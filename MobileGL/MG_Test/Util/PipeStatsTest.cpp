@@ -156,6 +156,10 @@ namespace {
         // the pull build has no CSO to mint and must stay symbol-identical.
         EXPECT_NE(line.find("cso[csom="), String::npos) << line;
         EXPECT_NE(line.find("csob="), String::npos) << line;
+        // P3a's persistent-map acquisition attempts ride the same bracket. It is the counter
+        // the storage-regrow gate reads, so its short name is pinned where an operator's
+        // grep would break.
+        EXPECT_NE(line.find("mpr="), String::npos) << line;
 #endif
     }
 
@@ -276,6 +280,7 @@ namespace {
 #if MOBILEGL_PIPE_PUSH
         EXPECT_STREQ(PS::NameOf(PS::CallClass::RenderStateCsoMints), "render-state-cso-mints");
         EXPECT_STREQ(PS::NameOf(PS::CallClass::RenderStateCsoBinds), "render-state-cso-binds");
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::MapPersistentRoundtrips), "map-persistent-roundtrips");
 #endif
         EXPECT_STREQ(PS::NameOf(PS::Gate::EsprytRenderState), "espryt-render-state");
         EXPECT_STREQ(PS::NameOf(PS::Gate::EsprytTextureSyncList), "espryt-texture-sync-list");

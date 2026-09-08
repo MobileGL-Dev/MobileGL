@@ -245,6 +245,46 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return entry.backend;
         }
 
+        // P3a: resolve-or-create BY HANDLE, and it is the shape that discharges the debt this
+        // header records against itself at the top of the file.
+        //
+        // The overload above mints - it calls MGPipeSlots().Acquire off a frontend object's
+        // lifetime id, from inside MG_Backend - which is monolith glue: a handle is minted by
+        // the CLIENT, and under a real split neither the object nor its lifetime id exists on
+        // this side. This overload never touches the allocator at all. The handle ARRIVED, in
+        // the call's payload, already minted by the side that owns minting; all this does is
+        // index the slot, notice a generation that no longer matches (the slot was recycled,
+        // so the twin at it describes driver ids the new resource never made) and hand back
+        // the twin pointer. FindByHandle beside it is the same shape and already existed.
+        //
+        // No StatePtr, therefore no Entry::stateRef: the weak pointer is liveness for
+        // ForEachLive() and a handle-keyed entry has no frontend object to weakly hold. Such
+        // an entry is therefore invisible to ForEachLive, which is correct - the one direct
+        // iteration site walks texture twins, and it is not one of these tables.
+        //
+        // Death stays ANNOUNCED, as it is on the other overload: for a handle-keyed kind the
+        // announcement is the family's own destroy call, not the shared death notice, and the
+        // slot is freed by the CLIENT after that call returns.
+        //
+        // UNUSED AT THE CONTRACT COMMIT, deliberately: it is a member of a class template, so
+        // an uninstantiated one costs nothing anywhere, and the backend package is what gives
+        // it its first caller.
+        BackendPtr& GetOrCreate(MG_Pipe::MGPipeHandle handle) {
+            MOBILEGL_ASSERT(!MG_Pipe::MGPipeHandleIsNull(handle),
+                            "GetOrCreate(handle) named the reserved null handle");
+            if (MG_Pipe::MGPipeHandleIsNull(handle)) return m_nullTwin;
+
+            // Same arming as the minting overload, and for the same reason: twin creation is
+            // the moment a driver-owned id starts needing a guarded destructor.
+            EnsureProcessTeardownSentinel();
+
+            Entry& entry = EntryAt(handle.Slot);
+            if (entry.Live && entry.Gen != handle.Gen) entry.backend.reset();
+            entry.Gen = handle.Gen;
+            entry.Live = true;
+            return entry.backend;
+        }
+
         // Null when no live twin of this object exists. Unlike the registry's Find this NEVER
         // mutates the table, so the returned pointer survives any later Find on it; only a
         // GetOrCreate that grows the vector can move it, and callers that hold one across a

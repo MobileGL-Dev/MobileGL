@@ -379,6 +379,12 @@ namespace MobileGL::MG_Pipe {
 
         MGPipeApplierState g_applier{};
 
+        // The installed handle-shaped resource table. Null until a backend registers one,
+        // which is what makes the client half landable on its own: with nothing here every
+        // frontend dispatch falls through to the op table this one replaces, and the tree
+        // behaves exactly as it did.
+        const MGPipeResourceOps* g_resourceOps = nullptr;
+
         MGPipeRenderStateCsoRecord* FindCso(MGPipeHandle handle) {
             if (handle.Slot >= g_applier.RenderStateCsos.size()) return nullptr;
             MGPipeRenderStateCsoRecord& record = g_applier.RenderStateCsos[handle.Slot];
@@ -392,6 +398,9 @@ namespace MobileGL::MG_Pipe {
 
     MGPipeApplierState& MGPipeApplier() { return g_applier; }
 
+    void MGPipeSetResourceOps(const MGPipeResourceOps* ops) { g_resourceOps = ops; }
+    const MGPipeResourceOps* MGPipeGetResourceOps() { return g_resourceOps; }
+
     void MGPipeApplierReset() {
         g_applier.RenderStateCsos.clear();
         g_applier.BoundRenderStateCso = kMGPipeNullHandle;
@@ -402,6 +411,22 @@ namespace MobileGL::MG_Pipe {
         g_applier.ResidualDivergences = 0;
         g_applier.PatchCarrierComparisons = 0;
         g_applier.PatchCarrierDivergences = 0;
+        // P3a. A fresh context is a fresh server: the records describe objects the new
+        // context never made, and the three serials are per-context MGGens that must not
+        // carry a previous context's count into a twin's "have I synced this?" compare.
+        // The OP TABLE is deliberately NOT cleared here - it is installed and uninstalled by
+        // the backend's own bring-up and teardown, not by a state reset.
+        g_applier.Resources.clear();
+        g_applier.VertexElementsCsos.clear();
+        g_applier.BoundVertexElements = kMGPipeNullHandle;
+        g_applier.VertexBuffers = {};
+        g_applier.VertexBufferStart = 0;
+        g_applier.VertexBufferCount = 0;
+        g_applier.VertexFetchBaseInstance = 0;
+        g_applier.VertexBuffersSerial = 0;
+        g_applier.IndexBuffer = MGPIndexBuffer{};
+        g_applier.IndexBufferSerial = 0;
+        g_applier.MapPersistentRoundtrips = 0;
     }
 
     void MGPipeApplyCreateRenderState(const MGPRenderStateDesc& desc, const void* chunkBytes) {
@@ -653,6 +678,75 @@ namespace MobileGL::MG_Pipe {
                                  static_cast<int>(assembledBit));
         }
     }
+
+    // ================================================================================
+    // P3a: the fourteen new entry points, AT THE CONTRACT COMMIT ONLY.
+    //
+    // Every body below is a deliberate no-op. The contract commit's job is the SHAPE - the
+    // signatures the client, the backend and the gates compile against, the records they
+    // write into and the op table they dispatch through - and the bodies land in the two
+    // commits that follow on this branch, before anything emits a single one of these calls.
+    //
+    // NOTHING REACHES THEM HERE, and that is checked rather than hoped: the two subsystem
+    // bits are not in MG_Impl/Pipe/PipeFill.cpp's kMGPipeWiredSubsystems, the dirty bits that
+    // would gate the emission still map to no subsystem, and the emitters beside them are
+    // stubs that emit nothing. A no-op that could be reached would be worse than an
+    // unimplemented one - it would silently drop a mutation - which is exactly why the two
+    // halves land in one commit apiece rather than one half at a time.
+    // ================================================================================
+
+    void MGPipeApplyResourceCreate(const MGPResourceDesc& desc) { (void)desc; }
+
+    void MGPipeApplyResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes) {
+        (void)desc;
+        (void)initialBytes;
+    }
+
+    void MGPipeApplyResourceSubData(const MGPSubData& record, const void* bytes) {
+        (void)record;
+        (void)bytes;
+    }
+
+    void MGPipeApplyBufferSubDataResident(const MGPSubData& record, const void* bytes) {
+        (void)record;
+        (void)bytes;
+    }
+
+    void MGPipeApplyResourceFlushRange(const MGPFlushRange& record, const void* bytes) {
+        (void)record;
+        (void)bytes;
+    }
+
+    void MGPipeApplyResourceReadback(const MGPReadback& record) { (void)record; }
+
+    void MGPipeApplyResourceDestroy(const MGPHandleOnly& handle) { (void)handle; }
+
+    // A DECLINE, which is a real answer rather than a failure: the persistent-map acquisition
+    // is allowed to say no, the caller already has that branch, and null is what it reads.
+    void* MGPipeApplyMapPersistent(const MGPHandleOnly& handle, Uint64 size, const void* seedBytes) {
+        (void)handle;
+        (void)size;
+        (void)seedBytes;
+        return nullptr;
+    }
+
+    void MGPipeApplyUnmapPersistent(const MGPHandleOnly& handle) { (void)handle; }
+
+    void MGPipeApplyCreateVertexElements(const MGPVertexElements& desc, const void* blobBytes) {
+        (void)desc;
+        (void)blobBytes;
+    }
+
+    void MGPipeApplyBindVertexElements(const MGPHandleOnly& handle) { (void)handle; }
+
+    void MGPipeApplyDeleteVertexElements(const MGPHandleOnly& handle) { (void)handle; }
+
+    void MGPipeApplySetVertexBuffers(const MGPVertexBuffers& hdr, const MGPVertexBuffer* tail) {
+        (void)hdr;
+        (void)tail;
+    }
+
+    void MGPipeApplySetIndexBuffer(const MGPIndexBuffer& record) { (void)record; }
 
     void MGPipeDeriveRenderStateFields(PipeInputs& inputs) {
         // The derivation itself lives in MGPipeApplyAccess above, because that is the one

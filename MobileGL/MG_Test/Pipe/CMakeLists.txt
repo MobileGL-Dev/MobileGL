@@ -135,8 +135,42 @@ if (MSVC)
         target_compile_options(MagmaPipeIdentityTest PRIVATE /Zc:preprocessor)
 endif()
 
+# P3a's two suites. Their targets and this registration are the CONTRACT commit's, for the
+# same reason the four P2 suites' are: their CONTENTS belong to two later packages each, and
+# neither of them should have to come back to this file to add a case.
+#
+# They link gtest rather than gtest_main and carry their own main(), like PipeInputsTest and
+# RenderStateSpansTest: the applier's bounds and protocol trip wires report through a log line
+# in a shipped push build and std::abort() in a poison or verify one, so a case that drives
+# one reads the line back out of a file the process names before anything logs. Deciding that
+# HERE is what keeps the later packages out of this file.
+foreach(pipeTest ResourceEmitTest VertexInputEmitTest)
+        add_executable(${pipeTest} ${pipeTest}.cpp)
+
+        target_include_directories(${pipeTest} PRIVATE
+                ${MGL_ROOT}/include
+                ${MGL_ROOT}/MobileGL
+                ${MGL_ROOT}/MobileGL/MG_Pipe
+                ${MGL_ROOT}/3rdparty/xxHash
+                ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
+                ${MGL_ROOT}/3rdparty/SPIRV-Reflect
+        )
+
+        target_link_libraries(${pipeTest} PRIVATE
+                GTest::gtest
+                ${LINK_LIBRARIES}
+        )
+
+        if (MSVC)
+                target_compile_options(${pipeTest} PRIVATE /Zc:preprocessor)
+        endif()
+endforeach()
+
 include(GoogleTest)
 gtest_discover_tests(PipeCatalogueTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+foreach(pipeTest ResourceEmitTest VertexInputEmitTest)
+        gtest_discover_tests(${pipeTest} DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+endforeach()
 gtest_discover_tests(MagmaPipeIdentityTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(PipeInputsTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(RenderStateSpansTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

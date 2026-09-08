@@ -113,6 +113,8 @@ inline Bool MGPipeVerify(const PerBufferBlendState& a, const PerBufferBlendState
 inline Bool MGPipeVerify(const StencilFaceState& a, const StencilFaceState& b, const char** outField);
 inline Bool MGPipeVerify(const DynamicBackendParameters& a, const DynamicBackendParameters& b, const char** outField);
 inline Bool MGPipeVerify(const MGHostSpan& a, const MGHostSpan& b, const char** outField);
+inline Bool MGPipeVerify(const MGPVertexAttribWire& a, const MGPVertexAttribWire& b, const char** outField);
+inline Bool MGPipeVerify(const MGPVertexBindingPointWire& a, const MGPVertexBindingPointWire& b, const char** outField);
 
 template <>
 struct MGPipeHasFieldVerifier<MGPBlobRef> : std::true_type {};
@@ -252,6 +254,10 @@ template <>
 struct MGPipeHasFieldVerifier<DynamicBackendParameters> : std::true_type {};
 template <>
 struct MGPipeHasFieldVerifier<MGHostSpan> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<MGPVertexAttribWire> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<MGPVertexBindingPointWire> : std::true_type {};
 
 template <class T>
 inline Bool MGPipeFieldEqual(const T& a, const T& b) {
@@ -643,6 +649,16 @@ inline Bool MGPipeVerify(const MGHostSpan& a, const MGHostSpan& b, const char** 
     return true;
 }
 
+inline Bool MGPipeVerify(const MGPVertexAttribWire& a, const MGPVertexAttribWire& b, const char** outField) {
+    MGP_FIELDS_MGPVertexAttribWire(MGP_VERIFY_FIELD)
+    return true;
+}
+
+inline Bool MGPipeVerify(const MGPVertexBindingPointWire& a, const MGPVertexBindingPointWire& b, const char** outField) {
+    MGP_FIELDS_MGPVertexBindingPointWire(MGP_VERIFY_FIELD)
+    return true;
+}
+
 #undef MGP_VERIFY_FIELD
 
-inline constexpr SizeT kMGPipeVerifiedPayloadCount = 69;
+inline constexpr SizeT kMGPipeVerifiedPayloadCount = 71;

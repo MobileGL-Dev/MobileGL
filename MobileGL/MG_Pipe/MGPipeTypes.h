@@ -353,6 +353,13 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPFramebufferState, 304);
 
+    // GL_MAX_VERTEX_ATTRIBS as MobileGL advertises it, on the MG_Pipe side of the boundary.
+    // It bounds the two declared counts of MGPVertexElements, the applier's two per-CSO
+    // arrays and the vertex-buffer set. It MUST equal VertexArrayObject::MAX_VERTEX_ATTRIBS;
+    // MG_Impl/Pipe/PipeFill.cpp is the one translation unit that sees both and carries the
+    // static_assert, because this header may not include a frontend one.
+    inline constexpr Uint32 kMGPipeMaxVertexAttribs = 32;
+
     struct MGPVertexBuffer {
         MGPipeHandle Res;
         Uint64 Offset;
@@ -366,9 +373,25 @@ namespace MobileGL::MG_Pipe {
     // Var-tail header: MGPVertexBuffer[Count] follows.
     struct MGPVertexBuffers {
         Uint32 Start, Count;
+        // The vertex-FETCH base instance these offsets are valid for (P3a, D-H1). It is DRAW
+        // state, not VAO state, and it is NOT the same thing as MGPDrawInfo::StartInstance:
+        // that one is the GL draw's baseInstance and feeds gl_BaseInstance, this one is the
+        // shift the fetch address of an instanced array needs when the device has no native
+        // base-instance support. The server decides whether to emulate it or let
+        // GL_EXT_base_instance do the work - emulation is server-owned - so the client sends
+        // the draw's raw value and never a pre-shifted offset.
+        //
+        // IT IS A ContentHash INPUT, and that is a requirement rather than a nicety:
+        // set_vertex_buffers is suppressed on an unchanged hash (MG_Impl/Pipe/
+        // SetHashSuppressor.h's SetVertexBuffers slot), so a baseInstance that moved while
+        // the buffer set did not would be suppressed and the server would keep the previous
+        // shift. It rides ONE PER EMITTED SET rather than per entry: per entry the shift is
+        // redundant and lets a malformed record disagree with itself.
+        Uint32 BaseInstance;
+        Uint32 Pad0;
         Uint64 ContentHash;
     };
-    MGP_ASSERT_POD(MGPVertexBuffers, 16);
+    MGP_ASSERT_POD(MGPVertexBuffers, 24);
 
     // An independent call, NOT a subset of the VAO configuration version (D5).
     struct MGPIndexBuffer {
@@ -615,6 +638,22 @@ namespace MobileGL::MG_Pipe {
         return static_cast<Uint64>(static_cast<Uint32>(record.UnionBox.X));
     }
     inline Uint64 MGPipeSubDataBufferSize(const MGPSubData& record) { return record.UnionBox.W; }
+
+    // P3a, D-A5: the per-record half of resource_respecify's kNeedsAck.
+    //
+    // Flags are a PER-CALL static property and resource_respecify serves BOTH glBufferData
+    // and glBufferStorage. A bare kNeedsAck on the call would acknowledge every glBufferData
+    // in a world upload; only glBufferStorage is a real synchronous allocation and only it is
+    // allowed a synchronous ack. So kNeedsAck on the call means "records of this call MAY
+    // require an acknowledgement" and THIS predicate decides per record. In monolith the ack
+    // is ((void)0) - the applier is one function call away - and the transport wires the
+    // doorbell to this predicate when it lands.
+    //
+    // Immutable is exactly the right discriminator: it is set iff the store came from a
+    // glBufferStorage* entry point, which is the definition of the allowed case.
+    inline Bool MGPipeResourceRespecifyNeedsAck(const MGPResourceDesc& desc) {
+        return desc.Immutable != 0;
+    }
 
     // The forward terminator for a server-initiated texture pull (section 7.1). May carry
     // zero regions - that is how a pull that needs nothing is answered.

@@ -16,6 +16,12 @@
 //             kScreen lands in struct MGPipeScreen, every other class in struct
 //             MGPipeContext (plan section 4.3).
 //     Flags : kNone | kNeedsAck | kHasBlob | kVarTail | kHostSpan | kReplySlot | kOptional
+//             kNeedsAck on a call means records of this call MAY require an ack; a
+//             per-record predicate decides. resource_respecify carries it for
+//             glBufferStorage - a real synchronous allocation, and the only entry point
+//             allowed a synchronous ack - and MGPipeResourceRespecifyNeedsAck(desc)
+//             (MGPipeTypes.h) is what says so, which is why the same call still carries
+//             every glBufferData without acknowledging one.
 //
 // RECORD NUMBERING NEVER CHURNS. Entries that are not implemented yet still occupy their
 // line (plan section 11, P0: "the complete call catalogue, placeholders included"). A new
@@ -73,7 +79,7 @@
     /* ---- screen: caps, resources, persistent map, fences (plan 4.4.1) ---- */                    \
     X(GetCaps,                  MGPCaps,                    kScreen,    kReplySlot)                 \
     X(ResourceCreate,           MGPResourceDesc,            kScreen,    kNone)                      \
-    X(ResourceRespecify,        MGPResourceDesc,            kScreen,    kNone)                      \
+    X(ResourceRespecify,        MGPResourceDesc,            kScreen,    kNeedsAck)                  \
     X(ResourceDestroy,          MGPHandleOnly,              kScreen,    kNone)                      \
     X(MapPersistent,            MGPHandleOnly,              kScreen,    kReplySlot|kOptional)       \
     X(UnmapPersistent,          MGPHandleOnly,              kScreen,    kOptional)                  \

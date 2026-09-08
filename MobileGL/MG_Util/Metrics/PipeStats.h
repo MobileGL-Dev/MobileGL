@@ -113,6 +113,17 @@ namespace MobileGL::MG_Util::PipeStats {
         // the cache's hit rate, and it is the number the CSO content-addressing negative
         // control moves.
         RenderStateCsoBinds,
+        // P3a's, and push-only for the same reason as the two above.
+        //
+        // EVERY map_persistent EMISSION, i.e. every acquisition ATTEMPT - a mint or a decline
+        // - because every one of them needs an answer from the resource owner. Counted that
+        // way on purpose: "round trips actually taken" is 0 by construction in a monolith and
+        // could never go red, which is not a counter, it is a decoration. Counted as attempts
+        // the number is identical in both modes, it is exactly "one per storage definition",
+        // and a regression that acquires per DRAW instead of per definition shows up on the
+        // first window. Counted at the client emitter, behind the usual Enabled() predicate;
+        // no timer anywhere.
+        MapPersistentRoundtrips,
 #endif
         Count
     };

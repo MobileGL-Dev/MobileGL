@@ -76,13 +76,23 @@ namespace MobileGL::MG_Pipe {
     inline constexpr Uint64 kMGPipeSubsystemResidualValues = 1ull << 4;
     inline constexpr Uint64 kMGPipeSubsystemEsprytSlots = 1ull << 5;      // Track H, Espryt 0b
     inline constexpr Uint64 kMGPipeSubsystemMagmaVertexInput = 1ull << 6; // Track H, Magma subsystem 4
-    // bits 7..62 reserved for the later phases, allocated in ROADMAP order.
+    // P3a's two. Resources is the seven BufferBackendOps hooks turned into the handle-shaped
+    // resource_* family; VertexInput is vertex elements, vertex buffers and the index buffer.
+    // They are separate bits because they are separate A/Bs: a buffer path that regressed and
+    // a vertex path that regressed are different findings, and clearing one must not disarm
+    // the other.
+    inline constexpr Uint64 kMGPipeSubsystemResources = 1ull << 7;
+    inline constexpr Uint64 kMGPipeSubsystemVertexInput = 1ull << 8;
+    // bits 9..62 reserved for the later phases, allocated in ROADMAP order.
     // NOT a subsystem, a BEHAVIOUR: turn OFF client-side content addressing of CSOs, so
     // every pipeline-version change mints a fresh CSO and the map is never probed. This is
     // the negative control the whole CSO design is measured against (ROADMAP.md P2).
     inline constexpr Uint64 kMGPipeBehaviourNoCsoContentAddressing = 1ull << 63;
-    // The default of a push build with the knob unset (ConfigLoader.cpp).
-    inline constexpr Uint64 kMGPipeSubsystemsMigratedAtP2 = 0x7full; // bits 0..6
+    // The default of a push build with the knob unset (ConfigLoader.cpp). Each phase's
+    // constant STAYS, because it is the A/B control for the phase after it: P3a's
+    // "everything P2 had and nothing of mine" arm is spelled MOBILEGL_PIPE_PUSH=0x7f.
+    inline constexpr Uint64 kMGPipeSubsystemsMigratedAtP2 = 0x7full;   // bits 0..6
+    inline constexpr Uint64 kMGPipeSubsystemsMigratedAtP3a = 0x1ffull; // bits 0..8
 
     // The catalogue itself. Only macros, so it is safe to expand inside the namespace, and
     // consumers (the unit test, later the transport) get MGP_CALL_LIST from this header.

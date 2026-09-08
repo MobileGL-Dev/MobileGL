@@ -322,12 +322,16 @@ namespace MobileGL::MG_Config {
         // 0 - the only shipped value until the migration lands - is "pull everything",
         // i.e. exactly today's behaviour, and is the default of a PULL build, where the
         // knob is meaningless anyway. A PUSH build defaults to every subsystem migrated so
-        // far (MG_Pipe::kMGPipeSubsystemsMigratedAtP2), so MOBILEGL_PIPE_PUSH=0 in the
-        // environment is the all-pull control. Accepts decimal or 0x-prefixed hex, and
-        // operators pass it as hex, so the bits are listed here (MG_Pipe/MGPipe.h owns them):
+        // far (MG_Pipe::kMGPipeSubsystemsMigratedAtP3a), so MOBILEGL_PIPE_PUSH=0 in the
+        // environment is the all-pull control and 0x7f (kMGPipeSubsystemsMigratedAtP2) is
+        // the "P2 only" control P3a's A/B is run against. Accepts decimal or 0x-prefixed
+        // hex, and operators pass it as hex, so the bits are listed here (MG_Pipe/MGPipe.h
+        // owns them):
         //   0x01 render state (create/bind_render_state + set_dynamic_state)
         //   0x02 pixel pack        0x04 patch state      0x08 vertex attrib defaults
         //   0x10 residual values   0x20 Espryt slots     0x40 Magma vertex input
+        //   0x80 resources (the resource_* family: the seven BufferBackendOps hooks)
+        //   0x100 vertex input (vertex elements / vertex buffers / index buffer)
         //   1<<63 NOT a subsystem, a BEHAVIOUR: turn OFF client-side content addressing of
         //         CSOs, so every pipeline-version change mints a fresh CSO and the map is
         //         never probed. The negative control the CSO design is measured against.

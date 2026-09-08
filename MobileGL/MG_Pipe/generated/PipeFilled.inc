@@ -306,6 +306,7 @@ inline constexpr const char* kMGPipeInputFieldFilledBy[kMGPipeInputFieldCount] =
 enum class MGPipeFieldEmitter : Uint8 {
     kNone = 0,
     BindRenderState,
+    BindVertexElements,
     CreateRenderState,
     SetDynamicState,
     SetPatchState,
@@ -315,6 +316,7 @@ enum class MGPipeFieldEmitter : Uint8 {
 inline constexpr const char* kMGPipeFieldEmitterNames[] = {
     "kNone",
     "BindRenderState",
+    "BindVertexElements",
     "CreateRenderState",
     "SetDynamicState",
     "SetPatchState",
@@ -327,7 +329,7 @@ inline constexpr MGPipeFieldEmitter kMGPipeFieldEmittedBy[kMGPipeInputFieldCount
     MGPipeFieldEmitter::CreateRenderState, // GetBlendEquationIndexed
     MGPipeFieldEmitter::CreateRenderState, // GetBlendFuncIndexed
     MGPipeFieldEmitter::kNone, // GetBoundTransformFeedbackName
-    MGPipeFieldEmitter::kNone, // GetBoundVertexArray
+    MGPipeFieldEmitter::BindVertexElements, // GetBoundVertexArray
     MGPipeFieldEmitter::kNone, // GetBufferBindingSlot
     MGPipeFieldEmitter::kNone, // GetBufferBindingPoint
     MGPipeFieldEmitter::kNone, // GetBufferBindingPointCount
@@ -386,7 +388,7 @@ inline constexpr MGPipeFieldEmitter kMGPipeFieldEmittedBy[kMGPipeInputFieldCount
     MGPipeFieldEmitter::kNone, // GetBoundTransformFeedbackLifetimeId
     MGPipeFieldEmitter::kNone, // HasOpenTransformFeedbackSpan
 };
-inline constexpr SizeT kMGPipeEmittedFieldCount = 33;
+inline constexpr SizeT kMGPipeEmittedFieldCount = 34;
 
 struct MGPipeFilledState {
     Uint64 CurrentVerbSerial;

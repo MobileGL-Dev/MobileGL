@@ -34,11 +34,26 @@
     /* dead: no backend reads it since D21; kept for inventory row 594 */  \
     X(GetBoundTransformFeedbackName,            SetStreamOutputTargets)  \
     X(GetBoundVertexArray,                      BindVertexElements)      \
-    /* Polymorphic over BufferTarget: its rows split across set_vertex_buffers,     */  \
-    /* set_index_buffer, set_indirect_buffers and set_shader_buffers when the       */  \
-    /* inventory is re-vendored carrying the target argument (deferred out of P1:   */  \
-    /* the extractor lives in MobileGL-CS). Named for the plan's explicit           */  \
-    /* replacement of the DrawIndirect/Parameter pair.                              */  \
+    /* Polymorphic over BufferTarget, and P3a SPLITS it - not by re-vendoring the   */  \
+    /* inventory (the extractor lives in MobileGL-CS and still does not carry the   */  \
+    /* target argument), but by supplying the target from the EMISSION SITE, which  */  \
+    /* knows it exactly. The split, target by target:                               */  \
+    /*   ArrayBuffer, and the per-attribute buffer of a VAO -> set_vertex_buffers   */  \
+    /*   ElementArrayBuffer                                 -> set_index_buffer     */  \
+    /*   DrawIndirectBuffer, ParameterBuffer                -> set_indirect_buffers */  \
+    /*   Uniform/ShaderStorage/AtomicCounter/TransformFeedback                      */  \
+    /*                                                      -> set_shader_buffers   */  \
+    /*   CopyRead/CopyWrite/PixelPack/PixelUnpack/Texture   -> still pulled: the    */  \
+    /*     transfer and pixel-store targets have no call of their own yet.          */  \
+    /* THE ROW STAYS ONE ROW, and that is structural rather than a shortcut: this   */  \
+    /* list IS the MGPipeInputField enum and the PipeInputs field set, and the      */  \
+    /* field is ONE array (m_bufferBindingSlot[kBufferTargetCount]) that a second   */  \
+    /* row of the same name could only duplicate. So the split lives here and in    */  \
+    /* the emitters, and the row keeps naming set_indirect_buffers for the plan's   */  \
+    /* explicit replacement of the DrawIndirect/Parameter pair. It is deliberately  */  \
+    /* NOT in the EMITTED list below: five targets above are still pulled, and a    */  \
+    /* row there says "the whole field is supplied", which for this field would be  */  \
+    /* the same half-truth GetPixelStoreParameters is kept out for.                 */  \
     X(GetBufferBindingSlot,                     SetIndirectBuffers)      \
     X(GetBufferBindingPoint,                    SetShaderBuffers)        \
     X(GetBufferBindingPointCount,               SetShaderBuffers)        \
@@ -151,8 +166,25 @@
 // nothing while its poison stamp said it was published, so neither the poison nor the verify
 // comparator could see it. Until the field is split, the whole of it keeps going through the
 // fill loop and the pack half is simply written twice.
+//
+// P3a ADDS ONE ROW, GetBoundVertexArray -> BindVertexElements, and it is the vertex-input
+// family's only candidate: GetBufferBindingSlot is polymorphic over a target set P3a covers
+// only part of (see its comment above) and GetCurrentVertexAttribute has been here since P2.
+// The row is INERT until the vertex-input subsystem is wired - MG_Impl/Pipe/PipeFill.cpp's
+// kMGPipeWiredSubsystems does not carry that bit at the contract commit, because the emitters
+// beside it are still stubs - which is exactly the guard that lets a row land before the call
+// that carries it exists.
+//
+// A NOTE FOR THE COMMIT THAT WIRES IT, because it is not visible from this file: the field is
+// a shared pointer to the frontend VAO, and the vertex-input calls supply the CONFIGURATION
+// (the applier's MGPipeVertexElementsRecord), not the object. So the row is shape-only in the
+// same sense GetCurrentVertexAttribute's is, and it stays so until the backend's twin
+// resolution reads the applier's BoundVertexElements instead of the object - at which point
+// PipeFill.cpp's EmittedCallSuppliesTheWholeField arm is where that is decided, deliberately
+// rather than silently by this row's presence.
 #define MGP_COVERAGE_EMITTED_LIST(X)                                     \
     X(GetBlendColor,                            SetDynamicState)         \
+    X(GetBoundVertexArray,                      BindVertexElements)      \
     X(GetBlendEquationIndexed,                  CreateRenderState)       \
     X(GetBlendFuncIndexed,                      CreateRenderState)       \
     X(GetClampReadColor,                        SetDynamicState)         \

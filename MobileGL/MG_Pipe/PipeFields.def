@@ -97,7 +97,7 @@
     F(Res) F(Offset) F(Stride) F(Divisor) F(BindingIndex)
 
 #define MGP_FIELDS_MGPVertexBuffers(F) \
-    F(Start) F(Count) F(ContentHash)
+    F(Start) F(Count) F(BaseInstance) F(ContentHash)
 
 #define MGP_FIELDS_MGPIndexBuffer(F) \
     F(Res) F(Offset) F(IndexSize)
@@ -295,6 +295,21 @@
 #define MGP_FIELDS_MGHostSpan(F) \
     F(Ptr) F(Seg) F(Size) F(Offset)
 
+// P3a's two vertex wire views (MGPipeValueTypes.h). They are not call payloads either: they
+// are the ELEMENTS of create_vertex_elements' blob, and the comparator has to see into them
+// for the same reason it sees into the value structs - a blob compared with memcmp would
+// false-differ on MGPVertexAttribWire::Pad0. Divisor is deliberately not in the attribute
+// list (it travels in MGPVertexBuffer) and the two Legacy* query answers are deliberately not
+// on the wire at all; both absences are argued in MGPipeValueTypes.h and both are enforced
+// here by gen_pipe.py's "every list names exactly its struct's direct members" rule.
+
+#define MGP_FIELDS_MGPVertexAttribWire(F) \
+    F(Offset) F(Stride) F(Type) F(Size) F(Enabled) F(Normalized) F(IsInteger) F(IsLong) F(IsBgra) \
+    F(BindingIndex)
+
+#define MGP_FIELDS_MGPVertexBindingPointWire(F) \
+    F(Offset) F(Stride) F(Divisor)
+
 // Every payload above, in the order the comparator is generated. Keep in sync with the
 // macros; gen_pipe.py reads THIS list to know what to emit.
 #define MGP_VERIFY_PAYLOAD_LIST(P) \
@@ -312,6 +327,7 @@
     P(MGPXfbAccounting) P(MGPStreamOutputControl) P(MGPFlush) P(MGPPresent) P(MGPSwapInterval) \
     P(MGPSurfaceInfo) \
     P(RenderStateParameters) P(PixelStoreParameters) P(PerBufferBlendState) P(StencilFaceState) \
-    P(DynamicBackendParameters) P(MGHostSpan)
+    P(DynamicBackendParameters) P(MGHostSpan) \
+    P(MGPVertexAttribWire) P(MGPVertexBindingPointWire)
 
 // clang-format on

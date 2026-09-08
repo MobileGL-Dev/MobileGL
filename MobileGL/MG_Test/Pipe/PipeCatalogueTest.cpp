@@ -349,15 +349,20 @@ TEST(PipeCatalogue, FloatVectorsCompareBitwise) {
 }
 
 // The six value structs have field lists of their own (P1 brief D8): 63 + 6 payloads, and
-// the struct that used to memcmp is compared member by member.
+// the struct that used to memcmp is compared member by member. P3a added the two vertex wire
+// views as a seventh and eighth non-payload entry (63 + 8), for the same reason: they are the
+// elements of create_vertex_elements' blob, and a memcmp over that blob would false-differ on
+// MGPVertexAttribWire::Pad0.
 TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
-    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 69u);
+    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 71u);
     static_assert(MGPipeHasFieldVerifier<RenderStateParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PixelStoreParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PerBufferBlendState>::value);
     static_assert(MGPipeHasFieldVerifier<StencilFaceState>::value);
     static_assert(MGPipeHasFieldVerifier<DynamicBackendParameters>::value);
     static_assert(MGPipeHasFieldVerifier<MGHostSpan>::value);
+    static_assert(MGPipeHasFieldVerifier<MGPVertexAttribWire>::value);
+    static_assert(MGPipeHasFieldVerifier<MGPVertexBindingPointWire>::value);
     PixelStoreParameters p{};
     PixelStoreParameters q{};
     const char* field = nullptr;
@@ -467,4 +472,114 @@ TEST(PipeCatalogue, SubDataBufferRangeRidesInTheUnionBox) {
     EXPECT_FALSE(MGPipeSetSubDataBufferRange(record, 0, 0x100000000ull));
     EXPECT_EQ(MGPipeSubDataBufferOffset(record), 0x7FFFFFFFull);
     EXPECT_EQ(MGPipeSubDataBufferSize(record), 0xFFFFFFFFull);
+}
+
+// P3a, D-H1: set_vertex_buffers carries the vertex-FETCH base instance explicitly, one per
+// emitted set rather than one per entry, and the header grew 16 -> 24 bytes to hold it.
+//
+// The size is the cheap half. The half a compiler cannot catch is the PipeFields.def row:
+// MGPVertexBuffers still HAS a ContentHash and still asserts its size whether or not the
+// field list names BaseInstance, and a comparator blind to the field would let a
+// baseInstance-only divergence through under MOBILEGL_PIPE_VERIFY - which is the one gate
+// that would otherwise have seen the suppression bug the ContentHash rule exists to prevent.
+// So the field list is pinned the only way it can be: by making the comparator name it.
+TEST(PipeCatalogue, VertexBufferSetCarriesAnExplicitBaseInstance) {
+    static_assert(sizeof(MGPVertexBuffers) == 24);
+    static_assert(sizeof(MGPVertexBuffer) == 32); // the per-entry struct did NOT change
+    EXPECT_EQ(sizeof(MGPVertexBuffers), 24u);
+
+    MGPVertexBuffers a{};
+    MGPVertexBuffers b{};
+    const char* field = nullptr;
+    EXPECT_TRUE(MGPipeVerify(a, b, &field));
+    b.Pad0 = 0x5A; // padding is not a field
+    EXPECT_TRUE(MGPipeVerify(a, b, &field));
+    b.Pad0 = 0;
+    b.BaseInstance = 7;
+    EXPECT_FALSE(MGPipeVerify(a, b, &field));
+    EXPECT_STREQ(field, "BaseInstance");
+
+    // The set still carries no fetch shift per entry: an entry that disagreed with its own
+    // header is a shape the applier would have to police, and MGPVertexBuffer's Pad0 stays
+    // padding rather than becoming a second copy of the same number.
+    MGPVertexBuffer left{};
+    MGPVertexBuffer right{};
+    right.Pad0 = 0x5A;
+    EXPECT_TRUE(MGPipeVerify(left, right, &field));
+}
+
+// P3a, D-G2: the two vertex wire views. They are what create_vertex_elements' blob is made
+// of, so their sizes are the blob's stride and the applier's bounds arithmetic; and IsLong is
+// carried SEPARATELY from Type, because a GL_DOUBLE format converted to float and a long
+// format that keeps all 64 bits are different requests that a backend has to tell apart.
+TEST(PipeCatalogue, VertexWireViewsAreFlatAndCarryIsLongSeparately) {
+    static_assert(sizeof(MGPVertexAttribWire) == 24);
+    static_assert(sizeof(MGPVertexBindingPointWire) == 16);
+    EXPECT_EQ(sizeof(MGPVertexAttribWire), 24u);
+    EXPECT_EQ(sizeof(MGPVertexBindingPointWire), 16u);
+
+    MGPVertexAttribWire a{};
+    MGPVertexAttribWire b{};
+    const char* field = nullptr;
+    EXPECT_TRUE(MGPipeVerify(a, b, &field));
+    b.Pad0 = 0x5A;
+    EXPECT_TRUE(MGPipeVerify(a, b, &field));
+    b.Pad0 = 0;
+    // Type unchanged, IsLong moved: a comparator that folded the two would miss this.
+    b.IsLong = 1;
+    EXPECT_FALSE(MGPipeVerify(a, b, &field));
+    EXPECT_STREQ(field, "IsLong");
+
+    MGPVertexBindingPointWire p{};
+    MGPVertexBindingPointWire q{};
+    EXPECT_TRUE(MGPipeVerify(p, q, &field));
+    q.Divisor = 2;
+    EXPECT_FALSE(MGPipeVerify(p, q, &field));
+    EXPECT_STREQ(field, "Divisor");
+}
+
+// P3a, D-A5: the tree's FIRST kNeedsAck, and the reason it is not a bare flag.
+//
+// Flags are a PER-CALL static property and resource_respecify serves both glBufferData and
+// glBufferStorage. A bare kNeedsAck on the call would acknowledge every glBufferData in a
+// world upload - a round trip per chunk store the moment a transport is under it. So the flag
+// declares that records of this call MAY need one and MGPipeResourceRespecifyNeedsAck decides
+// per record: only an immutable store, which is a real synchronous allocation.
+//
+// This is the negative control for a future flag that over-acks: in monolith the ack is a
+// no-op, so the mistake cannot be shipped from here, and the phase where it would bite
+// inherits this pin rather than the guess.
+TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
+    Uint32 flags = 0;
+#define MGP_FLAGS_OF_RESOURCE_RESPECIFY(Name, Payload, Class, Flags)                                                   \
+    if (std::strcmp(#Name, "ResourceRespecify") == 0) flags = static_cast<Uint32>(Flags);
+    MGP_CALL_LIST(MGP_FLAGS_OF_RESOURCE_RESPECIFY)
+#undef MGP_FLAGS_OF_RESOURCE_RESPECIFY
+    EXPECT_EQ(flags & static_cast<Uint32>(kNeedsAck), static_cast<Uint32>(kNeedsAck));
+    // And it is the ONLY call that carries it: a second one would be a second decision, and
+    // this predicate answers for exactly one call.
+    Uint32 ackingCalls = 0;
+#define MGP_COUNT_ACKING_CALLS(Name, Payload, Class, Flags)                                                            \
+    if ((static_cast<Uint32>(Flags) & static_cast<Uint32>(kNeedsAck)) != 0) ++ackingCalls;
+    MGP_CALL_LIST(MGP_COUNT_ACKING_CALLS)
+#undef MGP_COUNT_ACKING_CALLS
+    EXPECT_EQ(ackingCalls, 1u);
+
+    // glBufferStorage: an immutable store, and the one entry point allowed a synchronous ack.
+    MGPResourceDesc immutable{};
+    immutable.Immutable = 1;
+    EXPECT_TRUE(MGPipeResourceRespecifyNeedsAck(immutable));
+
+    // glBufferData through the same call: never acknowledged, whatever else the descriptor
+    // says. The usage hint and a defined initial content are the two things a "well it looks
+    // synchronous" reading would key on, so both are set here on purpose.
+    MGPResourceDesc mutableStore{};
+    mutableStore.Immutable = 0;
+    mutableStore.Usage = 0x88E4; // GL_STATIC_DRAW, i.e. the most "final-looking" hint there is
+    mutableStore.HasDefinedContent = 1;
+    mutableStore.Width = 64u * 1024u;
+    EXPECT_FALSE(MGPipeResourceRespecifyNeedsAck(mutableStore));
+
+    // And the opcode did not move: a flag-word edit is not a catalogue edit.
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::ResourceRespecify), 3);
 }

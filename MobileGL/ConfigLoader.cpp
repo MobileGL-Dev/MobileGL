@@ -250,8 +250,10 @@ namespace MobileGL::MG_ConfigLoader {
 #if MOBILEGL_PIPE_PUSH
         // A push build with the knob unset runs every subsystem migrated so far, so the
         // shipped path is the one the gates measure; MOBILEGL_PIPE_PUSH=0 in the
-        // environment is the all-subsystems-pull control that reproduces P1 exactly.
-        features.PipePush = QueryEnvUint64("MOBILEGL_PIPE_PUSH", MG_Pipe::kMGPipeSubsystemsMigratedAtP2);
+        // environment is the all-subsystems-pull control that reproduces P1 exactly, and
+        // kMGPipeSubsystemsMigratedAtP2 (0x7f) is the phase-by-phase control - P3a's two
+        // subsystems off, everything P2 landed still on.
+        features.PipePush = QueryEnvUint64("MOBILEGL_PIPE_PUSH", MG_Pipe::kMGPipeSubsystemsMigratedAtP3a);
 #else
         // Meaningless in a pull build: there is nothing to push. Config.h documents 0 as
         // "pull everything" and that stays literally true.

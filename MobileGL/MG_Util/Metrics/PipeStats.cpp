@@ -174,7 +174,7 @@ namespace MobileGL::MG_Util::PipeStats {
             "draws", "accessor-calls", "tex-upload-emissions", "tex-upload-box", "tex-upload-rect",
             "tex-upload-jobs",
 #if MOBILEGL_PIPE_PUSH
-            "render-state-cso-mints", "render-state-cso-binds",
+            "render-state-cso-mints", "render-state-cso-binds", "map-persistent-roundtrips",
 #endif
         };
         const char* const kGateNames[kGateCount] = {
@@ -425,6 +425,10 @@ namespace MobileGL::MG_Util::PipeStats {
         // line an operator greps.
         line += "] cso[csom=" + std::to_string(calls[static_cast<Uint32>(CallClass::RenderStateCsoMints)]);
         line += " csob=" + std::to_string(calls[static_cast<Uint32>(CallClass::RenderStateCsoBinds)]);
+        // P3a's persistent-map acquisition attempts, on the same bracket and for the same
+        // reason: it is push-only, and a window with an unexpected mpr= is the one number
+        // that says an adoption is happening per draw rather than per storage definition.
+        line += " mpr=" + std::to_string(calls[static_cast<Uint32>(CallClass::MapPersistentRoundtrips)]);
 #endif
         line += "] gates[";
         for (Uint32 i = 0; i < kGateCount; ++i) {

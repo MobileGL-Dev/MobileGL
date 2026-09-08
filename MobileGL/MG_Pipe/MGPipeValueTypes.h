@@ -544,6 +544,61 @@ namespace MobileGL {
         };
     } // namespace MG_State::GLState
 
+    // ---- P3a: the WIRE forms of the two views above (ARCHITECTURE.md section on vertex
+    // elements; brief D-G2). Neither VertexAttribute nor VertexBufferBindingPoint can travel
+    // as itself: both hold a SharedPtr<BufferObject>, and a payload never contains a pointer.
+    // They live here rather than in MGPipeTypes.h so the structs they mirror are one screen
+    // away and a member added above has its wire twin in view; MGPipeTypes.h includes this
+    // header, so MG_Pipe sees them unqualified like every other value type.
+    //
+    // Both ride the create_vertex_elements BLOB, in ascending index order, attributes first:
+    // MGPVertexAttribWire[AttributeCount] then MGPVertexBindingPointWire[BindingPointCount],
+    // each count <= VertexArrayObject::MAX_VERTEX_ATTRIBS (32). The applier refuses a record
+    // whose declared counts do not match the blob's declared size.
+
+    // The resolved flat attribute view. Buffer identity does NOT travel here - it travels in
+    // set_vertex_buffers, which is what keeps this record stable while buffers change under
+    // it. Stride is the RESOLVED distance and a surviving 0 can only have come from the
+    // binding model (see VertexAttribute::Stride above); collapsing it back into the element
+    // size is what made KHR-GL43.vertex_attrib_binding.basic-input-case7/8 read past the
+    // buffer. Divisor is deliberately ABSENT: it is resolved per binding point and travels in
+    // MGPVertexBuffer::Divisor, which is where the backend's glVertexAttribDivisor reads it.
+    // LegacyStride / LegacyPointer are likewise absent - they are the glGetVertexAttrib*
+    // query answers and stay client-side, because nothing but the query path reads them.
+    struct MGPVertexAttribWire {
+        Uint64 Offset;       //  0
+        Int32 Stride;        //  8
+        Uint32 Type;         // 12  DataType
+        Uint8 Size;          // 16  1..4; GL_BGRA keeps 4
+        Uint8 Enabled;       // 17
+        Uint8 Normalized;    // 18
+        Uint8 IsInteger;     // 19
+        // CARRIED SEPARATELY from Type == Float64, and it has to be: VertexAttribFormat(
+        // GL_DOUBLE) also reads doubles from memory but asks for them converted to float,
+        // while VertexAttribLFormat keeps all 64 bits. The backend's fp64 narrowing and its
+        // Adreno disabled-attribute workaround both key on telling the two apart.
+        Uint8 IsLong;        // 20
+        Uint8 IsBgra;        // 21
+        Uint8 BindingIndex;  // 22  which MGPVertexBuffer entry feeds it (< MAX_VERTEX_ATTRIBS)
+        Uint8 Pad0;          // 23
+    };
+
+    // The ARB_vertex_attrib_binding view. Buffer identity is again in set_vertex_buffers.
+    //
+    // WHY IT TRAVELS AT ALL, since no backend has ever read a binding point (the frontend
+    // resolves them eagerly into the flat view above, and grep finds zero backend reads of
+    // VertexBufferBindingPoint / GetAttributeBindingIndex / GetAttributeRelativeOffset): the
+    // record DECLARES BindingPointCount, PipeFields.def names it, and a record whose declared
+    // counts do not describe its own blob is a shape the applier's bounds gate would have to
+    // police forever. Carrying both views keeps the record self-describing, and the cost is
+    // paid once per configuration change rather than per draw - the blob rides only on
+    // create_vertex_elements.
+    struct MGPVertexBindingPointWire {
+        Uint64 Offset;  // 0
+        Int32 Stride;   // 8   GL 4.6 core table 23.4: the INITIAL value is 16, not 0
+        Uint32 Divisor; // 12
+    };
+
     // ---- trip wires (P0.5). Sizes are what every ABI MobileGL ships on produces: every
     // member is a fixed-width scalar, an enum of one, or an array of those - no pointer, no
     // SizeT - except the vertex types, which carry SharedPtr<BufferObject> by design and are
@@ -560,5 +615,16 @@ namespace MobileGL {
     static_assert(std::is_trivially_copyable_v<SamplerParameters> && sizeof(SamplerParameters) == 100);
     static_assert(std::is_trivially_copyable_v<MG_State::GLState::VertexAttributeVersion> &&
                   sizeof(MG_State::GLState::VertexAttributeVersion) == 6);
+    // The two P3a wire views. Unlike the structs they mirror these ARE flat PODs with
+    // explicit padding, so the trip wire is the same one every MGPipe payload carries: the
+    // blob they ride in is memcpy'd, and a field silently changing width is a protocol break
+    // no test would otherwise see. (MGP_ASSERT_POD is MGPipeTypes.h's and that header
+    // includes this one, so the assertions are spelled out here instead.)
+    static_assert(std::is_trivially_copyable_v<MGPVertexAttribWire> &&
+                  sizeof(MGPVertexAttribWire) == 24);
+    static_assert(std::is_standard_layout_v<MGPVertexAttribWire>);
+    static_assert(std::is_trivially_copyable_v<MGPVertexBindingPointWire> &&
+                  sizeof(MGPVertexBindingPointWire) == 16);
+    static_assert(std::is_standard_layout_v<MGPVertexBindingPointWire>);
 } // namespace MobileGL
 #endif // MOBILEGL_MG_PIPE_VALUE_TYPES_H

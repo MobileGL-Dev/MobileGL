@@ -631,6 +631,12 @@ namespace MobileGL::MG_Pipe {
                 return kMGPipeSubsystemPatchState;
             case MGPipeFieldEmitter::SetVertexAttribDefaults:
                 return kMGPipeSubsystemVertexAttribDefaults;
+            // P3a. bind_vertex_elements is the vertex-input family's only emitter row today
+            // (Coverage.def says why the other two candidates are not there); the resource
+            // family has none at all, because its calls are dispatched at the GL call that
+            // causes them rather than filled into a PipeInputs field.
+            case MGPipeFieldEmitter::BindVertexElements:
+                return kMGPipeSubsystemVertexInput;
             case MGPipeFieldEmitter::kNone:
                 break;
             }
@@ -662,10 +668,53 @@ namespace MobileGL::MG_Pipe {
                           MGPipeSubsystemForDirty(MGPipeDirty::NewVertexAttribDefaults),
                       "set_vertex_attrib_defaults and NEW_VERTEX_ATTRIB_DEFAULTS must name one subsystem");
 
+        // P3a's pairing, in the two halves the contract commit can actually state.
+        //
+        // The four above compare the two maps directly, which is only possible once BOTH
+        // sides name the subsystem. MGPipeSubsystemForDirty is MG_Impl/Pipe/Tracker.h's and
+        // its bit 5 / 9 / 10 arms land with the client emitters, not here - so the direct
+        // form would fail at this commit for a reason that is not a defect. What is stated
+        // instead is exactly as strong in the direction that matters:
+        //
+        //   (a) the emitter half names the vertex-input subsystem, so a later edit that moved
+        //       it onto a different one fails here;
+        //   (b) the two maps AGREE OR THE DIRTY HALF IS NOT MAPPED YET. The escape hatch is
+        //       the not-yet-mapped case only: the moment Tracker.h maps NEW_VERTEX_ELEMENTS
+        //       onto anything at all, this becomes the equality the four above are;
+        //   (c) and while the dirty half is unmapped the subsystem is NOT in
+        //       kMGPipeWiredSubsystems below, so no field can be skipped on the strength of a
+        //       call nobody emits. (c) is what makes (b)'s hatch safe rather than convenient.
+        static_assert(SubsystemForEmitter(MGPipeFieldEmitter::BindVertexElements) ==
+                          kMGPipeSubsystemVertexInput,
+                      "bind_vertex_elements must name the vertex-input subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexElements) == 0 ||
+                          MGPipeSubsystemForDirty(MGPipeDirty::NewVertexElements) ==
+                              SubsystemForEmitter(MGPipeFieldEmitter::BindVertexElements),
+                      "bind_vertex_elements and NEW_VERTEX_ELEMENTS must name one subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexBuffers) == 0 ||
+                          MGPipeSubsystemForDirty(MGPipeDirty::NewVertexBuffers) ==
+                              kMGPipeSubsystemVertexInput,
+                      "set_vertex_buffers and NEW_VERTEX_BUFFERS must name one subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewIndexBuffer) == 0 ||
+                          MGPipeSubsystemForDirty(MGPipeDirty::NewIndexBuffer) ==
+                              kMGPipeSubsystemVertexInput,
+                      "set_index_buffer and NEW_INDEX_BUFFER must name one subsystem");
+        // The two vertex views' capacity is one number on both sides of the boundary. This is
+        // the one translation unit that sees the frontend constant and the MG_Pipe one, so it
+        // is where they are pinned together; MGPipeTypes.h says so in place.
+        static_assert(kMGPipeMaxVertexAttribs ==
+                          MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS,
+                      "the MGPipe vertex-attribute capacity and the frontend's have drifted");
+
         // Which of those subsystems THIS BUILD actually emits for. It grows one commit at a
         // time, and a field whose emitter is not wired here keeps being pulled - so adding a
         // row to Coverage.def can never silently drop a field on the floor before the call
         // that carries it exists.
+        //
+        // P3a's two are DELIBERATELY ABSENT at the contract commit: the three emitters below
+        // are stubs that emit nothing and the applier's fourteen entry points are stubs that
+        // apply nothing, so wiring either bit here would retire a pull for a call that does
+        // not happen yet. The commit that gives the emitters their bodies adds them.
         constexpr Uint64 kMGPipeWiredSubsystems = kMGPipeSubsystemRenderState |
                                                   kMGPipeSubsystemPixelPack |
                                                   kMGPipeSubsystemPatchState |
@@ -1044,6 +1093,35 @@ namespace MobileGL::MG_Pipe {
             }
             return payloadBytes;
         }
+
+        // ---- P3a's three vertex-input emitters. STUBS AT THE CONTRACT COMMIT. ----
+        //
+        // They exist here, and are called from the validate point below, for the same reason
+        // the applier's fourteen entry points exist as stubs: this file's enum-coupled block
+        // is the contract commit's and everything else in it belongs to the commit that
+        // fills the bodies in, so the two must not have to touch the same lines. What lands
+        // here is the SHAPE - three functions, in the emission order the design fixes
+        // (elements, then buffers, then index, after the four P2 emitters) - and the bodies
+        // replace `return 0` without moving a call site.
+        //
+        // THEY ARE UNREACHABLE, not merely empty: MGPipeSubsystemForDirty maps NEW_VERTEX_
+        // ELEMENTS / _BUFFERS / _INDEX_BUFFER onto no subsystem yet, so `wants()` is false
+        // for all three whatever MOBILEGL_PIPE_PUSH says. Returning 0 keeps them out of the
+        // payload histogram, which must not gain a bucket for bytes nobody sent.
+        Uint64 EmitVertexElements(GLContext& ctx) {
+            (void)ctx;
+            return 0;
+        }
+
+        Uint64 EmitVertexBuffers(GLContext& ctx) {
+            (void)ctx;
+            return 0;
+        }
+
+        Uint64 EmitIndexBuffer(GLContext& ctx) {
+            (void)ctx;
+            return 0;
+        }
     } // namespace
 
     Uint64 MGPipeVertexAttribDefaultRepairCount() { return g_attribDefaultRepairs; }
@@ -1125,6 +1203,21 @@ namespace MobileGL::MG_Pipe {
         }
         if (wants(MGPipeDirty::NewVertexAttribDefaults)) {
             payloadBytes += EmitVertexAttribDefaults(*ctx, tracker.FreshlyPrimed());
+        }
+
+        // P3a's vertex segment, in the order the design fixes: vertex elements, then the
+        // vertex buffers that fill them, then the index binding. All three still resolve to
+        // false today - their dirty bits map to no subsystem until the tracker's arms land -
+        // and all three emitters are stubs; the call sites are here so the commit that gives
+        // them bodies does not also have to edit the validate point.
+        if (wants(MGPipeDirty::NewVertexElements)) {
+            payloadBytes += EmitVertexElements(*ctx);
+        }
+        if (wants(MGPipeDirty::NewVertexBuffers)) {
+            payloadBytes += EmitVertexBuffers(*ctx);
+        }
+        if (wants(MGPipeDirty::NewIndexBuffer)) {
+            payloadBytes += EmitIndexBuffer(*ctx);
         }
 
         // ---- step 4: the residual fill, for what an emitted call did NOT supply ----
