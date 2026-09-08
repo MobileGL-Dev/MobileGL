@@ -76,6 +76,10 @@ namespace {
     X(TrackerWalk, TheIndexBufferBitDoesNotFireOnAnUnrelatedBufferWrite) \
     X(TrackerWalk, TheIndexBufferBitFiresWhenTheSlotVersionWrapsOntoADifferentBuffer) \
     X(TrackerWalk, ABaseInstanceSurvivesTheFirstWalkOnAFreshContext) \
+    X(TrackerWalk, ASamplerBindAloneFiresTheSamplerStateBit) \
+    X(TrackerWalk, ARestagedProgramPipelineFiresTheProgramBits) \
+    X(TrackerWalk, ARelinkOfAStageProgramFiresTheProgramBits) \
+    X(TrackerWalk, UseProgramZeroLeavesTheBoundPipelineDrivingTheProgramBits) \
     X(TrackerAttribPayload, AFloatWriteCarriesTheFloatBitsAndNamesItsClass) \
     X(TrackerAttribPayload, AnIntWriteCarriesTheIntWordsAndNamesItsClass) \
     X(TrackerAttribPayload, AUintWriteCarriesTheUintWordsAndNamesItsClass) \
@@ -616,6 +620,135 @@ namespace {
         Walk();
         EXPECT_EQ(m_tracker.PendingBaseInstance(), 0u);
         m_cache.Reset();
+    }
+
+    // ===================================================================================
+    // P4a c0d: the two under-fires that only a bit WITH an emitter can be hurt by
+    // ===================================================================================
+
+    // BIT 13 IS WHAT bind_sampler_states IS EMITTED OFF (PipeFill.cpp gates EmitSamplerStates
+    // on NEW_SAMPLERS), and glBindSampler moved neither half of what its shutter used to read:
+    // GL_Sampler.cpp's BindSampler_State calls NoteTextureUnitTouched and then
+    // TextureUnit::SetSamplerObject, and BOTH of those bump the TEXTURE BIND generation, which
+    // is bit 12's. The only writers of the sampling-resolution generation are parameter
+    // changes. This case makes those two calls, in that order, with nothing else moving.
+    TEST_F(TrackerWalk, ASamplerBindAloneFiresTheSamplerStateBit) {
+        ASSERT_TRUE(Ctx().CreateSamplerObject(1) != nullptr);
+        ASSERT_TRUE(Ctx().CreateSamplerObject(2) != nullptr);
+
+        Ctx().NoteTextureUnitTouched(3);
+        Ctx().GetTextureUnitObject(3).SetSamplerObject(Ctx().GetSamplerObject(1));
+        Walk();
+        ASSERT_EQ(Walk(), 0u) << "the fixture did not reach a steady state";
+
+        // The one and only change: unit 3 now carries a DIFFERENT sampler object, whose
+        // parameters happen to differ from the first one's. No glSamplerParameter*, no
+        // glTexParameter*, so the sampling-resolution generation cannot have moved.
+        Ctx().NoteTextureUnitTouched(3);
+        Ctx().GetTextureUnitObject(3).SetSamplerObject(Ctx().GetSamplerObject(2));
+        const Uint32 dirty = Walk();
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewSamplers), 0u)
+            << "bind_sampler_states is emitted off NEW_SAMPLERS and never saw the sampler bind";
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewSamplerViews), 0u)
+            << "the view set is re-resolved on a sampler bind too - completeness depends on the "
+               "effective sampler - and that half was already right";
+        EXPECT_EQ(Walk(), 0u) << "the widened shutter fires forever";
+    }
+
+    // BITS 6/7/8 UNDER A SEPARABLE PROGRAM PIPELINE. GetCurrentProgram() is null for the whole
+    // life of a bound pipeline, so all three shutters used to latch 0 and never move again
+    // after the first walk: glUseProgramStages would rebuild the composite and EmitShaderState
+    // would never be called, leaving the new composite with no ShaderCso handle at all.
+    TEST_F(TrackerWalk, ARestagedProgramPipelineFiresTheProgramBits) {
+        Vector<Uint> names;
+        Ctx().GenProgramPipelineNames(1, names);
+        ASSERT_EQ(names.size(), 1u);
+        Ctx().CreateProgramPipelineObject(names[0]);
+        Ctx().BindProgramPipelineObject(names[0]);
+        const auto& pipeline = Ctx().GetBoundProgramPipeline();
+        ASSERT_TRUE(pipeline != nullptr);
+        ASSERT_TRUE(Ctx().GetCurrentProgram() == nullptr)
+            << "the premise of this case is that the program family has no current program";
+
+        Walk();
+        ASSERT_EQ(Walk(), 0u) << "the fixture did not reach a steady state";
+
+        // What glUseProgramStages does at the end of its validation: one stage changes.
+        const Uint vertex = Ctx().CreateProgram();
+        pipeline->SetStageProgram(MobileGL::ShaderStage::Vertex, Ctx().GetProgramObject(vertex));
+        const Uint32 dirty = Walk();
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewShader), 0u)
+            << "the re-composited pipeline would never get a ShaderCso handle";
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewShaderBindings), 0u);
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewGlobalConstants), 0u)
+            << "set_global_constants would never be sent for a pipeline draw";
+        EXPECT_EQ(Walk(), 0u) << "the pipeline arm fires forever";
+    }
+
+    // The same three bits, moved by the OTHER event that changes what a pipeline draws: a
+    // stage program's relink. The stage set does not move at all here - only the link version
+    // the composite cache is keyed on, which is what makes GetProgramForDraw build a new one.
+    TEST_F(TrackerWalk, ARelinkOfAStageProgramFiresTheProgramBits) {
+        Vector<Uint> names;
+        Ctx().GenProgramPipelineNames(1, names);
+        ASSERT_EQ(names.size(), 1u);
+        Ctx().CreateProgramPipelineObject(names[0]);
+        Ctx().BindProgramPipelineObject(names[0]);
+        const auto& pipeline = Ctx().GetBoundProgramPipeline();
+        ASSERT_TRUE(pipeline != nullptr);
+
+        const Uint vertex = Ctx().CreateProgram();
+        const SharedPtr<MG_State::GLState::ProgramObject> stage = Ctx().GetProgramObject(vertex);
+        ASSERT_TRUE(stage != nullptr);
+        pipeline->SetStageProgram(MobileGL::ShaderStage::Vertex, stage);
+        Walk();
+        ASSERT_EQ(Walk(), 0u) << "the fixture did not reach a steady state";
+
+        // A real relink, through the entry point glLinkProgram drives. It fails - the
+        // program has no shaders attached - and that is deliberate: Link()'s PROLOGUE is where
+        // the link-observable versions are bumped, before any early-out, precisely so that
+        // every memo keyed on them reads stale from the instant the relink is enqueued.
+        stage->Link();
+        const Uint32 dirty = Walk();
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewShader), 0u);
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewShaderBindings), 0u);
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewGlobalConstants), 0u);
+        EXPECT_EQ(Walk(), 0u);
+    }
+
+    // AND THE HANDOVER, which is the shape an application actually writes: a program is in
+    // use, a pipeline is bound underneath it, and glUseProgram(0) hands the draw to the
+    // pipeline (GL 4.6 core 7.4). The program in use wins while there is one - so the bits
+    // must move when the SOURCE changes - and the pipeline must drive them afterwards.
+    TEST_F(TrackerWalk, UseProgramZeroLeavesTheBoundPipelineDrivingTheProgramBits) {
+        Vector<Uint> names;
+        Ctx().GenProgramPipelineNames(1, names);
+        ASSERT_EQ(names.size(), 1u);
+        Ctx().CreateProgramPipelineObject(names[0]);
+        Ctx().BindProgramPipelineObject(names[0]);
+        const auto& pipeline = Ctx().GetBoundProgramPipeline();
+        ASSERT_TRUE(pipeline != nullptr);
+
+        const Uint installed = Ctx().CreateProgram();
+        Ctx().UseProgram(installed);
+        ASSERT_TRUE(Ctx().GetCurrentProgram() != nullptr);
+        Walk();
+        ASSERT_EQ(Walk(), 0u) << "the fixture did not reach a steady state";
+
+        Ctx().UseProgram(0);
+        const Uint32 handover = Walk();
+        EXPECT_NE(handover & MGPipeDirtyBit(MGPipeDirty::NewShader), 0u)
+            << "the draw's program source changed and bit 6 did not fire";
+        ASSERT_EQ(Walk(), 0u);
+
+        // The pipeline is the source now, so a stage change has to reach the same bits.
+        const Uint vertex = Ctx().CreateProgram();
+        pipeline->SetStageProgram(MobileGL::ShaderStage::Vertex, Ctx().GetProgramObject(vertex));
+        const Uint32 dirty = Walk();
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewShader), 0u)
+            << "with no program in use the bound pipeline has to drive the program family";
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewShaderBindings), 0u);
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewGlobalConstants), 0u);
     }
 
     // ===================================================================================

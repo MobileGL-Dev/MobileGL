@@ -27,10 +27,17 @@
 // per-bit fire rate is a measurement rather than a plan and their fields go through the
 // residual fill until P4b.
 //
-// P4a NARROWS NOTHING AND WIDENS ONE THING: bit 11's shutter gains the READ framebuffer
-// binding slot's version, because set_framebuffer_state is emitted per bound TARGET and a
-// glBindFramebuffer(GL_READ_FRAMEBUFFER, ...) moved no shutter at all before. Over-firing is
-// free; that was an under-fire.
+// P4a NARROWS NOTHING AND WIDENS THREE THINGS, and every one of them was an UNDER-FIRE that
+// only became reachable once the bit gained an emitter:
+//   (1) bit 11's shutter gains the READ framebuffer binding slot's version, because
+//       set_framebuffer_state is emitted per bound TARGET and a glBindFramebuffer(
+//       GL_READ_FRAMEBUFFER, ...) moved no shutter at all before;
+//   (2) bit 13's gains the TEXTURE BIND generation, because glBindSampler moves that one and
+//       not the sampling-resolution one, so bind_sampler_states could not see a sampler bind;
+//   (3) bits 6/7/8 - and with them bit 14's program half - read the EFFECTIVE program source
+//       instead of GetCurrentProgram() alone, which is null for the whole life of a bound
+//       separable program pipeline, so a re-composited pipeline reached no program emitter.
+// Over-firing is free; all three of those were the other direction.
 //
 // WHY EVERY SHUTTER OVER-FIRES. A bit that fires too often costs one extra push. A bit
 // that fires too rarely renders stale, and ARCHITECTURE.md 13.2 names that as the
@@ -294,6 +301,49 @@ namespace MobileGL::MG_Pipe {
             // must not force a compile just to answer "did the shader move". These version
             // counters are plain members and are exactly what the backends already read
             // without joining (Core.cpp, the glUseProgram half of join site J1).
+            //
+            // BUT GetCurrentProgram() ALONE IS NOT THE PROGRAM SOURCE, AND AT P4a THAT IS AN
+            // UNDER-FIRE. Under GL_ARB_separate_shader_objects an application drives
+            // `glUseProgram(0); glBindProgramPipeline(P)`, and m_currentProgram is then null
+            // for the whole life of that pipeline (Core.cpp, GetProgramForDraw's second half):
+            // all three of these shutters read 0 == 0 forever, so after the first walk on a
+            // fresh context - the one !m_primed fires unconditionally - bits 6, 7 and 8 never
+            // fire again however the pipeline is restaged.
+            //
+            // WHILE NOTHING WAS EMITTED FOR THEM THAT WAS INVISIBLE, which is how it survived
+            // to P4a: GetProgramForDraw is emitted-and-still-pulled, the residual fill copies
+            // it at every verb, and DirtySurface.def rules BindProgramPipelineObject
+            // kPulledEveryVerb for exactly that reason - the backend still receives the right
+            // SharedPtr and nothing renders wrong. The moment P4a emits off these bits it
+            // stops being invisible: glUseProgramStages rebuilds the composite, EmitShaderState
+            // is never called again, so the new composite gets no ShaderCso handle and no
+            // create_shader_state while set_draw_program keeps naming the previous one - a
+            // program the handle protocol never announced, which is exactly the seam-defect
+            // class P3a spent a phase closing. And bit 8 never firing means
+            // set_global_constants is never sent for a pipeline draw at all, where the pull
+            // rescues nothing.
+            //
+            // SO THE SHUTTER READS THE EFFECTIVE SOURCE: the program in use when there is one,
+            // and the bound pipeline when there is not. What it reads OF that pipeline is the
+            // pair ComputeDrawProgramSignature() is built from - each stage program's lifetime
+            // id and LINK version - so bit 6 fires exactly when GetProgramForDraw would hand
+            // back a different composite, which is exactly when a new ShaderCso handle has to
+            // be minted. Those are the same non-artefact fields the plain-program arm above
+            // reads, and the ones Core.cpp calls out as not passing through ProgramObject's
+            // join gate, so the "must not force a compile" rule survives intact: no join, no
+            // flatten, no Link().
+            //
+            // THE PIPELINE NAME IS MIXED IN because two pipelines can carry the same stage set
+            // and each caches its OWN composite object, so the signature alone would let a
+            // glBindProgramPipeline between two such pipelines pass without a fire. What that
+            // does NOT close is a name RECYCLED (glDeleteProgramPipelines +
+            // glGenProgramPipelines) back onto the same stage programs at the same link
+            // versions with no other program-family change in between: a ProgramPipelineObject
+            // has no lifetime id and no wire object at all - DirtySurface.def says so where it
+            // rules MarkProgramPipelineForDeletion kUnpublishedDestroy - so there is nothing
+            // else here to mix it with. Recorded rather than quietly left: closing it needs a
+            // generation counter on the frontend object, which is an MG_State change and not
+            // this file's to make.
             const auto& program = ctx.GetCurrentProgram();
             Uint64 shader = 0;
             Uint64 bindings = 0;
@@ -308,6 +358,66 @@ namespace MobileGL::MG_Pipe {
                     program->GetUniformWriteSetVersion());
                 constants = MGPipeMixShutter(program->GetLifetimeId(), program->GetUBOContentVersion());
                 programImages = program->GetImageUnitVersion();
+            } else if (const auto& pipeline = ctx.GetBoundProgramPipeline(); pipeline) {
+                using Pipeline = MG_State::GLState::ProgramPipelineObject;
+                // THE FIELDS ARE READ DIRECTLY RATHER THAN THROUGH THE TWO FUNCTIONS THAT
+                // ALREADY PACK THEM, and that is a gate constraint, not a preference. Calling
+                // ComputeDrawProgramSignature() / ComputeUniformMirrorVersions() would say
+                // "the same pairs the composite cache and the uniform-mirror gate compare"
+                // far better than this loop does - but gen_pipe_dirty_surface.py derives a
+                // shutter by following each accessor to the member it returns, and both of
+                // those build a LOCAL array and return that, which it cannot place. A shutter
+                // naming them is UNRESOLVED, and then every DirtySurface.def row that names
+                // bits 6, 7, 8 or 14 loses its verdict - including the derivation that is the
+                // only mechanism able to catch the next under-fire here. So the pairs are
+                // spelled out, and the two static_asserts below are what say they must stay in
+                // step with the functions they mirror.
+                static_assert(sizeof(Pipeline::DrawProgramSignature) ==
+                                  2 * Pipeline::kGraphicsStageCount * sizeof(Uint64),
+                              "bit 6 reads the {lifetimeId, linkVersion} pair per graphics "
+                              "stage that ComputeDrawProgramSignature packs");
+                static_assert(sizeof(Pipeline::UniformMirrorVersions) ==
+                                  2 * Pipeline::kGraphicsStageCount * sizeof(Uint64),
+                              "bits 7 and 8 read the four counters per graphics stage that "
+                              "ComputeUniformMirrorVersions packs");
+
+                // Bit 6 is the pipeline's identity plus the composite cache key. Bits 7 and 8
+                // add the per-program state, which under a pipeline is written to the STAGE
+                // programs - glUniform* addresses the pipeline's active program,
+                // glProgramUniform* and the two block-binding calls address a named one - and
+                // only reaches the composite through RefreshCompositeUniforms. Bit 14's half
+                // takes the image-unit generation, which is its own counter for the reason
+                // ProgramObject gives (ES forbids glUniform1i on an image uniform, so Espryt
+                // BAKES the unit into the ESSL it generates and only a regeneration honours a
+                // change) and which D-G4 asks this shutter to keep reading as a FRONTEND
+                // counter rather than any server-side epoch.
+                //
+                // STAGELINKS IS MIXED INTO ALL THREE OF THE OTHERS, ON PURPOSE. A composite
+                // REBUILD hands back a brand-new ProgramObject with an empty default uniform
+                // block and no backend state at all - SetCachedDrawProgram clears the mirror
+                // versions with it - so a shutter watching only the per-stage state counters
+                // would let a rebuilt composite inherit the bindings, the constants and the
+                // image units of the one it replaced.
+                Uint64 stageLinks = static_cast<Uint64>(ctx.GetBoundProgramPipelineName());
+                Uint64 stageState = 0;
+                Uint64 stageImages = 0;
+                for (SizeT stage = 0; stage < Pipeline::kGraphicsStageCount; ++stage) {
+                    const auto& staged = pipeline->GetStageProgram(static_cast<ShaderStage>(stage));
+                    if (!staged) continue;
+                    stageLinks = MGPipeMixShutter(
+                        MGPipeMixShutter(stageLinks, staged->GetLifetimeId()), staged->GetLinkVersion());
+                    stageState = MGPipeMixShutter(
+                        MGPipeMixShutter(MGPipeMixShutter(stageState, staged->GetBackendStateVersion()),
+                                         MGPipeMixShutter(staged->GetUBOContentVersion(),
+                                                          staged->GetBlockBindingVersion())),
+                        staged->GetUniformWriteSetVersion());
+                    stageImages = MGPipeMixShutter(stageImages, staged->GetImageUnitVersion());
+                }
+                shader = stageLinks;
+                stageState = MGPipeMixShutter(stageLinks, stageState);
+                bindings = MGPipeMixShutter(stageState, stageImages);
+                constants = stageState;
+                programImages = MGPipeMixShutter(stageLinks, stageImages);
             }
             now[Index(MGPipeDirty::NewShader)] = shader;
             now[Index(MGPipeDirty::NewShaderBindings)] = bindings;
@@ -383,8 +493,28 @@ namespace MobileGL::MG_Pipe {
                     ctx.GetFramebufferBindingSlot(FramebufferTarget::Read).GetVersion()));
             now[Index(MGPipeDirty::NewSamplerViews)] =
                 MGPipeMixShutter(textureContent, ctx.GetTextureBindGeneration());
-            now[Index(MGPipeDirty::NewSamplers)] =
-                MGPipeMixShutter(textureParams, ctx.GetSamplingResolutionGeneration());
+            // Bit 13, WIDENED AT P4a FOR BIT 11's REASON and found the same way. glBindSampler
+            // moves NEITHER half of what this used to read: GL_Sampler.cpp's BindSampler_State
+            // goes through NoteTextureUnitTouched and TextureUnit::SetSamplerObject, and both
+            // of those bump the TEXTURE BIND generation - bit 12's. The only two writers of
+            // BumpSamplingResolutionGeneration are PARAMETER changes (SamplerObject.cpp,
+            // TextureObject.cpp). So `glBindSampler(3, a); draw; glBindSampler(3, b); draw`
+            // fired bit 12 twice and bit 13 not once, and the server's BoundSamplerStates[3]
+            // went on naming a's CSO: wrong filtering, with nothing able to see it, because
+            // bind_sampler_states has no pulled twin to fall back on the way the view set does.
+            //
+            // MIXING THE GENERATION IN IS THE FIX RATHER THAN A SECOND GATE ON THE EMITTER,
+            // because that generation is what the unit SET is derived from: a sampler bind
+            // changes which sampler state applies at a unit, and a texture bind changes it too
+            // whenever the unit carries no sampler object and the texture's BUILT-IN sampler is
+            // what applies. Keeping it one shutter per bit is also what keeps the per-subsystem
+            // A/B and the per-bit fire tallies meaning what they say - a bit gated on another
+            // bit's shutter measures neither. The extra fires a plain texture bind now costs
+            // are swallowed by the emitter's own set-hash suppressor, which MGPipeTypes.h makes
+            // mandatory for every kVarTail set for this exact traffic.
+            now[Index(MGPipeDirty::NewSamplers)] = MGPipeMixShutter(
+                MGPipeMixShutter(textureParams, ctx.GetSamplingResolutionGeneration()),
+                ctx.GetTextureBindGeneration());
             now[Index(MGPipeDirty::NewShaderImages)] =
                 MGPipeMixShutter(MGPipeMixShutter(textureContent, textureParams), programImages);
             now[Index(MGPipeDirty::NewConstBuffers)] = buffers;
