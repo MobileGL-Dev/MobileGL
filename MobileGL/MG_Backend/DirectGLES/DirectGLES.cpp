@@ -2327,6 +2327,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // draw-path staleness check below at one integer test.
         static Uint g_imageUnitHighWaterMark = 0;
 
+#if MOBILEGL_PIPE_PUSH
+        // P4a e3 (D-G3). The pushed image-unit record for this unit, or null when there is
+        // none to read.
+        //
+        // THE IDENTITY CHECK IS THE POINT. set_shader_images is emitted at the validate point
+        // for a draw, while SyncImageTextureBinding is also the EAGER funnel that
+        // glBindImageTexture itself runs - so at that moment the newest record describes the
+        // previous draw. Driving the driver from a record that names a different texture than
+        // the unit holds would bind one texture with another's level, layer and format, which
+        // is the class of bug the frontend's own ImageTextureBinding exists to make
+        // impossible. So a record is used only when it names EXACTLY the texture the unit
+        // holds, and otherwise this returns null and the frontend binding answers - which is
+        // also what a build whose client half has not landed always gets.
+        //
+        // Count is the "has this set ever arrived" test, never the serial: MGPipeApplierReset
+        // advances the working-state serials whether or not anything was emitted.
+        static const MG_Pipe::MGPImageView* ResolveShaderImageRecord(
+            Uint unit, const MG_State::GLState::ITextureObject* boundTexture) {
+            if (!EsprytDrawSamplerHandlesEnabled()) return nullptr;
+            const auto& st = MG_Pipe::MGPipeApplier();
+            if (st.ShaderImageCount == 0) return nullptr;
+            if (unit < st.ShaderImageStart || unit - st.ShaderImageStart >= st.ShaderImageCount) return nullptr;
+            if (unit >= st.BoundShaderImages.size()) return nullptr;
+            const MG_Pipe::MGPImageView& view = st.BoundShaderImages[unit];
+            if (view.Res != g_backendTextureObjects.HandleOf(boundTexture)) return nullptr;
+            return &view;
+        }
+#endif
+
         void SyncImageTextureBinding(Uint unit) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -2342,9 +2371,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             auto& backendTexture = SyncTextureObjectToBackend(imageBinding.Texture, true);
+#if MOBILEGL_PIPE_PUSH
+            // P4a e3: the four well-defined fields of the pushed record are the authority for
+            // this unit once the record names the same texture the unit holds (see
+            // ResolveShaderImageRecord). ACCESS IS DELIBERATELY NOT AMONG THEM:
+            // MGPImageView::Access is a Uint8 and a GL access token is not, so the record
+            // carries an ENCODING whose definition belongs to the client emitter and does not
+            // exist at the contract commit. Reading it here before that encoding is written
+            // down would be inventing it. The frontend value answers until then, and it is the
+            // same value by construction - the client copies the unit's own binding.
+            const MG_Pipe::MGPImageView* const record =
+                ResolveShaderImageRecord(unit, imageBinding.Texture.get());
+#define MGB_IMAGE_LAYERED (record ? static_cast<GLboolean>(record->Layered) : imageBinding.Layered)
+#define MGB_IMAGE_LAYER (record ? static_cast<GLint>(record->Layer) : imageBinding.Layer)
+#define MGB_IMAGE_LEVEL (record ? static_cast<GLint>(record->Level) : imageBinding.Level)
+#define MGB_IMAGE_FORMAT (record ? static_cast<GLenum>(record->InternalFormat) : imageBinding.Format)
+#else
+#define MGB_IMAGE_LAYERED imageBinding.Layered
+#define MGB_IMAGE_LAYER imageBinding.Layer
+#define MGB_IMAGE_LEVEL imageBinding.Level
+#define MGB_IMAGE_FORMAT imageBinding.Format
+#endif
             const Bool layerable = SupportsLayeredImageBinding(imageBinding.Texture->GetTarget());
-            const GLboolean layered = layerable ? imageBinding.Layered : GL_FALSE;
-            const GLint layer = layerable ? imageBinding.Layer : 0;
+            const GLboolean layered = layerable ? MGB_IMAGE_LAYERED : GL_FALSE;
+            const GLint layer = layerable ? MGB_IMAGE_LAYER : 0;
             // The bind half of the image-format widening. SyncTextureObjectToBackend has just
             // allocated this texture's storage in the core carrier of its format (the call above
             // is the one that marks it image-bindable), and glBindImageTexture's `format` has to
@@ -2381,13 +2431,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // format it asked for so that a samplerBuffer reading the same buffer texture - which
             // is NOT subscript-rewritten - still sees whole texels. See
             // BackendTextureObject::m_bufferImageSplitViewId.
-            GLenum bindFormat = imageBinding.Format;
+            GLenum bindFormat = MGB_IMAGE_FORMAT;
             GLuint bindTextureId = backendTexture->GetBackendTextureId();
             if (imageBinding.Texture->GetTarget() == TextureTarget::TextureBuffer) {
                 if (TextureImpl::GetImageBindableBufferSplitFormat(imageBinding.Texture->GetFormat()) !=
                     GL_UNKNOWN_MGL) {
                     if (const GLenum boundFormatSplit = TextureImpl::GetImageBindableBufferSplitFormat(
-                            MG_Util::ConvertGLEnumToTextureInternalFormat(imageBinding.Format));
+                            MG_Util::ConvertGLEnumToTextureInternalFormat(MGB_IMAGE_FORMAT));
                         boundFormatSplit != GL_UNKNOWN_MGL) {
                         bindFormat = boundFormatSplit;
                         if (const Uint splitViewId = backendTexture->GetBufferImageSplitViewId();
@@ -2398,13 +2448,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             } else if (TextureImpl::GetImageBindableStorageWidening(imageBinding.Texture->GetFormat())) {
                 const auto boundFormatWidening = TextureImpl::GetImageBindableStorageWidening(
-                    MG_Util::ConvertGLEnumToTextureInternalFormat(imageBinding.Format));
+                    MG_Util::ConvertGLEnumToTextureInternalFormat(MGB_IMAGE_FORMAT));
                 if (boundFormatWidening) {
                     bindFormat = boundFormatWidening.InternalFormat;
                 }
             }
-            g_GLESFuncs.glBindImageTexture(unit, bindTextureId, imageBinding.Level,
+            g_GLESFuncs.glBindImageTexture(unit, bindTextureId, MGB_IMAGE_LEVEL,
                                            layered, layer, imageBinding.Access, bindFormat);
+#undef MGB_IMAGE_LAYERED
+#undef MGB_IMAGE_LAYER
+#undef MGB_IMAGE_LEVEL
+#undef MGB_IMAGE_FORMAT
         }
 
         // A buffer texture bound to a WRITABLE image unit is a buffer the shader is about to
@@ -2447,6 +2501,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // limit raises GL_INVALID_VALUE on every dispatch.
             const Uint unitCount = std::min<Uint>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS,
                                                   static_cast<Uint>(std::max(g_GLESCapabilities.MaxImageUnits, 0)));
+#if MOBILEGL_PIPE_PUSH
+            // P4a e3 (D-G2, D-J2): the pushed set's window is the sweep's membership once the
+            // set has arrived. THE VAR-TAIL WINDOW IS THE BOUND AND ENTRIES OUTSIDE IT ARE NOT
+            // CLEARED - the record is "the last set as received" - so this walks [Start,
+            // Start + Count) and nothing else, clamped to what ES actually exposes because
+            // binding past the device limit raises GL_INVALID_VALUE on every dispatch. The
+            // client emits Start = 0 and Count = the image high-water mark + 1, so this is the
+            // same walk with the high-water read off the record instead of a backend global.
+            {
+                const auto& st = MG_Pipe::MGPipeApplier();
+                if (EsprytDrawSamplerHandlesEnabled() && st.ShaderImageCount != 0) {
+                    const Uint32 end =
+                        std::min<Uint32>(st.ShaderImageStart + st.ShaderImageCount, static_cast<Uint32>(unitCount));
+                    for (Uint32 unit = st.ShaderImageStart; unit < end; ++unit) {
+                        SyncImageTextureBinding(unit);
+                    }
+                    return;
+                }
+            }
+#endif
             for (Uint unit = 0; unit < unitCount; ++unit) {
                 SyncImageTextureBinding(unit);
             }
@@ -2472,6 +2546,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the obvious choice): a texture that is bound ONLY to an image unit is re-minted inside
         // this very sweep, so a backend-side trigger would be bumped after the gate had already
         // declined to run it.
+        //
+        // P4a e3 (D-G4) leaves BOTH properties of this gate exactly as they are, and says so
+        // because they are the kind of thing a later optimisation deletes:
+        //
+        //   1. the g_imageUnitHighWaterMark == 0 early-out is what makes every Minecraft draw
+        //      pay one integer test, and it is asked BEFORE anything reads a record;
+        //   2. the gate key stays the FRONTEND sampling-resolution generation and is
+        //      deliberately not re-keyed onto a server-owned serial, for the reason above: a
+        //      texture bound only to an image unit is re-minted INSIDE this sweep, so an epoch
+        //      the server bumps would move after the gate had already declined to run it. The
+        //      client's own NewShaderImages shutter mixes the same three frontend counters
+        //      (texture content, texture params, the program's image-unit version), so the
+        //      property is preserved on both sides by construction rather than by agreement.
         void SyncImageTextureBindingsForDraw(const DrawTextureSyncKeys& keys) {
             if (g_imageUnitHighWaterMark == 0) return;
             if (g_imageSweepValid && g_imageSweepContextId == keys.contextId &&
