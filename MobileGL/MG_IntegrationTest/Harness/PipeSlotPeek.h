@@ -30,6 +30,29 @@ namespace MGITest {
     enum class PipeSlotKind {
         Buffer,
         VertexElementsCso,
+        // P4a's six (G8b). Every one of them is a kind the CLIENT mints and the client alone
+        // frees (BRIEF-P4A.md D-I1: one death helper per kind, called from the frontend
+        // object's own destructor, whatever backend is running), so every one of them can leak
+        // the P3a C-1 way - and the leak is invisible in pixels, in GL names and in
+        // glGetError, exactly as the VertexElementsCso one was.
+        Texture,
+        Renderbuffer,
+        // Framebuffer has a HANDLE but no wire lifetime (D-I2): no create_*, no destroy row in
+        // the catalogue, and its death helper does the notice and the free and emits nothing.
+        // That makes the allocator the ONLY observable of its lifetime, so this row matters
+        // more here than the others rather than less.
+        Framebuffer,
+        SamplerCso,
+        SamplerViewCso,
+        // ShaderCso covers BOTH the ordinary program slots and the program-pipeline COMPOSITES
+        // minted out of the reserved high band (MGPipeHandles.h:86-97, D-H7). One kind, because
+        // that is what the allocator has: the band is a second dense table inside the same
+        // kind, LiveCount counts both and HighWater is one past the highest slot handed out in
+        // either. The composite's leak case is a separate CASE rather than a separate kind for
+        // that reason - what makes it its own case is that a composite's slot has TWO
+        // independent release paths (the pipeline cache's LRU eviction and the composite
+        // ProgramObject's destructor), not that it is counted anywhere else.
+        ShaderCso,
     };
 
     // Live slots of this kind right now, and one past the highest slot ever handed out.

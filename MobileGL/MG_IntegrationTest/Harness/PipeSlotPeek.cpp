@@ -20,11 +20,24 @@ namespace MGITest {
 
 #if defined(MGITEST_PIPE_SLOT_PEEK_LIVE)
     namespace {
+        // One arm per member, and NO `default:` on purpose: adding a PipeSlotKind without
+        // deciding which MGPipeKind it names is a compiler warning here (-Wswitch) rather than
+        // a row that silently counts VertexElementsCso and reports "did not leak" about a kind
+        // it never looked at. The trailing return is the unreachable one the compiler needs.
         MobileGL::MG_Pipe::MGPipeKind Translate(PipeSlotKind kind) {
             switch (kind) {
                 case PipeSlotKind::Buffer: return MobileGL::MG_Pipe::MGPipeKind::Buffer;
-                default: return MobileGL::MG_Pipe::MGPipeKind::VertexElementsCso;
+                case PipeSlotKind::VertexElementsCso:
+                    return MobileGL::MG_Pipe::MGPipeKind::VertexElementsCso;
+                case PipeSlotKind::Texture: return MobileGL::MG_Pipe::MGPipeKind::Texture;
+                case PipeSlotKind::Renderbuffer: return MobileGL::MG_Pipe::MGPipeKind::Renderbuffer;
+                case PipeSlotKind::Framebuffer: return MobileGL::MG_Pipe::MGPipeKind::Framebuffer;
+                case PipeSlotKind::SamplerCso: return MobileGL::MG_Pipe::MGPipeKind::SamplerCso;
+                case PipeSlotKind::SamplerViewCso:
+                    return MobileGL::MG_Pipe::MGPipeKind::SamplerViewCso;
+                case PipeSlotKind::ShaderCso: return MobileGL::MG_Pipe::MGPipeKind::ShaderCso;
             }
+            return MobileGL::MG_Pipe::MGPipeKind::None;
         }
     } // namespace
 
