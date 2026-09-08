@@ -1819,7 +1819,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint64 m_syncedBackendIdGeneration = 0;
 #if MOBILEGL_PIPE_PUSH
             // P4a (D-C4): MGPFramebufferState::ContentHash as of this twin's last sync, PER
-            // BOUND TARGET, and it is the second of the hash's two jobs - "the server's
+            // TARGET IT WAS SYNCED AS, and it is the second of the hash's two jobs - "the server's
             // render-pass memo key, and the CLIENT's emission suppressor". It replaces
             // m_syncedFrontendAttachmentVersions AS A KEY (the array stays: it is what the
             // legacy arm compares, and it is the mechanism the handle arm re-arms through).
@@ -1830,9 +1830,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // a suppressed record provably means the draw-buffer array did not move, which
             // provably means the fragColor broadcast count did not move.
             //
-            // PER TARGET rather than one, because Draw and Read sync different things off two
-            // different records; 0 is never a live hash (a computed 0 is remapped to 1 by the
-            // client's suppressor), so a zeroed memo is a guaranteed miss.
+            // PER TARGET rather than one, and it stays that way under ID-19's per-OBJECT record:
+            // there is now ONE record for this framebuffer, but syncing it as Draw and syncing it
+            // as Read do different work (glDrawBuffers and the four cross-object masks are
+            // Draw-only, glReadBuffer is Read-only), so "I have already applied this record" is a
+            // per-target claim and one memo would let the second target skip work the first never
+            // did. 0 is never a live hash (a computed 0 is remapped to 1 by the client's
+            // suppressor), so a zeroed memo is a guaranteed miss.
             Array<Uint64, SizeT(FramebufferTarget::FramebufferTargetCount)> m_syncedRecordHashes = {0};
 #endif
         };
@@ -1841,20 +1845,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_backendFramebufferObjects;
 
 #if MOBILEGL_PIPE_PUSH
-        // P4a (D-C2): the applier's record FOR THIS BOUND TARGET, or null.
+        // P4a (D-C2 as corrected by ID-19): the applier's record for THE FRAMEBUFFER OBJECT this
+        // handle names, or null.
         //
-        // The applier holds set_framebuffer_state as WORKING STATE - two records, Draw and Read,
-        // written by whichever emission named that target (Target = Both writes both). This twin
-        // is per FRAMEBUFFER OBJECT, so the two have to be matched: the record is this twin's
-        // only if its Fbo names this twin's handle. A mismatch means the object being synced is
-        // not the one currently bound to that target, which is a real sequence (a scratch FBO
-        // synced while another is bound) and is answered with null rather than with the other
-        // framebuffer's attachments.
+        // v1 asked the applier for its two BOUND-target working records and answered null unless
+        // one of them happened to name this twin - which meant every DSA entry point
+        // (BlitNamedFramebuffer, the four ClearNamedFramebuffer*) drove a framebuffer that is
+        // bound to neither target, found no record, declined, and then had the clear or blit
+        // issued against a driver FBO that never got its attachments. The record is now keyed by
+        // the framebuffer HANDLE (MGPipeApplierState::FramebufferRecords, wire v3), so a record
+        // that comes back is this framebuffer's by construction and it comes back whether the
+        // object is bound to Draw, to Read, to both or to neither. A null here means "no emission
+        // has ever described this framebuffer, or the handle's generation is stale" - both of
+        // them seam defects on an integrated tree, never a binding question.
         //
         // `fbo` is the handle the caller resolved for this twin; passing it in rather than
         // resolving it here keeps the monolith-glue lookup at one site per sync.
-        const MG_Pipe::MGPFramebufferState* PushedFramebufferRecord(FramebufferTarget asTarget,
-                                                                    MG_Pipe::MGPipeHandle fbo);
+        const MG_Pipe::MGPFramebufferState* PushedFramebufferRecord(MG_Pipe::MGPipeHandle fbo);
+
+        // THE BINDING QUESTION, WHICH IS NOW A DIFFERENT QUESTION FROM THE DESCRIPTION (ID-19(d)):
+        // "is the framebuffer this handle names the one bound to `target`". One array compare
+        // against MGPipeApplierState::BoundFramebuffer, never a record lookup - a Named record
+        // describes an object without claiming any binding for it, so asking the record would
+        // give the wrong answer by construction.
+        Bool PushedFramebufferIsBoundTo(FramebufferTarget target, MG_Pipe::MGPipeHandle fbo);
 #endif
         // True when the read buffer names a fixed-point (norm/snorm) attachment that the
         // backend actually stores in a floating-point format. GL clamps a read from a
@@ -1963,6 +1977,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // GL_FRAMEBUFFER binds both targets.
         void BindFramebufferId(GLenum fbTarget, Uint id);
         Uint CurrentFramebufferBinding(FramebufferTarget target);
+#if MOBILEGL_PIPE_PUSH
+        // THE HANDLE ARM'S OWN FRAMEBUFFER MEMOS, AND THEY ARE PACKAGE E's STORAGE
+        // (DirectGLES.cpp: g_fboSyncedSerials, g_fboRecordsTrusted). E's review MAJOR-4 handed
+        // this to D because InvalidateFramebufferBindingCache is in THIS file and has three
+        // callers E cannot reach - MG_Test/SanityTest.cpp's ScopedStateGuardMocks::ResetShadows
+        // and ScopedBackendTwinMocks' constructor and destructor - which clear the pre-handle
+        // trio and would leave the handle-arm memos claiming a target is synced across a GLES
+        // function-table swap. Calling it from INSIDE InvalidateFramebufferBindingCache is what
+        // makes forgetting impossible, and that call is written below.
+        //
+        // IT IS GATED, AND HERE IS THE HANDSHAKE, because the definition is `static` in E's file
+        // on the tree this package was built against (esprytdraw v2, DirectGLES.cpp:2789) and an
+        // internal-linkage function cannot be called from Managers.cpp. E's verification round
+        // drops that one keyword; D's verification round flips this constant to 1, in this file,
+        // one line. Neither side can do it silently: the flip has no other reader and the
+        // declaration below has no other definition.
+#define MOBILEGL_ESPRYT_FBO_HANDLE_ARM_MEMOS_LINKED 0
+#if MOBILEGL_ESPRYT_FBO_HANDLE_ARM_MEMOS_LINKED
+        void InvalidateFramebufferHandleArmMemos();
+#endif
+#endif
         void InvalidateFramebufferBindingCache();
         // A driver framebuffer id is about to be deleted: ES reverts every target that
         // currently binds it to 0, so the binding shadow has to follow or the next
