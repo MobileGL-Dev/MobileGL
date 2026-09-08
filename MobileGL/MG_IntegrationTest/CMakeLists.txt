@@ -844,8 +844,15 @@ gtest_discover_tests(MobileGLIntegrationTest
 # precisely D14's startup Fatal{PipeLegacyMemosDisabled} condition - so a lane that set it there
 # would abort the process before the scenario could report its skip. MOBILEGL_PIPE_HANDLE_ABA_CONTROL
 # has no field to parse into in a pull build at all (Config.h declares it under #if MOBILEGL_PIPE_PUSH).
+# A lane that needs an arm pins EVERY knob that selects it. A ctest ENVIRONMENT property overrides
+# only the variables it names; the rest leak in from the job. The five-part gate's all-pull control
+# arm runs `MOBILEGL_PIPE_PUSH=0 ctest -L integration-gpu` over the whole label, and without the
+# explicit bitmask below that leaked PUSH=0 turned this lane's LEGACY_MEMOS=0 into D14's armless
+# combination: the bring-up aborted, on purpose, and the lane went red for a reason that was never
+# about handles. The mask is the P2 default (kMGPipeSubsystemsMigratedAtP2), not a hand-picked bit,
+# so the lane keeps measuring the shape that ships.
 if (MOBILEGL_PIPE_PUSH)
-    set(MGL_ITEST_HANDLES_ARM_KNOBS "MOBILEGL_PIPE_LEGACY_MEMOS=0")
+    set(MGL_ITEST_HANDLES_ARM_KNOBS "MOBILEGL_PIPE_LEGACY_MEMOS=0" "MOBILEGL_PIPE_PUSH=0x7f")
     set(MGL_ITEST_ABA_ARM_KNOBS "MOBILEGL_PIPE_HANDLE_ABA_CONTROL=1")
 else()
     set(MGL_ITEST_HANDLES_ARM_KNOBS "")
