@@ -44,9 +44,16 @@ counted; `--require-all` turns every SKIP into a failure. That is what lets this
 land BEFORE the two headers do, and what stops an all-SKIP run from passing for free
 once they exist - the integrator flips `--require-all` on as the ratchet.
 
+TWO WAYS THIS GATE USED TO GO GREEN WITHOUT LOOKING AT ANYTHING, both closed:
+an explicit `--compiler` is resolved in EVERY mode (the default `--mode text` never runs
+one, so a gate line naming a binary this image does not have used to pass), and
+`--expect-probes N` pins how many probes actually ran, because an exit code cannot tell
+four probes from none. The campaign gate spells `--compiler clang++`: there is no
+`clang++-20` in the WSL image, and asking for one is now a stop rather than a silent skip.
+
     python3 scripts/check_include_closure.py --mode text --self-test
-    python3 scripts/check_include_closure.py --mode both --compiler clang++-20 --self-test
-    python3 scripts/check_include_closure.py --mode both --self-test --require-all
+    python3 scripts/check_include_closure.py --mode both --compiler clang++ --self-test
+    python3 scripts/check_include_closure.py --mode both --self-test --require-all --expect-probes 4
 """
 
 import argparse
@@ -581,6 +588,9 @@ def main():
                         help="run the negative controls and the parser checks (always on in CI)")
     parser.add_argument("--require-all", action="store_true",
                         help="a SKIP (header not present yet) is a failure")
+    parser.add_argument("--expect-probes", type=int, default=None,
+                        help="fail unless exactly this many probes ran; a gate that only checks "
+                             "the exit code cannot tell 4 probes from 0")
     parser.add_argument("--json", default=None, help="write the machine-readable result here")
     args = parser.parse_args()
 
@@ -592,6 +602,17 @@ def main():
             return 1
 
     modes = ["text", "clang"] if args.mode == "both" else [args.mode]
+
+    # AN EXPLICIT --compiler IS VALIDATED IN EVERY MODE, not only in the ones that would run
+    # it. `--mode text` is the default and never reaches pick_compiler, so a gate line that
+    # spelled a compiler this image does not have (clang++-20, say) used to run the text half,
+    # print nothing about it and exit 0 - a green nobody earned, which is exactly what
+    # ROADMAP.md:7 forbids. Asking for a compiler that is not there is an operator error
+    # whatever the mode, and it stops the run here rather than half-running it.
+    resolved_compiler = pick_compiler(args.compiler) if args.compiler else None
+    if args.compiler and "clang" not in modes:
+        say("compiler {} resolved but mode `{}` does not use it".format(resolved_compiler, args.mode))
+
     if "clang" in modes:
         check_clang_prereqs()
 
@@ -606,7 +627,7 @@ def main():
         "compiler_label": "-",
     }
     if "clang" in modes:
-        compiler = pick_compiler(args.compiler)
+        compiler = resolved_compiler or pick_compiler(None)
         context["compiler"] = compiler
         context["compiler_label"] = compiler
         if args.compile_commands:
@@ -675,6 +696,12 @@ def main():
         self_test_ok = self_test(modes, context)
         if not self_test_ok:
             problems += 1
+
+    # A COUNT, NOT ONLY AN EXIT CODE. Zero probes is a green a run with nothing in it earns,
+    # and a --probe typo or a manifest edit is exactly how a gate stops looking at anything.
+    if args.expect_probes is not None and len(selected) != args.expect_probes:
+        problems += 1
+        error("expected {} probe(s), ran {}".format(args.expect_probes, len(selected)))
 
     say("{} probes, {} skipped, {} problem(s)".format(len(selected), skipped, problems))
 
