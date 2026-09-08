@@ -65,7 +65,7 @@ namespace MobileGL {
 #if MOBILEGL_PIPE_PUSH
                 // SIX FACES, SIX BLOBS, SIX DRAIN KEYS: the upload target is the face, and it is
                 // what the sub-data record's Target byte carries beside the resource target.
-                PipeNoteLevelDirty(uploadTarget, mipmapLevel, dirty);
+                if (dirty) PipeNoteLevelDirty(uploadTarget, mipmapLevel);
 #endif
             }
 
@@ -80,7 +80,7 @@ namespace MobileGL {
                 m_textureStorage.MarkDirtyRegion(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, offset,
                                                  size);
 #if MOBILEGL_PIPE_PUSH
-                PipeNoteLevelDirty(uploadTarget, mipmapLevel, true);
+                PipeNoteLevelDirty(uploadTarget, mipmapLevel);
 #endif
             }
 

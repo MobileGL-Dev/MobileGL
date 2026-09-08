@@ -12,15 +12,13 @@
 #include "MG_Util/Types.h"
 #include <MG_Util/Metrics/TextureMetrics.h>
 #include <MG_Pipe/PipeMutation.h>
-#if MOBILEGL_PIPE_PUSH
-// THE ONE MG_State TRANSLATION UNIT THAT SEES THE CLIENT'S TEXTURE EMITTER, on purpose: the
-// three PipePublish* helpers below are declared on TextureObjectBase and defined here, so the
-// cube's, the view's and the buffer texture's translation units call an inherited member and
-// still see only a declaration. That is the layering MG_Pipe/PipeMutation.h gives the buffer
-// family; P4a cannot use that header because it belongs to the contract package for the whole
-// phase and carries no texture row (TextureEmit.h's header comment has the full argument).
-#include <MG_Impl/Pipe/TextureEmit.h>
-#endif
+// NO MG_State TRANSLATION UNIT SEES THE CLIENT'S EMITTER ANY MORE (c0b, ID-13). v1 included
+// MG_Impl/Pipe/TextureEmit.h here and in RenderbufferObject.cpp because at the contract tag
+// MG_Pipe/PipeMutation.h carried no texture row; it now declares the four mints, the nine
+// emissions and the publication latch, so this file sees a DECLARATION exactly as
+// BufferObject.cpp does and the closure gate's mutation-header probe has nothing to find.
+// The three PipePublish* helpers stay on TextureObjectBase so the cube's, the view's and the
+// buffer texture's translation units keep calling an inherited member.
 
 namespace MobileGL {
     namespace MG_State {
@@ -53,29 +51,31 @@ namespace MobileGL {
                 //      name and leaves a still-bound object very much alive;
                 //   3. the slot LAST, and a double free on a stale generation is a proven no-op.
                 //
-                // Steps 2 and 3 - plus the SamplerViewCso minted off this same lifetime id - are
-                // the contract's helper. The BUILT-IN SAMPLER is deliberately not released from
-                // here: it is a real SamplerObject with its own lifetime id and its own
-                // destructor, which runs immediately after this body and takes the same helper
-                // shape. Step 1 is the client package's, one statement earlier, because the
-                // helper's file belongs to the contract package for the whole phase.
-                MG_Pipe::MGPipeEmitTextureResourceDestroy(m_lifetimeId);
+                // ALL THREE STEPS ARE THE CONTRACT'S HELPER (c0b): it reads the publication
+                // latch, emits the resource_destroy itself, raises the notice while the handle
+                // still resolves and frees the slot last. v1 emitted step 1 from a second
+                // statement here because at the tag the helper hard-coded `published = false`;
+                // that statement is deleted rather than kept, since a second delete for a
+                // record the helper has already dropped is a refused call the applier asserts
+                // on. The SamplerViewCso minted off this same lifetime id goes with it. The
+                // BUILT-IN SAMPLER does not: it is a real SamplerObject with its own lifetime
+                // id and its own destructor, which takes the same helper shape.
                 MG_Pipe::MGPipeEmitTextureDestroyAndFree(m_lifetimeId);
             }
 
             // ---- P4a's three client emission points (see TextureObject.h) ----
 
             void TextureObjectBase::PipePublishDescriptor() {
-                MG_Pipe::MGPipeEmitTextureRespecify(*this);
+                MG_Pipe::MGPipeEmitTextureResourceRespecify(*this);
             }
 
             void TextureObjectBase::PipePublishParams() {
                 MG_Pipe::MGPipeEmitTextureParams(*this);
             }
 
-            void TextureObjectBase::PipeNoteLevelDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel,
-                                                       Bool dirty) {
-                MG_Pipe::MGPipeNoteTextureLevelDirty(*this, uploadTarget, mipmapLevel, dirty);
+            void TextureObjectBase::PipeNoteLevelDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel) {
+                MG_Pipe::MGPipeNoteTextureLevelDirty(*this, static_cast<Uint32>(uploadTarget),
+                                                     static_cast<Uint32>(mipmapLevel));
             }
 #endif
 
@@ -115,15 +115,25 @@ namespace MobileGL {
                 // because set_framebuffer_state and set_sampler_views name this texture by handle
                 // out of two different subsystems.
                 //
-                // NOTHING VIRTUAL IS TOUCHED HERE and that is a correctness requirement rather
-                // than a style: the derived object does not exist yet, and
-                // ITextureObject::GetStorageType is PURE - calling it from a base constructor is
-                // undefined behaviour. The target and the GL name are the two facts a create
-                // carries and both are plain members by this point; the storage kind is derived
-                // from the target, which is exact (TextureObjectBuffer is the only class that
-                // reports Buffer and TextureBuffer is the only target it is constructed with).
-                MG_Pipe::MGPipeMintAndCreateTexture(static_cast<ITextureObject*>(this), m_lifetimeId, target,
-                                                    externalIndex);
+                // NOTHING THE DERIVED CLASS IMPLEMENTS IS TOUCHED HERE and that is a
+                // correctness requirement rather than a style: the derived object does not exist
+                // yet, so ITextureObject::GetStorageType and ::GetUploadTargets - PURE, with no
+                // body on this base - would be undefined behaviour. The emitter reads GetTarget()
+                // and GetExternalIndex(), which TextureObjectBase itself overrides and which
+                // therefore dispatch to this class's own bodies over members the mem-init list
+                // has already written; the storage kind is derived from the target, which is
+                // exact (TextureObjectBuffer is the only class that reports Buffer and
+                // TextureBuffer is the only target it is constructed with).
+                //
+                // TWO CALLS AND NOT ONE (c0b): the MINT is unconditional in a push build -
+                // set_framebuffer_state and set_sampler_views name this texture by handle out of
+                // two other subsystems, so gating it would make them emit null handles in exactly
+                // the A/B arm that exists to isolate the families - and the CREATE is what the
+                // subsystem gate in PipeFill.cpp decides.
+                (void)target;
+                (void)externalIndex;
+                MG_Pipe::MGPipeMintTextureHandle(*this);
+                MG_Pipe::MGPipeEmitTextureResourceCreate(*this);
 #endif
             }
 
@@ -498,7 +508,9 @@ namespace MobileGL {
                 }
                 m_textureStorage.MarkDirty(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, dirty);
 #if MOBILEGL_PIPE_PUSH
-                PipeNoteLevelDirty(uploadTarget, mipmapLevel, dirty);
+                // THE DRAIN LIST HAS NO CLEAN ARM (see TextureEmit.h): a level that goes clean
+                // is collected at the next drain, whose first test is IsStorageDirty.
+                if (dirty) PipeNoteLevelDirty(uploadTarget, mipmapLevel);
 #endif
             }
 
@@ -517,7 +529,7 @@ namespace MobileGL {
                 // forwards this call to the OWNER's method after remapping the level and the
                 // region, so an upload through a view and an upload through the owner arrive here
                 // on the same object with the same owner-side coordinates.
-                PipeNoteLevelDirty(uploadTarget, mipmapLevel, true);
+                PipeNoteLevelDirty(uploadTarget, mipmapLevel);
 #endif
             }
 
