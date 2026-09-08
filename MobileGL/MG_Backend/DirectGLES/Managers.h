@@ -2527,7 +2527,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ~BackendSamplerObject();
             BackendSamplerObject(const BackendSamplerObject&) = delete;
             BackendSamplerObject& operator=(const BackendSamplerObject&) = delete;
+#if MOBILEGL_PIPE_PUSH
+            // THE SAMPLER CSO HANDLE IS CARRIED BY THE CALLER, and it has to be, because a
+            // SamplerCso is CONTENT-ADDRESSED on the client (D-F1) while this twin is keyed on
+            // the frontend OBJECT. g_backendSamplerObjects mints a SamplerCso slot off the
+            // SamplerObject's lifetime id - that handle is this twin's identity and is what
+            // FindByHandle memos index - but the client's cache allocates its handles by
+            // CONTENT (MGPipeSlots().Allocate, SamplerEmit.h), so no create_sampler_state ever
+            // lands at the identity handle and looking a record up by it can only ever miss.
+            // The carried fact that DOES name the right record is the applier's own
+            // MGPipeApplier().BoundSamplerStates[unit], which the client writes per unit at
+            // bind_sampler_states; the caller that knows the unit passes it here.
+            //
+            // Defaulted so a caller that has no unit - the backend's OWN raw-depth-fetch
+            // sampler (DirectGLES.cpp:217), a SamplerObject the client has never seen and for
+            // which no record can exist - keeps working: that arm reads the object, which is
+            // the authority for server-owned state. An APPLICATION sampler reaching here
+            // without a handle is the E-side call-site gap and says so once.
+            //
+            // Push-only spelling on purpose: a defaulted parameter is still part of the
+            // signature, so widening it unconditionally would rename this symbol in the PULL
+            // build and P4a's admitted-change set is EMPTY (D-P/G1).
+            void SyncToBackend(const SharedPtr<MG_State::GLState::SamplerObject>& stateSamplerObject,
+                               MG_Pipe::MGPipeHandle pushedCso = MG_Pipe::kMGPipeNullHandle);
+#else
             void SyncToBackend(const SharedPtr<MG_State::GLState::SamplerObject>& stateSamplerObject);
+#endif
             void Bind(Uint unit);
             Uint GetBackendSamplerId() const;
 

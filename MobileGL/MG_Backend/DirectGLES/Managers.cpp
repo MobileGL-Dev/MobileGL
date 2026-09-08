@@ -12287,8 +12287,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_backendSamplerId = 0;
         }
 
+#if MOBILEGL_PIPE_PUSH
+        void BackendSamplerObject::SyncToBackend(
+            const SharedPtr<MG_State::GLState::SamplerObject>& stateSamplerObject,
+            MG_Pipe::MGPipeHandle pushedCso) {
+#else
         void BackendSamplerObject::SyncToBackend(
             const SharedPtr<MG_State::GLState::SamplerObject>& stateSamplerObject) {
+#endif
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -12309,24 +12315,69 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_PIPE_PUSH
             const SamplerParameters* pushedParams = nullptr;
             if (SamplerSubsystemEnabled()) {
-                // MONOLITH GLUE: the SamplerCso handle of an object this backend still arrives
-                // holding. Under a real split it rides in the payload, and every path P4a
-                // switches over already carries it - this is for the paths that do not.
-                const MG_Pipe::MGPipeHandle cso = g_backendSamplerObjects.HandleOf(stateSamplerObject.get());
-                const auto* record = PipeSamplerCsoRecordForHandle(cso);
-                if (record == nullptr) {
-                    MGLOG_E_ONCE("MGPipe: sampler %u has no applier record on the handle arm, so its "
-                                 "parameters cannot be pushed (handle {%u, %u})",
-                                 stateSamplerObject->GetExternalIndex(), cso.Slot, cso.Gen);
-                    return;
+                // THE HANDLE COMES FROM THE CALLER, NOT FROM THIS TWIN'S REGISTRY, and the
+                // difference is the seam D's verification round found on the integrated tree.
+                //
+                // v2 asked g_backendSamplerObjects.HandleOf(object) - the twin's own identity
+                // handle, minted off the frontend lifetime id - and looked the record up by it.
+                // That can only ever miss: a SamplerCso is CONTENT-ADDRESSED on the client
+                // (D-F1, ID-14/ID-17), its handles come out of MGPipeSlots().Allocate keyed on a
+                // parameter hash, and nothing ever emits a create_sampler_state at an identity
+                // handle. On the integrated tree every glBindSampler-driven parameter set was
+                // therefore refused and the driver sampler kept its defaults - two integration
+                // scenarios red, and the twin's own comment below (content-addressed, the
+                // record's Serial is the authority) already said why it could not work.
+                //
+                // The carried fact is MGPipeApplier().BoundSamplerStates[unit], written by the
+                // client at bind_sampler_states; the caller that knows the unit passes it as
+                // `pushedCso`. See the declaration for why the parameter is push-only.
+                if (!MG_Pipe::MGPipeHandleIsNull(pushedCso)) {
+                    const auto* record = PipeSamplerCsoRecordForHandle(pushedCso);
+                    if (record == nullptr) {
+                        MGLOG_E_ONCE("MGPipe: sampler %u has no applier record on the handle arm, so its "
+                                     "parameters cannot be pushed (handle {%u, %u})",
+                                     stateSamplerObject->GetExternalIndex(), pushedCso.Slot, pushedCso.Gen);
+                        return;
+                    }
+                    if (m_isInitialized && m_syncedSamplerSerial != 0 && m_syncedSamplerSerial == record->Serial) {
+                        MGLOG_D("Sampler parameters have not changed for sampler ID: %u, skipping sync.",
+                                stateSamplerObject->GetExternalIndex());
+                        return;
+                    }
+                    m_syncedSamplerSerial = record->Serial;
+                    pushedParams = &record->Params;
+                } else {
+                    // NO HANDLE CARRIED. Two shapes, and they are told apart by whether this
+                    // object is in the twin registry at all:
+                    //
+                    //   * not registered -> a sampler this BACKEND minted for its own use (the
+                    //     raw-depth-fetch sampler, DirectGLES.cpp:207-218). The client has never
+                    //     seen it, no record can exist for it now or after any package lands,
+                    //     and the object IS the authority for server-owned state. Not a seam.
+                    //   * registered -> an application sampler whose caller did not carry the
+                    //     unit's handle. That is the E-side call-site gap; it is named once and
+                    //     the values are taken from the object, which in monolith are the very
+                    //     values the client content-addressed, so the picture stays right while
+                    //     the gap is visible rather than silent.
+                    if (!MG_Pipe::MGPipeHandleIsNull(
+                            g_backendSamplerObjects.HandleOf(stateSamplerObject.get()))) {
+                        MGLOG_E_ONCE("MGPipe: sampler %u was synced without its unit's SamplerCso handle, so "
+                                     "the content-addressed record cannot be named and the object's own "
+                                     "parameters are used - the caller must pass "
+                                     "MGPipeApplier().BoundSamplerStates[unit]",
+                                     stateSamplerObject->GetExternalIndex());
+                    }
+                    // Spelled exactly as the pre-handle arm below spells it (compare widened,
+                    // assign narrowed) so the two cannot drift on a version past 65535.
+                    const Uint currentSamplerVersion = stateSamplerObject->GetVersion();
+                    if (m_isInitialized && m_syncedSamplerVersion == currentSamplerVersion) {
+                        MGLOG_D("Sampler parameters have not changed for sampler ID: %u, skipping sync.",
+                                stateSamplerObject->GetExternalIndex());
+                        return;
+                    }
+                    m_syncedSamplerVersion = currentSamplerVersion;
+                    pushedParams = &stateSamplerObject->GetAllSamplerParameters();
                 }
-                if (m_isInitialized && m_syncedSamplerSerial != 0 && m_syncedSamplerSerial == record->Serial) {
-                    MGLOG_D("Sampler parameters have not changed for sampler ID: %u, skipping sync.",
-                            stateSamplerObject->GetExternalIndex());
-                    return;
-                }
-                m_syncedSamplerSerial = record->Serial;
-                pushedParams = &record->Params;
             } else {
 #if !MOBILEGL_PIPE_LEGACY_MEMOS
                 // UNREACHABLE: ResolveSamplerSubsystemArm stops at its first call when the bit is
