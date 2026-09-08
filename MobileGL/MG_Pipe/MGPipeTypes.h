@@ -250,11 +250,29 @@ namespace MobileGL::MG_Pipe {
     // VertexAttribute[32] AND the binding points, because a pointer-call stride of 0 means
     // "element size" while a binding-model stride of 0 means "every vertex reads the same
     // element" (section 4.5.3). IsLong and Type == Float64 are carried separately.
+    //
+    // THE BLOB RULE - ONE RULE FOR EVERY RECORD IN THIS HEADER THAT CARRIES AN MGPBlobRef,
+    // and MGPSubData below is the other one. `Blob.Size` is the record's own statement of how
+    // many bytes its blob holds, and the applier holds the record to that statement WHENEVER
+    // THE RECORD MAKES IT: a non-zero Blob.Size that disagrees with the byte length the
+    // record's other fields describe is Fatal{ProtocolCorruption} and the call is refused. A
+    // ZERO Blob.Size means "this record does not declare its blob", which is what a monolith
+    // emission is - the bytes travel beside the record through the apply entry point's
+    // companion `const void*` and no MGPBlobRef is filled - and it is not a fault. Either way
+    // the bytes read are bounded by the record's OTHER fields (the two counts here, the
+    // destination range there), so the length is a cross-check and never the safety property.
+    // A transport that fills these in gets a real gate on the first record it truncates; a
+    // client that leaves them zero gets no verify-build abort for a field it never used.
     struct MGPVertexElements {
         MGPipeHandle Cso;
         Uint32 AttributeCount;
         Uint32 BindingPointCount;
-        MGPBlobRef Blob; // VertexAttribute[] followed by VertexBufferBindingPoint[]
+        // MGPVertexAttribWire[AttributeCount] followed by
+        // MGPVertexBindingPointWire[BindingPointCount] - the WIRE views of MGPipeValueTypes.h,
+        // not VertexAttribute / VertexBufferBindingPoint, which cannot travel at all (each
+        // holds a SharedPtr<BufferObject>). The layout is stated once at
+        // MGPipeValueTypes.h's P3a block and unpacked once in PipeApply.cpp.
+        MGPBlobRef Blob;
     };
     MGP_ASSERT_POD(MGPVertexElements, 40);
 
@@ -601,8 +619,16 @@ namespace MobileGL::MG_Pipe {
     //
     // THE BUFFER HALF. With Target == Buffer there is no level and no box, so the destination
     // byte range rides in the box's first coordinate and first extent: UnionBox.X is the byte
-    // offset, UnionBox.W the byte size, Y = Z = 0, H = D = 1, Level = 0, RegionCount = 0, and
-    // Blob holds exactly Size source bytes. That caps ONE record at a 2^31-1 offset and a
+    // offset, UnionBox.W the byte size, Y = Z = 0, H = D = 1, Level = 0, RegionCount = 0.
+    //
+    // THE BLOB RULE, THE SAME ONE MGPVertexElements ABOVE CARRIES: `Blob.Size` is the record's
+    // own statement of how many bytes its blob holds and the applier holds the record to that
+    // statement whenever the record makes it - a non-zero Blob.Size that is not exactly the
+    // record's own byte size (MGPipeSubDataBufferSize below) is Fatal{ProtocolCorruption} and
+    // the write is refused. A zero Blob.Size means "this record does not declare its blob",
+    // which is what a monolith emission is: the bytes travel beside the record through
+    // MGPipeApplyResourceSubData's companion `const void*`. The destination range is what
+    // bounds the write in both cases. That caps ONE record at a 2^31-1 offset and a
     // 2^32-1 size; a range beyond either is split by the emitter - the same rule, and at
     // SEG_STAGE's 32 MiB the far tighter one, that the ring's half-capacity bound already
     // imposes on it. MGPipeSetSubDataBufferRange / MGPipeSubDataBufferOffset / Size below are
