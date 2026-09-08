@@ -1831,23 +1831,36 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // by construction: consumers only ever ask "is this the same value I stamped", the
         // walk's counter is small and dense and this one is a 64-bit mix, so the two cannot
         // meet except with vanishing probability - and a collision costs a spare rebuild.
-        static Bool UnitBindingsEpochFromRecords(Uint64& out) {
+        static Bool UnitBindingsEpochFromRecords(Uint64& out, Int maxTouchedUnit) {
             const auto& st = MG_Pipe::MGPipeApplier();
             // P4a decline-site T2: S - FLIPPED AT THE VERIFICATION ROUND to loud-once, then
-            //   the decline. Bits 10 and 11 are on (the caller asked
-            //   SamplerSubsystemEnabled(), which refuses one without the other) and package C
-            //   has landed, so a draw that reaches here with NEITHER window ever received is a
-            //   seam defect: no set_sampler_views and no bind_sampler_states has ever been
-            //   applied for a draw that is about to read texture units. It declines to the
-            //   snapshot walk rather than refusing the draw, because the walk answers the same
-            //   question correctly and a wrong picture is not the failure mode here - a silent
-            //   permanent fallback is, and that is what the line is for. The caller's MINOR-4
-            //   gate tick still counts every one of these.
+            //   the decline, and MEASURED before it was believed. Bits 10 and 11 are on (the
+            //   caller asked SamplerSubsystemEnabled(), which refuses one without the other)
+            //   and package C has landed, so a draw that reaches here with NEITHER window ever
+            //   received looks like a seam defect - but the first real-path run said otherwise
+            //   for one whole class of draw and the condition is narrowed by that measurement,
+            //   not by argument.
+            //
+            //   maxTouchedUnit < 0 IS "THIS DRAW TOUCHES NO TEXTURE UNIT AT ALL", and for such
+            //   a draw an empty sampler-view and sampler-state window is the correct and only
+            //   possible emission: there is nothing to describe. 161 of the integration lane's
+            //   477 processes are that shape, every one of them at units 0..-1, and a line that
+            //   fires on a third of a green lane is a line nobody reads. So the refusal is
+            //   scoped to a draw that actually touches a unit, where an empty window really
+            //   does mean no set_sampler_views and no bind_sampler_states ever arrived.
+            //
+            //   It declines to the snapshot walk rather than refusing the draw, because the
+            //   walk answers the same question correctly and a wrong picture is not the failure
+            //   mode here - a silent permanent fallback is, and that is what the line is for.
+            //   The caller's MINOR-4 gate tick still counts EVERY decline, loud or not.
             if (st.SamplerViewCount == 0 && st.SamplerStateCount == 0) {
-                MGLOG_E_ONCE("A sampler record does not describe the binding it names: neither a "
-                             "sampler-view nor a sampler-state window has ever been applied while "
-                             "the sampler subsystem bit is set; running the pre-handle unit-bindings "
-                             "snapshot walk.");
+                if (maxTouchedUnit >= 0) {
+                    MGLOG_E_ONCE("A sampler record does not describe the binding it names: a draw "
+                                 "touches units 0..%d and neither a sampler-view nor a sampler-state "
+                                 "window has ever been applied while the sampler subsystem bit is "
+                                 "set; running the pre-handle unit-bindings snapshot walk.",
+                                 static_cast<int>(maxTouchedUnit));
+                }
                 return false;
             }
             // Local, because the tracker's MGPipeMixShutter lives in MG_Impl and no backend
@@ -1866,7 +1879,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //   round: the mask's word is the one thing a decline may be quiet about.
             if (SamplerSubsystemEnabled()) {
                 Uint64 epochFromRecords = 0;
-                if (UnitBindingsEpochFromRecords(epochFromRecords)) {
+                if (UnitBindingsEpochFromRecords(epochFromRecords, maxTouchedUnit)) {
                     // No accessor reads and no walk on this arm; the two PipeStats accessor
                     // ticks below are not counted because no accessor was called.
                     if (MG_Util::PipeStats::Enabled()) {
@@ -4782,7 +4795,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //   bind_sampler_states ever applied is a seam defect. The frontend walk still
             //   runs: it answers the same question correctly, and what this line exists to stop
             //   is the SILENT permanent fallback, not the fallback.
-            if (st.SamplerStateCount == 0) {
+            //   NARROWED BY THE FIRST REAL-PATH RUN, exactly as T2 was and for the same
+            //   reason: maxTouchedUnit < 0 is a draw that touches no texture unit, for which an
+            //   empty window is the correct emission. All 161 hits of the unnarrowed line were
+            //   that shape - the log said `units 0..-1` on every one of them.
+            if (st.SamplerStateCount == 0 && maxTouchedUnit >= 0) {
                 MGLOG_E_ONCE("A sampler record does not describe the binding it names: a draw touches "
                              "units 0..%d and no bind_sampler_states has ever been applied while the "
                              "sampler subsystem bit is set; running the pre-handle sampler walk.",
