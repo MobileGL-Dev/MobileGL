@@ -587,6 +587,20 @@ jobs:
       # needs apply here too, and a crash here has to leave a core for the same black-box flow.
       # The step above is the only reason those lines exist in this job; a control that crashed
       # without one would be the hardest failure in the job to diagnose.
+      #
+      # THE -R ALTERNATIVES ARE TEST-NAME PREFIXES, NOT LANE LABELS, and each one is deliberately
+      # the SHORTEST string that still selects only what it means to. `ResourceSubsystem` (not
+      # `ResourceSubsystemControl`) is what reaches the eight
+      # DirectGLES.ResourceSubsystemOn./Off.LargeArenaAdoptionScenario.* entries - the A/B lanes
+      # whose entire purpose is that the handle path and the legacy BufferBackendOps path must
+      # agree about an adopted store - as well as the two ResourceSubsystemControl. entries.
+      # `MapPersistentRoundtrip` is singular because LargeArenaAdoptionScenario's case is
+      # `AnAdoptionCostsExactlyOneMapPersistentRoundtrip`; the plural matched only the lane PREFIX
+      # of the other one. Both mistakes were silent: this is the only CI job that unpacks a push
+      # build, so an entry the filter misses is either never run under the P3a bits at all or runs
+      # only in the pull `integration` job, where a MOBILEGL_PIPE_PUSH value steers nothing
+      # (Config.h declares the field inside the push guard) and both arms are the same legacy path.
+      # A lane that cannot go red where it is installed is not a gate (ROADMAP.md:7).
       - name: The handle-ABA, CSO and P3a subsystem controls (G8, G10, G12)
         working-directory: build-verify
         env:
@@ -598,7 +612,7 @@ jobs:
           ulimit -c unlimited
           sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
           ctest --output-on-failure -L integration-gpu \
-            -R 'HandleRecycle|CsoContentAddressing|ResourceSubsystemControl|MapPersistentRoundtrips' \
+            -R 'HandleRecycle|CsoContentAddressing|ResourceSubsystem|MapPersistentRoundtrip' \
             --no-tests=error -j 4
 
       # The arming lanes' logs, and ONLY those. Each lane shares one MOBILEGL_LOG_FILE_PATH and the
