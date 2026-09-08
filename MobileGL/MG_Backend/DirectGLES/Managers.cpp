@@ -2322,14 +2322,37 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // disabled, in silence. The two families differ in whether that third verdict is
         // REACHABLE, which is why the classifier takes it as a parameter rather than assuming it.
         //
-        // NOT A STOP, unlike ResolveEsprytSlotTablesArm's NoArm. Bit 5's stop is safe because no
-        // shipped lane pins bit 5 clear; bits 7 and 8 are clear in every `.Handles` itest lane
-        // today (MG_IntegrationTest/CMakeLists.txt pins MOBILEGL_PIPE_PUSH=0x7f beside
-        // MOBILEGL_PIPE_LEGACY_MEMOS=0), which is contract-review item 11 and package D's to
-        // re-pin. Aborting here would turn that lane red for a mis-pinned control rather than
-        // for a defect. The verdict is therefore NAMED and loud, and the stop can be promoted
-        // the moment those lanes carry an explicit 0x1ff arm.
+        // A STOP, exactly like ResolveEsprytSlotTablesArm's NoArm, and M-4 is the promotion.
+        //
+        // It was a warning while the premise for the warning held: bits 7 and 8 were clear in
+        // every `.Handles` itest lane, which pinned MOBILEGL_PIPE_PUSH=0x7f beside
+        // MOBILEGL_PIPE_LEGACY_MEMOS=0, so aborting would have turned that lane red for a
+        // mis-pinned control rather than for a defect. That premise is gone: gates' M1 re-pinned
+        // MGL_ITEST_HANDLES_ARM_KNOBS to "MOBILEGL_PIPE_LEGACY_MEMOS=0" + "MOBILEGL_PIPE_PUSH=0x1ff"
+        // (MG_IntegrationTest/CMakeLists.txt), and the four CSO lanes went to 0x1ff /
+        // 0x800000000000_01ff, which is contract-review item 11 closed for all three lane
+        // families. The only lanes that set LEGACY_MEMOS=0 now carry an explicit vertex-input
+        // arm, so an armless verdict can no longer be a lane's own configuration - it can only
+        // be an operator who asked for both arms to be gone.
+        //
+        // Warning-and-continue is the wrong answer to that, for ResolveEsprytSlotTablesArm's
+        // reason verbatim: continuing runs the very arm the operator disabled and hands back a
+        // result measured on it, which is exactly the lever HandleRecycleScenario's arms are
+        // selected with, so a mis-set A/B would be scored silently against the wrong arm
+        // (ARCHITECTURE.md 9.6). Resolved lazily at the first use, not at bring-up, so the stop
+        // lands in a scenario body where ctest reports it rather than inside eglMakeCurrent
+        // where the harness reads an abort as "no usable GPU" and skips.
+        //
+        // This closes espryt D14 / closure row 7 and, with it, row 6's "LEGACY_MEMOS=0 +
+        // PUSH=0x7f must name a verdict": that combination now names NoArm and stops.
         enum class PipeSubsystemArmVerdict { Handles, Legacy, NoArm };
+
+        // The one voice for an armless verdict, so the two families cannot disagree about what
+        // it means or about whether it stops. `what` names the family and the bit.
+        [[noreturn]] void StopOnArmlessPipeSubsystem(const char* what) {
+            MGLOG_F("MGPipe: Fatal{PipeLegacyMemosDisabled, \"%s, so there is no arm to run\"}", what);
+            std::abort();
+        }
 
         PipeSubsystemArmVerdict ClassifyPipeSubsystemArm(Bool subsystemBitSet, Bool legacyMemosEnabled,
                                                          Bool legacyArmSurvivesLegacyMemos) {
@@ -2348,6 +2371,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const PipeSubsystemArmVerdict verdict =
                 ClassifyPipeSubsystemArm(bitSet, MG_Config::Features.PipeLegacyMemos,
                                          /*legacyArmSurvivesLegacyMemos=*/true);
+            // Unreachable for this family by the argument above, and stated as a stop anyway:
+            // the two P3a families answer an armless verdict the same way, and an unreachable
+            // branch that says something different is how the reachable one drifts.
+            if (verdict == PipeSubsystemArmVerdict::NoArm) {
+                StopOnArmlessPipeSubsystem("MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemResources "
+                                           "(bit 7) clear and the pre-handle buffer arm is gone");
+            }
             if (verdict == PipeSubsystemArmVerdict::Legacy && !MG_Config::Features.PipeLegacyMemos) {
                 MGLOG_W("MGPipe: MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemResources (bit 7) clear while "
                         "MOBILEGL_PIPE_LEGACY_MEMOS=0 asks for the pre-handle arms to be gone; the buffer "
@@ -2389,14 +2419,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const PipeSubsystemArmVerdict verdict =
                 ClassifyPipeSubsystemArm(bitSet, MG_Config::Features.PipeLegacyMemos,
                                          /*legacyArmSurvivesLegacyMemos=*/false);
-            if (verdict == PipeSubsystemArmVerdict::NoArm || !kLegacyVaoArmCompiled) {
-                if (verdict != PipeSubsystemArmVerdict::Handles) {
-                    MGLOG_E("MGPipe: PipeLegacyMemosDisabled - MOBILEGL_PIPE_PUSH leaves "
-                            "kMGPipeSubsystemVertexInput (bit 8) clear and the pre-handle VAO sync is "
-                            "%s, so this process has no vertex-input arm at all; the driver VAO will "
-                            "not be configured and SyncToBackend says so again at the first draw",
-                            kLegacyVaoArmCompiled ? "disabled by MOBILEGL_PIPE_LEGACY_MEMOS=0" : "not compiled");
-                }
+            if (verdict != PipeSubsystemArmVerdict::Handles &&
+                (verdict == PipeSubsystemArmVerdict::NoArm || !kLegacyVaoArmCompiled)) {
+                // M-4: A STOP, not a log line. Continuing here left the process drawing through
+                // an UNCONFIGURED driver VAO - every attribute pointer whatever the last owner
+                // of that VAO name set it to - after one MGLOG_E that a lane summary does not
+                // read. The lanes that pin MOBILEGL_PIPE_LEGACY_MEMOS=0 all carry an explicit
+                // 0x1ff now, so this verdict is an operator's configuration and nothing else.
+                StopOnArmlessPipeSubsystem(
+                    kLegacyVaoArmCompiled
+                        ? "MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemVertexInput (bit 8) clear and "
+                          "MOBILEGL_PIPE_LEGACY_MEMOS=0 disables the pre-handle VAO sync"
+                        : "MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemVertexInput (bit 8) clear and "
+                          "the pre-handle VAO sync is not compiled into this build");
             }
             const Bool enabled = verdict == PipeSubsystemArmVerdict::Handles;
             MGLOG_D("MGPipe: Espryt vertex-input family runs the %s arm", enabled ? "handle" : "legacy");
@@ -3793,6 +3828,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 #endif
 #if !MOBILEGL_PIPE_LEGACY_MEMOS
+            // UNREACHABLE as of M-4: VertexInputSubsystemEnabled() resolves the arm at its first
+            // call, and an armless verdict now stops the process there rather than returning
+            // false into this branch. Kept, and kept loud, because it is the second lock on the
+            // same question: this is what an arm resolution that ever stopped stopping would
+            // reach, and drawing on through an unconfigured driver VAO is exactly what must not
+            // happen quietly.
             (void)stateVAOObject;
             MGLOG_E_ONCE("MGPipe: the vertex-input subsystem bit is clear and MOBILEGL_PIPE_LEGACY_MEMOS=0 "
                          "removed the pre-handle VAO sync, so this configuration has no arm at all");
