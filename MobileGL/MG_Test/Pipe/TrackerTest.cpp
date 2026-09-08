@@ -23,6 +23,7 @@
 #include <MG_Impl/Pipe/PipeFill.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/Tracker.h>
+#include <MG_Impl/Pipe/VertexInputEmit.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Pipe/PipeMutation.h>
@@ -74,6 +75,7 @@ namespace {
     X(TrackerWalk, TheFireTalliesOnlyRunWhilePipeStatsIsOn) \
     X(TrackerWalk, TheIndexBufferBitDoesNotFireOnAnUnrelatedBufferWrite) \
     X(TrackerWalk, TheIndexBufferBitFiresWhenTheSlotVersionWrapsOntoADifferentBuffer) \
+    X(TrackerWalk, ABaseInstanceSurvivesTheFirstWalkOnAFreshContext) \
     X(TrackerAttribPayload, AFloatWriteCarriesTheFloatBitsAndNamesItsClass) \
     X(TrackerAttribPayload, AnIntWriteCarriesTheIntWordsAndNamesItsClass) \
     X(TrackerAttribPayload, AUintWriteCarriesTheUintWordsAndNamesItsClass) \
@@ -84,7 +86,8 @@ namespace {
     X(TrackerShippedEmitter, AViewportThroughTheValidatePointMintsNoCso) \
     X(TrackerShippedEmitter, AClipDistanceEnableReArmsTheResidualBlock) \
     X(TrackerShippedEmitter, AFreshContextRepublishesEveryVertexAttributeDefault) \
-    X(TrackerShippedEmitter, AFreshContextResetsTheApplierWithTheRenderStateSubsystemOff)
+    X(TrackerShippedEmitter, AFreshContextResetsTheApplierWithTheRenderStateSubsystemOff) \
+    X(TrackerShippedEmitter, ABaseInstancedDrawAfterAMakeCurrentPublishesItsOwnBaseInstance)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -238,12 +241,21 @@ namespace {
     // the next bind_render_state naming a CSO the applier no longer has - it asserts and
     // returns, leaving m_renderState unwritten. The three are one state, so they are reset
     // together, here and in TrackerShippedEmitter.
+    // P3a adds two more pieces to that one state. MGPipeApplierReset is a MAKE-CURRENT and
+    // deliberately keeps the object records now, so a fixture that means "this applier is
+    // going away" has to say the other verb as well (PipeApply.h); and the vertex-input
+    // emitter's latches say "this handle has already published this configuration" about an
+    // applier that is about to be empty, so a bind would be suppressed against a record that
+    // is no longer there.
     void ResetTheServerSideSingletons() {
         MGPipeApplierReset();
+        MGPipeApplierReleaseObjectRecords();
         MGPipeCsoCacheInstance().Reset();
         MGPipeCsoCacheInstance().ResetCounters();
         MGPipeTrackerInstance().Reset();
         MGPipeSetHashSuppressorInstance().InvalidateAll();
+        MGPipeVertexInputEmitterInstance().Reset();
+        MGPipeVertexInputEmitterInstance().ResetCounters();
     }
 
     class TrackerWalk : public ::testing::Test {
@@ -544,6 +556,34 @@ namespace {
         m_cache.Reset();
     }
 
+    // THE PENDING BASE INSTANCE IS THIS CALL'S ARGUMENT, NOT A LATCH, and Update() is where
+    // the difference bites: it calls Reset() from inside itself whenever the current
+    // GLContext pointer moves, and the draw entry point wrote the value one statement EARLIER
+    // (D-H2.1 puts MGP_SET_BASE_INSTANCE immediately above MGP_FILL, and Update is inside
+    // MGP_FILL). So `eglMakeCurrent(ctxB); glDrawArraysInstancedBaseInstance(..., 7)` used to
+    // put a BaseInstance of 0 on the wire - one silently mis-shifted instanced draw per
+    // context switch, on the emulation path, invisible to a single-context retrace corpus and
+    // to every case that drives the emitter directly.
+    //
+    // A FRESH TRACKER IS EXACTLY THAT SWITCH: m_context starts null, so the first Walk() takes
+    // the same `m_context != &ctx` branch a make-current does.
+    TEST_F(TrackerWalk, ABaseInstanceSurvivesTheFirstWalkOnAFreshContext) {
+        m_tracker.SetPendingBaseInstance(7);
+        const Uint32 dirty = Walk();
+        EXPECT_EQ(m_tracker.PendingBaseInstance(), 7u)
+            << "the walk that follows a make-current cleared the base instance the same call set";
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewVertexBuffers), 0u)
+            << "NEW_VERTEX_BUFFERS did not fire on the first walk of a fresh context";
+
+        // And the control, so the assertion above is about Reset() and not about a value that
+        // is never cleared at all: the verb that consumes it clears it, and the next walk on
+        // the SAME context then sees 0.
+        m_tracker.ClearPendingBaseInstance();
+        Walk();
+        EXPECT_EQ(m_tracker.PendingBaseInstance(), 0u);
+        m_cache.Reset();
+    }
+
     // ===================================================================================
     // set_vertex_attrib_defaults' payload (P2 brief D10)
     // ===================================================================================
@@ -808,6 +848,69 @@ namespace {
         }
         EXPECT_EQ(Cso().Mints, 0u);
         EXPECT_EQ(Cso().Binds, 0u) << "glViewport reached the CSO cache";
+    }
+
+    // B-C1's scenario END TO END, through the shipped entry point and read back off the real
+    // applier: the setter runs, THEN a make-current happens inside the same fill (the fresh
+    // GLContext below is the switch), and what set_vertex_buffers carries has to be the 7 the
+    // draw entry point passed - not the 0 the tracker's context Reset used to leave behind.
+    //
+    // It also pins the two halves D-H2.3 makes one property: the applier's raw
+    // VertexFetchBaseInstance, and the ContentHash the suppressor keys on - which has to mix
+    // BaseInstance in, or the SECOND draw at a different base instance over the same buffer
+    // set would be suppressed as unchanged and the server would keep the first one's shift.
+    TEST_F(TrackerShippedEmitter, ABaseInstancedDrawAfterAMakeCurrentPublishesItsOwnBaseInstance) {
+        MG_Config::Features.PipePush = kMGPipeSubsystemsMigratedAtP2 | kMGPipeSubsystemResources |
+                                       kMGPipeSubsystemVertexInput;
+        Draw(); // prime this context, so the switch below is a real make-current
+        ASSERT_EQ(MGPipeApplier().VertexFetchBaseInstance, 0u);
+
+        // The make-current, then the entry point's one line, then the fill - in that order,
+        // which is the order GL_Drawing.cpp has.
+        MG_State::pGLContext = MakeUnique<GLContext>();
+        const SharedPtr<MG_State::GLState::BufferObject> vertices = Ctx().CreateBufferObject(1);
+        vertices->Respecify(4096, nullptr);
+        Ctx().GetBoundVertexArray()->SetAttributeFormat(0, 4, DataType::Float32, false, 16, 0, false, false, -1);
+        Ctx().GetBoundVertexArray()->BindAttributeBuffer(0, vertices);
+        Ctx().GetBoundVertexArray()->EnableAttribute(0);
+
+        MGPipeSetPendingBaseInstance(7);
+        ASSERT_EQ(MGPipePendingBaseInstance(), 7u) << "the setter did not take";
+        Draw();
+
+        EXPECT_EQ(MGPipeApplier().VertexFetchBaseInstance, 7u)
+            << "the make-current between the setter and the fill ate the base instance";
+        EXPECT_EQ(MGPipeApplier().VertexBufferCount, 1u);
+        const Uint64 hashAtSeven = MGPipeVertexInputEmitterInstance().LastVertexBuffers().ContentHash;
+        EXPECT_EQ(hashAtSeven,
+                  MGPipeVertexBufferSetContentHash(MGPipeVertexInputEmitterInstance().LastEntries().data(), 0,
+                                                   1, 7))
+            << "the emitted set's ContentHash does not include the base instance it went out with";
+
+        // CONSUMED by the verb that carried it: the next plain draw sees 0 again, and the
+        // clear that makes that true is the validate point's, not MGPipeLeaveVerb's (no GL
+        // entry point calls that one).
+        EXPECT_EQ(MGPipePendingBaseInstance(), 0u);
+        const Uint64 setsAtSeven = MGPipeVertexInputEmitterInstance().VertexBufferSetCount();
+        Draw();
+        EXPECT_EQ(MGPipeApplier().VertexFetchBaseInstance, 0u)
+            << "a plain draw after a base-instanced one kept the previous fetch shift";
+        EXPECT_GT(MGPipeVertexInputEmitterInstance().VertexBufferSetCount(), setsAtSeven)
+            << "the buffer set was suppressed on a base-instance-only change - the hash or the "
+               "bit-9 shutter is missing it";
+        EXPECT_NE(MGPipeVertexInputEmitterInstance().LastVertexBuffers().ContentHash, hashAtSeven);
+
+        // THE OTHER EXIT. MGPipeValidateForVerb returns early when there is no live context,
+        // which skips step 3 and therefore skips step 3's clear - and since Reset() no longer
+        // clears it either, that exit is the only path left on which a base instance could
+        // stand into the next verb. A draw with no context is a no-op; its argument must not
+        // outlive it.
+        MGPipeSetPendingBaseInstance(11);
+        UniquePtr<GLContext> parked = Move(MG_State::pGLContext);
+        Draw();
+        EXPECT_EQ(MGPipePendingBaseInstance(), 0u)
+            << "the no-live-context exit left the draw's base instance standing for the next verb";
+        MG_State::pGLContext = Move(parked);
     }
 
 #endif // MOBILEGL_PIPE_PUSH

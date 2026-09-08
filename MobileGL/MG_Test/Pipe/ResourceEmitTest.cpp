@@ -58,6 +58,7 @@
 #include <Config.h>
 #include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
+#include <MG_Impl/Pipe/VertexInputEmit.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_State/GLState/Core.h>
 
@@ -1331,7 +1332,10 @@ namespace {
     X(ResourceEmit, EveryBufferTargetSetsItsBindMaskBit)                                            \
     X(ResourceEmit, ABindMaskBitIsStickyAcrossARespecifyThatDoesNotRebind)                          \
     X(ResourceEmit, ADestroyedBufferReleasesItsSlotAndAStaleHandleResolvesToNothing)                \
-    X(ResourceEmit, AWholeBufferSubDataBeyondTheRecordBoundIsSplitIntoContiguousRecords)
+    X(ResourceEmit, AWholeBufferSubDataBeyondTheRecordBoundIsSplitIntoContiguousRecords)         \
+    X(ResourceEmit, ABufferCreatedBeforeAMakeCurrentStillLandsItsSubDataAfterOne)                \
+    X(ResourceEmit, ADrawTimeIndexBindingPublishesElementArrayEvenWhenTheRespecifyCannotSeeIt)   \
+    X(ResourceEmit, ADestroyFollowsTheCreateEvenIfTheOpTableWasUnregisteredMeanwhile)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -1399,6 +1403,49 @@ namespace {
         return false;
     }
 
+    // THE ORACLE FOR THE BIND-MASK TABLE, spelled out here as raw bit positions rather than
+    // by calling MGPipeBindMaskForBufferTarget: comparing the emitted mask against the table
+    // under test pins the plumbing and not the table, and the risk register calls this table
+    // the one P3a deliverable whose only real gate is a unit case. The numbers are
+    // MGPipeTypes.h's documented order - VERTEX|INDEX|CONSTANT|SHADER_BUFFER|INDIRECT|
+    // SAMPLER|SHADER_IMAGE|RENDER_TARGET|DEPTH_STENCIL|STREAM_OUTPUT|ATOMIC|ELEMENT_ARRAY -
+    // read off that list and not off the enum, so a renumbering of MGPipeBindBit that the
+    // table follows still fails here.
+    //
+    // No `default:`, for the table's own reason: a new BufferTarget must be a build break in
+    // both places rather than a bit that quietly stops being published.
+    Uint32 LiteralBindMaskFor(BufferTarget target) {
+        switch (target) {
+        case BufferTarget::Vertex:
+            return 1u << 0;                        // VERTEX
+        case BufferTarget::Index:
+            return (1u << 1) | (1u << 11);         // INDEX | ELEMENT_ARRAY
+        case BufferTarget::Uniform:
+            return 1u << 2;                        // CONSTANT
+        case BufferTarget::ShaderStorage:
+            return 1u << 3;                        // SHADER_BUFFER
+        case BufferTarget::DispatchIndirect:
+        case BufferTarget::DrawIndirect:
+        case BufferTarget::Parameter:
+            return 1u << 4;                        // INDIRECT
+        case BufferTarget::Texture:
+            return 1u << 5;                        // SAMPLER
+        case BufferTarget::TransformFeedback:
+            return 1u << 9;                        // STREAM_OUTPUT
+        case BufferTarget::AtomicCounter:
+            return 1u << 10;                       // ATOMIC
+        case BufferTarget::CopyRead:
+        case BufferTarget::CopyWrite:
+        case BufferTarget::PixelPack:
+        case BufferTarget::PixelUnpack:
+        case BufferTarget::Query:
+        case BufferTarget::BufferTargetCount:
+        case BufferTarget::Unknown:
+            return 0u;                             // transfer and query targets bind nothing
+        }
+        return 0xFFFFFFFFu;
+    }
+
     // D-A3, and the risk register calls this the one P3a deliverable whose only real gate is
     // a unit test: a wrong ELEMENT_ARRAY bit silently disables restart rewriting and
     // multi-draw flattening under split and is invisible in monolith.
@@ -1433,7 +1480,12 @@ namespace {
             buffer->Respecify(64, nullptr);
 
             const MGPResourceDesc respecified = tracker.LastDesc();
-            const auto expected = static_cast<Uint16>(MGPipeBindMaskForBufferTarget(target));
+            // AGAINST THE LITERAL, not against the table this case exists to police.
+            const auto expected = static_cast<Uint16>(LiteralBindMaskFor(target));
+            EXPECT_EQ(MGPipeBindMaskForBufferTarget(target), LiteralBindMaskFor(target))
+                << "the BufferTarget -> bit table disagrees with MGPipeTypes.h's documented bit "
+                   "order for target "
+                << i;
             EXPECT_EQ(respecified.BindMask, expected)
                 << "BindMask for BufferTarget " << i << " (" << respecified.BindMask << " vs " << expected << ")";
             EXPECT_EQ(respecified.Resource, created.Resource) << "a respecify keeps the handle";
@@ -1449,6 +1501,15 @@ namespace {
         // table edit that moved it is a failure here rather than a silent P8 regression.
         EXPECT_EQ(MGPipeBindMaskForBufferTarget(BufferTarget::Index),
                   static_cast<Uint32>(kMGPipeBindIndex | kMGPipeBindElementArray));
+        // Every enumerator, including the ones the loop above skips because no entry point
+        // binds them through a global slot: the TABLE is the thing P8 keys on, and a row that
+        // moved for an unbindable target is exactly as silent as one that moved for a
+        // bindable one.
+        for (SizeT i = 0; i < static_cast<SizeT>(BufferTarget::BufferTargetCount); ++i) {
+            const auto target = static_cast<BufferTarget>(i);
+            EXPECT_EQ(MGPipeBindMaskForBufferTarget(target), LiteralBindMaskFor(target))
+                << "the bind-mask row for BufferTarget " << i << " is not the documented bit";
+        }
     }
 
     // Sticky means ORed and never cleared, exactly like the image-bindable hint. A buffer
@@ -1608,6 +1669,127 @@ namespace {
         EXPECT_FALSE(MGPipeForEachSubDataRecordRange(kMGPipeSubDataMaxRecordOffset - kSegment,
                                                      kSegment * 4, collect, kSegment));
         EXPECT_TRUE(pieces.empty());
+    }
+
+    // B-C2 FROM THE CLIENT'S SIDE, with a real BufferObject rather than a synthetic handle.
+    // ResourceEmit.TheObjectRecordsSurviveAMakeCurrentAndOnlyTheWorkingStateIsReset drives the
+    // applier's half; this drives the CLIENT's: the record's only producer is the buffer's
+    // CONSTRUCTOR, which a context switch does not re-run, so if a make-current dropped the
+    // record there would be nothing to re-publish it and the next glBufferSubData on a
+    // share-group buffer would resolve to nothing and be refused - a lost upload, in a build
+    // where the refusal's assertion has compiled out.
+    //
+    // THE RULE THIS PINS is the one ResourceTracker.h states beside ResetForTest: a handle and
+    // its record are share-group object state, and the only things that drop a record are the
+    // object's own death signal and the served context's teardown. The client therefore has NO
+    // re-publication path on a fresh context and must not grow one.
+    TEST(ResourceEmit, ABufferCreatedBeforeAMakeCurrentStillLandsItsSubDataAfterOne) {
+        PushArm arm;
+        MGPipeResourceTracker& tracker = MGPipeResourceTrackerInstance();
+
+        // ctxA: the buffer exists and has a store.
+        const SharedPtr<BufferObject> shared = MakeBuffer(1);
+        shared->Respecify(256, nullptr);
+        const MGPipeHandle handle = tracker.Find(*shared);
+        ASSERT_FALSE(MGPipeHandleIsNull(handle));
+        ASSERT_TRUE(RecordOf(handle.Slot).Live) << "the constructor's create never reached the applier";
+        ASSERT_EQ(RecordOf(handle.Slot).Desc.Width, 256u);
+        const Uint64 serialBefore = RecordOf(handle.Slot).Serial;
+
+        // The make-current, exactly as MGPipeValidateForVerb's FreshlyPrimed arm performs it.
+        // The buffer is held by this case, which is what a share group is: the context went
+        // away, the object did not.
+        MGPipeApplierReset();
+        MG_State::pGLContext = MakeUnique<GLContext>();
+
+        ASSERT_TRUE(RecordOf(handle.Slot).Live)
+            << "a make-current dropped the record of a buffer the switch did not destroy";
+        EXPECT_EQ(tracker.Find(*shared), handle) << "the handle is client state and does not move";
+
+        Array<Uint8, 32> bytes{};
+        shared->UploadSubData(DataPtr{bytes.data(), bytes.size()}, 0);
+
+        EXPECT_GT(RecordOf(handle.Slot).Serial, serialBefore)
+            << "the first write after a make-current moved no serial - it was dropped";
+        EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, 0u)
+            << "the write was refused because the applier had no record for it";
+        EXPECT_EQ(tracker.CreateCount(), 1u)
+            << "the client re-published a create for a record the applier still had";
+    }
+
+    // THE DSA HOLE, which is what makes the sampled mask insufficient on its own: an element
+    // buffer bound once, drawn with, unbound, and then defined through glNamedBuffer* has no
+    // binding at all at the moment the respecify samples - and MC 26.3 streams with exactly
+    // that idiom (TryAdoptLargeStorage's comment names glNamedBufferSubData). The ELEMENT_ARRAY
+    // bit is the split path's kCapNeedsHostIndexBytes switch, so losing it silently disables
+    // restart rewriting and multi-draw flattening and is invisible in monolith.
+    //
+    // What closes it is NoteBoundAs from the draw-time emitters: any buffer ever fetched from
+    // carries its bit for the rest of its life.
+    TEST(ResourceEmit, ADrawTimeIndexBindingPublishesElementArrayEvenWhenTheRespecifyCannotSeeIt) {
+        PushArm arm;
+        MGPipeResourceTracker& tracker = MGPipeResourceTrackerInstance();
+        MGPipeVertexInputEmitterInstance().Reset();
+
+        const SharedPtr<BufferObject> indices = MakeBuffer(1);
+        const SharedPtr<BufferObject> vertices = MakeBuffer(2);
+
+        // The negative control FIRST, so the assertion below cannot pass because the bit is
+        // set for everything: a respecify with nothing bound publishes an empty mask.
+        indices->Respecify(64, nullptr);
+        ASSERT_EQ(tracker.LastDesc().BindMask, 0u)
+            << "a respecify with no binding at all published one";
+
+        // Bind, draw, unbind - the transient the sampler cannot see afterwards.
+        Ctx().GetBoundVertexArray()->GetIndexBufferBindingSlot().Bind(indices);
+        Ctx().GetBoundVertexArray()->BindAttributeBuffer(0, vertices);
+        Ctx().GetBoundVertexArray()->EnableAttribute(0);
+        MGPipeVertexInputEmitterInstance().EmitIndexBuffer(Ctx());
+        MGPipeVertexInputEmitterInstance().EmitVertexBuffers(Ctx(), 0);
+        Ctx().GetBoundVertexArray()->GetIndexBufferBindingSlot().Bind(nullptr);
+        Ctx().GetBoundVertexArray()->BindAttributeBuffer(0, nullptr);
+
+        // The DSA respecify: nothing is bound now, and the bit still goes out.
+        indices->Respecify(128, nullptr);
+        EXPECT_EQ(tracker.LastDesc().BindMask & kMGPipeBindElementArray, kMGPipeBindElementArray)
+            << "the element-array bit was lost because the buffer was not bound at the respecify";
+        EXPECT_EQ(tracker.LastDesc().BindMask & kMGPipeBindIndex, kMGPipeBindIndex);
+
+        vertices->Respecify(128, nullptr);
+        EXPECT_EQ(tracker.LastDesc().BindMask & kMGPipeBindVertex, kMGPipeBindVertex)
+            << "a buffer drawn from as a vertex array published no ARRAY_BUFFER bit";
+    }
+
+    // CREATE AND DESTROY ARE GATED AT TWO DIFFERENT MOMENTS - the create at its call site in
+    // the constructor, the destroy inside the emit-then-free helper - so asking
+    // MGPipeResourceSubsystemEnabled() twice pairs an emission taken under one registration
+    // with a decision taken under another. A buffer that outlives its backend's table would
+    // then free its slot with the applier's record still Live, and the allocator is about to
+    // hand that slot out again; a stale generation is the only thing between that and a
+    // cross-buffer id mix-up on the backend's side. The answer is latched at the create.
+    TEST(ResourceEmit, ADestroyFollowsTheCreateEvenIfTheOpTableWasUnregisteredMeanwhile) {
+        PushArm arm;
+        MGPipeResourceTracker& tracker = MGPipeResourceTrackerInstance();
+        // Owned by the case, so "the last reference drops" is one line below and not a chain
+        // of unbinds through a context that is about to be torn down anyway.
+        SharedPtr<BufferObject> buffer = MakeShared<BufferObject>(1);
+        const MGPipeHandle handle = tracker.Find(*buffer);
+        ASSERT_FALSE(MGPipeHandleIsNull(handle));
+        ASSERT_TRUE(RecordOf(handle.Slot).Live) << "the constructor's create never reached the applier";
+
+        // The backend goes away while the buffer is still alive.
+        MGPipeSetResourceOps(nullptr);
+        ASSERT_FALSE(MGPipeResourceSubsystemEnabled());
+
+        const Uint64 destroysBefore = tracker.DestroyCount();
+        buffer.reset();
+
+        EXPECT_EQ(tracker.DestroyCount(), destroysBefore + 1)
+            << "the destroy was gated on the live predicate rather than on the create's own latch";
+        EXPECT_FALSE(RecordOf(handle.Slot).Live)
+            << "the applier's record outlived the object, on a slot the allocator will hand out again";
+        EXPECT_FALSE(MGPipeSlots().IsLive(MGPipeKind::Buffer, handle));
+        EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, 0u);
     }
 #endif // MOBILEGL_PIPE_PUSH
 } // namespace
