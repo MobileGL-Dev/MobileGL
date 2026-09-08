@@ -364,13 +364,23 @@ namespace MobileGL::MG_Pipe {
         // every bit set, which is what makes the first verb on a fresh context publish a
         // complete state rather than an increment. Deliberately does NOT clear the fire
         // tallies: they are a per-run measurement, not per-context state.
+        //
+        // AND IT DELIBERATELY DOES NOT CLEAR m_pendingBaseInstance. Everything else this
+        // function clears is a LATCH describing what the server was last told; the pending
+        // base instance is THIS CALL'S ARGUMENT, written by the draw entry point one
+        // statement before MGP_FILL and not yet read by anybody. Update() calls Reset() from
+        // inside itself whenever the current GLContext pointer moves, so clearing it here
+        // meant that `eglMakeCurrent(ctxB); glDrawArraysInstancedBaseInstance(..., 7)` put a
+        // BaseInstance of 0 on the wire - one silently mis-shifted instanced draw per context
+        // switch, on the emulation path, with nothing to catch it. The value is cleared by the
+        // verb that consumes it (PipeFill.cpp's step 3, and its no-context early return) and
+        // by MGPipeLeaveVerb, which is where a per-call argument belongs.
         void Reset() {
             std::memset(m_lastPushed, 0, sizeof(m_lastPushed));
             m_renderStateVersion.Reset();
             m_pipelineStateVersion.Reset();
             m_framebufferBind.Reset();
             m_indexSlotVersion.Reset();
-            m_pendingBaseInstance = 0;
             m_pack = PixelStoreParameters{};
             m_patch = PatchTrio{};
             m_staged = RenderStateParameters{};
@@ -432,7 +442,14 @@ namespace MobileGL::MG_Pipe {
         // whose only change is its base instance has to reach the emitter. Set immediately
         // before the fill at the three *BaseInstance draw entry points; CONSUMED and cleared
         // by the validate point once it has been emitted, so a plain draw that follows one
-        // sees 0 again whether or not anything called MGPipeLeaveVerb in between.
+        // sees 0 again.
+        //
+        // THE CLEAR THAT ACTUALLY RUNS IN PRODUCTION IS THE VALIDATE POINT'S. MGPipeLeaveVerb
+        // clears it too, but no GL entry point calls MGPipeLeaveVerb - only MG_Test's
+        // ScopedPipeVerb and TrackerTest do - so the production guarantee is entirely
+        // PipeFill.cpp's, on BOTH of its exits: the end of step 3, and the no-live-context
+        // early return that skips step 3 altogether. Reset() deliberately does not clear it
+        // (see there): it is this call's argument, not a latch.
         void SetPendingBaseInstance(Uint32 baseInstance) { m_pendingBaseInstance = baseInstance; }
         Uint32 PendingBaseInstance() const { return m_pendingBaseInstance; }
         void ClearPendingBaseInstance() { m_pendingBaseInstance = 0; }

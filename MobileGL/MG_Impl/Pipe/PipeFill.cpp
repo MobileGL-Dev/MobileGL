@@ -795,9 +795,15 @@ namespace MobileGL::MG_Pipe {
 #endif
         MGPipeFillAccess::SetVerb(inputs, MGPipeVerb::kVerbCount);
         // The pending base instance belongs to the verb that was about to run, so leaving
-        // one drops it. The validate point clears it too, after the emission consumed it -
-        // the two together are what make a plain draw after a base-instanced one see 0
-        // again, and neither of them relies on the other being called.
+        // one drops it.
+        //
+        // THIS IS NOT THE CLEAR PRODUCTION RELIES ON, and saying so is better than implying
+        // two independent guarantees where there is one: no GL entry point calls
+        // MGPipeLeaveVerb - grep finds MG_Test/ScopedPipeVerb.h and MG_Test/Pipe/TrackerTest
+        // .cpp and nothing else - so what this line guarantees is that a unit case which
+        // opens a ScopedPipeVerb cannot leak a base instance into the next case. The
+        // production property ("consumed by exactly the verb whose entry point set it, and 0
+        // at every other Update") is held by MGPipeValidateForVerb, on both of its exits.
         MGPipeTrackerInstance().ClearPendingBaseInstance();
     }
 
@@ -1367,7 +1373,15 @@ namespace MobileGL::MG_Pipe {
         MGPipeFillAccess::SetVerb(inputs, verb);
         auto* ctx = LiveContext();
         MGPipeFillAccess::SetIdentity(inputs, ctx);
-        if (ctx == nullptr) return;
+        if (ctx == nullptr) {
+            // The pending base instance belongs to THIS verb, and this exit skips step 3's
+            // clear, so it has to make the same promise here: a base-instanced draw with no
+            // live context is a no-op, but leaving its argument standing would hand it to the
+            // next verb - which, since the tracker's Reset() no longer clears it, is the one
+            // path that could still carry a stale shift across.
+            MGPipeTrackerInstance().ClearPendingBaseInstance();
+            return;
+        }
         const MGPipeVerbClass verbClass = kMGPipeVerbClass[static_cast<SizeT>(verb)];
         const MGPipeFieldMask& mask = kMGPipeClassFieldMask[static_cast<SizeT>(verbClass)];
 
