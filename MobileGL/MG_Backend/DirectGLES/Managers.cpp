@@ -7550,9 +7550,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #undef MGB_STORAGE_FIXED_SAMPLE_LOCATIONS
 #undef MGB_STORAGE_IMMUTABLE
 #undef MGB_STORAGE_KIND
-#undef MGB_STORAGE_TEXBUFFER_HANDLE
-#undef MGB_STORAGE_TEXBUFFER_OFFSET
-#undef MGB_STORAGE_TEXBUFFER_SIZE
 
 #if MOBILEGL_PIPE_PUSH
         const SamplerParameters* BackendTextureObject::ResolvePushedBuiltinSampler(
@@ -9251,8 +9248,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // OVER-FIRING IS FREE AND UNDER-FIRING IS FATAL, so the per-attachment versions stay
             // as a second, narrower gate underneath: a frontend attachment that moved without
             // the record moving still re-attaches. That direction is the safe one and it is the
-            // reason the array is re-armed rather than retired here; the array itself retires
-            // with the frontend attachment objects, which is E's SyncAttachmentObject work.
+            // reason the array is re-armed rather than retired here. It is what the array is FOR
+            // now: the walk below resolves each attachment from the record (SyncAttachmentSurface),
+            // so the versions no longer say WHICH object a point holds - they say only "this point
+            // may have moved since I last looked", and they retire with the frontend attachment
+            // array itself, which is a later phase's.
             if (pushedRecord != nullptr && m_syncedRecordHashes[SizeT(asTarget)] != pushedRecord->ContentHash) {
                 std::fill(m_syncedFrontendAttachmentVersions.begin(), m_syncedFrontendAttachmentVersions.end(),
                           static_cast<Uint16>(~0u));
