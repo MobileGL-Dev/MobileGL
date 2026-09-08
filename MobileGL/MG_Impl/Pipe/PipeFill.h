@@ -53,20 +53,24 @@ namespace MobileGL::MG_Pipe {
     // and to the tracker's bit-9 shutter, so a draw whose only change is its base instance
     // still reaches the emitter and still goes out.
     //
-    // Call it immediately before MGP_FILL at a draw entry point that takes a baseinstance.
-    // The validate point consumes and clears it, and MGPipeLeaveVerb clears it too, so a
-    // plain draw that follows a base-instanced one sees 0 again.
+    // DO NOT CALL IT DIRECTLY FROM A GL ENTRY POINT - use MGP_SET_BASE_INSTANCE below. This
+    // whole declaration block is inside #if MOBILEGL_PIPE_PUSH, so a bare call would not even
+    // compile in a pull build, and the three call sites are in a file that is compiled in
+    // both. The macro is the same shape MGP_FILL already has, for the same reason.
     //
-    // [HANDED ON, not done here] The three GL entry points that owe this call are
+    // The validate point consumes and clears it - on both of its exits - and MGPipeLeaveVerb
+    // clears it too, so a plain draw that follows a base-instanced one sees 0 again. The
+    // tracker's Reset() deliberately does NOT clear it (Tracker.h): a make-current happens
+    // BETWEEN the setter and the fill that reads it.
+    //
+    // The three GL entry points that make this call (ID-10's grant) are
     // MG_Impl/GLImpl/Drawing/GL_Drawing.cpp's DrawElementsInstancedBaseVertexBaseInstance,
-    // DrawElementsInstancedBaseInstance and DrawArraysInstancedBaseInstance. That file is
-    // outside this package's ownership (C.5 assigns it to nobody and C.1 does not list it),
-    // so the setter, its consumption, its shutter and its hash all land here and the three
-    // one-line call sites are recorded for the integrator. Until they exist the emitted
-    // BaseInstance is 0 on every draw, which is what the tree does today.
+    // DrawElementsInstancedBaseInstance and DrawArraysInstancedBaseInstance - one line each,
+    // immediately above the MGP_FILL, carrying the RAW baseinstance argument.
     void MGPipeSetPendingBaseInstance(Uint32 baseInstance);
-    // What the next set_vertex_buffers will carry. Exists for the unit gate, which drives
-    // the emitter without a draw entry point to set it.
+    // What the next set_vertex_buffers will carry. The unit gate reads it to pin that a
+    // make-current between the setter and the fill does not eat it
+    // (TrackerWalk.ABaseInstanceSurvivesTheFirstWalkOnAFreshContext).
     Uint32 MGPipePendingBaseInstance();
 
     // PipeFill.cpp. Negative control B (P1 brief D6): the filler withholds the STAMP - never
@@ -108,6 +112,13 @@ namespace MobileGL::MG_Pipe {
 #endif
 } // namespace MobileGL::MG_Pipe
 #define MGP_FILL(Verb) ::MobileGL::MG_Pipe::MGPipeValidateForVerb(::MobileGL::MG_Pipe::MGPipeVerb::Verb)
+// P3a D-H2.1. One line immediately ABOVE the MGP_FILL of a draw entry point that takes a
+// baseinstance, carrying the argument RAW. It has to be a macro for MGP_FILL's reason: the
+// three call sites are compiled in the pull build too, where MGPipeSetPendingBaseInstance is
+// neither declared nor defined.
+#define MGP_SET_BASE_INSTANCE(BaseInstance)                                                        \
+    ::MobileGL::MG_Pipe::MGPipeSetPendingBaseInstance(static_cast<::MobileGL::Uint32>(BaseInstance))
 #else
 #define MGP_FILL(Verb) ((void)0)
+#define MGP_SET_BASE_INSTANCE(BaseInstance) ((void)0)
 #endif

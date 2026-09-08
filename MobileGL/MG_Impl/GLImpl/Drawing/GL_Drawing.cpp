@@ -659,6 +659,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_SET_BASE_INSTANCE(baseinstance);
         MGP_FILL(DrawElementsInstancedBaseVertexBaseInstance);
         MG_Backend::gBackendFunctionsTable.GL.DrawElementsInstancedBaseVertexBaseInstance(
             mode, count, type, indices, instancecount, basevertex, baseinstance);
@@ -681,6 +682,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_SET_BASE_INSTANCE(baseinstance);
         MGP_FILL(DrawElementsInstancedBaseInstance);
         MG_Backend::gBackendFunctionsTable.GL.DrawElementsInstancedBaseInstance(mode, count, type, indices,
                                                                                 instancecount, baseinstance);
@@ -710,6 +712,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_SET_BASE_INSTANCE(baseinstance);
         MGP_FILL(DrawArraysInstancedBaseInstance);
         MG_Backend::gBackendFunctionsTable.GL.DrawArraysInstancedBaseInstance(mode, first, count, instancecount,
                                                                               baseinstance);
