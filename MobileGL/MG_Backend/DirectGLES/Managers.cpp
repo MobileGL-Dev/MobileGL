@@ -4543,15 +4543,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
             auto* resource = BufferImpl::FindBufferResourceForHandle(binding.Res);
             if (resource == nullptr) return false;
 
-            // WHAT IS NOT HERE, recorded rather than hidden: the legacy arm opens with
-            // bufferObject->SyncGpuWrites(), one of the eleven Espryt SyncPersistentMappedRange
-            // / SyncGpuWrites sites D-N keeps where they are for P3a. It cannot be made from a
-            // handle - the server has no inverse map to a frontend object, by design - so on
-            // this arm a 64-bit array whose SOURCE buffer was written by a shader and not yet
-            // pulled back narrows stale bytes. P8 is what closes it, by moving the pull to the
-            // client where the object lives; until then this is the one behavioural difference
-            // between the two arms and it is confined to fp64 vertex arrays fed by
-            // shader-written buffers.
+            // WHAT IS NOT HERE, AND IT IS A RULED DEVIATION FOR P3a RATHER THAN AN OVERSIGHT
+            // (M-3; integrator ruling, this commit).
+            //
+            // The legacy arm opens with bufferObject->SyncGpuWrites(), one of the eleven Espryt
+            // SyncPersistentMappedRange / SyncGpuWrites sites D-N keeps where they are for P3a.
+            // D-N's wording is "no MOVE of those sites off the frontend", and this arm does not
+            // move it: it CANNOT MAKE IT AT ALL. The call needs a frontend BufferObject and this
+            // path holds only a handle, because the server has no inverse map back to a frontend
+            // object - that absence is the design, not a gap in it (ARCHITECTURE.md 4.2). The
+            // two ways to keep the site here would each break something D-N or D-J protects: a
+            // handle -> object map is the very thing the split removes, and pulling the bytes
+            // eagerly on the client at every draw is new behaviour and new cost.
+            //
+            // SO THE DEVIATION IS DECLARED, WITH ITS BLAST RADIUS. Under the default mask a
+            // 64-bit vertex array whose SOURCE buffer was written by a shader and not yet pulled
+            // back narrows STALE bytes on this arm and fresh bytes on the legacy one. That is
+            // the whole of it: fp64 vertex arrays, fed by a buffer a shader wrote, read without
+            // any intervening explicit readback. No other attribute type reads through this
+            // path, and a persistently mapped source is excluded separately below (the memo
+            // never trusts one, so those re-read every draw through the coherent map).
+            //
+            // P8 closes it by moving the pull to the client, where the object lives. Until then
+            // this is the ONE behavioural difference between the two arms under the default
+            // mask, and it is written here rather than only in a document so that the next
+            // reader of this function finds it at the site.
             // WHERE THE BYTES ARE, and it is not one fixed place: an ADOPTED store has no client
             // shadow left at all (PipeResource::AdoptPersistentMap clears and shrinks it), so
             // the coherent map IS the source of truth - which is exactly the case the memo
