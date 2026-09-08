@@ -3914,9 +3914,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             Bind();
 
-            const Uint32 attributeCount =
-                std::min<Uint32>(rec->AttributeCount, MG_Pipe::kMGPipeMaxVertexAttribs);
-            for (Uint attribIndex = 0; attribIndex < attributeCount && emitAttributes; ++attribIndex) {
+            // ALL 32 SLOTS, not rec->AttributeCount, and the difference is the disable arm.
+            // The legacy walk ran over the frontend's whole 32-slot attribute array and reached
+            // glDisableVertexAttribArray for every attribute that was off; a walk bounded by the
+            // record's count leaves an attribute the configuration has just DROPPED enabled in
+            // the driver VAO, pointing at whatever buffer it last held - which is the class the
+            // first Adreno workaround below exists to prevent. Nothing in the contract requires
+            // the client to emit 32 entries (D-H3 sets the precedent the other way for the
+            // BUFFER set: "truncated to the highest enabled attribute + 1"), so the bound was a
+            // requirement on B that was neither stated nor pinned. It costs nothing to drop it:
+            // MGPipeApplyCreateVertexElements zeroes both arrays before it unpacks, so every
+            // entry past AttributeCount reads Enabled = 0, Type = 0 (Int8, not Float64) and
+            // IsLong = 0 - i.e. exactly "disable this array", with no dependency on B at all.
+            for (Uint attribIndex = 0; attribIndex < MG_Pipe::kMGPipeMaxVertexAttribs && emitAttributes;
+                 ++attribIndex) {
                 const MGPVertexAttribWire& attrib = rec->Attributes[attribIndex];
                 const MG_Pipe::MGPVertexBuffer* binding =
                     VertexBufferForBindingIndex(st, attrib.BindingIndex);
