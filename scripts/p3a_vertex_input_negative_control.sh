@@ -37,14 +37,30 @@
 #   <build-dir>   a configured build directory carrying the push-only unit suites
 #                 (VertexInputEmit's emission cases are compiled only under MOBILEGL_PIPE_PUSH)
 #
+# RESTORE IS NOT ENOUGH; THE REBUILD IS PART OF THE CONTRACT. Once the header has been patched,
+# EVERY way out of this script goes through repair(): restore the header, rebuild the library from
+# it, and re-run the suite to prove the tree really went back. `cp` alone leaves <build-dir> holding
+# a libMobileGL.so in which IsBgra is hard-zeroed, `ctest` does not rebuild, and nothing in an exit
+# status tells a caller to. The path that needs this most is the one that reads "NEGATIVE CONTROL
+# DID NOT TRIP": an engineer reacts to it by opening the suite and re-running ctest against this
+# very build directory, and every reading they take there would come from a deliberately corrupted
+# library. Leaving a build directory holding the broken header is worse than any exit status, so
+# repair() runs from the EXIT trap as well - a mid-way failure (the patched header would not
+# compile, an interrupt) repairs too - and a repair that itself fails downgrades the verdict to 2.
+#
+# Nothing is written into the repository. Logs and the header backup live in
+# <build-dir>/p3a-g7-logs/, which is inside the build tree and therefore neither committed nor
+# picked up by `git status`; the paths are printed with every verdict.
+#
 # Exit codes: 0 the control tripped AND named IsBgra;
 #             1 the control did not answer: either the suite stayed green with the field dropped,
 #               or it went red without ever naming IsBgra, so the red cannot be attributed to the
 #               dropped field. Both are findings about the TEST, not errors in this script - and
-#               both leave the tree restored and rebuilt;
+#               both leave the tree restored AND rebuilt AND re-run;
 #             2 the script could not run the control at all (bad arguments; the header or the
 #               field is absent on this tree; no matching test; a build that was already broken;
-#               a failed restore).
+#               the patched header did not compile; a failed restore or a failed rebuild after
+#               one).
 set -u -o pipefail
 
 BUILD_DIR=""
@@ -63,15 +79,47 @@ cd "$REPO_ROOT" || exit 2
 HEADER=MobileGL/MG_Impl/Pipe/VertexInputEmit.h
 FIELD=IsBgra
 TEST_NAME='VertexInputEmit\.'
-LOG_DIR=$(mktemp -d)
+# Inside the build tree, never in the repository: a run must not leave untracked files behind, and
+# .gitignore carries no rule for a p3a-*.log at the root. Falls back to a temp directory only if
+# the build directory cannot be written, which would be a strange build directory.
+LOG_DIR=$(cd "$BUILD_DIR" && pwd)/p3a-g7-logs
+mkdir -p "$LOG_DIR" 2>/dev/null || LOG_DIR=$(mktemp -d) || exit 2
 BACKUP=$LOG_DIR/VertexInputEmit.h.orig
 
 say() { echo "[p3a-g7] $*" >&2; }
 
-restore() {
+restore_header() {
   # From the byte-for-byte copy taken before the patch, never from git: someone running this on a
   # dirty tree must get their own tree back, not HEAD.
   if [ -f "$BACKUP" ]; then cp -f "$BACKUP" "$HEADER"; fi
+}
+
+# Restore the header AND rebuild AND re-run the suite. Idempotent, and a no-op until the patch has
+# actually been applied. Called explicitly before the verdict is decided, and from the EXIT trap
+# for every path that does not reach it.
+PATCH_APPLIED=0
+REPAIR_DONE=0
+REPAIR_RC=0
+repair() {
+  [ "$PATCH_APPLIED" = 1 ] || return 0
+  if [ "$REPAIR_DONE" = 1 ]; then return "$REPAIR_RC"; fi
+  REPAIR_DONE=1
+  restore_header
+  say "restored $HEADER; rebuilding $BUILD_DIR from it"
+  if ! cmake --build "$BUILD_DIR" -j "$(nproc)" > "$LOG_DIR/build-restored.log" 2>&1; then
+    say "the tree did NOT rebuild after the restore - see $LOG_DIR/build-restored.log"
+    say "THE BUILD DIRECTORY IS NOT TRUSTWORTHY: repair it before reading anything out of it."
+    REPAIR_RC=2
+    return 2
+  fi
+  if ! ctest --test-dir "$BUILD_DIR" -R "$TEST_NAME" --no-tests=error \
+       > "$LOG_DIR/ctest-restored.log" 2>&1; then
+    say "the tree did NOT go back to green after the restore - see $LOG_DIR/ctest-restored.log"
+    REPAIR_RC=2
+    return 2
+  fi
+  say "the tree is restored, rebuilt and green again"
+  return 0
 }
 
 # --- 0. the control has to have something to break ------------------------------------------
@@ -123,7 +171,11 @@ say "$TEST_NAME is green before the patch"
 
 # --- 2. stop copying IsBgra ------------------------------------------------------------------
 cp -f "$HEADER" "$BACKUP" || exit 2
-trap 'restore' EXIT
+trap 'repair' EXIT
+# Armed BEFORE the patcher runs, not after: a python that died half-way through the write must
+# still be repaired. The cost of arming it early is one unnecessary rebuild in the case where the
+# patcher matched nothing and the file is byte-identical (cp refreshes its mtime).
+PATCH_APPLIED=1
 say "dropping the ${FIELD} copy from $HEADER"
 python3 - "$HEADER" "$FIELD" <<'PY' || exit 2
 import re
@@ -152,57 +204,59 @@ if ! cmake --build "$BUILD_DIR" -j "$(nproc)" > "$LOG_DIR/build-after.log" 2>&1;
   say "'nothing was built'. The break is supposed to be invisible to the compiler - if the field is"
   say "read somewhere that needs its value, say so in the control rather than working around it."
   grep -m10 -E 'error:' "$LOG_DIR/build-after.log" >&2
+  # The EXIT trap repairs the tree on the way out; this path is a 'could not run', not a verdict.
   exit 2
 fi
 say "the patched header still compiles, so the record still has the field and still asserts its size"
 
 # --- 4. the suite must now be RED, and name the field ----------------------------------------
+# The verdict is only RECORDED here. Nothing is reported and nothing exits until step 5 has put the
+# tree back, because all three outcomes below leave the same corrupted build directory behind.
 say "running $TEST_NAME against the dropped field"
 if ctest --test-dir "$BUILD_DIR" -R "$TEST_NAME" --no-tests=error --output-on-failure \
      > "$LOG_DIR/ctest-after.log" 2>&1; then
-  say "NEGATIVE CONTROL DID NOT TRIP: $TEST_NAME is still green with ${FIELD} no longer copied into"
-  say "MGPVertexAttribWire. A GL_BGRA attribute now travels as a non-BGRA one and the emission"
-  say "comparison did not notice, so G6 is not checking what it claims to check."
-  cp -f "$LOG_DIR/ctest-after.log" ./p3a-vertex-input-control-failure.log
-  say "ctest output kept at ./p3a-vertex-input-control-failure.log"
-  exit 1
-fi
-
-# A red is not yet a pass: a suite that had started failing for an unrelated reason satisfies the
-# first half of the claim and none of the second. The answer is remembered here and decided at the
-# end - AFTER the restore, because leaving a build directory holding the broken header is worse
-# than any exit status.
-TRIPPED_FOR_THE_RIGHT_REASON=1
-if grep -q "$FIELD" "$LOG_DIR/ctest-after.log"; then
-  say "negative control tripped, naming $FIELD"
+  VERDICT=did-not-trip
+elif grep -q "$FIELD" "$LOG_DIR/ctest-after.log"; then
+  # A red is not yet a pass: a suite that had started failing for an unrelated reason satisfies the
+  # first half of the claim and none of the second.
+  VERDICT=tripped
 else
-  TRIPPED_FOR_THE_RIGHT_REASON=0
-  say "negative control tripped, but its output does not name $FIELD - the suite failed for some"
-  say "other reason, so this is NOT a pass. Restoring first, then reporting it."
-  grep -m20 -E 'Failure|error|Expected|Actual' "$LOG_DIR/ctest-after.log" >&2
+  VERDICT=wrong-reason
 fi
 
 # --- 5. put it back, and prove it went back --------------------------------------------------
-restore
+# SHARED BY ALL THREE OUTCOMES, and that is the whole point of doing it before the verdict is
+# printed. `restore` on its own only refreshes the header's mtime; without the rebuild the caller
+# is handed a libMobileGL.so built from the hard-zeroed field, and the "did not trip" reader is
+# precisely the caller who goes on to run more ctest against it.
+repair
+repair_rc=$?
 trap - EXIT
-say "restored; rebuilding"
-if ! cmake --build "$BUILD_DIR" -j "$(nproc)" > "$LOG_DIR/build-restored.log" 2>&1; then
-  say "the tree did NOT rebuild after the restore - see $LOG_DIR/build-restored.log"
-  exit 2
-fi
-if ! ctest --test-dir "$BUILD_DIR" -R "$TEST_NAME" --no-tests=error \
-     > "$LOG_DIR/ctest-restored.log" 2>&1; then
-  say "the tree did NOT go back to green after the restore - see $LOG_DIR/ctest-restored.log"
+if [ "$repair_rc" -ne 0 ]; then
+  say "the control's own verdict was '$VERDICT', but the repair failed, so that verdict is not"
+  say "what this run reports: a build directory that could not be put back is 'could not run'."
   exit 2
 fi
 
-if [ "$TRIPPED_FOR_THE_RIGHT_REASON" = 0 ]; then
-  cp -f "$LOG_DIR/ctest-after.log" ./p3a-vertex-input-control-wrong-reason.log
-  say "INCONCLUSIVE: $TEST_NAME went red with ${FIELD} dropped but never named it, so the red"
-  say "cannot be attributed to the dropped field. The tree is restored and green again; the failing"
-  say "output is kept at ./p3a-vertex-input-control-wrong-reason.log."
-  exit 1
-fi
-
-say "negative control tripped and the tree is green again"
-exit 0
+case "$VERDICT" in
+  did-not-trip)
+    say "NEGATIVE CONTROL DID NOT TRIP: $TEST_NAME was still green with ${FIELD} no longer copied"
+    say "into MGPVertexAttribWire. A GL_BGRA attribute travelled as a non-BGRA one and the emission"
+    say "comparison did not notice, so G6 is not checking what it claims to check."
+    say "The failing run's output is kept at $LOG_DIR/ctest-after.log"
+    exit 1
+    ;;
+  wrong-reason)
+    say "INCONCLUSIVE: $TEST_NAME went red with ${FIELD} dropped but never named it, so the red"
+    say "cannot be attributed to the dropped field. The suite failed for some other reason."
+    grep -m20 -E 'Failure|error|Expected|Actual' "$LOG_DIR/ctest-after.log" >&2
+    say "The failing run's output is kept at $LOG_DIR/ctest-after.log"
+    exit 1
+    ;;
+  tripped)
+    say "negative control tripped, naming $FIELD, and the tree is green again"
+    exit 0
+    ;;
+esac
+say "unreachable verdict '$VERDICT'"
+exit 2
