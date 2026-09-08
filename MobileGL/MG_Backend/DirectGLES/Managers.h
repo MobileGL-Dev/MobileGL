@@ -698,9 +698,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // target refreshes and skips - that today leave the frontend flag set. A naive move of the
     // clear to the client would lose exactly those texels. The set survives any number of
     // bails; ConsumePipeTextureUpload below is called ONLY where the level actually uploaded.
+    //
+    // `uploadTarget` is static_cast<Uint16>(MobileGL::TextureUploadTarget) - the HALF, not the
+    // packed field. The stored key is MGPSubData::Target whole (low byte MGPipeResourceTarget,
+    // high byte TextureUploadTarget, ID-12) and both functions decode it with
+    // MGPipeSubDataUploadTargetOf; they are the only two places this package compares it.
     const MG_Pipe::MGPipeResourceRecord::PendingUpload* FindPipeTextureUpload(
         const MG_Pipe::MGPipeResourceRecord& record, Uint16 uploadTarget, Uint16 level);
     void ConsumePipeTextureUpload(MG_Pipe::MGPipeHandle res, Uint16 uploadTarget, Uint16 level);
+
+    // THE SERVER'S OWN RE-DIRTY, armed in the applier's set instead of in the frontend's model
+    // (esprytobj review M-1). `packedTarget` is a full MGPSubData::Target built with
+    // MGPipePackSubDataTarget, because the entry this writes has to be indistinguishable from
+    // one the client emitted. Whole-level, no regions, merged with any entry already there;
+    // false (and one named log line) when the applier's pending set is at its bound. The three
+    // server-side MarkStorageDirty sites are enumerated at the definition.
+    Bool RearmPipeTextureLevelUpload(MG_Pipe::MGPipeHandle res, Uint16 packedTarget, Uint16 level,
+                                     const MG_Pipe::MGPBox& wholeLevel);
 #endif
 
     namespace BufferImpl {
