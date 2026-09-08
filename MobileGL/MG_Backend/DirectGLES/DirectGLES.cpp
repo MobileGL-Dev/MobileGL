@@ -201,7 +201,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // beside ResolveResourceSubsystemArm / ResolveVertexInputSubsystemArm in Managers.cpp -
     // which is package D's file for the whole phase, so the draw-path package cannot write
     // them. It is landed BEFORE D, so it carries its own bit tests until those latches exist;
-    // at the rebase every one of these becomes a call to D's, which additionally
+    // at the rebase every one of these is DELETED and its callers call D's PUBLIC WRAPPERS -
+    // FramebufferSubsystemEnabled() / TextureResourceSubsystemEnabled() /
+    // SamplerSubsystemEnabled() / ProgramSubsystemEnabled() (Managers.h, beside the four
+    // Resolve<Family>SubsystemArm() resolvers; the WRAPPER holds the `static const` latch, so
+    // the resolver is never the thing to call) - which additionally
     //
     //   * LOGS each dependency refusal with one MGLOG_E naming BOTH bits, and
     //   * reaches PipeSubsystemArmVerdict::NoArm and STOPS with the named
@@ -210,20 +214,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
     //     arrays, the twin's cheap-gate trio, UnitSamplerLookupMemo's WeakPtr rows and
     //     g_programTwinLookupMemo are all pre-handle arms).
     //
-    // The dependency DIRECTIONS are copied here verbatim, so a mask that half-runs is refused
-    // in the meantime too and the A/B is not silently wrong; the refusal log and the stop are
-    // D's and are deliberately not duplicated here, because two writers of one diagnostic is
-    // how the two drift.
+    // The dependency DIRECTIONS are copied here, so a mask that half-runs is refused in the
+    // meantime too and the A/B is not silently wrong; the refusal log and the stop are D's and
+    // are deliberately not duplicated here, because two writers of one diagnostic is how the
+    // two drift.
+    //
+    // D-K2 HAS FOUR ROWS, NOT THREE (ID-15). The brief's table said "bit 10 without bit 11 is
+    // fine"; that is wrong for P4a as built - MGPTextureParams::BuiltinSampler is a SamplerCso
+    // handle, only bit 11 mints sampler CSOs, and a null there is Fatal. So BIT 10 REQUIRES BIT
+    // 11 as well, which makes the texture-resource and sampler latches the same predicate by
+    // construction. D's mirror comment (esprytobj Managers.h ~631) still states the refuted
+    // sentence out loud and is D's own rework item; nothing here may copy it forward. The row
+    // is spelled as a RAW BIT TEST rather than as a call to the sampler latch, because the two
+    // latches would otherwise initialise each other.
     //
     // Latched once per process for the reason Managers.h gives for the other two: the two arms
     // keep their state in different places, so an answer that changed mid-run would strand
     // everything already built against the previous one.
     static Bool EsprytDrawTextureResourceHandlesEnabled() {
         // Bit 10 requires bit 7: a buffer texture's BufferForTexBuffer names a Buffer handle
-        // and only bit 7 puts twins in that table (D-K2).
+        // and only bit 7 puts twins in that table (D-K2 row 3).
+        // Bit 10 requires bit 11 (D-K2 row 4, ID-15): MGPTextureParams::BuiltinSampler is a
+        // SamplerCso handle and only bit 11 mints those.
         static const Bool enabled =
             (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemTextureResources) != 0 &&
-            (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemResources) != 0;
+            (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemResources) != 0 &&
+            (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemSamplers) != 0;
         return enabled;
     }
 
@@ -250,6 +266,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static const Bool enabled =
             (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemPrograms) != 0;
         return enabled;
+    }
+
+    // THE ONE PLACE THIS FILE ASKS THE APPLIER "which framebuffer record describes this
+    // binding". Six reads used to spell `MGPipeApplier().DrawFramebuffer` / `.ReadFramebuffer`
+    // inline; they go through here instead, for exactly one reason.
+    //
+    // ID-19 turns the applier's framebuffer state into a PER-OBJECT table keyed by the
+    // framebuffer handle, with `BoundFramebuffer[Draw|Read]` holding the bound handles, so that
+    // the DSA entry points (BlitNamedFramebuffer, the four ClearNamedFramebuffer*) can be
+    // handed a record for a framebuffer that is bound to neither binding. Wire v3 keeps
+    // `DrawFramebuffer` / `ReadFramebuffer` as ACCESSORS OF THOSE NAMES resolving through the
+    // bound handle, precisely so this package keeps its shape. If they land as member functions
+    // rather than as members, this one function grows a pair of parentheses and nothing else in
+    // this file moves; if the accessor can answer "no record for the bound handle", that answer
+    // arrives here as a null Fbo, which is already what every caller treats as a decline.
+    static const MG_Pipe::MGPFramebufferState& BoundFramebufferRecord(FramebufferTarget target) {
+        const auto& st = MG_Pipe::MGPipeApplier();
+        return target == FramebufferTarget::Draw ? st.DrawFramebuffer : st.ReadFramebuffer;
     }
 #endif // MOBILEGL_PIPE_PUSH
 
@@ -278,8 +312,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // RECORDED HERE ON PURPOSE: this pair of file-static SharedPtrs is the largest surviving
     // MG_State-type usage anywhere under MG_Backend/DirectGLES, and its owner is P3b/P4b - so
     // the include-graph gate at P13 meets a known item rather than a surprise. The purity
-    // gates are unaffected either way: they grep for pGLContext under MG_Backend and for an
-    // MG_State type inside MGPipeResourceOps, and this is neither.
+    // gates are unaffected either way: they grep MG_Backend for the pull arm's live-GLContext
+    // pointer token (G13 - deliberately not spelled here, because that grep is a BARE TOKEN
+    // grep and a comment naming it is a hit) and for an MG_State type inside
+    // MGPipeResourceOps, and this is neither.
     SamplerImpl::BackendSamplerObject* GetRawDepthFetchSampler() {
         if (!g_rawDepthFetchSamplerState) {
             g_rawDepthFetchSamplerState = MakeShared<MG_State::GLState::SamplerObject>(0);
@@ -1849,6 +1885,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // meet except with vanishing probability - and a collision costs a spare rebuild.
         static Bool UnitBindingsEpochFromRecords(Uint64& out) {
             const auto& st = MG_Pipe::MGPipeApplier();
+            // P4a decline-site T2: S - flips to MGLOG_E_ONCE-then-decline at the verification
+            //   round. Once bits 10/11 are on and B/C have landed, a draw that reaches here
+            //   with neither window ever received is a seam defect, not a transitional state;
+            //   the gate tick below (MINOR-4) is what makes the decline countable in the
+            //   meantime.
             if (st.SamplerViewCount == 0 && st.SamplerStateCount == 0) return false;
             // Local, because the tracker's MGPipeMixShutter lives in MG_Impl and no backend
             // translation unit may reach for it.
@@ -1861,6 +1902,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         static Uint64 CurrentUnitBindingsEpoch(Int maxTouchedUnit) {
 #if MOBILEGL_PIPE_PUSH
+            // P4a decline-site T1: M - the mask says this family is not switched on; stays
+            //   silent at the verification round (becomes D's SamplerSubsystemEnabled()).
             if (EsprytDrawSamplerHandlesEnabled()) {
                 Uint64 epochFromRecords = 0;
                 if (UnitBindingsEpochFromRecords(epochFromRecords)) {
@@ -1871,6 +1914,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                       /*hit=*/true);
                     }
                     return epochFromRecords;
+                }
+                // MINOR-4. THE RECORD ARM'S DECLINE IS TICKED AS A MISS, and it has to be:
+                // the walk arm below ticks the SAME gate with its own hit/miss, so without
+                // this a fully declining tree reports the walk memo's high hit rate on
+                // Gate::EsprytUnitBindingsEpoch and the verification round's "hit rate goes to
+                // 100%" cannot tell "the record arm engaged" from "the walk arm's memo hit".
+                // With it, every declining call contributes at least one miss, so 100% means
+                // exactly one thing.
+                if (MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::CountGate(MG_Util::PipeStats::Gate::EsprytUnitBindingsEpoch,
+                                                  /*hit=*/false);
                 }
             }
 #endif
@@ -2064,8 +2118,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             Bool recordKeyed = false;
             Uint64 contentHash = 0;
+            // P4a decline-site F8 (read list): K - not a behavioural decline but a memo-KEY
+            //   selection. Both key shapes are correct and are held in separate fields, so a
+            //   process that runs the version key before the first emission and the ContentHash
+            //   key after it never compares one against the other. No flip at the verification
+            //   round.
             if (EsprytDrawFramebufferHandlesEnabled()) {
-                const auto& record = MG_Pipe::MGPipeApplier().ReadFramebuffer;
+                const auto& record = BoundFramebufferRecord(FramebufferTarget::Read);
                 if (!MG_Pipe::MGPipeHandleIsNull(record.Fbo)) {
                     recordKeyed = true;
                     contentHash = record.ContentHash;
@@ -2208,8 +2267,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_PIPE_PUSH
                 Bool fboRecordKeyed = false;
                 Uint64 fboContentHash = 0;
+                // P4a decline-site F8 (draw list): K - a memo-KEY selection, not a decline; see
+                //   the read list's F8 note above. No flip at the verification round.
                 if (EsprytDrawFramebufferHandlesEnabled()) {
-                    const auto& drawRecord = MG_Pipe::MGPipeApplier().DrawFramebuffer;
+                    const auto& drawRecord = BoundFramebufferRecord(FramebufferTarget::Draw);
                     if (!MG_Pipe::MGPipeHandleIsNull(drawRecord.Fbo)) {
                         fboRecordKeyed = true;
                         fboContentHash = drawRecord.ContentHash;
