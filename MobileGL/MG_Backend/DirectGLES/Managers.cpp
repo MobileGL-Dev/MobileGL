@@ -3594,22 +3594,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // view: it is resolved per binding point and rides in MGPVertexBuffer::Divisor, which
         // is where glVertexAttribDivisor reads it (D-G2).
 
-        // The entry of the applied set that feeds this attribute. The client emits one entry
-        // per enabled attribute with BindingIndex == the attribute index, so the positional
-        // slot is the answer in every real record; the scan behind it is what keeps a record
-        // that numbers its entries differently correct rather than silently misfed.
-        const MG_Pipe::MGPVertexBuffer* VertexBufferForBindingIndex(const MG_Pipe::MGPipeApplierState& st,
-                                                                    Uint32 bindingIndex) {
+        // The entry of the applied set that feeds ATTRIBUTE `attributeIndex`.
+        //
+        // THE KEY IS THE ATTRIBUTE INDEX, NOT MGPVertexAttribWire::BindingIndex, and the two
+        // live in different spaces. Espryt consumes RESOLVED attributes, so the client emits
+        // set_vertex_buffers as one entry per attribute slot with
+        // MGPVertexBuffer::BindingIndex == the attribute index (VertexInputEmit.h:190-193,
+        // :229 - "Espryt consumes RESOLVED attributes, so the set is one entry per attribute
+        // slot with BindingIndex == the attribute index"), each carrying that attribute's
+        // already-folded buffer, stride and divisor. MGPVertexAttribWire::BindingIndex is the
+        // OTHER thing: the GL binding POINT the attribute was attached to by
+        // glVertexAttribBinding, which is the key of the binding-point view this arm never
+        // reads (it needs no separate view, because the resolution already happened on the
+        // client). The two coincide whenever the attribute was configured through
+        // glVertexAttribPointer, which is why every scenario that uses the pointer API stayed
+        // green while glVertexAttribBinding(2, 3) / (0, 5) fetched the wrong entry or none -
+        // KHR-GL43.vertex_attrib_binding's whole subject.
+        const MG_Pipe::MGPVertexBuffer* VertexBufferForAttributeIndex(const MG_Pipe::MGPipeApplierState& st,
+                                                                      Uint32 attributeIndex) {
             if (st.VertexBufferCount == 0) return nullptr;
             const Uint32 begin = st.VertexBufferStart;
             const Uint32 end = begin + st.VertexBufferCount;
-            if (bindingIndex >= begin && bindingIndex < end &&
-                bindingIndex < MG_Pipe::kMGPipeMaxVertexAttribs &&
-                st.VertexBuffers[bindingIndex].BindingIndex == bindingIndex) {
-                return &st.VertexBuffers[bindingIndex];
+            if (attributeIndex >= begin && attributeIndex < end &&
+                attributeIndex < MG_Pipe::kMGPipeMaxVertexAttribs &&
+                st.VertexBuffers[attributeIndex].BindingIndex == attributeIndex) {
+                return &st.VertexBuffers[attributeIndex];
             }
             for (Uint32 i = begin; i < end && i < MG_Pipe::kMGPipeMaxVertexAttribs; ++i) {
-                if (st.VertexBuffers[i].BindingIndex == bindingIndex) return &st.VertexBuffers[i];
+                if (st.VertexBuffers[i].BindingIndex == attributeIndex) return &st.VertexBuffers[i];
             }
             return nullptr;
         }
@@ -4021,7 +4033,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                  ++attribIndex) {
                 const MGPVertexAttribWire& attrib = rec->Attributes[attribIndex];
                 const MG_Pipe::MGPVertexBuffer* binding =
-                    VertexBufferForBindingIndex(st, attrib.BindingIndex);
+                    VertexBufferForAttributeIndex(st, attribIndex);
                 const Uint32 divisor = binding != nullptr ? binding->Divisor : 0u;
 
                 // The enable/disable block. On this arm there is no per-attribute version to
