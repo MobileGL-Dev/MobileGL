@@ -1124,9 +1124,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            void FlushPendingRangesNow(GLESBufferResource& resource, BufferObject& bufferObject) {
-                FlushPendingRangesFrom(resource, bufferObject.MappedData(), bufferObject.GetSize());
-            }
+            // NO `FlushPendingRangesNow` FORWARDER HERE, and that is G5's doing (ID-11).
+            // The gate extracts the ONE definition of that name from this file and compares
+            // its bytes with the pre-P3a one, so a second definition - even a two-line
+            // forwarder - is a gate that cannot run rather than a gate that passes. The pull
+            // build's untouched function below IS that definition; a push build has none, and
+            // its two legacy call sites call the shared ladder above directly. The property
+            // the row exists for is stronger this way than the row asks: a push build
+            // contains exactly ONE three-tier ladder and BOTH arms call it, where a forwarder
+            // would have left the pull text as a second ladder for the extractor to hash.
+            // (The handle arm cannot call FlushPendingRangesNow itself: its signature takes a
+            // BufferObject&, and having no frontend object to offer is the whole point of the
+            // conversion.)
 
             // Land the app bytes queued for an ADOPTED store on the GPU timeline: staged
             // into the upload ring and delivered by glCopyBufferSubData. The destination
@@ -1705,7 +1714,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 // Queued app writes must land in the backend store before it is read
                 // back, or the writeback below would revert them in the shadow.
+#if MOBILEGL_PIPE_PUSH
+                // The shared ladder, by ID-11: a push build has no FlushPendingRangesNow (see
+                // the note at its would-be forwarder), so this arm and the handle arm call the
+                // one body between them.
+                FlushPendingRangesFrom(*resource, bufferObject.MappedData(), bufferObject.GetSize());
+#else
                 FlushPendingRangesNow(*resource, bufferObject);
+#endif
 
                 BindBufferId(TempBufferTarget, resource->id);
                 void* mapped = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size),
@@ -2680,7 +2696,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 resource->storageSize != bufferObject->GetSize()) {
                 RespecifyStorageNow(*resource, *bufferObject);
             } else if (!resource->pendingRanges.empty()) {
+#if MOBILEGL_PIPE_PUSH
+                // The shared ladder, by ID-11 - see the note where the forwarder would be.
+                FlushPendingRangesFrom(*resource, bufferObject->MappedData(), bufferObject->GetSize());
+#else
                 FlushPendingRangesNow(*resource, *bufferObject);
+#endif
                 resource->syncedChangeSerial = bufferObject->GetChangeSerial();
             } else if (resource->syncedChangeSerial != bufferObject->GetChangeSerial()) {
                 // Ops could not track some writes (e.g. the ops table was
