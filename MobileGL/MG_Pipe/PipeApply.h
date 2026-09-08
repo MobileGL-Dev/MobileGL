@@ -148,6 +148,42 @@ namespace MobileGL::MG_Pipe {
                   "the ShaderCso bound must contain the composite band, or a composite handle "
                   "is refused as out of range on arrival");
 
+    // ---- P4a's SHAPE bounds, and they are the same argument the slot bounds above make, one
+    // level down: every number below arrives inside a payload, every one of them decides how
+    // much the applier allocates or how far it indexes, and NONE of them is ever allocated by
+    // being named. A record that names one past its bound is Fatal{ProtocolCorruption} - the
+    // verdict this file reserves for a record that would make the server act outside its own
+    // storage - and never a resize.
+
+    // A sub-data record's mip level. GL's own bound is log2 of the maximum texture size, which
+    // no device reports above 2^16, so a level index of 32 addresses a texture no
+    // implementation can allocate and is a corrupt record rather than a large one. It is NOT
+    // MGPTextureParams::MaxLevel's bound: GL_TEXTURE_MAX_LEVEL defaults to 1000 and is a
+    // parameter, not a storage level, so nothing here polices it.
+    inline constexpr Uint16 kMGPipeMaxTextureLevels = 32;
+
+    // The pending-upload set (below) is keyed by (UploadTarget, Level) and both halves come
+    // off the wire. Levels are bounded above; upload targets are not - a cube face, an array
+    // target and a rectangle target are all legal values - so the number of DISTINCT keys one
+    // resource may accumulate is bounded here. Six cube faces times 32 levels is 192; 256
+    // leaves room for a target space this phase has not enumerated and still refuses the
+    // unbounded growth a corrupt Uint16 would otherwise buy.
+    inline constexpr Uint32 kMGPipeMaxPendingUploads = 256;
+
+    // The rect list behind one pending entry. The frontend keeps at most MipmapStorage's
+    // kMaxDirtyRects = 96 per level and answers "0 rects" for everything it cannot describe
+    // that way, which is the model this mirrors: an accumulation that would exceed this
+    // collapses to BOX ONLY - the same answer, with the same meaning, and never a dropped
+    // region. 256 is that bound with room for several emissions accumulating behind a bail.
+    inline constexpr Uint32 kMGPipeMaxPendingUploadRegions = 256;
+
+    // The default uniform block's image, the one allocation P4a adds per program. The size
+    // comes from the program's own MGPProgramDesc::GlobalUboSize, so it is checked ONCE at
+    // create_shader_state and the set_global_constants that follows can only allocate what the
+    // create already declared. 16 MiB is four orders of magnitude above any default uniform
+    // block a real program links and still turns a corrupt Uint32 into a refusal.
+    inline constexpr Uint32 kMGPipeMaxGlobalConstantsBytes = 16u << 20;
+
     // One record per live resource, indexed by MGPipeHandle::Slot, kind Buffer; slot 0 is the
     // reserved null handle and is never live.
     struct MGPipeResourceRecord {
@@ -582,7 +618,15 @@ namespace MobileGL::MG_Pipe {
     // resource_subdata, buffer half: the destination range rides in the record's box through
     // MGPipeSetSubDataBufferRange, and a false from that helper is where the EMITTER split.
     // The applier stores nothing per record - contents are the backend's - and bumps Serial.
-    void MGPipeApplyResourceSubData(const MGPSubData& record, const void* bytes);
+    //
+    // P4a: `regions` IS THE CALL'S VARIABLE TAIL - MGPSubRegion[record.RegionCount] - and it is
+    // a trailing DEFAULTED parameter rather than a second entry point. The call has carried
+    // kVarTail since P2 (PipeCalls.def) and the texture half cannot be applied without it: the
+    // applier's pending-upload set is (UnionBox, RegionCount, Regions[]) and the verify lane's
+    // retain mode compares all three. The buffer half declares no regions, so P3a's one call
+    // site and every existing case are unchanged by the default.
+    void MGPipeApplyResourceSubData(const MGPSubData& record, const void* bytes,
+                                    const MGPSubRegion* regions = nullptr);
     // buffer_subdata_resident: same shape; `bytes` is the application's staging store and is
     // valid for the duration of the call only. The op-table entry may be null.
     void MGPipeApplyBufferSubDataResident(const MGPSubData& record, const void* bytes);

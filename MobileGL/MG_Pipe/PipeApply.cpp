@@ -16,9 +16,11 @@
 
 #include <MG_Backend/MGPipe/PipeInputs.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
 
 // THE VERDICT OF EVERY TRIP WIRE IN THIS FILE, IN ONE PLACE.
 //
@@ -440,6 +442,64 @@ namespace MobileGL::MG_Pipe {
             return &record;
         }
 
+        // ----------------------------------------------------------------------------
+        // P4a: THE SAME THREE QUESTIONS, ASKED OF A TABLE RATHER THAN OF THE ONE TABLE.
+        //
+        // The slot spaces of kinds Buffer, Texture and Renderbuffer are INDEPENDENT - the
+        // allocator is per kind - so three different live objects can hold slot 7 at once and
+        // one slot-indexed table would alias all three onto one record. The record TYPE is
+        // shared, because the descriptor is one discriminated descriptor; only the table is
+        // per kind, and choosing it is what the two selectors below do.
+        // ----------------------------------------------------------------------------
+        template <class Record>
+        Record* FindIn(Vector<Record>& records, MGPipeHandle handle) {
+            if (handle.Slot >= records.size()) return nullptr;
+            Record& record = records[handle.Slot];
+            if (!record.Live || record.Gen != handle.Gen) return nullptr;
+            return &record;
+        }
+
+        // Null means "this is not a resource target this catalogue names", which is a corrupt
+        // descriptor rather than an unknown object: acting on the wrong table would create,
+        // respecify or destroy an unrelated LIVE object that happens to hold the same slot in
+        // another kind's space, and that is the "act outside its own storage" class.
+        Vector<MGPipeResourceRecord>* ResourceTableForTarget(Uint8 target) {
+            if (target == kMGPipeResourceTargetBuffer) return &g_applier.Resources;
+            if (target == static_cast<Uint8>(MGPipeResourceTarget::Renderbuffer)) {
+                return &g_applier.RenderbufferResources;
+            }
+            if (target < static_cast<Uint8>(MGPipeResourceTarget::Count)) {
+                // Every remaining enumerator is a texture target, and they share one table
+                // because they share one kind: MGPipeKind::Texture. Tex1D..TexCubeArray,
+                // Tex2DMS/MSArray, TexBuffer and TexRect are all one slot space.
+                return &g_applier.TextureResources;
+            }
+            return nullptr;
+        }
+
+        // resource_destroy carries no descriptor, so its discriminator is the handle's KIND.
+        Vector<MGPipeResourceRecord>* ResourceTableForKind(Uint32 kind) {
+            switch (static_cast<MGPipeKind>(kind)) {
+            case MGPipeKind::Buffer:
+                return &g_applier.Resources;
+            case MGPipeKind::Texture:
+                return &g_applier.TextureResources;
+            case MGPipeKind::Renderbuffer:
+                return &g_applier.RenderbufferResources;
+            default:
+                return nullptr;
+            }
+        }
+
+        // A sub-data record's own discriminator, and it is DELIBERATELY NOT the table selector
+        // above: MGPSubData::Target is the UPLOAD target - a cube face is one, and those are
+        // not MGPipeResourceTarget enumerators - so the only thing it can be asked is the one
+        // question that has an answer for every value. kMGPipeResourceTargetBuffer is 0 and no
+        // texture upload target is, which is the contract the emitter is held to.
+        Bool SubDataNamesABuffer(const MGPSubData& record) {
+            return record.Target == kMGPipeResourceTargetBuffer;
+        }
+
         // WHY A DEAD HANDLE IS NOT A TRIP WIRE HERE, and the bounds faults below are - and
         // why it is nonetheless COUNTED rather than silently dropped.
         //
@@ -485,6 +545,32 @@ namespace MobileGL::MG_Pipe {
             return record;
         }
 
+        // P4a: the same resolver over a chosen table. A texture's and a renderbuffer's
+        // resource_* calls are RESOURCE calls and count into the resource counter, exactly as a
+        // buffer's do; the object counter beside it is for the five families that have no
+        // resource call at all (framebuffer, sampler, sampler view, program, texture params).
+        MGPipeResourceRecord* ResolveResourceIn(Vector<MGPipeResourceRecord>& table, const char* call,
+                                               MGPipeHandle res) {
+            MGPipeResourceRecord* record = FindIn(table, res);
+            MOBILEGL_ASSERT(record != nullptr, "%s named {slot=%u, gen=%u}: %s", call, res.Slot, res.Gen,
+                            kResourceRefusalNote);
+            if (record == nullptr) ++g_applier.RefusedResourceCalls;
+            return record;
+        }
+
+        // P4a's object families. ONE counter for the five, because they share one legal refusal
+        // sequence - the teardown order beside kResourceRefusalNote - and because what an
+        // operator reading a log needs to know is that an object call was dropped; the line
+        // itself names which call and which handle.
+        template <class Record>
+        Record* ResolveObject(Vector<Record>& table, const char* call, MGPipeHandle handle) {
+            Record* record = FindIn(table, handle);
+            MOBILEGL_ASSERT(record != nullptr, "%s named {slot=%u, gen=%u}: %s", call, handle.Slot,
+                            handle.Gen, kResourceRefusalNote);
+            if (record == nullptr) ++g_applier.RefusedObjectCalls;
+            return record;
+        }
+
         MGPipeVertexElementsRecord* ResolveVertexElements(const char* call, MGPipeHandle cso) {
             MGPipeVertexElementsRecord* record = FindVertexElements(cso);
             MOBILEGL_ASSERT(record != nullptr, "%s named {slot=%u, gen=%u}: %s", call, cso.Slot, cso.Gen,
@@ -507,6 +593,14 @@ namespace MobileGL::MG_Pipe {
         // MGPipeSetSubDataBufferRange is its only encoder, so every field it writes is a field
         // the applier can hold the record to - which is what makes a hand-rolled or corrupted
         // record visible instead of being read as a plausible range.
+        //
+        // P4a SPLIT IT IN TWO RATHER THAN WIDENING IT. Every statement below is a statement
+        // about the BUFFER convention - "no level", "no sub-regions", "the blob is the box's
+        // own byte size" - and every one of them is false for a texture, which carries a real
+        // level, a real region list and a blob whose length no other field describes. A single
+        // predicate that tried to hold both would have to be right about which record it was
+        // looking at anyway, so the branch is at the call and each half states only what it
+        // can actually check. SubDataTextureFault is the other half.
         const char* SubDataBoxFault(const MGPSubData& record) {
             // The box's first coordinate is a signed Int32 on the wire and the encoder never
             // writes a negative one; read back as unsigned (which is what the decoder does,
@@ -528,6 +622,136 @@ namespace MobileGL::MG_Pipe {
                 return "the declared blob length is not the record's own byte size";
             }
             return nullptr;
+        }
+
+        // ----------------------------------------------------------------------------
+        // P4a: the texture half of the sub-data validator, and the pending-upload set.
+        // ----------------------------------------------------------------------------
+
+        // A box is EMPTY when any extent is zero, and an empty box unions to nothing. Written
+        // once because the accumulation below needs it in three places.
+        Bool BoxIsEmpty(const MGPBox& box) { return box.W == 0 || box.H == 0 || box.D == 0; }
+
+        // A box stays inside the range one record can encode: the origin is a signed Int32 and
+        // the extent an unsigned Uint32, so an origin plus an extent that leaves the positive
+        // Int32 range is a record no encoder writes and is refused before any arithmetic below
+        // has to survive it. It is the same bound, and the same reason, as the buffer half's
+        // "above the bound one record can encode".
+        Bool BoxIsEncodable(Int32 origin, Uint32 extent) {
+            return origin >= 0 && static_cast<Int64>(origin) + static_cast<Int64>(extent) <= 0x7FFFFFFF;
+        }
+
+        Bool BoxIsEncodable(const MGPBox& box) {
+            return BoxIsEncodable(box.X, box.W) && BoxIsEncodable(box.Y, box.H) &&
+                   BoxIsEncodable(box.Z, box.D);
+        }
+
+        Bool AxisContains(Int32 outerOrigin, Uint32 outerExtent, Int32 innerOrigin, Uint32 innerExtent) {
+            const Int64 outerEnd = static_cast<Int64>(outerOrigin) + static_cast<Int64>(outerExtent);
+            const Int64 innerEnd = static_cast<Int64>(innerOrigin) + static_cast<Int64>(innerExtent);
+            return innerOrigin >= outerOrigin && innerEnd <= outerEnd;
+        }
+
+        // THE ONE INVARIANT THE TEXTURE HALF CAN ACTUALLY CHECK, and it is the one that matters:
+        // the union box IS the union of the regions (MipmapStorage maintains both through one
+        // MarkDirtyRegion, and "0 regions" means "the box is the whole story"). The SERVER picks
+        // the upload shape from the pair - one box job, or N rect jobs, and Mali prices that
+        // choice at ~6 ms/frame - so a region outside the box means the two shapes describe
+        // different texels and whichever the server picks is wrong: the box misses the region's
+        // texels, and the region writes where the box never said it would.
+        const char* SubDataTextureFault(const MGPSubData& record, const MGPSubRegion* regions) {
+            if (record.Level >= kMGPipeMaxTextureLevels) {
+                return "the level is above the bound any texture's storage can have";
+            }
+            if (!BoxIsEncodable(record.UnionBox)) {
+                return "the union box has a negative origin or runs past the bound one record can encode";
+            }
+            if (record.RegionCount > kMGPipeMaxPendingUploadRegions) {
+                return "the record declares more sub-regions than one upload may carry";
+            }
+            if (record.RegionCount != 0 && regions == nullptr) {
+                return "the record declares sub-regions and carries none";
+            }
+            for (Uint32 i = 0; i < record.RegionCount; ++i) {
+                const MGPSubRegion& region = regions[i];
+                if (!BoxIsEncodable(region.X, region.W) || !BoxIsEncodable(region.Y, region.H) ||
+                    !BoxIsEncodable(region.Z, region.D)) {
+                    return "a sub-region has a negative origin or runs past the bound one record can encode";
+                }
+                if (!AxisContains(record.UnionBox.X, record.UnionBox.W, region.X, region.W) ||
+                    !AxisContains(record.UnionBox.Y, record.UnionBox.H, region.Y, region.H) ||
+                    !AxisContains(record.UnionBox.Z, record.UnionBox.D, region.Z, region.D)) {
+                    return "a sub-region is not inside the union box the record declares";
+                }
+            }
+            // WHAT IS DELIBERATELY NOT CHECKED, so that a later reader does not add it back as
+            // an oversight. (a) The level against MGPResourceDesc::Levels: a MUTABLE texture
+            // defines its levels one glTexImage2D at a time, so the descriptor's level count is
+            // not an upper bound at every instant and a gate on it would refuse a legal upload
+            // to a level the next respecify is about to declare. (b) The box against the
+            // descriptor's extents: the record addresses the LEVEL's coordinate system, and a
+            // view remaps that space, so the arithmetic is the storage owner's and not this
+            // applier's. (c) The blob: no field of a texture record describes its own byte
+            // length - the strides are per region and the level shadow's size is not carried -
+            // so the one Blob rule has nothing to cross-check here and stays inert by
+            // construction rather than by omission.
+            return nullptr;
+        }
+
+        MGPBox UnionOfBoxes(const MGPBox& a, const MGPBox& b) {
+            if (BoxIsEmpty(a)) return b;
+            if (BoxIsEmpty(b)) return a;
+            const Int32 x = a.X < b.X ? a.X : b.X;
+            const Int32 y = a.Y < b.Y ? a.Y : b.Y;
+            const Int32 z = a.Z < b.Z ? a.Z : b.Z;
+            const Int64 xEnd = std::max(static_cast<Int64>(a.X) + a.W, static_cast<Int64>(b.X) + b.W);
+            const Int64 yEnd = std::max(static_cast<Int64>(a.Y) + a.H, static_cast<Int64>(b.Y) + b.H);
+            const Int64 zEnd = std::max(static_cast<Int64>(a.Z) + a.D, static_cast<Int64>(b.Z) + b.D);
+            return MGPBox{x, y, z, static_cast<Uint32>(xEnd - x), static_cast<Uint32>(yEnd - y),
+                          static_cast<Uint32>(zEnd - z)};
+        }
+
+        // D-D5's SAFETY NET, and the whole reason it is server-side state. The client clears
+        // its own dirty flags AT EMISSION, for the levels whose record this applier accepted;
+        // Espryt's upload loop has bail arms - an incomplete texture returns early, a
+        // multisample target refreshes and skips - that today leave the frontend flag set, so a
+        // naive move of the clear to the client would lose exactly those texels. The emitted
+        // shape accumulates here instead, it survives any number of bails, and Espryt consumes
+        // and clears an entry only where it actually uploads.
+        //
+        // ACCUMULATION IS THE CLIENT'S OWN MODEL, ONE LEVEL UP. MipmapStorage keeps a union box
+        // and, behind it, a bounded disjoint rect list, and answers "0 rects" for everything it
+        // cannot describe that way - which means "upload the box instead" and covers every
+        // reason at once. So: boxes union; rect lists concatenate; and the moment either side
+        // says "box only", or the list would outgrow its bound, the entry becomes box only.
+        // Never a dropped region - the box still covers every texel the dropped list named.
+        // Returns false when the record names more distinct (target, level) keys than any
+        // texture can have, which the caller reports as a corrupt record.
+        Bool AccumulatePendingUpload(MGPipeResourceRecord& stored, const MGPSubData& record,
+                                     const MGPSubRegion* regions) {
+            for (MGPipeResourceRecord::PendingUpload& entry : stored.PendingUploads) {
+                if (entry.UploadTarget != record.Target || entry.Level != record.Level) continue;
+                entry.UnionBox = UnionOfBoxes(entry.UnionBox, record.UnionBox);
+                if (record.RegionCount == 0 || entry.Regions.empty() ||
+                    static_cast<Uint64>(entry.Regions.size()) + record.RegionCount >
+                        kMGPipeMaxPendingUploadRegions) {
+                    entry.Regions.clear();
+                    return true;
+                }
+                entry.Regions.insert(entry.Regions.end(), regions, regions + record.RegionCount);
+                return true;
+            }
+            if (stored.PendingUploads.size() >= kMGPipeMaxPendingUploads) return false;
+            MGPipeResourceRecord::PendingUpload entry;
+            entry.UploadTarget = record.Target;
+            entry.Level = record.Level;
+            entry.UnionBox = record.UnionBox;
+            // A first contribution with no regions makes the entry BOX ONLY from the start, and
+            // that is why an empty list above means box only rather than "not filled in yet":
+            // an entry is never created without its first contribution.
+            if (record.RegionCount != 0) entry.Regions.assign(regions, regions + record.RegionCount);
+            stored.PendingUploads.push_back(std::move(entry));
+            return true;
         }
 
 #if MOBILEGL_PIPE_VERIFY
@@ -590,6 +814,53 @@ namespace MobileGL::MG_Pipe {
                 return;
             }
             if (g_resourceOps->SubData != nullptr) g_resourceOps->SubData(record.Res, record, bytes);
+        }
+
+        // The texture half of resource_subdata, and it DISPATCHES TO NOBODY. Nothing in this
+        // family reaches the backend at GL-call time today: a texture write marks a level dirty
+        // and Espryt uploads it at its own sync point, out of the accumulated set below. So the
+        // whole of this function is the gate, the accumulation and the serial - which is also
+        // why MGPipeResourceOps did not have to grow a member for it.
+        void ApplyTextureUpload(const MGPSubData& record, const void* bytes, const MGPSubRegion* regions) {
+            MGPipeResourceRecord* stored =
+                ResolveResourceIn(g_applier.TextureResources, "resource_subdata", record.Res);
+            if (stored == nullptr) return;
+
+            const char* fault = SubDataTextureFault(record, regions);
+            // A whole-level upload declares no regions and a non-empty box; a record that
+            // declares neither has nothing to upload and nothing to accumulate, which is a
+            // shape the drain list cannot produce.
+            if (fault == nullptr && BoxIsEmpty(record.UnionBox) && record.RegionCount == 0) {
+                fault = "the record describes no texels at all";
+            }
+            if (fault == nullptr && bytes == nullptr) {
+                fault = "a texture upload carries no bytes";
+            }
+            if (fault != nullptr) {
+                MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                     " resource_subdata {slot=%u, gen=%u, glName=%u}: %s (target=%u, "
+                                     "level=%u, box=%d,%d,%d %ux%ux%u, regions=%u)",
+                                     record.Res.Slot, record.Res.Gen, stored->Desc.GlNameForDiag, fault,
+                                     record.Target, record.Level, record.UnionBox.X, record.UnionBox.Y,
+                                     record.UnionBox.Z, record.UnionBox.W, record.UnionBox.H,
+                                     record.UnionBox.D, record.RegionCount);
+                return;
+            }
+            if (!AccumulatePendingUpload(*stored, record, regions)) {
+                MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                     " resource_subdata {slot=%u, gen=%u, glName=%u}: the resource names "
+                                     "more distinct (upload target, level) pairs than any texture can "
+                                     "have (%u)",
+                                     record.Res.Slot, record.Res.Gen, stored->Desc.GlNameForDiag,
+                                     kMGPipeMaxPendingUploads);
+                return;
+            }
+            // The serial moves for the buffer half's reason: the twin stamps its own synced
+            // serial from inside the sync that reads this record, so a bump afterwards would
+            // leave it one mutation behind and the next draw would re-upload what it had just
+            // landed. The ACCEPTANCE is what the client reads to clear its own dirty flag - the
+            // record was accumulated, so the texels are the server's now.
+            ++stored->Serial;
         }
     } // namespace
 
@@ -996,13 +1267,25 @@ namespace MobileGL::MG_Pipe {
                         "resource_create named the reserved slot 0");
         if (desc.Resource.Slot < kMGPipeFirstAllocatableSlot) return;
 
+        // P4a: THE TABLE IS CHOSEN BY THE DESCRIPTOR'S TARGET, and getting that wrong is the one
+        // way this call can damage an object it was not about - slot 7 is a live Buffer, a live
+        // Texture and a live Renderbuffer at the same time, in three independent slot spaces.
+        Vector<MGPipeResourceRecord>* table = ResourceTableForTarget(desc.Target);
+        if (table == nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " resource_create {slot=%u, gen=%u, glName=%u}: the descriptor names no "
+                                 "resource target (%u)",
+                                 desc.Resource.Slot, desc.Resource.Gen, desc.GlNameForDiag, desc.Target);
+            return;
+        }
+
         // A CREATE STARTS THE RECORD OVER rather than editing it. The slot it names may be a
         // RECYCLED one whose record still describes the previous occupant, and inheriting one
-        // field of that - a Width, a Serial, an Immutable - is precisely how a buffer at a
-        // recycled address inherits its predecessor's contents. The generation is the client
-        // allocator's answer to "is this still the same GL object", so it is taken from the
-        // handle and nothing else survives.
-        MGPipeResourceRecord* record = RecordAt(g_applier.Resources, desc.Resource.Slot, kMGPipeMaxResourceSlots);
+        // field of that - a Width, a Serial, an Immutable, a pending upload - is precisely how a
+        // buffer at a recycled address inherits its predecessor's contents. The generation is
+        // the client allocator's answer to "is this still the same GL object", so it is taken
+        // from the handle and nothing else survives.
+        MGPipeResourceRecord* record = RecordAt(*table, desc.Resource.Slot, kMGPipeMaxResourceSlots);
         if (record == nullptr) {
             MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
                                  " resource_create {slot=%u, gen=%u, glName=%u}: the slot is outside the "
@@ -1019,13 +1302,27 @@ namespace MobileGL::MG_Pipe {
         // no storage - that is the first respecify's job, and a backend tolerates a resource
         // that has none - and a fresh backend twin starts its own synced serial at 0, so the
         // two agree from the first instant without either side publishing anything.
+        //
+        // EVERY NON-BUFFER TARGET STORES AND RETURNS. Espryt allocates a texture's storage
+        // lazily inside SyncMipmapsToBackend and a renderbuffer's inside its own SyncToBackend,
+        // so there is no GL-call-time hook to dispatch to and P4a adds none: the record IS the
+        // publication, and the backend reads it at the sync point it already has.
+        if (desc.Target != kMGPipeResourceTargetBuffer) return;
         if (g_resourceOps != nullptr && g_resourceOps->Create != nullptr) {
             g_resourceOps->Create(desc.Resource, desc);
         }
     }
 
     void MGPipeApplyResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes) {
-        MGPipeResourceRecord* record = ResolveResource("resource_respecify", desc.Resource);
+        Vector<MGPipeResourceRecord>* table = ResourceTableForTarget(desc.Target);
+        if (table == nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " resource_respecify {slot=%u, gen=%u, glName=%u}: the descriptor names "
+                                 "no resource target (%u)",
+                                 desc.Resource.Slot, desc.Resource.Gen, desc.GlNameForDiag, desc.Target);
+            return;
+        }
+        MGPipeResourceRecord* record = ResolveResourceIn(*table, "resource_respecify", desc.Resource);
         if (record == nullptr) return;
         PinNoLiveHostWrites(*record, desc.Resource, "resource_respecify");
 
@@ -1036,6 +1333,15 @@ namespace MobileGL::MG_Pipe {
         record->Desc = desc;
         ++record->Serial;
 
+        // A RESPECIFY REDEFINES THE STORE, SO THE PENDING UPLOADS AGAINST THE OLD ONE GO WITH
+        // IT. They are boxes and rects in a level's coordinate system, and the level that space
+        // belonged to has just been replaced - a box kept across a shrink would have Espryt
+        // upload past the end of the new level. Nothing is lost by it: the frontend entry
+        // points that respecify a texture re-mark the levels they define
+        // (AllocateStorage then MarkStorageDirty), so what is still owed is re-emitted against
+        // the storage that now exists. A buffer never has one, so this is inert for P3a's half.
+        record->PendingUploads.clear();
+
         // resource_respecify is the catalogue's only kNeedsAck call, and the per-record half
         // of that flag is MGPipeResourceRespecifyNeedsAck(desc): glBufferStorage is a real
         // synchronous allocation and the only entry point allowed a synchronous ack, while
@@ -1045,15 +1351,26 @@ namespace MobileGL::MG_Pipe {
         // branch whose arms were identical would be dead code the transport would then have to
         // find and remove. PipeCatalogueTest.ResourceRespecifyAcksOnlyImmutableStorage is what
         // keeps the predicate honest until the doorbell reads it.
+        if (desc.Target != kMGPipeResourceTargetBuffer) return;
         if (g_resourceOps != nullptr && g_resourceOps->Respecify != nullptr) {
             g_resourceOps->Respecify(desc.Resource, desc, initialBytes);
         }
     }
 
-    void MGPipeApplyResourceSubData(const MGPSubData& record, const void* bytes) {
-        // The applier stores NOTHING per record - the contents are the backend's, and the
-        // range is the backend's to land - so the whole of its job is the gate and the serial.
-        ApplyBufferWrite("resource_subdata", record, bytes, /*resident=*/false);
+    void MGPipeApplyResourceSubData(const MGPSubData& record, const void* bytes,
+                                    const MGPSubRegion* regions) {
+        // ONE CALL, TWO HALVES, and the branch is one comparison. For a buffer the applier
+        // stores NOTHING per record - the contents are the backend's, and the range is the
+        // backend's to land - so its whole job is the gate and the serial. For a texture there
+        // is no backend hook at all and the whole job is the gate, the accumulated shape and
+        // the serial.
+        if (SubDataNamesABuffer(record)) {
+            MOBILEGL_ASSERT(regions == nullptr,
+                            "resource_subdata: the buffer half declares no sub-regions and carries none");
+            ApplyBufferWrite("resource_subdata", record, bytes, /*resident=*/false);
+            return;
+        }
+        ApplyTextureUpload(record, bytes, regions);
     }
 
     void MGPipeApplyBufferSubDataResident(const MGPSubData& record, const void* bytes) {
@@ -1129,9 +1446,19 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplyResourceDestroy(const MGPHandleOnly& handle) {
-        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::Buffer), "resource_destroy on kind %u",
-                        handle.Kind);
-        MGPipeResourceRecord* record = ResolveResource("resource_destroy", handle.Handle);
+        // THE KIND IS THE DISCRIMINATOR HERE, because a destroy carries no descriptor, and it is
+        // a Fatal rather than an assertion for the reason resource_create's target is: the three
+        // slot spaces are independent, so a destroy routed to the wrong table would drop the
+        // record of a live object of another kind that happens to hold the same slot.
+        Vector<MGPipeResourceRecord>* table = ResourceTableForKind(handle.Kind);
+        if (table == nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " resource_destroy {slot=%u, gen=%u}: the handle names no resource kind "
+                                 "(%u)",
+                                 handle.Handle.Slot, handle.Handle.Gen, handle.Kind);
+            return;
+        }
+        MGPipeResourceRecord* record = ResolveResourceIn(*table, "resource_destroy", handle.Handle);
         if (record == nullptr) return;
 
         // The record is dropped WHOLE and the generation is kept. The client allocator owns
@@ -1148,6 +1475,11 @@ namespace MobileGL::MG_Pipe {
         // CLIENT frees the slot after this returns, in that order, because the allocator
         // forgets the lifetime id on free and a notice resolved twice finds nothing the second
         // time.
+        //
+        // AND ONLY A BUFFER IS HANDED ON, for resource_create's reason: the op table is the
+        // buffer family's, its Destroy takes a handle whose kind that backend registered for,
+        // and a texture's death is read out of the record at the sync that would have used it.
+        if (static_cast<MGPipeKind>(handle.Kind) != MGPipeKind::Buffer) return;
         if (g_resourceOps != nullptr && g_resourceOps->Destroy != nullptr) {
             g_resourceOps->Destroy(handle.Handle);
         }
@@ -1416,25 +1748,85 @@ namespace MobileGL::MG_Pipe {
     }
 
     // ================================================================================
-    // P4a: the fifteen object and working-state entry points - STUBS (contract commit)
+    // P4a: the fifteen object and working-state entry points
     // ================================================================================
     //
-    // Every body below is deliberately empty at the contract commit, exactly as P3a's nine
-    // resource entry points were at theirs. What this commit fixes is the SIGNATURE and the
-    // storage it will write into: packages B and C compile and link against these, package D
-    // and E read the records above, and the gates see the whole shape - so nothing after this
-    // commit has to change a declaration, and no two packages ever edit one file.
+    // NOT ONE OF THEM DISPATCHES TO A BACKEND FUNCTION POINTER, and that is the structural
+    // decision the whole phase rests on rather than an omission. Nothing in these families
+    // reaches the backend at GL-call time today - texture storage only marks a level dirty,
+    // texture parameters run from the draw-time sync, renderbuffer storage is allocated inside
+    // SyncToBackend, a sampler twin is created lazily from the program pass, and the
+    // framebuffer, the unit sets and the program are all resolved at PrepareForDraw - so every
+    // call below is either an OBJECT RECORD the applier stores or WORKING STATE the applier
+    // stores, and the backend reads the applier at the sync points it already has, keyed on a
+    // server-owned Serial instead of a frontend version. MGPipeResourceOps is unchanged.
     //
-    // The bodies land in w1 (framebuffer + texture resources), w2 (samplers, views and the
-    // three unit sets) and w3 (programs and the default uniform block), on this same branch
-    // and before any client package runs against them: a stub applier under a real client is
-    // how P3a's first Espryt round produced 202 red cases that had to be argued rather than
-    // measured, and the order exists to make that structurally impossible.
+    // THE SAME THREE STEPS, IN THE SAME ORDER, AS P3a's NINE: resolve the handle against this
+    // applier's record, check the record against its own declared extent, and only then move
+    // the record. The two verdicts are the same two, and the difference between them is the
+    // whole of this file's discipline - a call naming a record this applier does not have is a
+    // DEFINED NO-OP that is COUNTED (RefusedObjectCalls), because one legal sequence produces
+    // it; a record that would make the server index or allocate outside its own storage is
+    // Fatal{ProtocolCorruption} with the record's identity in the line.
     //
-    // (void) casts rather than unnamed parameters, so the parameter NAMES stay in the
-    // definition and the bodies that replace these start from the vocabulary the header uses.
+    // NOTHING EMITS ANY OF THEM IN THIS PACKAGE. The four subsystem bits are not in
+    // kMGPipeWiredSubsystems, every client emitter beside them is still a stub, and no backend
+    // reads the records yet - so the state below is correct and unread until the packages that
+    // wire both ends land, and this tree is behaviourally identical to the contract commit's.
 
-    void MGPipeApplySetFramebufferState(const MGPFramebufferState& state) { (void)state; }
+    // ================================================================================
+    // w1: the framebuffer record, per bound target
+    // ================================================================================
+
+    void MGPipeApplySetFramebufferState(const MGPFramebufferState& state) {
+        // GL HAS TWO INDEPENDENT FRAMEBUFFER BINDINGS AND THIS RECORD DESCRIBES ONE, so Target
+        // is what says which - and Both is one object bound to both, which writes both records
+        // from one call. A value outside the three is not a binding this server has, and
+        // guessing one would put a draw's attachments into the read record or the other way
+        // round, which is the defect class the per-target emission exists to close.
+        const char* fault = nullptr;
+        if (state.Target >= static_cast<Uint8>(MGPipeFramebufferTarget::Count)) {
+            fault = "the record names no framebuffer binding target";
+        }
+        // THE DRAW-BUFFER ARRAY IS AN INDEX INTO THIS RECORD'S OWN Color[], and -1 is NONE. An
+        // entry outside that range would have the server read a colour attachment the record
+        // does not carry: the wire array is 8 wide, the driver's MaxColorAttachments is not
+        // clamped to it, and a truncated record arriving here as a plausible index is exactly
+        // what the framebuffer subsystem's cap refusal exists to prevent upstream.
+        for (Uint32 i = 0; fault == nullptr && i < kMGPipeMaxColorAttachments; ++i) {
+            if (state.DrawBuffers[i] < -1 ||
+                state.DrawBuffers[i] >= static_cast<Int8>(kMGPipeMaxColorAttachments)) {
+                fault = "a draw-buffer entry names a colour attachment outside the record's own array";
+            }
+        }
+        if (fault != nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " set_framebuffer_state {slot=%u, gen=%u, target=%u}: %s (the record "
+                                 "carries %u colour attachments)",
+                                 state.Fbo.Slot, state.Fbo.Gen, state.Target, fault,
+                                 kMGPipeMaxColorAttachments);
+            return;
+        }
+
+        // NO HANDLE IS RESOLVED HERE AND NONE MAY BE. A framebuffer has a handle but no wire
+        // lifetime - the catalogue has no framebuffer create and no framebuffer destroy,
+        // because a framebuffer is state and this call is the only one that names one - so
+        // there is no record to refuse against and this entry point never counts a refusal.
+        // The surfaces' Res handles are not resolved either: an attachment PINS its texture,
+        // and in monolith the frontend's own SharedPtr is that keep-alive, so a refusal here
+        // would be enforcing a lifetime rule monolith cannot need and split has not defined.
+        if (state.Target != static_cast<Uint8>(MGPipeFramebufferTarget::Read)) {
+            g_applier.DrawFramebuffer = state;
+        }
+        if (state.Target != static_cast<Uint8>(MGPipeFramebufferTarget::Draw)) {
+            g_applier.ReadFramebuffer = state;
+        }
+        // ONE SERIAL FOR THE PAIR, and it moves once per applied record - a Both record is one
+        // record. It is what retires the four g_fboSynced* arrays and the twin's own
+        // {slot version, object version, backend id generation} quadruple: a compare that used
+        // to ask "is my memo still the frontend's" asks "is my serial still the server's".
+        ++g_applier.FramebufferSerial;
+    }
 
     void MGPipeApplyCreateSamplerState(const MGPSamplerDesc& desc, const SamplerParameters* parameters) {
         (void)desc;
@@ -1447,7 +1839,43 @@ namespace MobileGL::MG_Pipe {
 
     void MGPipeApplyDeleteSamplerView(const MGPHandleOnly& handle) { (void)handle; }
 
-    void MGPipeApplySetTextureParams(const MGPTextureParams& params) { (void)params; }
+    void MGPipeApplySetTextureParams(const MGPTextureParams& params) {
+        // ADDRESSED BY RESOURCE AND BY NOTHING ELSE, which is the whole point of the call: a
+        // texture that is only an FBO attachment, only an image-unit binding or only a
+        // glCopyImageSubData endpoint has no sampler view to hang its parameters on, and the
+        // READ-attachment case reaches no parameter push at all today. The record exists the
+        // moment the parameters move, whether or not anything is bound.
+        MGPipeResourceRecord* record =
+            ResolveObject(g_applier.TextureResources, "set_texture_params", params.Res);
+        if (record == nullptr) return;
+
+        // EVERY ITextureObject OWNS A SamplerObject, so the built-in sampler CSO is not
+        // optional and a null handle is not "no sampler" - it is a record that would have the
+        // backend sample a texture with whatever filter and wrap state the unit last left
+        // behind. GL 4.6 table 23.18 makes filter/wrap/compare/border sampler state and Espryt
+        // pushes it onto the TEXTURE with glTexParameter*, so this handle is the only thing
+        // that says which values those are.
+        if (MGPipeHandleIsNull(params.BuiltinSampler)) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " set_texture_params {slot=%u, gen=%u, glName=%u}: the record names no "
+                                 "built-in sampler CSO, and every texture object owns one",
+                                 params.Res.Slot, params.Res.Gen, record->Desc.GlNameForDiag);
+            return;
+        }
+        // AND THE CSO IT NAMES IS NOT RESOLVED. The sampler subsystem is its own bit and may be
+        // clear while the texture bit is set, so a record that names a CSO this applier has not
+        // been told about is an ORDERING fact rather than a corrupt one; refusing it would make
+        // one legal A/B arm drop every texture's parameters. What the record carries is the
+        // identity, and the identity is what the backend resolves at its own sync point.
+
+        record->Params = params;
+        // The serial moves BEFORE anything downstream is told, for ApplyBufferWrite's reason.
+        // It plus the record's own ForceResync / SamplerResync bytes are what retire the twin's
+        // m_syncedTextureParamsVersion + m_forceTextureParamsResync pair - and the two resync
+        // bytes are CARRIED, never cleared here: the server ORs them into its own flags and
+        // clears its own copy, and the client never clears a server flag.
+        ++record->ParamsSerial;
+    }
 
     void MGPipeApplySetSamplerViews(const MGPSamplerViews& hdr, const MGPBoundView* tail) {
         (void)hdr;
