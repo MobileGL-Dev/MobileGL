@@ -1023,11 +1023,8 @@ void main() { oColor = texture(uTex, vUv); }
                                 "allocator to leak from.";
             }
 
-            unsigned liveBefore = 0;
-            unsigned highWaterBefore = 0;
-            if (!MGITest::PeekPipeSlotLiveCount(MGITest::PipeSlotKind::VertexElementsCso, &liveBefore) ||
-                !MGITest::PeekPipeSlotHighWater(MGITest::PipeSlotKind::VertexElementsCso,
-                                                &highWaterBefore)) {
+            unsigned probe = 0;
+            if (!MGITest::PeekPipeSlotLiveCount(MGITest::PipeSlotKind::VertexElementsCso, &probe)) {
                 GTEST_SKIP() << "the client slot allocator is out of reach from this module (a pull "
                                 "build has none, and the Android link resolves no internal symbol), so "
                                 "'could not look' would be reported as 'did not leak'";
@@ -1037,31 +1034,54 @@ void main() { oColor = texture(uTex, vUv); }
             // Buffer kind's slots alongside them and blur which allocator answered.
             const GLuint buffer = MakeQuadBuffer(0.0f, 1.0f, 0.0f);
 
-            // Each round creates a vertex array, DRAWS with it - which is what mints the slot and
+            // One round: create a vertex array, DRAW with it - which is what mints the slot and
             // publishes the applier's record; a VAO that never reaches a validate point has
-            // neither - unbinds it and deletes it. glGenVertexArrays hands the same name back
-            // every time, exactly as a chunk renderer's does, so a death path that keyed on the
-            // GL NAME rather than on the lifetime id would look correct here too - which is why
-            // the assertion is on the allocator and not on the name.
-            constexpr int kChurn = 48;
-            unsigned peakLive = liveBefore;
-            for (int round = 0; round < kChurn; ++round) {
+            // neither - unbind it and delete it. glGenVertexArrays hands the same name back every
+            // time, exactly as a chunk renderer's does, so a death path that keyed on the GL NAME
+            // rather than on the lifetime id would look correct here too, which is why the
+            // assertion is on the allocator and not on the name.
+            unsigned peakLive = 0;
+            const auto round = [&](const char* when, bool checkPixels) {
                 GLuint vao = 0;
                 glGenVertexArrays(1, &vao);
                 ConfigureQuadVao(vao, buffer);
                 const Image image = DrawQuadAndRead(vao);
-                if (round == 0) {
+                if (checkPixels) {
                     // One picture check, so a green here cannot mean "the draws never happened
                     // and therefore nothing was ever minted".
-                    ExpectWholeViewportIs(image, "green", "the churn's first draw");
+                    ExpectWholeViewportIs(image, "green", when);
                 }
                 unsigned live = 0;
-                ASSERT_TRUE(MGITest::PeekPipeSlotLiveCount(MGITest::PipeSlotKind::VertexElementsCso,
-                                                           &live));
-                if (live > peakLive) peakLive = live;
+                if (MGITest::PeekPipeSlotLiveCount(MGITest::PipeSlotKind::VertexElementsCso, &live) &&
+                    live > peakLive) {
+                    peakLive = live;
+                }
                 glBindVertexArray(0);
                 glDeleteVertexArrays(1, &vao);
-            }
+            };
+
+            // TWO WARM-UP ROUNDS BEFORE THE BASELINE IS TAKEN, so what is measured is growth WITH
+            // the churn and not the one-off cost of drawing at all. The first draws in a process
+            // mint slots that legitimately never come back inside this case - the DEFAULT vertex
+            // array's above all, which this scenario's frames bind and which lives as long as the
+            // context does - and the second round is what proves the steady state has been
+            // reached, since a per-round leak would still be growing at that point. Sampling
+            // before them would score a one-off as the churn's leak; sampling after makes the
+            // assertion the exact one that matters: "N more create/destroy cycles cost ZERO more
+            // slots", with no slack in it.
+            round("the first warm-up draw", /*checkPixels=*/true);
+            round("the second warm-up draw", /*checkPixels=*/false);
+            peakLive = 0;
+
+            unsigned liveBefore = 0;
+            unsigned highWaterBefore = 0;
+            ASSERT_TRUE(MGITest::PeekPipeSlotLiveCount(MGITest::PipeSlotKind::VertexElementsCso,
+                                                       &liveBefore));
+            ASSERT_TRUE(MGITest::PeekPipeSlotHighWater(MGITest::PipeSlotKind::VertexElementsCso,
+                                                       &highWaterBefore));
+
+            constexpr int kChurn = 48;
+            for (int i = 0; i < kChurn; ++i) round("a churn draw", /*checkPixels=*/false);
             ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the churn left a GL error behind";
 
             unsigned liveAfter = 0;
@@ -1082,10 +1102,11 @@ void main() { oColor = texture(uTex, vUv); }
                    "process, and past kMGPipeMaxVertexElementsSlots every create_vertex_elements "
                    "trips Fatal{ProtocolCorruption} for good. Backend "
                 << Gl().BackendName();
-            EXPECT_LE(highWaterAfter - highWaterBefore, 4u)
-                << "the CSO slot space grew with the churn instead of recycling one slot; the "
-                   "frees are not reaching the allocator's free list";
-            EXPECT_LE(peakLive - liveBefore, 2u)
+            EXPECT_EQ(highWaterAfter, highWaterBefore)
+                << "the CSO slot space grew with the churn instead of recycling the one slot the "
+                   "warm-up round already handed out; the frees are not reaching the allocator's "
+                   "free list";
+            EXPECT_LE(peakLive - liveBefore, 1u)
                 << "more than one churned vertex array was live at the allocator at once, so the "
                    "deaths are arriving late rather than at the destructor";
 
