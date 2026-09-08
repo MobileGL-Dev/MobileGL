@@ -5301,7 +5301,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     }
                                     backendSampler = backendObj.get();
                                 }
+#if MOBILEGL_PIPE_PUSH
+                                backendSampler->SyncToBackend(
+                                    samplerObject,
+                                    static_cast<SizeT>(unit) < MG_Pipe::MGPipeApplier().BoundSamplerStates.size()
+                                        ? MG_Pipe::MGPipeApplier().BoundSamplerStates[static_cast<SizeT>(unit)]
+                                        : MG_Pipe::kMGPipeNullHandle);
+#else
                                 backendSampler->SyncToBackend(samplerObject);
+#endif
                                 // Syncing the object's parameters is not the same as putting it on the
                                 // unit: without this the driver kept sampling with the texture's own
                                 // parameters and every sampler object was inert.

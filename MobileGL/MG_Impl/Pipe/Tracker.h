@@ -515,8 +515,9 @@ namespace MobileGL::MG_Pipe {
             now[Index(MGPipeDirty::NewSamplers)] = MGPipeMixShutter(
                 MGPipeMixShutter(textureParams, ctx.GetSamplingResolutionGeneration()),
                 ctx.GetTextureBindGeneration());
-            now[Index(MGPipeDirty::NewShaderImages)] =
-                MGPipeMixShutter(MGPipeMixShutter(textureContent, textureParams), programImages);
+            now[Index(MGPipeDirty::NewShaderImages)] = MGPipeMixShutter(
+            MGPipeMixShutter(MGPipeMixShutter(textureContent, textureParams), programImages),
+            ctx.GetTextureBindGeneration());
             now[Index(MGPipeDirty::NewConstBuffers)] = buffers;
             now[Index(MGPipeDirty::NewShaderBuffers)] = buffers;
             now[Index(MGPipeDirty::NewSoTargets)] =
