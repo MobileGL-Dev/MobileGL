@@ -612,7 +612,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     Bool allClean = true;
                     for (Uint i = 0; i < memo->count; ++i) {
                         auto& entry = memo->entries[i];
-                        if (IsBufferDrawCleanByHandle(entry.handle, entry.resource)) continue;
+                        // entry.frontend is the same object the legacy arm probes and is kept
+                        // alive by the VAO attribute's SharedPtr for as long as this memo is
+                        // valid; it answers the live-map question no record carries in P3a.
+                        if (IsBufferDrawCleanByHandle(entry.handle, entry.resource, entry.frontend)) continue;
                         allClean = false;
                         entry.resource =
                             EnsureBufferResource(currentVAOObject->GetAttribute(entry.attribIndex).Buffer);
@@ -787,7 +790,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         if (memo && memo->iboHandle == iboHandle && memo->iboCleanEpoch == bufferEpoch) {
                             // probed fully clean at this epoch; nothing can have dirtied it
                         } else if (memo && memo->iboHandle == iboHandle &&
-                                   IsBufferDrawCleanByHandle(iboHandle, memo->iboResource)) {
+                                   IsBufferDrawCleanByHandle(iboHandle, memo->iboResource,
+                                                             possibleIBO.get())) {
                             memo->iboCleanEpoch = bufferEpoch;
                         } else {
                             auto* resource = EnsureBufferResource(possibleIBO);

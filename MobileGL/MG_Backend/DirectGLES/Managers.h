@@ -721,7 +721,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // asks the applier the same five questions IsBufferDrawClean asks the frontend object,
         // with identical semantics (D-A4); EnsureBufferResourceForHandle is the ensure path
         // driven by the applier's descriptor and the shadow base the call carried.
-        Bool IsBufferDrawCleanByHandle(MG_Pipe::MGPipeHandle res, const GLESBufferResource* resource);
+        //
+        // `frontend` supplies the ONE question the applier's record cannot answer in P3a: an
+        // emulated (non-adopted) persistent map is written through its pointer with no call, so
+        // MGPipeResourceRecord::HasLiveHostWrites - the field that will carry it - is pinned
+        // false and the probe still has to ask the object. It retires with P5. See the long note
+        // at the definition; passing null means "no live map", not "unknown".
+        Bool IsBufferDrawCleanByHandle(MG_Pipe::MGPipeHandle res, const GLESBufferResource* resource,
+                                       const MG_State::GLState::BufferObject* frontend);
         GLESBufferResource* EnsureBufferResourceForHandle(
             const SharedPtr<MG_State::GLState::BufferObject>& bufferObject, MG_Pipe::MGPipeHandle res);
 

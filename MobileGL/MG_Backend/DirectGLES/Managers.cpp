@@ -2426,13 +2426,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //   identity      the slot table's twin at this handle, not GetBackendResource()
         //   size          record.Desc.Width, not GetSize()
         //   freshness     record.Serial vs syncedChangeSerial, not GetChangeSerial()
-        //   map state     record.HasLiveHostWrites, not IsMapped()
+        //   map state     record.HasLiveHostWrites AND the frontend's IsMapped() - see below
         //   the rest      unchanged, and server-side to begin with
         //
         // HasLiveHostWrites is ALWAYS FALSE in P3a and is written by nobody; it is here so the
         // phase that pushes persistent-mapped host writes can set it with no new record kind,
         // and the assertion below is what stops that phase landing a silent semantic change.
-        Bool IsBufferDrawCleanByHandle(MG_Pipe::MGPipeHandle res, const GLESBufferResource* resource) {
+        //
+        // BECAUSE it is pinned false, it CANNOT stand in for the frontend's IsMapped() yet, and
+        // the probe still asks the object: an EMULATED (non-adopted) persistent map - under the
+        // 16 MiB adoption threshold, or with DisableLargeBufferAdoption, or with no
+        // EXT_buffer_storage - mutates the client's shadow with no call, no serial and no epoch,
+        // which is the entire reason the legacy probe asks a map question instead of a serial
+        // one. Answering only HasLiveHostWrites made such a buffer read draw-clean forever, so
+        // SyncPersistentMappedRange (D-N keeps it on the ensure path for all of P3a) was never
+        // reached again and the frame drew the last uploaded bytes with no diagnostic anywhere.
+        // The frontend read retires the moment P5 gives HasLiveHostWrites a producer, and it is
+        // the last frontend read in this function.
+        Bool IsBufferDrawCleanByHandle(MG_Pipe::MGPipeHandle res, const GLESBufferResource* resource,
+                                       const MG_State::GLState::BufferObject* frontend) {
             if (!resource) return false;
             const auto* twin = g_backendBufferResources.FindByHandle(res);
             if (twin == nullptr || twin->get() != resource) return false;
@@ -2448,6 +2460,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             "MGPipeResourceRecord::HasLiveHostWrites is set, but P3a has no producer for it");
 #endif
             if (record->HasLiveHostWrites) return false;
+            // The same question the legacy arm asks at this exact point in the order, for the
+            // reason written at the top of this function. A null object is the "no frontend to
+            // ask" case (nothing reaches this probe without one today) and is treated as "not
+            // mapped", which is what the record already says.
+            if (frontend != nullptr && frontend->IsMapped()) return false;
             if (resource->pendingRespecify || !resource->storageInitialized) return false;
             if (!resource->pendingRanges.empty()) return false;
             if (resource->storageSize != static_cast<SizeT>(record->Desc.Width)) return false;
@@ -2458,7 +2475,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool IsBufferDrawClean(const MG_State::GLState::BufferObject* frontend, const GLESBufferResource* resource) {
 #if MOBILEGL_PIPE_PUSH
             if (ResourceSubsystemEnabled()) {
-                return IsBufferDrawCleanByHandle(HandleOfBuffer(frontend), resource);
+                return IsBufferDrawCleanByHandle(HandleOfBuffer(frontend), resource, frontend);
             }
 #endif
             // Identity first: a respecify path can hand the frontend a NEW resource; the
