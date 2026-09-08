@@ -2280,6 +2280,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         GLESBufferResource* GetOrCreateBufferResourceForHandle(MG_Pipe::MGPipeHandle res) {
             if (MG_Pipe::MGPipeHandleIsNull(res)) return nullptr;
+            // The table refuses both of these itself; this is the release-build VOICE for the
+            // refusal, because MOBILEGL_ASSERT compiles out at INFO and a resource that silently
+            // stops being twinned is the failure mode the refusal exists to replace.
+            if (res.Slot >= BackendBufferResourceTable::kMaxHandleSlot) {
+                MGLOG_E_ONCE("MGPipe: resource handle slot %u is past the backend table's %u bound - "
+                             "refusing to twin it",
+                             res.Slot, BackendBufferResourceTable::kMaxHandleSlot);
+                return nullptr;
+            }
+            const Uint32 liveGen = g_backendBufferResources.LiveGenAt(res.Slot);
+            if (liveGen != 0 && liveGen > res.Gen) {
+                MGLOG_E_ONCE("MGPipe: resource handle {%u, %u} names a generation BEHIND the live twin's "
+                             "%u - refusing rather than dropping the incumbent's driver storage",
+                             res.Slot, res.Gen, liveGen);
+                return nullptr;
+            }
             auto& twin = g_backendBufferResources.GetOrCreate(res);
             if (!twin) {
                 twin = MakeShared<GLESBufferResource>();

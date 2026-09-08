@@ -141,6 +141,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         using StateWeakPtr = std::weak_ptr<StateObject>;
         using BackendPtr = SharedPtr<BackendObject>;
 
+        // The largest slot index this table will grow to for a handle that ARRIVED in a call's
+        // payload. Slots are dense and allocated per kind, so a million of one kind is already
+        // far past any application's live object count; the cap is here because the alternative
+        // is letting a corrupt 32-bit slot decide a vector resize. See GetOrCreate(MGPipeHandle).
+        static constexpr Uint32 kMaxHandleSlot = 1u << 20;
+
         struct Entry {
             BackendPtr backend;
             // LIVENESS ONLY, and only for ForEachLive(), which locks it so the callee holds a
@@ -274,15 +280,58 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             "GetOrCreate(handle) named the reserved null handle");
             if (MG_Pipe::MGPipeHandleIsNull(handle)) return m_nullTwin;
 
+            // A slot index that ARRIVED in a payload indexes a vector this call would RESIZE,
+            // and nothing between the payload and here bounds it: the applier's blob gates sit
+            // in front of the vertex-input family, not in front of the resource family, which
+            // dispatches ops->Create(record.Res, ...) straight through. There is no allocator
+            // constant to check against on this side - the allocator is the client's - so this
+            // is a sanity cap and is documented as one: kMaxHandleSlot entries of one kind is
+            // already orders of magnitude past any real GL object count, while a corrupt 32-bit
+            // slot asks for a four-billion-entry resize.
+            if (handle.Slot >= kMaxHandleSlot) {
+                MOBILEGL_ASSERT(false, "GetOrCreate(handle) named slot %u, past this table's %u bound",
+                                handle.Slot, kMaxHandleSlot);
+                return m_nullTwin;
+            }
+
             // Same arming as the minting overload, and for the same reason: twin creation is
             // the moment a driver-owned id starts needing a guarded destructor.
             EnsureProcessTeardownSentinel();
 
+            // THE TWO DIRECTIONS ARE NOT SYMMETRIC HERE, where they are on the minting overload.
+            // There the handle comes straight out of MGPipeSlots().Acquire and can never be
+            // BEHIND the entry, so a bare `!=` only ever means "the slot was recycled forward".
+            // Here the handle arrived in a payload, so `handle.Gen < entry.Gen` is a reachable
+            // input, and adopting it would destroy the INCUMBENT LIVE twin - a driver buffer id,
+            // a persistent map, a pooled store, released by a defaulted destructor that issues
+            // no glDeleteBuffers and no pool enrolment - and then stamp the slot back to the
+            // dead resource's generation, after which the incumbent's own FindByHandle refuses
+            // it and it is silently handed a fresh, empty twin. That is a leak AND a resource
+            // that loses its storage with no diagnostic, i.e. the shape commit d7655247 fixed
+            // and the thing MGPipeHandle::Gen exists to prevent. So: forward is a recycle and
+            // resets the twin, BACKWARD is refused - which is the same answer FindByHandle
+            // below already gives the same input.
             Entry& entry = EntryAt(handle.Slot);
+            if (entry.Live && entry.Gen > handle.Gen) {
+                MOBILEGL_ASSERT(false,
+                                "GetOrCreate(handle) named generation %u at slot %u, which is BEHIND "
+                                "the live entry's %u - refusing rather than destroying the incumbent",
+                                handle.Gen, handle.Slot, entry.Gen);
+                return m_nullTwin;
+            }
             if (entry.Live && entry.Gen != handle.Gen) entry.backend.reset();
             entry.Gen = handle.Gen;
             entry.Live = true;
             return entry.backend;
+        }
+
+        // The generation of the LIVE entry at this slot, or 0 when the slot is out of range or
+        // holds no live entry. It exists so a caller can DIAGNOSE - in a release build, where
+        // MOBILEGL_ASSERT is inert - the refusal GetOrCreate(handle) above performs silently.
+        Uint32 LiveGenAt(Uint32 slot) const {
+            if (slot >= m_slots.size()) return 0;
+            const Entry& entry = m_slots[slot];
+            return entry.Live ? entry.Gen : 0;
         }
 
         // P3a: the death half of the overload above, for a kind whose announcement is its own
@@ -448,6 +497,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
+        // Grows the table to hold `slot`. Every caller bounds `slot` first - the minting
+        // overload because the allocator produced it, the handle overload against
+        // kMaxHandleSlot - because this is the one place a client-supplied number decides an
+        // allocation size.
         Entry& EntryAt(Uint32 slot) {
             if (slot >= m_slots.size()) m_slots.resize(static_cast<SizeT>(slot) + 1);
             return m_slots[slot];
