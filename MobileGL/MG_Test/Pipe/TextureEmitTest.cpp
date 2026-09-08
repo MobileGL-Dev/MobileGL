@@ -211,7 +211,8 @@ TEST(TextureEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
     X(TextureEmit, ALodWriteOnTheBuiltinSamplerRepublishesTheParams)                                \
     X(TextureEmit, ATexturesBuiltinSamplerHoldsOneCacheReferenceAndSwapsItWithTheContent)           \
     X(TextureEmit, ARecycledTextureSlotDoesNotInheritItsPredecessorsBindMask)                       \
-    X(TextureEmit, ALevelMarkedCleanIsCollectedAtTheNextDrain)                                     \n    X(TextureEmit, WithNoBackendConsumerTheFamilyGateIsFalseAndNothingReachesTheApplier)
+    X(TextureEmit, ALevelMarkedCleanIsCollectedAtTheNextDrain)                                     \
+    X(TextureEmit, WithNoBackendConsumerTheFamilyGateIsFalseAndNothingReachesTheApplier)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
