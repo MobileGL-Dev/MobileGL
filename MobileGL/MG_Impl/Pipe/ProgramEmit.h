@@ -115,7 +115,14 @@ namespace MobileGL::MG_Pipe {
             // allocator refuses a slot that is not live at that generation.
             if (drawProgram && MGPipeProgramIsPipelineComposite(*drawProgram)) {
                 if (const auto& pipeline = ctx.GetBoundProgramPipeline()) {
-                    MGPipeCompositeResolverInstance().Observe(*pipeline, *drawProgram, drawCso);
+                    // THE CONTEXT IS PART OF THE RESOLVER's KEY and this is the only place that
+                    // supplies it: the resolver is a process singleton and a pipeline's GL name
+                    // is per context, so without it a make-current between two contexts holding
+                    // one pipeline name released the other context's LIVE composite.
+                    // GetTextureContextId() is the tree's never-reused per-context id, the same
+                    // one PipeInputs carries and the backends' per-context memos key on.
+                    MGPipeCompositeResolverInstance().Observe(ctx.GetTextureContextId(), *pipeline,
+                                                             *drawProgram, drawCso);
                 }
             }
             const MGPipeHandle dispatchCso =

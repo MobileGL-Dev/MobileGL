@@ -361,7 +361,9 @@ TEST(CompositeResolver, ASlotAtTheShaderCsoLimitIsRefusedWhileTheLastBandSlotIsN
     X(CompositeResolver, TwoPipelinesWithTheSameSignatureKeepTheirOwnComposite)                     \
     X(CompositeResolver, EvictionThenDestructionFreesTheSlotExactlyOnce)                            \
     X(CompositeResolver, DestructionThenEvictionFreesTheSlotExactlyOnce)                            \
-    X(CompositeResolver, ASignatureMoveAfterAMakeCurrentStillReleasesThroughTheResolver)
+    X(CompositeResolver, ASignatureMoveAfterAMakeCurrentStillReleasesThroughTheResolver)         \
+    X(CompositeResolver, TwoContextsHoldingOnePipelineNameKeepTheirOwnComposites)                \
+    X(CompositeResolver, ADestroyedContextsEntryIsDroppedRatherThanReleasedASecondTime)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -373,6 +375,7 @@ namespace {
     namespace GL = MobileGL::MG_Impl::GLImpl;
     using GLContext = MG_State::GLState::GLContext;
     using MG_State::GLState::ProgramObject;
+    using MG_State::GLState::ProgramPipelineObject;
 
     struct ResolverScope {
         ResolverScope() { Clear(); }
@@ -619,6 +622,120 @@ void main() { o_color = vec4(0.5); }
         EXPECT_FALSE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, first))
             << "and the first composite's slot really went back, exactly once";
         EXPECT_TRUE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, second));
+    }
+
+    // THE RESOLVER IS A PROCESS SINGLETON AND A PIPELINE's GL NAME IS PER CONTEXT (C2-M1).
+    // GLContext owns m_programPipelines AND its own name generator m_programPipelineNames, so
+    // name N names two different ProgramPipelineObjects in two contexts, each with its own
+    // composite and its own handle. Keyed on the name alone, the first Observe after a
+    // make-current found the OTHER context's entry: the signature matched - two composites of
+    // the same stage set have the same signature, and here two default pipelines have the same
+    // all-zero one - while the handle could not, because two composites are two ProgramObjects
+    // with two lifetime ids. So it fell into ReleaseEntry and emitted delete_shader_state for a
+    // LIVE composite, cleared its publication latch and handed its band slot back while the
+    // frontend ProgramObject was still alive.
+    //
+    // DRIVEN AT THE RESOLVER RATHER THAN THROUGH GL, because one test process has one
+    // GLContext. Everything the case supplies is what the single production call site supplies:
+    // the context id is GLContext::GetTextureContextId()'s value, the two same-named pipeline
+    // objects are what two contexts hold, and the composites are ordinary ProgramObjects at
+    // external index 0 out of the reserved band, exactly as Core.cpp builds them.
+    TEST(CompositeResolver, TwoContextsHoldingOnePipelineNameKeepTheirOwnComposites) {
+        ResolverScope scope;
+        auto& resolver = MGPipeCompositeResolverInstance();
+        const LinkArtifacts link;
+        const SpirvArtifacts spirv;
+
+        constexpr Uint kSharedPipelineName = 9u;
+        constexpr Uint64 kContextA = 0x51A00001ull;
+        constexpr Uint64 kContextB = 0x51A00002ull;
+        const ProgramPipelineObject pipelineA{kSharedPipelineName};
+        const ProgramPipelineObject pipelineB{kSharedPipelineName};
+        const SharedPtr<ProgramObject> compositeA = MakeShared<ProgramObject>(0u);
+        const SharedPtr<ProgramObject> compositeB = MakeShared<ProgramObject>(0u);
+        ASSERT_TRUE(MGPipeProgramIsPipelineComposite(*compositeA));
+        ASSERT_EQ(pipelineA.GetExternalIndex(), pipelineB.GetExternalIndex());
+
+        const MGPipeHandle handleA = MGPipeSlots().AllocateComposite(compositeA->GetLifetimeId());
+        const MGPipeHandle handleB = MGPipeSlots().AllocateComposite(compositeB->GetLifetimeId());
+        ASSERT_NE(handleA, handleB);
+        for (const MGPipeHandle handle : {handleA, handleB}) {
+            MGPipeApplyCreateShaderState(CompositeDesc(handle, 0x3u), &link, &spirv);
+            MGPipeNoteHandlePublished(MGPipeKind::ShaderCso, handle);
+        }
+        const Uint64 releasesBefore = resolver.GetCounters().Releases;
+
+        EXPECT_EQ(resolver.Observe(kContextA, pipelineA, *compositeA, handleA), handleA);
+        // THE MAKE-CURRENT, which is what PipeFill's FreshlyPrimed arm reaches through the
+        // program emitter's own Reset()...
+        MGPipeProgramEmitterInstance().Reset();
+        // ... and then context B draws with ITS pipeline of the same name.
+        EXPECT_EQ(resolver.Observe(kContextB, pipelineB, *compositeB, handleB), handleB);
+
+        EXPECT_EQ(resolver.GetCounters().Releases, releasesBefore)
+            << "the other context's entry was released - it is not this pipeline's entry";
+        EXPECT_TRUE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, handleA))
+            << "A's band slot went back while A's composite ProgramObject was still alive";
+        EXPECT_TRUE(MGPipeHandleIsPublished(MGPipeKind::ShaderCso, handleA))
+            << "delete_shader_state went out for a live composite and cleared its latch";
+        EXPECT_TRUE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, handleB));
+
+        // AND BACK TO A. Its obligation stayed owed to its own context, so the unmoved
+        // signature is a reuse of the same handle and still nothing is released.
+        const Uint64 reusesBefore = resolver.GetCounters().Reuses;
+        MGPipeProgramEmitterInstance().Reset();
+        EXPECT_EQ(resolver.Observe(kContextA, pipelineA, *compositeA, handleA), handleA);
+        EXPECT_EQ(resolver.GetCounters().Reuses, reusesBefore + 1u);
+        EXPECT_EQ(resolver.GetCounters().Releases, releasesBefore);
+    }
+
+    // WHERE A DESTROYED CONTEXT's ENTRIES ARE RELEASED, and it is not in the resolver. The
+    // context's death drops m_programPipelines, which drops the ProgramPipelineObject, which
+    // drops the composite it cached; ~ProgramObject then runs the one client-side death helper
+    // and the band slot goes back EXACTLY ONCE. The resolver speaks no second delete - the
+    // entry can never be found again, and the allocator has erased the lifetime-id mapping
+    // anyway - and the next make-current DROPS the stranded entry, which is what keeps the
+    // vector bounded now that its key carries the context.
+    TEST(CompositeResolver, ADestroyedContextsEntryIsDroppedRatherThanReleasedASecondTime) {
+        ResolverScope scope;
+        auto& resolver = MGPipeCompositeResolverInstance();
+        const LinkArtifacts link;
+        const SpirvArtifacts spirv;
+
+        constexpr Uint kPipelineName = 11u;
+        constexpr Uint64 kDoomedContext = 0x51A00003ull;
+        // ResolverScope's Clear() has already run one Reset(), so every entry standing here has
+        // a live composite slot and nothing but this case's own entry can be swept below.
+        const SizeT sizeBefore = resolver.Size();
+        const Uint32 liveBefore = MGPipeSlots().LiveCount(MGPipeKind::ShaderCso);
+
+        const ProgramPipelineObject pipeline{kPipelineName};
+        SharedPtr<ProgramObject> composite = MakeShared<ProgramObject>(0u);
+        const MGPipeHandle handle = MGPipeSlots().AllocateComposite(composite->GetLifetimeId());
+        MGPipeApplyCreateShaderState(CompositeDesc(handle, 0x3u), &link, &spirv);
+        MGPipeNoteHandlePublished(MGPipeKind::ShaderCso, handle);
+        ASSERT_EQ(resolver.Observe(kDoomedContext, pipeline, *composite, handle), handle);
+        ASSERT_EQ(resolver.Size(), sizeBefore + 1u);
+        const Uint64 releasesBefore = resolver.GetCounters().Releases;
+        const Uint64 sweepsBefore = resolver.GetCounters().Sweeps;
+
+        // THE CONTEXT DIES: the last SharedPtr to its composite goes with its pipeline.
+        composite.reset();
+        EXPECT_FALSE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, handle))
+            << "~ProgramObject is the release path for this entry and it freed the slot";
+        EXPECT_FALSE(MGPipeHandleIsPublished(MGPipeKind::ShaderCso, handle))
+            << "and it took the publication latch with the delete";
+        EXPECT_EQ(MGPipeSlots().LiveCount(MGPipeKind::ShaderCso), liveBefore) << "exactly once";
+        EXPECT_EQ(resolver.GetCounters().Releases, releasesBefore)
+            << "the resolver spoke no release of its own for it";
+
+        // THE NEXT CONTEXT's FIRST VERB. The stranded entry is dropped, not released.
+        MGPipeProgramEmitterInstance().Reset();
+        EXPECT_EQ(resolver.GetCounters().Sweeps, sweepsBefore + 1u);
+        EXPECT_EQ(resolver.GetCounters().Releases, releasesBefore)
+            << "a dropped entry emits nothing and frees nothing - the obligation was discharged";
+        EXPECT_EQ(resolver.Size(), sizeBefore)
+            << "the vector is bounded by the pairs whose composite slot is actually live";
     }
 } // namespace
 #endif // MOBILEGL_PIPE_PUSH
