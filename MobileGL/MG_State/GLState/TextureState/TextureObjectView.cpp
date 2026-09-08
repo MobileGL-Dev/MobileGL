@@ -79,6 +79,18 @@ namespace MobileGL::MG_State::GLState {
         // to the view. GetImmutableLevels() forwards to the owner for the actual GL query, which
         // GL 4.6 core 8.18 defines as the ORIGINAL texture's value.
         SetImmutableLevels(numLevels);
+#if MOBILEGL_PIPE_PUSH
+        // ViewOf, and it is published from HERE rather than left to SetImmutableLevels above,
+        // which early-returns when the composed level count happens to be the base class's
+        // current value - a degenerate view (the spec's min() composition narrowed to zero
+        // levels) would otherwise never publish the one field that makes it a view. The
+        // descriptor is deduped on its own bytes, so the ordinary case pays one compare.
+        //
+        // ONE HOP ALWAYS REACHES STORAGE: glTextureView composes a view-of-a-view onto the ROOT
+        // at creation, which is what the spec's additive min-level rule describes and what the
+        // assertion above pins, so the owner named here is never itself a view.
+        PipePublishDescriptor();
+#endif
     }
 
     Uint TextureObjectView::GetImmutableLevels() const {

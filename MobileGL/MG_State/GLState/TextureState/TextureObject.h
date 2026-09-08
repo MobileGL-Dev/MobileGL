@@ -190,6 +190,12 @@ namespace MobileGL::MG_State::GLState {
             m_depthStencilTextureMode = mode;
             ++m_textureParamsVersion;
             MGP_NOTE_AGGREGATE(TextureParams);
+#if MOBILEGL_PIPE_PUSH
+            // D-E3's whole point, at the one site that proves it: the depth-stencil mode of a
+            // texture that is ONLY the READ framebuffer's attachment reaches the driver, because
+            // set_texture_params is addressed by resource and is independent of every binding.
+            PipePublishParams();
+#endif
         }
 
     protected:
@@ -200,6 +206,34 @@ namespace MobileGL::MG_State::GLState {
         // whether a bound texture reaches its native target at all, and a shape change is
         // otherwise invisible to such a memo (no bind moved).
         void BumpShapeVersion();
+
+#if MOBILEGL_PIPE_PUSH
+        // ---- P4a's client emission points (brief D-D1, D-D3, D-E1, D-I1) ----
+        //
+        // NON-VIRTUAL AND PUSH-ONLY, both deliberately: a virtual would grow the vtable and a
+        // member would grow the object, and P4a's admitted-resize set is EMPTY - every edit
+        // that reaches the pull build is inside this guard, so the pull build's symbol set is
+        // byte-for-byte the one it had before the phase.
+        //
+        // DECLARED HERE AND DEFINED IN TextureObject.cpp, which is the ONE MG_State
+        // translation unit that includes the client's MG_Impl/Pipe/TextureEmit.h. Every other
+        // texture .cpp - the cube's, the view's, the buffer texture's - calls the inherited
+        // helper and still sees only a declaration, which is the same layering
+        // MG_Pipe/PipeMutation.h gives the buffer family (that header is the contract
+        // package's for the whole phase and carries no texture row, which is why the
+        // declaration lives here instead; see TextureEmit.h's header comment).
+        //
+        // resource_respecify. Called from BumpShapeVersion and from the three parameter
+        // setters that move a DESCRIPTOR field without moving the shape (immutable levels,
+        // sample count, fixed sample locations). The emitter dedupes on the built descriptor,
+        // so an over-call costs one 88-byte compare and never an extra record.
+        void PipePublishDescriptor();
+        // set_texture_params, from every mutator that bumps m_textureParamsVersion.
+        void PipePublishParams();
+        // The sub-data DRAIN LIST. `dirty` false is a level going clean - a respecify, a
+        // truncation, or the emitter's own clear after an accepted record.
+        void PipeNoteLevelDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel, Bool dirty);
+#endif
 
         const Uint m_externalIndex;
         const Uint64 m_lifetimeId;

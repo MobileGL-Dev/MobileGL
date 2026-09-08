@@ -59,6 +59,13 @@ namespace MobileGL {
 
             private:
                 static Uint64 AllocateLifetimeId();
+#if MOBILEGL_PIPE_PUSH
+                // P4a D-D2: resource_respecify, from every storage-defining setter. Non-virtual
+                // and push-only, so the pull build's object layout is untouched (P4a's
+                // admitted-resize set is EMPTY); defined in RenderbufferObject.cpp, which is the
+                // one translation unit that includes the client emitter.
+                void PipePublishDescriptor();
+#endif
 
                 Uint m_externalIndex = 0;
                 const Uint64 m_lifetimeId = AllocateLifetimeId();

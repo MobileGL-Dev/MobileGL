@@ -9,6 +9,13 @@
 #include "RenderbufferObject.h"
 #include <MG_Util/Metrics/TextureMetrics.h>
 #include <MG_State/GLState/StateObjectDeathNotice.h>
+#if MOBILEGL_PIPE_PUSH
+// The second and last MG_State translation unit that sees the client's texture emitter. A
+// renderbuffer has no base class to hang protected helpers on and exactly one .cpp, so the
+// include is the whole coupling; see MG_Impl/Pipe/TextureEmit.h's header comment for why the
+// declaration cannot live in MG_Pipe/PipeMutation.h this phase.
+#include <MG_Impl/Pipe/TextureEmit.h>
+#endif
 
 #include <atomic>
 
@@ -25,19 +32,27 @@ namespace MobileGL {
                 return g_nextRenderbufferLifetimeId.fetch_add(1, std::memory_order_relaxed);
             }
 
-            RenderbufferObject::RenderbufferObject(Uint externalIndex) : m_externalIndex(externalIndex) {}
+            RenderbufferObject::RenderbufferObject(Uint externalIndex) : m_externalIndex(externalIndex) {
+#if MOBILEGL_PIPE_PUSH
+                // P4a D-D1: resource_create from the constructor, carrying no storage. A
+                // renderbuffer is an INDEPENDENT class on the wire - it shares MGPResourceDesc's
+                // shape with textures and buffers and nothing else - and its handle is minted
+                // whatever the subsystem bitmask says, because MGPSurface::Res names it out of the
+                // framebuffer subsystem.
+                MG_Pipe::MGPipeMintAndCreateRenderbuffer(*this);
+#endif
+            }
 
 #if MOBILEGL_PIPE_PUSH
             RenderbufferObject::~RenderbufferObject() {
-                // P2 step e2: ANNOUNCE the death instead of leaving the backend to discover it in a
-                // garbage sweep. This is the last SharedPtr to this object dropping - not
-                // glDeleteRenderbuffers, which only marks the name and leaves a still-bound object very much
-                // alive - so it is the exact moment the backend's twin, and the driver storage that
-                // twin owns, stop being reachable. The notice carries the lifetime id because the
-                // object no longer exists to be passed, and because the lifetime id is what the client
-                // slot allocator resolves the handle from. No-op unless a backend registered the ops
-                // (a pull build declares none at all).
-                NotifyStateObjectDestroyed(MG_Pipe::MGPipeKind::Renderbuffer, m_lifetimeId);
+                // P4a D-I1, the fixed three-step order: the wire delete first (published-gated,
+                // because a slot is not evidence of a record), then the death notice - the P2
+                // step-e2 announcement that used to stand here alone, raised while the handle
+                // still resolves - and the slot last. Steps 2 and 3 are the contract's helper;
+                // step 1 is this package's, one statement earlier, because the helper's file
+                // belongs to the contract package for the whole phase.
+                MG_Pipe::MGPipeEmitRenderbufferResourceDestroy(m_lifetimeId);
+                MG_Pipe::MGPipeEmitRenderbufferDestroyAndFree(m_lifetimeId);
             }
 #endif
 
@@ -96,17 +111,43 @@ namespace MobileGL {
             void RenderbufferObject::SetInternalFormat(TextureInternalFormat format) {
                 m_internalFormat = format;
                 m_componentSizes = MG_Util::GetComponentSizesForInternalFormat(format);
+#if MOBILEGL_PIPE_PUSH
+                PipePublishDescriptor();
+#endif
             }
 
             void RenderbufferObject::AllocateStorage(IntVec2 size) {
                 m_width = size.x();
                 m_height = size.y();
                 m_allocated = true;
+#if MOBILEGL_PIPE_PUSH
+                PipePublishDescriptor();
+#endif
             }
 
             void RenderbufferObject::SetSamples(Int samples) {
                 m_samples = samples;
+#if MOBILEGL_PIPE_PUSH
+                PipePublishDescriptor();
+#endif
             }
+
+#if MOBILEGL_PIPE_PUSH
+            // D-D2: THE RENDERBUFFER PUBLICATION HOLE, CLOSED BY EMISSION AND NOT BY A NEW
+            // VERSION. These three setters bump no version and raise no notice, and the
+            // framebuffer dirty bit's shutter does not move when an ALREADY-ATTACHED renderbuffer
+            // is re-storaged - so `glBindRenderbuffer; glRenderbufferStorage(newSize)` on an
+            // attached renderbuffer was invisible to everything downstream. Emitting from the
+            // storage entry point closes it; a version counter here would resize the pull build's
+            // object and break G1, and widening the shutter would fire the framebuffer emission on
+            // an unrelated renderbuffer write.
+            //
+            // The emitter dedupes on the built descriptor, so glRenderbufferStorage's three-setter
+            // sequence publishes once rather than three times.
+            void RenderbufferObject::PipePublishDescriptor() {
+                MG_Pipe::MGPipeEmitRenderbufferRespecify(*this);
+            }
+#endif
         } // namespace GLState
     } // namespace MG_State
 } // namespace MobileGL

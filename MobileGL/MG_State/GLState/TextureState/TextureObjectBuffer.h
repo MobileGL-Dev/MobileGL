@@ -29,6 +29,15 @@ namespace MobileGL {
                 void SetBufferRange(SizeT offset, SizeT size) {
                     m_bufferRangeOffset = offset;
                     m_bufferRangeSize = size;
+#if MOBILEGL_PIPE_PUSH
+                    // Both glTexBuffer entry points bind the backing buffer and then set the
+                    // window, so this is the first statement at which the descriptor's
+                    // BufferForTexBuffer / BufOffset / BufSize trio is complete. SetInternalFormat
+                    // publishes again one statement later and is deduped away when the format did
+                    // not move - which is exactly the case a re-attach of a DIFFERENT buffer at
+                    // the same format would otherwise fall through.
+                    PipePublishDescriptor();
+#endif
                 }
                 SizeT GetBufferRangeOffset() const { return m_bufferRangeOffset; }
                 // Resolved against the buffer's current size, so kWholeBuffer tracks it.
