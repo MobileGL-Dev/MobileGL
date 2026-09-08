@@ -212,7 +212,11 @@ TEST(TextureEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
     X(TextureEmit, ATexturesBuiltinSamplerHoldsOneCacheReferenceAndSwapsItWithTheContent)           \
     X(TextureEmit, ARecycledTextureSlotDoesNotInheritItsPredecessorsBindMask)                       \
     X(TextureEmit, ALevelMarkedCleanIsCollectedAtTheNextDrain)                                     \
-    X(TextureEmit, WithNoBackendConsumerTheFamilyGateIsFalseAndNothingReachesTheApplier)
+    X(TextureEmit, WithNoBackendConsumerTheFamilyGateIsFalseAndNothingReachesTheApplier)          \
+    X(TextureEmit, WithTheSamplerBitClearTheTextureFamilyGateIsFalseAndNothingReachesTheApplier)  \
+    X(TextureEmit,                                                                               \
+      WithTheBufferResourceBitClearTheTextureFamilyGateIsFalseAndNothingReachesTheApplier)        \
+    X(TextureEmit, EveryDKTwoDependencyRowGatesItsOwnFamilyAndTheMirrorPairsStayLive)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -240,10 +244,20 @@ namespace {
     struct TextureScope {
         TextureScope() {
             m_previousPush = MG_Config::Features.PipePush;
-            // D-K2's fourth row, in the fixture: BIT 10 REQUIRES BIT 11.
-            // MGPTextureParams::BuiltinSampler is a SamplerCso handle out of the sampler
-            // family's content-addressed cache, and a null there is Fatal{ProtocolCorruption}.
-            MG_Config::Features.PipePush |= kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers;
+            // D-K2's WHOLE ROW FOR BIT 10, in the fixture, because the client now enforces it
+            // (S-3 / ID-41) and not only Espryt's ResolveTextureResourceSubsystemArm:
+            //   - BIT 10 REQUIRES BIT 11 - MGPTextureParams::BuiltinSampler is a SamplerCso
+            //     handle out of the sampler family's content-addressed cache and a null there is
+            //     Fatal{ProtocolCorruption};
+            //   - BIT 10 REQUIRES BIT 7 - a buffer texture's BufferForTexBuffer names a Buffer
+            //     handle and only bit 7 puts twins in the resource slot table (D-D1). Arming it
+            //     changes nothing else here: this file constructs no BufferObject, so no P3a
+            //     resource hook has anything to fire on.
+            // Without all three the family gate is FALSE and every case below would be green for
+            // the wrong reason - which is what the dependency cases at the end of this file pin.
+            MG_Config::Features.PipePush |= kMGPipeSubsystemResources |
+                                            kMGPipeSubsystemTextureResources |
+                                            kMGPipeSubsystemSamplers;
             m_previousContext = Move(MG_State::pGLContext);
             MG_State::pGLContext = MakeUnique<GLContext>();
             MGPipeTextureEmitterInstance().ResetForTest();
@@ -908,6 +922,177 @@ TEST(TextureEmit, WithNoBackendConsumerTheFamilyGateIsFalseAndNothingReachesTheA
     EXPECT_EQ(Textures().RefusedSubDataCount(), 0u);
     EXPECT_EQ(MGPipeApplier().RefusedNoConsumer, 0u);
     EXPECT_FALSE(consumed->IsStorageDirty(TextureUploadTarget::Texture2D, 0));
+}
+
+// ==================== S-3 (ID-41): D-K2's DEPENDENCY TABLE, ON THE CLIENT ====================
+//
+// THE SAME DEFECT AS THE CASE ABOVE, ONE SIGNAL OVER. Espryt's four
+// `Resolve<Family>SubsystemArm()` functions REFUSE a family whose D-K2 dependency bit is clear
+// and run the legacy arm instead - the backstop. But the client's emission used to be gated on
+// MOBILEGL_PIPE_PUSH's own bit alone, so at 0x7ff (bit 10 set, bit 11 clear) it emitted the whole
+// texture family anyway, the applier accepted it, the emitter cleared each level's dirty flag on
+// that acceptance - and the server then refused bit 10 and ran a legacy path with nothing left to
+// upload. 438/491 on the DirectGLES integration lane, the same 47 texture-upload failures ID-39
+// saw on Magma for the consumer-less version of the identical mistake.
+//
+// WHAT THESE THREE CASES PIN IS "NOTHING AT ALL", NOT "LESS", exactly as the consumer case above
+// does: no create, no respecify, no params, no entry on the drain list - and the FRONTEND's own
+// dirty flag still set, which is the state the legacy pull path reads and the one whose loss no
+// pixel comparison on this side can see.
+TEST(TextureEmit, WithTheSamplerBitClearTheTextureFamilyGateIsFalseAndNothingReachesTheApplier) {
+    TextureScope scope;
+    // THE 0x7ff SHAPE EXACTLY: bit 10 set, bit 11 clear. D-K2's FOURTH row (ID-14/ID-15) -
+    // MGPTextureParams::BuiltinSampler is a SamplerCso handle, only bit 11 mints sampler CSOs,
+    // and the applier's verdict for a null one is Fatal{ProtocolCorruption}.
+    MG_Config::Features.PipePush &= ~kMGPipeSubsystemSamplers;
+
+    EXPECT_FALSE(MGPipeP4aFamilyEmits(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem))
+        << "bit 10 is set and bit 11 is clear; Espryt refuses this family, so the client must not "
+           "emit into it";
+
+    const auto texture = MakeTexture2D(43, 32);
+    const MGPipeHandle handle = Textures().FindTexture(*texture);
+    // The mint is unconditional and stays that way: what a dependency withholds is the EMISSION,
+    // never the identity, exactly as for the consumer conjunct.
+    ASSERT_FALSE(MGPipeHandleIsNull(handle));
+    EXPECT_FALSE(MGPipeHandleIsPublished(MGPipeKind::Texture, handle))
+        << "a create was published for a family the server refuses at this mask";
+    EXPECT_EQ(Textures().CreateCount(), 0u);
+    EXPECT_EQ(Textures().RespecifyCount(), 0u);
+    EXPECT_TRUE(MGPipeApplier().TextureResources.empty());
+
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0},
+                                    IntVec3{8, 8, 1});
+    EXPECT_EQ(Textures().DrainListSize(), 0u);
+    Textures().DrainTextureSubData(Ctx());
+    EXPECT_EQ(Textures().SubDataCount(), 0u);
+    // THE ONE THAT MATTERED, and it is the whole of S-3: the level's flag is what Espryt's LEGACY
+    // texture arm uploads from once it has refused bit 10.
+    EXPECT_TRUE(texture->IsStorageDirty(TextureUploadTarget::Texture2D, 0))
+        << "the level's dirty flag was cleared at a mask whose server-side arm is the legacy one, "
+           "so those texels exist nowhere";
+    EXPECT_EQ(MGPipeApplier().RefusedNoConsumer, 0u)
+        << "the belt is about the consumer; the DEPENDENCY is the gate's job and the gate is what "
+           "must have stopped this";
+
+    // ---- and with bit 11 back, the same sequence lands ----
+    MG_Config::Features.PipePush |= kMGPipeSubsystemSamplers;
+    EXPECT_TRUE(MGPipeP4aFamilyEmits(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem));
+    const auto live = MakeTexture2D(44, 32);
+    const MGPipeHandle liveHandle = Textures().FindTexture(*live);
+    ASSERT_FALSE(MGPipeHandleIsNull(liveHandle));
+    EXPECT_TRUE(MGPipeHandleIsPublished(MGPipeKind::Texture, liveHandle));
+    live->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0},
+                                 IntVec3{8, 8, 1});
+    EXPECT_EQ(Textures().DrainListSize(), 1u);
+    Textures().DrainTextureSubData(Ctx());
+    EXPECT_EQ(Textures().SubDataCount(), 1u);
+    EXPECT_FALSE(live->IsStorageDirty(TextureUploadTarget::Texture2D, 0));
+}
+
+// THE OTHER HALF OF THE SAME ROW: bit 10 requires bit 7 as well (D-D1). A buffer texture's
+// MGPResourceDesc::BufferForTexBuffer names a Buffer handle and only bit 7 puts twins in the
+// resource slot table, so ResolveTextureResourceSubsystemArm refuses bit 10 without it - and a
+// refused family must not have had its flags cleared by an emission that already went out. This
+// is the arm the 0x5ff-shaped masks reach from the other side.
+TEST(TextureEmit, WithTheBufferResourceBitClearTheTextureFamilyGateIsFalseAndNothingReachesTheApplier) {
+    TextureScope scope;
+    MG_Config::Features.PipePush &= ~kMGPipeSubsystemResources;
+
+    EXPECT_FALSE(MGPipeP4aFamilyEmits(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem))
+        << "bit 10 is set and bit 7 is clear; Espryt refuses this family, so the client must not "
+           "emit into it";
+
+    const auto texture = MakeTexture2D(45, 32);
+    const MGPipeHandle handle = Textures().FindTexture(*texture);
+    ASSERT_FALSE(MGPipeHandleIsNull(handle));
+    EXPECT_FALSE(MGPipeHandleIsPublished(MGPipeKind::Texture, handle));
+    EXPECT_EQ(Textures().CreateCount(), 0u);
+    EXPECT_EQ(Textures().RespecifyCount(), 0u);
+    EXPECT_TRUE(MGPipeApplier().TextureResources.empty());
+
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0},
+                                    IntVec3{8, 8, 1});
+    EXPECT_EQ(Textures().DrainListSize(), 0u);
+    Textures().DrainTextureSubData(Ctx());
+    EXPECT_EQ(Textures().SubDataCount(), 0u);
+    EXPECT_TRUE(texture->IsStorageDirty(TextureUploadTarget::Texture2D, 0));
+    EXPECT_EQ(MGPipeApplier().RefusedNoConsumer, 0u);
+}
+
+// THE TABLE ITSELF, ONE ROW PER FAMILY, AND THE MIRROR PAIRS THAT STAY LIVE. The two cases above
+// drive the texture family end to end because its emitter is the one this suite owns; the
+// framebuffer, sampler and program families are asserted through the gate itself, which is the
+// single predicate every one of their birth hooks and every `wants()` row in the walk resolves
+// through (MGPipeP4aFamilyEmits returns FamilyIsLive, not a second copy of it). `wired` is passed
+// as the family's own bit, which is what that constant is once the family has landed its emitter.
+//
+// THE ROWS ARE NON-TRANSITIVE ON PURPOSE. Espryt's resolvers classify their arms from
+// MOBILEGL_PIPE_PUSH alone, so this table asks the same question they ask - "is the dependency
+// BIT set" - and not "is the other family live". At a mask like 0x7ff that means the framebuffer
+// family stays LIVE on both sides while the texture family is dead on both sides, which is the
+// state the two must agree on; a client that withheld more than the server refuses would leave
+// the server's handle arm live with no records to read.
+TEST(TextureEmit, EveryDKTwoDependencyRowGatesItsOwnFamilyAndTheMirrorPairsStayLive) {
+    TextureScope scope;
+    const auto emits = [](Uint64 family) { return MGPipeP4aFamilyEmits(family, family); };
+    const Uint64 kAll = kMGPipeSubsystemResources | kMGPipeSubsystemFramebuffer |
+                        kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers |
+                        kMGPipeSubsystemPrograms;
+
+    // ---- every dependency satisfied: all four families live ----
+    MG_Config::Features.PipePush = kAll;
+    EXPECT_TRUE(emits(kMGPipeSubsystemFramebuffer));
+    EXPECT_TRUE(emits(kMGPipeSubsystemTextureResources));
+    EXPECT_TRUE(emits(kMGPipeSubsystemSamplers));
+    EXPECT_TRUE(emits(kMGPipeSubsystemPrograms));
+
+    // ---- ROW 1: bit 9 requires bit 10 (MGPSurface::Res names a texture or renderbuffer) ----
+    MG_Config::Features.PipePush = kAll & ~kMGPipeSubsystemTextureResources;
+    EXPECT_FALSE(emits(kMGPipeSubsystemFramebuffer)) << "bit 9 set, bit 10 clear";
+    // ROW 3 falls out of the same mask: bit 11 requires bit 10.
+    EXPECT_FALSE(emits(kMGPipeSubsystemSamplers)) << "bit 11 set, bit 10 clear";
+    EXPECT_TRUE(emits(kMGPipeSubsystemPrograms)) << "bit 12 depends on nothing";
+
+    // ---- ROW 2a: bit 10 requires bit 11 - the 0x7ff shape ----
+    MG_Config::Features.PipePush = kAll & ~kMGPipeSubsystemSamplers;
+    EXPECT_FALSE(emits(kMGPipeSubsystemTextureResources)) << "bit 10 set, bit 11 clear";
+    EXPECT_TRUE(emits(kMGPipeSubsystemFramebuffer))
+        << "bit 9's row names bit 10 and bit 10 IS set at this mask - the rows are non-transitive "
+           "because Espryt's ResolveFramebufferSubsystemArm is";
+    EXPECT_TRUE(emits(kMGPipeSubsystemPrograms));
+
+    // ---- ROW 2b: bit 10 requires bit 7 - the D-D1 half ----
+    MG_Config::Features.PipePush = kAll & ~kMGPipeSubsystemResources;
+    EXPECT_FALSE(emits(kMGPipeSubsystemTextureResources)) << "bit 10 set, bit 7 clear";
+    EXPECT_TRUE(emits(kMGPipeSubsystemSamplers)) << "bit 11's only row is bit 10, which is set";
+    EXPECT_TRUE(emits(kMGPipeSubsystemPrograms));
+
+    // ---- ROW 4: bit 12 depends on NOTHING, so it is live entirely on its own ----
+    MG_Config::Features.PipePush = kMGPipeSubsystemPrograms;
+    EXPECT_TRUE(emits(kMGPipeSubsystemPrograms));
+
+    // ---- THE MIRROR PAIRS, said out loud: an unreachable branch that says something different
+    //      is how the reachable one drifts (Managers.cpp:2377-2381's own words) ----
+    // bits 10 + 11 without bit 9: FINE, and it is the 0xdff arm.
+    MG_Config::Features.PipePush = kAll & ~kMGPipeSubsystemFramebuffer;
+    EXPECT_TRUE(emits(kMGPipeSubsystemTextureResources));
+    EXPECT_TRUE(emits(kMGPipeSubsystemSamplers));
+    EXPECT_TRUE(emits(kMGPipeSubsystemPrograms));
+    // bit 7 without bit 10: FINE, and it is P3a's shipped configuration - no P4a family is live
+    // because none of their own bits is set, and that is the ONLY reason.
+    MG_Config::Features.PipePush = kMGPipeSubsystemResources;
+    EXPECT_FALSE(emits(kMGPipeSubsystemFramebuffer));
+    EXPECT_FALSE(emits(kMGPipeSubsystemTextureResources));
+    EXPECT_FALSE(emits(kMGPipeSubsystemSamplers));
+    EXPECT_FALSE(emits(kMGPipeSubsystemPrograms));
+
+    // ---- AND THE P2/P3a FAMILIES ARE NOT NARROWED BY ANY OF IT: their bits are outside
+    //      kMGPipeP4aFamilySubsystems, so they have no dependency row and no consumer conjunct.
+    //      This is what makes "nothing that emits today changes" checkable rather than asserted.
+    MG_Config::Features.PipePush = kMGPipeSubsystemVertexInput;
+    EXPECT_TRUE(emits(kMGPipeSubsystemVertexInput))
+        << "bit 8 alone, with bit 7 clear: P3a's own rule, which this table must not touch";
 }
 
 // ============================ M4 ============================
