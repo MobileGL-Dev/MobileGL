@@ -134,6 +134,8 @@ add_executable(MobileGLIntegrationTest
     Scenarios/CsoContentAddressingScenario.cpp
     Scenarios/ResourceSubsystemControlScenario.cpp
     Scenarios/TextureParamsWithoutASamplerViewScenario.cpp
+    Scenarios/TextureUploadShapeScenario.cpp
+    Scenarios/ObjectSubsystemControlScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
@@ -564,6 +566,23 @@ if (MOBILEGL_PIPE_PUSH)
         endif()
     endforeach()
 
+    # The client-side emitter of P4a's four suppressor-visible emission counters, which is what
+    # ObjectSubsystemControl reads. Same shape and same reason as the CSO and map-persistent
+    # emitter probes above: the emitters are minted in MG_Impl/Pipe (packages B and C), header-only
+    # by design (D-P), so the question is "does any source there emit it", not "does a named file
+    # exist". Until one does, every counter in the emit[] bracket is structurally zero in BOTH arms
+    # of the A/B and an assertion about their difference would be a statement about nothing.
+    mgl_itest_probe_for_symbol(MGL_ITEST_OBJECT_EMITTER
+        "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe" "FramebufferEmissions")
+    if (MGL_ITEST_OBJECT_EMITTER)
+        message(STATUS "Integration tests: P4a's object emissions have an emitter "
+                       "(${MGL_ITEST_OBJECT_EMITTER})")
+        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_OBJECT_EMITTER_PRESENT=1")
+    else()
+        message(STATUS "Integration tests: no MG_Impl/Pipe source emits FramebufferEmissions - "
+                       "ObjectSubsystemControl's emission case will SKIP")
+    endif()
+
     mgl_itest_probe_for_symbol(MGL_ITEST_MAGMA_ABA
         "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectVulkan" "PipeHandleAbaControl")
     if (MGL_ITEST_MAGMA_ABA)
@@ -576,8 +595,9 @@ if (MOBILEGL_PIPE_PUSH)
     endif()
 else()
     message(STATUS "Integration tests: pull build - HandleRecycle.{Handles,AbaControl}, "
-                   "CsoContentAddressing and ResourceSubsystemControl stay registered (G2) and SKIP: "
-                   "every arm they assert is compiled only under MOBILEGL_PIPE_PUSH")
+                   "CsoContentAddressing, ResourceSubsystemControl, ObjectSubsystemControl and "
+                   "TextureUploadShape stay registered (G2) and SKIP: every arm they assert is "
+                   "compiled only under MOBILEGL_PIPE_PUSH")
 endif()
 
 mgl_itest_join_environment(MGL_ITEST_GLES_ENVIRONMENT
@@ -1320,6 +1340,108 @@ gtest_discover_tests(MobileGLIntegrationTest
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_GLES_ARENA_SUBSYSTEM_OFF_ENVIRONMENT}"
+)
+
+# --- G12: the P4a subsystem A/B, and its dependency refusal ---------------------------
+#
+# THE MASKS ARE THE TWO PHASE CONSTANTS, exactly as the P3a block above: 0x1fff is
+# kMGPipeSubsystemsMigratedAtP4a (the push build's default) and 0x1ff is
+# kMGPipeSubsystemsMigratedAtP3a, which is that default with bits 9 (framebuffer), 10 (texture
+# resources), 11 (samplers) and 12 (programs) cleared. THIS is the phase's "new 0x1ff off-lane": the
+# constant P3a shipped survives as P4a's A/B control, and a lane that spelled its own bit pattern
+# would stop being the shape that ships the first time the default moved.
+#
+# THE THIRD LANE IS THE DEPENDENCY REFUSAL (D-K2) and it is the one entry in this family that is not
+# vacuous before the emitters land: 0x9ff sets the sampler subsystem (bit 11) WITHOUT the texture
+# resource subsystem (bit 10) that every MGPBoundView::Texture and MGPImageView::Res depends on, and
+# the bring-up must log ONE error naming both bits and run the legacy sampler arm. That is a
+# decision made from the bitmask alone, so it is assertable on a tree where nothing emits yet - and
+# a half-honoured mask is invisible in the pixels by construction, which is why it needs an entry
+# rather than a code comment.
+#
+# ONE CASE PER LANE, through TEST_FILTER, and it is a constraint rather than a preference: each case
+# READS the library's log and the log is a per-LANE resource (the library opens it fopen(path, "w"),
+# so every process in a lane truncates it). Two entries in one lane race under `ctest -j` with a
+# failure indistinguishable from "the counter was never emitted". Same rule as the CSO lanes, the
+# map-persistent lanes and the verify arming lane.
+#
+# DirectGLES only. P4a migrates Espryt's framebuffer, texture, sampler and program paths; Magma's
+# are P7 and register nothing here, so a DirectVulkan lane would be measuring the client emitters
+# against a backend nobody asked to change.
+#
+# Registered in EVERY build, including the pull build where none of the counters exists, so that
+# `ctest -L integration-gpu` stays name-for-name identical between pull and push (gate G2). In a
+# pull build MGITEST_PIPE_PUSH_BUILD is absent and every one of these cases skips saying so.
+mgl_itest_join_environment(MGL_ITEST_GLES_OBJECT_SUBSYSTEM_ON_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_OBJECT_SUBSYSTEM_LANE=on"
+    "MOBILEGL_PIPE_PUSH=0x1fff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/object-subsystem-on-DirectGLES.log"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_GLES_OBJECT_SUBSYSTEM_OFF_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_OBJECT_SUBSYSTEM_LANE=off"
+    "MOBILEGL_PIPE_PUSH=0x1ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/object-subsystem-off-DirectGLES.log"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_GLES_OBJECT_SUBSYSTEM_REFUSED_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_OBJECT_SUBSYSTEM_LANE=refused"
+    "MOBILEGL_PIPE_PUSH=0x9ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/object-subsystem-refused-DirectGLES.log"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.ObjectSubsystemControl.On."
+    TEST_FILTER "ObjectSubsystemControlScenario.ClearingTheP4aBitsStopsTheEmissionsAndNotThePixels"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_ON_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.ObjectSubsystemControl.Off."
+    TEST_FILTER "ObjectSubsystemControlScenario.ClearingTheP4aBitsStopsTheEmissionsAndNotThePixels"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_OFF_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.ObjectSubsystemControl.Refused."
+    TEST_FILTER "ObjectSubsystemControlScenario.ASamplerBitWithoutTheTextureBitIsRefusedAndNamed"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_REFUSED_ENVIRONMENT}"
+)
+
+# --- The texture upload shape: RECORDED, NOT GATED in P4a (D-D4) ----------------------
+#
+# SSIM is blind to the box-versus-rect upload shape and the Mali cliff it hides is ~+6 ms/frame, so
+# the shape needs a number - two numbers, in fact, the server's tex[emit= box= rect= jobs=] and the
+# client's emit[ctu=], which agreeing is the whole reason both are published (D-L). What this lane
+# asserts is that the numbers could be READ, that the server bracket's own arithmetic holds and that
+# the two sides agree when both are non-zero; WHICH shape each texture took is RecordProperty'd and
+# printed for MEASUREMENTS.md. P3b/P4b turns it into a gate against a gold standard, with the Mali
+# frame-time delta published beside it - gating a shape this phase has not finished deciding would
+# either pin today's shape as the answer or fail on the change that is the next phase's point.
+#
+# Its own log path and its own single-case filter, for the per-lane-log reason above.
+mgl_itest_join_environment(MGL_ITEST_GLES_TEXTURE_UPLOAD_SHAPE_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_TEXTURE_UPLOAD_SHAPE_LANE=1"
+    "MOBILEGL_PIPE_PUSH=0x1fff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/texture-upload-shape-DirectGLES.log"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.TextureUploadShape."
+    TEST_FILTER "TextureUploadShapeScenario.TheEmittedUploadShapeIsRecordedAndTheTwoSidesAgree"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_TEXTURE_UPLOAD_SHAPE_ENVIRONMENT}"
 )
 
 # --- G9: the mandatory red-before scenario -------------------------------------------
