@@ -48,6 +48,20 @@
 //       that the refusal is NAMED and that the run then produces the same pixels as any other
 //       lane: a refusal that half-ran, or that aborted, would both be failures here.
 //
+//   refused-texture (MOBILEGL_PIPE_PUSH=0x5ff = bits 0..8 plus bit 10, texture resources, WITHOUT
+//       bit 11)
+//       D-K2's FOURTH row (ID-15), and the direction the brief originally called harmless.
+//       MGPTextureParams::BuiltinSampler is a SamplerCso HANDLE and only bit 11 mints sampler
+//       CSOs, so with bit 10 alone every set_texture_params would carry a null there and the
+//       applier's Fatal{ProtocolCorruption} is the next thing that happens. Same two assertions
+//       as the lane above, with the two bits' roles swapped.
+//
+//   both refusal lanes
+//       "NAMED" means ONE LINE of the library's log, at ERROR severity, that says it REFUSED and
+//       names both bits. Not a substring anywhere in the file: the word "sampler" appears in
+//       almost any log the sampler path writes to, and an assertion that cannot go red for its
+//       stated reason is worse than no assertion (review F-M6).
+//
 //   every lane
 //       THE PIXELS MUST NOT MOVE. The workload draws one solid-colour quad through a texture, an
 //       explicit sampler object and a user framebuffer, and every lane must read back that colour.
@@ -72,6 +86,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -97,6 +112,12 @@ namespace MGITest {
         constexpr const char* kLaneOn = "on";
         constexpr const char* kLaneOff = "off";
         constexpr const char* kLaneRefused = "refused";
+        // D-K2's FOURTH row (ID-15): bit 10 without bit 11. 0x5ff is 0x1ff plus bit 10.
+        constexpr const char* kLaneRefusedTexture = "refused-texture";
+
+        bool LaneIsARefusalLane(const std::string& lane) {
+            return lane == kLaneRefused || lane == kLaneRefusedTexture;
+        }
 
         constexpr int kInset = 2;
         constexpr int kTextureSize = 4;
@@ -132,6 +153,70 @@ void main() { oColor = texture(uTex, vUv); }
         std::string LaneName() {
             const char* lane = std::getenv(kLaneMarker);
             return lane != nullptr ? std::string(lane) : std::string();
+        }
+
+        // ---- reading the refusal out of the library's own log ------------------------------
+        //
+        // THE UNIT IS A LINE, AND THE LINE HAS TO BE THE REFUSAL (review F-M6). The first cut of
+        // this asked whether the WHOLE FILE contained a lowercase "sampler" and whether it
+        // contained "texture resource", anywhere, in any order, at any severity. Both are true of
+        // almost any log the moment the sampler path says anything at all, so the assertion could
+        // not go red for the reason it claims and the one P4a control that is not vacuous before
+        // the emitters land would have been vacuous too.
+        //
+        // What is matched instead is one line that is ALL of:
+        //   * at ERROR severity - the library writes "[<time>] [<os> <thread>/<TAG>]: <message>",
+        //     one record per line (MG_Util/Debug/Log.cpp), and D-K2 asks for an MGLOG_E. A refusal
+        //     that was demoted to a D or a W is a refusal an operator's log will not carry;
+        //   * carrying the word REFUS(ING) - so a line that merely mentions the two bits (a future
+        //     summary, a comment echoed into the log) is not mistaken for the decision;
+        //   * naming the bit that was SET and the bit it NEEDED, on that same line.
+        //
+        // Espryt's text is one MGLOG_E from the helper the three dependent families share
+        // (Managers.cpp, PipeSubsystemDependencyMissing): "MGPipe: <A> (bit N) is set but <B>
+        // (bit M) is clear; <why> - REFUSING the dependent bit and running the legacy arm. Set
+        // both bits, or clear both". Three spellings are accepted per bit - the constant's name,
+        // "(bit N)", and the hexadecimal mask - so the assertion pins the DECISION and not the
+        // prose around it.
+        bool LineNamesTheBit(const std::string& line, const std::vector<std::string>& spellings) {
+            for (const std::string& spelling : spellings) {
+                if (line.find(spelling) != std::string::npos) return true;
+            }
+            return false;
+        }
+
+        // The matching line, or an empty string. Returned rather than a bool so the case can print
+        // what it found: a reader of a green refusal lane must be able to see the sentence.
+        std::string FindTheRefusalLine(const std::string& log,
+                                       const std::vector<std::string>& bitThatWasSet,
+                                       const std::vector<std::string>& bitThatWasNeeded) {
+            std::size_t pos = 0;
+            while (pos <= log.size()) {
+                const std::size_t newline = log.find('\n', pos);
+                const std::string line = log.substr(
+                    pos, newline == std::string::npos ? std::string::npos : newline - pos);
+                const bool atErrorSeverity = line.find("/ERROR]") != std::string::npos;
+                const bool saysItRefused = line.find("REFUS") != std::string::npos ||
+                                           line.find("refus") != std::string::npos;
+                if (atErrorSeverity && saysItRefused && LineNamesTheBit(line, bitThatWasSet) &&
+                    LineNamesTheBit(line, bitThatWasNeeded)) {
+                    return line;
+                }
+                if (newline == std::string::npos) break;
+                pos = newline + 1;
+            }
+            return std::string();
+        }
+
+        // The three accepted spellings of each of the two P4a bits this file's two refusal lanes
+        // are about. MGPipe.h: bit 10 = kMGPipeSubsystemTextureResources = 0x400,
+        // bit 11 = kMGPipeSubsystemSamplers = 0x800.
+        std::vector<std::string> SamplerBitSpellings() {
+            return {"kMGPipeSubsystemSamplers", "(bit 11)", "0x800"};
+        }
+
+        std::vector<std::string> TextureResourceBitSpellings() {
+            return {"kMGPipeSubsystemTextureResources", "(bit 10)", "0x400"};
         }
 
         class ObjectSubsystemControlScenario : public ScenarioTest {
@@ -305,12 +390,13 @@ void main() { oColor = texture(uTex, vUv); }
             if (!Ready()) return;
             SkipUnlessTheLaneIsAssertableHere(/*needsTheEmitters=*/true);
             if (IsSkipped()) return;
-            if (m_lane == kLaneRefused) {
-                GTEST_SKIP() << "the refusal lane runs ASamplerBitWithoutTheTextureBitIsRefusedAndNamed "
-                                "instead: at 0x9ff the sampler subsystem is refused at bring-up, so "
-                                "the emission counts are neither the on-lane's nor the off-lane's and "
-                                "asserting either would be reading a third arm as if it were one of "
-                                "the two.";
+            if (LaneIsARefusalLane(m_lane)) {
+                GTEST_SKIP() << "the refusal lanes run their own case instead (0x9ff -> "
+                                "ASamplerBitWithoutTheTextureBitIsRefusedAndNamed, 0x5ff -> "
+                                "ATextureBitWithoutTheSamplerBitIsRefusedAndNamed): a refused "
+                                "subsystem's emission counts are neither the on-lane's nor the "
+                                "off-lane's, and asserting either would be reading a third arm as "
+                                "if it were one of the two.";
             }
 
             BindDefaultFramebuffer();
@@ -379,9 +465,9 @@ void main() { oColor = texture(uTex, vUv); }
                     << window.line;
             } else {
                 FAIL() << "unknown " << kLaneMarker << " value '" << m_lane
-                       << "': the arms are on / off / refused. Reading an unrecognised name as "
-                          "either would make this lane assert the other arm's expectation while "
-                          "claiming to test this one.";
+                       << "': the arms are on / off / refused / refused-texture. Reading an "
+                          "unrecognised name as any of them would make this lane assert another "
+                          "arm's expectation while claiming to test this one.";
             }
 
             // ... and the picture is the same whichever arm ran.
@@ -469,27 +555,135 @@ void main() { oColor = texture(uTex, vUv); }
                 << "the library wrote nothing to " << PipeStatsWindow::LibraryLogPath()
                 << ", so the refusal cannot be read back. MOBILEGL_LOG_FILE_PATH is the only channel "
                    "this module has for the library's own report.";
-            // Named, not merely present: the refusal has to say which bit it refused AND which bit
-            // it needed, because "a sampler bit was ignored" without the dependency is a message an
-            // operator cannot act on. Both spellings are accepted - the constant's name and the
-            // hexadecimal mask - so the assertion does not pin the message's wording.
-            const bool namesTheSampler = log.find("Sampler") != std::string::npos ||
-                                         log.find("sampler") != std::string::npos ||
-                                         log.find("0x800") != std::string::npos;
-            const bool namesTheTexture = log.find("TextureResources") != std::string::npos ||
-                                         log.find("texture resource") != std::string::npos ||
-                                         log.find("0x400") != std::string::npos;
-            EXPECT_TRUE(namesTheSampler && namesTheTexture)
+            // ONE LINE, at ERROR severity, saying it refused and naming BOTH bits. See
+            // FindTheRefusalLine: a substring search over the whole file cannot go red for the
+            // reason this case claims (F-M6).
+            const std::string refusal =
+                FindTheRefusalLine(log, SamplerBitSpellings(), TextureResourceBitSpellings());
+            EXPECT_FALSE(refusal.empty())
                 << "MOBILEGL_PIPE_PUSH=0x9ff sets the sampler subsystem (bit 11) without the texture "
-                   "resource subsystem (bit 10) it depends on, and the library's log names neither "
-                   "of them. D-K2 requires ONE MGLOG_E naming both bits and a fall back to the "
-                   "legacy sampler arm; a mask that is silently half-honoured is the failure this "
-                   "case exists to catch, and it is invisible in the pixels by construction. The log "
-                   "was " << log.size() << " bytes.";
+                   "resource subsystem (bit 10) it depends on, and no single ERROR line of the "
+                   "library's log both says it REFUSED and names the two bits. D-K2 requires ONE "
+                   "MGLOG_E naming both and a fall back to the legacy sampler arm; a mask that is "
+                   "silently half-honoured is the failure this case exists to catch, and it is "
+                   "invisible in the pixels by construction. Accepted spellings per bit are the "
+                   "constant's name, '(bit 11)' / '(bit 10)', and '0x800' / '0x400'. The log was "
+                << log.size() << " bytes and is at " << PipeStatsWindow::LibraryLogPath() << ".";
+            if (!refusal.empty()) {
+                // Printed on the pass as well: a reader of a green refusal lane must be able to
+                // see the sentence the lane went green on.
+                std::cout << "[ ObjectSubsystemControl ] refusal line: " << refusal << std::endl;
+                RecordProperty("refusal_line", refusal.c_str());
+            }
 
             EXPECT_TRUE(RegionIsMostly(image, kInset, image.Width() - kInset, kInset,
                                        image.Height() - kInset, "green", 0.0,
                                        "the sampled draw [refused]"))
+                << "the refused configuration did not draw what every other lane draws. A refusal is "
+                   "supposed to run the LEGACY arm, which is the arm that ships in a pull build - so "
+                   "the pixels are the one thing it may not change.";
+
+            ReleaseTheWorkload();
+        }
+
+        // ------------------------------------------------------------------------------------
+        // D-K2's FOURTH dependency row, in the OTHER direction: bit 10 without bit 11 (ID-15).
+        //
+        // 0x5ff is bits 0..8 plus bit 10 (texture resources) and WITHOUT bit 11 (samplers).
+        //
+        // WHY THIS IS A REFUSAL AND NOT THE "FINE" MIRROR PAIR THE BRIEF ORIGINALLY CALLED IT.
+        // BRIEF-P4A.md's D-K2 says "bit 10 without bit 11 is fine", and that sentence is wrong for
+        // P4a AS BUILT: MGPTextureParams carries a BuiltinSampler, which is a SamplerCso HANDLE,
+        // and only bit 11 mints sampler CSOs - c0b's four unconditional mints deliberately exclude
+        // that kind (contract-v2.md), and package C content-addresses them through its own cache
+        // (ID-14). With bit 10 set and bit 11 clear every set_texture_params would therefore carry
+        // a NULL BuiltinSampler, which the applier treats as Fatal{ProtocolCorruption} (wire H1),
+        // and minting it client-side in the arm that exists to exclude samplers was rejected. So
+        // the dependency is real and it has to be refused at bring-up, exactly like bit 11 without
+        // bit 10 above and bit 8 without bit 7 one phase earlier. ID-15 puts the refusal in the
+        // texture family's Resolve*SubsystemArm - package D's Managers.cpp - and this case is the
+        // pin that says it is there.
+        //
+        // ON A TREE WHOSE BACKEND DOES NOT HONOUR P4a's MASK THIS SKIPS, NAMED, exactly as the
+        // 0x9ff case does and for the same reason: a backend that never reads the four constants
+        // cannot refuse a dependency between two of them, and reporting the absence of an
+        // unimplemented subsystem as a failure is what ID-2 forbids. Once the backend DOES name
+        // them the case is a hard pin, which is the point - if D's texture-family resolver honours
+        // the mask and does not carry this row, this entry is where that shows.
+        // ------------------------------------------------------------------------------------
+        TEST_F(ObjectSubsystemControlScenario, ATextureBitWithoutTheSamplerBitIsRefusedAndNamed) {
+            if (!Ready()) return;
+            // needsTheEmitters=false, for the 0x9ff case's reason: a bring-up decision made from
+            // the bitmask alone is assertable before any emitter exists.
+            SkipUnlessTheLaneIsAssertableHere(/*needsTheEmitters=*/false);
+            if (IsSkipped()) return;
+            if (m_lane != kLaneRefusedTexture) {
+                GTEST_SKIP() << "runs only in the texture-side refusal lane "
+                                "(MOBILEGL_PIPE_PUSH=0x5ff): every other lane configures a mask "
+                                "whose dependencies are satisfied or a different refusal, so there "
+                                "is nothing here to find and a search for one would report a "
+                                "healthy lane as red.";
+            }
+            {
+                const std::string& backend = Gl().BackendName();
+                const std::string marker =
+                    "MGITEST_HANDLE_REKEY_OBJECTS_" + (backend == "DirectVulkan"
+                                                           ? std::string("DirectVulkan")
+                                                           : std::string("DirectGLES"));
+                if (!BuildMarkerIsSet(marker.c_str())) {
+                    GTEST_SKIP() << "subsystem not implemented on this tree: no source under "
+                                    "MobileGL/MG_Backend/"
+                                 << backend
+                                 << " names any of kMGPipeSubsystem{Framebuffer, TextureResources, "
+                                    "Samplers, Programs}, so this backend does not honour P4a's mask "
+                                    "and cannot refuse a dependency inside it. D-K2's fourth row "
+                                    "(bit 10 requires bit 11, ID-15) lives in the texture family's "
+                                    "Resolve*SubsystemArm beside the bit-11-requires-bit-10 and "
+                                    "bit-8-requires-bit-7 refusals, which is P4a package D's file; "
+                                    "this control arms itself when that lands. The lane itself is "
+                                    "not wasted: the library came up under 0x5ff, which on a tree "
+                                    "with no P4a arm is P3a's mask plus one inert bit, and a mask "
+                                    "that aborted a bring-up would have failed this entry before "
+                                    "the skip.";
+                }
+            }
+
+            BindDefaultFramebuffer();
+            ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+            RunTheWorkload();
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR))
+                << "the workload left a GL error behind on the refused lane, which would mean the "
+                   "refusal did not fall back cleanly to the legacy arm";
+            const Image image = ReadPixels(Gl().Width(), Gl().Height());
+            Gl().EndFrame();
+
+            const std::string log = PipeStatsWindow::ReadWholeFile(PipeStatsWindow::LibraryLogPath());
+            ASSERT_FALSE(log.empty())
+                << "the library wrote nothing to " << PipeStatsWindow::LibraryLogPath()
+                << ", so the refusal cannot be read back. MOBILEGL_LOG_FILE_PATH is the only channel "
+                   "this module has for the library's own report.";
+            // The same line shape as the 0x9ff arm, with the two bits' roles swapped: the bit that
+            // was SET is the texture-resource one and the bit it NEEDED is the sampler one.
+            const std::string refusal =
+                FindTheRefusalLine(log, TextureResourceBitSpellings(), SamplerBitSpellings());
+            EXPECT_FALSE(refusal.empty())
+                << "MOBILEGL_PIPE_PUSH=0x5ff sets the texture resource subsystem (bit 10) without "
+                   "the sampler subsystem (bit 11) that MGPTextureParams::BuiltinSampler depends on, "
+                   "and no single ERROR line of the library's log both says it REFUSED and names the "
+                   "two bits. Only bit 11 mints sampler CSOs, so every set_texture_params emitted "
+                   "under this mask would carry a null BuiltinSampler and the applier's Fatal is the "
+                   "next thing that happens - which is why this pair is a refusal at bring-up and "
+                   "not the harmless mirror of the 0x9ff one. Accepted spellings per bit are the "
+                   "constant's name, '(bit 10)' / '(bit 11)', and '0x400' / '0x800'. The log was "
+                << log.size() << " bytes and is at " << PipeStatsWindow::LibraryLogPath() << ".";
+            if (!refusal.empty()) {
+                std::cout << "[ ObjectSubsystemControl ] refusal line: " << refusal << std::endl;
+                RecordProperty("refusal_line", refusal.c_str());
+            }
+
+            EXPECT_TRUE(RegionIsMostly(image, kInset, image.Width() - kInset, kInset,
+                                       image.Height() - kInset, "green", 0.0,
+                                       "the sampled draw [refused-texture]"))
                 << "the refused configuration did not draw what every other lane draws. A refusal is "
                    "supposed to run the LEGACY arm, which is the arm that ships in a pull build - so "
                    "the pixels are the one thing it may not change.";

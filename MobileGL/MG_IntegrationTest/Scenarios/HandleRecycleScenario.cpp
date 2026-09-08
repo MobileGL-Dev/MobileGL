@@ -173,6 +173,78 @@ namespace MGITest {
 
         bool RunningInAHandleRecycleLane() { return std::getenv(kArmMarker) != nullptr; }
 
+        // Does THIS LANE run with a live client slot allocator behind it - i.e. did it pin a
+        // non-zero MOBILEGL_PIPE_PUSH?
+        //
+        // The leak cases below need this and not the arm (review F-m4). The arm says which key a
+        // pixel assertion is about; the leak assertion is not about a key at all, it is about the
+        // allocator, and "the allocator has slots to leak" is exactly "the mask is not zero". The
+        // two questions almost coincide - DirectGLES/DirectVulkan.HandleRecycle.Legacy. and
+        // DirectVulkan.HandleRecycle.AbaControl. do pin MOBILEGL_PIPE_PUSH=0 - but
+        // DirectVulkan.HandleRecycle.AbaControlHandles. pins the shipping 0x1fff WITH a live
+        // allocator, and gating on `arm == Handles` declined it while telling the reader the
+        // lane had no allocator, which was false. Reading the lane's own pin covers all three.
+        //
+        // The ENVIRONMENT is the right place to read it from and the library's config is not:
+        // MG_Config is inside the library, this module links the shipping .so on Android, and the
+        // pin is the LANE's statement about what it configured. An entry that pinned nothing (the
+        // ambient ones) is not a lane and answers false - the build default may well be non-zero
+        // there, but an ambient entry configured no arm, no allocator expectation and no private
+        // log, which is the reason the whole file declines them.
+        bool LanePinnedALiveAllocator() {
+            const char* mask = std::getenv("MOBILEGL_PIPE_PUSH");
+            if (mask == nullptr || mask[0] == '\0') return false;
+            // strtoull handles the 0x form every lane spells it in, and a value this module
+            // cannot parse is treated as "no pin" rather than as a non-zero mask.
+            char* end = nullptr;
+            const unsigned long long value = std::strtoull(mask, &end, 0);
+            return end != nullptr && *end == '\0' && value != 0ull;
+        }
+
+        // ---- which of the allocator's TWO spaces a leak case measures --------------------
+        //
+        // Every kind but ShaderCso has one space. ShaderCso has two: the ordinary program slots,
+        // and the reserved high band the program-pipeline COMPOSITES are minted out of through
+        // the allocator's one door, AllocateComposite (D-H7). c0b split their high-water marks
+        // (contract-v2.md 4.3) precisely so that a leak case can be written about either, and
+        // the composite's case has to read the BAND's - a band slot that never comes back moves
+        // neither of the ordinary numbers, which is the review's F-M4: the case would have
+        // reported green having never looked at the thing it exists for.
+        //
+        // Stated at every call site rather than defaulted, for PipeSlotPeek's `no default:`
+        // reason: a new leak case must say which space it is about, because the wrong answer is
+        // a green that asserts nothing rather than a compile error.
+        enum class SlotSpace {
+            Ordinary,
+            CompositeBand,
+        };
+
+        const char* SpaceSuffix(SlotSpace space) {
+            return space == SlotSpace::CompositeBand ? " [composite band]" : "";
+        }
+
+        bool ReadSpaceLiveCount(PipeSlotKind kind, SlotSpace space, unsigned* out) {
+            return space == SlotSpace::CompositeBand ? MGITest::PeekPipeCompositeSlotLiveCount(out)
+                                                     : MGITest::PeekPipeSlotLiveCount(kind, out);
+        }
+
+        bool ReadSpaceHighWater(PipeSlotKind kind, SlotSpace space, unsigned* out) {
+            return space == SlotSpace::CompositeBand ? MGITest::PeekPipeCompositeSlotHighWater(out)
+                                                     : MGITest::PeekPipeSlotHighWater(kind, out);
+        }
+
+        // The value a space's high-water mark has when NOTHING of it was ever handed out: 0 for
+        // the ordinary space, and the band's BASE for the band, because CompositeHighWater() is
+        // an absolute slot number. Reading this wrong is what would turn the band's "nothing was
+        // ever minted" skip into a silent pass on a tree that mints composites.
+        bool ReadSpaceHighWaterFloor(SlotSpace space, unsigned* out) {
+            if (space != SlotSpace::CompositeBand) {
+                *out = 0;
+                return true;
+            }
+            return MGITest::PeekPipeCompositeSlotBandBase(out);
+        }
+
         const char* ArmName(Arm arm) {
             switch (arm) {
                 case Arm::Handles: return "Handles";
@@ -622,27 +694,48 @@ void main() { oColor = texture(uTex, vUv); }
             // vacuous - which is the one of the three that catches a death path that works but
             // runs at the wrong time (a deferred queue, a frame-boundary sweep).
             //
-            // `maxInFlight` is how many slots of the kind one round may legitimately hold at its
-            // peak: 1 where the round creates one object, more where the round creates several of
-            // the same kind (a pipeline composite's round also creates its two stage programs, and
-            // all three are ShaderCsos).
+            // `space` says WHICH of the allocator's two spaces the three assertions are about, and
+            // it is the difference between an assertion and a green that reads the wrong counter:
+            // only ShaderCso has two, and only the composite case is about the band.
+            //
+            // `maxInFlight` is how many slots of the kind IN THAT SPACE one round may legitimately
+            // hold at its peak: 1 where the round creates one object of it, more where the round
+            // creates several. The composite round creates three ShaderCsos - two stage programs
+            // and the composite they are flattened into - but only ONE of the three is a band
+            // slot, so the band's answer is 1 and the ordinary space's would have been 3.
             using ChurnRound = std::function<void(bool checkPixels, const std::function<void()>& observe)>;
-            void AssertChurnReturnsEverySlot(PipeSlotKind kind, const char* kindName,
+            void AssertChurnReturnsEverySlot(PipeSlotKind kind, SlotSpace space, const char* kindName,
                                              const char* owner, unsigned maxInFlight,
                                              const ChurnRound& round) {
-                if (m_arm != Arm::Handles) {
-                    GTEST_SKIP() << "the client mints a " << kindName
-                                 << " slot only when its subsystem is on, and only the Handles arm "
-                                    "pins the shipping mask (0x1fff). The Legacy and AbaControl "
-                                    "lanes run MOBILEGL_PIPE_PUSH=0, where there is no allocator to "
-                                    "leak from.";
+                // THE LANE'S OWN PIN, not the arm (F-m4). The Legacy and AbaControl lanes run
+                // MOBILEGL_PIPE_PUSH=0 and really have no allocator to leak from; the Handles
+                // lanes and DirectVulkan.HandleRecycle.AbaControlHandles. all pin the shipping
+                // 0x1fff and do. The old gate declined the third of those while telling the
+                // reader it had no allocator, which was false, and left one lane's coverage on
+                // the table.
+                if (!LanePinnedALiveAllocator()) {
+                    GTEST_SKIP() << "this entry pinned no non-zero MOBILEGL_PIPE_PUSH, so there is "
+                                    "no client slot allocator behind it to leak from: the "
+                                    "HandleRecycle.Legacy. and HandleRecycle.AbaControl. lanes pin "
+                                    "MOBILEGL_PIPE_PUSH=0 on purpose (they are about the pre-handle "
+                                    "guards), and the ambient entries configure no lane at all. The "
+                                    "lanes that carry this assertion are the two "
+                                    "HandleRecycle.Handles. ones and "
+                                    "DirectVulkan.HandleRecycle.AbaControlHandles., all of which pin "
+                                    "the shipping mask.";
                 }
                 unsigned probe = 0;
-                if (!MGITest::PeekPipeSlotLiveCount(kind, &probe)) {
+                if (!ReadSpaceLiveCount(kind, space, &probe)) {
                     GTEST_SKIP() << "the client slot allocator is out of reach from this module (a "
                                     "pull build has none, and the Android link resolves no internal "
                                     "symbol), so 'could not look' would be reported as 'did not "
                                     "leak'";
+                }
+                unsigned highWaterFloor = 0;
+                if (!ReadSpaceHighWaterFloor(space, &highWaterFloor)) {
+                    GTEST_SKIP() << "the composite band's base is out of reach from this module, so "
+                                    "'no composite was ever minted' cannot be told apart from 'the "
+                                    "band did not grow' and a green here would assert nothing";
                 }
 
                 // TWO WARM-UP ROUNDS BEFORE THE BASELINE IS TAKEN, so what is measured is growth
@@ -654,7 +747,7 @@ void main() { oColor = texture(uTex, vUv); }
                 unsigned peakLive = 0;
                 const std::function<void()> observe = [&]() {
                     unsigned live = 0;
-                    if (MGITest::PeekPipeSlotLiveCount(kind, &live) && live > peakLive) peakLive = live;
+                    if (ReadSpaceLiveCount(kind, space, &live) && live > peakLive) peakLive = live;
                 };
                 round(/*checkPixels=*/true, observe);
                 round(/*checkPixels=*/false, observe);
@@ -662,8 +755,8 @@ void main() { oColor = texture(uTex, vUv); }
 
                 unsigned liveBefore = 0;
                 unsigned highWaterBefore = 0;
-                ASSERT_TRUE(MGITest::PeekPipeSlotLiveCount(kind, &liveBefore));
-                ASSERT_TRUE(MGITest::PeekPipeSlotHighWater(kind, &highWaterBefore));
+                ASSERT_TRUE(ReadSpaceLiveCount(kind, space, &liveBefore));
+                ASSERT_TRUE(ReadSpaceHighWater(kind, space, &highWaterBefore));
 
                 constexpr int kChurn = 48;
                 for (int i = 0; i < kChurn; ++i) round(/*checkPixels=*/false, observe);
@@ -671,12 +764,13 @@ void main() { oColor = texture(uTex, vUv); }
 
                 unsigned liveAfter = 0;
                 unsigned highWaterAfter = 0;
-                ASSERT_TRUE(MGITest::PeekPipeSlotLiveCount(kind, &liveAfter));
-                ASSERT_TRUE(MGITest::PeekPipeSlotHighWater(kind, &highWaterAfter));
+                ASSERT_TRUE(ReadSpaceLiveCount(kind, space, &liveAfter));
+                ASSERT_TRUE(ReadSpaceHighWater(kind, space, &highWaterAfter));
                 std::cout << "[ HandleRecycle ] backend=" << Gl().BackendName() << " " << kindName
-                          << " live " << liveBefore << " -> " << liveAfter << " (peak " << peakLive
-                          << "), high water " << highWaterBefore << " -> " << highWaterAfter
-                          << " over " << kChurn << " create/draw/destroy rounds" << std::endl;
+                          << SpaceSuffix(space) << " live " << liveBefore << " -> " << liveAfter
+                          << " (peak " << peakLive << "), high water " << highWaterBefore << " -> "
+                          << highWaterAfter << " (floor " << highWaterFloor << ") over " << kChurn
+                          << " create/draw/destroy rounds" << std::endl;
 
                 // NOTHING WAS EVER MINTED, which is not "did not leak" and must not be reported as
                 // one. On the P4a contract tree the client emits nothing for any of these kinds -
@@ -685,9 +779,9 @@ void main() { oColor = texture(uTex, vUv); }
                 // a kind it never saw. This is the same rule as the peek returning false, applied
                 // to the other way of not being able to look, and it arms itself the moment the
                 // owning package's emitter lands.
-                if (highWaterAfter == 0 && peakLive == 0 && liveAfter == 0) {
+                if (highWaterAfter == highWaterFloor && peakLive == 0 && liveAfter == 0) {
                     GTEST_SKIP() << "subsystem not implemented on this tree: the client minted no "
-                                 << kindName
+                                 << kindName << SpaceSuffix(space)
                                  << " slot at all over " << (kChurn + 2)
                                  << " create/draw/destroy rounds, so there is nothing here that "
                                     "could leak and a green would assert nothing. P4a package "
@@ -697,7 +791,7 @@ void main() { oColor = texture(uTex, vUv); }
                 }
 
                 EXPECT_EQ(liveAfter, liveBefore)
-                    << kChurn << " " << kindName
+                    << kChurn << " " << kindName << SpaceSuffix(space)
                     << " objects were created, drawn with and destroyed and "
                     << (liveAfter - liveBefore)
                     << " slots never came back. Each one holds a SlotState, a lifetime-id map node "
@@ -708,12 +802,12 @@ void main() { oColor = texture(uTex, vUv); }
                        "(D-I1) rather than from a backend death table. Backend "
                     << Gl().BackendName();
                 EXPECT_EQ(highWaterAfter, highWaterBefore)
-                    << "the " << kindName
+                    << "the " << kindName << SpaceSuffix(space)
                     << " slot space grew with the churn instead of recycling the slot the warm-up "
                        "rounds already handed out; the frees are not reaching the allocator's free "
                        "list";
                 EXPECT_LE(peakLive > liveBefore ? peakLive - liveBefore : 0u, maxInFlight)
-                    << "more than " << maxInFlight << " churned " << kindName
+                    << "more than " << maxInFlight << " churned " << kindName << SpaceSuffix(space)
                     << " object(s) were live at the allocator at once, so the deaths are arriving "
                        "late rather than at the destructor";
             }
@@ -1235,11 +1329,20 @@ void main() { oColor = texture(uTex, vUv); }
                 // The corruption IS the assertion: with the identity half of the framebuffer memo
                 // key defeated, the replacement inherits the dead framebuffer's record and its
                 // clear lands on the dead one's attachment.
-                EXPECT_NE(deadIsNotRed, 0)
+                // sawStale, not `deadIsNotRed != 0` (review F-m12): the weaker form is satisfied
+                // by a dead attachment full of GARBAGE, which is not the observation this control
+                // claims. sawStale is the predicate the case already computes and prints - the
+                // dead attachment is now the REPLACEMENT'S green, i.e. the replacement's clear
+                // landed there - so the assertion and the printed line say the same thing.
+                EXPECT_TRUE(sawStale)
                     << "[AbaControl expects the STALE framebuffer] the DEAD framebuffer's "
-                       "attachment is still the red it was cleared to in the warm-up, so the "
-                       "replacement's clear went to its own attachment after all and the ABA was "
-                       "not reproduced - the control has stopped controlling anything.";
+                       "attachment did not come back as the replacement's green, so the "
+                       "replacement's clear did not land on it and the ABA was not reproduced - "
+                       "the control has stopped controlling anything. Texels that are neither the "
+                       "warm-up red nor the replacement green are a third answer and are not a "
+                       "reproduction either ("
+                    << deadIsNotRed << " of " << (deadTexels.size() / 4)
+                    << " dead texels are not red).";
             } else {
                 EXPECT_EQ(replacementIsNotGreen, 0)
                     << "the replacement framebuffer's own attachment is not the colour it was "
@@ -1807,7 +1910,8 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
             ConfigureQuadVao(vao, buffer);
 
             AssertChurnReturnsEverySlot(
-                PipeSlotKind::Texture, "Texture", "B (clientfb)", /*maxInFlight=*/1u,
+                PipeSlotKind::Texture, SlotSpace::Ordinary, "Texture", "B (clientfb)",
+                /*maxInFlight=*/1u,
                 [&](bool checkPixels, const std::function<void()>& observe) {
                     const GLuint texture = MakeSolidTexture(0, 255, 0);
                     const Image image = DrawTexturedQuadAndRead(vao, texture);
@@ -1845,7 +1949,8 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
             // DeleteSamplerState), which is precisely why it needs a case of its own: a helper
             // that forgot one of its three frees leaks only that kind and nothing else moves.
             AssertChurnReturnsEverySlot(
-                PipeSlotKind::SamplerViewCso, "SamplerViewCso", "C (clientsp)", /*maxInFlight=*/1u,
+                PipeSlotKind::SamplerViewCso, SlotSpace::Ordinary, "SamplerViewCso", "C (clientsp)",
+                /*maxInFlight=*/1u,
                 [&](bool checkPixels, const std::function<void()>& observe) {
                     const GLuint texture = MakeSolidTexture(0, 255, 0);
                     const Image image = DrawTexturedQuadAndRead(vao, texture);
@@ -1874,7 +1979,8 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
             glGenFramebuffers(1, &fbo);
 
             AssertChurnReturnsEverySlot(
-                PipeSlotKind::Renderbuffer, "Renderbuffer", "B (clientfb)", /*maxInFlight=*/1u,
+                PipeSlotKind::Renderbuffer, SlotSpace::Ordinary, "Renderbuffer", "B (clientfb)",
+                /*maxInFlight=*/1u,
                 [&](bool checkPixels, const std::function<void()>& observe) {
                     GLuint renderbuffer = 0;
                     glGenRenderbuffers(1, &renderbuffer);
@@ -1920,7 +2026,8 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
             // allocator is therefore the only observable this kind has, which makes this case the
             // whole of its lifetime coverage rather than a supplement to a wire assertion.
             AssertChurnReturnsEverySlot(
-                PipeSlotKind::Framebuffer, "Framebuffer", "B (clientfb)", /*maxInFlight=*/1u,
+                PipeSlotKind::Framebuffer, SlotSpace::Ordinary, "Framebuffer", "B (clientfb)",
+                /*maxInFlight=*/1u,
                 [&](bool checkPixels, const std::function<void()>& observe) {
                     GLuint fbo = 0;
                     glGenFramebuffers(1, &fbo);
@@ -1959,7 +2066,8 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
             // path. The LOD bias moves per round, which changes the hash and nothing else.
             int round = 0;
             AssertChurnReturnsEverySlot(
-                PipeSlotKind::SamplerCso, "SamplerCso", "C (clientsp)", /*maxInFlight=*/1u,
+                PipeSlotKind::SamplerCso, SlotSpace::Ordinary, "SamplerCso", "C (clientsp)",
+                /*maxInFlight=*/1u,
                 [&](bool checkPixels, const std::function<void()>& observe) {
                     GLuint sampler = 0;
                     glGenSamplers(1, &sampler);
@@ -2015,7 +2123,8 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
             // shader moves per round.
             int round = 0;
             AssertChurnReturnsEverySlot(
-                PipeSlotKind::ShaderCso, "ShaderCso", "C (clientsp)", /*maxInFlight=*/1u,
+                PipeSlotKind::ShaderCso, SlotSpace::Ordinary, "ShaderCso", "C (clientsp)",
+                /*maxInFlight=*/1u,
                 [&](bool checkPixels, const std::function<void()>& observe) {
                     const std::string fs = "#version 330 core\nout vec4 oColor;\nvoid main() { "
                                            "oColor = vec4(0.0, 1.0, 0.0, 1.0) + vec4(" +
@@ -2079,12 +2188,19 @@ void main() {
 )";
             int round = 0;
             AssertChurnReturnsEverySlot(
-                PipeSlotKind::ShaderCso, "ShaderCso (pipeline composites)", "C (clientsp)",
-                // TWO in flight: a round creates two stage programs and the composite the pipeline
-                // flattens them into, and the two stage programs are ordinary ShaderCsos of the
-                // same kind. The composite is the third, and it is the one whose two release paths
-                // this case is about.
-                /*maxInFlight=*/3u,
+                PipeSlotKind::ShaderCso,
+                // THE BAND'S OWN COUNTERS, not the ordinary ShaderCso space's (review F-M4,
+                // contract-v2.md 4.3/7.6). A round creates THREE ShaderCsos - the two stage
+                // programs and the composite the pipeline flattens them into - and the two stage
+                // programs are ORDINARY slots. So the ordinary space moves in this case whether
+                // or not a composite ever comes back, the "nothing was ever minted" skip would
+                // not fire, and every assertion below would have been a statement about the two
+                // stage programs while the band - the double-free-refusal case the band exists to
+                // police - went unread.
+                SlotSpace::CompositeBand, "ShaderCso (pipeline composites)", "C (clientsp)",
+                // ONE in flight, because in the BAND a round holds exactly one slot: the
+                // composite. (Against the ordinary space the answer would have been three.)
+                /*maxInFlight=*/1u,
                 [&](bool checkPixels, const std::function<void()>& observe) {
                     // A DIFFERENT FRAGMENT STAGE PER ROUND: the composite is keyed on
                     // ProgramPipelineObject::ComputeDrawProgramSignature(), the per-stage

@@ -324,11 +324,37 @@ void main() { oColor = texture(uTex, vUv); }
                 << "tex[jobs=] must be at least tex[emit=]: a box emission is one driver upload job "
                    "and a rect-list emission is N. " << window.line;
 
-            // 3. the two sides agree, WHEN THERE ARE TWO SIDES. On the P4a contract tree the client
-            //    emits nothing (the emit headers are the contract's stubs), so ctu= is zero and the
-            //    honest reading is "one side only", recorded and not asserted - never a divergence
-            //    reported against a client that has not been written yet.
-            if (clientEmissions > 0) {
+            // 3. the two sides agree, WHEN THERE ARE TWO SIDES - and "there are two sides" is
+            //    answered by the BUILD, not by the number (review F-m7).
+            //
+            //    ctu= IS ALWAYS PRESENT IN A PUSH BUILD: PipeStats.cpp writes the field whether or
+            //    not anything ever incremented the counter, so `clientEmissions > 0` conflated
+            //    three different trees - "no client emitter exists", "the emitter exists and
+            //    emitted nothing", and "the counter was not published at all" - into one branch
+            //    that asserts nothing and prints a sentence that is only true of the first. Once
+            //    package B's texture emitter lands, an emitter that STOPPED emitting would read
+            //    exactly like no emitter at all and this case would have gone green over it, which
+            //    is the failure mode the whole scenario exists to make impossible.
+            //
+            //    So the discriminator is MGITEST_PIPE_CLIENT_TEXTURE_UPLOAD_EMITTER_PRESENT, the
+            //    build's own content probe for a MG_Impl/Pipe source that emits
+            //    CallClass::ClientTextureUploadEmissions - the same mechanism as every other arming
+            //    decision in this package - and each side of it asserts something real.
+            const bool clientEmitterExists =
+                BuildMarkerIsSet("MGITEST_PIPE_CLIENT_TEXTURE_UPLOAD_EMITTER_PRESENT");
+            ASSERT_GE(clientEmissions, 0)
+                << "the summary line carries no ctu= field at all, in a push build, where PipeStats "
+                   "publishes it unconditionally. The client half of the comparison cannot be read: "
+                << window.line;
+            RecordProperty("client_emitter_present", clientEmitterExists ? 1 : 0);
+            if (clientEmitterExists) {
+                EXPECT_GT(clientEmissions, 0)
+                    << "a MG_Impl/Pipe source emits CallClass::ClientTextureUploadEmissions on this "
+                       "tree, and the SERVER counted " << emissions
+                    << " texture upload emissions for this workload, but the client counted NONE. An "
+                       "emitter that has stopped emitting reads exactly like no emitter at all in "
+                       "this field, which is why this case asks the build rather than the number. "
+                    << window.line;
                 EXPECT_EQ(clientEmissions, emissions)
                     << "the CLIENT counted " << clientEmissions
                     << " texture upload records and the SERVER counted " << emissions
@@ -338,10 +364,20 @@ void main() { oColor = texture(uTex, vUv); }
                        "on Mali when it goes the wrong way. "
                     << window.line;
             } else {
-                std::cout << "[ TextureUploadShape ] the client side reads zero: no P4a client "
-                             "emitter has landed on this tree, so this run records the SERVER shape "
-                             "only. That is the expected reading on the contract tree and it is not "
-                             "a divergence."
+                // Not merely "not asserted": on a tree with no client emitter the counter must be
+                // ZERO, and a non-zero one would mean the probe is looking for the wrong symbol -
+                // i.e. that the arming decision above is wrong and every future run of this case
+                // is mis-armed.
+                EXPECT_EQ(clientEmissions, 0)
+                    << "no MG_Impl/Pipe source emits CallClass::ClientTextureUploadEmissions on this "
+                       "tree, yet the client counted " << clientEmissions
+                    << " of them. Something is incrementing that counter which this build's probe "
+                       "cannot see, so the probe is looking for the wrong symbol and this case's "
+                       "arming decision is unreliable in both directions. " << window.line;
+                std::cout << "[ TextureUploadShape ] no P4a client emitter has landed on this tree "
+                             "(the build's ClientTextureUploadEmissions probe found none), so this "
+                             "run records the SERVER shape only and pins ctu=0. That is the expected "
+                             "reading on the contract tree and it is not a divergence."
                           << std::endl;
                 RecordProperty("client_side", "absent");
             }
