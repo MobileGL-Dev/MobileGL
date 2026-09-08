@@ -3629,6 +3629,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 "kMGPipeSubsystemTextureResources (bit 10) is set but kMGPipeSubsystemResources "
                 "(bit 7) is clear; a buffer texture's BufferForTexBuffer names a Buffer handle "
                 "and only bit 7 populates the resource slot table");
+            // BIT 10 REQUIRES BIT 11 - D-K2's FOURTH ROW (ID-14/ID-15), and it is the exact
+            // mirror of ResolveVertexInputSubsystemArm's bit-8-requires-bit-7 refusal above:
+            // the same "the handle arm resolves through a slot table only the other bit
+            // populates" shape, refused here rather than half-run, with the legacy arm as the
+            // fall-back. MGPTextureParams::BuiltinSampler is a SamplerCso HANDLE and only bit 11
+            // mints sampler CSOs (contract c0b's four unconditional mints deliberately exclude
+            // it), so with bit 11 clear every set_texture_params would carry a null there - and
+            // the applier's verdict for a null BuiltinSampler is Fatal{ProtocolCorruption}, not
+            // a decline. The brief's original sentence "bit 10 without 11 is fine" is WITHDRAWN
+            // for P4a as built; package F pins this arm at 0x5ff.
+            //
+            // THE TWO MIRROR PAIRS THAT STAY FINE, said out loud because an unreachable branch
+            // that says something different is how the reachable one drifts:
+            //   - bit 7 set, bit 10 clear: P3a's shipped configuration (above).
+            //   - bit 11 set, bit 10 clear: refused one function down, by the bit-11-requires-
+            //     bit-10 row, so the pair is symmetric and neither half can run alone. That
+            //     symmetry is the point: bits 10 and 11 are now ONE arm with two switches, and
+            //     the only two masks that reach the texture handle arm are "both set" and
+            //     "neither set".
+            if (!refused) {
+                refused = PipeSubsystemDependencyMissing(
+                    mask, MG_Pipe::kMGPipeSubsystemSamplers,
+                    "kMGPipeSubsystemTextureResources (bit 10) is set but kMGPipeSubsystemSamplers "
+                    "(bit 11) is clear; MGPTextureParams::BuiltinSampler is a SamplerCso handle, "
+                    "only bit 11 mints sampler CSOs, and the applier's verdict for a null one is "
+                    "Fatal{ProtocolCorruption}");
+            }
         }
         const BufferImpl::PipeSubsystemArmVerdict verdict = BufferImpl::ClassifyPipeSubsystemArm(
             bitSet && !refused, MG_Config::Features.PipeLegacyMemos,
@@ -3654,8 +3681,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // only bit 10 puts one in the slot table; without it every per-unit lookup would
             // miss and the walk would `continue` WITHOUT unbinding - i.e. every draw would
             // sample through whatever the unit last held, which is exactly the shape the
-            // bit-8-without-bit-7 refusal exists to prevent one family over. The mirror pair
-            // (bit 10 set, bit 11 clear) is FINE.
+            // bit-8-without-bit-7 refusal exists to prevent one family over.
+            //
+            // THE MIRROR PAIR (bit 10 set, bit 11 clear) IS NOT FINE EITHER, and that is D-K2's
+            // fourth row (ID-14/ID-15): it is refused by ResolveTextureResourceSubsystemArm
+            // above, because MGPTextureParams::BuiltinSampler is a SamplerCso handle only bit 11
+            // mints. So this dependency is SYMMETRIC - the two bits are one arm with two
+            // switches - and this sentence used to claim the opposite.
             refused = PipeSubsystemDependencyMissing(
                 mask, MG_Pipe::kMGPipeSubsystemTextureResources,
                 "kMGPipeSubsystemSamplers (bit 11) is set but kMGPipeSubsystemTextureResources "
@@ -3748,8 +3780,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // of one texture, which is at most six faces x the level count and in practice one or
         // two entries. A map would cost an allocation per texture per frame to save a walk of
         // three.
+        //
+        // THE STORED KEY IS THE PACKED MGPSubData::Target (ID-12): low byte
+        // MGPipeResourceTarget, HIGH byte TextureUploadTarget. The applier stores the whole
+        // field verbatim (PipeApply.cpp's `entry.UploadTarget = record.Target`) because
+        // MGPRespecifiedLevel::UploadTarget has to pair with it byte for byte, so the decode is
+        // the reader's - here and at the consume, the only two places D compares it. `uploadTarget`
+        // is static_cast<Uint16>(MobileGL::TextureUploadTarget), i.e. already the half.
+        // Without the decode every texture upload would be dropped silently: Texture1D is 0 and
+        // Texture2D is 1, which collide with the resource-target byte of Buffer and Tex1D.
         for (const auto& pending : record.PendingUploads) {
-            if (pending.UploadTarget == uploadTarget && pending.Level == level) return &pending;
+            if (MG_Pipe::MGPipeSubDataUploadTargetOf(pending.UploadTarget) == static_cast<Uint8>(uploadTarget) &&
+                pending.Level == level) {
+                return &pending;
+            }
         }
         return nullptr;
     }
@@ -3765,7 +3809,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!record.Live || record.Gen != res.Gen) return;
         for (SizeT index = 0; index < record.PendingUploads.size(); ++index) {
             const auto& pending = record.PendingUploads[index];
-            if (pending.UploadTarget != uploadTarget || pending.Level != level) continue;
+            // The same HIGH-byte decode FindPipeTextureUpload makes, and it has to be the same
+            // one: a consume that missed here after a find that hit would leave the entry in the
+            // set forever and re-upload the level on every sync.
+            if (MG_Pipe::MGPipeSubDataUploadTargetOf(pending.UploadTarget) != static_cast<Uint8>(uploadTarget) ||
+                pending.Level != level) {
+                continue;
+            }
             // Swap-and-pop: the set is unordered by construction (it is a per-(target, level)
             // accumulation, not a queue), and an ordered erase would be quadratic over a full
             // cube-map drain.
@@ -7486,18 +7536,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                      static_cast<TextureSwizzleParam>(pushedRecord->Params.Swizzle[2]),                 \
                                      static_cast<TextureSwizzleParam>(pushedRecord->Params.Swizzle[3])}                 \
          : stateTextureObject->GetAllSwizzleParams())
-// DEVIATION, recorded for the integrator: MGPTextureParams spells DepthStencilMode as a Uint8
-// while GetDepthStencilTextureMode() is a GLenum (GL_DEPTH_COMPONENT 0x1902 / GL_STENCIL_INDEX
-// 0x1901), which does not fit in a byte, and the contract left the encoding unstated. This is
-// the decode Espryt reads and therefore the encoding package B must emit:
-//     0 = GL_DEPTH_COMPONENT, 1 = GL_STENCIL_INDEX.
-// ZERO MEANS THE DEFAULT is the property that decides the direction, rather than the enum's low
-// byte: GL_DEPTH_COMPONENT is the GL and ES default and a texture that never asks for the
-// stencil aspect never emits the call, so a zeroed record has to decode to exactly what such a
-// texture already has.
+// The contract now spells this encoding (c0c, ID-12 DV-2): kMGPipeDepthStencilModeDepth = 0 =
+// GL_DEPTH_COMPONENT, kMGPipeDepthStencilModeStencil = 1 = GL_STENCIL_INDEX. v1 open-coded the
+// direction as a bare `!= 0` and recorded it as a deviation; the constants are read here instead,
+// so a future re-numbering moves both sides at once. ZERO MEANS THE DEFAULT is still what decides
+// the direction: GL_DEPTH_COMPONENT is the GL and ES default and a texture that never asks for
+// the stencil aspect never emits the call, so a zeroed record has to decode to exactly what such
+// a texture already has.
 #define MGB_TEXPARAM_DS_MODE                                                                                           \
-    (pushedRecord != nullptr ? (pushedRecord->Params.DepthStencilMode != 0 ? GL_STENCIL_INDEX : GL_DEPTH_COMPONENT)     \
-                             : stateTextureObject->GetDepthStencilTextureMode())
+    (pushedRecord != nullptr                                                                                           \
+         ? (pushedRecord->Params.DepthStencilMode == MG_Pipe::kMGPipeDepthStencilModeStencil ? GL_STENCIL_INDEX        \
+                                                                                            : GL_DEPTH_COMPONENT)      \
+         : stateTextureObject->GetDepthStencilTextureMode())
 #define MGB_TEXPARAM_BORDER_F (pushedBorder != nullptr ? pushedBorder->borderColor : stateTextureObject->GetBorderColor())
 #define MGB_TEXPARAM_BORDER_I                                                                                          \
     (pushedBorder != nullptr ? pushedBorder->borderColorI : stateTextureObject->GetBorderColorI())
@@ -8289,13 +8339,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                  stateFBOObject->GetExternalIndex(), fbo.Slot, fbo.Gen);
                     return;
                 }
+                // D-C1 makes the NULL Res the spelling of "no attachment" and c0c's
+                // kMGPipeSurfaceKindNone makes Kind agree with it on a zero-initialised record.
+                // Res stays the test - it is the one D-C1 fixes - and Kind is CROSS-CHECKED
+                // rather than consulted: the two are one statement the emitter has to make
+                // twice, and a record where they disagree is a seam defect, not an empty point.
+                // Picking a winner silently is what this refuses to do.
+                const Bool readSurfaceEmpty = MG_Pipe::MGPipeHandleIsNull(record->ReadSurface.Res);
+                if (readSurfaceEmpty != (record->ReadSurface.Kind == MG_Pipe::kMGPipeSurfaceKindNone)) {
+                    MGLOG_E_ONCE("MGPipe: framebuffer %u's resolved read surface says Res={%u, %u} and "
+                                 "Kind=%u, which disagree about whether it names anything - refusing "
+                                 "rather than choosing one of them",
+                                 stateFBOObject->GetExternalIndex(), record->ReadSurface.Res.Slot,
+                                 record->ReadSurface.Res.Gen, record->ReadSurface.Kind);
+                    return;
+                }
                 FramebufferAttachmentType pushedReadBuf = FramebufferAttachmentType::None;
-                if (!MG_Pipe::MGPipeHandleIsNull(record->ReadSurface.Res)) {
+                if (!readSurfaceEmpty) {
+                    // EVERY FIELD THAT IDENTIFIES THE IMAGE, not the three v1 compared (m-4).
+                    // The same image legally sits at two colour points - a layered attachment of
+                    // one array and a single slice of it are different surfaces of one Res - so a
+                    // partial comparison resolves to the lower index and the refusal branch below
+                    // ("refusing to guess") would then be doing part of the guessing itself.
+                    // InternalFormat and TextureTarget are properties of the RESOURCE rather than
+                    // of the point, so they add nothing to the identity and are left out.
                     Bool matched = false;
                     for (Uint i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
                         const auto& color = record->Color[i];
-                        if (color.Res == record->ReadSurface.Res && color.Level == record->ReadSurface.Level &&
-                            color.Layer == record->ReadSurface.Layer) {
+                        if (color.Res == record->ReadSurface.Res && color.Kind == record->ReadSurface.Kind &&
+                            color.Layered == record->ReadSurface.Layered &&
+                            color.Level == record->ReadSurface.Level &&
+                            color.Layer == record->ReadSurface.Layer &&
+                            color.UploadTarget == record->ReadSurface.UploadTarget) {
                             pushedReadBuf = static_cast<FramebufferAttachmentType>(
                                 static_cast<Int>(FramebufferAttachmentType::Color0) + static_cast<Int>(i));
                             matched = true;
