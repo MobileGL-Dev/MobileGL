@@ -601,7 +601,26 @@ jobs:
       # only in the pull `integration` job, where a MOBILEGL_PIPE_PUSH value steers nothing
       # (Config.h declares the field inside the push guard) and both arms are the same legacy path.
       # A lane that cannot go red where it is installed is not a gate (ROADMAP.md:7).
-      - name: The handle-ABA, CSO and P3a subsystem controls (G8, G10, G12)
+      # P4a ADDS THREE ALTERNATIVES, and each one is here because this is the only CI job that
+      # unpacks a push build:
+      #   * `ObjectSubsystem` reaches the three DirectGLES.ObjectSubsystemControl. entries - the
+      #     0x1fff-vs-0x1ff A/B and the 0x9ff dependency refusal (G12). `ResourceSubsystem` does
+      #     NOT match it: the two families are named apart on purpose, because they are different
+      #     phases' switches and a filter that merged them would hide one behind the other.
+      #   * `TextureParamsWithoutASamplerView` reaches G9's four cases, the scenario ROADMAP.md:20
+      #     names by hand. It runs in the ambient lanes, which the label already selects - but this
+      #     step is where those cases run against a PUSH library, and G9's whole claim is about the
+      #     push path. All four cases are green on the contract commit - including the one D-E3
+      #     expected to be red, for the reason the scenario's header records - so this row is green
+      #     from the day it lands and goes red only if a reachability path stops syncing texture
+      #     parameters at all, which is the coupling ARCHITECTURE.md:100 exists to remove.
+      #   * `TextureUploadShape` is RECORDED, not gated (D-D4): it asserts that the two upload-shape
+      #     counters could be read and that they agree, and prints the shape for MEASUREMENTS.md. It
+      #     is in the filter so that the number is actually collected on every run - an unmeasured
+      #     shape is not a recorded one - and because its own assertions can go red.
+      # As with the four before them, each alternative is the SHORTEST string that selects only what
+      # it means to.
+      - name: The handle-ABA, CSO, subsystem and texture-parameter controls (G8, G8b, G9, G10, G12)
         working-directory: build-verify
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -612,7 +631,7 @@ jobs:
           ulimit -c unlimited
           sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
           ctest --output-on-failure -L integration-gpu \
-            -R 'HandleRecycle|CsoContentAddressing|ResourceSubsystem|MapPersistentRoundtrip' \
+            -R 'HandleRecycle|CsoContentAddressing|ResourceSubsystem|MapPersistentRoundtrip|ObjectSubsystem|TextureParamsWithoutASamplerView|TextureUploadShape' \
             --no-tests=error -j 4
 
       # The arming lanes' logs, and ONLY those. Each lane shares one MOBILEGL_LOG_FILE_PATH and the
@@ -1557,12 +1576,18 @@ jobs:
     # Deliberately independent of build-linux: these are source-level gates, they take
     # seconds, and a broken build must not hide a drifted interface.
     env:
-      # P3a's base ref, for the G5 region gate below. It is 44c2b5cf and NOT the workflow's
-      # baseline_sha input: that input is the SYMBOL baseline (087685d1, P1's G1 reading) and it
-      # is empty on a push, whereas this gate asks "did the buffer pool, the deferred-release
-      # drain and the three rings move since the phase started". INTEGRATOR-DECISIONS ID-1 is
-      # where the ref comes from.
-      BASELINE: "44c2b5cf"
+      # THE CURRENT PHASE's base ref, for the two G5 region gates below. It is 37da3c3a - P4a's
+      # base ref, INTEGRATOR-DECISIONS ID-1 - and NOT the workflow's baseline_sha input: that input
+      # is the SYMBOL baseline (087685d1, P1's G1 reading) and it is empty on a push, whereas these
+      # gates ask "did the do-not-touch list move since the phase started".
+      #
+      # IT MOVED FROM P3a's 44c2b5cf TO P4a's 37da3c3a WITH THE PHASE, and that is a deliberate
+      # narrowing rather than a loss: P3a's eleven functions were compared against 44c2b5cf at P3a's
+      # own exit and were byte-identical there, so 37da3c3a carries the same bodies (measured: the
+      # eleven shas at 37da3c3a are the eleven shas at 44c2b5cf, and FlushPendingRangesFrom's is
+      # still the sha pinned in the script at 3e298c9a). What the two gates now both answer is "did
+      # anything on the list move during P4a", which is the question this phase can act on.
+      BASELINE: "37da3c3a"
 
     steps:
       - name: Checkout repo
@@ -1663,6 +1688,39 @@ jobs:
       - name: The untouched-region gate can still fail (G5)
         if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
         run: bash scripts/p3a_untouched_regions.sh --self-test
+
+      # A GATE AS OF P4a (G5), and a SECOND script rather than an edit to the one above. P4a extends
+      # the same claim to the rest of ARCHITECTURE.md:318's do-not-touch list - the unpack PBO ring's
+      # staging repack and its two helpers, the attachment permutation, the D24S8 sampling-emulation
+      # core and the format-caveat handler - which is SEVENTEEN regions across THREE files
+      # (BRIEF-P4A.md D-N: P3a's eleven, which P4a must not touch either, plus P4a's six). The
+      # parent's SOURCE_PATH is a single file, so the extension needed a per-region source path and
+      # a region KIND (DepthStencilSamplingReadImpl is a namespace, not a function); everything else
+      # about the extraction is its parent's, verbatim.
+      #
+      # Both scripts run. The parent keeps answering its own question against its own eleven, so a
+      # regression in either half names itself, and neither gate can be silenced by editing the
+      # other's list.
+      #
+      # Same feat/disaggregated-or-dispatch guard as the P3a step, for the same reason: the question
+      # is "did these move since the phase started", and on dev - where unrelated buffer and texture
+      # fixes land on their own schedule - it would be a question nobody posed. It belongs with the
+      # TEMPORARY trigger lines at the top of this file and retires with them.
+      #
+      # --self-test is the half that keeps it honest and is not optional: a comparison that silently
+      # stopped comparing produces exactly the same green as seventeen untouched regions. It runs
+      # three positive controls (seventeen regions extracted, an untouched copy compared equal, an
+      # edit OUTSIDE them invisible in all three files) and FOUR negative ones - ClearBufferPool,
+      # FlushPendingRangesNow, RecomputeBackendColorSlots and StageBlocksIntoUnpackRing, each
+      # perturbed on its own and each required to be named BY NAME - and fails if any of them does
+      # not answer.
+      - name: The unpack ring, the attachment permutation, the D24S8 core and the format caveat did not move (G5)
+        if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
+        run: bash scripts/p4a_untouched_regions.sh "${BASELINE}" HEAD
+
+      - name: The P4a untouched-region gate can still fail (G5)
+        if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
+        run: bash scripts/p4a_untouched_regions.sh --self-test
 
       # Warning only for now: the disaggregation documents are still being written, and a
       # lint that fails a rewrite in progress teaches people to ignore it. It becomes
