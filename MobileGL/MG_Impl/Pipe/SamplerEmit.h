@@ -220,7 +220,29 @@ namespace MobileGL::MG_Pipe {
             // Mints made with the cache already full and EVERY entry referenced. A recorded
             // number and not a gate (ID-17): growing past 256 is the safe direction, and this
             // is what makes it visible instead of silent.
+            //
+            // READ IT AS "HOW FAR THE CACHE PERMANENTLY GREW", not "how often it grew". Once
+            // m_entries.size() is past the capacity every later Mint evicts one unreferenced
+            // entry and pushes one, so the size stays at its high-water mark for the life of
+            // the process - along with that many SamplerCso slots in the allocator and that
+            // many create_sampler_state records in the applier. Bounded by the peak
+            // simultaneous pin count, so this is memory retention and not a leak; the cache
+            // never shrinks back.
             Uint64 OverCapacityMints = 0;
+            // A RELEASE THIS CACHE COULD NOT ACCOUNT FOR. UnknownReleases: the handle names no
+            // entry here (a stale handle from before a ResetForTest, a handle of another kind
+            // passed by mistake, a handle whose entry was already evicted). UnderflowedReleases:
+            // the entry was found with a count already 0. Both are contract violations by a
+            // HOLDER and are counted rather than absorbed, because the pin they steal is
+            // exactly what stops the LRU taking a handle a published record still names - see
+            // Release(). Recorded numbers, not gates; MOBILEGL_ASSERT could not carry them
+            // because it compiles out at INFO, i.e. in every gate build and every shipped one.
+            Uint64 UnknownReleases = 0;
+            Uint64 UnderflowedReleases = 0;
+            // ID-17's Evict invariant, as a counter for the same reason (C2-n1). Mint's victim
+            // choice structurally guarantees it stays 0; it is what would say so in a shipped
+            // build if a second caller of Evict ever appeared.
+            Uint64 ReferencedEvictions = 0;
         };
 
         // The handle for `params`' value, AND A REFERENCE ON IT. Mints and emits
@@ -253,6 +275,12 @@ namespace MobileGL::MG_Pipe {
         // 64-bit XXH64 collision, so without this the whole branch is uncovered and the case
         // named for it proves something else. It hashes nothing and simply uses the hash it is
         // given; production code has no reason to call it.
+        //
+        // THE THREE MEMBERS A CONSUMER MUST NOT CALL are this one, ResetForTest() (which frees
+        // every slot the cache holds and drops their publication latches) and ResetCounters().
+        // Package B's seam is Acquire / Release / RefCountOf / RecordIsPublished / Size /
+        // GetCounters and nothing else - the class is public because it is header-only, not
+        // because all nine members are for callers.
         MGPipeHandle AcquireWithForcedHashForTest(const SamplerParameters& params, Uint64 forcedHash,
                                                   Uint64& payloadBytes) {
             SamplerParameters canon;
@@ -262,16 +290,31 @@ namespace MobileGL::MG_Pipe {
 
         // Drops one reference. The entry stays - a released value is still worth reusing - it
         // merely becomes eligible for the LRU again. Releasing a handle this cache never handed
-        // out, or releasing one twice, is a no-op rather than an underflow: the death paths that
-        // call it are idempotent by contract and a second call must not corrupt the count.
+        // out, or releasing one twice, does not underflow: the death paths that call it are
+        // idempotent by contract and a second call must not corrupt the count.
+        //
+        // BUT THE COUNT IS PER HANDLE, NOT PER HOLDER, and that is the sentence a holder has to
+        // read. Entries are content-addressed and shared by design - package B's texture-params
+        // record and this file's own bind_sampler_states will routinely name the SAME handle,
+        // each owing its own Release - so a holder that releases twice is not harmlessly
+        // repeating itself: it takes ANOTHER holder's pin, the entry can reach RefCount 0 while
+        // a published MGPTextureParams and a standing bind_sampler_states set still name it,
+        // and the LRU may then evict it with nothing to refuse and nothing to re-emit. This
+        // cannot be repaired here, so it is COUNTED (UnknownReleases / UnderflowedReleases)
+        // rather than absorbed silently, and that is what a reviewer of a holder asserts on.
         void Release(MGPipeHandle handle) {
             if (MGPipeHandleIsNull(handle)) return;
             for (Entry& entry : m_entries) {
                 if (entry.Cso != handle) continue;
-                if (entry.RefCount > 0) --entry.RefCount;
+                if (entry.RefCount > 0) {
+                    --entry.RefCount;
+                } else {
+                    ++m_counters.UnderflowedReleases;
+                }
                 ++m_counters.Releases;
                 return;
             }
+            ++m_counters.UnknownReleases;
         }
 
         // How many live references this cache is holding for `handle`. Diagnostics and unit
@@ -431,9 +474,14 @@ namespace MobileGL::MG_Pipe {
         // whole of ID-17's ruling: a handle a standing record names cannot be taken, because
         // the applier does not resolve MGPTextureParams::BuiltinSampler and an eviction is not
         // a parameter change, so nothing would refuse and nothing would re-emit.
+        //
+        // COUNTED, NOT ASSERTED (C2-n1). MOBILEGL_ASSERT is live only at DEBUG, so an assertion
+        // here would be absent from all three gate builds and from every shipped build - the
+        // idiom D-J3 forbids and the one C-m6 removed from the program emitter. The eviction
+        // still proceeds when the count is non-zero: the sole caller guarantees the condition,
+        // and refusing here would leave Mint without the room it asked for.
         void Evict(SizeT index) {
-            MOBILEGL_ASSERT(m_entries[index].RefCount == 0,
-                            "a referenced sampler CSO was evicted; the LRU must skip pinned entries");
+            if (m_entries[index].RefCount != 0) ++m_counters.ReferencedEvictions;
             MGPHandleOnly handle{};
             handle.Handle = m_entries[index].Cso;
             handle.Kind = static_cast<Uint32>(MGPipeKind::SamplerCso);
@@ -751,10 +799,25 @@ namespace MobileGL::MG_Pipe {
         // A BOUND SAMPLER STATE HOLDS A REFERENCE ON ITS CSO FOR AS LONG AS IT IS BOUND
         // (ID-17). The set the applier holds is "the last set as received" and outlives the
         // pass that sent it, so a handle in it must not become the LRU's victim; the reference
-        // is what makes that true. The reconciliation below is one pass over the unit array:
-        // Acquire has already taken a reference for every unit in the new set, so a unit whose
-        // handle did not move gives that duplicate back, a unit whose handle moved gives back
-        // the one it used to hold, and a unit that fell outside the window gives back its own.
+        // is what makes that true. The reconciliation below walks the unit array once: Acquire
+        // has already taken a reference for every unit in the new set, so a unit whose handle
+        // did not move gives that duplicate back, a unit whose handle moved gives back the one
+        // it used to hold, and a unit that fell outside the window gives back its own.
+        //
+        // ITS COST IS NOT "ONE EXTRA ARRAY WALK" and the ID-19 budget entry says so. Each
+        // Release of a NON-NULL handle is itself a linear scan of the whole cache, sitting
+        // beside an Acquire probe that is another, so a pass in which K units hold sampler CSOs
+        // costs 2 * K * O(cacheSize) handle comparisons - up to ~98 000 at K == 192 with a full
+        // cache, and unbounded above that because the over-capacity path lets the cache grow
+        // past 256. In Minecraft-shaped workloads K is typically 0: no unit has a SamplerObject
+        // bound, so Acquire is never called and Release(null) returns immediately. The workload
+        // that has both a large K and a large cache is a CTS sampler sweep. c0d moved the
+        // firing rate underneath this as well - bit 13's shutter now mixes
+        // GetTextureBindGeneration(), so this runs on EVERY texture bind at any unit and not
+        // only on a parameter change, and the set-hash suppressor below stops the record going
+        // out but not these two scans, which happen first. The per-unit (sampler lifetime id,
+        // ctx.GetSamplingResolutionGeneration()) latch recorded under ID-19 as C-m2 removes
+        // BOTH scans, not one.
         Uint64 EmitSamplerStates(GLContext& ctx) {
             const Int maxTouched = ctx.GetMaxTouchedTextureUnit();
             const Uint32 count =
