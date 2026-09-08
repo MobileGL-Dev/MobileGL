@@ -88,7 +88,11 @@
 # very build directory, and every reading they take there would come from a deliberately corrupted
 # library. So repair() runs from the EXIT trap as well - a mid-way failure (a patched header that
 # would not compile, an interrupt) repairs too - and a repair that itself fails downgrades the
-# verdict to 2. On the exits that happen BEFORE any patch (bad arguments, a missing header, a
+# verdict to 2. The state repair() reads lives in THIS shell and not in a command substitution,
+# which is what makes the trap version of it a real repair rather than a no-op, and every child's
+# exit status is additionally checked for "killed by a signal" so that a Ctrl-C stops the run
+# instead of carrying on into the next control and signing off with a verdict about a control
+# nobody ran. On the exits that happen BEFORE any patch (bad arguments, a missing header, a
 # missing suite) the tree was never touched and the build directory still holds what the caller
 # built: there is nothing to restore and nothing to rebuild, and the script says which of the two
 # situations it is leaving behind.
@@ -102,10 +106,11 @@
 #               red without ever naming the field, so the red cannot be attributed to the drop.
 #               Both are findings about the TEST, not errors in this script - and both leave the
 #               tree restored AND rebuilt AND re-run;
-#             2 a control could not be run at all (bad arguments; a header or a field absent on
-#               this tree; no matching test; a build that was already broken; a patched header that
-#               did not compile; a failed restore or a failed rebuild after one). Exit 2 wins over
-#               exit 1: "could not run" is never reported as "did not answer".
+#             2 a control could not be run at all (bad arguments; a build directory that is not a
+#               push one; a header or a field absent on this tree; no matching test; a build that
+#               was already broken; a patched header that did not compile; a failed restore or a
+#               failed rebuild after one; the run was INTERRUPTED). Exit 2 wins over exit 1:
+#               "could not run" is never reported as "did not answer".
 set -u -o pipefail
 
 BUILD_DIR=""
@@ -203,9 +208,23 @@ repair() {
 # that reader does is build, from a hard-wired field, with nothing saying so. The two extra traps
 # repair and then re-raise with the default disposition, so the exit status still reports the
 # signal. Armed for the whole run: before the first patch repair() is a no-op.
+#
+# AND THE TRAPS ARE NOT THE ONLY DETECTION, because bash's SIGINT semantics do not guarantee that
+# they run. A Ctrl-C in a terminal goes to the whole PROCESS GROUP, so the `cmake` this script is
+# waiting on dies first and returns 130 - and bash, having a handler installed, may go on to the
+# next command rather than to the trap. Measured exactly that way: the tree WAS repaired (through
+# the explicit failure path below, which is why the state has to live in this shell), but the run
+# then carried on into the second control and signed off with the summary it prints on an
+# untouched contract tree. Repaired and wrong is still wrong. So every child's status is checked
+# for "killed by a signal" as well, INTERRUPTED latches either way, and the run stops and says so.
+INTERRUPTED=""
+note_interrupt() { [ -n "$INTERRUPTED" ] || INTERRUPTED=$1; }
+# 128 + signal number is how a shell reports a child that died on a signal; nothing this script
+# runs exits above 128 for any other reason (ctest uses 8 for failing tests).
+child_was_signalled() { [ "${1:-0}" -ge 128 ]; }
+trap 'note_interrupt INT; repair; trap - INT; kill -INT $$' INT
+trap 'note_interrupt TERM; repair; trap - TERM; kill -TERM $$' TERM
 trap 'repair' EXIT
-trap 'repair; trap - INT; kill -INT $$' INT
-trap 'repair; trap - TERM; kill -TERM $$' TERM
 
 # --- one control -----------------------------------------------------------------------------
 # Sets the GLOBAL CONTROL_VERDICT to "tripped" / "did-not-trip" / "wrong-reason" /
@@ -329,7 +348,17 @@ PY
   # 3. it must still COMPILE. A build break here would prove the static_asserts work, not that the
   #    suite still checks.
   say "[$tag] rebuilding with the dropped field"
-  if ! cmake --build "$BUILD_DIR" -j "$(nproc)" </dev/null > "$LOG_DIR/build-after-$tag.log" 2>&1; then
+  cmake --build "$BUILD_DIR" -j "$(nproc)" </dev/null > "$LOG_DIR/build-after-$tag.log" 2>&1
+  buildRc=$?
+  if child_was_signalled "$buildRc" || [ -n "$INTERRUPTED" ]; then
+    note_interrupt "exit $buildRc"
+    say "[$tag] INTERRUPTED during the rebuild ($INTERRUPTED). Repairing the tree and stopping:"
+    say "a run that carried on here would report a verdict about a control that never ran."
+    repair || true
+    CONTROL_VERDICT=could-not-run
+    return
+  fi
+  if [ "$buildRc" -ne 0 ]; then
     say "[$tag] the patched header did not compile, so the control cannot tell 'the test failed'"
     say "from 'nothing was built'. The break is supposed to be invisible to the compiler - if the"
     say "field is read somewhere that needs its value, say so in the control rather than working"
@@ -345,8 +374,18 @@ PY
   #    reported and nothing returns until step 5 has put the tree back, because all three outcomes
   #    leave the same corrupted build directory behind.
   say "[$tag] running $test against the dropped field"
-  if ctest --test-dir "$BUILD_DIR" -R "$test" --no-tests=error --output-on-failure </dev/null \
-       > "$LOG_DIR/ctest-after-$tag.log" 2>&1; then
+  ctest --test-dir "$BUILD_DIR" -R "$test" --no-tests=error --output-on-failure </dev/null \
+       > "$LOG_DIR/ctest-after-$tag.log" 2>&1
+  ctestRc=$?
+  if child_was_signalled "$ctestRc" || [ -n "$INTERRUPTED" ]; then
+    note_interrupt "exit $ctestRc"
+    say "[$tag] INTERRUPTED while running $test ($INTERRUPTED). A suite that was killed is not a"
+    say "suite that went red: repairing the tree and stopping rather than scoring the control."
+    repair || true
+    CONTROL_VERDICT=could-not-run
+    return
+  fi
+  if [ "$ctestRc" -eq 0 ]; then
     CONTROL_VERDICT=did-not-trip
   elif awk '/: Failure$/ || /: error:/ { block = 1 } block { print } /^[[:space:]]*$/ { block = 0 }' \
          "$LOG_DIR/ctest-after-$tag.log" | grep -q "$field"; then
@@ -422,6 +461,12 @@ for mglRow in "${CONTROL_ROWS[@]}"; do
     could-not-run) WORST=2 ;;
     *) [ "$WORST" -eq 2 ] || WORST=1 ;;
   esac
+  if [ -n "$INTERRUPTED" ]; then
+    SUMMARY="$SUMMARY
+  (INTERRUPTED - the remaining control(s) did not run)"
+    WORST=2
+    break
+  fi
 done
 
 trap - EXIT
@@ -429,7 +474,14 @@ say "---- G7 (P4a descriptor emission) ----$SUMMARY"
 case "$WORST" in
   0) say "both controls tripped and named their field; exit 0" ;;
   1) say "a control did not answer; exit 1" ;;
-  2) say "a control could not be run; exit 2 (this is the expected answer on the P4a contract tree,"
-     say "where both emit headers are the contract's stubs and copy nothing)" ;;
+  2) if [ -n "$INTERRUPTED" ]; then
+       say "the run was INTERRUPTED ($INTERRUPTED); exit 2. The tree was repaired before this line -"
+       say "\`git status\` is the check - and NOTHING here is a verdict about the controls."
+     else
+       say "a control could not be run; exit 2 (this is the expected answer on the P4a contract tree,"
+       say "where both emit headers are the contract's stubs and copy nothing)"
+     fi ;;
 esac
+# A run this shell interrupted still exits 2 rather than by signal, because the INT trap's
+# re-raise only happens when bash actually reaches the trap. The summary above says which it was.
 exit "$WORST"
