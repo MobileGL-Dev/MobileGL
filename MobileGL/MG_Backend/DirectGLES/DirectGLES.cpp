@@ -2781,6 +2781,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Record that `target` now reflects the applier's record as of `serial`. The two
         // generations ride along for the reason D-B3 keeps them: they answer questions about
         // the DRIVER's own ids that no client-side version can answer.
+        // The stamp's opposite, for a path that leaves a target correctly bound WITHOUT having
+        // consulted the record (MINOR-3, ForceBindCurrentFBO). Costs one extra sync at worst.
+        static void InvalidateSyncedFramebufferSerial(FramebufferTarget target) {
+            g_fboSyncedSerials[SizeT(target)].valid = false;
+        }
+
         static void StampSyncedFramebufferSerial(FramebufferTarget target, Uint64 serial) {
             auto& memo = g_fboSyncedSerials[SizeT(target)];
             memo.serial = serial;
@@ -2841,12 +2847,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool SyncCurrentFBOByRecord() {
             g_fboRecordsTrusted = false;
             const auto& st = MG_Pipe::MGPipeApplier();
-            if (MG_Pipe::MGPipeHandleIsNull(st.DrawFramebuffer.Fbo) ||
-                MG_Pipe::MGPipeHandleIsNull(st.ReadFramebuffer.Fbo)) {
+            const MG_Pipe::MGPFramebufferState& drawRecord = BoundFramebufferRecord(FramebufferTarget::Draw);
+            const MG_Pipe::MGPFramebufferState& readRecord = BoundFramebufferRecord(FramebufferTarget::Read);
+            const Bool drawUnrecorded = MG_Pipe::MGPipeHandleIsNull(drawRecord.Fbo);
+            const Bool readUnrecorded = MG_Pipe::MGPipeHandleIsNull(readRecord.Fbo);
+            // P4a decline-site F2: S, and its HALF-DESCRIBED case is LOUD NOW (ID-19), not at
+            //   the verification round.
+            //
+            //   NEITHER target recorded is the transitional state of a tree whose client half
+            //   has not landed - every draw on this tree is that - and it stays silent until
+            //   the round flips it. EXACTLY ONE recorded is a different animal: an emitter
+            //   walks {Draw, Read} together and a Target = Both record writes both, so no
+            //   correct emitter can produce it. It is the shape a PARTIALLY LANDED emitter
+            //   produces, it is invisible in a pixel test because the arm just declines, and it
+            //   is precisely what this phase's integration round has to catch - so it says so,
+            //   in the words section 8's one grep looks for, and names which target is missing
+            //   plus the handle of the one that is not.
+            if (drawUnrecorded || readUnrecorded) {
+                if (drawUnrecorded != readUnrecorded) {
+                    const MG_Pipe::MGPFramebufferState& described = drawUnrecorded ? readRecord : drawRecord;
+                    MGLOG_E_ONCE("A framebuffer record does not describe the binding it names: the %s "
+                                 "binding has no record while %s names {slot %u, gen %u} - a "
+                                 "half-described applier; running the pre-handle framebuffer sync.",
+                                 drawUnrecorded ? "DRAW" : "READ", drawUnrecorded ? "READ" : "DRAW",
+                                 static_cast<unsigned>(described.Fbo.Slot),
+                                 static_cast<unsigned>(described.Fbo.Gen));
+                }
                 return false;
             }
-            if (!FramebufferRecordMatchesBinding(FramebufferTarget::Draw, st.DrawFramebuffer) ||
-                !FramebufferRecordMatchesBinding(FramebufferTarget::Read, st.ReadFramebuffer)) {
+            // P4a decline-site F3: S - the framebuffer seam, already loud; the round keeps this
+            //   wording VERBATIM because it is the stem the other two seams now share.
+            if (!FramebufferRecordMatchesBinding(FramebufferTarget::Draw, drawRecord) ||
+                !FramebufferRecordMatchesBinding(FramebufferTarget::Read, readRecord)) {
                 MGLOG_E_ONCE("A framebuffer record does not describe the binding it names; "
                              "running the pre-handle framebuffer sync.");
                 return false;
@@ -2857,9 +2889,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (auto& target : fboTargets) {
                 if (SyncedFramebufferSerialIsCurrent(target, st.FramebufferSerial)) continue;
 
-                const MG_Pipe::MGPFramebufferState& record = target == FramebufferTarget::Draw
-                                                                 ? st.DrawFramebuffer
-                                                                 : st.ReadFramebuffer;
+                const MG_Pipe::MGPFramebufferState& record = BoundFramebufferRecord(target);
                 if (record.IsDefault != 0) {
                     // The default framebuffer, said by the record rather than by comparing the
                     // bound object against pDefaultFramebufferInfo->defaultFBO - which is one
@@ -2880,10 +2910,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // frontend object (package D re-keys its BODY onto the record; this package
                 // owns the call site and the decisions around it). The IDENTITY is already the
                 // handle - FindByHandle(record.Fbo) - so a recycled FBO cannot be mistaken for
-                // its predecessor here; the resolve-or-create fallback below is what becomes
-                // GetOrCreate(record.Fbo) once package D forwards that overload.
+                // its predecessor here.
+                //
+                // A1, RECONCILED AGAINST WHAT D ACTUALLY BUILT. The fallback below is NOT the
+                // one-liner this package predicted. D adds `BackendPtr* GetOrCreateByHandle(
+                // MGPipeHandle)` (esprytobj Managers.h ~453), which returns a POINTER rather
+                // than the reference GetOrCreate(StatePtr) returns, and D says the pointer form
+                // is deliberate. So at the rebase this becomes GetOrCreateByHandle(record.Fbo)
+                // PLUS A NULL CHECK on the returned pointer, and once the resolve takes the
+                // handle the `slot.GetBoundObject()` above it and FramebufferRecordMatchesBinding
+                // both go with it (A2's `#else` half never fires - D left SyncToBackend's and
+                // SyncReadBufferToBackend's signatures textually unchanged).
+                //
+                // AND THE POINTER-INVALIDATION CONTRACT HAS TO BE RE-CHECKED THERE, not just
+                // the call. Managers.h ~381-385 says a handle-arm result is invalidated by the
+                // next GetOrCreate/Find/CollectGarbage. The expression below short-circuits, so
+                // FindByHandle's result is never held across the fallback - but
+                // GetOrCreateByHandle CAN GROW THE TABLE, so whoever writes the rebase must
+                // keep the two out of one expression and must not hold the pointer across a
+                // later resolve.
                 auto& slot = GetFramebufferBindingSlotChecked(target);
                 const auto& currentFBO = slot.GetBoundObject();
+                // P4a decline-site F4: S - unreachable today (FramebufferRecordMatchesBinding
+                //   maps "nothing bound" to boundIsDefault and a non-default record is already
+                //   rejected above), and at the verification round it becomes a FULL fallback -
+                //   g_fboRecordsTrusted = false; return false - rather than the `continue` that
+                //   would leave the other target half-run against section 1's invariant.
                 if (!currentFBO) {
                     MGLOG_E_ONCE("A framebuffer record names %s but no FBO is bound to it.",
                                  target == FramebufferTarget::Read ? "READ" : "DRAW");
@@ -2902,10 +2954,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // client saying one object is bound to both bindings, so the attachment and
                 // draw-buffer work the DRAW pass already did is not repeated - and the read
                 // buffer, which is READ-target-specific and is what that skip used to drop, is
-                // applied from the record's OWN ReadSurface. That is what makes the
-                // read-buffer-shared-FBO defect class unrepresentable rather than merely fixed:
-                // there is no path here that can reach the read binding without its own
-                // resolved read surface.
+                // applied unconditionally on this path.
+                //
+                // MINOR-1, CORRECTED: the read buffer is applied by SyncReadBufferToBackend
+                // FROM THE FRONTEND OBJECT, not from MGPFramebufferState::ReadSurface - this
+                // package reads Fbo, IsDefault, Target, DrawBuffers[] and ContentHash and
+                // nothing else. What the change actually buys, and it is worth having, is that
+                // the skip is now a FIELD TEST on record.Target instead of a pointer compare
+                // against whatever object the previous loop iteration happened to sync, so the
+                // read-buffer-shared-FBO defect class can no longer be produced by an accident
+                // of loop order. It is the defect expressed as a field, NOT made
+                // unrepresentable; reading ReadSurface here is the D-C1 endpoint and belongs
+                // with A1's rewrite, when the twin API takes the record.
                 if (target == FramebufferTarget::Read &&
                     record.Target == static_cast<Uint8>(MG_Pipe::MGPipeFramebufferTarget::Both)) {
                     backendObj->SyncReadBufferToBackend(currentFBO);
@@ -2932,6 +2992,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_PIPE_PUSH
             // The handle arm first, and it declines rather than half-running: with no record
             // yet it hands the walk straight back to the pre-handle arm below, unchanged.
+            // P4a decline-site F1: M - the mask says this family is not switched on; stays
+            //   silent at the verification round (becomes D's FramebufferSubsystemEnabled()).
             if (EsprytDrawFramebufferHandlesEnabled() && SyncCurrentFBOByRecord()) return;
 #endif
 
@@ -3804,8 +3866,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 table = &st.ShaderCsos;
                 index = handle.Slot;
             }
+            // P4a decline-site P2: S - flips to loud-once at the verification round, and the
+            //   round must distinguish the two bands: an out-of-range ORDINARY slot is "the
+            //   record has not arrived", while an out-of-range COMPOSITE index is a contract
+            //   bug (the composite table is dense and the band base is fixed).
             if (index >= table->size()) return nullptr;
             const MG_Pipe::MGPipeShaderCsoRecord& record = (*table)[index];
+            // P4a decline-site P3: S - flips to loud-once. This is ID-8's stale-generation
+            //   refusal and today it is indistinguishable from "no record at all"; on the
+            //   integrated tree a bound program whose record generation has moved is a death /
+            //   recycle seam defect and has to be named as one.
             if (!record.Live || record.Gen != handle.Gen) return nullptr;
             return &record;
         }
@@ -3827,13 +3897,69 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Anything else and the frontend's own MapUBO answers, exactly as it does today.
         static const MG_Pipe::MGPipeShaderCsoRecord* ResolveGlobalConstantsRecord(
             const MG_State::GLState::ProgramObject* program) {
+            // P4a decline-site P1: M - the mask says this family is not switched on, or there
+            //   is no current program at all; stays silent at the verification round (becomes
+            //   D's ProgramSubsystemEnabled()).
             if (!EsprytDrawProgramHandlesEnabled() || program == nullptr) return nullptr;
             const MG_Pipe::MGPipeHandle handle = g_backendProgramObjects.HandleOf(program);
             const MG_Pipe::MGPipeShaderCsoRecord* const record = FindShaderCsoRecord(handle);
+            // P4a decline-site P4: S - folded into P2/P3 at the verification round; the two
+            //   reasons FindShaderCsoRecord can answer null are told apart there, not here.
             if (record == nullptr) return nullptr;
-            if (record->Desc.Cso != handle) return nullptr;
+            // P4a decline-site P5: S - THE PROGRAM SEAM, loud NOW (MAJOR-3) and in the same
+            //   words as the framebuffer and image seams, so one grep polices all three. No
+            //   further flip. Unlike the image seam this one has no eager funnel to be wrong
+            //   at: the only caller is the global-UBO upload at the draw validate point, where
+            //   the record for THIS draw has been applied, so a descriptor that names a
+            //   different handle than the slot it sits in is always a mis-keyed emission.
+            if (record->Desc.Cso != handle) {
+                MGLOG_E_ONCE("A program record does not describe the binding it names: the ShaderCso "
+                             "record at {slot %u, gen %u} names {slot %u, gen %u} in its own "
+                             "descriptor; running the frontend's own uniform block.",
+                             static_cast<unsigned>(handle.Slot), static_cast<unsigned>(handle.Gen),
+                             static_cast<unsigned>(record->Desc.Cso.Slot),
+                             static_cast<unsigned>(record->Desc.Cso.Gen));
+                return nullptr;
+            }
+            // P4a decline-site P6: M, then S. The ~0u NEVER-UPLOADED SENTINEL is legitimate
+            //   before the first upload for this program. At the verification round it becomes
+            //   loud-once under the narrower condition the round can test: bit 12 on, and
+            //   GetUBOSize() > 0 && HasGlobalUboBlock() - a program that reaches a draw with a
+            //   default uniform block and no global constants ever uploaded is a seam defect.
             if (record->GlobalConstantsVersion == ~Uint32{0}) return nullptr;
-            if (record->GlobalConstants.size() < static_cast<SizeT>(program->GetUBOSize())) return nullptr;
+            // P4a decline-site P7: S, and LOUD NOW (ID-19) - this one is not a missing record,
+            //   it is PROTOCOL CORRUPTION. The upload copies GetUBOSize() bytes out of
+            //   GlobalConstants, so a shorter block image is a read past the end of the
+            //   applier's own buffer; no correct emitter can produce it, and quietly handing
+            //   the draw back to MapUBO() would file a memory-safety bug as a perf regression.
+            //
+            //   THE VERDICT IS THE ONE THE CONTRACT ALREADY SPELLS, and deliberately not a new
+            //   one: PipeApply.cpp's "the verdict of every trip wire in this file, in one
+            //   place" says a poison or verify build STOPS and writes the Fatal{} marker G4
+            //   greps the retrace logs for, while a shipped push build logs at error level and
+            //   carries on from a defined state. So the gate lanes - which is where a seam
+            //   defect has to be caught - never reach MapUBO() at all, and a shipped build does
+            //   not abort a running game over a client-side bug. If the integrator wants the
+            //   stop on every arm, it is one #if away and this comment is where to say so.
+            if (record->GlobalConstants.size() < static_cast<SizeT>(program->GetUBOSize())) {
+#if MOBILEGL_PIPE_POISON || MOBILEGL_PIPE_VERIFY
+                MGLOG_F("MGPipe: Fatal{ProtocolCorruption} A program record does not describe the "
+                        "binding it names: the ShaderCso record {slot %u, gen %u} carries a %llu-byte "
+                        "global-constant block for a %llu-byte default uniform block.",
+                        static_cast<unsigned>(handle.Slot), static_cast<unsigned>(handle.Gen),
+                        static_cast<unsigned long long>(record->GlobalConstants.size()),
+                        static_cast<unsigned long long>(program->GetUBOSize()));
+                std::abort();
+#else
+                MGLOG_E_ONCE("A program record does not describe the binding it names: the ShaderCso "
+                             "record {slot %u, gen %u} carries a %llu-byte global-constant block for a "
+                             "%llu-byte default uniform block; running the frontend's own uniform block.",
+                             static_cast<unsigned>(handle.Slot), static_cast<unsigned>(handle.Gen),
+                             static_cast<unsigned long long>(record->GlobalConstants.size()),
+                             static_cast<unsigned long long>(program->GetUBOSize()));
+#endif
+                return nullptr;
+            }
             return record;
         }
 #endif
