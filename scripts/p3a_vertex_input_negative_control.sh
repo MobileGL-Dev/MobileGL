@@ -222,18 +222,19 @@ say "running $TEST_NAME against the dropped field"
 if ctest --test-dir "$BUILD_DIR" -R "$TEST_NAME" --no-tests=error --output-on-failure \
      > "$LOG_DIR/ctest-after.log" 2>&1; then
   VERDICT=did-not-trip
-elif grep -qE "^.*(Failure|error:|Expected).*$FIELD|$FIELD.*(Failure|Which is|Expected)" \
-       "$LOG_DIR/ctest-after.log"; then
+elif awk '/: Failure$/ || /: error:/ { block = 1 } block { print } /^[[:space:]]*$/ { block = 0 }' \
+       "$LOG_DIR/ctest-after.log" | grep -q "$FIELD"; then
   # A red is not yet a pass: a suite that had started failing for an unrelated reason satisfies the
   # first half of the claim and none of the second.
   #
-  # m3: matched against the FAILING ASSERTION's own lines rather than against the whole ctest log.
-  # A bare `grep -q IsBgra` over the log was exact today only because the field name happens to
-  # appear exactly once in the tree, inside the case that fails; a future case NAMED after the
-  # field, a skip reason quoting it, or a compiler note echoed into the log would all have made
-  # "tripped" mean "the string exists somewhere". The alternation keeps both orders because gtest
-  # prints the field on the `Failure`/`Expected` line for an EXPECT_EQ and on the following
-  # `Which is` line for a streamed message.
+  # m3: matched against the FAILING ASSERTIONS' OWN BLOCKS rather than against the whole ctest log.
+  # gtest prints a failure as `<file>:<line>: Failure` followed by the compared expressions and
+  # their values, terminated by a blank line, and the field name appears among those expressions
+  # (`wire.IsBgra` / `attrib.IsBgra ? 1 : 0`) - so the block, not the line, is the right unit and
+  # the whole file is the wrong one. A bare `grep -q IsBgra` over the log was exact today only
+  # because the field name happens to appear exactly once in the tree, inside the case that fails;
+  # a future case NAMED after the field, a skip reason quoting it, or a compiler note echoed into
+  # the log would all have made "tripped" mean "the string exists somewhere in the output".
   VERDICT=tripped
 else
   VERDICT=wrong-reason
