@@ -110,20 +110,20 @@ namespace MobileGL::MG_Pipe {
     // family off clears MG_Config::Features.PipePush, which is the switch the shipped build has.
     inline Bool MGPipeTextureSubsystemEnabled();
 
-    // DO THE RECORDS THIS EMITTER BUILDS REACH THE APPLIER ON THIS BASE? It is the wired
-    // constant asked as a predicate, and it is a SECOND gate rather than the same one because
-    // the two questions really are different while the flip is blocked:
+    // DO THE RECORDS THIS EMITTER BUILDS REACH THE APPLIER IN THIS BUILD? It is the wired
+    // constant asked as a COMPILE-TIME predicate, and with the constant set it is simply true -
+    // which is the point: every `if constexpr` below is taken, so the acceptance answers the
+    // emitter gates its own bookkeeping on are real answers rather than a default.
     //
-    //   * the emitter's ARM decides whether the family runs at all - the handles, the sticky
-    //     bind mask, the descriptor dedupe, the drain list and the record construction;
-    //   * this decides whether the four resource_* records are handed to P3a's apply bodies,
-    //     which cannot hold them until the wire package's w1 gives them their Desc.Target
-    //     branch and their three per-kind vectors.
+    // IT IS KEPT RATHER THAN INLINED because it is what makes a build with the constant back at
+    // 0 - the A/B arm an operator gets by editing one line, and the arm a bisect lands on -
+    // compile with the applier calls discarded instead of half-wired. Where the difference
+    // matters is stated at each site: the dirty-flag clear may never run on a discarded call
+    // (D-D5 step 1), and the descriptor mirror may not advance past a call that never landed.
     //
-    // set_texture_params is deliberately NOT behind it: MGPipeApplySetTextureParams is one of
-    // P4a's OWN fifteen entry points and is a stub at the contract tag, so a record handed to it
-    // is stored by nobody and refused by nobody. Sending it is what keeps that seam exercised
-    // rather than merely declared.
+    // set_texture_params is deliberately NOT behind it. It is addressed by RESOURCE and is the
+    // one call that closes D-E3's READ-attachment gap, and its BuiltinSampler comes from the
+    // sampler family rather than this one - so it rides bit 11's wiring, not bit 10's.
     inline constexpr Bool MGPipeTextureRecordsReachTheApplier() {
         return (kMGPipeWiredTextureSubsystem & kMGPipeSubsystemTextureResources) != 0;
     }
