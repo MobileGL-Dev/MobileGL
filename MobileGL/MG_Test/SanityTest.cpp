@@ -3976,6 +3976,57 @@ TEST(DirectGLESSlotTable, AnArmlessKnobCombinationStopsInsteadOfSkippingTheLane)
 #endif // MOBILEGL_PIPE_LEGACY_MEMOS
 }
 
+// The two guards the armless cases stand on, pinned on their own: whatever an operator had in
+// MOBILEGL_LOG_FILE_PATH - a path, or nothing - and whatever MG_Config::Features held are back,
+// byte for byte, once the guards go out of scope, with or without a failure inside. Before
+// this the armless case unset the variable for every later case in the binary and restored
+// the config only on its success path (the round-4 review's minor 5).
+TEST(DirectGLESSlotTable, TheArmlessCasesLeaveTheLogPathAndTheConfigAsTheyFoundThem) {
+    using namespace MobileGL;
+
+    const Uint64 push = MG_Config::Features.PipePush;
+    const Bool legacy = MG_Config::Features.PipeLegacyMemos;
+    std::string previousPath;
+    const bool hadPreviousPath = std::getenv("MOBILEGL_LOG_FILE_PATH") != nullptr;
+    if (hadPreviousPath) previousPath = std::getenv("MOBILEGL_LOG_FILE_PATH");
+
+    // With an operator path in place...
+    const std::filesystem::path operatorPath = UniqueScratchLogPath("mobilegl-espryt-operator");
+    SetEnvVar("MOBILEGL_LOG_FILE_PATH", operatorPath.string().c_str());
+    {
+        const ScopedArmlessKnobPair knobs;
+        const ScopedLogFileRedirect redirect(UniqueScratchLogPath("mobilegl-espryt-guard"));
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+        // Only a build with the legacy arm can be left armless; without it the verdict is
+        // Handles whatever the knobs say, and what is pinned here is the restore, not the arm.
+        EXPECT_EQ(MG_Backend::DirectGLES::CurrentEsprytSlotArmVerdict(),
+                  MG_Backend::DirectGLES::EsprytSlotArmVerdict::NoArm);
+#endif
+        EXPECT_EQ(MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemEsprytSlots, 0ull);
+        EXPECT_FALSE(MG_Config::Features.PipeLegacyMemos);
+        EXPECT_STRNE(std::getenv("MOBILEGL_LOG_FILE_PATH"), operatorPath.string().c_str());
+    }
+    ASSERT_NE(std::getenv("MOBILEGL_LOG_FILE_PATH"), nullptr) << "the operator's log path was unset";
+    EXPECT_STREQ(std::getenv("MOBILEGL_LOG_FILE_PATH"), operatorPath.string().c_str());
+    EXPECT_EQ(MG_Config::Features.PipePush, push);
+    EXPECT_EQ(MG_Config::Features.PipeLegacyMemos, legacy);
+
+    // ...and with none.
+    UnsetEnvVar("MOBILEGL_LOG_FILE_PATH");
+    {
+        const ScopedLogFileRedirect redirect(UniqueScratchLogPath("mobilegl-espryt-guard"));
+        EXPECT_NE(std::getenv("MOBILEGL_LOG_FILE_PATH"), nullptr);
+    }
+    EXPECT_EQ(std::getenv("MOBILEGL_LOG_FILE_PATH"), nullptr)
+        << "a log path was left behind where the operator had none";
+
+    if (hadPreviousPath) {
+        SetEnvVar("MOBILEGL_LOG_FILE_PATH", previousPath.c_str());
+    }
+    std::error_code ignored;
+    std::filesystem::remove(operatorPath, ignored);
+}
+
 // The round-4 review's minor 4: the case above pins the two FUNCTIONS, and nothing failed if
 // InitDisplayAndContext() (DirectGLES.cpp) was edited back to call the stopping one - which is
 // exactly the regression that produced the round-3 major. This pins the CALL SITE, by running
@@ -4103,6 +4154,10 @@ TEST(DirectGLESSlotTable, ASavedCopyOfARealRegistryDropsTheTwinOnTheSameNotice) 
 }
 
 TEST(DirectGLESSlotTable, EglBringUpUnderTheArmlessKnobPairReturnsInsteadOfStopping) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, TheArmlessCasesLeaveTheLogPathAndTheConfigAsTheyFoundThem) {
     GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 #endif // MOBILEGL_PIPE_PUSH
