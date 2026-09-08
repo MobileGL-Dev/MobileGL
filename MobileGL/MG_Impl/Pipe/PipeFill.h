@@ -43,6 +43,25 @@ namespace MobileGL::MG_Pipe {
     // stop where it says it stops (MG_Test/ScopedPipeVerb.h).
     void MGPipeLeaveVerb();
 
+    // PipeFill.cpp. DOES THIS BUILD, ON THIS BACKEND, EMIT FOR THIS P4a FAMILY? (ID-39.) The
+    // three conjuncts are the operator's per-subsystem bit in MOBILEGL_PIPE_PUSH, the family's
+    // own kMGPipeWired*Subsystem constant (`wired`, which the caller passes because it lives in
+    // the family's emit header and this header may not include one), and - for the four
+    // families P4a migrates - a backend having registered MGPipeResourceOps, which is the same
+    // per-backend signal `MGPipeResourceSubsystemEnabled()` has applied to P3a's buffers since
+    // the phase began.
+    //
+    // THE THIRD CONJUNCT IS THE ONE THIS DECLARATION EXISTS FOR. Magma (DirectVulkan) registers
+    // no table and has no P4a twins; before it, the client emitted, the applier accepted, the
+    // emitters cleared their per-level dirty flags on that acceptance, and Magma's legacy
+    // upload path found nothing to upload. With it the four families emit NOTHING there and the
+    // legacy pull path runs exactly as it does on a pull build.
+    //
+    // It is exported for the unit gate and for no other caller: the gate itself is
+    // FamilyIsLive() inside PipeFill.cpp, every birth hook and every `wants()` row resolves
+    // through it, and this returns that same expression rather than a second copy of it.
+    Bool MGPipeP4aFamilyEmits(Uint64 subsystem, Uint64 wired);
+
     // PipeFill.cpp. P3a D-H2.1: the DRAW's raw vertex-fetch base instance, which
     // set_vertex_buffers now carries as an explicit field.
     //

@@ -523,6 +523,35 @@ namespace MobileGL::MG_Pipe {
         // that is Fatal{ProtocolCorruption}, not a dropped call.
         Uint64 RefusedObjectCalls = 0;
 
+        // P4a's BELT (ID-39): every call in one of the four families P4a migrates that this
+        // applier declined because NO BACKEND HAS REGISTERED MGPipeResourceOps - i.e. because
+        // nothing in this process consumes what the record publishes.
+        //
+        // WHY THE APPLIER ASKS A QUESTION ABOUT THE BACKEND AT ALL, when it is otherwise
+        // backend-neutral: acceptance is a CONTRACT WITH THE CLIENT since ID-18 M3. The
+        // emitters clear a texture level's dirty flags, advance their descriptor mirrors and
+        // latch their suppressors on the answer this applier returns, so an applier that
+        // accepts a record nothing will ever read makes the client forget work the legacy pull
+        // path still owed - which is exactly how 66 texture-upload-shaped DirectVulkan cases
+        // went red on the push build (ID-39). The client's own gate
+        // (MG_Impl/Pipe/PipeFill.cpp's FamilyIsLive) stops the emission upstream; this is the
+        // belt under it, so a record that reaches here by any other route - GL_Framebuffer.cpp's
+        // PipePublishFramebufferByName calls its emitter directly, without passing PipeFill -
+        // is declined rather than accepted.
+        //
+        // IT IS NOT A DEFECT COUNTER, WHICH IS WHY IT IS SILENT. RefusedResourceCalls,
+        // RefusedVertexInputCalls and RefusedObjectCalls each mean "a record named something
+        // this applier should have had"; a non-zero value there is a seam defect. A non-zero
+        // value HERE is the designed steady state of a backend with no P4a twins, so logging it
+        // would put an ERROR line in every ordinary Magma run. The number is the observable.
+        //
+        // THE DEATH PATHS ARE DELIBERATELY NOT ON THIS LIST. resource_destroy,
+        // delete_sampler_state, delete_sampler_view and delete_shader_state are idempotent
+        // cleanup that must keep working whatever the registration did, and with no consumer
+        // there is no record for them to find anyway (they count their own refusal). Per
+        // context and cleared by MGPipeApplierReset, like the three above it.
+        Uint64 RefusedNoConsumer = 0;
+
         // ---- working state: what the next draw fetches with. All of it is per context and
         // all of it is cleared by MGPipeApplierReset, EXCEPT the two serials, which only ever
         // advance (see there).

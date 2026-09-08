@@ -875,15 +875,64 @@ namespace MobileGL::MG_Pipe {
         using MG_State::GLState::RenderbufferObject;
         using MG_State::GLState::SamplerObject;
 
-        // THE SAME PAIR `wants()` APPLIES TO EVERY EMISSION at the validate point, and it is
+        // THE FOUR FAMILIES P4a MIGRATES, as one mask, so the consumer rule below is stated
+        // once instead of four times. It is deliberately NOT kMGPipeSubsystemsMigratedAtP4a
+        // (which is 0x1fff, every bit through P4a): the rule belongs to the families this
+        // phase adds and to no earlier one.
+        inline constexpr Uint64 kMGPipeP4aFamilySubsystems =
+            kMGPipeSubsystemFramebuffer | kMGPipeSubsystemTextureResources |
+            kMGPipeSubsystemSamplers | kMGPipeSubsystemPrograms;
+
+        // AND THE THIRD HALF, WHICH IS P3a's SECOND ONE: HAS A BACKEND REGISTERED THE CONSUMER?
+        //
+        // `MGPipeResourceSubsystemEnabled()` (above, ~:612) is bit 7 AND
+        // `MGPipeGetResourceOps() != nullptr`, and the second conjunct is not decoration - it is
+        // what keeps P3a's buffers on the legacy pull path under a backend that registers no
+        // table. DirectVulkan (Magma) is exactly that backend: it registers no
+        // MGPipeResourceOps and has none of P4a's twins. Without this conjunct the four P4a
+        // families emitted there anyway, the applier ACCEPTED every record, the emitters cleared
+        // their per-level dirty flags on that acceptance (D-D5 as amended by ID-18 M3), and
+        // Magma's legacy upload path then found nothing left to upload: 66 texture-upload-shaped
+        // DirectVulkan integration-gpu cases red on the push build at the default mask, with the
+        // pull build 966/966 green (ID-39).
+        //
+        // ALL FOUR FAMILIES RIDE THE ONE SIGNAL, and the reason is D-D1: a texture and a
+        // renderbuffer are RESOURCE rows - they travel on P3a's own resource_create /
+        // resource_respecify / resource_subdata catalogue, whose consumer IS this table - so the
+        // texture family's gate is P3a's gate by construction. The other three name texture
+        // handles and cannot be live without it (MGPSurface::Res is a texture or renderbuffer
+        // handle, MGPBoundView::Texture and MGPImageView::Res are texture handles, and
+        // MGPTextureParams is addressed by one), so they follow. There is no fifth signal to
+        // invent and no per-family registration to add: a backend that consumes P4a records
+        // consumes resource rows first.
+        //
+        // A BACKEND THAT REGISTERS ONE IS UNAFFECTED. DirectGLES (Espryt) registers the table
+        // at RegisterBufferBackendOps, unconditionally and at bring-up, so every predicate
+        // below answers exactly what it answered before this commit.
+        //
+        // THE REGISTER/UNREGISTER WINDOW IS THE SAME ONE P3a LIVES WITH, and it is closed the
+        // same way: UnregisterBufferBackendOps nulls the table at context teardown and the
+        // re-register happens at the next MakeCurrent, so an object born in that window never
+        // publishes a create and latches Published = false - after which the family's own
+        // self-healing create on the next respecify (TextureEmit.h ~:576 / ~:709, the shape
+        // MGPipeEmitResourceRespecify above uses for buffers) publishes it. Nothing here needs
+        // to remember the window.
+        Bool P4aFamilyHasItsConsumer(Uint64 subsystem) {
+            return (subsystem & kMGPipeP4aFamilySubsystems) == 0 ||
+                   MGPipeGetResourceOps() != nullptr;
+        }
+
+        // THE SAME TRIPLE `wants()` APPLIES TO EVERY EMISSION at the validate point, and it is
         // deliberately the same predicate rather than a second copy of it: the operator's
-        // per-subsystem A/B bit in MOBILEGL_PIPE_PUSH, AND this build having WIRED the family
-        // at all. The second half is the family's own kMGPipeWired*Subsystem constant, which
-        // lives in the family's emit header and is 0 until the commit that gives the emitter
-        // its body - so a client path that lands before its emitter does is inert by
-        // construction rather than by everyone remembering to check.
+        // per-subsystem A/B bit in MOBILEGL_PIPE_PUSH, this build having WIRED the family
+        // at all, AND - for a P4a family - a backend having registered the consumer. The second
+        // half is the family's own kMGPipeWired*Subsystem constant, which lives in the family's
+        // emit header and is 0 until the commit that gives the emitter its body - so a client
+        // path that lands before its emitter does is inert by construction rather than by
+        // everyone remembering to check; the third is P4aFamilyHasItsConsumer above.
         Bool FamilyIsLive(Uint64 subsystem, Uint64 wired) {
-            return (MG_Config::Features.PipePush & subsystem) != 0 && (wired & subsystem) != 0;
+            return (MG_Config::Features.PipePush & subsystem) != 0 && (wired & subsystem) != 0 &&
+                   P4aFamilyHasItsConsumer(subsystem);
         }
 
         // ---- THE FAMILY SEAM ----
@@ -1037,6 +1086,16 @@ namespace MobileGL::MG_Pipe {
     void MGPipeNoteHandleUnpublished(MGPipeKind kind, MGPipeHandle handle) {
         if (MGPipeHandleIsNull(handle)) return;
         PublicationLatch().NoteUnpublished(kind, handle);
+    }
+
+    // THE GATE ITSELF, AS AN OBSERVABLE (ID-39). Every P4a birth hook below and every `wants()`
+    // row in the walk resolve through FamilyIsLive / P4aFamilyHasItsConsumer, and neither is
+    // reachable from a test - so this is the one door a unit case has onto the answer, and it
+    // is the SAME expression rather than a second copy of it. A subsystem outside
+    // kMGPipeP4aFamilySubsystems answers the pair the P2/P3a families have always answered,
+    // which is what makes "nothing that emits today changes" checkable instead of asserted.
+    Bool MGPipeP4aFamilyEmits(Uint64 subsystem, Uint64 wired) {
+        return FamilyIsLive(subsystem, wired);
     }
 
     void MGPipeMintTextureHandle(ITextureObject& texture) {
@@ -2171,7 +2230,7 @@ namespace MobileGL::MG_Pipe {
         // would be a second copy of that map in the only path that runs, and mis-gating a bit
         // in it would pass every test the map has.
         //
-        // FOUR CONDITIONS, AND THE WIRED MASK IS ONE OF THEM. `kMGPipeWiredSubsystems` is the
+        // FIVE CONDITIONS, AND THE WIRED MASK IS ONE OF THEM. `kMGPipeWiredSubsystems` is the
         // OR of the per-family constants each emit header defines, and the whole ownership
         // design rests on it MEANING what the headers, this file and the result files all say
         // it means: an emitter runs only once the commit that gave it a body set its family's
@@ -2181,11 +2240,21 @@ namespace MobileGL::MG_Pipe {
         // measure an arm nobody thinks is on - and the mirror error is worse: a family that
         // lands its body and forgets the constant would emit nothing and look broken. The
         // P2/P3a bits are all in the mask, so nothing that emits today changes.
+        //
+        // AND THE FIFTH IS P4aFamilyHasItsConsumer (ID-39), the same conjunct FamilyIsLive
+        // applies to every birth hook: a P4a family whose records nothing on this backend
+        // consumes emits NOTHING, so the legacy pull path runs exactly as it does on the pull
+        // build. It is written here rather than folded into kMGPipeWiredSubsystems because the
+        // wired mask is a property of the BUILD - a constexpr an emit header sets - and this is
+        // a property of the RUNNING BACKEND, and collapsing the two would make a bisect that
+        // lands between them unreadable. The P2/P3a bits are outside kMGPipeP4aFamilySubsystems,
+        // so the conjunct is true for every one of them and nothing that emits today changes.
         const Uint64 pushMask = MG_Config::Features.PipePush;
         const auto wants = [&](MGPipeDirty bit) {
             const Uint64 subsystem = MGPipeSubsystemForDirty(bit);
             return subsystem != 0 && (pushMask & subsystem) != 0 &&
                    (kMGPipeWiredSubsystems & subsystem) != 0 &&
+                   P4aFamilyHasItsConsumer(subsystem) &&
                    (dirty & MGPipeDirtyBit(bit)) != 0;
         };
         Uint64 payloadBytes = 0;
@@ -2250,10 +2319,14 @@ namespace MobileGL::MG_Pipe {
             payloadBytes += EmitShaderState(*ctx);
         }
         // The texture drain has no dirty bit over it (see its definition); it is gated on the
-        // subsystem bit and on this build having wired the family at all, which is the same
-        // pair `wants()` applies to every other emission.
+        // subsystem bit, on this build having wired the family at all and on a backend having
+        // registered the consumer, which is the same triple `wants()` applies to every other
+        // emission. The third one is the whole of ID-39 on the path where it mattered most:
+        // the drain is what clears a level's dirty flags on acceptance, so a drain that ran
+        // against an applier no backend reads is exactly how Magma lost its texel uploads.
         if ((pushMask & kMGPipeSubsystemTextureResources) != 0 &&
-            (kMGPipeWiredSubsystems & kMGPipeSubsystemTextureResources) != 0) {
+            (kMGPipeWiredSubsystems & kMGPipeSubsystemTextureResources) != 0 &&
+            P4aFamilyHasItsConsumer(kMGPipeSubsystemTextureResources)) {
             payloadBytes += DrainTextureSubData(*ctx);
         }
         if (wants(MGPipeDirty::NewSamplerViews)) {
@@ -2326,8 +2399,13 @@ namespace MobileGL::MG_Pipe {
             // the very fields the migration just took over.
             const MGPipeFieldEmitter emitter = kMGPipeFieldEmittedBy[i];
             const Uint64 subsystem = SubsystemForEmitter(emitter);
+            // P4aFamilyHasItsConsumer is in this conjunction for the reason it is in `wants()`:
+            // "supplied" means A CALL WENT OUT CARRYING THIS FIELD, and on a backend with no
+            // consumer no P4a call went out at all - so withholding the pull here would leave
+            // the field unfilled at the very verb that reads it.
             const Bool supplied = subsystem != 0 && (subsystem & kMGPipeWiredSubsystems) != 0 &&
                                   (pushMask & subsystem) != 0 &&
+                                  P4aFamilyHasItsConsumer(subsystem) &&
                                   EmittedCallSuppliesTheWholeField(field) &&
                                   (applierDerives || AppliedWithoutDerivation(field));
             if (!supplied) MGPipeFillAccess::CopyField(inputs, *ctx, field);
