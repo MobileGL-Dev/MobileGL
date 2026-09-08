@@ -80,11 +80,22 @@ namespace {
     }
 
 #if MOBILEGL_PIPE_PUSH
-    std::string ReadLog() {
+    // `from` is a byte offset, and it exists because of the fork below: the library's log file
+    // is already open by the time a case runs, so the child's lines are APPENDED to it rather
+    // than written to a fresh file, and only what the child appended is this drive's evidence.
+    std::string ReadLog(std::streamoff from = 0) {
         std::ifstream in(g_logPath, std::ios::binary);
+        if (from > 0) in.seekg(from, std::ios::beg);
         std::ostringstream ss;
         ss << in.rdbuf();
         return ss.str();
+    }
+
+    // Where the library's log file currently ends. Reading from here after the child has
+    // aborted gives exactly the lines that drive produced.
+    std::streamoff LogEnd() {
+        std::ifstream in(g_logPath, std::ios::binary | std::ios::ate);
+        return in ? static_cast<std::streamoff>(in.tellg()) : std::streamoff{0};
     }
 
     // A fresh applier per case, BOTH SCOPES, and it takes both because there are two: a reset
@@ -112,8 +123,14 @@ namespace {
     template <class Body>
     ChildResult RunInChild(Body body) {
         ChildResult result;
-        std::error_code ec;
-        std::filesystem::remove(g_logPath, ec);
+        // THE LOG PATH IS NOT UNLINKED HERE, and that is what this helper had to learn when the
+        // client's cases landed in the same file as the applier's: main() calls
+        // MobileGL::Initialize(), so the library's log FILE* is already open on this path and
+        // fork() duplicates it. Removing the path would leave the child writing into a deleted
+        // inode and the parent reading an empty file - the child would still abort, and the
+        // assertion on WHAT it named could never see the line. So the log's end is remembered
+        // and only what the child appended is read back.
+        const std::streamoff before = LogEnd();
         std::fflush(nullptr);
         const pid_t pid = ::fork();
         if (pid < 0) return result;
@@ -124,7 +141,7 @@ namespace {
         int status = 0;
         if (::waitpid(pid, &status, 0) != pid) return result;
         result.Status = status;
-        result.Log = ReadLog();
+        result.Log = ReadLog(before);
         return result;
     }
 
