@@ -137,18 +137,28 @@ namespace MobileGL {
 
 #if MOBILEGL_PIPE_PUSH
             // D-D2: THE RENDERBUFFER PUBLICATION HOLE, CLOSED BY EMISSION AND NOT BY A NEW
-            // VERSION. These three setters bump no version and raise no notice, and the
-            // framebuffer dirty bit's shutter does not move when an ALREADY-ATTACHED renderbuffer
-            // is re-storaged - so `glBindRenderbuffer; glRenderbufferStorage(newSize)` on an
-            // attached renderbuffer was invisible to everything downstream. Emitting from the
-            // storage entry point closes it; a version counter here would resize the pull build's
-            // object and break G1, and widening the shutter would fire the framebuffer emission on
-            // an unrelated renderbuffer write.
+            // VERSION. These three setters bump no version and raise no notice, so
+            // `glBindRenderbuffer; glRenderbufferStorage(newSize)` on an attached renderbuffer
+            // was invisible to everything downstream. Emitting from the storage entry point
+            // closes the RESOURCE half; a version counter here would resize the pull build's
+            // object and break G1.
+            //
+            // THE FRAMEBUFFER HALF IS THE AGGREGATE BUMP BELOW (P4a fable seam F-3), and the
+            // sentence that used to end the paragraph above - "widening the shutter would fire
+            // the framebuffer emission on an unrelated renderbuffer write" - was the seam:
+            // set_framebuffer_state inlines an attachment's InternalFormat, extent and Samples at
+            // emission (D-C1), so re-storaging an ATTACHED renderbuffer left the framebuffer
+            // record - and the handle arm's four cross-object masks - describing the previous
+            // storage while the resource record described the new one. The bump costs one
+            // framebuffer re-emission per storage definition, whether or not the object is
+            // attached, which the emitter's content hash suppresses when nothing it inlines
+            // moved; it is not a counter on this object.
             //
             // The emitter dedupes on the built descriptor, so glRenderbufferStorage's three-setter
             // sequence publishes once rather than three times.
             void RenderbufferObject::PipePublishDescriptor() {
                 MG_Pipe::MGPipeEmitRenderbufferResourceRespecify(*this);
+                MGP_NOTE_AGGREGATE(FramebufferAttachment);
             }
 #endif
         } // namespace GLState

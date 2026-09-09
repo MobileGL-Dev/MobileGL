@@ -56,7 +56,11 @@ namespace MobileGL::MG_Pipe {
     enum class MGPipeAggregate : Uint32 {
         // VertexArrayState: any VAO attribute format / buffer / enable moved.
         VaoAttribute = 0,
-        // FramebufferState: any FBO attachment or default-geometry write, or a bind.
+        // FramebufferState: any FBO attachment or default-geometry write, or a bind - and, since
+        // P4a (fable seam F-3), any STORAGE DEFINITION of a texture or a renderbuffer, because
+        // set_framebuffer_state inlines an attachment's format, extent and samples and those
+        // setters are the only writers of what it inlines (TextureObject.cpp /
+        // RenderbufferObject.cpp, PipePublishDescriptor).
         FramebufferAttachment,
         // TextureState: any texture object CONTENT moved (an upload, a dirty region).
         TextureContent,
