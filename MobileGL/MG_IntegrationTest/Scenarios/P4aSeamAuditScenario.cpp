@@ -648,5 +648,91 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
             EXPECT_EQ(FirstGLError(), 0u) << GLErrorName(FirstGLError());
         }
 
+        // -----------------------------------------------------------------------------------
+        // F-4: the unit's driver sampler is the CSO's own twin on the handle arm
+        // -----------------------------------------------------------------------------------
+        //
+        // Public-GL half: a glBindSampler'd object whose wrap differs from the texture's built-in
+        // sampler wins (GL 4.6 core 8.10) - every arm passes this, because the pre-handle program
+        // pass bound the object through its identity twin. White-box half, on Espryt's handle arm:
+        // the sampler the unit carries on the driver must be the twin Espryt holds AT THE CSO
+        // HANDLE bind_sampler_states named for the unit. On the tree the audit read that twin did
+        // not exist - the handle is content-addressed, the registry's twins were minted off
+        // lifetime ids - so the record arm bound nothing on every draw.
+        TEST_F(P4aSeamAuditScenario, ABoundSamplerObjectIsDrivenThroughItsCsoTwinOnTheHandleArm) {
+            if (!Ready()) return;
+
+            std::string error;
+            const GLuint program = CompileProgram(kQuadVS, kOutsideSampleFS, &error);
+            ASSERT_NE(program, 0u) << error;
+
+            // The texture's built-in sampler REPEATS, so (1.5, 1.5) reads the red texel through it;
+            // the sampler object CLAMPS TO A WHITE BORDER, so the same coordinate reads white
+            // through it. White is a Vulkan palette border colour, so Magma needs no extension.
+            const GLuint red = MakeSolidTexture2D(255, 0, 0);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+            GLuint sampler = 0;
+            glGenSamplers(1, &sampler);
+            glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+            glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+            const GLfloat white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+            glSamplerParameterfv(sampler, GL_TEXTURE_BORDER_COLOR, white);
+            ASSERT_EQ(FirstGLError(), 0u) << "sampler setup left a GL error behind";
+
+            ColorFbo target = MakeColorFbo(kSize, kSize);
+            ASSERT_NE(target.fbo, 0u);
+            BindFbo(target);
+            glBindVertexArray(m_vao);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, red);
+            glBindSampler(0, sampler);
+            glUseProgram(program);
+            glUniform1i(glGetUniformLocation(program, "uTex"), 0);
+            ClearTo(0.0f, 0.0f, 1.0f, 1.0f);
+            DrawQuad();
+            EXPECT_EQ(FirstGLError(), 0u) << "the draw left a GL error behind";
+
+            const Image image = ReadPixels(kSize, kSize);
+            ASSERT_FALSE(image.Empty());
+            EXPECT_TRUE(RegionIsMostly(image, kInset, kSize - 1 - kInset, kInset, kSize - 1 - kInset, "white", 0.0,
+                                       "the draw through the bound sampler object"))
+                << "red means the texture's own REPEAT sampler applied instead of the bound object's "
+                   "CLAMP_TO_BORDER";
+
+            if (SamplerHandleArmIsLive("F-4")) {
+                EsprytUnitSamplerPeek peek{};
+                ASSERT_TRUE(PeekEsprytUnitSampler(0, sampler, &peek));
+                std::cout << "[ P4aSeamAudit ] white-box: unit 0 driver sampler " << peek.BoundSamplerId
+                          << ", bind_sampler_states handle {" << peek.CsoHandleSlot << ", " << peek.CsoHandleGen
+                          << "} inside window " << (peek.UnitInsideWindow ? "yes" : "no") << ", CSO twin "
+                          << peek.CsoTwinSamplerId << ", identity twin " << peek.IdentityTwinSamplerId << std::endl;
+                EXPECT_TRUE(peek.UnitInsideWindow) << "bind_sampler_states did not describe unit 0";
+                EXPECT_NE(peek.CsoHandleSlot, 0u) << "bind_sampler_states names no CSO for a unit that carries "
+                                                     "a sampler object";
+                EXPECT_NE(peek.CsoTwinSamplerId, 0u)
+                    << "Espryt holds no twin at the CSO handle bind_sampler_states named: the record arm's "
+                       "lookup went to the identity-keyed registry with a content-addressed handle and "
+                       "could never hit (F-4)";
+                EXPECT_EQ(peek.BoundSamplerId, peek.CsoTwinSamplerId)
+                    << "the driver sampler on unit 0 is not the CSO's twin, so it was put there by the "
+                       "pre-handle program pass and not by the record arm (F-4)";
+                EXPECT_EQ(peek.IdentityTwinSamplerId, 0u)
+                    << "an identity-keyed twin was minted for the sampler object on the handle arm: the "
+                       "pre-handle pass is still the one doing the binding";
+            }
+
+            glBindSampler(0, 0);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glUseProgram(0);
+            DestroyColorFbo(target);
+            glDeleteSamplers(1, &sampler);
+            glDeleteTextures(1, &red);
+            glDeleteProgram(program);
+            EXPECT_EQ(FirstGLError(), 0u) << GLErrorName(FirstGLError());
+        }
+
     } // namespace
 } // namespace MGITest

@@ -4777,10 +4777,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // A NULL HANDLE MEANS "this unit has no sampler object", which is the record's way of
         // saying what the frontend's null SharedPtr says, and it unbinds - the texture's own
-        // built-in sampler then applies, exactly as today. A handle whose twin does not exist
-        // yet is left alone and NOT cached as a miss, for the reason ResolveUnitSamplerBackend
-        // gives: the program pass creates the twin later in the same draw, and its Bind moves
-        // the shadow row and so re-opens this memo.
+        // built-in sampler then applies, exactly as today. A live handle resolves to THE CSO's
+        // OWN TWIN (P4a fable seam F-4, SamplerImpl::ResolveSamplerCsoTwin): the sentence that
+        // stood here - "a handle whose twin does not exist yet is left alone ... the program
+        // pass creates the twin later in the same draw" - described a lookup that could never
+        // hit, because the handle is content-addressed and the registry's twins were minted off
+        // lifetime ids, so this arm bound nothing on every draw and only the pre-handle program
+        // pass ever put a glBindSampler'd object on the driver. The program pass now binds the
+        // same CSO twin for the units it samples, which is what stops the two arms ping-ponging
+        // a unit between two driver samplers.
         //
         // Declines - falls through to the frontend walk - until the set has arrived, and the
         // COUNT says so rather than the serial (MGPipeApplierReset advances serials whether or
@@ -4837,16 +4842,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         SamplerImpl::UnbindSampler(unit);
                         continue;
                     }
-                    // P4a decline-site S4: M - a live handle whose twin does not exist yet is
-                    //   left alone and deliberately NOT cached as a miss: the program pass
-                    //   creates the twin later in the same draw and its Bind moves the shadow
-                    //   row, which re-opens this memo. Parity with ResolveUnitSamplerBackend's
-                    //   null path. SILENT, CONFIRMED AT THE VERIFICATION ROUND: this is a
-                    //   within-draw ORDERING fact, not a missing record, and the sampler
-                    //   family's own missing-record refusal lives in D's SyncToBackend.
-                    if (auto* slot = SamplerImpl::g_backendSamplerObjects.FindByHandle(sampler);
-                        slot && *slot) {
-                        (*slot)->Bind(unit);
+                    // P4a decline-site S4, RETIRED at the fable seam round (F-4): what stood here
+                    //   was `g_backendSamplerObjects.FindByHandle(sampler)` - an identity-keyed
+                    //   table asked for a content-addressed handle, a miss by construction on
+                    //   every draw - with a comment that read the miss as a within-draw ordering
+                    //   fact. The twin is the CSO's own now; a null answer has already named its
+                    //   reason (no record, or a slot that cannot be adopted) and leaves the unit
+                    //   as it is, which is the one decline this arm still has.
+                    if (auto* twin = SamplerImpl::ResolveSamplerCsoTwin(sampler)) {
+                        twin->Bind(unit);
                     }
                 }
                 walkedFromRecords = true;
@@ -5292,6 +5296,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 GetRawDepthFetchSampler()->Bind(unit);
                                 MGLOG_D("Using raw depth fetch sampler on unit %d.", unit);
                             } else if (samplerObject) {
+#if MOBILEGL_PIPE_PUSH
+                                // P4a fable seam F-4: on the handle arm the unit's sampler is THE
+                                // CSO's OWN TWIN, the same one BindCurrentUnitSamplers' record arm
+                                // binds, so this pass and that walk cannot hand the unit back and
+                                // forth between two driver samplers. The handle is read only inside
+                                // the received window - outside it BoundSamplerStates holds whatever
+                                // an earlier, wider set left - and a unit the window does not
+                                // describe, or a handle whose record is gone, takes the pre-handle
+                                // path below, which carries the handle to SyncToBackend and speaks
+                                // there.
+                                SamplerImpl::BackendSamplerObject* csoTwin = nullptr;
+                                if (SamplerSubsystemEnabled()) {
+                                    const auto& st = MG_Pipe::MGPipeApplier();
+                                    const auto index = static_cast<Uint32>(unit);
+                                    if (index >= st.SamplerStateStart &&
+                                        index - st.SamplerStateStart < st.SamplerStateCount &&
+                                        index < st.BoundSamplerStates.size()) {
+                                        csoTwin = SamplerImpl::ResolveSamplerCsoTwin(st.BoundSamplerStates[index]);
+                                    }
+                                }
+                                if (csoTwin != nullptr) {
+                                    csoTwin->Bind(unit);
+                                } else {
+#endif
                                 auto* backendSampler = ResolveUnitSamplerBackend(unit, samplerObject);
                                 if (!backendSampler) {
                                     auto& backendObj =
@@ -5314,6 +5342,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 // unit: without this the driver kept sampling with the texture's own
                                 // parameters and every sampler object was inert.
                                 backendSampler->Bind(unit);
+#if MOBILEGL_PIPE_PUSH
+                                }
+#endif
                             } else {
                                 SamplerImpl::UnbindSampler(unit);
                             }

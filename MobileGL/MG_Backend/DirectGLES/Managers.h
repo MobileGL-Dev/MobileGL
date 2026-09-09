@@ -2583,6 +2583,39 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_boundSamplersCache;
         extern TwinRegistry<MG_State::GLState::SamplerObject, BackendSamplerObject, MG_Pipe::MGPipeKind::SamplerCso>
             g_backendSamplerObjects;
+
+#if MOBILEGL_PIPE_PUSH
+        // P4a FABLE SEAM F-4: THE TWIN FOR A CONTENT-ADDRESSED SamplerCso HANDLE.
+        //
+        // bind_sampler_states carries, per unit, the handle of a CSO the client allocated BY
+        // CONTENT (SamplerEmit.h: MGPipeSlots().Allocate with no lifetime id), while every twin
+        // in g_backendSamplerObjects was minted off a SamplerObject's lifetime id - two disjoint
+        // slot families out of one allocator. So `g_backendSamplerObjects.FindByHandle(
+        // BoundSamplerStates[unit])` (the record arm of BindCurrentUnitSamplers, E's S4) could
+        // never find a twin, the record arm bound nothing on every draw, and every glBindSampler
+        // reached the driver only through the pre-handle program pass - S-1's confusion one
+        // loop over, and exactly what SamplerEmit.h:201-205 forbids ("a backend must NOT key a
+        // sampler twin on a SamplerObject's lifetime id; the twin's life is
+        // create_sampler_state -> delete_sampler_state").
+        //
+        // This is the twin keyed the way the record is: resolved-or-created AT THE CSO HANDLE
+        // (GetOrCreateByHandle, the same slot table, a slot the identity family can never hold)
+        // and synced from the record it names, serial-gated. Two callers bind it - the record
+        // arm of BindCurrentUnitSamplers and the program pass's sampler override - so the two
+        // cannot ping-pong the unit between an identity twin and a CSO twin. Its death is the
+        // slot's recycle: the client's LRU eviction drops the record and frees the slot, and
+        // the next handout at that slot arrives with a moved generation, which GetOrCreate(
+        // handle) answers by resetting the twin (the driver sampler goes with it). A twin for
+        // an evicted CSO therefore lives until its slot is reused - bounded by the cache's
+        // capacity, never by draw count - and there is no delete_sampler_state hook to retire it
+        // earlier; the ops table carries none for this kind.
+        //
+        // Null, loudly, when the handle names no record (a client seam) or cannot be adopted
+        // (a generation behind the slot's live entry); null silently for the null handle. The
+        // pre-handle arm - a twin keyed on the frontend object - is untouched and still serves
+        // the raw-depth-fetch sampler and every caller that carries no handle.
+        BackendSamplerObject* ResolveSamplerCsoTwin(MG_Pipe::MGPipeHandle cso);
+#endif
     } // namespace SamplerImpl
 
 #if MOBILEGL_PIPE_PUSH
