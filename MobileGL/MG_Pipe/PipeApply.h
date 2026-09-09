@@ -784,6 +784,11 @@ namespace MobileGL::MG_Pipe {
     // same value the emission of that level put in the record. A per-face respecify therefore
     // drops the face it redefines and leaves the other five standing, and a caller that packs
     // the pair differently here than it packs it there simply matches nothing.
+    // A NAMED LEVEL IS DROPPED EVEN WHEN EVERY STORAGE-DEFINING FIELD IS UNCHANGED (P4a final
+    // review C-1): the pointer is the caller's statement that it reallocated that level, and
+    // a non-base level's extent is not in the descriptor. Only a NULL level with unchanged
+    // fields is the metadata update that drops nothing (ID-18 M4); the client's mask republish
+    // is the one caller of that shape and passes null on purpose.
     struct MGPRespecifiedLevel {
         Uint16 UploadTarget = 0;
         Uint16 Level = 0;

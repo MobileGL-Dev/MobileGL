@@ -1100,10 +1100,13 @@ namespace MobileGL::MG_Pipe {
     //     answers the per-record question, but a metadata update allocates nothing, so a
     //     record it classifies as metadata is not acked even when that predicate says the
     //     call may require one.
-    //   - NO PendingUploads clear - not the whole vector, and not the redefined level either.
-    //     This REFINES the level-scoped clear: identical storage fields clear NOTHING. (The
+    //   - NO PendingUploads clear when the call names NO level. This REFINES the whole-resource
+    //     clear: identical storage fields with a null MGPRespecifiedLevel clear NOTHING. (The
     //     level-scoped rule exists because clearing the whole vector on a level-1 definition
-    //     silently dropped level 0's accepted texels; a metadata update must drop neither.)
+    //     silently dropped level 0's accepted texels; a metadata update must drop neither.) A
+    //     call that NAMES a level is that level's redefinition whatever the descriptor says -
+    //     a non-base level's extent is not a descriptor field - and drops exactly that level
+    //     (P4a final review C-1); the client's mask republish passes null on purpose.
     //   - The stored descriptor's BindMask and ImageBindableHint ARE updated - BindMask is
     //     sticky and therefore ORed, never replaced - and the twin re-derives its storage
     //     flags from the new mask on its next sync, recreating backend storage only where the

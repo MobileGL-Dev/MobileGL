@@ -1667,23 +1667,28 @@ namespace MobileGL::MG_Pipe {
         //     the arm this set exists for) -> glTexImage2D(1, data), which under a blanket
         //     clear destroys level 0's entry before anything ever uploaded it.
         //
-        //   - and a METADATA update (ID-18 M4) drops NOTHING, whatever `level` says. It is the
-        //     third arm and it refines the first two rather than contradicting them: the rule
-        //     is "the uploads against the storage this call REPLACES go with it", and a call
-        //     whose storage-defining fields all equal the stored descriptor replaces no
-        //     storage, so no level's coordinate system has moved and every pending box is still
-        //     described in the space it was accumulated in. B re-emits the descriptor when a
-        //     sticky bind bit moves, which can land between a glTexSubImage2D and the sync that
-        //     consumes it; eating those texels there would be C1's bug with a different
-        //     trigger, and just as silent.
+        //   - and a METADATA update (ID-18 M4) with a NULL level drops NOTHING. It refines the
+        //     whole-resource arm rather than contradicting it: the rule is "the uploads against
+        //     the storage this call REPLACES go with it", and a call whose storage-defining
+        //     fields all equal the stored descriptor replaces no storage, so no level's
+        //     coordinate system has moved and every pending box is still described in the
+        //     space it was accumulated in. B re-emits the descriptor when a sticky bind bit
+        //     moves - with a null level, deliberately - which can land between a
+        //     glTexSubImage2D and the sync that consumes it; eating those texels there would be
+        //     C1's bug with a different trigger, and just as silent.
+        //
+        //   - A NAMED LEVEL IS DROPPED WHETHER OR NOT THE DESCRIPTOR MOVED (P4a final review
+        //     C-1, refining wire's W11 clause). The level pointer is the CALLER's statement that
+        //     it reallocated that level, and the descriptor cannot contradict it: a non-base
+        //     level redefined at a new size moves no descriptor field at all (the descriptor
+        //     carries the base extent and the level count), so "identical storage fields" says
+        //     nothing about that level's coordinate system, and a box kept against the old
+        //     level would be uploaded past the end of the new one. The client's mask republish
+        //     passes null, so this arm can never eat a standing upload on its behalf.
         //
         // A buffer never has a pending upload at all, so all three arms are inert for P3a's
         // half - which is also why a buffer is never classified as metadata-only (below).
-        if (metadataOnly) {
-            // nothing to drop, deliberately.
-        } else if (level == nullptr) {
-            record->PendingUploads.clear();
-        } else {
+        if (level != nullptr) {
             // The keys are unique by AccumulatePendingUpload's construction - it looks for the
             // pair before it appends - so this erases at most one entry and stops.
             for (auto it = record->PendingUploads.begin(); it != record->PendingUploads.end(); ++it) {
@@ -1691,6 +1696,10 @@ namespace MobileGL::MG_Pipe {
                 record->PendingUploads.erase(it);
                 break;
             }
+        } else if (metadataOnly) {
+            // nothing to drop, deliberately.
+        } else {
+            record->PendingUploads.clear();
         }
 
         // resource_respecify is the catalogue's only kNeedsAck call, and the per-record half

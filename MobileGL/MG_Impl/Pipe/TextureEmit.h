@@ -523,14 +523,36 @@ namespace MobileGL::MG_Pipe {
             PublishCreate(MGPipeKind::Texture, handle, entry, desc);
         }
 
-        // resource_respecify, from every storage-defining entry point. DEDUPED ON THE
-        // DESCRIPTOR ITSELF rather than on a version, because the entry points that reach here
-        // are the ones that move the SHAPE and several of them do not move the descriptor at
-        // all (glTexParameter TEXTURE_BASE_LEVEL bumps the shape version and changes no field
-        // this record carries). A byte compare of an 88-byte POD is cheaper than the emission
-        // it avoids, and it is the same "version-first skip before anything expensive" shape
-        // every other P4a emission takes.
-        void EmitResourceRespecify(ITextureObject& texture) {
+        // resource_respecify, from every storage-defining entry point, WITH THE SCOPE OF THE
+        // STORAGE IT REPLACES (P4a final review C-1; the scopes are PipeMutation.h's).
+        //
+        // THE LEVEL IS PASSED, AND IT IS WIRE'S KEY. The applier keeps a pending-upload set per
+        // (uploadTarget, level) - the client's dirty flags, inverted - and a respecify drops the
+        // entries against the storage it REPLACES: with a null MGPRespecifiedLevel every entry,
+        // with a level exactly that one. v2 passed null at every call, so a level the applier
+        // had ACCEPTED at one verb (the client flag already clear, D-D5 step 1) and that the
+        // next verb's glTexImage2D(level 1) or glGenerateMipmap grow defined AROUND was dropped
+        // with nobody owing its texels: `L0; draw(other); L1; draw(T)` read a black level 0.
+        // The key is built from the SAME packed MGPSubData::Target the drain puts in that
+        // level's record (wire-v3 §5 item 5), so what this drops is what that emission made.
+        //
+        // THREE SCOPES, one call each for the first two and one call PER REMOVED LEVEL for the
+        // chain cut: the applier's key is one (uploadTarget, level), so "every level from N"
+        // is spelled as N.., each after the first landing on an unchanged descriptor - which
+        // the applier classifies as a metadata update that drops nothing but the level it
+        // names. That is the refinement wire's W11 clause takes this round.
+        //
+        // DEDUPED ON THE DESCRIPTOR ITSELF for the whole-resource form only: the entry points
+        // that reach it move the SHAPE and several of them do not move the descriptor at all
+        // (glTexParameter TEXTURE_BASE_LEVEL bumps the shape version and changes no field this
+        // record carries), and a byte compare of an 88-byte POD is cheaper than the emission
+        // it avoids. A PER-LEVEL form is never deduped: the level it redefines is not in the
+        // descriptor (a non-base level's extent moves no field), so an unchanged descriptor
+        // cannot say whether the applier still holds a box against the OLD level - and a box
+        // kept across a shrink is uploaded past the end of the new one. One applier call per
+        // level definition is the cost, and the sub-data that follows moves the serial anyway.
+        void EmitResourceRespecify(ITextureObject& texture, MGPipeTextureRespecifyScope scope,
+                                   Uint32 uploadTarget, Uint32 level) {
             const MGPipeHandle handle = AcquireTexture(texture.GetLifetimeId(), &texture);
             // THE VIEW'S OWNER IS ACQUIRED FIRST, and no Entry& is held across it (m3): the
             // owner's slot can be higher than this table's size, so AcquireTexture would
@@ -568,7 +590,37 @@ namespace MobileGL::MG_Pipe {
             const MGPResourceDesc desc = MGPipeBuildTextureResourceDesc(
                 texture, handle, entry.BindMask, /*storageDefined=*/true, viewOf, bufferHandle, bufOffset,
                 bufSize);
-            if (entry.HasLastDesc && std::memcmp(&entry.LastDesc, &desc, sizeof(desc)) == 0) return;
+            const Bool unchanged = entry.HasLastDesc && std::memcmp(&entry.LastDesc, &desc, sizeof(desc)) == 0;
+
+            // THE KEYS THIS CALL DROPS. `keyCount == 0` is the whole resource (a null level
+            // pointer); otherwise `keyCount` keys from `firstLevel` up, all on `uploadTarget`.
+            Uint32 firstLevel = 0;
+            Uint32 keyCount = 0;
+            switch (scope) {
+            case MGPipeTextureRespecifyScope::OneLevel:
+                firstLevel = level;
+                keyCount = 1;
+                break;
+            case MGPipeTextureRespecifyScope::LevelsFrom: {
+                // A cut at 0 leaves nothing: the whole resource. Otherwise the removed levels
+                // are [level, the level count the applier last accepted): LastDesc mirrors
+                // acceptance, and a sub-data for a level the accepted descriptor does not
+                // describe is refused by the applier, so no key above that count can exist. A
+                // cut that removes nothing the applier could hold is deduped like the
+                // whole-resource form; if the descriptor moved anyway the first key carries it.
+                if (level == 0) break;
+                const Uint32 previous = entry.HasLastDesc ? static_cast<Uint32>(entry.LastDesc.Levels) : 0u;
+                if (previous <= level && unchanged) return;
+                firstLevel = level;
+                keyCount = previous > level ? previous - level : 1u;
+                break;
+            }
+            case MGPipeTextureRespecifyScope::WholeResource:
+            default:
+                if (unchanged) return;
+                break;
+            }
+
             // SELF-HEALING IN BOTH DIRECTIONS, the P3a m12 shape: a texture born while the
             // subsystem bit was clear has no applier record, and every later respecify would be
             // REFUSED. A create rather than a respecify, because that is what the record's
@@ -589,24 +641,24 @@ namespace MobileGL::MG_Pipe {
             // about what the APPLIER holds, so a refused respecify must leave LastDesc naming
             // the descriptor that actually landed, or the next identical call is suppressed
             // against a record that was never stored.
-            Bool accepted = ApplyRespecify(desc);
-            if constexpr (MGPipeTextureRecordsReachTheApplier()) {
-                if (!accepted) {
-                    // THE SECOND HALF OF THE SELF-HEAL, and the publication latch cannot give
-                    // it: the latch answers "did a create for this handle GO OUT", which stays
-                    // true after MGPipeApplierReleaseObjectRecords has dropped every object
-                    // record - the scope a served context's teardown takes while the frontend
-                    // objects live on in the share group. The applier's REFUSAL is the only
-                    // signal that says "I hold nothing for this handle", and the acceptance
-                    // return is what makes it visible from here at all. One retry, never a
-                    // loop: a descriptor the applier refuses on its own merits (a target that
-                    // names no resource kind) is refused again and the flags stay set.
-                    const MGPResourceDesc healDesc = MGPipeBuildTextureResourceDesc(
-                        texture, handle, entry.BindMask, /*storageDefined=*/false, viewOf,
-                        bufferHandle, bufOffset, bufSize);
-                    NoteDesc(healDesc, /*isCreate=*/true);
-                    PublishCreate(MGPipeKind::Texture, handle, entry, healDesc);
-                    accepted = ApplyRespecify(desc);
+            //
+            // THE PACKED TARGET IS THE DRAIN's (wire-v3 §5 item 5): the contract's packer takes
+            // two Uint32s, low byte the resource target, high byte the upload target (a cube
+            // face), and the applier matches the key against the sub-data records verbatim.
+            const Uint16 packedTarget = MGPipePackSubDataTarget(
+                static_cast<Uint32>(MGPipeResourceTargetForTextureTarget(texture.GetTarget())), uploadTarget);
+            Bool accepted = false;
+            if (keyCount == 0) {
+                accepted = RespecifyOnce(texture, handle, entry, desc, nullptr, viewOf, bufferHandle, bufOffset,
+                                         bufSize);
+            } else {
+                for (Uint32 i = 0; i < keyCount; ++i) {
+                    MGPRespecifiedLevel key{};
+                    key.UploadTarget = packedTarget;
+                    key.Level = static_cast<Uint16>(firstLevel + i);
+                    accepted = RespecifyOnce(texture, handle, entry, desc, &key, viewOf, bufferHandle, bufOffset,
+                                             bufSize);
+                    if (!accepted) break;
                 }
             }
             NoteRespecified(entry, desc, accepted);
@@ -713,7 +765,8 @@ namespace MobileGL::MG_Pipe {
                 PublishCreate(MGPipeKind::Renderbuffer, handle, entry, createDesc);
             }
             NoteDesc(desc, /*isCreate=*/false);
-            Bool accepted = ApplyRespecify(desc);
+            // A renderbuffer's storage is always the whole object: no levels, so no key.
+            Bool accepted = ApplyRespecify(desc, nullptr);
             if constexpr (MGPipeTextureRecordsReachTheApplier()) {
                 if (!accepted) {
                     // See the texture twin: the applier's refusal is the only thing that can
@@ -722,7 +775,7 @@ namespace MobileGL::MG_Pipe {
                         renderbuffer, handle, entry.BindMask, /*storageDefined=*/false);
                     NoteDesc(healDesc, /*isCreate=*/true);
                     PublishCreate(MGPipeKind::Renderbuffer, handle, entry, healDesc);
-                    accepted = ApplyRespecify(desc);
+                    accepted = ApplyRespecify(desc, nullptr);
                 }
             }
             NoteRespecified(entry, desc, accepted);
@@ -952,11 +1005,41 @@ namespace MobileGL::MG_Pipe {
             entry.HasLastDesc = true;
         }
 
-        static Bool ApplyRespecify(const MGPResourceDesc& desc) {
+        // `level` is null for the whole resource and a key for exactly one level; every caller
+        // says which (final review C-1), and RepublishMask's null is deliberate - a mask move
+        // replaces no storage at all.
+        static Bool ApplyRespecify(const MGPResourceDesc& desc, const MGPRespecifiedLevel* level) {
             if constexpr (MGPipeTextureRecordsReachTheApplier()) {
-                return MGPipeApplyResourceRespecify(desc, nullptr);
+                return MGPipeApplyResourceRespecify(desc, nullptr, level);
             }
+            (void)level;
             return false;
+        }
+
+        // One respecify with one key, and the refusal self-heal beside it. THE SECOND HALF OF
+        // THE SELF-HEAL, and the publication latch cannot give it: the latch answers "did a
+        // create for this handle GO OUT", which stays true after
+        // MGPipeApplierReleaseObjectRecords has dropped every object record - the scope a
+        // served context's teardown takes while the frontend objects live on in the share
+        // group. The applier's REFUSAL is the only signal that says "I hold nothing for this
+        // handle", and the acceptance return is what makes it visible from here at all. One
+        // retry, never a loop: a descriptor the applier refuses on its own merits (a target
+        // that names no resource kind) is refused again and the flags stay set.
+        Bool RespecifyOnce(ITextureObject& texture, MGPipeHandle handle, Entry& entry, const MGPResourceDesc& desc,
+                           const MGPRespecifiedLevel* key, MGPipeHandle viewOf, MGPipeHandle bufferHandle,
+                           Uint64 bufOffset, Uint64 bufSize) {
+            Bool accepted = ApplyRespecify(desc, key);
+            if constexpr (MGPipeTextureRecordsReachTheApplier()) {
+                if (!accepted) {
+                    const MGPResourceDesc healDesc = MGPipeBuildTextureResourceDesc(
+                        texture, handle, entry.BindMask, /*storageDefined=*/false, viewOf, bufferHandle,
+                        bufOffset, bufSize);
+                    NoteDesc(healDesc, /*isCreate=*/true);
+                    PublishCreate(MGPipeKind::Texture, handle, entry, healDesc);
+                    accepted = ApplyRespecify(desc, key);
+                }
+            }
+            return accepted;
         }
 
         static void NoteRespecified(Entry& entry, const MGPResourceDesc& desc, Bool accepted) {
@@ -982,7 +1065,10 @@ namespace MobileGL::MG_Pipe {
             desc.ImageBindableHint = (entry.BindMask & kMGPipeBindShaderImage) != 0 ? 1 : 0;
             if (std::memcmp(&entry.LastDesc, &desc, sizeof(desc)) == 0) return;
             NoteDesc(desc, /*isCreate=*/false);
-            NoteRespecified(entry, desc, ApplyRespecify(desc));
+            // A NULL LEVEL, DELIBERATELY (wire-v3 §5 item 6): a mask move replaces no storage,
+            // and the applier classifies the identical storage fields as a metadata update
+            // that drops nothing. A key here would name a level this call did not touch.
+            NoteRespecified(entry, desc, ApplyRespecify(desc, nullptr));
         }
 
         void NoteDesc(const MGPResourceDesc& desc, Bool isCreate) {

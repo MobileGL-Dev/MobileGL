@@ -312,12 +312,44 @@ namespace MobileGL::MG_Pipe {
     //
     // Entry points MGPipeTextureEmitter must provide, all taking the frontend object by
     // reference and returning void:
-    //   EmitResourceCreate(ITextureObject&) / EmitResourceRespecify(ITextureObject&)
+    //   EmitResourceCreate(ITextureObject&)
+    //   EmitResourceRespecify(ITextureObject&, MGPipeTextureRespecifyScope, Uint32 uploadTarget,
+    //                         Uint32 level)
     //   EmitTextureParams(ITextureObject&)
     //   NoteLevelDirty(ITextureObject& storageOwner, Uint32 uploadTarget, Uint32 level)
     //   EmitRenderbufferCreate(RenderbufferObject&) / EmitRenderbufferRespecify(RenderbufferObject&)
     void MGPipeEmitTextureResourceCreate(MG_State::GLState::ITextureObject& texture);
-    void MGPipeEmitTextureResourceRespecify(MG_State::GLState::ITextureObject& texture);
+
+    // WHICH STORAGE A TEXTURE RESPECIFY REPLACES (P4a final review C-1). The applier scopes
+    // its pending-upload clear on this answer and not on the descriptor, because the
+    // descriptor cannot give it: AllocateStorage is per (uploadTarget, level) and
+    // TruncateMipmapLevels removes every level at or above a cut, while MGPResourceDesc
+    // carries only the base extent and the level count. A level the applier had ACCEPTED at
+    // one verb (the client's dirty flag already clear, D-D5 step 1) and that a later per-level
+    // definition redefined AROUND was dropped by the whole-resource arm with nobody owing its
+    // texels - so every respecify states its scope, and "whole resource" is said, never
+    // defaulted. The emitter builds wire's MGPRespecifiedLevel from the pair, packed exactly
+    // as the drain packs a sub-data record's Target (MGPipePackSubDataTarget), so the key it
+    // drops is the key that level's emission made.
+    enum class MGPipeTextureRespecifyScope : Uint32 {
+        // The whole store is redefined or restated: a format, sample-count or
+        // fixed-sample-locations change, an immutable allocation completing
+        // (SetImmutableLevels), a texture view's creation. Every pending upload goes.
+        WholeResource = 0,
+        // ONE (uploadTarget, level) was (re)allocated: glTexImage*D, glCompressedTexImage*D,
+        // glCopyTexImage*D, one level of a glTexStorage* loop, one level of a generated-mipmap
+        // grow. That level's pending upload goes; every other level's stays. `uploadTarget` and
+        // `level` name it.
+        OneLevel = 1,
+        // The chain was cut: every level of `uploadTarget` at or above `level` is gone and the
+        // levels below it are untouched (glGenerateMipmap fitting the chain, a base-level
+        // redefinition discarding its tail, glTexStorage* fitting the chain to its level
+        // count). `level` is the first level removed; a cut at 0 is the whole resource.
+        LevelsFrom = 2,
+    };
+    void MGPipeEmitTextureResourceRespecify(MG_State::GLState::ITextureObject& texture,
+                                            MGPipeTextureRespecifyScope scope, Uint32 uploadTarget,
+                                            Uint32 level);
     void MGPipeEmitTextureParams(MG_State::GLState::ITextureObject& texture);
     // The DRAIN LIST's append, on a level's FIRST dirty mark, keyed on the STORAGE OWNER from
     // day one (D-D4: a view and its owner already share one dirty state, so an upload through

@@ -34,8 +34,9 @@ namespace MobileGL {
 #if MOBILEGL_PIPE_PUSH
                 // AFTER the allocation, for TextureObjectWithOneMipmap's reason: BumpShapeVersion
                 // runs first and a descriptor built there would describe the level set this call
-                // is about to change.
-                PipePublishDescriptor();
+                // is about to change. The FACE rides in `uploadTarget`, so the key the emitter
+                // drops is that face's level and no other face's (final review C-1).
+                PipePublishLevelDescriptor(uploadTarget, mipmapLevel);
 #endif
             }
 
@@ -43,7 +44,7 @@ namespace MobileGL {
                 BumpShapeVersion();
                 m_textureStorage.TruncateToLevelCount(GetIndexOfTextureUploadTarget(uploadTarget), levelCount);
 #if MOBILEGL_PIPE_PUSH
-                PipePublishDescriptor();
+                PipePublishTruncatedDescriptor(uploadTarget, levelCount);
 #endif
             }
 
