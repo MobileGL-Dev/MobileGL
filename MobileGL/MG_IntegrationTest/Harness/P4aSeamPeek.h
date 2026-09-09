@@ -36,6 +36,12 @@ namespace MGITest {
     // other. Written only on true.
     bool PeekEsprytSamplerHandleArmIsLive(bool* outLive);
 
+    // The same question for the FRAMEBUFFER family (bit 9): true when Espryt consumes
+    // set_framebuffer_state in this process. The renderbuffer half of the F-3 case asserts only
+    // there - on the pre-handle arm a renderbuffer re-storaged while attached moves nothing the
+    // FBO memo reads (D-D2's documented hole, pre-P4a code), and the record is what closes it.
+    bool PeekEsprytFramebufferHandleArmIsLive(bool* outLive);
+
     // ---- the applier's shader-image window, as last received ------------------------------
     //
     // MGPipeApplierState::ShaderImageStart / ShaderImageCount / ShaderImagesSerial. Count is

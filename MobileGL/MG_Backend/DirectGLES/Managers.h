@@ -1978,6 +1978,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the driver FBO would keep the deleted texture name attached forever. The
         // SyncCurrentFBO gate compares this generation (below) to re-enter the sync,
         // and each twin re-arms its per-attachment memo on a mismatch (SyncToBackend).
+        //
+        // AND WHENEVER AN ATTACHABLE OBJECT'S DRIVER STORAGE IS REDEFINED IN PLACE (P4a fable
+        // seam F-3): a mutable texture regenerated on the same id, a renderbuffer re-storaged
+        // on the same id. The id did not move, but the four cross-object masks SyncToBackend
+        // computes from the attachment's format did, and nothing else the FBO memo reads sees
+        // a respecify of an attached object. So "did I change something under an attachment
+        // point that no frontend version can tell the framebuffer about" is what this counts,
+        // and the re-mint is one case of it.
         extern Uint64 g_attachmentBackendIdGeneration;
         // What g_attachmentBackendIdGeneration was when SyncCurrentFBO last stamped each
         // target; part of the synced tuple above.

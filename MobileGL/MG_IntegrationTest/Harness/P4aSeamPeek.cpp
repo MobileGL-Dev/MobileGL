@@ -40,6 +40,13 @@ namespace MGITest {
         return true;
     }
 
+    bool PeekEsprytFramebufferHandleArmIsLive(bool* outLive) {
+        if (outLive == nullptr) return false;
+        if (!EsprytIsRunning()) return false;
+        *outLive = MGB::FramebufferSubsystemEnabled();
+        return true;
+    }
+
     bool PeekPipeShaderImageWindow(PipeShaderImageWindowPeek* out) {
         if (out == nullptr) return false;
         const MGP::MGPipeApplierState& applier = MGP::MGPipeApplier();
@@ -92,6 +99,7 @@ namespace MGITest {
     }
 #else
     bool PeekEsprytSamplerHandleArmIsLive(bool*) { return false; }
+    bool PeekEsprytFramebufferHandleArmIsLive(bool*) { return false; }
     bool PeekPipeShaderImageWindow(PipeShaderImageWindowPeek*) { return false; }
     bool PeekEsprytUnitSampler(unsigned, unsigned, EsprytUnitSamplerPeek*) { return false; }
 #endif
