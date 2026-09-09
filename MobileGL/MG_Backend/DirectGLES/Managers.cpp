@@ -12316,8 +12316,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             if (!stateSamplerObject) {
+#if MOBILEGL_PIPE_PUSH
+                // A CSO TWIN HAS NO FRONTEND OBJECT (P4a fable seam F-4, ResolveSamplerCsoTwin):
+                // the content-addressed handle is its identity and the applier's record its
+                // only authority, so a null object beside a live handle is the record arm and
+                // not the pre-P4a error. Everything below that names the object is guarded on
+                // it; the pull build's text is the three lines the #if brackets.
+                if (MG_Pipe::MGPipeHandleIsNull(pushedCso)) {
+#endif
                 MGLOG_E_ONCE("State sampler object is null, cannot sync to backend.");
                 return;
+#if MOBILEGL_PIPE_PUSH
+                }
+#endif
             }
 
             // P4a (D-F1): a SamplerObject is a pure 100-byte value with no driver-side per-object
@@ -12331,6 +12342,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // pre-P4a text token for token (D-P).
 #if MOBILEGL_PIPE_PUSH
             const SamplerParameters* pushedParams = nullptr;
+            // The GL name for the two log lines below, or 0 for a CSO twin, which has no object
+            // to name (F-4): the handle in the same line is its name.
+            const Uint samplerName = stateSamplerObject ? stateSamplerObject->GetExternalIndex() : 0u;
             if (SamplerSubsystemEnabled()) {
                 // THE HANDLE COMES FROM THE CALLER, NOT FROM THIS TWIN'S REGISTRY, and the
                 // difference is the seam D's verification round found on the integrated tree.
@@ -12353,12 +12367,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (record == nullptr) {
                         MGLOG_E_ONCE("MGPipe: sampler %u has no applier record on the handle arm, so its "
                                      "parameters cannot be pushed (handle {%u, %u})",
-                                     stateSamplerObject->GetExternalIndex(), pushedCso.Slot, pushedCso.Gen);
+                                     samplerName, pushedCso.Slot, pushedCso.Gen);
                         return;
                     }
                     if (m_isInitialized && m_syncedSamplerSerial != 0 && m_syncedSamplerSerial == record->Serial) {
                         MGLOG_D("Sampler parameters have not changed for sampler ID: %u, skipping sync.",
-                                stateSamplerObject->GetExternalIndex());
+                                samplerName);
                         return;
                     }
                     m_syncedSamplerSerial = record->Serial;
@@ -12396,6 +12410,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     pushedParams = &stateSamplerObject->GetAllSamplerParameters();
                 }
             } else {
+                // A CSO twin is only ever resolved on the handle arm (ResolveSamplerCsoTwin gates
+                // on SamplerSubsystemEnabled()), so a null object cannot reach the legacy body
+                // below; stated as a return rather than assumed, because that body dereferences
+                // it.
+                if (!stateSamplerObject) return;
 #if !MOBILEGL_PIPE_LEGACY_MEMOS
                 // UNREACHABLE: ResolveSamplerSubsystemArm stops at its first call when the bit is
                 // clear and the pre-handle arm is not compiled. Kept, and kept loud.
@@ -12426,8 +12445,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_syncedSamplerVersion = currentSamplerVersion;
 #endif
 
+#if MOBILEGL_PIPE_PUSH
+            MGLOG_D("Syncing sampler with backend ID %u to backend for state ID %u", m_backendSamplerId, samplerName);
+#else
             MGLOG_D("Syncing sampler with backend ID %u to backend for state ID %u", m_backendSamplerId,
                     stateSamplerObject->GetExternalIndex());
+#endif
 
 #if MOBILEGL_PIPE_PUSH
             const SamplerParameters& samplerParams = *pushedParams;
@@ -12544,6 +12567,42 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Array<BackendSamplerObject*, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS> g_boundSamplersCache;
         TwinRegistry<MG_State::GLState::SamplerObject, BackendSamplerObject, MG_Pipe::MGPipeKind::SamplerCso> g_backendSamplerObjects;
+
+#if MOBILEGL_PIPE_PUSH
+        // P4a fable seam F-4. THE TWIN FOR A CONTENT-ADDRESSED SamplerCso HANDLE, keyed by that
+        // handle and synced from its record - see the declaration for why the identity-keyed
+        // lookup it replaces could never hit.
+        BackendSamplerObject* ResolveSamplerCsoTwin(MG_Pipe::MGPipeHandle cso) {
+            if (MG_Pipe::MGPipeHandleIsNull(cso)) return nullptr;
+            // THE RECORD FIRST, before the table is touched: a handle with no record is a seam
+            // defect (the client minted and named a CSO it never described, or evicted one a
+            // standing set still names), and adopting a slot for it would leave a twin that
+            // syncs nothing. The census stem is the sampler family's.
+            const auto* record = PipeSamplerCsoRecordForHandle(cso);
+            if (record == nullptr) {
+                MGLOG_E_ONCE("MGPipe: sampler CSO {%u, %u} has no applier record on the handle arm, so no "
+                             "driver sampler can be built for it and the unit keeps what it holds",
+                             cso.Slot, cso.Gen);
+                return nullptr;
+            }
+            // The same slot table the identity twins live in: one allocator serves both handle
+            // families of this kind, so a content-addressed slot and an identity-minted slot can
+            // never coincide, and the generation discipline (forward = recycle, backward =
+            // refused) is what retires a twin whose CSO the client's LRU evicted and re-minted.
+            auto* slot = g_backendSamplerObjects.GetOrCreateByHandle(cso);
+            if (slot == nullptr) {
+                MGLOG_E_ONCE("MGPipe: sampler CSO {%u, %u} cannot be adopted on the handle arm (the slot's "
+                             "live generation is %u), so no driver sampler is built for it",
+                             cso.Slot, cso.Gen, g_backendSamplerObjects.LiveGenAt(cso.Slot));
+                return nullptr;
+            }
+            if (!*slot) *slot = MakeShared<BackendSamplerObject>();
+            // Serial-gated inside: a CSO whose record did not move since this twin last synced
+            // costs the record lookup above and one compare.
+            (*slot)->SyncToBackend(nullptr, cso);
+            return slot->get();
+        }
+#endif
     } // namespace SamplerImpl
 
     namespace RenderbufferImpl {
