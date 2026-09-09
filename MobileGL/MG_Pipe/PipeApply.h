@@ -1013,7 +1013,14 @@ namespace MobileGL::MG_Pipe {
     // glCopyImageSubData endpoint carry its parameters at all. params.BuiltinSampler may never
     // be the null handle - every ITextureObject owns a sampler object - so a null is
     // Fatal{ProtocolCorruption} rather than "no sampler".
-    void MGPipeApplySetTextureParams(const MGPTextureParams& params);
+    //
+    // Returns true when the record took the parameters (P4a final review m-1, audit F-7): the
+    // emitter's version latch advances on this answer and on nothing else, the way the
+    // sub-data and respecify paths latch on theirs, so a refused record - no consumer, no
+    // record for the handle, a null sampler - is re-sent at the next call rather than at the
+    // next glTexParameter*. Source-compatible for the same reason the three resource returns
+    // are: a Bool is ignorable and gen_pipe never parses this header.
+    Bool MGPipeApplySetTextureParams(const MGPTextureParams& params);
 
     // set_sampler_views / bind_sampler_states / set_shader_images: `tail` is hdr.Count entries
     // starting at hdr.Start, and hdr.Start + hdr.Count above the unit bound is

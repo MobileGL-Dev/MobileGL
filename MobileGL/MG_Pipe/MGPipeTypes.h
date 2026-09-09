@@ -1107,10 +1107,12 @@ namespace MobileGL::MG_Pipe {
     //     call that NAMES a level is that level's redefinition whatever the descriptor says -
     //     a non-base level's extent is not a descriptor field - and drops exactly that level
     //     (P4a final review C-1); the client's mask republish passes null on purpose.
-    //   - The stored descriptor's BindMask and ImageBindableHint ARE updated - BindMask is
-    //     sticky and therefore ORed, never replaced - and the twin re-derives its storage
-    //     flags from the new mask on its next sync, recreating backend storage only where the
-    //     backend actually needs it. The record itself is not a request to recreate.
+    //   - The stored descriptor's BindMask and ImageBindableHint ARE updated: the applier
+    //     replaces the descriptor WHOLE with the one the client sent (PipeApply.cpp), and the
+    //     mask in it is the CLIENT's sticky OR (TextureEmit.h's entry, never cleared), so the
+    //     replacement can never lose a bit the record once carried. The twin re-derives its
+    //     storage flags from the new mask on its next sync, recreating backend storage only
+    //     where the backend actually needs it. The record itself is not a request to recreate.
     //
     // THE STORAGE-DEFINING FIELD SET, named here so that neither side has to guess and a
     // later field cannot join it by silence. It is every MGPResourceDesc member except the

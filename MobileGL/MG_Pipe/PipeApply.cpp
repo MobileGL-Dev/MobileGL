@@ -2479,11 +2479,11 @@ namespace MobileGL::MG_Pipe {
         record->Gen = gen;
     }
 
-    void MGPipeApplySetTextureParams(const MGPTextureParams& params) {
+    Bool MGPipeApplySetTextureParams(const MGPTextureParams& params) {
         // P4a's belt, and FIRST here because this call's first act is a resolution: with no
         // consumer no texture create was accepted, so resolving would report the absence as
         // RefusedObjectCalls - the counter that means a seam defect - for the designed state.
-        if (NoP4aConsumer()) return;
+        if (NoP4aConsumer()) return false;
 
         // ADDRESSED BY RESOURCE AND BY NOTHING ELSE, which is the whole point of the call: a
         // texture that is only an FBO attachment, only an image-unit binding or only a
@@ -2492,7 +2492,7 @@ namespace MobileGL::MG_Pipe {
         // moment the parameters move, whether or not anything is bound.
         MGPipeResourceRecord* record =
             ResolveObject(g_applier.TextureResources, "set_texture_params", params.Res);
-        if (record == nullptr) return;
+        if (record == nullptr) return false;
 
         // EVERY ITextureObject OWNS A SamplerObject, so the built-in sampler CSO is not
         // optional and a null handle is not "no sampler" - it is a record that would have the
@@ -2505,7 +2505,7 @@ namespace MobileGL::MG_Pipe {
                                  " set_texture_params {slot=%u, gen=%u, glName=%u}: the record names no "
                                  "built-in sampler CSO, and every texture object owns one",
                                  params.Res.Slot, params.Res.Gen, record->Desc.GlNameForDiag);
-            return;
+            return false;
         }
         // AND THE CSO IT NAMES IS NOT RESOLVED. The sampler subsystem is its own bit and may be
         // clear while the texture bit is set, so a record that names a CSO this applier has not
@@ -2520,6 +2520,7 @@ namespace MobileGL::MG_Pipe {
         // bytes are CARRIED, never cleared here: the server ORs them into its own flags and
         // clears its own copy, and the client never clears a server flag.
         ++record->ParamsSerial;
+        return true;
     }
 
     // The three of them, and NO STAGE DIMENSION on any of them: MobileGL's texture-unit space
