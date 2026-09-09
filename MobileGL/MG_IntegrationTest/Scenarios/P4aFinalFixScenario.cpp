@@ -337,5 +337,155 @@ void main() { oColor = texture(uTex, vUv); }
             glDeleteTextures(1, &cleanup);
         }
 
+        // ======================================================================================
+        // C-2: delete-then-use, for every kind P4a mints, on both backends
+        // ======================================================================================
+
+        // A level goes dirty, the texture dies before any verb, and the next verb's drain walks
+        // the entry. Before the fix the emitter resolved the dead handle to the freed object and
+        // the drain called a virtual on it: SIGABRT in the first round. Eight rounds, and the
+        // lane registered with MALLOC_PERTURB_ scribbles every freed block so a resolved-but-
+        // dead pointer faults rather than reads the object's ghost.
+        TEST_F(P4aFinalFixScenario, ADirtyTextureDeletedBeforeAnyVerbIsWalkedByTheNextDrain) {
+            if (!Ready()) return;
+            for (int round = 0; round < 8; ++round) {
+                GLuint texture = 0;
+                glGenTextures(1, &texture);
+                glBindTexture(GL_TEXTURE_2D, texture);
+                const std::vector<std::uint8_t> texels = Solid(4, 255, 0, 0);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels.data());
+                glBindTexture(GL_TEXTURE_2D, 0);
+                glDeleteTextures(1, &texture); // the last reference: the frontend object dies here
+                // Something else is allocated between the death and the drain, so the freed
+                // storage is not simply re-handed to the next object.
+                std::vector<std::uint8_t> churn(4096 + round * 1024, static_cast<std::uint8_t>(round));
+                (void)churn;
+                const Image image = DrawSampled(m_other); // the validate point: the drain runs here
+                ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+                if (round == 0) Report("ADirtyTextureDeletedBeforeAnyVerbIsWalkedByTheNextDrain", image);
+                EXPECT_TRUE(Mostly(image, "white", "the draw after a dirty texture died"));
+            }
+        }
+
+        // ABA: the slot the dead texture held is handed straight to the next texture (the free
+        // list is LIFO). The new texture's picture must be its own, and the dead one's drain
+        // entry must not be replayed onto it.
+        TEST_F(P4aFinalFixScenario, ATextureRecycledOntoTheDeadSlotDoesNotInheritItsDrainEntry) {
+            if (!Ready()) return;
+            {
+                GLuint dead = 0;
+                glGenTextures(1, &dead);
+                glBindTexture(GL_TEXTURE_2D, dead);
+                const std::vector<std::uint8_t> texels = Solid(4, 255, 0, 0);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels.data());
+                glBindTexture(GL_TEXTURE_2D, 0);
+                glDeleteTextures(1, &dead); // dirty, dead, no verb between
+            }
+            const GLuint successor = MakeLevel0(0, 0, 255, /*maxLevel=*/0, /*size=*/8);
+            const Image image = DrawSampled(successor);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            Report("ATextureRecycledOntoTheDeadSlotDoesNotInheritItsDrainEntry", image);
+            EXPECT_TRUE(Mostly(image, "blue", "the successor of a dead dirty texture on the recycled slot"));
+            const Image other = DrawSampled(m_other);
+            EXPECT_TRUE(Mostly(other, "white", "an unrelated draw after the recycled slot was used"));
+            GLuint cleanup = successor;
+            glDeleteTextures(1, &cleanup);
+        }
+
+        // A renderbuffer with defined storage, attached, cleared through its framebuffer, then
+        // both die before the next verb.
+        TEST_F(P4aFinalFixScenario, ARenderbufferAndItsFramebufferDeletedAfterAClearLeaveTheNextDrawIntact) {
+            if (!Ready()) return;
+            GLuint renderbuffer = 0;
+            glGenRenderbuffers(1, &renderbuffer);
+            glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 8, 8);
+            GLuint fbo = 0;
+            glGenFramebuffers(1, &fbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
+            ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+            glViewport(0, 0, 8, 8);
+            glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            const Image cleared = ReadPixels(8, 8);
+            EXPECT_TRUE(RegionIsMostly(cleared, 0, 8, 0, 8, "green", 0.0, "the renderbuffer after the clear"));
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glBindRenderbuffer(GL_RENDERBUFFER, 0);
+            glDeleteFramebuffers(1, &fbo);
+            glDeleteRenderbuffers(1, &renderbuffer); // the attachment's last reference went with the FBO
+            const Image image = DrawSampled(m_other);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            Report("ARenderbufferAndItsFramebufferDeletedAfterAClearLeaveTheNextDrawIntact", image);
+            EXPECT_TRUE(Mostly(image, "white", "the draw after a renderbuffer and its framebuffer died"));
+        }
+
+        // A sampler object bound to the unit the draw samples through, deleted while bound: GL
+        // unbinds it from every unit at glDeleteSamplers, and the texture's own parameters apply
+        // again. Both draws must be the texture's colour.
+        TEST_F(P4aFinalFixScenario, ASamplerObjectDeletedWhileBoundLeavesTheNextDrawIntact) {
+            if (!Ready()) return;
+            const GLuint texture = MakeLevel0(255, 0, 0, /*maxLevel=*/0);
+            GLuint sampler = 0;
+            glGenSamplers(1, &sampler);
+            glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glBindSampler(0, sampler);
+            const Image withSampler = DrawSampled(texture);
+            EXPECT_TRUE(Mostly(withSampler, "red", "the draw through the bound sampler object"));
+            glDeleteSamplers(1, &sampler); // bound: unbound by the delete, then dies
+            const Image image = DrawSampled(texture);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            Report("ASamplerObjectDeletedWhileBoundLeavesTheNextDrawIntact", image);
+            EXPECT_TRUE(Mostly(image, "red", "the draw after the bound sampler object died"));
+            glBindSampler(0, 0);
+            GLuint cleanup = texture;
+            glDeleteTextures(1, &cleanup);
+        }
+
+        // A second program, in use when it is deleted (GL keeps it alive until it is no longer
+        // current), then released by a glUseProgram of the fixture's program: it dies there, and
+        // the draw that follows runs through the survivor.
+        TEST_F(P4aFinalFixScenario, AProgramDeletedWhileInUseLeavesTheNextDrawIntact) {
+            if (!Ready()) return;
+            std::string error;
+            const GLuint second = CompileProgram(kVS, kFS, &error);
+            ASSERT_NE(second, 0u) << error;
+            const GLuint texture = MakeLevel0(255, 0, 0, /*maxLevel=*/0);
+            const Image throughSecond = DrawSampled(texture, second);
+            EXPECT_TRUE(Mostly(throughSecond, "red", "the draw through the second program"));
+            glDeleteProgram(second); // current: flagged for deletion, still very much alive
+            const Image stillCurrent = DrawSampled(texture, second);
+            EXPECT_TRUE(Mostly(stillCurrent, "red", "the draw through a program flagged for deletion"));
+            const Image image = DrawSampled(texture); // glUseProgram(m_program): the second dies here
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            Report("AProgramDeletedWhileInUseLeavesTheNextDrawIntact", image);
+            EXPECT_TRUE(Mostly(image, "red", "the draw after the deleted program was released"));
+            GLuint cleanup = texture;
+            glDeleteTextures(1, &cleanup);
+        }
+
+        // A framebuffer handed to the server BY NAME (a DSA clear emits a Named record, ID-19(c))
+        // and deleted before the next verb; its attachment lives on and carries the clear.
+        TEST_F(P4aFinalFixScenario, AFramebufferDeletedAfterADsaClearLeavesItsAttachmentIntact) {
+            if (!Ready()) return;
+            const GLuint texture = MakeLevel0(255, 0, 0, /*maxLevel=*/0);
+            GLuint fbo = 0;
+            glGenFramebuffers(1, &fbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+            ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            const GLfloat green[4] = {0.0f, 1.0f, 0.0f, 1.0f};
+            glClearNamedFramebufferfv(fbo, GL_COLOR, 0, green);
+            glDeleteFramebuffers(1, &fbo); // unbound and named: dies here
+            const Image image = DrawSampled(texture);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            Report("AFramebufferDeletedAfterADsaClearLeavesItsAttachmentIntact", image);
+            EXPECT_TRUE(Mostly(image, "green", "the attachment of a framebuffer that died after a DSA clear"));
+            GLuint cleanup = texture;
+            glDeleteTextures(1, &cleanup);
+        }
+
     } // namespace
 } // namespace MGITest

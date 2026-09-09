@@ -824,6 +824,36 @@ gtest_discover_tests(MobileGLIntegrationTest
         ENVIRONMENT "${MGL_ITEST_GLES_UNLOCATED_IO_BLOCKS_ENVIRONMENT}"
 )
 
+# P4a final review C-2: the dirty-then-delete case, with the allocator SCRIBBLING every freed
+# block. The defect this pins was a client emitter resolving a dead-but-not-recycled texture
+# handle to the freed ITextureObject* and calling a virtual on it from the next verb's drain;
+# whether that reads the object's ghost or faults depends on what the allocator did with the
+# block, so the ambient registrations above run the case as the application would see it and
+# these two run it with MALLOC_PERTURB_ set, where a resolved-but-dead pointer faults rather
+# than passes. Both backends: the death path is backend-neutral by ruling (ID-8).
+mgl_itest_join_environment(MGL_ITEST_GLES_MALLOC_PERTURB_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MALLOC_PERTURB_=165" ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_VULKAN_MALLOC_PERTURB_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MALLOC_PERTURB_=165" ${MGL_ITEST_VULKAN_ENV})
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.MallocPerturb."
+    TEST_FILTER "P4aFinalFixScenario.ADirtyTextureDeletedBeforeAnyVerbIsWalkedByTheNextDrain"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_MALLOC_PERTURB_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.MallocPerturb."
+    TEST_FILTER "P4aFinalFixScenario.ADirtyTextureDeletedBeforeAnyVerbIsWalkedByTheNextDrain"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_VULKAN_MALLOC_PERTURB_ENVIRONMENT}"
+)
+
 # AsyncCompileScenario, with asynchronous compilation PINNED ON per backend.
 #
 # Not a duplicate of what the two ambient registrations already run: they run whatever

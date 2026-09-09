@@ -324,14 +324,12 @@ namespace MobileGL::MG_Pipe {
 
         // The memo's other half, and the bound-mirror clearing beside it.
         //
-        // NO PRODUCTION CALLER TODAY, stated rather than implied: since c0b the death path
-        // reads the contract's latch and never asks an emitter. It is kept because the memo
-        // above needs a way to be told, and because everything it clears SELF-HEALS if it is
-        // not called - the slot's Gen moves on reuse, so `RecordGen == handle.Gen` refuses a
-        // stale record latch, and the three bound mirrors below hold a handle whose generation
-        // can never be handed out again, so the next EmitShaderState compares against a
-        // different handle and re-binds. Clearing them here is the cheaper answer, not the
-        // load-bearing one.
+        // THE CALLER IS THE CONTRACT's DEATH HELPER (P4a final review C-2): the death path
+        // reads the contract's latch for the wire delete and then forwards here, before the
+        // slot is freed, so a dead handle no longer reads as published in this memo between
+        // the death and the recycle and the three bound mirrors never name a dead program.
+        // Gen-keyed, so a late notice for a slot already handed out again clears nothing of
+        // the successor's.
         void NoteRecordDestroyed(MGPipeHandle handle) {
             if (MGPipeHandleIsNull(handle)) return;
             Vector<Latch>& table = TableOf(handle);

@@ -389,6 +389,26 @@ namespace MobileGL::MG_Pipe {
 
         // ---- what a unit case reads. The emitter builds INTO these and hands the applier the
         // same objects, so "what was emitted" costs no copy. ----
+        // ---- the death half (P4a final review C-2) ----
+        //
+        // Called by the contract's death helper before the slot is freed (there is no wire
+        // delete for this kind, D-I2, so this is the only client-side thing a framebuffer's
+        // death has to do). The per-object Named latch is the entry: a recycled handle's Gen
+        // already refuses the stale latch, so this is hygiene rather than a fix - the rule
+        // (ID-8) is that whatever mints a handle retires everything it keeps under it at the
+        // death, and every P4a kind takes the same shape. Gen-keyed for a late notice.
+        void NoteFramebufferDied(MGPipeHandle handle) {
+            const SizeT slot = handle.Slot;
+            if (MGPipeHandleIsNull(handle) || slot >= m_named.size()) return;
+            if (m_named[slot].Gen == handle.Gen) m_named[slot] = NamedEntry{};
+        }
+        // "Does this emitter hold a Named-record latch for this handle at its generation."
+        Bool NamedRecordIsLatched(MGPipeHandle handle) const {
+            const SizeT slot = handle.Slot;
+            if (MGPipeHandleIsNull(handle) || slot >= m_named.size()) return false;
+            return m_named[slot].Has && m_named[slot].Gen == handle.Gen;
+        }
+
         const MGPFramebufferState& LastDraw() const { return m_lastDraw; }
         const MGPFramebufferState& LastRead() const { return m_lastRead; }
         const MGPFramebufferState& LastNamed() const { return m_lastNamed; }
