@@ -802,21 +802,49 @@ namespace MobileGL::MG_Pipe {
             ++m_paramSets;
             // Not behind MGPipeTextureRecordsReachTheApplier() (see its comment): the call is
             // dispatched whenever this emitter runs, so the answer is always a real one.
-            if (!MGPipeApplySetTextureParams(params)) {
-                // Refused - a record the applier does not hold, or no consumer. Nothing latched:
-                // the same versions re-send at the next call, and the self-healing create the
-                // next respecify carries is what gives the record back. Loud for the reason the
-                // sub-data refusal is loud.
+            Bool accepted = MGPipeApplySetTextureParams(params);
+            if (!accepted) {
+                // THE SELF-HEAL, the respecify path's shape, and the parameters are the one
+                // publication that may be a texture's FIRST: the context's default textures are
+                // constructed before the backend registers its consumer, so no create ever went
+                // out for them, and the application's first glTexParameter* on texture 0 found
+                // no record (the retrace census's residual once this refusal went loud). A
+                // create with no storage gives the record its identity, the storage follows if
+                // the texture has any (a respecify against the create's descriptor is never
+                // deduped away), and the parameters land on the record that now exists. The
+                // same repair covers the served context's teardown scope, where the records are
+                // dropped while the objects live on. One retry, never a loop.
+                const MGPResourceDesc healDesc = MGPipeBuildTextureResourceDesc(
+                    texture, handle, entry.BindMask, /*storageDefined=*/false, kMGPipeNullHandle,
+                    kMGPipeNullHandle, 0, 0);
+                NoteDesc(healDesc, /*isCreate=*/true);
+                PublishCreate(MGPipeKind::Texture, handle, entry, healDesc);
+                const auto* mipmap = MG_State::GLState::AsMipmapTexture(&texture);
+                const Bool hasStorage = mipmap != nullptr
+                                            ? mipmap->GetMipmapLevelCount() > 0
+                                            : texture.GetStorageType() == MobileGL::TextureStorageType::Buffer;
+                if (hasStorage) {
+                    // Can grow the table (a view's owner is acquired inside): no Entry& is held
+                    // across it - `entry` is re-fetched below.
+                    EmitResourceRespecify(texture, MGPipeTextureRespecifyScope::WholeResource, 0, 0);
+                }
+                accepted = MGPipeApplySetTextureParams(params);
+            }
+            Entry& latched = EntryFor(m_textures, handle);
+            if (!accepted) {
+                // Refused on its merits (a null built-in sampler, no consumer). Nothing latched:
+                // the same versions re-send at the next call. Loud for the reason the sub-data
+                // refusal is loud.
                 ++m_refusedParamSets;
                 MGLOG_E_ONCE("MGPipe: set_texture_params for texture %u {slot=%u, gen=%u} was refused; the "
                              "latch is not taken and the parameters are re-sent at the next call",
                              texture.GetExternalIndex(), handle.Slot, handle.Gen);
                 return;
             }
-            entry.HasParamsLatch = true;
-            entry.ParamsVersion = paramsVersion;
-            entry.SamplerVersion = samplerVersion;
-            entry.ForceParamsResync = false;
+            latched.HasParamsLatch = true;
+            latched.ParamsVersion = paramsVersion;
+            latched.SamplerVersion = samplerVersion;
+            latched.ForceParamsResync = false;
         }
 
         void EmitRenderbufferCreate(RenderbufferObject& renderbuffer) {
