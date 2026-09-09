@@ -450,6 +450,75 @@ namespace MobileGL::MG_Pipe {
             now[Index(MGPipeDirty::NewShaderBindings)] = bindings;
             now[Index(MGPipeDirty::NewGlobalConstants)] = constants;
 
+            // ===========================================================================
+            // THE RECORD-FIELD -> SETTER -> SHUTTER TABLE FOR THE SEVEN P4a BITS.
+            //
+            // THE RULE (P4a fable seam audit, section C.1): every field of every emitted
+            // record names the frontend setter that changes it, and that setter moves a
+            // counter the emitting bit's shutter reads - or the emission is unconditional at
+            // the setter (the resource_* family, set_texture_params). A record field whose
+            // setter moves no shutter input is a stale record with nothing to refuse: c0d
+            // (bit 13 without the bind generation), SD-0 (an image re-bind), F-1 (the
+            // program behind the view set), F-2 (the program behind the image window) and
+            // F-3 (an attached object's storage) were all this one class. DirtySurface.def
+            // cannot catch it - it maps MUTATORS to bits and cannot see that a DERIVED field
+            // depends on a mutator whose row is another family's - so the table lives here,
+            // beside the shutters, and a row is added whenever a record gains a field.
+            //
+            // bit 6  create/bind_shader_state, set_draw/dispatch_program (ProgramEmit.h)
+            //        fields: Cso, StageMask, GlobalUboSize, the artefact blob refs, the two
+            //                bound handles
+            //        setters: glUseProgram (m_currentProgram), glLinkProgram (link version),
+            //                glBindProgramPipeline / glUseProgramStages (pipeline name +
+            //                per-stage {lifetime id, link version})
+            //        shutter: lifetime id x link version, or stageLinks under a pipeline
+            // bit 7  the program's bindings (image units, block bindings, uniform write set)
+            //        setters: glUniform1i on an opaque uniform (backend state version, image
+            //                unit version), glUniformBlockBinding / glShaderStorageBlockBinding
+            //                (block binding version), any glUniform* (uniform write set)
+            //        shutter: the four per-program counters, x stageLinks under a pipeline
+            // bit 8  set_global_constants: ShaderCso, Version, the default-block image
+            //        setters: any glUniform* on the default block (UBO content version),
+            //                glUseProgram (lifetime id)
+            //        shutter: lifetime id x UBO content version, or stageState
+            // bit 11 set_framebuffer_state: Fbo, Color[8]/Depth/Stencil/ReadSurface
+            //        (Res, Kind, InternalFormat, TextureTarget, Layered, Level, Layer,
+            //        UploadTarget), DrawBuffers[8], Width/Height/Layers/Samples/
+            //        FixedSampleLocations, IsDefault, Complete, Target
+            //        setters: glFramebufferTexture*/glFramebufferRenderbuffer, glDrawBuffer(s),
+            //                glReadBuffer, glFramebufferParameteri (the attachment
+            //                aggregate); glBindFramebuffer (the two binding slot versions);
+            //                AND a storage redefinition of an ATTACHED texture or
+            //                renderbuffer - glTexImage*/glTexStorage*/glTexBuffer/
+            //                glTextureView/glRenderbufferStorage* - because InternalFormat,
+            //                TextureTarget, the extent, Samples and Complete are INLINED at
+            //                emission (D-C1): those bump the attachment aggregate from the
+            //                object's PipePublishDescriptor (F-3)
+            //        shutter: attachment aggregate x draw bind version x read bind version
+            // bit 12 set_sampler_views: per unit {View, Texture}
+            //        setters: glBindTexture / glActiveTexture (bind generation), a texture's
+            //                or a sampler object's parameters (SamplesAsIncompleteTexture -
+            //                the params aggregate), an upload that defines a level (content
+            //                aggregate), the default texture's image appearing (bind
+            //                generation, TextureObject.cpp); AND the program in use -
+            //                glUseProgram, a relink, glUniform1i on a sampler uniform (which
+            //                unit a uniform's TYPE resolves) - F-1
+            //        shutter: content x params x bind generation x opaqueUnits
+            // bit 13 bind_sampler_states: per unit the sampler CSO handle
+            //        setters: glBindSampler (bind generation, c0d), glSamplerParameter* /
+            //                glTexParameter* (params aggregate + sampling resolution),
+            //                glDeleteSamplers (bind generation)
+            //        shutter: params x sampling resolution x bind generation
+            // bit 14 set_shader_images: per unit {Res, InternalFormat, Layer, Level,
+            //        Layered, Access} over the program's image-unit window
+            //        setters: glBindImageTexture (bind generation, SD-0), a texture's
+            //                content/params, glUniform1i on an image uniform (image unit
+            //                version); AND the program in use - glUseProgram, a relink -
+            //                F-2
+            //        shutter: content x params x bind generation x programImages
+            //                (lifetime id x link version x image unit version)
+            // ===========================================================================
+
             // ---- the object-class bits 9..17 ----
             const Uint64 textureContent = ctx.GetAnyTextureContentGeneration();
             const Uint64 textureParams = ctx.GetAnyTextureParamsGeneration();
@@ -497,13 +566,24 @@ namespace MobileGL::MG_Pipe {
             // firing costs one extra push; under-firing renders stale, and this file's own
             // rule is that under-firing is the dangerous direction.
             //
-            // A RENDERBUFFER RESPECIFY IS STILL INVISIBLE HERE, and deliberately so:
-            // RenderbufferObject's SetInternalFormat / AllocateStorage / SetSamples bump no
-            // version and raise no notice, so re-storaging an ALREADY-ATTACHED renderbuffer
-            // moves neither half of this shutter. That hole is closed by emitting
-            // resource_respecify straight from the storage entry point - not by widening this
-            // shutter and not by adding a version counter to RenderbufferObject, which would
-            // resize the pull build's object and break G1.
+            // A STORAGE REDEFINITION OF AN ATTACHED OBJECT MOVES THIS SHUTTER (P4a fable seam
+            // F-3), and the sentence that stood here - "a renderbuffer respecify is still
+            // invisible here, and deliberately so ... closed by emitting resource_respecify
+            // straight from the storage entry point" - was true of the RESOURCE record only.
+            // set_framebuffer_state inlines each attachment's InternalFormat, TextureTarget,
+            // extent, Samples and Complete (D-C1: "so the four cross-object masks fall out at
+            // push time with no lookup"), so `glTexImage2D(tex, RGB8); attach; draw;
+            // glTexImage2D(tex, RGBA8); draw` left the FRAMEBUFFER record saying RGB8 while the
+            // resource record said RGBA8, and the handle arm answered its alpha-widening,
+            // snorm-clamp and integer masks from the stale copy where the legacy arm re-read
+            // the frontend at the same re-sync - a proven arm divergence on a public-GL
+            // sequence. The fix is at the SETTER, not here: TextureObjectBase::PipePublish
+            // Descriptor and RenderbufferObject::PipePublishDescriptor - the one funnel every
+            // storage-defining entry point of either object takes, push-only - bump the
+            // attachment aggregate this shutter already reads. No counter is added to either
+            // object (G1), nothing widens this shutter onto the texture-content aggregate (which
+            // would fire the 304-byte record build on every glTexSubImage2D), and a storage
+            // definition of an UNATTACHED object over-fires it exactly once at load time.
             //
             // AND A TRAP THE NEXT NARROWING WOULD WALK INTO, recorded here because it is
             // invisible from the shutter: FramebufferObject::SetDrawBuffer versions the VALUE
