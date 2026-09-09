@@ -369,7 +369,15 @@ namespace MobileGL::MG_Pipe {
                                      program->GetBlockBindingVersion()),
                     program->GetUniformWriteSetVersion());
                 constants = MGPipeMixShutter(program->GetLifetimeId(), program->GetUBOContentVersion());
-                programImages = program->GetImageUnitVersion();
+                // THE IDENTITY IS MIXED IN (P4a fable seam F-2), exactly as the pipeline arm
+                // below mixes stageLinks into its half: the counter alone is a per-program
+                // number two programs routinely share - 0 == 0 for any pair that never moved an
+                // image unit through glUniform1i, and 0 == 0 against no program at all - so a
+                // glUseProgram between them fired nothing, set_shader_images' window stayed the
+                // previous program's, and a program whose only image is a BUFFER image (E's
+                // SD-4: nothing else moves between the bind and the dispatch) never reached the
+                // record at all.
+                programImages = MGPipeMixShutter(shader, program->GetImageUnitVersion());
                 opaqueUnits = MGPipeMixShutter(shader, program->GetBackendStateVersion());
             } else if (const auto& pipeline = ctx.GetBoundProgramPipeline(); pipeline) {
                 using Pipeline = MG_State::GLState::ProgramPipelineObject;
