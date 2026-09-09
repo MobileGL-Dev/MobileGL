@@ -487,5 +487,172 @@ void main() { oColor = texture(uTex, vUv); }
             glDeleteTextures(1, &cleanup);
         }
 
+        // ======================================================================================
+        // M-A: an image bind after the allocation is a metadata respecify with the hint set
+        // ======================================================================================
+
+        // glTexStorage2D (immutable: no later respecify to ride), a red upload consumed by a draw,
+        // then a blue upload drained by a verb the texture is not reached by (accepted, standing
+        // in the applier's pending set), then glBindImageTexture. The bind must reach the record
+        // as a metadata update - ImageBindableHint 1, the pending upload still standing - and the
+        // draw after it must show the blue that upload carried through the widened carrier the
+        // hint schedules.
+        TEST_F(P4aFinalFixScenario, AnImageBindAfterAllocationReachesTheApplierAsAMetadataRespecify) {
+            if (!Ready()) return;
+            SkipUnlessEspryt("M-A's image-bindable hint");
+            if (IsSkipped()) return;
+            GLint maxImageUnits = 0;
+            glGetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
+            while (glGetError() != GL_NO_ERROR) {
+            }
+            if (maxImageUnits < 1) {
+                GTEST_SKIP() << "no image units";
+                return;
+            }
+
+            // THE NUMBER ROADMAP OPEN QUESTION 2 ASKS FOR: a texture Espryt allocated BEFORE the
+            // hint reached it is re-minted image-bindable at the bind and its levels replayed
+            // from the client's shadow - one remint pull, counted. Arming the counter here is
+            // what makes it readable without a stats-enabled lane.
+            unsigned long long pullsBefore = 0;
+            const bool pullsReadable = PeekPipeStatsTextureRemintPulls(&pullsBefore);
+
+            GLuint texture = 0;
+            glGenTextures(1, &texture);
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 4, 4);
+            const std::vector<std::uint8_t> red = Solid(4, 255, 0, 0);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, red.data());
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            const Image before = DrawSampled(texture); // allocated and consumed, NOT image-bindable
+            EXPECT_TRUE(Mostly(before, "red", "the immutable texture before the image bind"));
+
+            PipeTextureResourceRecordPeek record{};
+            const bool readable = RecordIsReadable(texture, "M-A's image-bindable hint", &record);
+            if (readable) {
+                EXPECT_EQ(record.ImageBindableHint, 0u) << "nothing has image-bound this texture yet";
+                EXPECT_EQ(record.PendingUploads, 0u) << "the red upload was consumed by the draw";
+            }
+
+            // A blue upload, drained by a verb that does not reach T: accepted, unconsumed.
+            const std::vector<std::uint8_t> blue = Solid(4, 0, 0, 255);
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, blue.data());
+            glBindTexture(GL_TEXTURE_2D, 0);
+            const Image unrelated = DrawSampled(m_other);
+            EXPECT_TRUE(Mostly(unrelated, "white", "the unrelated draw"));
+            if (readable) {
+                ASSERT_TRUE(PeekPipeTextureResourceRecord(texture, &record));
+                EXPECT_EQ(record.PendingUploads, 1u) << "the blue upload was not drained into the applier";
+            }
+            const unsigned long long serialBeforeBind = record.Serial;
+            unsigned long long uploadsBeforeBind = 0;
+            const bool uploadsReadable = PeekPipeStatsTextureUploadEmissions(&uploadsBeforeBind);
+
+            // THE TRANSITION. An immutable texture has no storage-defining respecify left, so the
+            // hint can only arrive as a metadata update (ID-18 M4). Espryt syncs the texture
+            // eagerly inside glBindImageTexture and the widening re-mints its storage, replaying
+            // every defined level from the shadow (the remint pull the counter below counts), so
+            // the standing upload is consumed by that regeneration here and the picture that
+            // follows is blue whatever the metadata respecify did to the record - the KEPT
+            // property is proved further down, on a texture no remint stands in front of.
+            (void)uploadsBeforeBind;
+            (void)uploadsReadable;
+            glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            if (readable) {
+                ASSERT_TRUE(PeekPipeTextureResourceRecord(texture, &record));
+                EXPECT_EQ(record.ImageBindableHint, 1u)
+                    << "glBindImageTexture did not reach the applier's record as ImageBindableHint";
+                EXPECT_NE(record.BindMask & (1u << 6), 0u) << "kMGPipeBindShaderImage was not produced";
+                EXPECT_GT(record.Serial, serialBeforeBind) << "the metadata respecify moved no serial";
+            }
+
+            const Image image = DrawSampled(texture);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            Report("AnImageBindAfterAllocationReachesTheApplierAsAMetadataRespecify", image);
+            EXPECT_TRUE(Mostly(image, "blue", "the texture after the image bind that followed an unconsumed upload"));
+            glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+            unsigned long long pullsAfter = 0;
+            if (pullsReadable && readable && PeekPipeStatsTextureRemintPulls(&pullsAfter)) {
+                EXPECT_EQ(pullsAfter, pullsBefore + 1)
+                    << "the re-mint of a texture allocated before its hint was not counted as a remint pull "
+                       "(trp= on the stats line is ROADMAP open question 2's number)";
+            }
+
+            // THE PREVENTION HALF, measured the other way round: a texture whose hint arrives at
+            // the bind, BEFORE its first sync, is allocated image-bindable up front and pulls
+            // nothing - the counter does not move.
+            GLuint early = 0;
+            glGenTextures(1, &early);
+            glBindTexture(GL_TEXTURE_2D, early);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 4, 4);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, red.data());
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glBindImageTexture(0, early, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8); // before any sync
+            const Image earlyImage = DrawSampled(early);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_TRUE(Mostly(earlyImage, "red", "a texture image-bound before its first sync"));
+            glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+            unsigned long long pullsEarly = 0;
+            if (pullsReadable && readable && PeekPipeStatsTextureRemintPulls(&pullsEarly)) {
+                EXPECT_EQ(pullsEarly, pullsAfter)
+                    << "a texture whose hint preceded its first sync was still re-minted (the prevention "
+                       "half of the hint did not fire)";
+            }
+
+            // THE METADATA RESPECIFY KEEPS A STANDING UPLOAD, end to end and with no remint in the
+            // way: `early` is image-bindable already, so a NEW sticky bit reaching it - the
+            // RENDER_TARGET bit a DSA attachment produces at its setter (a Named record, ID-19(c)),
+            // with no sync of the texture in between - is a pure metadata update. The blue upload
+            // drained before it must still stand in the record afterwards (or, if a sync did run,
+            // have been uploaded rather than dropped) and reach the driver at the next draw.
+            glBindTexture(GL_TEXTURE_2D, early);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, blue.data());
+            glBindTexture(GL_TEXTURE_2D, 0);
+            const Image unrelatedAgain = DrawSampled(m_other);
+            EXPECT_TRUE(Mostly(unrelatedAgain, "white", "the unrelated draw"));
+            PipeTextureResourceRecordPeek earlyRecord{};
+            const bool earlyReadable = PeekPipeTextureResourceRecord(early, &earlyRecord);
+            if (earlyReadable) {
+                EXPECT_EQ(earlyRecord.PendingUploads, 1u) << "the blue upload was not drained into the applier";
+            }
+            const unsigned long long earlySerialBefore = earlyRecord.Serial;
+            unsigned long long uploadsBeforeAttach = 0;
+            const bool uploadsCounted = PeekPipeStatsTextureUploadEmissions(&uploadsBeforeAttach);
+            GLuint namedFbo = 0;
+            glCreateFramebuffers(1, &namedFbo);
+            glNamedFramebufferTexture(namedFbo, GL_COLOR_ATTACHMENT0, early, 0);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            if (earlyReadable) {
+                ASSERT_TRUE(PeekPipeTextureResourceRecord(early, &earlyRecord));
+                EXPECT_NE(earlyRecord.BindMask & (1u << 7), 0u)
+                    << "the DSA attachment did not produce kMGPipeBindRenderTarget";
+                EXPECT_GT(earlyRecord.Serial, earlySerialBefore) << "the mask move reached the record as no respecify";
+                unsigned long long uploadsAfterAttach = 0;
+                if (earlyRecord.PendingUploads == 0 && uploadsCounted &&
+                    PeekPipeStatsTextureUploadEmissions(&uploadsAfterAttach)) {
+                    EXPECT_GT(uploadsAfterAttach, uploadsBeforeAttach)
+                        << "the standing upload vanished from the record without Espryt uploading anything: "
+                           "the metadata respecify dropped it";
+                } else {
+                    EXPECT_EQ(earlyRecord.PendingUploads, 1u)
+                        << "the metadata respecify dropped the pending upload standing beside it";
+                }
+            }
+            const Image earlyAfter = DrawSampled(early);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_TRUE(Mostly(earlyAfter, "blue", "the upload that stood across a metadata respecify"));
+            glDeleteFramebuffers(1, &namedFbo);
+            GLuint cleanup = texture;
+            glDeleteTextures(1, &cleanup);
+            GLuint cleanupEarly = early;
+            glDeleteTextures(1, &cleanupEarly);
+        }
+
     } // namespace
 } // namespace MGITest

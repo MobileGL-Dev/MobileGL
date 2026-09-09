@@ -767,6 +767,11 @@ namespace MobileGL::MG_Pipe {
                 if (MG_State::GLState::SamplesAsIncompleteTexture(texture.get(), effective)) continue;
 
                 entry.Texture = MGPipeSlots().Acquire(MGPipeKind::Texture, texture->GetLifetimeId());
+                // D-A4: a texture the sampler-view resolution names in an emitted MGPBoundView
+                // is SAMPLER-bound from then on (sticky; the texture emitter's contract door,
+                // since this header is included BY TextureEmit.h). One early-out per unit per
+                // pass once the bit is set.
+                MGPipeNoteTextureBoundAs(entry.Texture, static_cast<Uint32>(kMGPipeBindSampler));
                 entry.View = AcquireSamplerView(*texture, entry.Texture, bytes);
             }
 

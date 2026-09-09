@@ -1290,6 +1290,21 @@ namespace MobileGL::MG_Pipe {
             [&](auto& emitter) { emitter.EmitRenderbufferRespecify(renderbuffer); });
     }
 
+    void MGPipeNoteTextureBoundAs(MGPipeHandle texture, Uint32 bindBit) {
+        // Not gated on FamilyIsLive: the mask is client state (see the declaration), and the
+        // emitter gates the emission it causes.
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
+            MGPipeTextureEmitterInstance(),
+            [&](auto& emitter) { emitter.NoteTextureBoundAs(texture, static_cast<Uint16>(bindBit)); });
+    }
+
+    void MGPipeNoteTextureImageBound(ITextureObject& texture) {
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(MGPipeTextureEmitterInstance(), [&](auto& emitter) {
+            emitter.NoteTextureBoundAs(emitter.AcquireTexture(texture.GetLifetimeId(), &texture),
+                                       static_cast<Uint16>(kMGPipeBindShaderImage));
+        });
+    }
+
     void MGPipeEmitSamplerCsoCreate(SamplerObject& sampler) {
         if (!FamilyIsLive(kMGPipeSubsystemSamplers, kMGPipeWiredSamplerSubsystem)) return;
         ForwardWhenWired<kMGPipeWiredSamplerSubsystem>(

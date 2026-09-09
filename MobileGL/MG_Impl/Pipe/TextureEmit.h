@@ -519,8 +519,11 @@ namespace MobileGL::MG_Pipe {
         // ORed, never cleared, and emitted on BOTH resource_create and every
         // resource_respecify, exactly as P3a's buffer mask is. The four bits nothing set before
         // P4a get their producers here and in the framebuffer emitter: RENDER_TARGET and
-        // DEPTH_STENCIL from an attachment point, SAMPLER from a resolved sampler view and
-        // SHADER_IMAGE from a resolved image unit (the sampler package's two).
+        // DEPTH_STENCIL from an attachment point (FramebufferEmit.h), SAMPLER from a resolved
+        // sampler view (SamplerEmit.h) and SHADER_IMAGE from glBindImageTexture's state setter
+        // and the resolved image unit (TextureState.h, ImageEmit.h) - the last two through the
+        // contract's MGPipeNoteTextureBoundAs door, since neither may include this header
+        // (final review M-A: before the fix round nothing produced them and the hint was dead).
         // A MASK CHANGE AFTER THE ALLOCATION IS A METADATA RESPECIFY (ID-18 M4), and without it
         // the sticky half of D-A4 is a no-op for exactly the textures it was written for. The
         // mask rides resource_create and every resource_respecify - and an IMMUTABLE texture has

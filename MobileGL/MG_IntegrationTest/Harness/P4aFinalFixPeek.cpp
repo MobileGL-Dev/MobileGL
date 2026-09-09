@@ -13,6 +13,7 @@
 #if MOBILEGL_PIPE_PUSH
 #include <MG_Pipe/MGPipeTypes.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_Util/Metrics/PipeStats.h>
 #define MGITEST_P4A_FINALFIX_PEEK_LIVE 1
 #endif
 #endif
@@ -45,8 +46,26 @@ namespace MGITest {
         }
         return false;
     }
+
+    bool PeekPipeStatsTextureRemintPulls(unsigned long long* out) {
+        if (out == nullptr) return false;
+        namespace Stats = MobileGL::MG_Util::PipeStats;
+        if (!Stats::Enabled()) Stats::SetEnabledForTesting(true);
+        *out = static_cast<unsigned long long>(Stats::TotalCalls(Stats::CallClass::TextureRemintPulls));
+        return true;
+    }
+
+    bool PeekPipeStatsTextureUploadEmissions(unsigned long long* out) {
+        if (out == nullptr) return false;
+        namespace Stats = MobileGL::MG_Util::PipeStats;
+        if (!Stats::Enabled()) Stats::SetEnabledForTesting(true);
+        *out = static_cast<unsigned long long>(Stats::TotalCalls(Stats::CallClass::TextureUploadEmissions));
+        return true;
+    }
 #else
     bool PeekPipeTextureResourceRecord(unsigned, PipeTextureResourceRecordPeek*) { return false; }
+    bool PeekPipeStatsTextureRemintPulls(unsigned long long*) { return false; }
+    bool PeekPipeStatsTextureUploadEmissions(unsigned long long*) { return false; }
 #endif
 
 } // namespace MGITest

@@ -5252,6 +5252,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (m_imageBindableStorageRequired) {
                 return;
             }
+#if MOBILEGL_PIPE_PUSH
+            // Whether this transition re-mints storage that ALREADY EXISTED on the backend: that
+            // is the remint PULL (the levels below are replayed from the client's shadow to fill
+            // the new carrier), and it is what ROADMAP open question 2 counts. A texture reaching
+            // here uninitialised is allocated image-bindable up front and pulls nothing.
+            const Bool hadBackendStorage = m_isInitialized;
+#endif
             m_imageBindableStorageRequired = true;
             m_isInitialized = false;
             // Every level this object has ALREADY uploaded has to be replayed, because the
@@ -5326,6 +5333,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         if (!markedRemintPull) {
                             MG_Pipe::MGPipeUnmigratedEmulation("texture-remint-pull");
                             markedRemintPull = true;
+                            // THE COUNTER BEHIND ROADMAP OPEN QUESTION 2 (final review M-A): one per
+                            // transition that replays a level of storage the backend already held.
+                            if (hadBackendStorage && MG_Util::PipeStats::Enabled()) {
+                                MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::TextureRemintPulls, 1);
+                            }
                         }
                         if (!MG_Pipe::MGPipeHandleIsNull(rearmRes)) {
                             const MG_Pipe::MGPBox wholeLevel{0,

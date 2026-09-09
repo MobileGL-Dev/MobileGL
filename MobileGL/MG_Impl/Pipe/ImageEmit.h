@@ -38,6 +38,7 @@
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeMutation.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/TextureState/TextureState.h>
 #include <MG_Util/Metrics/PipeStats.h>
@@ -97,6 +98,13 @@ namespace MobileGL::MG_Pipe {
                 entry.Res = binding.Texture ? MGPipeSlots().Acquire(MGPipeKind::Texture,
                                                                     binding.Texture->GetLifetimeId())
                                             : kMGPipeNullHandle;
+                // D-A4: a texture named in an emitted MGPImageView is SHADER-IMAGE-bound from
+                // then on - the bit ImageBindableHint is derived from. The bind itself noted it
+                // first (TextureState.h, so the hint precedes the first sync); this is the
+                // letter of the rule and a one-compare early-out once the bit is set.
+                if (!MGPipeHandleIsNull(entry.Res)) {
+                    MGPipeNoteTextureBoundAs(entry.Res, static_cast<Uint32>(kMGPipeBindShaderImage));
+                }
                 // THE APPLICATION's format and access, verbatim. The bind-format recast and the
                 // buffer-texture split view are server-side and stay there; so does
                 // SupportsLayeredImageBinding's rule, which asks the BACKEND target after
