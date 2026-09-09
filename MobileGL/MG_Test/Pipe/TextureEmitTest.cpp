@@ -223,6 +223,7 @@ TEST(TextureEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
     X(TextureEmit, ADeadTexturesHandleResolvesToNothingAndLeavesTheDrainList)                      \
     X(TextureEmit, ATextureRecycledOntoADeadSlotDoesNotInheritTheDrainEntry)                       \
     X(TextureEmit, ADeadRenderbuffersEntryIsRetiredWithItsSlot)                                    \
+    X(TextureEmit, ARefusedParamsRecordDoesNotAdvanceTheLatch)                                     \
     X(TextureEmit, ADeadTexturesSamplerViewLatchIsRetiredAtItsDeath)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
@@ -1496,6 +1497,42 @@ TEST(TextureEmit, ADeadRenderbuffersEntryIsRetiredWithItsSlot) {
     const MGPipeHandle successorHandle = Textures().FindRenderbuffer(*successor);
     ASSERT_EQ(successorHandle.Slot, handle.Slot);
     EXPECT_EQ(Textures().RenderbufferBindMask(successorHandle), 0u);
+}
+
+// ============================ final review m-1 (audit F-7) ============================
+//
+// set_texture_params LATCHES ON ACCEPTANCE, like the sub-data and respecify paths. A record the
+// applier refused (it holds nothing for the handle) used to advance the version latch anyway,
+// so the parameters were not re-sent until the next glTexParameter* moved a version.
+TEST(TextureEmit, ARefusedParamsRecordDoesNotAdvanceTheLatch) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(95, 8);
+    const MGPipeHandle handle = Textures().FindTexture(*texture);
+    ASSERT_NE(AppliedTexture(handle), nullptr);
+
+    // The served context's teardown scope: every object record is dropped while the frontend
+    // objects live on. A parameter then moves (a LOD write on the built-in sampler, which the
+    // format setter's earlier publication did not carry) and its set_texture_params is refused.
+    MGPipeApplierReleaseObjectRecords();
+    texture->GetSamplerObject()->SetLodBias(0.5f);
+    const Uint64 paramsBefore = Textures().ParamCount();
+    MG_Pipe::MGPipeEmitTextureParams(*texture);
+    EXPECT_EQ(Textures().ParamCount(), paramsBefore + 1) << "the record was not even emitted";
+    EXPECT_EQ(Textures().RefusedParamCount(), 1u) << "the emitter did not see the refusal";
+
+    // The record comes back through the self-healing create the next respecify carries.
+    texture->AllocateStorage(TextureUploadTarget::Texture2D, 0, MipmapInput{IntVec3{16, 16, 1}, 16 * 16 * 4});
+    const MGPipeResourceRecord* record = AppliedTexture(handle);
+    ASSERT_NE(record, nullptr);
+    ASSERT_EQ(record->ParamsSerial, 0u);
+
+    // The same parameters, no version moved: with the latch taken on the REFUSED call this
+    // returns early and the record never learns them.
+    MG_Pipe::MGPipeEmitTextureParams(*texture);
+    EXPECT_EQ(Textures().ParamCount(), paramsBefore + 2)
+        << "a refused set_texture_params advanced the latch, so the parameters are not re-sent";
+    EXPECT_EQ(record->ParamsSerial, 1u) << "the record never learned the LOD write";
+    EXPECT_EQ(record->Params.LodBias, 0.5f);
 }
 
 #endif // MOBILEGL_PIPE_PUSH

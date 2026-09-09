@@ -335,7 +335,10 @@ namespace MobileGL::MG_Config {
         //   0x100 vertex input (vertex elements / vertex buffers / index buffer)
         //   0x200 framebuffer (set_framebuffer_state)              - requires 0x400
         //   0x400 texture resources (texture + renderbuffer resource_*,
-        //         set_texture_params)                              - requires 0x80
+        //         set_texture_params)                              - requires 0x80 AND 0x800
+        //         (the built-in sampler CSO a set_texture_params record names is minted by
+        //         the sampler family alone, ID-15; the four rows are MG_Impl/Pipe/PipeFill.cpp's
+        //         kMGPipeP4aFamilyDependencies, mirrored bit for bit by Espryt's resolvers)
         //   0x800 samplers (sampler CSO, sampler view, set_sampler_views /
         //         bind_sampler_states / set_shader_images)         - requires 0x400
         //   0x1000 programs (shader CSO, set_draw/dispatch_program, global constants)

@@ -762,9 +762,10 @@ namespace MobileGL::MG_Pipe {
                 entry.SamplerVersion == samplerVersion && !entry.ForceParamsResync) {
                 return;
             }
-            entry.HasParamsLatch = true;
-            entry.ParamsVersion = paramsVersion;
-            entry.SamplerVersion = samplerVersion;
+            // THE LATCH IS TAKEN BELOW, ON ACCEPTANCE (final review m-1, audit F-7) - like the
+            // sub-data and respecify paths, and unlike v2, which advanced it here and left a
+            // refused record (no applier record for the handle, the SD-1/SD-3 shape) unsent
+            // until the next glTexParameter* moved a version.
 
             // ID-14 / ID-17: THE BUILT-IN SAMPLER COMES FROM C's CONTENT-ADDRESSED CACHE and is
             // never minted here. v1 took MGPipeSlots().Acquire(SamplerCso, the SamplerObject's
@@ -797,10 +798,25 @@ namespace MobileGL::MG_Pipe {
 
             const MGPTextureParams params =
                 MGPipeBuildTextureParams(texture, handle, entry.BuiltinSampler, entry.ForceParamsResync);
-            entry.ForceParamsResync = false;
             m_lastParams = params;
             ++m_paramSets;
-            MGPipeApplySetTextureParams(params);
+            // Not behind MGPipeTextureRecordsReachTheApplier() (see its comment): the call is
+            // dispatched whenever this emitter runs, so the answer is always a real one.
+            if (!MGPipeApplySetTextureParams(params)) {
+                // Refused - a record the applier does not hold, or no consumer. Nothing latched:
+                // the same versions re-send at the next call, and the self-healing create the
+                // next respecify carries is what gives the record back. Loud for the reason the
+                // sub-data refusal is loud.
+                ++m_refusedParamSets;
+                MGLOG_E_ONCE("MGPipe: set_texture_params for texture %u {slot=%u, gen=%u} was refused; the "
+                             "latch is not taken and the parameters are re-sent at the next call",
+                             texture.GetExternalIndex(), handle.Slot, handle.Gen);
+                return;
+            }
+            entry.HasParamsLatch = true;
+            entry.ParamsVersion = paramsVersion;
+            entry.SamplerVersion = samplerVersion;
+            entry.ForceParamsResync = false;
         }
 
         void EmitRenderbufferCreate(RenderbufferObject& renderbuffer) {
@@ -946,6 +962,8 @@ namespace MobileGL::MG_Pipe {
         // Records the applier REFUSED. The dirty flag survives one of these, which is the whole
         // of D-D5 step 1 - so a case that wants to prove the flag survived asserts on this.
         Uint64 RefusedSubDataCount() const { return m_refusedSubDatas; }
+        // set_texture_params records the applier refused; the latch survives one of these (m-1).
+        Uint64 RefusedParamCount() const { return m_refusedParamSets; }
         // What create_sampler_state put on the wire on this emitter's behalf, so the csob-blob
         // accounting does not under-report 100 bytes per built-in sampler mint. set_texture_params
         // itself returns no byte count - it is not emitted from the validate point's payload
@@ -975,6 +993,7 @@ namespace MobileGL::MG_Pipe {
         void ResetCounters() {
             m_creates = m_respecifies = m_paramSets = m_subDatas = 0;
             m_refusedSubDatas = 0;
+            m_refusedParamSets = 0;
             m_samplerCsoPayloadBytes = 0;
             m_deadResolves = 0;
         }
@@ -1276,6 +1295,7 @@ namespace MobileGL::MG_Pipe {
         Uint64 m_paramSets = 0;
         Uint64 m_subDatas = 0;
         Uint64 m_refusedSubDatas = 0;
+        Uint64 m_refusedParamSets = 0;
         Uint64 m_samplerCsoPayloadBytes = 0;
         mutable Uint64 m_deadResolves = 0;
     };
