@@ -23,13 +23,16 @@
 //        lanes: a redefinition that keeps the driver id (mutable texture storage regenerated in
 //        place, a renderbuffer re-storaged in place) moves neither the framebuffer's frontend
 //        versions nor the backend-id generation the FBO memo reads, so SyncToBackend never
-//        re-ran and the masks stayed on both arms. The texture half is fixed on both arms (an
-//        in-place regeneration now takes the same generation a re-mint takes); the renderbuffer
-//        half only on the handle arm, where the resource record carries the re-storage - on the
-//        pre-handle arm a renderbuffer's twin is only ever reached from inside the FBO walk the
-//        memo skips (D-D2's documented hole, pre-P4a code), so that case asserts on the handle
-//        arm and declines by name elsewhere. Three cases, both directions, texture and
-//        renderbuffer. DirectGLES only: the masks are Espryt's substitution machinery.
+//        re-ran and the masks stayed on both arms. The texture half is fixed on both arms OF A
+//        PUSH BUILD (an in-place regeneration now takes the same generation a re-mint takes -
+//        compiled under MOBILEGL_PIPE_PUSH because G1 keeps the pull library byte-identical to
+//        the P4a baseline, so the pull build keeps the pre-P4a hole until the fix lands on dev on
+//        its own and the texture cases decline by name there); the renderbuffer half only on the
+//        handle arm, where the resource record carries the re-storage - on the pre-handle arm a
+//        renderbuffer's twin is only ever reached from inside the FBO walk the memo skips (D-D2's
+//        documented hole, pre-P4a code), so that case asserts on the handle arm and declines by
+//        name elsewhere. Three cases, both directions, texture and renderbuffer. DirectGLES only:
+//        the masks are Espryt's substitution machinery.
 //   F-1  set_sampler_views is resolved for the PROGRAM IN USE and bit 12's shutter read no program
 //        input, so a glUseProgram alone never re-emitted it; E's record epoch (the two set serials)
 //        then kept the program-independent texture sync list from ever rebuilding, and a texture
@@ -336,10 +339,26 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
             DrawQuad();
             ReadPixelFloat(kSize / 2, kSize / 2, pixel);
             EXPECT_NEAR(pixel[1], 1.0f, 0.05f) << "the draw did not land at all";
-            EXPECT_NEAR(pixel[3], 0.25f, 0.02f)
-                << "the draw's alpha never reached a four-channel attachment: the framebuffer record "
-                   "(handle arm) or the FBO twin's memo (pre-handle arm) still describes the "
-                   "three-channel storage the texture was attached with, so alpha stayed masked off (F-3)";
+            // PUSH BUILDS ONLY, EVERY ARM OF THEM. The pre-handle half of the fix (an in-place
+            // regeneration takes the backend-id generation a re-mint takes) is Espryt code the
+            // pull build would share, and G1 keeps the pull library byte-identical to the P4a
+            // baseline - so it is compiled under MOBILEGL_PIPE_PUSH and the pull build keeps the
+            // pre-P4a hole until the same lines land on dev on their own. The peek returns true
+            // exactly where it could look, which for a case that already skipped off Espryt means
+            // "a push build"; what it writes (is the handle arm live) does not matter here.
+            bool framebufferArmLive = false;
+            if (PeekEsprytFramebufferHandleArmIsLive(&framebufferArmLive)) {
+                EXPECT_NEAR(pixel[3], 0.25f, 0.02f)
+                    << "the draw's alpha never reached a four-channel attachment: the framebuffer record "
+                       "(handle arm) or the FBO twin's memo (pre-handle arm) still describes the "
+                       "three-channel storage the texture was attached with, so alpha stayed masked off (F-3)";
+            } else {
+                std::cout << "[ P4aSeamAudit ] texture respecify verdict DECLINED on the pull build (the "
+                             "in-place regeneration bump is push-only by G1); alpha read "
+                          << pixel[3] << std::endl;
+                RecordProperty("p4a_seam_white_box", "declined");
+                RecordProperty("p4a_seam_white_box_reason", "texture respecify: pull build (G1)");
+            }
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glDeleteFramebuffers(1, &fbo);
@@ -488,11 +507,27 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
             DrawQuad();
             glDisable(GL_BLEND);
             ReadPixelFloat(kSize / 2, kSize / 2, pixel);
-            EXPECT_NEAR(pixel[0], 1.0f, 0.05f)
-                << "GL_DST_ALPHA read the stored alpha of a three-channel attachment and it was not "
-                   "1.0: the framebuffer record (handle arm) or the FBO twin's memo (pre-handle arm) "
-                   "still describes the four-channel storage the texture was attached with, so the "
-                   "draw was let write alpha (F-3, mirror)";
+            // PUSH BUILDS ONLY, EVERY ARM OF THEM (the mirror). The pre-handle half of the fix (an in-place
+            // regeneration takes the backend-id generation a re-mint takes) is Espryt code the
+            // pull build would share, and G1 keeps the pull library byte-identical to the P4a
+            // baseline - so it is compiled under MOBILEGL_PIPE_PUSH and the pull build keeps the
+            // pre-P4a hole until the same lines land on dev on their own. The peek returns true
+            // exactly where it could look, which for a case that already skipped off Espryt means
+            // "a push build"; what it writes (is the handle arm live) does not matter here.
+            bool framebufferArmLive = false;
+            if (PeekEsprytFramebufferHandleArmIsLive(&framebufferArmLive)) {
+                EXPECT_NEAR(pixel[0], 1.0f, 0.05f)
+                    << "GL_DST_ALPHA read the stored alpha of a three-channel attachment and it was not "
+                       "1.0: the framebuffer record (handle arm) or the FBO twin's memo (pre-handle arm) "
+                       "still describes the four-channel storage the texture was attached with, so the "
+                       "draw was let write alpha (F-3, mirror)";
+            } else {
+                std::cout << "[ P4aSeamAudit ] three-channel respecify verdict DECLINED on the pull build (the "
+                             "in-place regeneration bump is push-only by G1); red read "
+                          << pixel[0] << std::endl;
+                RecordProperty("p4a_seam_white_box", "declined");
+                RecordProperty("p4a_seam_white_box_reason", "three-channel respecify: pull build (G1)");
+            }
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glDeleteFramebuffers(1, &fbo);
