@@ -6667,6 +6667,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (needsRegeneration) {
                     MGLOG_D("Texture state changed significantly or not initialized, regenerating texture with ID: %u",
                             m_backendTextureId);
+                    // A REDEFINITION IN PLACE TAKES THE SAME GENERATION A RE-MINT TAKES (P4a fable
+                    // seam F-3, the pre-handle half). Mutable driver storage is redefined on the
+                    // SAME id below, so unlike RecreateBackendTexture nothing moves the FBO twins'
+                    // memo: the frontend framebuffer versions do not see a texture's respecify
+                    // and the id did not change. An attached texture whose format moved to one
+                    // with the same carrier (GL_SRGB8 -> GL_SRGB8_ALPHA8 on a driver that widens
+                    // the first) therefore kept the framebuffer's alpha-widening mask, and every
+                    // draw into it stayed masked. The first definition is not a redefinition and
+                    // bumps nothing; a redefinition that went through RecreateBackendTexture above
+                    // has already bumped.
+                    if (m_isInitialized && !m_backendStorageImmutable) {
+                        ++FramebufferImpl::g_attachmentBackendIdGeneration;
+                    }
 
                     // Regenerate all mipmap levels
                     GLenum glInternalFormat, glType, glFormat;
@@ -12725,6 +12738,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 #endif
+
+            // A RE-STORAGE IS A REDEFINITION ON THE SAME DRIVER ID (P4a fable seam F-3, the
+            // pre-handle half): glRenderbufferStorage below re-allocates behind the name the
+            // framebuffer twins already attached, the frontend's renderbuffer setters bump no
+            // version and no framebuffer version sees them, so without this the FBO memo kept
+            // the widening masks of the storage the renderbuffer was attached with. Same
+            // generation a texture re-mint takes, for the same reason; the first allocation is
+            // not a redefinition.
+            if (m_isInitialized) {
+                ++FramebufferImpl::g_attachmentBackendIdGeneration;
+            }
 
             Bind();
 

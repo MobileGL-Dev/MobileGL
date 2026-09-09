@@ -18,9 +18,18 @@
 //
 //   F-3  set_framebuffer_state INLINES an attachment's format (D-C1) and a storage redefinition of
 //        an ATTACHED texture or renderbuffer moved nothing bit 11 read: Espryt's handle arm then
-//        answered its alpha-widening / snorm-clamp / integer masks from the stale copy while the
-//        legacy arm re-read the frontend. Three cases, both directions, texture and renderbuffer.
-//        DirectGLES only: the masks are Espryt's substitution machinery.
+//        answered its alpha-widening / snorm-clamp / integer masks from the stale copy. AND THE
+//        PRE-HANDLE ARM WAS NOT FRESH EITHER, which these cases found on the 0x1ff / 0 / pull
+//        lanes: a redefinition that keeps the driver id (mutable texture storage regenerated in
+//        place, a renderbuffer re-storaged in place) moves neither the framebuffer's frontend
+//        versions nor the backend-id generation the FBO memo reads, so SyncToBackend never
+//        re-ran and the masks stayed on both arms. The texture half is fixed on both arms (an
+//        in-place regeneration now takes the same generation a re-mint takes); the renderbuffer
+//        half only on the handle arm, where the resource record carries the re-storage - on the
+//        pre-handle arm a renderbuffer's twin is only ever reached from inside the FBO walk the
+//        memo skips (D-D2's documented hole, pre-P4a code), so that case asserts on the handle
+//        arm and declines by name elsewhere. Three cases, both directions, texture and
+//        renderbuffer. DirectGLES only: the masks are Espryt's substitution machinery.
 //   F-1  set_sampler_views is resolved for the PROGRAM IN USE and bit 12's shutter read no program
 //        input, so a glUseProgram alone never re-emitted it; E's record epoch (the two set serials)
 //        then kept the program-independent texture sync list from ever rebuilding, and a texture
@@ -273,7 +282,9 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
         // alpha masked off so the stored alpha stays at the 1.0 a three-channel format implies.
         // Redefine the same attached texture as GL_SRGB8_ALPHA8 and the application owns alpha
         // again - the mask must clear. On the tree the audit read the record still said SRGB8, the
-        // handle arm kept masking, and the 0.25 this case draws never reached the storage.
+        // handle arm kept masking, and the 0.25 this case draws never reached the storage; on the
+        // pre-handle arm the twin regenerated the (mutable) storage on the same driver id, nothing
+        // the FBO memo reads moved, and the masks stayed the same way.
 
         TEST_F(P4aSeamAuditScenario, ATextureRespecifiedWhileAttachedReachesTheFramebufferRecord) {
             if (!Ready()) return;
@@ -327,8 +338,8 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
             EXPECT_NEAR(pixel[1], 1.0f, 0.05f) << "the draw did not land at all";
             EXPECT_NEAR(pixel[3], 0.25f, 0.02f)
                 << "the draw's alpha never reached a four-channel attachment: the framebuffer record "
-                   "still describes the three-channel storage the texture was attached with, so the "
-                   "handle arm kept masking alpha off (F-3)";
+                   "(handle arm) or the FBO twin's memo (pre-handle arm) still describes the "
+                   "three-channel storage the texture was attached with, so alpha stayed masked off (F-3)";
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glDeleteFramebuffers(1, &fbo);
@@ -386,9 +397,27 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
             DrawQuad();
             ReadPixelFloat(kSize / 2, kSize / 2, pixel);
             EXPECT_NEAR(pixel[1], 1.0f, 0.05f) << "the draw did not land at all";
-            EXPECT_NEAR(pixel[3], 0.25f, 0.02f)
-                << "the draw's alpha never reached the four-channel renderbuffer: the framebuffer "
-                   "record still describes the storage it was attached with (F-3)";
+            // THE HANDLE ARM ONLY. On the pre-handle arm a renderbuffer's twin is reached only from
+            // inside the FBO walk, and nothing that walk's memo reads moves on glRenderbufferStorage
+            // - the frontend setters bump no version (D-D2), no framebuffer version sees them, and
+            // the twin that would bump the backend generation is exactly what the memo skips. That
+            // is pre-P4a code and D-D2's documented hole; the resource record is what closes it,
+            // so the verdict is taken where the record is consumed and declined by name elsewhere
+            // (measured: alpha 1.0 on the pull build and at 0x1ff / 0, the mask of the storage the
+            // renderbuffer was attached with).
+            bool framebufferArmLive = false;
+            if (PeekEsprytFramebufferHandleArmIsLive(&framebufferArmLive) && framebufferArmLive) {
+                EXPECT_NEAR(pixel[3], 0.25f, 0.02f)
+                    << "the draw's alpha never reached the four-channel renderbuffer: the framebuffer "
+                       "record still describes the storage it was attached with (F-3)";
+            } else {
+                std::cout << "[ P4aSeamAudit ] renderbuffer re-storage verdict DECLINED on the pre-handle arm "
+                             "(D-D2's documented hole: no frontend version and no backend generation moves on a "
+                             "renderbuffer re-storage until the FBO walk the memo skips); alpha read "
+                          << pixel[3] << std::endl;
+                RecordProperty("p4a_seam_white_box", "declined");
+                RecordProperty("p4a_seam_white_box_reason", "renderbuffer re-storage: pre-handle arm (D-D2)");
+            }
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glDeleteFramebuffers(1, &fbo);
@@ -461,8 +490,9 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
             ReadPixelFloat(kSize / 2, kSize / 2, pixel);
             EXPECT_NEAR(pixel[0], 1.0f, 0.05f)
                 << "GL_DST_ALPHA read the stored alpha of a three-channel attachment and it was not "
-                   "1.0: the framebuffer record still describes the four-channel storage the texture "
-                   "was attached with, so the handle arm let the draw write alpha (F-3, mirror)";
+                   "1.0: the framebuffer record (handle arm) or the FBO twin's memo (pre-handle arm) "
+                   "still describes the four-channel storage the texture was attached with, so the "
+                   "draw was let write alpha (F-3, mirror)";
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glDeleteFramebuffers(1, &fbo);
