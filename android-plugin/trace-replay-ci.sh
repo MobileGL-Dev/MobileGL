@@ -367,7 +367,9 @@ run_retrace() {
   mkdir -p "${result_dir}"
   # A repeat run of a case the previous invocation already installed and pushed only needs
   # the on-device copy back into a fresh app output directory.
-  if [ "${reuse_fixture}" -eq 0 ]; then
+  # MOBILEGL_TRACE_SKIP_INSTALL=1: the caller installed the APK itself (ColorOS shows an install-confirmation
+  # dialog whose tap drops adb for a few seconds, so the install has to be done and settled outside a run).
+  if [ "${reuse_fixture}" -eq 0 ] && [ "${MOBILEGL_TRACE_SKIP_INSTALL:-0}" != "1" ]; then
     "${ADB}" install -r "$(host_path_for_adb "${apk_file}")"
   fi
   copy_fixture_to_app
