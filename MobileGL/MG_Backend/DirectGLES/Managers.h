@@ -1985,7 +1985,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // computes from the attachment's format did, and nothing else the FBO memo reads sees
         // a respecify of an attached object. So "did I change something under an attachment
         // point that no frontend version can tell the framebuffer about" is what this counts,
-        // and the re-mint is one case of it.
+        // and the re-mint is one case of it. The in-place bumps are compiled under
+        // MOBILEGL_PIPE_PUSH: G1 keeps the pull library byte-identical to the P4a baseline,
+        // so the pull build keeps the pre-P4a hole until they land on dev on their own.
         extern Uint64 g_attachmentBackendIdGeneration;
         // What g_attachmentBackendIdGeneration was when SyncCurrentFBO last stamped each
         // target; part of the synced tuple above.

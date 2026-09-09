@@ -6677,9 +6677,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // draw into it stayed masked. The first definition is not a redefinition and
                     // bumps nothing; a redefinition that went through RecreateBackendTexture above
                     // has already bumped.
+#if MOBILEGL_PIPE_PUSH
+                    // PUSH BUILDS ONLY. This is Espryt code the pull build would share, and G1
+                    // keeps the pull library byte-identical to the P4a baseline (the bump resized
+                    // this function and the renderbuffer twin's SyncToBackend: 0/0/2/0). So the
+                    // pull build carries the pre-P4a hole until these lines land on dev on their
+                    // own; every arm of a push build has the fix.
                     if (m_isInitialized && !m_backendStorageImmutable) {
                         ++FramebufferImpl::g_attachmentBackendIdGeneration;
                     }
+#endif
 
                     // Regenerate all mipmap levels
                     GLenum glInternalFormat, glType, glFormat;
@@ -12746,9 +12753,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the widening masks of the storage the renderbuffer was attached with. Same
             // generation a texture re-mint takes, for the same reason; the first allocation is
             // not a redefinition.
+#if MOBILEGL_PIPE_PUSH
+            // PUSH BUILDS ONLY, for the texture twin's reason (G1: the pull library stays
+            // byte-identical to the P4a baseline).
             if (m_isInitialized) {
                 ++FramebufferImpl::g_attachmentBackendIdGeneration;
             }
+#endif
 
             Bind();
 
