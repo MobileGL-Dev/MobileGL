@@ -84,6 +84,7 @@ namespace {
     X(TrackerAggregates, ARenderbufferStorageDefinitionMovesTheFramebufferAggregate) \
     X(TrackerWalk, AProgramSwitchAloneFiresTheSamplerViewBit) \
     X(TrackerWalk, ATextureParameterAloneFiresTheSamplerViewBit) \
+    X(TrackerWalk, AProgramSwitchBetweenEqualImageUnitCountersFiresTheShaderImageBit) \
     X(TrackerAttribPayload, AFloatWriteCarriesTheFloatBitsAndNamesItsClass) \
     X(TrackerAttribPayload, AnIntWriteCarriesTheIntWordsAndNamesItsClass) \
     X(TrackerAttribPayload, AUintWriteCarriesTheUintWordsAndNamesItsClass) \
@@ -824,6 +825,30 @@ namespace {
             << "completeness is a view-set input and a parameter change did not re-resolve it";
         EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewSamplers), 0u);
         EXPECT_EQ(Walk(), 0u);
+    }
+
+    // P4a FABLE SEAM F-2 (and E's SD-4, which is this bit through a buffer image). Bit 14's
+    // plain-program arm mixed GetImageUnitVersion() ALONE - a per-program counter that two
+    // programs routinely share, 0 == 0 for any pair that never moved an image unit through
+    // glUniform1i - so a glUseProgram between them fired nothing and set_shader_images' window
+    // stayed the previous program's. The pipeline arm already mixed stageLinks; the plain arm
+    // now mixes the same identity bit 6 reads.
+    TEST_F(TrackerWalk, AProgramSwitchBetweenEqualImageUnitCountersFiresTheShaderImageBit) {
+        const Uint first = Ctx().CreateProgram();
+        const Uint second = Ctx().CreateProgram();
+        ASSERT_EQ(Ctx().GetProgramObject(first)->GetImageUnitVersion(),
+                  Ctx().GetProgramObject(second)->GetImageUnitVersion())
+            << "the premise of this case is two programs whose image-unit counters are equal";
+        Ctx().UseProgram(first);
+        Walk();
+        ASSERT_EQ(Walk(), 0u) << "the fixture did not reach a steady state";
+
+        Ctx().UseProgram(second);
+        const Uint32 dirty = Walk();
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewShaderImages), 0u)
+            << "set_shader_images' window is the program's and a glUseProgram alone did not "
+               "re-emit it (F-2)";
+        EXPECT_EQ(Walk(), 0u) << "the widened shutter fires forever";
     }
 
     // ===================================================================================

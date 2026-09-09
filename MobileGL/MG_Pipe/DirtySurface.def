@@ -300,14 +300,15 @@
     /*   UseProgram is bit 6's whole subject: the shutter is                                */ \
     /*     Mix(GetCurrentProgram()->GetLifetimeId(), GetLinkVersion()) and glUseProgram is  */  \
     /*     what moves the object it reads through. Two call sites. AND SINCE THE FABLE     */  \
-    /*     SEAM ROUND (F-1) IT IS BIT 12's TOO: set_sampler_views is resolved for the       */  \
-    /*     program in use, so its shutter mixes the same identity bit 6 reads, and a         */  \
-    /*     glUseProgram alone moves both. Undecided for the same reason as bit 6 (the        */  \
-    /*     taint below), marked the same way.                                                */  \
+    /*     SEAM ROUND (F-1 / F-2) IT IS BITS 12 AND 14's TOO: set_sampler_views is         */  \
+    /*     resolved for the program in use and set_shader_images' window is the highest    */  \
+    /*     image unit the program in use names, so both shutters mix the same identity     */  \
+    /*     bit 6 reads, and a glUseProgram alone moves all three. Undecided for the same    */  \
+    /*     reason as bit 6 (the taint below), marked the same way.                          */  \
     /*   BindVertexArray is bit 5's, for the same reason one level down: the shutter mixes  */  \
     /*     the bound VAO's identity with its configuration version, and this is the bind.   */  \
     /*     Three call sites.                                                                */ \
-    X(UseProgram,                         NEW_SHADER|NEW_SAMPLER_VIEWS)                        \
+    X(UseProgram,                         NEW_SHADER|NEW_SAMPLER_VIEWS|NEW_SHADER_IMAGES)      \
     X(BindVertexArray,                    NEW_VERTEX_ELEMENTS)                                 \
     /* NOT NEW_SHADER, and the derivation refutes it outright rather than leaving it a      */  \
     /* judgement: this mutator writes m_boundProgramPipeline (plus the pipeline name table) */  \
@@ -417,6 +418,7 @@
 #define MGP_DIRTY_SURFACE_UNDECIDED_LIST(X)                                                     \
     X(UseProgram,      NEW_SHADER)                                                              \
     X(UseProgram,      NEW_SAMPLER_VIEWS)                                                       \
+    X(UseProgram,      NEW_SHADER_IMAGES)                                                       \
     X(BindVertexArray, NEW_VERTEX_ELEMENTS)
 
 // clang-format on

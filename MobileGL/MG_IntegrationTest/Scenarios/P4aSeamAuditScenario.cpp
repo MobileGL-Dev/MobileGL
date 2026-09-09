@@ -569,5 +569,84 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
             EXPECT_EQ(FirstGLError(), 0u) << GLErrorName(FirstGLError());
         }
 
+        // -----------------------------------------------------------------------------------
+        // F-2 / SD-4: the image window follows the program, through buffer images
+        // -----------------------------------------------------------------------------------
+        //
+        // Public-GL half: both dispatches store what they should (every arm passes this - the
+        // server's window/high-water union takes the pre-handle bind for a unit the record does
+        // not cover, which is exactly why the seam was silent). White-box half, on Espryt's handle
+        // arm: after the first dispatch set_shader_images must have arrived with a window of ONE
+        // unit (SD-4: on the tree the audit read a buffer image never reached the record at all -
+        // the null -> program transition moved nothing bit 14 read), and after the switch to the
+        // program naming two units the window must be TWO (F-2: the two programs' image-unit
+        // counters are equal, so the switch alone moved nothing either).
+        TEST_F(P4aSeamAuditScenario, AProgramSwitchWithEqualImageUnitCountersMovesTheImageWindow) {
+            if (!Ready()) return;
+            if (!ComputeImagesAreUsable()) GTEST_SKIP() << "no compute image units / buffer textures on this host";
+
+            std::string error;
+            const GLuint one = MakeComputeProgram(kOneBufferImageCS, &error);
+            ASSERT_NE(one, 0u) << error;
+            const GLuint two = MakeComputeProgram(kTwoBufferImagesCS, &error);
+            ASSERT_NE(two, 0u) << error;
+
+            GLuint buffer0 = 0;
+            GLuint buffer1 = 0;
+            const GLuint image0 = MakeBufferTexture(&buffer0, 0u);
+            const GLuint image1 = MakeBufferTexture(&buffer1, 0u);
+            ASSERT_EQ(FirstGLError(), 0u) << "buffer texture setup left a GL error behind";
+
+            // Both units bound BEFORE any dispatch, so the bind generation does not move between
+            // the two dispatches and the only thing that changes is the program in use.
+            glBindImageTexture(0, image0, 0, GL_FALSE, 0, GL_READ_WRITE, GL_R32UI);
+            glBindImageTexture(1, image1, 0, GL_FALSE, 0, GL_READ_WRITE, GL_R32UI);
+            ASSERT_EQ(FirstGLError(), 0u) << "binding the buffer images left a GL error behind";
+
+            const bool whiteBox = SamplerHandleArmIsLive("F-2 / SD-4");
+
+            glUseProgram(one);
+            glDispatchCompute(1, 1, 1);
+            glMemoryBarrier(GL_ALL_BARRIER_BITS);
+            EXPECT_EQ(FirstGLError(), 0u) << "the first dispatch leaked a GL error";
+            if (whiteBox) {
+                PipeShaderImageWindowPeek window{};
+                ASSERT_TRUE(PeekPipeShaderImageWindow(&window));
+                EXPECT_EQ(window.Start, 0u);
+                EXPECT_EQ(window.Count, 1u)
+                    << "set_shader_images never arrived for a program whose only image is a BUFFER "
+                       "image (SD-4): the null -> program transition moved nothing bit 14 read";
+            }
+
+            glUseProgram(two);
+            glDispatchCompute(1, 1, 1);
+            glMemoryBarrier(GL_ALL_BARRIER_BITS);
+            EXPECT_EQ(FirstGLError(), 0u) << "the second dispatch leaked a GL error";
+            if (whiteBox) {
+                PipeShaderImageWindowPeek window{};
+                ASSERT_TRUE(PeekPipeShaderImageWindow(&window));
+                EXPECT_EQ(window.Start, 0u);
+                EXPECT_EQ(window.Count, 2u)
+                    << "the image window did not follow the program switch: two programs with equal "
+                       "image-unit counters, and bit 14 mixed only the counter (F-2)";
+            }
+
+            EXPECT_EQ(ReadBufferTexel0(buffer0), 7u) << "the first program's store did not land";
+            EXPECT_EQ(ReadBufferTexel0(buffer1), 9u) << "the second program's store did not land";
+
+            glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32UI);
+            glBindImageTexture(1, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32UI);
+            glBindBuffer(GL_TEXTURE_BUFFER, 0);
+            glBindTexture(GL_TEXTURE_BUFFER, 0);
+            glUseProgram(0);
+            glDeleteProgram(one);
+            glDeleteProgram(two);
+            glDeleteTextures(1, &image0);
+            glDeleteTextures(1, &image1);
+            glDeleteBuffers(1, &buffer0);
+            glDeleteBuffers(1, &buffer1);
+            EXPECT_EQ(FirstGLError(), 0u) << GLErrorName(FirstGLError());
+        }
+
     } // namespace
 } // namespace MGITest
