@@ -54,6 +54,7 @@ add_executable(MobileGLIntegrationTest
     Harness/BackendCapsPeek.cpp
     Harness/PipeSlotPeek.cpp
     Harness/PipeApplyPeek.cpp
+    Harness/P4aSeamPeek.cpp
     Scenarios/OrientationScenario.cpp
     Scenarios/CrossFrameBufferScenario.cpp
     Scenarios/ResidentIndexScenario.cpp
@@ -137,6 +138,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/TextureParamsWithoutASamplerViewScenario.cpp
     Scenarios/TextureUploadShapeScenario.cpp
     Scenarios/ObjectSubsystemControlScenario.cpp
+    Scenarios/P4aSeamAuditScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE

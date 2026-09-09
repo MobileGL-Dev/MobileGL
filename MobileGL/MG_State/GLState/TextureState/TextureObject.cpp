@@ -67,6 +67,20 @@ namespace MobileGL {
 
             void TextureObjectBase::PipePublishDescriptor() {
                 MG_Pipe::MGPipeEmitTextureResourceRespecify(*this);
+                // AND THE FRAMEBUFFER AGGREGATE MOVES (P4a fable seam F-3). The resource record
+                // above is only half of what a storage definition changes: set_framebuffer_state
+                // INLINES an attachment's InternalFormat, TextureTarget, extent, Samples and
+                // Complete at emission (D-C1), so redefining the storage of a texture that is
+                // ATTACHED changed those fields with nothing bit 11 reads moving - the format
+                // and shape setters bump the two TEXTURE aggregates and never the attachment
+                // one, and no path from a texture reaches its framebuffers. The handle arm then
+                // answered its four cross-object masks from the stale copy while the legacy arm
+                // re-read the frontend at the same re-sync. This is the one funnel every
+                // storage-defining entry point takes (see AllocateStorage), so the bump lives
+                // here and not per setter, it is push-only like the rest of this block, and it
+                // over-fires the framebuffer bit once per storage definition of an unattached
+                // texture - at load time, where a 304-byte hash is nothing.
+                MGP_NOTE_AGGREGATE(FramebufferAttachment);
             }
 
             void TextureObjectBase::PipePublishParams() {

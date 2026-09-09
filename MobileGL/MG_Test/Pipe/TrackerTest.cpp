@@ -80,6 +80,8 @@ namespace {
     X(TrackerWalk, ARestagedProgramPipelineFiresTheProgramBits) \
     X(TrackerWalk, ARelinkOfAStageProgramFiresTheProgramBits) \
     X(TrackerWalk, UseProgramZeroLeavesTheBoundPipelineDrivingTheProgramBits) \
+    X(TrackerAggregates, ATextureStorageDefinitionMovesTheFramebufferAggregateToo) \
+    X(TrackerAggregates, ARenderbufferStorageDefinitionMovesTheFramebufferAggregate) \
     X(TrackerAttribPayload, AFloatWriteCarriesTheFloatBitsAndNamesItsClass) \
     X(TrackerAttribPayload, AnIntWriteCarriesTheIntWordsAndNamesItsClass) \
     X(TrackerAttribPayload, AUintWriteCarriesTheUintWordsAndNamesItsClass) \
@@ -230,6 +232,39 @@ namespace {
         MGP_NOTE_AGGREGATE(BufferChange); // must not dereference a null context
         MG_State::pGLContext = Move(held);
         SUCCEED();
+    }
+
+    // P4a FABLE SEAM F-3. set_framebuffer_state INLINES an attachment's format, extent and
+    // samples (D-C1), so the setters that define a texture's storage are setters of a
+    // framebuffer-record field - and the record-field -> setter -> shutter rule (Tracker.h's
+    // table) says they must move the aggregate bit 11 reads. They still move the params
+    // aggregate they always moved; what this case pins is the SECOND bump, which the
+    // "moves only" cases above cannot see and which is the whole of F-3's fix.
+    TEST_F(TrackerAggregates, ATextureStorageDefinitionMovesTheFramebufferAggregateToo) {
+        const auto& tex = Ctx().CreateTextureObject(3, TextureTarget::Texture2D);
+        ASSERT_TRUE(tex != nullptr);
+        const Snapshot before = Snap();
+        tex->SetInternalFormat(MobileGL::TextureInternalFormat::RGBA8);
+        const Snapshot after = Snap();
+        EXPECT_GT(after[MGPipeAggregate::FramebufferAttachment], before[MGPipeAggregate::FramebufferAttachment])
+            << "a texture whose storage is redefined WHILE ATTACHED left set_framebuffer_state "
+               "describing the previous format (F-3)";
+        EXPECT_GT(after[MGPipeAggregate::TextureParams], before[MGPipeAggregate::TextureParams]);
+        EXPECT_EQ(after[MGPipeAggregate::TextureContent], before[MGPipeAggregate::TextureContent]);
+        EXPECT_EQ(after[MGPipeAggregate::VaoAttribute], before[MGPipeAggregate::VaoAttribute]);
+        EXPECT_EQ(after[MGPipeAggregate::BufferChange], before[MGPipeAggregate::BufferChange]);
+        EXPECT_EQ(after[MGPipeAggregate::VertexAttribDefault], before[MGPipeAggregate::VertexAttribDefault]);
+    }
+
+    // The renderbuffer twin, and the one that had NO aggregate at all before: its three storage
+    // setters bumped no version and raised no notice (D-D2 closed the resource record by emitting
+    // from the entry point and left the framebuffer record stale).
+    TEST_F(TrackerAggregates, ARenderbufferStorageDefinitionMovesTheFramebufferAggregate) {
+        const auto& rbo = Ctx().CreateRenderbufferObject(1);
+        ASSERT_TRUE(rbo != nullptr);
+        const Snapshot before = Snap();
+        rbo->AllocateStorage(IntVec2{8, 8});
+        ExpectOnly(MGPipeAggregate::FramebufferAttachment, before, Snap());
     }
 
     // ===================================================================================
