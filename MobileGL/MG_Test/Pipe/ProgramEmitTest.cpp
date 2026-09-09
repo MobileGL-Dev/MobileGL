@@ -501,7 +501,8 @@ TEST(ProgramEmit, TheProgramRecordSurvivesAMakeCurrentWhileTheThreeBindingsDoNot
     X(ProgramEmit, AReLinkReIssuesOnTheSameHandle)                                                  \
     X(ProgramEmit, TheDrawAndDispatchProgramsAreTwoIndependentSlots)                                \
     X(ProgramEmit, AnUnchangedProgramEmitsNothingAtAll)                                             \
-    X(ProgramEmit, AReIssuedCreateReSendsTheDefaultUniformBlock)
+    X(ProgramEmit, AReIssuedCreateReSendsTheDefaultUniformBlock)                                    \
+    X(ProgramEmit, ADeadProgramsRecordLatchIsRetiredAtItsDeath)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -773,6 +774,26 @@ void main() { gl_Position = vec4(0.0); EmitVertex(); }
         for (int i = 0; i < 8 && Emitter().EmitGlobalConstants(Ctx()) > 0u; ++i) {
         }
         EXPECT_GT(Emitter().GlobalConstantsSetCount(), setsBefore);
+    }
+    // FINAL REVIEW C-2: the death helper forwards to this emitter before the slot is freed, so
+    // a dead program's handle no longer reads as published in the record memo between the death
+    // and the recycle (the memo's own Gen test covers only the recycle).
+    TEST(ProgramEmit, ADeadProgramsRecordLatchIsRetiredAtItsDeath) {
+        EmitterScope scope;
+        const GLuint name = MakeVsFsProgram();
+        MGPipeHandle handle{};
+        {
+            const SharedPtr<ProgramObject>& program = Ctx().GetProgramObject(name);
+            ASSERT_TRUE(program);
+            Uint64 bytes = 0;
+            handle = Emitter().AcquireShaderCso(*program, bytes);
+            ASSERT_FALSE(MGPipeHandleIsNull(handle));
+            ASSERT_TRUE(Emitter().RecordIsPublished(handle));
+        }
+        GL::DeleteProgram(name); // not in use: the frontend object dies here
+        EXPECT_FALSE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, handle));
+        EXPECT_FALSE(Emitter().RecordIsPublished(handle))
+            << "a dead program still reads as published in the program emitter's memo";
     }
 } // namespace
 #endif // MOBILEGL_PIPE_PUSH

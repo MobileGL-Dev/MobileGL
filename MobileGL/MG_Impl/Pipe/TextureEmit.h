@@ -441,15 +441,77 @@ namespace MobileGL::MG_Pipe {
 
         // The texture a handle names, or null. A RAW pointer is exact here for
         // MGPipeResourceTracker::Resolve's reason: the entry exists only between the create the
-        // constructor emits and the destroy the destructor emits, and the Gen compare is what
-        // refuses a stale handle rather than resolving it to whatever now occupies the slot.
+        // constructor emits and the destroy the destructor emits - and since the final review's
+        // C-2 that sentence is ESTABLISHED rather than assumed: the contract's death helper
+        // forwards to NoteTextureDied below before it frees the slot, so a dead handle finds a
+        // null pointer here. The Gen compare refuses a RECYCLED handle rather than resolving it
+        // to whatever now occupies the slot.
+        //
+        // A DEAD SLOT IS REFUSED, LOUDLY. The allocator's generation moves only at the NEXT
+        // hand-out, so between a death and a recycle a dead handle compares equal to the slot's
+        // generation - which is why the guard is IsLive and not GenOfSlot (the review's C-2:
+        // that compare guarded a recycled slot and never a dead one, and the drain then called
+        // a virtual on the freed object once per verb). Reaching this arm at all means a death
+        // path skipped the emitter, which is a seam defect and not traffic: it is counted and
+        // logged once, and the answer is null.
         ITextureObject* ResolveTexture(MGPipeHandle handle) const {
             const SizeT slot = handle.Slot;
             if (MGPipeHandleIsNull(handle) || slot >= m_textures.size()) return nullptr;
             const Entry& entry = m_textures[slot];
             if (entry.Texture == nullptr || entry.Gen != handle.Gen) return nullptr;
-            if (MGPipeSlots().GenOfSlot(MGPipeKind::Texture, handle.Slot) != handle.Gen) return nullptr;
+            if (!MGPipeSlots().IsLive(MGPipeKind::Texture, handle)) {
+                ++m_deadResolves;
+                MGLOG_E_ONCE("MGPipe: texture handle {slot=%u, gen=%u} is dead but the emitter still holds its "
+                             "object - the death path did not retire the entry; refused rather than resolved",
+                             handle.Slot, handle.Gen);
+                return nullptr;
+            }
             return entry.Texture;
+        }
+
+        // ---- the death half (P4a final review C-2) ----
+        //
+        // CALLED BY THE CONTRACT'S DEATH HELPER, after the wire delete went out and BEFORE the
+        // slot is freed (ID-8's order: delete, notice, free - this sits between the first two).
+        // v2 had no such door: the helper freed the slot, the emitter kept the freed
+        // ITextureObject* and the level on the drain list, and `glTexImage2D; glDeleteTextures;
+        // <any verb>` walked freed memory at the next validate point - a SIGABRT ("pure virtual
+        // method called") at the shipping mask. Everything the entry owns goes here: the drain
+        // entries (nothing is owed for a dead texture - its record is gone with the wire delete),
+        // the built-in sampler's cache reference (ID-17: one per entry, released at the death
+        // and no longer at the recycle), the latches and the sticky mask. RetireIfRecycled stays
+        // as the belt for a slot whose death this emitter was never told about.
+        //
+        // Keyed on the GENERATION so a late notice for a slot that has already been handed out
+        // again cannot retire the successor's entry.
+        void NoteTextureDied(MGPipeHandle handle) {
+            const SizeT slot = handle.Slot;
+            if (MGPipeHandleIsNull(handle) || slot >= m_textures.size()) return;
+            Entry& entry = m_textures[slot];
+            if (entry.Gen != handle.Gen) return;
+            if (!entry.DrainKeys.empty()) {
+                // A death inside the drain cannot happen (no SharedPtr drops there), but if one
+                // ever did the loop below is iterating m_drain: the null pointer the reset
+                // leaves is what makes EmitOneLevel answer "nothing owed" and drop the entry.
+                if (!m_draining) {
+                    SizeT kept = 0;
+                    for (SizeT i = 0; i < m_drain.size(); ++i) {
+                        if (m_drain[i].Handle == handle) continue;
+                        m_drain[kept++] = m_drain[i];
+                    }
+                    m_drain.resize(kept);
+                }
+                entry.DrainKeys.clear();
+            }
+            MGPipeSamplerCsoCacheInstance().Release(entry.BuiltinSampler);
+            entry = Entry{};
+        }
+        void NoteRenderbufferDied(MGPipeHandle handle) {
+            const SizeT slot = handle.Slot;
+            if (MGPipeHandleIsNull(handle) || slot >= m_renderbuffers.size()) return;
+            Entry& entry = m_renderbuffers[slot];
+            if (entry.Gen != handle.Gen) return;
+            entry = Entry{};
         }
 
         // ---- the sticky bind mask (D-A4) ----
@@ -474,6 +536,11 @@ namespace MobileGL::MG_Pipe {
         void NoteTextureBoundAs(MGPipeHandle handle, Uint16 bit) {
             if (MGPipeHandleIsNull(handle)) return;
             Entry& entry = EntryFor(m_textures, handle);
+            // The entry is stamped with the generation it is written under, and a predecessor's
+            // entry on a recycled slot is retired first (the same door AcquireTexture takes): a
+            // texture born while the family bit was clear has no create to have done it.
+            RetireIfRecycled(entry, handle);
+            entry.Gen = handle.Gen;
             const Uint16 before = entry.BindMask;
             const Uint16 now = static_cast<Uint16>(before | bit);
             if (now == before) return;
@@ -491,6 +558,8 @@ namespace MobileGL::MG_Pipe {
         void NoteRenderbufferBoundAs(MGPipeHandle handle, Uint16 bit) {
             if (MGPipeHandleIsNull(handle)) return;
             Entry& entry = EntryFor(m_renderbuffers, handle);
+            RetireIfRecycled(entry, handle);
+            entry.Gen = handle.Gen;
             const Uint16 before = entry.BindMask;
             const Uint16 now = static_cast<Uint16>(before | bit);
             if (now == before) return;
@@ -706,9 +775,9 @@ namespace MobileGL::MG_Pipe {
             // what stops the LRU pulling a handle out from under a standing MGPTextureParams
             // record: the applier deliberately does not resolve BuiltinSampler, and an eviction
             // is not a parameter change, so nothing would refuse and nothing would re-emit. The
-            // previous handle is released when the content moves it, and the last one when the
-            // slot is recycled (RetireIfRecycled) - which is the only moment this package can
-            // see a texture die, the death helper being A's.
+            // previous handle is released when the content moves it, and the last one at the
+            // texture's death (NoteTextureDied, reached from the contract's death helper) - or
+            // at the recycle, as the belt, for a death this emitter was not told about.
             MGPipeSamplerCsoCache& cache = MGPipeSamplerCsoCacheInstance();
             Uint64 samplerBytes = 0;
             const MGPipeHandle builtinSampler =
@@ -879,6 +948,9 @@ namespace MobileGL::MG_Pipe {
         // itself returns no byte count - it is not emitted from the validate point's payload
         // histogram - so this is where the cache's answer lands.
         Uint64 SamplerCsoPayloadBytes() const { return m_samplerCsoPayloadBytes; }
+        // Dead handles that still held an object when resolved: a death path that skipped the
+        // emitter. 0 on a healthy tree; a case that drives every death path asserts it.
+        Uint64 DeadResolveCount() const { return m_deadResolves; }
         MGPipeHandle BuiltinSamplerOf(MGPipeHandle handle) const {
             const SizeT slot = handle.Slot;
             if (MGPipeHandleIsNull(handle) || slot >= m_textures.size()) return kMGPipeNullHandle;
@@ -901,6 +973,7 @@ namespace MobileGL::MG_Pipe {
             m_creates = m_respecifies = m_paramSets = m_subDatas = 0;
             m_refusedSubDatas = 0;
             m_samplerCsoPayloadBytes = 0;
+            m_deadResolves = 0;
         }
 
         // A unit fixture's per-case reset; the library never calls it. See
@@ -968,7 +1041,8 @@ namespace MobileGL::MG_Pipe {
         }
         static Uint16 MaskOf(const Vector<Entry>& table, MGPipeHandle handle) {
             const SizeT slot = handle.Slot;
-            return slot < table.size() ? table[slot].BindMask : Uint16{0};
+            if (slot >= table.size() || table[slot].Gen != handle.Gen) return Uint16{0};
+            return table[slot].BindMask;
         }
         // A SLOT THE ALLOCATOR HAS HANDED OUT AGAIN CARRIES ITS PREDECESSOR'S ENTRY, and every
         // field in it is a lie about the new object (m4). The sticky BindMask is the one that
@@ -977,10 +1051,10 @@ namespace MobileGL::MG_Pipe {
         // the dead one's mask and its first descriptor said so. The generation is what
         // distinguishes them and the reset is here because AcquireTexture is the one door.
         //
-        // IT IS ALSO THE ONLY MOMENT THIS PACKAGE CAN SEE A TEXTURE DIE. The death helper is
-        // A's (MGPipeEmitTextureDestroyAndFree) and does not forward to this emitter, so the
-        // built-in sampler's cache reference is dropped here - bounded by the number of live
-        // texture slots rather than unbounded, which is the shape ID-17 rule 3 names.
+        // IT IS THE BELT, NOT THE PATH (final review C-2): the death helper forwards to
+        // NoteTextureDied, which retires the entry - drain entries, cache reference, latches,
+        // mask - at the death itself. This stays for a slot whose death this emitter was never
+        // told about, and drops the same reference if one is still standing.
         void RetireIfRecycled(Entry& entry, MGPipeHandle handle) {
             if (entry.Gen == handle.Gen) return;
             MGPipeSamplerCsoCacheInstance().Release(entry.BuiltinSampler);
@@ -1200,6 +1274,7 @@ namespace MobileGL::MG_Pipe {
         Uint64 m_subDatas = 0;
         Uint64 m_refusedSubDatas = 0;
         Uint64 m_samplerCsoPayloadBytes = 0;
+        mutable Uint64 m_deadResolves = 0;
     };
 
     inline MGPipeTextureEmitter& MGPipeTextureEmitterInstance() {
@@ -1234,7 +1309,10 @@ namespace MobileGL::MG_Pipe {
     //     keeping the inline definition here would not have compiled at all;
     //   * step 1 of the death order is inside MGPipeEmitTextureDestroyAndFree /
     //     ...RenderbufferDestroyAndFree, which read MGPipeHandleIsPublished and emit the
-    //     resource_destroy themselves, so the destructors call ONE helper and not two;
+    //     resource_destroy themselves, so the destructors call ONE helper and not two - and
+    //     since the final review's C-2 the helper then forwards to NoteTextureDied /
+    //     NoteRenderbufferDied above, so no ITextureObject* survives its object in this table
+    //     and no dead level survives on the drain list;
     //   * the publication latch is PipeFill.cpp's {kind, slot, gen} table, written by
     //     PublishCreate above and read by those helpers.
     //

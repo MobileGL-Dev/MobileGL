@@ -1370,11 +1370,24 @@ namespace MobileGL::MG_Pipe {
         }
     } // namespace
 
+    // THE EMITTER IS TOLD BETWEEN THE WIRE DELETE AND THE FREE (P4a final review C-2), for
+    // every kind that keeps client state under a handle: a texture's drain entries, pointer,
+    // cache reference and latches; a renderbuffer's entry; a framebuffer's Named latch; a
+    // sampler view's and a shader CSO's record memo. Before this the six helpers freed the slot
+    // and told nobody, so the texture emitter kept the freed ITextureObject* and the level on
+    // the drain list, and `glTexImage2D; glDeleteTextures; <verb>` called a virtual on freed
+    // memory from the next validate point. The forward is the P3a shape
+    // (MGPipeEmitVertexElementsDestroyAndFree's emitter.NoteRecordDestroyed) applied to the
+    // five P4a kinds that have an entry to retire; the content-addressed sampler CSO keeps
+    // none per object (its death is the cache's LRU, ID-17). Unconditional in a push build,
+    // like the mints: the entries exist whether or not the family bit is set.
     Bool MGPipeEmitSamplerViewCsoDestroyAndFree(Uint64 lifetimeId) {
         const MGPipeHandle handle =
             MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerViewCso, lifetimeId);
         const Bool published =
             EmitDeleteIfPublished(MGPipeKind::SamplerViewCso, handle, &MGPipeApplyDeleteSamplerView);
+        ForwardWhenWired<kMGPipeWiredSamplerSubsystem>(
+            MGPipeSamplerEmitterInstance(), [&](auto& emitter) { emitter.NoteRecordDestroyed(handle); });
         // THE NOTICE IS RAISED FOR THIS KIND TOO, and the reason it once was not is wrong:
         // NotifyStateObjectDestroyed takes a KIND and a lifetime id, not an object
         // (StateObjectDeathNotice.h - one entry point for every kind rather than one ops table
@@ -1394,6 +1407,11 @@ namespace MobileGL::MG_Pipe {
         const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, lifetimeId);
         const Bool published =
             EmitDeleteIfPublished(MGPipeKind::Texture, handle, &MGPipeApplyResourceDestroy);
+        // The emitter retires its entry while the handle still resolves (C-2): the drain list
+        // drops the dead texture's levels, the raw pointer goes, the built-in sampler's cache
+        // reference is given back, the latches and the sticky mask are cleared.
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
+            MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.NoteTextureDied(handle); });
         NotifyAndFree(MGPipeKind::Texture, lifetimeId, handle);
         // THE SAMPLER VIEW DIES WITH ITS TEXTURE, because it is minted off the same lifetime
         // id: one SamplerViewCso per ITextureObject (D-F2), re-issued on the same handle
@@ -1430,6 +1448,8 @@ namespace MobileGL::MG_Pipe {
             MGPipeSlots().FindByLifetimeId(MGPipeKind::Renderbuffer, lifetimeId);
         const Bool published =
             EmitDeleteIfPublished(MGPipeKind::Renderbuffer, handle, &MGPipeApplyResourceDestroy);
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
+            MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.NoteRenderbufferDied(handle); });
         NotifyAndFree(MGPipeKind::Renderbuffer, lifetimeId, handle);
         return published;
     }
@@ -1454,6 +1474,8 @@ namespace MobileGL::MG_Pipe {
         // whatever it owed", which for a framebuffer is the death notice this just raised.
         const MGPipeHandle handle =
             MGPipeSlots().FindByLifetimeId(MGPipeKind::Framebuffer, lifetimeId);
+        ForwardWhenWired<kMGPipeWiredFramebufferSubsystem>(
+            MGPipeFramebufferEmitterInstance(), [&](auto& emitter) { emitter.NoteFramebufferDied(handle); });
         NotifyAndFree(MGPipeKind::Framebuffer, lifetimeId, handle);
         return false;
     }
@@ -1463,6 +1485,11 @@ namespace MobileGL::MG_Pipe {
             MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerCso, lifetimeId);
         const Bool published =
             EmitDeleteIfPublished(MGPipeKind::SamplerCso, handle, &MGPipeApplyDeleteSamplerState);
+        // NOTHING TO RETIRE IN AN EMITTER FOR THIS KIND, stated rather than implied: a sampler
+        // CSO is content-addressed and belongs to a value, so no emitter keeps an entry under
+        // a SamplerObject's handle - the cache's entries are keyed by value and reference
+        // count, and the death of a bound sampler object releases its unit's reference at the
+        // next bind_sampler_states pass (SamplerEmit.h's reconciliation).
         NotifyAndFree(MGPipeKind::SamplerCso, lifetimeId, handle);
         return published;
     }
@@ -1479,6 +1506,8 @@ namespace MobileGL::MG_Pipe {
             MGPipeSlots().FindByLifetimeId(MGPipeKind::ShaderCso, lifetimeId);
         const Bool published =
             EmitDeleteIfPublished(MGPipeKind::ShaderCso, handle, &MGPipeApplyDeleteShaderState);
+        ForwardWhenWired<kMGPipeWiredProgramSubsystem>(
+            MGPipeProgramEmitterInstance(), [&](auto& emitter) { emitter.NoteRecordDestroyed(handle); });
         NotifyAndFree(MGPipeKind::ShaderCso, lifetimeId, handle);
         return published;
     }

@@ -986,11 +986,11 @@ namespace MobileGL::MG_Pipe {
         }
 
         // The memo's other half, for a caller that knows the applier has dropped this record.
-        // NO PRODUCTION CALLER TODAY, and that is stated rather than implied: the death path
-        // goes through the contract's latch, not through here. It is kept because the memo
-        // above needs a way to be told, and because leaving the latch standing SELF-HEALS
-        // anyway - the slot's Gen moves on reuse, so the `RecordGen == handle.Gen` test in
-        // RecordIsPublished and in AcquireSamplerView already refuses a stale entry.
+        // THE CALLER IS THE CONTRACT's DEATH HELPER (P4a final review C-2): the texture's
+        // helper drops the sampler view minted off the texture's lifetime id and forwards here
+        // before the slot is freed, so a dead handle no longer reads as published in this memo
+        // between the death and the recycle. Gen-keyed, so a late notice for a slot already
+        // handed out again clears nothing of the successor's.
         void NoteRecordDestroyed(MGPipeHandle handle) {
             if (MGPipeHandleIsNull(handle)) return;
             const SizeT slot = handle.Slot;

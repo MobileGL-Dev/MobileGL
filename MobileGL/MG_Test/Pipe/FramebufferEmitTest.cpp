@@ -234,7 +234,8 @@ TEST(FramebufferEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
     X(FramebufferEmit, ANamedRecordIsSuppressedPerObjectAndNeverAgainstABoundRecord)               \
     X(FramebufferEmit, ADrawBufferTokenAboveTheWireWidthIsRefusedNotTruncated)                     \
     X(FramebufferEmit, ALayeredCubeAttachmentDoesNotAssertAFaceItCannotKnow)                       \
-    X(FramebufferEmit, EveryNonTexturePointCarriesTheUnknownSentinelsRatherThanZero)
+    X(FramebufferEmit, EveryNonTexturePointCarriesTheUnknownSentinelsRatherThanZero)              \
+    X(FramebufferEmit, ADeadFramebuffersNamedRecordLatchIsRetired)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -771,6 +772,27 @@ TEST(FramebufferEmit, EveryNonTexturePointCarriesTheUnknownSentinelsRatherThanZe
         << "MGPipeCopySurfaceForHash does not copy MGPSurface::TextureTarget, so a record whose "
            "only moved field is the attachment's texture target would be suppressed";
     (void)probe;
+}
+// ============================ final review C-2 ============================
+//
+// A framebuffer has no wire lifetime (D-I2), so the only client state under its handle is this
+// emitter's per-object Named latch - and the death helper retires it before the slot is freed,
+// the shape every P4a kind takes (ID-8). A recycled handle's Gen already refused the stale
+// latch, so this pins the hygiene rather than a picture.
+TEST(FramebufferEmit, ADeadFramebuffersNamedRecordLatchIsRetired) {
+    FramebufferScope scope;
+    MGPipeHandle handle{};
+    {
+        const auto fbo = MakeShared<FramebufferObject>(31);
+        const auto color = MakeColorTexture(32, 8);
+        fbo->AttachTexture(FramebufferAttachmentType::Color0, color, TextureUploadTarget::Texture2D);
+        handle = MGPipeFramebufferEmitter::HandleFor(*fbo);
+        ASSERT_GT(Framebuffers().EmitFramebufferByName(*fbo), 0u) << "the Named record did not go out";
+        ASSERT_TRUE(Framebuffers().NamedRecordIsLatched(handle));
+    }
+    EXPECT_FALSE(MGPipeSlots().IsLive(MGPipeKind::Framebuffer, handle));
+    EXPECT_FALSE(Framebuffers().NamedRecordIsLatched(handle))
+        << "the dead framebuffer's Named latch survived its death";
 }
 #endif // MOBILEGL_PIPE_PUSH
 

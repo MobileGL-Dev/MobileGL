@@ -219,7 +219,11 @@ TEST(TextureEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
     X(TextureEmit, EveryDKTwoDependencyRowGatesItsOwnFamilyAndTheMirrorPairsStayLive)              \
     X(TextureEmit, ALevelDefinedAfterAnEmittedButUnconsumedUploadKeepsThatUpload)                  \
     X(TextureEmit, AChainTruncationKeepsTheSurvivingLevelsPendingUploads)                          \
-    X(TextureEmit, ARedefinitionOfANonBaseLevelAtANewSizeDropsOnlyThatLevelsPendingUpload)
+    X(TextureEmit, ARedefinitionOfANonBaseLevelAtANewSizeDropsOnlyThatLevelsPendingUpload)         \
+    X(TextureEmit, ADeadTexturesHandleResolvesToNothingAndLeavesTheDrainList)                      \
+    X(TextureEmit, ATextureRecycledOntoADeadSlotDoesNotInheritTheDrainEntry)                       \
+    X(TextureEmit, ADeadRenderbuffersEntryIsRetiredWithItsSlot)                                    \
+    X(TextureEmit, ADeadTexturesSamplerViewLatchIsRetiredAtItsDeath)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -1236,6 +1240,11 @@ TEST(TextureEmit, ARecycledTextureSlotDoesNotInheritItsPredecessorsBindMask) {
         Textures().NoteTextureBoundAs(firstHandle, kMGPipeBindShaderImage);
         ASSERT_NE(Textures().TextureBindMask(firstHandle) & kMGPipeBindRenderTarget, 0);
     }
+    // Since the final review's C-2 the reference goes back AT THE DEATH, through the death
+    // helper's forward, and not first at the recycle.
+    EXPECT_EQ(cache.RefCountOf(firstCso), 0u)
+        << "the dead texture's cache reference survived its death; the death helper did not reach the emitter";
+    EXPECT_EQ(Textures().TextureBindMask(firstHandle), 0u) << "a dead handle still reads its sticky mask";
     const auto second = MakeTexture2D(22, 8);
     const MGPipeHandle secondHandle = Textures().FindTexture(*second);
     ASSERT_EQ(secondHandle.Slot, firstHandle.Slot) << "the slot was not recycled; the case proves nothing";
@@ -1388,6 +1397,105 @@ TEST(TextureEmit, ARedefinitionOfANonBaseLevelAtANewSizeDropsOnlyThatLevelsPendi
     }
     EXPECT_TRUE(zeroPending) << "redefining level 1 dropped level 0's standing upload";
     EXPECT_FALSE(onePending) << "level 1's 8x8 box survived its redefinition onto a 4x4 level";
+}
+
+// ============================ final review C-2 ============================
+//
+// A DEAD HANDLE RESOLVES TO NOTHING AND THE DRAIN LIST DROPS IT AT THE DEATH. The allocator's
+// generation moves only at the next hand-out, so between a death and a recycle the dead handle
+// compared equal to the slot's generation and the emitter answered the freed ITextureObject*;
+// the drain then called a virtual on it once per verb until something recycled the slot.
+TEST(TextureEmit, ADeadTexturesHandleResolvesToNothingAndLeavesTheDrainList) {
+    TextureScope scope;
+    MGPipeHandle handle{};
+    {
+        const auto texture = MakeShared<TextureObject2D>(91);
+        texture->SetInternalFormat(TextureInternalFormat::RGBA8);
+        texture->AllocateStorage(TextureUploadTarget::Texture2D, 0, MipmapInput{IntVec3{16, 16, 1}, 16 * 16 * 4});
+        // glTexSubImage2D: the level goes on the drain list; NO verb follows before the delete.
+        texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{16, 16, 1});
+        handle = Textures().FindTexture(*texture);
+        ASSERT_FALSE(MGPipeHandleIsNull(handle));
+        ASSERT_EQ(Textures().DrainListSize(), 1u);
+    } // glDeleteTextures: the last SharedPtr drops, ~TextureObjectBase frees the slot
+    EXPECT_FALSE(MGPipeSlots().IsLive(MGPipeKind::Texture, handle));
+    EXPECT_EQ(Textures().ResolveTexture(handle), nullptr)
+        << "ResolveTexture hands back the freed ITextureObject* of a dead-but-not-recycled handle";
+    EXPECT_EQ(Textures().DrainListSize(), 0u)
+        << "the dead texture's level is still on the drain list, so the next verb walks it";
+    // And the next drain has nothing to say about it: no record, no refusal, no emission.
+    Textures().DrainTextureSubData(Ctx());
+    EXPECT_EQ(Textures().SubDataCount(), 0u);
+    EXPECT_EQ(Textures().RefusedSubDataCount(), 0u);
+    // The null came from the DEATH PATH retiring the entry, not from the loud refusal that
+    // guards a death path that skipped the emitter.
+    EXPECT_EQ(Textures().DeadResolveCount(), 0u)
+        << "the dead handle was refused by ResolveTexture's guard, so the death helper never told the emitter";
+}
+
+// The sampler view minted off the texture's lifetime id (D-F2) has its own record memo in the
+// sampler emitter; the texture's death retires it through the view's death helper.
+TEST(TextureEmit, ADeadTexturesSamplerViewLatchIsRetiredAtItsDeath) {
+    TextureScope scope;
+    MGPipeHandle viewHandle{};
+    {
+        const auto texture = MakeTexture2D(89, 8);
+        const MGPipeHandle handle = Textures().FindTexture(*texture);
+        Uint64 bytes = 0;
+        viewHandle = MGPipeSamplerEmitterInstance().AcquireSamplerView(*texture, handle, bytes);
+        ASSERT_FALSE(MGPipeHandleIsNull(viewHandle));
+        ASSERT_TRUE(MGPipeSamplerEmitterInstance().RecordIsPublished(viewHandle));
+    }
+    EXPECT_FALSE(MGPipeSlots().IsLive(MGPipeKind::SamplerViewCso, viewHandle));
+    EXPECT_FALSE(MGPipeSamplerEmitterInstance().RecordIsPublished(viewHandle))
+        << "a dead sampler view still reads as published in the sampler emitter's memo";
+}
+
+// ABA: the recycled slot's new texture owns the drain list entry it makes and none of its
+// predecessor's.
+TEST(TextureEmit, ATextureRecycledOntoADeadSlotDoesNotInheritTheDrainEntry) {
+    TextureScope scope;
+    MGPipeHandle deadHandle{};
+    {
+        const auto dead = MakeTexture2D(97, 8);
+        dead->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{8, 8, 1});
+        deadHandle = Textures().FindTexture(*dead);
+        ASSERT_EQ(Textures().DrainListSize(), 1u);
+    }
+    EXPECT_EQ(Textures().DrainListSize(), 0u) << "the death did not retire the drain entry";
+    const auto successor = MakeTexture2D(98, 32);
+    const MGPipeHandle handle = Textures().FindTexture(*successor);
+    ASSERT_EQ(handle.Slot, deadHandle.Slot) << "the slot was not recycled; the case proves nothing";
+    ASSERT_NE(handle.Gen, deadHandle.Gen);
+    EXPECT_EQ(Textures().DrainListSize(), 0u) << "the successor inherited a drain entry it never made";
+    successor->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{32, 32, 1});
+    EXPECT_EQ(Textures().DrainListSize(), 1u);
+    Textures().DrainTextureSubData(Ctx());
+    EXPECT_EQ(Textures().SubDataCount(), 1u) << "exactly the successor's level went out";
+    EXPECT_TRUE(Textures().LastSubData().Res == handle);
+    EXPECT_EQ(Textures().LastSubData().UnionBox.W, 32u);
+    EXPECT_EQ(Textures().DrainListSize(), 0u);
+}
+
+// The renderbuffer table has no pointer to dangle but the same stale entry: a dead
+// renderbuffer's sticky mask must not be readable through its dead handle.
+TEST(TextureEmit, ADeadRenderbuffersEntryIsRetiredWithItsSlot) {
+    TextureScope scope;
+    MGPipeHandle handle{};
+    {
+        const auto renderbuffer = MakeShared<RenderbufferObject>(94);
+        handle = Textures().FindRenderbuffer(*renderbuffer);
+        ASSERT_FALSE(MGPipeHandleIsNull(handle));
+        Textures().NoteRenderbufferBoundAs(handle, kMGPipeBindRenderTarget);
+        ASSERT_NE(Textures().RenderbufferBindMask(handle) & kMGPipeBindRenderTarget, 0);
+    }
+    EXPECT_FALSE(MGPipeSlots().IsLive(MGPipeKind::Renderbuffer, handle));
+    EXPECT_EQ(Textures().RenderbufferBindMask(handle), 0u)
+        << "a dead renderbuffer's entry still answers through its dead handle";
+    const auto successor = MakeShared<RenderbufferObject>(99);
+    const MGPipeHandle successorHandle = Textures().FindRenderbuffer(*successor);
+    ASSERT_EQ(successorHandle.Slot, handle.Slot);
+    EXPECT_EQ(Textures().RenderbufferBindMask(successorHandle), 0u);
 }
 
 #endif // MOBILEGL_PIPE_PUSH
