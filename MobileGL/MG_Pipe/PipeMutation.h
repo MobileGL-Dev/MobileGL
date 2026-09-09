@@ -361,6 +361,29 @@ namespace MobileGL::MG_Pipe {
     void MGPipeEmitRenderbufferResourceCreate(MG_State::GLState::RenderbufferObject& renderbuffer);
     void MGPipeEmitRenderbufferResourceRespecify(MG_State::GLState::RenderbufferObject& renderbuffer);
 
+    // ---- D-A4's two sticky bind-mask producers (P4a final review M-A) ----
+    //
+    // kMGPipeBindSampler is "any texture the sampler-view resolution names in an emitted
+    // MGPBoundView" and kMGPipeBindShaderImage "any texture named in an emitted MGPImageView"
+    // - both the SAMPLER package's emitters (SamplerEmit.h, ImageEmit.h), which the texture
+    // emitter's header includes and which therefore cannot include it back - and, earliest of
+    // all, glBindImageTexture's state setter (TextureState.h, MG_State), which may include no
+    // emit header at all. So the note goes through this door, exactly as the birth hooks do.
+    // Nothing produced either bit before the fix round: ImageBindableHint was always 0, the
+    // metadata respecify (ID-18 M4) had no live trigger, and the remint pull the hint exists to
+    // prevent was neither prevented nor counted.
+    //
+    // UNCONDITIONAL IN A PUSH BUILD, like the mints: the mask is CLIENT state the framebuffer
+    // emitter ORs into whether or not the texture family is on, and the emission a mask move
+    // causes (the metadata respecify) is gated inside the emitter on the family's own pair.
+    void MGPipeNoteTextureBoundAs(MGPipeHandle texture, Uint32 bindBit);
+    // glBindImageTexture. The hint is the PREVENTION half of the texture-remint stall class -
+    // a texture the server knows may be image-bound is allocated image-bindable up front - so it
+    // has to reach the applier before the texture's first sync, i.e. at the bind itself, not at
+    // the validate point's image walk (which notes it as well, D-A4's letter).
+    void MGPipeNoteTextureImageBound(MG_State::GLState::ITextureObject& texture);
+
+
     // ---- sampler CSOs and sampler views: MG_Impl/Pipe/SamplerEmit.h, package C ----
     //
     // Entry points MGPipeSamplerEmitter must provide, returning void:

@@ -48,6 +48,7 @@
 #include <MG_Impl/GLImpl/Program/GL_Program.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
 #include <MG_Impl/Pipe/ImageEmit.h>
+#include <MG_Impl/Pipe/TextureEmit.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/PipeApply.h>
@@ -347,7 +348,8 @@ TEST(ImageEmit, AMakeCurrentClearsTheImageSetAndAdvancesItsSerial) {
     X(ImageEmit, AZeroHighWaterMarkEmitsNothingWithoutHashing)                                      \
     X(ImageEmit, AnAccessModeChangeAloneStillEmitsTheSet)                                           \
     X(ImageEmit, AnInternalFormatChangeAloneStillEmitsTheSet)                                       \
-    X(ImageEmit, TheApplicationsFormatAndAccessTravelUnrecast)
+    X(ImageEmit, TheApplicationsFormatAndAccessTravelUnrecast)                                    \
+    X(ImageEmit, AnImageBoundTextureIsMarkedShaderImageBoundAtTheBind)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -515,6 +517,43 @@ void main() { imageStore(img, ivec2(0), vec4(1.0)); }
         EXPECT_GT(Emitter().ImageSetCount(), before);
         EXPECT_EQ(Emitter().LastImageViews()[1].InternalFormat, static_cast<Uint32>(GL_RGBA8UI));
         GL::UseProgram(0);
+    }
+
+    // FINAL REVIEW M-A: glBindImageTexture IS THE EARLIEST PRODUCER OF kMGPipeBindShaderImage -
+    // the bit the ImageBindableHint is derived from - and the emitted image set's walk is D-A4's
+    // (any texture named in an emitted MGPImageView). The hint is the PREVENTION half of the
+    // texture-remint stall class: a texture the server knows may be image-bound is allocated
+    // image-bindable up front, so it has to arrive before the first sync, i.e. at the bind.
+    // Nothing produced the bit before the fix round.
+    TEST(ImageEmit, AnImageBoundTextureIsMarkedShaderImageBoundAtTheBind) {
+        EmitterScope scope;
+        MGPipeTextureEmitterInstance().ResetForTest();
+        const GLuint name = MakeImageTexture();
+        const auto& texture = Ctx().GetTextureObject(name);
+        ASSERT_TRUE(texture);
+        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, texture->GetLifetimeId());
+        ASSERT_FALSE(MGPipeHandleIsNull(handle));
+        EXPECT_EQ(MGPipeTextureEmitterInstance().TextureBindMask(handle) & kMGPipeBindShaderImage, 0)
+            << "nothing has image-bound this texture yet";
+
+        GL::BindImageTexture(0, name, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+        EXPECT_NE(MGPipeTextureEmitterInstance().TextureBindMask(handle) & kMGPipeBindShaderImage, 0)
+            << "glBindImageTexture did not mark the texture image-bound";
+
+        static const char* kOneImage = R"(#version 430 core
+layout(local_size_x = 1) in;
+layout(binding = 0, rgba8) uniform image2D img;
+void main() { imageStore(img, ivec2(0, 0), vec4(1.0)); }
+)";
+        const GLuint program = MakeComputeProgram(kOneImage);
+        GL::UseProgram(program);
+        Emitter().EmitShaderImages(Ctx());
+        ASSERT_GE(Emitter().Window(), 1u);
+        EXPECT_TRUE(Emitter().LastImageViews()[0].Res == handle);
+        EXPECT_NE(MGPipeTextureEmitterInstance().TextureBindMask(handle) & kMGPipeBindShaderImage, 0)
+            << "the emitted image set's walk does not carry the bit either";
+        GL::UseProgram(0);
+        GL::BindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
     }
 } // namespace
 #endif // MOBILEGL_PIPE_PUSH

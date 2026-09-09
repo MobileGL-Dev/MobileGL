@@ -179,7 +179,7 @@ namespace MobileGL::MG_Util::PipeStats {
 #if MOBILEGL_PIPE_PUSH
             "render-state-cso-mints", "render-state-cso-binds", "map-persistent-roundtrips",
             "framebuffer-emissions", "sampler-view-emissions", "sampler-state-emissions",
-            "shader-image-emissions", "client-tex-upload-emissions",
+            "shader-image-emissions", "client-tex-upload-emissions", "tex-remint-pulls",
 #endif
         };
         const char* const kGateNames[kGateCount] = {
@@ -453,6 +453,10 @@ namespace MobileGL::MG_Util::PipeStats {
         line += " sie=" + std::to_string(calls[static_cast<Uint32>(CallClass::ShaderImageEmissions)]);
         line += " ctu=" +
                 std::to_string(calls[static_cast<Uint32>(CallClass::ClientTextureUploadEmissions)]);
+        // trp is the texture-remint pull count (ROADMAP open question 2): every one is a texture
+        // Espryt had already allocated and then had to re-mint image-bindable, replaying its
+        // levels from the client's shadow, because ImageBindableHint reached it too late.
+        line += " trp=" + std::to_string(calls[static_cast<Uint32>(CallClass::TextureRemintPulls)]);
 #endif
         line += "] gates[";
         for (Uint32 i = 0; i < kGateCount; ++i) {

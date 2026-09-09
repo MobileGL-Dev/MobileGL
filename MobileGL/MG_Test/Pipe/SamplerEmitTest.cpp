@@ -58,6 +58,7 @@
 #include "Init.h"
 #include <MG_Impl/GLImpl/Program/GL_Program.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
+#include <MG_Impl/Pipe/TextureEmit.h>
 #include <MG_Impl/Pipe/SamplerEmit.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
@@ -566,7 +567,8 @@ TEST(SamplerEmit, AMakeCurrentTakesTheUnitSetsAndLeavesTheCsoAndViewRecordsStand
     X(SamplerEmit, ABoundSamplerStateHoldsItsCsoUntilTheUnitMoves)                                  \
     X(SamplerEmit, AReferencedCsoIsNeverTheLruVictim)                                               \
     X(SamplerEmit, AFullyPinnedCacheMintsBeyondItsCapacityAndCountsIt)                              \
-    X(SamplerEmit, AReleaseThisCacheNeverHandedOutIsCountedRatherThanAbsorbed)
+    X(SamplerEmit, AReleaseThisCacheNeverHandedOutIsCountedRatherThanAbsorbed)                    \
+    X(SamplerEmit, AResolvedSamplerViewMarksItsTextureAsSamplerBound)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -1087,6 +1089,44 @@ namespace {
         // NOTHING WAS EVICTED WHILE REFERENCED, which is the ID-17 invariant the same round
         // turned from a compiled-out assert into a number.
         EXPECT_EQ(Cache().GetCounters().ReferencedEvictions, 0u);
+    }
+
+    // FINAL REVIEW M-A: THE SAMPLER-VIEW RESOLUTION IS D-A4's PRODUCER OF kMGPipeBindSampler.
+    // "Any texture the sampler-view resolution names in an emitted MGPBoundView" carries the
+    // sticky bit from then on; a texture bound to a unit no sampler uniform resolves does not.
+    // Nothing produced the bit before the fix round.
+    TEST(SamplerEmit, AResolvedSamplerViewMarksItsTextureAsSamplerBound) {
+        EmitterScope scope;
+        MGPipeTextureEmitterInstance().ResetForTest();
+        namespace GL = MobileGL::MG_Impl::GLImpl;
+        const Uint program = MakeSamplerProgram();
+        GLint linked = 0;
+        GL::GetProgramiv(program, GL_LINK_STATUS, &linked);
+        ASSERT_EQ(linked, GL_TRUE);
+        GL::UseProgram(program);
+        const GLint location = GL::GetUniformLocation(program, "sampled");
+        ASSERT_GE(location, 0);
+        GL::Uniform1i(location, 3);
+
+        GLuint sampledName = 0;
+        GLuint unsampledName = 0;
+        const SharedPtr<ITextureObject> sampled = MakeCompleteTexture(sampledName, 4);
+        const SharedPtr<ITextureObject> unsampled = MakeCompleteTexture(unsampledName, 4);
+        BindTextureToUnit(3, sampled);
+        BindTextureToUnit(5, unsampled);
+
+        ASSERT_GT(Emitter().EmitSamplerViews(Ctx()), 0u);
+        const MGPBoundView& resolved = Emitter().LastBoundViews()[3];
+        ASSERT_FALSE(MGPipeHandleIsNull(resolved.Texture));
+        EXPECT_NE(MGPipeTextureEmitterInstance().TextureBindMask(resolved.Texture) & kMGPipeBindSampler, 0)
+            << "the texture a sampler view was resolved for does not carry kMGPipeBindSampler";
+        const MGPipeHandle unsampledHandle =
+            MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, unsampled->GetLifetimeId());
+        if (!MGPipeHandleIsNull(unsampledHandle)) {
+            EXPECT_EQ(MGPipeTextureEmitterInstance().TextureBindMask(unsampledHandle) & kMGPipeBindSampler, 0)
+                << "a texture no sampler uniform resolves to was marked sampler-bound";
+        }
+        GL::UseProgram(0);
     }
 } // namespace
 #endif // MOBILEGL_PIPE_PUSH
