@@ -224,7 +224,8 @@ TEST(TextureEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
     X(TextureEmit, ATextureRecycledOntoADeadSlotDoesNotInheritTheDrainEntry)                       \
     X(TextureEmit, ADeadRenderbuffersEntryIsRetiredWithItsSlot)                                    \
     X(TextureEmit, ARefusedParamsRecordDoesNotAdvanceTheLatch)                                     \
-    X(TextureEmit, ADeadTexturesSamplerViewLatchIsRetiredAtItsDeath)
+    X(TextureEmit, ADeadTexturesSamplerViewLatchIsRetiredAtItsDeath)                              \
+    X(TextureEmit, ATextureBornBeforeTheConsumerRegisteredGetsItsRecordFromItsFirstParamsPublication)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -1502,37 +1503,88 @@ TEST(TextureEmit, ADeadRenderbuffersEntryIsRetiredWithItsSlot) {
 // ============================ final review m-1 (audit F-7) ============================
 //
 // set_texture_params LATCHES ON ACCEPTANCE, like the sub-data and respecify paths. A record the
-// applier refused (it holds nothing for the handle) used to advance the version latch anyway,
-// so the parameters were not re-sent until the next glTexParameter* moved a version.
+// applier refused used to advance the version latch anyway, so the parameters were not re-sent
+// until the next glTexParameter* moved a version. A refusal for a missing record is HEALED now
+// (the case after this one), so the property is driven through a refusal on the merits: with no
+// backend consumer the applier's belt refuses the parameters AND the healing create, and the
+// emitter is driven directly (the contract hook would not even emit without the consumer).
 TEST(TextureEmit, ARefusedParamsRecordDoesNotAdvanceTheLatch) {
     TextureScope scope;
     const auto texture = MakeTexture2D(95, 8);
     const MGPipeHandle handle = Textures().FindTexture(*texture);
     ASSERT_NE(AppliedTexture(handle), nullptr);
+    const Uint64 serialBefore = AppliedTexture(handle)->ParamsSerial;
 
-    // The served context's teardown scope: every object record is dropped while the frontend
-    // objects live on. A parameter then moves (a LOD write on the built-in sampler, which the
-    // format setter's earlier publication did not carry) and its set_texture_params is refused.
-    MGPipeApplierReleaseObjectRecords();
+    // A parameter moves (a LOD write on the built-in sampler, which the format setter's earlier
+    // publication did not carry) while no consumer is registered: refused, and not healable.
     texture->GetSamplerObject()->SetLodBias(0.5f);
     const Uint64 paramsBefore = Textures().ParamCount();
-    MG_Pipe::MGPipeEmitTextureParams(*texture);
+    {
+        ScopedNoResourceOps noConsumer;
+        Textures().EmitTextureParams(*texture);
+    }
     EXPECT_EQ(Textures().ParamCount(), paramsBefore + 1) << "the record was not even emitted";
     EXPECT_EQ(Textures().RefusedParamCount(), 1u) << "the emitter did not see the refusal";
+    EXPECT_EQ(AppliedTexture(handle)->ParamsSerial, serialBefore) << "the refused record moved the serial";
 
-    // The record comes back through the self-healing create the next respecify carries.
-    texture->AllocateStorage(TextureUploadTarget::Texture2D, 0, MipmapInput{IntVec3{16, 16, 1}, 16 * 16 * 4});
-    const MGPipeResourceRecord* record = AppliedTexture(handle);
-    ASSERT_NE(record, nullptr);
-    ASSERT_EQ(record->ParamsSerial, 0u);
-
-    // The same parameters, no version moved: with the latch taken on the REFUSED call this
-    // returns early and the record never learns them.
+    // The consumer is back and the same parameters, no version moved, are published again:
+    // with the latch taken on the REFUSED call this returns early and the record never learns
+    // the LOD write.
     MG_Pipe::MGPipeEmitTextureParams(*texture);
     EXPECT_EQ(Textures().ParamCount(), paramsBefore + 2)
         << "a refused set_texture_params advanced the latch, so the parameters are not re-sent";
-    EXPECT_EQ(record->ParamsSerial, 1u) << "the record never learned the LOD write";
+    const MGPipeResourceRecord* record = AppliedTexture(handle);
+    ASSERT_NE(record, nullptr);
+    EXPECT_EQ(record->ParamsSerial, serialBefore + 1) << "the record never learned the LOD write";
     EXPECT_EQ(record->Params.LodBias, 0.5f);
+}
+
+// THE RETRACE CENSUS's ONE RESIDUAL after m-1 went loud: a texture born while the family was
+// not live - the context's default textures are constructed before the backend registers its
+// consumer - has no record, and when the application's first glTexParameter* lands on it
+// (texture 0) the record is refused and, before m-1, silently latched away for ever. The
+// params path now heals the record the way the respecify path does: a create with no storage
+// for the identity, the storage itself if the texture has any, then the parameters.
+TEST(TextureEmit, ATextureBornBeforeTheConsumerRegisteredGetsItsRecordFromItsFirstParamsPublication) {
+    TextureScope scope;
+    SharedPtr<TextureObject2D> texture;
+    {
+        ScopedNoResourceOps noConsumer;
+        texture = MakeTexture2D(88, 8); // born, formatted and allocated with no consumer: no create
+    }
+    const MGPipeHandle handle = Textures().FindTexture(*texture);
+    ASSERT_FALSE(MGPipeHandleIsNull(handle));
+    ASSERT_EQ(AppliedTexture(handle), nullptr) << "the case needs a texture the applier never heard of";
+    ASSERT_FALSE(MGPipeHandleIsPublished(MGPipeKind::Texture, handle));
+
+    // glTexParameterf(GL_TEXTURE_LOD_BIAS) on it, with the consumer present now.
+    texture->GetSamplerObject()->SetLodBias(0.25f);
+    MG_Pipe::MGPipeEmitTextureParams(*texture);
+    EXPECT_EQ(Textures().RefusedParamCount(), 0u)
+        << "the parameters of a texture born before the consumer were refused instead of healing its record";
+    const MGPipeResourceRecord* record = AppliedTexture(handle);
+    ASSERT_NE(record, nullptr) << "no record was healed";
+    EXPECT_TRUE(MGPipeHandleIsPublished(MGPipeKind::Texture, handle));
+    EXPECT_EQ(record->Desc.Width, 8u) << "the healed record carries no storage although the texture has some";
+    EXPECT_EQ(record->Desc.Levels, 1u);
+    EXPECT_EQ(record->ParamsSerial, 1u);
+    EXPECT_EQ(record->Params.LodBias, 0.25f);
+    // And a texture with NO storage at all - the default texture's shape - heals to a record
+    // with the identity only, which is what its parameters need and all a create says.
+    const auto bare = MakeShared<TextureObject2D>(87);
+    {
+        // its create went out with the consumer present, so take the record away again to model
+        // a birth the applier never saw
+        MGPipeApplierReleaseObjectRecords();
+    }
+    bare->GetSamplerObject()->SetLodBias(0.75f);
+    MG_Pipe::MGPipeEmitTextureParams(*bare);
+    const MGPipeHandle bareHandle = Textures().FindTexture(*bare);
+    const MGPipeResourceRecord* bareRecord = AppliedTexture(bareHandle);
+    ASSERT_NE(bareRecord, nullptr) << "a storage-less texture's parameters healed no record";
+    EXPECT_EQ(bareRecord->Desc.Width, 0u);
+    EXPECT_EQ(bareRecord->Params.LodBias, 0.75f);
+    EXPECT_EQ(Textures().RefusedParamCount(), 0u);
 }
 
 #endif // MOBILEGL_PIPE_PUSH
