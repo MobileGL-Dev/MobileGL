@@ -299,11 +299,15 @@
     /* begins with one of the ten words the pattern matched.                                */ \
     /*   UseProgram is bit 6's whole subject: the shutter is                                */ \
     /*     Mix(GetCurrentProgram()->GetLifetimeId(), GetLinkVersion()) and glUseProgram is  */  \
-    /*     what moves the object it reads through. Two call sites.                          */ \
+    /*     what moves the object it reads through. Two call sites. AND SINCE THE FABLE     */  \
+    /*     SEAM ROUND (F-1) IT IS BIT 12's TOO: set_sampler_views is resolved for the       */  \
+    /*     program in use, so its shutter mixes the same identity bit 6 reads, and a         */  \
+    /*     glUseProgram alone moves both. Undecided for the same reason as bit 6 (the        */  \
+    /*     taint below), marked the same way.                                                */  \
     /*   BindVertexArray is bit 5's, for the same reason one level down: the shutter mixes  */  \
     /*     the bound VAO's identity with its configuration version, and this is the bind.   */  \
     /*     Three call sites.                                                                */ \
-    X(UseProgram,                         NEW_SHADER)                                          \
+    X(UseProgram,                         NEW_SHADER|NEW_SAMPLER_VIEWS)                        \
     X(BindVertexArray,                    NEW_VERTEX_ELEMENTS)                                 \
     /* NOT NEW_SHADER, and the derivation refutes it outright rather than leaving it a      */  \
     /* judgement: this mutator writes m_boundProgramPipeline (plus the pipeline name table) */  \
@@ -387,11 +391,12 @@
 // row nor outlive its reason.
 //
 // IT WAS EMPTY UNTIL P4a, and it stops being empty for a reason that is a property of the
-// SCANNER rather than of the two rows. Both entries below are bit answers that are plainly
-// true - glUseProgram is what moves the object bit 6's shutter reads through, and
-// glBindVertexArray is what moves the object bit 5's shutter reads through - and the write
-// analysis cannot say so, because each of them reaches, BY NAME, a body that writes a member
-// with no m_ prefix:
+// SCANNER rather than of the rows. Every entry below is a bit answer that is plainly true -
+// glUseProgram is what moves the object bits 6, 12 and 14's shutters read through (the
+// program in use; bits 12 and 14 since the fable seam round, F-1 / F-2), and glBindVertexArray
+// is what moves the object bit 5's shutter reads through - and the write analysis cannot say
+// so, because each of the two mutators reaches, BY NAME, a body that writes a member with no
+// m_ prefix:
 //
 //   UseProgram      -> DestroyProgramSlot() writes `attachedShaders`
 //   BindVertexArray -> a call spelled `Bind(` resolves to every body of that name, one of
@@ -403,13 +408,15 @@
 // never be claimed about code the script could not read. Widening the taint rule to ignore
 // non-m_ writes would weaken the one mechanism that catches a genuine under-fire, so the rows
 // are MARKED, with the tool's own reason, rather than the tool being made more permissive.
-// Control 9c is what proves a marked row still needs the mark, and control 18 is what fails
-// the moment either of these becomes decidable and the mark outlives its reason.
+// Control 21 is what proves every marked row still needs its mark (it reads this list, so a
+// row that gains a bit here is counted rather than assumed), and control 18 is what fails the
+// moment any of them becomes decidable and the mark outlives its reason.
 //
 // The ten mutators that reach a tainted body (--check prints the count) all carry a prose
-// answer, which no derivation checks; these two are the first that carry a bit answer.
+// answer, which no derivation checks; these two mutators are the first that carry a bit answer.
 #define MGP_DIRTY_SURFACE_UNDECIDED_LIST(X)                                                     \
     X(UseProgram,      NEW_SHADER)                                                              \
+    X(UseProgram,      NEW_SAMPLER_VIEWS)                                                       \
     X(BindVertexArray, NEW_VERTEX_ELEMENTS)
 
 // clang-format on

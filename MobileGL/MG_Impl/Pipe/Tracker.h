@@ -349,6 +349,18 @@ namespace MobileGL::MG_Pipe {
             Uint64 bindings = 0;
             Uint64 constants = 0;
             Uint64 programImages = 0;
+            // THE PROGRAM INPUT OF THE PROGRAM-RESOLVED VIEW SET (P4a fable seam F-1).
+            // set_sampler_views is resolved for the program in use (SamplerEmit.h: the sampler
+            // uniform's TYPE picks which of a unit's targets is the view) and the emitter
+            // memoises that resolution on (lifetime id, link version, backend state version). A
+            // shutter that read only the texture generations therefore missed a glUseProgram:
+            // `glBindTexture x N; glUseProgram(P1); draw; glUseProgram(P2); draw` moved nothing
+            // bit 12 read, so the view set stayed P1's - and E's record epoch, keyed on the two
+            // set serials, then never rebuilt the texture sync list for P2 either. This value is
+            // that memo key, and bit 12 mixes it in below: over-firing costs one re-resolution
+            // the set-hash suppressor absorbs, under-firing left the record describing the
+            // previous program's units.
+            Uint64 opaqueUnits = 0;
             if (program) {
                 shader = MGPipeMixShutter(program->GetLifetimeId(), program->GetLinkVersion());
                 bindings = MGPipeMixShutter(
@@ -358,6 +370,7 @@ namespace MobileGL::MG_Pipe {
                     program->GetUniformWriteSetVersion());
                 constants = MGPipeMixShutter(program->GetLifetimeId(), program->GetUBOContentVersion());
                 programImages = program->GetImageUnitVersion();
+                opaqueUnits = MGPipeMixShutter(shader, program->GetBackendStateVersion());
             } else if (const auto& pipeline = ctx.GetBoundProgramPipeline(); pipeline) {
                 using Pipeline = MG_State::GLState::ProgramPipelineObject;
                 // THE FIELDS ARE READ DIRECTLY RATHER THAN THROUGH THE TWO FUNCTIONS THAT
@@ -401,6 +414,10 @@ namespace MobileGL::MG_Pipe {
                 Uint64 stageLinks = static_cast<Uint64>(ctx.GetBoundProgramPipelineName());
                 Uint64 stageState = 0;
                 Uint64 stageImages = 0;
+                // The per-stage sampler/image unit assignments alone (glUniform1i on a stage
+                // program's sampler moves its backend state version and reaches the composite
+                // through the uniform mirror), for bit 12's program input below.
+                Uint64 stageOpaque = 0;
                 for (SizeT stage = 0; stage < Pipeline::kGraphicsStageCount; ++stage) {
                     const auto& staged = pipeline->GetStageProgram(static_cast<ShaderStage>(stage));
                     if (!staged) continue;
@@ -412,12 +429,14 @@ namespace MobileGL::MG_Pipe {
                                                           staged->GetBlockBindingVersion())),
                         staged->GetUniformWriteSetVersion());
                     stageImages = MGPipeMixShutter(stageImages, staged->GetImageUnitVersion());
+                    stageOpaque = MGPipeMixShutter(stageOpaque, staged->GetBackendStateVersion());
                 }
                 shader = stageLinks;
                 stageState = MGPipeMixShutter(stageLinks, stageState);
                 bindings = MGPipeMixShutter(stageState, stageImages);
                 constants = stageState;
                 programImages = MGPipeMixShutter(stageLinks, stageImages);
+                opaqueUnits = MGPipeMixShutter(stageLinks, stageOpaque);
             }
             now[Index(MGPipeDirty::NewShader)] = shader;
             now[Index(MGPipeDirty::NewShaderBindings)] = bindings;
@@ -491,8 +510,16 @@ namespace MobileGL::MG_Pipe {
                         ctx.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetVersion())),
                 m_readFramebufferBind.Observe(
                     ctx.GetFramebufferBindingSlot(FramebufferTarget::Read).GetVersion()));
-            now[Index(MGPipeDirty::NewSamplerViews)] =
-                MGPipeMixShutter(textureContent, ctx.GetTextureBindGeneration());
+            // Bit 12 reads FOUR things (F-1): the two texture aggregates, the bind generation
+            // and the program input computed above. The params aggregate is here because
+            // SamplerEmit.h drops a unit's view to null when SamplesAsIncompleteTexture says so,
+            // and that predicate reads the effective sampler's filters - a glTexParameteri(
+            // MIN_FILTER) that completes a texture fired bit 13 and not this one, so the entry
+            // stayed null. The program input is here because the set is resolved FOR THE
+            // PROGRAM IN USE, and a glUseProgram alone moved nothing this shutter read.
+            now[Index(MGPipeDirty::NewSamplerViews)] = MGPipeMixShutter(
+                MGPipeMixShutter(MGPipeMixShutter(textureContent, textureParams), ctx.GetTextureBindGeneration()),
+                opaqueUnits);
             // Bit 13, WIDENED AT P4a FOR BIT 11's REASON and found the same way. glBindSampler
             // moves NEITHER half of what this used to read: GL_Sampler.cpp's BindSampler_State
             // goes through NoteTextureUnitTouched and TextureUnit::SetSamplerObject, and both

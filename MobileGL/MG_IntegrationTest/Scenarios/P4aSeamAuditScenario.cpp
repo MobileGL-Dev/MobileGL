@@ -471,5 +471,103 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
             EXPECT_EQ(FirstGLError(), 0u) << GLErrorName(FirstGLError());
         }
 
+        // -----------------------------------------------------------------------------------
+        // F-1 / F-1b: a program switch re-resolves the view set, and the texture sync list with it
+        // -----------------------------------------------------------------------------------
+        //
+        // The sequence the audit named, and every step of it is ordinary: two programs sampling two
+        // different units, a texture bound to a unit's EMPTY 2D slot - the unit was already touched
+        // through another target, so the high-water mark does not move - while a program that does
+        // not sample it is in use, then the switch to the one that does. Nothing between the two
+        // draws touches a parameter, a level or a populated slot, which is exactly what leaves the
+        // record epoch - and the program-independent texture sync list keyed on it - unmoved on
+        // the tree the audit read: the second program sampled an unbound unit and drew black.
+        TEST_F(P4aSeamAuditScenario, ATextureBoundToAnEmptySlotUnderOneProgramIsSampledByTheNext) {
+            if (!Ready()) return;
+
+            std::string error;
+            const GLuint first = CompileProgram(kQuadVS, kFetchFS, &error);
+            ASSERT_NE(first, 0u) << error;
+            const GLuint second = CompileProgram(kQuadVS, kFetchFS, &error);
+            ASSERT_NE(second, 0u) << error;
+            glUseProgram(first);
+            glUniform1i(glGetUniformLocation(first, "uTex"), 0);
+            glUseProgram(second);
+            glUniform1i(glGetUniformLocation(second, "uTex"), 1);
+            glUseProgram(0);
+
+            // Every texture exists, complete, with its parameters set, BEFORE the first draw: a
+            // parameter or a level defined between the two draws would move the sampling-resolution
+            // generation and rescue the list by accident.
+            const GLuint red = MakeSolidTexture2D(255, 0, 0);
+            const GLuint green = MakeSolidTexture2D(0, 255, 0);
+            GLuint touch3D = 0;
+            glGenTextures(1, &touch3D);
+            glBindTexture(GL_TEXTURE_3D, touch3D);
+            const std::uint8_t blue[2 * 2 * 2 * 4] = {0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255,
+                                                     0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255};
+            glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, 2, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, blue);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glBindTexture(GL_TEXTURE_3D, 0);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            ASSERT_EQ(FirstGLError(), 0u) << "texture setup left a GL error behind";
+
+            ColorFbo target = MakeColorFbo(kSize, kSize);
+            ASSERT_NE(target.fbo, 0u);
+            BindFbo(target);
+            glBindVertexArray(m_vao);
+
+            // Unit 1 is TOUCHED through its 3D slot; its 2D slot stays empty. Unit 0 holds red.
+            // The first program is in use BEFORE the first verb (the clear), so the very first
+            // view set that goes out is already resolved for it - measured: with no program in
+            // use at the clear the first set is [null, null], and the bind below then re-resolves
+            // to [red, null], a DIFFERENT set that moves the serial and rescues the case by
+            // accident.
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_3D, touch3D);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, red);
+            glUseProgram(first);
+            ClearTo(0.0f, 0.0f, 1.0f, 1.0f);
+            DrawQuad();
+
+            // THE BIND ONTO THE EMPTY SLOT, under a program that does not sample unit 1, and a
+            // draw with THAT program so the bind's own re-resolution of the view set happens under
+            // it (the bind generation fires bit 12 at the next verb; a switch inside the same verb
+            // gap would let that fire resolve under the second program by accident) ...
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, green);
+            glActiveTexture(GL_TEXTURE0);
+            DrawQuad();
+            // ... and THE SWITCH to the one that does sample it. No other state moves.
+            glUseProgram(second);
+            DrawQuad();
+            EXPECT_EQ(FirstGLError(), 0u) << "the two draws left a GL error behind";
+
+            const Image image = ReadPixels(kSize, kSize);
+            ASSERT_FALSE(image.Empty());
+            EXPECT_TRUE(RegionIsMostly(image, kInset, kSize - 1 - kInset, kInset, kSize - 1 - kInset, "green", 0.0,
+                                       "the draw after the program switch"))
+                << "black means the second program sampled an unbound unit: the texture bound to the "
+                   "empty slot was never synced because the view set - and E's record epoch with it - "
+                   "did not move on the program switch (F-1 / F-1b); red means the first program's "
+                   "set was still in force";
+
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glBindTexture(GL_TEXTURE_3D, 0);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glUseProgram(0);
+            DestroyColorFbo(target);
+            glDeleteTextures(1, &red);
+            glDeleteTextures(1, &green);
+            glDeleteTextures(1, &touch3D);
+            glDeleteProgram(first);
+            glDeleteProgram(second);
+            EXPECT_EQ(FirstGLError(), 0u) << GLErrorName(FirstGLError());
+        }
+
     } // namespace
 } // namespace MGITest

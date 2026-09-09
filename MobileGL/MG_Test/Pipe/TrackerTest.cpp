@@ -82,6 +82,8 @@ namespace {
     X(TrackerWalk, UseProgramZeroLeavesTheBoundPipelineDrivingTheProgramBits) \
     X(TrackerAggregates, ATextureStorageDefinitionMovesTheFramebufferAggregateToo) \
     X(TrackerAggregates, ARenderbufferStorageDefinitionMovesTheFramebufferAggregate) \
+    X(TrackerWalk, AProgramSwitchAloneFiresTheSamplerViewBit) \
+    X(TrackerWalk, ATextureParameterAloneFiresTheSamplerViewBit) \
     X(TrackerAttribPayload, AFloatWriteCarriesTheFloatBitsAndNamesItsClass) \
     X(TrackerAttribPayload, AnIntWriteCarriesTheIntWordsAndNamesItsClass) \
     X(TrackerAttribPayload, AUintWriteCarriesTheUintWordsAndNamesItsClass) \
@@ -784,6 +786,44 @@ namespace {
             << "with no program in use the bound pipeline has to drive the program family";
         EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewShaderBindings), 0u);
         EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewGlobalConstants), 0u);
+    }
+
+    // P4a FABLE SEAM F-1. set_sampler_views is resolved for the PROGRAM IN USE (the sampler
+    // uniform's type picks which of a unit's targets is the view), and bit 12's shutter read
+    // only the texture-content aggregate and the bind generation - so `glUseProgram(P1); draw;
+    // glUseProgram(P2); draw` never re-emitted the set and the record went on describing P1's
+    // units. A program switch alone, with no bind and no texture change, has to fire it.
+    TEST_F(TrackerWalk, AProgramSwitchAloneFiresTheSamplerViewBit) {
+        const Uint first = Ctx().CreateProgram();
+        const Uint second = Ctx().CreateProgram();
+        Ctx().UseProgram(first);
+        Walk();
+        ASSERT_EQ(Walk(), 0u) << "the fixture did not reach a steady state";
+
+        Ctx().UseProgram(second);
+        const Uint32 dirty = Walk();
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewSamplerViews), 0u)
+            << "the view set is resolved for the program in use and a glUseProgram alone did not "
+               "re-emit it (F-1)";
+        EXPECT_EQ(Walk(), 0u) << "the widened shutter fires forever";
+    }
+
+    // The other input F-1 added: the params aggregate. SamplerEmit.h drops a unit's view to
+    // null when SamplesAsIncompleteTexture says so, and that predicate reads the effective
+    // sampler's filters and the level range - a glTexParameteri that completes a texture fired
+    // bit 13 and left the view entry null.
+    TEST_F(TrackerWalk, ATextureParameterAloneFiresTheSamplerViewBit) {
+        const auto& tex = Ctx().CreateTextureObject(1, TextureTarget::Texture2D);
+        ASSERT_TRUE(tex != nullptr);
+        Walk();
+        ASSERT_EQ(Walk(), 0u) << "the fixture did not reach a steady state";
+
+        tex->SetMaxLevel(4);
+        const Uint32 dirty = Walk();
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewSamplerViews), 0u)
+            << "completeness is a view-set input and a parameter change did not re-resolve it";
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewSamplers), 0u);
+        EXPECT_EQ(Walk(), 0u);
     }
 
     // ===================================================================================

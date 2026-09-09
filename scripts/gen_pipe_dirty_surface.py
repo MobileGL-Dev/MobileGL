@@ -1811,17 +1811,21 @@ def self_test(scanned, bits, publishers, movers, moved, outside=None, undecided_
                 "20%s (the %s row is STALE the moment the scan stops finding it)"
                 % ("abcd"[index], name))
 
-    # 21. THE TWO UNDECIDED MARKS ARE STILL LOAD-BEARING. Dropping them has to make --check
-    #     refuse both rows as unmarked UNDECIDED - which is what says the marks are covering a
-    #     real blind spot rather than a verdict the analysis could give today. Control 18 is
-    #     the other direction: a mark the derivation DOES decide is itself a problem, so
-    #     neither of these can outlive its reason.
+    # 21. EVERY UNDECIDED MARK IS STILL LOAD-BEARING. Dropping them all has to make --check
+    #     refuse EVERY marked (mutator, bit) as an unmarked UNDECIDED, and nothing else - which
+    #     is what says each mark is covering a real blind spot rather than a verdict the
+    #     analysis could give today. Control 18 is the other direction: a mark the derivation
+    #     DOES decide is itself a problem, so no mark can outlive its reason. Read from the
+    #     file's own list rather than spelled here, so a row that gains a bit - UseProgram
+    #     gained NEW_SAMPLER_VIEWS and NEW_SHADER_IMAGES at the P4a fable seam round - cannot
+    #     silently turn this control into one that counts the wrong number.
     problems, _, _, undecided_rows = object_class_problems(real, bits, movers, moved, outside, {})
-    tripped(any(p.startswith("UNDECIDED answer NEW_SHADER for UseProgram") for p in problems)
-            and any(p.startswith("UNDECIDED answer NEW_VERTEX_ELEMENTS for BindVertexArray")
-                    for p in problems)
-            and len(undecided_rows) == 2,
-            "21 (the two P4a undecided marks are still needed)")
+    marked_pairs = sorted((mutator, bit) for mutator, marks in real_marks.items() for bit in marks)
+    tripped(marked_pairs
+            and all(any(p.startswith("UNDECIDED answer %s for %s" % (bit, mutator)) for p in problems)
+                    for mutator, bit in marked_pairs)
+            and len(undecided_rows) == len(marked_pairs),
+            "21 (every P4a undecided mark - %d of them - is still needed)" % len(marked_pairs))
 
     # THE POSITIVE CONTROLS. (a) The row that was wrong in round 3: SetPixelStoreParam writes
     # NEW_PIXEL_PACK's shutter member sixteen times, through a token-pasting macro; it has
