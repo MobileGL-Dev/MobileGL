@@ -221,11 +221,23 @@ namespace MobileGL::MG_State::GLState {
         // members rather than free calls so the cube's, the view's and the buffer texture's
         // translation units keep calling an inherited helper.
         //
-        // resource_respecify. Called from BumpShapeVersion and from the three parameter
+        // resource_respecify, WHOLE-RESOURCE scope: the format setter and the three parameter
         // setters that move a DESCRIPTOR field without moving the shape (immutable levels,
-        // sample count, fixed sample locations). The emitter dedupes on the built descriptor,
-        // so an over-call costs one 88-byte compare and never an extra record.
+        // sample count, fixed sample locations), and a view's creation. The emitter dedupes
+        // this form on the built descriptor, so an over-call costs one 88-byte compare and
+        // never an extra record.
         void PipePublishDescriptor();
+        // The PER-LEVEL and the CHAIN-CUT forms of the same call (P4a final review C-1). The
+        // applier keeps a pending-upload set per (uploadTarget, level) and drops the entries
+        // against the storage a respecify REPLACES - and the descriptor cannot tell it which:
+        // AllocateStorage is per level and TruncateMipmapLevels removes a tail, while the
+        // descriptor carries the base extent and the level count only. So the storage entry
+        // points state the scope themselves; the whole-resource form above is for the calls
+        // that really redefine the whole store. A per-level form is NOT deduped on the
+        // descriptor: a non-base level redefined at a new size moves no descriptor field, and
+        // the applier's box against the old level has to go regardless.
+        void PipePublishLevelDescriptor(TextureUploadTarget uploadTarget, Uint mipmapLevel);
+        void PipePublishTruncatedDescriptor(TextureUploadTarget uploadTarget, Uint levelCount);
         // set_texture_params, from every mutator that bumps m_textureParamsVersion.
         void PipePublishParams();
         // The sub-data DRAIN LIST's append, on a level's first dirty mark. There is no clean

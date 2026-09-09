@@ -66,7 +66,8 @@ namespace MobileGL {
             // ---- P4a's three client emission points (see TextureObject.h) ----
 
             void TextureObjectBase::PipePublishDescriptor() {
-                MG_Pipe::MGPipeEmitTextureResourceRespecify(*this);
+                MG_Pipe::MGPipeEmitTextureResourceRespecify(*this, MG_Pipe::MGPipeTextureRespecifyScope::WholeResource,
+                                                            0, 0);
                 // AND THE FRAMEBUFFER AGGREGATE MOVES (P4a fable seam F-3). The resource record
                 // above is only half of what a storage definition changes: set_framebuffer_state
                 // INLINES an attachment's InternalFormat, TextureTarget, extent, Samples and
@@ -80,6 +81,24 @@ namespace MobileGL {
                 // here and not per setter, it is push-only like the rest of this block, and it
                 // over-fires the framebuffer bit once per storage definition of an unattached
                 // texture - at load time, where a 304-byte hash is nothing.
+                MGP_NOTE_AGGREGATE(FramebufferAttachment);
+            }
+
+            void TextureObjectBase::PipePublishLevelDescriptor(TextureUploadTarget uploadTarget, Uint mipmapLevel) {
+                // ONE level was (re)allocated: only that level's pending upload is against
+                // storage that is gone (P4a final review C-1). Every other level's stays.
+                MG_Pipe::MGPipeEmitTextureResourceRespecify(*this, MG_Pipe::MGPipeTextureRespecifyScope::OneLevel,
+                                                            static_cast<Uint32>(uploadTarget),
+                                                            static_cast<Uint32>(mipmapLevel));
+                MGP_NOTE_AGGREGATE(FramebufferAttachment); // an attached level's extent is inlined (F-3)
+            }
+
+            void TextureObjectBase::PipePublishTruncatedDescriptor(TextureUploadTarget uploadTarget, Uint levelCount) {
+                // The chain was cut at `levelCount`: the levels above the cut are gone with their
+                // pending uploads, the levels below it are untouched and keep theirs.
+                MG_Pipe::MGPipeEmitTextureResourceRespecify(*this, MG_Pipe::MGPipeTextureRespecifyScope::LevelsFrom,
+                                                            static_cast<Uint32>(uploadTarget),
+                                                            static_cast<Uint32>(levelCount));
                 MGP_NOTE_AGGREGATE(FramebufferAttachment);
             }
 
@@ -492,8 +511,10 @@ namespace MobileGL {
                 // storage-defining GL entry point - glTexImage*, glCompressedTexImage*,
                 // glTexStorage*, glTextureView and the generated-mip storage grow - reaches
                 // storage through here, which is what makes the emission complete without one call
-                // site per entry point in MG_Impl/GLImpl.
-                PipePublishDescriptor();
+                // site per entry point in MG_Impl/GLImpl. AND IT NAMES THE LEVEL (final review
+                // C-1): this call replaced ONE level's storage, and only that level's pending
+                // upload may go with it.
+                PipePublishLevelDescriptor(uploadTarget, mipmapLevel);
 #endif
             }
 
@@ -501,7 +522,9 @@ namespace MobileGL {
                 BumpShapeVersion();
                 m_textureStorage.TruncateToLevelCount(GetIndexOfTextureUploadTarget(uploadTarget), levelCount);
 #if MOBILEGL_PIPE_PUSH
-                PipePublishDescriptor();
+                // The levels at and above the cut are gone; the ones below keep their pending
+                // uploads (final review C-1).
+                PipePublishTruncatedDescriptor(uploadTarget, levelCount);
 #endif
             }
 

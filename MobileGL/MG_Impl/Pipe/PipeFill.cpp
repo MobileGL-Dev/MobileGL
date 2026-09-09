@@ -1255,10 +1255,12 @@ namespace MobileGL::MG_Pipe {
             MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.EmitResourceCreate(texture); });
     }
 
-    void MGPipeEmitTextureResourceRespecify(ITextureObject& texture) {
+    void MGPipeEmitTextureResourceRespecify(ITextureObject& texture, MGPipeTextureRespecifyScope scope,
+                                            Uint32 uploadTarget, Uint32 level) {
         if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
         ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
-            MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.EmitResourceRespecify(texture); });
+            MGPipeTextureEmitterInstance(),
+            [&](auto& emitter) { emitter.EmitResourceRespecify(texture, scope, uploadTarget, level); });
     }
 
     void MGPipeEmitTextureParams(ITextureObject& texture) {

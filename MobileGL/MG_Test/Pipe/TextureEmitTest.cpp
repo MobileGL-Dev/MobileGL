@@ -205,18 +205,21 @@ TEST(TextureEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
     X(TextureEmit, ADestroyedTextureReleasesItsResourceViewAndBuiltinSamplerSlots)                 \
     X(TextureEmit, ARenderbufferRespecifyPublishesItsExtentWithoutAVersionCounter)                 \
     X(TextureEmit, ABailedLevelStaysDirtyAndStaysOnTheDrainList)                                   \
-    X(TextureEmit, TheApplierStoresTheRegionListTheEmitterBuiltAndNotAnEmptyOne)                    \
-    X(TextureEmit, ARefusedUploadLeavesTheLevelDirtyAndOnTheDrainList)                              \
-    X(TextureEmit, AnImmutableTexturesImageBindableHintReachesTheApplierAfterItsAllocation)         \
-    X(TextureEmit, ALodWriteOnTheBuiltinSamplerRepublishesTheParams)                                \
-    X(TextureEmit, ATexturesBuiltinSamplerHoldsOneCacheReferenceAndSwapsItWithTheContent)           \
-    X(TextureEmit, ARecycledTextureSlotDoesNotInheritItsPredecessorsBindMask)                       \
+    X(TextureEmit, TheApplierStoresTheRegionListTheEmitterBuiltAndNotAnEmptyOne)                   \
+    X(TextureEmit, ARefusedUploadLeavesTheLevelDirtyAndOnTheDrainList)                             \
+    X(TextureEmit, AnImmutableTexturesImageBindableHintReachesTheApplierAfterItsAllocation)        \
+    X(TextureEmit, ALodWriteOnTheBuiltinSamplerRepublishesTheParams)                               \
+    X(TextureEmit, ATexturesBuiltinSamplerHoldsOneCacheReferenceAndSwapsItWithTheContent)          \
+    X(TextureEmit, ARecycledTextureSlotDoesNotInheritItsPredecessorsBindMask)                      \
     X(TextureEmit, ALevelMarkedCleanIsCollectedAtTheNextDrain)                                     \
-    X(TextureEmit, WithNoBackendConsumerTheFamilyGateIsFalseAndNothingReachesTheApplier)          \
-    X(TextureEmit, WithTheSamplerBitClearTheTextureFamilyGateIsFalseAndNothingReachesTheApplier)  \
-    X(TextureEmit,                                                                               \
-      WithTheBufferResourceBitClearTheTextureFamilyGateIsFalseAndNothingReachesTheApplier)        \
-    X(TextureEmit, EveryDKTwoDependencyRowGatesItsOwnFamilyAndTheMirrorPairsStayLive)
+    X(TextureEmit, WithNoBackendConsumerTheFamilyGateIsFalseAndNothingReachesTheApplier)           \
+    X(TextureEmit, WithTheSamplerBitClearTheTextureFamilyGateIsFalseAndNothingReachesTheApplier)   \
+    X(TextureEmit,                                                                                 \
+      WithTheBufferResourceBitClearTheTextureFamilyGateIsFalseAndNothingReachesTheApplier)         \
+    X(TextureEmit, EveryDKTwoDependencyRowGatesItsOwnFamilyAndTheMirrorPairsStayLive)              \
+    X(TextureEmit, ALevelDefinedAfterAnEmittedButUnconsumedUploadKeepsThatUpload)                  \
+    X(TextureEmit, AChainTruncationKeepsTheSurvivingLevelsPendingUploads)                          \
+    X(TextureEmit, ARedefinitionOfANonBaseLevelAtANewSizeDropsOnlyThatLevelsPendingUpload)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -1275,6 +1278,118 @@ TEST(TextureEmit, ALevelMarkedCleanIsCollectedAtTheNextDrain) {
     EXPECT_EQ(Textures().DrainListSize(), 1u)
         << "a re-dirtied level did not go back on the drain list, so its texels are owed for ever";
 }
+// ============================ final review C-1 ============================
+//
+// THE CLIENT PASSES THE LEVEL IT REDEFINES. AllocateStorage is per (uploadTarget, level) while
+// the descriptor carries only the base extent and the level count, so only the caller can tell
+// the applier WHICH storage a respecify replaces (wire C1's MGPRespecifiedLevel); before the fix
+// every texture respecify took the whole-resource arm and dropped every pending upload of the
+// texture - including a level the applier had already accepted and whose client flag was
+// therefore already clear (D-D5 step 1). Driven through the real AllocateStorage.
+TEST(TextureEmit, ALevelDefinedAfterAnEmittedButUnconsumedUploadKeepsThatUpload) {
+    TextureScope scope;
+    const auto texture = MakeShared<TextureObject2D>(90);
+    texture->SetInternalFormat(TextureInternalFormat::RGBA8);
+    // glTexImage2D(level 0, data)
+    texture->AllocateStorage(TextureUploadTarget::Texture2D, 0, MipmapInput{IntVec3{64, 64, 1}, 64 * 64 * 4});
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{64, 64, 1});
+    // A verb the texture is not reached by: the drain emits level 0, the applier accepts, the
+    // client clears its flag. Nothing has consumed the entry.
+    Textures().DrainTextureSubData(Ctx());
+    const MGPipeHandle handle = Textures().FindTexture(*texture);
+    const MGPipeResourceRecord* record = AppliedTexture(handle);
+    ASSERT_NE(record, nullptr);
+    ASSERT_EQ(Textures().RefusedSubDataCount(), 0u);
+    ASSERT_EQ(record->PendingUploads.size(), 1u);
+    ASSERT_FALSE(texture->IsStorageDirty(TextureUploadTarget::Texture2D, 0));
+    // glTexImage2D(level 1, data): a DIFFERENT level.
+    texture->AllocateStorage(TextureUploadTarget::Texture2D, 1, MipmapInput{IntVec3{32, 32, 1}, 32 * 32 * 4});
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 1, IntVec3{0, 0, 0}, IntVec3{32, 32, 1});
+    record = AppliedTexture(handle);
+    ASSERT_NE(record, nullptr);
+    Bool levelZeroPending = false;
+    for (const auto& pending : record->PendingUploads) {
+        if (pending.Level == 0) levelZeroPending = true;
+    }
+    EXPECT_TRUE(levelZeroPending)
+        << "defining level 1 dropped level 0's accepted-but-unconsumed pending upload (PendingUploads.size()="
+        << record->PendingUploads.size() << ") while level 0's client dirty flag is "
+        << (texture->IsStorageDirty(TextureUploadTarget::Texture2D, 0) ? "set" : "CLEAR - the texels are owed by nobody");
+    // And after the next drain both levels stand in the set.
+    Textures().DrainTextureSubData(Ctx());
+    record = AppliedTexture(handle);
+    ASSERT_NE(record, nullptr);
+    Bool zeroAfter = false;
+    Bool oneAfter = false;
+    for (const auto& pending : record->PendingUploads) {
+        if (pending.Level == 0) zeroAfter = true;
+        if (pending.Level == 1) oneAfter = true;
+    }
+    EXPECT_TRUE(oneAfter);
+    EXPECT_TRUE(zeroAfter) << "level 0's texels are lost: not pending, flag clear";
+}
+
+// A chain truncation - glGenerateMipmap fitting the chain, a base redefinition discarding its
+// tail - removes the levels at and above the cut and nothing below it. Before the fix it was a
+// whole-resource respecify and took level 0's standing upload with the tail.
+TEST(TextureEmit, AChainTruncationKeepsTheSurvivingLevelsPendingUploads) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(93, 64, /*levels=*/3);
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{64, 64, 1});
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 2, IntVec3{0, 0, 0}, IntVec3{16, 16, 1});
+    Textures().DrainTextureSubData(Ctx());
+    const MGPipeHandle handle = Textures().FindTexture(*texture);
+    const MGPipeResourceRecord* record = AppliedTexture(handle);
+    ASSERT_NE(record, nullptr);
+    ASSERT_EQ(record->PendingUploads.size(), 2u);
+    ASSERT_FALSE(texture->IsStorageDirty(TextureUploadTarget::Texture2D, 0));
+
+    texture->TruncateMipmapLevels(TextureUploadTarget::Texture2D, 1);
+    record = AppliedTexture(handle);
+    ASSERT_NE(record, nullptr);
+    EXPECT_EQ(record->Desc.Levels, 1u);
+    Bool zeroPending = false;
+    Bool twoPending = false;
+    for (const auto& pending : record->PendingUploads) {
+        if (pending.Level == 0) zeroPending = true;
+        if (pending.Level == 2) twoPending = true;
+    }
+    EXPECT_TRUE(zeroPending) << "truncating the chain above level 0 dropped level 0's standing upload";
+    EXPECT_FALSE(twoPending) << "a level the truncation removed kept a pending upload against storage that is gone";
+}
+
+// A non-base level redefined at a new size moves NO descriptor field (the descriptor carries
+// the base extent and the level count), so the emitter's descriptor dedupe used to swallow the
+// respecify and the applier kept a box sized for the OLD level - which Espryt would have
+// uploaded past the end of the new one. A per-level respecify reaches the applier whether or
+// not the descriptor moved, and drops exactly that level.
+TEST(TextureEmit, ARedefinitionOfANonBaseLevelAtANewSizeDropsOnlyThatLevelsPendingUpload) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(96, 16, /*levels=*/2);
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{16, 16, 1});
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 1, IntVec3{0, 0, 0}, IntVec3{8, 8, 1});
+    Textures().DrainTextureSubData(Ctx());
+    const MGPipeHandle handle = Textures().FindTexture(*texture);
+    const MGPipeResourceRecord* record = AppliedTexture(handle);
+    ASSERT_NE(record, nullptr);
+    ASSERT_EQ(record->PendingUploads.size(), 2u);
+    const Uint64 serialBefore = record->Serial;
+
+    // glTexImage2D(level 1) at 4x4: the base is still 16x16 and the chain still two levels.
+    texture->AllocateStorage(TextureUploadTarget::Texture2D, 1, MipmapInput{IntVec3{4, 4, 1}, 4 * 4 * 4});
+    record = AppliedTexture(handle);
+    ASSERT_NE(record, nullptr);
+    EXPECT_GT(record->Serial, serialBefore) << "the per-level respecify never reached the applier";
+    Bool zeroPending = false;
+    Bool onePending = false;
+    for (const auto& pending : record->PendingUploads) {
+        if (pending.Level == 0) zeroPending = true;
+        if (pending.Level == 1) onePending = true;
+    }
+    EXPECT_TRUE(zeroPending) << "redefining level 1 dropped level 0's standing upload";
+    EXPECT_FALSE(onePending) << "level 1's 8x8 box survived its redefinition onto a 4x4 level";
+}
+
 #endif // MOBILEGL_PIPE_PUSH
 
 // =========================================================================================
@@ -1902,7 +2017,7 @@ TEST(TextureEmit, ARespecifyThatRedefinesNoStorageCarriesTheStickyMaskAndKeepsTh
     // glTexStorage2D: an IMMUTABLE store, which is the whole reason this arm exists.
     MGPResourceDesc allocated = TextureDesc(texture, 64, 151);
     allocated.Immutable = 1;
-    allocated.Levels = 1;
+    allocated.Levels = 2; // level 1 exists for the named-level clause below
     allocated.InternalFormat = 0x8058u; // GL_RGBA8
     allocated.BindMask = static_cast<Uint16>(kMGPipeBindSampler);
     ASSERT_TRUE(MGPipeApplyResourceRespecify(allocated, nullptr));
@@ -1931,16 +2046,28 @@ TEST(TextureEmit, ARespecifyThatRedefinesNoStorageCarriesTheStickyMaskAndKeepsTh
         << "the serial is the whole publication of a metadata update - the twin re-derives its "
            "storage flags from the new mask on the strength of it";
 
-    // AND THE LEVEL POINTER DOES NOT CHANGE THE ANSWER. This is where ID-18 M4 refines C1:
-    // C1's rule drops the uploads against the storage a call REPLACES, and a call that replaces
-    // no storage replaces no level's coordinate system either, whatever level it names.
-    const MGPRespecifiedLevel levelZero{kTex2D, 0};
+    // A SECOND MASK MOVE WITH A NULL LEVEL STILL DROPS NOTHING - the client's mask republish
+    // passes null on purpose (wire-v3 §5 item 6) and this is its shape.
     MGPResourceDesc maskedAgain = masked;
     maskedAgain.BindMask = static_cast<Uint16>(masked.BindMask | kMGPipeBindRenderTarget);
-    ASSERT_TRUE(MGPipeApplyResourceRespecify(maskedAgain, nullptr, &levelZero));
+    ASSERT_TRUE(MGPipeApplyResourceRespecify(maskedAgain, nullptr, nullptr));
     ASSERT_EQ(TextureRecordOf(11).PendingUploads.size(), 1u)
-        << "a metadata update dropped the level it named";
+        << "a metadata update with no level dropped a standing upload";
     EXPECT_EQ(TextureRecordOf(11).Desc.BindMask, maskedAgain.BindMask);
+
+    // BUT A NAMED LEVEL IS DROPPED WHETHER OR NOT THE DESCRIPTOR MOVED (P4a final review C-1,
+    // refining the W11 clause that stood here): the pointer is the caller's statement that it
+    // reallocated that level, and the descriptor cannot contradict it - a non-base level
+    // redefined at a new size moves no descriptor field, so "identical storage fields" says
+    // nothing about that level's coordinate system. Level 1's entry goes; level 0's stays.
+    ASSERT_TRUE(MGPipeApplyResourceSubData(TextureUpload(texture, 1, MGPBox{0, 0, 0, 32, 32, 1}, 0), texels));
+    ASSERT_EQ(TextureRecordOf(11).PendingUploads.size(), 2u);
+    const MGPRespecifiedLevel levelOne{kTex2D, 1};
+    ASSERT_TRUE(MGPipeApplyResourceRespecify(maskedAgain, nullptr, &levelOne));
+    ASSERT_EQ(TextureRecordOf(11).PendingUploads.size(), 1u)
+        << "a level-scoped respecify on an unchanged descriptor did not drop the level it named";
+    EXPECT_EQ(TextureRecordOf(11).PendingUploads[0].Level, 0u) << "it dropped the wrong level";
+    const MGPRespecifiedLevel levelZero{kTex2D, 0};
 
     // THE NEGATIVE CONTROL, in the same case: move ONE storage-defining field and the same call
     // is a redefinition again, which takes the level it names with it.
