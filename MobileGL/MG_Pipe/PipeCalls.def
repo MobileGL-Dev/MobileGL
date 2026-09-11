@@ -23,6 +23,14 @@
 //             (MGPipeTypes.h) is what says so, which is why the same call still carries
 //             every glBufferData without acknowledging one.
 //
+//             kHasBlob MEANS "THE PAYLOAD OWNS AN MGPBlobRef MEMBER", nothing weaker (P5
+//             R-13.1). It is not "this call carries bytes": three calls carry bytes with no
+//             MGPBlobRef at all and they are named in CONTRACT-P5.md table 1, not flagged
+//             here, because a decoder that trusts kHasBlob has to find a member to read.
+//             The flags are EXPORTED, once, as kMGPipeCallFlags[] in generated/PipeWire.inc
+//             (P5 R-13.4): before that table existed every consumer hard-coded its own copy,
+//             which is how the two carriers below came to disagree with their payloads.
+//
 // RECORD NUMBERING NEVER CHURNS. Entries that are not implemented yet still occupy their
 // line (plan section 11, P0: "the complete call catalogue, placeholders included"). A new
 // call is APPENDED to its group; a retired call keeps its slot with a comment. The wire
@@ -77,8 +85,20 @@
 // clang-format off
 #define MGP_CALL_LIST(X)                                                                            \
     /* ---- screen: caps, resources, persistent map, fences (plan 4.4.1) ---- */                    \
-    X(GetCaps,                  MGPCaps,                    kScreen,    kReplySlot)                 \
+    /* kHasBlob because MGPCaps owns TWO MGPBlobRef members - FormatCapabilities and      */  \
+    /* RendererInfo (MGPipeTypes.h). It carried none until P5 R-13.1; the flag is a        */  \
+    /* property of the payload, so its absence was simply wrong. Adding a flag does not    */  \
+    /* move an opcode: the opcode is this line's 1-based position.                          */  \
+    X(GetCaps,                  MGPCaps,                    kScreen,    kReplySlot|kHasBlob)     \
     X(ResourceCreate,           MGPResourceDesc,            kScreen,    kNone)                      \
+    /* NO kHasBlob, BY RULING (P5 R-13.3; CONTRACT-P5.md table 1 row 19). MGPResourceDesc   */  \
+    /* owns no MGPBlobRef and gains none: under split `initialBytes` is always nullptr and  */  \
+    /* the initial content of a glBufferData(size, data) / glTexImage*(..., data) arrives   */  \
+    /* as resource_subdata records IMMEDIATELY AFTER this one. Reuses a path that is        */  \
+    /* already chunked (MGPipeForEachSubDataRecordRange) and already acceptance-gated; the  */  \
+    /* cost is one extra record. NOTE the SECOND uncarried companion on this call, the      */  \
+    /* MGPRespecifiedLevel* scope (PipeApply.h:792) - it is NOT bytes and NOT covered by    */  \
+    /* this ruling; table 1 row 19 gives it the two pad fields of MGPResourceDesc.          */  \
     X(ResourceRespecify,        MGPResourceDesc,            kScreen,    kNeedsAck)                  \
     X(ResourceDestroy,          MGPHandleOnly,              kScreen,    kNone)                      \
     X(MapPersistent,            MGPHandleOnly,              kScreen,    kReplySlot|kOptional)       \
@@ -101,7 +121,11 @@
     X(CreateVertexElements,     MGPVertexElements,          kCtxCso,    kHasBlob)                   \
     X(BindVertexElements,       MGPHandleOnly,              kCtxCso,    kNone)                      \
     X(DeleteVertexElements,     MGPHandleOnly,              kCtxCso,    kNone)                      \
-    X(CreateSamplerState,       MGPSamplerDesc,             kCtxCso,    kNone)                      \
+    /* kHasBlob because MGPSamplerDesc owns an MGPBlobRef member, `Parameters` - the        */  \
+    /* SamplerParameters POD byte for byte, borderColorForm included (P5 R-13.1). The       */  \
+    /* companion pointer beside the record today is a TYPED frontend pointer               */  \
+    /* (const SamplerParameters*), which is exactly what split may not carry.              */  \
+    X(CreateSamplerState,       MGPSamplerDesc,             kCtxCso,    kHasBlob)                   \
     X(DeleteSamplerState,       MGPHandleOnly,              kCtxCso,    kNone)                      \
     X(CreateSamplerView,        MGPSamplerView,             kCtxCso,    kNone)                      \
     X(DeleteSamplerView,        MGPHandleOnly,              kCtxCso,    kNone)                      \
@@ -134,6 +158,13 @@
     X(ResourceSubData,          MGPSubData,                 kCtxObject, kHasBlob|kVarTail)          \
     X(BufferSubDataResident,    MGPSubData,                 kCtxObject, kHasBlob|kOptional)         \
     X(ResourceSubDataComplete,  MGPSubDataComplete,         kCtxObject, kNone)                      \
+    /* NO kHasBlob AND NO MGPBlobRef, BY RULING (P5 R-13.2; CONTRACT-P5.md table 1 row 21). */  \
+    /* It takes a content pointer today, but under split it CARRIES NO BYTES AT ALL: it is  */  \
+    /* a {range, AccessFlags} control record, and the bytes of [Offset, Offset+Size) arrive  */  \
+    /* AHEAD of it as resource_subdata records covering exactly that range. The ladder this  */  \
+    /* drives rewrites its range "from the authoritative shadow" (Managers.cpp:1047-1076),   */  \
+    /* and under split the authoritative shadow is server-owned (R-11), so subdata is the    */  \
+    /* only way bytes reach it - a blobref here would be a SECOND way to say the same thing. */  \
     X(ResourceFlushRange,       MGPFlushRange,              kCtxObject, kNone)                      \
     X(ResourceReadback,         MGPReadback,                kCtxObject, kReplySlot)                 \
     X(ResourceCopyRegion,       MGPCopyRegion,              kCtxObject, kNone)                      \

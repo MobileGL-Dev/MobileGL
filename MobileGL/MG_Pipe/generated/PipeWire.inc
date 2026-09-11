@@ -118,6 +118,127 @@ enum class MGPWireOp : Uint16 {
     kOpCount = 72,
 };
 
+// THE FLAGS, EXPORTED ONCE, INDEXED BY OPCODE (P5 R-13.4). MGPWireRecHeader::Flags is
+// documented as "MGPipeCallFlags of the call", and until this table existed nothing
+// generated said what those were: every consumer that needed to know whether a record owns
+// an MGPBlobRef, a variable tail or a reply slot had to hard-code its own copy of
+// PipeCalls.def's fourth column, and six of them were about to. A hard-coded copy is how
+// GetCaps and CreateSamplerState came to carry an MGPBlobRef member with no kHasBlob on
+// their line at all - nothing compared the two, because nothing had both in one place.
+//
+// Index 0 is MGPWireOp::kInvalid and is kNone: the catalogue is 1-based, and an encoder
+// that reads flags for an opcode it never got from the catalogue must see the empty set
+// rather than another call's flags.
+//
+// kHasBlob here means EXACTLY "the payload owns an MGPBlobRef member". Three calls carry
+// bytes without one - resource_respecify, resource_flush_range and map_persistent, whose
+// companion pointers have no carrier - and they are deliberately NOT flagged; MG_Remote's
+// CONTRACT-P5.md table 1 is where those live, because a decoder that trusts kHasBlob has
+// to find a member to read.
+inline constexpr Uint32 kMGPipeCallFlags[static_cast<SizeT>(MGPWireOp::kOpCount)] = {
+    /*  0 kInvalid                */ static_cast<Uint32>(kNone),
+    /*  1 GetCaps                 */ static_cast<Uint32>(kReplySlot | kHasBlob),
+    /*  2 ResourceCreate          */ static_cast<Uint32>(kNone),
+    /*  3 ResourceRespecify       */ static_cast<Uint32>(kNeedsAck),
+    /*  4 ResourceDestroy         */ static_cast<Uint32>(kNone),
+    /*  5 MapPersistent           */ static_cast<Uint32>(kReplySlot | kOptional),
+    /*  6 UnmapPersistent         */ static_cast<Uint32>(kOptional),
+    /*  7 FenceCreate             */ static_cast<Uint32>(kNone),
+    /*  8 FenceStatus             */ static_cast<Uint32>(kReplySlot),
+    /*  9 FenceWait               */ static_cast<Uint32>(kReplySlot),
+    /* 10 FenceDestroy            */ static_cast<Uint32>(kNone),
+    /* 11 QueryCreate             */ static_cast<Uint32>(kNone),
+    /* 12 QueryBegin              */ static_cast<Uint32>(kNone),
+    /* 13 QueryEnd                */ static_cast<Uint32>(kNone),
+    /* 14 QueryAvailable          */ static_cast<Uint32>(kReplySlot),
+    /* 15 QueryResult             */ static_cast<Uint32>(kReplySlot),
+    /* 16 QueryDestroy            */ static_cast<Uint32>(kNone),
+    /* 17 CreateRenderState       */ static_cast<Uint32>(kHasBlob),
+    /* 18 BindRenderState         */ static_cast<Uint32>(kNone),
+    /* 19 DeleteRenderState       */ static_cast<Uint32>(kNone),
+    /* 20 CreateVertexElements    */ static_cast<Uint32>(kHasBlob),
+    /* 21 BindVertexElements      */ static_cast<Uint32>(kNone),
+    /* 22 DeleteVertexElements    */ static_cast<Uint32>(kNone),
+    /* 23 CreateSamplerState      */ static_cast<Uint32>(kHasBlob),
+    /* 24 DeleteSamplerState      */ static_cast<Uint32>(kNone),
+    /* 25 CreateSamplerView       */ static_cast<Uint32>(kNone),
+    /* 26 DeleteSamplerView       */ static_cast<Uint32>(kNone),
+    /* 27 CreateShaderState       */ static_cast<Uint32>(kHasBlob),
+    /* 28 BindShaderState         */ static_cast<Uint32>(kNone),
+    /* 29 DeleteShaderState       */ static_cast<Uint32>(kNone),
+    /* 30 SetDynamicState         */ static_cast<Uint32>(kHasBlob),
+    /* 31 SetFramebufferState     */ static_cast<Uint32>(kNone),
+    /* 32 SetVertexBuffers        */ static_cast<Uint32>(kVarTail),
+    /* 33 SetIndexBuffer          */ static_cast<Uint32>(kNone),
+    /* 34 SetIndirectBuffers      */ static_cast<Uint32>(kNone),
+    /* 35 SetSamplerViews         */ static_cast<Uint32>(kVarTail),
+    /* 36 BindSamplerStates       */ static_cast<Uint32>(kVarTail),
+    /* 37 SetShaderImages         */ static_cast<Uint32>(kVarTail),
+    /* 38 SetShaderBuffers        */ static_cast<Uint32>(kVarTail | kHostSpan),
+    /* 39 SetStreamOutputTargets  */ static_cast<Uint32>(kVarTail),
+    /* 40 SetGlobalConstants      */ static_cast<Uint32>(kHasBlob),
+    /* 41 SetVertexAttribDefaults */ static_cast<Uint32>(kVarTail),
+    /* 42 SetPixelPackState       */ static_cast<Uint32>(kNone),
+    /* 43 SetPatchState           */ static_cast<Uint32>(kNone),
+    /* 44 SetDrawProgram          */ static_cast<Uint32>(kNone),
+    /* 45 SetDispatchProgram      */ static_cast<Uint32>(kNone),
+    /* 46 SetResidualValueState   */ static_cast<Uint32>(kHasBlob),
+    /* 47 SetTextureParams        */ static_cast<Uint32>(kNone),
+    /* 48 ResourceSubData         */ static_cast<Uint32>(kHasBlob | kVarTail),
+    /* 49 BufferSubDataResident   */ static_cast<Uint32>(kHasBlob | kOptional),
+    /* 50 ResourceSubDataComplete */ static_cast<Uint32>(kNone),
+    /* 51 ResourceFlushRange      */ static_cast<Uint32>(kNone),
+    /* 52 ResourceReadback        */ static_cast<Uint32>(kReplySlot),
+    /* 53 ResourceCopyRegion      */ static_cast<Uint32>(kNone),
+    /* 54 GenerateMipmap          */ static_cast<Uint32>(kNone),
+    /* 55 GetTextureImage         */ static_cast<Uint32>(kReplySlot),
+    /* 56 Blit                    */ static_cast<Uint32>(kNone),
+    /* 57 Clear                   */ static_cast<Uint32>(kNone),
+    /* 58 ReadPixels              */ static_cast<Uint32>(kReplySlot),
+    /* 59 DrawVbo                 */ static_cast<Uint32>(kHostSpan | kVarTail),
+    /* 60 LaunchGrid              */ static_cast<Uint32>(kNone),
+    /* 61 MemoryBarrier           */ static_cast<Uint32>(kNone),
+    /* 62 BeginStreamOutput       */ static_cast<Uint32>(kNone),
+    /* 63 EndStreamOutput         */ static_cast<Uint32>(kNone),
+    /* 64 PauseStreamOutput       */ static_cast<Uint32>(kNone),
+    /* 65 ResumeStreamOutput      */ static_cast<Uint32>(kNone),
+    /* 66 Flush                   */ static_cast<Uint32>(kNone),
+    /* 67 Present                 */ static_cast<Uint32>(kNone),
+    /* 68 SetSwapInterval         */ static_cast<Uint32>(kOptional),
+    /* 69 QueryTimestamp          */ static_cast<Uint32>(kReplySlot),
+    /* 70 QueryCounter            */ static_cast<Uint32>(kNone),
+    /* 71 FenceWaitServer         */ static_cast<Uint32>(kNone),
+};
+static_assert(sizeof(kMGPipeCallFlags) / sizeof(kMGPipeCallFlags[0]) ==
+                  static_cast<SizeT>(MGPWireOp::kOpCount),
+              "the flags table and the opcode space disagree");
+
+// The only supported read of the table. Out-of-range is kNone rather than undefined
+// behaviour, because the one caller that can pass a bad opcode is a decoder holding bytes
+// off a stream, and it must reach its own Fatal{ProtocolCorruption} rather than read past
+// the array on the way there.
+inline constexpr Uint32 MGPipeCallFlagsFor(MGPWireOp op) {
+    const SizeT index = static_cast<SizeT>(op);
+    return index < static_cast<SizeT>(MGPWireOp::kOpCount) ? kMGPipeCallFlags[index]
+                                                           : static_cast<Uint32>(kNone);
+}
+
+// Spot checks the generator states about its own output, so that a catalogue edit that
+// silently drops a flag is a build break here and not a wrong decode six packages away.
+static_assert(MGPipeCallFlagsFor(MGPWireOp::kInvalid) == static_cast<Uint32>(kNone),
+              "opcode 0 is not a call and carries no flags");
+static_assert((MGPipeCallFlagsFor(MGPWireOp::GetCaps) & static_cast<Uint32>(kHasBlob)) != 0,
+              "MGPCaps owns two MGPBlobRef members; R-13.1 gave the call its flag");
+static_assert((MGPipeCallFlagsFor(MGPWireOp::CreateSamplerState) & static_cast<Uint32>(kHasBlob)) != 0,
+              "MGPSamplerDesc owns an MGPBlobRef member; R-13.1 gave the call its flag");
+static_assert((MGPipeCallFlagsFor(MGPWireOp::ResourceFlushRange) & static_cast<Uint32>(kHasBlob)) == 0,
+              "R-13.2: resource_flush_range carries no bytes on the wire and owns no blobref");
+static_assert((MGPipeCallFlagsFor(MGPWireOp::ResourceRespecify) & static_cast<Uint32>(kHasBlob)) == 0,
+              "R-13.3: initial bytes follow as resource_subdata; MGPResourceDesc owns no blobref");
+static_assert((MGPipeCallFlagsFor(MGPWireOp::DrawVbo) &
+               static_cast<Uint32>(kHostSpan | kVarTail)) == static_cast<Uint32>(kHostSpan | kVarTail),
+              "draw_vbo is the conditional-tail plus host-span shape the codec is measured on");
+
 struct alignas(8) MGPWireRec_GetCaps {
     MGPWireRecHeader Header;
     MGPCaps Payload;
