@@ -8,6 +8,9 @@
 
 #include "CapsCodec.h"
 
+#include "Transport/SessionRings.h"
+
+#include <MGGitHash.h>
 #include <MG_Util/Debug/Log.h>
 
 #include <cstdlib>
@@ -49,7 +52,35 @@ namespace MobileGL::MG_Remote {
 
     Bool DecodeRendererInfo(const void*, Uint64, RendererInfo&) { MGP5_C0_STUB("DecodeRendererInfo"); }
 
-    Uint64 CapsAbiFingerprint() { MGP5_C0_STUB("CapsAbiFingerprint"); }
+    // s1's half of this file (the two codecs above stay w1's).
+    //
+    // MGPCaps has only a COMPOSITIONAL size assertion (MGPipeTypes.h:145-146),
+    // because DynamicBackendParameters still carries SizeT and GLenum members -
+    // P0.5's fixed-width rewrite never happened and P5 does not do it either
+    // (that is P7's account, CONTRACT-P5 table 0). So the two peers assert they
+    // were built from the SAME struct shapes instead, and a mismatch is
+    // Fatal{AbiMismatch}, NEVER a downgrade: every alternative to aborting reads
+    // one struct as another and produces a plausible picture for the wrong reason.
+    //
+    // GLFunctionsTable is in the mix even though a split client never receives
+    // one, because the SERVER's table shape is what the emit table is derived
+    // from (R-4's 71 slots) and a peer whose table is a different size has a
+    // different slot numbering.
+    //
+    // The git stamp is the weakest of the four inputs and is here for its
+    // diagnostic value rather than its strength: it is captured at CMAKE
+    // CONFIGURE time, so an incremental build after a commit still reports the
+    // configured hash. The three sizeofs are what actually catch a shape change,
+    // and under P6's spawn - same machine, same binary - all four are trivially
+    // equal, which is the case this assertion is cheapest in and least needed.
+    Uint64 CapsAbiFingerprint() {
+        return Transport::MixAbiFingerprint(
+            static_cast<Uint64>(sizeof(MG_Backend::DynamicBackendParameters)),
+            static_cast<Uint64>(sizeof(MG_Pipe::MGPCaps)),
+            static_cast<Uint64>(sizeof(MG_Backend::GLFunctionsTable)),
+            MOBILEGL_ABI_VERSION(MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR),
+            GIT_COMMIT_HASH_SHORT);
+    }
 
 #undef MGP5_C0_STUB
 

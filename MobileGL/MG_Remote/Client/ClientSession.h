@@ -38,8 +38,21 @@
 #include <Config.h>
 #include <MG_Pipe/MGPipe.h>
 
+#include "../Transport/Doorbell.h"
+#include "../Transport/EventRing.h"
+#include "../Transport/ITransport.h"
+#include "../Transport/ReplySlot.h"
+#include "../Transport/Ring.h"
+#include "../Transport/RoleMemory.h"
+#include "../Transport/SessionRings.h"
 #include "../Wire/PipeWireCodec.h"
 #include "CapsMirror.h"
+
+#include <memory>
+
+namespace MobileGL::MG_Remote::Transport {
+    class InProcessTransport;
+}
 
 namespace MobileGL::MG_Remote::Client {
 
@@ -47,6 +60,8 @@ namespace MobileGL::MG_Remote::Client {
     public:
         // Null until Start() succeeds; MG_Backend::Init() is the only caller of Start().
         static ClientSession* Active();
+
+        ~ClientSession();
 
         // Builds the four segments, performs Hello/Welcome, takes the first CapsSnapshot, and
         // - for TransportMode::InProcess - starts the server role's apply thread. Returns a
@@ -85,11 +100,68 @@ namespace MobileGL::MG_Remote::Client {
         static Bool InBarrierWait();
         static Bool ApplyThreadIsInsideApplier();
 
+        // ---- s1's additions: the four primitives c1's EmitAndWait composes ---------------
+        //
+        // s1 owns construction and lifetime; c1 owns the barrier POLICY. So the plumbing is
+        // here and the composition is c1's: encode (w1) -> PublishAndNotify -> WaitForApplied
+        // -> ReadReply. Splitting it the other way round is how a package ends up
+        // re-deriving an acceptance answer locally, which is the c0f/c0g defect P4a paid two
+        // contract corrections for.
+
+        Bool Started() const;
+
+        // Publish the ring head, record submittedSeq, then ring the server IF IT IS PARKED -
+        // in that order. RingTest.cpp:446 pins the order; SessionProducer is where it lives.
+        Transport::SessionProducer& Producer();
+
+        // Wait for RingControl::appliedSeq >= seq. Returns ShutDown when the doorbell died,
+        // which is the only thing that returns from a kWaitForever park and therefore the
+        // only way a client blocked in the barrier survives a server that went away.
+        Transport::SessionWait WaitForApplied(Uint64 seq, Uint32 timeoutMs);
+
+        // The reply slot for `seq`, addressed seq % slots with the seq stamped back into the
+        // header for self-check (R-3). `outStatus` is 0 OK / 1 DECLINED / 2 ERROR, and
+        // DECLINED IS A REAL ANSWER - MapPersistent's nullptr and the four Bool acceptances.
+        Bool ReadReply(Uint64 seq, void* outBytes, Uint64 outCapacity, Int32* outStatus,
+                       Uint64* outSize);
+        // What one answer may carry. A ReadPixels bigger than this is Fatal rather than
+        // chunked, so the client checks BEFORE it emits.
+        Uint32 MaxReplyBytes() const;
+
+        // The reverse channel's reading end: OnBufferWriteback / OnGpuWritten /
+        // OnSurfaceChanged. Drained by the GL thread between verbs.
+        Transport::EventRingConsumer& Events();
+
+        Transport::RingControl* Control();
+        Transport::SessionSegments& Shm();
+        Transport::ITransport* Control_Plane();
+
+        // Peak-RSS accounting for t1 (RoleMemory.h).
+        Transport::RoleMemorySample SampleMemory() const;
+        void LogMemory(const char* phase) const;
+
     private:
         Wire::PipeWireEncoder m_encoder;
         Wire::SegmentTable m_segments;
         CapsMirror* m_caps = nullptr;
         Bool m_barrierArmed = true;
+
+        std::unique_ptr<Transport::InProcessTransport> m_clientTransport;
+        std::unique_ptr<Transport::InProcessTransport> m_serverTransport;
+        Transport::SessionSegments m_shm;
+        Transport::RingProducer m_cmd;
+        Transport::RingProducer m_stage;
+        Transport::SessionProducer m_producer;
+        Transport::EventRingConsumer m_events;
+        Transport::ReplySlotPool m_replies;
+        Transport::ITransport* m_transport = nullptr;
+        Bool m_started = false;
     };
+
+    // One per process in P5, because P5 serves one context, and LEAKED AT EXIT like every other
+    // MG_Remote singleton (ID-8): no frontend destructor may reach pipe or backend state from an
+    // exit handler, and a session destroyed before them would be a use-after-free rather than a
+    // tidy teardown. MG_Backend::Init() calls Start() on this one.
+    ClientSession& ClientSessionInstance();
 
 } // namespace MobileGL::MG_Remote::Client

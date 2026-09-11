@@ -10,6 +10,8 @@
 
 #include "PipeApplier.h"
 
+#include "../Transport/ReplySlot.h"
+
 #include <MG_Util/Debug/Log.h>
 
 #include <cstdlib>
@@ -27,7 +29,21 @@ namespace MobileGL::MG_Remote::Server {
     ReplyPool::ReplyPool(void* base, Uint64 sizeBytes, Uint32 slotCount, Uint32 slotBytes)
         : m_base(static_cast<Uint8*>(base)), m_size(sizeBytes), m_slots(slotCount), m_slotBytes(slotBytes) {}
 
-    void ReplyPool::PostReply(Uint64, Int32, const void*, Uint64) { MGP5_C0_STUB("ReplyPool::PostReply"); }
+    // PACKAGE s1's, not v1's, even though the class is declared in v1's header: the SEG_REPLY
+    // slot pool is s1's deliverable (BRIEF §5) and its addressing lives in one place,
+    // Transport/ReplySlot.h, which the CLIENT reads the same slots back through. Duplicating
+    // `seq % slots` on this side is how the two halves come to disagree about which slot an
+    // answer is in - and because seq IS the reply-slot id (R-3), a disagreement reads another
+    // call's answer instead of failing.
+    //
+    // The view is rebuilt per call rather than stored, so that this body does not change
+    // ReplyPool's four members and therefore does not touch v1's header at all.
+    void ReplyPool::PostReply(Uint64 seq, Int32 status, const void* bytes, Uint64 size) {
+        Transport::ReplySlotPool pool(m_base, m_size, m_slots);
+        // Fatal inside Post when the answer does not fit a slot: P5 does not chunk replies,
+        // and the client knows an answer's size before it emits the record.
+        pool.Post(seq, status, bytes, size);
+    }
 
     Uint32 ReplyPool::SlotBytes() const { return m_slotBytes; }
 
