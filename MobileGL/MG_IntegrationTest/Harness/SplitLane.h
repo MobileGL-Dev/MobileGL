@@ -6,35 +6,20 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 //
-// The four harness markers the `DirectGLES.Split.` ctest entries set, and the one question
-// every Split case has to ask before it asserts anything.
+// The harness markers the `DirectGLES.Split.` ctest entries set.
 //
-// WHY A MARKER AND NOT MOBILEGL_TRANSPORT. The library's own variable says what was ASKED FOR,
-// not what happened. In a build without -DMOBILEGL_BUILD_DISAGGREGATED the whole
-// MOBILEGL_TRANSPORT parser does not exist (CONTRACT-P5.md 5: putting a complaint in the
-// unconditional part of ConfigLoader would move a pull-build symbol and break G1), so
-// MOBILEGL_TRANSPORT=inproc is accepted by the environment and SILENTLY IGNORED. A Split case
-// that keyed off MOBILEGL_TRANSPORT would therefore run monolith and go green - which is
-// precisely the failure the whole lane exists to make impossible. The build-level guard against
-// that is `nm --defined-only libMobileGL.so | grep -i MG_Remote` in build-split, asserted by the
-// gate's part 1 and by the build-linux-split CI job; the markers here are the TEST-level guard
-// for the other half of the same question, "is there a client to assert about yet".
+// WHAT IS AND IS NOT DECIDED HERE. These markers say what the LANE asked for. Whether the lane
+// GOT it is a different question and it is answered by Harness/SplitRuntimePeek.h, out of the
+// running process - see the long argument in that header. The split of responsibility matters:
+// an environment variable is a request, and this package's first version treated a request (plus
+// a grep over source text) as evidence that the request had been honoured. Review finding M-1
+// falsified that by renaming one string in six files, which armed eleven lanes and turned eight
+// of them green against the monolith path.
 //
 // MGITEST_SPLIT_LANE=1
-//     Set by the DirectGLES.Split.* entries and by nothing else. A scenario's split-only
-//     assertions are the ones that are meaningless in the ambient DirectGLES./DirectVulkan.
-//     lanes, and this is how a case tells the two apart in ONE binary that is registered many
-//     times over.
-//
-// MGITEST_REMOTE_CLIENT_PRESENT=1
-//     Set by a CMake content probe over MobileGL/MG_Remote/Client (package c1's directory), for
-//     a SYMBOL and never a filename - the reason is argued at length above
-//     mgl_itest_probe_for_symbol in MG_IntegrationTest/CMakeLists.txt: the owning package picks
-//     its own file layout, and a filename probe answers "no" forever the moment it moves the
-//     code. Until c1 lands there is no emitter, so `MOBILEGL_TRANSPORT=inproc` reaches a library
-//     that parses it, logs it and then runs monolith anyway. A Split entry in that state must
-//     SKIP NAMING THE MISSING THING; it must not be deleted (gate G14 - a ctest name may never
-//     disappear) and it must not go green.
+//     Set by the DirectGLES.Split.* entries and by nothing else. It is how a case in ONE binary,
+//     registered many times over, knows which registration it is running under. It is NOT
+//     evidence of anything about the transport.
 //
 // MGITEST_PERSISTENT_MAP_ARM=adopted|emulated
 //     The arm the LANE declares. AcquireMemoryRange adopts a PERSISTENT|WRITE map that is not
@@ -43,17 +28,26 @@
 //     driver and the build rather than by the test, and MOBILEGL_DISABLE_LARGE_BUFFER_ADOPTION
 //     does NOT separate them (it guards TryAdoptLargeStorage's 16 MiB path, which a
 //     scenario-sized buffer never reaches at all). So the lane states which arm it expects and
-//     the scenario asserts it landed there. R-6 pins the split lane at T2 = emulated.
+//     PersistentCoherentMapScenario asserts it landed there, through
+//     Harness/PersistentMapPeek.h's read of IsBackendPersistentMapped(). R-6 pins the split lane
+//     at T2 = declined = emulated.
 //
-// MGITEST_SPLIT_EXPECT_TRANSPORT=inproc|monolith
-//     What the lane expects MG_Config::Transport to have resolved to, for the case that reads
-//     the library's own log back. Only meaningful in a lane that gave itself a private
-//     MOBILEGL_LOG_FILE_PATH.
+// MGITEST_PMAP_LANE=1
+//     The one counting entry per transport that reads the library's summary line back. It has a
+//     MOBILEGL_LOG_FILE_PATH of its own and a RESOURCE_LOCK on it.
+//
+// MGITEST_SMALL_RING_LANE=1
+//     Exit gate E3(e)'s lane: the same split scenarios with MOBILEGL_IPC_RING_MB and
+//     MOBILEGL_IPC_STAGE_MB at their floor, so that the ring is small enough to make at least one
+//     back-pressure wait happen. A case uses it only to say so in its recorded properties; the
+//     ring sizes themselves reach the library through MOBILEGL_IPC_*.
 
 #pragma once
 
 #include <cstdlib>
 #include <string>
+
+#include "SplitRuntimePeek.h"
 
 namespace MGITest::SplitLane {
 
@@ -67,33 +61,24 @@ namespace MGITest::SplitLane {
     // True in the DirectGLES.Split.* entries only.
     inline bool IsSplitLane() { return MarkerIsOne("MGITEST_SPLIT_LANE"); }
 
-    // True once any source under MG_Remote/Client names one of the symbols CONTRACT-P5 fixes
-    // for it. See the probe in CMakeLists.txt.
-    inline bool RemoteClientPresent() { return MarkerIsOne("MGITEST_REMOTE_CLIENT_PRESENT"); }
+    // True in exit gate E3(e)'s small-ring lane.
+    inline bool IsSmallRingLane() { return MarkerIsOne("MGITEST_SMALL_RING_LANE"); }
 
-    // Empty when this case may assert; otherwise the reason to GTEST_SKIP() with. The reason
-    // is spelled out rather than summarised because a skip line is the only thing anyone reads
-    // when they ask "did the split lane actually run".
+    // Empty when this case may assert; otherwise the reason to GTEST_SKIP() with. The reason is
+    // spelled out rather than summarised because a skip line is the only thing anyone reads when
+    // they ask "did the split lane actually run" - and because the previous version of this
+    // message named the wrong missing thing (review finding N-1): it said MG_Remote/Client did
+    // not exist, on a tree where it existed and compiled and every entry point aborted.
     inline std::string SkipReasonForSplitOnlyAssertions() {
         if (!IsSplitLane()) {
             return "not the split lane (MGITEST_SPLIT_LANE is unset): this case's split-only "
-                   "assertions are about MOBILEGL_TRANSPORT=inproc and say nothing in a monolith "
-                   "process";
+                   "assertions are about a live MG_Remote client session and say nothing in a "
+                   "monolith process";
         }
-        if (!RemoteClientPresent()) {
-            return "MobileGL/MG_Remote/Client does not exist yet - no source there names "
-                   "kRemoteEmitSlotCount / BackendObject_Remote / CapsMirror, so package c1 has "
-                   "not landed and MOBILEGL_TRANSPORT=inproc reaches a library that parses it and "
-                   "then runs monolith. Passing here would be a green that means 'the thing I test "
-                   "does not exist yet'; the entry stays registered (G14) and skips instead";
-        }
-        return {};
+        return SplitRuntimeSkipReason();
     }
 
     // "adopted", "emulated", or empty when the lane declared nothing.
     inline std::string DeclaredPersistentMapArm() { return MarkerValue("MGITEST_PERSISTENT_MAP_ARM"); }
-
-    // "inproc", "monolith", or empty when the lane declared nothing.
-    inline std::string DeclaredTransport() { return MarkerValue("MGITEST_SPLIT_EXPECT_TRANSPORT"); }
 
 } // namespace MGITest::SplitLane

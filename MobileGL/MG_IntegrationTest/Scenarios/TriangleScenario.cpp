@@ -64,8 +64,8 @@ namespace MGITest {
         // MESA_GLSL_VERSION_OVERRIDE pins and what every other scenario in this module that does
         // not need a later feature uses.
         constexpr const char* kVertexSource = R"(#version 330 core
-in vec2 aPos;
-in vec3 aColor;
+layout(location = 0) in vec2 aPos;
+layout(location = 1) in vec3 aColor;
 out vec3 vColor;
 void main() {
     vColor = aColor;
