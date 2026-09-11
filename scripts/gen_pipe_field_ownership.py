@@ -172,6 +172,9 @@ def parse_supplies_whole_field(text=None):
 ROW_RE = re.compile(r"X\(\s*(\w+)\s*,\s*(\w+)\s*,\s*\"([^\"]*)\"\s*,\s*\"([^\"]*)\"\s*\)")
 ARG_ROW_RE = re.compile(r"X\(\s*(\w+)\s*,\s*(\d+)\s*,\s*(\w+)\s*,\s*\"([^\"]*)\"\s*\)")
 PAIR_RE = re.compile(r"X\(\s*(\w+)\s*,\s*(\w+)\s*\)")
+# An exemption's reason may be one string or several adjacent ones, the way a long C literal is
+# written; the row regex takes the first and the check only cares that there is one.
+EXEMPT_RE = re.compile(r"X\(\s*(\w+)\s*,\s*\"([^\"]*)\"")
 
 
 def parse_ownership(text=None):
@@ -180,38 +183,52 @@ def parse_ownership(text=None):
     forwards = ROW_RE.findall(macro_block(text, "MGP_FIELD_OWNERSHIP_FORWARD_LIST"))
     args = ARG_ROW_RE.findall(macro_block(text, "MGP_FIELD_OWNERSHIP_ARG_LIST"))
     verb_ops = PAIR_RE.findall(macro_block(text, "MGP_VERB_OP_LIST"))
+    exempt = EXEMPT_RE.findall(macro_block(text, "MGP_VERB_OP_EXEMPT_LIST"))
     if not fields:
         sys.exit("gen_pipe_field_ownership: FieldOwnership.def's field list did not parse")
-    return fields, forwards, args, verb_ops
+    return fields, forwards, args, verb_ops, exempt
 
 
 def parse_ops_and_verbs(calls_text=None, fill_points_text=None):
     """The two name spaces the stamp map joins, read from the files that define them: the
-    catalogue's calls (PipeCalls.def, which IS the MGPWireOp enum) and the verb set
-    (FillPoints.def, which IS MG_Backend::GLFunctionsTable's member list)."""
+    catalogue's calls (PipeCalls.def, which IS the MGPWireOp enum, with each call's KIND) and
+    the verb set (FillPoints.def, which IS MG_Backend::GLFunctionsTable's member list)."""
     calls_text = read(PIPE_CALLS) if calls_text is None else calls_text
     fill_points_text = read(FILL_POINTS) if fill_points_text is None else fill_points_text
-    ops = re.findall(r"X\(\s*(\w+)\s*,\s*\w+\s*,\s*\w+\s*,",
-                     macro_block(calls_text, "MGP_CALL_LIST"))
+    calls = re.findall(r"X\(\s*(\w+)\s*,\s*\w+\s*,\s*(k\w+)\s*,",
+                       macro_block(calls_text, "MGP_CALL_LIST"))
     verbs = re.findall(r"X\(\s*(\w+)\s*,\s*(k\w+)\s*\)",
                        macro_block(fill_points_text, "MGP_FILL_VERB_LIST"))
-    if not ops:
+    if not calls:
         sys.exit("gen_pipe_field_ownership: PipeCalls.def's call list did not parse")
     if not verbs:
         sys.exit("gen_pipe_field_ownership: FillPoints.def's verb list did not parse")
-    return ops, [v for v, _ in verbs]
+    return calls, [v for v, _ in verbs]
 
 
-def check_verb_ops(verb_ops, ops, verbs):
-    """The stamp map, against both name spaces. A row whose op or verb does not exist would
-    otherwise become a switch arm that fails to compile minutes later - or, worse, a silently
-    absent stamp point."""
+def verb_shaped_calls(calls, verbs):
+    """The calls that MUST have a stamp row or an exemption, by two derived tests: the
+    catalogue's own kind (kCtxVerb) and a name that is also a verb's. Neither can see a call
+    that is a verb boundary, is not kCtxVerb and is renamed - FieldOwnership.def names the one
+    such call in the tree and says the phase that emits it writes its row."""
+    verbSet = set(verbs)
+    return [name for name, kind in calls if kind == "kCtxVerb" or name in verbSet]
+
+
+def check_verb_ops(verb_ops, exempt, calls, verbs):
+    """The stamp map, in BOTH directions.
+
+    A row whose op or verb does not exist would become a switch arm that fails to compile. An
+    OMITTED row is worse and is what this check exists for: the applier would run the record
+    under the PREVIOUS verb's serial, mask and name, so a field inside that mask reads FRESH
+    while holding the previous verb's value - the one failure in this package that is silent."""
+    opNames = [name for name, _ in calls]
     if not verb_ops:
         sys.exit("gen_pipe_field_ownership: MGP_VERB_OP_LIST is empty - the server would have "
                  "no verb boundary to stamp at and every field would read @<none>")
     seen = set()
     for op, verb in verb_ops:
-        if op not in ops:
+        if op not in opNames:
             sys.exit("gen_pipe_field_ownership: the stamp map names op %s, which is not a call "
                      "in PipeCalls.def" % op)
         if verb not in verbs:
@@ -220,7 +237,30 @@ def check_verb_ops(verb_ops, ops, verbs):
         if op in seen:
             sys.exit("gen_pipe_field_ownership: op %s has two stamp rows" % op)
         seen.add(op)
-    return verb_ops
+
+    required = verb_shaped_calls(calls, verbs)
+    exemptMap = {}
+    for op, why in exempt:
+        if op not in opNames:
+            sys.exit("gen_pipe_field_ownership: the stamp map exempts op %s, which is not a call "
+                     "in PipeCalls.def" % op)
+        if op not in required:
+            sys.exit("gen_pipe_field_ownership: op %s is exempted from the stamp map but is not "
+                     "verb-shaped, so it was never required - an exemption that exempts nothing "
+                     "reads as a decision that was made" % op)
+        if op in seen:
+            sys.exit("gen_pipe_field_ownership: op %s has both a stamp row and an exemption" % op)
+        if not why.strip():
+            sys.exit("gen_pipe_field_ownership: op %s is exempted with no reason" % op)
+        exemptMap[op] = why
+
+    missing = [op for op in required if op not in seen and op not in exemptMap]
+    if missing:
+        sys.exit("gen_pipe_field_ownership: %d verb-shaped call(s) have no stamp row and no "
+                 "exemption: %s - an omitted stamp point is SILENT (the record would apply under "
+                 "the previous verb's serial, mask and name), so it is a build failure here"
+                 % (len(missing), ", ".join(missing)))
+    return verb_ops, exemptMap, required
 
 
 def build(accessors, sticky, emitted, refused, rows, forwards, args):
@@ -302,7 +342,8 @@ def build(accessors, sticky, emitted, refused, rows, forwards, args):
     return ownership, phase, why, forward_map, arg_rows, counts
 
 
-def emit(accessors, sticky, ownership, phase, why, forward_map, arg_rows, counts, verb_ops):
+def emit(accessors, sticky, ownership, phase, why, forward_map, arg_rows, counts, verb_ops,
+         exemptMap):
     out = [BANNER.format(name=OUT_NAME)]
     add = out.append
     add("""
@@ -412,9 +453,14 @@ static_assert(MGPipeEveryFieldIsClassified(),
     add("""// WHERE THE SERVER STAMPS. The wire's op and the fill's verb are different name spaces
 // and do not line up by name (draw_vbo is DrawArrays, blit is BlitFramebuffer), so this is the
 // join. An op with no row is NOT a verb boundary and the applier must not stamp on it.
-// Present is deliberately absent: FillPoints.def:21 - "Present and SetSwapInterval go through
-// BackendObject virtuals and read no frontend state, so they are not verbs here".
-constexpr MGPipeVerb MGPipeVerbForWireOp(MGPWireOp op) {
+//
+// EVERY VERB-SHAPED CALL IS ANSWERED HERE OR EXEMPTED BY NAME, and the generator refuses an
+// omission: a verb-shaped record with no row would apply under the PREVIOUS verb's serial,
+// mask and name, so a field inside that mask would read FRESH while holding the previous
+// verb's value - the one silent failure this table has. The exemptions:""")
+    for op in sorted(exemptMap):
+        add("//   %-16s %s" % (op, exemptMap[op]))
+    add("""constexpr MGPipeVerb MGPipeVerbForWireOp(MGPWireOp op) {
     switch (op) {""")
     for op, verb in verb_ops:
         add("    case MGPWireOp::%s: return MGPipeVerb::%s;" % (op, verb))
@@ -424,6 +470,7 @@ constexpr MGPipeVerb MGPipeVerbForWireOp(MGPWireOp op) {
 }
 """)
     add("inline constexpr SizeT kMGPipeVerbBoundaryOpCount = %d;" % len(verb_ops))
+    add("inline constexpr SizeT kMGPipeVerbBoundaryExemptCount = %d;" % len(exemptMap))
     add("")
     add("// The class sizes, as constants a test can pin without recounting the table.")
     for cls in CLASSES:
@@ -445,14 +492,32 @@ def write(path, text, check_only, changed):
             handle.write(text)
 
 
-def expect_trip(name, fn):
-    """A control that must exit. Returns 1 when it did, and says so when it did not - a
-    silent pass here is the gate not checking anything."""
+def expect_trip(name, because, fn, quiet=False):
+    """A control that must exit FOR ITS OWN REASON.
+
+    The first version of this function caught any SystemExit and asked nothing about which one,
+    and that is exactly how control #4 came to be a silent duplicate of control #1: its
+    replacement string was raw, so it mangled the row instead of blanking the phase, the row
+    stopped parsing, and the generator exited with "a field in NO class" while the report
+    counted a trip for "a BARRIER_PULLED row with no retiring phase". The guard that every debt
+    row names its retiring phase therefore had no control at all.
+
+    `because` is a substring the control's own message must contain. This is the discipline
+    gen_pipe_dirty_surface.py's self_test already uses (it asserts each control's problem
+    string) and it is the half that was dropped."""
     try:
         fn()
-    except SystemExit:
-        return 1
-    print("gen_pipe_field_ownership: self-test: control did NOT trip: %s" % name, file=sys.stderr)
+    except SystemExit as exit:
+        message = str(exit.code) if exit.code is not None else ""
+        if because in message:
+            return 1
+        if not quiet:
+            print("gen_pipe_field_ownership: self-test: control %r tripped for SOMEONE ELSE'S "
+                  "reason:\n    expected to contain: %s\n    actually said:       %s"
+                  % (name, because, message), file=sys.stderr)
+        return 0
+    if not quiet:
+        print("gen_pipe_field_ownership: self-test: control did NOT trip: %s" % name, file=sys.stderr)
     return 0
 
 
@@ -465,13 +530,15 @@ def self_test():
     accessors, sticky, emitted = parse_coverage(coverage)
     refused = parse_supplies_whole_field(fill)
 
-    ops, verbs = parse_ops_and_verbs()
+    calls, verbs = parse_ops_and_verbs()
 
-    def run(own_text=None, cov=None, fill_text=None):
+    def run(own_text=None, cov=None, fill_text=None, calls_text=None):
         acc, stk, emt = parse_coverage(cov if cov is not None else coverage)
         ref = parse_supplies_whole_field(fill_text if fill_text is not None else fill)
-        rows, fwd, args, verb_ops = parse_ownership(own_text if own_text is not None else ownership_text)
-        check_verb_ops(verb_ops, ops, verbs)
+        rows, fwd, args, verb_ops, exempt = parse_ownership(
+            own_text if own_text is not None else ownership_text)
+        c, v = parse_ops_and_verbs(calls_text) if calls_text is not None else (calls, verbs)
+        check_verb_ops(verb_ops, exempt, c, v)
         return build(acc, stk, emt, ref, rows, fwd, args)
 
     # The rows wrap over two lines with a trailing backslash, so every control below edits
@@ -487,11 +554,15 @@ def self_test():
                      "edit no longer matches the file it is supposed to break" % what)
         return edited
 
+    # Every control below is (name, the substring its own message must contain, the edit). The
+    # substring is not decoration: see expect_trip.
+
     # 1. THE HEADLINE CONTROL (exit gate E4): take one field out of the table. It is in no
     #    class, and that is a build failure rather than a silent default.
     dropped = edit(r"X\(GetActiveTextureUnit," + GAP + r"BARRIER_PULLED," + GAP + r"\"[^\"]*\","
                    + GAP + r"\"[^\"]*\"\)", "", "remove GetActiveTextureUnit's row")
     controls = [("a field in NO class (GetActiveTextureUnit's row removed)",
+                 "field(s) in NO class",
                  lambda: run(own_text=dropped))]
 
     # 2. The other direction: a field the derivation already placed in RECORD_SUPPLIED, also
@@ -500,41 +571,56 @@ def self_test():
         "#define MGP_FIELD_OWNERSHIP_LIST(X)",
         "#define MGP_FIELD_OWNERSHIP_LIST(X) X(GetClearColor, FATAL, \"-\", \"moved by hand\") \\\n", 1)
     controls.append(("a RECORD_SUPPLIED field claimed by hand (supplied -> FATAL)",
+                     "GetClearColor is in TWO classes",
                      lambda: run(own_text=doubled)))
 
     # 3. A row naming something that is not a field at all.
     typo = edit(r"X\(GetActiveTextureUnit,", "X(GetActiveTextureUnitt,", "misspell a field name")
-    controls.append(("a row naming a non-field", lambda: run(own_text=typo)))
+    controls.append(("a row naming a non-field",
+                     "GetActiveTextureUnitt, which is not a PipeInputs field",
+                     lambda: run(own_text=typo)))
 
     # 4. A BARRIER_PULLED row with no retiring phase: the debt is only sized if every row
     #    says who pays it, which is the whole of R-7.2's "rsp IS the size of the debt".
+    #    THE REPLACEMENT IS NOT A RAW STRING. It was, and the backslashes survived into the
+    #    substitution, mangled the row past ROW_RE's reach and made this control a silent
+    #    duplicate of #1 for a whole round.
     unphased = edit(r"(X\(GetActiveTextureUnit," + GAP + r"BARRIER_PULLED,)" + GAP + r"\"[^\"]*\",",
-                    r"\1 \"-\",", "blank a BARRIER_PULLED row's retiring phase")
-    controls.append(("a BARRIER_PULLED row with no retiring phase", lambda: run(own_text=unphased)))
+                    "\\1 \"-\",", "blank a BARRIER_PULLED row's retiring phase")
+    controls.append(("a BARRIER_PULLED row with no retiring phase",
+                     "GetActiveTextureUnit is BARRIER_PULLED and names no retiring phase",
+                     lambda: run(own_text=unphased)))
 
     # 5. A class that is not one of the four.
     bogus = edit(r"(X\(GetActiveTextureUnit,)" + GAP + r"BARRIER_PULLED,",
-                 r"\1 SOMEHOW_FINE,", "introduce a fifth class")
-    controls.append(("a fifth class", lambda: run(own_text=bogus)))
+                 "\\1 SOMEHOW_FINE,", "introduce a fifth class")
+    controls.append(("a fifth class",
+                     "GetActiveTextureUnit is in class SOMEHOW_FINE",
+                     lambda: run(own_text=bogus)))
 
     # 6. A sticky forward that lost its own row - the seven most dangerous fields are exactly
     #    the ones a table without forward rows is blind to.
     no_forward = edit(r"X\(RecordError," + GAP + r"BARRIER_PULLED," + GAP + r"\"P9\"," + GAP
                       + r"\"OnGlError[^\"]*\"\)", "", "remove RecordError's forward row")
-    controls.append(("a sticky forward with no row", lambda: run(own_text=no_forward)))
+    controls.append(("a sticky forward with no row",
+                     "sticky forward(s) with no row: RecordError",
+                     lambda: run(own_text=no_forward)))
 
     # 7. A forward row that disagrees with its field row.
     disagree = edit(r"X\(GetTextureObject," + GAP + r"BARRIER_PULLED," + GAP + r"\"P7\"," + GAP
                     + r"\"a server-side texture handle table\"\)",
                     "X(GetTextureObject, FATAL, \"-\", \"a server-side texture handle table\")",
                     "contradict GetTextureObject's field row")
-    controls.append(("a forward row that contradicts its field row", lambda: run(own_text=disagree)))
+    controls.append(("a forward row that contradicts its field row",
+                     "field row says BARRIER_PULLED and its forward row says FATAL",
+                     lambda: run(own_text=disagree)))
 
     # 8. An argument exception that narrows nothing.
     same = edit(r"X\(GetPixelStoreParameters, 1, FATAL,",
                 "X(GetPixelStoreParameters, 1, APPLIER_DERIVED,",
                 "make the argument exception repeat the field's class")
     controls.append(("an argument exception that repeats the field's class",
+                     "narrows nothing",
                      lambda: run(own_text=same)))
 
     # 9. THE DERIVATION'S OWN SOURCE. If EmittedCallSuppliesTheWholeField's refusals stop
@@ -544,20 +630,66 @@ def self_test():
     blinded = fill.replace("Bool EmittedCallSuppliesTheWholeField(MGPipeInputField field)",
                            "Bool EmittedCallSuppliesTheWholeFieldXX(MGPipeInputField field)", 1)
     controls.append(("the derivation's source function renamed away",
+                     "EmittedCallSuppliesTheWholeField is not in PipeFill.cpp",
                      lambda: run(fill_text=blinded)))
 
-    # 10. THE STAMP MAP against both name spaces. A row naming an op that is not a call, or a
-    #     verb that is not a verb, would otherwise be an arm that fails to compile - or an
-    #     absent stamp point, which is silent.
+    # 10-11. THE STAMP MAP against both name spaces.
     bad_op = edit(r"X\(Clear,\s*Clear\)", "X(Klear, Clear)", "misspell a stamp map op")
-    controls.append(("a stamp row naming an op that does not exist", lambda: run(own_text=bad_op)))
+    controls.append(("a stamp row naming an op that does not exist",
+                     "names op Klear, which is not a call in PipeCalls.def",
+                     lambda: run(own_text=bad_op)))
     bad_verb = edit(r"X\(DrawVbo,\s*DrawArrays\)", "X(DrawVbo, DrawArrayz)",
                     "misspell a stamp map verb")
-    controls.append(("a stamp row naming a verb that does not exist", lambda: run(own_text=bad_verb)))
+    controls.append(("a stamp row naming a verb that does not exist",
+                     "names verb DrawArrayz, which is not a verb in FillPoints.def",
+                     lambda: run(own_text=bad_verb)))
+
+    # 12. THE OMISSION, which the first version of this gate could not see at all. A
+    #     verb-shaped call with neither a row nor an exemption is the one silent failure in
+    #     this package: the record applies under the PREVIOUS verb's serial, mask and name.
+    no_row = edit(r"X\(GenerateMipmap,\s*GenerateMipmap\)", "", "remove GenerateMipmap's stamp row")
+    controls.append(("a verb-shaped call with no stamp row and no exemption",
+                     "have no stamp row and no exemption: GenerateMipmap",
+                     lambda: run(own_text=no_row)))
+
+    # 13. An exemption is a decision, so it may not be written for a call that was never
+    #     required - that would read as a ruling where there was none.
+    idle = edit(r"#define MGP_VERB_OP_EXEMPT_LIST\(X\)",
+                "#define MGP_VERB_OP_EXEMPT_LIST(X) X(SetDynamicState, \"not verb-shaped\") \\\n",
+                "exempt a call that was never required")
+    controls.append(("an exemption for a call that is not verb-shaped",
+                     "SetDynamicState is exempted from the stamp map but is not verb-shaped",
+                     lambda: run(own_text=idle)))
+
+    # 14. An exemption with no reason is an absence with extra steps.
+    mute = edit(r"X\(Flush," + GAP + r"\"", "X(Flush, \"\" \"", "blank an exemption's reason")
+    controls.append(("an exemption with no reason",
+                     "Flush is exempted with no reason",
+                     lambda: run(own_text=mute)))
+
+    # 15. THE REQUIRED SET'S OWN SOURCE. verb_shaped_calls reads PipeCalls.def's KIND column; if
+    #     that column stops parsing as kCtxVerb the required set collapses to the name matches
+    #     alone and control 12 would pass for the wrong reason. Renaming the kind is the cheapest
+    #     way to prove the kind is actually being read.
+    kindless = read(PIPE_CALLS).replace("kCtxVerb", "kCtxVerbb")
+    controls.append(("the catalogue's kCtxVerb kind renamed away",
+                     "is exempted from the stamp map but is not verb-shaped",
+                     lambda: run(calls_text=kindless)))
+
+    # THE HARNESS'S OWN CONTROL, and it is the durable form of how M-1 was found. The defect was
+    # not the escaping in control #4; it was that expect_trip asked "did something exit" rather
+    # than "did THIS exit", so a control could silently become a duplicate of another. Prove the
+    # harness can tell them apart: control #1's edit, asserted against control #4's reason, must
+    # be REJECTED. Without this line the stricter harness could itself rot back.
+    if expect_trip("(harness control) control #1's edit under control #4's reason",
+                   "names no retiring phase", lambda: run(own_text=dropped), quiet=True) != 0:
+        sys.exit("gen_pipe_field_ownership: self-test: expect_trip accepted an exit that belongs "
+                 "to another control - the harness cannot tell one control from another, which is "
+                 "exactly the defect that let control #4 be a silent duplicate of control #1")
 
     trips = 0
-    for name, fn in controls:
-        trips += expect_trip(name, fn)
+    for name, because, fn in controls:
+        trips += expect_trip(name, because, fn)
 
     # The positive control: the real tables pass, and they partition the real field set.
     _, _, _, _, _, counts = run()
@@ -576,7 +708,8 @@ def self_test():
     if trips != len(controls):
         sys.exit("gen_pipe_field_ownership: self-test: %d of %d negative controls did not trip"
                  % (len(controls) - trips, len(controls)))
-    print("gen_pipe_field_ownership: self-test: %d negative-control trip(s), positive control OK "
+    print("gen_pipe_field_ownership: self-test: %d negative-control trip(s), each asserted against "
+          "its OWN message; harness control OK; positive control OK "
           "(%d fields partitioned, 7 sticky forwards, 9 refusals)" % (trips, total))
     return 0
 
@@ -594,9 +727,9 @@ def main():
 
     accessors, sticky, emitted = parse_coverage()
     refused = parse_supplies_whole_field()
-    rows, forwards, arg_rows, verb_ops = parse_ownership()
-    ops, verbs = parse_ops_and_verbs()
-    check_verb_ops(verb_ops, ops, verbs)
+    rows, forwards, arg_rows, verb_ops, exempt = parse_ownership()
+    calls, verbs = parse_ops_and_verbs()
+    _, exemptMap, required = check_verb_ops(verb_ops, exempt, calls, verbs)
     ownership, phase, why, forward_map, arg_list, counts = build(
         accessors, sticky, emitted, refused, rows, forwards, arg_rows)
 
@@ -604,15 +737,19 @@ def main():
         os.makedirs(GENERATED_DIR)
     changed = []
     write(os.path.join(GENERATED_DIR, OUT_NAME),
-          emit(accessors, sticky, ownership, phase, why, forward_map, arg_list, counts, verb_ops),
+          emit(accessors, sticky, ownership, phase, why, forward_map, arg_list, counts, verb_ops,
+               exemptMap),
           args.check, changed)
 
     print("gen_pipe_field_ownership: %d fields + %d sticky forwards = %d rows; "
           "%d record-supplied (derived), %d applier-derived, %d barrier-pulled, %d fatal, "
-          "%d argument exception(s), %d verb-boundary op(s)"
+          "%d argument exception(s)"
           % (len(accessors), len(sticky), len(accessors) + len(sticky),
              counts["RECORD_SUPPLIED"], counts["APPLIER_DERIVED"], counts["BARRIER_PULLED"],
-             counts["FATAL"], len(arg_list), len(verb_ops)))
+             counts["FATAL"], len(arg_list)))
+    print("gen_pipe_field_ownership: stamp map: %d verb-shaped call(s) = %d row(s) + %d "
+          "exemption(s), 0 unanswered"
+          % (len(required), len(verb_ops), len(exemptMap)))
     pulled = [(f, phase[f]) for f in accessors if ownership[f] == "BARRIER_PULLED"]
     print("gen_pipe_field_ownership: the debt, by retiring phase:")
     by_phase = {}
