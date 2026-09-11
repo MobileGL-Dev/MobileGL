@@ -133,7 +133,7 @@ These three are the reason `kHasBlob` had to be given an exact meaning (table 0)
 | 17 | `CreateSamplerState` (23) | **now `kHasBlob`** (R-13.1) | `MGPSamplerDesc` **does** own an `MGPBlobRef Parameters` (`:429`) and the flag was simply missing. The blob is `memcpy(sizeof(SamplerParameters))` — a POD, and **`borderColorForm` must survive byte for byte** (`MGPipeTypes.h:425-428`), because all three colour representations are always numerically populated and it is the only thing that says which one the backend must use. | companion today is a **typed frontend pointer**, `const SamplerParameters*` (`PipeApply.h:1000`), passed `SamplerEmit.h:458`. Declares `Size = 0` (`SamplerEmit.h:433-435`); cross-check at `PipeApply.cpp:2353` is inert until rule A arms it. **Padding trap:** `SamplerEmit.h:437-445` — assignment leaves three trailing padding bytes stale, and the bytes staged must be the bytes a later `memcmp` compares. |
 | 18 | `GetCaps` (1) | **now `kReplySlot\|kHasBlob`** (R-13.1) | `MGPCaps` owns **two** `MGPBlobRef`s, `FormatCapabilities` and `RendererInfo` (`:137-138`), and carried no `kHasBlob` at all. | `PipeCalls.def:80` before the fix. Serializers are P5's new work (`MG_Remote/CapsCodec.h`); the header itself defers them to this phase (`MGPipeTypes.h:134-136`). |
 | 19 | `ResourceRespecify` (3) | stays `kNeedsAck`, **no `kHasBlob`** (R-13.3) | **`initialBytes` is always `nullptr` under split. Initial content arrives as `ResourceSubData` records immediately after this one.** `MGPResourceDesc` owns no `MGPBlobRef` and gains none. | The alternative was costed and rejected: `MGPBlobRef` is 24 bytes, `MGPResourceDesc`'s two pads are `Uint16 Pad0` (`:303`) + `Uint32 Pad1` (`:315`) = **6 bytes**, so a blob member takes the struct 88 → 112 and moves `MGP_ASSERT_POD(MGPResourceDesc, 88)` (`:320`). The chosen route reuses a path that is already chunked (`MGPipeForEachSubDataRecordRange`, `PipeFill.cpp:694-713`) and already acceptance-gated; it costs one extra record. `HasDefinedContent` (`:301`) is the field the encoder branches on, and it already exists. **The texture path already does exactly this** — `TextureEmit.h:1137` passes `nullptr` and relies on a following upload — so this generalises today's texture behaviour to buffers rather than inventing anything. |
-| 19b | `ResourceRespecify`'s **second** uncarried companion | — | **`const MGPRespecifiedLevel* level` (`PipeApply.h:792-795`, 4 bytes: `Uint16 UploadTarget; Uint16 Level;`) has no wire carrier either, and it is not bytes — R-13.3 does not cover it.** Ruling: it rides in `MGPResourceDesc`'s existing pads — `Pad1` (4 B, `:315`) becomes `{Uint16 RespecifiedUploadTarget; Uint16 RespecifiedLevel;}` and one byte of `Pad0` (`:303`) becomes `Uint8 HasRespecifiedLevel`. **Zero size change, `MGP_ASSERT_POD(..., 88)` does not move**, and `PipeFields.def`'s `MGP_FIELDS_MGPResourceDesc` gains the two named members (pads are excluded from field lists, so this is required, not optional). | Null means "this respecify redefines the **whole** resource" and drops every pending upload; non-null names the single `(uploadTarget, level)` and drops **only** that key. Clearing the whole set for a per-level `glTexImage2D` loses exactly the texels the server-side set exists to protect (`PipeApply.h:805-820`). Without a carrier, every OpenRA per-level respecify would silently take the whole-resource arm. **c0 rules it and specifies it; c0 does NOT implement it** — `MGPipeTypes.h` is unowned and the edit goes through the integrator, who must land it before w1 encodes this record. |
+| 19b | `ResourceRespecify`'s **second** uncarried companion | — | **`const MGPRespecifiedLevel* level` (`PipeApply.h:792-795`, 4 bytes: `Uint16 UploadTarget; Uint16 Level;`) has no wire carrier either, and it is not bytes — R-13.3 does not cover it.** Ruling: it rides in `MGPResourceDesc`'s existing pads — `Pad1` (4 B, `:315`) becomes `{Uint16 RespecifiedUploadTarget; Uint16 RespecifiedLevel;}` and one byte of `Pad0` (`:303`) becomes `Uint8 HasRespecifiedLevel`. **Zero size change, `MGP_ASSERT_POD(..., 88)` does not move**, and `PipeFields.def`'s `MGP_FIELDS_MGPResourceDesc` gains the two named members (pads are excluded from field lists, so this is required, not optional). | Null means "this respecify redefines the **whole** resource" and drops every pending upload; non-null names the single `(uploadTarget, level)` and drops **only** that key. Clearing the whole set for a per-level `glTexImage2D` loses exactly the texels the server-side set exists to protect (`PipeApply.h:805-820`). Without a carrier, every OpenRA per-level respecify would silently take the whole-resource arm. **LANDED** (integrator ruling A made `MGPipeTypes.h` c0's file): `Uint8 HasRespecifiedLevel` in Pad0's high byte, `Uint16 RespecifiedUploadTarget; Uint16 RespecifiedLevel;` in Pad1, `MGP_ASSERT_POD(MGPResourceDesc, 88)` unmoved, plus an `offsetof` assertion that the pair stays adjacent and in `MGPRespecifiedLevel`'s order. **Read it only through `MGPipeRespecifyIsWholeResource` / `MGPipeRespecifiedUploadTargetOf` / `MGPipeRespecifiedLevelOf`, and write it only through `MGPipeSetRespecifiedLevel` / `MGPipeClearRespecifiedLevel`**: three fields are one value, and an open-coded reader that forgets the presence byte reads level 0 of upload target 0 as a real scope. **The carrier has no producer** — P5 builds only whole-resource descriptors, and a verify build pins that (`PinWholeResourceRespecifyScope`, `PipeApply.cpp`, the `PinNoLiveHostWrites` shape) so the phase that wires it cannot arrive unannounced. |
 | 20 | `ResourceFlushRange` (51) | stays `kNone` (R-13.2) | **It carries no bytes at all under split.** It is a `{range, AccessFlags}` control record; the bytes of `[Offset, Offset+Size)` arrive **ahead of it** as `ResourceSubData` records covering exactly that range. | R-13.2 offered "add a blobref" or "write the convention down". Neither, and for a reason: the ladder this record drives rewrites its range *"from the authoritative shadow"* (`Managers.cpp:1047-1076`), and under split the authoritative shadow is **server-owned** by rule C — so `resource_subdata` is already the only way bytes reach it, and a blobref here would be a second, forgeable way to say the same thing. `AccessFlags` must still cross **verbatim**, not normalised (`PipeApply.h:902-903`). **Overturn condition:** if the tier-1 `INVALIDATE_RANGE` arm turns out to need the bytes and the range in the *same* record — i.e. an intervening record could stale the subdata — this needs its own blobref. It cannot happen while the verb barrier holds, because nothing interleaves; **revisit when the barrier retires for the buffer family.** |
 
 ### Group D — the four server → client rows the brief's list omitted
@@ -504,4 +504,72 @@ Each entry says what would overturn it.
     `MGPipeUnmigratedEmulation` sites, it is five calls plus one comment; `ARCHITECTURE.md:19`
     says eight EGL lifecycle virtuals, there are nine (`ResizeEGLWindowSurface` is the
     uncounted one).
+
+---
+
+## §7 R-15 — getter-shaped slots are answered locally, and the emit table's three classes
+
+**R-15 (integrator ruling, made after the verb census).** A `GLFunctionsTable` slot whose answer
+is a **static property of the server's device** is answered on the client **from the caps
+mirror**. It is never emitted and never `Fatal`. The gate already exists and already runs on
+every lane: `AdvertisedLimitsScenario.ComputeWorkGroupLimitsAreTheCapsBlocksAnswer`
+(`MG_IntegrationTest/Scenarios/AdvertisedLimitsScenario.cpp:580-623`) pins that the caps copy and
+`glGetIntegeri_v` give one number.
+
+This settles the census's sharpest finding: `GetIntegeri_v` is reached by the **first
+`glCompileShader` of every context** (`CompileEnv.cpp:134-138` ← `Core.cpp:39`), not by any verb,
+so an all-`Fatal` table would abort every scenario before it drew anything — and an emitter for
+it would be a round trip for six constants the snapshot already carries.
+
+### The three classes of the 71 slots. c1 does not re-derive this.
+
+**Class A — answered locally from the caps mirror (2 slots). No record, ever.**
+
+| slot | answered from |
+|---|---|
+| `GetIntegeri_v` (`BackendObject.h:205`) | `MGPCaps::Dynamic.MaxComputeWorkGroupCount` / `MaxComputeWorkGroupSize` (`BackendObject.h:392-393`) — the only indexed pnames the device owns. Every other indexed pname is frontend state and is answered before any table is consulted. |
+| `IsTimerQuerySupported` (`:245`) | `kCapTimerQuery` (`MGPipeTypes.h:114`). A capability predicate, not a call: today a null slot means `COUNTER_BITS = 0` (`GL_Query.cpp:792`). |
+
+`GLFunctionsTable::PrefersCpuXfbPrimitiveAccounting` (`:274`) is in the same class by the same
+argument — `kCapCpuXfbPrimitiveAccounting` — and is not a slot.
+
+**Class B — emitted in P5 (5 slots).** The verb census's answer, and nothing else:
+`Clear`, `DrawArrays`, `ReadPixels`, `BlitFramebuffer`, `Present`.
+`Present` is in this class despite having **zero `MG_Impl` call sites** — it is reached through
+`EGLImpl.cpp:178` → `BackendObject.cpp:396`, so c1 cannot find it by mirroring GLImpl.
+
+**Class C — `Fatal{UnmigratedVerb, "<slot>"}` (64 slots).** Everything else, including
+`SetSwapInterval`, `GetGpuTimestampNs` (a live GPU timestamp, not a static property, so **not**
+class A), and the whole sync / query / transform-feedback / compute / copy / mipmap surface.
+
+### The cross-cutting rule R-4 would otherwise break
+
+**Forty-one of the 69 slots are null-checked at their call site, and several of those null checks
+are CAPABILITY PROBES rather than safety checks.** R-4 forbids a null slot — so in the emit table
+every one of those probes answers "supported" and the fallback behind it silently disappears.
+That is not a theoretical risk: it is how a split lane produces a plausible picture for the wrong
+reason. Three named cases; the rule generalises to all 41.
+
+| probe site | what it decides today | reads instead |
+|---|---|---|
+| `GL_Query.cpp:481`, `:785` — `BeginOcclusionQuery != nullptr` | whether the target is rejected outright | `kCapOcclusionQuery` |
+| `GL_Query.cpp:534` — the `BeginXfbPrimitivesQuery` ternary | GPU query vs CPU primitive accounting | `kCapXfbPrimitivesQuery` |
+| the `SubDataResident` op-table slot | whether the resident-upload path exists at all | `kCapResidentSubData` |
+
+**A null check on a slot may never survive into the client under split.** It becomes a caps-mirror
+read — class A's mechanism — whatever class the slot itself is in. That is exactly
+`ARCHITECTURE.md:114`'s "`CallMask` replaces 'is this table slot null' as the implicit capability
+probe", now with a concrete list of what has to move.
+
+---
+
+## §8 Ownership amendments
+
+- **`MobileGL/MG_Pipe/MGPipeTypes.h` is c0's file** (integrator ruling A; the BRIEF §5 ownership
+  table is amended). It was unowned, which is how the respecify-scope gap in table 1 row 19b had
+  no one to close it. A package that needs a payload struct shape changed goes through the
+  integrator, as with the three `.def` files.
+- Consequently the row-19b carrier is **landed, not merely specified** — see §2 table 1 row 19b
+  and `MGPipeTypes.h`'s `HasRespecifiedLevel` / `RespecifiedUploadTarget` / `RespecifiedLevel`
+  and the five `MGPipeRespecify*` helpers beside them.
 
