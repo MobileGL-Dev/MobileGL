@@ -25,6 +25,10 @@
 #include <cstring>
 #include <utility>
 
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
+
 namespace MobileGL::MG_Remote::Transport {
 
     ShmSegment::~ShmSegment() { Close(); }
@@ -180,17 +184,37 @@ namespace MobileGL::MG_Remote::Transport {
 
     MobileGLResult SessionSegments::Create(const SessionSegmentSizes& sizes, MemoryRole role) {
         Close();
+        // Set BEFORE the loop, so that Close() on a failure INSIDE it really
+        // closes what has already been created: Close only walks m_owned when
+        // m_owns is true, and setting it afterwards left a failure at segment 3
+        // holding segments 0-2's descriptors and mappings open with Valid()
+        // false, against ShmSegment.h:66's "unmaps and releases the descriptor".
+        m_owns = true;
 
         struct Spec {
             const char* name;
             std::uint64_t bytes;
         };
+        // The sizes are RING sizes; a segment that carries a control page at its
+        // head is that much bigger. SEG_STAGE drives the SECOND cursor triple of
+        // SEG_CMD's page and SEG_REPLY is not a ring at all, so neither of those
+        // two grows.
         const Spec specs[kSlotCount] = {
-            {"mgl-cmd", sizes.CmdBytes},
-            {"mgl-stage", sizes.StageBytes},
+            {"mgl-cmd", SegmentBytesForRing(sizes.CmdRingBytes)},
+            {"mgl-stage", LargestPowerOfTwoAtMost(sizes.StageRingBytes)},
             {"mgl-reply", sizes.ReplyBytes},
-            {"mgl-event", sizes.EventBytes},
+            {"mgl-event", SegmentBytesForRing(sizes.EventRingBytes)},
         };
+        for (std::size_t index = 0; index < kSlotCount; ++index) {
+            if (specs[index].bytes == 0) {
+                MGLOG_E("MG_Remote session: segment %s was asked for a ring size that cannot be "
+                        "made into one (a ring is a power of two between %llu and %llu bytes)",
+                        specs[index].name, static_cast<unsigned long long>(kMinRingCapacity),
+                        static_cast<unsigned long long>(kMaxRingCapacity));
+                Close();
+                return MOBILEGL_ERR_INVALID_ARGUMENT;
+            }
+        }
 
         for (std::size_t index = 0; index < kSlotCount; ++index) {
             const MobileGLResult created =
@@ -215,7 +239,6 @@ namespace MobileGL::MG_Remote::Transport {
             }
         }
 
-        m_owns = true;
         m_replySlotCount = sizes.ReplySlotCount;
         DeriveViews();
         if (!m_valid) {
@@ -240,10 +263,51 @@ namespace MobileGL::MG_Remote::Transport {
         if (!owner.Valid()) {
             return MOBILEGL_ERR_NOT_INITIALIZED;
         }
+#if !defined(_WIN32)
+        // A REAL SECOND MAPPING, not an alias. dup + Adopt + Map is byte for byte
+        // the call sequence P6's SCM_RIGHTS client runs, so mapping, the fstat
+        // size check inside Adopt (ShmSegmentPosix.cpp:119-141), alignment and the
+        // peer's own lifetime are all exercised now rather than on the day the
+        // second process appears. Aliasing the owner's ShmSegment objects would
+        // leave the attach half untested for exactly the reason this file refuses
+        // to allocate the rings with new[].
+        m_owns = true;
+        for (std::size_t index = 0; index < kSlotCount; ++index) {
+            const ShmSegment* theirs = owner.m_segments[index];
+            const int duplicate = theirs == nullptr ? -1 : ::dup(theirs->Fd());
+            if (duplicate < 0) {
+                MGLOG_E("MG_Remote session: could not dup the owner's descriptor for segment %zu",
+                        index);
+                Close();
+                return MOBILEGL_ERR_INVALID_ARGUMENT;
+            }
+            // Adopt takes ownership of `duplicate` on success only.
+            const MobileGLResult adopted =
+                ShmSegment::Adopt(duplicate, theirs->Size(), m_owned[index]);
+            if (adopted != MOBILEGL_OK) {
+                ::close(duplicate);
+                Close();
+                return adopted;
+            }
+            // Read/write: under inproc the client writes SEG_CMD and SEG_STAGE and
+            // reads SEG_REPLY and SEG_EVENT, and one ShmSegment maps the whole
+            // thing one way. The per-segment read-only peer view is P6's, where
+            // the roles are separable.
+            const MobileGLResult mapped = m_owned[index].Map(false);
+            if (mapped != MOBILEGL_OK) {
+                Close();
+                return mapped;
+            }
+        }
+#else
+        // Windows has no Adopt (ShmSegment::Adopt is POSIX-only; a Windows peer
+        // resolves the section by the name carried in SegmentRef). Alias, and say
+        // so: this arm does not exercise the attach path P6 replaces.
         for (std::size_t index = 0; index < kSlotCount; ++index) {
             m_segments[index] = owner.m_segments[index];
         }
         m_owns = false;
+#endif
         m_replySlotCount = owner.m_replySlotCount;
         DeriveViews();
         if (!m_valid) {

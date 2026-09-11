@@ -77,8 +77,10 @@ namespace MobileGL::MG_Remote::Transport {
 
     RoleMemorySample SampleRoleMemory(MemoryRole role);
 
-    // Emits one line at ERROR level (the wire layer's only level - WireLog.h) so
-    // t1's harness can grep it out of a lane log without a new log sink.
+    // Emits one line at INFO level, which is what every P5 lane builds at, so
+    // t1's harness can grep it out of a lane log without a new log sink. Not
+    // DEBUG, which the INFO build compiles out; not ERROR, which this is not.
+    // The grep tag is `MG_Remote memory[`.
     // `phase` is a short tag: "handshake", "first-frame", "teardown".
     void LogRoleMemory(const char* phase, const RoleMemorySample& sample);
 

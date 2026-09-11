@@ -12,6 +12,7 @@
 
 #include <MG_Util/Debug/Log.h>
 
+#include <cstdlib>
 #include <cstring>
 
 namespace MobileGL::MG_Remote::Transport {
@@ -320,6 +321,14 @@ namespace MobileGL::MG_Remote::Transport {
         return value;
     }
 
+    std::uint64_t SegmentBytesForRing(std::uint64_t ringBytes) {
+        const std::uint64_t ring = LargestPowerOfTwoAtMost(ringBytes);
+        if (ring < kMinRingCapacity || ring > kMaxRingCapacity) {
+            return 0;
+        }
+        return ring + sizeof(RingControl);
+    }
+
     std::uint64_t RingCapacityForSegment(std::uint64_t segmentBytes) {
         if (segmentBytes <= sizeof(RingControl)) {
             return 0;
@@ -333,18 +342,26 @@ namespace MobileGL::MG_Remote::Transport {
         namespace {
             // A watermark may be published LATE but never EARLY, and it may never
             // move BACKWARDS. Backwards is the half that is mechanically
-            // detectable from inside, so it is refused loudly here; "early" can
-            // only be caught at the call site, which is why every advance below
-            // has exactly one caller and a named unit case.
+            // detectable from inside, and it is FATAL rather than logged: the
+            // consumer keeps its own counter, so a shared watermark left behind
+            // makes every later advance a no-op and every WaitForApplied on
+            // kWaitForever - the verb barrier and every reply wait - block for
+            // ever. A hang with one ERROR line in the log is strictly worse than
+            // an abort at the instruction that caused it, and Ring.h:181-185
+            // already rules the same way for the cursor invariants on this page.
+            // "Early" can only be caught at the call site, which is why every
+            // advance below has exactly one caller and a named unit case.
             void AdvanceMonotonic(std::atomic<std::uint64_t>& watermark, std::uint64_t to,
                                   const char* name) {
                 const std::uint64_t current = watermark.load(std::memory_order_relaxed);
                 if (to < current) {
-                    MGLOG_E("MG_Remote watermark: refusing to move %s backwards, %llu -> %llu; a "
-                            "waiter that already resumed on the higher value cannot be un-resumed",
+                    MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"watermark\"} %s moved backwards, "
+                            "%llu -> %llu. A waiter that already resumed on the higher value cannot "
+                            "be un-resumed, and every later advance of this watermark would be a "
+                            "no-op, so the verb barrier and every reply wait would block for ever",
                             name, static_cast<unsigned long long>(current),
                             static_cast<unsigned long long>(to));
-                    return;
+                    std::abort();
                 }
                 if (to == current) {
                     return;
@@ -404,6 +421,7 @@ namespace MobileGL::MG_Remote::Transport {
         m_stage = nullptr;
         m_peerBell = nullptr;
         m_selfBell = nullptr;
+        m_lastPublishedSeq = 0;
     }
 
     void SessionProducer::PublishAndNotify(std::uint64_t submittedSeq) {
@@ -415,8 +433,20 @@ namespace MobileGL::MG_Remote::Transport {
         if (m_stage != nullptr) {
             m_stage->Publish();
         }
+        // Kept locally as well as on the shared page: the shared watermark is
+        // allowed to lag (Ring.h:72-77), and teardown's drain must not.
+        //
+        // Clamped UP, not passed through. A caller that republishes an older
+        // bound - teardown does exactly that, and so does any batched publisher
+        // that lost track - is publishing LATE, which R-9 permits; it is not the
+        // same thing as a watermark moving backwards, which is Fatal. Doing the
+        // clamp here keeps that distinction at the one boundary where a stale
+        // argument is legitimate.
+        if (submittedSeq > m_lastPublishedSeq) {
+            m_lastPublishedSeq = submittedSeq;
+        }
         // 2. the diagnostic watermark, after the bytes it describes.
-        Watermark::AdvanceSubmitted(*m_control, submittedSeq);
+        Watermark::AdvanceSubmitted(*m_control, m_lastPublishedSeq);
         // 3. and only now the bell. Publish-then-ring, never ring-then-publish.
         if (m_peerBell != nullptr) {
             NotifyIfParked(*m_peerBell, m_control->consumerParked);
@@ -483,6 +513,8 @@ namespace MobileGL::MG_Remote::Transport {
         m_selfBell = selfBell;
         m_spinUs = spinUs;
         m_appliedSeq = control == nullptr ? 0 : control->appliedSeq.load(std::memory_order_acquire);
+        m_retirableCursor = cmd == nullptr ? 0 : cmd->LocalTail();
+        m_borrowHeld = false;
     }
 
     void SessionConsumer::Detach() {
@@ -490,6 +522,8 @@ namespace MobileGL::MG_Remote::Transport {
         m_cmd = nullptr;
         m_peerBell = nullptr;
         m_selfBell = nullptr;
+        m_retirableCursor = 0;
+        m_borrowHeld = false;
     }
 
     SessionWait SessionConsumer::WaitForWork(std::uint32_t timeoutMs) {
@@ -515,7 +549,45 @@ namespace MobileGL::MG_Remote::Transport {
             return;
         }
         Watermark::AdvanceRetired(*m_control, seq);
-        m_cmd->PublishRetired();
+        // PublishRetiredUpTo, NOT PublishRetired: the latter stores m_localTail
+        // into BOTH tails, i.e. it hands back every byte the consumer has popped
+        // whether or not a record among them was borrowed into the GPU timeline.
+        // That would defeat the whole reason the ring carries two tails
+        // (Ring.h:24-27) and would let the producer overwrite a slot the GPU is
+        // still reading. m_retirableCursor stops at the first borrowed record.
+        m_cmd->PublishApplied();
+        m_cmd->PublishRetiredUpTo(m_retirableCursor);
+        NotifyClient();
+    }
+
+    void SessionConsumer::RetireBorrowedUpTo(std::uint64_t cursor) {
+        if (!Valid()) {
+            return;
+        }
+        if (cursor > m_retirableCursor) {
+            m_retirableCursor = cursor;
+            // A release that reaches everything popped so far clears the latch;
+            // anything still unreleased keeps it set, so a second borrow behind
+            // the first is not skipped.
+            m_borrowHeld = cursor < m_cmd->LocalTail();
+        }
+        m_cmd->PublishRetiredUpTo(m_retirableCursor);
+        NotifyClient();
+    }
+
+    void SessionConsumer::CompleteFrame(std::uint64_t serial) {
+        if (!Valid()) {
+            return;
+        }
+        Watermark::AdvanceCompletedFrame(*m_control, serial);
+        NotifyClient();
+    }
+
+    void SessionConsumer::ReturnPresentCredit(std::uint64_t serial) {
+        if (!Valid()) {
+            return;
+        }
+        Watermark::AdvancePresentAck(*m_control, serial);
         NotifyClient();
     }
 

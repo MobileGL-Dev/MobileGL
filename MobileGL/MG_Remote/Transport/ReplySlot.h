@@ -50,6 +50,14 @@
 #include <cstdlib>
 #include <cstring>
 
+// P9's account, named here rather than left to be rediscovered: the seq stamp
+// catches a sequence space drifted by anything that is NOT a multiple of
+// slotCount. A drift of exactly 8, 16, ... lands on the same slot with a matching
+// stamp and reads as this call's answer. Under R-1's verb barrier the in-flight
+// depth is one and a drift cannot open at all; P9 is what removes the barrier,
+// and it is what has to widen the stamp (a generation beside the seq) or bound
+// the drift some other way.
+
 namespace MobileGL::MG_Remote::Transport {
 
     // CONTRACT-P5 table 0, "reply slot header".
@@ -106,8 +114,24 @@ namespace MobileGL::MG_Remote::Transport {
                              static_cast<unsigned long long>(sizeof(ReplySlotHeader)));
                 return;
             }
+            // EVERY SLOT MUST START 8-ALIGNED. The header is written by one thread
+            // and read by another; the fences below order the payload against the
+            // stamp, but the stamp's own 8-byte Seq has to be untorn for the
+            // wrong-slot self-check to mean anything, and that is only true while
+            // it is naturally aligned. A geometry whose slotBytes is not a
+            // multiple of 8 puts later slots on odd boundaries, so it is refused
+            // here rather than left to a future caller to discover.
+            if ((slotBytes % 8) != 0 ||
+                (reinterpret_cast<std::uintptr_t>(base) % alignof(ReplySlotHeader)) != 0) {
+                WireLogError("MG_Remote reply pool: rejected, a %llu byte slot at base alignment "
+                             "%llu would put a slot header on an unaligned address, and the seq "
+                             "stamp the wrong-slot check reads has to be untorn",
+                             static_cast<unsigned long long>(slotBytes),
+                             static_cast<unsigned long long>(
+                                 reinterpret_cast<std::uintptr_t>(base) % alignof(ReplySlotHeader)));
+                return;
+            }
             m_base = static_cast<std::uint8_t*>(base);
-            m_size = sizeBytes;
             m_slots = slotCount;
             m_mask = slotCount - 1;
             // Truncated to 32 bits deliberately: the header's Size field is
@@ -242,7 +266,6 @@ namespace MobileGL::MG_Remote::Transport {
         }
 
         std::uint8_t* m_base = nullptr;
-        std::uint64_t m_size = 0;
         std::uint32_t m_slots = 0;
         std::uint32_t m_mask = 0;
         std::uint32_t m_slotBytes = 0;

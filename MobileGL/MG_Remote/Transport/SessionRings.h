@@ -28,27 +28,37 @@
 // phase is trying not to repeat.
 //
 // ---------------------------------------------------------------------------
-// THE RING CAPACITY IS HALF THE SEGMENT, AND THAT IS ARITHMETIC, NOT A CHOICE.
+// THE KNOB NAMES THE RING; THE SEGMENT IS THE RING PLUS ONE CONTROL PAGE.
 //
-// Ring.h:11-13 puts RingControl at the HEAD of SEG_CMD, and RingProducer requires
-// a POWER-OF-TWO capacity (Ring.cpp:89-103, the mask is the indexing). A segment
-// of 8 MiB therefore has 8 MiB - 4096 bytes left for records, and the largest
-// power of two that fits is 4 MiB. A record may be at most half the ring
-// (RingProducer::MaxRecordBytes), so the real cap on one record is 2 MiB.
+// Ring.h:11-13 puts RingControl at the HEAD of SEG_CMD and RingProducer requires
+// a POWER-OF-TWO capacity (Ring.cpp:89-103 - the mask IS the indexing). Those two
+// facts together mean a segment and its ring cannot both be 8 MiB, and one of the
+// two numbers has to give.
 //
-// CONTRACT-P5 §5 and Config.h's MOBILEGL_IPC_RING_MB comment both say "8 MiB caps
-// one record at 4 MiB". That arithmetic assumed the whole segment is ring bytes
-// and did not subtract the control page. The number here is HALF of theirs, and
-// the deviation is deliberately in the SAFE direction: R-10's obligation is to
-// PROVE no record ever approaches the cap, and a lower cap makes that proof fire
-// earlier and louder rather than later and silently. The alternatives were both
-// worse - announcing SegmentRef.sizeBytes as 4096 + 8 MiB breaks the four sizes
-// ProtocolSmokeTest.cpp:72 pins, and moving RingControl out of SEG_CMD needs a
-// fifth SegmentRef that Welcome does not have.
+// The one that gives is the SEGMENT: SEG_CMD is `MOBILEGL_IPC_RING_MB` MiB PLUS
+// 4096, so the ring inside it is exactly MOBILEGL_IPC_RING_MB MiB and
+// RingProducer::MaxRecordBytes() is exactly half of that. CONTRACT-P5 §5 and
+// Config.h's MOBILEGL_IPC_RING_MB comment - "A RECORD MAY BE AT MOST HALF OF
+// THIS, so 8 MiB caps one record at 4 MiB" - are then TRUE AS WRITTEN, which
+// matters because that sentence is what every other package sizes against.
+//
+// The first version of this file did the opposite: an 8 MiB segment with a 4 MiB
+// ring and a 2 MiB record cap, on the grounds that ProtocolSmokeTest.cpp:72 pinned
+// the four announced sizes. That was wrong on the facts - that test builds four
+// SegmentRefs from its own literals and round-trips them through the schema; it
+// says nothing about what a session announces, and it never mentions
+// SessionSegments at all. So the alternative was available at no cost, and the
+// version that made two live documents false and left half of SEG_CMD mapped and
+// unreachable was the worse of the two.
+//
+// SegmentRef.sizeBytes therefore announces the MAPPING size (ring + page), which
+// is what a spawn peer must mmap. The four numbers a reader recognises - 8 MiB /
+// 32 MiB / 8 MiB / 256 KiB - are the RING sizes, which is what the knobs name.
 //
 // SEG_STAGE has no control page of its own: RingControl carries TWO cursor
-// triples (Ring.h:101-109) and the stage triple is the second. So SEG_STAGE's
-// capacity is its whole segment, and 32 MiB is already a power of two.
+// triples (Ring.h:101-109) and the stage triple is the second. So SEG_STAGE is
+// exactly its ring, and 32 MiB is already a power of two. SEG_REPLY is not a ring
+// at all.
 // ---------------------------------------------------------------------------
 
 #pragma once
@@ -65,22 +75,29 @@
 
 namespace MobileGL::MG_Remote::Transport {
 
-    // The four sizes are CONTRACT-P5's and are pinned by ProtocolSmokeTest.cpp:72.
-    // MOBILEGL_IPC_RING_MB / MOBILEGL_IPC_STAGE_MB move the first two.
+    // RING sizes, not segment sizes - see the header block. The four defaults are
+    // CONTRACT-P5's; MOBILEGL_IPC_RING_MB / MOBILEGL_IPC_STAGE_MB move the first
+    // two, and ServerSession applies them unless SetSegmentSizes overrode them.
     struct SessionSegmentSizes {
-        std::uint64_t CmdBytes = 8ull * 1024 * 1024;
-        std::uint64_t StageBytes = 32ull * 1024 * 1024;
-        std::uint64_t ReplyBytes = 8ull * 1024 * 1024;
-        std::uint64_t EventBytes = 256ull * 1024;
+        std::uint64_t CmdRingBytes = 8ull * 1024 * 1024;    // + one control page
+        std::uint64_t StageRingBytes = 32ull * 1024 * 1024; // no control page
+        std::uint64_t ReplyBytes = 8ull * 1024 * 1024;      // not a ring
+        std::uint64_t EventRingBytes = 256ull * 1024;       // + one control page
         std::uint32_t ReplySlotCount = kDefaultReplySlotCount;
     };
 
     // Largest power of two <= `bytes`, or 0 when there is none. The ring's
-    // indexing is a mask, so this is what any segment's usable ring area is.
+    // indexing is a mask, so this is what a ring capacity has to be rounded to.
     std::uint64_t LargestPowerOfTwoAtMost(std::uint64_t bytes);
 
-    // Usable ring capacity of a segment that carries a RingControl page at its
-    // head. See the header block above for why this is half the segment.
+    // How big a segment has to be to hold `ringBytes` of ring behind its control
+    // page. `ringBytes` is rounded DOWN to a power of two first, so an operator
+    // who asks for 6 MiB gets a 4 MiB ring in a 4 MiB + 4096 segment rather than
+    // a segment whose tail can never be addressed.
+    std::uint64_t SegmentBytesForRing(std::uint64_t ringBytes);
+
+    // The usable ring inside a segment that carries a RingControl page at its
+    // head. The inverse of SegmentBytesForRing for any size it produced.
     std::uint64_t RingCapacityForSegment(std::uint64_t segmentBytes);
 
     enum class SessionSegmentSlot : std::uint32_t {
@@ -111,9 +128,24 @@ namespace MobileGL::MG_Remote::Transport {
         // and SEG_EVENT's), and books the mapping in `role`'s ledger.
         MobileGLResult Create(const SessionSegmentSizes& sizes, MemoryRole role);
 
-        // The inproc peer's view: the SAME mapping, booked under the OTHER role.
-        // It does not re-init the control pages - there is one shared page and
-        // re-initialising it would zero the owner's cursors under it.
+        // The inproc peer's view of the owner's four segments, booked under the
+        // OTHER role. It does NOT re-init the control pages - there is one shared
+        // page per ring and re-initialising it would zero the owner's cursors out
+        // from under whoever is already using them.
+        //
+        // ON POSIX THIS IS A REAL SECOND MAPPING, NOT AN ALIAS: each descriptor is
+        // dup()ed and adopted through ShmSegment::Adopt + Map, so the peer gets
+        // its own virtual addresses over the same memfd. That is the same reason
+        // inproc uses ShmSegment at all (see the header block): the ATTACH half is
+        // the half P6 replaces with an SCM_RIGHTS Adopt, and aliasing the owner's
+        // ShmSegment objects would leave it first exercised on the day the second
+        // process appears - which is exactly the criticism this file levels at
+        // new[]. It also removes a raw lifetime coupling: an aliased view holds
+        // pointers into the owner's members with no ownership, so the two Closes
+        // have to be ordered by hand.
+        //
+        // Windows has no Adopt (ShmSegment::Adopt is POSIX-only; the section name
+        // travels in SegmentRef instead), so there it still aliases and says so.
         MobileGLResult AttachInProcess(SessionSegments& owner, MemoryRole role);
 
         void Close();
@@ -177,10 +209,19 @@ namespace MobileGL::MG_Remote::Transport {
     // THE ONE RULE THAT MATTERS: a watermark may be published LATE but NEVER
     // EARLY. Late costs a waiter some latency; early makes every waiter a silent
     // use of work that has not happened, and there is no checksum anywhere on
-    // this ring that would catch it. So the advances below REFUSE to move a
-    // watermark backwards (that is the detectable half) and the callers are
-    // responsible for never calling them before the work is done (that is the
-    // half only a call-site review and R-9's unit cases can enforce).
+    // this ring that would catch it. The callers are responsible for never
+    // calling an advance before the work is done - that is the half only a
+    // call-site review and R-9's unit cases can enforce.
+    //
+    // THE HALF THAT IS MECHANICALLY DETECTABLE - a watermark moving BACKWARDS -
+    // IS FATAL, not logged-and-ignored. Logging it and returning was the first
+    // version of this file and it was worse than useless: SessionConsumer keeps
+    // its own counter, so once the shared appliedSeq is behind, every later
+    // advance is a no-op for ever and every WaitForApplied(seq, kWaitForever) -
+    // the verb barrier and every reply wait - blocks permanently. The user sees a
+    // hang and the only evidence is one ERROR line. This is the same class as
+    // RingCursorsValid returning false, and Ring.h:181-185 already calls that "a
+    // Fatal{ProtocolCorruption}, never a retry".
     namespace Watermark {
 
         // Producer, after Publish. Nobody waits on it - it is the answer to "how
@@ -247,6 +288,17 @@ namespace MobileGL::MG_Remote::Transport {
         // call order; this is the one place production code performs it.
         void PublishAndNotify(std::uint64_t submittedSeq);
 
+        // The last seq THIS producer published, kept locally rather than read back
+        // out of RingControl::submittedSeq. Teardown's drain needs it: Ring.h:72-77
+        // explicitly permits submittedSeq to be published LAZILY and Ring.h:243
+        // encourages batching the publish, so the shared watermark may lag the
+        // emitter - and a drain that waits for `appliedSeq >= submittedSeq` would
+        // then under-wait and free an emitter's var-tail while a record still
+        // names it. With the verb barrier armed the two are equal; with
+        // MOBILEGL_IPC_VERB_BARRIER=0, R-1's negative control which the phase has
+        // to run once, they are not.
+        std::uint64_t LastPublishedSeq() const { return m_lastPublishedSeq; }
+
         // The verb barrier's wait, AND the reply's wait: they are the same wait
         // (R-3/R-5), which is why a blocking ReadPixels, MapPersistent's decline
         // and the four Bool acceptances cost ZERO extra round trips.
@@ -277,6 +329,7 @@ namespace MobileGL::MG_Remote::Transport {
         Doorbell* m_peerBell = nullptr;
         Doorbell* m_selfBell = nullptr;
         std::uint32_t m_spinUs = kDefaultSpinUs;
+        std::uint64_t m_lastPublishedSeq = 0;
     };
 
     // -----------------------------------------------------------------------
@@ -322,14 +375,49 @@ namespace MobileGL::MG_Remote::Transport {
             ++m_appliedSeq;
             Watermark::AdvanceApplied(*m_control, m_appliedSeq);
             m_cmd->PublishApplied();
+            // THE BYTE CURSOR RetireThrough MAY RECLAIM TO, which is NOT simply
+            // "everything popped". A record carrying kRecBorrowSlot has been lent
+            // into the GPU timeline and its slot can only be recycled after
+            // completedFrameSerial (Ring.h:24-27), so the reclaimable cursor stops
+            // AT the first borrowed record and does not move again until
+            // RetireBorrowedUpTo releases it. Nothing sets kRecBorrowSlot yet;
+            // this is here so that the day something does, the producer does not
+            // overwrite a slot the GPU is still reading.
+            if ((view.flags & kRecBorrowSlot) == 0 && !m_borrowHeld) {
+                m_retirableCursor = view.cursor + sizeof(RingRecordHeader) + view.payloadSize;
+            } else {
+                m_borrowHeld = true;
+            }
             NotifyClient();
             return true;
         }
 
-        // Records without kRecBorrowSlot retire as soon as they are applied; a
-        // borrowed slot retires on completedFrameSerial, which is why this is a
-        // separate call and not folded into ApplyOne.
+        // Publish the retire watermark and hand back every byte up to the first
+        // still-borrowed record.
+        //
+        // IT IS MANDATORY, NOT OPTIONAL. RingProducer::FreeBytes() reclaims against
+        // retiredTail ONLY (Ring.cpp:110-115) and nothing else in this class
+        // publishes it, so an apply loop that calls ApplyOne and never this wedges
+        // the producer on the first full ring. Call it once per drain batch.
         void RetireThrough(std::uint64_t seq);
+
+        // Release borrowed slots up to `cursor` once completedFrameSerial has
+        // passed them. `cursor` is a RingRecordView::cursor the apply loop kept.
+        // This is the only thing that moves the reclaim point past a borrowed
+        // record - see ApplyOne.
+        void RetireBorrowedUpTo(std::uint64_t cursor);
+
+        // The byte cursor RetireThrough would reclaim to right now. Diagnostic;
+        // a borrow that is never released shows up as this number standing still.
+        std::uint64_t RetirableCursor() const { return m_retirableCursor; }
+
+        // completedFrameSerial and presentAckSerial, advanced AND rung. The free
+        // functions in namespace Watermark advance only: a v1 caller that used one
+        // directly would leave a client parked in WaitForPresentAck(kWaitForever)
+        // with nothing to wake it, because the advance and the doorbell are two
+        // separate stores and only the pair is a wakeup.
+        void CompleteFrame(std::uint64_t serial);
+        void ReturnPresentCredit(std::uint64_t serial);
 
         // Ring the client's bell, but only when it said it is parked: a store to
         // a shared cache line otherwise burns a big core for a whole frame on a
@@ -350,6 +438,8 @@ namespace MobileGL::MG_Remote::Transport {
         Doorbell* m_selfBell = nullptr;
         std::uint32_t m_spinUs = kDefaultSpinUs;
         std::uint64_t m_appliedSeq = 0;
+        std::uint64_t m_retirableCursor = 0;
+        bool m_borrowHeld = false;
     };
 
     // -----------------------------------------------------------------------
