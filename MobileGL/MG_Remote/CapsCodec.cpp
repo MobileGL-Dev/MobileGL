@@ -34,6 +34,8 @@
 
 #include "CapsCodec.h"
 
+#include "Protocol/mg_protocol_base.h"
+
 #include <MGGitHash.h>
 #include <MG_Util/Debug/Log.h>
 
@@ -486,6 +488,12 @@ namespace MobileGL::MG_Remote {
         hash = FnvU64(hash, kFormatCapabilitiesCodecVersion);
         hash = FnvU64(hash, kRendererInfoCodecVersion);
         hash = FnvU64(hash, static_cast<Uint64>(MG_Pipe::MGPWireOp::kOpCount));
+        // The declared protocol ABI, carried over from s1's version of this function at
+        // integration (ID-33). The sizeofs above catch a struct that changed shape; this
+        // catches a peer that changed the PROTOCOL while every struct stayed the same size,
+        // which is the one break the rest of the mix is blind to.
+        hash = FnvU64(hash,
+                      static_cast<Uint64>(MOBILEGL_ABI_VERSION(MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR)));
         hash = FnvBytes(hash, GIT_COMMIT_HASH_SHORT, std::strlen(GIT_COMMIT_HASH_SHORT));
         return hash;
     }

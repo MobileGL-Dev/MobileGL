@@ -103,7 +103,30 @@ namespace MobileGL::MG_Remote::Transport {
         alignas(64) std::atomic<std::uint64_t> cmdAppliedTail; // consumer: bytes decoded/copied out
         std::atomic<std::uint64_t> cmdRetiredTail;             // consumer: borrowed slots released
 
-        // ---- SEG_STAGE cursors ----------------------------------------------
+        // ---- SEG_STAGE cursors ------------------------------------------------
+        //
+        // DEAD IN P5, DELIBERATELY, AND NOBODY MAY WIRE THEM UP HALFWAY.
+        //
+        // SEG_STAGE is NOT a ring any more. Package w1's encoder owns staging as
+        // an ENCODER-LOCAL LINEAR ALLOCATOR: a staged byte run carries no
+        // RingRecordHeader, there is no consumer walking SEG_STAGE, and the
+        // allocator reclaims on `retiredSeq` - the sequence watermark below -
+        // rather than on these three cursors. So all three stay ZERO for the
+        // whole of P5, `RingCursorSet::Stage` has no producer and no consumer,
+        // and `SessionTest.TheStageCursorTripleStaysDeadAcrossAWholeSession`
+        // pins that rather than leaving it to be noticed.
+        //
+        // They are kept rather than deleted because RingCursorSet, the three
+        // cursor accessors in Ring.cpp and RingTest's fixture are all written
+        // against a two-triple page, and P8/P11's shadow and adopt segments are
+        // the ring-shaped users this triple was reserved for. What is NOT
+        // acceptable is the middle state: a producer publishing `stageHead` with
+        // nothing advancing the two tails makes FreeBytes() fall to zero the
+        // first time the head laps the capacity and never recover, which is a
+        // guaranteed hang rather than a slow path. Five watermarks already spent
+        // a whole phase declared-and-written-by-nobody; this is the sixth, and
+        // it is declared-and-written-by-nobody ON PURPOSE, which is only
+        // different if it is written down.
         alignas(64) std::atomic<std::uint64_t> stageHead;
         alignas(64) std::atomic<std::uint64_t> stageAppliedTail;
         std::atomic<std::uint64_t> stageRetiredTail;
@@ -140,6 +163,33 @@ namespace MobileGL::MG_Remote::Transport {
     };
     static_assert(sizeof(RingRecordHeader) == 8, "RecHeader is 8 bytes on the wire");
 
+    // THESE ARE RING FLAGS AND THEY ARE NOT MGPipeCallFlags, AND THREE OF THE
+    // BITS COLLIDE WITH A DIFFERENT MEANING. `MGPipeCallFlags` (MG_Pipe/MGPipe.h:
+    // 42-54) is a SEPARATE SPACE that happens to overlap this one, and an encoder
+    // that copies `MGPipeCallFlagsFor(op)` into RingRecordHeader::flags without
+    // translating puts a call's bits into a framing field:
+    //
+    //   bit 0  kNeedsAck  == kRecNeedsAck    same meaning, harmless
+    //   bit 1  kHasBlob   == kRecHasBlob     same meaning, harmless
+    //   bit 2  kVarTail   == kRecPad         WORST: a var-tail record would read
+    //                                        as a WRAP FILLER and be skipped
+    //                                        silently by Pop, losing the record
+    //                                        with nothing logged anywhere
+    //   bit 3  kHostSpan  == kRecBorrowSlot  a host-span record would read as
+    //                                        borrowed into the GPU timeline, and
+    //                                        the consumer would stop reclaiming
+    //                                        ring bytes behind it for ever
+    //   bit 4  kReplySlot == kRecVarTail     a blocking call would read as having
+    //                                        a tail it does not have
+    //   bit 5  kOptional  == (unused here)
+    //
+    // Translating is the ENCODER's job. Two things on this side make the first
+    // two of those survivable anyway rather than trusting it: `Pop` requires a
+    // filler to carry BOTH kRecPad AND kind == kRingPadRecordKind, so a real
+    // record with bit 2 set is delivered rather than eaten (a call record always
+    // has a real opcode kind, the catalogue starts at 1); and SessionConsumer
+    // counts and NAMES every kRecBorrowSlot it sees, because P5 produces no
+    // borrowed slots at all and the bit arriving means the collision did.
     enum RingRecordFlags : std::uint16_t {
         kRecNone = 0,
         kRecNeedsAck = 1u << 0,

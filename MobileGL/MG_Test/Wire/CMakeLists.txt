@@ -9,6 +9,9 @@ set(MOBILEGL_WIRE_TESTS
         RingTest
         InProcessTransportTest
         ProtocolSmokeTest
+        # P5 s1: the ring-owning session pair - four ShmSegment-backed segments, the five
+        # watermarks with real writers, the reply slot pool and the event ring.
+        SessionTest
 )
 
 if (NOT WIN32)

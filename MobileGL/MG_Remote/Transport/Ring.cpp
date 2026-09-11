@@ -8,8 +8,11 @@
 
 #include "Ring.h"
 
+#include "SessionRings.h"
+
 #include <MG_Util/Debug/Log.h>
 
+#include <cstdlib>
 #include <cstring>
 
 namespace MobileGL::MG_Remote::Transport {
@@ -257,7 +260,16 @@ namespace MobileGL::MG_Remote::Transport {
                 return false;
             }
 
-            if ((header.flags & kRecPad) != 0) {
+            // BOTH, not just the flag. kRecPad (1<<2) is the same bit as
+            // MGPipeCallFlags::kVarTail, so an encoder that copied a call's flags
+            // into this framing field verbatim would have every var-tail record
+            // skipped HERE, silently, with the record lost and nothing logged on
+            // either side. A genuine filler is always kind kRingPadRecordKind -
+            // Reserve writes it two dozen lines above - and a call record always
+            // carries a real opcode, because the catalogue starts at 1. Requiring
+            // the pair costs one comparison and turns that collision from a lost
+            // record into a record the decoder gets and can reject by name.
+            if ((header.flags & kRecPad) != 0 && header.kind == kRingPadRecordKind) {
                 m_localTail += size;
                 continue;
             }
@@ -301,6 +313,331 @@ namespace MobileGL::MG_Remote::Transport {
         if (clamped > current) {
             RetiredTail(*m_control, m_cursors).store(clamped, std::memory_order_release);
         }
+    }
+
+    // =======================================================================
+    // P5: the five watermarks, the two session endpoints, and the ABI mixer.
+    // =======================================================================
+
+    std::uint64_t LargestPowerOfTwoAtMost(std::uint64_t bytes) {
+        if (bytes == 0) {
+            return 0;
+        }
+        std::uint64_t value = 1;
+        while (value <= (bytes >> 1)) {
+            value <<= 1;
+        }
+        return value;
+    }
+
+    std::uint64_t SegmentBytesForRing(std::uint64_t ringBytes) {
+        const std::uint64_t ring = LargestPowerOfTwoAtMost(ringBytes);
+        if (ring < kMinRingCapacity || ring > kMaxRingCapacity) {
+            return 0;
+        }
+        return ring + sizeof(RingControl);
+    }
+
+    std::uint64_t RingCapacityForSegment(std::uint64_t segmentBytes) {
+        if (segmentBytes <= sizeof(RingControl)) {
+            return 0;
+        }
+        const std::uint64_t usable = LargestPowerOfTwoAtMost(segmentBytes - sizeof(RingControl));
+        return usable < kMinRingCapacity ? 0 : usable;
+    }
+
+    namespace Watermark {
+
+        namespace {
+            // A watermark may be published LATE but never EARLY, and it may never
+            // move BACKWARDS. Backwards is the half that is mechanically
+            // detectable from inside, and it is FATAL rather than logged: the
+            // consumer keeps its own counter, so a shared watermark left behind
+            // makes every later advance a no-op and every WaitForApplied on
+            // kWaitForever - the verb barrier and every reply wait - block for
+            // ever. A hang with one ERROR line in the log is strictly worse than
+            // an abort at the instruction that caused it, and Ring.h:181-185
+            // already rules the same way for the cursor invariants on this page.
+            // "Early" can only be caught at the call site, which is why every
+            // advance below has exactly one caller and a named unit case.
+            void AdvanceMonotonic(std::atomic<std::uint64_t>& watermark, std::uint64_t to,
+                                  const char* name) {
+                const std::uint64_t current = watermark.load(std::memory_order_relaxed);
+                if (to < current) {
+                    MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"watermark\"} %s moved backwards, "
+                            "%llu -> %llu. A waiter that already resumed on the higher value cannot "
+                            "be un-resumed, and every later advance of this watermark would be a "
+                            "no-op, so the verb barrier and every reply wait would block for ever",
+                            name, static_cast<unsigned long long>(current),
+                            static_cast<unsigned long long>(to));
+                    std::abort();
+                }
+                if (to == current) {
+                    return;
+                }
+                // Release: everything the advance is a statement ABOUT - the
+                // record that was applied, the staged bytes that were drained,
+                // the reply that was posted - must be visible to the acquiring
+                // waiter before the number that says it happened.
+                watermark.store(to, std::memory_order_release);
+            }
+        } // namespace
+
+        void AdvanceSubmitted(RingControl& control, std::uint64_t seq) {
+            AdvanceMonotonic(control.submittedSeq, seq, "submittedSeq");
+        }
+
+        void AdvanceApplied(RingControl& control, std::uint64_t seq) {
+            AdvanceMonotonic(control.appliedSeq, seq, "appliedSeq");
+        }
+
+        void AdvanceRetired(RingControl& control, std::uint64_t seq) {
+            // retiredSeq may never overtake appliedSeq: the staging allocator
+            // reclaims behind it, so a retire ahead of the apply hands live bytes
+            // back to the producer. Clamped rather than refused, because a
+            // caller that retires "everything applied" is the normal shape.
+            const std::uint64_t applied = control.appliedSeq.load(std::memory_order_acquire);
+            AdvanceMonotonic(control.retiredSeq, seq > applied ? applied : seq, "retiredSeq");
+        }
+
+        void AdvanceCompletedFrame(RingControl& control, std::uint64_t serial) {
+            AdvanceMonotonic(control.completedFrameSerial, serial, "completedFrameSerial");
+        }
+
+        void AdvancePresentAck(RingControl& control, std::uint64_t serial) {
+            AdvanceMonotonic(control.presentAckSerial, serial, "presentAckSerial");
+        }
+
+    } // namespace Watermark
+
+    // -----------------------------------------------------------------------
+    // SessionProducer
+    // -----------------------------------------------------------------------
+
+    void SessionProducer::Attach(RingControl* control, RingProducer* cmd, Doorbell* peerBell,
+                                 Doorbell* selfBell, std::uint32_t spinUs) {
+        m_control = control;
+        m_cmd = cmd;
+        m_peerBell = peerBell;
+        m_selfBell = selfBell;
+        m_spinUs = spinUs;
+    }
+
+    void SessionProducer::Detach() {
+        m_control = nullptr;
+        m_cmd = nullptr;
+        m_peerBell = nullptr;
+        m_selfBell = nullptr;
+        m_lastPublishedSeq = 0;
+    }
+
+    void SessionProducer::PublishAndNotify(std::uint64_t submittedSeq) {
+        if (!Valid()) {
+            return;
+        }
+        // 1. the records themselves. ONLY SEG_CMD: SEG_STAGE is not a ring and
+        // RingCursorSet::Stage is driven by nobody (Ring.h's stage triple).
+        m_cmd->Publish();
+        // Kept locally as well as on the shared page: the shared watermark is
+        // allowed to lag (Ring.h:72-77), and teardown's drain must not.
+        //
+        // Clamped UP, not passed through. A caller that republishes an older
+        // bound - teardown does exactly that, and so does any batched publisher
+        // that lost track - is publishing LATE, which R-9 permits; it is not the
+        // same thing as a watermark moving backwards, which is Fatal. Doing the
+        // clamp here keeps that distinction at the one boundary where a stale
+        // argument is legitimate.
+        if (submittedSeq > m_lastPublishedSeq) {
+            m_lastPublishedSeq = submittedSeq;
+        }
+        // 2. the diagnostic watermark, after the bytes it describes.
+        Watermark::AdvanceSubmitted(*m_control, m_lastPublishedSeq);
+        // 3. and only now the bell. Publish-then-ring, never ring-then-publish.
+        if (m_peerBell != nullptr) {
+            NotifyIfParked(*m_peerBell, m_control->consumerParked);
+        }
+    }
+
+    template <class Ready>
+    SessionWait SessionProducer::Park(Ready&& ready, std::uint32_t timeoutMs) {
+        if (!Valid() || m_selfBell == nullptr) {
+            return SessionWait::TimedOut;
+        }
+        if (m_selfBell->Wait(m_control->producerParked, ready, m_spinUs, timeoutMs)) {
+            return SessionWait::Reached;
+        }
+        // Wait == false && Dead() is "the session was shut down", and it is the
+        // only thing that returns from a kWaitForever park. Anything else is the
+        // deadline.
+        return m_selfBell->Dead() ? SessionWait::ShutDown : SessionWait::TimedOut;
+    }
+
+    SessionWait SessionProducer::WaitForApplied(std::uint64_t seq, std::uint32_t timeoutMs) {
+        if (!Valid()) {
+            return SessionWait::TimedOut;
+        }
+        RingControl* control = m_control;
+        return Park([control, seq] { return Watermark::Reached(control->appliedSeq, seq); },
+                    timeoutMs);
+    }
+
+    SessionWait SessionProducer::WaitForPresentAck(std::uint64_t serial, std::uint32_t timeoutMs) {
+        if (!Valid()) {
+            return SessionWait::TimedOut;
+        }
+        RingControl* control = m_control;
+        return Park([control, serial] { return Watermark::Reached(control->presentAckSerial, serial); },
+                    timeoutMs);
+    }
+
+    SessionWait SessionProducer::WaitForCmdSpace(std::uint64_t bytes, std::uint32_t timeoutMs) {
+        if (!Valid()) {
+            return SessionWait::TimedOut;
+        }
+        RingProducer* cmd = m_cmd;
+        return Park([cmd, bytes] { return cmd->FreeBytes() >= bytes; }, timeoutMs);
+    }
+
+    // -----------------------------------------------------------------------
+    // SessionConsumer
+    // -----------------------------------------------------------------------
+
+    void SessionConsumer::Attach(RingControl* control, RingConsumer* cmd, Doorbell* peerBell,
+                                 Doorbell* selfBell, std::uint32_t spinUs) {
+        m_control = control;
+        m_cmd = cmd;
+        m_peerBell = peerBell;
+        m_selfBell = selfBell;
+        m_spinUs = spinUs;
+        m_appliedSeq = control == nullptr ? 0 : control->appliedSeq.load(std::memory_order_acquire);
+        m_retirableCursor = cmd == nullptr ? 0 : cmd->LocalTail();
+        m_borrowHeld = false;
+    }
+
+    void SessionConsumer::Detach() {
+        m_control = nullptr;
+        m_cmd = nullptr;
+        m_peerBell = nullptr;
+        m_selfBell = nullptr;
+        m_retirableCursor = 0;
+        m_borrowHeld = false;
+    }
+
+    SessionWait SessionConsumer::WaitForWork(std::uint32_t timeoutMs) {
+        if (!Valid() || m_selfBell == nullptr) {
+            return SessionWait::TimedOut;
+        }
+        RingControl* control = m_control;
+        RingConsumer* cmd = m_cmd;
+        const bool woke = m_selfBell->Wait(
+            control->consumerParked,
+            [control, cmd] {
+                return control->cmdHead.load(std::memory_order_acquire) != cmd->LocalTail();
+            },
+            m_spinUs, timeoutMs);
+        if (woke) {
+            return SessionWait::Reached;
+        }
+        return m_selfBell->Dead() ? SessionWait::ShutDown : SessionWait::TimedOut;
+    }
+
+    void SessionConsumer::RetireThrough(std::uint64_t seq) {
+        if (!Valid()) {
+            return;
+        }
+        Watermark::AdvanceRetired(*m_control, seq);
+        // PublishRetiredUpTo, NOT PublishRetired: the latter stores m_localTail
+        // into BOTH tails, i.e. it hands back every byte the consumer has popped
+        // whether or not a record among them was borrowed into the GPU timeline.
+        // That would defeat the whole reason the ring carries two tails
+        // (Ring.h:24-27) and would let the producer overwrite a slot the GPU is
+        // still reading. m_retirableCursor stops at the first borrowed record.
+        m_cmd->PublishApplied();
+        m_cmd->PublishRetiredUpTo(m_retirableCursor);
+        NotifyClient();
+    }
+
+    void SessionConsumer::NoteBorrowedRecord(std::uint16_t kind, std::uint16_t flags) {
+        ++m_borrowedSeen;
+        if (m_borrowedSeen == 1) {
+            MGLOG_E("MG_Remote ring: record kind %u carries kRecBorrowSlot (flags=0x%04X). P5 "
+                    "implements NO borrowed slots, and that bit is also MGPipeCallFlags::"
+                    "kHostSpan, which P5's reduced path is ruled to produce none of either. "
+                    "Nothing past this record will be reclaimed until RetireBorrowedUpTo "
+                    "releases it, so a producer that then wedges on a full ring is THIS line's "
+                    "fault and not the ring's",
+                    static_cast<unsigned>(kind), static_cast<unsigned>(flags));
+        }
+    }
+
+    void SessionConsumer::RetireBorrowedUpTo(std::uint64_t cursor) {
+        if (!Valid()) {
+            return;
+        }
+        if (cursor > m_retirableCursor) {
+            m_retirableCursor = cursor;
+            // A release that reaches everything popped so far clears the latch;
+            // anything still unreleased keeps it set, so a second borrow behind
+            // the first is not skipped.
+            m_borrowHeld = cursor < m_cmd->LocalTail();
+        }
+        m_cmd->PublishRetiredUpTo(m_retirableCursor);
+        NotifyClient();
+    }
+
+    void SessionConsumer::CompleteFrame(std::uint64_t serial) {
+        if (!Valid()) {
+            return;
+        }
+        Watermark::AdvanceCompletedFrame(*m_control, serial);
+        NotifyClient();
+    }
+
+    void SessionConsumer::ReturnPresentCredit(std::uint64_t serial) {
+        if (!Valid()) {
+            return;
+        }
+        Watermark::AdvancePresentAck(*m_control, serial);
+        NotifyClient();
+    }
+
+    void SessionConsumer::NotifyClient() {
+        if (m_control != nullptr && m_peerBell != nullptr) {
+            NotifyIfParked(*m_peerBell, m_control->producerParked);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // The ABI fingerprint's mixer
+    // -----------------------------------------------------------------------
+
+    std::uint64_t MixAbiFingerprint(std::uint64_t dynamicParamsSize, std::uint64_t capsSize,
+                                    std::uint64_t functionTableSize, std::uint32_t abiVersion,
+                                    const char* buildStamp) {
+        // FNV-1a over the four numbers and the stamp. Not a hash with any
+        // security property and not meant to be one: it has to (a) change when
+        // ANY input changes and (b) be computable identically in two processes
+        // built from one source tree, which rules out anything seeded at runtime.
+        std::uint64_t hash = 1469598103934665603ull;
+        const auto mix = [&hash](std::uint64_t value) {
+            for (int byte = 0; byte < 8; ++byte) {
+                hash ^= static_cast<std::uint64_t>((value >> (byte * 8)) & 0xFF);
+                hash *= 1099511628211ull;
+            }
+        };
+        mix(dynamicParamsSize);
+        mix(capsSize);
+        mix(functionTableSize);
+        mix(abiVersion);
+        if (buildStamp != nullptr) {
+            for (const char* c = buildStamp; *c != '\0'; ++c) {
+                hash ^= static_cast<std::uint64_t>(static_cast<unsigned char>(*c));
+                hash *= 1099511628211ull;
+            }
+        }
+        // 0 is reserved for "not stated": a peer that forgot to fill the field
+        // must not accidentally agree with one that did.
+        return hash == 0 ? 1ull : hash;
     }
 
 } // namespace MobileGL::MG_Remote::Transport
