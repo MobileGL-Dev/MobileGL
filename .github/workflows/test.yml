@@ -736,6 +736,367 @@ jobs:
           path: /tmp/core.*
           if-no-files-found: ignore
 
+  # P5's split build. The verify pair cloned, because the problem is the same one: a third
+  # configuration of the same sources whose whole value depends on the option having taken.
+  #
+  # IT CANNOT RIDE ON build-linux'S ARTIFACT. build-linux passes no -DMOBILEGL_PIPE_PUSH, so it is
+  # a PULL build; MOBILEGL_BUILD_DISAGGREGATED implies MOBILEGL_PIPE_PUSH (the split path decodes
+  # into the MGPipe applier and PIPE_PUSH is what compiles the applier), so the split arm needs a
+  # build of its own exactly as the verify arm does.
+  #
+  # THE `nm` STEP IS THE POINT OF THIS JOB. In a build without the option, MG_Remote is not
+  # compiled at all and MOBILEGL_TRANSPORT's parser does not exist - so the variable is accepted by
+  # the environment and silently ignored (CONTRACT-P5 5). Every downstream lane would then run
+  # monolith and go green under a name that says split. CMake will not complain about a typo'd -D,
+  # so the build-level assertion is the only guard, and its absence is precisely what would make
+  # the whole split arm meaningless.
+  build-linux-split:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: write
+      contents: read
+    env:
+      BUILD_DIR: build-split
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: "true"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 4G
+      CCACHE_NOHASHDIR: "true"
+
+    steps:
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 32
+
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          # recursive, and load-bearing here beyond the usual: MOBILEGL_BUILD_DISAGGREGATED
+          # SHADOWS ITSELF BACK TO OFF when 3rdparty/flatbuffers/include is missing
+          # (CMakeLists.txt:471-486, a normal variable rather than a cache force, deliberately).
+          # A shallow checkout would therefore configure cleanly, build a monolith library, and
+          # be caught only by the nm step below.
+          submodules: recursive
+
+      - name: Get CMake
+        uses: lukka/get-cmake@v4.3.3
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          restore-keys: |
+            ${{ runner.os }}-test-${{ github.job }}-ccache-
+
+      - name: Prepare Vulkan SDK
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.4.304.1
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      - name: Update glslang external sources
+        working-directory: 3rdparty/glslang
+        run: python update_glslang_sources.py
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
+
+      - name: Show installed toolchain
+        run: |
+          ccache --version
+          clang-20 --version
+          clang++-20 --version
+          dpkg -l 'libc++*' 'libegl*' 'libgles*' 'mesa*' 'vulkan*' || true
+
+      - name: Configure CMake
+        # Release/INFO like the shipped build, for the same reason build-linux-verify gives.
+        # INFO specifically matters here: ConfigLoader logs the resolved transport at INFO and
+        # that line is what run_trace_case.cmake and the integration-split lane read back as
+        # proof the transport resolved in THIS process.
+        #
+        # _INPROC implies _DISAGGREGATED implies _PIPE_PUSH; all three are passed anyway, because
+        # an implication that is asserted in two places is an implication nobody has to remember.
+        run: |
+          cmake -S . -B "${BUILD_DIR}" -G Ninja \
+            -DCMAKE_C_COMPILER=clang-20 \
+            -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
+            -DMOBILEGL_BUILD_TEST=ON \
+            -DMOBILEGL_BUILD_BENCHMARK=OFF \
+            -DMOBILEGL_BUILD_INTEGRATION_TEST=ON \
+            -DMOBILEGL_ITEST_VK_ICD=/usr/share/vulkan/icd.d/lvp_icd.json \
+            -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
+            -DMOBILEGL_PIPE_PUSH=ON \
+            -DMOBILEGL_BUILD_DISAGGREGATED=ON \
+            -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Build
+        run: cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
+
+      # `nm` and NOT `nm -D`, for the reason build-linux-verify spells out: everything under
+      # MG_Remote is a plain namespace symbol in a CXX_VISIBILITY_PRESET=hidden Release build and
+      # none of it reaches the dynamic table. The symbol count guards the remaining hole - a
+      # stripped library would make the grep fail for a third, silent reason.
+      #
+      # The mirror of this assertion already exists and is the G1 control: monolith-symbol-report
+      # asserts that a -DMOBILEGL_BUILD_DISAGGREGATED=OFF library defines NO MG_Remote symbol. The
+      # two together are ARCHITECTURE.md:524's surviving byte-level equality, in both directions.
+      - name: The split library really carries MG_Remote
+        run: |
+          test -f "${BUILD_DIR}/libMobileGL.so"
+          defined=$(nm --defined-only "${BUILD_DIR}/libMobileGL.so" | wc -l)
+          if [ "${defined}" -lt 1000 ]; then
+            echo "::error::nm --defined-only sees only ${defined} symbols in ${BUILD_DIR}/libMobileGL.so - it looks stripped, so the checks below could not have failed honestly"
+            exit 1
+          fi
+          remote=$(nm --defined-only "${BUILD_DIR}/libMobileGL.so" | grep -c -i "MG_Remote" || true)
+          if [ "${remote}" -lt 1 ]; then
+            echo "::error::libMobileGL.so defines no MG_Remote symbol: -DMOBILEGL_BUILD_DISAGGREGATED=ON did not take (a typo'd -D is not a CMake error, and the option shadows itself OFF when 3rdparty/flatbuffers/include is missing). Every lane that consumes this artifact would run MONOLITH while claiming to run split, because the MOBILEGL_TRANSPORT parser does not exist in such a build and the variable is accepted and ignored."
+            exit 1
+          fi
+          # The transport parser itself, which is the symbol the runtime evidence depends on.
+          if ! nm --defined-only "${BUILD_DIR}/libMobileGL.so" | grep -q "MGPipeApply"; then
+            echo "::error::libMobileGL.so defines no MGPipeApply* entry point, so MOBILEGL_PIPE_PUSH did not take either and there is no applier for the split path to decode into"
+            exit 1
+          fi
+          echo "libMobileGL.so defines ${remote} MG_Remote symbol(s) and the MGPipe applier (${defined} defined symbols)"
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats
+
+      - name: Release superseded ccache entry
+        if: github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_KEY: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+        run: gh cache delete "${CACHE_KEY}" || true
+
+      - name: Save ccache
+        if: github.ref_name == github.event.repository.default_branch
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+
+      - name: Package Linux split runtime
+        run: |
+          mkdir -p ci-artifacts
+          mapfile -t SHARED_LIBS < <(find "${BUILD_DIR}" -type f \( -name '*.so' -o -name '*.so.*' \) -print | sort)
+          tar \
+            --exclude='*/CMakeFiles' \
+            --exclude='*.o' \
+            --exclude='*.a' \
+            --exclude='*.ninja*' \
+            --exclude='build.ninja' \
+            --exclude='cmake_install.cmake' \
+            -czf ci-artifacts/mobilegl-linux-runtime-split.tgz \
+            "${BUILD_DIR}/CTestTestfile.cmake" \
+            "${BUILD_DIR}/MobileGL/MG_Test" \
+            "${BUILD_DIR}/MobileGL/MG_IntegrationTest" \
+            "${SHARED_LIBS[@]}"
+
+      - name: Upload Linux split runtime
+        uses: actions/upload-artifact@v7
+        with:
+          name: mobilegl-linux-runtime-split
+          path: ci-artifacts/mobilegl-linux-runtime-split.tgz
+          if-no-files-found: error
+
+  # The split lane itself: the three-arm shape ARCHITECTURE.md:521 asks for verbatim, plus the
+  # first real run of the five MG_Test/Wire suites, plus P5's two exit-gate negative controls.
+  integration-split:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    needs: build-linux-split
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Get CMake
+        uses: lukka/get-cmake@v4.3.3
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
+
+      - name: Download Linux split runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: mobilegl-linux-runtime-split
+          path: .
+
+      - name: Unpack Linux split runtime
+        run: |
+          tar -xzf mobilegl-linux-runtime-split.tgz
+          test -f build-split/libMobileGL.so
+
+      - name: Normalize CTest command paths
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          for path in Path('build-split').rglob('CTestTestfile.cmake'):
+              text = path.read_text()
+              text = re.sub(r'"[^"]*/cmake-[^"]*/bin/cmake"', '"cmake"', text)
+              path.write_text(text)
+          PY
+
+      # THE FIRST REAL RUN OF MG_Test/Wire. Those five suites - Framing, Ring, InProcessTransport,
+      # ProtocolSmoke and FdPassing - are registered only under MOBILEGL_BUILD_DISAGGREGATED
+      # (MG_Test/CMakeLists.txt), and before this job existed NO cmake invocation anywhere in this
+      # workflow passed that option. They had never been compiled by CI, let alone run.
+      - name: Unit tests on the split runtime
+        working-directory: build-split
+        run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)"
+
+      # --no-tests=error is half the gate, exactly as in integration-verify: the integration-split
+      # entries exist only when the library was configured with -DMOBILEGL_BUILD_DISAGGREGATED=ON,
+      # so a build that lost the option matches nothing and reds here instead of reporting a green
+      # run of nothing. The other half is the transport-resolution check below.
+      #
+      # An entry whose owning package (c1 client, s1 session, v1 server) has not landed SKIPS with
+      # the reason and never goes green - MG_IntegrationTest/CMakeLists.txt probes MG_Remote for
+      # c0's signature stubs and disarms the lane while any remain.
+      - name: Split scenarios under MOBILEGL_TRANSPORT=inproc
+        working-directory: build-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+        run: |
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          ctest --output-on-failure -L integration-split --no-tests=error -j 4
+
+      # ARCHITECTURE.md:521 asks for `ctest -L integration-gpu` to be name-for-name identical
+      # between the monolith and the split arm of the SAME build - the G2 shape extended to a
+      # third arm. The knob goes in the JOB environment rather than in a ctest property, for the
+      # reason the MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH precedent in `integration` gives: a
+      # property would override it and the arm would not be an arm.
+      #
+      # The entries that name MOBILEGL_TRANSPORT in their OWN property (the Split. lanes) keep
+      # their value in both passes, which is correct: they are the split family in both arms and
+      # the comparison is about the other 1100.
+      - name: The same integration entries under monolith and under inproc
+        working-directory: build-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH: "1"
+          MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS: "1"
+          MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: "1"
+        run: |
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          ctest -N -L integration-gpu | grep -E '^ *Test *#[0-9]+:' | sed -E 's/^ *Test *#[0-9]+: //' | sort > /tmp/names-split.txt
+          count=$(wc -l < /tmp/names-split.txt)
+          if [ "${count}" -lt 1 ]; then
+            echo "::error::the split runtime registers ${count} integration-gpu entries"
+            exit 1
+          fi
+          echo "integration-gpu entries in the split build: ${count}"
+          MOBILEGL_TRANSPORT=monolith ctest --output-on-failure -L integration-gpu --no-tests=error -j 4
+          MOBILEGL_TRANSPORT=inproc   ctest --output-on-failure -L integration-gpu --no-tests=error -j 4
+
+      # THE RUNTIME HALF OF "THIS IS REALLY A SPLIT BUILD". The build-level nm check in
+      # build-linux-split proves the library CARRIES MG_Remote; this proves the transport
+      # RESOLVED in a process of this lane. ConfigLoader::InitTransport logs one INFO line when it
+      # selects InProcess, and the DirectGLES.Split.PersistentMapArm. entry is the one Split entry
+      # with a MOBILEGL_LOG_FILE_PATH of its own (nothing else writes it, so the grep means what it
+      # says). The line is written during bring-up, before any scenario decides to skip, so this
+      # check is live from the day the lanes land rather than from the day they stop skipping.
+      - name: The split lane really resolved the transport
+        working-directory: build-split
+        run: |
+          log=MobileGL/MG_IntegrationTest/persistent-map-arm-split-DirectGLES.log
+          if [ ! -f "${log}" ]; then
+            echo "::error::${log} does not exist: the DirectGLES.Split.PersistentMapArm. entry never ran, so nothing in this job establishes that MOBILEGL_TRANSPORT ever resolved to inproc in a live process"
+            exit 1
+          fi
+          if ! grep -q "MOBILEGL_TRANSPORT=inproc" "${log}"; then
+            echo "::error::${log} carries no transport-resolution line. ConfigLoader logs one at INFO when it selects InProcess, and that code exists only in a MOBILEGL_BUILD_DISAGGREGATED build - so this lane ran a monolith library while claiming to be the split lane."
+            exit 1
+          fi
+          echo "the split lane resolved MOBILEGL_TRANSPORT=inproc"
+
+      # EXIT GATE E1's NEGATIVE CONTROL and EXIT GATE E3(a)'s, in one step because they have the
+      # same two-state shape and the same reason for it.
+      #
+      # Both controls turn a knob that MUST make a split scenario red: MOBILEGL_IPC_VERB_BARRIER=0
+      # removes the lockstep fence R-1 rests on, and MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0 turns the
+      # persistent-map push off. A control of the verify lane's shape - "this step passes when
+      # ctest FAILS" - cannot be written yet, because while packages c1/s1/v1 are landing the
+      # Split entries SKIP and ctest reports green whatever the knob says, so an unconditional
+      # control would be red for the whole of P5 for a reason that is not a defect.
+      #
+      # So the expected state is DERIVED rather than assumed, from the same fact the lanes derive
+      # it from: MG_IntegrationTest/CMakeLists.txt puts MGITEST_REMOTE_CLIENT_PRESENT=1 into the
+      # Split entries' ENVIRONMENT exactly when MG_Remote carries no c0 signature stub, and that
+      # string is in the generated ctest include files this artifact ships. When it is there the
+      # controls MUST fire; when it is not, the step says so loudly and does not pretend.
+      - name: Negative controls - the verb barrier and the persistent-map push must be load-bearing
+        working-directory: build-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+        run: |
+          armed=0
+          if grep -qs "MGITEST_REMOTE_CLIENT_PRESENT" MobileGL/MG_IntegrationTest/*_tests.cmake; then
+            armed=1
+          fi
+          if [ "${armed}" -eq 0 ]; then
+            echo "::warning::the DirectGLES.Split. lanes are DISARMED on this tree - MG_Remote still carries package c0's signature stubs, so every Split entry skips and neither negative control can fire. This step becomes a gate automatically on the commit that lands the last of c1/s1/v1; it is not a green that asserted anything today."
+            exit 0
+          fi
+          run_control() {
+            name="$1"; filter="$2"; shift 2
+            matched=$(ctest -N -L integration-split -R "${filter}" | grep -cE '^ *Test *#[0-9]+:')
+            if [ "${matched}" -lt 1 ]; then
+              echo "::error::${name} selected ${matched} tests; its filter no longer matches anything"
+              exit 1
+            fi
+            if env "$@" ctest --output-on-failure -L integration-split -R "${filter}" --no-tests=error; then
+              echo "::error::${name} left ${matched} split entries GREEN, so the knob it turns is not load-bearing and the gate it controls proves nothing."
+              exit 1
+            fi
+            echo "${name} turned ${matched} selected entries red, as it must"
+          }
+          # E1: R-1's lockstep verb barrier. Without it the client keeps pulling fields from a live
+          # GLContext while the server runs ahead, so the server reads future values.
+          run_control "negative control E1 (MOBILEGL_IPC_VERB_BARRIER=0)" \
+            'DirectGLES\.Split\.(Triangle|ClearThenReadPixels)' MOBILEGL_IPC_VERB_BARRIER=0
+          # E3(a): the persistent-map push. 0 is admitted by ConfigLoader on purpose and is
+          # documented there as this control.
+          run_control "negative control E3(a) (MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0)" \
+            'DirectGLES\.Split\.PersistentCoherentMapScenario' MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0
+
+      - name: Upload split lane logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-split-logs
+          path: build-split/MobileGL/MG_IntegrationTest/*.log*
+          if-no-files-found: warn
+
+      - name: Upload core dumps
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-split-core-dumps
+          path: /tmp/core.*
+          if-no-files-found: ignore
+
   # MobileGL/MG_Remote/Protocol/generated/protocol_generated.h is COMMITTED, and
   # flatc is deliberately absent from the default build graph (a codegen step in
   # the graph is how the earlier branch ended up cross-compiling an arm64 flatc
@@ -1013,6 +1374,7 @@ jobs:
       matrix: ${{ steps.trace-cases.outputs.matrix }}
       names: ${{ steps.trace-cases.outputs.names }}
       verify-matrix: ${{ steps.trace-cases.outputs.verify-matrix }}
+      split-matrix: ${{ steps.trace-cases.outputs.split-matrix }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -1025,6 +1387,11 @@ jobs:
           # The subset the verify build retraces ("verify": true in trace_cases.json). It is a
           # SUBSET of the matrix above, so retrace-verify needs no fixtures of its own.
           echo "verify-matrix=$(python3 tools/trace_replay/trace_cases.py --ci --format github-verify-matrix)" >> "$GITHUB_OUTPUT"
+          # P5's split subset ("split": true, DirectGLES only). Also a SUBSET of the matrix above,
+          # so retrace-split needs no fixtures of its own either. It is one case today - OpenRA,
+          # which is what the phase gate names - and trace_cases.py refuses a `split` case that is
+          # not in CI or does not run DirectGLES, so the subset cannot silently become empty.
+          echo "split-matrix=$(python3 tools/trace_replay/trace_cases.py --ci --format github-split-matrix)" >> "$GITHUB_OUTPUT"
 
   trace-fixtures:
     name: trace fixture (${{ matrix.case }})
@@ -1392,6 +1759,147 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: retrace-verify-result-${{ matrix.backend }}-${{ matrix.case }}
+          path: |
+            build-retrace/tools/trace_replay/${{ matrix.case }}/actual-images/**
+            build-retrace/tools/trace_replay/${{ matrix.case }}/${{ matrix.backend }}/output/**
+          if-no-files-found: warn
+
+  # P5's retrace arm: retrace-verify with MOBILEGL_PIPE_VERIFY=1 swapped for
+  # MOBILEGL_TRANSPORT=inproc and the comparator's symbol swapped for an MG_Remote one. Exit gate
+  # E2 is one row - OpenRA at SSIM >= 0.99 - and trace_cases.json's `split: true` is where that
+  # subset lives.
+  #
+  # IT RUNS THE UNCHANGED CTEST NAMES with the transport exported in the JOB environment, rather
+  # than the SPLIT-suffixed variant entries. build-retrace configures without
+  # -DMOBILEGL_BUILD_DISAGGREGATED, so the variant entries are deliberately not registered there
+  # (a name that says SPLIT in a build that cannot be one is worse than no name), and the
+  # unchanged names are what retrace-verify already proves this shape works with. The variant
+  # entries exist for a build that DOES configure the option - a local build-split with trace
+  # replay on - where `ctest -L retrace-split` is self-describing and needs no environment ritual.
+  #
+  # WHAT MAKES IT FALSIFIABLE is not the SSIM. A monolith run of OpenRA also scores 1.000: measured
+  # on this branch, a pull library under MOBILEGL_TRANSPORT=inproc produced ssim=1.0 and was caught
+  # only by run_trace_case.cmake's transport-resolution assertion. So there are two guards, and the
+  # SSIM is neither of them: the nm check below (this library carries MG_Remote) and the
+  # transport-resolution line in the library's own log (this PROCESS resolved inproc).
+  retrace-split:
+    name: retrace split (${{ matrix.backend }}, ${{ matrix.case }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    needs:
+      - build-linux-split
+      - build-retrace
+      - trace-cases
+      - trace-fixtures
+    if: ${{ always() && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.trace-cases.outputs.split-matrix) }}
+
+    steps:
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 16
+
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Download trace fixture
+        uses: actions/download-artifact@v8
+        with:
+          name: trace-fixture-${{ matrix.case }}
+          path: trace-fixture-download
+
+      - name: Install trace fixture
+        run: |
+          mkdir -p tools/trace_replay/fixtures
+          find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
+
+      - name: Get CMake
+        uses: lukka/get-cmake@v4.3.3
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1 libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers
+          test -e /usr/lib/x86_64-linux-gnu/libEGL.so
+          test -e /usr/lib/x86_64-linux-gnu/libGLESv2.so
+
+      - name: Download Linux split runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: mobilegl-linux-runtime-split
+          path: .
+
+      - name: Download trace replay
+        uses: actions/download-artifact@v8
+        with:
+          name: mobilegl-trace-replay
+          path: .
+
+      - name: Unpack the SPLIT runtime as the library under test
+        # build-retrace's CTestTestfile.cmake has the absolute path
+        # <workspace>/build-linux/libMobileGL.so frozen into every case, so the swap happens here
+        # rather than through a variable, exactly as in retrace-verify. `nm`, not `nm -D`.
+        run: |
+          tar -xzf mobilegl-linux-runtime-split.tgz
+          tar -xzf mobilegl-trace-replay.tgz
+          test -f build-split/libMobileGL.so
+          test -f build-retrace/tools/trace_replay/mobilegl_trace_replay
+          mkdir -p build-linux
+          cp build-split/libMobileGL.so build-linux/libMobileGL.so
+          if ! nm --defined-only build-linux/libMobileGL.so | grep -q -i MG_Remote; then
+            echo "::error::the library unpacked at build-linux/libMobileGL.so defines no MG_Remote symbol, so this retrace would replay against a monolith build, ignore MOBILEGL_TRANSPORT entirely and match its golden having split nothing"
+            exit 1
+          fi
+          echo "the library at build-linux/libMobileGL.so is the split build"
+
+      - name: Retrace and validate under MOBILEGL_TRANSPORT=inproc
+        working-directory: build-retrace/tools/trace_replay
+        # run_trace_case.cmake turns MOBILEGL_TRANSPORT into assertions of its own - the library
+        # must have RESOLVED the transport in this process, and its log must carry no Fatal{ - so a
+        # case that somehow ran the wrong library reds here instead of passing on its golden. That
+        # log is also the only valid refusal census: the console sink is compiled out of this
+        # configuration, so a `ctest -V` transcript reports a false zero for Fatal{ lines.
+        run: |
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          export MOBILEGL_TRANSPORT=inproc
+          ctest -V --no-tests=error --timeout 10800 \
+            -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'
+
+      # The refusal census, recorded rather than gated. run_trace_case.cmake already REDS the case
+      # on any Fatal{, so reaching here means the count is zero - but the number and the distinct
+      # slot names are what MEASUREMENTS wants from every split run, and reading them out of the
+      # library's own log is the only way to get them (ctest -V's transcript is a false zero).
+      - name: Refusal census from the library log
+        if: always()
+        working-directory: build-retrace/tools/trace_replay
+        run: |
+          log="${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.log"
+          if [ ! -f "${log}" ]; then
+            echo "no ${log} - the replay wrote no library log"
+            exit 0
+          fi
+          echo "Fatal{ lines: $(grep -c 'Fatal{' "${log}" || true)"
+          grep -o 'Fatal{[A-Za-z]*, "[^"]*"' "${log}" | sort | uniq -c | sort -rn | head -20 || true
+          grep -m1 "MOBILEGL_TRANSPORT=" "${log}" || echo "no transport line in ${log}"
+
+      - name: Upload core dumps
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrace-split-core-dumps-${{ matrix.backend }}-${{ matrix.case }}
+          path: /tmp/core.*
+          if-no-files-found: ignore
+
+      - name: Upload actual image
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrace-split-result-${{ matrix.backend }}-${{ matrix.case }}
           path: |
             build-retrace/tools/trace_replay/${{ matrix.case }}/actual-images/**
             build-retrace/tools/trace_replay/${{ matrix.case }}/${{ matrix.backend }}/output/**
