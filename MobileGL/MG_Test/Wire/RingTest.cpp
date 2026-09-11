@@ -517,3 +517,155 @@ TEST(RingTest, DoorbellHandoffWakesBothSidesOnEveryPublish) {
     EXPECT_TRUE(ok.load());
     EXPECT_TRUE(ring.Invariants());
 }
+
+// ---------------------------------------------------------------------------
+// P5 R-9: the five watermarks and the pad rule, from Ring.h's header comment.
+//
+// Nothing in the tree advanced any of the five before P5 - InitRingControl zeroed
+// them and that was all - so these five cases pin the RULES against the sessions
+// that are about to start writing them, rather than testing today's (absent)
+// writers. Each one is the negative control for one sentence of that comment.
+// ---------------------------------------------------------------------------
+
+// R-9, sentence 0: all five start at zero, so "has not moved" and "moved to zero"
+// are the same state and a waiter that starts before its peer cannot be fooled by
+// a stale non-zero value left over from a previous session.
+TEST(RingTest, WatermarksAreAllZeroUntilSomeoneAdvancesThem) {
+    alignas(4096) RingControl control{};
+    InitRingControl(control);
+    EXPECT_EQ(control.submittedSeq.load(), 0u);
+    EXPECT_EQ(control.appliedSeq.load(), 0u);
+    EXPECT_EQ(control.retiredSeq.load(), 0u);
+    EXPECT_EQ(control.completedFrameSerial.load(), 0u);
+    EXPECT_EQ(control.presentAckSerial.load(), 0u);
+    // ... while the two GENERATIONS start at one, because for them zero means
+    // "uninitialized" and must never be a legal value. The two conventions are
+    // opposite on purpose and are next to each other in the same struct.
+    EXPECT_EQ(control.serverEpoch.load(), 1u);
+    EXPECT_EQ(control.ringGeneration.load(), 1u);
+}
+
+// R-9, "every wait is >=, never ==". Both sides advance in jumps - a consumer that
+// applies two records before republishing, a server that completes two frames in one
+// poll - so an equality test misses its wakeup and the waiter hangs until the next
+// coincidence. This case is that hang, made deterministic.
+TEST(RingTest, AWatermarkWaiterMustTestGreaterOrEqualRatherThanEqual) {
+    alignas(4096) RingControl control{};
+    InitRingControl(control);
+
+    const std::uint64_t mySeq = 7;
+    // The peer jumps straight past the value this waiter cares about.
+    control.appliedSeq.store(mySeq + 1, std::memory_order_release);
+
+    const std::uint64_t seen = control.appliedSeq.load(std::memory_order_acquire);
+    EXPECT_FALSE(seen == mySeq) << "an equality waiter is still asleep at this point";
+    EXPECT_TRUE(seen >= mySeq) << "the >= waiter this contract mandates has been released";
+}
+
+// R-9, appliedSeq's row: advanced by the consumer for EVERY SINGLE RECORD, and P5
+// forbids the 64-record batching the ring was designed for, because the verb barrier
+// and every reply wait read it. The invariant that must hold after each Pop is
+// `appliedSeq == records applied so far` - not "eventually", every time.
+TEST(RingTest, AppliedSeqAdvancesOncePerRecordAndIsNeverBatchedInP5) {
+    RingFixture ring(1024);
+    constexpr int kRecords = 12;
+    for (int i = 0; i < kRecords; ++i) {
+        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(i + 1), 16,
+                                     static_cast<std::uint8_t>(i)));
+    }
+
+    std::uint64_t applied = 0;
+    RingRecordView view{};
+    while (ring.Consumer().Pop(view)) {
+        ++applied;
+        ring.Control().appliedSeq.store(applied, std::memory_order_release);
+        // The reader's guarantee, checked at EVERY record rather than at the end:
+        // a batched watermark would sit at 0 here for 63 of every 64 iterations,
+        // and a client barrier reading it would block on work that already ran.
+        EXPECT_EQ(ring.Control().appliedSeq.load(std::memory_order_acquire), applied);
+    }
+    EXPECT_EQ(applied, static_cast<std::uint64_t>(kRecords));
+    EXPECT_TRUE(ring.Invariants());
+}
+
+// R-9, "batching may only make a watermark LATE, never early". retiredSeq is the one
+// the staging allocator reclaims behind, so a value published ahead of the actual
+// drain hands live bytes back to the producer. Late is merely slow; early is a
+// use-after-free that nothing on this ring checksums.
+TEST(RingTest, ALazyWatermarkMayTrailTheWorkButMustNeverLeadIt) {
+    RingFixture ring(1024);
+    constexpr int kRecords = 8;
+    for (int i = 0; i < kRecords; ++i) {
+        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(i + 1), 16,
+                                     static_cast<std::uint8_t>(i)));
+    }
+
+    std::uint64_t drained = 0;
+    RingRecordView view{};
+    while (ring.Consumer().Pop(view)) {
+        ++drained;
+        // A deliberately lazy publisher: only every third record. This is legal.
+        if (drained % 3 == 0) {
+            ring.Control().retiredSeq.store(drained, std::memory_order_release);
+        }
+        EXPECT_LE(ring.Control().retiredSeq.load(std::memory_order_acquire), drained)
+            << "retiredSeq ran ahead of the drain; those staged bytes are still live";
+    }
+    // Trailing at the end is fine and is what "late" means.
+    EXPECT_LE(ring.Control().retiredSeq.load(), static_cast<std::uint64_t>(kRecords));
+    EXPECT_TRUE(ring.Invariants());
+}
+
+// R-9's last sentence, and the one with no other detector: kRecPad DOES NOT ADVANCE
+// SEQ. A wrap filler is framing - no opcode, no payload, no reply slot - so a side
+// that counts it drifts from the side that does not, by one per wrap, for ever. And
+// because seq IS the reply-slot id (R-3), a drifted seq reads ANOTHER CALL'S ANSWER
+// instead of failing. Here the ring is sized so the last record cannot fit before the
+// wrap boundary, which forces the producer to emit a filler; the consumer must count
+// the records and not the filler.
+TEST(RingTest, AWrapFillerDoesNotAdvanceTheRecordSequence) {
+    RingFixture ring(256);
+    constexpr std::uint64_t kPayload = 56; // 8-byte header + 56 = 64 per record
+
+    // Three records fill 192 of 256 bytes; the fourth needs 64 and only 64 remain, so
+    // it lands exactly at the boundary. The fifth is what forces the filler.
+    std::uint64_t written = 0;
+    for (int i = 0; i < 3; ++i) {
+        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(i + 1), kPayload,
+                                     static_cast<std::uint8_t>(i)));
+        ++written;
+    }
+    const std::uint64_t headAfterThree = ring.Producer().LocalHead();
+
+    std::uint64_t popped = 0;
+    RingRecordView view{};
+    while (ring.Consumer().Pop(view)) {
+        // Pop skips fillers by contract, so a pad must never reach a caller that is
+        // about to number it. If one ever does, that is the drift itself.
+        EXPECT_EQ(view.flags & kRecPad, 0u) << "a wrap filler reached the record counter";
+        EXPECT_NE(view.kind, kRingPadRecordKind);
+        ++popped;
+    }
+    EXPECT_EQ(popped, written) << "the consumer numbered something the producer did not send";
+    ring.Consumer().PublishApplied();
+    ring.Consumer().PublishRetired();
+
+    // Now drive the producer across the wrap and prove a filler really was emitted:
+    // the head advances by MORE than the records' own bytes, and that surplus is the
+    // pad. The record count still has to match.
+    for (int i = 0; i < 3; ++i) {
+        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(i + 10), kPayload,
+                                     static_cast<std::uint8_t>(i + 10)));
+        ++written;
+    }
+    const std::uint64_t headAfterSix = ring.Producer().LocalHead();
+    EXPECT_GE(headAfterSix - headAfterThree, 3u * (kPayload + sizeof(RingRecordHeader)));
+
+    while (ring.Consumer().Pop(view)) {
+        EXPECT_EQ(view.flags & kRecPad, 0u) << "a wrap filler reached the record counter";
+        ++popped;
+    }
+    EXPECT_EQ(popped, written)
+        << "the two sides' sequence spaces have drifted by the fillers between them";
+    EXPECT_TRUE(ring.Invariants());
+}
