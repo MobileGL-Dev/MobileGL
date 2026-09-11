@@ -143,7 +143,6 @@ namespace MobileGL::MG_Remote::Client {
     private:
         Wire::PipeWireEncoder m_encoder;
         Wire::SegmentTable m_segments;
-        CapsMirror* m_caps = nullptr;
         Bool m_barrierArmed = true;
 
         std::unique_ptr<Transport::InProcessTransport> m_clientTransport;

@@ -80,6 +80,26 @@ namespace MobileGL::MG_Remote::Client {
             std::abort();
         }
 
+        // Guarded the same way ServerSession's helpers are: MG_Config::Ipc only exists
+        // behind MOBILEGL_BUILD_DISAGGREGATED (Config.h), and this file is only compiled
+        // there today - but the guard is what keeps that true if the source list ever
+        // changes, and an unguarded read would be a compile error nobody could read.
+        Uint32 SpinUsFromConfig() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            return MG_Config::Ipc.SpinUs;
+#else
+            return Transport::kDefaultSpinUs;
+#endif
+        }
+
+        Bool VerbBarrierFromConfig() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            return MG_Config::Ipc.VerbBarrier != 0;
+#else
+            return true;
+#endif
+        }
+
         const char* TransportModeName(MG_Config::TransportMode mode) {
             switch (mode) {
                 case MG_Config::TransportMode::Monolith: return "monolith";
@@ -172,7 +192,11 @@ namespace MobileGL::MG_Remote::Client {
                 return received;
             }
             const ::MobileGL::Wire::CtrlEnvelope* envelope = ParseEnvelope(frame);
-            if (envelope == nullptr || envelope->msg_type() != ::MobileGL::Wire::CtrlMsg::Welcome) {
+            // msg_as_Welcome() IS PART OF THE GUARD - flatbuffers' Verifier::VerifyTable is
+            // `return !table || table->Verify(*this)`, so a NULL union member verifies while
+            // msg_type() still reports Welcome. See ServerSession::Accept for the same guard.
+            if (envelope == nullptr || envelope->msg_type() != ::MobileGL::Wire::CtrlMsg::Welcome ||
+                envelope->msg_as_Welcome() == nullptr) {
                 MGLOG_E("MG_Remote client: the server's first control frame is not a verifiable "
                         "Welcome");
                 Stop();
@@ -234,7 +258,7 @@ namespace MobileGL::MG_Remote::Client {
         // PeerDoorbell() is the bell the SERVER parks on and this side rings; SelfDoorbell() is
         // this side's own. Which is which is the session's knowledge, not the transport's.
         m_producer.Attach(control, &m_cmd, &m_stage, &m_clientTransport->PeerDoorbell(),
-                          &m_clientTransport->SelfDoorbell(), MG_Config::Ipc.SpinUs);
+                          &m_clientTransport->SelfDoorbell(), SpinUsFromConfig());
 
         m_replies = Transport::ReplySlotPool(m_shm.ReplyBase(), m_shm.ReplyBytes(),
                                              m_shm.ReplySlotCount());
@@ -246,7 +270,7 @@ namespace MobileGL::MG_Remote::Client {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
 
-        m_barrierArmed = MG_Config::Ipc.VerbBarrier != 0;
+        m_barrierArmed = VerbBarrierFromConfig();
         if (!m_barrierArmed) {
             MGLOG_W("MG_Remote client: MOBILEGL_IPC_VERB_BARRIER=0 - this is R-1's NEGATIVE "
                     "CONTROL and is EXPECTED to be red. 31 of the 63 PipeInputs fields are still "
@@ -309,10 +333,18 @@ namespace MobileGL::MG_Remote::Client {
 
     void ClientSession::Stop() {
         if (!m_started) {
-            // Start's own failure paths land here with a half-built session; tear down what
-            // exists and leave nothing mapped.
+            // Start's own failure paths land here with a half-built session. FIVE of them are
+            // reached AFTER ServerSession::Accept has already returned OK, so tearing down
+            // only the client half is not enough and gets three things wrong at once: the
+            // server keeps its four mappings and stays m_accepted, so Accept's own guard
+            // refuses every later Start and the process can never open a session again; the
+            // process-wide segment resolver stays installed; and resetting m_serverTransport
+            // destroys a transport that ServerSession::m_transport and its two Doorbell*
+            // still point at. The server closes FIRST, in the same order the started path
+            // gets right, and only then do the transports go.
             m_producer.Detach();
             m_shm.Close();
+            Server::ServerSessionInstance().Close();
             m_clientTransport.reset();
             m_serverTransport.reset();
             m_transport = nullptr;
@@ -325,7 +357,14 @@ namespace MobileGL::MG_Remote::Client {
         //    a hung exit.
         Transport::RingControl* control = m_shm.CmdControl();
         if (control != nullptr) {
-            const Uint64 submitted = control->submittedSeq.load(std::memory_order_acquire);
+            // The PRODUCER's own last-published seq, not RingControl::submittedSeq. Ring.h:72-77
+            // permits submittedSeq to be published lazily and Ring.h:243 encourages batching
+            // the publish, so the shared watermark is allowed to lag the emitter - and a drain
+            // that waited for `appliedSeq >= submittedSeq` would then under-wait and free an
+            // emitter-owned var-tail while a record still names it. With the verb barrier armed
+            // the two are equal; under MOBILEGL_IPC_VERB_BARRIER=0, R-1's negative control that
+            // the phase has to run once, they are not.
+            const Uint64 submitted = m_producer.LastPublishedSeq();
             m_producer.PublishAndNotify(submitted);
             if (submitted != 0 &&
                 m_producer.WaitForApplied(submitted, kDrainTimeoutMs) != Transport::SessionWait::Reached) {
