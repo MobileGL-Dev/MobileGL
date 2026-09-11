@@ -1664,6 +1664,27 @@ jobs:
           python3 scripts/gen_pipe_dirty_surface.py --check
           python3 scripts/gen_pipe_dirty_surface.py --self-test
 
+      # A GATE as of P5 (R-7.1, CONTRACT-P5.md table 2). The eighth generator, and the only one
+      # whose output the step above cannot cover: `gen_pipe.py` does not write
+      # PipeFieldOwnership.inc, so regenerating the seven and diffing MG_Pipe/generated leaves a
+      # drifted ownership table green. The build-level static_assert only catches an
+      # UNCLASSIFIED row; a hand edit that CHANGES a class compiles clean, and --check is the
+      # only thing in the tree that catches it.
+      #
+      # NO BRANCH GUARD, deliberately, unlike the two G5 steps below: this asks "does the
+      # committed table still follow from the .def files", which is a question every branch can
+      # answer and every branch wants answered. The table outlives feat/disaggregated.
+      #
+      # --self-test is not optional, for the reason the two gates above give and for one this
+      # generator learned the hard way: its first version counted eleven trips when one control
+      # was a silent duplicate of another, because the harness asked "did something exit" rather
+      # than "did THIS exit". Every control now asserts its own message, and a harness control
+      # asserts that the harness still rejects someone else's exit.
+      - name: MGPipe PipeInputs field-ownership table is complete (R-7.1, table 2)
+        run: |
+          python3 scripts/gen_pipe_field_ownership.py --check
+          python3 scripts/gen_pipe_field_ownership.py --self-test
+
       # A GATE as of P3a (G5). "pool 与延迟释放原样搬" (ROADMAP.md:19) is meant literally: the
       # buffer pool, the deferred-release drain and the three persistently mapped rings move
       # VERBATIM, and ARCHITECTURE.md:515 says why - their retire happens only inside Present, so
