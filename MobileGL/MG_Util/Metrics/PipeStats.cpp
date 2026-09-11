@@ -30,9 +30,20 @@
 //                        OnSubData / OnFlushMappedRange, the AcquirePersistentMap seed, the
 //                        AcquireResidentSlice initial upload and the AcquireStreamedSlice
 //                        arena fill.
-//                        NOT covered: bytes an app writes THROUGH a persistent map. Those
-//                        never pass through either backend (D4/D-B4) - see
-//                        persistent-map-push.
+//                        NOT covered IN A MONOLITH BUILD: bytes an app writes THROUGH a
+//                        persistent map. Those never pass through either backend (D4/D-B4) -
+//                        see persistent-map-push.
+//                        COVERED UNDER SPLIT, AND DELIBERATELY OVERLAPPING WITH
+//                        persistent-map-push (P5 b1, R-6). At adoption tier T2 there is no
+//                        adoption, so a pushed block IS an ordinary resource_subdata: it
+//                        reaches Ops_H_SubData, is queued into pendingRanges and is staged
+//                        here like any other write. The same bytes are therefore in BOTH
+//                        classes, on purpose - stage-buffer answers "what did the backend
+//                        move", persistent-map-push answers "what did the client have to ship
+//                        because the acquisition was declined", and subtracting one from the
+//                        other would make the first under-report the thing it exists to
+//                        measure. Read them as two questions about the same bytes, never as a
+//                        partition, and do not add them.
 //   stage-texture        ESPRYT (Managers.cpp texture upload): the bytes of whichever of
 //                        the three upload shapes ran (rect list / union box / whole level).
 //                        MAGMA (VkTextureManager.cpp): the packed staging slice of an
@@ -78,9 +89,9 @@
 //                        ANTI-CORRELATED with: mpr counts acquisition ATTEMPTS - one per
 //                        storage definition, the same number in both modes - and this counts
 //                        the bytes the client had to ship because the attempt was declined.
-//                        NOT double-counted with stage-buffer: that class is what a BACKEND
-//                        stages out of a shadow it owns, and it explicitly excludes bytes an
-//                        app writes through a persistent map (see its entry above).
+//                        DOUBLE-COUNTED WITH stage-buffer, deliberately: see that entry
+//                        above. The two are different questions about the same bytes under
+//                        split, and adding them is wrong.
 //   residual-value-block Placeholder, always 0 until P2 (plan section 6.3).
 //
 // Call classes
