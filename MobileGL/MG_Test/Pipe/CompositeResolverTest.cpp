@@ -51,6 +51,13 @@
 #include <MG_Pipe/MGPipe.h>
 #if MOBILEGL_PIPE_PUSH
 #include "Init.h"
+// MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h:20-26) and nowhere
+// else, so a TU that tests it without this include silently reads it as 0. That is
+// invisible in a push build (where it really is 0) and in a verify build (where
+// -DMOBILEGL_PIPE_VERIFY=1 is on the command line); MOBILEGL_BUILD_DISAGGREGATED is the
+// one arming condition that lives behind the header, so a split build is the first place
+// the refusals below stop being fatal while the expectations still say they are.
+#include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Impl/GLImpl/Program/GL_Program.h>
 #include <MG_Impl/GLImpl/Program/GL_ProgramPipeline.h>
 #include <MG_Impl/Pipe/CompositeResolver.h>

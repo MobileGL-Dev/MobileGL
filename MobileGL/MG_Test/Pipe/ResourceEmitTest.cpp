@@ -56,6 +56,13 @@
 #include <MG_Pipe/MGPipe.h>
 #if MOBILEGL_PIPE_PUSH
 #include <Config.h>
+// MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h:20-26) and nowhere
+// else, so a TU that tests it without this include silently reads it as 0. That is
+// invisible in a push build (where it really is 0) and in a verify build (where
+// -DMOBILEGL_PIPE_VERIFY=1 is on the command line); MOBILEGL_BUILD_DISAGGREGATED is the
+// one arming condition that lives behind the header, so a split build is the first place
+// the refusals below stop being fatal while the expectations still say they are.
+#include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Impl/Pipe/VertexInputEmit.h>
@@ -1246,7 +1253,12 @@ namespace {
     TEST(ResourceEmit, TheLiveHostWritesWireFiresOnTheCallAPersistentMapProducerWouldSetItOn) {
 #if !MOBILEGL_PIPE_PUSH
         GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#elif !(MOBILEGL_PIPE_POISON || MOBILEGL_PIPE_VERIFY)
+        // MOBILEGL_PIPE_VERIFY alone, NOT `POISON || VERIFY`. PinNoLiveHostWrites is compiled
+        // under `#if MOBILEGL_PIPE_VERIFY` only (PipeApply.cpp:838-853), so in a split build -
+        // where POISON is armed by MOBILEGL_BUILD_DISAGGREGATED but VERIFY is off - the wire
+        // genuinely is compiled out and this case must skip. The wrong disjunction was masked
+        // until now by POISON being invisible in this TU at all (see the include at the top).
+#elif !MOBILEGL_PIPE_VERIFY
         GTEST_SKIP() << "Fatal{PipeLiveHostWrites} is a MOBILEGL_PIPE_VERIFY wire and is compiled out here";
 #elif !MGTEST_HAVE_FORK
         GTEST_SKIP() << "no fork on this platform; the wire's verdict is std::abort()";
