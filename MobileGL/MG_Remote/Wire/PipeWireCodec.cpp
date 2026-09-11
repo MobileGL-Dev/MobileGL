@@ -672,14 +672,20 @@ namespace MobileGL::MG_Remote::Wire {
         // The caller's tails are held to the layout the PAYLOAD declares, which is the same
         // arithmetic the decoder will run. A Count that says 4000 while the tail holds 8 bytes
         // dies here, on the producing side, rather than on a peer that can only say "corrupt".
-        if (tailCount != layout.TailCount) {
+        //
+        // A caller may SUPPLY FEWER TAILS THAN THE LAYOUT HAS, but only while the ones it left
+        // out are empty - Count == 0 is a legal record for every kVarTail row, and requiring a
+        // {nullptr, 0} entry for it would be a trap rather than a check. Anything else is a
+        // disagreement between the counts the payload declares and the bytes the caller holds.
+        if (tailCount > layout.TailCount) {
             WireProtocolFatalAt("EncodeRecord.tailCount", tailCount, layout.TailCount);
         }
-        for (Uint32 i = 0; i < tailCount; ++i) {
-            if (tails[i].Size != layout.TailBytes[i]) {
-                WireProtocolFatalAt("EncodeRecord.tailBytes", tails[i].Size, layout.TailBytes[i]);
+        for (Uint32 i = 0; i < layout.TailCount; ++i) {
+            const Uint64 supplied = i < tailCount ? tails[i].Size : 0;
+            if (supplied != layout.TailBytes[i]) {
+                WireProtocolFatalAt("EncodeRecord.tailBytes", supplied, layout.TailBytes[i]);
             }
-            if (tails[i].Size != 0 && tails[i].Bytes == nullptr) {
+            if (supplied != 0 && tails[i].Bytes == nullptr) {
                 WireProtocolFatal("EncodeRecord.tail", "non-zero tail length with a null pointer");
             }
         }

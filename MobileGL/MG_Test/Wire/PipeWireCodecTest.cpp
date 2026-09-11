@@ -452,6 +452,27 @@ TEST_F(PipeWireCodecTest, KVarTailRoundTripsWithItsTailIntact) {
     EXPECT_TRUE(applied);
 }
 
+TEST_F(PipeWireCodecTest, AnEmptyVarTailIsALegalRecordAndNeedsNoPlaceholderEntry) {
+    // Count == 0 is legal for every kVarTail row - "bind nothing at this range" - and a caller
+    // that had to pass a {nullptr, 0} entry for each absent tail would be walking into a trap
+    // rather than through a check. SetStreamOutputTargets is the sharpest case: its layout has
+    // TWO tails and both are empty at Count 0.
+    Wire2 wire;
+    MGPStreamOutputTargets header{};
+    header.Count = 0;
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetStreamOutputTargets, &header, sizeof(header)),
+              kInvalidSeq);
+    MGPVertexBuffers buffers{};
+    buffers.Count = 0;
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetVertexBuffers, &buffers, sizeof(buffers)),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_FALSE(applied); // no applier for stream output; off the reduced path
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+}
+
 TEST_F(PipeWireCodecTest, KReplySlotMapPersistentIsAConstantDecline) {
     // R-6 / R-2.4. DECLINED is a real answer, not a failure, and the applier is not called at
     // all: the record's payload is a bare MGPHandleOnly and carries NEITHER the size NOR the
