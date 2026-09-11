@@ -175,8 +175,41 @@ foreach(pipeTest ResourceEmitTest VertexInputEmitTest
         endif()
 endforeach()
 
+# P5 package p1: table 2 (PipeInputs field ownership) at runtime. Registered in EVERY
+# configuration rather than behind `if (MOBILEGL_BUILD_DISAGGREGATED)` like the Wire suite,
+# because half of it is arithmetic over the generated table that a push or verify build can
+# check just as well - and a suite that only exists in one configuration is a suite three
+# configurations cannot notice breaking. Its split-only cases compile away there.
+#
+# Links gtest rather than gtest_main and carries its own main(), like PipeInputsTest and
+# RenderStateSpansTest: its abort cases read the Fatal line back out of a log file the process
+# names before anything logs.
+add_executable(
+        FieldOwnershipTest
+        FieldOwnershipTest.cpp
+)
+
+target_include_directories(FieldOwnershipTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+        ${MGL_ROOT}/MobileGL/MG_Pipe
+        ${MGL_ROOT}/3rdparty/xxHash
+        ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
+        ${MGL_ROOT}/3rdparty/SPIRV-Reflect
+)
+
+target_link_libraries(FieldOwnershipTest PRIVATE
+        GTest::gtest
+        ${LINK_LIBRARIES}
+)
+
+if (MSVC)
+        target_compile_options(FieldOwnershipTest PRIVATE /Zc:preprocessor)
+endif()
+
 include(GoogleTest)
 gtest_discover_tests(PipeCatalogueTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+gtest_discover_tests(FieldOwnershipTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 foreach(pipeTest ResourceEmitTest VertexInputEmitTest
                  FramebufferEmitTest TextureEmitTest SamplerEmitTest ImageEmitTest
                  ProgramEmitTest CompositeResolverTest)

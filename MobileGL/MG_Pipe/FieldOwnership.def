@@ -1,0 +1,284 @@
+// MobileGL - MobileGL/MG_Pipe/FieldOwnership.def
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// The hand-maintained half of TABLE 2 (CONTRACT-P5.md section 3, R-7): where every
+// PipeInputs field's value comes from once the backend is a server.
+//
+// scripts/gen_pipe_field_ownership.py joins this file against the DERIVED half and writes
+// generated/PipeFieldOwnership.inc. CI runs `--check` and `--self-test` beside gen_pipe.py's.
+//
+// THE FOUR CLASSES (CONTRACT-P5.md section 3):
+//
+//   RECORD_SUPPLIED  a pushed record supplies the WHOLE field, so the server never needs
+//                    the client for it. THIS CLASS IS DERIVED, NOT LISTED: it is
+//                    kMGPipeFieldEmittedBy != kNone (Coverage.def's MGP_COVERAGE_EMITTED_LIST)
+//                    minus the fields EmittedCallSuppliesTheWholeField refuses
+//                    (MG_Impl/Pipe/PipeFill.cpp). 32 fields today. A row below that names a
+//                    field the derivation already placed here is a CONTRADICTION and stops
+//                    the generator - which is the only way this file can stay true as the
+//                    emitted list grows.
+//
+//   APPLIER_DERIVED  the applier writes it out of records it already applies, but no row of
+//                    the emitted list claims it, so the derivation above cannot see it.
+//
+//   BARRIER_PULLED   P5's DEBT. The server answers by reading a value the client's residual
+//                    fill (PipeFill.cpp step 4) left in the single shared gPipeInputs while
+//                    the verb barrier holds both threads apart (R-1). Correct only because
+//                    of that barrier, which is why the barrier is load-bearing rather than
+//                    cautious. Every row NAMES THE PHASE THAT RETIRES IT; a row with no
+//                    phase stops the generator. Each such read increments
+//                    PipeStats::CallClass::ResidualPulls (`rsp`) and, under
+//                    MOBILEGL_IPC_STRICT_ERRORS=1, is Fatal.
+//
+//   FATAL            no carrier, and the reduced path never reads it, so a read is a real
+//                    defect: Fatal{UnmigratedPipeInput, "<Field>@<verb>"}.
+//
+// A field in NONE of the four is a generator error and therefore a build failure (R-7.1).
+// A field in TWO is the same. That is the whole mechanism: a hand-maintained table would be
+// wrong within a week, and this one cannot be silently incomplete.
+//
+// clang-format off
+
+// X(Field, Class, RetiringPhase, Why)
+//
+// RetiringPhase is `-` for every class but BARRIER_PULLED, where it is the ROADMAP phase
+// whose row stops the pull. It is a string, not an enum, because two of them name two
+// phases for the two backends and flattening that would lose the half that matters.
+#define MGP_FIELD_OWNERSHIP_LIST(X)                                                                  \
+    /* ---- BARRIER_PULLED: the 20 non-sticky rows the reduced path actually reads ----          */  \
+    /* scout-unmigrated-census section 3 intersects each verb class's may-read mask with "no     */  \
+    /* record supplies it" and unions kClear (7 of 18), kDraw (19 of 47) and kReadback (12 of    */  \
+    /* 17). That union is 21 fields; GetPixelStoreParameters is the 21st and it is               */  \
+    /* APPLIER_DERIVED below, for the reason written there. OpenRA adds no field to this set -   */  \
+    /* it widens the SITE set, not the field set.                                                */  \
+    X(GetActiveTextureUnit,               BARRIER_PULLED, "P3b/P4b",                                 \
+      "the server answers from its own state; Coverage.def:215-219 says no call carries it")     \
+    /* DirectGLES.cpp:4486, PrepareForDraw, UNCONDITIONAL ON EVERY DRAW. No #if, no arm guard,   */  \
+    /* no record fallback, and PipeFill.cpp:1902-1905 says outright that what retires the pull   */  \
+    /* is P8, not a better applier: the storage is a SharedPtr<VertexArrayObject> and            */  \
+    /* bind_vertex_elements carries an eight-byte {slot, gen}.                                   */  \
+    X(GetBoundVertexArray,                BARRIER_PULLED, "P8",                                      \
+      "frontend heap reference; the record carries a handle, the mirror is a pointer")           \
+    /* 18 Espryt sites + 11 Magma. Coverage.def:37-70 splits the 15 BufferTargets across three   */  \
+    /* calls and leaves SEVEN with no carrier at all (CopyRead, CopyWrite, PixelPack,            */  \
+    /* PixelUnpack, Texture, DispatchIndirect, Query), which is why the FIELD is pulled even     */  \
+    /* though eight targets are covered.                                                         */  \
+    X(GetBufferBindingSlot,               BARRIER_PULLED, "P8 (indirect), P9 (readback), P13 (transfer)", \
+      "7 of 15 BufferTargets have no call; the field is one array over all 15")                   \
+    X(GetBufferBindingPoint,              BARRIER_PULLED, "P3b/P4b, P7",                             \
+      "frontend BindingSlotRange1D pointer")                                                      \
+    X(GetTouchedBufferBindingPointCount,  BARRIER_PULLED, "P3b/P4b",                                 \
+      "no call carries the touched-count high-water mark")                                        \
+    /* The applier CANNOT reproduce GLContext's cross-view conversion: the frontend writes       */  \
+    /* (Int32)value into intValue while MGPipeApplySetVertexAttribDefaults memcpys one Data[4]   */  \
+    /* into all three views (PipeFill.cpp:1884-1896). So the record exists, the applier writes   */  \
+    /* the field, and the value is still wrong - which is BARRIER_PULLED, not APPLIER_DERIVED.   */  \
+    X(GetCurrentVertexAttribute,          BARRIER_PULLED, "P3b/P4b",                                 \
+      "the applier writes it but cannot reproduce the cross-view conversion")                     \
+    /* 8 Espryt sites through GetFramebufferBindingSlotChecked + 13 Magma. SyncCurrentFBO        */  \
+    /* (:2995) is SELF-DECLARED monolith glue (DirectGLES.cpp:2961-2965) while BindCurrentFBO    */  \
+    /* (:4303-4353) is already split-clean - the bind is migrated, the sync is not.              */  \
+    X(GetFramebufferBindingSlot,          BARRIER_PULLED, "P3b/P4b (Espryt), P7 (Magma)",            \
+      "frontend BindingSlot<FramebufferObject> pointer")                                          \
+    X(GetImageTextureBinding,             BARRIER_PULLED, "P3b/P4b, P7",                             \
+      "frontend ImageTextureBinding base pointer")                                                \
+    /* set_sampler_views' Count IS this value plus one, but the set is suppressed on an          */  \
+    /* unchanged content hash while the high-water mark still moves (PipeFill.cpp:1917-1923).    */  \
+    X(GetMaxTouchedTextureUnit,           BARRIER_PULLED, "P3b/P4b",                                 \
+      "hash-suppressed set, high-water mark still moves")                                         \
+    /* The three texture SHUTTERS. Coverage.def:220-224 is explicit that no call carries them    */  \
+    /* and none should: what replaces them server-side is the applier's own Serial, a different  */  \
+    /* value with a different owner. So these are not values to migrate.                         */  \
+    X(GetSamplingResolutionGeneration,    BARRIER_PULLED, "P3b/P4b",                                 \
+      "a shutter, not a value: the server answers from its own Serial")                           \
+    X(GetTextureBindGeneration,           BARRIER_PULLED, "P3b/P4b",                                 \
+      "a shutter, not a value: the server answers from its own Serial")                           \
+    X(GetTextureContextId,                BARRIER_PULLED, "P3b/P4b",                                 \
+      "a shutter, not a value: the server answers from its own Serial")                           \
+    X(GetTextureUnitObject,               BARRIER_PULLED, "P3b/P4b, P7",                             \
+      "frontend TextureUnit base pointer; 13 Espryt + 8 Magma sites")                             \
+    /* DirectGLES.cpp:4497, PrepareForDraw, the second unconditional pointer read of every draw. */  \
+    X(GetProgramForDraw,                  BARRIER_PULLED, "P8 (Espryt), P7 (Magma)",                 \
+      "frontend SharedPtr<ProgramObject>; the record carries a handle")                           \
+    /* The XFB six. XFB itself is off the reduced path, but kDraw's may-read mask carries all    */  \
+    /* six and the draw walk reads them regardless - which is exactly the case a field census    */  \
+    /* taken from "what the scenario does" rather than from the mask would miss.                 */  \
+    X(IsTransformFeedbackActive,          BARRIER_PULLED, "P3b/P4b (Espryt), P7 (Magma)",            \
+      "read on every kDraw walk although XFB is off the reduced path")                            \
+    X(IsTransformFeedbackPaused,          BARRIER_PULLED, "P3b/P4b (Espryt), P7 (Magma)",            \
+      "read on every kDraw walk although XFB is off the reduced path")                            \
+    X(GetTransformFeedbackProgram,        BARRIER_PULLED, "P3b/P4b (Espryt), P7 (Magma)",            \
+      "frontend SharedPtr<ProgramObject>")                                                        \
+    X(GetTransformFeedbackGeneration,     BARRIER_PULLED, "P3b/P4b (Espryt), P7 (Magma)",            \
+      "no call carries it")                                                                       \
+    X(GetBoundTransformFeedbackLifetimeId, BARRIER_PULLED, "P3b/P4b (Espryt), P7 (Magma)",           \
+      "the D21 counter-slot rekey's key; no call carries it")                                     \
+    X(GetTransformFeedbackCapturedVertices, BARRIER_PULLED, "P3b/P4b (Espryt), P7 (Magma)",          \
+      "no call carries it")                                                                       \
+                                                                                                     \
+    /* ---- APPLIER_DERIVED ----                                                                 */  \
+    /* THE ONE ROW, and it is the one the contract asked P5 to split into two field ids. It is   */  \
+    /* split HERE INSTEAD, by ARGUMENT, in the argument-exception list below - see that list's   */  \
+    /* header for the evidence and for what would overturn the decision. The field itself is     */  \
+    /* APPLIER_DERIVED because set_pixel_pack_state arrives and MGPipeApplyAccess::PackState     */  \
+    /* writes m_pixelStore[0] out of it (PipeApply.cpp:1373), while no row of the emitted list   */  \
+    /* claims the field (Coverage.def:173 keeps it out deliberately, because the record supplies */  \
+    /* half of it).                                                                              */  \
+    X(GetPixelStoreParameters,            APPLIER_DERIVED, "-",                                      \
+      "set_pixel_pack_state; the applier writes m_pixelStore[0] (PipeApply.cpp:1373)")            \
+                                                                                                     \
+    /* ---- FATAL: three non-sticky fields, each off the reduced path for a checkable reason --- */  \
+    X(GetBoundTransformFeedbackName,      FATAL, "-",                                                \
+      "DEAD: read by no backend since the D21 rekey (PipeInputs.h:232-234)")                      \
+    X(GetTransformFeedbackPausedPrimitiveCounter, FATAL, "-",                                        \
+      "reachable only from class kQuery, which the reduced path never enters")                    \
+    X(GetProgramForDispatch,              FATAL, "-",                                                \
+      "reachable only from kDispatch; there is no compute on the reduced path")                   \
+                                                                                                     \
+    /* ---- the seven sticky forwards, as FIELD rows ----                                        */  \
+    /* They have no storage, so a read of the FIELD is a call of the FORWARD; the field row and  */  \
+    /* the forward row below carry the same class by construction, and the generator refuses a   */  \
+    /* pair that disagrees. Their poison exemption (generated/PipeFilled.inc:422's sticky arm)   */  \
+    /* is cancelled under split by the server stamp, which zeroes their FilledGen - and 0 loses  */  \
+    /* to nothing, because :419's "never filled" test runs first.                                */  \
+    X(GetBufferBindingPointCount,         BARRIER_PULLED, "P7/P13",                                  \
+      "an argument-keyed lookup into the frontend's binding-point table")                         \
+    X(GetProgramObject,                   BARRIER_PULLED, "P9",                                      \
+      "hands the backend a frontend SharedPtr<ProgramObject> keyed by GL name")                   \
+    X(GetTextureObject,                   BARRIER_PULLED, "P7",                                      \
+      "hands the backend a frontend SharedPtr<ITextureObject> keyed by GL name")                  \
+    X(HasOpenTransformFeedbackSpan,       BARRIER_PULLED, "P7/P9",                                   \
+      "a lookup into frontend XFB span state keyed by lifetime id")                               \
+    X(ValidateProgramName,                BARRIER_PULLED, "P9",                                      \
+      "a frontend name-table probe; Coverage.def calls it kClientResolved")                       \
+    X(InvalidateCompileEnv,               BARRIER_PULLED, "P5",                                      \
+      "a WRITE INTO THE FRONTEND; R-12 replaces it with the re-arriving caps snapshot")           \
+    X(RecordError,                        BARRIER_PULLED, "P9",                                      \
+      "a WRITE INTO THE FRONTEND; R-12's OnGlError, whose ordering is P9's")
+
+// X(Field, Class, RetiringPhase, Mechanism) - the SEVEN STICKY FORWARDS as their own rows.
+//
+// CONTRACT-P5.md section 3: "The domain is 63 fields plus the 7 sticky forwards, which are
+// among those 63 but are exempted from the poison and so need their own row. 70 rows."
+// The reason they need a second row is that they are the seven that hand the server a raw
+// FRONTEND OBJECT or write INTO the frontend, so "the exit gate is structurally blind on the
+// seven most dangerous fields" - and the row that fixes that is about the FORWARD (a live
+// call with no stored value), not about the field's storage, which does not exist.
+//
+// Mechanism is what replaces the forward, which is NOT the same question as which phase
+// retires the pull.
+#define MGP_FIELD_OWNERSHIP_FORWARD_LIST(X)                                                          \
+    X(GetBufferBindingPointCount,         BARRIER_PULLED, "P7/P13",                                  \
+      "a server-side binding-point table")                                                       \
+    X(GetProgramObject,                   BARRIER_PULLED, "P9",                                      \
+      "a client-resolved program handle table (ARCHITECTURE 3.2 explicitly-not-ported)")         \
+    X(GetTextureObject,                   BARRIER_PULLED, "P7",                                      \
+      "a server-side texture handle table")                                                      \
+    X(HasOpenTransformFeedbackSpan,       BARRIER_PULLED, "P7/P9",                                   \
+      "server-side XFB span state")                                                              \
+    X(ValidateProgramName,                BARRIER_PULLED, "P9",                                      \
+      "a client-resolved program name probe")                                                    \
+    X(InvalidateCompileEnv,               BARRIER_PULLED, "P5",                                      \
+      "OnCapsInvalidated - the re-arriving caps snapshot IS the invalidation (R-12)")            \
+    X(RecordError,                        BARRIER_PULLED, "P9",                                      \
+      "OnGlError, the ordered reverse-channel error post (R-12); its ordering is P9's")
+
+// X(Field, Arg0, Class, Why) - ARGUMENT-KEYED EXCEPTIONS.
+//
+// A row here narrows ONE argument value of ONE field to a different class. The field keeps
+// its single row above; this is the same shape Coverage.def:62-69 already rules for
+// GetBufferBindingSlot - "THE ROW STAYS ONE ROW, and that is structural rather than a
+// shortcut: this list IS the MGPipeInputField enum and the PipeInputs field set, and the
+// field is ONE array that a second row of the same name could only duplicate".
+//
+// GetPixelStoreParameters is m_pixelStore[2] indexed by its own `isUnpack` argument, exactly
+// as GetBufferBindingSlot is m_bufferBindingSlot[15] indexed by its BufferTarget. Only [0]
+// (pack) has a carrier, and the applier writes it.
+//
+// AND THE UNPACK HALF HAS NO BACKEND READER AT ALL. Every MGB_CTX->GetPixelStoreParameters
+// call site in the tree passes `false`: DirectGLES.cpp:7924, :9399, :10893, :11272,
+// Utils.cpp:2302 and VulkanRenderer.cpp:10980 - six, not the five the scout named, and the
+// scout did not open them. PipeFill.cpp's own EmitPixelPackState says the same thing from
+// the other side: "PACK only, deliberately: nothing on the far side of the boundary reads
+// unpack state". So the honest class for the unpack half is FATAL, not BARRIER_PULLED: a
+// future backend read of it would otherwise be served a stale struct in silence, and this
+// way it is a named abort on the first read.
+#define MGP_FIELD_OWNERSHIP_ARG_LIST(X)                                                              \
+    X(GetPixelStoreParameters, 1, FATAL,                                                             \
+      "the unpack half has no carrier AND no backend reader; all six MGB_CTX sites pass false")
+
+// X(WireOp, Verb) - WHERE THE SERVER STAMPS.
+//
+// The stamp rule needs one thing the wire does not carry: which MGPipeVerb a record belongs
+// to. The two name spaces are not the same and do not line up by name - the DRAW verb is
+// `DrawArrays` and its record is `draw_vbo`, the BLIT verb is `BlitFramebuffer` and its record
+// is `blit` - so the map is written here and checked against both sources (PipeCalls.def for
+// the op, FillPoints.def for the verb) rather than believed.
+//
+// EXACTLY THE OPS THAT ARE VERB BOUNDARIES. CONTRACT-P5.md section 7 puts five slots in class
+// B (emitted in P5): Clear, DrawArrays, ReadPixels, BlitFramebuffer and Present. FOUR OF THEM
+// ARE HERE AND PRESENT IS NOT, and that is a ruling rather than an omission: FillPoints.def:21
+// says in so many words that "Present and SetSwapInterval go through BackendObject virtuals
+// and read no frontend state, so they are not verbs here". There is no MGPipeVerb::Present to
+// stamp for, MGPipeValidateForVerb is never called for it, and stamping at Present would
+// retire the previous verb's answers with nothing to put in their place.
+//
+// An op that is not in this list is NOT a verb boundary and the applier must not stamp on it:
+// a set_dynamic_state between two draws is part of the draw's verb, not a new one.
+//
+// THE GENERATOR REFUSES AN OMISSION, NOT ONLY A TYPO, and that is the half the first version of
+// this file did not have. Every call that is VERB-SHAPED must have a row here or an exemption
+// row below with a reason. "Verb-shaped" is the union of two mechanical tests, both derived:
+//   (a) PipeCalls.def gives the call kind kCtxVerb - the catalogue's own word for it;
+//   (b) the call's name is also an MGPipeVerb name in FillPoints.def.
+// Twelve rows and three exemptions cover all fifteen. Only four of the twelve can arrive in P5
+// (CONTRACT §7 class B minus Present); the other eight are Fatal{UnmigratedVerb} today and are
+// mapped ANYWAY, because the failure mode of an absent row is silent: the applier would run the
+// record under the PREVIOUS verb's serial, mask and name, and a field inside that mask would
+// read FRESH while holding the previous verb's value.
+//
+// NOT MECHANICALLY DETECTABLE, and so not claimed: a call that is a verb boundary, is not
+// kCtxVerb, and whose name differs from its verb's. `ResourceCopyRegion` is the one in the tree
+// (its verbs are CopyImageSubData / CopyTexSubImage2D / CopyTexImage2D - three of them, which is
+// why it cannot be a row without a rule for choosing). The phase that emits it adds its row and
+// decides which verb it is.
+#define MGP_VERB_OP_LIST(X)                                                                          \
+    /* CONTRACT §7 class B - the four that can actually arrive in P5. */                              \
+    X(Clear,              Clear)                                                                     \
+    X(DrawVbo,            DrawArrays)                                                                \
+    X(ReadPixels,         ReadPixels)                                                                \
+    X(Blit,               BlitFramebuffer)                                                           \
+    /* Class C today (Fatal{UnmigratedVerb}); mapped so the phase that emits one cannot get NO  */   \
+    /* stamp by omission. DrawVbo above has the same shape and a worse case: it stands for all  */   \
+    /* twenty draw verbs, which share the kDraw mask but not the NAME a Fatal prints.           */   \
+    X(LaunchGrid,         DispatchCompute)                                                           \
+    X(MemoryBarrier,      MemoryBarrier)                                                             \
+    X(BeginStreamOutput,  BeginTransformFeedback)                                                    \
+    X(EndStreamOutput,    EndTransformFeedback)                                                      \
+    X(PauseStreamOutput,  PauseTransformFeedback)                                                    \
+    X(ResumeStreamOutput, ResumeTransformFeedback)                                                   \
+    X(GenerateMipmap,     GenerateMipmap)                                                            \
+    X(GetTextureImage,    GetTextureImage)
+
+// X(Op, Why) - verb-shaped calls that are deliberately NOT stamp points.
+//
+// An exemption is a ROW, not an absence, so that the reason is in the file rather than in a
+// reviewer's head and so that the generator's completeness check has something to accept.
+#define MGP_VERB_OP_EXEMPT_LIST(X)                                                                   \
+    X(Present,                                                                                       \
+      "FillPoints.def:21 - Present and SetSwapInterval go through BackendObject virtuals and "       \
+      "read no frontend state, so they are not verbs here. There is no MGPipeVerb::Present, "        \
+      "MGPipeValidateForVerb is never called for it, and stamping would retire the previous "        \
+      "verb's answers with nothing to put in their place. It is class B all the same.")              \
+    X(SetSwapInterval,                                                                               \
+      "the same sentence of FillPoints.def:21, and it is class C besides")                           \
+    X(Flush,                                                                                         \
+      "not a verb at all: the verb census (BRIEF §12 C-3) found Flush is not a GLFunctionsTable "    \
+      "slot and glFlush/glFinish are empty function bodies (Definitions.cpp:111-112), so there "     \
+      "is no MGPipeVerb::Flush for a row to name")
+// clang-format on

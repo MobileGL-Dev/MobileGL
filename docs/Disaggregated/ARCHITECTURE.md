@@ -80,9 +80,18 @@ CSO 在 client 侧内容寻址（Mesa `cso_cache` 先例）：每类一张 `ska:
 | G2 | `PipeThunks.inc` | monolith 直调 thunk `MGP_<Name>()`，`MG_Impl` 的约 93 个 `gBackendFunctionsTable.GL.*` 站点逐名改到它上面 |
 | G3 | `PipeWire.inc` | wire 记录 + 每种一条尺寸 `static_assert` + applier 分发前的运行期边界检查 → `Fatal{ProtocolCorruption}` |
 | G4 | `PipeVerify.inc` | `MOBILEGL_PIPE_VERIFY` 的逐字段比对器（字段表来自 `PipeFields.def`；浮点按位比较，NaN patch level 不会误报） |
-| G5 | `PipeFilled.inc` | `PipeInputs` 字段 id（61 个）与逐 verb 世代 poison |
+| G5 | `PipeFilled.inc` | `PipeInputs` 字段 id（**63 个**，`static_assert(kMGPipeInputFieldCount == 63)`）与逐 verb 世代 poison |
 | G6 | `PipeCoverage.inc` | 477 行后端读点清单 → MGPipe 调用的映射（`Coverage.def` 手工维护一半）：299 → 调用、5 client 自答、6 反向通道、167 结构性句柄、**0 UNMAPPED** |
 | G7 | `PipeSpanTable.inc` | render-state pipeline 子集的成员名表（24 个，取自 `ComputePipelineStateHash` 今天哈希的字段，`scripts/gen_pipe.py:67-92`）；带 `offsetof` 的 chunk 表与 setter 一致性测试在 P2 |
+
+**G8（P5 新增，另一个生成器）** `scripts/gen_pipe_field_ownership.py` → `generated/PipeFieldOwnership.inc`：
+`CONTRACT-P5.md` §3 的表 2，63 个字段 + 7 个 sticky forward = **70 行**，每行恰好属于
+`RECORD-SUPPLIED / APPLIER-DERIVED / BARRIER-PULLED / FATAL` 之一，**不在任何一类里 = 构建失败**（R-7.1）。
+`RECORD-SUPPLIED` 是**推导**出来的（`Coverage.def` 的 emitted 列表减去 `PipeFill.cpp` 的
+`EmittedCallSuppliesTheWholeField` 拒绝项），手工那一半在 `MG_Pipe/FieldOwnership.def`。
+它从 `MG_Backend/MGPipe/PipeInputs.h` include，**不从 `MG_Pipe/MGPipe.h`**——后者在 pull 构建的
+include 闭包里，而 G1 不允许那里有任何符号位移。`--check` 与 `--self-test`（11 条阴性对照）与
+`gen_pipe.py` 的同样在 CI 里跑。
 
 ### 3.2 分组与计数
 
