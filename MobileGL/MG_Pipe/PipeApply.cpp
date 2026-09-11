@@ -852,6 +852,30 @@ namespace MobileGL::MG_Pipe {
         void PinNoLiveHostWrites(const MGPipeResourceRecord&, MGPipeHandle, const char*) {}
 #endif
 
+#if MOBILEGL_PIPE_VERIFY
+        // P5's pin, the same shape and for the same reason. The respecify SCOPE now has a wire
+        // carrier (MGPResourceDesc's HasRespecifiedLevel + the pair) and no producer: every
+        // descriptor P5 builds is whole-resource, and the per-level scope still arrives the old
+        // way, as the trailing MGPRespecifiedLevel* this function does not look at.
+        //
+        // The two must not disagree, and when a later package wires the carrier it will set the
+        // fields at a call site that also still passes the pointer - so the first thing that can
+        // go wrong is exactly one of the two moving. A verify build refuses to let that arrive
+        // unannounced, because a descriptor that says "whole resource" while the pointer says
+        // "level 1" drops every other level's pending upload with nothing saying so.
+        void PinWholeResourceRespecifyScope(const MGPResourceDesc& desc, MGPipeHandle res, const char* call) {
+            if (MGPipeRespecifyIsWholeResource(desc)) return;
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeRespecifyScope")
+                                 " %s {slot=%u, gen=%u}: the descriptor carries a per-level respecify "
+                                 "scope (target=%u, level=%u), and no path in this phase may set one",
+                                 call, res.Slot, res.Gen,
+                                 static_cast<unsigned>(MGPipeRespecifiedUploadTargetOf(desc)),
+                                 static_cast<unsigned>(MGPipeRespecifiedLevelOf(desc)));
+        }
+#else
+        void PinWholeResourceRespecifyScope(const MGPResourceDesc&, MGPipeHandle, const char*) {}
+#endif
+
         // The one gate every content-carrying buffer write goes through. resource_subdata and
         // buffer_subdata_resident differ only in which backend hook takes the bytes and in the
         // fact that one of them is allowed to be absent, so a second copy of this arithmetic
@@ -1628,6 +1652,7 @@ namespace MobileGL::MG_Pipe {
         MGPipeResourceRecord* record = ResolveResourceIn(*table, "resource_respecify", desc.Resource);
         if (record == nullptr) return false;
         PinNoLiveHostWrites(*record, desc.Resource, "resource_respecify");
+        PinWholeResourceRespecifyScope(desc, desc.Resource, "resource_respecify");
 
         // IS THIS A REDEFINITION AT ALL? Asked BEFORE the descriptor is replaced, because the
         // stored one is the only thing there is to compare against (ID-18 M4). See

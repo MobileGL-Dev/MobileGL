@@ -41,10 +41,16 @@
 #define MGP_FIELDS_MGPCaps(F) \
     F(Dynamic) F(CallMask) F(FormatCapabilities) F(RendererInfo)
 
+// The three respecify-scope fields are listed like any other member: they occupy what used to be
+// Pad0's high byte and Pad1, and the generator's cover check only excludes members actually
+// NAMED Pad*, so leaving them out would fail --check rather than pass it. They are also real
+// G4 comparands - a verify build that let the scope differ silently would be blind to the one
+// thing that decides whether a respecify drops one pending upload or all of them.
 #define MGP_FIELDS_MGPResourceDesc(F) \
     F(Resource) F(Target) F(StorageKind) F(BindMask) F(InternalFormat) F(Width) F(Height) F(Depth) \
     F(ArrayLayers) F(Levels) F(Samples) F(FixedSampleLocations) F(Immutable) F(Usage) F(StorageFlags) \
-    F(HasDefinedContent) F(ImageBindableHint) F(GlNameForDiag) F(ViewOf) F(BufferForTexBuffer) \
+    F(HasDefinedContent) F(ImageBindableHint) F(HasRespecifiedLevel) F(GlNameForDiag) \
+    F(RespecifiedUploadTarget) F(RespecifiedLevel) F(ViewOf) F(BufferForTexBuffer) \
     F(BufOffset) F(BufSize)
 
 #define MGP_FIELDS_MGPFenceWait(F) \

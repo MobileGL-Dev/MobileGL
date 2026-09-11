@@ -300,7 +300,30 @@ namespace MobileGL::MG_Pipe {
         Uint32 StorageFlags; // glBufferStorage flags
         Uint8 HasDefinedContent;  // false after a NULL-data respecify - STORAGE-DEFINING
         Uint8 ImageBindableHint;  // client-side everImageBound; pre-emptive allocation
-        Uint16 Pad0;
+        // THE SCOPE OF A RESPECIFY (P5 R-13.3b, CONTRACT-P5.md table 1 row 19b). Zero means
+        // "this respecify redefines the WHOLE resource"; non-zero means it redefines exactly
+        // the (RespecifiedUploadTarget, RespecifiedLevel) pair below and nothing else.
+        //
+        // It exists because the applier ALREADY takes that scope - as a trailing
+        // const MGPRespecifiedLevel* (PipeApply.h:792-795) - and MGPResourceDesc could not
+        // express it, so it was the second of resource_respecify's two companions with no wire
+        // carrier. The difference is not cosmetic: a null scope drops EVERY pending upload,
+        // because every level's coordinate system has just been replaced, while a per-level
+        // one drops only that key. Crossing without the scope would make every mutable
+        // per-level glTexImage*D on the far side look like a whole-resource redefinition and
+        // silently eat the texels of every other level - exactly the loss the server-side
+        // pending-upload set exists to prevent.
+        //
+        // READ IT THROUGH THE THREE HELPERS BELOW, never by touching the fields: the
+        // presence byte and the pair are one value in three pieces, and an open-coded reader
+        // that forgets the presence byte reads level 0 of upload target 0 as a real scope.
+        //
+        // NOT STORAGE-DEFINING, and not metadata either: it does not describe the resource at
+        // all, it describes what this CALL replaces. MGPipeResourceRespecifyNeedsAck and the
+        // storage-defining field set below are unaffected by it, which is why it is not named
+        // in either.
+        Uint8 HasRespecifiedLevel;
+        Uint8 Pad0;
         // ImageBindableHint and BindMask above are the two METADATA fields the rule exists
         // for: a respecify that moves only them - every storage-defining field equal to the
         // stored descriptor - is a metadata update, with no reallocation ack and no
@@ -312,12 +335,62 @@ namespace MobileGL::MG_Pipe {
         // of a content hash (section 4.2.1). Widened from the plan's two bytes, which
         // cannot hold one.
         Uint32 GlNameForDiag;
-        Uint32 Pad1;
+        // The pair HasRespecifiedLevel above gates. Byte for byte the two members of
+        // MGPRespecifiedLevel (PipeApply.h:792-795), in that order, so the applier's existing
+        // struct and this carrier are one layout - but spelled as two Uint16s rather than as
+        // that type, because PipeApply.h includes THIS header and not the other way round.
+        Uint16 RespecifiedUploadTarget;
+        Uint16 RespecifiedLevel;
         MGPipeHandle ViewOf;             // storage owner for a texture view
         MGPipeHandle BufferForTexBuffer; // texture-buffer backing store
         Uint64 BufOffset, BufSize;       // kWholeBuffer == ~0, resolved live
     };
     MGP_ASSERT_POD(MGPResourceDesc, 88);
+    // The scope fields went into the two existing pads, so the descriptor did not grow and this
+    // number did not move. That was the deciding argument against giving MGPResourceDesc an
+    // MGPBlobRef for the OTHER uncarried companion (initialBytes): a blobref is 24 bytes, the
+    // pads are 6, and it would have taken the struct to 112. The scope needs 5 and fits.
+    static_assert(offsetof(MGPResourceDesc, RespecifiedUploadTarget) + sizeof(Uint16) ==
+                      offsetof(MGPResourceDesc, RespecifiedLevel),
+                  "the respecify scope pair must stay adjacent and in MGPRespecifiedLevel's order");
+
+    // ---- the only supported reads of the respecify scope --------------------------------
+    //
+    // Three fields, one value. Open-coding them is how a reader that forgets the presence byte
+    // turns "whole resource" into "upload target 0, level 0" - a real scope, and the wrong one.
+
+    // True when this respecify replaces the whole resource, which is every glBufferData, every
+    // glBufferStorage, every glTexStorage* and every texture view. The applier drops every
+    // pending upload for it.
+    inline constexpr Bool MGPipeRespecifyIsWholeResource(const MGPResourceDesc& desc) {
+        return desc.HasRespecifiedLevel == 0;
+    }
+
+    // The single (uploadTarget, level) a per-level respecify replaces. Reading either half of a
+    // whole-resource descriptor is a caller error; both answer 0 so that a misuse is at least
+    // deterministic rather than whatever the pad happened to hold.
+    inline constexpr Uint16 MGPipeRespecifiedUploadTargetOf(const MGPResourceDesc& desc) {
+        return MGPipeRespecifyIsWholeResource(desc) ? Uint16(0) : desc.RespecifiedUploadTarget;
+    }
+    inline constexpr Uint16 MGPipeRespecifiedLevelOf(const MGPResourceDesc& desc) {
+        return MGPipeRespecifyIsWholeResource(desc) ? Uint16(0) : desc.RespecifiedLevel;
+    }
+
+    // The two writers. A producer sets the scope with one call so the presence byte cannot be
+    // left behind, and clears it with the other; a descriptor built by value-initialization is
+    // already whole-resource, which is the safe default and the only one P5 produces.
+    inline constexpr void MGPipeSetRespecifiedLevel(MGPResourceDesc& desc, Uint16 uploadTarget,
+                                                   Uint16 level) {
+        desc.HasRespecifiedLevel = 1;
+        desc.RespecifiedUploadTarget = uploadTarget;
+        desc.RespecifiedLevel = level;
+    }
+    inline constexpr void MGPipeClearRespecifiedLevel(MGPResourceDesc& desc) {
+        desc.HasRespecifiedLevel = 0;
+        desc.RespecifiedUploadTarget = 0;
+        desc.RespecifiedLevel = 0;
+    }
+
     inline constexpr Uint64 kMGPipeWholeBuffer = ~0ull;
 
     struct MGPFenceWait {
