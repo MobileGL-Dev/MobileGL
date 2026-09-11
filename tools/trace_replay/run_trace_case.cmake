@@ -28,6 +28,30 @@ if(TRACE_COHERENT_AS_FLUSH)
     list(APPEND coherent_as_flush_args --coherent-as-flush)
 endif()
 
+# --- P5: the transport, threaded as an ENVIRONMENT rather than as a replay CLI flag ----------
+#
+# MOBILEGL_TRANSPORT reaches the library through the environment, so a `cmake -P` script can set
+# it and the child inherits it - exactly how the MOBILEGL_PIPE_VERIFY block at the bottom of this
+# file already works, and with no C++ change anywhere. The desktop CLI has no --env option
+# (trace_replay_cli.cpp:116-179 is the whole option list) and the Android path already has one
+# (trace-replay-ci.sh --env -> trace_replay_core.cpp's setenv block), so an environment read
+# covers both directions and a new flag would buy nothing.
+#
+# TWO WAYS IN, ONE ASSERTION. `-DTRACE_TRANSPORT=` is what the SPLIT ctest variant passes, so
+# that entry is self-describing and needs no ritual around it; exporting MOBILEGL_TRANSPORT in
+# the calling process is what ~/w7/retrace_gate.py and CI's retrace-split job do over the
+# UNCHANGED case names, because the gate parses a FOREIGN reference CTestTestfile.cmake whose
+# name regex cannot see a variant suffix. Setting the variable from the -D FIRST means the
+# assertions below read one value however it arrived.
+if(DEFINED TRACE_TRANSPORT AND NOT "${TRACE_TRANSPORT}" STREQUAL "")
+    set(ENV{MOBILEGL_TRANSPORT} "${TRACE_TRANSPORT}")
+endif()
+if(DEFINED TRACE_IPC_SERVER_PATH AND NOT "${TRACE_IPC_SERVER_PATH}" STREQUAL "")
+    # ARCHITECTURE.md:543. P6 consumes it; P5 carries it so that "unparsed" and
+    # "parsed and ignored" stop being the same observation.
+    set(ENV{MOBILEGL_IPC_SERVER_PATH} "${TRACE_IPC_SERVER_PATH}")
+endif()
+
 if(EXISTS "${TRACE_OUTPUT_DIR}")
     file(REMOVE_RECURSE "${TRACE_OUTPUT_DIR}")
 endif()
@@ -187,5 +211,77 @@ if(DEFINED ENV{MOBILEGL_PIPE_VERIFY} AND NOT "$ENV{MOBILEGL_PIPE_VERIFY}" STREQU
                     "vocabularies are kMGPipeInputFieldNames[] and kMGPipeVerbNames[].")
         endif()
         message(STATUS "MGPipe verify: ${pipe_verify_case} armed, zero divergences, zero unmigrated reads")
+    endif()
+endif()
+
+# --- P5: MOBILEGL_TRANSPORT, the split arm's own assertions ----------------------------------
+#
+# The same problem the verify block above solves, with the same answer and one extra reason to
+# need it. A retrace that exported MOBILEGL_TRANSPORT=inproc at a library configured WITHOUT
+# -DMOBILEGL_BUILD_DISAGGREGATED=ON is not merely a no-op: the variable's PARSER does not exist
+# in that build at all (CONTRACT-P5 5 - putting a complaint in the unconditional part of
+# ConfigLoader would move a pull-build symbol and break gate G1), so the value is accepted by the
+# environment and silently ignored, every frame still matches its golden, and the case reports a
+# clean pass having run monolith end to end.
+#
+# THE LIBRARY'S OWN LOG IS THE ONLY CHANNEL a `cmake -P` script has for the difference, and it is
+# also THE ONLY VALID REFUSAL CENSUS. A `ctest -V` transcript is a FALSE ZERO for Fatal{...}
+# lines: the console sink is compiled out of the configurations these lanes run, so the aborts
+# reach output/mobilegl.log and nowhere else. That is why TRACE_OUTPUT_DIR and TRACE_ARTIFACT_DIR
+# carry the variant - without it both arms write one output/mobilegl.log, the second run wipes
+# the first, and the census silently becomes a census of one arm. P4a shipped that defect once
+# already; this is the same defect in a new place, pre-empted.
+#
+# Three demands, all silent when MOBILEGL_TRANSPORT is unset or "monolith":
+#   * mobilegl.log exists - the replay wrote one, so the library was loaded and logging;
+#   * it carries ConfigLoader's inproc line, which is emitted ONLY by a build that compiled the
+#     parser AND resolved the value to InProcess. This is the falsifiable half;
+#   * it carries no Fatal{ at all. Under split the emit table raises
+#     Fatal{UnmigratedVerb, "<slot>"} for the 64 slots P5 does not implement, so a clean run of a
+#     reduced-path target is a run that touched none of them - and any other Fatal{ (ProtocolCorruption,
+#     UnmigratedPipeInput, AbiMismatch) is a real defect. The count and the distinct names are
+#     printed either way, because the census is the deliverable even when the run passes.
+if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "")
+    set(split_case "${TRACE_CASE_NAME} ${TRACE_BACKEND}")
+    if("$ENV{MOBILEGL_TRANSPORT}" STREQUAL "monolith")
+        message(STATUS "MGPipe split: MOBILEGL_TRANSPORT=monolith, no split assertions for ${split_case}")
+    elseif(NOT EXISTS "${mobilegl_log}")
+        message(FATAL_ERROR
+                "MOBILEGL_TRANSPORT=$ENV{MOBILEGL_TRANSPORT} is set for ${split_case} but the run wrote "
+                "no ${mobilegl_log}, so there is no evidence the transport ever resolved. A split "
+                "retrace with no library log cannot be counted as a split retrace.")
+    else()
+        file(READ "${mobilegl_log}" split_log)
+        string(FIND "${split_log}" "MOBILEGL_TRANSPORT=inproc" split_armed_at)
+        if(split_armed_at EQUAL -1)
+            message(FATAL_ERROR
+                    "MOBILEGL_TRANSPORT=$ENV{MOBILEGL_TRANSPORT} is set for ${split_case} and the library "
+                    "never reported resolving it. ConfigLoader::InitTransport logs one line at INFO when "
+                    "it selects InProcess, and that line exists only in a build configured with "
+                    "-DMOBILEGL_BUILD_DISAGGREGATED=ON - in a build without it the whole parser is "
+                    "compiled out and the variable is accepted and ignored, which is exactly the 'the "
+                    "split lane ran monolith and went green' failure. Check that the SPLIT runtime "
+                    "artifact is the one at ${MOBILEGL_LIBRARY}, and that MOBILEGL_LOG_ACTIVE_LEVEL "
+                    "admits INFO.")
+        endif()
+        # The refusal census. Recorded on every split run, pass or fail.
+        file(STRINGS "${mobilegl_log}" split_fatals REGEX "Fatal\\{")
+        list(LENGTH split_fatals split_fatal_count)
+        message(STATUS "MGPipe split: ${split_case} transport=$ENV{MOBILEGL_TRANSPORT}, "
+                       "Fatal{ lines in ${mobilegl_log}: ${split_fatal_count}")
+        if(split_fatals)
+            foreach(line IN LISTS split_fatals)
+                message(STATUS "${line}")
+            endforeach()
+            message(FATAL_ERROR
+                    "${split_case}: ${split_fatal_count} MGPipe Fatal(s) under MOBILEGL_TRANSPORT="
+                    "$ENV{MOBILEGL_TRANSPORT}. Fatal{UnmigratedVerb, \"<slot>\"} is one of the 64 emit-table "
+                    "slots P5 leaves unimplemented (R-4) - if the reduced path reached it, either the verb "
+                    "census is wrong or this case is not on the reduced path; Fatal{ProtocolCorruption, ...} "
+                    "is a record that crossed the wire without declaring its bytes (CONTRACT-P5 rule A); "
+                    "Fatal{UnmigratedPipeInput, ...} is a missing row in the field-ownership table. None of "
+                    "them is silenced here: this log is the only place they appear, because the console sink "
+                    "is compiled out of the configurations this lane runs.")
+        endif()
     endif()
 endif()

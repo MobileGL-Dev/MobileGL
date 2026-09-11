@@ -322,7 +322,14 @@ function(add_trace_replay_test CASE_NAME BACKEND)
             CROP_Y
             CROP_WIDTH
             CROP_HEIGHT
-            COHERENT_AS_FLUSH)
+            COHERENT_AS_FLUSH
+            # P5. VARIANT is a NAME SUFFIX and TRANSPORT is what the variant runs with; passing
+            # TRANSPORT without VARIANT is a configure error below, because add_test with a
+            # duplicate NAME is a hard CMake error and the collision is with the very case this
+            # entry is a second arm of.
+            VARIANT
+            TRANSPORT
+            IPC_SERVER_PATH)
     cmake_parse_arguments(TRACE_CASE "" "${oneValueArgs}" "" ${ARGN})
     foreach(required TRACE_ARCHIVE GOLDEN TARGET_CALL WIDTH HEIGHT)
         if(NOT TRACE_CASE_${required})
@@ -347,8 +354,38 @@ function(add_trace_replay_test CASE_NAME BACKEND)
     if(NOT TRACE_CASE_CROP_HEIGHT)
         set(TRACE_CASE_CROP_HEIGHT 0)
     endif()
+
+    # --- P5: the variant suffix, and why the OUTPUT DIRECTORIES have to carry it too ----------
+    #
+    # ARCHITECTURE.md:584 asks for the SPLIT suffix because without it the entry collides with
+    # the same case+backend and add_test with a duplicate NAME is a hard CMake error.
+    #
+    # THE DIRECTORIES ARE THE HALF THAT IS EASY TO FORGET AND EXPENSIVE TO GET WRONG. Both arms
+    # of a case write output/mobilegl.log, and run_trace_case.cmake deletes TRACE_OUTPUT_DIR
+    # before every run - so two arms sharing one directory means the second arm's run erases the
+    # first arm's log while `ctest -j` may still be reading it, and, worse, the SPLIT arm's
+    # refusal census is then a census of whichever arm happened to finish last. That log is the
+    # ONLY valid census: the console sink is compiled out of these configurations, so a `ctest -V`
+    # transcript reports a FALSE ZERO for Fatal{ lines. P4a shipped exactly that defect once
+    # already, in a different place. Same argument for TRACE_ARTIFACT_DIR, which is what CI
+    # uploads.
+    set(trace_case_suffix "")
+    set(trace_case_output_tag "${BACKEND}")
+    set(trace_case_artifact_tag "actual-images")
+    if(TRACE_CASE_VARIANT)
+        set(trace_case_suffix ".${TRACE_CASE_VARIANT}")
+        set(trace_case_output_tag "${BACKEND}-${TRACE_CASE_VARIANT}")
+        set(trace_case_artifact_tag "actual-images-${TRACE_CASE_VARIANT}")
+    elseif(TRACE_CASE_TRANSPORT)
+        message(FATAL_ERROR
+                "add_trace_replay_test(${CASE_NAME} ${BACKEND} TRANSPORT ${TRACE_CASE_TRANSPORT}) with no "
+                "VARIANT: the entry would collide with the monolith arm of the same case and backend, and "
+                "a duplicate add_test NAME is a hard error")
+    endif()
+    set(trace_case_name "MobileGLTraceReplay.${CASE_NAME}.${BACKEND}${trace_case_suffix}")
+
     add_test(
-            NAME MobileGLTraceReplay.${CASE_NAME}.${BACKEND}
+            NAME ${trace_case_name}
             COMMAND "${CMAKE_COMMAND}"
             -DTRACE_REPLAY_EXE=$<TARGET_FILE:mobilegl_trace_replay>
             -DMOBILEGL_LIBRARY=${mobilegl_trace_replay_mobilegl_library}
@@ -367,23 +404,56 @@ function(add_trace_replay_test CASE_NAME BACKEND)
             -DTRACE_CROP_WIDTH=${TRACE_CASE_CROP_WIDTH}
             -DTRACE_CROP_HEIGHT=${TRACE_CASE_CROP_HEIGHT}
             -DTRACE_COHERENT_AS_FLUSH=${TRACE_CASE_COHERENT_AS_FLUSH}
-            -DTRACE_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${CASE_NAME}/${BACKEND}
-            -DTRACE_ARTIFACT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${CASE_NAME}/actual-images
+            -DTRACE_TRANSPORT=${TRACE_CASE_TRANSPORT}
+            -DTRACE_IPC_SERVER_PATH=${TRACE_CASE_IPC_SERVER_PATH}
+            -DTRACE_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${CASE_NAME}/${trace_case_output_tag}
+            -DTRACE_ARTIFACT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${CASE_NAME}/${trace_case_artifact_tag}
             -P ${MOBILEGL_TRACE_ROOT}/run_trace_case.cmake)
+
+    # The label list gains `retrace-split` on a variant arm, for the same reason
+    # integration-split exists: a private second label is what lets `ctest -L retrace-split
+    # --no-tests=error` go RED in a build that never registered the arm, instead of greenly
+    # running nothing. `retrace` stays so the existing whole-label selections keep describing the
+    # whole set. A `;` inside a property value has to be escaped.
+    set(trace_case_labels retrace)
+    if(TRACE_CASE_VARIANT)
+        set(trace_case_labels "retrace\;retrace-${TRACE_CASE_VARIANT}")
+        string(TOLOWER "${trace_case_labels}" trace_case_labels)
+    endif()
     if(BACKEND STREQUAL "DirectGLES")
-        set_tests_properties(MobileGLTraceReplay.${CASE_NAME}.${BACKEND} PROPERTIES
+        set_tests_properties(${trace_case_name} PROPERTIES
                 ENVIRONMENT "EGL_PLATFORM=surfaceless;LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330"
-                LABELS retrace)
+                LABELS "${trace_case_labels}")
     else()
-        set_tests_properties(MobileGLTraceReplay.${CASE_NAME}.${BACKEND} PROPERTIES
+        set_tests_properties(${trace_case_name} PROPERTIES
                 ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330"
-                LABELS retrace)
+                LABELS "${trace_case_labels}")
     endif()
 endfunction()
 
 function(add_trace_replay_test_for_backends CASE_NAME)
     add_trace_replay_test(${CASE_NAME} DirectGLES ${ARGN})
     add_trace_replay_test(${CASE_NAME} DirectVulkan ${ARGN})
+endfunction()
+
+# --- P5: the SPLIT arm of the retrace matrix -------------------------------------------------
+#
+# One variant entry per case that trace_cases.json marks `split: true` - today that is OpenRA
+# alone, which is the only target the phase gate names and (measurably) the only fixture hydrated
+# locally. DirectGLES only: the split shape's first backend is Espryt, and a DirectVulkan arm
+# would be measuring a server nobody has written yet.
+#
+# REGISTERED ONLY UNDER MOBILEGL_BUILD_DISAGGREGATED, because the arm is a statement about a
+# library that compiled MG_Remote. A build without the option accepts MOBILEGL_TRANSPORT=inproc
+# and silently ignores it (CONTRACT-P5 5), so an unconditional registration would be an entry
+# that passes by running monolith - and run_trace_case.cmake's split block would then be the only
+# thing standing between that and a green, which is one guard too few for a name that says SPLIT.
+function(add_trace_replay_split_test CASE_NAME)
+    if(NOT MOBILEGL_BUILD_DISAGGREGATED)
+        return()
+    endif()
+    add_trace_replay_test(${CASE_NAME} DirectGLES VARIANT SPLIT TRANSPORT inproc
+            IPC_SERVER_PATH "${CMAKE_BINARY_DIR}/libMobileGLServer.so" ${ARGN})
 endfunction()
 
 set(MOBILEGL_TRACE_CASES_CMAKE "${CMAKE_CURRENT_BINARY_DIR}/trace_cases.cmake")

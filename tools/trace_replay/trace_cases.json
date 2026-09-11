@@ -14,6 +14,7 @@
     {
       "name": "OpenRA",
       "verify": true,
+      "split": true,
       "trace_archive": "openra.tgz",
       "trace_file": "openra.trace",
       "golden": "openra.0000031249.png",
