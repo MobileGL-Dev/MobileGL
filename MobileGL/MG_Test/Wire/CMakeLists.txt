@@ -65,3 +65,30 @@ if (MSVC)
 endif ()
 
 gtest_discover_tests(PipeWireCodecTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
+# P5 c1's suite: the 71-slot emit table, the caps mirror and R-8's liveness gates. Registered
+# on its own for PipeWireCodecTest's reason - MGLOG_F writes to stdout and to a named file and
+# NEVER to stderr, so a Fatal arm can only be asserted by forking and reading that file back,
+# which needs a main() of its own.
+add_executable(RemoteClientTest RemoteClientTest.cpp)
+
+target_include_directories(RemoteClientTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+        ${MGL_ROOT}/MobileGL/MG_Pipe
+        ${MGL_ROOT}/3rdparty/flatbuffers/include
+        ${MGL_ROOT}/3rdparty/xxHash
+        ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
+        ${MGL_ROOT}/3rdparty/SPIRV-Reflect
+)
+
+target_link_libraries(RemoteClientTest PRIVATE
+        GTest::gtest
+        ${LINK_LIBRARIES}
+)
+
+if (MSVC)
+    target_compile_options(RemoteClientTest PRIVATE /Zc:preprocessor)
+endif ()
+
+gtest_discover_tests(RemoteClientTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

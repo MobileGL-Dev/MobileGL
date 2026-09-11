@@ -60,6 +60,22 @@
 
 namespace MobileGL::MG_Remote::Client {
 
+    // MGPClear::Kind. MGPipeTypes.h:1273 states the list as a COMMENT - "Whole | Color | Depth
+    // | Stencil | DepthStencil" - and mints no enumerator, because until P5 the record had no
+    // producer. These are the values, in that comment's own order, and they are here rather
+    // than in MGPipeTypes.h because that file is c0's and this phase produces exactly ONE of
+    // them: glClear is the only entry point that reaches the Clear slot (the four
+    // glClearBuffer* and the four glClearNamedFramebuffer* are class C). v1's
+    // WireVerbSink::OnClear must therefore Fatal on anything but Whole rather than guess, and
+    // the phase that migrates the other eight moves these into the contract.
+    enum MGRemoteClearKind : Uint32 {
+        kRemoteClearWhole = 0,
+        kRemoteClearColor = 1,
+        kRemoteClearDepth = 2,
+        kRemoteClearStencil = 3,
+        kRemoteClearDepthStencil = 4,
+    };
+
     // The table MG_Backend::Init() installs into gBackendFunctionsTable for the remote role.
     // A reference to a never-destroyed block, like every other MG_Remote singleton (ID-8).
     const MG_Backend::GlobalBackendFunctionsTable& RemoteEmitTable();
@@ -76,5 +92,26 @@ namespace MobileGL::MG_Remote::Client {
     // The total the count above is out of. Asserted against the struct in EmitTables.cpp, so
     // a slot added to GLFunctionsTable without a decision here is a build break.
     inline constexpr Uint32 kRemoteEmitSlotCount = 71;
+
+    // The other two thirds of the census, so a case can assert the WHOLE partition rather than
+    // only the half that emits. CONTRACT-P5.md §7's three classes are 2 + 5 + 64, and
+    // EmitTables.cpp static_asserts that they sum to kRemoteEmitSlotCount: a slot that quietly
+    // changes class shows up as a build break in the sum, not as a silent behaviour change.
+    Uint32 LocallyAnsweredSlotCount(); // class A - answered from the caps mirror, R-15
+    Uint32 UnmigratedSlotCount();      // class C - Fatal{UnmigratedVerb}
+
+    // THE E2 NEGATIVE CONTROL (t1's debt against c1, BRIEF §7). When set, the Clear emitter
+    // SKIPS its record - it still runs the pre-verb hooks and still returns - so a replay that
+    // is really going through the wire loses one clear per frame and its SSIM falls below the
+    // 0.99 threshold, while a replay that fell through to the driver is unaffected. It is a
+    // function rather than a knob in Config.h for two reasons: the control has to be settable
+    // from a test process that has already started, and a knob would be a
+    // MOBILEGL_IPC_-shaped name for something no operator may ever set.
+    //
+    // Emissions actually skipped, so the control can assert that it DID something rather than
+    // that a picture changed - a control that silently never fired is the third shape of R-16's
+    // "a gate that cannot go red for its own reason".
+    void SetDropClearEmissionForNegativeControl(Bool drop);
+    Uint64 DroppedClearEmissions();
 
 } // namespace MobileGL::MG_Remote::Client

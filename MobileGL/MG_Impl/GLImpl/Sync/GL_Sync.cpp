@@ -10,6 +10,11 @@
 #include <MG_Backend/BackendObjects.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_Impl/Pipe/PipeFill.h>
+// CONTRACT-P5.md §7 / ID-14: a null check on a GLFunctionsTable slot may not survive into the
+// client under split - it becomes a caps-mirror read. SlotCaps.h carries the rule and the test
+// that decides which of its two spellings a site takes; in a pull build both expand to exactly
+// the check they replaced.
+#include <MG_Remote/Client/SlotCaps.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
     namespace {
@@ -56,7 +61,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto* syncObject = new SyncObject;
         syncObject->condition = condition;
         syncObject->flags = flags;
-        if (const auto backendFenceSync = MG_Backend::gBackendFunctionsTable.GL.FenceSync) {
+        // The family's ONE gate. FenceSync is class C under split, and "absent" is the
+        // answer the whole fallback chain below is written against: every later site already
+        // checks syncObject->backendHandle, which stays null from here. The POINTER-valued
+        // macro keeps the init-statement byte-identical in a pull build (G1).
+        if (const auto backendFenceSync = MGL_BACKEND_SLOT_PTR_LOCAL(FenceSync)) {
             MGP_FILL(FenceSync);
             syncObject->backendHandle = backendFenceSync();
         }

@@ -97,4 +97,28 @@ namespace MobileGL::MG_Remote::Client {
     // reach pipe or backend state from an exit handler.
     CapsMirror& CapsMirrorInstance();
 
+    // ---- c1's addition to c0's signature block -----------------------------------------
+    //
+    // WHY A HOOK AND NOT A READ. BackendObject::GetFormatCapabilities() is NON-VIRTUAL
+    // (BackendObject.h:594) and returns the base class's own m_formatCapabilities member, so a
+    // remote backend object cannot answer it lazily from the mirror - it has to PUSH the cache
+    // into that member, and the only moment it can know to is when a snapshot lands. A raw
+    // function pointer rather than std::function, for ID-8's reason: this can fire on paths
+    // that must not allocate. One hook, installed by BackendObject_Remote's constructor.
+    using CapsAdoptedHook = void (*)();
+    void SetCapsAdoptedHook(CapsAdoptedHook hook);
+
+    // R-8's NEGATIVE CONTROL NEEDS TO SEE THE WITHHOLDING, NOT INFER IT FROM AN ABSENCE.
+    // "the client emits nothing for a family the server does not consume" is, on its own,
+    // indistinguishable from "the client emits nothing because nothing called it" - and the
+    // second is how a gate goes green for the wrong reason. So the one funnel that answers the
+    // question counts its own refusals and names the family, once per family, in the log.
+    //
+    // Counted inside ServerConsumes(), which is R-8's only legal spelling, so a refusal that
+    // happened cannot fail to be counted and a count that moved cannot have come from anywhere
+    // else.
+    Uint64 ConsumerRefusals();
+    Uint64 LastRefusedSubsystem();
+    void ResetConsumerRefusalsForTest();
+
 } // namespace MobileGL::MG_Remote::Client

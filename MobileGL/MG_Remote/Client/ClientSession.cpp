@@ -18,9 +18,12 @@
 #include "../Transport/InProcessTransport.h"
 
 #include <MGGitHash.h>
+#include <MG_Pipe/MGPipeCallbacks.h>
 #include <MG_Util/Debug/Log.h>
 
+#include <atomic>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 namespace MobileGL::MG_Remote::Client {
@@ -100,6 +103,29 @@ namespace MobileGL::MG_Remote::Client {
 #endif
         }
 
+        // ---- c1: the barrier's two flags ------------------------------------------------
+        //
+        // thread_local for the client's own "am I waiting", a shared atomic for "is the apply
+        // thread inside the applier" - see ClientSession::InBarrierWait's note.
+        thread_local Bool g_inBarrierWait = false;
+        std::atomic<Bool> g_applyThreadInsideApplier{false};
+
+        struct BarrierWaitScope {
+            BarrierWaitScope() { g_inBarrierWait = true; }
+            ~BarrierWaitScope() { g_inBarrierWait = false; }
+            BarrierWaitScope(const BarrierWaitScope&) = delete;
+            BarrierWaitScope& operator=(const BarrierWaitScope&) = delete;
+        };
+
+        // BOUNDED, AND THE BOUND IS GENEROUS RATHER THAN TIGHT. The barrier is a correctness
+        // device, not a watchdog: a slow readback on a software rasterizer is a legitimate
+        // second-scale wait, while a lost record never completes at all. 30 s separates the two
+        // without turning a loaded CI machine into a red lane, and the Fatal names the seq.
+        constexpr Uint32 kBarrierTimeoutMs = 30000;
+        // How many queued control frames one pump will drain. A backlog deeper than this is a
+        // finding, not a steady state.
+        constexpr Uint32 kMaxControlFramesPerPump = 16;
+
         const char* TransportModeName(MG_Config::TransportMode mode) {
             switch (mode) {
                 case MG_Config::TransportMode::Monolith: return "monolith";
@@ -109,6 +135,170 @@ namespace MobileGL::MG_Remote::Client {
                 case MG_Config::TransportMode::NamedPipe: return "pipe:";
             }
             return "?";
+        }
+
+        // ---- c1: the reverse channel's reading end ---------------------------------------
+        //
+        // R-12's three: OnBufferWriteback (#3), OnGpuWritten (#2), OnSurfaceChanged (#7).
+        // Drained BY THE GL THREAD BETWEEN VERBS, which under the barrier means immediately
+        // after appliedSeq reaches this record - the one moment at which the apply thread is
+        // known not to be inside the applier.
+        //
+        // THE BYTES LIVE IN THE RING ITSELF, so Drained() is called only after every payload
+        // pointer popped here has been consumed: retiring earlier is R-11's violation one level
+        // down (EventRing.h:168-171 says so in as many words).
+        Uint32 DrainEventRing(Transport::EventRingConsumer& events) {
+            if (!events.Valid()) return 0;
+            Uint32 delivered = 0;
+            Transport::RingRecordView view{};
+            Bool corrupt = false;
+            while (events.Pop(view, &corrupt)) {
+                if (corrupt) {
+                    MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"event-ring\"} - the reverse "
+                            "channel's record stream is corrupt");
+                    std::abort();
+                }
+                switch (view.kind) {
+                case Transport::kEventBufferWriteback: {
+                    if (view.payloadSize < sizeof(Transport::EventBufferWritebackHead)) break;
+                    const auto* head =
+                        static_cast<const Transport::EventBufferWritebackHead*>(view.payload);
+                    const void* bytes = static_cast<const Uint8*>(view.payload) + sizeof(*head);
+                    if (view.payloadSize - sizeof(*head) < head->Size) {
+                        MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"buffer-writeback\"} - the "
+                                "head declares %llu inline bytes and the record carries %llu",
+                                static_cast<unsigned long long>(head->Size),
+                                static_cast<unsigned long long>(view.payloadSize - sizeof(*head)));
+                        std::abort();
+                    }
+                    if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback != nullptr) {
+                        // The blobref names SEG_EVENT and the IN-SEGMENT offset of those inline
+                        // bytes - never a host address (R-2's rule B), which is the whole reason
+                        // EventRingConsumer exposes OffsetInSegment at all.
+                        MG_Pipe::MGPBlobRef blob{};
+                        blob.Seg = Wire::kSegEvent;
+                        blob.Offset = events.OffsetInSegment(bytes);
+                        blob.Size = head->Size;
+                        MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(
+                            MG_Pipe::MGPipeHandle{head->Resource.Slot, head->Resource.Gen},
+                            head->Offset, blob);
+                        ++delivered;
+                    }
+                    break;
+                }
+                case Transport::kEventGpuWritten: {
+                    if (view.payloadSize < sizeof(Transport::EventGpuWrittenHead)) break;
+                    const auto* head =
+                        static_cast<const Transport::EventGpuWrittenHead*>(view.payload);
+                    const Uint64 tail = view.payloadSize - sizeof(*head);
+                    if (tail / sizeof(Transport::EventRange) < head->RangeCount) {
+                        MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"gpu-written\"} - RangeCount "
+                                "%u does not fit the record's %llu tail bytes",
+                                static_cast<unsigned>(head->RangeCount),
+                                static_cast<unsigned long long>(tail));
+                        std::abort();
+                    }
+                    if (MG_Pipe::gMGPipeCallbacks.OnGpuWritten != nullptr) {
+                        // EventRange and MGPRange are the same two Uint64s (EventRing.h:61-66
+                        // asserts it), so the tail is handed over as-is rather than copied into
+                        // a second array a later reader could get out of step with.
+                        const auto* ranges = reinterpret_cast<const MG_Pipe::MGPRange*>(
+                            static_cast<const Uint8*>(view.payload) + sizeof(*head));
+                        MG_Pipe::gMGPipeCallbacks.OnGpuWritten(
+                            MG_Pipe::MGPipeHandle{head->Resource.Slot, head->Resource.Gen},
+                            static_cast<Uint>(head->RangeCount), ranges);
+                        ++delivered;
+                    }
+                    break;
+                }
+                case Transport::kEventSurfaceChanged: {
+                    if (view.payloadSize < sizeof(Transport::EventSurfaceChangedHead)) break;
+                    if (MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged != nullptr) {
+                        const auto* head =
+                            static_cast<const Transport::EventSurfaceChangedHead*>(view.payload);
+                        MG_Pipe::MGPSurfaceInfo info{};
+                        info.Width = head->Width;
+                        info.Height = head->Height;
+                        info.InternalFormat = head->InternalFormat;
+                        info.Samples = head->Samples;
+                        info.Layers = head->Layers;
+                        info.IsDefault = head->IsDefault;
+                        MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged(&info);
+                        ++delivered;
+                    }
+                    break;
+                }
+                default:
+                    MGLOG_W("MG_Remote client: reverse-channel record kind %u is not consumed in "
+                            "P5 (R-12 takes three and a half of the ten callbacks)",
+                            static_cast<unsigned>(view.kind));
+                    break;
+                }
+            }
+            // AND ONLY NOW. Every payload pointer above has been consumed.
+            events.Drained();
+            return delivered;
+        }
+
+        // ---- c1: the CapsSnapshot -> CapsMirror adoption, in ONE place -------------------
+        //
+        // Every field of the snapshot has exactly one reader, and a field that fails to decode
+        // is a REFUSAL rather than a partial adopt: CompileEnv.cpp:123 copies the whole
+        // DynamicBackendParameters struct into the compile env, so a mirror that adopted three
+        // of four members would put the fourth's default into a shader fingerprint.
+        Bool AdoptCapsSnapshot(const ::MobileGL::Wire::CapsSnapshot* snapshot) {
+            if (snapshot == nullptr) return false;
+
+            MG_Pipe::MGPCaps caps{};
+            const auto* dynamicBytes = snapshot->dynamicParameters();
+            if (dynamicBytes == nullptr || dynamicBytes->size() != sizeof(caps.Dynamic)) {
+                // The Hello/Welcome fingerprint already asserted both peers agree on
+                // sizeof(DynamicBackendParameters), so a disagreement HERE is a corrupt frame
+                // rather than an ABI skew - which is why it is a refusal and not FatalAbiMismatch.
+                MGLOG_E("MG_Remote client: CapsSnapshot carries %llu dynamic bytes, this build's "
+                        "struct is %llu - the snapshot is refused whole",
+                        static_cast<unsigned long long>(dynamicBytes == nullptr ? 0
+                                                                                : dynamicBytes->size()),
+                        static_cast<unsigned long long>(sizeof(caps.Dynamic)));
+                return false;
+            }
+            std::memcpy(&caps.Dynamic, dynamicBytes->data(), sizeof(caps.Dynamic));
+            caps.CallMask = snapshot->callMask();
+
+            RendererInfo renderer{};
+            const auto* rendererBytes = snapshot->rendererInfo();
+            if (rendererBytes == nullptr ||
+                !DecodeRendererInfo(rendererBytes->data(), rendererBytes->size(), renderer)) {
+                MGLOG_E("MG_Remote client: CapsSnapshot's rendererInfo blob did not decode");
+                return false;
+            }
+
+            MG_Backend::FormatCapabilityCache formats{};
+            const auto* formatBytes = snapshot->formatCaps();
+            if (formatBytes == nullptr ||
+                !DecodeFormatCapabilities(formatBytes->data(), formatBytes->size(), formats)) {
+                MGLOG_E("MG_Remote client: CapsSnapshot's formatCaps blob did not decode");
+                return false;
+            }
+
+            const String apiVersion =
+                snapshot->apiVersion() == nullptr ? String{} : String{snapshot->apiVersion()->c_str()};
+
+            // THE SERVER'S BACKEND TYPE, NEVER A NEW "Remote" ENUMERATOR and never guessed from
+            // the renderer string: GL_Framebuffer.cpp:47, GL_Texture.cpp:6536 and
+            // CompileEnv.cpp:122 SWITCH on it, and a value they do not know takes a wrong arm
+            // rather than failing.
+            const Uint32 rawBackend = snapshot->backendType();
+            if (rawBackend >= static_cast<Uint32>(BackendType::BackendTypeCount)) {
+                MGLOG_E("MG_Remote client: CapsSnapshot names backend type %u, which this build "
+                        "has no enumerator for - the snapshot is refused rather than folded onto "
+                        "Unknown, which three frontend switches would silently mis-branch on",
+                        static_cast<unsigned>(rawBackend));
+                return false;
+            }
+            CapsMirrorInstance().Adopt(caps, formats, renderer, apiVersion,
+                                       static_cast<BackendType>(rawBackend));
+            return true;
         }
 
     } // namespace
@@ -308,24 +498,17 @@ namespace MobileGL::MG_Remote::Client {
         m_encoder = Wire::PipeWireEncoder(control, &m_cmd, nullptr, &m_segments);
 
         // ---- 7. the first CapsSnapshot, if the server had a backend to publish one from.
-        if (m_transport->PeekFrameSize() != 0) {
-            std::vector<Uint8> frame;
-            if (ReceiveEnvelope(*m_transport, frame, 0) == MOBILEGL_OK) {
-                const ::MobileGL::Wire::CtrlEnvelope* envelope = ParseEnvelope(frame);
-                if (envelope != nullptr &&
-                    envelope->msg_type() == ::MobileGL::Wire::CtrlMsg::CapsSnapshot) {
-                    // The mirror's Adopt and the two blob DECODERS are c1's and w1's. s1 stops
-                    // at "the snapshot arrived and is verifiable": adopting it here would put
-                    // the caps mirror's invalidation rule (R-12: a second arrival IS the
-                    // invalidation) in two places.
-                    MGLOG_I("MG_Remote client: first CapsSnapshot received (%llu bytes); adopting "
-                            "it is package c1's CapsMirror::Adopt over package w1's decoders",
-                            static_cast<unsigned long long>(frame.size()));
-                }
-            }
+        // ONE DRAIN, ONE ADOPTER (c1): PumpControlPlane below is the only thing in the client
+        // that turns a CapsSnapshot into a CapsMirror generation, so R-12's "a second arrival
+        // IS the invalidation" lives in exactly one place. s1's step here used to stop at
+        // "the snapshot arrived and is verifiable"; it now goes all the way, through the same
+        // function every later arrival goes through.
+        if (PumpControlPlane() == 0) {
+            MGLOG_W("MG_Remote client: the handshake carried no CapsSnapshot - the caps mirror is "
+                    "a PLACEHOLDER until one arrives. Every caps read until then answers a "
+                    "default and says so");
         }
 
-        m_started = true;
         g_active = this;
         LogMemory("handshake");
 
@@ -425,18 +608,179 @@ namespace MobileGL::MG_Remote::Client {
     // cost zero extra round trips - and the client may not re-derive any of those four answers
     // locally. s1 supplies the four primitives it composes from: Encoder(), Producer(),
     // WaitForApplied() and ReadReply().
-    Uint64 ClientSession::EmitAndWait(MG_Pipe::MGPWireOp, const void*, Uint64, const void*, Uint64,
-                                      void*, Uint64, Int32*) {
-        MGP5_C0_STUB("ClientSession::EmitAndWait");
+    //
+    // THE ORDER IS ENCODE -> PUBLISH+NOTIFY -> WAIT -> READ REPLY, and it is not negotiable.
+    // Splitting the wait from the read is how a package ends up answering an acceptance
+    // question locally, which is the c0f/c0g defect P4a paid two contract corrections for; and
+    // "always accept" is ID-39's 66 lost DirectVulkan uploads with a wire in between.
+    Uint64 ClientSession::EmitAndWait(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
+                                      const void* varTail, Uint64 varTailBytes, void* replyOut,
+                                      Uint64 replyBytes, Int32* statusOut) {
+        if (statusOut != nullptr) *statusOut = Wire::ReplySink::kStatusError;
+        if (!m_started) {
+            MGLOG_F("MGPipe: Fatal{NoClientSession, \"%s\"} - EmitAndWait on a session that has "
+                    "not started. There is no fall-through: a record that could not be emitted "
+                    "is a verb that did not happen",
+                    Wire::WireOpName(op));
+            std::abort();
+        }
+
+        // R-1's INVARIANT, AS A RUNTIME CHECK RATHER THAN A SENTENCE. While the barrier holds,
+        // at most one of {GL thread, apply thread} is runnable - and that is the whole reason a
+        // single process-wide gPipeInputs is legal (table 3). The client is about to publish a
+        // record whose fields the applier will read out of gPipeInputs, so the apply thread
+        // being inside the applier right now means the invariant has already been broken and
+        // the next record would be read against a half-written residual fill.
+        if (ApplyThreadIsInsideApplier()) {
+            MGLOG_F("MGPipe: Fatal{BarrierViolation, \"%s\"} - the apply thread is inside the "
+                    "applier while the GL thread is emitting. R-1 makes at most one of them "
+                    "runnable, which is what keeps one process-wide gPipeInputs legal",
+                    Wire::WireOpName(op));
+            std::abort();
+        }
+
+        const Uint64 seq =
+            m_encoder.EncodeRecord(op, payload, payloadBytes, varTail, varTailBytes);
+        if (seq == Wire::kInvalidSeq) {
+            // The ring refused it. NOT a silent drop and not a retry loop: R-10 says P5 does no
+            // chunking and must prove it needs none, so a refusal is the proof failing.
+            MGLOG_F("MGPipe: Fatal{RingOverrun, \"%s\"} - the command ring refused a %llu-byte "
+                    "record. P5 does not chunk (R-10); this is the proof obligation failing, not "
+                    "a back-pressure case",
+                    Wire::WireOpName(op),
+                    static_cast<unsigned long long>(payloadBytes + varTailBytes));
+            std::abort();
+        }
+
+        // Publish the head, record submittedSeq, THEN ring - in that order, which is
+        // SessionProducer's one job and RingTest.cpp:446's pin. Notify-then-publish loses the
+        // wakeup.
+        m_producer.PublishAndNotify(seq);
+
+        // Does this row own a reply slot? kMGPipeCallFlags IS THE SINGLE SOURCE OF TRUTH
+        // (R-16 / ID-31) - fourteen rows now, because the four Bool acceptance entry points
+        // gained the flag. Asking the catalogue rather than the caller is what stops a caller
+        // that forgot to pass a buffer from silently turning an answer into a guess.
+        const Bool ownsReplySlot =
+            (MG_Pipe::MGPipeCallFlagsFor(op) & static_cast<Uint32>(MG_Pipe::kReplySlot)) != 0;
+
+        if (!m_barrierArmed && !ownsReplySlot) {
+            // R-1's NEGATIVE CONTROL ARM, and the only thing it turns off is the barrier. A
+            // reply-slot row still waits: the answer is not derivable here and R-5 forbids
+            // inventing one, so MOBILEGL_IPC_VERB_BARRIER=0 makes the queue free-running, not
+            // the client clairvoyant.
+            return seq;
+        }
+
+        const BarrierWaitScope waiting;
+        const Transport::SessionWait wait = m_producer.WaitForApplied(seq, kBarrierTimeoutMs);
+        if (wait == Transport::SessionWait::ShutDown) {
+            // The doorbell died: the server went away. The only thing that returns from a
+            // kWaitForever park, and therefore the only way a client blocked in the barrier
+            // survives a server that is gone. Not a Fatal - teardown legitimately reaches here.
+            MGLOG_E("MG_Remote client: the barrier for %s (seq %llu) woke on a dead doorbell; the "
+                    "server is gone and this verb did not happen",
+                    Wire::WireOpName(op), static_cast<unsigned long long>(seq));
+            return seq;
+        }
+        if (wait != Transport::SessionWait::Reached) {
+            MGLOG_F("MGPipe: Fatal{BarrierTimeout, \"%s\"} - appliedSeq did not reach %llu within "
+                    "%u ms. A bounded wait is deliberate: a wedged CI job and a lost record look "
+                    "identical from outside, and only one of them is a bug worth finding",
+                    Wire::WireOpName(op), static_cast<unsigned long long>(seq), kBarrierTimeoutMs);
+            std::abort();
+        }
+
+        // THE REVERSE CHANNEL IS DRAINED HERE, and here is the only place it can be: under the
+        // barrier this is the one instant at which the apply thread is known not to be inside
+        // the applier, and MGPipeClientOnGpuWritten / OnBufferWriteback write frontend objects.
+        // It is what gives AwaitBufferWriteback something to have waited FOR: b1's third state
+        // clears when the writeback lands, and the writeback lands on this ring.
+        DrainEventRing(m_events);
+
+        if (!ownsReplySlot) return seq;
+
+        // THE SAME WAIT, NOT A SECOND ONE. appliedSeq >= seq already means the server wrote
+        // this record's answer, because it writes the slot before it advances the watermark.
+        Uint64 replySize = 0;
+        Int32 status = Wire::ReplySink::kStatusError;
+        if (!ReadReply(seq, replyOut, replyBytes, &status, &replySize)) {
+            MGLOG_F("MGPipe: Fatal{ReplyMissing, \"%s\"} - seq %llu carries kReplySlot and the "
+                    "server applied it, but its slot does not stamp that seq. The stamp is what "
+                    "makes a wrong-slot read detectable rather than plausible (R-3)",
+                    Wire::WireOpName(op), static_cast<unsigned long long>(seq));
+            std::abort();
+        }
+        if (statusOut != nullptr) *statusOut = status;
+        if (status == Wire::ReplySink::kStatusError) {
+            MGLOG_E("MG_Remote client: %s (seq %llu) answered ERROR", Wire::WireOpName(op),
+                    static_cast<unsigned long long>(seq));
+        }
+        // DECLINED is NOT an error and is deliberately not logged as one: it is how
+        // MapPersistent says nullptr (R-6) and how the four Bool acceptance rows say false
+        // (R-5). A client that treated it as a failure would re-create ID-39 from the other
+        // side.
+        if (replyOut != nullptr && replySize > replyBytes) {
+            MGLOG_F("MGPipe: Fatal{ReplyTooLarge, \"%s\"} - the answer is %llu bytes and the "
+                    "caller offered %llu. P5 does not chunk a reply",
+                    Wire::WireOpName(op), static_cast<unsigned long long>(replySize),
+                    static_cast<unsigned long long>(replyBytes));
+            std::abort();
+        }
+        return seq;
     }
 
     Bool ClientSession::BarrierArmed() const { return m_barrierArmed; }
 
-    // False, not a Fatal, for both: these are the R-1 mutual-exclusion assertion's two probes,
-    // and an assertion helper that aborts when asked is worse than useless. Package c1 gives
-    // them real answers when it lands the barrier.
-    Bool ClientSession::InBarrierWait() { return false; }
-    Bool ClientSession::ApplyThreadIsInsideApplier() { return false; }
+    // R-1's mutual-exclusion invariant, as two probes that answer honestly.
+    //
+    // THE CLIENT'S FLAG IS THREAD-LOCAL AND THE SERVER'S IS NOT, and the asymmetry is the
+    // point: "am I inside a barrier wait" is a question about the calling thread, while "is the
+    // apply thread inside the applier" is a question the GL thread asks about a DIFFERENT
+    // thread - so the second has to be a shared atomic and the first must not be, or a second
+    // GL thread would see the first one's wait as its own.
+    Bool ClientSession::InBarrierWait() { return g_inBarrierWait; }
+    Bool ClientSession::ApplyThreadIsInsideApplier() {
+        return g_applyThreadInsideApplier.load(std::memory_order_acquire);
+    }
+    void ClientSession::NoteApplyThreadEnteredApplier() {
+        g_applyThreadInsideApplier.store(true, std::memory_order_release);
+    }
+    void ClientSession::NoteApplyThreadLeftApplier() {
+        g_applyThreadInsideApplier.store(false, std::memory_order_release);
+    }
+
+    Uint32 ClientSession::PumpControlPlane() {
+        // NOT gated on m_started. The first snapshot arrives DURING Start(), before this session
+        // is started or active - and s1's half-built teardown path depends on m_started staying
+        // false until step 8 has succeeded, so the flag cannot be moved earlier to suit this.
+        if (m_transport == nullptr) return 0;
+        Uint32 adopted = 0;
+        // Bounded rather than `while (true)`: a server that queued frames faster than this
+        // drains them would otherwise hold the GL thread here for ever, and a frame backlog
+        // deeper than this is a finding rather than a steady state.
+        for (Uint32 guard = 0; guard < kMaxControlFramesPerPump; ++guard) {
+            if (m_transport->PeekFrameSize() == 0) break;
+            std::vector<Uint8> frame;
+            if (ReceiveEnvelope(*m_transport, frame, 0) != MOBILEGL_OK) break;
+            const ::MobileGL::Wire::CtrlEnvelope* envelope = ParseEnvelope(frame);
+            if (envelope == nullptr) {
+                MGLOG_E("MG_Remote client: an unverifiable control frame (%llu bytes) was dropped",
+                        static_cast<unsigned long long>(frame.size()));
+                continue;
+            }
+            if (envelope->msg_type() != ::MobileGL::Wire::CtrlMsg::CapsSnapshot) {
+                // SurfaceOp / SurfaceReply / ResyncRequest / AuxRequest / LogLine are P6's and
+                // P7's. Named rather than ignored, so a phase that starts sending one does not
+                // discover this loop swallowing it.
+                MGLOG_W("MG_Remote client: control message %d is not consumed in P5",
+                        static_cast<int>(envelope->msg_type()));
+                continue;
+            }
+            if (AdoptCapsSnapshot(envelope->msg_as_CapsSnapshot())) ++adopted;
+        }
+        return adopted;
+    }
 
     Transport::SessionProducer& ClientSession::Producer() { return m_producer; }
 

@@ -571,6 +571,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         MobileGL/MG_Remote/Client/ClientSession.cpp
         MobileGL/MG_Remote/Client/EmitTables.cpp
         MobileGL/MG_Remote/Client/CapsMirror.cpp
+        # P5 c1: the client role's BackendObject. pActiveBackendObject holds one of these
+        # under split (table 3); the hook that installs it is v1's, in MG_Backend/Init.cpp.
+        MobileGL/MG_Remote/Client/BackendObject_Remote.cpp
         # P5 b1's two: the conservative GPU-write set the client must build because all six
         # MarkGpuWritten producers are on the server's side of the line, and the
         # block-granularity persistent-map push that tier T2 makes mandatory.

@@ -39,6 +39,15 @@
 #include <MG_Pipe/PipeMutation.h>
 #include <Config.h>
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+// R-8 (c1): the client's liveness gates read the caps mirror, never MGPipeGetResourceOps().
+// Behind the build option for G1's reason - nothing under MG_Remote may be reachable from a
+// pull build - and every use below is additionally gated on the resolved TRANSPORT, because
+// build-split runs MOBILEGL_TRANSPORT=monolith in every unit and integration-gpu lane and those
+// lanes must keep answering exactly what they answered before.
+#include <MG_Remote/Client/CapsMirror.h>
+#endif
+
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -609,12 +618,38 @@ namespace MobileGL::MG_Pipe {
         }
     } // namespace
 
+    // R-8 (c1). THE SECOND CONJUNCT MOVES UNDER SPLIT, AND ONLY UNDER SPLIT.
+    //
+    // `MGPipeGetResourceOps() != nullptr` asks "has a backend registered the consumer". That
+    // table is the SERVER's registration and it is a PROCESS-WIDE global (PipeApply.cpp:402):
+    // under inproc a client reading it answers correctly BY ACCIDENT, and under spawn the
+    // client process has no backend at all, so the read answers null and five record families
+    // stop emitting - silently, while the emitters go on clearing their per-level dirty flags
+    // on the acceptance they never asked for. That is ID-39's 66 lost DirectVulkan uploads with
+    // a wire in between. The client asks the caps mirror instead, which carries the answer the
+    // SERVER gave at the handshake (CallMask bits 32..47).
+    //
+    // s1 made the server end Fatal when nobody sets the mask; this is the client end.
     Bool MGPipeResourceSubsystemEnabled() {
-        return (MG_Config::Features.PipePush & kMGPipeSubsystemResources) != 0 &&
-               MGPipeGetResourceOps() != nullptr;
+        if ((MG_Config::Features.PipePush & kMGPipeSubsystemResources) == 0) return false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            return MG_Remote::Client::CapsMirrorInstance().ServerConsumes(kMGPipeSubsystemResources);
+        }
+#endif
+        return MGPipeGetResourceOps() != nullptr;
     }
 
     Bool MGPipeResourceOpsHaveSubDataResident() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            // CONTRACT-P5.md §7's THIRD NAMED CAPABILITY PROBE. `ops->SubDataResident != nullptr`
+            // is not a safety check - it decides whether the resident-upload path EXISTS - and
+            // under split there is no op table here to probe. kCapResidentSubData is the bit the
+            // server publishes for exactly this question.
+            return MG_Remote::Client::CapsMirrorInstance().HasCap(kCapResidentSubData);
+        }
+#endif
         const MGPipeResourceOps* ops = MGPipeGetResourceOps();
         return ops != nullptr && ops->SubDataResident != nullptr;
     }
@@ -936,8 +971,21 @@ namespace MobileGL::MG_Pipe {
         // MGPipeEmitResourceRespecify above uses for buffers) publishes it. Nothing here needs
         // to remember the window.
         Bool P4aFamilyHasItsConsumer(Uint64 subsystem) {
-            return (subsystem & kMGPipeP4aFamilySubsystems) == 0 ||
-                   MGPipeGetResourceOps() != nullptr;
+            if ((subsystem & kMGPipeP4aFamilySubsystems) == 0) return true;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // R-8 (c1), the same move as MGPipeResourceSubsystemEnabled's and for the same
+            // reason. ALL FOUR FAMILIES RIDE THE ONE SIGNAL, exactly as they do in monolith:
+            // the paragraph above explains why the resource consumer IS the texture family's
+            // consumer, and the split spelling of "a backend registered the resource op table"
+            // is "the server published the resource subsystem's consumer bit". Asking per
+            // family here would be a NEW rule, and a client that withheld more than the server
+            // refuses leaves the server's handle arm live with no records to read.
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                return MG_Remote::Client::CapsMirrorInstance().ServerConsumes(
+                    kMGPipeSubsystemResources);
+            }
+#endif
+            return MGPipeGetResourceOps() != nullptr;
         }
 
         // ================================================================================

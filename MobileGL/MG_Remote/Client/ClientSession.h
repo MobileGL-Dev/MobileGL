@@ -100,6 +100,36 @@ namespace MobileGL::MG_Remote::Client {
         static Bool InBarrierWait();
         static Bool ApplyThreadIsInsideApplier();
 
+        // ---- c1's additions ---------------------------------------------------------------
+
+        // The apply thread's half of R-1's invariant. v1's apply loop brackets its
+        // DecodeAndApply with these; the client checks the flag before it publishes, so
+        // "at most one of {GL thread, apply thread} is runnable" is a runtime assertion rather
+        // than a sentence in a brief. A raw pair rather than an RAII type in this header
+        // because the server side owns its own scoping and must not have to include a client
+        // header to get it - ScopedApplierEntry below is the convenience, not the contract.
+        static void NoteApplyThreadEnteredApplier();
+        static void NoteApplyThreadLeftApplier();
+        struct ScopedApplierEntry {
+            ScopedApplierEntry() { NoteApplyThreadEnteredApplier(); }
+            ~ScopedApplierEntry() { NoteApplyThreadLeftApplier(); }
+            ScopedApplierEntry(const ScopedApplierEntry&) = delete;
+            ScopedApplierEntry& operator=(const ScopedApplierEntry&) = delete;
+        };
+
+        // R-12's INVALIDATION EDGE. Drains whatever the server has queued on the control plane
+        // and adopts every CapsSnapshot in it - and a SECOND snapshot IS the invalidation,
+        // which is why there is no Invalidate(). Non-blocking: it peeks and returns.
+        //
+        // Called at the handshake, from BackendObject_Remote's Initialize/InitCapabilities, and
+        // once per Present. Present is the boundary every one of P5's three targets crosses,
+        // and a caps re-run can only follow a surface event, so once a frame is both sufficient
+        // and the cheapest place that is.
+        //
+        // Returns how many snapshots it adopted, so a case can assert the edge fired rather
+        // than assert that a number downstream of it happened to change.
+        Uint32 PumpControlPlane();
+
         // ---- s1's additions: the four primitives c1's EmitAndWait composes ---------------
         //
         // s1 owns construction and lifetime; c1 owns the barrier POLICY. So the plumbing is

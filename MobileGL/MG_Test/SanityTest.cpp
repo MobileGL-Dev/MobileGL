@@ -41,6 +41,13 @@
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
 #include <MG_Util/Debug/Log.h>
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+// P5 c1 / R-8: the client's liveness gates read the caps mirror's consumer mask under split, so
+// a split-armed case has to arm that half too - registering an op table is the SERVER's arming.
+#include <MG_Remote/CapsCodec.h>
+#include <MG_Remote/Client/CapsMirror.h>
+#endif
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 #include <MG_Util/Types.h>
 #include <Config.h>
@@ -4695,6 +4702,21 @@ TEST(DirectGLESBufferDrawProbe, UnderSplitTheRecordAloneAnswersTheLiveHostMapQue
     MG_Pipe::MGPipeSetResourceOps(&ops);
     MG_Config::Transport = MG_Config::TransportMode::InProcess;
     MG_Config::Ipc.PersistentBlockKb = 64;
+    // P5 c1 / R-8: UNDER SPLIT THE OP TABLE IS NO LONGER THE ARMING CONDITION, and this case is
+    // the first place that shows. `MGPipeSetResourceOps(&ops)` is the SERVER's registration; the
+    // client's liveness gate now reads the caps mirror's consumer mask instead, because under a
+    // spawn the client process has no op table at all and reading one would silently stop five
+    // record families. So the probe has to arm BOTH halves - and the fact that it did not is the
+    // defect R-8 exists to catch, reproduced here by a change rather than argued about.
+    const Uint64 previousCapsGeneration = MG_Remote::Client::CapsMirrorInstance().Generation();
+    {
+        MG_Pipe::MGPCaps caps{};
+        caps.CallMask = MG_Remote::MGCapsConsumerBits(MG_Pipe::kMGPipeSubsystemResources);
+        MG_Remote::Client::CapsMirrorInstance().Adopt(caps, MG_Backend::FormatCapabilityCache{},
+                                                      RendererInfo{}, String{},
+                                                      BackendType::DirectGLES);
+    }
+    (void)previousCapsGeneration;
 
     {
         // The constructor mints the handle and emits resource_create; Respecify emits the
