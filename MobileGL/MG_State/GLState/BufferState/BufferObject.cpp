@@ -260,6 +260,14 @@ namespace MobileGL::MG_State::GLState {
             return;
         }
 #endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // R-6 IS "ALWAYS", AND THIS IS ITS SECOND DOOR. MGPipeApplyMapPersistent declines
+        // every acquisition under split - but a split build whose backend registered no
+        // MGPipe resource ops falls through to the LEGACY hook below, which would mint a real
+        // pointer and adopt it. A donated address is meaningless across a process, and an
+        // inproc lane that adopted would be green for a reason spawn cannot reproduce.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return;
+#endif
         if (g_bufferBackendOps == nullptr || g_bufferBackendOps->AcquirePersistentMap == nullptr) return;
         if (void* base = g_bufferBackendOps->AcquirePersistentMap(*this)) {
             m_resource.AdoptPersistentMap(base);
@@ -403,12 +411,16 @@ namespace MobileGL::MG_State::GLState {
         if (size == 0) return;
         NotifySubData(offset, size);
         if (MG_Util::PipeStats::Enabled()) {
-            // THE persistent-map-push SITE. It is the bytes an application wrote through a
-            // map with no API call and that a split build therefore has to ship - the bytes
-            // PipeStats.cpp's inventory says stage-buffer explicitly does NOT cover, so the
-            // two classes do not double-count: stage-buffer is what a BACKEND stages out of
-            // its own shadow, this is what the CLIENT ships because it has no shadow on the
-            // far side.
+            // THE persistent-map-push SITE: the bytes an application wrote through a map with
+            // no API call, which a split build therefore has to ship.
+            //
+            // THESE BYTES ARE ALSO COUNTED AS stage-buffer, and that overlap is stated in the
+            // inventory rather than avoided. At tier T2 a pushed block IS an ordinary
+            // resource_subdata, so it reaches Ops_H_SubData, is queued into pendingRanges and
+            // is staged like any other write. Subtracting it at the staging site would make
+            // stage-buffer under-report what the BACKEND actually moves, which is the question
+            // that class exists to answer; the two counters are different questions about the
+            // same bytes and PipeStats.cpp:33-35 now says so.
             MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush,
                                          static_cast<Uint64>(size));
         }
@@ -418,45 +430,48 @@ namespace MobileGL::MG_State::GLState {
         if (!MG_Remote::Client::PersistentMapTracker::PushIsArmed()) return;
         MG_Remote::Client::PersistentMapTracker::Instance().NoteMapStateChanged(*this);
 
-        // THE LIVE-HOST-WRITES BIT (ARCHITECTURE.md 12, CONTRACT-P5.md table 1 row 19's
-        // neighbour). A live WRITE map - persistent or not - mutates the shadow with no call,
-        // no serial and no epoch, which is exactly why IsBufferDrawCleanByHandle had to ask
-        // the frontend object whether it was mapped. Under a spawn there is no object on that
-        // side, so the fact has to cross; it rides MGPResourceDesc's last pad byte as a
-        // METADATA field (ID-18 M4), so a respecify that moves only it allocates nothing,
-        // acks nothing and clears no pending upload.
+        // THE LIVE-HOST-WRITES BIT (ARCHITECTURE.md 12, CONTRACT-P5.md section 3). A live
+        // WRITE map - persistent or not - mutates the shadow with no call, no serial and no
+        // epoch, which is exactly why IsBufferDrawCleanByHandle had to ask the frontend object
+        // whether it was mapped. Under a spawn there is no object on that side, so the fact
+        // has to cross; it rides MGPSubData's pad (see MGPipeTypes.h, and b1-v1.md 3.1 for
+        // why not MGPResourceDesc's).
         //
-        // PUBLISHED ON THE EDGE, not per map: the record is a state announcement, and
-        // re-announcing an unchanged state on every map of a streaming buffer would be new
-        // traffic for no new information.
+        // BOTH EDGES EMIT A RECORD, AND THE RISING ONE IS NOT OPTIONAL. An earlier cut let the
+        // rising edge emit nothing on the grounds that "the next content record carries the
+        // bit anyway" - and for the single idiom this feature exists to serve, a persistently
+        // mapped streaming arena behind a static VAO, there IS no next content record. The
+        // only one is the block push, the push for a vertex/uniform/SSBO map runs inside
+        // EnsureBufferResourceForHandle, and a draw-clean answer SKIPS that ensure
+        // (DirectGLES.cpp:691) and then LATCHES it (:697, vboCleanEpoch - and a coherent
+        // persistent map bumps no mutation epoch, which is its whole point). So: draw 1
+        // pushes, draw 2 probes clean, draw 3 onward never probes again, and the frame draws
+        // frame 1's bytes for ever with no diagnostic. That is Managers.cpp:2650-2655's
+        // regression one layer down, and the rising-edge record is what breaks the cycle: the
+        // server learns a host writer is live BEFORE the first probe, answers dirty while the
+        // map lives, and the ensure - and with it the push - runs every draw.
         const Bool live = m_isMapped && (m_mappingAccess & BufferMappingAccessBit::Write) &&
                           !m_resource.IsGpuResident();
         if (live == m_publishedLiveHostWrites) return;
         m_publishedLiveHostWrites = live;
-        if (live) {
-            // RISING EDGE COSTS NOTHING. The bit rides every content record this buffer
-            // emits, and a live write map's first record is the first block push - or, for a
-            // non-persistent map, the landing at unmap. Emitting one here would be a record
-            // whose only content is a bit the very next record carries anyway.
-            return;
-        }
-        // FALLING EDGE NEEDS A CARRIER, because after an unmap there may be no further
-        // content record for the lifetime of the buffer, and a record stuck at "a host writer
-        // is live" reads draw-DIRTY forever - the mirror image of the C-1 regression, costing
-        // a re-upload per draw instead of losing bytes. So one block goes out with the bit
-        // already cleared above.
-        //
-        // ONE BLOCK AND NOT THE SPAN: the bytes of the span have already shipped on this same
-        // path - ReleaseMemory lands the staged writes and then calls NotifyFlushMappedRange
-        // for every non-resident write map that is not FLUSH_EXPLICIT - so this record exists
-        // to carry the STATE, and the bytes it carries are real, current and the cheapest
-        // honest ones there are. A zero-length record would have been the alternative and it
-        // is illegal by contract rule A.
+
+        // ONE BLOCK, NOT THE SPAN. On the falling edge the span's bytes have already shipped
+        // on this same path (ReleaseMemory lands the staged writes and calls
+        // NotifyFlushMappedRange before this runs); on the rising edge the span has not been
+        // written yet. Either way the record exists to carry the STATE, and the bytes it
+        // carries are real, current and the cheapest honest ones there are. A zero-length
+        // record would have been the alternative and it is illegal by contract rule A.
         if (m_size == 0) return;
         const Uint64 blockBytes = MG_Remote::Client::PersistentMapTracker::BlockBytes();
-        const SizeT length = blockBytes == 0 || blockBytes >= static_cast<Uint64>(m_size)
-                                 ? m_size
-                                 : static_cast<SizeT>(blockBytes);
+        // MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0 TURNS THE WHOLE MECHANISM OFF, STATE RECORD
+        // INCLUDED (E3(a)). An earlier cut skipped the blocks and still shipped a whole buffer
+        // here, which meant an unmap delivered the bytes the control exists to withhold - and
+        // a negative control that still delivers them is not a control. With the knob at 0
+        // nothing is published and nothing is pushed, so the probe answers clean, the frame
+        // draws the last uploaded bytes, and PersistentCoherentMapScenario goes red.
+        if (blockBytes == 0) return;
+        const SizeT length = blockBytes >= static_cast<Uint64>(m_size) ? m_size
+                                                                      : static_cast<SizeT>(blockBytes);
         NotifySubData(0, length);
     }
 
@@ -776,6 +791,10 @@ namespace MobileGL::MG_State::GLState {
             return true;
         }
 #endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // R-6's second door, as in TryAdoptLargeStorage above.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return false;
+#endif
         if (m_size == 0 || g_bufferBackendOps == nullptr || g_bufferBackendOps->AcquirePersistentMap == nullptr) {
             return false;
         }
@@ -814,9 +833,10 @@ namespace MobileGL::MG_State::GLState {
 #if MOBILEGL_BUILD_DISAGGREGATED
         // BEFORE the adoption attempt below, deliberately. Under R-6 the acquisition always
         // declines, so the predicate this publishes is already final; if a later phase ever
-        // mints one, the adoption path notes the change itself and this entry is withdrawn
-        // there rather than never having been made - which is the order that keeps the set
-        // conservative under both answers.
+        // mints one, the adoption path notes the change itself (it does now - the call is
+        // beside AdoptPersistentMap) and the entry is withdrawn there rather than never
+        // having been made, which is the order that keeps the set conservative under both
+        // answers.
         NotePersistentMapStateChanged();
 #endif
 
@@ -834,13 +854,27 @@ namespace MobileGL::MG_State::GLState {
                 MG_Pipe::MGPipeResourceSubsystemEnabled()) {
                 if (void* pushedBase = MG_Pipe::MGPipeEmitMapPersistent(*this)) {
                     m_resource.AdoptPersistentMap(pushedBase);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    // An adoption takes the buffer OUT of the push set and out of the
+                    // live-host-writes state: the application now writes coherent GPU memory
+                    // and there is nothing to ship. Under R-6 this is unreachable; it is here
+                    // because the comment below used to claim the adoption path withdrew the
+                    // entry and nothing did, which would have left the published bit true
+                    // across an adoption until unmap (latent for P11).
+                    NotePersistentMapStateChanged();
+#endif
                 }
                 return m_resource.Bytes() + range.start;
             }
 #endif
             if (!m_resource.IsGpuResident() && (access & BufferMappingAccessBit::Write) &&
-                !(access & BufferMappingAccessBit::FlushExplicit) && g_bufferBackendOps &&
-                g_bufferBackendOps->AcquirePersistentMap) {
+                !(access & BufferMappingAccessBit::FlushExplicit) &&
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // R-6's second door, as in TryAdoptLargeStorage: no legacy mint under a
+                // transport, whatever the backend registered.
+                MG_Config::Transport == MG_Config::TransportMode::Monolith &&
+#endif
+                g_bufferBackendOps && g_bufferBackendOps->AcquirePersistentMap) {
                 if (void* base = g_bufferBackendOps->AcquirePersistentMap(*this)) {
                     m_resource.AdoptPersistentMap(base);
                 }

@@ -215,10 +215,11 @@ namespace MobileGL {
             // no longer ask this object (there is no object on that side of a spawn).
             void NotePersistentMapStateChanged();
 
-            // What MGPipeBuildResourceDesc writes into MGPResourceDesc::HasLiveHostWrites.
-            // The published value, not the live predicate: the two are the same by the time
-            // any descriptor is built, and reading the published one is what makes a
-            // descriptor and the record that announced it agree by construction.
+            // What MGPipeEmitResourceSubData and MGPipeEmitBufferSubDataResident write into
+            // MGPSubData::HasLiveHostWrites. The PUBLISHED value, not the live predicate: the
+            // two are the same by the time any content record is built, and reading the
+            // published one is what makes a record and the edge that announced it agree by
+            // construction.
             Bool HasLiveHostWritesForWire() const;
 
             // Is a GPU write still unreconciled? Under split this is the THIRD STATE made
