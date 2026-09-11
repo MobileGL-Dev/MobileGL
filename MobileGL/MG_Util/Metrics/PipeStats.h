@@ -164,6 +164,21 @@ namespace MobileGL::MG_Util::PipeStats {
         // sync is allocated image-bindable up front and never counts. `trp=` on the summary
         // line; the number that decides MOBILEGL_PIPE_TEXEL_RETAIN_MB's default.
         TextureRemintPulls,
+        // P5's, and push-only for the same reason as the nine above.
+        //
+        // `rsp` - THE SIZE OF THE P6/P7/P8 DEBT. One per read, on the server side, of a
+        // BARRIER-PULLED PipeInputs field (CONTRACT-P5.md table 2): a field no pushed record
+        // supplies, which the server answers by reading the value the CLIENT's residual fill
+        // left in the single shared gPipeInputs while the verb barrier holds both threads
+        // apart. That is correct only because of the barrier, which is what makes the barrier
+        // load-bearing rather than cautious - so the count is the debt, and a phase that
+        // retires a family of fields is expected to move it down.
+        //
+        // Counted at the ONE place that decides what a stale read means
+        // (MG_Backend/MGPipe/PipeInputs.cpp), so the 56 checked accessors and the seven sticky
+        // forwards cannot drift apart on it. It is zero in every monolith lane by
+        // construction: nothing arms it but a server verb-boundary stamp.
+        ResidualPulls,
 #endif
         Count
     };

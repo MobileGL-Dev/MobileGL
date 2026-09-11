@@ -1551,36 +1551,59 @@ namespace MobileGL::MG_Pipe {
     Bool PipeInputs::IsLive() const { return LiveContext() != nullptr; }
 
     // ---- the seven F-class forwarders ----
+    //
+    // P5 (R-7.3, CONTRACT-P5.md table 2's "the seven sticky forwards"): each of them now opens
+    // with MGP_STICKY_FORWARD_PULL. They are THE SEVEN THAT HAND THE SERVER A RAW FRONTEND
+    // OBJECT OR WRITE INTO THE FRONTEND, and they are also the only fields the poison cannot
+    // see - they carry no MGP_INPUT_CHECK at all, by the declared exception argued at
+    // PipeInputs.h's F-class block, so freshness never reaches them and the exit gate was
+    // structurally blind on exactly the seven most dangerous rows. The hook is a no-op outside
+    // a server-stamped verb, so InvalidateCompileEnv keeps being reachable from backend
+    // initialisation - the case the exemption was written for - and every monolith lane, split
+    // build included, behaves as it does today.
+#if MOBILEGL_BUILD_DISAGGREGATED
+#define MGP_STICKY_FORWARD_PULL(Field) MGPipeStickyForwardPull(MGPipeInputField::Field)
+#else
+#define MGP_STICKY_FORWARD_PULL(Field) ((void)0)
+#endif
+
     SizeT PipeInputs::GetBufferBindingPointCount(BufferTarget target) const {
+        MGP_STICKY_FORWARD_PULL(GetBufferBindingPointCount);
         const auto* ctx = LiveContext();
         return ctx != nullptr ? ctx->GetBufferBindingPointCount(target) : 0;
     }
 
     const SharedPtr<PipeInputs::ProgramObject>& PipeInputs::GetProgramObject(Uint index) {
+        MGP_STICKY_FORWARD_PULL(GetProgramObject);
         auto* ctx = LiveContext();
         return ctx != nullptr ? ctx->GetProgramObject(index) : NullShared<ProgramObject>();
     }
 
     const SharedPtr<PipeInputs::ITextureObject>& PipeInputs::GetTextureObject(Uint index) {
+        MGP_STICKY_FORWARD_PULL(GetTextureObject);
         auto* ctx = LiveContext();
         return ctx != nullptr ? ctx->GetTextureObject(index) : NullShared<ITextureObject>();
     }
 
     Bool PipeInputs::HasOpenTransformFeedbackSpan(Uint64 lifetimeId) const {
+        MGP_STICKY_FORWARD_PULL(HasOpenTransformFeedbackSpan);
         const auto* ctx = LiveContext();
         return ctx != nullptr && ctx->HasOpenTransformFeedbackSpan(lifetimeId);
     }
 
     void PipeInputs::InvalidateCompileEnv() {
+        MGP_STICKY_FORWARD_PULL(InvalidateCompileEnv);
         if (auto* ctx = LiveContext()) ctx->InvalidateCompileEnv();
     }
 
     Bool PipeInputs::ValidateProgramName(Uint index) const {
+        MGP_STICKY_FORWARD_PULL(ValidateProgramName);
         const auto* ctx = LiveContext();
         return ctx != nullptr && ctx->ValidateProgramName(index);
     }
 
     void PipeInputs::RecordError(ErrorCode code, UniquePtr<ErrorInfo> info) {
+        MGP_STICKY_FORWARD_PULL(RecordError);
         auto* ctx = LiveContext();
         if (ctx == nullptr) {
             MGLOG_E_ONCE("PipeInputs::RecordError: no live context, dropping error %d", static_cast<int>(code));
@@ -1588,6 +1611,7 @@ namespace MobileGL::MG_Pipe {
         }
         ctx->RecordError(code, Move(info));
     }
+#undef MGP_STICKY_FORWARD_PULL
 
     // P3a D-H2.1. The draw's RAW vertex-fetch base instance, set immediately before the fill
     // at the three *BaseInstance draw entry points. It replaces the ambient process global
@@ -1610,6 +1634,9 @@ namespace MobileGL::MG_Pipe {
         // Same bump the next fill would make, without a verb to fill from: no field is
         // stamped, so every stamp this verb made falls behind the serial.
         ++MGPipeFillAccess::Filled(inputs).CurrentVerbSerial;
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MGPipeServerClearVerbBoundary();
 #endif
         MGPipeFillAccess::SetVerb(inputs, MGPipeVerb::kVerbCount);
         // The pending base instance belongs to the verb that was about to run, so leaving
@@ -2382,6 +2409,14 @@ namespace MobileGL::MG_Pipe {
         // it on both branches, so a read before this first bump is
         // Fatal{UnmigratedPipeInput, "<Field>@<none>"} rather than default storage.
         ++filled.CurrentVerbSerial;
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The client is filling, so whatever the server stamped at its last verb boundary is
+        // withdrawn: the stamps below are the CLIENT's again and a stale read is a defect, not
+        // a residual pull. Disarming here rather than at the end of the applier's work is what
+        // makes the arming flag say "the current stamps are the server's" no matter which of
+        // the two roles ran last.
+        MGPipeServerClearVerbBoundary();
 #endif
         MGPipeFillAccess::SetVerb(inputs, verb);
         auto* ctx = LiveContext();

@@ -16,6 +16,11 @@
 #include <cstdint>
 #include <cstring>
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <Config.h>
+#include <MG_Util/Metrics/PipeStats.h>
+#endif
+
 namespace MobileGL::MG_Pipe {
     const char* MGPipeVerbName(MGPipeVerb verb) {
         const auto index = static_cast<SizeT>(verb);
@@ -41,6 +46,132 @@ namespace MobileGL::MG_Pipe {
         }
         return std::nullopt;
     }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // ================================================================================
+    // P5: the server's verb stamp, the residual-pull counter, and the four-way read verdict
+    // ================================================================================
+    namespace {
+        Uint64 g_residualPulls = 0;
+
+        // The strict arm of R-7.3. Same first line as the ordinary poison Fatal, so every
+        // existing filter on Fatal{UnmigratedPipeInput still matches, plus the class and the
+        // phase that retires it - a strict abort that did not say which phase owes the answer
+        // would leave the reader exactly where the gate found them.
+        [[noreturn]] void StrictBarrierPullFatal(MGPipeInputField field, MGPipeVerb verb) {
+            const SizeT index = static_cast<SizeT>(field);
+            MGLOG_F("MGPipe: Fatal{UnmigratedPipeInput, \"%s@%s\"} [BARRIER-PULLED, "
+                    "MOBILEGL_IPC_STRICT_ERRORS=1, retires in %s]",
+                    kMGPipeInputFieldNames[index], MGPipeVerbName(verb), kMGPipeFieldRetiringPhase[index]);
+            std::abort();
+        }
+
+        // One place decides what a BARRIER-PULLED read does, so the field accessors and the
+        // seven sticky forwards cannot drift apart on it.
+        void CountBarrierPull(MGPipeInputField field, MGPipeVerb verb) {
+            ++g_residualPulls;
+            if (MG_Util::PipeStats::Enabled()) {
+                MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ResidualPulls, 1);
+            }
+            if (MG_Config::Ipc.StrictErrors) StrictBarrierPullFatal(field, verb);
+        }
+
+        // The verb's OWN may-read table (FillPoints.def, kMGPipeClassFieldMask). The stamp
+        // respects it for the same reason the client's residual fill does: a field outside the
+        // verb's class is one the fill never copied, so answering it out of gPipeInputs would
+        // hand the server the PREVIOUS verb's value - the exact staleness the generation poison
+        // exists to catch, re-introduced by the very mechanism meant to instrument it.
+        Bool FieldIsInVerbClass(MGPipeInputField field, MGPipeVerb verb) {
+            const SizeT verbIndex = static_cast<SizeT>(verb);
+            if (verbIndex >= kMGPipeVerbCount) return false;
+            const MGPipeVerbClass verbClass = kMGPipeVerbClass[verbIndex];
+            return MGPipeFieldMaskHas(kMGPipeClassFieldMask[static_cast<SizeT>(verbClass)], field);
+        }
+    } // namespace
+
+    // The third door into the storage (see PipeInputs.h). It exists because neither of the
+    // other two can be the one that stamps: MGPipeApplyAccess deliberately does not, and
+    // MGPipeFillAccess lives in MG_Impl, the role a server does not have.
+    struct MGPipeStampAccess {
+        static MGPipeFilledState& Filled(PipeInputs& inputs) { return inputs.m_filled; }
+        static void SetVerb(PipeInputs& inputs, MGPipeVerb verb) { inputs.m_currentVerb = verb; }
+        static void SetServerStamped(PipeInputs& inputs, Bool stamped) {
+            inputs.m_serverStampedVerb = stamped;
+        }
+    };
+
+    void MGPipeServerStampVerbBoundary(MGPipeVerb verb) {
+        PipeInputs& inputs = gPipeInputs;
+        MGPipeFilledState& filled = MGPipeStampAccess::Filled(inputs);
+        MGPipeStampAccess::SetVerb(inputs, verb);
+        // Starts at 1 for MGPipeValidateForVerb's reason: FilledGen == 0 is "never filled" on
+        // BOTH branches of MGPipeInputFieldIsFresh, so the zeroing below is a real withdrawal
+        // rather than a stamp that happens to be old.
+        ++filled.CurrentVerbSerial;
+        for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
+            const auto field = static_cast<MGPipeInputField>(i);
+            const MGPipeFieldOwnership ownership = kMGPipeFieldOwnership[i];
+            // STAMPED: in this verb's class AND answerable out of the records the applier has
+            // already applied. WITHDRAWN (0): everything else - which is BARRIER-PULLED, FATAL,
+            // and anything the verb's own may-read table says this verb does not read.
+            //
+            // The withdrawal is the load-bearing half of the rule: the client's residual fill
+            // stamped all 63 fields at its own verb boundary, so without it every field would
+            // read fresh on the server, `rsp` would be identically 0 and the exit gate would be
+            // decoration. It also cancels the sticky exemption for free - generated/
+            // PipeFilled.inc tests "never filled" BEFORE it tests sticky, so 0 wins over
+            // kMGPipeInputFieldSticky without a line of the generated file changing.
+            const Bool answerable = (ownership == MGPipeFieldOwnership::kRecordSupplied ||
+                                     ownership == MGPipeFieldOwnership::kApplierDerived) &&
+                                    FieldIsInVerbClass(field, verb);
+            filled.FilledGen[i] = answerable ? filled.CurrentVerbSerial : 0;
+        }
+        MGPipeStampAccess::SetServerStamped(inputs, true);
+    }
+
+    void MGPipeServerClearVerbBoundary() { MGPipeStampAccess::SetServerStamped(gPipeInputs, false); }
+
+    Uint64 MGPipeResidualPullCount() { return g_residualPulls; }
+    void MGPipeResetResidualPullCountForTesting() { g_residualPulls = 0; }
+
+    void MGPipeInputUnfreshRead(MGPipeInputField field, MGPipeVerb verb, Bool serverStamped) {
+        // OUTSIDE A SERVER-STAMPED VERB THIS IS THE MONOLITH ANSWER, UNCHANGED. A split BUILD
+        // running MOBILEGL_TRANSPORT=monolith - every unit and integration-gpu lane of
+        // build-split - has a client that stamped all 63 fields, so a stale read there is the
+        // same defect it is in a verify build. Softening it on the build rather than on the
+        // stamp would take 1842 unit cases' ability to go red away with it.
+        //
+        // AND A READ OUTSIDE THE VERB'S OWN CLASS IS STILL FATAL even for a BARRIER-PULLED
+        // field: the value it would be answered with was never copied for this verb, so
+        // counting it would trade a loud staleness for a quiet one.
+        if (!serverStamped ||
+            kMGPipeFieldOwnership[static_cast<SizeT>(field)] != MGPipeFieldOwnership::kBarrierPulled ||
+            !FieldIsInVerbClass(field, verb)) {
+            MGPipeInputPoisonFatalForVerb(field, verb);
+        }
+        CountBarrierPull(field, verb);
+    }
+
+    void MGPipeInputArgumentRead(MGPipeInputField field, Uint32 arg0, MGPipeVerb verb, Bool serverStamped) {
+        if (!serverStamped) return;
+        const MGPipeFieldOwnership narrowed = MGPipeFieldOwnershipOf(field, arg0);
+        if (narrowed == MGPipeFieldOwnershipOf(field)) return; // the argument narrows nothing
+        if (narrowed == MGPipeFieldOwnership::kFatal) {
+            // The field's own stamp says fresh - the applier really did write the half that has
+            // a carrier - so only the argument can say that THIS read is unserved.
+            MGPipeInputPoisonFatalForVerb(field, verb);
+        }
+        if (narrowed == MGPipeFieldOwnership::kBarrierPulled) CountBarrierPull(field, verb);
+    }
+
+    void MGPipeStickyForwardPull(MGPipeInputField field) {
+        // The seven carry no MGP_INPUT_CHECK at all (the declared exception argued at
+        // PipeInputs.h's F-class block), so freshness can never reach them and neither can the
+        // stamp's withdrawal. This is the only thing that puts them in `rsp`.
+        if (!gPipeInputs.ServerStampedVerb()) return;
+        CountBarrierPull(field, gPipeInputs.CurrentVerb());
+    }
+#endif // MOBILEGL_BUILD_DISAGGREGATED
 
 #if MOBILEGL_PIPE_VERIFY
     namespace {

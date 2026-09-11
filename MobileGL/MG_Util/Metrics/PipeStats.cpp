@@ -180,6 +180,7 @@ namespace MobileGL::MG_Util::PipeStats {
             "render-state-cso-mints", "render-state-cso-binds", "map-persistent-roundtrips",
             "framebuffer-emissions", "sampler-view-emissions", "sampler-state-emissions",
             "shader-image-emissions", "client-tex-upload-emissions", "tex-remint-pulls",
+            "residual-pulls",
 #endif
         };
         const char* const kGateNames[kGateCount] = {
@@ -457,6 +458,13 @@ namespace MobileGL::MG_Util::PipeStats {
         // Espryt had already allocated and then had to re-mint image-bindable, replaying its
         // levels from the client's shadow, because ImageBindableHint reached it too late.
         line += " trp=" + std::to_string(calls[static_cast<Uint32>(CallClass::TextureRemintPulls)]);
+        // rsp is P5's residual-pull count: reads, on the server side, of a PipeInputs field no
+        // pushed record supplies, answered out of the client's residual fill under the verb
+        // barrier. It is the SIZE OF THE P6/P7/P8 DEBT and it is published on this line rather
+        // than only at teardown because the number an operator needs is per frame: a debt that
+        // tracks the draw count is a pull inside a loop, and one that tracks the frame count is
+        // a pull per verb. Zero in every monolith lane by construction.
+        line += " rsp=" + std::to_string(calls[static_cast<Uint32>(CallClass::ResidualPulls)]);
 #endif
         line += "] gates[";
         for (Uint32 i = 0; i < kGateCount; ++i) {
