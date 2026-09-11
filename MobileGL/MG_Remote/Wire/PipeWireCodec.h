@@ -364,16 +364,19 @@ namespace MobileGL::MG_Remote::Wire {
         // here Fatals, because a pad that reached the decoder has already been counted.
         Bool DecodeAndApply(const Transport::RingRecordView& record);
 
-        // Advanced by exactly one per applied non-pad record. P5 FORBIDS BATCHING IT (R-9):
-        // the verb barrier's waiter reads it, and a batched watermark makes the client wait
-        // for records the server has not run.
+        // THE DECODER'S OWN TALLY, NOT THE SHARED WATERMARK. Advanced by exactly one per
+        // applied non-pad record.
         //
-        // DecodeAndApply PUBLISHES RingControl::appliedSeq AND retiredSeq to this value after
-        // every record, because the decoder is the thing that knows when a record's SEG_STAGE
-        // runs stopped being read (R-11, table 1's "retires: apply"). v1's PipeApplier must
-        // therefore NOT advance either watermark a second time - a double advance makes the
-        // client's barrier resume on a record the server has not run, which is precisely the
-        // failure R-9's "never publish a watermark early" exists to forbid.
+        // RingControl::appliedSeq has exactly ONE writer - s1's SessionConsumer::ApplyOne, +1
+        // per record, pads never counted - and this class writes NO RingControl field at all.
+        // That is deliberate rather than a division of labour: two writers of a watermark is
+        // how a waiter resumes on a record the server has not run, which is what R-9's "never
+        // publish a watermark early" forbids, and there is no checksum on this ring that would
+        // catch it.
+        //
+        // Keeping a private count beside the session's is what makes the batching ban
+        // CHECKABLE instead of merely stated: after every record the two numbers must agree,
+        // and a single counter could not tell a batched publish from an honest one.
         Uint64 AppliedSeq() const;
 
         // v1 installs the backend bridge for contract §7's five class-B verbs. Null - the

@@ -949,15 +949,13 @@ namespace MobileGL::MG_Remote::Wire {
 
         PoisonResolvedRuns();
 
+        // THE DECODER'S OWN TALLY, AND NOT THE SHARED WATERMARK. RingControl::appliedSeq has
+        // exactly one writer - s1's SessionConsumer::ApplyOne, +1 per record, pads never
+        // counted - and this class does not write RingControl at all. Keeping a private count
+        // beside it is what makes R-9's batching ban CHECKABLE rather than merely stated: the
+        // session's watermark and this number must agree after every record, and a test that
+        // compares them catches a batched publish that a single counter could not.
         ++m_applySeq;
-        // R-9: EVERY record, never batched. The client's verb barrier and every reply wait
-        // read appliedSeq, and a batched watermark makes a waiter resume on work the server
-        // has not done. retiredSeq goes with it because nothing in P5 borrows a ring slot into
-        // the GPU timeline - the day something does, this is the line that splits.
-        if (m_control != nullptr) {
-            m_control->appliedSeq.store(m_applySeq, std::memory_order_release);
-            m_control->retiredSeq.store(m_applySeq, std::memory_order_release);
-        }
         return applied;
     }
 

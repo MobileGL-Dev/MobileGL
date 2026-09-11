@@ -111,9 +111,14 @@ namespace {
         Transport::RingConsumer& Consumer() { return m_consumer; }
         std::uint8_t* StageBase() { return m_stageBytes.data(); }
 
-        // Pops one record and decodes it. Returns whether the decoder reported "applied";
-        // `popped` says whether there was a record at all, so a case cannot pass because
-        // nothing was there.
+        // Pops one record, decodes it, and then does what s1's SessionConsumer::ApplyOne does:
+        // advance RingControl's watermarks by ONE. THE DECODER DOES NOT WRITE RingControl -
+        // appliedSeq has exactly one writer and it is the session - so this fixture has to
+        // play that role, which is also what lets a case compare the session's watermark
+        // against the decoder's own tally and catch a batched publish.
+        //
+        // Returns whether there was a record at all, so a case cannot pass because nothing was
+        // there; `applied` is what the decoder reported.
         bool PumpOne(bool* applied) {
             m_encoder.Publish();
             Transport::RingRecordView view{};
@@ -125,12 +130,19 @@ namespace {
                 return false;
             }
             const bool result = m_decoder.DecodeAndApply(view);
+            ++m_sessionApplied;
+            m_control.appliedSeq.store(m_sessionApplied, std::memory_order_release);
+            // Nothing in P5 borrows a ring slot into the GPU timeline, so a record's SEG_STAGE
+            // runs retire as soon as it is applied (table 1's "retires: apply").
+            m_control.retiredSeq.store(m_sessionApplied, std::memory_order_release);
             m_consumer.PublishRetired();
             if (applied != nullptr) {
                 *applied = result;
             }
             return true;
         }
+
+        std::uint64_t SessionAppliedSeq() const { return m_sessionApplied; }
 
         // ---- recorded answers ----
         struct Reply {
@@ -216,6 +228,7 @@ namespace {
         PipeWireDecoder m_decoder;
         Replies m_replies;
         Verbs m_verbs;
+        std::uint64_t m_sessionApplied = 0;
     };
 
     MGPipeHandle MakeHandle(Uint32 slot, Uint32 gen = 1) {
@@ -899,6 +912,10 @@ TEST_F(PipeWireCodecTest, AClassBVerbWithNoSinkDeclinesRatherThanInventsASemanti
 // =====================================================================================
 
 TEST_F(PipeWireCodecTest, AppliedSeqAdvancesByExactlyOnePerRecordAndIsNeverBatched) {
+    // TWO COUNTS, ON PURPOSE. RingControl::appliedSeq has exactly one writer - the session -
+    // and the decoder keeps its own tally. They must agree after every record, and a single
+    // counter could not tell a batched publish from an honest one (R-9: a batched watermark
+    // makes the client's barrier resume on work the server has not run).
     Wire2 wire;
     MGPPresent present{};
     for (Uint64 i = 1; i <= 5; ++i) {
@@ -911,12 +928,44 @@ TEST_F(PipeWireCodecTest, AppliedSeqAdvancesByExactlyOnePerRecordAndIsNeverBatch
         ASSERT_TRUE(wire.PumpOne(&applied));
         EXPECT_EQ(wire.Decoder().AppliedSeq(), i);
         EXPECT_EQ(wire.Control().appliedSeq.load(), i);
+        EXPECT_EQ(wire.SessionAppliedSeq(), wire.Decoder().AppliedSeq());
     }
     EXPECT_EQ(wire.Encoder().EmitSeq(), 5u);
 }
 
+TEST_F(PipeWireCodecTest, TheDecoderWritesNoRingControlFieldOfItsOwn) {
+    // s1 owns RingControl::appliedSeq; the codec's job ends at "this record was applied". Two
+    // writers of a watermark is how a waiter resumes on a record the server has not run, and
+    // there is no checksum on this ring that would catch it - so this is asserted rather than
+    // documented.
+    Wire2 wire;
+    MGPPresent present{};
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::Present, &present, sizeof(present)),
+              kInvalidSeq);
+    wire.Encoder().Publish();
+
+    Transport::RingRecordView view{};
+    bool corrupt = false;
+    ASSERT_TRUE(wire.Consumer().Pop(view, &corrupt));
+    ASSERT_FALSE(corrupt);
+    const std::uint64_t appliedBefore = wire.Control().appliedSeq.load();
+    const std::uint64_t retiredBefore = wire.Control().retiredSeq.load();
+
+    (void)wire.Decoder().DecodeAndApply(view);
+
+    EXPECT_EQ(wire.Control().appliedSeq.load(), appliedBefore);
+    EXPECT_EQ(wire.Control().retiredSeq.load(), retiredBefore);
+    EXPECT_EQ(wire.Decoder().AppliedSeq(), 1u); // the decoder's own tally did move
+}
+
 TEST_F(PipeWireCodecTest, MaxRecordBytesSeenStaysFarBelowHalfTheRing) {
     // R-10's proof obligation. P5 does no chunking and must instead show it never needed any.
+    //
+    // THE CAP IS ASKED FOR AT RUNTIME AND NEVER DERIVED FROM MOBILEGL_IPC_RING_MB. s1 found
+    // that SEG_CMD's 8 MiB holds a 4096-byte control page plus a POWER-OF-TWO ring, so the
+    // ring is 4 MiB and MaxRecordBytes() is 2 MiB - half of what both CONTRACT-P5.md §5 and
+    // Config.h's comment say. Every comparison in the codec goes through
+    // RingProducer::MaxRecordBytes() for exactly this reason.
     Wire2 wire;
     MGPDrawInfo info{};
     info.NumDraws = 64;
@@ -932,6 +981,31 @@ TEST_F(PipeWireCodecTest, MaxRecordBytesSeenStaysFarBelowHalfTheRing) {
     // MGPFramebufferState at 304, so a record only ever grows through its TAIL - which is why
     // the counter is on the encoder and not a constant.
     EXPECT_LT(8u + sizeof(MGPFramebufferState), wire.Cmd().MaxRecordBytes());
+}
+
+TEST_F(PipeWireCodecTest, ABigProgramArchiveDoesNotGrowItsRecordAtAll) {
+    // THE POINT OF R-10's "every blob goes through SEG_STAGE": create_shader_state's RECORD is
+    // 8 + sizeof(MGPProgramDesc) == 200 bytes whether the archive is one kilobyte or one
+    // megabyte, because the record carries {Seg, Offset, Size} and nothing else. So
+    // create_shader_state is one of the SMALLEST records in the catalogue, not the one most
+    // likely to approach MaxRecordBytes(); what approaches that cap is a var-tail, and the
+    // archive's own bound is MOBILEGL_IPC_STAGE_MB with a Fatal of its own.
+    Wire2 wire;
+    MG_State::GLState::LinkArtifacts link;
+    MG_State::GLState::SpirvArtifacts spirv;
+    spirv.generatedSpirv.resize(1);
+    spirv.generatedSpirv[0].assign(8 * 1024, 0x07230203u); // 32 KiB of module words
+    Vector<Uint8> archive;
+    MG_State::GLState::EncodeProgramArtifacts(link, spirv, archive);
+    ASSERT_GT(archive.size(), 32u * 1024u);
+
+    MGPProgramDesc desc{};
+    desc.Cso = MakeHandle(91);
+    desc.Reflection = wire.Encoder().StageBytes(archive.data(), archive.size());
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CreateShaderState, &desc, sizeof(desc)),
+              kInvalidSeq);
+    EXPECT_EQ(wire.Encoder().MaxRecordBytesSeen(), 8u + sizeof(MGPProgramDesc));
+    EXPECT_GE(wire.Encoder().StagedBytesInFlight(), archive.size());
 }
 
 TEST_F(PipeWireCodecTest, StagedBytesAreReclaimedOnlyBehindRetiredSeq) {
