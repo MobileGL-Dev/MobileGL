@@ -1086,7 +1086,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // 26.3 p99 depends on, and a second copy of it for the handle arm is exactly how a
             // tier silently changes. The arms differ only in where `hostBase` and `frontendSize`
             // come from.
-            void FlushPendingRangesFrom(GLESBufferResource& resource, const Uint8* hostBase, SizeT frontendSize) {
+            //
+            // R-11'S PARAMETER, AND IT IS A PARAMETER RATHER THAN AN ASSUMPTION (P5 b1).
+            // `hostBase` is re-read at every use today precisely because a shadow resize or an
+            // adoption moves what an earlier base pointed at. Under split the server may hold
+            // no pointer into the client's shadow at all, so the base becomes a SNAPSHOT taken
+            // into SEG_STAGE at emission - and a snapshot covers a RANGE, not the store. The
+            // two extra arguments say which range `hostBase` is good for; the default is the
+            // whole store, which is exactly what a live shadow is, so every caller today is
+            // byte-identical. The moment w1 passes a real snapshot extent, tier 1's widening
+            // refusal below stops being unreachable and a too-narrow snapshot is named instead
+            // of silently clobbering GPU-written bytes with stale ones.
+            constexpr SizeT kHostBaseCoversWholeStore = ~static_cast<SizeT>(0);
+            void FlushPendingRangesFrom(GLESBufferResource& resource, const Uint8* hostBase, SizeT frontendSize,
+                                        SizeT hostBaseFrom = 0,
+                                        SizeT hostBaseTo = kHostBaseCoversWholeStore) {
 #ifdef TRACY_ENABLE
                 ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -1134,9 +1148,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // shadow's to rewrite. Widening to page bounds looked free and was
                     // not - the widened bytes clobbered GPU-written data (an SSBO
                     // counter beside the app's SubData) with the stale shadow.
-                    const GLbitfield access = mapUsable ? InvalidateFlushAccessFor(start, end, start, end,
-                                                                                  limit, resource.storageSize)
-                                                        : 0u;
+                    // The extent the bytes behind `hostBase` are actually good for, clamped
+                    // to the store. With the default it IS [start, end), so the refusal below
+                    // cannot fire and the ladder is unchanged; with a real SEG_STAGE snapshot
+                    // it is the snapshot's window and a disagreement drops this range to the
+                    // staging ring instead of letting a widened INVALIDATE_RANGE declare bytes
+                    // dead that nothing is about to rewrite.
+                    const SizeT coveredFrom = hostBaseFrom > start ? hostBaseFrom : start;
+                    const SizeT coveredTo = hostBaseTo < end ? hostBaseTo : end;
+#if MOBILEGL_PIPE_VERIFY
+                    if (coveredFrom != start || coveredTo != end) {
+                        MGLOG_E_ONCE("MGPipe: Fatal{StageSnapshotTooNarrow} flush_pending_ranges: the "
+                                     "staged bytes cover [%zu, %zu) and the queued range is [%zu, %zu) "
+                                     "- tiers 2 and 3 would copy from outside the snapshot",
+                                     hostBaseFrom, hostBaseTo, start, end);
+                    }
+#endif
+                    const GLbitfield access =
+                        mapUsable ? InvalidateFlushAccessFor(start, end, coveredFrom, coveredTo, limit,
+                                                             resource.storageSize)
+                                  : 0u;
                     if (access != 0) {
                         BindBufferId(TempBufferTarget, resource.id);
                         void* dst = g_GLESFuncs.glMapBufferRange(TempBufferTarget, (GLintptr)start,
