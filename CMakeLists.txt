@@ -21,6 +21,13 @@ option(MOBILEGL_IOS               "Build MobileGL for iOS instead of macOS when 
 # That emptiness is one of the two byte-level equalities the plan's validation
 # gates keep (section 10.3).
 option(MOBILEGL_BUILD_DISAGGREGATED "Build the MG_Remote transport layer (two-process shape)" OFF)
+# The CI / debugging shape (ARCHITECTURE.md:581): both roles in ONE process, talking over the
+# same SEG_CMD ring and the same G3 codec a spawned server would use. It IMPLIES
+# MOBILEGL_BUILD_DISAGGREGATED (below) and additionally admits the role-isolation shims that
+# only make sense when the two roles share an address space. It is a SUPERSET, never a
+# substitute: MOBILEGL_TRANSPORT=inproc is what selects the shape at run time, and this option
+# only decides whether the shims are compiled in.
+option(MOBILEGL_BUILD_DISAGGREGATED_INPROC "Compile the in-process (one-process, two-role) split shims; implies MOBILEGL_BUILD_DISAGGREGATED" OFF)
 option(MOBILEGL_BUILD_SERVER_SPIKE "Build the P0 spike-A MobileGLServer delivery-chain executable (Android only)" OFF)
 # The PipeInputs strangler (ARCHITECTURE.md 9.2). OFF is the pull build and must stay
 # byte-identical to a tree without either option: MGB_CTX is the live GLContext, no
@@ -445,6 +452,17 @@ set(SOURCE_FILES
 # option OFF not one file here is compiled and no include path is added.
 # ---------------------------------------------------------------------------
 
+# MOBILEGL_BUILD_DISAGGREGATED_INPROC implies MOBILEGL_BUILD_DISAGGREGATED. A normal
+# variable, not a forced cache write, for the reason the two implications below give: an
+# operator's cache entry stays theirs and only this configure is shadowed. Ordered BEFORE the
+# flatbuffers guard so that a missing submodule turns BOTH off together - an INPROC build
+# with the transport shadowed off would compile a role-isolation shim over no roles.
+if (MOBILEGL_BUILD_DISAGGREGATED_INPROC AND NOT MOBILEGL_BUILD_DISAGGREGATED)
+    message(STATUS "MobileGL: MOBILEGL_BUILD_DISAGGREGATED_INPROC=ON forces "
+                   "MOBILEGL_BUILD_DISAGGREGATED ON for this configure")
+    set(MOBILEGL_BUILD_DISAGGREGATED ON)
+endif()
+
 # FlatBuffers is a submodule and its runtime is header-only. Guard both ways:
 # a checkout without the submodule must configure and build, just without the
 # disaggregated shape, rather than fail with a missing-header error a hundred
@@ -462,6 +480,24 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND
     # all. Shadowing the cache entry for this configure only keeps the operator's ON where it
     # was, so the next configure - with the submodule there - honours it.
     set(MOBILEGL_BUILD_DISAGGREGATED OFF)
+    # And with it the shim option, or the `-DMOBILEGL_BUILD_DISAGGREGATED_INPROC=1` below
+    # would still be defined over a build with no MG_Remote in it at all.
+    set(MOBILEGL_BUILD_DISAGGREGATED_INPROC OFF)
+endif()
+
+# MOBILEGL_BUILD_DISAGGREGATED implies MOBILEGL_PIPE_PUSH (P5 c0). The split path IS the
+# pushed path: MG_Remote's server decodes records into the MGPipeApply* entry points, which
+# live in MG_Pipe/PipeApply.cpp, which the PIPE_PUSH block below is what compiles. Without
+# this, `-DMOBILEGL_BUILD_DISAGGREGATED=ON` alone configures and then fails to link the
+# applier - and the shape it fails in (MG_Remote compiled, no applier) is indistinguishable
+# at the CMake level from a legitimate transport-only build, which is why it is stated here
+# rather than left to whoever hits the link error. Same normal-variable form as the two
+# implications above.
+if (MOBILEGL_BUILD_DISAGGREGATED AND NOT MOBILEGL_PIPE_PUSH)
+    message(STATUS "MobileGL: MOBILEGL_BUILD_DISAGGREGATED=ON forces MOBILEGL_PIPE_PUSH ON for "
+                   "this configure: the split path decodes into the MGPipe applier, and the "
+                   "applier is what MOBILEGL_PIPE_PUSH compiles")
+    set(MOBILEGL_PIPE_PUSH ON)
 endif()
 
 # MOBILEGL_PIPE_VERIFY implies MOBILEGL_PIPE_PUSH: the comparator compares the pushed block
@@ -516,6 +552,28 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # Keeps MG_Util/Debug/Log.h - and through it the GL frontend's
         # umbrella header - out of the header-only wire code (WireLog.h).
         MobileGL/MG_Remote/Transport/WireLog.cpp
+        # ---- P5: the three new directories ------------------------------
+        # Wire/   the G3 codec: MGPWireRec_* in and out of SEG_CMD, blobs and
+        #         var-tails in and out of SEG_STAGE.                    [w1]
+        # Client/ the emitting role: session, the 69-slot emit table, the
+        #         caps mirror.                                          [c1]
+        # Server/ the applying role: session, the applier bridge onto the
+        #         existing MGPipeApply* free functions, the apply thread. [v1]
+        #
+        # Every file below lands in P5 as a HEADER plus a .cpp of named
+        # Fatal stubs, so that all seven P5 packages compile and link on day
+        # one against signatures that cannot then move under them. A stub is
+        # MGLOG_F + std::abort, never a silent no-op: an unimplemented
+        # emitter that returns quietly is how a split lane runs monolith and
+        # goes green (ARCHITECTURE.md 10.3).
+        MobileGL/MG_Remote/CapsCodec.cpp
+        MobileGL/MG_Remote/Wire/PipeWireCodec.cpp
+        MobileGL/MG_Remote/Client/ClientSession.cpp
+        MobileGL/MG_Remote/Client/EmitTables.cpp
+        MobileGL/MG_Remote/Client/CapsMirror.cpp
+        MobileGL/MG_Remote/Server/ServerSession.cpp
+        MobileGL/MG_Remote/Server/PipeApplier.cpp
+        MobileGL/MG_Remote/Server/ServerLoop.cpp
     )
 endif()
 
