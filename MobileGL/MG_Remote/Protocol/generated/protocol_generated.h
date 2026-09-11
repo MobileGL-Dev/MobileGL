@@ -532,7 +532,8 @@ struct Hello FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_BUILDFINGERPRINT = 8,
     VT_BACKENDTYPE = 10,
     VT_PID = 12,
-    VT_CONFIGBLOB = 14
+    VT_CONFIGBLOB = 14,
+    VT_ABIFINGERPRINT = 16
   };
   uint32_t abiMajor() const {
     return GetField<uint32_t>(VT_ABIMAJOR, 0);
@@ -552,6 +553,9 @@ struct Hello FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::Vector<uint8_t> *configBlob() const {
     return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_CONFIGBLOB);
   }
+  uint64_t abiFingerprint() const {
+    return GetField<uint64_t>(VT_ABIFINGERPRINT, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -563,6 +567,7 @@ struct Hello FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint32_t>(verifier, VT_PID, 4) &&
            VerifyOffset(verifier, VT_CONFIGBLOB) &&
            verifier.VerifyVector(configBlob()) &&
+           VerifyField<uint64_t>(verifier, VT_ABIFINGERPRINT, 8) &&
            verifier.EndTable();
   }
 };
@@ -589,6 +594,9 @@ struct HelloBuilder {
   void add_configBlob(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> configBlob) {
     fbb_.AddOffset(Hello::VT_CONFIGBLOB, configBlob);
   }
+  void add_abiFingerprint(uint64_t abiFingerprint) {
+    fbb_.AddElement<uint64_t>(Hello::VT_ABIFINGERPRINT, abiFingerprint, 0);
+  }
   explicit HelloBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -607,8 +615,10 @@ inline ::flatbuffers::Offset<Hello> CreateHello(
     ::flatbuffers::Offset<::flatbuffers::String> buildFingerprint = 0,
     uint32_t backendType = 0,
     uint32_t pid = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> configBlob = 0) {
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> configBlob = 0,
+    uint64_t abiFingerprint = 0) {
   HelloBuilder builder_(_fbb);
+  builder_.add_abiFingerprint(abiFingerprint);
   builder_.add_configBlob(configBlob);
   builder_.add_pid(pid);
   builder_.add_backendType(backendType);
@@ -630,7 +640,8 @@ inline ::flatbuffers::Offset<Hello> CreateHelloDirect(
     const char *buildFingerprint = nullptr,
     uint32_t backendType = 0,
     uint32_t pid = 0,
-    const std::vector<uint8_t> *configBlob = nullptr) {
+    const std::vector<uint8_t> *configBlob = nullptr,
+    uint64_t abiFingerprint = 0) {
   auto buildFingerprint__ = buildFingerprint ? _fbb.CreateString(buildFingerprint) : 0;
   auto configBlob__ = configBlob ? _fbb.CreateVector<uint8_t>(*configBlob) : 0;
   return MobileGL::Wire::CreateHello(
@@ -640,7 +651,8 @@ inline ::flatbuffers::Offset<Hello> CreateHelloDirect(
       buildFingerprint__,
       backendType,
       pid,
-      configBlob__);
+      configBlob__,
+      abiFingerprint);
 }
 
 struct Welcome FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -653,7 +665,9 @@ struct Welcome FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_CMDRING = 10,
     VT_STAGERING = 12,
     VT_REPLYPOOL = 14,
-    VT_EVENTRING = 16
+    VT_EVENTRING = 16,
+    VT_BUILDFINGERPRINT = 18,
+    VT_ABIFINGERPRINT = 20
   };
   uint32_t abiMajor() const {
     return GetField<uint32_t>(VT_ABIMAJOR, 0);
@@ -676,6 +690,12 @@ struct Welcome FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const MobileGL::Wire::SegmentRef *eventRing() const {
     return GetPointer<const MobileGL::Wire::SegmentRef *>(VT_EVENTRING);
   }
+  const ::flatbuffers::String *buildFingerprint() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_BUILDFINGERPRINT);
+  }
+  uint64_t abiFingerprint() const {
+    return GetField<uint64_t>(VT_ABIFINGERPRINT, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -690,6 +710,9 @@ struct Welcome FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyTable(replyPool()) &&
            VerifyOffset(verifier, VT_EVENTRING) &&
            verifier.VerifyTable(eventRing()) &&
+           VerifyOffset(verifier, VT_BUILDFINGERPRINT) &&
+           verifier.VerifyString(buildFingerprint()) &&
+           VerifyField<uint64_t>(verifier, VT_ABIFINGERPRINT, 8) &&
            verifier.EndTable();
   }
 };
@@ -719,6 +742,12 @@ struct WelcomeBuilder {
   void add_eventRing(::flatbuffers::Offset<MobileGL::Wire::SegmentRef> eventRing) {
     fbb_.AddOffset(Welcome::VT_EVENTRING, eventRing);
   }
+  void add_buildFingerprint(::flatbuffers::Offset<::flatbuffers::String> buildFingerprint) {
+    fbb_.AddOffset(Welcome::VT_BUILDFINGERPRINT, buildFingerprint);
+  }
+  void add_abiFingerprint(uint64_t abiFingerprint) {
+    fbb_.AddElement<uint64_t>(Welcome::VT_ABIFINGERPRINT, abiFingerprint, 0);
+  }
   explicit WelcomeBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -738,8 +767,12 @@ inline ::flatbuffers::Offset<Welcome> CreateWelcome(
     ::flatbuffers::Offset<MobileGL::Wire::SegmentRef> cmdRing = 0,
     ::flatbuffers::Offset<MobileGL::Wire::SegmentRef> stageRing = 0,
     ::flatbuffers::Offset<MobileGL::Wire::SegmentRef> replyPool = 0,
-    ::flatbuffers::Offset<MobileGL::Wire::SegmentRef> eventRing = 0) {
+    ::flatbuffers::Offset<MobileGL::Wire::SegmentRef> eventRing = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> buildFingerprint = 0,
+    uint64_t abiFingerprint = 0) {
   WelcomeBuilder builder_(_fbb);
+  builder_.add_abiFingerprint(abiFingerprint);
+  builder_.add_buildFingerprint(buildFingerprint);
   builder_.add_eventRing(eventRing);
   builder_.add_replyPool(replyPool);
   builder_.add_stageRing(stageRing);
@@ -755,6 +788,31 @@ struct Welcome::Traits {
   static auto constexpr Create = CreateWelcome;
 };
 
+inline ::flatbuffers::Offset<Welcome> CreateWelcomeDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint32_t abiMajor = 0,
+    uint32_t abiMinor = 0,
+    uint32_t serverPid = 0,
+    ::flatbuffers::Offset<MobileGL::Wire::SegmentRef> cmdRing = 0,
+    ::flatbuffers::Offset<MobileGL::Wire::SegmentRef> stageRing = 0,
+    ::flatbuffers::Offset<MobileGL::Wire::SegmentRef> replyPool = 0,
+    ::flatbuffers::Offset<MobileGL::Wire::SegmentRef> eventRing = 0,
+    const char *buildFingerprint = nullptr,
+    uint64_t abiFingerprint = 0) {
+  auto buildFingerprint__ = buildFingerprint ? _fbb.CreateString(buildFingerprint) : 0;
+  return MobileGL::Wire::CreateWelcome(
+      _fbb,
+      abiMajor,
+      abiMinor,
+      serverPid,
+      cmdRing,
+      stageRing,
+      replyPool,
+      eventRing,
+      buildFingerprint__,
+      abiFingerprint);
+}
+
 struct CapsSnapshot FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef CapsSnapshotBuilder Builder;
   struct Traits;
@@ -764,10 +822,8 @@ struct CapsSnapshot FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_FORMATCAPS = 8,
     VT_EXTENSIONS = 10,
     VT_APIVERSION = 12,
-    VT_MAXCOMPUTEWORKGROUPCOUNT = 14,
-    VT_MAXCOMPUTEWORKGROUPSIZE = 16,
-    VT_TABLESLOTMASK = 18,
-    VT_PREFERSCPUXFBPRIMITIVEACCOUNTING = 20
+    VT_CALLMASK = 14,
+    VT_BACKENDTYPE = 16
   };
   const ::flatbuffers::Vector<uint8_t> *dynamicParameters() const {
     return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_DYNAMICPARAMETERS);
@@ -784,17 +840,11 @@ struct CapsSnapshot FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::String *apiVersion() const {
     return GetPointer<const ::flatbuffers::String *>(VT_APIVERSION);
   }
-  const ::flatbuffers::Vector<int32_t> *maxComputeWorkGroupCount() const {
-    return GetPointer<const ::flatbuffers::Vector<int32_t> *>(VT_MAXCOMPUTEWORKGROUPCOUNT);
+  uint64_t callMask() const {
+    return GetField<uint64_t>(VT_CALLMASK, 0);
   }
-  const ::flatbuffers::Vector<int32_t> *maxComputeWorkGroupSize() const {
-    return GetPointer<const ::flatbuffers::Vector<int32_t> *>(VT_MAXCOMPUTEWORKGROUPSIZE);
-  }
-  uint64_t tableSlotMask() const {
-    return GetField<uint64_t>(VT_TABLESLOTMASK, 0);
-  }
-  bool prefersCpuXfbPrimitiveAccounting() const {
-    return GetField<uint8_t>(VT_PREFERSCPUXFBPRIMITIVEACCOUNTING, 0) != 0;
+  uint32_t backendType() const {
+    return GetField<uint32_t>(VT_BACKENDTYPE, 0);
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
@@ -810,12 +860,8 @@ struct CapsSnapshot FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyVectorOfStrings(extensions()) &&
            VerifyOffset(verifier, VT_APIVERSION) &&
            verifier.VerifyString(apiVersion()) &&
-           VerifyOffset(verifier, VT_MAXCOMPUTEWORKGROUPCOUNT) &&
-           verifier.VerifyVector(maxComputeWorkGroupCount()) &&
-           VerifyOffset(verifier, VT_MAXCOMPUTEWORKGROUPSIZE) &&
-           verifier.VerifyVector(maxComputeWorkGroupSize()) &&
-           VerifyField<uint64_t>(verifier, VT_TABLESLOTMASK, 8) &&
-           VerifyField<uint8_t>(verifier, VT_PREFERSCPUXFBPRIMITIVEACCOUNTING, 1) &&
+           VerifyField<uint64_t>(verifier, VT_CALLMASK, 8) &&
+           VerifyField<uint32_t>(verifier, VT_BACKENDTYPE, 4) &&
            verifier.EndTable();
   }
 };
@@ -839,17 +885,11 @@ struct CapsSnapshotBuilder {
   void add_apiVersion(::flatbuffers::Offset<::flatbuffers::String> apiVersion) {
     fbb_.AddOffset(CapsSnapshot::VT_APIVERSION, apiVersion);
   }
-  void add_maxComputeWorkGroupCount(::flatbuffers::Offset<::flatbuffers::Vector<int32_t>> maxComputeWorkGroupCount) {
-    fbb_.AddOffset(CapsSnapshot::VT_MAXCOMPUTEWORKGROUPCOUNT, maxComputeWorkGroupCount);
+  void add_callMask(uint64_t callMask) {
+    fbb_.AddElement<uint64_t>(CapsSnapshot::VT_CALLMASK, callMask, 0);
   }
-  void add_maxComputeWorkGroupSize(::flatbuffers::Offset<::flatbuffers::Vector<int32_t>> maxComputeWorkGroupSize) {
-    fbb_.AddOffset(CapsSnapshot::VT_MAXCOMPUTEWORKGROUPSIZE, maxComputeWorkGroupSize);
-  }
-  void add_tableSlotMask(uint64_t tableSlotMask) {
-    fbb_.AddElement<uint64_t>(CapsSnapshot::VT_TABLESLOTMASK, tableSlotMask, 0);
-  }
-  void add_prefersCpuXfbPrimitiveAccounting(bool prefersCpuXfbPrimitiveAccounting) {
-    fbb_.AddElement<uint8_t>(CapsSnapshot::VT_PREFERSCPUXFBPRIMITIVEACCOUNTING, static_cast<uint8_t>(prefersCpuXfbPrimitiveAccounting), 0);
+  void add_backendType(uint32_t backendType) {
+    fbb_.AddElement<uint32_t>(CapsSnapshot::VT_BACKENDTYPE, backendType, 0);
   }
   explicit CapsSnapshotBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
@@ -869,20 +909,16 @@ inline ::flatbuffers::Offset<CapsSnapshot> CreateCapsSnapshot(
     ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> formatCaps = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> extensions = 0,
     ::flatbuffers::Offset<::flatbuffers::String> apiVersion = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<int32_t>> maxComputeWorkGroupCount = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<int32_t>> maxComputeWorkGroupSize = 0,
-    uint64_t tableSlotMask = 0,
-    bool prefersCpuXfbPrimitiveAccounting = false) {
+    uint64_t callMask = 0,
+    uint32_t backendType = 0) {
   CapsSnapshotBuilder builder_(_fbb);
-  builder_.add_tableSlotMask(tableSlotMask);
-  builder_.add_maxComputeWorkGroupSize(maxComputeWorkGroupSize);
-  builder_.add_maxComputeWorkGroupCount(maxComputeWorkGroupCount);
+  builder_.add_callMask(callMask);
+  builder_.add_backendType(backendType);
   builder_.add_apiVersion(apiVersion);
   builder_.add_extensions(extensions);
   builder_.add_formatCaps(formatCaps);
   builder_.add_rendererInfo(rendererInfo);
   builder_.add_dynamicParameters(dynamicParameters);
-  builder_.add_prefersCpuXfbPrimitiveAccounting(prefersCpuXfbPrimitiveAccounting);
   return builder_.Finish();
 }
 
@@ -898,17 +934,13 @@ inline ::flatbuffers::Offset<CapsSnapshot> CreateCapsSnapshotDirect(
     const std::vector<uint8_t> *formatCaps = nullptr,
     const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *extensions = nullptr,
     const char *apiVersion = nullptr,
-    const std::vector<int32_t> *maxComputeWorkGroupCount = nullptr,
-    const std::vector<int32_t> *maxComputeWorkGroupSize = nullptr,
-    uint64_t tableSlotMask = 0,
-    bool prefersCpuXfbPrimitiveAccounting = false) {
+    uint64_t callMask = 0,
+    uint32_t backendType = 0) {
   auto dynamicParameters__ = dynamicParameters ? _fbb.CreateVector<uint8_t>(*dynamicParameters) : 0;
   auto rendererInfo__ = rendererInfo ? _fbb.CreateVector<uint8_t>(*rendererInfo) : 0;
   auto formatCaps__ = formatCaps ? _fbb.CreateVector<uint8_t>(*formatCaps) : 0;
   auto extensions__ = extensions ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*extensions) : 0;
   auto apiVersion__ = apiVersion ? _fbb.CreateString(apiVersion) : 0;
-  auto maxComputeWorkGroupCount__ = maxComputeWorkGroupCount ? _fbb.CreateVector<int32_t>(*maxComputeWorkGroupCount) : 0;
-  auto maxComputeWorkGroupSize__ = maxComputeWorkGroupSize ? _fbb.CreateVector<int32_t>(*maxComputeWorkGroupSize) : 0;
   return MobileGL::Wire::CreateCapsSnapshot(
       _fbb,
       dynamicParameters__,
@@ -916,10 +948,8 @@ inline ::flatbuffers::Offset<CapsSnapshot> CreateCapsSnapshotDirect(
       formatCaps__,
       extensions__,
       apiVersion__,
-      maxComputeWorkGroupCount__,
-      maxComputeWorkGroupSize__,
-      tableSlotMask,
-      prefersCpuXfbPrimitiveAccounting);
+      callMask,
+      backendType);
 }
 
 struct DefaultFramebufferInfo FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
