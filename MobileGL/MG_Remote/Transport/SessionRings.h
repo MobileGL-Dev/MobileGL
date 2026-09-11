@@ -79,10 +79,15 @@ namespace MobileGL::MG_Remote::Transport {
     // CONTRACT-P5's; MOBILEGL_IPC_RING_MB / MOBILEGL_IPC_STAGE_MB move the first
     // two, and ServerSession applies them unless SetSegmentSizes overrode them.
     struct SessionSegmentSizes {
-        std::uint64_t CmdRingBytes = 8ull * 1024 * 1024;    // + one control page
-        std::uint64_t StageRingBytes = 32ull * 1024 * 1024; // no control page
-        std::uint64_t ReplyBytes = 8ull * 1024 * 1024;      // not a ring
-        std::uint64_t EventRingBytes = 256ull * 1024;       // + one control page
+        std::uint64_t CmdRingBytes = 8ull * 1024 * 1024; // + one control page
+        // SEG_STAGE IS NOT A RING. Package w1's encoder owns it as an
+        // encoder-local LINEAR ALLOCATOR that reclaims on retiredSeq, so this is
+        // a plain byte count: no control page, and no rounding down to a power of
+        // two either. Rounding was a ring requirement and keeping it would have
+        // silently turned an operator's MOBILEGL_IPC_STAGE_MB=24 into 16.
+        std::uint64_t StageBytes = 32ull * 1024 * 1024;
+        std::uint64_t ReplyBytes = 8ull * 1024 * 1024; // slot pool, not a ring
+        std::uint64_t EventRingBytes = 256ull * 1024;  // + one control page
         std::uint32_t ReplySlotCount = kDefaultReplySlotCount;
     };
 
@@ -155,8 +160,11 @@ namespace MobileGL::MG_Remote::Transport {
         void* CmdRingBase() const { return m_cmdRingBase; }
         std::uint64_t CmdRingCapacity() const { return m_cmdRingCapacity; }
 
+        // The whole SEG_STAGE mapping, for w1's linear allocator and for the
+        // SegmentTable view the decoder resolves blobrefs against. There is no
+        // stage RING and no RingProducer/RingConsumer over RingCursorSet::Stage.
         void* StageBase() const { return m_stageBase; }
-        std::uint64_t StageCapacity() const { return m_stageCapacity; }
+        std::uint64_t StageBytes() const { return m_stageBytes; }
 
         void* ReplyBase() const { return m_replyBase; }
         std::uint64_t ReplyBytes() const { return m_replyBytes; }
@@ -185,7 +193,7 @@ namespace MobileGL::MG_Remote::Transport {
         void* m_cmdRingBase = nullptr;
         std::uint64_t m_cmdRingCapacity = 0;
         void* m_stageBase = nullptr;
-        std::uint64_t m_stageCapacity = 0;
+        std::uint64_t m_stageBytes = 0;
         void* m_replyBase = nullptr;
         std::uint64_t m_replyBytes = 0;
         std::uint32_t m_replySlotCount = kDefaultReplySlotCount;
@@ -276,8 +284,14 @@ namespace MobileGL::MG_Remote::Transport {
         // `peerBell` is the bell the SERVER parks on and this side rings;
         // `selfBell` is this side's own. InProcessTransport::PeerDoorbell() and
         // SelfDoorbell() are exactly that pair, from the client endpoint.
-        void Attach(RingControl* control, RingProducer* cmd, RingProducer* stage, Doorbell* peerBell,
-                    Doorbell* selfBell, std::uint32_t spinUs);
+        // NO STAGE RING. SEG_STAGE is w1's encoder-local linear allocator and
+        // RingCursorSet::Stage has no producer and no consumer in P5 - see
+        // RingControl's stage triple in Ring.h. A producer here would publish
+        // stageHead with nothing advancing the two tails, so FreeBytes() would
+        // fall to zero the first time the head lapped the capacity and never
+        // recover: a guaranteed hang, not a slow path.
+        void Attach(RingControl* control, RingProducer* cmd, Doorbell* peerBell, Doorbell* selfBell,
+                    std::uint32_t spinUs);
         void Detach();
         bool Valid() const { return m_control != nullptr && m_cmd != nullptr; }
 
@@ -310,11 +324,9 @@ namespace MobileGL::MG_Remote::Transport {
         // enough free bytes can only mean "too big, chunk", and waiting on it
         // stalls forever.
         SessionWait WaitForCmdSpace(std::uint64_t bytes, std::uint32_t timeoutMs);
-        SessionWait WaitForStageSpace(std::uint64_t bytes, std::uint32_t timeoutMs);
 
         RingControl* Control() const { return m_control; }
         RingProducer* Cmd() const { return m_cmd; }
-        RingProducer* Stage() const { return m_stage; }
         Doorbell* PeerDoorbell() const { return m_peerBell; }
         Doorbell* SelfDoorbell() const { return m_selfBell; }
         std::uint32_t SpinUs() const { return m_spinUs; }
@@ -325,7 +337,6 @@ namespace MobileGL::MG_Remote::Transport {
 
         RingControl* m_control = nullptr;
         RingProducer* m_cmd = nullptr;
-        RingProducer* m_stage = nullptr;
         Doorbell* m_peerBell = nullptr;
         Doorbell* m_selfBell = nullptr;
         std::uint32_t m_spinUs = kDefaultSpinUs;
@@ -386,6 +397,17 @@ namespace MobileGL::MG_Remote::Transport {
             if ((view.flags & kRecBorrowSlot) == 0 && !m_borrowHeld) {
                 m_retirableCursor = view.cursor + sizeof(RingRecordHeader) + view.payloadSize;
             } else {
+                if ((view.flags & kRecBorrowSlot) != 0) {
+                    // P5 PRODUCES NO BORROWED SLOTS AT ALL, so this bit arriving
+                    // is either a borrow nobody implemented or MGPipeCallFlags::
+                    // kHostSpan wearing kRecBorrowSlot's bit (Ring.h's collision
+                    // table) - and P5's reduced path is ruled to produce zero
+                    // host spans too. Either way the conservative arm is taken
+                    // (nothing past it is reclaimed) and the sighting is NAMED,
+                    // because the alternative is a producer that wedges on the
+                    // first full ring with no line anywhere saying why.
+                    NoteBorrowedRecord(view.kind, view.flags);
+                }
                 m_borrowHeld = true;
             }
             NotifyClient();
@@ -425,6 +447,9 @@ namespace MobileGL::MG_Remote::Transport {
         void NotifyClient();
 
         std::uint64_t AppliedSeq() const { return m_appliedSeq; }
+        // How many kRecBorrowSlot records this consumer has seen. Non-zero in P5
+        // is a finding, not a statistic.
+        std::uint64_t BorrowedRecordsSeen() const { return m_borrowedSeen; }
         RingControl* Control() const { return m_control; }
         RingConsumer* Cmd() const { return m_cmd; }
         Doorbell* PeerDoorbell() const { return m_peerBell; }
@@ -439,7 +464,12 @@ namespace MobileGL::MG_Remote::Transport {
         std::uint32_t m_spinUs = kDefaultSpinUs;
         std::uint64_t m_appliedSeq = 0;
         std::uint64_t m_retirableCursor = 0;
+        std::uint64_t m_borrowedSeen = 0;
         bool m_borrowHeld = false;
+
+        // Out of line so ApplyOne, which is a template in a header this layer
+        // keeps free of MobileGL/Includes.h, can still log.
+        void NoteBorrowedRecord(std::uint16_t kind, std::uint16_t flags);
     };
 
     // -----------------------------------------------------------------------

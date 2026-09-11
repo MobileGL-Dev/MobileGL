@@ -53,7 +53,7 @@ namespace {
         // RING sizes. The SEG_CMD and SEG_EVENT segments are each one control page bigger.
         SessionSegmentSizes sizes;
         sizes.CmdRingBytes = 32ull * 1024;
-        sizes.StageRingBytes = 64ull * 1024;
+        sizes.StageBytes = 48ull * 1024;
         sizes.ReplyBytes = 64ull * 1024; // -> 8 slots of 8 KiB
         sizes.EventRingBytes = 16ull * 1024;
         sizes.ReplySlotCount = 8;
@@ -69,7 +69,8 @@ namespace {
         SessionSegments serverSegments;
         SessionSegments clientSegments;
         RingProducer cmdProducer;
-        RingProducer stageProducer;
+        // NO stageProducer and NO stage consumer: SEG_STAGE is w1's encoder-local linear
+        // allocator and RingCursorSet::Stage is driven by nobody (Ring.h's stage triple).
         RingConsumer cmdConsumer;
         SessionProducer producer;
         SessionConsumer consumer;
@@ -93,18 +94,15 @@ namespace {
             RingControl* serverControl = serverSegments.CmdControl();
             cmdProducer = RingProducer(clientControl, clientSegments.CmdRingBase(),
                                        clientSegments.CmdRingCapacity(), RingCursorSet::Cmd);
-            stageProducer = RingProducer(clientControl, clientSegments.StageBase(),
-                                         clientSegments.StageCapacity(), RingCursorSet::Stage);
             cmdConsumer = RingConsumer(serverControl, serverSegments.CmdRingBase(),
                                        serverSegments.CmdRingCapacity(), RingCursorSet::Cmd);
-            if (!cmdProducer.Valid() || !stageProducer.Valid() || !cmdConsumer.Valid()) {
+            if (!cmdProducer.Valid() || !cmdConsumer.Valid()) {
                 return false;
             }
             // PeerDoorbell is the bell the OTHER end parks on; SelfDoorbell is this end's own.
             // Which is which is the session's knowledge, never ITransport's (contract §3.9).
-            producer.Attach(clientControl, &cmdProducer, &stageProducer,
-                            &clientTransport->PeerDoorbell(), &clientTransport->SelfDoorbell(),
-                            kDefaultSpinUs);
+            producer.Attach(clientControl, &cmdProducer, &clientTransport->PeerDoorbell(),
+                            &clientTransport->SelfDoorbell(), kDefaultSpinUs);
             consumer.Attach(serverControl, &cmdConsumer, &serverTransport->PeerDoorbell(),
                             &serverTransport->SelfDoorbell(), kDefaultSpinUs);
             replies = ReplySlotPool(serverSegments.ReplyBase(), serverSegments.ReplyBytes(),
@@ -199,14 +197,14 @@ TEST(SessionTest, TheDefaultGeometryIsTheFourContractRingSizes) {
     SessionSegments segments;
     ASSERT_EQ(segments.Create(SessionSegmentSizes{}, MemoryRole::Server), MOBILEGL_OK);
     EXPECT_EQ(segments.CmdRingCapacity(), 8ull * 1024 * 1024);
-    EXPECT_EQ(segments.StageCapacity(), 32ull * 1024 * 1024);
+    EXPECT_EQ(segments.StageBytes(), 32ull * 1024 * 1024);
     EXPECT_EQ(segments.ReplyBytes(), 8ull * 1024 * 1024);
     EXPECT_EQ(segments.EventRingCapacity(), 256ull * 1024);
 
     EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Cmd),
               8ull * 1024 * 1024 + sizeof(RingControl));
-    // SEG_STAGE carries no control page: RingControl holds both cursor triples, so the whole
-    // segment is ring and 32 MiB is already a power of two. SEG_REPLY is not a ring at all.
+    // SEG_STAGE is not a ring at all - no control page, no cursor triple, no power-of-two
+    // rounding - and neither is SEG_REPLY, so both announce exactly what was asked for.
     EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Stage), 32ull * 1024 * 1024);
     EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Reply), 8ull * 1024 * 1024);
     EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Event),
@@ -971,6 +969,102 @@ TEST(SessionTest, CapsSnapshotFieldIdsAreFrozenAndTheRetiredSlotsStayBurned) {
     EXPECT_EQ(static_cast<int>(::MobileGL::Wire::Welcome::VT_EVENTRING), 16);
     EXPECT_EQ(static_cast<int>(::MobileGL::Wire::Welcome::VT_BUILDFINGERPRINT), 18);
     EXPECT_EQ(static_cast<int>(::MobileGL::Wire::Welcome::VT_ABIFINGERPRINT), 20);
+}
+
+// ---------------------------------------------------------------------------
+// Fix round 2 - SEG_STAGE stopped being a ring, and the flag-space collisions
+// ---------------------------------------------------------------------------
+
+// Package w1's encoder owns SEG_STAGE as a LINEAR ALLOCATOR that reclaims on retiredSeq: a staged
+// byte run carries no RingRecordHeader and nothing walks SEG_STAGE. So RingCursorSet::Stage has no
+// producer and no consumer, and all three of its cursors stay ZERO for the whole of a session.
+//
+// This case exists because "declared and written by nobody" is exactly the state the five sequence
+// watermarks were in for a whole phase before this one. The stage triple is in that state ON
+// PURPOSE now, and the difference between "on purpose" and "forgotten" is that one of them is
+// pinned. A half-wiring - a producer publishing stageHead with nothing advancing the two tails -
+// would make FreeBytes() fall to zero on the first lap and never recover: a hang, not a slow path.
+TEST(SessionTest, TheStageCursorTripleStaysDeadAcrossAWholeSession) {
+    SessionFixture session;
+    ASSERT_TRUE(session.Build(TestSizes()));
+
+    // SEG_STAGE is still mapped and still usable bytes - w1's allocator needs them, and the
+    // decoder resolves blobrefs against the same view - it is just not a ring.
+    ASSERT_NE(session.serverSegments.StageBase(), nullptr);
+    EXPECT_EQ(session.serverSegments.StageBytes(), 48ull * 1024)
+        << "SEG_STAGE is no longer rounded down to a power of two; that was a ring requirement "
+           "and keeping it would silently turn MOBILEGL_IPC_STAGE_MB=24 into 16";
+
+    // Drive a full session's worth of traffic through SEG_CMD.
+    constexpr int kRecords = 500;
+    int applied = 0;
+    for (int index = 0; index < kRecords; ++index) {
+        void* payload = nullptr;
+        while ((payload = session.cmdProducer.Reserve(1, kRecNone, 32)) == nullptr) {
+            while (session.consumer.ApplyOne([&](const RingRecordView&) { ++applied; })) {
+            }
+            session.consumer.RetireThrough(session.consumer.AppliedSeq());
+        }
+        std::memset(payload, index & 0xFF, 32);
+        session.producer.PublishAndNotify(static_cast<std::uint64_t>(index + 1));
+    }
+    while (session.consumer.ApplyOne([&](const RingRecordView&) { ++applied; })) {
+    }
+    session.consumer.RetireThrough(session.consumer.AppliedSeq());
+    ASSERT_EQ(applied, kRecords);
+
+    // The command triple moved. The stage triple did not, and nothing in the session touches it.
+    EXPECT_GT(session.Control().cmdHead.load(), 0u);
+    EXPECT_EQ(session.Control().stageHead.load(), 0u);
+    EXPECT_EQ(session.Control().stageAppliedTail.load(), 0u);
+    EXPECT_EQ(session.Control().stageRetiredTail.load(), 0u);
+    // retiredSeq is the watermark w1's allocator reclaims behind, and it is a SEQUENCE - not one
+    // of the three byte cursors above.
+    EXPECT_GT(session.Control().retiredSeq.load(), 0u);
+}
+
+// The kVarTail/kRecPad collision, made harmless. Those two are bit 2 of two different flag spaces,
+// so an encoder that copied MGPipeCallFlagsFor(op) into RingRecordHeader::flags verbatim would
+// have every var-tail record SKIPPED by Pop, silently, with the record lost and nothing logged on
+// either side. Pop now requires a filler to carry both the flag AND kind == kRingPadRecordKind, so
+// a real record wearing that bit is delivered instead of eaten.
+TEST(SessionTest, ARecordWearingThePadBitIsDeliveredRatherThanEatenAsAFiller) {
+    SessionFixture session;
+    ASSERT_TRUE(session.Build(TestSizes()));
+
+    // kRecPad is MGPipeCallFlags::kVarTail's bit. Kind 7 is a real opcode, not a filler.
+    void* payload = session.cmdProducer.Reserve(7, kRecPad, 16);
+    ASSERT_NE(payload, nullptr);
+    std::memset(payload, 0xAB, 16);
+    session.producer.PublishAndNotify(1);
+
+    int seen = 0;
+    std::uint16_t seenKind = 0;
+    while (session.consumer.ApplyOne([&](const RingRecordView& view) {
+        seenKind = view.kind;
+        ++seen;
+    })) {
+    }
+    EXPECT_EQ(seen, 1) << "the record was skipped as a wrap filler because it wore bit 2";
+    EXPECT_EQ(seenKind, 7);
+    EXPECT_EQ(session.Control().appliedSeq.load(), 1u);
+}
+
+// The kHostSpan/kRecBorrowSlot collision, made loud. P5 implements no borrowed slots and is ruled
+// to produce no host spans either, so the bit arriving means the collision did - and the
+// conservative arm it takes (stop reclaiming) would otherwise wedge the producer on the first full
+// ring with nothing in any log saying why.
+TEST(SessionTest, ABorrowSlotSightingIsCountedRatherThanJustActedOn) {
+    SessionFixture session;
+    ASSERT_TRUE(session.Build(TestSizes()));
+    EXPECT_EQ(session.consumer.BorrowedRecordsSeen(), 0u);
+
+    ASSERT_NE(session.cmdProducer.Reserve(3, kRecBorrowSlot, 16), nullptr);
+    session.producer.PublishAndNotify(1);
+    while (session.consumer.ApplyOne([](const RingRecordView&) {})) {
+    }
+    EXPECT_EQ(session.consumer.BorrowedRecordsSeen(), 1u)
+        << "a kRecBorrowSlot record went by unnamed; in P5 that bit can only be kHostSpan";
 }
 
 // m-4. The reply pool refuses a geometry whose slots would not be 8-aligned: the fences order

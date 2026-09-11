@@ -149,7 +149,6 @@ namespace MobileGL::MG_Remote::Client {
         std::unique_ptr<Transport::InProcessTransport> m_serverTransport;
         Transport::SessionSegments m_shm;
         Transport::RingProducer m_cmd;
-        Transport::RingProducer m_stage;
         Transport::SessionProducer m_producer;
         Transport::EventRingConsumer m_events;
         Transport::ReplySlotPool m_replies;

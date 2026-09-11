@@ -260,7 +260,16 @@ namespace MobileGL::MG_Remote::Transport {
                 return false;
             }
 
-            if ((header.flags & kRecPad) != 0) {
+            // BOTH, not just the flag. kRecPad (1<<2) is the same bit as
+            // MGPipeCallFlags::kVarTail, so an encoder that copied a call's flags
+            // into this framing field verbatim would have every var-tail record
+            // skipped HERE, silently, with the record lost and nothing logged on
+            // either side. A genuine filler is always kind kRingPadRecordKind -
+            // Reserve writes it two dozen lines above - and a call record always
+            // carries a real opcode, because the catalogue starts at 1. Requiring
+            // the pair costs one comparison and turns that collision from a lost
+            // record into a record the decoder gets and can reject by name.
+            if ((header.flags & kRecPad) != 0 && header.kind == kRingPadRecordKind) {
                 m_localTail += size;
                 continue;
             }
@@ -405,11 +414,10 @@ namespace MobileGL::MG_Remote::Transport {
     // SessionProducer
     // -----------------------------------------------------------------------
 
-    void SessionProducer::Attach(RingControl* control, RingProducer* cmd, RingProducer* stage,
-                                 Doorbell* peerBell, Doorbell* selfBell, std::uint32_t spinUs) {
+    void SessionProducer::Attach(RingControl* control, RingProducer* cmd, Doorbell* peerBell,
+                                 Doorbell* selfBell, std::uint32_t spinUs) {
         m_control = control;
         m_cmd = cmd;
-        m_stage = stage;
         m_peerBell = peerBell;
         m_selfBell = selfBell;
         m_spinUs = spinUs;
@@ -418,7 +426,6 @@ namespace MobileGL::MG_Remote::Transport {
     void SessionProducer::Detach() {
         m_control = nullptr;
         m_cmd = nullptr;
-        m_stage = nullptr;
         m_peerBell = nullptr;
         m_selfBell = nullptr;
         m_lastPublishedSeq = 0;
@@ -428,11 +435,9 @@ namespace MobileGL::MG_Remote::Transport {
         if (!Valid()) {
             return;
         }
-        // 1. the records themselves.
+        // 1. the records themselves. ONLY SEG_CMD: SEG_STAGE is not a ring and
+        // RingCursorSet::Stage is driven by nobody (Ring.h's stage triple).
         m_cmd->Publish();
-        if (m_stage != nullptr) {
-            m_stage->Publish();
-        }
         // Kept locally as well as on the shared page: the shared watermark is
         // allowed to lag (Ring.h:72-77), and teardown's drain must not.
         //
@@ -493,14 +498,6 @@ namespace MobileGL::MG_Remote::Transport {
         return Park([cmd, bytes] { return cmd->FreeBytes() >= bytes; }, timeoutMs);
     }
 
-    SessionWait SessionProducer::WaitForStageSpace(std::uint64_t bytes, std::uint32_t timeoutMs) {
-        if (!Valid() || m_stage == nullptr) {
-            return SessionWait::TimedOut;
-        }
-        RingProducer* stage = m_stage;
-        return Park([stage, bytes] { return stage->FreeBytes() >= bytes; }, timeoutMs);
-    }
-
     // -----------------------------------------------------------------------
     // SessionConsumer
     // -----------------------------------------------------------------------
@@ -558,6 +555,19 @@ namespace MobileGL::MG_Remote::Transport {
         m_cmd->PublishApplied();
         m_cmd->PublishRetiredUpTo(m_retirableCursor);
         NotifyClient();
+    }
+
+    void SessionConsumer::NoteBorrowedRecord(std::uint16_t kind, std::uint16_t flags) {
+        ++m_borrowedSeen;
+        if (m_borrowedSeen == 1) {
+            MGLOG_E("MG_Remote ring: record kind %u carries kRecBorrowSlot (flags=0x%04X). P5 "
+                    "implements NO borrowed slots, and that bit is also MGPipeCallFlags::"
+                    "kHostSpan, which P5's reduced path is ruled to produce none of either. "
+                    "Nothing past this record will be reclaimed until RetireBorrowedUpTo "
+                    "releases it, so a producer that then wedges on a full ring is THIS line's "
+                    "fault and not the ring's",
+                    static_cast<unsigned>(kind), static_cast<unsigned>(flags));
+        }
     }
 
     void SessionConsumer::RetireBorrowedUpTo(std::uint64_t cursor) {

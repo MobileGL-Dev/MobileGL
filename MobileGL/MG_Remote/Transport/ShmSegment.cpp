@@ -201,7 +201,7 @@ namespace MobileGL::MG_Remote::Transport {
         // two grows.
         const Spec specs[kSlotCount] = {
             {"mgl-cmd", SegmentBytesForRing(sizes.CmdRingBytes)},
-            {"mgl-stage", LargestPowerOfTwoAtMost(sizes.StageRingBytes)},
+            {"mgl-stage", sizes.StageBytes},
             {"mgl-reply", sizes.ReplyBytes},
             {"mgl-event", SegmentBytesForRing(sizes.EventRingBytes)},
         };
@@ -341,10 +341,11 @@ namespace MobileGL::MG_Remote::Transport {
         m_cmdRingBase = cmdBase + sizeof(RingControl);
         m_cmdRingCapacity = RingCapacityForSegment(m_segments[0]->Size());
 
-        // SEG_STAGE carries no control page of its own: RingControl holds TWO
-        // cursor triples and the stage triple is the second (Ring.h:106-109).
+        // SEG_STAGE IS NOT A RING: no control page, no cursor triple, no power-of-
+        // two rounding. Package w1's encoder owns it as a linear allocator that
+        // reclaims on retiredSeq, so the whole mapping is usable bytes.
         m_stageBase = m_segments[1]->Data();
-        m_stageCapacity = LargestPowerOfTwoAtMost(m_segments[1]->Size());
+        m_stageBytes = m_segments[1]->Size();
 
         m_replyBase = m_segments[2]->Data();
         m_replyBytes = m_segments[2]->Size();
@@ -360,14 +361,14 @@ namespace MobileGL::MG_Remote::Transport {
             m_mappedBytes += m_segments[index]->Size();
         }
 
-        if (m_cmdRingCapacity == 0 || m_stageCapacity == 0 || m_eventRingCapacity == 0 ||
+        if (m_cmdRingCapacity == 0 || m_stageBytes == 0 || m_eventRingCapacity == 0 ||
             m_replyBytes == 0) {
             MGLOG_E("MG_Remote session: segment sizes leave no usable ring (cmd cap=%llu stage "
                     "cap=%llu event cap=%llu reply=%llu). A ring is the largest POWER OF TWO that "
                     "fits after the 4096 byte control page, so a segment must be strictly larger "
                     "than one page plus the smallest ring",
                     static_cast<unsigned long long>(m_cmdRingCapacity),
-                    static_cast<unsigned long long>(m_stageCapacity),
+                    static_cast<unsigned long long>(m_stageBytes),
                     static_cast<unsigned long long>(m_eventRingCapacity),
                     static_cast<unsigned long long>(m_replyBytes));
             return;
@@ -392,7 +393,7 @@ namespace MobileGL::MG_Remote::Transport {
         m_cmdRingBase = nullptr;
         m_cmdRingCapacity = 0;
         m_stageBase = nullptr;
-        m_stageCapacity = 0;
+        m_stageBytes = 0;
         m_replyBase = nullptr;
         m_replyBytes = 0;
         m_eventControl = nullptr;

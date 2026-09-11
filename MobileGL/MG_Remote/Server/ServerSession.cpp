@@ -23,6 +23,29 @@
 
 namespace MobileGL::MG_Remote::Server {
 
+    // THE THREE FLAG-SPACE COLLISIONS, AS TRIPWIRES RATHER THAN AS A COMMENT.
+    //
+    // MGPipeCallFlags (MG_Pipe/MGPipe.h:42-54) and RingRecordFlags (Ring.h) are separate spaces
+    // that overlap, and three bits mean DIFFERENT things in each. Ring.h's enum carries the
+    // table; these are the assertions that break the build if either enum is renumbered, so the
+    // collision can never become news again. They live here because this is the nearest .cpp
+    // that legally sees both headers - nothing under Transport/ may reach MobileGL/Includes.h.
+    static_assert(static_cast<Uint16>(MG_Pipe::kVarTail) == Transport::kRecPad,
+                  "MGPipeCallFlags::kVarTail and kRecPad share bit 2: an encoder that copies call "
+                  "flags into RingRecordHeader::flags makes every var-tail record read as a wrap "
+                  "filler. RingConsumer::Pop requires kind == kRingPadRecordKind as well, which is "
+                  "what keeps that from eating the record - do not relax it");
+    static_assert(static_cast<Uint16>(MG_Pipe::kHostSpan) == Transport::kRecBorrowSlot,
+                  "MGPipeCallFlags::kHostSpan and kRecBorrowSlot share bit 3: a host-span record "
+                  "would read as borrowed into the GPU timeline and stop the consumer reclaiming "
+                  "ring bytes behind it. SessionConsumer counts and names every sighting");
+    static_assert(static_cast<Uint16>(MG_Pipe::kReplySlot) == Transport::kRecVarTail,
+                  "MGPipeCallFlags::kReplySlot and kRecVarTail share bit 4");
+    static_assert(static_cast<Uint16>(MG_Pipe::kNeedsAck) == Transport::kRecNeedsAck &&
+                      static_cast<Uint16>(MG_Pipe::kHasBlob) == Transport::kRecHasBlob,
+                  "the two bits that DO mean the same thing in both spaces have drifted apart, "
+                  "which is a different and worse problem than the three that collide");
+
     namespace {
 
         // A control-plane frame is small by construction (ITransport.h:56-58: bulk bytes
@@ -97,7 +120,7 @@ namespace MobileGL::MG_Remote::Server {
             const Uint64 ringMb = MG_Config::Ipc.RingMb == 0 ? 8u : MG_Config::Ipc.RingMb;
             const Uint64 stageMb = MG_Config::Ipc.StageMb == 0 ? 32u : MG_Config::Ipc.StageMb;
             sizes.CmdRingBytes = ringMb * 1024ull * 1024ull;
-            sizes.StageRingBytes = stageMb * 1024ull * 1024ull;
+            sizes.StageBytes = stageMb * 1024ull * 1024ull;
 #endif
             return sizes;
         }
@@ -304,7 +327,7 @@ namespace MobileGL::MG_Remote::Server {
         m_segments.Install(Wire::kSegCmd,
                            Wire::SegmentView{m_shm.CmdRingBase(), m_shm.CmdRingCapacity()});
         m_segments.Install(Wire::kSegStage,
-                           Wire::SegmentView{m_shm.StageBase(), m_shm.StageCapacity()});
+                           Wire::SegmentView{m_shm.StageBase(), m_shm.StageBytes()});
         m_segments.Install(Wire::kSegReply,
                            Wire::SegmentView{m_shm.ReplyBase(), m_shm.ReplyBytes()});
         m_segments.Install(Wire::kSegEvent, Wire::SegmentView{m_shm.EventSegmentBase(),

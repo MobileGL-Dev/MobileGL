@@ -249,15 +249,20 @@ namespace MobileGL::MG_Remote::Client {
         Transport::RingControl* control = m_shm.CmdControl();
         m_cmd = Transport::RingProducer(control, m_shm.CmdRingBase(), m_shm.CmdRingCapacity(),
                                         Transport::RingCursorSet::Cmd);
-        m_stage = Transport::RingProducer(control, m_shm.StageBase(), m_shm.StageCapacity(),
-                                          Transport::RingCursorSet::Stage);
-        if (!m_cmd.Valid() || !m_stage.Valid()) {
+        // NO STAGE RING. SEG_STAGE is package w1's encoder-local LINEAR ALLOCATOR:
+        // a staged byte run carries no RingRecordHeader, nothing consumes SEG_STAGE,
+        // and the allocator reclaims on retiredSeq. A RingProducer over
+        // RingCursorSet::Stage would publish stageHead with nothing advancing the
+        // two tails, so FreeBytes() would fall to zero the first time the head
+        // lapped the capacity and never recover - a guaranteed hang. See
+        // RingControl's stage triple in Ring.h.
+        if (!m_cmd.Valid()) {
             Stop();
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
         // PeerDoorbell() is the bell the SERVER parks on and this side rings; SelfDoorbell() is
         // this side's own. Which is which is the session's knowledge, not the transport's.
-        m_producer.Attach(control, &m_cmd, &m_stage, &m_clientTransport->PeerDoorbell(),
+        m_producer.Attach(control, &m_cmd, &m_clientTransport->PeerDoorbell(),
                           &m_clientTransport->SelfDoorbell(), SpinUsFromConfig());
 
         m_replies = Transport::ReplySlotPool(m_shm.ReplyBase(), m_shm.ReplyBytes(),
@@ -289,13 +294,18 @@ namespace MobileGL::MG_Remote::Client {
         m_segments.Install(Wire::kSegCmd,
                            Wire::SegmentView{m_shm.CmdRingBase(), m_shm.CmdRingCapacity()});
         m_segments.Install(Wire::kSegStage,
-                           Wire::SegmentView{m_shm.StageBase(), m_shm.StageCapacity()});
+                           Wire::SegmentView{m_shm.StageBase(), m_shm.StageBytes()});
         m_segments.Install(Wire::kSegReply,
                            Wire::SegmentView{m_shm.ReplyBase(), m_shm.ReplyBytes()});
         m_segments.Install(Wire::kSegEvent,
                            Wire::SegmentView{m_shm.EventSegmentBase(),
                                              m_shm.AnnouncedSize(Transport::SessionSegmentSlot::Event)});
-        m_encoder = Wire::PipeWireEncoder(control, &m_cmd, &m_stage, &m_segments);
+        // nullptr for the stage producer, and that is the honest value: c0's
+        // signature predates w1's ruling that SEG_STAGE is a linear allocator, and
+        // the encoder reaches its bytes through the SegmentTable above. Handing it
+        // a live RingProducer over a cursor triple nobody consumes would be the
+        // half-wired shape this session exists not to have.
+        m_encoder = Wire::PipeWireEncoder(control, &m_cmd, nullptr, &m_segments);
 
         // ---- 7. the first CapsSnapshot, if the server had a backend to publish one from.
         if (m_transport->PeekFrameSize() != 0) {
@@ -395,7 +405,6 @@ namespace MobileGL::MG_Remote::Client {
         m_events = Transport::EventRingConsumer();
         m_replies = Transport::ReplySlotPool();
         m_cmd = Transport::RingProducer();
-        m_stage = Transport::RingProducer();
         m_shm.Close();
         Server::ServerSessionInstance().Close();
         m_clientTransport.reset();
