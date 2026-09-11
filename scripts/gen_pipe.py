@@ -487,6 +487,30 @@ def check_call_payloads_have_field_lists(calls, payloads):
                  "would be blind to them: %s" % ", ".join(missing))
 
 
+# The MGPipeCallFlags enumerators, MGPipe.h:39-54. Kept here rather than parsed out of the
+# header because this list is what the generated kMGPipeCallFlags[] table spells into C++:
+# a flag token in PipeCalls.def that is not one of these would generate an expression that
+# does not compile, and a build break several minutes later is a worse diagnosis than this
+# one line. kNone is listed but is NOT a flag - it is the empty set, and it may not be
+# combined with anything.
+KNOWN_CALL_FLAGS = ("kNeedsAck", "kHasBlob", "kVarTail", "kHostSpan", "kReplySlot", "kOptional")
+
+
+def check_call_flags_are_known(calls):
+    """Every flag token in PipeCalls.def must be an MGPipeCallFlags enumerator, and kNone may
+    not be combined with one. Runs in both modes, --check included: P5 R-13.4 exports these
+    flags as a table six packages read, so a typo here is a wrong decode rather than a
+    compile error in the one consumer that used to hard-code its own copy."""
+    for call in calls:
+        for flag in call.Flags:
+            if flag != "kNone" and flag not in KNOWN_CALL_FLAGS:
+                sys.exit("PipeCalls.def: %s carries flag %s, which is not an MGPipeCallFlags "
+                         "enumerator (%s)" % (call.Name, flag, ", ".join(KNOWN_CALL_FLAGS)))
+        if "kNone" in call.Flags and len(call.Flags) != 1:
+            sys.exit("PipeCalls.def: %s combines kNone with %s; kNone is the empty set"
+                     % (call.Name, "|".join(f for f in call.Flags if f != "kNone")))
+
+
 def parse_coverage():
     text = read(os.path.join(PIPE_DIR, "Coverage.def"))
     accessors = []
@@ -641,6 +665,59 @@ enum class MGPWireOp : Uint16 {
         out.append("    %s = %d," % (call.Name, call.Index))
     out.append("    kOpCount = %d," % (len(calls) + 1))
     out.append("};\n")
+    out.append("""// THE FLAGS, EXPORTED ONCE, INDEXED BY OPCODE (P5 R-13.4). MGPWireRecHeader::Flags is
+// documented as "MGPipeCallFlags of the call", and until this table existed nothing
+// generated said what those were: every consumer that needed to know whether a record owns
+// an MGPBlobRef, a variable tail or a reply slot had to hard-code its own copy of
+// PipeCalls.def's fourth column, and six of them were about to. A hard-coded copy is how
+// GetCaps and CreateSamplerState came to carry an MGPBlobRef member with no kHasBlob on
+// their line at all - nothing compared the two, because nothing had both in one place.
+//
+// Index 0 is MGPWireOp::kInvalid and is kNone: the catalogue is 1-based, and an encoder
+// that reads flags for an opcode it never got from the catalogue must see the empty set
+// rather than another call's flags.
+//
+// kHasBlob here means EXACTLY "the payload owns an MGPBlobRef member". Three calls carry
+// bytes without one - resource_respecify, resource_flush_range and map_persistent, whose
+// companion pointers have no carrier - and they are deliberately NOT flagged; MG_Remote's
+// CONTRACT-P5.md table 1 is where those live, because a decoder that trusts kHasBlob has
+// to find a member to read.""")
+    out.append("inline constexpr Uint32 kMGPipeCallFlags[static_cast<SizeT>(MGPWireOp::kOpCount)] = {")
+    out.append("    /*  0 %-24s*/ static_cast<Uint32>(kNone)," % "kInvalid")
+    for call in calls:
+        out.append("    /* %2d %-24s*/ static_cast<Uint32>(%s),"
+                   % (call.Index, call.Name, " | ".join(call.Flags)))
+    out.append("};")
+    out.append("static_assert(sizeof(kMGPipeCallFlags) / sizeof(kMGPipeCallFlags[0]) ==")
+    out.append("                  static_cast<SizeT>(MGPWireOp::kOpCount),")
+    out.append("              \"the flags table and the opcode space disagree\");")
+    out.append("""
+// The only supported read of the table. Out-of-range is kNone rather than undefined
+// behaviour, because the one caller that can pass a bad opcode is a decoder holding bytes
+// off a stream, and it must reach its own Fatal{ProtocolCorruption} rather than read past
+// the array on the way there.
+inline constexpr Uint32 MGPipeCallFlagsFor(MGPWireOp op) {
+    const SizeT index = static_cast<SizeT>(op);
+    return index < static_cast<SizeT>(MGPWireOp::kOpCount) ? kMGPipeCallFlags[index]
+                                                           : static_cast<Uint32>(kNone);
+}
+
+// Spot checks the generator states about its own output, so that a catalogue edit that
+// silently drops a flag is a build break here and not a wrong decode six packages away.
+static_assert(MGPipeCallFlagsFor(MGPWireOp::kInvalid) == static_cast<Uint32>(kNone),
+              "opcode 0 is not a call and carries no flags");
+static_assert((MGPipeCallFlagsFor(MGPWireOp::GetCaps) & static_cast<Uint32>(kHasBlob)) != 0,
+              "MGPCaps owns two MGPBlobRef members; R-13.1 gave the call its flag");
+static_assert((MGPipeCallFlagsFor(MGPWireOp::CreateSamplerState) & static_cast<Uint32>(kHasBlob)) != 0,
+              "MGPSamplerDesc owns an MGPBlobRef member; R-13.1 gave the call its flag");
+static_assert((MGPipeCallFlagsFor(MGPWireOp::ResourceFlushRange) & static_cast<Uint32>(kHasBlob)) == 0,
+              "R-13.2: resource_flush_range carries no bytes on the wire and owns no blobref");
+static_assert((MGPipeCallFlagsFor(MGPWireOp::ResourceRespecify) & static_cast<Uint32>(kHasBlob)) == 0,
+              "R-13.3: initial bytes follow as resource_subdata; MGPResourceDesc owns no blobref");
+static_assert((MGPipeCallFlagsFor(MGPWireOp::DrawVbo) &
+               static_cast<Uint32>(kHostSpan | kVarTail)) == static_cast<Uint32>(kHostSpan | kVarTail),
+              "draw_vbo is the conditional-tail plus host-span shape the codec is measured on");
+""")
     for call in calls:
         out.append("struct alignas(8) MGPWireRec_%s {" % call.Name)
         out.append("    MGPWireRecHeader Header;")
@@ -1232,12 +1309,24 @@ def self_test(accessors):
     calls_for_control = parse_calls()
     controls.append(("emitted row naming a call that does not exist", lambda: gen_emitted_by(
         [("GetViewport", "SetDynamicState")], calls_for_control, [("GetViewport", "NotACall")])))
+    # P5 R-13.4's gate. The flags are now a GENERATED TABLE six packages read instead of six
+    # hard-coded copies, so a token that is not an MGPipeCallFlags enumerator has to stop the
+    # generator rather than emit an expression that fails to compile minutes later - and
+    # kNone, the empty set, may not be OR'd with a real flag and quietly read as one.
+    flag_typo = Call(1, "Canned", "MGPHandleOnly", "kScreen", ["kHasBlobb"])
+    flag_kNone = Call(1, "Canned", "MGPHandleOnly", "kScreen", ["kNone", "kHasBlob"])
+    controls.append(("call flag that is not an MGPipeCallFlags enumerator",
+                     lambda: check_call_flags_are_known([flag_typo])))
+    controls.append(("kNone combined with a real flag",
+                     lambda: check_call_flags_are_known([flag_kNone])))
     trips = 0
     for name, fn in controls:
         trips += expect_trip(name, fn)
     # The positive control: the canned struct's exact list passes, and the parser sees the
     # padding member as padding and the function as not a member.
     check_field_lists_cover_struct_members({"Canned": ["A", "B", "C"]}, ["Canned"], [canned_struct])
+    # ... and the real catalogue's real flags pass the same gate.
+    check_call_flags_are_known(calls_for_control)
     if trips == 0:
         sys.exit("gen_pipe: self-test: no negative control tripped - the gates are not checking anything")
     if trips != len(controls):
@@ -1256,6 +1345,7 @@ def main():
 
     calls = parse_calls()
     payloads = parse_verify_payloads()
+    check_call_flags_are_known(calls)
     check_call_payloads_have_field_lists(calls, payloads)
     check_field_lists_cover_struct_members(parse_field_lists(), payloads)
     accessors, deltas, sticky, emitted = parse_coverage()
