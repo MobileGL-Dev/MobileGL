@@ -901,6 +901,44 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // has to receive the handle in a payload instead.
         MG_Pipe::MGPipeHandle HandleOfBuffer(const MG_State::GLState::BufferObject* bufferObject);
 
+        // TIER 1 OF THE THREE-TIER FLUSH LADDER, AS A PURE FUNCTION (P5 b1).
+        //
+        // `GL_MAP_INVALIDATE_RANGE_BIT` is not a hint, it is an ASSERTION THAT THE OLD BYTES
+        // ARE DEAD - and it is only true of the bytes this call is about to rewrite from the
+        // authoritative shadow. Managers.cpp:1125-1128 records what happens when it is not:
+        // widening the map to page bounds "looked free and was not - the widened bytes
+        // clobbered GPU-written data (an SSBO counter beside the app's SubData) with the stale
+        // shadow". It fails SILENTLY, unlike tier 3, which only stalls.
+        //
+        // WHY IT IS A FUNCTION NOW, AND WHY IT TAKES THE MAP RANGE SEPARATELY FROM THE QUEUED
+        // ONE. Under split the bytes are not re-read at every use any more: the server may not
+        // hold a pointer into the client's shadow at all (R-11), so `hostBase` becomes a
+        // SNAPSHOT taken into SEG_STAGE at emission, and the window between the snapshot and
+        // the apply is new. A snapshot that covers less than the map does is exactly the
+        // widening that drew blood, with a thread boundary instead of a page alignment as the
+        // cause - so the two extents are separate parameters and a disagreement returns 0
+        // ("do not take tier 1"), which drops the range onto the staging ring and costs a copy
+        // rather than a corruption.
+        //
+        // Returns the glMapBufferRange access bits, or 0 when tier 1 must not be taken.
+        inline constexpr SizeT kEsprytInvalidateRangeMinBytes = 128u * 1024u;
+        constexpr GLbitfield InvalidateFlushAccessFor(SizeT queuedStart, SizeT queuedEnd, SizeT mapStart,
+                                                      SizeT mapEnd, SizeT limit, SizeT storageSize) {
+            if (mapEnd <= mapStart) return 0u;
+            // THE WIDENING REFUSAL. Not >=, not "covers": exactly, in both directions. A map
+            // narrower than the queued range leaves bytes unwritten inside a range it has just
+            // declared dead, which is the same corruption read the other way round.
+            if (mapStart != queuedStart || mapEnd != queuedEnd) return 0u;
+            const SizeT size = mapEnd - mapStart;
+            const Bool wholeBuffer = mapStart == 0 && mapEnd == limit && limit == storageSize;
+            // A partial range below the threshold goes to the ring instead: the map's
+            // page-substitution fast path needs a page-coverable range to engage, and below it
+            // the driver falls back to waiting out the WAR hazard on the CPU.
+            if (!wholeBuffer && size < kEsprytInvalidateRangeMinBytes) return 0u;
+            return GL_MAP_WRITE_BIT |
+                   (wholeBuffer ? GL_MAP_INVALIDATE_BUFFER_BIT : GL_MAP_INVALIDATE_RANGE_BIT);
+        }
+
         // The handle arms of the two draw-path entry points below. IsBufferDrawCleanByHandle
         // asks the applier the same five questions IsBufferDrawClean asks the frontend object,
         // with identical semantics (D-A4); EnsureBufferResourceForHandle is the ensure path

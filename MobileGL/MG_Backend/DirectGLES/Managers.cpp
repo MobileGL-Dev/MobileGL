@@ -1043,6 +1043,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // sizeable (page-coverable) range to engage, and below it the driver
             // falls back to waiting out the WAR hazard on the CPU.
             constexpr SizeT kInvalidateRangeMinBytes = 128u * 1024u;
+#if MOBILEGL_PIPE_PUSH
+            // The push arm's copy of this threshold lives in Managers.h, where a unit case can
+            // reach it (InvalidateFlushAccessFor). Two constants, one value, and the compiler
+            // is what keeps them one: the pull arm's FlushPendingRangesNow is byte-frozen
+            // against 5cb826b0 (ID-15), so the constant it reads may not move to a header.
+            static_assert(kInvalidateRangeMinBytes == kEsprytInvalidateRangeMinBytes,
+                          "the two arms of the three-tier ladder must use the same tier-1 threshold");
+#endif
 
             // Push every queued range of `resource` from the shadow into the backend
             // store, without ever letting a driver resolve the WAR hazard against
@@ -1126,12 +1134,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // shadow's to rewrite. Widening to page bounds looked free and was
                     // not - the widened bytes clobbered GPU-written data (an SSBO
                     // counter beside the app's SubData) with the stale shadow.
-                    const Bool wholeBuffer = start == 0 && end == limit && limit == resource.storageSize;
-                    if (mapUsable && (wholeBuffer || size >= kInvalidateRangeMinBytes)) {
+                    const GLbitfield access = mapUsable ? InvalidateFlushAccessFor(start, end, start, end,
+                                                                                  limit, resource.storageSize)
+                                                        : 0u;
+                    if (access != 0) {
                         BindBufferId(TempBufferTarget, resource.id);
-                        const GLbitfield access =
-                            GL_MAP_WRITE_BIT |
-                            (wholeBuffer ? GL_MAP_INVALIDATE_BUFFER_BIT : GL_MAP_INVALIDATE_RANGE_BIT);
                         void* dst = g_GLESFuncs.glMapBufferRange(TempBufferTarget, (GLintptr)start,
                                                                  (GLsizeiptr)size, access);
                         if (dst) {
@@ -2667,16 +2674,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             const auto* record = ResourceRecordOf(res);
             if (record == nullptr) return false;
-#if MOBILEGL_PIPE_VERIFY
+#if MOBILEGL_PIPE_VERIFY && !MOBILEGL_BUILD_DISAGGREGATED
             MOBILEGL_ASSERT(!record->HasLiveHostWrites,
-                            "MGPipeResourceRecord::HasLiveHostWrites is set, but P3a has no producer for it");
+                            "MGPipeResourceRecord::HasLiveHostWrites is set, but this build has no producer "
+                            "for it - P5 b1's producer is MGPSubData::HasLiveHostWrites and is split-only");
 #endif
             if (record->HasLiveHostWrites) return false;
-            // The same question the legacy arm asks at this exact point in the order, for the
-            // reason written at the top of this function. A null object is the "no frontend to
-            // ask" case (nothing reaches this probe without one today) and is treated as "not
-            // mapped", which is what the record already says.
-            if (frontend != nullptr && frontend->IsMapped()) return false;
+            // THE LAST FRONTEND READ IN THIS FUNCTION, AND P5 b1 RETIRES IT - under split
+            // only, because that is the only build where it is both wrong and replaceable.
+            //
+            // It asked the object whether it was mapped because HasLiveHostWrites was pinned
+            // false and an emulated persistent map mutates the shadow with no call, no serial
+            // and no epoch; answering from the record alone made such a buffer read
+            // draw-CLEAN forever, SyncPersistentMappedRange was never reached again, and the
+            // frame drew the last uploaded bytes with no diagnostic
+            // (MG_Test/SanityTest.cpp's DirectGLESBufferDrawProbe is exactly that case).
+            //
+            // TWO THINGS REPLACE IT AND BOTH HAD TO LAND FIRST: the record now carries the map
+            // state (the line above, from MGPSubData::HasLiveHostWrites), and the client
+            // pushes the mapped span by block at every validate point, so the serial moves for
+            // a write the application made with no API call. Under a spawn there is no object
+            // on this side to ask, which is why this was never going to stay a choice.
+            //
+            // A null object is the "no frontend to ask" case and is treated as "not mapped",
+            // which is what the record already says.
+            const Bool askTheObjectWhetherItIsMapped =
+                MG_Config::Transport == MG_Config::TransportMode::Monolith;
+            if (askTheObjectWhetherItIsMapped && frontend != nullptr && frontend->IsMapped()) return false;
             if (resource->pendingRespecify || !resource->storageInitialized) return false;
             if (!resource->pendingRanges.empty()) return false;
             if (resource->storageSize != static_cast<SizeT>(record->Desc.Width)) return false;
