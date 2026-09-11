@@ -152,16 +152,29 @@ namespace MobileGL::MG_Pipe {
         CountBarrierPull(field, verb);
     }
 
-    void MGPipeInputArgumentRead(MGPipeInputField field, Uint32 arg0, MGPipeVerb verb, Bool serverStamped) {
-        if (!serverStamped) return;
+    Bool MGPipeInputArgumentRead(MGPipeInputField field, Uint32 arg0, MGPipeVerb verb, Bool serverStamped) {
+        if (!serverStamped) return false;
         const MGPipeFieldOwnership narrowed = MGPipeFieldOwnershipOf(field, arg0);
-        if (narrowed == MGPipeFieldOwnershipOf(field)) return; // the argument narrows nothing
+        if (narrowed == MGPipeFieldOwnershipOf(field)) return false; // the argument narrows nothing
         if (narrowed == MGPipeFieldOwnership::kFatal) {
             // The field's own stamp says fresh - the applier really did write the half that has
-            // a carrier - so only the argument can say that THIS read is unserved.
-            MGPipeInputPoisonFatalForVerb(field, verb);
+            // a carrier - so only the argument can say that THIS read is unserved. THE MESSAGE
+            // NAMES THE ARGUMENT, because without it this line is byte-identical to what a
+            // genuinely stale read of the OTHER half would print, and the whole case for
+            // narrowing by argument rather than by a second field id is that the reader is told
+            // which half they asked for.
+            MGLOG_F("MGPipe: Fatal{UnmigratedPipeInput, \"%s@%s\"} [argument 0 = %u is %s while the "
+                    "field is %s]",
+                    kMGPipeInputFieldNames[static_cast<SizeT>(field)], MGPipeVerbName(verb), arg0,
+                    MGPipeFieldOwnershipName(narrowed),
+                    MGPipeFieldOwnershipName(MGPipeFieldOwnershipOf(field)));
+            std::abort();
         }
-        if (narrowed == MGPipeFieldOwnership::kBarrierPulled) CountBarrierPull(field, verb);
+        if (narrowed == MGPipeFieldOwnership::kBarrierPulled) {
+            CountBarrierPull(field, verb);
+            return true; // decided here; the field-level check must not count it again
+        }
+        return true;
     }
 
     void MGPipeStickyForwardPull(MGPipeInputField field) {

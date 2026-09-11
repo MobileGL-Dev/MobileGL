@@ -72,7 +72,13 @@ namespace MobileGL::MG_Pipe {
     // class is a statement about the argument rather than about the stamp: the pack half of
     // GetPixelStoreParameters is stamped and fresh while the unpack half has no carrier and no
     // backend reader at all.
-    void MGPipeInputArgumentRead(MGPipeInputField field, Uint32 arg0, MGPipeVerb verb, Bool serverStamped);
+    //
+    // RETURNS TRUE WHEN THE ARGUMENT ROW DECIDED, and the caller then skips the field-level
+    // check. Today the only row narrows to FATAL, which aborts, so the return value changes
+    // nothing; the day a row narrows to BARRIER-PULLED it is what stops the field-level check
+    // from either counting the same read twice or - worse, because the field's own class would
+    // not be BARRIER-PULLED - aborting a read the argument row had just declared legal.
+    Bool MGPipeInputArgumentRead(MGPipeInputField field, Uint32 arg0, MGPipeVerb verb, Bool serverStamped);
 #endif
 
     // The read-side poison check, on every non-forwarded accessor. Under MOBILEGL_PIPE_POISON
@@ -88,9 +94,10 @@ namespace MobileGL::MG_Pipe {
     } while (0)
 #define MGP_INPUT_CHECK_ARG(Field, Arg0)                                                                               \
     do {                                                                                                               \
-        ::MobileGL::MG_Pipe::MGPipeInputArgumentRead((Field), static_cast<Uint32>(Arg0), m_currentVerb,                 \
-                                                     m_serverStampedVerb);                                             \
-        MGP_INPUT_CHECK(Field);                                                                                        \
+        if (!::MobileGL::MG_Pipe::MGPipeInputArgumentRead((Field), static_cast<Uint32>(Arg0), m_currentVerb,            \
+                                                          m_serverStampedVerb)) {                                      \
+            MGP_INPUT_CHECK(Field);                                                                                    \
+        }                                                                                                              \
     } while (0)
 #else
 #define MGP_INPUT_CHECK(Field)                                                                                         \
@@ -250,12 +257,23 @@ namespace MobileGL::MG_Pipe {
         const MGPipeFilledState& FilledState() const { return m_filled; }
 #endif
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // TRUE between the server's verb-boundary stamp and the client's next fill. It is the
+        // TRUE between the server's verb-boundary stamp and whoever clears it. It is the
         // arming condition of the whole split read path: only inside a server-stamped verb is
         // a BARRIER-PULLED read counted rather than Fatal, and only there is a sticky forward
         // a residual pull rather than an ordinary monolith call. A split build running
-        // monolith transport never sets it, which is why build-split's 1842 unit cases and
-        // its 1117 integration cases behave exactly as a verify build's do.
+        // monolith transport never sets it, which is why build-split's unit and integration
+        // cases behave exactly as a verify build's do.
+        //
+        // CLEARING IT IS THE APPLIER'S JOB AND NOT THE CLIENT'S, even though the client also
+        // does it. MGPipeValidateForVerb and MGPipeLeaveVerb both call
+        // MGPipeServerClearVerbBoundary, which is sufficient for inproc, where both roles share
+        // one process and one gPipeInputs - and misleading for P6, where MG_Impl is not in the
+        // server at all. There this flag would latch TRUE for the life of the server after the
+        // first stamp, every later read anywhere would be judged against the last verb's mask,
+        // and MGPipeStickyForwardPull would stop being a no-op outside a verb - so
+        // InvalidateCompileEnv reached from a later context's backend initialisation, the exact
+        // case the sticky exemption was written for, would be counted and, under strict, would
+        // abort. So: PipeApplier clears on leaving the applier. Not optional.
         Bool ServerStampedVerb() const { return m_serverStampedVerb; }
 #endif
 
@@ -829,14 +847,37 @@ namespace MobileGL::MG_Pipe {
     // record's op onto a verb and answers kVerbCount for an op that is not verb-shaped, which
     // is the case the applier must NOT stamp on: a set_dynamic_state between two draws is not
     // a new verb, and stamping there would retire the previous verb's answers early.
+    //
+    // TWO THINGS THE CALLER INHERITS AND SHOULD NOT REDISCOVER:
+    //
+    //   (a) The records BETWEEN two boundaries apply under the earlier boundary's stamp - its
+    //       serial, its class mask and its verb NAME. That is correct today because every
+    //       MGPipeApply* entry point touches gPipeInputs through MGPipeApplyAccess, which
+    //       carries no MGP_INPUT_CHECK; the day one of them calls back into the backend, its
+    //       reads will be judged against a verb they do not belong to.
+    //   (b) The verb a draw record stamps is MGPipeVerb::DrawArrays for ALL TWENTY draw verbs.
+    //       The class mask is right (FillPoints.def puts all twenty in kDraw) and the NAME in a
+    //       Fatal is not: a glDrawElements that aborts will say "@DrawArrays". draw_vbo carries
+    //       no verb id, so fixing it means either a field on the record or a second argument
+    //       here; it is cosmetic for the verdict and misleading for the reader, and it belongs
+    //       with whatever phase widens draw_vbo to the multi-draw family (P8).
     void MGPipeServerStampVerbBoundary(MGPipeVerb verb);
-    // Called when the applier leaves the verb (and by the client's own fill). Clears the
-    // arming flag, so a read outside a server verb is judged exactly as it is in monolith.
+    // MANDATORY for the applier when it leaves the verb. The client's own MGPipeValidateForVerb
+    // and MGPipeLeaveVerb call it too, which is enough for inproc and NOT enough for a spawned
+    // server, where MG_Impl is not in the process - see ServerStampedVerb() above for what
+    // latching TRUE would do to the sticky forwards.
     void MGPipeServerClearVerbBoundary();
 
     // `rsp`. Also published per frame through PipeStats::CallClass::ResidualPulls; this is the
     // raw count, which exists because PipeStats can be switched off and the exit gate may not
     // be. Its value at the end of P5 IS the size of the P6/P7/P8 debt.
+    //
+    // PLAIN, NOT ATOMIC, AND THAT IS THE SAME RULING TABLE 3 MAKES FOR gPipeInputS ITSELF
+    // (CONTRACT-P5.md section 4): the verb barrier leaves at most one of {GL thread, apply
+    // thread} runnable, so there is one writer at any instant. This counter, m_serverStampedVerb
+    // and FilledGen[] all rest on that and on nothing else - so MOBILEGL_IPC_VERB_BARRIER=0,
+    // R-1's negative control, is a data race on all three as well as the correctness failure it
+    // is there to show. It is expected to be red; it is not expected to be meaningful.
     Uint64 MGPipeResidualPullCount();
     void MGPipeResetResidualPullCountForTesting();
 
