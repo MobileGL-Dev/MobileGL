@@ -21,10 +21,11 @@
 //     a single element is reserved, so a corrupt count cannot become a four-billion-element
 //     resize;
 //   * SPARSE for all three capability tables. The dense form is
-//     2 * targets * formats * 8 bytes plus the sample-count lists - half a megabyte of mostly
-//     zeroes, per context, per caps invalidation (R-12 makes a re-arriving snapshot the
-//     invalidation, so this is not a once-per-process cost). The tables are overwhelmingly
-//     empty, so what crosses is (index, value) pairs and the decoder Clear()s first;
+//     2 * targets * formats * 8 bytes plus the sample-count lists - with 13 targets and 77
+//     internal formats that is ~16 KiB of mostly zeroes, PER CONTEXT AND PER CAPS
+//     INVALIDATION, because R-12 makes a re-arriving snapshot the invalidation rather than a
+//     once-per-process cost. The tables are overwhelmingly empty, so what crosses is
+//     (index, value) pairs and the decoder Clear()s first;
 //   * little-endian by memcpy of fixed-width scalars, which is what every other MobileGL wire
 //     struct already assumes and what the ABI fingerprint below makes checkable;
 //   * every decoder returns FALSE on truncation, a bad version, a dimension mismatch, an
