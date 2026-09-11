@@ -25,6 +25,15 @@ namespace MobileGL::MG_Config {
     // Zero/default-initialized at static-init time (all fields have constexpr-friendly
     // defaults), so it is safe to read even if MG_ConfigLoader::Init has not run yet.
     FeaturesTable Features;
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // Same contract, and for the same reason: MG_Backend::Init() reads Transport, and a
+    // build order that put it before MG_ConfigLoader::Init() must see Monolith rather than
+    // a torn enum. Defined only here - in a pull build Config.h makes Transport a constexpr
+    // and there is nothing to define.
+    TransportMode Transport = TransportMode::Monolith;
+    String TransportEndpoint;
+    IpcTable Ipc;
+#endif
 } // namespace MobileGL::MG_Config
 
 namespace MobileGL::MG_ConfigLoader {
@@ -297,12 +306,106 @@ namespace MobileGL::MG_ConfigLoader {
 #undef ENTRY
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // MOBILEGL_TRANSPORT = monolith | inproc | spawn | unix:<path> | pipe:<name>
+    // (ARCHITECTURE.md:583). Shaped after InitBackendType above: an exact-name table, then
+    // one fallback that names what it did instead. The two prefixed forms are the only
+    // reason this is not literally that function's ENTRY macro.
+    //
+    // spawn / unix: / pipe: PARSE AND THEN REFUSE. They are P6's, and the refusal is NAMED
+    // rather than silent, because the failure this avoids is a P6 lane that set
+    // MOBILEGL_TRANSPORT=spawn, fell back to monolith, and went green on the wrong arm.
+    // The mode is left at Monolith so nothing half-initializes.
+    inline void InitTransport() {
+        String value;
+        QueryEnvVariable("MOBILEGL_TRANSPORT", value, "monolith");
+        String lowered = value;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        MG_Config::TransportEndpoint.clear();
+        if (lowered.empty() || lowered == "monolith") {
+            MG_Config::Transport = MG_Config::TransportMode::Monolith;
+            return;
+        }
+        if (lowered == "inproc") {
+            MG_Config::Transport = MG_Config::TransportMode::InProcess;
+            MGLOG_I("Config: MOBILEGL_TRANSPORT=inproc - the MGPipe record stream crosses a real "
+                    "ring to an apply thread");
+            return;
+        }
+        // The three P6 forms. Recognised precisely, so the diagnostic can say "not yet"
+        // rather than "unknown", which are different bugs on the operator's side.
+        if (lowered == "spawn" || lowered.compare(0, 5, "unix:") == 0 ||
+            lowered.compare(0, 5, "pipe:") == 0) {
+            MGLOG_E("Config: MOBILEGL_TRANSPORT='%s' names a transport P6 implements and P5 does "
+                    "not; staying on monolith. This run is NOT a split run.",
+                    value.c_str());
+            MG_Config::Transport = MG_Config::TransportMode::Monolith;
+            return;
+        }
+        MGLOG_W("Config: Ignoring invalid env variable MOBILEGL_TRANSPORT='%s'; expected "
+                "monolith|inproc|spawn|unix:<path>|pipe:<name>, using monolith",
+                value.c_str());
+        MG_Config::Transport = MG_Config::TransportMode::Monolith;
+    }
+
+    // The MOBILEGL_IPC_* family (Config.h IpcTable). Parsed unconditionally rather than only
+    // when Transport != Monolith: a knob that silently means nothing on one arm of an A/B is
+    // how an A/B stops being one, and the ranges below are the diagnostics.
+    inline void InitIpc() {
+        auto& ipc = MG_Config::Ipc;
+        QueryEnvVariable("MOBILEGL_IPC_SERVER_PATH", ipc.ServerPath, "");
+        // Both ring floors are 1 MiB, not 0: a ring caps ONE record at half its size, and
+        // the catalogue's largest fixed payload (MGPFramebufferState, 304 bytes) plus a
+        // create_shader_state archive already needs far more than a toy ring. The ceilings
+        // are sanity, not policy.
+        ipc.RingMb = QueryEnvUint32("MOBILEGL_IPC_RING_MB", 8, 1, 1024);
+        ipc.StageMb = QueryEnvUint32("MOBILEGL_IPC_STAGE_MB", 32, 1, 4096);
+        ipc.SpinUs = QueryEnvUint32("MOBILEGL_IPC_SPIN_US", 50, 0, 1000000);
+        // 0 is admitted ON PURPOSE and is the negative control of exit gate E3(a): it turns
+        // the persistent-map push OFF, and PersistentCoherentMapScenario must go red.
+        ipc.PersistentBlockKb = QueryEnvUint32("MOBILEGL_IPC_PERSISTENT_BLOCK_KB", 64, 0, 65536);
+        // 2 is the only tier P5 implements (R-6). 0 and 1 parse here and are refused at the
+        // point of use, which is where the "P11" in the message belongs.
+        ipc.AdoptTier = QueryEnvUint32("MOBILEGL_IPC_ADOPT_TIER", 2, 0, 2);
+        ipc.VerbBarrier = QueryEnvUint32("MOBILEGL_IPC_VERB_BARRIER", 1, 0, 1);
+        ipc.StrictErrors = QueryEnvFlag("MOBILEGL_IPC_STRICT_ERRORS");
+        ipc.Audit = QueryEnvFlag("MOBILEGL_IPC_AUDIT");
+        QueryEnvVariable("MOBILEGL_IPC_SERVER_AFFINITY", ipc.ServerAffinity, "auto");
+
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        // One line, on the arm where these numbers decide behaviour, because every one of
+        // them is a number a bug report has to quote.
+        MGLOG_I("Config: IPC ring=%uMiB stage=%uMiB spin=%uus persistent-block=%uKiB "
+                "adopt-tier=%u verb-barrier=%u strict=%d audit=%d affinity='%s'",
+                ipc.RingMb, ipc.StageMb, ipc.SpinUs, ipc.PersistentBlockKb, ipc.AdoptTier,
+                ipc.VerbBarrier, static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit),
+                ipc.ServerAffinity.c_str());
+        if (ipc.VerbBarrier == 0) {
+            MGLOG_W("Config: MOBILEGL_IPC_VERB_BARRIER=0 is the R-1 NEGATIVE CONTROL and is "
+                    "expected to fail: the client still pulls 31 of 63 PipeInputs fields from a "
+                    "live GLContext, so an unbarriered queue lets the server read future values");
+        }
+        if (ipc.PersistentBlockKb == 0) {
+            MGLOG_W("Config: MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0 is the E3(a) NEGATIVE CONTROL: "
+                    "the persistent-map push is OFF and a coherent-map scenario must go red");
+        }
+    }
+#endif
+
     void Init() {
         MGLOG_D("Loading configuration from environment variables...");
         InitializeAcceptedEnvVariables();
 
         InitBackendType();
         InitFeatures();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // After InitFeatures, so the one line InitIpc logs is the last word on this run's
+        // configuration, and before the accepted-env map is destroyed just below.
+        InitTransport();
+        InitIpc();
+#endif
 
         // Destroy the map since we won't need it anymore
         acceptedEnvVariablesMap.reset();
