@@ -740,24 +740,57 @@ static_assert((MGPipeCallFlagsFor(MGPWireOp::DrawVbo) &
         }                                                                                                              \\
     } while (0)
 
-// Returns whether the record was applied. P0 is a SKELETON: every case validates its
-// bounds and then reports "not applied", because no applier exists until P5 wires
-// MG_Remote/Server/PipeApplier.cpp to the real backend tables. The switch and the opcode
-// enum come from the same list, so a call added to the catalogue cannot be forgotten here;
-// the default arm is for the opcode that never came from this catalogue at all - a byte
-// off a corrupt stream - and it is fatal for the same reason the bounds check is.
+#if MOBILEGL_BUILD_DISAGGREGATED
+// THE DECODER HOOK (P5 w1). MG_Pipe is BELOW MG_Remote and may not include it, so the real
+// 71-arm decoder - MG_Remote/Wire/PipeWireCodec.cpp, which resolves the segments, cross-checks
+// the variable tails and calls today's MGPipeApply* free functions - installs itself here.
+// The indirection is the layering, not a policy: gMGPipeSegmentResolver
+// (MGPipeHostSpan.h:47) is the same shape for the same reason.
+//
+// It lives behind the build option because G1 admits no symbol movement in a PULL build, and
+// an inline variable that MGPipeApplyWireRecord odr-uses would be one.
+using MGPipeWireRecordApplyFn = Bool (*)(MGPWireOp op, const void* record, Uint64 size,
+                                         Uint64 remaining);
+inline MGPipeWireRecordApplyFn gMGPipeWireRecordApply = nullptr;
+#endif
+
+// Returns whether the record was applied.
+//
+// THE SWITCH IS THE PER-OPCODE BOUNDS GATE AND NOTHING ELSE, AND IT CANNOT SEE THE TAIL.
+// MGP_WIRE_CHECK_BOUNDS proves `size >= sizeof(MGPWireRec_X)`, `size <= remaining` and
+// 8-alignment - which is exactly the part a generator can state, because it is the part that
+// follows from the opcode alone. A kVarTail record declaring Count = 4000 while carrying 8
+// bytes passes every one of those, so the SECOND check - recompute the total from the
+// record's own count fields and require it to EQUAL MGPWireRecHeader::Size - belongs to the
+// decoder, which has the payload (MG_Remote/Wire's MGPipeWireRecordLayout, P5 w1).
+//
+// The switch and the opcode enum come from the same list, so a call added to the catalogue
+// cannot be forgotten here; the default arm is for the opcode that never came from this
+// catalogue at all - a byte off a corrupt stream - and it is fatal for the same reason the
+// bounds check is.
+//
+// With no decoder installed - every monolith build, and a split build before
+// ClientSession::Start - this returns false, "this build does not implement it". That is the
+// P0 skeleton's answer, kept deliberately: a codec that has not been installed must not look
+// like one that applied the record.
 inline Bool MGPipeApplyWireRecord(MGPWireOp op, const void* record, Uint64 size, Uint64 remaining) {
     (void)record;
     switch (op) {""")
     for call in calls:
         out.append("    case MGPWireOp::%s:" % call.Name)
         out.append("        MGP_WIRE_CHECK_BOUNDS(MGPWireRec_%s, \"%s\");" % (call.Name, call.Name))
-        out.append("        return false;")
+        out.append("        break;")
     out.append("""    case MGPWireOp::kInvalid:
     case MGPWireOp::kOpCount:
     default:
         MGPipeWireProtocolFatal("<unknown opcode>", size, remaining);
     }
+#if MOBILEGL_BUILD_DISAGGREGATED
+    if (gMGPipeWireRecordApply != nullptr) {
+        return gMGPipeWireRecordApply(op, record, size, remaining);
+    }
+#endif
+    return false;
 }
 
 #undef MGP_WIRE_CHECK_BOUNDS""")

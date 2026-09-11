@@ -820,233 +820,266 @@ static_assert(sizeof(MGPWireRec_FenceWaitServer) ==
         }                                                                                                              \
     } while (0)
 
-// Returns whether the record was applied. P0 is a SKELETON: every case validates its
-// bounds and then reports "not applied", because no applier exists until P5 wires
-// MG_Remote/Server/PipeApplier.cpp to the real backend tables. The switch and the opcode
-// enum come from the same list, so a call added to the catalogue cannot be forgotten here;
-// the default arm is for the opcode that never came from this catalogue at all - a byte
-// off a corrupt stream - and it is fatal for the same reason the bounds check is.
+#if MOBILEGL_BUILD_DISAGGREGATED
+// THE DECODER HOOK (P5 w1). MG_Pipe is BELOW MG_Remote and may not include it, so the real
+// 71-arm decoder - MG_Remote/Wire/PipeWireCodec.cpp, which resolves the segments, cross-checks
+// the variable tails and calls today's MGPipeApply* free functions - installs itself here.
+// The indirection is the layering, not a policy: gMGPipeSegmentResolver
+// (MGPipeHostSpan.h:47) is the same shape for the same reason.
+//
+// It lives behind the build option because G1 admits no symbol movement in a PULL build, and
+// an inline variable that MGPipeApplyWireRecord odr-uses would be one.
+using MGPipeWireRecordApplyFn = Bool (*)(MGPWireOp op, const void* record, Uint64 size,
+                                         Uint64 remaining);
+inline MGPipeWireRecordApplyFn gMGPipeWireRecordApply = nullptr;
+#endif
+
+// Returns whether the record was applied.
+//
+// THE SWITCH IS THE PER-OPCODE BOUNDS GATE AND NOTHING ELSE, AND IT CANNOT SEE THE TAIL.
+// MGP_WIRE_CHECK_BOUNDS proves `size >= sizeof(MGPWireRec_X)`, `size <= remaining` and
+// 8-alignment - which is exactly the part a generator can state, because it is the part that
+// follows from the opcode alone. A kVarTail record declaring Count = 4000 while carrying 8
+// bytes passes every one of those, so the SECOND check - recompute the total from the
+// record's own count fields and require it to EQUAL MGPWireRecHeader::Size - belongs to the
+// decoder, which has the payload (MG_Remote/Wire's MGPipeWireRecordLayout, P5 w1).
+//
+// The switch and the opcode enum come from the same list, so a call added to the catalogue
+// cannot be forgotten here; the default arm is for the opcode that never came from this
+// catalogue at all - a byte off a corrupt stream - and it is fatal for the same reason the
+// bounds check is.
+//
+// With no decoder installed - every monolith build, and a split build before
+// ClientSession::Start - this returns false, "this build does not implement it". That is the
+// P0 skeleton's answer, kept deliberately: a codec that has not been installed must not look
+// like one that applied the record.
 inline Bool MGPipeApplyWireRecord(MGPWireOp op, const void* record, Uint64 size, Uint64 remaining) {
     (void)record;
     switch (op) {
     case MGPWireOp::GetCaps:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_GetCaps, "GetCaps");
-        return false;
+        break;
     case MGPWireOp::ResourceCreate:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_ResourceCreate, "ResourceCreate");
-        return false;
+        break;
     case MGPWireOp::ResourceRespecify:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_ResourceRespecify, "ResourceRespecify");
-        return false;
+        break;
     case MGPWireOp::ResourceDestroy:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_ResourceDestroy, "ResourceDestroy");
-        return false;
+        break;
     case MGPWireOp::MapPersistent:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_MapPersistent, "MapPersistent");
-        return false;
+        break;
     case MGPWireOp::UnmapPersistent:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_UnmapPersistent, "UnmapPersistent");
-        return false;
+        break;
     case MGPWireOp::FenceCreate:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_FenceCreate, "FenceCreate");
-        return false;
+        break;
     case MGPWireOp::FenceStatus:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_FenceStatus, "FenceStatus");
-        return false;
+        break;
     case MGPWireOp::FenceWait:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_FenceWait, "FenceWait");
-        return false;
+        break;
     case MGPWireOp::FenceDestroy:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_FenceDestroy, "FenceDestroy");
-        return false;
+        break;
     case MGPWireOp::QueryCreate:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_QueryCreate, "QueryCreate");
-        return false;
+        break;
     case MGPWireOp::QueryBegin:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_QueryBegin, "QueryBegin");
-        return false;
+        break;
     case MGPWireOp::QueryEnd:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_QueryEnd, "QueryEnd");
-        return false;
+        break;
     case MGPWireOp::QueryAvailable:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_QueryAvailable, "QueryAvailable");
-        return false;
+        break;
     case MGPWireOp::QueryResult:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_QueryResult, "QueryResult");
-        return false;
+        break;
     case MGPWireOp::QueryDestroy:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_QueryDestroy, "QueryDestroy");
-        return false;
+        break;
     case MGPWireOp::CreateRenderState:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_CreateRenderState, "CreateRenderState");
-        return false;
+        break;
     case MGPWireOp::BindRenderState:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_BindRenderState, "BindRenderState");
-        return false;
+        break;
     case MGPWireOp::DeleteRenderState:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_DeleteRenderState, "DeleteRenderState");
-        return false;
+        break;
     case MGPWireOp::CreateVertexElements:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_CreateVertexElements, "CreateVertexElements");
-        return false;
+        break;
     case MGPWireOp::BindVertexElements:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_BindVertexElements, "BindVertexElements");
-        return false;
+        break;
     case MGPWireOp::DeleteVertexElements:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_DeleteVertexElements, "DeleteVertexElements");
-        return false;
+        break;
     case MGPWireOp::CreateSamplerState:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_CreateSamplerState, "CreateSamplerState");
-        return false;
+        break;
     case MGPWireOp::DeleteSamplerState:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_DeleteSamplerState, "DeleteSamplerState");
-        return false;
+        break;
     case MGPWireOp::CreateSamplerView:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_CreateSamplerView, "CreateSamplerView");
-        return false;
+        break;
     case MGPWireOp::DeleteSamplerView:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_DeleteSamplerView, "DeleteSamplerView");
-        return false;
+        break;
     case MGPWireOp::CreateShaderState:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_CreateShaderState, "CreateShaderState");
-        return false;
+        break;
     case MGPWireOp::BindShaderState:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_BindShaderState, "BindShaderState");
-        return false;
+        break;
     case MGPWireOp::DeleteShaderState:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_DeleteShaderState, "DeleteShaderState");
-        return false;
+        break;
     case MGPWireOp::SetDynamicState:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetDynamicState, "SetDynamicState");
-        return false;
+        break;
     case MGPWireOp::SetFramebufferState:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetFramebufferState, "SetFramebufferState");
-        return false;
+        break;
     case MGPWireOp::SetVertexBuffers:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetVertexBuffers, "SetVertexBuffers");
-        return false;
+        break;
     case MGPWireOp::SetIndexBuffer:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetIndexBuffer, "SetIndexBuffer");
-        return false;
+        break;
     case MGPWireOp::SetIndirectBuffers:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetIndirectBuffers, "SetIndirectBuffers");
-        return false;
+        break;
     case MGPWireOp::SetSamplerViews:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetSamplerViews, "SetSamplerViews");
-        return false;
+        break;
     case MGPWireOp::BindSamplerStates:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_BindSamplerStates, "BindSamplerStates");
-        return false;
+        break;
     case MGPWireOp::SetShaderImages:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetShaderImages, "SetShaderImages");
-        return false;
+        break;
     case MGPWireOp::SetShaderBuffers:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetShaderBuffers, "SetShaderBuffers");
-        return false;
+        break;
     case MGPWireOp::SetStreamOutputTargets:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetStreamOutputTargets, "SetStreamOutputTargets");
-        return false;
+        break;
     case MGPWireOp::SetGlobalConstants:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetGlobalConstants, "SetGlobalConstants");
-        return false;
+        break;
     case MGPWireOp::SetVertexAttribDefaults:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetVertexAttribDefaults, "SetVertexAttribDefaults");
-        return false;
+        break;
     case MGPWireOp::SetPixelPackState:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetPixelPackState, "SetPixelPackState");
-        return false;
+        break;
     case MGPWireOp::SetPatchState:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetPatchState, "SetPatchState");
-        return false;
+        break;
     case MGPWireOp::SetDrawProgram:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetDrawProgram, "SetDrawProgram");
-        return false;
+        break;
     case MGPWireOp::SetDispatchProgram:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetDispatchProgram, "SetDispatchProgram");
-        return false;
+        break;
     case MGPWireOp::SetResidualValueState:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetResidualValueState, "SetResidualValueState");
-        return false;
+        break;
     case MGPWireOp::SetTextureParams:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetTextureParams, "SetTextureParams");
-        return false;
+        break;
     case MGPWireOp::ResourceSubData:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_ResourceSubData, "ResourceSubData");
-        return false;
+        break;
     case MGPWireOp::BufferSubDataResident:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_BufferSubDataResident, "BufferSubDataResident");
-        return false;
+        break;
     case MGPWireOp::ResourceSubDataComplete:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_ResourceSubDataComplete, "ResourceSubDataComplete");
-        return false;
+        break;
     case MGPWireOp::ResourceFlushRange:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_ResourceFlushRange, "ResourceFlushRange");
-        return false;
+        break;
     case MGPWireOp::ResourceReadback:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_ResourceReadback, "ResourceReadback");
-        return false;
+        break;
     case MGPWireOp::ResourceCopyRegion:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_ResourceCopyRegion, "ResourceCopyRegion");
-        return false;
+        break;
     case MGPWireOp::GenerateMipmap:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_GenerateMipmap, "GenerateMipmap");
-        return false;
+        break;
     case MGPWireOp::GetTextureImage:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_GetTextureImage, "GetTextureImage");
-        return false;
+        break;
     case MGPWireOp::Blit:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_Blit, "Blit");
-        return false;
+        break;
     case MGPWireOp::Clear:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_Clear, "Clear");
-        return false;
+        break;
     case MGPWireOp::ReadPixels:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_ReadPixels, "ReadPixels");
-        return false;
+        break;
     case MGPWireOp::DrawVbo:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_DrawVbo, "DrawVbo");
-        return false;
+        break;
     case MGPWireOp::LaunchGrid:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_LaunchGrid, "LaunchGrid");
-        return false;
+        break;
     case MGPWireOp::MemoryBarrier:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_MemoryBarrier, "MemoryBarrier");
-        return false;
+        break;
     case MGPWireOp::BeginStreamOutput:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_BeginStreamOutput, "BeginStreamOutput");
-        return false;
+        break;
     case MGPWireOp::EndStreamOutput:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_EndStreamOutput, "EndStreamOutput");
-        return false;
+        break;
     case MGPWireOp::PauseStreamOutput:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_PauseStreamOutput, "PauseStreamOutput");
-        return false;
+        break;
     case MGPWireOp::ResumeStreamOutput:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_ResumeStreamOutput, "ResumeStreamOutput");
-        return false;
+        break;
     case MGPWireOp::Flush:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_Flush, "Flush");
-        return false;
+        break;
     case MGPWireOp::Present:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_Present, "Present");
-        return false;
+        break;
     case MGPWireOp::SetSwapInterval:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetSwapInterval, "SetSwapInterval");
-        return false;
+        break;
     case MGPWireOp::QueryTimestamp:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_QueryTimestamp, "QueryTimestamp");
-        return false;
+        break;
     case MGPWireOp::QueryCounter:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_QueryCounter, "QueryCounter");
-        return false;
+        break;
     case MGPWireOp::FenceWaitServer:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_FenceWaitServer, "FenceWaitServer");
-        return false;
+        break;
     case MGPWireOp::kInvalid:
     case MGPWireOp::kOpCount:
     default:
         MGPipeWireProtocolFatal("<unknown opcode>", size, remaining);
     }
+#if MOBILEGL_BUILD_DISAGGREGATED
+    if (gMGPipeWireRecordApply != nullptr) {
+        return gMGPipeWireRecordApply(op, record, size, remaining);
+    }
+#endif
+    return false;
 }
 
 #undef MGP_WIRE_CHECK_BOUNDS
