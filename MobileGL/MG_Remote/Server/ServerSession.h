@@ -99,26 +99,45 @@ namespace MobileGL::MG_Remote::Server {
         // PublishCapsSnapshot yourself.
         void SetBackend(MG_Backend::BackendObject* backend);
 
-        // MGPCaps::CallMask's two halves, kept apart because they have different owners.
+        // MGPCaps::CallMask's two halves. BOTH ARE MANDATORY AND NEITHER HAS A DEFAULT.
         //
-        // BITS 0..8, THE MGPCapBit FEATURE BITS: nothing in the tree produces them today -
-        // CallMask is declared at MGPipeTypes.h:133 and written by nobody - and what each one
-        // answers belongs to the package that owns the question (kCapTimerQuery to the query
-        // family, kCapResidentSubData to b1, and so on). The default below derives only the
-        // ONE bit that is mechanically derivable from the server's own registration, and
-        // kCapNeedsHostIndexBytes / kCapNeedsHostUboBytes stay 0 for the whole of P5 by
-        // ruling (CONTRACT-P5 table 0), which is what keeps every MGHostSpan out of the first
-        // IPC frame. Everything else is an owner's to set here.
+        // The first version of this file derived a default for each. That was the phase's
+        // marquee defect committed from the server's side: the consumer default read
+        // MGPipeGetResourceOps(), a PROCESS-WIDE global (PipeApply.cpp), so under inproc the
+        // server answered with whatever the client half of the same process had registered,
+        // and under spawn it collapsed to P2's 0x7f. Either way CapsMirror::ServerConsumes
+        // then answers a client-side liveness gate with a guess: the client stops emitting
+        // five P4a families, CLEARS ITS DIRTY FLAGS ON ACCEPTANCE ANYWAY, and the lane goes
+        // green with the uploads lost - ID-39's 66 lost uploads, reflected. R-8's whole point
+        // is that a client-side gate may never be answered by a server-side fact; a
+        // server-side gate answered by a PROCESS-wide fact is the same defect one level down.
+        //
+        // So there is no derivation at all. An unset mask is a programming error and
+        // CallMask() is a named Fatal on one - loud at the first snapshot instead of silent
+        // for a phase. Flagging it in a report was not a mechanism; this is.
+        //
+        // BITS 0..8, THE MGPCapBit FEATURE BITS. What each one answers belongs to the package
+        // that owns the question (kCapTimerQuery to the query family, kCapResidentSubData to
+        // b1, and so on). `SetCapabilityBits(0)` is a legitimate and explicit answer - "this
+        // server offers no optional capability" - and is the right call while those packages
+        // land. kCapNeedsHostIndexBytes / kCapNeedsHostUboBytes must stay 0 for the whole of
+        // P5 by ruling (CONTRACT-P5 table 0): they are the only two things that ask for an
+        // MGHostSpan, and 0 is what keeps every one of them out of the first IPC frame.
         void SetCapabilityBits(Uint64 capBits);
 
         // BITS 32..47, THE CONSUMER MASK (R-8 / C-4): which MGPipe subsystems this server has
-        // a consumer for. The client's liveness gates read it back through
-        // CapsMirror::ServerConsumes and may NEVER read MGPipeGetResourceOps() - that is the
-        // server's registration, which under inproc a client reads correctly by accident and
-        // under spawn reads as null, silently disabling five whole record families.
+        // a consumer for. v1 owns the answer - it owns the apply thread and knows what its
+        // backend took over. Publishing a bit the server does not consume is the failure
+        // above; withholding one the server does consume merely leaves the legacy pull path
+        // running, which is the safe direction.
         void SetConsumedSubsystems(Uint64 subsystemMask);
 
+        // False until BOTH setters have been called. A caller that can handle the absence
+        // asks this; PublishCapsSnapshot and CallMask abort on it.
+        Bool CallMaskIsSet() const;
+
         // What PublishCapsSnapshot puts on the wire: capBits | MGCapsConsumerBits(subsystems).
+        // Fatal{UnsetCallMask} if either half was never set.
         Uint64 CallMask() const;
 
         Bool Accepted() const;
@@ -134,6 +153,11 @@ namespace MobileGL::MG_Remote::Server {
         // The reverse channel. P5 only has to be able to CARRY OnBufferWriteback /
         // OnGpuWritten / OnSurfaceChanged; the overflow policy is P9's.
         Transport::EventRingProducer& Events();
+        // Publish everything reserved on SEG_EVENT and ring the client. USE THIS rather than
+        // EventRingProducer::PublishAndNotify, which takes a bell and a park flag from its
+        // caller and therefore compiles for every wrong pairing; the session is the thing
+        // that knows which bell belongs to the client.
+        void PublishEvents();
         Transport::ITransport* Control_Plane();
 
         // completedFrameSerial / presentAckSerial: the two watermarks only the server can
@@ -162,6 +186,7 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 m_consumedSubsystems = 0;
         Bool m_capBitsSet = false;
         Bool m_consumedSet = false;
+        Bool m_sizesSet = false;
         Bool m_accepted = false;
     };
 

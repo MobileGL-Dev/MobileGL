@@ -16,8 +16,6 @@
 
 #include <Config.h>
 #include <MGGitHash.h>
-#include <MG_Pipe/PipeApply.h>
-#include <MG_Pipe/PipeMutation.h>
 #include <MG_Util/Debug/Log.h>
 
 #include <cstdlib>
@@ -83,13 +81,23 @@ namespace MobileGL::MG_Remote::Server {
             std::abort();
         }
 
+        // MOBILEGL_IPC_RING_MB / MOBILEGL_IPC_STAGE_MB, actually applied.
+        //
+        // The first version of this file called this only `if (m_sizes.CmdBytes == 0)`, and
+        // SessionSegmentSizes has a default member initialiser of 8 MiB, so the condition was
+        // never true and the whole function was dead: ConfigLoader parsed both knobs, echoed
+        // them into the config line, and the session mapped 8/32 MiB regardless. Config.h's
+        // own comment four lines above the declaration is the statement of that bug - "an
+        // environment variable that nothing parses is indistinguishable from one that is
+        // parsed and ignored" - and a knob that REPORTS a value it does not use is worse,
+        // because it makes every measurement taken with it a lie.
         Transport::SessionSegmentSizes SizesFromConfig() {
             Transport::SessionSegmentSizes sizes;
 #if MOBILEGL_BUILD_DISAGGREGATED
             const Uint64 ringMb = MG_Config::Ipc.RingMb == 0 ? 8u : MG_Config::Ipc.RingMb;
             const Uint64 stageMb = MG_Config::Ipc.StageMb == 0 ? 32u : MG_Config::Ipc.StageMb;
-            sizes.CmdBytes = ringMb * 1024ull * 1024ull;
-            sizes.StageBytes = stageMb * 1024ull * 1024ull;
+            sizes.CmdRingBytes = ringMb * 1024ull * 1024ull;
+            sizes.StageRingBytes = stageMb * 1024ull * 1024ull;
 #endif
             return sizes;
         }
@@ -107,36 +115,21 @@ namespace MobileGL::MG_Remote::Server {
         // reason InProcessTransportTest.cpp:344 bounds its join at five seconds.
         constexpr Uint32 kHandshakeTimeoutMs = 5000;
 
-        // WHICH SUBSYSTEMS THIS SERVER CONSUMES, derived from the only registration the tree
-        // actually has. PipeFill.cpp:920's P4aFamilyHasItsConsumer is the evidence: every P4a
-        // family hangs off MGPipeGetResourceOps() and there is deliberately "no per-family
-        // registration to add". Below that, P2's bits 0..6 are consumed by the APPLIER, which
-        // a server role has by construction.
-        //
-        // FLAGGED FOR v1: this is a default, not a ruling. v1 owns the apply thread and knows
-        // what its backend actually took over, and SetConsumedSubsystems is how it says so.
-        // Publishing a bit the server does not consume is ID-39's shape from the other side -
-        // the client emits and nothing applies - so a wrong answer here is not benign.
-        Uint64 DeriveConsumedSubsystems() {
-            if (MG_Pipe::MGPipeGetResourceOps() == nullptr) {
-                return MG_Pipe::kMGPipeSubsystemsMigratedAtP2;
-            }
-            return MG_Pipe::kMGPipeSubsystemsMigratedAtP4a;
-        }
-
-        // The ONE MGPCapBit that is derivable from the server's own registration. Every other
-        // bit belongs to the package that owns the question it answers; 0 is the honest
-        // default for those, because a cap bit set on a guess is a capability probe that
-        // answers "supported" for a path that does not exist (R-15's cross-cutting rule).
-        Uint64 DeriveCapabilityBits() {
-            Uint64 bits = 0;
-            if (MG_Pipe::MGPipeResourceOpsHaveSubDataResident()) {
-                bits |= static_cast<Uint64>(MG_Pipe::kCapResidentSubData);
-            }
-            // kCapNeedsHostIndexBytes and kCapNeedsHostUboBytes are 0 for the whole of P5 by
-            // ruling, and that is the cheapest way to keep every MGHostSpan out of the first
-            // IPC frame: they are the only two things that ask for one.
-            return bits;
+        // THERE IS NO DERIVATION OF CallMask, BY RULING. See ServerSession.h's block on
+        // SetCapabilityBits / SetConsumedSubsystems for why the one that used to be here was
+        // the phase's marquee defect committed from the server's side.
+        [[noreturn]] void FatalUnsetCallMask(Bool capBitsSet, Bool consumedSet) {
+            MGLOG_F("MGPipe: Fatal{UnsetCallMask} - %s%s%s was never set on this ServerSession, "
+                    "and there is no default: a guessed consumer mask makes the client's R-8 "
+                    "liveness gates answer from a server-side fact the server never stated. The "
+                    "client would stop emitting whole record families, clear its dirty flags on "
+                    "acceptance anyway, and the lane would go green with the uploads lost "
+                    "(ID-39, reflected). Call SetConsumedSubsystems() and SetCapabilityBits() "
+                    "before Accept(); SetCapabilityBits(0) is a legitimate explicit answer",
+                    capBitsSet ? "" : "SetCapabilityBits",
+                    (!capBitsSet && !consumedSet) ? " and " : "",
+                    consumedSet ? "" : "SetConsumedSubsystems");
+            std::abort();
         }
 
         ServerSession* g_active = nullptr;
@@ -162,6 +155,7 @@ namespace MobileGL::MG_Remote::Server {
             return;
         }
         m_sizes = sizes;
+        m_sizesSet = true;
     }
 
     void ServerSession::SetBackend(MG_Backend::BackendObject* backend) { m_backend = backend; }
@@ -176,10 +170,13 @@ namespace MobileGL::MG_Remote::Server {
         m_consumedSet = true;
     }
 
+    Bool ServerSession::CallMaskIsSet() const { return m_capBitsSet && m_consumedSet; }
+
     Uint64 ServerSession::CallMask() const {
-        const Uint64 capBits = m_capBitsSet ? m_capBits : DeriveCapabilityBits();
-        const Uint64 consumed = m_consumedSet ? m_consumedSubsystems : DeriveConsumedSubsystems();
-        return capBits | MGCapsConsumerBits(consumed);
+        if (!CallMaskIsSet()) {
+            FatalUnsetCallMask(m_capBitsSet, m_consumedSet);
+        }
+        return m_capBits | MGCapsConsumerBits(m_consumedSubsystems);
     }
 
     Bool ServerSession::Accepted() const { return m_accepted; }
@@ -189,7 +186,9 @@ namespace MobileGL::MG_Remote::Server {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
         m_transport = &transport;
-        if (m_sizes.CmdBytes == 0) {
+        // MOBILEGL_IPC_RING_MB / _STAGE_MB unless SetSegmentSizes overrode them. Unconditional
+        // on purpose - see SizesFromConfig.
+        if (!m_sizesSet) {
             m_sizes = SizesFromConfig();
         }
 
@@ -203,7 +202,13 @@ namespace MobileGL::MG_Remote::Server {
             return received;
         }
         const ::MobileGL::Wire::CtrlEnvelope* envelope = ParseEnvelope(frame);
-        if (envelope == nullptr || envelope->msg_type() != ::MobileGL::Wire::CtrlMsg::Hello) {
+        // msg_as_Hello() IS PART OF THE GUARD, not a consequence of it. FlatBuffers'
+        // Verifier::VerifyTable is `return !table || table->Verify(*this)`, so a NULL union
+        // member passes verification: a 24-byte frame verifies, carries the identifier,
+        // reports msg_type() == Hello and returns nullptr from msg_as_Hello(). A malformed
+        // frame has to be refused, never dereferenced.
+        if (envelope == nullptr || envelope->msg_type() != ::MobileGL::Wire::CtrlMsg::Hello ||
+            envelope->msg_as_Hello() == nullptr) {
             MGLOG_E("MG_Remote server: the first control frame is not a verifiable Hello");
             return MOBILEGL_ERR_PROTOCOL_MISMATCH;
         }
@@ -235,7 +240,7 @@ namespace MobileGL::MG_Remote::Server {
         m_commands = Transport::RingConsumer(control, m_shm.CmdRingBase(), m_shm.CmdRingCapacity(),
                                              Transport::RingCursorSet::Cmd);
         if (!m_commands.Valid()) {
-            m_shm.Close();
+            Close();
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
         m_consumer.Attach(control, &m_commands, &ProducerDoorbell(), &ConsumerDoorbell(),
@@ -245,7 +250,7 @@ namespace MobileGL::MG_Remote::Server {
             Transport::ReplySlotPool pool(m_shm.ReplyBase(), m_shm.ReplyBytes(),
                                           m_shm.ReplySlotCount());
             if (!pool.Valid()) {
-                m_shm.Close();
+                Close();
                 return MOBILEGL_ERR_INVALID_ARGUMENT;
             }
             // A stale stamp from a previous session must never read as this session's answer.
@@ -280,7 +285,7 @@ namespace MobileGL::MG_Remote::Server {
             ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);
             const MobileGLResult sent = SendEnvelope(transport, builder);
             if (sent != MOBILEGL_OK) {
-                m_shm.Close();
+                Close();
                 return sent;
             }
         }
@@ -310,6 +315,16 @@ namespace MobileGL::MG_Remote::Server {
         m_accepted = true;
         g_active = this;
         LogMemory("accept");
+
+        if (!CallMaskIsSet()) {
+            // Not fatal HERE, because a session with no backend legitimately publishes no
+            // snapshot at all and the mask is only needed by one. It becomes
+            // Fatal{UnsetCallMask} the moment PublishCapsSnapshot asks for it, which is the
+            // first thing that would put a guess on the wire.
+            MGLOG_W("MG_Remote server: accepted with no CallMask - SetConsumedSubsystems() and/or "
+                    "SetCapabilityBits() were never called. There is no default and there will be "
+                    "no guess: the first CapsSnapshot will abort instead");
+        }
 
         // ---- 6. the first CapsSnapshot, if there is a backend to take it from.
         if (m_backend != nullptr) {
@@ -443,20 +458,30 @@ namespace MobileGL::MG_Remote::Server {
     Transport::EventRingProducer& ServerSession::Events() { return m_events; }
     Transport::ITransport* ServerSession::Control_Plane() { return m_transport; }
 
+    void ServerSession::PublishEvents() {
+        if (!m_accepted) {
+            return;
+        }
+        // Publish, THEN ring - the same order as the forward direction, and the session picks
+        // the bell so that no caller can pair the right ring with the wrong flag.
+        m_events.Ring().Publish();
+        m_consumer.NotifyClient();
+    }
+
+    // Both of these advance AND ring, through SessionConsumer. The free functions in namespace
+    // Watermark do not ring: a client parked in WaitForPresentAck(kWaitForever) needs the pair.
     void ServerSession::AdvanceCompletedFrame(Uint64 serial) {
         if (!m_accepted) {
             return;
         }
-        Transport::Watermark::AdvanceCompletedFrame(Control(), serial);
-        m_consumer.NotifyClient();
+        m_consumer.CompleteFrame(serial);
     }
 
     void ServerSession::ReturnPresentCredit(Uint64 serial) {
         if (!m_accepted) {
             return;
         }
-        Transport::Watermark::AdvancePresentAck(Control(), serial);
-        m_consumer.NotifyClient();
+        m_consumer.ReturnPresentCredit(serial);
     }
 
     Transport::RoleMemorySample ServerSession::SampleMemory() const {
