@@ -1,6 +1,6 @@
 # MGPipe：MobileGL 前后端拆分
 
-> 状态：**P0、P0.5、P1、P2、P3a 已落地**（`feat/disaggregated@fde5fda3`，基线 `dev@9eae9858`）。第 43 天 GO/NO-GO 判定为**继续**。P3a（handle wave 1：Espryt 的 buffer 与 VAO）已交付，**下一步 P4a**（handle wave 2：FBO / 纹理 / sampler / program 的身份与描述符）。见 `ROADMAP.md`。
+> 状态：**P0、P0.5、P1、P2、P3a、P4a 已落地**（`feat/disaggregated@8c458cd5`，基线 `dev@9eae9858`）。第 43 天 GO/NO-GO 判定为**继续**。P4a（handle wave 2：Espryt 的 FBO / 纹理 / sampler / program 身份与描述符）已交付，Espryt 的对象类读点至此全部走句柄；**下一步 P3b/P4b**（深化：memo 重键、发射游标、raw-depth-fetch sampler 原生化）与 **P5**（传输 + inproc applier，也只依赖 P4a）。见 `ROADMAP.md`。
 >
 > 性能纪律（2026-09-08 起）：逐线程 CPU 与 tracker 绝对 ns **对着 pull 臂基线记录**，不再作阻塞门（push 比 pull 多约 10% 逐线程 CPU 已被接受；该读数出自 -O0 APK，Release 基准线见 `MEASUREMENTS.md` §20），专门的优化阶段排在路线图推完之后。
 
@@ -31,7 +31,7 @@ MGPipe 是 MobileGL 前端（`MG_State` + `MG_Impl`）与后端（`MG_Backend`�
 |---|---|
 | `ARCHITECTURE.md` | 已定稿的设计与架构：句柄与世代、调用目录、记录约定、tracker、纹理路径、shader 制品、反向通道、后端改造、传输、persistent map 分档、进程/EGL/平台、构建与纯度门、验证策略 |
 | `ROADMAP.md` | P0…P13 阶段表、两条跑道、GO/NO-GO 清单、再基线检查点、仍然开放的问题 |
-| `MEASUREMENTS.md` | 逐阶段实测：P0（spike A/B、双设备边界计数器基线、桌面数据点、语料事实）、P1（verify harness 门）、P2（五部分门、两机配对 A/B、DriverBench T1/T2、计数器）、P3a（门、接缝缺陷、Track H 普查、两机 A/B）与复现命令 |
+| `MEASUREMENTS.md` | 逐阶段实测：P0（spike A/B、双设备边界计数器基线、桌面数据点、语料事实）、P1（verify harness 门）、P2（五部分门、两机配对 A/B、DriverBench T1/T2、计数器）、P3a（门、接缝缺陷、Track H 普查、两机 A/B）、P4a（门、契约七次修正与两轮终审修复、缝类审计、三臂设备 A/B、DriverBench T1/T2/T3）与复现命令 |
 
 代码地图（P0 已落地的部分）：
 
