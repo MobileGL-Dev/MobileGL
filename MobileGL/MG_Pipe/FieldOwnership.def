@@ -229,12 +229,56 @@
 // retire the previous verb's answers with nothing to put in their place.
 //
 // An op that is not in this list is NOT a verb boundary and the applier must not stamp on it:
-// a set_dynamic_state between two draws is part of the draw's verb, not a new one. A later
-// phase whose record becomes a verb boundary adds its row here, and the generator refuses a
-// row whose op or verb does not exist.
+// a set_dynamic_state between two draws is part of the draw's verb, not a new one.
+//
+// THE GENERATOR REFUSES AN OMISSION, NOT ONLY A TYPO, and that is the half the first version of
+// this file did not have. Every call that is VERB-SHAPED must have a row here or an exemption
+// row below with a reason. "Verb-shaped" is the union of two mechanical tests, both derived:
+//   (a) PipeCalls.def gives the call kind kCtxVerb - the catalogue's own word for it;
+//   (b) the call's name is also an MGPipeVerb name in FillPoints.def.
+// Twelve rows and three exemptions cover all fifteen. Only four of the twelve can arrive in P5
+// (CONTRACT §7 class B minus Present); the other eight are Fatal{UnmigratedVerb} today and are
+// mapped ANYWAY, because the failure mode of an absent row is silent: the applier would run the
+// record under the PREVIOUS verb's serial, mask and name, and a field inside that mask would
+// read FRESH while holding the previous verb's value.
+//
+// NOT MECHANICALLY DETECTABLE, and so not claimed: a call that is a verb boundary, is not
+// kCtxVerb, and whose name differs from its verb's. `ResourceCopyRegion` is the one in the tree
+// (its verbs are CopyImageSubData / CopyTexSubImage2D / CopyTexImage2D - three of them, which is
+// why it cannot be a row without a rule for choosing). The phase that emits it adds its row and
+// decides which verb it is.
 #define MGP_VERB_OP_LIST(X)                                                                          \
-    X(Clear,      Clear)                                                                             \
-    X(DrawVbo,    DrawArrays)                                                                        \
-    X(ReadPixels, ReadPixels)                                                                        \
-    X(Blit,       BlitFramebuffer)
+    /* CONTRACT §7 class B - the four that can actually arrive in P5. */                              \
+    X(Clear,              Clear)                                                                     \
+    X(DrawVbo,            DrawArrays)                                                                \
+    X(ReadPixels,         ReadPixels)                                                                \
+    X(Blit,               BlitFramebuffer)                                                           \
+    /* Class C today (Fatal{UnmigratedVerb}); mapped so the phase that emits one cannot get NO  */   \
+    /* stamp by omission. DrawVbo above has the same shape and a worse case: it stands for all  */   \
+    /* twenty draw verbs, which share the kDraw mask but not the NAME a Fatal prints.           */   \
+    X(LaunchGrid,         DispatchCompute)                                                           \
+    X(MemoryBarrier,      MemoryBarrier)                                                             \
+    X(BeginStreamOutput,  BeginTransformFeedback)                                                    \
+    X(EndStreamOutput,    EndTransformFeedback)                                                      \
+    X(PauseStreamOutput,  PauseTransformFeedback)                                                    \
+    X(ResumeStreamOutput, ResumeTransformFeedback)                                                   \
+    X(GenerateMipmap,     GenerateMipmap)                                                            \
+    X(GetTextureImage,    GetTextureImage)
+
+// X(Op, Why) - verb-shaped calls that are deliberately NOT stamp points.
+//
+// An exemption is a ROW, not an absence, so that the reason is in the file rather than in a
+// reviewer's head and so that the generator's completeness check has something to accept.
+#define MGP_VERB_OP_EXEMPT_LIST(X)                                                                   \
+    X(Present,                                                                                       \
+      "FillPoints.def:21 - Present and SetSwapInterval go through BackendObject virtuals and "       \
+      "read no frontend state, so they are not verbs here. There is no MGPipeVerb::Present, "        \
+      "MGPipeValidateForVerb is never called for it, and stamping would retire the previous "        \
+      "verb's answers with nothing to put in their place. It is class B all the same.")              \
+    X(SetSwapInterval,                                                                               \
+      "the same sentence of FillPoints.def:21, and it is class C besides")                           \
+    X(Flush,                                                                                         \
+      "not a verb at all: the verb census (BRIEF §12 C-3) found Flush is not a GLFunctionsTable "    \
+      "slot and glFlush/glFinish are empty function bodies (Definitions.cpp:111-112), so there "     \
+      "is no MGPipeVerb::Flush for a row to name")
 // clang-format on

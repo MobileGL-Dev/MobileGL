@@ -259,20 +259,35 @@ static_assert(MGPipeEveryFieldIsClassified(),
 // WHERE THE SERVER STAMPS. The wire's op and the fill's verb are different name spaces
 // and do not line up by name (draw_vbo is DrawArrays, blit is BlitFramebuffer), so this is the
 // join. An op with no row is NOT a verb boundary and the applier must not stamp on it.
-// Present is deliberately absent: FillPoints.def:21 - "Present and SetSwapInterval go through
-// BackendObject virtuals and read no frontend state, so they are not verbs here".
+//
+// EVERY VERB-SHAPED CALL IS ANSWERED HERE OR EXEMPTED BY NAME, and the generator refuses an
+// omission: a verb-shaped record with no row would apply under the PREVIOUS verb's serial,
+// mask and name, so a field inside that mask would read FRESH while holding the previous
+// verb's value - the one silent failure this table has. The exemptions:
+//   Flush            not a verb at all: the verb census (BRIEF §12 C-3) found Flush is not a GLFunctionsTable 
+//   Present          FillPoints.def:21 - Present and SetSwapInterval go through BackendObject virtuals and 
+//   SetSwapInterval  the same sentence of FillPoints.def:21, and it is class C besides
 constexpr MGPipeVerb MGPipeVerbForWireOp(MGPWireOp op) {
     switch (op) {
     case MGPWireOp::Clear: return MGPipeVerb::Clear;
     case MGPWireOp::DrawVbo: return MGPipeVerb::DrawArrays;
     case MGPWireOp::ReadPixels: return MGPipeVerb::ReadPixels;
     case MGPWireOp::Blit: return MGPipeVerb::BlitFramebuffer;
+    case MGPWireOp::LaunchGrid: return MGPipeVerb::DispatchCompute;
+    case MGPWireOp::MemoryBarrier: return MGPipeVerb::MemoryBarrier;
+    case MGPWireOp::BeginStreamOutput: return MGPipeVerb::BeginTransformFeedback;
+    case MGPWireOp::EndStreamOutput: return MGPipeVerb::EndTransformFeedback;
+    case MGPWireOp::PauseStreamOutput: return MGPipeVerb::PauseTransformFeedback;
+    case MGPWireOp::ResumeStreamOutput: return MGPipeVerb::ResumeTransformFeedback;
+    case MGPWireOp::GenerateMipmap: return MGPipeVerb::GenerateMipmap;
+    case MGPWireOp::GetTextureImage: return MGPipeVerb::GetTextureImage;
     default:
         return MGPipeVerb::kVerbCount;
     }
 }
 
-inline constexpr SizeT kMGPipeVerbBoundaryOpCount = 4;
+inline constexpr SizeT kMGPipeVerbBoundaryOpCount = 12;
+inline constexpr SizeT kMGPipeVerbBoundaryExemptCount = 3;
 
 // The class sizes, as constants a test can pin without recounting the table.
 inline constexpr SizeT kMGPipeRecordSuppliedFieldCount = 32;
