@@ -21,12 +21,12 @@ inline void MGP_GetCaps(const MGPCaps* payload, MGPReplySlot* reply) {
     gMGPipeScreen.GetCaps(payload, reply);
 }
 
-inline void MGP_ResourceCreate(const MGPResourceDesc* payload) {
-    gMGPipeScreen.ResourceCreate(payload);
+inline void MGP_ResourceCreate(const MGPResourceDesc* payload, MGPReplySlot* reply) {
+    gMGPipeScreen.ResourceCreate(payload, reply);
 }
 
-inline void MGP_ResourceRespecify(const MGPResourceDesc* payload) {
-    gMGPipeScreen.ResourceRespecify(payload);
+inline void MGP_ResourceRespecify(const MGPResourceDesc* payload, MGPReplySlot* reply) {
+    gMGPipeScreen.ResourceRespecify(payload, reply);
 }
 
 inline void MGP_ResourceDestroy(const MGPHandleOnly* payload) {
@@ -201,12 +201,12 @@ inline void MGP_SetResidualValueState(const MGPResidualValueState* payload) {
     gMGPipeContext.SetResidualValueState(payload);
 }
 
-inline void MGP_SetTextureParams(const MGPTextureParams* payload) {
-    gMGPipeContext.SetTextureParams(payload);
+inline void MGP_SetTextureParams(const MGPTextureParams* payload, MGPReplySlot* reply) {
+    gMGPipeContext.SetTextureParams(payload, reply);
 }
 
-inline void MGP_ResourceSubData(const MGPSubData* payload, const void* varTail, Uint32 varTailCount) {
-    gMGPipeContext.ResourceSubData(payload, varTail, varTailCount);
+inline void MGP_ResourceSubData(const MGPSubData* payload, const void* varTail, Uint32 varTailCount, MGPReplySlot* reply) {
+    gMGPipeContext.ResourceSubData(payload, varTail, varTailCount, reply);
 }
 
 inline void MGP_BufferSubDataResident(const MGPSubData* payload) {

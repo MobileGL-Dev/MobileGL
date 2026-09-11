@@ -850,6 +850,36 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
 #undef MGP_COUNT_ACKING_CALLS
     EXPECT_EQ(ackingCalls, 1u);
 
+    // P5 R-16: the same shape over kReplySlot, which had no count pin at all until the flag
+    // became load-bearing. It is what sizes the reply pool and what the decoder posts against,
+    // so the number is now a protocol quantity rather than a documentation one.
+    //
+    // FOURTEEN. Ten answers that were always declared - get_caps, map_persistent, the two fence
+    // reads, the three query reads, the two readbacks and read_pixels - plus the FOUR ACCEPTANCE
+    // ROWS, whose applier entry points return a Bool the client acts on destructively and which
+    // carried no flag because in monolith that answer is a direct call's return value.
+    Uint32 replySlotCalls = 0;
+#define MGP_COUNT_REPLY_SLOT_CALLS(Name, Payload, Class, Flags)                                                        \
+    if ((static_cast<Uint32>(Flags) & static_cast<Uint32>(kReplySlot)) != 0) ++replySlotCalls;
+    MGP_CALL_LIST(MGP_COUNT_REPLY_SLOT_CALLS)
+#undef MGP_COUNT_REPLY_SLOT_CALLS
+    EXPECT_EQ(replySlotCalls, 14u);
+
+    // And the four by name, because a count alone would let a row lose the flag while another
+    // gained one. These are exactly the MGPipeApply* entry points that return Bool
+    // (PipeApply.h:820, :868, :897, :1023); map_persistent's void* is the fifth answer and was
+    // already declared.
+    Uint32 acceptanceWithSlot = 0;
+#define MGP_COUNT_ACCEPTANCE_ROWS(Name, Payload, Class, Flags)                                                         \
+    if ((std::strcmp(#Name, "ResourceCreate") == 0 || std::strcmp(#Name, "ResourceRespecify") == 0 ||                   \
+         std::strcmp(#Name, "ResourceSubData") == 0 || std::strcmp(#Name, "SetTextureParams") == 0) &&                 \
+        (static_cast<Uint32>(Flags) & static_cast<Uint32>(kReplySlot)) != 0) {                                         \
+        ++acceptanceWithSlot;                                                                                          \
+    }
+    MGP_CALL_LIST(MGP_COUNT_ACCEPTANCE_ROWS)
+#undef MGP_COUNT_ACCEPTANCE_ROWS
+    EXPECT_EQ(acceptanceWithSlot, 4u);
+
     // glBufferStorage: an immutable store, and the one entry point allowed a synchronous ack.
     MGPResourceDesc immutable{};
     immutable.Immutable = 1;

@@ -16,8 +16,8 @@
 // call and the frontend keeps its own path (plan B section 4.1).
 struct MGPipeScreen {
     void (*GetCaps)(const MGPCaps* payload, MGPReplySlot* reply);
-    void (*ResourceCreate)(const MGPResourceDesc* payload);
-    void (*ResourceRespecify)(const MGPResourceDesc* payload);
+    void (*ResourceCreate)(const MGPResourceDesc* payload, MGPReplySlot* reply);
+    void (*ResourceRespecify)(const MGPResourceDesc* payload, MGPReplySlot* reply);
     void (*ResourceDestroy)(const MGPHandleOnly* payload);
     void (*MapPersistent)(const MGPHandleOnly* payload, MGPReplySlot* reply);
     void (*UnmapPersistent)(const MGPHandleOnly* payload);
@@ -67,8 +67,8 @@ struct MGPipeContext {
     void (*SetDrawProgram)(const MGPHandleOnly* payload);
     void (*SetDispatchProgram)(const MGPHandleOnly* payload);
     void (*SetResidualValueState)(const MGPResidualValueState* payload);
-    void (*SetTextureParams)(const MGPTextureParams* payload);
-    void (*ResourceSubData)(const MGPSubData* payload, const void* varTail, Uint32 varTailCount);
+    void (*SetTextureParams)(const MGPTextureParams* payload, MGPReplySlot* reply);
+    void (*ResourceSubData)(const MGPSubData* payload, const void* varTail, Uint32 varTailCount, MGPReplySlot* reply);
     void (*BufferSubDataResident)(const MGPSubData* payload);
     void (*ResourceSubDataComplete)(const MGPSubDataComplete* payload);
     void (*ResourceFlushRange)(const MGPFlushRange* payload);

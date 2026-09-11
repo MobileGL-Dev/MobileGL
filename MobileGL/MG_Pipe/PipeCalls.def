@@ -90,7 +90,14 @@
     /* property of the payload, so its absence was simply wrong. Adding a flag does not    */  \
     /* move an opcode: the opcode is this line's 1-based position.                          */  \
     X(GetCaps,                  MGPCaps,                    kScreen,    kReplySlot|kHasBlob)     \
-    X(ResourceCreate,           MGPResourceDesc,            kScreen,    kNone)                      \
+    /* THE FOUR ACCEPTANCE ROWS (P5 R-5, R-16). These four and map_persistent are the only    */  \
+    /* applier entry points that RETURN something the client acts on destructively - clearing  */  \
+    /* per-level dirty flags, latching parameters, advancing its own bookkeeping - so the      */  \
+    /* answer has to come back, and kReplySlot is how a record says so. They carried no flag   */  \
+    /* until P5, because in monolith the answer is the return value of a direct call and there */  \
+    /* was nothing to declare. kMGPipeCallFlags is now what sizes the reply pool and what the  */  \
+    /* decoder posts against, so a row that answers without the flag is a waiter that hangs.   */  \
+    X(ResourceCreate,           MGPResourceDesc,            kScreen,    kReplySlot)                 \
     /* NO kHasBlob, BY RULING (P5 R-13.3; CONTRACT-P5.md table 1 row 19). MGPResourceDesc   */  \
     /* owns no MGPBlobRef and gains none: under split `initialBytes` is always nullptr and  */  \
     /* the initial content of a glBufferData(size, data) / glTexImage*(..., data) arrives   */  \
@@ -99,7 +106,7 @@
     /* cost is one extra record. NOTE the SECOND uncarried companion on this call, the      */  \
     /* MGPRespecifiedLevel* scope (PipeApply.h:792) - it is NOT bytes and NOT covered by    */  \
     /* this ruling; table 1 row 19 gives it the two pad fields of MGPResourceDesc.          */  \
-    X(ResourceRespecify,        MGPResourceDesc,            kScreen,    kNeedsAck)                  \
+    X(ResourceRespecify,        MGPResourceDesc,            kScreen,    kNeedsAck|kReplySlot)       \
     X(ResourceDestroy,          MGPHandleOnly,              kScreen,    kNone)                      \
     X(MapPersistent,            MGPHandleOnly,              kScreen,    kReplySlot|kOptional)       \
     X(UnmapPersistent,          MGPHandleOnly,              kScreen,    kOptional)                  \
@@ -154,8 +161,8 @@
     /* final step asserts sizeof(ResidualValueBlock) == 0 (plan 6.3).                       */      \
     X(SetResidualValueState,    MGPResidualValueState,      kCtxState,  kHasBlob)                   \
     /* ---- context: per-object state and transfer (plan 4.4.3 set_texture_params, 4.4.4) ---- */   \
-    X(SetTextureParams,         MGPTextureParams,           kCtxObject, kNone)                      \
-    X(ResourceSubData,          MGPSubData,                 kCtxObject, kHasBlob|kVarTail)          \
+    X(SetTextureParams,         MGPTextureParams,           kCtxObject, kReplySlot)                 \
+    X(ResourceSubData,          MGPSubData,                 kCtxObject, kHasBlob|kVarTail|kReplySlot) \
     X(BufferSubDataResident,    MGPSubData,                 kCtxObject, kHasBlob|kOptional)         \
     X(ResourceSubDataComplete,  MGPSubDataComplete,         kCtxObject, kNone)                      \
     /* NO kHasBlob AND NO MGPBlobRef, BY RULING (P5 R-13.2; CONTRACT-P5.md table 1 row 21). */  \
