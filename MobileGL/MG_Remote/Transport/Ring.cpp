@@ -8,6 +8,8 @@
 
 #include "Ring.h"
 
+#include "SessionRings.h"
+
 #include <MG_Util/Debug/Log.h>
 
 #include <cstring>
@@ -301,6 +303,259 @@ namespace MobileGL::MG_Remote::Transport {
         if (clamped > current) {
             RetiredTail(*m_control, m_cursors).store(clamped, std::memory_order_release);
         }
+    }
+
+    // =======================================================================
+    // P5: the five watermarks, the two session endpoints, and the ABI mixer.
+    // =======================================================================
+
+    std::uint64_t LargestPowerOfTwoAtMost(std::uint64_t bytes) {
+        if (bytes == 0) {
+            return 0;
+        }
+        std::uint64_t value = 1;
+        while (value <= (bytes >> 1)) {
+            value <<= 1;
+        }
+        return value;
+    }
+
+    std::uint64_t RingCapacityForSegment(std::uint64_t segmentBytes) {
+        if (segmentBytes <= sizeof(RingControl)) {
+            return 0;
+        }
+        const std::uint64_t usable = LargestPowerOfTwoAtMost(segmentBytes - sizeof(RingControl));
+        return usable < kMinRingCapacity ? 0 : usable;
+    }
+
+    namespace Watermark {
+
+        namespace {
+            // A watermark may be published LATE but never EARLY, and it may never
+            // move BACKWARDS. Backwards is the half that is mechanically
+            // detectable from inside, so it is refused loudly here; "early" can
+            // only be caught at the call site, which is why every advance below
+            // has exactly one caller and a named unit case.
+            void AdvanceMonotonic(std::atomic<std::uint64_t>& watermark, std::uint64_t to,
+                                  const char* name) {
+                const std::uint64_t current = watermark.load(std::memory_order_relaxed);
+                if (to < current) {
+                    MGLOG_E("MG_Remote watermark: refusing to move %s backwards, %llu -> %llu; a "
+                            "waiter that already resumed on the higher value cannot be un-resumed",
+                            name, static_cast<unsigned long long>(current),
+                            static_cast<unsigned long long>(to));
+                    return;
+                }
+                if (to == current) {
+                    return;
+                }
+                // Release: everything the advance is a statement ABOUT - the
+                // record that was applied, the staged bytes that were drained,
+                // the reply that was posted - must be visible to the acquiring
+                // waiter before the number that says it happened.
+                watermark.store(to, std::memory_order_release);
+            }
+        } // namespace
+
+        void AdvanceSubmitted(RingControl& control, std::uint64_t seq) {
+            AdvanceMonotonic(control.submittedSeq, seq, "submittedSeq");
+        }
+
+        void AdvanceApplied(RingControl& control, std::uint64_t seq) {
+            AdvanceMonotonic(control.appliedSeq, seq, "appliedSeq");
+        }
+
+        void AdvanceRetired(RingControl& control, std::uint64_t seq) {
+            // retiredSeq may never overtake appliedSeq: the staging allocator
+            // reclaims behind it, so a retire ahead of the apply hands live bytes
+            // back to the producer. Clamped rather than refused, because a
+            // caller that retires "everything applied" is the normal shape.
+            const std::uint64_t applied = control.appliedSeq.load(std::memory_order_acquire);
+            AdvanceMonotonic(control.retiredSeq, seq > applied ? applied : seq, "retiredSeq");
+        }
+
+        void AdvanceCompletedFrame(RingControl& control, std::uint64_t serial) {
+            AdvanceMonotonic(control.completedFrameSerial, serial, "completedFrameSerial");
+        }
+
+        void AdvancePresentAck(RingControl& control, std::uint64_t serial) {
+            AdvanceMonotonic(control.presentAckSerial, serial, "presentAckSerial");
+        }
+
+    } // namespace Watermark
+
+    // -----------------------------------------------------------------------
+    // SessionProducer
+    // -----------------------------------------------------------------------
+
+    void SessionProducer::Attach(RingControl* control, RingProducer* cmd, RingProducer* stage,
+                                 Doorbell* peerBell, Doorbell* selfBell, std::uint32_t spinUs) {
+        m_control = control;
+        m_cmd = cmd;
+        m_stage = stage;
+        m_peerBell = peerBell;
+        m_selfBell = selfBell;
+        m_spinUs = spinUs;
+    }
+
+    void SessionProducer::Detach() {
+        m_control = nullptr;
+        m_cmd = nullptr;
+        m_stage = nullptr;
+        m_peerBell = nullptr;
+        m_selfBell = nullptr;
+    }
+
+    void SessionProducer::PublishAndNotify(std::uint64_t submittedSeq) {
+        if (!Valid()) {
+            return;
+        }
+        // 1. the records themselves.
+        m_cmd->Publish();
+        if (m_stage != nullptr) {
+            m_stage->Publish();
+        }
+        // 2. the diagnostic watermark, after the bytes it describes.
+        Watermark::AdvanceSubmitted(*m_control, submittedSeq);
+        // 3. and only now the bell. Publish-then-ring, never ring-then-publish.
+        if (m_peerBell != nullptr) {
+            NotifyIfParked(*m_peerBell, m_control->consumerParked);
+        }
+    }
+
+    template <class Ready>
+    SessionWait SessionProducer::Park(Ready&& ready, std::uint32_t timeoutMs) {
+        if (!Valid() || m_selfBell == nullptr) {
+            return SessionWait::TimedOut;
+        }
+        if (m_selfBell->Wait(m_control->producerParked, ready, m_spinUs, timeoutMs)) {
+            return SessionWait::Reached;
+        }
+        // Wait == false && Dead() is "the session was shut down", and it is the
+        // only thing that returns from a kWaitForever park. Anything else is the
+        // deadline.
+        return m_selfBell->Dead() ? SessionWait::ShutDown : SessionWait::TimedOut;
+    }
+
+    SessionWait SessionProducer::WaitForApplied(std::uint64_t seq, std::uint32_t timeoutMs) {
+        if (!Valid()) {
+            return SessionWait::TimedOut;
+        }
+        RingControl* control = m_control;
+        return Park([control, seq] { return Watermark::Reached(control->appliedSeq, seq); },
+                    timeoutMs);
+    }
+
+    SessionWait SessionProducer::WaitForPresentAck(std::uint64_t serial, std::uint32_t timeoutMs) {
+        if (!Valid()) {
+            return SessionWait::TimedOut;
+        }
+        RingControl* control = m_control;
+        return Park([control, serial] { return Watermark::Reached(control->presentAckSerial, serial); },
+                    timeoutMs);
+    }
+
+    SessionWait SessionProducer::WaitForCmdSpace(std::uint64_t bytes, std::uint32_t timeoutMs) {
+        if (!Valid()) {
+            return SessionWait::TimedOut;
+        }
+        RingProducer* cmd = m_cmd;
+        return Park([cmd, bytes] { return cmd->FreeBytes() >= bytes; }, timeoutMs);
+    }
+
+    SessionWait SessionProducer::WaitForStageSpace(std::uint64_t bytes, std::uint32_t timeoutMs) {
+        if (!Valid() || m_stage == nullptr) {
+            return SessionWait::TimedOut;
+        }
+        RingProducer* stage = m_stage;
+        return Park([stage, bytes] { return stage->FreeBytes() >= bytes; }, timeoutMs);
+    }
+
+    // -----------------------------------------------------------------------
+    // SessionConsumer
+    // -----------------------------------------------------------------------
+
+    void SessionConsumer::Attach(RingControl* control, RingConsumer* cmd, Doorbell* peerBell,
+                                 Doorbell* selfBell, std::uint32_t spinUs) {
+        m_control = control;
+        m_cmd = cmd;
+        m_peerBell = peerBell;
+        m_selfBell = selfBell;
+        m_spinUs = spinUs;
+        m_appliedSeq = control == nullptr ? 0 : control->appliedSeq.load(std::memory_order_acquire);
+    }
+
+    void SessionConsumer::Detach() {
+        m_control = nullptr;
+        m_cmd = nullptr;
+        m_peerBell = nullptr;
+        m_selfBell = nullptr;
+    }
+
+    SessionWait SessionConsumer::WaitForWork(std::uint32_t timeoutMs) {
+        if (!Valid() || m_selfBell == nullptr) {
+            return SessionWait::TimedOut;
+        }
+        RingControl* control = m_control;
+        RingConsumer* cmd = m_cmd;
+        const bool woke = m_selfBell->Wait(
+            control->consumerParked,
+            [control, cmd] {
+                return control->cmdHead.load(std::memory_order_acquire) != cmd->LocalTail();
+            },
+            m_spinUs, timeoutMs);
+        if (woke) {
+            return SessionWait::Reached;
+        }
+        return m_selfBell->Dead() ? SessionWait::ShutDown : SessionWait::TimedOut;
+    }
+
+    void SessionConsumer::RetireThrough(std::uint64_t seq) {
+        if (!Valid()) {
+            return;
+        }
+        Watermark::AdvanceRetired(*m_control, seq);
+        m_cmd->PublishRetired();
+        NotifyClient();
+    }
+
+    void SessionConsumer::NotifyClient() {
+        if (m_control != nullptr && m_peerBell != nullptr) {
+            NotifyIfParked(*m_peerBell, m_control->producerParked);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // The ABI fingerprint's mixer
+    // -----------------------------------------------------------------------
+
+    std::uint64_t MixAbiFingerprint(std::uint64_t dynamicParamsSize, std::uint64_t capsSize,
+                                    std::uint64_t functionTableSize, std::uint32_t abiVersion,
+                                    const char* buildStamp) {
+        // FNV-1a over the four numbers and the stamp. Not a hash with any
+        // security property and not meant to be one: it has to (a) change when
+        // ANY input changes and (b) be computable identically in two processes
+        // built from one source tree, which rules out anything seeded at runtime.
+        std::uint64_t hash = 1469598103934665603ull;
+        const auto mix = [&hash](std::uint64_t value) {
+            for (int byte = 0; byte < 8; ++byte) {
+                hash ^= static_cast<std::uint64_t>((value >> (byte * 8)) & 0xFF);
+                hash *= 1099511628211ull;
+            }
+        };
+        mix(dynamicParamsSize);
+        mix(capsSize);
+        mix(functionTableSize);
+        mix(abiVersion);
+        if (buildStamp != nullptr) {
+            for (const char* c = buildStamp; *c != '\0'; ++c) {
+                hash ^= static_cast<std::uint64_t>(static_cast<unsigned char>(*c));
+                hash *= 1099511628211ull;
+            }
+        }
+        // 0 is reserved for "not stated": a peer that forgot to fill the field
+        // must not accidentally agree with one that did.
+        return hash == 0 ? 1ull : hash;
     }
 
 } // namespace MobileGL::MG_Remote::Transport
