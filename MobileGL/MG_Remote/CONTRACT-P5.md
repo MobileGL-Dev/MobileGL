@@ -72,6 +72,8 @@ P2/P3a; everything else that is not a plain scalar is here.
 | **`MGPFramebufferState::DrawBuffers[8]`** | The `-1` / default-token narrowing at `FramebufferEmit.h:146-163`, verbatim. A draw-buffer entry naming a colour attachment outside the record's own array is `Fatal{ProtocolCorruption}` (the applier already says so). | `-1` = "no attachment" | decoder, applier | Same status. |
 | **`MGPReplySlot::Id`** | **= the record's sequence number** (R-3). No new id space, no allocator. The server writes the answer into `SEG_REPLY[seq % slots]` and **stamps `seq` back into the slot header** so a wrong-slot read is detectable rather than plausible. | seq is 1-based; `0` = "no record / not encoded" | client barrier wait | `ARCHITECTURE.md:124`: the wire carries no per-record seq field, so seq *is* the ordinal. `MGPReplySlot` exists (`MGPipeTypes.h:78-81`) and **no payload of the ten `kReplySlot` calls contains one** — which is exactly why the id must be derived rather than carried. P9 generalises this to "seq is the id's initial value", which extends the rule rather than overturning it. |
 | **reply slot header** | `{Uint64 Seq; Int32 Status; Uint32 Size;}` — 16 bytes, then the payload. `Status`: **0 = OK, 1 = DECLINED, 2 = ERROR**. | — | client | **`DECLINED` is a real answer, not a failure.** It is how `MapPersistent` says `nullptr` (R-6) and how the four `Bool` acceptance entry points say `false` (R-5). A client that treats DECLINED as an error re-creates ID-39's 66 lost uploads from the other side. |
+| **which rows own a reply slot** | **14, and `kMGPipeCallFlags` is the single source of truth** (R-16). The ten always-declared answers plus the **four acceptance rows** — `ResourceCreate`, `ResourceRespecify`, `ResourceSubData`, `SetTextureParams`. | a row without `kReplySlot` has no slot and must never be posted to | s1 sizes the pool from it; w1 posts against it | The four are exactly the `MGPipeApply*` entry points returning `Bool` (`PipeApply.h:820`, `:868`, `:897`, `:1023`); `MapPersistent`'s `void*` is the fifth answer and was already declared. They carried no flag because in monolith the answer is a direct call's return value and there was nothing to declare — but this table already said DECLINED is how they answer, so the catalogue and the contract could not both stand. Pinned by `PipeCatalogueTest`: 14 by count **and** the four by name, so a row cannot lose the flag while another gains one. |
+| **`kReplySlot` vs "never blocks"** | Both hold, and the barrier is why. | — | reviewers | `MGPipe.h:49` says a reply-slot call "never blocks", and R-5 says the four acceptance answers are read synchronously. That reads as a contradiction and is not one: **under the verb barrier the client is already waiting for `appliedSeq >= mySeq` at this verb boundary**, and the reply is read inside that wait. A `kReplySlot` row therefore adds **no** block — it adds a read to a wait that was already happening (R-3). The flag keeps its literal meaning: the CALL does not block; the barrier does, and the barrier is a retiring object. When it retires per family, these four become genuinely asynchronous and the acceptance answer becomes a real latency question — which is P9's account, not P5's. |
 | **`kRecPad` and seq** | A wrap filler **does not advance seq**, on either side. | — | both | R-9. `RingConsumer::Pop` already skips fillers; the rule is stated because the *counter* is the caller's, not `Pop`'s. A side that counts pads drifts by one per wrap, for ever — and since seq is the reply-slot id, a drifted seq reads another call's answer instead of failing. Pinned by `RingTest.AWrapFillerDoesNotAdvanceTheRecordSequence`. |
 | **per-opcode flags** | `kMGPipeCallFlags[MGPWireOp::kOpCount]` in `generated/PipeWire.inc`, read only through `MGPipeCallFlagsFor(op)`. Index 0 (`kInvalid`) is `kNone`. | `kNone` = no flags | every package | R-13.4. Before this table existed nothing generated exported the flags, so six packages were each about to hard-code `PipeCalls.def`'s fourth column — which is how `GetCaps` and `CreateSamplerState` came to own an `MGPBlobRef` with no `kHasBlob` on their line. `gen_pipe.py` now also refuses a flag token that is not an `MGPipeCallFlags` enumerator, with two negative controls in `--self-test`. |
 | **`kHasBlob`'s meaning** | **Exactly "the payload owns an `MGPBlobRef` member"** — nothing weaker. | — | decoder | `PipeApply.h:78-79` already says so. Three calls carry bytes with **no** `MGPBlobRef`; they are table 1 rows 19–21 and are deliberately unflagged, because a decoder that trusts `kHasBlob` has to find a member to read. |
@@ -560,6 +562,62 @@ reason. Three named cases; the rule generalises to all 41.
 read — class A's mechanism — whatever class the slot itself is in. That is exactly
 `ARCHITECTURE.md:114`'s "`CallMask` replaces 'is this table slot null' as the implicit capability
 probe", now with a concrete list of what has to move.
+
+---
+
+## §7b R-17 — `MGPWireRecHeader::Flags` is ring framing, never call flags
+
+**The wire record header and the ring record header are the same eight bytes**, and
+`MGPWireRecHeader::Flags` **is** `RingRecordHeader::flags`. The two enums that name those bits
+overlap and disagree:
+
+| bit | `MGPipeCallFlags` | `RingRecordFlags` | |
+|---|---|---|---|
+| 0 | `kNeedsAck` | `kRecNeedsAck` | agree |
+| 1 | `kHasBlob` | `kRecHasBlob` | agree |
+| 2 | `kVarTail` | `kRecPad` | **collide** |
+| 3 | `kHostSpan` | `kRecBorrowSlot` | **collide** |
+| 4 | `kReplySlot` | `kRecVarTail` | **collide** |
+| 5 | `kOptional` | — | no counterpart |
+
+**Stamping `MGPipeCallFlagsFor(op)` into that field is a silent, data-dependent corruption**, and
+the first two bits agreeing is exactly what makes it survive a debugger.
+
+**One of the three is already defended, and only one.** `RingProducer::Reserve` masks `kRecPad`
+out of whatever the caller passes (`Ring.cpp`: `flags & ~kRecPad`), so a stamped `kVarTail` does
+**not** delete the record for anyone who goes through `Reserve`. That defence is exactly one bit
+wide:
+
+- `kVarTail` → `kRecPad`: **masked by `Reserve`.** But the mask is not in the path of a producer
+  that writes the header *itself* — which is precisely what a codec with its own header struct
+  does, since these are the same eight bytes. Then `Pop` skips the record as a wrap filler and
+  it vanishes with no error raised anywhere.
+- `kHostSpan` → `kRecBorrowSlot`: **undefended.** The consumer believes the record borrowed a
+  slot into the GPU timeline, so it retires on `completedFrameSerial` instead of on apply.
+- `kReplySlot` → `kRecVarTail`: **undefended.** The record claims a variable tail it does not
+  have — and after R-16 this now fires on **fourteen** rows rather than ten.
+
+So the failure is not one dramatic disappearance; it is a lifetime lie and a phantom tail on
+every affected record, plus a disappearance only on the path that skips `Reserve`. The test
+below pins all three shapes, including the masking, so the defence cannot quietly go away either.
+
+**Ruling: the two spaces are disjoint by translation, not shared.** The encoder maps one to the
+other explicitly and nothing else writes the field. The call's flags are **not on the wire at
+all** and do not need to be — the opcode is, and `MGPipeCallFlagsFor(op)` recovers them exactly
+on either side.
+
+Enforcement, split by what each file can see:
+
+- the generator pins each `MGPipeCallFlags` bit **read out of `MGPipe.h`**, plus
+  `kMGPipeCallFlagsAllBits == 0x3F`, so a renumbering or a seventh flag is a build break;
+- `MG_Test/Wire/RingTest.cpp` holds the **cross-enum table** — the one place in the tree that
+  sees both, since MG_Pipe is below MG_Remote and may not include `Ring.h`. It asserts all six
+  correspondences and both totals, and then *demonstrates* the defect: a record framed with
+  `draw_vbo`'s call flags is popped as a wrap filler and vanishes, while the same record framed
+  with `kRecVarTail` round-trips.
+
+The generated comment on the field said "MGPipeCallFlags of the call, for asserts and tracing",
+which **invited** the defect. It now says what the field is for.
 
 ---
 
