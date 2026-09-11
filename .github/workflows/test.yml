@@ -1000,15 +1000,45 @@ jobs:
         run: |
           ulimit -c unlimited
           sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
-          ctest -N -L integration-gpu | grep -E '^ *Test *#[0-9]+:' | sed -E 's/^ *Test *#[0-9]+: //' | sort > /tmp/names-split.txt
-          count=$(wc -l < /tmp/names-split.txt)
+          count=$(ctest -N -L integration-gpu | grep -cE '^ *Test *#[0-9]+:')
           if [ "${count}" -lt 1 ]; then
             echo "::error::the split runtime registers ${count} integration-gpu entries"
             exit 1
           fi
           echo "integration-gpu entries in the split build: ${count}"
-          MOBILEGL_TRANSPORT=monolith ctest --output-on-failure -L integration-gpu --no-tests=error -j 4
-          MOBILEGL_TRANSPORT=inproc   ctest --output-on-failure -L integration-gpu --no-tests=error -j 4
+          MOBILEGL_TRANSPORT=monolith ctest --output-on-failure -L integration-gpu --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/arm-monolith.xml"
+          MOBILEGL_TRANSPORT=inproc   ctest --output-on-failure -L integration-gpu --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/arm-inproc.xml"
+          # NAME **AND STATUS**, and it is the comparison this step claimed to make and did not
+          # (review finding N-3): the first version wrote a names file and never read it, and
+          # `--output-on-failure` treats a SKIPPED test as not-a-failure - so the very failure
+          # ARCHITECTURE.md:521 is about, "an inproc arm that skipped forty entries the monolith arm
+          # ran", was invisible here and caught only by the local gate. `ctest -N` cannot see it
+          # either: this is one build directory, so the two arms have identical name lists by
+          # construction and the difference is entirely in what each entry DID.
+          python3 - "${RUNNER_TEMP}/arm-monolith.xml" "${RUNNER_TEMP}/arm-inproc.xml" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          def rows(path):
+              out = {}
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  status = 'passed'
+                  if case.find('failure') is not None or case.find('error') is not None:
+                      status = 'failed'
+                  elif case.find('skipped') is not None or case.get('status') in ('notrun', 'disabled'):
+                      status = 'skipped'
+                  out[case.get('name')] = status
+              return out
+          a, b = rows(sys.argv[1]), rows(sys.argv[2])
+          diff = sorted(set(a) ^ set(b)) + sorted(n for n in set(a) & set(b) if a[n] != b[n])
+          if diff:
+              for name in diff[:40]:
+                  print(f"::error::{name}: monolith={a.get(name, '<absent>')} inproc={b.get(name, '<absent>')}")
+              print(f"::error::the monolith and inproc arms of ctest -L integration-gpu differ on "
+                    f"{len(diff)} entries. ARCHITECTURE.md:521 requires them identical name for name "
+                    f"AND status; an entry that SKIPPED on one arm and ran on the other is the "
+                    f"failure this compares for, and it is not a failure to --output-on-failure.")
+              raise SystemExit(1)
+          print(f"the two arms agree on all {len(a)} entries, name and status")
+          PY
 
       # THE RUNTIME HALF OF "THIS IS REALLY A SPLIT BUILD". The build-level nm check in
       # build-linux-split proves the library CARRIES MG_Remote; this proves the transport
@@ -1025,8 +1055,11 @@ jobs:
             echo "::error::${log} does not exist: the DirectGLES.Split.PersistentMapArm. entry never ran, so nothing in this job establishes that MOBILEGL_TRANSPORT ever resolved to inproc in a live process"
             exit 1
           fi
-          if ! grep -q "MOBILEGL_TRANSPORT=inproc" "${log}"; then
-            echo "::error::${log} carries no transport-resolution line. ConfigLoader logs one at INFO when it selects InProcess, and that code exists only in a MOBILEGL_BUILD_DISAGGREGATED build - so this lane ran a monolith library while claiming to be the split lane."
+          # THE DISTINCTIVE PART OF THE INFO LINE, not the bare KEY=VALUE (review finding M-5):
+          # ConfigLoader logs `Config: Accepted env variable: MOBILEGL_TRANSPORT=inproc` for the
+          # env dump too, unconditionally and in a PULL build, and at DEBUG that line is live.
+          if ! grep -q "MOBILEGL_TRANSPORT=inproc - the MGPipe record stream" "${log}"; then
+            echo "::error::${log} carries no transport-resolution line. ConfigLoader::InitTransport logs it at INFO when it selects InProcess, and that code exists only in a MOBILEGL_BUILD_DISAGGREGATED build - so this lane ran a monolith library while claiming to be the split lane. (A bare MOBILEGL_TRANSPORT=inproc substring is NOT accepted: the env dump prints one in every build.)"
             exit 1
           fi
           echo "the split lane resolved MOBILEGL_TRANSPORT=inproc"
@@ -1051,12 +1084,24 @@ jobs:
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
         run: |
-          armed=0
-          if grep -qs "MGITEST_REMOTE_CLIENT_PRESENT" MobileGL/MG_IntegrationTest/*_tests.cmake; then
-            armed=1
-          fi
-          if [ "${armed}" -eq 0 ]; then
-            echo "::warning::the DirectGLES.Split. lanes are DISARMED on this tree - MG_Remote still carries package c0's signature stubs, so every Split entry skips and neither negative control can fire. This step becomes a gate automatically on the commit that lands the last of c1/s1/v1; it is not a green that asserted anything today."
+          # THE ARMED STATE IS DERIVED FROM BEHAVIOUR, not from a marker string in the generated
+          # ctest files. The first version read MGITEST_REMOTE_CLIENT_PRESENT out of
+          # *_tests.cmake, which was a restatement of the CMake source probe review finding M-1
+          # falsified; the arming condition is now a runtime fact inside each test process, so the
+          # only honest way to ask it from a shell is to look at what the entries DID.
+          ctest -L integration-split -j 4 --no-tests=error --output-junit "${RUNNER_TEMP}/isplit.xml" || true
+          armed=$(python3 - "${RUNNER_TEMP}/isplit.xml" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          ran = 0
+          for case in ET.parse(sys.argv[1]).getroot().iter('testcase'):
+              if case.find('skipped') is None and case.get('status') not in ('notrun', 'disabled'):
+                  ran += 1
+          print(ran)
+          PY
+          )
+          echo "split entries that actually ran: ${armed}"
+          if [ "${armed}" -lt 1 ]; then
+            echo "::warning::every DirectGLES.Split. entry SKIPPED, so neither negative control can fire. The arming condition is a runtime fact - MG_Config::Transport, ClientSession::Active() and ImplementedVerbCount(), read by Harness/SplitRuntimePeek - and it becomes true on the commit that lands the last of c1/s1/v1. This step becomes a gate then, with no edit; it is not a green that asserted anything today."
             exit 0
           fi
           run_control() {
@@ -1391,7 +1436,16 @@ jobs:
           # so retrace-split needs no fixtures of its own either. It is one case today - OpenRA,
           # which is what the phase gate names - and trace_cases.py refuses a `split` case that is
           # not in CI or does not run DirectGLES, so the subset cannot silently become empty.
-          echo "split-matrix=$(python3 tools/trace_replay/trace_cases.py --ci --format github-split-matrix)" >> "$GITHUB_OUTPUT"
+          SPLIT_MATRIX=$(python3 tools/trace_replay/trace_cases.py --ci --format github-split-matrix)
+          # AND IT MUST NOT BE EMPTY. An empty `include` is not an error to GitHub - it skips the
+          # whole retrace-split job with no red anywhere - so the one way this subset can vanish
+          # silently is guarded here. trace_cases.py now also rejects an unknown manifest key, which
+          # was the hole: `"splitt": true` loaded clean and emptied the subset (review N-4).
+          if [ "$(printf '%s' "${SPLIT_MATRIX}" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["include"]))')" -lt 1 ]; then
+            echo "::error::the split retrace subset is EMPTY. No case in trace_cases.json carries \"split\": true, so retrace-split would be skipped with no red. Exit gate E2 names OpenRA."
+            exit 1
+          fi
+          echo "split-matrix=${SPLIT_MATRIX}" >> "$GITHUB_OUTPUT"
 
   trace-fixtures:
     name: trace fixture (${{ matrix.case }})
@@ -1787,11 +1841,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     needs:
+      - build-linux
       - build-linux-split
       - build-retrace
       - trace-cases
       - trace-fixtures
-    if: ${{ always() && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    # build-linux is needed for the negative control ONLY: its pull library is what the control
+    # swaps in to prove the transport-resolution assertion is load-bearing.
+    if: ${{ always() && needs.build-linux.result == 'success' && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -1839,6 +1896,18 @@ jobs:
           name: mobilegl-trace-replay
           path: .
 
+      # The PULL runtime, for the negative control at the end of this job and for nothing else.
+      - name: Download Linux pull runtime (negative control)
+        uses: actions/download-artifact@v8
+        with:
+          name: mobilegl-linux-runtime
+          path: pull-runtime
+
+      - name: Unpack the pull runtime (negative control)
+        run: |
+          tar -xzf pull-runtime/mobilegl-linux-runtime.tgz -C pull-runtime
+          test -f pull-runtime/build-linux/libMobileGL.so
+
       - name: Unpack the SPLIT runtime as the library under test
         # build-retrace's CTestTestfile.cmake has the absolute path
         # <workspace>/build-linux/libMobileGL.so frozen into every case, so the swap happens here
@@ -1869,6 +1938,58 @@ jobs:
           export MOBILEGL_TRANSPORT=inproc
           ctest -V --no-tests=error --timeout 10800 \
             -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'
+
+      # THE RETRACE LANE'S OWN ALWAYS-ON NEGATIVE CONTROL, and its absence was review finding M-6:
+      # this job was a clone of retrace-verify with the one step removed that makes the lane mean
+      # anything. retrace-verify carries "a corrupted snapshot field must red this retrace" so that
+      # "79 traces, zero divergences" is not a statement about a comparator nobody watched; the
+      # same sentence applies here word for word.
+      #
+      # The control swaps the PULL library into the frozen path and requires the SAME replay to
+      # fail. It is the sharpest one available, because OpenRA scores ssim 1.000000 either way -
+      # measured - so this step fails if and only if run_trace_case.cmake's transport-resolution
+      # assertion has stopped working, which is the single thing standing between this job and a
+      # green that ran monolith end to end.
+      #
+      # NOT the control BRIEF 7 E2 names ("patch the Clear emitter to drop one emission; SSIM must
+      # fall below threshold"). That one needs an emitter, i.e. package c1, and it is carried as an
+      # explicit debt in t1-v1.md rather than silently substituted - which is what the first
+      # version of this package did.
+      #
+      # The rerun replays into the same case directory, so the good run's images are put aside and
+      # restored whichever way the control goes; "Upload actual image" below runs `if: always()`
+      # and would otherwise ship the deliberately-wrong run's output under the good run's name.
+      - name: Negative control - the PULL library must red this split retrace
+        working-directory: build-retrace/tools/trace_replay
+        run: |
+          set +e
+          GOOD_OUTPUT="${RUNNER_TEMP}/split-verified-output"
+          rm -rf "${GOOD_OUTPUT}"
+          if [ -d "${{ matrix.case }}" ]; then cp -a "${{ matrix.case }}" "${GOOD_OUTPUT}"; fi
+          # The pull library, unpacked from build-linux's artifact, over the frozen path every
+          # case has baked in. It defines no MG_Remote symbol, so ConfigLoader has no transport
+          # parser and MOBILEGL_TRANSPORT=inproc is accepted and ignored - the exact shape of "the
+          # split lane ran monolith".
+          cp "${GITHUB_WORKSPACE}/pull-runtime/build-linux/libMobileGL.so" \
+             "${GITHUB_WORKSPACE}/build-linux/libMobileGL.so"
+          if nm --defined-only "${GITHUB_WORKSPACE}/build-linux/libMobileGL.so" | grep -q -i MG_Remote; then
+            echo "::error::the control's own library defines MG_Remote symbols, so it is not a pull build and this control would prove nothing"
+            exit 1
+          fi
+          export MOBILEGL_TRANSPORT=inproc
+          ctest -V --no-tests=error --timeout 10800 \
+            -R "^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$"
+          control_rc=$?
+          set -e
+          if [ -d "${GOOD_OUTPUT}" ]; then
+            rm -rf "${{ matrix.case }}"; mv "${GOOD_OUTPUT}" "${{ matrix.case }}"
+            echo "restored the verified run's output over the control's"
+          fi
+          if [ "${control_rc}" -eq 0 ]; then
+            echo "::error::a PULL library passed the split retrace. OpenRA scores ssim 1.000000 under a monolith library too (measured), so the picture is not and cannot be this lane's gate - run_trace_case.cmake's transport-resolution assertion is, and it has stopped working. Every green in this job is then a monolith run under a name that says split."
+            exit 1
+          fi
+          echo "the pull library turned the split retrace red, as it must (ctest exit ${control_rc})"
 
       # The refusal census, recorded rather than gated. run_trace_case.cmake already REDS the case
       # on any Fatal{, so reaching here means the count is zero - but the number and the distinct

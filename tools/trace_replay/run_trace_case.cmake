@@ -252,17 +252,41 @@ if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "
                 "retrace with no library log cannot be counted as a split retrace.")
     else()
         file(READ "${mobilegl_log}" split_log)
-        string(FIND "${split_log}" "MOBILEGL_TRANSPORT=inproc" split_armed_at)
+        # THE DISTINCTIVE PART OF ConfigLoader's INFO LINE, not the bare KEY=VALUE - review finding
+        # M-5. ConfigLoader.cpp:71 logs `Config: Accepted env variable: %s=%s` for EVERY MOBILEGL_*
+        # variable, unconditionally, in every build including the pull one. That line is MGLOG_D,
+        # so at the INFO level CI and the gate use it is compiled out - but at
+        # MOBILEGL_LOG_ACTIVE_LEVEL=..._DEBUG it reads `Config: Accepted env variable:
+        # MOBILEGL_TRANSPORT=inproc` and satisfied the old substring search. Observed GREEN on a
+        # crafted pull-build log. The person most likely to hit that is the one who rebuilds at
+        # DEBUG to debug a split failure. The sentence below exists only in
+        # ConfigLoader::InitTransport's InProcess arm, which exists only under
+        # MOBILEGL_BUILD_DISAGGREGATED.
+        set(split_expected_marker "MOBILEGL_TRANSPORT=inproc - the MGPipe record stream")
+        string(FIND "${split_log}" "${split_expected_marker}" split_armed_at)
         if(split_armed_at EQUAL -1)
+            # Say which transport was actually asked for. ConfigLoader REFUSES spawn / unix: /
+            # pipe: BY NAME and stays on monolith (they are P6's), so a run that set one of those
+            # has a different diagnosis from one that set inproc against a monolith library, and
+            # the old message named `inproc` either way.
+            set(split_refusal "")
+            if(NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "inproc")
+                set(split_refusal
+                        " NOTE: this run asked for '$ENV{MOBILEGL_TRANSPORT}', which P5 does not "
+                        "implement - ConfigLoader recognises spawn / unix: / pipe: and REFUSES them by "
+                        "name, staying on monolith. Only 'inproc' can resolve in P5.")
+            endif()
             message(FATAL_ERROR
                     "MOBILEGL_TRANSPORT=$ENV{MOBILEGL_TRANSPORT} is set for ${split_case} and the library "
-                    "never reported resolving it. ConfigLoader::InitTransport logs one line at INFO when "
-                    "it selects InProcess, and that line exists only in a build configured with "
+                    "never reported resolving it: ${mobilegl_log} carries no "
+                    "\"${split_expected_marker}\". ConfigLoader::InitTransport logs that line at INFO "
+                    "when it selects InProcess, and it exists only in a build configured with "
                     "-DMOBILEGL_BUILD_DISAGGREGATED=ON - in a build without it the whole parser is "
                     "compiled out and the variable is accepted and ignored, which is exactly the 'the "
                     "split lane ran monolith and went green' failure. Check that the SPLIT runtime "
                     "artifact is the one at ${MOBILEGL_LIBRARY}, and that MOBILEGL_LOG_ACTIVE_LEVEL "
-                    "admits INFO.")
+                    "admits INFO (at WARN or above the line is compiled out and this reds for no "
+                    "defect).${split_refusal}")
         endif()
         # The refusal census. Recorded on every split run, pass or fail.
         file(STRINGS "${mobilegl_log}" split_fatals REGEX "Fatal\\{")

@@ -8,11 +8,48 @@ from pathlib import Path
 TRACE_CASES_JSON = Path(__file__).with_name("trace_cases.json")
 CI_BACKENDS = ("DirectGLES", "DirectVulkan")
 
+# Every key a case or the defaults block may carry. An UNKNOWN key is a hard error rather than a
+# silent no-op, which is review finding N-4: `"split": true` mistyped as `"splitt": true` loaded
+# clean, the split subset became [], the GitHub matrix became {"include":[]}, and `retrace-split`
+# was skipped with no red anywhere. Every other way of getting `split` wrong already raised
+# (`"ci": false`, a backend list without DirectGLES, a non-bool value) - the typo was the one hole,
+# and it is the shape that makes a whole CI job quietly stop existing.
+#
+# Adding a key means adding it here, deliberately, in the same commit. That is the point.
+KNOWN_CASE_KEYS = frozenset({
+    "name",
+    "trace_archive",
+    "trace_file",
+    "golden",
+    "alternate_golden",
+    "target_call",
+    "width",
+    "height",
+    "ssim_threshold",
+    "crop_x",
+    "crop_y",
+    "crop_width",
+    "crop_height",
+    "coherent_as_flush",
+    "timeout_seconds",
+    "ci",
+    "ci_backends",
+    "verify",
+    "split",
+    "avoid_angle_llvmpipe_explicit_lod_bias",
+})
+
 
 def load_trace_case_manifest(path=TRACE_CASES_JSON):
     with Path(path).open("r", encoding="utf-8") as file:
         manifest = json.load(file)
     defaults = manifest.get("defaults", {})
+    unknown_defaults = sorted(set(defaults) - KNOWN_CASE_KEYS)
+    if unknown_defaults:
+        raise ValueError(
+            f"unknown key(s) in the defaults block: {', '.join(unknown_defaults)}. "
+            f"Known keys are {', '.join(sorted(KNOWN_CASE_KEYS))}"
+        )
     cases = []
     seen = set()
     for case in manifest.get("cases", []):
@@ -20,6 +57,13 @@ def load_trace_case_manifest(path=TRACE_CASES_JSON):
         name = merged.get("name")
         if not name:
             raise ValueError("trace case is missing name")
+        unknown = sorted(set(case) - KNOWN_CASE_KEYS)
+        if unknown:
+            raise ValueError(
+                f"unknown key(s) for {name}: {', '.join(unknown)}. A mistyped flag loads clean and "
+                f"turns its whole CI subset into an empty matrix, which GitHub skips with no red. "
+                f"Known keys are {', '.join(sorted(KNOWN_CASE_KEYS))}"
+            )
         if name in seen:
             raise ValueError(f"duplicate trace case: {name}")
         seen.add(name)
