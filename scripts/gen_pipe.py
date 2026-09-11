@@ -487,13 +487,34 @@ def check_call_payloads_have_field_lists(calls, payloads):
                  "would be blind to them: %s" % ", ".join(missing))
 
 
-# The MGPipeCallFlags enumerators, MGPipe.h:39-54. Kept here rather than parsed out of the
-# header because this list is what the generated kMGPipeCallFlags[] table spells into C++:
-# a flag token in PipeCalls.def that is not one of these would generate an expression that
-# does not compile, and a build break several minutes later is a worse diagnosis than this
-# one line. kNone is listed but is NOT a flag - it is the empty set, and it may not be
-# combined with anything.
-KNOWN_CALL_FLAGS = ("kNeedsAck", "kHasBlob", "kVarTail", "kHostSpan", "kReplySlot", "kOptional")
+FLAG_ENUM_RE = re.compile(r"enum\s+MGPipeCallFlags\s*:\s*Uint32\s*\{(.*?)\}\s*;", re.S)
+FLAG_MEMBER_RE = re.compile(r"^\s*(k\w+)\s*=\s*1u\s*<<\s*(\d+)\s*,", re.M)
+
+
+def parse_call_flags():
+    """The MGPipeCallFlags enumerators and their bit positions, READ OUT OF MGPipe.h.
+
+    Parsed rather than hard-coded, and that is the point: this list is what the generated
+    kMGPipeCallFlags[] table spells into C++, and it is also what the emitted assertions pin
+    against MG_Remote's RingRecordFlags. A seventh flag added to the header has to reach both,
+    so it must reach this function - a copy here would go stale in exactly the case that
+    matters. kNone is deliberately absent: it is the empty set, not a flag."""
+    text = read(os.path.join(PIPE_DIR, "MGPipe.h"))
+    body = FLAG_ENUM_RE.search(text)
+    if not body:
+        sys.exit("MGPipe.h: enum MGPipeCallFlags : Uint32 is missing or has changed shape")
+    flags = [(name, int(bit)) for name, bit in FLAG_MEMBER_RE.findall(body.group(1))]
+    if not flags:
+        sys.exit("MGPipe.h: enum MGPipeCallFlags declares no 1u << N members")
+    seen = {}
+    for name, bit in flags:
+        if bit in seen:
+            sys.exit("MGPipe.h: %s and %s are both bit %d" % (seen[bit], name, bit))
+        seen[bit] = name
+    return flags
+
+
+KNOWN_CALL_FLAGS = tuple(name for name, _ in parse_call_flags())
 
 
 def check_call_flags_are_known(calls):
@@ -651,7 +672,33 @@ def gen_wire(calls, residual_fields=None):
 
 struct MGPWireRecHeader {
     Uint16 Op;    // MGPWireOp
-    Uint16 Flags; // MGPipeCallFlags of the call, for asserts and tracing
+    // RING FRAMING FLAGS - MG_Remote::Transport::RingRecordFlags - NOT MGPipeCallFlags.
+    //
+    // This field IS RingRecordHeader::flags (Ring.h): the two structs are the same eight bytes
+    // and the ring writes this one. The two flag spaces OVERLAP AND DISAGREE, so stamping
+    // MGPipeCallFlagsFor(op) in here is a silent, data-dependent corruption:
+    //
+    //     bit 0  kNeedsAck  == kRecNeedsAck     agree
+    //     bit 1  kHasBlob   == kRecHasBlob      agree
+    //     bit 2  kVarTail   vs kRecPad          DISAGREE
+    //     bit 3  kHostSpan  vs kRecBorrowSlot   DISAGREE
+    //     bit 4  kReplySlot vs kRecVarTail      DISAGREE
+    //     bit 5  kOptional  vs (nothing)        no ring counterpart
+    //
+    // The first two agreeing is exactly what makes this dangerous: a naive stamp looks right
+    // in a debugger. It is not. RingProducer::Reserve masks kRecPad out of a caller's flags,
+    // so bit 2 is defended for anyone who goes through it - and ONLY bit 2, and only on that
+    // path. A producer that writes this header itself (these are the same eight bytes, so a
+    // codec with its own header struct does exactly that) loses even that: Pop treats kRecPad
+    // as a WRAP FILLER AND SKIPS THE RECORD. Bits 3 and 4 are undefended everywhere - a
+    // stamped kHostSpan tells the consumer this record borrowed a slot into the GPU timeline
+    // and must retire late, and a stamped kReplySlot claims a tail that is not there.
+    //
+    // THE TWO SPACES ARE DISJOINT BY TRANSLATION, NOT SHARED. The encoder maps one to the
+    // other explicitly (MG_Remote/Wire/PipeWireCodec.cpp) and nothing else may write this
+    // field. The CALL's flags are not on the wire at all and do not need to be: the opcode is,
+    // and MGPipeCallFlagsFor(op) recovers them exactly on either side.
+    Uint16 Flags;
     Uint32 Size;  // bytes of this record including the header and the variable tail
 };
 static_assert(sizeof(MGPWireRecHeader) == 8, "the wire header is 8 bytes");
@@ -718,6 +765,32 @@ static_assert((MGPipeCallFlagsFor(MGPWireOp::DrawVbo) &
                static_cast<Uint32>(kHostSpan | kVarTail)) == static_cast<Uint32>(kHostSpan | kVarTail),
               "draw_vbo is the conditional-tail plus host-span shape the codec is measured on");
 """)
+    # The bit layout, pinned from the header the generator just read. This exists because
+    # MGPWireRecHeader::Flags is RingRecordHeader::flags and three of these bits mean something
+    # ELSE over there (kVarTail/kRecPad, kHostSpan/kRecBorrowSlot, kReplySlot/kRecVarTail). The
+    # cross-enum table cannot live here - MG_Pipe is below MG_Remote and may not include
+    # Ring.h - so it lives in MG_Test/Wire/RingTest.cpp, which sees both. What CAN be stated
+    # here is the half this side owns: these are the flags, at these bits, and this is all of
+    # them. Renumber one and the translation on the other side is wrong; both ends go red.
+    flag_list = parse_call_flags()
+    out.append("")
+    out.append("// The bit layout of MGPipeCallFlags, read out of MGPipe.h by the generator.")
+    out.append("// MG_Test/Wire/RingTest.cpp holds the other half: what each of these bits means")
+    out.append("// in MG_Remote::Transport::RingRecordFlags, which is NOT the same thing.")
+    for name, bit in flag_list:
+        out.append("static_assert(static_cast<Uint32>(%s) == (1u << %d)," % (name, bit))
+        out.append("              \"MGPipeCallFlags::%s moved bit; MG_Remote's translation is keyed on it\");"
+                   % name)
+    union = " | ".join(name for name, _ in flag_list)
+    total = 0
+    for _, bit in flag_list:
+        total |= 1 << bit
+    out.append("// ... and this is ALL of them. A seventh flag changes this number, which is the")
+    out.append("// build break that sends its author to the ring's flag space before it ships.")
+    out.append("inline constexpr Uint32 kMGPipeCallFlagsAllBits = static_cast<Uint32>(%s);" % union)
+    out.append("static_assert(kMGPipeCallFlagsAllBits == 0x%02Xu," % total)
+    out.append("              \"the MGPipeCallFlags bit set changed; see RingTest's cross-enum table\");")
+    out.append("")
     for call in calls:
         out.append("struct alignas(8) MGPWireRec_%s {" % call.Name)
         out.append("    MGPWireRecHeader Header;")

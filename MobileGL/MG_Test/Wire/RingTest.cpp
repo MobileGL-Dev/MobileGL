@@ -12,6 +12,10 @@
 
 #include <MG_Remote/Transport/Doorbell.h>
 #include <MG_Remote/Transport/Ring.h>
+// For MGPipeCallFlags. This file is the only place in the tree that sees BOTH flag
+// spaces: MG_Pipe is below MG_Remote and may not include Ring.h, so the cross-enum table
+// below cannot live in a generated .inc beside the call flags themselves.
+#include <MG_Pipe/MGPipe.h>
 
 #include <gtest/gtest.h>
 
@@ -667,5 +671,121 @@ TEST(RingTest, AWrapFillerDoesNotAdvanceTheRecordSequence) {
     }
     EXPECT_EQ(popped, written)
         << "the two sides' sequence spaces have drifted by the fillers between them";
+    EXPECT_TRUE(ring.Invariants());
+}
+
+// ---------------------------------------------------------------------------
+// The two flag spaces (P5, after w1's finding). MGPWireRecHeader::Flags IS
+// RingRecordHeader::flags - the two structs are the same eight bytes - and the
+// two enums that name those bits OVERLAP AND DISAGREE. Stamping
+// MGPipeCallFlagsFor(op) into the header is therefore a silent, data-dependent
+// corruption, and the first two bits agreeing is what makes it look right in a
+// debugger.
+//
+// The table below is exhaustive over both enums, and deliberately spells the
+// agreements as well as the collisions: "these two mean the same thing" is a
+// fact the encoder's translation relies on, so it has to be checked too.
+// ---------------------------------------------------------------------------
+
+namespace {
+    constexpr std::uint32_t Call(MobileGL::MG_Pipe::MGPipeCallFlags f) {
+        return static_cast<std::uint32_t>(f);
+    }
+    constexpr std::uint32_t Rec(RingRecordFlags f) { return static_cast<std::uint32_t>(f); }
+} // namespace
+
+TEST(RingTest, TheTwoFlagSpacesAreDisjointByTranslation) {
+    using namespace MobileGL::MG_Pipe;
+
+    // The two bits that agree. An encoder may pass these through, and w1's does.
+    static_assert(Call(kNeedsAck) == Rec(kRecNeedsAck), "bit 0 stopped agreeing");
+    static_assert(Call(kHasBlob) == Rec(kRecHasBlob), "bit 1 stopped agreeing");
+
+    // The three that collide. Each of these is a live defect if it is ever passed through,
+    // and the middle one is the worst: RingConsumer::Pop treats kRecPad as a wrap filler and
+    // SKIPS the record, so a stamped kVarTail deletes every variable-tail call from the
+    // stream with no error raised anywhere.
+    static_assert(Call(kVarTail) == Rec(kRecPad), "the kVarTail/kRecPad collision moved");
+    static_assert(Call(kHostSpan) == Rec(kRecBorrowSlot), "the kHostSpan/kRecBorrowSlot collision moved");
+    static_assert(Call(kReplySlot) == Rec(kRecVarTail), "the kReplySlot/kRecVarTail collision moved");
+
+    // kOptional has no ring counterpart at all: bit 5 is unused over there today. If a sixth
+    // ring flag is ever added it lands on this bit, so this is where that is noticed.
+    static_assert(Call(kOptional) == (1u << 5), "kOptional moved");
+
+    // Exhaustiveness, from both ends. The generator pins kMGPipeCallFlagsAllBits from
+    // MGPipe.h; this pins the ring's own set against it, so ADDING a flag to either enum is a
+    // build break here rather than a wrong decode in the field.
+    static_assert(kMGPipeCallFlagsAllBits == 0x3Fu, "MGPipeCallFlags grew or shrank");
+    constexpr std::uint32_t kAllRingFlags =
+        Rec(kRecNeedsAck) | Rec(kRecHasBlob) | Rec(kRecPad) | Rec(kRecBorrowSlot) | Rec(kRecVarTail);
+    static_assert(kAllRingFlags == 0x1Fu, "RingRecordFlags grew or shrank");
+
+    // ---- the runtime half, and it is NOT the story the collision table alone suggests ----
+    //
+    // RingProducer::Reserve MASKS kRecPad OUT of whatever the caller passes
+    // (Ring.cpp: `flags & ~kRecPad`). So the worst of the three collisions - a real record
+    // framed as a wrap filler and skipped by Pop - is ALREADY DEFENDED for anyone who goes
+    // through Reserve. That defence is worth knowing about and worth pinning, because it is
+    // also exactly one bit wide: the other two collisions pass straight through.
+    RingFixture ring(1024);
+    const std::uint32_t drawVboCallFlags = MGPipeCallFlagsFor(MGPWireOp::DrawVbo);
+    ASSERT_NE(drawVboCallFlags & Call(kVarTail), 0u) << "draw_vbo stopped being a var-tail call";
+    ASSERT_NE(drawVboCallFlags & Call(kHostSpan), 0u) << "draw_vbo stopped being a host-span call";
+
+    void* payload = ring.Producer().Reserve(
+        static_cast<std::uint16_t>(MGPWireOp::DrawVbo),
+        static_cast<std::uint16_t>(drawVboCallFlags), // the mistake, made on purpose
+        16);
+    ASSERT_NE(payload, nullptr);
+    std::memset(payload, 0xAB, 16);
+    ring.Producer().Publish();
+
+    RingRecordView view{};
+    ASSERT_TRUE(ring.Consumer().Pop(view)) << "Reserve stopped masking kRecPad";
+    EXPECT_EQ(view.flags & static_cast<std::uint16_t>(kRecPad), 0u)
+        << "Reserve is what keeps a stamped kVarTail from deleting this record";
+    // ... and here is what IS wrong with it. kHostSpan landed on kRecBorrowSlot and kReplySlot
+    // on kRecVarTail, neither of which Reserve masks. The consumer now believes this record
+    // borrowed a slot into the GPU timeline - so it retires late, on completedFrameSerial
+    // instead of on apply - and that it carries a variable tail it does not have.
+    EXPECT_NE(view.flags & static_cast<std::uint16_t>(kRecBorrowSlot), 0u)
+        << "the kHostSpan/kRecBorrowSlot collision is what makes a stamped header lie about "
+           "this record's lifetime";
+    EXPECT_TRUE(ring.Invariants());
+
+    // The one that Reserve cannot defend: a producer that writes the header ITSELF rather than
+    // letting Reserve write it - which is precisely what a codec with its own header struct
+    // does, since MGPWireRecHeader and RingRecordHeader are the same eight bytes. Then the
+    // mask is not in the path, Pop sees kRecPad, and the record is skipped as a wrap filler
+    // with no error raised anywhere.
+    void* second = ring.Producer().Reserve(static_cast<std::uint16_t>(MGPWireOp::DrawVbo),
+                                           kRecNone, 16);
+    ASSERT_NE(second, nullptr);
+    std::memset(second, 0xAB, 16);
+    RingRecordHeader stamped{};
+    std::memcpy(&stamped, static_cast<std::uint8_t*>(second) - sizeof(RingRecordHeader),
+                sizeof(stamped));
+    stamped.flags = static_cast<std::uint16_t>(drawVboCallFlags); // no mask in this path
+    std::memcpy(static_cast<std::uint8_t*>(second) - sizeof(RingRecordHeader), &stamped,
+                sizeof(stamped));
+    ring.Producer().Publish();
+
+    EXPECT_FALSE(ring.Consumer().Pop(view))
+        << "a header stamped with the CALL flags outside Reserve should vanish into Pop's "
+           "wrap-filler skip - if it did not, the collision has moved and this case is no "
+           "longer the control it was";
+
+    // And the same record framed the way the encoder actually frames it - translated, with the
+    // ring's own var-tail bit - round-trips intact.
+    void* honest = ring.Producer().Reserve(static_cast<std::uint16_t>(MGPWireOp::DrawVbo),
+                                           kRecVarTail, 16);
+    ASSERT_NE(honest, nullptr);
+    std::memset(honest, 0xCD, 16);
+    ring.Producer().Publish();
+    ASSERT_TRUE(ring.Consumer().Pop(view));
+    EXPECT_EQ(view.kind, static_cast<std::uint16_t>(MGPWireOp::DrawVbo));
+    EXPECT_EQ(view.flags, static_cast<std::uint16_t>(kRecVarTail));
+    EXPECT_EQ(view.payloadSize, 16u);
     EXPECT_TRUE(ring.Invariants());
 }
