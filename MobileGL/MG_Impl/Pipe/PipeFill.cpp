@@ -702,6 +702,15 @@ namespace MobileGL::MG_Pipe {
                 // one was emitted, so this cannot be false - but a zeroed record (null
                 // handle, size 0) is not the answer if that pre-pass is ever relaxed.
                 if (!MGPipeBuildSubDataRecord(handle, at, length, record, /*verbatimShadow=*/true)) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P5 (b1): the live-host-writes bit rides the content record, because
+                // "someone may be writing these bytes without telling you" is a fact about the
+                // CONTENT and not about the storage. It is set from the object's PUBLISHED
+                // value rather than from a live IsMapped() read so that the record and the
+                // edge that announced it can never disagree. MGPipeBuildSubDataRecord does not
+                // take the object, which is why it is set here and not in the builder.
+                record.HasLiveHostWrites = buffer.HasLiveHostWritesForWire() ? 1 : 0;
+#endif
                 MGPipeApplyResourceSubData(record, base + at);
             });
         if (!encodable) {

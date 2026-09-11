@@ -26,6 +26,13 @@
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #endif
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+// R-6's tier gate. One spelling, asked at the one place the decline is decided. Outside the
+// MOBILEGL_PIPE_VERIFY block above on purpose: the tier is a property of the BUILD, not of the
+// comparator, and a split build without the comparator still declines every acquisition.
+#include <MG_Remote/Client/PersistentMapTracker.h>
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -835,12 +842,18 @@ namespace MobileGL::MG_Pipe {
             return true;
         }
 
-#if MOBILEGL_PIPE_VERIFY
-        // D-A4's pin. HasLiveHostWrites is ALWAYS false in this phase and is written by
-        // nobody: it exists so the phase that pushes persistent-mapped host writes can set it
-        // with no new record kind. A producer that landed under it would change what
-        // IsBufferDrawClean answers with no other visible edit, so a verify build refuses to
-        // let one arrive unannounced.
+#if MOBILEGL_PIPE_VERIFY && !MOBILEGL_BUILD_DISAGGREGATED
+        // D-A4's pin, AND P5 (b1) IS THE PHASE IT WAS WAITING FOR. It said "HasLiveHostWrites
+        // is always false in this phase and is written by nobody: it exists so the phase that
+        // pushes persistent-mapped host writes can set it with no new record kind", and a
+        // verify build refused to let such a producer arrive unannounced.
+        //
+        // The producer is announced: MGPSubData::HasLiveHostWrites, set by
+        // MGPipeEmitResourceSubData from BufferObject::HasLiveHostWritesForWire and read by
+        // ApplyBufferWrite below. So the pin is LIFTED FOR A SPLIT BUILD ONLY, and left
+        // standing everywhere else - in a monolith build nothing sets the bit and the wire is
+        // still the thing that would say so if something started to. That is the whole value
+        // of the pin and it survives the phase it was written for.
         void PinNoLiveHostWrites(const MGPipeResourceRecord& record, MGPipeHandle res, const char* call) {
             if (!record.HasLiveHostWrites) return;
             MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeLiveHostWrites")
@@ -905,6 +918,16 @@ namespace MobileGL::MG_Pipe {
                 return false;
             }
             PinNoLiveHostWrites(*stored, record.Res, call);
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5 (b1): THE PRODUCER. The record's own statement about the resource, applied
+            // before the serial moves so that a probe re-entered from inside the backend hook
+            // below already sees it. It is an assignment and not an OR: the bit is a STATE,
+            // and a content record emitted while nothing maps the buffer is exactly how the
+            // state goes back to false - which is why the falling edge pushes one block
+            // (BufferObject::NotePersistentMapStateChanged) rather than relying on the next
+            // ordinary write to arrive.
+            stored->HasLiveHostWrites = record.HasLiveHostWrites != 0;
+#endif
 
             // THE SERIAL MOVES BEFORE THE BACKEND IS TOLD, and that order is load-bearing:
             // the backend stamps its own synced serial from this record inside the hook, so a
@@ -1931,6 +1954,26 @@ namespace MobileGL::MG_Pipe {
         // call the pin must sit on: a producer landing under it here is the semantic change
         // the flag exists to announce, and the wire is what refuses to let it arrive unnamed.
         PinNoLiveHostWrites(*record, handle.Handle, "map_persistent");
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // R-6: A SPLIT BUILD RUNS AT TIER T2 AND DECLINES EVERY ACQUISITION, ALWAYS.
+        //
+        // The mint returns a raw void* that the client stores as the store's base
+        // (BufferObject.cpp:238 / :603 / :658). Across a process boundary that address is
+        // meaningless, and under `inproc` it is WORSE than meaningless: it happens to work,
+        // so a lane that kept adoption alive would be green for a reason spawn cannot
+        // reproduce, and persistent-map-push - an exit-gate counter - would be structurally
+        // zero (PipeStats.cpp says so in as many words). Forcing T2 here rather than at the
+        // three client call sites is what keeps `mpr` identical between the arms: the
+        // roundtrip is COUNTED above, unconditionally, because a decline costs the same round
+        // trip as a mint.
+        //
+        // The frontend already tolerates a decline in all three places, and has since P3a.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            MG_Remote::Client::AdoptTierIsEmulate()) {
+            return nullptr;
+        }
+#endif
 
         // NO SERIAL MOVES and NO DESCRIPTOR CHANGES: the donation re-mints the backend's own
         // driver object, which is a server-local event that the backend's own id generation
