@@ -414,4 +414,103 @@ namespace MobileGL::MG_Config {
         String PipeStatsFile;
     };
     extern FeaturesTable Features;
+
+    // ---------------------------------------------------------------------------------
+    // P5: the transport selector and the MOBILEGL_IPC_* family (ARCHITECTURE.md 16, 附 A)
+    // ---------------------------------------------------------------------------------
+    //
+    // MOBILEGL_TRANSPORT = monolith | inproc | spawn | unix:<path> | pipe:<name>.
+    //
+    // WHY `Transport` IS NOT A FeaturesTable MEMBER. ARCHITECTURE.md:580 requires that with
+    // MOBILEGL_BUILD_DISAGGREGATED=OFF it be a `constexpr Monolith`, so that the single hook
+    // in MG_Backend/Init.cpp compiles away entirely rather than becoming a branch nobody can
+    // take. A FeaturesTable member is a runtime field in every build, which is the opposite
+    // of that; it would also resize MG_Config::Features and break G1 (the pull build's
+    // symbol set must not move) for the same reason the MOBILEGL_PIPE_VERIFY knobs above sit
+    // behind their own #if.
+    //
+    // ONE CONSEQUENCE, STATED SO IT IS NOT REDISCOVERED: in a build without the option,
+    // MOBILEGL_TRANSPORT=inproc is ACCEPTED BY THE ENVIRONMENT AND SILENTLY IGNORED - the
+    // parser below does not exist to complain about it, and putting a complaint in the
+    // unconditional part of ConfigLoader would move a pull-build symbol. That is the exact
+    // shape of "the split lane ran monolith and went green", so the gate against it is a
+    // BUILD-level check, not a runtime one: `nm --defined-only libMobileGL.so | grep -i
+    // MG_Remote` must be non-empty in build-split (CONTRACT-P5.md table 3, and the CI job
+    // P5 adds beside build-linux-verify).
+    enum class TransportMode : Uint8 {
+        Monolith = 0,  // today's in-library backend; no MG_Remote object is constructed
+        InProcess = 1, // P5: a real apply thread in this process, over the same G3 codec
+        Spawn = 2,     // P6: fork/exec MobileGLServer, socketpair
+        UnixSocket = 3,// P6: connect to an existing AF_UNIX endpoint (Endpoint = <path>)
+        NamedPipe = 4, // P6: Windows named pipe (Endpoint = <name>)
+    };
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // Parsed once by MG_ConfigLoader::Init(). Defaults to Monolith even here: building the
+    // transport in is not the same as using it, and every existing lane of a build-split
+    // must keep running monolith unless it is asked for one.
+    extern TransportMode Transport;
+    // The <path> of `unix:` / the <name> of `pipe:`. Empty for the other three modes.
+    extern String TransportEndpoint;
+
+    // The MOBILEGL_IPC_* family. A separate table rather than more FeaturesTable members,
+    // for the G1 reason above and because every field here is meaningless without the
+    // transport: a build that cannot reach the MG_Remote code cannot honour one of them.
+    //
+    // P5 lands exactly the knobs P5's own packages read. A later phase's knob is added HERE,
+    // through the integrator, and not invented at its call site - ARCHITECTURE.md:615 holds
+    // the full planned inventory (PRESENT_CREDIT, POLL_ESCALATE, SHADOW_SHM,
+    // INLINE_PAYLOADS, TRACE, ATTACH, RESPAWN, IDLE_EXIT_S), and every one of those belongs
+    // to P6 or later.
+    struct IpcTable {
+        // MOBILEGL_IPC_SERVER_PATH: where to find libMobileGLServer. P6 consumes it; P5
+        // lands the parse because t1's ctest ENVIRONMENT blocks and add_trace_replay_test's
+        // SPLIT variant already carry it, and an environment variable that nothing parses is
+        // indistinguishable from one that is parsed and ignored.
+        String ServerPath;
+        // MOBILEGL_IPC_RING_MB: SEG_CMD size. A RECORD MAY BE AT MOST HALF OF THIS
+        // (RingProducer::MaxRecordBytes), so 8 MiB caps one record at 4 MiB; R-10 makes the
+        // codec publish a max-record-bytes counter rather than assume that is enough.
+        Uint32 RingMb = 8;
+        // MOBILEGL_IPC_STAGE_MB: SEG_STAGE size. Every blob and every var-tail's bytes live
+        // here (R-10: no chunking in P5, so nothing may exceed it).
+        Uint32 StageMb = 32;
+        // MOBILEGL_IPC_SPIN_US: spin before parking on a doorbell, either direction.
+        Uint32 SpinUs = 50;
+        // MOBILEGL_IPC_PERSISTENT_BLOCK_KB: block granularity of the persistent-map push.
+        // 0 IS A NEGATIVE CONTROL, NOT "unlimited": it disables the push, and
+        // PersistentCoherentMapScenario must go RED under it (exit gate E3(a)).
+        Uint32 PersistentBlockKb = 64;
+        // MOBILEGL_IPC_ADOPT_TIER: 2 = emulate (client keeps the shadow and pushes), which
+        // is the only tier P5 implements and the reason persistent-map-push can be non-zero
+        // at all (R-6). 0 and 1 parse and are Fatal at use with "P11"; they exist now so the
+        // negative control has a spelling the day P11 writes it.
+        Uint32 AdoptTier = 2;
+        // MOBILEGL_IPC_VERB_BARRIER: 1 = the client blocks at every verb boundary until
+        // appliedSeq reaches its emitSeq (R-1). 0 is the negative control: it is EXPECTED to
+        // be red, because 31 of the 63 PipeInputs fields are still pulled from a live
+        // GLContext by the client's residual fill and a free-running queue lets the server
+        // read a FUTURE value of them.
+        Uint32 VerbBarrier = 1;
+        // MOBILEGL_IPC_STRICT_ERRORS: promote a BARRIER-PULLED field read - and, in a split
+        // build, the seven sticky forwards that are otherwise exempt - from "count it in
+        // rsp" to Fatal (R-7.3).
+        Bool StrictErrors = false;
+        // MOBILEGL_IPC_AUDIT: after a record retires, the server fills the SEG_STAGE bytes
+        // it referenced with 0xDD (R-2.5). This is the ONLY mechanical control that an
+        // inproc implementation did not quietly keep using a pointer past its lifetime.
+        Bool Audit = false;
+        // MOBILEGL_IPC_SERVER_AFFINITY: `auto` (the default, big-core detection borrowed
+        // from ShaderCompilePool), `off`, or an explicit CPU mask. Kept as the raw string
+        // because the resolved mask is logged by whoever starts the apply thread, and the
+        // string is what an operator typed.
+        String ServerAffinity = "auto";
+    };
+    extern IpcTable Ipc;
+#else
+    // The whole point: in a build without MG_Remote this folds at compile time, so
+    // `if (MG_Config::Transport != MG_Config::TransportMode::Monolith)` in Init.cpp is a
+    // discarded statement and the pull build gains no symbol, no branch and no byte.
+    inline constexpr TransportMode Transport = TransportMode::Monolith;
+#endif
 } // namespace MobileGL::MG_Config
