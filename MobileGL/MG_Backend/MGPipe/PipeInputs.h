@@ -26,6 +26,14 @@
 #endif
 
 namespace MobileGL::MG_Pipe {
+// TABLE 2 (CONTRACT-P5.md section 3, R-7): the four ownership classes, one per field, plus
+// the seven sticky forwards' own rows. Included HERE rather than from MG_Pipe/MGPipe.h with
+// gen_pipe.py's seven outputs, deliberately: MGPipe.h is in the PULL build's include closure
+// and G1 admits no symbol motion there, while this header is reached only through
+// PipeInputsSwitch.h's MOBILEGL_PIPE_PUSH arm. It is also exactly the header the poison check
+// below and the server's verb stamp both already see.
+#include <MG_Pipe/generated/PipeFieldOwnership.inc>
+
     // PipeInputs.cpp. The poison Fatal with the verb's name ("<none>" before the first
     // verb): MGLOG_F + std::abort(), live at every log level on purpose - this is not
     // MOBILEGL_ASSERT, which is inert in INFO builds.
@@ -37,18 +45,65 @@ namespace MobileGL::MG_Pipe {
     Optional<MGPipeInputField> MGPipeFindInputField(const char* name);
     Optional<MGPipeVerb> MGPipeFindVerb(const char* name);
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // ---- P5: the split arm of the read check (R-7.2, R-7.3) ------------------------------
+    //
+    // A stale read stops being one answer and becomes FOUR, keyed on the field's table-2 class
+    // - which is what turns the generated table from a document into a runtime mechanism:
+    //
+    //   RECORD-SUPPLIED / APPLIER-DERIVED  the server could answer it and did not: a real
+    //                                      defect. Fatal, exactly as today.
+    //   BARRIER-PULLED                     the server is reading the value the client's
+    //                                      residual fill left in gPipeInputs while the verb
+    //                                      barrier holds both threads apart (R-1). LEGAL, and
+    //                                      COUNTED: PipeStats::CallClass::ResidualPulls. Under
+    //                                      MOBILEGL_IPC_STRICT_ERRORS=1 it is Fatal instead.
+    //   FATAL                              no carrier and the reduced path never reads it.
+    //
+    // AND IT IS ARMED ONLY INSIDE A SERVER-STAMPED VERB (PipeInputs::ServerStampedVerb).
+    // A split BUILD running monolith transport - which is every unit and integration-gpu lane
+    // of build-split - has a client that fills and stamps all 63 fields at every verb, so a
+    // stale read there is the same defect it is in a verify build and gets the same Fatal.
+    // Without that condition the leniency would apply to lanes whose stamps are the client's,
+    // and 1842 unit cases would quietly stop being able to go red.
+    void MGPipeInputUnfreshRead(MGPipeInputField field, MGPipeVerb verb, Bool serverStamped);
+    // The same decision for an accessor that takes an argument the table narrows on
+    // (kMGPipeFieldArgumentOwnership). Called BEFORE the freshness test, because the narrowed
+    // class is a statement about the argument rather than about the stamp: the pack half of
+    // GetPixelStoreParameters is stamped and fresh while the unpack half has no carrier and no
+    // backend reader at all.
+    void MGPipeInputArgumentRead(MGPipeInputField field, Uint32 arg0, MGPipeVerb verb, Bool serverStamped);
+#endif
+
     // The read-side poison check, on every non-forwarded accessor. Under MOBILEGL_PIPE_POISON
     // a read of a field whose stamp is older than the current verb serial is
     // Fatal{UnmigratedPipeInput, "Field@Verb"}; otherwise the accessor is a plain load.
 #if MOBILEGL_PIPE_POISON
+#if MOBILEGL_BUILD_DISAGGREGATED
+#define MGP_INPUT_CHECK(Field)                                                                                         \
+    do {                                                                                                               \
+        if (!::MobileGL::MG_Pipe::MGPipeInputFieldIsFresh(m_filled, (Field))) {                                        \
+            ::MobileGL::MG_Pipe::MGPipeInputUnfreshRead((Field), m_currentVerb, m_serverStampedVerb);                  \
+        }                                                                                                              \
+    } while (0)
+#define MGP_INPUT_CHECK_ARG(Field, Arg0)                                                                               \
+    do {                                                                                                               \
+        ::MobileGL::MG_Pipe::MGPipeInputArgumentRead((Field), static_cast<Uint32>(Arg0), m_currentVerb,                 \
+                                                     m_serverStampedVerb);                                             \
+        MGP_INPUT_CHECK(Field);                                                                                        \
+    } while (0)
+#else
 #define MGP_INPUT_CHECK(Field)                                                                                         \
     do {                                                                                                               \
         if (!::MobileGL::MG_Pipe::MGPipeInputFieldIsFresh(m_filled, (Field))) {                                        \
             ::MobileGL::MG_Pipe::MGPipeInputPoisonFatalForVerb((Field), m_currentVerb);                                \
         }                                                                                                              \
     } while (0)
+#define MGP_INPUT_CHECK_ARG(Field, Arg0) MGP_INPUT_CHECK(Field)
+#endif
 #else
 #define MGP_INPUT_CHECK(Field) ((void)0)
+#define MGP_INPUT_CHECK_ARG(Field, Arg0) ((void)0)
 #endif
     // The compare-at-read hook of the MOBILEGL_PIPE_VERIFY comparator (P1 brief D8), defined
     // in MG_Impl/Pipe/PipeFill.cpp: re-reads the field from the live context and compares it
@@ -193,6 +248,15 @@ namespace MobileGL::MG_Pipe {
         MGPipeVerb CurrentVerb() const { return m_currentVerb; }
 #if MOBILEGL_PIPE_POISON
         const MGPipeFilledState& FilledState() const { return m_filled; }
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // TRUE between the server's verb-boundary stamp and the client's next fill. It is the
+        // arming condition of the whole split read path: only inside a server-stamped verb is
+        // a BARRIER-PULLED read counted rather than Fatal, and only there is a sticky forward
+        // a residual pull rather than an ordinary monolith call. A split build running
+        // monolith transport never sets it, which is why build-split's 1842 unit cases and
+        // its 1117 integration cases behave exactly as a verify build's do.
+        Bool ServerStampedVerb() const { return m_serverStampedVerb; }
 #endif
 
         // ---- V: values ----
@@ -345,8 +409,17 @@ namespace MobileGL::MG_Pipe {
             MGP_INPUT_VERIFY_READ(MGPipeInputField::GetRenderStateParametersVersion, 0, 0);
             return m_renderStateParametersVersion;
         }
+        // THE ONE FIELD TABLE 2 NARROWS BY ARGUMENT. m_pixelStore[2] is one array indexed by
+        // this accessor's own argument, exactly as m_bufferBindingSlot[15] is indexed by a
+        // BufferTarget, and Coverage.def:62-69 already rules that such a field stays ONE row.
+        // Only [0] (pack) has a carrier - set_pixel_pack_state, which the applier writes
+        // (PipeApply.cpp:1373) - so the field is APPLIER-DERIVED and the UNPACK half is FATAL:
+        // every MGB_CTX->GetPixelStoreParameters site in the tree passes false
+        // (DirectGLES.cpp:7924, :9399, :10893, :11272, Utils.cpp:2302,
+        // VulkanRenderer.cpp:10980), and PipeFill.cpp's EmitPixelPackState says the same from
+        // the other side: "nothing on the far side of the boundary reads unpack state".
         PixelStoreParameters GetPixelStoreParameters(Bool isUnpack) const {
-            MGP_INPUT_CHECK(MGPipeInputField::GetPixelStoreParameters);
+            MGP_INPUT_CHECK_ARG(MGPipeInputField::GetPixelStoreParameters, isUnpack ? 1u : 0u);
             MGP_INPUT_VERIFY_READ(MGPipeInputField::GetPixelStoreParameters, isUnpack ? 1u : 0u, 0);
             return m_pixelStore[isUnpack ? 1 : 0];
         }
@@ -616,6 +689,12 @@ namespace MobileGL::MG_Pipe {
         // does NOT stamp the poison generations - a stamp says "the filler published this
         // for THIS verb", which is the walk's statement, not the applier's.
         friend struct MGPipeApplyAccess;
+        // THE THIRD DOOR, and the one the split phase needed that neither of the two above
+        // could be: the SERVER's verb-boundary stamp (PipeInputs.cpp). MGPipeApplyAccess
+        // deliberately does not stamp - see its comment above - and MGPipeFillAccess lives in
+        // MG_Impl, which is the role the server does not have. So the stamp gets a door of its
+        // own rather than a relaxation of either existing one.
+        friend struct MGPipeStampAccess;
 
         // ---- identity ----
         const void* m_contextIdentity = nullptr;
@@ -623,6 +702,9 @@ namespace MobileGL::MG_Pipe {
         MGPipeVerb m_currentVerb = MGPipeVerb::kVerbCount;
 #if MOBILEGL_PIPE_POISON
         MGPipeFilledState m_filled{};
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+        Bool m_serverStampedVerb = false;
 #endif
 
         // ---- V ----
@@ -712,6 +794,60 @@ namespace MobileGL::MG_Pipe {
 #undef MGP_INPUT_COUNT_ONE
     // The docs budget ~20 KB; the block is a few KB.
     static_assert(sizeof(PipeInputs) < 20 * 1024, "PipeInputs outgrew its budget");
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // ============================================================================
+    // P5: the server-side verb stamp, and the counter that sizes what it leaves behind
+    // ============================================================================
+    //
+    // THE PREREQUISITE NOBODY ELSE OWNS (CONTRACT-P5.md section 3). Nothing stamps the poison
+    // generations on the applier side today and that is deliberate (see MGPipeApplyAccess'
+    // comment above: a stamp is the filler's statement, not the applier's). Under split the
+    // filler is in the other role, so without this every FilledGen[] would stay 0,
+    // MGPipeInputFieldIsFresh would answer false for EVERYTHING, and a purely server-side read
+    // would abort on the first field inside SyncRenderState - before any interesting case.
+    //
+    // THE RULE, in three lines, and the third one is the load-bearing one:
+    //
+    //   1. bump CurrentVerbSerial and set the verb, so a Fatal names it instead of "<none>";
+    //   2. stamp every RECORD-SUPPLIED and APPLIER-DERIVED field with the new serial - those
+    //      are exactly the fields the records this verb carried can answer;
+    //   3. ZERO every BARRIER-PULLED and FATAL field's stamp.
+    //
+    // (3) is what makes the instrumentation real. The client's residual fill stamps ALL 63
+    // fields at its own verb boundary (PipeFill.cpp step 4), so without the zeroing every
+    // field would read fresh on the server, `rsp` would be identically 0, and the gate would
+    // be decoration - the precise "an inproc implementation proves nothing" failure R-2
+    // exists to prevent. Zeroing also cancels the sticky exemption for free: generated/
+    // PipeFilled.inc tests "never filled" BEFORE it tests sticky, so gen == 0 wins.
+    //
+    // The value a BARRIER-PULLED read then gets is still the client's residual fill's, and it
+    // is still CORRECT - because the verb barrier (R-1) leaves exactly one of the two threads
+    // runnable. That is the debt, not a bug; `rsp` is its size.
+    //
+    // v1 calls this from Server/PipeApplier::StampVerbBoundary. MGPipeVerbForWireOp maps the
+    // record's op onto a verb and answers kVerbCount for an op that is not verb-shaped, which
+    // is the case the applier must NOT stamp on: a set_dynamic_state between two draws is not
+    // a new verb, and stamping there would retire the previous verb's answers early.
+    void MGPipeServerStampVerbBoundary(MGPipeVerb verb);
+    // Called when the applier leaves the verb (and by the client's own fill). Clears the
+    // arming flag, so a read outside a server verb is judged exactly as it is in monolith.
+    void MGPipeServerClearVerbBoundary();
+
+    // `rsp`. Also published per frame through PipeStats::CallClass::ResidualPulls; this is the
+    // raw count, which exists because PipeStats can be switched off and the exit gate may not
+    // be. Its value at the end of P5 IS the size of the P6/P7/P8 debt.
+    Uint64 MGPipeResidualPullCount();
+    void MGPipeResetResidualPullCountForTesting();
+
+    // The sticky forwards' hook, called from each of the seven bodies in
+    // MG_Impl/Pipe/PipeFill.cpp. They carry no MGP_INPUT_CHECK at all - the declared exception
+    // argued at the F-class block above - so freshness can never reach them and the exit gate
+    // would be structurally blind on the seven fields that hand the server a raw frontend
+    // object or write into the frontend. This is what puts them in `rsp` and, under
+    // MOBILEGL_IPC_STRICT_ERRORS=1, makes them Fatal like any other BARRIER-PULLED row.
+    void MGPipeStickyForwardPull(MGPipeInputField field);
+#endif
 
 #if MOBILEGL_PIPE_VERIFY
     // PipeInputs.cpp. Per-field equality for the entry compare (P1 brief D8): V by value
