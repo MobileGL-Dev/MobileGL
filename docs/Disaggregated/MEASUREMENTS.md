@@ -108,7 +108,7 @@ python3 tools/trace_replay/run_android_retrace_local.py \
 | `PipeInputs` 字段 | 63 | 计划写 61；`GetBoundTransformFeedbackLifetimeId`、`HasOpenTransformFeedbackSpan` 是 D21 之后新增的读点 |
 | 后端调用的不同访问器 | 62（Espryt 32、Magma 56） | `GetBoundTransformFeedbackName` 已无人读，留作已标注的死行 |
 | 填充点 | 83 条 `MGP_FILL`，覆盖 69 个 verb、9 个类 | `MG_Pipe/FillPoints.def` |
-| `SyncPersistentMappedRange` / `SyncGpuWrites` | 20 / 6 | 与计划一致 |
+| `SyncPersistentMappedRange` / `SyncGpuWrites` | **21** / 6 | P5 b1 复核：21 = Espryt 9 + Magma 12，不是 20。原来的 20 与 `Managers.cpp:5047-5048` 的"十一处 Espryt"都恰好少一行，少的是 `DirectGLES.cpp:361`（`ResolveIndirectCommandBytes`）——它是共享 helper 而不是 draw-path 站点，多半因此被排除，但一个能读到持久映射区间的 helper 与 draw 站点一样会读到陈旧字节。`ARCHITECTURE.md:290` 引的那张 §5.7 逐站点归属表**在树里不存在**。 |
 
 ## 7. verify 通道发现的两类真问题
 
