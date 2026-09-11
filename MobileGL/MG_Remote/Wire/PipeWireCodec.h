@@ -111,12 +111,72 @@ namespace MobileGL::MG_Remote::Wire {
 
     // R-2.3 arms 1-4 over one record's blobref. Split only; a monolith emission is exempt by
     // construction because it never reaches this layer.
+    //
+    // ARMS 3 AND 4 ONLY, PLUS ONE THIS FUNCTION HAD TO INVENT. A blobref is honest when it is
+    // EITHER fully declared - a real Seg, a non-zero Size and an Offset+Size inside that
+    // segment - OR fully absent, which is all three fields zero. The third shape, a Seg or an
+    // Offset with Size == 0, is neither, and it is the shape a monolith emitter produces
+    // today (Seg = None, Offset = a host address, Size = 0), so under split it has to be
+    // Fatal rather than "absent": a decoder that read it as absent would silently drop the
+    // bytes of every record an unconverted emitter sent.
+    //
+    // ARM 2 - "Blob.Size == 0 on a CONTENT record" - is NOT here and cannot be: whether a
+    // record carries content is a property of the record's OTHER fields (ChunkMask, the
+    // destination range, GlobalUboSize, the stage mask), which this signature does not see.
+    // RequireDeclaredBlob below is arm 2, and the decoder's per-op arm calls it exactly where
+    // the payload says content is implied.
     void CheckBlobIsHonest(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob,
                            const SegmentTable& segments);
+    // R-2.3 arm 2: the record's other fields say it carries content, so the blob must be
+    // declared. Fatal on an absent blob, then CheckBlobIsHonest on a present one.
+    void RequireDeclaredBlob(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob,
+                             const SegmentTable& segments);
     // R-2.3 arm for MGHostSpan. P5's reduced path should produce ZERO host spans
     // (kCapNeedsHostIndexBytes / kCapNeedsHostUboBytes are both 0 in P5, table 0), so this
     // firing at all is a finding, not just a corruption check.
     void CheckHostSpanIsHonest(const MG_Pipe::MGHostSpan& span);
+
+    // ---- one record's shape, computed ONCE and read by both sides ----------------------
+    //
+    // THE TAIL CROSS-CHECK LIVES HERE AND NOWHERE ELSE (BRIEF §5 w1, contract table 1 group
+    // B). MGP_WIRE_CHECK_BOUNDS only proves `size >= sizeof(MGPWireRec_X)` - IT CANNOT SEE
+    // THE TAIL - so a record declaring Count = 4000 while carrying 8 bytes passes it. The
+    // encoder computes this layout from the payload it is about to write and REFUSES a caller
+    // whose tails disagree; the decoder computes the same layout from the payload it just
+    // received and REFUSES a record whose MGPWireRecHeader::Size disagrees. Two readers, one
+    // arithmetic, so the two sides cannot drift.
+    //
+    // EVERY TAIL STARTS 8-BYTE ALIGNED WITHIN THE RECORD, and the encoder zero-fills the gap.
+    // Eight of the nine kVarTail rows are already aligned by construction (their payload and
+    // element sizes are multiples of 8); DrawVbo is not - MGPDrawRange is TWELVE bytes, so an
+    // odd NumDraws leaves the conditional MGHostSpan on a 4-byte boundary, and MGHostSpan
+    // holds a pointer and two Uint64s. P5 emits no host span at all, so this rule costs
+    // nothing now and is stated now because the phase that arms kDrawHasUserIndices would
+    // otherwise have to discover it as a misaligned load on a device.
+    struct WireRecordLayout {
+        Uint64 PayloadBytes = 0;   // sizeof the op's payload struct
+        Uint64 TailOffset[2] = {0, 0}; // from the START of the record, header included
+        Uint64 TailBytes[2] = {0, 0};
+        Uint32 TailCount = 0;
+        Uint64 TotalBytes = 0; // header + payload + gaps + tails, rounded up to 8
+    };
+
+    // `payload` must already be known to hold at least the op's payload struct - that is what
+    // MGP_WIRE_CHECK_BOUNDS proves, and this function is only ever called after it. Returns
+    // false for an opcode outside the catalogue; a count past its own GL bound is Fatal,
+    // because a decoder holding such a record has nothing safe left to do with it.
+    Bool MGPipeWireRecordLayout(MG_Pipe::MGPWireOp op, const void* payload, WireRecordLayout& out);
+
+    // The catalogue's own spelling of an opcode, for a Fatal line. Out of range is "<opcode>".
+    const char* WireOpName(MG_Pipe::MGPWireOp op);
+
+    // One tail array. Two of the 71 rows carry two (SetShaderBuffers, SetStreamOutputTargets)
+    // and DrawVbo carries a conditional second one, which is why EncodeRecord's one-tail form
+    // could not stay the only one.
+    struct WireTail {
+        const void* Bytes = nullptr;
+        Uint64 Size = 0;
+    };
 
     // ---- encoder -----------------------------------------------------------------------
     //
@@ -150,6 +210,31 @@ namespace MobileGL::MG_Remote::Wire {
         Uint64 EncodeRecord(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
                             const void* varTail = nullptr, Uint64 varTailBytes = 0);
 
+        // The same call for the three rows that carry TWO tails. The one-tail form above is
+        // this one with tailCount <= 1; nothing is duplicated between them.
+        //
+        // The tails a caller hands over are CROSS-CHECKED against the layout the payload
+        // itself declares (MGPipeWireRecordLayout): a caller whose Count says 4000 while its
+        // tail holds 8 bytes is Fatal HERE, on the producing side, rather than on a peer that
+        // can only report a corrupt stream. That is the same arithmetic the decoder runs, so
+        // the check is real rather than a restatement of the caller's own belief.
+        Uint64 EncodeRecord(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
+                            const WireTail* tails, Uint32 tailCount);
+
+        // Releases every SEG_STAGE run named by a record the apply side has RETIRED
+        // (RingControl::retiredSeq, R-9). Called by the client at its verb barrier and
+        // whenever StageBytes runs short; the allocator reclaims behind retiredSeq and
+        // nothing else may (table 1's "retires" column, R-11).
+        //
+        // THE MARK IS HELD ON THIS SIDE, NOT ON THE WIRE. A record does not carry where its
+        // staged bytes end, so the encoder remembers {seq, stage cursor} per record and
+        // reclaims to the newest mark whose seq the server has retired. That is exact, needs
+        // no wire field, and does not depend on the verb barrier - so it keeps working when
+        // R-1's barrier retires family by family.
+        void ReclaimStagedBytes();
+        // Staged bytes not yet reclaimed. The number MOBILEGL_IPC_STAGE_MB has to cover.
+        Uint64 StagedBytesInFlight() const;
+
         // Release-stores the head cursor, then rings the consumer doorbell IF PARKED. The
         // order is pinned by RingTest.cpp:446 and must not be swapped: notify-then-publish
         // loses the wakeup.
@@ -163,12 +248,21 @@ namespace MobileGL::MG_Remote::Wire {
         Uint64 MaxRecordBytesSeen() const;
 
     private:
+        // {the record's seq, the SEG_STAGE cursor just past everything that record named}.
+        struct StageMark {
+            Uint64 Seq = 0;
+            Uint64 StageCursor = 0;
+        };
+
         Transport::RingControl* m_control = nullptr;
         Transport::RingProducer* m_cmd = nullptr;
         Transport::RingProducer* m_stage = nullptr;
         SegmentTable* m_segments = nullptr;
         Uint64 m_emitSeq = kInvalidSeq;
         Uint64 m_maxRecordBytes = 0;
+        Vector<StageMark> m_stageMarks;
+        SizeT m_stageMarkFront = 0;
+        Uint64 m_stageReclaimed = 0;
     };
 
     // ---- decoder -----------------------------------------------------------------------
@@ -187,6 +281,61 @@ namespace MobileGL::MG_Remote::Wire {
         static constexpr Int32 kStatusDeclined = 1;
         static constexpr Int32 kStatusError = 2;
         virtual void PostReply(Uint64 seq, Int32 status, const void* bytes, Uint64 size) = 0;
+    };
+
+    // ---- the verb sink: the five rows with no MGPipeApply* to delegate to ---------------
+    //
+    // The decoder owns NO semantics, so every arm ends in an existing MGPipeApply* free
+    // function - except five, and they are exactly contract §7's class B: Clear (57), Blit
+    // (56), ReadPixels (58), DrawVbo (59) and Present (67). Those are GLFunctionsTable VERBS.
+    // MG_Pipe has no applier for any of them (the 37 MGPipeApply* entry points are the object
+    // and state families), so for these five P5 writes the first consumer as well as the first
+    // producer - and the consumer is the SERVER'S backend call, which is v1's, not the codec's.
+    //
+    // So the codec does what it can prove and stops there: it bounds-checks, cross-checks the
+    // tail, resolves the segments and hands over a DECODED, VALIDATED argument list. With no
+    // sink installed those five arms return false ("this build does not implement it"), which
+    // is the same answer the other unimplemented rows give.
+    //
+    // SetShaderBuffers (38) and SetStreamOutputTargets (39) also have no applier entry point,
+    // and they deliberately get NO sink method: both are off P5's reduced path (BRIEF §4's
+    // exclusion list), so inventing a consumer for them would be building a semantics nobody
+    // can test this phase. Their arms validate both tails - which is the part a later phase
+    // must not have to re-derive - and return false.
+    class WireVerbSink {
+    public:
+        virtual ~WireVerbSink() = default;
+        virtual Bool OnClear(const MG_Pipe::MGPClear& clear) {
+            (void)clear;
+            return false;
+        }
+        virtual Bool OnBlit(const MG_Pipe::MGPBlit& blit) {
+            (void)blit;
+            return false;
+        }
+        virtual Bool OnPresent(const MG_Pipe::MGPPresent& present) {
+            (void)present;
+            return false;
+        }
+        // The pixels go back in the reply slot (contract table 1 row 23: the destination is
+        // ALWAYS SEG_REPLY in P5, which is why MGPReadbackInfo gains no Seg field), so the
+        // sink is handed the seq and the sink it must answer into.
+        virtual Bool OnReadPixels(const MG_Pipe::MGPReadbackInfo& info, Uint64 seq, ReplySink* replies) {
+            (void)info;
+            (void)seq;
+            (void)replies;
+            return false;
+        }
+        // `ranges` is info.NumDraws entries. `userIndices` is null unless the record set
+        // kDrawHasUserIndices - which P5 never does, because the reduced path draws from a
+        // VBO precisely so no MGHostSpan is produced (table 0's cap-bit row).
+        virtual Bool OnDrawVbo(const MG_Pipe::MGPDrawInfo& info, const MG_Pipe::MGPDrawRange* ranges,
+                               const MG_Pipe::MGHostSpan* userIndices) {
+            (void)info;
+            (void)ranges;
+            (void)userIndices;
+            return false;
+        }
     };
 
     // Not thread safe: one decoder on the apply thread, by construction.
@@ -218,13 +367,56 @@ namespace MobileGL::MG_Remote::Wire {
         // Advanced by exactly one per applied non-pad record. P5 FORBIDS BATCHING IT (R-9):
         // the verb barrier's waiter reads it, and a batched watermark makes the client wait
         // for records the server has not run.
+        //
+        // DecodeAndApply PUBLISHES RingControl::appliedSeq AND retiredSeq to this value after
+        // every record, because the decoder is the thing that knows when a record's SEG_STAGE
+        // runs stopped being read (R-11, table 1's "retires: apply"). v1's PipeApplier must
+        // therefore NOT advance either watermark a second time - a double advance makes the
+        // client's barrier resume on a record the server has not run, which is precisely the
+        // failure R-9's "never publish a watermark early" exists to forbid.
         Uint64 AppliedSeq() const;
 
+        // v1 installs the backend bridge for contract §7's five class-B verbs. Null - the
+        // default - makes those five arms return false rather than invent a semantics.
+        void SetVerbSink(WireVerbSink* sink);
+        WireVerbSink* VerbSink() const;
+
+        // R-2.5 / rule C's mechanical control: with MOBILEGL_IPC_AUDIT=1 every SEG_STAGE byte
+        // this decoder resolved for a record is overwritten with 0xDD once the applier has
+        // RETURNED, so an applier that kept the pointer reads 0xDD on the next frame instead
+        // of bytes that happen to still be there. Off by default; the run is exact - the
+        // decoder poisons what it resolved, not a conservative window.
+        void SetAuditPoison(Bool enabled);
+        Bool AuditPoison() const;
+        // How many staged bytes this decoder has poisoned. Zero with the audit off, and the
+        // number a t1 lane asserts is non-zero with it on: an instrumentation that cannot be
+        // observed to have run is decoration.
+        Uint64 PoisonedStageBytes() const;
+
     private:
+        Bool ApplyChecked(MG_Pipe::MGPWireOp op, const void* record, Uint64 size);
+        const void* ResolveOrFatal(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob);
+        void NoteResolvedRun(const MG_Pipe::MGPBlobRef& blob);
+        void PoisonResolvedRuns();
+
+        friend Bool MGPipeWireRecordApplyThunk(MG_Pipe::MGPWireOp, const void*, Uint64, Uint64);
+
         Transport::RingControl* m_control = nullptr;
         SegmentTable* m_segments = nullptr;
         ReplySink* m_replies = nullptr;
+        WireVerbSink* m_verbs = nullptr;
         Uint64 m_applySeq = kInvalidSeq;
+        Bool m_auditPoison = false;
+        Uint64 m_poisonedBytes = 0;
+        // The SEG_STAGE runs the record being applied resolved, for the 0xDD fill. At most
+        // seven (CreateShaderState's blob members) plus one tail.
+        MG_Pipe::MGPBlobRef m_resolved[8];
+        Uint32 m_resolvedCount = 0;
     };
+
+    // The hook MGPipeApplyWireRecord dispatches to once its generated per-opcode bounds gate
+    // has passed. Installed by DecodeAndApply on the thread that decodes.
+    Bool MGPipeWireRecordApplyThunk(MG_Pipe::MGPWireOp op, const void* record, Uint64 size,
+                                    Uint64 remaining);
 
 } // namespace MobileGL::MG_Remote::Wire

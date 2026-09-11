@@ -6,18 +6,41 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P5 c0's stubs for package w1. Every body is MGLOG_F + std::abort and NOT a silent no-op:
-// an unimplemented codec that returns quietly is exactly how a split lane runs monolith and
-// goes green, which is the failure the whole phase is built to make impossible.
+// P5 package w1: the G3 record codec.
+//
+// ONE CALL IN, BYTES OUT; BYTES IN, ONE MGPipeApply* CALL OUT. This file owns NO semantics -
+// MG_Pipe/PipeApply.cpp is not edited by this package and every decoder arm ends in an
+// existing free function or in the verb sink v1 installs. An arm that "handles" a record
+// itself rather than delegating is a review failure (R-4's rule, one level down).
+//
+// THE THING THAT MOST NEARLY WENT WRONG, WRITTEN AT THE TOP BECAUSE IT IS INVISIBLE:
+// MGPWireRecHeader::Flags and Transport::RingRecordHeader::flags ARE THE SAME 16-BIT FIELD,
+// and the two flag spaces COLLIDE. MGPipeCallFlags::kVarTail is 1<<2 and
+// RingRecordFlags::kRecPad is 1<<2, so an encoder that stamped MGPipeCallFlagsFor(op) into
+// the header - which the generated comment ("MGPipeCallFlags of the call") invites - would
+// make RingConsumer::Pop skip every one of the nine kVarTail records as a WRAP FILLER.
+// Silently, with no checksum anywhere on this ring. MGPipeCallFlags::kHostSpan (1<<3) lands
+// on kRecBorrowSlot the same way and would retire those slots on the GPU timeline instead of
+// on apply. So: THE HEADER CARRIES RING FRAMING FLAGS, and the call's own flags are read from
+// the opcode through MGPipeCallFlagsFor (R-13.4), which is why that table was generated in the
+// first place. The static_asserts below pin the collision so it cannot be re-introduced by
+// someone who reads the comment and not this file.
 
 #include "PipeWireCodec.h"
 
+#include <Config.h>
+#include <MG_Pipe/MGPipeRenderStateSpans.h>
+#include <MG_Pipe/PipeApply.h>
 #include <MG_Remote/Protocol/generated/protocol_generated.h>
+#include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #include <MG_Util/Debug/Log.h>
 
 #include <cstdlib>
+#include <cstring>
 
 namespace MobileGL::MG_Remote::Wire {
+
+    using namespace MobileGL::MG_Pipe;
 
     // Table 0's first row, mechanised: this enum and the schema's SegmentKind are ONE id
     // space, and the only place they are compared is here. A schema edit that renumbers a
@@ -38,30 +61,236 @@ namespace MobileGL::MG_Remote::Wire {
     static_assert(static_cast<Uint32>(MG_Pipe::kMGHostSpanSegNone) == kSegNone,
                   "kMGHostSpanSegNone and SegmentId::kSegNone must be the same value");
 
-#define MGP5_C0_STUB(what)                                                                                             \
-    do {                                                                                                               \
-        MGLOG_F("MGPipe: Fatal{UnimplementedWireCodec, \"%s\"} - P5 package w1 has not landed "                        \
-                "this yet; c0 shipped the signature only",                                                             \
-                what);                                                                                                 \
-        std::abort();                                                                                                  \
-    } while (0)
+    // The collision named in the file header, asserted rather than described. If a later edit
+    // moves either bit these fire and the mapping below is revisited; if someone deletes the
+    // mapping and stamps MGPipeCallFlags straight into the header, the RingTest wrap cases
+    // stay green and nine opcodes vanish, which is why this is a static_assert and not a
+    // comment.
+    static_assert(static_cast<Uint16>(MG_Pipe::kVarTail) ==
+                      static_cast<Uint16>(Transport::kRecPad),
+                  "MGPipeCallFlags::kVarTail and RingRecordFlags::kRecPad share a bit AND a "
+                  "field; the encoder must translate, never stamp. If this ever stops being "
+                  "true, keep translating anyway - two flag spaces in one field is the hazard, "
+                  "not this particular overlap");
+    static_assert(static_cast<Uint16>(MG_Pipe::kHostSpan) ==
+                      static_cast<Uint16>(Transport::kRecBorrowSlot),
+                  "MGPipeCallFlags::kHostSpan and RingRecordFlags::kRecBorrowSlot share a bit");
+    static_assert(static_cast<Uint16>(MG_Pipe::kNeedsAck) ==
+                      static_cast<Uint16>(Transport::kRecNeedsAck),
+                  "the two kNeedsAck bits agree; the mapping below relies on it only for "
+                  "readability, not for correctness");
+    static_assert(static_cast<Uint16>(MG_Pipe::kHasBlob) ==
+                      static_cast<Uint16>(Transport::kRecHasBlob),
+                  "the two blob bits agree");
 
-    void SegmentTable::Install(SegmentId, SegmentView) { MGP5_C0_STUB("SegmentTable::Install"); }
+    // ---------------------------------------------------------------------------------
+    // The catalogue, once. Name and payload type per opcode.
+    // ---------------------------------------------------------------------------------
+    //
+    // ONE LIST, THREE READERS: the name table (Fatal lines), the payload-size table (the tail
+    // arithmetic's base) and the decoder's own completeness assertion. Hand-maintained lists
+    // that say the same thing three times are how a catalogue edit lands in two of them.
+    // gen_pipe.py owns PipeCalls.def and PipeWire.inc; this list is held to them by the
+    // kOpCount assertion under it, which is the strongest statement a non-generated file can
+    // make about a generated enum.
+#define MGPW_FOR_EACH_CALL(X)                                                                  \
+    X(GetCaps, MGPCaps)                                                                        \
+    X(ResourceCreate, MGPResourceDesc)                                                         \
+    X(ResourceRespecify, MGPResourceDesc)                                                      \
+    X(ResourceDestroy, MGPHandleOnly)                                                          \
+    X(MapPersistent, MGPHandleOnly)                                                            \
+    X(UnmapPersistent, MGPHandleOnly)                                                          \
+    X(FenceCreate, MGPHandleOnly)                                                              \
+    X(FenceStatus, MGPHandleOnly)                                                              \
+    X(FenceWait, MGPFenceWait)                                                                 \
+    X(FenceDestroy, MGPHandleOnly)                                                             \
+    X(QueryCreate, MGPQueryDesc)                                                               \
+    X(QueryBegin, MGPQueryDesc)                                                                \
+    X(QueryEnd, MGPQueryDesc)                                                                  \
+    X(QueryAvailable, MGPHandleOnly)                                                           \
+    X(QueryResult, MGPQueryResultRequest)                                                      \
+    X(QueryDestroy, MGPHandleOnly)                                                             \
+    X(CreateRenderState, MGPRenderStateDesc)                                                   \
+    X(BindRenderState, MGPBindRenderState)                                                     \
+    X(DeleteRenderState, MGPHandleOnly)                                                        \
+    X(CreateVertexElements, MGPVertexElements)                                                 \
+    X(BindVertexElements, MGPHandleOnly)                                                       \
+    X(DeleteVertexElements, MGPHandleOnly)                                                     \
+    X(CreateSamplerState, MGPSamplerDesc)                                                      \
+    X(DeleteSamplerState, MGPHandleOnly)                                                       \
+    X(CreateSamplerView, MGPSamplerView)                                                       \
+    X(DeleteSamplerView, MGPHandleOnly)                                                        \
+    X(CreateShaderState, MGPProgramDesc)                                                       \
+    X(BindShaderState, MGPHandleOnly)                                                          \
+    X(DeleteShaderState, MGPHandleOnly)                                                        \
+    X(SetDynamicState, MGPDynamicState)                                                        \
+    X(SetFramebufferState, MGPFramebufferState)                                                \
+    X(SetVertexBuffers, MGPVertexBuffers)                                                      \
+    X(SetIndexBuffer, MGPIndexBuffer)                                                          \
+    X(SetIndirectBuffers, MGPIndirectBuffers)                                                  \
+    X(SetSamplerViews, MGPSamplerViews)                                                        \
+    X(BindSamplerStates, MGPSamplerStates)                                                     \
+    X(SetShaderImages, MGPShaderImages)                                                        \
+    X(SetShaderBuffers, MGPShaderBuffers)                                                      \
+    X(SetStreamOutputTargets, MGPStreamOutputTargets)                                          \
+    X(SetGlobalConstants, MGPGlobalConstants)                                                  \
+    X(SetVertexAttribDefaults, MGPVertexAttribDefaults)                                        \
+    X(SetPixelPackState, MGPPixelPackState)                                                    \
+    X(SetPatchState, MGPPatchState)                                                            \
+    X(SetDrawProgram, MGPHandleOnly)                                                           \
+    X(SetDispatchProgram, MGPHandleOnly)                                                       \
+    X(SetResidualValueState, MGPResidualValueState)                                            \
+    X(SetTextureParams, MGPTextureParams)                                                      \
+    X(ResourceSubData, MGPSubData)                                                             \
+    X(BufferSubDataResident, MGPSubData)                                                       \
+    X(ResourceSubDataComplete, MGPSubDataComplete)                                             \
+    X(ResourceFlushRange, MGPFlushRange)                                                       \
+    X(ResourceReadback, MGPReadback)                                                           \
+    X(ResourceCopyRegion, MGPCopyRegion)                                                       \
+    X(GenerateMipmap, MGPMipPlan)                                                              \
+    X(GetTextureImage, MGPReadbackInfo)                                                        \
+    X(Blit, MGPBlit)                                                                           \
+    X(Clear, MGPClear)                                                                         \
+    X(ReadPixels, MGPReadbackInfo)                                                             \
+    X(DrawVbo, MGPDrawInfo)                                                                    \
+    X(LaunchGrid, MGPGridInfo)                                                                 \
+    X(MemoryBarrier, MGPMemoryBarrier)                                                         \
+    X(BeginStreamOutput, MGPStreamOutputBegin)                                                 \
+    X(EndStreamOutput, MGPXfbAccounting)                                                       \
+    X(PauseStreamOutput, MGPStreamOutputControl)                                               \
+    X(ResumeStreamOutput, MGPStreamOutputControl)                                              \
+    X(Flush, MGPFlush)                                                                         \
+    X(Present, MGPPresent)                                                                     \
+    X(SetSwapInterval, MGPSwapInterval)                                                        \
+    X(QueryTimestamp, MGPTimestampRequest)                                                     \
+    X(QueryCounter, MGPQueryDesc)                                                              \
+    X(FenceWaitServer, MGPFenceWait)
 
-    SegmentView SegmentTable::Get(SegmentId) const { MGP5_C0_STUB("SegmentTable::Get"); }
+    namespace {
 
-    const void* SegmentTable::Resolve(Uint32, Uint64, Uint64) const {
-        MGP5_C0_STUB("SegmentTable::Resolve");
+        constexpr Uint64 Align8(Uint64 value) { return (value + 7u) & ~Uint64(7u); }
+
+#define MGPW_NAME_ROW(Name, Payload) #Name,
+        constexpr const char* kWireOpNames[] = {
+            "<kInvalid>",
+            MGPW_FOR_EACH_CALL(MGPW_NAME_ROW)
+        };
+#undef MGPW_NAME_ROW
+
+        // The catalogue grew or shrank. Add the new opcode to MGPW_FOR_EACH_CALL, give it an
+        // arm in ApplyChecked, and decide in CONTRACT-P5.md table 1 whether it carries bytes.
+        static_assert(sizeof(kWireOpNames) / sizeof(kWireOpNames[0]) ==
+                          static_cast<SizeT>(MGPWireOp::kOpCount),
+                      "PipeCalls.def and this file's call list disagree");
+
+        // The payload struct's own sizeof, which is what the tail arithmetic starts from.
+        // NOT sizeof(MGPWireRec_X) - 8: three payloads are not multiples of 8 and the record
+        // is rounded up around them.
+#define MGPW_SIZE_ROW(Name, Payload) sizeof(MG_Pipe::Payload),
+        constexpr Uint64 kWirePayloadBytes[] = {
+            0,
+            MGPW_FOR_EACH_CALL(MGPW_SIZE_ROW)
+        };
+#undef MGPW_SIZE_ROW
+        static_assert(sizeof(kWirePayloadBytes) / sizeof(kWirePayloadBytes[0]) ==
+                          static_cast<SizeT>(MGPWireOp::kOpCount));
+
+        // The header's Size field is 32 bits by wire contract (Ring.h's kMaxRingCapacity
+        // comment). Every count-derived total is checked against this BEFORE it is used, so a
+        // corrupt Count can never wrap the arithmetic that is supposed to catch it.
+        constexpr Uint64 kMaxRecordBytesOnTheWire = 0xFFFFFFFFull;
+
+        // MGPResidualValueState's blob is the block itself, which only ever ratchets DOWN.
+        static_assert(sizeof(ResidualValueBlock) == MGL_RESIDUAL_BLOCK_SIZE);
+
+        // CreateShaderState's seven blob members are one contiguous run, which is what lets
+        // the honesty pass walk them as an array.
+        static_assert(offsetof(MGPProgramDesc, Reflection) ==
+                          offsetof(MGPProgramDesc, Spirv) + 6 * sizeof(MGPBlobRef),
+                      "MGPProgramDesc's seven MGPBlobRefs must stay contiguous");
+        static_assert(offsetof(MGPCaps, RendererInfo) ==
+                          offsetof(MGPCaps, FormatCapabilities) + sizeof(MGPBlobRef),
+                      "MGPCaps's two MGPBlobRefs must stay contiguous");
+
+        // Where an op's MGPBlobRef members live inside its payload. Ten rows: the eight
+        // kHasBlob calls plus the two R-13.1 corrected ones. A row's Count is how many
+        // CONSECUTIVE MGPBlobRefs start at Offset.
+        struct BlobSlots {
+            Uint32 Offset = 0;
+            Uint32 Count = 0;
+        };
+
+        BlobSlots BlobSlotsFor(MGPWireOp op) {
+            switch (op) {
+            case MGPWireOp::GetCaps:
+                return {static_cast<Uint32>(offsetof(MGPCaps, FormatCapabilities)), 2};
+            case MGPWireOp::CreateRenderState:
+                return {static_cast<Uint32>(offsetof(MGPRenderStateDesc, Blob)), 1};
+            case MGPWireOp::CreateVertexElements:
+                return {static_cast<Uint32>(offsetof(MGPVertexElements, Blob)), 1};
+            case MGPWireOp::CreateSamplerState:
+                return {static_cast<Uint32>(offsetof(MGPSamplerDesc, Parameters)), 1};
+            case MGPWireOp::CreateShaderState:
+                return {static_cast<Uint32>(offsetof(MGPProgramDesc, Spirv)), 7};
+            case MGPWireOp::SetDynamicState:
+                return {static_cast<Uint32>(offsetof(MGPDynamicState, Blob)), 1};
+            case MGPWireOp::SetGlobalConstants:
+                return {static_cast<Uint32>(offsetof(MGPGlobalConstants, Blob)), 1};
+            case MGPWireOp::SetResidualValueState:
+                return {static_cast<Uint32>(offsetof(MGPResidualValueState, Blob)), 1};
+            case MGPWireOp::ResourceSubData:
+            case MGPWireOp::BufferSubDataResident:
+                return {static_cast<Uint32>(offsetof(MGPSubData, Blob)), 1};
+            default:
+                return {};
+            }
+        }
+
+        Uint32 PopCount32(Uint32 value) {
+            Uint32 count = 0;
+            while (value != 0) {
+                value &= value - 1u;
+                ++count;
+            }
+            return count;
+        }
+
+        // The one place a count-times-element-size becomes a byte count. Uint32 * a small
+        // constant cannot overflow 64 bits, and the total is bounded above before anyone
+        // indexes with it.
+        Uint64 TailBytesFor(Uint64 count, Uint64 elementBytes) { return count * elementBytes; }
+
+        // The process resolver is a plain function pointer with no user datum
+        // (MGPipeHostSpan.h:46), so the table it resolves through has to be found here.
+        SegmentTable* g_processResolverTable = nullptr;
+
+        const void* ProcessResolverThunk(Uint32 seg, Uint64 offset, Uint64 size) {
+            if (g_processResolverTable == nullptr) {
+                return nullptr;
+            }
+            return g_processResolverTable->Resolve(seg, offset, size);
+        }
+
+        // The decoder currently inside MGPipeApplyWireRecord. Thread-local rather than a file
+        // static: there is one apply thread by construction, but a unit suite drives several
+        // decoders from several test threads and a shared slot would make those cases depend
+        // on each other.
+        thread_local PipeWireDecoder* t_activeDecoder = nullptr;
+
+    } // namespace
+
+    const char* WireOpName(MGPWireOp op) {
+        const SizeT index = static_cast<SizeT>(op);
+        if (index >= static_cast<SizeT>(MGPWireOp::kOpCount)) {
+            return "<opcode>";
+        }
+        return kWireOpNames[index];
     }
 
-    void SegmentTable::InstallProcessResolver() { MGP5_C0_STUB("SegmentTable::InstallProcessResolver"); }
+    // ---------------------------------------------------------------------------------
+    // The Fatal arms, worded once
+    // ---------------------------------------------------------------------------------
 
-    void SegmentTable::UninstallProcessResolver() {
-        MGP5_C0_STUB("SegmentTable::UninstallProcessResolver");
-    }
-
-    // NOT a stub: the two Fatal helpers are the one thing every package needs on day one, and
-    // a Fatal that is itself unimplemented would report the wrong failure.
     void WireProtocolFatal(const char* what, const char* detail) {
         MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s\"} %s", what, detail != nullptr ? detail : "");
         std::abort();
@@ -73,11 +302,277 @@ namespace MobileGL::MG_Remote::Wire {
         std::abort();
     }
 
-    void CheckBlobIsHonest(MG_Pipe::MGPWireOp, const MG_Pipe::MGPBlobRef&, const SegmentTable&) {
-        MGP5_C0_STUB("CheckBlobIsHonest");
+    // ---------------------------------------------------------------------------------
+    // SegmentTable
+    // ---------------------------------------------------------------------------------
+
+    void SegmentTable::Install(SegmentId seg, SegmentView view) {
+        if (seg == kSegNone || static_cast<Uint32>(seg) > static_cast<Uint32>(kSegAdopt)) {
+            WireProtocolFatalAt("SegmentTable::Install", static_cast<Uint64>(seg),
+                                static_cast<Uint64>(kSegAdopt));
+        }
+        m_views[static_cast<SizeT>(seg)] = view;
     }
 
-    void CheckHostSpanIsHonest(const MG_Pipe::MGHostSpan&) { MGP5_C0_STUB("CheckHostSpanIsHonest"); }
+    SegmentView SegmentTable::Get(SegmentId seg) const {
+        if (seg == kSegNone || static_cast<Uint32>(seg) > static_cast<Uint32>(kSegAdopt)) {
+            return SegmentView{};
+        }
+        return m_views[static_cast<SizeT>(seg)];
+    }
+
+    const void* SegmentTable::Resolve(Uint32 seg, Uint64 offset, Uint64 size) const {
+        // 0 is "no segment", ALWAYS (table 0), and 0xFFFFFFFF is P8's index-mirror sentinel
+        // which this phase does not resolve. Both land here as "unknown", and the CALLER
+        // escalates to Fatal - a unit case has to be able to exercise this arithmetic without
+        // dying.
+        if (seg == kSegNone || seg > static_cast<Uint32>(kSegAdopt)) {
+            return nullptr;
+        }
+        if (size == 0) {
+            return nullptr;
+        }
+        const SegmentView& view = m_views[static_cast<SizeT>(seg)];
+        if (view.Base == nullptr) {
+            return nullptr;
+        }
+        // Written as a subtraction so offset + size cannot wrap: both are attacker-controlled
+        // in the only sense that matters here - they came off a shared page.
+        if (offset > view.Size || size > view.Size - offset) {
+            return nullptr;
+        }
+        return static_cast<const Uint8*>(view.Base) + offset;
+    }
+
+    void SegmentTable::InstallProcessResolver() {
+        if (MG_Pipe::gMGPipeSegmentResolver != nullptr && g_processResolverTable != this) {
+            // Table 3: there is exactly ONE gMGPipeSegmentResolver per process, the SERVER
+            // role installs it before the apply thread starts, and the client never resolves a
+            // span at all. Two roles racing on one inline variable is loud rather than silent
+            // because of this line.
+            WireProtocolFatal("SegmentTable::InstallProcessResolver",
+                              "a process segment resolver is already installed; the server role "
+                              "installs it once, before the apply thread starts");
+        }
+        g_processResolverTable = this;
+        MG_Pipe::gMGPipeSegmentResolver = &ProcessResolverThunk;
+    }
+
+    void SegmentTable::UninstallProcessResolver() {
+        // Teardown order (table 3): uninstall AFTER the join, never before - a record still in
+        // flight can still resolve.
+        MG_Pipe::gMGPipeSegmentResolver = nullptr;
+        g_processResolverTable = nullptr;
+    }
+
+    // ---------------------------------------------------------------------------------
+    // R-2's honesty arms
+    // ---------------------------------------------------------------------------------
+
+    void CheckBlobIsHonest(MGPWireOp op, const MGPBlobRef& blob, const SegmentTable& segments) {
+        if (blob.Size == 0) {
+            if (blob.Seg != kSegNone || blob.Offset != 0) {
+                // The monolith shape: Seg = None, Offset = a host address, Size = 0. Legal
+                // there, and precisely what must not cross (rule A). Reading it as "absent"
+                // would silently drop the bytes of every record an unconverted emitter sent.
+                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} a blob with Size 0 "
+                        "declares Seg=%u Offset=%llu; under split a blobref is either fully "
+                        "declared or all three fields zero",
+                        WireOpName(op), static_cast<unsigned>(blob.Seg),
+                        static_cast<unsigned long long>(blob.Offset));
+                std::abort();
+            }
+            return;
+        }
+        if (blob.Seg == kSegNone) {
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} Size=%llu with no segment "
+                    "(R-2.3): a non-zero Size must name a real SEG_*",
+                    WireOpName(op), static_cast<unsigned long long>(blob.Size));
+            std::abort();
+        }
+        if (segments.Resolve(blob.Seg, blob.Offset, blob.Size) == nullptr) {
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} seg=%u offset=%llu size=%llu "
+                    "does not lie inside that segment (R-2.3)",
+                    WireOpName(op), static_cast<unsigned>(blob.Seg),
+                    static_cast<unsigned long long>(blob.Offset),
+                    static_cast<unsigned long long>(blob.Size));
+            std::abort();
+        }
+    }
+
+    void RequireDeclaredBlob(MGPWireOp op, const MGPBlobRef& blob, const SegmentTable& segments) {
+        if (blob.Size == 0) {
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} the record's own fields say "
+                    "it carries content and its blob declares none (R-2.2 / rule A)",
+                    WireOpName(op));
+            std::abort();
+        }
+        CheckBlobIsHonest(op, blob, segments);
+    }
+
+    void CheckHostSpanIsHonest(const MGHostSpan& span) {
+        if (span.Ptr != nullptr) {
+            // Rule B. In one address space this pointer WORKS, which is the whole reason the
+            // rule has to be mechanical: an inproc implementation that kept using it is
+            // indistinguishable from a correct one until the day it is a second process.
+            WireProtocolFatal("host-span",
+                              "MGHostSpan::Ptr is non-null under split; the encoder writes "
+                              "nullptr and names SEG_STAGE (R-2.1)");
+        }
+        if (span.Size != 0 && span.Seg == kMGHostSpanSegNone) {
+            WireProtocolFatalAt("host-span.seg", span.Size, 0);
+        }
+        if (span.Size == 0 && span.Seg != kMGHostSpanSegNone) {
+            WireProtocolFatalAt("host-span.size", span.Seg, 0);
+        }
+    }
+
+    // ---------------------------------------------------------------------------------
+    // The record layout: the tail arithmetic both sides run
+    // ---------------------------------------------------------------------------------
+
+    Bool MGPipeWireRecordLayout(MGPWireOp op, const void* payload, WireRecordLayout& out) {
+        out = WireRecordLayout{};
+        const SizeT index = static_cast<SizeT>(op);
+        if (index == 0 || index >= static_cast<SizeT>(MGPWireOp::kOpCount)) {
+            return false;
+        }
+        out.PayloadBytes = kWirePayloadBytes[index];
+        const Uint64 afterPayload = Align8(sizeof(MGPWireRecHeader) + out.PayloadBytes);
+        out.TotalBytes = afterPayload;
+        if (payload == nullptr) {
+            return true;
+        }
+
+        // Tail sizes. The COUNTS come off the wire, so every product is bounded before it is
+        // believed, and the bound is the header's own 32-bit Size field.
+        Uint64 tail0 = 0;
+        Uint64 tail1 = 0;
+        Uint32 tails = 0;
+        switch (op) {
+        case MGPWireOp::SetVertexBuffers: {
+            const auto& p = *static_cast<const MGPVertexBuffers*>(payload);
+            if (p.Count > kMGPipeMaxVertexAttribs ||
+                static_cast<Uint64>(p.Start) + p.Count > kMGPipeMaxVertexAttribs) {
+                WireProtocolFatalAt("SetVertexBuffers.Count",
+                                    static_cast<Uint64>(p.Start) + p.Count, kMGPipeMaxVertexAttribs);
+            }
+            tail0 = TailBytesFor(p.Count, sizeof(MGPVertexBuffer));
+            tails = 1;
+            break;
+        }
+        case MGPWireOp::SetSamplerViews: {
+            const auto& p = *static_cast<const MGPSamplerViews*>(payload);
+            if (static_cast<Uint64>(p.Start) + p.Count > kMGPipeMaxTextureUnits) {
+                WireProtocolFatalAt("SetSamplerViews.Count", static_cast<Uint64>(p.Start) + p.Count,
+                                    kMGPipeMaxTextureUnits);
+            }
+            tail0 = TailBytesFor(p.Count, sizeof(MGPBoundView));
+            tails = 1;
+            break;
+        }
+        case MGPWireOp::BindSamplerStates: {
+            const auto& p = *static_cast<const MGPSamplerStates*>(payload);
+            if (static_cast<Uint64>(p.Start) + p.Count > kMGPipeMaxTextureUnits) {
+                WireProtocolFatalAt("BindSamplerStates.Count",
+                                    static_cast<Uint64>(p.Start) + p.Count, kMGPipeMaxTextureUnits);
+            }
+            tail0 = TailBytesFor(p.Count, sizeof(MGPipeHandle));
+            tails = 1;
+            break;
+        }
+        case MGPWireOp::SetShaderImages: {
+            const auto& p = *static_cast<const MGPShaderImages*>(payload);
+            if (static_cast<Uint64>(p.Start) + p.Count > kMGPipeMaxImageUnits) {
+                WireProtocolFatalAt("SetShaderImages.Count", static_cast<Uint64>(p.Start) + p.Count,
+                                    kMGPipeMaxImageUnits);
+            }
+            tail0 = TailBytesFor(p.Count, sizeof(MGPImageView));
+            tails = 1;
+            break;
+        }
+        case MGPWireOp::SetShaderBuffers: {
+            // TWO TAILS. HostSpanCount is 0 or Count and NEVER anything else
+            // (MGPipeTypes.h:820-823), because the two arrays stay index-aligned; a third
+            // value would let a record describe spans for ranges it does not have.
+            const auto& p = *static_cast<const MGPShaderBuffers*>(payload);
+            if (p.HostSpanCount != 0 && p.HostSpanCount != p.Count) {
+                WireProtocolFatalAt("SetShaderBuffers.HostSpanCount", p.HostSpanCount, p.Count);
+            }
+            tail0 = TailBytesFor(p.Count, sizeof(MGPBufferRange));
+            tail1 = TailBytesFor(p.HostSpanCount, sizeof(MGHostSpan));
+            tails = p.HostSpanCount != 0 ? 2 : 1;
+            break;
+        }
+        case MGPWireOp::SetStreamOutputTargets: {
+            // TWO TAILS, one Count. MGPBufferRange[Count] then Uint32[Count].
+            const auto& p = *static_cast<const MGPStreamOutputTargets*>(payload);
+            tail0 = TailBytesFor(p.Count, sizeof(MGPBufferRange));
+            tail1 = TailBytesFor(p.Count, sizeof(Uint32));
+            tails = 2;
+            break;
+        }
+        case MGPWireOp::SetVertexAttribDefaults: {
+            // TWO DECLARANTS THAT MUST AGREE (contract table 1 row 15): Count and
+            // popcount(Mask). Nothing checks this today; a disagreement is a wire fault that
+            // scatters attribute values onto the wrong locations.
+            const auto& p = *static_cast<const MGPVertexAttribDefaults*>(payload);
+            if (p.Count != PopCount32(p.Mask)) {
+                WireProtocolFatalAt("SetVertexAttribDefaults.Count", p.Count, PopCount32(p.Mask));
+            }
+            if (p.Count > kMGPipeMaxVertexAttribs) {
+                WireProtocolFatalAt("SetVertexAttribDefaults.Count", p.Count, kMGPipeMaxVertexAttribs);
+            }
+            tail0 = TailBytesFor(p.Count, sizeof(MGPAttribValue));
+            tails = 1;
+            break;
+        }
+        case MGPWireOp::ResourceSubData:
+        case MGPWireOp::BufferSubDataResident: {
+            const auto& p = *static_cast<const MGPSubData*>(payload);
+            tail0 = TailBytesFor(p.RegionCount, sizeof(MGPSubRegion));
+            tails = 1;
+            break;
+        }
+        case MGPWireOp::DrawVbo: {
+            // MGPDrawRange[NumDraws], then a CONDITIONAL MGHostSpan. The span's start is
+            // realigned to 8 because MGPDrawRange is twelve bytes: see WireRecordLayout's
+            // header comment.
+            const auto& p = *static_cast<const MGPDrawInfo*>(payload);
+            tail0 = TailBytesFor(p.NumDraws, sizeof(MGPDrawRange));
+            if ((p.Flags & kDrawHasUserIndices) != 0) {
+                tail1 = sizeof(MGHostSpan);
+                tails = 2;
+            } else {
+                tails = 1;
+            }
+            break;
+        }
+        default:
+            break;
+        }
+
+        if (tails >= 1) {
+            out.TailOffset[0] = afterPayload;
+            out.TailBytes[0] = tail0;
+            out.TotalBytes = afterPayload + tail0;
+        }
+        if (tails >= 2) {
+            out.TailOffset[1] = Align8(out.TailOffset[0] + tail0);
+            out.TailBytes[1] = tail1;
+            out.TotalBytes = out.TailOffset[1] + tail1;
+        }
+        out.TailCount = tails;
+        out.TotalBytes = Align8(out.TotalBytes);
+        if (out.TotalBytes > kMaxRecordBytesOnTheWire) {
+            WireProtocolFatalAt("record.Size", out.TotalBytes, kMaxRecordBytesOnTheWire);
+        }
+        return true;
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Encoder
+    // ---------------------------------------------------------------------------------
 
     PipeWireEncoder::PipeWireEncoder(Transport::RingControl* control, Transport::RingProducer* cmd,
                                      Transport::RingProducer* stage, SegmentTable* segments)
@@ -85,32 +580,923 @@ namespace MobileGL::MG_Remote::Wire {
 
     Bool PipeWireEncoder::Valid() const { return m_control != nullptr && m_cmd != nullptr; }
 
-    MG_Pipe::MGPBlobRef PipeWireEncoder::StageBytes(const void*, Uint64) {
-        MGP5_C0_STUB("PipeWireEncoder::StageBytes");
+    MGPBlobRef PipeWireEncoder::StageBytes(const void* bytes, Uint64 size) {
+        if (!Valid() || m_stage == nullptr || m_segments == nullptr) {
+            WireProtocolFatal("PipeWireEncoder::StageBytes",
+                              "no SEG_STAGE producer or segment table installed");
+        }
+        if (size == 0) {
+            // "The record declared no blob" and "the record declared an empty blob" must not
+            // be spelled the same way on a wire (R-2.2), so this is a programming error rather
+            // than an empty ref.
+            WireProtocolFatal("PipeWireEncoder::StageBytes",
+                              "a content blob may not declare zero bytes (R-2.2)");
+        }
+        if (bytes == nullptr) {
+            WireProtocolFatal("PipeWireEncoder::StageBytes", "non-zero size with a null source");
+        }
+
+        void* slot = m_stage->Reserve(static_cast<Uint16>(MGPWireOp::kInvalid),
+                                      Transport::kRecHasBlob, size);
+        if (slot == nullptr) {
+            // One try at reclaiming what the server has already retired, then give up: a
+            // second failure means the run genuinely does not fit SEG_STAGE, which R-10 says
+            // P5 does not chunk and must instead prove it never needs to.
+            ReclaimStagedBytes();
+            slot = m_stage->Reserve(static_cast<Uint16>(MGPWireOp::kInvalid),
+                                    Transport::kRecHasBlob, size);
+        }
+        if (slot == nullptr) {
+            MGLOG_F("MGPipe: Fatal{RingOverrun, \"SEG_STAGE\"} a %llu byte blob does not fit a "
+                    "%llu byte staging ring with %llu bytes free; P5 does not chunk (R-10) - "
+                    "raise MOBILEGL_IPC_STAGE_MB or report the record to the integrator",
+                    static_cast<unsigned long long>(size),
+                    static_cast<unsigned long long>(m_stage->Capacity()),
+                    static_cast<unsigned long long>(m_stage->FreeBytes()));
+            std::abort();
+        }
+        std::memcpy(slot, bytes, static_cast<SizeT>(size));
+
+        const SegmentView stageView = m_segments->Get(kSegStage);
+        if (stageView.Base == nullptr) {
+            WireProtocolFatal("PipeWireEncoder::StageBytes", "SEG_STAGE has no segment view");
+        }
+        const Uint64 offset =
+            static_cast<Uint64>(static_cast<const Uint8*>(slot) - static_cast<const Uint8*>(stageView.Base));
+
+        MGPBlobRef ref{};
+        ref.Seg = kSegStage;
+        ref.Offset = offset;
+        ref.Size = size;
+        ref.Pad0 = 0;
+        // The self-check that keeps the two halves of "SEG_STAGE" one thing: the segment view
+        // the decoder resolves through must cover the ring this producer just wrote into. A
+        // view installed over the CONTROL page, or over the ring plus its header, resolves to
+        // a plausible pointer that is not these bytes.
+        if (m_segments->Resolve(ref.Seg, ref.Offset, ref.Size) != slot) {
+            WireProtocolFatal("PipeWireEncoder::StageBytes",
+                              "the SEG_STAGE segment view does not cover the staging ring's "
+                              "byte area; the two would resolve to different addresses");
+        }
+        // The stage ring's own Publish: the decoder reads these bytes by OFFSET, never by
+        // popping the stage ring, so the head has to be visible before the command record
+        // that names them is.
+        m_stage->Publish();
+        return ref;
     }
 
-    Uint64 PipeWireEncoder::EncodeRecord(MG_Pipe::MGPWireOp, const void*, Uint64, const void*, Uint64) {
-        MGP5_C0_STUB("PipeWireEncoder::EncodeRecord");
+    Uint64 PipeWireEncoder::EncodeRecord(MGPWireOp op, const void* payload, Uint64 payloadBytes,
+                                         const void* varTail, Uint64 varTailBytes) {
+        WireTail tail{varTail, varTailBytes};
+        return EncodeRecord(op, payload, payloadBytes, &tail, varTail != nullptr ? 1u : 0u);
     }
 
-    void PipeWireEncoder::Publish() { MGP5_C0_STUB("PipeWireEncoder::Publish"); }
+    Uint64 PipeWireEncoder::EncodeRecord(MGPWireOp op, const void* payload, Uint64 payloadBytes,
+                                         const WireTail* tails, Uint32 tailCount) {
+        if (!Valid()) {
+            WireProtocolFatal("PipeWireEncoder::EncodeRecord", "no SEG_CMD producer installed");
+        }
+        if (payload == nullptr) {
+            WireProtocolFatal("PipeWireEncoder::EncodeRecord", "null payload");
+        }
+
+        WireRecordLayout layout{};
+        if (!MGPipeWireRecordLayout(op, payload, layout)) {
+            WireProtocolFatalAt("PipeWireEncoder::EncodeRecord",
+                                static_cast<Uint64>(op),
+                                static_cast<Uint64>(MGPWireOp::kOpCount));
+        }
+        if (payloadBytes != layout.PayloadBytes) {
+            WireProtocolFatalAt("EncodeRecord.payloadBytes", payloadBytes, layout.PayloadBytes);
+        }
+        // The caller's tails are held to the layout the PAYLOAD declares, which is the same
+        // arithmetic the decoder will run. A Count that says 4000 while the tail holds 8 bytes
+        // dies here, on the producing side, rather than on a peer that can only say "corrupt".
+        if (tailCount != layout.TailCount) {
+            WireProtocolFatalAt("EncodeRecord.tailCount", tailCount, layout.TailCount);
+        }
+        for (Uint32 i = 0; i < tailCount; ++i) {
+            if (tails[i].Size != layout.TailBytes[i]) {
+                WireProtocolFatalAt("EncodeRecord.tailBytes", tails[i].Size, layout.TailBytes[i]);
+            }
+            if (tails[i].Size != 0 && tails[i].Bytes == nullptr) {
+                WireProtocolFatal("EncodeRecord.tail", "non-zero tail length with a null pointer");
+            }
+        }
+
+        const Uint64 total = layout.TotalBytes;
+        if (total > m_cmd->MaxRecordBytes()) {
+            // R-10: P5 does no chunking and must instead PROVE it never needs any. This is
+            // where the proof fails loudly if it was wrong.
+            MGLOG_F("MGPipe: Fatal{RingOverrun, \"%s\"} a %llu byte record exceeds "
+                    "RingProducer::MaxRecordBytes() == %llu (half of a %llu byte SEG_CMD); P5 "
+                    "does not chunk (R-10) - report it to the integrator, who decides between "
+                    "early chunking and a bigger default ring",
+                    WireOpName(op), static_cast<unsigned long long>(total),
+                    static_cast<unsigned long long>(m_cmd->MaxRecordBytes()),
+                    static_cast<unsigned long long>(m_cmd->Capacity()));
+            std::abort();
+        }
+
+        // MGPipeCallFlags -> RingRecordFlags. See the file header: these are two flag spaces
+        // in one 16-bit field and stamping the wrong one loses whole opcodes silently.
+        const Uint32 callFlags = MGPipeCallFlagsFor(op);
+        Uint16 ringFlags = Transport::kRecNone;
+        if ((callFlags & static_cast<Uint32>(kNeedsAck)) != 0) ringFlags |= Transport::kRecNeedsAck;
+        if ((callFlags & static_cast<Uint32>(kHasBlob)) != 0) ringFlags |= Transport::kRecHasBlob;
+        if ((callFlags & static_cast<Uint32>(kVarTail)) != 0) ringFlags |= Transport::kRecVarTail;
+
+        void* slot = m_cmd->Reserve(static_cast<Uint16>(op), ringFlags,
+                                    total - sizeof(MGPWireRecHeader));
+        if (slot == nullptr) {
+            // The ring is full, not the record too big - Reserve refuses an oversized record
+            // above, and we already proved this one is not. The caller publishes, waits for
+            // the apply side and retries.
+            return kInvalidSeq;
+        }
+
+        auto* bytes = static_cast<Uint8*>(slot);
+        std::memcpy(bytes, payload, static_cast<SizeT>(payloadBytes));
+        // Reserve does not zero the alignment padding it hands back, and these bytes leave the
+        // process under spawn: a record must be a function of what it declares, not of
+        // whatever the client's ring last held.
+        const Uint64 payloadSlack = layout.TailCount > 0
+                                        ? layout.TailOffset[0] - sizeof(MGPWireRecHeader) - payloadBytes
+                                        : total - sizeof(MGPWireRecHeader) - payloadBytes;
+        if (payloadSlack != 0) {
+            std::memset(bytes + payloadBytes, 0, static_cast<SizeT>(payloadSlack));
+        }
+        Uint64 written = layout.TailCount > 0 ? layout.TailOffset[0] - sizeof(MGPWireRecHeader)
+                                              : total - sizeof(MGPWireRecHeader);
+        for (Uint32 i = 0; i < tailCount; ++i) {
+            const Uint64 at = layout.TailOffset[i] - sizeof(MGPWireRecHeader);
+            if (at > written) {
+                std::memset(bytes + written, 0, static_cast<SizeT>(at - written));
+            }
+            if (tails[i].Size != 0) {
+                std::memcpy(bytes + at, tails[i].Bytes, static_cast<SizeT>(tails[i].Size));
+            }
+            written = at + tails[i].Size;
+        }
+        const Uint64 recordBody = total - sizeof(MGPWireRecHeader);
+        if (written < recordBody) {
+            std::memset(bytes + written, 0, static_cast<SizeT>(recordBody - written));
+        }
+
+        // R-2 arms 1 and 3, on the PRODUCING side, over the bytes actually written. Doing it
+        // here rather than only in the decoder is what makes `inproc` worth running: the
+        // encoder is the half that can still be wrong in a way the decoder would never see,
+        // because under inproc a host pointer resolves.
+        if (m_segments != nullptr) {
+            const BlobSlots slots = BlobSlotsFor(op);
+            for (Uint32 i = 0; i < slots.Count; ++i) {
+                MGPBlobRef blob{};
+                std::memcpy(&blob, bytes + slots.Offset + i * sizeof(MGPBlobRef), sizeof(MGPBlobRef));
+                CheckBlobIsHonest(op, blob, *m_segments);
+            }
+        }
+        if ((callFlags & static_cast<Uint32>(kHostSpan)) != 0 && layout.TailCount == 2 &&
+            layout.TailBytes[1] != 0) {
+            const Uint64 at = layout.TailOffset[1] - sizeof(MGPWireRecHeader);
+            const Uint64 spans = layout.TailBytes[1] / sizeof(MGHostSpan);
+            for (Uint64 i = 0; i < spans; ++i) {
+                MGHostSpan span{};
+                std::memcpy(&span, bytes + at + i * sizeof(MGHostSpan), sizeof(MGHostSpan));
+                CheckHostSpanIsHonest(span);
+            }
+        }
+
+        if (total > m_maxRecordBytes) {
+            m_maxRecordBytes = total;
+        }
+        ++m_emitSeq;
+        // The stage mark: where SEG_STAGE stood once everything this record names had been
+        // staged. ReclaimStagedBytes releases up to the newest mark the server has retired.
+        if (m_stage != nullptr) {
+            m_stageMarks.push_back(StageMark{m_emitSeq, m_stage->LocalHead()});
+        }
+        return m_emitSeq;
+    }
+
+    void PipeWireEncoder::ReclaimStagedBytes() {
+        if (m_stage == nullptr || m_control == nullptr) {
+            return;
+        }
+        const Uint64 retired = m_control->retiredSeq.load(std::memory_order_acquire);
+        Uint64 upTo = 0;
+        Bool found = false;
+        while (m_stageMarkFront < m_stageMarks.size() &&
+               m_stageMarks[m_stageMarkFront].Seq <= retired) {
+            upTo = m_stageMarks[m_stageMarkFront].StageCursor;
+            found = true;
+            ++m_stageMarkFront;
+        }
+        // Compact rather than erase-from-front on every call: the list is at most as long as
+        // the number of records in flight, which the verb barrier keeps at one or two.
+        if (m_stageMarkFront != 0 && m_stageMarkFront == m_stageMarks.size()) {
+            m_stageMarks.clear();
+            m_stageMarkFront = 0;
+        }
+        if (!found || upTo <= m_stageReclaimed) {
+            return;
+        }
+        m_stageReclaimed = upTo;
+        // SEG_STAGE is CLIENT-OWNED memory (contract table 1: "client stages, server copies"),
+        // and the server only ever reads it, so the client is both the producer and the thing
+        // that frees. What it may not do is free ahead of retiredSeq, which is the whole
+        // content of R-11 on this side.
+        m_control->stageAppliedTail.store(upTo, std::memory_order_release);
+        m_control->stageRetiredTail.store(upTo, std::memory_order_release);
+    }
+
+    Uint64 PipeWireEncoder::StagedBytesInFlight() const {
+        if (m_stage == nullptr) {
+            return 0;
+        }
+        return m_stage->LocalHead() - m_stageReclaimed;
+    }
+
+    void PipeWireEncoder::Publish() {
+        if (m_cmd == nullptr) {
+            return;
+        }
+        // Publish then notify. The order is pinned by RingTest and must not be swapped:
+        // notify-then-publish loses the wakeup. The doorbell itself belongs to the SESSION
+        // (s1) - the codec does not own a Doorbell and must not, or a unit case could not
+        // drive encoder -> ring -> decoder without one.
+        if (m_stage != nullptr) {
+            m_stage->Publish();
+        }
+        m_cmd->Publish();
+        if (m_control != nullptr) {
+            m_control->submittedSeq.store(m_emitSeq, std::memory_order_release);
+        }
+    }
 
     Uint64 PipeWireEncoder::EmitSeq() const { return m_emitSeq; }
 
     Uint64 PipeWireEncoder::MaxRecordBytesSeen() const { return m_maxRecordBytes; }
 
+    // ---------------------------------------------------------------------------------
+    // Decoder
+    // ---------------------------------------------------------------------------------
+
     PipeWireDecoder::PipeWireDecoder(Transport::RingControl* control, SegmentTable* segments,
                                      ReplySink* replies)
-        : m_control(control), m_segments(segments), m_replies(replies) {}
+        : m_control(control), m_segments(segments), m_replies(replies) {
+        m_auditPoison = MG_Config::Ipc.Audit;
+    }
 
     Bool PipeWireDecoder::Valid() const { return m_control != nullptr && m_segments != nullptr; }
 
-    Bool PipeWireDecoder::DecodeAndApply(const Transport::RingRecordView&) {
-        MGP5_C0_STUB("PipeWireDecoder::DecodeAndApply");
-    }
-
     Uint64 PipeWireDecoder::AppliedSeq() const { return m_applySeq; }
 
-#undef MGP5_C0_STUB
+    void PipeWireDecoder::SetVerbSink(WireVerbSink* sink) { m_verbs = sink; }
+
+    WireVerbSink* PipeWireDecoder::VerbSink() const { return m_verbs; }
+
+    void PipeWireDecoder::SetAuditPoison(Bool enabled) { m_auditPoison = enabled; }
+
+    Bool PipeWireDecoder::AuditPoison() const { return m_auditPoison; }
+
+    Uint64 PipeWireDecoder::PoisonedStageBytes() const { return m_poisonedBytes; }
+
+    Bool MGPipeWireRecordApplyThunk(MGPWireOp op, const void* record, Uint64 size, Uint64 remaining) {
+        (void)remaining;
+        if (t_activeDecoder == nullptr) {
+            return false;
+        }
+        return t_activeDecoder->ApplyChecked(op, record, size);
+    }
+
+    void PipeWireDecoder::NoteResolvedRun(const MGPBlobRef& blob) {
+        if (blob.Size == 0 || blob.Seg != kSegStage) {
+            return;
+        }
+        if (m_resolvedCount < sizeof(m_resolved) / sizeof(m_resolved[0])) {
+            m_resolved[m_resolvedCount++] = blob;
+        }
+    }
+
+    const void* PipeWireDecoder::ResolveOrFatal(MGPWireOp op, const MGPBlobRef& blob) {
+        RequireDeclaredBlob(op, blob, *m_segments);
+        const void* bytes = m_segments->Resolve(blob.Seg, blob.Offset, blob.Size);
+        if (bytes == nullptr) {
+            // RequireDeclaredBlob already ran the same arithmetic, so reaching here means the
+            // table moved under us rather than that the record is wrong. Same Fatal either
+            // way: there is no recovery from a segment that stopped covering its own runs.
+            WireProtocolFatalAt("segment-resolve", blob.Offset, blob.Size);
+        }
+        NoteResolvedRun(blob);
+        return bytes;
+    }
+
+    void PipeWireDecoder::PoisonResolvedRuns() {
+        if (!m_auditPoison) {
+            m_resolvedCount = 0;
+            return;
+        }
+        for (Uint32 i = 0; i < m_resolvedCount; ++i) {
+            const MGPBlobRef& blob = m_resolved[i];
+            const SegmentView view = m_segments->Get(kSegStage);
+            if (view.Base == nullptr || blob.Offset + blob.Size > view.Size) {
+                continue;
+            }
+            // R-2.5. The record has been applied and its bytes are retired, so an applier that
+            // kept the pointer reads 0xDD next frame instead of bytes that merely happen to
+            // still be there. Exactly the runs this record resolved, not a conservative window.
+            std::memset(static_cast<Uint8*>(view.Base) + blob.Offset, 0xDD,
+                        static_cast<SizeT>(blob.Size));
+            m_poisonedBytes += blob.Size;
+        }
+        m_resolvedCount = 0;
+    }
+
+    Bool PipeWireDecoder::DecodeAndApply(const Transport::RingRecordView& record) {
+        if (!Valid()) {
+            WireProtocolFatal("PipeWireDecoder::DecodeAndApply", "no control page or segment table");
+        }
+        if ((record.flags & Transport::kRecPad) != 0 ||
+            record.kind == Transport::kRingPadRecordKind) {
+            // R-9: a pad does not advance seq, and both sides skip it BEFORE counting.
+            // RingConsumer::Pop already does; one that reached here has been counted, and a
+            // seq that drifted by one silently reads another call's reply slot.
+            WireProtocolFatal("PipeWireDecoder::DecodeAndApply",
+                              "a kRecPad wrap filler reached the decoder; the caller skips pads "
+                              "before counting (R-9)");
+        }
+
+        const auto* base = static_cast<const Uint8*>(record.payload) - sizeof(MGPWireRecHeader);
+        const Uint64 size = record.payloadSize + sizeof(MGPWireRecHeader);
+        const MGPWireOp op = static_cast<MGPWireOp>(record.kind);
+
+        m_resolvedCount = 0;
+        PipeWireDecoder* previous = t_activeDecoder;
+        t_activeDecoder = this;
+        // The generated gate first, ALWAYS: MGPipeApplyWireRecord owns the per-opcode
+        // `size >= sizeof(MGPWireRec_X)` check, because that is the half that follows from the
+        // opcode alone and therefore belongs to the generator. It then calls back into
+        // ApplyChecked through the hook, which owns the half that needs the payload.
+        MG_Pipe::gMGPipeWireRecordApply = &MGPipeWireRecordApplyThunk;
+        const Bool applied = MG_Pipe::MGPipeApplyWireRecord(op, base, size, size);
+        t_activeDecoder = previous;
+
+        PoisonResolvedRuns();
+
+        ++m_applySeq;
+        // R-9: EVERY record, never batched. The client's verb barrier and every reply wait
+        // read appliedSeq, and a batched watermark makes a waiter resume on work the server
+        // has not done. retiredSeq goes with it because nothing in P5 borrows a ring slot into
+        // the GPU timeline - the day something does, this is the line that splits.
+        if (m_control != nullptr) {
+            m_control->appliedSeq.store(m_applySeq, std::memory_order_release);
+            m_control->retiredSeq.store(m_applySeq, std::memory_order_release);
+        }
+        return applied;
+    }
+
+    // ---------------------------------------------------------------------------------
+    // The 71 arms
+    // ---------------------------------------------------------------------------------
+    //
+    // EVERY ARM ENDS IN AN EXISTING MGPipeApply* FREE FUNCTION, in the verb sink, or in
+    // `false`. None of them interprets a field: the packed MGPSubData::Target, the
+    // MGPImageView::Access encoding and MGPFramebufferState::DrawBuffers' -1 token are all
+    // read by the applier that already owns them, which is why table 0 could say "a decoder
+    // that open-codes it is the class-1 defect" and this file could obey.
+    //
+    // `false` means "this build deliberately does not implement it" and is the answer for the
+    // 30-odd rows off P5's reduced path (BRIEF §4's exclusion list: the fence family, the
+    // query family, compute, XFB, indirect, copy-region, GetTextureImage, GenerateMipmap,
+    // SetShaderBuffers, SetStreamOutputTargets, ResourceSubDataComplete). They are NOT
+    // unchecked: every one of them runs the same bounds gate, the same tail cross-check and
+    // the same blob honesty pass before it declines, so the phase that implements one inherits
+    // a validated record rather than a validation problem.
+    Bool PipeWireDecoder::ApplyChecked(MGPWireOp op, const void* record, Uint64 size) {
+        const auto* base = static_cast<const Uint8*>(record);
+        const void* payload = base + sizeof(MGPWireRecHeader);
+
+        WireRecordLayout layout{};
+        if (!MGPipeWireRecordLayout(op, payload, layout)) {
+            WireProtocolFatalAt("opcode", static_cast<Uint64>(op),
+                                static_cast<Uint64>(MGPWireOp::kOpCount));
+        }
+        // THE TAIL CROSS-CHECK (BRIEF §5 w1). The generated gate proved `size >= sizeof(the
+        // record type)`; it CANNOT SEE THE TAIL, so this is the first thing that holds a
+        // record declaring Count = 4000 while carrying 8 bytes to its own arithmetic.
+        if (size != layout.TotalBytes) {
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s\"} the record declares Size=%llu and "
+                    "its own count fields describe %llu bytes (fixed payload %llu + tails %llu/%llu)",
+                    WireOpName(op), static_cast<unsigned long long>(size),
+                    static_cast<unsigned long long>(layout.TotalBytes),
+                    static_cast<unsigned long long>(layout.PayloadBytes),
+                    static_cast<unsigned long long>(layout.TailBytes[0]),
+                    static_cast<unsigned long long>(layout.TailBytes[1]));
+            std::abort();
+        }
+
+        // The record's own ordinal, which is its reply-slot id (R-3). 1-based, and m_applySeq
+        // only moves after the applier returns.
+        const Uint64 seq = m_applySeq + 1;
+
+        const auto tailAt = [&](Uint32 i) -> const Uint8* {
+            return layout.TailBytes[i] != 0 ? base + layout.TailOffset[i] : nullptr;
+        };
+        // The four Bool-returning appliers answer ACCEPTANCE, not "applied" (R-5: the client
+        // may not re-derive it, because an if-constexpr discard, a stale handle and a refused
+        // record are all invisible from the call site). The answer rides the reply slot the
+        // record's seq already names, so no payload of theirs needs an MGPReplySlot member.
+        const auto postAcceptance = [&](Bool accepted) {
+            if (m_replies != nullptr) {
+                m_replies->PostReply(seq, accepted ? ReplySink::kStatusOk : ReplySink::kStatusDeclined,
+                                     nullptr, 0);
+            }
+        };
+
+        switch (op) {
+
+        // ---- screen ---------------------------------------------------------------------
+        case MGPWireOp::GetCaps:
+            // The SESSION answers this one: the snapshot is built from the server's live
+            // backend and posted through ServerSession::PublishCapsSnapshot (s1/v1), and the
+            // two blob serializers it needs are MG_Remote/CapsCodec's. The codec validates the
+            // record and declines, rather than inventing a caps source of its own.
+            for (Uint32 i = 0; i < 2; ++i) {
+                MGPBlobRef blob{};
+                std::memcpy(&blob,
+                            base + sizeof(MGPWireRecHeader) + offsetof(MGPCaps, FormatCapabilities) +
+                                i * sizeof(MGPBlobRef),
+                            sizeof(MGPBlobRef));
+                CheckBlobIsHonest(op, blob, *m_segments);
+            }
+            return false;
+
+        // ---- resources -------------------------------------------------------------------
+        case MGPWireOp::ResourceCreate:
+            postAcceptance(MGPipeApplyResourceCreate(*static_cast<const MGPResourceDesc*>(payload)));
+            return true;
+
+        case MGPWireOp::ResourceRespecify: {
+            const auto& desc = *static_cast<const MGPResourceDesc*>(payload);
+            // R-13.3: `initialBytes` IS ALWAYS NULL UNDER SPLIT. Initial content arrives as
+            // resource_subdata records immediately after this one, which is what the texture
+            // path already does (TextureEmit.h:1137).
+            //
+            // The SCOPE is contract table 1 row 19b's carrier, read only through the helpers:
+            // the presence byte and the pair are one value in three pieces, and an open-coded
+            // reader that forgets the byte reads level 0 of upload target 0 as a real scope.
+            MGPRespecifiedLevel level{};
+            const MGPRespecifiedLevel* scope = nullptr;
+            if (!MGPipeRespecifyIsWholeResource(desc)) {
+                level.UploadTarget = MGPipeRespecifiedUploadTargetOf(desc);
+                level.Level = MGPipeRespecifiedLevelOf(desc);
+                scope = &level;
+            }
+            postAcceptance(MGPipeApplyResourceRespecify(desc, nullptr, scope));
+            return true;
+        }
+
+        case MGPWireOp::ResourceDestroy:
+            MGPipeApplyResourceDestroy(*static_cast<const MGPHandleOnly*>(payload));
+            return true;
+
+        case MGPWireOp::MapPersistent:
+            // R-6 / R-2.4: A CONSTANT DECLINE IN P5, and the applier is not called at all.
+            // Two reasons, and the second is the one worth writing down: the answer is a HOST
+            // POINTER, which cannot cross; and MGPWireRec_MapPersistent's payload is a bare
+            // MGPHandleOnly, so the record carries NEITHER the `size` NOR the `seedBytes` the
+            // entry point takes. The phase that lands a real map_persistent needs a payload
+            // change (MGPipeTypes.h, c0's file) before it can even call the applier.
+            //
+            // DECLINED is a real answer, not a failure: the three frontend sites already
+            // tolerate it (BufferObject.cpp:238, :603-606, :657-660).
+            if (m_replies != nullptr) {
+                m_replies->PostReply(seq, ReplySink::kStatusDeclined, nullptr, 0);
+            }
+            return true;
+
+        case MGPWireOp::UnmapPersistent:
+            MGPipeApplyUnmapPersistent(*static_cast<const MGPHandleOnly*>(payload));
+            return true;
+
+        // ---- fences and queries: off the reduced path (BRIEF §4) -------------------------
+        case MGPWireOp::FenceCreate:
+        case MGPWireOp::FenceStatus:
+        case MGPWireOp::FenceWait:
+        case MGPWireOp::FenceDestroy:
+        case MGPWireOp::FenceWaitServer:
+        case MGPWireOp::QueryCreate:
+        case MGPWireOp::QueryBegin:
+        case MGPWireOp::QueryEnd:
+        case MGPWireOp::QueryAvailable:
+        case MGPWireOp::QueryResult:
+        case MGPWireOp::QueryDestroy:
+        case MGPWireOp::QueryTimestamp:
+        case MGPWireOp::QueryCounter:
+            return false;
+
+        // ---- CSOs ------------------------------------------------------------------------
+        case MGPWireOp::CreateRenderState: {
+            const auto& desc = *static_cast<const MGPRenderStateDesc*>(payload);
+            const void* chunks = nullptr;
+            if (desc.ChunkMask != 0) {
+                // Contract table 1 row 1: nothing reads Blob.Size today, so the decoder is
+                // where the record is held to it. The expected length is not a guess - the
+                // chunk table computes it from the mask the record itself carries.
+                const Uint64 expected =
+                    static_cast<Uint64>(MGPipePipelineChunkBlobBytes(desc.ChunkMask));
+                RequireDeclaredBlob(op, desc.Blob, *m_segments);
+                if (desc.Blob.Size != expected) {
+                    WireProtocolFatalAt("CreateRenderState.Blob", desc.Blob.Size, expected);
+                }
+                chunks = ResolveOrFatal(op, desc.Blob);
+            } else {
+                CheckBlobIsHonest(op, desc.Blob, *m_segments);
+            }
+            MGPipeApplyCreateRenderState(desc, chunks);
+            return true;
+        }
+
+        case MGPWireOp::BindRenderState:
+            MGPipeApplyBindRenderState(*static_cast<const MGPBindRenderState*>(payload));
+            return true;
+
+        case MGPWireOp::DeleteRenderState:
+            MGPipeApplyDeleteRenderState(*static_cast<const MGPHandleOnly*>(payload));
+            return true;
+
+        case MGPWireOp::CreateVertexElements: {
+            const auto& desc = *static_cast<const MGPVertexElements*>(payload);
+            // The blob's length cross-check against the two counts is the applier's already
+            // (PipeApply.cpp:1990-1999) and is the model every other row copies; the decoder
+            // adds only what the applier cannot see, which is that the bytes exist at all.
+            const void* blob = ResolveOrFatal(op, desc.Blob);
+            MGPipeApplyCreateVertexElements(desc, blob);
+            return true;
+        }
+
+        case MGPWireOp::BindVertexElements:
+            MGPipeApplyBindVertexElements(*static_cast<const MGPHandleOnly*>(payload));
+            return true;
+
+        case MGPWireOp::DeleteVertexElements:
+            MGPipeApplyDeleteVertexElements(*static_cast<const MGPHandleOnly*>(payload));
+            return true;
+
+        case MGPWireOp::CreateSamplerState: {
+            const auto& desc = *static_cast<const MGPSamplerDesc*>(payload);
+            // R-13.1 gave this call its kHasBlob. The serialization IS the memcpy - a POD -
+            // and borderColorForm must survive BYTE FOR BYTE, because all three colour
+            // representations are always numerically populated and it is the only thing that
+            // says which one the backend must use (MGPipeTypes.h:425-428).
+            RequireDeclaredBlob(op, desc.Parameters, *m_segments);
+            if (desc.Parameters.Size != sizeof(MobileGL::SamplerParameters)) {
+                WireProtocolFatalAt("CreateSamplerState.Parameters", desc.Parameters.Size,
+                                    sizeof(MobileGL::SamplerParameters));
+            }
+            const void* bytes = ResolveOrFatal(op, desc.Parameters);
+            // Copied into a local rather than reinterpret_cast in place: the staged run is
+            // 8-aligned by the ring, but SamplerParameters is a frontend type and this file
+            // may not assume its alignment requirement is one the ring happens to satisfy.
+            MobileGL::SamplerParameters parameters{};
+            std::memcpy(&parameters, bytes, sizeof(parameters));
+            MGPipeApplyCreateSamplerState(desc, &parameters);
+            return true;
+        }
+
+        case MGPWireOp::DeleteSamplerState:
+            MGPipeApplyDeleteSamplerState(*static_cast<const MGPHandleOnly*>(payload));
+            return true;
+
+        case MGPWireOp::CreateSamplerView:
+            MGPipeApplyCreateSamplerView(*static_cast<const MGPSamplerView*>(payload));
+            return true;
+
+        case MGPWireOp::DeleteSamplerView:
+            MGPipeApplyDeleteSamplerView(*static_cast<const MGPHandleOnly*>(payload));
+            return true;
+
+        case MGPWireOp::CreateShaderState: {
+            const auto& desc = *static_cast<const MGPProgramDesc*>(payload);
+            // ONE ARCHIVE, NOT SEVEN RUNS - w1's ruling, and the cheapest one available.
+            // EncodeProgramArtifacts already serialises SpirvArtifacts::generatedSpirv, i.e.
+            // every stage module, so Reflection names the WHOLE archive and Spirv[0..5] stay
+            // undeclared. Shipping the modules a second time would double the largest record
+            // in the catalogue for no reader at all: MGPipeApplyCreateShaderState takes
+            // (desc, link*, spirv*) and reads the modules out of spirv->generatedSpirv -
+            // PipeApply.cpp touches neither desc.Spirv[] nor desc.Reflection.
+            //
+            // A DECLARED Spirv[i] IS FATAL rather than ignored, for resource_flush_range's
+            // reason (contract §6.3): a second, forgeable way to say the same thing is worse
+            // than no way at all. Overturn it by measuring that a per-stage run beats one
+            // archive - and then the archive has to stop carrying generatedSpirv, in the same
+            // change, or the two disagree.
+            for (Uint32 i = 0; i < 6; ++i) {
+                CheckBlobIsHonest(op, desc.Spirv[i], *m_segments);
+                if (desc.Spirv[i].Size != 0) {
+                    MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"CreateShaderState.Spirv[%u]\"} "
+                            "declares %llu bytes; under split the modules travel inside the "
+                            "Reflection archive and the six per-stage runs stay undeclared",
+                            static_cast<unsigned>(i),
+                            static_cast<unsigned long long>(desc.Spirv[i].Size));
+                    std::abort();
+                }
+            }
+            const void* archive = ResolveOrFatal(op, desc.Reflection);
+            MG_State::GLState::LinkArtifacts link;
+            MG_State::GLState::SpirvArtifacts spirv;
+            if (!MG_State::GLState::DecodeProgramArtifacts(static_cast<const Uint8*>(archive),
+                                                           static_cast<SizeT>(desc.Reflection.Size),
+                                                           link, spirv)) {
+                WireProtocolFatal("CreateShaderState.Reflection",
+                                  "DecodeProgramArtifacts refused the archive - a truncated "
+                                  "stream, a codec version mismatch or a struct-size mismatch");
+            }
+            MGPipeApplyCreateShaderState(desc, &link, &spirv);
+            return true;
+        }
+
+        case MGPWireOp::BindShaderState:
+            MGPipeApplyBindShaderState(*static_cast<const MGPHandleOnly*>(payload));
+            return true;
+
+        case MGPWireOp::DeleteShaderState:
+            MGPipeApplyDeleteShaderState(*static_cast<const MGPHandleOnly*>(payload));
+            return true;
+
+        // ---- working state ---------------------------------------------------------------
+        case MGPWireOp::SetDynamicState: {
+            const auto& dyn = *static_cast<const MGPDynamicState*>(payload);
+            const void* chunks = nullptr;
+            if (dyn.ChunkMask != 0) {
+                const Uint64 expected =
+                    static_cast<Uint64>(MGPipeDynamicChunkBlobBytes(dyn.ChunkMask));
+                RequireDeclaredBlob(op, dyn.Blob, *m_segments);
+                if (dyn.Blob.Size != expected) {
+                    WireProtocolFatalAt("SetDynamicState.Blob", dyn.Blob.Size, expected);
+                }
+                chunks = ResolveOrFatal(op, dyn.Blob);
+            } else {
+                CheckBlobIsHonest(op, dyn.Blob, *m_segments);
+            }
+            MGPipeApplySetDynamicState(dyn, chunks);
+            return true;
+        }
+
+        case MGPWireOp::SetFramebufferState:
+            MGPipeApplySetFramebufferState(*static_cast<const MGPFramebufferState*>(payload));
+            return true;
+
+        case MGPWireOp::SetVertexBuffers:
+            MGPipeApplySetVertexBuffers(*static_cast<const MGPVertexBuffers*>(payload),
+                                        reinterpret_cast<const MGPVertexBuffer*>(tailAt(0)));
+            return true;
+
+        case MGPWireOp::SetIndexBuffer:
+            MGPipeApplySetIndexBuffer(*static_cast<const MGPIndexBuffer*>(payload));
+            return true;
+
+        case MGPWireOp::SetIndirectBuffers:
+            // Indirect is off the reduced path (BRIEF §4) and has no applier entry point.
+            return false;
+
+        case MGPWireOp::SetSamplerViews:
+            MGPipeApplySetSamplerViews(*static_cast<const MGPSamplerViews*>(payload),
+                                       reinterpret_cast<const MGPBoundView*>(tailAt(0)));
+            return true;
+
+        case MGPWireOp::BindSamplerStates:
+            MGPipeApplyBindSamplerStates(*static_cast<const MGPSamplerStates*>(payload),
+                                         reinterpret_cast<const MGPipeHandle*>(tailAt(0)));
+            return true;
+
+        case MGPWireOp::SetShaderImages:
+            MGPipeApplySetShaderImages(*static_cast<const MGPShaderImages*>(payload),
+                                       reinterpret_cast<const MGPImageView*>(tailAt(0)));
+            return true;
+
+        case MGPWireOp::SetShaderBuffers: {
+            // NO APPLIER ENTRY POINT EXISTS, and P5 does not invent one: the call is on
+            // BRIEF §4's exclusion list, so a consumer written here would be a semantics
+            // nobody can test this phase. What the record needs and cannot get later is its
+            // TAIL ARITHMETIC, which MGPipeWireRecordLayout above has already run - including
+            // the HostSpanCount-is-0-or-Count rule, the thing that keeps the two arrays
+            // index-aligned.
+            //
+            // kCapNeedsHostUboBytes is 0 for the whole of P5 (table 0), so the second tail is
+            // always absent here; the honesty pass below is what says so out loud if it ever
+            // is not.
+            if (layout.TailCount == 2 && layout.TailBytes[1] != 0) {
+                const auto* spans = reinterpret_cast<const MGHostSpan*>(tailAt(1));
+                const Uint64 count = layout.TailBytes[1] / sizeof(MGHostSpan);
+                for (Uint64 i = 0; i < count; ++i) {
+                    MGHostSpan span{};
+                    std::memcpy(&span, reinterpret_cast<const Uint8*>(spans) + i * sizeof(MGHostSpan),
+                                sizeof(MGHostSpan));
+                    CheckHostSpanIsHonest(span);
+                }
+            }
+            return false;
+        }
+
+        case MGPWireOp::SetStreamOutputTargets:
+            // Same as above: no applier, off the reduced path, both tails validated.
+            return false;
+
+        case MGPWireOp::SetGlobalConstants: {
+            const auto& rec = *static_cast<const MGPGlobalConstants*>(payload);
+            // The length cross-check is the applier's (PipeApply.cpp:2784, against the
+            // program's GlobalUboSize, which this record does not carry). Under rule A it
+            // stops being inert for the first time, which is the whole point of arming Size.
+            const void* bytes = ResolveOrFatal(op, rec.Blob);
+            MGPipeApplySetGlobalConstants(rec, bytes);
+            return true;
+        }
+
+        case MGPWireOp::SetVertexAttribDefaults:
+            // Count == popcount(Mask) was enforced by the layout above: two declarants that
+            // must agree, and nothing checked it before (contract table 1 row 15).
+            MGPipeApplySetVertexAttribDefaults(*static_cast<const MGPVertexAttribDefaults*>(payload),
+                                               reinterpret_cast<const MGPAttribValue*>(tailAt(0)));
+            return true;
+
+        case MGPWireOp::SetPixelPackState:
+            MGPipeApplySetPixelPackState(*static_cast<const MGPPixelPackState*>(payload));
+            return true;
+
+        case MGPWireOp::SetPatchState:
+            MGPipeApplySetPatchState(*static_cast<const MGPPatchState*>(payload));
+            return true;
+
+        case MGPWireOp::SetDrawProgram:
+            MGPipeApplySetDrawProgram(*static_cast<const MGPHandleOnly*>(payload));
+            return true;
+
+        case MGPWireOp::SetDispatchProgram:
+            MGPipeApplySetDispatchProgram(*static_cast<const MGPHandleOnly*>(payload));
+            return true;
+
+        case MGPWireOp::SetResidualValueState: {
+            // THE HARDEST ROW IN TABLE 1, and it is hard for a reason that does not show in
+            // the payload: MGPipeApplySetResidualValueState takes `const ResidualValueBlock&`
+            // - not a payload, not a const void* - and MGPResidualValueState is NEVER
+            // INSTANTIATED on the live path (PipeFill.cpp:2184 passes the block straight to
+            // the applier). So the encoder had to invent both the record fill and the blob
+            // fill, and this is the first code in the tree that reads either.
+            //
+            // The block is the blob, whole, and its size only ever ratchets DOWN
+            // (MGL_RESIDUAL_BLOCK_SIZE, 1248 -> 8 at P2, 0 at P13). Requiring exact equality
+            // rather than ">=" is what makes a client built against an older block a loud
+            // mismatch instead of a silently short read of CapabilityBits.
+            const auto& rec = *static_cast<const MGPResidualValueState*>(payload);
+            RequireDeclaredBlob(op, rec.Blob, *m_segments);
+            if (rec.Blob.Size != sizeof(ResidualValueBlock)) {
+                WireProtocolFatalAt("SetResidualValueState.Blob", rec.Blob.Size,
+                                    sizeof(ResidualValueBlock));
+            }
+            const void* bytes = ResolveOrFatal(op, rec.Blob);
+            ResidualValueBlock block{};
+            std::memcpy(&block, bytes, sizeof(block));
+            MGPipeApplySetResidualValueState(block);
+            return true;
+        }
+
+        case MGPWireOp::SetTextureParams:
+            postAcceptance(MGPipeApplySetTextureParams(*static_cast<const MGPTextureParams*>(payload)));
+            return true;
+
+        // ---- transfer ---------------------------------------------------------------------
+        case MGPWireOp::ResourceSubData: {
+            const auto& rec = *static_cast<const MGPSubData*>(payload);
+            // Rule A arms both halves. The buffer half already declared a real size in
+            // monolith and is cross-checked at PipeApply.cpp:702; THE TEXTURE HALF DECLARED 0
+            // (TextureEmit.h:1265-1267, on the grounds that the byte count was "the server's
+            // to compute") and under split it must declare too - a length the reader computes
+            // from the record it is checking is not a bounds check.
+            const Bool namesABuffer = rec.Target == kMGPipeResourceTargetBuffer;
+            const Bool carriesContent =
+                namesABuffer ? MGPipeSubDataBufferSize(rec) != 0
+                             : (rec.UnionBox.W != 0 && rec.UnionBox.H != 0 && rec.UnionBox.D != 0);
+            const void* bytes = nullptr;
+            if (carriesContent) {
+                bytes = ResolveOrFatal(op, rec.Blob);
+            } else {
+                CheckBlobIsHonest(op, rec.Blob, *m_segments);
+            }
+            postAcceptance(MGPipeApplyResourceSubData(
+                rec, bytes, reinterpret_cast<const MGPSubRegion*>(tailAt(0))));
+            return true;
+        }
+
+        case MGPWireOp::BufferSubDataResident: {
+            const auto& rec = *static_cast<const MGPSubData*>(payload);
+            // kOptional is a CAPABILITY question under split, not a null-pointer one: the
+            // client gates on kCapResidentSubData through the caps mirror before it emits
+            // (R-8). By the time a record is here, the answer was already yes.
+            const void* bytes = MGPipeSubDataBufferSize(rec) != 0 ? ResolveOrFatal(op, rec.Blob)
+                                                                  : nullptr;
+            if (bytes == nullptr) {
+                CheckBlobIsHonest(op, rec.Blob, *m_segments);
+            }
+            MGPipeApplyBufferSubDataResident(rec, bytes);
+            return true;
+        }
+
+        case MGPWireOp::ResourceSubDataComplete:
+            // The forward terminator of a SERVER-initiated texture pull (section 7.1). There
+            // is no client producer and no applier; the reverse channel is P7/P9.
+            return false;
+
+        case MGPWireOp::ResourceFlushRange:
+            // R-13.2 / contract §6.3: IT CARRIES NO BYTES AT ALL under split. The ladder it
+            // drives rewrites its range from the AUTHORITATIVE SHADOW, which rule C makes
+            // server-owned, so resource_subdata is already the only way bytes reach it and a
+            // second way would be a forgeable one. AccessFlags cross verbatim, never
+            // normalised (PipeApply.h:902-903).
+            MGPipeApplyResourceFlushRange(*static_cast<const MGPFlushRange*>(payload), nullptr);
+            return true;
+
+        case MGPWireOp::ResourceReadback:
+            // The BYTES go back in SEG_EVENT through OnBufferWriteback (contract table 1 row
+            // 22) - the destination is the client's shadow and the size is the resource's, not
+            // a fixed slot's - so the reply slot carries COMPLETION only.
+            MGPipeApplyResourceReadback(*static_cast<const MGPReadback*>(payload));
+            if (m_replies != nullptr) {
+                m_replies->PostReply(seq, ReplySink::kStatusOk, nullptr, 0);
+            }
+            return true;
+
+        case MGPWireOp::ResourceCopyRegion:
+        case MGPWireOp::GenerateMipmap:
+        case MGPWireOp::GetTextureImage:
+            // Off the reduced path (BRIEF §4), and GetTextureImage's emit-table slot is
+            // Fatal{UnmigratedVerb} on the client anyway (contract §7 class C).
+            return false;
+
+        // ---- the five class-B verbs: no MGPipeApply* exists, so v1's sink or nothing -------
+        case MGPWireOp::Blit:
+            return m_verbs != nullptr && m_verbs->OnBlit(*static_cast<const MGPBlit*>(payload));
+
+        case MGPWireOp::Clear:
+            return m_verbs != nullptr && m_verbs->OnClear(*static_cast<const MGPClear*>(payload));
+
+        case MGPWireOp::ReadPixels:
+            // P5 BLOCKS on read_pixels (ROADMAP.md:21) and the pixels come back in the reply
+            // slot, which is why ReplyPool::SlotBytes() is sized from the scenario's largest
+            // read rather than guessed. MGPReadbackInfo has DstOffset/DstSize and no Seg on
+            // purpose: in P5 the destination is ALWAYS SEG_REPLY (contract table 1 row 23).
+            return m_verbs != nullptr &&
+                   m_verbs->OnReadPixels(*static_cast<const MGPReadbackInfo*>(payload), seq, m_replies);
+
+        case MGPWireOp::DrawVbo: {
+            const auto& info = *static_cast<const MGPDrawInfo*>(payload);
+            // The conditional second tail. P5 must produce NONE of these - the reduced path
+            // draws from a VBO precisely so kDrawHasUserIndices never fires (table 0's cap-bit
+            // row) - so a span arriving here is a FINDING, not merely a corruption check, and
+            // CheckHostSpanIsHonest is what makes it one.
+            const MGHostSpan* userIndices = nullptr;
+            MGHostSpan span{};
+            if ((info.Flags & kDrawHasUserIndices) != 0) {
+                if (layout.TailCount != 2 || layout.TailBytes[1] != sizeof(MGHostSpan)) {
+                    WireProtocolFatalAt("DrawVbo.userIndices", layout.TailBytes[1],
+                                        sizeof(MGHostSpan));
+                }
+                std::memcpy(&span, tailAt(1), sizeof(span));
+                CheckHostSpanIsHonest(span);
+                userIndices = &span;
+            }
+            return m_verbs != nullptr &&
+                   m_verbs->OnDrawVbo(info, reinterpret_cast<const MGPDrawRange*>(tailAt(0)),
+                                      userIndices);
+        }
+
+        case MGPWireOp::Present:
+            return m_verbs != nullptr && m_verbs->OnPresent(*static_cast<const MGPPresent*>(payload));
+
+        // ---- compute, XFB, barriers, flush, swap interval: off the reduced path ------------
+        case MGPWireOp::LaunchGrid:
+        case MGPWireOp::MemoryBarrier:
+        case MGPWireOp::BeginStreamOutput:
+        case MGPWireOp::EndStreamOutput:
+        case MGPWireOp::PauseStreamOutput:
+        case MGPWireOp::ResumeStreamOutput:
+        case MGPWireOp::SetSwapInterval:
+            return false;
+
+        case MGPWireOp::Flush:
+            // NOT A VERB AND NOT A NO-OP DECISION: there is no Flush slot in
+            // GLFunctionsTable at all, and glFlush/glFinish are empty function bodies
+            // (Definitions.cpp:111-112), so R-4's predicted minimum set naming Flush was
+            // wrong (C-3). A TriangleScenario that orders its readback with glFlush orders
+            // nothing; the verb barrier is what orders it.
+            return false;
+
+        case MGPWireOp::kInvalid:
+        case MGPWireOp::kOpCount:
+        default:
+            WireProtocolFatalAt("opcode", static_cast<Uint64>(op),
+                                static_cast<Uint64>(MGPWireOp::kOpCount));
+        }
+    }
 
 } // namespace MobileGL::MG_Remote::Wire
