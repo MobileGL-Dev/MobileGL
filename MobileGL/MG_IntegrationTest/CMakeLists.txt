@@ -56,6 +56,8 @@ add_executable(MobileGLIntegrationTest
     Harness/PipeApplyPeek.cpp
     Harness/P4aSeamPeek.cpp
     Harness/P4aFinalFixPeek.cpp
+    Harness/PersistentMapPeek.cpp
+    Harness/SplitRuntimePeek.cpp
     Scenarios/OrientationScenario.cpp
     Scenarios/CrossFrameBufferScenario.cpp
     Scenarios/ResidentIndexScenario.cpp
@@ -141,6 +143,11 @@ add_executable(MobileGLIntegrationTest
     Scenarios/ObjectSubsystemControlScenario.cpp
     Scenarios/P4aSeamAuditScenario.cpp
     Scenarios/P4aFinalFixScenario.cpp
+    # P5's two new scenarios, targets B and C of the reduced path (BRIEF-P5 4). Both are
+    # ORDINARY GL scenarios that run in every lane; the DirectGLES.Split. entries further down
+    # run the same cases with MOBILEGL_TRANSPORT=inproc.
+    Scenarios/TriangleScenario.cpp
+    Scenarios/PersistentCoherentMapScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
@@ -1756,4 +1763,233 @@ if (MOBILEGL_PIPE_VERIFY)
             TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
             ENVIRONMENT "${MGL_ITEST_VULKAN_POISON_OMIT_ENVIRONMENT}"
     )
+endif()
+
+# --- P5: the DirectGLES.Split. lanes and the persistent-map ARM lanes ------------------------
+#
+# THE PRIVATE SECOND LABEL IS WHAT MAKES THE LANE FALSIFIABLE, and it is the verify block above
+# copied verbatim for the same argument: `ctest -L integration-split --no-tests=error` in a build
+# that forgot -DMOBILEGL_BUILD_DISAGGREGATED=ON matches NOTHING and FAILS, instead of reporting a
+# green run of zero entries. Keeping `integration-gpu` as well is why "a split build's
+# `ctest -L integration-gpu` still describes the whole registration set" stays true.
+#
+# REGISTERED INSIDE `if (MOBILEGL_BUILD_DISAGGREGATED)`, and that is what keeps gate G2 (pull and
+# push name-for-name identical) untouched: neither of those two builds sets the option, so the
+# Split family is absent from BOTH of them rather than present in one. The two SCENARIO FILES the
+# lanes point at are added to the source list unconditionally, so their cases DO appear in the
+# ambient DirectGLES./DirectVulkan. registrations of every build - they are ordinary GL scenarios
+# and their monolith behaviour is the baseline the split arm is compared against.
+#
+# WHAT ARMS THE SPLIT LANES, AND WHY IT IS NOT A PROBE OVER SOURCE TEXT.
+#
+# Until a real client session exists, MOBILEGL_TRANSPORT=inproc is parsed (CONTRACT-P5 5) and then
+# nothing consumes it, so a Split entry would go green having run monolith end to end - the exact
+# failure the lane exists to prevent. The first version of this file answered "has the client
+# landed" with a CMake conjunction over c0's stub files: the c1 symbols present AND no
+# `Fatal.Unimplemented` surviving. REVIEW FINDING M-1 FALSIFIED IT BY PERFORMING IT - a
+# `sed -i 's/Fatal{Unimplemented/Fatal{NotYetImplemented/'` over c0's six stubs, with every entry
+# point still aborting and ImplementedVerbCount() still 0, armed all eleven lanes and EIGHT WENT
+# GREEN. A single comment line carrying the marker did the opposite and would keep them dark
+# forever (M-2), and two stub files outside the two probed directories allowed a partial arm (M-3).
+#
+# A statement about source text can always be falsified by editing source text, and the people
+# most likely to edit it are the ones landing the packages the probe watches for. So the arming
+# condition moved into the PROCESS: Harness/SplitRuntimePeek.cpp reads MG_Config::Transport,
+# ClientSession::Active() and ImplementedVerbCount() - three values c0 shipped and documented,
+# none of which a message edit can move - and every Split case skips, naming the first one that is
+# not true. All this file has to decide now is whether that peek can be COMPILED, which is exactly
+# "did this build compile MG_Remote", which is exactly the build option.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    target_compile_definitions(MobileGLIntegrationTest PRIVATE -DMGITEST_SPLIT_RUNTIME_PEEK=1)
+    message(STATUS "Integration tests: the DirectGLES.Split. lanes arm from the RUNNING PROCESS - "
+                   "MG_Config::Transport, ClientSession::Active() and ImplementedVerbCount() - and "
+                   "skip naming the first of those that is not true")
+endif()
+
+# Q-3, made a build fact rather than documentation. ConfigLoader logs the resolved transport at
+# INFO, and that line is what run_trace_case.cmake reads back as proof a retrace really went
+# split. At WARN or above it is compiled out and every split retrace reds for a reason that is not
+# a defect; at DEBUG, ConfigLoader's unconditional env dump prints a confusable KEY=VALUE line in
+# a PULL build too (review M-5, also fixed on the reading side). The integration lanes themselves
+# no longer depend on the log level at all - they read the variable - so this is a WARNING.
+if (MOBILEGL_BUILD_DISAGGREGATED AND DEFINED MOBILEGL_LOG_ACTIVE_LEVEL
+    AND NOT MOBILEGL_LOG_ACTIVE_LEVEL STREQUAL "MOBILEGL_LOG_LEVEL_INFO"
+    AND NOT MOBILEGL_LOG_ACTIVE_LEVEL STREQUAL "MOBILEGL_LOG_LEVEL_DEBUG")
+    message(WARNING "Integration tests: MOBILEGL_LOG_ACTIVE_LEVEL=${MOBILEGL_LOG_ACTIVE_LEVEL} in a "
+                    "disaggregated build. ConfigLoader's transport line is MGLOG_I, so the "
+                    "trace-replay split arm's transport-resolution assertion cannot see it and every "
+                    "split retrace will red. Use MOBILEGL_LOG_LEVEL_INFO.")
+endif()
+
+# Package b1's client-side persistent-map tracker, which is what Harness/PersistentMapPeek.cpp
+# asks the membership question of (b1-v1.md 4.1 item 2). TWO halves, and both are needed:
+# MOBILEGL_BUILD_DISAGGREGATED because a build that never compiled MG_Remote cannot LINK the call,
+# and the content probe because b1 may not have landed it yet. __has_include in the peek would
+# answer yes in a pull build - the header is in the source tree of every build - and turn a
+# healthy pull build into a link error, which is why this decision is made here.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    mgl_itest_probe_for_symbol(MGL_ITEST_PERSISTENT_MAP_TRACKER
+        "${MGL_ITEST_ROOT}/MobileGL/MG_Remote/Client" "IsLivePersistentMap")
+    if (MGL_ITEST_PERSISTENT_MAP_TRACKER)
+        message(STATUS "Integration tests: package b1's persistent-map tracker is present "
+                       "(${MGL_ITEST_PERSISTENT_MAP_TRACKER}) - PersistentCoherentMapScenario's "
+                       "membership assertion is live")
+        target_compile_definitions(MobileGLIntegrationTest PRIVATE -DMGITEST_PERSISTENT_MAP_TRACKER=1)
+    else()
+        message(STATUS "Integration tests: no source under MobileGL/MG_Remote/Client names "
+                       "IsLivePersistentMap - package b1's tracker has not landed, so "
+                       "PersistentCoherentMapScenario's membership assertion SKIPS")
+    endif()
+endif()
+
+# ARCHITECTURE.md:543 - every new ctest ENVIRONMENT and add_trace_replay_test's SPLIT branch
+# carries MOBILEGL_IPC_SERVER_PATH, because the dladdr fallback cannot find the server from a
+# binary that links MobileGL_s statically. P5 is inproc-only and nothing reads the value yet; it
+# is carried now so that an unparsed variable and a parsed-and-ignored one stop being
+# indistinguishable the day P6 consumes it. A generator expression is deliberately NOT used here:
+# a $<TARGET_FILE_DIR:...> inside a gtest_discover_tests PROPERTIES value is written into the
+# generated ctest include file verbatim and never expanded.
+set(MGL_ITEST_SPLIT_SERVER_PATH "${CMAKE_BINARY_DIR}/libMobileGLServer.so")
+
+mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc"
+    "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+
+# The two counting lanes, one per transport, and they are a PAIR: exit gate E3(c) asks that the
+# split arm's `mpr` equal the monolith arm's, and one test process can only ever see its own. So
+# both lanes run the same workload and assert the same constant, and the equality holds by
+# construction with each half able to fail on its own.
+#
+# Each gets a LOG PATH OF ITS OWN and a TEST_FILTER that selects ONE case, for the reason
+# PipeStatsWindow.h gives: the library opens its log fopen(path, "w"), so every process in a lane
+# truncates it, and two readers in one lane race under `ctest -j`. RESOURCE_LOCK on top of that,
+# for the reason the UnlocatedIoBlocks lane gives - measured on this tree, three runs of the full
+# integration-gpu label at -j 8 produced 4, 0 and 2 spurious failures of the log-reading cases
+# without it.
+#
+# The monolith lane declares NO arm: which arm AcquireMemoryRange takes for a sub-16-MiB
+# PERSISTENT|WRITE|COHERENT map is a property of the driver and the build, so the case RECORDS it
+# there and skips the assertion. Only the split lane - where R-6 pins the adopt tier at T2 -
+# declares one.
+# MOBILEGL_TRANSPORT=monolith IS NAMED HERE ON PURPOSE, and it is review finding N-6. This entry
+# is the MONOLITH half of a pair; without the property a job-level or gate-level
+# `MOBILEGL_TRANSPORT=inproc` export reaches it (observed: its own log then carried
+# `Config: MOBILEGL_TRANSPORT=inproc`) and, in the inproc arm of the three-arm A/B, BOTH halves of
+# the pair were inproc. Nothing failed - each half asserts the same constant - but the pair was
+# not the pair its name describes. A ctest ENVIRONMENT property overrides the job environment,
+# which is the one case where that is what you want.
+mgl_itest_join_environment(MGL_ITEST_GLES_PMAP_ARM_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_PMAP_LANE=1" "MOBILEGL_TRANSPORT=monolith"
+    "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/persistent-map-arm-DirectGLES.log"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.PersistentMapArm."
+    TEST_FILTER "PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        RESOURCE_LOCK persistent-map-arm-DirectGLES.log
+        ENVIRONMENT "${MGL_ITEST_GLES_PMAP_ARM_ENVIRONMENT}"
+)
+
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    # One block per scenario, following the DirectGLES.MapPersistentRoundtrips. precedent: a
+    # `:`-separated multi-pattern TEST_FILTER is not used anywhere in this file, so its escaping
+    # through gtest_discover_tests' flat PROPERTIES forwarding is unproven, and three blocks cost
+    # nothing.
+    #
+    # ClearThenReadPixelsScenario is target A of the reduced path and already existed; Triangle is
+    # target B and PersistentCoherentMap is target C, both new in P5.
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Split."
+        TEST_FILTER "ClearThenReadPixelsScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-split"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
+    )
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Split."
+        TEST_FILTER "TriangleScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-split"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
+    )
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Split."
+        TEST_FILTER "PersistentCoherentMapScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-split"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
+    )
+
+    # The split half of the counting pair. MGITEST_PERSISTENT_MAP_ARM=emulated is R-6: under split
+    # the adopt tier is pinned at T2, the resource owner declines every acquisition and the client
+    # pushes the mapping's dirty blocks - so pmap must be non-zero and mpr must be the monolith
+    # lane's number. pmap == 0 here means MGPipeApplyMapPersistent handed back a pointer, which is
+    # exit gate E3(d) failing, and under inproc that failure is invisible in pixels.
+    mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_PMAP_ARM_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc"
+        "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
+        "MGITEST_PMAP_LANE=1" "MGITEST_PERSISTENT_MAP_ARM=emulated"
+        "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/persistent-map-arm-split-DirectGLES.log"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Split.PersistentMapArm."
+        TEST_FILTER "PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-split"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            RESOURCE_LOCK persistent-map-arm-split-DirectGLES.log
+            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_PMAP_ARM_ENVIRONMENT}"
+    )
+
+    # --- EXIT GATE E3(e): the same checks with a ring small enough to force back-pressure -----
+    #
+    # BRIEF 7 E3(e) - "以上五条再跑一遍 ring 小到足以至少发生一次背压等待的配置" - was missing from
+    # the first cut of this package and missing from its report (review finding M-7). It is a
+    # LANE, not a new scenario: the same three split scenarios with SEG_CMD and SEG_STAGE at their
+    # floor, so a workload that fits comfortably in the 8 MiB / 32 MiB defaults has to wrap and
+    # wait at least once.
+    #
+    # 1 MiB is ConfigLoader's minimum for both (Config.h / ConfigLoader.cpp:363-364, floors of 1
+    # rather than 0 because a ring caps ONE record at half its size). That caps a record at 512
+    # KiB, which every record on the reduced path is far under, so the ring is legal and small
+    # rather than unusable.
+    #
+    # WHAT THIS LANE DOES NOT YET ASSERT, stated rather than implied: that a back-pressure wait
+    # ACTUALLY happened. That needs a counter only package s1 can publish (a producer-parked or
+    # ring-full tally on RingControl); until it exists this lane proves the five checks survive a
+    # small ring, not that the small ring bit. The gap is named in t1-v1.md's debts rather than
+    # left for someone to discover from a green.
+    mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_SMALL_RING_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc"
+        "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
+        "MGITEST_SMALL_RING_LANE=1" "MOBILEGL_IPC_RING_MB=1" "MOBILEGL_IPC_STAGE_MB=1"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+
+    foreach(mglItestSmallRingScenario ClearThenReadPixelsScenario TriangleScenario
+                                      PersistentCoherentMapScenario)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectGLES.Split.SmallRing."
+            TEST_FILTER "${mglItestSmallRingScenario}.*"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-gpu\;integration-split"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_SMALL_RING_ENVIRONMENT}"
+        )
+    endforeach()
 endif()

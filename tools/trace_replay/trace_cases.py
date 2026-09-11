@@ -8,11 +8,48 @@ from pathlib import Path
 TRACE_CASES_JSON = Path(__file__).with_name("trace_cases.json")
 CI_BACKENDS = ("DirectGLES", "DirectVulkan")
 
+# Every key a case or the defaults block may carry. An UNKNOWN key is a hard error rather than a
+# silent no-op, which is review finding N-4: `"split": true` mistyped as `"splitt": true` loaded
+# clean, the split subset became [], the GitHub matrix became {"include":[]}, and `retrace-split`
+# was skipped with no red anywhere. Every other way of getting `split` wrong already raised
+# (`"ci": false`, a backend list without DirectGLES, a non-bool value) - the typo was the one hole,
+# and it is the shape that makes a whole CI job quietly stop existing.
+#
+# Adding a key means adding it here, deliberately, in the same commit. That is the point.
+KNOWN_CASE_KEYS = frozenset({
+    "name",
+    "trace_archive",
+    "trace_file",
+    "golden",
+    "alternate_golden",
+    "target_call",
+    "width",
+    "height",
+    "ssim_threshold",
+    "crop_x",
+    "crop_y",
+    "crop_width",
+    "crop_height",
+    "coherent_as_flush",
+    "timeout_seconds",
+    "ci",
+    "ci_backends",
+    "verify",
+    "split",
+    "avoid_angle_llvmpipe_explicit_lod_bias",
+})
+
 
 def load_trace_case_manifest(path=TRACE_CASES_JSON):
     with Path(path).open("r", encoding="utf-8") as file:
         manifest = json.load(file)
     defaults = manifest.get("defaults", {})
+    unknown_defaults = sorted(set(defaults) - KNOWN_CASE_KEYS)
+    if unknown_defaults:
+        raise ValueError(
+            f"unknown key(s) in the defaults block: {', '.join(unknown_defaults)}. "
+            f"Known keys are {', '.join(sorted(KNOWN_CASE_KEYS))}"
+        )
     cases = []
     seen = set()
     for case in manifest.get("cases", []):
@@ -20,6 +57,13 @@ def load_trace_case_manifest(path=TRACE_CASES_JSON):
         name = merged.get("name")
         if not name:
             raise ValueError("trace case is missing name")
+        unknown = sorted(set(case) - KNOWN_CASE_KEYS)
+        if unknown:
+            raise ValueError(
+                f"unknown key(s) for {name}: {', '.join(unknown)}. A mistyped flag loads clean and "
+                f"turns its whole CI subset into an empty matrix, which GitHub skips with no red. "
+                f"Known keys are {', '.join(sorted(KNOWN_CASE_KEYS))}"
+            )
         if name in seen:
             raise ValueError(f"duplicate trace case: {name}")
         seen.add(name)
@@ -35,6 +79,23 @@ def load_trace_case_manifest(path=TRACE_CASES_JSON):
         if verify and not merged.get("ci", True):
             raise ValueError(
                 f"{name} is marked verify but excluded from CI, so the verify matrix would drop it"
+            )
+        # "split" opts a case into the MOBILEGL_TRANSPORT=inproc retrace subset, the same shape
+        # and the same reason as "verify" above: a typo has to be a loud manifest error in every
+        # consumer, not a subset that is quietly one case short. The split arm additionally runs
+        # DirectGLES ONLY - the server the arm exercises is Espryt's - so a case that excluded
+        # DirectGLES from CI would leave the split matrix with nothing to run.
+        split = merged.get("split", False)
+        if not isinstance(split, bool):
+            raise ValueError(f"split must be true or false for {name}")
+        if split and not merged.get("ci", True):
+            raise ValueError(
+                f"{name} is marked split but excluded from CI, so the split matrix would drop it"
+            )
+        if split and "DirectGLES" not in ci_backends(merged):
+            raise ValueError(
+                f"{name} is marked split but does not run DirectGLES in CI; the split arm is "
+                f"DirectGLES-only, so the entry would be registered with no backend"
             )
         cases.append(merged)
     return {"defaults": defaults, "cases": cases}
@@ -92,6 +153,16 @@ def verify_trace_cases(cases):
     return [case for case in cases if case.get("verify", False)]
 
 
+def split_trace_cases(cases):
+    """The subset the split (MOBILEGL_TRANSPORT=inproc) CI mode retraces.
+
+    P5's phase gate names exactly one: OpenRA, at SSIM >= 0.99. It is also the only fixture that
+    is hydrated locally, so keeping the subset explicit in the manifest is what stops a later
+    phase from widening the arm into an LFS fetch by accident.
+    """
+    return [case for case in cases if case.get("split", False)]
+
+
 def ci_backends(case):
     backends = case.get("ci_backends")
     if backends is None:
@@ -120,6 +191,16 @@ def github_test_matrix(cases):
 
 def github_verify_matrix(cases):
     return github_test_matrix(verify_trace_cases(cases))
+
+
+def github_split_matrix(cases):
+    """{backend, case} for the split arm. DirectGLES only - see split_trace_cases."""
+    return {
+        "include": [
+            {"backend": "DirectGLES", "case": case["name"]}
+            for case in split_trace_cases(cases)
+        ]
+    }
 
 
 def github_apk_matrix(cases):
@@ -158,8 +239,8 @@ def emit_cmake(cases, fixture_root):
         ("CROP_HEIGHT", "crop_height", False),
         ("COHERENT_AS_FLUSH", "coherent_as_flush", False),
     ]
-    for case in cases:
-        lines.append(f"add_trace_replay_test_for_backends({cmake_quote(case['name'])}")
+    def emit_one(function, case):
+        lines.append(f"{function}({cmake_quote(case['name'])}")
         for cmake_key, json_key, fixture_path in keys:
             value = case.get(json_key)
             if value is None or value == "":
@@ -169,6 +250,14 @@ def emit_cmake(cases, fixture_root):
             lines.append(f"        {cmake_key} {cmake_quote(value)}")
         lines.append(")")
         lines.append("")
+
+    for case in cases:
+        emit_one("add_trace_replay_test_for_backends", case)
+        # P5's split arm, emitted beside the monolith pair rather than in a block of its own so
+        # that a case and its variant always carry identical parameters. The CMake side is a
+        # no-op unless MOBILEGL_BUILD_DISAGGREGATED is ON.
+        if case.get("split", False):
+            emit_one("add_trace_replay_split_test", case)
     return "\n".join(lines)
 
 
@@ -183,6 +272,7 @@ def parse_args():
             "names",
             "github-test-matrix",
             "github-verify-matrix",
+            "github-split-matrix",
             "github-apk",
             "github-apk-matrix",
             "fixture-files",
@@ -204,6 +294,8 @@ def main():
         print(json.dumps(github_test_matrix(cases), separators=(",", ":")))
     elif args.format == "github-verify-matrix":
         print(json.dumps(github_verify_matrix(cases), separators=(",", ":")))
+    elif args.format == "github-split-matrix":
+        print(json.dumps(github_split_matrix(cases), separators=(",", ":")))
     elif args.format == "github-apk":
         print(json.dumps([github_apk_case(case) for case in cases], separators=(",", ":")))
     elif args.format == "github-apk-matrix":
