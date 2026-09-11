@@ -163,7 +163,7 @@ TEST(FieldOwnershipTest, TheReducedPathsUnmigratedFieldsAreAllAccountedFor) {
 TEST(FieldOwnershipTest, TheSevenStickyForwardsAgreeWithTheirFieldRows) {
     GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
 }
-TEST(FieldOwnershipTest, VerbBoundaryOpsAreTheFourTheStampRuleNames) {
+TEST(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
     GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
 }
 
@@ -274,18 +274,35 @@ TEST_F(FieldOwnershipTest, TheSevenStickyForwardsAgreeWithTheirFieldRows) {
     }
 }
 
-// The stamp map, and the one slot of class B that is deliberately NOT in it.
-TEST_F(FieldOwnershipTest, VerbBoundaryOpsAreTheFourTheStampRuleNames) {
+// The stamp map, in both directions: the four P5 class-B boundaries, the eight mapped ahead of
+// the phase that will emit them, and the three verb-shaped calls that are exempt by name.
+TEST_F(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
+    // CONTRACT §7 class B minus Present - the only four that can arrive in P5.
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::Clear), MGPipeVerb::Clear);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::DrawVbo), MGPipeVerb::DrawArrays);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::ReadPixels), MGPipeVerb::ReadPixels);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::Blit), MGPipeVerb::BlitFramebuffer);
-    EXPECT_EQ(kMGPipeVerbBoundaryOpCount, SizeT{4});
+    // Class C today, mapped anyway: an OMITTED stamp row is silent, because the record would
+    // apply under the previous verb's serial, mask and name.
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::LaunchGrid), MGPipeVerb::DispatchCompute);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::MemoryBarrier), MGPipeVerb::MemoryBarrier);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::BeginStreamOutput), MGPipeVerb::BeginTransformFeedback);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::EndStreamOutput), MGPipeVerb::EndTransformFeedback);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::PauseStreamOutput), MGPipeVerb::PauseTransformFeedback);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::ResumeStreamOutput), MGPipeVerb::ResumeTransformFeedback);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::GenerateMipmap), MGPipeVerb::GenerateMipmap);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::GetTextureImage), MGPipeVerb::GetTextureImage);
+    EXPECT_EQ(kMGPipeVerbBoundaryOpCount, SizeT{12});
+    EXPECT_EQ(kMGPipeVerbBoundaryExemptCount, SizeT{3});
+
     // Present is class B (it is emitted in P5) and is STILL not a verb boundary:
     // FillPoints.def:21 - "Present and SetSwapInterval go through BackendObject virtuals and
     // read no frontend state, so they are not verbs here". Stamping there would retire the
     // previous verb's answers with nothing to put in their place.
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::Present), MGPipeVerb::kVerbCount);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::SetSwapInterval), MGPipeVerb::kVerbCount);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::Flush), MGPipeVerb::kVerbCount);
+    // ... and a record that is part of a verb rather than a boundary of one.
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::SetDynamicState), MGPipeVerb::kVerbCount);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::GetCaps), MGPipeVerb::kVerbCount);
 }
@@ -320,6 +337,16 @@ TEST_F(FieldOwnershipTest, AServerStampMakesRecordSuppliedFieldsFreshAndWithdraw
     }
     // Not vacuous: kClear really does have record-supplied fields to stamp.
     EXPECT_GT(stamped, SizeT{0});
+
+    // AND FOUR NAMED FIELDS, NOT DERIVED FROM THE ARRAY UNDER TEST. The loop above recomputes
+    // `answerable` out of kMGPipeFieldOwnership, so it can only catch a stamp that disagrees
+    // with the table - never a table that is wrong. These four say what the stamp must do for
+    // four fields whose class is an argument of this package rather than a lookup.
+    const MGPipeFilledState& filled = gPipeInputs.FilledState();
+    EXPECT_TRUE(MGPipeInputFieldIsFresh(filled, MGPipeInputField::GetClearColor));         // supplied
+    EXPECT_TRUE(MGPipeInputFieldIsFresh(filled, MGPipeInputField::GetRenderStateParameters));
+    EXPECT_FALSE(MGPipeInputFieldIsFresh(filled, MGPipeInputField::GetFramebufferBindingSlot)); // pulled
+    EXPECT_FALSE(MGPipeInputFieldIsFresh(filled, MGPipeInputField::RecordError));           // sticky
 }
 
 // THE STICKY EXEMPTION, CANCELLED. generated/PipeFilled.inc answers "fresh" for a sticky field
@@ -383,6 +410,24 @@ TEST_F(FieldOwnershipTest, NothingIsCountedOutsideAServerStampedVerb) {
     (void)gPipeInputs.GetActiveTextureUnit();
     EXPECT_EQ(MGPipeResidualPullCount(), Uint64{0});
     EXPECT_FALSE(gPipeInputs.ServerStampedVerb());
+}
+
+// THE APPLIER'S OWN CLEAR, reached directly rather than through the client's fill. In a spawned
+// server MG_Impl is not in the process, so MGPipeValidateForVerb/MGPipeLeaveVerb never run and
+// MGPipeServerClearVerbBoundary is the ONLY thing that can disarm the flag; without it the
+// server latches TRUE after its first stamp and the sticky exemption - the one
+// InvalidateCompileEnv is reached from backend initialisation under - is gone for good.
+TEST_F(FieldOwnershipTest, TheAppliersOwnClearDisarmsTheStampWithoutTheClientsFill) {
+    MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
+    ASSERT_TRUE(gPipeInputs.ServerStampedVerb());
+    (void)gPipeInputs.ValidateProgramName(1u);
+    ASSERT_EQ(MGPipeResidualPullCount(), Uint64{1});
+
+    MGPipeServerClearVerbBoundary(); // what PipeApplier must call on leaving the applier
+    EXPECT_FALSE(gPipeInputs.ServerStampedVerb());
+    (void)gPipeInputs.ValidateProgramName(1u);
+    gPipeInputs.InvalidateCompileEnv();
+    EXPECT_EQ(MGPipeResidualPullCount(), Uint64{1}) << "a forward outside a stamped verb was counted";
 }
 
 // The verb's own may-read table still holds on the server: kClear does not read
@@ -482,6 +527,13 @@ TEST_F(FieldOwnershipTest, TheUnpackHalfOfThePixelStoreAbortsWhileThePackHalfDoe
     });
     ASSERT_TRUE(DiedOfAbort(fatal)) << DescribeStatus(fatal) << "\n" << fatal.Log;
     EXPECT_NE(fatal.Log.find("Fatal{UnmigratedPipeInput, \"GetPixelStoreParameters@ReadPixels\"}"),
+              std::string::npos)
+        << fatal.Log;
+    // The line must say WHICH HALF. Without this the message is byte-identical to what a
+    // genuinely stale read of the pack half would print, and the whole case for narrowing by
+    // argument instead of by a second field id is that the reader is told which half they
+    // asked for.
+    EXPECT_NE(fatal.Log.find("argument 0 = 1 is FATAL while the field is APPLIER-DERIVED"),
               std::string::npos)
         << fatal.Log;
 
