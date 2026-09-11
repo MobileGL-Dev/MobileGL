@@ -292,14 +292,47 @@ TEST_F(SplitBufferSet, TheLastBlockIsTheRemainderAndNotAWholeBlock) {
     buffer->ReleaseMemory(false);
 }
 
-// E3(a)'s NEGATIVE CONTROL: 0 disables the push, it does not mean "one unlimited block".
+// THE STATE RECORD ON BOTH EDGES (B-1). The rising edge is what breaks the cycle the probe
+// would otherwise latch: a coherent persistent map behind a static VAO emits NO content record
+// of its own until the push runs, the push runs inside the ensure path, and a draw-clean answer
+// skips that ensure and then latches it. So the map itself has to publish, and the unmap has to
+// publish the retraction - one block each, observable here as exactly one serial bump each.
+TEST_F(SplitBufferSet, BothEdgesOfAWriteMapPublishOneStateRecord) {
+    constexpr SizeT kSize = 4096;
+    auto buffer = MakeBuffer(26u, kSize);
+    EXPECT_FALSE(buffer->HasLiveHostWritesForWire());
+
+    const Uint64 beforeMap = buffer->GetChangeSerial();
+    buffer->AcquireMemoryRange(Range1D{0, kSize},
+                               BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
+    EXPECT_TRUE(buffer->HasLiveHostWritesForWire());
+    EXPECT_EQ(buffer->GetChangeSerial(), beforeMap + 1)
+        << "the rising edge published nothing, so the server cannot know a host writer is live "
+           "until a content record it may never emit";
+
+    const Uint64 beforeUnmap = buffer->GetChangeSerial();
+    buffer->ReleaseMemory(/*landStagedWrites=*/true);
+    EXPECT_FALSE(buffer->HasLiveHostWritesForWire());
+    EXPECT_EQ(buffer->GetChangeSerial(), beforeUnmap + 2)
+        << "the unmap's own NotifyFlushMappedRange plus the falling-edge state record: without "
+           "the second the record stays dirty for the buffer's life";
+}
+
+// E3(a)'s NEGATIVE CONTROL: 0 disables the push, it does not mean "one unlimited block" - and
+// it disables the STATE RECORDS with it. An earlier cut skipped the blocks and still shipped a
+// whole buffer at unmap, so a scenario that unmapped before reading back went green and the
+// control was dead.
 TEST_F(SplitBufferSet, AZeroBlockSizeTurnsThePushOffRatherThanMakingItUnlimited) {
     MG_Config::Ipc.PersistentBlockKb = 0;
     constexpr SizeT kSize = 128u * 1024u;
     auto buffer = MakeBuffer(23u, kSize);
+
+    const Uint64 beforeMap = buffer->GetChangeSerial();
     buffer->AcquireMemoryRange(Range1D{0, kSize},
                                BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
     ASSERT_TRUE(PersistentMapTracker::IsLivePersistentMap(*buffer));
+    EXPECT_EQ(buffer->GetChangeSerial(), beforeMap)
+        << "the rising-edge state record went out with the push disabled";
 
     const Uint64 before = MG_Util::PipeStats::TotalBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush);
     MG_Remote::Client::PushPersistentMapsBeforeVerb();
@@ -307,7 +340,13 @@ TEST_F(SplitBufferSet, AZeroBlockSizeTurnsThePushOffRatherThanMakingItUnlimited)
     EXPECT_EQ(MG_Util::PipeStats::TotalBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush), before)
         << "MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0 must ship nothing, so that "
            "PersistentCoherentMapScenario goes red under it";
-    buffer->ReleaseMemory(false);
+
+    const Uint64 beforeUnmap = buffer->GetChangeSerial();
+    buffer->ReleaseMemory(/*landStagedWrites=*/true);
+    EXPECT_EQ(buffer->GetChangeSerial(), beforeUnmap + 1)
+        << "with the push off the unmap must emit only its own NotifyFlushMappedRange - a "
+           "falling-edge record here delivers a whole buffer the control exists to withhold, "
+           "and a negative control that still delivers the bytes is not a control";
 }
 
 // The set does not keep a pointer to a dead buffer.
@@ -380,6 +419,7 @@ TEST(SplitBufferSet, TheWholeSetIsInertOnTheMonolithPath) { MGL_SPLIT_ONLY_OR_SK
 TEST(SplitBufferSet, MembershipIsSyncPersistentMappedRangesOwnEarlyOutChain) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, ThePushCutsTheMappedSpanIntoBlocksAndMovesPmap) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, TheLastBlockIsTheRemainderAndNotAWholeBlock) { MGL_SPLIT_ONLY_OR_SKIP(); }
+TEST(SplitBufferSet, BothEdgesOfAWriteMapPublishOneStateRecord) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, AZeroBlockSizeTurnsThePushOffRatherThanMakingItUnlimited) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, ADestroyedBufferLeavesTheSet) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, UnderSplitTheWritebackClearsThePendingFlagAndNotTheRequest) { MGL_SPLIT_ONLY_OR_SKIP(); }
