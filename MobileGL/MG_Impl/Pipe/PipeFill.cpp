@@ -702,6 +702,15 @@ namespace MobileGL::MG_Pipe {
                 // one was emitted, so this cannot be false - but a zeroed record (null
                 // handle, size 0) is not the answer if that pre-pass is ever relaxed.
                 if (!MGPipeBuildSubDataRecord(handle, at, length, record, /*verbatimShadow=*/true)) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P5 (b1): the live-host-writes bit rides the content record, because
+                // "someone may be writing these bytes without telling you" is a fact about the
+                // CONTENT and not about the storage. It is set from the object's PUBLISHED
+                // value rather than from a live IsMapped() read so that the record and the
+                // edge that announced it can never disagree. MGPipeBuildSubDataRecord does not
+                // take the object, which is why it is set here and not in the builder.
+                record.HasLiveHostWrites = buffer.HasLiveHostWritesForWire() ? 1 : 0;
+#endif
                 MGPipeApplyResourceSubData(record, base + at);
             });
         if (!encodable) {
@@ -723,6 +732,15 @@ namespace MobileGL::MG_Pipe {
                 // store, or the pattern FillSubData expanded locally, and neither is this
                 // client's untransformed shadow of the level.
                 if (!MGPipeBuildSubDataRecord(handle, at, length, record, /*verbatimShadow=*/false)) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P5 (b1): THE SECOND CONTENT EMITTER, and it has to speak for the same reason
+                // the first does. ApplyBufferWrite ASSIGNS the bit - a content record emitted
+                // while nothing maps the buffer is how the state goes back to false - so a
+                // resident sub-data that stayed silent would write false over a live write
+                // map. `glBufferSubData` against a persistently mapped arena is legal and is
+                // the ordinary Flywheel/Create shape, so that is not a corner.
+                record.HasLiveHostWrites = buffer.HasLiveHostWritesForWire() ? 1 : 0;
+#endif
                 // The application's STAGING store, valid for the duration of the call only.
                 MGPipeApplyBufferSubDataResident(record, base + (at - offset));
             });

@@ -1260,6 +1260,18 @@ namespace {
         // until now by POISON being invisible in this TU at all (see the include at the top).
 #elif !MOBILEGL_PIPE_VERIFY
         GTEST_SKIP() << "Fatal{PipeLiveHostWrites} is a MOBILEGL_PIPE_VERIFY wire and is compiled out here";
+        // P5 b1: AND IT IS RETIRED IN A SPLIT BUILD, because this is the phase the wire was
+        // waiting for. "HasLiveHostWrites is always false and is written by nobody" cannot
+        // survive the producer it exists to announce - MGPSubData::HasLiveHostWrites, set by
+        // MGPipeEmitResourceSubData - so under MOBILEGL_BUILD_DISAGGREGATED the always-false
+        // pin is gone and two other things carry the invariant instead:
+        // PinLiveHostWritesNamesABuffer (the bit is buffer-family only, and that IS still
+        // always true) and the production-path probe pair in MG_Test/SanityTest.cpp and
+        // MG_Test/Buffer/SplitBufferTest.cpp, both of which go red when the producer is
+        // deleted. This skip is what the build-verify-split lane exists to make visible.
+#elif MOBILEGL_BUILD_DISAGGREGATED
+        GTEST_SKIP() << "P5 gave HasLiveHostWrites a producer, so the always-false wire is retired "
+                        "in a split build; PinLiveHostWritesNamesABuffer replaces it";
 #elif !MGTEST_HAVE_FORK
         GTEST_SKIP() << "no fork on this platform; the wire's verdict is std::abort()";
 #else

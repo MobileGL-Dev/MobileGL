@@ -26,6 +26,11 @@
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <MG_State/GLState/TextureState/TextureState.h>
 #include <MG_Test/ScopedPipeVerb.h>
+#if MOBILEGL_PIPE_PUSH
+// P5 b1: MGPipeResourceTrackerInstance(), so the split probe case can ask the PRODUCTION
+// tracker for a buffer's handle instead of minting one by hand.
+#include <MG_Impl/Pipe/ResourceTracker.h>
+#endif
 #include <MG_Backend/DirectVulkan/Renderer/ProgramFactory.h>
 #include <MG_Backend/DirectVulkan/Renderer/UniformManager.h>
 #include <MG_Backend/DirectVulkan/Renderer/VkRenderPassManager.h>
@@ -4652,6 +4657,129 @@ TEST(DirectGLESBufferDrawProbe, ALiveHostMapKeepsTheHandleArmProbeDirtyBetweenTw
     record = {};
 }
 
+// P5 b1's half of the case above: THE PIN IS LIFTED, AND THIS IS WHAT REPLACED IT.
+//
+// The case above exists because answering the live-map question from HasLiveHostWrites alone
+// read draw-CLEAN forever. P5 gives that field a producer and retires the last frontend read
+// in IsBufferDrawCleanByHandle under split, because under a spawn there is no frontend object
+// on that side to ask.
+//
+// EVERYTHING THE CASE OBSERVES IS WRITTEN BY THE PRODUCER, NOT BY THE CASE. A first cut of
+// this test set `record.HasLiveHostWrites = true` by hand and therefore passed with the
+// producer deleted - a test that constructs the state it is supposed to be observing cannot
+// fail for the reason it exists. So the resource subsystem is armed with an empty ops table
+// (MG_Test/Pipe's PushArm shape), the map and the unmap are made through the ordinary
+// frontend entry points, and the record is only ever READ. Delete
+// BufferObject::NotePersistentMapStateChanged's emission, or PipeFill.cpp's
+// `record.HasLiveHostWrites = ...`, and this goes red.
+TEST(DirectGLESBufferDrawProbe, UnderSplitTheRecordAloneAnswersTheLiveHostMapQuestion) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    using namespace MobileGL::MG_State::GLState;
+
+    if (!EsprytSlotTablesEnabled()) {
+        GTEST_SKIP() << "the handle-keyed resource table only exists on the {slot, gen} arm";
+    }
+#if !MOBILEGL_BUILD_DISAGGREGATED
+    GTEST_SKIP() << "MG_Config::Transport is a constexpr Monolith without the transport built in, "
+                    "so the split arm of this probe cannot be entered";
+#else
+    // The subsystem, armed the way MG_Test/Pipe arms it: an EMPTY op table is enough, because
+    // MGPipeResourceSubsystemEnabled() only asks whether one is registered, and every hook this
+    // case reaches is optional.
+    const Uint64 previousPush = MG_Config::Features.PipePush;
+    const auto previousTransport = MG_Config::Transport;
+    const Uint32 previousBlockKb = MG_Config::Ipc.PersistentBlockKb;
+    MG_Pipe::MGPipeResourceOps ops{};
+    MG_Config::Features.PipePush |= MG_Pipe::kMGPipeSubsystemResources;
+    MG_Pipe::MGPipeSetResourceOps(&ops);
+    MG_Config::Transport = MG_Config::TransportMode::InProcess;
+    MG_Config::Ipc.PersistentBlockKb = 64;
+
+    {
+        // The constructor mints the handle and emits resource_create; Respecify emits the
+        // descriptor. Both through the production path.
+        auto owner = MakeShared<BufferObject>(0u);
+        owner->Respecify(256, nullptr);
+
+        const MG_Pipe::MGPipeHandle res = MG_Pipe::MGPipeResourceTrackerInstance().Find(*owner);
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(res));
+        auto& applier = MG_Pipe::MGPipeApplier();
+        ASSERT_GT(applier.Resources.size(), static_cast<SizeT>(res.Slot));
+        auto& record = applier.Resources[res.Slot];
+        ASSERT_TRUE(record.Live) << "resource_create did not reach the applier";
+        ASSERT_EQ(record.Desc.Width, 256u) << "resource_respecify did not reach the applier";
+        EXPECT_FALSE(record.HasLiveHostWrites) << "nothing maps this buffer yet";
+
+        auto& twin = BufferImpl::g_backendBufferResources.GetOrCreate(res);
+        twin = MakeShared<BufferImpl::GLESBufferResource>();
+        auto* const resource = twin.get();
+        resource->id = 1; // a name, never used: this probe issues no GL
+        resource->contextGeneration = BufferImpl::CurrentBufferContextGeneration();
+        resource->storageInitialized = true;
+        resource->storageSize = 256;
+        const auto stampSynced = [&]() {
+            resource->syncedChangeSerial = record.Serial;
+            const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+            resource->pendingRanges.clear();
+            resource->pendingResidentWrites.clear();
+        };
+        stampSynced();
+
+        // The probe is given NO frontend object at all, which is the point: this is the
+        // question a spawned server has to answer, and it has nothing to ask.
+        ASSERT_TRUE(BufferImpl::IsBufferDrawCleanByHandle(res, resource, nullptr))
+            << "the fixture is not clean before the map, so this case cannot isolate the "
+               "live-map question it exists for";
+
+        // ---- map. The RISING EDGE is what has to publish, and nothing else can. -----------
+        void* const mapped = owner->AcquireMemoryRange(
+            Range1D{0, 256}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
+        ASSERT_NE(mapped, nullptr);
+        ASSERT_TRUE(owner->IsMapped());
+        ASSERT_FALSE(owner->IsBackendPersistentMapped())
+            << "the acquisition was minted, so R-6's decline did not happen and this is the "
+               "adopted arm rather than the emulated one";
+
+        EXPECT_TRUE(record.HasLiveHostWrites)
+            << "the map published nothing the server can see. Without it the probe below answers "
+               "CLEAN, the ensure path is skipped and then latched (DirectGLES.cpp:691/:697), "
+               "SyncPersistentMappedRange is never reached again, and the frame draws the last "
+               "uploaded bytes for ever with no diagnostic";
+
+        // Absorb the rising-edge record so the ONLY thing left dirty is the flag.
+        stampSynced();
+        EXPECT_FALSE(BufferImpl::IsBufferDrawCleanByHandle(res, resource, nullptr))
+            << "a live host map read draw-CLEAN from the record alone";
+
+        // ---- a write with no API call announcing it, then the per-draw push --------------
+        static_cast<Uint8*>(mapped)[0] = 0x5Au;
+        const Uint64 serialBeforePush = record.Serial;
+        owner->SyncPersistentMappedRange();
+        EXPECT_GT(record.Serial, serialBeforePush)
+            << "the block push emitted nothing, so a write made through the pointer never left "
+               "the client";
+
+        // ---- unmap. The FALLING EDGE has to put it back. ---------------------------------
+        owner->ReleaseMemory(false);
+        EXPECT_FALSE(record.HasLiveHostWrites)
+            << "the unmap published nothing, so the record stays dirty for the buffer's life and "
+               "every later draw re-uploads it";
+        stampSynced();
+        EXPECT_TRUE(BufferImpl::IsBufferDrawCleanByHandle(res, resource, nullptr))
+            << "the probe stayed dirty after the unmap, i.e. it is not the record that is "
+               "being read";
+
+        BufferImpl::g_backendBufferResources.ReleaseByHandle(res);
+    }
+
+    MG_Config::Ipc.PersistentBlockKb = previousBlockKb;
+    MG_Config::Transport = previousTransport;
+    MG_Pipe::MGPipeSetResourceOps(nullptr);
+    MG_Config::Features.PipePush = previousPush;
+#endif
+}
+
 // P3a REWORK M-1's gate (contract-review M2). The minting overload's symmetric `!=` is safe
 // because its handle comes out of the allocator and can never be behind the entry; the HANDLE
 // overload's input ARRIVES in a payload, so a generation BEHIND the live entry's is reachable -
@@ -4780,6 +4908,10 @@ TEST(DirectGLESSlotTable, ADeathNoticeForEveryP4aKindIsIdempotent) {
 }
 
 TEST(DirectGLESBufferDrawProbe, ALiveHostMapKeepsTheHandleArmProbeDirtyBetweenTwoDraws) {
+    GTEST_SKIP() << "the handle-keyed resource table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESBufferDrawProbe, UnderSplitTheRecordAloneAnswersTheLiveHostMapQuestion) {
     GTEST_SKIP() << "the handle-keyed resource table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 #endif // MOBILEGL_PIPE_PUSH

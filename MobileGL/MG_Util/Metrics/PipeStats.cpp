@@ -30,9 +30,20 @@
 //                        OnSubData / OnFlushMappedRange, the AcquirePersistentMap seed, the
 //                        AcquireResidentSlice initial upload and the AcquireStreamedSlice
 //                        arena fill.
-//                        NOT covered: bytes an app writes THROUGH a persistent map. Those
-//                        never pass through either backend (D4/D-B4) - see
-//                        persistent-map-push.
+//                        NOT covered IN A MONOLITH BUILD: bytes an app writes THROUGH a
+//                        persistent map. Those never pass through either backend (D4/D-B4) -
+//                        see persistent-map-push.
+//                        COVERED UNDER SPLIT, AND DELIBERATELY OVERLAPPING WITH
+//                        persistent-map-push (P5 b1, R-6). At adoption tier T2 there is no
+//                        adoption, so a pushed block IS an ordinary resource_subdata: it
+//                        reaches Ops_H_SubData, is queued into pendingRanges and is staged
+//                        here like any other write. The same bytes are therefore in BOTH
+//                        classes, on purpose - stage-buffer answers "what did the backend
+//                        move", persistent-map-push answers "what did the client have to ship
+//                        because the acquisition was declined", and subtracting one from the
+//                        other would make the first under-report the thing it exists to
+//                        measure. Read them as two questions about the same bytes, never as a
+//                        partition, and do not add them.
 //   stage-texture        ESPRYT (Managers.cpp texture upload): the bytes of whichever of
 //                        the three upload shapes ran (rect list / union box / whole level).
 //                        MAGMA (VkTextureManager.cpp): the packed staging slice of an
@@ -65,9 +76,22 @@
 //                        payload, not resource bytes.
 //                        NOT covered: Magma builds no such array (it issues one vkCmdDraw*
 //                        per sub-draw), so this class is Espryt-only by construction.
-//   persistent-map-push  Not wired in P0: today a persistent map is a permanent address
-//                        space donation (D4/D-B4) that survives the whole monolith track,
-//                        so there is no push to count until the IPC track breaks it.
+//   persistent-map-push  WIRED IN P5 (b1), and only a split build can ever move it. The one
+//                        site is BufferObject::PushMappedSpanBlock, i.e. the client shipping
+//                        one MOBILEGL_IPC_PERSISTENT_BLOCK_KB block of a persistently mapped
+//                        span because MGPipeApplyMapPersistent declined the adoption (R-6,
+//                        tier T2). Zero in every monolith build, and that zero is CORRECT
+//                        rather than missing: a persistent map there is a permanent address
+//                        space donation (D4/D-B4), the application writes straight into GPU
+//                        memory, and there is no push to count. A split run where this stays
+//                        0 has NOT reached T2.
+//                        Read it against map-persistent-roundtrips (mpr), which it is
+//                        ANTI-CORRELATED with: mpr counts acquisition ATTEMPTS - one per
+//                        storage definition, the same number in both modes - and this counts
+//                        the bytes the client had to ship because the attempt was declined.
+//                        DOUBLE-COUNTED WITH stage-buffer, deliberately: see that entry
+//                        above. The two are different questions about the same bytes under
+//                        split, and adding them is wrong.
 //   residual-value-block Placeholder, always 0 until P2 (plan section 6.3).
 //
 // Call classes

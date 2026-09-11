@@ -16,6 +16,9 @@
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_Impl/Pipe/PipeFill.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Remote/Client/GpuWritePending.h>
+#endif
 #if MOBILEGL_PIPE_PUSH
 // P4a, ID-19(c). This file is the ONLY place every DSA framebuffer entry point lives, and the
 // emitter it reaches is this package's own header rather than a declaration in one of the
@@ -3093,6 +3096,18 @@ namespace MobileGL::MG_Impl::GLImpl {
     void ReadPixels_Backend(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
         MGP_FILL(ReadPixels);
         MG_Backend::gBackendFunctionsTable.GL.ReadPixels(x, y, width, height, format, type, pixels);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5 (b1), one of the two producers the client-side GPU-write set ADDS. A read into a
+        // bound GL_PIXEL_PACK_BUFFER is a GPU write to that buffer exactly as a shader's store
+        // is, and marking it is what makes the next glMapBuffer / glGetBufferSubData of the
+        // PBO reconcile. It is a no-op on the monolith path, where the backend still maps the
+        // PBO and copies it into the shadow inside the call
+        // (DirectGLES.cpp:10983-10993) - an unconditional stall on every glReadPixels whether
+        // or not anything ever reads the shadow. Deferring that to the first read that wants
+        // it is STRICTLY BETTER, which is the only reason a split build is allowed to differ
+        // here at all.
+        MG_Remote::Client::MarkReadPixelsPackBuffer();
+#endif
     }
 
     /* @INSERTION_POINT:FUNCTION_IMPLEMENTATION@ */

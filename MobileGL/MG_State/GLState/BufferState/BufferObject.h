@@ -187,6 +187,49 @@ namespace MobileGL {
             // from every path that reads the shadow on the app's behalf.
             void SyncGpuWrites();
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // ---- P5 b1: the two things a split build has to do that a monolith does not ---
+            //
+            // Everything here is behind the build option AND behind
+            // `MG_Config::Transport != Monolith` at the call site, because an extra
+            // resource_subdata record or an extra respecify on the monolith path is new
+            // behaviour and D-J forbids it. The pull build compiles none of it, which is also
+            // how G1 holds over a file this central.
+
+            // ONE MOBILEGL_IPC_PERSISTENT_BLOCK_KB BLOCK of the mapped span, emitted through
+            // the private NotifySubData - the same serial, the same defined-content flag, the
+            // same record - so the split arm and the monolith arm differ in HOW the span is
+            // cut and in nothing else. Called only by
+            // MG_Remote::Client::PersistentMapTracker, which owns the cutting.
+            void PushMappedSpanBlock(SizeT offset, SizeT size);
+
+            // Called on every event that can move the tracker's membership predicate: map,
+            // unmap, respecify, adoption, destruction. It is one call rather than an
+            // insert/erase pair on purpose - the predicate is read from this object, so a
+            // caller that had to decide which of the two to call could decide differently
+            // from IsLivePersistentMap and the set would drift from the thing it models.
+            //
+            // It also PUBLISHES the live-host-writes bit when it changes: the server must
+            // know that a write map is live, because such a map mutates the shadow with no
+            // call, no serial and no epoch, and the applier's IsBufferDrawCleanByHandle can
+            // no longer ask this object (there is no object on that side of a spawn).
+            void NotePersistentMapStateChanged();
+
+            // What MGPipeEmitResourceSubData and MGPipeEmitBufferSubDataResident write into
+            // MGPSubData::HasLiveHostWrites. The PUBLISHED value, not the live predicate: the
+            // two are the same by the time any content record is built, and reading the
+            // published one is what makes a record and the edge that announced it agree by
+            // construction.
+            Bool HasLiveHostWritesForWire() const;
+
+            // Is a GPU write still unreconciled? Under split this is the THIRD STATE made
+            // readable: SyncGpuWrites no longer clears optimistically, so between the readback
+            // emission and OnBufferWriteback landing this stays true, and nothing else in the
+            // object can express that. Split-only so the pull build's layout and inlining do
+            // not move (G1).
+            Bool HasOutstandingGpuWrite() const { return m_gpuWritePending; }
+#endif
+
             Bool IsMapped() const;
             Bool IsImmutableStorage() const;
             SizeT GetSize() const;
@@ -264,8 +307,16 @@ namespace MobileGL {
             Uint64 m_changeSerial = 0;
             // See HasDefinedContent().
             Bool m_hasDefinedContent = true;
-            // Set by MarkGpuWritten, cleared by SyncGpuWrites once the shadow is refreshed.
+            // Set by MarkGpuWritten, cleared by SyncGpuWrites once the shadow is refreshed -
+            // and, in a split build, cleared by WritebackFromBackend instead, because there
+            // the answer arrives later than the request. See SyncGpuWrites' definition.
             Bool m_gpuWritePending = false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // The last value of MGPResourceDesc::HasLiveHostWrites this object published.
+            // Behind the option so the pull build's layout - and therefore every inlined
+            // constructor and accessor in it - does not move (G1).
+            Bool m_publishedLiveHostWrites = false;
+#endif
             Range1D m_mappedRange;
             // The write-map staging store. MapAlignedData because the application is handed a
             // pointer into it, and biased by m_stagingBias because ARB_map_buffer_alignment

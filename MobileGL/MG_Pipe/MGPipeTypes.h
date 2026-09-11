@@ -1075,7 +1075,27 @@ namespace MobileGL::MG_Pipe {
         // Replaces the backend's `uploadData == mipData` pointer comparison: are these
         // bytes an untransformed level shadow?
         Uint8 SourceIsVerbatimLevelShadow;
-        Uint8 Pad0[3];
+        // P5 (b1): DOES THIS RESOURCE HAVE A LIVE HOST WRITER RIGHT NOW? One byte out of the
+        // pad, so MGP_ASSERT_POD(MGPSubData, 72) below does not move.
+        //
+        // It is here rather than on MGPResourceDesc, and that is a ruling with a reason. The
+        // fact is CONTENT-shaped - "someone may be writing these bytes without telling you" -
+        // and MGPResourceDesc's only carrier is resource_respecify, which for a BUFFER is
+        // never classified as metadata-only (PipeApply.cpp's RespecifyRedefinesNoStorage
+        // refuses the buffer target outright, so that ID-18 M4's "no reallocation ack" is true
+        // by construction). Announcing a map on a descriptor would therefore have cost a
+        // spurious reallocation per map - precisely the failure the brief warned about - or a
+        // change to that rule, which is a P4a contract the buffer family should not be
+        // re-opening for a flag.
+        //
+        // WHO SETS IT: MGPipeEmitResourceSubData, from BufferObject::HasLiveHostWritesForWire.
+        // WHO READS IT: ApplyBufferWrite, into MGPipeResourceRecord::HasLiveHostWrites, which
+        // is what IsBufferDrawCleanByHandle asks instead of the frontend object's IsMapped().
+        // ZERO IS THE ANSWER, NOT THE ABSENCE OF ONE: a record that does not set it says "no
+        // live writer", which is what every monolith emission means and why the monolith path
+        // needs no edit at all.
+        Uint8 HasLiveHostWrites;
+        Uint8 Pad0[2];
         MGPBox UnionBox;
         Uint32 RegionCount; // MGPSubRegion[] in the variable tail
         Uint32 Pad1;

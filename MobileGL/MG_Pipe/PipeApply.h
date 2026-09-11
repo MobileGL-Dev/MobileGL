@@ -219,9 +219,20 @@ namespace MobileGL::MG_Pipe {
         // sub-data). It is what replaces the frontend change serial the backend used to
         // mirror, and no MGPipe call may require the client to provide or know one.
         Uint64 Serial = 0;
-        // ALWAYS FALSE IN P3a, AND WRITTEN BY NOBODY. It exists so the phase that pushes
-        // persistent-mapped host writes can set it with zero new record kinds; a verify build
-        // pins that it is false, so that phase cannot land a silent semantic change under it.
+        // "DOES THIS RESOURCE HAVE A LIVE HOST WRITER RIGHT NOW?"
+        //
+        // False and written by nobody through P3a and P4a; P5 (b1) is the phase it was waiting
+        // for and gives it its producer, with zero new record kinds exactly as planned: the
+        // bit rides MGPSubData::HasLiveHostWrites - a byte out of that payload's existing pad -
+        // and ApplyBufferWrite assigns it here. In a MONOLITH build nothing sets it and the
+        // MOBILEGL_PIPE_VERIFY wire (PinNoLiveHostWrites) still refuses a producer, so the pin
+        // survives the phase it was written for instead of being deleted by it.
+        //
+        // It is what IsBufferDrawCleanByHandle asks under split INSTEAD of the frontend
+        // object's IsMapped(), because a spawned server has no frontend object to ask. Getting
+        // that substitution wrong once already cost a silent regression - an emulated
+        // persistent map read draw-clean for ever - which MG_Test/SanityTest.cpp's
+        // DirectGLESBufferDrawProbe pair now pins from both sides.
         Bool HasLiveHostWrites = false;
 
         // ---- P4a. Only a record of kind Texture ever carries these; a buffer's stay at

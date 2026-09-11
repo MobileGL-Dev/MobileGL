@@ -12,6 +12,9 @@
 #include <MG_State/EGLState/Core.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/Pipe/PipeFill.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Remote/Client/GpuWritePending.h>
+#endif
 #include "../Getter/GL_Getter.h"
 
 namespace MobileGL::MG_Impl::GLImpl {
@@ -1315,6 +1318,20 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                             static_cast<Uint>(bufferIndex));
             const auto& buffer = bindingPoint.GetBoundObject();
             if (buffer == nullptr) continue;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // This fixup READS the captured bytes back through the shadow, so it is the one
+            // consumer that cannot simply inherit the deferral EndTransformFeedback's dropped
+            // fence introduces. Under split it pays the reconciliation itself, which is the
+            // same cost the fence used to charge every caller - here charged only to the
+            // capture shapes that actually need reordering.
+            //
+            // TRANSPORT-GATED LIKE EVERY OTHER NEW SITE (D-J). Without the test this fires in
+            // a build-split lane running MOBILEGL_TRANSPORT=monolith on Magma - whose
+            // BeginXfbCaptureForDraw does mark the capture targets - where the fence at the
+            // caller still runs, so the readback it emits is pure new work on the monolith
+            // path and integration-gpu cannot see it.
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) buffer->SyncGpuWrites();
+#endif
             const Range1D range = bindingPoint.GetRange();
             const Uint8* mapped = buffer->MappedData();
             if (mapped == nullptr) continue;
@@ -1355,12 +1372,28 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGP_FILL(EndTransformFeedback);
             endXfb();
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5 (b1), the second producer the client-side GPU-write set ADDS, and it has to be
+        // taken HERE - before GLContext::EndTransformFeedback clears the live bindings, since
+        // a mark taken after it marks nothing.
+        MG_Remote::Client::MarkEndTransformFeedbackCaptureTargets();
+#endif
         MG_State::pGLContext->EndTransformFeedback();
         // Captured results must be visible to MapBuffer/GetBufferSubData after
         // End; the capture targets are host-coherent GPU memory, so completing
         // the GPU work is all that is required.
+        //
+        // P5 (b1): UNDER SPLIT THE UNBOUNDED WAIT GOES AND THE MARK ABOVE REPLACES IT. The
+        // wait exists for one reason - so that a later MapBuffer sees real captured results -
+        // and that is precisely what m_gpuWritePending says; SyncGpuWrites then pays for it
+        // once, on the first read that actually wants the bytes, instead of on every
+        // glEndTransformFeedback. A ~0ull ClientWaitSync on the GL thread is also the one
+        // shape a verb barrier cannot make cheap, because it is the driver's wait and not the
+        // barrier's.
         auto& backendGL = MG_Backend::gBackendFunctionsTable.GL;
-        if (backendGL.FenceSync && backendGL.ClientWaitSync) {
+        const Bool waitForTheCapture =
+            MG_Config::Transport == MG_Config::TransportMode::Monolith;
+        if (waitForTheCapture && backendGL.FenceSync && backendGL.ClientWaitSync) {
             MGP_FILL(FenceSync);
             if (auto sync = backendGL.FenceSync()) {
                 MGP_FILL(ClientWaitSync);

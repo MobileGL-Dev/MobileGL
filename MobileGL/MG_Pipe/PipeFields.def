@@ -173,7 +173,8 @@
     F(X) F(Y) F(Z) F(W) F(H) F(D) F(SrcOffset) F(SrcRowStride) F(SrcSliceStride)
 
 #define MGP_FIELDS_MGPSubData(F) \
-    F(Res) F(Target) F(Level) F(SourceIsVerbatimLevelShadow) F(UnionBox) F(RegionCount) F(Blob)
+    F(Res) F(Target) F(Level) F(SourceIsVerbatimLevelShadow) F(HasLiveHostWrites) F(UnionBox) \
+    F(RegionCount) F(Blob)
 
 #define MGP_FIELDS_MGPSubDataComplete(F) \
     F(Res) F(Target) F(FirstLevel) F(LevelCount) F(PullSerial)

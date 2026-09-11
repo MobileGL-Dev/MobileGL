@@ -1043,6 +1043,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // sizeable (page-coverable) range to engage, and below it the driver
             // falls back to waiting out the WAR hazard on the CPU.
             constexpr SizeT kInvalidateRangeMinBytes = 128u * 1024u;
+#if MOBILEGL_PIPE_PUSH
+            // The push arm's copy of this threshold lives in Managers.h, where a unit case can
+            // reach it (InvalidateFlushAccessFor). Two constants, one value, and the compiler
+            // is what keeps them one: the pull arm's FlushPendingRangesNow is byte-frozen
+            // against 5cb826b0 (ID-15), so the constant it reads may not move to a header.
+            static_assert(kInvalidateRangeMinBytes == kEsprytInvalidateRangeMinBytes,
+                          "the two arms of the three-tier ladder must use the same tier-1 threshold");
+#endif
 
             // Push every queued range of `resource` from the shadow into the backend
             // store, without ever letting a driver resolve the WAR hazard against
@@ -1078,7 +1086,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // 26.3 p99 depends on, and a second copy of it for the handle arm is exactly how a
             // tier silently changes. The arms differ only in where `hostBase` and `frontendSize`
             // come from.
-            void FlushPendingRangesFrom(GLESBufferResource& resource, const Uint8* hostBase, SizeT frontendSize) {
+            //
+            // R-11'S PARAMETER, AND IT IS A PARAMETER RATHER THAN AN ASSUMPTION (P5 b1).
+            // `hostBase` is re-read at every use today precisely because a shadow resize or an
+            // adoption moves what an earlier base pointed at. Under split the server may hold
+            // no pointer into the client's shadow at all, so the base becomes a SNAPSHOT taken
+            // into SEG_STAGE at emission - and a snapshot covers a RANGE, not the store. The
+            // two extra arguments say which range `hostBase` is good for; the default is the
+            // whole store, which is exactly what a live shadow is, so every caller today is
+            // byte-identical. The moment w1 passes a real snapshot extent, tier 1's widening
+            // refusal below stops being unreachable and a too-narrow snapshot is named instead
+            // of silently clobbering GPU-written bytes with stale ones.
+            constexpr SizeT kHostBaseCoversWholeStore = ~static_cast<SizeT>(0);
+            void FlushPendingRangesFrom(GLESBufferResource& resource, const Uint8* hostBase, SizeT frontendSize,
+                                        SizeT hostBaseFrom = 0,
+                                        SizeT hostBaseTo = kHostBaseCoversWholeStore) {
 #ifdef TRACY_ENABLE
                 ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -1126,12 +1148,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // shadow's to rewrite. Widening to page bounds looked free and was
                     // not - the widened bytes clobbered GPU-written data (an SSBO
                     // counter beside the app's SubData) with the stale shadow.
-                    const Bool wholeBuffer = start == 0 && end == limit && limit == resource.storageSize;
-                    if (mapUsable && (wholeBuffer || size >= kInvalidateRangeMinBytes)) {
+                    // The extent the bytes behind `hostBase` are actually good for, clamped
+                    // to the store. With the default it IS [start, end), so the refusal below
+                    // cannot fire and the ladder is unchanged; with a real SEG_STAGE snapshot
+                    // it is the snapshot's window and a disagreement drops this range to the
+                    // staging ring instead of letting a widened INVALIDATE_RANGE declare bytes
+                    // dead that nothing is about to rewrite.
+                    const SizeT coveredFrom = hostBaseFrom > start ? hostBaseFrom : start;
+                    const SizeT coveredTo = hostBaseTo < end ? hostBaseTo : end;
+#if MOBILEGL_PIPE_VERIFY
+                    if (coveredFrom != start || coveredTo != end) {
+                        MGLOG_E_ONCE("MGPipe: Fatal{StageSnapshotTooNarrow} flush_pending_ranges: the "
+                                     "staged bytes cover [%zu, %zu) and the queued range is [%zu, %zu) "
+                                     "- tiers 2 and 3 would copy from outside the snapshot",
+                                     hostBaseFrom, hostBaseTo, start, end);
+                    }
+#endif
+                    const GLbitfield access =
+                        mapUsable ? InvalidateFlushAccessFor(start, end, coveredFrom, coveredTo, limit,
+                                                             resource.storageSize)
+                                  : 0u;
+                    if (access != 0) {
                         BindBufferId(TempBufferTarget, resource.id);
-                        const GLbitfield access =
-                            GL_MAP_WRITE_BIT |
-                            (wholeBuffer ? GL_MAP_INVALIDATE_BUFFER_BIT : GL_MAP_INVALIDATE_RANGE_BIT);
                         void* dst = g_GLESFuncs.glMapBufferRange(TempBufferTarget, (GLintptr)start,
                                                                  (GLsizeiptr)size, access);
                         if (dst) {
@@ -2667,16 +2705,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             const auto* record = ResourceRecordOf(res);
             if (record == nullptr) return false;
-#if MOBILEGL_PIPE_VERIFY
+#if MOBILEGL_PIPE_VERIFY && !MOBILEGL_BUILD_DISAGGREGATED
             MOBILEGL_ASSERT(!record->HasLiveHostWrites,
-                            "MGPipeResourceRecord::HasLiveHostWrites is set, but P3a has no producer for it");
+                            "MGPipeResourceRecord::HasLiveHostWrites is set, but this build has no producer "
+                            "for it - P5 b1's producer is MGPSubData::HasLiveHostWrites and is split-only");
 #endif
             if (record->HasLiveHostWrites) return false;
-            // The same question the legacy arm asks at this exact point in the order, for the
-            // reason written at the top of this function. A null object is the "no frontend to
-            // ask" case (nothing reaches this probe without one today) and is treated as "not
-            // mapped", which is what the record already says.
-            if (frontend != nullptr && frontend->IsMapped()) return false;
+            // THE LAST FRONTEND READ IN THIS FUNCTION, AND P5 b1 RETIRES IT - under split
+            // only, because that is the only build where it is both wrong and replaceable.
+            //
+            // It asked the object whether it was mapped because HasLiveHostWrites was pinned
+            // false and an emulated persistent map mutates the shadow with no call, no serial
+            // and no epoch; answering from the record alone made such a buffer read
+            // draw-CLEAN forever, SyncPersistentMappedRange was never reached again, and the
+            // frame drew the last uploaded bytes with no diagnostic
+            // (MG_Test/SanityTest.cpp's DirectGLESBufferDrawProbe is exactly that case).
+            //
+            // TWO THINGS REPLACE IT AND BOTH HAD TO LAND FIRST: the record now carries the map
+            // state (the line above, from MGPSubData::HasLiveHostWrites), and the client
+            // pushes the mapped span by block at every validate point, so the serial moves for
+            // a write the application made with no API call. Under a spawn there is no object
+            // on this side to ask, which is why this was never going to stay a choice.
+            //
+            // A null object is the "no frontend to ask" case and is treated as "not mapped",
+            // which is what the record already says.
+            const Bool askTheObjectWhetherItIsMapped =
+                MG_Config::Transport == MG_Config::TransportMode::Monolith;
+            if (askTheObjectWhetherItIsMapped && frontend != nullptr && frontend->IsMapped()) return false;
             if (resource->pendingRespecify || !resource->storageInitialized) return false;
             if (!resource->pendingRanges.empty()) return false;
             if (resource->storageSize != static_cast<SizeT>(record->Desc.Width)) return false;
