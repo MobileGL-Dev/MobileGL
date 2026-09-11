@@ -123,9 +123,22 @@ namespace MobileGL::MG_Remote::Client {
         // parses them today is that the negative control needs a spelling before the thing
         // it controls exists. Falling back would make `MOBILEGL_IPC_ADOPT_TIER=0` look like
         // a working T0 run and silently produce pmap bytes it must not produce.
-        MGLOG_F("MGPipe: MOBILEGL_IPC_ADOPT_TIER=%u names an adoption tier P11 implements and P5 "
-                "does not; P5 runs at T2 (emulate) only.",
-                static_cast<unsigned>(tier));
+        // 0 and 1 are the two CONTRACT §5 promises - a real cross-process shared mapping and a
+        // server-side staging map - and they name P11. Anything else is not a tier at all, and
+        // saying "P11 implements it" of a 7 would be a lie the operator then repeats. Both die
+        // here rather than at parse, which is late: the abort lands at the first
+        // map_persistent, so a mis-set run gets through EGL bring-up and a frame of setup
+        // first. Moving it to the parse means a knob-validity rule in ConfigLoader, which is
+        // c0's file; filed for the integrator rather than taken here.
+        if (tier <= 1) {
+            MGLOG_F("MGPipe: MOBILEGL_IPC_ADOPT_TIER=%u names adoption tier T%u, which P11 implements "
+                    "and P5 does not; P5 runs at T2 (emulate) only.",
+                    static_cast<unsigned>(tier), static_cast<unsigned>(tier));
+        } else {
+            MGLOG_F("MGPipe: MOBILEGL_IPC_ADOPT_TIER=%u is not an adoption tier; the only values are 0 "
+                    "and 1 (P11) and 2 (emulate, the P5 default).",
+                    static_cast<unsigned>(tier));
+        }
         std::abort();
     }
 

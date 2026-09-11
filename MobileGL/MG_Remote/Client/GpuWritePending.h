@@ -41,6 +41,13 @@
 //     ~0ull) and marks the capture targets, for the same reason: the wait exists only so that
 //     a later MapBuffer sees real results, which is precisely what the flag is for.
 //
+// WHAT NO ROW COVERS, WRITTEN DOWN SO THE NEXT READER DOES NOT HAVE TO ASK. The set is built
+// from the APPLICATION's bindings, so it says nothing about a backend's own scratch buffers -
+// Espryt's converted-vertex-stream and primitive-restart substitution buffers, Magma's UBO
+// ring. None of those has a MarkGpuWritten today either, so the client set is no NARROWER than
+// monolith's and this is not a regression; it is a standing hole in both, and it stays one
+// until the phase that migrates the backend's own allocations.
+//
 // GATED ON THE TRANSPORT, like everything else in this package: on the monolith path the six
 // backend sites still run and a second marker would be new behaviour (D-J), and rows 4 and 5
 // would remove a stall monolith is entitled to keep.

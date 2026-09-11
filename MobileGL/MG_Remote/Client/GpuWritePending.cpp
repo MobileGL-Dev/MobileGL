@@ -15,6 +15,9 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
 #include <MG_State/GLState/TextureState/TextureState.h>
+#include <MG_Util/Debug/Log.h>
+
+#include <cstdlib>
 
 namespace MobileGL::MG_Remote::Client {
 
@@ -167,16 +170,31 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     void AwaitBufferWriteback(BufferObject& buffer) {
-        (void)buffer;
         // THE WAIT IS THE BARRIER'S WAIT (R-3). The reply-slot id IS the record's seq, so
         // "appliedSeq reached my readback" and "my answer is back" are one condition, and
-        // ClientSession::EmitAndWait has already paid for it by the time the emitter returns.
-        // With no session - a build-split lane running monolith, and every unit case - the
-        // emission WAS the application, synchronously, so the writeback has already landed
-        // and there is nothing to wait for. Spelling that as "return" rather than as a loop
-        // is deliberate: a loop here would be a hang in exactly that configuration, which is
-        // the configuration every gate lane runs.
+        // ClientSession::EmitAndWait is what pays for it. With no session - a build-split lane
+        // running monolith, and every unit case - the emission WAS the application,
+        // synchronously, so the writeback has already landed and there is nothing to wait for.
+        // Spelling that as "return" rather than as a loop is deliberate: a loop here would be
+        // a hang in exactly that configuration, which is the configuration every gate lane
+        // runs.
         if (ClientSession::Active() == nullptr) return;
+
+        // AND THE OTHER ARM IS A NAMED FATAL, NOT AN EMPTY BODY. A session exists, so the
+        // apply side is no longer synchronous, and if the flag is still set the shadow this
+        // caller is about to read is STALE - which is the whole failure the third state was
+        // introduced to stop. An empty body here would make that failure silent and would let
+        // s1/c1 land a session without noticing that nobody ever wrote the wait; a stub that
+        // aborts by name is the house shape for exactly this (EmitTables.cpp's
+        // UnmigratedVerbFatal), and it is what gives the hole a red spelling before the
+        // transport arrives.
+        if (!buffer.HasOutstandingGpuWrite()) return;
+        MGLOG_F("MGPipe: Fatal{UnimplementedWritebackWait} - a ClientSession is active and buffer %u "
+                "still has an outstanding GPU write after its readback was emitted. The wait is "
+                "ClientSession::EmitAndWait's (R-3: the reply slot id IS the record seq); P5 package "
+                "b1 landed the third state and s1/c1 own the wait itself.",
+                buffer.GetExternalIndex());
+        std::abort();
     }
 
 } // namespace MobileGL::MG_Remote::Client

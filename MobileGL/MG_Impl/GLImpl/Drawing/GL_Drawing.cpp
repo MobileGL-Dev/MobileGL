@@ -1324,7 +1324,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             // fence introduces. Under split it pays the reconciliation itself, which is the
             // same cost the fence used to charge every caller - here charged only to the
             // capture shapes that actually need reordering.
-            buffer->SyncGpuWrites();
+            //
+            // TRANSPORT-GATED LIKE EVERY OTHER NEW SITE (D-J). Without the test this fires in
+            // a build-split lane running MOBILEGL_TRANSPORT=monolith on Magma - whose
+            // BeginXfbCaptureForDraw does mark the capture targets - where the fence at the
+            // caller still runs, so the readback it emits is pure new work on the monolith
+            // path and integration-gpu cannot see it.
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) buffer->SyncGpuWrites();
 #endif
             const Range1D range = bindingPoint.GetRange();
             const Uint8* mapped = buffer->MappedData();
