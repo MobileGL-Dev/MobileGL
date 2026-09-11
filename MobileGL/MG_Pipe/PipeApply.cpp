@@ -889,6 +889,32 @@ namespace MobileGL::MG_Pipe {
         void PinWholeResourceRespecifyScope(const MGPResourceDesc&, MGPipeHandle, const char*) {}
 #endif
 
+#if MOBILEGL_PIPE_VERIFY
+        // P5 b1's wire, and the one statement about HasLiveHostWrites that IS still always
+        // true once the field has a producer: the bit is the BUFFER family's. It answers "does
+        // this resource have a live host writer right now", which only a buffer can have - a
+        // texture's host writes are the unpack path's and are announced by the upload itself -
+        // and the two emitters that set it (MGPipeEmitResourceSubData,
+        // MGPipeEmitBufferSubDataResident) are both buffer-only. A texture sub-data carrying
+        // it is therefore an encoder that copied a field across payload halves, which is
+        // precisely the class of defect a shared record type invites.
+        //
+        // It replaces the always-false pin in a split build. That pin could not survive the
+        // producer it existed to announce; this one can, and unlike that one it is compiled in
+        // EVERY verify build, including build-verify-split - the matrix cell where the field
+        // can actually be non-zero.
+        void PinLiveHostWritesNamesABuffer(const MGPSubData& record, const char* call) {
+            if (record.HasLiveHostWrites == 0) return;
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeLiveHostWritesTarget")
+                                 " %s {slot=%u, gen=%u}: a record whose resource target is not a "
+                                 "buffer (target=%u) declares live host writes, and only the buffer "
+                                 "family has any",
+                                 call, record.Res.Slot, record.Res.Gen, record.Target);
+        }
+#else
+        void PinLiveHostWritesNamesABuffer(const MGPSubData&, const char*) {}
+#endif
+
         // The one gate every content-carrying buffer write goes through. resource_subdata and
         // buffer_subdata_resident differ only in which backend hook takes the bytes and in the
         // fact that one of them is allowed to be absent, so a second copy of this arithmetic
@@ -1794,6 +1820,7 @@ namespace MobileGL::MG_Pipe {
         // accumulate a pending upload onto whatever TEXTURE holds slot N in the texture slot
         // space. Renderbuffers have no sub-data path at all, so no correct client can produce
         // one and this is a protocol fault rather than a dropped call.
+        PinLiveHostWritesNamesABuffer(record, "resource_subdata");
         const Uint8 resourceTarget = MGPipeSubDataResourceTargetOf(record.Target);
         if (resourceTarget == kMGPipeResourceTargetBuffer ||
             resourceTarget == static_cast<Uint8>(MGPipeResourceTarget::Renderbuffer) ||
