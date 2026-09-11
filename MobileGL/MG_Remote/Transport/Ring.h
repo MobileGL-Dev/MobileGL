@@ -41,6 +41,49 @@
 // (Records.def / PipeCalls.def) is a separate deliverable; the ring itself
 // only needs kind/flags/size, so it can carry the real records the day they
 // land without changing shape.
+//
+// ---------------------------------------------------------------------------
+// THE FIVE WATERMARKS (P5 R-9). One sentence each, and they are a contract:
+// every one of the five was declared here at P0 and written by nobody but
+// InitRingControl, so until P5 there was nothing to disagree with.
+//
+//   submittedSeq        Advanced by the PRODUCER after it publishes. NOBODY
+//                       WAITS ON IT - it is diagnostic, the answer to "how far
+//                       ahead of the server is the client right now".
+//   appliedSeq          Advanced by the CONSUMER for EVERY SINGLE RECORD it
+//                       applies. The client's verb barrier and every reply wait
+//                       read it, so it is the one watermark P5 FORBIDS BATCHING:
+//                       the sixty-four-record batching this ring was designed
+//                       for makes a waiter block on work that already ran, or -
+//                       far worse - resume on work that has not.
+//   retiredSeq          Advanced by the CONSUMER once it has finished with the
+//                       SEG_STAGE bytes a record referenced. The staging
+//                       allocator reclaims behind it, and nothing else may.
+//   completedFrameSerial Advanced by the SERVER when a present completes. What
+//                       recycling and ageing wait on; it trails appliedSeq by
+//                       the GPU's own depth and must never be conflated with it.
+//   presentAckSerial    Advanced by the SERVER when it returns a present credit.
+//                       The client's present throttle waits on it; it is the
+//                       only back-pressure that bounds latency rather than bytes.
+//
+// Every wait on all five is `>=`, never `==`: a waiter that tests equality
+// misses the wakeup the moment a producer or consumer moves by more than one.
+//
+// BATCHING MAY ONLY MAKE A WATERMARK LATE. All five except appliedSeq may be
+// published lazily, because a waiter that sees an old value waits longer than
+// it had to and is still correct. NONE of them may ever be published EARLY: a
+// watermark that reports more than was actually done turns every waiter into a
+// silent use of work that has not happened, and there is no checksum anywhere
+// on this ring that would catch it.
+//
+// kRecPad DOES NOT ADVANCE SEQ. A wrap filler is framing, not a record: it has
+// no opcode, no payload meaning and no reply slot. Both sides must skip it
+// BEFORE counting. If one side counts it and the other does not, the two seq
+// spaces drift by one at every wrap - and because seq IS the reply-slot id
+// (P5 R-3), a drifted seq silently reads another call's answer rather than
+// failing. Nothing on this ring would detect that, which is why the rule is
+// stated here rather than left to each side's loop.
+// ---------------------------------------------------------------------------
 
 #pragma once
 
