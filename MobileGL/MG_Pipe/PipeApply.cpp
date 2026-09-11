@@ -16,6 +16,12 @@
 
 #include <MG_Backend/MGPipe/PipeInputs.h>
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+// MGPipeUnmigratedEmulation's split arm reads MG_Config::Transport, which is what tells an
+// emulation site whether it is running inside a server or in the monolith it was written for.
+#include <Config.h>
+#endif
+
 #if MOBILEGL_PIPE_VERIFY
 // THE ONE PLACE THE PROGRAM ARCHIVE'S CODEC IS CALLED, and it is compiled into the VERIFY
 // build only. In monolith the archive does not travel - MGPProgramDesc's seven blob refs are
@@ -2842,5 +2848,26 @@ namespace MobileGL::MG_Pipe {
     // It takes a literal and does nothing with it. Not a log line, not a counter: it sits on
     // paths a frame can reach many times, and ROADMAP.md forbids committing hot-path
     // instrumentation.
-    void MGPipeUnmigratedEmulation(const char* name) { (void)name; }
+    // P5 GIVES IT TEETH, and this is the whole of it: ONE function edit arms FIVE call sites
+    // (Managers.cpp:5334, DirectGLES.cpp:8051, :8702, :8997, :10623), exactly as the header
+    // and P4a's comment above promised. Every one of them reaches back into the CLIENT's
+    // address space - a texture shadow, a CPU mipmap fallback, a host-side copy - and a server
+    // has no client address space to reach into, so degrading silently is the one outcome that
+    // must not happen.
+    //
+    // THE ARM IS THE TRANSPORT, NOT THE BUILD. build-split runs MOBILEGL_TRANSPORT=monolith in
+    // every unit and integration-gpu lane, and several of the five are on ordinary monolith
+    // paths that those lanes exercise (glGenerateMipmap reaches two of them); arming on the
+    // build would turn 1117 integration cases red for running code that is correct in the role
+    // they run it in. None of the five is on P5's reduced path, so under a real transport this
+    // costs nothing and catches a lot.
+    void MGPipeUnmigratedEmulation(const char* name) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            MGLOG_F("MGPipe: Fatal{UnmigratedEmulation, \"%s\"}", name != nullptr ? name : "<null>");
+            std::abort();
+        }
+#endif
+        (void)name;
+    }
 } // namespace MobileGL::MG_Pipe
