@@ -822,8 +822,8 @@ struct CapsSnapshot FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_FORMATCAPS = 8,
     VT_EXTENSIONS = 10,
     VT_APIVERSION = 12,
-    VT_CALLMASK = 14,
-    VT_BACKENDTYPE = 16
+    VT_CALLMASK = 22,
+    VT_BACKENDTYPE = 24
   };
   const ::flatbuffers::Vector<uint8_t> *dynamicParameters() const {
     return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_DYNAMICPARAMETERS);

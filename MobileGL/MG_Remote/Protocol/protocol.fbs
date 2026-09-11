@@ -98,8 +98,8 @@ table Welcome {
 // (plan B appendix A, `get_caps`). The three blobs are byte-for-byte images of
 // the corresponding POD structs; they are versioned by structSize-first
 // discipline, not by this schema.
-// The four fields this table used to end with are DELETED (CONTRACT-P5 table 0,
-// "CapsSnapshot redundancy"), not renamed and not deprecated:
+// The four fields this table used to end with are RETIRED (CONTRACT-P5 table 0,
+// "CapsSnapshot redundancy"):
 //
 //   maxComputeWorkGroupCount / maxComputeWorkGroupSize - they ride inside
 //     `dynamicParameters` already (BackendObject.h:392-393), and two spellings of
@@ -112,13 +112,29 @@ table Welcome {
 //   prefersCpuXfbPrimitiveAccounting - answered by kCapCpuXfbPrimitiveAccounting
 //     in `callMask` below.
 //
-// They were the LAST four fields, so nothing before them moved a vtable slot.
+// THEY ARE `(deprecated)`, NOT DELETED, AND THAT IS NOT A STYLE CHOICE. In
+// FlatBuffers a table field's id IS its vtable slot, and REMOVING a field FREES
+// that slot for the next field appended to the table - so plainly deleting these
+// four would have handed slots 14 and 16, which used to carry `[int]` vectors
+// (4-byte uoffsets), to `callMask` (an 8-byte inline ulong) and `backendType` (a
+// 4-byte inline uint). Two peers straddling that edit both still announce
+// abiMajor 1, and the ABI fingerprint mixes struct sizes and a git stamp, not the
+// schema, so neither the handshake nor the fingerprint could see it: the reader
+// would parse a uoffset as a ulong. `(deprecated)` keeps 14/18/20 burned, pushes
+// the two new fields to 22/24, generates no accessor for the retired names so
+// nothing can read or write them, and costs zero bytes on the wire. The
+// alternative - bumping MOBILEGL_PROTOCOL_ABI_MAJOR - is a real break for a
+// change that does not need to be one.
 table CapsSnapshot {
   dynamicParameters: [ubyte];
   rendererInfo: [ubyte];
   formatCaps: [ubyte];
   extensions: [string];
   apiVersion: string;
+  maxComputeWorkGroupCount: [int] (deprecated);
+  maxComputeWorkGroupSize: [int] (deprecated);
+  tableSlotMask: ulong (deprecated);
+  prefersCpuXfbPrimitiveAccounting: bool (deprecated);
   // MGPCaps::CallMask (MGPipeTypes.h:127). Bits 0..8 are MGPCapBit; bits 32..47
   // are the CONSUMER MASK - bit (32+n) means "the server has a consumer for
   // MGPipe subsystem bit n" - and MG_Remote/CapsCodec.h holds the four constexprs
