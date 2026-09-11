@@ -462,7 +462,7 @@ $ ctest --test-dir build-push -R 'HandleRecycle' --no-tests=error -j 4 --output-
 
 所有入表运行前后 `pin_device.sh check` 都是 PINNED（小米 rd12/Magma 崩溃后 GPU pwrlevel 被重置，其后的 sodium/create-instancing 行两臂同状态）。
 
-**读法。** (1) **P2 的边界在 Release 下的真实代价是 +6–12%**（`0x7f` 臂），两机两后端一致，比 -O0 表的 +8–18% 小但同量级；(2) **P3a 在 26.3 与 sodium 上几乎不再加价**（P3a 臂与 P2 臂在 26.3 上相差 −0.1 ～ +2 个百分点），**但在 rd12 上把差距从 +11% 推到 +27–30%**——rd12（Odin Lite 世界）每帧的 VAO/buffer 绑定切换远多于 26.3（26.3 的 1350 draw/帧大多复用同一 VAO），每次切换都走一遍 `set_vertex_buffers` 构造 + `ContentHash` + applier 记录 + Espryt 侧逐属性走查；Magma 上没有句柄消费者也多 15 个百分点，说明 client 侧发射本身就是大头；(3) **MC 26.3 在 Adreno 上的 p99**（`ROADMAP.md:19` 点名的那个数）：pull 25.46 ms → P3a 26.32 ms（+3.4%），finish 开 25.48 → 26.29；对着 `MEASUREMENTS.md:87` 的采纳基线（p99 163 → 21 ms）仍在 21–26 ms 档，没有回到采纳前的形态——按口径记录，不判门；(4) `mpr`（map-persistent-roundtrips，按窗口累加）：26.3 两机都是 8（首窗 4，之后两次 2——都是 ≥16 MiB store 定义时的采纳），sodium 1，rd12 与 create-instancing 0；P2 臂上恒 0（子系统关）——G10 在设备上成立；(5) `CreateVertexElements` 每帧字节数：统计行没有这一类（`vtxc` 是 client 数组），**未测**，留给 P4a 给汇总行加类；(6) 计数器（`acc/draw`、六个 memo 门、`resid=`、`csom/csob`）在 pull/P2/P3a 三臂间逐字相同——它们数的是代码路径，P3a 没有改它们的定义。
+**读法。** (1) **P2 的边界在 Release 下的真实代价是 +6–12%**（`0x7f` 臂），两机两后端一致，比 -O0 表的 +8–18% 小但同量级；(2) **P3a 在 26.3 与 sodium 上几乎不再加价**（P3a 臂与 P2 臂在 26.3 上相差 −0.1 ～ +2 个百分点），**但在 rd12 上把差距从 +11% 推到 +27–30%**——rd12（Odin Lite 世界）每帧的 VAO/buffer 绑定切换远多于 26.3（26.3 的 1350 draw/帧大多复用同一 VAO），每次切换都走一遍 `set_vertex_buffers` 构造 + `ContentHash` + applier 记录 + Espryt 侧逐属性走查；Magma 上没有句柄消费者也多 15 个百分点，说明 client 侧发射本身就是大头；(3) **MC 26.3 在 Adreno 上的 p99**（`ROADMAP.md:19` 点名的那个数）：pull 25.46 ms → P3a 26.32 ms（+3.4%），finish 开 25.48 → 26.29；对着 `MEASUREMENTS.md:87` 的采纳基线（p99 163 → 21 ms）仍在 21–26 ms 档，没有回到采纳前的形态——按口径记录，不判门；(4) `mpr`（map-persistent-roundtrips，按窗口累加）：26.3 两机都是 8（首窗 4，之后两次 2——都是 ≥16 MiB store 定义时的采纳），sodium 1，rd12 与 create-instancing 0；P2 臂上恒 0（子系统关）——G10 在设备上成立；(5) `CreateVertexElements` 每帧字节数：统计行原本没有这一类（`vtxc` 是 client 数组），**P4a 已补上并测了**——汇总行的 `bytes/f[...]` 多了一个 **`csob-blob`**（`cso-blob-bytes`：所有 CSO create 调用的 blob 字节，含 vertex-elements、sampler、shader）。79 例 retrace、`MOBILEGL_PIPE_STATS=1 MOBILEGL_PIPE_STATS_PERIOD=60`、push 构建（`8c458cd5`）：**DirectGLES 27 个用例逐用例窗口均值的中位数 2928 B/帧、均值 42.8 KB/帧、无一为零**，最大 `rd12-odinlite` **1.06 MB/帧**（它每帧换 VAO 的次数远多于别人，正是 §20 读法 (2) 里 rd12 多花 17–19 个百分点的同一根因，这下有了字节口径）；其后依次 `minecraft-1.21.4-in-world` 11.4 KB、`common-mods-inventory` 8.3 KB、`common-mods-in-world` 7.8 KB、`rei-inventory` 7.2 KB。**DirectVulkan 侧恒 0**——Magma 没有注册 `MGPipeResourceOps`，P4a 的消费者门因此让四族一条不发（见 `ARCHITECTURE.md` 的 `MOBILEGL_PIPE_PUSH` 行），这也是这个计数器第一次把那条门量化出来；(6) 计数器（`acc/draw`、六个 memo 门、`resid=`、`csom/csob`）在 pull/P2/P3a 三臂间逐字相同——它们数的是代码路径，P3a 没有改它们的定义。
 
 **小米 rd12 + Magma 的崩溃**：三臂（含 pull）都在启动后数秒 `SIGABRT`：`scudo::reportMapError` ← `remapImpl` ← `scudo_calloc` ← `libMobileGL.so`（0x818b14 / 0x7e2c44，已剥符号），当时 MemAvailable 6.1 GB——一次巨大或负尺寸的 calloc，在 Adreno 830 + Magma + 这条 fixture 上；pull 库与 P3a 前的 Magma 路径符号一致，所以是**既有 bug**，不入 P3a 账，已开独立任务（先符号化再修）。Oppo/Magma 与小米/Espryt 上同一 fixture 正常。
 
@@ -518,6 +518,8 @@ $ ctest --test-dir build-push -R 'HandleRecycle' --no-tests=error -j 4 --output-
 
 **`g_uploadRing` 不被重置的不对称：原样保留，记为 `dev` 侧跟进。** `OnBackendContextDestroyed`（`MobileGL/MG_Backend/DirectGLES/Managers.cpp:2481`）对 `g_uboRing` 与 `g_unpackRing` 调 `ResetRingForNewContext`（`:2492-2493`），**不对 `g_uploadRing` 调**；`RingAvailable`（`:3186`）在首次使用时按 `contextGeneration` 自愈，所以它是良性的。P3a **故意不在飞地顺手修**（`ROADMAP.md:98` 那条纪律：拆分不得借机修不相关的 `dev` 问题），把它作为 `dev` 侧跟进项留在这里。
 
+**P4a 在它旁边加第二条同类项：`ScopedDefaultUnpackState::s_synced` 没有失效路径（D-O）。** `Managers.cpp` 的 `ScopedDefaultUnpackState` 用一个**进程级**影子记住"默认 unpack 状态已经同步过"，那个影子被写、被读，**却没有任何地方让它失效**——换上下文、别的代码路径自己调 `glPixelStorei`，它都不知道。P4a 既不修它也没让它更糟（句柄臂的 ring 路径一条 `glPixelStorei` 都不发，唯一的外部写点仍被 `!ringStaged` 挡着），按同一条纪律记为 `dev` 侧跟进。**两条并列的理由是同一个**：它们都是"缓存了一个事实、却没有让这个事实失效的路径"，而 P4a 自己在 `Tracker.h` 上被同一类问题咬了三次（`glBindSampler` 不动位 13 的快门、SSO 下 `GetCurrentProgram()` 恒 null、`glBindImageTexture` 只换 level 时三个计数器都不动）——所以下一阶段的 brief 必须带一张"记录字段 → 写它的 setter → emitter 读的快门"的完备表，而不是让每个包各自去发现。
+
 **`FlushPendingRangesNow` 定义一次，句柄臂另有一条自己的档梯。** G5 的第十项与 G1 的空 resize 集之间有一处真冲突：就地重构那几个 helper 会 resize 五个 pull 符号（`FlushPendingRangesNow +14` 在内），G1 不允许。落地形状是：**`FlushPendingRangesNow` 只定义一次、对 `5cb826b0` 逐字节相同**（在 `#if MOBILEGL_PIPE_PUSH` 的 `#else` 臂里，`Managers.cpp:1316`，调用点 `:1723`、`:2906`），句柄臂另有一个 `FlushPendingRangesFrom(twin, hostBase, size)`（`:1051`，调用点 `:1721`、`:2044`、`:2766`、`:2904`）。**在 P3a 接受档梯在 push 构建里被复制一份**（与 respecify 核心已经用过的形状相同），代价是两条梯子会漂移；对冲是 `CrossFrameBufferScenario` 的十三条加 `StreamedArenaScenario` 的两条 recycle 用例，以及 §20 的 MC 26.3 p99。**它随 pull 臂在 P13 退役**（`ARCHITECTURE.md:367`）。共享模板加访问器接口的方案被否决：它同样 resize pull 符号（G1）。
 
 **`MG_Test/Buffer/BufferTest.cpp` 的 fixture 只 scope 了一半的表。** push 构建下后端在 bring-up 同时装 `BufferBackendOps` 与 `MGPipeResourceOps`，而 `ScopedBackendOps` 只 scope 前者，于是 86 条 `BufferBackendOps` 分发用例里有 **26 条**被路由进了 pipe（症状是 `EnsureGpuResidentStorage()` 返回 `false`、mock 从没被调用过）。这是**合并缝**的典型形态——两个分支各自绿、合起来红：espryt 那边没有东西经 pipe 发射，client 那边没有东西注册表。集成者落了单 scope 的修法（fixture 现在像 `MG_Test/Pipe/ResourceEmitTest.cpp` 的 `ApplierGuard` scope applier 那样，保存 / 置空 / 恢复 pipe 表）：**修完 86/86，整套单元 1619/1619**。它不削弱任何东西——那 86 条是 `BufferBackendOps` 的分发测试，pipe 侧的分发有 `ResourceEmitTest` 自己的覆盖。**跟进（不属于本阶段）**：给这个 fixture 一个 pipe 形的 mock，让同样的 86 条断言在句柄路径上再跑一遍。
@@ -526,3 +528,107 @@ $ ctest --test-dir build-push -R 'HandleRecycle' --no-tests=error -j 4 --output-
 
 **峰值 RSS（push vs pull，79 例 retrace）：工具不报，所以没有数。** `~/w7/retrace_gate.py` 只有五个参数（`--tree --lib --out -j --only`），代码里没有任何 `rss` / `maxrss` / `getrusage` 引用。这个数原本是用来盯第七张 slot 表泄漏的——一个没人销毁的 buffer 会永远漏掉它的 twin，而这对每一个正确性门都不可见；**这一轮拿不到它**，要拿必须先给那个工具加测量。对冲仍在：`ResourceDestroy` 是从 `~BufferObject` **无条件**发射的、不是靠清扫，顺序（先发射、后 `MGPipeSlots().Free`）由 `HandleRecycleScenario` 的三个臂把关（§16、§17）。
 
+
+---
+
+## 22. P4a 五部分门（`6035c9d7` 全量 + `8c458cd5` 复跑，基线 `37da3c3a`）
+
+P4a 的代码头是 **`8c458cd5`**；下面的"全量"一列跑在 `6035c9d7`（终审修复轮之前的那个头，`wsl_p4a_gate.sh` 完整五部分含三次 retrace），"复跑"一列是修复轮落地后在 `8c458cd5` 上重跑的同一组。两次之间只差终审那五个提交，门的口径没变。
+
+| 门 | `6035c9d7`（全量） | `8c458cd5`（复跑） |
+|---|---|---|
+| **G1** pull 符号（认定 resize 集为空） | 0 增 / 0 删 / 0 重命名 / 0 resize，`.text` 字节不变 | 同上 |
+| **G5** 字节一致区 | P3a 十一函数 rc 0；P4a 自己 **17 区 / 3 文件** rc 0，self-test **8 个阴性对照全部按名变红** | 同上 |
+| **G2** pull vs push 测试名 | 差 0 | 差 0（**2902** 条） |
+| **G14** 测试名增删 | 0 删除 / +275 | 0 删除 / **+314** |
+| 单元 | 1772 × 3（linux / push / verify） | **1785 × 3** |
+| `integration-gpu` | **1091/1091 × 七臂**（默认 `0x1fff`、`0x1ff`、`0`、`0x7f`、pull、`ESPRYT_DISABLE_INVALIDATE_FLUSH=1`、族正则 497/497） | **1117/1117 × 七臂**（多了 `0x9ff`、`0x5ff` 两个依赖拒绝臂；DirectVulkan **559/559**） |
+| `integration-verify` | **896/896，零 `Fatal{`** | **920/920，零 `Fatal{`** |
+| retrace（79 例） | verify 臂 **79/79 全 armed、零分歧、零 Fatal**；push 臂 **79/79**；G3b 具名 **12/12** | push 臂 **79/79** |
+| 三个阴性对照脚本 | 全部 rc 0：`g7_negative_control.sh`、`p3a_vertex_input_negative_control.sh` 点名 `IsBgra`、**`p4a_descriptor_negative_control.sh` 点名 `Layered` 与 `borderColorForm`** | 同上 |
+| 子系统对照套件 | `CsoContentAddressing` + `ResourceSubsystemControl` + `ObjectSubsystemControl` **24/24**，`0x9ff` 依赖拒绝臂 **14/14**，`HandleRecycle`（verify）**180/180** | 同上 + `184/184` controls |
+| 八族拒绝普查 | — | **0**（16 条 needle × retrace 日志、13 行 × itest 日志） |
+
+**两处口径，都是这一波踩出来的**：
+
+1. **`ctest -V` 做拒绝普查是假零。** console sink 在发布配置里被编译掉，`ctest -V` 抓不到任何 `MGLOG_E`；必须逐用例单跑并读它自己的日志文件（工具 `~/w7/notes/tools/wsl_p4a_refusal_census.sh`）。一份"零拒绝"的普查如果是用 `-V` 取的，它证明的只是 sink 被关了。
+2. **普查的短语表必须覆盖全部八族**，而且要小心跨字符串字面量换行的句子——最初那版漏了 sampler 与 renderbuffer 两族，正好是后来真出问题的那两族。
+
+## 23. 这一波真正的产出：缝的分类
+
+P4a 的契约改了七次（`c0b`…`c0g`），外加一轮缝类审计与一轮终审修复。把它们按**类**记下来，比按包记有用得多——每一类都在多个包里重复出现过，而下一阶段的 brief 应当在开工前就把这几张表写死：
+
+| 类 | 这一波的实例 | 症状 | 预防 |
+|---|---|---|---|
+| **编码没定死** | `MGPSubData::Target`（低字节资源目标 + 高字节上传目标 vs 裸枚举）、`DepthStencilMode`、`MGPSurface::Kind`、缺 `TextureTarget` | 两侧各自发明一套；`TextureUploadTarget::Texture1D == 0` 与 `kMGPipeResourceTargetBuffer == 0` 撞上，applier 的"这是 buffer 吗"判定被静默污染 | **编码表**：每个字段一行，写清位布局与零值含义，放进契约而不是包头 |
+| **身份 vs 内容** | 内置 sampler：client 按对象身份铸、cache 按内容铸；Espryt twin 按身份查那条内容寻址的记录 | 查找永远落空 → 整族拒绝（本波两次，其中一次让 17 条 Iris 光影 trace 全部用驱动默认采样器） | **每 kind 两侧 handle 规则表**：谁铸、按什么键、谁查、按什么键 |
+| **记录键错了维度** | framebuffer 记录按"当前绑定"存，DSA 的 `BlitNamedFramebuffer` / `ClearNamedFramebuffer*` 按名字来 | 打进一个从没收到附件的 FBO；SSIM 看得见但没有任何拒绝 | 记录按**对象**存，绑定另存句柄；第四个 target 值 `Named` |
+| **进程级单例 vs 每上下文命名** | `CompositeResolver` 按管线 GL 名记忆，GL 名是每上下文的 | 一次 make-current 就释放掉另一个上下文还活着的合成体 | 单例的键必须含上下文身份 |
+| **破坏性客户端动作缺前置条件** | 按 acceptance 清 dirty，但 (a) Magma 根本没有消费者，(b) D-K2 依赖位只在服务端拒 | 上传丢失：66 条 DirectVulkan 用例、`0x7ff` 下 438/491 | **消费者门 + 依赖门都要在客户端侧**：没消费者/依赖不满足时**一条不发**，而不是发了再在服务端拒 |
+| **快门看不见自己的主体** | `glBindSampler` 只动位 12 的世代；SSO 下 `GetCurrentProgram()` 恒 null；`glBindImageTexture` 只换 level 时三个计数器都不动 | 记录停在上一次的值，第一个真读该字段的消费者画错（`create-indirect` ssim 0.887） | **"记录字段 → setter → 快门"完备表**；新增计数器会撑大 pull 对象、G1 不允许，所以优先混入已有世代 |
+| **清得太宽** | `resource_respecify` 清掉整张待上传表 | 已被接受、客户端标志已清的那一级永久丢失（读回全黑） | 作用域随调用走：一级 / 截断链 / 整资源 |
+| **死亡没通知发射方** | 六个死亡 helper 只释放 slot | 已删但未复用的句柄仍解析到已释放的前端对象 → 下一个 validate 点对已释放内存调虚函数 | 死亡在 wire delete 与 free 之间转发给每个 emitter；查找按"活着"判定而不只按世代 |
+| **门不能变红** | `G7` 脚本因 scoped enum 写 0 而永远编译不过、`HighWater(ShaderCso)` 取的是段顶、G9 的红前态公共 GL 不可见 | 绿得毫无意义 | 每个门都要有阴性对照并**真跑过一次红**；公共 GL 看不见的，改白盒断言（`PipeApplyPeek`） |
+
+**一个方法论上的结论**：本波六个包的 v1 全部通过了自己的门，**六份对抗性复审全部判 REWORK**，而其中最贵的两个缺陷（丢上传、delete 后 UAF）是**整体 diff 终审**才抓到的——因为它们跨包：发射方、applier、twin 各自都自洽。所以"每包一审 + 集成后整体终审"这条流程里，**终审不是形式**，它是唯一能看见跨包契约的那一轮。
+
+## 24. P4a 设备配对 A/B（三臂）、MC 26.3 的 p99、上传形状（记录项）
+
+**先说口径，再看数（`MEASUREMENTS.md:440` 那条告诫在 P4a 上再次成立）**：`acc/draw` 数的是**约十个热入口上的静态计数点**，所以"把读点搬走"和"把工作去掉"在它上面长得一模一样。P4a 恰好是**搬**的一波：79 例语料上 DirectGLES 的 `acc/draw` 普遍下降（26.3 `10.49 → 8.34`、`rei-inventory` `13.33 → 11.25`、`rd12` `8.09 → 6.09`），而同一批运行的逐线程 CPU 是**上升**的。**这不是矛盾，是这个计数器的定义**：后端不再每 draw 去 `pGLContext` 上取，改成读被推送的记录，站点自然少计——工作搬到了客户端的发射侧。要判性能只看 CPU 时间序列与门的命中/未命中对，`acc/draw` 只能与站点常量表一起读。
+
+**设备与协议（与 §20 的两台机不同，这里换了机器）**：红米 M332BF（`2f7cbe2e`，SM8750 / **Adreno 830v2**，与 §20 的小米同 SoC 同定频点，数值可比）。reboot-clean → 大核 `policy6` 钉 1958400、小核 `policy0` 钉 1555200、GPU `pwrlevel 0`；**这台的 GPU 有效定频是 1050 MHz 不是 1100**——厂商把 `kgsl-3d0/thermal_pwrlevel` 常驻 1，root 写 0 无效（33 °C + 风扇全速下验证），`pin_device.sh` 按 1050 判定。全程**主动风扇恒定 level 2（~14.5k rpm）**：它对两臂是同一个常量，作用是把每用例之间的降温从 20–30 分钟压到 1 分钟以内，**40 个样本 40 个 `pin check` 全是 PINNED**（§20 那轮有 22 个样本因热漂移作废重跑）。APK 是 `8c458cd5` 的 Release trace 双臂（pull 8504077 B / push 8626957 B）。
+
+**三臂表**（`--benchmark-no-finish`，尾 200 帧、best-of-3、逐线程 CPU p50 ms；`0x1ff` = P2+P3a 边界，`0x1fff` = P4a 默认）：
+
+| 用例 | 后端 | pull | `0x1ff` | `0x1fff` | Δ P2+P3a | Δ 合计 | **P4a 自己** |
+|---|---|---|---|---|---|---|---|
+| improved-transparency-26.3 | Espryt | 10.716 | 11.754 | 12.124 | +9.7% | +13.1% | **+3.4 pt / +0.37 ms** |
+| improved-transparency-26.3 | Magma | 10.603 | 11.543 | 11.585 | +8.9% | +9.3% | +0.4 pt（噪声） |
+| rd12-odinlite | Espryt | 8.210 | 10.798 | 11.182 | +31.5% | +36.2% | **+4.7 pt / +0.38 ms** |
+| rd12-odinlite | Magma | — | — | — | — | — | 三臂全 `rc=1`，见下 |
+| fabric-sodium | Espryt | 1.312 | 1.406 | 1.454 | +7.2% | +10.8% | +3.6 pt / +0.05 ms |
+| fabric-sodium | Magma | 0.474 | 0.502 | 0.507 | +5.9% | +7.0% | +1.1 pt（噪声） |
+| 1.21.4-in-world | Espryt | 2.369 | 2.732 | 2.867 | +15.3% | +21.0% | **+5.7 pt / +0.14 ms** |
+| 1.21.4-in-world | Magma | 1.028 | 1.147 | 1.145 | +11.6% | +11.4% | −0.2 pt（噪声） |
+| fabric-iris-bsl | Espryt | 1.727 | 1.740 | 1.811 | +0.8% | +4.9% | +4.1 pt / +0.08 ms |
+| fabric-iris-bsl | Magma | 0.742 | 0.788 | 0.786 | +6.2% | +5.9% | −0.3 pt（噪声） |
+
+**读法。** (1) **P4a 自己在 Espryt 上是 +3.4 ～ +5.7 个百分点**（绝对值 0.05–0.38 ms/帧），大头仍然是 P2+P3a 那条边界——rd12 上 36.2% 里有 31.5% 是它。(2) **Magma 的 `0x1ff` 与 `0x1fff` 两臂在四个用例上逐个落在噪声内**（+1.1 / +0.4 / −0.2 / −0.3 pt），这是 c0f 那道"没有后端注册 `MGPipeResourceOps` 就一条不发"的门在设备上的读数——Magma 仍然要付 P2+P3a 的客户端发射（它消费那些族），但 P4a 的四族对它完全免费。(3) **`vanilla`（1.21.4-in-world）是 Espryt 上 P4a 占比最高的用例**（+5.7 pt），它 draw 少、状态切换密，正是句柄化最不划算的形状；`sodium`/`iris-bsl` 这种把状态压平的语料几乎不受影响。
+
+**头条一：MC 26.3 在 Adreno 上的 p99。** pull **25.297** → P4a **26.841 ms（+6.1%）**，`0x1ff` 臂 26.387；Magma 侧 24.979 → 26.021。对照 §20 的 P3a 读数（25.457 → 26.322，+3.4%）与 `MEASUREMENTS.md:87` 的采纳基线（p99 163 → 21 ms），**仍在 21–26 ms 档内、没有回到采纳前的形态**——按口径记录，不判门。
+
+**头条二：GUI/atlas 的纹理上传形状，pull 与 push 逐项相同。** 79 例语料两臂各跑一遍带 `MOBILEGL_PIPE_STATS=1` 的 retrace（`8c458cd5`，客户端计数器 `tex[emit/box/rect/jobs]`）：
+
+| | emit | box | rect | jobs |
+|---|---|---|---|---|
+| pull | 18451 | 16060 | 2391 | 39926 |
+| push | 18453 | 16062 | 2391 | 39928 |
+| 差 | **+2** | **+2** | **0** | **+2** |
+
+**整份语料上唯一的形状差异是 2 次**，而且正是那 2 次 `trp`（纹理重铸拉取，见 `ROADMAP.md` 开放问题 2）带来的重放上传——即"盒 vs 矩形"的分解一格没动。这是 SSIM 看不见、Mali 那道 ~+6 ms/帧的悬崖就藏在里面的那个数（`ARCHITECTURE.md` §6），P4a 在这里是**中性**的。逐用例看也一致：`rei-inventory` Espryt 两臂都是 16/16/0/16，Magma 两臂都是 47/46/1/75。
+
+**一条留给优化阶段的线索（不是缺陷，是读数）**：设备上 26.3 Espryt 的 `sve`（真正发出去的 sampler-view 集合数）**≈ draw 数**（9143 次 / 9138 draw，每窗口 120 帧），而桌面同一 fixture 只有 ~0.07/draw。`PipeStats.h` 给这四个集合计数器写的用途正是这个——"抑制器不再抑制时，它的计数会跟着 draw 数走而不是跟着状态变化走"。桌面与设备的差异说明这跟负载形状有关而不是无条件失效，但 **26.3 在设备上每 draw 重发一次 sampler-view 集合**是 Espryt 侧 P4a 那 +0.37 ms 最值得先查的去处，列进 P3b/P4b 的优化清单。
+
+**`rd12` + Magma 在这台机上照样崩**：三臂（含 pull）全部 `rc=1`，与 §20 在小米上的记录一致（`scudo::reportMapError` ← `remapImpl` ← `scudo_calloc` ← `libMobileGL.so`）。**换了一台同 SoC 的机器仍然复现，进一步确认它是 `dev` 侧的问题而不是设备个例**；按 `ROADMAP.md:7` 的纪律不在本分支顺手修，处置沿用 §20：排除在 A/B 之外、留在桌面语料里（桌面两臂均通过）。
+
+## 25. P4a DriverBench：T1 / T2 / T3（桌面，lavapipe + llvmpipe，记录项）
+
+`wsl_p4a_bench.sh` 在 `8c458cd5` 上重跑（原始表 `~/w7/notes/p4a/bench/driverbench.{csv,md}`，repeats=5 / frames=240，空闲机）。臂：`pull`、`push`（`0x1fff`）、**`push7f` 一列在 P4a 里装的是 `0x1ff`**（P2+P3a 边界 = 设备侧那个 T2 的桌面对应物）、`push0`（`PIPE_PUSH=0`）、`nocso`（关 CSO 内容寻址的负面对照）。
+
+| 臂 | `mc_vanilla_draw` | `mc_state_toggle` | `mc_pass_switch` |
+|---|---|---|---|
+| native | 4398.9 | 21387.3 | 412657.8 |
+| espryt-pull | 4684.4 | 22010.4 | 410936.2 |
+| espryt-push（`0x1fff`） | 5760.5 | 22974.9 | 419703.1 |
+| espryt-`0x1ff` | 5749.1 | 23768.2 | 419288.0 |
+| espryt-push0 | 5355.2 | 23618.8 | 420362.2 |
+| espryt-nocso | 5929.0 | 23685.0 | 418677.0 |
+| magma-pull | 15394.9 | 31678.5 | 420197.6 |
+| magma-push（`0x1fff`） | 16023.9 | 32417.4 | 415641.9 |
+| magma-`0x1ff` | 15847.5 | 32100.3 | 416670.4 |
+| magma-push0 | 15946.6 | 31610.2 | 417410.5 |
+| magma-nocso | 15846.2 | 32495.9 | 411306.4 |
+
+`mc_vanilla_draw` 上：**espryt T1（`0x1fff` − pull）= +1076.1 ns/draw，T2（`0x1ff` − pull）= +1064.7，T1 − T2 = +11.4**；magma T1 = +629.0、T2 = +452.6、T1 − T2 = +176.4。blend toggle：espryt +964.5 / magma +738.9 ns per toggle pair；pass switch：espryt +8766.9、magma −4555.7（后者符号为负，属该项的噪声量级）。
+
+**桌面这台机上，"P4a 自己"落在本 bench 的噪声底以下，所以不要单独引用它。** 同一份脚本在 `6035c9d7`（终审修复前）上跑出的是 espryt T1 +1269.7 / T2 +1135.8 / **T1 − T2 = +133.9**，本轮是 +1076.1 / +1064.7 / **+11.4**——**两臂的绝对值在两轮之间各自漂了 ~200 ns，而它们的差只有 10–130 ns**，也就是说这个 bench 分辨不出 P4a 这一档的增量。真正可引用的是：(1) **T1 ≈ +1.1 µs/draw 的总边界**（对 pull 基线，Espryt；这条在两轮之间是稳的）；(2) **设备侧的三臂表（§24）**——那里 P4a 自己是 +3.4 ～ +5.7 个百分点、0.05–0.38 ms/帧，样本全部在验证过的定频窗口里。**Magma 的 T1 − T2 = +176.4 ns 不是"Magma 在跑 P4a"**：c0f 的消费者门让它一条 P4a 记录都不发（设备侧 §24 的 Magma 两臂差也在噪声内），这 176 ns 是 tracker 多算的那几个快门加噪声。
