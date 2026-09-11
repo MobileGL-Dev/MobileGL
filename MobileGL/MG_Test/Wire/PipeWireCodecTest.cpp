@@ -571,6 +571,96 @@ TEST_F(PipeWireCodecTest, KHostSpanClassIsValidatedEvenThoughP5ProducesNone) {
 }
 
 // =====================================================================================
+// Declared padding is payload, not slack
+// =====================================================================================
+
+TEST_F(PipeWireCodecTest, EveryPayloadByteCrossesIncludingTheOnesSpelledPad) {
+    // A PAD IS A FIELD SOMEBODY HAS NOT CLAIMED YET, and this phase is the proof: P5 put the
+    // respecify scope into MGPResourceDesc's two pads (contract table 1 row 19b) and b1 put
+    // MGPSubData::Pad0's low byte to work as HasLiveHostWrites. A codec that zeroed a pad "for
+    // determinism", or built a payload field by field, would DELETE those bits - and a dropped
+    // HasLiveHostWrites is not a visible failure, it is IsBufferDrawClean answering "clean"
+    // for a buffer with a live host writer, i.e. the frame drawing the last uploaded bytes
+    // with no diagnostic at all.
+    //
+    // So this case asserts the whole payload byte for byte rather than the named fields: a
+    // test that compared only the members would go green through exactly that bug.
+    // IT NAMES NO PAD MEMBER, deliberately. The whole struct is stamped with a recognisable
+    // byte first and only the fields the decoder validates are then written, so whatever is
+    // left - Pad0, Pad1, or the names a later phase gives them - still carries the stamp and a
+    // memcmp over the whole payload is the assertion. A case that named `Pad0` would stop
+    // COMPILING the day someone claims it, which is precisely the day it is most needed.
+    Wire2 wire;
+    std::vector<std::uint8_t> texels(64, 0x31);
+
+    MGPSubData upload{};
+    std::memset(&upload, 0xA5, sizeof(upload));
+    upload.Res = MakeHandle(101);
+    upload.Target = MGPipePackSubDataTarget(static_cast<Uint32>(MGPipeResourceTarget::Tex2D), 0u);
+    upload.Level = 2;
+    upload.SourceIsVerbatimLevelShadow = 1;
+    upload.UnionBox = MGPBox{1, 2, 0, 4, 4, 1};
+    upload.RegionCount = 0;
+    upload.Blob = wire.Encoder().StageBytes(texels.data(), texels.size());
+
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceSubData, &upload, sizeof(upload)),
+              kInvalidSeq);
+    wire.Encoder().Publish();
+
+    Transport::RingRecordView view{};
+    bool corrupt = false;
+    ASSERT_TRUE(wire.Consumer().Pop(view, &corrupt));
+    ASSERT_FALSE(corrupt);
+    ASSERT_GE(view.payloadSize, sizeof(upload));
+    EXPECT_EQ(std::memcmp(view.payload, &upload, sizeof(upload)), 0)
+        << "the payload did not cross byte for byte";
+
+    // And the stamp really did survive somewhere the named fields do not cover, so the case
+    // cannot pass by comparing a struct that has no unclaimed bytes left.
+    const auto* crossed = static_cast<const std::uint8_t*>(view.payload);
+    std::size_t stamped = 0;
+    for (std::size_t i = 0; i < sizeof(upload); ++i) {
+        if (crossed[i] == 0xA5) {
+            ++stamped;
+        }
+    }
+    EXPECT_GT(stamped, 0u) << "no byte of the payload was left unclaimed; the case still checks "
+                              "the memcmp above, but it no longer proves anything about pads";
+}
+
+TEST_F(PipeWireCodecTest, ResourceDescPadsCrossToo) {
+    // The same property over the struct P5 itself put two fields into. The helpers are the
+    // only legal reader (three fields are one value), but the BYTES are what the codec owes.
+    Wire2 wire;
+    MGPResourceDesc desc{};
+    desc.Resource = MakeHandle(111);
+    desc.Target = static_cast<Uint8>(MGPipeResourceTarget::TexCube);
+    desc.InternalFormat = 7;
+    desc.Width = 16;
+    desc.Height = 16;
+    desc.Depth = 1;
+    desc.ArrayLayers = 6;
+    desc.Levels = 3;
+    desc.Samples = 1;
+    MGPipeSetRespecifiedLevel(desc, 0x0304u, 2u);
+
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceRespecify, &desc, sizeof(desc)),
+              kInvalidSeq);
+    wire.Encoder().Publish();
+
+    Transport::RingRecordView view{};
+    bool corrupt = false;
+    ASSERT_TRUE(wire.Consumer().Pop(view, &corrupt));
+    ASSERT_FALSE(corrupt);
+    EXPECT_EQ(std::memcmp(view.payload, &desc, sizeof(desc)), 0);
+    const auto* crossed = static_cast<const MGPResourceDesc*>(view.payload);
+    EXPECT_FALSE(MGPipeRespecifyIsWholeResource(*crossed));
+    EXPECT_EQ(MGPipeRespecifiedUploadTargetOf(*crossed), 0x0304u);
+    EXPECT_EQ(MGPipeRespecifiedLevelOf(*crossed), 2u);
+
+}
+
+// =====================================================================================
 // The two double-tailed rows, and DrawVbo's conditional one
 // =====================================================================================
 
