@@ -23,6 +23,7 @@
 // both delivery modes and SessionSegmentsAreRealSharedMemory below is the mechanical check that
 // it still does.
 
+#include <MG_Remote/Protocol/generated/protocol_generated.h>
 #include <MG_Remote/Transport/Doorbell.h>
 #include <MG_Remote/Transport/EventRing.h>
 #include <MG_Remote/Transport/InProcessTransport.h>
@@ -49,11 +50,12 @@ namespace {
     // command ring many times over - which is what puts the kRecPad rule under load rather
     // than under a contrived single wrap.
     SessionSegmentSizes TestSizes() {
+        // RING sizes. The SEG_CMD and SEG_EVENT segments are each one control page bigger.
         SessionSegmentSizes sizes;
-        sizes.CmdBytes = 64ull * 1024;   // -> 32 KiB ring after the control page
-        sizes.StageBytes = 64ull * 1024; // -> 64 KiB, no control page of its own
+        sizes.CmdRingBytes = 32ull * 1024;
+        sizes.StageRingBytes = 64ull * 1024;
         sizes.ReplyBytes = 64ull * 1024; // -> 8 slots of 8 KiB
-        sizes.EventBytes = 32ull * 1024; // -> 16 KiB ring after the control page
+        sizes.EventRingBytes = 16ull * 1024;
         sizes.ReplySlotCount = 8;
         return sizes;
     }
@@ -83,29 +85,35 @@ namespace {
             if (clientSegments.AttachInProcess(serverSegments, MemoryRole::Client) != MOBILEGL_OK) {
                 return false;
             }
-            RingControl* control = serverSegments.CmdControl();
-            cmdProducer = RingProducer(control, clientSegments.CmdRingBase(),
+            // EACH ROLE DRIVES ITS OWN MAPPING. Under inproc AttachInProcess dups the
+            // owner's descriptors and maps them again, so the client's RingControl is a
+            // different VIRTUAL address over the same physical page - which is exactly the
+            // shape spawn has, and the reason the fixture does not share one pointer.
+            RingControl* clientControl = clientSegments.CmdControl();
+            RingControl* serverControl = serverSegments.CmdControl();
+            cmdProducer = RingProducer(clientControl, clientSegments.CmdRingBase(),
                                        clientSegments.CmdRingCapacity(), RingCursorSet::Cmd);
-            stageProducer = RingProducer(control, clientSegments.StageBase(),
+            stageProducer = RingProducer(clientControl, clientSegments.StageBase(),
                                          clientSegments.StageCapacity(), RingCursorSet::Stage);
-            cmdConsumer = RingConsumer(control, serverSegments.CmdRingBase(),
+            cmdConsumer = RingConsumer(serverControl, serverSegments.CmdRingBase(),
                                        serverSegments.CmdRingCapacity(), RingCursorSet::Cmd);
             if (!cmdProducer.Valid() || !stageProducer.Valid() || !cmdConsumer.Valid()) {
                 return false;
             }
             // PeerDoorbell is the bell the OTHER end parks on; SelfDoorbell is this end's own.
             // Which is which is the session's knowledge, never ITransport's (contract §3.9).
-            producer.Attach(control, &cmdProducer, &stageProducer, &clientTransport->PeerDoorbell(),
-                            &clientTransport->SelfDoorbell(), kDefaultSpinUs);
-            consumer.Attach(control, &cmdConsumer, &serverTransport->PeerDoorbell(),
+            producer.Attach(clientControl, &cmdProducer, &stageProducer,
+                            &clientTransport->PeerDoorbell(), &clientTransport->SelfDoorbell(),
+                            kDefaultSpinUs);
+            consumer.Attach(serverControl, &cmdConsumer, &serverTransport->PeerDoorbell(),
                             &serverTransport->SelfDoorbell(), kDefaultSpinUs);
             replies = ReplySlotPool(serverSegments.ReplyBase(), serverSegments.ReplyBytes(),
                                     serverSegments.ReplySlotCount());
             replies.Clear();
-            eventOut = EventRingProducer(serverSegments.EventControl(), control,
+            eventOut = EventRingProducer(serverSegments.EventControl(), serverControl,
                                          serverSegments.EventRingBase(),
                                          serverSegments.EventRingCapacity());
-            eventIn = EventRingConsumer(clientSegments.EventControl(), control,
+            eventIn = EventRingConsumer(clientSegments.EventControl(), clientControl,
                                         clientSegments.EventRingBase(),
                                         clientSegments.EventRingCapacity(),
                                         clientSegments.EventSegmentBase());
@@ -145,49 +153,64 @@ TEST(SessionTest, SessionSegmentsAreRealSharedMemoryAndNotAHeapAllocation) {
     EXPECT_FALSE(segments.Valid());
 }
 
-// The arithmetic the whole geometry rests on, and the one place CONTRACT-P5 §5's "8 MiB caps
-// one record at 4 MiB" is corrected: the control page sits at the HEAD of SEG_CMD and the ring
-// capacity must be a power of two, so an 8 MiB segment yields a 4 MiB ring and a 2 MiB record.
-TEST(SessionTest, TheRingIsTheLargestPowerOfTwoLeftAfterTheControlPage) {
+// The knob names the RING and the segment carries one control page on top, so CONTRACT-P5 §5
+// and Config.h's "A RECORD MAY BE AT MOST HALF OF THIS, so 8 MiB caps one record at 4 MiB" are
+// true as written. Getting this the other way round - an 8 MiB segment with a 4 MiB ring -
+// made both of those documents false and left half of SEG_CMD mapped and unreachable.
+TEST(SessionTest, TheKnobNamesTheRingAndTheSegmentAddsOneControlPage) {
     EXPECT_EQ(LargestPowerOfTwoAtMost(0u), 0u);
     EXPECT_EQ(LargestPowerOfTwoAtMost(1u), 1u);
     EXPECT_EQ(LargestPowerOfTwoAtMost(4095u), 2048u);
     EXPECT_EQ(LargestPowerOfTwoAtMost(4096u), 4096u);
     EXPECT_EQ(LargestPowerOfTwoAtMost(4097u), 4096u);
 
-    // The four contract sizes, which ProtocolSmokeTest.cpp:72 pins on the wire.
-    constexpr std::uint64_t kCmd = 8ull * 1024 * 1024;
-    constexpr std::uint64_t kEvent = 256ull * 1024;
-    EXPECT_EQ(RingCapacityForSegment(kCmd), 4ull * 1024 * 1024);
-    EXPECT_EQ(RingCapacityForSegment(kEvent), 128ull * 1024);
+    constexpr std::uint64_t kCmdRing = 8ull * 1024 * 1024;
+    constexpr std::uint64_t kEventRing = 256ull * 1024;
+    EXPECT_EQ(SegmentBytesForRing(kCmdRing), kCmdRing + sizeof(RingControl));
+    EXPECT_EQ(SegmentBytesForRing(kEventRing), kEventRing + sizeof(RingControl));
+    // Round trip: the capacity inside a segment SegmentBytesForRing produced is the ring
+    // that was asked for, exactly.
+    EXPECT_EQ(RingCapacityForSegment(SegmentBytesForRing(kCmdRing)), kCmdRing);
+    EXPECT_EQ(RingCapacityForSegment(SegmentBytesForRing(kEventRing)), kEventRing);
+    // A ring size that is not a power of two is rounded DOWN rather than silently producing a
+    // segment whose tail can never be addressed.
+    EXPECT_EQ(SegmentBytesForRing(6ull * 1024 * 1024), 4ull * 1024 * 1024 + sizeof(RingControl));
+
     // ... and therefore the real cap on one record, which R-10 obliges the codec to prove it
-    // never approaches. Half of the ring, not half of the segment.
+    // never approaches: half of MOBILEGL_IPC_RING_MB, which is what §5 says.
     RingControl control{};
     InitRingControl(control);
-    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(RingCapacityForSegment(kCmd)));
-    RingProducer producer(&control, bytes.data(), RingCapacityForSegment(kCmd), RingCursorSet::Cmd);
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(kCmdRing));
+    RingProducer producer(&control, bytes.data(), kCmdRing, RingCursorSet::Cmd);
     ASSERT_TRUE(producer.Valid());
-    EXPECT_EQ(producer.MaxRecordBytes(), 2ull * 1024 * 1024);
+    EXPECT_EQ(producer.MaxRecordBytes(), 4ull * 1024 * 1024);
 
     // A segment that cannot hold the control page plus the smallest ring has NO ring, rather
     // than a ring of some rounded-down nonsense.
     EXPECT_EQ(RingCapacityForSegment(sizeof(RingControl)), 0u);
     EXPECT_EQ(RingCapacityForSegment(sizeof(RingControl) + 8), 0u);
+    EXPECT_EQ(SegmentBytesForRing(8u), 0u);
 }
 
-// The default geometry really allocates, and the announced sizes are the MAPPING sizes - what
-// a spawn peer must map - not the ring capacity inside them.
-TEST(SessionTest, TheDefaultGeometryIsTheFourContractSizes) {
+// The default geometry really allocates. The four RINGS are the four contract numbers; the two
+// segments that carry a control page announce that much more, because sizeBytes is what a spawn
+// peer must mmap.
+TEST(SessionTest, TheDefaultGeometryIsTheFourContractRingSizes) {
     SessionSegments segments;
     ASSERT_EQ(segments.Create(SessionSegmentSizes{}, MemoryRole::Server), MOBILEGL_OK);
-    EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Cmd), 8ull * 1024 * 1024);
+    EXPECT_EQ(segments.CmdRingCapacity(), 8ull * 1024 * 1024);
+    EXPECT_EQ(segments.StageCapacity(), 32ull * 1024 * 1024);
+    EXPECT_EQ(segments.ReplyBytes(), 8ull * 1024 * 1024);
+    EXPECT_EQ(segments.EventRingCapacity(), 256ull * 1024);
+
+    EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Cmd),
+              8ull * 1024 * 1024 + sizeof(RingControl));
+    // SEG_STAGE carries no control page: RingControl holds both cursor triples, so the whole
+    // segment is ring and 32 MiB is already a power of two. SEG_REPLY is not a ring at all.
     EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Stage), 32ull * 1024 * 1024);
     EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Reply), 8ull * 1024 * 1024);
-    EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Event), 256ull * 1024);
-    EXPECT_EQ(segments.CmdRingCapacity(), 4ull * 1024 * 1024);
-    // SEG_STAGE carries no control page: RingControl holds both cursor triples, so the whole
-    // segment is ring and 32 MiB is already a power of two.
-    EXPECT_EQ(segments.StageCapacity(), 32ull * 1024 * 1024);
+    EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Event),
+              256ull * 1024 + sizeof(RingControl));
     segments.Close();
 }
 
@@ -374,10 +397,7 @@ TEST(SessionTest, RetiredSeqMayTrailTheApplyButCanNeverOvertakeIt) {
     // Running ahead is not: clamped to what has actually been applied.
     Watermark::AdvanceRetired(session.Control(), 99);
     EXPECT_EQ(session.Control().retiredSeq.load(), 3u);
-    // And it never goes backwards, because a waiter that already resumed on the higher value
-    // cannot be un-resumed.
-    Watermark::AdvanceRetired(session.Control(), 2);
-    EXPECT_EQ(session.Control().retiredSeq.load(), 3u);
+    // Going BACKWARDS is Fatal, not clamped - see AWatermarkThatMovesBackwardsIsFatal below.
 }
 
 // completedFrameSerial: the SERVER's, advanced when a present completes. It trails appliedSeq
@@ -400,8 +420,9 @@ TEST(SessionTest, CompletedFrameSerialIsTheServersAndIsIndependentOfAppliedSeq) 
 
     Watermark::AdvanceCompletedFrame(session.Control(), 2);
     EXPECT_EQ(session.Control().completedFrameSerial.load(), 2u);
-    Watermark::AdvanceCompletedFrame(session.Control(), 1);
-    EXPECT_EQ(session.Control().completedFrameSerial.load(), 2u) << "a watermark went backwards";
+    // Republishing the SAME serial is legal and is what a lazy publisher does.
+    Watermark::AdvanceCompletedFrame(session.Control(), 2);
+    EXPECT_EQ(session.Control().completedFrameSerial.load(), 2u);
 }
 
 // presentAckSerial: the only back-pressure that bounds LATENCY rather than bytes. A client
@@ -448,7 +469,7 @@ TEST(SessionTest, PresentAckSerialIsWaitedOnWithGreaterOrEqualAndWakesThroughThe
 // it, so fillers are certain; the session's own appliedSeq must count the records and not them.
 TEST(SessionTest, AWrapFillerDoesNotAdvanceTheSessionsAppliedSeq) {
     SessionSegmentSizes sizes = TestSizes();
-    sizes.CmdBytes = 8192; // -> a 4 KiB ring, so a handful of records wraps it
+    sizes.CmdRingBytes = 4096; // a handful of records wraps it several times
     SessionFixture session;
     ASSERT_TRUE(session.Build(sizes));
     ASSERT_EQ(session.serverSegments.CmdRingCapacity(), 4096u);
@@ -766,4 +787,206 @@ TEST(SessionTest, TheAbiFingerprintChangesWhenAnyOfItsInputsDoes) {
     // A missing stamp is not the same as an empty one, and neither is the same as a real build.
     EXPECT_NE(MixAbiFingerprint(1024, 1080, 552, 0x00010000, nullptr),
               MixAbiFingerprint(1024, 1080, 552, 0x00010000, "abc1234"));
+}
+
+// ---------------------------------------------------------------------------
+// Fix round 1 - the cases the adversarial review's findings earned
+// ---------------------------------------------------------------------------
+
+// M-8. A watermark moving BACKWARDS is Fatal, not logged-and-ignored. Logging it and returning
+// was strictly worse than an abort: SessionConsumer keeps its own counter, so once the shared
+// appliedSeq is behind, every later advance is a no-op for ever and every WaitForApplied on
+// kWaitForever - the verb barrier and every reply wait - blocks permanently. A hang whose only
+// evidence is one ERROR line is not a diagnosis.
+#if defined(GTEST_HAS_DEATH_TEST) && GTEST_HAS_DEATH_TEST
+TEST(SessionTestDeath, AWatermarkThatMovesBackwardsIsFatalRatherThanIgnored) {
+    alignas(4096) RingControl control{};
+    InitRingControl(control);
+    Watermark::AdvanceApplied(control, 10);
+    ASSERT_EQ(control.appliedSeq.load(), 10u);
+    EXPECT_DEATH(Watermark::AdvanceApplied(control, 9), "");
+}
+#endif
+
+// M-6. `inproc`'s ATTACH half is a real second mapping, not an alias of the owner's ShmSegment
+// objects. The attach side is the side P6 replaces with an SCM_RIGHTS Adopt, so leaving it
+// aliased would mean dup/Adopt/Map/the fstat size check were first exercised on the day the
+// second process appears - the same criticism this package levels at allocating with new[].
+TEST(SessionTest, TheInprocPeerGetsItsOwnMappingOfTheSameSharedMemory) {
+    SessionSegments owner;
+    ASSERT_EQ(owner.Create(TestSizes(), MemoryRole::Server), MOBILEGL_OK);
+    SessionSegments peer;
+    ASSERT_EQ(peer.AttachInProcess(owner, MemoryRole::Client), MOBILEGL_OK);
+    ASSERT_TRUE(peer.Valid());
+
+#if !defined(_WIN32)
+    // Different descriptors, different virtual addresses...
+    EXPECT_NE(peer.DescriptorFor(SessionSegmentSlot::Cmd),
+              owner.DescriptorFor(SessionSegmentSlot::Cmd));
+    EXPECT_GE(peer.DescriptorFor(SessionSegmentSlot::Cmd), 0);
+    EXPECT_NE(static_cast<void*>(peer.CmdControl()), static_cast<void*>(owner.CmdControl()));
+    EXPECT_NE(peer.CmdRingBase(), owner.CmdRingBase());
+#endif
+    // ... over the SAME physical page, which is the whole point: a store through one mapping is
+    // visible through the other, exactly as it is across two processes under spawn.
+    EXPECT_EQ(peer.AnnouncedSize(SessionSegmentSlot::Cmd),
+              owner.AnnouncedSize(SessionSegmentSlot::Cmd));
+    owner.CmdControl()->appliedSeq.store(4242, std::memory_order_release);
+    EXPECT_EQ(peer.CmdControl()->appliedSeq.load(std::memory_order_acquire), 4242u);
+    peer.CmdControl()->presentAckSerial.store(77, std::memory_order_release);
+    EXPECT_EQ(owner.CmdControl()->presentAckSerial.load(std::memory_order_acquire), 77u);
+
+    peer.Close();
+    // The owner is untouched by the peer's teardown - there is no shared ownership left whose
+    // Close order has to be got right by hand.
+    EXPECT_TRUE(owner.Valid());
+    EXPECT_EQ(owner.CmdControl()->appliedSeq.load(), 4242u);
+    owner.Close();
+}
+
+// M-5. RetireThrough must NOT hand back a slot borrowed into the GPU timeline. The first
+// version called RingConsumer::PublishRetired(), which stores the local tail into BOTH tails
+// and therefore frees every popped byte regardless of kRecBorrowSlot - defeating the reason the
+// ring carries two tails at all (Ring.h:24-27) and letting the producer overwrite a slot the
+// GPU is still reading. Nothing sets kRecBorrowSlot yet; this is the case that has to be true
+// on the day something does.
+TEST(SessionTest, ABorrowedSlotIsNotHandedBackUntilItIsReleased) {
+    SessionFixture session;
+    ASSERT_TRUE(session.Build(TestSizes()));
+
+    constexpr std::uint64_t kPayload = 64;
+    for (int index = 0; index < 3; ++index) {
+        const std::uint16_t flags = index == 1 ? kRecBorrowSlot : kRecNone;
+        ASSERT_NE(session.cmdProducer.Reserve(1, flags, kPayload), nullptr);
+    }
+    session.producer.PublishAndNotify(3);
+
+    std::uint64_t firstCursor = 0;
+    bool sawBorrow = false;
+    int seen = 0;
+    while (session.consumer.ApplyOne([&](const RingRecordView& view) {
+        if (seen == 0) {
+            firstCursor = view.cursor;
+        }
+        if ((view.flags & kRecBorrowSlot) != 0) {
+            sawBorrow = true;
+        }
+        ++seen;
+    })) {
+    }
+    ASSERT_EQ(seen, 3);
+    ASSERT_TRUE(sawBorrow) << "the producer dropped kRecBorrowSlot, so this case proved nothing";
+
+    EXPECT_EQ(session.Control().appliedSeq.load(), 3u);
+    session.consumer.RetireThrough(session.consumer.AppliedSeq());
+
+    // The reclaim point stops AT the borrowed record: only the first record's bytes came back.
+    const std::uint64_t firstRecordEnd = firstCursor + sizeof(RingRecordHeader) + kPayload;
+    EXPECT_EQ(session.consumer.RetirableCursor(), firstRecordEnd);
+    EXPECT_EQ(session.Control().cmdRetiredTail.load(), firstRecordEnd);
+    EXPECT_LT(session.Control().cmdRetiredTail.load(), session.Control().cmdAppliedTail.load())
+        << "a borrowed slot was handed back to the producer while the GPU may still read it";
+    EXPECT_TRUE(RingCursorsValid(session.Control(), RingCursorSet::Cmd,
+                                 session.serverSegments.CmdRingCapacity()));
+
+    // completedFrameSerial passed it: now the rest comes back.
+    session.consumer.RetireBorrowedUpTo(session.cmdConsumer.LocalTail());
+    EXPECT_EQ(session.Control().cmdRetiredTail.load(), session.Control().cmdAppliedTail.load());
+    EXPECT_TRUE(RingCursorsValid(session.Control(), RingCursorSet::Cmd,
+                                 session.serverSegments.CmdRingCapacity()));
+}
+
+// q-1. Teardown's drain keys on the PRODUCER's own last-published seq, not on
+// RingControl::submittedSeq: Ring.h:72-77 permits that watermark to be published lazily, so a
+// drain that trusted it would under-wait and free an emitter-owned var-tail while a record
+// still names it. With the verb barrier armed the two are equal; under
+// MOBILEGL_IPC_VERB_BARRIER=0 - R-1's negative control, which the phase must run once - they
+// are not.
+TEST(SessionTest, TheProducerRemembersWhatItPublishedEvenIfTheWatermarkLags) {
+    SessionFixture session;
+    ASSERT_TRUE(session.Build(TestSizes()));
+
+    for (int index = 0; index < 4; ++index) {
+        ASSERT_NE(session.cmdProducer.Reserve(1, kRecNone, 8), nullptr);
+    }
+    // A lazy publisher: four records are visible, the shared watermark says two.
+    session.producer.PublishAndNotify(2);
+    EXPECT_EQ(session.Control().submittedSeq.load(), 2u);
+    EXPECT_EQ(session.producer.LastPublishedSeq(), 2u);
+
+    session.producer.PublishAndNotify(4);
+    EXPECT_EQ(session.producer.LastPublishedSeq(), 4u);
+    EXPECT_EQ(session.Control().submittedSeq.load(), 4u);
+    // The drain's bound may only grow, whatever a caller passes. Republishing an older bound is
+    // publishing LATE, which R-9 permits - it is clamped up rather than treated as a watermark
+    // moving backwards, which is Fatal. Teardown does exactly this.
+    session.producer.PublishAndNotify(3);
+    EXPECT_EQ(session.producer.LastPublishedSeq(), 4u);
+    EXPECT_EQ(session.Control().submittedSeq.load(), 4u);
+}
+
+// M-3. FlatBuffers' Verifier::VerifyTable is `return !table || table->Verify(*this)`, so a NULL
+// union member PASSES verification: a 24-byte frame verifies, carries the file identifier,
+// reports msg_type() == Hello, and returns nullptr from msg_as_Hello(). Both handshakes now
+// fold that into their guard instead of dereferencing it. This case is the proof the shape is
+// reachable at all, so the guard cannot be "simplified" away later.
+TEST(SessionTest, AVerifiableFrameCanCarryANullUnionPayload) {
+    ::flatbuffers::FlatBufferBuilder builder(256);
+    auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::Hello,
+                                                         ::flatbuffers::Offset<void>());
+    ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
+
+    ::flatbuffers::Verifier verifier(builder.GetBufferPointer(), builder.GetSize());
+    ASSERT_TRUE(::MobileGL::Wire::VerifyCtrlEnvelopeBuffer(verifier))
+        << "if this ever starts failing, the guard in both handshakes may be relaxed";
+    ASSERT_TRUE(::MobileGL::Wire::CtrlEnvelopeBufferHasIdentifier(builder.GetBufferPointer()));
+
+    const ::MobileGL::Wire::CtrlEnvelope* parsed =
+        ::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer());
+    ASSERT_NE(parsed, nullptr);
+    EXPECT_EQ(parsed->msg_type(), ::MobileGL::Wire::CtrlMsg::Hello);
+    // The whole finding, in one line: the tag says Hello and there is no Hello.
+    EXPECT_EQ(parsed->msg_as_Hello(), nullptr);
+}
+
+// M-1. The four retired CapsSnapshot fields are `(deprecated)`, so their vtable slots stay
+// burned and the two new fields sit past them. Plainly deleting them handed slot 14 - which
+// used to carry an `[int]` vector, a 4-byte uoffset - to `callMask`, an 8-byte inline ulong,
+// with no ABI-major bump and an ABI fingerprint that mixes struct sizes rather than the schema.
+// THIS IS THE FIRST TEST IN THE TREE THAT PINS A TABLE FIELD ID: ProtocolSmokeTest's
+// UnionTagsAreFrozenWireValues pins union tags and enum values only and says nothing about one.
+TEST(SessionTest, CapsSnapshotFieldIdsAreFrozenAndTheRetiredSlotsStayBurned) {
+    using CapsSnapshot = ::MobileGL::Wire::CapsSnapshot;
+    EXPECT_EQ(static_cast<int>(CapsSnapshot::VT_DYNAMICPARAMETERS), 4);
+    EXPECT_EQ(static_cast<int>(CapsSnapshot::VT_RENDERERINFO), 6);
+    EXPECT_EQ(static_cast<int>(CapsSnapshot::VT_FORMATCAPS), 8);
+    EXPECT_EQ(static_cast<int>(CapsSnapshot::VT_EXTENSIONS), 10);
+    EXPECT_EQ(static_cast<int>(CapsSnapshot::VT_APIVERSION), 12);
+    // 14, 16, 18 and 20 are the four retired fields and must stay unreachable for ever.
+    EXPECT_EQ(static_cast<int>(CapsSnapshot::VT_CALLMASK), 22);
+    EXPECT_EQ(static_cast<int>(CapsSnapshot::VT_BACKENDTYPE), 24);
+
+    // The appended Hello / Welcome fields really are tail appends onto slots nothing occupied.
+    EXPECT_EQ(static_cast<int>(::MobileGL::Wire::Hello::VT_ABIFINGERPRINT), 16);
+    EXPECT_EQ(static_cast<int>(::MobileGL::Wire::Welcome::VT_EVENTRING), 16);
+    EXPECT_EQ(static_cast<int>(::MobileGL::Wire::Welcome::VT_BUILDFINGERPRINT), 18);
+    EXPECT_EQ(static_cast<int>(::MobileGL::Wire::Welcome::VT_ABIFINGERPRINT), 20);
+}
+
+// m-4. The reply pool refuses a geometry whose slots would not be 8-aligned: the fences order
+// the payload against the stamp, but the stamp's own 8-byte Seq has to be untorn for the
+// wrong-slot self-check to mean anything, and that is only true while it is naturally aligned.
+TEST(SessionTest, AReplyGeometryThatWouldMisalignASlotHeaderIsRefused) {
+    std::vector<std::uint64_t> aligned(1024);
+    void* base = aligned.data();
+    // 4100 / 4 = 1025 -> every slot after the first lands on an odd boundary.
+    EXPECT_FALSE(ReplySlotPool(base, 4100, 4).Valid());
+    // A base that is not itself 8-aligned is refused too, whatever the slot size.
+    EXPECT_FALSE(ReplySlotPool(static_cast<std::uint8_t*>(base) + 1, 4096, 8).Valid());
+    // Not a power of two: the addressing is a mask.
+    EXPECT_FALSE(ReplySlotPool(base, 4096, 6).Valid());
+    // No room for a payload past the 16-byte header.
+    EXPECT_FALSE(ReplySlotPool(base, 64, 8).Valid());
+    // And the shape that is legal.
+    EXPECT_TRUE(ReplySlotPool(base, 4096, 8).Valid());
 }
