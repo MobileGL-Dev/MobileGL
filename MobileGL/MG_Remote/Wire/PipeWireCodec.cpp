@@ -61,27 +61,94 @@ namespace MobileGL::MG_Remote::Wire {
     static_assert(static_cast<Uint32>(MG_Pipe::kMGHostSpanSegNone) == kSegNone,
                   "kMGHostSpanSegNone and SegmentId::kSegNone must be the same value");
 
-    // The collision named in the file header, asserted rather than described. If a later edit
-    // moves either bit these fire and the mapping below is revisited; if someone deletes the
-    // mapping and stamps MGPipeCallFlags straight into the header, the RingTest wrap cases
-    // stay green and nine opcodes vanish, which is why this is a static_assert and not a
-    // comment.
-    static_assert(static_cast<Uint16>(MG_Pipe::kVarTail) ==
-                      static_cast<Uint16>(Transport::kRecPad),
-                  "MGPipeCallFlags::kVarTail and RingRecordFlags::kRecPad share a bit AND a "
-                  "field; the encoder must translate, never stamp. If this ever stops being "
-                  "true, keep translating anyway - two flag spaces in one field is the hazard, "
-                  "not this particular overlap");
-    static_assert(static_cast<Uint16>(MG_Pipe::kHostSpan) ==
-                      static_cast<Uint16>(Transport::kRecBorrowSlot),
-                  "MGPipeCallFlags::kHostSpan and RingRecordFlags::kRecBorrowSlot share a bit");
+    // ---- the collision, asserted EXHAUSTIVELY rather than described -------------------
+    //
+    // Naming the two overlaps somebody happened to notice is not enough: the review found a
+    // THIRD (kReplySlot == kRecVarTail) that four hand-written asserts had missed, and the
+    // fourth would have been found by a user. So the assertions below cover the whole of both
+    // enums - every bit, the exact overlap mask, and the completeness of the translation - and
+    // a new enumerator on either side breaks the build rather than being dropped in silence.
+    namespace FlagSpace {
+        constexpr Uint16 kCallAll = static_cast<Uint16>(MG_Pipe::kNeedsAck) |
+                                    static_cast<Uint16>(MG_Pipe::kHasBlob) |
+                                    static_cast<Uint16>(MG_Pipe::kVarTail) |
+                                    static_cast<Uint16>(MG_Pipe::kHostSpan) |
+                                    static_cast<Uint16>(MG_Pipe::kReplySlot) |
+                                    static_cast<Uint16>(MG_Pipe::kOptional);
+        constexpr Uint16 kRingAll = static_cast<Uint16>(Transport::kRecNeedsAck) |
+                                    static_cast<Uint16>(Transport::kRecHasBlob) |
+                                    static_cast<Uint16>(Transport::kRecPad) |
+                                    static_cast<Uint16>(Transport::kRecBorrowSlot) |
+                                    static_cast<Uint16>(Transport::kRecVarTail);
+        // The three call flags the encoder TRANSLATES, and the three it deliberately drops
+        // because MGPipeCallFlagsFor(op) recovers them from the opcode.
+        constexpr Uint16 kTranslated = static_cast<Uint16>(MG_Pipe::kNeedsAck) |
+                                       static_cast<Uint16>(MG_Pipe::kHasBlob) |
+                                       static_cast<Uint16>(MG_Pipe::kVarTail);
+        constexpr Uint16 kDropped = static_cast<Uint16>(MG_Pipe::kHostSpan) |
+                                    static_cast<Uint16>(MG_Pipe::kReplySlot) |
+                                    static_cast<Uint16>(MG_Pipe::kOptional);
+    } // namespace FlagSpace
+
+    static_assert(FlagSpace::kCallAll == 0x3Fu,
+                  "MGPipeCallFlags gained or lost an enumerator; re-derive the translation in "
+                  "EncodeRecord and extend the overlap assertions below before assuming the "
+                  "new bit is safe to drop");
+    static_assert(FlagSpace::kRingAll == 0x1Fu,
+                  "RingRecordFlags gained or lost an enumerator; the two spaces share one "
+                  "16-bit field, so a new ring bit may now alias a call flag");
+    static_assert((FlagSpace::kTranslated | FlagSpace::kDropped) == FlagSpace::kCallAll &&
+                      (FlagSpace::kTranslated & FlagSpace::kDropped) == 0,
+                  "every MGPipeCallFlags bit must be either translated or deliberately "
+                  "dropped; a seventh enumerator that needs a ring bit would otherwise be "
+                  "dropped in silence");
+    // FIVE OF THE SIX CALL-FLAG BITS ALIAS A RING BIT. Only kOptional (1<<5) is free, and it
+    // is free by luck rather than by design - RingRecordFlags simply has not reached 1<<5 yet.
+    static_assert((FlagSpace::kCallAll & FlagSpace::kRingAll) == FlagSpace::kRingAll,
+                  "the overlap between the two flag spaces moved");
+    // Named individually so a failure says WHICH pair, and so the three that actually bite are
+    // impossible to overlook while reading.
     static_assert(static_cast<Uint16>(MG_Pipe::kNeedsAck) ==
                       static_cast<Uint16>(Transport::kRecNeedsAck),
-                  "the two kNeedsAck bits agree; the mapping below relies on it only for "
-                  "readability, not for correctness");
+                  "kNeedsAck == kRecNeedsAck (harmless: the meanings agree)");
     static_assert(static_cast<Uint16>(MG_Pipe::kHasBlob) ==
                       static_cast<Uint16>(Transport::kRecHasBlob),
-                  "the two blob bits agree");
+                  "kHasBlob == kRecHasBlob (harmless: the meanings agree)");
+    static_assert(static_cast<Uint16>(MG_Pipe::kVarTail) ==
+                      static_cast<Uint16>(Transport::kRecPad),
+                  "kVarTail == kRecPad - THE DANGEROUS ONE. Stamping MGPipeCallFlags into the "
+                  "header would make RingConsumer::Pop discard all nine kVarTail opcodes as "
+                  "wrap fillers. The encoder must translate, never stamp; if this ever stops "
+                  "being true, keep translating anyway - two flag spaces in one field is the "
+                  "hazard, not this particular overlap");
+    static_assert(static_cast<Uint16>(MG_Pipe::kHostSpan) ==
+                      static_cast<Uint16>(Transport::kRecBorrowSlot),
+                  "kHostSpan == kRecBorrowSlot - a stamped host-span record would look like a "
+                  "slot borrowed into the GPU timeline and retire on completedFrameSerial");
+    static_assert(static_cast<Uint16>(MG_Pipe::kReplySlot) ==
+                      static_cast<Uint16>(Transport::kRecVarTail),
+                  "kReplySlot == kRecVarTail - live in the REVERSE direction: the encoder "
+                  "stamps kRecVarTail on nine opcodes, and a reader who believes "
+                  "PipeWire.inc's 'MGPipeCallFlags of the call' comment reads those nine as "
+                  "kReplySlot");
+    static_assert((static_cast<Uint16>(MG_Pipe::kOptional) & FlagSpace::kRingAll) == 0,
+                  "kOptional is the one call flag with no ring alias, and only because "
+                  "RingRecordFlags has not reached 1<<5");
+
+    // ---- and the two headers really are one layout -----------------------------------
+    //
+    // The decoder walks backwards from RingRecordView::payload to the MGPWireRecHeader in
+    // front of it, so the two structs being separately asserted to be eight bytes is not
+    // enough: if RingRecordHeader ever reorders its fields, every flag assert above still
+    // passes and every payload read shifts by the difference.
+    static_assert(sizeof(MGPWireRecHeader) == sizeof(Transport::RingRecordHeader));
+    static_assert(offsetof(MGPWireRecHeader, Op) == offsetof(Transport::RingRecordHeader, kind),
+                  "MGPWireRecHeader::Op and RingRecordHeader::kind are the same two bytes");
+    static_assert(offsetof(MGPWireRecHeader, Flags) ==
+                      offsetof(Transport::RingRecordHeader, flags),
+                  "MGPWireRecHeader::Flags and RingRecordHeader::flags are the same two bytes");
+    static_assert(offsetof(MGPWireRecHeader, Size) == offsetof(Transport::RingRecordHeader, size),
+                  "MGPWireRecHeader::Size and RingRecordHeader::size are the same four bytes");
 
     // ---------------------------------------------------------------------------------
     // The catalogue, once. Name and payload type per opcode.
@@ -427,6 +494,29 @@ namespace MobileGL::MG_Remote::Wire {
         }
     }
 
+    void CheckHostSpanIsHonest(const MGHostSpan& span, const SegmentTable& segments) {
+        CheckHostSpanIsHonest(span);
+        if (span.Size == 0) {
+            // Fully absent, and the arms above already proved Seg agrees with that.
+            return;
+        }
+        // ARM 4, WHICH THE OTHER OVERLOAD CANNOT DO. A span naming a real segment and a run
+        // past the end of it used to pass every check and reach WireVerbSink::OnDrawVbo, which
+        // this file's header promises is "a DECODED, VALIDATED argument list". It resolves to
+        // nullptr through MGPipeHostBytes - a draw from a null index pointer - or, for any
+        // consumer that adds Offset to its own SEG_STAGE base instead of going through the
+        // resolver, reads outside the segment. P5 emits no spans, so this was latent; P8 arms
+        // it, which is exactly when nobody will be reading this code.
+        if (segments.Resolve(span.Seg, span.Offset, span.Size) == nullptr) {
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"host-span\"} seg=%u offset=%llu "
+                    "size=%llu does not lie inside that segment (R-2.3 arm 4)",
+                    static_cast<unsigned>(span.Seg),
+                    static_cast<unsigned long long>(span.Offset),
+                    static_cast<unsigned long long>(span.Size));
+            std::abort();
+        }
+    }
+
     // ---------------------------------------------------------------------------------
     // The record layout: the tail arithmetic both sides run
     // ---------------------------------------------------------------------------------
@@ -527,11 +617,25 @@ namespace MobileGL::MG_Remote::Wire {
             tails = 1;
             break;
         }
-        case MGPWireOp::ResourceSubData:
-        case MGPWireOp::BufferSubDataResident: {
+        case MGPWireOp::ResourceSubData: {
             const auto& p = *static_cast<const MGPSubData*>(payload);
             tail0 = TailBytesFor(p.RegionCount, sizeof(MGPSubRegion));
             tails = 1;
+            break;
+        }
+        case MGPWireOp::BufferSubDataResident: {
+            // NO TAIL, because its catalogue row has no kVarTail (PipeCalls.def gives it
+            // kHasBlob|kOptional) and MGPipeApplyBufferSubDataResident takes no regions. The
+            // layout used to share ResourceSubData's arm, which meant a record with
+            // RegionCount = 2 was REQUIRED to carry 80 bytes the arm then dropped on the
+            // floor - and MGPipeBuildSubDataRecord is the shared builder that fills
+            // RegionCount for both halves, so that was one routing change away from being
+            // live. The resident path is the BUFFER half only and a buffer record declares no
+            // regions, so a non-zero count is a fault rather than a tail.
+            const auto& p = *static_cast<const MGPSubData*>(payload);
+            if (p.RegionCount != 0) {
+                WireProtocolFatalAt("BufferSubDataResident.RegionCount", p.RegionCount, 0);
+            }
             break;
         }
         case MGPWireOp::DrawVbo: {
@@ -580,10 +684,72 @@ namespace MobileGL::MG_Remote::Wire {
 
     Bool PipeWireEncoder::Valid() const { return m_control != nullptr && m_cmd != nullptr; }
 
+    Uint8* PipeWireEncoder::StageAllocate(Uint64 size) {
+        if (m_stageBase == nullptr) {
+            const SegmentView view = m_segments != nullptr ? m_segments->Get(kSegStage)
+                                                           : SegmentView{};
+            if (view.Base == nullptr || view.Size == 0) {
+                WireProtocolFatal("PipeWireEncoder::StageBytes", "SEG_STAGE has no segment view");
+            }
+            // The RingProducer c0's constructor takes is the authority on how many of the
+            // segment's bytes are really the staging area - the rest is whatever the session
+            // put in front of it. It is read, never written: SEG_STAGE's cursor triple belongs
+            // to nobody in P5 (see ReclaimStagedBytes' header).
+            Uint64 capacity = view.Size;
+            if (m_stage != nullptr && m_stage->Valid()) {
+                if (m_stage->Capacity() > view.Size) {
+                    WireProtocolFatalAt("SEG_STAGE.capacity", m_stage->Capacity(), view.Size);
+                }
+                capacity = m_stage->Capacity();
+            }
+            m_stageBase = static_cast<Uint8*>(view.Base);
+            m_stageCapacity = capacity;
+        }
+
+        const Uint64 need = Align8(size);
+        if (need > m_stageCapacity) {
+            MGLOG_F("MGPipe: Fatal{RingOverrun, \"SEG_STAGE\"} a %llu byte blob cannot fit a "
+                    "%llu byte staging segment at any occupancy; P5 does not chunk (R-10) - "
+                    "raise MOBILEGL_IPC_STAGE_MB or report the record to the integrator",
+                    static_cast<unsigned long long>(size),
+                    static_cast<unsigned long long>(m_stageCapacity));
+            std::abort();
+        }
+
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            const Uint64 offset = m_stageHead % m_stageCapacity;
+            // A run is always contiguous: one that would straddle the end skips the remainder,
+            // exactly as the ring's wrap pad does, and the skipped bytes are reclaimed with
+            // everything else behind them.
+            const Uint64 skip = offset + need > m_stageCapacity ? m_stageCapacity - offset : 0;
+            if ((m_stageHead + skip + need) - m_stageTail <= m_stageCapacity) {
+                const Uint64 at = (m_stageHead + skip) % m_stageCapacity;
+                m_stageHead += skip + need;
+                return m_stageBase + at;
+            }
+            if (attempt == 0) {
+                // One try at reclaiming what the server has already retired. A second failure
+                // means the bytes genuinely do not fit, which R-10 says P5 does not chunk and
+                // must instead prove it never needs to.
+                ReclaimStagedBytes();
+            }
+        }
+        MGLOG_F("MGPipe: Fatal{RingOverrun, \"SEG_STAGE\"} a %llu byte blob does not fit a %llu "
+                "byte staging segment with %llu bytes still in flight (retiredSeq=%llu); P5 "
+                "does not chunk (R-10) - raise MOBILEGL_IPC_STAGE_MB or report the record to "
+                "the integrator",
+                static_cast<unsigned long long>(size),
+                static_cast<unsigned long long>(m_stageCapacity),
+                static_cast<unsigned long long>(m_stageHead - m_stageTail),
+                static_cast<unsigned long long>(
+                    m_control != nullptr ? m_control->retiredSeq.load(std::memory_order_acquire) : 0));
+        std::abort();
+    }
+
     MGPBlobRef PipeWireEncoder::StageBytes(const void* bytes, Uint64 size) {
-        if (!Valid() || m_stage == nullptr || m_segments == nullptr) {
+        if (!Valid() || m_segments == nullptr) {
             WireProtocolFatal("PipeWireEncoder::StageBytes",
-                              "no SEG_STAGE producer or segment table installed");
+                              "no command producer or segment table installed");
         }
         if (size == 0) {
             // "The record declared no blob" and "the record declared an empty blob" must not
@@ -596,33 +762,9 @@ namespace MobileGL::MG_Remote::Wire {
             WireProtocolFatal("PipeWireEncoder::StageBytes", "non-zero size with a null source");
         }
 
-        void* slot = m_stage->Reserve(static_cast<Uint16>(MGPWireOp::kInvalid),
-                                      Transport::kRecHasBlob, size);
-        if (slot == nullptr) {
-            // One try at reclaiming what the server has already retired, then give up: a
-            // second failure means the run genuinely does not fit SEG_STAGE, which R-10 says
-            // P5 does not chunk and must instead prove it never needs to.
-            ReclaimStagedBytes();
-            slot = m_stage->Reserve(static_cast<Uint16>(MGPWireOp::kInvalid),
-                                    Transport::kRecHasBlob, size);
-        }
-        if (slot == nullptr) {
-            MGLOG_F("MGPipe: Fatal{RingOverrun, \"SEG_STAGE\"} a %llu byte blob does not fit a "
-                    "%llu byte staging ring with %llu bytes free; P5 does not chunk (R-10) - "
-                    "raise MOBILEGL_IPC_STAGE_MB or report the record to the integrator",
-                    static_cast<unsigned long long>(size),
-                    static_cast<unsigned long long>(m_stage->Capacity()),
-                    static_cast<unsigned long long>(m_stage->FreeBytes()));
-            std::abort();
-        }
+        Uint8* slot = StageAllocate(size);
         std::memcpy(slot, bytes, static_cast<SizeT>(size));
-
-        const SegmentView stageView = m_segments->Get(kSegStage);
-        if (stageView.Base == nullptr) {
-            WireProtocolFatal("PipeWireEncoder::StageBytes", "SEG_STAGE has no segment view");
-        }
-        const Uint64 offset =
-            static_cast<Uint64>(static_cast<const Uint8*>(slot) - static_cast<const Uint8*>(stageView.Base));
+        const Uint64 offset = static_cast<Uint64>(slot - m_stageBase);
 
         MGPBlobRef ref{};
         ref.Seg = kSegStage;
@@ -630,18 +772,14 @@ namespace MobileGL::MG_Remote::Wire {
         ref.Size = size;
         ref.Pad0 = 0;
         // The self-check that keeps the two halves of "SEG_STAGE" one thing: the segment view
-        // the decoder resolves through must cover the ring this producer just wrote into. A
-        // view installed over the CONTROL page, or over the ring plus its header, resolves to
+        // the decoder resolves through must cover the bytes this allocator just wrote into. A
+        // view installed over the CONTROL page, or over the segment plus a header, resolves to
         // a plausible pointer that is not these bytes.
         if (m_segments->Resolve(ref.Seg, ref.Offset, ref.Size) != slot) {
             WireProtocolFatal("PipeWireEncoder::StageBytes",
-                              "the SEG_STAGE segment view does not cover the staging ring's "
-                              "byte area; the two would resolve to different addresses");
+                              "the SEG_STAGE segment view does not cover the staging area; the "
+                              "two would resolve to different addresses");
         }
-        // The stage ring's own Publish: the decoder reads these bytes by OFFSET, never by
-        // popping the stage ring, so the head has to be visible before the command record
-        // that names them is.
-        m_stage->Publish();
         return ref;
     }
 
@@ -759,16 +897,32 @@ namespace MobileGL::MG_Remote::Wire {
                 MGPBlobRef blob{};
                 std::memcpy(&blob, bytes + slots.Offset + i * sizeof(MGPBlobRef), sizeof(MGPBlobRef));
                 CheckBlobIsHonest(op, blob, *m_segments);
+                // THE ENCODER MUST NOT ACCEPT A RECORD THE DECODER FATALS ON. w1's ruling that
+                // CreateShaderState's modules travel inside the Reflection archive lived only
+                // in the decoder, so an emitter that declared a per-stage run got a valid seq
+                // here and a Fatal on a peer - exactly the asymmetry EncodeRecord's own
+                // comment says it exists to prevent.
+                if (op == MGPWireOp::CreateShaderState && i < 6 && blob.Size != 0) {
+                    MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"CreateShaderState.Spirv[%u]\"} "
+                            "declares %llu bytes at the ENCODER; under split the modules travel "
+                            "inside the Reflection archive and the six per-stage runs stay "
+                            "undeclared",
+                            static_cast<unsigned>(i),
+                            static_cast<unsigned long long>(blob.Size));
+                    std::abort();
+                }
             }
         }
         if ((callFlags & static_cast<Uint32>(kHostSpan)) != 0 && layout.TailCount == 2 &&
-            layout.TailBytes[1] != 0) {
+            layout.TailBytes[1] != 0 && m_segments != nullptr) {
             const Uint64 at = layout.TailOffset[1] - sizeof(MGPWireRecHeader);
             const Uint64 spans = layout.TailBytes[1] / sizeof(MGHostSpan);
             for (Uint64 i = 0; i < spans; ++i) {
                 MGHostSpan span{};
                 std::memcpy(&span, bytes + at + i * sizeof(MGHostSpan), sizeof(MGHostSpan));
-                CheckHostSpanIsHonest(span);
+                // All four arms, including the one that needs the table: a producer that
+                // computed an offset wrongly is caught here rather than on a peer.
+                CheckHostSpanIsHonest(span, *m_segments);
             }
         }
 
@@ -778,49 +932,56 @@ namespace MobileGL::MG_Remote::Wire {
         ++m_emitSeq;
         // The stage mark: where SEG_STAGE stood once everything this record names had been
         // staged. ReclaimStagedBytes releases up to the newest mark the server has retired.
-        if (m_stage != nullptr) {
-            m_stageMarks.push_back(StageMark{m_emitSeq, m_stage->LocalHead()});
-        }
+        m_stageMarks.push_back(StageMark{m_emitSeq, m_stageHead});
         return m_emitSeq;
     }
 
     void PipeWireEncoder::ReclaimStagedBytes() {
-        if (m_stage == nullptr || m_control == nullptr) {
+        if (m_control == nullptr) {
             return;
         }
         const Uint64 retired = m_control->retiredSeq.load(std::memory_order_acquire);
-        Uint64 upTo = 0;
-        Bool found = false;
+        Uint64 upTo = m_stageTail;
         while (m_stageMarkFront < m_stageMarks.size() &&
                m_stageMarks[m_stageMarkFront].Seq <= retired) {
             upTo = m_stageMarks[m_stageMarkFront].StageCursor;
-            found = true;
             ++m_stageMarkFront;
         }
-        // Compact rather than erase-from-front on every call: the list is at most as long as
-        // the number of records in flight, which the verb barrier keeps at one or two.
-        if (m_stageMarkFront != 0 && m_stageMarkFront == m_stageMarks.size()) {
+
+        // COMPACT ON A THRESHOLD, NOT ONLY ON A FULL DRAIN. The queue used to be cleared only
+        // when front reached size(), so any pipelining deeper than "fully drained at every
+        // reclaim" - which is precisely the regime this design exists to survive when R-1's
+        // barrier retires family by family - left front < size() for ever and grew the vector
+        // 16 bytes per encoded record for the life of the context. Erasing the consumed prefix
+        // once it is half the queue is amortised O(1) and bounds the storage at twice the
+        // records actually in flight.
+        if (m_stageMarkFront == m_stageMarks.size()) {
             m_stageMarks.clear();
             m_stageMarkFront = 0;
+        } else if (m_stageMarkFront != 0 && m_stageMarkFront * 2 >= m_stageMarks.size()) {
+            m_stageMarks.erase(m_stageMarks.begin(),
+                               m_stageMarks.begin() + static_cast<std::ptrdiff_t>(m_stageMarkFront));
+            m_stageMarkFront = 0;
         }
-        if (!found || upTo <= m_stageReclaimed) {
-            return;
+
+        // SEG_STAGE is CLIENT-OWNED memory (contract table 1: "client stages, server copies")
+        // and the server only reads it, so the client is both the allocator and the thing that
+        // frees. What it may not do is free ahead of retiredSeq - the whole content of R-11 on
+        // this side - and what it may ALSO not do is write RingControl's stage tails, which
+        // Ring.h makes consumer-owned. So the reclaim watermark is this local counter and the
+        // shared triple is untouched.
+        if (upTo > m_stageTail) {
+            m_stageTail = upTo;
         }
-        m_stageReclaimed = upTo;
-        // SEG_STAGE is CLIENT-OWNED memory (contract table 1: "client stages, server copies"),
-        // and the server only ever reads it, so the client is both the producer and the thing
-        // that frees. What it may not do is free ahead of retiredSeq, which is the whole
-        // content of R-11 on this side.
-        m_control->stageAppliedTail.store(upTo, std::memory_order_release);
-        m_control->stageRetiredTail.store(upTo, std::memory_order_release);
     }
 
-    Uint64 PipeWireEncoder::StagedBytesInFlight() const {
-        if (m_stage == nullptr) {
-            return 0;
-        }
-        return m_stage->LocalHead() - m_stageReclaimed;
-    }
+    Uint64 PipeWireEncoder::StagedBytesInFlight() const { return m_stageHead - m_stageTail; }
+
+    // THE STORAGE, NOT THE LIVE COUNT. `size() - front` is the number of marks still in
+    // flight, and it stays at one or two even while the vector behind it grows for ever - so a
+    // control written against it would have gone green through exactly the leak it was meant
+    // to catch. What leaks is the container, so that is what this reports.
+    SizeT PipeWireEncoder::StageMarksHeld() const { return m_stageMarks.size(); }
 
     void PipeWireEncoder::Publish() {
         if (m_cmd == nullptr) {
@@ -830,13 +991,21 @@ namespace MobileGL::MG_Remote::Wire {
         // notify-then-publish loses the wakeup. The doorbell itself belongs to the SESSION
         // (s1) - the codec does not own a Doorbell and must not, or a unit case could not
         // drive encoder -> ring -> decoder without one.
-        if (m_stage != nullptr) {
-            m_stage->Publish();
-        }
+        //
+        // SEG_STAGE needs no publish: the decoder reads those bytes by OFFSET, never by
+        // popping a ring, and the release store on SEG_CMD's head below is what orders the
+        // staged writes before the record that names them.
         m_cmd->Publish();
         if (m_control != nullptr) {
+            // submittedSeq is the one watermark the PRODUCER owns (Ring.h's five-watermark
+            // block). Nobody waits on it; it answers "how far ahead of the server is the
+            // client right now".
             m_control->submittedSeq.store(m_emitSeq, std::memory_order_release);
         }
+        // The reclaim has a trigger in this package, rather than depending on a c1 barrier
+        // that does not exist yet: every publish is a chance to notice what the server has
+        // already retired, and it costs one acquire load.
+        ReclaimStagedBytes();
     }
 
     Uint64 PipeWireEncoder::EmitSeq() const { return m_emitSeq; }
@@ -851,7 +1020,17 @@ namespace MobileGL::MG_Remote::Wire {
                                      ReplySink* replies)
         : m_control(control), m_segments(segments), m_replies(replies) {
         m_auditPoison = MG_Config::Ipc.Audit;
+        // Once, at construction, beside the resolver it is modelled on - not per record from
+        // the apply thread. The thunk is inert without a decoder on the calling thread, so an
+        // early install changes nothing for a monolith caller of MGPipeApplyWireRecord.
+        InstallApplyHook();
     }
+
+    void PipeWireDecoder::InstallApplyHook() {
+        MG_Pipe::gMGPipeWireRecordApply = &MGPipeWireRecordApplyThunk;
+    }
+
+    void PipeWireDecoder::UninstallApplyHook() { MG_Pipe::gMGPipeWireRecordApply = nullptr; }
 
     Bool PipeWireDecoder::Valid() const { return m_control != nullptr && m_segments != nullptr; }
 
@@ -867,6 +1046,34 @@ namespace MobileGL::MG_Remote::Wire {
 
     Uint64 PipeWireDecoder::PoisonedStageBytes() const { return m_poisonedBytes; }
 
+    Bool PipeWireDecoder::LastAcceptanceKnown() const { return m_lastAcceptanceKnown; }
+
+    Bool PipeWireDecoder::LastAcceptance() const { return m_lastAcceptance; }
+
+    Uint64 PipeWireDecoder::AcceptedRecords() const { return m_accepted; }
+
+    Uint64 PipeWireDecoder::DeclinedRecords() const { return m_declined; }
+
+    void PipeWireDecoder::PostReply(MGPWireOp op, Uint64 seq, Int32 status, const void* bytes,
+                                    Uint64 size) {
+        // THE ONE GATE ON SEG_REPLY. s1 sizes ReplyPool from MGPipeCallFlagsFor - table 0 says
+        // that table is what "every package" reads - so writing SEG_REPLY[seq % slots] for a
+        // record the pool reserved no slot for silently overwrites a waiter's answer. And
+        // because the slot header stamps the WRITER's seq for self-check, the waiter's check
+        // then fails for ever: the barrier HANGS rather than returning something wrong, which
+        // is the harder failure to diagnose of the two.
+        if ((MGPipeCallFlagsFor(op) & static_cast<Uint32>(kReplySlot)) == 0) {
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s\"} the decoder tried to answer into "
+                    "a reply slot for a call the catalogue gives no kReplySlot; s1 sizes "
+                    "ReplyPool from MGPipeCallFlagsFor and reserved none",
+                    WireOpName(op));
+            std::abort();
+        }
+        if (m_replies != nullptr) {
+            m_replies->PostReply(seq, status, bytes, size);
+        }
+    }
+
     Bool MGPipeWireRecordApplyThunk(MGPWireOp op, const void* record, Uint64 size, Uint64 remaining) {
         (void)remaining;
         if (t_activeDecoder == nullptr) {
@@ -875,13 +1082,21 @@ namespace MobileGL::MG_Remote::Wire {
         return t_activeDecoder->ApplyChecked(op, record, size);
     }
 
-    void PipeWireDecoder::NoteResolvedRun(const MGPBlobRef& blob) {
+    void PipeWireDecoder::NoteResolvedRun(MGPWireOp op, const MGPBlobRef& blob) {
         if (blob.Size == 0 || blob.Seg != kSegStage) {
             return;
         }
-        if (m_resolvedCount < sizeof(m_resolved) / sizeof(m_resolved[0])) {
-            m_resolved[m_resolvedCount++] = blob;
+        if (m_resolvedCount >= sizeof(m_resolved) / sizeof(m_resolved[0])) {
+            // LOUD, NOT A SILENT DROP. This array is what the 0xDD fill covers, and a poison
+            // that quietly stopped covering a run is the same failure as no poison at all -
+            // rule C's only mechanical control going dark without a line in the log.
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s\"} more than %llu SEG_STAGE runs in "
+                    "one record; the audit fill would stop covering them",
+                    WireOpName(op),
+                    static_cast<unsigned long long>(sizeof(m_resolved) / sizeof(m_resolved[0])));
+            std::abort();
         }
+        m_resolved[m_resolvedCount++] = blob;
     }
 
     const void* PipeWireDecoder::ResolveOrFatal(MGPWireOp op, const MGPBlobRef& blob) {
@@ -893,7 +1108,7 @@ namespace MobileGL::MG_Remote::Wire {
             // way: there is no recovery from a segment that stopped covering its own runs.
             WireProtocolFatalAt("segment-resolve", blob.Offset, blob.Size);
         }
-        NoteResolvedRun(blob);
+        NoteResolvedRun(op, blob);
         return bytes;
     }
 
@@ -905,7 +1120,12 @@ namespace MobileGL::MG_Remote::Wire {
         for (Uint32 i = 0; i < m_resolvedCount; ++i) {
             const MGPBlobRef& blob = m_resolved[i];
             const SegmentView view = m_segments->Get(kSegStage);
-            if (view.Base == nullptr || blob.Offset + blob.Size > view.Size) {
+            // The SUBTRACTION form, the same one Resolve uses, so the addition cannot wrap.
+            // Every run here has already been through Resolve, so this is unreachable today -
+            // but it is the one place in the file where a wrap would be an arbitrary 0xDD
+            // memset, and "unreachable" is not a reason to write the weaker test.
+            if (view.Base == nullptr || blob.Offset > view.Size ||
+                blob.Size > view.Size - blob.Offset) {
                 continue;
             }
             // R-2.5. The record has been applied and its bytes are retired, so an applier that
@@ -937,13 +1157,14 @@ namespace MobileGL::MG_Remote::Wire {
         const MGPWireOp op = static_cast<MGPWireOp>(record.kind);
 
         m_resolvedCount = 0;
+        m_lastAcceptanceKnown = false;
         PipeWireDecoder* previous = t_activeDecoder;
         t_activeDecoder = this;
         // The generated gate first, ALWAYS: MGPipeApplyWireRecord owns the per-opcode
         // `size >= sizeof(MGPWireRec_X)` check, because that is the half that follows from the
         // opcode alone and therefore belongs to the generator. It then calls back into
-        // ApplyChecked through the hook, which owns the half that needs the payload.
-        MG_Pipe::gMGPipeWireRecordApply = &MGPipeWireRecordApplyThunk;
+        // ApplyChecked through the hook, which owns the half that needs the payload. The hook
+        // was installed once, at construction.
         const Bool applied = MG_Pipe::MGPipeApplyWireRecord(op, base, size, size);
         t_activeDecoder = previous;
 
@@ -1008,12 +1229,20 @@ namespace MobileGL::MG_Remote::Wire {
         };
         // The four Bool-returning appliers answer ACCEPTANCE, not "applied" (R-5: the client
         // may not re-derive it, because an if-constexpr discard, a stale handle and a refused
-        // record are all invisible from the call site). The answer rides the reply slot the
-        // record's seq already names, so no payload of theirs needs an MGPReplySlot member.
-        const auto postAcceptance = [&](Bool accepted) {
-            if (m_replies != nullptr) {
-                m_replies->PostReply(seq, accepted ? ReplySink::kStatusOk : ReplySink::kStatusDeclined,
-                                     nullptr, 0);
+        // record are all invisible from the call site).
+        //
+        // IT DOES NOT GO IN A REPLY SLOT. None of the four carries kReplySlot, and s1 sizes
+        // ReplyPool from that table - see PostReply. The answer is recorded here and read
+        // through LastAcceptance() / Accepted+DeclinedRecords() until the integrator rules on
+        // which half of the contract moves (table 0 says these four use DECLINED; the
+        // catalogue gives them no slot).
+        const auto noteAcceptance = [&](Bool accepted) {
+            m_lastAcceptanceKnown = true;
+            m_lastAcceptance = accepted;
+            if (accepted) {
+                ++m_accepted;
+            } else {
+                ++m_declined;
             }
         };
 
@@ -1037,7 +1266,7 @@ namespace MobileGL::MG_Remote::Wire {
 
         // ---- resources -------------------------------------------------------------------
         case MGPWireOp::ResourceCreate:
-            postAcceptance(MGPipeApplyResourceCreate(*static_cast<const MGPResourceDesc*>(payload)));
+            noteAcceptance(MGPipeApplyResourceCreate(*static_cast<const MGPResourceDesc*>(payload)));
             return true;
 
         case MGPWireOp::ResourceRespecify: {
@@ -1056,7 +1285,7 @@ namespace MobileGL::MG_Remote::Wire {
                 level.Level = MGPipeRespecifiedLevelOf(desc);
                 scope = &level;
             }
-            postAcceptance(MGPipeApplyResourceRespecify(desc, nullptr, scope));
+            noteAcceptance(MGPipeApplyResourceRespecify(desc, nullptr, scope));
             return true;
         }
 
@@ -1074,9 +1303,7 @@ namespace MobileGL::MG_Remote::Wire {
             //
             // DECLINED is a real answer, not a failure: the three frontend sites already
             // tolerate it (BufferObject.cpp:238, :603-606, :657-660).
-            if (m_replies != nullptr) {
-                m_replies->PostReply(seq, ReplySink::kStatusDeclined, nullptr, 0);
-            }
+            PostReply(op, seq, ReplySink::kStatusDeclined, nullptr, 0);
             return true;
 
         case MGPWireOp::UnmapPersistent:
@@ -1297,7 +1524,10 @@ namespace MobileGL::MG_Remote::Wire {
                     MGHostSpan span{};
                     std::memcpy(&span, reinterpret_cast<const Uint8*>(spans) + i * sizeof(MGHostSpan),
                                 sizeof(MGHostSpan));
-                    CheckHostSpanIsHonest(span);
+                    // ALL FOUR ARMS, the segment-range one included: this row and DrawVbo are
+                    // the only two host-span carriers in the catalogue, and an out-of-segment
+                    // span used to pass every check here.
+                    CheckHostSpanIsHonest(span, *m_segments);
                 }
             }
             return false;
@@ -1366,7 +1596,7 @@ namespace MobileGL::MG_Remote::Wire {
         }
 
         case MGPWireOp::SetTextureParams:
-            postAcceptance(MGPipeApplySetTextureParams(*static_cast<const MGPTextureParams*>(payload)));
+            noteAcceptance(MGPipeApplySetTextureParams(*static_cast<const MGPTextureParams*>(payload)));
             return true;
 
         // ---- transfer ---------------------------------------------------------------------
@@ -1378,16 +1608,31 @@ namespace MobileGL::MG_Remote::Wire {
             // to compute") and under split it must declare too - a length the reader computes
             // from the record it is checking is not a bounds check.
             const Bool namesABuffer = rec.Target == kMGPipeResourceTargetBuffer;
-            const Bool carriesContent =
-                namesABuffer ? MGPipeSubDataBufferSize(rec) != 0
-                             : (rec.UnionBox.W != 0 && rec.UnionBox.H != 0 && rec.UnionBox.D != 0);
+            // THE TEXTURE PREDICATE, TIGHTENED. It used to be "all three extents non-zero",
+            // which read a 4x4x0 box as carrying nothing and let rule A's arm 2 sit out - so a
+            // record could describe a real destination and declare no bytes. A box is either
+            // EMPTY (every extent zero, which is how a pull that needs nothing is spelled) or
+            // WHOLE; a partially-zero extent is neither, and no emitter produces one.
+            const Bool boxIsEmpty =
+                rec.UnionBox.W == 0 && rec.UnionBox.H == 0 && rec.UnionBox.D == 0;
+            const Bool boxIsWhole =
+                rec.UnionBox.W != 0 && rec.UnionBox.H != 0 && rec.UnionBox.D != 0;
+            if (!namesABuffer && !boxIsEmpty && !boxIsWhole) {
+                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"ResourceSubData\"} the union box "
+                        "%ux%ux%u has a zero extent on some axes and not others; a box is "
+                        "either empty or whole",
+                        rec.UnionBox.W, rec.UnionBox.H, rec.UnionBox.D);
+                std::abort();
+            }
+            const Bool carriesContent = namesABuffer ? MGPipeSubDataBufferSize(rec) != 0
+                                                     : (boxIsWhole || rec.RegionCount != 0);
             const void* bytes = nullptr;
             if (carriesContent) {
                 bytes = ResolveOrFatal(op, rec.Blob);
             } else {
                 CheckBlobIsHonest(op, rec.Blob, *m_segments);
             }
-            postAcceptance(MGPipeApplyResourceSubData(
+            noteAcceptance(MGPipeApplyResourceSubData(
                 rec, bytes, reinterpret_cast<const MGPSubRegion*>(tailAt(0))));
             return true;
         }
@@ -1425,9 +1670,7 @@ namespace MobileGL::MG_Remote::Wire {
             // 22) - the destination is the client's shadow and the size is the resource's, not
             // a fixed slot's - so the reply slot carries COMPLETION only.
             MGPipeApplyResourceReadback(*static_cast<const MGPReadback*>(payload));
-            if (m_replies != nullptr) {
-                m_replies->PostReply(seq, ReplySink::kStatusOk, nullptr, 0);
-            }
+            PostReply(op, seq, ReplySink::kStatusOk, nullptr, 0);
             return true;
 
         case MGPWireOp::ResourceCopyRegion:
@@ -1466,7 +1709,11 @@ namespace MobileGL::MG_Remote::Wire {
                                         sizeof(MGHostSpan));
                 }
                 std::memcpy(&span, tailAt(1), sizeof(span));
-                CheckHostSpanIsHonest(span);
+                // ALL FOUR ARMS. WireVerbSink's header promises OnDrawVbo "a DECODED,
+                // VALIDATED argument list"; without the segment-range arm a span whose run
+                // left SEG_STAGE reached the sink and that promise was false. P8 is what arms
+                // this path, which is exactly when nobody will be reading this code.
+                CheckHostSpanIsHonest(span, *m_segments);
                 userIndices = &span;
             }
             return m_verbs != nullptr &&

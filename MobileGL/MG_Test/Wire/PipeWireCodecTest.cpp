@@ -371,6 +371,19 @@ TEST_F(PipeWireCodecTest, AVarTailRecordIsNotSkippedAsAWrapFiller) {
     // anywhere on this ring. This case is the trip wire for that.
     static_assert(static_cast<Uint16>(kVarTail) == static_cast<Uint16>(Transport::kRecPad),
                   "the collision this case exists for is gone; keep the case anyway");
+    // And the third one, which the first round missed and a reviewer found: it bites in the
+    // REVERSE direction, because the encoder stamps kRecVarTail on nine opcodes and anyone
+    // trusting PipeWire.inc's "MGPipeCallFlags of the call" reads those nine as kReplySlot.
+    static_assert(static_cast<Uint16>(kReplySlot) == static_cast<Uint16>(Transport::kRecVarTail),
+                  "kReplySlot and kRecVarTail alias");
+    // Five of the six call-flag bits alias a ring bit; only kOptional is free, and only
+    // because RingRecordFlags has not reached 1<<5.
+    static_assert((static_cast<Uint16>(kNeedsAck | kHasBlob | kVarTail | kHostSpan | kReplySlot |
+                                       kOptional) &
+                   static_cast<Uint16>(Transport::kRecNeedsAck | Transport::kRecHasBlob |
+                                       Transport::kRecPad | Transport::kRecBorrowSlot |
+                                       Transport::kRecVarTail)) == 0x1Fu,
+                  "the overlap between the two flag spaces moved");
 
     Wire2 wire;
     MGPVertexBuffers header{};
@@ -530,10 +543,12 @@ TEST_F(PipeWireCodecTest, KNeedsAckRespecifyCarriesItsRedefinitionScope) {
               kInvalidSeq);
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
-    // Two records, two acceptance answers, on their own seqs (R-3: the seq IS the id).
-    ASSERT_EQ(wire.Answers().All.size(), 2u);
-    EXPECT_EQ(wire.Answers().All[0].Seq, 1u);
-    EXPECT_EQ(wire.Answers().All[1].Seq, 2u);
+    // Two records, two ACCEPTANCE answers - and NOT in a reply slot. Neither ResourceCreate
+    // nor ResourceRespecify carries kReplySlot, and s1 sizes ReplyPool from that table, so a
+    // reply written here would overwrite some waiter's slot.
+    EXPECT_TRUE(wire.Answers().All.empty());
+    EXPECT_EQ(wire.Decoder().AcceptedRecords() + wire.Decoder().DeclinedRecords(), 2u);
+    EXPECT_TRUE(wire.Decoder().LastAcceptanceKnown());
 }
 
 TEST_F(PipeWireCodecTest, KOptionalUnmapPersistentRoundTrips) {
@@ -726,7 +741,7 @@ TEST_F(PipeWireCodecTest, ResourceSubDataCarriesABlobAndARegionTailTogether) {
               kInvalidSeq);
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
-    ASSERT_EQ(wire.Answers().All.size(), 2u);
+    EXPECT_TRUE(wire.Answers().All.empty());
     // ACCEPTANCE IS NOT "APPLIED", and this case is where the difference shows. The record
     // crossed and reached MGPipeApplyResourceSubData, which is the codec's whole job; the
     // applier then DECLINED it, because no backend registered a P4a texture consumer in this
@@ -734,8 +749,10 @@ TEST_F(PipeWireCodecTest, ResourceSubDataCarriesABlobAndARegionTailTogether) {
     // into lost texels on Magma). That is exactly the answer R-5 says must travel rather than
     // be re-derived on the client: a client that cleared its dirty flags on the strength of
     // having EMITTED would drop these texels for good.
-    EXPECT_EQ(wire.Answers().All[1].Seq, 2u);
-    EXPECT_EQ(wire.Answers().All[1].Status, ReplySink::kStatusDeclined);
+    EXPECT_TRUE(wire.Decoder().LastAcceptanceKnown());
+    EXPECT_FALSE(wire.Decoder().LastAcceptance());
+    // Both records answered - the texture create is declined by the same NoP4aConsumer belt.
+    EXPECT_EQ(wire.Decoder().AcceptedRecords() + wire.Decoder().DeclinedRecords(), 2u);
     // And the texels themselves crossed intact: the decline is the applier's, not the wire's.
     const void* staged =
         wire.Segments().Resolve(upload.Blob.Seg, upload.Blob.Offset, upload.Blob.Size);
@@ -1051,11 +1068,12 @@ TEST_F(PipeWireCodecTest, TheDecoderWritesNoRingControlFieldOfItsOwn) {
 TEST_F(PipeWireCodecTest, MaxRecordBytesSeenStaysFarBelowHalfTheRing) {
     // R-10's proof obligation. P5 does no chunking and must instead show it never needed any.
     //
-    // THE CAP IS ASKED FOR AT RUNTIME AND NEVER DERIVED FROM MOBILEGL_IPC_RING_MB. s1 found
-    // that SEG_CMD's 8 MiB holds a 4096-byte control page plus a POWER-OF-TWO ring, so the
-    // ring is 4 MiB and MaxRecordBytes() is 2 MiB - half of what both CONTRACT-P5.md §5 and
-    // Config.h's comment say. Every comparison in the codec goes through
-    // RingProducer::MaxRecordBytes() for exactly this reason.
+    // THE CAP IS ASKED FOR AT RUNTIME AND NEVER DERIVED FROM MOBILEGL_IPC_RING_MB, and this
+    // phase is why: the number moved twice in one afternoon. s1 first found that the control
+    // page came out of the segment (making the cap 2 MiB at the default), then fixed it the
+    // other way round - MOBILEGL_IPC_RING_MB now names the RING and the segment adds a page on
+    // top - so the cap is 4 MiB again and the contract is true as written. Nothing in the
+    // codec changed either time, because every comparison goes through MaxRecordBytes().
     Wire2 wire;
     MGPDrawInfo info{};
     info.NumDraws = 64;
@@ -1117,6 +1135,102 @@ TEST_F(PipeWireCodecTest, StagedBytesAreReclaimedOnlyBehindRetiredSeq) {
     ASSERT_TRUE(wire.PumpOne(&applied));
     wire.Encoder().ReclaimStagedBytes();
     EXPECT_EQ(wire.Encoder().StagedBytesInFlight(), 0u);
+}
+
+// ---- M2 / M3: SEG_STAGE's cursors and the mark queue --------------------------------------
+
+TEST_F(PipeWireCodecTest, TheEncoderNeverWritesSegStagesConsumerCursors) {
+    // Ring.h makes stageAppliedTail / stageRetiredTail CONSUMER-owned and says the staging
+    // allocator reclaims behind retiredSeq "and nothing else may". A producer writing them is
+    // the same shape w1's own §8.1 argues against for appliedSeq, one segment over: if s1 ever
+    // attaches a RingConsumer to RingCursorSet::Stage - the obvious thing to do for a segment
+    // with a cursor triple - its m_localTail never moves (nothing Pops the stage ring) and the
+    // two cursors get walked forward by the client and back by the server.
+    Wire2 wire;
+    const std::uint8_t payload[128] = {};
+    (void)wire.Encoder().StageBytes(payload, sizeof(payload));
+    MGPBindRenderState bind{};
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    wire.Encoder().ReclaimStagedBytes();
+    EXPECT_EQ(wire.Encoder().StagedBytesInFlight(), 0u) << "the reclaim did not run at all";
+
+    EXPECT_EQ(wire.Control().stageHead.load(), 0u);
+    EXPECT_EQ(wire.Control().stageAppliedTail.load(), 0u);
+    EXPECT_EQ(wire.Control().stageRetiredTail.load(), 0u);
+}
+
+TEST_F(PipeWireCodecTest, TheStageMarkQueueStaysBoundedWithOneRecordAlwaysInFlight) {
+    // The steady-state leak: the queue used to be cleared ONLY when it drained completely, so
+    // one unretired record at every reclaim meant front < size() for ever and 16 bytes per
+    // encoded record for the life of the context. That is exactly the regime W-3 says the
+    // design exists to survive once R-1's barrier retires family by family - and no SSIM
+    // comparison and no two-scenario lane would ever see it.
+    Wire2 wire;
+    MGPBindRenderState bind{};
+    const std::uint8_t blob[32] = {};
+
+    // PRIMING IS THE WHOLE POINT. Encoding and applying one record per iteration drains the
+    // queue at every reclaim, which is the one regime the old "clear only when front reaches
+    // size()" code handled - a case written that way stays green against the bug. One record
+    // encoded ahead of the one being applied is what makes `front < size()` permanent.
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)),
+              kInvalidSeq);
+    for (int i = 0; i < 4000; ++i) {
+        (void)wire.Encoder().StageBytes(blob, sizeof(blob));
+        ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)),
+                  kInvalidSeq);
+        bool applied = false;
+        ASSERT_TRUE(wire.PumpOne(&applied)) << "record " << i;
+    }
+    EXPECT_EQ(wire.Encoder().EmitSeq(), 4001u);
+    EXPECT_EQ(wire.Decoder().AppliedSeq(), 4000u) << "one record must still be in flight";
+    // Bounded by twice the records actually in flight, not by the records ever encoded.
+    EXPECT_LE(wire.Encoder().StageMarksHeld(), 4u)
+        << "the mark queue is tracking history rather than flight";
+}
+
+// ---- M4: the reply slot is for kReplySlot rows only ----------------------------------------
+
+TEST_F(PipeWireCodecTest, NoReplyIsWrittenForARowTheCatalogueGivesNoReplySlot) {
+    // s1 sizes ReplyPool from MGPipeCallFlagsFor, so a reply written for a record the pool
+    // reserved no slot for overwrites a waiter's answer - and because the slot header stamps
+    // the WRITER's seq for self-check, the waiter's check then fails for ever and the barrier
+    // HANGS rather than returning something wrong.
+    Wire2 wire;
+    ASSERT_EQ(MGPipeCallFlagsFor(MGPWireOp::ResourceCreate) & static_cast<Uint32>(kReplySlot), 0u);
+    ASSERT_EQ(MGPipeCallFlagsFor(MGPWireOp::SetTextureParams) & static_cast<Uint32>(kReplySlot), 0u);
+
+    MGPResourceDesc create{};
+    create.Resource = MakeHandle(131);
+    create.Target = static_cast<Uint8>(MGPipeResourceTarget::Buffer);
+    create.Width = 64;
+    create.Height = 1;
+    create.Depth = 1;
+    create.ArrayLayers = 1;
+    create.Levels = 1;
+    create.Samples = 1;
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceCreate, &create, sizeof(create)),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+
+    EXPECT_TRUE(wire.Answers().All.empty()) << "a reply slot was written for a kNone row";
+    // The acceptance answer R-5 requires is still produced - it just does not ride SEG_REPLY.
+    EXPECT_TRUE(wire.Decoder().LastAcceptanceKnown());
+    EXPECT_EQ(wire.Decoder().AcceptedRecords() + wire.Decoder().DeclinedRecords(), 1u);
+}
+
+TEST_F(PipeWireCodecTest, EveryRowThatDoesWriteAReplyCarriesKReplySlot) {
+    // The other half: the three rows in P5 that answer into a slot all carry the flag, so
+    // PostReply's gate cannot be firing on any of them.
+    for (const MGPWireOp op :
+         {MGPWireOp::MapPersistent, MGPWireOp::ResourceReadback, MGPWireOp::ReadPixels}) {
+        EXPECT_NE(MGPipeCallFlagsFor(op) & static_cast<Uint32>(kReplySlot), 0u) << WireOpName(op);
+    }
 }
 
 TEST_F(PipeWireCodecTest, TheAuditFillOverwritesExactlyTheRunsTheRecordResolved) {
@@ -1473,6 +1587,120 @@ TEST_F(PipeWireCodecTest, AHostSpanCountThatIsNeitherZeroNorCountIsFatal) {
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("SetShaderBuffers.HostSpanCount"), std::string::npos) << r.Log;
+}
+
+// ---- M1: R-2 arm 4 over MGHostSpan, on both host-span rows ------------------------------
+
+TEST_F(PipeWireCodecTest, AHostSpanRunPastItsSegmentIsFatalOnSetShaderBuffers) {
+    // Before the fix this child exited 0: CheckHostSpanIsHonest took no SegmentTable and no
+    // caller resolved, so arm 4 was implemented for blobrefs only. The span names a REAL
+    // segment and a run that leaves it.
+    const ChildResult r = RunInChild([] {
+        Wire2 wire;
+        MGPShaderBuffers header{};
+        header.Count = 1;
+        header.HostSpanCount = 1;
+        MGPBufferRange range{};
+        MGHostSpan span{};
+        span.Ptr = nullptr; // rule B satisfied, so only arm 4 can catch this
+        span.Seg = kSegStage;
+        span.Offset = Wire2::kStageBytes - 8;
+        span.Size = 1024;
+        std::vector<std::uint8_t> tail(sizeof(range) + sizeof(span));
+        std::memcpy(tail.data(), &range, sizeof(range));
+        std::memcpy(tail.data() + sizeof(range), &span, sizeof(span));
+        ForgeAndDecode(wire, MGPWireOp::SetShaderBuffers, &header, sizeof(header), tail.data(),
+                       tail.size());
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{ProtocolCorruption, \"host-span\"}"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("does not lie inside that segment (R-2.3 arm 4)"), std::string::npos)
+        << r.Log;
+}
+
+TEST_F(PipeWireCodecTest, AHostSpanRunPastItsSegmentIsFatalOnDrawVbo) {
+    // The same span on the other host-span row - the one whose sink WireVerbSink's header
+    // promises is handed "a DECODED, VALIDATED argument list". Before the fix it reached
+    // OnDrawVbo.
+    const ChildResult r = RunInChild([] {
+        Wire2 wire;
+        MGPDrawInfo info{};
+        info.Mode = 4;
+        info.IndexSize = 2;
+        info.Flags = kDrawHasUserIndices;
+        info.NumDraws = 1;
+        MGPDrawRange ranges[1] = {{0, 4, 0}};
+        MGHostSpan span{};
+        span.Ptr = nullptr;
+        span.Seg = kSegStage;
+        span.Offset = 0xFFFFFFFFull;
+        span.Size = 0xFFFFu;
+        // The layout realigns the span to 8 after a 12-byte MGPDrawRange, so the forged tail
+        // has to carry the same four pad bytes the encoder would.
+        std::vector<std::uint8_t> tail(16 + sizeof(span), 0);
+        std::memcpy(tail.data(), ranges, sizeof(ranges));
+        std::memcpy(tail.data() + 16, &span, sizeof(span));
+        ForgeAndDecode(wire, MGPWireOp::DrawVbo, &info, sizeof(info), tail.data(), tail.size());
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("does not lie inside that segment (R-2.3 arm 4)"), std::string::npos)
+        << r.Log;
+}
+
+// ---- M5 / m8 / q2 ------------------------------------------------------------------------
+
+TEST_F(PipeWireCodecTest, BufferSubDataResidentMayNotDeclareRegions) {
+    // Its catalogue row has no kVarTail and its applier takes no regions, so a non-zero
+    // RegionCount is a fault rather than a tail. The layout used to share ResourceSubData's
+    // arm, which REQUIRED 80 bytes of tail the arm then dropped.
+    const ChildResult r = RunInChild([] {
+        Wire2 wire;
+        MGPSubData rec{};
+        rec.Res = MakeHandle(7);
+        rec.RegionCount = 2;
+        MGPipeSetSubDataBufferRange(rec, 0, 64);
+        rec.RegionCount = 2; // after the helper, which zeroes it
+        ForgeAndDecode(wire, MGPWireOp::BufferSubDataResident, &rec, sizeof(rec), nullptr, 0);
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("BufferSubDataResident.RegionCount"), std::string::npos) << r.Log;
+}
+
+TEST_F(PipeWireCodecTest, TheEncoderRefusesThePerStageSpirvRunTheDecoderCallsFatal) {
+    // The rule lived only in the decoder, so an emitter that declared a per-stage run got a
+    // valid seq here and a Fatal on a peer that could only report "corrupt stream".
+    const ChildResult r = RunInChild([] {
+        Wire2 wire;
+        MG_State::GLState::LinkArtifacts link;
+        MG_State::GLState::SpirvArtifacts spirv;
+        Vector<Uint8> archive;
+        MG_State::GLState::EncodeProgramArtifacts(link, spirv, archive);
+        MGPProgramDesc desc{};
+        desc.Cso = MakeHandle(3);
+        desc.Reflection = wire.Encoder().StageBytes(archive.data(), archive.size());
+        const std::uint32_t words[4] = {1, 2, 3, 4};
+        desc.Spirv[0] = wire.Encoder().StageBytes(words, sizeof(words));
+        (void)wire.Encoder().EncodeRecord(MGPWireOp::CreateShaderState, &desc, sizeof(desc));
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("declares 16 bytes at the ENCODER"), std::string::npos) << r.Log;
+}
+
+TEST_F(PipeWireCodecTest, APartiallyZeroUploadBoxIsFatalRatherThanReadAsEmpty) {
+    // The content predicate used to be "all three extents non-zero", so a 4x4x0 box was read
+    // as carrying nothing and rule A's arm 2 sat out for a record that named a real
+    // destination. A box is either empty or whole.
+    const ChildResult r = RunInChild([] {
+        Wire2 wire;
+        MGPSubData rec{};
+        rec.Res = MakeHandle(9);
+        rec.Target = MGPipePackSubDataTarget(static_cast<Uint32>(MGPipeResourceTarget::Tex2D), 0u);
+        rec.UnionBox = MGPBox{0, 0, 0, 4, 4, 0};
+        ForgeAndDecode(wire, MGPWireOp::ResourceSubData, &rec, sizeof(rec), nullptr, 0);
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("has a zero extent on some axes and not others"), std::string::npos)
+        << r.Log;
 }
 
 TEST_F(PipeWireCodecTest, ASecondProcessResolverIsFatalRatherThanASilentRace) {

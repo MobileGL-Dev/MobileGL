@@ -131,10 +131,21 @@ namespace MobileGL::MG_Remote::Wire {
     // declared. Fatal on an absent blob, then CheckBlobIsHonest on a present one.
     void RequireDeclaredBlob(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob,
                              const SegmentTable& segments);
-    // R-2.3 arm for MGHostSpan. P5's reduced path should produce ZERO host spans
+    // R-2.3 arms 1 and 3 for MGHostSpan. P5's reduced path should produce ZERO host spans
     // (kCapNeedsHostIndexBytes / kCapNeedsHostUboBytes are both 0 in P5, table 0), so this
     // firing at all is a finding, not just a corruption check.
+    //
+    // IT CANNOT DO ARM 4 - it has no segment table - so a span that names a real segment and a
+    // run PAST THE END OF IT passes this function. Use the overload below on any path that has
+    // a table; this one exists because c0 shipped the signature and other packages compile
+    // against it.
     void CheckHostSpanIsHonest(const MG_Pipe::MGHostSpan& span);
+    // All four arms. Arm 4 is the one the signature above cannot express: a span is only
+    // honest if its Offset+Size actually lies inside the segment it names, and the promise
+    // WireVerbSink's header makes - that OnDrawVbo is handed a VALIDATED argument list - is
+    // false without it. Latent in P5 (nothing emits a span) and armed at P8, which is exactly
+    // when nobody will be reading this file.
+    void CheckHostSpanIsHonest(const MG_Pipe::MGHostSpan& span, const SegmentTable& segments);
 
     // ---- one record's shape, computed ONCE and read by both sides ----------------------
     //
@@ -222,18 +233,37 @@ namespace MobileGL::MG_Remote::Wire {
                             const WireTail* tails, Uint32 tailCount);
 
         // Releases every SEG_STAGE run named by a record the apply side has RETIRED
-        // (RingControl::retiredSeq, R-9). Called by the client at its verb barrier and
-        // whenever StageBytes runs short; the allocator reclaims behind retiredSeq and
-        // nothing else may (table 1's "retires" column, R-11).
+        // (RingControl::retiredSeq, R-9, which this class only ever READS). Called from
+        // Publish() and whenever StageBytes runs short, so nothing outside this package has to
+        // remember to; the allocator reclaims behind retiredSeq and nothing else may
+        // (table 1's "retires" column, R-11).
         //
         // THE MARK IS HELD ON THIS SIDE, NOT ON THE WIRE. A record does not carry where its
         // staged bytes end, so the encoder remembers {seq, stage cursor} per record and
         // reclaims to the newest mark whose seq the server has retired. That is exact, needs
         // no wire field, and does not depend on the verb barrier - so it keeps working when
         // R-1's barrier retires family by family.
+        //
+        // SEG_STAGE'S CURSOR TRIPLE IN RingControl IS NOT USED BY EITHER SIDE IN P5, and this
+        // is the reason. Ring.h makes stageAppliedTail / stageRetiredTail CONSUMER-owned, the
+        // server never Pops the stage ring (the decoder resolves by offset), and a producer
+        // that wrote those cursors would be the very shape R-9 forbids one segment over. So
+        // the allocator below is entirely encoder-local and the triple is left at its
+        // InitRingControl values. **s1 must not attach a RingConsumer to
+        // RingCursorSet::Stage**: its m_localTail would never move, and PublishApplied /
+        // PublishRetired would then walk both cursors BACKWARDS under this allocator.
         void ReclaimStagedBytes();
         // Staged bytes not yet reclaimed. The number MOBILEGL_IPC_STAGE_MB has to cover.
         Uint64 StagedBytesInFlight() const;
+        // The {seq, cursor} marks the queue is STILL STORING, consumed ones included - not the
+        // number in flight. Bounded by twice the records in flight, and exposed so a case can
+        // assert that bound rather than trust the comment, because an unbounded queue here is
+        // a steady-state leak no SSIM comparison and no two-scenario lane would ever see.
+        //
+        // It reports the storage deliberately: the in-flight count stays at one or two while
+        // the container behind it grows for ever, so a control written against that number
+        // goes green through exactly the leak it exists to catch.
+        SizeT StageMarksHeld() const;
 
         // Release-stores the head cursor, then rings the consumer doorbell IF PARKED. The
         // order is pinned by RingTest.cpp:446 and must not be swapped: notify-then-publish
@@ -254,6 +284,12 @@ namespace MobileGL::MG_Remote::Wire {
             Uint64 StageCursor = 0;
         };
 
+        // The SEG_STAGE linear allocator (BRIEF §5 w1's own wording). Monotonic byte counters
+        // over the segment; the in-segment offset is `cursor % capacity` and a run that would
+        // straddle the end skips to the boundary, exactly as a ring does, but WITHOUT touching
+        // RingControl - see ReclaimStagedBytes above.
+        Uint8* StageAllocate(Uint64 size);
+
         Transport::RingControl* m_control = nullptr;
         Transport::RingProducer* m_cmd = nullptr;
         Transport::RingProducer* m_stage = nullptr;
@@ -262,7 +298,10 @@ namespace MobileGL::MG_Remote::Wire {
         Uint64 m_maxRecordBytes = 0;
         Vector<StageMark> m_stageMarks;
         SizeT m_stageMarkFront = 0;
-        Uint64 m_stageReclaimed = 0;
+        Uint8* m_stageBase = nullptr;
+        Uint64 m_stageCapacity = 0;
+        Uint64 m_stageHead = 0; // monotonic bytes allocated
+        Uint64 m_stageTail = 0; // monotonic bytes reclaimed
     };
 
     // ---- decoder -----------------------------------------------------------------------
@@ -394,13 +433,52 @@ namespace MobileGL::MG_Remote::Wire {
         // How many staged bytes this decoder has poisoned. Zero with the audit off, and the
         // number a t1 lane asserts is non-zero with it on: an instrumentation that cannot be
         // observed to have run is decoration.
+        //
+        // WHAT IT ACTUALLY COVERS is "the blob runs the arm resolved", which today is AT MOST
+        // ONE per record: tails live in SEG_CMD and are never noted, and CreateShaderState's
+        // six per-stage runs are Fatal rather than resolved, so the one archive is the only
+        // multi-kilobyte run in the catalogue that reaches it. The array is eight deep so a
+        // later phase that declares more can fill it without a code change - and overflowing
+        // it is Fatal rather than a silent drop, because a poison that quietly stopped
+        // covering a run is the same failure as no poison at all.
         Uint64 PoisonedStageBytes() const;
+
+        // R-5's acceptance answer for the four Bool-returning appliers - ResourceCreate,
+        // ResourceRespecify, ResourceSubData, SetTextureParams.
+        //
+        // IT DOES NOT RIDE A REPLY SLOT, and that is a contract conflict this package could
+        // not settle on its own. CONTRACT-P5.md table 0's reply-slot-header row says DECLINED
+        // "is how the four Bool acceptance entry points say false (R-5)", but PipeCalls.def
+        // gives none of those four `kReplySlot` - and table 0 ALSO says kMGPipeCallFlags is
+        // what "every package" reads, so s1 will size ReplyPool from it. Writing
+        // SEG_REPLY[seq % slots] for a record the pool never reserved a slot for overwrites a
+        // waiter's answer, and because the slot header stamps the writer's seq for self-check,
+        // the waiter's check then fails FOR EVER and the barrier hangs rather than returning
+        // something wrong. So the decoder posts a reply only for rows whose flags say
+        // kReplySlot (PostReply itself Fatals otherwise) and exposes the acceptance here
+        // instead. The integrator rules on which half of the contract moves.
+        Bool LastAcceptanceKnown() const;
+        Bool LastAcceptance() const;
+        Uint64 AcceptedRecords() const;
+        Uint64 DeclinedRecords() const;
+
+        // Points MG_Pipe::gMGPipeWireRecordApply at this layer's thunk. Called once from the
+        // constructor and modelled on SegmentTable::InstallProcessResolver, which is the same
+        // shape for the same reason; Uninstall belongs beside that one at teardown. The thunk
+        // is inert without a decoder on the calling thread, so installing it early changes
+        // nothing for a monolith caller of MGPipeApplyWireRecord.
+        static void InstallApplyHook();
+        static void UninstallApplyHook();
 
     private:
         Bool ApplyChecked(MG_Pipe::MGPWireOp op, const void* record, Uint64 size);
         const void* ResolveOrFatal(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob);
-        void NoteResolvedRun(const MG_Pipe::MGPBlobRef& blob);
+        void NoteResolvedRun(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob);
         void PoisonResolvedRuns();
+        // The ONLY way this class answers a record. Fatals if `op` carries no kReplySlot -
+        // see LastAcceptanceKnown() for why that is a Fatal and not a log line.
+        void PostReply(MG_Pipe::MGPWireOp op, Uint64 seq, Int32 status, const void* bytes,
+                       Uint64 size);
 
         friend Bool MGPipeWireRecordApplyThunk(MG_Pipe::MGPWireOp, const void*, Uint64, Uint64);
 
@@ -411,14 +489,19 @@ namespace MobileGL::MG_Remote::Wire {
         Uint64 m_applySeq = kInvalidSeq;
         Bool m_auditPoison = false;
         Uint64 m_poisonedBytes = 0;
-        // The SEG_STAGE runs the record being applied resolved, for the 0xDD fill. At most
-        // seven (CreateShaderState's blob members) plus one tail.
+        Bool m_lastAcceptanceKnown = false;
+        Bool m_lastAcceptance = false;
+        Uint64 m_accepted = 0;
+        Uint64 m_declined = 0;
+        // The SEG_STAGE runs the record being applied resolved, for the 0xDD fill. Eight deep
+        // so CreateShaderState's seven blob members plus a tail would fit if a later phase
+        // declares them; today at most one run is ever noted (see PoisonedStageBytes).
         MG_Pipe::MGPBlobRef m_resolved[8];
         Uint32 m_resolvedCount = 0;
     };
 
     // The hook MGPipeApplyWireRecord dispatches to once its generated per-opcode bounds gate
-    // has passed. Installed by DecodeAndApply on the thread that decodes.
+    // has passed. Inert unless a decoder is active on the calling thread.
     Bool MGPipeWireRecordApplyThunk(MG_Pipe::MGPWireOp op, const void* record, Uint64 size,
                                     Uint64 remaining);
 
