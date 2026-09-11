@@ -55,6 +55,7 @@
 #include <string>
 
 #include "../Harness/HeadlessGL.h"
+#include "../Harness/PersistentMapPeek.h"
 #include "../Harness/PipeStatsWindow.h"
 #include "../Harness/ScenarioFixture.h"
 #include "../Harness/SplitLane.h"
@@ -107,6 +108,14 @@ void main() { oColor = vec4(vColor, 1.0); }
 
         constexpr GLsizeiptr kQuadBytes = GLsizeiptr(sizeof(Vertex) * 6);
         constexpr GLbitfield kCoherentFlags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+        // b1-v1.md 4.1 item 7, asserted rather than commented. GL_MAP_FLUSH_EXPLICIT_BIT would
+        // take this buffer OUT of the client's live-persistent-map set on purpose - the
+        // application announces its own writes through resource_flush_range and the push ships
+        // nothing - so a flag added here would turn every assertion below into a statement about
+        // a different mechanism, and it would still draw the right pixels under monolith.
+        static_assert((kCoherentFlags & GL_MAP_FLUSH_EXPLICIT_BIT) == 0,
+                      "this scenario is about the PUSH, which is defined only for a persistent "
+                      "write map that is NOT FLUSH_EXPLICIT (BufferObject.cpp:645-661)");
 
         // The ctest entry that reads the summary line sets this and nothing else does; the case
         // skips everywhere else rather than racing for the lane's log (PipeStatsWindow.h).
@@ -191,8 +200,80 @@ void main() { oColor = vec4(vColor, 1.0); }
                 }
                 m_vbo = store.vbo;
                 m_map = store.map;
+                // b1-v1.md 4.1 item 1, IMMEDIATELY AFTER THE MAP and before anything else can
+                // change the answer. This is the assertion that decides whether the rest of the
+                // scenario means anything.
+                AssertOrRecordArm(m_vbo, "immediately after the map");
+                if (IsSkipped() || HasFatalFailure()) return;
+                AssertMembership(m_vbo, "immediately after the map");
+                if (IsSkipped() || HasFatalFailure()) return;
                 DescribeAttributes();
                 ASSERT_EQ(FirstGLError(), 0u) << "configuring the VAO over the coherently mapped store";
+            }
+
+            // WHICH ARM. b1-v1.md 4.1 items 1 and 5: IsBackendPersistentMapped() false is the
+            // emulated arm - the resource owner DECLINED, the CPU shadow is still the truth, and
+            // the client has to push the mapping's dirty blocks. True is the adopted arm, where
+            // MGPipeApplyMapPersistent handed back a pointer and the shadow was released.
+            //
+            // Under inproc BOTH ARMS RENDER CORRECTLY, because an adopted store's address really
+            // is valid in this process - which is exactly why exit gate E3(d) has to be checked
+            // and cannot be inferred from pixels. Under spawn the adopted arm would be a wild
+            // pointer, so this one assertion is what makes E3 mean the same thing in P5 and P6.
+            //
+            // The lane DECLARES the arm it expects (MGITEST_PERSISTENT_MAP_ARM); a lane that
+            // declares none RECORDS it, because which arm AcquireMemoryRange takes for a
+            // sub-16-MiB map is a property of the driver - llvmpipe mints, a device may decline -
+            // and a monolith lane that pinned one would be red on hardware for no defect.
+            void AssertOrRecordArm(unsigned int vbo, const char* when) {
+                const std::string declared = SplitLane::DeclaredPersistentMapArm();
+                if (!PersistentMapPeekAvailable()) {
+                    if (!declared.empty()) {
+                        GTEST_SKIP() << "this lane declares the " << declared
+                                     << " arm but Harness/PersistentMapPeek cannot look in this "
+                                        "build (on Android this module links the shipping "
+                                        "libMobileGL.so, built -fvisibility=hidden, so no internal "
+                                        "symbol resolves). 'Could not look' is not 'it was "
+                                        << declared << "'.";
+                    }
+                    RecordProperty("persistent_map_arm", "unknown");
+                    return;
+                }
+                bool adopted = false;
+                ASSERT_TRUE(PeekBufferIsAdoptedPersistentMap(vbo, &adopted))
+                    << "no frontend BufferObject behind GL buffer " << vbo << " " << when;
+                const char* arm = adopted ? "adopted" : "emulated";
+                RecordProperty("persistent_map_arm", arm);
+                if (declared.empty()) return;
+                ASSERT_EQ(declared, std::string(arm))
+                    << "the lane declared the " << declared << " arm and IsBackendPersistentMapped() "
+                    << when << " says " << arm
+                    << ". R-6 pins the split arm at adopt tier T2 = declined = emulated, and the two "
+                       "arms are completely different code paths: adopted means the CPU shadow was "
+                       "released and the application writes straight into storage the resource owner "
+                       "minted, emulated means the shadow is the truth and every validate point has "
+                       "to push blocks. Under inproc both render correctly, so pixels cannot tell "
+                       "them apart - this is exit gate E3(d) and it is the only thing that can.";
+            }
+
+            // b1-v1.md 4.1 item 2: the client's live-persistent-map set is meant to be exactly
+            // SyncPersistentMappedRange's early-out chain. A drift between the two stops the push
+            // silently; asking here makes it a named failure instead.
+            void AssertMembership(unsigned int vbo, const char* when) {
+                if (!PersistentMapTrackerAvailable()) {
+                    RecordProperty("persistent_map_membership", "unavailable");
+                    return;
+                }
+                bool live = false;
+                ASSERT_TRUE(PeekBufferIsLivePersistentMap(vbo, &live))
+                    << "the tracker is compiled in but could not answer for GL buffer " << vbo << " " << when;
+                EXPECT_TRUE(live)
+                    << "a PERSISTENT|WRITE|COHERENT map that is not FLUSH_EXPLICIT is a member of "
+                       "the client's live-persistent-map set by construction, and it is not one "
+                    << when
+                    << ". The set is supposed to BE SyncPersistentMappedRange's early-out chain; if "
+                       "they have drifted, the push stops shipping this buffer's blocks and nothing "
+                       "else says so.";
             }
 
             void TearDown() override {
@@ -270,6 +351,11 @@ void main() { oColor = vec4(vColor, 1.0); }
                                    "the SECOND write through the same mapping, announced by nothing: "
                                    "this is exit gate E3(b), and a 'push on the next explicit buffer "
                                    "operation' implementation reads back the FIRST write's colour here"));
+        // E3(d) again, AFTER the draws: b1-v1.md 4.1 item 5 asks that the arm hold across the
+        // whole scenario, not only at the map. A late adoption - the owner declining once and
+        // minting on a later validate point - would leave the first assertion true and this one
+        // false, and would be invisible in every pixel this case reads.
+        AssertOrRecordArm(m_vbo, "after both writes and both draws");
         Gl().EndFrame();
     }
 
@@ -291,6 +377,7 @@ void main() { oColor = vec4(vColor, 1.0); }
         EXPECT_EQ(FirstGLError(), 0u);
         EXPECT_TRUE(WholeSurfaceIs(second, "red",
                                    "frame 1's write through the SAME mapping, after a Present"));
+        AssertOrRecordArm(m_vbo, "after a frame boundary and two draws");
         Gl().EndFrame();
     }
 
@@ -321,6 +408,10 @@ void main() { oColor = vec4(vColor, 1.0); }
         if (!store.refusal.empty()) {
             GTEST_SKIP() << store.refusal;
         }
+        AssertOrRecordArm(store.vbo, "immediately after the counted window's map");
+        if (IsSkipped() || HasFatalFailure()) return;
+        AssertMembership(store.vbo, "immediately after the counted window's map");
+        if (IsSkipped() || HasFatalFailure()) return;
         glBindVertexArray(m_vao);
         glBindBuffer(GL_ARRAY_BUFFER, store.vbo);
         DescribeAttributes();
@@ -358,56 +449,38 @@ void main() { oColor = vec4(vColor, 1.0); }
                "monolith arm's' checkable by one process. It reported: "
             << window.line;
 
-        // The arm. pmap is bytes PUSHED because a persistently mapped range had to be published,
-        // and a push happens if and only if the acquisition was DECLINED - so pmap > 0 is the
-        // emulated arm and pmap == 0 is the adopted one.
+        // E3(c)'s second half: the bytes the push actually shipped. `pmap` is bytes PUSHED because
+        // a persistently mapped range had to be published, so on the emulated arm a window with
+        // four writes and four draws through a live coherent mapping cannot be zero.
+        //
+        // THE ARM ITSELF IS NOT DERIVED FROM THIS NUMBER. It is asserted from
+        // IsBackendPersistentMapped() at the map and again after the draws (b1-v1.md 4.1 items 1
+        // and 5), which is the direct observable; pmap is the CONSEQUENCE and is checked as a
+        // cross-check. Deriving the arm from pmap would have made "the push was never wired" and
+        // "the store was adopted" the same reading, and they are different defects with different
+        // owners.
         const double pushedBytes = PipeStatsWindow::CounterAsDoubleOrAbsent(window, "pmap");
         ASSERT_GE(pushedBytes, 0.0) << "the summary line carries no pmap= field: " << window.line;
-        const char* observedArm = (pushedBytes > 0.0) ? "emulated" : "adopted";
-        RecordProperty("persistent_map_arm", observedArm);
         RecordProperty("persistent_map_push_bytes_per_frame", std::to_string(pushedBytes).c_str());
         RecordProperty("map_persistent_roundtrips", std::to_string(roundtrips).c_str());
 
-        const std::string declared = SplitLane::DeclaredPersistentMapArm();
-        if (declared.empty()) {
-            // SUCCEED, not GTEST_SKIP. The mpr assertion above is this lane's real claim and it
-            // has already been made; the arm is the half it cannot assert, because WHICH arm
-            // AcquireMemoryRange takes for a sub-16-MiB map is a property of the driver (llvmpipe
-            // mints, a device may decline) and a monolith lane that pinned one would be red on
-            // hardware for a reason that is not a defect. A skip here would have thrown away the
-            // mpr result with it - and mpr is the number the split lane is compared against.
-            SUCCEED() << "this lane declares no MGITEST_PERSISTENT_MAP_ARM, so the arm is RECORDED "
-                         "and not asserted, and the assertion this lane does make - one coherent "
-                         "map costs one acquisition attempt - passed. Observed arm: "
-                      << observedArm << " (pmap=" << pushedBytes << ", mpr=" << roundtrips << "). "
-                      << window.line;
-            glBindVertexArray(0);
-            unsigned int recordedVbo = store.vbo;
-            glBindBuffer(GL_ARRAY_BUFFER, recordedVbo);
-            glUnmapBuffer(GL_ARRAY_BUFFER);
-            glBindBuffer(GL_ARRAY_BUFFER, 0);
-            glDeleteBuffers(1, &recordedVbo);
-            return;
-        }
-        EXPECT_EQ(declared, std::string(observedArm))
-            << "the lane declared the " << declared << " arm and the library took the " << observedArm
-            << " one (pmap=" << pushedBytes
-            << "). R-6 pins the split lane at T2 = emulated, and the two arms are completely "
-               "different code paths: adopted means MGPipeApplyMapPersistent handed back a pointer "
-               "and the CPU shadow was released, emulated means it declined and the client has to "
-               "push blocks. Under inproc an ADOPTED store still renders correctly - the address is "
-               "real in this process - so pixels cannot tell them apart and this counter is the "
-               "only thing that can. That is exit gate E3(d) in the only spelling a black-box "
-               "scenario has. Line: "
-            << window.line;
-        if (declared == "emulated") {
+        if (SplitLane::DeclaredPersistentMapArm() == "emulated") {
             EXPECT_GT(pushedBytes, 0.0)
                 << "the emulated arm pushes the mapping's dirty blocks at every validate point, so "
-                   "a window with four writes and four draws through a live coherent mapping cannot "
-                   "have pushed zero bytes. Zero here with MOBILEGL_IPC_PERSISTENT_BLOCK_KB at its "
-                   "default is the push never being wired; zero with it set to 0 is exit gate "
-                   "E3(a)'s negative control working as intended. Line: "
+                   "a window with "
+                << kDrawsInTheWindow
+                << " writes and as many draws through a live coherent mapping cannot have pushed "
+                   "zero bytes. Zero here with MOBILEGL_IPC_PERSISTENT_BLOCK_KB at its default "
+                   "means the push is not reaching this buffer - which is a DIFFERENT defect from "
+                   "the store having been adopted, and the arm assertion above has already ruled "
+                   "that one out. Zero with the knob set to 0 is exit gate E3(a)'s negative control "
+                   "working as intended. Line: "
                 << window.line;
+        } else {
+            // Recorded, not asserted: on this arm the number is whatever the driver's adoption
+            // decision makes it, and it is the figure MEASUREMENTS wants beside the split one.
+            RecordProperty("persistent_map_push_note",
+                           "recorded only - this lane declares no emulated arm");
         }
 
         unsigned int vbo = store.vbo;

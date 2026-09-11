@@ -56,6 +56,7 @@ add_executable(MobileGLIntegrationTest
     Harness/PipeApplyPeek.cpp
     Harness/P4aSeamPeek.cpp
     Harness/P4aFinalFixPeek.cpp
+    Harness/PersistentMapPeek.cpp
     Scenarios/OrientationScenario.cpp
     Scenarios/CrossFrameBufferScenario.cpp
     Scenarios/ResidentIndexScenario.cpp
@@ -1798,6 +1799,27 @@ endif()
 # half is the sharp one and it is layout-independent in the way the house rule demands - the
 # owning packages have to DELETE those aborts to implement anything, whatever files they
 # choose to put the implementation in. Both halves are printed at configure time.
+# Package b1's client-side persistent-map tracker, which is what Harness/PersistentMapPeek.cpp
+# asks the membership question of (b1-v1.md 4.1 item 2). TWO halves, and both are needed:
+# MOBILEGL_BUILD_DISAGGREGATED because a build that never compiled MG_Remote cannot LINK the call,
+# and the content probe because b1 may not have landed it yet. __has_include in the peek would
+# answer yes in a pull build - the header is in the source tree of every build - and turn a
+# healthy pull build into a link error, which is why this decision is made here.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    mgl_itest_probe_for_symbol(MGL_ITEST_PERSISTENT_MAP_TRACKER
+        "${MGL_ITEST_ROOT}/MobileGL/MG_Remote/Client" "IsLivePersistentMap")
+    if (MGL_ITEST_PERSISTENT_MAP_TRACKER)
+        message(STATUS "Integration tests: package b1's persistent-map tracker is present "
+                       "(${MGL_ITEST_PERSISTENT_MAP_TRACKER}) - PersistentCoherentMapScenario's "
+                       "membership assertion is live")
+        target_compile_definitions(MobileGLIntegrationTest PRIVATE -DMGITEST_PERSISTENT_MAP_TRACKER=1)
+    else()
+        message(STATUS "Integration tests: no source under MobileGL/MG_Remote/Client names "
+                       "IsLivePersistentMap - package b1's tracker has not landed, so "
+                       "PersistentCoherentMapScenario's membership assertion SKIPS")
+    endif()
+endif()
+
 mgl_itest_probe_for_symbol(MGL_ITEST_REMOTE_CLIENT_SIGNATURES
     "${MGL_ITEST_ROOT}/MobileGL/MG_Remote/Client"
     "kRemoteEmitSlotCount|RemoteEmitTable|CapsMirror")
