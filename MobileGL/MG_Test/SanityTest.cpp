@@ -4652,6 +4652,92 @@ TEST(DirectGLESBufferDrawProbe, ALiveHostMapKeepsTheHandleArmProbeDirtyBetweenTw
     record = {};
 }
 
+// P5 b1's half of the case above: THE PIN IS LIFTED, AND THIS IS WHAT REPLACED IT.
+//
+// The case above exists because answering the live-map question from HasLiveHostWrites alone
+// read draw-CLEAN forever. P5 gives that field a producer - MGPSubData::HasLiveHostWrites, set
+// by MGPipeEmitResourceSubData from BufferObject::HasLiveHostWritesForWire - and with the
+// producer in place the last frontend read in IsBufferDrawCleanByHandle retires under split,
+// because under a spawn there is no frontend object on that side to ask.
+//
+// So the same fixture is driven twice with the transport flipped, and the second half is the
+// one that would have been impossible before: the record ALONE has to be able to say both
+// answers. If it could not, this case reads CLEAN in both arms and the regression the case
+// above records comes back through the other door.
+TEST(DirectGLESBufferDrawProbe, UnderSplitTheRecordAloneAnswersTheLiveHostMapQuestion) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    using namespace MobileGL::MG_State::GLState;
+
+    if (!EsprytSlotTablesEnabled()) {
+        GTEST_SKIP() << "the handle-keyed resource table only exists on the {slot, gen} arm";
+    }
+#if !MOBILEGL_BUILD_DISAGGREGATED
+    GTEST_SKIP() << "MG_Config::Transport is a constexpr Monolith without the transport built in, "
+                    "so the split arm of this probe cannot be entered";
+#else
+    auto owner = MakeShared<BufferObject>(0u);
+    owner->Respecify(256, nullptr);
+    const MG_Pipe::MGPipeHandle res =
+        MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Buffer, owner->GetLifetimeId());
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(res));
+
+    auto& applier = MG_Pipe::MGPipeApplier();
+    if (applier.Resources.size() <= static_cast<SizeT>(res.Slot)) {
+        applier.Resources.resize(static_cast<SizeT>(res.Slot) + 1);
+    }
+    auto& record = applier.Resources[res.Slot];
+    record = {};
+    record.Gen = res.Gen;
+    record.Live = true;
+    record.Desc.Width = 256;
+    record.Serial = 7;
+    record.HasLiveHostWrites = false;
+
+    auto& twin = BufferImpl::g_backendBufferResources.GetOrCreate(res);
+    twin = MakeShared<BufferImpl::GLESBufferResource>();
+    auto* const resource = twin.get();
+    resource->id = 1;
+    resource->contextGeneration = BufferImpl::CurrentBufferContextGeneration();
+    resource->storageInitialized = true;
+    resource->storageSize = 256;
+    resource->syncedChangeSerial = record.Serial;
+
+    const auto previousTransport = MG_Config::Transport;
+    MG_Config::Transport = MG_Config::TransportMode::InProcess;
+
+    // The map is live and the object still says so - but the probe may no longer ask it.
+    void* const mapped = owner->AcquireMemoryRange(
+        Range1D{0, 256}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
+    ASSERT_NE(mapped, nullptr);
+    ASSERT_TRUE(owner->IsMapped());
+    // AcquireMemoryRange's NotePersistentMapStateChanged may have emitted the falling/rising
+    // edge record; re-stamp the fixture so the only question left is the flag.
+    record.Serial = 9;
+    resource->syncedChangeSerial = record.Serial;
+    {
+        const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+        resource->pendingRanges.clear();
+    }
+
+    record.HasLiveHostWrites = false;
+    EXPECT_TRUE(BufferImpl::IsBufferDrawCleanByHandle(res, resource, owner.get()))
+        << "the frontend IsMapped() read did NOT retire under split - it is still what answers, "
+           "and a spawned server has no object to ask";
+
+    record.HasLiveHostWrites = true;
+    EXPECT_FALSE(BufferImpl::IsBufferDrawCleanByHandle(res, resource, owner.get()))
+        << "the record alone cannot say 'a host writer is live', so the question has no answer "
+           "on the server's side of a split at all";
+
+    MG_Config::Transport = previousTransport;
+    owner->ReleaseMemory(false);
+    BufferImpl::g_backendBufferResources.ReleaseByHandle(res);
+    MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, res);
+    record = {};
+#endif
+}
+
 // P3a REWORK M-1's gate (contract-review M2). The minting overload's symmetric `!=` is safe
 // because its handle comes out of the allocator and can never be behind the entry; the HANDLE
 // overload's input ARRIVES in a payload, so a generation BEHIND the live entry's is reachable -
@@ -4780,6 +4866,10 @@ TEST(DirectGLESSlotTable, ADeathNoticeForEveryP4aKindIsIdempotent) {
 }
 
 TEST(DirectGLESBufferDrawProbe, ALiveHostMapKeepsTheHandleArmProbeDirtyBetweenTwoDraws) {
+    GTEST_SKIP() << "the handle-keyed resource table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESBufferDrawProbe, UnderSplitTheRecordAloneAnswersTheLiveHostMapQuestion) {
     GTEST_SKIP() << "the handle-keyed resource table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 #endif // MOBILEGL_PIPE_PUSH
