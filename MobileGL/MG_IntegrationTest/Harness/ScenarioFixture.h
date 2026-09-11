@@ -28,6 +28,7 @@
 #include <gtest/gtest.h>
 
 #include "HeadlessGL.h"
+#include "SplitLane.h"
 
 namespace MGITest {
 
@@ -94,6 +95,24 @@ namespace MGITest {
                 // that must not silently degrade sets REQUIRE_HARDWARE_GPU.
                 FAIL() << "MOBILEGL_ITEST_REQUIRE_HARDWARE_GPU is set but the context landed on a software "
                        << "rasterizer: " << gl.RendererString();
+            }
+            // P5's DirectGLES.Split. lanes, in ONE place rather than in each scenario they
+            // point at. A Split entry runs with MOBILEGL_TRANSPORT=inproc, and until packages
+            // c1/s1/v1 land there is nothing to consume that variable: ConfigLoader parses it,
+            // logs it, and the process then runs monolith. Every case in the lane would go GREEN
+            // against the monolith path under a name that says it tested the split one - the one
+            // outcome the whole lane exists to prevent, and the reason CONTRACT-P5 5 also
+            // demands a BUILD-level `nm ... | grep MG_Remote` check for the other half of this
+            // question. The registrations are never deleted (gate G14: a ctest name may never
+            // disappear); they skip, naming exactly what is missing.
+            //
+            // Here rather than in TriangleScenario/PersistentCoherentMapScenario because the
+            // Split family also points at ClearThenReadPixelsScenario, which is target A of the
+            // reduced path and predates P5 - and any later Split lane gets the same guarantee
+            // without anyone having to remember it.
+            if (const std::string splitSkip = SplitLane::SkipReasonForSplitOnlyAssertions();
+                SplitLane::IsSplitLane() && !splitSkip.empty()) {
+                GTEST_SKIP() << splitSkip;
             }
             // A scenario starts from a clean slate but shares the context (and so
             // the renderer's memos) with every other scenario in this process -

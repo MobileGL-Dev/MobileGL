@@ -91,4 +91,23 @@ namespace MGITest::PipeStatsWindow {
         return -1;
     }
 
+    // The same lookup for a counter that is printed as a FIXED-POINT PER-FRAME FIGURE rather
+    // than as an integer, which is every member of the bytes/f[...] bracket: FormatWindowLine
+    // divides each byte class by the window's frame count and prints two decimals whenever the
+    // window contains a Present. `pmap` is one of those, so CounterOrAbsent's strtoll reads
+    // "0.37" as 0 and an assertion that a push HAPPENED silently becomes an assertion that it
+    // pushed at least one whole byte per frame - the one way this counter can be wrong without
+    // ever failing. Returns -1.0 when the line does not carry the name; every real value of a
+    // byte class is >= 0, so the sentinel cannot collide with one.
+    inline double CounterAsDoubleOrAbsent(const Window& window, const char* shortName) {
+        if (!window.found) return -1.0;
+        for (const char* prefix : {" ", "["}) {
+            const std::string key = std::string(prefix) + shortName + "=";
+            const std::size_t at = window.line.find(key);
+            if (at == std::string::npos) continue;
+            return std::strtod(window.line.c_str() + at + key.size(), nullptr);
+        }
+        return -1.0;
+    }
+
 } // namespace MGITest::PipeStatsWindow
