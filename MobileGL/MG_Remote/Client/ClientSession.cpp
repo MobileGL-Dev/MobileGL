@@ -649,6 +649,7 @@ namespace MobileGL::MG_Remote::Client {
         // 4. and ONLY NOW may anything an emitter owns be released: a var-tail still
         //    referenced by an unapplied record is a use-after-free the join is what prevents.
         LogMemory("teardown");
+        LogWireLedger();
         m_producer.Detach();
         m_encoder = Wire::PipeWireEncoder();
         m_events = Transport::EventRingConsumer();
@@ -898,6 +899,45 @@ namespace MobileGL::MG_Remote::Client {
 
     void ClientSession::LogMemory(const char* phase) const {
         Transport::LogRoleMemory(phase, SampleMemory());
+    }
+
+    // R-10's AND R-9's numbers IN EVERY SPLIT PRIVATE LOG, not only in the lanes that set
+    // MOBILEGL_PIPE_STATS=1.
+    //
+    // WHY IT IS HERE AND NOT ONLY ON THE STATS LINE. `MGPipe stats:` is an opt-in channel: two
+    // ctest entries out of 21 set MOBILEGL_PIPE_STATS, and neither the retrace lanes nor the
+    // 19 ordinary split entries do. R-10's proof obligation is about THE PHASE, not about the
+    // two counting lanes - "no record on the reduced path comes near half the ring" has to be
+    // readable from any split run that happened, which is what ID-53's per-entry private log
+    // is for. One line per session teardown costs nothing and cannot be missed.
+    //
+    // IT IS ALSO WHERE THE PROOF FAILS SOFTLY. A record ABOVE the cap already aborts on the
+    // spot with Fatal{RingOverrun} (PipeWireCodec.cpp), so this line's job is the other half:
+    // a maximum that is merely CLOSE to the cap is not a crash and would otherwise be
+    // invisible until the day a workload crossed it. The percentage is printed for exactly
+    // that reason, and R-10 names the integrator as the person who decides between early
+    // chunking and a bigger default ring when it climbs.
+    void ClientSession::LogWireLedger() const {
+        const Uint64 maxRecord = m_encoder.MaxRecordBytesSeen();
+        const Uint64 cap = m_encoder.MaxRecordBytesCap();
+        // Integer permille rather than a float: this file has no <iomanip> and a "%.1f" of a
+        // ratio nobody can reproduce by hand is worse than two integers.
+        const Uint64 permille = cap != 0 ? (maxRecord * 1000ull) / cap : 0ull;
+        MGLOG_I("MG_Remote client: wire ledger: maxrec=%llu maxrecop=%s cap=%llu (%llu.%llu%% of "
+                "RingProducer::MaxRecordBytes, half of a %llu byte SEG_CMD) cmdbytes=%llu "
+                "ringwraps=%llu ringpads=%llu "
+                "ringwaits=%llu emitseq=%llu - R-10's proof obligation and R-9's producer "
+                "readings, published from the session that produced them",
+                static_cast<unsigned long long>(maxRecord), m_encoder.MaxRecordOpName(),
+                static_cast<unsigned long long>(cap),
+                static_cast<unsigned long long>(permille / 10),
+                static_cast<unsigned long long>(permille % 10),
+                static_cast<unsigned long long>(cap * 2),
+                static_cast<unsigned long long>(m_encoder.CmdBytesWritten()),
+                static_cast<unsigned long long>(m_encoder.CmdWraps()),
+                static_cast<unsigned long long>(m_encoder.CmdWrapPads()),
+                static_cast<unsigned long long>(m_encoder.StageReclaimWaits()),
+                static_cast<unsigned long long>(m_encoder.EmitSeq()));
     }
 
 #undef MGP5_C0_STUB

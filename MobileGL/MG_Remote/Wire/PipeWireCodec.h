@@ -276,6 +276,54 @@ namespace MobileGL::MG_Remote::Wire {
 
         // R-10's proof obligation: the largest single record this encoder has written.
         Uint64 MaxRecordBytesSeen() const;
+        // The op whose record set that maximum, by name, or "none" before any record. Published
+        // beside the number so R-10's integrator decision names a row rather than a size.
+        const char* MaxRecordOpName() const;
+
+        // THE CAP THAT NUMBER IS PROVED AGAINST, read from the ring rather than recomputed.
+        // RingProducer::MaxRecordBytes() == Capacity()/2, and Capacity() is
+        // MOBILEGL_IPC_RING_MB. Published beside MaxRecordBytesSeen() so a reader never has to
+        // multiply an environment variable to know whether the proof holds - which is the one
+        // arithmetic step between "4 MiB" and "half of the ring this process actually got".
+        // 0 when this encoder has no command ring (a default-constructed one).
+        Uint64 MaxRecordBytesCap() const;
+
+        // ---- R-9's producer readings, and why they are three rather than one ---------------
+        //
+        // `CmdWraps()` counts SEG_CMD going ROUND: the number of times the producer's monotonic
+        // head crossed a multiple of the ring capacity and the byte area was reused from the
+        // start. It is what exit gate E3(e)'s small-ring lane asserts, because it is the one
+        // that is GUARANTEED once a workload writes more bytes than the ring holds, and
+        // therefore the one a lane can be red for not reaching.
+        //
+        // `CmdWrapPads()` counts the kRecPad fillers Reserve lays when a record would have
+        // STRADDLED that boundary. R-9's last clause - "a pad record does not advance seq, both
+        // sides must skip it and count again" - is about this one, and it is RECORDED rather
+        // than asserted: measured, a stream of clears and draws repeats at a stride that
+        // divides a power-of-two capacity exactly, so 1310824 bytes through a 1 MiB SEG_CMD
+        // produced one and a half trips round the ring and ZERO pads. A gate written against
+        // this number would have been red for the arithmetic of the record catalogue rather
+        // than for anything about the ring.
+        //
+        // `StageReclaimWaits()` counts every SEG_STAGE allocation that did not fit until the
+        // encoder reclaimed the runs the server had already retired - i.e. every time the
+        // producer's progress depended on the consumer's retiredSeq. That is the honest
+        // back-pressure reading in P5, and the reason the command ring has none: the verb
+        // barrier makes EmitAndWait wait for appliedSeq after EVERY record (R-1), so at most
+        // one record is ever in flight on SEG_CMD and a full command ring is not a wait but a
+        // Fatal{RingOverrun} (ClientSession.cpp). Publishing a "command ring waits" counter
+        // that can only ever be zero-or-dead is the decoration this file's counters are not.
+        Uint64 CmdWraps() const;
+        Uint64 CmdWrapPads() const;
+        Uint64 StageReclaimWaits() const;
+
+        // Bytes this encoder has ever written into SEG_CMD, pad fillers included: the
+        // producer's monotonic head cursor. It is the DENOMINATOR the wrap count only means
+        // anything against - "0 wraps" is a defect when the run pushed more bytes than the ring
+        // holds and a tautology when it pushed fewer, and only this number tells those apart.
+        // It is also how E3(e)'s lane knows when it has driven enough work, without guessing a
+        // record size. 0 when there is no command ring.
+        Uint64 CmdBytesWritten() const;
 
     private:
         // {the record's seq, the SEG_STAGE cursor just past everything that record named}.
@@ -307,6 +355,10 @@ namespace MobileGL::MG_Remote::Wire {
         SegmentTable* m_segments = nullptr;
         Uint64 m_emitSeq = kInvalidSeq;
         Uint64 m_maxRecordBytes = 0;
+        MG_Pipe::MGPWireOp m_maxRecordOp = MG_Pipe::MGPWireOp::kOpCount;
+        Uint64 m_cmdWraps = 0;
+        Uint64 m_cmdWrapPads = 0;
+        Uint64 m_stageReclaimWaits = 0;
         Vector<StageMark> m_stageMarks;
         SizeT m_stageMarkFront = 0;
         Uint8* m_stageBase = nullptr;

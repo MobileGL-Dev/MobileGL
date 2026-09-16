@@ -183,6 +183,58 @@ namespace MobileGL::MG_Util::PipeStats {
         Count
     };
 
+#if MOBILEGL_PIPE_PUSH
+    // P5's GAUGES, and they are a THIRD KIND of counter rather than three more CallClass rows.
+    //
+    // A ByteClass and a CallClass are SUMS this module owns and a call site increments. These
+    // three are neither: they are the wire producer's own running readings - a MAXIMUM and two
+    // RUN TOTALS that live on MG_Remote's encoder, which this module cannot see and must not
+    // link against (MG_Util is below MG_Remote, and the pull build has no MG_Remote at all).
+    // The owner publishes its current value at the frame boundary and this module prints the
+    // last one it was given. Summing them here would be wrong twice: a maximum is not additive,
+    // and the encoder already holds the run total, so adding deltas would double-count.
+    //
+    // THEY ARE RUN TOTALS ON A WINDOWED LINE, deliberately and against the file's own habit.
+    // Everything else on the summary line covers "since the previous line" because a run total
+    // over a workload whose shape changes hides the number P2 wants. These three are the
+    // opposite: "the largest record this run ever wrote" and "did the ring ever wrap" are
+    // questions about the RUN, and a windowed maximum would read 0 in every window that did not
+    // happen to contain the biggest record - which is the shape of a proof obligation that
+    // cannot fail. The label says so in the line itself (`maxrec=` is bytes, not bytes/frame).
+    //
+    // PUSH-ONLY for the reason every counter added since P2 is: the pull build must stay
+    // symbol-identical (gate G1), and a gauge whose only publisher is MG_Remote could never
+    // leave zero there.
+    enum class Gauge : Uint32 {
+        // R-10's PROOF OBLIGATION. The largest single record the wire encoder has written, in
+        // bytes, and the cap it must stay under - RingProducer::MaxRecordBytes() ==
+        // MOBILEGL_IPC_RING_MB / 2. P5 does no chunking and has to prove it needs none; before
+        // this pair existed the only consumers of PipeWireEncoder::MaxRecordBytesSeen() were
+        // codec unit tests, so BRIEF 8 item 3 had no measurement from any real workload
+        // (joint-v1.md 5, "Maximum record bytes: NO MEASUREMENT").
+        MaxRecordBytes = 0,
+        MaxRecordBytesCap,
+        // R-9's three producer readings. `RingWraps` is SEG_CMD going ROUND - the head crossing
+        // a multiple of the capacity - which is the event exit gate E3(e)'s small-ring lane
+        // asserts, because it is guaranteed once the workload writes more bytes than the ring
+        // holds. `RingWrapPads` is the kRecPad fillers laid when a record would have STRADDLED
+        // that boundary, which is R-9's "a pad does not advance seq" path and is RECORDED, not
+        // asserted: a uniform record stride over a power-of-two ring lands on the boundary
+        // exactly and never straddles it (measured). `RingWaits` is SEG_STAGE allocations that
+        // had to wait on the consumer's retiredSeq. See PipeWireCodec.h for why the command
+        // ring contributes no wait count while the verb barrier is armed.
+        RingWraps,
+        RingWrapPads,
+        RingWaits,
+        Count
+    };
+
+    // Publishes the owner's current reading. Cheap and unconditional on the caller's side:
+    // the call sites are per-frame, not per-record.
+    void PublishGauge(Gauge gauge, Uint64 value);
+    Uint64 GaugeValue(Gauge gauge);
+#endif
+
     // Memo gates. Each is a place where a backend decides "nothing moved, skip the work".
     // Hit == the gate short-circuited; Miss == it fell through and did the work. The six
     // are exactly the ones section 2.3.1 tabulates.
