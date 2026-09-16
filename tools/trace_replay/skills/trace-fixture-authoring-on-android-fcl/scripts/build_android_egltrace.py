@@ -123,6 +123,41 @@ static void mobilegl_capture_record_request(void) {
     if brace < 0:
         raise SystemExit("eglSwapBuffers wrapper has no function body")
     text = text[:brace + 1] + "\n    mobilegl_capture_record_request();" + text[brace + 1:]
+
+    # A buffer copy consumes coherent mapped writes just like a draw. Upstream
+    # only commits shadows at draws, so Minecraft's staging-buffer copies could
+    # consume the previous frame's vertices before the current writes landed.
+    for name in ("glCopyBufferSubData", "glCopyNamedBufferSubData", "glNamedCopyBufferSubDataEXT"):
+        start = text.find(f"void APIENTRY {name}(")
+        if start < 0:
+            raise SystemExit(f"generated egltrace.cpp has no {name} wrapper to patch")
+        brace = text.index("{", start)
+        text = (text[:brace + 1] +
+                "\n    GLMemoryShadow::commitAllWrites(gltrace::getContext(), trace::fakeMemcpy);" +
+                text[brace + 1:])
+
+    # Deleting a mapped buffer implicitly unmaps it. Retire its shadow before
+    # the real storage is freed; a later draw must not commit to a deleted map,
+    # and reuse of the GL name must not leave a dangling dirtyShadows entry.
+    retire_shadows = r'''
+    auto *_ctx = gltrace::getContext();
+    for (GLsizei i = 0; i < n; ++i) {
+        auto it = _ctx->sharedRes->bufferToShadowMemory.find(buffers[i]);
+        if (it != _ctx->sharedRes->bufferToShadowMemory.end()) {
+            if (it->second->getMapFlags() != 0) {
+                it->second->unmap(trace::fakeMemcpy);
+            }
+            _ctx->sharedRes->bufferToShadowMemory.erase(it);
+        }
+    }
+'''
+    for name in ("glDeleteBuffers", "glDeleteBuffersARB"):
+        start = text.find(f"void APIENTRY {name}(")
+        if start < 0:
+            raise SystemExit(f"generated egltrace.cpp has no {name} wrapper to patch")
+        brace = text.index("{", start)
+        text = text[:brace + 1] + retire_shadows + text[brace + 1:]
+
     generated.write_text(text, encoding="utf-8", newline="\n")
     return generated
 

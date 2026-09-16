@@ -160,6 +160,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Immediate ops, dispatched from the frontend BufferBackendOps table.
         void OnRespecify(MG_State::GLState::BufferObject& bufferObject);
         void OnSubData(MG_State::GLState::BufferObject& bufferObject, SizeT offset, SizeT size);
+        void OnResidentSubData(MG_State::GLState::BufferObject& bufferObject, SizeT offset, DataPtr data);
         void OnFlushMappedRange(MG_State::GLState::BufferObject& bufferObject, Range1D range,
                                 Flags<BufferMappingAccessBit> appAccess);
         void OnResourceDestroyed(SharedPtr<MG_State::GLState::BackendBufferResource>&& resource);
@@ -189,7 +190,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool SwapStorageAndUploadAll(VkBufferResource& resource, MG_State::GLState::BufferObject& bufferObject);
         // Record a staging-slice copy into the resident storage, ordered against
         // in-flight and already-recorded GPU work.
-        Bool StagedRangeCopy(VkBufferResource& resource, MG_State::GLState::BufferObject& bufferObject,
+        Bool StagedRangeCopy(VkBufferResource& resource, const void* data,
                              SizeT offset, SizeT size);
         void DeferRelease(VkBufferObject&& buffer);
         void CollectDeferredReleases(Uint32 frameIndex);

@@ -67,6 +67,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
+        void Ops_ResidentSubData(BufferObject& bufferObject, SizeT offset, DataPtr data) {
+            if (g_activeBufferManager) {
+                g_activeBufferManager->OnResidentSubData(bufferObject, offset, data);
+            }
+        }
+
         void Ops_FlushMappedRange(BufferObject& bufferObject, Range1D range,
                                   Flags<BufferMappingAccessBit> appAccess) {
             if (g_activeBufferManager) {
@@ -78,11 +84,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // host-visible GPU storage (EnsureGpuResidentStorage adopts it when the buffer is
         // bound as a shader storage buffer), so nothing needs copying - but coherence only
         // says the writes are visible once they have happened, so the work has to retire
-        // first.
+        // first, including copies already submitted by a sync-point flush.
         void Ops_ReadbackFromGpu(BufferObject& bufferObject) {
             (void)bufferObject;
             if (pVulkanRenderer) {
-                pVulkanRenderer->FinishPendingGpuWork();
+                pVulkanRenderer->WaitForSubmitIndex(
+                    pVulkanRenderer->GetSyncPointSubmitIndex(), UINT64_MAX, true);
             }
         }
 
@@ -106,6 +113,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const BufferBackendOps g_vulkanBufferBackendOps = {
             .Respecify = Ops_Respecify,
             .SubData = Ops_SubData,
+            .ResidentSubData = Ops_ResidentSubData,
             .FlushMappedRange = Ops_FlushMappedRange,
             .OnDestroy = Ops_OnDestroy,
             .AcquirePersistentMap = Ops_AcquirePersistentMap,
@@ -378,13 +386,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-    Bool VkBufferManager::StagedRangeCopy(VkBufferResource& resource, MG_State::GLState::BufferObject& bufferObject,
+    Bool VkBufferManager::StagedRangeCopy(VkBufferResource& resource, const void* data,
                                           SizeT offset, SizeT size) {
         if (!m_copyProvider) {
             return false;
         }
         BufferSlice staging{};
-        if (!m_transientUploadArena.Upload(m_currentFrameIndex, bufferObject.MappedData() + offset,
+        if (!m_transientUploadArena.Upload(m_currentFrameIndex, data,
                                            static_cast<VkDeviceSize>(size), 16, staging)) {
             return false;
         }
@@ -499,8 +507,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Busy partial write: stage + GPU copy preserves GL ordering within the
         // frame and leaves bytes outside the range (possibly GPU-written, e.g.
         // SSBO) intact. Fall back to a storage swap if staging is unavailable.
-        if (!StagedRangeCopy(*resource, bufferObject, offset, size)) {
+        if (!StagedRangeCopy(*resource, bufferObject.MappedData() + offset, offset, size)) {
             SwapStorageAndUploadAll(*resource, bufferObject);
+        }
+    }
+
+    void VkBufferManager::OnResidentSubData(MG_State::GLState::BufferObject& bufferObject,
+                                           SizeT offset, DataPtr data) {
+        auto* resource = ResourceOf(bufferObject);
+        MOBILEGL_ASSERT(resource && resource->persistentMapped && resource->buffer.IsValid(),
+                        "OnResidentSubData requires adopted Vulkan storage");
+        // The mapping is also the GPU's storage. Copy the supplied bytes onto the
+        // command timeline before touching it: earlier draws must keep seeing the
+        // old contents, including draws recorded but not yet submitted. The buffer
+        // cannot be orphaned because the application may hold its mapped pointer.
+        if (StagedRangeCopy(*resource, data.data, offset, data.size)) {
+            return;
+        }
+        // Allocation failure: a host write is safe only after all prior work retires.
+        if (pVulkanRenderer && pVulkanRenderer->WaitForSubmitIndex(
+                pVulkanRenderer->GetSyncPointSubmitIndex(), UINT64_MAX, true)) {
+            resource->buffer.Upload(data.data, data.size, offset);
+        } else {
+            MGLOG_E_ONCE("VkBufferManager::OnResidentSubData: ordered upload failed");
         }
     }
 
@@ -536,7 +565,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return;
         }
 
-        if (!StagedRangeCopy(*resource, bufferObject, offset, size)) {
+        if (!StagedRangeCopy(*resource, bufferObject.MappedData() + offset, offset, size)) {
             SwapStorageAndUploadAll(*resource, bufferObject);
         }
     }
