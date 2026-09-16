@@ -2093,6 +2093,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const SizeT offset = static_cast<SizeT>(MG_Pipe::MGPipeSubDataBufferOffset(record));
                 const SizeT size = static_cast<SizeT>(MG_Pipe::MGPipeSubDataBufferSize(record));
                 auto* resource = FindBufferResourceForHandle(res);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // R-11 / ID-52 item 3: under an ACTIVE TRANSPORT this record's bytes are the ONLY
+                // delivery of the buffer's content - the client sends no companion pointer and the
+                // server has no MappedData to fall back on. But the twin is created LAZILY at the
+                // first draw (Ops_H_Create is a no-op by D-A2), which is AFTER this record, so a
+                // subdata that finds no twin would return here and the bytes would be lost - the
+                // draw then uploads an empty/shifted store (TriangleScenario read a blue triangle
+                // before this). So under split the subdata MINTS the twin it needs to stage into.
+                // Monolith is untouched: the twin stays lazy there because the frontend object's
+                // MappedData is the source and nothing is lost by deferring the allocation (D-A2).
+                if (resource == nullptr && bytes != nullptr &&
+                    MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                    resource = GetOrCreateBufferResourceForHandle(res);
+                }
+#endif
                 if (!resource) return;
                 // M-2: UNDER pendingMutex, because this line runs BEFORE the CanTouchGLNow()
                 // test below - i.e. on the arm D-A2 deliberately keeps reachable off the render
@@ -2926,6 +2941,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // fallback for the drains that have NO object (the readback flush), and it is
             // nulled at both of those events.
             const auto liveHostBase = [&resource, &bufferObject]() -> const Uint8* {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // M-2 / codex 3 / ID-52 item 3: under an ACTIVE TRANSPORT the server's staged
+                // copy (resource->hostBytes, filled by MGL_SERVER_STAGED_ADOPT in Ops_H_SubData /
+                // Ops_H_FlushRange) is the ONLY authoritative base. Preferring the frontend
+                // object's MappedData() here - which under inproc is always non-null, same process
+                // - meant every reduced-path drain read the CLIENT's shadow and NEVER the server's,
+                // so a corrupt staged upload rendered the frontend's correct bytes and the R-2.5
+                // 0xDD audit could not reach a draw. R-2 / table 3: honest inproc is inproc that
+                // does not read the client object's memory. Under monolith nothing changes.
+                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                    return resource->hostBytes;
+                }
+#endif
                 if (bufferObject) return bufferObject->MappedData();
                 return resource->hostBytes;
             };
@@ -2942,6 +2970,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 resource->persistentMapped = false;
                 resource->persistentPtr = nullptr;
                 resource->immutableStorage = false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // m-5 / codex 5: OnBackendContextDestroyed ran MGL_SERVER_STAGED_DROP_ALL(), which
+                // frees every server shadow but does NOT null the hostBytes that name them - so a
+                // twin that SURVIVES a context loss still carries a base into the freed allocation.
+                // Null it here, where a surviving twin is re-armed - but ONLY when the shadow is
+                // really gone. This block also runs on a twin's FIRST ensure (contextGeneration
+                // starts mismatched), and there the shadow a preceding resource_subdata just staged
+                // is still live; nulling it then would drop the reduced path's own bytes (it did,
+                // and TriangleScenario read the wrong VBO). HasShadow is the discriminator: false
+                // after DropAll, true after an ordinary Adopt.
+                if (!ServerStaged().HasShadow(resource)) {
+                    resource->hostBytes = nullptr;
+                }
+#endif
             }
 
             // An immutable store nothing maps any more, retired here on the thread that can.
@@ -2977,6 +3019,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     resource->storageInitialized = true;
                     resource->pendingRespecify = false;
                     BindBufferId(TempBufferTarget, reused);
+                    // M-3 / codex 4: this is a WHOLE-STORE upload from the base, and under split
+                    // the base is the server shadow (M-2), whose zero-filled bytes past the staged
+                    // coverage are not the application's - uploading them is the silent data loss
+                    // the M-6 ruling forbids. RequireCoverage is a no-op for the legacy arm's
+                    // MappedData() and for a non-copying store; under split it Fatals by name on a
+                    // sparse shadow rather than seeding the driver with zeroes.
+                    MGL_SERVER_STAGED_REQUIRE(*resource, liveHostBase(), 0, poolSize,
+                                              "pool_reuse_whole_store");
                     g_GLESFuncs.glBufferSubData(TempBufferTarget, 0, (GLsizeiptr)poolSize, liveHostBase());
                     if (MG_Util::PipeStats::Enabled()) {
                         MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer,
@@ -3050,8 +3100,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Bool shadowHasContent =
                 bufferObject ? bufferObject->HasDefinedContent() : (record->Desc.HasDefinedContent != 0);
             const void* initialData = shadowHasContent ? hostBase : nullptr;
+            // M-3 / codex 4: a RespecifyStorageWith(..., initialData != nullptr) is a WHOLE-STORE
+            // [0, size) upload from the base, so it owes the same coverage the pending-range drain
+            // below owes - the two respecify arms were the readers M-6's "never widened" rule did
+            // not reach. No-op for the legacy arm's MappedData() and for a non-copying store; a
+            // Fatal{StageSnapshotTooNarrow, "respecify_whole_store"} under split when the shadow's
+            // coverage does not span the store, instead of uploading its zero-fill as content.
+            const auto requireWholeStoreCoverage = [&]() {
+                if (initialData != nullptr) {
+                    MGL_SERVER_STAGED_REQUIRE(*resource, static_cast<const Uint8*>(initialData), 0,
+                                              size, "respecify_whole_store");
+                }
+            };
 
             if (resource->pendingRespecify || !resource->storageInitialized || resource->storageSize != size) {
+                requireWholeStoreCoverage();
                 RespecifyStorageWith(*resource, size, usage, initialData, serial);
             } else if (!resource->pendingRanges.empty()) {
                 // Same rule as Ops_H_Readback's, at the draw-time drain: with no frontend object
@@ -3062,6 +3125,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             } else if (resource->syncedChangeSerial != serial) {
                 // Mutations this backend could not track (the table was unregistered between
                 // contexts); re-upload everything.
+                requireWholeStoreCoverage();
                 RespecifyStorageWith(*resource, size, usage, initialData, serial);
             }
             return resource;
@@ -3114,6 +3178,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 resource->persistentPtr = nullptr;
                 resource->immutableStorage = false;
             }
+            // m-5: the LEGACY arm (EnsureBufferResource) is reached only under monolith/push, where
+            // liveHostBase reads the frontend object's MappedData rather than a server shadow, so
+            // there is no freed server base to null here - the split freed-base hazard lives in
+            // EnsureBufferResourceForHandle above, guarded by HasShadow.
 
             // An immutable store nothing maps any more: a respecification of a buffer that
             // had been persistently mapped, which Ops_Respecify could not retire because it

@@ -29,6 +29,11 @@
 //     exists to test: bytes that were copied survive the source being overwritten with 0xDD.
 
 #include <Config.h>
+#include <MG_Backend/BackendObject.h>
+#include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/DirectGLES/BackendObject_DirectGLES.h>
+#include <MG_Backend/DirectGLES/Managers.h>
+#include <MG_Backend/DirectGLES/Utils.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Remote/CapsCodec.h>
@@ -41,7 +46,10 @@
 #include <MG_Remote/Transport/Ring.h>
 #include <MG_Remote/Transport/SessionRings.h>
 #include <MG_Remote/Wire/PipeWireCodec.h>
+#include <MG_State/GLState/TextureState/TextureEnum.h>
 #include <MGGitHash.h>
+
+#include <csignal>
 
 #include <gtest/gtest.h>
 
@@ -184,6 +192,23 @@ namespace {
             return producer.WaitForApplied(seq, timeoutMs) == Transport::SessionWait::Reached;
         }
 
+        // C10: poll the flag the Doorbell sets ONLY while it is actually blocked in Park
+        // (RingControl::consumerParked, stored inside Doorbell::Wait's blocking section and
+        // cleared on wake), NOT ServerLoop::ParkCount(), which increments on the way TOWARD a park
+        // and stays set even if Wait returns without ever blocking. A loop whose wait was replaced
+        // by `true` never sets this, so a poll for it TIMES OUT - which is what makes "the apply
+        // thread really parked" a claim that can go red for its own reason.
+        bool WaitUntilTrulyParked(Uint32 timeoutMs = 5000) {
+            Transport::RingControl* control = clientSegments.CmdControl();
+            if (control == nullptr) return false;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+            while (std::chrono::steady_clock::now() < deadline) {
+                if (control->consumerParked.load(std::memory_order_acquire) == 1u) return true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            return false;
+        }
+
         void Stop() {
             // Table 3's order: the client publishes and lets the server drain (EmitAndWait
             // already did), then Doorbell::Kill through the transport's Shutdown, THEN the
@@ -226,12 +251,12 @@ TEST(ServerLoopTest, AControlRequestRunsOnTheApplyThreadAndUnparksIt) {
     ASSERT_TRUE(fixture.StartLoop());
 
     Server::ServerLoop& loop = Server::ServerLoopInstance();
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (loop.ParkCount() == 0 && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    ASSERT_GT(loop.ParkCount(), 0u)
-        << "the apply thread never parked, so this case would prove nothing about waking it";
+    // C10: arm on the ACTUAL blocked park (consumerParked), not ParkCount() - a loop that spun
+    // instead of blocking would pass a ParkCount() check without the wait ever mattering, which
+    // was the whole finding.
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked())
+        << "the apply thread never entered the blocking park, so this case would prove nothing "
+           "about waking it (ParkCount() counts an intention, not a park)";
 
     struct Probe {
         std::thread::id ranOn{};
@@ -296,11 +321,10 @@ TEST(ServerLoopTest, StopKillsTheDoorbellJoinsAndTheThreadReallyExits) {
     ASSERT_TRUE(fixture.StartLoop());
     Server::ServerLoop& loop = Server::ServerLoopInstance();
 
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (loop.ParkCount() == 0 && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    ASSERT_GT(loop.ParkCount(), 0u) << "the thread must be parked for this to be a shutdown test";
+    // C10: the same actual-park arming - a shutdown test whose thread never blocked would not be
+    // exercising the lost-wakeup path table 3 step 2 is about.
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked())
+        << "the thread must be BLOCKED in the park for this to be a shutdown test";
     ASSERT_TRUE(loop.Running());
 
     const auto began = std::chrono::steady_clock::now();
@@ -323,11 +347,7 @@ TEST(ServerLoopTest, TheAffinityStringResolvesToAMaskAndTheMaskIsLogged) {
     ServerFixture fixture;
     ASSERT_TRUE(fixture.Handshake());
     ASSERT_TRUE(fixture.StartLoop());
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (Server::ServerLoopInstance().ParkCount() == 0 &&
-           std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked());
     EXPECT_EQ(Server::ServerLoopInstance().ResolvedAffinityMask(), 0u)
         << "`off` did not resolve to no-affinity";
 
@@ -336,9 +356,48 @@ TEST(ServerLoopTest, TheAffinityStringResolvesToAMaskAndTheMaskIsLogged) {
         << "the apply thread did not log its resolved affinity mask; an affinity that silently "
            "did nothing is indistinguishable from one that worked";
     EXPECT_NE(log.find("mgl-srv-apply started"), std::string::npos);
+    // M-4: `off` must be a RECOGNISED string, not fall through to the numeric-parse "not
+    // recognised" arm. Deleting the `off` branch in RequestedAffinityMask makes off unrecognised;
+    // this asserts it did not, so that branch's deletion goes red here (its own reason).
+    EXPECT_EQ(log.find("is not `auto`, `off` or a number"), std::string::npos)
+        << "`off` was treated as an unrecognised affinity string; its own branch is gone";
 
     fixture.Stop();
     MG_Config::Ipc.ServerAffinity = saved;
+}
+
+// M-4 / codex 11, the other half: an EXPLICIT mask must resolve to itself and be LOGGED as the
+// EFFECTIVE mask the kernel took, not the requested one. `off` -> 0 and `0x3` -> 0x3 are two
+// answers that must DIFFER, so the resolver cannot be a constant; and reading the mask back with
+// sched_getaffinity is what makes a cpuset that trimmed the request visible (codex 11), which the
+// requested-mask log hid. Red once by making ApplyAffinity return `requested`: the effective read
+// is what a trimmed request diverges from, and the explicit-mask assert is what catches a broken
+// resolver.
+TEST(ServerLoopTest, TheExplicitAffinityMaskResolvesToItselfAndIsLogged) {
+#if defined(__linux__) || defined(__ANDROID__)
+    if (std::thread::hardware_concurrency() < 2) {
+        GTEST_SKIP() << "needs at least 2 online cpus to honour 0x3";
+    }
+    const String saved = MG_Config::Ipc.ServerAffinity;
+    MG_Config::Ipc.ServerAffinity = "0x3"; // cpu 0 and cpu 1, both online on any 2+-cpu box
+
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked());
+
+    EXPECT_EQ(Server::ServerLoopInstance().ResolvedAffinityMask(), 0x3u)
+        << "an explicit mask the box can honour did not resolve to itself (0x3); the effective "
+           "mask read back from the kernel differs from the request, or the resolver is broken";
+    const std::string log = ReadLog();
+    EXPECT_NE(log.find("RESOLVED mask 0x3"), std::string::npos)
+        << "the logged RESOLVED mask is not the effective 0x3";
+
+    fixture.Stop();
+    MG_Config::Ipc.ServerAffinity = saved;
+#else
+    GTEST_SKIP() << "affinity is a Linux/Android facility";
+#endif
 }
 
 // =====================================================================================
@@ -558,6 +617,25 @@ TEST(StagedShadowTest, CoverageIsExactAndAGapIsNotCovered) {
     EXPECT_TRUE(store.IsCovered(&key, 0, 48));
 }
 
+// m-5's discriminator, at unit scope: HasShadow is TRUE for a key that was Adopted and FALSE once
+// DropAll has run - which is exactly what tells the generation-reset block whether a twin's
+// hostBytes names a live server shadow (keep it) or a freed one (null it). A version that answered
+// "always live" would let a freed base reach the driver; "always gone" would drop a base a subdata
+// just staged in the same generation (that regression really happened - TriangleScenario read a
+// shifted VBO). Both directions are asserted here.
+TEST(StagedShadowTest, HasShadowIsTrueAfterAdoptAndFalseAfterTheShadowIsDropped) {
+    Server::StagedShadowStore store(/*copies=*/true);
+    const int key = 0;
+    Vector<Uint8> bytes(16, Uint8{0x44});
+    EXPECT_FALSE(store.HasShadow(&key)) << "nothing staged yet";
+    store.Adopt(&key, 16, bytes.data(), 0, 16);
+    EXPECT_TRUE(store.HasShadow(&key)) << "a staged key must read live, or the reset block nulls a "
+                                          "base a subdata just filled";
+    store.DropAll();
+    EXPECT_FALSE(store.HasShadow(&key)) << "after DropAll the base is freed and must read gone, or "
+                                           "a surviving twin hands the driver a dangling pointer";
+}
+
 TEST(StagedShadowTest, DropForgetsOneResourceAndDropAllForgetsEveryOne) {
     Server::StagedShadowStore store(/*copies=*/true);
     const int a = 0;
@@ -591,12 +669,187 @@ TEST(StagedShadowTest, ADrainOutsideTheStagedCoverageIsFatalByName) {
     // legacy arm, whose MappedData() is valid for the whole store.
     store.RequireCoverage(&key, bytes.data(), 0, 64, "unit");
 
-    EXPECT_DEATH(store.RequireCoverage(&key, base, 0, 64, "unit_out_of_range"), "");
+    // m-2: name the death MODE and the diagnostic, not just "the process died". The empty regex
+    // accepted any death, including a SIGSEGV inside RequireCoverage; KilledBySignal(SIGABRT) pins
+    // it to the Fatal's abort() (a segfault is SIGSEGV and fails this), and the log grep names the
+    // exact wording. The log flush is pinned: Log.cpp's WriteToFile fflushes after every write and
+    // MGLOG_F logs before abort(), so the line is on disk in the forked child before it dies.
+    EXPECT_EXIT(store.RequireCoverage(&key, base, 0, 64, "unit_out_of_range"),
+                ::testing::KilledBySignal(SIGABRT), ".*");
     const std::string log = ReadLog();
     EXPECT_NE(log.find("Fatal{StageSnapshotTooNarrow, \"unit_out_of_range\"}"), std::string::npos)
         << "the abort happened but not for this rule's reason; the log says: " << log;
 }
 #endif
+
+// =====================================================================================
+// R-11's PRODUCTION wiring (M-1 / codex 8), the EGL lifecycle seams (C2/M-6/M-7/C6/C7)
+// =====================================================================================
+
+// M-1 / codex 8: the R-11 gate that drives the PRODUCTION path - the real resource op table
+// installed by RegisterBufferBackendOps, dispatched through MGPipeGetResourceOps()->SubData, i.e.
+// the exact Managers.cpp:2118 call site R-11 changed - and NOT StagedShadowStore in isolation.
+// StagedShadowTest stays as the container test; this is the gate that goes red under the two
+// perturbations the reviewer used (restore `hostBytes = raw - offset`, neuter the coverage clamp).
+#if !defined(_WIN32)
+TEST(StagedShadowProductionTest, SubDataThroughTheRealOpsTableCopiesAndSurvivesTheSourcePoison) {
+    // MG_Config::Transport is InProcess (main), so ServerStaged() latches its copying arm on.
+    MG_Backend::DirectGLES::BufferImpl::RegisterBufferBackendOps();
+    const MG_Pipe::MGPipeResourceOps* ops = MG_Pipe::MGPipeGetResourceOps();
+    ASSERT_NE(ops, nullptr) << "RegisterBufferBackendOps did not install the resource op table";
+    ASSERT_NE(ops->SubData, nullptr);
+
+    MG_Pipe::MGPipeHandle res{};
+    res.Slot = 7;
+    res.Gen = 1;
+    auto* twin = MG_Backend::DirectGLES::BufferImpl::GetOrCreateBufferResourceForHandle(res);
+    ASSERT_NE(twin, nullptr);
+
+    Vector<Uint8> src(32, Uint8{0xAB});
+    MG_Pipe::MGPSubData rec{};
+    rec.Res = res;
+    rec.Target = MG_Pipe::MGPipePackSubDataTarget(MG_Pipe::kMGPipeResourceTargetBuffer, 0u);
+    ASSERT_TRUE(MG_Pipe::MGPipeSetSubDataBufferRange(rec, 0, src.size()));
+    // THE PRODUCTION CALL. Not StagedShadowStore::Adopt directly - the whole point of M-1.
+    ops->SubData(res, rec, src.data());
+
+    auto* found = MG_Backend::DirectGLES::BufferImpl::FindBufferResourceForHandle(res);
+    ASSERT_NE(found, nullptr);
+    ASSERT_NE(found->hostBytes, nullptr) << "Ops_H_SubData recorded no base at all";
+    EXPECT_NE(found->hostBytes, static_cast<const Uint8*>(src.data()))
+        << "hostBytes points into the CLIENT's staging bytes (raw - offset), the exact rule-C "
+           "violation R-11 exists to fix - restore that line and this goes red";
+
+    // w1's retired-stage poison, by hand and at the right moment: the record has 'retired', so the
+    // client's staging run is dead. A server that copied still reads the original bytes.
+    std::fill(src.begin(), src.end(), Uint8{0xDD});
+    for (SizeT i = 0; i < src.size(); ++i) {
+        ASSERT_EQ(found->hostBytes[i], 0xAB)
+            << "byte " << i << " of the server base is the poison: Ops_H_SubData kept a pointer "
+               "into SEG_STAGE instead of copying";
+    }
+    MG_Backend::DirectGLES::BufferImpl::UnregisterBufferBackendOps();
+}
+#endif
+
+// C2: after the loop has stopped, a forwarder call must return NOT_INITIALIZED and must NOT run
+// inline on the caller. The pre-fix code read m_running outside the control mutex and ran work
+// inline for !m_running - which in the race the verifier's latch harness reproduced
+// (v1-codex-verify.md C2) hung forever posting into a mailbox no thread pumps. The fix clears
+// m_running UNDER the mutex and re-checks it there; this is the deterministic half of it (no
+// latch needed: after Stop() m_running is false for certain).
+TEST(ServerLoopTest, AForwarderCallAfterTheLoopStoppedReturnsNotInitializedAndDoesNotRunInline) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked());
+    fixture.Stop();
+    ASSERT_FALSE(Server::ServerLoopInstance().Running());
+
+    struct Probe {
+        Bool ran = false;
+    } probe;
+    const MobileGLResult rc = Server::ServerLoopInstance().RunOnApplyThread(
+        +[](void* user) -> MobileGLResult {
+            static_cast<Probe*>(user)->ran = true;
+            return MOBILEGL_OK;
+        },
+        &probe);
+
+    EXPECT_EQ(rc, MOBILEGL_ERR_NOT_INITIALIZED)
+        << "a forwarder call after Stop() did not return NOT_INITIALIZED (old code ran it inline)";
+    EXPECT_FALSE(probe.ran) << "the work ran on the caller after the loop stopped";
+}
+
+// M-7: the OTHER !m_running arm - a backend built but no thread (Start refused / std::thread
+// threw) - must be a NAMED Fatal, never a silent inline EGL-on-the-app-thread fallback. A split
+// lane that ran eglMakeCurrent on the app thread would render correctly with the context on the
+// wrong thread, which is the one outcome R-1 exists to make impossible.
+#if !defined(_WIN32)
+TEST(ServerLoopTest, AForwarderWithABackendButNoThreadIsFatalNotAnAppThreadFallback) {
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_EQ(loop.CreateBackend(BackendType::DirectGLES), MOBILEGL_OK);
+    ASSERT_FALSE(loop.Running());
+    // A backend exists, no apply thread runs. A forwarder must abort by name.
+    EXPECT_EXIT(Server::ServerReleaseEGLResources(), ::testing::KilledBySignal(SIGABRT), ".*");
+    const std::string log = ReadLog();
+    EXPECT_NE(log.find("Fatal{ApplyThreadNotRunning"), std::string::npos)
+        << "the abort was not the M-7 named Fatal; the log says: " << log;
+    loop.Stop(); // drop the backend in the parent
+}
+#endif
+
+// M-6: ServerLoop::Stop() with no thread ever started must still DROP the private backend, which
+// ShutdownSplitRoles relies on for the early-Start-failure path. If it does not, the server's
+// BackendObject stays alive with g_resourceOps pointing into it and every later CreateBackend in
+// the process is refused - which is exactly the leak M-6 names.
+TEST(ServerLoopTest, StopWithoutAStartedThreadStillDropsThePrivateBackend) {
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_EQ(loop.CreateBackend(BackendType::DirectGLES), MOBILEGL_OK);
+    ASSERT_NE(loop.Backend(), nullptr);
+    loop.Stop(); // the !joinable arm
+    EXPECT_EQ(loop.Backend(), nullptr) << "Stop() left the private backend alive with no thread";
+    EXPECT_FALSE(loop.Running());
+    // A second bring-up must now succeed; CreateBackend refuses if m_backend != nullptr.
+    EXPECT_EQ(loop.CreateBackend(BackendType::DirectGLES), MOBILEGL_OK)
+        << "the leaked backend blocks the next split bring-up (CreateBackend's m_backend guard)";
+    loop.Stop();
+}
+
+// C6: the server's format-capability accessor reads the SERVER's own backend cache, not the
+// process global (which under split is the CLIENT's BackendObject_Remote). Pointer-identity: no
+// mask injection needed - ActiveBackendFormatCaps() must return the server's cache address, not
+// the global's. Red once by making ActiveBackendFormatCaps return pActiveBackendObject's.
+TEST(ServerLoopTest, TheServerFormatCapsAccessorReadsTheServersOwnBackendNotTheGlobal) {
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_EQ(loop.CreateBackend(BackendType::DirectGLES), MOBILEGL_OK);
+    MG_Backend::BackendObject* server = loop.Backend();
+    ASSERT_NE(server, nullptr);
+
+    // A DIFFERENT object in the global the seven C6 reads used to follow.
+    auto client = MakeUnique<MG_Backend::DirectGLES::BackendObject_DirectGLES>();
+    MG_Backend::BackendObject* clientRaw = client.get();
+    MG_Backend::pActiveBackendObject = std::move(client);
+
+    const MG_Backend::FormatCapabilityCache* caps = MG_Backend::DirectGLES::ActiveBackendFormatCaps();
+    EXPECT_EQ(caps, &server->GetFormatCapabilities())
+        << "ActiveBackendFormatCaps returned the process global's cache; under split that is the "
+           "CLIENT's BackendObject_Remote, not the server's private backend";
+    EXPECT_NE(caps, &clientRaw->GetFormatCapabilities());
+
+    loop.Stop();
+    MG_Backend::pActiveBackendObject.reset();
+}
+
+// C7 / ID-54: the make-current decision. A new tuple binds; an identical repeat is a no-op; a
+// release request (the three NO_* markers) is recorded, not forwarded. The native-bind COUNT is a
+// joint-lane control (it needs a real EGL context); this is the pure decision, which is what
+// keeps "the context is bound once and held for life" from being a per-call storm. Red once by
+// deleting the RepeatNoOp arm - an identical repeat then classifies as NativeBind.
+TEST(ServerLoopTest, MakeCurrentClassifiesRepeatAndReleaseWithoutRebinding) {
+    const EGLDisplay dpy = reinterpret_cast<EGLDisplay>(0x1);
+    const EGLSurface draw = reinterpret_cast<EGLSurface>(0x2);
+    const EGLSurface read = reinterpret_cast<EGLSurface>(0x2);
+    const EGLContext ctx = reinterpret_cast<EGLContext>(0x3);
+
+    // Nothing current yet: a genuine bind.
+    EXPECT_EQ(Server::ClassifyEglMakeCurrent(false, EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                                             EGL_NO_CONTEXT, dpy, draw, read, ctx),
+              Server::EglBindAction::NativeBind);
+    // The SAME tuple already held: a no-op, no native bind, no owner write.
+    EXPECT_EQ(Server::ClassifyEglMakeCurrent(true, dpy, draw, read, ctx, dpy, draw, read, ctx),
+              Server::EglBindAction::RepeatNoOp)
+        << "an identical make-current was classified as a native rebind; the owner would be "
+           "written twice and the caches invalidated for nothing";
+    // A DIFFERENT tuple: a real rebind.
+    const EGLContext otherCtx = reinterpret_cast<EGLContext>(0x9);
+    EXPECT_EQ(Server::ClassifyEglMakeCurrent(true, dpy, draw, read, ctx, dpy, draw, read, otherCtx),
+              Server::EglBindAction::NativeBind);
+    // A release request, whatever is current: recorded, not forwarded (the context is held).
+    EXPECT_EQ(Server::ClassifyEglMakeCurrent(true, dpy, draw, read, ctx, dpy, EGL_NO_SURFACE,
+                                             EGL_NO_SURFACE, EGL_NO_CONTEXT),
+              Server::EglBindAction::ClientRelease);
+}
 
 int main(int argc, char** argv) {
     // Before anything logs: MG_Util::Debug::InitFile() reads the variable once, on the first

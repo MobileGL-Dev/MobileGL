@@ -812,6 +812,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Int maxSamples = 0;
         const SizeT formatIndex = static_cast<SizeT>(logicalFormat);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // C6 / ID-52: read the ROLE's own cache. Under split that is the server's private backend
+        // (ActiveBackendFormatCaps), not pActiveBackendObject, which holds the client's mirror.
+        const FormatCapabilityCache* activeCaps = ActiveBackendFormatCaps();
+        if (activeCaps != nullptr && targetIndex < kFormatCapabilityTargetCount &&
+            formatIndex < kFormatCapabilityFormatCount) {
+            // Descending, so the head is the largest count this device actually allocated.
+            const Vector<Int>& probedCounts = activeCaps->SampleCounts[targetIndex][formatIndex];
+            if (!probedCounts.empty()) {
+                maxSamples = probedCounts.front();
+            }
+        }
+#else
         if (pActiveBackendObject && targetIndex < kFormatCapabilityTargetCount &&
             formatIndex < kFormatCapabilityFormatCount) {
             // Descending, so the head is the largest count this device actually allocated.
@@ -821,6 +834,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 maxSamples = probedCounts.front();
             }
         }
+#endif
         if (maxSamples <= 0) {
             maxSamples = GetGLESFormatMaxSamples(g_GLESCapabilities, logicalFormat, imageFormat);
         }

@@ -1870,7 +1870,20 @@ namespace MobileGL::MG_Pipe {
         if (stored == nullptr) return;
 
         const char* fault = BufferRangeFault(record.Offset, record.Size, stored->Desc.Width);
-        if (fault == nullptr && record.Size != 0 && bytes == nullptr) {
+        // item-12 / R-13.2 / ID-37: the "a non-empty flush carries no bytes" fault is a MONOLITH
+        // rule. Under an ACTIVE TRANSPORT resource_flush_range carries no companion pointer AT ALL
+        // (contract table 1 row 20 / R-13.2): the covering resource_subdata already staged those
+        // bytes into the server-owned StagedShadowStore (R-11), and Ops_H_FlushRange reads that
+        // shadow, not the record. So a null `bytes` on a non-empty flush is the NORMAL split case,
+        // not corruption - and a flush whose bytes were genuinely never staged is caught more
+        // precisely downstream by R-11's Fatal{StageSnapshotTooNarrow}, which names the missing
+        // subdata rather than the flush. The check stays exact under monolith
+        // (MG_Config::Transport is a constexpr Monolith in a non-disaggregated build, so this is
+        // `&& true` there and the codegen is unchanged). This was the only seam between the joint
+        // inproc lane's 14/21 and 21/21: all seven PersistentCoherentMapScenario entries aborted
+        // here (c1-v2.md 6).
+        if (fault == nullptr && record.Size != 0 && bytes == nullptr &&
+            MG_Config::Transport == MG_Config::TransportMode::Monolith) {
             fault = "a non-empty flush carries no bytes";
         }
         if (fault != nullptr) {

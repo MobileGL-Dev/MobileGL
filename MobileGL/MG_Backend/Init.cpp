@@ -181,6 +181,17 @@ namespace MobileGL::MG_Backend {
         // owns. A var-tail still named by an unapplied record is a use-after-free the join is
         // what prevents, which is why the order is not a preference.
         MG_Remote::Client::ClientSessionInstance().Stop();
+        // M-6: ClientSession::Stop's !m_started arm (a Start that FAILED after
+        // ServerSession::Accept - a refused Accept, an invalid cmd/reply ring) tears down only
+        // the client half and never stops the apply thread or drops the server's private backend,
+        // which ServerLoop::CreateBackend already built and which holds the process-wide
+        // g_resourceOps. So call ServerLoop::Stop() here unconditionally. It is idempotent: on the
+        // started path ClientSession::Stop already joined the thread, so this hits Stop's
+        // !joinable arm, which resets a backend that never ran a thread and is otherwise a no-op.
+        // Without this an early Start failure leaves BackendObject_DirectGLES permanently alive
+        // and every later split bring-up in the process fails at CreateBackend's m_backend!=null
+        // guard.
+        MG_Remote::Server::ServerLoopInstance().Stop();
     }
 #endif
 
@@ -204,6 +215,13 @@ namespace MobileGL::MG_Backend {
                 MGLOG_W("Failed to initialize MobileGL backend libraries for the remote object");
                 return;
             }
+            // m-6: the honesty cross-check runs a SECOND time, now that step 4's
+            // pActiveBackendObject (the client's BackendObject_Remote) exists and its
+            // Initialize() has run inside InitSpecificBackendLibs. Anything the client object
+            // registered into MGPipeSetResourceOps after the step-2 check is invisible to that
+            // first call; re-asserting here costs one call and closes the window in which a
+            // client-registered g_resourceOps would flip the answer under the applier's feet.
+            AssertConsumerMaskIsHonest(ConsumedSubsystemsFor(MG_Config::ActiveBackendType));
             LogBackendInfo();
             return;
         }
