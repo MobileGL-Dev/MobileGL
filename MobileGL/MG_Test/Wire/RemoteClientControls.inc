@@ -393,4 +393,136 @@ int RunPackGpuControl(bool split) {
                 ok ? "PASS" : "FAIL", DescribeStatus(child).c_str(), child.Log.c_str());
     return ok ? 0 : 1;
 }
+namespace {
+struct PatternReadPeer : ReadPeer {
+    Bool OnReadPixels(const MGPReadbackInfo& info, Uint64 seq, Codec::ReplySink* replies) override {
+        Uint8 bytes[32];
+        for (Uint8 i = 0; i < sizeof(bytes); ++i) bytes[i] = i + 1;
+        replies->PostReply(seq, 0, bytes, info.DstSize);
+        return true;
+    }
+};
+
+std::atomic<Bool> retirementRetryStarted{false};
+std::atomic<Bool> retirementWaitObserved{false};
+void HoldRetirementUntilProducerWaits() {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (retirementRetryStarted.load() && ClientSessionInstance().Control()->producerParked.load()) {
+            retirementWaitObserved.store(true);
+            break;
+        }
+        std::this_thread::yield();
+    }
+    Srv::ServerLoopInstance().SetBeforeRetireHookForTesting(nullptr);
+}
+
+struct DrawPeer : Codec::WireVerbSink {
+    Bool OnDrawVbo(const MGPDrawInfo&, const MGPDrawRange*, const MGHostSpan*,
+                   const MGPDrawIndirect*) override { return true; }
+    void Install() {
+        Srv::ServerLoopInstance().RunOnApplyThread([](void* self) {
+            auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
+            decoder.SetVerbSink(static_cast<DrawPeer*>(self));
+            return MOBILEGL_OK;
+        }, this);
+    }
+};
+}
+
+TEST(RemoteClientControls, ReadPixelsSwapsComponentsInTightAndScatteredReplies) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+        PatternReadPeer peer;
+        peer.Install();
+        struct Pair { GLenum format; GLenum type; Uint32 bpp; Uint32 group; };
+        for (const Pair pair : {Pair{GL_RGBA, GL_UNSIGNED_SHORT, 8, 2},
+                                Pair{GL_RGBA, GL_FLOAT, 16, 4},
+                                Pair{GL_RGBA, GL_UNSIGNED_INT_8_8_8_8, 4, 4},
+                                Pair{GL_DEPTH_STENCIL, GL_FLOAT_32_UNSIGNED_INT_24_8_REV, 8, 4},
+                                Pair{GL_RGBA, GL_UNSIGNED_BYTE, 4, 1}}) {
+            for (int scatter : {0, 1}) for (int swap : {0, 1}) {
+                auto& context = *MG_State::pGLContext;
+                context.SetPixelStoreParam(PixelStoreParam::PackSwapBytes, swap);
+                context.SetPixelStoreParam(PixelStoreParam::PackRowLength, scatter ? 3 : 0);
+                context.SetPixelStoreParam(PixelStoreParam::PackSkipPixels, scatter);
+                Uint8 result[160];
+                std::memset(result, 0xCD, sizeof(result));
+                RemoteEmitTable().GL.ReadPixels(0, 0, 1, 2, pair.format, pair.type, result);
+                for (Uint32 at = 0; at < sizeof(result); ++at) {
+                    Uint8 expected = 0xCD;
+                    for (Uint32 row = 0; row < 2; ++row) {
+                        const Uint32 begin = (scatter ? 1 + 3 * row : row) * pair.bpp;
+                        if (at >= begin && at < begin + pair.bpp) {
+                            Uint32 i = at - begin;
+                            if (swap) i = (i / pair.group) * pair.group + pair.group - 1 - i % pair.group;
+                            expected = row * pair.bpp + i + 1;
+                        }
+                    }
+                    if (result[at] != expected) ::_exit(110);
+                }
+            }
+        }
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+TEST(RemoteClientControls, PersistentMapProducerRefusesTheApplyThread) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+            PersistentMapTracker::Instance().PushAllMembers();
+            return MOBILEGL_OK;
+        }, nullptr);
+    });
+    ExpectNamedAbort(child, "Fatal{RoleViolation, \"PushAllMembers\"}");
+}
+
+TEST(RemoteClientControls, CommandWrapWaitsForRetirementAfterThePriorRecordApplied) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.RingMb = 1;
+        StartControlSession();
+        DrawPeer peer;
+        peer.Install();
+        Vector<MGPDrawRange> ranges(32768);
+        MGPDrawInfo info{};
+        auto emit = [&](Uint32 count) {
+            info.NumDraws = count;
+            return ClientSessionInstance().EmitAndWait(MGPWireOp::DrawVbo, &info, sizeof(info),
+                ranges.data(), count * sizeof(MGPDrawRange), nullptr, 0, nullptr);
+        };
+        emit(28000); // Position the next record so that its successor needs a wrap pad.
+        peer.Install(); // A mailbox round trip also lets the previous drain retire.
+        Srv::ServerLoopInstance().SetBeforeRetireHookForTesting(&HoldRetirementUntilProducerWaits);
+        const auto prior = emit(32768);
+        if (ClientSessionInstance().Control()->retiredSeq.load() >= prior) ::_exit(111);
+        retirementRetryStarted.store(true);
+        const auto next = emit(32768);
+        if (next != prior + 1 || !retirementWaitObserved.load()) ::_exit(112);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+TEST(RemoteClientControls, StagingWaitsForRetirementAfterThePriorRecordApplied) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.StageMb = 1;
+        StartControlSession();
+        Vector<Uint8> bytes(768 * 1024, 0x57);
+        auto& session = ClientSessionInstance();
+        session.Encoder().StageBytes(bytes.data(), bytes.size());
+        Srv::ServerLoopInstance().SetBeforeRetireHookForTesting(&HoldRetirementUntilProducerWaits);
+        MGPBindRenderState bind{};
+        const auto prior = session.EmitAndWait(MGPWireOp::BindRenderState, &bind, sizeof(bind),
+                                               nullptr, 0, nullptr, 0, nullptr);
+        if (session.Control()->retiredSeq.load() >= prior) ::_exit(113);
+        retirementRetryStarted.store(true);
+        session.Encoder().StageBytes(bytes.data(), bytes.size());
+        if (!retirementWaitObserved.load() || session.Encoder().StageReclaimWaits() != 1) ::_exit(114);
+        session.Stop();
+    });
+    ExpectChildSuccess(child);
+}
 #endif

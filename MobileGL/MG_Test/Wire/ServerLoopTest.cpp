@@ -1629,6 +1629,44 @@ TEST(StagedShadowProductionTest, ATwinSurvivingContextLossDropsItsFreedShadowBas
 // shows it": B is the corruption, the upload is the draw, the mapped read-back is the picture. Red
 // once by restoring the MappedData() fallback in liveHostBase(): the store then holds A, the
 // client's bytes, and the R-2.5 audit could never reach a draw again.
+TEST(ServerLoopEglTest, FrontendFramebufferDeathDeletesOnTheContextOwner) {
+    MG_Config::Features.PipePush |= MG_Pipe::kMGPipeSubsystemEsprytSlots;
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    ASSERT_TRUE(fixture.MakeCurrent());
+    namespace GLES = MG_Backend::DirectGLES;
+    static auto nativeDelete = GLES::g_GLESFuncs.glDeleteFramebuffers;
+    static std::atomic<Uint32> deleted{0};
+    static std::atomic<Bool> wrongThread{false};
+    nativeDelete = GLES::g_GLESFuncs.glDeleteFramebuffers;
+    deleted.store(0);
+    wrongThread.store(false);
+    auto framebuffer = MakeShared<MG_State::GLState::FramebufferObject>(901u);
+    GLuint driverId = 0;
+    ASSERT_EQ(OnApply([&] {
+        auto& twin = GLES::FramebufferImpl::g_backendFramebufferObjects.GetOrCreate(framebuffer);
+        twin = MakeShared<GLES::FramebufferImpl::BackendFramebufferObject>();
+        driverId = twin->GetBackendFramebufferId();
+        twin->Bind(FramebufferTarget::Draw);
+        GLES::g_GLESFuncs.glDeleteFramebuffers = +[](GLsizei count, const GLuint* names) {
+            if (!Server::ServerLoop::OnApplyThread()) wrongThread.store(true);
+            deleted.fetch_add(count);
+            nativeDelete(count, names);
+        };
+    }), MOBILEGL_OK);
+    ASSERT_NE(driverId, 0u);
+    framebuffer.reset(); // Frontend destructor runs on this client thread.
+    EXPECT_EQ(deleted.load(), 1u);
+    EXPECT_FALSE(wrongThread.load());
+    ASSERT_EQ(OnApply([&] {
+        GLES::g_GLESFuncs.glDeleteFramebuffers = nativeDelete;
+        GLint bound = -1;
+        GLES::g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &bound);
+        EXPECT_EQ(bound, 0) << "native deletion must unbind the framebuffer in the owner context";
+    }), MOBILEGL_OK);
+    fixture.TearDown();
+}
+
 TEST(StagedShadowProductionTest, TheEnsurePathUploadsTheServerShadowNotTheClientObjectsBytes) {
     EglServerFixture fixture;
     MGL_EGL_BRING_UP_OR_BAIL(fixture);
@@ -1641,6 +1679,12 @@ TEST(StagedShadowProductionTest, TheEnsurePathUploadsTheServerShadowNotTheClient
     ASSERT_NE(buffer->MappedData(), nullptr);
     ASSERT_EQ(buffer->MappedData()[0], 0xA5);
     ASSERT_TRUE(buffer->HasDefinedContent());
+
+    // Keep this object coherently mapped: Ensure's retained backend sync site must not
+    // re-enter the client producer and replace the staged 0x5B bytes with this 0xA5 map.
+    ASSERT_NE(buffer->AcquireMemoryRange({0, 64}, BufferMappingAccessBit::Write |
+                         BufferMappingAccessBit::Persistent | BufferMappingAccessBit::Coherent), nullptr);
+    ASSERT_TRUE(buffer->IsMapped());
 
     // The server shadow for the twin the draw will use: B, staged the way the wire delivers it.
     const MG_Pipe::MGPipeHandle res = DeclareBuffer(BufferDesc(26, 64, true));

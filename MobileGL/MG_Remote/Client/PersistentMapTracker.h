@@ -72,6 +72,17 @@ namespace MobileGL::MG_Remote::Client {
         // resource_subdata record there would be new behaviour, which D-J forbids.
         static Bool PushIsArmed();
 
+        // r1 (P5-close codex finding 1, ID-52): true on the SERVER role's thread - the apply thread
+        // of a running ServerLoop, which under inproc lives in this very process. This module is
+        // the CLIENT's producer: it reads the frontend object's MappedData() and pushes it as
+        // resource_subdata. On the apply thread that record is routed through the monolith adapter
+        // straight into the server's shadow (Ops_H_SubData), which REPLACES the transported bytes
+        // with client memory - and under an active transport the staged copy is the draw's ONLY
+        // base (ID-52 item 3). So the producer asks this before it runs: on the server role the
+        // answer is "there is nothing to sync" (SyncPersistentMappedRange) or a refusal by name
+        // (PushMappedSpanBlock). False in every monolith process, where no ServerLoop runs.
+        static Bool OnServerRole();
+
         // SyncPersistentMappedRange's early-out chain as a predicate. THE only spelling.
         static Bool IsLivePersistentMap(const MG_State::GLState::BufferObject& buffer);
 

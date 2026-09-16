@@ -39,6 +39,7 @@
 #include <MG_Remote/Client/EmitTables.h>
 #include <MG_Remote/Client/WireTables.h>
 #include <MG_Remote/Client/ClientSession.h>
+#include <MG_Remote/Client/PersistentMapTracker.h>
 #include <MG_Remote/Client/BackendObject_Remote.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_State/GLState/Core.h>
@@ -51,6 +52,9 @@
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/GLImpl/Drawing/GL_Drawing.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
+#include <atomic>
+#include <chrono>
+#include <thread>
 
 #if !defined(_WIN32)
 #include <csignal>

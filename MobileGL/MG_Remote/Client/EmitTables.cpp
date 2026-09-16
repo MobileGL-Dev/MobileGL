@@ -779,6 +779,23 @@ namespace MobileGL::MG_Remote::Client {
                    ReadbackBytesPerPixel(format, type);
         }
 
+        void ApplyReadbackByteSwap(void* pixels, Uint64 bytes, GLenum type,
+                                   const PixelStoreParameters& pack) {
+            if (!pack.SwapBytes || pixels == nullptr) return;
+            const auto dataType = MG_Util::ConvertGLEnumToTexturePixelDataType(type);
+            SizeT group = MG_Util::GetSizedTexturePixelDataTypeSize(dataType);
+            if (group == 0) group = MG_Util::GetBaseTexturePixelDataTypeSize(dataType);
+            // This packed depth/stencil type contains two independent 32-bit words.
+            if (type == GL_FLOAT_32_UNSIGNED_INT_24_8_REV) group = 4;
+            if (group <= 1) return;
+            auto* data = static_cast<Uint8*>(pixels);
+            for (Uint64 at = 0; at + group <= bytes; at += group) {
+                for (SizeT i = 0; i < group / 2; ++i) {
+                    std::swap(data[at + i], data[at + group - 1 - i]);
+                }
+            }
+        }
+
         // M2 / codex 11: the reply the server posted is COMPLETE and OK. A short OK reply, and a
         // DECLINED or ERROR reply with a zero payload, both leave the destination full of stale
         // bytes; scattering or returning it is the silently truncated picture ID-47's own comment
@@ -898,6 +915,7 @@ namespace MobileGL::MG_Remote::Client {
                 // handed back as pixels. The Fatal aborts before the application reads the buffer,
                 // so the bytes EmitAndWait already copied into `pixels` are never observed.
                 RequireReadbackReplyComplete(status, replySize, tight);
+                ApplyReadbackByteSwap(pixels, tight, type, pack);
                 return;
             }
 
@@ -910,6 +928,7 @@ namespace MobileGL::MG_Remote::Client {
             // BEFORE THE SCATTER, so a short or non-OK reply never reaches the application's
             // pointer at all (the bounce is the only thing that held the partial bytes).
             RequireReadbackReplyComplete(status, replySize, tight);
+            ApplyReadbackByteSwap(bounce.data(), tight, type, pack);
             ScatterTightReadbackIntoPackState(bounce.data(), pixels, width, height, bytesPerPixel,
                                               pack);
         }
