@@ -153,6 +153,16 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 Presents() const { return m_presents; }
         Uint64 LastPresentSerial() const { return m_lastPresentSerial; }
         Uint64 ReadbackBytes() const { return m_readbackBytes; }
+        // ---- P5b package i1's tallies. R-16: a probe may not arm against a stub, and on a
+        // split build "the scenario passed" is also what a scenario that never left the
+        // monolith path looks like - so the lane asserts the number that only this sink can
+        // move. One per wire ROW, not per GL slot: launch_grid carries both dispatch entry
+        // points and memory_barrier both barrier ones, and the sink is where they separate.
+        Uint64 ImageBinds() const { return m_imageBinds; }
+        Uint64 Dispatches() const { return m_dispatches; }
+        Uint64 MemoryBarriers() const { return m_memoryBarriers; }
+        Uint64 ImageCopies() const { return m_imageCopies; }
+        Uint64 StorageBlockBindings() const { return m_storageBlockBindings; }
         // ID-49's tight-size control reads this: the scratch a read_pixels grew to. It must equal
         // the tight w*h*bpp extent of the read, never the client's DstSize - a scratch sized from
         // DstSize is exactly the heap overflow codex 1 found, one field over.
@@ -169,6 +179,11 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 m_presents = 0;
         Uint64 m_lastPresentSerial = 0;
         Uint64 m_readbackBytes = 0;
+        Uint64 m_imageBinds = 0;
+        Uint64 m_dispatches = 0;
+        Uint64 m_memoryBarriers = 0;
+        Uint64 m_imageCopies = 0;
+        Uint64 m_storageBlockBindings = 0;
         // ReadPixels' destination. The pixels go into the reply slot, but GLFunctionsTable::
         // ReadPixels writes into a caller buffer, so one staging vector per session sits
         // between them. Grown, never shrunk, and never handed out past the call.

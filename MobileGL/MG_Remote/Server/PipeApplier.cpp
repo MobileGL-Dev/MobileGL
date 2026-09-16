@@ -355,31 +355,144 @@ namespace MobileGL::MG_Remote::Server {
     // in the same words), the call, and a tally the lane can assert moved.
     // -----------------------------------------------------------------------------------
 
-    // ---- i1 ----
+    // ---- i1 ---- (MG_Remote/CONTRACT-P5B.md §2 i1; landed by package p5b/i1)
+    //
+    // RULE D IN FIVE BODIES. Each reproduces the backend call the monolith makes, from the
+    // record and from server state, and NOTHING ELSE: the backend goes on reading the frontend
+    // fields it reads today through the BARRIER-PULLED entries of its verb class, which the
+    // verb stamp PipeApplier::ApplyOne put up before this sink ran is exactly what makes legal.
+    // That is why none of these touches a backend file and why the monolith path is byte
+    // identical - and it is also the honest statement of the debt, which `rsp` counts.
+
     Bool ServerVerbSink::OnLaunchGrid(const MG_Pipe::MGPGridInfo& grid) {
-        (void)grid;
-        ServerUnmigratedVerbFatal(grid.IsIndirect ? "DispatchComputeIndirect" : "DispatchCompute");
+        const MG_Backend::GlobalBackendFunctionsTable* table = Table("launch_grid");
+        if (table == nullptr) return false;
+        const MG_Backend::GLFunctionsTable& gl = table->GL;
+        // The compute program is NOT named by this record and must not be: it is
+        // GetProgramForDispatch, GetProgramForDraw's twin, which the backend pulls inside its
+        // own PrepareForCompute (DirectGLES.cpp:5779). i1 is what puts compute on the path, so
+        // the field moves FATAL -> BARRIER_PULLED in FieldOwnership.def (contract §6.9, the
+        // one row this package is granted). Block* are 0 on the wire for the same reason: the
+        // local size is a link artifact the backend reads from its own program.
+        if (grid.IsIndirect != 0) {
+            if (gl.DispatchComputeIndirect == nullptr) return false;
+            // IndirectBuffer travels for P7's sake; the BINDING is server state, put there by
+            // the set_buffer_bindings record that preceded this one, exactly as OnClear's Fbo
+            // is not re-resolved here. glDispatchComputeIndirect takes only the offset.
+            gl.DispatchComputeIndirect(static_cast<GLintptr>(grid.IndirectOffset));
+        } else {
+            if (gl.DispatchCompute == nullptr) return false;
+            gl.DispatchCompute(static_cast<GLuint>(grid.GridX), static_cast<GLuint>(grid.GridY),
+                               static_cast<GLuint>(grid.GridZ));
+        }
+        ++m_dispatches;
+        return true;
     }
 
     Bool ServerVerbSink::OnMemoryBarrier(const MG_Pipe::MGPMemoryBarrier& barrier) {
-        ServerUnmigratedVerbFatal(barrier.ByRegion ? "MemoryBarrierByRegion" : "MemoryBarrier");
+        const MG_Backend::GlobalBackendFunctionsTable* table = Table("memory_barrier");
+        if (table == nullptr) return false;
+        const MG_Backend::GLFunctionsTable& gl = table->GL;
+        // THE BITS GO OVER VERBATIM AND ARE LOWERED HERE BY NOBODY. Espryt's atomic-counter
+        // lowering - the counter bit implying the storage bit, because glslang lowers every
+        // atomic_uint onto a storage block - lives inside its own MemoryBarrier
+        // (DirectGLES.cpp:8837) and is a statement about the DRIVER. Repeating it on this side
+        // would make the split arm and the monolith arm two different calls.
+        if (barrier.ByRegion != 0) {
+            if (gl.MemoryBarrierByRegion == nullptr) return false;
+            gl.MemoryBarrierByRegion(static_cast<GLbitfield>(barrier.Bits));
+        } else {
+            if (gl.MemoryBarrier == nullptr) return false;
+            gl.MemoryBarrier(static_cast<GLbitfield>(barrier.Bits));
+        }
+        ++m_memoryBarriers;
+        return true;
     }
 
     Bool ServerVerbSink::OnResourceCopyRegion(const MG_Pipe::MGPCopyRegion& copy) {
-        (void)copy;
-        ServerUnmigratedVerbFatal("CopyImageSubData");
+        const MG_Backend::GlobalBackendFunctionsTable* table = Table("resource_copy_region");
+        if (table == nullptr) return false;
+        if (table->GL.CopyImageSubData == nullptr) return false;
+
+        // REFUSED BY NAME ON BOTH SIDES OF ONE WIRE. The client refuses a renderbuffer endpoint
+        // before it emits (ID-57's shape, EmitTables.cpp), and this is the same refusal for a
+        // record that reached here anyway: no sticky forward hands out a RenderbufferObject, so
+        // there is no honest way to build the endpoint, and guessing an empty one would copy
+        // nothing and say it copied.
+        if (copy.SrcTarget == GL_RENDERBUFFER || copy.DstTarget == GL_RENDERBUFFER) {
+            ServerUnmigratedVerbFatal("CopyImageSubData+RENDERBUFFER");
+        }
+
+        // THE TWO ENDPOINTS ARE REBUILT FROM THE GL NAMES, through the BARRIER-PULLED sticky
+        // forward GetTextureObject(name) - `rsp` counts every one of these and P7 is what
+        // retires them by making the backend take the handles that travel beside the names.
+        MG_Backend::CopyImageEndpoint src{};
+        MG_Backend::CopyImageEndpoint dst{};
+        src.Texture = MG_Pipe::gPipeInputs.GetTextureObject(static_cast<Uint>(copy.SrcGlName));
+        dst.Texture = MG_Pipe::gPipeInputs.GetTextureObject(static_cast<Uint>(copy.DstGlName));
+        if (!src.Exists() || !dst.Exists()) {
+            // The monolith's own answer to this, in its own words (DirectGLES.cpp:9067
+            // "source or destination image failed to sync; declining the copy"): the frontend
+            // validator is what keeps it unreachable and what reports the INVALID_VALUE the
+            // application is owed. A decline here is a real answer, not a silent success.
+            MGLOG_E_ONCE("MG_Remote server: resource_copy_region named texture(s) %u -> %u that "
+                         "the frontend no longer holds; declining the copy",
+                         static_cast<unsigned>(copy.SrcGlName),
+                         static_cast<unsigned>(copy.DstGlName));
+            return false;
+        }
+
+        // SrcBox is {origin, extent} and the extent is the copy's, spelled once by GL for both
+        // endpoints; the destination contributes only its origin.
+        table->GL.CopyImageSubData(src, static_cast<GLenum>(copy.SrcTarget),
+                                   static_cast<GLint>(copy.SrcLevel), copy.SrcBox.X, copy.SrcBox.Y,
+                                   copy.SrcBox.Z, dst, static_cast<GLenum>(copy.DstTarget),
+                                   static_cast<GLint>(copy.DstLevel), copy.DstX, copy.DstY,
+                                   copy.DstZ, static_cast<GLsizei>(copy.SrcBox.W),
+                                   static_cast<GLsizei>(copy.SrcBox.H),
+                                   static_cast<GLsizei>(copy.SrcBox.D));
+        ++m_imageCopies;
+        return true;
     }
 
     Bool ServerVerbSink::OnBindShaderImage(const MG_Pipe::MGPImageBind& bind) {
-        (void)bind;
-        ServerUnmigratedVerbFatal("BindImageTexture");
+        const MG_Backend::GlobalBackendFunctionsTable* table = Table("bind_shader_image");
+        if (table == nullptr) return false;
+        if (table->GL.BindImageTexture == nullptr) return false;
+        // THE SAME CALL IS RIGHT FOR BOTH BACKENDS, which is why the record carries the whole
+        // argument list although neither reads all of it today: Espryt ignores everything but
+        // Unit and syncs that unit from the barrier-pulled GetImageTextureBinding
+        // (DirectGLES.cpp:9154, :2471), and Magma's slot is a no-op (DirectVulkan.cpp:665). The
+        // arguments travel because rule D says a verb crosses as the CALL, and because P7 is
+        // what makes the backend read them instead of pulling.
+        table->GL.BindImageTexture(static_cast<GLuint>(bind.Unit), static_cast<GLuint>(bind.GlName),
+                                   static_cast<GLint>(bind.Level),
+                                   bind.Layered != 0 ? GL_TRUE : GL_FALSE,
+                                   static_cast<GLint>(bind.Layer),
+                                   static_cast<GLenum>(bind.Access),
+                                   static_cast<GLenum>(bind.Format));
+        ++m_imageBinds;
+        return true;
     }
 
     Bool ServerVerbSink::OnSetStorageBlockBinding(const MG_Pipe::MGPStorageBlockBinding& binding,
                                                   const char* name) {
-        (void)binding;
-        (void)name;
-        ServerUnmigratedVerbFatal("ShaderStorageBlockBinding");
+        const MG_Backend::GlobalBackendFunctionsTable* table = Table("set_storage_block_binding");
+        if (table == nullptr) return false;
+        if (table->GL.ShaderStorageBlockBinding == nullptr) return false;
+        if (name == nullptr) return false;
+        // The NAME is the one coordinate the application, the frontend and both backends agree
+        // on (BackendObject.h:216-221), which is why the row carries a blob rather than the
+        // application's block INDEX. `name` points into the decoder's bounded local and is
+        // valid for this call only (rule C); the backend slot copies what it needs.
+        //
+        // Both backends resolve the PROGRAM through the barrier-pulled GetProgramObject(GlName)
+        // / TryGetDirectVulkanProgram - `rsp` again, retired by P9. ShaderCso travels beside the
+        // name for the phase that dispatches on it.
+        table->GL.ShaderStorageBlockBinding(static_cast<GLuint>(binding.GlName), name,
+                                            static_cast<GLuint>(binding.Binding));
+        ++m_storageBlockBindings;
+        return true;
     }
 
     // ---- t2 ----
