@@ -34,6 +34,8 @@
 
 #include "Includes.h"
 
+// MG_Config::Transport and MG_Config::Ipc.AdoptTier: the two knobs R-6's tier gate reads.
+#include <Config.h>
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 #include <MG_Pipe/PipeApply.h>
@@ -512,6 +514,37 @@ TEST_F(PipeWireCodecTest, KReplySlotMapPersistentIsAConstantDecline) {
     EXPECT_TRUE(applied);
     ASSERT_EQ(wire.Answers().All.size(), 1u);
     EXPECT_EQ(wire.Answers().All[0].Seq, 1u);
+    EXPECT_EQ(wire.Answers().All[0].Status, ReplySink::kStatusDeclined);
+    EXPECT_TRUE(wire.Answers().All[0].Bytes.empty());
+}
+
+TEST_F(PipeWireCodecTest, TierTwoUnderSplitTransportStillDeclinesRatherThanRefusing) {
+    // The POSITIVE half of the two AdoptTier death cases below. Without it, those two could
+    // be satisfied by an arm that aborted on every tier, which is the opposite mistake to the
+    // one wave1-codex-verify.md §4 found. T2 is the only tier P5 implements and R-6 says the
+    // answer there is DECLINED - a real answer, not a failure - even when the transport is
+    // the split one that makes the tier question live at all.
+    const MG_Config::TransportMode savedTransport = MG_Config::Transport;
+    const Uint32 savedTier = MG_Config::Ipc.AdoptTier;
+    struct Restore {
+        MG_Config::TransportMode T;
+        Uint32 A;
+        ~Restore() {
+            MG_Config::Transport = T;
+            MG_Config::Ipc.AdoptTier = A;
+        }
+    } restore{savedTransport, savedTier};
+    MG_Config::Transport = MG_Config::TransportMode::InProcess;
+    MG_Config::Ipc.AdoptTier = 2u;
+
+    Wire2 wire;
+    const MGPHandleOnly handle = HandleOnly(5, MGPipeKind::Buffer);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::MapPersistent, &handle, sizeof(handle)),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_EQ(wire.Answers().All.size(), 1u);
     EXPECT_EQ(wire.Answers().All[0].Status, ReplySink::kStatusDeclined);
     EXPECT_TRUE(wire.Answers().All[0].Bytes.empty());
 }
@@ -1135,6 +1168,43 @@ TEST_F(PipeWireCodecTest, StagedBytesAreReclaimedOnlyBehindRetiredSeq) {
     ASSERT_TRUE(wire.PumpOne(&applied));
     wire.Encoder().ReclaimStagedBytes();
     EXPECT_EQ(wire.Encoder().StagedBytesInFlight(), 0u);
+
+    // ---- AND AN EMPTY STAGE TAKES THE WHOLE SEGMENT ---------------------------------
+    // The verifier's extension of this case, kept (wave1-codex-verify.md §1). The 64-byte
+    // run has retired and in-flight bytes are ZERO, so every byte of SEG_STAGE is free -
+    // but head and tail are monotonic and both sit at 64, so `head % capacity` is 64 and the
+    // allocator used to charge a `capacity - 64` wrap skip against a capacity that had
+    // nothing in it. The test then read `2*capacity - 64 <= capacity`, false at every
+    // occupancy, and a blob the segment holds WHOLE aborted with
+    // `Fatal{RingOverrun, "SEG_STAGE"} ... with 0 bytes still in flight`.
+    //
+    // I made it red once, by doing X: X = deleting the `RebaseEmptyStage()` call at the top
+    // of StageAllocate's attempt loop (PipeWireCodec.cpp). The case then dies with SIGABRT
+    // inside PipeWireEncoder::StageAllocate on that message, exactly as the verifier
+    // recorded it.
+    //
+    // THE EXACT MAXIMUM. `need = Align8(size)` and the first bound is `need > capacity`, so
+    // an empty stage takes a blob of exactly the capacity the encoder adopted - here
+    // Wire2::kStageBytes, and in a real session the whole SEG_STAGE view, i.e.
+    // MOBILEGL_IPC_STAGE_MB (32 MiB by default; SessionRings.h keeps SEG_STAGE un-ringed and
+    // un-rounded, so there is no control page to subtract).
+    const Uint64 maxRecordBefore = wire.Encoder().MaxRecordBytesSeen();
+    std::vector<std::uint8_t> whole(Wire2::kStageBytes, 0x5A);
+    const MGPBlobRef full = wire.Encoder().StageBytes(whole.data(), whole.size());
+    EXPECT_EQ(full.Offset, 0u) << "an empty stage must hand a whole-capacity blob offset zero";
+    EXPECT_EQ(full.Size, Wire2::kStageBytes);
+    EXPECT_EQ(full.Seg, static_cast<Uint32>(kSegStage));
+    EXPECT_EQ(wire.Encoder().StagedBytesInFlight(), Wire2::kStageBytes);
+    const void* back = wire.Segments().Resolve(full.Seg, full.Offset, full.Size);
+    ASSERT_NE(back, nullptr);
+    EXPECT_EQ(back, wire.StageBase());
+
+    // R-10's max-record counter DOES NOT SEE IT, and that is the point of R-10's carrier
+    // rule: EncodeRecord feeds m_maxRecordBytes from `layout.TotalBytes` - header + payload +
+    // tails, all of it SEG_CMD - while the blob leaves only {Seg, Offset, Size} in the
+    // record. A quarter-megabyte of staging moved the counter by zero bytes. SEG_STAGE has
+    // its own bound and its own named Fatal, and MaxRecordBytesSeen() is not it.
+    EXPECT_EQ(wire.Encoder().MaxRecordBytesSeen(), maxRecordBefore);
 }
 
 // ---- M2 / M3: SEG_STAGE's cursors and the mark queue --------------------------------------
@@ -1463,6 +1533,69 @@ TEST_F(PipeWireCodecTest, ARunThatLeavesItsSegmentIsFatal) {
     EXPECT_NE(r.Log.find("does not lie inside that segment"), std::string::npos) << r.Log;
 }
 
+TEST_F(PipeWireCodecTest, AContentBlobCarriedOutsideSegStageIsFatalAtTheDecoder) {
+    // R-2.3's second half, and the verifier's finding-3 fixture kept as its own case
+    // (wave1-codex-verify.md §3). Contract table 1 row 17 puts CreateSamplerState's bytes in
+    // SEG_STAGE; here they sit in a mapped SEG_REPLY - the SERVER-owned reply pool, whose
+    // reuse has nothing to do with stage retirement - and the record names that segment. It
+    // used to be ACCEPTED and APPLIED, because the only test was that the run resolved
+    // somewhere: the verifier's probe printed `seg=3 accepted=1 poisoned=0`.
+    //
+    // The audit is armed, so the second half of the finding is nailed down too: with the
+    // poison ON, the record must DIE rather than be applied with PoisonedStageBytes() left at
+    // zero. NoteResolvedRun used to return silently for any non-stage carrier, which made
+    // rule C's only mechanical control dark on exactly the record it exists to catch; it is
+    // now a Fatal of its own and unreachable behind this arm.
+    //
+    // I made it red once, by doing X: X = deleting the `blob.Seg != kSegStage` arm in
+    // CheckBlobIsHonest (PipeWireCodec.cpp). The child then exits 0 instead of aborting and
+    // this case fails on DiedOfAbort - the verifier's `accepted=1` state.
+    const ChildResult r = RunInChild([] {
+        Wire2 wire;
+        std::vector<std::uint8_t> replyBytes(4096, 0);
+        SamplerParameters params{};
+        params.borderColorForm = BorderColorForm::Int;
+        std::memcpy(replyBytes.data(), &params, sizeof(params));
+        wire.Segments().Install(kSegReply, SegmentView{replyBytes.data(), replyBytes.size()});
+        wire.Decoder().SetAuditPoison(true);
+
+        MGPSamplerDesc desc{};
+        desc.Cso = MakeHandle(88);
+        desc.Parameters.Seg = static_cast<Uint32>(kSegReply);
+        desc.Parameters.Offset = 0;
+        desc.Parameters.Size = sizeof(SamplerParameters);
+        ForgeAndDecode(wire, MGPWireOp::CreateSamplerState, &desc, sizeof(desc), nullptr, 0);
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("is not SEG_STAGE"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("CreateSamplerState.blob"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("seg=3"), std::string::npos) << r.Log;
+}
+
+TEST_F(PipeWireCodecTest, TheEncoderRefusesTheNonStageCarrierTheDecoderCallsFatal) {
+    // THE ENCODER MUST NOT ACCEPT A RECORD THE DECODER FATALS ON - the same symmetry
+    // TheEncoderRefusesThePerStageSpirvRunTheDecoderCallsFatal states one arm over. Under
+    // `inproc` a SEG_REPLY pointer resolves, so an emitter that staged into the reply pool
+    // would get a valid seq here and a Fatal on a peer, which is the asymmetry EncodeRecord's
+    // own honesty loop exists to prevent.
+    //
+    // I made it red once, by doing X: X = deleting the `blob.Seg != kSegStage` arm in
+    // CheckBlobIsHonest. EncodeRecord then returns a real seq and the child exits 0.
+    const ChildResult r = RunInChild([] {
+        Wire2 wire;
+        std::vector<std::uint8_t> replyBytes(4096, 0);
+        wire.Segments().Install(kSegReply, SegmentView{replyBytes.data(), replyBytes.size()});
+        MGPSamplerDesc desc{};
+        desc.Cso = MakeHandle(88);
+        desc.Parameters.Seg = static_cast<Uint32>(kSegReply);
+        desc.Parameters.Offset = 0;
+        desc.Parameters.Size = sizeof(SamplerParameters);
+        (void)wire.Encoder().EncodeRecord(MGPWireOp::CreateSamplerState, &desc, sizeof(desc));
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("is not SEG_STAGE"), std::string::npos) << r.Log;
+}
+
 TEST_F(PipeWireCodecTest, AHalfDeclaredBlobIsFatalRatherThanReadAsAbsent) {
     // The shape a MONOLITH emitter produces - Seg None, Offset a host address, Size 0. Reading
     // it as "absent" would silently drop the bytes of every record an unconverted emitter sent.
@@ -1716,6 +1849,59 @@ TEST_F(PipeWireCodecTest, ASecondProcessResolverIsFatalRatherThanASilentRace) {
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("already installed"), std::string::npos) << r.Log;
+}
+
+// ---- R-6 / contract §5: the two forbidden adoption tiers die ON THE WIRE PATH TOO --------
+//
+// wave1-codex-verify.md §4: `AdoptTier` had ZERO references anywhere on the codec path, so
+// MOBILEGL_IPC_ADOPT_TIER=0 and =1 - which contract §5 promises "parse and are Fatal at use,
+// naming P11" - decoded as an ordinary DECLINED. The verifier set each forbidden tier inside
+// KReplySlotMapPersistentIsAConstantDecline and watched its successful-decline assertions
+// still pass, on BOTH tiers.
+//
+// THESE ARE FORKED, NOT EXPECT_DEATH, for the reason at the top of this file - and forking is
+// what lets the case REQUIRE THE DIAGNOSTIC rather than any abort: r.Log is searched for the
+// exact sentence AdoptTierIsEmulate prints. ID-46 finding 10 is an empty death regex; the
+// EXPECT_NE lines below are the opposite of that, and a crash for any other reason fails the
+// case on the log it prints.
+//
+// I made both red once, by doing X: X = restoring the unconditional decline in
+// PipeWireCodec.cpp's MapPersistent arm (deleting the AdoptTierIsEmulate call). Both children
+// then exit 0 having posted a clean DECLINED, and both cases fail on DiedOfAbort.
+
+TEST_F(PipeWireCodecTest, AdoptTierZeroIsFatalOnTheWirePathAndNamesP11) {
+    const ChildResult r = RunInChild([] {
+        // The child dies; nothing needs restoring. The transport half is the same conjunction
+        // MGPipeApplyMapPersistent uses - a monolith TRANSPORT mints like push (ID-42) and is
+        // not the arm this record can arrive on.
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        MG_Config::Ipc.AdoptTier = 0u;
+        Wire2 wire;
+        const MGPHandleOnly handle = HandleOnly(5, MGPipeKind::Buffer);
+        (void)wire.Encoder().EncodeRecord(MGPWireOp::MapPersistent, &handle, sizeof(handle));
+        bool applied = false;
+        (void)wire.PumpOne(&applied);
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("MOBILEGL_IPC_ADOPT_TIER=0 names adoption tier T0, which P11 implements"),
+              std::string::npos)
+        << r.Log;
+}
+
+TEST_F(PipeWireCodecTest, AdoptTierOneIsFatalOnTheWirePathAndNamesP11) {
+    const ChildResult r = RunInChild([] {
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        MG_Config::Ipc.AdoptTier = 1u;
+        Wire2 wire;
+        const MGPHandleOnly handle = HandleOnly(5, MGPipeKind::Buffer);
+        (void)wire.Encoder().EncodeRecord(MGPWireOp::MapPersistent, &handle, sizeof(handle));
+        bool applied = false;
+        (void)wire.PumpOne(&applied);
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("MOBILEGL_IPC_ADOPT_TIER=1 names adoption tier T1, which P11 implements"),
+              std::string::npos)
+        << r.Log;
 }
 
 #else
