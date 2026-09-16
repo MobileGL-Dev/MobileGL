@@ -85,7 +85,27 @@ namespace MobileGL::MG_Remote::Client {
         // here would make the control green for the wrong reason - it has to disable the
         // push, so that PersistentCoherentMapScenario draws the last uploaded bytes and goes
         // red exactly the way an unpushed map does.
-        if (blockBytes == 0) return;
+        //
+        // AND IT SAYS SO, ONCE. Until now this was a silent `return`, so E3(a)'s red could
+        // only ever be the scenario's pixel assertion and the control had no way to tell "the
+        // push was disabled" apart from "the push was never armed, or never reached, or the
+        // knob never got here" (joint-v1.md §3: "There is no Fatal for block size zero";
+        // ID-65 assigns the line to x2). The control now requires BOTH: the pixel red AND
+        // this line in the entry's own private log. It is MGLOG_W and not a Fatal because 0
+        // is a legal configured value whose whole purpose is to keep running with the push
+        // off; aborting here would turn every E3(a) entry into a subprocess abort and take
+        // the pixel evidence with it.
+        if (blockBytes == 0) {
+            if (!m_blockZeroAnnounced) {
+                m_blockZeroAnnounced = true;
+                MGLOG_W("MGPipe: persistent-map push disabled - MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0 "
+                        "is exit gate E3(a)'s NEGATIVE CONTROL, not 'unlimited': a live "
+                        "persistent WRITE mapping's dirty blocks are NOT being pushed, so the "
+                        "server draws whatever bytes last crossed by some other route. A lane "
+                        "that stays green with this set is not getting its pixels from the push");
+            }
+            return;
+        }
 
         const auto range = buffer.GetMappedRange();
         const Uint64 begin = static_cast<Uint64>(range.start);
