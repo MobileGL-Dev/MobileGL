@@ -175,21 +175,6 @@ namespace MobileGL::MG_Remote {
         constexpr Uint64 kFormatCells = static_cast<Uint64>(MG_Backend::kFormatCapabilityTargetCount) *
                                         static_cast<Uint64>(MG_Backend::kFormatCapabilityFormatCount);
 
-        // FNV-1a, the same mixer the tree already uses for build-stamp style fingerprints.
-        constexpr Uint64 kFnvOffset = 1469598103934665603ull;
-        constexpr Uint64 kFnvPrime = 1099511628211ull;
-
-        Uint64 FnvBytes(Uint64 hash, const void* bytes, SizeT size) {
-            const auto* p = static_cast<const Uint8*>(bytes);
-            for (SizeT i = 0; i < size; ++i) {
-                hash ^= static_cast<Uint64>(p[i]);
-                hash *= kFnvPrime;
-            }
-            return hash;
-        }
-
-        Uint64 FnvU64(Uint64 hash, Uint64 value) { return FnvBytes(hash, &value, sizeof(value)); }
-
     } // namespace
 
     // ---------------------------------------------------------------------------------
@@ -469,7 +454,7 @@ namespace MobileGL::MG_Remote {
     // The ABI assertion the handshake carries
     // ---------------------------------------------------------------------------------
 
-    Uint64 CapsAbiFingerprint() {
+    Transport::AbiFingerprintInputs CapsAbiFingerprintInputs() {
         // MGPCaps has only a COMPOSITIONAL size assertion (MGPipeTypes.h:145-146) because
         // DynamicBackendParameters still carries SizeT and GLenum members - P0.5's fixed-width
         // rewrite did not happen and P5 does not do it either (table 0's ABI row; the rewrite
@@ -479,23 +464,28 @@ namespace MobileGL::MG_Remote {
         // The git stamp is in it because two builds of the same sizes can still disagree about
         // a FIELD ORDER, which no sizeof can see; P6's spawn is same-machine and same-binary,
         // so it inherits this unchanged rather than needing a looser rule.
-        Uint64 hash = kFnvOffset;
-        hash = FnvU64(hash, sizeof(MG_Backend::DynamicBackendParameters));
-        hash = FnvU64(hash, sizeof(MG_Pipe::MGPCaps));
-        hash = FnvU64(hash, sizeof(MG_Backend::GLFunctionsTable));
-        hash = FnvU64(hash, static_cast<Uint64>(MG_Backend::kFormatCapabilityTargetCount));
-        hash = FnvU64(hash, static_cast<Uint64>(MG_Backend::kFormatCapabilityFormatCount));
-        hash = FnvU64(hash, kFormatCapabilitiesCodecVersion);
-        hash = FnvU64(hash, kRendererInfoCodecVersion);
-        hash = FnvU64(hash, static_cast<Uint64>(MG_Pipe::MGPWireOp::kOpCount));
+        Transport::AbiFingerprintInputs inputs;
+        inputs.DynamicParamsSize = sizeof(MG_Backend::DynamicBackendParameters);
+        inputs.CapsSize = sizeof(MG_Pipe::MGPCaps);
+        inputs.FunctionTableSize = sizeof(MG_Backend::GLFunctionsTable);
+        inputs.FormatCapabilityTargets = static_cast<Uint64>(MG_Backend::kFormatCapabilityTargetCount);
+        inputs.FormatCapabilityFormats = static_cast<Uint64>(MG_Backend::kFormatCapabilityFormatCount);
+        inputs.FormatCapabilitiesCodecVersion = kFormatCapabilitiesCodecVersion;
+        inputs.RendererInfoCodecVersion = kRendererInfoCodecVersion;
+        inputs.OpCount = static_cast<Uint64>(MG_Pipe::MGPWireOp::kOpCount);
         // The declared protocol ABI, carried over from s1's version of this function at
         // integration (ID-33). The sizeofs above catch a struct that changed shape; this
         // catches a peer that changed the PROTOCOL while every struct stayed the same size,
         // which is the one break the rest of the mix is blind to.
-        hash = FnvU64(hash,
-                      static_cast<Uint64>(MOBILEGL_ABI_VERSION(MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR)));
-        hash = FnvBytes(hash, GIT_COMMIT_HASH_SHORT, std::strlen(GIT_COMMIT_HASH_SHORT));
-        return hash;
+        inputs.AbiVersion =
+            static_cast<Uint32>(MOBILEGL_ABI_VERSION(MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR));
+        inputs.BuildStamp = GIT_COMMIT_HASH_SHORT;
+        return inputs;
     }
+
+    // ONE implementation, deliberately a one-liner: the wave-1 review (ID-46 finding 6) found a
+    // second hand-rolled FNV loop here while the mixer under Transport/ had no production caller,
+    // so the sensitivity test could not see this function change. Now it starts from here.
+    Uint64 CapsAbiFingerprint() { return Transport::MixAbiFingerprint(CapsAbiFingerprintInputs()); }
 
 } // namespace MobileGL::MG_Remote

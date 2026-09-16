@@ -28,10 +28,13 @@
 // uploads from the other side, and a client that folds it into OK accepts a
 // pointer the server never handed out.
 //
-// A REPLY LARGER THAN ONE SLOT IS FATAL, NOT CHUNKED. P5's only large answer is
-// ReadPixels, and the client knows its size before it emits the record, so an
-// overflow means the two sides disagree about the frame rather than that the
-// pool is too small. Chunking is P8's; growing the pool is an operator's.
+// A REPLY LARGER THAN ONE SLOT IS FATAL, NOT CHUNKED, AND THE CLIENT SAYS SO
+// FIRST (ID-47). P5's only large answer is ReadPixels, and the client knows its
+// size before it emits the record, so it refuses an oversize read BY NAME before
+// emission (RequireReadPixelsFits: Fatal{ReplyTooLarge, "ReadPixels <w>x<h>
+// <format> <bytes> > <cap>"}); Post's own refusal is the server's last line of
+// defence, and reaching it means the two sides disagree about the frame rather
+// than that the pool is too small. Chunking is a P6 debt; the pool has no knob.
 //
 // ORDERING. The client only looks at a slot after it has seen
 // RingControl::appliedSeq >= its own seq with an ACQUIRE load, and the server
@@ -77,15 +80,28 @@ namespace MobileGL::MG_Remote::Transport {
         kReplyStatusError = 2,
     };
 
-    // Eight slots of a 8 MiB SEG_REPLY is 1 MiB per answer.
+    // Eight slots of a 16 MiB SEG_REPLY is 2 MiB per slot, and MaxReplyBytes() is
+    // 2 MiB minus the 16-byte header = 2,097,136 bytes per answer (ID-47).
     //
     // Why eight and not sixty-four: while the verb barrier holds (R-1) the client
     // blocks at every verb boundary, so the in-flight depth is exactly ONE and
     // every extra slot buys nothing but a smaller maximum answer. The trade is
     // the other way round - fewer slots, bigger replies - and P5's only large
-    // answer is a blocking ReadPixels. 1 MiB covers a 512x512 RGBA8 read. P9,
-    // which is what makes the pool asynchronous, re-chooses this geometry with
-    // real depth to size it against.
+    // answer is a blocking ReadPixels. P9, which is what makes the pool
+    // asynchronous, re-chooses this geometry with real depth to size it against.
+    //
+    // WHY 2 MiB AND NOT 1. The first version of this file said "1 MiB covers a
+    // 512x512 RGBA8 read", and it did not: 512*512*4 is exactly 1 MiB and the
+    // slot header takes 16 of those bytes, so Post refused it by sixteen. Worse,
+    // the E2 retrace harness's snapshot is a full-surface GL_RGBA/GL_UNSIGNED_BYTE
+    // read of OpenRA's 640x480 surface = 1,228,800 bytes through the interposer,
+    // 17% over the old cap - Post would have aborted on the first snapshot the
+    // day the client's ReadPixels emitter landed. Contract §2 row 23 says the
+    // slot is "sized from the scenario's largest read rather than guessed";
+    // 2 MiB is that size for every P5 exit-gate read (E2 is the largest at
+    // 640x480). A 2400x1080 RGBA8 device surface is ~10.4 MB and is a P6 debt
+    // (chunked readback or a dedicated readback carrier), recorded in the
+    // ROADMAP by the integrator - the geometry here is not the place it is paid.
     inline constexpr std::uint32_t kDefaultReplySlotCount = 8;
 
     // Slot 0 exists and is used: seq is 1-based, so seq % slotCount hits slot 0
@@ -152,6 +168,44 @@ namespace MobileGL::MG_Remote::Transport {
                                     : m_slotBytes - static_cast<std::uint32_t>(sizeof(ReplySlotHeader));
         }
 
+        // ID-47: THE CLIENT'S HALF of "a reply larger than one slot is fatal". True
+        // exactly when an answer of `bytes` can be posted into this pool: the pool
+        // is configured and `bytes <= MaxReplyBytes()`. The boundary is inclusive
+        // and SessionTest pins it from both sides.
+        bool CanHold(std::uint64_t bytes) const { return m_base != nullptr && bytes <= MaxReplyBytes(); }
+
+        // ID-47's named refusal, AT THE CLIENT, BEFORE EMISSION. Returns when the
+        // answer fits; otherwise
+        //     Fatal{ReplyTooLarge, "ReadPixels <w>x<h> <format> <bytes> > <cap>"}
+        // and abort. Never truncated, never chunked, and never a server-side
+        // abort the client cannot name: Post's own refusal below stays as the
+        // last line of defence, but it fires on the apply thread with the record
+        // already on the wire, where the only thing the client sees is a hang.
+        //
+        // `format`/`type` are the GL enums the record carries (MGPReadbackInfo::
+        // Format/Type), printed as the hex pair every pipe diagnostic uses; the
+        // caller passes the byte count it computed for the record's DstSize, so
+        // what is refused is exactly what would have been posted. This is the one
+        // call c1's OnReadPixels emitter makes before EmitAndWait; the
+        // ClientSession forwards it verbatim (RequireReadPixelsReplyFits).
+        void RequireReadPixelsFits(std::uint32_t width, std::uint32_t height, std::uint32_t format,
+                                   std::uint32_t type, std::uint64_t bytes) const {
+            if (CanHold(bytes)) {
+                return;
+            }
+            WireLogFatal("MGPipe: Fatal{ReplyTooLarge, \"ReadPixels %ux%u 0x%04X/0x%04X %llu > %u\"} - "
+                         "the answer does not fit one SEG_REPLY slot (%u slots of %u bytes, payload "
+                         "cap %u; a cap of 0 means no reply pool is configured). Refused at the "
+                         "client before emission (ID-47): P5 neither truncates nor chunks a reply, "
+                         "and a read larger than the cap is a P6 debt (chunked readback), not a "
+                         "bigger pool",
+                         static_cast<unsigned>(width), static_cast<unsigned>(height),
+                         static_cast<unsigned>(format), static_cast<unsigned>(type),
+                         static_cast<unsigned long long>(bytes),
+                         static_cast<unsigned>(MaxReplyBytes()), static_cast<unsigned>(m_slots),
+                         static_cast<unsigned>(m_slotBytes), static_cast<unsigned>(MaxReplyBytes()));
+        }
+
         // Zeroes every header, so a stale seq from a previous session cannot be
         // mistaken for this session's answer. Called on the server side at Accept.
         void Clear() {
@@ -170,24 +224,25 @@ namespace MobileGL::MG_Remote::Transport {
         // chunked - see the file header.
         void Post(std::uint64_t seq, std::int32_t status, const void* bytes, std::uint64_t size) {
             if (m_base == nullptr) {
-                WireLogError("MG_Remote reply pool: Post(seq=%llu) on an unconfigured pool",
+                WireLogFatal("MG_Remote reply pool: Fatal{ProtocolCorruption} - Post(seq=%llu) on an "
+                             "unconfigured pool",
                              static_cast<unsigned long long>(seq));
-                std::abort();
             }
             if (seq == 0) {
-                WireLogError("MG_Remote reply pool: seq 0 is \"no record\" and can never name a "
-                             "slot (R-3: seq is 1-based)");
-                std::abort();
+                WireLogFatal("MG_Remote reply pool: Fatal{ProtocolCorruption} - seq 0 is \"no "
+                             "record\" and can never name a slot (R-3: seq is 1-based)");
             }
             if (size > MaxReplyBytes()) {
-                WireLogError("MG_Remote reply pool: Fatal{ProtocolCorruption} - a %llu byte answer "
+                // The server's LAST line of defence, not the first: the client refuses an
+                // oversize ReadPixels by name before it emits (RequireReadPixelsFits, ID-47),
+                // so reaching this means the two sides disagree about the frame.
+                WireLogFatal("MG_Remote reply pool: Fatal{ProtocolCorruption} - a %llu byte answer "
                              "for seq %llu does not fit a %u byte slot (payload cap %u). P5 does "
                              "not chunk replies: the client knows an answer's size before it emits "
                              "the record, so this means the two sides disagree about the frame",
                              static_cast<unsigned long long>(size),
                              static_cast<unsigned long long>(seq), static_cast<unsigned>(m_slotBytes),
                              static_cast<unsigned>(MaxReplyBytes()));
-                std::abort();
             }
             std::uint8_t* slot = SlotAt(seq);
             if (size != 0 && bytes != nullptr) {

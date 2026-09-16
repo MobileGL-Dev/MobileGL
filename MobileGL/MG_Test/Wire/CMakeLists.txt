@@ -65,3 +65,33 @@ if (MSVC)
 endif ()
 
 gtest_discover_tests(PipeWireCodecTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
+# P5 s1's handshake suite (wave 1.5, ID-46 findings 6 and 7): the two null-union guards driven
+# THROUGH ServerSession::Accept and ClientSession::StartOverTransportPair, and the ABI
+# fingerprint's sensitivity case driven from CapsAbiFingerprint(), the production entry point.
+# Separate from SessionTest for two reasons: it needs CapsCodec.h and the sessions, i.e. the GL
+# frontend's umbrella header that the ring-owning suite deliberately keeps out; and each guard's
+# refusal is asserted BY MESSAGE, which with the console sink compiled out (Defines.h) means a
+# log file this process names before anything logs - PipeWireCodecTest's own-main() shape.
+add_executable(SessionHandshakeTest SessionHandshakeTest.cpp)
+
+target_include_directories(SessionHandshakeTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+        ${MGL_ROOT}/MobileGL/MG_Pipe
+        ${MGL_ROOT}/3rdparty/flatbuffers/include
+        ${MGL_ROOT}/3rdparty/xxHash
+        ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
+        ${MGL_ROOT}/3rdparty/SPIRV-Reflect
+)
+
+target_link_libraries(SessionHandshakeTest PRIVATE
+        GTest::gtest
+        ${LINK_LIBRARIES}
+)
+
+if (MSVC)
+    target_compile_options(SessionHandshakeTest PRIVATE /Zc:preprocessor)
+endif ()
+
+gtest_discover_tests(SessionHandshakeTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

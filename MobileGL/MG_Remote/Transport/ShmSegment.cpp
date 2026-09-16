@@ -78,43 +78,73 @@ namespace MobileGL::MG_Remote::Transport {
             return role == MemoryRole::Server ? "server" : "client";
         }
 
-        // One pass over /proc/self/status for a "VmHWM:" / "VmRSS:" line. The
-        // values are in kB and the unit suffix is part of the line, so it is
-        // parsed rather than assumed.
-        std::uint64_t ProcStatusBytes(const char* key) {
-#if defined(__linux__) || defined(__ANDROID__)
-            std::FILE* file = std::fopen("/proc/self/status", "re");
-            if (file == nullptr) {
-                return 0;
-            }
+        // "<key>:\t   <number> kB" -> bytes. The unit suffix is part of the
+        // line, so it is parsed rather than assumed; anything else is a kernel
+        // this code has not seen, and 0 ("not measured") is the honest answer.
+        bool ParseKilobyteLine(const char* line, const char* key, std::uint64_t* outBytes) {
             const std::size_t keyLength = std::strlen(key);
-            char line[256];
-            std::uint64_t bytes = 0;
-            while (std::fgets(line, sizeof(line), file) != nullptr) {
-                if (std::strncmp(line, key, keyLength) != 0) {
-                    continue;
-                }
-                unsigned long long kilobytes = 0;
-                // The format is "<key>:\t   <number> kB". Anything else is a
-                // kernel this code has not seen, and 0 ("not measured") is the
-                // honest answer for it.
-                if (std::sscanf(line + keyLength, ": %llu kB", &kilobytes) == 1) {
-                    bytes = static_cast<std::uint64_t>(kilobytes) * 1024ull;
-                }
-                break;
+            if (std::strncmp(line, key, keyLength) != 0) {
+                return false;
             }
-            std::fclose(file);
-            return bytes;
-#else
-            (void)key;
-            return 0;
-#endif
+            unsigned long long kilobytes = 0;
+            if (std::sscanf(line + keyLength, ": %llu kB", &kilobytes) == 1) {
+                *outBytes = static_cast<std::uint64_t>(kilobytes) * 1024ull;
+            }
+            return true;
+        }
+
+        // The process-wide running peak SampleRoleMemory folds into. One per
+        // process, like VmHWM itself; under inproc both roles share it and the
+        // log line says so.
+        std::atomic<std::uint64_t>& ProcessRunningPeak() {
+            static std::atomic<std::uint64_t> peak{0};
+            return peak;
         }
     } // namespace
 
-    std::uint64_t ProcessPeakRssBytes() { return ProcStatusBytes("VmHWM"); }
+    // ONE PASS FOR BOTH KEYS - see RoleMemory.h. A pass per key was the wave-1
+    // shape and it is what GitHub run 35079459114 caught: the second fopen grew
+    // RSS past the VmHWM the first pass had reported, because the kernel only
+    // stores hiwater_rss when RSS is about to drop and reports max(stored, now)
+    // otherwise, so the two reads were snapshots of different "now"s.
+    void ProcessRssBytes(std::uint64_t* outPeakBytes, std::uint64_t* outCurrentBytes) {
+        std::uint64_t peak = 0;
+        std::uint64_t current = 0;
+#if defined(__linux__) || defined(__ANDROID__)
+        std::FILE* file = std::fopen("/proc/self/status", "re");
+        if (file != nullptr) {
+            char line[256];
+            bool sawPeak = false;
+            bool sawCurrent = false;
+            while ((!sawPeak || !sawCurrent) && std::fgets(line, sizeof(line), file) != nullptr) {
+                if (!sawPeak && ParseKilobyteLine(line, "VmHWM", &peak)) {
+                    sawPeak = true;
+                } else if (!sawCurrent && ParseKilobyteLine(line, "VmRSS", &current)) {
+                    sawCurrent = true;
+                }
+            }
+            std::fclose(file);
+        }
+#endif
+        if (outPeakBytes != nullptr) {
+            *outPeakBytes = peak;
+        }
+        if (outCurrentBytes != nullptr) {
+            *outCurrentBytes = current;
+        }
+    }
 
-    std::uint64_t ProcessCurrentRssBytes() { return ProcStatusBytes("VmRSS"); }
+    std::uint64_t ProcessPeakRssBytes() {
+        std::uint64_t peak = 0;
+        ProcessRssBytes(&peak, nullptr);
+        return peak;
+    }
+
+    std::uint64_t ProcessCurrentRssBytes() {
+        std::uint64_t current = 0;
+        ProcessRssBytes(nullptr, &current);
+        return current;
+    }
 
     void LedgerAddSegment(MemoryRole role, std::uint64_t bytes) {
         LedgerSlot(role).fetch_add(bytes, std::memory_order_relaxed);
@@ -140,13 +170,33 @@ namespace MobileGL::MG_Remote::Transport {
         return total;
     }
 
-    RoleMemorySample SampleRoleMemory(MemoryRole role) {
+    RoleMemorySample SampleRoleMemoryInto(std::atomic<std::uint64_t>& runningPeak, MemoryRole role,
+                                          std::uint64_t kernelPeakRssBytes,
+                                          std::uint64_t kernelCurrentRssBytes) {
+        // max(running, kernel peak, kernel current), as a CAS loop: two threads
+        // sampling at once (the GL thread and the apply thread both log memory
+        // at phase boundaries) must not let a lower value overwrite a higher.
+        const std::uint64_t observed =
+            kernelPeakRssBytes > kernelCurrentRssBytes ? kernelPeakRssBytes : kernelCurrentRssBytes;
+        std::uint64_t peak = runningPeak.load(std::memory_order_relaxed);
+        while (observed > peak &&
+               !runningPeak.compare_exchange_weak(peak, observed, std::memory_order_relaxed)) {
+        }
         RoleMemorySample sample;
         sample.Role = role;
-        sample.PeakRssBytes = ProcessPeakRssBytes();
-        sample.CurrentRssBytes = ProcessCurrentRssBytes();
+        // THE RUNNING MAXIMUM, never the kernel's peak verbatim - RoleMemory.h
+        // says why, and SessionTest's stubbed-reader control is the gate on it.
+        sample.PeakRssBytes = observed > peak ? observed : peak;
+        sample.CurrentRssBytes = kernelCurrentRssBytes;
         sample.MappedSegmentBytes = LedgerMappedBytes(role);
         return sample;
+    }
+
+    RoleMemorySample SampleRoleMemory(MemoryRole role) {
+        std::uint64_t kernelPeak = 0;
+        std::uint64_t kernelCurrent = 0;
+        ProcessRssBytes(&kernelPeak, &kernelCurrent);
+        return SampleRoleMemoryInto(ProcessRunningPeak(), role, kernelPeak, kernelCurrent);
     }
 
     void LogRoleMemory(const char* phase, const RoleMemorySample& sample) {
