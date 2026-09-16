@@ -419,7 +419,7 @@ P13：删 `SnapshotFromGLContext()` 的非 verify 分支、`MGB_CTX`、`MOBILEGL
 |---|---|---|---|
 | `SEG_CMD` | client（server 只读） | 8 MiB，2 的幂 | `RingControl`（4 KiB 页）+ POD 记录 + ≤4 KiB 内联负载 |
 | `SEG_STAGE` | client | 32 MiB，上限实测定 | bulk 字节：buffer sub-data、纹理紧密重打包区域、UBO scratch、client 顶点/索引/indirect 数组、multi-draw 参数块、具名 UBO host payload、persistent-map 脏块 |
-| `SEG_REPLY` | server（client 只读） | 8 MiB，4 KiB slot | readback 像素、buffer writeback |
+| `SEG_REPLY` | server（client 只读） | 16 MiB，8 个 2 MiB slot（ID-47：按最大场景读回 640×480 RGBA8 定尺，超过即 client 侧具名拒绝） | readback 像素、buffer writeback |
 | `SEG_EVENT` | server | 256 KiB SPSC ring | 十个回调的事件 + `EvQueryResult/EvFenceSignaled/EvReadbackDone` |
 | `SEG_SHADOW[n]` | client | 每对象，≥256 KiB shadow（Phase 2） | 零拷贝 buffer/texture shadow |
 | `SEG_ADOPT[n]` | server（client RW） | 每 buffer，≥16 MiB adopted store（P11） | 应用直写 GPU 内存 |
