@@ -31,6 +31,9 @@
 #include <Config.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 #include <MG_Pipe/PipeApply.h>
+// R-6's tier gate, and the ONE spelling of it (b1's file, unchanged by this package): the
+// MapPersistent arm below asks it the same question MGPipeApplyMapPersistent asks.
+#include <MG_Remote/Client/PersistentMapTracker.h>
 #include <MG_Remote/Protocol/generated/protocol_generated.h>
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #include <MG_Util/Debug/Log.h>
@@ -1379,6 +1382,19 @@ namespace MobileGL::MG_Remote::Wire {
             //
             // DECLINED is a real answer, not a failure: the three frontend sites already
             // tolerate it (BufferObject.cpp:238, :603-606, :657-660).
+            //
+            // THE TIER IS CONSULTED HERE, AND IT IS THE SAME CONJUNCTION THE MONOLITH APPLIER
+            // USES (PipeApply.cpp's `Transport != Monolith && AdoptTierIsEmulate()`). The arm
+            // used to decline UNCONDITIONALLY and AdoptTier had no reference anywhere on the
+            // codec path, so MOBILEGL_IPC_ADOPT_TIER=0 and =1 - which contract §5 promises
+            // "parse and are Fatal at use, naming P11" - decoded as an ordinary DECLINED and
+            // the operator got a run that looked like a working T0. AdoptTierIsEmulate returns
+            // true at T2 and ABORTS at T0/T1 on its own named diagnostic, so the return value
+            // is deliberately not a branch: P5 declines at every tier it survives (R-6), and
+            // the two forbidden ones never get this far.
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                (void)MG_Remote::Client::AdoptTierIsEmulate();
+            }
             PostReply(op, seq, ReplySink::kStatusDeclined, nullptr, 0);
             return true;
 

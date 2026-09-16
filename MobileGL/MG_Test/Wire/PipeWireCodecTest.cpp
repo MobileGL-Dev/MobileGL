@@ -34,6 +34,8 @@
 
 #include "Includes.h"
 
+// MG_Config::Transport and MG_Config::Ipc.AdoptTier: the two knobs R-6's tier gate reads.
+#include <Config.h>
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 #include <MG_Pipe/PipeApply.h>
@@ -512,6 +514,37 @@ TEST_F(PipeWireCodecTest, KReplySlotMapPersistentIsAConstantDecline) {
     EXPECT_TRUE(applied);
     ASSERT_EQ(wire.Answers().All.size(), 1u);
     EXPECT_EQ(wire.Answers().All[0].Seq, 1u);
+    EXPECT_EQ(wire.Answers().All[0].Status, ReplySink::kStatusDeclined);
+    EXPECT_TRUE(wire.Answers().All[0].Bytes.empty());
+}
+
+TEST_F(PipeWireCodecTest, TierTwoUnderSplitTransportStillDeclinesRatherThanRefusing) {
+    // The POSITIVE half of the two AdoptTier death cases below. Without it, those two could
+    // be satisfied by an arm that aborted on every tier, which is the opposite mistake to the
+    // one wave1-codex-verify.md §4 found. T2 is the only tier P5 implements and R-6 says the
+    // answer there is DECLINED - a real answer, not a failure - even when the transport is
+    // the split one that makes the tier question live at all.
+    const MG_Config::TransportMode savedTransport = MG_Config::Transport;
+    const Uint32 savedTier = MG_Config::Ipc.AdoptTier;
+    struct Restore {
+        MG_Config::TransportMode T;
+        Uint32 A;
+        ~Restore() {
+            MG_Config::Transport = T;
+            MG_Config::Ipc.AdoptTier = A;
+        }
+    } restore{savedTransport, savedTier};
+    MG_Config::Transport = MG_Config::TransportMode::InProcess;
+    MG_Config::Ipc.AdoptTier = 2u;
+
+    Wire2 wire;
+    const MGPHandleOnly handle = HandleOnly(5, MGPipeKind::Buffer);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::MapPersistent, &handle, sizeof(handle)),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_EQ(wire.Answers().All.size(), 1u);
     EXPECT_EQ(wire.Answers().All[0].Status, ReplySink::kStatusDeclined);
     EXPECT_TRUE(wire.Answers().All[0].Bytes.empty());
 }
@@ -1816,6 +1849,59 @@ TEST_F(PipeWireCodecTest, ASecondProcessResolverIsFatalRatherThanASilentRace) {
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("already installed"), std::string::npos) << r.Log;
+}
+
+// ---- R-6 / contract §5: the two forbidden adoption tiers die ON THE WIRE PATH TOO --------
+//
+// wave1-codex-verify.md §4: `AdoptTier` had ZERO references anywhere on the codec path, so
+// MOBILEGL_IPC_ADOPT_TIER=0 and =1 - which contract §5 promises "parse and are Fatal at use,
+// naming P11" - decoded as an ordinary DECLINED. The verifier set each forbidden tier inside
+// KReplySlotMapPersistentIsAConstantDecline and watched its successful-decline assertions
+// still pass, on BOTH tiers.
+//
+// THESE ARE FORKED, NOT EXPECT_DEATH, for the reason at the top of this file - and forking is
+// what lets the case REQUIRE THE DIAGNOSTIC rather than any abort: r.Log is searched for the
+// exact sentence AdoptTierIsEmulate prints. ID-46 finding 10 is an empty death regex; the
+// EXPECT_NE lines below are the opposite of that, and a crash for any other reason fails the
+// case on the log it prints.
+//
+// I made both red once, by doing X: X = restoring the unconditional decline in
+// PipeWireCodec.cpp's MapPersistent arm (deleting the AdoptTierIsEmulate call). Both children
+// then exit 0 having posted a clean DECLINED, and both cases fail on DiedOfAbort.
+
+TEST_F(PipeWireCodecTest, AdoptTierZeroIsFatalOnTheWirePathAndNamesP11) {
+    const ChildResult r = RunInChild([] {
+        // The child dies; nothing needs restoring. The transport half is the same conjunction
+        // MGPipeApplyMapPersistent uses - a monolith TRANSPORT mints like push (ID-42) and is
+        // not the arm this record can arrive on.
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        MG_Config::Ipc.AdoptTier = 0u;
+        Wire2 wire;
+        const MGPHandleOnly handle = HandleOnly(5, MGPipeKind::Buffer);
+        (void)wire.Encoder().EncodeRecord(MGPWireOp::MapPersistent, &handle, sizeof(handle));
+        bool applied = false;
+        (void)wire.PumpOne(&applied);
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("MOBILEGL_IPC_ADOPT_TIER=0 names adoption tier T0, which P11 implements"),
+              std::string::npos)
+        << r.Log;
+}
+
+TEST_F(PipeWireCodecTest, AdoptTierOneIsFatalOnTheWirePathAndNamesP11) {
+    const ChildResult r = RunInChild([] {
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        MG_Config::Ipc.AdoptTier = 1u;
+        Wire2 wire;
+        const MGPHandleOnly handle = HandleOnly(5, MGPipeKind::Buffer);
+        (void)wire.Encoder().EncodeRecord(MGPWireOp::MapPersistent, &handle, sizeof(handle));
+        bool applied = false;
+        (void)wire.PumpOne(&applied);
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("MOBILEGL_IPC_ADOPT_TIER=1 names adoption tier T1, which P11 implements"),
+              std::string::npos)
+        << r.Log;
 }
 
 #else
