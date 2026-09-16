@@ -110,12 +110,21 @@
 # next reader of this file meets them:
 #   D-N/1  the namespace region kind, above.
 #   D-N/2  the PINNED baseline is CONSULTED UNCONDITIONALLY for FlushPendingRangesFrom, where the
-#          parent consults it only when <ref-a> does not define the function. D-N says that row is
-#          compared "against its pinned 3e298c9a sha", and at P4a's base ref the function DOES
-#          exist - so the parent's fallback would silently never fire and the pin would stop being
-#          the baseline the brief names. Both readings agree on this tree (measured: the body at
-#          37da3c3a hashes to the pinned value); where they would ever disagree, this script says
-#          so on stderr and keeps the PIN, because the pin is the reviewed text.
+#          parent consulted it only when <ref-a> did not define the function. D-N says that row is
+#          compared "against its pinned sha", and at P4a's base ref the function DOES exist - so
+#          the parent's fallback would silently never fire and the pin would stop being the
+#          baseline the brief names. INTEGRATOR DECISION ID-41 has since made this the parent's
+#          reading too, so D-N/2 is no longer a deviation between the two scripts; it is kept here
+#          as the record of why this one got there first.
+#
+#          The two answers now DISAGREE on every ref CI passes, and that is the expected state
+#          rather than a finding: P5 (b1) re-parameterised the shipping ladder
+#          (hostBaseFrom/hostBaseTo, a MOBILEGL_PIPE_VERIFY-only StageSnapshotTooNarrow log, the
+#          tier-1 access computation moved into InvalidateFlushAccessFor), the PULL arm is
+#          byte-identical across that change and G1 reports .text +0, and ID-41 ruled that the row
+#          be RE-PINNED on the reviewed P5 body rather than reverted or quietly left comparing
+#          against <ref-a>. This script says so on stderr, in both directions, and keeps the PIN -
+#          because the pin is the reviewed text.
 set -u -o pipefail
 
 # One row per region: <name>@<kind>@<path>. The ORDER is the fixed order the sha list is printed
@@ -143,11 +152,20 @@ ShouldUseCaveatTextureFormat@function@MobileGL/MG_Backend/DirectGLES/Utils.cpp"
 EXPECTED_FUNCTION_COUNT=17
 
 # The one region born in P3a, so there is no body at P4a's base ref that this phase reviewed: its
-# baseline is the sha captured at 3e298c9a, the commit at which the two-arm shape was reviewed and
-# accepted (ID-15). See DEVIATIONS D-N/2 for why it is consulted unconditionally.
+# baseline is PINNED and consulted UNCONDITIONALLY (DEVIATIONS D-N/2, and ID-41 for the parent).
+#
+# THE PIN, AND WHAT RE-PINS IT. Whoever moves this body deliberately replaces BOTH lines and
+# writes the decision beside them; a pin with no commit and no decision next to it is a number
+# nobody can audit. The parent script carries the identical table and the two must not drift.
+#   3e298c9a  37fc94ff...  ID-15, P3a: the two-arm shape, reviewed and accepted
+#   3dadd4c1  172b0222...  ID-41, P5 (b1): [Fix] (DirectGLES): make the extent hostBase is good
+#                          for a parameter of the flush ladder, so tier 1's widening refusal is
+#                          live code the moment a SEG_STAGE snapshot is narrower than the queued
+#                          range.  <- CURRENT
 PINNED_FUNCTIONS="FlushPendingRangesFrom"
-PINNED_BASELINE_REF=3e298c9a
-PINNED_SHA_FlushPendingRangesFrom=37fc94ffc5991923d222d585daa3af6511d2352d255623026ce35a3b6963c4a6
+PINNED_BASELINE_REF=3dadd4c1
+PINNED_BASELINE_DECISION=ID-41
+PINNED_SHA_FlushPendingRangesFrom=172b022273db01b16e772d15b269ffcd797fe38c767f7354d83ce113a66040d0
 
 # The regions the self-test perturbs, one negative control each. FOUR, exactly as D-N requires, and
 # each is a different shape so that a control which only ever perturbed the easy one cannot leave
@@ -372,7 +390,7 @@ def extract(rows):
 
 
 def perturb(rows, target, src, dst, where='head'):
-    """Insert one line into a region's body, at its HEAD or at its TAIL.
+    """Insert one line into a region's body at its HEAD or its TAIL, or one TOKEN at its head.
 
     TWO POSITIONS, AND THE SECOND ONE IS REVIEW FINDING F-m2. Every control used to insert at the
     very first byte after the opening brace, so all four of them would still have tripped if
@@ -393,7 +411,15 @@ def perturb(rows, target, src, dst, where='head'):
                              % (target, len(hits)))
             return 2
         begin, end = hits[0]
-        if where == 'tail':
+        if where == 'token':
+            # ONE TOKEN - a single empty statement at the head of the body - and nothing else.
+            # ID-41(d) asks the pinned row's control to perturb the LADDER rather than a comment
+            # beside it, and this is the smallest edit that is unambiguously code: a reader cannot
+            # answer "the gate only notices comments". The perturbed copy is never compiled, only
+            # hashed, so an empty statement is legal here in a way it would not be in the tree.
+            brace = masked.index('{', begin)
+            patched = text[:brace + 1] + ';' + text[brace + 1:]
+        elif where == 'tail':
             # end is one PAST the closing brace (find_function / find_namespace both return
             # `match_forward(...) + 1`), so end - 1 is the brace itself and this lands inside the
             # body, one character before it ends.
@@ -497,29 +523,57 @@ extract_baseline() {
   fi
   for name in $PINNED_FUNCTIONS; do
     eval "pinned=\$PINNED_SHA_$name"
+    grep "^$name$(printf '\t')" "$WORK_DIR/$out.spec.all" > "$WORK_DIR/$out.spec.pinned" || true
+    atRef=$(python3 "$PY" extract "$WORK_DIR/$out.spec.pinned" 2>/dev/null | awk '{ print $1 }')
+    if [ -n "$atRef" ] && [ "$atRef" != "$pinned" ]; then
+      say "NOTE: $name IS defined at '$ref' and hashes"
+      say "  $atRef, which is not the pin"
+      say "  ($pinned,"
+      say "  captured at $PINNED_BASELINE_REF, $PINNED_BASELINE_DECISION). THE PIN IS WHAT IS"
+      say "  COMPARED - it is the reviewed body - and this note is not a verdict in either"
+      say "  direction. If '$ref' PREDATES $PINNED_BASELINE_REF the two SHOULD disagree: the pinned"
+      say "  body is the change $PINNED_BASELINE_DECISION admitted, which is why it was re-pinned"
+      say "  rather than reverted. If it does not predate it, the ladder that ships has moved away"
+      say "  from the reviewed text without this gate being re-pinned - re-pin deliberately or"
+      say "  revert, but do not leave them disagreeing."
+    fi
+  done
+  # The pinned rows are appended and the list is put back into the FIXED ORDER, both inside
+  # apply_pinned_shas - ONE spelling of the substitution, which --self-test's pin controls drive
+  # as well, so a control cannot prove only that a copy of the logic agrees with itself.
+  apply_pinned_shas "$WORK_DIR/$out.sha" || return 2
+  return 0
+}
+
+# True when $1 is one of the rows whose baseline is the PIN rather than <ref-a>.
+is_pinned_row() {
+  local name candidate
+  for candidate in $PINNED_FUNCTIONS; do
+    [ "$candidate" = "$1" ] && return 0
+  done
+  return 1
+}
+
+# Overwrite the pinned rows of a `<sha>  <region>` list with the shas PINNED at the top of this
+# script, then restore the FIXED ORDER (review F-m1: the pinned rows would otherwise be emitted
+# LAST while extract_ref emits everything in REGIONS order. The gate itself never noticed -
+# compare_lists looks rows up by name - but the documented capture workflow did: the header
+# promises "stdout is always the sha list ... in the fixed order above - so a baseline capture is a
+# plain redirect", and a baseline captured that way then diffed against a two-ref stdout showed
+# seven spurious differences purely from row order).
+apply_pinned_shas() {
+  local file=$1 name pinned
+  for name in $PINNED_FUNCTIONS; do
+    eval "pinned=\$PINNED_SHA_$name"
     if [ -z "$pinned" ] || [ "$pinned" = "PLACEHOLDER_SHA" ]; then
       say "$name has no pinned baseline sha; that row cannot be compared"
       return 2
     fi
-    grep "^$name$(printf '\t')" "$WORK_DIR/$out.spec.all" > "$WORK_DIR/$out.spec.pinned" || true
-    atRef=$(python3 "$PY" extract "$WORK_DIR/$out.spec.pinned" 2>/dev/null | awk '{ print $1 }')
-    if [ -n "$atRef" ] && [ "$atRef" != "$pinned" ]; then
-      say "NOTE: $name IS defined at '$ref' and hashes $atRef, which is NOT the sha pinned in this"
-      say "  script ($pinned, captured at $PINNED_BASELINE_REF). The PIN is what is compared - it is"
-      say "  the reviewed text (ID-15) - but the two disagreeing means the push ladder moved between"
-      say "  $PINNED_BASELINE_REF and '$ref' without this gate being re-pinned. Re-pin deliberately or"
-      say "  revert; do not leave them disagreeing."
-    fi
-    printf '%s  %s\n' "$pinned" "$name" >> "$WORK_DIR/$out.sha"
+    grep -v "  $name\$" "$file" > "$file.unpinned" || true
+    mv -f "$file.unpinned" "$file" || return 2
+    printf '%s  %s\n' "$pinned" "$name" >> "$file"
   done
-  # ...and put the list back into the FIXED ORDER (review F-m1). The pinned rows were stripped out
-  # of the spec above and appended here, so without this the baseline side emits them LAST while
-  # extract_ref emits everything in REGIONS order. The gate itself never noticed - compare_lists
-  # looks rows up by name - but the documented capture workflow did: the header promises "stdout is
-  # always the sha list ... in the fixed order above - so a baseline capture is a plain redirect",
-  # and a baseline captured that way then diffed against a two-ref stdout showed seven spurious
-  # differences purely from row order.
-  reorder_sha_list "$WORK_DIR/$out.sha" || return 2
+  reorder_sha_list "$file" || return 2
   return 0
 }
 
@@ -553,6 +607,18 @@ compare_lists() {
         say "FIRST REGION THAT MOVED: $name"
         say "  $labelA ${shaA:-<not found>}"
         say "  $labelB ${shaB:-<not found>}"
+        if is_pinned_row "$name"; then
+          # ITS OWN MESSAGE, and that is R-16 rather than decoration: the pinned row and the
+          # sixteen ref-a rows fail differently and are fixed differently, so a reader who sees
+          # only the generic paragraph below goes looking for a diff against <ref-a> that does not
+          # exist.
+          say "  $name IS A PINNED ROW ($PINNED_BASELINE_DECISION): its baseline is ALWAYS the sha"
+          say "  PINNED in this script - the body reviewed at $PINNED_BASELINE_REF - and never the"
+          say "  body at '$labelA'. So this is not a diff against the base ref: the ladder that"
+          say "  SHIPS has moved away from the text that was reviewed. Either re-pin deliberately,"
+          say "  replacing the sha AND the commit AND the decision beside it in BOTH this script"
+          say "  and its parent scripts/p3a_untouched_regions.sh, or revert the body."
+        fi
         say "  G5 (ARCHITECTURE.md:318, :321, :515) says the Espryt do-not-touch list is literal:"
         say "  P3a's buffer pool, deferred-release drain, three rings and BOTH arms of the three-tier"
         say "  flush drain, plus P4a's unpack-PBO staging repack and its two ring helpers, the"
@@ -573,10 +639,12 @@ compare_lists() {
 # --- self-test ------------------------------------------------------------------------------
 # A gate that always says "identical" and a gate that is working produce the same green, so the
 # comparison has to be shown failing. Both controls run: the POSITIVE ones (an untouched copy
-# compares equal; an edit OUTSIDE the regions is invisible) rule out a comparison that reports
-# every region as moved, and the eight NEGATIVE ones - D-N's four regions, each perturbed at the
-# HEAD of its body and again at its TAIL - rule out both the comparison that never reports any and
-# the extraction whose extent stops before the closing brace (F-m2).
+# compares equal; an edit OUTSIDE the regions is invisible; a baseline that names another sha for
+# the PINNED row is overridden by the pin) rule out a comparison that reports every region as
+# moved, and the NINE NEGATIVE ones - D-N's four regions, each perturbed at the HEAD of its body
+# and again at its TAIL, plus a ONE-TOKEN edit to the pinned ladder compared AGAINST THE PIN
+# (ID-41) - rule out the comparison that never reports any, the extraction whose extent stops
+# before the closing brace (F-m2), and a pin that nothing consults.
 if [ "${1:-}" = "--self-test" ]; then
   [ $# -eq 1 ] || { say "--self-test takes no other arguments"; exit 2; }
   mkdir -p "$WORK_DIR/pristine" || exit 2
@@ -678,6 +746,85 @@ if [ "${1:-}" = "--self-test" ]; then
     say "its tail), ran $controls"
     exit 2
   fi
+
+  # --- THE PINNED ROW (ID-41) -----------------------------------------------------------------
+  # TWO more controls, and they exist because none of the ten above can see the pin at all: every
+  # one of them compares one extraction of the working tree against another, so they would all be
+  # green on a build of this script in which PINNED_SHA_* was never read by anything. The pinned
+  # row's whole claim is "the baseline is the PIN, not <ref-a>" (D-N/2, ID-41), and that claim
+  # needs its own two.
+  for target in $PINNED_FUNCTIONS; do
+    eval "pinned=\$PINNED_SHA_$target"
+    targetSource=$(printf '%s\n' "$REGIONS" | awk -F@ -v n="$target" '$1 == n { print $3 }')
+    [ -n "$targetSource" ] || { say "$target is not one of the regions"; exit 2; }
+
+    # (1) PIN PRECEDENCE, positive. A baseline that carries some OTHER sha for the pinned row -
+    # which is the shape of every <ref-a> CI passes, since 37da3c3a DOES define
+    # FlushPendingRangesFrom and no longer hashes the pin - must come out of apply_pinned_shas
+    # carrying the PIN.
+    grep -v "  $target\$" "$WORK_DIR/pristine.sha" > "$WORK_DIR/pinprec.sha" || true
+    printf '%s  %s\n' \
+        "0000000000000000000000000000000000000000000000000000000000000000" "$target" \
+        >> "$WORK_DIR/pinprec.sha"
+    apply_pinned_shas "$WORK_DIR/pinprec.sha" || exit 2
+    got=$(awk -v n="$target" '$2 == n { print $1 }' "$WORK_DIR/pinprec.sha")
+    if [ "$got" != "$pinned" ]; then
+      say "PIN CONTROL FAILED: a baseline that carried a DIFFERENT sha for $target came out as"
+      say "  '${got:-<absent>}' and not as the pin ($pinned). That row would be compared against"
+      say "  <ref-a> again, which is exactly what D-N/2 and $PINNED_BASELINE_DECISION forbid."
+      exit 2
+    fi
+    say "pin control: a baseline that defines $target differently is overridden by the PIN"
+
+    # (2) A ONE-TOKEN EDIT TO THE PINNED LADDER, negative, AGAINST THE PIN. The comparison must go
+    # red, must name the region, and must say the region is PINNED - R-16's "a control asserts its
+    # OWN failure string": the pinned row and the sixteen ref-a rows are fixed differently, and a
+    # reader who gets only the generic paragraph goes looking for a diff against <ref-a> that does
+    # not exist.
+    rm -rf "$WORK_DIR/pinperturbed"
+    cp -r "$WORK_DIR/pristine" "$WORK_DIR/pinperturbed" || exit 2
+    write_spec "$WORK_DIR/pinperturbed" "$WORK_DIR/pinperturbed.spec"
+    python3 "$PY" perturb "$WORK_DIR/pinperturbed.spec" "$target" \
+        "$WORK_DIR/pristine/$(blob_name "$targetSource")" \
+        "$WORK_DIR/pinperturbed/$(blob_name "$targetSource")" token || exit 2
+    python3 "$PY" extract "$WORK_DIR/pinperturbed.spec" > "$WORK_DIR/pinperturbed.sha" || exit 2
+    cp -f "$WORK_DIR/pristine.sha" "$WORK_DIR/pinbase.sha" || exit 2
+    apply_pinned_shas "$WORK_DIR/pinbase.sha" || exit 2
+    if compare_lists "$WORK_DIR/pinbase.sha" "$WORK_DIR/pinperturbed.sha" \
+         "PIN($PINNED_BASELINE_REF)" "one-token-perturbed" 2> "$WORK_DIR/pinperturbed.err"; then
+      say "NEGATIVE CONTROL DID NOT TRIP: one token was inserted into $target's body and the"
+      say "comparison AGAINST THE PIN still reported every region as identical. The pinned row is"
+      say "not being compared at all, so every green this gate has printed for it means nothing."
+      exit 2
+    fi
+    if ! grep -q "FIRST REGION THAT MOVED: $target" "$WORK_DIR/pinperturbed.err"; then
+      say "NEGATIVE CONTROL TRIPPED FOR THE WRONG REASON: the comparison against the pin went red"
+      say "but did not name $target as the first region that moved. It said:"
+      sed 's/^/[p4a-untouched]   /' "$WORK_DIR/pinperturbed.err" >&2
+      exit 2
+    fi
+    if ! grep -q "$target IS A PINNED ROW" "$WORK_DIR/pinperturbed.err"; then
+      say "NEGATIVE CONTROL TRIPPED FOR THE WRONG REASON: it went red and named $target, but did"
+      say "not say that this row's baseline is the PIN. That is the half a reader acts on, and a"
+      say "control that does not assert its own message is not a control (R-16). It said:"
+      sed 's/^/[p4a-untouched]   /' "$WORK_DIR/pinperturbed.err" >&2
+      exit 2
+    fi
+    controls=$((controls + 1))
+    say "negative control $controls: a ONE-TOKEN edit to the pinned $target body goes red AGAINST"
+    say "  THE PIN, is named, and says the row is pinned"
+
+    # NOT a failure, deliberately: --self-test is about whether the comparison works, and it runs
+    # on the WORKING tree, which may legitimately carry an uncommitted edit. The two-ref gate is
+    # what fails when the committed region has left the pin.
+    treeSha=$(awk -v n="$target" '$2 == n { print $1 }' "$WORK_DIR/pristine.sha")
+    if [ "$treeSha" != "$pinned" ]; then
+      say "NOTE: this working tree's $target hashes $treeSha, not the pin ($pinned). The"
+      say "  self-test's verdict is unaffected; the two-ref gate will be RED until you re-pin or"
+      say "  revert."
+    fi
+  done
+
   say "self-test passed: $controls negative controls, all tripped and all named"
   exit 0
 fi

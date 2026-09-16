@@ -702,9 +702,11 @@ TEST(RingTest, TheTwoFlagSpacesAreDisjointByTranslation) {
     static_assert(Call(kHasBlob) == Rec(kRecHasBlob), "bit 1 stopped agreeing");
 
     // The three that collide. Each of these is a live defect if it is ever passed through,
-    // and the middle one is the worst: RingConsumer::Pop treats kRecPad as a wrap filler and
-    // SKIPS the record, so a stamped kVarTail deletes every variable-tail call from the
-    // stream with no error raised anywhere.
+    // and the middle one was the worst: kRecPad is the flag RingConsumer::Pop reads as "wrap
+    // filler", so on the flag alone a stamped kVarTail would delete every variable-tail call
+    // from the stream with no error raised anywhere. Pop does not read it on the flag alone -
+    // it requires kind == kRingPadRecordKind beside it - and the runtime half below is the
+    // control on exactly that.
     static_assert(Call(kVarTail) == Rec(kRecPad), "the kVarTail/kRecPad collision moved");
     static_assert(Call(kHostSpan) == Rec(kRecBorrowSlot), "the kHostSpan/kRecBorrowSlot collision moved");
     static_assert(Call(kReplySlot) == Rec(kRecVarTail), "the kReplySlot/kRecVarTail collision moved");
@@ -757,8 +759,17 @@ TEST(RingTest, TheTwoFlagSpacesAreDisjointByTranslation) {
     // The one that Reserve cannot defend: a producer that writes the header ITSELF rather than
     // letting Reserve write it - which is precisely what a codec with its own header struct
     // does, since MGPWireRecHeader and RingRecordHeader are the same eight bytes. Then the
-    // mask is not in the path, Pop sees kRecPad, and the record is skipped as a wrap filler
-    // with no error raised anywhere.
+    // mask is not in the path and Pop sees kRecPad on a record that is not a filler.
+    //
+    // What saves it is the KIND. RingConsumer::Pop skips a record only when it carries kRecPad
+    // AND kind == kRingPadRecordKind (Ring.cpp: `(header.flags & kRecPad) != 0 && header.kind ==
+    // kRingPadRecordKind` - "BOTH, not just the flag"). Kind 0 is the wrap filler's and nothing
+    // else's, because the call catalogue starts at 1. So the stamped record is DELIVERED, lies
+    // and all, and the decoder can reject it by name - which it can only do because it got it.
+    // THE ASSERT AND THE EXPECTS BELOW ARE THE CONTROL ON THAT KIND CHECK: delete the
+    // `&& header.kind == kRingPadRecordKind` half of Pop's condition and this record vanishes
+    // into the wrap-filler skip again, exactly as it did before the pair was required, and this
+    // case goes red on the ASSERT's own message. That perturbation was run.
     void* second = ring.Producer().Reserve(static_cast<std::uint16_t>(MGPWireOp::DrawVbo),
                                            kRecNone, 16);
     ASSERT_NE(second, nullptr);
@@ -771,10 +782,51 @@ TEST(RingTest, TheTwoFlagSpacesAreDisjointByTranslation) {
                 sizeof(stamped));
     ring.Producer().Publish();
 
+    ASSERT_TRUE(ring.Consumer().Pop(view))
+        << "the stamped record vanished into Pop's wrap-filler skip. Pop's kind check - a filler "
+           "must carry kind == kRingPadRecordKind as well as kRecPad - is the only thing standing "
+           "between a header stamped with the CALL flags and every var-tail call being deleted "
+           "from the stream with nothing logged on either side";
+    EXPECT_EQ(view.kind, static_cast<std::uint16_t>(MGPWireOp::DrawVbo))
+        << "kind is what Pop tells a real record from a filler by, and a filler's is "
+           "kRingPadRecordKind";
+
+    // Delivered is not the same as correct. The stamped bits arrive verbatim, and they are
+    // exactly the collisions the table above names: bit 2 (kVarTail -> kRecPad) is why this
+    // record looked like a filler at all, and bit 3 (kHostSpan -> kRecBorrowSlot) still makes it
+    // claim a slot in the GPU timeline it never borrowed. draw_vbo is not a kReplySlot call, so
+    // bit 4 (kReplySlot -> kRecVarTail) is clear here; on a blocking call it would lie too.
+    EXPECT_EQ(view.flags, static_cast<std::uint16_t>(drawVboCallFlags))
+        << "the header did not arrive as it was stamped";
+    EXPECT_NE(view.flags & static_cast<std::uint16_t>(kRecPad), 0u)
+        << "the kVarTail/kRecPad collision arrives intact - the kind check narrows the SKIP, it "
+           "does not scrub the bit, and naming this record is the decoder's job";
+    EXPECT_NE(view.flags & static_cast<std::uint16_t>(kRecBorrowSlot), 0u)
+        << "the kHostSpan/kRecBorrowSlot collision is what makes a stamped header lie about "
+           "this record's lifetime";
+    EXPECT_EQ(view.flags & static_cast<std::uint16_t>(kRecVarTail), 0u)
+        << "draw_vbo started carrying kReplySlot; then the third collision lies here too";
+    EXPECT_EQ(view.payloadSize, 16u);
+    EXPECT_TRUE(ring.Invariants());
+
+    // The other side of the same control, so that "the record is popped" cannot be satisfied by
+    // simply not skipping anything: kRecPad on a header whose kind IS kRingPadRecordKind is a
+    // genuine wrap filler and still vanishes. Pop's check was narrowed to the pair, not removed.
+    void* filler = ring.Producer().Reserve(kRingPadRecordKind, kRecNone, 16);
+    ASSERT_NE(filler, nullptr);
+    std::memset(filler, 0xEF, 16);
+    RingRecordHeader asFiller{};
+    std::memcpy(&asFiller, static_cast<std::uint8_t*>(filler) - sizeof(RingRecordHeader),
+                sizeof(asFiller));
+    asFiller.flags = static_cast<std::uint16_t>(kRecPad);
+    std::memcpy(static_cast<std::uint8_t*>(filler) - sizeof(RingRecordHeader), &asFiller,
+                sizeof(asFiller));
+    ring.Producer().Publish();
+
     EXPECT_FALSE(ring.Consumer().Pop(view))
-        << "a header stamped with the CALL flags outside Reserve should vanish into Pop's "
-           "wrap-filler skip - if it did not, the collision has moved and this case is no "
-           "longer the control it was";
+        << "a header carrying BOTH kRecPad and kind kRingPadRecordKind is a wrap filler and has "
+           "to be skipped; if it reaches a caller the skip is gone, not narrowed";
+    EXPECT_TRUE(ring.Invariants());
 
     // And the same record framed the way the encoder actually frames it - translated, with the
     // ring's own var-tail bit - round-trips intact.
