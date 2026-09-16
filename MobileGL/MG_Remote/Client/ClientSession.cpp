@@ -124,6 +124,30 @@ namespace MobileGL::MG_Remote::Client {
         // second-scale wait, while a lost record never completes at all. 30 s separates the two
         // without turning a loaded CI machine into a red lane, and the Fatal names the seq.
         constexpr Uint32 kBarrierTimeoutMs = 30000;
+
+        Uint64 AppliedWaitBudgetMs(MG_Pipe::MGPWireOp op, const void* payload) {
+            if (op != MG_Pipe::MGPWireOp::FenceWait) return kBarrierTimeoutMs;
+            const Uint64 timeoutNs = static_cast<const MG_Pipe::MGPFenceWait*>(payload)->TimeoutNs;
+            // ClientWaitSync may legitimately block longer than the ordinary verb barrier.
+            // Round up without overflowing UINT64_MAX, then allow the usual transport grace.
+            // FenceWaitServer queues a GPU wait; its GL_TIMEOUT_IGNORED is not a CPU budget.
+            return timeoutNs / 1000000 + (timeoutNs % 1000000 != 0) + kBarrierTimeoutMs;
+        }
+
+        Transport::SessionWait WaitForAppliedBudget(Transport::SessionProducer& producer,
+                                                    Uint64 seq, Uint64 remainingMs) {
+            // The transport takes Uint32 milliseconds with UINT32_MAX meaning forever.
+            // Keep even the largest GL timeout finite, using bounded chunks and preserving
+            // the doorbell's immediate shutdown result. Avoid a giant chrono deadline too.
+            constexpr Uint32 kMaxFiniteWaitMs = Transport::kWaitForever - 1;
+            for (;;) {
+                const Uint32 chunkMs = remainingMs > kMaxFiniteWaitMs
+                                           ? kMaxFiniteWaitMs : static_cast<Uint32>(remainingMs);
+                const auto wait = producer.WaitForApplied(seq, chunkMs);
+                if (wait != Transport::SessionWait::TimedOut || remainingMs <= chunkMs) return wait;
+                remainingMs -= chunkMs;
+            }
+        }
         // How many queued control frames one pump will drain. A backlog deeper than this is a
         // finding, not a steady state.
         constexpr Uint32 kMaxControlFramesPerPump = 16;
@@ -776,7 +800,8 @@ namespace MobileGL::MG_Remote::Client {
         }
 
         const BarrierWaitScope waiting;
-        const Transport::SessionWait wait = m_producer.WaitForApplied(seq, kBarrierTimeoutMs);
+        const Uint64 waitBudgetMs = AppliedWaitBudgetMs(op, payload);
+        const Transport::SessionWait wait = WaitForAppliedBudget(m_producer, seq, waitBudgetMs);
         if (wait == Transport::SessionWait::ShutDown) {
             // The doorbell died: the server went away. The only thing that returns from a
             // kWaitForever park, and therefore the only way a client blocked in the barrier
@@ -796,9 +821,10 @@ namespace MobileGL::MG_Remote::Client {
         }
         if (wait != Transport::SessionWait::Reached) {
             MGLOG_F("MGPipe: Fatal{BarrierTimeout, \"%s\"} - appliedSeq did not reach %llu within "
-                    "%u ms. A bounded wait is deliberate: a wedged CI job and a lost record look "
+                    "%llu ms. A bounded wait is deliberate: a wedged CI job and a lost record look "
                     "identical from outside, and only one of them is a bug worth finding",
-                    Wire::WireOpName(op), static_cast<unsigned long long>(seq), kBarrierTimeoutMs);
+                    Wire::WireOpName(op), static_cast<unsigned long long>(seq),
+                    static_cast<unsigned long long>(waitBudgetMs));
             std::abort();
         }
 

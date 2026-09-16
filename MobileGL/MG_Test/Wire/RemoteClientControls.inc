@@ -20,6 +20,54 @@ struct RepliesTag {
     friend Type PeerMember(RepliesTag);
 };
 template struct PeerAccess<RepliesTag, &Codec::PipeWireDecoder::m_replies>;
+struct ProducerBellTag {
+    using Type = Transport::Doorbell* Transport::SessionProducer::*;
+    friend Type PeerMember(ProducerBellTag);
+};
+template struct PeerAccess<ProducerBellTag, &Transport::SessionProducer::m_selfBell>;
+
+// Observe the actual transport park selected by EmitAndWait. The peer waits until
+// the client parks, so no GPU or wall-clock 60-second sleep is required.
+struct BudgetBell : Transport::Doorbell {
+    Transport::Doorbell* original;
+    std::atomic<Uint32> firstMs{0};
+    std::atomic<Bool> entered{false};
+    Bool shutDown = false;
+    explicit BudgetBell(Transport::Doorbell* bell) : original(bell) {}
+    void Notify() override { original->Notify(); }
+    void Reset() override { original->Reset(); }
+    bool Park(std::uint32_t timeoutMs) override {
+        if (!entered.load()) {
+            firstMs.store(timeoutMs);
+            entered.store(true);
+        }
+        return shutDown ? false : original->Park(timeoutMs);
+    }
+    bool Dead() const override { return (shutDown && entered.load()) || original->Dead(); }
+};
+
+struct FenceBudgetPeer : Codec::WireVerbSink {
+    BudgetBell& bell;
+    std::atomic<Bool> release{false};
+    explicit FenceBudgetPeer(BudgetBell& value) : bell(value) {}
+    void AwaitPark() {
+        while (!bell.entered.load() || (bell.shutDown && !release.load())) std::this_thread::yield();
+    }
+    Bool OnFenceWait(const MGPFenceWait&, Uint32& result) override {
+        AwaitPark();
+        result = GL_TIMEOUT_EXPIRED;
+        return true;
+    }
+    Bool OnFenceWaitServer(const MGPFenceWait&) override { AwaitPark(); return true; }
+    void Install() {
+        if (Srv::ServerLoopInstance().RunOnApplyThread([](void* self) {
+            auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
+            decoder.SetVerbSink(static_cast<FenceBudgetPeer*>(self));
+            return MOBILEGL_OK;
+        }, this) != MOBILEGL_OK) ::_exit(92);
+    }
+};
+
 struct BackendTag {
     using Type = UniquePtr<MG_Backend::BackendObject> Srv::ServerLoop::*;
     friend Type PeerMember(BackendTag);
@@ -149,6 +197,89 @@ TEST(RemoteClientControls, ErrorReadPixelsReplyRefusesByName) {
         RemoteEmitTable().GL.ReadPixels(0, 0, 4, 3, 0x1908, 0x1401, pixels);
     });
     ExpectNamedAbort(child, "Fatal{ReplyError, \"ReadPixels\"}");
+}
+
+TEST(RemoteClientControls, UnknownReadPixelsReplyStatusRefusesTightAndBounce) {
+    for (const Bool bounce : {false, true}) {
+        const auto child = RunInChild([bounce] {
+            StartControlSession();
+            if (bounce) {
+                MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+                MG_State::pGLContext->SetPixelStoreParam(PixelStoreParam::PackRowLength, 8);
+            }
+            ReadPeer peer;
+            peer.status = 3;
+            peer.Install();
+            Uint8 pixels[128]{};
+            RemoteEmitTable().GL.ReadPixels(0, 0, 4, 3, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        });
+        ExpectNamedAbort(child, "Fatal{ReplyStatusInvalid, \"ReadPixels\"}");
+    }
+}
+
+TEST(RemoteClientControls, FenceWaitBudgetHonorsGlTimeoutAndFiniteTransportChunks) {
+    struct WaitCase { Uint64 timeoutNs; MGPWireOp op; Uint32 expectedParkMs; };
+    const WaitCase cases[] = {
+        {0, MGPWireOp::FenceWait, 30000},
+        {1, MGPWireOp::FenceWait, 30001},
+        {60000000000ull, MGPWireOp::FenceWait, 90000},
+        {~Uint64(0), MGPWireOp::FenceWait, Transport::kWaitForever - 1},
+        {~Uint64(0), MGPWireOp::FenceWaitServer, 30000},
+    };
+    for (const auto test : cases) {
+        const auto child = RunInChild([test] {
+            StartControlSession();
+            auto& session = ClientSessionInstance();
+            auto& producer = session.Producer();
+            BudgetBell bell(producer.SelfDoorbell());
+            FenceBudgetPeer peer(bell);
+            peer.Install();
+            producer.*PeerMember(ProducerBellTag{}) = &bell;
+            MGPFenceWait request{};
+            request.TimeoutNs = test.timeoutNs;
+            Uint32 result = 0;
+            Int32 status = -1;
+            Uint64 size = 0;
+            session.EmitAndWait(test.op, &request, sizeof(request), nullptr, 0,
+                                &result, sizeof(result), &status, &size);
+            producer.*PeerMember(ProducerBellTag{}) = bell.original;
+            const auto observed = bell.firstMs.load();
+            // Doorbell converts the remaining deadline to whole milliseconds. Allow
+            // scheduler delay, but neither a 30s clamp nor an unbounded sentinel.
+            if (!bell.entered.load() || observed > test.expectedParkMs ||
+                observed < test.expectedParkMs - 100 || observed == Transport::kWaitForever) ::_exit(93);
+            if (test.op == MGPWireOp::FenceWait &&
+                (status != Codec::ReplySink::kStatusOk || size != sizeof(result) ||
+                 result != GL_TIMEOUT_EXPIRED)) ::_exit(94);
+            session.Stop();
+        });
+        ExpectChildSuccess(child);
+    }
+}
+
+TEST(RemoteClientControls, LongFenceWaitBudgetStillWakesOnShutdown) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        auto& session = ClientSessionInstance();
+        auto& producer = session.Producer();
+        BudgetBell bell(producer.SelfDoorbell());
+        bell.shutDown = true;
+        FenceBudgetPeer peer(bell);
+        peer.Install();
+        producer.*PeerMember(ProducerBellTag{}) = &bell;
+        MGPFenceWait request{};
+        request.TimeoutNs = ~Uint64(0);
+        Uint32 result = 0;
+        Int32 status = -1;
+        Uint64 size = 7;
+        session.EmitAndWait(MGPWireOp::FenceWait, &request, sizeof(request), nullptr, 0,
+                            &result, sizeof(result), &status, &size);
+        producer.*PeerMember(ProducerBellTag{}) = bell.original;
+        peer.release.store(true);
+        if (status != Codec::ReplySink::kStatusDeclined || size != 0) ::_exit(95);
+        session.Stop();
+    });
+    ExpectChildSuccess(child);
 }
 
 TEST(RemoteClientControls, ResourceRespecifyErrorIsNotADecline) {

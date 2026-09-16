@@ -873,6 +873,10 @@ namespace MobileGL::MG_Remote::Client {
                         "Fatal here rather than a buffer of stale bytes");
                 std::abort();
             }
+            if (status != Wire::ReplySink::kStatusOk) {
+                MGLOG_F("MGPipe: Fatal{ReplyStatusInvalid, \"ReadPixels\"} - unknown reply status %d", status);
+                std::abort();
+            }
             if (replySize != expected) {
                 MGLOG_F("MGPipe: Fatal{ReadbackReplyShort, \"ReadPixels %llu < %llu\"} - the OK "
                         "reply carried fewer bytes than the read's own DstSize (CONTRACT-P5 row "
