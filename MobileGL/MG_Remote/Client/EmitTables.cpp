@@ -10,8 +10,8 @@
 //
 // THE PARTITION IS CONTRACT-P5.md §7's AND IS NOT RE-DERIVED HERE (R-15, ID-12):
 //   class A  2 slots  answered locally from the caps mirror, never emitted, never Fatal
-//   class B  5 slots  emitted
-//   class C 64 slots  Fatal{UnmigratedVerb, "<slot>"}
+//   class B 24 slots  emitted (P5's five; P5b d1's nineteen draw slots, all on draw_vbo)
+//   class C 45 slots  Fatal{UnmigratedVerb, "<slot>"}
 // The three counts are static_asserted to sum to kRemoteEmitSlotCount below, so a slot that
 // changes class without changing the arithmetic is a build break rather than a behaviour
 // change nobody reviewed.
@@ -35,7 +35,14 @@
 
 #include <MG_State/GLState/BufferState/BufferObject.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
 
+// P5b d1: the handle a bound buffer already has (never minted here - the validate-time
+// set_index_buffer / the buffer's own constructor did that), for MGPDrawInfo::IndexResource and
+// the two indirect-buffer handles.
+#include <MG_Impl/Pipe/ResourceTracker.h>
+
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -270,6 +277,303 @@ namespace MobileGL::MG_Remote::Client {
             // diagnose.
             session.EmitAndWait(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), &range,
                                 sizeof(range), nullptr, 0, nullptr);
+        }
+
+        // =============================================================================
+        // P5b d1 - the nineteen indexed / instanced / multi-draw / indirect draw slots
+        // (MG_Remote/CONTRACT-P5B.md §2 d1). ONE ROW, draw_vbo (59): the record carries the GL
+        // call verbatim (rule D) beside the handle the P8 form will dispatch on, and the sink
+        // reproduces the backend call the monolith makes.
+        // =============================================================================
+        //
+        // Every entry point below is: read the bindings, plan the head and the ranges (the pure
+        // functions the unit cases drive), then EmitDrawRecord - which runs the SAME pre-verb
+        // hooks in the SAME order as EmitDrawArrays (push, then mark walk, then the record;
+        // ID-18), honours the E2 draw-drop control for every draw record and not only the P5
+        // one, stages a client index array into SEG_STAGE when there is one, and emits.
+        //
+        // WHAT IS REFUSED BY NAME, ID-57's shape (Fatal{UnmigratedVerb, "<slot>+<QUALIFIER>"}),
+        // never rendered wrong and never fallen through to the driver (R-4):
+        //   +CLIENT_INDICES    a glMultiDrawElements* with no element buffer bound: `indices[i]`
+        //                      are drawcount separate client pointers and one span names one run;
+        //                      P8's HostResolve.cpp flattens it. No measured workload has one.
+        //   +CLIENT_COMMANDS   an indirect draw with no GL_DRAW_INDIRECT_BUFFER bound: `indirect`
+        //                      would be a host pointer, which rule B forbids on the wire.
+        //   +UNBOUND_PARAMETER an *IndirectCount with no GL_PARAMETER_BUFFER (the frontend has
+        //                      already raised INVALID_OPERATION for it; stated so the emitter
+        //                      cannot send a null handle where the sink dereferences one).
+        //   +INDEX_OFFSET      an element-buffer byte offset that is not a whole number of
+        //                      indices (or past 2^32 of them): the record spells Start in
+        //                      indices, and rounding would draw from the wrong element.
+
+        [[noreturn]] void RefuseDrawByName(const char* slot, const char* qualifier) {
+            char name[96];
+            std::snprintf(name, sizeof(name), "%s+%s", slot, qualifier);
+            UnmigratedVerbFatal(name);
+        }
+
+        // The bindings the plan is made from, read ONCE per draw from the frontend context on
+        // the GL thread. The element buffer is the VAO's (the same slot EmitIndexBuffer read at
+        // validate), the two indirect buffers are the context's, and the handles are LOOKED UP,
+        // never minted: a push build mints in the BufferObject constructor.
+        RemoteDrawBindings ReadDrawBindings() {
+            RemoteDrawBindings b{};
+            MG_State::GLState::GLContext* ctx = MG_State::pGLContext.get();
+            if (ctx == nullptr) return b;
+            if (const auto& vao = ctx->GetBoundVertexArray()) {
+                if (const auto& bound = vao->GetIndexBufferBindingSlot().GetBoundObject()) {
+                    b.ElementBufferBound = true;
+                    b.ElementBuffer = MG_Pipe::MGPipeResourceTrackerInstance().Find(*bound);
+                }
+            }
+            if (const auto& di = ctx->GetBufferBindingSlot(::MobileGL::BufferTarget::DrawIndirect).GetBoundObject()) {
+                b.DrawIndirectBuffer = MG_Pipe::MGPipeResourceTrackerInstance().Find(*di);
+            }
+            if (const auto& pb = ctx->GetBufferBindingSlot(::MobileGL::BufferTarget::Parameter).GetBoundObject()) {
+                b.ParameterBuffer = MG_Pipe::MGPipeResourceTrackerInstance().Find(*pb);
+            }
+            b.PrimitiveRestart = ctx->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
+                                 ctx->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
+            b.RestartIndex = ctx->GetPrimitiveRestartIndex();
+            return b;
+        }
+
+        // The one emission for all nineteen. `clientIndices`/`clientIndexBytes` name a client
+        // index array to stage (no element buffer bound); `indirect` is the kDrawIsIndirect
+        // block. The two are exclusive by construction here and by the layout on both sides.
+        void EmitDrawRecord(const char* slot, MG_Pipe::MGPDrawInfo& info,
+                            const MG_Pipe::MGPDrawRange* ranges, Uint32 numDraws,
+                            const void* clientIndices, Uint64 clientIndexBytes,
+                            const MG_Pipe::MGPDrawIndirect* indirect) {
+            ClientSession& session = RequireSession(slot);
+            BeforeDrawVerb();
+
+            if (g_dropDrawEmission) {
+                // E2's negative control covers EVERY draw record, not only DrawArrays: the
+                // Minecraft traces are DrawElements frames, and a control that dropped only the
+                // one P5 entry point would leave those lanes green with the wire disarmed.
+                ++g_droppedDrawEmissions;
+                return;
+            }
+
+            info.NumDraws = numDraws;
+            Wire::WireTail tails[2] = {{ranges, static_cast<Uint64>(numDraws) * sizeof(MG_Pipe::MGPDrawRange)},
+                                       {nullptr, 0}};
+            Uint32 tailCount = 1;
+            MG_Pipe::MGHostSpan span{};
+            if (clientIndices != nullptr && clientIndexBytes != 0) {
+                // The P8 resolve-on-client rule, applied: the bytes exist on the client only,
+                // so the client stages them whole and the record names the run - Ptr = nullptr,
+                // Seg = SEG_STAGE (rule B). The encoder runs all four honesty arms on the span
+                // before it is published, and the sink resolves it through MGPipeHostBytes.
+                const MG_Pipe::MGPBlobRef staged =
+                    session.Encoder().StageBytes(clientIndices, clientIndexBytes);
+                span.Ptr = nullptr;
+                span.Seg = staged.Seg;
+                span.Offset = staged.Offset;
+                span.Size = staged.Size;
+                info.Flags |= MG_Pipe::kDrawHasUserIndices;
+                tails[1] = {&span, sizeof(span)};
+                tailCount = 2;
+            } else if (indirect != nullptr) {
+                info.Flags |= MG_Pipe::kDrawIsIndirect;
+                tails[1] = {indirect, sizeof(*indirect)};
+                tailCount = 2;
+            }
+            session.EmitAndWaitTails(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), tails,
+                                     tailCount, nullptr, 0, nullptr);
+        }
+
+        // ---- the single-draw indexed family: DrawElements, DrawElementsBaseVertex, the two
+        // DrawRangeElements*, the four DrawElementsInstanced* -------------------------------
+        void EmitIndexedDraw(const char* slot, GLenum mode, GLsizei count, GLenum type,
+                             const void* indices, GLint baseVertex, GLsizei instanceCount,
+                             GLuint baseInstance, Bool hasRange, GLuint start, GLuint end) {
+            const RemoteDrawBindings bindings = ReadDrawBindings();
+            const Uint8 indexSize = RemoteIndexSizeFor(type);
+            if (indexSize == 0) RefuseDrawByName(slot, "INDEX_TYPE");
+            MG_Pipe::MGPDrawInfo info =
+                PlanDrawInfo(mode, indexSize, instanceCount, baseInstance, 1, bindings);
+            if (hasRange) {
+                info.Flags |= MG_Pipe::kDrawHasIndexRange;
+                info.MinIndex = start;
+                info.MaxIndex = end;
+            }
+            MG_Pipe::MGPDrawRange range{};
+            if (!PlanDrawRange(bindings, indexSize, indices, count, baseVertex, range)) {
+                RefuseDrawByName(slot, "INDEX_OFFSET");
+            }
+            // No element buffer: `indices` is the application's array and the draw's own
+            // range is exactly what the driver would read. A null pointer or an empty draw
+            // stages nothing and crosses as a zero-length range, which is what the monolith
+            // hands the driver too.
+            const Bool clientArray = !bindings.ElementBufferBound && indices != nullptr && count > 0;
+            EmitDrawRecord(slot, info, &range, 1, clientArray ? indices : nullptr,
+                           clientArray ? static_cast<Uint64>(count) * indexSize : 0, nullptr);
+        }
+
+        void EmitDrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices) {
+            EmitIndexedDraw("DrawElements", mode, count, type, indices, 0, 1, 0, false, 0, 0);
+        }
+        void EmitDrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                        GLint basevertex) {
+            EmitIndexedDraw("DrawElementsBaseVertex", mode, count, type, indices, basevertex, 1, 0,
+                            false, 0, 0);
+        }
+        void EmitDrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
+                                   const void* indices) {
+            EmitIndexedDraw("DrawRangeElements", mode, count, type, indices, 0, 1, 0, true, start, end);
+        }
+        void EmitDrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsizei count,
+                                             GLenum type, const void* indices, GLint basevertex) {
+            EmitIndexedDraw("DrawRangeElementsBaseVertex", mode, count, type, indices, basevertex, 1,
+                            0, true, start, end);
+        }
+        void EmitDrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                       GLsizei instancecount) {
+            EmitIndexedDraw("DrawElementsInstanced", mode, count, type, indices, 0, instancecount, 0,
+                            false, 0, 0);
+        }
+        void EmitDrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type,
+                                                 const void* indices, GLsizei instancecount,
+                                                 GLint basevertex) {
+            EmitIndexedDraw("DrawElementsInstancedBaseVertex", mode, count, type, indices, basevertex,
+                            instancecount, 0, false, 0, 0);
+        }
+        void EmitDrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type,
+                                                   const void* indices, GLsizei instancecount,
+                                                   GLuint baseinstance) {
+            EmitIndexedDraw("DrawElementsInstancedBaseInstance", mode, count, type, indices, 0,
+                            instancecount, baseinstance, false, 0, 0);
+        }
+        void EmitDrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, GLenum type,
+                                                             const void* indices, GLsizei instancecount,
+                                                             GLint basevertex, GLuint baseinstance) {
+            EmitIndexedDraw("DrawElementsInstancedBaseVertexBaseInstance", mode, count, type, indices,
+                            basevertex, instancecount, baseinstance, false, 0, 0);
+        }
+
+        // ---- the instanced array draws ------------------------------------------------
+        void EmitArraysDraw(const char* slot, GLenum mode, GLint first, GLsizei count,
+                            GLsizei instanceCount, GLuint baseInstance) {
+            const RemoteDrawBindings bindings = ReadDrawBindings();
+            MG_Pipe::MGPDrawInfo info = PlanDrawInfo(mode, 0, instanceCount, baseInstance, 1, bindings);
+            MG_Pipe::MGPDrawRange range{};
+            PlanDrawRange(bindings, 0, reinterpret_cast<const void*>(static_cast<std::intptr_t>(first)),
+                          count, 0, range);
+            EmitDrawRecord(slot, info, &range, 1, nullptr, 0, nullptr);
+        }
+        void EmitDrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instancecount) {
+            EmitArraysDraw("DrawArraysInstanced", mode, first, count, instancecount, 0);
+        }
+        void EmitDrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count,
+                                                 GLsizei instancecount, GLuint baseinstance) {
+            // The vertex-FETCH base instance already crossed in set_vertex_buffers::BaseInstance
+            // at validate (D-H1: MGP_SET_BASE_INSTANCE runs before MGP_FILL); StartInstance is
+            // gl_BaseInstance's value and feeds the GL call.
+            EmitArraysDraw("DrawArraysInstancedBaseInstance", mode, first, count, instancecount,
+                           baseinstance);
+        }
+
+        // ---- the multi-draws: MGPDrawRange[drawcount] is exactly their shape -------------
+        //
+        // The range array is built in a scratch vector owned by the GL thread (the emitter is
+        // single-threaded by the ring's own SPSC contract), sized by drawcount, never held past
+        // the emission. A drawcount of 0 is a call that draws nothing and emits nothing: the
+        // frontend has already refused a negative one.
+        Vector<MG_Pipe::MGPDrawRange>& MultiDrawScratch(Uint32 count) {
+            static Vector<MG_Pipe::MGPDrawRange>& scratch = *new Vector<MG_Pipe::MGPDrawRange>();
+            scratch.resize(count);
+            return scratch;
+        }
+
+        void EmitMultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount) {
+            if (drawcount <= 0 || first == nullptr || count == nullptr) return;
+            const RemoteDrawBindings bindings = ReadDrawBindings();
+            const auto n = static_cast<Uint32>(drawcount);
+            MG_Pipe::MGPDrawInfo info = PlanDrawInfo(mode, 0, 1, 0, n, bindings);
+            Vector<MG_Pipe::MGPDrawRange>& ranges = MultiDrawScratch(n);
+            for (Uint32 i = 0; i < n; ++i) {
+                PlanDrawRange(bindings, 0,
+                              reinterpret_cast<const void*>(static_cast<std::intptr_t>(first[i])),
+                              count[i], 0, ranges[i]);
+            }
+            EmitDrawRecord("MultiDrawArrays", info, ranges.data(), n, nullptr, 0, nullptr);
+        }
+
+        void EmitMultiIndexedDraw(const char* slot, GLenum mode, const GLsizei* count, GLenum type,
+                                  const GLvoid* const* indices, GLsizei drawcount,
+                                  const GLint* basevertex) {
+            if (drawcount <= 0 || count == nullptr || indices == nullptr) return;
+            const RemoteDrawBindings bindings = ReadDrawBindings();
+            const Uint8 indexSize = RemoteIndexSizeFor(type);
+            if (indexSize == 0) RefuseDrawByName(slot, "INDEX_TYPE");
+            if (!bindings.ElementBufferBound) RefuseDrawByName(slot, "CLIENT_INDICES");
+            const auto n = static_cast<Uint32>(drawcount);
+            MG_Pipe::MGPDrawInfo info = PlanDrawInfo(mode, indexSize, 1, 0, n, bindings);
+            Vector<MG_Pipe::MGPDrawRange>& ranges = MultiDrawScratch(n);
+            for (Uint32 i = 0; i < n; ++i) {
+                if (!PlanDrawRange(bindings, indexSize, indices[i], count[i],
+                                   basevertex != nullptr ? basevertex[i] : 0, ranges[i])) {
+                    RefuseDrawByName(slot, "INDEX_OFFSET");
+                }
+            }
+            EmitDrawRecord(slot, info, ranges.data(), n, nullptr, 0, nullptr);
+        }
+        void EmitMultiDrawElements(GLenum mode, const GLsizei* count, GLenum type,
+                                   const GLvoid* const* indices, GLsizei drawcount) {
+            EmitMultiIndexedDraw("MultiDrawElements", mode, count, type, indices, drawcount, nullptr);
+        }
+        void EmitMultiDrawElementsBaseVertex(GLenum mode, const GLsizei* count, GLenum type,
+                                             const GLvoid* const* indices, GLsizei drawcount,
+                                             const GLint* basevertex) {
+            EmitMultiIndexedDraw("MultiDrawElementsBaseVertex", mode, count, type, indices, drawcount,
+                                 basevertex);
+        }
+
+        // ---- the indirect family: the block is the second tail, NumDraws is 0 -------------
+        void EmitIndirectDraw(const char* slot, GLenum mode, GLenum type, const void* indirect,
+                              GLsizei drawcount, GLsizei stride, GLintptr parameterOffset,
+                              Bool hasParameterBuffer) {
+            const RemoteDrawBindings bindings = ReadDrawBindings();
+            const Uint8 indexSize = type != 0 ? RemoteIndexSizeFor(type) : 0;
+            if (type != 0 && indexSize == 0) RefuseDrawByName(slot, "INDEX_TYPE");
+            if (MG_Pipe::MGPipeHandleIsNull(bindings.DrawIndirectBuffer)) {
+                RefuseDrawByName(slot, "CLIENT_COMMANDS");
+            }
+            if (hasParameterBuffer && MG_Pipe::MGPipeHandleIsNull(bindings.ParameterBuffer)) {
+                RefuseDrawByName(slot, "UNBOUND_PARAMETER");
+            }
+            MG_Pipe::MGPDrawInfo info = PlanDrawInfo(mode, indexSize, 1, 0, 0, bindings);
+            const MG_Pipe::MGPDrawIndirect block = PlanDrawIndirect(bindings, indirect, drawcount, stride,
+                                                                    parameterOffset, hasParameterBuffer);
+            EmitDrawRecord(slot, info, nullptr, 0, nullptr, 0, &block);
+        }
+        void EmitDrawArraysIndirect(GLenum mode, const void* indirect) {
+            EmitIndirectDraw("DrawArraysIndirect", mode, 0, indirect, 1, 0, 0, false);
+        }
+        void EmitDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) {
+            EmitIndirectDraw("DrawElementsIndirect", mode, type, indirect, 1, 0, 0, false);
+        }
+        void EmitMultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount,
+                                         GLsizei stride) {
+            EmitIndirectDraw("MultiDrawArraysIndirect", mode, 0, indirect, drawcount, stride, 0, false);
+        }
+        void EmitMultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect,
+                                           GLsizei drawcount, GLsizei stride) {
+            EmitIndirectDraw("MultiDrawElementsIndirect", mode, type, indirect, drawcount, stride, 0,
+                             false);
+        }
+        void EmitMultiDrawArraysIndirectCount(GLenum mode, const void* indirect, GLintptr drawcount,
+                                              GLsizei maxdrawcount, GLsizei stride) {
+            EmitIndirectDraw("MultiDrawArraysIndirectCount", mode, 0, indirect, maxdrawcount, stride,
+                             drawcount, true);
+        }
+        void EmitMultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect,
+                                                GLintptr drawcount, GLsizei maxdrawcount,
+                                                GLsizei stride) {
+            EmitIndirectDraw("MultiDrawElementsIndirectCount", mode, type, indirect, maxdrawcount,
+                             stride, drawcount, true);
         }
 
         void EmitBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0,
@@ -585,7 +889,8 @@ namespace MobileGL::MG_Remote::Client {
         }
 
         // =============================================================================
-        // CLASS C - Fatal{UnmigratedVerb}. 64 slots: 63 in GLFunctionsTable + SetSwapInterval.
+        // CLASS C - Fatal{UnmigratedVerb}. 45 slots on this head: 44 in GLFunctionsTable +
+        // SetSwapInterval (64 at the P5b contract commit; d1 v1 moved its 19 to class B).
         // =============================================================================
         //
         // PARTITIONED BY THE P5b PACKAGE THAT OWNS THE FLIP (MG_Remote/CONTRACT-P5B.md,
@@ -611,30 +916,14 @@ namespace MobileGL::MG_Remote::Client {
         //   tail the wave-3 remainder nothing measured: queries, syncs, the texture readbacks,
         //        the DSA blit, the swap interval (census-classC.md "static cross")
 
-#define MGR_UNMIGRATED_D1_SLOTS(X)                                                                 \
-    X(DrawElements, void, (GLenum, GLsizei, GLenum, const void*))                                  \
-    X(DrawElementsBaseVertex, void, (GLenum, GLsizei, GLenum, const void*, GLint))                 \
-    X(MultiDrawArrays, void, (GLenum, const GLint*, const GLsizei*, GLsizei))                      \
-    X(MultiDrawElements, void, (GLenum, const GLsizei*, GLenum, const GLvoid* const*, GLsizei))    \
-    X(MultiDrawElementsBaseVertex, void,                                                           \
-      (GLenum, const GLsizei*, GLenum, const GLvoid* const*, GLsizei, const GLint*))               \
-    X(MultiDrawElementsIndirect, void, (GLenum, GLenum, const void*, GLsizei, GLsizei))            \
-    X(MultiDrawArraysIndirect, void, (GLenum, const void*, GLsizei, GLsizei))                      \
-    X(MultiDrawElementsIndirectCount, void, (GLenum, GLenum, const void*, GLintptr, GLsizei, GLsizei)) \
-    X(MultiDrawArraysIndirectCount, void, (GLenum, const void*, GLintptr, GLsizei, GLsizei))       \
-    X(DrawRangeElementsBaseVertex, void,                                                           \
-      (GLenum, GLuint, GLuint, GLsizei, GLenum, const void*, GLint))                               \
-    X(DrawRangeElements, void, (GLenum, GLuint, GLuint, GLsizei, GLenum, const void*))             \
-    X(DrawElementsInstancedBaseVertexBaseInstance, void,                                           \
-      (GLenum, GLsizei, GLenum, const void*, GLsizei, GLint, GLuint))                              \
-    X(DrawElementsInstancedBaseVertex, void, (GLenum, GLsizei, GLenum, const void*, GLsizei, GLint)) \
-    X(DrawElementsInstancedBaseInstance, void,                                                     \
-      (GLenum, GLsizei, GLenum, const void*, GLsizei, GLuint))                                     \
-    X(DrawElementsInstanced, void, (GLenum, GLsizei, GLenum, const void*, GLsizei))                \
-    X(DrawArraysInstancedBaseInstance, void, (GLenum, GLint, GLsizei, GLsizei, GLuint))            \
-    X(DrawArraysInstanced, void, (GLenum, GLint, GLsizei, GLsizei))                                \
-    X(DrawElementsIndirect, void, (GLenum, GLenum, const void*))                                   \
-    X(DrawArraysIndirect, void, (GLenum, const void*))
+        // d1 v1 flipped all nineteen (DrawElements, DrawElementsBaseVertex, MultiDrawArrays,
+        // MultiDrawElements, MultiDrawElementsBaseVertex, MultiDrawElementsIndirect,
+        // MultiDrawArraysIndirect, MultiDrawElementsIndirectCount, MultiDrawArraysIndirectCount,
+        // DrawRangeElementsBaseVertex, DrawRangeElements, the four DrawElementsInstanced*,
+        // DrawArraysInstancedBaseInstance, DrawArraysInstanced, DrawElementsIndirect,
+        // DrawArraysIndirect) to class B; the list is kept, empty, so the ownership assertion
+        // below still reads 0 + 19 = 19 and a slot that fell back in would have to be added here.
+#define MGR_UNMIGRATED_D1_SLOTS(X)
 
         // DispatchCompute and DispatchComputeIndirect are i1's too; they are hand-written below
         // because they carry b1's dispatch hook before the Fatal.
@@ -761,7 +1050,7 @@ namespace MobileGL::MG_Remote::Client {
 
         // The emitted counts, PER OWNER. P5's five are c1's; each P5b package raises its own.
         constexpr Uint32 kEmittedSlotsP5 = 5; // Clear, DrawArrays, ReadPixels, Blit, Present
-        constexpr Uint32 kEmittedSlotsD1 = 0;
+        constexpr Uint32 kEmittedSlotsD1 = 19; // the draw family, all on draw_vbo (d1 v1)
         constexpr Uint32 kEmittedSlotsI1 = 0;
         constexpr Uint32 kEmittedSlotsT2 = 0;
         constexpr Uint32 kEmittedSlotsF1 = 0;
@@ -778,7 +1067,12 @@ namespace MobileGL::MG_Remote::Client {
         static_assert(kUnmigratedT2 + kEmittedSlotsT2 == 7, "t2 owns the 7 XFB/tessellation slots");
         static_assert(kUnmigratedF1 + kEmittedSlotsF1 == 11, "f1 owns the 11 clear/copy/mip slots");
         static_assert(kUnmigratedTail == 20, "the wave-3 tail is 20 slots and no P5b package owns one");
-        static_assert(kUnmigratedSlots == 64, "CONTRACT-P5.md §7 class C is 64 slots at the P5b contract commit");
+        // 64 at the P5b contract commit; every P5b flip moves exactly one slot from C to B, so
+        // the SUM is what stays pinned, and a package's flip changes its own count and nothing
+        // else on this line.
+        static_assert(kUnmigratedSlots + (kEmittedSlots - kEmittedSlotsP5) == 64,
+                      "CONTRACT-P5.md §7 class C was 64 slots at the P5b contract commit; a P5b flip "
+                      "moves one slot from C to B and the two counts must still sum to 64");
         static_assert(kLocallyAnsweredSlots + kEmittedSlots + kUnmigratedSlots == kRemoteEmitSlotCount,
                       "the three classes no longer partition the 71 slots");
 
@@ -812,6 +1106,27 @@ namespace MobileGL::MG_Remote::Client {
             // ---- class B
             table.GL.Clear = &EmitClear;
             table.GL.DrawArrays = &EmitDrawArrays;
+            // ---- P5b d1: the nineteen draw slots, all on draw_vbo (CONTRACT-P5B.md §2 d1)
+            table.GL.DrawElements = &EmitDrawElements;
+            table.GL.DrawElementsBaseVertex = &EmitDrawElementsBaseVertex;
+            table.GL.DrawRangeElements = &EmitDrawRangeElements;
+            table.GL.DrawRangeElementsBaseVertex = &EmitDrawRangeElementsBaseVertex;
+            table.GL.DrawElementsInstanced = &EmitDrawElementsInstanced;
+            table.GL.DrawElementsInstancedBaseVertex = &EmitDrawElementsInstancedBaseVertex;
+            table.GL.DrawElementsInstancedBaseInstance = &EmitDrawElementsInstancedBaseInstance;
+            table.GL.DrawElementsInstancedBaseVertexBaseInstance =
+                &EmitDrawElementsInstancedBaseVertexBaseInstance;
+            table.GL.DrawArraysInstanced = &EmitDrawArraysInstanced;
+            table.GL.DrawArraysInstancedBaseInstance = &EmitDrawArraysInstancedBaseInstance;
+            table.GL.MultiDrawArrays = &EmitMultiDrawArrays;
+            table.GL.MultiDrawElements = &EmitMultiDrawElements;
+            table.GL.MultiDrawElementsBaseVertex = &EmitMultiDrawElementsBaseVertex;
+            table.GL.DrawArraysIndirect = &EmitDrawArraysIndirect;
+            table.GL.DrawElementsIndirect = &EmitDrawElementsIndirect;
+            table.GL.MultiDrawArraysIndirect = &EmitMultiDrawArraysIndirect;
+            table.GL.MultiDrawElementsIndirect = &EmitMultiDrawElementsIndirect;
+            table.GL.MultiDrawArraysIndirectCount = &EmitMultiDrawArraysIndirectCount;
+            table.GL.MultiDrawElementsIndirectCount = &EmitMultiDrawElementsIndirectCount;
             table.GL.ReadPixels = &EmitReadPixels;
             table.GL.BlitFramebuffer = &EmitBlitFramebuffer;
             table.Present = &EmitPresent;
@@ -888,6 +1203,97 @@ namespace MobileGL::MG_Remote::Client {
             std::memcpy(out + row * strideBytes, in + row * writtenPerRow,
                         static_cast<SizeT>(writtenPerRow));
         }
+    }
+
+    // =============================================================================
+    // P5b d1 - the draw family's record plan, at namespace scope so the unit cases drive
+    // exactly what the emitters above call (R-16).
+    // =============================================================================
+
+    Uint8 RemoteIndexSizeFor(GLenum indexType) {
+        switch (indexType) {
+        case GL_UNSIGNED_BYTE: return 1;
+        case GL_UNSIGNED_SHORT: return 2;
+        case GL_UNSIGNED_INT: return 4;
+        default: return 0;
+        }
+    }
+
+    MG_Pipe::MGPDrawInfo PlanDrawInfo(GLenum mode, Uint8 indexSize, GLsizei instanceCount,
+                                      GLuint baseInstance, Uint32 numDraws,
+                                      const RemoteDrawBindings& bindings) {
+        MG_Pipe::MGPDrawInfo info{};
+        info.Mode = static_cast<Uint32>(mode);
+        info.IndexSize = indexSize;
+        // The restart state rides verbatim (informational in P5b: the backend's
+        // ScopedRestartIndexSubstitution reads its own barrier-pulled copy and the index bytes
+        // on its side). kDrawHasUserIndices / kDrawIsIndirect are added by the emission itself,
+        // kDrawHasIndexRange by the two DrawRangeElements* callers.
+        info.Flags = bindings.PrimitiveRestart ? static_cast<Uint8>(MG_Pipe::kDrawPrimitiveRestart) : 0;
+        // A negative count has already been refused by the frontend (INVALID_VALUE); 0 crosses
+        // as 0 and draws nothing, which is what the driver does with it.
+        info.InstanceCount = instanceCount > 0 ? static_cast<Uint32>(instanceCount) : 0u;
+        info.StartInstance = baseInstance;
+        info.RestartIndex = bindings.RestartIndex;
+        info.DrawIdOffset = 0;
+        // The handle beside the call (rule D): the VAO's element buffer for an indexed draw,
+        // the same handle set_index_buffer (32) carried at validate; null for arrays and for a
+        // client index array.
+        info.IndexResource = (indexSize != 0 && bindings.ElementBufferBound) ? bindings.ElementBuffer
+                                                                             : MG_Pipe::kMGPipeNullHandle;
+        info.MinIndex = ~0u; // "unknown" (MGPipeTypes.h); the DrawRangeElements* callers fill it
+        info.MaxIndex = ~0u;
+        info.XfbCpuCapturedVertices = 0;
+        info.NumDraws = numDraws;
+        return info;
+    }
+
+    Bool PlanDrawRange(const RemoteDrawBindings& bindings, Uint8 indexSize, const void* indicesOrFirst,
+                       GLsizei count, GLint baseVertex, MG_Pipe::MGPDrawRange& out) {
+        out = MG_Pipe::MGPDrawRange{};
+        out.Count = count > 0 ? static_cast<Uint32>(count) : 0u;
+        if (indexSize == 0) {
+            // Arrays: `first`, spelled through the pointer parameter so one function serves
+            // both shapes. A negative first has already been refused by the frontend.
+            const auto first = static_cast<std::intptr_t>(reinterpret_cast<std::uintptr_t>(indicesOrFirst));
+            out.Start = first > 0 ? static_cast<Uint32>(first) : 0u;
+            out.IndexBias = 0;
+            return true;
+        }
+        out.IndexBias = baseVertex;
+        if (!bindings.ElementBufferBound) {
+            // A client index array: the emitter stages the bytes and the run starts at its
+            // first index.
+            out.Start = 0;
+            return true;
+        }
+        // An element buffer: `indices` is a byte offset into it, and Start is that offset in
+        // INDICES - the same arithmetic OnDrawVbo inverts (offset = Start * IndexSize). An
+        // offset that is not a whole number of indices cannot be spelled and is the caller's
+        // refusal, not a rounding.
+        const auto offset = reinterpret_cast<std::uintptr_t>(indicesOrFirst);
+        if (offset % indexSize != 0) return false;
+        const std::uintptr_t start = offset / indexSize;
+        if (start > 0xFFFFFFFFull) return false;
+        out.Start = static_cast<Uint32>(start);
+        return true;
+    }
+
+    MG_Pipe::MGPDrawIndirect PlanDrawIndirect(const RemoteDrawBindings& bindings, const void* indirect,
+                                              GLsizei drawCount, GLsizei stride,
+                                              GLintptr parameterOffset, Bool hasParameterBuffer) {
+        MG_Pipe::MGPDrawIndirect block{};
+        block.Buffer = bindings.DrawIndirectBuffer;
+        block.ParameterBuffer = hasParameterBuffer ? bindings.ParameterBuffer : MG_Pipe::kMGPipeNullHandle;
+        // The command byte offset the call passed as `indirect` (a bound GL_DRAW_INDIRECT_BUFFER
+        // makes it an offset, never an address - the emitter refused the other case by name).
+        block.Offset = static_cast<Uint64>(reinterpret_cast<std::uintptr_t>(indirect));
+        block.ParameterOffset = hasParameterBuffer ? static_cast<Uint64>(parameterOffset) : 0u;
+        // 0 = tightly packed, as GL spells it; the backend normalises. Negative counts and
+        // strides have already been refused by the frontend.
+        block.Stride = stride > 0 ? static_cast<Uint32>(stride) : 0u;
+        block.DrawCount = drawCount > 0 ? static_cast<Uint32>(drawCount) : 0u;
+        return block;
     }
 
 } // namespace MobileGL::MG_Remote::Client

@@ -161,4 +161,59 @@ namespace MobileGL::MG_Remote::Client {
     // 0=OK / 1=DECLINED / 2=ERROR as `status`.
     Bool ReadbackReplyIsComplete(Int32 status, Uint64 replySize, Uint64 expected);
 
+    // =============================================================================
+    // P5b d1 - the draw family's record plan (MG_Remote/CONTRACT-P5B.md §2 d1)
+    // =============================================================================
+    //
+    // The nineteen indexed / instanced / multi-draw / indirect entry points all ride draw_vbo
+    // (59), and the ONLY thing that differs per entry point is how the GL arguments become the
+    // record's fields. That derivation is split out of the emitters as three pure functions
+    // over a snapshot of the bindings the emitter read from the GL context, so a unit case can
+    // drive the PRODUCTION derivation with synthetic bindings (R-16) while the integration lane
+    // proves the bindings are read from the right slots. The emitters compose these and add
+    // nothing but the hooks, the E2 draw-drop control and the staging of a client index array.
+
+    // What the emitter reads from the GL context before it plans a draw.
+    struct RemoteDrawBindings {
+        // The VAO's GL_ELEMENT_ARRAY_BUFFER: bound or not, and its handle when bound (the same
+        // handle set_index_buffer carried at validate). Not bound means `indices` is a client
+        // pointer and the emitter stages the bytes (kDrawHasUserIndices).
+        Bool ElementBufferBound = false;
+        MG_Pipe::MGPipeHandle ElementBuffer = MG_Pipe::kMGPipeNullHandle;
+        // The bound GL_DRAW_INDIRECT_BUFFER and GL_PARAMETER_BUFFER, null when unbound.
+        MG_Pipe::MGPipeHandle DrawIndirectBuffer = MG_Pipe::kMGPipeNullHandle;
+        MG_Pipe::MGPipeHandle ParameterBuffer = MG_Pipe::kMGPipeNullHandle;
+        // GL_PRIMITIVE_RESTART / GL_PRIMITIVE_RESTART_FIXED_INDEX and the application's index,
+        // carried verbatim (informational in P5b: the backend reads its own barrier-pulled copy).
+        Bool PrimitiveRestart = false;
+        Uint32 RestartIndex = 0;
+    };
+
+    // 1 / 2 / 4 for the three GL index types, 0 for anything else (the frontend has already
+    // refused those with INVALID_ENUM before the slot is reached).
+    Uint8 RemoteIndexSizeFor(GLenum indexType);
+
+    // The fixed head. `indexSize` 0 = arrays. `instanceCount` is the call's own (1 for a
+    // non-instanced entry point) and `baseInstance` its gl_BaseInstance value; the sink reads
+    // "instanced" as InstanceCount != 1 || StartInstance != 0, so an instanced call with a
+    // count of 1 and no base instance is dispatched as the plain draw it is equivalent to.
+    MG_Pipe::MGPDrawInfo PlanDrawInfo(GLenum mode, Uint8 indexSize, GLsizei instanceCount,
+                                      GLuint baseInstance, Uint32 numDraws,
+                                      const RemoteDrawBindings& bindings);
+
+    // One MGPDrawRange from one (first | indices, count, basevertex). Arrays: Start = first.
+    // Indexed with an element buffer bound: Start = offset / IndexSize, and FALSE when the byte
+    // offset is not a whole number of indices or does not fit the record's Uint32 Start - the
+    // caller refuses by name rather than round. Indexed with no element buffer: Start = 0 and
+    // the bytes are the client's (the emitter stages `count * IndexSize` of them).
+    Bool PlanDrawRange(const RemoteDrawBindings& bindings, Uint8 indexSize, const void* indicesOrFirst,
+                       GLsizei count, GLint baseVertex, MG_Pipe::MGPDrawRange& out);
+
+    // The kDrawIsIndirect second tail: the bound GL_DRAW_INDIRECT_BUFFER handle, the call's
+    // `indirect` byte offset, the stride and the draw count; for the *IndirectCount forms the
+    // bound GL_PARAMETER_BUFFER handle and the byte offset the call spells as `drawcount`.
+    MG_Pipe::MGPDrawIndirect PlanDrawIndirect(const RemoteDrawBindings& bindings, const void* indirect,
+                                              GLsizei drawCount, GLsizei stride,
+                                              GLintptr parameterOffset, Bool hasParameterBuffer);
+
 } // namespace MobileGL::MG_Remote::Client

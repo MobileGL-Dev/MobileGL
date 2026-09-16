@@ -108,6 +108,15 @@ namespace MobileGL::MG_Remote::Client {
                            const void* varTail, Uint64 varTailBytes, void* replyOut,
                            Uint64 replyBytes, Int32* statusOut, Uint64* replySizeOut = nullptr);
 
+        // The same call for a record that carries TWO tails (P5b d1: draw_vbo's user-index span
+        // or its MGPDrawIndirect block behind the range array). The one-tail form above is this
+        // one with a single WireTail; the barrier policy lives in exactly one body. A distinct
+        // name rather than an overload, because `nullptr, 0` would match both.
+        Uint64 EmitAndWaitTails(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
+                                const Wire::WireTail* tails, Uint32 tailCount, void* replyOut,
+                                Uint64 replyBytes, Int32* statusOut,
+                                Uint64* replySizeOut = nullptr);
+
         // MOBILEGL_IPC_VERB_BARRIER. False is the R-1 negative control and is EXPECTED to be
         // red; it must be run once and the way it goes red recorded.
         Bool BarrierArmed() const;

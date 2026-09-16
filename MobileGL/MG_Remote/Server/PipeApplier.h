@@ -127,7 +127,8 @@ namespace MobileGL::MG_Remote::Server {
         //   f1  OnGenerateMipmap, OnCopyFramebufferToTexture ("CopyTexImage2D" /
         //       "CopyTexSubImage2D"), and OnClear's four non-Whole kinds (live already)
         //   d1  OnDrawVbo above: the indirect tail, the user-index span, NumDraws > 1 and the
-        //       instanced arms (declined by name today)
+        //       instanced arms - LIVE since d1 v1 (every shape the client's nineteen draw slots
+        //       produce dispatches to the backend slot CONTRACT-P5B.md §2 d1 names)
         Bool OnLaunchGrid(const MG_Pipe::MGPGridInfo& grid) override;
         Bool OnMemoryBarrier(const MG_Pipe::MGPMemoryBarrier& barrier) override;
         Bool OnResourceCopyRegion(const MG_Pipe::MGPCopyRegion& copy) override;
@@ -158,6 +159,25 @@ namespace MobileGL::MG_Remote::Server {
         // DstSize is exactly the heap overflow codex 1 found, one field over.
         Uint64 ReadbackScratchBytes() const { return static_cast<Uint64>(m_readbackScratch.size()); }
 
+        // ---- P5b d1: what the LAST draw_vbo record carried, as the sink saw it ---------------
+        //
+        // Recorded BEFORE the backend is consulted, so a process with no backend object (every
+        // unit case) can still assert the wire's fields rather than only that a draw "was
+        // declined": the record's head, its first range, its indirect block, and whether a
+        // user-index span rode with it and how many bytes it named. Nothing here outlives the
+        // call except these copies (rule C: the pointers the sink was handed are not kept).
+        struct LastDrawRecord {
+            MG_Pipe::MGPDrawInfo Info{};
+            MG_Pipe::MGPDrawRange FirstRange{};
+            MG_Pipe::MGPDrawIndirect Indirect{};
+            Uint64 UserIndexBytes = 0;
+            Bool HadUserIndices = false;
+            Bool HadIndirect = false;
+        };
+        const LastDrawRecord& LastDraw() const { return m_lastDraw; }
+        // draw_vbo records seen, applied or declined; Draws() above counts only the applied.
+        Uint64 DrawRecords() const { return m_drawRecords; }
+
     private:
         const MG_Backend::GlobalBackendFunctionsTable* Table(const char* verb) const;
 
@@ -173,6 +193,15 @@ namespace MobileGL::MG_Remote::Server {
         // ReadPixels writes into a caller buffer, so one staging vector per session sits
         // between them. Grown, never shrunk, and never handed out past the call.
         Vector<Uint8> m_readbackScratch;
+        // P5b d1: the multi-draw arrays the glMultiDraw* slots take, rebuilt from the ranges
+        // per record (rule C: bounded by NumDraws, owned here, never handed out past the call),
+        // and the last-record witness above.
+        Vector<GLsizei> m_multiCounts;
+        Vector<GLint> m_multiFirsts;
+        Vector<const void*> m_multiOffsets;
+        Vector<GLint> m_multiBaseVertices;
+        LastDrawRecord m_lastDraw{};
+        Uint64 m_drawRecords = 0;
     };
 
     class PipeApplier {

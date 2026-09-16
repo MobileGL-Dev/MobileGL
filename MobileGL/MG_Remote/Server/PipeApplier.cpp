@@ -281,65 +281,236 @@ namespace MobileGL::MG_Remote::Server {
         std::abort();
     }
 
+    // P5b d1 (MG_Remote/CONTRACT-P5B.md §2 d1): draw_vbo's whole cross product. The record
+    // carries the GL call verbatim (rule D) and this body reproduces the backend call the
+    // monolith makes for that shape, reading only the record and the backend's own
+    // barrier-pulled state; the twenty GL entry points collapse onto the arms below:
+    //
+    //   kDrawIsIndirect      arrays: DrawArraysIndirect (DrawCount 1, Stride 0) /
+    //                        MultiDrawArraysIndirect / MultiDrawArraysIndirectCount (a parameter
+    //                        buffer named); indexed: the three Elements twins
+    //   NumDraws != 1        MultiDrawArrays / MultiDrawElementsBaseVertex, the two arrays
+    //                        rebuilt from the ranges into bounded locals (rule C)
+    //   arrays, one range    DrawArrays / DrawArraysInstanced / DrawArraysInstancedBaseInstance
+    //   indexed, one range   DrawElementsBaseVertex (the P5 arm, unchanged, bias 0 for a plain
+    //                        DrawElements) / DrawRangeElements[BaseVertex] under
+    //                        kDrawHasIndexRange / the four DrawElementsInstanced* by whether a
+    //                        base vertex and a base instance are non-zero
+    //   kDrawHasUserIndices  the `indices` argument is the resolved SEG_STAGE run instead of an
+    //                        element-buffer offset (the client staged a client index array)
+    //
+    // "Instanced" is InstanceCount != 1 || StartInstance != 0: an instanced call with a count
+    // of 1 and no base instance is the plain draw it is equivalent to, and a count of 0 must
+    // NOT collapse onto the plain draw (it draws nothing, the plain draw would draw once).
+    //
+    // What is still refused by name (the census's own grep family): a multi-draw that arrived
+    // with a span (the client refuses "MultiDrawElements+CLIENT_INDICES" first; P8's
+    // HostResolve.cpp flattens it) and a multi-draw that claims instancing (no GL entry point
+    // produces one; the client never sends it).
     Bool ServerVerbSink::OnDrawVbo(const MG_Pipe::MGPDrawInfo& info,
                                    const MG_Pipe::MGPDrawRange* ranges,
                                    const MG_Pipe::MGHostSpan* userIndices,
                                    const MG_Pipe::MGPDrawIndirect* indirect) {
+        // The witness first, before the backend is consulted, so a unit process with no
+        // backend object still sees the wire's fields (PipeApplier.h LastDraw).
+        m_lastDraw = LastDrawRecord{};
+        m_lastDraw.Info = info;
+        if (ranges != nullptr && info.NumDraws != 0) m_lastDraw.FirstRange = ranges[0];
+        if (userIndices != nullptr) {
+            m_lastDraw.HadUserIndices = true;
+            m_lastDraw.UserIndexBytes = userIndices->Size;
+        }
+        if (indirect != nullptr) {
+            m_lastDraw.HadIndirect = true;
+            m_lastDraw.Indirect = *indirect;
+        }
+        ++m_drawRecords;
+
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("draw_vbo");
         if (table == nullptr) return false;
-        // P5b d1 (CONTRACT-P5B.md): the three arms the contract gives this sink and P5 did not
-        // implement are DECLINED BY NAME until d1 lands them - the same names the census greps,
-        // so the lane's first-blocker table reads the server's gap as the slot it is.
-        if (indirect != nullptr) {
-            ServerUnmigratedVerbFatal(info.IndexSize == 0 ? "MultiDrawArraysIndirect"
-                                                          : "MultiDrawElementsIndirect");
-        }
-        if (userIndices != nullptr) {
-            // The span is validated and names a SEG_STAGE run the client staged (d1's rule for
-            // client-side index arrays); resolving it is MG_Pipe::MGPipeHostBytes and passing
-            // the pointer to gl.DrawElements is d1's body. Declined by name until then.
-            ServerUnmigratedVerbFatal("DrawElements+CLIENT_INDICES");
-        }
-        if (ranges == nullptr || info.NumDraws == 0) return false;
-
-        // P5 IMPLEMENTS THE TWO SHAPES ITS REDUCED PATH USES AND DECLINES THE REST BY NAME.
-        // draw_vbo collapses all twenty draw entry points, and picking the right one needs the
-        // instancing / base-vertex / base-instance / multi-draw cross product. TriangleScenario
-        // is a single non-instanced array draw and OpenRA's are single indexed draws from a
-        // bound element buffer; the rest are d1's (CONTRACT-P5B.md d1 says which GL entry each
-        // shape of the record dispatches to).
         const MG_Backend::GLFunctionsTable& gl = table->GL;
-        const Bool instanced = info.InstanceCount > 1 || info.StartInstance != 0;
-        if (info.NumDraws != 1) {
-            ServerUnmigratedVerbFatal(info.IndexSize == 0 ? "MultiDrawArrays" : "MultiDrawElements");
+        const auto mode = static_cast<GLenum>(info.Mode);
+
+        GLenum indexType = 0;
+        switch (info.IndexSize) {
+        case 0: break; // arrays
+        case 1: indexType = GL_UNSIGNED_BYTE; break;
+        case 2: indexType = GL_UNSIGNED_SHORT; break;
+        case 4: indexType = GL_UNSIGNED_INT; break;
+        default:
+            // IndexSize is "0 = arrays, else 1 / 2 / 4" (MGPipeTypes.h) and nothing else is a
+            // legal width; defaulting to 4 would read past the element buffer.
+            Wire::WireProtocolFatalAt("MGPDrawInfo::IndexSize", info.IndexSize, 4);
         }
-        if (instanced) {
-            ServerUnmigratedVerbFatal(info.IndexSize == 0 ? "DrawArraysInstanced"
-                                                          : "DrawElementsInstanced");
-        }
-        const MG_Pipe::MGPDrawRange& range = ranges[0];
-        if (info.IndexSize == 0) {
-            if (gl.DrawArrays == nullptr) return false;
-            gl.DrawArrays(static_cast<GLenum>(info.Mode), static_cast<GLint>(range.Start),
-                          static_cast<GLsizei>(range.Count));
-        } else {
-            if (gl.DrawElementsBaseVertex == nullptr) return false;
-            GLenum indexType = GL_UNSIGNED_INT;
-            switch (info.IndexSize) {
-            case 1: indexType = GL_UNSIGNED_BYTE; break;
-            case 2: indexType = GL_UNSIGNED_SHORT; break;
-            case 4: indexType = GL_UNSIGNED_INT; break;
-            default:
-                // IndexSize is "0 = arrays, else 1 / 2 / 4" (MGPipeTypes.h:1323) and nothing
-                // else is a legal width; defaulting to 4 would read past the element buffer.
-                Wire::WireProtocolFatalAt("MGPDrawInfo::IndexSize", info.IndexSize, 4);
+
+        // ---- the indirect family: the block is the whole description --------------------
+        if (indirect != nullptr) {
+            // The layout already refused a record that sets both flags or declares ranges
+            // beside the block, so NumDraws is 0 and there is no span here.
+            const auto offset = reinterpret_cast<const void*>(static_cast<std::uintptr_t>(indirect->Offset));
+            const auto drawCount = static_cast<GLsizei>(indirect->DrawCount);
+            const auto stride = static_cast<GLsizei>(indirect->Stride);
+            const Bool counted = !MG_Pipe::MGPipeHandleIsNull(indirect->ParameterBuffer);
+            const auto parameterOffset = static_cast<GLintptr>(indirect->ParameterOffset);
+            // glMultiDraw*Indirect with drawcount 1 and stride 0 IS glDraw*Indirect by GL's own
+            // definition, so the single-draw entry point is the one the monolith reaches for
+            // the single-draw call and nothing is lost for the multi-draw spelling of it.
+            const Bool single = !counted && drawCount == 1 && stride == 0;
+            if (info.IndexSize == 0) {
+                if (counted) {
+                    if (gl.MultiDrawArraysIndirectCount == nullptr) return false;
+                    gl.MultiDrawArraysIndirectCount(mode, offset, parameterOffset, drawCount, stride);
+                } else if (single) {
+                    if (gl.DrawArraysIndirect == nullptr) return false;
+                    gl.DrawArraysIndirect(mode, offset);
+                } else {
+                    if (gl.MultiDrawArraysIndirect == nullptr) return false;
+                    gl.MultiDrawArraysIndirect(mode, offset, drawCount, stride);
+                }
+            } else {
+                if (counted) {
+                    if (gl.MultiDrawElementsIndirectCount == nullptr) return false;
+                    gl.MultiDrawElementsIndirectCount(mode, indexType, offset, parameterOffset,
+                                                      drawCount, stride);
+                } else if (single) {
+                    if (gl.DrawElementsIndirect == nullptr) return false;
+                    gl.DrawElementsIndirect(mode, indexType, offset);
+                } else {
+                    if (gl.MultiDrawElementsIndirect == nullptr) return false;
+                    gl.MultiDrawElementsIndirect(mode, indexType, offset, drawCount, stride);
+                }
             }
-            // Start is the FIRST INDEX, so the byte offset into the bound element buffer is
-            // Start * IndexSize - the same arithmetic PipeFill's emitter inverted.
-            const auto offset = static_cast<std::uintptr_t>(range.Start) * info.IndexSize;
-            gl.DrawElementsBaseVertex(static_cast<GLenum>(info.Mode),
-                                      static_cast<GLsizei>(range.Count), indexType,
-                                      reinterpret_cast<const void*>(offset), range.IndexBias);
+            ++m_draws;
+            return true;
+        }
+
+        if (ranges == nullptr || info.NumDraws == 0) return false;
+        const Bool instanced = info.InstanceCount != 1 || info.StartInstance != 0;
+        const auto instanceCount = static_cast<GLsizei>(info.InstanceCount);
+        const GLuint baseInstance = info.StartInstance;
+
+        // ---- the multi-draws: the two arrays rebuilt from the ranges (rule C) --------------
+        if (info.NumDraws != 1) {
+            if (userIndices != nullptr) {
+                ServerUnmigratedVerbFatal(info.IndexSize == 0 ? "MultiDrawArrays+CLIENT_INDICES"
+                                                              : "MultiDrawElements+CLIENT_INDICES");
+            }
+            if (instanced) {
+                ServerUnmigratedVerbFatal(info.IndexSize == 0 ? "MultiDrawArrays+INSTANCED"
+                                                              : "MultiDrawElements+INSTANCED");
+            }
+            const auto n = static_cast<SizeT>(info.NumDraws);
+            m_multiCounts.resize(n);
+            if (info.IndexSize == 0) {
+                if (gl.MultiDrawArrays == nullptr) return false;
+                m_multiFirsts.resize(n);
+                for (SizeT i = 0; i < n; ++i) {
+                    m_multiFirsts[i] = static_cast<GLint>(ranges[i].Start);
+                    m_multiCounts[i] = static_cast<GLsizei>(ranges[i].Count);
+                }
+                gl.MultiDrawArrays(mode, m_multiFirsts.data(), m_multiCounts.data(),
+                                   static_cast<GLsizei>(n));
+            } else {
+                if (gl.MultiDrawElementsBaseVertex == nullptr) return false;
+                m_multiOffsets.resize(n);
+                m_multiBaseVertices.resize(n);
+                for (SizeT i = 0; i < n; ++i) {
+                    m_multiOffsets[i] = reinterpret_cast<const void*>(
+                        static_cast<std::uintptr_t>(ranges[i].Start) * info.IndexSize);
+                    m_multiCounts[i] = static_cast<GLsizei>(ranges[i].Count);
+                    m_multiBaseVertices[i] = ranges[i].IndexBias;
+                }
+                // MultiDrawElements is the same call with every base vertex 0, which is what
+                // its ranges carry (CONTRACT-P5B.md d1's MultiDrawElements row).
+                gl.MultiDrawElementsBaseVertex(mode, m_multiCounts.data(), indexType,
+                                               m_multiOffsets.data(), static_cast<GLsizei>(n),
+                                               m_multiBaseVertices.data());
+            }
+            ++m_draws;
+            return true;
+        }
+
+        // ---- one range ----------------------------------------------------------------------
+        const MG_Pipe::MGPDrawRange& range = ranges[0];
+        const auto count = static_cast<GLsizei>(range.Count);
+        if (info.IndexSize == 0) {
+            if (!instanced) {
+                if (gl.DrawArrays == nullptr) return false;
+                gl.DrawArrays(mode, static_cast<GLint>(range.Start), count);
+            } else if (baseInstance != 0) {
+                if (gl.DrawArraysInstancedBaseInstance == nullptr) return false;
+                gl.DrawArraysInstancedBaseInstance(mode, static_cast<GLint>(range.Start), count,
+                                                   instanceCount, baseInstance);
+            } else {
+                if (gl.DrawArraysInstanced == nullptr) return false;
+                gl.DrawArraysInstanced(mode, static_cast<GLint>(range.Start), count, instanceCount);
+            }
+            ++m_draws;
+            return true;
+        }
+
+        // Indexed. `indices` is the element-buffer byte offset Start * IndexSize - the same
+        // arithmetic PipeFill's emitter inverted - or, for a client index array, the staged run
+        // resolved through the process resolver the server installed (rule C: the pointer is
+        // used for this call only). The codec proved the span lies inside SEG_STAGE (all four
+        // honesty arms), so a null here is the resolver missing, which is a wiring fault.
+        const void* indices = nullptr;
+        if (userIndices != nullptr) {
+            indices = MG_Pipe::MGPipeHostBytes(*userIndices);
+            if (indices == nullptr) {
+                Wire::WireProtocolFatal("DrawVbo.userIndices",
+                                        "the user-index span passed the codec's four honesty arms "
+                                        "but MGPipeHostBytes resolved it to null; the server's "
+                                        "segment resolver is not installed");
+            }
+        } else {
+            indices = reinterpret_cast<const void*>(static_cast<std::uintptr_t>(range.Start) *
+                                                    info.IndexSize);
+        }
+        const GLint baseVertex = range.IndexBias;
+        const Bool ranged = (info.Flags & MG_Pipe::kDrawHasIndexRange) != 0;
+        // A BASE VERTEX OF 0 IS THE PLAIN ENTRY POINT, NOT THE BaseVertex ONE WITH A 0 - d1's one
+        // ruling against CONTRACT-P5B.md's "DrawElementsBaseVertex(..., 0), the P5 arm,
+        // unchanged". Espryt's DrawElementsBaseVertex slot calls glDrawElementsBaseVertex, which
+        // is ES 3.2 / OES_draw_elements_base_vertex and is NOT loaded on an ES 3.1 provider
+        // (ANGLE on D3D11: "Failed to load GLES function: glDrawElementsBaseVertex" at bring-up),
+        // so the P5 arm dereferenced a null function pointer on every plain glDrawElements - the
+        // one call every Minecraft frame is made of - while the monolith, which calls
+        // GL.DrawElements for glDrawElements, was fine. Rule D says the sink reproduces the call
+        // the monolith makes; this is that, for all three indexed families.
+        if (!instanced) {
+            if (ranged) {
+                if (baseVertex != 0) {
+                    if (gl.DrawRangeElementsBaseVertex == nullptr) return false;
+                    gl.DrawRangeElementsBaseVertex(mode, info.MinIndex, info.MaxIndex, count, indexType,
+                                                   indices, baseVertex);
+                } else {
+                    if (gl.DrawRangeElements == nullptr) return false;
+                    gl.DrawRangeElements(mode, info.MinIndex, info.MaxIndex, count, indexType, indices);
+                }
+            } else if (baseVertex != 0) {
+                if (gl.DrawElementsBaseVertex == nullptr) return false;
+                gl.DrawElementsBaseVertex(mode, count, indexType, indices, baseVertex);
+            } else {
+                if (gl.DrawElements == nullptr) return false;
+                gl.DrawElements(mode, count, indexType, indices);
+            }
+        } else if (baseInstance != 0) {
+            if (baseVertex != 0) {
+                if (gl.DrawElementsInstancedBaseVertexBaseInstance == nullptr) return false;
+                gl.DrawElementsInstancedBaseVertexBaseInstance(mode, count, indexType, indices,
+                                                               instanceCount, baseVertex, baseInstance);
+            } else {
+                if (gl.DrawElementsInstancedBaseInstance == nullptr) return false;
+                gl.DrawElementsInstancedBaseInstance(mode, count, indexType, indices, instanceCount,
+                                                     baseInstance);
+            }
+        } else if (baseVertex != 0) {
+            if (gl.DrawElementsInstancedBaseVertex == nullptr) return false;
+            gl.DrawElementsInstancedBaseVertex(mode, count, indexType, indices, instanceCount, baseVertex);
+        } else {
+            if (gl.DrawElementsInstanced == nullptr) return false;
+            gl.DrawElementsInstanced(mode, count, indexType, indices, instanceCount);
         }
         ++m_draws;
         return true;

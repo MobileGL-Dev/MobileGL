@@ -1778,6 +1778,141 @@ TEST(StagedShadowProductionTest, TheStreamingIdiomThroughAPoolReuseIsUploadedNot
 }
 #endif // !_WIN32
 
+// =====================================================================================
+// P5b d1: a draw_vbo record of every d1 shape crosses to the REAL ServerVerbSink with its
+// fields intact (MG_Remote/CONTRACT-P5B.md §2 d1). No backend object lives in this process,
+// so each record is DECLINED after the sink has witnessed it - which is exactly the point:
+// the witness is taken before the backend is consulted, so these cases pin the wire's fields
+// and not a backend call. The emitter half (GL args -> these fields) is RemoteClientTest's
+// PlanDraw* cases; the backend half is the DirectGLES.Split. IndexedDrawFamilyScenario lane.
+// =====================================================================================
+
+namespace {
+    MG_Pipe::MGPipeHandle D1Handle(Uint32 slot) {
+        MG_Pipe::MGPipeHandle h{};
+        h.Slot = slot;
+        h.Gen = 1;
+        return h;
+    }
+    MG_Pipe::MGPDrawInfo D1DrawInfo(Uint8 indexSize, Uint32 numDraws) {
+        MG_Pipe::MGPDrawInfo info{};
+        info.Mode = 0x0004; // GL_TRIANGLES
+        info.IndexSize = indexSize;
+        info.InstanceCount = 1;
+        info.MinIndex = ~0u;
+        info.MaxIndex = ~0u;
+        info.NumDraws = numDraws;
+        return info;
+    }
+} // namespace
+
+// Red once by: dropping `m_lastDraw.Info = info;` from OnDrawVbo - InstanceCount reads 1 and
+// IndexBias reads 0 below.
+TEST(ServerLoopTest, AnInstancedBaseVertexDrawRecordReachesTheSinkWithItsFieldsIntact) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+
+    MG_Pipe::MGPDrawInfo info = D1DrawInfo(/*indexSize=*/2, /*numDraws=*/1);
+    info.InstanceCount = 7;     // DrawElementsInstancedBaseVertex(..., 7, 5): the Minecraft slot
+    info.IndexResource = D1Handle(31);
+    const MG_Pipe::MGPDrawRange range{/*Start=*/12, /*Count=*/36, /*IndexBias=*/5};
+    ASSERT_TRUE(fixture.EmitAndWaitWithTail(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), &range,
+                                            sizeof(range)));
+
+    const Server::ServerVerbSink& verbs = fixture.session->Applier().Verbs();
+    EXPECT_EQ(verbs.DrawRecords(), 1u) << "the record did not reach OnDrawVbo";
+    EXPECT_EQ(verbs.Draws(), 0u) << "no backend object lives here, so the draw must be DECLINED "
+                                    "after the witness, never applied";
+    const Server::ServerVerbSink::LastDrawRecord& seen = verbs.LastDraw();
+    EXPECT_EQ(seen.Info.IndexSize, 2u);
+    EXPECT_EQ(seen.Info.InstanceCount, 7u);
+    EXPECT_EQ(seen.Info.IndexResource.Slot, 31u);
+    EXPECT_EQ(seen.FirstRange.Start, 12u);
+    EXPECT_EQ(seen.FirstRange.Count, 36u);
+    EXPECT_EQ(seen.FirstRange.IndexBias, 5);
+    EXPECT_FALSE(seen.HadUserIndices);
+    EXPECT_FALSE(seen.HadIndirect);
+    EXPECT_FALSE(MG_Pipe::gPipeInputs.ServerStampedVerb());
+
+    fixture.Stop();
+}
+
+// Red once by: setting `m_lastDraw.UserIndexBytes = 0` in OnDrawVbo's span arm - the byte
+// count below reads 0 while HadUserIndices stays true.
+TEST(ServerLoopTest, AClientIndexArrayCrossesAsAStagedSpanAndTheSinkSeesItsByteCount) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+
+    // d1's rule for a client index array: the CLIENT stages count * IndexSize bytes and the
+    // record names the run (Ptr = nullptr, SEG_STAGE); the sink resolves it for the call only.
+    const Uint32 indices[6] = {0, 1, 2, 2, 3, 0};
+    const MG_Pipe::MGPBlobRef staged = fixture.encoder.StageBytes(indices, sizeof(indices));
+    MG_Pipe::MGHostSpan span{};
+    span.Ptr = nullptr;
+    span.Seg = staged.Seg;
+    span.Offset = staged.Offset;
+    span.Size = staged.Size;
+
+    MG_Pipe::MGPDrawInfo info = D1DrawInfo(/*indexSize=*/4, /*numDraws=*/1);
+    info.Flags = MG_Pipe::kDrawHasUserIndices;
+    const MG_Pipe::MGPDrawRange range{0, 6, 0};
+    const Codec::WireTail tails[2] = {{&range, sizeof(range)}, {&span, sizeof(span)}};
+    const Uint64 seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info),
+                                                    tails, 2);
+    ASSERT_NE(seq, Codec::kInvalidSeq);
+    fixture.encoder.Publish();
+    fixture.producer.PublishAndNotify(seq);
+    ASSERT_EQ(fixture.producer.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
+
+    const Server::ServerVerbSink::LastDrawRecord& seen = fixture.session->Applier().Verbs().LastDraw();
+    EXPECT_TRUE(seen.HadUserIndices) << "the span did not reach OnDrawVbo";
+    EXPECT_EQ(seen.UserIndexBytes, sizeof(indices));
+    EXPECT_EQ(seen.Info.Flags & MG_Pipe::kDrawHasUserIndices, MG_Pipe::kDrawHasUserIndices);
+    EXPECT_EQ(seen.FirstRange.Count, 6u);
+    EXPECT_EQ(fixture.session->Applier().Verbs().Draws(), 0u);
+
+    fixture.Stop();
+}
+
+// Red once by: dropping `m_lastDraw.Indirect = *indirect;` - DrawCount reads 0 below.
+TEST(ServerLoopTest, AnIndirectDrawRecordReachesTheSinkWithItsBlockIntact) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+
+    MG_Pipe::MGPDrawInfo info = D1DrawInfo(/*indexSize=*/0, /*numDraws=*/0);
+    info.Flags = MG_Pipe::kDrawIsIndirect;
+    MG_Pipe::MGPDrawIndirect block{};
+    block.Buffer = D1Handle(40);
+    block.ParameterBuffer = D1Handle(41); // the *IndirectCount shape
+    block.Offset = 32;
+    block.ParameterOffset = 8;
+    block.Stride = 16;
+    block.DrawCount = 3;
+    const Codec::WireTail tails[2] = {{nullptr, 0}, {&block, sizeof(block)}};
+    const Uint64 seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info),
+                                                    tails, 2);
+    ASSERT_NE(seq, Codec::kInvalidSeq);
+    fixture.encoder.Publish();
+    fixture.producer.PublishAndNotify(seq);
+    ASSERT_EQ(fixture.producer.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
+
+    const Server::ServerVerbSink::LastDrawRecord& seen = fixture.session->Applier().Verbs().LastDraw();
+    EXPECT_TRUE(seen.HadIndirect) << "the indirect block did not reach OnDrawVbo";
+    EXPECT_FALSE(seen.HadUserIndices);
+    EXPECT_EQ(seen.Indirect.Buffer.Slot, 40u);
+    EXPECT_EQ(seen.Indirect.ParameterBuffer.Slot, 41u);
+    EXPECT_EQ(seen.Indirect.Offset, 32u);
+    EXPECT_EQ(seen.Indirect.ParameterOffset, 8u);
+    EXPECT_EQ(seen.Indirect.Stride, 16u);
+    EXPECT_EQ(seen.Indirect.DrawCount, 3u);
+    EXPECT_EQ(seen.Info.NumDraws, 0u);
+
+    fixture.Stop();
+}
+
 int main(int argc, char** argv) {
     // Before anything logs: MG_Util::Debug::InitFile() reads the variable once, on the first
     // write, and caches the FILE*. The name carries this process's pid, because

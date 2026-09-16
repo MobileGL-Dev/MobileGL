@@ -62,6 +62,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/CrossFrameBufferScenario.cpp
     Scenarios/ResidentIndexScenario.cpp
     Scenarios/MultiDrawScenario.cpp
+    Scenarios/IndexedDrawFamilyScenario.cpp
     Scenarios/DrawParametersScenario.cpp
     Scenarios/AsyncCompileScenario.cpp
     Scenarios/XfbAfterClipDistanceScenario.cpp
@@ -1934,6 +1935,41 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             TIMEOUT ${MGL_ITEST_TIMEOUT}
             ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
     )
+
+    # ---- P5b d1: the indexed / instanced / multi-draw / indirect draw family under inproc ----
+    #
+    # One block per scenario, the precedent above. IndexedDrawFamilyScenario is d1's own lane
+    # case: every case's picture depends on a d1 draw (an element-buffer glDrawElements, a
+    # client index array, a base vertex, the Minecraft trace's DrawElementsInstancedBaseVertex,
+    # the two multi-draws, an indirect draw), so a record that did not cross is a wrong picture
+    # and not a green. MultiDrawScenario, DrawParametersScenario, PrimitiveRestartScenario and
+    # GuiBatchScenario are the census's own DrawElements / MultiDrawElementsBaseVertex /
+    # DrawArraysInstancedBaseInstance / MultiDraw*Indirect* first-blocker scenarios, now at
+    # their pictures. The ONE case excluded by filter is MultiDrawScenario's
+    # ClientSideIndicesBatchMatchesUnrolledDraws: a multi-draw with client-side indices is
+    # refused BY NAME under split (Fatal{UnmigratedVerb, "MultiDrawElementsBaseVertex+
+    # CLIENT_INDICES"}, CONTRACT-P5B.md d1 - P8's HostResolve.cpp flattens it), which is its
+    # next first blocker and not a lane failure. It is listed in d1-v1.md, not deleted (G14).
+    set(MGL_SPLIT_D1_SCENARIOS IndexedDrawFamilyScenario MultiDrawScenario DrawParametersScenario
+                               PrimitiveRestartScenario GuiBatchScenario)
+    set(MGL_SPLIT_D1_FILTER_IndexedDrawFamilyScenario "IndexedDrawFamilyScenario.*")
+    set(MGL_SPLIT_D1_FILTER_MultiDrawScenario
+        "MultiDrawScenario.*-MultiDrawScenario.ClientSideIndicesBatchMatchesUnrolledDraws")
+    set(MGL_SPLIT_D1_FILTER_DrawParametersScenario "DrawParametersScenario.*")
+    set(MGL_SPLIT_D1_FILTER_PrimitiveRestartScenario "PrimitiveRestartScenario.*")
+    set(MGL_SPLIT_D1_FILTER_GuiBatchScenario "GuiBatchScenario.*")
+    foreach(mglItestD1Scenario IN LISTS MGL_SPLIT_D1_SCENARIOS)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectGLES.Split."
+            TEST_LIST "MGL_SPLIT_D1_${mglItestD1Scenario}_TESTS"
+            TEST_FILTER "${MGL_SPLIT_D1_FILTER_${mglItestD1Scenario}}"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-gpu\;integration-split"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
+        )
+    endforeach()
 
     # The split half of the counting pair. MGITEST_PERSISTENT_MAP_ARM=emulated is R-6: under split
     # the adopt tier is pinned at T2, the resource owner declines every acquisition and the client

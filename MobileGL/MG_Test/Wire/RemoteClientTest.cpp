@@ -175,8 +175,11 @@ TEST(RemoteEmitTable, TheThreeClassesPartitionAllSeventyOneSlots) {
     // table itself reports with - which is also what t1's arming condition reads - rather than
     // recomputed here, so a table that lost an emitter cannot look like one that never had it.
     EXPECT_EQ(LocallyAnsweredSlotCount(), 2u);
-    EXPECT_EQ(ImplementedVerbCount(), 5u);
-    EXPECT_EQ(UnmigratedSlotCount(), 64u);
+    // P5b d1 moved the nineteen draw slots from class C to class B (CONTRACT-P5B.md §7: B = 5
+    // + the packages' flips, C = 64 - the same). Each P5b package raises B and lowers C by the
+    // same number, so the two numbers here move together and the sum below never does.
+    EXPECT_EQ(ImplementedVerbCount(), 5u + 19u);
+    EXPECT_EQ(UnmigratedSlotCount(), 64u - 19u);
     EXPECT_EQ(LocallyAnsweredSlotCount() + ImplementedVerbCount() + UnmigratedSlotCount(),
               kRemoteEmitSlotCount);
 }
@@ -229,22 +232,42 @@ TEST(RemoteEmitTable, AnUnmigratedSlotAbortsAndNamesItself) {
     // THE DEATH TEST ON THE UnmigratedVerbFatal ARM. It asserts the exact wording, not merely
     // that the child died: a control that trips on any abort is satisfied by the wrong abort,
     // which is one of the three shapes R-16 was written after.
+    // GetTexImage is the wave-3 tail (CONTRACT-P5B.md §7): no P5b package flips it, so this
+    // case keeps its subject across the four P5b landings. (It was DrawElements until d1 made
+    // that a class-B emitter.)
+    const ChildResult r = RunInChild([] {
+        RemoteEmitTable().GL.GetTexImage(0x0DE1 /*GL_TEXTURE_2D*/, 0, 0x1908 /*GL_RGBA*/,
+                                         0x1401 /*GL_UNSIGNED_BYTE*/, nullptr);
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"GetTexImage\"}"), std::string::npos) << r.Log;
+}
+
+TEST(RemoteEmitTable, EachUnmigratedSlotNamesItsOwnSlot) {
+    // The half the case above cannot state on its own: that the name in the message is the
+    // slot's and not a constant. Two different slots, two different names - both from the
+    // wave-3 tail, for the reason the case above gives.
+    const ChildResult r = RunInChild([] { RemoteEmitTable().SetSwapInterval(1); });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"SetSwapInterval\"}"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("GetTexImage"), std::string::npos)
+        << "the Fatal message names a slot other than the one that was called:\n"
+        << r.Log;
+}
+
+// P5b d1: a class-B draw slot with no session aborts Fatal{NoClientSession, "<slot>"} - the
+// class-B shape - and NOT Fatal{UnmigratedVerb}: that is what distinguishes a flipped slot from
+// the stub it replaced, by behaviour rather than by pointer. Red once by: moving DrawElements
+// back into MGR_UNMIGRATED_D1_SLOTS - the log then reads UnmigratedVerb.
+TEST(RemoteEmitTable, AFlippedDrawSlotDemandsASessionRatherThanNamingItselfUnmigrated) {
     const ChildResult r = RunInChild([] {
         RemoteEmitTable().GL.DrawElements(0x0004 /*GL_TRIANGLES*/, 3, 0x1405 /*GL_UNSIGNED_INT*/,
                                           nullptr);
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"DrawElements\"}"), std::string::npos) << r.Log;
-}
-
-TEST(RemoteEmitTable, EachUnmigratedSlotNamesItsOwnSlot) {
-    // The half the case above cannot state on its own: that the name in the message is the
-    // slot's and not a constant. Two different slots, two different names.
-    const ChildResult r = RunInChild([] { RemoteEmitTable().GL.GenerateMipmap(0x0DE1); });
-    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"GenerateMipmap\"}"), std::string::npos) << r.Log;
-    EXPECT_EQ(r.Log.find("DrawElements"), std::string::npos)
-        << "the Fatal message names a slot other than the one that was called:\n"
+    EXPECT_NE(r.Log.find("Fatal{NoClientSession, \"DrawElements\"}"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("Fatal{UnmigratedVerb"), std::string::npos)
+        << "DrawElements is class B since d1 and must not name itself unmigrated:\n"
         << r.Log;
 }
 
@@ -404,6 +427,178 @@ TEST(CapsMirrorTest, TheConsumerBlockDoesNotCollideWithTheFeatureBits) {
 // =====================================================================================
 // E2's emitter-drop control: the switch itself, driven through the real emitter's own counter
 // =====================================================================================
+
+// =====================================================================================
+// P5b d1: the draw family's record plan (MG_Remote/CONTRACT-P5B.md §2 d1). These drive the
+// PRODUCTION derivation the nineteen emitters call - PlanDrawInfo / PlanDrawRange /
+// PlanDrawIndirect over a RemoteDrawBindings snapshot - so the fields on the wire are pinned
+// here without a GL context (R-16: the production predicate, not a copy). The bindings' READ
+// from the real context is the integration lane's (IndexedDrawFamilyScenario under
+// DirectGLES.Split.), and the sink's consumption of the same fields is ServerLoopTest's.
+// =====================================================================================
+
+namespace {
+    MGPipeHandle D1Handle(Uint32 slot) {
+        MGPipeHandle h{};
+        h.Slot = slot;
+        h.Gen = 3;
+        return h;
+    }
+    RemoteDrawBindings D1BoundElementBuffer(Uint32 slot) {
+        RemoteDrawBindings b{};
+        b.ElementBufferBound = true;
+        b.ElementBuffer = D1Handle(slot);
+        return b;
+    }
+} // namespace
+
+// Red once by: returning `offset` instead of `offset / indexSize` from PlanDrawRange's
+// element-buffer arm - Start reads 24 below.
+TEST(RemoteDrawPlan, AnElementBufferDrawElementsCarriesTheHandleAndItsOffsetInIndices) {
+    const RemoteDrawBindings b = D1BoundElementBuffer(17);
+    const MGPDrawInfo info = PlanDrawInfo(0x0004 /*GL_TRIANGLES*/, RemoteIndexSizeFor(0x1403 /*USHORT*/),
+                                          /*instanceCount=*/1, /*baseInstance=*/0, /*numDraws=*/1, b);
+    EXPECT_EQ(info.Mode, 4u);
+    EXPECT_EQ(info.IndexSize, 2u);
+    EXPECT_EQ(info.IndexResource.Slot, 17u) << "IndexResource must be the VAO's element buffer";
+    EXPECT_EQ(info.InstanceCount, 1u);
+    EXPECT_EQ(info.StartInstance, 0u);
+    EXPECT_EQ(info.Flags, 0u) << "a plain DrawElements sets no flag";
+    EXPECT_EQ(info.MinIndex, ~0u);
+    EXPECT_EQ(info.NumDraws, 1u);
+
+    MGPDrawRange range{};
+    ASSERT_TRUE(PlanDrawRange(b, 2, reinterpret_cast<const void*>(24), 36, 0, range));
+    EXPECT_EQ(range.Start, 12u) << "Start is the byte offset in INDICES (24 / 2)";
+    EXPECT_EQ(range.Count, 36u);
+    EXPECT_EQ(range.IndexBias, 0);
+}
+
+// Red once by: dropping `out.IndexBias = baseVertex` - IndexBias reads 0 below. And the
+// instanced head: swap InstanceCount and StartInstance in PlanDrawInfo - 7 and 2 trade places.
+TEST(RemoteDrawPlan, TheInstancedBaseVertexBaseInstanceFormCarriesAllThreeNumbers) {
+    const RemoteDrawBindings b = D1BoundElementBuffer(9);
+    const MGPDrawInfo info = PlanDrawInfo(0x0004, 4, /*instanceCount=*/7, /*baseInstance=*/2, 1, b);
+    EXPECT_EQ(info.InstanceCount, 7u);
+    EXPECT_EQ(info.StartInstance, 2u);
+    MGPDrawRange range{};
+    ASSERT_TRUE(PlanDrawRange(b, 4, reinterpret_cast<const void*>(0), 6, /*baseVertex=*/5, range));
+    EXPECT_EQ(range.Start, 0u);
+    EXPECT_EQ(range.IndexBias, 5);
+    // An instanced call with a count of 0 crosses as 0, never as the plain draw's 1: the sink
+    // reads InstanceCount != 1 as instanced, and 0 instances must draw nothing.
+    EXPECT_EQ(PlanDrawInfo(0x0004, 4, 0, 0, 1, b).InstanceCount, 0u);
+}
+
+// Red once by: making PlanDrawRange's element-buffer arm `return true` on a remainder - the
+// misaligned offset below plans as index 3 instead of being refused.
+TEST(RemoteDrawPlan, AMisalignedElementOffsetIsRefusedNotRounded) {
+    const RemoteDrawBindings b = D1BoundElementBuffer(1);
+    MGPDrawRange range{};
+    EXPECT_FALSE(PlanDrawRange(b, 4, reinterpret_cast<const void*>(13), 3, 0, range))
+        << "13 bytes is not a whole number of 4-byte indices; the emitter refuses "
+           "\"<slot>+INDEX_OFFSET\" rather than draw from index 3";
+    EXPECT_TRUE(PlanDrawRange(b, 4, reinterpret_cast<const void*>(12), 3, 0, range));
+    EXPECT_EQ(range.Start, 3u);
+}
+
+// Red once by: setting `out.Start = offset` in the no-element-buffer arm - Start reads the
+// pointer's low bits instead of 0 (the staged run starts at its first index).
+TEST(RemoteDrawPlan, AClientIndexArrayPlansFromIndexZeroWithNoHandle) {
+    RemoteDrawBindings b{}; // nothing bound: `indices` is the application's array
+    const std::uint16_t clientIndices[3] = {0, 1, 2};
+    const MGPDrawInfo info = PlanDrawInfo(0x0004, 2, 1, 0, 1, b);
+    EXPECT_TRUE(MGPipeHandleIsNull(info.IndexResource)) << "no element buffer, no handle";
+    MGPDrawRange range{};
+    ASSERT_TRUE(PlanDrawRange(b, 2, clientIndices, 3, 0, range));
+    EXPECT_EQ(range.Start, 0u);
+    EXPECT_EQ(range.Count, 3u);
+    // The span itself is added by the emission (kDrawHasUserIndices, count * IndexSize bytes
+    // staged); ServerLoopTest's AClientIndexArrayCrossesAsAStagedSpan pins the other side.
+}
+
+// Red once by: returning `first * sizeof(float)` or any scaled first for arrays - Start reads
+// something other than 56064 below. (Arrays spell `first` through the pointer parameter.)
+TEST(RemoteDrawPlan, AnArraysRangeIsFirstAndCountWithNoBias) {
+    RemoteDrawBindings b{};
+    MGPDrawRange range{};
+    ASSERT_TRUE(PlanDrawRange(b, 0, reinterpret_cast<const void*>(static_cast<std::intptr_t>(56064)),
+                              16128, 0, range));
+    EXPECT_EQ(range.Start, 56064u);
+    EXPECT_EQ(range.Count, 16128u);
+    EXPECT_EQ(range.IndexBias, 0);
+    EXPECT_EQ(PlanDrawInfo(0x0004, 0, 1, 0, 1, b).IndexSize, 0u);
+}
+
+// Red once by: dropping `block.ParameterBuffer = ...` for the counted form - the parameter
+// handle reads null below and the sink would dispatch the uncounted call.
+TEST(RemoteDrawPlan, TheIndirectBlockNamesBothBuffersAndTheCallsOffsets) {
+    RemoteDrawBindings b{};
+    b.DrawIndirectBuffer = D1Handle(40);
+    b.ParameterBuffer = D1Handle(41);
+    const MGPDrawIndirect counted = PlanDrawIndirect(b, reinterpret_cast<const void*>(64),
+                                                     /*drawCount=*/3, /*stride=*/20,
+                                                     /*parameterOffset=*/8, /*hasParameterBuffer=*/true);
+    EXPECT_EQ(counted.Buffer.Slot, 40u);
+    EXPECT_EQ(counted.ParameterBuffer.Slot, 41u);
+    EXPECT_EQ(counted.Offset, 64u);
+    EXPECT_EQ(counted.ParameterOffset, 8u);
+    EXPECT_EQ(counted.Stride, 20u);
+    EXPECT_EQ(counted.DrawCount, 3u);
+    const MGPDrawIndirect plain = PlanDrawIndirect(b, reinterpret_cast<const void*>(64), 1, 0, 8, false);
+    EXPECT_TRUE(MGPipeHandleIsNull(plain.ParameterBuffer))
+        << "an uncounted indirect draw names no parameter buffer even when one is bound";
+    EXPECT_EQ(plain.ParameterOffset, 0u);
+    EXPECT_EQ(plain.DrawCount, 1u);
+    // The head of an indirect record declares no ranges: the server never reads the indirect
+    // buffer to learn a count (MGPipeTypes.h kDrawIsIndirect).
+    EXPECT_EQ(PlanDrawInfo(0x0004, 4, 1, 0, 0, b).NumDraws, 0u);
+}
+
+// Red once by: returning 4 for GL_UNSIGNED_SHORT - the second line below reads 4.
+TEST(RemoteDrawPlan, TheThreeIndexTypesSizeAndNothingElseDoes) {
+    EXPECT_EQ(RemoteIndexSizeFor(0x1401 /*GL_UNSIGNED_BYTE*/), 1u);
+    EXPECT_EQ(RemoteIndexSizeFor(0x1403 /*GL_UNSIGNED_SHORT*/), 2u);
+    EXPECT_EQ(RemoteIndexSizeFor(0x1405 /*GL_UNSIGNED_INT*/), 4u);
+    EXPECT_EQ(RemoteIndexSizeFor(0x1406 /*GL_FLOAT*/), 0u) << "not an index type: the emitter refuses "
+                                                             "\"<slot>+INDEX_TYPE\"";
+}
+
+TEST(RemoteEmitTable, TheNineteenDrawSlotsAreEmittersDistinctFromEveryStub) {
+    // The table half of d1's flip: each of the nineteen draw pointers is non-null and is NOT the
+    // class-C thunk that stood there at the contract commit. Read from the struct (R-16).
+    // Red once by: leaving one `table.GL.X = &EmitX;` out of BuildRemoteEmitTable - that slot
+    // would then be the MGR_UNMIGRATED thunk, which the macro no longer defines, so the build
+    // breaks first; and by re-adding an X row to MGR_UNMIGRATED_D1_SLOTS, which breaks the
+    // ownership static_assert. Both are build breaks, which is the point of the arithmetic.
+    const MG_Backend::GlobalBackendFunctionsTable& t = RemoteEmitTable();
+    const void* stub = reinterpret_cast<const void*>(t.GL.GetTexImage); // a class-C thunk
+    const void* draws[19] = {
+        reinterpret_cast<const void*>(t.GL.DrawElements),
+        reinterpret_cast<const void*>(t.GL.DrawElementsBaseVertex),
+        reinterpret_cast<const void*>(t.GL.DrawRangeElements),
+        reinterpret_cast<const void*>(t.GL.DrawRangeElementsBaseVertex),
+        reinterpret_cast<const void*>(t.GL.DrawElementsInstanced),
+        reinterpret_cast<const void*>(t.GL.DrawElementsInstancedBaseVertex),
+        reinterpret_cast<const void*>(t.GL.DrawElementsInstancedBaseInstance),
+        reinterpret_cast<const void*>(t.GL.DrawElementsInstancedBaseVertexBaseInstance),
+        reinterpret_cast<const void*>(t.GL.DrawArraysInstanced),
+        reinterpret_cast<const void*>(t.GL.DrawArraysInstancedBaseInstance),
+        reinterpret_cast<const void*>(t.GL.MultiDrawArrays),
+        reinterpret_cast<const void*>(t.GL.MultiDrawElements),
+        reinterpret_cast<const void*>(t.GL.MultiDrawElementsBaseVertex),
+        reinterpret_cast<const void*>(t.GL.DrawArraysIndirect),
+        reinterpret_cast<const void*>(t.GL.DrawElementsIndirect),
+        reinterpret_cast<const void*>(t.GL.MultiDrawArraysIndirect),
+        reinterpret_cast<const void*>(t.GL.MultiDrawElementsIndirect),
+        reinterpret_cast<const void*>(t.GL.MultiDrawArraysIndirectCount),
+        reinterpret_cast<const void*>(t.GL.MultiDrawElementsIndirectCount),
+    };
+    for (int i = 0; i < 19; ++i) {
+        EXPECT_NE(draws[i], nullptr) << "draw slot " << i;
+        EXPECT_NE(draws[i], stub) << "draw slot " << i << " is a class-C thunk";
+    }
+}
 
 TEST(RemoteEmitTable, TheE2DropSwitchStartsDisarmed) {
     // The half a unit case can state. E2's statement - "drop one Clear emission and OpenRA's

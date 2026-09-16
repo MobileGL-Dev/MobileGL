@@ -689,6 +689,21 @@ namespace MobileGL::MG_Remote::Client {
     Uint64 ClientSession::EmitAndWait(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
                                       const void* varTail, Uint64 varTailBytes, void* replyOut,
                                       Uint64 replyBytes, Int32* statusOut, Uint64* replySizeOut) {
+        // One tail is the two-tail form with one entry (P5b d1). Nothing is duplicated: the
+        // barrier policy below has exactly one body, and the encoder's one-tail EncodeRecord is
+        // itself defined as the tails form with tailCount <= 1.
+        const Wire::WireTail tail{varTail, varTailBytes};
+        return EmitAndWaitTails(op, payload, payloadBytes, varTail != nullptr ? &tail : nullptr,
+                                varTail != nullptr ? 1u : 0u, replyOut, replyBytes, statusOut,
+                                replySizeOut);
+    }
+
+    Uint64 ClientSession::EmitAndWaitTails(MG_Pipe::MGPWireOp op, const void* payload,
+                                           Uint64 payloadBytes, const Wire::WireTail* tails,
+                                           Uint32 tailCount, void* replyOut, Uint64 replyBytes,
+                                           Int32* statusOut, Uint64* replySizeOut) {
+        Uint64 varTailBytes = 0;
+        for (Uint32 i = 0; i < tailCount; ++i) varTailBytes += tails[i].Size;
         if (statusOut != nullptr) *statusOut = Wire::ReplySink::kStatusError;
         if (replySizeOut != nullptr) *replySizeOut = 0;
         if (!m_started) {
@@ -713,8 +728,7 @@ namespace MobileGL::MG_Remote::Client {
             std::abort();
         }
 
-        const Uint64 seq =
-            m_encoder.EncodeRecord(op, payload, payloadBytes, varTail, varTailBytes);
+        const Uint64 seq = m_encoder.EncodeRecord(op, payload, payloadBytes, tails, tailCount);
         if (seq == Wire::kInvalidSeq) {
             // The ring refused it. NOT a silent drop and not a retry loop: R-10 says P5 does no
             // chunking and must prove it needs none, so a refusal is the proof failing.
