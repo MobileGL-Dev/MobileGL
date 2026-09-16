@@ -558,6 +558,26 @@ namespace MobileGL::MG_Remote::Wire {
         }
     }
 
+    void CheckDrawUserIndices(const MGPDrawInfo& info, const MGPDrawRange* ranges,
+                              const MGHostSpan& span) {
+        if ((info.Flags & kDrawHasUserIndices) == 0 || (info.Flags & kDrawIsIndirect) != 0 ||
+            info.NumDraws != 1 || ranges == nullptr) {
+            WireProtocolFatal("DrawVbo.userIndices.shape",
+                              "a user-index span requires exactly one direct indexed range");
+        }
+        if (info.IndexSize != 1 && info.IndexSize != 2 && info.IndexSize != 4) {
+            WireProtocolFatalAt("DrawVbo.userIndices.IndexSize", info.IndexSize, 4);
+        }
+        // Client arrays are staged from their first index; Start only addresses an EBO.
+        if (ranges[0].Start != 0) {
+            WireProtocolFatalAt("DrawVbo.userIndices.Start", ranges[0].Start, 0);
+        }
+        const Uint64 required = static_cast<Uint64>(ranges[0].Count) * info.IndexSize;
+        if (required > span.Size) {
+            WireProtocolFatalAt("DrawVbo.userIndices.extent", required, span.Size);
+        }
+    }
+
     // ---------------------------------------------------------------------------------
     // The record layout: the tail arithmetic both sides run
     // ---------------------------------------------------------------------------------
@@ -910,6 +930,13 @@ namespace MobileGL::MG_Remote::Wire {
             if (supplied != 0 && tails[i].Bytes == nullptr) {
                 WireProtocolFatal("EncodeRecord.tail", "non-zero tail length with a null pointer");
             }
+        }
+
+        if (op == MGPWireOp::DrawVbo && layout.SecondTailIsHostSpans) {
+            MGHostSpan span{};
+            std::memcpy(&span, tails[1].Bytes, sizeof(span));
+            const auto& info = *static_cast<const MGPDrawInfo*>(payload);
+            CheckDrawUserIndices(info, static_cast<const MGPDrawRange*>(tails[0].Bytes), span);
         }
 
         const Uint64 total = layout.TotalBytes;
@@ -1964,6 +1991,7 @@ namespace MobileGL::MG_Remote::Wire {
                 // left SEG_STAGE reached the sink and that promise was false. P5b's d1 is what
                 // arms this path (client-side index arrays staged whole, CONTRACT-P5B.md d1).
                 CheckHostSpanIsHonest(span, *m_segments);
+                CheckDrawUserIndices(info, reinterpret_cast<const MGPDrawRange*>(tailAt(0)), span);
                 userIndices = &span;
             }
             // P5b d1: the indirect block, in the span's place. The layout already refused a

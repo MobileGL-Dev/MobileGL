@@ -1004,6 +1004,34 @@ TEST_F(PipeWireCodecTest, DrawVboConditionalSpanTailIsEightAlignedAndSurvives) {
     EXPECT_FALSE(wire.Sink().SawIndirect);
 }
 
+TEST_F(PipeWireCodecTest, UserIndexSpanExactlyAtSegmentEndReachesTheSink) {
+    Wire2 wire;
+    MGPDrawInfo info{};
+    info.Mode = GL_POINTS;
+    info.IndexSize = 2;
+    info.Flags = kDrawHasUserIndices;
+    info.InstanceCount = 1;
+    info.NumDraws = 1;
+    MGPDrawRange range{0, 1, 0};
+    MGHostSpan span{};
+    span.Seg = kSegStage;
+    span.Offset = Wire2::kStageBytes - 2;
+    span.Size = 2;
+    const WireTail tails[] = {{&range, sizeof(range)}, {&span, sizeof(span)}};
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::DrawVbo, &info, sizeof(info), tails, 2),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    ASSERT_TRUE(applied);
+    ASSERT_EQ(wire.Sink().DrawRanges.size(), 1u);
+    EXPECT_EQ(wire.Sink().DrawRanges[0].Count, 1u);
+    EXPECT_EQ(wire.Sink().LastSpan.Offset, span.Offset);
+    EXPECT_EQ(wire.Sink().LastSpan.Size, 2u);
+    Server::ServerVerbSink sink;
+    EXPECT_FALSE(sink.OnDrawVbo(info, &range, &span, nullptr)); // no backend, valid witness
+    EXPECT_EQ(sink.DrawRecords(), 1u);
+}
+
 // =====================================================================================
 // P5b (MG_Remote/CONTRACT-P5B.md): one round trip per row the four migration packages consume
 // =====================================================================================
@@ -2429,6 +2457,87 @@ TEST_F(PipeWireCodecTest, AHostSpanRunPastItsSegmentIsFatalOnDrawVbo) {
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("does not lie inside that segment (R-2.3 arm 4)"), std::string::npos)
         << r.Log;
+}
+
+// The span itself is in bounds, but the driver's index count would leave it. Exercise
+// the real encoder, forged decoder input, and the sink independently; none may rely on the
+// preceding layer for the count/extent check.
+TEST_F(PipeWireCodecTest, UserIndexSpanRejectsAnExtentBeyondItsLastTwoBytes) {
+    for (int side = 0; side != 3; ++side) {
+        SCOPED_TRACE(side);
+        const ChildResult r = RunInChild([side] {
+            Wire2 wire;
+            MGPDrawInfo info{};
+            info.Mode = GL_TRIANGLES;
+            info.IndexSize = 2;
+            info.Flags = kDrawHasUserIndices;
+            info.NumDraws = 1;
+            info.InstanceCount = 1;
+            MGPDrawRange range{0, 3, 0};
+            MGHostSpan span{};
+            span.Seg = kSegStage;
+            span.Offset = Wire2::kStageBytes - 2;
+            span.Size = 2;
+            if (side == 0) {
+                const WireTail tails[] = {{&range, sizeof(range)}, {&span, sizeof(span)}};
+                wire.Encoder().EncodeRecord(MGPWireOp::DrawVbo, &info, sizeof(info), tails, 2);
+            } else if (side == 1) {
+                std::vector<std::uint8_t> tail(16 + sizeof(span), 0);
+                std::memcpy(tail.data(), &range, sizeof(range));
+                std::memcpy(tail.data() + 16, &span, sizeof(span));
+                ForgeAndDecode(wire, MGPWireOp::DrawVbo, &info, sizeof(info), tail.data(), tail.size());
+            } else {
+                Server::ServerVerbSink sink;
+                sink.OnDrawVbo(info, &range, &span, nullptr);
+            }
+        });
+        ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+        EXPECT_NE(r.Log.find("DrawVbo.userIndices.extent"), std::string::npos) << r.Log;
+    }
+}
+
+TEST_F(PipeWireCodecTest, UserIndexSpanRequiresOneIndexedRangeAndNonWrappingExtent) {
+    for (int side = 0; side != 2; ++side) {
+        for (int malformed = 0; malformed != 6; ++malformed) {
+            SCOPED_TRACE(side);
+            SCOPED_TRACE(malformed);
+            const ChildResult r = RunInChild([side, malformed] {
+                Wire2 wire;
+                MGPDrawInfo info{};
+                info.Mode = GL_TRIANGLES;
+                info.IndexSize = 2;
+                info.Flags = kDrawHasUserIndices;
+                info.NumDraws = 1;
+                MGPDrawRange ranges[2] = {{0, 1, 0}, {0, 1, 0}};
+                MGHostSpan span{};
+                span.Seg = kSegStage;
+                span.Size = 2;
+                switch (malformed) {
+                case 0: info.IndexSize = 0; break; // arrays cannot consume user indices
+                case 1: info.IndexSize = 3; break;
+                case 2: info.NumDraws = 0; break;
+                case 3: info.NumDraws = 2; break; // no flattening contract for multi-draw yet
+                case 4: ranges[0].Start = 1; break;
+                case 5: info.IndexSize = 4; ranges[0].Count = 0x80000001u; span.Size = 4; break;
+                }
+                if (side == 0) {
+                    const WireTail tails[] = {
+                        {ranges, static_cast<Uint64>(info.NumDraws) * sizeof(MGPDrawRange)},
+                        {&span, sizeof(span)}};
+                    wire.Encoder().EncodeRecord(MGPWireOp::DrawVbo, &info, sizeof(info), tails, 2);
+                } else {
+                    const auto bytes = info.NumDraws * sizeof(MGPDrawRange);
+                    const auto spanAt = (bytes + 7) & ~SizeT{7};
+                    std::vector<std::uint8_t> tail(spanAt + sizeof(span), 0);
+                    std::memcpy(tail.data(), ranges, bytes);
+                    std::memcpy(tail.data() + spanAt, &span, sizeof(span));
+                    ForgeAndDecode(wire, MGPWireOp::DrawVbo, &info, sizeof(info), tail.data(), tail.size());
+                }
+            });
+            ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+            EXPECT_NE(r.Log.find("DrawVbo.userIndices."), std::string::npos) << r.Log;
+        }
+    }
 }
 
 // ---- M5 / m8 / q2 ------------------------------------------------------------------------

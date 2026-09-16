@@ -148,6 +148,12 @@ namespace MobileGL::MG_Remote::Wire {
     // when nobody will be reading this file.
     void CheckHostSpanIsHonest(const MG_Pipe::MGHostSpan& span, const SegmentTable& segments);
 
+    // A legal segment run must also contain every index the draw will consume. Shared by
+    // the encoder, decoder and sink so a direct sink call cannot bypass the extent gate.
+    void CheckDrawUserIndices(const MG_Pipe::MGPDrawInfo& info,
+                              const MG_Pipe::MGPDrawRange* ranges,
+                              const MG_Pipe::MGHostSpan& span);
+
     // ---- one record's shape, computed ONCE and read by both sides ----------------------
     //
     // THE TAIL CROSS-CHECK LIVES HERE AND NOWHERE ELSE (BRIEF §5 w1, contract table 1 group

@@ -408,6 +408,9 @@ namespace MobileGL::MG_Remote::Server {
                                    const MG_Pipe::MGPDrawRange* ranges,
                                    const MG_Pipe::MGHostSpan* userIndices,
                                    const MG_Pipe::MGPDrawIndirect* indirect) {
+        if (userIndices != nullptr) {
+            Wire::CheckDrawUserIndices(info, ranges, *userIndices);
+        }
         // The witness first, before the backend is consulted, so a unit process with no
         // backend object still sees the wire's fields (PipeApplier.h LastDraw).
         m_lastDraw = LastDrawRecord{};
