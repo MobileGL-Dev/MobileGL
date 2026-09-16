@@ -70,6 +70,36 @@ namespace MGITest {
         unsigned int totalVerbSlots = 0;
         // The encoder's highest produced record ordinal, or 0 when there is no session.
         unsigned long long emitSeq = 0;
+
+        // ---- the wire producer's ledger, for exit gates E3(e) and R-10's proof obligation ---
+        //
+        // All four are 0 when there is no session, which is why every case that reads them has
+        // to have passed SplitRuntimeSkipReason() first: 0 wraps in a process that never had a
+        // ring and 0 wraps in a process whose ring never filled are the same number and
+        // completely different facts.
+        //
+        // maxRecordBytes / maxRecordBytesCap: R-10 says P5 does no chunking and must prove it
+        // needs none. The cap is RingProducer::MaxRecordBytes() == MOBILEGL_IPC_RING_MB / 2,
+        // read from the ring this process actually got rather than recomputed from the
+        // environment.
+        //
+        // cmdWraps / cmdWrapPads / cmdBytesWritten: SEG_CMD cannot go round until more bytes
+        // have been written than the ring holds, so the byte count is the denominator without
+        // which the wrap count means nothing - "0 wraps" is a defect after 1.25 MiB through a
+        // 1 MiB ring and a tautology after 40 KiB. cmdWrapPads is the narrower R-9 event (a
+        // record STRADDLED the boundary and needed a kRecPad filler) and is recorded rather
+        // than asserted: a uniform record stride over a power-of-two ring lands on the
+        // boundary exactly and never straddles it.
+        //
+        // stageReclaimWaits: SEG_STAGE allocations that only fitted after the encoder reclaimed
+        // what the server had retired - P5's one real producer wait (see PipeWireCodec.h for
+        // why the command ring has none while the verb barrier is armed).
+        unsigned long long maxRecordBytes = 0;
+        unsigned long long maxRecordBytesCap = 0;
+        unsigned long long cmdWraps = 0;
+        unsigned long long cmdWrapPads = 0;
+        unsigned long long cmdBytesWritten = 0;
+        unsigned long long stageReclaimWaits = 0;
     };
 
     SplitRuntimeState PeekSplitRuntime();

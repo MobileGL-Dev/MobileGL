@@ -47,7 +47,17 @@ namespace MGITest {
         if (session != nullptr) {
             // Encoder() returns the member; EmitSeq() returns m_emitSeq. Neither is a stub, and
             // neither emits anything - this is a read.
-            state.emitSeq = session->Encoder().EmitSeq();
+            const MobileGL::MG_Remote::Wire::PipeWireEncoder& encoder = session->Encoder();
+            state.emitSeq = encoder.EmitSeq();
+            // The producer's ledger. Every one of these is a plain member read on the encoder
+            // or on the RingProducer it holds; none of them emits, publishes or waits, so a
+            // case may read them between two GL calls without changing what the next record is.
+            state.maxRecordBytes = encoder.MaxRecordBytesSeen();
+            state.maxRecordBytesCap = encoder.MaxRecordBytesCap();
+            state.cmdWraps = encoder.CmdWraps();
+            state.cmdWrapPads = encoder.CmdWrapPads();
+            state.cmdBytesWritten = encoder.CmdBytesWritten();
+            state.stageReclaimWaits = encoder.StageReclaimWaits();
         }
 #endif
         return state;
