@@ -457,6 +457,36 @@ namespace MobileGL::MG_Remote::Wire {
                     WireOpName(op), static_cast<unsigned long long>(blob.Size));
             std::abort();
         }
+        // R-2.3's SECOND HALF: "inside SOME segment" IS NOT THE RULE. Contract table 1 gives
+        // every client->server content blob - groups A, B and C, all nineteen rows - the ONE
+        // carrier SEG_STAGE, and R-10 sends blobs there whole. Until this arm existed the only
+        // test was that the run resolved, so `CreateSamplerState.Parameters={Seg=SEG_REPLY,...}`
+        // was accepted and APPLIED: a server-owned segment, whose reuse is the reply pool's
+        // business and has nothing to do with stage retirement, carrying bytes the applier
+        // then read. It also went unpoisoned - NoteResolvedRun skipped every non-stage carrier
+        // - so rule C's only mechanical control read zero on exactly the record that needed it.
+        //
+        // The segment is checked BEFORE the resolve, deliberately: a forged SEG_REPLY run that
+        // happens to lie inside a mapped reply pool must be refused for naming the wrong
+        // carrier, not left to pass or fail on whether that pool is mapped at all.
+        //
+        // NOT A NEW FATAL FAMILY. The review suggested `Fatal{BlobNotStaged}`; this is
+        // ProtocolCorruption like every other R-2 honesty arm, because the families are the
+        // vocabulary the operator and the CI greps share (ProtocolCorruption, AbiMismatch,
+        // UnmigratedVerb, UnmigratedPipeInput, UnsetCallMask, RingOverrun) and a one-off
+        // seventh name would be a token nothing else in the tree recognises. The SEGMENT is in
+        // the message, which is what has to be greppable.
+        if (blob.Seg != kSegStage) {
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} seg=%u offset=%llu "
+                    "size=%llu is not SEG_STAGE(%u); every client->server content blob is "
+                    "staged whole in SEG_STAGE (contract table 1 groups A/B/C, R-10) and no "
+                    "other segment may carry one",
+                    WireOpName(op), static_cast<unsigned>(blob.Seg),
+                    static_cast<unsigned long long>(blob.Offset),
+                    static_cast<unsigned long long>(blob.Size),
+                    static_cast<unsigned>(kSegStage));
+            std::abort();
+        }
         if (segments.Resolve(blob.Seg, blob.Offset, blob.Size) == nullptr) {
             MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} seg=%u offset=%llu size=%llu "
                     "does not lie inside that segment (R-2.3)",
@@ -1115,8 +1145,22 @@ namespace MobileGL::MG_Remote::Wire {
     }
 
     void PipeWireDecoder::NoteResolvedRun(MGPWireOp op, const MGPBlobRef& blob) {
+        // UNREACHABLE NOW, AND LOUD RATHER THAN SILENT. This used to `return`, and that made
+        // the audit's bookkeeping quietly optional: a record naming a non-SEG_STAGE carrier
+        // was applied AND recorded nothing, so PoisonedStageBytes() stayed zero and rule C's
+        // only mechanical control was dark on exactly the record it existed to catch. The one
+        // caller is ResolveOrFatal, which runs RequireDeclaredBlob first, and that now refuses
+        // both an undeclared blob and a non-SEG_STAGE one by name. If either ever arrives here
+        // the audit has stopped covering the carrier, which is the same failure as no audit at
+        // all - the reason the run-count overflow just below is a Fatal too.
         if (blob.Size == 0 || blob.Seg != kSegStage) {
-            return;
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s\"} the audit was asked to record a "
+                    "resolved run with seg=%u size=%llu; only declared SEG_STAGE(%u) runs "
+                    "reach the poison fill (R-2.5)",
+                    WireOpName(op), static_cast<unsigned>(blob.Seg),
+                    static_cast<unsigned long long>(blob.Size),
+                    static_cast<unsigned>(kSegStage));
+            std::abort();
         }
         if (m_resolvedCount >= sizeof(m_resolved) / sizeof(m_resolved[0])) {
             // LOUD, NOT A SILENT DROP. This array is what the 0xDD fill covers, and a poison

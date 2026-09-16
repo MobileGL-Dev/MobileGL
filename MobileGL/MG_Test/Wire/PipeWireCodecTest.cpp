@@ -1500,6 +1500,69 @@ TEST_F(PipeWireCodecTest, ARunThatLeavesItsSegmentIsFatal) {
     EXPECT_NE(r.Log.find("does not lie inside that segment"), std::string::npos) << r.Log;
 }
 
+TEST_F(PipeWireCodecTest, AContentBlobCarriedOutsideSegStageIsFatalAtTheDecoder) {
+    // R-2.3's second half, and the verifier's finding-3 fixture kept as its own case
+    // (wave1-codex-verify.md §3). Contract table 1 row 17 puts CreateSamplerState's bytes in
+    // SEG_STAGE; here they sit in a mapped SEG_REPLY - the SERVER-owned reply pool, whose
+    // reuse has nothing to do with stage retirement - and the record names that segment. It
+    // used to be ACCEPTED and APPLIED, because the only test was that the run resolved
+    // somewhere: the verifier's probe printed `seg=3 accepted=1 poisoned=0`.
+    //
+    // The audit is armed, so the second half of the finding is nailed down too: with the
+    // poison ON, the record must DIE rather than be applied with PoisonedStageBytes() left at
+    // zero. NoteResolvedRun used to return silently for any non-stage carrier, which made
+    // rule C's only mechanical control dark on exactly the record it exists to catch; it is
+    // now a Fatal of its own and unreachable behind this arm.
+    //
+    // I made it red once, by doing X: X = deleting the `blob.Seg != kSegStage` arm in
+    // CheckBlobIsHonest (PipeWireCodec.cpp). The child then exits 0 instead of aborting and
+    // this case fails on DiedOfAbort - the verifier's `accepted=1` state.
+    const ChildResult r = RunInChild([] {
+        Wire2 wire;
+        std::vector<std::uint8_t> replyBytes(4096, 0);
+        SamplerParameters params{};
+        params.borderColorForm = BorderColorForm::Int;
+        std::memcpy(replyBytes.data(), &params, sizeof(params));
+        wire.Segments().Install(kSegReply, SegmentView{replyBytes.data(), replyBytes.size()});
+        wire.Decoder().SetAuditPoison(true);
+
+        MGPSamplerDesc desc{};
+        desc.Cso = MakeHandle(88);
+        desc.Parameters.Seg = static_cast<Uint32>(kSegReply);
+        desc.Parameters.Offset = 0;
+        desc.Parameters.Size = sizeof(SamplerParameters);
+        ForgeAndDecode(wire, MGPWireOp::CreateSamplerState, &desc, sizeof(desc), nullptr, 0);
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("is not SEG_STAGE"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("CreateSamplerState.blob"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("seg=3"), std::string::npos) << r.Log;
+}
+
+TEST_F(PipeWireCodecTest, TheEncoderRefusesTheNonStageCarrierTheDecoderCallsFatal) {
+    // THE ENCODER MUST NOT ACCEPT A RECORD THE DECODER FATALS ON - the same symmetry
+    // TheEncoderRefusesThePerStageSpirvRunTheDecoderCallsFatal states one arm over. Under
+    // `inproc` a SEG_REPLY pointer resolves, so an emitter that staged into the reply pool
+    // would get a valid seq here and a Fatal on a peer, which is the asymmetry EncodeRecord's
+    // own honesty loop exists to prevent.
+    //
+    // I made it red once, by doing X: X = deleting the `blob.Seg != kSegStage` arm in
+    // CheckBlobIsHonest. EncodeRecord then returns a real seq and the child exits 0.
+    const ChildResult r = RunInChild([] {
+        Wire2 wire;
+        std::vector<std::uint8_t> replyBytes(4096, 0);
+        wire.Segments().Install(kSegReply, SegmentView{replyBytes.data(), replyBytes.size()});
+        MGPSamplerDesc desc{};
+        desc.Cso = MakeHandle(88);
+        desc.Parameters.Seg = static_cast<Uint32>(kSegReply);
+        desc.Parameters.Offset = 0;
+        desc.Parameters.Size = sizeof(SamplerParameters);
+        (void)wire.Encoder().EncodeRecord(MGPWireOp::CreateSamplerState, &desc, sizeof(desc));
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("is not SEG_STAGE"), std::string::npos) << r.Log;
+}
+
 TEST_F(PipeWireCodecTest, AHalfDeclaredBlobIsFatalRatherThanReadAsAbsent) {
     // The shape a MONOLITH emitter produces - Seg None, Offset a host address, Size 0. Reading
     // it as "absent" would silently drop the bytes of every record an unconverted emitter sent.
