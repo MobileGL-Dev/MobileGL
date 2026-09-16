@@ -15,6 +15,12 @@
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Remote/Client/GpuWritePending.h>
 #endif
+// CONTRACT-P5.md §7 / ID-14: a null check on a GLFunctionsTable slot may not survive into the
+// client under split - it becomes a caps-mirror read. SlotCaps.h carries the rule and the test
+// that decides which of its two spellings a site takes; in a pull build both expand to exactly
+// the check they replaced. P5b t2 converts ONE site in this file - the capture-ownership probe
+// in FixupGsStripCaptureOrder - for the reason CONTRACT-P5B.md §6.5 gives.
+#include <MG_Remote/Client/SlotCaps.h>
 #include "../Getter/GL_Getter.h"
 
 namespace MobileGL::MG_Impl::GLImpl {
@@ -1287,7 +1293,15 @@ namespace MobileGL::MG_Impl::GLImpl {
         // Only Vulkan-order captures need this. A backend that runs the capture on its
         // own GL/ES driver (it owns the span, hence the EndTransformFeedback entry) has
         // already produced GL's vertex order, and reordering it again would corrupt it.
-        if (MG_Backend::gBackendFunctionsTable.GL.EndTransformFeedback != nullptr) {
+        //
+        // P5b t2 (CONTRACT-P5B.md §6.5): UNDER SPLIT THE TABLE THIS USED TO ASK IS THE CLIENT'S
+        // EMIT TABLE, whose EndTransformFeedback slot t2 just made non-null for every server -
+        // so the raw null check would answer "the backend owns the capture" even against Magma,
+        // which registers no XFB slot at all, and would skip a reorder Magma needs. The question
+        // is about the SERVER's table, so it is answered from the bit the server publishes.
+        // Under monolith (and in a pull build) this expands to the null check it replaced,
+        // character for character.
+        if (MGL_BACKEND_SLOT_CAP(EndTransformFeedback, MG_Pipe::kCapBackendOwnsXfbCapture)) {
             return;
         }
         if (program == nullptr || !program->HasGsTriangleStripCaptureFixup() || inputPrimitives == 0) {

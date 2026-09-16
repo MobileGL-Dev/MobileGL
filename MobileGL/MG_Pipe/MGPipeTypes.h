@@ -121,6 +121,18 @@ namespace MobileGL::MG_Pipe {
         // The server packs named uniform blocks into its own ring and therefore needs the
         // host bytes of a set_shader_buffers(Uniform) range (D-B8).
         kCapNeedsHostUboBytes = 1ull << 8,
+        // P5b t2 (CONTRACT-P5B.md §6.5), the one cap bit P5b adds. The SERVER's backend owns
+        // the transform-feedback capture, i.e. its own table registers EndTransformFeedback.
+        // FixupGsStripCaptureOrder (GL_Drawing.cpp:1290) asks that question to decide whether
+        // the CLIENT must reorder the captured records into GL's vertex order, and it used to
+        // ask it of gBackendFunctionsTable.GL.EndTransformFeedback - which under split is the
+        // client's EMIT table, where the slot is non-null the moment t2 installs an emitter,
+        // for every server. A client talking to Espryt would then be right by accident and a
+        // client talking to Magma (which registers no XFB slot at all, so the sink DECLINES)
+        // would skip a reorder Magma needs and hand the application a silently corrupt capture
+        // buffer. So the answer is the SERVER's table, published as a bit and read through
+        // MGL_BACKEND_SLOT_CAP. The first of the "XFB span family" bits SlotCaps.h predicted.
+        kCapBackendOwnsXfbCapture = 1ull << 9,
     };
 
     struct MGPCaps {

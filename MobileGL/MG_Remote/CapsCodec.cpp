@@ -44,9 +44,11 @@
 
 namespace MobileGL::MG_Remote {
 
-    // The consumer mask may not collide with the MGPCapBits below it. kCapNeedsHostUboBytes
-    // is 1<<8 today; this asserts the gap stays a gap rather than trusting the comment.
-    static_assert((static_cast<Uint64>(MG_Pipe::kCapNeedsHostUboBytes) & kMGCapsConsumerMask) == 0,
+    // The consumer mask may not collide with the MGPCapBits below it. The HIGHEST allocated
+    // feature bit is kCapBackendOwnsXfbCapture, 1<<9 (P5b t2 raised it from
+    // kCapNeedsHostUboBytes' 1<<8); this asserts the gap stays a gap rather than trusting the
+    // comment, so it has to name whichever bit is currently the top one.
+    static_assert((static_cast<Uint64>(MG_Pipe::kCapBackendOwnsXfbCapture) & kMGCapsConsumerMask) == 0,
                   "an MGPCapBit has grown into CallMask's consumer block (bits 32..47)");
     static_assert(MGCapsServerConsumes(MGCapsConsumerBits(MG_Pipe::kMGPipeSubsystemResources),
                                        MG_Pipe::kMGPipeSubsystemResources),

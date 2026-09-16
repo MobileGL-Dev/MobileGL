@@ -75,11 +75,30 @@
 //   GL_Drawing.cpp:844  PatchParameteri. "Absent" means the patch size is never set and every
 //       tessellation draw silently uses the previous one. Class C; it aborts by name.
 //
+// P5b t2 CLOSED THE FIRST OF THOSE TWO, AND THE OTHER SIX SITES NEEDED NOTHING (CONTRACT-P5B.md
+// §2 t2, §6.5). The six SPAN sites - :1274 Begin, :1371 End, :1420 Pause, :1435 Resume, :1641
+// Delete, :1673 Bind - are guards over a slot that is now class B in the client's table, so they
+// simply call the emitter; their `if (const auto f = ...)` shape is left exactly as it was,
+// because under split the slot is non-null and under monolith nothing moved. THE PROBE AT :1290
+// IS THE ONE THAT HAD TO CHANGE, and it is the reason this header said the XFB span family would
+// be the first to need a bit: it is not a guard on a call, it is a QUESTION ABOUT THE BACKEND
+// asked of a table that under split belongs to the client. It now reads
+// MGL_BACKEND_SLOT_CAP(EndTransformFeedback, kCapBackendOwnsXfbCapture), the bit the server sets
+// from ITS table in MG_Backend/Init.cpp's InitSplitRoles. Espryt registers the slot and answers
+// yes; Magma registers no XFB slot, answers no, and the client keeps reordering for it exactly
+// as it does under monolith. GL_Drawing.cpp:844's PatchParameteri stays a plain guard for the
+// same reason as the six: the slot is class B now, so "absent" never arises.
+//
+// The one XFB slot still class C is DeleteTransformFeedback, which CONTRACT-P5B.md gives no row
+// (unmeasured); :1641's guard therefore still reaches Fatal{UnmigratedVerb} by name, which is
+// the outcome R-4 asks for.
+//
 // WHAT THIS HEADER DELIBERATELY DOES NOT DO. It does not touch the 28 unguarded slots: those
 // have no probe to convert, and calling one reaches Fatal{UnmigratedVerb, "<slot>"} by name,
 // which is R-4's intent. And it does not invent a cap bit - a new MGPCapBit is an
 // MGPipeTypes.h edit and that file is c0's, so a family that needs one goes through the
-// integrator (the XFB span family is the first that will).
+// integrator (the XFB span family is the first that will). It did: P5b's contract granted t2
+// exactly that one bit, kCapBackendOwnsXfbCapture (CONTRACT-P5B.md §6.5, §8), and t2 added it.
 //
 // G1: in a build without MOBILEGL_BUILD_DISAGGREGATED both macros expand to the null check the
 // site already had, so the pull build's code generation is unchanged.

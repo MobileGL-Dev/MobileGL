@@ -16,6 +16,12 @@
 // changes class without changing the arithmetic is a build break rather than a behaviour
 // change nobody reviewed.
 //
+// P5b MOVES SLOTS FROM C TO B, ONE PACKAGE AT A TIME (MG_Remote/CONTRACT-P5B.md §7). The three
+// numbers above are the partition AT THE P5b CONTRACT COMMIT and they are the ones the contract
+// states; the arithmetic below is what the tree currently has, and the per-package ownership
+// assertions say which package moved which slot. On this head t2 has landed: class B is 5 + 6
+// and class C is 58.
+//
 // THE PRE-VERB HOOKS RUN BEFORE THE RECORD, NEVER AFTER (b1, ID-18). PushPersistentMapsBeforeVerb
 // publishes the bytes an application wrote through a coherent map with no API call at all, and
 // MarkGpuWritesForDraw builds the conservative GPU-write set the client now owns. Both describe
@@ -897,6 +903,131 @@ namespace MobileGL::MG_Remote::Client {
                                 nullptr, 0, nullptr, 0, nullptr);
         }
 
+        // CLASS B - P5b package t2: the transform-feedback spans, the XFB object bind and the
+        // tessellation patch parameter (MG_Remote/CONTRACT-P5B.md §2 t2).
+        // =============================================================================
+        //
+        // SIX SLOTS, SIX ROWS, AND NOT ONE OF THEM STARTS A SHADER. Every one of the six is a
+        // control call - it opens, closes, pauses, resumes or re-targets a capture span, or sets
+        // the patch size the next tessellation draw uses - so each takes BeforeReadOnlyVerb(),
+        // which is CONTRACT-P5B.md §4's rule for "a verb that reads buffers but starts no
+        // shader" naming the XFB and patch controls by hand. The GPU-WRITE MARK FOR THE CAPTURE
+        // TARGETS IS NOT TAKEN HERE and that is deliberate: it belongs at the END of the span,
+        // after the record and before GLContext::EndTransformFeedback clears the live bindings,
+        // which is exactly where b1 already put it (GL_Drawing.cpp's
+        // MarkEndTransformFeedbackCaptureTargets). Taking it here as well would mark the same
+        // buffers twice and taking it INSTEAD of there would mark nothing.
+        //
+        // RULE D (CONTRACT-P5B.md §0): each record carries the GL arguments the frontend handed
+        // the backend slot and nothing that is a READING of them. The capture program, the
+        // capture-buffer bindings, the patch state and the bound XFB object all stay
+        // BARRIER-PULLED - the server's backend reads the client's gPipeInputs fill of the
+        // moment, which MGP_FILL at each call site has just written and the verb barrier holds
+        // still (R-1). That is why these are six two-line emitters and not an XFB protocol.
+        //
+        // WHAT MUST HAVE CROSSED BEFORE begin_stream_output, since it is the ordering question
+        // this package was asked: the capture buffers' own resource records (emitted at their
+        // own call sites through the resource family, long before this point), the program
+        // (the CSO/program family, likewise), and the buffer BINDINGS - which do not cross as a
+        // record at all, because set_stream_output_targets (39) has no producer and no consumer
+        // and CONTRACT-P5B.md §2 rules it NOT required for t2: under the barrier the server's
+        // StartPendingTransformFeedback reads them through the kXfbSpan/kDraw pulls
+        // (GetTransformFeedbackProgram, GetBufferBindingPoint). Producing that row is P9's.
+
+        void EmitBeginTransformFeedback(GLenum primitiveMode) {
+            ClientSession& session = RequireSession("BeginTransformFeedback");
+            BeforeReadOnlyVerb();
+
+            MG_Pipe::MGPStreamOutputBegin record{};
+            // The GL token verbatim (contract table 0's "GL enums on the wire"): the sink hands
+            // it to the backend slot that takes it, and nothing between here and there reads it.
+            record.PrimitiveMode = static_cast<Uint32>(primitiveMode);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::BeginStreamOutput, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        void EmitEndTransformFeedback() {
+            ClientSession& session = RequireSession("EndTransformFeedback");
+            BeforeReadOnlyVerb();
+
+            MG_Pipe::MGPXfbAccounting record{};
+            // THE ACCOUNTING IS THE CLIENT'S OWN AND IT IS INFORMATIONAL ON THIS SIDE OF THE
+            // WIRE: end_stream_output's backend call takes no arguments, and the three numbers
+            // are what the frontend has counted over this span (CONTRACT-P5B.md §2 t2, the
+            // companions row). They travel because the row has carried them since P4a and
+            // because they are what a server-side scatter would need when P9 lands one; the
+            // sink today calls GL.EndTransformFeedback() and reads none of them. Read here,
+            // BEFORE GLContext::EndTransformFeedback resets the counters at the call site.
+            const auto& context = *MG_State::pGLContext;
+            record.CapturedVertices = context.GetTransformFeedbackCapturedVertices();
+            record.PrimitivesWritten = context.GetTransformFeedbackPrimitiveCounter();
+            record.PrimitiveMode = static_cast<Uint32>(context.GetTransformFeedbackPrimitiveMode());
+            session.EmitAndWait(MG_Pipe::MGPWireOp::EndStreamOutput, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        void EmitPauseTransformFeedback() {
+            ClientSession& session = RequireSession("PauseTransformFeedback");
+            BeforeReadOnlyVerb();
+
+            // Reserved IS zero and the contract says so (MGPStreamOutputControl{Reserved = 0}).
+            // The row exists to BE the verb boundary - the stamp the server puts up before the
+            // sink runs - not to carry anything.
+            MG_Pipe::MGPStreamOutputControl record{};
+            record.Reserved = 0;
+            session.EmitAndWait(MG_Pipe::MGPWireOp::PauseStreamOutput, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        void EmitResumeTransformFeedback() {
+            ClientSession& session = RequireSession("ResumeTransformFeedback");
+            BeforeReadOnlyVerb();
+
+            MG_Pipe::MGPStreamOutputControl record{};
+            record.Reserved = 0;
+            session.EmitAndWait(MG_Pipe::MGPWireOp::ResumeStreamOutput, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        void EmitBindTransformFeedback(GLuint name) {
+            ClientSession& session = RequireSession("BindTransformFeedback");
+            BeforeReadOnlyVerb();
+
+            MG_Pipe::MGPStreamOutputBind record{};
+            // THE GL NAME IS NOT AN IDENTITY (ARCHITECTURE 4.2.1) and is carried anyway, because
+            // it is the key the backend has always used: Espryt indexes its driver objects by it
+            // (XfbImpl::g_xfbObjects[name], DirectGLES.cpp:1401) and generates the ES object on
+            // first bind. Name 0 is the default object, which is why the field is not a handle.
+            record.GlName = static_cast<Uint32>(name);
+            // Beside it, the identity that WILL dispatch: the frontend's per-object lifetime id,
+            // process-wide and never reused, which is what survives glGenTransformFeedbacks
+            // recycling a name. Read AFTER GLContext::BindTransformFeedbackObject at the call
+            // site, so it is the id of the object being bound and not of the previous one.
+            record.LifetimeId = MG_State::pGLContext->GetBoundTransformFeedbackLifetimeId();
+            session.EmitAndWait(MG_Pipe::MGPWireOp::BindStreamOutput, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        void EmitPatchParameteri(GLenum pname, GLint value) {
+            ClientSession& session = RequireSession("PatchParameteri");
+            BeforeReadOnlyVerb();
+
+            MG_Pipe::MGPPatchParameter record{};
+            // GL_PATCH_VERTICES is the only pname that reaches a backend slot - the frontend
+            // answers GL_PATCH_DEFAULT_*_LEVEL itself and bakes those into the synthesized
+            // control stage - and the frontend has already rejected every other pname with
+            // INVALID_ENUM before this call (GL_Drawing.cpp's PatchParameteri). Carried verbatim
+            // so the sink reproduces the call rather than a reading of it.
+            record.Pname = static_cast<Uint32>(pname);
+            record.Value = static_cast<Int32>(value);
+            // set_patch_state (43) STILL TRAVELS, at the next validate, and that is not a
+            // duplicate: it is the applier's working-block copy, this is the driver push Espryt
+            // does AT THE CALL (DirectGLES.cpp:8760), and both pushes happen today on the
+            // monolith path too (CONTRACT-P5B.md §2 t2).
+            session.EmitAndWait(MG_Pipe::MGPWireOp::PatchParameter, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
         // =============================================================================
         // CLASS A - answered locally from the caps mirror (R-15). NO RECORD, EVER.
         // =============================================================================
@@ -995,13 +1126,14 @@ namespace MobileGL::MG_Remote::Client {
         // (a P5b wave-3 image/compute slot) has the partition to put it in.
 #define MGR_UNMIGRATED_I1_SLOTS(X)
 
+        // t2 LANDED (CONTRACT-P5B.md §2 t2): the three measured slots - BeginTransformFeedback
+        // (95 lane entries), PatchParameteri (43), BindTransformFeedback (2) - and the three
+        // companions that share their rows are class B now and live in the block above.
+        // DeleteTransformFeedback is the one that stays: it has NO ROW in P5b, by ruling and
+        // not by omission (unmeasured; the driver object leaks on the server until P9's XFB
+        // namespace work, and a bind of name 0 is what the backend does on delete of the bound
+        // one, DirectGLES.cpp:1422). It therefore still aborts by its own name.
 #define MGR_UNMIGRATED_T2_SLOTS(X)                                                                 \
-    X(PatchParameteri, void, (GLenum, GLint))                                                      \
-    X(BeginTransformFeedback, void, (GLenum))                                                      \
-    X(EndTransformFeedback, void, ())                                                              \
-    X(PauseTransformFeedback, void, ())                                                            \
-    X(ResumeTransformFeedback, void, ())                                                           \
-    X(BindTransformFeedback, void, (GLuint))                                                       \
     X(DeleteTransformFeedback, void, (GLuint))
 
 #define MGR_UNMIGRATED_F1_SLOTS(X)
@@ -1081,10 +1213,8 @@ namespace MobileGL::MG_Remote::Client {
         // The emitted counts, PER OWNER. P5's five are c1's; each P5b package raises its own.
         constexpr Uint32 kEmittedSlotsP5 = 5; // Clear, DrawArrays, ReadPixels, Blit, Present
         constexpr Uint32 kEmittedSlotsD1 = 0;
-        // P5b i1: BindImageTexture, DispatchCompute, DispatchComputeIndirect, MemoryBarrier,
-        // MemoryBarrierByRegion, CopyImageSubData, ShaderStorageBlockBinding.
         constexpr Uint32 kEmittedSlotsI1 = 7;
-        constexpr Uint32 kEmittedSlotsT2 = 0;
+        constexpr Uint32 kEmittedSlotsT2 = 6;
         constexpr Uint32 kEmittedSlotsF1 = 11;
         constexpr Uint32 kEmittedSlots =
             kEmittedSlotsP5 + kEmittedSlotsD1 + kEmittedSlotsI1 + kEmittedSlotsT2 + kEmittedSlotsF1;
@@ -1134,8 +1264,17 @@ namespace MobileGL::MG_Remote::Client {
             table.GL.ReadPixels = &EmitReadPixels;
             table.GL.BlitFramebuffer = &EmitBlitFramebuffer;
             table.Present = &EmitPresent;
+            // ---- class B, P5b t2. Assigned AFTER the class-C block above, which is what makes
+            // the flip a single-line change per slot: the Fatal thunk is overwritten, and a slot
+            // whose row is removed from MGR_UNMIGRATED_T2_SLOTS but not assigned here would be
+            // NULL and caught by RemoteEmitTable.NoSlotIsNull rather than silently skipped.
+            table.GL.BeginTransformFeedback = &EmitBeginTransformFeedback;
+            table.GL.EndTransformFeedback = &EmitEndTransformFeedback;
+            table.GL.PauseTransformFeedback = &EmitPauseTransformFeedback;
+            table.GL.ResumeTransformFeedback = &EmitResumeTransformFeedback;
+            table.GL.BindTransformFeedback = &EmitBindTransformFeedback;
+            table.GL.PatchParameteri = &EmitPatchParameteri;
 
-<<<<<<< HEAD
             // ---- f1 ----
             table.GL.ClearBufferfi = &EmitClearBufferfi;
             table.GL.ClearBufferfv = &EmitClearBufferfv;
@@ -1148,7 +1287,7 @@ namespace MobileGL::MG_Remote::Client {
             table.GL.CopyTexImage2D = &EmitCopyTexImage2D;
             table.GL.CopyTexSubImage2D = &EmitCopyTexSubImage2D;
             table.GL.GenerateMipmap = &EmitGenerateMipmap;
-=======
+
             // ---- class B, P5b package i1 (kEmittedSlotsI1 = 7)
             table.GL.BindImageTexture = &EmitBindImageTexture;
             table.GL.DispatchCompute = &EmitDispatchCompute;
@@ -1157,7 +1296,6 @@ namespace MobileGL::MG_Remote::Client {
             table.GL.MemoryBarrierByRegion = &EmitMemoryBarrierByRegion;
             table.GL.CopyImageSubData = &EmitCopyImageSubData;
             table.GL.ShaderStorageBlockBinding = &EmitShaderStorageBlockBinding;
->>>>>>> p5b/i1
 
             return table;
         }

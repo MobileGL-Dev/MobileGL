@@ -1984,6 +1984,53 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         )
     endforeach()
 
+    # ---- P5b t2: the transform-feedback spans, the XFB object bind, the patch parameter -------
+    #
+    # MG_Remote/CONTRACT-P5B.md §2 t2. The three P5 lanes above are the REDUCED PATH's targets
+    # (a clear, a triangle, a persistent map); these two are the first lane entries whose GREEN
+    # DEPENDS ON A t2 RECORD HAVING CROSSED AND BEEN APPLIED BY THE BACKEND, which is the only
+    # statement a package flipping a verb can make that a unit case cannot:
+    #
+    #   TessellationXfbCaptureScenario  covers BOTH halves of t2 in one workload. Every case
+    #       calls glPatchParameteri(GL_PATCH_VERTICES, n) and then draws GL_PATCHES into a
+    #       transform-feedback capture, and asserts the CAPTURED BYTES. A patch_parameter (73)
+    #       that did not reach the server tessellates at the previous patch size and the capture
+    #       is the wrong length; a begin/end_stream_output (62/63) that did not reach it leaves
+    #       the buffer holding the scenario's poison value, which is what those cases print.
+    #   XfbCaptureBufferReuseScenario   is the span family alone, across four buffer lifetimes
+    #       (a buffer per span, one immutable-storage buffer, one respecified buffer, a
+    #       respecification that changes the capture size). It is the case that would notice a
+    #       span whose END crossed but whose BEGIN did not, because the second span's bytes
+    #       would be the first span's.
+    #
+    # Both are DirectGLES only, deliberately, and the reason is measured rather than assumed:
+    # under Magma the capture is written into the server's resident slice and there is no route
+    # back, because MG_Backend/Init.cpp's ConsumedSubsystemsFor(DirectVulkan) withholds
+    # kMGPipeSubsystemResources, so BufferObject::SyncGpuWrites() emits no resource_readback.
+    # Every DirectVulkan XFB capture entry in the inproc census fails on exactly that (t2-v1.md
+    # §"the 51"), and it retires with P7 (Magma's resource family) / P9 (the readback carrier) -
+    # not here. A DirectVulkan arm of this lane would be red for a reason t2 cannot fix.
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Split."
+        TEST_LIST MGL_SPLIT_T2_TESS_TESTS
+        TEST_FILTER "TessellationXfbCaptureScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-split"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
+    )
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Split."
+        TEST_LIST MGL_SPLIT_T2_XFB_TESTS
+        TEST_FILTER "XfbCaptureBufferReuseScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-split"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
+    )
+
     # The split half of the counting pair. MGITEST_PERSISTENT_MAP_ARM=emulated is R-6: under split
     # the adopt tier is pinned at T2, the resource owner declines every acquisition and the client
     # pushes the mapping's dirty blocks - so pmap must be non-zero and mpr must be the monolith

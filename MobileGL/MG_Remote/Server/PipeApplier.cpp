@@ -497,35 +497,104 @@ namespace MobileGL::MG_Remote::Server {
         return true;
     }
 
-    // ---- t2 ----
+    // ---- t2 ---- (MG_Remote/CONTRACT-P5B.md §2 t2)
+    //
+    // SIX BODIES, SIX BACKEND CALLS, NO STATE OF THEIR OWN. Rule D: the record IS the call, and
+    // everything the backend reads around it - the capture program, the capture-buffer
+    // bindings, the bound XFB object, the patch state - it reads from gPipeInputs through its
+    // verb class's BARRIER-PULLED fields, which the client filled at the call site and the
+    // verb barrier holds still (R-1). That is why none of these touches m_backend beyond
+    // Table() and why not one of them caches anything across records.
+    //
+    // A NULL SLOT DECLINES, AND THE DECLINE IS THE MONOLITH'S ANSWER IN THE SAME WORDS. Magma
+    // (DirectVulkan) registers NO XFB slot and no PatchParameteri at all
+    // (BackendObject_DirectVulkan.cpp), and under monolith the frontend's own
+    // `if (const auto f = table.GL.X)` guard simply skips the call; `return false` here is that
+    // same skip, reported to DecodeAndApply as "this build did not apply it" rather than as a
+    // crash or as a silent success. Contract §2 t2 says so for PatchParameteri by name.
+
     Bool ServerVerbSink::OnBeginStreamOutput(const MG_Pipe::MGPStreamOutputBegin& begin) {
-        (void)begin;
-        ServerUnmigratedVerbFatal("BeginTransformFeedback");
+        const MG_Backend::GlobalBackendFunctionsTable* table = Table("begin_stream_output");
+        if (table == nullptr) return false;
+        if (table->GL.BeginTransformFeedback == nullptr) return false;
+        // Espryt's Begin only ARMS the span (DirectGLES.cpp:1212-1220: primitiveMode, pending,
+        // targets cleared); the driver glBeginTransformFeedback happens in the tail of the next
+        // PrepareForDraw (StartPendingTransformFeedback, :1224), where the capture program and
+        // the buffer bindings are read through the pulls. So this record's effect is not
+        // visible until a DRAW crosses - which is why an XFB scenario whose draw is still class
+        // C moves its first blocker to that draw rather than rendering.
+        table->GL.BeginTransformFeedback(static_cast<GLenum>(begin.PrimitiveMode));
+        ++m_streamOutputSpans;
+        return true;
     }
 
     Bool ServerVerbSink::OnEndStreamOutput(const MG_Pipe::MGPXfbAccounting& accounting) {
+        const MG_Backend::GlobalBackendFunctionsTable* table = Table("end_stream_output");
+        if (table == nullptr) return false;
+        if (table->GL.EndTransformFeedback == nullptr) return false;
+        // THE THREE ACCOUNTING FIELDS ARE NOT READ, AND THAT IS THE RULING RATHER THAN AN
+        // OMISSION. glEndTransformFeedback takes no arguments; the numbers are the CLIENT's own
+        // per-span accounting (contract §2 t2's companions row) and the client is where they are
+        // consumed - by the primitive queries and by the capture-capacity clamp. A server that
+        // second-guessed them from its own driver would be publishing a second answer to a
+        // question the frontend already answers, and the second answer is the one that goes
+        // stale. They cross because the row has carried them since P4a and because P9's
+        // server-side scatter is what will need them.
         (void)accounting;
-        ServerUnmigratedVerbFatal("EndTransformFeedback");
+        table->GL.EndTransformFeedback();
+        ++m_streamOutputSpans;
+        return true;
     }
 
     Bool ServerVerbSink::OnPauseStreamOutput(const MG_Pipe::MGPStreamOutputControl& control) {
-        (void)control;
-        ServerUnmigratedVerbFatal("PauseTransformFeedback");
+        const MG_Backend::GlobalBackendFunctionsTable* table = Table("pause_stream_output");
+        if (table == nullptr) return false;
+        if (table->GL.PauseTransformFeedback == nullptr) return false;
+        (void)control; // Reserved, and the contract says it is 0.
+        table->GL.PauseTransformFeedback();
+        ++m_streamOutputControls;
+        return true;
     }
 
     Bool ServerVerbSink::OnResumeStreamOutput(const MG_Pipe::MGPStreamOutputControl& control) {
+        const MG_Backend::GlobalBackendFunctionsTable* table = Table("resume_stream_output");
+        if (table == nullptr) return false;
+        if (table->GL.ResumeTransformFeedback == nullptr) return false;
         (void)control;
-        ServerUnmigratedVerbFatal("ResumeTransformFeedback");
+        table->GL.ResumeTransformFeedback();
+        ++m_streamOutputControls;
+        return true;
     }
 
     Bool ServerVerbSink::OnBindStreamOutput(const MG_Pipe::MGPStreamOutputBind& bind) {
-        (void)bind;
-        ServerUnmigratedVerbFatal("BindTransformFeedback");
+        const MG_Backend::GlobalBackendFunctionsTable* table = Table("bind_stream_output");
+        if (table == nullptr) return false;
+        if (table->GL.BindTransformFeedback == nullptr) return false;
+        // THE GL NAME IS THE ARGUMENT, NOT THE LifetimeId BESIDE IT. Espryt keys its driver
+        // objects by the GL name (XfbImpl::g_xfbObjects[name], DirectGLES.cpp:1401) and creates
+        // the ES object on first bind; passing the lifetime id would index a map that has never
+        // heard of it and silently create a second driver object per bind. The lifetime id
+        // travels as the identity P7/P9 will dispatch on once the XFB namespace has a wire
+        // lifetime of its own - it has no reader on this side today, and pretending otherwise
+        // by folding it into the key is exactly the "a GL name is never an identity" confusion
+        // the contract's GlName row is written against.
+        table->GL.BindTransformFeedback(static_cast<GLuint>(bind.GlName));
+        ++m_streamOutputBinds;
+        return true;
     }
 
     Bool ServerVerbSink::OnPatchParameter(const MG_Pipe::MGPPatchParameter& patch) {
-        (void)patch;
-        ServerUnmigratedVerbFatal("PatchParameteri");
+        const MG_Backend::GlobalBackendFunctionsTable* table = Table("patch_parameter");
+        if (table == nullptr) return false;
+        // Magma registers no PatchParameteri: it compiles the patch size into its synthesized
+        // control stage from set_patch_state instead, so the DECLINE below is the whole of the
+        // right answer for that backend and not a gap (contract §2 t2).
+        if (table->GL.PatchParameteri == nullptr) return false;
+        // Pname is GL_PATCH_VERTICES and the frontend has already rejected every other spelling
+        // with INVALID_ENUM before the record was built, so this is a forward and not a switch.
+        table->GL.PatchParameteri(static_cast<GLenum>(patch.Pname), static_cast<GLint>(patch.Value));
+        ++m_patchParameters;
+        return true;
     }
 
     // ---- f1 ----
