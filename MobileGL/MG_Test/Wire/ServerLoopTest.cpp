@@ -617,6 +617,25 @@ TEST(StagedShadowTest, CoverageIsExactAndAGapIsNotCovered) {
     EXPECT_TRUE(store.IsCovered(&key, 0, 48));
 }
 
+// m-5's discriminator, at unit scope: HasShadow is TRUE for a key that was Adopted and FALSE once
+// DropAll has run - which is exactly what tells the generation-reset block whether a twin's
+// hostBytes names a live server shadow (keep it) or a freed one (null it). A version that answered
+// "always live" would let a freed base reach the driver; "always gone" would drop a base a subdata
+// just staged in the same generation (that regression really happened - TriangleScenario read a
+// shifted VBO). Both directions are asserted here.
+TEST(StagedShadowTest, HasShadowIsTrueAfterAdoptAndFalseAfterTheShadowIsDropped) {
+    Server::StagedShadowStore store(/*copies=*/true);
+    const int key = 0;
+    Vector<Uint8> bytes(16, Uint8{0x44});
+    EXPECT_FALSE(store.HasShadow(&key)) << "nothing staged yet";
+    store.Adopt(&key, 16, bytes.data(), 0, 16);
+    EXPECT_TRUE(store.HasShadow(&key)) << "a staged key must read live, or the reset block nulls a "
+                                          "base a subdata just filled";
+    store.DropAll();
+    EXPECT_FALSE(store.HasShadow(&key)) << "after DropAll the base is freed and must read gone, or "
+                                           "a surviving twin hands the driver a dangling pointer";
+}
+
 TEST(StagedShadowTest, DropForgetsOneResourceAndDropAllForgetsEveryOne) {
     Server::StagedShadowStore store(/*copies=*/true);
     const int a = 0;

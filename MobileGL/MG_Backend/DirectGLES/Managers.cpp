@@ -2958,13 +2958,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
                 // m-5 / codex 5: OnBackendContextDestroyed ran MGL_SERVER_STAGED_DROP_ALL(), which
                 // frees every server shadow but does NOT null the hostBytes that name them - so a
-                // twin that SURVIVES a context loss (this is the block that repairs it) still
-                // carries a base into the freed allocation. The two other drop sites pair the drop
-                // with something that makes the base unreachable (Ops_H_Destroy retires the twin;
-                // the map-persistent site nulls hostBytes on the next line); DropAll did neither.
-                // Null it here, at the one place a surviving twin is re-armed, so no freed base
-                // reaches glBufferData/glBufferSubData before the next content record refills it.
-                resource->hostBytes = nullptr;
+                // twin that SURVIVES a context loss still carries a base into the freed allocation.
+                // Null it here, where a surviving twin is re-armed - but ONLY when the shadow is
+                // really gone. This block also runs on a twin's FIRST ensure (contextGeneration
+                // starts mismatched), and there the shadow a preceding resource_subdata just staged
+                // is still live; nulling it then would drop the reduced path's own bytes (it did,
+                // and TriangleScenario read the wrong VBO). HasShadow is the discriminator: false
+                // after DropAll, true after an ordinary Adopt.
+                if (!ServerStaged().HasShadow(resource)) {
+                    resource->hostBytes = nullptr;
+                }
 #endif
             }
 
@@ -3159,12 +3162,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 resource->persistentMapped = false;
                 resource->persistentPtr = nullptr;
                 resource->immutableStorage = false;
-#if MOBILEGL_PIPE_PUSH
-                // m-5 / codex 5: mirror the handle arm - DropAll freed the shadow this base named
-                // on context loss, so a surviving twin repaired here must not carry it forward.
-                resource->hostBytes = nullptr;
-#endif
             }
+            // m-5: the LEGACY arm (EnsureBufferResource) is reached only under monolith/push, where
+            // liveHostBase reads the frontend object's MappedData rather than a server shadow, so
+            // there is no freed server base to null here - the split freed-base hazard lives in
+            // EnsureBufferResourceForHandle above, guarded by HasShadow.
 
             // An immutable store nothing maps any more: a respecification of a buffer that
             // had been persistently mapped, which Ops_Respecify could not retire because it

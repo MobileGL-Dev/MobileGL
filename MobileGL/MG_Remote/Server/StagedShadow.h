@@ -133,6 +133,19 @@ namespace MobileGL::MG_Remote::Server {
             return m_shadows.size();
         }
 
+        // Is there STILL a live shadow for this key? The m-5 discriminator: after DropAll (context
+        // loss) the key is erased, so a twin's cached hostBytes names freed memory and must be
+        // nulled; after an ordinary Adopt the key is present and its base is live. The
+        // generation-reset block runs on a twin's FIRST ensure too (the generation starts
+        // mismatched), and there the shadow a preceding subdata just staged is present - so nulling
+        // must key on THIS answer, not on the generation change alone, or the reduced path drops
+        // its own bytes.
+        Bool HasShadow(const void* key) const {
+            if (!m_any.load(std::memory_order_acquire)) return false;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            return m_shadows.find(key) != m_shadows.end();
+        }
+
         // Adjacent ranges merge - there is no gap between them, so the union really is one run.
         // Ranges with a gap do NOT merge, and that is the whole mechanism: it is what makes a
         // missing record detectable instead of papered over.
