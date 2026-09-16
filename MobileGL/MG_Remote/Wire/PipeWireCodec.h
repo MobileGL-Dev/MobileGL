@@ -290,6 +290,17 @@ namespace MobileGL::MG_Remote::Wire {
         // RingControl - see ReclaimStagedBytes above.
         Uint8* StageAllocate(Uint64 size);
 
+        // AN EMPTY STAGE STARTS OVER AT ZERO, so that the wrap skip is only ever charged
+        // against bytes that are really still in flight. Head and tail are monotonic, so once
+        // everything has retired they are EQUAL BUT NOT ZERO, and `head % capacity` is
+        // wherever the last run happened to end - a wrap skip charged against that offset
+        // costs the suffix a second time and refused a blob the whole segment could hold, with
+        // a message that reported zero bytes in flight while it did so. Rebasing also rewrites
+        // the marks still held: a mark stores an ABSOLUTE head cursor and a later reclaim
+        // assigns it to m_stageTail, so leaving a stale one behind would drive the tail past
+        // the head and underflow StagedBytesInFlight().
+        void RebaseEmptyStage();
+
         Transport::RingControl* m_control = nullptr;
         Transport::RingProducer* m_cmd = nullptr;
         Transport::RingProducer* m_stage = nullptr;

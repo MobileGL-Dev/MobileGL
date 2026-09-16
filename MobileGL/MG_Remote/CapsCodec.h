@@ -34,6 +34,8 @@
 #include <MG_Backend/BackendObject.h>
 #include <MG_Pipe/MGPipe.h>
 
+#include "Transport/SessionRings.h" // AbiFingerprintInputs / MixAbiFingerprint
+
 namespace MobileGL::MG_Remote {
 
     // ---- CallMask's layout (c0's ruling, extending R-8) ---------------------------------
@@ -90,10 +92,17 @@ namespace MobileGL::MG_Remote {
 
     // ---- the ABI assertion the handshake carries ----------------------------------------
     //
-    // Mixes sizeof(DynamicBackendParameters), sizeof(MGPCaps), sizeof(GLFunctionsTable) and
-    // the compile-time build fingerprint. Compared in Hello/Welcome; a mismatch is
-    // Fatal{AbiMismatch} and never a downgrade, because every alternative silently reads one
-    // struct as another.
+    // The inputs, as this build sees them: sizeof(DynamicBackendParameters), sizeof(MGPCaps),
+    // sizeof(GLFunctionsTable), the format-capability table's extents, the two caps-blob codec
+    // versions, MGPWireOp::kOpCount, the protocol ABI version and the compile-time git stamp.
+    // Public so that the sensitivity control can pin every one of them to the real value AND
+    // perturb them one at a time through the same mixer the handshake uses.
+    Transport::AbiFingerprintInputs CapsAbiFingerprintInputs();
+
+    // What Hello/Welcome carry and compare: EXACTLY Transport::MixAbiFingerprint(
+    // CapsAbiFingerprintInputs()) - one implementation, no second hash (ID-46 finding 6). A
+    // mismatch is Fatal{AbiMismatch} and never a downgrade, because every alternative silently
+    // reads one struct as another.
     Uint64 CapsAbiFingerprint();
 
 } // namespace MobileGL::MG_Remote

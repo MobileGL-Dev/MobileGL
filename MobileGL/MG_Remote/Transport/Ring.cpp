@@ -9,6 +9,7 @@
 #include "Ring.h"
 
 #include "SessionRings.h"
+#include "WireLog.h"
 
 #include <MG_Util/Debug/Log.h>
 
@@ -364,13 +365,15 @@ namespace MobileGL::MG_Remote::Transport {
                                   const char* name) {
                 const std::uint64_t current = watermark.load(std::memory_order_relaxed);
                 if (to < current) {
-                    MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"watermark\"} %s moved backwards, "
-                            "%llu -> %llu. A waiter that already resumed on the higher value cannot "
-                            "be un-resumed, and every later advance of this watermark would be a "
-                            "no-op, so the verb barrier and every reply wait would block for ever",
-                            name, static_cast<unsigned long long>(current),
-                            static_cast<unsigned long long>(to));
-                    std::abort();
+                    // WireLogFatal, not MGLOG_F + abort: the line has to reach stderr
+                    // for SessionTestDeath's control to name it (WireLog.h).
+                    WireLogFatal("MGPipe: Fatal{ProtocolCorruption, \"watermark\"} %s moved backwards, "
+                                 "%llu -> %llu. A waiter that already resumed on the higher value "
+                                 "cannot be un-resumed, and every later advance of this watermark "
+                                 "would be a no-op, so the verb barrier and every reply wait would "
+                                 "block for ever",
+                                 name, static_cast<unsigned long long>(current),
+                                 static_cast<unsigned long long>(to));
                 }
                 if (to == current) {
                     return;
@@ -611,13 +614,12 @@ namespace MobileGL::MG_Remote::Transport {
     // The ABI fingerprint's mixer
     // -----------------------------------------------------------------------
 
-    std::uint64_t MixAbiFingerprint(std::uint64_t dynamicParamsSize, std::uint64_t capsSize,
-                                    std::uint64_t functionTableSize, std::uint32_t abiVersion,
-                                    const char* buildStamp) {
-        // FNV-1a over the four numbers and the stamp. Not a hash with any
-        // security property and not meant to be one: it has to (a) change when
-        // ANY input changes and (b) be computable identically in two processes
-        // built from one source tree, which rules out anything seeded at runtime.
+    std::uint64_t MixAbiFingerprint(const AbiFingerprintInputs& inputs) {
+        // FNV-1a over every field, in declaration order, then the stamp. Not a
+        // hash with any security property and not meant to be one: it has to
+        // (a) change when ANY input changes and (b) be computable identically in
+        // two processes built from one source tree, which rules out anything
+        // seeded at runtime.
         std::uint64_t hash = 1469598103934665603ull;
         const auto mix = [&hash](std::uint64_t value) {
             for (int byte = 0; byte < 8; ++byte) {
@@ -625,12 +627,21 @@ namespace MobileGL::MG_Remote::Transport {
                 hash *= 1099511628211ull;
             }
         };
-        mix(dynamicParamsSize);
-        mix(capsSize);
-        mix(functionTableSize);
-        mix(abiVersion);
-        if (buildStamp != nullptr) {
-            for (const char* c = buildStamp; *c != '\0'; ++c) {
+        mix(inputs.DynamicParamsSize);
+        mix(inputs.CapsSize);
+        mix(inputs.FunctionTableSize);
+        mix(inputs.FormatCapabilityTargets);
+        mix(inputs.FormatCapabilityFormats);
+        mix(inputs.FormatCapabilitiesCodecVersion);
+        mix(inputs.RendererInfoCodecVersion);
+        mix(inputs.OpCount);
+        mix(inputs.AbiVersion);
+        // A presence marker before the bytes, so that "no stamp" (nullptr) and
+        // "an empty stamp" ("") are different inputs rather than the same
+        // absence of bytes.
+        mix(inputs.BuildStamp != nullptr ? 1u : 0u);
+        if (inputs.BuildStamp != nullptr) {
+            for (const char* c = inputs.BuildStamp; *c != '\0'; ++c) {
                 hash ^= static_cast<std::uint64_t>(static_cast<unsigned char>(*c));
                 hash *= 1099511628211ull;
             }

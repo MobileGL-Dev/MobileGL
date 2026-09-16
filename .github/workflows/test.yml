@@ -1074,57 +1074,32 @@ jobs:
       # Split entries SKIP and ctest reports green whatever the knob says, so an unconditional
       # control would be red for the whole of P5 for a reason that is not a defect.
       #
-      # So the expected state is DERIVED rather than assumed, from the same fact the lanes derive
-      # it from: MG_IntegrationTest/CMakeLists.txt puts MGITEST_REMOTE_CLIENT_PRESENT=1 into the
-      # Split entries' ENVIRONMENT exactly when MG_Remote carries no c0 signature stub, and that
-      # string is in the generated ctest include files this artifact ships. When it is there the
-      # controls MUST fire; when it is not, the step says so loudly and does not pretend.
+      # So the expected state is DERIVED FROM BEHAVIOUR rather than assumed. The first version read
+      # MGITEST_REMOTE_CLIENT_PRESENT out of the generated *_tests.cmake, which was a restatement of
+      # the CMake source probe review finding M-1 falsified; the arming condition is a runtime fact
+      # inside each test process (MG_Config::Transport, ClientSession::Active() and
+      # ImplementedVerbCount(), read by Harness/SplitRuntimePeek), so the only honest way to ask it
+      # from a shell is to look at what the entries DID. When entries passed, the controls MUST
+      # fire; when every one of them skipped, the step says so loudly and does not pretend.
+      #
+      # THE BODY OF THIS STEP IS scripts/ci/split_negative_controls.sh, and the move is the point
+      # rather than tidiness. A `run:` block executes nowhere but on a runner, so these lines were
+      # unreviewable and untestable: when the wave-1 cross-family review said they were broken,
+      # CONFIRMING it needed a hand-made copy of them (wave1-codex-verify.md 8), and a copy is not
+      # the thing. scripts/ci/control_smoke_test.sh now drives the very file this step runs.
+      #
+      # What that smoke test pins, and what ID-46 finding 8 found missing: each control asserts its
+      # OWN failure reason. A non-zero ctest exit used to be enough, so a timeout, a setup abort or
+      # any unrelated assertion printed "turned N selected entries red, as it must" and this step
+      # went green. The arming run's `|| true` had the matching defect - it counted a case that ran
+      # and FAILED as evidence the lane was live, so the controls could be measured against a
+      # baseline that was already red.
       - name: Negative controls - the verb barrier and the persistent-map push must be load-bearing
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
-        run: |
-          # THE ARMED STATE IS DERIVED FROM BEHAVIOUR, not from a marker string in the generated
-          # ctest files. The first version read MGITEST_REMOTE_CLIENT_PRESENT out of
-          # *_tests.cmake, which was a restatement of the CMake source probe review finding M-1
-          # falsified; the arming condition is now a runtime fact inside each test process, so the
-          # only honest way to ask it from a shell is to look at what the entries DID.
-          ctest -L integration-split -j 4 --no-tests=error --output-junit "${RUNNER_TEMP}/isplit.xml" || true
-          armed=$(python3 - "${RUNNER_TEMP}/isplit.xml" <<'PY'
-          import sys, xml.etree.ElementTree as ET
-          ran = 0
-          for case in ET.parse(sys.argv[1]).getroot().iter('testcase'):
-              if case.find('skipped') is None and case.get('status') not in ('notrun', 'disabled'):
-                  ran += 1
-          print(ran)
-          PY
-          )
-          echo "split entries that actually ran: ${armed}"
-          if [ "${armed}" -lt 1 ]; then
-            echo "::warning::every DirectGLES.Split. entry SKIPPED, so neither negative control can fire. The arming condition is a runtime fact - MG_Config::Transport, ClientSession::Active() and ImplementedVerbCount(), read by Harness/SplitRuntimePeek - and it becomes true on the commit that lands the last of c1/s1/v1. This step becomes a gate then, with no edit; it is not a green that asserted anything today."
-            exit 0
-          fi
-          run_control() {
-            name="$1"; filter="$2"; shift 2
-            matched=$(ctest -N -L integration-split -R "${filter}" | grep -cE '^ *Test *#[0-9]+:')
-            if [ "${matched}" -lt 1 ]; then
-              echo "::error::${name} selected ${matched} tests; its filter no longer matches anything"
-              exit 1
-            fi
-            if env "$@" ctest --output-on-failure -L integration-split -R "${filter}" --no-tests=error; then
-              echo "::error::${name} left ${matched} split entries GREEN, so the knob it turns is not load-bearing and the gate it controls proves nothing."
-              exit 1
-            fi
-            echo "${name} turned ${matched} selected entries red, as it must"
-          }
-          # E1: R-1's lockstep verb barrier. Without it the client keeps pulling fields from a live
-          # GLContext while the server runs ahead, so the server reads future values.
-          run_control "negative control E1 (MOBILEGL_IPC_VERB_BARRIER=0)" \
-            'DirectGLES\.Split\.(Triangle|ClearThenReadPixels)' MOBILEGL_IPC_VERB_BARRIER=0
-          # E3(a): the persistent-map push. 0 is admitted by ConfigLoader on purpose and is
-          # documented there as this control.
-          run_control "negative control E3(a) (MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0)" \
-            'DirectGLES\.Split\.PersistentCoherentMapScenario' MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0
+          CONTROL_TMPDIR: ${{ runner.temp }}
+        run: bash "${GITHUB_WORKSPACE}/scripts/ci/split_negative_controls.sh"
 
       - name: Upload split lane logs
         if: always()
@@ -1959,37 +1934,25 @@ jobs:
       # The rerun replays into the same case directory, so the good run's images are put aside and
       # restored whichever way the control goes; "Upload actual image" below runs `if: always()`
       # and would otherwise ship the deliberately-wrong run's output under the good run's name.
+      # THE BODY OF THIS STEP IS scripts/ci/retrace_pull_library_control.sh, for the reason the
+      # split lane's control gives: a `run:` block cannot be executed off a runner, so these lines
+      # could not be tested until they ran in CI. scripts/ci/control_smoke_test.sh drives that file.
+      #
+      # Two holes ID-46 finding 8(b) found in this block, both CONFIRMED against the REAL ctest in a
+      # REAL build tree, both closed in the script: it had NO selection guard at all - unlike the
+      # split lane's run_control - so a case/backend regex matching nothing exited 8 through
+      # `--no-tests=error` and was read as "the pull library turned it red"; and only "non-zero
+      # ctest" was checked after the nm identity check, so a loader failure, a missing fixture or a
+      # timeout passed it. The red must now carry run_trace_case.cmake's own sentence.
       - name: Negative control - the PULL library must red this split retrace
         working-directory: build-retrace/tools/trace_replay
-        run: |
-          set +e
-          GOOD_OUTPUT="${RUNNER_TEMP}/split-verified-output"
-          rm -rf "${GOOD_OUTPUT}"
-          if [ -d "${{ matrix.case }}" ]; then cp -a "${{ matrix.case }}" "${GOOD_OUTPUT}"; fi
-          # The pull library, unpacked from build-linux's artifact, over the frozen path every
-          # case has baked in. It defines no MG_Remote symbol, so ConfigLoader has no transport
-          # parser and MOBILEGL_TRANSPORT=inproc is accepted and ignored - the exact shape of "the
-          # split lane ran monolith".
-          cp "${GITHUB_WORKSPACE}/pull-runtime/build-linux/libMobileGL.so" \
-             "${GITHUB_WORKSPACE}/build-linux/libMobileGL.so"
-          if nm --defined-only "${GITHUB_WORKSPACE}/build-linux/libMobileGL.so" | grep -q -i MG_Remote; then
-            echo "::error::the control's own library defines MG_Remote symbols, so it is not a pull build and this control would prove nothing"
-            exit 1
-          fi
-          export MOBILEGL_TRANSPORT=inproc
-          ctest -V --no-tests=error --timeout 10800 \
-            -R "^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$"
-          control_rc=$?
-          set -e
-          if [ -d "${GOOD_OUTPUT}" ]; then
-            rm -rf "${{ matrix.case }}"; mv "${GOOD_OUTPUT}" "${{ matrix.case }}"
-            echo "restored the verified run's output over the control's"
-          fi
-          if [ "${control_rc}" -eq 0 ]; then
-            echo "::error::a PULL library passed the split retrace. OpenRA scores ssim 1.000000 under a monolith library too (measured), so the picture is not and cannot be this lane's gate - run_trace_case.cmake's transport-resolution assertion is, and it has stopped working. Every green in this job is then a monolith run under a name that says split."
-            exit 1
-          fi
-          echo "the pull library turned the split retrace red, as it must (ctest exit ${control_rc})"
+        env:
+          CONTROL_TMPDIR: ${{ runner.temp }}
+          PULL_LIBRARY: ${{ github.workspace }}/pull-runtime/build-linux/libMobileGL.so
+          FROZEN_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
+        run: >-
+          bash "${GITHUB_WORKSPACE}/scripts/ci/retrace_pull_library_control.sh"
+          '${{ matrix.case }}' '${{ matrix.backend }}'
 
       # The refusal census, recorded rather than gated. run_trace_case.cmake already REDS the case
       # on any Fatal{, so reaching here means the count is zero - but the number and the distinct
@@ -2314,6 +2277,21 @@ jobs:
           python3 scripts/gen_pipe_field_ownership.py --check
           python3 scripts/gen_pipe_field_ownership.py --self-test
 
+      # R-16 APPLIED TO THE NEGATIVE CONTROLS THEMSELVES. The split lane's E1/E3(a) controls and the
+      # retrace lane's pull-library control are gates, and until ID-46 finding 8 neither could be
+      # made red by anyone: their bodies were `run:` blocks, which execute only on a runner. Both
+      # bodies now live in scripts/ci/, and this step runs them against a stubbed ctest that
+      # reproduces the finding - a NON-EMPTY selection failing with UNRELATED_CONTROL_FAILURE, and a
+      # case/backend regex matching no tests - and requires each control to report FAILED. The same
+      # stub, failing with the diagnostics the scenarios really emit, must make them report PASSED.
+      #
+      # NO BRANCH GUARD: this asks "do the negative controls still reject a red that is not theirs",
+      # which is a question every branch can answer and none of which depends on the TEMPORARY
+      # feat/disaggregated trigger at the top of this file. It costs a couple of seconds and needs
+      # no build.
+      - name: The split and retrace negative controls still reject a red that is not theirs (R-16)
+        run: bash scripts/ci/control_smoke_test.sh
+
       # A GATE as of P3a (G5). "pool 与延迟释放原样搬" (ROADMAP.md:19) is meant literally: the
       # buffer pool, the deferred-release drain and the three persistently mapped rings move
       # VERBATIM, and ARCHITECTURE.md:515 says why - their retire happens only inside Present, so
@@ -2325,8 +2303,9 @@ jobs:
       # per preprocessor arm, and a push build compiles only FlushPendingRangesFrom while the
       # untouched FlushPendingRangesNow lives in the `#else`. Hashing the pull name alone would
       # protect text no shipping build compiles, so both are hashed - the pull ladder against
-      # BASELINE, the push ladder against a sha pinned in the script at 3e298c9a, because that
-      # one was born in P3a and has no body at the base ref to compare with.
+      # BASELINE, the push ladder against a sha pinned in the script at 3dadd4c1 (ID-41), because
+      # that one was born in P3a and is compared against the reviewed body rather than against the
+      # base ref.
       #
       # Scoped to the disaggregation branch and to a manual dispatch, deliberately: the question
       # is "did these eleven move since P3a started", and BASELINE is P3a's base ref. On dev,
@@ -2336,9 +2315,10 @@ jobs:
       #
       # --self-test is the half that keeps it honest, and it is not optional: a comparison that
       # silently stopped comparing produces exactly the same green as eleven untouched bodies. It
-      # runs six canned controls - eleven bodies extracted, an untouched copy compared equal, an
-      # edit OUTSIDE them ignored, and each of the three perturbation targets (ClearBufferPool
-      # and BOTH flush ladders) reported BY NAME - and fails if any of them does not answer.
+      # runs eight canned controls - eleven bodies extracted, an untouched copy compared equal, an
+      # edit OUTSIDE them ignored, each of the three perturbation targets (ClearBufferPool and BOTH
+      # flush ladders) reported BY NAME, plus the pin-precedence control and a one-token edit to the
+      # pinned ladder compared against the pin - and fails if any of them does not answer.
       # Same shape as gen_pipe.py --self-test above.
       - name: The buffer pool, the deferred-release drain and the rings did not move (G5)
         if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
@@ -2369,10 +2349,11 @@ jobs:
       # --self-test is the half that keeps it honest and is not optional: a comparison that silently
       # stopped comparing produces exactly the same green as seventeen untouched regions. It runs
       # three positive controls (seventeen regions extracted, an untouched copy compared equal, an
-      # edit OUTSIDE them invisible in all three files) and FOUR negative ones - ClearBufferPool,
+      # edit OUTSIDE them invisible in all three files) and NINE negative ones - ClearBufferPool,
       # FlushPendingRangesNow, RecomputeBackendColorSlots and StageBlocksIntoUnpackRing, each
-      # perturbed on its own and each required to be named BY NAME - and fails if any of them does
-      # not answer.
+      # perturbed at its HEAD and at its TAIL and each required to be named BY NAME, plus a
+      # one-token edit to the pinned FlushPendingRangesFrom body compared against the pin - and
+      # fails if any of them does not answer.
       - name: The unpack ring, the attachment permutation, the D24S8 core and the format caveat did not move (G5)
         if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
         run: bash scripts/p4a_untouched_regions.sh "${BASELINE}" HEAD
