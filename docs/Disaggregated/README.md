@@ -1,6 +1,6 @@
 # MGPipe：MobileGL 前后端拆分
 
-> 状态：**P0、P0.5、P1、P2、P3a、P4a 已落地**（`feat/disaggregated@8c458cd5`，基线 `dev@9eae9858`）。第 43 天 GO/NO-GO 判定为**继续**。P4a（handle wave 2：Espryt 的 FBO / 纹理 / sampler / program 身份与描述符）已交付，Espryt 的对象类读点至此全部走句柄；**下一步 P3b/P4b**（深化：memo 重键、发射游标、raw-depth-fetch sampler 原生化）与 **P5**（传输 + inproc applier，也只依赖 P4a）。见 `ROADMAP.md`。
+> 状态：**P0、P0.5、P1、P2、P3a、P4a、P5 已落地**（`feat/disaggregated@eec0e836`）。P5 已在完整门上跑出缩减路径首个 IPC 帧：`Clear` / `DrawArrays` / `ReadPixels` / `BlitFramebuffer` / `Present` 经同一套 wire codec 到同进程第二个 apply 线程，OpenRA 在 `inproc` 下两后端 2/2、SSIM 1.0。其余 64 个 class-C 槽仍具名 `Fatal{UnmigratedVerb}`；下一阶段先按 census 迁移它们，把真实负载完整搬上 apply 线程，再做 spawn。见 `ROADMAP.md`。
 >
 > 性能纪律（2026-09-08 起）：逐线程 CPU 与 tracker 绝对 ns **对着 pull 臂基线记录**，不再作阻塞门（push 比 pull 多约 10% 逐线程 CPU 已被接受；该读数出自 -O0 APK，Release 基准线见 `MEASUREMENTS.md` §20），专门的优化阶段排在路线图推完之后。
 
@@ -24,6 +24,27 @@ MGPipe 是 MobileGL 前端（`MG_State` + `MG_Impl`）与后端（`MG_Backend`�
 ```
 
 三种构建/运行形态共用**同一份 backend 实现**：`monolith`（默认，接口在进程内直调）、`inproc`（同进程两个线程，CI 形态与渲染线程交付物）、`spawn`（`fork`+`execve` 出 server 进程，SPSC 共享内存 ring + FlatBuffers 控制面）。
+
+## 运行 P5 split lane
+
+本地门使用四个 flavour：`build-linux`（pull）、`build-push`（monolith push）、`build-verify`（影子比对）与 `build-split`（disaggregated + inproc）。split 运行时显式设置：
+
+```text
+MOBILEGL_TRANSPORT=inproc ctest --test-dir build-split -L integration-split --output-on-failure
+MOBILEGL_TRANSPORT=inproc ctest --test-dir build-split -L integration-gpu --output-on-failure
+```
+
+缩减路径的具名入口是 `DirectGLES.Split.*`；每条 entry 都带独立的 `MOBILEGL_LOG_FILE_PATH`，日志不共享，阴性控制也只读被选 entry 的私有文件。常用运行时旋钮：
+
+| 变量 | 默认 | 用途 |
+|---|---:|---|
+| `MOBILEGL_IPC_VERB_BARRIER` | `1` | 每个 verb 等 `appliedSeq == emitSeq`；`0` 只作 E1 阴性控制 |
+| `MOBILEGL_IPC_AUDIT` | `0` | apply 返回后以 `0xDD` 填退休 staging，查跨返回持针 |
+| `MOBILEGL_IPC_STRICT_ERRORS` | `0` | 把 BARRIER-PULLED residual input 提升为具名 Fatal |
+| `MOBILEGL_IPC_ADOPT_TIER` | `2` | P5 split 使用 emulated persistent-map 路径；接受 `auto/0/1/2` |
+| `MOBILEGL_IPC_PERSISTENT_BLOCK_KB` | `64` | persistent-map 保守块推送粒度；`0` 是 E3(a) 阴性控制 |
+
+Android 有三份 APK flavour：pull、push 与 split-inproc；构建映射分别由 Gradle properties `mobilegl.pipePush`、`mobilegl.buildDisaggregated`、`mobilegl.buildDisaggregatedInproc` 驱动。split APK 仍需运行环境 `MOBILEGL_TRANSPORT=inproc`；不设置时是 split build 的 monolith control arm。
 
 ## 文件地图
 

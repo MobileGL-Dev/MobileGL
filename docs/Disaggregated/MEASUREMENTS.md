@@ -632,3 +632,106 @@ P4a 的契约改了七次（`c0b`…`c0g`），外加一轮缝类审计与一轮
 `mc_vanilla_draw` 上：**espryt T1（`0x1fff` − pull）= +1076.1 ns/draw，T2（`0x1ff` − pull）= +1064.7，T1 − T2 = +11.4**；magma T1 = +629.0、T2 = +452.6、T1 − T2 = +176.4。blend toggle：espryt +964.5 / magma +738.9 ns per toggle pair；pass switch：espryt +8766.9、magma −4555.7（后者符号为负，属该项的噪声量级）。
 
 **桌面这台机上，"P4a 自己"落在本 bench 的噪声底以下，所以不要单独引用它。** 同一份脚本在 `6035c9d7`（终审修复前）上跑出的是 espryt T1 +1269.7 / T2 +1135.8 / **T1 − T2 = +133.9**，本轮是 +1076.1 / +1064.7 / **+11.4**——**两臂的绝对值在两轮之间各自漂了 ~200 ns，而它们的差只有 10–130 ns**，也就是说这个 bench 分辨不出 P4a 这一档的增量。真正可引用的是：(1) **T1 ≈ +1.1 µs/draw 的总边界**（对 pull 基线，Espryt；这条在两轮之间是稳的）；(2) **设备侧的三臂表（§24）**——那里 P4a 自己是 +3.4 ～ +5.7 个百分点、0.05–0.38 ms/帧，样本全部在验证过的定频窗口里。**Magma 的 T1 − T2 = +176.4 ns 不是"Magma 在跑 P4a"**：c0f 的消费者门让它一条 P4a 记录都不发（设备侧 §24 的 Magma 两臂差也在噪声内），这 176 ns 是 tracker 多算的那几个快门加噪声。
+
+---
+
+## 26. P5 五部分门（joint `e61d0012`）与 landed quick gate（`eec0e836`）
+
+P5 的完整记录来自 `~/w7/notes/p5/p5-results/joint-v1.md` §2 与 ID-63；脚本按 **1 → 5 → 3 → 2 → 4** 的顺序跑。`e61d0012` 是 joint scratch head，随后同一组 landed 代码进入 `feat/disaggregated@eec0e836`；landing 后按 ID-66 只跑 quick gate，不把 quick gate 写成第二次 full gate。
+
+| 部分 | joint 实测 |
+|---|---|
+| **1 接口纯度** | include closure **4 probes / 0 problems**；pull `MG_Remote` symbol **0**、split **610**；G1 `.text` **10806611 → 10806611**、defined symbols **27814 → 27814**、**0 added / 0 removed / 0 resized / 0 renamed**；P3a/P4a G5 对 `ff2994d9` byte-identical |
+| **5 coverage / generator** | `gen_pipe` up-to-date、self-test **9/9**；dirty-surface **27/27**（`UseProgram` 一项明确为 UNDECIDED，不伪装成 absence proof）；field ownership up-to-date、**15/15**；emitter/CSO **185/185**；verify controls **4/4** |
+| **3 行为 A/B** | G2 name diff **0**；G14 **0 removed / 42 added**；unit **1816/1816 ×3**、split **2038/2038**；Wire **58/58**；integration-gpu pull **1128/1128**、push **1128/1128**、split-monolith **1149/1149**；split-inproc **426 pass / 185 skip / 511 abort / 27 fail / 0 segfault**；`integration-split` **21/21（19 run、2 design-skip）**；persistent arm **2/2**，split `pmap=2160.00, mpr=1`，push `pmap=0.00, mpr=1` |
+| **2 语义 / retrace** | integration-verify **930/930**、`Fatal{` **0**；OpenRA inproc **2/2**、两后端 SSIM **1.0**、`Fatal{` **0**；push retrace **79/79**；verify retrace **79/79**、armed **79/79**、`Fatal{` **0** |
+| **4 设备** | **未跑**；joint package 明确禁止 adb。设备 A/B 留在 §30，不用 desktop 数代填 |
+
+landed quick gate（ID-66）：split unit **2038/2038**；`integration-split` inproc **22/22**（比 joint 多 `SplitLogPaths`）；push integration-gpu **1128/1128**；G1 **0/0/0/0、`.text +0`**。这组数证明 landing 没丢 joint 的 reduced path，不声称重跑了 Part 2/4。
+
+## 27. P5 退出门 E1–E6：门、阴性控制与处置
+
+| 门 | 实测与“为什么会红” |
+|---|---|
+| **E1 barrier** | default reduced path 三次均 **19 pass / 2 skip / 0 fail**；`MOBILEGL_IPC_VERB_BARRIER=0` 选中的 **14/14** 全 abort，且每个 private lane file 都有自己的 `Fatal{BarrierViolation, "<slot>"}`（ID-53/65，`joint-v1.md` §3） |
+| **E2 OpenRA** | baseline **2/2、SSIM 1.0**；pull library + `inproc` 的 transport control 会红。`MOBILEGL_IPC_E2_DROP_CLEAR=1` 已武装但仍 **1/1、SSIM 1.0、mismatchPixels=0**，所以 clear-drop 控制**没有**因自己的理由变红，pending x2；不能据此反推 wire bypass（ID-65） |
+| **E3 persistent map** | (a) block KB=0：**6 selected / 4 red / 2 skip**，红在第二次无 GL 宣告写的 pixel assertion；(b) 该无宣告写在场景内；ID-42 的 emulated membership 经 green → `return false` **3 red** → restored green，已 VERIFIED；(c) counting lane `pmap=2160.00 / mpr=1`，push `0.00 / 1`；(d) split apply 恒 decline，不返回 host pointer；(e) SmallRing entry 跑过，但无 wrap/wait counter，pending x2（ID-42/63/65） |
+| **E4 field ownership** | generator **15/15** own-message controls；strict lane **19 abort / 2 skip / 0 pass**，首条具名 `Fatal{UnmigratedPipeInput, "GetTextureContextId@Clear"}`。这是 BARRIER-PULLED 债务的响亮读法，不是 default regression（ID-65） |
+| **E5 honest inproc** | `MOBILEGL_IPC_AUDIT=1`：**19 pass / 2 skip / 0 fail**；production SubData copy 与 `0xDD` poison 两条 shipped test 通过。五条机制已在代码门上覆盖，但“corrupt staged upload 再 draw”这个 R-16 半边未执行，**pending v1 round 3**，不把 audit-green 扩写成它已自证（ID-65） |
+| **E6 phase gate** | G1 **0/0/0/0**、G2 name diff **0**、G14 **0 removed / 42 added**；verify **930/930**；push/verify retrace **79/79**。broad inproc census是 **426/185/511/27/0**，其 attribution 如下；reduced path 与记录债务分开结算（ID-63/65） |
+
+E6 的 27 个普通失败逐条复跑均 `rc=1`、private log **0 Fatal**；8 个争议项又各跑三次，无 flake。归属不是从测试名猜的，而是 `joint-v1.md` §4 的 probe：
+
+| family | 条 | 记录去向 |
+|---|---:|---|
+| `LayeredAttachmentShapeScenario` | 14 | P4b/P7 layered texture readback |
+| packed depth/stencil `GetTexImage` | 3 | P4b/P7 texture-shadow readback |
+| framebuffer `HandleRecycleScenario` | 5 | P4b/P7 readback；不是已证明的 handle recycle bug |
+| `PrimitivesGeneratedNoXfbScenario` | 3 | P7 query / primitive accounting |
+| `TextureParamsWithoutASamplerView` | 1 | P6 shared-backend inspection forwarder |
+| `P4aFinalFixScenario` FBO/RBO delete | 1 | P6 shared-backend lifetime after transported delete |
+
+511 个 abort 只**计数**，没有逐条诊断；抽样两条分别是 `DrawElements` 与 `BeginTransformFeedback` 的 class-C `Fatal{UnmigratedVerb}`。因此“511 全是 class C”不作为测量结论（`joint-v1.md` §4）。
+
+## 28. R-10、逐帧 ledger 与内存口径
+
+`joint-v1.md` §5 在 `MOBILEGL_PIPE_STATS_PERIOD=1` 下只取真实非零窗口：
+
+| entry | frame/window | `pmap` bytes/frame | `mpr` | `rsp` |
+|---|---|---:|---:|---:|
+| Triangle redraw | 1/1 | 0.00 | 0 | 35 |
+| Triangle redraw | 2/1 | 0.00 | 0 | 35 |
+| Persistent map write-after-frame | 1/1 | 600.00 | 1 | 35 |
+| Persistent map write-after-frame | 2/1 | 600.00 | 0 | 35 |
+
+| entry | server accept peak RSS | client handshake peak RSS | client teardown peak RSS |
+|---|---:|---:|---:|
+| Triangle | 11,526,144 B | 11,706,368 B | 141,451,264 B |
+| Persistent map | 11,464,704 B | 11,649,024 B | 141,422,592 B |
+
+`inproc` 两角色共享一个进程，所以上表是**进程**峰值，不是两个独立 physical peak；server 只在 accept 时取样，不能声称 full-run server peak，也没有 N-frame RSS slope。日志另报 `roleMapped=58,990,592 B`、`allRolesMapped=117,981,184 B`。规范 ledger 由执行过的 `ProtocolSmokeTest` 钉住：**SEG_CMD 8 MiB / SEG_STAGE 32 MiB / SEG_REPLY 16 MiB / SEG_EVENT 256 KiB**（ID-47/65）。
+
+**max record bytes：没有场景测量，pending x2。** encoder 有 `MaxRecordBytesSeen`，但 scenario telemetry 未发布；单元只证明它远小于 half-ring，不提供这两个场景的数。这里不从 struct size 或 ring capacity 反推（`joint-v1.md` §5）。
+
+## 29. 复审作为过程测量：跨族发现、轮次与身份修复
+
+wave-1 跨模型族复审的十项全部经独立 perturbation **CONFIRMED（10/10，0 refuted，0 partial）**；它量到的不是“代码行多”，而是十个本轮同族门没有捕获的具体缝（ID-46/48，`wave1-codex-review.md` + `wave1-codex-verify.md`）：
+
+| # | confirmed finding |
+|---:|---|
+| 1 | empty `SEG_STAGE` wrap arithmetic 拒绝本可容纳的 blob |
+| 2 | 旧 8-slot reply geometry 连 512×512 RGBA8 都差 16 B |
+| 3 | blob validation 接受任意 mapped segment，audit poison 覆盖不全 |
+| 4 | wire `MapPersistent` decline 绕过 adoption-tier refusal |
+| 5 | pad-bit control 经 `Reserve` 后根本没有发送该 bit |
+| 6 | ABI sensitivity gate 驱动的是 production 已不调用的 helper |
+| 7 | null-union control 没到达 handshake guard |
+| 8 | 三个 CI negative control 接受任意非零退出 |
+| 9 | `gen_pipe.py expect_trip` 接受任意 `SystemExit` |
+| 10 | 两个 death control 使用空 diagnostic regex |
+
+后续 v1/c1 review 的数量本身也入账，作为门质量的过程数据：
+
+| 决策 | review 读数 | 处置 |
+|---|---|---|
+| ID-52（v1 两审合并） | cross-family **2 blockers + 8 majors + 1 minor**；same-family 另给 M-1..M-7、m-1..m-7，五个 codex-only 项先执行验证 | confirmed set 进入 v1 round 2 |
+| ID-58（c1 round 2） | **3 blockers / 8 majors / 6 minors** | round 3；若仍有 blocker 才拆包 |
+| ID-62（v1 round-2 review） | **7 closed / 7 partial / 1 not closed**，新增 **5 majors** | round 3；E1 skip-false-green 转 j0 |
+| ID-64（c1 round-3 review） | **8 closed / 6 partial / 1 not closed**，新增 **0 blockers / 5 majors / 4 minors** | 判 MERGEABLE；剩余 gate debt 转 c1f |
+
+这些数字解释了流程为何在 P5 尾声改变：用户要求不再在轮次中做过度验证；以后 package 自门 + quick gate 落地，每阶段末只做一次 Codex adversarial review，发现进入下一阶段首轮（ID-66）。
+
+另一个过程事实是 identity rewrite（ID-40）：Sep 8 以后 WSL repo-local `rereview <rereview@local>` 污染了 **81** 个被 Windows 重写的提交与 **58** 个 wave-1 提交；本地谱系经 parent/env rewrite 接到 GitHub `ff2994d9`，验证 **59** 个重写提交全部是 `Swung0x48 <swung0x48@outlook.com>`，tree/patch 等价。自此每阶段首个 commit 前必须先跑 `git var GIT_COMMITTER_IDENT`。这是过程修复，不计成 P5 实现产量。
+
+## 30. P5 four-arm A/B on the Redmi（pending `ab-v1.md`）
+
+本节只冻结协议，不填数字。设备是项目指定 Redmi；四臂用同一 native code 对照：
+
+| arm | APK / env | 回答的问题 |
+|---|---|---|
+| pull | pull APK | 既有 pull 基线 |
+| push | push APK | monolith push 边界 |
+| split-inproc | split APK + `MOBILEGL_TRANSPORT=inproc` | 第二 apply 线程的 barrier / codec / copy 总成本 |
+| split-no-env control | 同一 split APK，不设 transport env | Gradle flavour 本身是否改变 monolith；应与 push 对照 |
+
+沿用设备协议：reboot-clean、同一风扇档与已验证定频、四臂交错配对；每个 trace 记录尾 200 帧 p50/p99、逐线程 CPU、`pmap/mpr/rsp`、进程 `VmHWM`，并保留 pin check 与 private log。A/B 后台运行、不阻塞 landing（ID-66）；在 `~/w7/notes/p5/p5-results/ab-v1.md` 出现前，本节保持 **pending**，不从 desktop gate 或旧 APK 推算。
