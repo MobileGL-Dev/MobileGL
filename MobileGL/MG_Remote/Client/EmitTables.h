@@ -58,25 +58,24 @@
 #include <Includes.h>
 
 #include <MG_Backend/BackendObject.h>
+// P5b: the clear discriminants below alias MGPipeTypes.h's (CONTRACT-P5B.md f1). The header
+// was already in this file's closure through BackendObject.h's neighbours; naming it makes
+// the dependency the aliases have explicit.
+#include <MG_Pipe/MGPipeTypes.h>
 #include <MG_Pipe/MGPipeValueTypes.h>
 
 namespace MobileGL::MG_Remote::Client {
 
-    // MGPClear::Kind. MGPipeTypes.h:1273 states the list as a COMMENT - "Whole | Color | Depth
-    // | Stencil | DepthStencil" - and mints no enumerator, because until P5 the record had no
-    // producer. These are the values, in that comment's own order, and they are here rather
-    // than in MGPipeTypes.h because that file is c0's and this phase produces exactly ONE of
-    // them: glClear is the only entry point that reaches the Clear slot (the four
-    // glClearBuffer* and the four glClearNamedFramebuffer* are class C). v1's
-    // WireVerbSink::OnClear must therefore Fatal on anything but Whole rather than guess, and
-    // the phase that migrates the other eight moves these into the contract.
-    enum MGRemoteClearKind : Uint32 {
-        kRemoteClearWhole = 0,
-        kRemoteClearColor = 1,
-        kRemoteClearDepth = 2,
-        kRemoteClearStencil = 3,
-        kRemoteClearDepthStencil = 4,
-    };
+    // MGPClear::Kind and ::ValueClass. P5b MOVED THE NUMBERS INTO MGPipeTypes.h
+    // (kMGPipeClearKind* / kMGPipeClearValueClass*, CONTRACT-P5B.md f1) - the single spelling
+    // this header and the server's PipeApplier.h each said they were waiting for. These are
+    // aliases so c1's EmitClear reads unchanged; f1's four ClearBuffer* emitters and the DSA
+    // form name the MG_Pipe constants directly.
+    inline constexpr Uint32 kRemoteClearWhole = MG_Pipe::kMGPipeClearKindWhole;
+    inline constexpr Uint32 kRemoteClearColor = MG_Pipe::kMGPipeClearKindColor;
+    inline constexpr Uint32 kRemoteClearDepth = MG_Pipe::kMGPipeClearKindDepth;
+    inline constexpr Uint32 kRemoteClearStencil = MG_Pipe::kMGPipeClearKindStencil;
+    inline constexpr Uint32 kRemoteClearDepthStencil = MG_Pipe::kMGPipeClearKindDepthStencil;
 
     // The table MG_Backend::Init() installs into gBackendFunctionsTable for the remote role.
     // A reference to a never-destroyed block, like every other MG_Remote singleton (ID-8).

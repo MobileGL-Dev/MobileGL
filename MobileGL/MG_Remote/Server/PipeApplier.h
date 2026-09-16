@@ -72,27 +72,19 @@ namespace MobileGL::MG_Remote::Server {
 
     // ---- MGPClear's two discriminants ---------------------------------------------------
     //
-    // MGPClear (MGPipeTypes.h:1271) names `Kind` "Whole | Color | Depth | Stencil |
-    // DepthStencil" and `ValueClass` "Float | Int | Uint" IN A COMMENT AND NOWHERE ELSE: the
-    // catalogue ships no enum for either, and the record has no producer or consumer in the
-    // tree, so P5 writes both halves and the two halves have to agree on a number. Declaring
-    // them here rather than open-coding 0..4 on each side is table 0's own rule for exactly
-    // this shape ("a decoder that open-codes it is the class-1 defect"), applied to a field
-    // table 0 did not reach.
-    //
-    // THE ORDER IS THE COMMENT'S, LEFT TO RIGHT, and ValueClass reuses the numbering
-    // MG_State/GLState/Core.h:39-41 already gives the identical three-way split on
-    // MGPAttribValue::ValueClass. c1 encodes against these constants; a disagreement is a
-    // clear of the wrong attachment with the wrong value type, which renders plausibly.
-    // FLAGGED FOR THE INTEGRATOR: this belongs in MGPipeTypes.h, which is c0's file.
-    inline constexpr Uint32 kMGPClearKindWhole = 0;        // glClear(mask)
-    inline constexpr Uint32 kMGPClearKindColor = 1;        // glClearBuffer{f,i,ui}v(GL_COLOR, i, v)
-    inline constexpr Uint32 kMGPClearKindDepth = 2;        // glClearBufferfv(GL_DEPTH, 0, &d)
-    inline constexpr Uint32 kMGPClearKindStencil = 3;      // glClearBufferiv(GL_STENCIL, 0, &s)
-    inline constexpr Uint32 kMGPClearKindDepthStencil = 4; // glClearBufferfi(GL_DEPTH_STENCIL,...)
-    inline constexpr Uint32 kMGPClearValueClassFloat = 0;
-    inline constexpr Uint32 kMGPClearValueClassInt = 1;
-    inline constexpr Uint32 kMGPClearValueClassUint = 2;
+    // P5b MOVED THEM INTO MGPipeTypes.h (kMGPipeClearKind* / kMGPipeClearValueClass*), which is
+    // where this file said they belonged: through P5 the numbers lived here and in the client's
+    // EmitTables.h as two hand-minted copies, and a disagreement between them is a clear of the
+    // wrong attachment with the wrong value type, which renders plausibly. These are ALIASES so
+    // v1's bodies read unchanged; new code names the MG_Pipe constants directly.
+    inline constexpr Uint32 kMGPClearKindWhole = MG_Pipe::kMGPipeClearKindWhole;
+    inline constexpr Uint32 kMGPClearKindColor = MG_Pipe::kMGPipeClearKindColor;
+    inline constexpr Uint32 kMGPClearKindDepth = MG_Pipe::kMGPipeClearKindDepth;
+    inline constexpr Uint32 kMGPClearKindStencil = MG_Pipe::kMGPipeClearKindStencil;
+    inline constexpr Uint32 kMGPClearKindDepthStencil = MG_Pipe::kMGPipeClearKindDepthStencil;
+    inline constexpr Uint32 kMGPClearValueClassFloat = MG_Pipe::kMGPipeClearValueClassFloat;
+    inline constexpr Uint32 kMGPClearValueClassInt = MG_Pipe::kMGPipeClearValueClassInt;
+    inline constexpr Uint32 kMGPClearValueClassUint = MG_Pipe::kMGPipeClearValueClassUint;
 
     // ---- the five class-B verbs' consumer ------------------------------------------------
     //
@@ -116,7 +108,40 @@ namespace MobileGL::MG_Remote::Server {
         Bool OnReadPixels(const MG_Pipe::MGPReadbackInfo& info, Uint64 seq,
                           Wire::ReplySink* replies) override;
         Bool OnDrawVbo(const MG_Pipe::MGPDrawInfo& info, const MG_Pipe::MGPDrawRange* ranges,
-                       const MG_Pipe::MGHostSpan* userIndices) override;
+                       const MG_Pipe::MGHostSpan* userIndices,
+                       const MG_Pipe::MGPDrawIndirect* indirect) override;
+
+        // ---- P5b (MG_Remote/CONTRACT-P5B.md): one override per row a migration package owns.
+        // At the contract commit EVERY BODY BELOW IS A STUB that dies
+        // Fatal{UnmigratedVerb, "<GL slot>"} by the slot's own name - the same line the client's
+        // class-C table raises and the census greps - so a client flipped ahead of its server
+        // half aborts by name rather than rendering nothing, and the census on this head is
+        // unchanged (the client refuses first). The owning package replaces the body.
+        //
+        //   i1  OnLaunchGrid ("DispatchCompute"), OnMemoryBarrier, OnResourceCopyRegion
+        //       ("CopyImageSubData"), OnBindShaderImage ("BindImageTexture"),
+        //       OnSetStorageBlockBinding ("ShaderStorageBlockBinding")
+        //   t2  OnBeginStreamOutput / OnEndStreamOutput / OnPauseStreamOutput /
+        //       OnResumeStreamOutput ("*TransformFeedback"), OnBindStreamOutput
+        //       ("BindTransformFeedback"), OnPatchParameter ("PatchParameteri")
+        //   f1  OnGenerateMipmap, OnCopyFramebufferToTexture ("CopyTexImage2D" /
+        //       "CopyTexSubImage2D"), and OnClear's four non-Whole kinds (live already)
+        //   d1  OnDrawVbo above: the indirect tail, the user-index span, NumDraws > 1 and the
+        //       instanced arms (declined by name today)
+        Bool OnLaunchGrid(const MG_Pipe::MGPGridInfo& grid) override;
+        Bool OnMemoryBarrier(const MG_Pipe::MGPMemoryBarrier& barrier) override;
+        Bool OnResourceCopyRegion(const MG_Pipe::MGPCopyRegion& copy) override;
+        Bool OnBindShaderImage(const MG_Pipe::MGPImageBind& bind) override;
+        Bool OnSetStorageBlockBinding(const MG_Pipe::MGPStorageBlockBinding& binding,
+                                      const char* name) override;
+        Bool OnBeginStreamOutput(const MG_Pipe::MGPStreamOutputBegin& begin) override;
+        Bool OnEndStreamOutput(const MG_Pipe::MGPXfbAccounting& accounting) override;
+        Bool OnPauseStreamOutput(const MG_Pipe::MGPStreamOutputControl& control) override;
+        Bool OnResumeStreamOutput(const MG_Pipe::MGPStreamOutputControl& control) override;
+        Bool OnBindStreamOutput(const MG_Pipe::MGPStreamOutputBind& bind) override;
+        Bool OnPatchParameter(const MG_Pipe::MGPPatchParameter& patch) override;
+        Bool OnGenerateMipmap(const MG_Pipe::MGPMipPlan& plan) override;
+        Bool OnCopyFramebufferToTexture(const MG_Pipe::MGPCopyFromFramebuffer& copy) override;
 
         // Per-verb tallies. The lane asserts these moved, because "the scenario passed" on a
         // split build is also what a scenario that ran entirely on the monolith path looks

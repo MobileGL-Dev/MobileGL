@@ -470,11 +470,30 @@ namespace MobileGL::MG_Remote::Client {
         // CLASS C - Fatal{UnmigratedVerb}. 64 slots: 63 in GLFunctionsTable + SetSwapInterval.
         // =============================================================================
         //
-        // The list is an X-macro so the DEFINITION and the ASSIGNMENT cannot drift apart, and
-        // so the count is arithmetic rather than a comment. Two of them carry a pre-verb hook
-        // before the Fatal - see the note on DispatchCompute.
+        // PARTITIONED BY THE P5b PACKAGE THAT OWNS THE FLIP (MG_Remote/CONTRACT-P5B.md,
+        // ~/w7/notes/p5b/BRIEF-P5B.md), so that four packages migrating in parallel edit four
+        // DISJOINT lists and four DISJOINT counts rather than one list and one number. To flip a
+        // slot a package (1) removes its X row from ITS list, (2) assigns the real emitter in
+        // BuildRemoteEmitTable's class-B block, (3) raises ITS kEmittedSlots* by one. The
+        // per-package ownership assertions below then still hold, the totals stay arithmetic,
+        // and a slot that changes class without changing the arithmetic is a build break. The
+        // X-macro shape is kept so the DEFINITION and the ASSIGNMENT cannot drift apart. Three
+        // slots carry a body the macro cannot (DispatchCompute, DispatchComputeIndirect,
+        // SetSwapInterval) and are written out by hand below.
+        //
+        //   d1   indexed / instanced / multi-draw / indirect draws -> draw_vbo (59), its
+        //        kDrawIsIndirect tail and its kDrawHasUserIndices span
+        //   i1   image bind, compute, barriers, copy-image, storage block -> bind_shader_image
+        //        (72), launch_grid (60), memory_barrier (61), resource_copy_region (53),
+        //        set_storage_block_binding (75)
+        //   t2   the XFB spans and object bind, the patch parameter -> begin/end/pause/resume_
+        //        stream_output (62..65), bind_stream_output (74), patch_parameter (73)
+        //   f1   the clear family, the framebuffer-sourced copies, mips -> clear (57),
+        //        copy_framebuffer_to_texture (76), generate_mipmap (54)
+        //   tail the wave-3 remainder nothing measured: queries, syncs, the texture readbacks,
+        //        the DSA blit, the swap interval (census-classC.md "static cross")
 
-#define MGR_UNMIGRATED_GL_SLOTS(X)                                                                 \
+#define MGR_UNMIGRATED_D1_SLOTS(X)                                                                 \
     X(DrawElements, void, (GLenum, GLsizei, GLenum, const void*))                                  \
     X(DrawElementsBaseVertex, void, (GLenum, GLsizei, GLenum, const void*, GLint))                 \
     X(MultiDrawArrays, void, (GLenum, const GLint*, const GLsizei*, GLsizei))                      \
@@ -497,7 +516,30 @@ namespace MobileGL::MG_Remote::Client {
     X(DrawArraysInstancedBaseInstance, void, (GLenum, GLint, GLsizei, GLsizei, GLuint))            \
     X(DrawArraysInstanced, void, (GLenum, GLint, GLsizei, GLsizei))                                \
     X(DrawElementsIndirect, void, (GLenum, GLenum, const void*))                                   \
-    X(DrawArraysIndirect, void, (GLenum, const void*))                                             \
+    X(DrawArraysIndirect, void, (GLenum, const void*))
+
+        // DispatchCompute and DispatchComputeIndirect are i1's too; they are hand-written below
+        // because they carry b1's dispatch hook before the Fatal.
+#define MGR_UNMIGRATED_I1_SLOTS(X)                                                                 \
+    X(BindImageTexture, void, (GLuint, GLuint, GLint, GLboolean, GLint, GLenum, GLenum))           \
+    X(CopyImageSubData, void,                                                                      \
+      (const MG_Backend::CopyImageEndpoint&, GLenum, GLint, GLint, GLint, GLint,                   \
+       const MG_Backend::CopyImageEndpoint&, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, \
+       GLsizei))                                                                                   \
+    X(MemoryBarrier, void, (GLbitfield))                                                           \
+    X(MemoryBarrierByRegion, void, (GLbitfield))                                                   \
+    X(ShaderStorageBlockBinding, void, (GLuint, const GLchar*, GLuint))
+
+#define MGR_UNMIGRATED_T2_SLOTS(X)                                                                 \
+    X(PatchParameteri, void, (GLenum, GLint))                                                      \
+    X(BeginTransformFeedback, void, (GLenum))                                                      \
+    X(EndTransformFeedback, void, ())                                                              \
+    X(PauseTransformFeedback, void, ())                                                            \
+    X(ResumeTransformFeedback, void, ())                                                           \
+    X(BindTransformFeedback, void, (GLuint))                                                       \
+    X(DeleteTransformFeedback, void, (GLuint))
+
+#define MGR_UNMIGRATED_F1_SLOTS(X)                                                                 \
     X(ClearBufferfi, void, (GLenum, GLint, GLfloat, GLint))                                        \
     X(ClearBufferfv, void, (GLenum, GLint, const GLfloat*))                                        \
     X(ClearBufferuiv, void, (GLenum, GLint, const GLuint*))                                        \
@@ -510,44 +552,33 @@ namespace MobileGL::MG_Remote::Client {
       (const SharedPtr<MG_State::GLState::FramebufferObject>&, GLenum, GLint, const GLint*))       \
     X(ClearNamedFramebufferuiv, void,                                                              \
       (const SharedPtr<MG_State::GLState::FramebufferObject>&, GLenum, GLint, const GLuint*))      \
+    X(CopyTexImage2D, void, (GLenum, GLint, GLenum, GLint, GLint, GLsizei, GLsizei, GLint))        \
+    X(CopyTexSubImage2D, void, (GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei))      \
+    X(GenerateMipmap, void, (GLenum))
+
+        // The wave-3 tail. SetSwapInterval is hand-written below (it is not a GL.* slot).
+#define MGR_UNMIGRATED_TAIL_SLOTS(X)                                                               \
     X(BlitNamedFramebuffer, void,                                                                  \
       (const SharedPtr<MG_State::GLState::FramebufferObject>&,                                     \
        const SharedPtr<MG_State::GLState::FramebufferObject>&, GLint, GLint, GLint, GLint, GLint,  \
        GLint, GLint, GLint, GLbitfield, GLenum))                                                   \
-    X(CopyTexImage2D, void, (GLenum, GLint, GLenum, GLint, GLint, GLsizei, GLsizei, GLint))        \
-    X(CopyTexSubImage2D, void, (GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei))      \
-    X(CopyImageSubData, void,                                                                      \
-      (const MG_Backend::CopyImageEndpoint&, GLenum, GLint, GLint, GLint, GLint,                   \
-       const MG_Backend::CopyImageEndpoint&, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, \
-       GLsizei))                                                                                   \
-    X(GenerateMipmap, void, (GLenum))                                                              \
     X(GetTexImage, void, (GLenum, GLint, GLenum, GLenum, GLvoid*))                                 \
     X(GetTextureImage, void,                                                                       \
       (const SharedPtr<MG_State::GLState::ITextureObject>&, TextureUploadTarget, GLint, GLenum,    \
        GLenum, GLsizei, GLvoid*))                                                                  \
-    X(MemoryBarrier, void, (GLbitfield))                                                           \
-    X(MemoryBarrierByRegion, void, (GLbitfield))                                                   \
-    X(BindImageTexture, void, (GLuint, GLuint, GLint, GLboolean, GLint, GLenum, GLenum))           \
-    X(ShaderStorageBlockBinding, void, (GLuint, const GLchar*, GLuint))                            \
     X(WaitSync, void, (MG_Backend::BackendSyncHandle, GLbitfield, GLuint64))                       \
     X(DeleteSync, void, (MG_Backend::BackendSyncHandle))                                           \
     X(EndTimeElapsedQuery, void, (MG_Backend::BackendQueryHandle))                                  \
     X(DeleteBackendQuery, void, (MG_Backend::BackendQueryHandle))                                   \
     X(EndOcclusionQuery, void, (MG_Backend::BackendQueryHandle))                                    \
-    X(EndXfbPrimitivesQuery, void, (MG_Backend::BackendQueryHandle))                                \
-    X(PatchParameteri, void, (GLenum, GLint))                                                      \
-    X(BeginTransformFeedback, void, (GLenum))                                                      \
-    X(EndTransformFeedback, void, ())                                                              \
-    X(PauseTransformFeedback, void, ())                                                            \
-    X(ResumeTransformFeedback, void, ())                                                           \
-    X(BindTransformFeedback, void, (GLuint))                                                       \
-    X(DeleteTransformFeedback, void, (GLuint))
+    X(EndXfbPrimitivesQuery, void, (MG_Backend::BackendQueryHandle))
 
         // The non-void ones, kept apart only because the macro body differs: a [[noreturn]]
         // call is a complete body for a void slot and for a value-returning one alike, but a
         // compiler that does not see UnmigratedVerbFatal's attribute through the macro would
-        // warn on the second. It does see it; they are split for readability.
-#define MGR_UNMIGRATED_GL_VALUE_SLOTS(X)                                                           \
+        // warn on the second. It does see it; they are split for readability. All ten are the
+        // wave-3 tail.
+#define MGR_UNMIGRATED_TAIL_VALUE_SLOTS(X)                                                         \
     X(FenceSync, MG_Backend::BackendSyncHandle, ())                                                \
     X(ClientWaitSync, GLenum, (MG_Backend::BackendSyncHandle, GLbitfield, GLuint64))               \
     X(GetSyncStatus, Bool, (MG_Backend::BackendSyncHandle))                                        \
@@ -559,6 +590,16 @@ namespace MobileGL::MG_Remote::Client {
     X(BeginXfbPrimitivesQuery, MG_Backend::BackendQueryHandle, (Bool))                              \
     X(GetGpuTimestampNs, Int64, ())
 
+        // The union, for the places that want every class-C row at once (the definitions and
+        // the assignments). A package never edits THIS; it edits its own list above.
+#define MGR_UNMIGRATED_GL_SLOTS(X)                                                                 \
+    MGR_UNMIGRATED_D1_SLOTS(X)                                                                     \
+    MGR_UNMIGRATED_I1_SLOTS(X)                                                                     \
+    MGR_UNMIGRATED_T2_SLOTS(X)                                                                     \
+    MGR_UNMIGRATED_F1_SLOTS(X)                                                                     \
+    MGR_UNMIGRATED_TAIL_SLOTS(X)
+#define MGR_UNMIGRATED_GL_VALUE_SLOTS(X) MGR_UNMIGRATED_TAIL_VALUE_SLOTS(X)
+
 #define MGR_DEFINE_UNMIGRATED(Name, Ret, Sig)                                                      \
     Ret Name##_Unmigrated Sig { UnmigratedVerbFatal(#Name); }
 
@@ -568,11 +609,11 @@ namespace MobileGL::MG_Remote::Client {
 
         // THE TWO COMPUTE SLOTS CARRY b1's DISPATCH HOOK BEFORE THE FATAL, and this is stated
         // rather than hidden. MarkGpuWritesForDispatch() belongs immediately before the
-        // dispatch record, and the dispatch record is class C in P5 - so the call site is here,
-        // in the right place, and is UNREACHABLE-IN-EFFECT: the abort follows it. There is no
-        // gate on it and this file says so; the phase that moves DispatchCompute into class B
-        // replaces the Fatal and inherits a call site that is already correct rather than
-        // discovering that the mark walk was never wired.
+        // dispatch record, and the dispatch record is class C until i1 lands - so the call site
+        // is here, in the right place, and is UNREACHABLE-IN-EFFECT: the abort follows it. The
+        // package that moves DispatchCompute into class B (i1: launch_grid, opcode 60) replaces
+        // the Fatal and inherits a call site that is already correct rather than discovering
+        // that the mark walk was never wired.
         void DispatchCompute_Unmigrated(GLuint, GLuint, GLuint) {
             PushPersistentMapsBeforeVerb();
             MarkGpuWritesForDispatch();
@@ -588,16 +629,38 @@ namespace MobileGL::MG_Remote::Client {
 
         // The counts, as arithmetic. MGR_COUNT_ONE expands to `+ 1` per row.
 #define MGR_COUNT_ONE(Name, Ret, Sig) +1
-        constexpr Uint32 kUnmigratedListedSlots =
-            0 MGR_UNMIGRATED_GL_SLOTS(MGR_COUNT_ONE) MGR_UNMIGRATED_GL_VALUE_SLOTS(MGR_COUNT_ONE);
+        constexpr Uint32 kUnmigratedD1 = 0 MGR_UNMIGRATED_D1_SLOTS(MGR_COUNT_ONE);
+        // + DispatchCompute, DispatchComputeIndirect, written out by hand.
+        constexpr Uint32 kUnmigratedI1 = 0 MGR_UNMIGRATED_I1_SLOTS(MGR_COUNT_ONE) + 2;
+        constexpr Uint32 kUnmigratedT2 = 0 MGR_UNMIGRATED_T2_SLOTS(MGR_COUNT_ONE);
+        constexpr Uint32 kUnmigratedF1 = 0 MGR_UNMIGRATED_F1_SLOTS(MGR_COUNT_ONE);
+        // + SetSwapInterval, written out by hand.
+        constexpr Uint32 kUnmigratedTail =
+            0 MGR_UNMIGRATED_TAIL_SLOTS(MGR_COUNT_ONE) MGR_UNMIGRATED_TAIL_VALUE_SLOTS(MGR_COUNT_ONE) + 1;
 #undef MGR_COUNT_ONE
-        // + DispatchCompute, DispatchComputeIndirect, SetSwapInterval, written out by hand
-        // because they carry a body the macro cannot.
-        constexpr Uint32 kUnmigratedSlots = kUnmigratedListedSlots + 3;
-        constexpr Uint32 kLocallyAnsweredSlots = 2; // GetIntegeri_v, IsTimerQuerySupported
-        constexpr Uint32 kEmittedSlots = 5;         // Clear, DrawArrays, ReadPixels, Blit, Present
+        constexpr Uint32 kUnmigratedSlots =
+            kUnmigratedD1 + kUnmigratedI1 + kUnmigratedT2 + kUnmigratedF1 + kUnmigratedTail;
 
-        static_assert(kUnmigratedSlots == 64, "CONTRACT-P5.md §7 class C is 64 slots");
+        // The emitted counts, PER OWNER. P5's five are c1's; each P5b package raises its own.
+        constexpr Uint32 kEmittedSlotsP5 = 5; // Clear, DrawArrays, ReadPixels, Blit, Present
+        constexpr Uint32 kEmittedSlotsD1 = 0;
+        constexpr Uint32 kEmittedSlotsI1 = 0;
+        constexpr Uint32 kEmittedSlotsT2 = 0;
+        constexpr Uint32 kEmittedSlotsF1 = 0;
+        constexpr Uint32 kEmittedSlots =
+            kEmittedSlotsP5 + kEmittedSlotsD1 + kEmittedSlotsI1 + kEmittedSlotsT2 + kEmittedSlotsF1;
+        constexpr Uint32 kLocallyAnsweredSlots = 2; // GetIntegeri_v, IsTimerQuerySupported
+
+        // EACH PACKAGE'S OWNERSHIP, PINNED. A package that flips a slot removes one row and
+        // adds one to its emitted count; a package that touches another's list breaks the
+        // other's line, not its own. The four numbers are the census's package tables plus the
+        // unmeasured companions that share a wire row (BRIEF-P5B.md file-ownership table).
+        static_assert(kUnmigratedD1 + kEmittedSlotsD1 == 19, "d1 owns the 19 draw slots");
+        static_assert(kUnmigratedI1 + kEmittedSlotsI1 == 7, "i1 owns the 7 image/compute/barrier/copy/SSBO slots");
+        static_assert(kUnmigratedT2 + kEmittedSlotsT2 == 7, "t2 owns the 7 XFB/tessellation slots");
+        static_assert(kUnmigratedF1 + kEmittedSlotsF1 == 11, "f1 owns the 11 clear/copy/mip slots");
+        static_assert(kUnmigratedTail == 20, "the wave-3 tail is 20 slots and no P5b package owns one");
+        static_assert(kUnmigratedSlots == 64, "CONTRACT-P5.md §7 class C is 64 slots at the P5b contract commit");
         static_assert(kLocallyAnsweredSlots + kEmittedSlots + kUnmigratedSlots == kRemoteEmitSlotCount,
                       "the three classes no longer partition the 71 slots");
 

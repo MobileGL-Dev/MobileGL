@@ -170,6 +170,12 @@ namespace MobileGL::MG_Remote::Wire {
         Uint64 TailBytes[2] = {0, 0};
         Uint32 TailCount = 0;
         Uint64 TotalBytes = 0; // header + payload + gaps + tails, rounded up to 8
+        // P5b: WHAT THE SECOND TAIL IS. SetShaderBuffers' second tail is MGHostSpan[HostSpanCount]
+        // and DrawVbo's is EITHER the user-index MGHostSpan (kDrawHasUserIndices) OR one
+        // MGPDrawIndirect (kDrawIsIndirect, CONTRACT-P5B.md d1). The encoder's host-span
+        // honesty pass reads this rather than "tail 2 exists", because a 40-byte indirect
+        // block read as spans is one span and a quarter of garbage.
+        Bool SecondTailIsHostSpans = false;
     };
 
     // `payload` must already be known to hold at least the op's payload struct - that is what
@@ -377,13 +383,91 @@ namespace MobileGL::MG_Remote::Wire {
             return false;
         }
         // `ranges` is info.NumDraws entries. `userIndices` is null unless the record set
-        // kDrawHasUserIndices - which P5 never does, because the reduced path draws from a
-        // VBO precisely so no MGHostSpan is produced (table 0's cap-bit row).
+        // kDrawHasUserIndices; `indirect` is null unless it set kDrawIsIndirect (P5b d1,
+        // CONTRACT-P5B.md). The layout refuses a record that sets both, so at most one of the
+        // two is non-null. The span is VALIDATED (all four R-2 arms, the segment-range one
+        // included) and names a SEG_STAGE run the client staged; the sink resolves it through
+        // MG_Pipe::MGPipeHostBytes and never holds the pointer past its return (rule C).
         virtual Bool OnDrawVbo(const MG_Pipe::MGPDrawInfo& info, const MG_Pipe::MGPDrawRange* ranges,
-                               const MG_Pipe::MGHostSpan* userIndices) {
+                               const MG_Pipe::MGHostSpan* userIndices,
+                               const MG_Pipe::MGPDrawIndirect* indirect) {
             (void)info;
             (void)ranges;
             (void)userIndices;
+            (void)indirect;
+            return false;
+        }
+
+        // ---- P5b (MG_Remote/CONTRACT-P5B.md): the rows the four migration packages consume.
+        //
+        // Every one below is a GLFunctionsTable verb with NO MGPipeApply* entry point - the
+        // census's correction - so, exactly like the five above, the codec validates and hands
+        // over and the SERVER'S sink (Server/PipeApplier.cpp's ServerVerbSink) makes the
+        // backend call. The default bodies return false ("this build does not implement it");
+        // ServerVerbSink's stubs die Fatal{UnmigratedVerb, "<GL slot>"} by name until the owning
+        // package lands the real body, so a client that flips a slot ahead of its server half
+        // aborts with the same line the census greps rather than rendering nothing.
+        //
+        //   i1  OnLaunchGrid, OnMemoryBarrier, OnResourceCopyRegion, OnBindShaderImage,
+        //       OnSetStorageBlockBinding
+        //   t2  OnBeginStreamOutput, OnEndStreamOutput, OnPauseStreamOutput,
+        //       OnResumeStreamOutput, OnBindStreamOutput, OnPatchParameter
+        //   f1  OnGenerateMipmap, OnCopyFramebufferToTexture (and OnClear's non-Whole kinds)
+        //   d1  OnDrawVbo's indirect tail and user-index span (above)
+        virtual Bool OnLaunchGrid(const MG_Pipe::MGPGridInfo& grid) {
+            (void)grid;
+            return false;
+        }
+        virtual Bool OnMemoryBarrier(const MG_Pipe::MGPMemoryBarrier& barrier) {
+            (void)barrier;
+            return false;
+        }
+        virtual Bool OnResourceCopyRegion(const MG_Pipe::MGPCopyRegion& copy) {
+            (void)copy;
+            return false;
+        }
+        virtual Bool OnBindShaderImage(const MG_Pipe::MGPImageBind& bind) {
+            (void)bind;
+            return false;
+        }
+        // `name` is the NUL-terminated block name the decoder copied out of the record's
+        // SEG_STAGE blob; valid for the call only.
+        virtual Bool OnSetStorageBlockBinding(const MG_Pipe::MGPStorageBlockBinding& binding,
+                                              const char* name) {
+            (void)binding;
+            (void)name;
+            return false;
+        }
+        virtual Bool OnBeginStreamOutput(const MG_Pipe::MGPStreamOutputBegin& begin) {
+            (void)begin;
+            return false;
+        }
+        virtual Bool OnEndStreamOutput(const MG_Pipe::MGPXfbAccounting& accounting) {
+            (void)accounting;
+            return false;
+        }
+        virtual Bool OnPauseStreamOutput(const MG_Pipe::MGPStreamOutputControl& control) {
+            (void)control;
+            return false;
+        }
+        virtual Bool OnResumeStreamOutput(const MG_Pipe::MGPStreamOutputControl& control) {
+            (void)control;
+            return false;
+        }
+        virtual Bool OnBindStreamOutput(const MG_Pipe::MGPStreamOutputBind& bind) {
+            (void)bind;
+            return false;
+        }
+        virtual Bool OnPatchParameter(const MG_Pipe::MGPPatchParameter& patch) {
+            (void)patch;
+            return false;
+        }
+        virtual Bool OnGenerateMipmap(const MG_Pipe::MGPMipPlan& plan) {
+            (void)plan;
+            return false;
+        }
+        virtual Bool OnCopyFramebufferToTexture(const MG_Pipe::MGPCopyFromFramebuffer& copy) {
+            (void)copy;
             return false;
         }
     };

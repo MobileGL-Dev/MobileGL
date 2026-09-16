@@ -269,21 +269,36 @@ namespace MobileGL::MG_Remote::Server {
         return true;
     }
 
+    // P5b's server-side stub shape (CONTRACT-P5B.md): the same line the client's class-C table
+    // raises (EmitTables.cpp UnmigratedVerbFatal) and the same family the census greps, so a
+    // slot flipped on the client ahead of its server half aborts BY NAME on the apply thread
+    // rather than rendering nothing. Named "(server sink)" in the message so a log reader can
+    // tell which half is missing.
+    [[noreturn]] static void ServerUnmigratedVerbFatal(const char* slot) {
+        MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"%s\"} (server sink: the record crossed and "
+                "ServerVerbSink has no body for it yet - CONTRACT-P5B.md names the package)",
+                slot);
+        std::abort();
+    }
+
     Bool ServerVerbSink::OnDrawVbo(const MG_Pipe::MGPDrawInfo& info,
                                    const MG_Pipe::MGPDrawRange* ranges,
-                                   const MG_Pipe::MGHostSpan* userIndices) {
+                                   const MG_Pipe::MGHostSpan* userIndices,
+                                   const MG_Pipe::MGPDrawIndirect* indirect) {
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("draw_vbo");
         if (table == nullptr) return false;
+        // P5b d1 (CONTRACT-P5B.md): the three arms the contract gives this sink and P5 did not
+        // implement are DECLINED BY NAME until d1 lands them - the same names the census greps,
+        // so the lane's first-blocker table reads the server's gap as the slot it is.
+        if (indirect != nullptr) {
+            ServerUnmigratedVerbFatal(info.IndexSize == 0 ? "MultiDrawArraysIndirect"
+                                                          : "MultiDrawElementsIndirect");
+        }
         if (userIndices != nullptr) {
-            // kCapNeedsHostIndexBytes is 0 for the whole of P5 by ruling (table 0's cap-bit
-            // row) precisely so this tail never appears; a span that arrived anyway means the
-            // client's cap gate did not hold, and filling one is P8's.
-            MGLOG_E_ONCE("MG_Remote server: draw_vbo carries an MGHostSpan of user indices. P5 "
-                         "rules kCapNeedsHostIndexBytes and kCapNeedsHostUboBytes to 0 so that "
-                         "no host span reaches the first IPC frame (contract table 0); filling "
-                         "one under split is P8's. The draw is DECLINED rather than drawn from "
-                         "a pointer that does not belong to this process");
-            return false;
+            // The span is validated and names a SEG_STAGE run the client staged (d1's rule for
+            // client-side index arrays); resolving it is MG_Pipe::MGPipeHostBytes and passing
+            // the pointer to gl.DrawElements is d1's body. Declined by name until then.
+            ServerUnmigratedVerbFatal("DrawElements+CLIENT_INDICES");
         }
         if (ranges == nullptr || info.NumDraws == 0) return false;
 
@@ -291,17 +306,16 @@ namespace MobileGL::MG_Remote::Server {
         // draw_vbo collapses all twenty draw entry points, and picking the right one needs the
         // instancing / base-vertex / base-instance / multi-draw cross product. TriangleScenario
         // is a single non-instanced array draw and OpenRA's are single indexed draws from a
-        // bound element buffer; the rest are P8's, together with the MGPDrawIndirect record
-        // that has no producer yet.
+        // bound element buffer; the rest are d1's (CONTRACT-P5B.md d1 says which GL entry each
+        // shape of the record dispatches to).
         const MG_Backend::GLFunctionsTable& gl = table->GL;
         const Bool instanced = info.InstanceCount > 1 || info.StartInstance != 0;
-        if (info.NumDraws != 1 || instanced) {
-            MGLOG_E_ONCE("MG_Remote server: draw_vbo with NumDraws=%u InstanceCount=%u "
-                         "StartInstance=%u is DECLINED - P5's reduced path is the single "
-                         "non-instanced draw (BRIEF 4); the multi-draw and instanced arms are "
-                         "P8's",
-                         info.NumDraws, info.InstanceCount, info.StartInstance);
-            return false;
+        if (info.NumDraws != 1) {
+            ServerUnmigratedVerbFatal(info.IndexSize == 0 ? "MultiDrawArrays" : "MultiDrawElements");
+        }
+        if (instanced) {
+            ServerUnmigratedVerbFatal(info.IndexSize == 0 ? "DrawArraysInstanced"
+                                                          : "DrawElementsInstanced");
         }
         const MG_Pipe::MGPDrawRange& range = ranges[0];
         if (info.IndexSize == 0) {
@@ -329,6 +343,84 @@ namespace MobileGL::MG_Remote::Server {
         }
         ++m_draws;
         return true;
+    }
+
+    // -----------------------------------------------------------------------------------
+    // P5b: the stubs the four migration packages replace (MG_Remote/CONTRACT-P5B.md).
+    //
+    // Each dies by the GL slot's own name. The record has crossed and been validated by the
+    // codec by the time one of these runs, so the only thing missing is the backend call, and
+    // the package that owns the row writes it here: `Table("<row>")`, the null-slot check
+    // (a backend that leaves the slot null DECLINES, which is the monolith's null-slot answer
+    // in the same words), the call, and a tally the lane can assert moved.
+    // -----------------------------------------------------------------------------------
+
+    // ---- i1 ----
+    Bool ServerVerbSink::OnLaunchGrid(const MG_Pipe::MGPGridInfo& grid) {
+        (void)grid;
+        ServerUnmigratedVerbFatal(grid.IsIndirect ? "DispatchComputeIndirect" : "DispatchCompute");
+    }
+
+    Bool ServerVerbSink::OnMemoryBarrier(const MG_Pipe::MGPMemoryBarrier& barrier) {
+        ServerUnmigratedVerbFatal(barrier.ByRegion ? "MemoryBarrierByRegion" : "MemoryBarrier");
+    }
+
+    Bool ServerVerbSink::OnResourceCopyRegion(const MG_Pipe::MGPCopyRegion& copy) {
+        (void)copy;
+        ServerUnmigratedVerbFatal("CopyImageSubData");
+    }
+
+    Bool ServerVerbSink::OnBindShaderImage(const MG_Pipe::MGPImageBind& bind) {
+        (void)bind;
+        ServerUnmigratedVerbFatal("BindImageTexture");
+    }
+
+    Bool ServerVerbSink::OnSetStorageBlockBinding(const MG_Pipe::MGPStorageBlockBinding& binding,
+                                                  const char* name) {
+        (void)binding;
+        (void)name;
+        ServerUnmigratedVerbFatal("ShaderStorageBlockBinding");
+    }
+
+    // ---- t2 ----
+    Bool ServerVerbSink::OnBeginStreamOutput(const MG_Pipe::MGPStreamOutputBegin& begin) {
+        (void)begin;
+        ServerUnmigratedVerbFatal("BeginTransformFeedback");
+    }
+
+    Bool ServerVerbSink::OnEndStreamOutput(const MG_Pipe::MGPXfbAccounting& accounting) {
+        (void)accounting;
+        ServerUnmigratedVerbFatal("EndTransformFeedback");
+    }
+
+    Bool ServerVerbSink::OnPauseStreamOutput(const MG_Pipe::MGPStreamOutputControl& control) {
+        (void)control;
+        ServerUnmigratedVerbFatal("PauseTransformFeedback");
+    }
+
+    Bool ServerVerbSink::OnResumeStreamOutput(const MG_Pipe::MGPStreamOutputControl& control) {
+        (void)control;
+        ServerUnmigratedVerbFatal("ResumeTransformFeedback");
+    }
+
+    Bool ServerVerbSink::OnBindStreamOutput(const MG_Pipe::MGPStreamOutputBind& bind) {
+        (void)bind;
+        ServerUnmigratedVerbFatal("BindTransformFeedback");
+    }
+
+    Bool ServerVerbSink::OnPatchParameter(const MG_Pipe::MGPPatchParameter& patch) {
+        (void)patch;
+        ServerUnmigratedVerbFatal("PatchParameteri");
+    }
+
+    // ---- f1 ----
+    Bool ServerVerbSink::OnGenerateMipmap(const MG_Pipe::MGPMipPlan& plan) {
+        (void)plan;
+        ServerUnmigratedVerbFatal("GenerateMipmap");
+    }
+
+    Bool ServerVerbSink::OnCopyFramebufferToTexture(const MG_Pipe::MGPCopyFromFramebuffer& copy) {
+        ServerUnmigratedVerbFatal(copy.SubImage ? "CopyTexSubImage2D" : "CopyTexImage2D");
     }
 
     // -----------------------------------------------------------------------------------

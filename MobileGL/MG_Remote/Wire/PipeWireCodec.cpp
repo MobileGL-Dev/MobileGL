@@ -234,7 +234,12 @@ namespace MobileGL::MG_Remote::Wire {
     X(SetSwapInterval, MGPSwapInterval)                                                        \
     X(QueryTimestamp, MGPTimestampRequest)                                                     \
     X(QueryCounter, MGPQueryDesc)                                                              \
-    X(FenceWaitServer, MGPFenceWait)
+    X(FenceWaitServer, MGPFenceWait)                                                           \
+    X(BindShaderImage, MGPImageBind)                                                           \
+    X(PatchParameter, MGPPatchParameter)                                                       \
+    X(BindStreamOutput, MGPStreamOutputBind)                                                   \
+    X(SetStorageBlockBinding, MGPStorageBlockBinding)                                          \
+    X(CopyFramebufferToTexture, MGPCopyFromFramebuffer)
 
     namespace {
 
@@ -311,6 +316,9 @@ namespace MobileGL::MG_Remote::Wire {
             case MGPWireOp::ResourceSubData:
             case MGPWireOp::BufferSubDataResident:
                 return {static_cast<Uint32>(offsetof(MGPSubData, Blob)), 1};
+            // P5b: the block NAME rides SEG_STAGE (CONTRACT-P5B.md i1).
+            case MGPWireOp::SetStorageBlockBinding:
+                return {static_cast<Uint32>(offsetof(MGPStorageBlockBinding, Name)), 1};
             default:
                 return {};
             }
@@ -625,6 +633,7 @@ namespace MobileGL::MG_Remote::Wire {
             tail0 = TailBytesFor(p.Count, sizeof(MGPBufferRange));
             tail1 = TailBytesFor(p.HostSpanCount, sizeof(MGHostSpan));
             tails = p.HostSpanCount != 0 ? 2 : 1;
+            out.SecondTailIsHostSpans = true;
             break;
         }
         case MGPWireOp::SetStreamOutputTargets: {
@@ -677,8 +686,26 @@ namespace MobileGL::MG_Remote::Wire {
             // header comment.
             const auto& p = *static_cast<const MGPDrawInfo*>(payload);
             tail0 = TailBytesFor(p.NumDraws, sizeof(MGPDrawRange));
-            if ((p.Flags & kDrawHasUserIndices) != 0) {
+            const Bool userIndices = (p.Flags & kDrawHasUserIndices) != 0;
+            const Bool indirect = (p.Flags & kDrawIsIndirect) != 0;
+            // P5b (CONTRACT-P5B.md d1): the second tail is the user-index span OR the indirect
+            // block, never both - an indirect draw takes its indices from the bound element
+            // buffer by GL rule - and an indirect draw declares no ranges, because the server
+            // never reads the indirect buffer to learn a count and the client has none to send.
+            if (userIndices && indirect) {
+                WireProtocolFatal("DrawVbo.Flags",
+                                  "kDrawHasUserIndices and kDrawIsIndirect are exclusive; an "
+                                  "indirect draw's indices come from the bound element buffer");
+            }
+            if (indirect && p.NumDraws != 0) {
+                WireProtocolFatalAt("DrawVbo.NumDraws", p.NumDraws, 0);
+            }
+            if (userIndices) {
                 tail1 = sizeof(MGHostSpan);
+                tails = 2;
+                out.SecondTailIsHostSpans = true;
+            } else if (indirect) {
+                tail1 = sizeof(MGPDrawIndirect);
                 tails = 2;
             } else {
                 tails = 1;
@@ -953,7 +980,7 @@ namespace MobileGL::MG_Remote::Wire {
             }
         }
         if ((callFlags & static_cast<Uint32>(kHostSpan)) != 0 && layout.TailCount == 2 &&
-            layout.TailBytes[1] != 0 && m_segments != nullptr) {
+            layout.SecondTailIsHostSpans && layout.TailBytes[1] != 0 && m_segments != nullptr) {
             const Uint64 at = layout.TailOffset[1] - sizeof(MGPWireRecHeader);
             const Uint64 spans = layout.TailBytes[1] / sizeof(MGHostSpan);
             for (Uint64 i = 0; i < spans; ++i) {
@@ -1785,11 +1812,22 @@ namespace MobileGL::MG_Remote::Wire {
             PostReply(op, seq, ReplySink::kStatusOk, nullptr, 0);
             return true;
 
+        // P5b (CONTRACT-P5B.md): the two transfer verbs with no applier reach the sink like the
+        // class-B five. resource_copy_region = glCopyImageSubData (i1), generate_mipmap =
+        // glGenerateMipmap (f1). The payloads are plain PODs with no blob and no tail, so the
+        // bounds gate above is the whole validation; what the sink does with a renderbuffer
+        // endpoint or an emulation site is the contract's, not the codec's.
         case MGPWireOp::ResourceCopyRegion:
+            return m_verbs != nullptr &&
+                   m_verbs->OnResourceCopyRegion(*static_cast<const MGPCopyRegion*>(payload));
+
         case MGPWireOp::GenerateMipmap:
+            return m_verbs != nullptr &&
+                   m_verbs->OnGenerateMipmap(*static_cast<const MGPMipPlan*>(payload));
+
         case MGPWireOp::GetTextureImage:
-            // Off the reduced path (BRIEF §4), and GetTextureImage's emit-table slot is
-            // Fatal{UnmigratedVerb} on the client anyway (contract §7 class C).
+            // Off the reduced path (BRIEF §4) and outside P5b's measured 25: its emit-table slot
+            // is Fatal{UnmigratedVerb} on the client (contract §7 class C, wave 3 / P9).
             return false;
 
         // ---- the five class-B verbs: no MGPipeApply* exists, so v1's sink or nothing -------
@@ -1823,27 +1861,104 @@ namespace MobileGL::MG_Remote::Wire {
                 std::memcpy(&span, tailAt(1), sizeof(span));
                 // ALL FOUR ARMS. WireVerbSink's header promises OnDrawVbo "a DECODED,
                 // VALIDATED argument list"; without the segment-range arm a span whose run
-                // left SEG_STAGE reached the sink and that promise was false. P8 is what arms
-                // this path, which is exactly when nobody will be reading this code.
+                // left SEG_STAGE reached the sink and that promise was false. P5b's d1 is what
+                // arms this path (client-side index arrays staged whole, CONTRACT-P5B.md d1).
                 CheckHostSpanIsHonest(span, *m_segments);
                 userIndices = &span;
             }
+            // P5b d1: the indirect block, in the span's place. The layout already refused a
+            // record that sets both flags or that declares ranges alongside it.
+            const MGPDrawIndirect* indirect = nullptr;
+            MGPDrawIndirect indirectBlock{};
+            if ((info.Flags & kDrawIsIndirect) != 0) {
+                if (layout.TailCount != 2 || layout.TailBytes[1] != sizeof(MGPDrawIndirect)) {
+                    WireProtocolFatalAt("DrawVbo.indirect", layout.TailBytes[1],
+                                        sizeof(MGPDrawIndirect));
+                }
+                std::memcpy(&indirectBlock, tailAt(1), sizeof(indirectBlock));
+                indirect = &indirectBlock;
+            }
             return m_verbs != nullptr &&
                    m_verbs->OnDrawVbo(info, reinterpret_cast<const MGPDrawRange*>(tailAt(0)),
-                                      userIndices);
+                                      userIndices, indirect);
         }
 
         case MGPWireOp::Present:
             return m_verbs != nullptr && m_verbs->OnPresent(*static_cast<const MGPPresent*>(payload));
 
-        // ---- compute, XFB, barriers, flush, swap interval: off the reduced path ------------
+        // ---- compute, barriers, XFB: P5b's i1 and t2 rows, to the sink -----------------------
+        //
+        // Six existing rows that returned false through P5 ("off the reduced path"). None has
+        // an MGPipeApply* and none gains one (CONTRACT-P5B.md): the payloads are plain PODs the
+        // bounds gate has already proved, so each arm hands over and stops.
         case MGPWireOp::LaunchGrid:
+            return m_verbs != nullptr &&
+                   m_verbs->OnLaunchGrid(*static_cast<const MGPGridInfo*>(payload));
+
         case MGPWireOp::MemoryBarrier:
+            return m_verbs != nullptr &&
+                   m_verbs->OnMemoryBarrier(*static_cast<const MGPMemoryBarrier*>(payload));
+
         case MGPWireOp::BeginStreamOutput:
+            return m_verbs != nullptr &&
+                   m_verbs->OnBeginStreamOutput(*static_cast<const MGPStreamOutputBegin*>(payload));
+
         case MGPWireOp::EndStreamOutput:
+            return m_verbs != nullptr &&
+                   m_verbs->OnEndStreamOutput(*static_cast<const MGPXfbAccounting*>(payload));
+
         case MGPWireOp::PauseStreamOutput:
+            return m_verbs != nullptr &&
+                   m_verbs->OnPauseStreamOutput(*static_cast<const MGPStreamOutputControl*>(payload));
+
         case MGPWireOp::ResumeStreamOutput:
+            return m_verbs != nullptr &&
+                   m_verbs->OnResumeStreamOutput(*static_cast<const MGPStreamOutputControl*>(payload));
+
+        // ---- the five P5b-appended verbs, opcodes 72..76 ---------------------------------------
+        case MGPWireOp::BindShaderImage:
+            return m_verbs != nullptr &&
+                   m_verbs->OnBindShaderImage(*static_cast<const MGPImageBind*>(payload));
+
+        case MGPWireOp::PatchParameter:
+            return m_verbs != nullptr &&
+                   m_verbs->OnPatchParameter(*static_cast<const MGPPatchParameter*>(payload));
+
+        case MGPWireOp::BindStreamOutput:
+            return m_verbs != nullptr &&
+                   m_verbs->OnBindStreamOutput(*static_cast<const MGPStreamOutputBind*>(payload));
+
+        case MGPWireOp::SetStorageBlockBinding: {
+            // The block name is the ONE string on the wire (CONTRACT-P5B.md i1): a kHasBlob
+            // record whose blob is the NUL-terminated name, Size = strlen + 1, staged whole in
+            // SEG_STAGE like every other client -> server blob. Copied into a bounded local
+            // and re-terminated, so a record whose staged bytes forgot the NUL cannot make the
+            // backend read past the run, and so the pointer the sink sees dies with this call
+            // (rule C).
+            const auto& rec = *static_cast<const MGPStorageBlockBinding*>(payload);
+            constexpr Uint64 kMaxBlockNameBytes = 4096;
+            RequireDeclaredBlob(op, rec.Name, *m_segments);
+            if (rec.Name.Size > kMaxBlockNameBytes) {
+                WireProtocolFatalAt("SetStorageBlockBinding.Name", rec.Name.Size, kMaxBlockNameBytes);
+            }
+            const void* bytes = ResolveOrFatal(op, rec.Name);
+            char name[kMaxBlockNameBytes + 1];
+            std::memcpy(name, bytes, static_cast<SizeT>(rec.Name.Size));
+            name[rec.Name.Size] = '\0';
+            if (name[rec.Name.Size - 1] != '\0') {
+                WireProtocolFatal("SetStorageBlockBinding.Name",
+                                  "the staged block name is not NUL-terminated; Size is strlen + 1");
+            }
+            return m_verbs != nullptr && m_verbs->OnSetStorageBlockBinding(rec, name);
+        }
+
+        case MGPWireOp::CopyFramebufferToTexture:
+            return m_verbs != nullptr &&
+                   m_verbs->OnCopyFramebufferToTexture(
+                       *static_cast<const MGPCopyFromFramebuffer*>(payload));
+
         case MGPWireOp::SetSwapInterval:
+            // Class C, wave 3 (census-classC.md "static cross"); not a verb (FillPoints.def:21).
             return false;
 
         case MGPWireOp::Flush:
