@@ -170,8 +170,8 @@ namespace MobileGL::MG_Backend {
     } // namespace
 #endif
 
-    void ShutdownSplitRoles() {
 #if MOBILEGL_BUILD_DISAGGREGATED
+    void ShutdownSplitRoles() {
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
         // ClientSession::Stop IS table 3's whole order and it is idempotent: publish and wait
         // for the server to drain (bounded - a lost record must be a red lane, not a hung
@@ -181,8 +181,8 @@ namespace MobileGL::MG_Backend {
         // owns. A var-tail still named by an unapplied record is a use-after-free the join is
         // what prevents, which is why the order is not a preference.
         MG_Remote::Client::ClientSessionInstance().Stop();
-#endif
     }
+#endif
 
     void Init() {
         MGLOG_D("Initializing MobileGL Backend...");
