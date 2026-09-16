@@ -29,6 +29,11 @@ subprojects {
                 }
                 externalNativeBuild {
                     cmake {
+                        // P5 trace A/B: :MobileGL owns libMobileGL.so, not :app's replay runner.
+                        arguments += listOf(
+                            "-DMOBILEGL_BUILD_DISAGGREGATED=${project.findProperty("mobilegl.buildDisaggregated") ?: "OFF"}",
+                            "-DMOBILEGL_BUILD_DISAGGREGATED_INPROC=${project.findProperty("mobilegl.buildDisaggregatedInproc") ?: "OFF"}",
+                        )
                         mobileGlCmakeCompilerLauncher().takeIf(String::isNotEmpty)?.let { compilerLauncher ->
                             arguments += listOf(
                                 "-DCMAKE_C_COMPILER_LAUNCHER=$compilerLauncher",
