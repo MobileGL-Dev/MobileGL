@@ -41,6 +41,7 @@
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #include <MG_Util/Debug/Log.h>
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 
@@ -48,29 +49,60 @@ namespace MobileGL::MG_Remote::Client {
 
     using MG_Pipe::MGPWireOp;
 
-    namespace {
+    // TABLE 3's ROLE SPLIT, AS A RUNTIME CHECK. gMGPipeScreen / gMGPipeContext are PROCESS
+    // globals and under `inproc` the server role is a thread in this same process, so the
+    // apply thread running the server's own backend - the EGL bring-up, InitCapabilities,
+    // the applier - reaches these very emitters. A record published there would be waited
+    // for by the thread that is supposed to apply it: `Fatal{BarrierTimeout,
+    // "ResourceRespecify"}` from `mgl-srv-apply`, thirty seconds into bring-up, which is
+    // exactly how this was found.
+    //
+    // THE ANSWER IS NOT "SUPPRESS THE RECORD" - it is "run the server's own code", because
+    // on that thread this process IS the server and the applier is one call away. It is
+    // the same thing PipeWireCodec does on the decode side, where every arm calls
+    // MGPipeApply* directly and never goes through a table.
+    //
+    // Under `spawn` (P6) the predicate is constantly false in the client process and
+    // constantly true in the server's, so this costs one atomic load and changes nothing.
+    //
+    // NOT in the anonymous namespace, because M5 needs it from MG_Impl/Pipe/PipeFill.cpp too
+    // (its split-only respecify/flush branches must not run on the apply thread). Declared in
+    // WireTables.h.
+    Bool RunsAsTheServerRole() { return Server::ServerLoop::OnApplyThread(); }
 
-        // TABLE 3's ROLE SPLIT, AS A RUNTIME CHECK. gMGPipeScreen / gMGPipeContext are PROCESS
-        // globals and under `inproc` the server role is a thread in this same process, so the
-        // apply thread running the server's own backend - the EGL bring-up, InitCapabilities,
-        // the applier - reaches these very emitters. A record published there would be waited
-        // for by the thread that is supposed to apply it: `Fatal{BarrierTimeout,
-        // "ResourceRespecify"}` from `mgl-srv-apply`, thirty seconds into bring-up, which is
-        // exactly how this was found.
-        //
-        // THE ANSWER IS NOT "SUPPRESS THE RECORD" - it is "run the server's own code", because
-        // on that thread this process IS the server and the applier is one call away. It is
-        // the same thing PipeWireCodec does on the decode side, where every arm calls
-        // MGPipeApply* directly and never goes through a table.
-        //
-        // Under `spawn` (P6) the predicate is constantly false in the client process and
-        // constantly true in the server's, so this costs one atomic load and changes nothing.
-        Bool RunsAsTheServerRole() { return Server::ServerLoop::OnApplyThread(); }
+    namespace {
 
         Uint64 g_emitted = 0;
         Uint64 g_declined = 0;
 
+        // TEARDOWN REFUSAL (codex 4). ClientSession::Stop marks the routed tables uninstalled
+        // BEFORE it frees the rings, the segments and the transport - so the window between then
+        // and the moment the monolith adapters go back is one in which a routed GL-thread call
+        // must not run the applier on the caller (the forbidden path table 3 draws) and must not
+        // reach a half-freed ring. Round 2 reinstalled the monolith adapters at the top of Stop,
+        // which is exactly running the applier on the caller; a routed mutation after
+        // UninstallClientWireTables() moved no wire ordinal and never refused (the cross-family
+        // verifier reproduced it). So Uninstall now RAISES THIS FLAG and leaves the wire rows in
+        // place; RequireSession below reads it and refuses by name before it touches anything.
+        // Atomic because the apply thread's own role check races a GL-thread teardown.
+        std::atomic<Bool> g_clientTablesUninstalled{false};
+
         ClientSession& RequireSession(const char* row) {
+            // BEFORE the session lookup and before any ring access. A routed call that arrives
+            // once Stop has begun tearing the session down is refused by name rather than run
+            // on the caller's thread - the applier is server-exclusive (table 3), and a wire
+            // emit into a ring being freed is a use-after-free. The monolith adapters are put
+            // back only as the LAST step of teardown, for the at-exit ~BufferObject deletes that
+            // legitimately reach a process with no session (see ReinstallMonolithAfterTeardown).
+            if (g_clientTablesUninstalled.load(std::memory_order_acquire)) {
+                MGLOG_F("MGPipe: Fatal{ClientTablesUninstalled, \"%s\"} - a routed call reached the "
+                        "client wire tables while ClientSession::Stop was tearing the session "
+                        "down. R-4/R-17: the applier is server-exclusive and the rings this emit "
+                        "would use are being freed, so the call is refused by name rather than run "
+                        "on the caller",
+                        row);
+                std::abort();
+            }
             ClientSession* session = ClientSession::Active();
             if (session == nullptr) {
                 MGLOG_F("MGPipe: Fatal{NoClientSession, \"%s\"} - the client wire tables are "
@@ -173,7 +205,6 @@ namespace MobileGL::MG_Remote::Client {
         MGP_WIRE_BLOB(CreateRenderState, MGPRenderStateDesc, Blob)
         MGP_WIRE_BLOB(CreateVertexElements, MGPVertexElements, Blob)
         MGP_WIRE_BLOB(CreateSamplerState, MGPSamplerDesc, Parameters)
-        MGP_WIRE_BLOB(SetDynamicState, MGPDynamicState, Blob)
         MGP_WIRE_BLOB(SetGlobalConstants, MGPGlobalConstants, Blob)
 
         // -- context, variable tail ---------------------------------------------------
@@ -188,6 +219,33 @@ namespace MobileGL::MG_Remote::Client {
 #undef MGP_WIRE_TAIL
 
         // -- the rows that fit none of the three shapes --------------------------------
+
+        // set_dynamic_state. AN OPTIONAL BLOB, NOT A MANDATORY ONE (round-2 regression, the
+        // census's Fatal{BlobMissing, "SetDynamicState"}). EmitRenderState (PipeFill.cpp:2405-
+        // 2421) sends a set_dynamic_state whenever the RenderState VERSION moved, and when the
+        // chunk-level suppressor finds NO dynamic chunk changed it sends the 32-byte header with
+        // ChunkMask == 0 and blobByteCount == 0 - a version-only update, which the comment there
+        // calls out as deliberate. The generic MGP_WIRE_BLOB wrapper stages through StageRequired,
+        // which Fatals on a zero count, so a legal header-only update aborted the process with a
+        // blob-shape complaint that had nothing to do with the actual state of the pipe. The
+        // DECODER already handles it: PipeWireCodec.cpp:1571-1587 takes the `ChunkMask == 0` arm
+        // (CheckBlobIsHonest, no blob resolved) and applies the header alone. So the emitter is
+        // the only side that was wrong; it stages OPTIONALLY, exactly like the two sub-data rows.
+        // A non-empty mask still stages (blobByteCount > 0), so the reduced-path scenarios, whose
+        // first draw is freshly primed with every chunk, are byte-for-byte unchanged.
+        void Wire_SetDynamicState(const MG_Pipe::MGPDynamicState* payload, const void* blobBytes,
+                                  Uint64 blobByteCount) {
+            if (RunsAsTheServerRole()) {
+                MG_Pipe::MGPipeMonolithContext().SetDynamicState(payload, blobBytes, blobByteCount);
+                return;
+            }
+            ClientSession& session = RequireSession("SetDynamicState");
+            MG_Pipe::MGPDynamicState record = *payload;
+            record.Blob = StageOptional(session, blobBytes, blobByteCount);
+            session.EmitAndWait(MGPWireOp::SetDynamicState, &record, sizeof(record), nullptr, 0,
+                                nullptr, 0, nullptr);
+            ++g_emitted;
+        }
 
         // set_residual_value_state. CONTRACT-P5 table 1 row 6: the applier takes a frontend
         // `ResidualValueBlock&` and `MGPResidualValueState` is never instantiated on the live
@@ -338,6 +396,17 @@ namespace MobileGL::MG_Remote::Client {
                                     0, nullptr, 0, &status);
             (void)seq;
             ++g_emitted;
+            // ERROR IS NOT A DECLINE (M4 / codex 5 / R-5). status is 0 OK / 1 DECLINED / 2 ERROR;
+            // an escape may not fold 2 into `false`, which is what a bare `return status == 0`
+            // did - a transport fault then read as "the server said no". Every reply-owning row
+            // - the generated acceptance rows through MGPipeTakeReplyBool, and now these two
+            // escapes - answers ERROR with the same named Fatal.
+            if (status == 2) {
+                MGLOG_F("MGPipe: Fatal{ReplyError, \"resource_respecify\"} - the row answered "
+                        "ERROR, which is not an acceptance answer; folding it into accepted or "
+                        "refused would make a transport fault look like a resource decision");
+                std::abort();
+            }
             if (status == 1) ++g_declined;
             return status == 0;
         }
@@ -376,6 +445,15 @@ namespace MobileGL::MG_Remote::Client {
             session.EmitAndWait(MGPWireOp::MapPersistent, handle, sizeof(*handle), nullptr, 0,
                                 nullptr, 0, &status);
             ++g_emitted;
+            // ERROR IS NOT A DECLINE (M4 / codex 5 / R-5), the same rule the respecify escape and
+            // the generated acceptance rows obey: status 2 is a transport fault, and returning
+            // nullptr for it would make it indistinguishable from R-6's legitimate decline.
+            if (status == 2) {
+                MGLOG_F("MGPipe: Fatal{ReplyError, \"map_persistent\"} - the row answered ERROR, "
+                        "which is not an acceptance answer; a transport fault is not a resource "
+                        "decision and may not be folded into the decline R-6 predicts");
+                std::abort();
+            }
             if (status == 1) ++g_declined;
             // NOT "always nullptr": the answer is READ. R-6 says the server declines, and the
             // day it stops declining this returns what it actually said rather than what the
@@ -436,6 +514,12 @@ namespace MobileGL::MG_Remote::Client {
     void InstallClientWireTables() {
         using namespace MG_Pipe;
 
+        // A fresh install means the routed tables are live again: a Start after a previous
+        // session's Stop clears the teardown-refusal flag so its own routed calls are not
+        // refused. (Stop already puts the monolith adapters back and clears the flag; this is
+        // the belt to that braces.)
+        g_clientTablesUninstalled.store(false, std::memory_order_release);
+
         gMGPipeScreen.ResourceCreate = &Wire_ResourceCreate;
         gMGPipeScreen.ResourceDestroy = &Wire_ResourceDestroy;
         gMGPipeScreen.UnmapPersistent = &Wire_UnmapPersistent;
@@ -480,11 +564,28 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     void UninstallClientWireTables() {
-        // PUTS THE MONOLITH ARM BACK rather than nulling the rows. A null row is the
-        // pre-migration state and would be an immediate crash with no diagnostic at whatever
-        // GL call raced the teardown; the monolith adapter is at least a correct answer for a
-        // process that no longer has a session.
+        // MARK THE ROUTED TABLES UNINSTALLED (codex 4). It does NOT reinstall the monolith
+        // adapters, and that is the whole fix: round 2 reinstalled them here, at the TOP of
+        // Stop, so a routed GL-thread call arriving during teardown ran the applier on the
+        // caller - the forbidden path - and moved no wire ordinal, with no refusal. Raising the
+        // flag leaves the Wire_* rows in place; the next routed call reaches RequireSession,
+        // reads the flag and aborts by name (Fatal{ClientTablesUninstalled}) before it touches a
+        // ring that Stop is about to free. The monolith adapters are put back only once teardown
+        // is complete, by ReinstallMonolithAfterTeardown, for the at-exit deletes that reach a
+        // process with no session at all. Idempotent: safe to call when nothing was installed.
+        g_clientTablesUninstalled.store(true, std::memory_order_release);
+    }
+
+    void ReinstallMonolithAfterTeardown() {
+        // THE LAST STEP OF ClientSession::Stop, after the rings, segments and transport are gone
+        // and the apply thread has joined. Now a routed call can only be a process that no
+        // longer has a session - the canonical case is ~BufferObject running from an exit
+        // handler (ID-8) - and the monolith adapter, which runs the applier synchronously, is
+        // the correct answer for it, exactly as it is in a pure-monolith build. Clearing the
+        // flag re-enables the (now monolith) rows. A null row here would be an undiagnosed crash
+        // at whatever GL call an exit handler makes; the applier is a defined no-op-or-apply.
         MG_Pipe::MGPipeInstallMonolithTables();
+        g_clientTablesUninstalled.store(false, std::memory_order_release);
     }
 
     Uint64 ClientWireRecordsEmitted() { return g_emitted; }

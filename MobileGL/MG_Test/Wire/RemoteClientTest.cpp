@@ -37,6 +37,7 @@
 #include <MG_Remote/Transport/ReplySlot.h>
 #include <MG_Pipe/PipeRoute.h>
 #include <MG_Remote/Client/EmitTables.h>
+#include <MG_Remote/Client/WireTables.h>
 
 #if !defined(_WIN32)
 #include <csignal>
@@ -521,6 +522,39 @@ TEST(RemoteReadback, TheTightRowsAreScatteredWhereThePackStateSaysAndTheGapsAreL
                                         "reply carried";
 }
 
+TEST(RemoteReadback, PackSkipImagesIsIgnoredForATwoDimensionalRead) {
+    // codex 6: SKIP_IMAGES (and IMAGE_HEIGHT) are image-level pack parameters and GL ignores
+    // them for glReadPixels, a 2-D read - the monolith conversion path says so with
+    // honorPackImageParams=false (DirectGLES.cpp:10905). The first cut applied SKIP_IMAGES as a
+    // whole-image offset: a 4x3 RGBA8 read with SKIP_IMAGES=1 wrote bytes 48..95 of a 96-byte
+    // destination sized for one image, overrunning it. With the fix the reply lands at bytes
+    // 0..47 and the second image's worth of bytes keeps its sentinel.
+    constexpr Uint64 kBpp = 4;
+    constexpr GLsizei kW = 4;
+    constexpr GLsizei kH = 3;
+    constexpr Uint8 kSentinel = 0xEE;
+
+    PixelStoreParameters pack{};
+    pack.SkipImages = 1;      // the parameter under test
+    pack.ImageHeight = kH;    // and its companion; both must be ignored
+
+    std::vector<Uint8> tight(static_cast<size_t>(kW) * kH * kBpp);
+    for (size_t i = 0; i < tight.size(); ++i) tight[i] = static_cast<Uint8>(i + 1);
+
+    std::vector<Uint8> destination(96, kSentinel);
+    ScatterTightReadbackIntoPackState(tight.data(), destination.data(), kW, kH, kBpp, pack);
+
+    for (size_t i = 0; i < tight.size(); ++i)
+        EXPECT_EQ(destination[i], tight[i]) << "byte " << i << " should hold the reply at offset 0";
+    for (size_t i = tight.size(); i < destination.size(); ++i)
+        EXPECT_EQ(destination[i], kSentinel)
+            << "byte " << i << " is past the read's own extent and SKIP_IMAGES must not have moved "
+               "the write there";
+    // And the fast path takes it: an otherwise-neutral read with only SKIP_IMAGES set is tight.
+    EXPECT_TRUE(ReadbackPackStateIsTightForTest(kW, kBpp, pack))
+        << "SKIP_IMAGES alone must not force the bounce path for a 2-D read";
+}
+
 TEST(RemoteReadback, TheFastPathIsTakenExactlyWhenTheScatterWouldChangeNothing) {
     // EmitReadPixels reads the reply STRAIGHT into the application's pointer when
     // ReadbackPackStateIsTight says so, and pays for a bounce buffer otherwise. That is only
@@ -643,6 +677,120 @@ TEST(PipeRouting, AnErrorStatusIsNotFoldedIntoAcceptedOrRefused) {
     EXPECT_NE(child.Log.find("set_texture_params"), std::string::npos) << child.Log;
 }
 #endif // MGTEST_HAVE_FORK
+
+// =====================================================================================
+// B3 / codex 9: the CLIENT arm's 37 rows are observed, not just the monolith install
+// =====================================================================================
+
+namespace {
+    // How many function-pointer cells of `a` differ from `b`, walked as a block of void* -
+    // the structs ARE their function pointers (PipeCatalogueTest static_asserts that shape). A
+    // routed row that stayed on the monolith adapter reads EQUAL and is not counted, which is
+    // exactly the defect this measures.
+    template <class T>
+    SizeT CountDifferingCells(const T& a, const T& b) {
+        const void* const* pa = reinterpret_cast<const void* const*>(&a);
+        const void* const* pb = reinterpret_cast<const void* const*>(&b);
+        SizeT n = 0;
+        for (SizeT i = 0; i < sizeof(T) / sizeof(void*); ++i)
+            if (pa[i] != pb[i]) ++n;
+        return n;
+    }
+} // namespace
+
+TEST(PipeRouting, TheInstalledClientArmIsWireAndNotMonolithAndEveryRoutedRowMoved) {
+    // WHAT B3 SAYS IS MISSING. PipeCatalogueTest installs and COUNTS the monolith table, so a
+    // client row that was never overwritten stays non-null and still counts - deleting one
+    // `gMGPipe*.X = &Wire_X` assignment left every gate green (the cross-family verifier
+    // reproduced it: catalogue 32/32, all lanes green). The only thing that catches it is
+    // observing that the CLIENT install actually MOVED each routed row off the monolith adapter.
+    //
+    // The monolith adapters are kept beside the installed tables (MGPipeMonolith*()), so the
+    // client install differs from them at exactly the routed rows and nowhere else. This reads
+    // the pointers back rather than constructing them (R-16): a deleted assignment reads equal.
+    InstallClientWireTables();
+    EXPECT_EQ(static_cast<int>(MGPipeInstalledArm()), static_cast<int>(MGPipeRouteArm::kClientWire))
+        << "InstallClientWireTables did not record the client-wire arm";
+
+    const SizeT movedScreen = CountDifferingCells(gMGPipeScreen, MGPipeMonolithScreen());
+    const SizeT movedContext = CountDifferingCells(gMGPipeContext, MGPipeMonolithContext());
+    EXPECT_EQ(movedScreen + movedContext, 33u)
+        << "exactly the 33 generated routed rows must differ from the monolith adapters; "
+        << movedScreen + movedContext
+        << " did, so a row was left on the monolith adapter (it would run the applier on the GL "
+           "thread under split) or an unrouted row was overwritten";
+
+    const SizeT movedEscapes = CountDifferingCells(gMGPipeRouteEscapes, MGPipeMonolithEscapes());
+    EXPECT_EQ(movedEscapes, 4u)
+        << "the four escape routes must move off the monolith escapes too";
+
+    // Restore the monolith arm for the sibling cases that assert it (and for a clean binary).
+    MGPipeInstallMonolithTables();
+    EXPECT_EQ(static_cast<int>(MGPipeInstalledArm()), static_cast<int>(MGPipeRouteArm::kMonolith));
+}
+
+#if MGTEST_HAVE_FORK
+TEST(PipeRouting, AClientWireRowWithNoSessionRefusesByNameRatherThanApplying) {
+    // THE RUNTIME HALF of B3, and it distinguishes a Wire_* row from the monolith adapter by
+    // BEHAVIOUR: with the client tables installed and no session, a routed call reaches
+    // RequireSession and aborts Fatal{NoClientSession}. The monolith adapter (the deleted-
+    // assignment state) would instead run MGPipeApply* and NOT abort with that string - so the
+    // control goes red the moment a row falls back to monolith.
+    const ChildResult child = RunInChild([] {
+        InstallClientWireTables();
+        MGPHandleOnly handle{};
+        handle.Handle = MGPipeHandle{1, 0};
+        handle.Kind = static_cast<Uint32>(MGPipeKind::Renderbuffer);
+        gMGPipeScreen.ResourceDestroy(&handle); // Wire_ResourceDestroy, no session
+    });
+    EXPECT_TRUE(DiedOfAbort(child)) << DescribeStatus(child) << "\n" << child.Log;
+    EXPECT_NE(child.Log.find("Fatal{NoClientSession, \"ResourceDestroy\"}"), std::string::npos)
+        << "the installed row did not refuse by name; it may be the monolith adapter (B3)\n"
+        << child.Log;
+}
+
+TEST(PipeRouting, ARoutedCallDuringTeardownRefusesByNameNotRunsTheApplier) {
+    // codex 4: UninstallClientWireTables marks the tables uninstalled; a routed call in that
+    // window must abort by name rather than run the applier on the caller. Reverting Uninstall
+    // to reinstall the monolith adapters (round 2's behaviour) makes this call run the applier
+    // and NOT abort with this string - the red-once.
+    const ChildResult child = RunInChild([] {
+        InstallClientWireTables();
+        UninstallClientWireTables();
+        MGPHandleOnly handle{};
+        handle.Handle = MGPipeHandle{1, 0};
+        handle.Kind = static_cast<Uint32>(MGPipeKind::Renderbuffer);
+        gMGPipeScreen.ResourceDestroy(&handle);
+    });
+    EXPECT_TRUE(DiedOfAbort(child)) << DescribeStatus(child) << "\n" << child.Log;
+    EXPECT_NE(child.Log.find("Fatal{ClientTablesUninstalled, \"ResourceDestroy\"}"), std::string::npos)
+        << "a routed call after UninstallClientWireTables ran the applier on the caller instead "
+           "of refusing by name (codex 4)\n"
+        << child.Log;
+}
+#endif // MGTEST_HAVE_FORK
+
+// =====================================================================================
+// M2 / codex 11: a short or non-OK reply is refused, never scattered as pixels
+// =====================================================================================
+
+TEST(RemoteReadback, AReplyIsScatteredOnlyWhenItIsOkAndExactlyTheReadsExtent) {
+    // EmitReadPixels decides on ReadbackReplyIsComplete before it scatters or returns (the Fatal
+    // wording each mode owns is at the call site). Driving the production predicate directly:
+    // only a full OK reply is complete; a short OK reply, and a DECLINE or ERROR with a zero
+    // payload, are not - and those are the shapes that would otherwise spray stale destination
+    // bytes as pixels. `tight` is the read's own DstSize (CONTRACT-P5 row 23).
+    constexpr Int32 kOk = 0, kDeclined = 1, kError = 2;
+    const Uint64 tight = TightReadbackByteCount(4, 3, 0x1908, 0x1401); // 48
+    EXPECT_TRUE(ReadbackReplyIsComplete(kOk, tight, tight)) << "a full OK reply is the only one scattered";
+    EXPECT_FALSE(ReadbackReplyIsComplete(kOk, tight - 16, tight))
+        << "a SHORT OK reply (one row missing) must not be scattered - the missing rows would be "
+           "whatever the destination held";
+    EXPECT_FALSE(ReadbackReplyIsComplete(kDeclined, 0, tight))
+        << "a DECLINED reply carries no pixels";
+    EXPECT_FALSE(ReadbackReplyIsComplete(kError, 0, tight)) << "an ERROR reply carries no pixels";
+    EXPECT_FALSE(ReadbackReplyIsComplete(kOk, 0, tight)) << "an OK reply of zero bytes is not the extent";
+}
 
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;

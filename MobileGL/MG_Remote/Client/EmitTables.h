@@ -147,4 +147,11 @@ namespace MobileGL::MG_Remote::Client {
     Bool ReadbackPackStateIsTightForTest(GLsizei width, Uint64 bytesPerPixel,
                                          const PixelStoreParameters& pack);
 
+    // M2 / codex 11. True exactly when the readback reply is OK and carries the read's own exact
+    // extent (CONTRACT-P5 row 23). EmitReadPixels calls this and Fatals by name when it is false
+    // - a short OK reply, or a DECLINE/ERROR with a zero payload, is refused rather than scattered
+    // as pixels. Exposed so the control drives the production predicate (R-16), not a copy: pass
+    // 0=OK / 1=DECLINED / 2=ERROR as `status`.
+    Bool ReadbackReplyIsComplete(Int32 status, Uint64 replySize, Uint64 expected);
+
 } // namespace MobileGL::MG_Remote::Client

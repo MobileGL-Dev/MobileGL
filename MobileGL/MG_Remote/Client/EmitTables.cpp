@@ -32,6 +32,7 @@
 #include <MG_Util/Debug/Log.h>
 #include <MG_Util/Metrics/TextureMetrics.h>
 
+#include <MG_State/GLState/BufferState/BufferObject.h>
 #include <MG_State/GLState/Core.h>
 
 #include <cstdlib>
@@ -96,7 +97,11 @@ namespace MobileGL::MG_Remote::Client {
         // last clause is what the control checks with a sentinel.
         Bool ReadbackPackStateIsTight(GLsizei width, Uint64 bytesPerPixel,
                                       const PixelStoreParameters& pack) {
-            if (pack.SkipRows != 0 || pack.SkipPixels != 0 || pack.SkipImages != 0) return false;
+            // SKIP_IMAGES (and IMAGE_HEIGHT) are NOT consulted: glReadPixels is a 2-D read and GL
+            // ignores the image-level pack parameters for it, exactly as the monolith conversion
+            // path does at DirectGLES.cpp:10905 (honorPackImageParams=false). A non-zero
+            // SkipImages therefore does not make the layout non-tight (codex 6).
+            if (pack.SkipRows != 0 || pack.SkipPixels != 0) return false;
             if (pack.RowLength != 0 && pack.RowLength != width) return false;
             const Uint64 alignment = pack.Alignment > 0 ? static_cast<Uint64>(pack.Alignment) : 1ull;
             const Uint64 rowBytes = static_cast<Uint64>(width) * bytesPerPixel;
@@ -265,9 +270,62 @@ namespace MobileGL::MG_Remote::Client {
                    ReadbackBytesPerPixel(format, type);
         }
 
+        // M2 / codex 11: the reply the server posted is COMPLETE and OK. A short OK reply, and a
+        // DECLINED or ERROR reply with a zero payload, both leave the destination full of stale
+        // bytes; scattering or returning it is the silently truncated picture ID-47's own comment
+        // says an SSIM comparison cannot see, arriving through the status field rather than
+        // through truncation. `expected` is the record's own DstSize (CONTRACT-P5 row 23: the
+        // reply's exact extent). The predicate is at namespace scope (below) and exposed for the
+        // control, so R-16's "drive the production predicate" holds rather than a second copy of
+        // the rule in the test.
+
+        // The same predicate at the call site, with the named Fatal each failure mode owns.
+        // status > expected cannot reach here: EmitAndWait already aborts Fatal{ReplyTooLarge} on
+        // an oversize reply, so the only failures left are a wrong status or a SHORT one.
+        void RequireReadbackReplyComplete(Int32 status, Uint64 replySize, Uint64 expected) {
+            if (status == Wire::ReplySink::kStatusError) {
+                MGLOG_F("MGPipe: Fatal{ReplyError, \"ReadPixels\"} - the readback answered ERROR; "
+                        "the destination is left untouched rather than filled with stale bytes");
+                std::abort();
+            }
+            if (status == Wire::ReplySink::kStatusDeclined) {
+                MGLOG_F("MGPipe: Fatal{ReadbackDeclined, \"ReadPixels\"} - the server has no "
+                        "GL.ReadPixels and DECLINED; a decline is a real answer for an acceptance "
+                        "row (R-5) but a blocking readback has no pixels to return, so it is a "
+                        "Fatal here rather than a buffer of stale bytes");
+                std::abort();
+            }
+            if (replySize != expected) {
+                MGLOG_F("MGPipe: Fatal{ReadbackReplyShort, \"ReadPixels %llu < %llu\"} - the OK "
+                        "reply carried fewer bytes than the read's own DstSize (CONTRACT-P5 row "
+                        "23's exact extent); the missing rows would otherwise be scattered as "
+                        "whatever the destination held",
+                        static_cast<unsigned long long>(replySize),
+                        static_cast<unsigned long long>(expected));
+                std::abort();
+            }
+        }
+
         void EmitReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
                             GLenum type, void* pixels) {
             ClientSession& session = RequireSession("ReadPixels");
+
+            // ID-57 / M8: A PACK-PBO DESTINATION IS REFUSED BY NAME, BEFORE ANY EMISSION AND
+            // BEFORE `pixels` IS TOUCHED. With GL_PIXEL_PACK_BUFFER bound, the frontend permits
+            // `pixels` to be a byte OFFSET into that buffer, not an address (GL_Framebuffer.cpp:
+            // 3055 aligns it to the type size, one byte for UNSIGNED_BYTE) - and this emitter has
+            // no PBO branch: it sets DstOffset = 0, hands the offset to EmitAndWait as a host
+            // buffer, and the reply is memcpy'd to CPU address <offset>. Under monolith the
+            // backend maps the PBO and writes the reply into the buffer (unchanged). The real
+            // split form - the server writes the reply into the buffer resource and the client
+            // marks it GPU-written (b1's MarkReadPixelsPackBuffer becoming the producer contract
+            // §3 names) - is a P6 ROADMAP item. In P5 it is class C's shape (R-4), refused here.
+            if (MG_State::pGLContext != nullptr &&
+                MG_State::pGLContext->GetBufferBindingSlot(::MobileGL::BufferTarget::PixelPack)
+                    .GetBoundObject()) {
+                UnmigratedVerbFatal("ReadPixels+PACK_BUFFER");
+            }
+
             BeforeReadOnlyVerb();
 
             // THE PBO HALF IS b1's DESIGN AND b1 ALREADY WIRED ITS MARK, at
@@ -275,10 +333,16 @@ namespace MobileGL::MG_Remote::Client {
             // ReadPixels_Backend itself. So this emitter deliberately does NOT call
             // MarkReadPixelsPackBuffer(): a second call there would be the "wire it twice"
             // shape, and the per-row counter b1's unit cases assert on would then count one
-            // read as two.
+            // read as two. (In P5 the refusal above means no PBO read reaches here at all; the
+            // note stays for the P6 form.)
             if (width <= 0 || height <= 0) return;
             const Uint64 bytesPerPixel = ReadbackBytesPerPixel(format, type);
-            const Uint64 tight = static_cast<Uint64>(width) * static_cast<Uint64>(height) * bytesPerPixel;
+            // ONE tight-size function for production AND the control (M3 / codex 10a). The first
+            // cut computed this inline here while the test drove TightReadbackByteCount, so a
+            // `+16` on the production line stayed green - the test observed a different number.
+            // Now the number the server allocates and the number the test asserts come from the
+            // same body.
+            const Uint64 tight = TightReadbackBytes(width, height, format, type);
 
             MG_Pipe::MGPReadbackInfo info{};
             info.Res = MG_Pipe::kMGPipeNullHandle; // "the bound read surface answers"
@@ -312,6 +376,7 @@ namespace MobileGL::MG_Remote::Client {
             }
 
             Int32 status = 0;
+            Uint64 replySize = 0;
             if (ReadbackPackStateIsTight(width, bytesPerPixel, pack)) {
                 // THE COMMON CASE, AND IT KEEPS THE ZERO-COPY. A neutral pack state means the
                 // destination layout IS the tight layout, so the reply lands straight in the
@@ -319,7 +384,11 @@ namespace MobileGL::MG_Remote::Client {
                 // SAME bytes, not a second rule: ScatterTightReadback below is a memcpy of the
                 // whole run in exactly this case, and the control drives that function.
                 session.EmitAndWait(MG_Pipe::MGPWireOp::ReadPixels, &info, sizeof(info), nullptr, 0,
-                                    pixels, tight, &status);
+                                    pixels, tight, &status, &replySize);
+                // M2 / codex 11: an OK reply that arrived short, or a DECLINE/ERROR, must not be
+                // handed back as pixels. The Fatal aborts before the application reads the buffer,
+                // so the bytes EmitAndWait already copied into `pixels` are never observed.
+                RequireReadbackReplyComplete(status, replySize, tight);
                 return;
             }
 
@@ -328,7 +397,10 @@ namespace MobileGL::MG_Remote::Client {
             // level out: nothing here outlives the call.
             Vector<Uint8> bounce(static_cast<SizeT>(tight));
             session.EmitAndWait(MG_Pipe::MGPWireOp::ReadPixels, &info, sizeof(info), nullptr, 0,
-                                bounce.data(), tight, &status);
+                                bounce.data(), tight, &status, &replySize);
+            // BEFORE THE SCATTER, so a short or non-OK reply never reaches the application's
+            // pointer at all (the bounce is the only thing that held the partial bytes).
+            RequireReadbackReplyComplete(status, replySize, tight);
             ScatterTightReadbackIntoPackState(bounce.data(), pixels, width, height, bytesPerPixel,
                                               pack);
         }
@@ -590,6 +662,12 @@ namespace MobileGL::MG_Remote::Client {
         return TightReadbackBytes(width, height, format, type);
     }
 
+    // M2 / codex 11's predicate at namespace scope: the one RequireReadbackReplyComplete decides
+    // on and the one the control drives. 0=OK / 1=DECLINED / 2=ERROR.
+    Bool ReadbackReplyIsComplete(Int32 status, Uint64 replySize, Uint64 expected) {
+        return status == Wire::ReplySink::kStatusOk && replySize == expected;
+    }
+
     // ID-49's scatter. Exported for the same reason as the refusal above: the control drives
     // THIS, which is what the emitter calls, rather than a second copy of 8.4.4's arithmetic.
     void ScatterTightReadbackIntoPackState(const void* tight, void* destination, GLsizei width,
@@ -601,15 +679,21 @@ namespace MobileGL::MG_Remote::Client {
         const Uint64 alignment = pack.Alignment > 0 ? static_cast<Uint64>(pack.Alignment) : 1ull;
         const Uint64 strideBytes =
             ((rowPixels * bytesPerPixel + alignment - 1) / alignment) * alignment;
+        // m6: the client re-derives GL 4.6 8.4.4's pack layout, so it honours GL_PACK_ROW_LENGTH
+        // VERBATIM - including the ill-formed 0 < ROW_LENGTH < width, where the row stride is
+        // narrower than a written row and consecutive rows overlap. GL leaves that case to the
+        // implementation; the client reproduces exactly what the monolith backend's own scatter
+        // would do with the same state rather than clamping, so the two arms stay byte-identical.
+        // The fast path (ReadbackPackStateIsTight) already rejects any ROW_LENGTH != width, so
+        // this only runs on the scatter path the application asked for.
         const Uint64 writtenPerRow = static_cast<Uint64>(width) * bytesPerPixel;
-        // SKIP_IMAGES is in the parameter set and is meaningless for a 2D read, so it is
-        // applied as GL defines it (whole images of ROW_LENGTH x IMAGE_HEIGHT) rather than
-        // ignored - ignoring a non-zero one would silently write over the application's first
-        // image.
-        const Uint64 imageRows =
-            pack.ImageHeight > 0 ? static_cast<Uint64>(pack.ImageHeight) : static_cast<Uint64>(height);
+        // SKIP_IMAGES and IMAGE_HEIGHT ARE IGNORED (codex 6). glReadPixels is a 2-D read; GL
+        // does not apply the image-level pack parameters to it, and the monolith conversion path
+        // says so explicitly with honorPackImageParams=false (DirectGLES.cpp:10905). Applying
+        // SKIP_IMAGES here shifted a read with SKIP_IMAGES=1 by a whole image and overran an
+        // application buffer sized for exactly `height` rows. Only SKIP_ROWS and SKIP_PIXELS -
+        // the 2-D skips - offset the first written byte.
         auto* out = static_cast<Uint8*>(destination) +
-                    static_cast<Uint64>(pack.SkipImages) * imageRows * strideBytes +
                     static_cast<Uint64>(pack.SkipRows) * strideBytes +
                     static_cast<Uint64>(pack.SkipPixels) * bytesPerPixel;
         const auto* in = static_cast<const Uint8*>(tight);

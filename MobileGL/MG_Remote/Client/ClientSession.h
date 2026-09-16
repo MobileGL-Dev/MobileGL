@@ -96,11 +96,17 @@ namespace MobileGL::MG_Remote::Client {
         // name where a kReplySlot answer lands; pass {nullptr, 0} for a call that has none.
         // Returns the record's seq, which is also its reply-slot id.
         //
+        // `replySizeOut` (optional) receives the answer's OWN byte count as the server stamped
+        // it - which is not always `replyBytes`: a short OK reply stamps fewer, and a DECLINE or
+        // ERROR stamps 0. ReadPixels is the one caller that must know, because scattering a
+        // reply that arrived short would spray stale bytes as pixels (M2 / codex 11); it reads
+        // this and refuses `replySize != DstSize` by name rather than trust the copy.
+        //
         // Waiting is spin(MOBILEGL_IPC_SPIN_US) then park, through Doorbell::Wait, with
         // producerParked set before blocking - the shape Doorbell.h:121 already implements.
         Uint64 EmitAndWait(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
                            const void* varTail, Uint64 varTailBytes, void* replyOut,
-                           Uint64 replyBytes, Int32* statusOut);
+                           Uint64 replyBytes, Int32* statusOut, Uint64* replySizeOut = nullptr);
 
         // MOBILEGL_IPC_VERB_BARRIER. False is the R-1 negative control and is EXPECTED to be
         // red; it must be run once and the way it goes red recorded.

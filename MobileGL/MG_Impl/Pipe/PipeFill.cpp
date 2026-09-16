@@ -743,7 +743,18 @@ namespace MobileGL::MG_Pipe {
         // SPLIT-ONLY, and that is load-bearing for G2: under monolith the applier reads
         // `initialBytes` directly and a second upload would be a real behaviour change in the
         // arm the split arm is measured against.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && initialBytes != nullptr) {
+        //
+        // ROLE-AWARE (M5). Under inproc the apply thread reaches this very emitter when the
+        // server's own backend respecifies a buffer (c1-v2 §4 R-17.3: that is where
+        // Fatal{BarrierTimeout, "ResourceRespecify"} from mgl-srv-apply came from). On that
+        // thread this branch would emit CLIENT wire records - which the server role does not
+        // produce, so ClientWireRecordsEmitted() would not move and the self-check below would
+        // abort the SERVER by name; it would also run the respecify(nullptr)+follow-up shape,
+        // giving the server role a path monolith does not have. So the server role takes the
+        // ELSE below, exactly as monolith does. RunsAsTheServerRole() is v1's
+        // ServerLoop::OnApplyThread(), false on the GL thread that owns this fill.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            !MG_Remote::Client::RunsAsTheServerRole() && initialBytes != nullptr) {
             MGPipeRouteResourceRespecify(desc, nullptr);
             // COUNTED, NOT ASSUMED, and this is the only thing that can gate the follow-up at
             // all. Dropping the walk below leaves a respecify that went out with nullptr and
@@ -859,8 +870,11 @@ namespace MobileGL::MG_Pipe {
         //
         // EXACTLY THAT RANGE, not the whole buffer: the flush's own [offset, size) is what
         // the ladder rewrites, and staging more would be the coverage WIDENING ID-37 forbids.
-        // Split-only, for the respecify's G2 reason.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && size != 0) {
+        // Split-only, for the respecify's G2 reason - and ROLE-AWARE for M5's reason, the twin of
+        // the respecify branch above: the apply thread flushing the server's own buffer emits no
+        // client wire records, so it takes the plain route below rather than this split follow-up.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            !MG_Remote::Client::RunsAsTheServerRole() && size != 0) {
             MGPipeEmitResourceSubData(buffer, offset, size);
         }
 #endif
@@ -1510,9 +1524,21 @@ namespace MobileGL::MG_Pipe {
         // Step 1, shared: the wire delete goes out FIRST and only for a PUBLISHED handle, and
         // the latch is cleared with it so a second death path - a composite's two, a backend's
         // redundant notice - cannot emit a second delete for a record that is already gone.
-        Bool EmitDeleteIfPublished(MGPipeKind kind, MGPipeHandle handle, void (*apply)(const MGPHandleOnly&)) {
+        //
+        // `route` IS A MGPipeRoute<Name> AND NEVER A MGPipeApply<Name> (B1). R-17 converted the
+        // 40 direct applier CALLS to route calls by renaming `MGPipeApply<Name>(` -> but these
+        // five sites take the entry point BY ADDRESS, `&MGPipeApply<Name>`, so the call-expression
+        // rename missed them and four routed rows (DeleteSamplerView, DeleteShaderState,
+        // DeleteSamplerState, ResourceDestroy for textures/renderbuffers) still ran the applier
+        // synchronously on the GL thread under split - two writers on g_applier with the barrier
+        // not consulted, and under spawn a silent no-op that leaks every one of those objects.
+        // The parameter type is the route's, which is byte-identical to the applier's
+        // (const MGPHandleOnly&, void return), so the fix is `&MGPipeRoute<Name>` at the five call
+        // sites; the grep gate scripts/../p5-c1 redcheck refuses any `&MGPipeApply` under MG_Impl/.
+        Bool EmitDeleteIfPublished(MGPipeKind kind, MGPipeHandle handle,
+                                   void (*route)(const MGPHandleOnly&)) {
             if (!MGPipeHandleIsPublished(kind, handle)) return false;
-            apply(HandleOnly(kind, handle));
+            route(HandleOnly(kind, handle));
             MGPipeNoteHandleUnpublished(kind, handle);
             return true;
         }
@@ -1533,7 +1559,7 @@ namespace MobileGL::MG_Pipe {
         const MGPipeHandle handle =
             MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerViewCso, lifetimeId);
         const Bool published =
-            EmitDeleteIfPublished(MGPipeKind::SamplerViewCso, handle, &MGPipeApplyDeleteSamplerView);
+            EmitDeleteIfPublished(MGPipeKind::SamplerViewCso, handle, &MGPipeRouteDeleteSamplerView);
         ForwardWhenWired<kMGPipeWiredSamplerSubsystem>(
             MGPipeSamplerEmitterInstance(), [&](auto& emitter) { emitter.NoteRecordDestroyed(handle); });
         // THE NOTICE IS RAISED FOR THIS KIND TOO, and the reason it once was not is wrong:
@@ -1554,7 +1580,7 @@ namespace MobileGL::MG_Pipe {
     Bool MGPipeEmitTextureDestroyAndFree(Uint64 lifetimeId) {
         const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, lifetimeId);
         const Bool published =
-            EmitDeleteIfPublished(MGPipeKind::Texture, handle, &MGPipeApplyResourceDestroy);
+            EmitDeleteIfPublished(MGPipeKind::Texture, handle, &MGPipeRouteResourceDestroy);
         // The emitter retires its entry while the handle still resolves (C-2): the drain list
         // drops the dead texture's levels, the raw pointer goes, the built-in sampler's cache
         // reference is given back, the latches and the sticky mask are cleared.
@@ -1595,7 +1621,7 @@ namespace MobileGL::MG_Pipe {
         const MGPipeHandle handle =
             MGPipeSlots().FindByLifetimeId(MGPipeKind::Renderbuffer, lifetimeId);
         const Bool published =
-            EmitDeleteIfPublished(MGPipeKind::Renderbuffer, handle, &MGPipeApplyResourceDestroy);
+            EmitDeleteIfPublished(MGPipeKind::Renderbuffer, handle, &MGPipeRouteResourceDestroy);
         ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
             MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.NoteRenderbufferDied(handle); });
         NotifyAndFree(MGPipeKind::Renderbuffer, lifetimeId, handle);
@@ -1632,7 +1658,7 @@ namespace MobileGL::MG_Pipe {
         const MGPipeHandle handle =
             MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerCso, lifetimeId);
         const Bool published =
-            EmitDeleteIfPublished(MGPipeKind::SamplerCso, handle, &MGPipeApplyDeleteSamplerState);
+            EmitDeleteIfPublished(MGPipeKind::SamplerCso, handle, &MGPipeRouteDeleteSamplerState);
         // NOTHING TO RETIRE IN AN EMITTER FOR THIS KIND, stated rather than implied: a sampler
         // CSO is content-addressed and belongs to a value, so no emitter keeps an entry under
         // a SamplerObject's handle - the cache's entries are keyed by value and reference
@@ -1653,7 +1679,7 @@ namespace MobileGL::MG_Pipe {
         const MGPipeHandle handle =
             MGPipeSlots().FindByLifetimeId(MGPipeKind::ShaderCso, lifetimeId);
         const Bool published =
-            EmitDeleteIfPublished(MGPipeKind::ShaderCso, handle, &MGPipeApplyDeleteShaderState);
+            EmitDeleteIfPublished(MGPipeKind::ShaderCso, handle, &MGPipeRouteDeleteShaderState);
         ForwardWhenWired<kMGPipeWiredProgramSubsystem>(
             MGPipeProgramEmitterInstance(), [&](auto& emitter) { emitter.NoteRecordDestroyed(handle); });
         NotifyAndFree(MGPipeKind::ShaderCso, lifetimeId, handle);

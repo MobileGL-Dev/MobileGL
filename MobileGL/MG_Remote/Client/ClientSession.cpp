@@ -576,12 +576,17 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     void ClientSession::Stop() {
-        // FIRST, BEFORE ANYTHING ELSE GOES AWAY (R-17). Every later step here frees something
-        // an emitter dereferences - the rings, the segments, the transports - so a GL call
-        // that arrives during teardown must already be looking at the monolith arm. Putting
-        // the monolith adapters back rather than nulling the rows is deliberate: a null row is
-        // the pre-migration state and would be an undiagnosed crash, and the adapter is a
-        // correct answer for a process that no longer has a session.
+        // FIRST, BEFORE ANYTHING ELSE GOES AWAY (R-17 / codex 4). Every later step here frees
+        // something an emitter dereferences - the rings, the segments, the transports - so a
+        // routed GL-thread call that arrives during teardown must not run the applier on the
+        // caller and must not reach a half-freed ring. Round 2 reinstalled the monolith adapters
+        // HERE, which is running the applier on the caller - the forbidden path table 3 draws.
+        // Uninstall now RAISES A FLAG and leaves the wire rows in place; the next routed call
+        // aborts by name (Fatal{ClientTablesUninstalled}) inside RequireSession before it touches
+        // anything. The monolith adapters go back only at the END of teardown
+        // (ReinstallMonolithAfterTeardown), for the at-exit ~BufferObject deletes that reach a
+        // process with no session at all - and by then the rings are gone, so the applier a
+        // monolith adapter runs is a defined no-op rather than a use-after-free.
         UninstallClientWireTables();
         if (!m_started) {
             // Start's own failure paths land here with a half-built session. FIVE of them are
@@ -599,6 +604,9 @@ namespace MobileGL::MG_Remote::Client {
             m_clientTransport.reset();
             m_serverTransport.reset();
             m_transport = nullptr;
+            // The rings are gone; put the monolith adapters back for a process that will make no
+            // more routed calls except, possibly, at-exit deletes (codex 4).
+            ReinstallMonolithAfterTeardown();
             return;
         }
 
@@ -655,6 +663,12 @@ namespace MobileGL::MG_Remote::Client {
         if (g_active == this) {
             g_active = nullptr;
         }
+        // AND ONLY NOW the monolith adapters go back (codex 4): every ring an emitter would have
+        // used is freed above, so from here a routed call - an at-exit ~BufferObject delete - runs
+        // the applier exactly as it does under monolith, which is the correct answer for a
+        // process that no longer has a session. During the whole span above, the raised flag made
+        // any routed call abort by name instead.
+        ReinstallMonolithAfterTeardown();
     }
 
     Wire::PipeWireEncoder& ClientSession::Encoder() { return m_encoder; }
@@ -673,8 +687,9 @@ namespace MobileGL::MG_Remote::Client {
     // "always accept" is ID-39's 66 lost DirectVulkan uploads with a wire in between.
     Uint64 ClientSession::EmitAndWait(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
                                       const void* varTail, Uint64 varTailBytes, void* replyOut,
-                                      Uint64 replyBytes, Int32* statusOut) {
+                                      Uint64 replyBytes, Int32* statusOut, Uint64* replySizeOut) {
         if (statusOut != nullptr) *statusOut = Wire::ReplySink::kStatusError;
+        if (replySizeOut != nullptr) *replySizeOut = 0;
         if (!m_started) {
             MGLOG_F("MGPipe: Fatal{NoClientSession, \"%s\"} - EmitAndWait on a session that has "
                     "not started. There is no fall-through: a record that could not be emitted "
@@ -735,9 +750,15 @@ namespace MobileGL::MG_Remote::Client {
         if (wait == Transport::SessionWait::ShutDown) {
             // The doorbell died: the server went away. The only thing that returns from a
             // kWaitForever park, and therefore the only way a client blocked in the barrier
-            // survives a server that is gone. Not a Fatal - teardown legitimately reaches here.
+            // survives a server that is gone. It is teardown, not a server fault - so the answer
+            // handed back is DECLINED, not the ERROR the status was pre-set to (M4): a
+            // reply-owning row that saw ERROR here would abort Fatal{ReplyError} on a shutting-
+            // down session, which is what the "teardown legitimately reaches here" comment
+            // promised would NOT happen. DECLINED is honest - "the verb did not happen" - and the
+            // acceptance rows already treat it as `false` / nullptr without aborting.
+            if (statusOut != nullptr) *statusOut = Wire::ReplySink::kStatusDeclined;
             MGLOG_E("MG_Remote client: the barrier for %s (seq %llu) woke on a dead doorbell; the "
-                    "server is gone and this verb did not happen",
+                    "server is gone and this verb did not happen (reported as DECLINED, not ERROR)",
                     Wire::WireOpName(op), static_cast<unsigned long long>(seq));
             return seq;
         }
@@ -770,6 +791,7 @@ namespace MobileGL::MG_Remote::Client {
             std::abort();
         }
         if (statusOut != nullptr) *statusOut = status;
+        if (replySizeOut != nullptr) *replySizeOut = replySize;
         if (status == Wire::ReplySink::kStatusError) {
             MGLOG_E("MG_Remote client: %s (seq %llu) answered ERROR", Wire::WireOpName(op),
                     static_cast<unsigned long long>(seq));

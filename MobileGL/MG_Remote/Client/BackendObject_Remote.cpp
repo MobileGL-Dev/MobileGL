@@ -210,7 +210,25 @@ namespace MobileGL::MG_Remote::Client {
         // InitCapabilities' answer comes from a snapshot the server can only publish once its
         // own InitCapabilities has run - and ServerMakeEGLCurrent is what publishes it.
         if (!Server::ServerMakeEGLCurrent(dpy, draw, read, ctx)) return false;
-        return MG_Backend::BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
+        if (!MG_Backend::BackendObject::MakeEGLCurrent(dpy, draw, read, ctx)) return false;
+
+        // R-12 ARM (a) ON EVERY SUCCESSFUL MAKE-CURRENT (codex 12). ServerMakeEGLCurrent above
+        // republishes the caps snapshot on every call (ServerLoop.cpp:613-628), but the base
+        // class only runs InitCapabilities - the one place that pumps and refreshes - on the
+        // FIRST make-current per surface (BackendObject.cpp:341-347). A repeated make-current
+        // onto an already-initialised surface therefore left the client mirror one generation
+        // behind while unpumped snapshots accumulated, so a cap getter or a shader compile before
+        // the next Present read the prior mirror. Adopting here closes that: "a second snapshot
+        // arrival IS the invalidation" (R-12) now holds AT the make-current that caused it. It is
+        // idempotent - on the first make-current InitCapabilities already pumped, so this adopts
+        // 0 - and a release-current (draw/ctx cleared) publishes nothing and is skipped.
+        if (draw != EGL_NO_SURFACE && ctx != EGL_NO_CONTEXT) {
+            if (ClientSession* session = ClientSession::Active()) {
+                session->PumpControlPlane();
+                RefreshFormatCapabilities();
+            }
+        }
+        return true;
     }
 
     Bool BackendObject_Remote::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
@@ -246,5 +264,19 @@ namespace MobileGL::MG_Remote::Client {
         Server::ServerReleaseEGLResources();
         MG_Backend::BackendObject::ReleaseEGLResources();
     }
+
+    // NO strong CreateRemoteBackendObject() lives here, and the reason is a link fact, not an
+    // oversight. v1's Init.cpp calls MG_Remote::Client::CreateRemoteBackendObject() and ships a
+    // __attribute__((weak)) placeholder for it beside ServerLoop that aborts by name; its comment
+    // expects "c1's strong definition [to] displace it at link time". A strong definition here
+    // does NOT: libMobileGL is linked from a static archive, ServerLoop.o (weak) is already in
+    // the link and satisfies Init's reference, and nothing else references this TU's
+    // CreateRemoteBackendObject - so BackendObject_Remote.o is never pulled to override it, and
+    // the weak's abort fires (measured: readelf shows one local symbol, the log shows
+    // Fatal{UnimplementedRemoteBackendObject}). The integrator's Init.cpp hunk works because it
+    // constructs BackendObject_Remote DIRECTLY (MakeUnique<BackendObject_Remote>), which both
+    // references this object - forcing its TU into the link - and bypasses the weak symbol. So
+    // the merge-time construction stays v1's Init.cpp edit (or a --whole-archive / forced
+    // reference the integrator adds); see c1-v3.md.
 
 } // namespace MobileGL::MG_Remote::Client

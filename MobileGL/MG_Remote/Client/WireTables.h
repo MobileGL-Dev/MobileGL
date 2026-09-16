@@ -43,19 +43,45 @@ namespace MobileGL::MG_Remote::Client {
     // gMGPipeRouteEscapes and records the arm. Idempotent.
     void InstallClientWireTables();
 
-    // Puts the monolith adapters back. Idempotent; safe to call when nothing was installed.
+    // Marks the routed tables uninstalled so a routed call refuses by name
+    // (Fatal{ClientTablesUninstalled, "<row>"}) rather than running the applier on the caller
+    // (codex 4). It does NOT restore the monolith adapters - that is ReinstallMonolithAfterTeardown
+    // below, run only once the session's rings are freed. Idempotent.
     void UninstallClientWireTables();
 
-    // How many records the thirty-seven emitters have published. This is t1's FOURTH arming
-    // fact - "the client encoder's record ordinal actually moving during the case" - counted
-    // at the only place that can count it, and it is deliberately NOT the encoder's EmitSeq:
-    // EmitSeq moves for the five class-B verbs too, so a lane that armed on it would arm on a
-    // Clear and call the resource path proven.
+    // The LAST step of ClientSession::Stop: after the rings, segments and transport are gone,
+    // puts the monolith adapters back and clears the refusal flag, so the at-exit ~BufferObject
+    // deletes that reach a process with no session run the applier as they do under monolith.
+    void ReinstallMonolithAfterTeardown();
+
+    // How many records the thirty-seven emitters have published. It counts the ROUTED rows
+    // only - a resource_create, a set_vertex_buffers, a create_shader_state - and never the
+    // five class-B verbs, so it is the one number that says "the resource/CSO/state path really
+    // ran" as opposed to "a Clear crossed".
+    //
+    // WHAT IT IS NOT (M7, corrected). This is NOT what arms the split lane. WireTables.h round 2
+    // claimed it was "t1's FOURTH arming fact", and that was wrong: the harness reads the
+    // encoder's EmitSeq (Harness/SplitRuntimePeek.cpp:50, Harness/ScenarioFixture.h:85), which
+    // moves for the class-B verbs too. So an armed Clear-only lane is green on EmitSeq while this
+    // counter stays 0. Making the harness read THIS instead is t1's file (SplitRuntimePeek), so
+    // the honest statement is the one here: c1 counts the routed ordinal at the only place that
+    // can, PipeFill's InitialBytesNotCarried self-check reads it (PipeFill.cpp:755), and the
+    // lane's own arming remains EmitSeq until t1 re-points it. c1-v3.md M7 has the full note.
     Uint64 ClientWireRecordsEmitted();
 
     // How many of those were refused by the server, by acceptance row. Counted rather than
     // inferred, R-8's rule one level out.
     Uint64 ClientWireRecordsDeclined();
+
+    // TRUE ON THE SERVER ROLE's OWN THREAD (the apply thread), false everywhere else. It is
+    // v1's ServerLoop::OnApplyThread(), exposed here because it is table 3's role split made
+    // into one predicate and TWO packages read it: the wire emitters below (a routed call that
+    // finds itself on the apply thread runs the monolith adapter, because on that thread this
+    // process IS the server), and MG_Impl/Pipe/PipeFill.cpp's split-only respecify/flush
+    // branches (M5: those branches emit CLIENT wire records and must not run on the server's
+    // apply thread, which produces none - the InitialBytesNotCarried self-check would abort the
+    // server otherwise). Declared here so PipeFill does not have to include a server header.
+    Bool RunsAsTheServerRole();
 
 } // namespace MobileGL::MG_Remote::Client
 
