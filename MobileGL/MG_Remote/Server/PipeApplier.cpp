@@ -14,7 +14,10 @@
 
 #include <Config.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
+#include <MG_Pipe/PipeApply.h>
+#include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Debug/Log.h>
+#include <MG_Util/Metrics/TextureMetrics.h>
 
 #include <cstdlib>
 #include <cstring>
@@ -148,10 +151,18 @@ namespace MobileGL::MG_Remote::Server {
         if (table->Present == nullptr) return false;
         // Present is the ONLY frame-boundary drain the backend has (DirectGLES.cpp:12424-12470:
         // the fence poll, the four ring OnPresent hooks, TrimBufferPool, PipeStats::OnPresent),
-        // which is why ARCHITECTURE.md:531 insists present <-> eglSwapBuffers stays strictly
-        // 1:1. It is NOT eglSwapBuffers itself: the swap is the client's EGL call and crosses
-        // as the SwapEGLBuffers control request, which runs Present on this thread through this
-        // same table. Both paths therefore end here and the 1:1 is structural.
+        // which is why ARCHITECTURE.md:531 wants present <-> eglSwapBuffers to stay 1:1.
+        //
+        // m-1: THAT 1:1 IS A CONVENTION c1 UPHOLDS, NOT A STRUCTURAL GUARANTEE, and the earlier
+        // claim that it was structural is wrong. This Present() is reached ONLY from a present
+        // RECORD (ServerVerbSink::OnPresent). ServerSwapEGLBuffers does NOT reach it - it calls
+        // backend->SwapEGLBuffers -> BackendObject::SwapEGLBuffers -> eglSwapBuffers, and never
+        // Present() - so the two paths do NOT both end here. The frame count staying in step with
+        // the swap count rests entirely on c1 emitting exactly one present record per swap;
+        // nothing here compares Presents() to a swap count. If that drifts, the frame fence and
+        // TrimBufferPool's recycle watermark stop tracking frames - which is the reason the 1:1
+        // was wanted, recorded here so a future swap-without-present is looked for rather than
+        // assumed impossible. Presents() is exposed for a lane that wants to make the comparison.
         table->Present();
         ++m_presents;
         // FrameSerial 0 means "the server stamps its own" (c1-v1 8.3): P5 has no client-side
@@ -184,19 +195,75 @@ namespace MobileGL::MG_Remote::Server {
             replies->PostReply(seq, Wire::ReplySink::kStatusError, nullptr, 0);
             return false;
         }
-        // THE CLIENT DECLARES THE BYTE COUNT AND THE SERVER DOES NOT RECOMPUTE IT. DstSize is
-        // sized on the client from the same GL_PACK_* state the frontend owns, and it is what
-        // the client will read back out of the slot; a server that recomputed from Box x
-        // Format x Type would be a SECOND opinion about a pack alignment the client half owns,
-        // and the two disagreeing is a short read with plausible pixels in it.
-        if (info.DstSize > m_readbackScratch.size()) {
-            m_readbackScratch.resize(static_cast<SizeT>(info.DstSize));
+        // ID-49: THE REPLY CROSSES TIGHT AND PACK STATE NEVER CROSSES FOR A READ. The server reads
+        // with NEUTRAL pack state - ROW_LENGTH 0, SKIP_ROWS/PIXELS/IMAGES 0, ALIGNMENT 1 - into a
+        // w*h*bytesPerPixel extent that IS the reply payload, and restores the pack state
+        // afterwards; the CLIENT scatters those tight rows into the application's pointer per its
+        // own GL_PACK_* state (c1's half). Reading with the client's pack state HERE was the
+        // codex-1 blocker: the backend's ReadPixels honours ROW_LENGTH/SKIP_* and writes PAST a
+        // DstSize the client sized without the initial skip (a 4x3 RGBA8 read with ROW_LENGTH=8,
+        // SKIP_ROWS=1, SKIP_PIXELS=2 allocates 80 and lands its last write at 120), which is the
+        // two DepthReadbackHonoursThePackPixelStoreParameters SEGFAULTs the census omitted. THE
+        // DstSize FORMULA BOTH SIDES AGREE ON: w * h * bytesPerPixel. A non-default server-visible
+        // pack state can no longer change either the reply's size or its bytes.
+        const SizeT bytesPerPixel = MG_Util::GetInputBytesPerPixel(
+            MG_Util::ConvertGLEnumToTextureInputFormat(static_cast<GLenum>(info.Format)),
+            MG_Util::ConvertGLEnumToTexturePixelDataType(static_cast<GLenum>(info.Type)));
+        // Tight size = w*h*bpp, the whole of ID-49's formula. If this build cannot size the
+        // (format, type) pair (bpp == 0) it trusts the client's DstSize - a neutral read still
+        // cannot overflow it via row length or skips, and an unsizeable pair is c1's
+        // Fatal{UnsizedReadback} at emission, not this side's.
+        const Uint64 tight = bytesPerPixel != 0
+                                 ? static_cast<Uint64>(info.Box.W) * static_cast<Uint64>(info.Box.H) *
+                                       static_cast<Uint64>(bytesPerPixel)
+                                 : info.DstSize;
+        if (bytesPerPixel != 0 && tight != info.DstSize) {
+            // Both halves compute w*h*bpp under ID-49, so a disagreement is the two sides
+            // disagreeing about the frame. Read (and post) the tight extent this side owns rather
+            // than the client's number, so a wrong DstSize can never make this a short read into
+            // uninitialised scratch.
+            MGLOG_E_ONCE("MG_Remote server: read_pixels DstSize %llu != tight w*h*bpp %llu "
+                         "(%ux%u, bpp %zu); reading the tight extent (ID-49)",
+                         static_cast<unsigned long long>(info.DstSize),
+                         static_cast<unsigned long long>(tight), info.Box.W, info.Box.H,
+                         bytesPerPixel);
         }
+        if (tight > m_readbackScratch.size()) {
+            m_readbackScratch.resize(static_cast<SizeT>(tight));
+        }
+
+        // Save the server-visible pack state, force neutral for the read, restore. Both go through
+        // the applier's own set_pixel_pack_state entry point (MGPipeApplySetPixelPackState writes
+        // gPipeInputs.m_pixelStore[0], which the backend's ReadPixels reads via
+        // MGB_CTX->GetPixelStoreParameters); the read is synchronous on this thread, so the window
+        // in which the pack state is neutral does not outlive the call.
+        const MG_Pipe::PixelStoreParameters savedPack =
+            MG_Pipe::gPipeInputs.GetPixelStoreParameters(/*isUnpack=*/false);
+        MG_Pipe::MGPPixelPackState neutralPack{};
+        neutralPack.Pack.RowLength = 0;
+        neutralPack.Pack.SkipRows = 0;
+        neutralPack.Pack.SkipPixels = 0;
+        neutralPack.Pack.SkipImages = 0;
+        neutralPack.Pack.Alignment = 1;
+        MG_Pipe::MGPipeApplySetPixelPackState(neutralPack);
+
         table->GL.ReadPixels(info.Box.X, info.Box.Y, static_cast<GLsizei>(info.Box.W),
                              static_cast<GLsizei>(info.Box.H), static_cast<GLenum>(info.Format),
                              static_cast<GLenum>(info.Type), m_readbackScratch.data());
-        replies->PostReply(seq, Wire::ReplySink::kStatusOk, m_readbackScratch.data(), info.DstSize);
-        m_readbackBytes += info.DstSize;
+
+        MG_Pipe::MGPPixelPackState restorePack{};
+        restorePack.Pack = savedPack;
+        MG_Pipe::MGPipeApplySetPixelPackState(restorePack);
+
+        // m-7: the answer is written into the slot HERE, mid-apply, while the verb stamp is still
+        // up - and that is safe for exactly one reason, which is the contract's and is stated so it
+        // is not mistaken for luck: the client reaches a reply slot ONLY through appliedSeq
+        // (ReplySlot.h's ORDERING clause), never by polling the slot's own stamp, and s1's
+        // SessionConsumer::ApplyOne publishes appliedSeq only AFTER PipeApplier::ApplyOne has run
+        // LeaveApplier() and (on the joint tree) dropped the ScopedApplierEntry. So by the time the
+        // client is allowed to look at this slot, the apply-side gPipeInputs flag is already down.
+        replies->PostReply(seq, Wire::ReplySink::kStatusOk, m_readbackScratch.data(), tight);
+        m_readbackBytes += tight;
         ++m_readbacks;
         return true;
     }
