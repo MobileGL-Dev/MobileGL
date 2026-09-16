@@ -1,6 +1,6 @@
 # MGPipe 设计与架构
 
-> 本文描述**已决定**的设计。每条决定附一行理由；数字凡有实测的取实测（见 `MEASUREMENTS.md`）。落地状态以 `feat/disaggregated@458ccde1` 为准：标注"P0 已落地"的是树里的代码，其余是后续阶段要实现的形状（阶段号见 `ROADMAP.md`）。
+> 本文描述**已决定**的设计。每条决定附一行理由；数字凡有实测的取实测（见 `MEASUREMENTS.md`）。落地状态以 `feat/disaggregated@eec0e836` 为准：P0–P5 已落地；明确标成 P6+ 的仍是后续形状（阶段号见 `ROADMAP.md`）。
 
 ## 1. 边界
 
@@ -92,6 +92,8 @@ CSO 在 client 侧内容寻址（Mesa `cso_cache` 先例）：每类一张 `ska:
 它从 `MG_Backend/MGPipe/PipeInputs.h` include，**不从 `MG_Pipe/MGPipe.h`**——后者在 pull 构建的
 include 闭包里，而 G1 不允许那里有任何符号位移。`--check` 与 `--self-test`（11 条阴性对照）与
 `gen_pipe.py` 的同样在 CI 里跑。
+
+**G1 的 P5 codegen 陷阱（实测，`c1-v2.md` §9）。** capability gate 若替换的是指针表达式，就必须保留它的**表达式形状**，不能只保留真假值。两个 `if (const auto f = TABLE.GL.Slot)` 被 Bool-valued macro 改写成 block 后，pull `.text` **−144 B**，`GLImpl::GetInteger64v` −150、`GLImpl::GetIntegerv` +2；语义没变，G1 仍正确地判红。落地形状分成 `MGL_BACKEND_SLOT_CAP` 与 pointer-valued `MGL_BACKEND_SLOT_PTR_CAP` / `_PTR_LOCAL`，后者在 pull 展开回原 slot expression。规则不是“宏结果相等”，而是“byte-identical gate 必须保住 init-statement / short-circuit / pointer 的原表达式形状”。
 
 ### 3.2 分组与计数
 
@@ -587,11 +589,43 @@ MobileGL/MG_Remote/                仅 MOBILEGL_BUILD_DISAGGREGATED
 ```
 
 - CMake option（`CMakeLists.txt:23`）：`MOBILEGL_BUILD_DISAGGREGATED`（默认 OFF）追加 `MG_Remote/**` 进 `SOURCE_FILES`（`CMakeLists.txt:454-469`）并定义 `-DMOBILEGL_BUILD_DISAGGREGATED=1`；OFF 时 `MG_Config::Transport` 是 `constexpr Monolith`，`Init.cpp` 的分支编译期消失。`3rdparty/flatbuffers/include` 缺失时把 option 强制回 OFF 并 `message(WARNING)`（`CMakeLists.txt:440-451`）。`MobileGL` 与 `MobileGL_s` 都拿到同一份源。`MG_Test/Wire` 只在该 option 下注册（`MobileGL/MG_Test/CMakeLists.txt:93-95`）。
-- `MOBILEGL_BUILD_DISAGGREGATED_INPROC`（尚不存在）：CI/调试形态，隐含开启前者，额外加角色隔离 shim。MGPipe 让需要角色分身的进程全局从四个（`pGLContext`、`gBackendFunctionsTable`、`pActiveBackendObject`、`pDefaultFramebufferInfo`）降到**两个**（pipe 表与 `pActiveBackendObject`）：server 角色不再读 `pGLContext`（三道纯度门就是这个断言），`pDefaultFramebufferInfo` 由保留句柄 `{0,1}` + `OnSurfaceChanged` 取代。两个 shim 都不在 GL 热路径的每次访问上——这是 `inproc` 从"成本可疑的实验"变成"可交付形态"的直接原因（Android 上 dlopen 的库无法可靠用 initial-exec TLS，`pGLContext->` 在 `MG_Impl` 有 1494 处）。
+- `MOBILEGL_BUILD_DISAGGREGATED_INPROC`（P5 已落地）：CI/调试形态，隐含开启前者并加角色隔离。MGPipe 让需要角色分身的进程全局从四个（`pGLContext`、`gBackendFunctionsTable`、`pActiveBackendObject`、`pDefaultFramebufferInfo`）降到**两个**（pipe 表与 `pActiveBackendObject`）：server 角色不读 `pGLContext`，`pDefaultFramebufferInfo` 由保留句柄 `{0,1}` + surface forwarder 取代。两个角色通过 apply thread 与控制 mailbox 分开，而不是给 1494 个 `pGLContext->` 读点加 TLS。
 - `MobileGLServer`：桌面 `add_executable` 链接 `MobileGL_s`；Android `add_executable` 改名 `lib*.so` 链接共享 `MobileGL`，由 AGP 打进 `jniLibs`。
 - `MOBILEGL_TRANSPORT = monolith | inproc | spawn | unix:<path> | pipe:<name>`（P5 起在 `ConfigLoader.cpp` 解析），免费换来 ctest `ENVIRONMENT` 变体、trace-replay 的 `setenv` 块、FCL 用户可编辑 env、plugin APK 的 V2 开关表、`/data/local/tmp` CTS 路径。
 - 测试接线陷阱：ctest `ENVIRONMENT` 是替换而非追加、`;` 必须转义、property 覆盖 job env，必须用 `mgl_itest_join_environment(... ${MGL_ITEST_COMMON_ENV})` 构造；`add_trace_replay_test` 加 `SPLIT` 后缀（否则与同 case+backend 重名）并加 `-DTRACE_TRANSPORT=` 给 `run_trace_case.cmake` 消费。
 - CI（`.github/workflows/test.yml:1538` `pipe-gates`，P0 已落地）：`gen_pipe.py` 重生成 + diff；`MG_Backend`/`MG_State` 下禁止 stdio 插桩的 grep 门；`gen_pipe_dirty_surface.py --check` + `--self-test`（**P2 起成为门**，`.github/workflows/test.yml:1601-1604`，取代原来信息性的 `--summary` 步骤）；`check_doc_citations.py`（警告级，文档定稿后 `--strict`）。独立 job `flatc-check`。已落地：`include-graph-check`（P0.5）、`monolith-symbol-report`、`build-linux-verify` / `integration-verify` / `retrace-verify`（P1）。
+
+## 17. P5 落地形状：lockstep `inproc`、reply 与 apply-thread server
+
+### 17.1 verb barrier 与诚实的同地址空间传输
+
+P5 的 `inproc` 是真第二线程，但还是 **lockstep**：每条 class-B verb 发射后，client 的 `EmitAndWait` 等到 `appliedSeq == emitSeq`；`MOBILEGL_IPC_VERB_BARRIER=1` 默认开启。理由不是吞吐，而是 27 个 BARRIER-PULLED 字段尚无记录载体；在这些字段退役前让两线程同时跑，会让 server 读到 client 的“未来值”（R-1，ID-4）。barrier 是逐族可退役对象，不是 P6 transport 的要求。
+
+同一地址空间不得成为旁路（R-2）：encoder 把 `MGHostSpan::Ptr` 恒写成 `nullptr`，内容 blob 必须带真实 `SEG_STAGE` / 段内 offset / 非零 size；decoder 对四种形状分别 `Fatal{ProtocolCorruption}`——非空 `Ptr`、内容记录 size 为 0、非零 size 却无 segment、`offset+size` 越界。`MapPersistent` 在 split 恒 decline；`MOBILEGL_IPC_AUDIT=1` 在 retire 后把 staging 填 `0xDD`，让跨 applier 返回持针的实现下一次读取时可见地失败。四个 Fatal 与 audit 使 `inproc` 和未来 spawn 表达同一份所有权。
+
+reply mailbox 以**记录序号作为 slot id**（R-3）：slot header 是 `{Seq, Status, Size}`，acceptance 的四个 Bool 答案与 `MapPersistent` decline 都在既有 verb wait 内读取，不增加第二次等待。`Status=ERROR` 一律 `Fatal{ReplyError}`，不能退化成 false；读到 reply 之前先由 `appliedSeq` 证明该记录已离开 applier（R-5）。P9 才把这套同步 mailbox 推广成异步池。
+
+### 17.2 71 槽的路由、caps 与 tight readback
+
+client 表只有三类（`CONTRACT-P5.md` §7）：2 个 getter 从 caps mirror 本地回答；5 个 P5 verb 发射；其余 64 个 `Fatal{UnmigratedVerb}`。实现不是手写 switch：**33 条**走 generated route tables，**4 条 escape** 保留专用 reply/资源语义，`PipeCatalogueTest` 同时钉住 **37**。R-17 的第一轮只替换 `MGPipeApply<Name>(` 调用表达式，漏掉了五个 `&MGPipeApply<Name>` 地址获取点，四条 delete/resource row 于是仍在 GL thread 同步执行；落地门因此既扫调用也扫 address-of。教训：生成路由的完备性必须覆盖值调用与函数地址，两者不是同一张 grep 表（ID-58/61）。
+
+能力存活只读 `CapsMirror` 中的 `MGPCaps::CallMask`；server 的 consumer mask 由 backend 类型显式设置并以实际 op table 校验，**永不**从进程级 `MGPipeGetResourceOps()` 推导。41 个旧 slot-null probe 也改读对应 cap，否则 non-null emit table 会把所有 fallback 错判成“支持”（R-8）。成功的 `MakeEGLCurrent` / `InitCapabilities` 重新发布 snapshot；client 按 generation 采纳（R-12）。
+
+`ReadPixels` 在线上恒为 **tight**：server 临时设 neutral pack（row length / skips = 0，alignment = 1），只向 reply 写 `width*height*bytesPerPixel`；client 用自己持有的 pack state scatter，row gap 保持原字节（ID-49）。绑定 PACK PBO 时 P5 在 client 侧、发射和解引用之前 `Fatal{UnmigratedVerb, "ReadPixels+PACK_BUFFER"}`；server 直接写 buffer resource 并 `MarkGpuWritten` 是 P6+ 的真实形状（ID-57）。reply 单槽 payload 上限是 `2 MiB - 16`，更大 readback 的 carrier 同样留给 P6+。
+
+### 17.3 server 角色、shadow 与退出
+
+`ServerLoop` 的 `mgl-srv-apply` 是 native context 的终身 owner。`ServerMakeEGLCurrent` 对 `(dpy, draw, read, ctx)` tuple **只 bind 一次**；相同 tuple 是 no-op，client release 只记账、绝不让 apply thread native-unbind，context 直到 destroy / context loss 才离开该线程（ID-54）。罕见 EGL 操作经 caller-serialised one-slot control mailbox 进 apply thread；十二个 `Server*` forwarder 是唯一缝，其中 make-current 与 init-caps 成功时执行 R-12 republish。mailbox 在 stop 判定与 publish 上共用 mutex；有 backend 却无 thread 时 `Fatal{ApplyThreadNotRunning}`，不允许回落到 app thread。
+
+`PipeApplier::ApplyOne` 依次 stamp verb、decode/apply、清 stamp；只有 `SessionConsumer::ApplyOne` 每条记录把 `appliedSeq` 加一，pad 不计数。五条没有 `MGPipeApply*` 的 class-B verb 由 `ServerVerbSink` 消费。`StagedShadowStore` 按 resource twin 复制并合并**精确覆盖范围**；`Ops_H_SubData` / flush / respecify 只把 server-owned copy 交给后端，任何 widened read 先过 `RequireStagedCoverageForPendingRanges`，否则 `Fatal{StageSnapshotTooNarrow}`（R-11）。
+
+退出顺序承重：`ShutdownSplitRoles` 先让 client publish 并 bounded-drain，再 shutdown transport / 唤醒 wait，随后 bounded-join apply thread；线程在仍持 context 时 detach decoder、销毁 private backend，最后才销毁 emitter 与 transport。这样 stats dump、`pActiveBackendObject.reset()` 与 ring unmap 都发生在 thread 退出之后。
+
+### 17.4 lane 隔离、G5 与阶段边界
+
+每条 `DirectGLES.Split.*` entry 有独立 `MOBILEGL_LOG_FILE_PATH`；E1/E3 控制从被选 entry 的私有文件取 Fatal，不能从并行 lane 的公共日志“借红”（ID-53）。G5 的第十一行 `FlushPendingRangesFrom` 因 P5 的 range 参数化被承认，但两份 untouched-region script 都**始终**对固定 pin `172b0222…` 比较；re-pin 必须同时改两份脚本，不能让 ref-a/ref-b 漂移掩掉改变（ID-41）。
+
+P5 到此只声称 reduced path：private lane、barrier、reply、shadow 与 context ownership 已落地；class-C verb、27 个 readback/query wrong-answer、`rsp` residual inputs、PACK-PBO 真 carrier、>2 MiB readback、GetCaps 的两个 server→client blob carrier 与 ABI fingerprint 的 segment-size 混入都属于 P6+ / P7 / P3b-P4b，逐项见 `ROADMAP.md`，不由 `inproc` 同地址空间替它们背书。
 
 ## 附 A：开关
 
@@ -601,7 +635,7 @@ CMake：
 |---|---|---|
 | `MOBILEGL_BUILD_DISAGGREGATED` | OFF | 已落地 |
 | `MOBILEGL_BUILD_SERVER_SPIKE` | OFF（仅 Android） | 已落地（spike A，非出货） |
-| `MOBILEGL_BUILD_DISAGGREGATED_INPROC` | OFF | 计划（P5） |
+| `MOBILEGL_BUILD_DISAGGREGATED_INPROC` | OFF | 已落地（P5） |
 | `MOBILEGL_PIPE_VERIFY` | OFF | 计划（P1；构建期开关，编译进 `SnapshotFromGLContext()` 与 G4 比对器，P13 后保留） |
 | `MOBILEGL_PIPE_LEGACY_MEMOS` | ON（P2..P13） | 已落地（P2；`CMakeLists.txt:36`，OFF 时不编译 pre-handle 臂；`MOBILEGL_PIPE_PUSH=OFF` 会把它强制回 ON 并 `message(STATUS)`，`CMakeLists.txt:476-479`，因为 pull 构建里 pre-handle 臂就是唯一的实现） |
 | `MOBILEGL_FLATC_EXECUTABLE` | 空 | 已落地（只服务 `flatc-check`） |
@@ -621,7 +655,7 @@ CMake：
 | `MOBILEGL_PIPE_STATS_PERIOD` | 120（1–10⁶） | 每多少帧一条汇总行 |
 | `MOBILEGL_PIPE_STATS_FILE` | 空 | teardown 时的 JSON 转储路径 |
 
-运行时，传输与 IPC（计划，P5+）：`MOBILEGL_TRANSPORT`(monolith)、`MOBILEGL_IPC_SERVER_PATH`、`MOBILEGL_IPC_RING_MB`(8)、`MOBILEGL_IPC_STAGE_MB`(32)、`MOBILEGL_IPC_PRESENT_CREDIT`(1)、`MOBILEGL_IPC_SPIN_US`(50)、`MOBILEGL_IPC_POLL_ESCALATE`(64)、`MOBILEGL_IPC_PERSISTENT_BLOCK_KB`(64)、`MOBILEGL_IPC_ADOPT_TIER`(auto)、`MOBILEGL_IPC_SHADOW_SHM`(1，Phase 2 起)、`MOBILEGL_IPC_INLINE_PAYLOADS`(0，负面对照)、`MOBILEGL_IPC_SERVER_AFFINITY`(auto)、`MOBILEGL_IPC_STRICT_ERRORS`(0)、`MOBILEGL_IPC_AUDIT`(0)、`MOBILEGL_IPC_TRACE`(0)、`MOBILEGL_IPC_ATTACH`、`MOBILEGL_IPC_RESPAWN`(0)、`MOBILEGL_IPC_IDLE_EXIT_S`(30)。显式不设立：`MOBILEGL_IPC_PROGRAM`（没有 relink 档）、`MOBILEGL_IPC_VALIDATE_SERVER`（server 没有 `MG_Impl` 校验器）。既有负面对照开关（`MOBILEGL_ESPRYT_DISABLE_{UBO,UNPACK,UPLOAD}_RING`、`_INVALIDATE_FLUSH`、`MOBILEGL_DISABLE_LARGE_BUFFER_ADOPTION`、`MOBILEGL_COHERENT_AS_FLUSH`）全部保留。
+运行时，传输与 IPC（P5 已落地的核心项）：`MOBILEGL_TRANSPORT`(monolith)、`MOBILEGL_IPC_VERB_BARRIER`(1)、`MOBILEGL_IPC_RING_MB`(8)、`MOBILEGL_IPC_STAGE_MB`(32)、`MOBILEGL_IPC_PERSISTENT_BLOCK_KB`(64)、`MOBILEGL_IPC_ADOPT_TIER`(2)、`MOBILEGL_IPC_STRICT_ERRORS`(0)、`MOBILEGL_IPC_AUDIT`(0)、`MOBILEGL_IPC_SERVER_AFFINITY`(auto)。`MOBILEGL_IPC_SERVER_PATH`、present credit、poll escalation、shadow shm、attach/respawn/idle-exit 等随 P6+ 生效。显式不设立：`MOBILEGL_IPC_PROGRAM`（没有 relink 档）、`MOBILEGL_IPC_VALIDATE_SERVER`（server 没有 `MG_Impl` 校验器）。既有负面对照开关全部保留。
 
 ## 附 B：边界计数器（`MobileGL/MG_Util/Metrics/PipeStats.h:46-122`，P0 已落地）
 
