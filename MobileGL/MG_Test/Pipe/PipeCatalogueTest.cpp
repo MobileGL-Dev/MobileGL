@@ -13,6 +13,10 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <regex>
+#include <sstream>
 #include <iterator>
 #include <limits>
 #include <type_traits>
@@ -33,6 +37,30 @@
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
+
+TEST(PipeCatalogue, FrontendNeverTakesAnApplierAddress) {
+    namespace fs = std::filesystem;
+    auto base = fs::current_path();
+    while (!fs::is_directory(base / "MobileGL/MG_Impl") && base != base.root_path())
+        base = base.parent_path();
+    const auto root = base / "MobileGL/MG_Impl";
+    ASSERT_TRUE(fs::is_directory(root)) << "frontend source unavailable: " << root;
+    const std::regex comments(R"(/\*[\s\S]*?\*/|//[^\n]*)");
+    const std::regex address(R"(&\s*MGPipeApply[A-Za-z_0-9]*)");
+    for (const auto& entry : fs::recursive_directory_iterator(root)) {
+        if (!entry.is_regular_file()) continue;
+        const auto ext = entry.path().extension();
+        if (ext != ".cpp" && ext != ".h" && ext != ".inc") continue;
+        std::ifstream input(entry.path());
+        ASSERT_TRUE(input.good()) << entry.path();
+        std::ostringstream bytes;
+        bytes << input.rdbuf();
+        const auto code = std::regex_replace(bytes.str(), comments, "");
+        EXPECT_FALSE(std::regex_search(code, address))
+            << "FrontendApplierAddress: " << entry.path()
+            << " must take the route address; routing tables live outside MG_Impl";
+    }
+}
 
 namespace {
     // Counting expansions of the catalogue. The Class parameter is a real enumerator, so a
