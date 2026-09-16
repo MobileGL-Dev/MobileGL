@@ -15,6 +15,11 @@
 #   stdout-fatal       Fatal exists only on stdout, never in the private file
 #   stale-fatal        Fatal exists before reset, never from this control run
 #   e3-unrelated       E1 has its private Fatal; E3(a) fails for an unrelated reason
+#   skipped-selection  knob kills pre-flight; private Fatal exists, entry skips, ctest exits 0
+#   notrun-selection   selected entry was not run, despite a private Fatal
+#   missing-selection  selected entry is absent from the result XML
+#   partial-fatal      two entries fail, but only the first has its expected private Fatal
+#   wrong-fatal        entry fails with a different Fatal in its private file
 #   green              baseline green; the control's own run PASSES (the knob is not load-bearing)
 #   red-baseline       the baseline itself has a failed entry
 #   all-skipped        the baseline is entirely skipped (the disarmed lane, a legitimate exit 0)
@@ -44,10 +49,31 @@ emit_listing() {
     return
   fi
   echo "  Test #1: DirectGLES.Split.ClearThenReadPixelsScenario.ClearWithNoDrawIsVisibleToDefaultFramebufferReadPixels"
-  echo "Total Tests: 1"
+  if [ "${mode}" = partial-fatal ]; then
+    echo "  Test #2: DirectGLES.Split.TriangleScenario.SecondEntry"
+    echo "Total Tests: 2"
+  else
+    echo "Total Tests: 1"
+  fi
 }
 
 write_junit() {
+  if [ "${MOBILEGL_IPC_VERB_BARRIER:-1}" = 0 ] || [ "${MOBILEGL_IPC_PERSISTENT_BLOCK_KB:-64}" = 0 ]; then
+    entry=DirectGLES.Split.ClearThenReadPixelsScenario.ClearWithNoDrawIsVisibleToDefaultFramebufferReadPixels
+    [ "${MOBILEGL_IPC_PERSISTENT_BLOCK_KB:-64}" != 0 ] || entry=DirectGLES.Split.PersistentCoherentMapScenario.TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw
+    body="<testcase name=\"${entry}\" status=\"fail\"><failure message=\"control red\"/></testcase>"
+    if [ "${mode}" = partial-fatal ] && [ "${MOBILEGL_IPC_VERB_BARRIER:-1}" = 0 ]; then
+      body="${body}<testcase name=\"DirectGLES.Split.TriangleScenario.SecondEntry\" status=\"fail\"><failure/></testcase>"
+    fi
+    case "${mode}" in
+      skipped-selection) body="<testcase name=\"${entry}\" status=\"notrun\"><skipped/></testcase>" ;;
+      notrun-selection) body="<testcase name=\"${entry}\" status=\"notrun\"/>" ;;
+      missing-selection) body='' ;;
+      green) body="<testcase name=\"${entry}\" status=\"run\"/>" ;;
+    esac
+    printf '%s\n' "<testsuite>${body}</testsuite>" > "$1"
+    return
+  fi
   case "${mode}" in
     red-baseline)
       body='<testcase name="DirectGLES.Split.TriangleScenario.AVboBackedTriangleReachesReadPixels" status="failed"><failure message="already red"/></testcase>'
@@ -65,7 +91,7 @@ write_junit() {
 # Model the library file sink separately from ctest stdout (ID-53).
 log="${CONTROL_TMPDIR}/entry.log"
 if [ "${json_requested:-0}" = 1 ]; then
-  python3 -c 'import json, os; p=os.environ["CONTROL_TMPDIR"]; print(json.dumps({"tests": [{"name": "DirectGLES.Split."+n, "properties": [{"name": "LABELS", "value": ["integration-split"]}, {"name": "ENVIRONMENT", "value": ["MOBILEGL_LOG_FILE_PATH="+p+"/"+f]}]} for n,f in [("ClearThenReadPixelsScenario.ClearWithNoDrawIsVisibleToDefaultFramebufferReadPixels", "entry.log"), ("PersistentCoherentMapScenario.TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw", "pmap.log")]]}))'
+  python3 -c 'import json, os; p=os.environ["CONTROL_TMPDIR"]; entries=[("ClearThenReadPixelsScenario.ClearWithNoDrawIsVisibleToDefaultFramebufferReadPixels", "entry.log"), ("PersistentCoherentMapScenario.TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw", "pmap.log")]; entries += [("TriangleScenario.SecondEntry", "second.log")] if os.environ["STUB_MODE"] == "partial-fatal" else []; print(json.dumps({"tests": [{"name": "DirectGLES.Split."+n, "properties": [{"name": "LABELS", "value": ["integration-split"]}, {"name": "ENVIRONMENT", "value": ["MOBILEGL_LOG_FILE_PATH="+p+"/"+f]}]} for n,f in entries]}))'
   if [ "${mode}" = stale-fatal ]; then
     echo 'Fatal{BarrierViolation, "DrawVbo"}' > "${log}"
   fi
@@ -79,22 +105,30 @@ fi
 
 if [ -n "${junit}" ]; then
   write_junit "${junit}"
+  if [ "${MOBILEGL_IPC_VERB_BARRIER:-1}" != 0 ] && [ "${MOBILEGL_IPC_PERSISTENT_BLOCK_KB:-64}" != 0 ]; then
   case "${mode}" in
     red-baseline) echo "1/1 Test #1: ... ***Failed"; exit 8 ;;
     *)            echo "100% tests passed, 0 tests failed out of 1"; exit 0 ;;
   esac
+  fi
 fi
 
 # The control's own run.
 if [ "${MOBILEGL_IPC_VERB_BARRIER:-1}" = 0 ]; then
   case "${mode}" in
-    evidence|e3-unrelated) echo 'Fatal{BarrierViolation, "DrawVbo"}' > "${log}" ;;
+    evidence|e3-unrelated|skipped-selection|notrun-selection|missing-selection|partial-fatal) echo 'Fatal{BarrierViolation, "DrawVbo"}' > "${log}" ;;
+    wrong-fatal) echo 'Fatal{ReplyMissing, "DrawVbo"}' > "${log}" ;;
     missing-fatal) echo "library setup only; no fatal" > "${log}" ;;
     stdout-fatal) echo 'Fatal{BarrierViolation, "DrawVbo"}' ;;
   esac
 fi
 case "${mode}" in
-  unrelated|missing-fatal|stdout-fatal|stale-fatal|e3-unrelated)
+  skipped-selection|notrun-selection|missing-selection)
+    echo '1/1 Test #1: selected entry ... ***Skipped'
+    echo '100% tests passed, 0 tests failed out of 1'
+    exit 0
+    ;;
+  unrelated|missing-fatal|stdout-fatal|stale-fatal|e3-unrelated|partial-fatal|wrong-fatal)
     echo "1/1 Test #1: DirectGLES.Split.ClearThenReadPixelsScenario.ClearWithNoDrawIsVisibleToDefaultFramebufferReadPixels ...***Failed"
     echo "UNRELATED_CONTROL_FAILURE: the harness aborted in setup before the knob was read"
     if [ "${MOBILEGL_IPC_PERSISTENT_BLOCK_KB:-64}" = 0 ]; then

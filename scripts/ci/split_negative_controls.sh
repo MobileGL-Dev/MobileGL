@@ -42,8 +42,7 @@
 set -u
 
 if [ "${1:-}" = "--self-test" ]; then
-  bash "$(dirname "$0")/control_smoke_test.sh" &&
-    bash "$(dirname "$0")/testdata/split_private_log_smoke.sh"
+  bash "$(dirname "$0")/control_smoke_test.sh"
   exit $?
 fi
 
@@ -65,7 +64,8 @@ python3 "${log_helper}" check "${CTEST}" "$PWD" || exit 1
 # runtime fact inside each test process (MG_Config::Transport, ClientSession::Active(),
 # ImplementedVerbCount(), read by Harness/SplitRuntimePeek), so the only honest way to ask it from a
 # shell is to look at what the entries DID.
-"${CTEST}" -L integration-split -j 4 --no-tests=error --output-junit "${junit}"
+# The metadata ownership test shares the label but cannot arm runtime controls.
+"${CTEST}" -L integration-split -R '^DirectGLES\.Split\.' -j 4 --no-tests=error --output-junit "${junit}"
 baseline_rc=$?
 
 if [ ! -f "${junit}" ]; then
@@ -115,9 +115,16 @@ run_control() {
   python3 "${log_helper}" reset "${manifest}" "${filter}" || exit 1
 
   out="${CONTROL_TMPDIR}/control-output.txt"
-  env "$@" "${CTEST}" --output-on-failure -L integration-split -R "${filter}" --no-tests=error > "${out}" 2>&1
+  result="${CONTROL_TMPDIR}/control.xml"
+  rm -f "${result}"
+  env "$@" "${CTEST}" --output-on-failure -L integration-split -R "${filter}" --no-tests=error --output-junit "${result}" > "${out}" 2>&1
   control_rc=$?
   cat "${out}"
+
+  # Inspect JUnit before exit status or private Fatal: a skipped pre-flight can carry both.
+  label='E3(a)'
+  [ "${evidence}" != private-barrier-fatal ] || label=E1
+  python3 "${log_helper}" results "${manifest}" "${filter}" "${result}" "${label}" || exit 1
 
   if [ "${control_rc}" -eq 0 ]; then
     echo "::error::${name} left ${matched} split entries GREEN, so the knob it turns is not load-bearing and the gate it controls proves nothing."
@@ -136,7 +143,9 @@ run_control() {
   echo "${name} turned ${matched} selected entries red, and the red carries the scenario's own diagnostic, as it must"
 }
 
-# E1: c1 ClientSession::Post emits MGLOG_F Fatal{BarrierViolation, "<slot>"}.
+# E1: c1 ClientSession::EmitAndWait emits MGLOG_F Fatal{BarrierViolation, "<slot>"}.
+# This asserts an observed overlap with the applier, which is timing-dependent.
+# Without that Fatal in a fresh selected file E1 fails; pixel/status fallbacks do not count.
 # Keep the ID-53-approved SmallRing selection as well as the default lane.
 run_control "negative control E1 (MOBILEGL_IPC_VERB_BARRIER=0)" \
   'DirectGLES\.Split\.(SmallRing\.)?(Triangle|ClearThenReadPixels)' \

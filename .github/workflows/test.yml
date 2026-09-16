@@ -1043,9 +1043,9 @@ jobs:
       # THE RUNTIME HALF OF "THIS IS REALLY A SPLIT BUILD". The build-level nm check in
       # build-linux-split proves the library CARRIES MG_Remote; this proves the transport
       # RESOLVED in a process of this lane. ConfigLoader::InitTransport logs one INFO line when it
-      # selects InProcess, and the DirectGLES.Split.PersistentMapArm. entry is the one Split entry
-      # with a MOBILEGL_LOG_FILE_PATH of its own (nothing else writes it, so the grep means what it
-      # says). The line is written during bring-up, before any scenario decides to skip, so this
+      # selects InProcess, and the DirectGLES.Split.PersistentMapArm. entry retains its private
+      # counting log (all Split entries now have private paths; nothing else writes this file).
+      # The line is written during bring-up, before any scenario decides to skip, so this
       # check is live from the day the lanes land rather than from the day they stop skipping.
       - name: The split lane really resolved the transport
         working-directory: build-split
@@ -1106,7 +1106,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: integration-split-logs
-          path: build-split/MobileGL/MG_IntegrationTest/*.log*
+          path: |
+            build-split/MobileGL/MG_IntegrationTest/*.log*
+            build-split/MobileGL/MG_IntegrationTest/split-logs/*.log
           if-no-files-found: warn
 
       - name: Upload core dumps

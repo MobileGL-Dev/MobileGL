@@ -19,7 +19,7 @@
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-WORK="$(mktemp -d)"
+WORK="$(mktemp -d)" || exit 1
 trap 'rm -rf "${WORK}"' EXIT
 
 STUB_DIR="${WORK}/stub"
@@ -99,6 +99,10 @@ expect FAILED "a pull library passed the split retrace"      -- run_retrace retr
 
 echo
 echo "smoke test: ${passes} passed, ${failures} failed"
+# Keep the private-file cases on the entry point used by CI and the local gate.
+if ! bash "${HERE}/testdata/split_private_log_smoke.sh"; then
+  failures=$((failures + 1))
+fi
 if [ "${failures}" -gt 0 ]; then
   echo "CONTROL_SMOKE_TEST_FAILED"
   exit 1
