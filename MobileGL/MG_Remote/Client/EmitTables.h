@@ -101,19 +101,27 @@ namespace MobileGL::MG_Remote::Client {
     Uint32 LocallyAnsweredSlotCount(); // class A - answered from the caps mirror, R-15
     Uint32 UnmigratedSlotCount();      // class C - Fatal{UnmigratedVerb}
 
-    // THE E2 NEGATIVE CONTROL (t1's debt against c1, BRIEF §7). When set, the Clear emitter
+    // THE E2 NEGATIVE CONTROLS (t1's debt against c1, BRIEF §7). When set, the named emitter
     // SKIPS its record - it still runs the pre-verb hooks and still returns - so a replay that
-    // is really going through the wire loses one clear per frame and its SSIM falls below the
-    // 0.99 threshold, while a replay that fell through to the driver is unaffected. It is a
-    // function rather than a knob in Config.h for two reasons: the control has to be settable
-    // from a test process that has already started, and a knob would be a
-    // MOBILEGL_IPC_-shaped name for something no operator may ever set.
+    // is really going through the wire loses that verb while a replay that fell through to the
+    // driver is unaffected. They are functions rather than knobs in Config.h for two reasons:
+    // a control has to be settable from a test process that has already started, and a knob
+    // would be a MOBILEGL_IPC_-shaped name for something no operator may ever set.
     //
-    // Emissions actually skipped, so the control can assert that it DID something rather than
+    // Emissions actually skipped, so a control can assert that it DID something rather than
     // that a picture changed - a control that silently never fired is the third shape of R-16's
     // "a gate that cannot go red for its own reason".
+    //
+    // WHICH ONE E2'S RETRACE USES, and it is not the clear. Measured on the joint head: with
+    // MOBILEGL_IPC_E2_DROP_CLEAR=1 armed and its WARN in the library's own log, the OpenRA
+    // retrace under inproc still scored ssim=1.000000 / mismatchPixels=0 (joint-v1.md §3),
+    // because OpenRA covers every pixel it clears before the snapshot. Dropping the DRAWS is
+    // the control whose observable the golden is actually made of. See EmitTables.cpp's
+    // ArmControlKnobs for the trace census that settled it.
     void SetDropClearEmissionForNegativeControl(Bool drop);
     Uint64 DroppedClearEmissions();
+    void SetDropDrawEmissionForNegativeControl(Bool drop);
+    Uint64 DroppedDrawEmissions();
 
     // ID-47. The CLIENT refuses a readback whose answer would not fit a reply slot, BEFORE it
     // emits the record, and names the read. THE REFUSAL ITSELF IS s1's -
