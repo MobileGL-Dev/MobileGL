@@ -138,8 +138,10 @@ namespace MobileGL::MG_Remote::Server {
         if (table->GL.BlitFramebuffer == nullptr) return false;
         // Same ruling as OnClear's: the read and draw framebuffers are already bound by the
         // set_framebuffer_state records that preceded this one, so the unnamed entry point is
-        // the one that matches what the server's state actually is. BlitNamedFramebuffer needs
-        // two frontend SharedPtrs, which table 2 lists as uncarried.
+        // the one that matches what the server's state actually is. For the named form the
+        // client temporarily binds the two named objects and validates before emitting; its
+        // existing BARRIER-PULLED fields stay fixed until this call returns. ReadFbo/DrawFbo
+        // retain the original identities for the later handle-only endpoint (CONTRACT-P5B §6).
         table->GL.BlitFramebuffer(blit.SrcX0, blit.SrcY0, blit.SrcX1, blit.SrcY1, blit.DstX0,
                                   blit.DstY0, blit.DstX1, blit.DstY1,
                                   static_cast<GLbitfield>(blit.Mask),

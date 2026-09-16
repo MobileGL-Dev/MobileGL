@@ -10,7 +10,7 @@
 //
 // THE PARTITION IS CONTRACT-P5.md §7's AND IS NOT RE-DERIVED HERE (R-15, ID-12):
 //   class A  2 slots  answered locally from the caps mirror, never emitted, never Fatal
-//   class B 48 slots emitted; class C 21 slots name their unmigrated verb.
+//   class B 49 slots emitted; class C 20 slots name their unmigrated verb.
 // The three counts are static_asserted to sum to kRemoteEmitSlotCount below, so a slot that
 // changes class without changing the arithmetic is a build break rather than a behaviour
 // change nobody reviewed.
@@ -60,6 +60,7 @@
 
 #include "WireTables.h"
 #include <MG_Impl/Pipe/FramebufferEmit.h>
+#include <MG_Impl/Pipe/PipeFill.h>
 #include <MG_Impl/Pipe/TextureEmit.h>
 
 namespace MobileGL::MG_Remote::Client {
@@ -716,7 +717,7 @@ namespace MobileGL::MG_Remote::Client {
             MG_Pipe::MGPBlit record{};
             // Same reasoning as Clear's Fbo: the read and draw bindings are gPipeInputs', set
             // by MGP_FILL(BlitFramebuffer) at GL_Framebuffer.cpp:660 and held still by the
-            // barrier. glBlitNamedFramebuffer, which DOES name two framebuffers, is class C.
+            // barrier. The named form below carries both handles after a scoped binding override.
             record.ReadFbo = MG_Pipe::kMGPipeNullHandle;
             record.DrawFbo = MG_Pipe::kMGPipeNullHandle;
             record.SrcX0 = srcX0;
@@ -727,6 +728,57 @@ namespace MobileGL::MG_Remote::Client {
             record.DstY0 = dstY0;
             record.DstX1 = dstX1;
             record.DstY1 = dstY1;
+            record.Mask = static_cast<Uint32>(mask);
+            record.Filter = static_cast<Uint32>(filter);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::Blit, &record, sizeof(record), nullptr, 0,
+                                nullptr, 0, nullptr);
+        }
+
+        // DSA blits use the existing bound-form backend while the verb barrier holds.
+        // Only client shadow bindings change here; no driver call or frontend pointer crosses
+        // the wire. Bind() bumps their versions on entry and restore, so the next ordinary
+        // verb republishes the application's original bindings even if no GL bind intervenes.
+        class ScopedBlitBindings {
+        public:
+            using Fbo = MG_State::GLState::FramebufferObject;
+            ScopedBlitBindings(const SharedPtr<Fbo>& read, const SharedPtr<Fbo>& draw)
+                : m_read(MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read)),
+                  m_draw(MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw)),
+                  m_savedRead(m_read.GetBoundObject()), m_savedDraw(m_draw.GetBoundObject()) {
+                m_read.Bind(read);
+                m_draw.Bind(draw);
+            }
+            ~ScopedBlitBindings() {
+                m_read.Bind(m_savedRead);
+                m_draw.Bind(m_savedDraw);
+            }
+            ScopedBlitBindings(const ScopedBlitBindings&) = delete;
+            ScopedBlitBindings& operator=(const ScopedBlitBindings&) = delete;
+        private:
+            BindingSlot<Fbo>& m_read;
+            BindingSlot<Fbo>& m_draw;
+            SharedPtr<Fbo> m_savedRead;
+            SharedPtr<Fbo> m_savedDraw;
+        };
+
+        void EmitBlitNamedFramebuffer(
+            const SharedPtr<MG_State::GLState::FramebufferObject>& read,
+            const SharedPtr<MG_State::GLState::FramebufferObject>& draw,
+            GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0,
+            GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
+            ClientSession& session = RequireSession("BlitNamedFramebuffer");
+            const ScopedBlitBindings bindings(read, draw);
+            // The frontend's first validate preceded this temporary lowering. Refresh both
+            // emitted framebuffer state and the existing BARRIER-PULLED binding fields now.
+            MG_Pipe::MGPipeValidateForVerb(MG_Pipe::MGPipeVerb::BlitNamedFramebuffer);
+            BeforeReadOnlyVerb();
+            MG_Pipe::MGPBlit record{};
+            record.ReadFbo = MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*read);
+            record.DrawFbo = MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*draw);
+            record.SrcX0 = srcX0; record.SrcY0 = srcY0;
+            record.SrcX1 = srcX1; record.SrcY1 = srcY1;
+            record.DstX0 = dstX0; record.DstY0 = dstY0;
+            record.DstX1 = dstX1; record.DstY1 = dstY1;
             record.Mask = static_cast<Uint32>(mask);
             record.Filter = static_cast<Uint32>(filter);
             session.EmitAndWait(MG_Pipe::MGPWireOp::Blit, &record, sizeof(record), nullptr, 0,
@@ -1445,10 +1497,6 @@ namespace MobileGL::MG_Remote::Client {
 
         // The wave-3 tail. SetSwapInterval is hand-written below (it is not a GL.* slot).
 #define MGR_UNMIGRATED_TAIL_SLOTS(X)                                                               \
-    X(BlitNamedFramebuffer, void,                                                                  \
-      (const SharedPtr<MG_State::GLState::FramebufferObject>&,                                     \
-       const SharedPtr<MG_State::GLState::FramebufferObject>&, GLint, GLint, GLint, GLint, GLint,  \
-       GLint, GLint, GLint, GLbitfield, GLenum))                                                   \
     X(GetTexImage, void, (GLenum, GLint, GLenum, GLenum, GLvoid*))                                 \
     X(GetTextureImage, void,                                                                       \
       (const SharedPtr<MG_State::GLState::ITextureObject>&, TextureUploadTarget, GLint, GLenum,    \
@@ -1521,8 +1569,10 @@ namespace MobileGL::MG_Remote::Client {
         constexpr Uint32 kEmittedSlotsI1 = 7;
         constexpr Uint32 kEmittedSlotsT2 = 6;
         constexpr Uint32 kEmittedSlotsF1 = 11;
+        constexpr Uint32 kEmittedSlotsTail = 1; // BlitNamedFramebuffer
         constexpr Uint32 kEmittedSlots =
-            kEmittedSlotsP5 + kEmittedSlotsD1 + kEmittedSlotsI1 + kEmittedSlotsT2 + kEmittedSlotsF1;
+            kEmittedSlotsP5 + kEmittedSlotsD1 + kEmittedSlotsI1 + kEmittedSlotsT2 + kEmittedSlotsF1 +
+            kEmittedSlotsTail;
         constexpr Uint32 kLocallyAnsweredSlots = 2; // GetIntegeri_v, IsTimerQuerySupported
 
         // EACH PACKAGE'S OWNERSHIP, PINNED. A package that flips a slot removes one row and
@@ -1533,7 +1583,7 @@ namespace MobileGL::MG_Remote::Client {
         static_assert(kUnmigratedI1 + kEmittedSlotsI1 == 7, "i1 owns the 7 image/compute/barrier/copy/SSBO slots");
         static_assert(kUnmigratedT2 + kEmittedSlotsT2 == 7, "t2 owns the 7 XFB/tessellation slots");
         static_assert(kUnmigratedF1 + kEmittedSlotsF1 == 11, "f1 owns the 11 clear/copy/mip slots");
-        static_assert(kUnmigratedTail == 20, "the wave-3 tail is 20 slots and no P5b package owns one");
+        static_assert(kUnmigratedTail + kEmittedSlotsTail == 20, "the original wave-3 tail owns 20 slots");
         static_assert(kUnmigratedSlots + kEmittedSlots == 69, "class B and C own 69 slots");
         static_assert(kLocallyAnsweredSlots + kEmittedSlots + kUnmigratedSlots == kRemoteEmitSlotCount,
                       "the three classes no longer partition the 71 slots");
@@ -1589,6 +1639,7 @@ namespace MobileGL::MG_Remote::Client {
             table.GL.MultiDrawElementsIndirectCount = &EmitMultiDrawElementsIndirectCount;
             table.GL.ReadPixels = &EmitReadPixels;
             table.GL.BlitFramebuffer = &EmitBlitFramebuffer;
+            table.GL.BlitNamedFramebuffer = &EmitBlitNamedFramebuffer;
             table.Present = &EmitPresent;
             // ---- class B, P5b t2. Assigned AFTER the class-C block above, which is what makes
             // the flip a single-line change per slot: the Fatal thunk is overwritten, and a slot

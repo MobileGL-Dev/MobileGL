@@ -177,8 +177,8 @@ namespace {
 TEST(RemoteEmitTable, TheThreeClassesPartitionAllSeventyOneSlots) {
     // P5 baseline five + f1 eleven + i1 seven + t2 six emitted slots.
     EXPECT_EQ(LocallyAnsweredSlotCount(), 2u);
-    EXPECT_EQ(ImplementedVerbCount(), 48u);
-    EXPECT_EQ(UnmigratedSlotCount(), 21u);
+    EXPECT_EQ(ImplementedVerbCount(), 49u);
+    EXPECT_EQ(UnmigratedSlotCount(), 20u);
     EXPECT_EQ(LocallyAnsweredSlotCount() + ImplementedVerbCount() + UnmigratedSlotCount(),
               kRemoteEmitSlotCount);
 }

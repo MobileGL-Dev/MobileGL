@@ -2159,3 +2159,23 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         )
     endforeach()
 endif()
+
+# P5b measured named-blit blockers, exercising both backend bound-form lowerings.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    foreach(namedBlitBackend DirectGLES DirectVulkan)
+        mgl_itest_join_environment(MGL_ITEST_NAMED_BLIT_ENVIRONMENT
+            "MOBILEGL_BACKEND_TYPE=${namedBlitBackend}" "MOBILEGL_TRANSPORT=inproc"
+            "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
+            ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+        foreach(namedBlitCase NamedBlitPreservesBindingsAndRestoresNextVerbsPixels NamedBlitDefaultEndpointPixels)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "${namedBlitBackend}.Split.NamedBlit."
+                TEST_FILTER "F1WireScenario.${namedBlitCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES
+                    LABELS "integration-split"
+                    TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ENVIRONMENT "${MGL_ITEST_NAMED_BLIT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5b-${namedBlitBackend}-${namedBlitCase}.log")
+        endforeach()
+    endforeach()
+endif()

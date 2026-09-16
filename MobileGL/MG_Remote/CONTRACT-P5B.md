@@ -404,6 +404,21 @@ the user-index span.
 
 ---
 
+13. **Measured named blits use the existing `blit` row with a scoped client binding override.**
+   P5b's next trace census reaches `BlitNamedFramebuffer` in iris-BSL and
+   improved-transparency on both backends. The client saves its read/draw binding objects,
+   binds the named arguments in the client shadow only, validates `BlitNamedFramebuffer`,
+   and emits the original rectangles/mask/filter plus both original `MGPBlit` handles.
+   The barrier holds those bindings until the server's bound `BlitFramebuffer` finishes;
+   then RAII restores both client bindings. Their version changes make the next ordinary
+   verb republish the restored state. The existing classified BARRIER-PULLED accessors
+   remain the sole frontend read path; no pointer is added to the record or to a side channel,
+   and no driver call occurs on the client. Name 0 carries `kMGPipeDefaultFramebuffer`.
+   This adds no opcode and supersedes only named-blit's wave-3 deferral. *Overturned by:*
+   removing the lockstep barrier or adding process separation; then both framebuffer
+   handles need server-only resolution before dispatch. Pixel/binding gates cover unbound
+   endpoints, default endpoints and ordinary clear/blit immediately after restoration.
+
 ## §7 The 71 slots after P5b's contract commit, and after the four packages
 
 On this head the partition is CONTRACT-P5 §7's, unchanged: **A = 2, B = 5, C = 64**

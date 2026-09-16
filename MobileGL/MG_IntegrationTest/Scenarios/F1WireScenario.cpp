@@ -219,4 +219,85 @@ TEST_F(F1WireScenario, GenerateMipmapPixels) {
     const int expected[4] = {64, 128, 191, 255};
     for (int i = 0; i < 4; ++i) EXPECT_NEAR(pixel[i], expected[i], 1) << "F1.GenerateMipmap.pixels";
 }
+TEST_F(F1WireScenario, NamedBlitPreservesBindingsAndRestoresNextVerbsPixels) {
+    if (!Ready()) return;
+    Attach(GL_RGBA8);
+    glClearColor(1, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    GLuint fbos[3]{}, textures[3]{};
+    glGenFramebuffers(3, fbos);
+    glGenTextures(3, textures);
+    for (int i = 0; i < 3; ++i) {
+        glBindFramebuffer(GL_FRAMEBUFFER, fbos[i]);
+        glBindTexture(GL_TEXTURE_2D, textures[i]);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 8, 8);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textures[i], 0);
+        ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+        glClearColor(0, i == 1 ? 1 : 0, 1, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbos[1]);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbos[2]);
+    const auto before = PeekSplitRuntime().emitSeq;
+    glBlitNamedFramebuffer(fbo, fbos[0], 0, 0, 8, 8, 0, 0, 8, 8, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    EXPECT_GT(PeekSplitRuntime().emitSeq, before);
+    GLint read = 0, draw = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw);
+    EXPECT_EQ(read, GLint(fbos[1]));
+    EXPECT_EQ(draw, GLint(fbos[2]));
+
+    // No intervening bind: this must clear the restored draw FBO, not the DSA destination.
+    glClearColor(1, 0, 1, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbos[2]);
+    std::array<GLubyte, 4> pixel{};
+    glReadPixels(2, 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    EXPECT_EQ(pixel, (std::array<GLubyte, 4>{255, 0, 255, 255})) << "named blit restored draw before clear";
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbos[0]);
+    glReadPixels(2, 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    EXPECT_EQ(pixel, (std::array<GLubyte, 4>{255, 0, 0, 255})) << "unbound named blit copied source";
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbos[1]);
+    glBlitFramebuffer(0, 0, 8, 8, 0, 0, 8, 8, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbos[2]);
+    glReadPixels(2, 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    EXPECT_EQ(pixel, (std::array<GLubyte, 4>{0, 255, 255, 255})) << "ordinary blit follows restored bindings";
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glDeleteFramebuffers(3, fbos);
+    glDeleteTextures(3, textures);
+}
+
+TEST_F(F1WireScenario, NamedBlitDefaultEndpointPixels) {
+    if (!Ready()) return;
+    Attach(GL_RGBA8);
+    glClearColor(1, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glClearColor(0, 0, 1, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glBlitNamedFramebuffer(fbo, 0, 0, 0, 8, 8, 0, 0, 8, 8, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    GLint read = 0, draw = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw);
+    EXPECT_EQ(read, GLint(fbo));
+    EXPECT_EQ(draw, GLint(fbo));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    std::array<GLubyte, 4> pixel{};
+    glReadPixels(2, 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    EXPECT_EQ(pixel, (std::array<GLubyte, 4>{255, 0, 0, 255})) << "default draw endpoint";
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glClearColor(0, 1, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBlitNamedFramebuffer(0, fbo, 0, 0, 8, 8, 0, 0, 8, 8, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw);
+    EXPECT_EQ(read, GLint(fbo));
+    EXPECT_EQ(draw, GLint(fbo));
+    glReadPixels(2, 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    EXPECT_EQ(pixel, (std::array<GLubyte, 4>{255, 0, 0, 255})) << "default read endpoint";
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+}
 } // namespace MGITest
