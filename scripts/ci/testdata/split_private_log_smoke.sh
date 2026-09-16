@@ -7,7 +7,7 @@ trap 'rm -rf "${WORK}"' EXIT
 cp "${HERE}/testdata/stub_ctest.sh" "${WORK}/ctest"
 chmod +x "${WORK}/ctest"
 passes=0
-for mode in missing-fatal stdout-fatal stale-fatal evidence e3-unrelated skipped-selection notrun-selection missing-selection partial-fatal wrong-fatal; do
+for mode in missing-fatal stdout-fatal stale-fatal evidence e3-unrelated e3-no-private skipped-selection notrun-selection missing-selection partial-fatal wrong-fatal; do
   mkdir -p "${WORK}/${mode}"
   rc=0
   STUB_MODE="${mode}" CTEST="${WORK}/ctest" CONTROL_TMPDIR="${WORK}/${mode}" \
@@ -23,6 +23,7 @@ for mode in missing-fatal stdout-fatal stale-fatal evidence e3-unrelated skipped
     message='E1 FAILED: selected private logs lack expected Fatal'
     [ "${mode}" != e3-unrelated ] || message='FAILED: red lacks its persistent-map push diagnostic'
     case "${mode}" in
+      e3-no-private) message='no selected private log carries /MGPipe: persistent-map push disabled' ;;
       skipped-selection) message='SplitLogPaths FAILED: E1 control: the knob killed the pre-flight, not the entry - 1 selected entries skipped' ;;
       notrun-selection|missing-selection) message='SplitLogPaths FAILED: E1 control: 1 selected entries did not run' ;;
     esac

@@ -153,6 +153,13 @@ namespace MobileGL::MG_Util::PipeStats {
         Uint64 g_windowBaseGateMiss[kGateCount] = {};
         Uint64 g_windowBaseFrames = 0;
         Bool g_shutdownDone = false;
+#if MOBILEGL_PIPE_PUSH
+        // The gauges' storage. Relaxed atomics like every other counter here: the publisher is
+        // the GL thread at a frame boundary and the reader is whoever formats the line, which
+        // under split can be the apply thread.
+        Counter g_gauges[static_cast<Uint32>(Gauge::Count)] = {};
+        constexpr Uint32 kGaugeCount = static_cast<Uint32>(Gauge::Count);
+#endif
 
         // Frames per summary line, latched by Init() from MOBILEGL_PIPE_STATS_PERIOD.
         Uint64 g_summaryPeriod = kDefaultSummaryFramePeriod;
@@ -258,6 +265,11 @@ namespace MobileGL::MG_Util::PipeStats {
             }
             g_frameCount.store(0, std::memory_order_relaxed);
             g_windowBaseFrames = 0;
+#if MOBILEGL_PIPE_PUSH
+            for (Uint32 i = 0; i < kGaugeCount; ++i) {
+                g_gauges[i].store(0, std::memory_order_relaxed);
+            }
+#endif
         }
 
         void EmitSummaryLine() {
@@ -328,6 +340,19 @@ namespace MobileGL::MG_Util::PipeStats {
         Bump(g_frameCalls[index], count);
         Bump(g_totalCalls[index], count);
     }
+
+#if MOBILEGL_PIPE_PUSH
+    // A STORE, NOT A BUMP, and the difference is the whole reason these are a separate kind.
+    // The publisher hands over its OWN run total (a maximum, or a count it has been keeping
+    // since the session opened), so accumulating deltas here would double every reading; and a
+    // maximum is not additive at all. Publishing the same value twice is a no-op, which is
+    // what makes it safe to call at every frame boundary.
+    void PublishGauge(Gauge gauge, Uint64 value) {
+        g_gauges[static_cast<Uint32>(gauge)].store(value, std::memory_order_relaxed);
+    }
+
+    Uint64 GaugeValue(Gauge gauge) { return Read(g_gauges[static_cast<Uint32>(gauge)]); }
+#endif
 
     void CountGate(Gate gate, Bool hit) {
         const Uint32 index = static_cast<Uint32>(gate);
@@ -489,6 +514,22 @@ namespace MobileGL::MG_Util::PipeStats {
         // tracks the draw count is a pull inside a loop, and one that tracks the frame count is
         // a pull per verb. Zero in every monolith lane by construction.
         line += " rsp=" + std::to_string(calls[static_cast<Uint32>(CallClass::ResidualPulls)]);
+        // P5's three wire gauges, and THEY ARE RUN TOTALS on a line whose every other field is
+        // a window - see the Gauge enum for the argument. `maxrec` is R-10's proof obligation
+        // (BRIEF 8 item 3): the largest single record this run wrote, in BYTES, beside the cap
+        // it has to stay under so nobody has to multiply MOBILEGL_IPC_RING_MB by hand. `maxcap`
+        // reads 0 when this process has no wire producer, which is what a monolith lane prints
+        // and is NOT the same statement as "the cap is zero".
+        //
+        // ringwraps / ringwaits are R-9's: SEG_CMD wrap pads and SEG_STAGE waits on retiredSeq.
+        // A small-ring lane whose ringwraps stays 0 ran the default lane's workload under a
+        // different environment block, which is exactly what exit gate E3(e) was recorded as
+        // NOT having proved (joint-v1.md 6).
+        line += " maxrec=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::MaxRecordBytes)]));
+        line += " maxcap=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::MaxRecordBytesCap)]));
+        line += " ringwraps=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWraps)]));
+        line += " ringpads=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWrapPads)]));
+        line += " ringwaits=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWaits)]));
 #endif
         line += "] gates[";
         for (Uint32 i = 0; i < kGateCount; ++i) {
@@ -544,6 +585,20 @@ namespace MobileGL::MG_Util::PipeStats {
                     ", \"miss\": " + std::to_string(Read(g_totalGateMiss[i])) + "}";
             json += (i + 1 == kGateCount) ? "\n" : ",\n";
         }
+#if MOBILEGL_PIPE_PUSH
+        // The gauges, under their long names. Run totals here as on the summary line.
+        json += "  },\n  \"wire\": {\n";
+        json += "    \"max-record-bytes\": " +
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::MaxRecordBytes)])) + ",\n";
+        json += "    \"max-record-bytes-cap\": " +
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::MaxRecordBytesCap)])) + ",\n";
+        json += "    \"ring-wraps\": " +
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWraps)])) + ",\n";
+        json += "    \"ring-wrap-pads\": " +
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWrapPads)])) + ",\n";
+        json += "    \"ring-waits\": " +
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWaits)])) + "\n";
+#endif
         json += "  },\n  \"cmd-bytes-per-draw-histogram\": [";
         for (Uint32 i = 0; i < kPayloadHistogramBuckets; ++i) {
             if (i != 0) {
