@@ -24,7 +24,7 @@
 #                      never says the push was disabled (the half ID-65 added)
 #   green              baseline green; the control's own run PASSES (the knob is not load-bearing)
 #   red-baseline       the baseline itself has a failed entry
-#   all-skipped        the baseline is entirely skipped (the disarmed lane, a legitimate exit 0)
+#   all-skipped        the baseline is entirely skipped (lost implementation, a hard failure)
 #   retrace-noselect   `ctest -N` matches nothing; the run exits 8 the way --no-tests=error does
 #   retrace-unrelated  one match; the run fails without naming the transport
 #   retrace-evidence   one match; the run fails with run_trace_case.cmake's own sentence
@@ -76,10 +76,20 @@ write_junit() {
     entry=DirectGLES.Split.ClearThenReadPixelsScenario.ClearWithNoDrawIsVisibleToDefaultFramebufferReadPixels
     [ "${MOBILEGL_IPC_PERSISTENT_BLOCK_KB:-64}" != 0 ] || entry=DirectGLES.Split.PersistentCoherentMapScenario.TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw
     body="<testcase name=\"${entry}\" status=\"fail\"><failure message=\"control red\"/></testcase>"
+    if [ "${MOBILEGL_IPC_PERSISTENT_BLOCK_KB:-64}" = 0 ]; then
+      case "${mode}" in
+        evidence|e3-no-private)
+          body="<testcase name=\"${entry}\" status=\"fail\"><failure/><system-out>the SECOND write through the same mapping, announced by nothing</system-out></testcase>" ;;
+      esac
+    fi
     if [ "${mode}" = partial-fatal ] && [ "${MOBILEGL_IPC_VERB_BARRIER:-1}" = 0 ]; then
       body="${body}<testcase name=\"DirectGLES.Split.TriangleScenario.SecondEntry\" status=\"fail\"><failure/></testcase>"
     fi
     case "${mode}" in
+      e3-skipped-selection)
+        if [ "${MOBILEGL_IPC_PERSISTENT_BLOCK_KB:-64}" = 0 ]; then
+          body="<testcase name=\"${entry}\" status=\"notrun\"><skipped/></testcase>"
+        fi ;;
       skipped-selection) body="<testcase name=\"${entry}\" status=\"notrun\"><skipped/></testcase>" ;;
       notrun-selection) body="<testcase name=\"${entry}\" status=\"notrun\"/>" ;;
       missing-selection) body='' ;;
@@ -130,7 +140,7 @@ fi
 # The control's own run.
 if [ "${MOBILEGL_IPC_VERB_BARRIER:-1}" = 0 ]; then
   case "${mode}" in
-    evidence|e3-unrelated|e3-no-private|skipped-selection|notrun-selection|missing-selection|partial-fatal) echo 'Fatal{BarrierViolation, "DrawVbo"}' > "${log}" ;;
+    evidence|e3-unrelated|e3-no-private|skipped-selection|e3-skipped-selection|notrun-selection|missing-selection|partial-fatal) echo 'Fatal{BarrierViolation, "DrawVbo"}' > "${log}" ;;
     wrong-fatal) echo 'Fatal{ReplyMissing, "DrawVbo"}' > "${log}" ;;
     missing-fatal) echo "library setup only; no fatal" > "${log}" ;;
     stdout-fatal) echo 'Fatal{BarrierViolation, "DrawVbo"}' ;;
@@ -144,6 +154,13 @@ if [ "${MOBILEGL_IPC_PERSISTENT_BLOCK_KB:-64}" = 0 ] && [ "${mode}" = evidence ]
     > "${CONTROL_TMPDIR}/pmap.log"
 fi
 case "${mode}" in
+  e3-skipped-selection)
+    if [ "${MOBILEGL_IPC_PERSISTENT_BLOCK_KB:-64}" = 0 ]; then
+      echo 'selected E3 entry ... ***Skipped'
+      exit 0
+    fi
+    exit 8
+    ;;
   skipped-selection|notrun-selection|missing-selection)
     echo '1/1 Test #1: selected entry ... ***Skipped'
     echo '100% tests passed, 0 tests failed out of 1'

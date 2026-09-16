@@ -264,6 +264,21 @@ void main() { oColor = vec4(vColor, 1.0); }
         // the lane is that IT is the arm with a ring the workload can fill.
         if (SplitLane::IsSmallRingLane()) {
             const unsigned long long driven = DriveUntilSmallRingOverruns();
+            // Ordinary uploads, each fitting by itself, jointly exceed the lane's 1 MiB
+            // staging segment. Delay only scheduling between applied and retired: the
+            // production allocator, not this test, must observe capacity and wait.
+            GLuint pressureBuffer = 0;
+            glGenBuffers(1, &pressureBuffer);
+            glBindBuffer(GL_COPY_WRITE_BUFFER, pressureBuffer);
+            std::vector<unsigned char> upload(768 * 1024, 0x5a);
+            glBufferData(GL_COPY_WRITE_BUFFER, upload.size(), nullptr, GL_DYNAMIC_DRAW);
+            DelaySplitRetirementForTesting(true);
+            glBufferSubData(GL_COPY_WRITE_BUFFER, 0, upload.size(), upload.data());
+            upload[0] = 0xa5;
+            glBufferSubData(GL_COPY_WRITE_BUFFER, 0, upload.size(), upload.data());
+            DelaySplitRetirementForTesting(false);
+            glBindBuffer(GL_COPY_WRITE_BUFFER, 0);
+            glDeleteBuffers(1, &pressureBuffer);
             Gl().EndFrame();
             WireLedger::ExpectSmallRingWrappedAtLeastOnce(
                 "TriangleScenario.TheSameVboAndVaoRedrawAcrossAFrameBoundary", driven);

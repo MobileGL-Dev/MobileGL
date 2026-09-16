@@ -56,10 +56,15 @@ run_split() { # $1 = STUB_MODE
 run_retrace() { # $1 = STUB_MODE
   cd "${WORK}" || return 127
   mkdir -p "${WORK}/OpenRA"
+  local rc=0
   env -i PATH="${STUB_DIR}:/usr/bin:/bin" STUB_MODE="$1" \
       CTEST=ctest CONTROL_TMPDIR="${WORK}/tmp-$1" \
       PULL_LIBRARY="${WORK}/pull.so" FROZEN_LIBRARY="${WORK}/frozen.so" \
-      bash "${HERE}/retrace_pull_library_control.sh" OpenRA DirectGLES
+      bash "${HERE}/retrace_pull_library_control.sh" OpenRA DirectGLES || rc=$?
+  cmp -s "${WORK}/frozen.so" "${WORK}/split.so" || {
+    echo 'F6 FAILED: pull control did not restore the split library'; return 1;
+  }
+  return "${rc}"
 }
 
 run_drop_draw() { # $1 = STUB_MODE
@@ -67,7 +72,7 @@ run_drop_draw() { # $1 = STUB_MODE
   mkdir -p "${WORK}/OpenRA"
   env -i PATH="${STUB_DIR}:/usr/bin:/bin" STUB_MODE="$1" \
       CTEST=ctest CONTROL_TMPDIR="${WORK}/tmp-$1" \
-      LIBRARY_LOG="${WORK}/tmp-$1/mobilegl.log" \
+      FROZEN_LIBRARY="${WORK}/frozen.so" LIBRARY_LOG="${WORK}/tmp-$1/mobilegl.log" \
       bash "${HERE}/retrace_drop_draw_control.sh" OpenRA DirectGLES
 }
 
@@ -80,8 +85,8 @@ expect PASSED "the scenarios' own diagnostic"               -- run_split evidenc
 expect FAILED "the knob leaves the selection green"          -- run_split green
 # The arming counter's half of the finding: a baseline that is already red cannot arm anything.
 expect FAILED "the baseline is already red"                  -- run_split red-baseline
-# The disarmed lane, which is a legitimate exit 0 while c1/s1/v1 are landing.
-expect PASSED "every split entry skipped (lane not armed)"   -- run_split all-skipped
+# P5 is complete: losing the runtime implementation must no longer disarm the gate.
+expect FAILED "every split entry skipped (implementation lost)" -- run_split all-skipped
 
 echo
 echo "=== the retrace lane's pull-library control (scripts/ci/retrace_pull_library_control.sh)"
@@ -93,7 +98,9 @@ else
   echo "no cc available; the retrace half of this smoke test needs one" >&2
   exit 1
 fi
-: > "${WORK}/frozen.so"
+printf '%s\n' 'int MG_Remote_stub(void) { return 1; }' > "${WORK}/split.c"
+cc -shared -fPIC -o "${WORK}/frozen.so" "${WORK}/split.c" || exit 1
+cp "${WORK}/frozen.so" "${WORK}/split.so"
 
 # THE FINDING, part (b): a regex matching no tests. --no-tests=error exits non-zero and the old
 # control read that as "the pull library turned it red".

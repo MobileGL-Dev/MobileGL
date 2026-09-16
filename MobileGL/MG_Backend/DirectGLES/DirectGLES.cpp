@@ -8988,6 +8988,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
         auto* srcMipmap = MG_State::GLState::AsMipmapTexture(srcEndpoint.Texture.get());
         auto* dstMipmap = MG_State::GLState::AsMipmapTexture(dstEndpoint.Texture.get());
         if (!srcMipmap || !dstMipmap) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5b package i1's ONE backend edit, and the contract names this site
+        // (MG_Remote/CONTRACT-P5B.md §2 i1 "the copy-image-shadow-mirror emulation", ruling
+        // §6.7). Migrating glCopyImageSubData moves the first blocker off the client's
+        // Fatal{UnmigratedVerb} and onto the Fatal below, on every Espryt copy between two
+        // textures with CPU shadows - so the ruling is: UNDER A REAL TRANSPORT THE SERVER SKIPS
+        // THE MIRROR, and the client-side mirror ROADMAP P8 names ("CopyImage 镜像搬到 client")
+        // stays P8's.
+        //
+        // WHAT THE SKIP LOSES IS BOUNDED BY TWO FATALS, which is the whole reason it is allowed
+        // to be a skip rather than a port: a later glGetTexImage of the destination served from
+        // the shadow is class C wave 3 (Fatal{UnmigratedVerb, "GetTexImage"}, P9) and a texture
+        // re-mint that re-uploads the level is Fatal{UnmigratedEmulation, "texture-remint-pull"}
+        // (Managers.cpp:5634). Neither can silently read the un-mirrored shadow.
+        //
+        // BEHIND #if MOBILEGL_BUILD_DISAGGREGATED so the pull build's code does not move (G1),
+        // and the arm is the TRANSPORT and not the build - build-split runs its unit and
+        // integration-gpu lanes under MOBILEGL_TRANSPORT=monolith, where this mirror is on an
+        // ordinary correct path and must still run.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return;
+#endif
 #if MOBILEGL_PIPE_PUSH
         // P4a (D-M). glCopyImageSubData's CPU-shadow mirror copies the source level's shadow
         // rows into the DESTINATION's shadow so a later readback of the destination sees what

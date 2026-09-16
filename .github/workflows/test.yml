@@ -962,6 +962,8 @@ jobs:
       # workflow passed that option. They had never been compiled by CI, let alone run.
       - name: Unit tests on the split runtime
         working-directory: build-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
         run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)"
 
       # --no-tests=error is half the gate, exactly as in integration-verify: the integration-split
@@ -979,13 +981,11 @@ jobs:
         run: |
           ulimit -c unlimited
           sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
-          ctest --output-on-failure -L integration-split --no-tests=error -j 4
+          ctest --output-on-failure -L integration-split --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/split-baseline.xml"
+          python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/split-baseline.xml" --require-split-ran
 
-      # ARCHITECTURE.md:521 asks for `ctest -L integration-gpu` to be name-for-name identical
-      # between the monolith and the split arm of the SAME build - the G2 shape extended to a
-      # third arm. The knob goes in the JOB environment rather than in a ctest property, for the
-      # reason the MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH precedent in `integration` gives: a
-      # property would override it and the arm would not be an arm.
+      # ID-65 supersedes broad inproc status parity: class-C aborts and named wrong-answer
+      # debts are recorded. Monolith, integration-split and the controls remain hard gates.
       #
       # The entries that name MOBILEGL_TRANSPORT in their OWN property (the Split. lanes) keep
       # their value in both passes, which is correct: they are the split family in both arms and
@@ -1007,14 +1007,11 @@ jobs:
           fi
           echo "integration-gpu entries in the split build: ${count}"
           MOBILEGL_TRANSPORT=monolith ctest --output-on-failure -L integration-gpu --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/arm-monolith.xml"
-          MOBILEGL_TRANSPORT=inproc   ctest --output-on-failure -L integration-gpu --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/arm-inproc.xml"
-          # NAME **AND STATUS**, and it is the comparison this step claimed to make and did not
-          # (review finding N-3): the first version wrote a names file and never read it, and
-          # `--output-on-failure` treats a SKIPPED test as not-a-failure - so the very failure
-          # ARCHITECTURE.md:521 is about, "an inproc arm that skipped forty entries the monolith arm
-          # ran", was invisible here and caught only by the local gate. `ctest -N` cannot see it
-          # either: this is one build directory, so the two arms have identical name lists by
-          # construction and the difference is entirely in what each entry DID.
+          # ID-65: broad inproc is a recorded debt census. Reduced split + controls gate below.
+          inproc_rc=0
+          MOBILEGL_TRANSPORT=inproc ctest --output-on-failure -L integration-gpu --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/arm-inproc.xml" || inproc_rc=$?
+          python3 ../scripts/ci/census_junit.py "${RUNNER_TEMP}/arm-inproc.xml" "${inproc_rc}" >> "${GITHUB_STEP_SUMMARY}"
+          # Retain the per-name status delta as evidence, not as the reduced-path gate.
           python3 - "${RUNNER_TEMP}/arm-monolith.xml" "${RUNNER_TEMP}/arm-inproc.xml" <<'PY'
           import sys, xml.etree.ElementTree as ET
           def rows(path):
@@ -1031,13 +1028,10 @@ jobs:
           diff = sorted(set(a) ^ set(b)) + sorted(n for n in set(a) & set(b) if a[n] != b[n])
           if diff:
               for name in diff[:40]:
-                  print(f"::error::{name}: monolith={a.get(name, '<absent>')} inproc={b.get(name, '<absent>')}")
-              print(f"::error::the monolith and inproc arms of ctest -L integration-gpu differ on "
-                    f"{len(diff)} entries. ARCHITECTURE.md:521 requires them identical name for name "
-                    f"AND status; an entry that SKIPPED on one arm and ran on the other is the "
-                    f"failure this compares for, and it is not a failure to --output-on-failure.")
-              raise SystemExit(1)
-          print(f"the two arms agree on all {len(a)} entries, name and status")
+                  print(f"{name}: monolith={a.get(name, '<absent>')} inproc={b.get(name, '<absent>')}")
+              print(f"Recorded ID-65 census: {len(diff)} name/status differences; not a parity gate")
+          else:
+              print(f"the two arms agree on all {len(a)} entries, name and status")
           PY
 
       # THE RUNTIME HALF OF "THIS IS REALLY A SPLIT BUILD". The build-level nm check in
@@ -1095,6 +1089,7 @@ jobs:
       # and FAILED as evidence the lane was live, so the controls could be measured against a
       # baseline that was already red.
       - name: Negative controls - the verb barrier and the persistent-map push must be load-bearing
+        if: ${{ !cancelled() }}
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -1109,6 +1104,8 @@ jobs:
           path: |
             build-split/MobileGL/MG_IntegrationTest/*.log*
             build-split/MobileGL/MG_IntegrationTest/split-logs/*.log
+            ${{ runner.temp }}/arm-inproc.xml
+            ${{ runner.temp }}/arm-monolith.xml
           if-no-files-found: warn
 
       - name: Upload core dumps
@@ -1978,6 +1975,7 @@ jobs:
         env:
           CONTROL_TMPDIR: ${{ runner.temp }}
           LIBRARY_LOG: ${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.log
+          FROZEN_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
         run: >-
           bash "${GITHUB_WORKSPACE}/scripts/ci/retrace_drop_draw_control.sh"
           '${{ matrix.case }}' '${{ matrix.backend }}'

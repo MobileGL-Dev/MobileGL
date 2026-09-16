@@ -68,6 +68,14 @@ def main():
                          for n in selected for c in by_name[n])
         if not_failed:
             raise ValueError(f"{label} control: {not_failed} selected entries did not fail")
+    elif mode == "assertion":
+        cases = ET.parse(sys.argv[4]).getroot().findall(".//testcase")
+        by_name = {case.get("name"): case for case in cases}
+        for name in selected:
+            case = by_name.get(name)
+            output = "" if case is None else " ".join(" ".join(case.itertext()).split())
+            if not re.search(sys.argv[5], output):
+                raise ValueError(f"E3(a) FAILED: {name} red lacks its persistent-map push diagnostic")
     elif mode == "evidence":
         missing = []
         label = sys.argv[5] if len(sys.argv) > 5 else ""

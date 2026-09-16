@@ -20,9 +20,11 @@ import sys
 import xml.etree.ElementTree as ET
 
 
-def tally(path):
+def tally(path, split_only=False):
     passed = failed = skipped = 0
     for case in ET.parse(path).getroot().iter('testcase'):
+        if split_only and not case.get('name', '').startswith('DirectGLES.Split.'):
+            continue
         if case.find('failure') is not None or case.find('error') is not None:
             failed += 1
         elif case.find('skipped') is not None or case.get('status') in ('notrun', 'disabled'):
@@ -33,15 +35,18 @@ def tally(path):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("usage: junit_tally.py <junit.xml>", file=sys.stderr)
+    if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != '--require-split-ran'):
+        print("usage: junit_tally.py <junit.xml> [--require-split-ran]", file=sys.stderr)
         return 2
     try:
-        passed, failed, skipped = tally(sys.argv[1])
+        passed, failed, skipped = tally(sys.argv[1], split_only=len(sys.argv) == 3)
     except Exception as exc:  # a malformed file is not "zero of everything"
         print(f"junit_tally: cannot parse {sys.argv[1]}: {exc}", file=sys.stderr)
         return 1
     print(f"{passed} {failed} {skipped}")
+    if len(sys.argv) == 3 and (passed == 0 or failed):
+        print('split baseline FAILED: no successful split runtime entries or an already-red selection', file=sys.stderr)
+        return 1
     return 0
 
 

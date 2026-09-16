@@ -51,6 +51,7 @@ CONTROL_TMPDIR="${CONTROL_TMPDIR:-${RUNNER_TEMP:-/tmp}}"
 mkdir -p "${CONTROL_TMPDIR}"
 
 junit="${CONTROL_TMPDIR}/isplit.xml"
+rm -f "${junit}"
 log_helper="$(dirname "$0")/../../MobileGL/MG_IntegrationTest/Harness/split_log_paths.py"
 
 # Check ownership even while the runtime lane is disarmed and will skip.
@@ -87,14 +88,14 @@ echo "split entries - passed: ${baseline_passed}, failed: ${baseline_failed}, sk
 # A RED BASELINE DISARMS THE CONTROLS RATHER THAN ARMING THEM (review finding 8, second half).
 # `|| true` plus a "not skipped" counter used to treat a case that ran and FAILED as evidence the
 # lane was live. Turning an already-red entry red is not a measurement.
-if [ "${baseline_failed}" -gt 0 ]; then
+if [ "${baseline_failed}" -gt 0 ] || [ "${baseline_rc}" -ne 0 ]; then
   echo "::error::${baseline_failed} DirectGLES.Split. entries are ALREADY RED with both knobs at their defaults, so neither negative control below can attribute its red to the knob it turns. Fix the lane first; a control measured against a red baseline is not a control. (This used to be swallowed by an unconditional '|| true' and counted as 'the lane is armed'.)"
   exit 1
 fi
 
 if [ "${baseline_passed}" -lt 1 ]; then
-  echo "::warning::every DirectGLES.Split. entry SKIPPED, so neither negative control can fire. The arming condition is a runtime fact - MG_Config::Transport, ClientSession::Active() and ImplementedVerbCount(), read by Harness/SplitRuntimePeek - and it becomes true on the commit that lands the last of c1/s1/v1. This step becomes a gate then, with no edit; it is not a green that asserted anything today."
-  exit 0
+  echo "::error::split baseline FAILED: every DirectGLES.Split. entry SKIPPED; the split implementation did not execute"
+  exit 1
 fi
 
 # ---- the controls ---------------------------------------------------------------------------
@@ -145,7 +146,7 @@ run_control() {
   if [ "${evidence}" = "private-barrier-fatal" ]; then
     python3 "${log_helper}" evidence "${manifest}" "${filter}" \
       'Fatal\{BarrierViolation, "[A-Za-z_][A-Za-z_0-9]*"\}' || exit 1
-  elif ! tr -s '[:space:]' ' ' < "${out}" | grep -qE "${evidence}"; then
+  elif ! python3 "${log_helper}" assertion "${manifest}" "${filter}" "${result}" "${evidence}"; then
     echo "::error::${name} FAILED: red lacks its persistent-map push diagnostic. Required: ${evidence}"
     exit 1
   fi
@@ -179,8 +180,10 @@ run_control "negative control E1 (MOBILEGL_IPC_VERB_BARRIER=0)" \
 #   * the LIBRARY's own line in the entry's private file, saying the push was disabled by this
 #     knob. It did not exist until ID-65 assigned it (joint-v1.md 3), which is why this control
 #     used to rest on the pixels alone.
+# TheMapLandsInTheArmItsLaneDeclares skips by design outside PersistentMapArm.
+# Select only the pixel cases; a pre-flight skip in either remains a hard failure.
 run_control "negative control E3(a) (MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0)" \
-  'DirectGLES\.Split\.(SmallRing\.)?PersistentCoherentMapScenario' \
+  'DirectGLES\.Split\.(SmallRing\.)?PersistentCoherentMapScenario\.(TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw|AWriteAfterAFrameBoundaryReachesTheNextFramesDraw)$' \
   "the SECOND write through the same mapping, announced by nothing|frame 1's write through the SAME mapping, after a Present" \
   'MGPipe: persistent-map push disabled - MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0' \
   MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0

@@ -10,11 +10,16 @@
 //
 // THE PARTITION IS CONTRACT-P5.md §7's AND IS NOT RE-DERIVED HERE (R-15, ID-12):
 //   class A  2 slots  answered locally from the caps mirror, never emitted, never Fatal
-//   class B 24 slots  emitted (P5's five; P5b d1's nineteen draw slots, all on draw_vbo)
-//   class C 45 slots  Fatal{UnmigratedVerb, "<slot>"}
+//   class B 48 slots emitted; class C 21 slots name their unmigrated verb.
 // The three counts are static_asserted to sum to kRemoteEmitSlotCount below, so a slot that
 // changes class without changing the arithmetic is a build break rather than a behaviour
 // change nobody reviewed.
+//
+// P5b MOVES SLOTS FROM C TO B, ONE PACKAGE AT A TIME (MG_Remote/CONTRACT-P5B.md §7). The three
+// numbers above are the partition AT THE P5b CONTRACT COMMIT and they are the ones the contract
+// states; the arithmetic below is what the tree currently has, and the per-package ownership
+// assertions say which package moved which slot. On this head t2 has landed: class B is 5 + 6
+// and class C is 58.
 //
 // THE PRE-VERB HOOKS RUN BEFORE THE RECORD, NEVER AFTER (b1, ID-18). PushPersistentMapsBeforeVerb
 // publishes the bytes an application wrote through a coherent map with no API call at all, and
@@ -36,6 +41,13 @@
 #include <MG_State/GLState/BufferState/BufferObject.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
+// P5b i1: the emitters below name a texture's, a buffer's and a program's HANDLE beside the GL
+// arguments (rule D). The handle comes from the client's own slot allocator, which is
+// MG_Impl/Pipe's - the same table MG_Impl/Pipe/ImageEmit.h's set_shader_images reads, so the
+// two records name one identity rather than two.
+#include <MG_Impl/Pipe/SlotAllocator.h>
+#include <MG_State/GLState/ProgramState/ProgramObject.h>
+#include <MG_State/GLState/TextureState/TextureState.h>
 
 // P5b d1: the handle a bound buffer already has (never minted here - the validate-time
 // set_index_buffer / the buffer's own constructor did that), for MGPDrawInfo::IndexResource and
@@ -47,6 +59,8 @@
 #include <cstring>
 
 #include "WireTables.h"
+#include <MG_Impl/Pipe/FramebufferEmit.h>
+#include <MG_Impl/Pipe/TextureEmit.h>
 
 namespace MobileGL::MG_Remote::Client {
 
@@ -240,6 +254,123 @@ namespace MobileGL::MG_Remote::Client {
             record.ValueClass = 0;
             session.EmitAndWait(MG_Pipe::MGPWireOp::Clear, &record, sizeof(record), nullptr, 0,
                                 nullptr, 0, nullptr);
+        }
+
+
+        // ---- f1: verbatim clear/copy/mipmap records (CONTRACT-P5B §2) ----
+        void EmitF1Clear(const char* slot, MG_Pipe::MGPipeHandle fbo, GLenum buffer,
+                         GLint drawbuffer, Uint8 valueClass, const void* value,
+                         GLfloat depth = 0, GLint stencil = 0) {
+            auto& session = RequireSession(slot);
+            BeforeReadOnlyVerb();
+            MG_Pipe::MGPClear record{};
+            record.Fbo = fbo;
+            record.DrawBufferIndex = drawbuffer;
+            record.ValueClass = valueClass;
+            switch (buffer) {
+            case GL_COLOR:
+                record.Kind = MG_Pipe::kMGPipeClearKindColor;
+                std::memcpy(record.ColorValue, value, sizeof(record.ColorValue));
+                break;
+            case GL_DEPTH:
+                record.Kind = MG_Pipe::kMGPipeClearKindDepth;
+                std::memcpy(&record.DepthValue, value, sizeof(record.DepthValue));
+                break;
+            case GL_STENCIL:
+                record.Kind = MG_Pipe::kMGPipeClearKindStencil;
+                std::memcpy(&record.StencilValue, value, sizeof(record.StencilValue));
+                break;
+            case GL_DEPTH_STENCIL:
+                record.Kind = MG_Pipe::kMGPipeClearKindDepthStencil;
+                record.DepthValue = depth;
+                record.StencilValue = stencil;
+                break;
+            default: UnmigratedVerbFatal(slot);
+            }
+            session.EmitAndWait(MG_Pipe::MGPWireOp::Clear, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        void EmitClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) {
+            EmitF1Clear("ClearBufferfv", MG_Pipe::kMGPipeNullHandle, buffer, drawbuffer,
+                        MG_Pipe::kMGPipeClearValueClassFloat, value);
+        }
+        void EmitClearNamedFramebufferfv(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo,
+                                               GLenum buffer, GLint drawbuffer, const GLfloat* value) {
+            EmitF1Clear("ClearNamedFramebufferfv", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo),
+                        buffer, drawbuffer, MG_Pipe::kMGPipeClearValueClassFloat, value);
+        }
+
+        void EmitClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
+            EmitF1Clear("ClearBufferiv", MG_Pipe::kMGPipeNullHandle, buffer, drawbuffer,
+                        MG_Pipe::kMGPipeClearValueClassInt, value);
+        }
+        void EmitClearNamedFramebufferiv(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo,
+                                               GLenum buffer, GLint drawbuffer, const GLint* value) {
+            EmitF1Clear("ClearNamedFramebufferiv", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo),
+                        buffer, drawbuffer, MG_Pipe::kMGPipeClearValueClassInt, value);
+        }
+
+        void EmitClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value) {
+            EmitF1Clear("ClearBufferuiv", MG_Pipe::kMGPipeNullHandle, buffer, drawbuffer,
+                        MG_Pipe::kMGPipeClearValueClassUint, value);
+        }
+        void EmitClearNamedFramebufferuiv(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo,
+                                               GLenum buffer, GLint drawbuffer, const GLuint* value) {
+            EmitF1Clear("ClearNamedFramebufferuiv", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo),
+                        buffer, drawbuffer, MG_Pipe::kMGPipeClearValueClassUint, value);
+        }
+
+        void EmitClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
+            EmitF1Clear("ClearBufferfi", MG_Pipe::kMGPipeNullHandle, buffer, drawbuffer,
+                        MG_Pipe::kMGPipeClearValueClassFloat, nullptr, depth, stencil);
+        }
+        void EmitClearNamedFramebufferfi(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo,
+                                         GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
+            EmitF1Clear("ClearNamedFramebufferfi", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo),
+                        buffer, drawbuffer, MG_Pipe::kMGPipeClearValueClassFloat, nullptr, depth, stencil);
+        }
+        const SharedPtr<MG_State::GLState::ITextureObject>& F1BoundTexture(GLenum target) {
+            auto& ctx = *MG_State::pGLContext;
+            return ctx.GetTextureUnitObject(ctx.GetActiveTextureUnit())
+                .GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target)).GetBoundObject();
+        }
+        void EmitF1Copy(GLenum target, GLint level, GLenum format, GLint x, GLint y,
+                        GLsizei width, GLsizei height, GLint xoffset, GLint yoffset, Bool subImage) {
+            auto& session = RequireSession(subImage ? "CopyTexSubImage2D" : "CopyTexImage2D");
+            BeforeReadOnlyVerb();
+            MG_Pipe::MGPCopyFromFramebuffer record{};
+            record.Dst = MG_Pipe::MGPipeTextureEmitterInstance().FindTexture(*F1BoundTexture(target));
+            record.Target = static_cast<Uint32>(target);
+            record.Level = level;
+            record.InternalFormat = format;
+            record.X = x; record.Y = y;
+            record.Width = width; record.Height = height;
+            record.XOffset = xoffset; record.YOffset = yoffset;
+            record.SubImage = subImage;
+            session.EmitAndWait(MG_Pipe::MGPWireOp::CopyFramebufferToTexture, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+        void EmitCopyTexImage2D(GLenum target, GLint level, GLenum format, GLint x, GLint y,
+                                GLsizei width, GLsizei height, GLint) {
+            EmitF1Copy(target, level, format, x, y, width, height, 0, 0, false);
+        }
+        void EmitCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
+                                   GLint x, GLint y, GLsizei width, GLsizei height) {
+            EmitF1Copy(target, level, 0, x, y, width, height, xoffset, yoffset, true);
+        }
+        void EmitGenerateMipmap(GLenum target) {
+            auto& session = RequireSession("GenerateMipmap");
+            BeforeReadOnlyVerb();
+            const auto& texture = F1BoundTexture(target);
+            MG_Pipe::MGPMipPlan record{};
+            record.Res = MG_Pipe::MGPipeTextureEmitterInstance().FindTexture(*texture);
+            record.Target = static_cast<Uint16>(target);
+            record.BaseLevel = texture->GetLevelRange().x();
+            const auto* mipmap = dynamic_cast<const MG_State::GLState::TextureObjectMipmap*>(texture.get());
+            record.LevelCount = mipmap ? mipmap->GetMipmapLevelCount() : 0;
+            session.EmitAndWait(MG_Pipe::MGPWireOp::GenerateMipmap, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
         }
 
         void EmitDrawArrays(GLenum mode, GLint first, GLsizei count) {
@@ -851,6 +982,356 @@ namespace MobileGL::MG_Remote::Client {
         }
 
         // =============================================================================
+        // CLASS B - P5b package i1: image bind, compute, barriers, copy-image, SSBO block
+        // (MG_Remote/CONTRACT-P5B.md §2 i1). Seven slots, five wire rows.
+        // =============================================================================
+        //
+        // RULE D, WHICH IS WHY THESE ARE SHORT. A P5b verb crosses AS THE CALL: the record
+        // carries the GL arguments verbatim - the enums as tokens, the GL names the backend
+        // keys on - beside the handle the P7/P8 form will dispatch on instead, and the server's
+        // ServerVerbSink reproduces the backend call the monolith makes. The backend keeps
+        // reading the frontend state it reads today through the BARRIER-PULLED fields of its
+        // verb class, which the record's own verb stamp is what makes legal. So a migration is
+        // one emitter here plus one sink body there, and nothing in the backend moves.
+        //
+        // THE HANDLES ARE LOOKED UP, NEVER MINTED, and that is a ruling (i1-v1 §4). The sinks
+        // below dispatch on the GL NAME - that is the whole point of carrying it - so a handle
+        // is carried for P7's sake only. FindByLifetimeId answers the handle the resource
+        // subsystem has already published for this object and kMGPipeNullHandle when it has
+        // published none; Acquire would MINT one here instead, at a call site that emits no
+        // create record, and the server would then be handed an identity it has never seen.
+        // A null Res/Src/Dst/ShaderCso therefore means "no handle published yet", which is a
+        // true statement, rather than a slot nobody allocated.
+
+        MG_Pipe::MGPipeHandle PublishedTextureHandle(
+            const SharedPtr<MG_State::GLState::ITextureObject>& texture) {
+            if (!texture) return MG_Pipe::kMGPipeNullHandle;
+            return MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::Texture,
+                                                           texture->GetLifetimeId());
+        }
+
+        // glBindImageTexture. Emitted AT THE CALL, after the frontend has written the unit's
+        // ImageTextureBinding and MGP_FILL(BindImageTexture) has run - the record's verb
+        // boundary is what makes the server's read of that binding legal. set_shader_images
+        // (the draw-prep set) still travels at the next validate, untouched: that record
+        // describes a resolved unit for the draw, this one reproduces a call.
+        //
+        // NO PRE-VERB HOOK, AND THAT IS DELIBERATE. b1's two hooks describe "the work the
+        // record is ABOUT TO START" - PushPersistentMapsBeforeVerb publishes bytes an
+        // application wrote through a coherent map, MarkGpuWrites* builds the GPU-write set.
+        // A bind starts no shader and reads no buffer; the dispatch that later reads this image
+        // is the verb that carries both hooks, and running them here as well would push the
+        // same maps twice per dispatch and inflate b1's per-row counters.
+        void EmitBindImageTexture(GLuint unit, GLuint texture, GLint level, GLboolean layered,
+                                  GLint layer, GLenum access, GLenum format) {
+            ClientSession& session = RequireSession("BindImageTexture");
+
+            MG_Pipe::MGPImageBind record{};
+            // The unit's binding is the frontend's and has just been written by the caller, so
+            // the texture this record names is the one the server's SyncImageTextureBinding
+            // will pull for the same unit. Read from MG_State::pGLContext and NOT through
+            // MGB_CTX: on this side of a split MGB_CTX is gPipeInputs, which is the SERVER's
+            // view, and the client asking it a question is how the two halves come to disagree.
+            if (MG_State::pGLContext != nullptr) {
+                record.Res = PublishedTextureHandle(
+                    MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(unit)).Texture);
+            }
+            record.Unit = static_cast<Uint32>(unit);
+            // The GL name the application passed, verbatim - what the ES slot is handed as
+            // `texture` and currently ignores. Never an identity (ARCHITECTURE 4.2.1).
+            record.GlName = static_cast<Uint32>(texture);
+            record.Level = static_cast<Int32>(level);
+            record.Layer = static_cast<Int32>(layer);
+            // THE GL ACCESS TOKEN, not MGPImageView::Access's three-value encoding (table 0's
+            // MGPImageBind::Access row). Two records, two jobs.
+            record.Access = static_cast<Uint32>(access);
+            record.Format = static_cast<Uint32>(format);
+            record.Layered = layered != GL_FALSE ? 1 : 0;
+            session.EmitAndWait(MG_Pipe::MGPWireOp::BindShaderImage, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        // glDispatchCompute. THE HOOK ORDER IS b1's AND IS INHERITED FROM THE CLASS-C STUB
+        // VERBATIM: push the persistent maps (they produce resource_subdata records that must
+        // precede the verb on SEG_CMD), then the dispatch mark walk, then the record. The stub
+        // carried both calls before its Fatal precisely so that the package which flipped this
+        // slot would inherit a call site that was already correct.
+        void EmitDispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
+            ClientSession& session = RequireSession("DispatchCompute");
+            PushPersistentMapsBeforeVerb();
+            MarkGpuWritesForDispatch();
+
+            MG_Pipe::MGPGridInfo record{};
+            record.GridX = static_cast<Uint32>(numGroupsX);
+            record.GridY = static_cast<Uint32>(numGroupsY);
+            record.GridZ = static_cast<Uint32>(numGroupsZ);
+            // Block* STAY 0 IN P5b (contract i1): the local size is a link artifact the backend
+            // reads from its own program, and a client-minted copy would be a second statement
+            // of it. P7's Magma may fill it from the reflection archive.
+            record.IndirectBuffer = MG_Pipe::kMGPipeNullHandle;
+            record.IndirectOffset = 0;
+            record.IsIndirect = 0;
+            session.EmitAndWait(MG_Pipe::MGPWireOp::LaunchGrid, &record, sizeof(record), nullptr, 0,
+                                nullptr, 0, nullptr);
+        }
+
+        void EmitDispatchComputeIndirect(GLintptr indirect) {
+            ClientSession& session = RequireSession("DispatchComputeIndirect");
+            PushPersistentMapsBeforeVerb();
+            MarkGpuWritesForDispatch();
+
+            MG_Pipe::MGPGridInfo record{};
+            // The counts come from the GL_DISPATCH_INDIRECT_BUFFER, so the three grid fields are
+            // 0 and IsIndirect is what says so; the sink dispatches on it and calls
+            // glDispatchComputeIndirect with the offset the application spelled.
+            record.IsIndirect = 1;
+            record.IndirectOffset = static_cast<Uint64>(indirect);
+            record.IndirectBuffer = MG_Pipe::kMGPipeNullHandle;
+            if (MG_State::pGLContext != nullptr) {
+                const auto& bound =
+                    MG_State::pGLContext
+                        ->GetBufferBindingSlot(::MobileGL::BufferTarget::DispatchIndirect)
+                        .GetBoundObject();
+                if (bound) {
+                    record.IndirectBuffer = MG_Pipe::MGPipeSlots().FindByLifetimeId(
+                        MG_Pipe::MGPipeKind::Buffer, bound->GetLifetimeId());
+                }
+            }
+            session.EmitAndWait(MG_Pipe::MGPWireOp::LaunchGrid, &record, sizeof(record), nullptr, 0,
+                                nullptr, 0, nullptr);
+        }
+
+        // glMemoryBarrier / glMemoryBarrierByRegion. The bits cross VERBATIM: the frontend has
+        // already validated them and already folds glTextureBarrier onto the same field
+        // (GL_Drawing.cpp:920-937), and Espryt's atomic-counter lowering - the counter bit
+        // implying the storage bit - stays inside the backend where the reason for it lives
+        // (DirectGLES.cpp:8837). A client that pre-lowered would be answering a driver question
+        // from the wrong side and the two arms would stop being byte-identical.
+        //
+        // No pre-verb hook: a barrier orders memory the GPU already holds. It starts no shader
+        // and reads no mapped buffer.
+        void EmitMemoryBarrier(GLbitfield barriers) {
+            ClientSession& session = RequireSession("MemoryBarrier");
+            MG_Pipe::MGPMemoryBarrier record{};
+            record.Bits = static_cast<Uint32>(barriers);
+            record.ByRegion = 0;
+            session.EmitAndWait(MG_Pipe::MGPWireOp::MemoryBarrier, &record, sizeof(record), nullptr,
+                                0, nullptr, 0, nullptr);
+        }
+
+        void EmitMemoryBarrierByRegion(GLbitfield barriers) {
+            ClientSession& session = RequireSession("MemoryBarrierByRegion");
+            MG_Pipe::MGPMemoryBarrier record{};
+            record.Bits = static_cast<Uint32>(barriers);
+            record.ByRegion = 1;
+            session.EmitAndWait(MG_Pipe::MGPWireOp::MemoryBarrier, &record, sizeof(record), nullptr,
+                                0, nullptr, 0, nullptr);
+        }
+
+        // glCopyImageSubData -> resource_copy_region (53), which P5b rules is glCopyImageSubData
+        // ONLY (contract §6.4; the framebuffer-sourced copies are f1's row 76).
+        void EmitCopyImageSubData(const MG_Backend::CopyImageEndpoint& src, GLenum srcTarget,
+                                  GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
+                                  const MG_Backend::CopyImageEndpoint& dst, GLenum dstTarget,
+                                  GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
+                                  GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
+            ClientSession& session = RequireSession("CopyImageSubData");
+
+            // ID-57's SHAPE: REFUSED BY NAME, BEFORE ANY EMISSION. GL 4.6 core 18.3.2 accepts
+            // GL_RENDERBUFFER as either endpoint, and an endpoint is a sum type for exactly that
+            // reason - but no sticky forward hands out a renderbuffer object, so the sink has no
+            // way to rebuild one from a name, and none was measured. P7 is where the backend
+            // takes handles and this arm becomes ordinary. The sink refuses the same shape by
+            // the same name if a record ever reaches it (defence on both sides of one wire).
+            if (src.IsRenderbuffer() || dst.IsRenderbuffer()) {
+                UnmigratedVerbFatal("CopyImageSubData+RENDERBUFFER");
+            }
+
+            MG_Pipe::MGPCopyRegion record{};
+            record.Src = PublishedTextureHandle(src.Texture);
+            record.Dst = PublishedTextureHandle(dst.Texture);
+            // The GL names beside the handles: the key MGB_CTX->GetTextureObject(name) takes on
+            // the far side (a BARRIER-PULLED sticky forward, counted in `rsp`, retired by P7).
+            record.SrcGlName =
+                src.Texture ? static_cast<Uint32>(src.Texture->GetExternalIndex()) : 0u;
+            record.DstGlName =
+                dst.Texture ? static_cast<Uint32>(dst.Texture->GetExternalIndex()) : 0u;
+            // The GL targets verbatim, in a Uint16 - every GL texture target fits one. NOT
+            // MGPipeResourceTarget: the sink only ever forwards these to a slot that takes GL
+            // enums, and the tree has no resource-target -> GL-enum inverse to spend on them.
+            record.SrcTarget = static_cast<Uint16>(srcTarget);
+            record.DstTarget = static_cast<Uint16>(dstTarget);
+            record.SrcLevel = static_cast<Uint16>(srcLevel);
+            record.DstLevel = static_cast<Uint16>(dstLevel);
+            // SrcBox is {srcX, srcY, srcZ, w, h, d}: the source origin AND the extent, which is
+            // one extent for both endpoints (GL spells the copy's size once).
+            record.SrcBox = MG_Pipe::MGPBox{srcX, srcY, srcZ, static_cast<Uint32>(srcWidth),
+                                            static_cast<Uint32>(srcHeight),
+                                            static_cast<Uint32>(srcDepth)};
+            record.DstX = dstX;
+            record.DstY = dstY;
+            record.DstZ = dstZ;
+            session.EmitAndWait(MG_Pipe::MGPWireOp::ResourceCopyRegion, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        // glShaderStorageBlockBinding -> set_storage_block_binding (75), the ONE content-carrying
+        // row P5b adds. The block is NAMED, not indexed, because the application's index is the
+        // frontend interface-query enumeration's and no backend shares that index space
+        // (BackendObject.h:216-221) - the name is the one coordinate all three agree on.
+        void EmitShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName,
+                                           GLuint storageBlockBinding) {
+            ClientSession& session = RequireSession("ShaderStorageBlockBinding");
+            // The backend slot's own first line (DirectGLES.cpp:9201), kept here so a null name
+            // never becomes a zero-size blob - which rule A forbids spelling at all.
+            if (storageBlockName == nullptr) return;
+
+            MG_Pipe::MGPStorageBlockBinding record{};
+            record.GlName = static_cast<Uint32>(program);
+            record.Binding = static_cast<Uint32>(storageBlockBinding);
+            record.ShaderCso = MG_Pipe::kMGPipeNullHandle;
+            if (MG_State::pGLContext != nullptr) {
+                const auto& programObject = MG_State::pGLContext->GetProgramObject(program);
+                if (programObject) {
+                    record.ShaderCso = MG_Pipe::MGPipeSlots().FindByLifetimeId(
+                        MG_Pipe::MGPipeKind::ShaderCso, programObject->GetLifetimeId());
+                }
+            }
+            // Size = strlen + 1: THE NUL TRAVELS (contract table 0's block-name row). The
+            // decoder re-terminates into a bounded local and refuses a run whose last byte is
+            // not NUL, so the two sides agree on where the name ends.
+            const Uint64 nameBytes = static_cast<Uint64>(std::strlen(storageBlockName)) + 1ull;
+            record.Name = session.Encoder().StageBytes(storageBlockName, nameBytes);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::SetStorageBlockBinding, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        // CLASS B - P5b package t2: the transform-feedback spans, the XFB object bind and the
+        // tessellation patch parameter (MG_Remote/CONTRACT-P5B.md §2 t2).
+        // =============================================================================
+        //
+        // SIX SLOTS, SIX ROWS, AND NOT ONE OF THEM STARTS A SHADER. Every one of the six is a
+        // control call - it opens, closes, pauses, resumes or re-targets a capture span, or sets
+        // the patch size the next tessellation draw uses - so each takes BeforeReadOnlyVerb(),
+        // which is CONTRACT-P5B.md §4's rule for "a verb that reads buffers but starts no
+        // shader" naming the XFB and patch controls by hand. The GPU-WRITE MARK FOR THE CAPTURE
+        // TARGETS IS NOT TAKEN HERE and that is deliberate: it belongs at the END of the span,
+        // after the record and before GLContext::EndTransformFeedback clears the live bindings,
+        // which is exactly where b1 already put it (GL_Drawing.cpp's
+        // MarkEndTransformFeedbackCaptureTargets). Taking it here as well would mark the same
+        // buffers twice and taking it INSTEAD of there would mark nothing.
+        //
+        // RULE D (CONTRACT-P5B.md §0): each record carries the GL arguments the frontend handed
+        // the backend slot and nothing that is a READING of them. The capture program, the
+        // capture-buffer bindings, the patch state and the bound XFB object all stay
+        // BARRIER-PULLED - the server's backend reads the client's gPipeInputs fill of the
+        // moment, which MGP_FILL at each call site has just written and the verb barrier holds
+        // still (R-1). That is why these are six two-line emitters and not an XFB protocol.
+        //
+        // WHAT MUST HAVE CROSSED BEFORE begin_stream_output, since it is the ordering question
+        // this package was asked: the capture buffers' own resource records (emitted at their
+        // own call sites through the resource family, long before this point), the program
+        // (the CSO/program family, likewise), and the buffer BINDINGS - which do not cross as a
+        // record at all, because set_stream_output_targets (39) has no producer and no consumer
+        // and CONTRACT-P5B.md §2 rules it NOT required for t2: under the barrier the server's
+        // StartPendingTransformFeedback reads them through the kXfbSpan/kDraw pulls
+        // (GetTransformFeedbackProgram, GetBufferBindingPoint). Producing that row is P9's.
+
+        void EmitBeginTransformFeedback(GLenum primitiveMode) {
+            ClientSession& session = RequireSession("BeginTransformFeedback");
+            BeforeReadOnlyVerb();
+
+            MG_Pipe::MGPStreamOutputBegin record{};
+            // The GL token verbatim (contract table 0's "GL enums on the wire"): the sink hands
+            // it to the backend slot that takes it, and nothing between here and there reads it.
+            record.PrimitiveMode = static_cast<Uint32>(primitiveMode);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::BeginStreamOutput, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        void EmitEndTransformFeedback() {
+            ClientSession& session = RequireSession("EndTransformFeedback");
+            BeforeReadOnlyVerb();
+
+            MG_Pipe::MGPXfbAccounting record{};
+            // THE ACCOUNTING IS THE CLIENT'S OWN AND IT IS INFORMATIONAL ON THIS SIDE OF THE
+            // WIRE: end_stream_output's backend call takes no arguments, and the three numbers
+            // are what the frontend has counted over this span (CONTRACT-P5B.md §2 t2, the
+            // companions row). They travel because the row has carried them since P4a and
+            // because they are what a server-side scatter would need when P9 lands one; the
+            // sink today calls GL.EndTransformFeedback() and reads none of them. Read here,
+            // BEFORE GLContext::EndTransformFeedback resets the counters at the call site.
+            const auto& context = *MG_State::pGLContext;
+            record.CapturedVertices = context.GetTransformFeedbackCapturedVertices();
+            record.PrimitivesWritten = context.GetTransformFeedbackPrimitiveCounter();
+            record.PrimitiveMode = static_cast<Uint32>(context.GetTransformFeedbackPrimitiveMode());
+            session.EmitAndWait(MG_Pipe::MGPWireOp::EndStreamOutput, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        void EmitPauseTransformFeedback() {
+            ClientSession& session = RequireSession("PauseTransformFeedback");
+            BeforeReadOnlyVerb();
+
+            // Reserved IS zero and the contract says so (MGPStreamOutputControl{Reserved = 0}).
+            // The row exists to BE the verb boundary - the stamp the server puts up before the
+            // sink runs - not to carry anything.
+            MG_Pipe::MGPStreamOutputControl record{};
+            record.Reserved = 0;
+            session.EmitAndWait(MG_Pipe::MGPWireOp::PauseStreamOutput, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        void EmitResumeTransformFeedback() {
+            ClientSession& session = RequireSession("ResumeTransformFeedback");
+            BeforeReadOnlyVerb();
+
+            MG_Pipe::MGPStreamOutputControl record{};
+            record.Reserved = 0;
+            session.EmitAndWait(MG_Pipe::MGPWireOp::ResumeStreamOutput, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        void EmitBindTransformFeedback(GLuint name) {
+            ClientSession& session = RequireSession("BindTransformFeedback");
+            BeforeReadOnlyVerb();
+
+            MG_Pipe::MGPStreamOutputBind record{};
+            // THE GL NAME IS NOT AN IDENTITY (ARCHITECTURE 4.2.1) and is carried anyway, because
+            // it is the key the backend has always used: Espryt indexes its driver objects by it
+            // (XfbImpl::g_xfbObjects[name], DirectGLES.cpp:1401) and generates the ES object on
+            // first bind. Name 0 is the default object, which is why the field is not a handle.
+            record.GlName = static_cast<Uint32>(name);
+            // Beside it, the identity that WILL dispatch: the frontend's per-object lifetime id,
+            // process-wide and never reused, which is what survives glGenTransformFeedbacks
+            // recycling a name. Read AFTER GLContext::BindTransformFeedbackObject at the call
+            // site, so it is the id of the object being bound and not of the previous one.
+            record.LifetimeId = MG_State::pGLContext->GetBoundTransformFeedbackLifetimeId();
+            session.EmitAndWait(MG_Pipe::MGPWireOp::BindStreamOutput, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        void EmitPatchParameteri(GLenum pname, GLint value) {
+            ClientSession& session = RequireSession("PatchParameteri");
+            BeforeReadOnlyVerb();
+
+            MG_Pipe::MGPPatchParameter record{};
+            // GL_PATCH_VERTICES is the only pname that reaches a backend slot - the frontend
+            // answers GL_PATCH_DEFAULT_*_LEVEL itself and bakes those into the synthesized
+            // control stage - and the frontend has already rejected every other pname with
+            // INVALID_ENUM before this call (GL_Drawing.cpp's PatchParameteri). Carried verbatim
+            // so the sink reproduces the call rather than a reading of it.
+            record.Pname = static_cast<Uint32>(pname);
+            record.Value = static_cast<Int32>(value);
+            // set_patch_state (43) STILL TRAVELS, at the next validate, and that is not a
+            // duplicate: it is the applier's working-block copy, this is the driver push Espryt
+            // does AT THE CALL (DirectGLES.cpp:8760), and both pushes happen today on the
+            // monolith path too (CONTRACT-P5B.md §2 t2).
+            session.EmitAndWait(MG_Pipe::MGPWireOp::PatchParameter, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        // =============================================================================
         // CLASS A - answered locally from the caps mirror (R-15). NO RECORD, EVER.
         // =============================================================================
 
@@ -889,8 +1370,7 @@ namespace MobileGL::MG_Remote::Client {
         }
 
         // =============================================================================
-        // CLASS C - Fatal{UnmigratedVerb}. 45 slots on this head: 44 in GLFunctionsTable +
-        // SetSwapInterval (64 at the P5b contract commit; d1 v1 moved its 19 to class B).
+        // CLASS C - 21 slots remain after d1/i1/t2/f1; each names its first blocker.
         // =============================================================================
         //
         // PARTITIONED BY THE P5b PACKAGE THAT OWNS THE FLIP (MG_Remote/CONTRACT-P5B.md,
@@ -925,43 +1405,24 @@ namespace MobileGL::MG_Remote::Client {
         // below still reads 0 + 19 = 19 and a slot that fell back in would have to be added here.
 #define MGR_UNMIGRATED_D1_SLOTS(X)
 
-        // DispatchCompute and DispatchComputeIndirect are i1's too; they are hand-written below
-        // because they carry b1's dispatch hook before the Fatal.
-#define MGR_UNMIGRATED_I1_SLOTS(X)                                                                 \
-    X(BindImageTexture, void, (GLuint, GLuint, GLint, GLboolean, GLint, GLenum, GLenum))           \
-    X(CopyImageSubData, void,                                                                      \
-      (const MG_Backend::CopyImageEndpoint&, GLenum, GLint, GLint, GLint, GLint,                   \
-       const MG_Backend::CopyImageEndpoint&, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, \
-       GLsizei))                                                                                   \
-    X(MemoryBarrier, void, (GLbitfield))                                                           \
-    X(MemoryBarrierByRegion, void, (GLbitfield))                                                   \
-    X(ShaderStorageBlockBinding, void, (GLuint, const GLchar*, GLuint))
+        // i1 HAS LANDED: the list is EMPTY and all seven slots are class B (the five emitters
+        // above plus the two compute ones). It is kept as an empty macro rather than deleted so
+        // that MGR_UNMIGRATED_GL_SLOTS' union, kUnmigratedI1's arithmetic and the ownership
+        // static_assert below all keep their shape - and so the next package to need a row here
+        // (a P5b wave-3 image/compute slot) has the partition to put it in.
+#define MGR_UNMIGRATED_I1_SLOTS(X)
 
+        // t2 LANDED (CONTRACT-P5B.md §2 t2): the three measured slots - BeginTransformFeedback
+        // (95 lane entries), PatchParameteri (43), BindTransformFeedback (2) - and the three
+        // companions that share their rows are class B now and live in the block above.
+        // DeleteTransformFeedback is the one that stays: it has NO ROW in P5b, by ruling and
+        // not by omission (unmeasured; the driver object leaks on the server until P9's XFB
+        // namespace work, and a bind of name 0 is what the backend does on delete of the bound
+        // one, DirectGLES.cpp:1422). It therefore still aborts by its own name.
 #define MGR_UNMIGRATED_T2_SLOTS(X)                                                                 \
-    X(PatchParameteri, void, (GLenum, GLint))                                                      \
-    X(BeginTransformFeedback, void, (GLenum))                                                      \
-    X(EndTransformFeedback, void, ())                                                              \
-    X(PauseTransformFeedback, void, ())                                                            \
-    X(ResumeTransformFeedback, void, ())                                                           \
-    X(BindTransformFeedback, void, (GLuint))                                                       \
     X(DeleteTransformFeedback, void, (GLuint))
 
-#define MGR_UNMIGRATED_F1_SLOTS(X)                                                                 \
-    X(ClearBufferfi, void, (GLenum, GLint, GLfloat, GLint))                                        \
-    X(ClearBufferfv, void, (GLenum, GLint, const GLfloat*))                                        \
-    X(ClearBufferuiv, void, (GLenum, GLint, const GLuint*))                                        \
-    X(ClearBufferiv, void, (GLenum, GLint, const GLint*))                                          \
-    X(ClearNamedFramebufferfv, void,                                                               \
-      (const SharedPtr<MG_State::GLState::FramebufferObject>&, GLenum, GLint, const GLfloat*))     \
-    X(ClearNamedFramebufferfi, void,                                                               \
-      (const SharedPtr<MG_State::GLState::FramebufferObject>&, GLenum, GLint, GLfloat, GLint))     \
-    X(ClearNamedFramebufferiv, void,                                                               \
-      (const SharedPtr<MG_State::GLState::FramebufferObject>&, GLenum, GLint, const GLint*))       \
-    X(ClearNamedFramebufferuiv, void,                                                              \
-      (const SharedPtr<MG_State::GLState::FramebufferObject>&, GLenum, GLint, const GLuint*))      \
-    X(CopyTexImage2D, void, (GLenum, GLint, GLenum, GLint, GLint, GLsizei, GLsizei, GLint))        \
-    X(CopyTexSubImage2D, void, (GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei))      \
-    X(GenerateMipmap, void, (GLenum))
+#define MGR_UNMIGRATED_F1_SLOTS(X)
 
         // The wave-3 tail. SetSwapInterval is hand-written below (it is not a GL.* slot).
 #define MGR_UNMIGRATED_TAIL_SLOTS(X)                                                               \
@@ -1014,31 +1475,18 @@ namespace MobileGL::MG_Remote::Client {
         MGR_UNMIGRATED_GL_VALUE_SLOTS(MGR_DEFINE_UNMIGRATED)
 #undef MGR_DEFINE_UNMIGRATED
 
-        // THE TWO COMPUTE SLOTS CARRY b1's DISPATCH HOOK BEFORE THE FATAL, and this is stated
-        // rather than hidden. MarkGpuWritesForDispatch() belongs immediately before the
-        // dispatch record, and the dispatch record is class C until i1 lands - so the call site
-        // is here, in the right place, and is UNREACHABLE-IN-EFFECT: the abort follows it. The
-        // package that moves DispatchCompute into class B (i1: launch_grid, opcode 60) replaces
-        // the Fatal and inherits a call site that is already correct rather than discovering
-        // that the mark walk was never wired.
-        void DispatchCompute_Unmigrated(GLuint, GLuint, GLuint) {
-            PushPersistentMapsBeforeVerb();
-            MarkGpuWritesForDispatch();
-            UnmigratedVerbFatal("DispatchCompute");
-        }
-        void DispatchComputeIndirect_Unmigrated(GLintptr) {
-            PushPersistentMapsBeforeVerb();
-            MarkGpuWritesForDispatch();
-            UnmigratedVerbFatal("DispatchComputeIndirect");
-        }
+        // THE TWO COMPUTE SLOTS' class-C stubs are GONE (P5b i1): they carried b1's dispatch
+        // hook before their Fatal so that the package flipping them would inherit a call site
+        // that was already correct, and EmitDispatchCompute / EmitDispatchComputeIndirect above
+        // are that inheritance - same two calls, same order, the record where the Fatal was.
 
         void SetSwapInterval_Unmigrated(Int) { UnmigratedVerbFatal("SetSwapInterval"); }
 
         // The counts, as arithmetic. MGR_COUNT_ONE expands to `+ 1` per row.
 #define MGR_COUNT_ONE(Name, Ret, Sig) +1
         constexpr Uint32 kUnmigratedD1 = 0 MGR_UNMIGRATED_D1_SLOTS(MGR_COUNT_ONE);
-        // + DispatchCompute, DispatchComputeIndirect, written out by hand.
-        constexpr Uint32 kUnmigratedI1 = 0 MGR_UNMIGRATED_I1_SLOTS(MGR_COUNT_ONE) + 2;
+        // i1 landed: the list is empty and the two hand-written compute stubs are gone with it.
+        constexpr Uint32 kUnmigratedI1 = 0 MGR_UNMIGRATED_I1_SLOTS(MGR_COUNT_ONE);
         constexpr Uint32 kUnmigratedT2 = 0 MGR_UNMIGRATED_T2_SLOTS(MGR_COUNT_ONE);
         constexpr Uint32 kUnmigratedF1 = 0 MGR_UNMIGRATED_F1_SLOTS(MGR_COUNT_ONE);
         // + SetSwapInterval, written out by hand.
@@ -1050,10 +1498,10 @@ namespace MobileGL::MG_Remote::Client {
 
         // The emitted counts, PER OWNER. P5's five are c1's; each P5b package raises its own.
         constexpr Uint32 kEmittedSlotsP5 = 5; // Clear, DrawArrays, ReadPixels, Blit, Present
-        constexpr Uint32 kEmittedSlotsD1 = 19; // the draw family, all on draw_vbo (d1 v1)
-        constexpr Uint32 kEmittedSlotsI1 = 0;
-        constexpr Uint32 kEmittedSlotsT2 = 0;
-        constexpr Uint32 kEmittedSlotsF1 = 0;
+        constexpr Uint32 kEmittedSlotsD1 = 19;
+        constexpr Uint32 kEmittedSlotsI1 = 7;
+        constexpr Uint32 kEmittedSlotsT2 = 6;
+        constexpr Uint32 kEmittedSlotsF1 = 11;
         constexpr Uint32 kEmittedSlots =
             kEmittedSlotsP5 + kEmittedSlotsD1 + kEmittedSlotsI1 + kEmittedSlotsT2 + kEmittedSlotsF1;
         constexpr Uint32 kLocallyAnsweredSlots = 2; // GetIntegeri_v, IsTimerQuerySupported
@@ -1067,12 +1515,7 @@ namespace MobileGL::MG_Remote::Client {
         static_assert(kUnmigratedT2 + kEmittedSlotsT2 == 7, "t2 owns the 7 XFB/tessellation slots");
         static_assert(kUnmigratedF1 + kEmittedSlotsF1 == 11, "f1 owns the 11 clear/copy/mip slots");
         static_assert(kUnmigratedTail == 20, "the wave-3 tail is 20 slots and no P5b package owns one");
-        // 64 at the P5b contract commit; every P5b flip moves exactly one slot from C to B, so
-        // the SUM is what stays pinned, and a package's flip changes its own count and nothing
-        // else on this line.
-        static_assert(kUnmigratedSlots + (kEmittedSlots - kEmittedSlotsP5) == 64,
-                      "CONTRACT-P5.md §7 class C was 64 slots at the P5b contract commit; a P5b flip "
-                      "moves one slot from C to B and the two counts must still sum to 64");
+        static_assert(kUnmigratedSlots + kEmittedSlots == 69, "class B and C own 69 slots");
         static_assert(kLocallyAnsweredSlots + kEmittedSlots + kUnmigratedSlots == kRemoteEmitSlotCount,
                       "the three classes no longer partition the 71 slots");
 
@@ -1089,8 +1532,6 @@ namespace MobileGL::MG_Remote::Client {
             MGR_UNMIGRATED_GL_SLOTS(MGR_ASSIGN_UNMIGRATED)
             MGR_UNMIGRATED_GL_VALUE_SLOTS(MGR_ASSIGN_UNMIGRATED)
 #undef MGR_ASSIGN_UNMIGRATED
-            table.GL.DispatchCompute = &DispatchCompute_Unmigrated;
-            table.GL.DispatchComputeIndirect = &DispatchComputeIndirect_Unmigrated;
             table.SetSwapInterval = &SetSwapInterval_Unmigrated;
 
             // ---- class A
@@ -1130,6 +1571,38 @@ namespace MobileGL::MG_Remote::Client {
             table.GL.ReadPixels = &EmitReadPixels;
             table.GL.BlitFramebuffer = &EmitBlitFramebuffer;
             table.Present = &EmitPresent;
+            // ---- class B, P5b t2. Assigned AFTER the class-C block above, which is what makes
+            // the flip a single-line change per slot: the Fatal thunk is overwritten, and a slot
+            // whose row is removed from MGR_UNMIGRATED_T2_SLOTS but not assigned here would be
+            // NULL and caught by RemoteEmitTable.NoSlotIsNull rather than silently skipped.
+            table.GL.BeginTransformFeedback = &EmitBeginTransformFeedback;
+            table.GL.EndTransformFeedback = &EmitEndTransformFeedback;
+            table.GL.PauseTransformFeedback = &EmitPauseTransformFeedback;
+            table.GL.ResumeTransformFeedback = &EmitResumeTransformFeedback;
+            table.GL.BindTransformFeedback = &EmitBindTransformFeedback;
+            table.GL.PatchParameteri = &EmitPatchParameteri;
+
+            // ---- f1 ----
+            table.GL.ClearBufferfi = &EmitClearBufferfi;
+            table.GL.ClearBufferfv = &EmitClearBufferfv;
+            table.GL.ClearBufferiv = &EmitClearBufferiv;
+            table.GL.ClearBufferuiv = &EmitClearBufferuiv;
+            table.GL.ClearNamedFramebufferfi = &EmitClearNamedFramebufferfi;
+            table.GL.ClearNamedFramebufferfv = &EmitClearNamedFramebufferfv;
+            table.GL.ClearNamedFramebufferiv = &EmitClearNamedFramebufferiv;
+            table.GL.ClearNamedFramebufferuiv = &EmitClearNamedFramebufferuiv;
+            table.GL.CopyTexImage2D = &EmitCopyTexImage2D;
+            table.GL.CopyTexSubImage2D = &EmitCopyTexSubImage2D;
+            table.GL.GenerateMipmap = &EmitGenerateMipmap;
+
+            // ---- class B, P5b package i1 (kEmittedSlotsI1 = 7)
+            table.GL.BindImageTexture = &EmitBindImageTexture;
+            table.GL.DispatchCompute = &EmitDispatchCompute;
+            table.GL.DispatchComputeIndirect = &EmitDispatchComputeIndirect;
+            table.GL.MemoryBarrier = &EmitMemoryBarrier;
+            table.GL.MemoryBarrierByRegion = &EmitMemoryBarrierByRegion;
+            table.GL.CopyImageSubData = &EmitCopyImageSubData;
+            table.GL.ShaderStorageBlockBinding = &EmitShaderStorageBlockBinding;
 
             return table;
         }

@@ -171,18 +171,101 @@ namespace {
 // =====================================================================================
 
 TEST(RemoteEmitTable, TheThreeClassesPartitionAllSeventyOneSlots) {
-    // CONTRACT-P5.md §7: 2 answered locally + 5 emitted + 64 Fatal. Read from the functions the
-    // table itself reports with - which is also what t1's arming condition reads - rather than
-    // recomputed here, so a table that lost an emitter cannot look like one that never had it.
+    // P5 baseline five + f1 eleven + i1 seven + t2 six emitted slots.
     EXPECT_EQ(LocallyAnsweredSlotCount(), 2u);
-    // P5b d1 moved the nineteen draw slots from class C to class B (CONTRACT-P5B.md §7: B = 5
-    // + the packages' flips, C = 64 - the same). Each P5b package raises B and lowers C by the
-    // same number, so the two numbers here move together and the sum below never does.
-    EXPECT_EQ(ImplementedVerbCount(), 5u + 19u);
-    EXPECT_EQ(UnmigratedSlotCount(), 64u - 19u);
+    EXPECT_EQ(ImplementedVerbCount(), 48u);
+    EXPECT_EQ(UnmigratedSlotCount(), 21u);
     EXPECT_EQ(LocallyAnsweredSlotCount() + ImplementedVerbCount() + UnmigratedSlotCount(),
               kRemoteEmitSlotCount);
 }
+
+TEST(RemoteEmitTable, TheSixXfbAndPatchSlotsAreNonNullAndDistinct) {
+    // P5b t2 (CONTRACT-P5B.md §2 t2), the half that needs no fork: the six slots exist and are
+    // six DIFFERENT functions. Six identical pointers would be one emitter assigned six times,
+    // which is how a copy-paste flip loses five records and still passes every count.
+    //
+    // Red once by assigning `table.GL.PauseTransformFeedback = &EmitResumeTransformFeedback;`
+    // in BuildRemoteEmitTable - the exact copy-paste this guards: "t2 slots 2 and 3 are one
+    // function".
+    const MG_Backend::GlobalBackendFunctionsTable& table = RemoteEmitTable();
+    const void* const six[] = {
+        reinterpret_cast<const void*>(table.GL.BeginTransformFeedback),
+        reinterpret_cast<const void*>(table.GL.EndTransformFeedback),
+        reinterpret_cast<const void*>(table.GL.PauseTransformFeedback),
+        reinterpret_cast<const void*>(table.GL.ResumeTransformFeedback),
+        reinterpret_cast<const void*>(table.GL.BindTransformFeedback),
+        reinterpret_cast<const void*>(table.GL.PatchParameteri),
+    };
+    for (SizeT i = 0; i < 6; ++i) {
+        EXPECT_NE(six[i], nullptr) << "t2 slot " << i << " is null";
+        for (SizeT j = i + 1; j < 6; ++j) {
+            EXPECT_NE(six[i], six[j]) << "t2 slots " << i << " and " << j << " are one function";
+        }
+    }
+    // And the one XFB slot t2 does NOT flip is still there to be Fatal - CONTRACT-P5B.md gives
+    // DeleteTransformFeedback no row (unmeasured), so it must not have been swept up.
+    EXPECT_NE(table.GL.DeleteTransformFeedback, nullptr);
+}
+
+#if MGTEST_HAVE_FORK
+TEST(RemoteEmitTable, EachXfbAndPatchSlotIsClassBAndDemandsASessionByItsOwnName) {
+    // P5b t2, THE HALF THAT DECIDES THE CLASS. A pointer comparison cannot tell a class-B
+    // emitter from a class-C thunk - each unmigrated slot gets its own generated function, so
+    // every slot in the table is already a distinct non-null address. What distinguishes them is
+    // WHAT THEY SAY when called with no ClientSession: an emitter reaches RequireSession and
+    // dies Fatal{NoClientSession, "<slot>"}; a thunk dies Fatal{UnmigratedVerb, "<slot>"}. Both
+    // strings are asserted, because a case that only looked for the first would be satisfied by
+    // a build where every one of these had been flipped by accident.
+    //
+    // Red once by SWAPPING the Pause and Resume assignments in BuildRemoteEmitTable - the two
+    // emitters with the same signature, so the swap compiles and neither is orphaned (the first
+    // attempt redirected one slot at another's emitter and the build failed on the signature
+    // and on -Wunused-function, which is a control that did not run). The child called through
+    // PauseTransformFeedback died Fatal{NoClientSession, "ResumeTransformFeedback"} and this
+    // case failed with "PauseTransformFeedback did not reach the class-B emitter's session
+    // demand", so the string really is the slot's own name and not a shared constant.
+    struct Slot {
+        const char* Name;
+        void (*Call)();
+    };
+    static const Slot kSlots[] = {
+        {"BeginTransformFeedback", [] { RemoteEmitTable().GL.BeginTransformFeedback(0x0004); }},
+        {"EndTransformFeedback", [] { RemoteEmitTable().GL.EndTransformFeedback(); }},
+        {"PauseTransformFeedback", [] { RemoteEmitTable().GL.PauseTransformFeedback(); }},
+        {"ResumeTransformFeedback", [] { RemoteEmitTable().GL.ResumeTransformFeedback(); }},
+        {"BindTransformFeedback", [] { RemoteEmitTable().GL.BindTransformFeedback(0); }},
+        {"PatchParameteri", [] { RemoteEmitTable().GL.PatchParameteri(0x8E72, 3); }},
+    };
+    for (const Slot& slot : kSlots) {
+        const ChildResult r = RunInChild([&slot] { slot.Call(); });
+        ASSERT_TRUE(DiedOfAbort(r)) << slot.Name << ": " << DescribeStatus(r) << "\n" << r.Log;
+        EXPECT_NE(r.Log.find(std::string("Fatal{NoClientSession, \"") + slot.Name + "\"}"),
+                  std::string::npos)
+            << slot.Name << " did not reach the class-B emitter's session demand:\n"
+            << r.Log;
+        EXPECT_EQ(r.Log.find("Fatal{UnmigratedVerb"), std::string::npos)
+            << slot.Name << " is still class C:\n"
+            << r.Log;
+    }
+}
+
+TEST(RemoteEmitTable, DeleteTransformFeedbackHasNoRowAndStillAbortsByItsOwnName) {
+    // CONTRACT-P5B.md §2 t2 and c0b-v1.md §6: the seventh slot in t2's ownership block gets NO
+    // row in P5b - it is unmeasured, the driver object leaks on the server until P9's XFB
+    // namespace work, and a bind of name 0 is what the backend does on delete of the bound one.
+    // That is a RULING, so it is pinned rather than left to be re-derived from a count: a later
+    // round that gives it a row has to delete this case and say why.
+    //
+    // Red once by assigning `table.GL.DeleteTransformFeedback = &EmitBindTransformFeedback;` in
+    // BuildRemoteEmitTable - a package sweeping the whole XFB family into class B: the child
+    // died Fatal{NoClientSession, "BindTransformFeedback"} and the UnmigratedVerb expectation
+    // failed.
+    const ChildResult r = RunInChild([] { RemoteEmitTable().GL.DeleteTransformFeedback(7); });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"DeleteTransformFeedback\"}"), std::string::npos)
+        << r.Log;
+}
+#endif // MGTEST_HAVE_FORK
 
 TEST(RemoteEmitTable, NoSlotIsNull) {
     // R-4's whole rule, asserted over the STRUCT rather than over the list that built it. 91
@@ -280,6 +363,49 @@ TEST(RemoteEmitTable, SetSwapIntervalIsClassCAndSaysSo) {
     EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"SetSwapInterval\"}"), std::string::npos) << r.Log;
 }
 
+#endif // MGTEST_HAVE_FORK
+
+// ---- P5b package i1 (MG_Remote/CONTRACT-P5B.md §2 i1) -------------------------------------
+
+TEST(RemoteEmitTable, TheSevenI1SlotsAreClassBAndAreNotTheFatalThunk) {
+    // The census's five measured slots plus the two companions that share their rows. Named
+    // rather than counted, so a table that flipped a DIFFERENT seven is red here and not only
+    // in the arithmetic. The comparison is against a slot that is still class C: a flipped slot
+    // and an unflipped one cannot be the same pointer, which is what a forgotten class-B
+    // assignment would look like (class C is assigned FIRST in BuildRemoteEmitTable precisely so
+    // that the mistake is loud rather than null).
+    const MG_Backend::GlobalBackendFunctionsTable& table = RemoteEmitTable();
+    const void* fatal = reinterpret_cast<const void*>(table.GL.GetTexImage); // wave-3 tail, class C
+    ASSERT_NE(fatal, nullptr);
+    const void* const i1[] = {
+        reinterpret_cast<const void*>(table.GL.BindImageTexture),
+        reinterpret_cast<const void*>(table.GL.DispatchCompute),
+        reinterpret_cast<const void*>(table.GL.DispatchComputeIndirect),
+        reinterpret_cast<const void*>(table.GL.MemoryBarrier),
+        reinterpret_cast<const void*>(table.GL.MemoryBarrierByRegion),
+        reinterpret_cast<const void*>(table.GL.CopyImageSubData),
+        reinterpret_cast<const void*>(table.GL.ShaderStorageBlockBinding),
+    };
+    static const char* const kNames[] = {"BindImageTexture",      "DispatchCompute",
+                                         "DispatchComputeIndirect", "MemoryBarrier",
+                                         "MemoryBarrierByRegion", "CopyImageSubData",
+                                         "ShaderStorageBlockBinding"};
+    for (SizeT i = 0; i < sizeof(i1) / sizeof(i1[0]); ++i) {
+        EXPECT_NE(i1[i], nullptr) << kNames[i] << " is null";
+        EXPECT_NE(i1[i], fatal) << kNames[i]
+                                << " still points at an UnmigratedVerbFatal thunk; i1 flipped it "
+                                   "to class B";
+    }
+    // The two barrier slots and the two dispatch slots share a WIRE ROW but not an emitter: the
+    // discriminant (ByRegion / IsIndirect) is set by the emitter, so one thunk for both would
+    // carry the wrong one.
+    EXPECT_NE(i1[3], i1[4]) << "MemoryBarrier and MemoryBarrierByRegion share memory_barrier (61) "
+                               "but must set opposite ByRegion values";
+    EXPECT_NE(i1[1], i1[2]) << "DispatchCompute and DispatchComputeIndirect share launch_grid (60) "
+                               "but must set opposite IsIndirect values";
+}
+
+#if MGTEST_HAVE_FORK
 TEST(RemoteEmitTable, AClassBSlotWithNoSessionAbortsRatherThanFallingThrough) {
     // The other half of "no slot may fall through to the driver". With no ClientSession the
     // emitter has nowhere to put the record, and the one thing it may not do is return quietly:
@@ -287,6 +413,53 @@ TEST(RemoteEmitTable, AClassBSlotWithNoSessionAbortsRatherThanFallingThrough) {
     const ChildResult r = RunInChild([] { RemoteEmitTable().GL.Clear(0x4000 /*COLOR_BUFFER_BIT*/); });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{NoClientSession, \"Clear\"}"), std::string::npos) << r.Log;
+}
+
+TEST(RemoteEmitTable, EachI1SlotReachesRequireSessionUnderItsOwnName) {
+    // The behavioural half: an i1 slot is class B, so with no ClientSession it reaches
+    // RequireSession and aborts Fatal{NoClientSession, "<slot>"} - NOT Fatal{UnmigratedVerb}
+    // (which would mean the flip never happened) and NOT quietly (which is the split lane
+    // running monolith and going green, R-4). The name in the message is the slot's own, which
+    // is the half a single case could not state.
+    //
+    // RED ONCE BY DOING X: put `X(MemoryBarrier, void, (GLbitfield))` back in
+    // MGR_UNMIGRATED_I1_SLOTS and drop `table.GL.MemoryBarrier = &EmitMemoryBarrier;` - the
+    // MemoryBarrier arm below then finds Fatal{UnmigratedVerb, "MemoryBarrier"} instead.
+    const ChildResult barrier = RunInChild([] { RemoteEmitTable().GL.MemoryBarrier(0x2000); });
+    ASSERT_TRUE(DiedOfAbort(barrier)) << DescribeStatus(barrier) << "\n" << barrier.Log;
+    EXPECT_NE(barrier.Log.find("Fatal{NoClientSession, \"MemoryBarrier\"}"), std::string::npos)
+        << barrier.Log;
+    EXPECT_EQ(barrier.Log.find("Fatal{UnmigratedVerb"), std::string::npos)
+        << "MemoryBarrier is class B from P5b i1 on:\n"
+        << barrier.Log;
+
+    const ChildResult dispatch = RunInChild([] { RemoteEmitTable().GL.DispatchCompute(1, 1, 1); });
+    ASSERT_TRUE(DiedOfAbort(dispatch)) << DescribeStatus(dispatch) << "\n" << dispatch.Log;
+    EXPECT_NE(dispatch.Log.find("Fatal{NoClientSession, \"DispatchCompute\"}"), std::string::npos)
+        << dispatch.Log;
+
+    const ChildResult bind = RunInChild(
+        [] { RemoteEmitTable().GL.BindImageTexture(0, 1, 0, GL_FALSE, 0, 0x88BA, 0x8058); });
+    ASSERT_TRUE(DiedOfAbort(bind)) << DescribeStatus(bind) << "\n" << bind.Log;
+    EXPECT_NE(bind.Log.find("Fatal{NoClientSession, \"BindImageTexture\"}"), std::string::npos)
+        << bind.Log;
+
+    const ChildResult ssbo = RunInChild(
+        [] { RemoteEmitTable().GL.ShaderStorageBlockBinding(1, "Blk", 2); });
+    ASSERT_TRUE(DiedOfAbort(ssbo)) << DescribeStatus(ssbo) << "\n" << ssbo.Log;
+    EXPECT_NE(ssbo.Log.find("Fatal{NoClientSession, \"ShaderStorageBlockBinding\"}"),
+              std::string::npos)
+        << ssbo.Log;
+
+    const ChildResult copy = RunInChild([] {
+        const MG_Backend::CopyImageEndpoint src{};
+        const MG_Backend::CopyImageEndpoint dst{};
+        RemoteEmitTable().GL.CopyImageSubData(src, 0x0DE1, 0, 0, 0, 0, dst, 0x0DE1, 0, 0, 0, 0, 1,
+                                              1, 1);
+    });
+    ASSERT_TRUE(DiedOfAbort(copy)) << DescribeStatus(copy) << "\n" << copy.Log;
+    EXPECT_NE(copy.Log.find("Fatal{NoClientSession, \"CopyImageSubData\"}"), std::string::npos)
+        << copy.Log;
 }
 #endif // MGTEST_HAVE_FORK
 
@@ -1042,6 +1215,300 @@ TEST(RemoteReadback, AReplyIsScatteredOnlyWhenItIsOkAndExactlyTheReadsExtent) {
 }
 
 #include "RemoteClientControls.inc"
+#include <MG_Impl/Pipe/FramebufferEmit.h>
+#include <MG_Impl/Pipe/TextureEmit.h>
+#include <MG_State/GLState/TextureState/TextureObject2D.h>
+
+// f1: the installed emitters are decoded by a peer on the apply thread.
+#if MGTEST_HAVE_FORK
+namespace {
+struct F1Peer : Codec::WireVerbSink {
+    MGPClear clear{};
+    MGPCopyFromFramebuffer copy{};
+    MGPMipPlan mip{};
+    unsigned calls = 0;
+    Bool OnClear(const MGPClear& v) override { clear = v; ++calls; return true; }
+    Bool OnCopyFramebufferToTexture(const MGPCopyFromFramebuffer& v) override { copy = v; ++calls; return true; }
+    Bool OnGenerateMipmap(const MGPMipPlan& v) override { mip = v; ++calls; return true; }
+    void Install() {
+        if (Srv::ServerLoopInstance().RunOnApplyThread([](void* self) {
+            auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
+            decoder.SetVerbSink(static_cast<F1Peer*>(self));
+            return MOBILEGL_OK;
+        }, this) != MOBILEGL_OK) ::_exit(82);
+    }
+};
+}
+
+TEST(RemoteF1, ClearBufferfvFieldsCross) {
+    // Red once (executed, reverted): zero the emitted clear values; F1.ClearBufferfv.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession();
+        F1Peer peer; peer.Install();
+        const GLfloat value[4] = {1, 7, 13, 23};
+
+        RemoteEmitTable().GL.ClearBufferfv(GL_COLOR, 3, value);
+        const auto& r = peer.clear;
+        if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassFloat ||
+            r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
+            !MGPipeHandleIsNull(r.Fbo)) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.ClearBufferfv.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, ClearNamedFramebufferfvFieldsCross) {
+    // Red once (executed, reverted): zero the emitted clear values; F1.ClearNamedFramebufferfv.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession();
+        F1Peer peer; peer.Install();
+        const GLfloat value[4] = {1, 7, 13, 23};
+        const auto fbo = MakeShared<MG_State::GLState::FramebufferObject>(73);
+        RemoteEmitTable().GL.ClearNamedFramebufferfv(fbo, GL_COLOR, 3, value);
+        const auto& r = peer.clear;
+        if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassFloat ||
+            r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
+            r.Fbo != MGPipeFramebufferEmitter::HandleFor(*fbo)) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.ClearNamedFramebufferfv.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, ClearBufferivFieldsCross) {
+    // Red once (executed, reverted): zero the emitted clear values; F1.ClearBufferiv.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession();
+        F1Peer peer; peer.Install();
+        const GLint value[4] = {1, 7, 13, 23};
+
+        RemoteEmitTable().GL.ClearBufferiv(GL_COLOR, 3, value);
+        const auto& r = peer.clear;
+        if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassInt ||
+            r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
+            !MGPipeHandleIsNull(r.Fbo)) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.ClearBufferiv.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, ClearNamedFramebufferivFieldsCross) {
+    // Red once (executed, reverted): zero the emitted clear values; F1.ClearNamedFramebufferiv.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession();
+        F1Peer peer; peer.Install();
+        const GLint value[4] = {1, 7, 13, 23};
+        const auto fbo = MakeShared<MG_State::GLState::FramebufferObject>(73);
+        RemoteEmitTable().GL.ClearNamedFramebufferiv(fbo, GL_COLOR, 3, value);
+        const auto& r = peer.clear;
+        if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassInt ||
+            r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
+            r.Fbo != MGPipeFramebufferEmitter::HandleFor(*fbo)) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.ClearNamedFramebufferiv.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, ClearBufferuivFieldsCross) {
+    // Red once (executed, reverted): zero the emitted clear values; F1.ClearBufferuiv.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession();
+        F1Peer peer; peer.Install();
+        const GLuint value[4] = {1, 7, 13, 23};
+
+        RemoteEmitTable().GL.ClearBufferuiv(GL_COLOR, 3, value);
+        const auto& r = peer.clear;
+        if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassUint ||
+            r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
+            !MGPipeHandleIsNull(r.Fbo)) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.ClearBufferuiv.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, ClearNamedFramebufferuivFieldsCross) {
+    // Red once (executed, reverted): zero the emitted clear values; F1.ClearNamedFramebufferuiv.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession();
+        F1Peer peer; peer.Install();
+        const GLuint value[4] = {1, 7, 13, 23};
+        const auto fbo = MakeShared<MG_State::GLState::FramebufferObject>(73);
+        RemoteEmitTable().GL.ClearNamedFramebufferuiv(fbo, GL_COLOR, 3, value);
+        const auto& r = peer.clear;
+        if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassUint ||
+            r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
+            r.Fbo != MGPipeFramebufferEmitter::HandleFor(*fbo)) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.ClearNamedFramebufferuiv.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, ClearBufferfiFieldsCross) {
+    // Red once (executed, reverted): zero the emitted clear values; F1.ClearBufferfi.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession(); F1Peer peer; peer.Install();
+
+        RemoteEmitTable().GL.ClearBufferfi(GL_DEPTH_STENCIL, 0, 0.375f, 91);
+        const auto& r = peer.clear;
+        if (peer.calls != 1 || r.Kind != kMGPipeClearKindDepthStencil || r.DrawBufferIndex != 0 ||
+            r.DepthValue != 0.375f || r.StencilValue != 91 ||
+            !MGPipeHandleIsNull(r.Fbo)) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.ClearBufferfi.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, ClearNamedFramebufferfiFieldsCross) {
+    // Red once (executed, reverted): zero the emitted clear values; F1.ClearNamedFramebufferfi.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession(); F1Peer peer; peer.Install();
+        const auto fbo = MakeShared<MG_State::GLState::FramebufferObject>(73);
+        RemoteEmitTable().GL.ClearNamedFramebufferfi(fbo, GL_DEPTH_STENCIL, 0, 0.375f, 91);
+        const auto& r = peer.clear;
+        if (peer.calls != 1 || r.Kind != kMGPipeClearKindDepthStencil || r.DrawBufferIndex != 0 ||
+            r.DepthValue != 0.375f || r.StencilValue != 91 ||
+            r.Fbo != MGPipeFramebufferEmitter::HandleFor(*fbo)) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.ClearNamedFramebufferfi.fields: " << DescribeStatus(child) << child.Log;
+}
+
+namespace {
+SharedPtr<MG_State::GLState::TextureObject2D> F1Texture() {
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+    auto tex = MakeShared<MG_State::GLState::TextureObject2D>(91);
+    tex->SetInternalFormat(TextureInternalFormat::RGBA8);
+    for (Uint level = 0; level != 3; ++level) {
+        const Int size = 8 >> level;
+        tex->AllocateStorage(TextureUploadTarget::Texture2D, level,
+            MG_State::GLState::MipmapInput{IntVec3{size, size, 1}, static_cast<SizeT>(size * size * 4)});
+    }
+    tex->SetBaseLevel(1);
+    MGPipeTextureEmitterInstance().AcquireTexture(tex->GetLifetimeId(), tex.get());
+    MG_State::pGLContext->GetTextureUnitObject(0).GetBindingSlot(TextureTarget::Texture2D).Bind(tex);
+    return tex;
+}
+}
+
+TEST(RemoteF1, CopyTexImage2DFieldsCross) {
+    // Red once (executed, reverted): increment the emitted copy level; F1.CopyTexImage2D.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession(); F1Peer peer; peer.Install(); const auto tex = F1Texture();
+        RemoteEmitTable().GL.CopyTexImage2D(GL_TEXTURE_2D, 2, GL_RGBA8, -3, 4, 11, 13, 0);
+        const auto& r = peer.copy;
+        if (peer.calls != 1 || r.Dst != MGPipeTextureEmitterInstance().FindTexture(*tex) ||
+            MGPipeHandleIsNull(r.Dst) || r.Target != GL_TEXTURE_2D || r.Level != 2 ||
+            r.InternalFormat != GL_RGBA8 || r.X != -3 || r.Y != 4 || r.Width != 11 || r.Height != 13 ||
+            r.XOffset != 0 || r.YOffset != 0 || r.SubImage != 0) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.CopyTexImage2D.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, CopyTexSubImage2DFieldsCross) {
+    // Red once (executed, reverted): increment the emitted copy level; F1.CopyTexSubImage2D.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession(); F1Peer peer; peer.Install(); const auto tex = F1Texture();
+        RemoteEmitTable().GL.CopyTexSubImage2D(GL_TEXTURE_2D, 2, 5, 7, -3, 4, 11, 13);
+        const auto& r = peer.copy;
+        if (peer.calls != 1 || r.Dst != MGPipeTextureEmitterInstance().FindTexture(*tex) ||
+            MGPipeHandleIsNull(r.Dst) || r.Target != GL_TEXTURE_2D || r.Level != 2 ||
+            r.InternalFormat != 0 || r.X != -3 || r.Y != 4 || r.Width != 11 || r.Height != 13 ||
+            r.XOffset != 5 || r.YOffset != 7 || r.SubImage != 1) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.CopyTexSubImage2D.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, GenerateMipmapFieldsCross) {
+    // Red once (executed, reverted): increment the emitted base level; F1.GenerateMipmap.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession(); F1Peer peer; peer.Install(); const auto tex = F1Texture();
+        RemoteEmitTable().GL.GenerateMipmap(GL_TEXTURE_2D);
+        const auto& r = peer.mip;
+        if (peer.calls != 1 || r.Res != MGPipeTextureEmitterInstance().FindTexture(*tex) ||
+            MGPipeHandleIsNull(r.Res) || r.Target != GL_TEXTURE_2D || r.BaseLevel != 1 || r.LevelCount != 3)
+            ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.GenerateMipmap.fields: " << DescribeStatus(child) << child.Log;
+}
+#endif
+
+
+
+#if MGTEST_HAVE_FORK
+
+TEST(RemoteF1, UnboundNamedfvRefusesByName) {
+    // Red once (executed, reverted): disable the named-FBO refusal; its exact Fatal disappears.
+    const auto child = RunInChild([] {
+        CapsPeer backend;
+        Srv::ServerVerbSink sink;
+        sink.SetBackend(&backend);
+        MGPClear r{};
+        r.Fbo = {701, 1};
+        r.Kind = kMGPipeClearKindColor;
+        r.ValueClass = kMGPipeClearValueClassFloat;
+        sink.OnClear(r);
+    });
+    ExpectNamedAbort(child, "Fatal{UnmigratedVerb, \"ClearNamedFramebufferfv+UNBOUND\"}");
+}
+
+TEST(RemoteF1, UnboundNamedivRefusesByName) {
+    // Red once (executed, reverted): disable the named-FBO refusal; its exact Fatal disappears.
+    const auto child = RunInChild([] {
+        CapsPeer backend;
+        Srv::ServerVerbSink sink;
+        sink.SetBackend(&backend);
+        MGPClear r{};
+        r.Fbo = {701, 1};
+        r.Kind = kMGPipeClearKindColor;
+        r.ValueClass = kMGPipeClearValueClassInt;
+        sink.OnClear(r);
+    });
+    ExpectNamedAbort(child, "Fatal{UnmigratedVerb, \"ClearNamedFramebufferiv+UNBOUND\"}");
+}
+
+TEST(RemoteF1, UnboundNameduivRefusesByName) {
+    // Red once (executed, reverted): disable the named-FBO refusal; its exact Fatal disappears.
+    const auto child = RunInChild([] {
+        CapsPeer backend;
+        Srv::ServerVerbSink sink;
+        sink.SetBackend(&backend);
+        MGPClear r{};
+        r.Fbo = {701, 1};
+        r.Kind = kMGPipeClearKindColor;
+        r.ValueClass = kMGPipeClearValueClassUint;
+        sink.OnClear(r);
+    });
+    ExpectNamedAbort(child, "Fatal{UnmigratedVerb, \"ClearNamedFramebufferuiv+UNBOUND\"}");
+}
+
+TEST(RemoteF1, UnboundNamedfiRefusesByName) {
+    // Red once (executed, reverted): disable the named-FBO refusal; its exact Fatal disappears.
+    const auto child = RunInChild([] {
+        CapsPeer backend;
+        Srv::ServerVerbSink sink;
+        sink.SetBackend(&backend);
+        MGPClear r{};
+        r.Fbo = {701, 1};
+        r.Kind = kMGPipeClearKindDepthStencil;
+        r.ValueClass = kMGPipeClearValueClassFloat;
+        sink.OnClear(r);
+    });
+    ExpectNamedAbort(child, "Fatal{UnmigratedVerb, \"ClearNamedFramebufferfi+UNBOUND\"}");
+}
+#endif
 
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;

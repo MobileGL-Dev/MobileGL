@@ -1,7 +1,10 @@
 # Included by CTest after all GoogleTest discovery files (ID-53).
 # CTest appends ENVIRONMENT here; keep all previously discovered lane settings.
 file(MAKE_DIRECTORY "@CMAKE_CURRENT_BINARY_DIR@/split-logs")
-foreach(entry IN LISTS MGL_SPLIT_CLEAR_TESTS MGL_SPLIT_TRIANGLE_TESTS MGL_SPLIT_PMAP_TESTS)
+# P5b t2's two lanes ride the same rule: one private log path per entry, or
+# SplitLogPaths.PrivateAndDistinct is red for them (ID-53).
+foreach(entry IN LISTS MGL_SPLIT_CLEAR_TESTS MGL_SPLIT_TRIANGLE_TESTS MGL_SPLIT_PMAP_TESTS
+                      MGL_SPLIT_T2_TESS_TESTS MGL_SPLIT_T2_XFB_TESTS)
     set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
         "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
 endforeach()
@@ -14,6 +17,16 @@ endforeach()
 # P5b d1's split entries: the same private, distinct log per entry.
 foreach(scenario @MGL_SPLIT_D1_SCENARIOS@)
     foreach(entry IN LISTS MGL_SPLIT_D1_${scenario}_TESTS)
+        set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+            "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
+    endforeach()
+endforeach()
+
+# P5b package i1's four scenarios, the same shape as the small-ring loop above: every
+# DirectGLES.Split. entry owns exactly one absolute log path and shares it with nobody, which
+# is what SplitLogPaths.PrivateAndDistinct checks over the discovered set.
+foreach(scenario @MGL_SPLIT_I1_SCENARIOS@)
+    foreach(entry IN LISTS MGL_SPLIT_I1_${scenario}_TESTS)
         set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
             "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
     endforeach()

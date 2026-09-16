@@ -19,10 +19,21 @@
 
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/Client/EmitTables.h>
+#include <MG_Remote/Server/ServerLoop.h>
+#include <chrono>
+#include <thread>
 #define MGITEST_SPLIT_RUNTIME_PEEK_LIVE 1
 #endif
 
 namespace MGITest {
+    void DelaySplitRetirementForTesting(bool enabled) {
+#if defined(MGITEST_SPLIT_RUNTIME_PEEK_LIVE)
+        MobileGL::MG_Remote::Server::ServerLoopInstance().SetBeforeRetireHookForTesting(
+            enabled ? +[] { std::this_thread::sleep_for(std::chrono::milliseconds(30)); } : nullptr);
+#else
+        (void)enabled;
+#endif
+    }
 
     SplitRuntimeState PeekSplitRuntime() {
         SplitRuntimeState state;

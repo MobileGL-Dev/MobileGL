@@ -121,9 +121,9 @@ namespace MobileGL::MG_Remote::Server {
         //   i1  OnLaunchGrid ("DispatchCompute"), OnMemoryBarrier, OnResourceCopyRegion
         //       ("CopyImageSubData"), OnBindShaderImage ("BindImageTexture"),
         //       OnSetStorageBlockBinding ("ShaderStorageBlockBinding")
-        //   t2  OnBeginStreamOutput / OnEndStreamOutput / OnPauseStreamOutput /
-        //       OnResumeStreamOutput ("*TransformFeedback"), OnBindStreamOutput
-        //       ("BindTransformFeedback"), OnPatchParameter ("PatchParameteri")
+        //   t2  LANDED. OnBeginStreamOutput / OnEndStreamOutput / OnPauseStreamOutput /
+        //       OnResumeStreamOutput / OnBindStreamOutput / OnPatchParameter are real bodies
+        //       now: the backend call the contract names, the null-slot DECLINE, a tally.
         //   f1  OnGenerateMipmap, OnCopyFramebufferToTexture ("CopyTexImage2D" /
         //       "CopyTexSubImage2D"), and OnClear's four non-Whole kinds (live already)
         //   d1  OnDrawVbo above: the indirect tail, the user-index span, NumDraws > 1 and the
@@ -154,6 +154,16 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 Presents() const { return m_presents; }
         Uint64 LastPresentSerial() const { return m_lastPresentSerial; }
         Uint64 ReadbackBytes() const { return m_readbackBytes; }
+        // ---- P5b package i1's tallies. R-16: a probe may not arm against a stub, and on a
+        // split build "the scenario passed" is also what a scenario that never left the
+        // monolith path looks like - so the lane asserts the number that only this sink can
+        // move. One per wire ROW, not per GL slot: launch_grid carries both dispatch entry
+        // points and memory_barrier both barrier ones, and the sink is where they separate.
+        Uint64 ImageBinds() const { return m_imageBinds; }
+        Uint64 Dispatches() const { return m_dispatches; }
+        Uint64 MemoryBarriers() const { return m_memoryBarriers; }
+        Uint64 ImageCopies() const { return m_imageCopies; }
+        Uint64 StorageBlockBindings() const { return m_storageBlockBindings; }
         // ID-49's tight-size control reads this: the scratch a read_pixels grew to. It must equal
         // the tight w*h*bpp extent of the read, never the client's DstSize - a scratch sized from
         // DstSize is exactly the heap overflow codex 1 found, one field over.
@@ -177,6 +187,16 @@ namespace MobileGL::MG_Remote::Server {
         const LastDrawRecord& LastDraw() const { return m_lastDraw; }
         // draw_vbo records seen, applied or declined; Draws() above counts only the applied.
         Uint64 DrawRecords() const { return m_drawRecords; }
+        // P5b t2's tallies, for the same reason the five above exist (R-16): under split "the
+        // scenario passed" is also what a scenario that ran entirely on the monolith path looks
+        // like, so a lane that wants to say the XFB spans CROSSED has to read a counter the
+        // server moved. Spans counts Begin and End together - they are one span and a lane that
+        // saw only one of them has a bug the two-counter version would have hidden behind a
+        // sum; controls counts Pause and Resume; binds and patch parameters count their own.
+        Uint64 StreamOutputSpans() const { return m_streamOutputSpans; }
+        Uint64 StreamOutputControls() const { return m_streamOutputControls; }
+        Uint64 StreamOutputBinds() const { return m_streamOutputBinds; }
+        Uint64 PatchParameters() const { return m_patchParameters; }
 
     private:
         const MG_Backend::GlobalBackendFunctionsTable* Table(const char* verb) const;
@@ -189,6 +209,15 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 m_presents = 0;
         Uint64 m_lastPresentSerial = 0;
         Uint64 m_readbackBytes = 0;
+        Uint64 m_imageBinds = 0;
+        Uint64 m_dispatches = 0;
+        Uint64 m_memoryBarriers = 0;
+        Uint64 m_imageCopies = 0;
+        Uint64 m_storageBlockBindings = 0;
+        Uint64 m_streamOutputSpans = 0;
+        Uint64 m_streamOutputControls = 0;
+        Uint64 m_streamOutputBinds = 0;
+        Uint64 m_patchParameters = 0;
         // ReadPixels' destination. The pixels go into the reply slot, but GLFunctionsTable::
         // ReadPixels writes into a caller buffer, so one staging vector per session sits
         // between them. Grown, never shrunk, and never handed out past the call.

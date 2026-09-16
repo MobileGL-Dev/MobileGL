@@ -69,7 +69,7 @@ def cases():
          [SUITE+'BoundPackBufferOffsetReadRefusesByName'], 'RemoteClientTest'),
         ('codex12-repeat-skip', BACKEND,
          replace('if (draw != EGL_NO_SURFACE && ctx != EGL_NO_CONTEXT) {', 'if (false) {'),
-         [SUITE+'RepeatedMakeCurrentAdoptsRepublishedCapsWithoutAPumpOrPresent'], 'RemoteClientTest'),
+         [SUITE+'ADifferentTupleMakeCurrentIsAdoptedWithoutAPumpOrPresent'], 'RemoteClientTest'),
         ('BlobMissing-optional-to-required', WIRE,
          replace('record.Blob = StageOptional(session, blobBytes, blobByteCount);',
                  'record.Blob = StageRequired(session, "SetDynamicState", blobBytes, blobByteCount);'),
@@ -122,13 +122,20 @@ def main():
         binary = ROOT / 'build-split/MobileGL/MG_Test' / ('Pipe' if target == 'PipeCatalogueTest' else 'Wire') / target
         build = ['cmake', '--build', 'build-split', '-j', '24', '--target', target]
         run = [str(binary), '--gtest_filter='+':'.join(names)]
+        # ID-67: both replacement cases must execute green before/after this mutation.
+        # Suppressing client adoption only reddens the different-tuple case; an identical
+        # tuple correctly republishes nothing and must remain green under the perturbation.
+        green_names = names
+        if label == 'codex12-repeat-skip':
+            green_names = names + [SUITE+'AnIdenticalRepeatedMakeCurrentRepublishesNothing']
+        green_run = [str(binary), '--gtest_filter='+':'.join(green_names)]
         print('\n=== '+label+' ===', flush=True)
         try:
             brc, out = command(build)
             if brc:
                 raise RuntimeError('baseline build failed\n'+out)
-            rc, out = command(run)
-            if rc or any('[       OK ] '+name+' (' not in out for name in names):
+            rc, out = command(green_run)
+            if rc or any('[       OK ] '+name+' (' not in out for name in green_names):
                 raise RuntimeError('baseline not green\n'+out)
             path.write_text(mutate(original.decode()))
             brc, out = command(build)
@@ -146,12 +153,12 @@ def main():
         finally:
             path.write_bytes(original)
             brc, out = command(build)
-            rc, out = command(run) if brc == 0 else (brc, out)
-            if rc or any('[       OK ] '+name+' (' not in out for name in names):
+            rc, out = command(green_run) if brc == 0 else (brc, out)
+            if rc or any('[       OK ] '+name+' (' not in out for name in green_names):
                 print('RESTORE-FAIL\n'+out, flush=True)
                 failures.append(label+' restore')
             else:
-                print('RESTORED GREEN: '+', '.join(names), flush=True)
+                print('RESTORED GREEN: '+', '.join(green_names), flush=True)
     print('FAILED_CONTROLS='+repr(failures), flush=True)
     return bool(failures)
 

@@ -105,6 +105,14 @@
     /* DirectGLES.cpp:4497, PrepareForDraw, the second unconditional pointer read of every draw. */  \
     X(GetProgramForDraw,                  BARRIER_PULLED, "P8 (Espryt), P7 (Magma)",                 \
       "frontend SharedPtr<ProgramObject>; the record carries a handle")                           \
+    /* P5b package i1 (CONTRACT-P5B.md §6.9, the one row the contract grants a package). This    */  \
+    /* was FATAL "reachable only from kDispatch; there is no compute on the reduced path" - and  */  \
+    /* i1 IS what puts compute on the path: launch_grid (60) now crosses and the backend's       */  \
+    /* PrepareForCompute pulls this inside it (DirectGLES.cpp:5779, VulkanRenderer.cpp:7327).    */  \
+    /* It is GetProgramForDraw's twin in every respect, so it takes its class and its retiring   */  \
+    /* phases. Overturned by: nothing in P5b; P7/P8 retire both rows together.                   */  \
+    X(GetProgramForDispatch,              BARRIER_PULLED, "P7 (Magma), P8 (Espryt)",                 \
+      "frontend SharedPtr<ProgramObject>; the record carries a handle")                           \
     /* The XFB six. XFB itself is off the reduced path, but kDraw's may-read mask carries all    */  \
     /* six and the draw walk reads them regardless - which is exactly the case a field census    */  \
     /* taken from "what the scenario does" rather than from the mask would miss.                 */  \
@@ -132,13 +140,13 @@
     X(GetPixelStoreParameters,            APPLIER_DERIVED, "-",                                      \
       "set_pixel_pack_state; the applier writes m_pixelStore[0] (PipeApply.cpp:1373)")            \
                                                                                                      \
-    /* ---- FATAL: three non-sticky fields, each off the reduced path for a checkable reason --- */  \
+    /* ---- FATAL: two non-sticky fields, each off the reduced path for a checkable reason ----- */  \
+    /* Three until P5b: GetProgramForDispatch moved up to BARRIER_PULLED when package i1 put     */  \
+    /* compute on the path (CONTRACT-P5B.md §6.9).                                               */  \
     X(GetBoundTransformFeedbackName,      FATAL, "-",                                                \
       "DEAD: read by no backend since the D21 rekey (PipeInputs.h:232-234)")                      \
     X(GetTransformFeedbackPausedPrimitiveCounter, FATAL, "-",                                        \
       "reachable only from class kQuery, which the reduced path never enters")                    \
-    X(GetProgramForDispatch,              FATAL, "-",                                                \
-      "reachable only from kDispatch; there is no compute on the reduced path")                   \
                                                                                                      \
     /* ---- the seven sticky forwards, as FIELD rows ----                                        */  \
     /* They have no storage, so a read of the FIELD is a call of the FORWARD; the field row and  */  \

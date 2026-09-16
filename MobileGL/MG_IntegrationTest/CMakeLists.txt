@@ -1972,6 +1972,102 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         )
     endforeach()
 
+    # ---- P5b package i1 (MG_Remote/CONTRACT-P5B.md §2 i1) --------------------------------
+    #
+    # THE LANE CASE THAT PROVES THE RECORDS CROSSED, and it is a RESULT and not a probe (R-16:
+    # a probe may not arm against a stub). Each of these four scenarios asserts a value that
+    # only exists if the verb ran on the apply thread - the texel a compute shader stored
+    # through an image unit, the word glCopyImageSubData moved, the counter an atomic add left
+    # behind, the block a program pipeline rebound - so a sink that DECLINED, or a client that
+    # fell through to the driver, is red by the number it reads back and not by a tally.
+    #
+    # Before i1 every one of these aborted at the client's Fatal{UnmigratedVerb} on the first
+    # glBindImageTexture / glDispatchCompute / glCopyImageSubData / glShaderStorageBlockBinding;
+    # all four are green under inproc now (the census: 13 + 6 + 11 + 3 DirectGLES entries).
+    # RED ONCE BY DOING X: return false from ServerVerbSink::OnLaunchGrid before the
+    # gl.DispatchCompute call and UnboundImageDescriptor / AtomicCounter / ProgramPipeline all
+    # read back their initial values.
+    #
+    # THE FILTERS ARE NARROWED TO THE CASES THAT ACTUALLY EMIT, and that is ScenarioFixture's
+    # rule rather than a convenience: an armed `DirectGLES.Split.` case must move the client
+    # encoder's record ordinal (ScenarioFixture.h:86), because a lane whose workload produced no
+    # record is the "resolved the transport and then fell through to the driver" shape that
+    # every pixel assertion is blind to. ProgramPipelineScenario's other nine cases are pure
+    # name/state cases that draw nothing, so the whole-scenario filter would arm them and they
+    # would be red for having nothing to say. The two named here are the ones that were
+    # Fatal{UnmigratedVerb, "ShaderStorageBlockBinding"} on the c0b head.
+    #
+    # One block per scenario, following the three above: a `:`-separated multi-pattern
+    # TEST_FILTER is unproven through gtest_discover_tests' flat PROPERTIES forwarding.
+    set(MGL_SPLIT_I1_SCENARIOS
+        UnboundImageDescriptorScenario   # bind_shader_image (72) + launch_grid (60), 13 cases
+        CopyImageLayeredScenario         # resource_copy_region (53), 6 cases
+        AtomicCounterScenario            # launch_grid (60) + memory_barrier (61), 3 cases
+        ProgramPipelineScenario)         # set_storage_block_binding (75), the 2 storage-block cases
+    set(MGL_SPLIT_I1_FILTER_UnboundImageDescriptorScenario "UnboundImageDescriptorScenario.*")
+    set(MGL_SPLIT_I1_FILTER_CopyImageLayeredScenario       "CopyImageLayeredScenario.*")
+    set(MGL_SPLIT_I1_FILTER_AtomicCounterScenario          "AtomicCounterScenario.*")
+    set(MGL_SPLIT_I1_FILTER_ProgramPipelineScenario        "ProgramPipelineScenario.*StorageBlock*")
+    foreach(mglItestI1Scenario IN LISTS MGL_SPLIT_I1_SCENARIOS)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectGLES.Split."
+            TEST_LIST "MGL_SPLIT_I1_${mglItestI1Scenario}_TESTS"
+            TEST_FILTER "${MGL_SPLIT_I1_FILTER_${mglItestI1Scenario}}"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-gpu\;integration-split"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
+        )
+    endforeach()
+
+    # ---- P5b t2: the transform-feedback spans, the XFB object bind, the patch parameter -------
+    #
+    # MG_Remote/CONTRACT-P5B.md §2 t2. The three P5 lanes above are the REDUCED PATH's targets
+    # (a clear, a triangle, a persistent map); these two are the first lane entries whose GREEN
+    # DEPENDS ON A t2 RECORD HAVING CROSSED AND BEEN APPLIED BY THE BACKEND, which is the only
+    # statement a package flipping a verb can make that a unit case cannot:
+    #
+    #   TessellationXfbCaptureScenario  covers BOTH halves of t2 in one workload. Every case
+    #       calls glPatchParameteri(GL_PATCH_VERTICES, n) and then draws GL_PATCHES into a
+    #       transform-feedback capture, and asserts the CAPTURED BYTES. A patch_parameter (73)
+    #       that did not reach the server tessellates at the previous patch size and the capture
+    #       is the wrong length; a begin/end_stream_output (62/63) that did not reach it leaves
+    #       the buffer holding the scenario's poison value, which is what those cases print.
+    #   XfbCaptureBufferReuseScenario   is the span family alone, across four buffer lifetimes
+    #       (a buffer per span, one immutable-storage buffer, one respecified buffer, a
+    #       respecification that changes the capture size). It is the case that would notice a
+    #       span whose END crossed but whose BEGIN did not, because the second span's bytes
+    #       would be the first span's.
+    #
+    # Both are DirectGLES only, deliberately, and the reason is measured rather than assumed:
+    # under Magma the capture is written into the server's resident slice and there is no route
+    # back, because MG_Backend/Init.cpp's ConsumedSubsystemsFor(DirectVulkan) withholds
+    # kMGPipeSubsystemResources, so BufferObject::SyncGpuWrites() emits no resource_readback.
+    # Every DirectVulkan XFB capture entry in the inproc census fails on exactly that (t2-v1.md
+    # §"the 51"), and it retires with P7 (Magma's resource family) / P9 (the readback carrier) -
+    # not here. A DirectVulkan arm of this lane would be red for a reason t2 cannot fix.
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Split."
+        TEST_LIST MGL_SPLIT_T2_TESS_TESTS
+        TEST_FILTER "TessellationXfbCaptureScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-split"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
+    )
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Split."
+        TEST_LIST MGL_SPLIT_T2_XFB_TESTS
+        TEST_FILTER "XfbCaptureBufferReuseScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-split"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
+    )
+
     # The split half of the counting pair. MGITEST_PERSISTENT_MAP_ARM=emulated is R-6: under split
     # the adopt tier is pinned at T2, the resource owner declines every acquisition and the client
     # pushes the mapping's dirty blocks - so pmap must be non-zero and mpr must be the monolith
@@ -2046,4 +2142,20 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             "${CMAKE_CURRENT_SOURCE_DIR}/Harness/split_log_paths.py"
             check "${CMAKE_CTEST_COMMAND}" "${CMAKE_BINARY_DIR}")
     set_tests_properties(SplitLogPaths.PrivateAndDistinct PROPERTIES LABELS "integration-split")
+endif()
+
+# f1: split-only source keeps the monolith registry unchanged.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    target_sources(MobileGLIntegrationTest PRIVATE Scenarios/F1WireScenario.cpp)
+    foreach(f1Slot ClearBufferfi ClearBufferfv ClearBufferiv ClearBufferuiv ClearNamedFramebufferfi ClearNamedFramebufferfv ClearNamedFramebufferiv ClearNamedFramebufferuiv CopyTexImage2D CopyTexSubImage2D GenerateMipmap)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectGLES.Split.F1."
+            TEST_FILTER "F1WireScenario.${f1Slot}Pixels"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-split"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5b-f1-${f1Slot}.log"
+        )
+    endforeach()
 endif()
