@@ -174,12 +174,106 @@ TEST(RemoteEmitTable, TheThreeClassesPartitionAllSeventyOneSlots) {
     // CONTRACT-P5.md §7: 2 answered locally + 5 emitted + 64 Fatal. Read from the functions the
     // table itself reports with - which is also what t1's arming condition reads - rather than
     // recomputed here, so a table that lost an emitter cannot look like one that never had it.
+    //
+    // P5b MOVES THE SECOND AND THIRD NUMBERS, ONE PACKAGE AT A TIME (CONTRACT-P5B.md §7). On
+    // this head t2 has landed its six XFB / patch slots, so it is 2 + 11 + 58. The SUM is what
+    // actually has to hold, and it is asserted separately below for that reason; the two moving
+    // numbers are spelled out anyway so a package that flips a slot without owning it has to
+    // edit this line and say so.
     EXPECT_EQ(LocallyAnsweredSlotCount(), 2u);
-    EXPECT_EQ(ImplementedVerbCount(), 5u);
-    EXPECT_EQ(UnmigratedSlotCount(), 64u);
+    EXPECT_EQ(ImplementedVerbCount(), 11u) << "P5's five class-B verbs plus t2's six";
+    EXPECT_EQ(UnmigratedSlotCount(), 58u) << "64 at the P5b contract commit, minus t2's six";
     EXPECT_EQ(LocallyAnsweredSlotCount() + ImplementedVerbCount() + UnmigratedSlotCount(),
               kRemoteEmitSlotCount);
 }
+
+TEST(RemoteEmitTable, TheSixXfbAndPatchSlotsAreNonNullAndDistinct) {
+    // P5b t2 (CONTRACT-P5B.md §2 t2), the half that needs no fork: the six slots exist and are
+    // six DIFFERENT functions. Six identical pointers would be one emitter assigned six times,
+    // which is how a copy-paste flip loses five records and still passes every count.
+    //
+    // Red once by assigning `table.GL.PauseTransformFeedback = &EmitResumeTransformFeedback;`
+    // in BuildRemoteEmitTable - the exact copy-paste this guards: "t2 slots 2 and 3 are one
+    // function".
+    const MG_Backend::GlobalBackendFunctionsTable& table = RemoteEmitTable();
+    const void* const six[] = {
+        reinterpret_cast<const void*>(table.GL.BeginTransformFeedback),
+        reinterpret_cast<const void*>(table.GL.EndTransformFeedback),
+        reinterpret_cast<const void*>(table.GL.PauseTransformFeedback),
+        reinterpret_cast<const void*>(table.GL.ResumeTransformFeedback),
+        reinterpret_cast<const void*>(table.GL.BindTransformFeedback),
+        reinterpret_cast<const void*>(table.GL.PatchParameteri),
+    };
+    for (SizeT i = 0; i < 6; ++i) {
+        EXPECT_NE(six[i], nullptr) << "t2 slot " << i << " is null";
+        for (SizeT j = i + 1; j < 6; ++j) {
+            EXPECT_NE(six[i], six[j]) << "t2 slots " << i << " and " << j << " are one function";
+        }
+    }
+    // And the one XFB slot t2 does NOT flip is still there to be Fatal - CONTRACT-P5B.md gives
+    // DeleteTransformFeedback no row (unmeasured), so it must not have been swept up.
+    EXPECT_NE(table.GL.DeleteTransformFeedback, nullptr);
+}
+
+#if MGTEST_HAVE_FORK
+TEST(RemoteEmitTable, EachXfbAndPatchSlotIsClassBAndDemandsASessionByItsOwnName) {
+    // P5b t2, THE HALF THAT DECIDES THE CLASS. A pointer comparison cannot tell a class-B
+    // emitter from a class-C thunk - each unmigrated slot gets its own generated function, so
+    // every slot in the table is already a distinct non-null address. What distinguishes them is
+    // WHAT THEY SAY when called with no ClientSession: an emitter reaches RequireSession and
+    // dies Fatal{NoClientSession, "<slot>"}; a thunk dies Fatal{UnmigratedVerb, "<slot>"}. Both
+    // strings are asserted, because a case that only looked for the first would be satisfied by
+    // a build where every one of these had been flipped by accident.
+    //
+    // Red once by SWAPPING the Pause and Resume assignments in BuildRemoteEmitTable - the two
+    // emitters with the same signature, so the swap compiles and neither is orphaned (the first
+    // attempt redirected one slot at another's emitter and the build failed on the signature
+    // and on -Wunused-function, which is a control that did not run). The child called through
+    // PauseTransformFeedback died Fatal{NoClientSession, "ResumeTransformFeedback"} and this
+    // case failed with "PauseTransformFeedback did not reach the class-B emitter's session
+    // demand", so the string really is the slot's own name and not a shared constant.
+    struct Slot {
+        const char* Name;
+        void (*Call)();
+    };
+    static const Slot kSlots[] = {
+        {"BeginTransformFeedback", [] { RemoteEmitTable().GL.BeginTransformFeedback(0x0004); }},
+        {"EndTransformFeedback", [] { RemoteEmitTable().GL.EndTransformFeedback(); }},
+        {"PauseTransformFeedback", [] { RemoteEmitTable().GL.PauseTransformFeedback(); }},
+        {"ResumeTransformFeedback", [] { RemoteEmitTable().GL.ResumeTransformFeedback(); }},
+        {"BindTransformFeedback", [] { RemoteEmitTable().GL.BindTransformFeedback(0); }},
+        {"PatchParameteri", [] { RemoteEmitTable().GL.PatchParameteri(0x8E72, 3); }},
+    };
+    for (const Slot& slot : kSlots) {
+        const ChildResult r = RunInChild([&slot] { slot.Call(); });
+        ASSERT_TRUE(DiedOfAbort(r)) << slot.Name << ": " << DescribeStatus(r) << "\n" << r.Log;
+        EXPECT_NE(r.Log.find(std::string("Fatal{NoClientSession, \"") + slot.Name + "\"}"),
+                  std::string::npos)
+            << slot.Name << " did not reach the class-B emitter's session demand:\n"
+            << r.Log;
+        EXPECT_EQ(r.Log.find("Fatal{UnmigratedVerb"), std::string::npos)
+            << slot.Name << " is still class C:\n"
+            << r.Log;
+    }
+}
+
+TEST(RemoteEmitTable, DeleteTransformFeedbackHasNoRowAndStillAbortsByItsOwnName) {
+    // CONTRACT-P5B.md §2 t2 and c0b-v1.md §6: the seventh slot in t2's ownership block gets NO
+    // row in P5b - it is unmeasured, the driver object leaks on the server until P9's XFB
+    // namespace work, and a bind of name 0 is what the backend does on delete of the bound one.
+    // That is a RULING, so it is pinned rather than left to be re-derived from a count: a later
+    // round that gives it a row has to delete this case and say why.
+    //
+    // Red once by assigning `table.GL.DeleteTransformFeedback = &EmitBindTransformFeedback;` in
+    // BuildRemoteEmitTable - a package sweeping the whole XFB family into class B: the child
+    // died Fatal{NoClientSession, "BindTransformFeedback"} and the UnmigratedVerb expectation
+    // failed.
+    const ChildResult r = RunInChild([] { RemoteEmitTable().GL.DeleteTransformFeedback(7); });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"DeleteTransformFeedback\"}"), std::string::npos)
+        << r.Log;
+}
+#endif // MGTEST_HAVE_FORK
 
 TEST(RemoteEmitTable, NoSlotIsNull) {
     // R-4's whole rule, asserted over the STRUCT rather than over the list that built it. 91

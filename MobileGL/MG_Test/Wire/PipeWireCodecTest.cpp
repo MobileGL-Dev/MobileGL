@@ -1204,6 +1204,113 @@ TEST_F(PipeWireCodecTest, BindStreamOutputReachesTheSink) {
     EXPECT_EQ(wire.Sink().StreamOutputBinds[0].LifetimeId, 0x1234567890ull);
 }
 
+// =====================================================================================
+// P5b t2 (MG_Remote/CONTRACT-P5B.md §2 t2). c0b's cases above round-trip each row once; these
+// pin the fields t2's EMITTERS actually fill and the one ordering property the span family has.
+// =====================================================================================
+
+TEST_F(PipeWireCodecTest, EndStreamOutputCarriesAllThreeAccountingFieldsAndNotJustTheVertices) {
+    // t2's emitter fills all three from the frontend's own per-span accounting
+    // (GetTransformFeedbackCapturedVertices / GetTransformFeedbackPrimitiveCounter /
+    // GetTransformFeedbackPrimitiveMode) and the row above asserts only CapturedVertices, so a
+    // codec that dropped either of the other two - or an emitter that left them zero - reads
+    // green there. THE THREE ARE DELIBERATELY DIFFERENT NUMBERS: with 300/300 a swap of the two
+    // 64-bit fields is invisible.
+    //
+    // Red once by making the recorder above push a default-constructed MGPXfbAccounting{}
+    // instead of the one the decoder handed it - the shape of a seam that loses the payload:
+    // "end_stream_output lost the primitives-written half of its accounting".
+    Wire2 wire;
+    MGPXfbAccounting end{};
+    end.CapturedVertices = 21;
+    end.PrimitivesWritten = 7;
+    end.PrimitiveMode = 0x0000; // GL_POINTS - and 0 is a legal primitive mode, not "unset"
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::EndStreamOutput, &end, sizeof(end)), kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_EQ(wire.Sink().Ends.size(), 1u);
+    EXPECT_EQ(wire.Sink().Ends[0].CapturedVertices, 21u);
+    EXPECT_EQ(wire.Sink().Ends[0].PrimitivesWritten, 7u)
+        << "end_stream_output lost the primitives-written half of its accounting";
+    EXPECT_EQ(wire.Sink().Ends[0].PrimitiveMode, 0u)
+        << "GL_POINTS is 0 and a row that treats 0 as 'no mode' has made a legal capture "
+           "indistinguishable from an unfilled record";
+}
+
+TEST_F(PipeWireCodecTest, BindStreamOutputOfNameZeroIsTheDefaultObjectAndNotAnAbsentOne) {
+    // THE ONE NAME t2 CANNOT TREAT AS "NOTHING". CONTRACT-P5B.md gives DeleteTransformFeedback
+    // no row, and the backend's answer to deleting the bound object is a bind of NAME 0
+    // (DirectGLES.cpp:1422) - so a row that folded 0 into kMGPipeNullHandle, or a sink that read
+    // 0 as "no object", would silently stop rebinding the default object and leave the driver
+    // bound to a deleted one. The lifetime id beside it is 0 too here, which is the frontend's
+    // seed value for the default object, so this case also pins that a wholly-zero record is
+    // legal and applies rather than being refused as unfilled.
+    //
+    // Red once by making the sink's OnBindStreamOutput refuse GlName == 0 (return false): the
+    // EXPECT_TRUE(applied) below failed, which is the shape the wrong reading would take.
+    Wire2 wire;
+    MGPStreamOutputBind bind{};
+    bind.GlName = 0;
+    bind.LifetimeId = 0;
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindStreamOutput, &bind, sizeof(bind)), kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied) << "a bind of the default transform-feedback object did not apply";
+    ASSERT_EQ(wire.Sink().StreamOutputBinds.size(), 1u);
+    EXPECT_EQ(wire.Sink().StreamOutputBinds[0].GlName, 0u);
+}
+
+TEST_F(PipeWireCodecTest, AWholeCaptureSpanReachesTheSinkInTheOrderTheClientEmittedIt) {
+    // THE PROPERTY A PER-ROW ROUND TRIP CANNOT STATE. A capture span is five calls whose MEANING
+    // is their order - bind the object, open the span, pause it, resume it, close it - and every
+    // one of them rides its own row with no sequence field of its own to check. The decoder's
+    // ordering is the ring's, so this is a pin on the seam rather than a new guarantee: if a
+    // later change ever batches or reorders records per row, a capture reordered into
+    // bind/begin/end/pause/resume applies five records, sets `applied` five times, and leaves
+    // every per-row case above green while the capture is destroyed.
+    //
+    // Red once by encoding the Pause AFTER the End: the interleaved-order EXPECT below failed on
+    // Pauses being 0 at the point the End was seen.
+    Wire2 wire;
+    MGPStreamOutputBind bind{};
+    bind.GlName = 3;
+    bind.LifetimeId = 0x5150ull;
+    MGPStreamOutputBegin begin{};
+    begin.PrimitiveMode = 0x0004; // GL_TRIANGLES
+    MGPStreamOutputControl control{};
+    MGPXfbAccounting end{};
+    end.CapturedVertices = 9;
+    end.PrimitivesWritten = 3;
+    end.PrimitiveMode = 0x0004;
+
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindStreamOutput, &bind, sizeof(bind)), kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BeginStreamOutput, &begin, sizeof(begin)), kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::PauseStreamOutput, &control, sizeof(control)), kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResumeStreamOutput, &control, sizeof(control)), kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::EndStreamOutput, &end, sizeof(end)), kInvalidSeq);
+
+    // Pumped ONE AT A TIME with the sink read between pumps, which is what makes this a
+    // statement about order rather than about totals: after the third record the pause must
+    // have happened and the end must NOT have.
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_EQ(wire.Sink().StreamOutputBinds.size(), 1u) << "the object bind did not come first";
+    EXPECT_EQ(wire.Sink().Begins.size(), 0u);
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_EQ(wire.Sink().Begins.size(), 1u) << "the span did not open second";
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_EQ(wire.Sink().Pauses, 1u) << "the pause did not arrive third";
+    EXPECT_EQ(wire.Sink().Ends.size(), 0u)
+        << "the span closed before it was paused - the capture's order did not survive the wire";
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_EQ(wire.Sink().Resumes, 1u);
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    ASSERT_EQ(wire.Sink().Ends.size(), 1u);
+    EXPECT_EQ(wire.Sink().Ends[0].PrimitivesWritten, 3u);
+    EXPECT_EQ(wire.Decoder().AppliedSeq(), 5u);
+}
+
 TEST_F(PipeWireCodecTest, SetStorageBlockBindingCarriesItsNameAsAStagedBlob) {
     // i1: the ONE string on the wire. Size is strlen + 1 - the NUL travels - and the decoder
     // hands the sink a pointer that dies with the call.
