@@ -20,15 +20,14 @@
 #endif
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-namespace MobileGL::MG_Remote::Client {
-    // PACKAGE c1's, DECLARED HERE RATHER THAN INCLUDED. The client's BackendObject_Remote is
-    // c1's file and does not exist while v1 is written, so v1 ships a WEAK definition of this
-    // beside ServerLoop that aborts by name. c1's strong definition displaces it at link time
-    // with no edit to this file - and until then the hook cannot silently succeed, which is the
-    // only property that matters: a split lane that installed a WORKING monolith backend object
-    // here would render correctly for entirely the wrong reason (ARCHITECTURE.md 10.3).
-    UniquePtr<MG_Backend::BackendObject> CreateRemoteBackendObject();
-} // namespace MobileGL::MG_Remote::Client
+// [p5/v1-joint PREVIEW EDIT - the merge-time form of v1's hook, c1-v1 8.2's exact order.] The
+// weak CreateRemoteBackendObject placeholder v1 shipped for a c1-less tree is DELETED at the
+// merge: the integration test links the STATIC MobileGL_s archive, and an archive member is
+// only pulled to satisfy an UNDEFINED reference - the weak definition in ServerLoop.cpp.o
+// already satisfied it, so BackendObject_Remote.cpp.o was never linked at all and the joint
+// build aborted in the placeholder (~/w7/p5-v1-joint-preflight.log). Direct construction
+// needs no factory and no weak symbol.
+#include <MG_Remote/Client/BackendObject_Remote.h>
 #endif
 
 namespace MobileGL::MG_Backend {
@@ -160,11 +159,7 @@ namespace MobileGL::MG_Backend {
             // 4. and only now the CLIENT's backend object in the one global that holds it.
             //    Table 3: pActiveBackendObject holds BackendObject_Remote and the server's
             //    BackendObject_DirectGLES stays private to ServerLoop.
-            pActiveBackendObject = MG_Remote::Client::CreateRemoteBackendObject();
-            if (!pActiveBackendObject) {
-                MGLOG_E("MG_Remote: CreateRemoteBackendObject returned null");
-                return false;
-            }
+            pActiveBackendObject = MakeUnique<MG_Remote::Client::BackendObject_Remote>();
             return true;
         }
     } // namespace

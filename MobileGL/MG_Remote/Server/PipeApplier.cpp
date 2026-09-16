@@ -14,6 +14,7 @@
 
 #include <Config.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
+#include <MG_Remote/Client/ClientSession.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Debug/Log.h>
@@ -365,6 +366,14 @@ namespace MobileGL::MG_Remote::Server {
                     "Attach once before its first pop");
             std::abort();
         }
+        // R-1's INVARIANT, THE SERVER'S HALF (table 3's gPipeInputs row, c1-v1 8.1). The flag
+        // is raised for the WHOLE of this function and not only around DecodeAndApply: the
+        // stamp below and LeaveApplier at the end are both writes to gPipeInputs, and the client
+        // asserts the flag is down before it publishes (ClientSession::EmitAndWait), so a
+        // bracket that excluded either would leave a real write outside the check. It is
+        // dropped before this function returns, and s1's SessionConsumer::ApplyOne publishes
+        // appliedSeq only after that - so by the time the client is runnable the flag is down.
+        const Client::ClientSession::ScopedApplierEntry insideApplier;
         // ORDER IS THE CONTRACT'S: stamp, then apply. The stamp is what makes any server-side
         // read of gPipeInputs legal at all (PipeApplier.h's block 1), so a record applied
         // before it aborts on the FIRST field inside SyncRenderState.

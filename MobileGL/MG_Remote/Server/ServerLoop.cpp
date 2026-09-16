@@ -858,29 +858,3 @@ namespace MobileGL::MG_Remote::Server {
     }
 
 } // namespace MobileGL::MG_Remote::Server
-
-// ---------------------------------------------------------------------------------
-// The weak placeholder for package c1's remote backend object
-// ---------------------------------------------------------------------------------
-//
-// MG_Backend/Init.cpp's hook calls MG_Remote::Client::CreateRemoteBackendObject(), which is
-// c1's BackendObject_Remote and does not exist while v1 is written. A WEAK definition here
-// lets v1 compile, link and be tested today, and c1's strong definition displaces it at link
-// time with no edit anywhere.
-//
-// IT ABORTS BY NAME AND DOES NOT RETURN A WORKING MONOLITH OBJECT. That distinction is the
-// whole point: a placeholder that handed back a BackendObject_DirectGLES would give a lane
-// called "split" a correct picture produced entirely by the monolith path, which is
-// ARCHITECTURE.md 10.3's failure and the one this phase exists to make impossible.
-#if defined(__GNUC__) || defined(__clang__)
-namespace MobileGL::MG_Remote::Client {
-    __attribute__((weak)) UniquePtr<MG_Backend::BackendObject> CreateRemoteBackendObject() {
-        MGLOG_F("MGPipe: Fatal{UnimplementedRemoteBackendObject} - MG_Backend::Init()'s split "
-                "hook asked for the client's BackendObject_Remote and only v1's weak "
-                "placeholder is linked in. That object is package c1's (BRIEF 5); until it "
-                "lands there is no client role, and this build refuses to substitute the "
-                "monolith backend for it");
-        std::abort();
-    }
-} // namespace MobileGL::MG_Remote::Client
-#endif
