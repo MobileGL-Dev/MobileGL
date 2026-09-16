@@ -16,6 +16,12 @@
 #include <MG_Pipe/MGPipeHostSpan.h>
 #include <MG_Pipe/PipeApply.h>
 #endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+// R-11's server-owned staging copy. Header-only and package v1's; see its own header block for
+// why GLESBufferResource does not simply gain a member.
+#include <MG_Remote/Server/StagedShadow.h>
+#endif
+
 #include "Utils.h"
 #include "DirectGLES.h"
 #include "BackendObject_DirectGLES.h"
@@ -1008,6 +1014,77 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return StorageMatchesSize(resource, bufferObject.GetSize());
             }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // -------------------------------------------------------------------------------
+            // R-11 - THE SERVER'S OWN COPY OF THE STAGED BYTES. Package v1.
+            //
+            // The rule, the evidence and the reason the storage is a side table rather than a
+            // member of GLESBufferResource are all in MG_Remote/Server/StagedShadow.h. This is
+            // only the instance and the four call sites.
+            //
+            // ONE PER PROCESS, and its copying arm is decided ONCE at first use: the two arms
+            // hold the authoritative bytes in DIFFERENT places, so an answer that changed
+            // mid-run would strand every resource already staged - the same reason
+            // ResolveResourceSubsystemArm latches (Managers.h). Leaked at exit like every other
+            // MG_Remote singleton (ID-8): ~BufferObject reaches the destroy path from exit
+            // handlers, after this TU's globals would already be gone.
+            // -------------------------------------------------------------------------------
+            MG_Remote::Server::StagedShadowStore& ServerStaged() {
+                static MG_Remote::Server::StagedShadowStore& store =
+                    *new MG_Remote::Server::StagedShadowStore(
+                        MG_Config::Transport != MG_Config::TransportMode::Monolith);
+                return store;
+            }
+
+            // THE COVERAGE RULE FOR THE THREE-TIER FLUSH DRAIN, ASSERTED BEFORE THE CALL AND NOT
+            // INSIDE IT. FlushPendingRangesFrom is a G5-pinned body (p3a_untouched_regions.sh's
+            // PINNED_FUNCTIONS, ID-41): the split arm CALLS it, it does not re-spell it, and it
+            // does not add a line to it either. Its tier-1 arm - the range-invalidating map -
+            // copies with its own Memcpy and never reaches UploadRangeFrom, so the one tier that
+            // DECLARES THE OLD BYTES DEAD is the one tier no later check can see; the only place
+            // left to say "every queued range is inside the staged coverage" is the instant before
+            // the drain takes the queue. The clamp is the drain's own (limit = the smaller of the
+            // frontend size and the backend store; bytes past either end have nowhere to land and
+            // are not this rule's subject), so the two agree about which bytes are meant.
+            //
+            // Fires only for a base that IS this resource's server shadow: RequireCoverage
+            // answers nothing for the legacy arm's MappedData(), which is valid for the whole
+            // store. `pendingMutex` is taken here and released before the drain takes it again.
+            void RequireStagedCoverageForPendingRanges(GLESBufferResource& resource, const Uint8* hostBase,
+                                                       SizeT frontendSize, const char* site) {
+                if (hostBase == nullptr) return;
+                const SizeT limit = std::min(frontendSize, resource.storageSize);
+                const std::lock_guard<std::mutex> lock(resource.pendingMutex);
+                for (const auto& range : resource.pendingRanges) {
+                    const SizeT end = std::min(range.end, limit);
+                    const SizeT start = std::min(range.start, end);
+                    if (start == end) continue;
+                    ServerStaged().RequireCoverage(&resource, hostBase, start, end, site);
+                }
+            }
+#endif // MOBILEGL_BUILD_DISAGGREGATED
+
+// The four hostBytes sites read the same in both builds. The non-split expansion is the
+// ORIGINAL EXPRESSION, character for character - `raw - offset` - so a push or verify build
+// compiles exactly what it compiled before R-11 and the split arm is the only new behaviour.
+#if MOBILEGL_BUILD_DISAGGREGATED
+#define MGL_SERVER_STAGED_ADOPT(res, width, bytes, offset, size)                                                       \
+    ServerStaged().Adopt(&(res), (width), (bytes), (offset), (size))
+#define MGL_SERVER_STAGED_DROP(res) ServerStaged().Drop(&(res))
+#define MGL_SERVER_STAGED_DROP_ALL() ServerStaged().DropAll()
+#define MGL_SERVER_STAGED_REQUIRE(res, base, start, end, site)                                                         \
+    ServerStaged().RequireCoverage(&(res), (base), (start), (end), (site))
+#define MGL_SERVER_STAGED_REQUIRE_PENDING(res, base, frontendSize, site)                                               \
+    RequireStagedCoverageForPendingRanges((res), (base), (frontendSize), (site))
+#else
+#define MGL_SERVER_STAGED_ADOPT(res, width, bytes, offset, size)                                                       \
+    (static_cast<const Uint8*>(bytes) - (offset))
+#define MGL_SERVER_STAGED_DROP(res) ((void)0)
+#define MGL_SERVER_STAGED_DROP_ALL() ((void)0)
+#define MGL_SERVER_STAGED_REQUIRE(res, base, start, end, site) ((void)0)
+#define MGL_SERVER_STAGED_REQUIRE_PENDING(res, base, frontendSize, site) ((void)0)
+#endif
+
             // The host bytes a range upload/flush reads. On the legacy arm the frontend object's
             // shadow; on the handle arm the base the last content-carrying call handed over.
             void UploadRangeFrom(GLESBufferResource& resource, const Uint8* hostBase, SizeT start, SizeT end) {
@@ -1015,6 +1092,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
                 if (start >= end || hostBase == nullptr) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                MGL_SERVER_STAGED_REQUIRE(resource, hostBase, start, end, "upload_range");
+#endif
                 BindBufferId(TempBufferTarget, resource.id);
                 g_GLESFuncs.glBufferSubData(TempBufferTarget, (GLintptr)start, (GLsizeiptr)(end - start),
                                             hostBase + start);
@@ -1946,9 +2026,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // every reader below treats a null base as "no bytes to move", which is the
                     // honest answer, and the ensure path re-reads the live base from the
                     // frontend object it still holds.
-                    resource->hostBytes = (desc.HasDefinedContent != 0 && initialBytes != nullptr)
-                                              ? static_cast<const Uint8*>(initialBytes)
-                                              : nullptr;
+                    if (desc.HasDefinedContent != 0 && initialBytes != nullptr) {
+                        // R-11: in monolith this is the client's shadow base, unchanged; under
+                        // split it is copied into server-owned storage first. A respecify's
+                        // companion pointer is the base at offset 0 and covers the whole store.
+                        // Under split it is ALWAYS null (contract table 1 row 19 -
+                        // initialBytes does not cross, and the content arrives as
+                        // resource_subdata records right behind this record), so in practice
+                        // this arm is the monolith one and the else arm is the split one.
+                        resource->hostBytes = MGL_SERVER_STAGED_ADOPT(*resource, static_cast<SizeT>(desc.Width),
+                                                                      initialBytes, 0,
+                                                                      static_cast<SizeT>(desc.Width));
+                    } else {
+                        MGL_SERVER_STAGED_DROP(*resource);
+                        resource->hostBytes = nullptr;
+                    }
                 }
                 if (!resource) return; // lazy: the ensure path full-uploads on creation
                 if (resource->immutableStorage) {
@@ -2018,7 +2110,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // and the ensure path's republication (the 3c55e027 fix) is what runs at a draw.
                 if (bytes != nullptr) {
                     const std::lock_guard<std::mutex> lock(resource->pendingMutex);
-                    resource->hostBytes = static_cast<const Uint8*>(bytes) - offset;
+                    // R-11: MONOLITH keeps the client's base; SPLIT copies [offset, offset+size)
+                    // into server-owned storage and points hostBytes at that. Inside the SAME
+                    // lock as the queued range, because the base and the range are one fact
+                    // ("these bytes, at this base") and the drain takes this mutex to lift them.
+                    resource->hostBytes =
+                        MGL_SERVER_STAGED_ADOPT(*resource, ResourceWidthOf(res), bytes, offset, size);
                 }
                 if (resource->pendingRespecify) return; // full re-upload pending anyway
                 if (!CanTouchGLNow() || resource->id == 0 ||
@@ -2067,10 +2164,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!resource) return;
                 const SizeT start = static_cast<SizeT>(record.Offset);
                 const SizeT end = start + static_cast<SizeT>(record.Size);
-                // M-2, the second store site - same lock, same reason as Ops_H_SubData's.
+                // M-2, the second store site - same lock, same reason as Ops_H_SubData's, and
+                // the same R-11 copy. UNDER SPLIT `bytes` IS ALWAYS NULL HERE by ruling (C-6 /
+                // contract table 1 row 20: resource_flush_range carries no bytes at all - the
+                // ladder it drives rewrites its range from the authoritative shadow, which rule
+                // C makes server-owned, so resource_subdata is already the only way bytes reach
+                // it and a second carrier would be a forgeable way to say the same thing). So
+                // this arm keeps whatever the preceding subdata records staged, which is
+                // exactly what the ladder must read.
                 if (bytes != nullptr) {
                     const std::lock_guard<std::mutex> lock(resource->pendingMutex);
-                    resource->hostBytes = static_cast<const Uint8*>(bytes) - start;
+                    resource->hostBytes = MGL_SERVER_STAGED_ADOPT(*resource, ResourceWidthOf(res), bytes,
+                                                                  start, end - start);
                 }
                 if (resource->pendingRespecify) return;
                 if (!CanTouchGLNow() || resource->id == 0 ||
@@ -2100,6 +2205,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     resource->hostBytes != nullptr) {
 #ifdef TRACY_ENABLE
                     ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    // The kill-switch arm's own Memcpy, and the one that passes
+                    // GL_MAP_INVALIDATE_RANGE_BIT - i.e. the one that tells the driver the old
+                    // bytes are dead. Bytes outside the staged coverage are exactly the ones
+                    // that claim is false for.
+                    MGL_SERVER_STAGED_REQUIRE(*resource, resource->hostBytes, start, end,
+                                              "flush_range_invalidate_map");
 #endif
                     BindBufferId(TempBufferTarget, resource->id);
                     void* mappedData = g_GLESFuncs.glMapBufferRange(
@@ -2145,7 +2258,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (size == 0) return;
 
                 // Queued app writes must land in the backend store before it is read back, or
-                // the writeback below would revert them in the shadow.
+                // the writeback below would revert them in the shadow. Under split every queued
+                // range must lie inside the server shadow's staged coverage first (R-11 / the
+                // M-6 ruling): the drain's tier-1 map would otherwise declare live GPU bytes
+                // dead over a range nothing staged.
+                MGL_SERVER_STAGED_REQUIRE_PENDING(*resource, resource->hostBytes, ResourceWidthOf(res),
+                                                  "readback_flush_pending");
                 FlushPendingRangesFrom(*resource, resource->hostBytes, ResourceWidthOf(res));
 
                 BindBufferId(TempBufferTarget, resource->id);
@@ -2187,6 +2305,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             void Ops_H_Destroy(MG_Pipe::MGPipeHandle res) {
+                // R-11's server copy dies with the resource, and BEFORE the twin leaves the
+                // table - the side map is keyed by the twin's address, so this is the last
+                // moment that address can be looked up.
+                if (GLESBufferResource* dying = FindBufferResourceForHandle(res); dying != nullptr) {
+                    MGL_SERVER_STAGED_DROP(*dying);
+                }
                 // The twin comes OUT of the table first, so the three outcomes below are
                 // reached with the entry already retired. The SLOT is the client's to free,
                 // after this returns (D-L).
@@ -2272,6 +2396,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // PipeResource::AdoptPersistentMap then does m_shadow->clear() +
                 // shrink_to_fit(), so the shadow base any earlier content-carrying call
                 // recorded is a FREED allocation from here on. The live bytes are persistentPtr.
+                // R-11's server copy goes with it: the bytes are the coherent map's now, and a
+                // stale server shadow would answer a later drain with pre-map content.
+                MGL_SERVER_STAGED_DROP(*resource);
                 resource->hostBytes = nullptr;
                 resource->storageSize = static_cast<SizeT>(size);
                 resource->storageInitialized = true;
@@ -2631,6 +2758,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // handles (no GL) and let the next draw / texture upload recreate them.
             ResetRingForNewContext(g_uboRing);
             ResetRingForNewContext(g_unpackRing);
+#if MOBILEGL_PIPE_PUSH
+            // R-11's server copies die with the context for the same reason the rings' ids do:
+            // the resource twins they are keyed by are about to be rebuilt against a new
+            // generation, and a shadow that outlived its twin would be looked up by a RECYCLED
+            // address on the next allocation - which is the quietest possible wrong answer.
+            MGL_SERVER_STAGED_DROP_ALL();
+#endif
         }
 
         void ProcessDeferredBufferReleases() {
@@ -2920,6 +3054,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (resource->pendingRespecify || !resource->storageInitialized || resource->storageSize != size) {
                 RespecifyStorageWith(*resource, size, usage, initialData, serial);
             } else if (!resource->pendingRanges.empty()) {
+                // Same rule as Ops_H_Readback's, at the draw-time drain: with no frontend object
+                // `hostBase` is the server shadow and every queued range must be staged.
+                MGL_SERVER_STAGED_REQUIRE_PENDING(*resource, hostBase, size, "ensure_flush_pending");
                 FlushPendingRangesFrom(*resource, hostBase, size);
                 resource->syncedChangeSerial = serial;
             } else if (resource->syncedChangeSerial != serial) {
