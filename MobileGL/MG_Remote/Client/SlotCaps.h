@@ -52,11 +52,8 @@
 // class-C slot Fatals by name instead.
 //
 // Converted, because the fallback is right:
-//   GL_Sync.cpp:59    FenceSync              -> always-signaled syncs, which the table's own
-//                                               header documents as the fallback and which GL
-//                                               permits; every other sync site is already
-//                                               guarded on syncObject->backendHandle, so this
-//                                               one gate carries the whole family.
+//   FenceSync used this fallback through P5. P5b §9 moved it to class B: the frontend
+//   now calls the emitter and the server preserves the optional/native-null fallback.
 //   GL_Texture.cpp:6537 GetTextureImage      -> the frontend's own CPU readback, which is exact
 //   GL_Texture.cpp:6799 GetTexImage          -> the same
 //   GL_Getter.cpp x2  GetGpuTimestampNs      -> 0, which BackendObject.h:192 already names as

@@ -54,7 +54,7 @@
     F(BufOffset) F(BufSize)
 
 #define MGP_FIELDS_MGPFenceWait(F) \
-    F(Fence) F(TimeoutNs)
+    F(Fence) F(TimeoutNs) F(Flags)
 
 #define MGP_FIELDS_MGPQueryDesc(F) \
     F(Query) F(Kind) F(Stream)

@@ -1537,12 +1537,24 @@ namespace MobileGL::MG_Remote::Wire {
             MGPipeApplyUnmapPersistent(*static_cast<const MGPHandleOnly*>(payload));
             return true;
 
-        // ---- fences and queries: off the reduced path (BRIEF §4) -------------------------
         case MGPWireOp::FenceCreate:
-        case MGPWireOp::FenceStatus:
-        case MGPWireOp::FenceWait:
+            return m_verbs != nullptr && m_verbs->OnFenceCreate(*static_cast<const MGPHandleOnly*>(payload));
         case MGPWireOp::FenceDestroy:
+            return m_verbs != nullptr && m_verbs->OnFenceDestroy(*static_cast<const MGPHandleOnly*>(payload));
         case MGPWireOp::FenceWaitServer:
+            return m_verbs != nullptr && m_verbs->OnFenceWaitServer(*static_cast<const MGPFenceWait*>(payload));
+        case MGPWireOp::FenceStatus:
+        case MGPWireOp::FenceWait: {
+            Uint32 result = 0;
+            const Bool ok = m_verbs != nullptr &&
+                (op == MGPWireOp::FenceStatus
+                     ? m_verbs->OnFenceStatus(*static_cast<const MGPHandleOnly*>(payload), result)
+                     : m_verbs->OnFenceWait(*static_cast<const MGPFenceWait*>(payload), result));
+            PostReply(op, seq, ok ? ReplySink::kStatusOk : ReplySink::kStatusDeclined,
+                      ok ? &result : nullptr, ok ? sizeof(result) : 0);
+            return ok;
+        }
+        // Query migration follows the measured first blockers.
         case MGPWireOp::QueryCreate:
         case MGPWireOp::QueryBegin:
         case MGPWireOp::QueryEnd:

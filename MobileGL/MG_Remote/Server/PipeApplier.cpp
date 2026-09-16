@@ -50,7 +50,10 @@ namespace MobileGL::MG_Remote::Server {
     // ServerVerbSink - the five class-B verbs
     // -----------------------------------------------------------------------------------
 
-    void ServerVerbSink::SetBackend(MG_Backend::BackendObject* backend) { m_backend = backend; }
+    void ServerVerbSink::SetBackend(MG_Backend::BackendObject* backend) {
+        if (m_backend != backend) ReleaseFences();
+        m_backend = backend;
+    }
 
     const MG_Backend::GlobalBackendFunctionsTable* ServerVerbSink::Table(const char* verb) const {
         if (m_backend == nullptr) {
@@ -66,6 +69,96 @@ namespace MobileGL::MG_Remote::Server {
             return nullptr;
         }
         return &m_backend->GetBackendFunctions();
+    }
+
+    ServerVerbSink::FenceEntry& ServerVerbSink::FindFence(MG_Pipe::MGPipeHandle handle) {
+        const auto it = m_fences.find(handle.Slot);
+        if (handle.Slot == 0 || it == m_fences.end() ||
+            !it->second.Live || it->second.Gen != handle.Gen) {
+            Wire::WireProtocolFatal("Fence.handle", "missing, destroyed or stale fence handle");
+        }
+        return it->second;
+    }
+
+    Bool ServerVerbSink::OnFenceCreate(const MG_Pipe::MGPHandleOnly& desc) {
+        if (desc.Kind != static_cast<Uint32>(MG_Pipe::MGPipeKind::Fence))
+            Wire::WireProtocolFatal("Fence.Kind", "expected Fence namespace");
+        const auto* table = Table("FenceCreate");
+        if (table == nullptr) return false;
+        const auto handle = desc.Handle;
+        if (handle.Slot == 0) {
+            Wire::WireProtocolFatal("FenceCreate.handle", "reserved fence handle");
+        }
+        const Bool seen = m_fences.find(handle.Slot) != m_fences.end();
+        auto& entry = m_fences[handle.Slot];
+        if (entry.Live || (seen && handle.Gen <= entry.Gen)) {
+            Wire::WireProtocolFatal("FenceCreate.handle", "duplicate or stale fence generation");
+        }
+        entry.Gen = handle.Gen;
+        entry.Live = true;
+        // GL_Sync.cpp treats an absent slot or a null creation result as always signaled.
+        entry.Native = table->GL.FenceSync == nullptr ? nullptr : table->GL.FenceSync();
+        return true;
+    }
+
+    Bool ServerVerbSink::OnFenceDestroy(const MG_Pipe::MGPHandleOnly& desc) {
+        if (desc.Kind != static_cast<Uint32>(MG_Pipe::MGPipeKind::Fence))
+            Wire::WireProtocolFatal("Fence.Kind", "expected Fence namespace");
+        auto& entry = FindFence(desc.Handle);
+        const auto* table = Table("FenceDestroy");
+        if (table == nullptr) return false;
+        if (entry.Native != nullptr && table->GL.DeleteSync != nullptr) table->GL.DeleteSync(entry.Native);
+        entry.Native = nullptr;
+        entry.Live = false;
+        return true;
+    }
+
+    Bool ServerVerbSink::OnFenceStatus(const MG_Pipe::MGPHandleOnly& desc, Uint32& result) {
+        if (desc.Kind != static_cast<Uint32>(MG_Pipe::MGPipeKind::Fence))
+            Wire::WireProtocolFatal("Fence.Kind", "expected Fence namespace");
+        auto& entry = FindFence(desc.Handle);
+        const auto* table = Table("FenceStatus");
+        if (table == nullptr) return false;
+        result = entry.Native == nullptr || table->GL.GetSyncStatus == nullptr ||
+                 table->GL.GetSyncStatus(entry.Native);
+        return true;
+    }
+
+    Bool ServerVerbSink::OnFenceWait(const MG_Pipe::MGPFenceWait& request, Uint32& result) {
+        if ((request.Flags & ~static_cast<Uint32>(GL_SYNC_FLUSH_COMMANDS_BIT)) != 0) {
+            Wire::WireProtocolFatal("FenceWait.Flags", "unknown client-wait flag");
+        }
+        auto& entry = FindFence(request.Fence);
+        const auto* table = Table("FenceWait");
+        if (table == nullptr) return false;
+        result = entry.Native == nullptr || table->GL.ClientWaitSync == nullptr
+                     ? GL_ALREADY_SIGNALED
+                     : table->GL.ClientWaitSync(entry.Native, request.Flags, request.TimeoutNs);
+        return true;
+    }
+
+    Bool ServerVerbSink::OnFenceWaitServer(const MG_Pipe::MGPFenceWait& request) {
+        if (request.Flags != 0 || request.TimeoutNs != GL_TIMEOUT_IGNORED) {
+            Wire::WireProtocolFatal("FenceWaitServer.arguments", "invalid server wait arguments");
+        }
+        auto& entry = FindFence(request.Fence);
+        const auto* table = Table("FenceWaitServer");
+        if (table == nullptr) return false;
+        if (entry.Native != nullptr && table->GL.WaitSync != nullptr)
+            table->GL.WaitSync(entry.Native, request.Flags, request.TimeoutNs);
+        return true;
+    }
+
+    void ServerVerbSink::ReleaseFences() {
+        // Detach runs on the apply thread before its private backend/context is destroyed.
+        if (m_backend != nullptr) {
+            const auto destroy = m_backend->GetBackendFunctions().GL.DeleteSync;
+            if (destroy != nullptr) {
+                for (auto& [slot, entry] : m_fences)
+                    if (entry.Live && entry.Native != nullptr) destroy(entry.Native);
+            }
+        }
+        m_fences.clear();
     }
 
     Bool ServerVerbSink::OnClear(const MG_Pipe::MGPClear& clear) {

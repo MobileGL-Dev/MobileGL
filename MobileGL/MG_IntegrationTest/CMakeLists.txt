@@ -63,6 +63,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/ResidentIndexScenario.cpp
     Scenarios/MultiDrawScenario.cpp
     Scenarios/IndexedDrawFamilyScenario.cpp
+    Scenarios/SyncWireScenario.cpp
     Scenarios/DrawParametersScenario.cpp
     Scenarios/AsyncCompileScenario.cpp
     Scenarios/XfbAfterClipDistanceScenario.cpp
@@ -2061,6 +2062,17 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         TEST_PREFIX "DirectGLES.Split."
         TEST_LIST MGL_SPLIT_T2_XFB_TESTS
         TEST_FILTER "XfbCaptureBufferReuseScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-split"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
+    )
+
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Split."
+        TEST_LIST MGL_SPLIT_SYNC_TESTS
+        TEST_FILTER "SyncWireScenario.*"
         DISCOVERY_TIMEOUT 30
         PROPERTIES
             LABELS "integration-gpu\;integration-split"

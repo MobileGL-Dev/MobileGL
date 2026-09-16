@@ -4,7 +4,7 @@ file(MAKE_DIRECTORY "@CMAKE_CURRENT_BINARY_DIR@/split-logs")
 # P5b t2's two lanes ride the same rule: one private log path per entry, or
 # SplitLogPaths.PrivateAndDistinct is red for them (ID-53).
 foreach(entry IN LISTS MGL_SPLIT_CLEAR_TESTS MGL_SPLIT_TRIANGLE_TESTS MGL_SPLIT_PMAP_TESTS
-                      MGL_SPLIT_T2_TESS_TESTS MGL_SPLIT_T2_XFB_TESTS)
+                      MGL_SPLIT_T2_TESS_TESTS MGL_SPLIT_T2_XFB_TESTS MGL_SPLIT_SYNC_TESTS)
     set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
         "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
 endforeach()

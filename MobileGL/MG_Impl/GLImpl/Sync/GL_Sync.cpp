@@ -61,11 +61,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto* syncObject = new SyncObject;
         syncObject->condition = condition;
         syncObject->flags = flags;
-        // The family's ONE gate. FenceSync is class C under split, and "absent" is the
-        // answer the whole fallback chain below is written against: every later site already
-        // checks syncObject->backendHandle, which stays null from here. The POINTER-valued
-        // macro keeps the init-statement byte-identical in a pull build (G1).
-        if (const auto backendFenceSync = MGL_BACKEND_SLOT_PTR_LOCAL(FenceSync)) {
+        // P5b: FenceSync is now a class-B emitter under split. Its server sink keeps the
+        // backend's optional/null-native fallback; the client must reach the wire first.
+        // This is the same pointer expression MGL_BACKEND_SLOT_PTR_LOCAL had in a pull build.
+        if (const auto backendFenceSync = MG_Backend::gBackendFunctionsTable.GL.FenceSync) {
             MGP_FILL(FenceSync);
             syncObject->backendHandle = backendFenceSync();
         }

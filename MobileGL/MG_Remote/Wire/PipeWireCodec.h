@@ -414,6 +414,11 @@ namespace MobileGL::MG_Remote::Wire {
     class WireVerbSink {
     public:
         virtual ~WireVerbSink() = default;
+        virtual Bool OnFenceCreate(const MG_Pipe::MGPHandleOnly&) { return false; }
+        virtual Bool OnFenceDestroy(const MG_Pipe::MGPHandleOnly&) { return false; }
+        virtual Bool OnFenceStatus(const MG_Pipe::MGPHandleOnly&, Uint32&) { return false; }
+        virtual Bool OnFenceWait(const MG_Pipe::MGPFenceWait&, Uint32&) { return false; }
+        virtual Bool OnFenceWaitServer(const MG_Pipe::MGPFenceWait&) { return false; }
         virtual Bool OnClear(const MG_Pipe::MGPClear& clear) {
             (void)clear;
             return false;

@@ -36,6 +36,8 @@
 
 // MG_Config::Transport and MG_Config::Ipc.AdoptTier: the two knobs R-6's tier gate reads.
 #include <Config.h>
+#include <MG_Remote/Server/PipeApplier.h>
+#include <MG_Backend/DirectGLES/BackendObject_DirectGLES.h>
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 #include <MG_Pipe/PipeApply.h>
@@ -2635,4 +2637,141 @@ int main(int argc, char** argv) {
     const int rc = RUN_ALL_TESTS();
     fs::remove(path, ec);
     return rc;
+}
+
+
+namespace {
+    struct FenceProbeBackend final : MG_Backend::DirectGLES::BackendObject_DirectGLES {
+        MG_Backend::GlobalBackendFunctionsTable Table{};
+        const MG_Backend::GlobalBackendFunctionsTable& GetBackendFunctions() const override { return Table; }
+    };
+    Uint32 fenceDeletes = 0;
+    Uint32 fenceServerWaits = 0;
+    Uint32 fenceFlags = 0;
+    Uint64 fenceTimeout = 0;
+    int nativeFenceToken = 0;
+
+    void InstallFenceProbe(FenceProbeBackend& backend) {
+        fenceDeletes = fenceServerWaits = fenceFlags = 0;
+        fenceTimeout = 0;
+        backend.Table.GL.FenceSync = +[]() -> MG_Backend::BackendSyncHandle { return &nativeFenceToken; };
+        backend.Table.GL.ClientWaitSync = +[](MG_Backend::BackendSyncHandle native, GLbitfield flags,
+                                               GLuint64 timeout) -> GLenum {
+            EXPECT_EQ(native, &nativeFenceToken);
+            fenceFlags = flags;
+            fenceTimeout = timeout;
+            return GL_TIMEOUT_EXPIRED;
+        };
+        backend.Table.GL.GetSyncStatus = +[](MG_Backend::BackendSyncHandle native) -> Bool {
+            EXPECT_EQ(native, &nativeFenceToken);
+            return false;
+        };
+        backend.Table.GL.WaitSync = +[](MG_Backend::BackendSyncHandle native, GLbitfield flags, GLuint64 timeout) {
+            EXPECT_EQ(native, &nativeFenceToken);
+            EXPECT_EQ(flags, 0u);
+            EXPECT_EQ(timeout, GL_TIMEOUT_IGNORED);
+            ++fenceServerWaits;
+        };
+        backend.Table.GL.DeleteSync = +[](MG_Backend::BackendSyncHandle native) {
+            EXPECT_EQ(native, &nativeFenceToken);
+            ++fenceDeletes;
+        };
+    }
+}
+
+TEST(FenceWireRoundTrip, PreservesWaitFlagsTimeoutAnswersAndNativeLifetime) {
+    Wire2 wire;
+    FenceProbeBackend backend;
+    InstallFenceProbe(backend);
+    Server::ServerVerbSink sink;
+    sink.SetBackend(&backend);
+    wire.Decoder().SetVerbSink(&sink);
+    const MGPHandleOnly fence{{41, 0}, static_cast<Uint32>(MGPipeKind::Fence), 0};
+    auto send = [&](MGPWireOp op, const auto& payload) {
+        const auto seq = wire.Encoder().EncodeRecord(op, &payload, sizeof(payload));
+        EXPECT_NE(seq, kInvalidSeq);
+        bool applied = false;
+        EXPECT_TRUE(wire.PumpOne(&applied));
+        EXPECT_TRUE(applied);
+        return seq;
+    };
+    send(MGPWireOp::FenceCreate, fence);
+    EXPECT_TRUE(wire.Answers().All.empty());
+    const MGPFenceWait wait{fence.Handle, 0x123456789ull, GL_SYNC_FLUSH_COMMANDS_BIT, 0};
+    const auto waitSeq = send(MGPWireOp::FenceWait, wait);
+    ASSERT_EQ(wire.Answers().All.size(), 1u);
+    const auto& answer = wire.Answers().All.back();
+    EXPECT_EQ(answer.Seq, waitSeq);
+    EXPECT_EQ(answer.Status, ReplySink::kStatusOk);
+    ASSERT_EQ(answer.Bytes.size(), sizeof(Uint32));
+    Uint32 value = 0;
+    std::memcpy(&value, answer.Bytes.data(), sizeof(value));
+    EXPECT_EQ(value, GL_TIMEOUT_EXPIRED); // a real timeout must never become signaled
+    EXPECT_EQ(fenceFlags, GL_SYNC_FLUSH_COMMANDS_BIT);
+    EXPECT_EQ(fenceTimeout, wait.TimeoutNs);
+    send(MGPWireOp::FenceStatus, fence);
+    std::memcpy(&value, wire.Answers().All.back().Bytes.data(), sizeof(value));
+    EXPECT_EQ(value, 0u);
+    send(MGPWireOp::FenceWaitServer, MGPFenceWait{fence.Handle, GL_TIMEOUT_IGNORED, 0, 0});
+    EXPECT_EQ(fenceServerWaits, 1u);
+    send(MGPWireOp::FenceDestroy, fence);
+    EXPECT_EQ(fenceDeletes, 1u);
+    const MGPHandleOnly replacement{{41, 1}, static_cast<Uint32>(MGPipeKind::Fence), 0};
+    send(MGPWireOp::FenceCreate, replacement);
+    sink.SetBackend(nullptr); // orphan cleanup occurs before backend destruction
+    EXPECT_EQ(fenceDeletes, 2u);
+}
+
+TEST(FenceWireRoundTrip, NullNativeFenceUsesOnlyTheExistingMonolithFallback) {
+    Wire2 wire;
+    FenceProbeBackend backend;
+    InstallFenceProbe(backend);
+    backend.Table.GL.FenceSync = +[]() -> MG_Backend::BackendSyncHandle { return nullptr; };
+    Server::ServerVerbSink sink;
+    sink.SetBackend(&backend);
+    wire.Decoder().SetVerbSink(&sink);
+    const MGPHandleOnly fence{{1, 1}, static_cast<Uint32>(MGPipeKind::Fence), 0};
+    ASSERT_TRUE(sink.OnFenceCreate(fence));
+    Uint32 result = 0;
+    EXPECT_TRUE(sink.OnFenceWait({fence.Handle, 0, 0, 0}, result));
+    EXPECT_EQ(result, GL_ALREADY_SIGNALED);
+    EXPECT_TRUE(sink.OnFenceStatus(fence, result));
+    EXPECT_EQ(result, 1u);
+    EXPECT_TRUE(sink.OnFenceDestroy(fence));
+    EXPECT_EQ(fenceDeletes, 0u);
+    sink.SetBackend(nullptr);
+}
+
+#if MGTEST_HAVE_FORK
+TEST(FenceWireRoundTrip, DestroyedAndRecycledWireHandlesNeverReachTheBackend) {
+    const auto r = RunInChild([] {
+        FenceProbeBackend backend;
+        InstallFenceProbe(backend);
+        Server::ServerVerbSink sink;
+        sink.SetBackend(&backend);
+        const MGPHandleOnly old{{9, 0}, static_cast<Uint32>(MGPipeKind::Fence), 0};
+        sink.OnFenceCreate(old);
+        sink.OnFenceDestroy(old);
+        sink.OnFenceCreate({{9, 1}, static_cast<Uint32>(MGPipeKind::Fence), 0});
+        Uint32 result = 0;
+        sink.OnFenceWait({old.Handle, 0, 0, 0}, result);
+    });
+    ASSERT_TRUE(DiedOfAbort(r));
+    EXPECT_NE(r.Log.find("Fence.handle"), std::string::npos) << r.Log;
+}
+#endif
+
+
+TEST(FenceWireRoundTrip, MissingConsumerDeclinesWithoutInventingASignaledAnswer) {
+    Wire2 wire;
+    const MGPFenceWait wait{{3, 0}, 0, 0, 0};
+    const auto seq = wire.Encoder().EncodeRecord(MGPWireOp::FenceWait, &wait, sizeof(wait));
+    ASSERT_NE(seq, kInvalidSeq);
+    bool applied = true;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_FALSE(applied);
+    ASSERT_EQ(wire.Answers().All.size(), 1u);
+    EXPECT_EQ(wire.Answers().All[0].Seq, seq);
+    EXPECT_EQ(wire.Answers().All[0].Status, ReplySink::kStatusDeclined);
+    EXPECT_TRUE(wire.Answers().All[0].Bytes.empty());
 }

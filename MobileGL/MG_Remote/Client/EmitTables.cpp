@@ -10,7 +10,7 @@
 //
 // THE PARTITION IS CONTRACT-P5.md §7's AND IS NOT RE-DERIVED HERE (R-15, ID-12):
 //   class A  2 slots  answered locally from the caps mirror, never emitted, never Fatal
-//   class B 49 slots emitted; class C 20 slots name their unmigrated verb.
+//   class B 54 slots emitted; class C 15 slots name their unmigrated verb.
 // The three counts are static_asserted to sum to kRemoteEmitSlotCount below, so a slot that
 // changes class without changing the arithmetic is a build break rather than a behaviour
 // change nobody reviewed.
@@ -1441,7 +1441,84 @@ namespace MobileGL::MG_Remote::Client {
         }
 
         // =============================================================================
-        // CLASS C - 21 slots remain after d1/i1/t2/f1; each names its first blocker.
+        // The frontend sees a local opaque token; neither this address nor the driver's
+        // BackendSyncHandle is serialized. The Fence-kind slot allocator supplies wire identity.
+        struct RemoteFenceProxy { MG_Pipe::MGPipeHandle Handle; };
+        std::mutex g_fenceMutex;
+        UnorderedMap<MG_Backend::BackendSyncHandle, UniquePtr<RemoteFenceProxy>> g_fenceProxies;
+
+        MG_Pipe::MGPipeHandle FenceHandle(MG_Backend::BackendSyncHandle proxy) {
+            const auto it = g_fenceProxies.find(proxy);
+            if (it == g_fenceProxies.end())
+                Wire::WireProtocolFatal("Fence.proxy", "unknown client fence proxy");
+            return it->second->Handle;
+        }
+
+        MG_Backend::BackendSyncHandle EmitFenceSync() {
+            ClientSession& session = RequireSession("FenceSync");
+            const std::lock_guard<std::mutex> lock(g_fenceMutex);
+            BeforeReadOnlyVerb();
+            auto proxy = MakeUnique<RemoteFenceProxy>();
+            proxy->Handle = MG_Pipe::MGPipeSlots().Allocate(MG_Pipe::MGPipeKind::Fence);
+            const MG_Pipe::MGPHandleOnly desc{proxy->Handle, static_cast<Uint32>(MG_Pipe::MGPipeKind::Fence), 0};
+            session.EmitAndWait(MG_Pipe::MGPWireOp::FenceCreate, &desc, sizeof(desc),
+                                nullptr, 0, nullptr, 0, nullptr);
+            auto* local = proxy.get();
+            g_fenceProxies.emplace(local, std::move(proxy));
+            return local;
+        }
+
+        Uint32 ReadFenceReply(ClientSession& session, MG_Pipe::MGPWireOp op,
+                             const void* payload, Uint64 bytes) {
+            Uint32 result = 0;
+            Int32 status = Wire::ReplySink::kStatusError;
+            Uint64 replyBytes = 0;
+            session.EmitAndWait(op, payload, bytes, nullptr, 0, &result, sizeof(result),
+                                &status, &replyBytes);
+            if (status != Wire::ReplySink::kStatusOk || replyBytes != sizeof(result))
+                Wire::WireProtocolFatal("Fence.reply", "missing or malformed sync result");
+            return result;
+        }
+
+        GLenum EmitClientWaitSync(MG_Backend::BackendSyncHandle proxy, GLbitfield flags, GLuint64 timeout) {
+            ClientSession& session = RequireSession("ClientWaitSync");
+            const std::lock_guard<std::mutex> lock(g_fenceMutex);
+            const MG_Pipe::MGPFenceWait request{FenceHandle(proxy), timeout, flags, 0};
+            return ReadFenceReply(session, MG_Pipe::MGPWireOp::FenceWait, &request, sizeof(request));
+        }
+
+        Bool EmitGetSyncStatus(MG_Backend::BackendSyncHandle proxy) {
+            ClientSession& session = RequireSession("GetSyncStatus");
+            const std::lock_guard<std::mutex> lock(g_fenceMutex);
+            const MG_Pipe::MGPHandleOnly desc{FenceHandle(proxy), static_cast<Uint32>(MG_Pipe::MGPipeKind::Fence), 0};
+            const Uint32 result = ReadFenceReply(session, MG_Pipe::MGPWireOp::FenceStatus, &desc, sizeof(desc));
+            if (result > 1) Wire::WireProtocolFatal("FenceStatus.reply", "status must be boolean");
+            return result != 0;
+        }
+
+        void EmitWaitSync(MG_Backend::BackendSyncHandle proxy, GLbitfield flags, GLuint64 timeout) {
+            ClientSession& session = RequireSession("WaitSync");
+            const std::lock_guard<std::mutex> lock(g_fenceMutex);
+            const MG_Pipe::MGPFenceWait request{FenceHandle(proxy), timeout, flags, 0};
+            session.EmitAndWait(MG_Pipe::MGPWireOp::FenceWaitServer, &request, sizeof(request),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        void EmitDeleteSync(MG_Backend::BackendSyncHandle proxy) {
+            const std::lock_guard<std::mutex> lock(g_fenceMutex);
+            const auto handle = FenceHandle(proxy);
+            // MobileGL::Destroy stops the server BEFORE DestroyAllSyncObjects. Detach already
+            // released those native objects on the apply thread; only the local proxy remains.
+            if (auto* session = ClientSession::Active(); session != nullptr && session->Started()) {
+                const MG_Pipe::MGPHandleOnly desc{handle, static_cast<Uint32>(MG_Pipe::MGPipeKind::Fence), 0};
+                session->EmitAndWait(MG_Pipe::MGPWireOp::FenceDestroy, &desc, sizeof(desc),
+                                     nullptr, 0, nullptr, 0, nullptr);
+            }
+            MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Fence, handle);
+            g_fenceProxies.erase(proxy);
+        }
+
+        // CLASS C - 16 slots remain after d1/i1/t2/f1; each names its first blocker.
         // =============================================================================
         //
         // PARTITIONED BY THE P5b PACKAGE THAT OWNS THE FLIP (MG_Remote/CONTRACT-P5B.md,
@@ -1501,8 +1578,6 @@ namespace MobileGL::MG_Remote::Client {
     X(GetTextureImage, void,                                                                       \
       (const SharedPtr<MG_State::GLState::ITextureObject>&, TextureUploadTarget, GLint, GLenum,    \
        GLenum, GLsizei, GLvoid*))                                                                  \
-    X(WaitSync, void, (MG_Backend::BackendSyncHandle, GLbitfield, GLuint64))                       \
-    X(DeleteSync, void, (MG_Backend::BackendSyncHandle))                                           \
     X(EndTimeElapsedQuery, void, (MG_Backend::BackendQueryHandle))                                  \
     X(DeleteBackendQuery, void, (MG_Backend::BackendQueryHandle))                                   \
     X(EndOcclusionQuery, void, (MG_Backend::BackendQueryHandle))                                    \
@@ -1514,9 +1589,6 @@ namespace MobileGL::MG_Remote::Client {
         // warn on the second. It does see it; they are split for readability. All ten are the
         // wave-3 tail.
 #define MGR_UNMIGRATED_TAIL_VALUE_SLOTS(X)                                                         \
-    X(FenceSync, MG_Backend::BackendSyncHandle, ())                                                \
-    X(ClientWaitSync, GLenum, (MG_Backend::BackendSyncHandle, GLbitfield, GLuint64))               \
-    X(GetSyncStatus, Bool, (MG_Backend::BackendSyncHandle))                                        \
     X(BeginTimeElapsedQuery, MG_Backend::BackendQueryHandle, ())                                   \
     X(QueryCounterTimestamp, MG_Backend::BackendQueryHandle, ())                                   \
     X(IsQueryResultAvailable, Bool, (MG_Backend::BackendQueryHandle))                               \
@@ -1570,9 +1642,10 @@ namespace MobileGL::MG_Remote::Client {
         constexpr Uint32 kEmittedSlotsT2 = 6;
         constexpr Uint32 kEmittedSlotsF1 = 11;
         constexpr Uint32 kEmittedSlotsTail = 1; // BlitNamedFramebuffer
+        constexpr Uint32 kEmittedSlotsSync = 5;
         constexpr Uint32 kEmittedSlots =
             kEmittedSlotsP5 + kEmittedSlotsD1 + kEmittedSlotsI1 + kEmittedSlotsT2 + kEmittedSlotsF1 +
-            kEmittedSlotsTail;
+            kEmittedSlotsTail + kEmittedSlotsSync;
         constexpr Uint32 kLocallyAnsweredSlots = 2; // GetIntegeri_v, IsTimerQuerySupported
 
         // EACH PACKAGE'S OWNERSHIP, PINNED. A package that flips a slot removes one row and
@@ -1583,7 +1656,8 @@ namespace MobileGL::MG_Remote::Client {
         static_assert(kUnmigratedI1 + kEmittedSlotsI1 == 7, "i1 owns the 7 image/compute/barrier/copy/SSBO slots");
         static_assert(kUnmigratedT2 + kEmittedSlotsT2 == 7, "t2 owns the 7 XFB/tessellation slots");
         static_assert(kUnmigratedF1 + kEmittedSlotsF1 == 11, "f1 owns the 11 clear/copy/mip slots");
-        static_assert(kUnmigratedTail + kEmittedSlotsTail == 20, "the original wave-3 tail owns 20 slots");
+        static_assert(kUnmigratedTail + kEmittedSlotsTail + kEmittedSlotsSync == 20,
+                      "the original wave-3 tail owns 20 slots");
         static_assert(kUnmigratedSlots + kEmittedSlots == 69, "class B and C own 69 slots");
         static_assert(kLocallyAnsweredSlots + kEmittedSlots + kUnmigratedSlots == kRemoteEmitSlotCount,
                       "the three classes no longer partition the 71 slots");
@@ -1602,6 +1676,12 @@ namespace MobileGL::MG_Remote::Client {
             MGR_UNMIGRATED_GL_VALUE_SLOTS(MGR_ASSIGN_UNMIGRATED)
 #undef MGR_ASSIGN_UNMIGRATED
             table.SetSwapInterval = &SetSwapInterval_Unmigrated;
+
+            table.GL.FenceSync = &EmitFenceSync;
+            table.GL.ClientWaitSync = &EmitClientWaitSync;
+            table.GL.GetSyncStatus = &EmitGetSyncStatus;
+            table.GL.WaitSync = &EmitWaitSync;
+            table.GL.DeleteSync = &EmitDeleteSync;
 
             // ---- class A
             table.GL.GetIntegeri_v = &AnswerGetIntegeri_v;

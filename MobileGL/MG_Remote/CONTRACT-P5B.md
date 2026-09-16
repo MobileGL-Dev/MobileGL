@@ -451,3 +451,32 @@ The wave-3 tail no P5b package owns, by name, so nobody discovers it by grep: `B
 - The backends (`MG_Backend/DirectGLES`, `DirectVulkan`): untouched by c0b; a package that
   must touch one does so behind `#if MOBILEGL_BUILD_DISAGGREGATED` and names the region in
   its report (G1 admits no pull-build symbol motion; G5's untouched regions are pinned).
+
+
+## §9 Wave 3: fence sync (integrator-approved, 2026-09-16)
+
+The dynamic Minecraft census exposes `FenceSync`. All five sync slots migrate together on
+existing opcodes: FenceCreate/FenceStatus/FenceWait/FenceDestroy/FenceWaitServer. No opcode
+moves and no creation reply is introduced. The client allocates a Fence-kind `{slot, gen}`;
+a local opaque proxy satisfies the frontend's `BackendSyncHandle` API. Only the handle crosses
+SEG_CMD. The server owns a generation-checked table of native backend sync handles, creates,
+waits, queries and deletes them exclusively on the apply thread, and releases remaining native
+objects before the backend is detached. Client orphan deletion after session shutdown only
+releases its proxy. Duplicate creation and missing, destroyed or stale wire handles are protocol
+corruption, since GL argument errors were already handled by the frontend.
+
+`MGPFenceWait` grows 16 → 24 bytes: append `Uint32 Flags; Uint32 Pad0;` after TimeoutNs.
+Flags preserves `GL_SYNC_FLUSH_COMMANDS_BIT` for ClientWaitSync; server WaitSync accepts only
+zero flags and GL_TIMEOUT_IGNORED. Existing ABI fingerprinting rejects mixed layouts.
+FenceStatus and FenceWait retain their existing reply slots: an OK reply is exactly one Uint32,
+respectively 0/1 or the backend's GL wait enum. Missing backend declines and never manufactures
+an OK result. A present backend with no FenceSync slot or a FenceSync call returning null uses
+exactly GL_Sync.cpp's existing always-signaled fallback; a real native fence's failed/timeout
+wait answer is returned unchanged. A missing native wait/status slot uses the same frontend
+fallback. This is compatibility with existing monolith behavior, not an unconditional success.
+
+All five opcodes stamp their matching MGPipeVerb (`FenceSync`, `GetSyncStatus`,
+`ClientWaitSync`, `DeleteSync`, `WaitSync`). Every record keeps the verb barrier. The sole `GL_Sync.cpp` FenceSync guard changes from the class-C LOCAL macro to its original
+table pointer expression: in a pull build these are identical. Under split it reaches the
+class-B emitter, and the server preserves the optional-native fallback. No backend changes. The wave-3 tail's five slots move C → B; d1/i1/t2/f1 ownership
+counts remain unchanged.

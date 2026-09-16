@@ -408,8 +408,10 @@ namespace MobileGL::MG_Pipe {
     struct MGPFenceWait {
         MGPipeHandle Fence;
         Uint64 TimeoutNs;
+        Uint32 Flags;
+        Uint32 Pad0;
     };
-    MGP_ASSERT_POD(MGPFenceWait, 16);
+    MGP_ASSERT_POD(MGPFenceWait, 24);
 
     struct MGPQueryDesc {
         MGPipeHandle Query;

@@ -102,6 +102,12 @@ namespace MobileGL::MG_Remote::Server {
         // verb that arrives before then declines by name rather than dereferencing.
         void SetBackend(MG_Backend::BackendObject* backend);
 
+        Bool OnFenceCreate(const MG_Pipe::MGPHandleOnly&) override;
+        Bool OnFenceDestroy(const MG_Pipe::MGPHandleOnly&) override;
+        Bool OnFenceStatus(const MG_Pipe::MGPHandleOnly&, Uint32&) override;
+        Bool OnFenceWait(const MG_Pipe::MGPFenceWait&, Uint32&) override;
+        Bool OnFenceWaitServer(const MG_Pipe::MGPFenceWait&) override;
+        void ReleaseFences();
         Bool OnClear(const MG_Pipe::MGPClear& clear) override;
         Bool OnBlit(const MG_Pipe::MGPBlit& blit) override;
         Bool OnPresent(const MG_Pipe::MGPPresent& present) override;
@@ -201,6 +207,13 @@ namespace MobileGL::MG_Remote::Server {
     private:
         const MG_Backend::GlobalBackendFunctionsTable* Table(const char* verb) const;
 
+        struct FenceEntry {
+            Uint32 Gen = 0;
+            Bool Live = false;
+            MG_Backend::BackendSyncHandle Native = nullptr;
+        };
+        FenceEntry& FindFence(MG_Pipe::MGPipeHandle handle);
+        UnorderedMap<Uint32, FenceEntry> m_fences;
         MG_Backend::BackendObject* m_backend = nullptr;
         Uint64 m_clears = 0;
         Uint64 m_draws = 0;

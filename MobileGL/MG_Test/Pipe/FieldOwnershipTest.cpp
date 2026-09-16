@@ -313,7 +313,7 @@ TEST_F(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::SetStorageBlockBinding),
               MGPipeVerb::ShaderStorageBlockBinding);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::CopyFramebufferToTexture), MGPipeVerb::CopyTexImage2D);
-    EXPECT_EQ(kMGPipeVerbBoundaryOpCount, SizeT{18});
+    EXPECT_EQ(kMGPipeVerbBoundaryOpCount, SizeT{23});
     EXPECT_EQ(kMGPipeVerbBoundaryExemptCount, SizeT{3});
 
     // Present is class B (it is emitted in P5) and is STILL not a verb boundary:
