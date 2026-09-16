@@ -130,7 +130,10 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
     EXPECT_EQ(ClassCount<kCtxCso>(), 13u);
     EXPECT_EQ(ClassCount<kCtxState>(), 17u);
     EXPECT_EQ(ClassCount<kCtxObject>(), 9u);
-    EXPECT_EQ(ClassCount<kCtxVerb>(), 13u);
+    // 13 + the five P5b-appended verbs (MG_Remote/CONTRACT-P5B.md): bind_shader_image,
+    // patch_parameter, bind_stream_output, set_storage_block_binding,
+    // copy_framebuffer_to_texture.
+    EXPECT_EQ(ClassCount<kCtxVerb>(), 18u);
 }
 
 // A row nobody has migrated is null - which is exactly what "this subsystem has not been
@@ -545,7 +548,41 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::QueryTimestamp), 69);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::QueryCounter), 70);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::FenceWaitServer), 71);
-    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 72);
+    // P5b (MG_Remote/CONTRACT-P5B.md) appended five verbs AFTER P0's three late arrivals, by
+    // the same rule: opcodes 72..76, and nothing before them moved. The five are pinned by
+    // VALUE, because the pin is the protocol - a row inserted ahead of one would silently
+    // re-point every record a P5b package emits at the wrong arm.
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::BindShaderImage), 72);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::PatchParameter), 73);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::BindStreamOutput), 74);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::SetStorageBlockBinding), 75);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::CopyFramebufferToTexture), 76);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 77);
+    // And the P5b rows carry what their contract says: one blob (the block name) and nothing
+    // else, and the extended draw row keeps its two flags.
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::SetStorageBlockBinding), static_cast<Uint32>(kHasBlob));
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::BindShaderImage), static_cast<Uint32>(kNone));
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::PatchParameter), static_cast<Uint32>(kNone));
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::BindStreamOutput), static_cast<Uint32>(kNone));
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::CopyFramebufferToTexture), static_cast<Uint32>(kNone));
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::DrawVbo), static_cast<Uint32>(kHostSpan | kVarTail));
+    // The P5b payload sizes, pinned like every other MGP_ASSERT_POD at runtime so the numbers
+    // show up in ctest output; MGPCopyRegion grew 64 -> 72 for its two GL names (i1).
+    EXPECT_EQ(sizeof(MGPImageBind), 40u);
+    EXPECT_EQ(sizeof(MGPPatchParameter), 8u);
+    EXPECT_EQ(sizeof(MGPStreamOutputBind), 16u);
+    EXPECT_EQ(sizeof(MGPStorageBlockBinding), 40u);
+    EXPECT_EQ(sizeof(MGPCopyFromFramebuffer), 48u);
+    EXPECT_EQ(sizeof(MGPCopyRegion), 72u);
+    EXPECT_EQ(sizeof(MGPDrawIndirect), 40u);
+    // The two draw-flag bits P5b's d1 arms are exclusive by contract and distinct by value.
+    EXPECT_EQ(static_cast<Uint32>(kDrawIsIndirect), 1u << 5);
+    EXPECT_EQ(static_cast<Uint32>(kDrawHasUserIndices) & static_cast<Uint32>(kDrawIsIndirect), 0u);
+    // The clear discriminants have ONE spelling now, and Whole is 0 so a zeroed record is a
+    // whole-framebuffer clear.
+    EXPECT_EQ(kMGPipeClearKindWhole, 0u);
+    EXPECT_EQ(kMGPipeClearKindDepthStencil + 1, kMGPipeClearKindCount);
+    EXPECT_EQ(kMGPipeClearValueClassUint + 1, kMGPipeClearValueClassCount);
 }
 
 // A well-formed record passes the applier's bounds gate. P0 has no applier, so "accepted"
@@ -732,7 +769,10 @@ TEST(PipeCatalogue, FloatVectorsCompareBitwise) {
 // a cache that read the padding would mint a fresh CSO per call and the verify lane would
 // abort at random.
 TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
-    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 72u);
+    // 72 through P5; P5b appended five call payloads (MG_Remote/CONTRACT-P5B.md: MGPImageBind,
+    // MGPPatchParameter, MGPStreamOutputBind, MGPStorageBlockBinding, MGPCopyFromFramebuffer),
+    // each with its own field list, so the comparator sees every one of them: 77.
+    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 77u);
     static_assert(MGPipeHasFieldVerifier<RenderStateParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PixelStoreParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PerBufferBlendState>::value);

@@ -192,7 +192,7 @@ namespace {
                 return true;
             }
             Bool OnDrawVbo(const MGPDrawInfo& info, const MGPDrawRange* ranges,
-                           const MGHostSpan* userIndices) override {
+                           const MGHostSpan* userIndices, const MGPDrawIndirect* indirect) override {
                 Draws.push_back(info);
                 DrawRanges.clear();
                 for (Uint32 i = 0; i < info.NumDraws; ++i) {
@@ -202,6 +202,68 @@ namespace {
                 if (userIndices != nullptr) {
                     LastSpan = *userIndices;
                 }
+                SawIndirect = indirect != nullptr;
+                if (indirect != nullptr) {
+                    LastIndirect = *indirect;
+                }
+                return true;
+            }
+            // ---- P5b's rows (CONTRACT-P5B.md): one recorder per sink method, so a round trip
+            // asserts the arm reached the RIGHT consumer with the record intact.
+            Bool OnLaunchGrid(const MGPGridInfo& grid) override {
+                Grids.push_back(grid);
+                return true;
+            }
+            Bool OnMemoryBarrier(const MGPMemoryBarrier& barrier) override {
+                Barriers.push_back(barrier);
+                return true;
+            }
+            Bool OnResourceCopyRegion(const MGPCopyRegion& copy) override {
+                Copies.push_back(copy);
+                return true;
+            }
+            Bool OnBindShaderImage(const MGPImageBind& bind) override {
+                ImageBinds.push_back(bind);
+                return true;
+            }
+            Bool OnSetStorageBlockBinding(const MGPStorageBlockBinding& binding,
+                                          const char* name) override {
+                StorageBindings.push_back(binding);
+                StorageBlockNames.push_back(name != nullptr ? name : "<null>");
+                return true;
+            }
+            Bool OnBeginStreamOutput(const MGPStreamOutputBegin& begin) override {
+                Begins.push_back(begin);
+                return true;
+            }
+            Bool OnEndStreamOutput(const MGPXfbAccounting& accounting) override {
+                Ends.push_back(accounting);
+                return true;
+            }
+            Bool OnPauseStreamOutput(const MGPStreamOutputControl& control) override {
+                (void)control;
+                ++Pauses;
+                return true;
+            }
+            Bool OnResumeStreamOutput(const MGPStreamOutputControl& control) override {
+                (void)control;
+                ++Resumes;
+                return true;
+            }
+            Bool OnBindStreamOutput(const MGPStreamOutputBind& bind) override {
+                StreamOutputBinds.push_back(bind);
+                return true;
+            }
+            Bool OnPatchParameter(const MGPPatchParameter& patch) override {
+                Patches.push_back(patch);
+                return true;
+            }
+            Bool OnGenerateMipmap(const MGPMipPlan& plan) override {
+                MipPlans.push_back(plan);
+                return true;
+            }
+            Bool OnCopyFramebufferToTexture(const MGPCopyFromFramebuffer& copy) override {
+                FramebufferCopies.push_back(copy);
                 return true;
             }
             std::vector<MGPClear> Clears;
@@ -213,6 +275,22 @@ namespace {
             std::vector<MGPDrawRange> DrawRanges;
             bool SawUserIndices = false;
             MGHostSpan LastSpan{};
+            bool SawIndirect = false;
+            MGPDrawIndirect LastIndirect{};
+            std::vector<MGPGridInfo> Grids;
+            std::vector<MGPMemoryBarrier> Barriers;
+            std::vector<MGPCopyRegion> Copies;
+            std::vector<MGPImageBind> ImageBinds;
+            std::vector<MGPStorageBlockBinding> StorageBindings;
+            std::vector<std::string> StorageBlockNames;
+            std::vector<MGPStreamOutputBegin> Begins;
+            std::vector<MGPXfbAccounting> Ends;
+            Uint32 Pauses = 0;
+            Uint32 Resumes = 0;
+            std::vector<MGPStreamOutputBind> StreamOutputBinds;
+            std::vector<MGPPatchParameter> Patches;
+            std::vector<MGPMipPlan> MipPlans;
+            std::vector<MGPCopyFromFramebuffer> FramebufferCopies;
         };
 
         Replies& Answers() { return m_replies; }
@@ -921,6 +999,267 @@ TEST_F(PipeWireCodecTest, DrawVboConditionalSpanTailIsEightAlignedAndSurvives) {
     EXPECT_TRUE(wire.Sink().SawUserIndices);
     EXPECT_EQ(wire.Sink().LastSpan.Ptr, nullptr);
     EXPECT_EQ(wire.Sink().LastSpan.Size, sizeof(indices));
+    EXPECT_FALSE(wire.Sink().SawIndirect);
+}
+
+// =====================================================================================
+// P5b (MG_Remote/CONTRACT-P5B.md): one round trip per row the four migration packages consume
+// =====================================================================================
+//
+// The shape is the one above: encode, pump one record through the ring and the decoder, and
+// assert that the arm reached the RIGHT sink method with the record intact. Nothing here
+// asserts rendering - the sink is a recorder - which is exactly the layer the contract package
+// owns: the bytes and the dispatch, not the backend call.
+
+TEST_F(PipeWireCodecTest, DrawVboIndirectTailCrossesInPlaceOfTheSpan) {
+    // d1: kDrawIsIndirect puts one MGPDrawIndirect where the user-index span would sit, with
+    // NumDraws 0 (the server never reads the indirect buffer to learn a count).
+    Wire2 wire;
+    MGPDrawInfo info{};
+    info.Mode = 4;
+    info.IndexSize = 4;
+    info.Flags = kDrawIsIndirect;
+    info.InstanceCount = 1;
+    info.NumDraws = 0;
+    MGPDrawIndirect indirect{};
+    indirect.Buffer = MakeHandle(81);
+    indirect.ParameterBuffer = MakeHandle(82);
+    indirect.Offset = 64;
+    indirect.ParameterOffset = 16;
+    indirect.Stride = 20;
+    indirect.DrawCount = 7;
+
+    WireRecordLayout layout{};
+    ASSERT_TRUE(MGPipeWireRecordLayout(MGPWireOp::DrawVbo, &info, layout));
+    EXPECT_EQ(layout.TailCount, 2u);
+    EXPECT_EQ(layout.TailBytes[0], 0u);
+    EXPECT_EQ(layout.TailBytes[1], sizeof(MGPDrawIndirect));
+    EXPECT_FALSE(layout.SecondTailIsHostSpans);
+    EXPECT_EQ(layout.TailOffset[1] % 8, 0u);
+
+    const WireTail tails[2] = {{nullptr, 0}, {&indirect, sizeof(indirect)}};
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::DrawVbo, &info, sizeof(info), tails, 2),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_EQ(wire.Sink().Draws.size(), 1u);
+    EXPECT_FALSE(wire.Sink().SawUserIndices);
+    ASSERT_TRUE(wire.Sink().SawIndirect);
+    EXPECT_EQ(wire.Sink().LastIndirect.Buffer.Slot, 81u);
+    EXPECT_EQ(wire.Sink().LastIndirect.ParameterBuffer.Slot, 82u);
+    EXPECT_EQ(wire.Sink().LastIndirect.Offset, 64u);
+    EXPECT_EQ(wire.Sink().LastIndirect.ParameterOffset, 16u);
+    EXPECT_EQ(wire.Sink().LastIndirect.Stride, 20u);
+    EXPECT_EQ(wire.Sink().LastIndirect.DrawCount, 7u);
+}
+
+TEST_F(PipeWireCodecTest, LaunchGridReachesTheSink) {
+    Wire2 wire;
+    MGPGridInfo grid{};
+    grid.GridX = 8;
+    grid.GridY = 4;
+    grid.GridZ = 2;
+    grid.IsIndirect = 0;
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::LaunchGrid, &grid, sizeof(grid)), kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_EQ(wire.Sink().Grids.size(), 1u);
+    EXPECT_EQ(wire.Sink().Grids[0].GridX, 8u);
+    EXPECT_EQ(wire.Sink().Grids[0].GridZ, 2u);
+}
+
+TEST_F(PipeWireCodecTest, MemoryBarrierReachesTheSink) {
+    Wire2 wire;
+    MGPMemoryBarrier barrier{};
+    barrier.Bits = 0x2000u; // GL_SHADER_STORAGE_BARRIER_BIT
+    barrier.ByRegion = 0;
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier)),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_EQ(wire.Sink().Barriers.size(), 1u);
+    EXPECT_EQ(wire.Sink().Barriers[0].Bits, 0x2000u);
+}
+
+TEST_F(PipeWireCodecTest, ResourceCopyRegionReachesTheSinkWithItsTwoNames) {
+    Wire2 wire;
+    MGPCopyRegion copy{};
+    copy.Src = MakeHandle(91);
+    copy.Dst = MakeHandle(92);
+    copy.SrcBox = MGPBox{1, 2, 0, 16, 8, 1};
+    copy.DstX = 3;
+    copy.DstY = 4;
+    copy.DstZ = 0;
+    copy.SrcTarget = 0x0DE1; // GL_TEXTURE_2D
+    copy.DstTarget = 0x0DE1;
+    copy.SrcLevel = 0;
+    copy.DstLevel = 1;
+    copy.SrcGlName = 1001;
+    copy.DstGlName = 1002;
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceCopyRegion, &copy, sizeof(copy)),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_EQ(wire.Sink().Copies.size(), 1u);
+    EXPECT_EQ(wire.Sink().Copies[0].SrcGlName, 1001u);
+    EXPECT_EQ(wire.Sink().Copies[0].DstGlName, 1002u);
+    EXPECT_EQ(wire.Sink().Copies[0].SrcBox.W, 16u);
+    EXPECT_EQ(wire.Sink().Copies[0].DstLevel, 1u);
+}
+
+TEST_F(PipeWireCodecTest, GenerateMipmapReachesTheSink) {
+    Wire2 wire;
+    MGPMipPlan plan{};
+    plan.Res = MakeHandle(93);
+    plan.Target = 0x8513; // GL_TEXTURE_CUBE_MAP, verbatim
+    plan.BaseLevel = 0;
+    plan.LevelCount = 9;
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::GenerateMipmap, &plan, sizeof(plan)), kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_EQ(wire.Sink().MipPlans.size(), 1u);
+    EXPECT_EQ(wire.Sink().MipPlans[0].Target, 0x8513u);
+    EXPECT_EQ(wire.Sink().MipPlans[0].LevelCount, 9u);
+}
+
+TEST_F(PipeWireCodecTest, TheFourStreamOutputSpanRowsReachTheSink) {
+    Wire2 wire;
+    MGPStreamOutputBegin begin{};
+    begin.PrimitiveMode = 4;
+    MGPStreamOutputControl control{};
+    MGPXfbAccounting end{};
+    end.CapturedVertices = 300;
+    end.PrimitivesWritten = 100;
+    end.PrimitiveMode = 4;
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BeginStreamOutput, &begin, sizeof(begin)), kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::PauseStreamOutput, &control, sizeof(control)), kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResumeStreamOutput, &control, sizeof(control)), kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::EndStreamOutput, &end, sizeof(end)), kInvalidSeq);
+    bool applied = false;
+    for (int i = 0; i < 4; ++i) {
+        ASSERT_TRUE(wire.PumpOne(&applied)) << i;
+        EXPECT_TRUE(applied) << i;
+    }
+    ASSERT_EQ(wire.Sink().Begins.size(), 1u);
+    EXPECT_EQ(wire.Sink().Begins[0].PrimitiveMode, 4u);
+    EXPECT_EQ(wire.Sink().Pauses, 1u);
+    EXPECT_EQ(wire.Sink().Resumes, 1u);
+    ASSERT_EQ(wire.Sink().Ends.size(), 1u);
+    EXPECT_EQ(wire.Sink().Ends[0].CapturedVertices, 300u);
+    EXPECT_EQ(wire.Decoder().AppliedSeq(), 4u);
+}
+
+TEST_F(PipeWireCodecTest, BindShaderImageReachesTheSinkVerbatim) {
+    Wire2 wire;
+    MGPImageBind bind{};
+    bind.Res = MakeHandle(94);
+    bind.Unit = 3;
+    bind.GlName = 77;
+    bind.Level = 1;
+    bind.Layer = 5;
+    bind.Layered = 1;
+    bind.Access = 0x88BA; // GL_READ_WRITE, the GL token and not the view encoding
+    bind.Format = 0x8058; // GL_RGBA8
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindShaderImage, &bind, sizeof(bind)), kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_EQ(wire.Sink().ImageBinds.size(), 1u);
+    EXPECT_EQ(wire.Sink().ImageBinds[0].Unit, 3u);
+    EXPECT_EQ(wire.Sink().ImageBinds[0].Access, 0x88BAu);
+    EXPECT_EQ(wire.Sink().ImageBinds[0].Layered, 1u);
+    EXPECT_EQ(wire.Sink().ImageBinds[0].Layer, 5);
+}
+
+TEST_F(PipeWireCodecTest, PatchParameterReachesTheSink) {
+    Wire2 wire;
+    MGPPatchParameter patch{};
+    patch.Pname = 0x8E72; // GL_PATCH_VERTICES
+    patch.Value = 16;
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::PatchParameter, &patch, sizeof(patch)), kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_EQ(wire.Sink().Patches.size(), 1u);
+    EXPECT_EQ(wire.Sink().Patches[0].Pname, 0x8E72u);
+    EXPECT_EQ(wire.Sink().Patches[0].Value, 16);
+}
+
+TEST_F(PipeWireCodecTest, BindStreamOutputReachesTheSink) {
+    Wire2 wire;
+    MGPStreamOutputBind bind{};
+    bind.GlName = 12;
+    bind.LifetimeId = 0x1234567890ull;
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindStreamOutput, &bind, sizeof(bind)), kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_EQ(wire.Sink().StreamOutputBinds.size(), 1u);
+    EXPECT_EQ(wire.Sink().StreamOutputBinds[0].GlName, 12u);
+    EXPECT_EQ(wire.Sink().StreamOutputBinds[0].LifetimeId, 0x1234567890ull);
+}
+
+TEST_F(PipeWireCodecTest, SetStorageBlockBindingCarriesItsNameAsAStagedBlob) {
+    // i1: the ONE string on the wire. Size is strlen + 1 - the NUL travels - and the decoder
+    // hands the sink a pointer that dies with the call.
+    Wire2 wire;
+    const char name[] = "ParticleBuffer";
+    MGPStorageBlockBinding binding{};
+    binding.ShaderCso = MakeHandle(95);
+    binding.GlName = 501;
+    binding.Binding = 2;
+    binding.Name = wire.Encoder().StageBytes(name, sizeof(name));
+    EXPECT_EQ(binding.Name.Size, sizeof(name));
+    EXPECT_EQ(binding.Name.Seg, static_cast<Uint32>(kSegStage));
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetStorageBlockBinding, &binding, sizeof(binding)),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_EQ(wire.Sink().StorageBindings.size(), 1u);
+    EXPECT_EQ(wire.Sink().StorageBindings[0].Binding, 2u);
+    EXPECT_EQ(wire.Sink().StorageBindings[0].GlName, 501u);
+    ASSERT_EQ(wire.Sink().StorageBlockNames.size(), 1u);
+    EXPECT_EQ(wire.Sink().StorageBlockNames[0], "ParticleBuffer");
+}
+
+TEST_F(PipeWireCodecTest, CopyFramebufferToTextureReachesTheSinkForBothForms) {
+    Wire2 wire;
+    MGPCopyFromFramebuffer image{};
+    image.Dst = MakeHandle(96);
+    image.Target = 0x0DE1; // GL_TEXTURE_2D
+    image.Level = 0;
+    image.InternalFormat = 0x8058;
+    image.X = 10;
+    image.Y = 20;
+    image.Width = 64;
+    image.Height = 32;
+    image.SubImage = 0;
+    MGPCopyFromFramebuffer sub = image;
+    sub.SubImage = 1;
+    sub.InternalFormat = 0;
+    sub.XOffset = 4;
+    sub.YOffset = 8;
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CopyFramebufferToTexture, &image, sizeof(image)),
+              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CopyFramebufferToTexture, &sub, sizeof(sub)),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_EQ(wire.Sink().FramebufferCopies.size(), 2u);
+    EXPECT_EQ(wire.Sink().FramebufferCopies[0].SubImage, 0u);
+    EXPECT_EQ(wire.Sink().FramebufferCopies[0].InternalFormat, 0x8058u);
+    EXPECT_EQ(wire.Sink().FramebufferCopies[1].SubImage, 1u);
+    EXPECT_EQ(wire.Sink().FramebufferCopies[1].XOffset, 4);
+    EXPECT_EQ(wire.Sink().FramebufferCopies[1].Width, 64);
 }
 
 // =====================================================================================
@@ -1873,6 +2212,41 @@ TEST_F(PipeWireCodecTest, AHostSpanRunPastItsSegmentIsFatalOnDrawVbo) {
 }
 
 // ---- M5 / m8 / q2 ------------------------------------------------------------------------
+
+TEST_F(PipeWireCodecTest, ADrawThatSetsBothTheSpanAndTheIndirectFlagIsFatal) {
+    // P5b d1: the two second-tail flags are exclusive by contract - an indirect draw's indices
+    // come from the bound element buffer - and the layout is where the exclusion is enforced,
+    // on BOTH sides, so it is forged straight into SEG_CMD here rather than encoded.
+    Wire2 wire;
+    MGPDrawInfo info{};
+    info.Mode = 4;
+    info.IndexSize = 2;
+    info.Flags = kDrawHasUserIndices | kDrawIsIndirect;
+    info.InstanceCount = 1;
+    info.NumDraws = 0;
+    MGPDrawIndirect indirect{};
+    const ChildResult r = RunInChild([&] {
+        ForgeAndDecode(wire, MGPWireOp::DrawVbo, &info, sizeof(info), &indirect, sizeof(indirect));
+    });
+    EXPECT_TRUE(DiedOfAbort(r)) << DescribeStatus(r);
+    EXPECT_NE(r.Log.find("Fatal{ProtocolCorruption, \"DrawVbo.Flags\"}"), std::string::npos) << r.Log;
+}
+
+TEST_F(PipeWireCodecTest, AnIndirectDrawThatDeclaresRangesIsFatal) {
+    Wire2 wire;
+    MGPDrawInfo info{};
+    info.Mode = 4;
+    info.IndexSize = 0;
+    info.Flags = kDrawIsIndirect;
+    info.InstanceCount = 1;
+    info.NumDraws = 1; // the server never reads a count and the client never sends ranges
+    MGPDrawRange range{0, 3, 0};
+    const ChildResult r = RunInChild([&] {
+        ForgeAndDecode(wire, MGPWireOp::DrawVbo, &info, sizeof(info), &range, sizeof(range));
+    });
+    EXPECT_TRUE(DiedOfAbort(r)) << DescribeStatus(r);
+    EXPECT_NE(r.Log.find("Fatal{ProtocolCorruption, \"DrawVbo.NumDraws\"}"), std::string::npos) << r.Log;
+}
 
 TEST_F(PipeWireCodecTest, BufferSubDataResidentMayNotDeclareRegions) {
     // Its catalogue row has no kVarTail and its applier takes no regions, so a non-zero

@@ -292,7 +292,18 @@ TEST_F(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::ResumeStreamOutput), MGPipeVerb::ResumeTransformFeedback);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::GenerateMipmap), MGPipeVerb::GenerateMipmap);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::GetTextureImage), MGPipeVerb::GetTextureImage);
-    EXPECT_EQ(kMGPipeVerbBoundaryOpCount, SizeT{12});
+    // P5b (MG_Remote/CONTRACT-P5B.md): the renamed boundary the file left to "the phase that
+    // emits it" - resource_copy_region is glCopyImageSubData only - and the five appended verbs,
+    // each stamped as the GLFunctionsTable verb it reproduces. copy_framebuffer_to_texture also
+    // carries glCopyTexSubImage2D and stamps CopyTexImage2D for both: one kBlitOrCopy mask.
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::ResourceCopyRegion), MGPipeVerb::CopyImageSubData);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::BindShaderImage), MGPipeVerb::BindImageTexture);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::PatchParameter), MGPipeVerb::PatchParameteri);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::BindStreamOutput), MGPipeVerb::BindTransformFeedback);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::SetStorageBlockBinding),
+              MGPipeVerb::ShaderStorageBlockBinding);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::CopyFramebufferToTexture), MGPipeVerb::CopyTexImage2D);
+    EXPECT_EQ(kMGPipeVerbBoundaryOpCount, SizeT{18});
     EXPECT_EQ(kMGPipeVerbBoundaryExemptCount, SizeT{3});
 
     // Present is class B (it is emitted in P5) and is STILL not a verb boundary:
