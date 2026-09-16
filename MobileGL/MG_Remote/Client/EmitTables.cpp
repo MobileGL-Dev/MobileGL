@@ -38,6 +38,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "WireTables.h"
+
 namespace MobileGL::MG_Remote::Client {
 
     // The slot arithmetic, asserted rather than commented. GlobalBackendFunctionsTable is
@@ -117,6 +119,7 @@ namespace MobileGL::MG_Remote::Client {
         // slot is the "split lane ran monolith and went green" shape that every gate in this
         // phase exists to prevent (R-4).
         ClientSession& RequireSession(const char* slot) {
+            RequireClientTablesInstalled(slot);
             ClientSession* session = ClientSession::Active();
             if (session == nullptr) {
                 MGLOG_F("MGPipe: Fatal{NoClientSession, \"%s\"} - the remote emit table is "

@@ -756,6 +756,8 @@ namespace MobileGL::MG_Remote::Client {
             // down session, which is what the "teardown legitimately reaches here" comment
             // promised would NOT happen. DECLINED is honest - "the verb did not happen" - and the
             // acceptance rows already treat it as `false` / nullptr without aborting.
+            // ReadPixels intentionally refuses this with Fatal{ReadbackDeclined, "ReadPixels"}:
+            // unlike acceptance rows it cannot return successfully without complete pixels.
             if (statusOut != nullptr) *statusOut = Wire::ReplySink::kStatusDeclined;
             MGLOG_E("MG_Remote client: the barrier for %s (seq %llu) woke on a dead doorbell; the "
                     "server is gone and this verb did not happen (reported as DECLINED, not ERROR)",

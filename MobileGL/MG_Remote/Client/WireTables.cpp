@@ -94,15 +94,7 @@ namespace MobileGL::MG_Remote::Client {
             // emit into a ring being freed is a use-after-free. The monolith adapters are put
             // back only as the LAST step of teardown, for the at-exit ~BufferObject deletes that
             // legitimately reach a process with no session (see ReinstallMonolithAfterTeardown).
-            if (g_clientTablesUninstalled.load(std::memory_order_acquire)) {
-                MGLOG_F("MGPipe: Fatal{ClientTablesUninstalled, \"%s\"} - a routed call reached the "
-                        "client wire tables while ClientSession::Stop was tearing the session "
-                        "down. R-4/R-17: the applier is server-exclusive and the rings this emit "
-                        "would use are being freed, so the call is refused by name rather than run "
-                        "on the caller",
-                        row);
-                std::abort();
-            }
+            RequireClientTablesInstalled(row);
             ClientSession* session = ClientSession::Active();
             if (session == nullptr) {
                 MGLOG_F("MGPipe: Fatal{NoClientSession, \"%s\"} - the client wire tables are "
@@ -510,6 +502,14 @@ namespace MobileGL::MG_Remote::Client {
         }
 
     } // namespace
+
+    void RequireClientTablesInstalled(const char* row) {
+        if (g_clientTablesUninstalled.load(std::memory_order_acquire)) {
+            MGLOG_F("MGPipe: Fatal{ClientTablesUninstalled, \"%s\"} - the client tables are "
+                    "being torn down; refusing before session or ring access", row);
+            std::abort();
+        }
+    }
 
     void InstallClientWireTables() {
         using namespace MG_Pipe;

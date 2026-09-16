@@ -6,9 +6,9 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P5 package c1's suite: the 71-slot emit table, the caps mirror and R-8's liveness gates. No
-// session, no transport and no thread - s1's SessionTest owns those and w1's PipeWireCodecTest
-// owns the bytes.
+// P5 package c1's suite: the 71-slot emit table, the caps mirror and R-8's liveness gates.
+// The helper cases below are supplemented by RemoteClientControls.inc: installed producers
+// over a live session, with adversarial peer replies and a repeated-make-current control.
 //
 // IT LINKS gtest RATHER THAN gtest_main AND CARRIES ITS OWN main(), for PipeWireCodecTest's and
 // PipeInputsTest's reason: the Fatal arms report through MGLOG_F + std::abort, and MGLOG_F
@@ -38,6 +38,19 @@
 #include <MG_Pipe/PipeRoute.h>
 #include <MG_Remote/Client/EmitTables.h>
 #include <MG_Remote/Client/WireTables.h>
+#include <MG_Remote/Client/ClientSession.h>
+#include <MG_Remote/Client/BackendObject_Remote.h>
+#include <MG_Remote/Server/ServerLoop.h>
+#include <MG_State/GLState/Core.h>
+#include <MG_Impl/GLImpl/Texture/GL_Texture.h>
+#include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
+#include <MG_Pipe/PipeMutation.h>
+#include <MG_Pipe/PipeApply.h>
+#include <Init.h>
+#include <MG_Impl/EGLImpl/EGLImpl.h>
+#include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
+#include <MG_Impl/GLImpl/Drawing/GL_Drawing.h>
+#include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 
 #if !defined(_WIN32)
 #include <csignal>
@@ -713,6 +726,47 @@ TEST(PipeRouting, TheInstalledClientArmIsWireAndNotMonolithAndEveryRoutedRowMove
         << "InstallClientWireTables did not record the client-wire arm";
 
     const SizeT movedScreen = CountDifferingCells(gMGPipeScreen, MGPipeMonolithScreen());
+#define C1F_MOVED(Table, Row) EXPECT_NE(gMGPipe##Table.Row, MGPipeMonolith##Table().Row) << #Table "." #Row
+    C1F_MOVED(Screen, ResourceCreate);
+    C1F_MOVED(Screen, ResourceDestroy);
+    C1F_MOVED(Screen, UnmapPersistent);
+    C1F_MOVED(Context, CreateRenderState);
+    C1F_MOVED(Context, BindRenderState);
+    C1F_MOVED(Context, DeleteRenderState);
+    C1F_MOVED(Context, CreateVertexElements);
+    C1F_MOVED(Context, BindVertexElements);
+    C1F_MOVED(Context, DeleteVertexElements);
+    C1F_MOVED(Context, CreateSamplerState);
+    C1F_MOVED(Context, DeleteSamplerState);
+    C1F_MOVED(Context, CreateSamplerView);
+    C1F_MOVED(Context, DeleteSamplerView);
+    C1F_MOVED(Context, BindShaderState);
+    C1F_MOVED(Context, DeleteShaderState);
+    C1F_MOVED(Context, SetDrawProgram);
+    C1F_MOVED(Context, SetDispatchProgram);
+    C1F_MOVED(Context, SetDynamicState);
+    C1F_MOVED(Context, SetFramebufferState);
+    C1F_MOVED(Context, SetVertexBuffers);
+    C1F_MOVED(Context, SetIndexBuffer);
+    C1F_MOVED(Context, SetSamplerViews);
+    C1F_MOVED(Context, BindSamplerStates);
+    C1F_MOVED(Context, SetShaderImages);
+    C1F_MOVED(Context, SetGlobalConstants);
+    C1F_MOVED(Context, SetVertexAttribDefaults);
+    C1F_MOVED(Context, SetPixelPackState);
+    C1F_MOVED(Context, SetPatchState);
+    C1F_MOVED(Context, SetResidualValueState);
+    C1F_MOVED(Context, SetTextureParams);
+    C1F_MOVED(Context, ResourceSubData);
+    C1F_MOVED(Context, BufferSubDataResident);
+    C1F_MOVED(Context, ResourceReadback);
+#undef C1F_MOVED
+#define C1F_ESCAPE(Row) EXPECT_NE(gMGPipeRouteEscapes.Row, MGPipeMonolithEscapes().Row) << #Row
+    C1F_ESCAPE(ResourceRespecify);
+    C1F_ESCAPE(ResourceFlushRange);
+    C1F_ESCAPE(MapPersistent);
+    C1F_ESCAPE(CreateShaderState);
+#undef C1F_ESCAPE
     const SizeT movedContext = CountDifferingCells(gMGPipeContext, MGPipeMonolithContext());
     EXPECT_EQ(movedScreen + movedContext, 33u)
         << "exactly the 33 generated routed rows must differ from the monolith adapters; "
@@ -792,6 +846,8 @@ TEST(RemoteReadback, AReplyIsScatteredOnlyWhenItIsOkAndExactlyTheReadsExtent) {
     EXPECT_FALSE(ReadbackReplyIsComplete(kOk, 0, tight)) << "an OK reply of zero bytes is not the extent";
 }
 
+#include "RemoteClientControls.inc"
+
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;
     const fs::path path =
@@ -803,6 +859,15 @@ int main(int argc, char** argv) {
     _putenv_s("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str());
 #else
     setenv("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str(), 1);
+#endif
+#if MGTEST_HAVE_FORK
+    // Explicit GPU control, kept out of the CPU-only unit label. No silent skip is allowed.
+    if (argc == 2 && std::string(argv[1]).starts_with("--c1f-pack-gpu=")) {
+        const bool split = std::string(argv[1]) == "--c1f-pack-gpu=inproc";
+        const int rc = RunPackGpuControl(split);
+        fs::remove(path, ec);
+        return rc;
+    }
 #endif
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();

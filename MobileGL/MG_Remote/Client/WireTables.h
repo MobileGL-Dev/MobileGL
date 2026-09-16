@@ -30,7 +30,7 @@
 //     barrier holds (table 3), and installing from the apply thread would publish the table to
 //     the GL thread with no synchronisation at all.
 // `Uninstall()` runs at the TOP of `Stop()`, before the rings go away, so the last thing any
-// straggling GL-thread call reaches is the monolith arm rather than a dangling session.
+// straggling GL-thread call reaches is a named refusal rather than a dangling session.
 
 #pragma once
 #include <Includes.h>
@@ -48,6 +48,9 @@ namespace MobileGL::MG_Remote::Client {
     // (codex 4). It does NOT restore the monolith adapters - that is ReinstallMonolithAfterTeardown
     // below, run only once the session's rings are freed. Idempotent.
     void UninstallClientWireTables();
+
+    // Shared by routed rows and the five class-B emitters, before session/ring access.
+    void RequireClientTablesInstalled(const char* row);
 
     // The LAST step of ClientSession::Stop: after the rings, segments and transport are gone,
     // puts the monolith adapters back and clears the refusal flag, so the at-exit ~BufferObject

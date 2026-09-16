@@ -1534,7 +1534,7 @@ namespace MobileGL::MG_Pipe {
         // not consulted, and under spawn a silent no-op that leaks every one of those objects.
         // The parameter type is the route's, which is byte-identical to the applier's
         // (const MGPHandleOnly&, void return), so the fix is `&MGPipeRoute<Name>` at the five call
-        // sites; the grep gate scripts/../p5-c1 redcheck refuses any `&MGPipeApply` under MG_Impl/.
+        // sites; PipeCatalogue.FrontendNeverTakesAnApplierAddress checks MG_Impl in every unit lane.
         Bool EmitDeleteIfPublished(MGPipeKind kind, MGPipeHandle handle,
                                    void (*route)(const MGPHandleOnly&)) {
             if (!MGPipeHandleIsPublished(kind, handle)) return false;
