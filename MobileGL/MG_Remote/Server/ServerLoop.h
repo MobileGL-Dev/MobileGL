@@ -146,6 +146,11 @@ namespace MobileGL::MG_Remote::Server {
         // fail for its own reason.
         Uint64 DrainedRecords() const;
         Uint64 ParkCount() const;
+        // Scheduling perturbation only: the hook runs after application, before retirement.
+        // Integration tests use it to observe real producer back-pressure from GL uploads.
+        void SetBeforeRetireHookForTesting(void (*hook)()) {
+            m_beforeRetireHook.store(hook, std::memory_order_release);
+        }
 
         // C7 / ID-54 diagnostics, read by ServerLoopTest's C7 and N-3 controls. NativeBindCount is
         // how many times ApplyMakeCurrent FORWARDED a bind to the backend (a tuple it did not
@@ -230,6 +235,7 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 m_affinityMask = 0;
         std::atomic<Uint64> m_drained{0};
         std::atomic<Uint64> m_parks{0};
+        std::atomic<void (*)()> m_beforeRetireHook{nullptr};
 
         // C7 / ID-54: the (dpy, draw, read, ctx) currently bound on the apply thread. Written and
         // read ONLY on the apply thread inside ApplyMakeCurrent, so it needs no lock; the two
