@@ -2093,6 +2093,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const SizeT offset = static_cast<SizeT>(MG_Pipe::MGPipeSubDataBufferOffset(record));
                 const SizeT size = static_cast<SizeT>(MG_Pipe::MGPipeSubDataBufferSize(record));
                 auto* resource = FindBufferResourceForHandle(res);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // R-11 / ID-52 item 3: under an ACTIVE TRANSPORT this record's bytes are the ONLY
+                // delivery of the buffer's content - the client sends no companion pointer and the
+                // server has no MappedData to fall back on. But the twin is created LAZILY at the
+                // first draw (Ops_H_Create is a no-op by D-A2), which is AFTER this record, so a
+                // subdata that finds no twin would return here and the bytes would be lost - the
+                // draw then uploads an empty/shifted store (TriangleScenario read a blue triangle
+                // before this). So under split the subdata MINTS the twin it needs to stage into.
+                // Monolith is untouched: the twin stays lazy there because the frontend object's
+                // MappedData is the source and nothing is lost by deferring the allocation (D-A2).
+                if (resource == nullptr && bytes != nullptr &&
+                    MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                    resource = GetOrCreateBufferResourceForHandle(res);
+                }
+#endif
                 if (!resource) return;
                 // M-2: UNDER pendingMutex, because this line runs BEFORE the CanTouchGLNow()
                 // test below - i.e. on the arm D-A2 deliberately keeps reachable off the render
