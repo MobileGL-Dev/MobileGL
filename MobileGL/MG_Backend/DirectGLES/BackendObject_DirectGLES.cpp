@@ -971,17 +971,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ResetEGLRuntimeState();
         }
 
-        const Bool created = BackendObject::CreateEGLWindowSurface(surface, handle);
 #if MOBILEGL_BUILD_DISAGGREGATED
         // ID-54 / ID-67: the surface's creation bound natively (InitWindowSurface -> MakeCurrent);
-        // the first virtual tuple adopts that bind. On failure nothing is known to be bound.
+        // the first virtual tuple adopts that bind. On failure nothing is known to be bound. The
+        // pull arm below is the original statement, byte for byte (G1).
+        const Bool created = BackendObject::CreateEGLWindowSurface(surface, handle);
         if (created) {
             NoteNativeContextFreshFromSurfaceCreation();
         } else {
             NoteNativeContextGone();
         }
-#endif
         return created;
+#else
+        return BackendObject::CreateEGLWindowSurface(surface, handle);
+#endif
     }
 
     Bool BackendObject_DirectGLES::CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
@@ -1000,16 +1003,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ResetEGLRuntimeState();
         }
 
-        const Bool created = BackendObject::CreateEGLPbufferSurface(surface, width, height);
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // ID-54 / ID-67: as for the window surface - InitPbufferSurface bound natively.
+        // ID-54 / ID-67: as for the window surface - InitPbufferSurface bound natively. The pull
+        // arm below is the original statement, byte for byte (G1).
+        const Bool created = BackendObject::CreateEGLPbufferSurface(surface, width, height);
         if (created) {
             NoteNativeContextFreshFromSurfaceCreation();
         } else {
             NoteNativeContextGone();
         }
-#endif
         return created;
+#else
+        return BackendObject::CreateEGLPbufferSurface(surface, width, height);
+#endif
     }
 
     Bool BackendObject_DirectGLES::InitPbufferSurface(EGLint width, EGLint height) {

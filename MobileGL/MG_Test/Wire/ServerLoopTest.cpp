@@ -285,7 +285,9 @@ TEST(ServerLoopTest, AControlRequestRunsOnTheApplyThreadAndUnparksIt) {
     // NOT_INITIALIZED (C2's block), so the join below cannot wedge either.
     MobileGLResult rc = MOBILEGL_ERR_INVALID_ARGUMENT;
     std::atomic<Bool> answered{false};
+    std::thread::id posterId{};
     std::thread poster([&] {
+        posterId = std::this_thread::get_id();
         rc = loop.RunOnApplyThread(
             +[](void* user) -> MobileGLResult {
                 auto* p = static_cast<Probe*>(user);
@@ -312,10 +314,13 @@ TEST(ServerLoopTest, AControlRequestRunsOnTheApplyThreadAndUnparksIt) {
     poster.join();
 
     EXPECT_EQ(rc, MOBILEGL_OK);
-    EXPECT_NE(probe.ranOn, std::this_thread::get_id())
+    // The CALLER is the poster thread, not the test thread (N-9 moved the post onto a helper).
+    EXPECT_NE(probe.ranOn, posterId)
         << "the control request ran on the CALLER, which means the EGL lifecycle calls would "
            "reach the driver from the app thread and the context would never migrate";
-    EXPECT_TRUE(probe.onApplyThread);
+    EXPECT_NE(probe.ranOn, std::this_thread::get_id());
+    EXPECT_TRUE(probe.onApplyThread)
+        << "the control request ran on the CALLER (OnApplyThread() answered false inside it)";
     EXPECT_FALSE(Server::ServerLoop::OnApplyThread());
 
     fixture.Stop();
@@ -1039,20 +1044,25 @@ TEST(ServerLoopTest, TheSevenFormatCapabilityReadsAnswerFromTheServersBackendNot
     EXPECT_NE(MG_Backend::DirectGLES::ClampSamplesToBackendSupport(rb, TextureInternalFormat::RGBA8, GL_RGBA8, 8), 6)
         << "the renderbuffer sample clamp answered from the global's probed counts (6), not the server's";
 
-    // (B) the null-check reads: global NULL, server present.
+    // (B) the null-check reads: global NULL, server present. RGB8_SNORM, not RGB8: the fallback
+    // normalisation's three-channel widening is APPLICABLE to GL_RGB8_SNORM and not to GL_RGB8
+    // (TextureFormatProcessor.cpp's applicability table), so it is the format whose answer the
+    // "no backend" arm actually changes - the first cut of this case used RGB8 and both arms agreed.
     MG_Backend::pActiveBackendObject.reset();
+    constexpr GLenum kGlRgb8Snorm = 0x8F96;
     GLenum internalFormat = 0;
     GLenum format = 0;
     GLenum type = 0;
-    TextureImpl::GenerateTextureFormatInfo(TextureInternalFormat::RGB8, &internalFormat, &format, &type,
+    TextureImpl::GenerateTextureFormatInfo(TextureInternalFormat::RGB8Snorm, &internalFormat, &format, &type,
                                            TextureTarget::Texture2D);
-    EXPECT_EQ(internalFormat, static_cast<GLenum>(GL_RGB8))
-        << "the format info followed the global (null, so the fallback normalisation widened RGB8) "
-           "instead of the server's backend (present, so native RGB8); got 0x" << std::hex << internalFormat;
-    EXPECT_FALSE(TextureImpl::BackendTextureFormatAddsAlpha(TextureInternalFormat::RGB8, TextureTarget::Texture2D))
+    EXPECT_EQ(internalFormat, kGlRgb8Snorm)
+        << "the format info followed the global (null, so the fallback normalisation widened RGB8_SNORM) "
+           "instead of the server's backend (present, so native RGB8_SNORM); got 0x" << std::hex
+        << internalFormat;
+    EXPECT_FALSE(TextureImpl::BackendTextureFormatAddsAlpha(TextureInternalFormat::RGB8Snorm, TextureTarget::Texture2D))
         << "the adds-alpha answer followed the global (null, so the fallback adds alpha) instead of "
            "the server's backend";
-    EXPECT_FALSE(TextureImpl::BackendRenderbufferFormatAddsAlpha(TextureInternalFormat::RGB8))
+    EXPECT_FALSE(TextureImpl::BackendRenderbufferFormatAddsAlpha(TextureInternalFormat::RGB8Snorm))
         << "the renderbuffer adds-alpha answer followed the global (null) instead of the server's backend";
 
     loop.Stop();
