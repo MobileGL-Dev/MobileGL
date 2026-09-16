@@ -62,6 +62,15 @@ run_retrace() { # $1 = STUB_MODE
       bash "${HERE}/retrace_pull_library_control.sh" OpenRA DirectGLES
 }
 
+run_drop_draw() { # $1 = STUB_MODE
+  cd "${WORK}" || return 127
+  mkdir -p "${WORK}/OpenRA"
+  env -i PATH="${STUB_DIR}:/usr/bin:/bin" STUB_MODE="$1" \
+      CTEST=ctest CONTROL_TMPDIR="${WORK}/tmp-$1" \
+      LIBRARY_LOG="${WORK}/tmp-$1/mobilegl.log" \
+      bash "${HERE}/retrace_drop_draw_control.sh" OpenRA DirectGLES
+}
+
 echo "=== the split lane's E1 / E3(a) controls (scripts/ci/split_negative_controls.sh)"
 # THE FINDING, REPRODUCED. Non-empty selection, green baseline, and a red that is not the knob's.
 expect FAILED "unrelated failure with a non-empty selection" -- run_split unrelated
@@ -96,6 +105,27 @@ expect FAILED "red without the transport-resolution message" -- run_retrace retr
 expect PASSED "run_trace_case.cmake's own sentence, wrapped" -- run_retrace retrace-evidence
 # The pull library replaying green is the failure this control exists to catch.
 expect FAILED "a pull library passed the split retrace"      -- run_retrace retrace-green
+
+echo
+echo "=== the retrace lane's draw-drop control (scripts/ci/retrace_drop_draw_control.sh)"
+# Exit gate E2's picture control. The joint gate's finding is the reason it exists at all: the
+# CLEAR-drop knob was armed, was read, dropped all 29 of OpenRA's clears - and the retrace still
+# scored ssim 1.000000, because OpenRA overdraws every pixel it clears. So this control's three
+# guards are each a different way for "the picture went red" to be someone else's red.
+expect FAILED "empty selection (--no-tests=error exit)"      -- run_drop_draw dropdraw-noselect
+# The failure the gate exists to catch: the golden survives the loss of every draw.
+expect FAILED "the retrace passed with every draw dropped"   -- run_drop_draw dropdraw-green
+# A red with no comparator output at all - a loader failure, a missing fixture, a timeout.
+expect FAILED "red with no ssim summary in the output"       -- run_drop_draw dropdraw-nossim
+# A red whose SSIM is FINE: something else (a Fatal{, a transport assertion) reddened the case.
+expect FAILED "red but the ssim is above the threshold"      -- run_drop_draw dropdraw-ssimhigh
+# A red picture with no evidence the knob was ever read by the process that produced it.
+expect FAILED "no 'E2 control armed' line in the library log" -- run_drop_draw dropdraw-nolog
+# The R-16 case the dropped-record COUNT exists for: the knob armed and dropped nothing, so the
+# wrong picture came from somewhere else.
+expect FAILED "the knob armed but dropped zero records"      -- run_drop_draw dropdraw-zero
+# The real thing: a red picture, a fallen SSIM, and N > 0 records the library says it dropped.
+expect PASSED "ssim below threshold and N records dropped"   -- run_drop_draw dropdraw-evidence
 
 echo
 echo "smoke test: ${passes} passed, ${failures} failed"

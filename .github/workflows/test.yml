@@ -1954,6 +1954,32 @@ jobs:
           bash "${GITHUB_WORKSPACE}/scripts/ci/retrace_pull_library_control.sh"
           '${{ matrix.case }}' '${{ matrix.backend }}'
 
+      # EXIT GATE E2's OTHER HALF, and the one BRIEF-P5 §7 E2 actually names: "drop an emission
+      # and the SSIM must fall below the threshold". The control above proves the lane runs a
+      # SPLIT library; it cannot prove the PICTURE came through the wire, because OpenRA scores
+      # ssim 1.000000 against a monolith library too and the transport assertion is what reds it.
+      #
+      # It drops the DRAWS and not the clears, and that is a measurement rather than a
+      # preference: with MOBILEGL_IPC_E2_DROP_CLEAR=1 armed, read, and all 29 of OpenRA's Clear
+      # records dropped, the retrace still scored ssim=1.000000 / mismatchPixels=0 - OpenRA
+      # overdraws every pixel it clears before the snapshot (joint-v1.md §3 found the green;
+      # scripts/ci/retrace_drop_draw_control.sh's header has the trace census that explains it).
+      # With the DrawVbo records dropped instead: 758 dropped, ssim=0.000036,
+      # mismatchPixels=295296.
+      #
+      # THE BODY IS A SCRIPT for the reason the two steps above give: a `run:` block cannot be
+      # executed off a runner, and scripts/ci/control_smoke_test.sh drives this file against a
+      # stubbed ctest in seven modes - including the two that matter most, a red whose SSIM never
+      # fell and a knob that armed and dropped nothing.
+      - name: Negative control - dropping the draws on the wire must red this split retrace
+        working-directory: build-retrace/tools/trace_replay
+        env:
+          CONTROL_TMPDIR: ${{ runner.temp }}
+          LIBRARY_LOG: ${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.log
+        run: >-
+          bash "${GITHUB_WORKSPACE}/scripts/ci/retrace_drop_draw_control.sh"
+          '${{ matrix.case }}' '${{ matrix.backend }}'
+
       # The refusal census, recorded rather than gated. run_trace_case.cmake already REDS the case
       # on any Fatal{, so reaching here means the count is zero - but the number and the distinct
       # slot names are what MEASUREMENTS wants from every split run, and reading them out of the

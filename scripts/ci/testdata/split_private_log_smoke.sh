@@ -7,7 +7,7 @@ trap 'rm -rf "${WORK}"' EXIT
 cp "${HERE}/testdata/stub_ctest.sh" "${WORK}/ctest"
 chmod +x "${WORK}/ctest"
 passes=0
-for mode in missing-fatal stdout-fatal stale-fatal evidence e3-unrelated; do
+for mode in missing-fatal stdout-fatal stale-fatal evidence e3-unrelated e3-no-private; do
   mkdir -p "${WORK}/${mode}"
   rc=0
   STUB_MODE="${mode}" CTEST="${WORK}/ctest" CONTROL_TMPDIR="${WORK}/${mode}" \
@@ -19,6 +19,9 @@ for mode in missing-fatal stdout-fatal stale-fatal evidence e3-unrelated; do
   else
     message='E1 FAILED: selected private logs lack expected Fatal'
     [ "${mode}" != e3-unrelated ] || message='FAILED: red lacks its persistent-map push diagnostic'
+    # ID-65's half: the pixel assertion arrived, the library said nothing, and the control must
+    # refuse the red by naming the line it wanted rather than accepting the pixels alone.
+    [ "${mode}" != e3-no-private ] || message='no selected private log carries /MGPipe: persistent-map push disabled'
     [ "${rc}" != 0 ] && grep -q "${message}" "${WORK}/${mode}.out" || {
       cat "${WORK}/${mode}.out"; echo "NOT OK ${mode}: control must report FAILED for its own reason"; exit 1;
     }

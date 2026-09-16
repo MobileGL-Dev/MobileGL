@@ -48,10 +48,21 @@ def main():
         for path in selected.values():
             Path(path).unlink(missing_ok=True)
     elif mode == "evidence":
+        # argv[5], optional: the control's name, for the failure message. Without it the message
+        # is E1's, word for word - scripts/ci/testdata/split_private_log_smoke.sh greps for that
+        # sentence, and E1 was the only caller until E3(a) gained a library diagnostic of its own
+        # (ID-65: "no library diagnostic exists for block size 0 - x2 adds one").
+        label = sys.argv[5] if len(sys.argv) > 5 else ""
         for name, path in selected.items():
             if Path(path).is_file() and re.search(sys.argv[4], Path(path).read_text(errors="replace")):
                 print(f"private-log evidence: {name}: {path}")
                 return
+        if label:
+            raise ValueError(f"{label} FAILED: no selected private log carries /{sys.argv[4]}/. "
+                             "The library's own line is the only channel for this: ctest's "
+                             "transcript is a FALSE ZERO for library output, because the console "
+                             "sink is compiled out of the configurations these lanes run. "
+                             + ", ".join(f"{n} ({p})" for n, p in selected.items()))
         raise ValueError("E1 FAILED: selected private logs lack expected Fatal{BarrierViolation, \"<slot>\"} line: "
                          + ", ".join(f"{n} ({p})" for n, p in selected.items()))
     else:
