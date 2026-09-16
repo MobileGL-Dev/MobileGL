@@ -40,11 +40,15 @@
 // surface is CREATED, and once more from the client's first eglMakeCurrent. So (1)
 // ServerMakeEGLCurrent classifies the request against the tuple it last bound
 // (ClassifyEglMakeCurrent): an identical repeat is a no-op, and the R-12 republish decision for
-// it is "nothing to republish"; a different tuple is a real forwarded bind; a client
-// release-current is RECORDED (ClientReleaseCount) and NOT forwarded. And (2)
-// BackendObject_DirectGLES::MakeEGLCurrent, under an active transport only, skips the native call
-// when the requested draw surface is the one already natively current on this thread
-// (IsBackendContextCurrentOnThisThread, which is EGL ground truth). Measured at the EGL function
+// it is "nothing to republish" (ID-67: the client's mirror generation must not move); a different
+// tuple is a real forwarded bind AND a caps republish; a client release-current is RECORDED
+// (ClientReleaseCount) and NOT forwarded. And (2) BackendObject_DirectGLES::MakeEGLCurrent, under
+// an active transport only, skips the native call when the requested draw surface is the one
+// already natively current on this thread (IsBackendContextCurrentOnThisThread, which is EGL
+// ground truth) AND the virtual tuple is the one that bind was for - or the bind is the surface's
+// own creation, which the first tuple adopts; a different virtual context onto the same surface
+// binds natively again, because MakeCurrent's invalidations describe the frontend context that
+// changed (ID-67). Measured at the EGL function
 // table by ServerLoopTest's C7 control on a real llvmpipe context: surface creation + two
 // identical make-currents + a client release + a bind after the release = ONE native
 // eglMakeCurrent, ZERO native releases, and the apply thread still the owner afterwards. So
@@ -152,6 +156,11 @@ namespace MobileGL::MG_Remote::Server {
         // - and the control reads that one at the EGL function table, not here.
         Uint64 NativeBindCount() const;
         Uint64 ClientReleaseCount() const;
+        // ID-67: how many caps snapshots ServerMakeEGLCurrent has re-published (R-12 arm (a)) - one
+        // per forwarded bind of a tuple it did not hold, never for an identical repeat, so the
+        // client's mirror generation moves exactly when the server's answers could have.
+        Uint64 MakeCurrentRepublishCount() const;
+        void NoteMakeCurrentRepublished();
 
         // The deduped make-current, on the apply thread. Classifies the request (see
         // ClassifyEglMakeCurrent), forwards a native bind only for a genuinely new tuple, records
@@ -232,6 +241,7 @@ namespace MobileGL::MG_Remote::Server {
         EGLContext m_curCtx = EGL_NO_CONTEXT;
         std::atomic<Uint64> m_nativeBinds{0};
         std::atomic<Uint64> m_clientReleases{0};
+        std::atomic<Uint64> m_makeCurrentRepublishes{0};
     };
 
     ServerLoop& ServerLoopInstance();

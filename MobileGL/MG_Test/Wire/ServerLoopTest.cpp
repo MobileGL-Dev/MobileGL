@@ -115,7 +115,10 @@ namespace {
         sizes.CmdRingBytes = 64ull * 1024;
         sizes.StageBytes = 64ull * 1024;
         sizes.ReplyBytes = 64ull * 1024;
-        sizes.EventRingBytes = 16ull * 1024;
+        // 1 MiB, not 16 KiB: the EGL cases have the server republish its caps snapshot into the
+        // event ring several times with no client draining it, and a ring that fills would turn a
+        // "no republish" assertion into a ring-full one.
+        sizes.EventRingBytes = 1024ull * 1024;
         sizes.ReplySlotCount = 8;
         return sizes;
     }
@@ -1158,6 +1161,9 @@ namespace {
             MG_External::EGLFunctionsTable counted = egl;
             counted.eglMakeCurrent = &CountingEglMakeCurrent;
             MG_Backend::DirectGLES::SetEGLFuncsTable(counted);
+            // InitSplitRoles step 2: the session answers its caps snapshots from this backend, so
+            // ServerMakeEGLCurrent's R-12 republish has something to publish (ID-67's control).
+            Server::ServerSessionInstance().SetBackend(loop.Backend());
             if (!Handshake()) return "the session handshake";
             if (!StartLoop()) return "ServerLoop::Start";
             EGLint major = 0;
@@ -1179,6 +1185,8 @@ namespace {
         void TearDown() {
             Server::ServerReleaseEGLResources();
             Stop();
+            // The backend Stop() just destroyed must not be the session's answer for the next case.
+            Server::ServerSessionInstance().SetBackend(nullptr);
             MG_State::pGLContext = Move(savedContext);
         }
     };
@@ -1296,6 +1304,60 @@ TEST(ServerLoopEglTest, MakeCurrentBindsNativelyOncePerContextAndNeverForwardsAC
               MOBILEGL_OK);
     EXPECT_TRUE(ownerIsApplyThread) << "after the sequence the apply thread no longer owns the context";
     EXPECT_FALSE(MG_Backend::DirectGLES::IsBackendContextCurrentOnThisThread()) << "the app thread owns the context";
+
+    fixture.TearDown();
+}
+
+// ID-67: an IDENTICAL tuple is a native no-op AND publishes no caps snapshot (the client's mirror
+// generation must not move, nothing accumulates); a DIFFERENT tuple - a second MobileGL context onto
+// the same surface, the same driver triple - is a real native bind AND a republish (R-12 arm (a)),
+// so the client adopts it without a pump or a Present. Both halves measured: native binds at the EGL
+// table, republishes at ServerMakeEGLCurrent's own tally. Red once, three ways: make the backend's
+// skip answer "same tuple" for any tuple (the different tuple stays at 1 native bind), republish on
+// a repeat (the repeat reads 2 republishes), republish only on the first bind (the different tuple
+// reads 1).
+TEST(ServerLoopEglTest, ADifferentTupleBindsNativelyAndRepublishesAnIdenticalRepeatDoesNeither) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    const EGLDisplay dpy = EglServerFixture::Dpy();
+    const EGLSurface surf = EglServerFixture::Surf();
+    const EGLContext ctxA = EglServerFixture::Ctx();
+    const EGLContext ctxB = reinterpret_cast<EGLContext>(static_cast<std::uintptr_t>(0x2));
+    ASSERT_EQ(g_nativeEglBinds.load(), 1) << "the surface's own creation did not bind natively exactly once";
+    ASSERT_EQ(loop.MakeCurrentRepublishCount(), 0u);
+
+    // The first tuple adopts the creation's bind, and republishes (InitCapabilities has now run).
+    ASSERT_TRUE(Server::ServerMakeEGLCurrent(dpy, surf, surf, ctxA));
+    EXPECT_EQ(g_nativeEglBinds.load(), 1);
+    EXPECT_EQ(loop.MakeCurrentRepublishCount(), 1u)
+        << "the first make-current did not republish the caps snapshot (R-12 arm (a))";
+
+    // Identical: 0 native binds, 0 republishes.
+    ASSERT_TRUE(Server::ServerMakeEGLCurrent(dpy, surf, surf, ctxA));
+    EXPECT_EQ(g_nativeEglBinds.load(), 1) << "an identical repeat bound natively";
+    EXPECT_EQ(loop.MakeCurrentRepublishCount(), 1u)
+        << "an identical repeat republished the caps snapshot: the client's mirror generation moved "
+           "for nothing and unpumped snapshots accumulate (ID-67)";
+
+    // Different (a second context onto the same surface): 1 native bind, 1 republish.
+    ASSERT_TRUE(Server::ServerMakeEGLCurrent(dpy, surf, surf, ctxB));
+    EXPECT_EQ(g_nativeEglBinds.load(), 2)
+        << "a make-current with a DIFFERENT tuple (a second context onto the same surface) did not "
+           "bind natively: DirectGLES's invalidations for the new frontend context never ran (ID-67)";
+    EXPECT_EQ(loop.NativeBindCount(), 2u);
+    EXPECT_EQ(loop.MakeCurrentRepublishCount(), 2u)
+        << "a make-current with a different tuple did not republish the caps snapshot; the client "
+           "would adopt nothing without a pump or a Present (R-12 arm (a), ID-67)";
+
+    // Identical again, then back to the first: 0 + 0, then 1 + 1.
+    ASSERT_TRUE(Server::ServerMakeEGLCurrent(dpy, surf, surf, ctxB));
+    EXPECT_EQ(g_nativeEglBinds.load(), 2);
+    EXPECT_EQ(loop.MakeCurrentRepublishCount(), 2u);
+    ASSERT_TRUE(Server::ServerMakeEGLCurrent(dpy, surf, surf, ctxA));
+    EXPECT_EQ(g_nativeEglBinds.load(), 3);
+    EXPECT_EQ(loop.NativeBindCount(), 3u);
+    EXPECT_EQ(loop.MakeCurrentRepublishCount(), 3u);
 
     fixture.TearDown();
 }

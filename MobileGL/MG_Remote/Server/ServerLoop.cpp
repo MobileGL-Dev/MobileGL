@@ -213,6 +213,7 @@ namespace MobileGL::MG_Remote::Server {
         m_parks.store(0, std::memory_order_release);
         m_nativeBinds.store(0, std::memory_order_release);
         m_clientReleases.store(0, std::memory_order_release);
+        m_makeCurrentRepublishes.store(0, std::memory_order_release);
         m_haveCurrentTuple = false;
         {
             const std::lock_guard<std::mutex> lock(m_exitMutex);
@@ -237,6 +238,12 @@ namespace MobileGL::MG_Remote::Server {
     Uint64 ServerLoop::NativeBindCount() const { return m_nativeBinds.load(std::memory_order_acquire); }
     Uint64 ServerLoop::ClientReleaseCount() const {
         return m_clientReleases.load(std::memory_order_acquire);
+    }
+    Uint64 ServerLoop::MakeCurrentRepublishCount() const {
+        return m_makeCurrentRepublishes.load(std::memory_order_acquire);
+    }
+    void ServerLoop::NoteMakeCurrentRepublished() {
+        m_makeCurrentRepublishes.fetch_add(1, std::memory_order_acq_rel);
     }
 
     // C7 / ID-54. A release-current request (the three NO_* markers, exactly IsReleaseCurrentRequest's
@@ -770,15 +777,19 @@ namespace MobileGL::MG_Remote::Server {
                 ok = outcome.ok;
                 if (!ok || !outcome.boundNatively) return MOBILEGL_OK;
                 // R-12, arm (a): the caps snapshot is REPUBLISHED because InitCapabilities has
-                // now run for real - and ONLY on a real native bind, not on an identical repeat
-                // (a repeat re-published nothing). DirectGLES has no OnCapsInvalidated producer at
-                // all, and c0's answer is that a SECOND arrival IS the invalidation - so the
-                // client's mirror is refreshed with no dev-shaped backend edit and with no
-                // eleventh MGPipeCallbacks slot (MGPipeCallbacks.h:56-58's static_assert exists to
-                // make that cost visible).
+                // now run for real - on every forwarded bind of a tuple this loop did not hold
+                // (the first, and every DIFFERENT tuple after it), and NEVER on an identical
+                // repeat (ID-67: a repeat is a native no-op AND publishes nothing, so the client's
+                // mirror generation does not move and nothing accumulates). DirectGLES has no
+                // OnCapsInvalidated producer at all, and c0's answer is that a SECOND arrival IS the
+                // invalidation - so the client's mirror is refreshed with no dev-shaped backend edit
+                // and with no eleventh MGPipeCallbacks slot (MGPipeCallbacks.h:56-58's static_assert
+                // exists to make that cost visible). Red once by republishing only on the first
+                // bind: the ID-67 control's different tuple reads 1 republish where 2 are required.
                 ServerSession* session = ServerSession::Active();
                 if (session != nullptr && session->Accepted()) {
                     const MobileGLResult published = session->PublishCapsSnapshot();
+                    if (published == MOBILEGL_OK) ServerLoopInstance().NoteMakeCurrentRepublished();
                     if (published != MOBILEGL_OK) {
                         MGLOG_E("MG_Remote server: the post-make-current CapsSnapshot could not "
                                 "be published (rc=%d); the client's mirror still holds the empty "
