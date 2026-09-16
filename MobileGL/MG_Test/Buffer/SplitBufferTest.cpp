@@ -41,6 +41,21 @@ namespace {
     using MG_Remote::Client::GpuWriteProducer;
     using MG_Remote::Client::PersistentMapTracker;
 
+    // A backend that MINTS a persistent mapping, for the one case that needs the adopted arm
+    // (TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo). Only AcquirePersistentMap is
+    // filled in: the frontend null-checks every op individually, and a table with one live
+    // member is the smallest thing that makes AcquireMemoryRange's legacy adoption arm fire.
+    // The storage is the CASE's, not this table's - AdoptPersistentMap keeps the pointer and
+    // never owns it - so the base travels through a file-scope variable the case sets and
+    // clears around the one acquisition it wants minted.
+    void* g_mintedPersistentBase = nullptr;
+    void* MintPersistentMap(BufferObject&) { return g_mintedPersistentBase; }
+    const MG_State::GLState::BufferBackendOps g_mintingBufferOps = [] {
+        MG_State::GLState::BufferBackendOps ops{};
+        ops.AcquirePersistentMap = &MintPersistentMap;
+        return ops;
+    }();
+
     // Everything in this package is gated on `Transport != Monolith`, so every case has to
     // put the process into a split configuration and put it back. A fixture rather than a
     // lambda because the tracker is a process-wide singleton and a case that left an entry in
@@ -64,6 +79,11 @@ namespace {
             MG_Remote::Client::ResetProducerMarkCountsForTest();
         }
         void TearDown() override {
+            // Belt and braces for the one case that installs a minting backend: a table left
+            // behind would make the NEXT case's acquisition land in the adopted arm, and every
+            // membership assertion in this file would then be about a different code path.
+            MG_State::GLState::SetBufferBackendOps(nullptr);
+            g_mintedPersistentBase = nullptr;
             PersistentMapTracker::Instance().ClearForTest();
             MG_State::pGLContext = Move(m_context);
             MG_Config::Transport = m_transport;
@@ -258,6 +278,92 @@ TEST_F(SplitBufferSet, MembershipIsSyncPersistentMappedRangesOwnEarlyOutChain) {
     buffer->ReleaseMemory(false);
 }
 
+// THE ADOPTED ARM IS NOT A MEMBER, AND IT IS THE CHAIN THAT SAYS SO - NOT THE TIER (ID-42).
+//
+// IsLivePersistentMap's second row is `if (buffer.IsBackendPersistentMapped()) return false;`,
+// and its comment promises that the row answers for ITSELF: at tier T2 the arm is unreachable
+// because MapPersistent declines, but a build that reaches T0/T1 later must get the same answer
+// out of the same row. Nothing drove that promise. The case above only ever sees the declined
+// arm, and PersistentCoherentMapScenario's membership assertion cannot pin it either - an
+// integration entry sees whichever arm its driver and transport hand it, which is exactly how
+// that assertion came to state the emulated arm's property as if it were universal and go red on
+// seven split-monolith entries the first time it ran.
+//
+// So the statement is pinned HERE, where both answers can be produced on demand. The adoption is
+// made by the PRODUCTION path - AcquireMemoryRange dispatching to the backend's
+// AcquirePersistentMap and calling PipeResource::AdoptPersistentMap - and not by the case
+// reaching into the buffer, because a hand-set flag would still be "true" with the production
+// adoption deleted (R-16). The transport is Monolith for exactly that call, because R-6's decline
+// is ANDed with `Transport != Monolith` and there is no other way to reach a mint in this build;
+// the PREDICATE is then asked with the tier back at T2/InProcess, which is the whole point: the
+// tier says "emulated, always" and the chain still says "not a member".
+TEST_F(SplitBufferSet, TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo) {
+    constexpr SizeT kSize = 4096;
+    // The storage the backend "mints". Declared first so it outlives the buffer: AdoptPersistentMap
+    // stores the pointer and releases the shadow, and it never owns what it was handed.
+    Vector<Uint8> minted(kSize, static_cast<Uint8>(0));
+    g_mintedPersistentBase = minted.data();
+
+    auto adopted = MakeBuffer(27u, kSize);
+    auto declined = MakeBuffer(28u, kSize);
+
+    // The declined twin first, with no backend ops at all: same flags, same size, same call.
+    declined->AcquireMemoryRange(Range1D{0, kSize},
+                                 BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
+    ASSERT_FALSE(declined->IsBackendPersistentMapped());
+    ASSERT_TRUE(PersistentMapTracker::IsLivePersistentMap(*declined))
+        << "the emulated arm IS a member - if this fails the two halves are not comparable and the "
+           "assertion below proves nothing";
+
+    {
+        MG_State::GLState::SetBufferBackendOps(&g_mintingBufferOps);
+        MG_Config::Transport = MG_Config::TransportMode::Monolith;
+        adopted->AcquireMemoryRange(Range1D{0, kSize},
+                                    BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        MG_State::GLState::SetBufferBackendOps(nullptr);
+    }
+    ASSERT_TRUE(adopted->IsBackendPersistentMapped())
+        << "the backend declined the mint, so there is no adopted arm here to ask about";
+
+    // THE TIER SAYS EMULATED. The chain must still say "not a member".
+    ASSERT_TRUE(MG_Remote::Client::AdoptTierIsEmulate());
+    ASSERT_NE(MG_Config::Transport, MG_Config::TransportMode::Monolith);
+    EXPECT_FALSE(PersistentMapTracker::IsLivePersistentMap(*adopted))
+        << "an adopted store's bytes are already in host-visible coherent GPU memory and there is "
+           "nothing for the push to ship, so IsBackendPersistentMapped() takes it out of the set. "
+           "This answer must come from that ROW and not from the adopt tier: the tier is T2 and the "
+           "transport is InProcess right now, which is the configuration in which R-6 says every "
+           "acquisition declines - and the store in front of the predicate is adopted anyway, "
+           "because a later phase's T0/T1 will mint one. A predicate that read the tier would call "
+           "it a member and the push would read an adopted store's Bytes() as if it were the "
+           "shadow.";
+
+    // The SET agrees with the predicate, asked through the production entry point rather than by
+    // reading a member: NoteMapStateChanged is what every one of the five maintenance events
+    // calls, and it must refuse to enrol an adopted store.
+    PersistentMapTracker::Instance().NoteMapStateChanged(*adopted);
+    EXPECT_EQ(PersistentMapTracker::Instance().MemberCount(), 1u)
+        << "only the declined twin: enrolling an adopted store would make the push read its "
+           "Bytes() - which is the GPU map, not the shadow - as if it were bytes to ship";
+
+    // ...and the consequence, which is the one that would actually corrupt something.
+    const Uint64 before = MG_Util::PipeStats::TotalBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush);
+    MG_Remote::Client::PushPersistentMapsBeforeVerb();
+    EXPECT_EQ(MG_Util::PipeStats::TotalBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush) - before,
+              static_cast<Uint64>(kSize))
+        << "the declined twin's 4096 bytes and nothing else: the adopted buffer must contribute no "
+           "pushed bytes at all";
+
+    declined->ReleaseMemory(false);
+    // The adopted one is NOT released through ReleaseMemory: ReleasePersistentMap is for a store
+    // being redefined, and a persistent map the application holds outlives every unmap by
+    // definition (PipeResource.h:121-127). It is dropped here with the mapping still adopted,
+    // which is also the shape ~BufferObject has to survive.
+    adopted.reset();
+    g_mintedPersistentBase = nullptr;
+}
+
 // pmap is non-zero, and it is non-zero in BLOCKS.
 TEST_F(SplitBufferSet, ThePushCutsTheMappedSpanIntoBlocksAndMovesPmap) {
     constexpr SizeT kSize = 4u * 64u * 1024u; // exactly four 64 KiB blocks
@@ -402,7 +508,7 @@ TEST_F(SplitBufferSet, OnlyAdoptTierTwoIsImplemented) {
 
 #else
 
-// THE SAME FIFTEEN NAMES, SO THE ctest NAME SET DOES NOT MOVE BETWEEN LANES. G2 compares the
+// THE SAME SIXTEEN NAMES, SO THE ctest NAME SET DOES NOT MOVE BETWEEN LANES. G2 compares the
 // pull and push name lists line for line and G14 allows build-split to ADD names but never to
 // remove one, so a case that exists only where it can run would break both gates for a reason
 // that has nothing to do with what it tests. It skips instead, and says why.
@@ -417,6 +523,7 @@ TEST(SplitBufferSet, Row4AReadPixelsIntoAPackPboMarksThePbo) { MGL_SPLIT_ONLY_OR
 TEST(SplitBufferSet, Row5EndTransformFeedbackMarksTheCaptureTargets) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, TheWholeSetIsInertOnTheMonolithPath) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, MembershipIsSyncPersistentMappedRangesOwnEarlyOutChain) { MGL_SPLIT_ONLY_OR_SKIP(); }
+TEST(SplitBufferSet, TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, ThePushCutsTheMappedSpanIntoBlocksAndMovesPmap) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, TheLastBlockIsTheRemainderAndNotAWholeBlock) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, BothEdgesOfAWriteMapPublishOneStateRecord) { MGL_SPLIT_ONLY_OR_SKIP(); }

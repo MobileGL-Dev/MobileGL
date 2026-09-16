@@ -43,6 +43,16 @@
 // address really is valid in this process, which is precisely why E3(d) is worth gating at all -
 // and a direct count of declines would need a counter from packages b1/v1.
 //
+// AND MEMBERSHIP FOLLOWS THE ARM (ID-42). The client's live-persistent-map set is the set of maps
+// the client still has to PUSH, so an ADOPTED store is deliberately not in it -
+// PersistentMapTracker::IsLivePersistentMap's second row is IsBackendPersistentMapped(), and an
+// adopted store's bytes are already in coherent GPU memory. AssertMembership therefore expects
+// `live == (arm == emulated)`, from the same peek AssertOrRecordArm reads. The arm-INDEPENDENT
+// claim - "the predicate reads the chain, not the adopt tier" - belongs to a unit case that can
+// drive both answers on demand (SplitBufferSet.
+// TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo) and not to an integration entry, which
+// only ever sees whichever arm its driver and transport happen to give it.
+//
 // `mpr` (map-persistent-roundtrips) is counted per ACQUISITION ATTEMPT, mint or decline
 // (ARCHITECTURE.md:492), so it is the SAME NUMBER on both arms and in both transports: that is
 // what makes exit gate E3(c)'s "mpr equal to the monolith arm's" checkable by one process. Both
@@ -243,6 +253,11 @@ void main() { oColor = vec4(vColor, 1.0); }
                 ASSERT_TRUE(PeekBufferIsAdoptedPersistentMap(vbo, &adopted))
                     << "no frontend BufferObject behind GL buffer " << vbo << " " << when;
                 const char* arm = adopted ? "adopted" : "emulated";
+                // REMEMBERED, because AssertMembership's expectation is a function of it (ID-42)
+                // and the two have to be talking about ONE observation of ONE buffer. A second
+                // peek would be a second question, and a scenario that asked it twice could
+                // straddle a change and then compare two different moments.
+                m_observedArm = adopted ? ObservedArm::Adopted : ObservedArm::Emulated;
                 RecordProperty("persistent_map_arm", arm);
                 if (declared.empty()) return;
                 ASSERT_EQ(declared, std::string(arm))
@@ -259,21 +274,63 @@ void main() { oColor = vec4(vColor, 1.0); }
             // b1-v1.md 4.1 item 2: the client's live-persistent-map set is meant to be exactly
             // SyncPersistentMappedRange's early-out chain. A drift between the two stops the push
             // silently; asking here makes it a named failure instead.
+            //
+            // MEMBERSHIP IS A PROPERTY OF THE ARM, NOT OF THE FLAGS - INTEGRATOR DECISION ID-42,
+            // and the first cut of this function got it wrong in a way no lane could see. It
+            // asserted `live` UNCONDITIONALLY, on the grounds that "a PERSISTENT|WRITE|COHERENT map
+            // that is not FLUSH_EXPLICIT is a member by construction". That sentence is true only
+            // on the EMULATED arm. PersistentMapTracker::IsLivePersistentMap's second row is
+            // `if (buffer.IsBackendPersistentMapped()) return false;` - deliberately, because the
+            // predicate must read the CHAIN and not the tier: an adopted store's bytes are already
+            // in coherent GPU memory and there is nothing for the push to ship, so it is not a
+            // member and must not be one. On the adopted arm `live` is false BY DESIGN.
+            //
+            // It survived the first wave because the two builds that ran it could not contradict
+            // it: the push build compiles no MG_Remote, so MGITEST_PERSISTENT_MAP_TRACKER is
+            // undefined and this function returned at the line above before asserting anything;
+            // the split build's monolith lane, where the tracker IS compiled, adopts
+            // (MGPipeApplyMapPersistent's R-6 decline is ANDed with `Transport != Monolith`,
+            // PipeApply.cpp:2005), and seven entries went red the first time the assertion ran at
+            // all.
+            //
+            // So the expectation is `live == (arm == emulated)`, taken from the SAME peek
+            // AssertOrRecordArm read. The arm-independent half - "the predicate reads the chain,
+            // not the tier" - is not an integration claim and is pinned where it can be driven
+            // directly, by MG_Test/Buffer/SplitBufferTest.cpp's
+            // SplitBufferSet.TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo.
             void AssertMembership(unsigned int vbo, const char* when) {
                 if (!PersistentMapTrackerAvailable()) {
                     RecordProperty("persistent_map_membership", "unavailable");
                     return;
                 }
+                if (m_observedArm == ObservedArm::NotLookedAt) {
+                    // AssertOrRecordArm could not look, so there is no arm to condition on and
+                    // "could not look" is not "it was emulated" (PersistentMapPeek.h). A lane that
+                    // DECLARES an arm has already been skipped by AssertOrRecordArm in this case.
+                    RecordProperty("persistent_map_membership", "arm unknown");
+                    return;
+                }
+                const bool emulated = (m_observedArm == ObservedArm::Emulated);
                 bool live = false;
                 ASSERT_TRUE(PeekBufferIsLivePersistentMap(vbo, &live))
                     << "the tracker is compiled in but could not answer for GL buffer " << vbo << " " << when;
-                EXPECT_TRUE(live)
-                    << "a PERSISTENT|WRITE|COHERENT map that is not FLUSH_EXPLICIT is a member of "
-                       "the client's live-persistent-map set by construction, and it is not one "
-                    << when
+                RecordProperty("persistent_map_membership", live ? "member" : "not a member");
+                EXPECT_EQ(live, emulated)
+                    << "the client's live-persistent-map set is the set of maps the client still has "
+                       "to PUSH, so membership follows the arm: on the emulated arm this "
+                       "PERSISTENT|WRITE|COHERENT non-FLUSH_EXPLICIT map must be a member, and on "
+                       "the adopted arm it must not be - IsLivePersistentMap's "
+                       "IsBackendPersistentMapped() row takes it out, because an adopted store's "
+                       "bytes are already in coherent GPU memory and there is nothing to ship. This "
+                       "map landed in the "
+                    << (emulated ? "emulated" : "adopted") << " arm " << when << " and the predicate "
+                    << (live ? "made it a member" : "did not make it a member")
                     << ". The set is supposed to BE SyncPersistentMappedRange's early-out chain; if "
-                       "they have drifted, the push stops shipping this buffer's blocks and nothing "
-                       "else says so.";
+                       "they have drifted, the push either stops shipping this buffer's blocks or "
+                       "starts shipping an adopted store's, and nothing else says so. (ID-42. The "
+                       "arm-independent statement - that the predicate reads the chain and not the "
+                       "adopt tier - is pinned by SplitBufferSet."
+                       "TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo, not here.)";
             }
 
             void TearDown() override {
@@ -319,6 +376,13 @@ void main() { oColor = vec4(vColor, 1.0); }
                                                       const std::string& when) {
                 return RegionIsMostly(image, 8, image.Width() - 9, 8, image.Height() - 9, color, 0.0, when);
             }
+
+            // The arm this scenario OBSERVED, as opposed to the one its lane declared. A lane may
+            // declare none (the monolith counting lane does not), and the peek may be unable to
+            // look at all, so the third state is not "assume emulated" - it is "there is no arm to
+            // condition on", and AssertMembership records rather than asserts under it.
+            enum class ObservedArm { NotLookedAt, Adopted, Emulated };
+            ObservedArm m_observedArm = ObservedArm::NotLookedAt;
 
             unsigned int m_program = 0;
             unsigned int m_vao = 0;
