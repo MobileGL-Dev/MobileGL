@@ -65,6 +65,8 @@ jobs:
         uses: android-actions/setup-android@v4
         with:
           accept-android-sdk-licenses: false
+          packages: platform-tools
+          cmdline-tools-version: 13114758
 
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses >/dev/null
@@ -297,6 +299,8 @@ jobs:
         uses: android-actions/setup-android@v4
         with:
           accept-android-sdk-licenses: false
+          packages: platform-tools
+          cmdline-tools-version: 13114758
 
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses >/dev/null
@@ -372,6 +376,8 @@ jobs:
         uses: android-actions/setup-android@v4
         with:
           accept-android-sdk-licenses: false
+          packages: platform-tools
+          cmdline-tools-version: 13114758
 
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses >/dev/null
