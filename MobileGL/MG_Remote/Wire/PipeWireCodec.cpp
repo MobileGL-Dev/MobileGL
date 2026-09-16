@@ -31,6 +31,9 @@
 #include <Config.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 #include <MG_Pipe/PipeApply.h>
+// R-6's tier gate, and the ONE spelling of it (b1's file, unchanged by this package): the
+// MapPersistent arm below asks it the same question MGPipeApplyMapPersistent asks.
+#include <MG_Remote/Client/PersistentMapTracker.h>
 #include <MG_Remote/Protocol/generated/protocol_generated.h>
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #include <MG_Util/Debug/Log.h>
@@ -457,6 +460,36 @@ namespace MobileGL::MG_Remote::Wire {
                     WireOpName(op), static_cast<unsigned long long>(blob.Size));
             std::abort();
         }
+        // R-2.3's SECOND HALF: "inside SOME segment" IS NOT THE RULE. Contract table 1 gives
+        // every client->server content blob - groups A, B and C, all nineteen rows - the ONE
+        // carrier SEG_STAGE, and R-10 sends blobs there whole. Until this arm existed the only
+        // test was that the run resolved, so `CreateSamplerState.Parameters={Seg=SEG_REPLY,...}`
+        // was accepted and APPLIED: a server-owned segment, whose reuse is the reply pool's
+        // business and has nothing to do with stage retirement, carrying bytes the applier
+        // then read. It also went unpoisoned - NoteResolvedRun skipped every non-stage carrier
+        // - so rule C's only mechanical control read zero on exactly the record that needed it.
+        //
+        // The segment is checked BEFORE the resolve, deliberately: a forged SEG_REPLY run that
+        // happens to lie inside a mapped reply pool must be refused for naming the wrong
+        // carrier, not left to pass or fail on whether that pool is mapped at all.
+        //
+        // NOT A NEW FATAL FAMILY. The review suggested `Fatal{BlobNotStaged}`; this is
+        // ProtocolCorruption like every other R-2 honesty arm, because the families are the
+        // vocabulary the operator and the CI greps share (ProtocolCorruption, AbiMismatch,
+        // UnmigratedVerb, UnmigratedPipeInput, UnsetCallMask, RingOverrun) and a one-off
+        // seventh name would be a token nothing else in the tree recognises. The SEGMENT is in
+        // the message, which is what has to be greppable.
+        if (blob.Seg != kSegStage) {
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} seg=%u offset=%llu "
+                    "size=%llu is not SEG_STAGE(%u); every client->server content blob is "
+                    "staged whole in SEG_STAGE (contract table 1 groups A/B/C, R-10) and no "
+                    "other segment may carry one",
+                    WireOpName(op), static_cast<unsigned>(blob.Seg),
+                    static_cast<unsigned long long>(blob.Offset),
+                    static_cast<unsigned long long>(blob.Size),
+                    static_cast<unsigned>(kSegStage));
+            std::abort();
+        }
         if (segments.Resolve(blob.Seg, blob.Offset, blob.Size) == nullptr) {
             MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} seg=%u offset=%llu size=%llu "
                     "does not lie inside that segment (R-2.3)",
@@ -717,6 +750,12 @@ namespace MobileGL::MG_Remote::Wire {
         }
 
         for (int attempt = 0; attempt < 2; ++attempt) {
+            // THE WRAP SKIP MAY ONLY BE CHARGED AGAINST BYTES THAT ARE STILL IN FLIGHT. When
+            // there are none the allocator starts over at offset zero, so a blob the segment
+            // can hold whole is never refused (see RebaseEmptyStage). On attempt 1 this runs
+            // AFTER ReclaimStagedBytes, which is the case the finding describes: 8 MiB
+            // allocated, then retired, then a 28 MiB request that used to abort.
+            RebaseEmptyStage();
             const Uint64 offset = m_stageHead % m_stageCapacity;
             // A run is always contiguous: one that would straddle the end skips the remainder,
             // exactly as the ring's wrap pad does, and the skipped bytes are reclaimed with
@@ -936,6 +975,32 @@ namespace MobileGL::MG_Remote::Wire {
         return m_emitSeq;
     }
 
+    // THE EMPTY-STAGE REBASE. Head and tail are monotonic byte counts, so "every staged byte
+    // has retired" reads head == tail, NOT head == tail == 0, and `head % capacity` is left
+    // wherever the last run ended. Charging a wrap skip against that offset then costs the
+    // unused suffix a second time: with head == tail == 64 in a 256 KiB stage, the allocator's
+    // test became `2*capacity - 64 <= capacity`, which is false at EVERY occupancy, so a blob
+    // that fits the segment whole was refused with `Fatal{RingOverrun, "SEG_STAGE"}` - whose
+    // own message then reported `0 bytes still in flight`. ReclaimStagedBytes cannot help,
+    // because an already-empty tail has nothing left to move.
+    //
+    // THE MARK QUEUE COMES WITH IT. A mark holds the ABSOLUTE head cursor it was pushed at and
+    // ReclaimStagedBytes assigns that value straight to m_stageTail. Every mark not yet
+    // consumed has StageCursor <= head == tail - the head is monotonic and marks are pushed in
+    // order - so each of them names a region that is already reclaimed and zero is the
+    // truthful rebasing of it. Without that, one reclaim after a rebase would put the tail
+    // AHEAD of the head and StagedBytesInFlight() would underflow to about 2^64.
+    void PipeWireEncoder::RebaseEmptyStage() {
+        if (m_stageHead != m_stageTail || m_stageHead == 0) {
+            return;
+        }
+        m_stageHead = 0;
+        m_stageTail = 0;
+        for (SizeT i = 0; i < m_stageMarks.size(); ++i) {
+            m_stageMarks[i].StageCursor = 0;
+        }
+    }
+
     void PipeWireEncoder::ReclaimStagedBytes() {
         if (m_control == nullptr) {
             return;
@@ -1083,8 +1148,22 @@ namespace MobileGL::MG_Remote::Wire {
     }
 
     void PipeWireDecoder::NoteResolvedRun(MGPWireOp op, const MGPBlobRef& blob) {
+        // UNREACHABLE NOW, AND LOUD RATHER THAN SILENT. This used to `return`, and that made
+        // the audit's bookkeeping quietly optional: a record naming a non-SEG_STAGE carrier
+        // was applied AND recorded nothing, so PoisonedStageBytes() stayed zero and rule C's
+        // only mechanical control was dark on exactly the record it existed to catch. The one
+        // caller is ResolveOrFatal, which runs RequireDeclaredBlob first, and that now refuses
+        // both an undeclared blob and a non-SEG_STAGE one by name. If either ever arrives here
+        // the audit has stopped covering the carrier, which is the same failure as no audit at
+        // all - the reason the run-count overflow just below is a Fatal too.
         if (blob.Size == 0 || blob.Seg != kSegStage) {
-            return;
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s\"} the audit was asked to record a "
+                    "resolved run with seg=%u size=%llu; only declared SEG_STAGE(%u) runs "
+                    "reach the poison fill (R-2.5)",
+                    WireOpName(op), static_cast<unsigned>(blob.Seg),
+                    static_cast<unsigned long long>(blob.Size),
+                    static_cast<unsigned>(kSegStage));
+            std::abort();
         }
         if (m_resolvedCount >= sizeof(m_resolved) / sizeof(m_resolved[0])) {
             // LOUD, NOT A SILENT DROP. This array is what the 0xDD fill covers, and a poison
@@ -1323,6 +1402,19 @@ namespace MobileGL::MG_Remote::Wire {
             //
             // DECLINED is a real answer, not a failure: the three frontend sites already
             // tolerate it (BufferObject.cpp:238, :603-606, :657-660).
+            //
+            // THE TIER IS CONSULTED HERE, AND IT IS THE SAME CONJUNCTION THE MONOLITH APPLIER
+            // USES (PipeApply.cpp's `Transport != Monolith && AdoptTierIsEmulate()`). The arm
+            // used to decline UNCONDITIONALLY and AdoptTier had no reference anywhere on the
+            // codec path, so MOBILEGL_IPC_ADOPT_TIER=0 and =1 - which contract §5 promises
+            // "parse and are Fatal at use, naming P11" - decoded as an ordinary DECLINED and
+            // the operator got a run that looked like a working T0. AdoptTierIsEmulate returns
+            // true at T2 and ABORTS at T0/T1 on its own named diagnostic, so the return value
+            // is deliberately not a branch: P5 declines at every tier it survives (R-6), and
+            // the two forbidden ones never get this far.
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                (void)MG_Remote::Client::AdoptTierIsEmulate();
+            }
             PostReply(op, seq, ReplySink::kStatusDeclined, nullptr, 0);
             return true;
 

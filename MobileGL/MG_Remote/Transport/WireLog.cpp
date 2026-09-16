@@ -12,6 +12,7 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 
 namespace MobileGL::MG_Remote::Transport {
 
@@ -28,6 +29,25 @@ namespace MobileGL::MG_Remote::Transport {
             return;
         }
         MGLOG_E("%s", line);
+    }
+
+    void WireLogFatal(const char* format, ...) {
+        char line[512];
+        va_list args;
+        va_start(args, format);
+        const int written = std::vsnprintf(line, sizeof(line), format, args);
+        va_end(args);
+        if (written < 0) {
+            std::snprintf(line, sizeof(line),
+                          "MG_Remote wire: unformattable Fatal diagnostic (format=%s)", format);
+        }
+        MGLOG_F("%s", line);
+        // The stderr echo is the half a death test can see (WireLog.h). Unbuffered
+        // by default and flushed anyway: abort() does not flush stdio.
+        std::fputs(line, stderr);
+        std::fputc('\n', stderr);
+        std::fflush(stderr);
+        std::abort();
     }
 
 } // namespace MobileGL::MG_Remote::Transport

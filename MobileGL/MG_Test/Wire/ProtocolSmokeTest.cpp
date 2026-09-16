@@ -69,11 +69,15 @@ TEST(ProtocolSmokeTest, HelloRoundTrips) {
     EXPECT_EQ(envelope->msg_as_Welcome(), nullptr);
 }
 
+// The four canonical sizes: 8 MiB / 32 MiB / 16 MiB / 256 KiB. SEG_REPLY is 16 MiB by ID-47
+// (eight slots of 2 MiB, sized from the largest P5 read - E2's 640x480 RGBA8 snapshot - which
+// the previous 8 MiB pool could not hold); SessionTest pins the same number on the mapping and
+// CONTRACT-P5 §2 row 23 on paper. All three move together or not at all.
 TEST(ProtocolSmokeTest, WelcomeCarriesTheFourSegmentAnnouncements) {
     ::flatbuffers::FlatBufferBuilder builder(1024);
     auto cmd = CreateSegmentRefDirect(builder, 1, SegmentKind::Cmd, 8ull * 1024 * 1024, "cmd");
     auto stage = CreateSegmentRefDirect(builder, 2, SegmentKind::Stage, 32ull * 1024 * 1024, "stage");
-    auto reply = CreateSegmentRefDirect(builder, 3, SegmentKind::Reply, 8ull * 1024 * 1024, "reply");
+    auto reply = CreateSegmentRefDirect(builder, 3, SegmentKind::Reply, 16ull * 1024 * 1024, "reply");
     auto event = CreateSegmentRefDirect(builder, 4, SegmentKind::Event, 256ull * 1024, "event");
     auto welcome = CreateWelcome(builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR,
                                  /*serverPid=*/99, cmd, stage, reply, event);
@@ -91,6 +95,11 @@ TEST(ProtocolSmokeTest, WelcomeCarriesTheFourSegmentAnnouncements) {
     EXPECT_EQ(parsed->cmdRing()->sizeBytes(), 8ull * 1024 * 1024);
     ASSERT_NE(parsed->stageRing(), nullptr);
     EXPECT_EQ(parsed->stageRing()->sizeBytes(), 32ull * 1024 * 1024);
+    // The pin never read the reply announcement back before ID-47; a size that moved on the
+    // wire and not here would have gone unnoticed.
+    ASSERT_NE(parsed->replyPool(), nullptr);
+    EXPECT_EQ(parsed->replyPool()->kind(), SegmentKind::Reply);
+    EXPECT_EQ(parsed->replyPool()->sizeBytes(), 16ull * 1024 * 1024);
     ASSERT_NE(parsed->eventRing(), nullptr);
     EXPECT_EQ(parsed->eventRing()->sizeBytes(), 256ull * 1024);
 }

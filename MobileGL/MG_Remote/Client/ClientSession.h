@@ -69,6 +69,19 @@ namespace MobileGL::MG_Remote::Client {
         // ran monolith and went green" failure, and it must be loud.
         MobileGLResult Start(MG_Config::TransportMode mode, const String& endpoint);
 
+        // Start()'s second half: the handshake and everything after it, over a transport pair
+        // the CALLER made with InProcessTransport::CreatePair. Start() refuses every mode but
+        // `inproc`, makes the pair, and calls this; it is public for exactly one reason. The
+        // Welcome guard below (envelope->msg_as_Welcome() == nullptr, ID-46 finding 7) can only
+        // be reached by a frame that arrives on the server->client direction BEFORE the
+        // server's own Welcome, and Start() builds that pair itself, so no control could put
+        // one there. SessionHandshakeTest does it through here, and the null-union Welcome must
+        // come back as MOBILEGL_ERR_PROTOCOL_MISMATCH with the guard's own line. Not a second
+        // way to start a session: MG_Backend::Init() calls Start(), and nothing else may call
+        // this with a pair it did not just create.
+        MobileGLResult StartOverTransportPair(std::unique_ptr<Transport::InProcessTransport> clientEnd,
+                                              std::unique_ptr<Transport::InProcessTransport> serverEnd);
+
         // Teardown order matters and is table 3's fourth column: publish and let the server
         // drain, Doorbell::Kill() (the ONLY thing that wakes an apply thread parked on
         // kWaitForever, Doorbell.h:211-221), then join, and only then release anything an
@@ -157,6 +170,18 @@ namespace MobileGL::MG_Remote::Client {
         // What one answer may carry. A ReadPixels bigger than this is Fatal rather than
         // chunked, so the client checks BEFORE it emits.
         Uint32 MaxReplyBytes() const;
+        // ID-47, the fifth primitive: true exactly when an answer of `bytes` can be posted.
+        Bool ReplyCanHold(Uint64 bytes) const;
+        // ID-47's named refusal, forwarded verbatim to ReplySlotPool::RequireReadPixelsFits.
+        // Returns when the answer fits; otherwise
+        //     Fatal{ReplyTooLarge, "ReadPixels <w>x<h> <format> <bytes> > <cap>"}
+        // and abort - AT THE CLIENT, BEFORE EMISSION. Package c1's OnReadPixels emitter calls
+        // this once, immediately before EmitAndWait(MGPWireOp::ReadPixels, ...), with the
+        // record's box, its Format/Type enums and the DstSize it computed; the server's Post
+        // keeps its own refusal as the last line of defence, but that one fires on the apply
+        // thread with the record already on the wire, where all the client sees is a hang.
+        void RequireReadPixelsReplyFits(Uint32 width, Uint32 height, Uint32 format, Uint32 type,
+                                        Uint64 bytes) const;
 
         // The reverse channel's reading end: OnBufferWriteback / OnGpuWritten /
         // OnSurfaceChanged. Drained by the GL thread between verbs.

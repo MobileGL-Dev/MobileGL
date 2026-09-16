@@ -1389,27 +1389,54 @@ def write(path, text, check, changed):
             handle.write(text)
 
 
-def expect_trip(name, fn):
-    """Runs one negative control; a gate that lets it through is the failure."""
+def expect_trip(name, because, fn, quiet=False):
+    """Runs one negative control; a gate that lets it through, or trips for a reason that is
+    not ITS OWN, is the failure.
+
+    The first version of this function caught any SystemExit - including an unrelated
+    diagnostic, and even a CLEAN sys.exit(0) - and asked nothing about which one, so the
+    codex cross-family review's finding 9 could replace a control's callback with either and
+    the "nine negative controls all trip" line stayed true while the guard it named never
+    fired. gen_pipe_field_ownership.py's M-1 was the same defect in the sibling generator;
+    this mirrors that fix.
+
+    `because` is a substring the control's OWN message must contain, and an exit code of 0
+    can never count as a trip."""
     try:
         fn()
     except SystemExit as trip:
-        print("gen_pipe: self-test %s: tripped as expected (%s)" % (name, str(trip).splitlines()[0][:100]))
-        return 1
-    print("gen_pipe: self-test %s: DID NOT TRIP" % name, file=sys.stderr)
+        code = trip.code
+        message = str(code) if code is not None else ""
+        if code != 0 and because in message:
+            if not quiet:
+                print("gen_pipe: self-test %s: tripped as expected (%s)"
+                      % (name, message.splitlines()[0][:100]))
+            return 1
+        if not quiet:
+            print("gen_pipe: self-test %s: tripped for SOMEONE ELSE'S reason:\n"
+                  "    expected to contain: %s\n"
+                  "    actually said (code=%r): %s"
+                  % (name, because, code, message.splitlines()[0][:200] if message else "<empty>"),
+                  file=sys.stderr)
+        return 0
+    if not quiet:
+        print("gen_pipe: self-test %s: DID NOT TRIP" % name, file=sys.stderr)
     return 0
 
 
 def self_test(accessors):
     """The negative controls (check_include_closure.py's shape): each gate must go red for
-    its reason, and zero trips is itself an error."""
+    its OWN reason, and zero trips is itself an error."""
     canned_struct = "struct Canned {\n    Uint32 A;\n    Uint32 B, C;\n    Uint8 Pad0[3];\n    void F() { return; }\n};\n"
     controls = [
         ("struct member without F(...)",
+         "member(s) with no F(...) in PipeFields.def",
          lambda: check_field_lists_cover_struct_members({"Canned": ["A", "B"]}, ["Canned"], [canned_struct])),
         ("F(...) that is not a member",
+         "F(...) name(s) that are not members",
          lambda: check_field_lists_cover_struct_members({"Canned": ["A", "B", "C", "D"]}, ["Canned"], [canned_struct])),
         ("payload with no struct",
+         "struct not found",
          lambda: check_field_lists_cover_struct_members({"Nowhere": ["A"]}, ["Nowhere"], [canned_struct])),
     ]
     fill_text = read(os.path.join(PIPE_DIR, "FillPoints.def"))
@@ -1417,16 +1444,24 @@ def self_test(accessors):
     field_row = re.compile(r"X\(\s*kDraw\s*,\s*GetBoundVertexArray\s*\)")
     if not verb_row.search(fill_text) or not field_row.search(fill_text):
         sys.exit("gen_pipe: self-test: FillPoints.def lost the rows the controls edit")
-    controls.append(("verb missing from FillPoints.def", lambda: parse_fill_points(
+    controls.append(("verb missing from FillPoints.def",
+                     "GLFunctionsTable member(s) without a verb row",
+                     lambda: parse_fill_points(
         accessors, text=verb_row.sub("", fill_text, count=1))))
-    controls.append(("verb that is not a GLFunctionsTable member", lambda: parse_fill_points(
+    controls.append(("verb that is not a GLFunctionsTable member",
+                     "verb(s) that are not GLFunctionsTable members",
+                     lambda: parse_fill_points(
         accessors, text=verb_row.sub("X(DrawArrays, kDraw) X(NotAVerb, kDraw)", fill_text, count=1))))
-    controls.append(("field row naming a non-accessor", lambda: parse_fill_points(
+    controls.append(("field row naming a non-accessor",
+                     "is not an accessor in Coverage.def",
+                     lambda: parse_fill_points(
         accessors, text=field_row.sub("X(kDraw, NotAnAccessor)", fill_text, count=1))))
     # The EMITTED list's own gate: a row naming a call that is not in PipeCalls.def would
     # generate an enumerator nothing can dispatch on.
     calls_for_control = parse_calls()
-    controls.append(("emitted row naming a call that does not exist", lambda: gen_emitted_by(
+    controls.append(("emitted row naming a call that does not exist",
+                     "which is not a call in PipeCalls.def",
+                     lambda: gen_emitted_by(
         [("GetViewport", "SetDynamicState")], calls_for_control, [("GetViewport", "NotACall")])))
     # P5 R-13.4's gate. The flags are now a GENERATED TABLE six packages read instead of six
     # hard-coded copies, so a token that is not an MGPipeCallFlags enumerator has to stop the
@@ -1434,13 +1469,36 @@ def self_test(accessors):
     # kNone, the empty set, may not be OR'd with a real flag and quietly read as one.
     flag_typo = Call(1, "Canned", "MGPHandleOnly", "kScreen", ["kHasBlobb"])
     flag_kNone = Call(1, "Canned", "MGPHandleOnly", "kScreen", ["kNone", "kHasBlob"])
+    flag_typo_because = "which is not an MGPipeCallFlags enumerator"
     controls.append(("call flag that is not an MGPipeCallFlags enumerator",
+                     flag_typo_because,
                      lambda: check_call_flags_are_known([flag_typo])))
     controls.append(("kNone combined with a real flag",
+                     "combines kNone with",
                      lambda: check_call_flags_are_known([flag_kNone])))
+
+    # R-16 meta-control (codex review finding 9; verified by execution in
+    # p5-results/wave1-codex-verify.md §9). The exact perturbation there replaced the
+    # flag-typo control's callback with `sys.exit("unrelated parser failure")` and,
+    # separately, with `sys.exit(0)`; the OLD expect_trip counted both as "tripped as
+    # expected" because it never looked at the message or the code. Both must be REJECTED
+    # here, under the real control's own `because`. This is a quiet, unlisted assertion (not
+    # one of the nine controls below) so it cannot itself inflate the trip count.
+    # "Red once by doing X" = reverting expect_trip to `except SystemExit as trip: return 1`
+    # (accept any SystemExit) - that alone turns each of these two checks from a silent pass
+    # into the sys.exit below.
+    if expect_trip("(R-16 meta-control) unrelated diagnostic standing in for the flag-typo guard",
+                   flag_typo_because, lambda: sys.exit("unrelated parser failure"), quiet=True) != 0:
+        sys.exit("gen_pipe: self-test: expect_trip counted an UNRELATED SystemExit as the "
+                 "flag-typo guard's own trip - finding 9 / R-16 is back")
+    if expect_trip("(R-16 meta-control) sys.exit(0) standing in for the flag-typo guard",
+                   flag_typo_because, lambda: sys.exit(0), quiet=True) != 0:
+        sys.exit("gen_pipe: self-test: expect_trip counted sys.exit(0) as a trip - "
+                 "finding 9 / R-16 is back")
+
     trips = 0
-    for name, fn in controls:
-        trips += expect_trip(name, fn)
+    for name, because, fn in controls:
+        trips += expect_trip(name, because, fn)
     # The positive control: the canned struct's exact list passes, and the parser sees the
     # padding member as padding and the function as not a member.
     check_field_lists_cover_struct_members({"Canned": ["A", "B", "C"]}, ["Canned"], [canned_struct])

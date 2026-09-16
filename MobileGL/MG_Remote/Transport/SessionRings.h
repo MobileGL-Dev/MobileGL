@@ -53,7 +53,8 @@
 //
 // SegmentRef.sizeBytes therefore announces the MAPPING size (ring + page), which
 // is what a spawn peer must mmap. The four numbers a reader recognises - 8 MiB /
-// 32 MiB / 8 MiB / 256 KiB - are the RING sizes, which is what the knobs name.
+// 32 MiB / 16 MiB / 256 KiB (ID-47) - are the RING sizes, which is what the
+// knobs name.
 //
 // SEG_STAGE has no control page of its own: RingControl carries TWO cursor
 // triples (Ring.h:101-109) and the stage triple is the second. So SEG_STAGE is
@@ -86,8 +87,13 @@ namespace MobileGL::MG_Remote::Transport {
         // two either. Rounding was a ring requirement and keeping it would have
         // silently turned an operator's MOBILEGL_IPC_STAGE_MB=24 into 16.
         std::uint64_t StageBytes = 32ull * 1024 * 1024;
-        std::uint64_t ReplyBytes = 8ull * 1024 * 1024; // slot pool, not a ring
-        std::uint64_t EventRingBytes = 256ull * 1024;  // + one control page
+        // SEG_REPLY: a slot pool, not a ring, and NO KNOB MOVES IT (contract §5 has
+        // none). ID-47: 16 MiB = eight slots of 2 MiB, sized from the largest P5
+        // read - the E2 retrace's full-surface 640x480 RGBA8 snapshot, 1,228,800
+        // bytes - which the previous 8 MiB / 1 MiB-per-slot pool could not hold
+        // (ReplySlot.h says how it was found). ProtocolSmokeTest pins the number.
+        std::uint64_t ReplyBytes = 16ull * 1024 * 1024;
+        std::uint64_t EventRingBytes = 256ull * 1024; // + one control page
         std::uint32_t ReplySlotCount = kDefaultReplySlotCount;
     };
 
@@ -473,17 +479,48 @@ namespace MobileGL::MG_Remote::Transport {
     };
 
     // -----------------------------------------------------------------------
-    // The ABI fingerprint's mixer.
+    // The ABI fingerprint's mixer - THE ONE IMPLEMENTATION.
     //
-    // It lives under Transport/ rather than in CapsCodec.cpp so that it can be
-    // tested without the GL frontend's umbrella header, and so that the SIZES it
-    // mixes are the caller's - CapsCodec.cpp passes the three real sizeofs, a
-    // unit test passes made-up ones and can then prove a one-byte difference
-    // changes the answer. A fingerprint that cannot be shown to change is
-    // indistinguishable from one that is never compared.
+    // CapsCodec.cpp's CapsAbiFingerprint(), the value both handshakes compare,
+    // is exactly MixAbiFingerprint(CapsAbiFingerprintInputs()). It lives under
+    // Transport/ so that it can be tested without the GL frontend's umbrella
+    // header, and it takes its inputs as a struct so that the SAME function the
+    // handshake calls can be driven with one field perturbed at a time.
+    //
+    // The wave-1 review (ID-46 finding 6) found the previous shape - a
+    // five-argument mixer here and a SEPARATE hand-rolled FNV loop in
+    // CapsCodec.cpp - had exactly one caller of this function: the sensitivity
+    // test. Production never called it, so replacing CapsAbiFingerprint() with
+    // `return 1;` left every fingerprint test green and both peers agreeing on
+    // nothing. Now there is one mixer, the sensitivity case starts from the
+    // production entry point, and that perturbation turns it red.
     // -----------------------------------------------------------------------
-    std::uint64_t MixAbiFingerprint(std::uint64_t dynamicParamsSize, std::uint64_t capsSize,
-                                    std::uint64_t functionTableSize, std::uint32_t abiVersion,
-                                    const char* buildStamp);
+    struct AbiFingerprintInputs {
+        // The three struct shapes table 0's ABI-agreement row names.
+        std::uint64_t DynamicParamsSize = 0;
+        std::uint64_t CapsSize = 0;
+        std::uint64_t FunctionTableSize = 0;
+        // The caps blob's own geometry and the two blob codecs' versions: the
+        // format-capability table's extents and the codec version stamps.
+        std::uint64_t FormatCapabilityTargets = 0;
+        std::uint64_t FormatCapabilityFormats = 0;
+        std::uint64_t FormatCapabilitiesCodecVersion = 0;
+        std::uint64_t RendererInfoCodecVersion = 0;
+        // The catalogue's length (ID-33): a peer with one more opcode is a
+        // different wire even if every struct kept its size.
+        std::uint64_t OpCount = 0;
+        // MOBILEGL_ABI_VERSION(major, minor): a protocol change that left every
+        // struct the same size, which nothing above can see.
+        std::uint32_t AbiVersion = 0;
+        // GIT_COMMIT_HASH_SHORT: two builds of the same sizes can still disagree
+        // about a FIELD ORDER, which no sizeof can see. nullptr and "" are
+        // distinct inputs and neither equals a real stamp.
+        const char* BuildStamp = nullptr;
+    };
+
+    // FNV-1a over every field above, in declaration order. Never 0: that value is
+    // reserved for "not stated", so a peer that forgot to fill the field cannot
+    // accidentally agree with one that did.
+    std::uint64_t MixAbiFingerprint(const AbiFingerprintInputs& inputs);
 
 } // namespace MobileGL::MG_Remote::Transport

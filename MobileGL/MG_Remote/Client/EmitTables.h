@@ -117,18 +117,13 @@ namespace MobileGL::MG_Remote::Client {
     Uint64 DroppedClearEmissions();
 
     // ID-47. The CLIENT refuses a readback whose answer would not fit a reply slot, BEFORE it
-    // emits the record, and names the read. Never truncated (a short write is a silently
-    // truncated picture, the one failure an SSIM comparison cannot see) and never left to the
-    // server's `Post` abort (which happens on the apply thread, after the client is already
-    // parked in the barrier, and names a byte count rather than a read).
-    //
-    // IT IS A FREE FUNCTION SO THE BOUNDARY PAIR CAN DRIVE IT. `EmitReadPixels` needs a live
-    // session before it reaches any of this, so a control over the emitter could only ever
-    // observe Fatal{NoClientSession}; a control over THIS observes the decision and its exact
-    // message, and it is the same function the emitter calls rather than a second copy of the
-    // arithmetic. Returns when the read fits; aborts when it does not.
-    void RefuseReadbackLargerThanTheReplySlot(GLsizei width, GLsizei height, GLenum format,
-                                              Uint64 bytes, Uint64 capacity);
+    // emits the record, and names the read. THE REFUSAL ITSELF IS s1's -
+    // ClientSession::RequireReadPixelsReplyFits, forwarding to
+    // ReplySlotPool::RequireReadPixelsFits - and this package does not own a second copy of the
+    // message: two spellings of one refusal is how the two sides come to disagree about which
+    // reads are legal. What c1 owns is the CALL SITE and the number it passes, which is ID-49's
+    // tight extent; the control below is over that, and s1-v3.md §1's cases are over the
+    // helper.
 
     // ID-49. `MGPReadbackInfo::DstSize` is the TIGHT w*h*bytesPerPixel extent - the reply
     // payload - and nothing about the application's pack state crosses the wire. The server

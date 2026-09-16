@@ -198,7 +198,8 @@ TEST(SessionTest, TheDefaultGeometryIsTheFourContractRingSizes) {
     ASSERT_EQ(segments.Create(SessionSegmentSizes{}, MemoryRole::Server), MOBILEGL_OK);
     EXPECT_EQ(segments.CmdRingCapacity(), 8ull * 1024 * 1024);
     EXPECT_EQ(segments.StageBytes(), 32ull * 1024 * 1024);
-    EXPECT_EQ(segments.ReplyBytes(), 8ull * 1024 * 1024);
+    // ID-47: 16 MiB, eight slots of 2 MiB. ProtocolSmokeTest pins the same number on the wire.
+    EXPECT_EQ(segments.ReplyBytes(), 16ull * 1024 * 1024);
     EXPECT_EQ(segments.EventRingCapacity(), 256ull * 1024);
 
     EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Cmd),
@@ -206,9 +207,57 @@ TEST(SessionTest, TheDefaultGeometryIsTheFourContractRingSizes) {
     // SEG_STAGE is not a ring at all - no control page, no cursor triple, no power-of-two
     // rounding - and neither is SEG_REPLY, so both announce exactly what was asked for.
     EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Stage), 32ull * 1024 * 1024);
-    EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Reply), 8ull * 1024 * 1024);
+    EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Reply), 16ull * 1024 * 1024);
     EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Event),
               256ull * 1024 + sizeof(RingControl));
+    segments.Close();
+}
+
+// ID-47 (ID-46 finding 2). The DEFAULT reply pool must hold the largest P5 read: the E2 retrace
+// harness snapshots OpenRA's whole 640x480 surface as GL_RGBA/GL_UNSIGNED_BYTE through the
+// interposer, 1,228,800 bytes, and the previous geometry (8 MiB / 8 slots, 1 MiB minus a 16-byte
+// header) refused it by 180,240 bytes - and refused the 512x512 RGBA8 read s1-v1.md:134 claimed
+// it covered, by sixteen. This is the verifier's case, committed: it posts exactly 640*480*4
+// bytes into a pool built from SessionSegmentSizes{} and reads them back. RED ONCE by reverting
+// SessionSegmentSizes::ReplyBytes to 8 MiB: Post then takes its oversize-abort branch and the
+// case dies, which is the verifier's original outcome. That perturbation was run.
+TEST(SessionTest, TheDefaultReplyGeometryHoldsTheLargestP5Read) {
+    SessionSegments segments;
+    ASSERT_EQ(segments.Create(SessionSegmentSizes{}, MemoryRole::Server), MOBILEGL_OK);
+    ReplySlotPool pool(segments.ReplyBase(), segments.ReplyBytes(), segments.ReplySlotCount());
+    ASSERT_TRUE(pool.Valid());
+    EXPECT_EQ(pool.SlotCount(), 8u);
+    EXPECT_EQ(pool.SlotBytes(), 2u * 1024 * 1024);
+    EXPECT_EQ(pool.MaxReplyBytes(), 2u * 1024 * 1024 - 16u);
+
+    const std::uint64_t kOpenRaSnapshot = 640ull * 480 * 4; // E2's read, the largest in P5
+    const std::uint64_t kHalfKSquare = 512ull * 512 * 4;    // the read s1-v1.md:134 got wrong
+    EXPECT_TRUE(pool.CanHold(kOpenRaSnapshot));
+    EXPECT_TRUE(pool.CanHold(kHalfKSquare));
+
+    std::vector<std::uint8_t> answer(static_cast<std::size_t>(kOpenRaSnapshot));
+    for (std::size_t i = 0; i < answer.size(); ++i) {
+        answer[i] = static_cast<std::uint8_t>(i * 7 + (i >> 12));
+    }
+    pool.Post(1, kReplyStatusOk, answer.data(), answer.size());
+
+    std::vector<std::uint8_t> back(answer.size(), 0);
+    std::int32_t status = -1;
+    std::uint64_t size = 0;
+    ASSERT_TRUE(pool.Read(1, back.data(), back.size(), &status, &size))
+        << "the E2 snapshot does not fit the default reply pool";
+    EXPECT_EQ(status, kReplyStatusOk);
+    EXPECT_EQ(size, kOpenRaSnapshot);
+    EXPECT_EQ(std::memcmp(back.data(), answer.data(), answer.size()), 0);
+
+    // And the 512x512 read, in the next slot, so a geometry that only just clears 640x480 by
+    // some accident of rounding cannot pass this case either.
+    answer.resize(static_cast<std::size_t>(kHalfKSquare));
+    pool.Post(2, kReplyStatusOk, answer.data(), answer.size());
+    back.assign(answer.size(), 0);
+    ASSERT_TRUE(pool.Read(2, back.data(), back.size(), &status, &size));
+    EXPECT_EQ(size, kHalfKSquare);
+    EXPECT_EQ(std::memcmp(back.data(), answer.data(), answer.size()), 0);
     segments.Close();
 }
 
@@ -229,14 +278,61 @@ TEST(SessionTest, TheMemoryLedgerIsPerRoleAndIsReleasedOnClose) {
         const RoleMemorySample sample = SampleRoleMemory(MemoryRole::Client);
         EXPECT_EQ(sample.MappedSegmentBytes, clientBefore + mapped);
 #if defined(__linux__) || defined(__ANDROID__)
-        // VmHWM is the PROCESS's high-water mark, so it is the same number for both roles and
-        // is only meaningful beside the ledger - which is why RoleMemorySample carries both.
+        // The peak is the PROCESS's, so it is the same number for both roles and is only
+        // meaningful beside the ledger - which is why RoleMemorySample carries both.
         EXPECT_GT(sample.PeakRssBytes, 0u);
+        // Holds BY CONSTRUCTION now (the ledger's own running max, RoleMemory.h), not by
+        // the kernel's grace: GitHub run 35079459114 failed exactly this line with VmHWM
+        // 4,784,128 < VmRSS 4,849,664. The control on the construction is the next case.
         EXPECT_GE(sample.PeakRssBytes, sample.CurrentRssBytes);
 #endif
     }
     EXPECT_EQ(LedgerMappedBytes(MemoryRole::Client), clientBefore);
     EXPECT_EQ(LedgerMappedBytes(MemoryRole::Server), serverBefore);
+}
+
+// The kernel's VmHWM is NOT a monotone bound on the kernel's VmRSS at read time: hiwater_rss
+// is stored only when RSS is about to drop, task_mem() reports max(stored, rss-now), and the
+// wave-1 sampler read the two keys in two passes, so the second fopen could grow RSS past the
+// peak the first pass reported. GitHub run 35079459114 (ubuntu-24.04) caught it; the probe under
+// ~/w7/p5-s1-probe reproduced it locally. The rule is therefore that the ledger keeps ITS OWN
+// running peak and folds the kernel's two numbers into it, so a stubbed reader whose current
+// exceeds its peak must not fail. RED ONCE by reverting SampleRoleMemoryInto to
+// `sample.PeakRssBytes = kernelPeakRssBytes;` - the first EXPECT_EQ below then reads 100 against
+// 200 and the EXPECT_GE beside it is the CI line again. That perturbation was run.
+TEST(SessionTest, TheLedgersPeakIsItsOwnRunningMaxAndNeverTheKernelsHighWaterMarkVerbatim) {
+    std::atomic<std::uint64_t> runningPeak{0};
+
+    // The CI shape: the kernel says peak 100, current 200.
+    RoleMemorySample sample = SampleRoleMemoryInto(runningPeak, MemoryRole::Client, 100, 200);
+    EXPECT_EQ(sample.PeakRssBytes, 200u)
+        << "the kernel's peak was reported verbatim although its current exceeded it";
+    EXPECT_GE(sample.PeakRssBytes, sample.CurrentRssBytes);
+    EXPECT_EQ(sample.CurrentRssBytes, 200u);
+    EXPECT_EQ(runningPeak.load(), 200u);
+
+    // A later, smaller sample does not lower it: a running max never decreases.
+    sample = SampleRoleMemoryInto(runningPeak, MemoryRole::Server, 150, 120);
+    EXPECT_EQ(sample.PeakRssBytes, 200u);
+    EXPECT_EQ(sample.CurrentRssBytes, 120u);
+    EXPECT_EQ(sample.Role, MemoryRole::Server);
+
+    // The kernel's peak still counts when it IS the larger number: it is a lower bound on
+    // the true peak that this process's own samples may have missed.
+    sample = SampleRoleMemoryInto(runningPeak, MemoryRole::Client, 300, 100);
+    EXPECT_EQ(sample.PeakRssBytes, 300u);
+    EXPECT_EQ(runningPeak.load(), 300u);
+
+    // And the production sampler reads BOTH keys in ONE pass, so the pair it folds is one
+    // snapshot: on Linux neither number is 0 and the pair is self-consistent.
+#if defined(__linux__) || defined(__ANDROID__)
+    std::uint64_t kernelPeak = 0;
+    std::uint64_t kernelCurrent = 0;
+    ProcessRssBytes(&kernelPeak, &kernelCurrent);
+    EXPECT_GT(kernelPeak, 0u);
+    EXPECT_GT(kernelCurrent, 0u);
+    EXPECT_GE(kernelPeak, kernelCurrent) << "one pass over /proc/self/status disagreed with itself";
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -571,14 +667,72 @@ TEST(SessionTest, DeclinedIsARealAnswerWithNoPayload) {
 #if defined(GTEST_HAS_DEATH_TEST) && GTEST_HAS_DEATH_TEST
 // A reply larger than a slot is FATAL, not chunked and not truncated: P5's only large answer is
 // a blocking ReadPixels whose size the client knows before it emits, so an overflow means the
-// two sides disagree about the frame. A gate that cannot go red is not a gate.
+// two sides disagree about the frame. A gate that cannot go red is not a gate - and a death
+// control with an empty regex is not a gate either (ID-46 finding 10: a bare std::abort(), or a
+// segfault in a broken refusal path, satisfied the previous `""`). The regex below is the
+// diagnostic's own wording, which WireLogFatal echoes to stderr for exactly this reader. RED ONCE
+// by replacing the oversize branch's WireLogFatal with a bare std::abort(): the process still
+// dies, the regex finds nothing, and the case fails on "died but not with the expected error".
+// That perturbation was run. The boundary is a pair: exactly MaxReplyBytes() posts and reads
+// back, one more byte is the named refusal.
 TEST(SessionTestDeath, AReplyLargerThanItsSlotIsFatalRatherThanTruncated) {
     SessionSegments segments;
     ASSERT_EQ(segments.Create(TestSizes(), MemoryRole::Server), MOBILEGL_OK);
     ReplySlotPool pool(segments.ReplyBase(), segments.ReplyBytes(), segments.ReplySlotCount());
     ASSERT_TRUE(pool.Valid());
-    std::vector<std::uint8_t> oversize(pool.SlotBytes() + 1, 0xAB);
-    EXPECT_DEATH(pool.Post(1, kReplyStatusOk, oversize.data(), oversize.size()), "");
+    ASSERT_EQ(pool.SlotBytes(), 8192u);
+    ASSERT_EQ(pool.MaxReplyBytes(), 8176u);
+
+    std::vector<std::uint8_t> exact(pool.MaxReplyBytes(), 0xAB);
+    EXPECT_TRUE(pool.CanHold(exact.size()));
+    pool.Post(1, kReplyStatusOk, exact.data(), exact.size());
+    std::vector<std::uint8_t> back(exact.size(), 0);
+    std::uint64_t size = 0;
+    ASSERT_TRUE(pool.Read(1, back.data(), back.size(), nullptr, &size));
+    EXPECT_EQ(size, exact.size());
+
+    std::vector<std::uint8_t> oversize(pool.MaxReplyBytes() + 1, 0xAB);
+    EXPECT_FALSE(pool.CanHold(oversize.size()));
+    EXPECT_DEATH(pool.Post(2, kReplyStatusOk, oversize.data(), oversize.size()),
+                 "reply pool: Fatal\\{ProtocolCorruption\\} - a 8177 byte answer for seq 2 does not "
+                 "fit a 8192 byte slot \\(payload cap 8176\\)");
+}
+
+// ID-47's client half, on the DEFAULT geometry so the numbers are the ruling's: exactly
+// MaxReplyBytes() = 2,097,136 passes, one more byte is refused BY NAME before emission, and the
+// 1024x512 RGBA8 read - exactly 2 MiB, sixteen bytes over the cap, the same sixteen-byte shape
+// that sank the previous geometry's 512x512 claim - is refused with its own dimensions in the
+// line. The message is the contract's verbatim: `ReadPixels <w>x<h> <format> <bytes> > <cap>`.
+// RED ONCE by replacing RequireReadPixelsFits's WireLogFatal with a bare std::abort() (the two
+// death regexes then match nothing) and, separately, by making CanHold `<` instead of `<=` (the
+// exact-cap call then dies). Both perturbations were run.
+TEST(SessionTestDeath, AReadPixelsLargerThanAReplySlotIsRefusedAtTheClientByName) {
+    SessionSegments segments;
+    ASSERT_EQ(segments.Create(SessionSegmentSizes{}, MemoryRole::Server), MOBILEGL_OK);
+    ReplySlotPool pool(segments.ReplyBase(), segments.ReplyBytes(), segments.ReplySlotCount());
+    ASSERT_TRUE(pool.Valid());
+    const std::uint64_t cap = pool.MaxReplyBytes();
+    ASSERT_EQ(cap, 2097136u);
+    constexpr std::uint32_t kGlRgba = 0x1908;
+    constexpr std::uint32_t kGlUnsignedByte = 0x1401;
+
+    // Exactly the cap: 524,284 RGBA8 pixels in one row. Returns, no death.
+    ASSERT_EQ(524284ull * 1 * 4, cap);
+    EXPECT_TRUE(pool.CanHold(cap));
+    pool.RequireReadPixelsFits(524284, 1, kGlRgba, kGlUnsignedByte, cap);
+
+    // One more byte.
+    EXPECT_FALSE(pool.CanHold(cap + 1));
+    EXPECT_DEATH(pool.RequireReadPixelsFits(524284, 1, kGlRgba, kGlUnsignedByte, cap + 1),
+                 "Fatal\\{ReplyTooLarge, \"ReadPixels 524284x1 0x1908/0x1401 2097137 > 2097136\"\\}");
+
+    // The read a caller would actually make: 1024x512 RGBA8 = 2 MiB, 16 over.
+    EXPECT_DEATH(pool.RequireReadPixelsFits(1024, 512, kGlRgba, kGlUnsignedByte, 1024ull * 512 * 4),
+                 "Fatal\\{ReplyTooLarge, \"ReadPixels 1024x512 0x1908/0x1401 2097152 > 2097136\"\\}");
+
+    // And E2's read, the reason for the geometry, is not refused.
+    pool.RequireReadPixelsFits(640, 480, kGlRgba, kGlUnsignedByte, 640ull * 480 * 4);
+    segments.Close();
 }
 #endif
 
@@ -766,26 +920,15 @@ TEST(SessionTest, ShutdownUnparksTheApplyThreadAndTheJoinIsBounded) {
 }
 
 // ---------------------------------------------------------------------------
-// The ABI fingerprint's mixer
+// The ABI fingerprint's mixer: MOVED to SessionHandshakeTest (ID-46 finding 6).
+//
+// The case that lived here drove MixAbiFingerprint with made-up sizes and never touched
+// CapsAbiFingerprint(), the value the two handshakes actually compare - which had its own
+// second FNV loop and no caller of the mixer at all, so `return 1;` in production left the
+// whole unit lane green. The sensitivity case now starts from CapsAbiFingerprint(), which
+// needs CapsCodec.h and therefore the GL frontend's umbrella header that this suite keeps
+// out; it lives in SessionHandshakeTest.cpp beside the two handshake-guard controls.
 // ---------------------------------------------------------------------------
-
-// A fingerprint that cannot be SHOWN to change is indistinguishable from one that is never
-// compared, which is why the mixer takes its sizes as arguments instead of reading sizeof
-// directly: a test can vary one byte and prove the answer moves.
-TEST(SessionTest, TheAbiFingerprintChangesWhenAnyOfItsInputsDoes) {
-    const std::uint64_t base = MixAbiFingerprint(1024, 1080, 552, 0x00010000, "abc1234");
-    EXPECT_NE(base, 0u) << "0 is reserved for \"not stated\"";
-    EXPECT_EQ(base, MixAbiFingerprint(1024, 1080, 552, 0x00010000, "abc1234"));
-
-    EXPECT_NE(base, MixAbiFingerprint(1025, 1080, 552, 0x00010000, "abc1234"));
-    EXPECT_NE(base, MixAbiFingerprint(1024, 1081, 552, 0x00010000, "abc1234"));
-    EXPECT_NE(base, MixAbiFingerprint(1024, 1080, 553, 0x00010000, "abc1234"));
-    EXPECT_NE(base, MixAbiFingerprint(1024, 1080, 552, 0x00010001, "abc1234"));
-    EXPECT_NE(base, MixAbiFingerprint(1024, 1080, 552, 0x00010000, "abc1235"));
-    // A missing stamp is not the same as an empty one, and neither is the same as a real build.
-    EXPECT_NE(MixAbiFingerprint(1024, 1080, 552, 0x00010000, nullptr),
-              MixAbiFingerprint(1024, 1080, 552, 0x00010000, "abc1234"));
-}
 
 // ---------------------------------------------------------------------------
 // Fix round 1 - the cases the adversarial review's findings earned
@@ -796,13 +939,19 @@ TEST(SessionTest, TheAbiFingerprintChangesWhenAnyOfItsInputsDoes) {
 // appliedSeq is behind, every later advance is a no-op for ever and every WaitForApplied on
 // kWaitForever - the verb barrier and every reply wait - blocks permanently. A hang whose only
 // evidence is one ERROR line is not a diagnosis.
+//
+// The regex names the diagnostic (ID-46 finding 10; see the reply-pool death control for why an
+// empty one was not a gate). RED ONCE by replacing AdvanceMonotonic's WireLogFatal block with a
+// bare std::abort(): the case then fails on "died but not with the expected error". That
+// perturbation was run.
 #if defined(GTEST_HAS_DEATH_TEST) && GTEST_HAS_DEATH_TEST
 TEST(SessionTestDeath, AWatermarkThatMovesBackwardsIsFatalRatherThanIgnored) {
     alignas(4096) RingControl control{};
     InitRingControl(control);
     Watermark::AdvanceApplied(control, 10);
     ASSERT_EQ(control.appliedSeq.load(), 10u);
-    EXPECT_DEATH(Watermark::AdvanceApplied(control, 9), "");
+    EXPECT_DEATH(Watermark::AdvanceApplied(control, 9),
+                 "Fatal\\{ProtocolCorruption, \"watermark\"\\} appliedSeq moved backwards, 10 -> 9");
 }
 #endif
 
@@ -925,10 +1074,17 @@ TEST(SessionTest, TheProducerRemembersWhatItPublishedEvenIfTheWatermarkLags) {
 
 // M-3. FlatBuffers' Verifier::VerifyTable is `return !table || table->Verify(*this)`, so a NULL
 // union member PASSES verification: a 24-byte frame verifies, carries the file identifier,
-// reports msg_type() == Hello, and returns nullptr from msg_as_Hello(). Both handshakes now
-// fold that into their guard instead of dereferencing it. This case is the proof the shape is
-// reachable at all, so the guard cannot be "simplified" away later.
-TEST(SessionTest, AVerifiableFrameCanCarryANullUnionPayload) {
+// reports msg_type() == Hello, and returns nullptr from msg_as_Hello(). Both handshakes fold
+// that into their guard instead of dereferencing it.
+//
+// THIS CASE IS THE PREMISE, NOT THE CONTROL. It proves the shape is reachable - a FlatBuffers
+// property - and nothing about MobileGL: the wave-1 review (ID-46 finding 7) deleted both
+// `msg_as_*() == nullptr` clauses and this case stayed green, because it never calls Accept or
+// Start. The controls on the two guards are SessionHandshakeTest's, which drive this exact
+// frame THROUGH ServerSession::Accept and ClientSession::StartOverTransportPair and require
+// each guard's own refusal line. s1-v1.md:338 claimed this case meant "the guard cannot be
+// simplified away"; it did not, and s1-v3.md says so.
+TEST(SessionTest, ANullUnionFrameVerifiesWhichIsThePremiseOfBothHandshakeGuards) {
     ::flatbuffers::FlatBufferBuilder builder(256);
     auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::Hello,
                                                          ::flatbuffers::Offset<void>());
@@ -1028,26 +1184,69 @@ TEST(SessionTest, TheStageCursorTripleStaysDeadAcrossAWholeSession) {
 // have every var-tail record SKIPPED by Pop, silently, with the record lost and nothing logged on
 // either side. Pop now requires a filler to carry both the flag AND kind == kRingPadRecordKind, so
 // a real record wearing that bit is delivered instead of eaten.
+//
+// THE BIT HAS TO BE ON THE WIRE. The first version of this case asked Reserve(7, kRecPad, 16),
+// and RingProducer::Reserve MASKS kRecPad OUT of whatever the caller passes (Ring.cpp: `flags &
+// ~kRecPad`), so the header it stored had flags == 0, Pop's pad arm was never entered, and the
+// case stayed green with the kind check deleted (ID-46 finding 5, executed by the verifier). So
+// this producer writes the header ITSELF after Reserve, the way a codec with its own header
+// struct does - MGPWireRecHeader and RingRecordHeader are the same eight bytes - which is the one
+// path Reserve's mask cannot cover. RingTest.TheTwoFlagSpacesAreDisjointByTranslation (ID-43) is
+// the same control at the ring; this one is at the SESSION, where what is pinned in addition is
+// that appliedSeq counts the delivered record and does NOT count the genuine filler beside it.
+// RED ONCE by deleting `&& header.kind == kRingPadRecordKind` from RingConsumer::Pop: the record
+// vanishes into the wrap-filler skip, `seen` stays 0 and appliedSeq stays 0, and the case fails
+// on the first EXPECT's message. That perturbation was run.
 TEST(SessionTest, ARecordWearingThePadBitIsDeliveredRatherThanEatenAsAFiller) {
     SessionFixture session;
     ASSERT_TRUE(session.Build(TestSizes()));
 
     // kRecPad is MGPipeCallFlags::kVarTail's bit. Kind 7 is a real opcode, not a filler.
-    void* payload = session.cmdProducer.Reserve(7, kRecPad, 16);
+    void* payload = session.cmdProducer.Reserve(7, kRecNone, 16);
     ASSERT_NE(payload, nullptr);
     std::memset(payload, 0xAB, 16);
+    // Stamp the bit past Reserve's mask, exactly where the codec's header struct would put it.
+    auto* headerBytes = static_cast<std::uint8_t*>(payload) - sizeof(RingRecordHeader);
+    RingRecordHeader stamped{};
+    std::memcpy(&stamped, headerBytes, sizeof(stamped));
+    ASSERT_EQ(stamped.kind, 7u);
+    ASSERT_EQ(stamped.flags & kRecPad, 0u) << "Reserve stopped masking kRecPad";
+    stamped.flags = static_cast<std::uint16_t>(stamped.flags | kRecPad);
+    std::memcpy(headerBytes, &stamped, sizeof(stamped));
     session.producer.PublishAndNotify(1);
 
     int seen = 0;
     std::uint16_t seenKind = 0;
+    std::uint16_t seenFlags = 0;
     while (session.consumer.ApplyOne([&](const RingRecordView& view) {
         seenKind = view.kind;
+        seenFlags = view.flags;
         ++seen;
     })) {
     }
-    EXPECT_EQ(seen, 1) << "the record was skipped as a wrap filler because it wore bit 2";
+    EXPECT_EQ(seen, 1) << "the record was skipped as a wrap filler because it wore bit 2 - Pop's "
+                          "kind check (a filler is kRecPad AND kind == kRingPadRecordKind) is the "
+                          "only thing between a stamped header and a silently deleted record";
     EXPECT_EQ(seenKind, 7);
+    EXPECT_NE(seenFlags & kRecPad, 0u)
+        << "the bit arrives intact: the kind check narrows the SKIP, it does not scrub the bit";
     EXPECT_EQ(session.Control().appliedSeq.load(), 1u);
+
+    // The opposite control, so that "delivered" cannot be satisfied by not skipping anything:
+    // a header wearing kRecPad whose kind IS kRingPadRecordKind is a genuine wrap filler, still
+    // vanishes, and is NOT counted by appliedSeq (R-9: a filler does not advance seq).
+    void* filler = session.cmdProducer.Reserve(kRingPadRecordKind, kRecNone, 16);
+    ASSERT_NE(filler, nullptr);
+    headerBytes = static_cast<std::uint8_t*>(filler) - sizeof(RingRecordHeader);
+    std::memcpy(&stamped, headerBytes, sizeof(stamped));
+    stamped.flags = static_cast<std::uint16_t>(stamped.flags | kRecPad);
+    std::memcpy(headerBytes, &stamped, sizeof(stamped));
+    session.producer.PublishAndNotify(2);
+    while (session.consumer.ApplyOne([&](const RingRecordView&) { ++seen; })) {
+    }
+    EXPECT_EQ(seen, 1) << "a genuine filler was delivered as a record: Pop's skip was removed, "
+                          "not narrowed";
+    EXPECT_EQ(session.Control().appliedSeq.load(), 1u) << "a filler advanced appliedSeq (R-9)";
 }
 
 // The kHostSpan/kRecBorrowSlot collision, made loud. P5 implements no borrowed slots and is ruled

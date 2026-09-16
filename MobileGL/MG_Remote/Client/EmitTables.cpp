@@ -265,20 +265,6 @@ namespace MobileGL::MG_Remote::Client {
                    ReadbackBytesPerPixel(format, type);
         }
 
-        // ID-47's refusal, in its own function so the boundary pair can drive it without a
-        // session. See EmitTables.h.
-        void RefuseOversizeReadback(GLsizei width, GLsizei height, GLenum format, Uint64 bytes,
-                                    Uint64 capacity) {
-            if (bytes <= capacity) return;
-            MGLOG_F("MGPipe: Fatal{ReplyTooLarge, \"ReadPixels %dx%d 0x%04x %llu > %llu\"} - P5 "
-                    "does not chunk a readback (R-10) and must not truncate one; grow "
-                    "MOBILEGL_IPC_REPLY_MB or read less",
-                    static_cast<int>(width), static_cast<int>(height),
-                    static_cast<unsigned>(format), static_cast<unsigned long long>(bytes),
-                    static_cast<unsigned long long>(capacity));
-            std::abort();
-        }
-
         void EmitReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
                             GLenum type, void* pixels) {
             ClientSession& session = RequireSession("ReadPixels");
@@ -305,13 +291,20 @@ namespace MobileGL::MG_Remote::Client {
             info.DstOffset = 0;
             info.DstSize = tight;
 
-            // CHECKED BEFORE THE EMISSION, not after the answer (ID-47). A reply bigger than a
-            // slot is Fatal on the SERVER, and a Fatal there is a dead apply thread with a
-            // client parked in the barrier for ever, naming a byte count and not a read; here
-            // it is one line naming the read. The capacity is read LIVE from the pool rather
-            // than compared against a constant, so s1's growth of SEG_REPLY to 16 MiB / eight
-            // 2 MiB slots needs no edit in this file.
-            RefuseOversizeReadback(width, height, format, tight, session.MaxReplyBytes());
+            // CHECKED BEFORE THE EMISSION, not after the answer (ID-47), and through S1's
+            // HELPER rather than a copy of it here. A reply bigger than a slot is Fatal on the
+            // SERVER too, and s1 keeps that as the last line of defence - but it fires on the
+            // apply thread with the record already on the wire, where all the client sees is a
+            // hang. This one names the read, at the call site that knows what the read was.
+            //
+            // THE NUMBER IS ID-49's TIGHT EXTENT and not the packed one: the pack state never
+            // crosses, so the answer that has to fit a slot is w*h*bytesPerPixel. The cap is
+            // the pool's own, read live, so s1's growth of SEG_REPLY to 16 MiB / eight 2 MiB
+            // slots needed no edit in this file - only the merge.
+            session.RequireReadPixelsReplyFits(static_cast<Uint32>(width),
+                                               static_cast<Uint32>(height),
+                                               static_cast<Uint32>(format),
+                                               static_cast<Uint32>(type), tight);
 
             PixelStoreParameters pack{};
             if (MG_State::pGLContext != nullptr) {
@@ -587,14 +580,6 @@ namespace MobileGL::MG_Remote::Client {
 
     void SetDropClearEmissionForNegativeControl(Bool drop) { g_dropClearEmission = drop; }
     Uint64 DroppedClearEmissions() { return g_droppedClearEmissions; }
-
-    // ID-47's refusal, exported so the boundary pair drives THE EMITTER'S OWN decision rather
-    // than a copy of it. One line, because the arithmetic that produced `bytes` is
-    // TightReadbackBytes' and the capacity is the pool's - this function only decides.
-    void RefuseReadbackLargerThanTheReplySlot(GLsizei width, GLsizei height, GLenum format,
-                                              Uint64 bytes, Uint64 capacity) {
-        RefuseOversizeReadback(width, height, format, bytes, capacity);
-    }
 
     Bool ReadbackPackStateIsTightForTest(GLsizei width, Uint64 bytesPerPixel,
                                          const PixelStoreParameters& pack) {

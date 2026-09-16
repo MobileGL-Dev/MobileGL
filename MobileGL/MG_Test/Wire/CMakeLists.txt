@@ -66,21 +66,25 @@ endif ()
 
 gtest_discover_tests(PipeWireCodecTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 
-# P5 c1's and v1's suites. Both are registered on their own, and both for
-# PipeWireCodecTest's reason - MGLOG_F writes to stdout and to a named file and NEVER to
-# stderr, so a Fatal arm can only be asserted by forking and reading that file back, which
-# needs a main() of its own. Both also reach MG_Pipe, MG_Backend and MG_State, so both carry
+# P5 c1's, v1's and s1's suites. All three are registered on their own, and all three for
+# PipeWireCodecTest's reason: a Fatal arm reports through MGLOG_F, which writes to stdout and to
+# a named file and NEVER to stderr (and with the console sink compiled out, Defines.h, only to
+# the file), so asserting one means naming a log file before anything logs - which needs a
+# main() of its own. All three also reach MG_Pipe, MG_Backend and MG_State, so all three carry
 # those include paths.
 #
-#   RemoteClientTest  the 71-slot emit table, the caps mirror, R-8's liveness gates and
-#                     R-17's routing (c1)
-#   ServerLoopTest    the apply thread, the blocking control mailbox, the verb stamp and
-#                     R-11's server-owned staging copy (v1)
+#   RemoteClientTest      the 71-slot emit table, the caps mirror, R-8's liveness gates, R-17's
+#                         routing and ID-47/ID-49's readback rules (c1)
+#   ServerLoopTest        the apply thread, the blocking control mailbox, the verb stamp and
+#                         R-11's server-owned staging copy (v1)
+#   SessionHandshakeTest  the two null-union guards driven THROUGH ServerSession::Accept and
+#                         ClientSession::StartOverTransportPair, and the ABI fingerprint's
+#                         sensitivity case driven from CapsAbiFingerprint() (s1, ID-46 6 and 7)
 #
-# THE ONLY CONFLICT IN THE c1/v1 MERGE, and it is the same-point-append shape BRIEF §5's
-# ownership table exists to prevent: two packages each added a target at the end of one file.
-# Both blocks are kept verbatim; nothing is chosen over anything.
-foreach (wiretest IN ITEMS RemoteClientTest ServerLoopTest)
+# THIS FILE IS THE PHASE'S ONE RECURRING MERGE CONFLICT, and it is the same-point-append shape
+# BRIEF §5's ownership table exists to prevent: three packages, three targets, one end-of-file.
+# The loop is what stops there being a fourth: a package adding a suite adds a NAME.
+foreach (wiretest IN ITEMS RemoteClientTest ServerLoopTest SessionHandshakeTest)
     add_executable(${wiretest} ${wiretest}.cpp)
 
     target_include_directories(${wiretest} PRIVATE

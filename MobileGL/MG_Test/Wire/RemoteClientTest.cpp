@@ -34,6 +34,7 @@
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Remote/CapsCodec.h>
 #include <MG_Remote/Client/CapsMirror.h>
+#include <MG_Remote/Transport/ReplySlot.h>
 #include <MG_Pipe/PipeRoute.h>
 #include <MG_Remote/Client/EmitTables.h>
 
@@ -407,32 +408,44 @@ TEST(RemoteEmitTable, TheE2DropSwitchStartsDisarmed) {
 // =====================================================================================
 
 TEST(RemoteReadback, ExactlyTheCapacityPassesAndOneByteMoreIsRefusedByName) {
-    // THE BOUNDARY PAIR ID-47 ASKS FOR, driven through the emitter's own decision function.
-    // It is not driven through EmitReadPixels, and that is the point: EmitReadPixels needs a
-    // live session before it reaches any of this, so a control over the emitter could only
-    // ever observe Fatal{NoClientSession} and would be green for the wrong reason.
-    constexpr Uint64 kCap = 2u * 1024u * 1024u - 16u; // ID-47's post-growth MaxReplyBytes
+    // ID-47's boundary pair, and it is THE CALL SITE'S half. The refusal itself is s1's
+    // (ReplySlotPool::RequireReadPixelsFits, its own cases in s1-v3.md §1); what c1 owns is
+    // that the number handed to it is the one the emitter computes - ID-49's TIGHT extent -
+    // and that exactly the cap is legal while one byte more is not. So this drives the real
+    // pool with the real helper, over the real arithmetic, and never restates the message.
+    //
+    // A real pool over a real mapping, because CanHold answers false for a null base and a
+    // control built on a default-constructed pool would "refuse" everything for that reason.
+    constexpr std::uint32_t kSlots = 8;
+    constexpr std::uint64_t kSlotBytes = 2u * 1024u * 1024u;
+    std::vector<Uint8> backing(static_cast<size_t>(kSlots) * kSlotBytes);
+    Transport::ReplySlotPool pool(backing.data(), backing.size(), kSlots);
+    const std::uint64_t cap = pool.MaxReplyBytes();
+    ASSERT_GT(cap, 0u) << "the fixture's pool is not configured, so every answer would be refused";
 
-    // The passing half runs IN THIS PROCESS, because "it did not abort" is only a statement if
-    // the thing that would have aborted is the same code.
-    RefuseReadbackLargerThanTheReplySlot(724, 724, 0x1908 /*GL_RGBA*/, kCap, kCap);
+    // ID-47's own number: the E2 retrace snapshot reads 640x480 RGBA8 and it must now FIT.
+    EXPECT_TRUE(pool.CanHold(TightReadbackByteCount(640, 480, 0x1908, 0x1401)))
+        << "the read ID-47 grew SEG_REPLY for still does not fit";
+
+    pool.RequireReadPixelsFits(724, 724, 0x1908, 0x1401, cap);
     SUCCEED() << "exactly the capacity is not an overflow";
 
 #if MGTEST_HAVE_FORK
     const ChildResult child = RunInChild([&] {
-        RefuseReadbackLargerThanTheReplySlot(640, 480, 0x1908 /*GL_RGBA*/, kCap + 1, kCap);
+        Transport::ReplySlotPool inner(backing.data(), backing.size(), kSlots);
+        inner.RequireReadPixelsFits(640, 480, 0x1908, 0x1401, inner.MaxReplyBytes() + 1);
     });
     EXPECT_TRUE(DiedOfAbort(child)) << "one byte over the slot did not abort: " << DescribeStatus(child);
     // ITS OWN FAILURE STRING, AND THE READ'S OWN NUMBERS. A control that only asserted
     // "something died" would pass on Fatal{NoClientSession}, Fatal{UnmigratedVerb} or a
-    // segfault, and this file has three other cases that abort for those reasons.
+    // segfault, and this file has four other cases that abort for those reasons.
     EXPECT_NE(child.Log.find("Fatal{ReplyTooLarge"), std::string::npos) << child.Log;
     EXPECT_NE(child.Log.find("ReadPixels 640x480"), std::string::npos)
         << "the message does not name the read, so an operator cannot tell which one: " << child.Log;
-    EXPECT_NE(child.Log.find(std::to_string(kCap + 1)), std::string::npos)
+    EXPECT_NE(child.Log.find(std::to_string(cap + 1)), std::string::npos)
         << "the message does not carry the byte count";
 #else
-    GTEST_SKIP() << "the refusal reports through MGLOG_F + abort and needs fork() to read back";
+    GTEST_SKIP() << "the refusal reports through a Fatal + abort and needs fork() to read back";
 #endif
 }
 
