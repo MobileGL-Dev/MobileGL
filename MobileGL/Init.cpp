@@ -43,6 +43,11 @@ namespace MobileGL {
             if (logLifecycle) {
                 MGLOG_I("MobileGL closing...");
             }
+            // P5: the split roles come down FIRST - ARCHITECTURE.md:537's order puts the whole
+            // of it before MobileGL::Destroy(), and this function IS MobileGL::Destroy. A no-op
+            // in a monolith build and in a monolith run; see BackendObjects.h for why the
+            // position rather than the call is the load-bearing part.
+            MG_Backend::ShutdownSplitRoles();
             // Before any subsystem the counters name goes away, and before the last frame's
             // numbers can be lost: emits the final summary line and, when
             // MOBILEGL_PIPE_STATS_FILE is set, the JSON dump. A no-op when the counters are
