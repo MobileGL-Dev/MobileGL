@@ -200,6 +200,9 @@ namespace MobileGL::MG_Remote::Client {
         // Peak-RSS accounting for t1 (RoleMemory.h).
         Transport::RoleMemorySample SampleMemory() const;
         void LogMemory(const char* phase) const;
+        // R-10's maximum record bytes and R-9's wrap/wait counts, at teardown, in whatever log
+        // this process writes. See the definition for why it is not only on the stats line.
+        void LogWireLedger() const;
 
     private:
         Wire::PipeWireEncoder m_encoder;

@@ -1161,6 +1161,74 @@ TEST_F(PipeWireCodecTest, MaxRecordBytesSeenStaysFarBelowHalfTheRing) {
     // MGPFramebufferState at 304, so a record only ever grows through its TAIL - which is why
     // the counter is on the encoder and not a constant.
     EXPECT_LT(8u + sizeof(MGPFramebufferState), wire.Cmd().MaxRecordBytes());
+
+    // AND THE CAP THE PROOF IS AGAINST IS PUBLISHED BY THE ENCODER ITSELF. Everything outside
+    // MG_Remote - the summary line's `maxrec=`/`maxcap=`, the session's teardown ledger, the
+    // integration lanes' Harness/WireLedgerChecks - compares against MaxRecordBytesCap() rather
+    // than against MOBILEGL_IPC_RING_MB / 2, because the cap moved twice in this phase without
+    // the environment variable changing (see the paragraph above). If those two ever disagree,
+    // every published `maxrec` percentage is measured against the wrong denominator, and this
+    // is the case that says so.
+    EXPECT_EQ(wire.Encoder().MaxRecordBytesCap(), wire.Cmd().MaxRecordBytes());
+    EXPECT_EQ(wire.Encoder().MaxRecordBytesCap(), Wire2::kCmdBytes / 2);
+}
+
+TEST_F(PipeWireCodecTest, TheCommandRingWrapCountIsWhatTheHeadActuallyDid) {
+    // R-9's wrap reading, and the distinction exit gate E3(e) turned out to depend on.
+    //
+    // `CmdWraps()` is the head crossing a multiple of the capacity - the ring going ROUND -
+    // and it is guaranteed once more bytes are written than the ring holds. `CmdWrapPads()` is
+    // the narrower event: a record that would have STRADDLED the boundary and needed a kRecPad
+    // filler, which is the case R-9's "a pad does not advance seq, both sides skip it and
+    // count again" is about.
+    //
+    // THEY ARE NOT THE SAME NUMBER, and assuming they were is what this case exists to
+    // prevent. A stream of identically sized records whose stride divides a power-of-two
+    // capacity lands on the boundary EXACTLY every time and never straddles it: measured in
+    // the split lane, 1310824 bytes of clears and draws through a 1 MiB SEG_CMD produced one
+    // wrap and ZERO pads. The first cut of E3(e)'s assertion read the pad count and went red
+    // for that arithmetic rather than for anything about the ring.
+    Wire2 wire;
+    EXPECT_EQ(wire.Encoder().CmdWraps(), 0u);
+    EXPECT_EQ(wire.Encoder().CmdWrapPads(), 0u);
+    EXPECT_EQ(wire.Encoder().CmdBytesWritten(), 0u);
+
+    // The stride is MEASURED rather than computed from sizeof: Reserve rounds the header plus
+    // payload up to 8, and a case that restated that arithmetic would be asserting its own
+    // copy of Ring.cpp rather than what the producer did.
+    MGPBindRenderState bind{};
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    const Uint64 stride = wire.Encoder().CmdBytesWritten();
+    ASSERT_GT(stride, 0u);
+    EXPECT_EQ(wire.Encoder().CmdWraps(), 0u) << "one record cannot have taken the ring round";
+
+    // One trip round and a little more, draining after every record so the producer never meets
+    // its own tail. This is the same shape the split lane has under the verb barrier: one
+    // record in flight at a time, the ring recycled behind it - so a wrap here is a wrap
+    // there, and not an artefact of a backed-up queue.
+    const Uint64 records = (Wire2::kCmdBytes / stride) + 3;
+    for (Uint64 i = 1; i < records; ++i) {
+        ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)),
+                  kInvalidSeq)
+            << "the ring refused record " << i << " of " << records;
+        ASSERT_TRUE(wire.PumpOne(&applied));
+    }
+
+    EXPECT_GT(wire.Encoder().CmdBytesWritten(), Wire2::kCmdBytes);
+    EXPECT_EQ(wire.Encoder().CmdWraps(), 1u);
+
+    // AND THE PAD COUNT IS A DIFFERENT NUMBER. With this record the stride is 24 bytes and the
+    // ring is 65536, which leaves a 16-byte remainder: exactly one record per trip finds fewer
+    // than 24 bytes to the boundary and gets a kRecPad filler. Change the stride to one that
+    // DIVIDES the capacity and the same trip produces no pad at all - measured in the split
+    // lane, where 1310824 bytes of clears and draws through a 1 MiB SEG_CMD reported
+    // ringwraps=1 ringpads=0. That is why exit gate E3(e) asserts the WRAP and only records
+    // the pad: a gate on the pad count would be a gate on the sizes in the record catalogue.
+    EXPECT_EQ(Wire2::kCmdBytes % stride, 16u) << "stride " << stride;
+    EXPECT_EQ(wire.Encoder().CmdWrapPads(), 1u);
 }
 
 TEST_F(PipeWireCodecTest, ABigProgramArchiveDoesNotGrowItsRecordAtAll) {
@@ -1607,6 +1675,35 @@ TEST_F(PipeWireCodecTest, ANonZeroSizeWithNoSegmentIsFatal) {
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("with no segment"), std::string::npos) << r.Log;
+}
+
+TEST_F(PipeWireCodecTest, ARecordLargerThanHalfTheRingIsFatalRingOverrun) {
+    // R-10's PROOF OBLIGATION, FAILING ON PURPOSE - the red-once for everything the phase
+    // publishes as `maxrec=`. P5 does no chunking: a record above
+    // RingProducer::MaxRecordBytes() == Capacity()/2 must abort by name at the ENCODER, on the
+    // producing side, rather than becoming a nullptr from Reserve that some caller reads as
+    // "the ring is full, wait" - which on an EMPTY ring would be a wait that never ends.
+    //
+    // The oversized record is a REAL one from the catalogue with a long var-tail, not a forged
+    // header: MGPDrawInfo declares NumDraws and the encoder cross-checks the tail against the
+    // layout that number implies, so this is the shape a genuine emitter bug would take.
+    const ChildResult r = RunInChild([] {
+        Wire2 wire;
+        MGPDrawInfo info{};
+        // Just over half the ring. Wire2's SEG_CMD is 64 KiB, so the cap is 32 KiB.
+        const Uint32 draws =
+            static_cast<Uint32>(((Wire2::kCmdBytes / 2) / sizeof(MGPDrawRange)) + 8);
+        info.NumDraws = draws;
+        std::vector<MGPDrawRange> ranges(draws);
+        (void)wire.Encoder().EncodeRecord(MGPWireOp::DrawVbo, &info, sizeof(info), ranges.data(),
+                                          ranges.size() * sizeof(MGPDrawRange));
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{RingOverrun,"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("exceeds RingProducer::MaxRecordBytes()"), std::string::npos) << r.Log;
+    // The diagnostic has to name R-10 and the decision it forces, because the person reading it
+    // has to choose between early chunking and a bigger ring and neither is a local fix.
+    EXPECT_NE(r.Log.find("does not chunk (R-10)"), std::string::npos) << r.Log;
 }
 
 TEST_F(PipeWireCodecTest, ARunThatLeavesItsSegmentIsFatal) {
