@@ -16,6 +16,7 @@
 #include "../Server/ServerLoop.h"
 #include "../Server/ServerSession.h"
 #include "../Transport/InProcessTransport.h"
+#include "WireTables.h"
 
 #include <MGGitHash.h>
 #include <MG_Pipe/MGPipeCallbacks.h>
@@ -509,6 +510,16 @@ namespace MobileGL::MG_Remote::Client {
                     "default and says so");
         }
 
+        // BOTH, AND m_started FIRST. `Active()` is what the integration lane's skip reads and
+        // `m_started` is what `EmitAndWait` reads, and c1's round-1 rewrite of this function
+        // set only the second of the two - so a fully-handshaken session with an apply thread
+        // running and a caps mirror adopted took Fatal{NoClientSession, "Clear"} on its very
+        // first verb, which is the most confusing possible spelling of "the session is up".
+        // The order matters for the same reason it does at the other end: `Active()` hands a
+        // caller a session it may immediately emit on, so the flag that permits emitting has
+        // to be true before the pointer that grants access to it is published. `Stop()` takes
+        // them down in the mirror order (m_started = false, then g_active = nullptr).
+        m_started = true;
         g_active = this;
         LogMemory("handshake");
 
@@ -521,10 +532,38 @@ namespace MobileGL::MG_Remote::Client {
             Stop();
             return running;
         }
+
+        // ---- 9. AND ONLY NOW THE THIRTY-SEVEN WIRE EMITTERS (R-17). This is the line that
+        // arms `integration-split`: the 21 `DirectGLES.Split.*` entries skip on
+        // `ClientSession::Active() == nullptr`, and every one of the four arming facts is true
+        // at exactly this point and at no earlier one.
+        //
+        // IT IS LAST, AND EACH OF THE FOUR REASONS IS A DIFFERENT FAILURE:
+        //   - after Hello/Welcome (step 2-4), or an emitter would publish into a ring the peer
+        //     has not mapped;
+        //   - after the first CapsSnapshot (step 7), because R-8's liveness gates read the caps
+        //     mirror and a PLACEHOLDER mirror consumes nothing - a record emitted before it
+        //     would go to a server this client has not been told consumes that family;
+        //   - after ServerLoop::Start (step 8), because EmitAndWait BLOCKS on appliedSeq and
+        //     with no apply thread nothing advances it: the first resource_create would spend
+        //     30 seconds in the barrier and then Fatal{BarrierTimeout};
+        //   - on THIS thread, the one that called MG_Backend::Init(), because it is the GL
+        //     thread and table 3 makes gPipeInputs its to touch while the barrier holds.
+        // The publication is safe without a fence because the apply thread never reads these
+        // tables - the server decodes straight into MGPipeApply* - and this thread wrote them
+        // before it can reach any GL entry point.
+        InstallClientWireTables();
         return MOBILEGL_OK;
     }
 
     void ClientSession::Stop() {
+        // FIRST, BEFORE ANYTHING ELSE GOES AWAY (R-17). Every later step here frees something
+        // an emitter dereferences - the rings, the segments, the transports - so a GL call
+        // that arrives during teardown must already be looking at the monolith arm. Putting
+        // the monolith adapters back rather than nulling the rows is deliberate: a null row is
+        // the pre-migration state and would be an undiagnosed crash, and the adapter is a
+        // correct answer for a process that no longer has a session.
+        UninstallClientWireTables();
         if (!m_started) {
             // Start's own failure paths land here with a half-built session. FIVE of them are
             // reached AFTER ServerSession::Accept has already returned OK, so tearing down

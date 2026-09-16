@@ -86,6 +86,23 @@ namespace MobileGL::MG_Remote::Client {
             return armed;
         }
 
+        // ID-49's two halves, in one place so the emitter and its control read the same
+        // arithmetic.
+        //
+        // GL 4.6 8.4.4, pack side: the destination row stride is ROW_LENGTH (or the width)
+        // pixels rounded UP to PACK_ALIGNMENT, the first written byte is offset by SKIP_ROWS
+        // whole strides plus SKIP_PIXELS pixels, and only `width * bytesPerPixel` bytes of each
+        // stride are written - the gaps belong to the application and are never touched. That
+        // last clause is what the control checks with a sentinel.
+        Bool ReadbackPackStateIsTight(GLsizei width, Uint64 bytesPerPixel,
+                                      const PixelStoreParameters& pack) {
+            if (pack.SkipRows != 0 || pack.SkipPixels != 0 || pack.SkipImages != 0) return false;
+            if (pack.RowLength != 0 && pack.RowLength != width) return false;
+            const Uint64 alignment = pack.Alignment > 0 ? static_cast<Uint64>(pack.Alignment) : 1ull;
+            const Uint64 rowBytes = static_cast<Uint64>(width) * bytesPerPixel;
+            return (rowBytes % alignment) == 0;
+        }
+
         // ---- the session, demanded rather than assumed --------------------------------
         //
         // Every class-B slot needs one. A null session here is NOT the monolith answer - the
@@ -203,15 +220,28 @@ namespace MobileGL::MG_Remote::Client {
         }
 
         // How many bytes glReadPixels will pack for this rectangle, from the PACK half of the
-        // pixel-store state. The client has to declare it - MGPReadbackInfo::DstSize is what
-        // sizes the reply and what the client checks against MaxReplyBytes() BEFORE it emits,
-        // because a reply bigger than a slot is Fatal rather than chunked (s1's ReplySlot.h).
+        // pixel-store state.
         //
-        // GL 4.6 8.4.4's arithmetic, and nothing cleverer: a row is rounded up to Alignment,
-        // the LAST row is not padded, and SkipRows/SkipPixels/SkipImages shift the destination
-        // rather than growing it (the application owns those bytes and we never write them).
-        Uint64 PackedReadbackBytes(GLsizei width, GLsizei height, GLenum format, GLenum type) {
-            if (width <= 0 || height <= 0) return 0;
+        // ID-49: THE PACK STATE NEVER CROSSES FOR A READ, AND DstSize IS THE TIGHT EXTENT.
+        // The first version of this computed GL 4.6 8.4.4's PACKED size - row length, skips,
+        // alignment - and handed it over as DstSize. v1's server allocates exactly DstSize and
+        // the real backend honours the live pack state, so a 4x3 RGBA8 read with
+        // PACK_ROW_LENGTH=8, SKIP_ROWS=1, SKIP_PIXELS=2 allocated 80 bytes and the driver wrote
+        // to byte 120. That is the shape of the joint inproc lane's two
+        // DepthReadbackHonoursThePackPixelStoreParameters SEGFAULTs, on both backends.
+        //
+        // So the wire carries a RECTANGLE and not a layout: the server reads with NEUTRAL pack
+        // state into a tight w*h*bytesPerPixel run that IS the reply payload, and the CLIENT -
+        // which is the side that holds the application's pack state, and the only side that
+        // can - scatters those rows into the application's pointer. "OnReadPixels writes
+        // exactly DstSize bytes" still holds; DstSize is now a number both sides derive from
+        // the same three values instead of one side deriving it from state the other cannot
+        // see.
+        //
+        // IT IS FORMAT-AGNOSTIC ON PURPOSE. The depth and depth-stencil reads the 21 split
+        // entries touch take the same rule with no special case, because the rule is about the
+        // LAYOUT and not about the component: bytesPerPixel is whatever the format sizes to.
+        Uint64 ReadbackBytesPerPixel(GLenum format, GLenum type) {
             const TextureInputFormat inputFormat =
                 MG_Util::ConvertGLEnumToTextureInputFormat(format);
             const TexturePixelDataType dataType = MG_Util::ConvertGLEnumToTexturePixelDataType(type);
@@ -226,18 +256,27 @@ namespace MobileGL::MG_Remote::Client {
                         static_cast<unsigned>(format), static_cast<unsigned>(type));
                 std::abort();
             }
+            return static_cast<Uint64>(bytesPerPixel);
+        }
 
-            PixelStoreParameters pack{};
-            if (MG_State::pGLContext != nullptr) {
-                pack = MG_State::pGLContext->GetPixelStoreParameters(/*isUnpack=*/false);
-            }
-            const Uint64 rowPixels =
-                pack.RowLength > 0 ? static_cast<Uint64>(pack.RowLength) : static_cast<Uint64>(width);
-            const Uint64 alignment = pack.Alignment > 0 ? static_cast<Uint64>(pack.Alignment) : 1ull;
-            const Uint64 rowBytes = rowPixels * static_cast<Uint64>(bytesPerPixel);
-            const Uint64 paddedRow = ((rowBytes + alignment - 1) / alignment) * alignment;
-            const Uint64 lastRow = static_cast<Uint64>(width) * static_cast<Uint64>(bytesPerPixel);
-            return paddedRow * (static_cast<Uint64>(height) - 1) + lastRow;
+        Uint64 TightReadbackBytes(GLsizei width, GLsizei height, GLenum format, GLenum type) {
+            if (width <= 0 || height <= 0) return 0;
+            return static_cast<Uint64>(width) * static_cast<Uint64>(height) *
+                   ReadbackBytesPerPixel(format, type);
+        }
+
+        // ID-47's refusal, in its own function so the boundary pair can drive it without a
+        // session. See EmitTables.h.
+        void RefuseOversizeReadback(GLsizei width, GLsizei height, GLenum format, Uint64 bytes,
+                                    Uint64 capacity) {
+            if (bytes <= capacity) return;
+            MGLOG_F("MGPipe: Fatal{ReplyTooLarge, \"ReadPixels %dx%d 0x%04x %llu > %llu\"} - P5 "
+                    "does not chunk a readback (R-10) and must not truncate one; grow "
+                    "MOBILEGL_IPC_REPLY_MB or read less",
+                    static_cast<int>(width), static_cast<int>(height),
+                    static_cast<unsigned>(format), static_cast<unsigned long long>(bytes),
+                    static_cast<unsigned long long>(capacity));
+            std::abort();
         }
 
         void EmitReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
@@ -251,7 +290,9 @@ namespace MobileGL::MG_Remote::Client {
             // MarkReadPixelsPackBuffer(): a second call there would be the "wire it twice"
             // shape, and the per-row counter b1's unit cases assert on would then count one
             // read as two.
-            const Uint64 bytes = PackedReadbackBytes(width, height, format, type);
+            if (width <= 0 || height <= 0) return;
+            const Uint64 bytesPerPixel = ReadbackBytesPerPixel(format, type);
+            const Uint64 tight = static_cast<Uint64>(width) * static_cast<Uint64>(height) * bytesPerPixel;
 
             MG_Pipe::MGPReadbackInfo info{};
             info.Res = MG_Pipe::kMGPipeNullHandle; // "the bound read surface answers"
@@ -262,27 +303,41 @@ namespace MobileGL::MG_Remote::Client {
             info.Target = 0;
             info.Level = 0;
             info.DstOffset = 0;
-            info.DstSize = bytes;
+            info.DstSize = tight;
 
-            // CHECKED BEFORE THE EMISSION, not after the answer. A reply bigger than a slot is
-            // Fatal on the server, and a Fatal there is a dead apply thread with a client
-            // parked in the barrier for ever; here it is one line naming the number.
-            const Uint64 capacity = session.MaxReplyBytes();
-            if (bytes > capacity) {
-                MGLOG_F("MGPipe: Fatal{ReplyTooLarge, \"read_pixels\"} %llu bytes into a %llu-byte "
-                        "reply slot - P5 does not chunk a readback (R-10); raise the reply pool's "
-                        "slot size or shrink the read",
-                        static_cast<unsigned long long>(bytes),
-                        static_cast<unsigned long long>(capacity));
-                std::abort();
+            // CHECKED BEFORE THE EMISSION, not after the answer (ID-47). A reply bigger than a
+            // slot is Fatal on the SERVER, and a Fatal there is a dead apply thread with a
+            // client parked in the barrier for ever, naming a byte count and not a read; here
+            // it is one line naming the read. The capacity is read LIVE from the pool rather
+            // than compared against a constant, so s1's growth of SEG_REPLY to 16 MiB / eight
+            // 2 MiB slots needs no edit in this file.
+            RefuseOversizeReadback(width, height, format, tight, session.MaxReplyBytes());
+
+            PixelStoreParameters pack{};
+            if (MG_State::pGLContext != nullptr) {
+                pack = MG_State::pGLContext->GetPixelStoreParameters(/*isUnpack=*/false);
             }
 
             Int32 status = 0;
-            // The pixels land straight in the application's buffer: the barrier's wait IS the
-            // reply's wait (R-3), so this costs no round trip beyond the one the barrier was
-            // already paying.
+            if (ReadbackPackStateIsTight(width, bytesPerPixel, pack)) {
+                // THE COMMON CASE, AND IT KEEPS THE ZERO-COPY. A neutral pack state means the
+                // destination layout IS the tight layout, so the reply lands straight in the
+                // application's buffer and there is no bounce at all. It is a fast path for the
+                // SAME bytes, not a second rule: ScatterTightReadback below is a memcpy of the
+                // whole run in exactly this case, and the control drives that function.
+                session.EmitAndWait(MG_Pipe::MGPWireOp::ReadPixels, &info, sizeof(info), nullptr, 0,
+                                    pixels, tight, &status);
+                return;
+            }
+
+            // The bounce is the price of the application having asked for a layout. It is the
+            // tight size and never more, and it is freed before this returns - R-11's rule one
+            // level out: nothing here outlives the call.
+            Vector<Uint8> bounce(static_cast<SizeT>(tight));
             session.EmitAndWait(MG_Pipe::MGPWireOp::ReadPixels, &info, sizeof(info), nullptr, 0,
-                                pixels, bytes, &status);
+                                bounce.data(), tight, &status);
+            ScatterTightReadbackIntoPackState(bounce.data(), pixels, width, height, bytesPerPixel,
+                                              pack);
         }
 
         void EmitPresent() {
@@ -532,5 +587,51 @@ namespace MobileGL::MG_Remote::Client {
 
     void SetDropClearEmissionForNegativeControl(Bool drop) { g_dropClearEmission = drop; }
     Uint64 DroppedClearEmissions() { return g_droppedClearEmissions; }
+
+    // ID-47's refusal, exported so the boundary pair drives THE EMITTER'S OWN decision rather
+    // than a copy of it. One line, because the arithmetic that produced `bytes` is
+    // TightReadbackBytes' and the capacity is the pool's - this function only decides.
+    void RefuseReadbackLargerThanTheReplySlot(GLsizei width, GLsizei height, GLenum format,
+                                              Uint64 bytes, Uint64 capacity) {
+        RefuseOversizeReadback(width, height, format, bytes, capacity);
+    }
+
+    Bool ReadbackPackStateIsTightForTest(GLsizei width, Uint64 bytesPerPixel,
+                                         const PixelStoreParameters& pack) {
+        return ReadbackPackStateIsTight(width, bytesPerPixel, pack);
+    }
+
+    Uint64 TightReadbackByteCount(GLsizei width, GLsizei height, GLenum format, GLenum type) {
+        return TightReadbackBytes(width, height, format, type);
+    }
+
+    // ID-49's scatter. Exported for the same reason as the refusal above: the control drives
+    // THIS, which is what the emitter calls, rather than a second copy of 8.4.4's arithmetic.
+    void ScatterTightReadbackIntoPackState(const void* tight, void* destination, GLsizei width,
+                                           GLsizei height, Uint64 bytesPerPixel,
+                                           const PixelStoreParameters& pack) {
+        if (tight == nullptr || destination == nullptr || width <= 0 || height <= 0) return;
+        const Uint64 rowPixels =
+            pack.RowLength > 0 ? static_cast<Uint64>(pack.RowLength) : static_cast<Uint64>(width);
+        const Uint64 alignment = pack.Alignment > 0 ? static_cast<Uint64>(pack.Alignment) : 1ull;
+        const Uint64 strideBytes =
+            ((rowPixels * bytesPerPixel + alignment - 1) / alignment) * alignment;
+        const Uint64 writtenPerRow = static_cast<Uint64>(width) * bytesPerPixel;
+        // SKIP_IMAGES is in the parameter set and is meaningless for a 2D read, so it is
+        // applied as GL defines it (whole images of ROW_LENGTH x IMAGE_HEIGHT) rather than
+        // ignored - ignoring a non-zero one would silently write over the application's first
+        // image.
+        const Uint64 imageRows =
+            pack.ImageHeight > 0 ? static_cast<Uint64>(pack.ImageHeight) : static_cast<Uint64>(height);
+        auto* out = static_cast<Uint8*>(destination) +
+                    static_cast<Uint64>(pack.SkipImages) * imageRows * strideBytes +
+                    static_cast<Uint64>(pack.SkipRows) * strideBytes +
+                    static_cast<Uint64>(pack.SkipPixels) * bytesPerPixel;
+        const auto* in = static_cast<const Uint8*>(tight);
+        for (Uint64 row = 0; row < static_cast<Uint64>(height); ++row) {
+            std::memcpy(out + row * strideBytes, in + row * writtenPerRow,
+                        static_cast<SizeT>(writtenPerRow));
+        }
+    }
 
 } // namespace MobileGL::MG_Remote::Client

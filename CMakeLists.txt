@@ -533,6 +533,13 @@ if (MOBILEGL_PIPE_PUSH)
         # by pointer beside the record), so the codec is live code only in the VERIFY lane,
         # where the applier serialises, deserialises and field-compares before storing.
         MobileGL/MG_State/GLState/ProgramState/ProgramArtifactsCodec.cpp
+        # P5's contract (integrator ruling R-17, package c1): the MONOLITH arm of the
+        # client->wire routing - the thirty-seven adapters that install gMGPipeScreen /
+        # gMGPipeContext over the MGPipeApply* entry points, and the reply mailbox the four
+        # acceptance rows answer through. Push-only for the same G1 reason as the five above:
+        # the two tables are inline variables that are zero in a pull build and nothing there
+        # can reach a thunk.
+        MobileGL/MG_Pipe/PipeRoute.cpp
     )
 endif()
 
@@ -574,6 +581,12 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # P5 c1: the client role's BackendObject. pActiveBackendObject holds one of these
         # under split (table 3); the hook that installs it is v1's, in MG_Backend/Init.cpp.
         MobileGL/MG_Remote/Client/BackendObject_Remote.cpp
+        # P5 c1, ruling R-17: the ENCODE TWIN of gMGPipeWireRecordApply - the thirty-seven
+        # emitters installed over the two generated tables, which is what stops every
+        # resource/CSO/texture/program record executing synchronously on the GL thread under
+        # inproc. The monolith arm of the same routing is MG_Pipe/PipeRoute.cpp, in the
+        # PIPE_PUSH list above, because it must exist in a push build that has no MG_Remote.
+        MobileGL/MG_Remote/Client/WireTables.cpp
         # P5 b1's two: the conservative GPU-write set the client must build because all six
         # MarkGpuWritten producers are on the server's side of the line, and the
         # block-granularity persistent-map push that tier T2 makes mandatory.

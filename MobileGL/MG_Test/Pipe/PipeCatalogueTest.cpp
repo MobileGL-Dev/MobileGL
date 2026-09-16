@@ -25,6 +25,10 @@
 #if MOBILEGL_PIPE_PUSH
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/PipeApply.h>
+// P5 R-17: the routing that INSTALLS the two tables. Included here so that the installation
+// case below states the partition deterministically rather than depending on whether some
+// other object in this particular test binary happened to drag the installer in.
+#include <MG_Pipe/PipeRoute.h>
 #endif
 
 using namespace MobileGL;
@@ -101,17 +105,111 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
     EXPECT_EQ(ClassCount<kCtxVerb>(), 13u);
 }
 
-// An uninstalled pipe is every entry null - which is exactly what "this subsystem has not
-// been migrated, keep pulling" means (plan B section 4.1).
+// A row nobody has migrated is null - which is exactly what "this subsystem has not been
+// migrated, keep pulling" means (plan B section 4.1).
+//
+// UNTIL P5 R-17 THAT WAS EVERY ROW, and this case said so. It is now EXACTLY THE 34 ROWS WITH
+// NO MGPipeApply* ENTRY POINT: the other 37 have an applier, R-17 installs adapters over them,
+// and a null there would no longer mean "keep pulling" - `MG_Impl/Pipe`'s call sites go through
+// the thunks, so a null would mean "call through a null pointer". The number is asserted rather
+// than the emptiness, because "37 installed" and "34 still null" are the two halves of a
+// partition and a case that checked only one of them would pass an installer that had
+// overwritten rows it does not own.
+// THE NAME IS KEPT, AND SO IS THE STATEMENT IT MAKES - only the ROWS it makes it about have
+// narrowed. G2/G14 compare ctest names against a pre-P5 baseline and require ZERO removed, so
+// renaming a case is a removal even when the new name is better: it is indistinguishable, from
+// the gate's side, from a case that was deleted. So this case stays, asserting the half that is
+// still true, and the new half below is an ADDED name.
 TEST(PipeCatalogue, UninstalledTablesAreAllNull) {
     const void* const* screen = reinterpret_cast<const void* const*>(&gMGPipeScreen);
-    for (SizeT i = 0; i < kMGPipeScreenCallCount; ++i) {
-        EXPECT_EQ(screen[i], nullptr) << "screen entry " << i;
-    }
     const void* const* context = reinterpret_cast<const void* const*>(&gMGPipeContext);
-    for (SizeT i = 0; i < kMGPipeContextCallCount; ++i) {
-        EXPECT_EQ(context[i], nullptr) << "context entry " << i;
+#if MOBILEGL_PIPE_PUSH
+    MGPipeInstallMonolithTables();
+    // The 34 rows with no MGPipeApply* entry point are still null, and null still means "this
+    // subsystem has not been migrated, keep pulling". Named rather than counted, because the
+    // count is the other case's job and two cases asserting the same number would both go red
+    // for one change.
+    EXPECT_EQ(gMGPipeContext.SetShaderBuffers, nullptr);
+    EXPECT_EQ(gMGPipeContext.SetStreamOutputTargets, nullptr);
+    EXPECT_EQ(gMGPipeContext.DrawVbo, nullptr);
+    EXPECT_EQ(gMGPipeContext.Present, nullptr);
+    EXPECT_EQ(gMGPipeContext.SetSwapInterval, nullptr);
+    EXPECT_EQ(gMGPipeScreen.GetCaps, nullptr);
+    EXPECT_EQ(gMGPipeContext.QueryCreate, nullptr);
+    EXPECT_EQ(gMGPipeScreen.FenceCreate, nullptr);
+#else
+    // A pull build compiles no applier and no routing, so the pre-migration statement is the
+    // whole truth there and this case is the one that says so.
+    for (SizeT i = 0; i < kMGPipeScreenCallCount; ++i) EXPECT_EQ(screen[i], nullptr) << i;
+    for (SizeT i = 0; i < kMGPipeContextCallCount; ++i) EXPECT_EQ(context[i], nullptr) << i;
+#endif
+    (void)screen;
+    (void)context;
+}
+
+TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
+    const void* const* screen = reinterpret_cast<const void* const*>(&gMGPipeScreen);
+    const void* const* context = reinterpret_cast<const void* const*>(&gMGPipeContext);
+    SizeT installed = 0;
+    SizeT nulls = 0;
+
+#if MOBILEGL_PIPE_PUSH
+    // IDEMPOTENT, and called here on purpose: what this case observes is WHICH rows the
+    // installer fills, not whether an installer ran somewhere in this binary. Leaving that to
+    // ambient linkage is what made the same assertion pass in one build directory and fail in
+    // another - the object file carrying a static initialiser was dropped by the linker in the
+    // binaries that did not name a symbol in it.
+    MGPipeInstallMonolithTables();
+#endif
+
+    for (SizeT i = 0; i < kMGPipeScreenCallCount; ++i) {
+        if (screen[i] != nullptr) ++installed; else ++nulls;
     }
+    for (SizeT i = 0; i < kMGPipeContextCallCount; ++i) {
+        if (context[i] != nullptr) ++installed; else ++nulls;
+    }
+    EXPECT_EQ(installed + nulls, static_cast<SizeT>(kMGPipeCallCount));
+
+#if MOBILEGL_PIPE_PUSH
+    // 33 + 4 = 37, and the split is the honest shape of R-17 rather than an implementation
+    // detail: 37 is the number of MGPipeApply* entry points PipeApply.h declares, 33 of them
+    // fit a GENERATED row and go in the two tables, and FOUR cannot be expressed by any
+    // generated signature and go in the hand-written escape table beside them
+    // (ResourceRespecify's uncarried initialBytes, ResourceFlushRange's likewise,
+    // MapPersistent's size + seedBytes + void* return, CreateShaderState's seven blobrefs and
+    // two typed pointers - each one a CONTRACT-P5 ruling, see MG_Pipe/PipeRoute.h).
+    //
+    // BOTH NUMBERS ARE ASSERTED. If the escape table were left out of this case, moving a row
+    // out of the generated tables and forgetting to install its escape would read as a smaller
+    // "installed" count and nothing else - and the call site would take a null.
+    EXPECT_EQ(installed, 33u) << "the routed rows and the applier's entry points disagree";
+    EXPECT_EQ(nulls, static_cast<SizeT>(kMGPipeCallCount) - 33u);
+    const void* const* escapes = reinterpret_cast<const void* const*>(&gMGPipeRouteEscapes);
+    SizeT escapesInstalled = 0;
+    for (SizeT i = 0; i < sizeof(MGPipeRouteEscapes) / sizeof(void*); ++i) {
+        if (escapes[i] != nullptr) ++escapesInstalled;
+    }
+    EXPECT_EQ(escapesInstalled, 4u) << "an escape row is null; its call site would take a null "
+                                       "pointer rather than fall back to anything";
+    EXPECT_EQ(installed + escapesInstalled, 37u)
+        << "the two tables plus the escapes must be exactly PipeApply.h's entry points";
+
+    // And the rows that MUST still be null, named rather than counted: these are calls with no
+    // applier at all (CONTRACT-P5 table 1 rows 13, 14: "no applier entry point exists"), plus
+    // the two verbs the census measured as having zero MG_Impl call sites. An installer that
+    // filled one of these would be claiming an implementation that does not exist.
+    EXPECT_EQ(gMGPipeContext.SetShaderBuffers, nullptr);
+    EXPECT_EQ(gMGPipeContext.SetStreamOutputTargets, nullptr);
+    EXPECT_EQ(gMGPipeContext.DrawVbo, nullptr);
+    EXPECT_EQ(gMGPipeContext.Present, nullptr);
+    EXPECT_EQ(gMGPipeContext.SetSwapInterval, nullptr);
+    EXPECT_EQ(gMGPipeScreen.GetCaps, nullptr);
+#else
+    // A pull build compiles no applier and no routing, so the pre-migration statement is still
+    // the whole truth there.
+    EXPECT_EQ(installed, 0u);
+    EXPECT_EQ(nulls, static_cast<SizeT>(kMGPipeCallCount));
+#endif
 }
 
 // The retirement ratchet of the migration carrier (section 6.3): the constant and the

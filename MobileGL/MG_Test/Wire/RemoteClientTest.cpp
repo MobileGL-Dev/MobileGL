@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <vector>
 #include <string>
 
 #include "Includes.h"
@@ -33,6 +34,7 @@
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Remote/CapsCodec.h>
 #include <MG_Remote/Client/CapsMirror.h>
+#include <MG_Pipe/PipeRoute.h>
 #include <MG_Remote/Client/EmitTables.h>
 
 #if !defined(_WIN32)
@@ -399,6 +401,235 @@ TEST(RemoteEmitTable, TheE2DropSwitchStartsDisarmed) {
     EXPECT_EQ(DroppedClearEmissions(), 0u)
         << "arming and disarming the control must not, by itself, drop anything";
 }
+
+// =====================================================================================
+// ID-47: a readback larger than a reply slot is refused at the CLIENT, by name
+// =====================================================================================
+
+TEST(RemoteReadback, ExactlyTheCapacityPassesAndOneByteMoreIsRefusedByName) {
+    // THE BOUNDARY PAIR ID-47 ASKS FOR, driven through the emitter's own decision function.
+    // It is not driven through EmitReadPixels, and that is the point: EmitReadPixels needs a
+    // live session before it reaches any of this, so a control over the emitter could only
+    // ever observe Fatal{NoClientSession} and would be green for the wrong reason.
+    constexpr Uint64 kCap = 2u * 1024u * 1024u - 16u; // ID-47's post-growth MaxReplyBytes
+
+    // The passing half runs IN THIS PROCESS, because "it did not abort" is only a statement if
+    // the thing that would have aborted is the same code.
+    RefuseReadbackLargerThanTheReplySlot(724, 724, 0x1908 /*GL_RGBA*/, kCap, kCap);
+    SUCCEED() << "exactly the capacity is not an overflow";
+
+#if MGTEST_HAVE_FORK
+    const ChildResult child = RunInChild([&] {
+        RefuseReadbackLargerThanTheReplySlot(640, 480, 0x1908 /*GL_RGBA*/, kCap + 1, kCap);
+    });
+    EXPECT_TRUE(DiedOfAbort(child)) << "one byte over the slot did not abort: " << DescribeStatus(child);
+    // ITS OWN FAILURE STRING, AND THE READ'S OWN NUMBERS. A control that only asserted
+    // "something died" would pass on Fatal{NoClientSession}, Fatal{UnmigratedVerb} or a
+    // segfault, and this file has three other cases that abort for those reasons.
+    EXPECT_NE(child.Log.find("Fatal{ReplyTooLarge"), std::string::npos) << child.Log;
+    EXPECT_NE(child.Log.find("ReadPixels 640x480"), std::string::npos)
+        << "the message does not name the read, so an operator cannot tell which one: " << child.Log;
+    EXPECT_NE(child.Log.find(std::to_string(kCap + 1)), std::string::npos)
+        << "the message does not carry the byte count";
+#else
+    GTEST_SKIP() << "the refusal reports through MGLOG_F + abort and needs fork() to read back";
+#endif
+}
+
+// =====================================================================================
+// ID-49: the pack state never crosses; the client scatters the tight rows
+// =====================================================================================
+
+TEST(RemoteReadback, DstSizeIsTheTightExtentAndNeverThePackedOne) {
+    // The number v1 allocates on the server. It must not move with the pack state, because the
+    // server reads with a NEUTRAL one and cannot see the client's: the first version of this
+    // emitter declared GL 8.4.4's PACKED size, v1 allocated exactly that, and the driver then
+    // wrote past it - two SEGFAULTs on the joint inproc lane, both backends.
+    constexpr GLenum kRgba = 0x1908;
+    constexpr GLenum kUByte = 0x1401;
+    EXPECT_EQ(TightReadbackByteCount(4, 3, kRgba, kUByte), 4u * 3u * 4u);
+    EXPECT_EQ(TightReadbackByteCount(640, 480, kRgba, kUByte), 640u * 480u * 4u);
+    // ID-47's own arithmetic depends on this: 640x480 RGBA8 is what the E2 retrace snapshot
+    // reads, and 1,228,800 is the number that forced SEG_REPLY to grow.
+    EXPECT_EQ(TightReadbackByteCount(640, 480, kRgba, kUByte), 1228800u);
+}
+
+TEST(RemoteReadback, TheTightRowsAreScatteredWhereThePackStateSaysAndTheGapsAreLeftAlone) {
+    // ID-49's control, and it is the exact case the cross-family review found: 4x3 RGBA8 with
+    // PACK_ROW_LENGTH=8, SKIP_ROWS=1, SKIP_PIXELS=2. Stride = 8*4 = 32; the first written byte
+    // is 1*32 + 2*4 = 40; each row writes 4*4 = 16 bytes and the remaining 16 of its stride
+    // belong to the application.
+    constexpr Uint64 kBpp = 4;
+    constexpr GLsizei kW = 4;
+    constexpr GLsizei kH = 3;
+    constexpr Uint8 kSentinel = 0xCD;
+
+    PixelStoreParameters pack{};
+    pack.RowLength = 8;
+    pack.SkipRows = 1;
+    pack.SkipPixels = 2;
+    pack.Alignment = 4;
+
+    // THE INPUT, not the state under test: every source byte is distinct, so a scatter that
+    // wrote the right COUNT of bytes from the wrong offset cannot look correct.
+    std::vector<Uint8> tight(static_cast<size_t>(kW) * kH * kBpp);
+    for (size_t i = 0; i < tight.size(); ++i) tight[i] = static_cast<Uint8>(i);
+
+    std::vector<Uint8> destination(512, kSentinel);
+    ScatterTightReadbackIntoPackState(tight.data(), destination.data(), kW, kH, kBpp, pack);
+
+    const size_t stride = 8 * 4;
+    const size_t first = 1 * stride + 2 * 4;
+    for (size_t row = 0; row < static_cast<size_t>(kH); ++row) {
+        for (size_t byte = 0; byte < static_cast<size_t>(kW) * kBpp; ++byte) {
+            EXPECT_EQ(destination[first + row * stride + byte],
+                      tight[row * static_cast<size_t>(kW) * kBpp + byte])
+                << "row " << row << " byte " << byte << " landed somewhere else";
+        }
+    }
+
+    // THE GAPS, which is the half that makes this a control rather than a copy of the loop
+    // above: the bytes the pack state does not name belong to the application and must still
+    // hold their sentinel. Removing the skips from the scatter passes the loop above and fails
+    // here; widening the per-row copy to the stride passes both loops above and fails here.
+    size_t touched = 0;
+    for (size_t i = 0; i < destination.size(); ++i) {
+        const bool inWrittenRow =
+            i >= first && ((i - first) % stride) < static_cast<size_t>(kW) * kBpp &&
+            ((i - first) / stride) < static_cast<size_t>(kH);
+        if (!inWrittenRow) {
+            EXPECT_EQ(destination[i], kSentinel)
+                << "byte " << i << " is outside the rectangle GL names and was overwritten";
+        } else {
+            ++touched;
+        }
+    }
+    EXPECT_EQ(touched, tight.size()) << "the scatter wrote a different number of bytes than the "
+                                        "reply carried";
+}
+
+TEST(RemoteReadback, TheFastPathIsTakenExactlyWhenTheScatterWouldChangeNothing) {
+    // EmitReadPixels reads the reply STRAIGHT into the application's pointer when
+    // ReadbackPackStateIsTight says so, and pays for a bounce buffer otherwise. That is only
+    // legal if the predicate and the scatter AGREE - so this case drives BOTH and compares
+    // them, rather than testing either alone. A predicate that said "tight" for a layout the
+    // scatter would have rearranged is a silently wrong picture with no bounce to blame.
+    constexpr Uint64 kBpp = 4;
+    constexpr GLsizei kW = 5;
+    constexpr GLsizei kH = 3;
+    std::vector<Uint8> tight(static_cast<size_t>(kW) * kH * kBpp);
+    for (size_t i = 0; i < tight.size(); ++i) tight[i] = static_cast<Uint8>(i * 7 + 1);
+
+    // Six layouts, chosen so both answers appear: a bare default, an explicit equal row
+    // length, an alignment the row already satisfies, an alignment it does not, a skip, and a
+    // wider row. If every case agreed on "tight" the comparison below would be vacuous, so the
+    // count of each answer is asserted too.
+    std::vector<PixelStoreParameters> layouts(6);
+    layouts[1].RowLength = kW;
+    layouts[2].Alignment = 4;   // 5*4 = 20, already a multiple of 4
+    layouts[3].Alignment = 8;   // 20 is not a multiple of 8 - the rows gain padding
+    layouts[4].SkipPixels = 1;
+    layouts[5].RowLength = 8;
+
+    int tightCount = 0;
+    for (size_t i = 0; i < layouts.size(); ++i) {
+        const PixelStoreParameters& pack = layouts[i];
+        std::vector<Uint8> destination(4096, 0);
+        ScatterTightReadbackIntoPackState(tight.data(), destination.data(), kW, kH, kBpp, pack);
+        destination.resize(tight.size());
+        const bool scatterChangedNothing = (destination == tight);
+        const bool predicateSaysTight =
+            ReadbackPackStateIsTightForTest(kW, kBpp, pack) != 0;
+        EXPECT_EQ(predicateSaysTight, scatterChangedNothing)
+            << "layout " << i << ": the fast-path predicate and the scatter disagree";
+        if (predicateSaysTight) ++tightCount;
+    }
+    EXPECT_GT(tightCount, 0) << "no layout took the fast path, so the equality above is vacuous";
+    EXPECT_LT(tightCount, static_cast<int>(layouts.size()))
+        << "every layout took the fast path, so the equality above is vacuous";
+}
+
+// =====================================================================================
+// R-17: the routing, its reply mailbox, and the arm that is actually installed
+// =====================================================================================
+
+TEST(PipeRouting, TheTablesAreInstalledWithoutAnybodyHavingRememberedTo) {
+    // The gate on the install MECHANISM rather than on the table contents (PipeCatalogueTest
+    // owns the partition). Nothing in this file calls an installer; the tables are installed
+    // because MG_Pipe/PipeRoute.h's inline variable is in this binary, which is the property
+    // that a static initialiser inside PipeRoute.cpp did NOT have - the linker dropped that
+    // object from every test binary that named no symbol in it, and five CsoCacheTest cases
+    // took a null function pointer.
+    EXPECT_TRUE(MGPipeTablesAreInstalled());
+    EXPECT_EQ(static_cast<int>(MGPipeInstalledArm()), static_cast<int>(MGPipeRouteArm::kMonolith))
+        << "this process has no ClientSession, so the monolith adapters must be the arm";
+}
+
+TEST(PipeRouting, AnAnswerIsWhatTheRowSaidAndDeclinedIsFalseRatherThanAFailure) {
+    const Uint64 takenBefore = MGPipeRepliesTaken();
+    const Uint64 declinedBefore = MGPipeRepliesDeclined();
+
+    const MGPReplySlot ok = MGPipeMintReplySlot();
+    MGPipePostReply(ok, 0 /*OK*/, 1);
+    EXPECT_TRUE(MGPipeTakeReplyBool(ok, "unit"));
+
+    const MGPReplySlot declined = MGPipeMintReplySlot();
+    MGPipePostReply(declined, 1 /*DECLINED*/, 0);
+    EXPECT_FALSE(MGPipeTakeReplyBool(declined, "unit"))
+        << "DECLINED is how the four Bool acceptance rows say false (R-5), not how they fail";
+
+    EXPECT_EQ(MGPipeRepliesTaken(), takenBefore + 2u);
+    EXPECT_EQ(MGPipeRepliesDeclined(), declinedBefore + 1u)
+        << "the refusal was not COUNTED, so 'the client accepted everything' and 'the client "
+           "never asked' are still the same observation from outside";
+
+    // The two slots are different ids, which is what makes the mismatch Fatal below meaningful.
+    EXPECT_NE(ok.Id, declined.Id);
+    EXPECT_NE(ok.Id, 0u) << "slot 0 is ReplySlot.h's 'no record' and must stay unmintable";
+}
+
+#if MGTEST_HAVE_FORK
+TEST(PipeRouting, AnUnansweredRowIsFatalRatherThanAcceptedOrRefused) {
+    // R-5's whole point, made structural. There is no default: "always accept" is ID-39's 66
+    // lost DirectVulkan uploads with a wire in between, and "always refuse" is an emitter that
+    // re-sends for ever. A row that forgets to answer has to be impossible to READ.
+    const ChildResult child = RunInChild([] {
+        const MGPReplySlot slot = MGPipeMintReplySlot();
+        (void)MGPipeTakeReplyBool(slot, "resource_create");
+    });
+    EXPECT_TRUE(DiedOfAbort(child)) << DescribeStatus(child);
+    EXPECT_NE(child.Log.find("Fatal{ReplyMissing"), std::string::npos) << child.Log;
+    EXPECT_NE(child.Log.find("resource_create"), std::string::npos)
+        << "the Fatal does not name the row, so it cannot say WHICH answer went missing";
+}
+
+TEST(PipeRouting, TwoOutstandingAnswersAreFatalBecauseTheBarrierIsOneDeep) {
+    // The mailbox is one entry deep because R-1's verb barrier makes the in-flight depth one
+    // (ReplySlot.h). A second posting before the first is taken is not a capacity problem, it
+    // is a barrier that has stopped holding - so it must not be absorbed by a deeper mailbox.
+    const ChildResult child = RunInChild([] {
+        const MGPReplySlot first = MGPipeMintReplySlot();
+        const MGPReplySlot second = MGPipeMintReplySlot();
+        MGPipePostReply(first, 0, 1);
+        MGPipePostReply(second, 0, 1);
+    });
+    EXPECT_TRUE(DiedOfAbort(child)) << DescribeStatus(child);
+    EXPECT_NE(child.Log.find("Fatal{ReplyOverrun"), std::string::npos) << child.Log;
+}
+
+TEST(PipeRouting, AnErrorStatusIsNotFoldedIntoAcceptedOrRefused) {
+    // ERROR is a transport fault and DECLINED is a resource decision. Folding the first into
+    // either arm of the second makes a broken wire look like a server that said no.
+    const ChildResult child = RunInChild([] {
+        const MGPReplySlot slot = MGPipeMintReplySlot();
+        MGPipePostReply(slot, 2 /*ERROR*/, 0);
+        (void)MGPipeTakeReplyBool(slot, "set_texture_params");
+    });
+    EXPECT_TRUE(DiedOfAbort(child)) << DescribeStatus(child);
+    EXPECT_NE(child.Log.find("Fatal{ReplyError"), std::string::npos) << child.Log;
+    EXPECT_NE(child.Log.find("set_texture_params"), std::string::npos) << child.Log;
+}
+#endif // MGTEST_HAVE_FORK
 
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;

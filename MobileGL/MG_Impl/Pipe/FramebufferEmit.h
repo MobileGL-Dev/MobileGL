@@ -32,6 +32,7 @@
 #include <MG_Impl/Pipe/Tracker.h>
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeRoute.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Metrics/PipeStats.h>
 
@@ -456,7 +457,7 @@ namespace MobileGL::MG_Pipe {
                 m_lastDraw = state;
                 if (state.Target == static_cast<Uint8>(MGPipeFramebufferTarget::Both)) m_lastRead = state;
             }
-            MGPipeApplySetFramebufferState(state);
+            MGPipeRouteSetFramebufferState(state);
             ++m_emissions;
             if (MG_Util::PipeStats::Enabled()) {
                 MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::FramebufferEmissions, 1);

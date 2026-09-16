@@ -47,16 +47,18 @@
 // disappears. A null check on a slot may not survive into the client: it becomes a caps-mirror
 // read, which is what ARCHITECTURE.md:114 means by "CallMask replaces 'is this table slot null'".
 //
-// NOTE the asymmetry this table does not resolve: the resource, CSO, framebuffer, texture,
-// sampler and program families do NOT come through here. They are emitted from
-// MG_Impl/Pipe/* by direct MGPipeApply* calls (37 entry points, 41 call sites), and under
-// split each of those becomes an encode. This table covers only the verbs - the draws,
-// clears, blits, readbacks, queries, fences and present.
+// NOTE the asymmetry this table does not resolve, AND WHERE IT IS RESOLVED (R-17): the
+// resource, CSO, framebuffer, texture, sampler and program families do NOT come through here.
+// They were emitted from MG_Impl/Pipe/* by 40 direct calls to the 37 MGPipeApply* entry
+// points; those call sites now go through the two generated tables
+// (MG_Pipe/PipeRoute.h -> MG_Remote/Client/WireTables.cpp). This table covers only the verbs -
+// the draws, clears, blits, readbacks, queries, fences and present.
 
 #pragma once
 #include <Includes.h>
 
 #include <MG_Backend/BackendObject.h>
+#include <MG_Pipe/MGPipeValueTypes.h>
 
 namespace MobileGL::MG_Remote::Client {
 
@@ -113,5 +115,41 @@ namespace MobileGL::MG_Remote::Client {
     // "a gate that cannot go red for its own reason".
     void SetDropClearEmissionForNegativeControl(Bool drop);
     Uint64 DroppedClearEmissions();
+
+    // ID-47. The CLIENT refuses a readback whose answer would not fit a reply slot, BEFORE it
+    // emits the record, and names the read. Never truncated (a short write is a silently
+    // truncated picture, the one failure an SSIM comparison cannot see) and never left to the
+    // server's `Post` abort (which happens on the apply thread, after the client is already
+    // parked in the barrier, and names a byte count rather than a read).
+    //
+    // IT IS A FREE FUNCTION SO THE BOUNDARY PAIR CAN DRIVE IT. `EmitReadPixels` needs a live
+    // session before it reaches any of this, so a control over the emitter could only ever
+    // observe Fatal{NoClientSession}; a control over THIS observes the decision and its exact
+    // message, and it is the same function the emitter calls rather than a second copy of the
+    // arithmetic. Returns when the read fits; aborts when it does not.
+    void RefuseReadbackLargerThanTheReplySlot(GLsizei width, GLsizei height, GLenum format,
+                                              Uint64 bytes, Uint64 capacity);
+
+    // ID-49. `MGPReadbackInfo::DstSize` is the TIGHT w*h*bytesPerPixel extent - the reply
+    // payload - and nothing about the application's pack state crosses the wire. The server
+    // reads with a NEUTRAL pack state into that run; this is the number both sides derive.
+    Uint64 TightReadbackByteCount(GLsizei width, GLsizei height, GLenum format, GLenum type);
+
+    // ID-49. Scatters the tight rows into the application's pointer per the application's own
+    // pack state (ROW_LENGTH, SKIP_*, ALIGNMENT), which only the client holds. Exposed for the
+    // same reason as the refusal above: the control drives the function the emitter calls
+    // rather than a second copy of GL 4.6 8.4.4's arithmetic. THE GAPS ARE NEVER WRITTEN -
+    // they belong to the application - and that is what the control checks with a sentinel.
+    void ScatterTightReadbackIntoPackState(const void* tight, void* destination, GLsizei width,
+                                           GLsizei height, Uint64 bytesPerPixel,
+                                           const PixelStoreParameters& pack);
+
+    // ID-49. True when the destination layout IS the tight layout, which is the only condition
+    // under which EmitReadPixels may read the reply straight into the application pointer and
+    // skip the bounce. Exported because the FAST PATH and the SCATTER have to agree, and the
+    // only honest way to state that is to drive both and compare - a case that tested either
+    // alone would pass a predicate that said yes to a layout the scatter would have rearranged.
+    Bool ReadbackPackStateIsTightForTest(GLsizei width, Uint64 bytesPerPixel,
+                                         const PixelStoreParameters& pack);
 
 } // namespace MobileGL::MG_Remote::Client

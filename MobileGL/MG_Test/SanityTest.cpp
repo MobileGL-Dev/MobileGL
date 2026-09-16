@@ -4802,6 +4802,93 @@ TEST(DirectGLESBufferDrawProbe, UnderSplitTheRecordAloneAnswersTheLiveHostMapQue
 #endif
 }
 
+// R-8's NEGATIVE CONTROL, at the level of the probe above rather than at the level of the
+// accessor. `CapsMirrorTest.AMaskWithoutAFamilyRefusesItAndNamesIt` already pins that
+// `ServerConsumes` counts and names a refusal; what it cannot pin is that the LIVENESS GATE
+// the probe above depends on actually asks it. This case is the pair: the op table is
+// registered - so the pre-R-8 read (`MGPipeGetResourceOps() != nullptr`) would answer
+// "enabled" - and the caps mask is EMPTY, so the only honest answer is "no consumer".
+//
+// AND THE REFUSAL IS COUNTED, NOT INFERRED. "No record appeared" is satisfied by a client that
+// never ran at all: a typo in the fixture, a subsystem bit left clear, a BufferObject that
+// threw. Asking `ConsumerRefusals()` for a DELTA and `LastRefusedSubsystem()` for the family's
+// own bit is a statement that the gate was reached, asked the mirror, and was told no - which
+// is the fact R-8 exists to establish. Put `MGPipeGetResourceOps() != nullptr` back into
+// MGPipeResourceSubsystemEnabled() and this goes red on the record, not on the counter.
+TEST(DirectGLESBufferDrawProbe, ACapsMaskWithoutTheResourceFamilyEmitsNothingAndCountsTheRefusal) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    using namespace MobileGL::MG_State::GLState;
+
+    if (!EsprytSlotTablesEnabled()) {
+        GTEST_SKIP() << "the handle-keyed resource table only exists on the {slot, gen} arm";
+    }
+#if !MOBILEGL_BUILD_DISAGGREGATED
+    GTEST_SKIP() << "MG_Config::Transport is a constexpr Monolith without the transport built in, "
+                    "so the split arm of this probe cannot be entered";
+#else
+    const Uint64 previousPush = MG_Config::Features.PipePush;
+    const auto previousTransport = MG_Config::Transport;
+    MG_Pipe::MGPipeResourceOps ops{};
+    MG_Config::Features.PipePush |= MG_Pipe::kMGPipeSubsystemResources;
+    // THE SERVER's registration is present. Under the pre-R-8 gate this alone armed the client.
+    MG_Pipe::MGPipeSetResourceOps(&ops);
+    MG_Config::Transport = MG_Config::TransportMode::InProcess;
+
+    {
+        // The CLIENT's answer: a snapshot that names no consumer at all. R-12 makes a second
+        // arrival the invalidation, so adopting is how a mask is replaced; there is no
+        // Invalidate() to call and inventing one would be a second spelling of the same edge.
+        MG_Pipe::MGPCaps caps{};
+        caps.CallMask = 0;
+        MG_Remote::Client::CapsMirrorInstance().Adopt(caps, MG_Backend::FormatCapabilityCache{},
+                                                      RendererInfo{}, String{},
+                                                      BackendType::DirectGLES);
+    }
+    ASSERT_FALSE(MG_Remote::Client::CapsMirrorInstance().ServerConsumes(
+        MG_Pipe::kMGPipeSubsystemResources))
+        << "the fixture's own mask consumes the family, so this case cannot observe a refusal";
+
+    MG_Remote::Client::ResetConsumerRefusalsForTest();
+    {
+        auto owner = MakeShared<BufferObject>(0u);
+        owner->Respecify(256, nullptr);
+
+        // The MINT is unconditional in a push build (set_vertex_buffers names a buffer by
+        // handle whether or not the resource family is on), so a handle is the expected state
+        // and is NOT what this case reads.
+        const MG_Pipe::MGPipeHandle res = MG_Pipe::MGPipeResourceTrackerInstance().Find(*owner);
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(res))
+            << "the mint is unconditional; without a handle this case is observing the wrong "
+               "absence";
+
+        auto& applier = MG_Pipe::MGPipeApplier();
+        if (applier.Resources.size() > static_cast<SizeT>(res.Slot)) {
+            EXPECT_FALSE(applier.Resources[res.Slot].Live)
+                << "resource_create reached the applier for a family the server told this client "
+                   "it does not consume - which is ID-39's 66 lost uploads in the other "
+                   "direction: records emitted to a consumer that is not there";
+        }
+    }
+
+    // THE COUNTED HALF. Both statements, because either alone is satisfiable by an accident:
+    // a non-zero count alone could come from any family, and the family id alone could be left
+    // over from an earlier case.
+    EXPECT_GT(MG_Remote::Client::ConsumerRefusals(), 0u)
+        << "the liveness gate never asked the caps mirror. It is still reading "
+           "MGPipeGetResourceOps(), which is the SERVER's registration and is null under a "
+           "spawn - R-8's whole defect";
+    EXPECT_EQ(MG_Remote::Client::LastRefusedSubsystem(), MG_Pipe::kMGPipeSubsystemResources)
+        << "a refusal was counted for some other family, so this case is not observing the "
+           "resource gate it names";
+
+    MG_Config::Transport = previousTransport;
+    MG_Pipe::MGPipeSetResourceOps(nullptr);
+    MG_Config::Features.PipePush = previousPush;
+    MG_Remote::Client::ResetConsumerRefusalsForTest();
+#endif
+}
+
 // P3a REWORK M-1's gate (contract-review M2). The minting overload's symmetric `!=` is safe
 // because its handle comes out of the allocator and can never be behind the entry; the HANDLE
 // overload's input ARRIVES in a payload, so a generation BEHIND the live entry's is reachable -
@@ -4934,6 +5021,10 @@ TEST(DirectGLESBufferDrawProbe, ALiveHostMapKeepsTheHandleArmProbeDirtyBetweenTw
 }
 
 TEST(DirectGLESBufferDrawProbe, UnderSplitTheRecordAloneAnswersTheLiveHostMapQuestion) {
+    GTEST_SKIP() << "the handle-keyed resource table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESBufferDrawProbe, ACapsMaskWithoutTheResourceFamilyEmitsNothingAndCountsTheRefusal) {
     GTEST_SKIP() << "the handle-keyed resource table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 #endif // MOBILEGL_PIPE_PUSH

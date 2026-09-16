@@ -57,6 +57,7 @@
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeRoute.h>
 #include <MG_Pipe/PipeMutation.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/RenderbufferState/RenderbufferObject.h>
@@ -802,7 +803,7 @@ namespace MobileGL::MG_Pipe {
             ++m_paramSets;
             // Not behind MGPipeTextureRecordsReachTheApplier() (see its comment): the call is
             // dispatched whenever this emitter runs, so the answer is always a real one.
-            Bool accepted = MGPipeApplySetTextureParams(params);
+            Bool accepted = MGPipeRouteSetTextureParams(params);
             if (!accepted) {
                 // THE SELF-HEAL, the respecify path's shape, and the parameters are the one
                 // publication that may be a texture's FIRST: the context's default textures are
@@ -828,7 +829,7 @@ namespace MobileGL::MG_Pipe {
                     // across it - `entry` is re-fetched below.
                     EmitResourceRespecify(texture, MGPipeTextureRespecifyScope::WholeResource, 0, 0);
                 }
-                accepted = MGPipeApplySetTextureParams(params);
+                accepted = MGPipeRouteSetTextureParams(params);
             }
             Entry& latched = EntryFor(m_textures, handle);
             if (!accepted) {
@@ -1121,7 +1122,7 @@ namespace MobileGL::MG_Pipe {
             Bool dispatched = false;
             if constexpr (MGPipeTextureRecordsReachTheApplier()) {
                 dispatched = true;
-                accepted = MGPipeApplyResourceCreate(desc);
+                accepted = MGPipeRouteResourceCreate(desc);
             }
             if (dispatched && !accepted) return;
             MGPipeNoteHandlePublished(kind, handle);
@@ -1134,7 +1135,7 @@ namespace MobileGL::MG_Pipe {
         // replaces no storage at all.
         static Bool ApplyRespecify(const MGPResourceDesc& desc, const MGPRespecifiedLevel* level) {
             if constexpr (MGPipeTextureRecordsReachTheApplier()) {
-                return MGPipeApplyResourceRespecify(desc, nullptr, level);
+                return MGPipeRouteResourceRespecify(desc, nullptr, level);
             }
             (void)level;
             return false;
@@ -1275,7 +1276,14 @@ namespace MobileGL::MG_Pipe {
             Bool dispatched = false;
             if constexpr (MGPipeTextureRecordsReachTheApplier()) {
                 dispatched = true;
-                accepted = MGPipeApplyResourceSubData(m_lastSubData, shadow,
+                // `levelBytes` closes CONTRACT-P5 table 1 row 7's open half. The record still
+                // declares Blob.Size 0 on the monolith arm - where the applier reads the
+                // companion pointer and the destination box bounds the write - but under split
+                // the staged run needs a length, and the comment above already says what it
+                // is: "the bytes this record declares ARE the level shadow". The regions' own
+                // SrcOffsets index into exactly that run.
+                accepted = MGPipeRouteResourceSubData(m_lastSubData, shadow,
+                                                      static_cast<Uint64>(levelBytes),
                                                       m_regions.empty() ? nullptr : m_regions.data());
             }
             ++m_subDatas;

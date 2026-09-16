@@ -44,6 +44,7 @@
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeRoute.h>
 #include <MG_Util/Metrics/PipeStats.h>
 
 #include <cstring>
@@ -154,7 +155,7 @@ namespace MobileGL::MG_Pipe {
             // minted from a neighbour rather than from nothing.
             desc.ChunkMask = kAllPipelineChunks;
             desc.Blob.Size = kMGPipePipelineChunkBytes;
-            MGPipeApplyCreateRenderState(desc, bytes.data());
+            MGPipeRouteCreateRenderState(desc, bytes.data());
             payloadBytes += sizeof(MGPRenderStateDesc) + kMGPipePipelineChunkBytes;
 
             Entry entry;
@@ -175,7 +176,7 @@ namespace MobileGL::MG_Pipe {
             MGPHandleOnly handle{};
             handle.Handle = m_entries[index].Cso;
             handle.Kind = static_cast<Uint32>(MGPipeKind::RenderStateCso);
-            MGPipeApplyDeleteRenderState(handle);
+            MGPipeRouteDeleteRenderState(handle);
             MGPipeSlots().Free(MGPipeKind::RenderStateCso, m_entries[index].Cso);
             m_entries[index] = m_entries.back();
             m_entries.pop_back();

@@ -1231,11 +1231,27 @@ namespace MobileGL::MG_Remote::Wire {
         // may not re-derive it, because an if-constexpr discard, a stale handle and a refused
         // record are all invisible from the call site).
         //
-        // IT DOES NOT GO IN A REPLY SLOT. None of the four carries kReplySlot, and s1 sizes
-        // ReplyPool from that table - see PostReply. The answer is recorded here and read
-        // through LastAcceptance() / Accepted+DeclinedRecords() until the integrator rules on
+        // IT NOW RIDES THE REPLY SLOT, AND THAT IS THE RULING THIS COMMENT ASKED FOR. The text
+        // that stood here said the answer could not ride a slot "until the integrator rules on
         // which half of the contract moves (table 0 says these four use DECLINED; the
-        // catalogue gives them no slot).
+        // catalogue gives them no slot)". Both halves have since moved the same way: ID-31
+        // gave `ResourceCreate` kReplySlot and `kMGPipeCallFlags` now carries the flag on all
+        // four (PipeWire.inc rows 2, 3, 47, 48), and P5 ruling R-17 states that the acceptance
+        // answers "come back through the reply slot inside the barrier's wait". So the
+        // conflict is resolved in favour of table 0, the pool reserves these seqs like any
+        // other, and `PostReply`'s own Fatal - which trips on a row with no kReplySlot - is
+        // what keeps this honest if a flag is ever taken away again.
+        //
+        // WITHOUT THIS THE CLIENT CANNOT RUN AT ALL: `ClientSession::EmitAndWait` asks the
+        // catalogue, not the caller, whether a row owns a slot, so all four would wait for an
+        // answer nobody wrote and take `Fatal{ReplyMissing}` inside the barrier. Recording the
+        // acceptance locally as well is kept, because `LastAcceptance()` and the two counters
+        // are what the monolith-side decoder cases are asserted on.
+        //
+        // OWNERSHIP: MG_Remote/Wire/* is package w1's and w1 is not in wave 2. This hunk is
+        // four lines inside one lambda, made under R-17 by c1 because it is the server half of
+        // the routing R-17 assigns, and it is called out in c1-v2.md so the integrator can
+        // move it if the call belongs elsewhere.
         const auto noteAcceptance = [&](Bool accepted) {
             m_lastAcceptanceKnown = true;
             m_lastAcceptance = accepted;
@@ -1244,6 +1260,10 @@ namespace MobileGL::MG_Remote::Wire {
             } else {
                 ++m_declined;
             }
+            // DECLINED is a real answer and carries no payload (ReplySlot.h): the four Bool
+            // rows say `false` with it, exactly as MapPersistent says nullptr with it.
+            PostReply(op, seq, accepted ? ReplySink::kStatusOk : ReplySink::kStatusDeclined,
+                      nullptr, 0);
         };
 
         switch (op) {

@@ -29,113 +29,30 @@ namespace MobileGL::MG_Remote::Client {
 
     namespace {
 
-        // ---- the EGL bridge ---------------------------------------------------------------
+        // ---- the EGL seam ------------------------------------------------------------------
         //
-        // Every one of the nine crosses as a BLOCKING control request on the apply thread,
-        // because every one of them has a return value the caller acts on immediately. v1's
-        // ServerLoop::RunOnApplyThread takes a raw function pointer plus a user pointer rather
-        // than a std::function, deliberately: this path runs at teardown too, and the teardown
-        // path may not allocate (ID-8).
+        // THE NINE EGL VIRTUALS CALL v1's TWELVE FORWARDERS AND NOTHING ELSE. c1 round 1 built
+        // its own trampolines over ServerLoop::RunOnApplyThread and ServerLoop::Backend(),
+        // which ran the right driver call on the right thread and was still wrong, because
+        // three of the twelve do MORE than forward:
         //
-        // A NULL SERVER BACKEND IS "false", NOT A CRASH AND NOT A LOCAL SUCCESS. Under inproc
-        // the apply thread creates it during ClientSession::Start, so a null one here means the
-        // bring-up did not complete - and answering `true` would let the frontend believe it
-        // has a context.
-        MG_Backend::BackendObject* ServerBackend() { return Server::ServerLoopInstance().Backend(); }
-
-        struct DisplayArgs {
-            EGLDisplay Dpy;
-            EGLint* Major;
-            EGLint* Minor;
-            Bool Ok;
-        };
-        MobileGLResult RunInitDisplay(void* user) {
-            auto* args = static_cast<DisplayArgs*>(user);
-            args->Ok = ServerBackend()->InitializeEGLDisplay(args->Dpy, args->Major, args->Minor);
-            return MOBILEGL_OK;
-        }
-
-        struct WindowSurfaceArgs {
-            EGLSurface Surface;
-            const MG_Backend::WindowHandle* Handle;
-            Bool Ok;
-        };
-        MobileGLResult RunCreateWindowSurface(void* user) {
-            auto* args = static_cast<WindowSurfaceArgs*>(user);
-            args->Ok = ServerBackend()->CreateEGLWindowSurface(args->Surface, *args->Handle);
-            return MOBILEGL_OK;
-        }
-
-        struct ResizeArgs {
-            EGLSurface Surface;
-            Uint32 Width;
-            Uint32 Height;
-            Bool Ok;
-        };
-        MobileGLResult RunResize(void* user) {
-            auto* args = static_cast<ResizeArgs*>(user);
-            args->Ok = ServerBackend()->ResizeEGLWindowSurface(args->Surface, args->Width, args->Height);
-            return MOBILEGL_OK;
-        }
-
-        struct PbufferArgs {
-            EGLSurface Surface;
-            EGLint Width;
-            EGLint Height;
-            Bool Ok;
-        };
-        MobileGLResult RunCreatePbuffer(void* user) {
-            auto* args = static_cast<PbufferArgs*>(user);
-            args->Ok = ServerBackend()->CreateEGLPbufferSurface(args->Surface, args->Width, args->Height);
-            return MOBILEGL_OK;
-        }
-
-        struct MakeCurrentArgs {
-            EGLDisplay Dpy;
-            EGLSurface Draw;
-            EGLSurface Read;
-            EGLContext Ctx;
-            Bool Ok;
-        };
-        MobileGLResult RunMakeCurrent(void* user) {
-            auto* args = static_cast<MakeCurrentArgs*>(user);
-            args->Ok = ServerBackend()->MakeEGLCurrent(args->Dpy, args->Draw, args->Read, args->Ctx);
-            return MOBILEGL_OK;
-        }
-
-        struct SwapIntervalArgs {
-            Int Interval;
-        };
-        MobileGLResult RunSwapInterval(void* user) {
-            ServerBackend()->SetEGLSwapInterval(static_cast<SwapIntervalArgs*>(user)->Interval);
-            return MOBILEGL_OK;
-        }
-
-        struct SurfaceArgs {
-            EGLSurface Surface;
-        };
-        MobileGLResult RunReleaseSurface(void* user) {
-            ServerBackend()->ReleaseEGLSurface(static_cast<SurfaceArgs*>(user)->Surface);
-            return MOBILEGL_OK;
-        }
-
-        MobileGLResult RunReleaseResources(void*) {
-            ServerBackend()->ReleaseEGLResources();
-            return MOBILEGL_OK;
-        }
-
-        // Runs `work` on the apply thread if there is a server backend to run it against, and
-        // says so by name when there is not.
-        Bool ForwardToApplyThread(const char* what, Server::ServerLoop::ControlWork work, void* user) {
-            if (ServerBackend() == nullptr) {
-                MGLOG_E("MG_Remote client: %s has no server backend to forward to - the apply "
-                        "thread's bring-up did not complete, and answering success here would "
-                        "tell the frontend it has a context it does not have",
-                        what);
-                return false;
-            }
-            return Server::ServerLoopInstance().RunOnApplyThread(work, user) == MOBILEGL_OK;
-        }
+        //   ServerMakeEGLCurrent   re-publishes the caps snapshot after the server's own
+        //                          InitCapabilities has run (R-12 arm (a))
+        //   ServerInitCapabilities the same, on the explicit path
+        //   ServerSetWindowHandle  hands the surface to the server's backend
+        //
+        // Calling `Backend()->MakeEGLCurrent(...)` skips the republish, so the client's mirror
+        // keeps the snapshot Accept() sent BEFORE any context existed - every limit, every
+        // advertised extension and the compile-env fingerprint read off an empty backend, with
+        // InitCapabilities below happily reporting success because a snapshot did arrive once.
+        // That is the failure this seam exists to make impossible: there is no second route to
+        // the server's EGL, so there is no route that can skip what the forwarder does.
+        //
+        // The forwarders block on mgl-srv-apply themselves and run INLINE when the caller is
+        // already on that thread, so this file no longer needs RunOnApplyThread, a per-call
+        // args struct, or a null-backend check of its own - ServerBackendOrNull() inside each
+        // forwarder is the one place that answers "the bring-up did not complete", and it
+        // answers `false` rather than crashing or succeeding locally.
 
         // CapsMirror's adoption hook. A free function because the hook is a raw function
         // pointer (ID-8: this can fire on a path that must not allocate), and it reaches the
@@ -198,6 +115,18 @@ namespace MobileGL::MG_Remote::Client {
             MGLOG_E("MG_Remote client: InitCapabilities with no session");
             return false;
         }
+        // ASK THE SERVER RATHER THAN ASSUMING ServerMakeEGLCurrent HAS ALREADY ASKED IT. The
+        // comment above says "by this point MakeEGLCurrent has already run the SERVER's
+        // MakeEGLCurrent", and that is true on the make-current path - but the base class
+        // reaches InitCapabilities lazily, once per SURFACE lifetime, and a surface can be
+        // replaced without a new make-current. ServerInitCapabilities re-publishes the
+        // snapshot the same way, so asking twice costs one snapshot and never asking costs
+        // every limit in the mirror. It is idempotent on the server's side.
+        if (!Server::ServerInitCapabilities()) {
+            MGLOG_E("MG_Remote client: the server's InitCapabilities failed, so there is no "
+                    "snapshot to adopt and going current would read default limits");
+            return false;
+        }
         session->PumpControlPlane();
         RefreshFormatCapabilities();
         // A PLACEHOLDER MIRROR IS A FAILURE HERE, unlike at startup. LogBackendInfo reading a
@@ -251,46 +180,36 @@ namespace MobileGL::MG_Remote::Client {
     // InitCapabilities has run.
 
     Bool BackendObject_Remote::InitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor) {
-        DisplayArgs args{dpy, major, minor, false};
-        if (!ForwardToApplyThread("InitializeEGLDisplay", &RunInitDisplay, &args) || !args.Ok) {
-            return false;
-        }
+        if (!Server::ServerInitializeEGLDisplay(dpy, major, minor)) return false;
         return MG_Backend::BackendObject::InitializeEGLDisplay(dpy, major, minor);
     }
 
     Bool BackendObject_Remote::CreateEGLWindowSurface(EGLSurface surface,
                                                       const MG_Backend::WindowHandle& handle) {
-        WindowSurfaceArgs args{surface, &handle, false};
-        if (!ForwardToApplyThread("CreateEGLWindowSurface", &RunCreateWindowSurface, &args) ||
-            !args.Ok) {
-            return false;
-        }
+        // The handle first: the server's backend has to know which window it is about to make
+        // a surface for, and ServerSetWindowHandle is the only way to tell it.
+        Server::ServerSetWindowHandle(handle);
+        if (!Server::ServerCreateEGLWindowSurface(surface, handle)) return false;
         return MG_Backend::BackendObject::CreateEGLWindowSurface(surface, handle);
     }
 
     Bool BackendObject_Remote::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
-        ResizeArgs args{surface, width, height, false};
-        if (!ForwardToApplyThread("ResizeEGLWindowSurface", &RunResize, &args) || !args.Ok) {
-            return false;
-        }
+        if (!Server::ServerResizeEGLWindowSurface(surface, width, height)) return false;
         return MG_Backend::BackendObject::ResizeEGLWindowSurface(surface, width, height);
     }
 
     Bool BackendObject_Remote::CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
-        PbufferArgs args{surface, width, height, false};
-        if (!ForwardToApplyThread("CreateEGLPbufferSurface", &RunCreatePbuffer, &args) || !args.Ok) {
-            return false;
-        }
+        if (!Server::ServerCreateEGLPbufferSurface(surface, width, height)) return false;
         return MG_Backend::BackendObject::CreateEGLPbufferSurface(surface, width, height);
     }
 
     Bool BackendObject_Remote::MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read,
                                               EGLContext ctx) {
-        MakeCurrentArgs args{dpy, draw, read, ctx, false};
-        if (!ForwardToApplyThread("MakeEGLCurrent", &RunMakeCurrent, &args) || !args.Ok) {
-            return false;
-        }
-        // AND ONLY NOW the client's own bookkeeping, which is what calls InitCapabilities.
+        // FORWARD FIRST, THEN RUN THE BASE. The server has to own the context before the base
+        // class latches "the surface is initialised" and calls InitCapabilities, because
+        // InitCapabilities' answer comes from a snapshot the server can only publish once its
+        // own InitCapabilities has run - and ServerMakeEGLCurrent is what publishes it.
+        if (!Server::ServerMakeEGLCurrent(dpy, draw, read, ctx)) return false;
         return MG_Backend::BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
     }
 
@@ -298,9 +217,10 @@ namespace MobileGL::MG_Remote::Client {
         // NOT FORWARDED, and this is the one that must not be. The base implementation's last
         // act is GetBackendFunctions().Present() (BackendObject.cpp:396) - which is this
         // client's class-B Present EMITTER, the only route by which Present is reached at all
-        // (it has zero MG_Impl call sites). Forwarding would present on the server directly and
-        // put no record on the wire, which is the shape every gate in this phase exists to
-        // catch.
+        // (it has zero MG_Impl call sites). Calling Server::ServerSwapEGLBuffers would present
+        // on the server directly and put no record on the wire, which is the shape every gate
+        // in this phase exists to catch. The forwarder exists for a spawned P6 client whose
+        // Present record cannot carry the swap; in P5 it has no caller and that is deliberate.
         return MG_Backend::BackendObject::SwapEGLBuffers(dpy, draw);
     }
 
@@ -311,13 +231,11 @@ namespace MobileGL::MG_Remote::Client {
         // the base implementation would abort on every eglSwapInterval. The answer is the
         // caps-mirror-read rule's general shape: the question "can the presentation path take
         // an interval" belongs to the server, so it is asked of the server.
-        SwapIntervalArgs args{interval};
-        ForwardToApplyThread("SetEGLSwapInterval", &RunSwapInterval, &args);
+        Server::ServerSetEGLSwapInterval(interval);
     }
 
     void BackendObject_Remote::ReleaseEGLSurface(EGLSurface surface) {
-        SurfaceArgs args{surface};
-        ForwardToApplyThread("ReleaseEGLSurface", &RunReleaseSurface, &args);
+        Server::ServerReleaseEGLSurface(surface);
         MG_Backend::BackendObject::ReleaseEGLSurface(surface);
     }
 
@@ -325,7 +243,7 @@ namespace MobileGL::MG_Remote::Client {
         // BLOCKING BY CONTRACT (ServerLoop.h's header note): MobileGL::Destroy()
         // (MobileGL/Init.cpp:68) walks on the moment this returns, and the server still holds
         // the context until the apply thread has run it.
-        ForwardToApplyThread("ReleaseEGLResources", &RunReleaseResources, nullptr);
+        Server::ServerReleaseEGLResources();
         MG_Backend::BackendObject::ReleaseEGLResources();
     }
 

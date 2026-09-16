@@ -38,6 +38,7 @@
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeRoute.h>
 #include <MG_Pipe/PipeMutation.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/TextureState/TextureState.h>
@@ -126,7 +127,7 @@ namespace MobileGL::MG_Pipe {
             m_lastImages.Start = 0;
             m_lastImages.Count = count;
             m_lastImages.ContentHash = hash;
-            MGPipeApplySetShaderImages(m_lastImages, m_entries.data());
+            MGPipeRouteSetShaderImages(m_lastImages, m_entries.data());
             ++m_imageSets;
             if (MG_Util::PipeStats::Enabled()) {
                 MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ShaderImageEmissions, 1);

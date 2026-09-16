@@ -36,6 +36,7 @@
 #include <MG_Impl/Pipe/VertexInputEmit.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeRoute.h>
 #include <MG_Pipe/PipeMutation.h>
 #include <Config.h>
 
@@ -46,6 +47,7 @@
 // build-split runs MOBILEGL_TRANSPORT=monolith in every unit and integration-gpu lane and those
 // lanes must keep answering exactly what they answered before.
 #include <MG_Remote/Client/CapsMirror.h>
+#include <MG_Remote/Client/WireTables.h>
 #endif
 
 #include <atomic>
@@ -677,7 +679,7 @@ namespace MobileGL::MG_Pipe {
         // LATCHED, so the destroy is gated on whether this create actually went out rather
         // than on whether a table is still registered when the object dies (D-L, m12).
         tracker.NotePublished(handle);
-        MGPipeApplyResourceCreate(desc);
+        MGPipeRouteResourceCreate(desc);
     }
 
     void MGPipeEmitResourceRespecify(BufferObject& buffer) {
@@ -710,7 +712,7 @@ namespace MobileGL::MG_Pipe {
                 MGPipeBuildResourceDesc(buffer, handle, bindMask, /*storageDefined=*/false);
             tracker.NoteDesc(createDesc, true);
             tracker.NotePublished(handle);
-            MGPipeApplyResourceCreate(createDesc);
+            MGPipeRouteResourceCreate(createDesc);
         }
         const MGPResourceDesc desc = MGPipeBuildResourceDesc(buffer, handle, bindMask, true);
         tracker.NoteDesc(desc, false);
@@ -723,7 +725,47 @@ namespace MobileGL::MG_Pipe {
         // allocation and only it is allowed one. In monolith the acknowledgement is
         // ((void)0), because the applier is one function call away and has already run by
         // the time this returns; the transport wires the doorbell to that same predicate.
-        MGPipeApplyResourceRespecify(desc, initialBytes);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // R-13.3's MISSING PRODUCER, and it is the reason the first joint inproc run died.
+        // CONTRACT-P5 §2 row 19 rules that `initialBytes` is ALWAYS nullptr under split and
+        // that "initial content arrives as ResourceSubData records immediately after this
+        // one" - but nothing emitted those records, so the split arm's refusal
+        // (Fatal{UncarriedInitialBytes}) fired on the first glBufferData with data, which is
+        // the first thing every scenario does.
+        //
+        // IT IS THE CONTRACT'S OWN PRESCRIBED ROUTE, not a new one: "the chosen route reuses a
+        // path that is already chunked (MGPipeForEachSubDataRecordRange) and already
+        // acceptance-gated; it costs one extra record". So the respecify defines the storage
+        // and the walk below ships the bytes, through the same emitter every later
+        // glBufferSubData uses - which also means the HasLiveHostWrites bit and the
+        // acceptance latch are computed in exactly one place instead of two.
+        //
+        // SPLIT-ONLY, and that is load-bearing for G2: under monolith the applier reads
+        // `initialBytes` directly and a second upload would be a real behaviour change in the
+        // arm the split arm is measured against.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && initialBytes != nullptr) {
+            MGPipeRouteResourceRespecify(desc, nullptr);
+            // COUNTED, NOT ASSUMED, and this is the only thing that can gate the follow-up at
+            // all. Dropping the walk below leaves a respecify that went out with nullptr and
+            // bytes that nothing carried - and no P5 scenario's PICTURE changes, because every
+            // one of them re-uploads its vertices through the ordinary dirty path afterwards.
+            // So the statement "the content followed" is made HERE, against the client's own
+            // record ordinal, rather than left to a lane that cannot see it. Remove the call
+            // below and this aborts by name on the first glBufferData that carries data.
+            const Uint64 before = MG_Remote::Client::ClientWireRecordsEmitted();
+            MGPipeEmitResourceSubData(buffer, 0, static_cast<SizeT>(buffer.GetSize()));
+            if (MG_Remote::Client::ClientWireRecordsEmitted() == before) {
+                MGLOG_F("MGPipe: Fatal{InitialBytesNotCarried, \"resource_respecify\"} - the "
+                        "respecify crossed with initialBytes = nullptr (R-13.3) and the "
+                        "resource_subdata records that were supposed to follow it emitted "
+                        "NOTHING, so %llu bytes of initial content exist on no side of the wire",
+                        static_cast<unsigned long long>(buffer.GetSize()));
+                std::abort();
+            }
+            return;
+        }
+#endif
+        MGPipeRouteResourceRespecify(desc, initialBytes);
     }
 
     void MGPipeEmitResourceSubData(BufferObject& buffer, SizeT offset, SizeT size) {
@@ -746,7 +788,11 @@ namespace MobileGL::MG_Pipe {
                 // take the object, which is why it is set here and not in the builder.
                 record.HasLiveHostWrites = buffer.HasLiveHostWritesForWire() ? 1 : 0;
 #endif
-                MGPipeApplyResourceSubData(record, base + at);
+                // `length` is this chunk's byte count, which the record also declares
+                // (MGPipeBuildSubDataRecord writes it into the destination range) - passed
+                // rather than re-read so the staged run and the record's own claim come from
+                // one number.
+                MGPipeRouteResourceSubData(record, base + at, length);
             });
         if (!encodable) {
             MGLOG_E_ONCE("MGPipe: resource_subdata range [%llu, +%llu) on buffer %u cannot be encoded - "
@@ -777,7 +823,7 @@ namespace MobileGL::MG_Pipe {
                 record.HasLiveHostWrites = buffer.HasLiveHostWritesForWire() ? 1 : 0;
 #endif
                 // The application's STAGING store, valid for the duration of the call only.
-                MGPipeApplyBufferSubDataResident(record, base + (at - offset));
+                MGPipeRouteBufferSubDataResident(record, base + (at - offset), length);
             });
         if (!encodable) {
             MGLOG_E_ONCE("MGPipe: buffer_subdata_resident range [%llu, +%llu) on buffer %u cannot be encoded",
@@ -797,7 +843,28 @@ namespace MobileGL::MG_Pipe {
         // arm reads INVALIDATE_RANGE / INVALIDATE_BUFFER / UNSYNCHRONIZED per call to choose
         // between a map+memcpy+unmap and an upload, so merging them here would change which.
         record.AccessFlags = accessFlags;
-        MGPipeApplyResourceFlushRange(record, buffer.MappedData() + offset);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // R-13.2's MISSING PRODUCER, the twin of the respecify one above, and the cause of the
+        // seven PersistentCoherentMapScenario aborts on the first joint inproc run:
+        //     Fatal{ProtocolCorruption} resource_flush_range {slot=1, gen=0, glName=1}:
+        //     a non-empty flush carries no bytes (offset=0, size=120, storage=120 bytes)
+        //
+        // CONTRACT-P5 §2 row 20 rules that this record carries NO bytes under split - it is a
+        // {range, AccessFlags} control record, and a blobref here "would be a second,
+        // forgeable way to say the same thing" - and that "the bytes of [Offset, Offset+Size)
+        // arrive AHEAD of it as ResourceSubData records covering exactly that range". Nothing
+        // emitted those records, so v1's StagedShadowStore had nothing staged for the range
+        // the flush names, which is precisely the refusal ID-37 asked it to make rather than
+        // silently reading the bytes again.
+        //
+        // EXACTLY THAT RANGE, not the whole buffer: the flush's own [offset, size) is what
+        // the ladder rewrites, and staging more would be the coverage WIDENING ID-37 forbids.
+        // Split-only, for the respecify's G2 reason.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && size != 0) {
+            MGPipeEmitResourceSubData(buffer, offset, size);
+        }
+#endif
+        MGPipeRouteResourceFlushRange(record, buffer.MappedData() + offset);
     }
 
     void MGPipeEmitResourceReadback(BufferObject& buffer) {
@@ -811,7 +878,7 @@ namespace MobileGL::MG_Pipe {
         record.Size = buffer.GetSize();
         // The answer travels back through MGPipeClientOnBufferWriteback, and the server's
         // epoch bump happens AFTER that writeback, never before.
-        MGPipeApplyResourceReadback(record);
+        MGPipeRouteResourceReadback(record);
     }
 
     // NO UnmapPersistent PRODUCER IN P3a, AND THAT IS DELIBERATE. The catalogue has the call
@@ -834,7 +901,7 @@ namespace MobileGL::MG_Pipe {
         if (MG_Util::PipeStats::Enabled()) {
             MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::MapPersistentRoundtrips, 1);
         }
-        return MGPipeApplyMapPersistent(BufferHandleOnly(handle), buffer.GetSize(), buffer.MappedData());
+        return MGPipeRouteMapPersistent(BufferHandleOnly(handle), buffer.GetSize(), buffer.MappedData());
     }
 
     Bool MGPipeEmitResourceDestroyAndFree(BufferObject& buffer) {
@@ -849,7 +916,7 @@ namespace MobileGL::MG_Pipe {
         const Bool published = tracker.WasPublished(handle);
         if (published) {
             tracker.NoteDestroy();
-            MGPipeApplyResourceDestroy(BufferHandleOnly(handle));
+            MGPipeRouteResourceDestroy(BufferHandleOnly(handle));
         }
         // THE ORDER IS FIXED (D-L): the applier clears the record and the backend drops its
         // twin while the handle still resolves, and only then does the slot go back. Free
@@ -889,7 +956,7 @@ namespace MobileGL::MG_Pipe {
             MGPHandleOnly only{};
             only.Handle = handle;
             only.Kind = static_cast<Uint32>(MGPipeKind::VertexElementsCso);
-            MGPipeApplyDeleteVertexElements(only);
+            MGPipeRouteDeleteVertexElements(only);
             emitter.NoteRecordDestroyed(handle);
         }
 
@@ -2103,7 +2170,7 @@ namespace MobileGL::MG_Pipe {
         Uint64 EmitPixelPackState(GLContext& ctx) {
             MGPPixelPackState pack{};
             pack.Pack = ctx.GetPixelStoreParameters(false);
-            MGPipeApplySetPixelPackState(pack);
+            MGPipeRouteSetPixelPackState(pack);
             return sizeof(MGPPixelPackState);
         }
 
@@ -2116,7 +2183,7 @@ namespace MobileGL::MG_Pipe {
             patch.Vertices = live.PatchVertices;
             for (SizeT i = 0; i < 4; ++i) patch.Outer[i] = live.PatchDefaultOuterLevel[i];
             for (SizeT i = 0; i < 2; ++i) patch.Inner[i] = live.PatchDefaultInnerLevel[i];
-            MGPipeApplySetPatchState(patch);
+            MGPipeRouteSetPatchState(patch);
             return sizeof(MGPPatchState);
         }
 
@@ -2205,7 +2272,7 @@ namespace MobileGL::MG_Pipe {
             }
             if (header.Count == 0) return 0;
             g_attribDefaultLastHeader = header;
-            MGPipeApplySetVertexAttribDefaults(header, tail.data());
+            MGPipeRouteSetVertexAttribDefaults(header, tail.data());
 
             // Did the applier reproduce it? Byte for byte, over the attributes this call
             // named - anything less would be a mirror that disagrees with the frontend in a
@@ -2274,7 +2341,7 @@ namespace MobileGL::MG_Pipe {
                     block.CapabilityBits |= Uint64{1} << i;
                 }
             }
-            MGPipeApplySetResidualValueState(block);
+            MGPipeRouteSetResidualValueState(block);
             if (MG_Util::PipeStats::Enabled()) {
                 // ByteClass::ResidualValueBlock has been a placeholder that "stays at 0
                 // until P2" since P0. This is what makes it non-zero.
@@ -2328,7 +2395,7 @@ namespace MobileGL::MG_Pipe {
                 bind.Cso = cso;
                 bind.Version = version;
                 bind.PipelineVersion = pipelineVersion;
-                MGPipeApplyBindRenderState(bind);
+                MGPipeRouteBindRenderState(bind);
                 payloadBytes += sizeof(MGPBindRenderState);
                 if (MG_Util::PipeStats::Enabled()) {
                     MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::RenderStateCsoBinds, 1);
@@ -2350,7 +2417,7 @@ namespace MobileGL::MG_Pipe {
                 dyn.ChunkMask = chunkMask;
                 dyn.Version = version;
                 dyn.Blob.Size = blobBytes;
-                MGPipeApplySetDynamicState(dyn, blob.data());
+                MGPipeRouteSetDynamicState(dyn, blob.data());
                 payloadBytes += sizeof(MGPDynamicState) + blobBytes;
             }
 
