@@ -101,7 +101,12 @@ namespace MobileGL::MG_Remote::Server {
 #endif
         }
 
-        // Returns the mask that was actually APPLIED, which is 0 when nothing was.
+        // Returns the mask that the kernel ACTUALLY applied - the EFFECTIVE mask read back with
+        // sched_getaffinity, not the requested one (codex 11). A cpuset that permits only a subset
+        // of the requested cpus is accepted by sched_setaffinity with the intersection, and
+        // logging the request would then claim cpus the thread never ran on - which is precisely
+        // the "an affinity that silently did nothing looks like one that worked" failure the
+        // resolved mask exists to make visible. 0 when nothing was applied.
         Uint64 ApplyAffinity(Uint64 requested) {
             if (requested == 0) return 0;
 #if defined(__linux__) || defined(__ANDROID__)
@@ -116,7 +121,19 @@ namespace MobileGL::MG_Remote::Server {
             }
             if (applied == 0) return 0;
             if (sched_setaffinity(0, sizeof(set), &set) != 0) return 0;
-            return requested;
+            // Read back the mask the kernel really honoured. This is the codex-11 fix: the log
+            // and ResolvedAffinityMask() report the EFFECTIVE set, so a request the cpuset trimmed
+            // is visible as a smaller resolved mask rather than as a lie that matched the request.
+            cpu_set_t effective;
+            CPU_ZERO(&effective);
+            if (sched_getaffinity(0, sizeof(effective), &effective) != 0) {
+                return requested; // best effort: the set succeeded, the read did not
+            }
+            Uint64 mask = 0;
+            for (Uint cpu = 0; cpu < 64; ++cpu) {
+                if (CPU_ISSET(cpu, &effective)) mask |= (1ull << cpu);
+            }
+            return mask;
 #else
             return 0;
 #endif
@@ -188,6 +205,15 @@ namespace MobileGL::MG_Remote::Server {
         }
         m_session = &session;
         m_stopRequested.store(false, std::memory_order_release);
+        // m-3: reset THIS session's own diagnostics. DrainedRecords()/ParkCount() are absolute and
+        // a case asserts == N, so a process that opens a SECOND session (context loss, or
+        // Initialize after Destroy) must start them at zero rather than carry the first session's
+        // tally - and a developer running the binary directly gets the count CI sees.
+        m_drained.store(0, std::memory_order_release);
+        m_parks.store(0, std::memory_order_release);
+        m_nativeBinds.store(0, std::memory_order_release);
+        m_clientReleases.store(0, std::memory_order_release);
+        m_haveCurrentTuple = false;
         {
             const std::lock_guard<std::mutex> lock(m_exitMutex);
             m_exited = false;
@@ -208,6 +234,65 @@ namespace MobileGL::MG_Remote::Server {
     Uint64 ServerLoop::ResolvedAffinityMask() const { return m_affinityMask; }
     Uint64 ServerLoop::DrainedRecords() const { return m_drained.load(std::memory_order_acquire); }
     Uint64 ServerLoop::ParkCount() const { return m_parks.load(std::memory_order_acquire); }
+    Uint64 ServerLoop::NativeBindCount() const { return m_nativeBinds.load(std::memory_order_acquire); }
+    Uint64 ServerLoop::ClientReleaseCount() const {
+        return m_clientReleases.load(std::memory_order_acquire);
+    }
+
+    // C7 / ID-54. A release-current request (the three NO_* markers, exactly IsReleaseCurrentRequest's
+    // test in BackendObject_DirectGLES.cpp) is a ClientRelease the server records but does not
+    // forward. Otherwise an identical (dpy, draw, read, ctx) already held is a RepeatNoOp, and
+    // anything else is a real NativeBind. Pure: a unit case drives it with no EGL context.
+    EglBindAction ClassifyEglMakeCurrent(Bool haveCurrent, EGLDisplay curDpy, EGLSurface curDraw,
+                                         EGLSurface curRead, EGLContext curCtx, EGLDisplay dpy,
+                                         EGLSurface draw, EGLSurface read, EGLContext ctx) {
+        if (draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT) {
+            return EglBindAction::ClientRelease;
+        }
+        if (haveCurrent && curDpy == dpy && curDraw == draw && curRead == read && curCtx == ctx) {
+            return EglBindAction::RepeatNoOp;
+        }
+        return EglBindAction::NativeBind;
+    }
+
+    ServerLoop::MakeCurrentOutcome ServerLoop::ApplyMakeCurrent(MG_Backend::BackendObject* backend,
+                                                               EGLDisplay dpy, EGLSurface draw,
+                                                               EGLSurface read, EGLContext ctx) {
+        // Apply thread only (RunOnApplyThread put us here), so m_haveCurrentTuple/m_cur* need no
+        // lock. The counters are atomic for the reader on the test thread.
+        MakeCurrentOutcome outcome;
+        const EglBindAction action = ClassifyEglMakeCurrent(m_haveCurrentTuple, m_curDpy, m_curDraw,
+                                                            m_curRead, m_curCtx, dpy, draw, read, ctx);
+        switch (action) {
+        case EglBindAction::ClientRelease:
+            // Recorded, NOT forwarded (ID-54): the context stays current on this thread until
+            // ~BackendObject_DirectGLES or context loss. Forwarding backend->MakeEGLCurrent here
+            // would route to DirectGLES::ReleaseCurrent, unbind, and clear
+            // g_backendContextOwnerThread - reinstating the off-thread degradation the phase
+            // removes. m_haveCurrentTuple is left intact so a later identical bind is still a
+            // RepeatNoOp (the driver never lost the context).
+            m_clientReleases.fetch_add(1, std::memory_order_acq_rel);
+            outcome.ok = true;
+            outcome.boundNatively = false;
+            return outcome;
+        case EglBindAction::RepeatNoOp:
+            outcome.ok = true;
+            outcome.boundNatively = false;
+            return outcome;
+        case EglBindAction::NativeBind:
+            break;
+        }
+        outcome.ok = backend->MakeEGLCurrent(dpy, draw, read, ctx);
+        if (!outcome.ok) return outcome;
+        m_haveCurrentTuple = true;
+        m_curDpy = dpy;
+        m_curDraw = draw;
+        m_curRead = read;
+        m_curCtx = ctx;
+        m_nativeBinds.fetch_add(1, std::memory_order_acq_rel);
+        outcome.boundNatively = true;
+        return outcome;
+    }
 
     void ServerLoop::ApplyThreadMain() {
         m_applyThreadId.store(std::this_thread::get_id(), std::memory_order_release);
@@ -305,8 +390,16 @@ namespace MobileGL::MG_Remote::Server {
             m_backend.reset();
         }
 
-        // Anything still parked in RunOnApplyThread has to be answered rather than left
-        // waiting: this thread is the only thing that could have run it.
+        // C2: THE m_running CLEAR IS INSIDE THIS SAME CRITICAL SECTION AS THE FINAL DRAIN OF THE
+        // MAILBOX. It used to be a separate store after the block, and that gap was a lost-forever
+        // hang: a caller that read m_running == true just before this thread exited, then had this
+        // thread run the block (finding nothing pending) and clear m_running OUTSIDE the lock,
+        // would go on to publish a request into a mailbox no thread will ever pump and block on
+        // m_controlDone with no answer possible (the bounded join has already succeeded, so there
+        // is not even a Fatal{ApplyThreadJoinTimeout}). With the clear under the lock, a caller
+        // either takes the lock FIRST (its request is here and answered NOT_INITIALIZED) or takes
+        // it AFTER (it sees !m_running under the lock in RunOnApplyThread and returns
+        // NOT_INITIALIZED without publishing). There is no third order.
         {
             const std::lock_guard<std::mutex> lock(m_controlMutex);
             if (m_controlPending) {
@@ -316,10 +409,10 @@ namespace MobileGL::MG_Remote::Server {
                 MGLOG_E("MG_Remote server: a control request was still posted when mgl-srv-apply "
                         "exited; it is answered NOT_INITIALIZED rather than left blocking");
             }
+            m_running.store(false, std::memory_order_release);
         }
         m_controlDone.notify_all();
 
-        m_running.store(false, std::memory_order_release);
         SignalExited();
     }
 
@@ -420,29 +513,52 @@ namespace MobileGL::MG_Remote::Server {
         // applier calls that wants "run this where the context is". Running inline is the
         // correct answer there and the only non-hanging one.
         if (OnApplyThread()) return work(user);
-        // NO THREAD YET, OR ALREADY GONE: run inline on the caller. That is right for the
-        // window between MG_Backend::Init()'s hook and ClientSession::Start (the backend object
-        // exists, the thread does not, and nothing has made a context current), and for the
-        // window after Stop(). It is NOT a silent fallback to monolith: the thread's absence in
-        // those two windows is a fact about the lifecycle, not about the transport.
-        if (!m_running.load(std::memory_order_acquire)) return work(user);
 
         const std::lock_guard<std::mutex> callerLock(m_callerMutex);
-        {
-            std::unique_lock<std::mutex> lock(m_controlMutex);
-            m_controlWork = work;
-            m_controlUser = user;
-            m_controlPending = true;
-            m_controlFinished = false;
+        std::unique_lock<std::mutex> lock(m_controlMutex);
+        // C2 + M-7: the m_running check and the publish are ONE critical section, and m_running is
+        // cleared under this same lock on the way out (ApplyThreadMain's exit block), so this read
+        // cannot see `true` for a thread that then vanishes before the publish. When there is no
+        // thread there are two sub-cases and neither is a silent EGL-on-the-app-thread fallback:
+        if (!m_running.load(std::memory_order_acquire)) {
+            const Bool backendAlive = m_backend != nullptr;
+            lock.unlock();
+            if (backendAlive) {
+                // M-7: the backend exists but no thread owns it - ClientSession::Start refused
+                // (ServerLoop.cpp Start's !Accepted arm) or std::thread's constructor threw.
+                // Running `work` inline here would issue eglMakeCurrent on the APP thread and
+                // stamp g_backendContextOwnerThread with it, so a lane called split would render
+                // correctly with the context on the wrong thread - the one outcome R-1 exists to
+                // make impossible. Fatal by name, never a fallback; compare CreateBackend's
+                // default: arm, which also refuses rather than substitutes.
+                MGLOG_F("MGPipe: Fatal{ApplyThreadNotRunning, \"EGL on the app thread\"} - a "
+                        "control request reached RunOnApplyThread with the server's backend built "
+                        "but no mgl-srv-apply thread running (ClientSession::Start failed after "
+                        "ServerLoop::CreateBackend). Running it inline would make the context "
+                        "current on the APP thread - the split lane's whole premise. Refusing by "
+                        "name rather than falling back to monolith");
+                std::abort();
+            }
+            // Backend already gone (post-Stop teardown, or the pre-Init window): the forwarders'
+            // ServerBackendOrNull() would answer null anyway, so NOT_INITIALIZED is the honest
+            // result and running inline is pointless. This is the deterministic half of C2 - a
+            // forwarder call after the loop stopped returns NOT_INITIALIZED, it does not hang and
+            // it does not run on the caller.
+            return MOBILEGL_ERR_NOT_INITIALIZED;
         }
+        m_controlWork = work;
+        m_controlUser = user;
+        m_controlPending = true;
+        m_controlFinished = false;
         // Publish THEN ring, in that order and never the other (Doorbell.h:186-193). The bell
         // is rung unconditionally rather than through NotifyIfParked because this side does not
         // know whether the apply thread is parked or spinning, and CondVarDoorbell remembers a
-        // wakeup that arrives while nobody is waiting.
+        // wakeup that arrives while nobody is waiting. Held under m_controlMutex: wait() releases
+        // it atomically, so the apply thread cannot observe the request until this side is
+        // waiting, and the doorbell remembers the notify regardless.
         if (m_session != nullptr) {
             m_session->ConsumerDoorbell().Notify();
         }
-        std::unique_lock<std::mutex> lock(m_controlMutex);
         m_controlDone.wait(lock, [this] { return m_controlFinished; });
         return m_controlResult;
     }
@@ -488,11 +604,12 @@ namespace MobileGL::MG_Remote::Server {
             // a use-after-free whose only symptom is an intermittent crash somewhere else.
             // Aborting here is red, immediate, and names the cause.
             MGLOG_F("MGPipe: Fatal{ApplyThreadJoinTimeout} - mgl-srv-apply did not exit within "
-                    "%u ms of Stop(). It parks on Doorbell::Wait(kWaitForever), which only "
-                    "CondVarDoorbell::Kill() can break (Doorbell.h:211-221, table 3 step 2), so "
-                    "this is a lost wakeup and not a slow thread. Aborting rather than "
-                    "detaching: a detached apply thread still owns the context and would read "
-                    "rings the client is about to unmap",
+                    "%u ms of Stop(). Stop() published m_stopRequested (in the park predicate) "
+                    "BEFORE it rang, so a plain Notify should already have un-parked the thread; "
+                    "Doorbell::Kill() (Doorbell.h:211-221, table 3 step 2) is the belt to that "
+                    "Notify's braces. If the thread is still parked after both, the wakeup was "
+                    "lost, not slow. Aborting rather than detaching: a detached apply thread still "
+                    "owns the context and would read rings the client is about to unmap",
                     kJoinTimeoutMs);
             std::abort();
         }
@@ -605,17 +722,22 @@ namespace MobileGL::MG_Remote::Server {
             MobileGLResult Run() {
                 MG_Backend::BackendObject* backend = ServerBackendOrNull();
                 if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
-                // THE ONE eglMakeCurrent OF THE PROCESS'S LIFE, ON THIS THREAD. Every later
-                // client-side eglMakeCurrent onto the same surface finds the context already
-                // current here and costs nothing; the owner slot is written once.
-                ok = backend->MakeEGLCurrent(dpy, draw, read, ctx);
-                if (!ok) return MOBILEGL_OK;
+                // C7 / ID-54: the apply thread binds the native context ONCE per tuple and holds
+                // it for life. ApplyMakeCurrent forwards a real bind only for a new tuple, treats
+                // an identical repeat as a no-op, and records a client release-current WITHOUT
+                // unbinding - so "the owner slot is written once" is true here even though
+                // DirectGLES::MakeCurrent itself has no shortcut.
+                const ServerLoop::MakeCurrentOutcome outcome =
+                    ServerLoopInstance().ApplyMakeCurrent(backend, dpy, draw, read, ctx);
+                ok = outcome.ok;
+                if (!ok || !outcome.boundNatively) return MOBILEGL_OK;
                 // R-12, arm (a): the caps snapshot is REPUBLISHED because InitCapabilities has
-                // now run for real. DirectGLES has no OnCapsInvalidated producer at all, and
-                // c0's answer is that a SECOND arrival IS the invalidation - so the client's
-                // mirror is refreshed with no dev-shaped backend edit and with no eleventh
-                // MGPipeCallbacks slot (MGPipeCallbacks.h:56-58's static_assert exists to make
-                // that cost visible).
+                // now run for real - and ONLY on a real native bind, not on an identical repeat
+                // (a repeat re-published nothing). DirectGLES has no OnCapsInvalidated producer at
+                // all, and c0's answer is that a SECOND arrival IS the invalidation - so the
+                // client's mirror is refreshed with no dev-shaped backend edit and with no
+                // eleventh MGPipeCallbacks slot (MGPipeCallbacks.h:56-58's static_assert exists to
+                // make that cost visible).
                 ServerSession* session = ServerSession::Active();
                 if (session != nullptr && session->Accepted()) {
                     const MobileGLResult published = session->PublishCapsSnapshot();

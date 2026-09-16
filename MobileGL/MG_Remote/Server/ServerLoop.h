@@ -22,17 +22,27 @@
 // P6 splits it.
 //
 // PARKING AND SHUTDOWN. The thread parks on Doorbell::Wait(consumerParked, ready, spinUs,
-// kWaitForever) and shuts down when Wait returns false with Dead() set. Doorbell::Kill()
-// (Doorbell.h:211-221) IS THE ONLY THING that wakes a thread parked on kWaitForever - a fact
-// ARCHITECTURE.md's teardown order (:537) omits and InProcessTransportTest.cpp:344 already
-// pins. Kill BEFORE join; join before the client frees any emitter-owned Vector; and the join
-// must be bounded (that test uses 5 s) so a regression is a red test and not a hung CI job.
+// kWaitForever) and shuts down when Wait returns false with Dead() set. TWO things can un-park a
+// kWaitForever waiter, not one, and the difference is the whole of review m-4: for the STOP case a
+// plain Doorbell::Notify() is sufficient, because m_stopRequested is in the park predicate and
+// Stop() publishes it BEFORE it rings (Doorbell.h re-tests ready() after every Park return);
+// Doorbell::Kill() (Doorbell.h:211-221) is load-bearing only for a predicate that has NOTHING to
+// see, which is why the redcheck's park-predicate-loses-control entry - the one that drops the
+// control flag FROM the predicate - is the case that actually times out. Kill BEFORE join; join
+// before the client frees any emitter-owned Vector; and the join must be bounded (that test uses
+// 5 s) so a regression is a red test and not a hung CI job.
 //
-// THE EGL OWNERSHIP MOVE. eglMakeCurrent runs ONCE on this thread and is never released
-// (DirectGLES.cpp:11925 plus the six cache invalidations at :11933-11953, which become a
-// one-time startup cost instead of a per-make-current storm). The client's nine EGL virtuals
-// become BLOCKING control requests executed here. ReleaseEGLResources and
-// ~BackendObject_DirectGLES MUST be blocking: MobileGL::Destroy() (MobileGL/Init.cpp:68)
+// THE EGL OWNERSHIP MOVE. eglMakeCurrent runs ONCE per (dpy, draw, read, ctx) tuple on this
+// thread and the context is then held for life. The "once" is NOT free at the DirectGLES layer -
+// DirectGLES::MakeCurrent always calls native eglMakeCurrent and rewrites the owner (codex C7) -
+// so ServerMakeEGLCurrent is where the dedup lives (ID-54): an identical repeat is a no-op apart
+// from the R-12 republish decision, a different tuple is a real rebind, and a client
+// release-current is RECORDED (NativeBindCount / ClientReleaseCount) but NOT forwarded - the apply
+// thread keeps the context current until ~BackendObject_DirectGLES or context loss, which is what
+// makes DirectGLES.cpp's six cache invalidations a one-off startup cost and the 16
+// IsBackendContextCurrentOnThisThread() / 16 CanTouchGLNow() sites answer TRUE on the server. The
+// client's nine EGL virtuals become BLOCKING control requests executed here. ReleaseEGLResources
+// and ~BackendObject_DirectGLES MUST be blocking: MobileGL::Destroy() (MobileGL/Init.cpp:68)
 // otherwise walks on while the server still holds the context.
 //
 // THE FALLBACK IS PRE-DECLARED, NOT INVENTED UNDER PRESSURE (R-1). If the context migration is
@@ -120,6 +130,24 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 DrainedRecords() const;
         Uint64 ParkCount() const;
 
+        // C7 / ID-54 diagnostics, read by the C7 control. NativeBindCount is how many times
+        // ServerMakeEGLCurrent forwarded a REAL native bind (a new tuple); ClientReleaseCount how
+        // many client release-current requests were recorded-and-not-forwarded. Two identical
+        // binds must move the first by one and the second not at all.
+        Uint64 NativeBindCount() const;
+        Uint64 ClientReleaseCount() const;
+
+        // The deduped make-current, on the apply thread. Classifies the request (see
+        // ClassifyEglMakeCurrent), forwards a native bind only for a genuinely new tuple, records
+        // a release without forwarding it, and returns whether a native bind happened so the
+        // caller (ServerMakeEGLCurrent) knows whether to re-publish the caps snapshot (R-12).
+        struct MakeCurrentOutcome {
+            Bool ok = false;            // the request was honoured
+            Bool boundNatively = false; // a native eglMakeCurrent ran (=> republish caps)
+        };
+        MakeCurrentOutcome ApplyMakeCurrent(MG_Backend::BackendObject* backend, EGLDisplay dpy,
+                                            EGLSurface draw, EGLSurface read, EGLContext ctx);
+
     private:
         void ApplyThreadMain();
         // Part of the apply thread's park predicate: a posted control request must be able to
@@ -163,9 +191,29 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 m_affinityMask = 0;
         std::atomic<Uint64> m_drained{0};
         std::atomic<Uint64> m_parks{0};
+
+        // C7 / ID-54: the (dpy, draw, read, ctx) currently bound on the apply thread. Written and
+        // read ONLY on the apply thread inside ApplyMakeCurrent, so it needs no lock; the two
+        // counters beside it are atomic because a test reads them from another thread.
+        Bool m_haveCurrentTuple = false;
+        EGLDisplay m_curDpy = EGL_NO_DISPLAY;
+        EGLSurface m_curDraw = EGL_NO_SURFACE;
+        EGLSurface m_curRead = EGL_NO_SURFACE;
+        EGLContext m_curCtx = EGL_NO_CONTEXT;
+        std::atomic<Uint64> m_nativeBinds{0};
+        std::atomic<Uint64> m_clientReleases{0};
     };
 
     ServerLoop& ServerLoopInstance();
+
+    // C7 / ID-54, factored out so a unit case can drive the DECISION without a live EGL context
+    // (the native bind itself needs the joint lane). Given the tuple currently held on the apply
+    // thread and the request, is this a native bind, an identical no-op repeat, or a client
+    // release-current the server must record without forwarding?
+    enum class EglBindAction { NativeBind, RepeatNoOp, ClientRelease };
+    EglBindAction ClassifyEglMakeCurrent(Bool haveCurrent, EGLDisplay curDpy, EGLSurface curDraw,
+                                         EGLSurface curRead, EGLContext curCtx, EGLDisplay dpy,
+                                         EGLSurface draw, EGLSurface read, EGLContext ctx);
 
     // ---------------------------------------------------------------------------------
     // THE EGL OWNERSHIP MOVE - the part that can sink the phase, expressed as twelve calls
