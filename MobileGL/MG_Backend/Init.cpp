@@ -150,7 +150,23 @@ namespace MobileGL::MG_Backend {
             // kCapNeedsHostIndexBytes and kCapNeedsHostUboBytes must be 0 for the whole of P5
             // by ruling - they are the only two things that ask for an MGHostSpan, and 0 is
             // what keeps every one of them out of the first IPC frame (contract table 0).
-            session.SetCapabilityBits(0);
+            //
+            // P5b t2 (CONTRACT-P5B.md §6.5) PUBLISHES THE ONE BIT P5b ADDS, and this is the
+            // only place that can: the question kCapBackendOwnsXfbCapture answers is "does the
+            // SERVER's backend own the transform-feedback capture", and the server's table is
+            // visible here and nowhere on the client. It is read straight off the table
+            // ServerLoop::CreateBackend just built - Espryt registers XfbImpl::EndTransformFeedback
+            // (BackendObject_DirectGLES.cpp:1458) and Magma registers no XFB slot at all - so the
+            // bit is a statement about THIS backend rather than about a build option, which is
+            // what makes it survive a backend switch. The client reads it through
+            // MGL_BACKEND_SLOT_CAP at GL_Drawing.cpp's FixupGsStripCaptureOrder.
+            Uint64 capBits = 0;
+            if (const MG_Backend::BackendObject* serverBackend = loop.Backend();
+                serverBackend != nullptr &&
+                serverBackend->GetBackendFunctions().GL.EndTransformFeedback != nullptr) {
+                capBits |= MG_Pipe::kCapBackendOwnsXfbCapture;
+            }
+            session.SetCapabilityBits(capBits);
             session.SetBackend(loop.Backend());
 
             // 3. the handshake, the four segments, and - at its end - the apply thread.
