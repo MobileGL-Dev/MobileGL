@@ -219,6 +219,46 @@ TEST_F(F1WireScenario, GenerateMipmapPixels) {
     const int expected[4] = {64, 128, 191, 255};
     for (int i = 0; i < 4; ++i) EXPECT_NEAR(pixel[i], expected[i], 1) << "F1.GenerateMipmap.pixels";
 }
+TEST_F(F1WireScenario, GenerateMipmapPackedFloatPixels) {
+    if (!Ready()) return;
+    // Only level zero exists initially. Generating the special-format chain must use the
+    // shape published by the client, and level two must contain the generated GPU pixels.
+    std::array<GLfloat, 8 * 8 * 3> source{};
+    for (size_t i = 0; i < source.size(); i += 3) {
+        source[i] = 0.25f; source[i + 1] = 0.5f; source[i + 2] = 0.75f;
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R11F_G11F_B10F, 8, 8, 0, GL_RGB, GL_FLOAT, source.data());
+    const auto before = PeekSplitRuntime().emitSeq;
+    glGenerateMipmap(GL_TEXTURE_2D);
+    ASSERT_GT(PeekSplitRuntime().emitSeq, before);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 2);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    GLfloat pixel[4]{};
+    glReadPixels(1, 1, 1, 1, GL_RGBA, GL_FLOAT, pixel);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    const GLfloat expected[4] = {0.25f, 0.5f, 0.75f, 1.0f};
+    for (int i = 0; i < 4; ++i) EXPECT_NEAR(pixel[i], expected[i], 0.01f);
+}
+
+TEST_F(F1WireScenario, GenerateMipmapDepthPixels) {
+    if (!Ready()) return;
+    std::array<GLfloat, 8 * 8> source{};
+    source.fill(0.375f);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, 8, 8, 0,
+                 GL_DEPTH_COMPONENT, GL_FLOAT, source.data());
+    const auto before = PeekSplitRuntime().emitSeq;
+    glGenerateMipmap(GL_TEXTURE_2D);
+    ASSERT_GT(PeekSplitRuntime().emitSeq, before);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, texture, 2);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    GLfloat pixel = 0;
+    glReadPixels(1, 1, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &pixel);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    EXPECT_NEAR(pixel, 0.375f, 0.00001f);
+}
+
 TEST_F(F1WireScenario, NamedBlitPreservesBindingsAndRestoresNextVerbsPixels) {
     if (!Ready()) return;
     Attach(GL_RGBA8);

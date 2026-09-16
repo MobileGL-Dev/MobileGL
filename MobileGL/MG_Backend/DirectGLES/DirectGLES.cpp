@@ -8078,6 +8078,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     static Bool EnsureGenerateMipmapStorageAllocated(const SharedPtr<MG_State::GLState::ITextureObject>& texture) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            // The frontend has already defined the generated chain before emitting this verb.
+            // Its resource_respecify carries that shape, so the server only verifies the
+            // descriptor; it must not allocate or dirty the client's level shadows again.
+            // Identity resolution is the same existing registry lookup used by texture sync.
+            const auto handle = TextureImpl::g_backendTextureObjects.HandleOf(texture.get());
+            const auto* record = PipeTextureRecordForHandle(handle);
+            if (record == nullptr || record->Desc.Width == 0 || record->Desc.Levels == 0) {
+                MG_Pipe::MGPipeUnmigratedEmulation("generate-mipmap-storage");
+            }
+            const auto& desc = record->Desc;
+            Uint maxDimension = desc.Width;
+            const auto target = static_cast<MG_Pipe::MGPipeResourceTarget>(desc.Target);
+            if (target != MG_Pipe::MGPipeResourceTarget::Tex1D &&
+                target != MG_Pipe::MGPipeResourceTarget::Tex1DArray) {
+                maxDimension = std::max(maxDimension, desc.Height);
+            }
+            if (target == MG_Pipe::MGPipeResourceTarget::Tex3D) {
+                maxDimension = std::max(maxDimension, desc.Depth);
+            }
+            Uint requiredLevels = 1;
+            while (maxDimension > 1) {
+                maxDimension /= 2;
+                ++requiredLevels;
+            }
+            if (desc.Levels < requiredLevels) {
+                MG_Pipe::MGPipeUnmigratedEmulation("generate-mipmap-storage");
+            }
+            return false; // No server-side shadow allocation was necessary.
+        }
+#endif
         auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(texture.get());
         MOBILEGL_ASSERT(mipmapTexture != nullptr, "GenerateMipmap requires mipmap texture storage.");
         Bool allocatedStorage = false;
