@@ -714,17 +714,31 @@ namespace MobileGL::MG_Remote::Client {
             std::abort();
         }
 
-        const Uint64 seq =
+        Uint64 seq =
             m_encoder.EncodeRecord(op, payload, payloadBytes, varTail, varTailBytes);
         if (seq == Wire::kInvalidSeq) {
-            // The ring refused it. NOT a silent drop and not a retry loop: R-10 says P5 does no
-            // chunking and must prove it needs none, so a refusal is the proof failing.
-            MGLOG_F("MGPipe: Fatal{RingOverrun, \"%s\"} - the command ring refused a %llu-byte "
-                    "record. P5 does not chunk (R-10); this is the proof obligation failing, not "
-                    "a back-pressure case",
-                    Wire::WireOpName(op),
-                    static_cast<unsigned long long>(payloadBytes + varTailBytes));
-            std::abort();
+            // EncodeRecord already refused individually oversized records. This one fits,
+            // but appliedSeq may be ahead of retiredTail: wait for actual reclaimable space,
+            // including the wrap pad. Prior EmitAndWait calls have published every record.
+            Wire::WireRecordLayout layout{};
+            Wire::MGPipeWireRecordLayout(op, payload, layout);
+            const Uint64 toEnd = m_cmd.Capacity() - m_cmd.LocalHead() % m_cmd.Capacity();
+            const Uint64 needed = layout.TotalBytes + (toEnd < layout.TotalBytes ? toEnd : 0);
+            const BarrierWaitScope waiting;
+            const auto wait = m_producer.WaitForCmdSpace(needed, kBarrierTimeoutMs);
+            if (wait != Transport::SessionWait::Reached) {
+                MGLOG_F("MGPipe: Fatal{RetirementWaitFailed, \"SEG_CMD\"} - %s needs %llu "
+                        "reclaimable bytes; the retirement wait ended on %s",
+                        Wire::WireOpName(op), static_cast<unsigned long long>(needed),
+                        wait == Transport::SessionWait::ShutDown ? "shutdown" : "timeout");
+                std::abort();
+            }
+            seq = m_encoder.EncodeRecord(op, payload, payloadBytes, varTail, varTailBytes);
+            if (seq == Wire::kInvalidSeq) {
+                MGLOG_F("MGPipe: Fatal{RingOverrun, \"SEG_CMD\"} - %s refused after sufficient "
+                        "space retired", Wire::WireOpName(op));
+                std::abort();
+            }
         }
 
         // Publish the head, record submittedSeq, THEN ring - in that order, which is

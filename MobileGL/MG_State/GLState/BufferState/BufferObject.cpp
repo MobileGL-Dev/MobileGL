@@ -18,6 +18,9 @@
 // edge exists only in a build that has the transport at all.
 #include <MG_Remote/Client/GpuWritePending.h>
 #include <MG_Remote/Client/PersistentMapTracker.h>
+#include <MG_Util/Debug/Log.h>
+
+#include <cstdlib>
 #include <MG_Util/Metrics/PipeStats.h>
 #endif
 
@@ -375,17 +378,11 @@ namespace MobileGL::MG_State::GLState {
 
     void BufferObject::SyncPersistentMappedRange() {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // SPLIT: the same span, cut into MOBILEGL_IPC_PERSISTENT_BLOCK_KB blocks, and the
-        // membership test is this function's own early-out chain read by the tracker rather
-        // than re-derived there. The 21 sites that call this (CONTRACT-P5.md section 3: 9
-        // Espryt + 12 Magma) therefore keep pushing at exactly the points monolith pushes
-        // at, which is what makes the split arm comparable to the monolith one at all; they
-        // retire into MG_Remote::Client::PushPersistentMapsBeforeVerb at P8.
-        //
-        // A block size of 0 disables the push (E3(a)'s negative control) and this is where
-        // that is felt: the bytes the application wrote through the pointer never leave, the
-        // frame draws the last uploaded ones, and PersistentCoherentMapScenario goes red.
+        // Split's client pre-verb hook publishes these bytes. The retained backend sync
+        // sites must do nothing on the apply thread: re-entering this producer there would
+        // overwrite the server shadow through the monolith adapter without crossing the wire.
         if (MG_Remote::Client::PersistentMapTracker::PushIsArmed()) {
+            if (MG_Remote::Client::PersistentMapTracker::OnServerRole()) return;
             MG_Remote::Client::PersistentMapTracker::Instance().PushBlocksFor(*this);
             return;
         }
@@ -409,6 +406,16 @@ namespace MobileGL::MG_State::GLState {
         // defined-content promotion and the legacy-ops fallback are what the monolith span
         // push does, and a second route to the same record is a second thing to keep in step.
         if (size == 0) return;
+        // Assert ownership at the final producer entry too, before serial/aggregate updates.
+        if (MG_Remote::Client::PersistentMapTracker::OnServerRole()) {
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"PushMappedSpanBlock\"} - the server role (the apply "
+                    "thread) reached the CLIENT persistent-map producer for buffer lifetime %llu "
+                    "[%zu, +%zu). Under an active transport the server's staged copy is the draw's "
+                    "only base (ID-52); a push from here would replace the transported bytes with "
+                    "client memory through the monolith adapter",
+                    static_cast<unsigned long long>(m_lifetimeId), offset, size);
+            std::abort();
+        }
         NotifySubData(offset, size);
         if (MG_Util::PipeStats::Enabled()) {
             // THE persistent-map-push SITE: the bytes an application wrote through a map with
@@ -429,6 +436,8 @@ namespace MobileGL::MG_State::GLState {
     void BufferObject::NotePersistentMapStateChanged() {
         if (!MG_Remote::Client::PersistentMapTracker::PushIsArmed()) return;
         MG_Remote::Client::PersistentMapTracker::Instance().NoteMapStateChanged(*this);
+        // Teardown must retire membership, but only the client publishes live-host-write state.
+        if (MG_Remote::Client::PersistentMapTracker::OnServerRole()) return;
 
         // THE LIVE-HOST-WRITES BIT (ARCHITECTURE.md 12, CONTRACT-P5.md section 3). A live
         // WRITE map - persistent or not - mutates the shadow with no call, no serial and no

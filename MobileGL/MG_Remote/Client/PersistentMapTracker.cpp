@@ -10,6 +10,7 @@
 
 #include <MG_State/GLState/BufferState/BufferObject.h>
 #include <MG_Util/Debug/Log.h>
+#include <MG_Remote/Server/ServerLoop.h>
 
 #include <cstdlib>
 
@@ -33,6 +34,8 @@ namespace MobileGL::MG_Remote::Client {
     Bool PersistentMapTracker::PushIsArmed() {
         return MG_Config::Transport != MG_Config::TransportMode::Monolith;
     }
+
+    Bool PersistentMapTracker::OnServerRole() { return Server::ServerLoop::OnApplyThread(); }
 
     // SyncPersistentMappedRange's early-out chain (BufferObject.cpp:341-353), in its order,
     // read as a membership test. Every line here has a line there; if one of them moves, the
@@ -72,6 +75,11 @@ namespace MobileGL::MG_Remote::Client {
 
     void PersistentMapTracker::PushBlocksFor(BufferObject& buffer) {
         if (!PushIsArmed()) return;
+        if (OnServerRole()) {
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"PushBlocksFor\"} - the persistent-map "
+                    "producer belongs to the client; the server consumes transported bytes");
+            std::abort();
+        }
         // Re-checked rather than trusted. The set is maintained at five events and a sixth
         // one arriving without a NoteMapStateChanged would otherwise push a buffer whose
         // shadow has been released - an adopted store's Bytes() is the GPU map, and reading
@@ -120,6 +128,11 @@ namespace MobileGL::MG_Remote::Client {
 
     void PersistentMapTracker::PushAllMembers() {
         if (!PushIsArmed()) return;
+        if (OnServerRole()) {
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"PushAllMembers\"} - the persistent-map "
+                    "producer belongs to the client; the server consumes transported bytes");
+            std::abort();
+        }
         if (m_livePersistentMaps.empty()) return;
         // Copied out first: PushBlocksFor can erase its own entry (a member that stopped
         // being one), and ska::flat_hash_map invalidates on erase.

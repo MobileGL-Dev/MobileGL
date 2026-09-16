@@ -20,6 +20,7 @@
 // R-11's server-owned staging copy. Header-only and package v1's; see its own header block for
 // why GLESBufferResource does not simply gain a member.
 #include <MG_Remote/Server/StagedShadow.h>
+#include <MG_Remote/Server/ServerLoop.h>
 #endif
 
 #include "Utils.h"
@@ -204,6 +205,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // garbage for a later collection - there is none on this arm.
         void OnFrontendStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
             if (InProcessTeardown()) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // Death notices have no framebuffer wire opcode. Keep the lifetime/slot valid
+            // until the context owner has destroyed its twin and updated its binding cache.
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                !MG_Remote::Server::ServerLoop::OnApplyThread()) {
+                struct Death { MG_Pipe::MGPipeKind kind; Uint64 lifetimeId; } death{kind, lifetimeId};
+                MG_Remote::Server::ServerLoopInstance().RunOnApplyThread(
+                    +[](void* user) -> MobileGLResult {
+                        const auto& death = *static_cast<Death*>(user);
+                        OnFrontendStateObjectDestroyed(death.kind, death.lifetimeId);
+                        return MOBILEGL_OK;
+                    }, &death);
+                return;
+            }
+#endif
             switch (kind) {
             case MG_Pipe::MGPipeKind::Texture:
                 TextureImpl::g_backendTextureObjects.DestroyByLifetimeId(lifetimeId);

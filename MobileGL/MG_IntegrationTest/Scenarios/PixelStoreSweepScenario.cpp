@@ -219,6 +219,44 @@ namespace MGITest {
         EXPECT_EQ(FirstGLError(), 0u);
     }
 
+    TEST_F(PixelStoreSweepScenario, ReadPixelsSwapsUnsignedShortComponentsAndPreservesPackGaps) {
+        if (!Ready()) return;
+        ResetAllPixelStoreModes();
+        GLuint texture = 0, framebuffer = 0;
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        // RGBA8 expands to repeated bytes in a ushort and cannot expose a missing swap.
+        const GLfloat color[] = {0.1f, 0.2f, 0.3f, 0.4f};
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, 1, 1, 0, GL_RGBA, GL_FLOAT, color);
+        glGenFramebuffers(1, &framebuffer);
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+        ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+        std::uint8_t native[8]{};
+        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_SHORT, native);
+        ASSERT_NE(native[0], native[1]) << "the source must contain a non-symmetric ushort";
+        glPixelStorei(GL_PACK_SWAP_BYTES, GL_TRUE);
+        std::uint8_t tight[8]{};
+        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_SHORT, tight);
+        glPixelStorei(GL_PACK_ROW_LENGTH, 3);
+        glPixelStorei(GL_PACK_SKIP_ROWS, 1);
+        glPixelStorei(GL_PACK_SKIP_PIXELS, 1);
+        std::vector<std::uint8_t> scattered(64, 0xCD);
+        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_SHORT, scattered.data());
+        for (std::size_t i = 0; i < sizeof(native); ++i) {
+            EXPECT_EQ(tight[i], native[i ^ 1]);
+            EXPECT_EQ(scattered[32 + i], native[i ^ 1]);
+        }
+        for (std::size_t i = 0; i < scattered.size(); ++i) {
+            if (i < 32 || i >= 40) EXPECT_EQ(scattered[i], 0xCD);
+        }
+        EXPECT_EQ(FirstGLError(), 0u);
+        ResetAllPixelStoreModes();
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDeleteFramebuffers(1, &framebuffer);
+        glDeleteTextures(1, &texture);
+    }
+
     // The leak regression. Each iteration is one complete CTS inner step, and every readback has
     // to be exactly the gradient THIS iteration uploaded - never the previous one's. Before the
     // missing destructors were added, the driver-side framebuffer count grew without bound here.
