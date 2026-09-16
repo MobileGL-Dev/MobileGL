@@ -96,11 +96,17 @@ namespace MobileGL::MG_Remote::Client {
         // name where a kReplySlot answer lands; pass {nullptr, 0} for a call that has none.
         // Returns the record's seq, which is also its reply-slot id.
         //
+        // `replySizeOut` (optional) receives the answer's OWN byte count as the server stamped
+        // it - which is not always `replyBytes`: a short OK reply stamps fewer, and a DECLINE or
+        // ERROR stamps 0. ReadPixels is the one caller that must know, because scattering a
+        // reply that arrived short would spray stale bytes as pixels (M2 / codex 11); it reads
+        // this and refuses `replySize != DstSize` by name rather than trust the copy.
+        //
         // Waiting is spin(MOBILEGL_IPC_SPIN_US) then park, through Doorbell::Wait, with
         // producerParked set before blocking - the shape Doorbell.h:121 already implements.
         Uint64 EmitAndWait(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
                            const void* varTail, Uint64 varTailBytes, void* replyOut,
-                           Uint64 replyBytes, Int32* statusOut);
+                           Uint64 replyBytes, Int32* statusOut, Uint64* replySizeOut = nullptr);
 
         // MOBILEGL_IPC_VERB_BARRIER. False is the R-1 negative control and is EXPECTED to be
         // red; it must be run once and the way it goes red recorded.
@@ -112,6 +118,36 @@ namespace MobileGL::MG_Remote::Client {
         // client never touches gPipeInputs while the server is inside the applier.
         static Bool InBarrierWait();
         static Bool ApplyThreadIsInsideApplier();
+
+        // ---- c1's additions ---------------------------------------------------------------
+
+        // The apply thread's half of R-1's invariant. v1's apply loop brackets its
+        // DecodeAndApply with these; the client checks the flag before it publishes, so
+        // "at most one of {GL thread, apply thread} is runnable" is a runtime assertion rather
+        // than a sentence in a brief. A raw pair rather than an RAII type in this header
+        // because the server side owns its own scoping and must not have to include a client
+        // header to get it - ScopedApplierEntry below is the convenience, not the contract.
+        static void NoteApplyThreadEnteredApplier();
+        static void NoteApplyThreadLeftApplier();
+        struct ScopedApplierEntry {
+            ScopedApplierEntry() { NoteApplyThreadEnteredApplier(); }
+            ~ScopedApplierEntry() { NoteApplyThreadLeftApplier(); }
+            ScopedApplierEntry(const ScopedApplierEntry&) = delete;
+            ScopedApplierEntry& operator=(const ScopedApplierEntry&) = delete;
+        };
+
+        // R-12's INVALIDATION EDGE. Drains whatever the server has queued on the control plane
+        // and adopts every CapsSnapshot in it - and a SECOND snapshot IS the invalidation,
+        // which is why there is no Invalidate(). Non-blocking: it peeks and returns.
+        //
+        // Called at the handshake, from BackendObject_Remote's Initialize/InitCapabilities, and
+        // once per Present. Present is the boundary every one of P5's three targets crosses,
+        // and a caps re-run can only follow a surface event, so once a frame is both sufficient
+        // and the cheapest place that is.
+        //
+        // Returns how many snapshots it adopted, so a case can assert the edge fired rather
+        // than assert that a number downstream of it happened to change.
+        Uint32 PumpControlPlane();
 
         // ---- s1's additions: the four primitives c1's EmitAndWait composes ---------------
         //

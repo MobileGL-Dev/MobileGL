@@ -45,6 +45,11 @@
 
 #include "ServerSession.h"
 
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+
 namespace MobileGL::MG_Remote::Server {
 
     class ServerLoop {
@@ -81,11 +86,129 @@ namespace MobileGL::MG_Remote::Server {
         using ControlWork = MobileGLResult (*)(void* user);
         MobileGLResult RunOnApplyThread(ControlWork work, void* user);
 
+        // ---- v1's additions beyond c0's signature block ---------------------------------
+
+        // Constructs the SERVER ROLE's private BackendObject and runs its non-GL Initialize().
+        // Called from MG_Backend::Init()'s single hook, BEFORE ClientSession::Start(), because
+        // ServerSession::Accept() publishes the first CapsSnapshot from it and because the two
+        // CallMask halves - which have no default and Fatal when unset (ServerSession.h) - are
+        // answered from what this backend is.
+        //
+        // NO GL AND NO EGL HAPPENS HERE. BackendObject_DirectGLES::Initialize() loads the
+        // driver's entry points; the native context does not exist until the client's first
+        // eglMakeCurrent crosses as a blocking control request and runs on the apply thread.
+        // That split is what lets the backend object be BUILT on the app thread while its
+        // context is never OWNED by it.
+        MobileGLResult CreateBackend(BackendType type);
+
+        // True on the apply thread itself. RunOnApplyThread uses it to run inline rather than
+        // deadlock when the apply thread posts to itself - which the EGL teardown path does,
+        // because ~BackendObject_DirectGLES runs THERE and reaches ReleaseEGLResources.
+        static Bool OnApplyThread();
+
+        // The CPU mask MOBILEGL_IPC_SERVER_AFFINITY resolved to and sched_setaffinity accepted.
+        // 0 means "no affinity was applied" - the honest answer for `off`, for a platform with
+        // no affinity call, and for a failed syscall - and is exactly why the RESOLVED mask is
+        // logged rather than the string an operator typed.
+        Uint64 ResolvedAffinityMask() const;
+
+        // Diagnostics the tests read. DrainedRecords is how many records this thread has handed
+        // to the applier; ParkCount how many times it actually parked. A shutdown test that
+        // asserts only "Stop() returned" cannot tell a thread that parked and was woken by Kill
+        // from one that never parked at all - which is the R-16 shape of a check that cannot
+        // fail for its own reason.
+        Uint64 DrainedRecords() const;
+        Uint64 ParkCount() const;
+
     private:
+        void ApplyThreadMain();
+        // Part of the apply thread's park predicate: a posted control request must be able to
+        // un-park a thread waiting on kWaitForever, which a Notify alone cannot do.
+        Bool ControlIsPending() const;
+        // Runs a posted control request, if there is one. Returns true if it ran one.
+        Bool PumpControlRequest();
+        // Pops and applies every record currently in the ring; returns how many it applied.
+        Uint64 DrainRing();
+        void SignalExited();
+
         ServerSession* m_session = nullptr;
-        Bool m_running = false;
+        std::atomic<Bool> m_running{false};
+        std::atomic<Bool> m_stopRequested{false};
+        std::thread m_thread;
+        std::atomic<std::thread::id> m_applyThreadId{};
+
+        // The private backend object. Destroyed ON the apply thread while it still owns the
+        // context - see Stop().
+        UniquePtr<MG_Backend::BackendObject> m_backend;
+
+        // The blocking control mailbox. ONE slot, because the verb barrier already leaves one
+        // client thread runnable at a time; m_callerMutex serialises anything that is not.
+        std::mutex m_callerMutex;
+        std::mutex m_controlMutex;
+        std::condition_variable m_controlPosted;
+        std::condition_variable m_controlDone;
+        ControlWork m_controlWork = nullptr;
+        void* m_controlUser = nullptr;
+        MobileGLResult m_controlResult = MOBILEGL_OK;
+        Bool m_controlPending = false;
+        Bool m_controlFinished = false;
+
+        // The BOUNDED join's other half. std::thread::join has no deadline, so a lost wakeup
+        // would wedge CI rather than fail it; the thread signals here last and Stop() waits
+        // with a deadline (InProcessTransportTest.cpp:344's five seconds).
+        std::mutex m_exitMutex;
+        std::condition_variable m_exitCv;
+        Bool m_exited = false;
+
+        Uint64 m_affinityMask = 0;
+        std::atomic<Uint64> m_drained{0};
+        std::atomic<Uint64> m_parks{0};
     };
 
     ServerLoop& ServerLoopInstance();
+
+    // ---------------------------------------------------------------------------------
+    // THE EGL OWNERSHIP MOVE - the part that can sink the phase, expressed as twelve calls
+    // ---------------------------------------------------------------------------------
+    //
+    // Under split the app thread must never reach the driver's eglMakeCurrent. Today it does:
+    // EGLImpl.cpp:284 -> BackendObject_DirectGLES.cpp:963 -> DirectGLES.cpp:11925, and the
+    // owner slot g_backendContextOwnerThread (DirectGLES.cpp:11865) is stamped with whatever
+    // thread got there. So BackendObject_Remote's nine EGL virtuals - package c1's - call these
+    // twelve, each of which is a BLOCKING control request that runs the SERVER's backend object
+    // on mgl-srv-apply. eglMakeCurrent then runs ONCE, on that thread, and is never released:
+    // g_backendContextOwnerThread is written once, DirectGLES.cpp:11933-11953's six cache
+    // invalidations become a one-off startup cost instead of a per-migration storm, the
+    // per-frame EGL re-verification stamp is permanently true, and the 16
+    // IsBackendContextCurrentOnThisThread() sites plus the 16 CanTouchGLNow() sites answer TRUE
+    // on the server instead of silently degrading.
+    //
+    // TWO OF THEM MUST BLOCK OR THE PROCESS TEARS ITS OWN CONTEXT DOWN UNDER ITSELF:
+    // ReleaseEGLResources (reached from EGLImpl.cpp:326, which for DirectGLES runs
+    // DestroyEGLContext) and ~BackendObject_DirectGLES (reached from
+    // pActiveBackendObject.reset() at MobileGL/Init.cpp:68). Both are blocking here - the first
+    // by being one of these calls, the second because ServerLoop::Stop() destroys the private
+    // backend ON the apply thread before that thread exits and Stop() itself waits.
+    //
+    // WHY THEY ARE FREE FUNCTIONS AND NOT MEMBERS: c1 needs exactly this surface and nothing
+    // else of the server, so the seam between the two packages is a list of twelve signatures
+    // rather than a class with a lifecycle.
+    Bool ServerInitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor);
+    Bool ServerCreateEGLWindowSurface(EGLSurface surface, const MG_Backend::WindowHandle& handle);
+    Bool ServerResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);
+    Bool ServerCreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height);
+    // Also RE-PUBLISHES THE CAPS SNAPSHOT on success (R-12). BackendObject::MakeEGLCurrent runs
+    // InitCapabilities() on the first make-current per surface (BackendObject.cpp:341-347), so
+    // this is the moment the server's answers stop being the empty ones Accept() published -
+    // and a SECOND arrival IS the invalidation signal, which is how DirectGLES, which has no
+    // OnCapsInvalidated producer at all, tells the client without a dev-shaped backend edit.
+    Bool ServerMakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx);
+    Bool ServerSwapEGLBuffers(EGLDisplay dpy, EGLSurface draw);
+    void ServerSetEGLSwapInterval(Int interval);
+    void ServerReleaseEGLSurface(EGLSurface surface);
+    void ServerReleaseEGLResources();
+    Bool ServerInitCapabilities();
+    Bool ServerInitWindowSurface();
+    void ServerSetWindowHandle(const MG_Backend::WindowHandle& handle);
 
 } // namespace MobileGL::MG_Remote::Server

@@ -31,6 +31,11 @@
 #include <MG_Util/Math/FixedPointConversion.h>
 #include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
 #include <MG_Impl/Pipe/PipeFill.h>
+// CONTRACT-P5.md §7 / ID-14: a null check on a GLFunctionsTable slot may not survive into the
+// client under split - it becomes a caps-mirror read. SlotCaps.h carries the rule and the test
+// that decides which of its two spellings a site takes; in a pull build both expand to exactly
+// the check they replaced.
+#include <MG_Remote/Client/SlotCaps.h>
 // P4a, ID-18 M2. The ONE door MG_State and MG_Impl have into the client's emitters; the three
 // call sites below are declarations only, exactly as the frontend's mutators are.
 #include <MG_Pipe/PipeMutation.h>
@@ -6534,7 +6539,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                GLenum type, GLsizei bufSize, void* pixels, const char* caller) {
         if (MG_Backend::pActiveBackendObject != nullptr &&
             MG_Backend::pActiveBackendObject->GetBackendType() == BackendType::DirectVulkan &&
-            MG_Backend::gBackendFunctionsTable.GL.GetTextureImage != nullptr) {
+            MGL_BACKEND_SLOT_LOCAL(GetTextureImage)) {
             MGP_FILL(GetTextureImage);
             MG_Backend::gBackendFunctionsTable.GL.GetTextureImage(textureObject, uploadTarget, level, format, type,
                                                                   bufSize, pixels);
@@ -6796,7 +6801,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {
         if (!GetTexImage_State(target, level, format, type, pixels)) return;
-        if (MG_Backend::gBackendFunctionsTable.GL.GetTexImage != nullptr) {
+        if (MGL_BACKEND_SLOT_LOCAL(GetTexImage)) {
             GetTexImage_Backend(target, level, format, type, pixels);
             return;
         }

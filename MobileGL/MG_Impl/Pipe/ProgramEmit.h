@@ -41,6 +41,7 @@
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/MGPipeHostSpan.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeRoute.h>
 #include <MG_Pipe/PipeMutation.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ProgramState/ProgramObject.h>
@@ -137,19 +138,19 @@ namespace MobileGL::MG_Pipe {
             // exactly "nothing bound".
             const MGPipeHandle boundCso = !MGPipeHandleIsNull(drawCso) ? drawCso : dispatchCso;
             if (boundCso != m_boundCso) {
-                MGPipeApplyBindShaderState(HandleOnly(boundCso));
+                MGPipeRouteBindShaderState(HandleOnly(boundCso));
                 m_boundCso = boundCso;
                 ++m_binds;
                 bytes += sizeof(MGPHandleOnly);
             }
             if (drawCso != m_drawCso) {
-                MGPipeApplySetDrawProgram(HandleOnly(drawCso));
+                MGPipeRouteSetDrawProgram(HandleOnly(drawCso));
                 m_drawCso = drawCso;
                 ++m_drawSets;
                 bytes += sizeof(MGPHandleOnly);
             }
             if (dispatchCso != m_dispatchCso) {
-                MGPipeApplySetDispatchProgram(HandleOnly(dispatchCso));
+                MGPipeRouteSetDispatchProgram(HandleOnly(dispatchCso));
                 m_dispatchCso = dispatchCso;
                 ++m_dispatchSets;
                 bytes += sizeof(MGPHandleOnly);
@@ -192,7 +193,12 @@ namespace MobileGL::MG_Pipe {
             m_lastConstants.Blob.Seg = kMGHostSpanSegNone;
             m_lastConstants.Blob.Offset = reinterpret_cast<Uint64>(program->GetUBOData());
             m_lastConstants.Blob.Size = 0;
-            MGPipeApplySetGlobalConstants(m_lastConstants, program->GetUBOData());
+            // `size` is GetUBOSize(), and it is passed because the record declares 0 - the
+            // monolith convention (the bytes ride beside the record) that CONTRACT-P5 table 1
+            // rule A cannot keep under split. It is the row's largest and least bounded blob,
+            // per program per frame, so it is also the one R-10's max-record counter watches.
+            MGPipeRouteSetGlobalConstants(m_lastConstants, program->GetUBOData(),
+                                          static_cast<Uint64>(size));
             m_constantsCso = cso;
             m_constantsVersion = version;
             ++m_constantSets;
@@ -254,7 +260,7 @@ namespace MobileGL::MG_Pipe {
             m_lastDesc.Reflection.Offset = reinterpret_cast<Uint64>(&link);
             m_lastDesc.Reflection.Size = 0;
 
-            MGPipeApplyCreateShaderState(m_lastDesc, &link, &spirv);
+            MGPipeRouteCreateShaderState(m_lastDesc, &link, &spirv);
             // THE CREATE WENT OUT, so the publication latch is taken here and nowhere else
             // (contract-v2 §3.1). MGPipeEmitShaderCsoDestroyAndFree reads it, and without it
             // delete_shader_state can never go out - for an ordinary program or for a

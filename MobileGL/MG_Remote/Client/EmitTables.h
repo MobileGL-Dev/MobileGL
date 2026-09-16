@@ -47,18 +47,36 @@
 // disappears. A null check on a slot may not survive into the client: it becomes a caps-mirror
 // read, which is what ARCHITECTURE.md:114 means by "CallMask replaces 'is this table slot null'".
 //
-// NOTE the asymmetry this table does not resolve: the resource, CSO, framebuffer, texture,
-// sampler and program families do NOT come through here. They are emitted from
-// MG_Impl/Pipe/* by direct MGPipeApply* calls (37 entry points, 41 call sites), and under
-// split each of those becomes an encode. This table covers only the verbs - the draws,
-// clears, blits, readbacks, queries, fences and present.
+// NOTE the asymmetry this table does not resolve, AND WHERE IT IS RESOLVED (R-17): the
+// resource, CSO, framebuffer, texture, sampler and program families do NOT come through here.
+// They were emitted from MG_Impl/Pipe/* by 40 direct calls to the 37 MGPipeApply* entry
+// points; those call sites now go through the two generated tables
+// (MG_Pipe/PipeRoute.h -> MG_Remote/Client/WireTables.cpp). This table covers only the verbs -
+// the draws, clears, blits, readbacks, queries, fences and present.
 
 #pragma once
 #include <Includes.h>
 
 #include <MG_Backend/BackendObject.h>
+#include <MG_Pipe/MGPipeValueTypes.h>
 
 namespace MobileGL::MG_Remote::Client {
+
+    // MGPClear::Kind. MGPipeTypes.h:1273 states the list as a COMMENT - "Whole | Color | Depth
+    // | Stencil | DepthStencil" - and mints no enumerator, because until P5 the record had no
+    // producer. These are the values, in that comment's own order, and they are here rather
+    // than in MGPipeTypes.h because that file is c0's and this phase produces exactly ONE of
+    // them: glClear is the only entry point that reaches the Clear slot (the four
+    // glClearBuffer* and the four glClearNamedFramebuffer* are class C). v1's
+    // WireVerbSink::OnClear must therefore Fatal on anything but Whole rather than guess, and
+    // the phase that migrates the other eight moves these into the contract.
+    enum MGRemoteClearKind : Uint32 {
+        kRemoteClearWhole = 0,
+        kRemoteClearColor = 1,
+        kRemoteClearDepth = 2,
+        kRemoteClearStencil = 3,
+        kRemoteClearDepthStencil = 4,
+    };
 
     // The table MG_Backend::Init() installs into gBackendFunctionsTable for the remote role.
     // A reference to a never-destroyed block, like every other MG_Remote singleton (ID-8).
@@ -76,5 +94,64 @@ namespace MobileGL::MG_Remote::Client {
     // The total the count above is out of. Asserted against the struct in EmitTables.cpp, so
     // a slot added to GLFunctionsTable without a decision here is a build break.
     inline constexpr Uint32 kRemoteEmitSlotCount = 71;
+
+    // The other two thirds of the census, so a case can assert the WHOLE partition rather than
+    // only the half that emits. CONTRACT-P5.md §7's three classes are 2 + 5 + 64, and
+    // EmitTables.cpp static_asserts that they sum to kRemoteEmitSlotCount: a slot that quietly
+    // changes class shows up as a build break in the sum, not as a silent behaviour change.
+    Uint32 LocallyAnsweredSlotCount(); // class A - answered from the caps mirror, R-15
+    Uint32 UnmigratedSlotCount();      // class C - Fatal{UnmigratedVerb}
+
+    // THE E2 NEGATIVE CONTROL (t1's debt against c1, BRIEF §7). When set, the Clear emitter
+    // SKIPS its record - it still runs the pre-verb hooks and still returns - so a replay that
+    // is really going through the wire loses one clear per frame and its SSIM falls below the
+    // 0.99 threshold, while a replay that fell through to the driver is unaffected. It is a
+    // function rather than a knob in Config.h for two reasons: the control has to be settable
+    // from a test process that has already started, and a knob would be a
+    // MOBILEGL_IPC_-shaped name for something no operator may ever set.
+    //
+    // Emissions actually skipped, so the control can assert that it DID something rather than
+    // that a picture changed - a control that silently never fired is the third shape of R-16's
+    // "a gate that cannot go red for its own reason".
+    void SetDropClearEmissionForNegativeControl(Bool drop);
+    Uint64 DroppedClearEmissions();
+
+    // ID-47. The CLIENT refuses a readback whose answer would not fit a reply slot, BEFORE it
+    // emits the record, and names the read. THE REFUSAL ITSELF IS s1's -
+    // ClientSession::RequireReadPixelsReplyFits, forwarding to
+    // ReplySlotPool::RequireReadPixelsFits - and this package does not own a second copy of the
+    // message: two spellings of one refusal is how the two sides come to disagree about which
+    // reads are legal. What c1 owns is the CALL SITE and the number it passes, which is ID-49's
+    // tight extent; the control below is over that, and s1-v3.md §1's cases are over the
+    // helper.
+
+    // ID-49. `MGPReadbackInfo::DstSize` is the TIGHT w*h*bytesPerPixel extent - the reply
+    // payload - and nothing about the application's pack state crosses the wire. The server
+    // reads with a NEUTRAL pack state into that run; this is the number both sides derive.
+    Uint64 TightReadbackByteCount(GLsizei width, GLsizei height, GLenum format, GLenum type);
+
+    // ID-49. Scatters the tight rows into the application's pointer per the application's own
+    // pack state (ROW_LENGTH, SKIP_*, ALIGNMENT), which only the client holds. Exposed for the
+    // same reason as the refusal above: the control drives the function the emitter calls
+    // rather than a second copy of GL 4.6 8.4.4's arithmetic. THE GAPS ARE NEVER WRITTEN -
+    // they belong to the application - and that is what the control checks with a sentinel.
+    void ScatterTightReadbackIntoPackState(const void* tight, void* destination, GLsizei width,
+                                           GLsizei height, Uint64 bytesPerPixel,
+                                           const PixelStoreParameters& pack);
+
+    // ID-49. True when the destination layout IS the tight layout, which is the only condition
+    // under which EmitReadPixels may read the reply straight into the application pointer and
+    // skip the bounce. Exported because the FAST PATH and the SCATTER have to agree, and the
+    // only honest way to state that is to drive both and compare - a case that tested either
+    // alone would pass a predicate that said yes to a layout the scatter would have rearranged.
+    Bool ReadbackPackStateIsTightForTest(GLsizei width, Uint64 bytesPerPixel,
+                                         const PixelStoreParameters& pack);
+
+    // M2 / codex 11. True exactly when the readback reply is OK and carries the read's own exact
+    // extent (CONTRACT-P5 row 23). EmitReadPixels calls this and Fatals by name when it is false
+    // - a short OK reply, or a DECLINE/ERROR with a zero payload, is refused rather than scattered
+    // as pixels. Exposed so the control drives the production predicate (R-16), not a copy: pass
+    // 0=OK / 1=DECLINED / 2=ERROR as `status`.
+    Bool ReadbackReplyIsComplete(Int32 status, Uint64 replySize, Uint64 expected);
 
 } // namespace MobileGL::MG_Remote::Client

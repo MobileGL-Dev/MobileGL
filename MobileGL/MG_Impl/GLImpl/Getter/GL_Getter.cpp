@@ -31,6 +31,11 @@
 #include <MG_Util/ShaderTranspiler/Types.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/Pipe/PipeFill.h>
+// CONTRACT-P5.md §7 / ID-14: a null check on a GLFunctionsTable slot may not survive into the
+// client under split - it becomes a caps-mirror read. SlotCaps.h carries the rule and the test
+// that decides which of its two spellings a site takes; in a pull build both expand to exactly
+// the check they replaced.
+#include <MG_Remote/Client/SlotCaps.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
     // Declared rather than #included from GL_RenderState.h on purpose: that header also declares
@@ -1354,7 +1359,16 @@ namespace MobileGL::MG_Impl::GLImpl {
             // full 64-bit GPU timestamp survives; LWJGL reads it this way.
             Int64 timestamp = 0;
             if (!MG_Config::Features.DisableTimerQuery) {
-                if (const auto getGpuTimestampNs = MG_Backend::gBackendFunctionsTable.GL.GetGpuTimestampNs) {
+                // glGetInteger64v(GL_TIMESTAMP). GetGpuTimestampNs is class C - a LIVE GPU
+                // timestamp is not a static property, so R-15 does not reach it - and the
+                // documented answer when it is unavailable is 0 (BackendObject.h:192), which
+                // is correct rather than merely quiet. kCapTimerQuery is the published bit.
+                //
+                // The POINTER-valued macro, so the init-statement below is unchanged in a pull
+                // build and G1 cannot see this edit: the Bool-valued spelling moved this
+                // function by -150 bytes for no behavioural reason at all.
+                if (const auto getGpuTimestampNs =
+                        MGL_BACKEND_SLOT_PTR_CAP(GetGpuTimestampNs, MG_Pipe::kCapTimerQuery)) {
                     MGP_FILL(GetGpuTimestampNs);
                     timestamp = getGpuTimestampNs();
                 }
@@ -2265,7 +2279,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TIMESTAMP: {
             Int64 timestamp = 0;
             if (!MG_Config::Features.DisableTimerQuery) {
-                if (const auto getGpuTimestampNs = MG_Backend::gBackendFunctionsTable.GL.GetGpuTimestampNs) {
+                // glGetInteger64v(GL_TIMESTAMP). GetGpuTimestampNs is class C - a LIVE GPU
+                // timestamp is not a static property, so R-15 does not reach it - and the
+                // documented answer when it is unavailable is 0 (BackendObject.h:192), which
+                // is correct rather than merely quiet. kCapTimerQuery is the published bit.
+                //
+                // The POINTER-valued macro, so the init-statement below is unchanged in a pull
+                // build and G1 cannot see this edit: the Bool-valued spelling moved this
+                // function by -150 bytes for no behavioural reason at all.
+                if (const auto getGpuTimestampNs =
+                        MGL_BACKEND_SLOT_PTR_CAP(GetGpuTimestampNs, MG_Pipe::kCapTimerQuery)) {
                     MGP_FILL(GetGpuTimestampNs);
                     timestamp = getGpuTimestampNs();
                 }

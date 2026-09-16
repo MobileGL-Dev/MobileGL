@@ -152,6 +152,19 @@ class Call(object):
         """(parameter declaration list, argument list) for this call."""
         params = ["const %s* payload" % self.Payload]
         args = ["payload"]
+        # P5 R-17. EXACTLY the shape kVarTail already has, one flag over: a kHasBlob row's
+        # payload owns an MGPBlobRef, and a blobref names bytes that live somewhere the
+        # payload cannot reach on its own. In monolith "somewhere" is the caller's own
+        # memory and the companion is the raw pointer every MG_Impl call site passes today
+        # (CONTRACT-P5 table 1's "companion pointer today" column, nine rows); under split
+        # it is a SEG_STAGE run the client staged before it published. A table row that
+        # omitted the pair could reproduce NEITHER, which is why nine of the thirty-seven
+        # entry points had no routing that could be written at all.
+        if "kHasBlob" in self.Flags:
+            params.append("const void* blobBytes")
+            params.append("Uint64 blobByteCount")
+            args.append("blobBytes")
+            args.append("blobByteCount")
         if "kVarTail" in self.Flags:
             params.append("const void* varTail")
             params.append("Uint32 varTailCount")

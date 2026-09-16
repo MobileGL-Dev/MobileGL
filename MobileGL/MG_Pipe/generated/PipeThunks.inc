@@ -17,8 +17,8 @@
 // unimplemented (null) entry is the caller's business to check, exactly as it is
 // with the table this replaces.
 
-inline void MGP_GetCaps(const MGPCaps* payload, MGPReplySlot* reply) {
-    gMGPipeScreen.GetCaps(payload, reply);
+inline void MGP_GetCaps(const MGPCaps* payload, const void* blobBytes, Uint64 blobByteCount, MGPReplySlot* reply) {
+    gMGPipeScreen.GetCaps(payload, blobBytes, blobByteCount, reply);
 }
 
 inline void MGP_ResourceCreate(const MGPResourceDesc* payload, MGPReplySlot* reply) {
@@ -81,8 +81,8 @@ inline void MGP_QueryDestroy(const MGPHandleOnly* payload) {
     gMGPipeContext.QueryDestroy(payload);
 }
 
-inline void MGP_CreateRenderState(const MGPRenderStateDesc* payload) {
-    gMGPipeContext.CreateRenderState(payload);
+inline void MGP_CreateRenderState(const MGPRenderStateDesc* payload, const void* blobBytes, Uint64 blobByteCount) {
+    gMGPipeContext.CreateRenderState(payload, blobBytes, blobByteCount);
 }
 
 inline void MGP_BindRenderState(const MGPBindRenderState* payload) {
@@ -93,8 +93,8 @@ inline void MGP_DeleteRenderState(const MGPHandleOnly* payload) {
     gMGPipeContext.DeleteRenderState(payload);
 }
 
-inline void MGP_CreateVertexElements(const MGPVertexElements* payload) {
-    gMGPipeContext.CreateVertexElements(payload);
+inline void MGP_CreateVertexElements(const MGPVertexElements* payload, const void* blobBytes, Uint64 blobByteCount) {
+    gMGPipeContext.CreateVertexElements(payload, blobBytes, blobByteCount);
 }
 
 inline void MGP_BindVertexElements(const MGPHandleOnly* payload) {
@@ -105,8 +105,8 @@ inline void MGP_DeleteVertexElements(const MGPHandleOnly* payload) {
     gMGPipeContext.DeleteVertexElements(payload);
 }
 
-inline void MGP_CreateSamplerState(const MGPSamplerDesc* payload) {
-    gMGPipeContext.CreateSamplerState(payload);
+inline void MGP_CreateSamplerState(const MGPSamplerDesc* payload, const void* blobBytes, Uint64 blobByteCount) {
+    gMGPipeContext.CreateSamplerState(payload, blobBytes, blobByteCount);
 }
 
 inline void MGP_DeleteSamplerState(const MGPHandleOnly* payload) {
@@ -121,8 +121,8 @@ inline void MGP_DeleteSamplerView(const MGPHandleOnly* payload) {
     gMGPipeContext.DeleteSamplerView(payload);
 }
 
-inline void MGP_CreateShaderState(const MGPProgramDesc* payload) {
-    gMGPipeContext.CreateShaderState(payload);
+inline void MGP_CreateShaderState(const MGPProgramDesc* payload, const void* blobBytes, Uint64 blobByteCount) {
+    gMGPipeContext.CreateShaderState(payload, blobBytes, blobByteCount);
 }
 
 inline void MGP_BindShaderState(const MGPHandleOnly* payload) {
@@ -133,8 +133,8 @@ inline void MGP_DeleteShaderState(const MGPHandleOnly* payload) {
     gMGPipeContext.DeleteShaderState(payload);
 }
 
-inline void MGP_SetDynamicState(const MGPDynamicState* payload) {
-    gMGPipeContext.SetDynamicState(payload);
+inline void MGP_SetDynamicState(const MGPDynamicState* payload, const void* blobBytes, Uint64 blobByteCount) {
+    gMGPipeContext.SetDynamicState(payload, blobBytes, blobByteCount);
 }
 
 inline void MGP_SetFramebufferState(const MGPFramebufferState* payload) {
@@ -173,8 +173,8 @@ inline void MGP_SetStreamOutputTargets(const MGPStreamOutputTargets* payload, co
     gMGPipeContext.SetStreamOutputTargets(payload, varTail, varTailCount);
 }
 
-inline void MGP_SetGlobalConstants(const MGPGlobalConstants* payload) {
-    gMGPipeContext.SetGlobalConstants(payload);
+inline void MGP_SetGlobalConstants(const MGPGlobalConstants* payload, const void* blobBytes, Uint64 blobByteCount) {
+    gMGPipeContext.SetGlobalConstants(payload, blobBytes, blobByteCount);
 }
 
 inline void MGP_SetVertexAttribDefaults(const MGPVertexAttribDefaults* payload, const void* varTail, Uint32 varTailCount) {
@@ -197,20 +197,20 @@ inline void MGP_SetDispatchProgram(const MGPHandleOnly* payload) {
     gMGPipeContext.SetDispatchProgram(payload);
 }
 
-inline void MGP_SetResidualValueState(const MGPResidualValueState* payload) {
-    gMGPipeContext.SetResidualValueState(payload);
+inline void MGP_SetResidualValueState(const MGPResidualValueState* payload, const void* blobBytes, Uint64 blobByteCount) {
+    gMGPipeContext.SetResidualValueState(payload, blobBytes, blobByteCount);
 }
 
 inline void MGP_SetTextureParams(const MGPTextureParams* payload, MGPReplySlot* reply) {
     gMGPipeContext.SetTextureParams(payload, reply);
 }
 
-inline void MGP_ResourceSubData(const MGPSubData* payload, const void* varTail, Uint32 varTailCount, MGPReplySlot* reply) {
-    gMGPipeContext.ResourceSubData(payload, varTail, varTailCount, reply);
+inline void MGP_ResourceSubData(const MGPSubData* payload, const void* blobBytes, Uint64 blobByteCount, const void* varTail, Uint32 varTailCount, MGPReplySlot* reply) {
+    gMGPipeContext.ResourceSubData(payload, blobBytes, blobByteCount, varTail, varTailCount, reply);
 }
 
-inline void MGP_BufferSubDataResident(const MGPSubData* payload) {
-    gMGPipeContext.BufferSubDataResident(payload);
+inline void MGP_BufferSubDataResident(const MGPSubData* payload, const void* blobBytes, Uint64 blobByteCount) {
+    gMGPipeContext.BufferSubDataResident(payload, blobBytes, blobByteCount);
 }
 
 inline void MGP_ResourceSubDataComplete(const MGPSubDataComplete* payload) {

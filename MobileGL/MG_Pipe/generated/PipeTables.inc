@@ -15,7 +15,7 @@
 // share group: 11 calls. A null entry means the backend does not implement this
 // call and the frontend keeps its own path (plan B section 4.1).
 struct MGPipeScreen {
-    void (*GetCaps)(const MGPCaps* payload, MGPReplySlot* reply);
+    void (*GetCaps)(const MGPCaps* payload, const void* blobBytes, Uint64 blobByteCount, MGPReplySlot* reply);
     void (*ResourceCreate)(const MGPResourceDesc* payload, MGPReplySlot* reply);
     void (*ResourceRespecify)(const MGPResourceDesc* payload, MGPReplySlot* reply);
     void (*ResourceDestroy)(const MGPHandleOnly* payload);
@@ -37,20 +37,20 @@ struct MGPipeContext {
     void (*QueryAvailable)(const MGPHandleOnly* payload, MGPReplySlot* reply);
     void (*QueryResult)(const MGPQueryResultRequest* payload, MGPReplySlot* reply);
     void (*QueryDestroy)(const MGPHandleOnly* payload);
-    void (*CreateRenderState)(const MGPRenderStateDesc* payload);
+    void (*CreateRenderState)(const MGPRenderStateDesc* payload, const void* blobBytes, Uint64 blobByteCount);
     void (*BindRenderState)(const MGPBindRenderState* payload);
     void (*DeleteRenderState)(const MGPHandleOnly* payload);
-    void (*CreateVertexElements)(const MGPVertexElements* payload);
+    void (*CreateVertexElements)(const MGPVertexElements* payload, const void* blobBytes, Uint64 blobByteCount);
     void (*BindVertexElements)(const MGPHandleOnly* payload);
     void (*DeleteVertexElements)(const MGPHandleOnly* payload);
-    void (*CreateSamplerState)(const MGPSamplerDesc* payload);
+    void (*CreateSamplerState)(const MGPSamplerDesc* payload, const void* blobBytes, Uint64 blobByteCount);
     void (*DeleteSamplerState)(const MGPHandleOnly* payload);
     void (*CreateSamplerView)(const MGPSamplerView* payload);
     void (*DeleteSamplerView)(const MGPHandleOnly* payload);
-    void (*CreateShaderState)(const MGPProgramDesc* payload);
+    void (*CreateShaderState)(const MGPProgramDesc* payload, const void* blobBytes, Uint64 blobByteCount);
     void (*BindShaderState)(const MGPHandleOnly* payload);
     void (*DeleteShaderState)(const MGPHandleOnly* payload);
-    void (*SetDynamicState)(const MGPDynamicState* payload);
+    void (*SetDynamicState)(const MGPDynamicState* payload, const void* blobBytes, Uint64 blobByteCount);
     void (*SetFramebufferState)(const MGPFramebufferState* payload);
     void (*SetVertexBuffers)(const MGPVertexBuffers* payload, const void* varTail, Uint32 varTailCount);
     void (*SetIndexBuffer)(const MGPIndexBuffer* payload);
@@ -60,16 +60,16 @@ struct MGPipeContext {
     void (*SetShaderImages)(const MGPShaderImages* payload, const void* varTail, Uint32 varTailCount);
     void (*SetShaderBuffers)(const MGPShaderBuffers* payload, const void* varTail, Uint32 varTailCount);
     void (*SetStreamOutputTargets)(const MGPStreamOutputTargets* payload, const void* varTail, Uint32 varTailCount);
-    void (*SetGlobalConstants)(const MGPGlobalConstants* payload);
+    void (*SetGlobalConstants)(const MGPGlobalConstants* payload, const void* blobBytes, Uint64 blobByteCount);
     void (*SetVertexAttribDefaults)(const MGPVertexAttribDefaults* payload, const void* varTail, Uint32 varTailCount);
     void (*SetPixelPackState)(const MGPPixelPackState* payload);
     void (*SetPatchState)(const MGPPatchState* payload);
     void (*SetDrawProgram)(const MGPHandleOnly* payload);
     void (*SetDispatchProgram)(const MGPHandleOnly* payload);
-    void (*SetResidualValueState)(const MGPResidualValueState* payload);
+    void (*SetResidualValueState)(const MGPResidualValueState* payload, const void* blobBytes, Uint64 blobByteCount);
     void (*SetTextureParams)(const MGPTextureParams* payload, MGPReplySlot* reply);
-    void (*ResourceSubData)(const MGPSubData* payload, const void* varTail, Uint32 varTailCount, MGPReplySlot* reply);
-    void (*BufferSubDataResident)(const MGPSubData* payload);
+    void (*ResourceSubData)(const MGPSubData* payload, const void* blobBytes, Uint64 blobByteCount, const void* varTail, Uint32 varTailCount, MGPReplySlot* reply);
+    void (*BufferSubDataResident)(const MGPSubData* payload, const void* blobBytes, Uint64 blobByteCount);
     void (*ResourceSubDataComplete)(const MGPSubDataComplete* payload);
     void (*ResourceFlushRange)(const MGPFlushRange* payload);
     void (*ResourceReadback)(const MGPReadback* payload, MGPReplySlot* reply);

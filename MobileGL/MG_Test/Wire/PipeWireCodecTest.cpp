@@ -233,6 +233,30 @@ namespace {
         std::uint64_t m_sessionApplied = 0;
     };
 
+    // ID-31 + R-17's cross-check, written once because four cases need it.
+    //
+    // The four Bool acceptance rows now answer into SEG_REPLY, and "an answer was written" is
+    // a weak statement on its own - a PostReply that stamped a constant OK would satisfy it.
+    // So the STATUSES are compared against the decoder's own accepted/declined counters, which
+    // are produced by a different line of code from a different value. A single-sided
+    // assertion here is exactly the shape R-16 was written after.
+    void ExpectRepliesAgreeWithTheAcceptanceTally(Wire2& wire) {
+        std::uint64_t ok = 0;
+        std::uint64_t declined = 0;
+        for (const auto& reply : wire.Answers().All) {
+            EXPECT_NE(reply.Status, ReplySink::kStatusError)
+                << "seq " << reply.Seq << ": ERROR is not an acceptance answer";
+            if (reply.Status == ReplySink::kStatusOk) ++ok;
+            if (reply.Status == ReplySink::kStatusDeclined) ++declined;
+        }
+        EXPECT_EQ(ok, wire.Decoder().AcceptedRecords())
+            << "the slots say " << ok << " accepted, the decoder's tally says "
+            << wire.Decoder().AcceptedRecords();
+        EXPECT_EQ(declined, wire.Decoder().DeclinedRecords())
+            << "the slots say " << declined << " declined, the decoder's tally says "
+            << wire.Decoder().DeclinedRecords();
+    }
+
     MGPipeHandle MakeHandle(Uint32 slot, Uint32 gen = 1) {
         MGPipeHandle handle{};
         handle.Slot = slot;
@@ -576,12 +600,22 @@ TEST_F(PipeWireCodecTest, KNeedsAckRespecifyCarriesItsRedefinitionScope) {
               kInvalidSeq);
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
-    // Two records, two ACCEPTANCE answers - and NOT in a reply slot. Neither ResourceCreate
-    // nor ResourceRespecify carries kReplySlot, and s1 sizes ReplyPool from that table, so a
-    // reply written here would overwrite some waiter's slot.
-    EXPECT_TRUE(wire.Answers().All.empty());
+    // Two records, two ACCEPTANCE answers, AND THEY NOW RIDE THE REPLY SLOT (ID-31 + R-17).
+    // Both rows carry kReplySlot in kMGPipeCallFlags, ReplyPool is sized from that same table,
+    // and CONTRACT-P5 table 0 always said DECLINED "is how the four Bool acceptance entry
+    // points say false". The two halves agreed the moment ID-31 landed the flag.
+    ASSERT_EQ(wire.Answers().All.size(), 2u);
+    EXPECT_EQ(wire.Answers().All[0].Seq, 1u);
+    EXPECT_EQ(wire.Answers().All[1].Seq, 2u);
+    EXPECT_TRUE(wire.Answers().All[0].Bytes.empty());
+    EXPECT_TRUE(wire.Answers().All[1].Bytes.empty());
     EXPECT_EQ(wire.Decoder().AcceptedRecords() + wire.Decoder().DeclinedRecords(), 2u);
     EXPECT_TRUE(wire.Decoder().LastAcceptanceKnown());
+    // THE CROSS-CHECK, and it is the point of asserting the status at all: the slot's status
+    // and the decoder's own tally are two independent statements of the same fact, so a
+    // PostReply that stamped a constant would disagree with the counters even though every
+    // other assertion above still passed.
+    ExpectRepliesAgreeWithTheAcceptanceTally(wire);
 }
 
 TEST_F(PipeWireCodecTest, KOptionalUnmapPersistentRoundTrips) {
@@ -774,7 +808,12 @@ TEST_F(PipeWireCodecTest, ResourceSubDataCarriesABlobAndARegionTailTogether) {
               kInvalidSeq);
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
-    EXPECT_TRUE(wire.Answers().All.empty());
+    // ID-31 + R-17: ResourceCreate and ResourceSubData both carry kReplySlot now, so both
+    // answer into a slot rather than only into the decoder's tally.
+    ASSERT_EQ(wire.Answers().All.size(), 2u);
+    EXPECT_EQ(wire.Answers().All[0].Seq, 1u);
+    EXPECT_EQ(wire.Answers().All[1].Seq, 2u);
+    ExpectRepliesAgreeWithTheAcceptanceTally(wire);
     // ACCEPTANCE IS NOT "APPLIED", and this case is where the difference shows. The record
     // crossed and reached MGPipeApplyResourceSubData, which is the codec's whole job; the
     // applier then DECLINED it, because no backend registered a P4a texture consumer in this
@@ -1268,11 +1307,24 @@ TEST_F(PipeWireCodecTest, NoReplyIsWrittenForARowTheCatalogueGivesNoReplySlot) {
     // s1 sizes ReplyPool from MGPipeCallFlagsFor, so a reply written for a record the pool
     // reserved no slot for overwrites a waiter's answer - and because the slot header stamps
     // the WRITER's seq for self-check, the waiter's check then fails for ever and the barrier
-    // HANGS rather than returning something wrong.
+    // HANGS rather than returning something wrong. That statement is unchanged and is what
+    // this case still asserts.
+    //
+    // WHAT CHANGED IS THE ROW IT ASSERTS IT ABOUT (ID-31 fallout, closed by c1 round 2). It
+    // used to name ResourceCreate and SetTextureParams as rows "the catalogue gives no reply
+    // slot", which ID-31 made false - it gave ResourceCreate the flag, and all four Bool
+    // acceptance rows carry it now. A case that names a kReplySlot row while asserting a row
+    // has no slot is not testing the rule, it is testing a stale catalogue, so the row moved
+    // to one that genuinely carries kNone and the rule stayed exactly where it was.
     Wire2 wire;
-    ASSERT_EQ(MGPipeCallFlagsFor(MGPWireOp::ResourceCreate) & static_cast<Uint32>(kReplySlot), 0u);
-    ASSERT_EQ(MGPipeCallFlagsFor(MGPWireOp::SetTextureParams) & static_cast<Uint32>(kReplySlot), 0u);
+    ASSERT_EQ(MGPipeCallFlagsFor(MGPWireOp::ResourceDestroy) & static_cast<Uint32>(kReplySlot), 0u)
+        << "ResourceDestroy gained a reply slot; this case needs a kNone row to mean anything";
+    ASSERT_EQ(MGPipeCallFlagsFor(MGPWireOp::BindRenderState) & static_cast<Uint32>(kReplySlot), 0u);
 
+    // A create first, so the destroy has a live record to reach - and its OWN answer is the
+    // control on the control: if PostReply were firing indiscriminately there would be two
+    // answers here, not one, and the case would fail on the count rather than pass because
+    // nothing was ever written.
     MGPResourceDesc create{};
     create.Resource = MakeHandle(131);
     create.Target = static_cast<Uint8>(MGPipeResourceTarget::Buffer);
@@ -1286,21 +1338,61 @@ TEST_F(PipeWireCodecTest, NoReplyIsWrittenForARowTheCatalogueGivesNoReplySlot) {
               kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
+    ASSERT_EQ(wire.Answers().All.size(), 1u) << "the kReplySlot row did not answer";
+
+    const MGPHandleOnly destroy = HandleOnly(131, MGPipeKind::Buffer);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceDestroy, &destroy, sizeof(destroy)),
+              kInvalidSeq);
+    ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
 
-    EXPECT_TRUE(wire.Answers().All.empty()) << "a reply slot was written for a kNone row";
-    // The acceptance answer R-5 requires is still produced - it just does not ride SEG_REPLY.
-    EXPECT_TRUE(wire.Decoder().LastAcceptanceKnown());
-    EXPECT_EQ(wire.Decoder().AcceptedRecords() + wire.Decoder().DeclinedRecords(), 1u);
+    EXPECT_EQ(wire.Answers().All.size(), 1u) << "a reply slot was written for a kNone row";
+    EXPECT_EQ(wire.Answers().All[0].Seq, 1u) << "the answer that exists is the create's";
 }
 
 TEST_F(PipeWireCodecTest, EveryRowThatDoesWriteAReplyCarriesKReplySlot) {
-    // The other half: the three rows in P5 that answer into a slot all carry the flag, so
-    // PostReply's gate cannot be firing on any of them.
-    for (const MGPWireOp op :
-         {MGPWireOp::MapPersistent, MGPWireOp::ResourceReadback, MGPWireOp::ReadPixels}) {
+    // The other half: every row in P5 that answers into a slot carries the flag, so
+    // PostReply's gate cannot be firing on any of them. The four Bool acceptance rows joined
+    // this list at ID-31 and R-17 - and they are listed BY NAME rather than derived from the
+    // flags table, because deriving the expectation from the same table the assertion reads
+    // would make this case true by construction.
+    for (const MGPWireOp op : {MGPWireOp::MapPersistent, MGPWireOp::ResourceReadback,
+                               MGPWireOp::ReadPixels, MGPWireOp::ResourceCreate,
+                               MGPWireOp::ResourceRespecify, MGPWireOp::ResourceSubData,
+                               MGPWireOp::SetTextureParams}) {
         EXPECT_NE(MGPipeCallFlagsFor(op) & static_cast<Uint32>(kReplySlot), 0u) << WireOpName(op);
     }
+}
+
+TEST_F(PipeWireCodecTest, TheFourAcceptanceRowsAnswerThroughTheSlotAndNotOnlyThroughTheTally) {
+    // R-17's server half, and the reason c1 could not simply write thirty-seven emitters: the
+    // client asks the CATALOGUE whether a row owns a slot (ClientSession::EmitAndWait), so the
+    // moment ID-31 gave these rows kReplySlot, a decoder that answered only into
+    // LastAcceptance() left the client parked in the barrier until Fatal{ReplyMissing}.
+    //
+    // THE ASSERTION IS THAT THE ANSWER MATCHES THE APPLIER's, not that one exists. Under a
+    // unit process no backend registers a P4a consumer, so set_texture_params is DECLINED -
+    // and that is the useful direction: a PostReply hard-coded to OK would pass a case that
+    // only counted answers.
+    Wire2 wire;
+    MGPTextureParams params{};
+    params.Res = MakeHandle(77);
+    params.BuiltinSampler = MakeHandle(78);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetTextureParams, &params, sizeof(params)),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied) << "the record must still have CROSSED; acceptance is not 'applied'";
+
+    ASSERT_EQ(wire.Answers().All.size(), 1u);
+    EXPECT_EQ(wire.Answers().All[0].Seq, 1u) << "the id is the record's own ordinal (R-3)";
+    EXPECT_TRUE(wire.Answers().All[0].Bytes.empty())
+        << "an acceptance answer is a STATUS; DECLINED carries no payload";
+    ASSERT_TRUE(wire.Decoder().LastAcceptanceKnown());
+    EXPECT_EQ(wire.Answers().All[0].Status, wire.Decoder().LastAcceptance()
+                                                ? ReplySink::kStatusOk
+                                                : ReplySink::kStatusDeclined);
+    ExpectRepliesAgreeWithTheAcceptanceTally(wire);
 }
 
 TEST_F(PipeWireCodecTest, TheAuditFillOverwritesExactlyTheRunsTheRecordResolved) {

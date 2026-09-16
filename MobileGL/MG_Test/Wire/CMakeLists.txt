@@ -66,32 +66,45 @@ endif ()
 
 gtest_discover_tests(PipeWireCodecTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 
-# P5 s1's handshake suite (wave 1.5, ID-46 findings 6 and 7): the two null-union guards driven
-# THROUGH ServerSession::Accept and ClientSession::StartOverTransportPair, and the ABI
-# fingerprint's sensitivity case driven from CapsAbiFingerprint(), the production entry point.
-# Separate from SessionTest for two reasons: it needs CapsCodec.h and the sessions, i.e. the GL
-# frontend's umbrella header that the ring-owning suite deliberately keeps out; and each guard's
-# refusal is asserted BY MESSAGE, which with the console sink compiled out (Defines.h) means a
-# log file this process names before anything logs - PipeWireCodecTest's own-main() shape.
-add_executable(SessionHandshakeTest SessionHandshakeTest.cpp)
+# P5 c1's, v1's and s1's suites. All three are registered on their own, and all three for
+# PipeWireCodecTest's reason: a Fatal arm reports through MGLOG_F, which writes to stdout and to
+# a named file and NEVER to stderr (and with the console sink compiled out, Defines.h, only to
+# the file), so asserting one means naming a log file before anything logs - which needs a
+# main() of its own. All three also reach MG_Pipe, MG_Backend and MG_State, so all three carry
+# those include paths.
+#
+#   RemoteClientTest      the 71-slot emit table, the caps mirror, R-8's liveness gates, R-17's
+#                         routing and ID-47/ID-49's readback rules (c1)
+#   ServerLoopTest        the apply thread, the blocking control mailbox, the verb stamp and
+#                         R-11's server-owned staging copy (v1)
+#   SessionHandshakeTest  the two null-union guards driven THROUGH ServerSession::Accept and
+#                         ClientSession::StartOverTransportPair, and the ABI fingerprint's
+#                         sensitivity case driven from CapsAbiFingerprint() (s1, ID-46 6 and 7)
+#
+# THIS FILE IS THE PHASE'S ONE RECURRING MERGE CONFLICT, and it is the same-point-append shape
+# BRIEF §5's ownership table exists to prevent: three packages, three targets, one end-of-file.
+# The loop is what stops there being a fourth: a package adding a suite adds a NAME.
+foreach (wiretest IN ITEMS RemoteClientTest ServerLoopTest SessionHandshakeTest)
+    add_executable(${wiretest} ${wiretest}.cpp)
 
-target_include_directories(SessionHandshakeTest PRIVATE
-        ${MGL_ROOT}/include
-        ${MGL_ROOT}/MobileGL
-        ${MGL_ROOT}/MobileGL/MG_Pipe
-        ${MGL_ROOT}/3rdparty/flatbuffers/include
-        ${MGL_ROOT}/3rdparty/xxHash
-        ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
-        ${MGL_ROOT}/3rdparty/SPIRV-Reflect
-)
+    target_include_directories(${wiretest} PRIVATE
+            ${MGL_ROOT}/include
+            ${MGL_ROOT}/MobileGL
+            ${MGL_ROOT}/MobileGL/MG_Pipe
+            ${MGL_ROOT}/3rdparty/flatbuffers/include
+            ${MGL_ROOT}/3rdparty/xxHash
+            ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
+            ${MGL_ROOT}/3rdparty/SPIRV-Reflect
+    )
 
-target_link_libraries(SessionHandshakeTest PRIVATE
-        GTest::gtest
-        ${LINK_LIBRARIES}
-)
+    target_link_libraries(${wiretest} PRIVATE
+            GTest::gtest
+            ${LINK_LIBRARIES}
+    )
 
-if (MSVC)
-    target_compile_options(SessionHandshakeTest PRIVATE /Zc:preprocessor)
-endif ()
+    if (MSVC)
+        target_compile_options(${wiretest} PRIVATE /Zc:preprocessor)
+    endif ()
 
-gtest_discover_tests(SessionHandshakeTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+    gtest_discover_tests(${wiretest} DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+endforeach ()

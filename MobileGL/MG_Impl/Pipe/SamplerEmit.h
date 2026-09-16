@@ -44,6 +44,7 @@
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/MGPipeHostSpan.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeRoute.h>
 #include <MG_Pipe/PipeMutation.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ProgramState/ProgramObject.h>
@@ -455,7 +456,7 @@ namespace MobileGL::MG_Pipe {
             // The applier is handed the CACHE's copy, so the pointer stays valid for the whole
             // call and the bytes it stores are provably the bytes the memcmp will confirm
             // against later.
-            MGPipeApplyCreateSamplerState(desc, &m_entries.back().Params);
+            MGPipeRouteCreateSamplerState(desc, &m_entries.back().Params);
             // THE CREATE ACTUALLY WENT OUT, so the publication latch is taken here and nowhere
             // else (contract-v2 §3.1). It is what the six death helpers read, and without it a
             // delete_sampler_state can never go out for this kind.
@@ -490,7 +491,7 @@ namespace MobileGL::MG_Pipe {
             // only then does the slot go back. There is no NotifyStateObjectDestroyed step
             // here - a content-addressed CSO has no frontend object whose death is being
             // announced, which is precisely why this eviction is the only death path it has.
-            MGPipeApplyDeleteSamplerState(handle);
+            MGPipeRouteDeleteSamplerState(handle);
             // AND THE LATCH GOES WITH THE DELETE. This is the "an emitter that drops a record
             // for its own reasons calls MGPipeNoteHandleUnpublished" half of the publication
             // protocol (contract-v2 §3.1): the record is gone, so a death helper reaching this
@@ -783,7 +784,7 @@ namespace MobileGL::MG_Pipe {
             m_lastViews.Start = 0;
             m_lastViews.Count = count;
             m_lastViews.ContentHash = hash;
-            MGPipeApplySetSamplerViews(m_lastViews, m_views.data());
+            MGPipeRouteSetSamplerViews(m_lastViews, m_views.data());
             ++m_viewSets;
             if (MG_Util::PipeStats::Enabled()) {
                 MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::SamplerViewEmissions, 1);
@@ -857,7 +858,7 @@ namespace MobileGL::MG_Pipe {
             m_lastStates.Start = 0;
             m_lastStates.Count = count;
             m_lastStates.ContentHash = hash;
-            MGPipeApplyBindSamplerStates(m_lastStates, m_states.data());
+            MGPipeRouteBindSamplerStates(m_lastStates, m_states.data());
             ++m_stateSets;
             if (MG_Util::PipeStats::Enabled()) {
                 MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::SamplerStateEmissions, 1);
@@ -914,7 +915,7 @@ namespace MobileGL::MG_Pipe {
             m_lastView.NumLayers = static_cast<Uint16>(texture.GetViewNumLayers());
             m_lastView.Samples = static_cast<Uint16>(texture.GetSamples() < 0 ? 0 : texture.GetSamples());
             m_lastView.FixedSampleLocations = texture.HasFixedSampleLocations() ? 1 : 0;
-            MGPipeApplyCreateSamplerView(m_lastView);
+            MGPipeRouteCreateSamplerView(m_lastView);
             // THE CREATE WENT OUT, so the publication latch is taken (contract-v2 §3.1). The
             // texture's death helper reads it, and without it delete_sampler_view can never go
             // out - the C-1 leak, one kind later. Re-taking it on a re-issue is right and

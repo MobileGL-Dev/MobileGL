@@ -43,6 +43,7 @@
 #include <MG_Impl/Pipe/Tracker.h>
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeRoute.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Metrics/PipeStats.h>
 
@@ -158,7 +159,7 @@ namespace MobileGL::MG_Pipe {
             const auto& vao = ctx.GetBoundVertexArray();
             if (!vao) {
                 if (!MGPipeHandleIsNull(m_boundHandle)) {
-                    MGPipeApplyBindVertexElements(HandleOnly(kMGPipeNullHandle));
+                    MGPipeRouteBindVertexElements(HandleOnly(kMGPipeNullHandle));
                     ++m_binds;
                     m_boundHandle = kMGPipeNullHandle;
                     m_boundLifetimeId = 0;
@@ -178,7 +179,7 @@ namespace MobileGL::MG_Pipe {
                                      latch.Gen != handle.Gen;
             if (configMoved) bytes += EmitCreate(*vao, handle, latch, configVersion);
             if (lifetimeId != m_boundLifetimeId || m_boundHandle != handle) {
-                MGPipeApplyBindVertexElements(HandleOnly(handle));
+                MGPipeRouteBindVertexElements(HandleOnly(handle));
                 ++m_binds;
                 bytes += sizeof(MGPHandleOnly);
                 m_boundHandle = handle;
@@ -242,7 +243,7 @@ namespace MobileGL::MG_Pipe {
             // emulation is server-owned.
             m_lastBuffers.BaseInstance = baseInstance;
             m_lastBuffers.ContentHash = hash;
-            MGPipeApplySetVertexBuffers(m_lastBuffers, m_entries.data());
+            MGPipeRouteSetVertexBuffers(m_lastBuffers, m_entries.data());
             ++m_bufferSets;
             return sizeof(MGPVertexBuffers) + static_cast<Uint64>(count) * sizeof(MGPVertexBuffer);
         }
@@ -267,7 +268,7 @@ namespace MobileGL::MG_Pipe {
                     MGPipeResourceTrackerInstance().NoteBoundAs(m_lastIndex.Res, BufferTarget::Index);
                 }
             }
-            MGPipeApplySetIndexBuffer(m_lastIndex);
+            MGPipeRouteSetIndexBuffer(m_lastIndex);
             ++m_indexSets;
             return sizeof(MGPIndexBuffer);
         }
@@ -396,7 +397,7 @@ namespace MobileGL::MG_Pipe {
             m_lastElements.Blob.Seg = kMGHostSpanSegNone;
             m_lastElements.Blob.Offset = 0;
             m_lastElements.Blob.Size = kAttribBytes + kBindingBytes;
-            MGPipeApplyCreateVertexElements(m_lastElements, m_blob.data());
+            MGPipeRouteCreateVertexElements(m_lastElements, m_blob.data());
             ++m_creates;
             latch.Published = true;
             latch.Gen = handle.Gen;
