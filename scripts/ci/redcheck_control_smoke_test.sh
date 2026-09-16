@@ -55,7 +55,7 @@ split, retrace, dropdraw = sys.argv[1], sys.argv[2], sys.argv[3]
 # other two catching the smoke test's "unrelated failure" case, and the case never flips - which
 # is what this script measured the first time the perturbation actually applied.
 rules = [
-    (split, [('LINE', 'grep -qE "${evidence}"', ('if ! ', 'elif ! ')),
+    (split, [('LINE', '"${log_helper}" assertion', ('if ! ', 'elif ! ')),
              ('SUBST', '"[A-Za-z_][A-Za-z_0-9]*"\\}\' || exit 1', '"[A-Za-z_][A-Za-z_0-9]*"\\}\' || true'),
              ('SUBST', '"${private_evidence}" "${name}" || exit 1',
                        '"${private_evidence}" "${name}" || true')]),

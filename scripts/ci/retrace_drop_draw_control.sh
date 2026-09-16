@@ -50,6 +50,14 @@ CTEST="${CTEST:-ctest}"
 CONTROL_TMPDIR="${CONTROL_TMPDIR:-${RUNNER_TEMP:-/tmp}}"
 LIBRARY_LOG="${LIBRARY_LOG:-${CASE}/${BACKEND}/output/mobilegl.log}"
 mkdir -p "${CONTROL_TMPDIR}"
+FROZEN_LIBRARY="${FROZEN_LIBRARY:?FROZEN_LIBRARY must name the split library the replay loads}"
+symbols=$(nm --defined-only "${FROZEN_LIBRARY}") || exit 1
+remote_count=$(printf '%s\n' "${symbols}" | grep -ic MG_Remote || true)
+echo "draw-drop control library: ${FROZEN_LIBRARY}: MG_Remote=${remote_count}"
+if [ "${remote_count}" -lt 1 ]; then
+  echo '::error::draw-drop control requires a split library: MG_Remote=0'
+  exit 1
+fi
 
 selector="^MobileGLTraceReplay\.${CASE}\.${BACKEND}$"
 
@@ -66,6 +74,8 @@ restore_good_output() {
     echo "restored the verified run's output over the control's"
   fi
 }
+trap restore_good_output EXIT
+trap 'exit 130' INT TERM
 
 matched=$("${CTEST}" -N -R "${selector}" | grep -cE '^ *Test *#[0-9]+:')
 if [ "${matched}" -lt 1 ]; then

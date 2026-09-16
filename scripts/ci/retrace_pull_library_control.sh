@@ -69,6 +69,18 @@ restore_good_output() {
   fi
 }
 
+# Restore the exact split library on success, failure, and interruption. The following
+# draw-drop control uses this same frozen path.
+saved_library=$(mktemp "${CONTROL_TMPDIR}/split-library.XXXXXX") || exit 1
+cp -p "${FROZEN_LIBRARY}" "${saved_library}" || exit 1
+restore_control() {
+  cp -p "${saved_library}" "${FROZEN_LIBRARY}"
+  rm -f "${saved_library}"
+  restore_good_output
+}
+trap restore_control EXIT
+trap 'exit 130' INT TERM
+
 # HOLE 1: COUNT THE SELECTION FIRST. `--no-tests=error` turns an empty selection into a non-zero
 # exit, which is indistinguishable from a working control unless the selection is counted.
 matched=$("${CTEST}" -N -R "${selector}" | grep -cE '^ *Test *#[0-9]+:')
@@ -82,8 +94,11 @@ fi
 # in. It defines no MG_Remote symbol, so ConfigLoader has no transport parser and
 # MOBILEGL_TRANSPORT=inproc is accepted and ignored - the exact shape of "the split lane ran
 # monolith".
-cp "${PULL_LIBRARY}" "${FROZEN_LIBRARY}"
-if nm --defined-only "${FROZEN_LIBRARY}" | grep -q -i MG_Remote; then
+cp "${PULL_LIBRARY}" "${FROZEN_LIBRARY}" || exit 1
+symbols=$(nm --defined-only "${FROZEN_LIBRARY}") || exit 1
+remote_count=$(printf '%s\n' "${symbols}" | grep -ic MG_Remote || true)
+echo "pull control library: ${FROZEN_LIBRARY}: MG_Remote=${remote_count}"
+if [ "${remote_count}" -ne 0 ]; then
   restore_good_output
   echo "::error::the control's own library defines MG_Remote symbols, so it is not a pull build and this control would prove nothing"
   exit 1
