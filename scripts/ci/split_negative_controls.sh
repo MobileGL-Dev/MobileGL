@@ -115,9 +115,16 @@ run_control() {
   python3 "${log_helper}" reset "${manifest}" "${filter}" || exit 1
 
   out="${CONTROL_TMPDIR}/control-output.txt"
-  env "$@" "${CTEST}" --output-on-failure -L integration-split -R "${filter}" --no-tests=error > "${out}" 2>&1
+  result="${CONTROL_TMPDIR}/control.xml"
+  rm -f "${result}"
+  env "$@" "${CTEST}" --output-on-failure -L integration-split -R "${filter}" --no-tests=error --output-junit "${result}" > "${out}" 2>&1
   control_rc=$?
   cat "${out}"
+
+  # Inspect JUnit before exit status or private Fatal: a skipped pre-flight can carry both.
+  label='E3(a)'
+  [ "${evidence}" != private-barrier-fatal ] || label=E1
+  python3 "${log_helper}" results "${manifest}" "${filter}" "${result}" "${label}" || exit 1
 
   if [ "${control_rc}" -eq 0 ]; then
     echo "::error::${name} left ${matched} split entries GREEN, so the knob it turns is not load-bearing and the gate it controls proves nothing."

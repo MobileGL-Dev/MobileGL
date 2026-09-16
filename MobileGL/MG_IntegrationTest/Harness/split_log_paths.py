@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 
 
 def paths(document):
@@ -47,13 +48,36 @@ def main():
     if mode == "reset":
         for path in selected.values():
             Path(path).unlink(missing_ok=True)
+    elif mode == "results":
+        cases = ET.parse(sys.argv[4]).getroot().findall(".//testcase")
+        label = sys.argv[5]
+        by_name = {}
+        for case in cases:
+            by_name.setdefault(case.get("name"), []).append(case)
+        skipped = sum(any(c.find("skipped") is not None for c in by_name.get(n, []))
+                      for n in selected)
+        # ID-62: pre-flight Fatal is not evidence that a selected entry ran.
+        if skipped:
+            raise ValueError(f"{label} control: the knob killed the pre-flight, not the entry - "
+                             f"{skipped} selected entries skipped")
+        missing = sum(len(by_name.get(n, [])) != 1 or
+                      by_name[n][0].get("status") in ("notrun", "disabled") for n in selected)
+        if missing:
+            raise ValueError(f"{label} control: {missing} selected entries did not run")
+        not_failed = sum(c.find("failure") is None or c.get("status") != "fail"
+                         for n in selected for c in by_name[n])
+        if not_failed:
+            raise ValueError(f"{label} control: {not_failed} selected entries did not fail")
     elif mode == "evidence":
+        missing = []
         for name, path in selected.items():
             if Path(path).is_file() and re.search(sys.argv[4], Path(path).read_text(errors="replace")):
                 print(f"private-log evidence: {name}: {path}")
-                return
-        raise ValueError("E1 FAILED: selected private logs lack expected Fatal{BarrierViolation, \"<slot>\"} line: "
-                         + ", ".join(f"{n} ({p})" for n, p in selected.items()))
+            else:
+                missing.append(f"{name} ({path})")
+        if missing:
+            raise ValueError("E1 FAILED: selected private logs lack expected Fatal{BarrierViolation, \"<slot>\"} line: "
+                             + ", ".join(missing))
     else:
         raise ValueError(f"unknown mode: {mode}")
 
@@ -61,5 +85,5 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+    except (ValueError, OSError, ET.ParseError, subprocess.CalledProcessError) as error:
         sys.exit(f"SplitLogPaths FAILED: {error}")

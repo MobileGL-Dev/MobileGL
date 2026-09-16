@@ -12,10 +12,12 @@
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="$(mktemp -d)" || exit 1
-trap 'cp "${WORK}/split.orig" "${HERE}/split_negative_controls.sh"; cp "${WORK}/retrace.orig" "${HERE}/retrace_pull_library_control.sh"; rm -rf "${WORK}"' EXIT
+HELPER="${HERE}/../../MobileGL/MG_IntegrationTest/Harness/split_log_paths.py"
+trap 'cp "${WORK}/split.orig" "${HERE}/split_negative_controls.sh"; cp "${WORK}/retrace.orig" "${HERE}/retrace_pull_library_control.sh"; cp "${WORK}/helper.orig" "${HELPER}"; rm -rf "${WORK}"' EXIT
 
 cp "${HERE}/split_negative_controls.sh" "${WORK}/split.orig"
 cp "${HERE}/retrace_pull_library_control.sh" "${WORK}/retrace.orig"
+cp "${HELPER}" "${WORK}/helper.orig"
 
 echo "=== baseline: the smoke test must be GREEN before anything is perturbed"
 if ! bash "${HERE}/control_smoke_test.sh" > "${WORK}/before.log" 2>&1; then
@@ -77,4 +79,25 @@ if [ "${missed}" -ne 0 ]; then
 fi
 
 echo
-echo "P5_T1_CONTROL_SMOKE_REDCHECK_OK - removing the evidence checks reds the unrelated split, unrelated retrace and missing private-Fatal cases"
+cp "${WORK}/split.orig" "${HERE}/split_negative_controls.sh"
+cp "${WORK}/retrace.orig" "${HERE}/retrace_pull_library_control.sh"
+echo "=== ID-62 perturbation: remove only the skip check"
+python3 - "${HELPER}" <<'PY' || exit 1
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+needle = '        if skipped:\n'
+if text.count(needle) != 1:
+    raise SystemExit('expected exactly one skip check')
+path.write_text(text.replace(needle, '        if False:  # skip check removed by red-check\n'))
+PY
+bash "${HERE}/control_smoke_test.sh" > "${WORK}/skips.log" 2>&1
+rc=$?
+cat "${WORK}/skips.log"
+if [ "${rc}" -eq 0 ] || ! grep -qFx 'NOT OK skipped-selection: control must report FAILED for its own reason' "${WORK}/skips.log"; then
+  echo 'RED-CHECK FAILED: removing the skip check must red the skipped-selection message assertion'
+  exit 1
+fi
+echo 'ID-62 red-once: removing only the skip check made skipped-selection red (smoke rc=1)'
+echo "P5_T1_CONTROL_SMOKE_REDCHECK_OK - evidence and skipped-selection checks each made their smoke cases red"
