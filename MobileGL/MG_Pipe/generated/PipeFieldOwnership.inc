@@ -69,7 +69,7 @@ inline constexpr MGPipeFieldOwnership kMGPipeFieldOwnership[kMGPipeInputFieldCou
     MGPipeFieldOwnership::kRecordSupplied, // GetPolygonOffsetFactor
     MGPipeFieldOwnership::kRecordSupplied, // GetPolygonOffsetUnits
     MGPipeFieldOwnership::kRecordSupplied, // GetPrimitiveRestartIndex
-    MGPipeFieldOwnership::kFatal, // GetProgramForDispatch
+    MGPipeFieldOwnership::kBarrierPulled, // GetProgramForDispatch
     MGPipeFieldOwnership::kBarrierPulled, // GetProgramForDraw
     MGPipeFieldOwnership::kBarrierPulled, // GetProgramObject
     MGPipeFieldOwnership::kRecordSupplied, // GetProvokingVertexMode
@@ -136,7 +136,7 @@ inline constexpr const char* kMGPipeFieldRetiringPhase[kMGPipeInputFieldCount] =
     "-", // GetPolygonOffsetFactor
     "-", // GetPolygonOffsetUnits
     "-", // GetPrimitiveRestartIndex
-    "-", // GetProgramForDispatch
+    "P7 (Magma), P8 (Espryt)", // GetProgramForDispatch
     "P8 (Espryt), P7 (Magma)", // GetProgramForDraw
     "P9", // GetProgramObject
     "-", // GetProvokingVertexMode
@@ -298,6 +298,6 @@ inline constexpr SizeT kMGPipeVerbBoundaryExemptCount = 3;
 // The class sizes, as constants a test can pin without recounting the table.
 inline constexpr SizeT kMGPipeRecordSuppliedFieldCount = 32;
 inline constexpr SizeT kMGPipeApplierDerivedFieldCount = 1;
-inline constexpr SizeT kMGPipeBarrierPulledFieldCount = 27;
-inline constexpr SizeT kMGPipeFatalFieldCount = 3;
+inline constexpr SizeT kMGPipeBarrierPulledFieldCount = 28;
+inline constexpr SizeT kMGPipeFatalFieldCount = 2;
 static_assert(kMGPipeRecordSuppliedFieldCount + kMGPipeApplierDerivedFieldCount + kMGPipeBarrierPulledFieldCount + kMGPipeFatalFieldCount == kMGPipeInputFieldCount, "the four class sizes do not partition the field set");

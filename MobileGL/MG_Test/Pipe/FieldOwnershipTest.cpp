@@ -254,13 +254,23 @@ TEST_F(FieldOwnershipTest, TheReducedPathsUnmigratedFieldsAreAllAccountedFor) {
     EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetPixelStoreParameters, 1u),
               MGPipeFieldOwnership::kFatal);
 
-    // The three off the reduced path, each for its own checkable reason.
+    // The two off the reduced path, each for its own checkable reason. THREE UNTIL P5b: the
+    // third was GetProgramForDispatch, FATAL because "there is no compute on the reduced path",
+    // and package i1 is what put compute on the path (CONTRACT-P5B.md §6.9). It is asserted
+    // below in its new class rather than deleted from this case, because a field that quietly
+    // left the FATAL list is exactly what this case exists to catch.
     EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetBoundTransformFeedbackName),
               MGPipeFieldOwnership::kFatal);
     EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetTransformFeedbackPausedPrimitiveCounter),
               MGPipeFieldOwnership::kFatal);
+    // P5b i1: launch_grid (60) crosses, the backend's PrepareForCompute pulls the compute
+    // program inside it (DirectGLES.cpp:5779), and the field takes GetProgramForDraw's class
+    // and its retiring phases - so it is a measured DEBT now, not a defect.
     EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetProgramForDispatch),
-              MGPipeFieldOwnership::kFatal);
+              MGPipeFieldOwnership::kBarrierPulled);
+    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetProgramForDispatch),
+              MGPipeFieldOwnershipOf(MGPipeInputField::GetProgramForDraw))
+        << "GetProgramForDispatch is GetProgramForDraw's twin and must share its class";
 }
 
 TEST_F(FieldOwnershipTest, TheSevenStickyForwardsAgreeWithTheirFieldRows) {
@@ -516,14 +526,40 @@ TEST_F(FieldOwnershipTest, StrictErrorsAlsoPromotesTheStickyForwards) {
 
 // A FATAL-class read aborts whatever the knob says: no carrier, and the reduced path never
 // reads it, so it is a real defect rather than a debt.
+// P5b i1: the exemplar MOVED. This case used GetProgramForDispatch, which is BARRIER-PULLED
+// from i1 on (a debt the server serves, not an abort), so it would now assert that a served
+// read aborts - green for the wrong reason at best. GetTransformFeedbackPausedPrimitiveCounter
+// is the same statement with a field that is still FATAL: reachable only from class kQuery,
+// which the reduced path never enters.
+// RED ONCE BY DOING X: put GetProgramForDispatch back in the FATAL block of FieldOwnership.def
+// and TheFieldOwnershipTableIsTheContractsTableRow's new kBarrierPulled expectation goes red by
+// name; swap the field below for GetProgramForDispatch and THIS case goes red instead, because
+// a barrier-pulled read under a stamp does not abort.
 TEST_F(FieldOwnershipTest, AFatalClassReadAbortsEvenWithoutStrictErrors) {
     const ChildResult r = RunInChild([] {
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
-        (void)gPipeInputs.GetProgramForDispatch();
+        (void)gPipeInputs.GetTransformFeedbackPausedPrimitiveCounter();
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetProgramForDispatch@DrawArrays\"}"),
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, "
+                         "\"GetTransformFeedbackPausedPrimitiveCounter@DrawArrays\"}"),
               std::string::npos)
+        << r.Log;
+}
+
+// And the field that LEFT the FATAL class is served rather than fatal, under the verb that made
+// it reachable. This is i1's half of the §6.9 grant made checkable: a dispatch stamp plus a read
+// of the compute program must NOT abort, which is precisely the statement "compute is on the
+// path now". RED ONCE BY DOING X: revert the FieldOwnership.def row to FATAL and this child
+// aborts with Fatal{UnmigratedPipeInput, "GetProgramForDispatch@DispatchCompute"}.
+TEST_F(FieldOwnershipTest, TheComputeProgramIsServedUnderADispatchStampFromP5bOn) {
+    const ChildResult r = RunInChild([] {
+        MGPipeServerStampVerbBoundary(MGPipeVerb::DispatchCompute);
+        (void)gPipeInputs.GetProgramForDispatch();
+        MGPipeServerClearVerbBoundary();
+    });
+    EXPECT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_EQ(r.Log.find("Fatal{UnmigratedPipeInput, \"GetProgramForDispatch"), std::string::npos)
         << r.Log;
 }
 
