@@ -39,6 +39,8 @@
 #include <cstring>
 
 #include "WireTables.h"
+#include <MG_Impl/Pipe/FramebufferEmit.h>
+#include <MG_Impl/Pipe/TextureEmit.h>
 
 namespace MobileGL::MG_Remote::Client {
 
@@ -172,6 +174,123 @@ namespace MobileGL::MG_Remote::Client {
             record.ValueClass = 0;
             session.EmitAndWait(MG_Pipe::MGPWireOp::Clear, &record, sizeof(record), nullptr, 0,
                                 nullptr, 0, nullptr);
+        }
+
+
+        // ---- f1: verbatim clear/copy/mipmap records (CONTRACT-P5B §2) ----
+        void EmitF1Clear(const char* slot, MG_Pipe::MGPipeHandle fbo, GLenum buffer,
+                         GLint drawbuffer, Uint8 valueClass, const void* value,
+                         GLfloat depth = 0, GLint stencil = 0) {
+            auto& session = RequireSession(slot);
+            BeforeReadOnlyVerb();
+            MG_Pipe::MGPClear record{};
+            record.Fbo = fbo;
+            record.DrawBufferIndex = drawbuffer;
+            record.ValueClass = valueClass;
+            switch (buffer) {
+            case GL_COLOR:
+                record.Kind = MG_Pipe::kMGPipeClearKindColor;
+                std::memcpy(record.ColorValue, value, sizeof(record.ColorValue));
+                break;
+            case GL_DEPTH:
+                record.Kind = MG_Pipe::kMGPipeClearKindDepth;
+                std::memcpy(&record.DepthValue, value, sizeof(record.DepthValue));
+                break;
+            case GL_STENCIL:
+                record.Kind = MG_Pipe::kMGPipeClearKindStencil;
+                std::memcpy(&record.StencilValue, value, sizeof(record.StencilValue));
+                break;
+            case GL_DEPTH_STENCIL:
+                record.Kind = MG_Pipe::kMGPipeClearKindDepthStencil;
+                record.DepthValue = depth;
+                record.StencilValue = stencil;
+                break;
+            default: UnmigratedVerbFatal(slot);
+            }
+            session.EmitAndWait(MG_Pipe::MGPWireOp::Clear, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+
+        void EmitClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) {
+            EmitF1Clear("ClearBufferfv", MG_Pipe::kMGPipeNullHandle, buffer, drawbuffer,
+                        MG_Pipe::kMGPipeClearValueClassFloat, value);
+        }
+        void EmitClearNamedFramebufferfv(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo,
+                                               GLenum buffer, GLint drawbuffer, const GLfloat* value) {
+            EmitF1Clear("ClearNamedFramebufferfv", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo),
+                        buffer, drawbuffer, MG_Pipe::kMGPipeClearValueClassFloat, value);
+        }
+
+        void EmitClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
+            EmitF1Clear("ClearBufferiv", MG_Pipe::kMGPipeNullHandle, buffer, drawbuffer,
+                        MG_Pipe::kMGPipeClearValueClassInt, value);
+        }
+        void EmitClearNamedFramebufferiv(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo,
+                                               GLenum buffer, GLint drawbuffer, const GLint* value) {
+            EmitF1Clear("ClearNamedFramebufferiv", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo),
+                        buffer, drawbuffer, MG_Pipe::kMGPipeClearValueClassInt, value);
+        }
+
+        void EmitClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value) {
+            EmitF1Clear("ClearBufferuiv", MG_Pipe::kMGPipeNullHandle, buffer, drawbuffer,
+                        MG_Pipe::kMGPipeClearValueClassUint, value);
+        }
+        void EmitClearNamedFramebufferuiv(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo,
+                                               GLenum buffer, GLint drawbuffer, const GLuint* value) {
+            EmitF1Clear("ClearNamedFramebufferuiv", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo),
+                        buffer, drawbuffer, MG_Pipe::kMGPipeClearValueClassUint, value);
+        }
+
+        void EmitClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
+            EmitF1Clear("ClearBufferfi", MG_Pipe::kMGPipeNullHandle, buffer, drawbuffer,
+                        MG_Pipe::kMGPipeClearValueClassFloat, nullptr, depth, stencil);
+        }
+        void EmitClearNamedFramebufferfi(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo,
+                                         GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
+            EmitF1Clear("ClearNamedFramebufferfi", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo),
+                        buffer, drawbuffer, MG_Pipe::kMGPipeClearValueClassFloat, nullptr, depth, stencil);
+        }
+        const SharedPtr<MG_State::GLState::ITextureObject>& F1BoundTexture(GLenum target) {
+            auto& ctx = *MG_State::pGLContext;
+            return ctx.GetTextureUnitObject(ctx.GetActiveTextureUnit())
+                .GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target)).GetBoundObject();
+        }
+        void EmitF1Copy(GLenum target, GLint level, GLenum format, GLint x, GLint y,
+                        GLsizei width, GLsizei height, GLint xoffset, GLint yoffset, Bool subImage) {
+            auto& session = RequireSession(subImage ? "CopyTexSubImage2D" : "CopyTexImage2D");
+            BeforeReadOnlyVerb();
+            MG_Pipe::MGPCopyFromFramebuffer record{};
+            record.Dst = MG_Pipe::MGPipeTextureEmitterInstance().FindTexture(*F1BoundTexture(target));
+            record.Target = static_cast<Uint32>(target);
+            record.Level = level;
+            record.InternalFormat = format;
+            record.X = x; record.Y = y;
+            record.Width = width; record.Height = height;
+            record.XOffset = xoffset; record.YOffset = yoffset;
+            record.SubImage = subImage;
+            session.EmitAndWait(MG_Pipe::MGPWireOp::CopyFramebufferToTexture, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
+        }
+        void EmitCopyTexImage2D(GLenum target, GLint level, GLenum format, GLint x, GLint y,
+                                GLsizei width, GLsizei height, GLint) {
+            EmitF1Copy(target, level, format, x, y, width, height, 0, 0, false);
+        }
+        void EmitCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
+                                   GLint x, GLint y, GLsizei width, GLsizei height) {
+            EmitF1Copy(target, level, 0, x, y, width, height, xoffset, yoffset, true);
+        }
+        void EmitGenerateMipmap(GLenum target) {
+            auto& session = RequireSession("GenerateMipmap");
+            BeforeReadOnlyVerb();
+            const auto& texture = F1BoundTexture(target);
+            MG_Pipe::MGPMipPlan record{};
+            record.Res = MG_Pipe::MGPipeTextureEmitterInstance().FindTexture(*texture);
+            record.Target = static_cast<Uint16>(target);
+            record.BaseLevel = texture->GetLevelRange().x();
+            const auto* mipmap = dynamic_cast<const MG_State::GLState::TextureObjectMipmap*>(texture.get());
+            record.LevelCount = mipmap ? mipmap->GetMipmapLevelCount() : 0;
+            session.EmitAndWait(MG_Pipe::MGPWireOp::GenerateMipmap, &record, sizeof(record),
+                                nullptr, 0, nullptr, 0, nullptr);
         }
 
         void EmitDrawArrays(GLenum mode, GLint first, GLsizei count) {
@@ -539,22 +658,7 @@ namespace MobileGL::MG_Remote::Client {
     X(BindTransformFeedback, void, (GLuint))                                                       \
     X(DeleteTransformFeedback, void, (GLuint))
 
-#define MGR_UNMIGRATED_F1_SLOTS(X)                                                                 \
-    X(ClearBufferfi, void, (GLenum, GLint, GLfloat, GLint))                                        \
-    X(ClearBufferfv, void, (GLenum, GLint, const GLfloat*))                                        \
-    X(ClearBufferuiv, void, (GLenum, GLint, const GLuint*))                                        \
-    X(ClearBufferiv, void, (GLenum, GLint, const GLint*))                                          \
-    X(ClearNamedFramebufferfv, void,                                                               \
-      (const SharedPtr<MG_State::GLState::FramebufferObject>&, GLenum, GLint, const GLfloat*))     \
-    X(ClearNamedFramebufferfi, void,                                                               \
-      (const SharedPtr<MG_State::GLState::FramebufferObject>&, GLenum, GLint, GLfloat, GLint))     \
-    X(ClearNamedFramebufferiv, void,                                                               \
-      (const SharedPtr<MG_State::GLState::FramebufferObject>&, GLenum, GLint, const GLint*))       \
-    X(ClearNamedFramebufferuiv, void,                                                              \
-      (const SharedPtr<MG_State::GLState::FramebufferObject>&, GLenum, GLint, const GLuint*))      \
-    X(CopyTexImage2D, void, (GLenum, GLint, GLenum, GLint, GLint, GLsizei, GLsizei, GLint))        \
-    X(CopyTexSubImage2D, void, (GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei))      \
-    X(GenerateMipmap, void, (GLenum))
+#define MGR_UNMIGRATED_F1_SLOTS(X)
 
         // The wave-3 tail. SetSwapInterval is hand-written below (it is not a GL.* slot).
 #define MGR_UNMIGRATED_TAIL_SLOTS(X)                                                               \
@@ -646,7 +750,7 @@ namespace MobileGL::MG_Remote::Client {
         constexpr Uint32 kEmittedSlotsD1 = 0;
         constexpr Uint32 kEmittedSlotsI1 = 0;
         constexpr Uint32 kEmittedSlotsT2 = 0;
-        constexpr Uint32 kEmittedSlotsF1 = 0;
+        constexpr Uint32 kEmittedSlotsF1 = 11;
         constexpr Uint32 kEmittedSlots =
             kEmittedSlotsP5 + kEmittedSlotsD1 + kEmittedSlotsI1 + kEmittedSlotsT2 + kEmittedSlotsF1;
         constexpr Uint32 kLocallyAnsweredSlots = 2; // GetIntegeri_v, IsTimerQuerySupported
@@ -660,7 +764,7 @@ namespace MobileGL::MG_Remote::Client {
         static_assert(kUnmigratedT2 + kEmittedSlotsT2 == 7, "t2 owns the 7 XFB/tessellation slots");
         static_assert(kUnmigratedF1 + kEmittedSlotsF1 == 11, "f1 owns the 11 clear/copy/mip slots");
         static_assert(kUnmigratedTail == 20, "the wave-3 tail is 20 slots and no P5b package owns one");
-        static_assert(kUnmigratedSlots == 64, "CONTRACT-P5.md §7 class C is 64 slots at the P5b contract commit");
+        static_assert(kUnmigratedSlots + kEmittedSlots == 69, "class B and C own 69 slots");
         static_assert(kLocallyAnsweredSlots + kEmittedSlots + kUnmigratedSlots == kRemoteEmitSlotCount,
                       "the three classes no longer partition the 71 slots");
 
@@ -697,6 +801,19 @@ namespace MobileGL::MG_Remote::Client {
             table.GL.ReadPixels = &EmitReadPixels;
             table.GL.BlitFramebuffer = &EmitBlitFramebuffer;
             table.Present = &EmitPresent;
+
+            // ---- f1 ----
+            table.GL.ClearBufferfi = &EmitClearBufferfi;
+            table.GL.ClearBufferfv = &EmitClearBufferfv;
+            table.GL.ClearBufferiv = &EmitClearBufferiv;
+            table.GL.ClearBufferuiv = &EmitClearBufferuiv;
+            table.GL.ClearNamedFramebufferfi = &EmitClearNamedFramebufferfi;
+            table.GL.ClearNamedFramebufferfv = &EmitClearNamedFramebufferfv;
+            table.GL.ClearNamedFramebufferiv = &EmitClearNamedFramebufferiv;
+            table.GL.ClearNamedFramebufferuiv = &EmitClearNamedFramebufferuiv;
+            table.GL.CopyTexImage2D = &EmitCopyTexImage2D;
+            table.GL.CopyTexSubImage2D = &EmitCopyTexSubImage2D;
+            table.GL.GenerateMipmap = &EmitGenerateMipmap;
 
             return table;
         }

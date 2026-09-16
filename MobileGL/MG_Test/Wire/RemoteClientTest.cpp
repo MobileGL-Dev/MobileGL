@@ -175,8 +175,8 @@ TEST(RemoteEmitTable, TheThreeClassesPartitionAllSeventyOneSlots) {
     // table itself reports with - which is also what t1's arming condition reads - rather than
     // recomputed here, so a table that lost an emitter cannot look like one that never had it.
     EXPECT_EQ(LocallyAnsweredSlotCount(), 2u);
-    EXPECT_EQ(ImplementedVerbCount(), 5u);
-    EXPECT_EQ(UnmigratedSlotCount(), 64u);
+    EXPECT_EQ(ImplementedVerbCount(), 16u);
+    EXPECT_EQ(UnmigratedSlotCount(), 53u);
     EXPECT_EQ(LocallyAnsweredSlotCount() + ImplementedVerbCount() + UnmigratedSlotCount(),
               kRemoteEmitSlotCount);
 }
@@ -240,9 +240,9 @@ TEST(RemoteEmitTable, AnUnmigratedSlotAbortsAndNamesItself) {
 TEST(RemoteEmitTable, EachUnmigratedSlotNamesItsOwnSlot) {
     // The half the case above cannot state on its own: that the name in the message is the
     // slot's and not a constant. Two different slots, two different names.
-    const ChildResult r = RunInChild([] { RemoteEmitTable().GL.GenerateMipmap(0x0DE1); });
+    const ChildResult r = RunInChild([] { RemoteEmitTable().GL.GetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr); });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"GenerateMipmap\"}"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"GetTexImage\"}"), std::string::npos) << r.Log;
     EXPECT_EQ(r.Log.find("DrawElements"), std::string::npos)
         << "the Fatal message names a slot other than the one that was called:\n"
         << r.Log;
@@ -847,6 +847,300 @@ TEST(RemoteReadback, AReplyIsScatteredOnlyWhenItIsOkAndExactlyTheReadsExtent) {
 }
 
 #include "RemoteClientControls.inc"
+#include <MG_Impl/Pipe/FramebufferEmit.h>
+#include <MG_Impl/Pipe/TextureEmit.h>
+#include <MG_State/GLState/TextureState/TextureObject2D.h>
+
+// f1: the installed emitters are decoded by a peer on the apply thread.
+#if MGTEST_HAVE_FORK
+namespace {
+struct F1Peer : Codec::WireVerbSink {
+    MGPClear clear{};
+    MGPCopyFromFramebuffer copy{};
+    MGPMipPlan mip{};
+    unsigned calls = 0;
+    Bool OnClear(const MGPClear& v) override { clear = v; ++calls; return true; }
+    Bool OnCopyFramebufferToTexture(const MGPCopyFromFramebuffer& v) override { copy = v; ++calls; return true; }
+    Bool OnGenerateMipmap(const MGPMipPlan& v) override { mip = v; ++calls; return true; }
+    void Install() {
+        if (Srv::ServerLoopInstance().RunOnApplyThread([](void* self) {
+            auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
+            decoder.SetVerbSink(static_cast<F1Peer*>(self));
+            return MOBILEGL_OK;
+        }, this) != MOBILEGL_OK) ::_exit(82);
+    }
+};
+}
+
+TEST(RemoteF1, ClearBufferfvFieldsCross) {
+    // Red once (executed, reverted): zero the emitted clear values; F1.ClearBufferfv.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession();
+        F1Peer peer; peer.Install();
+        const GLfloat value[4] = {1, 7, 13, 23};
+
+        RemoteEmitTable().GL.ClearBufferfv(GL_COLOR, 3, value);
+        const auto& r = peer.clear;
+        if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassFloat ||
+            r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
+            !MGPipeHandleIsNull(r.Fbo)) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.ClearBufferfv.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, ClearNamedFramebufferfvFieldsCross) {
+    // Red once (executed, reverted): zero the emitted clear values; F1.ClearNamedFramebufferfv.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession();
+        F1Peer peer; peer.Install();
+        const GLfloat value[4] = {1, 7, 13, 23};
+        const auto fbo = MakeShared<MG_State::GLState::FramebufferObject>(73);
+        RemoteEmitTable().GL.ClearNamedFramebufferfv(fbo, GL_COLOR, 3, value);
+        const auto& r = peer.clear;
+        if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassFloat ||
+            r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
+            r.Fbo != MGPipeFramebufferEmitter::HandleFor(*fbo)) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.ClearNamedFramebufferfv.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, ClearBufferivFieldsCross) {
+    // Red once (executed, reverted): zero the emitted clear values; F1.ClearBufferiv.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession();
+        F1Peer peer; peer.Install();
+        const GLint value[4] = {1, 7, 13, 23};
+
+        RemoteEmitTable().GL.ClearBufferiv(GL_COLOR, 3, value);
+        const auto& r = peer.clear;
+        if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassInt ||
+            r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
+            !MGPipeHandleIsNull(r.Fbo)) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.ClearBufferiv.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, ClearNamedFramebufferivFieldsCross) {
+    // Red once (executed, reverted): zero the emitted clear values; F1.ClearNamedFramebufferiv.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession();
+        F1Peer peer; peer.Install();
+        const GLint value[4] = {1, 7, 13, 23};
+        const auto fbo = MakeShared<MG_State::GLState::FramebufferObject>(73);
+        RemoteEmitTable().GL.ClearNamedFramebufferiv(fbo, GL_COLOR, 3, value);
+        const auto& r = peer.clear;
+        if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassInt ||
+            r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
+            r.Fbo != MGPipeFramebufferEmitter::HandleFor(*fbo)) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.ClearNamedFramebufferiv.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, ClearBufferuivFieldsCross) {
+    // Red once (executed, reverted): zero the emitted clear values; F1.ClearBufferuiv.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession();
+        F1Peer peer; peer.Install();
+        const GLuint value[4] = {1, 7, 13, 23};
+
+        RemoteEmitTable().GL.ClearBufferuiv(GL_COLOR, 3, value);
+        const auto& r = peer.clear;
+        if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassUint ||
+            r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
+            !MGPipeHandleIsNull(r.Fbo)) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.ClearBufferuiv.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, ClearNamedFramebufferuivFieldsCross) {
+    // Red once (executed, reverted): zero the emitted clear values; F1.ClearNamedFramebufferuiv.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession();
+        F1Peer peer; peer.Install();
+        const GLuint value[4] = {1, 7, 13, 23};
+        const auto fbo = MakeShared<MG_State::GLState::FramebufferObject>(73);
+        RemoteEmitTable().GL.ClearNamedFramebufferuiv(fbo, GL_COLOR, 3, value);
+        const auto& r = peer.clear;
+        if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassUint ||
+            r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
+            r.Fbo != MGPipeFramebufferEmitter::HandleFor(*fbo)) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.ClearNamedFramebufferuiv.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, ClearBufferfiFieldsCross) {
+    // Red once (executed, reverted): zero the emitted clear values; F1.ClearBufferfi.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession(); F1Peer peer; peer.Install();
+
+        RemoteEmitTable().GL.ClearBufferfi(GL_DEPTH_STENCIL, 0, 0.375f, 91);
+        const auto& r = peer.clear;
+        if (peer.calls != 1 || r.Kind != kMGPipeClearKindDepthStencil || r.DrawBufferIndex != 0 ||
+            r.DepthValue != 0.375f || r.StencilValue != 91 ||
+            !MGPipeHandleIsNull(r.Fbo)) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.ClearBufferfi.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, ClearNamedFramebufferfiFieldsCross) {
+    // Red once (executed, reverted): zero the emitted clear values; F1.ClearNamedFramebufferfi.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession(); F1Peer peer; peer.Install();
+        const auto fbo = MakeShared<MG_State::GLState::FramebufferObject>(73);
+        RemoteEmitTable().GL.ClearNamedFramebufferfi(fbo, GL_DEPTH_STENCIL, 0, 0.375f, 91);
+        const auto& r = peer.clear;
+        if (peer.calls != 1 || r.Kind != kMGPipeClearKindDepthStencil || r.DrawBufferIndex != 0 ||
+            r.DepthValue != 0.375f || r.StencilValue != 91 ||
+            r.Fbo != MGPipeFramebufferEmitter::HandleFor(*fbo)) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.ClearNamedFramebufferfi.fields: " << DescribeStatus(child) << child.Log;
+}
+
+namespace {
+SharedPtr<MG_State::GLState::TextureObject2D> F1Texture() {
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+    auto tex = MakeShared<MG_State::GLState::TextureObject2D>(91);
+    tex->SetInternalFormat(TextureInternalFormat::RGBA8);
+    for (Uint level = 0; level != 3; ++level) {
+        const Int size = 8 >> level;
+        tex->AllocateStorage(TextureUploadTarget::Texture2D, level,
+            MG_State::GLState::MipmapInput{IntVec3{size, size, 1}, static_cast<SizeT>(size * size * 4)});
+    }
+    tex->SetBaseLevel(1);
+    MGPipeTextureEmitterInstance().AcquireTexture(tex->GetLifetimeId(), tex.get());
+    MG_State::pGLContext->GetTextureUnitObject(0).GetBindingSlot(TextureTarget::Texture2D).Bind(tex);
+    return tex;
+}
+}
+
+TEST(RemoteF1, CopyTexImage2DFieldsCross) {
+    // Red once (executed, reverted): increment the emitted copy level; F1.CopyTexImage2D.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession(); F1Peer peer; peer.Install(); const auto tex = F1Texture();
+        RemoteEmitTable().GL.CopyTexImage2D(GL_TEXTURE_2D, 2, GL_RGBA8, -3, 4, 11, 13, 0);
+        const auto& r = peer.copy;
+        if (peer.calls != 1 || r.Dst != MGPipeTextureEmitterInstance().FindTexture(*tex) ||
+            MGPipeHandleIsNull(r.Dst) || r.Target != GL_TEXTURE_2D || r.Level != 2 ||
+            r.InternalFormat != GL_RGBA8 || r.X != -3 || r.Y != 4 || r.Width != 11 || r.Height != 13 ||
+            r.XOffset != 0 || r.YOffset != 0 || r.SubImage != 0) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.CopyTexImage2D.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, CopyTexSubImage2DFieldsCross) {
+    // Red once (executed, reverted): increment the emitted copy level; F1.CopyTexSubImage2D.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession(); F1Peer peer; peer.Install(); const auto tex = F1Texture();
+        RemoteEmitTable().GL.CopyTexSubImage2D(GL_TEXTURE_2D, 2, 5, 7, -3, 4, 11, 13);
+        const auto& r = peer.copy;
+        if (peer.calls != 1 || r.Dst != MGPipeTextureEmitterInstance().FindTexture(*tex) ||
+            MGPipeHandleIsNull(r.Dst) || r.Target != GL_TEXTURE_2D || r.Level != 2 ||
+            r.InternalFormat != 0 || r.X != -3 || r.Y != 4 || r.Width != 11 || r.Height != 13 ||
+            r.XOffset != 5 || r.YOffset != 7 || r.SubImage != 1) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.CopyTexSubImage2D.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, GenerateMipmapFieldsCross) {
+    // Red once (executed, reverted): increment the emitted base level; F1.GenerateMipmap.fields fails.
+    const auto child = RunInChild([] {
+        StartControlSession(); F1Peer peer; peer.Install(); const auto tex = F1Texture();
+        RemoteEmitTable().GL.GenerateMipmap(GL_TEXTURE_2D);
+        const auto& r = peer.mip;
+        if (peer.calls != 1 || r.Res != MGPipeTextureEmitterInstance().FindTexture(*tex) ||
+            MGPipeHandleIsNull(r.Res) || r.Target != GL_TEXTURE_2D || r.BaseLevel != 1 || r.LevelCount != 3)
+            ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.GenerateMipmap.fields: " << DescribeStatus(child) << child.Log;
+}
+#endif
+
+
+
+#if MGTEST_HAVE_FORK
+
+TEST(RemoteF1, UnboundNamedfvRefusesByName) {
+    // Red once (executed, reverted): disable the named-FBO refusal; its exact Fatal disappears.
+    const auto child = RunInChild([] {
+        CapsPeer backend;
+        Srv::ServerVerbSink sink;
+        sink.SetBackend(&backend);
+        MGPClear r{};
+        r.Fbo = {701, 1};
+        r.Kind = kMGPipeClearKindColor;
+        r.ValueClass = kMGPipeClearValueClassFloat;
+        sink.OnClear(r);
+    });
+    ExpectNamedAbort(child, "Fatal{UnmigratedVerb, \"ClearNamedFramebufferfv+UNBOUND\"}");
+}
+
+TEST(RemoteF1, UnboundNamedivRefusesByName) {
+    // Red once (executed, reverted): disable the named-FBO refusal; its exact Fatal disappears.
+    const auto child = RunInChild([] {
+        CapsPeer backend;
+        Srv::ServerVerbSink sink;
+        sink.SetBackend(&backend);
+        MGPClear r{};
+        r.Fbo = {701, 1};
+        r.Kind = kMGPipeClearKindColor;
+        r.ValueClass = kMGPipeClearValueClassInt;
+        sink.OnClear(r);
+    });
+    ExpectNamedAbort(child, "Fatal{UnmigratedVerb, \"ClearNamedFramebufferiv+UNBOUND\"}");
+}
+
+TEST(RemoteF1, UnboundNameduivRefusesByName) {
+    // Red once (executed, reverted): disable the named-FBO refusal; its exact Fatal disappears.
+    const auto child = RunInChild([] {
+        CapsPeer backend;
+        Srv::ServerVerbSink sink;
+        sink.SetBackend(&backend);
+        MGPClear r{};
+        r.Fbo = {701, 1};
+        r.Kind = kMGPipeClearKindColor;
+        r.ValueClass = kMGPipeClearValueClassUint;
+        sink.OnClear(r);
+    });
+    ExpectNamedAbort(child, "Fatal{UnmigratedVerb, \"ClearNamedFramebufferuiv+UNBOUND\"}");
+}
+
+TEST(RemoteF1, UnboundNamedfiRefusesByName) {
+    // Red once (executed, reverted): disable the named-FBO refusal; its exact Fatal disappears.
+    const auto child = RunInChild([] {
+        CapsPeer backend;
+        Srv::ServerVerbSink sink;
+        sink.SetBackend(&backend);
+        MGPClear r{};
+        r.Fbo = {701, 1};
+        r.Kind = kMGPipeClearKindDepthStencil;
+        r.ValueClass = kMGPipeClearValueClassFloat;
+        sink.OnClear(r);
+    });
+    ExpectNamedAbort(child, "Fatal{UnmigratedVerb, \"ClearNamedFramebufferfi+UNBOUND\"}");
+}
+#endif
 
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;

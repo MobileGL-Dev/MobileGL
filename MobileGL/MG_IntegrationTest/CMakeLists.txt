@@ -2010,3 +2010,19 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             check "${CMAKE_CTEST_COMMAND}" "${CMAKE_BINARY_DIR}")
     set_tests_properties(SplitLogPaths.PrivateAndDistinct PROPERTIES LABELS "integration-split")
 endif()
+
+# f1: split-only source keeps the monolith registry unchanged.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    target_sources(MobileGLIntegrationTest PRIVATE Scenarios/F1WireScenario.cpp)
+    foreach(f1Slot ClearBufferfi ClearBufferfv ClearBufferiv ClearBufferuiv ClearNamedFramebufferfi ClearNamedFramebufferfv ClearNamedFramebufferiv ClearNamedFramebufferuiv CopyTexImage2D CopyTexSubImage2D GenerateMipmap)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectGLES.Split.F1."
+            TEST_FILTER "F1WireScenario.${f1Slot}Pixels"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-split"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5b-f1-${f1Slot}.log"
+        )
+    endforeach()
+endif()

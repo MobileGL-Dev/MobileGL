@@ -73,14 +73,16 @@ namespace MobileGL::MG_Remote::Server {
         if (table == nullptr) return false;
         const MG_Backend::GLFunctionsTable& gl = table->GL;
 
-        // THE FBO HANDLE IS NOT RESOLVED HERE, AND THAT IS THE RULING RATHER THAN AN OMISSION.
-        // MGPClear::Fbo names the framebuffer the clear belongs to, but the BINDING is already
-        // server state: set_framebuffer_state (op 33) arrives ahead of the clear and the
-        // applier has bound it. Re-resolving the handle to a frontend FramebufferObject here
-        // would need the SharedPtr the four ClearNamedFramebuffer* entries take - a frontend
-        // heap reference that table 2 lists as one of the six fields with no wire carrier. So
-        // P5 clears THE BOUND FRAMEBUFFER, which for the reduced path (default FBO) is exactly
-        // right, and the named form is P7's along with the handle it needs.
+        // Named records precede the verb; bound-form backends re-sync the live draw binding.
+        if (!MG_Pipe::MGPipeHandleIsNull(clear.Fbo) &&
+            clear.Fbo != MG_Pipe::MGPipeApplier().BoundFramebuffer[0]) {
+            const char* slot = clear.Kind == kMGPClearKindDepthStencil ? "ClearNamedFramebufferfi+UNBOUND" :
+                clear.ValueClass == kMGPClearValueClassInt ? "ClearNamedFramebufferiv+UNBOUND" :
+                clear.ValueClass == kMGPClearValueClassUint ? "ClearNamedFramebufferuiv+UNBOUND" :
+                "ClearNamedFramebufferfv+UNBOUND";
+            MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"%s\"}", slot);
+            std::abort();
+        }
         switch (clear.Kind) {
         case kMGPClearKindWhole:
             if (gl.Clear == nullptr) return false;
@@ -415,12 +417,25 @@ namespace MobileGL::MG_Remote::Server {
 
     // ---- f1 ----
     Bool ServerVerbSink::OnGenerateMipmap(const MG_Pipe::MGPMipPlan& plan) {
-        (void)plan;
-        ServerUnmigratedVerbFatal("GenerateMipmap");
+        const auto* table = Table("GenerateMipmap");
+        if (table == nullptr || table->GL.GenerateMipmap == nullptr) return false;
+        table->GL.GenerateMipmap(plan.Target);
+        return true;
     }
 
     Bool ServerVerbSink::OnCopyFramebufferToTexture(const MG_Pipe::MGPCopyFromFramebuffer& copy) {
-        ServerUnmigratedVerbFatal(copy.SubImage ? "CopyTexSubImage2D" : "CopyTexImage2D");
+        const auto* table = Table(copy.SubImage ? "CopyTexSubImage2D" : "CopyTexImage2D");
+        if (table == nullptr) return false;
+        if (copy.SubImage) {
+            if (table->GL.CopyTexSubImage2D == nullptr) return false;
+            table->GL.CopyTexSubImage2D(copy.Target, copy.Level, copy.XOffset, copy.YOffset,
+                                      copy.X, copy.Y, copy.Width, copy.Height);
+        } else {
+            if (table->GL.CopyTexImage2D == nullptr) return false;
+            table->GL.CopyTexImage2D(copy.Target, copy.Level, copy.InternalFormat,
+                                   copy.X, copy.Y, copy.Width, copy.Height, 0);
+        }
+        return true;
     }
 
     // -----------------------------------------------------------------------------------
