@@ -11,6 +11,10 @@
 # STUB_MODE:
 #   unrelated          baseline green; the control's own run fails with UNRELATED_CONTROL_FAILURE
 #   evidence           baseline green; the control's own run fails with the scenarios' own wording
+#   missing-fatal      private file exists but lacks Fatal (stdout status still fails)
+#   stdout-fatal       Fatal exists only on stdout, never in the private file
+#   stale-fatal        Fatal exists before reset, never from this control run
+#   e3-unrelated       E1 has its private Fatal; E3(a) fails for an unrelated reason
 #   green              baseline green; the control's own run PASSES (the knob is not load-bearing)
 #   red-baseline       the baseline itself has a failed entry
 #   all-skipped        the baseline is entirely skipped (the disarmed lane, a legitimate exit 0)
@@ -26,6 +30,7 @@ listing=1
 junit=""
 prev=""
 for a in "$@"; do
+  [ "$a" = "--show-only=json-v1" ] && json_requested=1
   [ "$a" = "-N" ] && listing_requested=1
   if [ "$prev" = "--output-junit" ]; then junit="$a"; fi
   prev="$a"
@@ -57,6 +62,16 @@ write_junit() {
   printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' "<testsuite name=\"stub\">" "  ${body}" '</testsuite>' > "$1"
 }
 
+# Model the library file sink separately from ctest stdout (ID-53).
+log="${CONTROL_TMPDIR}/entry.log"
+if [ "${json_requested:-0}" = 1 ]; then
+  python3 -c 'import json, os; p=os.environ["CONTROL_TMPDIR"]; print(json.dumps({"tests": [{"name": "DirectGLES.Split."+n, "properties": [{"name": "LABELS", "value": ["integration-split"]}, {"name": "ENVIRONMENT", "value": ["MOBILEGL_LOG_FILE_PATH="+p+"/"+f]}]} for n,f in [("ClearThenReadPixelsScenario.ClearWithNoDrawIsVisibleToDefaultFramebufferReadPixels", "entry.log"), ("PersistentCoherentMapScenario.TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw", "pmap.log")]]}))'
+  if [ "${mode}" = stale-fatal ]; then
+    echo 'Fatal{BarrierViolation, "DrawVbo"}' > "${log}"
+  fi
+  exit 0
+fi
+
 if [ "${listing_requested}" = "1" ]; then
   emit_listing
   exit 0
@@ -71,16 +86,27 @@ if [ -n "${junit}" ]; then
 fi
 
 # The control's own run.
+if [ "${MOBILEGL_IPC_VERB_BARRIER:-1}" = 0 ]; then
+  case "${mode}" in
+    evidence|e3-unrelated) echo 'Fatal{BarrierViolation, "DrawVbo"}' > "${log}" ;;
+    missing-fatal) echo "library setup only; no fatal" > "${log}" ;;
+    stdout-fatal) echo 'Fatal{BarrierViolation, "DrawVbo"}' ;;
+  esac
+fi
 case "${mode}" in
-  unrelated)
+  unrelated|missing-fatal|stdout-fatal|stale-fatal|e3-unrelated)
     echo "1/1 Test #1: DirectGLES.Split.ClearThenReadPixelsScenario.ClearWithNoDrawIsVisibleToDefaultFramebufferReadPixels ...***Failed"
     echo "UNRELATED_CONTROL_FAILURE: the harness aborted in setup before the knob was read"
+    if [ "${MOBILEGL_IPC_PERSISTENT_BLOCK_KB:-64}" = 0 ]; then
+      case "${mode}" in
+        missing-fatal|stdout-fatal|stale-fatal)
+          echo "the SECOND write through the same mapping, announced by nothing" ;;
+      esac
+    fi
     exit 8
     ;;
   evidence)
-    # Both controls' required wording, so one stub serves E1 and E3(a). Copied from the real
-    # diagnostics: ~/w7/p5-v1-joint-isplit-barrier0.log for the first, and
-    # PersistentCoherentMapScenario.cpp:414-417 for the second.
+    # E1 is file-only above; E3(a) emits its scenario assertion to ctest.
     echo "1/1 Test #1: DirectGLES.Split.ClearThenReadPixelsScenario.ClearWithNoDrawIsVisibleToDefaultFramebufferReadPixels ...***Failed"
     echo "../MobileGL/MG_IntegrationTest/Scenarios/ClearThenReadPixelsScenario.cpp:290: Failure"
     echo "Expected: (bottom.r) > (200), actual: '\\0' vs 200"

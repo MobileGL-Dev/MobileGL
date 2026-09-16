@@ -33,21 +33,29 @@
 # CONTROL", "is the E3(a) NEGATIVE CONTROL"), and it is tempting to grep for that. It is not
 # evidence: it is written at config load, by every process in the run, whatever happens next. A
 # setup abort would carry it too. It proves the knob was READ, never that the knob caused the red.
-# Only the failing case's own diagnostic does that. (It is also unreachable from here: the three
-# DirectGLES.Split. lanes set no MOBILEGL_LOG_FILE_PATH, and the library's console sink is compiled
-# out of this configuration, so no MGLOG_ output of any level reaches ctest's transcript. Measured:
-# ~/w7/p5-v1-joint-isplit-barrier0.log, 18 aborted entries, zero occurrences of the string "Fatal".)
+# Only the failing case's own diagnostic does that. ID-53 gives each Split entry a private
+# library log: E1 reads its Fatal there; E3(a) reads the scenario assertion in ctest output.
 #
-# Usage:  split_negative_controls.sh
+# Usage:  split_negative_controls.sh [--self-test]
 #   CTEST          ctest binary                       (default: ctest)
 #   CONTROL_TMPDIR scratch dir for the junit + output  (default: ${RUNNER_TEMP:-/tmp})
 set -u
+
+if [ "${1:-}" = "--self-test" ]; then
+  bash "$(dirname "$0")/control_smoke_test.sh" &&
+    bash "$(dirname "$0")/testdata/split_private_log_smoke.sh"
+  exit $?
+fi
 
 CTEST="${CTEST:-ctest}"
 CONTROL_TMPDIR="${CONTROL_TMPDIR:-${RUNNER_TEMP:-/tmp}}"
 mkdir -p "${CONTROL_TMPDIR}"
 
 junit="${CONTROL_TMPDIR}/isplit.xml"
+log_helper="$(dirname "$0")/../../MobileGL/MG_IntegrationTest/Harness/split_log_paths.py"
+
+# Check ownership even while the runtime lane is disarmed and will skip.
+python3 "${log_helper}" check "${CTEST}" "$PWD" || exit 1
 
 # ---- the baseline ---------------------------------------------------------------------------
 #
@@ -101,6 +109,11 @@ run_control() {
     exit 1
   fi
 
+  manifest="${CONTROL_TMPDIR}/split-tests.json"
+  "${CTEST}" --show-only=json-v1 > "${manifest}" || exit 1
+  # Remove selected files first: a previous Fatal must never arm a new red.
+  python3 "${log_helper}" reset "${manifest}" "${filter}" || exit 1
+
   out="${CONTROL_TMPDIR}/control-output.txt"
   env "$@" "${CTEST}" --output-on-failure -L integration-split -R "${filter}" --no-tests=error > "${out}" 2>&1
   control_rc=$?
@@ -111,41 +124,29 @@ run_control() {
     exit 1
   fi
 
-  # THE HALF THAT WAS MISSING. A non-zero exit is necessary and nowhere near sufficient.
-  # Whitespace is normalised across the whole file first, for the reason given in
-  # retrace_pull_library_control.sh: a diagnostic that arrives wrapped is still the diagnostic.
-  if ! tr -s '[:space:]' ' ' < "${out}" | grep -qE "${evidence}"; then
-    echo "::error::${name} turned ${matched} selected entries red, but the red carries NONE of the diagnostics those scenarios emit when this knob is off, so it is not this control's red. Required one of: ${evidence}. A timeout, a setup abort, a harness that died before it read the knob, or any unrelated assertion lands here - and every one of them used to print the success message below and leave this step green (ID-46 finding 8). If the entries aborted with no output at all, that is the barrier path having no named diagnostic of its own: see t1-v2.md, it is a debt on the server package, not a reason to accept the red."
+  # E1's MGLOG_F sink is the private file, never ctest's status or transcript.
+  if [ "${evidence}" = "private-barrier-fatal" ]; then
+    python3 "${log_helper}" evidence "${manifest}" "${filter}" \
+      'Fatal\{BarrierViolation, "[A-Za-z_][A-Za-z_0-9]*"\}' || exit 1
+  elif ! tr -s '[:space:]' ' ' < "${out}" | grep -qE "${evidence}"; then
+    echo "::error::${name} FAILED: red lacks its persistent-map push diagnostic. Required: ${evidence}"
     exit 1
   fi
 
   echo "${name} turned ${matched} selected entries red, and the red carries the scenario's own diagnostic, as it must"
 }
 
-# E1: R-1's lockstep verb barrier. Without it the client keeps pulling fields from a live GLContext
-# while the server runs ahead, so the server reads future values.
-#
-# THE SELECTION INCLUDES THE SmallRing LANE, and that is not cosmetic. Measured on v1's joint tree
-# (~/w7/p5-v1-joint-isplit-barrier0.log): with the barrier off, every entry the OLD filter selected
-# aborted with no output whatsoever, and the one entry in the whole run that failed with a readable
-# assertion - ClearThenReadPixelsScenario.cpp:290/:295, reading back 0 where >200 was cleared - was
-# a DirectGLES.Split.SmallRing. entry, which the old filter excluded. A control whose selection
-# contains no case able to say why it failed cannot assert its own failure reason. The SmallRing
-# entries are the same two scenarios under the same transport with SEG_CMD/SEG_STAGE at their floor,
-# so including them widens E1's selection strictly within E1's charter.
+# E1: c1 ClientSession::Post emits MGLOG_F Fatal{BarrierViolation, "<slot>"}.
+# Keep the ID-53-approved SmallRing selection as well as the default lane.
 run_control "negative control E1 (MOBILEGL_IPC_VERB_BARRIER=0)" \
   'DirectGLES\.Split\.(SmallRing\.)?(Triangle|ClearThenReadPixels)' \
-  'ClearThenReadPixelsScenario\.cpp:(290|295)|the bottom band should be red after the resolve|the top band should be blue after the resolve|TriangleScenario\.cpp:[0-9]+: Failure' \
+  'private-barrier-fatal' \
   MOBILEGL_IPC_VERB_BARRIER=0
 
-# E3(a): the persistent-map push. 0 is admitted by ConfigLoader on purpose and is documented there
-# as this control. The evidence is the scenario's own wording for "the second write never arrived":
-# with the push off, the write that no GL call announces cannot reach its draw, which is exactly
-# what TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw and
-# AWriteAfterAFrameBoundaryReachesTheNextFramesDraw read back
-# (PersistentCoherentMapScenario.cpp:414-417, :442-443). The counting case's pmap= assertion
-# (:531-541) is listed too, for the lane where it is the one that runs.
+# E3(a): PersistentMapTracker.cpp returns at blockBytes == 0 (no Fatal).
+# PersistentCoherentMapScenario.cpp:414-417 / 442-443 name the missing second write.
+# Do not accept a generic source-line Failure: an unrelated assertion is not this red.
 run_control "negative control E3(a) (MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0)" \
   'DirectGLES\.Split\.(SmallRing\.)?PersistentCoherentMapScenario' \
-  "the SECOND write through the same mapping, announced by nothing|frame 1's write through the SAME mapping|cannot have pushed|PersistentCoherentMapScenario\.cpp:[0-9]+: Failure" \
+  "the SECOND write through the same mapping, announced by nothing|frame 1's write through the SAME mapping, after a Present" \
   MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0

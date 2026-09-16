@@ -1906,6 +1906,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # target B and PersistentCoherentMap is target C, both new in P5.
     gtest_discover_tests(MobileGLIntegrationTest
         TEST_PREFIX "DirectGLES.Split."
+        TEST_LIST MGL_SPLIT_CLEAR_TESTS
         TEST_FILTER "ClearThenReadPixelsScenario.*"
         DISCOVERY_TIMEOUT 30
         PROPERTIES
@@ -1915,6 +1916,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     )
     gtest_discover_tests(MobileGLIntegrationTest
         TEST_PREFIX "DirectGLES.Split."
+        TEST_LIST MGL_SPLIT_TRIANGLE_TESTS
         TEST_FILTER "TriangleScenario.*"
         DISCOVERY_TIMEOUT 30
         PROPERTIES
@@ -1924,6 +1926,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     )
     gtest_discover_tests(MobileGLIntegrationTest
         TEST_PREFIX "DirectGLES.Split."
+        TEST_LIST MGL_SPLIT_PMAP_TESTS
         TEST_FILTER "PersistentCoherentMapScenario.*"
         DISCOVERY_TIMEOUT 30
         PROPERTIES
@@ -1947,6 +1950,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 
     gtest_discover_tests(MobileGLIntegrationTest
         TEST_PREFIX "DirectGLES.Split.PersistentMapArm."
+        TEST_LIST MGL_SPLIT_ARM_TESTS
         TEST_FILTER "PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares"
         DISCOVERY_TIMEOUT 30
         PROPERTIES
@@ -1984,6 +1988,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                                       PersistentCoherentMapScenario)
         gtest_discover_tests(MobileGLIntegrationTest
             TEST_PREFIX "DirectGLES.Split.SmallRing."
+            TEST_LIST "MGL_SPLIT_SMALL_${mglItestSmallRingScenario}_TESTS"
             TEST_FILTER "${mglItestSmallRingScenario}.*"
             DISCOVERY_TIMEOUT 30
             PROPERTIES
@@ -1992,4 +1997,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_SMALL_RING_ENVIRONMENT}"
         )
     endforeach()
+    # Apply per-entry paths after GoogleTest discovery has populated the TEST_LISTs.
+    configure_file(Harness/SplitLogPaths.cmake.in SplitLogPaths.cmake @ONLY)
+    set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/SplitLogPaths.cmake")
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME SplitLogPaths.PrivateAndDistinct
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Harness/split_log_paths.py"
+            check "${CMAKE_CTEST_COMMAND}" "${CMAKE_BINARY_DIR}")
 endif()
