@@ -21,6 +21,7 @@
 #include <MG_Util/Debug/Log.h>
 
 #include <cstdlib>
+#include <utility>
 #include <vector>
 
 namespace MobileGL::MG_Remote::Client {
@@ -150,7 +151,25 @@ namespace MobileGL::MG_Remote::Client {
 
         // ---- 1. the control plane and the two bells. The transport owns the bells; THE
         // SESSION owns the rings, and the accessors stay off ITransport (contract §3.9).
-        Transport::InProcessTransport::CreatePair(m_clientTransport, m_serverTransport);
+        std::unique_ptr<Transport::InProcessTransport> clientEnd;
+        std::unique_ptr<Transport::InProcessTransport> serverEnd;
+        Transport::InProcessTransport::CreatePair(clientEnd, serverEnd);
+        return StartOverTransportPair(std::move(clientEnd), std::move(serverEnd));
+    }
+
+    MobileGLResult ClientSession::StartOverTransportPair(
+        std::unique_ptr<Transport::InProcessTransport> clientEnd,
+        std::unique_ptr<Transport::InProcessTransport> serverEnd) {
+        if (m_started) {
+            return MOBILEGL_ERR_INVALID_ARGUMENT;
+        }
+        if (clientEnd == nullptr || serverEnd == nullptr) {
+            MGLOG_E("MG_Remote client: StartOverTransportPair needs both ends of one "
+                    "InProcessTransport::CreatePair");
+            return MOBILEGL_ERR_INVALID_ARGUMENT;
+        }
+        m_clientTransport = std::move(clientEnd);
+        m_serverTransport = std::move(serverEnd);
         m_transport = m_clientTransport.get();
 
         // ---- 2. Hello. Sent before the server accepts: InProcessTransport queues whole
@@ -450,6 +469,15 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     Uint32 ClientSession::MaxReplyBytes() const { return m_replies.MaxReplyBytes(); }
+
+    Bool ClientSession::ReplyCanHold(Uint64 bytes) const { return m_replies.CanHold(bytes); }
+
+    // ID-47. Forwarded verbatim so that the message, the boundary and the abort are the pool's
+    // and are pinned once, in SessionTest, rather than re-derived per caller.
+    void ClientSession::RequireReadPixelsReplyFits(Uint32 width, Uint32 height, Uint32 format,
+                                                   Uint32 type, Uint64 bytes) const {
+        m_replies.RequireReadPixelsFits(width, height, format, type, bytes);
+    }
 
     Transport::EventRingConsumer& ClientSession::Events() { return m_events; }
 
