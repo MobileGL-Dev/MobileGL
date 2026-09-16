@@ -65,3 +65,31 @@ if (MSVC)
 endif ()
 
 gtest_discover_tests(PipeWireCodecTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
+# P5 v1's suite: the apply thread, the blocking control mailbox, the verb stamp and R-11's
+# server-owned staging copy. Registered on its own for PipeWireCodecTest's reason - it links
+# gtest and carries its own main(), because the Fatal arms report through MGLOG_F + std::abort
+# and a case that asserts one has to name the log file BEFORE anything logs. It also reaches
+# MG_Pipe, MG_Backend and MG_State, so it carries their include paths.
+add_executable(ServerLoopTest ServerLoopTest.cpp)
+
+target_include_directories(ServerLoopTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+        ${MGL_ROOT}/MobileGL/MG_Pipe
+        ${MGL_ROOT}/3rdparty/flatbuffers/include
+        ${MGL_ROOT}/3rdparty/xxHash
+        ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
+        ${MGL_ROOT}/3rdparty/SPIRV-Reflect
+)
+
+target_link_libraries(ServerLoopTest PRIVATE
+        GTest::gtest
+        ${LINK_LIBRARIES}
+)
+
+if (MSVC)
+    target_compile_options(ServerLoopTest PRIVATE /Zc:preprocessor)
+endif ()
+
+gtest_discover_tests(ServerLoopTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
