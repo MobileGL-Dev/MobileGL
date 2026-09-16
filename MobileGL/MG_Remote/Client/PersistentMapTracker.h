@@ -96,6 +96,7 @@ namespace MobileGL::MG_Remote::Client {
         void ResetCountersForTest() {
             m_blocksPushed = 0;
             m_bytesPushed = 0;
+            m_blockZeroAnnounced = false;
         }
         void ClearForTest() {
             m_livePersistentMaps.clear();
@@ -111,6 +112,11 @@ namespace MobileGL::MG_Remote::Client {
         UnorderedMap<Uint64, MG_State::GLState::BufferObject*> m_livePersistentMaps;
         Uint64 m_blocksPushed = 0;
         Uint64 m_bytesPushed = 0;
+        // E3(a)'s diagnostic is emitted ONCE per process. PushBlocksFor runs at every validate
+        // point of every member, so an unlatched MGLOG_W would be one line per draw per mapping
+        // - and a control that has to grep a log cannot tell a message that fired from a
+        // message that flooded.
+        Bool m_blockZeroAnnounced = false;
     };
 
     // What the client's emit table calls immediately BEFORE emitting any verb that can read a

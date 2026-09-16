@@ -797,6 +797,15 @@ namespace MobileGL::MG_Remote::Wire {
                 // One try at reclaiming what the server has already retired. A second failure
                 // means the bytes genuinely do not fit, which R-10 says P5 does not chunk and
                 // must instead prove it never needs to.
+                //
+                // AND THIS IS P5'S ONE REAL BACK-PRESSURE EVENT, so it is counted here and
+                // published as `ringwaits=`. Reaching this line means the producer could not
+                // place a blob until the CONSUMER had retired earlier ones - the producer's
+                // progress depended on retiredSeq, which is exactly what R-9's "batching may
+                // only delay a watermark" is about. Exit gate E3(e)'s small-ring lane exists
+                // to make it happen at least once; a lane that never reaches it has a ring
+                // that is small only in its environment block.
+                ++m_stageReclaimWaits;
                 ReclaimStagedBytes();
             }
         }
@@ -916,8 +925,48 @@ namespace MobileGL::MG_Remote::Wire {
         if ((callFlags & static_cast<Uint32>(kHasBlob)) != 0) ringFlags |= Transport::kRecHasBlob;
         if ((callFlags & static_cast<Uint32>(kVarTail)) != 0) ringFlags |= Transport::kRecVarTail;
 
+        // BOTH WRAP READINGS ARE TAKEN FROM THE PRODUCER'S OWN CURSOR, not from a flag Reserve
+        // does not return. The cursor is a monotonic byte count and the ring is indexed
+        // `cursor & mask`, so `cursor / capacity` is the number of times the byte area has been
+        // reused - and Reserve advances the cursor by `total` for a contiguous record and by
+        // `spaceToEnd + total` when it had to lay a kRecPad filler down to the boundary first
+        // (Ring.cpp). Everything below is exact arithmetic over those two facts, which keeps
+        // both counters in the encoder - where R-10's maximum already lives - rather than
+        // adding members to a Transport class the wire package does not own.
+        //
+        // AND THEY ARE TWO COUNTERS BECAUSE THEY ARE TWO EVENTS, which one measurement made
+        // unmissable: a workload whose records repeat at a uniform stride that DIVIDES the
+        // capacity lands on the boundary exactly, every time, for ever. Driving 1310824 bytes
+        // of clears and draws through a 1 MiB SEG_CMD produced ZERO pads - the ring went round
+        // once and a half and never straddled - so "did a pad happen" is NOT the question "did
+        // this ring wrap", and a lane that asked the first one while meaning the second would
+        // have gone red for a property of its own arithmetic.
+        //
+        //   m_cmdWraps      the head crossed a multiple of the capacity: the ring went round.
+        //                   Guaranteed once more bytes are written than the ring holds, which
+        //                   is what makes it something exit gate E3(e) can ASSERT.
+        //   m_cmdWrapPads   a kRecPad filler was laid because a record would have straddled
+        //                   the boundary. R-9's "a pad does not advance seq, both sides skip
+        //                   it and count again" is about THIS one, and it is RECORDED rather
+        //                   than asserted, because whether it ever happens is a property of
+        //                   the record sizes and not of the ring.
+        const Uint64 headBeforeReserve = m_cmd->LocalHead();
         void* slot = m_cmd->Reserve(static_cast<Uint16>(op), ringFlags,
                                     total - sizeof(MGPWireRecHeader));
+        if (slot != nullptr) {
+            const Uint64 headAfterReserve = m_cmd->LocalHead();
+            if ((headAfterReserve - headBeforeReserve) > total) {
+                ++m_cmdWrapPads;
+            }
+            const Uint64 capacity = m_cmd->Capacity();
+            if (capacity != 0) {
+                // A record is capped at capacity/2 and its pad at capacity/2 too, so one
+                // Reserve can cross at most one boundary; the subtraction is still written as
+                // a difference of quotients rather than as a Bool, because that stays correct
+                // if the cap ever changes.
+                m_cmdWraps += (headAfterReserve / capacity) - (headBeforeReserve / capacity);
+            }
+        }
         if (slot == nullptr) {
             // The ring is full, not the record too big - Reserve refuses an oversized record
             // above, and we already proved this one is not. The caller publishes, waits for
@@ -994,6 +1043,13 @@ namespace MobileGL::MG_Remote::Wire {
 
         if (total > m_maxRecordBytes) {
             m_maxRecordBytes = total;
+            // WHICH ROW IT WAS, not just how big. R-10 makes the integrator choose between early
+            // chunking and a bigger default ring when the maximum climbs, and that choice is
+            // about a specific record family - a var-tail whose length the GL limits bound, or
+            // one the emitter has to split itself. A number with no row attached leaves the
+            // reader to guess which, and the guess in c1-v2.md §10 was SetGlobalConstants while
+            // the measured answer on the reduced path is a different row entirely.
+            m_maxRecordOp = op;
         }
         ++m_emitSeq;
         // The stage mark: where SEG_STAGE stood once everything this record names had been
@@ -1103,6 +1159,29 @@ namespace MobileGL::MG_Remote::Wire {
     Uint64 PipeWireEncoder::EmitSeq() const { return m_emitSeq; }
 
     Uint64 PipeWireEncoder::MaxRecordBytesSeen() const { return m_maxRecordBytes; }
+
+    const char* PipeWireEncoder::MaxRecordOpName() const {
+        return m_maxRecordOp == MG_Pipe::MGPWireOp::kOpCount ? "none" : WireOpName(m_maxRecordOp);
+    }
+
+    Uint64 PipeWireEncoder::MaxRecordBytesCap() const {
+        // Read from the ring, not recomputed from MOBILEGL_IPC_RING_MB: the number the proof
+        // has to hold against is the capacity this process's producer actually got, and the
+        // two differ the moment a session clamps or rounds the configured size.
+        return (m_cmd != nullptr && m_cmd->Valid()) ? m_cmd->MaxRecordBytes() : 0;
+    }
+
+    Uint64 PipeWireEncoder::CmdWraps() const { return m_cmdWraps; }
+
+    Uint64 PipeWireEncoder::CmdWrapPads() const { return m_cmdWrapPads; }
+
+    Uint64 PipeWireEncoder::StageReclaimWaits() const { return m_stageReclaimWaits; }
+
+    Uint64 PipeWireEncoder::CmdBytesWritten() const {
+        // LocalHead(), not RingControl::head: the producer's own cursor includes records
+        // reserved but not yet published, and this number is about what the PRODUCER wrote.
+        return (m_cmd != nullptr && m_cmd->Valid()) ? m_cmd->LocalHead() : 0;
+    }
 
     // ---------------------------------------------------------------------------------
     // Decoder

@@ -30,6 +30,7 @@
 
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Debug/Log.h>
+#include <MG_Util/Metrics/PipeStats.h>
 #include <MG_Util/Metrics/TextureMetrics.h>
 
 #include <MG_State/GLState/BufferState/BufferObject.h>
@@ -68,27 +69,85 @@ namespace MobileGL::MG_Remote::Client {
 
         Bool g_dropClearEmission = false;
         Uint64 g_droppedClearEmissions = 0;
+        Bool g_dropDrawEmission = false;
+        Uint64 g_droppedDrawEmissions = 0;
+        Uint64 g_presentOrdinal = 0;
+        Uint64 g_publishedMaxRecordBytes = 0;
 
         // E2's control has to be armable from OUTSIDE the process that runs the replay, because
-        // the statement it makes is about a trace lane and not about a unit case: "drop one
-        // Clear emission and OpenRA's SSIM falls below 0.99". A recompile would make the control
+        // the statement it makes is about a trace lane and not about a unit case: "drop an
+        // emission and OpenRA's SSIM falls below 0.99". A recompile would make the control
         // arm against source text, which is ID-22(a)'s defect.
         //
         // READ WITH getenv RATHER THAN THROUGH MG_Config, DELIBERATELY AND TEMPORARILY. Config.h
-        // is c0's and a new MOBILEGL_IPC_* knob goes through the integrator; this is a
-        // NEGATIVE-CONTROL switch no operator may ever set, and it announces itself at warning
-        // level every time it arms so it cannot be on by accident. Flagged for adoption into
-        // IpcTable if the integrator wants it there.
-        Bool ReadDropClearFromEnvironment() {
-            const char* value = std::getenv("MOBILEGL_IPC_E2_DROP_CLEAR");
-            const Bool armed = value != nullptr && value[0] == '1' && value[1] == '\0';
-            if (armed) {
-                MGLOG_W("MG_Remote client: MOBILEGL_IPC_E2_DROP_CLEAR=1 - E2's NEGATIVE CONTROL is "
-                        "armed and every glClear will be DROPPED on the wire. This arm is expected "
-                        "to fail its SSIM threshold; a lane that stays green with it set is not "
-                        "going through the wire at all");
+        // is c0's and a new MOBILEGL_IPC_* knob goes through the integrator; these are
+        // NEGATIVE-CONTROL switches no operator may ever set, and they announce themselves at
+        // warning level every time they arm so they cannot be on by accident. Flagged for
+        // adoption into IpcTable if the integrator wants them there.
+        Bool ReadControlKnob(const char* name) {
+            const char* value = std::getenv(name);
+            return value != nullptr && value[0] == '1' && value[1] == '\0';
+        }
+
+        // ---- WHY THERE ARE TWO OF THESE KNOBS, measured rather than assumed -----------------
+        //
+        // MOBILEGL_IPC_E2_DROP_CLEAR came first and it does exactly what it says: every glClear
+        // stops at the client and no Clear record reaches the ring. It STILL COULD NOT TURN THE
+        // E2 RETRACE RED (joint-v1.md 3: SSIM 1.000000, mismatchPixels=0 with the knob armed and
+        // the arming WARN in the library's own log). That is not a broken knob, it is OpenRA:
+        // `apitrace dump` of openra.trace over the 31249 replayed calls counts 30 glClear, 30
+        // glXSwapBuffers and 788 glDrawArrays, and the final frame issues its clear at call
+        // 30197 and then covers the surface four times over with a terrain layer
+        // (`glDrawArrays(GL_TRIANGLES, first=56064, count=16128)` x4, under a scissor of
+        // -24,-24,688x528 over a 640x480 surface) before the snapshot at 31249. A frame that
+        // overdraws every pixel it clears has a picture that does not depend on the clear, so
+        // "drop the clear" is a control whose observable is invisible to THIS trace - R-16's
+        // exact defect, a gate that cannot go red for its own reason.
+        //
+        // MOBILEGL_IPC_E2_DROP_DRAW is the honest form of the same statement for a trace lane:
+        // drop every DrawVbo record and the picture can only be the clear colour. It is the
+        // control that makes "the wire carried the frame" falsifiable, because the thing it
+        // removes is the thing the golden is made of.
+        //
+        // DROP_CLEAR IS KEPT rather than retired: it drops a real record, it now publishes the
+        // count it dropped (below), and a scenario whose picture DOES depend on its clear -
+        // ClearThenReadPixelsScenario is the reduced path's target A - is where it is
+        // observable. What it is no longer allowed to be is E2's retrace control.
+        void ArmControlKnobs() {
+            g_dropClearEmission = ReadControlKnob("MOBILEGL_IPC_E2_DROP_CLEAR");
+            g_dropDrawEmission = ReadControlKnob("MOBILEGL_IPC_E2_DROP_DRAW");
+            if (g_dropClearEmission) {
+                MGLOG_W("MG_Remote client: MOBILEGL_IPC_E2_DROP_CLEAR=1 - a NEGATIVE CONTROL is "
+                        "armed and every glClear will be DROPPED on the wire. It is observable "
+                        "only where the picture depends on the clear: OpenRA overdraws its whole "
+                        "surface every frame, so this knob does NOT redden the E2 retrace "
+                        "(measured, joint-v1.md 3) - MOBILEGL_IPC_E2_DROP_DRAW is the one that "
+                        "does. The dropped count is published on the 'E2 control armed' line");
             }
-            return armed;
+            if (g_dropDrawEmission) {
+                MGLOG_W("MG_Remote client: MOBILEGL_IPC_E2_DROP_DRAW=1 - E2's NEGATIVE CONTROL is "
+                        "armed and every DrawVbo record will be DROPPED on the wire. The surface "
+                        "can then only carry the clear colour, so this arm is expected to fail its "
+                        "SSIM threshold; a lane that stays green with it set is not going through "
+                        "the wire at all");
+            }
+        }
+
+        // THE CONTROL'S OWN EVIDENCE LINE, and it is emitted per frame rather than at teardown
+        // on purpose: a retrace that is killed by its own timeout, or whose library never runs
+        // MobileGL::Destroy, would leave a teardown-only line absent and the control would then
+        // have to accept a bare threshold failure - which is the thing R-16 forbids. One line
+        // per Present, only while a knob is armed, is bounded by the frame count and present
+        // whatever happens afterwards.
+        void LogE2ControlLine(Uint64 frameOrdinal) {
+            if (!g_dropClearEmission && !g_dropDrawEmission) return;
+            MGLOG_W("MGPipe: E2 control armed - drop-draw=%d drop-clear=%d, %llu records dropped "
+                    "on the wire (draw=%llu clear=%llu), frame %llu",
+                    g_dropDrawEmission ? 1 : 0, g_dropClearEmission ? 1 : 0,
+                    static_cast<unsigned long long>(g_droppedDrawEmissions + g_droppedClearEmissions),
+                    static_cast<unsigned long long>(g_droppedDrawEmissions),
+                    static_cast<unsigned long long>(g_droppedClearEmissions),
+                    static_cast<unsigned long long>(frameOrdinal));
         }
 
         // ID-49's two halves, in one place so the emitter and its control read the same
@@ -155,9 +214,11 @@ namespace MobileGL::MG_Remote::Client {
             BeforeReadOnlyVerb();
 
             if (g_dropClearEmission) {
-                // E2's negative control. Everything above still ran, so the only difference
+                // A negative control. Everything above still ran, so the only difference
                 // between this arm and the live one is the record - which is exactly the
-                // statement "the picture comes from the wire" that E2 exists to prove.
+                // statement "the picture comes from the wire" that E2 exists to prove. Its
+                // OBSERVABILITY is a property of the workload, not of this branch: see
+                // ArmControlKnobs for the measurement that took E2's retrace off this knob.
                 ++g_droppedClearEmissions;
                 return;
             }
@@ -296,6 +357,16 @@ namespace MobileGL::MG_Remote::Client {
         void EmitDrawArrays(GLenum mode, GLint first, GLsizei count) {
             ClientSession& session = RequireSession("DrawArrays");
             BeforeDrawVerb();
+
+            if (g_dropDrawEmission) {
+                // E2's LOAD-BEARING negative control. Same shape as the clear drop and the same
+                // rule: everything above still ran - the persistent-map push and the GPU-write
+                // mark walk both happened - so the ONLY difference from the live arm is that
+                // this frame's geometry never crossed the ring. A lane that still matches its
+                // golden with this armed did not get its picture from the wire.
+                ++g_droppedDrawEmissions;
+                return;
+            }
 
             MG_Pipe::MGPDrawInfo info{};
             info.Mode = static_cast<Uint32>(mode);
@@ -531,6 +602,50 @@ namespace MobileGL::MG_Remote::Client {
             ClientSession& session = RequireSession("Present");
             BeforeReadOnlyVerb();
 
+            // ---- R-10's and R-9's readings, published BEFORE the present record ------------
+            //
+            // THE FRAME BOUNDARY IS THE RIGHT PLACE and the per-record path is the wrong one:
+            // the encoder keeps all five as run totals, so this is five relaxed stores per
+            // frame rather than five per record. Guarded by Enabled() like every other counting
+            // site in the tree, so the cost with MOBILEGL_PIPE_STATS unset is a global load and
+            // a predicted branch.
+            //
+            // AND IT IS BEFORE THE EmitAndWait BELOW, WHICH IS NOT A DETAIL. PipeStats::OnPresent
+            // is called by the SERVER's Present - i.e. from inside the apply of the very record
+            // this function is about to emit - so a publish placed after it lands one frame
+            // late, and the FIRST summary line of every run then reads `maxrec=0 maxcap=0`.
+            // Measured that way once: a zero that means "not published yet" is printed in the
+            // same shape as a zero that means "nothing crossed", and the second one is a real
+            // defect (an emit table that fell through to the driver). The Present record is 24
+            // bytes and cannot be the maximum, so nothing is lost by reading one record early.
+            if (MG_Util::PipeStats::Enabled()) {
+                const Wire::PipeWireEncoder& encoder = session.Encoder();
+                using MG_Util::PipeStats::Gauge;
+                MG_Util::PipeStats::PublishGauge(Gauge::MaxRecordBytes, encoder.MaxRecordBytesSeen());
+                MG_Util::PipeStats::PublishGauge(Gauge::MaxRecordBytesCap, encoder.MaxRecordBytesCap());
+                MG_Util::PipeStats::PublishGauge(Gauge::RingWraps, encoder.CmdWraps());
+                MG_Util::PipeStats::PublishGauge(Gauge::RingWrapPads, encoder.CmdWrapPads());
+                MG_Util::PipeStats::PublishGauge(Gauge::RingWaits, encoder.StageReclaimWaits());
+
+                // AND THE ROW, WHENEVER THE MAXIMUM MOVES. The summary line can carry the
+                // number but not the name - MG_Util is below MG_Remote and has no WireOpName -
+                // and the name is the actionable half: R-10 makes the integrator choose between
+                // early chunking and a bigger ring, and that is a decision about a record
+                // FAMILY. ClientSession::Stop prints the same pair at teardown, but a trace
+                // replay never reaches it (measured: the OpenRA lane's library log ends mid-run
+                // with no teardown line at all), so a stats-enabled run would otherwise publish
+                // a size with no row. Emitted only when the maximum actually grows, so it is
+                // bounded by the number of distinct maxima - five or six in a whole replay.
+                if (encoder.MaxRecordBytesSeen() > g_publishedMaxRecordBytes) {
+                    g_publishedMaxRecordBytes = encoder.MaxRecordBytesSeen();
+                    MGLOG_I("MGPipe: wire ledger: new maximum record - maxrec=%llu "
+                            "maxrecop=%s cap=%llu (R-10's proof obligation; P5 does not chunk)",
+                            static_cast<unsigned long long>(g_publishedMaxRecordBytes),
+                            encoder.MaxRecordOpName(),
+                            static_cast<unsigned long long>(encoder.MaxRecordBytesCap()));
+                }
+            }
+
             MG_Pipe::MGPPresent record{};
             // FrameSerial 0 = "the server stamps its own". P5 has no client-side present credit
             // (MOBILEGL_IPC_PRESENT_CREDIT is P6's), so a client-minted serial would be a second
@@ -545,6 +660,9 @@ namespace MobileGL::MG_Remote::Client {
             // keyed on pActiveBackendObject.get() (Core.cpp:34) and that pointer never changes
             // under split.
             session.PumpControlPlane();
+
+            ++g_presentOrdinal;
+            LogE2ControlLine(g_presentOrdinal);
         }
 
         // =============================================================================
@@ -769,7 +887,7 @@ namespace MobileGL::MG_Remote::Client {
                       "the three classes no longer partition the 71 slots");
 
         MG_Backend::GlobalBackendFunctionsTable BuildRemoteEmitTable() {
-            g_dropClearEmission = ReadDropClearFromEnvironment();
+            ArmControlKnobs();
             MG_Backend::GlobalBackendFunctionsTable table{};
 
             // ---- class C first, so that a slot forgotten below stays Fatal rather than null.
@@ -835,6 +953,9 @@ namespace MobileGL::MG_Remote::Client {
 
     void SetDropClearEmissionForNegativeControl(Bool drop) { g_dropClearEmission = drop; }
     Uint64 DroppedClearEmissions() { return g_droppedClearEmissions; }
+
+    void SetDropDrawEmissionForNegativeControl(Bool drop) { g_dropDrawEmission = drop; }
+    Uint64 DroppedDrawEmissions() { return g_droppedDrawEmissions; }
 
     Bool ReadbackPackStateIsTightForTest(GLsizei width, Uint64 bytesPerPixel,
                                          const PixelStoreParameters& pack) {

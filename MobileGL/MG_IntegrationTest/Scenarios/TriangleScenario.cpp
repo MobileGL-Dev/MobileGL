@@ -48,6 +48,8 @@
 
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/ScenarioFixture.h"
+#include "../Harness/SplitLane.h"
+#include "../Harness/WireLedgerChecks.h"
 
 #ifdef GLAPI
 #undef GLAPI
@@ -163,6 +165,32 @@ void main() { oColor = vec4(vColor, 1.0); }
                 EXPECT_TRUE(RegionIsMostly(image, 0, (w * 5) / 100, 0, (h * 5) / 100, color, 0.0, when));
             }
 
+            // EXIT GATE E3(e)'s DRIVE LOOP. Ordinary GL through this scenario's own objects -
+            // a clear and a VBO-backed draw per iteration, no readback (a readback is a
+            // SEG_REPLY round trip per iteration and would make this cost seconds rather than
+            // milliseconds) - repeated until the producer has written more bytes into SEG_CMD
+            // than the lane's ring holds. Returns the bytes this loop drove.
+            //
+            // NOTHING HERE TOUCHES THE RING DIRECTLY. The loop's only input is the producer's
+            // own head cursor, read through Harness/SplitRuntimePeek, and its only output is
+            // GL calls the scenario already makes. R-16: an assertion may not construct the
+            // state it observes, and "the workload makes the ring wrap" is a different claim
+            // from "a test can make the ring wrap".
+            unsigned long long DriveUntilSmallRingOverruns() {
+                const unsigned long long before = WireLedger::CmdBytesWritten();
+                unsigned long long driven = 0;
+                for (unsigned int i = 0; i < WireLedger::kSmallRingLaneMaxIterations; ++i) {
+                    ClearTo(0.0f, 0.0f, (i & 1u) ? 1.0f : 0.0f, 1.0f);
+                    glUseProgram(m_program);
+                    glBindVertexArray(m_vao);
+                    glDrawArrays(GL_TRIANGLES, 0, 3);
+                    // Cheap: this is a member read on the encoder, not a wire round trip.
+                    driven = WireLedger::CmdBytesWritten() - before;
+                    if (driven > WireLedger::kSmallRingLaneCmdByteTarget) break;
+                }
+                return driven;
+            }
+
             unsigned int m_program = 0;
             unsigned int m_vao = 0;
             unsigned int m_vbo = 0;
@@ -205,6 +233,41 @@ void main() { oColor = vec4(vColor, 1.0); }
                                "re-specification of either");
         ExpectClearedCorner(second, "black", "frame 1's clear, which is the only thing that changed");
         Gl().EndFrame();
+
+        // ---- the split lanes' two readings of the wire producer's ledger --------------------
+        //
+        // They are HERE, at the end of the steady-state case, and not in a case of their own,
+        // for a reason that is about the gate and not about tidiness: `integration-split` is a
+        // NAMED census (19 ran / 2 skipped by design) and a new entry moves it, so the phase
+        // would have to re-baseline a number the joint gate just pinned. The measurement wants
+        // this workload anyway - BRIEF 8 item 3 names this case - and a reading taken after the
+        // case's own pixel assertions is a reading over a run that is known to have been
+        // correct.
+        //
+        // Both are skipped, loudly and by the same predicate every other split-only assertion
+        // uses, in the monolith lanes: there is no encoder there, and every field of the
+        // ledger reads 0.
+        const std::string skip = SplitLane::SkipReasonForSplitOnlyAssertions();
+        if (!skip.empty()) {
+            RecordProperty("wire_ledger_skip_reason", skip);
+            return;
+        }
+
+        // R-10's proof obligation over target B. Published in every split lane, small ring
+        // included - the cap moves with MOBILEGL_IPC_RING_MB, so the SmallRing lane is also the
+        // arm where a record closest to its cap would show up first.
+        WireLedger::ExpectMaxRecordBytesUnderCap(
+            "TriangleScenario.TheSameVboAndVaoRedrawAcrossAFrameBoundary");
+
+        // Exit gate E3(e). Only the small-ring lane drives the overrun: at the default 8 MiB
+        // the same loop would take eight times as long to say the same thing, and the point of
+        // the lane is that IT is the arm with a ring the workload can fill.
+        if (SplitLane::IsSmallRingLane()) {
+            const unsigned long long driven = DriveUntilSmallRingOverruns();
+            Gl().EndFrame();
+            WireLedger::ExpectSmallRingWrappedAtLeastOnce(
+                "TriangleScenario.TheSameVboAndVaoRedrawAcrossAFrameBoundary", driven);
+        }
     }
 
 } // namespace MGITest

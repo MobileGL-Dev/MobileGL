@@ -70,12 +70,19 @@ def main():
             raise ValueError(f"{label} control: {not_failed} selected entries did not fail")
     elif mode == "evidence":
         missing = []
+        label = sys.argv[5] if len(sys.argv) > 5 else ""
         for name, path in selected.items():
             if Path(path).is_file() and re.search(sys.argv[4], Path(path).read_text(errors="replace")):
                 print(f"private-log evidence: {name}: {path}")
             else:
                 missing.append(f"{name} ({path})")
         if missing:
+            if label:
+                raise ValueError(f"{label} FAILED: no selected private log carries /{sys.argv[4]}/. "
+                                 "The library's own line is the only channel for this: ctest's "
+                                 "transcript is a FALSE ZERO for library output, because the console "
+                                 "sink is compiled out of the configurations these lanes run. "
+                                 + ", ".join(missing))
             raise ValueError("E1 FAILED: selected private logs lack expected Fatal{BarrierViolation, \"<slot>\"} line: "
                              + ", ".join(missing))
     else:

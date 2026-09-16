@@ -99,9 +99,19 @@ fi
 
 # ---- the controls ---------------------------------------------------------------------------
 #
-# run_control <name> <filter> <evidence regex> <VAR=VALUE>...
+# run_control <name> <filter> <ctest evidence regex> <private-log evidence regex|""> <VAR=VALUE>...
+#
+# THE FOURTH ARGUMENT IS NEW AND E3(a) IS WHY. The header above argues that the knob's own
+# ConfigLoader line is not evidence, and that is still true: it is written at config load, by
+# every process in the run, whatever happens next. What IS evidence is a line the knob's
+# BEHAVIOUR emits at the site that changed - and until now E3(a) had none, because
+# PersistentMapTracker::PushBlocksFor simply `return`ed at blockBytes == 0. The joint gate
+# recorded exactly that ("There is no Fatal for block size zero ... No nonexistent private-file
+# Fatal is quoted", joint-v1.md 3) and ID-65 assigned the missing line here. With it, E3(a) no
+# longer rests on a pixel assertion alone: the red must carry the scenario's own diagnostic AND
+# the library's own statement that the push was disabled, from the entry's private file.
 run_control() {
-  name="$1"; filter="$2"; evidence="$3"; shift 3
+  name="$1"; filter="$2"; evidence="$3"; private_evidence="$4"; shift 4
 
   matched=$("${CTEST}" -N -L integration-split -R "${filter}" | grep -cE '^ *Test *#[0-9]+:')
   if [ "${matched}" -lt 1 ]; then
@@ -140,6 +150,14 @@ run_control() {
     exit 1
   fi
 
+  # ... and, where the knob has one, the LIBRARY's own line as well, out of the entry's private
+  # file. Both halves are required: the scenario assertion says the pixels were wrong, and this
+  # says the code path the knob turns off is the one that stopped running. A red that has only
+  # the first half is consistent with any other defect in the same scenario.
+  if [ -n "${private_evidence}" ]; then
+    python3 "${log_helper}" evidence "${manifest}" "${filter}" "${private_evidence}" "${name}" || exit 1
+  fi
+
   echo "${name} turned ${matched} selected entries red, and the red carries the scenario's own diagnostic, as it must"
 }
 
@@ -150,12 +168,19 @@ run_control() {
 run_control "negative control E1 (MOBILEGL_IPC_VERB_BARRIER=0)" \
   'DirectGLES\.Split\.(SmallRing\.)?(Triangle|ClearThenReadPixels)' \
   'private-barrier-fatal' \
+  '' \
   MOBILEGL_IPC_VERB_BARRIER=0
 
-# E3(a): PersistentMapTracker.cpp returns at blockBytes == 0 (no Fatal).
-# PersistentCoherentMapScenario.cpp:414-417 / 442-443 name the missing second write.
-# Do not accept a generic source-line Failure: an unrelated assertion is not this red.
+# E3(a): PersistentMapTracker::PushBlocksFor stops at blockBytes == 0 - deliberately, because 0
+# is the negative control and not "unlimited". Two independent halves are now required:
+#   * the SCENARIO's own assertion in ctest's output. PersistentCoherentMapScenario.cpp:414-417 /
+#     442-443 name the missing second write; a generic source-line Failure is not accepted,
+#     because an unrelated assertion in the same case is not this red;
+#   * the LIBRARY's own line in the entry's private file, saying the push was disabled by this
+#     knob. It did not exist until ID-65 assigned it (joint-v1.md 3), which is why this control
+#     used to rest on the pixels alone.
 run_control "negative control E3(a) (MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0)" \
   'DirectGLES\.Split\.(SmallRing\.)?PersistentCoherentMapScenario' \
   "the SECOND write through the same mapping, announced by nothing|frame 1's write through the SAME mapping, after a Present" \
+  'MGPipe: persistent-map push disabled - MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0' \
   MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0
