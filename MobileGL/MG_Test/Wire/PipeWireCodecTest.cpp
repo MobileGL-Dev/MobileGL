@@ -1595,6 +1595,20 @@ TEST_F(PipeWireCodecTest, ABigProgramArchiveDoesNotGrowItsRecordAtAll) {
     EXPECT_GE(wire.Encoder().StagedBytesInFlight(), archive.size());
 }
 
+TEST_F(PipeWireCodecTest, AlreadyRetiredStagingReclamationIsNotAProducerWait) {
+    Wire2 wire;
+    std::vector<std::uint8_t> payload(Wire2::kStageBytes * 3 / 4, 0x5a);
+    wire.Encoder().StageBytes(payload.data(), payload.size());
+    MGPBindRenderState bind{};
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)), kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    // Do not explicitly reclaim: the second real allocation must do that itself.
+    wire.Encoder().StageBytes(payload.data(), payload.size());
+    EXPECT_EQ(wire.Encoder().StageReclaimWaits(), 0u)
+        << "already-retired lazy reclamation is not a producer wait";
+}
+
 TEST_F(PipeWireCodecTest, StagedBytesAreReclaimedOnlyBehindRetiredSeq) {
     Wire2 wire;
     const std::uint8_t payload[64] = {};

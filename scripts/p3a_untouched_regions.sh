@@ -532,7 +532,8 @@ if [ "${1:-}" = "--self-test" ]; then
     printf '%s  %s\n' \
         "0000000000000000000000000000000000000000000000000000000000000000" "$target" \
         >> "$WORK_DIR/pinprec.sha"
-    apply_pinned_shas "$WORK_DIR/pinprec.sha" || exit 2
+    # Drive production extraction on a real historical ref whose body differs from the pin.
+    extract_baseline ff2994d9 pinprec || exit 2
     got=$(awk -v n="$target" '$2 == n { print $1 }' "$WORK_DIR/pinprec.sha")
     if [ "$got" != "$pinned" ]; then
       say "PIN CONTROL FAILED: a baseline that carried a DIFFERENT sha for $target came out as"
@@ -552,7 +553,7 @@ if [ "${1:-}" = "--self-test" ]; then
     python3 "$PY" extract "$WORK_DIR/pinperturbed.cpp" "$ALL_FUNCTIONS" \
         > "$WORK_DIR/pinperturbed.sha" || exit 2
     cp -f "$WORK_DIR/pristine.sha" "$WORK_DIR/pinbase.sha" || exit 2
-    apply_pinned_shas "$WORK_DIR/pinbase.sha" || exit 2
+    extract_baseline HEAD pinbase || exit 2
     if compare_lists "$WORK_DIR/pinbase.sha" "$WORK_DIR/pinperturbed.sha" \
          "PIN($PINNED_BASELINE_REF)" "one-token-perturbed" 2> "$WORK_DIR/pinperturbed.err"; then
       say "NEGATIVE CONTROL DID NOT TRIP: one token was inserted into $target's body and the"

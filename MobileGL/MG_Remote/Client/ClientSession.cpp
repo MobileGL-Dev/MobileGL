@@ -516,6 +516,7 @@ namespace MobileGL::MG_Remote::Client {
         // a live RingProducer over a cursor triple nobody consumes would be the
         // half-wired shape this session exists not to have.
         m_encoder = Wire::PipeWireEncoder(control, &m_cmd, nullptr, &m_segments);
+        m_encoder.SetStageRetirementDoorbell(m_producer.SelfDoorbell());
 
         // ---- 7. the first CapsSnapshot, if the server had a backend to publish one from.
         // ONE DRAIN, ONE ADOPTER (c1): PumpControlPlane below is the only thing in the client

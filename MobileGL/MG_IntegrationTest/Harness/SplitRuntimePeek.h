@@ -91,9 +91,8 @@ namespace MGITest {
         // than asserted: a uniform record stride over a power-of-two ring lands on the
         // boundary exactly and never straddles it.
         //
-        // stageReclaimWaits: SEG_STAGE allocations that only fitted after the encoder reclaimed
-        // what the server had retired - P5's one real producer wait (see PipeWireCodec.h for
-        // why the command ring has none while the verb barrier is armed).
+        // stageReclaimWaits: allocations blocked after immediate reclamation failed;
+        // already-retired bytes reclaimed lazily do not count as a wait.
         unsigned long long maxRecordBytes = 0;
         unsigned long long maxRecordBytesCap = 0;
         unsigned long long cmdWraps = 0;
@@ -103,6 +102,8 @@ namespace MGITest {
     };
 
     SplitRuntimeState PeekSplitRuntime();
+    // Scheduling-only perturbation; never changes a watermark or counter.
+    void DelaySplitRetirementForTesting(bool enabled);
 
     // Empty when this process is a real split run that can be asserted about; otherwise the
     // reason to GTEST_SKIP() with, naming the first fact that is not true and the package that

@@ -44,6 +44,7 @@
 #include <MG_Pipe/MGPipe.h>
 
 #include "../Transport/Ring.h"
+#include "../Transport/Doorbell.h"
 
 namespace MobileGL::MG_Remote::Wire {
 
@@ -311,17 +312,16 @@ namespace MobileGL::MG_Remote::Wire {
         // this number would have been red for the arithmetic of the record catalogue rather
         // than for anything about the ring.
         //
-        // `StageReclaimWaits()` counts every SEG_STAGE allocation that did not fit until the
-        // encoder reclaimed the runs the server had already retired - i.e. every time the
-        // producer's progress depended on the consumer's retiredSeq. That is the honest
-        // back-pressure reading in P5, and the reason the command ring has none: the verb
-        // barrier makes EmitAndWait wait for appliedSeq after EVERY record (R-1), so at most
-        // one record is ever in flight on SEG_CMD and a full command ring is not a wait but a
-        // Fatal{RingOverrun} (ClientSession.cpp). Publishing a "command ring waits" counter
-        // that can only ever be zero-or-dead is the decoration this file's counters are not.
+        // `StageReclaimWaits()` counts allocations blocked on an outstanding retiredSeq
+        // after immediate reclamation still left insufficient space. Reclaiming bytes
+        // the consumer had already retired does not increment it. One allocation counts
+        // once even if it waits for several marks; this is staging, not command-ring pressure.
         Uint64 CmdWraps() const;
         Uint64 CmdWrapPads() const;
         Uint64 StageReclaimWaits() const;
+        // The live session supplies its shutdown-aware producer doorbell. Standalone codecs
+        // without a consumer cannot wait for retirement and retain the named refusal.
+        void SetStageRetirementDoorbell(Transport::Doorbell* bell) { m_stageRetirementBell = bell; }
 
         // Bytes this encoder has ever written into SEG_CMD, pad fillers included: the
         // producer's monotonic head cursor. It is the DENOMINATOR the wrap count only means
@@ -365,6 +365,7 @@ namespace MobileGL::MG_Remote::Wire {
         Uint64 m_cmdWraps = 0;
         Uint64 m_cmdWrapPads = 0;
         Uint64 m_stageReclaimWaits = 0;
+        Transport::Doorbell* m_stageRetirementBell = nullptr;
         Vector<StageMark> m_stageMarks;
         SizeT m_stageMarkFront = 0;
         Uint8* m_stageBase = nullptr;

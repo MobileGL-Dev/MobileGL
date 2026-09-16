@@ -530,6 +530,7 @@ namespace MobileGL::MG_Remote::Server {
             // a loop that applies and never retires ends the first MOBILEGL_IPC_STAGE_MB of
             // staging in Fatal{RingOverrun, "SEG_STAGE"} (w1-v1 5). Once per drain batch, not
             // once per record: retiring LATE is always legal, retiring EARLY never is.
+            if (const auto hook = m_beforeRetireHook.load(std::memory_order_acquire)) hook();
             consumer.RetireThrough(consumer.AppliedSeq());
             // LEAVING THE APPLIER (p1's M-5) IS *NOT* DONE HERE. It is done inside
             // PipeApplier::ApplyOne, before s1's SessionConsumer::ApplyOne publishes appliedSeq

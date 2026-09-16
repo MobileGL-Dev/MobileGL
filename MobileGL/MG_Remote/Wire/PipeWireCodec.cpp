@@ -776,10 +776,12 @@ namespace MobileGL::MG_Remote::Wire {
             std::abort();
         }
 
-        for (int attempt = 0; attempt < 2; ++attempt) {
+        bool reclaimed = false;
+        bool waited = false;
+        for (;;) {
             // THE WRAP SKIP MAY ONLY BE CHARGED AGAINST BYTES THAT ARE STILL IN FLIGHT. When
             // there are none the allocator starts over at offset zero, so a blob the segment
-            // can hold whole is never refused (see RebaseEmptyStage). On attempt 1 this runs
+            // can hold whole is never refused (see RebaseEmptyStage). On retry this runs
             // AFTER ReclaimStagedBytes, which is the case the finding describes: 8 MiB
             // allocated, then retired, then a 28 MiB request that used to abort.
             RebaseEmptyStage();
@@ -793,21 +795,28 @@ namespace MobileGL::MG_Remote::Wire {
                 m_stageHead += skip + need;
                 return m_stageBase + at;
             }
-            if (attempt == 0) {
-                // One try at reclaiming what the server has already retired. A second failure
-                // means the bytes genuinely do not fit, which R-10 says P5 does not chunk and
-                // must instead prove it never needs to.
-                //
-                // AND THIS IS P5'S ONE REAL BACK-PRESSURE EVENT, so it is counted here and
-                // published as `ringwaits=`. Reaching this line means the producer could not
-                // place a blob until the CONSUMER had retired earlier ones - the producer's
-                // progress depended on retiredSeq, which is exactly what R-9's "batching may
-                // only delay a watermark" is about. Exit gate E3(e)'s small-ring lane exists
-                // to make it happen at least once; a lane that never reaches it has a ring
-                // that is small only in its environment block.
-                ++m_stageReclaimWaits;
+            if (!reclaimed) {
+                // Lazy reclamation of already-retired bytes is NOT a producer wait.
                 ReclaimStagedBytes();
+                reclaimed = true;
+                continue;
             }
+            if (m_stageRetirementBell == nullptr || m_stageMarkFront == m_stageMarks.size()) break;
+            const Uint64 pending = m_stageMarks[m_stageMarkFront].Seq;
+            const auto ready = [&] {
+                return m_control->retiredSeq.load(std::memory_order_acquire) >= pending;
+            };
+            if (!ready()) {
+                // The allocation still cannot progress after reclamation. Count this
+                // blocked allocation once, not each watermark poll or each reclaimed mark.
+                if (!waited) { ++m_stageReclaimWaits; waited = true; }
+                if (!m_stageRetirementBell->Wait(m_control->producerParked, ready, 0, 5000)) {
+                    MGLOG_F("MGPipe: Fatal{RetirementWaitFailed, \"SEG_STAGE\"} producer wait "
+                            "ended before the pending allocation retired (shutdown or timeout)");
+                    std::abort();
+                }
+            }
+            ReclaimStagedBytes();
         }
         MGLOG_F("MGPipe: Fatal{RingOverrun, \"SEG_STAGE\"} a %llu byte blob does not fit a %llu "
                 "byte staging segment with %llu bytes still in flight (retiredSeq=%llu); P5 "

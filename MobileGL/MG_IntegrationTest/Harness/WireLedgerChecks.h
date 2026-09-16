@@ -134,6 +134,9 @@ namespace MGITest::WireLedger {
                "kSmallRingLaneCmdByteTarget, which is sized for the 1 MiB ring this lane "
                "declares (MGL_ITEST_GLES_SPLIT_SMALL_RING_ENVIRONMENT); a larger ring needs a "
                "larger workload and is not what this lane is for";
+        EXPECT_GE(state.stageReclaimWaits, 1u)
+            << where << ": exit gate E3(e) - producer NEVER WAITED for staging retirement; "
+               "lazy reclamation of already-retired bytes is not back-pressure";
         ::testing::Test::RecordProperty("ring_wraps", static_cast<int>(state.cmdWraps));
         ::testing::Test::RecordProperty("ring_wrap_pads", static_cast<int>(state.cmdWrapPads));
         ::testing::Test::RecordProperty("ring_waits", static_cast<int>(state.stageReclaimWaits));
