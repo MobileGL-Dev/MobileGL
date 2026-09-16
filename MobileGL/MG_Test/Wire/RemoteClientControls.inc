@@ -173,7 +173,7 @@ TEST(RemoteClientControls, MapPersistentErrorIsNotADecline) {
     ExpectNamedAbort(child, "Fatal{ReplyError, \"map_persistent\"}");
 }
 
-TEST(RemoteClientControls, RepeatedMakeCurrentAdoptsRepublishedCapsWithoutAPumpOrPresent) {
+TEST(RemoteClientControls, AnIdenticalRepeatedMakeCurrentRepublishesNothing) {
     const auto child = RunInChild([] {
         StartControlSession();
         if (Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
@@ -194,14 +194,43 @@ TEST(RemoteClientControls, RepeatedMakeCurrentAdoptsRepublishedCapsWithoutAPumpO
         GLint before = 0;
         remote.GetBackendFunctions().GL.GetIntegeri_v(0x91BE, 0, &before);
         if (before != 113) ::_exit(87);
+        if (!remote.MakeEGLCurrent(dpy, surface, surface, ctx)) ::_exit(88);
+        if (CapsMirrorInstance().Generation() != generation) ::_exit(89);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+TEST(RemoteClientControls, ADifferentTupleMakeCurrentIsAdoptedWithoutAPumpOrPresent) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        if (Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+            auto backend = MakeUnique<CapsPeer>();
+            backend->dynamic.MaxComputeWorkGroupCount[0] = 113;
+            Srv::ServerSessionInstance().SetBackend(backend.get());
+            Srv::ServerLoopInstance().*PeerMember(BackendTag{}) = Move(backend);
+            return MOBILEGL_OK;
+        }, nullptr) != MOBILEGL_OK) ::_exit(90);
+        BackendObject_Remote remote;
+        auto dpy = reinterpret_cast<EGLDisplay>(1);
+        auto surface = reinterpret_cast<EGLSurface>(2);
+        auto ctx = reinterpret_cast<EGLContext>(3);
+        auto otherCtx = reinterpret_cast<EGLContext>(4);
+        if (!remote.InitializeEGLDisplay(dpy, nullptr, nullptr) ||
+            !remote.CreateEGLPbufferSurface(surface, 4, 4) ||
+            !remote.MakeEGLCurrent(dpy, surface, surface, ctx)) ::_exit(91);
+        const auto generation = CapsMirrorInstance().Generation();
+        GLint before = 0;
+        remote.GetBackendFunctions().GL.GetIntegeri_v(0x91BE, 0, &before);
+        if (before != 113) ::_exit(92);
         if (Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
             static_cast<CapsPeer*>(Srv::ServerLoopInstance().Backend())->dynamic.MaxComputeWorkGroupCount[0] = 227;
             return MOBILEGL_OK;
-        }, nullptr) != MOBILEGL_OK) ::_exit(88);
-        if (!remote.MakeEGLCurrent(dpy, surface, surface, ctx)) ::_exit(89);
+        }, nullptr) != MOBILEGL_OK) ::_exit(93);
+        if (!remote.MakeEGLCurrent(dpy, surface, surface, otherCtx)) ::_exit(94);
         GLint after = 0;
         remote.GetBackendFunctions().GL.GetIntegeri_v(0x91BE, 0, &after);
-        if (CapsMirrorInstance().Generation() <= generation || after != 227) ::_exit(90);
+        if (CapsMirrorInstance().Generation() <= generation || after != 227) ::_exit(95);
         ClientSessionInstance().Stop();
     });
     ExpectChildSuccess(child);
