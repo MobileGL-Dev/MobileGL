@@ -66,29 +66,41 @@ endif ()
 
 gtest_discover_tests(PipeWireCodecTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 
-# P5 c1's suite: the 71-slot emit table, the caps mirror and R-8's liveness gates. Registered
-# on its own for PipeWireCodecTest's reason - MGLOG_F writes to stdout and to a named file and
-# NEVER to stderr, so a Fatal arm can only be asserted by forking and reading that file back,
-# which needs a main() of its own.
-add_executable(RemoteClientTest RemoteClientTest.cpp)
+# P5 c1's and v1's suites. Both are registered on their own, and both for
+# PipeWireCodecTest's reason - MGLOG_F writes to stdout and to a named file and NEVER to
+# stderr, so a Fatal arm can only be asserted by forking and reading that file back, which
+# needs a main() of its own. Both also reach MG_Pipe, MG_Backend and MG_State, so both carry
+# those include paths.
+#
+#   RemoteClientTest  the 71-slot emit table, the caps mirror, R-8's liveness gates and
+#                     R-17's routing (c1)
+#   ServerLoopTest    the apply thread, the blocking control mailbox, the verb stamp and
+#                     R-11's server-owned staging copy (v1)
+#
+# THE ONLY CONFLICT IN THE c1/v1 MERGE, and it is the same-point-append shape BRIEF §5's
+# ownership table exists to prevent: two packages each added a target at the end of one file.
+# Both blocks are kept verbatim; nothing is chosen over anything.
+foreach (wiretest IN ITEMS RemoteClientTest ServerLoopTest)
+    add_executable(${wiretest} ${wiretest}.cpp)
 
-target_include_directories(RemoteClientTest PRIVATE
-        ${MGL_ROOT}/include
-        ${MGL_ROOT}/MobileGL
-        ${MGL_ROOT}/MobileGL/MG_Pipe
-        ${MGL_ROOT}/3rdparty/flatbuffers/include
-        ${MGL_ROOT}/3rdparty/xxHash
-        ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
-        ${MGL_ROOT}/3rdparty/SPIRV-Reflect
-)
+    target_include_directories(${wiretest} PRIVATE
+            ${MGL_ROOT}/include
+            ${MGL_ROOT}/MobileGL
+            ${MGL_ROOT}/MobileGL/MG_Pipe
+            ${MGL_ROOT}/3rdparty/flatbuffers/include
+            ${MGL_ROOT}/3rdparty/xxHash
+            ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
+            ${MGL_ROOT}/3rdparty/SPIRV-Reflect
+    )
 
-target_link_libraries(RemoteClientTest PRIVATE
-        GTest::gtest
-        ${LINK_LIBRARIES}
-)
+    target_link_libraries(${wiretest} PRIVATE
+            GTest::gtest
+            ${LINK_LIBRARIES}
+    )
 
-if (MSVC)
-    target_compile_options(RemoteClientTest PRIVATE /Zc:preprocessor)
-endif ()
+    if (MSVC)
+        target_compile_options(${wiretest} PRIVATE /Zc:preprocessor)
+    endif ()
 
-gtest_discover_tests(RemoteClientTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+    gtest_discover_tests(${wiretest} DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+endforeach ()

@@ -40,6 +40,7 @@
 #pragma once
 #include <Includes.h>
 
+#include <MG_Backend/BackendObject.h>
 #include <MG_Pipe/MGPipe.h>
 
 #include "../Transport/Ring.h"
@@ -69,34 +70,147 @@ namespace MobileGL::MG_Remote::Server {
         Uint32 m_slotBytes = 0;
     };
 
+    // ---- MGPClear's two discriminants ---------------------------------------------------
+    //
+    // MGPClear (MGPipeTypes.h:1271) names `Kind` "Whole | Color | Depth | Stencil |
+    // DepthStencil" and `ValueClass` "Float | Int | Uint" IN A COMMENT AND NOWHERE ELSE: the
+    // catalogue ships no enum for either, and the record has no producer or consumer in the
+    // tree, so P5 writes both halves and the two halves have to agree on a number. Declaring
+    // them here rather than open-coding 0..4 on each side is table 0's own rule for exactly
+    // this shape ("a decoder that open-codes it is the class-1 defect"), applied to a field
+    // table 0 did not reach.
+    //
+    // THE ORDER IS THE COMMENT'S, LEFT TO RIGHT, and ValueClass reuses the numbering
+    // MG_State/GLState/Core.h:39-41 already gives the identical three-way split on
+    // MGPAttribValue::ValueClass. c1 encodes against these constants; a disagreement is a
+    // clear of the wrong attachment with the wrong value type, which renders plausibly.
+    // FLAGGED FOR THE INTEGRATOR: this belongs in MGPipeTypes.h, which is c0's file.
+    inline constexpr Uint32 kMGPClearKindWhole = 0;        // glClear(mask)
+    inline constexpr Uint32 kMGPClearKindColor = 1;        // glClearBuffer{f,i,ui}v(GL_COLOR, i, v)
+    inline constexpr Uint32 kMGPClearKindDepth = 2;        // glClearBufferfv(GL_DEPTH, 0, &d)
+    inline constexpr Uint32 kMGPClearKindStencil = 3;      // glClearBufferiv(GL_STENCIL, 0, &s)
+    inline constexpr Uint32 kMGPClearKindDepthStencil = 4; // glClearBufferfi(GL_DEPTH_STENCIL,...)
+    inline constexpr Uint32 kMGPClearValueClassFloat = 0;
+    inline constexpr Uint32 kMGPClearValueClassInt = 1;
+    inline constexpr Uint32 kMGPClearValueClassUint = 2;
+
+    // ---- the five class-B verbs' consumer ------------------------------------------------
+    //
+    // Contract §7 class B is Clear (57), Blit (56), ReadPixels (58), DrawVbo (59) and Present
+    // (67), and NONE of them has an MGPipeApply* entry point - the 37 that exist are the object
+    // and state families. So w1's decoder validates and hands over a checked argument list and
+    // stops, and this is the other half: the SERVER'S OWN BACKEND CALL, through the private
+    // GlobalBackendFunctionsTable ServerLoop holds. It is not gBackendFunctionsTable, which in
+    // a split process is the client's emit table (table 3) - calling THAT here would re-emit
+    // the record the server is in the middle of applying, which is an infinite loop that
+    // renders nothing and looks like a hang.
+    class ServerVerbSink final : public Wire::WireVerbSink {
+    public:
+        // The server's private backend. Null until ServerLoop::CreateBackend has run, and a
+        // verb that arrives before then declines by name rather than dereferencing.
+        void SetBackend(MG_Backend::BackendObject* backend);
+
+        Bool OnClear(const MG_Pipe::MGPClear& clear) override;
+        Bool OnBlit(const MG_Pipe::MGPBlit& blit) override;
+        Bool OnPresent(const MG_Pipe::MGPPresent& present) override;
+        Bool OnReadPixels(const MG_Pipe::MGPReadbackInfo& info, Uint64 seq,
+                          Wire::ReplySink* replies) override;
+        Bool OnDrawVbo(const MG_Pipe::MGPDrawInfo& info, const MG_Pipe::MGPDrawRange* ranges,
+                       const MG_Pipe::MGHostSpan* userIndices) override;
+
+        // Per-verb tallies. The lane asserts these moved, because "the scenario passed" on a
+        // split build is also what a scenario that ran entirely on the monolith path looks
+        // like (R-16: a probe may not arm against a stub).
+        Uint64 Clears() const { return m_clears; }
+        Uint64 Draws() const { return m_draws; }
+        Uint64 Readbacks() const { return m_readbacks; }
+        Uint64 Blits() const { return m_blits; }
+        Uint64 Presents() const { return m_presents; }
+        Uint64 LastPresentSerial() const { return m_lastPresentSerial; }
+        Uint64 ReadbackBytes() const { return m_readbackBytes; }
+
+    private:
+        const MG_Backend::GlobalBackendFunctionsTable* Table(const char* verb) const;
+
+        MG_Backend::BackendObject* m_backend = nullptr;
+        Uint64 m_clears = 0;
+        Uint64 m_draws = 0;
+        Uint64 m_readbacks = 0;
+        Uint64 m_blits = 0;
+        Uint64 m_presents = 0;
+        Uint64 m_lastPresentSerial = 0;
+        Uint64 m_readbackBytes = 0;
+        // ReadPixels' destination. The pixels go into the reply slot, but GLFunctionsTable::
+        // ReadPixels writes into a caller buffer, so one staging vector per session sits
+        // between them. Grown, never shrunk, and never handed out past the call.
+        Vector<Uint8> m_readbackScratch;
+    };
+
     class PipeApplier {
     public:
         PipeApplier() = default;
         PipeApplier(Wire::SegmentTable* segments, ReplyPool* replies);
 
-        // Decode one record, stamp the verb, apply, post the reply if the call has one, then
-        // advance appliedSeq by exactly one. P5 FORBIDS BATCHING appliedSeq (R-9): the barrier's
-        // waiter reads it, and a batched watermark promises work that has not run.
+        // Builds the decoder over the session's control page and points it at this applier's
+        // verb sink. Separate from the constructor because ServerSession::Accept constructs the
+        // applier before it has decided anything about the apply thread, and the decoder needs
+        // the RingControl the constructor was never given.
+        //
+        // CALLED ON THE APPLY THREAD, ONCE, BEFORE THE FIRST RECORD. PipeWireDecoder is "not
+        // thread safe: one decoder on the apply thread, by construction", and its constructor
+        // installs the process-wide apply hook.
+        void Attach(Transport::RingControl* control, MG_Backend::BackendObject* backend);
+        void Detach();
+        Bool Attached() const;
+
+        // Decode one record, stamp the verb, apply, post the reply if the call has one. THE
+        // CALLER advances appliedSeq by exactly one, through s1's SessionConsumer::ApplyOne,
+        // which is that watermark's single writer; P5 FORBIDS BATCHING it (R-9), because the
+        // barrier's waiter reads it and a batched watermark promises work that has not run.
         Bool ApplyOne(const Transport::RingRecordView& record);
 
         // p1's rule, v1's call site. Called at the verb boundary, before the record's applier
         // runs, with the verb the record belongs to.
         void StampVerbBoundary(MG_Pipe::MGPWireOp op);
 
+        // MANDATORY on leaving the applier (p1's M-5, PipeInputs.h's ServerStampedVerb block).
+        // The client's MGPipeValidateForVerb / MGPipeLeaveVerb also clear it, which is enough
+        // for inproc and NOT enough for a spawned server, where MG_Impl is not in the process:
+        // there the flag would latch TRUE for the server's life, every later read anywhere
+        // would be judged against the last verb's mask, and the sticky forwards would start
+        // aborting under strict on exactly the case their exemption exists for.
+        void LeaveApplier();
+
         // R-7.2's counter, read by the gate. A BARRIER-PULLED field read on the server side
         // increments PipeStats::CallClass::ResidualPulls (short name `rsp`); its value at the
         // end of P5 IS the size of the P6/P7/P8 debt and goes into MEASUREMENTS.
+        //
+        // IT FORWARDS TO MGPipeResidualPullCount() AND KEEPS NO MEMBER OF ITS OWN. The member
+        // c0's signature block declared is deleted rather than wired: the counter is
+        // process-wide in PipeInputs.cpp because the reads that increment it happen inside the
+        // BACKEND, arbitrarily deep under an MGPipeApply* call, with no PipeApplier in scope.
+        // A second copy here could only ever be a number that disagreed with the one the exit
+        // gate reads (p1-v1 5).
         Uint64 ResidualPullCount() const;
 
         // R-11's audit: after a record retires, fill the SEG_STAGE bytes it referenced with
         // 0xDD. Only under MOBILEGL_IPC_AUDIT=1, because it costs a write of every staged byte.
         void PoisonRetiredStageBytes(Uint64 offset, Uint64 size);
 
+        // How many staged bytes the decoder has poisoned, and how many records it has applied -
+        // the two numbers the audit lane asserts are non-zero, since an instrumentation that
+        // cannot be observed to have run is decoration.
+        Uint64 PoisonedStageBytes() const;
+        Uint64 DecoderAppliedSeq() const;
+        ServerVerbSink& Verbs() { return m_verbs; }
+        const ServerVerbSink& Verbs() const { return m_verbs; }
+
     private:
         Wire::SegmentTable* m_segments = nullptr;
         ReplyPool* m_replies = nullptr;
         Wire::PipeWireDecoder m_decoder;
-        Uint64 m_residualPulls = 0;
+        ServerVerbSink m_verbs;
+        Bool m_attached = false;
     };
 
 } // namespace MobileGL::MG_Remote::Server
