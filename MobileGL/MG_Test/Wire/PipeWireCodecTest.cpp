@@ -1135,6 +1135,43 @@ TEST_F(PipeWireCodecTest, StagedBytesAreReclaimedOnlyBehindRetiredSeq) {
     ASSERT_TRUE(wire.PumpOne(&applied));
     wire.Encoder().ReclaimStagedBytes();
     EXPECT_EQ(wire.Encoder().StagedBytesInFlight(), 0u);
+
+    // ---- AND AN EMPTY STAGE TAKES THE WHOLE SEGMENT ---------------------------------
+    // The verifier's extension of this case, kept (wave1-codex-verify.md §1). The 64-byte
+    // run has retired and in-flight bytes are ZERO, so every byte of SEG_STAGE is free -
+    // but head and tail are monotonic and both sit at 64, so `head % capacity` is 64 and the
+    // allocator used to charge a `capacity - 64` wrap skip against a capacity that had
+    // nothing in it. The test then read `2*capacity - 64 <= capacity`, false at every
+    // occupancy, and a blob the segment holds WHOLE aborted with
+    // `Fatal{RingOverrun, "SEG_STAGE"} ... with 0 bytes still in flight`.
+    //
+    // I made it red once, by doing X: X = deleting the `RebaseEmptyStage()` call at the top
+    // of StageAllocate's attempt loop (PipeWireCodec.cpp). The case then dies with SIGABRT
+    // inside PipeWireEncoder::StageAllocate on that message, exactly as the verifier
+    // recorded it.
+    //
+    // THE EXACT MAXIMUM. `need = Align8(size)` and the first bound is `need > capacity`, so
+    // an empty stage takes a blob of exactly the capacity the encoder adopted - here
+    // Wire2::kStageBytes, and in a real session the whole SEG_STAGE view, i.e.
+    // MOBILEGL_IPC_STAGE_MB (32 MiB by default; SessionRings.h keeps SEG_STAGE un-ringed and
+    // un-rounded, so there is no control page to subtract).
+    const Uint64 maxRecordBefore = wire.Encoder().MaxRecordBytesSeen();
+    std::vector<std::uint8_t> whole(Wire2::kStageBytes, 0x5A);
+    const MGPBlobRef full = wire.Encoder().StageBytes(whole.data(), whole.size());
+    EXPECT_EQ(full.Offset, 0u) << "an empty stage must hand a whole-capacity blob offset zero";
+    EXPECT_EQ(full.Size, Wire2::kStageBytes);
+    EXPECT_EQ(full.Seg, static_cast<Uint32>(kSegStage));
+    EXPECT_EQ(wire.Encoder().StagedBytesInFlight(), Wire2::kStageBytes);
+    const void* back = wire.Segments().Resolve(full.Seg, full.Offset, full.Size);
+    ASSERT_NE(back, nullptr);
+    EXPECT_EQ(back, wire.StageBase());
+
+    // R-10's max-record counter DOES NOT SEE IT, and that is the point of R-10's carrier
+    // rule: EncodeRecord feeds m_maxRecordBytes from `layout.TotalBytes` - header + payload +
+    // tails, all of it SEG_CMD - while the blob leaves only {Seg, Offset, Size} in the
+    // record. A quarter-megabyte of staging moved the counter by zero bytes. SEG_STAGE has
+    // its own bound and its own named Fatal, and MaxRecordBytesSeen() is not it.
+    EXPECT_EQ(wire.Encoder().MaxRecordBytesSeen(), maxRecordBefore);
 }
 
 // ---- M2 / M3: SEG_STAGE's cursors and the mark queue --------------------------------------

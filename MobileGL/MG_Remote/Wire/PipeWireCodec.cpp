@@ -717,6 +717,12 @@ namespace MobileGL::MG_Remote::Wire {
         }
 
         for (int attempt = 0; attempt < 2; ++attempt) {
+            // THE WRAP SKIP MAY ONLY BE CHARGED AGAINST BYTES THAT ARE STILL IN FLIGHT. When
+            // there are none the allocator starts over at offset zero, so a blob the segment
+            // can hold whole is never refused (see RebaseEmptyStage). On attempt 1 this runs
+            // AFTER ReclaimStagedBytes, which is the case the finding describes: 8 MiB
+            // allocated, then retired, then a 28 MiB request that used to abort.
+            RebaseEmptyStage();
             const Uint64 offset = m_stageHead % m_stageCapacity;
             // A run is always contiguous: one that would straddle the end skips the remainder,
             // exactly as the ring's wrap pad does, and the skipped bytes are reclaimed with
@@ -934,6 +940,32 @@ namespace MobileGL::MG_Remote::Wire {
         // staged. ReclaimStagedBytes releases up to the newest mark the server has retired.
         m_stageMarks.push_back(StageMark{m_emitSeq, m_stageHead});
         return m_emitSeq;
+    }
+
+    // THE EMPTY-STAGE REBASE. Head and tail are monotonic byte counts, so "every staged byte
+    // has retired" reads head == tail, NOT head == tail == 0, and `head % capacity` is left
+    // wherever the last run ended. Charging a wrap skip against that offset then costs the
+    // unused suffix a second time: with head == tail == 64 in a 256 KiB stage, the allocator's
+    // test became `2*capacity - 64 <= capacity`, which is false at EVERY occupancy, so a blob
+    // that fits the segment whole was refused with `Fatal{RingOverrun, "SEG_STAGE"}` - whose
+    // own message then reported `0 bytes still in flight`. ReclaimStagedBytes cannot help,
+    // because an already-empty tail has nothing left to move.
+    //
+    // THE MARK QUEUE COMES WITH IT. A mark holds the ABSOLUTE head cursor it was pushed at and
+    // ReclaimStagedBytes assigns that value straight to m_stageTail. Every mark not yet
+    // consumed has StageCursor <= head == tail - the head is monotonic and marks are pushed in
+    // order - so each of them names a region that is already reclaimed and zero is the
+    // truthful rebasing of it. Without that, one reclaim after a rebase would put the tail
+    // AHEAD of the head and StagedBytesInFlight() would underflow to about 2^64.
+    void PipeWireEncoder::RebaseEmptyStage() {
+        if (m_stageHead != m_stageTail || m_stageHead == 0) {
+            return;
+        }
+        m_stageHead = 0;
+        m_stageTail = 0;
+        for (SizeT i = 0; i < m_stageMarks.size(); ++i) {
+            m_stageMarks[i].StageCursor = 0;
+        }
     }
 
     void PipeWireEncoder::ReclaimStagedBytes() {
