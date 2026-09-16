@@ -13,6 +13,19 @@
 #include <MG_Util/Texture/TextureFormatProcessor.h>
 
 namespace MobileGL::MG_Backend::DirectGLES {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // C6 / ID-52 / CONTRACT-P5 table 3's pActiveBackendObject row. The format-capability cache of
+    // THIS ROLE's backend. Under an active transport the server's own private
+    // BackendObject_DirectGLES owns the context on the apply thread, so a backend-internal format
+    // lookup must read ITS probed cache - not pActiveBackendObject's, which under split is the
+    // CLIENT's BackendObject_Remote mirror (a caps snapshot, generation-lagged, and on an
+    // independent server not usable at all). Monolith build/transport: pActiveBackendObject, so a
+    // pull build never sees this symbol. Null when no backend is up. The seven table-3 reads
+    // (five in Utils.cpp, ClampSamplesToBackendSupport in BackendObject_DirectGLES.cpp) go through
+    // this instead of dereferencing pActiveBackendObject directly.
+    const FormatCapabilityCache* ActiveBackendFormatCaps();
+#endif
+
     namespace DebugImpl {
         class ErrorLopper {
         public:

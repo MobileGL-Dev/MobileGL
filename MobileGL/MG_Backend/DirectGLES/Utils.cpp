@@ -10,6 +10,9 @@
 #include "Utils.h"
 #include "Managers.h"
 #include "MG_Backend/BackendObjects.h"
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Remote/Server/ServerLoop.h>
+#endif
 #include "MG_Util/Converters/GLToMG/FramebufferEnumConverter.h"
 #include "MG_Util/SelfTest/DriverBugProbes.h"
 #include "MG_Util/Texture/TextureFormatProcessor.h"
@@ -33,6 +36,21 @@
 #include <regex>
 
 namespace MobileGL::MG_Backend::DirectGLES {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    const FormatCapabilityCache* ActiveBackendFormatCaps() {
+        // Under a live split session the SERVER's private backend is what owns the context on the
+        // apply thread (and these reads all run there), so its cache is the authoritative one.
+        // Before the session lands, or under monolith transport in a disaggregated build, fall
+        // back to the process global exactly as the monolith path always has.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            if (MG_Backend::BackendObject* server = MG_Remote::Server::ServerLoopInstance().Backend()) {
+                return &server->GetFormatCapabilities();
+            }
+        }
+        return pActiveBackendObject ? &pActiveBackendObject->GetFormatCapabilities() : nullptr;
+    }
+#endif
+
     namespace {
         Flags<PixelFormatNormalizeOptionBit> GetForcedPixelFormatNormalizeOptions() {
             Flags<PixelFormatNormalizeOptionBit> options;
@@ -71,15 +89,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                        SizeT targetIndex,
                                        Bool caveat,
                                        FormatCapability capability) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            const FormatCapabilityCache* activeCaps = ActiveBackendFormatCaps();
+            if (activeCaps == nullptr || targetIndex >= kFormatCapabilityTargetCount) {
+                return false;
+            }
+#else
             if (!pActiveBackendObject || targetIndex >= kFormatCapabilityTargetCount) {
                 return false;
             }
+#endif
             const SizeT formatIndex = static_cast<SizeT>(internalFormat);
             if (formatIndex >= kFormatCapabilityFormatCount) {
                 return false;
             }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+            const FormatCapabilityCache& cache = *activeCaps;
+#else
             const FormatCapabilityCache& cache = pActiveBackendObject->GetFormatCapabilities();
+#endif
             const FormatCapabilityFlags caps =
                 caveat ? cache.CaveatCaps[targetIndex][formatIndex] : cache.FullCaps[targetIndex][formatIndex];
             return HasFormatCapability(caps, capability);
@@ -123,7 +152,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             using namespace MobileGL::MG_Util::TextureFormatProcessor;
             const GLenum requestedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
             Flags<PixelFormatNormalizeOptionBit> options;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (ActiveBackendFormatCaps() == nullptr || ShouldUseCaveatFormat(internalFormat, targetIndex)) {
+#else
             if (!pActiveBackendObject || ShouldUseCaveatFormat(internalFormat, targetIndex)) {
+#endif
                 options = GetRuntimeFallbackNormalizeOptions(
                     requestedInternalFormat,
                     TextureImpl::GetRenderTargetNormalizeOptions(g_GLESCapabilities, targetIndex));
@@ -217,9 +250,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // not be resolved yet - a probe run then would latch "cannot tell" as "clean"
             // forever. Once the backend exists, the first narrow-format image this process
             // creates runs the probe on a live context.
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (ActiveBackendFormatCaps() == nullptr) {
+                return false;
+            }
+#else
             if (pActiveBackendObject == nullptr) {
                 return false;
             }
+#endif
             return MG_Util::SelfTest::CopyImageMirrorsPacked16FieldOrder(g_GLESFuncs);
         }
 
@@ -257,9 +296,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!TargetRequiresRenderableFormat(targetIndex)) {
                     return false;
                 }
+#if MOBILEGL_BUILD_DISAGGREGATED
+                if (ActiveBackendFormatCaps() != nullptr && !ShouldUseCaveatFormat(internalFormat, targetIndex)) {
+                    return false;
+                }
+#else
                 if (pActiveBackendObject && !ShouldUseCaveatFormat(internalFormat, targetIndex)) {
                     return false;
                 }
+#endif
                 const GLenum requestedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
                 const Flags<PixelFormatNormalizeOptionBit> options = GetRuntimeFallbackNormalizeOptions(
                     requestedInternalFormat, GetRenderTargetNormalizeOptions(g_GLESCapabilities, targetIndex));
