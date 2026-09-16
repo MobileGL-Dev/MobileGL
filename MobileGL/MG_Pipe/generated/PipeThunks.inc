@@ -300,3 +300,23 @@ inline void MGP_QueryCounter(const MGPQueryDesc* payload) {
 inline void MGP_FenceWaitServer(const MGPFenceWait* payload) {
     gMGPipeScreen.FenceWaitServer(payload);
 }
+
+inline void MGP_BindShaderImage(const MGPImageBind* payload) {
+    gMGPipeContext.BindShaderImage(payload);
+}
+
+inline void MGP_PatchParameter(const MGPPatchParameter* payload) {
+    gMGPipeContext.PatchParameter(payload);
+}
+
+inline void MGP_BindStreamOutput(const MGPStreamOutputBind* payload) {
+    gMGPipeContext.BindStreamOutput(payload);
+}
+
+inline void MGP_SetStorageBlockBinding(const MGPStorageBlockBinding* payload, const void* blobBytes, Uint64 blobByteCount) {
+    gMGPipeContext.SetStorageBlockBinding(payload, blobBytes, blobByteCount);
+}
+
+inline void MGP_CopyFramebufferToTexture(const MGPCopyFromFramebuffer* payload) {
+    gMGPipeContext.CopyFramebufferToTexture(payload);
+}

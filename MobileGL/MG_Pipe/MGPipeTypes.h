@@ -1247,15 +1247,39 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPReadback, 24);
 
+    // resource_copy_region = glCopyImageSubData (P5b, CONTRACT-P5B.md i1). The record had no
+    // producer and no consumer before P5b, so its shape is settled here for the first time:
+    //
+    //   Src / Dst        the two endpoints' handles - kind Texture, or kind Renderbuffer when the
+    //                    matching *Target is GL_RENDERBUFFER. The handle is the identity.
+    //   SrcTarget /      the GL target enum the APPLICATION named, verbatim (GL_TEXTURE_2D,
+    //   DstTarget        GL_TEXTURE_CUBE_MAP, GL_RENDERBUFFER, ...); every one fits a Uint16.
+    //                    Espryt's own MakeGLESCopyImageEndpoint does the ES lowering
+    //                    (DirectGLES.cpp) and must keep seeing the enum the app passed.
+    //   SrcBox           {SrcX, SrcY, SrcZ, Width, Height, Depth} of the copied region.
+    //   SrcGlName /      THE P5b DEBT, stated rather than hidden. GLFunctionsTable::
+    //   DstGlName        CopyImageSubData takes two CopyImageEndpoints, each a frontend SharedPtr,
+    //                    and the server has none. Under inproc and the verb barrier the server
+    //                    rebuilds a TEXTURE endpoint from the GL name through the barrier-pulled
+    //                    sticky forward MGB_CTX->GetTextureObject(name) (counted in `rsp`,
+    //                    retired by P7 / P3b-P4b when the backend takes handles). A GL name is
+    //                    NEVER an identity (section 4.2.1); it is the lookup key of a pull the
+    //                    handle beside it will replace. No forward hands out a renderbuffer,
+    //                    so a RENDERBUFFER endpoint is refused by name in P5b
+    //                    (Fatal{UnmigratedVerb, "CopyImageSubData+RENDERBUFFER"}, ID-57's shape).
+    //
+    // 64 -> 72: the two names did not fit the four pad bytes, and the record had no wire history
+    // to preserve.
     struct MGPCopyRegion {
         MGPipeHandle Src, Dst;
         MGPBox SrcBox;
         Int32 DstX, DstY, DstZ;
         Uint16 SrcTarget, DstTarget;
         Uint16 SrcLevel, DstLevel;
+        Uint32 SrcGlName, DstGlName;
         Uint32 Pad0;
     };
-    MGP_ASSERT_POD(MGPCopyRegion, 64);
+    MGP_ASSERT_POD(MGPCopyRegion, 72);
 
     struct MGPBlit {
         MGPipeHandle ReadFbo, DrawFbo;
@@ -1270,16 +1294,61 @@ namespace MobileGL::MG_Pipe {
     // glClearNamedFramebuffer* entry points (section 4.4.4).
     struct MGPClear {
         MGPipeHandle Fbo;
-        Uint32 Kind;   // Whole | Color | Depth | Stencil | DepthStencil
+        Uint32 Kind;   // kMGPipeClearKind*, below
         Int32 DrawBufferIndex;
         Uint32 BufferMask; // GL_COLOR_BUFFER_BIT etc. for the whole-framebuffer form
-        Uint32 ValueClass; // Float | Int | Uint
+        Uint32 ValueClass; // kMGPipeClearValueClass*, below
         Uint32 ColorValue[4];
         Float DepthValue;
         Int32 StencilValue;
     };
     MGP_ASSERT_POD(MGPClear, 48);
 
+    // MGPClear's two discriminants, and THE ONLY SPELLING OF THEM (P5b, CONTRACT-P5B.md f1).
+    // Through P5 the list lived in this struct's comment and both the client emitter
+    // (MG_Remote/Client/EmitTables.h) and the server sink (MG_Remote/Server/PipeApplier.h)
+    // minted their own copy of the numbers, each flagged "this belongs in MGPipeTypes.h". A
+    // disagreement between the two copies is a clear of the wrong attachment with the wrong
+    // value type, which renders plausibly - table 0's "a decoder that open-codes it is the
+    // class-1 defect". Both files now alias these.
+    //
+    // Kind is the comment's order, left to right. ValueClass reuses the numbering
+    // MG_State/GLState/Core.h gives the identical three-way split on MGPAttribValue::ValueClass.
+    //
+    // WHICH GL ENTRY POINT PRODUCES WHICH KIND, so the emitter and the sink cannot disagree:
+    //   glClear(mask)                            Whole, BufferMask = mask, DrawBufferIndex = -1
+    //   glClearBuffer{f,i,ui}v(GL_COLOR, i, v)   Color, DrawBufferIndex = i, ValueClass by suffix
+    //   glClearBufferfv(GL_DEPTH, 0, &d)          Depth, DepthValue = d
+    //   glClearBufferiv(GL_STENCIL, 0, &s)        Stencil, StencilValue = s
+    //   glClearBufferfi(GL_DEPTH_STENCIL, 0, d, s) DepthStencil, DepthValue = d, StencilValue = s
+    // The four glClearNamedFramebuffer* forms are the same rows with Fbo = the named
+    // framebuffer's handle (preceded by its MGPipeFramebufferTarget::Named record, ID-19);
+    // the bound forms carry Fbo = kMGPipeNullHandle, "the bound draw framebuffer".
+    inline constexpr Uint32 kMGPipeClearKindWhole = 0;
+    inline constexpr Uint32 kMGPipeClearKindColor = 1;
+    inline constexpr Uint32 kMGPipeClearKindDepth = 2;
+    inline constexpr Uint32 kMGPipeClearKindStencil = 3;
+    inline constexpr Uint32 kMGPipeClearKindDepthStencil = 4;
+    inline constexpr Uint32 kMGPipeClearKindCount = 5;
+    inline constexpr Uint32 kMGPipeClearValueClassFloat = 0;
+    inline constexpr Uint32 kMGPipeClearValueClassInt = 1;
+    inline constexpr Uint32 kMGPipeClearValueClassUint = 2;
+    inline constexpr Uint32 kMGPipeClearValueClassCount = 3;
+
+    // generate_mipmap = glGenerateMipmap (P5b, CONTRACT-P5B.md f1). First producer and first
+    // consumer in P5b, so the fields are settled here:
+    //   Res         the texture bound to the active unit at `Target`, resolved on the client. The
+    //               server's backend slot takes only the GL target and resolves the bound texture
+    //               itself through the barrier-pulled unit state (kTextureOp's may-read mask), so
+    //               Res is the P8 form's identity and is not what the P5b sink dispatches on.
+    //   Target      the GL texture target enum VERBATIM (GL_TEXTURE_2D 0x0DE1, GL_TEXTURE_3D
+    //               0x806F, GL_TEXTURE_CUBE_MAP 0x8513, GL_TEXTURE_2D_ARRAY 0x8C1A ...), which
+    //               is what GLFunctionsTable::GenerateMipmap takes; every GL texture target fits
+    //               a Uint16 and the sink passes it straight through. NOT MGPipeResourceTarget:
+    //               there is no resource-target -> GL-enum inverse in the tree to spend on it.
+    //   BaseLevel / the plan the client computed from GL_TEXTURE_BASE_LEVEL and the level count:
+    //   LevelCount  informational in P5b (the backend derives its own), load-bearing in P8's
+    //               "generate_mipmap plan + CPU fallback texels" row.
     struct MGPMipPlan {
         MGPipeHandle Res;
         Uint16 Target, BaseLevel, LevelCount, Pad0;
@@ -1307,6 +1376,14 @@ namespace MobileGL::MG_Pipe {
         kDrawIndicesAreClient = 1u << 2,
         kDrawHasIndexRange = 1u << 3,
         kDrawHasXfbCount = 1u << 4,
+        // P5b (CONTRACT-P5B.md d1): the draw's ranges come from a GL_DRAW_INDIRECT_BUFFER and
+        // the record's SECOND TAIL is one MGPDrawIndirect rather than an MGHostSpan. The two
+        // flags are EXCLUSIVE - an indirect draw takes its indices from the bound element
+        // buffer by GL rule, so it can never carry user indices - and a record that sets both
+        // is Fatal{ProtocolCorruption} at the layout. NumDraws is 0 for an indirect draw: the
+        // server never reads the indirect buffer to learn a count and the client never sends
+        // ranges it does not have.
+        kDrawIsIndirect = 1u << 5,
     };
 
     // = pipe_draw_info. Today's twenty draw entry points collapse onto this one call, with
@@ -1341,8 +1418,22 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPDrawRange, 12);
 
-    // Present when the draw is indirect. The client resolves the COUNT itself, so the
-    // server never reads an indirect command block to learn how many draws there are.
+    // Present when the draw is indirect: draw_vbo's second tail under kDrawIsIndirect (P5b,
+    // CONTRACT-P5B.md d1), 8-aligned behind the (empty) range tail exactly where the user-index
+    // span would sit. The client resolves the COUNT itself, so the server never reads an
+    // indirect command block to learn how many draws there are:
+    //   glMultiDraw*Indirect        DrawCount = drawcount, ParameterBuffer = null
+    //   glMultiDraw*IndirectCount   DrawCount = maxdrawcount, ParameterBuffer = the bound
+    //                               GL_PARAMETER_BUFFER, ParameterOffset = drawcount (the byte
+    //                               offset the GL call spells as GLintptr drawcount). The server's
+    //                               backend slot takes exactly that pair and reads the real count
+    //                               where it does today; nothing about the parameter buffer's
+    //                               CONTENT crosses. (ROADMAP P8's HostResolve.cpp is where a
+    //                               client-side count resolve would live if a backend ever needed
+    //                               the number rather than the buffer; no backend does.)
+    //   Buffer / Offset / Stride    the bound GL_DRAW_INDIRECT_BUFFER handle, the command byte
+    //                               offset the GL call passed as `indirect`, and the stride (0 =
+    //                               tightly packed, as GL spells it - the backend normalises).
     struct MGPDrawIndirect {
         MGPipeHandle Buffer;
         MGPipeHandle ParameterBuffer;
@@ -1406,6 +1497,127 @@ namespace MobileGL::MG_Pipe {
         Uint32 Pad0;
     };
     MGP_ASSERT_POD(MGPSwapInterval, 8);
+
+    // ---------------------------------------------------------------------------------
+    // P5b: the five appended rows (MG_Remote/CONTRACT-P5B.md). APPENDED, never inserted:
+    // the wire opcode is a call's position in PipeCalls.def, so these sit after
+    // FenceWaitServer at opcodes 72..76 and no earlier opcode moved.
+    //
+    // Every one of them is a GLFunctionsTable VERB the class-C census measured as a first
+    // blocker and for which no existing row could carry the call. Four of the five exist
+    // because the backend slot does REAL WORK AT THE CALL rather than at the next validate,
+    // so a validate-time set record (set_shader_images, set_patch_state) cannot stand in for
+    // it: Espryt's BindImageTexture syncs the unit's binding to the driver on the spot,
+    // PatchParameteri pushes glPatchParameteri, BindTransformFeedback rebinds the driver
+    // object and invalidates the capture-binding shadows, and ShaderStorageBlockBinding
+    // pushes a rebinding onto an already-built driver program. The fifth,
+    // copy_framebuffer_to_texture, is a copy WITH the read framebuffer as its source, which
+    // resource_copy_region (resource -> resource) cannot express.
+    //
+    // NONE OF THEM HAS AN MGPipeApply* ENTRY POINT AND NONE GAINS ONE. They reach
+    // MG_Remote::Wire::WireVerbSink like the five P5 class-B verbs (the census's correction:
+    // a verb reaches the sink, not an applier), and under monolith they have no producer at
+    // all - the backend's own slot is called directly, byte for byte as today (G2/G14).
+    // ---------------------------------------------------------------------------------
+
+    // bind_shader_image = glBindImageTexture (P5b i1). The arguments VERBATIM plus the handle:
+    //   Res      the texture's handle (kind Texture); kMGPipeNullHandle for texture 0.
+    //   Unit     the image unit.
+    //   GlName   the GL texture name the app passed - what the ES backend slot is handed as
+    //            `texture` and what it currently ignores ((void)texture); never an identity.
+    //   Level / Layer / Layered / Access / Format   the GL arguments verbatim. Access is the
+    //            GL token (GL_READ_ONLY 0x88B8, GL_WRITE_ONLY 0x88B9, GL_READ_WRITE 0x88BA),
+    //            NOT MGPImageView's three-value encoding: this record reproduces a call, and
+    //            the encoding belongs to the validate-time set record, which still travels
+    //            beside it. Format is the GL internal-format enum.
+    // The server's slot reads the unit's binding from the barrier-pulled GetImageTextureBinding
+    // (kTextureOp's mask) exactly as it does in monolith; the record is the verb boundary and
+    // the stamp, and the fields are what P7 / P3b-P4b will dispatch on instead.
+    struct MGPImageBind {
+        MGPipeHandle Res;
+        Uint32 Unit;
+        Uint32 GlName;
+        Int32 Level;
+        Int32 Layer;
+        Uint32 Access;
+        Uint32 Format;
+        Uint8 Layered;
+        Uint8 Pad0[7];
+    };
+    MGP_ASSERT_POD(MGPImageBind, 40);
+
+    // patch_parameter = glPatchParameteri (P5b t2). Pname is GL_PATCH_VERTICES - the only
+    // pname that reaches the backend slot; the frontend answers GL_PATCH_DEFAULT_*_LEVEL itself
+    // (GL_Drawing.cpp's PatchParameterfv) and bakes them into set_patch_state. It is carried
+    // verbatim so the sink reproduces the call and not a reading of it. set_patch_state (op 43)
+    // still travels at the next validate: it is the applier's working-block copy, this is the
+    // driver push Espryt does at the call, and the two are two pushes today too.
+    struct MGPPatchParameter {
+        Uint32 Pname;
+        Int32 Value;
+    };
+    MGP_ASSERT_POD(MGPPatchParameter, 8);
+
+    // bind_stream_output = glBindTransformFeedback (P5b t2). The XFB object namespace is the
+    // frontend's and has no wire lifetime (no create/delete row); Espryt keys its driver
+    // objects by the GL NAME (XfbImpl::g_xfbObjects[name]) and the D21 rekey by the lifetime
+    // id, so both cross. Name 0 is the default object. A GL name is never an identity; here it
+    // is the key the backend has always used, carried so the backend need not change.
+    struct MGPStreamOutputBind {
+        Uint32 GlName;
+        Uint32 Pad0;
+        Uint64 LifetimeId;
+    };
+    MGP_ASSERT_POD(MGPStreamOutputBind, 16);
+
+    // set_storage_block_binding = glShaderStorageBlockBinding (P5b i1). The block is named,
+    // not indexed: BackendObject.h says why - the application's index is the frontend
+    // interface-query enumeration's and no backend shares that index space, the NAME is the
+    // one coordinate all three agree on. The name is bytes of unbounded length, so it rides
+    // the ONE client -> server byte carrier, SEG_STAGE, as a kHasBlob blob: Name.Size is
+    // strlen + 1 (the NUL travels), never 0.
+    //   ShaderCso   the program's CSO handle - the identity, and what P7 dispatches on.
+    //   GlName      the GL program name the backend slot takes; under inproc the slot resolves
+    //               it through the barrier-pulled sticky forward GetProgramObject(name)
+    //               (`rsp`, retired by P9). The P5b debt, stated.
+    //   Binding     storageBlockBinding.
+    struct MGPStorageBlockBinding {
+        MGPipeHandle ShaderCso;
+        Uint32 GlName;
+        Uint32 Binding;
+        MGPBlobRef Name;
+    };
+    MGP_ASSERT_POD(MGPStorageBlockBinding, 40);
+
+    // copy_framebuffer_to_texture = glCopyTexImage2D / glCopyTexSubImage2D (P5b f1). The
+    // source is the READ framebuffer the server already has bound (set_framebuffer_state), so
+    // no source handle crosses; the destination is the texture bound to the active unit at
+    // Target, which the backend slot resolves through the barrier-pulled unit state exactly as
+    // generate_mipmap does. glCopyTexImage2D (SubImage = 0) also REDEFINES the level, and the
+    // frontend's own TexImage2D_State has already emitted that level's resource_respecify
+    // (GL_Texture.cpp's CopyTexImage2D validator) before the backend slot is reached, so the
+    // record carries the copy and nothing about storage.
+    //   Dst                the destination texture's handle (P8 form; the P5b sink does not
+    //                      dispatch on it).
+    //   Target             the GL texture target enum verbatim (a 2D target or a cube face).
+    //   Level              the destination level.
+    //   InternalFormat     glCopyTexImage2D's internalformat (GL enum); 0 for the sub-image form.
+    //   X, Y, Width, Height  the read-framebuffer rectangle.
+    //   XOffset, YOffset   the sub-image form's destination origin; 0 for the image form.
+    //   SubImage           0 = glCopyTexImage2D, 1 = glCopyTexSubImage2D (unmeasured; shares
+    //                      the row because the two calls differ in exactly these two fields).
+    struct MGPCopyFromFramebuffer {
+        MGPipeHandle Dst;
+        Uint32 Target;
+        Int32 Level;
+        Uint32 InternalFormat;
+        Int32 X, Y;
+        Int32 Width, Height;
+        Int32 XOffset, YOffset;
+        Uint8 SubImage;
+        Uint8 Pad0[3];
+    };
+    MGP_ASSERT_POD(MGPCopyFromFramebuffer, 48);
 
     // ---------------------------------------------------------------------------------
     // Reverse channel payloads (section 7.1)

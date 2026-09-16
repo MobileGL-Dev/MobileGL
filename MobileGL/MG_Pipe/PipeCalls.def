@@ -47,8 +47,11 @@
 //   kCtxCso        13     CSO create/bind/delete
 //   kCtxState      17     16 of the 17 set_* calls + the temporary set_residual_value_state
 //   kCtxObject      9     set_texture_params (the 17th set_*) + 8 object-scoped transfers
-//   kCtxVerb       13     3 context-reading transfer calls + the 10 commands
-//   total          71
+//   kCtxVerb       18     3 context-reading transfer calls + the 10 commands, plus the five
+//                         P5b-appended verbs (bind_shader_image, patch_parameter,
+//                         bind_stream_output, set_storage_block_binding,
+//                         copy_framebuffer_to_texture - MG_Remote/CONTRACT-P5B.md)
+//   total          76
 //
 // Reconciliation with the plan's headline numbers (section 4.4 / appendix A), because they
 // do not add up to a set of UNIQUE records and this file has to hold unique records:
@@ -78,9 +81,16 @@
 //     QueryTimestamp, QueryCounter and FenceWaitServer, APPENDED at the end of the list -
 //     not slotted into their groups - because the wire opcode is the position, so a record
 //     that arrives late goes last. 71 unique records.
+//   - P5b appended FIVE more after them (opcodes 72..76), for the same reason and by the same
+//     rule: five GLFunctionsTable verbs the class-C census measured as first blockers - the
+//     image bind, the patch parameter, the XFB object bind, the storage-block rebinding and
+//     the framebuffer-to-texture copy - for which no existing row could carry the call.
+//     76 unique records. The catalogue footer's "ShaderStorageBlockBinding is folded into the
+//     reflection archive" is CORRECTED by the row: the archive carries the bindings the
+//     program LINKED with, and glShaderStorageBlockBinding moves one AFTER link.
 // ---------------------------------------------------------------------------------------
 
-#define MGP_CALL_LIST_DOCUMENTED_COUNT 71
+#define MGP_CALL_LIST_DOCUMENTED_COUNT 76
 
 // clang-format off
 #define MGP_CALL_LIST(X)                                                                            \
@@ -201,7 +211,26 @@
     X(QueryCounter,             MGPQueryDesc,               kCtxQuery,  kNone)                      \
     /* glWaitSync - WaitSync, the GPU-side wait, distinct from FenceWait's client-side one.   */    \
     /* TimeoutNs is GL_TIMEOUT_IGNORED by contract.                                            */    \
-    X(FenceWaitServer,          MGPFenceWait,               kScreen,    kNone)
+    X(FenceWaitServer,          MGPFenceWait,               kScreen,    kNone)                      \
+    /* ---- APPENDED BY P5b (MG_Remote/CONTRACT-P5B.md): five GLFunctionsTable verbs the      ---- */ \
+    /* ---- class-C census measured as first blockers and that no existing row could carry.   ---- */ \
+    /* ---- Opcodes 72..76. Every one reaches WireVerbSink, none has an MGPipeApply* entry    ---- */ \
+    /* ---- point, and under monolith none has a producer - the backend slot is called       ---- */ \
+    /* ---- directly, as today. The payload comments in MGPipeTypes.h say why each exists.   ---- */ \
+    /* glBindImageTexture - Espryt syncs the unit's binding to the driver AT THE CALL           */    \
+    /* (SyncImageTextureBinding), so the validate-time set_shader_images cannot stand in.       */    \
+    X(BindShaderImage,          MGPImageBind,               kCtxVerb,   kNone)                      \
+    /* glPatchParameteri(GL_PATCH_VERTICES) - Espryt pushes glPatchParameteri at the call.      */    \
+    X(PatchParameter,           MGPPatchParameter,          kCtxVerb,   kNone)                      \
+    /* glBindTransformFeedback - the driver object rebind and the capture-binding shadow       */    \
+    /* invalidation happen at the call; the XFB namespace has no wire lifetime.                 */    \
+    X(BindStreamOutput,         MGPStreamOutputBind,        kCtxVerb,   kNone)                      \
+    /* glShaderStorageBlockBinding - the block NAME is the coordinate all three sides share    */    \
+    /* (BackendObject.h), and a name is bytes: kHasBlob, staged whole in SEG_STAGE, NUL included. */  \
+    X(SetStorageBlockBinding,   MGPStorageBlockBinding,     kCtxVerb,   kHasBlob)                   \
+    /* glCopyTexImage2D / glCopyTexSubImage2D - a copy whose SOURCE is the read framebuffer,   */    \
+    /* which resource_copy_region (resource -> resource) cannot express.                        */    \
+    X(CopyFramebufferToTexture, MGPCopyFromFramebuffer,     kCtxVerb,   kNone)
 // clang-format on
 
 // Explicitly NOT migrated (plan 4.4.6 / appendix A "explicit deletions"):
@@ -215,7 +244,10 @@
 //   - GetProgramiv. GL_COMPUTE_WORK_GROUP_SIZE is a FRONTEND link artifact
 //     (ProgramObject::GetComputeLocalSize, what GL_Program.cpp has always answered from), not
 //     a backend answer at all; nothing a backend knows about a program crosses this way.
-//   - ShaderStorageBlockBinding (folded into MGPProgramDesc's reflection archive),
+//   - ShaderStorageBlockBinding WAS listed here as "folded into MGPProgramDesc's reflection
+//     archive". P5b's set_storage_block_binding row (opcode 75) replaces that: the archive
+//     carries the bindings as LINKED, and the call moves one after link, which the backend
+//     applies to an already-built driver program (DirectGLES.cpp ShaderStorageBlockBinding).
 //     set_pixel_unpack_state (no such state crosses the line - plan 4.6 D5), a
 //     compressed-format concept, pipe_transfer, and the stage dimension of set_sampler_views
 //     (MobileGL's texture unit space is merged, not per stage - plan 4.4.3).

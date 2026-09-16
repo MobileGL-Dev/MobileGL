@@ -281,12 +281,18 @@ constexpr MGPipeVerb MGPipeVerbForWireOp(MGPWireOp op) {
     case MGPWireOp::ResumeStreamOutput: return MGPipeVerb::ResumeTransformFeedback;
     case MGPWireOp::GenerateMipmap: return MGPipeVerb::GenerateMipmap;
     case MGPWireOp::GetTextureImage: return MGPipeVerb::GetTextureImage;
+    case MGPWireOp::ResourceCopyRegion: return MGPipeVerb::CopyImageSubData;
+    case MGPWireOp::BindShaderImage: return MGPipeVerb::BindImageTexture;
+    case MGPWireOp::PatchParameter: return MGPipeVerb::PatchParameteri;
+    case MGPWireOp::BindStreamOutput: return MGPipeVerb::BindTransformFeedback;
+    case MGPWireOp::SetStorageBlockBinding: return MGPipeVerb::ShaderStorageBlockBinding;
+    case MGPWireOp::CopyFramebufferToTexture: return MGPipeVerb::CopyTexImage2D;
     default:
         return MGPipeVerb::kVerbCount;
     }
 }
 
-inline constexpr SizeT kMGPipeVerbBoundaryOpCount = 12;
+inline constexpr SizeT kMGPipeVerbBoundaryOpCount = 18;
 inline constexpr SizeT kMGPipeVerbBoundaryExemptCount = 3;
 
 // The class sizes, as constants a test can pin without recounting the table.

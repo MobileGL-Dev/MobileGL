@@ -185,8 +185,11 @@
 #define MGP_FIELDS_MGPReadback(F) \
     F(Res) F(Offset) F(Size)
 
+// P5b (CONTRACT-P5B.md i1): the two GL names are the barrier-pulled lookup keys the sink
+// rebuilds the CopyImageEndpoints from; listed like any member, so a verify build sees them.
 #define MGP_FIELDS_MGPCopyRegion(F) \
-    F(Src) F(Dst) F(SrcBox) F(DstX) F(DstY) F(DstZ) F(SrcTarget) F(DstTarget) F(SrcLevel) F(DstLevel)
+    F(Src) F(Dst) F(SrcBox) F(DstX) F(DstY) F(DstZ) F(SrcTarget) F(DstTarget) F(SrcLevel) F(DstLevel) \
+    F(SrcGlName) F(DstGlName)
 
 #define MGP_FIELDS_MGPBlit(F) \
     F(ReadFbo) F(DrawFbo) F(SrcX0) F(SrcY0) F(SrcX1) F(SrcY1) F(DstX0) F(DstY0) F(DstX1) F(DstY1) \
@@ -239,6 +242,25 @@
 
 #define MGP_FIELDS_MGPSurfaceInfo(F) \
     F(Width) F(Height) F(InternalFormat) F(Samples) F(Layers) F(IsDefault)
+
+// ---- P5b's five appended rows (MG_Remote/CONTRACT-P5B.md). Pad-named members excluded, as
+// everywhere; MGPStorageBlockBinding's Name is an MGPBlobRef and recurses into that list.
+
+#define MGP_FIELDS_MGPImageBind(F) \
+    F(Res) F(Unit) F(GlName) F(Level) F(Layer) F(Access) F(Format) F(Layered)
+
+#define MGP_FIELDS_MGPPatchParameter(F) \
+    F(Pname) F(Value)
+
+#define MGP_FIELDS_MGPStreamOutputBind(F) \
+    F(GlName) F(LifetimeId)
+
+#define MGP_FIELDS_MGPStorageBlockBinding(F) \
+    F(ShaderCso) F(GlName) F(Binding) F(Name)
+
+#define MGP_FIELDS_MGPCopyFromFramebuffer(F) \
+    F(Dst) F(Target) F(Level) F(InternalFormat) F(X) F(Y) F(Width) F(Height) F(XOffset) F(YOffset) \
+    F(SubImage)
 
 // ---- the value structs and the host span (P1 brief D8). Not call payloads themselves, but
 // members of ones (ResidualValueBlock, MGPPixelPackState, MGPCaps) and of PipeInputs, so the
@@ -355,6 +377,8 @@
     P(MGPDrawRange) P(MGPDrawIndirect) P(MGPGridInfo) P(MGPMemoryBarrier) P(MGPStreamOutputBegin) \
     P(MGPXfbAccounting) P(MGPStreamOutputControl) P(MGPFlush) P(MGPPresent) P(MGPSwapInterval) \
     P(MGPSurfaceInfo) \
+    P(MGPImageBind) P(MGPPatchParameter) P(MGPStreamOutputBind) P(MGPStorageBlockBinding) \
+    P(MGPCopyFromFramebuffer) \
     P(RenderStateParameters) P(PixelStoreParameters) P(SamplerParameters) P(PerBufferBlendState) \
     P(StencilFaceState) \
     P(DynamicBackendParameters) P(MGHostSpan) \

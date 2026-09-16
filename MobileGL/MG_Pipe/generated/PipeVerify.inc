@@ -107,6 +107,11 @@ inline Bool MGPipeVerify(const MGPFlush& a, const MGPFlush& b, const char** outF
 inline Bool MGPipeVerify(const MGPPresent& a, const MGPPresent& b, const char** outField);
 inline Bool MGPipeVerify(const MGPSwapInterval& a, const MGPSwapInterval& b, const char** outField);
 inline Bool MGPipeVerify(const MGPSurfaceInfo& a, const MGPSurfaceInfo& b, const char** outField);
+inline Bool MGPipeVerify(const MGPImageBind& a, const MGPImageBind& b, const char** outField);
+inline Bool MGPipeVerify(const MGPPatchParameter& a, const MGPPatchParameter& b, const char** outField);
+inline Bool MGPipeVerify(const MGPStreamOutputBind& a, const MGPStreamOutputBind& b, const char** outField);
+inline Bool MGPipeVerify(const MGPStorageBlockBinding& a, const MGPStorageBlockBinding& b, const char** outField);
+inline Bool MGPipeVerify(const MGPCopyFromFramebuffer& a, const MGPCopyFromFramebuffer& b, const char** outField);
 inline Bool MGPipeVerify(const RenderStateParameters& a, const RenderStateParameters& b, const char** outField);
 inline Bool MGPipeVerify(const PixelStoreParameters& a, const PixelStoreParameters& b, const char** outField);
 inline Bool MGPipeVerify(const SamplerParameters& a, const SamplerParameters& b, const char** outField);
@@ -243,6 +248,16 @@ template <>
 struct MGPipeHasFieldVerifier<MGPSwapInterval> : std::true_type {};
 template <>
 struct MGPipeHasFieldVerifier<MGPSurfaceInfo> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<MGPImageBind> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<MGPPatchParameter> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<MGPStreamOutputBind> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<MGPStorageBlockBinding> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<MGPCopyFromFramebuffer> : std::true_type {};
 template <>
 struct MGPipeHasFieldVerifier<RenderStateParameters> : std::true_type {};
 template <>
@@ -622,6 +637,31 @@ inline Bool MGPipeVerify(const MGPSurfaceInfo& a, const MGPSurfaceInfo& b, const
     return true;
 }
 
+inline Bool MGPipeVerify(const MGPImageBind& a, const MGPImageBind& b, const char** outField) {
+    MGP_FIELDS_MGPImageBind(MGP_VERIFY_FIELD)
+    return true;
+}
+
+inline Bool MGPipeVerify(const MGPPatchParameter& a, const MGPPatchParameter& b, const char** outField) {
+    MGP_FIELDS_MGPPatchParameter(MGP_VERIFY_FIELD)
+    return true;
+}
+
+inline Bool MGPipeVerify(const MGPStreamOutputBind& a, const MGPStreamOutputBind& b, const char** outField) {
+    MGP_FIELDS_MGPStreamOutputBind(MGP_VERIFY_FIELD)
+    return true;
+}
+
+inline Bool MGPipeVerify(const MGPStorageBlockBinding& a, const MGPStorageBlockBinding& b, const char** outField) {
+    MGP_FIELDS_MGPStorageBlockBinding(MGP_VERIFY_FIELD)
+    return true;
+}
+
+inline Bool MGPipeVerify(const MGPCopyFromFramebuffer& a, const MGPCopyFromFramebuffer& b, const char** outField) {
+    MGP_FIELDS_MGPCopyFromFramebuffer(MGP_VERIFY_FIELD)
+    return true;
+}
+
 inline Bool MGPipeVerify(const RenderStateParameters& a, const RenderStateParameters& b, const char** outField) {
     MGP_FIELDS_RenderStateParameters(MGP_VERIFY_FIELD)
     return true;
@@ -669,4 +709,4 @@ inline Bool MGPipeVerify(const MGPVertexBindingPointWire& a, const MGPVertexBind
 
 #undef MGP_VERIFY_FIELD
 
-inline constexpr SizeT kMGPipeVerifiedPayloadCount = 72;
+inline constexpr SizeT kMGPipeVerifiedPayloadCount = 77;

@@ -236,17 +236,20 @@
 // row below with a reason. "Verb-shaped" is the union of two mechanical tests, both derived:
 //   (a) PipeCalls.def gives the call kind kCtxVerb - the catalogue's own word for it;
 //   (b) the call's name is also an MGPipeVerb name in FillPoints.def.
-// Twelve rows and three exemptions cover all fifteen. Only four of the twelve can arrive in P5
-// (CONTRACT §7 class B minus Present); the other eight are Fatal{UnmigratedVerb} today and are
-// mapped ANYWAY, because the failure mode of an absent row is silent: the applier would run the
-// record under the PREVIOUS verb's serial, mask and name, and a field inside that mask would
-// read FRESH while holding the previous verb's value.
+// Eighteen rows and three exemptions cover all twenty-one (P5: twelve and three; P5b appended
+// the five kCtxVerb rows 72..76 and settled ResourceCopyRegion). Only four of the rows could
+// arrive in P5 (CONTRACT §7 class B minus Present); the rest are Fatal{UnmigratedVerb} on the
+// client until a P5b migration package flips them and are mapped ANYWAY, because the failure
+// mode of an absent row is silent: the applier would run the record under the PREVIOUS verb's
+// serial, mask and name, and a field inside that mask would read FRESH while holding the
+// previous verb's value.
 //
 // NOT MECHANICALLY DETECTABLE, and so not claimed: a call that is a verb boundary, is not
-// kCtxVerb, and whose name differs from its verb's. `ResourceCopyRegion` is the one in the tree
-// (its verbs are CopyImageSubData / CopyTexSubImage2D / CopyTexImage2D - three of them, which is
-// why it cannot be a row without a rule for choosing). The phase that emits it adds its row and
-// decides which verb it is.
+// kCtxVerb, and whose name differs from its verb's. `ResourceCopyRegion` WAS the one in the
+// tree (its verbs could have been CopyImageSubData / CopyTexSubImage2D / CopyTexImage2D). P5b
+// decided: resource_copy_region is glCopyImageSubData only, and the two framebuffer-sourced
+// copies have their own row (copy_framebuffer_to_texture), so the choice is a row here rather
+// than a rule in a reader's head.
 #define MGP_VERB_OP_LIST(X)                                                                          \
     /* CONTRACT §7 class B - the four that can actually arrive in P5. */                              \
     X(Clear,              Clear)                                                                     \
@@ -263,7 +266,20 @@
     X(PauseStreamOutput,  PauseTransformFeedback)                                                    \
     X(ResumeStreamOutput, ResumeTransformFeedback)                                                   \
     X(GenerateMipmap,     GenerateMipmap)                                                            \
-    X(GetTextureImage,    GetTextureImage)
+    X(GetTextureImage,    GetTextureImage)                                                           \
+    /* P5b (MG_Remote/CONTRACT-P5B.md). The ONE renamed, non-kCtxVerb boundary the file above  */   \
+    /* said "the phase that emits it adds its row and decides which verb it is": P5b rules      */   \
+    /* resource_copy_region = glCopyImageSubData ONLY; the two framebuffer-sourced copies       */   \
+    /* (CopyTexImage2D / CopyTexSubImage2D) are copy_framebuffer_to_texture below, stamped as   */   \
+    /* CopyTexImage2D - both are kBlitOrCopy, one mask, and a row can name one verb.           */   \
+    X(ResourceCopyRegion, CopyImageSubData)                                                          \
+    /* The five P5b-appended verbs, opcodes 72..76, each stamped as the GLFunctionsTable verb   */   \
+    /* it reproduces.                                                                          */   \
+    X(BindShaderImage,    BindImageTexture)                                                          \
+    X(PatchParameter,     PatchParameteri)                                                           \
+    X(BindStreamOutput,   BindTransformFeedback)                                                     \
+    X(SetStorageBlockBinding, ShaderStorageBlockBinding)                                             \
+    X(CopyFramebufferToTexture, CopyTexImage2D)
 
 // X(Op, Why) - verb-shaped calls that are deliberately NOT stamp points.
 //
