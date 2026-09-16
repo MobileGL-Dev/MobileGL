@@ -2980,7 +2980,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // is still live; nulling it then would drop the reduced path's own bytes (it did,
                 // and TriangleScenario read the wrong VBO). HasShadow is the discriminator: false
                 // after DropAll, true after an ordinary Adopt.
-                if (!ServerStaged().HasShadow(resource)) {
+                //
+                // TRANSPORT-GUARDED like the other two split hunks in this file (review v2 N-7):
+                // under MONOLITH transport in a disaggregated build the store never copies, Adopt
+                // never sets m_any, HasShadow answers false for everything, and this null would
+                // run on every twin's first ensure - harmless there only because liveHostBase()
+                // prefers MappedData() under monolith, and "under monolith nothing changes" should
+                // be true by construction rather than by luck.
+                if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                    !ServerStaged().HasShadow(resource)) {
                     resource->hostBytes = nullptr;
                 }
 #endif

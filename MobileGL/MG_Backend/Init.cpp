@@ -118,6 +118,13 @@ namespace MobileGL::MG_Backend {
             }
         }
 
+        // The resource op table the SERVER's backend registered at step 1 (BackendObject_DirectGLES::
+        // Initialize -> RegisterBufferBackendOps), as step 2 saw it. Step 5 compares against it
+        // (review v2 N-8): a client object that registered a table of its own would have made
+        // AssertConsumerMaskIsHonest's "is a table registered" answer TRUE, so re-asking that
+        // question could never notice the swap - only the pointer can.
+        const MG_Pipe::MGPipeResourceOps* g_resourceOpsAtStep2 = nullptr;
+
         // The single hook (ARCHITECTURE.md:29). Returns false when the split could not be
         // brought up, and the caller then REFUSES TO CONTINUE rather than falling back to the
         // switch below - a fallback here is "the split lane ran monolith and went green".
@@ -136,6 +143,7 @@ namespace MobileGL::MG_Backend {
             Server::ServerSession& session = Server::ServerSessionInstance();
             const Uint64 consumed = ConsumedSubsystemsFor(MG_Config::ActiveBackendType);
             AssertConsumerMaskIsHonest(consumed);
+            g_resourceOpsAtStep2 = MG_Pipe::MGPipeGetResourceOps();
             session.SetConsumedSubsystems(consumed);
             // ZERO IS THE EXPLICIT ANSWER FOR P5, not an omission (ServerSession.h's block):
             // every optional capability bit belongs to the package that owns its question, and
@@ -215,13 +223,27 @@ namespace MobileGL::MG_Backend {
                 MGLOG_W("Failed to initialize MobileGL backend libraries for the remote object");
                 return;
             }
-            // m-6: the honesty cross-check runs a SECOND time, now that step 4's
-            // pActiveBackendObject (the client's BackendObject_Remote) exists and its
-            // Initialize() has run inside InitSpecificBackendLibs. Anything the client object
-            // registered into MGPipeSetResourceOps after the step-2 check is invisible to that
-            // first call; re-asserting here costs one call and closes the window in which a
-            // client-registered g_resourceOps would flip the answer under the applier's feet.
+            // m-6, re-worded per review v2 N-8. The honesty cross-check runs a SECOND time, now
+            // that step 4's pActiveBackendObject (the client's BackendObject_Remote) exists and
+            // its Initialize() has run inside InitSpecificBackendLibs. What the re-run CAN catch
+            // is a table that was REMOVED between step 2 and here (the claim would then be a lie
+            // again). What it cannot catch - and its first comment claimed it could - is a client
+            // object that REGISTERED a table of its own: that leaves "is a table registered"
+            // true. Only the pointer tells those apart, so the table is compared against the one
+            // step 2 saw and a swap is refused by name: the applier would otherwise dispatch the
+            // server's resource records into the CLIENT object's table under its feet.
             AssertConsumerMaskIsHonest(ConsumedSubsystemsFor(MG_Config::ActiveBackendType));
+            if (MG_Pipe::MGPipeGetResourceOps() != g_resourceOpsAtStep2) {
+                MGLOG_F("MGPipe: Fatal{ConsumerMaskLie, \"resource ops table replaced\"} - the "
+                        "resource op table MGPipeGetResourceOps() answers with is not the one the "
+                        "server's backend registered at step 1 (%p now, %p then). Something between "
+                        "ServerSession::Accept and the client object's Initialize() registered its "
+                        "own table, and the applier would dispatch every resource record into it. A "
+                        "mask is a statement about the server's backend, and so is the table",
+                        static_cast<const void*>(MG_Pipe::MGPipeGetResourceOps()),
+                        static_cast<const void*>(g_resourceOpsAtStep2));
+                std::abort();
+            }
             LogBackendInfo();
             return;
         }
