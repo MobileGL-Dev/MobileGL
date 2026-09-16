@@ -1942,22 +1942,23 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # case: every case's picture depends on a d1 draw (an element-buffer glDrawElements, a
     # client index array, a base vertex, the Minecraft trace's DrawElementsInstancedBaseVertex,
     # the two multi-draws, an indirect draw), so a record that did not cross is a wrong picture
-    # and not a green. MultiDrawScenario, DrawParametersScenario, PrimitiveRestartScenario and
-    # GuiBatchScenario are the census's own DrawElements / MultiDrawElementsBaseVertex /
-    # DrawArraysInstancedBaseInstance / MultiDraw*Indirect* first-blocker scenarios, now at
-    # their pictures. The ONE case excluded by filter is MultiDrawScenario's
-    # ClientSideIndicesBatchMatchesUnrolledDraws: a multi-draw with client-side indices is
-    # refused BY NAME under split (Fatal{UnmigratedVerb, "MultiDrawElementsBaseVertex+
-    # CLIENT_INDICES"}, CONTRACT-P5B.md d1 - P8's HostResolve.cpp flattens it), which is its
-    # next first blocker and not a lane failure. It is listed in d1-v1.md, not deleted (G14).
+    # and not a green. MultiDrawScenario, DrawParametersScenario and PrimitiveRestartScenario are
+    # the census's own DrawElements / MultiDrawElementsBaseVertex / DrawArraysInstancedBaseInstance
+    # / MultiDraw*Indirect* first-blocker scenarios, now at their pictures. The ONE case excluded
+    # by filter is MultiDrawScenario's ClientSideIndicesBatchMatchesUnrolledDraws: a multi-draw
+    # with client-side indices is refused BY NAME under split (Fatal{UnmigratedVerb,
+    # "MultiDrawElementsBaseVertex+CLIENT_INDICES"}, CONTRACT-P5B.md d1 - P8's HostResolve.cpp
+    # flattens it), which is its next first blocker and not a lane failure. It is listed in
+    # d1-v1.md, not deleted (G14). GuiBatchScenario (the census's other DrawElements scenario) is
+    # NOT registered: past its draws it stops at Fatal{UnmigratedVerb, "MemoryBarrier"}, which is
+    # i1's to flip; i1 registers it when that lands.
     set(MGL_SPLIT_D1_SCENARIOS IndexedDrawFamilyScenario MultiDrawScenario DrawParametersScenario
-                               PrimitiveRestartScenario GuiBatchScenario)
+                               PrimitiveRestartScenario)
     set(MGL_SPLIT_D1_FILTER_IndexedDrawFamilyScenario "IndexedDrawFamilyScenario.*")
     set(MGL_SPLIT_D1_FILTER_MultiDrawScenario
         "MultiDrawScenario.*-MultiDrawScenario.ClientSideIndicesBatchMatchesUnrolledDraws")
     set(MGL_SPLIT_D1_FILTER_DrawParametersScenario "DrawParametersScenario.*")
     set(MGL_SPLIT_D1_FILTER_PrimitiveRestartScenario "PrimitiveRestartScenario.*")
-    set(MGL_SPLIT_D1_FILTER_GuiBatchScenario "GuiBatchScenario.*")
     foreach(mglItestD1Scenario IN LISTS MGL_SPLIT_D1_SCENARIOS)
         gtest_discover_tests(MobileGLIntegrationTest
             TEST_PREFIX "DirectGLES.Split."
