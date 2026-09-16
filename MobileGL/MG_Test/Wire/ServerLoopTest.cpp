@@ -1397,13 +1397,14 @@ TEST(ServerLoopEglTest, AReadPixelsReplyIsTheTightExtentWhateverDstSizeTheClient
 // production sequence, on the real op table and the real backend: A - glBufferData(64, data), drawn
 // (ensured), then deleted on the apply thread, so its id retires into the buffer pool; two presents
 // with a finish between them move the frame-completion watermark past the id's retire serial, which
-// is the pool's hand-out rule. B - glBufferData(64, NULL) then glBufferSubData(0, 16), the ordinary
-// streaming idiom, so its server shadow covers [0, 16) of 64. B's first ensure finds A's id in the
-// pool and would seed the driver's whole 64-byte store from that shadow, 48 bytes of which nothing
-// staged. The refusal fires BEFORE the glBufferSubData, so the forked child - whose only thread is a
-// copy of this one and holds no context - reaches it with no GL call that matters (a no-context call
-// dispatches to a no-op). Red once by deleting the pool-reuse MGL_SERVER_STAGED_REQUIRE: the child
-// seeds the store and does not die.
+// is the pool's hand-out rule. B - glBufferData(64, data2), whose 64 bytes cross as resource_subdata
+// behind the respecify (table 1 row 19) - and only 16 of them arrive, the MISSING-RECORD shape. B's
+// first ensure finds A's id in the pool and would seed the driver's whole 64-byte store from a shadow
+// 48 bytes of which nothing staged. The refusal fires BEFORE the glBufferSubData, so the forked
+// child - whose only thread is a copy of this one and holds no context - reaches it with no GL call
+// that matters (a no-context call dispatches to a no-op). Red once by deleting the pool-reuse
+// MGL_SERVER_STAGED_REQUIRE: the child seeds the store and does not die. (The ORPHANED shape of the
+// same sequence, glBufferData(64, NULL) + 16 bytes, must NOT die: TheStreamingIdiom... below.)
 TEST(StagedShadowProductionTest, ASparseShadowForcedThroughAPoolReuseUploadIsFatalByName) {
     EglServerFixture fixture;
     MGL_EGL_BRING_UP_OR_BAIL(fixture);
@@ -1423,7 +1424,7 @@ TEST(StagedShadowProductionTest, ASparseShadowForcedThroughAPoolReuseUploadIsFat
               MOBILEGL_OK);
     ASSERT_TRUE(aEnsured) << "A's ensure minted no storage, so nothing retired into the pool";
 
-    const MG_Pipe::MGPipeHandle b = DeclareBuffer(BufferDesc(22, 64, false));
+    const MG_Pipe::MGPipeHandle b = DeclareBuffer(BufferDesc(22, 64, true));
     StageBytes(b, 0, 16, 0x22);
     ASSERT_NE(Twin(b), nullptr) << "the subdata did not mint B's twin (ID-52 item 3)";
     ASSERT_EQ(Twin(b)->id, 0u) << "B already has a store; the pool-reuse arm cannot be reached";
@@ -1605,6 +1606,103 @@ TEST(StagedShadowProductionTest, TheEnsurePathUploadsTheServerShadowNotTheClient
     EXPECT_EQ(buffer->MappedData()[0], 0xA5);
 
     fixture.TearDown();
+}
+
+namespace {
+    std::string ReadLogFrom(SizeT offset) {
+        const std::string whole = ReadLog();
+        return offset < whole.size() ? whole.substr(offset) : std::string();
+    }
+
+    // THE STREAMING IDIOM, end to end, in a FORKED CHILD that brings the server up itself (the
+    // integration harness's pre-flight shape): a Fatal on the apply thread ends the child, not the
+    // case, so the case can name it. glBufferData(64, NULL) then glBufferSubData(0, 16) then a draw:
+    // the frontend object ORPHANS its store and writes 16 bytes - which flips ITS HasDefinedContent
+    // to true - while on the wire that is a resource_respecify with HasDefinedContent CLEAR and one
+    // 16-byte resource_subdata, so the server shadow covers [0, 16) of 64 and the descriptor says
+    // the rest is undefined by the application's own declaration. The draw's whole-store upload
+    // (the respecify reader, or the pool-reuse reader when a 64-byte id is waiting in the pool)
+    // must go through and leave 16 bytes of pattern and 48 of zero in the driver's store. Exit 0
+    // when it did, 7 when the wrong bytes landed, 8 when the child's bring-up failed.
+    enum class IdiomArm { Respecify, PoolReuse };
+
+    [[noreturn]] void RunTheStreamingIdiomAndExit(IdiomArm arm) {
+        EglServerFixture fixture;
+        if (!fixture.BringUp().empty() || !fixture.MakeCurrent()) ::_exit(8);
+        Vector<Uint8> sixteen(16, Uint8{0x77});
+        auto buffer = MakeShared<MG_State::GLState::BufferObject>(arm == IdiomArm::PoolReuse ? 33u : 32u);
+        buffer->Respecify(64, nullptr);
+        buffer->UploadSubData(DataPtr{sixteen.data(), sixteen.size()}, 0);
+        Bool ok = false;
+        (void)OnApply([&] {
+            if (arm == IdiomArm::PoolReuse) {
+                const MG_Pipe::MGPipeHandle a = DeclareBuffer(BufferDesc(29, 64, true));
+                StageBytes(a, 0, 64, 0x11);
+                if (Ensure(a) == nullptr) return;
+                MG_Pipe::MGPipeGetResourceOps()->Destroy(a);
+                for (int frame = 0; frame < 2; ++frame) {
+                    if (MG_Backend::DirectGLES::g_GLESFuncs.glFinish) MG_Backend::DirectGLES::g_GLESFuncs.glFinish();
+                    MG_Backend::DirectGLES::Present();
+                }
+            }
+            const Uint32 slot = arm == IdiomArm::PoolReuse ? 30u : 28u;
+            const MG_Pipe::MGPipeHandle b = DeclareBuffer(BufferDesc(slot, 64, false));
+            StageBytes(b, 0, 16, 0x77);
+            auto* twin = MG_Backend::DirectGLES::BufferImpl::EnsureBufferResourceForHandle(buffer, b); // the draw
+            if (twin == nullptr || twin->id == 0) return;
+            const auto& gl = MG_Backend::DirectGLES::g_GLESFuncs;
+            gl.glBindBuffer(GL_ARRAY_BUFFER, twin->id);
+            const auto* view = static_cast<const Uint8*>(gl.glMapBufferRange(GL_ARRAY_BUFFER, 0, 64, GL_MAP_READ_BIT));
+            if (view == nullptr) return;
+            ok = view[0] == 0x77 && view[15] == 0x77 && view[16] == 0 && view[63] == 0;
+            gl.glUnmapBuffer(GL_ARRAY_BUFFER);
+        });
+        ::_exit(ok ? 0 : 7);
+    }
+} // namespace
+
+// M-3, ROUND 3's RULE, positive direction (the round-2 refusal aborted six LargeArenaAdoption /
+// ResourceSubsystemControl entries on the joint by this exact name): the ordinary streaming idiom
+// through the RESPECIFY reader is uploaded, not refused. Red once by making the refusal
+// unconditional again (the descriptor's HasDefinedContent ignored): the child dies of
+// Fatal{StageSnapshotTooNarrow, "respecify_whole_store"} and the appended log names it.
+TEST(StagedShadowProductionTest, TheStreamingIdiomOrphanThenPartialSubDataIsUploadedNotRefused) {
+    {
+        EglServerFixture probe;
+        MGL_EGL_BRING_UP_OR_BAIL(probe);
+        probe.TearDown();
+    }
+    const SizeT mark = ReadLog().size();
+    EXPECT_EXIT(RunTheStreamingIdiomAndExit(IdiomArm::Respecify), ::testing::ExitedWithCode(0), ".*")
+        << "the streaming idiom - glBufferData(64, NULL), glBufferSubData(0, 16), draw - did not put "
+           "its 16 bytes and 48 undefined (zero) bytes into the driver's store through the respecify "
+           "reader: exit 7 is the wrong bytes, a signal is the whole-store refusal firing on a store "
+           "the application itself orphaned";
+    const std::string appended = ReadLogFrom(mark);
+    EXPECT_EQ(appended.find("Fatal{StageSnapshotTooNarrow"), std::string::npos)
+        << "the orphan-then-partial-subdata idiom was refused by name (M-3's whole-store refusal must "
+           "key on the descriptor's HasDefinedContent, not on the frontend flag a partial subdata "
+           "flips); the log says: " << appended;
+}
+
+// The same idiom through the POOL-REUSE reader: a 64-byte id retired to the pool by a previous
+// buffer's delete, handed to the orphaned store's first draw, seeded from the sparse shadow.
+TEST(StagedShadowProductionTest, TheStreamingIdiomThroughAPoolReuseIsUploadedNotRefused) {
+    {
+        EglServerFixture probe;
+        MGL_EGL_BRING_UP_OR_BAIL(probe);
+        probe.TearDown();
+    }
+    const SizeT mark = ReadLog().size();
+    EXPECT_EXIT(RunTheStreamingIdiomAndExit(IdiomArm::PoolReuse), ::testing::ExitedWithCode(0), ".*")
+        << "the streaming idiom through a recycled pool id did not put its 16 bytes and 48 undefined "
+           "(zero) bytes into the driver's store: exit 7 is the wrong bytes, a signal is the "
+           "whole-store refusal firing on a store the application itself orphaned";
+    const std::string appended = ReadLogFrom(mark);
+    EXPECT_EQ(appended.find("Fatal{StageSnapshotTooNarrow"), std::string::npos)
+        << "the orphan-then-partial-subdata idiom through a pool reuse was refused by name (M-3's "
+           "whole-store refusal must key on the descriptor's HasDefinedContent); the log says: "
+        << appended;
 }
 #endif // !_WIN32
 
