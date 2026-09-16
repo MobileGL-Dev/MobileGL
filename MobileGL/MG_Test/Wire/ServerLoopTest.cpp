@@ -32,20 +32,27 @@
 #include <MG_Backend/BackendObject.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Backend/DirectGLES/BackendObject_DirectGLES.h>
+#include <MG_Backend/DirectGLES/DirectGLES.h>
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectGLES/Utils.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
+#include <MG_Impl/Pipe/PipeFill.h>
 #include <MG_Pipe/MGPipe.h>
+#include <MG_Pipe/PipeApply.h>
 #include <MG_Remote/CapsCodec.h>
+#include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/Protocol/generated/protocol_generated.h>
 #include <MG_Remote/Server/PipeApplier.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Remote/Server/ServerSession.h>
 #include <MG_Remote/Server/StagedShadow.h>
 #include <MG_Remote/Transport/InProcessTransport.h>
+#include <MG_Remote/Transport/ReplySlot.h>
 #include <MG_Remote/Transport/Ring.h>
 #include <MG_Remote/Transport/SessionRings.h>
 #include <MG_Remote/Wire/PipeWireCodec.h>
+#include <MG_State/GLState/BufferState/BufferObject.h>
+#include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/TextureState/TextureEnum.h>
 #include <MGGitHash.h>
 
@@ -53,11 +60,13 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -67,6 +76,9 @@
 #include <process.h>
 #else
 #include <unistd.h>
+#endif
+#if defined(__linux__) || defined(__ANDROID__)
+#include <sched.h>
 #endif
 
 using namespace MobileGL;
@@ -103,7 +115,10 @@ namespace {
         sizes.CmdRingBytes = 64ull * 1024;
         sizes.StageBytes = 64ull * 1024;
         sizes.ReplyBytes = 64ull * 1024;
-        sizes.EventRingBytes = 16ull * 1024;
+        // 1 MiB, not 16 KiB: the EGL cases have the server republish its caps snapshot into the
+        // event ring several times with no client draining it, and a ring that fills would turn a
+        // "no republish" assertion into a ring-full one.
+        sizes.EventRingBytes = 1024ull * 1024;
         sizes.ReplySlotCount = 8;
         return sizes;
     }
@@ -262,20 +277,50 @@ TEST(ServerLoopTest, AControlRequestRunsOnTheApplyThreadAndUnparksIt) {
         std::thread::id ranOn{};
         Bool onApplyThread = false;
     } probe;
-    const MobileGLResult rc = loop.RunOnApplyThread(
-        +[](void* user) -> MobileGLResult {
-            auto* p = static_cast<Probe*>(user);
-            p->ranOn = std::this_thread::get_id();
-            p->onApplyThread = Server::ServerLoop::OnApplyThread();
-            return MOBILEGL_OK;
-        },
-        &probe);
+    // POSTED FROM A HELPER THREAD AND WAITED FOR WITH A DEADLINE (review v2 N-9). A park predicate
+    // that lost the control flag never un-parks the apply thread and the post blocks for ever; the
+    // case has to SAY that, in its own words, rather than hit ctest's timeout - a timeout is what an
+    // unrelated hang produces too. Stop() afterwards is what frees the helper: m_stopRequested is in
+    // the predicate, the thread exits, and its exit block answers the still-posted request
+    // NOT_INITIALIZED (C2's block), so the join below cannot wedge either.
+    MobileGLResult rc = MOBILEGL_ERR_INVALID_ARGUMENT;
+    std::atomic<Bool> answered{false};
+    std::thread::id posterId{};
+    std::thread poster([&] {
+        posterId = std::this_thread::get_id();
+        rc = loop.RunOnApplyThread(
+            +[](void* user) -> MobileGLResult {
+                auto* p = static_cast<Probe*>(user);
+                p->ranOn = std::this_thread::get_id();
+                p->onApplyThread = Server::ServerLoop::OnApplyThread();
+                return MOBILEGL_OK;
+            },
+            &probe);
+        answered.store(true, std::memory_order_release);
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!answered.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (!answered.load(std::memory_order_acquire)) {
+        ADD_FAILURE() << "a posted control request did not un-park the apply thread within 5 s: the park "
+                         "predicate no longer carries the control flag, so a Notify alone cannot break a "
+                         "kWaitForever park (Doorbell::Wait consumes it, re-tests a condition nothing "
+                         "published, and parks again)";
+        fixture.Stop();
+        poster.join();
+        return;
+    }
+    poster.join();
 
     EXPECT_EQ(rc, MOBILEGL_OK);
-    EXPECT_NE(probe.ranOn, std::this_thread::get_id())
+    // The CALLER is the poster thread, not the test thread (N-9 moved the post onto a helper).
+    EXPECT_NE(probe.ranOn, posterId)
         << "the control request ran on the CALLER, which means the EGL lifecycle calls would "
            "reach the driver from the app thread and the context would never migrate";
-    EXPECT_TRUE(probe.onApplyThread);
+    EXPECT_NE(probe.ranOn, std::this_thread::get_id());
+    EXPECT_TRUE(probe.onApplyThread)
+        << "the control request ran on the CALLER (OnApplyThread() answered false inside it)";
     EXPECT_FALSE(Server::ServerLoop::OnApplyThread());
 
     fixture.Stop();
@@ -366,13 +411,13 @@ TEST(ServerLoopTest, TheAffinityStringResolvesToAMaskAndTheMaskIsLogged) {
     MG_Config::Ipc.ServerAffinity = saved;
 }
 
-// M-4 / codex 11, the other half: an EXPLICIT mask must resolve to itself and be LOGGED as the
-// EFFECTIVE mask the kernel took, not the requested one. `off` -> 0 and `0x3` -> 0x3 are two
-// answers that must DIFFER, so the resolver cannot be a constant; and reading the mask back with
-// sched_getaffinity is what makes a cpuset that trimmed the request visible (codex 11), which the
-// requested-mask log hid. Red once by making ApplyAffinity return `requested`: the effective read
-// is what a trimmed request diverges from, and the explicit-mask assert is what catches a broken
-// resolver.
+// M-4, the explicit-mask half: an EXPLICIT mask the box can honour must resolve to itself and be
+// LOGGED. `off` -> 0 and `0x3` -> 0x3 are two answers that must DIFFER, so the resolver cannot be a
+// constant. This case does NOT gate codex 11's effective-mask read-back - on an unrestricted box the
+// request and the effective set are the same and `return requested` stays green here (review v2
+// item 6, which struck the claim the first version of this comment made); the read-back's own gate
+// is TheResolvedAffinityMaskIsTheKernelsEffectiveSetNotTheRequest below. Red once by making the
+// resolver return a constant 0: the explicit-mask assert reads 0.
 TEST(ServerLoopTest, TheExplicitAffinityMaskResolvesToItselfAndIsLogged) {
 #if defined(__linux__) || defined(__ANDROID__)
     if (std::thread::hardware_concurrency() < 2) {
@@ -454,7 +499,9 @@ TEST(ServerLoopTest, TheSessionWatermarkAndTheDecoderTallyAgreeAfterEveryRecord)
         EXPECT_EQ(fixture.session->Consumer().AppliedSeq(), static_cast<Uint64>(i + 1));
         EXPECT_EQ(fixture.session->Applier().DecoderAppliedSeq(), static_cast<Uint64>(i + 1));
     }
-    EXPECT_EQ(Server::ServerLoopInstance().DrainedRecords(), 8u);
+    EXPECT_EQ(Server::ServerLoopInstance().DrainedRecords(), 8u)
+        << "the loop's own record tally (DrainedRecords) did not move with the eight records it "
+           "applied, so the ordering-defect control has nothing of its own to hold against appliedSeq";
 
     // retiredSeq is the watermark w1's SEG_STAGE allocator reclaims against; a loop that
     // applies and never retires ends the first MOBILEGL_IPC_STAGE_MB in Fatal{RingOverrun}.
@@ -821,11 +868,11 @@ TEST(ServerLoopTest, TheServerFormatCapsAccessorReadsTheServersOwnBackendNotTheG
     MG_Backend::pActiveBackendObject.reset();
 }
 
-// C7 / ID-54: the make-current decision. A new tuple binds; an identical repeat is a no-op; a
-// release request (the three NO_* markers) is recorded, not forwarded. The native-bind COUNT is a
-// joint-lane control (it needs a real EGL context); this is the pure decision, which is what
-// keeps "the context is bound once and held for life" from being a per-call storm. Red once by
-// deleting the RepeatNoOp arm - an identical repeat then classifies as NativeBind.
+// C7 / ID-54: the make-current DECISION, pure. A new tuple binds; an identical repeat is a no-op; a
+// release request (the three NO_* markers) is recorded, not forwarded. The native-bind COUNT - what
+// the driver actually saw - is measured by ServerLoopEglTest's C7 control on a real context below,
+// which is the control round 2 said needed the joint lane. Red once by deleting the RepeatNoOp arm:
+// an identical repeat then classifies as NativeBind.
 TEST(ServerLoopTest, MakeCurrentClassifiesRepeatAndReleaseWithoutRebinding) {
     const EGLDisplay dpy = reinterpret_cast<EGLDisplay>(0x1);
     const EGLSurface draw = reinterpret_cast<EGLSurface>(0x2);
@@ -850,6 +897,886 @@ TEST(ServerLoopTest, MakeCurrentClassifiesRepeatAndReleaseWithoutRebinding) {
                                              EGL_NO_SURFACE, EGL_NO_CONTEXT),
               Server::EglBindAction::ClientRelease);
 }
+
+// =====================================================================================
+// Round 3: the gates the v2 review found missing (N-5), each driving the PRODUCTION wiring
+// =====================================================================================
+
+// M-6 (review v2 item 7): the fix is the ServerLoop::Stop() call INSIDE ShutdownSplitRoles, so the
+// gate calls ShutdownSplitRoles - not Stop - after the shape M-6 names: InitSplitRoles step 1 built
+// the server's private backend and step 3 (ClientSession::Start) failed EARLY. The failure is a real
+// one, not a skipped step: P5's client refuses every transport but InProcess by name, before Accept
+// and before any ring exists. Red once by deleting Init.cpp's `ServerLoopInstance().Stop()` line:
+// the backend outlives the shutdown and the next CreateBackend is refused.
+TEST(ServerLoopTest, ShutdownSplitRolesAfterAnEarlyStartFailureDropsTheServersPrivateBackend) {
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_EQ(loop.CreateBackend(BackendType::DirectGLES), MOBILEGL_OK);
+    ASSERT_NE(MobileGL::MG_Remote::Client::ClientSessionInstance().Start(MG_Config::TransportMode::Spawn, ""),
+              MOBILEGL_OK)
+        << "the forced early Start failure did not fail; the case has nothing to shut down after";
+    ASSERT_NE(loop.Backend(), nullptr);
+    ASSERT_FALSE(loop.Running());
+
+    MG_Backend::ShutdownSplitRoles();
+
+    EXPECT_EQ(loop.Backend(), nullptr)
+        << "ShutdownSplitRoles left the server's private backend alive after an early "
+           "ClientSession::Start failure (M-6): every later split bring-up in this process is refused "
+           "at CreateBackend's m_backend guard";
+    EXPECT_FALSE(loop.Running());
+    EXPECT_EQ(loop.CreateBackend(BackendType::DirectGLES), MOBILEGL_OK)
+        << "the leaked backend blocks the next split bring-up";
+    loop.Stop();
+}
+
+// codex 11 (review v2 item 6): the resolved mask must be the EFFECTIVE set the kernel took, read
+// back with sched_getaffinity, not the request. The review's point was that on an unrestricted box
+// the two never differ, so `return requested` stays green; this makes them differ without a cpuset:
+// the request names one cpu this thread may use (taken from the kernel's own answer, so the case
+// constructs nothing it observes) PLUS cpu 63, which does not exist on any box with fewer than 64
+// cpus. sched_setaffinity accepts the mask with the absent cpu dropped, so the effective set is the
+// one real cpu - and a resolver that echoes the request reports a cpu the thread can never run on.
+// Red once by making ApplyAffinity `return requested;`: the resolved mask reads 0x8000000000000001-
+// shaped instead of 0x1-shaped, and the log line names the wrong mask.
+#if defined(__linux__) || defined(__ANDROID__)
+TEST(ServerLoopTest, TheResolvedAffinityMaskIsTheKernelsEffectiveSetNotTheRequest) {
+    const unsigned hw = std::thread::hardware_concurrency();
+    if (hw == 0 || hw >= 64) {
+        GTEST_SKIP() << "needs a box with fewer than 64 cpus so that cpu 63 is absent (has " << hw << ")";
+    }
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+    ASSERT_EQ(sched_getaffinity(0, sizeof(allowed), &allowed), 0);
+    int usable = -1;
+    for (int cpu = 0; cpu < 63; ++cpu) {
+        if (CPU_ISSET(cpu, &allowed)) {
+            usable = cpu;
+            break;
+        }
+    }
+    if (usable < 0 || CPU_ISSET(63, &allowed)) {
+        GTEST_SKIP() << "this thread's allowed set is not the shape the case needs";
+    }
+    const Uint64 requested = (1ull << usable) | (1ull << 63);
+    const Uint64 effective = 1ull << usable;
+    char requestedText[40];
+    std::snprintf(requestedText, sizeof(requestedText), "0x%llx", static_cast<unsigned long long>(requested));
+    char effectiveLine[64];
+    std::snprintf(effectiveLine, sizeof(effectiveLine), "RESOLVED mask 0x%llx (0 = no affinity applied)",
+                  static_cast<unsigned long long>(effective));
+
+    const String saved = MG_Config::Ipc.ServerAffinity;
+    MG_Config::Ipc.ServerAffinity = requestedText;
+
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked());
+
+    EXPECT_EQ(Server::ServerLoopInstance().ResolvedAffinityMask(), effective)
+        << "the resolved affinity mask reports the REQUESTED set (" << requestedText
+        << ") rather than the effective one the kernel took: cpu 63 does not exist on this " << hw
+        << "-cpu box, sched_setaffinity dropped it, and codex 11's sched_getaffinity read-back is what "
+           "makes that visible";
+    const std::string log = ReadLog();
+    EXPECT_NE(log.find(effectiveLine), std::string::npos)
+        << "the logged RESOLVED mask is not the effective one (" << effectiveLine << ")";
+
+    fixture.Stop();
+    MG_Config::Ipc.ServerAffinity = saved;
+}
+#endif
+
+namespace {
+    // A second DirectGLES object whose format cache the case can FILL, so that the server's (empty,
+    // never InitCapabilities'd) cache and the global's answer differently. Filling an INPUT is not
+    // constructing the observed state (R-16): what is observed is which object each read follows.
+    struct CapsProbeBackend final : MG_Backend::DirectGLES::BackendObject_DirectGLES {
+        MG_Backend::FormatCapabilityCache& Caps() { return MutableFormatCapabilities(); }
+    };
+} // namespace
+
+// C6 (review v2 item 9): the seven table-3 reads, asserted by their ANSWERS with two objects
+// installed - not by the accessor's address, which is what round 2 gated and what reverting one
+// call site at a time never moved. The server's cache is empty; the global's is not.
+//
+// Four of the seven are VALUE reads and the two objects' caches disagree for them: the
+// HasCachedFormatCapability pair behind the caveat decision (Utils.cpp) and the
+// ClampSamplesToBackendSupport pair (BackendObject_DirectGLES.cpp). Two are NULL-CHECK reads -
+// GenerateFormatInfo's and BackendFormatAddsAlpha's "is there a backend at all" - which two live
+// objects cannot tell apart, so for those the global is NULL and the server is present, which is
+// exactly the window between InitSplitRoles step 1 (the server backend) and step 4 (the client
+// object) that the reads used to answer "no backend" in. The seventh, UsesWidenedPacked16NormStorage's
+// gate in front of a memoised driver probe, is a null check whose two arms give the same answer on
+// the reference rasterizer (the probe says "not mirrored", the no-backend arm says false); it has
+// no answer-level control on this box and the report says so.
+//
+// Red once, one site at a time: revert the HasCachedFormatCapability pair -> the caveat decision
+// follows the global; revert ClampSamples -> the clamp answers 6; revert GenerateFormatInfo's null
+// check -> RGB8 widens to RGBA8; revert BackendFormatAddsAlpha's -> adds-alpha answers true.
+TEST(ServerLoopTest, TheSevenFormatCapabilityReadsAnswerFromTheServersBackendNotTheGlobal) {
+    namespace TextureImpl = MG_Backend::DirectGLES::TextureImpl;
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_EQ(loop.CreateBackend(BackendType::DirectGLES), MOBILEGL_OK);
+    const SizeT tex2d = MG_Backend::GetFormatCapabilityTargetIndex(TextureTarget::Texture2D);
+    const SizeT rb = MG_Backend::GetRenderbufferFormatCapabilityTargetIndex();
+    const SizeT rgb8 = static_cast<SizeT>(TextureInternalFormat::RGB8);
+    const SizeT rgba8 = static_cast<SizeT>(TextureInternalFormat::RGBA8);
+
+    // (A) the global holds a DIFFERENT object whose cache says the opposite of "empty": RGB8 is
+    // caveat-only there, and RGBA8 was "probed" at six samples - a count no driver's own maximum
+    // is, so it cannot collide with the fallback the server's empty cache falls to.
+    auto client = MakeUnique<CapsProbeBackend>();
+    for (const SizeT target : {tex2d, rb}) {
+        client->Caps().CaveatCaps[target][rgb8] |= MG_Backend::FormatCapability::Creatable;
+        client->Caps().CaveatCaps[target][rgb8] |= MG_Backend::FormatCapability::FramebufferRenderable;
+        client->Caps().SampleCounts[target][rgba8] = {6, 2};
+    }
+    MG_Backend::pActiveBackendObject = std::move(client);
+
+    EXPECT_FALSE(TextureImpl::ShouldUseCaveatTextureFormat(TextureInternalFormat::RGB8, TextureTarget::Texture2D))
+        << "the caveat decision followed the global's cache (caveat-only RGB8), not the server's "
+           "(empty): the HasCachedFormatCapability pair reads pActiveBackendObject again";
+    EXPECT_FALSE(TextureImpl::ShouldUseCaveatRenderbufferFormat(TextureInternalFormat::RGB8))
+        << "the renderbuffer caveat decision followed the global's cache, not the server's";
+    EXPECT_NE(MG_Backend::DirectGLES::ClampSamplesToBackendSupport(tex2d, TextureInternalFormat::RGBA8, GL_RGBA8, 8), 6)
+        << "the sample clamp answered from the global's probed counts (6), not the server's";
+    EXPECT_NE(MG_Backend::DirectGLES::ClampSamplesToBackendSupport(rb, TextureInternalFormat::RGBA8, GL_RGBA8, 8), 6)
+        << "the renderbuffer sample clamp answered from the global's probed counts (6), not the server's";
+
+    // (B) the null-check reads: global NULL, server present. RGB8_SNORM, not RGB8: the fallback
+    // normalisation's three-channel widening is APPLICABLE to GL_RGB8_SNORM and not to GL_RGB8
+    // (TextureFormatProcessor.cpp's applicability table), so it is the format whose answer the
+    // "no backend" arm actually changes - the first cut of this case used RGB8 and both arms agreed.
+    MG_Backend::pActiveBackendObject.reset();
+    constexpr GLenum kGlRgb8Snorm = 0x8F96;
+    GLenum internalFormat = 0;
+    GLenum format = 0;
+    GLenum type = 0;
+    TextureImpl::GenerateTextureFormatInfo(TextureInternalFormat::RGB8Snorm, &internalFormat, &format, &type,
+                                           TextureTarget::Texture2D);
+    EXPECT_EQ(internalFormat, kGlRgb8Snorm)
+        << "the format info followed the global (null, so the fallback normalisation widened RGB8_SNORM) "
+           "instead of the server's backend (present, so native RGB8_SNORM); got 0x" << std::hex
+        << internalFormat;
+    EXPECT_FALSE(TextureImpl::BackendTextureFormatAddsAlpha(TextureInternalFormat::RGB8Snorm, TextureTarget::Texture2D))
+        << "the adds-alpha answer followed the global (null, so the fallback adds alpha) instead of "
+           "the server's backend";
+    EXPECT_FALSE(TextureImpl::BackendRenderbufferFormatAddsAlpha(TextureInternalFormat::RGB8Snorm))
+        << "the renderbuffer adds-alpha answer followed the global (null) instead of the server's backend";
+
+    loop.Stop();
+}
+
+// =====================================================================================
+// The EGL fixture: the SERVER's real DirectGLES backend, a real headless context (mesa
+// surfaceless, llvmpipe) on the apply thread, driven only through v1's twelve forwarders
+// =====================================================================================
+//
+// Round 2 shipped its C7, M-3 and m-5 claims with the caveat "the native count is a joint-lane
+// control (needs a real EGL context)", and the review answered that nothing then gates them. This
+// fixture is the answer to that: the server role's own backend, brought up exactly the way
+// InitSplitRoles and the client's EGL virtuals bring it up - CreateBackend on the app thread, then
+// InitializeEGLDisplay / CreateEGLPbufferSurface / MakeEGLCurrent as BLOCKING control requests on
+// mgl-srv-apply - with no client object, no emit table and no scenario. What the joint lane adds is
+// c1's client; what it does not add is anything these cases observe: the driver's own eglMakeCurrent
+// count, the applier's read_pixels reply, and the backend's buffer twins.
+//
+// THE NATIVE COUNT IS READ WHERE THE DRIVER READS IT. DirectGLES dispatches every EGL call through
+// its function table (g_EGLFuncs, filled by BackendObject_DirectGLES::Initialize); the fixture puts
+// a counting trampoline in front of that table's eglMakeCurrent and forwards to the driver's entry
+// point. Nothing in the production tree is edited or told, and no production counter is trusted for
+// this number - ServerLoop::NativeBindCount() is the forwarder's view, and the whole point of the C7
+// control is that the two can disagree (they did: 2 native binds per process with the forwarder
+// counting 1, review v2 item 10).
+//
+// NO USABLE EGL IS A SKIP, UNLESS MOBILEGL_ITEST_REQUIRE_GPU SAYS OTHERWISE - the integration
+// harness's own rule (ScenarioFixture.h): a developer box without mesa should not fail a run it could
+// not perform, but a lane that relies on these cases sets the variable, and then an unusable EGL is
+// a FAILURE naming the step, never a green that ran nothing (review v2 N-1's lesson).
+#if !defined(_WIN32)
+namespace {
+
+    std::atomic<int> g_nativeEglBinds{0};
+    std::atomic<int> g_nativeEglReleases{0};
+    decltype(MG_Backend::DirectGLES::g_EGLFuncs.eglMakeCurrent) g_driverEglMakeCurrent = nullptr;
+
+    EGLBoolean CountingEglMakeCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
+        if (ctx == EGL_NO_CONTEXT) {
+            g_nativeEglReleases.fetch_add(1, std::memory_order_acq_rel);
+        } else {
+            g_nativeEglBinds.fetch_add(1, std::memory_order_acq_rel);
+        }
+        return g_driverEglMakeCurrent(dpy, draw, read, ctx);
+    }
+
+    Bool RequireGpuFromEnvironment() {
+        const char* value = std::getenv("MOBILEGL_ITEST_REQUIRE_GPU");
+        return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+    }
+
+    // The integration harness's headless pin (HeadlessGL.cpp, EnsureHeadlessPlatform), for the same
+    // reason: mesa's surfaceless platform needs no display, and glvnd has to be told which vendor to
+    // load. The vendor json is the one MG_IntegrationTest/CMakeLists.txt pins by default; an operator
+    // who set __EGL_VENDOR_LIBRARY_FILENAMES keeps theirs.
+    void PinHeadlessEglEnvironment() {
+        if (std::getenv("EGL_PLATFORM") == nullptr) setenv("EGL_PLATFORM", "surfaceless", 1);
+        unsetenv("DISPLAY");
+        unsetenv("WAYLAND_DISPLAY");
+        if (std::getenv("__EGL_VENDOR_LIBRARY_FILENAMES") == nullptr) {
+            const char* mesa = "/usr/share/glvnd/egl_vendor.d/50_mesa.json";
+            std::error_code ec;
+            if (std::filesystem::exists(mesa, ec)) setenv("__EGL_VENDOR_LIBRARY_FILENAMES", mesa, 1);
+        }
+    }
+
+    // A control request that runs an arbitrary callable on the apply thread. A std::function is
+    // fine in a test; production's ControlWork is a raw pointer for the teardown path's sake.
+    MobileGLResult OnApply(const std::function<void()>& body) {
+        std::function<void()> copy = body;
+        return Server::ServerLoopInstance().RunOnApplyThread(
+            +[](void* user) -> MobileGLResult {
+                (*static_cast<std::function<void()>*>(user))();
+                return MOBILEGL_OK;
+            },
+            &copy);
+    }
+
+    struct EglServerFixture : ServerFixture {
+        // The client's VIRTUAL handles. EGLImpl mints small integers, and every one of them is 0x1
+        // on this host (the N-3 finding's whole point), so the cases use exactly that shape.
+        static EGLDisplay Dpy() { return reinterpret_cast<EGLDisplay>(static_cast<std::uintptr_t>(0x1)); }
+        static EGLSurface Surf() { return reinterpret_cast<EGLSurface>(static_cast<std::uintptr_t>(0x1)); }
+        static EGLContext Ctx() { return reinterpret_cast<EGLContext>(static_cast<std::uintptr_t>(0x1)); }
+
+        // The backend's draw-shaped paths (ReadPixels syncs the bound textures and the read
+        // framebuffer) walk the process's frontend GLContext, which a bare unit process does not
+        // have; installed for the case's life and put back afterwards (SplitBufferTest's shape).
+        UniquePtr<MG_State::GLState::GLContext> savedContext;
+
+        // Empty on success, else the step that failed - the harness's SkipReason shape.
+        std::string BringUp() {
+            PinHeadlessEglEnvironment();
+            savedContext = Move(MG_State::pGLContext);
+            MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+            Server::ServerLoop& loop = Server::ServerLoopInstance();
+            // InitSplitRoles step 1: the server's private backend, no GL and no EGL yet; its
+            // Initialize() loads the driver's EGL/GLES entry points into the two tables.
+            if (loop.CreateBackend(BackendType::DirectGLES) != MOBILEGL_OK) return "CreateBackend refused";
+            const MG_External::EGLFunctionsTable& egl = MG_Backend::DirectGLES::g_EGLFuncs;
+            if (egl.eglMakeCurrent == nullptr) return "libEGL did not load (no eglMakeCurrent entry point)";
+            if (egl.eglMakeCurrent != &CountingEglMakeCurrent) g_driverEglMakeCurrent = egl.eglMakeCurrent;
+            g_nativeEglBinds.store(0);
+            g_nativeEglReleases.store(0);
+            MG_External::EGLFunctionsTable counted = egl;
+            counted.eglMakeCurrent = &CountingEglMakeCurrent;
+            MG_Backend::DirectGLES::SetEGLFuncsTable(counted);
+            // InitSplitRoles step 2: the session answers its caps snapshots from this backend, so
+            // ServerMakeEGLCurrent's R-12 republish has something to publish (ID-67's control).
+            Server::ServerSessionInstance().SetBackend(loop.Backend());
+            if (!Handshake()) return "the session handshake";
+            if (!StartLoop()) return "ServerLoop::Start";
+            EGLint major = 0;
+            EGLint minor = 0;
+            if (!Server::ServerInitializeEGLDisplay(Dpy(), &major, &minor)) return "ServerInitializeEGLDisplay";
+            // THE SURFACE'S OWN CREATION is what binds natively (InitPbufferSurface -> MakeCurrent).
+            if (!Server::ServerCreateEGLPbufferSurface(Surf(), 64, 64)) {
+                return "ServerCreateEGLPbufferSurface - no usable headless EGL (EGL_PLATFORM=surfaceless, "
+                       "__EGL_VENDOR_LIBRARY_FILENAMES -> mesa/llvmpipe) on this box";
+            }
+            return {};
+        }
+
+        Bool MakeCurrent() { return Server::ServerMakeEGLCurrent(Dpy(), Surf(), Surf(), Ctx()); }
+        Bool ReleaseCurrent() {
+            return Server::ServerMakeEGLCurrent(Dpy(), EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        }
+
+        void TearDown() {
+            Server::ServerReleaseEGLResources();
+            Stop();
+            // The backend Stop() just destroyed must not be the session's answer for the next case.
+            Server::ServerSessionInstance().SetBackend(nullptr);
+            MG_State::pGLContext = Move(savedContext);
+        }
+    };
+
+// FAIL() and GTEST_SKIP() both return from the enclosing void test body.
+#define MGL_EGL_BRING_UP_OR_BAIL(fixture)                                                             \
+    do {                                                                                              \
+        const std::string why = (fixture).BringUp();                                                  \
+        if (!why.empty()) {                                                                           \
+            (fixture).Stop();                                                                         \
+            MG_State::pGLContext = Move((fixture).savedContext);                                      \
+            if (RequireGpuFromEnvironment()) {                                                        \
+                FAIL() << "MOBILEGL_ITEST_REQUIRE_GPU is set, so the server's EGL bring-up failing is " \
+                          "a failure, not a skip. It failed at: "                                     \
+                       << why;                                                                        \
+            }                                                                                         \
+            GTEST_SKIP() << "no usable headless EGL for the server backend: " << why;                 \
+        }                                                                                             \
+    } while (0)
+
+    // The production shape of a buffer under split, step by step through the applier's own entry
+    // points and the REAL op table (Initialize registered it): resource_create mints the record,
+    // resource_respecify stores the descriptor - its bytes never cross under split (table 1 row 19),
+    // they arrive as resource_subdata right behind it - and resource_subdata stages bytes into the
+    // server shadow, minting the twin if no draw has (ID-52 item 3). `definedContent` is the
+    // descriptor's HasDefinedContent: what glBufferData(size, data) sets and glBufferData(size, NULL)
+    // clears.
+    MG_Pipe::MGPResourceDesc BufferDesc(Uint32 slot, Uint32 width, Bool definedContent) {
+        MG_Pipe::MGPResourceDesc desc{};
+        desc.Resource = MG_Pipe::MGPipeHandle{slot, 1};
+        desc.Target = MG_Pipe::kMGPipeResourceTargetBuffer;
+        desc.Width = width;
+        desc.Height = 1;
+        desc.Depth = 1;
+        desc.ArrayLayers = 1;
+        desc.Levels = 1;
+        desc.Samples = 1;
+        desc.Usage = static_cast<Uint32>(BufferUsage::StaticDraw);
+        desc.HasDefinedContent = definedContent ? 1 : 0;
+        return desc;
+    }
+
+    MG_Pipe::MGPipeHandle DeclareBuffer(const MG_Pipe::MGPResourceDesc& desc) {
+        EXPECT_TRUE(MG_Pipe::MGPipeApplyResourceCreate(desc)) << "resource_create refused slot " << desc.Resource.Slot;
+        EXPECT_TRUE(MG_Pipe::MGPipeApplyResourceRespecify(desc, nullptr)) << "resource_respecify refused";
+        return desc.Resource;
+    }
+
+    void StageBytes(MG_Pipe::MGPipeHandle res, SizeT offset, SizeT size, Uint8 fill) {
+        const MG_Pipe::MGPipeResourceOps* ops = MG_Pipe::MGPipeGetResourceOps();
+        ASSERT_NE(ops, nullptr) << "no resource op table is registered";
+        ASSERT_NE(ops->SubData, nullptr);
+        Vector<Uint8> bytes(size, fill);
+        MG_Pipe::MGPSubData rec{};
+        rec.Res = res;
+        rec.Target = MG_Pipe::MGPipePackSubDataTarget(MG_Pipe::kMGPipeResourceTargetBuffer, 0u);
+        ASSERT_TRUE(MG_Pipe::MGPipeSetSubDataBufferRange(rec, offset, size));
+        ops->SubData(res, rec, bytes.data());
+    }
+
+    MG_Backend::DirectGLES::BufferImpl::GLESBufferResource* Ensure(MG_Pipe::MGPipeHandle res) {
+        return MG_Backend::DirectGLES::BufferImpl::EnsureBufferResourceForHandle({}, res);
+    }
+
+    MG_Backend::DirectGLES::BufferImpl::GLESBufferResource* Twin(MG_Pipe::MGPipeHandle res) {
+        return MG_Backend::DirectGLES::BufferImpl::FindBufferResourceForHandle(res);
+    }
+
+} // namespace
+
+// C7 / ID-54, THE NATIVE HALF, measured where the review said it was not: at the driver. Surface
+// creation binds the context natively on the apply thread (that is bind #1 of the "2 per process"
+// the review counted); the client's first eglMakeCurrent onto that surface used to be bind #2 and is
+// now deduped by BackendObject_DirectGLES's ID-54 arm; an identical repeat is a forwarder-level
+// RepeatNoOp; a client release-current is recorded and never reaches the driver; a bind after the
+// release is a RepeatNoOp again because the driver never lost the context. ONE native bind, ZERO
+// native releases, and the apply thread is still the owner at the end. Red once, three ways: (a) make
+// ApplyMakeCurrent ignore the classification (the repeat is forwarded and the release reaches the
+// driver), (b) make the backend's native call unconditional again (2 native binds), (c) forward the
+// ClientRelease arm to the backend (1 native release).
+TEST(ServerLoopEglTest, MakeCurrentBindsNativelyOncePerContextAndNeverForwardsAClientRelease) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+
+    ASSERT_EQ(g_nativeEglBinds.load(), 1) << "the surface's own creation did not bind natively exactly once";
+    ASSERT_EQ(loop.NativeBindCount(), 0u);
+
+    ASSERT_TRUE(fixture.MakeCurrent());
+    EXPECT_EQ(g_nativeEglBinds.load(), 1)
+        << "the client's first make-current cost a second native eglMakeCurrent on a surface its own "
+           "creation had already made current on this thread (ID-54: bind once per tuple)";
+    EXPECT_EQ(loop.NativeBindCount(), 1u) << "the first make-current was not forwarded at all";
+
+    ASSERT_TRUE(fixture.MakeCurrent());
+    EXPECT_EQ(loop.NativeBindCount(), 1u)
+        << "an identical repeat make-current was forwarded as a native bind; the owner slot would be "
+           "written again and the caches invalidated for nothing";
+    EXPECT_EQ(g_nativeEglBinds.load(), 1);
+
+    ASSERT_TRUE(fixture.ReleaseCurrent());
+    EXPECT_EQ(loop.ClientReleaseCount(), 1u) << "the client release-current was not recorded";
+    EXPECT_EQ(g_nativeEglReleases.load(), 0)
+        << "a client release-current reached the driver as eglMakeCurrent(NO_CONTEXT): the apply thread "
+           "lost the context it holds for life (ID-54: never unbind on a client release)";
+
+    ASSERT_TRUE(fixture.MakeCurrent());
+    EXPECT_EQ(loop.NativeBindCount(), 1u) << "a bind after the recorded, unforwarded release was forwarded again";
+    EXPECT_EQ(g_nativeEglBinds.load(), 1);
+
+    // The owner is still the apply thread by EGL ground truth (IsBackendContextCurrentOnThisThread
+    // re-verifies against eglGetCurrentContext), and not this thread.
+    Bool ownerIsApplyThread = false;
+    ASSERT_EQ(OnApply([&] { ownerIsApplyThread = MG_Backend::DirectGLES::IsBackendContextCurrentOnThisThread(); }),
+              MOBILEGL_OK);
+    EXPECT_TRUE(ownerIsApplyThread) << "after the sequence the apply thread no longer owns the context";
+    EXPECT_FALSE(MG_Backend::DirectGLES::IsBackendContextCurrentOnThisThread()) << "the app thread owns the context";
+
+    fixture.TearDown();
+}
+
+// ID-67: an IDENTICAL tuple is a native no-op AND publishes no caps snapshot (the client's mirror
+// generation must not move, nothing accumulates); a DIFFERENT tuple - a second MobileGL context onto
+// the same surface, the same driver triple - is a real native bind AND a republish (R-12 arm (a)),
+// so the client adopts it without a pump or a Present. Both halves measured: native binds at the EGL
+// table, republishes at ServerMakeEGLCurrent's own tally. Red once, three ways: make the backend's
+// skip answer "same tuple" for any tuple (the different tuple stays at 1 native bind), republish on
+// a repeat (the repeat reads 2 republishes), republish only on the first bind (the different tuple
+// reads 1).
+TEST(ServerLoopEglTest, ADifferentTupleBindsNativelyAndRepublishesAnIdenticalRepeatDoesNeither) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    const EGLDisplay dpy = EglServerFixture::Dpy();
+    const EGLSurface surf = EglServerFixture::Surf();
+    const EGLContext ctxA = EglServerFixture::Ctx();
+    const EGLContext ctxB = reinterpret_cast<EGLContext>(static_cast<std::uintptr_t>(0x2));
+    ASSERT_EQ(g_nativeEglBinds.load(), 1) << "the surface's own creation did not bind natively exactly once";
+    ASSERT_EQ(loop.MakeCurrentRepublishCount(), 0u);
+
+    // The first tuple adopts the creation's bind, and republishes (InitCapabilities has now run).
+    ASSERT_TRUE(Server::ServerMakeEGLCurrent(dpy, surf, surf, ctxA));
+    EXPECT_EQ(g_nativeEglBinds.load(), 1);
+    EXPECT_EQ(loop.MakeCurrentRepublishCount(), 1u)
+        << "the first make-current did not republish the caps snapshot (R-12 arm (a))";
+
+    // Identical: 0 native binds, 0 republishes.
+    ASSERT_TRUE(Server::ServerMakeEGLCurrent(dpy, surf, surf, ctxA));
+    EXPECT_EQ(g_nativeEglBinds.load(), 1) << "an identical repeat bound natively";
+    EXPECT_EQ(loop.MakeCurrentRepublishCount(), 1u)
+        << "an identical repeat republished the caps snapshot: the client's mirror generation moved "
+           "for nothing and unpumped snapshots accumulate (ID-67)";
+
+    // Different (a second context onto the same surface): 1 native bind, 1 republish.
+    ASSERT_TRUE(Server::ServerMakeEGLCurrent(dpy, surf, surf, ctxB));
+    EXPECT_EQ(g_nativeEglBinds.load(), 2)
+        << "a make-current with a DIFFERENT tuple (a second context onto the same surface) did not "
+           "bind natively: DirectGLES's invalidations for the new frontend context never ran (ID-67)";
+    EXPECT_EQ(loop.NativeBindCount(), 2u);
+    EXPECT_EQ(loop.MakeCurrentRepublishCount(), 2u)
+        << "a make-current with a different tuple did not republish the caps snapshot; the client "
+           "would adopt nothing without a pump or a Present (R-12 arm (a), ID-67)";
+
+    // Identical again, then back to the first: 0 + 0, then 1 + 1.
+    ASSERT_TRUE(Server::ServerMakeEGLCurrent(dpy, surf, surf, ctxB));
+    EXPECT_EQ(g_nativeEglBinds.load(), 2);
+    EXPECT_EQ(loop.MakeCurrentRepublishCount(), 2u);
+    ASSERT_TRUE(Server::ServerMakeEGLCurrent(dpy, surf, surf, ctxA));
+    EXPECT_EQ(g_nativeEglBinds.load(), 3);
+    EXPECT_EQ(loop.NativeBindCount(), 3u);
+    EXPECT_EQ(loop.MakeCurrentRepublishCount(), 3u);
+
+    fixture.TearDown();
+}
+
+// N-3: a destroy-recreate with the SAME handle values must be a real bind again. Before the fix the
+// tuple survived ServerReleaseEGLResources, the recreated context's first make-current classified as
+// a RepeatNoOp, nothing ran in the base class (no InitCapabilities, no current-thread record) and no
+// caps were republished - a silent no-context-current from the forwarder's point of view, visible
+// only as the next swap failing. Red once by deleting the ForgetCurrentTuple() calls the forwarders
+// make: NativeBindCount() stays 1 and the swap after the re-create fails.
+TEST(ServerLoopEglTest, ADestroyedContextForgetsTheTupleSoTheSameHandleValuesBindAgain) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_TRUE(fixture.MakeCurrent());
+    ASSERT_EQ(loop.NativeBindCount(), 1u);
+    ASSERT_TRUE(Server::ServerSwapEGLBuffers(EglServerFixture::Dpy(), EglServerFixture::Surf()))
+        << "the swap BEFORE the destroy failed, so the case could not tell lost bookkeeping from a swap "
+           "that never worked";
+    ASSERT_EQ(g_nativeEglBinds.load(), 1);
+
+    // The context goes (DestroyEGLContext on the apply thread) and comes back under the same
+    // handle values.
+    Server::ServerReleaseEGLResources();
+    EGLint major = 0;
+    EGLint minor = 0;
+    ASSERT_TRUE(Server::ServerInitializeEGLDisplay(EglServerFixture::Dpy(), &major, &minor));
+    ASSERT_TRUE(Server::ServerCreateEGLPbufferSurface(EglServerFixture::Surf(), 64, 64));
+    ASSERT_EQ(g_nativeEglBinds.load(), 2) << "the recreated surface did not bind natively";
+
+    ASSERT_TRUE(fixture.MakeCurrent());
+    EXPECT_EQ(loop.NativeBindCount(), 2u)
+        << "the make-current after a destroy-recreate with the same handle values was classified as a "
+           "RepeatNoOp: the tuple outlived the context it named (N-3), so no base-class bookkeeping "
+           "ran and the caps snapshot was not republished";
+    EXPECT_TRUE(Server::ServerSwapEGLBuffers(EglServerFixture::Dpy(), EglServerFixture::Surf()))
+        << "the swap after the re-create failed: BackendObject::SwapEGLBuffers found no current-thread "
+           "record, because the make-current that should have made one was treated as a repeat";
+    EXPECT_EQ(g_nativeEglBinds.load(), 2) << "one native bind per context lifetime, not more";
+
+    fixture.TearDown();
+}
+
+// ID-49's tight-size half, gated (review v2 N-5: "nothing, unit and joint"). The client's DstSize is
+// deliberately WRONG - 80, the size a ROW_LENGTH=8 / SKIP_* client would compute for a 4x3 RGBA8
+// read whose tight extent is 48 - and the reply must still be the tight 48 bytes: posted at 48,
+// counted at 48, read into a scratch that grew to 48 and never to the client's 80, and stamped 48 in
+// the slot header the client reads. Red once, three ways: post at info.DstSize, size the scratch from
+// info.DstSize, compute `tight` from info.DstSize.
+TEST(ServerLoopEglTest, AReadPixelsReplyIsTheTightExtentWhateverDstSizeTheClientSent) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    ASSERT_TRUE(fixture.MakeCurrent());
+
+    // THE CLIENT'S HALF OF THE VERB, exactly as glReadPixels runs it before it reaches a backend
+    // (MGP_FILL(ReadPixels) in MG_Impl): the validate point fills gPipeInputs' residual fields
+    // from the frontend context - the texture-unit base, the bound framebuffers, the pack state
+    // - which the server's ReadPixels reads BARRIER-PULLED under R-1 while the client is parked
+    // in the barrier (PipeInputs.h's class table). Without it the apply thread reads a block
+    // nobody filled and walks a null texture-unit base; with it the case drives the same two
+    // halves the inproc lane drives, in the same order, on the same process-wide block.
+    MG_Pipe::MGPipeValidateForVerb(MG_Pipe::MGPipeVerb::ReadPixels);
+
+    MG_Pipe::MGPReadbackInfo info{};
+    info.Res = MG_Pipe::kMGPipeNullHandle; // read_pixels: the bound read surface answers
+    info.Box = MG_Pipe::MGPBox{0, 0, 0, 4, 3, 1};
+    info.Format = 0x1908; // GL_RGBA
+    info.Type = 0x1401;   // GL_UNSIGNED_BYTE
+    info.DstSize = 80;    // wrong on purpose; tight is 4 * 3 * 4 = 48
+    const Uint64 seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::ReadPixels, &info, sizeof(info));
+    ASSERT_NE(seq, Codec::kInvalidSeq);
+    fixture.encoder.Publish();
+    fixture.producer.PublishAndNotify(seq);
+    ASSERT_EQ(fixture.producer.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
+
+    const Server::ServerVerbSink& verbs = fixture.session->Applier().Verbs();
+    ASSERT_EQ(verbs.Readbacks(), 1u) << "the read_pixels record was declined or errored rather than applied";
+    EXPECT_EQ(verbs.ReadbackBytes(), 48u)
+        << "the reply was posted at the client's DstSize (80), not the tight w*h*bpp extent (48) (ID-49)";
+    EXPECT_EQ(verbs.ReadbackScratchBytes(), 48u)
+        << "the scratch was sized from the client's DstSize rather than the tight extent; a DstSize "
+           "smaller than tight would then be the heap overflow codex 1 found";
+
+    // And through the client's own view of the slot: the seq stamped back, OK, 48 bytes.
+    Transport::ReplySlotPool replies(fixture.clientSegments.ReplyBase(), fixture.clientSegments.ReplyBytes(),
+                                     fixture.clientSegments.ReplySlotCount());
+    ASSERT_TRUE(replies.Valid());
+    Vector<Uint8> pixels(128, 0);
+    Int32 status = -1;
+    Uint64 size = 0;
+    EXPECT_TRUE(replies.Read(seq, pixels.data(), pixels.size(), &status, &size));
+    EXPECT_EQ(status, static_cast<Int32>(Transport::kReplyStatusOk));
+    EXPECT_EQ(size, 48u) << "the slot header carries the client's DstSize, not the tight extent";
+
+    fixture.TearDown();
+}
+
+// M-3 / codex 4, the POOL-REUSE reader (review v2 item 4: "nothing can notice it going away"). The
+// production sequence, on the real op table and the real backend: A - glBufferData(64, data), drawn
+// (ensured), then deleted on the apply thread, so its id retires into the buffer pool; two presents
+// with a finish between them move the frame-completion watermark past the id's retire serial, which
+// is the pool's hand-out rule. B - glBufferData(64, data2), whose 64 bytes cross as resource_subdata
+// behind the respecify (table 1 row 19) - and only 16 of them arrive, the MISSING-RECORD shape. B's
+// first ensure finds A's id in the pool and would seed the driver's whole 64-byte store from a shadow
+// 48 bytes of which nothing staged. The refusal fires BEFORE the glBufferSubData, so the forked
+// child - whose only thread is a copy of this one and holds no context - reaches it with no GL call
+// that matters (a no-context call dispatches to a no-op). Red once by deleting the pool-reuse
+// MGL_SERVER_STAGED_REQUIRE: the child seeds the store and does not die. (The ORPHANED shape of the
+// same sequence, glBufferData(64, NULL) + 16 bytes, must NOT die: TheStreamingIdiom... below.)
+TEST(StagedShadowProductionTest, ASparseShadowForcedThroughAPoolReuseUploadIsFatalByName) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    ASSERT_TRUE(fixture.MakeCurrent());
+
+    const MG_Pipe::MGPipeHandle a = DeclareBuffer(BufferDesc(21, 64, true));
+    StageBytes(a, 0, 64, 0x11);
+    Bool aEnsured = false;
+    ASSERT_EQ(OnApply([&] {
+                  aEnsured = Ensure(a) != nullptr;
+                  MG_Pipe::MGPipeGetResourceOps()->Destroy(a);
+                  for (int frame = 0; frame < 2; ++frame) {
+                      if (MG_Backend::DirectGLES::g_GLESFuncs.glFinish) MG_Backend::DirectGLES::g_GLESFuncs.glFinish();
+                      MG_Backend::DirectGLES::Present();
+                  }
+              }),
+              MOBILEGL_OK);
+    ASSERT_TRUE(aEnsured) << "A's ensure minted no storage, so nothing retired into the pool";
+
+    const MG_Pipe::MGPipeHandle b = DeclareBuffer(BufferDesc(22, 64, true));
+    StageBytes(b, 0, 16, 0x22);
+    ASSERT_NE(Twin(b), nullptr) << "the subdata did not mint B's twin (ID-52 item 3)";
+    ASSERT_EQ(Twin(b)->id, 0u) << "B already has a store; the pool-reuse arm cannot be reached";
+
+    EXPECT_EXIT(Ensure(b), ::testing::KilledBySignal(SIGABRT), ".*");
+    const std::string log = ReadLog();
+    EXPECT_NE(log.find("Fatal{StageSnapshotTooNarrow, \"pool_reuse_whole_store\"}"), std::string::npos)
+        << "the abort was not the pool-reuse reader's coverage refusal (M-3); the log says: " << log;
+
+    fixture.TearDown();
+}
+
+// M-3 / codex 4, the RESPECIFY reader. A - glBufferData(64, data), drawn (ensured: id, storage,
+// serial all current). Then glBufferData(64, data2) again, whose bytes do not cross (table 1 row 19):
+// the record says "defined content", the old shadow is dropped, the store is pending a respecify -
+// and only 16 of the 64 bytes then arrive, staged from the app thread the way the applier queues
+// them off the context thread. The next ensure would RespecifyStorageWith(initialData = the sparse
+// shadow) over the whole store. The refusal fires before that glBufferData. Red once by deleting the
+// respecify MGL_SERVER_STAGED_REQUIRE.
+TEST(StagedShadowProductionTest, ASparseShadowForcedThroughAStorageRespecifyIsFatalByName) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    ASSERT_TRUE(fixture.MakeCurrent());
+
+    const MG_Pipe::MGPResourceDesc desc = BufferDesc(23, 64, true);
+    const MG_Pipe::MGPipeHandle res = DeclareBuffer(desc);
+    StageBytes(res, 0, 64, 0x33);
+    Bool ensured = false;
+    ASSERT_EQ(OnApply([&] { ensured = Ensure(res) != nullptr; }), MOBILEGL_OK);
+    ASSERT_TRUE(ensured);
+    ASSERT_NE(Twin(res)->id, 0u);
+
+    // Off the context thread on purpose (the apply thread is parked): the respecify takes the
+    // "cannot touch GL now" arm and leaves the store PENDING, exactly as an emitted record does.
+    ASSERT_TRUE(MG_Pipe::MGPipeApplyResourceRespecify(desc, nullptr));
+    ASSERT_TRUE(Twin(res)->pendingRespecify) << "the respecify did not leave the store pending";
+    StageBytes(res, 0, 16, 0x44);
+
+    EXPECT_EXIT(Ensure(res), ::testing::KilledBySignal(SIGABRT), ".*");
+    const std::string log = ReadLog();
+    EXPECT_NE(log.find("Fatal{StageSnapshotTooNarrow, \"respecify_whole_store\"}"), std::string::npos)
+        << "the abort was not the respecify reader's coverage refusal (M-3); the log says: " << log;
+
+    fixture.TearDown();
+}
+
+// M-1 / codex 8, THE COVERAGE HALF (review v2 item 2: "gated nowhere"). glBufferData(64, NULL) +
+// glBufferSubData(0, 16) + a draw: the shadow covers [0, 16) and the NULL respecify seeds nothing, so
+// that is legal. Then a resource_flush_range over [16, 48) with no bytes (that is what the row
+// carries under split, item 12) queues a range NOTHING STAGED, and the next draw-time drain would
+// take it through the three-tier ladder - whose tier 1 is a range-invalidating map that declares
+// the old bytes dead. RequireStagedCoverageForPendingRanges refuses before the drain, by name. Red
+// once by neutering its loop body: the child then dies one tier later, inside UploadRangeFrom's own
+// check, with a DIFFERENT site name - which this assertion refuses - or, on the tier-1 map, not at
+// all.
+TEST(StagedShadowProductionTest, AQueuedRangeOutsideTheStagedCoverageIsFatalAtTheDrainByName) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    ASSERT_TRUE(fixture.MakeCurrent());
+
+    const MG_Pipe::MGPipeHandle res = DeclareBuffer(BufferDesc(24, 64, false));
+    StageBytes(res, 0, 16, 0x55);
+    Bool ensured = false;
+    ASSERT_EQ(OnApply([&] { ensured = Ensure(res) != nullptr; }), MOBILEGL_OK);
+    ASSERT_TRUE(ensured);
+    ASSERT_NE(Twin(res)->id, 0u);
+    ASSERT_FALSE(Twin(res)->pendingRespecify);
+
+    MG_Pipe::MGPFlushRange flush{};
+    flush.Res = res;
+    flush.Offset = 16;
+    flush.Size = 32;
+    MG_Pipe::MGPipeGetResourceOps()->FlushRange(res, flush, nullptr); // off the context thread: queued
+    ASSERT_FALSE(Twin(res)->pendingRanges.empty()) << "the flush queued nothing, so no drain is owed";
+
+    EXPECT_EXIT(Ensure(res), ::testing::KilledBySignal(SIGABRT), ".*");
+    const std::string log = ReadLog();
+    EXPECT_NE(log.find("Fatal{StageSnapshotTooNarrow, \"ensure_flush_pending\"}"), std::string::npos)
+        << "the abort was not the pending-coverage clamp's (M-1, RequireStagedCoverageForPendingRanges); "
+           "the log says: " << log;
+
+    fixture.TearDown();
+}
+
+// m-5 / codex 5 (review v2 item 5: "the shipped control cannot reach the freed base"). This one can:
+// glBufferData(64, data) drawn (the twin's hostBytes names the server shadow), then the context is
+// lost (ServerReleaseEGLResources -> DestroyEGLContext -> OnBackendContextDestroyed -> DropAll frees
+// every shadow; the twin table survives), then the context comes back and the twin is re-armed at
+// its next ensure. The re-armed twin's base must be NULL. Without the null it still names the freed
+// allocation and the whole-store respecify that follows reads it - the use-after-free ASan would
+// name, asserted here as the dangling pointer itself. Red once by deleting the null.
+TEST(StagedShadowProductionTest, ATwinSurvivingContextLossDropsItsFreedShadowBase) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    ASSERT_TRUE(fixture.MakeCurrent());
+
+    const MG_Pipe::MGPipeHandle res = DeclareBuffer(BufferDesc(25, 64, true));
+    StageBytes(res, 0, 64, 0x66);
+    Bool ensured = false;
+    ASSERT_EQ(OnApply([&] { ensured = Ensure(res) != nullptr; }), MOBILEGL_OK);
+    ASSERT_TRUE(ensured);
+    ASSERT_NE(Twin(res)->hostBytes, nullptr) << "the drawn twin names no shadow, so there is nothing to free";
+
+    Server::ServerReleaseEGLResources();
+    ASSERT_NE(Twin(res), nullptr) << "the twin did not survive context loss; the m-5 hazard needs a survivor";
+
+    EGLint major = 0;
+    EGLint minor = 0;
+    ASSERT_TRUE(Server::ServerInitializeEGLDisplay(EglServerFixture::Dpy(), &major, &minor));
+    ASSERT_TRUE(Server::ServerCreateEGLPbufferSurface(EglServerFixture::Surf(), 64, 64));
+    ASSERT_TRUE(fixture.MakeCurrent());
+    ASSERT_EQ(OnApply([&] { ensured = Ensure(res) != nullptr; }), MOBILEGL_OK);
+    ASSERT_TRUE(ensured);
+
+    EXPECT_EQ(Twin(res)->hostBytes, nullptr)
+        << "a twin that survived context loss still names the freed server shadow (m-5): the "
+           "whole-store respecify that re-armed it read freed memory (ASan: heap-use-after-free at "
+           "RespecifyStorageWith)";
+
+    fixture.TearDown();
+}
+
+// M-2 / ID-52 item 3, SHIPPED AND EXECUTED (joint report joint-v1.md 3, "Audit and its R-16
+// limit": the corrupt-staged-bytes perturbation existed only by hand). Under an active transport
+// the server's staged copy is the draw's ONLY base; the frontend object's MappedData() - which under
+// inproc is the same process's memory and always non-null - may not be read. So: a real frontend
+// BufferObject whose shadow holds pattern A, a server shadow staged with pattern B through the real
+// op table (what resource_subdata delivers), and the production ensure path given BOTH. The driver
+// store must hold B. That is the executable form of "corrupt only the staged bytes and the draw
+// shows it": B is the corruption, the upload is the draw, the mapped read-back is the picture. Red
+// once by restoring the MappedData() fallback in liveHostBase(): the store then holds A, the
+// client's bytes, and the R-2.5 audit could never reach a draw again.
+TEST(StagedShadowProductionTest, TheEnsurePathUploadsTheServerShadowNotTheClientObjectsBytes) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    ASSERT_TRUE(fixture.MakeCurrent());
+
+    // The frontend object: glBufferData(64, A). Its shadow is A and it declares defined content.
+    Vector<Uint8> clientBytes(64, Uint8{0xA5});
+    auto buffer = MakeShared<MG_State::GLState::BufferObject>(31u);
+    buffer->Respecify(clientBytes.size(), clientBytes.data());
+    ASSERT_NE(buffer->MappedData(), nullptr);
+    ASSERT_EQ(buffer->MappedData()[0], 0xA5);
+    ASSERT_TRUE(buffer->HasDefinedContent());
+
+    // The server shadow for the twin the draw will use: B, staged the way the wire delivers it.
+    const MG_Pipe::MGPipeHandle res = DeclareBuffer(BufferDesc(26, 64, true));
+    StageBytes(res, 0, 64, 0x5B);
+
+    // The production ensure, WITH the frontend object (the draw-time shape), on the apply thread;
+    // then the driver's store read back through a READ map on the same thread.
+    Vector<Uint8> store(64, 0);
+    Bool ensured = false;
+    Bool mapped = false;
+    ASSERT_EQ(OnApply([&] {
+                  ensured = MG_Backend::DirectGLES::BufferImpl::EnsureBufferResourceForHandle(buffer, res) != nullptr;
+                  auto* twin = Twin(res);
+                  if (!ensured || twin == nullptr || twin->id == 0) return;
+                  const auto& gl = MG_Backend::DirectGLES::g_GLESFuncs;
+                  gl.glBindBuffer(GL_ARRAY_BUFFER, twin->id);
+                  void* view = gl.glMapBufferRange(GL_ARRAY_BUFFER, 0, 64, GL_MAP_READ_BIT);
+                  if (view != nullptr) {
+                      std::memcpy(store.data(), view, 64);
+                      gl.glUnmapBuffer(GL_ARRAY_BUFFER);
+                      mapped = true;
+                  }
+              }),
+              MOBILEGL_OK);
+    ASSERT_TRUE(ensured);
+    ASSERT_TRUE(mapped) << "the driver store could not be mapped for reading, so the case cannot see the upload";
+
+    EXPECT_EQ(store[0], 0x5B)
+        << "the ensure path uploaded the CLIENT object's bytes (MappedData(), pattern A = 0xA5) rather "
+           "than the server shadow (pattern B = 0x5B): under an active transport the staged copy must "
+           "be the draw's only base (M-2 / ID-52 item 3), or a corrupt staged upload renders the "
+           "frontend's correct bytes and the R-2.5 audit cannot reach a draw";
+    EXPECT_EQ(store[63], 0x5B);
+    // And the frontend object was not written through: its shadow is still A.
+    EXPECT_EQ(buffer->MappedData()[0], 0xA5);
+
+    fixture.TearDown();
+}
+
+namespace {
+    std::string ReadLogFrom(SizeT offset) {
+        const std::string whole = ReadLog();
+        return offset < whole.size() ? whole.substr(offset) : std::string();
+    }
+
+    // THE STREAMING IDIOM, end to end, in a FORKED CHILD that brings the server up itself (the
+    // integration harness's pre-flight shape): a Fatal on the apply thread ends the child, not the
+    // case, so the case can name it. glBufferData(64, NULL) then glBufferSubData(0, 16) then a draw:
+    // the frontend object ORPHANS its store and writes 16 bytes - which flips ITS HasDefinedContent
+    // to true - while on the wire that is a resource_respecify with HasDefinedContent CLEAR and one
+    // 16-byte resource_subdata, so the server shadow covers [0, 16) of 64 and the descriptor says
+    // the rest is undefined by the application's own declaration. The draw's whole-store upload
+    // (the respecify reader, or the pool-reuse reader when a 64-byte id is waiting in the pool)
+    // must go through and leave 16 bytes of pattern and 48 of zero in the driver's store. Exit 0
+    // when it did, 7 when the wrong bytes landed, 8 when the child's bring-up failed.
+    enum class IdiomArm { Respecify, PoolReuse };
+
+    [[noreturn]] void RunTheStreamingIdiomAndExit(IdiomArm arm) {
+        EglServerFixture fixture;
+        if (!fixture.BringUp().empty() || !fixture.MakeCurrent()) ::_exit(8);
+        Vector<Uint8> sixteen(16, Uint8{0x77});
+        auto buffer = MakeShared<MG_State::GLState::BufferObject>(arm == IdiomArm::PoolReuse ? 33u : 32u);
+        buffer->Respecify(64, nullptr);
+        buffer->UploadSubData(DataPtr{sixteen.data(), sixteen.size()}, 0);
+        Bool ok = false;
+        (void)OnApply([&] {
+            if (arm == IdiomArm::PoolReuse) {
+                const MG_Pipe::MGPipeHandle a = DeclareBuffer(BufferDesc(29, 64, true));
+                StageBytes(a, 0, 64, 0x11);
+                if (Ensure(a) == nullptr) return;
+                MG_Pipe::MGPipeGetResourceOps()->Destroy(a);
+                for (int frame = 0; frame < 2; ++frame) {
+                    if (MG_Backend::DirectGLES::g_GLESFuncs.glFinish) MG_Backend::DirectGLES::g_GLESFuncs.glFinish();
+                    MG_Backend::DirectGLES::Present();
+                }
+            }
+            const Uint32 slot = arm == IdiomArm::PoolReuse ? 30u : 28u;
+            const MG_Pipe::MGPipeHandle b = DeclareBuffer(BufferDesc(slot, 64, false));
+            StageBytes(b, 0, 16, 0x77);
+            auto* twin = MG_Backend::DirectGLES::BufferImpl::EnsureBufferResourceForHandle(buffer, b); // the draw
+            if (twin == nullptr || twin->id == 0) return;
+            const auto& gl = MG_Backend::DirectGLES::g_GLESFuncs;
+            gl.glBindBuffer(GL_ARRAY_BUFFER, twin->id);
+            const auto* view = static_cast<const Uint8*>(gl.glMapBufferRange(GL_ARRAY_BUFFER, 0, 64, GL_MAP_READ_BIT));
+            if (view == nullptr) return;
+            ok = view[0] == 0x77 && view[15] == 0x77 && view[16] == 0 && view[63] == 0;
+            gl.glUnmapBuffer(GL_ARRAY_BUFFER);
+        });
+        ::_exit(ok ? 0 : 7);
+    }
+} // namespace
+
+// M-3, ROUND 3's RULE, positive direction (the round-2 refusal aborted six LargeArenaAdoption /
+// ResourceSubsystemControl entries on the joint by this exact name): the ordinary streaming idiom
+// through the RESPECIFY reader is uploaded, not refused. Red once by making the refusal
+// unconditional again (the descriptor's HasDefinedContent ignored): the child dies of
+// Fatal{StageSnapshotTooNarrow, "respecify_whole_store"} and the appended log names it.
+TEST(StagedShadowProductionTest, TheStreamingIdiomOrphanThenPartialSubDataIsUploadedNotRefused) {
+    {
+        EglServerFixture probe;
+        MGL_EGL_BRING_UP_OR_BAIL(probe);
+        probe.TearDown();
+    }
+    const SizeT mark = ReadLog().size();
+    EXPECT_EXIT(RunTheStreamingIdiomAndExit(IdiomArm::Respecify), ::testing::ExitedWithCode(0), ".*")
+        << "the streaming idiom - glBufferData(64, NULL), glBufferSubData(0, 16), draw - did not put "
+           "its 16 bytes and 48 undefined (zero) bytes into the driver's store through the respecify "
+           "reader: exit 7 is the wrong bytes, a signal is the whole-store refusal firing on a store "
+           "the application itself orphaned";
+    const std::string appended = ReadLogFrom(mark);
+    EXPECT_EQ(appended.find("Fatal{StageSnapshotTooNarrow"), std::string::npos)
+        << "the orphan-then-partial-subdata idiom was refused by name (M-3's whole-store refusal must "
+           "key on the descriptor's HasDefinedContent, not on the frontend flag a partial subdata "
+           "flips); the log says: " << appended;
+}
+
+// The same idiom through the POOL-REUSE reader: a 64-byte id retired to the pool by a previous
+// buffer's delete, handed to the orphaned store's first draw, seeded from the sparse shadow.
+TEST(StagedShadowProductionTest, TheStreamingIdiomThroughAPoolReuseIsUploadedNotRefused) {
+    {
+        EglServerFixture probe;
+        MGL_EGL_BRING_UP_OR_BAIL(probe);
+        probe.TearDown();
+    }
+    const SizeT mark = ReadLog().size();
+    EXPECT_EXIT(RunTheStreamingIdiomAndExit(IdiomArm::PoolReuse), ::testing::ExitedWithCode(0), ".*")
+        << "the streaming idiom through a recycled pool id did not put its 16 bytes and 48 undefined "
+           "(zero) bytes into the driver's store: exit 7 is the wrong bytes, a signal is the "
+           "whole-store refusal firing on a store the application itself orphaned";
+    const std::string appended = ReadLogFrom(mark);
+    EXPECT_EQ(appended.find("Fatal{StageSnapshotTooNarrow"), std::string::npos)
+        << "the orphan-then-partial-subdata idiom through a pool reuse was refused by name (M-3's "
+           "whole-store refusal must key on the descriptor's HasDefinedContent); the log says: "
+        << appended;
+}
+#endif // !_WIN32
 
 int main(int argc, char** argv) {
     // Before anything logs: MG_Util::Debug::InitFile() reads the variable once, on the first

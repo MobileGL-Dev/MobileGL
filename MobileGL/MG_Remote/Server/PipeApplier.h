@@ -153,6 +153,10 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 Presents() const { return m_presents; }
         Uint64 LastPresentSerial() const { return m_lastPresentSerial; }
         Uint64 ReadbackBytes() const { return m_readbackBytes; }
+        // ID-49's tight-size control reads this: the scratch a read_pixels grew to. It must equal
+        // the tight w*h*bpp extent of the read, never the client's DstSize - a scratch sized from
+        // DstSize is exactly the heap overflow codex 1 found, one field over.
+        Uint64 ReadbackScratchBytes() const { return static_cast<Uint64>(m_readbackScratch.size()); }
 
     private:
         const MG_Backend::GlobalBackendFunctionsTable* Table(const char* verb) const;

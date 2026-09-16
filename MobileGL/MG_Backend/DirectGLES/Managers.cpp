@@ -2003,6 +2003,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const auto* record = ResourceRecordOf(res);
                 return record != nullptr ? static_cast<SizeT>(record->Desc.Width) : 0;
             }
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // M-3's rule for the two WHOLE-STORE readers (v1 round 3). The descriptor is the
+            // application's own statement about the store: HasDefinedContent set means it SUPPLIED
+            // the content (glBufferData(size, data)), which under split arrives as resource_subdata
+            // records behind the respecify (table 1 row 19) - so a coverage gap at the draw is a
+            // MISSING RECORD and the zero-fill past the coverage is not the application's bytes.
+            // Clear means it ORPHANED the store (glBufferData(size, NULL), glBufferStorage(NULL)):
+            // every byte it has not staged since is UNDEFINED by its own declaration, the streaming
+            // idiom (orphan, partial glBufferSubData, draw) is the ordinary case, and uploading the
+            // shadow's zero-fill for the rest is exactly what the monolith arm uploads from
+            // MappedData(). Round 2 refused both shapes and aborted six LargeArenaAdoption /
+            // ResourceSubsystemControl entries on the joint by name (v1-v3.md 6).
+            Bool ResourceContentIsDeclared(MG_Pipe::MGPipeHandle res) {
+                const auto* record = ResourceRecordOf(res);
+                return record != nullptr && record->Desc.HasDefinedContent != 0;
+            }
+#endif
 
             void Ops_H_Create(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc) {
                 (void)res;
@@ -2980,7 +2997,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // is still live; nulling it then would drop the reduced path's own bytes (it did,
                 // and TriangleScenario read the wrong VBO). HasShadow is the discriminator: false
                 // after DropAll, true after an ordinary Adopt.
-                if (!ServerStaged().HasShadow(resource)) {
+                //
+                // TRANSPORT-GUARDED like the other two split hunks in this file (review v2 N-7):
+                // under MONOLITH transport in a disaggregated build the store never copies, Adopt
+                // never sets m_any, HasShadow answers false for everything, and this null would
+                // run on every twin's first ensure - harmless there only because liveHostBase()
+                // prefers MappedData() under monolith, and "under monolith nothing changes" should
+                // be true by construction rather than by luck.
+                if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                    !ServerStaged().HasShadow(resource)) {
                     resource->hostBytes = nullptr;
                 }
 #endif
@@ -3020,13 +3045,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     resource->pendingRespecify = false;
                     BindBufferId(TempBufferTarget, reused);
                     // M-3 / codex 4: this is a WHOLE-STORE upload from the base, and under split
-                    // the base is the server shadow (M-2), whose zero-filled bytes past the staged
-                    // coverage are not the application's - uploading them is the silent data loss
-                    // the M-6 ruling forbids. RequireCoverage is a no-op for the legacy arm's
-                    // MappedData() and for a non-copying store; under split it Fatals by name on a
-                    // sparse shadow rather than seeding the driver with zeroes.
-                    MGL_SERVER_STAGED_REQUIRE(*resource, liveHostBase(), 0, poolSize,
-                                              "pool_reuse_whole_store");
+                    // the base is the server shadow (M-2). For a store whose content the
+                    // application SUPPLIED, zero-filled bytes past the staged coverage are not the
+                    // application's - uploading them is the silent data loss the M-6 ruling
+                    // forbids, and a gap is a missing record: Fatal by name. For a store the
+                    // application ORPHANED the gap is its own undefined content and the upload is
+                    // legal (ResourceContentIsDeclared, above). RequireCoverage is a no-op for the
+                    // legacy arm's MappedData() and for a non-copying store.
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    if (ResourceContentIsDeclared(res)) {
+                        MGL_SERVER_STAGED_REQUIRE(*resource, liveHostBase(), 0, poolSize,
+                                                  "pool_reuse_whole_store");
+                    }
+#endif
                     g_GLESFuncs.glBufferSubData(TempBufferTarget, 0, (GLsizeiptr)poolSize, liveHostBase());
                     if (MG_Util::PipeStats::Enabled()) {
                         MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer,
@@ -3104,13 +3135,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // [0, size) upload from the base, so it owes the same coverage the pending-range drain
             // below owes - the two respecify arms were the readers M-6's "never widened" rule did
             // not reach. No-op for the legacy arm's MappedData() and for a non-copying store; a
-            // Fatal{StageSnapshotTooNarrow, "respecify_whole_store"} under split when the shadow's
-            // coverage does not span the store, instead of uploading its zero-fill as content.
+            // Fatal{StageSnapshotTooNarrow, "respecify_whole_store"} under split when the
+            // DESCRIPTOR says the application supplied the content and the shadow's coverage does
+            // not span the store (a missing record), instead of uploading its zero-fill as content.
+            // NOT for a store the application orphaned: there `shadowHasContent` is the frontend
+            // object's flag, which the streaming idiom's partial glBufferSubData flips to true, and
+            // the bytes it did not write are undefined by its own glBufferData(NULL) - the rule at
+            // ResourceContentIsDeclared. Round 2 refused that idiom and aborted six joint entries.
             const auto requireWholeStoreCoverage = [&]() {
-                if (initialData != nullptr) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                if (initialData != nullptr && record->Desc.HasDefinedContent != 0) {
                     MGL_SERVER_STAGED_REQUIRE(*resource, static_cast<const Uint8*>(initialData), 0,
                                               size, "respecify_whole_store");
                 }
+#else
+                (void)initialData;
+#endif
             };
 
             if (resource->pendingRespecify || !resource->storageInitialized || resource->storageSize != size) {

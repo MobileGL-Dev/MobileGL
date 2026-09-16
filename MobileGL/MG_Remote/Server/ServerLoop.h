@@ -32,17 +32,34 @@
 // before the client frees any emitter-owned Vector; and the join must be bounded (that test uses
 // 5 s) so a regression is a red test and not a hung CI job.
 //
-// THE EGL OWNERSHIP MOVE. eglMakeCurrent runs ONCE per (dpy, draw, read, ctx) tuple on this
-// thread and the context is then held for life. The "once" is NOT free at the DirectGLES layer -
-// DirectGLES::MakeCurrent always calls native eglMakeCurrent and rewrites the owner (codex C7) -
-// so ServerMakeEGLCurrent is where the dedup lives (ID-54): an identical repeat is a no-op apart
-// from the R-12 republish decision, a different tuple is a real rebind, and a client
-// release-current is RECORDED (NativeBindCount / ClientReleaseCount) but NOT forwarded - the apply
-// thread keeps the context current until ~BackendObject_DirectGLES or context loss, which is what
-// makes DirectGLES.cpp's six cache invalidations a one-off startup cost and the 16
-// IsBackendContextCurrentOnThisThread() / 16 CanTouchGLNow() sites answer TRUE on the server. The
-// client's nine EGL virtuals become BLOCKING control requests executed here. ReleaseEGLResources
-// and ~BackendObject_DirectGLES MUST be blocking: MobileGL::Destroy() (MobileGL/Init.cpp:68)
+// THE EGL OWNERSHIP MOVE, AS MEASURED (ID-54; review v2 item 10 and N-3). The native
+// eglMakeCurrent for a surface runs ONCE PER CONTEXT LIFETIME on this thread and the context is
+// then held for life. That "once" lives in TWO layers, because one is not enough:
+// DirectGLES::MakeCurrent always calls native eglMakeCurrent and rewrites the owner (codex C7),
+// and it is reached twice per bring-up - once from InitPbufferSurface/InitWindowSurface when the
+// surface is CREATED, and once more from the client's first eglMakeCurrent. So (1)
+// ServerMakeEGLCurrent classifies the request against the tuple it last bound
+// (ClassifyEglMakeCurrent): an identical repeat is a no-op, and the R-12 republish decision for
+// it is "nothing to republish" (ID-67: the client's mirror generation must not move); a different
+// tuple is a real forwarded bind AND a caps republish; a client release-current is RECORDED
+// (ClientReleaseCount) and NOT forwarded. And (2) BackendObject_DirectGLES::MakeEGLCurrent, under
+// an active transport only, skips the native call when the requested draw surface is the one
+// already natively current on this thread (IsBackendContextCurrentOnThisThread, which is EGL
+// ground truth) AND the virtual tuple is the one that bind was for - or the bind is the surface's
+// own creation, which the first tuple adopts; a different virtual context onto the same surface
+// binds natively again, because MakeCurrent's invalidations describe the frontend context that
+// changed (ID-67). Measured at the EGL function
+// table by ServerLoopTest's C7 control on a real llvmpipe context: surface creation + two
+// identical make-currents + a client release + a bind after the release = ONE native
+// eglMakeCurrent, ZERO native releases, and the apply thread still the owner afterwards. So
+// DirectGLES.cpp's six cache invalidations run once per context lifetime rather than once per
+// client make-current, and the 16 IsBackendContextCurrentOnThisThread() / 16 CanTouchGLNow()
+// sites answer TRUE on the server. The tuple is FORGOTTEN (N-3) on every event after which the
+// native context it names may be gone - ReleaseEGLResources, ReleaseEGLSurface of the surface it
+// names, a surface (re)creation, backend destruction - so a recycled handle value after a destroy
+// is a real bind again and never a silent no-context-current. The client's nine EGL virtuals
+// become BLOCKING control requests executed here. ReleaseEGLResources and
+// ~BackendObject_DirectGLES MUST be blocking: MobileGL::Destroy() (MobileGL/Init.cpp:68)
 // otherwise walks on while the server still holds the context.
 //
 // THE FALLBACK IS PRE-DECLARED, NOT INVENTED UNDER PRESSURE (R-1). If the context migration is
@@ -130,12 +147,20 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 DrainedRecords() const;
         Uint64 ParkCount() const;
 
-        // C7 / ID-54 diagnostics, read by the C7 control. NativeBindCount is how many times
-        // ServerMakeEGLCurrent forwarded a REAL native bind (a new tuple); ClientReleaseCount how
-        // many client release-current requests were recorded-and-not-forwarded. Two identical
-        // binds must move the first by one and the second not at all.
+        // C7 / ID-54 diagnostics, read by ServerLoopTest's C7 and N-3 controls. NativeBindCount is
+        // how many times ApplyMakeCurrent FORWARDED a bind to the backend (a tuple it did not
+        // hold); ClientReleaseCount how many client release-current requests were recorded and
+        // not forwarded. Two identical binds must move the first by one and the second not at
+        // all. The number of native eglMakeCurrent calls the DRIVER saw is a different number -
+        // the backend object skips the native call for a surface already current (header block)
+        // - and the control reads that one at the EGL function table, not here.
         Uint64 NativeBindCount() const;
         Uint64 ClientReleaseCount() const;
+        // ID-67: how many caps snapshots ServerMakeEGLCurrent has re-published (R-12 arm (a)) - one
+        // per forwarded bind of a tuple it did not hold, never for an identical repeat, so the
+        // client's mirror generation moves exactly when the server's answers could have.
+        Uint64 MakeCurrentRepublishCount() const;
+        void NoteMakeCurrentRepublished();
 
         // The deduped make-current, on the apply thread. Classifies the request (see
         // ClassifyEglMakeCurrent), forwards a native bind only for a genuinely new tuple, records
@@ -147,6 +172,20 @@ namespace MobileGL::MG_Remote::Server {
         };
         MakeCurrentOutcome ApplyMakeCurrent(MG_Backend::BackendObject* backend, EGLDisplay dpy,
                                             EGLSurface draw, EGLSurface read, EGLContext ctx);
+
+        // N-3: forget the tuple ApplyMakeCurrent last bound. Apply thread only, like the tuple
+        // itself (the forwarders that call these run their Args::Run there). Called on every
+        // event after which the native context that tuple named may no longer exist -
+        // ReleaseEGLResources, ReleaseEGLSurface of a surface the tuple names, a surface
+        // (re)creation (BackendObject_DirectGLES destroys the context to create a different
+        // surface), backend destruction - so the next make-current with the SAME handle values
+        // (EGL handles are recycled; on this host every one of them is literally 0x1) is
+        // classified as a real bind, not as a RepeatNoOp that binds nothing, runs no base-class
+        // bookkeeping and republishes no caps. Forgetting is always safe: the cost of a
+        // forgotten-but-still-current tuple is one forwarded bind the backend object dedups
+        // natively; the cost of a remembered-but-dead one is a silent no-context-current.
+        void ForgetCurrentTuple();
+        void ForgetCurrentTupleIfItNames(EGLSurface surface);
 
     private:
         void ApplyThreadMain();
@@ -202,6 +241,7 @@ namespace MobileGL::MG_Remote::Server {
         EGLContext m_curCtx = EGL_NO_CONTEXT;
         std::atomic<Uint64> m_nativeBinds{0};
         std::atomic<Uint64> m_clientReleases{0};
+        std::atomic<Uint64> m_makeCurrentRepublishes{0};
     };
 
     ServerLoop& ServerLoopInstance();
@@ -224,12 +264,15 @@ namespace MobileGL::MG_Remote::Server {
     // owner slot g_backendContextOwnerThread (DirectGLES.cpp:11865) is stamped with whatever
     // thread got there. So BackendObject_Remote's nine EGL virtuals - package c1's - call these
     // twelve, each of which is a BLOCKING control request that runs the SERVER's backend object
-    // on mgl-srv-apply. eglMakeCurrent then runs ONCE, on that thread, and is never released:
-    // g_backendContextOwnerThread is written once, DirectGLES.cpp:11933-11953's six cache
-    // invalidations become a one-off startup cost instead of a per-migration storm, the
-    // per-frame EGL re-verification stamp is permanently true, and the 16
+    // on mgl-srv-apply. The native eglMakeCurrent then runs once per context lifetime on that
+    // thread (the surface's own creation binds; the client's make-currents onto that surface
+    // are deduped at both layers, header block above) and a client release is never forwarded,
+    // so g_backendContextOwnerThread is written once per context lifetime, DirectGLES.cpp's six
+    // cache invalidations run once per context lifetime rather than once per client
+    // make-current, the per-frame EGL re-verification stamp holds, and the 16
     // IsBackendContextCurrentOnThisThread() sites plus the 16 CanTouchGLNow() sites answer TRUE
-    // on the server instead of silently degrading.
+    // on the server instead of silently degrading. Measured, not assumed: ServerLoopTest's C7
+    // control counts the driver's eglMakeCurrent calls at the EGL function table.
     //
     // TWO OF THEM MUST BLOCK OR THE PROCESS TEARS ITS OWN CONTEXT DOWN UNDER ITSELF:
     // ReleaseEGLResources (reached from EGLImpl.cpp:326, which for DirectGLES runs

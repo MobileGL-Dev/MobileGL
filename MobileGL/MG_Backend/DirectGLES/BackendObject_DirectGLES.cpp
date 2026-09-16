@@ -32,6 +32,54 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // ID-54 / ID-67 (v1, under ID-52/ID-59's grant for this file). Which VIRTUAL (dpy, draw,
+        // read, ctx) the process's one native ES context is currently bound FOR, on the apply
+        // thread. DirectGLES has one native context and one native surface (g_Context, g_Surface)
+        // whatever virtual handles the client uses, so "is a native eglMakeCurrent needed" is never
+        // "is the native triple different" - it is "did the VIRTUAL context change":
+        // DirectGLES::MakeCurrent is also where the seven caches that describe the frontend context
+        // are invalidated, and a different virtual context needs them invalidated even though the
+        // driver binds the same triple. ID-67: a make-current with a DIFFERENT tuple is a real
+        // native bind (and a caps republish, ServerLoop's half); an IDENTICAL one is neither.
+        //
+        // Three states. NotBound: the next bind is native. FreshFromSurfaceCreation: the surface's
+        // own creation (InitPbufferSurface / InitWindowSurface) bound natively and invalidated, and
+        // no virtual tuple has claimed that bind yet - the first tuple adopts it, which is the
+        // "2 -> 1 native binds per process" of round 3. BoundForTuple: bound and invalidated for
+        // the recorded tuple; only that exact tuple may skip. Process-wide like the native state it
+        // mirrors; under split exactly one DirectGLES object exists (the server's), and only the
+        // apply thread reaches these.
+        enum class NativeBindState : Uint8 { NotBound, FreshFromSurfaceCreation, BoundForTuple };
+        NativeBindState g_nativeBindState = NativeBindState::NotBound;
+        EGLDisplay g_nativeBoundDpy = EGL_NO_DISPLAY;
+        EGLSurface g_nativeBoundDraw = EGL_NO_SURFACE;
+        EGLSurface g_nativeBoundRead = EGL_NO_SURFACE;
+        EGLContext g_nativeBoundCtx = EGL_NO_CONTEXT;
+
+        void NoteNativeContextGone() { g_nativeBindState = NativeBindState::NotBound; }
+        void NoteNativeContextFreshFromSurfaceCreation() {
+            g_nativeBindState = NativeBindState::FreshFromSurfaceCreation;
+        }
+        void NoteNativeBoundFor(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
+            g_nativeBindState = NativeBindState::BoundForTuple;
+            g_nativeBoundDpy = dpy;
+            g_nativeBoundDraw = draw;
+            g_nativeBoundRead = read;
+            g_nativeBoundCtx = ctx;
+        }
+        Bool NativeBindCanBeSkippedFor(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
+            switch (g_nativeBindState) {
+            case NativeBindState::NotBound: return false;
+            case NativeBindState::FreshFromSurfaceCreation: return true;
+            case NativeBindState::BoundForTuple:
+                return g_nativeBoundDpy == dpy && g_nativeBoundDraw == draw && g_nativeBoundRead == read &&
+                       g_nativeBoundCtx == ctx;
+            }
+            return false;
+        }
+#endif
+
         void ClearGLErrors(const MG_External::GLESFunctionsTable& gl) {
             if (!gl.glGetError) return;
             while (gl.glGetError() != GL_NO_ERROR) {}
@@ -843,6 +891,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     BackendObject_DirectGLES::~BackendObject_DirectGLES() {
         DestroyEGLContext();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        NoteNativeContextGone();
+#endif
     }
 
     Bool BackendObject_DirectGLES::InitWindowSurface() {
@@ -920,7 +971,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ResetEGLRuntimeState();
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // ID-54 / ID-67: the surface's creation bound natively (InitWindowSurface -> MakeCurrent);
+        // the first virtual tuple adopts that bind. On failure nothing is known to be bound. The
+        // pull arm below is the original statement, byte for byte (G1).
+        const Bool created = BackendObject::CreateEGLWindowSurface(surface, handle);
+        if (created) {
+            NoteNativeContextFreshFromSurfaceCreation();
+        } else {
+            NoteNativeContextGone();
+        }
+        return created;
+#else
         return BackendObject::CreateEGLWindowSurface(surface, handle);
+#endif
     }
 
     Bool BackendObject_DirectGLES::CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
@@ -939,7 +1003,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ResetEGLRuntimeState();
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // ID-54 / ID-67: as for the window surface - InitPbufferSurface bound natively. The pull
+        // arm below is the original statement, byte for byte (G1).
+        const Bool created = BackendObject::CreateEGLPbufferSurface(surface, width, height);
+        if (created) {
+            NoteNativeContextFreshFromSurfaceCreation();
+        } else {
+            NoteNativeContextGone();
+        }
+        return created;
+#else
         return BackendObject::CreateEGLPbufferSurface(surface, width, height);
+#endif
     }
 
     Bool BackendObject_DirectGLES::InitPbufferSurface(EGLint width, EGLint height) {
@@ -952,6 +1028,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!DirectGLES::ReleaseCurrent()) {
                 return false;
             }
+#if MOBILEGL_BUILD_DISAGGREGATED
+            NoteNativeContextGone();
+#endif
             return BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
         }
 
@@ -972,12 +1051,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // ID-54 / C7, the native half of "bind once per tuple" (v1, under ID-52/ID-59's grant for
+        // this file; #if-guarded so the pull build is byte-identical). Under an active transport
+        // this runs on the apply thread, which is the ONLY thread that ever binds the server's
+        // context, and the surface it is asked for was made natively current on this very thread
+        // by its own creation (InitPbufferSurface / InitWindowSurface -> DirectGLES::MakeCurrent).
+        // A second native eglMakeCurrent for the same surface is then a repeat: it rewrites the
+        // owner with the same thread, re-registers the same op table and invalidates seven caches
+        // that describe a context that did not change - the per-client-make-current storm the
+        // v2 review measured as "2 native binds per process, unchanged". So when the requested
+        // draw surface IS the active one and EGL itself says this thread holds the context
+        // (IsBackendContextCurrentOnThisThread re-verifies against eglGetCurrentContext), the
+        // native call is skipped and only the base class's bookkeeping below runs - which is
+        // still required: it is what InitCapabilities and SwapEGLBuffers' current-thread record
+        // hang off. Monolith transport in this build, and the pull build, bind exactly as before.
+        //
+        // AND ONLY FOR THE SAME VIRTUAL TUPLE (ID-67). The skip is keyed on NativeBindCanBeSkippedFor:
+        // the surface's own creation bind is adopted by the FIRST tuple, an identical tuple skips,
+        // and a DIFFERENT tuple - a second MobileGL context onto the same surface - runs the native
+        // call again even though the driver's triple is the same, because MakeCurrent's seven
+        // invalidations describe the frontend context that is changing. Red once, two ways:
+        // make this arm unconditional (ServerLoopTest's C7 control reads 2 native binds at the EGL
+        // function table instead of 1), or make NativeBindCanBeSkippedFor answer true for any tuple
+        // (the ID-67 control's different tuple stays at 1 native bind where 2 are required).
+        const Bool nativelyCurrentAlready = MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                                            m_eglSurfaceInitialized && m_eglSurface == draw &&
+                                            DirectGLES::IsBackendContextCurrentOnThisThread() &&
+                                            NativeBindCanBeSkippedFor(dpy, draw, read, ctx);
+        if (!nativelyCurrentAlready && !DirectGLES::MakeCurrent()) {
+            NoteNativeContextGone();
+            return false;
+        }
+        NoteNativeBoundFor(dpy, draw, read, ctx);
+#else
         if (!DirectGLES::MakeCurrent()) {
             return false;
         }
+#endif
 
         if (!BackendObject::MakeEGLCurrent(dpy, draw, read, ctx)) {
             (void)DirectGLES::ReleaseCurrent();
+#if MOBILEGL_BUILD_DISAGGREGATED
+            NoteNativeContextGone();
+#endif
             return false;
         }
         return true;
@@ -995,12 +1112,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void BackendObject_DirectGLES::ReleaseEGLResources() {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         DestroyEGLContext();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        NoteNativeContextGone();
+#endif
         BackendObject::ReleaseEGLResources();
     }
 
     void BackendObject_DirectGLES::OnEGLSurfaceReleased(EGLSurface surface) {
         (void)surface;
         DestroyEGLContext();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        NoteNativeContextGone();
+#endif
     }
 
     const RendererInfo& BackendObject_DirectGLES::GetRendererInfo() const {
