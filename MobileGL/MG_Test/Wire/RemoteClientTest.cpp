@@ -171,12 +171,21 @@ namespace {
 // =====================================================================================
 
 TEST(RemoteEmitTable, TheThreeClassesPartitionAllSeventyOneSlots) {
-    // CONTRACT-P5.md §7: 2 answered locally + 5 emitted + 64 Fatal. Read from the functions the
-    // table itself reports with - which is also what t1's arming condition reads - rather than
-    // recomputed here, so a table that lost an emitter cannot look like one that never had it.
+    // CONTRACT-P5.md §7: 2 answered locally + 5 emitted + 64 Fatal at the P5b contract commit.
+    // Read from the functions the table itself reports with - which is also what t1's arming
+    // condition reads - rather than recomputed here, so a table that lost an emitter cannot look
+    // like one that never had it.
+    //
+    // P5b package i1 (CONTRACT-P5B.md §2 i1) flipped SEVEN slots C -> B: BindImageTexture,
+    // DispatchCompute, DispatchComputeIndirect, MemoryBarrier, MemoryBarrierByRegion,
+    // CopyImageSubData, ShaderStorageBlockBinding. So the two numbers that move are 5 -> 12 and
+    // 64 -> 57, and the SUM below is the invariant that does not move whichever package lands
+    // next. RED ONCE BY DOING X: comment out `table.GL.MemoryBarrier = &EmitMemoryBarrier;` in
+    // BuildRemoteEmitTable and this case stays green while NoSlotIsNull goes red - which is why
+    // the per-package count is asserted here and the null walk is a separate case.
     EXPECT_EQ(LocallyAnsweredSlotCount(), 2u);
-    EXPECT_EQ(ImplementedVerbCount(), 5u);
-    EXPECT_EQ(UnmigratedSlotCount(), 64u);
+    EXPECT_EQ(ImplementedVerbCount(), 12u);
+    EXPECT_EQ(UnmigratedSlotCount(), 57u);
     EXPECT_EQ(LocallyAnsweredSlotCount() + ImplementedVerbCount() + UnmigratedSlotCount(),
               kRemoteEmitSlotCount);
 }
@@ -257,6 +266,49 @@ TEST(RemoteEmitTable, SetSwapIntervalIsClassCAndSaysSo) {
     EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"SetSwapInterval\"}"), std::string::npos) << r.Log;
 }
 
+#endif // MGTEST_HAVE_FORK
+
+// ---- P5b package i1 (MG_Remote/CONTRACT-P5B.md §2 i1) -------------------------------------
+
+TEST(RemoteEmitTable, TheSevenI1SlotsAreClassBAndAreNotTheFatalThunk) {
+    // The census's five measured slots plus the two companions that share their rows. Named
+    // rather than counted, so a table that flipped a DIFFERENT seven is red here and not only
+    // in the arithmetic. The comparison is against a slot that is still class C: a flipped slot
+    // and an unflipped one cannot be the same pointer, which is what a forgotten class-B
+    // assignment would look like (class C is assigned FIRST in BuildRemoteEmitTable precisely so
+    // that the mistake is loud rather than null).
+    const MG_Backend::GlobalBackendFunctionsTable& table = RemoteEmitTable();
+    const void* fatal = reinterpret_cast<const void*>(table.GL.GetTexImage); // wave-3 tail, class C
+    ASSERT_NE(fatal, nullptr);
+    const void* const i1[] = {
+        reinterpret_cast<const void*>(table.GL.BindImageTexture),
+        reinterpret_cast<const void*>(table.GL.DispatchCompute),
+        reinterpret_cast<const void*>(table.GL.DispatchComputeIndirect),
+        reinterpret_cast<const void*>(table.GL.MemoryBarrier),
+        reinterpret_cast<const void*>(table.GL.MemoryBarrierByRegion),
+        reinterpret_cast<const void*>(table.GL.CopyImageSubData),
+        reinterpret_cast<const void*>(table.GL.ShaderStorageBlockBinding),
+    };
+    static const char* const kNames[] = {"BindImageTexture",      "DispatchCompute",
+                                         "DispatchComputeIndirect", "MemoryBarrier",
+                                         "MemoryBarrierByRegion", "CopyImageSubData",
+                                         "ShaderStorageBlockBinding"};
+    for (SizeT i = 0; i < sizeof(i1) / sizeof(i1[0]); ++i) {
+        EXPECT_NE(i1[i], nullptr) << kNames[i] << " is null";
+        EXPECT_NE(i1[i], fatal) << kNames[i]
+                                << " still points at an UnmigratedVerbFatal thunk; i1 flipped it "
+                                   "to class B";
+    }
+    // The two barrier slots and the two dispatch slots share a WIRE ROW but not an emitter: the
+    // discriminant (ByRegion / IsIndirect) is set by the emitter, so one thunk for both would
+    // carry the wrong one.
+    EXPECT_NE(i1[3], i1[4]) << "MemoryBarrier and MemoryBarrierByRegion share memory_barrier (61) "
+                               "but must set opposite ByRegion values";
+    EXPECT_NE(i1[1], i1[2]) << "DispatchCompute and DispatchComputeIndirect share launch_grid (60) "
+                               "but must set opposite IsIndirect values";
+}
+
+#if MGTEST_HAVE_FORK
 TEST(RemoteEmitTable, AClassBSlotWithNoSessionAbortsRatherThanFallingThrough) {
     // The other half of "no slot may fall through to the driver". With no ClientSession the
     // emitter has nowhere to put the record, and the one thing it may not do is return quietly:
@@ -264,6 +316,53 @@ TEST(RemoteEmitTable, AClassBSlotWithNoSessionAbortsRatherThanFallingThrough) {
     const ChildResult r = RunInChild([] { RemoteEmitTable().GL.Clear(0x4000 /*COLOR_BUFFER_BIT*/); });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{NoClientSession, \"Clear\"}"), std::string::npos) << r.Log;
+}
+
+TEST(RemoteEmitTable, EachI1SlotReachesRequireSessionUnderItsOwnName) {
+    // The behavioural half: an i1 slot is class B, so with no ClientSession it reaches
+    // RequireSession and aborts Fatal{NoClientSession, "<slot>"} - NOT Fatal{UnmigratedVerb}
+    // (which would mean the flip never happened) and NOT quietly (which is the split lane
+    // running monolith and going green, R-4). The name in the message is the slot's own, which
+    // is the half a single case could not state.
+    //
+    // RED ONCE BY DOING X: put `X(MemoryBarrier, void, (GLbitfield))` back in
+    // MGR_UNMIGRATED_I1_SLOTS and drop `table.GL.MemoryBarrier = &EmitMemoryBarrier;` - the
+    // MemoryBarrier arm below then finds Fatal{UnmigratedVerb, "MemoryBarrier"} instead.
+    const ChildResult barrier = RunInChild([] { RemoteEmitTable().GL.MemoryBarrier(0x2000); });
+    ASSERT_TRUE(DiedOfAbort(barrier)) << DescribeStatus(barrier) << "\n" << barrier.Log;
+    EXPECT_NE(barrier.Log.find("Fatal{NoClientSession, \"MemoryBarrier\"}"), std::string::npos)
+        << barrier.Log;
+    EXPECT_EQ(barrier.Log.find("Fatal{UnmigratedVerb"), std::string::npos)
+        << "MemoryBarrier is class B from P5b i1 on:\n"
+        << barrier.Log;
+
+    const ChildResult dispatch = RunInChild([] { RemoteEmitTable().GL.DispatchCompute(1, 1, 1); });
+    ASSERT_TRUE(DiedOfAbort(dispatch)) << DescribeStatus(dispatch) << "\n" << dispatch.Log;
+    EXPECT_NE(dispatch.Log.find("Fatal{NoClientSession, \"DispatchCompute\"}"), std::string::npos)
+        << dispatch.Log;
+
+    const ChildResult bind = RunInChild(
+        [] { RemoteEmitTable().GL.BindImageTexture(0, 1, 0, GL_FALSE, 0, 0x88BA, 0x8058); });
+    ASSERT_TRUE(DiedOfAbort(bind)) << DescribeStatus(bind) << "\n" << bind.Log;
+    EXPECT_NE(bind.Log.find("Fatal{NoClientSession, \"BindImageTexture\"}"), std::string::npos)
+        << bind.Log;
+
+    const ChildResult ssbo = RunInChild(
+        [] { RemoteEmitTable().GL.ShaderStorageBlockBinding(1, "Blk", 2); });
+    ASSERT_TRUE(DiedOfAbort(ssbo)) << DescribeStatus(ssbo) << "\n" << ssbo.Log;
+    EXPECT_NE(ssbo.Log.find("Fatal{NoClientSession, \"ShaderStorageBlockBinding\"}"),
+              std::string::npos)
+        << ssbo.Log;
+
+    const ChildResult copy = RunInChild([] {
+        const MG_Backend::CopyImageEndpoint src{};
+        const MG_Backend::CopyImageEndpoint dst{};
+        RemoteEmitTable().GL.CopyImageSubData(src, 0x0DE1, 0, 0, 0, 0, dst, 0x0DE1, 0, 0, 0, 0, 1,
+                                              1, 1);
+    });
+    ASSERT_TRUE(DiedOfAbort(copy)) << DescribeStatus(copy) << "\n" << copy.Log;
+    EXPECT_NE(copy.Log.find("Fatal{NoClientSession, \"CopyImageSubData\"}"), std::string::npos)
+        << copy.Log;
 }
 #endif // MGTEST_HAVE_FORK
 

@@ -11,4 +11,13 @@ foreach(scenario @MGL_SPLIT_SMALL_RING_SCENARIOS@)
             "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
     endforeach()
 endforeach()
+# P5b package i1's four scenarios, the same shape as the small-ring loop above: every
+# DirectGLES.Split. entry owns exactly one absolute log path and shares it with nobody, which
+# is what SplitLogPaths.PrivateAndDistinct checks over the discovered set.
+foreach(scenario @MGL_SPLIT_I1_SCENARIOS@)
+    foreach(entry IN LISTS MGL_SPLIT_I1_${scenario}_TESTS)
+        set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+            "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
+    endforeach()
+endforeach()
 # PersistentMapArm retains its existing private path and RESOURCE_LOCK: b1 reads it.
