@@ -276,12 +276,22 @@ namespace MobileGL::MG_Remote::Server {
             outcome.boundNatively = false;
             return outcome;
         case EglBindAction::RepeatNoOp:
+            // ID-54's "a no-op apart from the R-12 republish decision": the decision for an
+            // identical repeat is NO republish, because nothing ran that could have moved the
+            // caps - InitCapabilities runs inside the backend's MakeEGLCurrent, which this arm
+            // does not reach, so a republish here would re-send the snapshot the last real bind
+            // already sent. (c1's BackendObject_Remote::InitCapabilities does not lean on this
+            // either way: it asks the server through ServerInitCapabilities, which publishes.)
             outcome.ok = true;
             outcome.boundNatively = false;
             return outcome;
         case EglBindAction::NativeBind:
             break;
         }
+        // "Forwarded" is the honest word: the backend object decides for itself whether the
+        // driver needs a native eglMakeCurrent (BackendObject_DirectGLES skips it for a surface
+        // that is already current on this thread - its own creation bound it), and the C7
+        // control counts THAT at the EGL function table. This counter counts forwards.
         outcome.ok = backend->MakeEGLCurrent(dpy, draw, read, ctx);
         if (!outcome.ok) return outcome;
         m_haveCurrentTuple = true;
@@ -292,6 +302,19 @@ namespace MobileGL::MG_Remote::Server {
         m_nativeBinds.fetch_add(1, std::memory_order_acq_rel);
         outcome.boundNatively = true;
         return outcome;
+    }
+
+    void ServerLoop::ForgetCurrentTuple() {
+        m_haveCurrentTuple = false;
+        m_curDpy = EGL_NO_DISPLAY;
+        m_curDraw = EGL_NO_SURFACE;
+        m_curRead = EGL_NO_SURFACE;
+        m_curCtx = EGL_NO_CONTEXT;
+    }
+
+    void ServerLoop::ForgetCurrentTupleIfItNames(EGLSurface surface) {
+        if (!m_haveCurrentTuple) return;
+        if (m_curDraw == surface || m_curRead == surface) ForgetCurrentTuple();
     }
 
     void ServerLoop::ApplyThreadMain() {
@@ -389,6 +412,9 @@ namespace MobileGL::MG_Remote::Server {
                     "which is the context owner");
             m_backend.reset();
         }
+        // N-3: the context died with the backend; a tuple that outlives it would make the next
+        // session's first make-current onto the same (recycled) handle values a RepeatNoOp.
+        ForgetCurrentTuple();
 
         // C2: THE m_running CLEAR IS INSIDE THIS SAME CRITICAL SECTION AS THE FINAL DRAIN OF THE
         // MAILBOX. It used to be a separate store after the block, and that gap was a lost-forever
@@ -578,6 +604,9 @@ namespace MobileGL::MG_Remote::Server {
             // thread called Stop. No context was ever made current from another thread in that
             // case, which is exactly the condition that makes this safe.
             if (m_backend != nullptr) m_backend.reset();
+            // N-3, same reason as ApplyThreadMain's exit: no thread runs, so the apply-thread-only
+            // rule on the tuple has no other writer to race.
+            ForgetCurrentTuple();
             m_running.store(false, std::memory_order_release);
             return;
         }
@@ -674,6 +703,9 @@ namespace MobileGL::MG_Remote::Server {
                 MG_Backend::BackendObject* backend = ServerBackendOrNull();
                 if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
                 ok = backend->CreateEGLWindowSurface(surface, *handle);
+                // N-3: BackendObject_DirectGLES destroys and recreates the native context to
+                // create a DIFFERENT surface, so whatever tuple was bound names a dead context.
+                if (ok) ServerLoopInstance().ForgetCurrentTuple();
                 return MOBILEGL_OK;
             }
         } args{surface, &handle};
@@ -706,6 +738,10 @@ namespace MobileGL::MG_Remote::Server {
                 MG_Backend::BackendObject* backend = ServerBackendOrNull();
                 if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
                 ok = backend->CreateEGLPbufferSurface(surface, width, height);
+                // N-3: as for the window surface - a (re)creation may have destroyed the context
+                // the held tuple named. The surface's own creation binds natively, so the client's
+                // make-current that follows is forwarded and deduped one layer down (ID-54).
+                if (ok) ServerLoopInstance().ForgetCurrentTuple();
                 return MOBILEGL_OK;
             }
         } args{surface, width, height};
@@ -722,11 +758,13 @@ namespace MobileGL::MG_Remote::Server {
             MobileGLResult Run() {
                 MG_Backend::BackendObject* backend = ServerBackendOrNull();
                 if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
-                // C7 / ID-54: the apply thread binds the native context ONCE per tuple and holds
-                // it for life. ApplyMakeCurrent forwards a real bind only for a new tuple, treats
-                // an identical repeat as a no-op, and records a client release-current WITHOUT
-                // unbinding - so "the owner slot is written once" is true here even though
-                // DirectGLES::MakeCurrent itself has no shortcut.
+                // C7 / ID-54: the apply thread binds the native context ONCE per context
+                // lifetime and holds it for life. ApplyMakeCurrent forwards a bind only for a
+                // tuple it does not hold, treats an identical repeat as a no-op, and records a
+                // client release-current WITHOUT unbinding; the native call for a surface already
+                // current on this thread is skipped one layer down (BackendObject_DirectGLES's
+                // ID-54 arm), which is what makes "the owner slot is written once" TRUE and
+                // measured (ServerLoopTest's C7 control) rather than claimed.
                 const ServerLoop::MakeCurrentOutcome outcome =
                     ServerLoopInstance().ApplyMakeCurrent(backend, dpy, draw, read, ctx);
                 ok = outcome.ok;
@@ -789,6 +827,12 @@ namespace MobileGL::MG_Remote::Server {
                 MG_Backend::BackendObject* backend = ServerBackendOrNull();
                 if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
                 backend->ReleaseEGLSurface(surface);
+                // N-3: a released surface the held tuple names may have taken the context with
+                // it (BackendObject::ReleaseEGLSurface -> OnEGLSurfaceReleased -> DestroyEGLContext
+                // once nothing holds it current). Forgetting when the base class only DEFERRED
+                // the destroy costs one forwarded bind; remembering when it did not would cost a
+                // silent no-context-current.
+                ServerLoopInstance().ForgetCurrentTupleIfItNames(surface);
                 return MOBILEGL_OK;
             }
         } args{surface};
@@ -807,6 +851,12 @@ namespace MobileGL::MG_Remote::Server {
                 MG_Backend::BackendObject* backend = ServerBackendOrNull();
                 if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
                 backend->ReleaseEGLResources();
+                // N-3: DestroyEGLContext just ran; the tuple names nothing. Without this a
+                // destroy-recreate with the same handle values (every EGL handle on this host
+                // is 0x1) classified as a RepeatNoOp, bound nothing, and republished no caps.
+                // Red once by deleting it: ServerLoopTest's recreate control reads
+                // NativeBindCount() == 1 where 2 is required.
+                ServerLoopInstance().ForgetCurrentTuple();
                 return MOBILEGL_OK;
             }
         } args{};

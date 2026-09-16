@@ -972,9 +972,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // ID-54 / C7, the native half of "bind once per tuple" (v1, under ID-52/ID-59's grant for
+        // this file; #if-guarded so the pull build is byte-identical). Under an active transport
+        // this runs on the apply thread, which is the ONLY thread that ever binds the server's
+        // context, and the surface it is asked for was made natively current on this very thread
+        // by its own creation (InitPbufferSurface / InitWindowSurface -> DirectGLES::MakeCurrent).
+        // A second native eglMakeCurrent for the same surface is then a repeat: it rewrites the
+        // owner with the same thread, re-registers the same op table and invalidates seven caches
+        // that describe a context that did not change - the per-client-make-current storm the
+        // v2 review measured as "2 native binds per process, unchanged". So when the requested
+        // draw surface IS the active one and EGL itself says this thread holds the context
+        // (IsBackendContextCurrentOnThisThread re-verifies against eglGetCurrentContext), the
+        // native call is skipped and only the base class's bookkeeping below runs - which is
+        // still required: it is what InitCapabilities and SwapEGLBuffers' current-thread record
+        // hang off. Monolith transport in this build, and the pull build, bind exactly as before.
+        // Red once by making this arm unconditional: ServerLoopTest's C7 control reads 2 native
+        // binds at the EGL function table instead of 1.
+        const Bool nativelyCurrentAlready = MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                                            m_eglSurfaceInitialized && m_eglSurface == draw &&
+                                            DirectGLES::IsBackendContextCurrentOnThisThread();
+        if (!nativelyCurrentAlready && !DirectGLES::MakeCurrent()) {
+            return false;
+        }
+#else
         if (!DirectGLES::MakeCurrent()) {
             return false;
         }
+#endif
 
         if (!BackendObject::MakeEGLCurrent(dpy, draw, read, ctx)) {
             (void)DirectGLES::ReleaseCurrent();
