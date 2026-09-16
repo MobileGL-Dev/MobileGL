@@ -14,7 +14,7 @@ def paths(document):
         props = {p["name"]: p["value"] for p in test.get("properties", [])}
         values = [v.split("=", 1)[1] for v in props.get("ENVIRONMENT", [])
                   if v.startswith("MOBILEGL_LOG_FILE_PATH=")]
-        is_split = "integration-split" in props.get("LABELS", [])
+        is_split = test["name"].startswith("DirectGLES.Split.")
         if is_split and (len(values) != 1 or not values[0]):
             raise ValueError(f"{test['name']}: requires exactly one nonempty MOBILEGL_LOG_FILE_PATH")
         for value in values:

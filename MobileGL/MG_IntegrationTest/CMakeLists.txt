@@ -1950,7 +1950,6 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 
     gtest_discover_tests(MobileGLIntegrationTest
         TEST_PREFIX "DirectGLES.Split.PersistentMapArm."
-        TEST_LIST MGL_SPLIT_ARM_TESTS
         TEST_FILTER "PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares"
         DISCOVERY_TIMEOUT 30
         PROPERTIES
@@ -1984,8 +1983,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         "MGITEST_SMALL_RING_LANE=1" "MOBILEGL_IPC_RING_MB=1" "MOBILEGL_IPC_STAGE_MB=1"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
-    foreach(mglItestSmallRingScenario ClearThenReadPixelsScenario TriangleScenario
+    set(MGL_SPLIT_SMALL_RING_SCENARIOS ClearThenReadPixelsScenario TriangleScenario
                                       PersistentCoherentMapScenario)
+    foreach(mglItestSmallRingScenario IN LISTS MGL_SPLIT_SMALL_RING_SCENARIOS)
         gtest_discover_tests(MobileGLIntegrationTest
             TEST_PREFIX "DirectGLES.Split.SmallRing."
             TEST_LIST "MGL_SPLIT_SMALL_${mglItestSmallRingScenario}_TESTS"
@@ -2001,9 +2001,12 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     configure_file(Harness/SplitLogPaths.cmake.in SplitLogPaths.cmake @ONLY)
     set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
         "${CMAKE_CURRENT_BINARY_DIR}/SplitLogPaths.cmake")
+    # Python is mandatory for this split integration gate (also used by the CI controls).
+    # Do not silently omit the ownership check when the interpreter is unavailable.
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(NAME SplitLogPaths.PrivateAndDistinct
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Harness/split_log_paths.py"
             check "${CMAKE_CTEST_COMMAND}" "${CMAKE_BINARY_DIR}")
+    set_tests_properties(SplitLogPaths.PrivateAndDistinct PROPERTIES LABELS "integration-split")
 endif()

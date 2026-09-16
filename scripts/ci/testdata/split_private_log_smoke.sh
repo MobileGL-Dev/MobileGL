@@ -16,6 +16,9 @@ for mode in missing-fatal stdout-fatal stale-fatal evidence e3-unrelated; do
     [ "${rc}" = 0 ] && grep -q "negative control E3(a).*scenario's own diagnostic" "${WORK}/${mode}.out" || {
       cat "${WORK}/${mode}.out"; echo "NOT OK private-file Fatal must PASS"; exit 1;
     }
+    grep -qFx "private-log evidence: DirectGLES.Split.ClearThenReadPixelsScenario.ClearWithNoDrawIsVisibleToDefaultFramebufferReadPixels: ${WORK}/${mode}/entry.log" "${WORK}/${mode}.out" || {
+      cat "${WORK}/${mode}.out"; echo "NOT OK private-file evidence line must name the selected entry and path"; exit 1;
+    }
   else
     message='E1 FAILED: selected private logs lack expected Fatal'
     [ "${mode}" != e3-unrelated ] || message='FAILED: red lacks its persistent-map push diagnostic'
