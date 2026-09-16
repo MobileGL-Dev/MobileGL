@@ -2303,8 +2303,9 @@ jobs:
       # per preprocessor arm, and a push build compiles only FlushPendingRangesFrom while the
       # untouched FlushPendingRangesNow lives in the `#else`. Hashing the pull name alone would
       # protect text no shipping build compiles, so both are hashed - the pull ladder against
-      # BASELINE, the push ladder against a sha pinned in the script at 3e298c9a, because that
-      # one was born in P3a and has no body at the base ref to compare with.
+      # BASELINE, the push ladder against a sha pinned in the script at 3dadd4c1 (ID-41), because
+      # that one was born in P3a and is compared against the reviewed body rather than against the
+      # base ref.
       #
       # Scoped to the disaggregation branch and to a manual dispatch, deliberately: the question
       # is "did these eleven move since P3a started", and BASELINE is P3a's base ref. On dev,
@@ -2314,9 +2315,10 @@ jobs:
       #
       # --self-test is the half that keeps it honest, and it is not optional: a comparison that
       # silently stopped comparing produces exactly the same green as eleven untouched bodies. It
-      # runs six canned controls - eleven bodies extracted, an untouched copy compared equal, an
-      # edit OUTSIDE them ignored, and each of the three perturbation targets (ClearBufferPool
-      # and BOTH flush ladders) reported BY NAME - and fails if any of them does not answer.
+      # runs eight canned controls - eleven bodies extracted, an untouched copy compared equal, an
+      # edit OUTSIDE them ignored, each of the three perturbation targets (ClearBufferPool and BOTH
+      # flush ladders) reported BY NAME, plus the pin-precedence control and a one-token edit to the
+      # pinned ladder compared against the pin - and fails if any of them does not answer.
       # Same shape as gen_pipe.py --self-test above.
       - name: The buffer pool, the deferred-release drain and the rings did not move (G5)
         if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
@@ -2347,10 +2349,11 @@ jobs:
       # --self-test is the half that keeps it honest and is not optional: a comparison that silently
       # stopped comparing produces exactly the same green as seventeen untouched regions. It runs
       # three positive controls (seventeen regions extracted, an untouched copy compared equal, an
-      # edit OUTSIDE them invisible in all three files) and FOUR negative ones - ClearBufferPool,
+      # edit OUTSIDE them invisible in all three files) and NINE negative ones - ClearBufferPool,
       # FlushPendingRangesNow, RecomputeBackendColorSlots and StageBlocksIntoUnpackRing, each
-      # perturbed on its own and each required to be named BY NAME - and fails if any of them does
-      # not answer.
+      # perturbed at its HEAD and at its TAIL and each required to be named BY NAME, plus a
+      # one-token edit to the pinned FlushPendingRangesFrom body compared against the pin - and
+      # fails if any of them does not answer.
       - name: The unpack ring, the attachment permutation, the D24S8 core and the format caveat did not move (G5)
         if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
         run: bash scripts/p4a_untouched_regions.sh "${BASELINE}" HEAD
