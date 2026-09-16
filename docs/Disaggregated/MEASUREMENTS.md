@@ -637,7 +637,7 @@ P4a 的契约改了七次（`c0b`…`c0g`），外加一轮缝类审计与一轮
 
 ## 26. P5 五部分门（joint `e61d0012`）与 landed quick gate（`eec0e836`）
 
-P5 的完整记录来自 `~/w7/notes/p5/p5-results/joint-v1.md` §2 与 ID-63；脚本按 **1 → 5 → 3 → 2 → 4** 的顺序跑。`e61d0012` 是 joint scratch head，随后同一组 landed 代码进入 `feat/disaggregated@eec0e836`；landing 后按 ID-66 只跑 quick gate，不把 quick gate 写成第二次 full gate。
+P5 的历史 joint 记录来自 `~/w7/notes/p5/p5-results/joint-v1.md` §2 与 ID-63（其中设备部分未运行）；脚本按 **1 → 5 → 3 → 2 → 4** 的顺序跑。`e61d0012` 是 joint scratch head，随后同一组 landed 代码进入 `feat/disaggregated@eec0e836`；landing 后按 ID-66 只跑 quick gate，不把 quick gate 写成第二次 full gate。
 
 | 部分 | joint 实测 |
 |---|---|
@@ -649,16 +649,18 @@ P5 的完整记录来自 `~/w7/notes/p5/p5-results/joint-v1.md` §2 与 ID-63；
 
 landed quick gate（ID-66）：split unit **2038/2038**；`integration-split` inproc **22/22**（比 joint 多 `SplitLogPaths`）；push integration-gpu **1128/1128**；G1 **0/0/0/0、`.text +0`**。这组数证明 landing 没丢 joint 的 reduced path，不声称重跑了 Part 2/4。
 
-## 27. P5 退出门 E1–E6：门、阴性控制与处置
+## 27. P5 退出门 E1–E6：历史读数与后续修正
+
+本表保留 joint 的历史基线，并明确写出 x2、v1-r3 和 r2 的后续证据。收尾头 `37fc4fdb` 的实跑边界另见 §31；表内不同头的结果不能合并成一次全门。
 
 | 门 | 实测与“为什么会红” |
 |---|---|
 | **E1 barrier** | default reduced path 三次均 **19 pass / 2 skip / 0 fail**；`MOBILEGL_IPC_VERB_BARRIER=0` 选中的 **14/14** 全 abort，且每个 private lane file 都有自己的 `Fatal{BarrierViolation, "<slot>"}`（ID-53/65，`joint-v1.md` §3） |
-| **E2 OpenRA** | baseline **2/2、SSIM 1.0**；pull library + `inproc` 的 transport control 会红。`MOBILEGL_IPC_E2_DROP_CLEAR=1` 已武装但仍 **1/1、SSIM 1.0、mismatchPixels=0**，所以 clear-drop 控制**没有**因自己的理由变红，pending x2；不能据此反推 wire bypass（ID-65） |
-| **E3 persistent map** | (a) block KB=0：**6 selected / 4 red / 2 skip**，红在第二次无 GL 宣告写的 pixel assertion；(b) 该无宣告写在场景内；ID-42 的 emulated membership 经 green → `return false` **3 red** → restored green，已 VERIFIED；(c) counting lane `pmap=2160.00 / mpr=1`，push `0.00 / 1`；(d) split apply 恒 decline，不返回 host pointer；(e) SmallRing entry 跑过，但无 wrap/wait counter，pending x2（ID-42/63/65） |
+| **E2 OpenRA** | joint baseline **2/2、SSIM 1.0**。x2 在 DirectGLES 实测丢 **29 clears** 仍 SSIM 1.0：目标帧被后续地形 draw 全面覆盖；换为丢 **758 DrawVbo** 后 SSIM **0.000036**、mismatchPixels **295296**，并要求正的丢弃计数。r2 又验证真实 CTest 顺序：baseline → pull-library control → 恢复原 split 库 → draw-drop；先放入 pull 库会在 replay 前被 `MG_Remote=0` 拒绝（§31） |
+| **E3 persistent map** | joint (a) **6 selected / 4 pixel red / 2 design-skip**；x2 补每进程一次 disabled-push 私有诊断，报告中的“6 red”更正为上述口径。j0 的逐选项 skip 拒绝使 `37fc4fdb` 全门停止；r2 精选默认/SmallRing 下两条 pixel 场景，共 **4 own pixel + private-log reds**。(b) ID-42 emulated membership 经 green → 3 red → restored green；(c) 历史 pmap=2160.00/mpr=1，push 0.00/1；(d) split apply decline；(e) x2 已测 wrap，r2 再证明真实 retirement wait，数字见 §28。pmap 或 block-zero 红都不能单独证明 server 不会重入 client producer（r1 #1） |
 | **E4 field ownership** | generator **15/15** own-message controls；strict lane **19 abort / 2 skip / 0 pass**，首条具名 `Fatal{UnmigratedPipeInput, "GetTextureContextId@Clear"}`。这是 BARRIER-PULLED 债务的响亮读法，不是 default regression（ID-65） |
-| **E5 honest inproc** | `MOBILEGL_IPC_AUDIT=1`：**19 pass / 2 skip / 0 fail**；production SubData copy 与 `0xDD` poison 两条 shipped test 通过。五条机制已在代码门上覆盖，但“corrupt staged upload 再 draw”这个 R-16 半边未执行，**pending v1 round 3**，不把 audit-green 扩写成它已自证（ID-65） |
-| **E6 phase gate** | G1 **0/0/0/0**、G2 name diff **0**、G14 **0 removed / 42 added**；verify **930/930**；push/verify retrace **79/79**。broad inproc census是 **426/185/511/27/0**，其 attribution 如下；reduced path 与记录债务分开结算（ID-63/65） |
+| **E5 honest inproc** | joint audit **19 pass / 2 skip / 0 fail**。v1-r3 的 `StagedShadowProductionTest.TheEnsurePathUploadsTheServerShadowNotTheClientObjectsBytes` 用 client A/server B 两份数据，真实 ensure 后 driver READ map 得 B；删 transport-only shadow 保护则因读到 client A 而红。它覆盖 **unmapped** BufferObject，不能扩写为 coherent-map 的 wire-only 证明；收官审查确认该绕过，归 r1 #1 |
+| **E6 phase gate** | joint G1 **0/0/0/0**、G2 name diff **0**、G14 **0 removed / 42 added**；verify **930/930**；push/verify retrace **79/79**。历史 census **426/185/511/27/0** 在 v1-r3 修掉六条过宽拒绝后变为 **432/185/505/27/0**；这些是分头证据，`37fc4fdb` 最终门并未全部完成（§31） |
 
 E6 的 27 个普通失败逐条复跑均 `rc=1`、private log **0 Fatal**；8 个争议项又各跑三次，无 flake。归属不是从测试名猜的，而是 `joint-v1.md` §4 的 probe：
 
@@ -669,9 +671,11 @@ E6 的 27 个普通失败逐条复跑均 `rc=1`、private log **0 Fatal**；8 �
 | framebuffer `HandleRecycleScenario` | 5 | P4b/P7 readback；不是已证明的 handle recycle bug |
 | `PrimitivesGeneratedNoXfbScenario` | 3 | P7 query / primitive accounting |
 | `TextureParamsWithoutASamplerView` | 1 | P6 shared-backend inspection forwarder |
-| `P4aFinalFixScenario` FBO/RBO delete | 1 | P6 shared-backend lifetime after transported delete |
+| `P4aFinalFixScenario` FBO/RBO delete | 1 | 原记 P6 lifetime；实际读回用 ReadPixels，完整像素因果未隔离。收官确认 framebuffer death 的 client-thread 驱动调用另归 r1 #2，不断言此条已证明与 server 改动无关 |
 
-511 个 abort 只**计数**，没有逐条诊断；抽样两条分别是 `DrawElements` 与 `BeginTransformFeedback` 的 class-C `Fatal{UnmigratedVerb}`。因此“511 全是 class C”不作为测量结论（`joint-v1.md` §4）。
+joint 当时只计数 511 个 abort，抽样了 `DrawElements` / `BeginTransformFeedback`，并未证明“511 全是 class C”。v1-r3 的逐项复查随后辨明：**505 UnmigratedVerb + 6 StageSnapshotTooNarrow**；后六条是 P5 的 whole-store coverage 过宽拒绝，修复后六条由 abort→pass，其余逐名状态不变。c0b 与 r2 的新鲜私有日志再次给出 **432 passed / 185 skipped / 505 UnmigratedVerb abort / 27 failed**（1149 项）。证据：`v1-v3.md` §2 item 6、`~/w7/p5b-c0b-census-logs/results.json`、`~/w7/p5b-r2-census-logs/results.json`。
+
+27 条 wrong-answer 中只有 **22** 是上述 texture-shadow/readback 家族，另有 3 query、1 inspection、1 FBO/RBO lifetime。阶段接纳没有消除这些错误；“全部 27 条都是纹理读回”或“均非 v1 的问题”均不受证据支持。
 
 ## 28. R-10、逐帧 ledger 与内存口径
 
@@ -691,7 +695,20 @@ E6 的 27 个普通失败逐条复跑均 `rc=1`、private log **0 Fatal**；8 �
 
 `inproc` 两角色共享一个进程，所以上表是**进程**峰值，不是两个独立 physical peak；server 只在 accept 时取样，不能声称 full-run server peak，也没有 N-frame RSS slope。日志另报 `roleMapped=58,990,592 B`、`allRolesMapped=117,981,184 B`。规范 ledger 由执行过的 `ProtocolSmokeTest` 钉住：**SEG_CMD 8 MiB / SEG_STAGE 32 MiB / SEG_REPLY 16 MiB / SEG_EVENT 256 KiB**（ID-47/65）。
 
-**max record bytes：没有场景测量，pending x2。** encoder 有 `MaxRecordBytesSeen`，但 scenario telemetry 未发布；单元只证明它远小于 half-ring，不提供这两个场景的数。这里不从 struct size 或 ring capacity 反推（`joint-v1.md` §5）。
+**x2 后续实测 max record bytes**（`p5/x2@579118a1`，经 x2m 合到 `37fc4fdb`；`x2-v1.md` §2、`x2m-v1.md`）：
+
+| workload | maxrec / row | cap | cmd bytes / records |
+|---|---|---:|---|
+| Triangle redraw | **784 B / SetVertexAttribDefaults** | 4,194,304 B | 4,040 B / 48 |
+| Persistent map write-after-frame | **784 B / SetVertexAttribDefaults** | 4,194,304 B | 4,904 B / 59 |
+| OpenRA DirectGLES，25 帧 | **784 B / SetVertexAttribDefaults** | 4,194,304 B | 未发布 run 总量 |
+| SmallRing triangle，1 MiB SEG_CMD | **784 B / SetVertexAttribDefaults** | 524,288 B | 1,314,880 B / 24,323 |
+
+默认 cap 下占 **0.019%**，这些负载不需要 R-10 chunking；更大的后续 draw tail 不能由这个结果保证。stats 上的 maxrec/maxcap/wrap/wait 是 **run totals**，不是窗口内计数。oversized DrawVbo 尾的 unit 具名拒绝 `Fatal{RingOverrun, "DrawVbo"}`，证明 half-ring 上限能红。
+
+x2 SmallRing 实测 `ringwraps=1, ringpads=0, ringwaits=1`，其中 **wrap 已自证，旧 wait 数只说明发生 reclaim**，不能称阻塞等待。r2 改为立即 reclaim 仍不够、确实被未退休发布记录阻塞的 allocation 才计一次；普通 GL 768 KiB uploads 配合只延迟退休的 hook，1 MiB 臂得到 `maxrec=784 cap=524288 cmdbytes=1315256 ringwraps=1 ringpads=0 ringwaits=1 emitseq=24328`。把 command/staging 都增至 8 MiB，同一门分别因 `NEVER WENT ROUND` / `producer NEVER WAITED` 变红（`r2-v1.md` #8、`p5b-r2-ring-{1,8}.{out,log}`）。这是 r2 包头的 staging-wait 证据；r1 的完整 command-ring/shutdown 处置另计。
+
+`rsp=35` 等历史值仅是当前有 stamp 的计数下界：未盖 verb stamp 的 sticky/non-verb frontend reads 仍有未计数/未 strict 拒绝的路径，见收官审查与 r2 债务表；不能据此称全部 residual reads 已纳入 ledger。
 
 ## 29. 复审作为过程测量：跨族发现、轮次与身份修复
 
@@ -718,20 +735,69 @@ wave-1 跨模型族复审的十项全部经独立 perturbation **CONFIRMED（10/
 | ID-58（c1 round 2） | **3 blockers / 8 majors / 6 minors** | round 3；若仍有 blocker 才拆包 |
 | ID-62（v1 round-2 review） | **7 closed / 7 partial / 1 not closed**，新增 **5 majors** | round 3；E1 skip-false-green 转 j0 |
 | ID-64（c1 round-3 review） | **8 closed / 6 partial / 1 not closed**，新增 **0 blockers / 5 majors / 4 minors** | 判 MERGEABLE；剩余 gate debt 转 c1f |
+| ID-73（P5 收官 Codex） | **1 blocker / 10 major / 2 minor**，只读 source-confirmed，确认扰动未在审查中执行 | #1–4 转 r1，#5–13 转 r2；包内执行结果与剩余债务见 §31 |
 
 这些数字解释了流程为何在 P5 尾声改变：用户要求不再在轮次中做过度验证；以后 package 自门 + quick gate 落地，每阶段末只做一次 Codex adversarial review，发现进入下一阶段首轮（ID-66）。
 
 另一个过程事实是 identity rewrite（ID-40）：Sep 8 以后 WSL repo-local `rereview <rereview@local>` 污染了 **81** 个被 Windows 重写的提交与 **58** 个 wave-1 提交；本地谱系经 parent/env rewrite 接到 GitHub `ff2994d9`，验证 **59** 个重写提交全部是 `Swung0x48 <swung0x48@outlook.com>`，tree/patch 等价。自此每阶段首个 commit 前必须先跑 `git var GIT_COMMITTER_IDENT`。这是过程修复，不计成 P5 实现产量。
 
-## 30. P5 four-arm A/B on the Redmi（pending `ab-v1.md`）
+## 30. P5 Redmi 四臂 A/B（已记录，split 性能仍不可测）
 
-本节只冻结协议，不填数字。设备是项目指定 Redmi；四臂用同一 native code 对照：
+证据：`~/w7/notes/p5/p5-results/ab-v1.md`、`ab-v1-tables.md`，构建身份见 `ap-v1.md`。设备 Redmi `2f7cbe2e`，会话 **2026-09-16 10:31:20–11:10:05 UTC−04**；runner head **eec0e836**，三份 APK 的源码头是 **joint e61d0012**，不能当成 `37fc4fdb` 的 APK。三份 APK 有独立 application ID；split 与 splitctl 共用同一 split APK。
 
 | arm | APK / env | 回答的问题 |
 |---|---|---|
 | pull | pull APK | 既有 pull 基线 |
 | push | push APK | monolith push 边界 |
-| split-inproc | split APK + `MOBILEGL_TRANSPORT=inproc` | 第二 apply 线程的 barrier / codec / copy 总成本 |
-| split-no-env control | 同一 split APK，不设 transport env | Gradle flavour 本身是否改变 monolith；应与 push 对照 |
+| split | split APK + `MOBILEGL_TRANSPORT=inproc` | 第二 apply 线程的 barrier / codec / copy 总成本 |
+| splitctl | split APK，不设 transport env | split build 的 monolith 对照 |
 
-沿用设备协议：reboot-clean、同一风扇档与已验证定频、四臂交错配对；每个 trace 记录尾 200 帧 p50/p99、逐线程 CPU、`pmap/mpr/rsp`、进程 `VmHWM`，并保留 pin check 与 private log。A/B 后台运行、不阻塞 landing（ID-66）；在 `~/w7/notes/p5/p5-results/ab-v1.md` 出现前，本节保持 **pending**，不从 desktop gate 或旧 APK 推算。
+reboot-clean、风扇 level 2、同热窗口与定频、四臂交错。每臂三次，取最低平均墙钟时间那次的尾 200 帧；所有 **40 组** 前后 pin check 都为 **P/P**，采样温度 **37.2–39.9 °C**。五个 case × 两后端 × 四臂，**27 组完成 / 13 组失败**，每次失败只重试一次；第五个 iris-BSL 用例一并保留在报告中。
+
+所有 **10 组 split** 都在 benchmark 前中止：improved-transparency 双后端为 `DrawElementsInstancedBaseVertex`，rd12 / fabric-sodium / vanilla 1.21.4 / iris-BSL 双后端为 `DrawElements`。其余三次失败是 rd12/DirectVulkan 的 pull、push、splitctl 均复现既有 `scudo::reportMapError`（dev 侧）。因此 **每个 case 的 barrier tax 都未测得**，不能从 splitctl 或启动后的 RSS 推算。
+
+关键帧时摘要（单位 ms，p50 / p99；完整逐线程 CPU、repeat、计数器与私有日志见上述报告）：
+
+| case / backend | pull | push | splitctl | split |
+|---|---:|---:|---:|---|
+| improved-transparency / DirectGLES | 10.535 / 25.415 | 12.106 / 26.973 | 12.235 / 27.131 | 索引 draw 中止 |
+| improved-transparency / DirectVulkan | 10.742 / 25.031 | 11.678 / 26.134 | 11.837 / 26.476 | 索引 draw 中止 |
+| fabric-sodium / DirectGLES | 8.314 / 9.573 | 8.311 / 9.701 | 8.303 / 9.486 | 索引 draw 中止 |
+| vanilla 1.21.4 / DirectVulkan | 1.043 / 2.293 | 1.159 / 2.404 | 1.179 / 2.426 | 索引 draw 中止 |
+| rd12 / DirectGLES | 7.999 / 22.089 | 11.105 / 24.865 | 11.261 / 24.771 | 索引 draw 中止 |
+
+在 push 与 splitctl 都完成的组合里，splitctl 相对 push 的帧 p50 为 **−0.1%…+1.6%**，p99 **−3.0%…+1.4%**。这只描述 split build 的 monolith 臂。举例 improved-transparency/DirectGLES 的逐线程 CPU p50/p99 为 pull **10.447/25.213**、push **12.011/26.775**、splitctl **12.135/26.936 ms**；它不提供 apply 线程成本。P5b 索引 draw 迁移后用新 APK 重跑，直到四个目标 trace 在设备上渲染；性能仍只记录、不阻塞 landing。
+
+## 31. P5 收尾实跑的停止点、j0/v1-r3 与 r2 修正
+
+`~/w7/p5-final-gate.log` 明确钉在 **37fc4fdb**，不是 §26 的 joint head。首次启动曾被 WSL 会话杀死；重启后的保留日志给出了以下结果，最后一行为 E3(a) 的 skip 拒绝，没有全门成功终止标记：
+
+| 已执行部分 | 该次实跑结果 |
+|---|---|
+| 配置/构建 | pull / push / verify / split 都 rc=0 |
+| Part 1 纯度与 G1/G5 | include closure 4 probes/0 problems；27,814 symbols，0/0/0/0；.text 10,806,611 B (+0)；两条 G5 byte-identical |
+| Part 5 | emitter/CSO 185/185，verify controls 4/4；生成器检查完成 |
+| Part 3 单元与 monolith | unit 1817×3 / split 2086；Wire 58；pull/push GPU 1128，各零失败；split-monolith 1149 零失败 |
+| Part 3 inproc | broad lane 1149 selected，CTest 报 532 non-success（含 abort，不等于 532 wrong-answer）；reduced 22 selected 零失败，含两条设计性 skip |
+| E1 | 14 selected 全部按 BarrierViolation 变红；逐项私有日志控制通过 |
+| E3(a) | 6 selected 中 4 条 pixel assertion 红、2 条 `TheMapLandsInTheArmItsLaneDeclares` 设计性 skip；控制以 `the knob killed the pre-flight, not the entry - 2 selected entries skipped` **失败** |
+| Part 2 / Part 4 | **该次执行未到达**；§26 joint retrace 与 §30 旧 APK A/B 是独立证据 |
+
+j0-v3 的 `cc20de37` 加了 fresh JUnit 逐选项检查：skip、未运行、缺失/重复条目都拒绝，E1 每条必须有自己的 Fatal。它正确暴露了 E3(a) 选择器把设计性 body skip 纳入像素控制的问题；不能通过放宽 j0 的 skip 检查修复。x2/x2m 的包内 smoke、OpenRA drop-draw 与 SmallRing 读数也不等于此最终门成功。日志里 broad census 的旧 name/status diff 含分类问题，不作为逐条归因依据；采用 §27 新鲜私有日志的 census。
+
+v1-r3 已完成并需保留的事实：native EGL bind 在 reduced lane 实测每进程 **1/1/1**、release **0**；真实 EGL 四套件 **33/33、0 skip**，36 个定向扰动因自己的诊断变红；`HasDefinedContent`/coverage 修复使六个过宽 whole-store 拒绝归零。各读数来自 `v1-v3.md` 所列包头/共同测试头，不能替代 `37fc4fdb` 的门。unmapped shadow 控制的边界见 §27 E5。
+
+收官审查 `p5-close-codex-review.md` 在 `37fc4fdb` 只读确认 **1 blocker / 10 major / 2 minor**（ID-73），不宣称当场执行了 proposed perturbations。r1 负责 coherent-map server re-entry、framebuffer death 驱动线程、PACK_SWAP_BYTES、RingOverrun 等待；r2 的 `37fc4fdb..d50183cb`（`6fa6a925` + `d50183cb`）完成 #5–13 并执行各自的具名 red-once：
+
+| 修正 | r2 包内证据与限制 |
+|---|---|
+| broad debt lane 与 runtime baseline | 普查 exit code/JUnit 记录后继续硬门；全部 runtime skip 则 baseline 失败，metadata 不能使其变绿。仅删掉 exit 捕获会再次阻断控制 |
+| E2 库身份/恢复 | frozen split path + SHA256 恢复；真实 CTest 连续运行 baseline/pull/drop，baseline SSIM 1.0、drop 0.000036，758 records；故意换成 pull 库在 replay 前被拒绝 |
+| E3(a) 选择 | 精选默认/SmallRing 的两条 pixel case，共 4 条自己的 assertion+disabled-push 私有诊断；恢复旧 broad selection 重现收尾错误，pre-flight skip 仍拒绝 |
+| ringwaits | 只有真正等未退休发布记录才计数；lazy reclaim 单元为 0，GL SmallRing 的 1/8 MiB 对照同时证明 wrap 与 wait；完整 transport policy 与 r1 对齐 |
+| REQUIRE_GPU / zero-run / stale evidence | split unit 强制 GPU，invalid EGL 从可选 skip 变 required failure；两份 census runner 零执行拒绝为 harness-error，launch 前清空私有日志，旧 Fatal 不可冒充新证据 |
+| G5 pin / c1f mutation | 删 production pin-selection 后各自具名红；c1f 改用 ID-67 的 different-tuple case，15/15 RED 后 restored GREEN，旧 case 名证据不沿用 |
+
+r2 最终包门：split unit **2087 selected**、reduced **22 selected**、push **1128 selected** 均零失败（selected 包含已注明 skip）；E1 **14 own reds**、E3(a) **4 own reds**；smoke **16 core + 12 private**；census **432/185/505/27**，零 segfault/harness-error。r2 **没有新跑 pull G1 binary comparison**，只说明修改不影响 pull production code；不能把继承的 0/0/0/0 当它的新测量。日志 `~/w7/p5b-r2-final-gate.log` 的 `UNIT_OK SPLIT_OK CONTROLS_OK SMOKE_OK CENSUS_OK PUSH_OK` 只认证 r2 包头，不认证后续合并头。
+
+r2 还更新树外 `~/w7/p5b-c0b-census.{sh,py}`、`~/w7/notes/tools/p6_census_lane.py`、`~/w7/notes/tools/wsl_p5_gate.sh`；git merge 不会把它们自动带到别处。仍未关闭的债务包括 r1 四项、无 stamp 的 residual reads、ReadPixels 正确大小但非法 status=3 的接受路径，以及 §27 的 27 条 wrong-answer。完整归属/退休门见 `ROADMAP.md`；实现与证据索引为 `~/w7/notes/p5b/p5b-results/r2-v1.md`。本节只汇总现有证据，没有追加轮次审查或重复全门。

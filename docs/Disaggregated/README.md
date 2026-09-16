@@ -1,6 +1,6 @@
 # MGPipe：MobileGL 前后端拆分
 
-> 状态：**P0、P0.5、P1、P2、P3a、P4a、P5 已落地**（`feat/disaggregated@eec0e836`）。P5 已在完整门上跑出缩减路径首个 IPC 帧：`Clear` / `DrawArrays` / `ReadPixels` / `BlitFramebuffer` / `Present` 经同一套 wire codec 到同进程第二个 apply 线程，OpenRA 在 `inproc` 下两后端 2/2、SSIM 1.0。其余 64 个 class-C 槽仍具名 `Fatal{UnmigratedVerb}`；下一阶段先按 census 迁移它们，把真实负载完整搬上 apply 线程，再做 spawn。见 `ROADMAP.md`。
+> 状态：**P0、P0.5、P1、P2、P3a、P4a、P5 已落地，P5b 正在进行**。P5 代码收尾头为 `37fc4fdb`；缩减路径的五个 verb 经 wire codec 到第二个 apply 线程，历史 joint 门已测 OpenRA `inproc` 双后端 2/2、SSIM 1.0。该收尾头的全门实跑停在 E3(a) 的设计性 skip，**没有完成最终五部分门**；r2 已在自己的包头修正控制选择并验证。P5b 按普查迁移真实负载的后续首阻塞，出口是四个 A/B trace 在 Redmi 上 `inproc` 渲染，之后再做 P6 spawn。各头的证据与欠债见 `MEASUREMENTS.md` §26–31、`ROADMAP.md`。
 >
 > 性能纪律（2026-09-08 起）：逐线程 CPU 与 tracker 绝对 ns **对着 pull 臂基线记录**，不再作阻塞门（push 比 pull 多约 10% 逐线程 CPU 已被接受；该读数出自 -O0 APK，Release 基准线见 `MEASUREMENTS.md` §20），专门的优化阶段排在路线图推完之后。
 
@@ -16,7 +16,7 @@ MGPipe 是 MobileGL 前端（`MG_State` + `MG_Impl`）与后端（`MG_Backend`�
 应用 GL 调用
   → MG_Impl（GL 语义、错误、shadow）
   → MG_Impl/Pipe/Tracker：在每条 verb 之前 validate，把变化推成 MGPipe 调用
-  → MGPipeScreen / MGPipeContext（两张函数指针表，71 条调用，单一真相源 PipeCalls.def）
+  → MGPipeScreen / MGPipeContext（两张函数指针表，76 条调用（P5b 契约头），单一真相源 PipeCalls.def）
       monolith：直调 backend 函数          split：发射器写 SEG_CMD ring → server applier
   → server 对象表（按 {slot, gen} 句柄索引的数组）+ PipeInputs（后端被推送的状态块）
   → MG_Backend（Espryt / Magma），两个后端的 ring / pool / memo / lowering pass 原样不动
@@ -34,7 +34,7 @@ MOBILEGL_TRANSPORT=inproc ctest --test-dir build-split -L integration-split --ou
 MOBILEGL_TRANSPORT=inproc ctest --test-dir build-split -L integration-gpu --output-on-failure
 ```
 
-缩减路径的具名入口是 `DirectGLES.Split.*`；每条 entry 都带独立的 `MOBILEGL_LOG_FILE_PATH`，日志不共享，阴性控制也只读被选 entry 的私有文件。常用运行时旋钮：
+`integration-gpu` 在 inproc 下仍是带已知 abort/wrong-answer 的普查车道；它的失败不会免除缩减路径和阴性控制的硬门。缩减路径的具名入口是 `DirectGLES.Split.*`；每条 entry 都带独立的 `MOBILEGL_LOG_FILE_PATH`，日志不共享，阴性控制也只读被选 entry 的私有文件。常用运行时旋钮：
 
 | 变量 | 默认 | 用途 |
 |---|---:|---|
@@ -52,7 +52,7 @@ Android 有三份 APK flavour：pull、push 与 split-inproc；构建映射分�
 |---|---|
 | `ARCHITECTURE.md` | 已定稿的设计与架构：句柄与世代、调用目录、记录约定、tracker、纹理路径、shader 制品、反向通道、后端改造、传输、persistent map 分档、进程/EGL/平台、构建与纯度门、验证策略 |
 | `ROADMAP.md` | P0…P13 阶段表、两条跑道、GO/NO-GO 清单、再基线检查点、仍然开放的问题 |
-| `MEASUREMENTS.md` | 逐阶段实测：P0（spike A/B、双设备边界计数器基线、桌面数据点、语料事实）、P1（verify harness 门）、P2（五部分门、两机配对 A/B、DriverBench T1/T2、计数器）、P3a（门、接缝缺陷、Track H 普查、两机 A/B）、P4a（门、契约七次修正与两轮终审修复、缝类审计、三臂设备 A/B、DriverBench T1/T2/T3）与复现命令 |
+| `MEASUREMENTS.md` | 逐阶段实测：P0（spike A/B、双设备边界计数器基线、桌面数据点、语料事实）、P1（verify harness 门）、P2（五部分门、两机配对 A/B、DriverBench T1/T2、计数器）、P3a（门、接缝缺陷、Track H 普查、两机 A/B）、P4a（门、契约七次修正与两轮终审修复、缝类审计、三臂设备 A/B、DriverBench T1/T2/T3）、P5（分头门证据、R-10、红米四臂 A/B、收官失败与 r2 修正）与复现命令 |
 
 代码地图（P0 已落地的部分）：
 
