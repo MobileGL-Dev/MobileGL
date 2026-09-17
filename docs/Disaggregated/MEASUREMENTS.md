@@ -800,4 +800,68 @@ v1-r3 已完成并需保留的事实：native EGL bind 在 reduced lane 实测�
 
 r2 最终包门：split unit **2087 selected**、reduced **22 selected**、push **1128 selected** 均零失败（selected 包含已注明 skip）；E1 **14 own reds**、E3(a) **4 own reds**；smoke **16 core + 12 private**；census **432/185/505/27**，零 segfault/harness-error。r2 **没有新跑 pull G1 binary comparison**，只说明修改不影响 pull production code；不能把继承的 0/0/0/0 当它的新测量。日志 `~/w7/p5b-r2-final-gate.log` 的 `UNIT_OK SPLIT_OK CONTROLS_OK SMOKE_OK CENSUS_OK PUSH_OK` 只认证 r2 包头，不认证后续合并头。
 
-r2 还更新树外 `~/w7/p5b-c0b-census.{sh,py}`、`~/w7/notes/tools/p6_census_lane.py`、`~/w7/notes/tools/wsl_p5_gate.sh`；git merge 不会把它们自动带到别处。仍未关闭的债务包括 r1 四项、无 stamp 的 residual reads、ReadPixels 正确大小但非法 status=3 的接受路径，以及 §27 的 27 条 wrong-answer。完整归属/退休门见 `ROADMAP.md`；实现与证据索引为 `~/w7/notes/p5b/p5b-results/r2-v1.md`。本节只汇总现有证据，没有追加轮次审查或重复全门。
+r2 还更新树外 `~/w7/p5b-c0b-census.{sh,py}`、`~/w7/notes/tools/p6_census_lane.py`、`~/w7/notes/tools/wsl_p5_gate.sh`；git merge 不会把它们自动带到别处。在 r2 包头时仍未关闭的债务包括 r1 四项、无 stamp 的 residual reads、ReadPixels 正确大小但非法 status=3 的接受路径，以及 §27 的 27 条 wrong-answer。完整归属/退休门见 `ROADMAP.md`；实现与证据索引为 `~/w7/notes/p5b/p5b-results/r2-v1.md`。本节只汇总现有证据，没有追加轮次审查或重复全门。
+
+## 32. P5b 真实负载迁移与包证据
+
+集成基准头 **`348d22a4b9c15cc571af840dedc4b4edc8c53dbb`**（2026-09-16）。此头包含 d1/i1/t2/f1、P5 收官 r1/r2、五槽 sync、具名 blit 与 GLES mip storage 修复。发射表 **A=2 / B=54 / C=15**；B=54 中包含 P5 的五槽，以及本轮 19+7+6+11+1+5 槽。目录仍是 76 条；槽数与 wire opcode 数不是同一个统计量。
+
+| 包 / 后续首阻塞 | 已落地行为与证据边界 |
+|---|---|
+| d1 | 19 个索引/实例/multi-draw/indirect 槽经 draw_vbo 过线。独立包动态 Minecraft 普查实际执行 77 backend cases，28 passed、49 first blockers；全部越过原 draw 首阻塞。该次默认 stage=32 MiB，不能用它直接推算后续合并头或 256 MiB profile 的进步幅度。 |
+| i1 | 七个 image/compute/barrier/copy-image/storage-block 槽迁移；包内五类原首阻塞合计 239（138+49+18+30+4）归零。CopyImage 的 client-shadow 镜像被跳过，GetTexImage 前端本地回退仍可能读旧 shadow，不能宣称始终有 Fatal 挡住它。 |
+| t2 | 六个 XFB/曲面细分槽迁移；原首阻塞实测 **140**（BeginTransformFeedback 95 + PatchParameteri 43 + BindTransformFeedback 2），不是早期计划的 138。包内同名基线 490 passed / 191 skipped / 390 aborted / 78 failed，原 432 passes 全保留；新增暴露的 Vulkan capture/query 失败详见包表。 |
+| f1 | 11 个 clear/copy/mip 槽迁移；原 34 个首阻塞归零。bound named-clear 已接线，unbound named-clear 仍具名拒绝；深度 copy/readback 和 Vulkan named publication 留待最终普查与后续阶段。 |
+| r1 / r2 | P5 收官 #1–13 修复已集成。r1 阻止 apply-role 进入 persistent-map producer，FBO death 转 apply mailbox，补 PACK_SWAP_BYTES，保留 r2 staging 等待并补 command retirement 重试。r1 最终定向 **10 passed / 0 skipped**；client-only push suppression 两个自己的像素失败，另一个 metadata skip 不算 red。r2 的库身份/恢复、skip/zero-run/陈旧日志、CI 控制顺序等证据见 §31。 |
+| 具名 blit | `BlitNamedFramebuffer` 经 scoped read/draw binding 发布降为现有 bound backend 调用，退出恢复公开绑定，下次普通 verb 重新发布。两后端四个 split runtime 像素 entry 通过；附带 15 unit passes，另四个 monolith 注册项设计性 skip，故包内选择 23 不等于 23 passes。 |
+| GLES mip storage | 前端先定义并发布层级，server 只验证 applier descriptor 的 Levels/extent，跳过重复 client-shadow grow。原 RGBA8、新 R11F、新 depth 三个 mip 像素控制 **3 passed / 0 skipped**；iris-BSL GLES 单例 SSIM **0.997496**、无 Fatal、默认 stage 32 MiB。registry 身份解析只 Find，不 mint；仍是 P5b barrier 债。RGB 三通道 CPU fallback 保持 Fatal。 |
+| sync | FenceSync / ClientWaitSync / GetSyncStatus / WaitSync / DeleteSync 的五条现有 opcode 接线，wire 只传句柄，native fence 归 apply 线程。原 LOCAL guard 使 trace 的 FenceSync 没真正执行，所以 d1 旧普查不存在可直接扣除的 FenceSync first-blocker 数。真实 wait 返回、64-bit timeout、flush flag、世代与 orphan cleanup 已有包内控制；长 wait 的运输 watchdog 另见 §34。 |
+
+包报告位于 `~/w7/notes/p5b/p5b-results/{d1-codex-v1,i1-v1,t2-codex-v1,f1-v1,r1-codex-v1,r2-v1,blit-codex-v1,mip-codex-v1,sync-codex-v1}.md`。这些是各包固定二进制上的证据；合并头以以下一次阶段门与普查为准。
+
+## 33. P5b 一次主机收尾门与合并普查
+
+主机门固定 **`348d22a4`**，证据目录 `~/w7/p5b-final-host-348d22a4/`；原始 `head.txt`、`libraries.sha256`、逐步 `status.tsv`、JUnit 及 `summary-counts.{json,md}` 保留。下表严格区分 selected、passed 和 skipped；当前已结束的表项均无 failed/error，完整回放尚待终止标记，不能据此把全门写成完成。
+
+| 车道 | Selected | Passed | Skipped | Failed/error |
+|---|---:|---:|---:|---:|
+| unit-linux | 1817 | 1500 | 317 | 0 |
+| unit-push | 1817 | 1782 | 35 | 0 |
+| unit-verify | 1817 | 1795 | 22 | 0 |
+| unit-split | 2132 | 2122 | 10 | 0 |
+| gpu-linux-monolith | 1148 | 895 | 253 | 0 |
+| gpu-push-monolith | 1148 | 953 | 195 | 0 |
+| gpu-split-monolith | 1178 | 953 | 225 | 0 |
+| split | 107 | 105 | 2 | 0 |
+| verify | 950 | 804 | 146 | 0 |
+| audit | 10 | 9 | 1 | 0 |
+
+G1：27,814 defined symbols，新增/删除/resize/rename 全为 0；`.text` **10,806,611 B → 10,806,611 B（+0）**。G5 的 P3a 11 函数 / P4a 17 区域及各自 production pin-selection 自测完成，生成器/纯度检查完成；测试注册名比较与 G14 步骤 rc=0。
+
+E1 与 E3(a) 的控制步骤 rc=0，各自 selected entry 必须自己的诊断与私有日志；E3(a) 精选四个像素 case，不含旧两条 metadata skip。E2 OpenRA **2 selected / 2 passed**；draw-drop 的单例 SSIM **0.000036**、758 records，pull-library 拒绝与恢复后的库 SHA 保持一致。控制跑器 smoke **16 core + 12 private** 按各自预期通过。
+
+**执行异常独立记账：**为归档 E1/E3 私有日志而在运行中追加 runner 行，Bash 的读取偏移触发过一次 `-test-dir: command not found`；外层未设置 set-e。该 shell 异常保留在原始会话输出，不冒充测试失败，也不能省略。verify / audit 自己的 JUnit 均完整且步骤 rc=0，后续 E2 正常；`negative-private-logs` 已提前手动归档。最终须用全部必需步骤状态、JUnit 数量及回放计数确认没有缺步，而不是仅凭最后一个 shell exit 宣称通过。
+
+主机 push / verify 的各 79 replay 结果与最终 complete/exit 尚待记录。
+
+合并 inproc 普查由独立 frozen runner 在 `~/w7/p5b-final-census-348d22a4/` 记录：integration lane 显式 **32 MiB**，完整 trace 显式 **256 MiB**。后者容纳目标负载的单次 128 MiB 上传；这不是默认容量修复。integration lane 已执行 **1267 selected = 811 passed + 203 skipped + 62 aborted + 191 failed**。旧 1149 名全部保留，新增 118、删除 0；旧 **432 passes 全保留、零回退**。旧 505 abort → 265 passed / 18 skipped / 58 aborted / 164 failed；旧 27 failed → 1 passed / 26 failed。后续错误被执行到不等于这些路径已正确，新增测试也不计入旧名回归判断。完整 trace 的 79 项仍在运行；最终同名 transition、逐 trace first blocker/SSIM 以 `joint-codex-v1.md` 的 census 块及 `identity.json`、`counts.json` 为准。
+
+## 34. P5b 唯一收官审查与定向修复
+
+阶段审查 `~/w7/notes/p5b/p5b-results/p5b-close-codex-review.md` 固定 `348d22a4`、diff base `37fc4fdb`，只读结论 **0 blocker / 2 major / 1 minor**。没有宣称现场重现 driver 越界、长时间 GPU wait 或设备结果；P5 的 #1–13 修复在此头已存在，没有追加发现。
+
+| 项 | 问题 | 当前处置 |
+|---|---|---|
+| Major 1 | user-index span 虽在 segment 范围内，其 Size 仍可能短于 Count × IndexSize，sink 会按独立 count 消费 | 集成 `a021e3cc`（包 `0b67568e`）：encoder/decoder/sink 共用 shape/extent gate，单 range、index width 1/2/4、Start=0，Uint64(Count) × IndexSize ≤ Size；三端短 span 均拒绝、segment 末尾 exact-fit 通过，**9 selected / 9 passed / 0 skipped** |
+| Major 2 | ClientWaitSync 保留 64-bit 原 timeout，但 applied/reply 等待一律 30 秒，合法长 wait 会被 BarrierTimeout 打断 | 集成 `82683d4a`（包 `6388035f`）：applied/reply 预算为 ceil(timeout ns / 1,000,000) + 30,000 ms，以有限 chunk 避开溢出和 forever sentinel；普通容量等待/FenceWaitServer 仍为 30 秒，shutdown 可唤醒 |
+| Minor 3 | ReadPixels exact-size reply 的未知 status 仍可穿过 production helper | 集成 `82683d4a`（包 `6388035f`）：tight 与 bounce 实际 return path 拒绝 status=3，报 ReplyStatusInvalid；既有 ERROR/DECLINED 诊断保留 |
+
+`6388035f` 的定向 RemoteClientTest **7 selected / 7 passed / 0 skipped / 0 failed**（80 ms）：真实 EmitAndWait 的 0 ns、1 ns、60 s、UINT64_MAX 预算，FenceWaitServer、shutdown，以及 tight/bounce 的未知状态控制。报告 `~/w7/notes/p5b/p5b-results/wait-codex-v1.md`；该结果属于后续修复包；index span 的报告为 `indexspan-codex-v1.md`。最终代码源头 **`82683d4a83b5c8f4f7c375a7a92ebee9a1854646`** 包含三项修复，合并后定向确认待集成者汇总。
+
+本阶段不再做第二轮全门或收官审查。原始全门的源头仍为 `348d22a4`，后续三项只以修复提交上的定向证据补齐；最终 APK/设备源头另行明确，不能倒改历史 gate 身份。
+
+## 35. P5b Redmi 出口与四臂 A/B（待完成）
+
+最终代码源头 **`82683d4a83b5c8f4f7c375a7a92ebee9a1854646`** 正在构建 pull / push / split 三个 APK，split APK分别运行 monolith control（splitctl）与 inproc（split）。四条目标 trace × 双后端共 **8 个正确性组合**；四臂性能共 **32 个组合**。全部显式使用 **`MOBILEGL_IPC_STAGE_MB=256`**，默认 32 MiB 保持不变。运行前检查源头与 APK/library 身份，使用独立 attempt 目录保留正确性 SSIM、Fatal 日志与性能数据。
+
+最终 sourcehead 已固定，设备尚无 DEVICE_DONE，**本节不填结果、不标 P5b 收官，也不从主机 SSIM 推断设备成功**。设备实际 selected/passed/skip、每个组合的 SSIM、barrier tax 与逐线程 CPU 汇总待同源证据到齐后填写。性能仍只记录，不作 landing 阻塞门；P6 spawn 要在设备出口之后开始。
