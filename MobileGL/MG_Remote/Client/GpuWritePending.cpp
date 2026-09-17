@@ -169,6 +169,21 @@ namespace MobileGL::MG_Remote::Client {
 #endif
     }
 
+    SizeT BufferWritebackSliceBytes() {
+        ClientSession* session = ClientSession::Active();
+        if (session == nullptr) return 0;
+        // A quarter of the ring, not the MaxRecordBytes half: the record carries its own
+        // header and the 24-byte EventBufferWritebackHead beside the payload, and the ring
+        // may still hold a few small events (gpu-written, gl-error) posted earlier in the
+        // same verb's apply. Each slice round-trips with its own barrier + drain, so the
+        // ring never holds more than one slice's bytes.
+        const Uint64 slice = session->EventRingCapacityBytes() / 4;
+        // A floor so a pathologically small operator-supplied ring cannot make the slicing
+        // loop in SyncGpuWrites spin at zero width; such a ring is broken anyway, and the
+        // producer's Fatal{EventRingOverflow} names it on the first post.
+        return static_cast<SizeT>(slice < 4096 ? 4096 : slice);
+    }
+
     void AwaitBufferWriteback(BufferObject& buffer) {
         // THE WAIT IS THE BARRIER'S WAIT (R-3). The reply-slot id IS the record's seq, so
         // "appliedSeq reached my readback" and "my answer is back" are one condition, and

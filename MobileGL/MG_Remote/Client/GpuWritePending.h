@@ -149,4 +149,12 @@ namespace MobileGL::MG_Remote::Client {
     // ever. It is the ONE case monolith's unconditional clear covers that a writeback cannot.
     Bool BufferWritebackIsReachable(const MG_State::GLState::BufferObject& buffer);
 
+    // The slice a whole-buffer readback is cut into so one writeback event always fits
+    // SEG_EVENT. The writeback's bytes travel INLINE in the event record (P5c ev, CONTRACT-P5C
+    // §4.2), one record must fit the ring (RingProducer::MaxRecordBytes == capacity/2,
+    // Ring.h:288), and a 24 MiB arena's single shot cannot (measured: Fatal{EventRingOverflow}
+    // on LargeArenaAdoptionScenario.GpuWriteIntoTheArenaIsReadBack). 0 when no session is
+    // active - the synchronous arm never slices.
+    SizeT BufferWritebackSliceBytes();
+
 } // namespace MobileGL::MG_Remote::Client

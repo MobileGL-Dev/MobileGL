@@ -563,7 +563,29 @@ namespace MobileGL::MG_State::GLState {
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
 #if MOBILEGL_PIPE_PUSH
             if (m_size != 0 && MG_Pipe::MGPipeResourceSubsystemEnabled()) {
-                MG_Pipe::MGPipeEmitResourceReadback(*this);
+                const SizeT sliceBytes = MG_Remote::Client::BufferWritebackSliceBytes();
+                if (sliceBytes != 0 && m_size > sliceBytes) {
+                    // The writeback's bytes travel INLINE in a SEG_EVENT record (P5c ev),
+                    // and one record must fit the ring (MaxRecordBytes == capacity/2) - a
+                    // whole-buffer request for a buffer larger than that aborts the server
+                    // on Fatal{EventRingOverflow}. Slice the request instead: every slice
+                    // round-trips its own barrier + drain before the next is emitted, so
+                    // the ring holds at most one slice's bytes at a time, and the in-order
+                    // channel makes the last slice's landing imply every earlier one.
+                    for (SizeT off = 0; off < m_size; off += sliceBytes) {
+                        const SizeT left = m_size - off;
+                        MG_Pipe::MGPipeEmitResourceReadbackRange(*this, off,
+                                                                 left < sliceBytes ? left : sliceBytes);
+                    }
+                    // No single writeback covered the whole buffer, so
+                    // WritebackFromBackend's clear (above) never fired - but every slice
+                    // has landed by here, which is exactly what the flag-clearing there
+                    // says. Clearing by hand is what keeps AwaitBufferWriteback's
+                    // third-state Fatal from misfiring on a sliced readback.
+                    m_gpuWritePending = false;
+                } else {
+                    MG_Pipe::MGPipeEmitResourceReadback(*this);
+                }
                 // The wait is the barrier's wait: the reply slot id IS the record's seq, so
                 // "my answer is back" and "appliedSeq reached me" are one condition. With no
                 // session (a build-split lane running monolith, and every unit case) the

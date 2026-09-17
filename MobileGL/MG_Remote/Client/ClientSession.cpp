@@ -1051,6 +1051,15 @@ namespace MobileGL::MG_Remote::Client {
 
     Transport::EventRingConsumer& ClientSession::Events() { return m_events; }
 
+    Uint32 ClientSession::DrainPublishedEvents() {
+        // Not gated on m_started on purpose: PumpControlPlane's own pre-start call during
+        // Start() has its ring-consumer twin here, and DrainEventRing's Valid() check is
+        // the whole guard either case needs.
+        return DrainEventRing(m_events);
+    }
+
+    Uint64 ClientSession::EventRingCapacityBytes() const { return m_shm.EventRingCapacity(); }
+
     Wire::SegmentTable& ClientSession::Segments() { return m_segments; }
 
     Transport::RingControl* ClientSession::Control() { return m_shm.CmdControl(); }

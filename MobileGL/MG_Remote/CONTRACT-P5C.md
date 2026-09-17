@@ -260,9 +260,16 @@ layer-1 violation; the GL thread calling a server-installed producer is layer 2.
 
 `DrainEventRing` calls the client consumers BY NAME (`MGPipeClientOnBufferWriteback` /
 `MGPipeClientOnGpuWritten`, `ResourceTracker.h:553-601`), not through `gMGPipeCallbacks` —
-the global table is a producer-side surface under split. The drain point is unchanged:
-inside `EmitAndWait` after the barrier (`ClientSession.cpp:836`), the one instant the apply
-thread is known to be outside the applier.
+the global table is a producer-side surface under split. **The drain points are TWO classes**
+(AMENDED at the regression triage): inside `EmitAndWait` after the barrier
+(`ClientSession.cpp:836`), AND at the return of the blocking EGL lifecycle RPCs
+(`BackendObject_Remote`'s surface creation / resize / make-current). Both satisfy the same
+safety premise — the apply thread is known idle because the work it was doing (the verb, the
+RPC) has completed and this thread has published nothing since. The second class exists
+because a surface-changed event posted during bring-up must be applied BEFORE the first
+frontend query of the default framebuffer's attachments: waiting for the first verb's drain
+answered the placeholder format to `glGetFramebufferAttachmentParameteriv`, and every buffer
+allocated from that answer was blit-incompatible with the real surface.
 
 ### 4.2 The three (+1) producers
 
@@ -307,6 +314,16 @@ barrier, and a full ring under lockstep means a producer burst no measured workl
 `EventRing.h:14-16` rules — P9 decides between waiting and dropping; P5c makes overflow a
 defect instead. The exit gate `eventDropped == 0` at drain points (E-P5c #3) is what checks
 this row.
+
+**AMENDED at the regression triage — the ring is sized for events, not buffers.** A
+whole-buffer writeback larger than the ring can NEVER fit (one record is capped at
+capacity/2), so the CLIENT slices the request (`BufferWritebackSliceBytes`: a quarter of the
+ring, floored at 4 KiB — a quarter, not the half, because the record carries its header
+beside the payload and the ring may still hold small events from the same verb). Each slice
+round-trips its own barrier + drain, so the ring holds at most one slice's bytes, and the
+in-order channel makes the last slice's landing imply every earlier one. This is a
+client-side ruling about request SHAPE, not a drop policy; the Fatal stays for a producer
+burst of real events.
 
 ### 4.5 Round-trip red-once
 
@@ -409,11 +426,14 @@ The generator's four classes are unchanged. c0c edits rows; rv/tx/hd land the co
   enum values, and a row naming a non-field stops the generator by design. What pins them
   instead: (a) `GetTextureUnitObject`'s existing row is re-annotated — the tx-retired reads
   leave its site list, what remains is the unit-object POINTER reads (P3b/P4b/P7); (b) the
-  object-surface list (texel bytes, per-level extent, dirty region, `HasDefinedContent`,
+  object-surface list (texel bytes, dirty region, `HasDefinedContent`,
   `MappedData`/`IsMapped`/`GetChangeSerial`) is pinned verbatim in `FieldOwnershipTest` as
-  the layer-1 surface set, and the §6 guard is what enforces it. This is the honest form of
-  ROADMAP's "把纹理家族补进 FieldOwnership.def": the .def's mechanism covers fields, and the
-  family's object reads get a pinned list plus a guard that can go red.
+  the layer-1 surface set, and the §6 guard is what enforces it. **AMENDED at gt's
+  landing:** "per-level extent" leaves the guard list — the pinned object-class rows'
+  per-frame binding walk legally depends on `GetMipmapTexelSize`, so extent is retired AT
+  THE SITES (tx's sync reads the store) rather than guarded on the accessor. This is the
+  honest form of ROADMAP's "把纹理家族补进 FieldOwnership.def": the .def's mechanism covers
+  fields, and the family's object reads get a pinned list plus a guard that can go red.
 
 ---
 
@@ -452,15 +472,26 @@ forgotten.
 **Red-once (R-16), per layer, mandatory:** each layer is switched off in one named
 integration scenario and the run MUST go red with the layer's Fatal — this is E-P5c #1's
 "关掉任一层守卫必须能在一条具名用例上变红", and it is what makes the guard a gate rather
-than a comment. CI gains one `MOBILEGL_IPC_STRICT_ERRORS=1` + guards-armed
-`integration-split` lane.
+than a comment. **CI lane, AMENDED at gt's landing:** a scenario-green
+`MOBILEGL_IPC_STRICT_ERRORS=1` lane is impossible while the object-class rows live (the
+first Clear pulls `GetFramebufferBindingSlot@Clear` and aborts by design), so the lane is
+two-sided: the unit lane under strict is the hard green gate (the RemoteGuards and
+FieldOwnershipTest strict arms live there), and the integration-split scenario lane is
+EXPECTED-RED with the `BARRIER-PULLED, MOBILEGL_IPC_STRICT_ERRORS=1` marker asserted in
+each entry's private log — the shape `split_negative_controls.sh` already drives. It
+becomes a plain green lane once P7 retires the object-class rows.
 
 **`rsp` at exit.** `ResidualPulls` enters the per-frame stats line and is MEASURED on the
 four A/B traces; the remaining reads are exactly the object-class rows pinned by
-`FieldOwnershipTest` (§5.3), value rows = 0. The known blind spot — sticky / non-verb
-forwards bypassing the stamp counter (ROADMAP debt "rsp=35 只是下界") — is closed by gt:
-the sticky-forward pull path (`MGPipeStickyForwardPull`, `PipeInputs.cpp:180-186`) counts
-into `rsp` under the same verb stamp, so a read that escapes the stamp escapes nothing.
+`FieldOwnershipTest` (§5.3), value rows = 0. **AMENDED at gt's landing:** the sticky-forward
+blind spot this paragraph assigned to gt was already closed (`MGPipeStickyForwardPull` has
+counted into `ResidualPulls` since `d709ef3e`; `FieldOwnershipTest` pins it). What the
+measurement actually found on the locally available traces: bsl in-world 948.5 rsp/frame
+(38.7/draw, 123 frames), iris-complementary 1591.9, iris-iterationrp 286.2 up to its
+pre-existing `Fatal{UnmigratedEmulation, "texture-remint-pull"}` — all object-class, zero
+value-class. The residual known blind spot is narrower than planned: a record applied
+OUTSIDE a verb boundary withdraws the stamp (`PipeApplier.cpp` notes it), and a sticky pull
+inside one escapes the count; no measured workload produces one.
 
 ---
 
@@ -488,7 +519,8 @@ into `rsp` under the same verb stamp, so a read that escapes the stamp escapes n
 
 ## §8 Exit gates this contract serves (E-P5c, restated for the packages)
 
-1. Guards armed: `integration-split` (107) green, broad inproc census with zero regressions
+1. Guards armed: `integration-split` (107 at plan time; 111 as landed — ct added four
+   `CtWireScenario` entries) green, broad inproc census with zero regressions
    vs `348d22a4`, 79 traces with no new first blocker; each guard layer red-once (§6).
 2. `MOBILEGL_IPC_AUDIT=1`'s `0xDD` covers texture staged bytes on the four A/B traces;
    reverting adoption goes red (§2.4).

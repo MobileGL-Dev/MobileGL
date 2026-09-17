@@ -216,6 +216,23 @@ namespace MobileGL::MG_Remote::Client {
         // OnSurfaceChanged. Drained by the GL thread between verbs.
         Transport::EventRingConsumer& Events();
 
+        // The event ring's SECOND drain point, for the blocking EGL lifecycle RPCs
+        // (BackendObject_Remote's surface creation and make-current). Their return is the
+        // same kind of instant as EmitAndWait's post-barrier one - the apply thread is
+        // known idle because the RPC it was serving has completed and this thread has
+        // published nothing since - so the consumers' frontend writes are as legal here as
+        // there. A surface-changed event posted during bring-up must be applied BEFORE the
+        // first frontend query of the default framebuffer's depth/stencil format: waiting
+        // for the first verb's drain answered GL_DEPTH32F_STENCIL8 (the placeholder) for a
+        // depth24+stencil8 surface, and every buffer allocated from that answer was
+        // blit-incompatible with the real thing.
+        Uint32 DrainPublishedEvents();
+
+        // SEG_EVENT's ring capacity, exposed so the readback path can slice a writeback
+        // request into records that always fit (RingProducer::MaxRecordBytes ==
+        // capacity/2, Ring.h:288).
+        Uint64 EventRingCapacityBytes() const;
+
         // The CLIENT's own segment table (P5c ev, CONTRACT-P5C §4.3): the writeback
         // consumer resolves a SEG_EVENT blobref through it. Never the process resolver -
         // table 3 installs that one on the server role only.

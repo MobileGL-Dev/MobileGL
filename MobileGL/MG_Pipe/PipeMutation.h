@@ -221,6 +221,11 @@ namespace MobileGL::MG_Pipe {
     void MGPipeEmitResourceFlushRange(MG_State::GLState::BufferObject& buffer, SizeT offset, SizeT size,
                                       Uint32 accessFlags);
     void MGPipeEmitResourceReadback(MG_State::GLState::BufferObject& buffer);
+    // The ranged form, for the split arm's sliced whole-buffer readback: the writeback's
+    // bytes travel INLINE in a SEG_EVENT record, so a buffer larger than the ring can hold
+    // is read back as [offset, offset+size) slices, each its own record. Monolith never
+    // calls it - the direct callback carries a pointer, not a copy.
+    void MGPipeEmitResourceReadbackRange(MG_State::GLState::BufferObject& buffer, SizeT offset, SizeT size);
     // Returns the coherent host pointer the resource owner donated, or null for a DECLINE -
     // which is a real answer. Every call, mint or decline, is one map-persistent roundtrip.
     void* MGPipeEmitMapPersistent(MG_State::GLState::BufferObject& buffer);

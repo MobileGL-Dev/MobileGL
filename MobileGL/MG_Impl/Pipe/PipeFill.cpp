@@ -905,14 +905,20 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeEmitResourceReadback(BufferObject& buffer) {
+        // Whole-buffer by contract (BufferObject.h: the op pulls the backend's current
+        // contents for the WHOLE buffer into the shadow). The split arm's slicing lives in
+        // the CALLER (BufferObject::SyncGpuWrites): what "whole" costs is decided by the
+        // event ring's capacity, which this layer does not read.
+        MGPipeEmitResourceReadbackRange(buffer, 0, buffer.GetSize());
+    }
+
+    void MGPipeEmitResourceReadbackRange(BufferObject& buffer, SizeT offset, SizeT size) {
         const MGPipeHandle handle = ContentHandleFor(buffer, "resource_readback");
         if (MGPipeHandleIsNull(handle)) return;
         MGPReadback record{};
         record.Res = handle;
-        // Whole-buffer by contract (BufferObject.h: the op pulls the backend's current
-        // contents for the WHOLE buffer into the shadow).
-        record.Offset = 0;
-        record.Size = buffer.GetSize();
+        record.Offset = offset;
+        record.Size = size;
         // The answer travels back through MGPipeClientOnBufferWriteback, and the server's
         // epoch bump happens AFTER that writeback, never before.
         MGPipeRouteResourceReadback(record);

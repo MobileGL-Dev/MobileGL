@@ -1128,7 +1128,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 if (g_GLESFuncs.glMapBufferRange != nullptr && g_GLESFuncs.glUnmapBuffer != nullptr) {
                     for (const auto& target : targets) {
-                        if (!target.buffer || target.buffer->IsBackendPersistentMapped()) continue;
+                        if (!target.buffer) continue;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                        // P5c: under an active transport the frontend object is client
+                        // memory (rule E), so the persistence question is the server
+                        // resource's and the captured bytes go back as a writeback EVENT -
+                        // WritebackFromBackend from the apply thread is the R1/R2 shape.
+                        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                            const MG_Pipe::MGPipeHandle res = BufferImpl::HandleOfBuffer(target.buffer.get());
+                            auto* resource = BufferImpl::FindBufferResourceForHandle(res);
+                            if (resource == nullptr || resource->persistentMapped) continue;
+                            const SizeT size = target.end - target.start;
+                            BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, target.backendId);
+                            void* mapped = g_GLESFuncs.glMapBufferRange(BufferImpl::TempBufferTarget,
+                                                                        static_cast<GLintptr>(target.start),
+                                                                        static_cast<GLsizeiptr>(size), GL_MAP_READ_BIT);
+                            if (mapped == nullptr) {
+                                MGLOG_E_ONCE("EndTransformFeedback: failed to map backend buffer %u [%zu, %zu) for "
+                                             "capture readback (ES error %s); the captured data will NOT be visible to "
+                                             "the application",
+                                             target.backendId, target.start, target.end,
+                                             MG_Util::ConvertGLEnumToString(TakeXfbDriverError()).c_str());
+                                continue;
+                            }
+                            if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback != nullptr) {
+                                MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(
+                                    res, target.start,
+                                    MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(mapped),
+                                                        static_cast<Uint64>(size),
+                                                        MG_Pipe::kMGHostSpanSegNone, 0});
+                            } else {
+                                MGLOG_E_ONCE("EndTransformFeedback: no reverse channel is installed, so the "
+                                             "captured bytes of buffer {%u,%u} cannot reach the client shadow",
+                                             res.Slot, res.Gen);
+                            }
+                            g_GLESFuncs.glUnmapBuffer(BufferImpl::TempBufferTarget);
+                            // Ops_H_Readback's order: writeback, unmap, THEN the serial
+                            // stamp, so the next draw does not re-upload the server's stale
+                            // staged bytes over the capture that just landed.
+                            resource->syncedChangeSerial = BufferImpl::ResourceSerialForHandle(res);
+                            BufferImpl::BumpBufferMutationEpoch();
+                            continue;
+                        }
+#endif
+                        if (target.buffer->IsBackendPersistentMapped()) continue;
                         const SizeT size = target.end - target.start;
                         BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, target.backendId);
                         void* mapped = g_GLESFuncs.glMapBufferRange(BufferImpl::TempBufferTarget,
@@ -1240,6 +1283,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (stride == 0) continue;
                     const SizeT rangeBytes = target.end - target.start;
                     Vector<Uint8> staged(rangeBytes);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    // P5c: under an active transport BufferObject::MappedData on the apply
+                    // thread is Fatal{RoleViolation, "buffer-legacy-arm"} (CONTRACT-P5C §3.8) -
+                    // the pre-capture bytes are the SERVER's staged shadow, and the reconciled
+                    // range goes back as a writeback EVENT instead of a WritebackFromBackend
+                    // poke into client memory.
+                    MG_Pipe::MGPipeHandle splitRes = MG_Pipe::kMGPipeNullHandle;
+                    BufferImpl::GLESBufferResource* splitResource = nullptr;
+                    if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                        splitRes = BufferImpl::HandleOfBuffer(target.buffer.get());
+                        splitResource = BufferImpl::FindBufferResourceForHandle(splitRes);
+                        const Uint8* hostBytes = splitResource != nullptr ? splitResource->hostBytes : nullptr;
+                        if (splitResource == nullptr || hostBytes == nullptr) {
+                            MGLOG_E_ONCE("EndTransformFeedback: a scattered capture target (handle {%u,%u}) has "
+                                         "no server shadow to read the pre-capture bytes from; its capture is "
+                                         "discarded",
+                                         splitRes.Slot, splitRes.Gen);
+                            continue;
+                        }
+                        BufferImpl::RequireStagedCoverage(*splitResource, hostBytes, target.start, target.end,
+                                                          "xfb_scatter_pre_capture");
+                        Memcpy(staged.data(), hostBytes + target.start, rangeBytes);
+                    } else
+#endif
                     Memcpy(staged.data(), target.buffer->MappedData() + target.start, rangeBytes);
 
                     for (const auto& varying : program->GetTransformFeedbackVaryings()) {
@@ -1253,6 +1320,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         }
                     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                        if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback != nullptr) {
+                            MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(
+                                splitRes, target.start,
+                                MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(staged.data()),
+                                                    static_cast<Uint64>(rangeBytes),
+                                                    MG_Pipe::kMGHostSpanSegNone, 0});
+                        } else {
+                            MGLOG_E_ONCE("EndTransformFeedback: no reverse channel is installed, so the "
+                                         "scattered capture of buffer {%u,%u} cannot reach the client shadow",
+                                         splitRes.Slot, splitRes.Gen);
+                        }
+                        // Ops_H_Readback's stamp, for its reason: the GL store now holds
+                        // bytes the server's staged shadow does not, and the next draw must
+                        // not re-upload the stale shadow over the capture.
+                        splitResource->syncedChangeSerial = BufferImpl::ResourceSerialForHandle(splitRes);
+                    } else
+#endif
                     target.buffer->WritebackFromBackend({staged.data(), rangeBytes}, target.start);
                     // Serial bumped with no backend op (see ReadbackCapturedRanges).
                     BufferImpl::BumpBufferMutationEpoch();

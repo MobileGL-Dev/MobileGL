@@ -190,16 +190,30 @@ namespace MobileGL::MG_Remote::Client {
         // a surface for, and ServerSetWindowHandle is the only way to tell it.
         Server::ServerSetWindowHandle(handle);
         if (!Server::ServerCreateEGLWindowSurface(surface, handle)) return false;
+        // The server's surface init published the default framebuffer's shape as a
+        // surface-changed EVENT (P5c ev): DirectGLES' depth/stencil format, Magma's
+        // swapchain extent. Apply it NOW - the RPC's return is a moment the apply thread
+        // is known idle - because the first verb's drain would otherwise let every pre-verb
+        // query answer from the placeholder attachments (GL_DEPTH32F_STENCIL8 for a
+        // depth24+stencil8 surface, and every buffer allocated from that answer is
+        // blit-incompatible with the real thing).
+        if (ClientSession* session = ClientSession::Active()) session->DrainPublishedEvents();
         return MG_Backend::BackendObject::CreateEGLWindowSurface(surface, handle);
     }
 
     Bool BackendObject_Remote::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
         if (!Server::ServerResizeEGLWindowSurface(surface, width, height)) return false;
+        // A resize re-creates the server's swapchain, which re-posts the surface-changed
+        // event - same drain, same reason as CreateEGLWindowSurface.
+        if (ClientSession* session = ClientSession::Active()) session->DrainPublishedEvents();
         return MG_Backend::BackendObject::ResizeEGLWindowSurface(surface, width, height);
     }
 
     Bool BackendObject_Remote::CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
         if (!Server::ServerCreateEGLPbufferSurface(surface, width, height)) return false;
+        // Same drain as the window surface: InitPbufferSurface publishes the default
+        // framebuffer's depth/stencil format on SEG_EVENT from inside this very RPC.
+        if (ClientSession* session = ClientSession::Active()) session->DrainPublishedEvents();
         return MG_Backend::BackendObject::CreateEGLPbufferSurface(surface, width, height);
     }
 
@@ -225,6 +239,10 @@ namespace MobileGL::MG_Remote::Client {
         if (draw != EGL_NO_SURFACE && ctx != EGL_NO_CONTEXT) {
             if (ClientSession* session = ClientSession::Active()) {
                 session->PumpControlPlane();
+                // The event ring beside the caps channel: a make-current can follow a
+                // surface (re)creation that posted a surface-changed event, and this is
+                // the same known-idle instant the RPC returns at.
+                session->DrainPublishedEvents();
                 RefreshFormatCapabilities();
             }
         }

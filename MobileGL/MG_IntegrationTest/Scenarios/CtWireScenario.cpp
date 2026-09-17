@@ -117,6 +117,13 @@ namespace {
 
     TEST_F(CtWireScenario, TextureDeathCrossesAndTheRecycledSlotAnswersTheNewObject) {
         if (!Ready()) return;
+        // The object_death producer is Espryt-side (OnFrontendStateObjectDestroyed,
+        // CONTRACT-P5C.md §5.2); Magma installs no StateObjectDeathOps (P7), so under
+        // DirectVulkan there is no death record to watch and the case has nothing to prove.
+        if (HeadlessGL::Get().BackendName() != "DirectGLES") {
+            GTEST_SKIP() << "object_death is produced by the DirectGLES death-notice ops; "
+                            "DirectVulkan has none until P7";
+        }
         const GLubyte red[4] = {255, 0, 0, 255};
         const GLubyte green[4] = {0, 255, 0, 255};
 
@@ -156,6 +163,12 @@ namespace {
 
     TEST_F(CtWireScenario, FramebufferDeathCrossesAndTheRecycledSlotAnswersTheNewObject) {
         if (!Ready()) return;
+        // Same producer reason as the texture case above: object_death is emitted by the
+        // DirectGLES death-notice ops; DirectVulkan has none until P7.
+        if (HeadlessGL::Get().BackendName() != "DirectGLES") {
+            GTEST_SKIP() << "object_death is produced by the DirectGLES death-notice ops; "
+                            "DirectVulkan has none until P7";
+        }
         // Framebuffer is the kind object_death EXISTS for: it has no other wire delete
         // opcode (CONTRACT-P5C.md §5.2). The renderbuffer goes along so the FBO has storage.
         GLuint fbo = 0, renderbuffer = 0;
