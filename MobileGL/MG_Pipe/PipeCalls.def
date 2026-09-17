@@ -41,17 +41,18 @@
 // that the expansion, the two generated tables and this number agree.
 //
 //   class       entries   group (as the plan tabulates it)
-//   kScreen        11     screen: caps 1 + resource 3 + persistent map 2 + fence 4, plus the
-//                         appended server-side fence wait 1
+//   kScreen        12     screen: caps 1 + resource 3 + persistent map 2 + fence 4, plus the
+//                         appended server-side fence wait 1 and P5c's applier_reset 1
 //   kCtxQuery       8     query object namespace 6, plus the appended timestamp pair 2
 //   kCtxCso        13     CSO create/bind/delete
 //   kCtxState      17     16 of the 17 set_* calls + the temporary set_residual_value_state
-//   kCtxObject      9     set_texture_params (the 17th set_*) + 8 object-scoped transfers
+//   kCtxObject     10     set_texture_params (the 17th set_*) + 8 object-scoped transfers, plus
+//                         P5c's object_death 1
 //   kCtxVerb       18     3 context-reading transfer calls + the 10 commands, plus the five
 //                         P5b-appended verbs (bind_shader_image, patch_parameter,
 //                         bind_stream_output, set_storage_block_binding,
 //                         copy_framebuffer_to_texture - MG_Remote/CONTRACT-P5B.md)
-//   total          76
+//   total          78
 //
 // Reconciliation with the plan's headline numbers (section 4.4 / appendix A), because they
 // do not add up to a set of UNIQUE records and this file has to hold unique records:
@@ -88,9 +89,15 @@
 //     76 unique records. The catalogue footer's "ShaderStorageBlockBinding is folded into the
 //     reflection archive" is CORRECTED by the row: the archive carries the bindings the
 //     program LINKED with, and glShaderStorageBlockBinding moves one AFTER link.
+//   - P5c (MG_Remote/CONTRACT-P5C.md §5.1/§5.2) appended TWO more after those (opcodes 77..78),
+//     same rule: applier_reset, the make-current edge's server-side reset that used to be a
+//     GL-thread direct call into server memory, and object_death, the framebuffer family's
+//     FIRST wire delete opcode and the handle-keyed replacement for the death-notice mailbox.
+//     Neither has an MGPipeApply* entry point and neither gains one; both reach WireVerbSink.
+//     78 unique records.
 // ---------------------------------------------------------------------------------------
 
-#define MGP_CALL_LIST_DOCUMENTED_COUNT 76
+#define MGP_CALL_LIST_DOCUMENTED_COUNT 78
 
 // clang-format off
 #define MGP_CALL_LIST(X)                                                                            \
@@ -230,7 +237,26 @@
     X(SetStorageBlockBinding,   MGPStorageBlockBinding,     kCtxVerb,   kHasBlob)                   \
     /* glCopyTexImage2D / glCopyTexSubImage2D - a copy whose SOURCE is the read framebuffer,   */    \
     /* which resource_copy_region (resource -> resource) cannot express.                        */    \
-    X(CopyFramebufferToTexture, MGPCopyFromFramebuffer,     kCtxVerb,   kNone)
+    X(CopyFramebufferToTexture, MGPCopyFromFramebuffer,     kCtxVerb,   kNone)                      \
+    /* ---- APPENDED BY P5c (MG_Remote/CONTRACT-P5C.md §5): the two control records. Opcodes ---- */ \
+    /* ---- 77..78. Neither has an MGPipeApply* entry point and neither gains one: both reach  ---- */ \
+    /* ---- WireVerbSink, and under monolith neither has a producer - the reset is a direct    ---- */ \
+    /* ---- MGPipeApplierReset() call and the death notice's mailbox hop, byte for byte as     ---- */ \
+    /* ---- today (G1/G2).                                                                    ---- */ \
+    /* tracker.FreshlyPrimed() - a make-current is a fresh server. Under a transport the GL     */    \
+    /* thread may not reset the server's g_applier itself (rule E), so the reset crosses AS    */    \
+    /* THE CALL, ahead of the block's client-side resets; the record's barrier orders it       */    \
+    /* against every verb that follows. ContextSerial is the client context's make-current     */    \
+    /* serial at the edge - ASSERTED against the session's, never dispatched on (P5c: one      */    \
+    /* context per session).                                                                   */    \
+    X(ApplierReset,             MGPApplierReset,            kScreen,    kNone)                      \
+    /* A frontend state object died. The record carries the HANDLE (and kind) the client's own */    \
+    /* allocator resolves for it - nothing is emitted for an object that never crossed (the    */    \
+    /* server never saw it, so there is no twin to kill) - and the sink releases the kind's    */    \
+    /* twin table by handle. The framebuffer family's FIRST wire delete opcode: its death used */    \
+    /* to hop to the apply thread through a stack-struct mailbox and a lifetime-id probe of    */    \
+    /* the client's allocator, both rule-E surfaces.                                           */    \
+    X(ObjectDeath,              MGPHandleOnly,              kCtxObject, kNone)
 // clang-format on
 
 // Explicitly NOT migrated (plan 4.4.6 / appendix A "explicit deletions"):

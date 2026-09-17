@@ -2172,6 +2172,29 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endforeach()
 endif()
 
+# P5c ct (MG_Remote/CONTRACT-P5C.md §5): the two control records, split-only source for the
+# same reason as f1's - the scenario reads the SERVER sink's tallies, which a monolith build
+# has no symbol for. One block per case with a LOG PATH OF ITS OWN, the F1 pattern:
+# SplitLogPaths.PrivateAndDistinct fails a lane whose cases share one file, and the death
+# case's child truncates whatever path it inherits.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    target_sources(MobileGLIntegrationTest PRIVATE Scenarios/CtWireScenario.cpp)
+    foreach(ctCase ApplierResetCrossesAtThePrimedEdgeInSerialOrder
+                   TextureDeathCrossesAndTheRecycledSlotAnswersTheNewObject
+                   FramebufferDeathCrossesAndTheRecycledSlotAnswersTheNewObject
+                   TheDirectApplierResetCallOnTheGLThreadIsRoleViolation)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectGLES.Split.Ct."
+            TEST_FILTER "CtWireScenario.${ctCase}"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-gpu\;integration-split"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5c-ct-${ctCase}.log"
+        )
+    endforeach()
+endif()
+
 # P5b measured named-blit blockers, exercising both backend bound-form lowerings.
 if (MOBILEGL_BUILD_DISAGGREGATED)
     foreach(namedBlitBackend DirectGLES DirectVulkan)

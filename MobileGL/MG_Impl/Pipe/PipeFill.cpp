@@ -2690,8 +2690,38 @@ namespace MobileGL::MG_Pipe {
         //   - what the server has is no longer what any suppressor slot last emitted;
         //   - and the residual block owes a fresh publication whatever else moved.
         if (tracker.FreshlyPrimed()) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5c (ct), CONTRACT-P5C.md §5.1: with an active transport the server's reset
+            // crosses AS A RECORD, ahead of every reset below - the client-side ones (the CSO
+            // cache, the hash suppressor, the vertex-input emitter) and the emitters' latches
+            // - because the record's barrier is what orders the server's MGPipeApplierReset()
+            // against every verb that follows. The GL-thread direct call it replaces is
+            // Fatal{RoleViolation, "g_applier"} inside MGPipeApplierReset itself (§6 layer 2),
+            // so reverting this arm to the direct call goes red by name rather than rendering
+            // stale. Monolith keeps the direct call, byte for byte (G1).
+            //
+            // THE APPLY THREAD IS EXCLUDED (M5's rule): a validate running on the server's own
+            // thread produces no client record - EmitAndWait there would wait on the thread
+            // that has to apply the record - and the direct call is exactly what the apply
+            // thread is allowed to make (the sink's own path runs it there).
+            //
+            // AND A CONFIGURED-BUT-WIRELESS TRANSPORT TAKES THE DIRECT CALL TOO:
+            // EmitApplierResetRecord answers false when no live session could carry the
+            // record (the pre-Start bring-up window, a ServerLoop fixture with no client at
+            // all), and in that shape this process IS the only place the reset can run.
+            const Bool transportActive =
+                MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                !MG_Remote::Client::RunsAsTheServerRole();
+            Bool resetCrossed = false;
+            if (transportActive) {
+                resetCrossed = MG_Remote::Client::EmitApplierResetRecord();
+            }
+#endif
             MGPipeCsoCacheInstance().Reset();
-            MGPipeApplierReset();
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (!resetCrossed)
+#endif
+                MGPipeApplierReset();
             MGPipeSetHashSuppressorInstance().InvalidateAll();
             // P3a: and the vertex-input emitter's latches. NOT because the applier dropped
             // its vertex-elements records - it does not, they are share-group object state

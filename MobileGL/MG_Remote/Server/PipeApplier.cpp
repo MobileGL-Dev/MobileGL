@@ -14,6 +14,10 @@
 
 #include <Config.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
+// P5c ct: object_death's per-kind release names the Espryt twin tables (CONTRACT-P5C.md
+// §5.2). The same dependency ServerLoop.cpp already takes for CreateBackend; a server built
+// on Magma simply holds no twins in these tables and every release resolves to nothing.
+#include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
@@ -886,6 +890,67 @@ namespace MobileGL::MG_Remote::Server {
             table->GL.CopyTexImage2D(copy.Target, copy.Level, copy.InternalFormat,
                                    copy.X, copy.Y, copy.Width, copy.Height, 0);
         }
+        return true;
+    }
+
+    // ---- P5c ct (MG_Remote/CONTRACT-P5C.md §5) ------------------------------------------
+    //
+    // TWO CONTROL RECORDS, NO BACKEND TABLE AND NO DECLINE ARM. Neither body consults
+    // Table(): the reset belongs to the applier this process owns, and the death release
+    // belongs to the twin tables - a backend that registered no slots (Magma's XFB shape)
+    // still has an applier to reset and still answers a death with the same generation
+    // check. A record that cannot be proved is Fatal, not declined: both refusals are
+    // ProtocolCorruption because by the time the sink runs the codec has already proved the
+    // record's SHAPE, and what is left to check are the contract facts about the peer (§1).
+
+    Bool ServerVerbSink::OnApplierReset(const MG_Pipe::MGPApplierReset& reset) {
+        // §1: the serial is ASSERTED, never dispatched on. P5c has exactly one context per
+        // session, so the only legal sequence is 0, 1, 2, ... and the session's own count of
+        // accepted resets IS the expected value; anything else means the two ends disagree
+        // about how many make-current edges have crossed, which no backend answer can fix.
+        if (reset.ContextSerial != m_applierResetSerial) {
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"ApplierReset.ContextSerial\"} - the "
+                    "record carries %llu and this session has accepted %llu reset(s); the "
+                    "serial is asserted against the session's own count, not dispatched on "
+                    "(one context per session in P5c)",
+                    static_cast<unsigned long long>(reset.ContextSerial),
+                    static_cast<unsigned long long>(m_applierResetSerial));
+            std::abort();
+        }
+        ++m_applierResetSerial;
+        // THE WHOLE POINT OF THE RECORD: the reset runs HERE, on the apply thread, against
+        // the g_applier this role owns (PipeApply.cpp:409). The layer-2 guard inside
+        // MGPipeApplierReset passes because this IS the apply thread; the GL-thread direct
+        // call it replaced is the Fatal arm.
+        MG_Pipe::MGPipeApplierReset();
+        ++m_applierResets;
+        return true;
+    }
+
+    Bool ServerVerbSink::OnObjectDeath(const MG_Pipe::MGPHandleOnly& death) {
+        // §1's zero ruling: a null handle means "the object never crossed", and the client
+        // emits NOTHING in that case (§5.2) - so a null handle arriving here is corruption,
+        // not a no-op.
+        if (MG_Pipe::MGPipeHandleIsNull(death.Handle)) {
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"ObjectDeath.Handle\"} - a null "
+                    "handle never crosses: the client emits nothing for an object its own "
+                    "allocator cannot resolve (CONTRACT-P5C.md §5.2)");
+            std::abort();
+        }
+        if (death.Kind >= static_cast<Uint32>(MG_Pipe::MGPipeKind::KindCount)) {
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"ObjectDeath.Kind\"} - %u is not an "
+                    "MGPipeKind",
+                    static_cast<unsigned>(death.Kind));
+            std::abort();
+        }
+        // The per-kind release, keyed by the handle the record carried. A false answer is
+        // NOT a decline: the kind's own delete opcode may already have released the twin
+        // (the idempotent second path every notice arm documents), and a kind this backend
+        // does not twin (Buffer, whose death crosses as resource_destroy) legally resolves
+        // to nothing.
+        MG_Backend::DirectGLES::ReleaseTwinsForWireObjectDeath(
+            death.Handle, static_cast<MG_Pipe::MGPipeKind>(death.Kind));
+        ++m_objectDeaths;
         return true;
     }
 

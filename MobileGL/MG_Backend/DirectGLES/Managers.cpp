@@ -22,6 +22,10 @@
 #include <MG_Remote/Server/StagedShadow.h>
 #include <MG_Remote/Server/StagedTextureStore.h>
 #include <MG_Remote/Server/ServerLoop.h>
+// P5c (ct): object_death's producer (CONTRACT-P5C.md §5.2) - the death notice's split arm
+// emits the record through the client's emit helper instead of hopping a stack struct to the
+// apply thread.
+#include <MG_Remote/Client/WireTables.h>
 #endif
 
 #include "Utils.h"
@@ -207,10 +211,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void OnFrontendStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
             if (InProcessTeardown()) return;
 #if MOBILEGL_BUILD_DISAGGREGATED
-            // Death notices have no framebuffer wire opcode. Keep the lifetime/slot valid
-            // until the context owner has destroyed its twin and updated its binding cache.
+            // P5c (ct), CONTRACT-P5C.md §5.2: with an active transport the death crosses AS A
+            // RECORD - object_death, the framebuffer family's first wire delete opcode. The GL
+            // thread resolves the dying object's handle in its OWN allocator inside
+            // EmitObjectDeathRecord: no handle means the server never saw the object and
+            // NOTHING crosses (which replaces the mailbox's unconditional delivery), and a
+            // handle means the record's EmitAndWait orders the death against in-flight verbs
+            // that name it - the one property the blocking RunOnApplyThread hop provided and
+            // the only one P5c keeps. The sink (ServerVerbSink::OnObjectDeath) releases the
+            // kind's twin table by handle on the apply thread, so neither a lifetime-id probe
+            // nor the client's allocator is touched from there any more.
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
                 !MG_Remote::Server::ServerLoop::OnApplyThread()) {
+                if (MG_Remote::Client::EmitObjectDeathRecord(kind, lifetimeId) !=
+                    MG_Remote::Client::ObjectDeathEmit::NoSession) {
+                    return;
+                }
+                // NoSession is the ONE shape the record cannot carry: a transport configured
+                // with no client session at all - a ServerLoop fixture driving a server role
+                // with no client, never a real split (there a session exists whenever the
+                // server does). The server loop IS there, so the death takes the delivery
+                // that predates the record, kept VERBATIM for exactly this arm: a stack
+                // struct hopped to the apply thread, which runs the switch below. NoHandle
+                // does NOT land here - a handle that never existed has no twin to kill (§5.2)
+                // - and a loop that is not RUNNING (teardown, pre-Start) has no thread to hop
+                // to; the twin dies with the server either way.
+                if (!MG_Remote::Server::ServerLoopInstance().Running()) {
+                    return;
+                }
                 struct Death { MG_Pipe::MGPipeKind kind; Uint64 lifetimeId; } death{kind, lifetimeId};
                 MG_Remote::Server::ServerLoopInstance().RunOnApplyThread(
                     +[](void* user) -> MobileGLResult {
@@ -289,6 +317,43 @@ namespace MobileGL::MG_Backend::DirectGLES {
             .OnDestroyed = OnFrontendStateObjectDestroyed,
         };
     } // namespace
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Bool ReleaseTwinsForWireObjectDeath(MG_Pipe::MGPipeHandle handle, MG_Pipe::MGPipeKind kind) {
+        // The handle-keyed twin of the notice switch above, and deliberately NOT that switch:
+        // the record carried the handle, so no lifetime id is probed and the client's
+        // allocator - a client-only surface under a transport (CONTRACT-P5C.md §3.1) - is
+        // never touched from the apply thread. Each arm names its kind's registry GLOBAL for
+        // the same spelling reason as the notice arms: ReleaseByHandle /
+        // ReleaseTwinByHandle is static and is answered by every table of the kind that
+        // exists, this global's own and any by-value copy a fixture or a context reset holds.
+        switch (kind) {
+        case MG_Pipe::MGPipeKind::Texture:
+            return TextureImpl::g_backendTextureObjects.ReleaseByHandle(handle);
+        case MG_Pipe::MGPipeKind::Framebuffer:
+            return FramebufferImpl::g_backendFramebufferObjects.ReleaseByHandle(handle);
+        case MG_Pipe::MGPipeKind::Renderbuffer:
+            return RenderbufferImpl::g_backendRenderbufferObjects.ReleaseByHandle(handle);
+        case MG_Pipe::MGPipeKind::SamplerCso:
+            return SamplerImpl::g_backendSamplerObjects.ReleaseByHandle(handle);
+        case MG_Pipe::MGPipeKind::ShaderCso:
+            return PrgramImpl::g_backendProgramObjects.ReleaseByHandle(handle);
+        case MG_Pipe::MGPipeKind::SamplerViewCso:
+            // The notice arm's REDUNDANT SECOND PATH, keyed by the view's handle the same
+            // way (CONTRACT-P5C.md §5.2): the client's delete_sampler_view may already have
+            // released the twin, in which case the generation check inside fails and this
+            // answers false. A false here is idempotency, never a leak - the view twin owns
+            // no driver id of its own.
+            return SamplerViewImpl::BackendSamplerViewTable::ReleaseTwinByHandle(handle);
+        case MG_Pipe::MGPipeKind::VertexElementsCso:
+            return VertexArrayImpl::g_backendVertexArrayObjects.ReleaseByHandle(handle);
+        default:
+            // Buffer's death crosses as resource_destroy (P3a), exactly as the notice
+            // switch's default arm rules; every other kind has no twin table here.
+            return false;
+        }
+    }
+#endif
 
     // The one sentence that decides the arm, written once so that a test can drive every
     // combination of the two knobs and so that bring-up and first-use cannot disagree.

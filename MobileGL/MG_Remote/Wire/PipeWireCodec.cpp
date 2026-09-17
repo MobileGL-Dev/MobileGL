@@ -239,7 +239,9 @@ namespace MobileGL::MG_Remote::Wire {
     X(PatchParameter, MGPPatchParameter)                                                       \
     X(BindStreamOutput, MGPStreamOutputBind)                                                   \
     X(SetStorageBlockBinding, MGPStorageBlockBinding)                                          \
-    X(CopyFramebufferToTexture, MGPCopyFromFramebuffer)
+    X(CopyFramebufferToTexture, MGPCopyFromFramebuffer)                                        \
+    X(ApplierReset, MGPApplierReset)                                                           \
+    X(ObjectDeath, MGPHandleOnly)
 
     namespace {
 
@@ -2084,6 +2086,20 @@ namespace MobileGL::MG_Remote::Wire {
             return m_verbs != nullptr &&
                    m_verbs->OnCopyFramebufferToTexture(
                        *static_cast<const MGPCopyFromFramebuffer*>(payload));
+
+        // ---- P5c's two control records, opcodes 77..78 (MG_Remote/CONTRACT-P5C.md §5) --------
+        //
+        // Fixed-size PODs the bounds gate has already proved; neither carries a blob, a tail
+        // or a reply, so each arm hands over and stops. ObjectDeath's null-handle refusal is
+        // the sink's, not the codec's: the codec proves SHAPES, and "the client emits nothing
+        // for an object that never crossed" (§5.2) is a contract fact about the peer.
+        case MGPWireOp::ApplierReset:
+            return m_verbs != nullptr &&
+                   m_verbs->OnApplierReset(*static_cast<const MGPApplierReset*>(payload));
+
+        case MGPWireOp::ObjectDeath:
+            return m_verbs != nullptr &&
+                   m_verbs->OnObjectDeath(*static_cast<const MGPHandleOnly*>(payload));
 
         case MGPWireOp::SetSwapInterval:
             // Class C, wave 3 (census-classC.md "static cross"); not a verb (FillPoints.def:21).
