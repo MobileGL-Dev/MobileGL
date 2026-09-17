@@ -426,3 +426,24 @@ Redmi `2f7cbe2e`，证据根 `MobileGL/.trace-work/p5b-redmi/p5bcodex2/2f7cbe2e/
 splitctl−push 全部在 ±1.6% 内（增量来自 inproc 传输与 barrier，不是 APK / 构建差）；p99 同向放大（sodium DirectVulkan 帧 p99 +107.7% 为离群尾帧）。inproc 臂 peak RSS 389 MiB – 2.5 GiB，全角色映射 560.5 MiB（256 MiB × 角色视图是虚拟映射容量，不是 RSS 增量）。
 
 **fixture 受限的 8 组**：`iris-bsl-in-world` 只有 123 个 benchmark 帧，低于 200 帧尾规则，四臂 × 双后端验证全部失败（pull 同失败，是 fixture 上限不是回归）；123 帧完整序列按同法折算成补充表 `ab-tables-bsl-123frame-supplement.md`：barrier tax CPU p50 DirectGLES **+7.1%**、DirectVulkan **+9.1%**，不混入上表。性能仍只记录、不作阻塞门。
+
+## 8. P5c（`11ac3de6..b88e8487`，同日收官）
+
+出口门（E-P5c）实测：
+
+| 门 | 结果 |
+|---|---|
+| 守卫开启下 unit | **2187/2187**（strict `MOBILEGL_IPC_STRICT_ERRORS=1` 下同绿） |
+| 守卫开启下 `integration-split` | **111/111**（107 + ct 的 4 条 CtWireScenario，全真跑） |
+| 每层守卫 red-once | layer-1（MipmapStorage 守卫短路 → `TextureMapMipmapDataFromTheApplyThreadIsFatalByName` 红）与 layer-2（`RefusePipeInputsTouchWhileApplierOwnsIt` 短路 → `ClientPipeInputsFillWhileTheApplierOwnsItIsFatalByName` 红）各红一次并复原；tx 的采纳改回丢指针 → 恰 `StagedTextureProductionTest` 红；ev 的 writeback 改回裸指针 → `AtomicCounterScenario.SubDataAfterDispatchSurvivesAnImmediateReadback` 按名红；ct 的发射短路 → Ct 4/4 按名红；rv 的发射门短路 → 7 条按名红 |
+| 纹理 `0xDD` audit | bsl in-world（100000 调用）与 iris-complementary in-world 全程零 Fatal |
+| `SEG_EVENT` 往返 | 三种事件 + `kEventGlError` 各有单元往返；排空点 `eventDropped == 0` |
+| `rsp` 分类 | 值类 = 0（rv 的 FieldOwnershipTest 钉住）；按帧实测：bsl 948.5/帧（38.7/draw，123 帧）、complementary 1591.9/帧（151 帧）、iterationrp 286.2/帧（108 帧后止于既有具名 `texture-remint-pull`）；残留全为对象类 15 行 |
+| 普查（integration-gpu @ inproc，对同机 11ac3de6 基线逐名比对） | 基线 253 红 / 收官头 423 红；183 条 newly-failing 中 11 条为三个真回归（默认 FBO 格式时序、大 writeback 溢出、XFB scatter 读前端）——已修并回归绿；其余 172 条全部带 Fatal 名证据归类为设计红（传输下旧臂具名拒绝的对照车道 14 条 + Magma P7 未迁移面 156 条）与 2 条 DirectVulkan CtWire（改按名 skip：Magma 无 object_death 生产者，P7） |
+| G1（pull 符号恒等，`11ac3de6` ↔ 收官头，CI 同款 sym 构建） | 0 增 / 0 删 / **3 认定 resize** / 0 重命名，`.text` −16 B：`SwapchainObject::Create`（ev 表面事件化）、`CopyTexSubImage2D`（hd 传输臂）、`ScopedRestartIndexSubstitution`（server-shadow 臂）；pull 构建零 `MG_Remote` 符号 |
+| G5（p3a / p4a 保护区） | 字节一致 |
+| 生成器 / 卫生门 | 双生成器 --check/--self-test 绿；doc 引用、include 闭包、dirty-surface 绿 |
+| Redmi 四臂复测 | **未做**（记录项，需设备窗口；barrier tax 重测随之） |
+| 79 trace 普查 | **未重跑**（全集语料不在本机；P5b 的 72/6/1 仍以其头为准） |
+
+审计的 59 处直接访问的终态：纹理纹素 / 形状 / 脏区改读 server staged shadow（tx）；反向通道四条事件（ev）；句柄解析全部按记录（hd）；`applier_reset` / `object_death` 上 wire（ct）；值类残余读清零（rv）；双层角色守卫 + `InBarrierWait`（gt）。**未到期的具名债**：`MGPipeReverseAnnouncementScope`（绑定记录 P4b 才发射的 ensure/通告族）与 `MGPipeFrontendKeyedRegistryScope`（G6 前端键 twin registry，P3b/P4b 重键）两个 scope 内的只读探测，以及对象类 15 行 BARRIER-PULLED——全部具名、可 grep、有退役阶段。
