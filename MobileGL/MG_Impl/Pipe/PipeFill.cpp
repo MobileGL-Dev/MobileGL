@@ -48,6 +48,9 @@
 // lanes must keep answering exactly what they answered before.
 #include <MG_Remote/Client/CapsMirror.h>
 #include <MG_Remote/Client/WireTables.h>
+// P5c gt (CONTRACT-P5C §6 layer 2, audit A1): the client-side gPipeInputs check consults
+// InBarrierWait() and ApplyThreadIsInsideApplier() - both live here.
+#include <MG_Remote/Client/ClientSession.h>
 // P5c ev (CONTRACT-P5C §4.2): RecordError's transport arm posts kEventGlError through the
 // server session, and InvalidateCompileEnv's forward is deleted with an active transport.
 #include <MG_Remote/Server/ServerSession.h>
@@ -532,6 +535,12 @@ namespace MobileGL::MG_Pipe {
     // an unrelated frontend write.
     void MGPipeNoteFrontendMutation(MGPipeInputField field) {
         PipeInputs& inputs = gPipeInputs;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (gt, layer 2): the single-field refresh is a client write into gPipeInputs too -
+        // same gate as the fill.
+        MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(
+            "MGPipeNoteFrontendMutation");
+#endif
         auto* ctx = LiveContext();
         if (ctx == nullptr) return;
         const auto verb = inputs.CurrentVerb();
@@ -1827,6 +1836,11 @@ namespace MobileGL::MG_Pipe {
 
     void MGPipeLeaveVerb() {
         PipeInputs& inputs = gPipeInputs;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Same layer-2 gate as the fill: the serial bump and the verb reset below are writes
+        // into gPipeInputs (gt).
+        MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt("MGPipeLeaveVerb");
+#endif
 #if MOBILEGL_PIPE_POISON
         // Same bump the next fill would make, without a verb to fill from: no field is
         // stamped, so every stamp this verb made falls behind the serial.
@@ -2657,6 +2671,15 @@ namespace MobileGL::MG_Pipe {
     // ---- the validate point (P2 brief D1) ----
     void MGPipeValidateForVerb(MGPipeVerb verb) {
         PipeInputs& inputs = gPipeInputs;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (gt, CONTRACT-P5C §6 layer 2): the residual fill is THE client-side write into
+        // gPipeInputs, and it is legal only because it runs before the record is published -
+        // under an armed barrier the apply thread's in-applier flag is provably down here. If
+        // that ever stops being true this is the check that says so, rather than the applier
+        // reading a half-written fill.
+        MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(
+            "MGPipeValidateForVerb");
+#endif
         ParsePoisonOmissionKnob();
 #if MOBILEGL_PIPE_VERIFY
         ArmVerify();

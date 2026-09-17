@@ -969,6 +969,25 @@ namespace MobileGL::MG_Remote::Client {
     Bool ClientSession::ApplyThreadIsInsideApplier() {
         return g_applyThreadInsideApplier.load(std::memory_order_acquire);
     }
+
+    void ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(const char* surface) {
+        if (Server::ServerLoop::OnApplyThread()) return; // the applier owns the block inside a verb
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        if (!ClientSessionInstance().Started()) return; // the bring-up window pre-dates the roles
+        // MOBILEGL_IPC_VERB_BARRIER=0 is R-1's NEGATIVE CONTROL: the single-writer rule is off
+        // by the operator's own hand there, and EmitAndWait's Fatal{BarrierViolation} owns the
+        // red. Firing here instead would pre-empt the control's evidence line.
+        if (!ClientSessionInstance().BarrierArmed()) return;
+        if (!ApplyThreadIsInsideApplier()) return;
+        if (InBarrierWait()) return;
+        MGLOG_F("MGPipe: Fatal{RoleViolation, \"gPipeInputs\"} - the GL thread touched gPipeInputs "
+                "(%s) while the apply thread was inside the applier and this thread was not in a "
+                "barrier wait. R-1's barrier is the only thing that makes one process-wide "
+                "gPipeInputs legal (CONTRACT-P5 table 3); a touch in this window races the "
+                "applier's own reads of it",
+                surface);
+        std::abort();
+    }
     void ClientSession::NoteApplyThreadEnteredApplier() {
         g_applyThreadInsideApplier.store(true, std::memory_order_release);
     }

@@ -128,6 +128,20 @@ namespace MobileGL::MG_Remote::Client {
         static Bool InBarrierWait();
         static Bool ApplyThreadIsInsideApplier();
 
+        // P5c (gt, CONTRACT-P5C §6 layer 2 / audit A1): the sentence above's second half,
+        // wired. A GL-thread touch of gPipeInputs while the apply thread is inside the
+        // applier and THIS thread is not in a barrier wait is Fatal{RoleViolation,
+        // "gPipeInputs"} - the barrier is the only thing that makes one process-wide
+        // gPipeInputs legal (CONTRACT-P5 table 3), and a touch in that window races the
+        // applier's own reads of it. The residual fill and the verify harness are legal by
+        // timing, not by exemption: they run before the record is published, which under an
+        // armed barrier is a moment the flag is provably down (the applier drops it before
+        // appliedSeq advances past the record the client last waited on). No-op when no armed
+        // split session is live, when the caller IS the apply thread, and when the barrier is
+        // disarmed - MOBILEGL_IPC_VERB_BARRIER=0 is R-1's negative control and its red belongs
+        // to Fatal{BarrierViolation}, not to this check.
+        static void RefusePipeInputsTouchWhileApplierOwnsIt(const char* surface);
+
         // ---- c1's additions ---------------------------------------------------------------
 
         // The apply thread's half of R-1's invariant. v1's apply loop brackets its

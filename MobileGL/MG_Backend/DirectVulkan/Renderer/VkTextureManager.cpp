@@ -1744,6 +1744,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Bool VkTextureManager::SyncTexture(MG_State::GLState::ITextureObject &texture,
                                        TextureResource &outResource) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (gt): Magma's texture sync still reads - and clears - the CLIENT's mip shadow:
+        // the dirty scan below, and UploadDirtyMipLevels' texel reads / region reads /
+        // MarkStorageDirty(false) clears. CONTRACT-P5C §2 migrated Espryt's sync and Magma's
+        // T5 writes, and left THIS path on the legacy arm; under the verb barrier and one
+        // address space the reads answer correctly, and the migration is P7's server-side
+        // sync. The scope is the debt's greppable form (MipmapStorage.h); outside it the
+        // layer-1 guard still aborts.
+        const MG_State::GLState::MGPipeTextureLegacyArmScope textureLegacyArm;
+#endif
         // Cross-draw fast path: if the resource is already built and neither the texture's
         // pixel content (bumped in MarkStorageDirty), its SHAPE (bumped in BumpShapeVersion)
         // nor its params changed since the last sync, there is nothing to re-check or

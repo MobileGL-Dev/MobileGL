@@ -147,6 +147,23 @@ namespace MobileGL::MG_Pipe {
         if (!serverStamped ||
             kMGPipeFieldOwnership[static_cast<SizeT>(field)] != MGPipeFieldOwnership::kBarrierPulled ||
             !FieldIsInVerbClass(field, verb)) {
+            // P5c (gt, CONTRACT-P5C §6 layer 1): under a server stamp, a stale read of a field
+            // whose row is RECORD-SUPPLIED or APPLIER-DERIVED - i.e. a value a pushed record
+            // DOES carry, read where this verb's stamp does not cover it - is a role violation
+            // named by its surface, not a generic unmigrated read: the wire already owns the
+            // answer, so reaching past it into the residual fill is rule E's shape. A
+            // BARRIER-PULLED field outside the verb's class and a FATAL field keep the poison
+            // Fatal - those are the stamp table's own verdicts, not a role's overreach.
+            const MGPipeFieldOwnership ownership = kMGPipeFieldOwnership[static_cast<SizeT>(field)];
+            if (serverStamped && (ownership == MGPipeFieldOwnership::kRecordSupplied ||
+                                  ownership == MGPipeFieldOwnership::kApplierDerived)) {
+                MGLOG_F("MGPipe: Fatal{RoleViolation, \"%s\"} - the server read this field stale "
+                        "at %s, but a pushed record carries it (the row is %s): the read reached "
+                        "the client's residual fill for a value the wire already owns",
+                        kMGPipeInputFieldNames[static_cast<SizeT>(field)], MGPipeVerbName(verb),
+                        MGPipeFieldOwnershipName(ownership));
+                std::abort();
+            }
             MGPipeInputPoisonFatalForVerb(field, verb);
         }
         CountBarrierPull(field, verb);
