@@ -57,6 +57,7 @@ shape no sink implements, a null backend slot DECLINES (`return false`). P5c add
 | **`MGPContextValues`** | The rv field table (§5.3), one fixed-width POD, `MGP_ASSERT_POD`-pinned. Whole-record hash-suppressed like every other `set_*` call: it crosses only when one of its source values moved since the last emission. There is no dirty mask in the payload — a suppressed record means "nothing moved", never "field invalid". | — | `MGPipeApplySetContextValues`, the server accessors it feeds |
 | **texture per-level extent, server-side** | `max(1, base_extent >> level)` computed from the descriptor's `Width/Height/Depth` and `Levels` (`MGPResourceDesc`, `MGPipeTypes.h:295-360`). The client does NOT emit per-level extents; the derivation is the mip chain's definition and two honest ends compute the same number. | — | tx's `SyncMipmapsToBackend` (§2.2) |
 | **`EventKind` = 4: `kEventGlError`** | `EventRing.h`'s enum gains `kEventGlError = 4` beside the existing three (:46-51). Head `EventGlErrorHead { Uint32 Code; Uint32 MessageBytes; }` (8 B) followed by the NUL-terminated message inline, `MessageBytes = strlen + 1`, **capped at 1024** (a longer message is truncated at the producer; the cap is a static_assert, not a check). `Code` is the frontend `ErrorCode`, widened. | `MessageBytes == 0` is `Fatal{ProtocolCorruption, "kEventGlError"}` (the NUL travels, rule A's twin) | `ClientSession::DrainEventRing` |
+| **`MGPSurfaceInfo` zero-extent semantics** | `Width == 0 && Height == 0` is the FORMAT-ONLY publication (the DirectGLES shape: the placeholder's extent is deliberately left alone, only the depth/stencil `InternalFormat` moves); a non-zero extent is the SWAPCHAIN shape (storage at the extent, then format). `Samples`/`Layers` are informational only (1/1 from Vulkan, 0/0 from GLES; the placeholder attachment model has no MSAA) and the consumer ignores them. | see left | the surface-changed consumer |
 
 ---
 
@@ -78,13 +79,25 @@ its own shadow and the descriptor.**
 `MobileGL/MG_Remote/Server/StagedTextureStore.h`, the texture twin of `StagedShadow.h`
 (R-11), and held to its four rulings:
 
-1. **Keyed by the texture resource twin's address** (stable, SharedPtr-held, exactly as
-   `StagedShadowStore`'s buffer keys, `StagedShadow.h:50-53`). Every event that ends a key's
-   life — respecify, destroy, context death — already has a call site to drop it from.
-2. **Coverage is EXACTLY what the records declared, per (uploadTarget, level), never
-   widened.** `Adopt(key, uploadTarget, level, extent, regions, regionCount, bytes)` copies
-   the staged run into server-owned level storage sized to the level's extent and records the
-   region set. A sync that reaches a texel no record covered is
+1. **Keyed by the wire handle the record carried** (`KeyForHandle` = `{slot, gen}` under a
+   tag bit) — AMENDED from "the twin's address" at tx's landing, for two reasons that
+   together left no honest alternative: constructing a texture twin calls `glGenTextures`
+   (Managers.cpp:5496), so a twin-address key either forces twin minting at adopt time (a
+   driver name burnt for a texture that may never draw, and a GL context required in the
+   R-16 unit case — buffer twins mint no GL and can be created lazily) or strands levels
+   adopted before the first sync; and the handle is rule E's cross-role identity anyway,
+   `{slot, gen}`-exact across a slot recycle. Magma's T5 path, which has no wire handle in
+   its identity tables, keys by twin address under a SECOND tag bit, so the two key spaces
+   can never collide. Every event that ends a key's life — respecify, destroy
+   (`resource_destroy`'s texture arm, delivered precisely because the store is
+   handle-keyed), context death — has a call site to drop it from.
+2. **Coverage is the WHOLE STAGED RUN per (uploadTarget, level)** — AMENDED from "the
+   region set" at tx's landing: a texture `resource_subdata` always stages the entire
+   level shadow (`Blob.Size` IS the declared byte count), so the run is the honest unit;
+   the region set stays what it always was — the dirty SHAPE the pending set carries.
+   Region-precise coverage would `Fatal` on the legal
+   texStorage→small-box `glTexSubImage`→conversion-fallback flow, whose sync reads the
+   whole level. A sync that reaches a level no record covered is
    `Fatal{StageSnapshotTooNarrow, "<site>"}` — the same words as the buffer half, and for the
    same reason (`StagedShadow.h:96-116`: moving zeroes into the store is silent data loss,
    not a missing optimisation).
@@ -109,14 +122,19 @@ no store coverage is the `Fatal{StageSnapshotTooNarrow}` case, not a silent re-r
 | texture target / levels count from the client object | the descriptor (`Target`, `Levels`; the `MGB_STORAGE_LEVELS` handle arm already reads `pushedStorage->Desc.Levels`, Managers.cpp:6651-6652) |
 | dirty region, level HAS a pending upload | the record's regions (unchanged — already record-supplied, Managers.cpp:7358-7369) |
 | dirty region, level has NO pending upload (GPU-generated mips, re-derivation) | **the server's own dirty mark on the shadow** (§2.3) — the client is never asked |
+| level EXISTS at all (`Levels = N` says nothing about a sparse chain) | the store's DEFINED-NESS, fed by the respecify hook: a named level redefines that one, an immutable whole-resource respecify defines the whole chain (all six cube faces included, GL 4.6 core 8.19), a mutable whole-resource respecify defines nothing. Without this the §1 derivation would define `{0,0,0}`-extent holes into existence and change FBO/sampling completeness — added at tx's landing, the contract's own omission |
 
 ### 2.3 GPU-generated mips (T5) — who owns "dirty" now
 
 A GPU-side generation (Magma's `GenerateMipmap`, Espryt's re-derivation arms) dirties the
-SERVER's shadow, not the client's: `EnsureGenerateMipmapStorageAllocated` is replaced by a
-store operation that allocates the level's server storage from the §1 extent derivation and
-marks it dirty-in-shadow. The client's `TextureObjectMipmap` is not touched from the apply
-thread — `AllocateStorage` and `MarkStorageDirty` on it are §6 layer-1 surfaces.
+SERVER's shadow, not the client's. The two backends land this in their own shapes, both
+final: **Magma**'s `EnsureGenerateMipmapStorageAllocated` is replaced by a store operation
+that marks the level Defined at the §1 extent and GpuDirty-in-shadow (the store answers
+"exists" and "needs upload" for it; the client object is never touched). **Espryt**
+generates the levels ON THE DRIVER, so no server shadow allocation is needed at all — the
+levels are already where a sync would put them, and the shadow's staleness is the correct
+state ruled below. Either way the client's `TextureObjectMipmap` is not touched from the
+apply thread — `AllocateStorage` and `MarkStorageDirty` on it are §6 layer-1 surfaces.
 
 The client shadow for such levels is stale and that is CORRECT: the two readers that could
 observe the staleness are both named refusals under split — `glGetTexImage` served from the
@@ -146,14 +164,45 @@ The rules:
    (`SlotTables.h:209-252`) and the death switch's `DestroyByLifetimeId` arms are
    monolith-only; split paths call the handle forms (`GetOrCreate(handle)`,
    `ReleaseByHandle`, :350-361).
+   **THE NAMED EXEMPTION, ruled at the tx/ev/hd merge:** the sites whose handle-carrying
+   records the client does not EMIT yet. `set_shader_buffers` and
+   `set_stream_output_targets` sit in the catalogue but are P4b's to emit
+   (`SetHashSuppressor.h` says so), so the buffer binding-point ensures they would feed
+   (`EnsureBufferResource`→`HandleOfBuffer`, Managers.cpp:3199, and its SSBO/UBO/atomic/
+   XFB/PBO callers) and the GPU-written announcement (`MarkBufferGpuWritten`'s handle
+   answer, `MGPipeAnnounceBufferGpuWritten` for Magma) have no record handle to resolve
+   from in P5c. Those probes run inside `MGPipeReverseAnnouncementScope`
+   (`SlotAllocator.h`) — one read-only lifetime-id read, scoped, named and greppable,
+   retired by P4b's emission (Espryt) and P7's server-side binding table (Magma). Every
+   other apply-thread allocator access (`Acquire`, `Free`, and `FindByLifetimeId` outside
+   the scope) stays Fatal with no exemption. The audit's B2 row is correspondingly
+   re-scoped: what hd retires is every site a record DOES name; the rest is this scope.
+   **THE SECOND NAMED EXEMPTION, ruled the same day:** the G6 frontend-keyed twin registry
+   — every `HandleOf`/`Find`/`GetOrCreate(const StatePtr&)` probe the texture / sampler /
+   sampler-view / VAO / program resolvers make, and the mailbox-delivered death switch
+   until ct's record replaces the hop (ct keeps a documented NoSession server-only-fixture
+   arm, and that arm is inside the scope too). These run inside
+   `MGPipeFrontendKeyedRegistryScope` (`SlotAllocator.h`), the executable form of §5.4's
+   pinned object-surface list: wrapping a site names the debt in code, an unwrapped probe
+   still aborts, and the guard's death tests pin exactly that. Retires with the G6 row's
+   own phases (P3b/P4b rekeys; the death switch's scope dies when the mailbox hop does).
 2. **The records already carry the handles.** `MGPBlit::ReadFbo/DrawFbo`, `MGPMipPlan::Res`,
    `MGPCopyFromFramebuffer::Dst`, `MGPDrawIndirect::Buffer` / `ParameterBuffer`,
    `MGPGridInfo::IndirectBuffer` — hd's edit is to USE them, not to add fields. A site that
    needs an object no record names is a missing handle and stops at the integrator, not a
    quietly-added lifetime-id probe.
 3. **Named blit.** `ServerVerbSink::OnBlit` resolves `ReadFbo`/`DrawFbo` through the FBO
-   twin table by handle and calls the NAMED backend entry; it no longer relies on "the read
-   and draw framebuffers are already bound" (`PipeApplier.cpp:232-237`). The client's
+   twin table by handle — AMENDED in shape at hd's landing: the named backend ENTRY's
+   signature takes frontend `SharedPtr<FramebufferObject>` and the shared function table
+   cannot grow a handle parameter without moving G1, so the record's handles reach the
+   backend through a split-only verb-handle workspace in `MGPipeApplierState` (the sink
+   writes it before dispatch, the backend reads it within the same verb), and
+   `BlitFramebuffer` takes its named arm when the workspace names a pair: twins resolved
+   by `GetOrCreateByHandle`, frontend objects reached through the twin table's state note
+   (`NoteStateForHandle`/`StateForHandle` — a server-side note seeded by the record-driven
+   sync, object-class, P3b/P4b retires it with the twin tables). A backend that does not
+   consume the workspace declines LOUDLY (Magma until P7) — a blit that silently landed on
+   the bound FBO would be a wrong picture, not a missing feature. The client's
    `ScopedBlitBindings` (`EmitTables.cpp:741-762`) is deleted from the split path — it exists
    only to stage values for the server's binding-slot read, and the read is gone. The
    record's `MGPBlit` payload is unchanged.
@@ -164,11 +213,15 @@ The rules:
    from the record's handle fields (CONTRACT-P5B §2 d1/i1 already put them there); the
    `GetBufferBindingSlot(DrawIndirect)` read at `DirectGLES.cpp:6702-6703` and its dispatch
    twin are layer-1 surfaces at those sites.
-6. **`HasDefinedContent` is the descriptor's bit.** `MGPResourceDesc::HasDefinedContent`
-   already exists; the client publishes it on ResourceCreate/Respecify, and it is sufficient
-   because the bit only ever moves undefined→defined at a storage-defining call, which is
-   always a respecify. `EnsureBufferResourceForHandle` (Managers.cpp:3147-3148) reads
-   `record->Desc.HasDefinedContent` with an active transport; `bufferObject->HasDefinedContent()`
+6. **`HasDefinedContent` is the descriptor's bit OR the staged coverage set** — AMENDED at
+   hd's landing, because this contract's premise was wrong: the bit does NOT move only at a
+   storage-defining call. The streaming idiom (`glBufferData(size, NULL)` then
+   `glBufferSubData`) defines content through subdata with NO new descriptor
+   (Managers.cpp:3130-3146 says so, `ServerLoopTest`'s streaming cases pin it), and a pure
+   descriptor read would orphan live bytes at the next respecify. The answer is
+   `Desc.HasDefinedContent || the staged coverage set is non-empty` — the coverage set IS
+   "content records delivered since the last orphan", pointwise equivalent to the
+   frontend's flag and purely server-side. `bufferObject->HasDefinedContent()`
    is a layer-1 surface.
 7. **caps.** Magma's four reads of the client mirror (`DirectVulkan.cpp:713-715`,
    `VulkanRenderer.cpp:667-676`, `VertexInputStateFactory.cpp:249-250`, :502-503) read
@@ -218,9 +271,9 @@ thread is known to be outside the applier.
 | `kEventBufferWriteback` | `Ops_H_Readback`'s writeback (Managers.cpp:2339-2343): the server copies the mapped bytes INTO the event record's inline tail instead of casting the pointer into `MGPBlobRef::Offset` | `EventBufferWritebackHead` + inline bytes |
 | `kEventGpuWritten` | `MarkBufferGpuWritten` (Managers.cpp:2722-2753) and Magma's three bypasses (`UniformManager.cpp:1075`, :1231, `VulkanRenderer.cpp:11618`) — Magma's direct `bufferObject->MarkGpuWritten()` calls are ROUTED THROUGH the callback, the bypass is deleted | `EventGpuWrittenHead` + `EventRange[RangeCount]` |
 | `kEventSurfaceChanged` | `PublishDefaultFramebufferDepthStencilFormat` (`DirectGLES.cpp:11519-11610`) and the swapchain twin (`SwapchainObject.cpp:276-333`): the backend fills `MGPSurfaceInfo` and posts; it no longer calls `AllocateStorage`/`SetInternalFormat` on `pDefaultFramebufferInfo` | `EventSurfaceChangedHead` |
-| `kEventGlError` | `PipeInputs::RecordError` (`PipeFill.cpp:1753-1756`) posts with `ErrorCode` + message (§1). **Ordering is P9's** (CONTRACT-P5 table 2 row `RecordError`): the event is observed at the next drain point, which preserves per-thread program order of error-then-read but not cross-verb interleaving; that is the accepted P5c shape and the contract says so rather than discovering it in P6. | `EventGlErrorHead` + inline message |
+| `kEventGlError` | `PipeInputs::RecordError` (`PipeFill.cpp:1764-1772`) posts with `ErrorCode` + message (§1). **Ordering is P9's** (CONTRACT-P5 table 2 row `RecordError`): the event is observed at the next drain point, which preserves per-thread program order of error-then-read but not cross-verb interleaving; that is the accepted P5c shape and the contract says so rather than discovering it in P6. | `EventGlErrorHead` + inline message |
 
-`PipeInputs::InvalidateCompileEnv` (`PipeFill.cpp:1764-1772`) is DELETED with an active
+`PipeInputs::InvalidateCompileEnv` (`PipeFill.cpp:1753-1756`) is DELETED with an active
 transport: R-12's caps re-publication (`CapsMirror.cpp:78-80`) already invalidates the
 compile environment on the client, and the forward is a write into the frontend with no wire
 shape. Its FieldOwnership.def row moves to FATAL under split (§5.4).
@@ -302,7 +355,10 @@ Sink: `ServerVerbSink::OnObjectDeath(const MGPHandleOnly&)` → the per-kind rel
 (`ReleaseByHandle`, `SlotTables.h:350-361`; the SamplerViewCso arm's idempotent
 secondary path, Managers.cpp:239-256, is keyed by the view's handle the same way). The
 mailbox hop (Managers.cpp:208-222) is deleted under split; it stays for monolith, where it
-never fired anyway (the guard at :208 is transport-gated).
+never fired anyway (the guard at :208 is transport-gated). **AMENDED at ct's landing:** a
+documented NoSession fallback arm delivers a death to a server-only fixture's loop (a
+transport configured with no client session is not a real split); with the §3.1
+exemption, that arm's `DestroyByLifetimeId` probes ride inside the registry scope.
 
 ### 5.3 `set_context_values` — opcode 79, the rv field table
 
@@ -343,9 +399,10 @@ The generator's four classes are unchanged. c0c edits rows; rv/tx/hd land the co
   landed).
 - The three shutters → APPLIER_DERIVED ("the applier's Serial").
 - `GetCurrentVertexAttribute` → RECORD_SUPPLIED (the amended payload).
-- `InvalidateCompileEnv` (field + forward rows) → FATAL under split with mechanism "deleted;
-  R-12 caps re-publication" — a read after the deletion is a real defect and should abort,
-  not pull.
+- `InvalidateCompileEnv` (field + forward rows) → FATAL with mechanism "DELETED under split
+  by P5c ev; R-12's caps re-publication replaced it" — the class is stated unconditionally
+  because the table only ever describes the split server's reads (under monolith there is no
+  server to read), so "under split" would be noise in a column that means it everywhere;
 - **The texture family is NOT a set of new field rows** — a ruling, because the texel /
   per-level extent / dirty reads are reads of frontend OBJECT internals reached through
   `GetTextureUnitObject` / the `GetTextureObject` sticky forward, not `MGPipeInputField`

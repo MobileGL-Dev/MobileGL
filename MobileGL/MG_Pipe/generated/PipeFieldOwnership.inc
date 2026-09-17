@@ -92,7 +92,7 @@ inline constexpr MGPipeFieldOwnership kMGPipeFieldOwnership[kMGPipeInputFieldCou
     MGPipeFieldOwnership::kRecordSupplied, // IsCapabilityEnabledIndexed
     MGPipeFieldOwnership::kBarrierPulled, // IsTransformFeedbackActive
     MGPipeFieldOwnership::kBarrierPulled, // IsTransformFeedbackPaused
-    MGPipeFieldOwnership::kBarrierPulled, // InvalidateCompileEnv
+    MGPipeFieldOwnership::kFatal, // InvalidateCompileEnv
     MGPipeFieldOwnership::kBarrierPulled, // ValidateProgramName
     MGPipeFieldOwnership::kBarrierPulled, // RecordError
     MGPipeFieldOwnership::kBarrierPulled, // GetBoundTransformFeedbackLifetimeId
@@ -159,7 +159,7 @@ inline constexpr const char* kMGPipeFieldRetiringPhase[kMGPipeInputFieldCount] =
     "-", // IsCapabilityEnabledIndexed
     "P3b/P4b (Espryt), P7 (Magma)", // IsTransformFeedbackActive
     "P3b/P4b (Espryt), P7 (Magma)", // IsTransformFeedbackPaused
-    "P5", // InvalidateCompileEnv
+    "-", // InvalidateCompileEnv
     "P9", // ValidateProgramName
     "P9", // RecordError
     "P3b/P4b (Espryt), P7 (Magma)", // GetBoundTransformFeedbackLifetimeId
@@ -187,7 +187,7 @@ inline constexpr MGPipeFieldOwnership kMGPipeFieldOwnershipForward[kMGPipeFieldO
     MGPipeFieldOwnership::kBarrierPulled, // GetTextureObject
     MGPipeFieldOwnership::kBarrierPulled, // HasOpenTransformFeedbackSpan
     MGPipeFieldOwnership::kBarrierPulled, // ValidateProgramName
-    MGPipeFieldOwnership::kBarrierPulled, // InvalidateCompileEnv
+    MGPipeFieldOwnership::kFatal, // InvalidateCompileEnv
     MGPipeFieldOwnership::kBarrierPulled, // RecordError
 };
 inline constexpr const char* kMGPipeFieldOwnershipForwardMechanism[kMGPipeFieldOwnershipForwardCount] = {
@@ -196,7 +196,7 @@ inline constexpr const char* kMGPipeFieldOwnershipForwardMechanism[kMGPipeFieldO
     "a server-side texture handle table", // GetTextureObject, retires in P7
     "server-side XFB span state", // HasOpenTransformFeedbackSpan, retires in P7/P9
     "a client-resolved program name probe", // ValidateProgramName, retires in P9
-    "OnCapsInvalidated - the re-arriving caps snapshot IS the invalidation (R-12)", // InvalidateCompileEnv, retires in P5
+    "DELETED under split by P5c ev; the re-arriving caps snapshot IS the invalidation (R-12)", // InvalidateCompileEnv, retires in -
     "OnGlError, the ordered reverse-channel error post (R-12); its ordering is P9's", // RecordError, retires in P9
 };
 
@@ -303,6 +303,6 @@ inline constexpr SizeT kMGPipeVerbBoundaryExemptCount = 3;
 // The class sizes, as constants a test can pin without recounting the table.
 inline constexpr SizeT kMGPipeRecordSuppliedFieldCount = 32;
 inline constexpr SizeT kMGPipeApplierDerivedFieldCount = 1;
-inline constexpr SizeT kMGPipeBarrierPulledFieldCount = 28;
-inline constexpr SizeT kMGPipeFatalFieldCount = 2;
+inline constexpr SizeT kMGPipeBarrierPulledFieldCount = 27;
+inline constexpr SizeT kMGPipeFatalFieldCount = 3;
 static_assert(kMGPipeRecordSuppliedFieldCount + kMGPipeApplierDerivedFieldCount + kMGPipeBarrierPulledFieldCount + kMGPipeFatalFieldCount == kMGPipeInputFieldCount, "the four class sizes do not partition the field set");

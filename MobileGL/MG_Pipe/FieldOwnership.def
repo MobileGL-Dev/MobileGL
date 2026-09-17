@@ -164,8 +164,13 @@
       "a lookup into frontend XFB span state keyed by lifetime id")                               \
     X(ValidateProgramName,                BARRIER_PULLED, "P9",                                      \
       "a frontend name-table probe; Coverage.def calls it kClientResolved")                       \
-    X(InvalidateCompileEnv,               BARRIER_PULLED, "P5",                                      \
-      "a WRITE INTO THE FRONTEND; R-12 replaces it with the re-arriving caps snapshot")           \
+    /* P5c ev DELETED the forward under an active transport (CONTRACT-P5C section 4.2):    */  \
+    /* R-12's caps re-publication (CapsMirror.cpp:78-80) already invalidates the compile   */  \
+    /* environment on the client, so a read or call under split is a real defect and       */  \
+    /* aborts, never a pull. The class is unconditional because FieldOwnership only ever   */  \
+    /* describes the split server's reads - under monolith there is no server to read.     */  \
+    X(InvalidateCompileEnv,               FATAL, "-",                                                \
+      "DELETED under split by P5c ev; R-12's caps re-publication replaced it")              \
     X(RecordError,                        BARRIER_PULLED, "P9",                                      \
       "a WRITE INTO THE FRONTEND; R-12's OnGlError, whose ordering is P9's")
 
@@ -191,8 +196,8 @@
       "server-side XFB span state")                                                              \
     X(ValidateProgramName,                BARRIER_PULLED, "P9",                                      \
       "a client-resolved program name probe")                                                    \
-    X(InvalidateCompileEnv,               BARRIER_PULLED, "P5",                                      \
-      "OnCapsInvalidated - the re-arriving caps snapshot IS the invalidation (R-12)")            \
+    X(InvalidateCompileEnv,               FATAL, "-",                                                \
+      "DELETED under split by P5c ev; the re-arriving caps snapshot IS the invalidation (R-12)") \
     X(RecordError,                        BARRIER_PULLED, "P9",                                      \
       "OnGlError, the ordered reverse-channel error post (R-12); its ordering is P9's")
 
