@@ -78,4 +78,15 @@ namespace MobileGL::MG_State::GLState {
     Bool FramebufferState::ValidateFramebufferObject(Uint index) const {
         return m_framebufferObjects.find(index) != m_framebufferObjects.end();
     }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    SharedPtr<FramebufferObject> FramebufferState::FindFramebufferObjectByLifetimeId(Uint64 lifetimeId) const {
+        for (const auto& [index, framebufferObject] : m_framebufferObjects) {
+            if (framebufferObject && framebufferObject->GetLifetimeId() == lifetimeId) {
+                return framebufferObject;
+            }
+        }
+        return nullptr;
+    }
+#endif
 } // namespace MobileGL::MG_State::GLState

@@ -1212,6 +1212,12 @@ namespace MobileGL::MG_State {
             return m_framebufferState.ValidateFramebufferObject(index);
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        SharedPtr<FramebufferObject> GLContext::FindFramebufferObjectByLifetimeId(Uint64 lifetimeId) const {
+            return m_framebufferState.FindFramebufferObjectByLifetimeId(lifetimeId);
+        }
+#endif
+
         // Sampler
         void GLContext::GenSamplerNames(Uint number, Vector<Uint>& samplers) {
             m_samplerState.GenerateNames(number, samplers);

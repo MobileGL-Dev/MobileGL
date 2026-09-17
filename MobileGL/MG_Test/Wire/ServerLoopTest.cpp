@@ -1629,44 +1629,6 @@ TEST(StagedShadowProductionTest, ATwinSurvivingContextLossDropsItsFreedShadowBas
 // shows it": B is the corruption, the upload is the draw, the mapped read-back is the picture. Red
 // once by restoring the MappedData() fallback in liveHostBase(): the store then holds A, the
 // client's bytes, and the R-2.5 audit could never reach a draw again.
-TEST(ServerLoopEglTest, FrontendFramebufferDeathDeletesOnTheContextOwner) {
-    MG_Config::Features.PipePush |= MG_Pipe::kMGPipeSubsystemEsprytSlots;
-    EglServerFixture fixture;
-    MGL_EGL_BRING_UP_OR_BAIL(fixture);
-    ASSERT_TRUE(fixture.MakeCurrent());
-    namespace GLES = MG_Backend::DirectGLES;
-    static auto nativeDelete = GLES::g_GLESFuncs.glDeleteFramebuffers;
-    static std::atomic<Uint32> deleted{0};
-    static std::atomic<Bool> wrongThread{false};
-    nativeDelete = GLES::g_GLESFuncs.glDeleteFramebuffers;
-    deleted.store(0);
-    wrongThread.store(false);
-    auto framebuffer = MakeShared<MG_State::GLState::FramebufferObject>(901u);
-    GLuint driverId = 0;
-    ASSERT_EQ(OnApply([&] {
-        auto& twin = GLES::FramebufferImpl::g_backendFramebufferObjects.GetOrCreate(framebuffer);
-        twin = MakeShared<GLES::FramebufferImpl::BackendFramebufferObject>();
-        driverId = twin->GetBackendFramebufferId();
-        twin->Bind(FramebufferTarget::Draw);
-        GLES::g_GLESFuncs.glDeleteFramebuffers = +[](GLsizei count, const GLuint* names) {
-            if (!Server::ServerLoop::OnApplyThread()) wrongThread.store(true);
-            deleted.fetch_add(count);
-            nativeDelete(count, names);
-        };
-    }), MOBILEGL_OK);
-    ASSERT_NE(driverId, 0u);
-    framebuffer.reset(); // Frontend destructor runs on this client thread.
-    EXPECT_EQ(deleted.load(), 1u);
-    EXPECT_FALSE(wrongThread.load());
-    ASSERT_EQ(OnApply([&] {
-        GLES::g_GLESFuncs.glDeleteFramebuffers = nativeDelete;
-        GLint bound = -1;
-        GLES::g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &bound);
-        EXPECT_EQ(bound, 0) << "native deletion must unbind the framebuffer in the owner context";
-    }), MOBILEGL_OK);
-    fixture.TearDown();
-}
-
 TEST(StagedShadowProductionTest, TheEnsurePathUploadsTheServerShadowNotTheClientObjectsBytes) {
     EglServerFixture fixture;
     MGL_EGL_BRING_UP_OR_BAIL(fixture);
@@ -1820,6 +1782,49 @@ TEST(StagedShadowProductionTest, TheStreamingIdiomThroughAPoolReuseIsUploadedNot
            "whole-store refusal must key on the descriptor's HasDefinedContent); the log says: "
         << appended;
 }
+namespace {
+    // The drive below, in a FORKED CHILD that brings the server up itself (the integration
+    // harness's pre-flight shape), so a Fatal on the apply thread ends the child and not the
+    // case. Exit 8 = the child's bring-up failed; exit 0 = the apply-thread twin mint ran,
+    // which is the refusal this case pins having been removed.
+    [[noreturn]] void RunFrontendFramebufferDeathOnApplyThreadAndExit() {
+        EglServerFixture fixture;
+        if (!fixture.BringUp().empty() || !fixture.MakeCurrent()) ::_exit(8);
+        namespace GLES = MG_Backend::DirectGLES;
+        auto framebuffer = MakeShared<MG_State::GLState::FramebufferObject>(901u);
+        (void)OnApply([&] {
+            auto& twin = GLES::FramebufferImpl::g_backendFramebufferObjects.GetOrCreate(framebuffer);
+            twin = MakeShared<GLES::FramebufferImpl::BackendFramebufferObject>();
+        });
+        framebuffer.reset();
+        ::_exit(0);
+    }
+} // namespace
+
+// P5c (hd, CONTRACT-P5C §3.1 / §6 layer 1): this case's original drive - mint the framebuffer
+// twin on the apply thread off the frontend object's lifetime id, then let the frontend death
+// notice reach the in-process death switch there - is refused by name at the first step:
+// the minting GetOrCreate(StatePtr) is monolith glue and the apply-thread call is
+// Fatal{RoleViolation, "MGPipeSlots"}. The deletion-on-owner semantics it pinned return with
+// ct's object_death record (the framebuffer family's first wire delete), whose sink releases
+// the twin BY HANDLE. The name stays; the pin is now the refusal that stands until ct lands.
+TEST(ServerLoopEglTest, FrontendFramebufferDeathDeletesOnTheContextOwner) {
+    MG_Config::Features.PipePush |= MG_Pipe::kMGPipeSubsystemEsprytSlots;
+    {
+        EglServerFixture probe;
+        MGL_EGL_BRING_UP_OR_BAIL(probe);
+        probe.TearDown();
+    }
+    const SizeT mark = ReadLog().size();
+    EXPECT_EXIT(RunFrontendFramebufferDeathOnApplyThreadAndExit(), ::testing::KilledBySignal(SIGABRT), ".*")
+        << "the apply-thread mint of a frontend framebuffer's twin was not refused; exit 8 is the "
+           "child's own bring-up failing";
+    const std::string appended = ReadLogFrom(mark);
+    EXPECT_NE(appended.find("Fatal{RoleViolation, \"MGPipeSlots\"}"), std::string::npos)
+        << "the abort was not the allocator guard's; the log says: " << appended;
+}
+
+
 #endif // !_WIN32
 
 // =====================================================================================

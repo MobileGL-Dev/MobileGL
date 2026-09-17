@@ -163,4 +163,47 @@ namespace MobileGL::MG_Pipe {
 
     // The monolith's one client allocator. Under split there is one per client context.
     MGPipeSlotAllocator& MGPipeSlots();
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P5c (hd, CONTRACT-P5C §3.1 / §6 layer 1): with an active transport this allocator is a
+    // CLIENT-only surface. Acquire, FindByLifetimeId and Free called from the apply thread -
+    // i.e. a server that resolves or mints handles off a frontend object's lifetime id (T2),
+    // which is memory that will not exist on its side of a real split - are
+    // Fatal{RoleViolation, "MGPipeSlots"}. Compiled out entirely outside split builds, so the
+    // pull build's bytes do not move (G1).
+    void MGPipeRefuseAllocatorFromApplyThread(const char* entry);
+
+    // The NAMED EXEMPTION to the rule above (CONTRACT-P5C §3.1): the family of sites whose
+    // handle-carrying records the client does not EMIT yet. set_shader_buffers and
+    // set_stream_output_targets exist in the catalogue but are P4b's to emit
+    // (SetHashSuppressor.h says so), so the buffer binding-point ensures and the GPU-written
+    // announcement they feed have no record handle to resolve from today. Inside this scope
+    // ONE read-only lifetime-id probe stays legal; the scope is the debt's measurable,
+    // greppable form, and it retires with P4b's emission (Espryt) and P7's server-side
+    // binding table (Magma). Every other apply-thread allocator access stays Fatal.
+    class MGPipeReverseAnnouncementScope {
+    public:
+        MGPipeReverseAnnouncementScope();
+        ~MGPipeReverseAnnouncementScope();
+        MGPipeReverseAnnouncementScope(const MGPipeReverseAnnouncementScope&) = delete;
+        MGPipeReverseAnnouncementScope& operator=(const MGPipeReverseAnnouncementScope&) = delete;
+        static Bool Active();
+    };
+
+    // The SECOND named exemption family (CONTRACT-P5C §5.4): the frontend-keyed twin
+    // registry (audit row G6). The texture / sampler-view / FBO-legacy HandleOf probes are
+    // how the server answers "which twin is this frontend object" while the registry is
+    // keyed by frontend identity - server-PRIVATE state whose rekey onto handles is
+    // P3b/P4b's, not P5c's. A probe inside this scope stays a read-only, barrier-held debt;
+    // wrapping a NEW site in it is the greppable act of naming that debt, and an unwrapped
+    // probe from the apply thread is still Fatal{RoleViolation, "MGPipeSlots"}.
+    class MGPipeFrontendKeyedRegistryScope {
+    public:
+        MGPipeFrontendKeyedRegistryScope();
+        ~MGPipeFrontendKeyedRegistryScope();
+        MGPipeFrontendKeyedRegistryScope(const MGPipeFrontendKeyedRegistryScope&) = delete;
+        MGPipeFrontendKeyedRegistryScope& operator=(const MGPipeFrontendKeyedRegistryScope&) = delete;
+        static Bool Active();
+    };
+#endif
 } // namespace MobileGL::MG_Pipe

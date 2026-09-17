@@ -1230,10 +1230,12 @@ struct F1Peer : Codec::WireVerbSink {
     MGPClear clear{};
     MGPCopyFromFramebuffer copy{};
     MGPMipPlan mip{};
+    MGPBlit blit{};
     unsigned calls = 0;
     Bool OnClear(const MGPClear& v) override { clear = v; ++calls; return true; }
     Bool OnCopyFramebufferToTexture(const MGPCopyFromFramebuffer& v) override { copy = v; ++calls; return true; }
     Bool OnGenerateMipmap(const MGPMipPlan& v) override { mip = v; ++calls; return true; }
+    Bool OnBlit(const MGPBlit& v) override { blit = v; ++calls; return true; }
     void Install() {
         if (Srv::ServerLoopInstance().RunOnApplyThread([](void* self) {
             auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
@@ -1513,6 +1515,333 @@ TEST(RemoteF1, UnboundNamedfiRefusesByName) {
     ExpectNamedAbort(child, "Fatal{UnmigratedVerb, \"ClearNamedFramebufferfi+UNBOUND\"}");
 }
 #endif
+
+// =====================================================================================
+// P5c (hd, CONTRACT-P5C §3): the record's handles are the server's resolution. The sink
+// publishes each verb's own handles into the applier's verb stash (§3.2), the named blit's
+// client emitter no longer rebinds anything (§3.3), and the layer-1 guards refuse the
+// client-only surfaces from the apply thread by name (§3.1, §3.7, §3.8).
+// =====================================================================================
+#if MGTEST_HAVE_FORK
+#include <MG_Backend/DirectGLES/SlotTables.h>
+#include <MG_Backend/DirectGLES/Utils.h>
+#include <MG_Impl/Pipe/SlotAllocator.h>
+#include <MG_State/GLState/BufferState/BufferObject.h>
+
+TEST(RemoteF1, BlitNamedCarriesHandlesAndLeavesTheClientBindingsAlone) {
+    // Red once (executed, reverted): re-bind the named arguments in the client shadow before
+    // emitting (the deleted ScopedBlitBindings); the two binding-slot asserts fail.
+    const auto child = RunInChild([] {
+        StartControlSession();
+        F1Peer peer;
+        peer.Install();
+        MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+        auto boundRead = MakeShared<MG_State::GLState::FramebufferObject>(11);
+        auto boundDraw = MakeShared<MG_State::GLState::FramebufferObject>(12);
+        auto namedRead = MakeShared<MG_State::GLState::FramebufferObject>(13);
+        auto namedDraw = MakeShared<MG_State::GLState::FramebufferObject>(14);
+        MG_State::pGLContext->GetFramebufferBindingSlot(MobileGL::FramebufferTarget::Read).Bind(boundRead);
+        MG_State::pGLContext->GetFramebufferBindingSlot(MobileGL::FramebufferTarget::Draw).Bind(boundDraw);
+
+        RemoteEmitTable().GL.BlitNamedFramebuffer(namedRead, namedDraw, 0, 0, 8, 8, 0, 0, 8, 8,
+                                                  GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        const auto& r = peer.blit;
+        if (peer.calls != 1 || r.ReadFbo != MGPipeFramebufferEmitter::HandleFor(*namedRead) ||
+            r.DrawFbo != MGPipeFramebufferEmitter::HandleFor(*namedDraw)) ::_exit(101);
+        // The client's own bindings are untouched: the server resolves the named pair from the
+        // record, not from a staged binding override (T3).
+        if (MG_State::pGLContext->GetFramebufferBindingSlot(MobileGL::FramebufferTarget::Read)
+                .GetBoundObject()
+                .get() != boundRead.get()) ::_exit(102);
+        if (MG_State::pGLContext->GetFramebufferBindingSlot(MobileGL::FramebufferTarget::Draw)
+                .GetBoundObject()
+                .get() != boundDraw.get()) ::_exit(103);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+namespace {
+    Bool g_stubBlitCalled = false;
+    MGPipeHandle g_observedBlitRead = kMGPipeNullHandle;
+    MGPipeHandle g_observedBlitDraw = kMGPipeNullHandle;
+    void StubBlitFramebuffer(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum) {
+        g_stubBlitCalled = true;
+        const auto& st = MG_Pipe::MGPipeApplier();
+        g_observedBlitRead = st.VerbBlitReadFbo;
+        g_observedBlitDraw = st.VerbBlitDrawFbo;
+    }
+    void StubBlitFramebufferConsuming(GLint x0, GLint y0, GLint x1, GLint y1, GLint dx0, GLint dy0,
+                                      GLint dx1, GLint dy1, GLbitfield mask, GLenum filter) {
+        StubBlitFramebuffer(x0, y0, x1, y1, dx0, dy0, dx1, dy1, mask, filter);
+        MG_Pipe::MGPipeApplier().VerbBlitNamedConsumed = true;
+    }
+
+    MGPipeHandle g_observedCopyDst = kMGPipeNullHandle;
+    void StubCopyTexImage2D(GLenum, GLint, GLenum, GLint, GLint, GLsizei, GLsizei, GLint) {
+        g_observedCopyDst = MG_Pipe::MGPipeApplier().VerbCopyTexDst;
+    }
+    MGPipeHandle g_observedMipRes = kMGPipeNullHandle;
+    void StubGenerateMipmap(GLenum) { g_observedMipRes = MG_Pipe::MGPipeApplier().VerbMipRes; }
+    MGPipeHandle g_observedIndirect = kMGPipeNullHandle;
+    MGPipeHandle g_observedParameter = kMGPipeNullHandle;
+    void StubMultiDrawArraysIndirectCount(GLenum, const void*, GLintptr, GLsizei, GLsizei) {
+        const auto& st = MG_Pipe::MGPipeApplier();
+        g_observedIndirect = st.VerbIndirectBuffer;
+        g_observedParameter = st.VerbIndirectParameterBuffer;
+    }
+    MGPipeHandle g_observedDispatchIndirect = kMGPipeNullHandle;
+    void StubDispatchComputeIndirect(GLintptr) {
+        g_observedDispatchIndirect = MG_Pipe::MGPipeApplier().VerbDispatchIndirectBuffer;
+    }
+} // namespace
+
+TEST(RemoteF1, NamedBlitStashesHandlesAndDeclinesWhenTheBackendHasNoNamedArm) {
+    // Red once (executed, reverted): do not write the verb stash; the observed handles are null.
+    const auto child = RunInChild([] {
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        CapsPeer backend;
+        backend.table.GL.BlitFramebuffer = &StubBlitFramebuffer;
+        Srv::ServerVerbSink sink;
+        sink.SetBackend(&backend);
+        MGPBlit r{};
+        r.ReadFbo = {41, 2};
+        r.DrawFbo = {42, 3};
+        r.Mask = GL_COLOR_BUFFER_BIT;
+        r.Filter = GL_NEAREST;
+        const Bool applied = sink.OnBlit(r);
+        if (applied) ::_exit(101); // a named pair the backend did not consume must decline
+        if (!g_stubBlitCalled) ::_exit(102);
+        // The backend saw the record's handles as the verb's own state (CONTRACT-P5C §3.2/§3.3).
+        if (g_observedBlitRead != r.ReadFbo || g_observedBlitDraw != r.DrawFbo) ::_exit(103);
+        ::_exit(0);
+    });
+    ExpectChildSuccess(child);
+}
+
+TEST(RemoteF1, NamedBlitIsAppliedWhenTheBackendConsumesThePair) {
+    const auto child = RunInChild([] {
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        CapsPeer backend;
+        backend.table.GL.BlitFramebuffer = &StubBlitFramebufferConsuming;
+        Srv::ServerVerbSink sink;
+        sink.SetBackend(&backend);
+        MGPBlit r{};
+        r.ReadFbo = {41, 2};
+        r.DrawFbo = {42, 3};
+        r.Mask = GL_COLOR_BUFFER_BIT;
+        r.Filter = GL_NEAREST;
+        if (!sink.OnBlit(r)) ::_exit(101);
+        if (g_observedBlitRead != r.ReadFbo || g_observedBlitDraw != r.DrawFbo) ::_exit(102);
+        ::_exit(0);
+    });
+    ExpectChildSuccess(child);
+}
+
+TEST(RemoteF1, BoundBlitCarriesNoHandlesAndIsAppliedAsBefore) {
+    const auto child = RunInChild([] {
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        CapsPeer backend;
+        backend.table.GL.BlitFramebuffer = &StubBlitFramebuffer;
+        Srv::ServerVerbSink sink;
+        sink.SetBackend(&backend);
+        MGPBlit r{};
+        r.Mask = GL_COLOR_BUFFER_BIT;
+        r.Filter = GL_NEAREST;
+        if (!sink.OnBlit(r)) ::_exit(101);
+        if (!MGPipeHandleIsNull(g_observedBlitRead) || !MGPipeHandleIsNull(g_observedBlitDraw))
+            ::_exit(102);
+        ::_exit(0);
+    });
+    ExpectChildSuccess(child);
+}
+
+TEST(RemoteF1, CopyFramebufferToTextureStashesTheDestinationHandle) {
+    // Red once (executed, reverted): do not write VerbCopyTexDst; the observed handle is null.
+    const auto child = RunInChild([] {
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        CapsPeer backend;
+        backend.table.GL.CopyTexImage2D = &StubCopyTexImage2D;
+        Srv::ServerVerbSink sink;
+        sink.SetBackend(&backend);
+        MGPCopyFromFramebuffer r{};
+        r.Dst = {51, 4};
+        r.Target = GL_TEXTURE_2D;
+        r.Level = 1;
+        r.InternalFormat = GL_RGBA8;
+        r.Width = 8;
+        r.Height = 8;
+        if (!sink.OnCopyFramebufferToTexture(r)) ::_exit(101);
+        if (g_observedCopyDst != r.Dst) ::_exit(102);
+        ::_exit(0);
+    });
+    ExpectChildSuccess(child);
+}
+
+TEST(RemoteF1, GenerateMipmapStashesTheTextureHandle) {
+    // Red once (executed, reverted): do not write VerbMipRes; the observed handle is null.
+    const auto child = RunInChild([] {
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        CapsPeer backend;
+        backend.table.GL.GenerateMipmap = &StubGenerateMipmap;
+        Srv::ServerVerbSink sink;
+        sink.SetBackend(&backend);
+        MGPMipPlan r{};
+        r.Res = {52, 5};
+        r.Target = GL_TEXTURE_2D;
+        if (!sink.OnGenerateMipmap(r)) ::_exit(101);
+        if (g_observedMipRes != r.Res) ::_exit(102);
+        ::_exit(0);
+    });
+    ExpectChildSuccess(child);
+}
+
+TEST(RemoteF1, AnIndirectDrawStashesTheCommandAndParameterBuffers) {
+    // Red once (executed, reverted): do not write the indirect stash; the observed handles are null.
+    const auto child = RunInChild([] {
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        CapsPeer backend;
+        backend.table.GL.MultiDrawArraysIndirectCount = &StubMultiDrawArraysIndirectCount;
+        Srv::ServerVerbSink sink;
+        sink.SetBackend(&backend);
+        MGPDrawInfo info{};
+        info.Mode = GL_TRIANGLES;
+        info.IndexSize = 0;
+        info.NumDraws = 0;
+        info.InstanceCount = 1;
+        MGPDrawIndirect indirect{};
+        indirect.Buffer = {61, 1};
+        indirect.ParameterBuffer = {62, 1};
+        indirect.Offset = 64;
+        indirect.DrawCount = 3;
+        indirect.Stride = 16;
+        if (!sink.OnDrawVbo(info, nullptr, nullptr, &indirect)) ::_exit(101);
+        if (g_observedIndirect != indirect.Buffer || g_observedParameter != indirect.ParameterBuffer)
+            ::_exit(102);
+        ::_exit(0);
+    });
+    ExpectChildSuccess(child);
+}
+
+TEST(RemoteF1, DispatchIndirectStashesTheCommandBuffer) {
+    // Red once (executed, reverted): do not write VerbDispatchIndirectBuffer; the observed
+    // handle is null.
+    const auto child = RunInChild([] {
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        CapsPeer backend;
+        backend.table.GL.DispatchComputeIndirect = &StubDispatchComputeIndirect;
+        Srv::ServerVerbSink sink;
+        sink.SetBackend(&backend);
+        MGPGridInfo grid{};
+        grid.IsIndirect = 1;
+        grid.IndirectBuffer = {63, 1};
+        grid.IndirectOffset = 128;
+        if (!sink.OnLaunchGrid(grid)) ::_exit(101);
+        if (g_observedDispatchIndirect != grid.IndirectBuffer) ::_exit(102);
+        ::_exit(0);
+    });
+    ExpectChildSuccess(child);
+}
+
+// ---- the layer-1 guards (CONTRACT-P5C §6), each verified red once by its own Fatal ---------
+
+TEST(RemoteGuards, AllocatorAcquireFromTheApplyThreadIsFatalByName) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+            MGPipeSlots().Acquire(MGPipeKind::Texture, 424242);
+            return MOBILEGL_OK;
+        }, nullptr);
+        ClientSessionInstance().Stop();
+    });
+    ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
+}
+
+TEST(RemoteGuards, AllocatorFindByLifetimeIdFromTheApplyThreadIsFatalByName) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+            MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, 424242);
+            return MOBILEGL_OK;
+        }, nullptr);
+        ClientSessionInstance().Stop();
+    });
+    ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
+}
+
+TEST(RemoteGuards, AllocatorFreeFromTheApplyThreadIsFatalByName) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+            MGPipeSlots().Free(MGPipeKind::Texture, {7, 1});
+            return MOBILEGL_OK;
+        }, nullptr);
+        ClientSessionInstance().Stop();
+    });
+    ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
+}
+
+namespace {
+    struct FakeTwin {
+        int marker = 0;
+    };
+    using TestTextureTable =
+        MG_Backend::DirectGLES::BackendSlotTable<MG_State::GLState::TextureObject2D, FakeTwin,
+                                                 MGPipeKind::Texture>;
+} // namespace
+
+TEST(RemoteGuards, SlotTableHandleOfFromTheApplyThreadIsFatalByName) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+            MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+            TestTextureTable table;
+            MG_State::GLState::TextureObject2D tex(44);
+            table.HandleOf(&tex);
+            return MOBILEGL_OK;
+        }, nullptr);
+        ClientSessionInstance().Stop();
+    });
+    ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
+}
+
+TEST(RemoteGuards, SlotTableMintingGetOrCreateFromTheApplyThreadIsFatalByName) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+            MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+            TestTextureTable table;
+            auto tex = MakeShared<MG_State::GLState::TextureObject2D>(45);
+            table.GetOrCreate(tex);
+            return MOBILEGL_OK;
+        }, nullptr);
+        ClientSessionInstance().Stop();
+    });
+    ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
+}
+
+// The four accessor drives share one shape: the BufferObject is constructed on the CLIENT
+// thread (its own resource_create publication is a legal client-side emit), and only the
+// accessor runs on the apply thread, where it must die at the accessor's own guard.
+#define MGL_BUFFER_GUARD_TEST(Name, Id, Call)                                                          TEST(RemoteGuards, Name) {                                                                                 const auto child = RunInChild([] {                                                                         StartControlSession();                                                                                 MG_State::GLState::BufferObject buffer(Id);                                                            Srv::ServerLoopInstance().RunOnApplyThread([](void* self) {                                                auto& buffer = *static_cast<MG_State::GLState::BufferObject*>(self);                                   Call;                                                                                                  return MOBILEGL_OK;                                                                                }, &buffer);                                                                                           ClientSessionInstance().Stop();                                                                    });                                                                                                    ExpectNamedAbort(child, "Fatal{RoleViolation, \"buffer-legacy-arm\"}");                           }
+MGL_BUFFER_GUARD_TEST(BufferMappedDataFromTheApplyThreadIsFatalByName, 703, (void)buffer.MappedData())
+MGL_BUFFER_GUARD_TEST(BufferIsMappedFromTheApplyThreadIsFatalByName, 704, (void)buffer.IsMapped())
+MGL_BUFFER_GUARD_TEST(BufferChangeSerialFromTheApplyThreadIsFatalByName, 705, (void)buffer.GetChangeSerial())
+MGL_BUFFER_GUARD_TEST(BufferSyncPersistentMappedRangeFromTheApplyThreadIsFatalByName, 706,
+                      buffer.SyncPersistentMappedRange())
+#undef MGL_BUFFER_GUARD_TEST
+
+TEST(RemoteGuards, CapsMirrorFallbackWithNoServerBackendIsFatalByName) {
+    const auto child = RunInChild([] {
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        // No server backend exists in this process: the format-caps fallback to the client
+        // mirror is refused by name (CONTRACT-P5C §3.7).
+        (void)MG_Backend::DirectGLES::ActiveBackendFormatCaps();
+    });
+    ExpectNamedAbort(child, "Fatal{RoleViolation, \"caps-mirror\"}");
+}
+#endif
+
 
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;

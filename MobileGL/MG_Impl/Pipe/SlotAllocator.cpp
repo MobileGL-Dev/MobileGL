@@ -9,7 +9,67 @@
 // SlotAllocator.h. Compiled only under MOBILEGL_PIPE_PUSH.
 #include <MG_Impl/Pipe/SlotAllocator.h>
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <Config.h>
+#include <MG_Remote/Server/ServerLoop.h>
+#include <MG_Util/Debug/Log.h>
+
+#include <cstdlib>
+#endif
+
 namespace MobileGL::MG_Pipe {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    void MGPipeRefuseAllocatorFromApplyThread(const char* entry) {
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        if (!MG_Remote::Server::ServerLoop::OnApplyThread()) return;
+        // The named exemption of CONTRACT-P5C §3.1: the sites whose handle-carrying records
+        // are not emitted yet (P4b/P7) probe read-only inside the scope. The G6
+        // frontend-keyed registry family (P3b/P4b) does the same inside its own scope.
+        if (MGPipeReverseAnnouncementScope::Active()) return;
+        if (MGPipeFrontendKeyedRegistryScope::Active()) return;
+        MGLOG_F("MGPipe: Fatal{RoleViolation, \"MGPipeSlots\"} - the apply thread called "
+                "MGPipeSlots().%s. With an active transport the client slot allocator is "
+                "client-only memory (CONTRACT-P5C §3.1, rule E): a handle arrives already "
+                "minted in a record, and a server that resolves or mints one off a frontend "
+                "object's lifetime id is reading memory that will not exist on its side of a "
+                "real split",
+                entry);
+        std::abort();
+    }
+
+    namespace {
+        thread_local Uint32 g_reverseAnnouncementScopeDepth = 0;
+    }
+
+    MGPipeReverseAnnouncementScope::MGPipeReverseAnnouncementScope() {
+        ++g_reverseAnnouncementScopeDepth;
+    }
+
+    MGPipeReverseAnnouncementScope::~MGPipeReverseAnnouncementScope() {
+        --g_reverseAnnouncementScopeDepth;
+    }
+
+    Bool MGPipeReverseAnnouncementScope::Active() {
+        return g_reverseAnnouncementScopeDepth != 0;
+    }
+
+    namespace {
+        thread_local Uint32 g_frontendKeyedRegistryScopeDepth = 0;
+    }
+
+    MGPipeFrontendKeyedRegistryScope::MGPipeFrontendKeyedRegistryScope() {
+        ++g_frontendKeyedRegistryScopeDepth;
+    }
+
+    MGPipeFrontendKeyedRegistryScope::~MGPipeFrontendKeyedRegistryScope() {
+        --g_frontendKeyedRegistryScopeDepth;
+    }
+
+    Bool MGPipeFrontendKeyedRegistryScope::Active() {
+        return g_frontendKeyedRegistryScopeDepth != 0;
+    }
+#endif
+
     namespace {
         // The ShaderCso band the ordinary allocator must never enter: the top 1/16 of the
         // ShaderCso slot space is reserved for PROGRAM PIPELINE COMPOSITES, which are minted
@@ -166,6 +226,9 @@ namespace MobileGL::MG_Pipe {
     }
 
     MGPipeHandle MGPipeSlotAllocator::FindByLifetimeId(MGPipeKind kind, Uint64 lifetimeId) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MGPipeRefuseAllocatorFromApplyThread("FindByLifetimeId");
+#endif
         if (lifetimeId == 0) return kMGPipeNullHandle;
         const KindState& state = StateOf(kind);
         const auto it = state.ByLifetimeId.find(lifetimeId);
@@ -176,12 +239,18 @@ namespace MobileGL::MG_Pipe {
     }
 
     MGPipeHandle MGPipeSlotAllocator::Acquire(MGPipeKind kind, Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MGPipeRefuseAllocatorFromApplyThread("Acquire");
+#endif
         const MGPipeHandle existing = FindByLifetimeId(kind, lifetimeId);
         if (!MGPipeHandleIsNull(existing)) return existing;
         return AllocateFor(kind, lifetimeId);
     }
 
     void MGPipeSlotAllocator::Free(MGPipeKind kind, MGPipeHandle handle) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MGPipeRefuseAllocatorFromApplyThread("Free");
+#endif
         KindState& state = StateOf(kind);
         SlotState* entry = EntryOf(state, kind, handle.Slot);
         if (entry == nullptr) return;

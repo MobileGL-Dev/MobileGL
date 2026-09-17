@@ -29,6 +29,28 @@ namespace MobileGL::MG_State::GLState {
         const BufferBackendOps* g_bufferBackendOps = nullptr;
         // Starts at 1 so a zero-initialized cache slot can never carry a live buffer's id.
         std::atomic<Uint64> g_nextBufferLifetimeId{1};
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (hd, CONTRACT-P5C §3.8 / §6 layer 1): the frontend BufferObject's legacy
+        // accessors are a layer-1 surface. With an active transport, the pre-handle buffer
+        // arm that reads them (Managers.cpp's RespecifyStorageNow / UploadRangeNow /
+        // IsBufferDrawClean / the old EnsureBufferResource body) stays compiled but may not
+        // run: the apply thread calling one is Fatal{RoleViolation, "buffer-legacy-arm"} -
+        // the same shape as Fatal{PipeLegacyMemosDisabled} - so a cleared subsystem bit 7 no
+        // longer leaves the arm silently readable. Client-thread callers (the GL thread's
+        // own state) are unaffected.
+        void RefuseLegacyBufferArmFromApplyThread(const char* accessor) {
+            if (!MG_Remote::Client::PersistentMapTracker::PushIsArmed()) return;
+            if (!MG_Remote::Client::PersistentMapTracker::OnServerRole()) return;
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"buffer-legacy-arm\"} - the apply thread "
+                    "called BufferObject::%s on a frontend object. With an active transport "
+                    "the server reads the applier's resource record and its own staged shadow; "
+                    "a frontend object is client memory (rule E) and the pre-handle buffer arm "
+                    "is monolith-only",
+                    accessor);
+            std::abort();
+        }
+#endif
     }
 
     Uint64 BufferObject::AllocateLifetimeId() {
@@ -378,6 +400,9 @@ namespace MobileGL::MG_State::GLState {
 
     void BufferObject::SyncPersistentMappedRange() {
 #if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (hd): the named refusal comes FIRST - the silent return below used to let a
+        // server-side caller slip through with one MGLOG_D's worth of evidence (B3).
+        RefuseLegacyBufferArmFromApplyThread("SyncPersistentMappedRange");
         // Split's client pre-verb hook publishes these bytes. The retained backend sync
         // sites must do nothing on the apply thread: re-entering this producer there would
         // overwrite the server shadow through the monolith adapter without crossing the wire.
@@ -914,6 +939,9 @@ namespace MobileGL::MG_State::GLState {
     }
 
     const Uint8* BufferObject::MappedData() const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RefuseLegacyBufferArmFromApplyThread("MappedData");
+#endif
         return m_resource.Bytes();
     }
 
@@ -934,10 +962,18 @@ namespace MobileGL::MG_State::GLState {
     }
 
     Uint64 BufferObject::GetChangeSerial() const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RefuseLegacyBufferArmFromApplyThread("GetChangeSerial");
+#endif
         return m_changeSerial;
     }
 
     Bool BufferObject::HasDefinedContent() const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // §3.6's surface as well as §3.8's: the descriptor's bit and the staged coverage
+        // answer on this side; the frontend flag is client memory.
+        RefuseLegacyBufferArmFromApplyThread("HasDefinedContent");
+#endif
         return m_hasDefinedContent;
     }
 
@@ -950,6 +986,9 @@ namespace MobileGL::MG_State::GLState {
     }
 
     Bool BufferObject::IsMapped() const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RefuseLegacyBufferArmFromApplyThread("IsMapped");
+#endif
         return m_isMapped;
     }
 

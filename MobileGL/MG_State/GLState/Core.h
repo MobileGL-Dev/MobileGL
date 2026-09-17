@@ -544,6 +544,11 @@ namespace MobileGL {
                 // Framebuffer
                 void GenFramebufferNames(Uint number, Vector<Uint>& framebuffers);
                 const SharedPtr<FramebufferObject>& GetFramebufferObject(Uint index);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // See FramebufferState::FindFramebufferObjectByLifetimeId - the named-blit
+                // consumer's handle-to-frontend resolution on a backend with no FBO twins.
+                SharedPtr<FramebufferObject> FindFramebufferObjectByLifetimeId(Uint64 lifetimeId) const;
+#endif
                 BindingSlot<FramebufferObject>& GetFramebufferBindingSlot(FramebufferTarget target);
                 const SharedPtr<FramebufferObject>& CreateFramebufferObject(Uint index);
                 void MarkFramebufferObjectForDeletion(Uint index);

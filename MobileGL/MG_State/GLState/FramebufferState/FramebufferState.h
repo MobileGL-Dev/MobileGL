@@ -25,6 +25,16 @@ namespace MobileGL::MG_State::GLState {
         Bool ValidateName(Uint index) const;
         Bool ValidateFramebufferObject(Uint index) const;
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (G6, CONTRACT-P5C §3.3/§5.4): the reverse of HandleFor() for a server that holds
+        // only the handle - the named-blit consumer on a backend with no FBO twin registry
+        // (Magma) resolves the verb's ReadFbo/DrawFbo to the frontend object by the lifetime
+        // id the handle was minted over. Named debt, reached inside
+        // MGPipeFrontendKeyedRegistryScope; P3b/P4b retire it by carrying the object identity
+        // in the record. nullptr when no live framebuffer owns the id.
+        SharedPtr<FramebufferObject> FindFramebufferObjectByLifetimeId(Uint64 lifetimeId) const;
+#endif
+
 #if MOBILEGL_PIPE_PUSH
         // P2 brief D4: "did the attachment set or the default geometry of ANY framebuffer
         // move". It does NOT cover a BIND - a bind writes a BindingSlot, not the object - so

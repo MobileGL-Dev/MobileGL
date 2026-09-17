@@ -714,8 +714,16 @@ namespace MobileGL::MG_Pipe {
             bufferObject->MarkGpuWritten();
             return;
         }
-        const MGPipeHandle res =
-            MGPipeSlots().FindByLifetimeId(MGPipeKind::Buffer, bufferObject->GetLifetimeId());
+        const MGPipeHandle res = [&]() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // CONTRACT-P5C §3.1's named exemption, Magma's half: the binding records that
+            // would carry this buffer's handle are P4b's to emit and Magma's server-side
+            // binding table is P7's, so until then the probe runs inside the scope - the
+            // debt's named, greppable form rather than a silent guard removal.
+            const MGPipeReverseAnnouncementScope reverseAnnouncement;
+#endif
+            return MGPipeSlots().FindByLifetimeId(MGPipeKind::Buffer, bufferObject->GetLifetimeId());
+        }();
         if (MGPipeHandleIsNull(res)) {
             MGLOG_E_ONCE("MGPipe: no handle for the GPU-write announcement of buffer %u - the "
                          "reverse channel is installed but the mint is missing, so the mark "

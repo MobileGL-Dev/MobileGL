@@ -40,6 +40,9 @@
 #if MOBILEGL_BUILD_DISAGGREGATED
 // P5c (T5 / tx): the server's staged-texture shadow GenerateMipmap defines its chain on.
 #include <MG_Remote/Server/StagedTextureStore.h>
+#include <MG_Remote/Server/ServerLoop.h>
+// P5c (G6): the named-blit arm's endpoint resolution runs inside the frontend-keyed scope.
+#include <MG_Impl/Pipe/SlotAllocator.h>
 #endif
 #include <algorithm>
 #include <bit>
@@ -672,6 +675,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     static void ApplyLineWidthState(VkCommandBuffer commandBuffer) {
         Float lineWidth = MGB_CTX->GetLineWidth();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (hd, CONTRACT-P5C §3.7): with an active transport the dynamic parameters are the
+        // SERVER's own backend's - the client caps mirror is client memory (rule E). Monolith
+        // reads the mirror as it always did.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            if (MG_Backend::BackendObject* server = MG_Remote::Server::ServerLoopInstance().Backend()) {
+                const auto& dynamicParameters = server->GetDynamicParameters();
+                const Float minLineWidth = dynamicParameters.AliasedLineWidthRangeMin;
+                const Float maxLineWidth = dynamicParameters.AliasedLineWidthRangeMax;
+                if (lineWidth < minLineWidth) {
+                    lineWidth = minLineWidth;
+                } else if (lineWidth > maxLineWidth) {
+                    lineWidth = maxLineWidth;
+                }
+            }
+        } else
+#endif
         if (MG_Backend::pActiveBackendObject != nullptr) {
             const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
             const Float minLineWidth = dynamicParameters.AliasedLineWidthRangeMin;
@@ -4522,6 +4542,17 @@ void main() {
     }
 
     void VulkanRenderer::ShutdownBlitResources() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (G6, CONTRACT-P5C §3.1's named exemption): the hidden blit program and samplers
+        // are FRONTEND objects the server backend created on the apply thread, and under an
+        // active transport they die here on that same thread. Their destructors run the client
+        // death helper, whose lifetime-id probe is the frontend-keyed registry family - it
+        // resolves to nothing (no handle was ever minted for these objects) and routes no
+        // delete, so the scope admits the probe as named debt rather than letting the guard
+        // Fatal at server teardown. P7 gives these resources storage that is not a frontend
+        // object.
+        const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
+#endif
         m_blitResources = {};
     }
 
@@ -4596,6 +4627,12 @@ void main() {
     }
 
     void VulkanRenderer::ShutdownDepthMipmapResources() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Same shape as ShutdownBlitResources above: the hidden depth-mipmap program is a
+        // frontend object created and destroyed by the server backend on the apply thread, and
+        // its destructor's lifetime-id probe is admitted here as named debt.
+        const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
+#endif
         m_depthMipmapResources = {};
     }
 
@@ -8928,6 +8965,53 @@ void main() {
     void VulkanRenderer::BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                          GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                                          GLbitfield mask, GLenum filter) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (G6, CONTRACT-P5C §3.3/§5.4): MAGMA'S NAMED ARM. A blit record whose
+        // ReadFbo/DrawFbo are non-null is a glBlitNamedFramebuffer: both framebuffers resolve
+        // from the record's handles, and the sink is told the pair was consumed - a backend
+        // that leaves the flag clear has no named arm and the verb declines there, loudly.
+        // Magma has no FBO twin registry (it reads the frontend object wherever it syncs), so
+        // the resolution here is frontend-keyed - the handle was minted over the frontend
+        // object's lifetime id, and the two probes below (the client allocator's slot entry
+        // and the frontend context's framebuffer pool) are named debt inside the scope, the
+        // same shape as Espryt's StateForHandle arm: P3b/P4b retire it by carrying the object
+        // identity in the record.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            auto& applierState = MG_Pipe::MGPipeApplier();
+            const MG_Pipe::MGPipeHandle readHandle = applierState.VerbBlitReadFbo;
+            const MG_Pipe::MGPipeHandle drawHandle = applierState.VerbBlitDrawFbo;
+            if (!MG_Pipe::MGPipeHandleIsNull(readHandle) || !MG_Pipe::MGPipeHandleIsNull(drawHandle)) {
+                const auto resolveEndpoint = [](MG_Pipe::MGPipeHandle handle)
+                        -> SharedPtr<MG_State::GLState::FramebufferObject> {
+                    const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
+                    if (handle == MG_Pipe::kMGPipeDefaultFramebuffer) {
+                        return MG_State::pGLContext ? MG_State::pGLContext->GetFramebufferObject(0) : nullptr;
+                    }
+                    if (!MG_Pipe::MGPipeSlots().IsLive(MG_Pipe::MGPipeKind::Framebuffer, handle)) {
+                        return nullptr;
+                    }
+                    const Uint64 lifetimeId =
+                        MG_Pipe::MGPipeSlots().LifetimeIdOfSlot(MG_Pipe::MGPipeKind::Framebuffer, handle.Slot);
+                    if (lifetimeId == 0 || MG_State::pGLContext == nullptr) return nullptr;
+                    return MG_State::pGLContext->FindFramebufferObjectByLifetimeId(lifetimeId);
+                };
+                auto readFbo = resolveEndpoint(readHandle);
+                auto drawFbo = resolveEndpoint(drawHandle);
+                if (!readFbo || !drawFbo) {
+                    // Leave the pair UNCONSUMED: the sink's decline is the loud answer a
+                    // missing endpoint deserves, not a silent blit of whatever is bound.
+                    MGLOG_E_ONCE("MGPipe: Magma's named blit could not resolve an endpoint (read {%u, %u}, draw "
+                                 "{%u, %u}) to a frontend framebuffer; the verb declines at the sink",
+                                 readHandle.Slot, readHandle.Gen, drawHandle.Slot, drawHandle.Gen);
+                    return;
+                }
+                applierState.VerbBlitNamedConsumed = true;
+                BlitNamedFramebuffer(readFbo, drawFbo, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0,
+                                     dstX1, dstY1, mask, filter);
+                return;
+            }
+        }
+#endif
         auto readFbo = MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
         auto drawFbo = MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         BlitNamedFramebuffer(readFbo, drawFbo, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
