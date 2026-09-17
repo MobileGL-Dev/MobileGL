@@ -1,6 +1,6 @@
 # 当前阶段进度
 
-分支 `feat/disaggregated`；代码头 `39d1a5d3`（2026-09-17，P5c 收官）。本文随每次落地更新。ID-1..75 的逐条裁定长文在 git 历史（`ef35ea0c` 之前版本的本文件）。
+分支 `feat/disaggregated`；代码头 `b88e8487`（2026-09-17，P5c 收官）。本文随每次落地更新。ID-1..75 的逐条裁定长文在 git 历史（`ef35ea0c` 之前版本的本文件）。
 
 ## 1. 阶段状态
 
@@ -9,7 +9,7 @@
 | P0 / P0.5 / P1 / P2 / P3a / P4a（monolith 跑道） | 已落地 | `ROADMAP.md` 阶段表；`MEASUREMENTS.md` §1–§5 |
 | **P5** 首个 IPC 帧（reduced path，lockstep inproc） | 已收官 | `ff2994d9..37fc4fdb`；`MEASUREMENTS.md` §6 |
 | **P5b** inproc 下的 verb 迁移（Minecraft 优先） | **已收官（2026-09-16）** | `37fc4fdb..82683d4a`；`MEASUREMENTS.md` §7 |
-| **P5c** `inproc` 共享内存读点归零 | **已收官（2026-09-17）** | `11ac3de6..39d1a5d3` + triage 修复；契约 `MobileGL/MG_Remote/CONTRACT-P5C.md`；审计 `~/w7/notes/p5c/p5c-audit-v1.md` |
+| **P5c** `inproc` 共享内存读点归零 | **已收官（2026-09-17）** | `11ac3de6..b88e8487` + triage 修复；契约 `MobileGL/MG_Remote/CONTRACT-P5C.md`；审计 `~/w7/notes/p5c/p5c-audit-v1.md` |
 | P6 spawn transport | **下一个** | 届时只是传输替换 |
 
 ## 2. 当前头实测

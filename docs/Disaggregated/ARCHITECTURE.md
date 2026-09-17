@@ -1,6 +1,6 @@
 # MGPipe 设计与架构
 
-> 本文只写**已决定**的设计，每条决定附一行理由。落地状态：P0–P5b 已落地（代码头 `82683d4a`）；标 **P6+** 的是后续形状，阶段号见 `ROADMAP.md`；实测数字见 `MEASUREMENTS.md`；P5 / P5b 的 wire 契约原文在 `MobileGL/MG_Remote/CONTRACT-P5.md`、`CONTRACT-P5B.md`。
+> 本文只写**已决定**的设计，每条决定附一行理由。落地状态：P0–P5c 已落地（代码头 `b88e8487`）；标 **P6+** 的是后续形状，阶段号见 `ROADMAP.md`；实测数字见 `MEASUREMENTS.md`；P5 / P5b / P5c 的 wire 契约原文在 `MobileGL/MG_Remote/CONTRACT-P5.md`、`CONTRACT-P5B.md`、`CONTRACT-P5C.md`。
 
 ## 1. 边界
 
@@ -563,11 +563,13 @@ client 表（`Client/EmitTables.cpp`）把后端函数表的 71 个槽分成三�
 - **具名 blit**：`BlitNamedFramebuffer` 经作用域化 client-shadow read/draw 绑定发布，降为现有 bound backend 调用，退出恢复公开绑定。**GLES mip storage**：前端先定义并发布层级，server 只验证 applier descriptor 的 Levels/extent；registry 身份解析只 Find 不 mint。
 - **P5b 留下的 inproc 依赖**：具名 blit 的 scoped client binding + barrier；mip descriptor 的 barrier-held registry 查询；FBO death 的 inproc mailbox。三者跨地址空间都不成立——它们只是 §17.6 清单里的三行。
 
-### 17.6 `inproc` 仍经共享地址空间的访问，与 P5c 的形状（计划，未实现）
+### 17.6 `inproc` 仍经共享地址空间的访问，与 P5c 的形状（已落地，头 `b88e8487`）
 
 P5 / P5b 的 wire 只覆盖 verb 记录、`SEG_STAGE` blob、reply 与 caps 快照。对 `a79a0af6` 的只读静态审计（`ROADMAP.md` "P5c 计划"，报告 `~/w7/notes/p5c/p5c-audit-v1.md`）列出 59 处仍靠 verb barrier 与同一地址空间才正确的直接访问，最重的四类：**纹理纹素**虽已过 `SEG_STAGE` 但 applier 丢掉指针、Espryt 回读 client 的 `MipmapStorage`（整个纹理家族不在 `FieldOwnership.def`，`rsp` / strict / audit 都看不见）；**反向通道**是 apply 线程直接调进 client `MG_State`（`OnBufferWriteback` 传裸指针，`SEG_EVENT` 已铺好但零 producer，十个回调只装了两个）；**server 用前端 `GetLifetimeId()` 去 client 的 slot 分配器查找甚至铸造句柄**，而记录里其实已带句柄；**Magma** 直接读 client 的 caps 镜像、直接 `MarkGpuWritten`、直接写 client 的 mip 存储。
 
-P5c 的设计决定：(1) **server 端纹理 staged shadow**——`ApplyTextureUpload` 采纳 `SEG_STAGE` 字节，`SyncMipmapsToBackend` 只读它与描述符，`0xDD` audit 因此覆盖纹理；(2) **`SEG_EVENT` 成为唯一反向通道**——`OnBufferWriteback` 的 `MGPBlobRef` 约定 `Seg = kSegEvent`，`OnGpuWritten` / `OnSurfaceChanged` 走同一 ring，Magma 与 Espryt 共用回调，溢出策略按 §11.7；(3) **sink 与 twin 按记录里的句柄解析**（`GetOrCreate(MGPipeHandle)`），server 永不触 `MGPipeSlots()`；(4) **两条控制记录** `applier_reset`（make-current 边）与 `object_death`（framebuffer 首次有 delete opcode），mailbox 只剩 EGL forwarder 给 P6；(5) **值类 BARRIER-PULLED 行改为每 verb 残余值记录或 server 自答**，对象类行保持 barrier 直到 twin 表落地（P3b/P4b、P7、P8）；(6) **角色守卫**——split 构建有传输时，apply 线程触前端对象表面、GL 线程触 server 状态表面都是 `Fatal{RoleViolation}`；这是 P5c 的出口门，也是 P6 只做传输替换的前提。
+P5c 的设计决定（六条全部落地，落地形状与偏差以 `MobileGL/MG_Remote/CONTRACT-P5C.md` 为最新权威）：(1) **server 端纹理 staged shadow**——`ApplyTextureUpload` 采纳 `SEG_STAGE` 字节，`SyncMipmapsToBackend` 只读它与描述符，`0xDD` audit 因此覆盖纹理；(2) **`SEG_EVENT` 成为唯一反向通道**——`OnBufferWriteback` 的 `MGPBlobRef` 约定 `Seg = kSegEvent`，`OnGpuWritten` / `OnSurfaceChanged` 走同一 ring，Magma 与 Espryt 共用回调，溢出策略按 §11.7；(3) **sink 与 twin 按记录里的句柄解析**（`GetOrCreate(MGPipeHandle)`），server 永不触 `MGPipeSlots()`；(4) **两条控制记录** `applier_reset`（make-current 边）与 `object_death`（framebuffer 首次有 delete opcode），mailbox 只剩 EGL forwarder 给 P6；(5) **值类 BARRIER-PULLED 行改为每 verb 残余值记录或 server 自答**，对象类行保持 barrier 直到 twin 表落地（P3b/P4b、P7、P8）；(6) **角色守卫**——split 构建有传输时，apply 线程触前端对象表面、GL 线程触 server 状态表面都是 `Fatal{RoleViolation}`；这是 P5c 的出口门，也是 P6 只做传输替换的前提。
+
+落地时的三条结构性补充（契约 §3.1 与 §5.4 的具名豁免）：审计漏了三族无句柄站点——绑定记录 P4b 才发射的 ensure/通告族（`MGPipeReverseAnnouncementScope`）、G6 前端键 twin registry（`MGPipeFrontendKeyedRegistryScope`，P3b/P4b 重键）、Magma 拆除期的隐藏资源；两个 scope 内的只读探测是具名、可 grep、带退役阶段的债，不是守卫的洞。
 
 ## 附 A：开关
 
