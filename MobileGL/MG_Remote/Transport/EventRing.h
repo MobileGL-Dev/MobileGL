@@ -42,12 +42,14 @@
 namespace MobileGL::MG_Remote::Transport {
 
     // Record kinds on SEG_EVENT. 0 is kRingPadRecordKind and can never be an
-    // event, which is why the list starts at 1.
+    // event, which is why the list starts at 1. APPEND-ONLY, for the same reason
+    // the opcode space is (CONTRACT-P5C §7.7): kEventGlError is the first addition.
     enum EventKind : std::uint16_t {
         kEventNone = 0,
         kEventBufferWriteback = 1, // MGPipeCallbacks::OnBufferWriteback
         kEventGpuWritten = 2,      // MGPipeCallbacks::OnGpuWritten
         kEventSurfaceChanged = 3,  // MGPipeCallbacks::OnSurfaceChanged
+        kEventGlError = 4,         // PipeInputs::RecordError, posted by the server session
     };
 
     // The 8-byte {slot, gen} pair, mirrored (MGPipeHandles.h:54-65).
@@ -96,6 +98,21 @@ namespace MobileGL::MG_Remote::Transport {
         std::uint8_t Pad0[7];
     };
     static_assert(sizeof(EventSurfaceChangedHead) == 24, "MGPSurfaceInfo is 24 bytes on the wire");
+
+    // PipeInputs::RecordError(code, info) (CONTRACT-P5C §1). The NUL-terminated
+    // message follows this head INSIDE THE RECORD: MessageBytes = strlen + 1 and
+    // the NUL travels, so MessageBytes == 0 is the corrupt shape, never "no
+    // message". A longer message is TRUNCATED AT THE PRODUCER to the cap; the cap
+    // is a static_assert here, not a runtime check, because it is part of the
+    // wire's shape rather than a policy a peer may disagree about.
+    struct EventGlErrorHead {
+        std::uint32_t Code;         // the frontend ErrorCode, widened
+        std::uint32_t MessageBytes; // strlen + 1, the NUL included
+    };
+    static_assert(sizeof(EventGlErrorHead) == 8, "wire shape");
+    inline constexpr std::uint32_t kEventGlErrorMaxMessageBytes = 1024;
+    static_assert(kEventGlErrorMaxMessageBytes == 1024,
+                  "CONTRACT-P5C §1 caps an inline GL-error message at 1024 bytes, NUL included");
 
     // The server's end. One producer: the apply thread, by construction.
     class EventRingProducer {

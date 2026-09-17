@@ -19,7 +19,12 @@
 #include "WireTables.h"
 
 #include <MGGitHash.h>
+#include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
+#include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Pipe/MGPipeCallbacks.h>
+#include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/ErrorState/ErrorInfo.h>
+#include <MG_State/GLState/TextureState/TextureObject2D.h>
 #include <MG_Util/Debug/Log.h>
 
 #include <atomic>
@@ -173,6 +178,58 @@ namespace MobileGL::MG_Remote::Client {
         // THE BYTES LIVE IN THE RING ITSELF, so Drained() is called only after every payload
         // pointer popped here has been consumed: retiring earlier is R-11's violation one level
         // down (EventRing.h:168-171 says so in as many words).
+        //
+        // THE CONSUMERS ARE CALLED BY NAME, NEVER THROUGH gMGPipeCallbacks (CONTRACT-P5C
+        // §4.1): with an active transport the global table's reverse entries are the SERVER
+        // session's producer callbacks, so routing the drain through it would call the
+        // producer back from the GL thread - the layer-2 violation the contract names.
+        //
+        // THE SURFACE-CHANGED CONSUMER IS WHERE R3's OWNERSHIP ALWAYS WAS: the backend
+        // posts the MGPSurfaceInfo, and the allocate/format writes against
+        // pDefaultFramebufferInfo happen HERE, on the GL thread, against client memory.
+        void ApplySurfaceChangedToClient(const MG_Pipe::MGPSurfaceInfo& info) {
+            auto& defaultFBOInfo = MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo;
+            if (!defaultFBOInfo) return;
+            const auto format = static_cast<TextureInternalFormat>(info.InternalFormat);
+            auto* colorTex =
+                static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->colorAttachment.get());
+            auto* depthTex =
+                static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->depthAttachment.get());
+            auto* stencilTex =
+                static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->stencilAttachment.get());
+            if (info.Width != 0 && info.Height != 0) {
+                // The SWAPCHAIN's publication shape: an extent-carrying event. Reproduces
+                // SwapchainObject's monolith writes statement for statement - colour storage
+                // at the extent, depth/stencil format then storage - because
+                // FramebufferObject::CheckCompleteness requires every attachment to agree.
+                const Int extentWidth = static_cast<Int>(info.Width);
+                const Int extentHeight = static_cast<Int>(info.Height);
+                const SizeT attachmentByteSize =
+                    static_cast<SizeT>(info.Width) * static_cast<SizeT>(info.Height) * 4;
+                if (colorTex != nullptr) {
+                    colorTex->AllocateStorage(TextureUploadTarget::Texture2D, 0,
+                                              {{extentWidth, extentHeight, 1}, attachmentByteSize});
+                }
+                if (depthTex != nullptr) {
+                    depthTex->SetInternalFormat(format);
+                    depthTex->AllocateStorage(TextureUploadTarget::Texture2D, 0,
+                                              {{extentWidth, extentHeight, 1}, attachmentByteSize});
+                }
+                if (stencilTex != nullptr) {
+                    stencilTex->SetInternalFormat(format);
+                    stencilTex->AllocateStorage(TextureUploadTarget::Texture2D, 0,
+                                                {{extentWidth, extentHeight, 1}, attachmentByteSize});
+                }
+            } else {
+                // The DirectGLES publication shape: FORMAT ONLY, Width/Height == 0. The
+                // placeholder's 512x512 extent is deliberately left alone - all three
+                // attachments share it, and resizing depth/stencil without colour would
+                // report the default framebuffer incomplete.
+                if (depthTex != nullptr) depthTex->SetInternalFormat(format);
+                if (stencilTex != nullptr) stencilTex->SetInternalFormat(format);
+            }
+        }
+
         Uint32 DrainEventRing(Transport::EventRingConsumer& events) {
             if (!events.Valid()) return 0;
             Uint32 delivered = 0;
@@ -197,19 +254,18 @@ namespace MobileGL::MG_Remote::Client {
                                 static_cast<unsigned long long>(view.payloadSize - sizeof(*head)));
                         std::abort();
                     }
-                    if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback != nullptr) {
-                        // The blobref names SEG_EVENT and the IN-SEGMENT offset of those inline
-                        // bytes - never a host address (R-2's rule B), which is the whole reason
-                        // EventRingConsumer exposes OffsetInSegment at all.
-                        MG_Pipe::MGPBlobRef blob{};
-                        blob.Seg = Wire::kSegEvent;
-                        blob.Offset = events.OffsetInSegment(bytes);
-                        blob.Size = head->Size;
-                        MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(
-                            MG_Pipe::MGPipeHandle{head->Resource.Slot, head->Resource.Gen},
-                            head->Offset, blob);
-                        ++delivered;
-                    }
+                    // The blobref names SEG_EVENT and the IN-SEGMENT offset of those inline
+                    // bytes - never a host address (R-2's rule B), which is the whole reason
+                    // EventRingConsumer exposes OffsetInSegment at all. The consumer's
+                    // kSegEvent arm resolves it through this session's own SegmentTable.
+                    MG_Pipe::MGPBlobRef blob{};
+                    blob.Seg = Wire::kSegEvent;
+                    blob.Offset = events.OffsetInSegment(bytes);
+                    blob.Size = head->Size;
+                    MG_Pipe::MGPipeClientOnBufferWriteback(
+                        MG_Pipe::MGPipeHandle{head->Resource.Slot, head->Resource.Gen},
+                        head->Offset, blob);
+                    ++delivered;
                     break;
                 }
                 case Transport::kEventGpuWritten: {
@@ -224,39 +280,71 @@ namespace MobileGL::MG_Remote::Client {
                                 static_cast<unsigned long long>(tail));
                         std::abort();
                     }
-                    if (MG_Pipe::gMGPipeCallbacks.OnGpuWritten != nullptr) {
-                        // EventRange and MGPRange are the same two Uint64s (EventRing.h:61-66
-                        // asserts it), so the tail is handed over as-is rather than copied into
-                        // a second array a later reader could get out of step with.
-                        const auto* ranges = reinterpret_cast<const MG_Pipe::MGPRange*>(
-                            static_cast<const Uint8*>(view.payload) + sizeof(*head));
-                        MG_Pipe::gMGPipeCallbacks.OnGpuWritten(
-                            MG_Pipe::MGPipeHandle{head->Resource.Slot, head->Resource.Gen},
-                            static_cast<Uint>(head->RangeCount), ranges);
-                        ++delivered;
-                    }
+                    // EventRange and MGPRange are the same two Uint64s (EventRing.h:61-66
+                    // asserts it), so the tail is handed over as-is rather than copied into
+                    // a second array a later reader could get out of step with.
+                    const auto* ranges = reinterpret_cast<const MG_Pipe::MGPRange*>(
+                        static_cast<const Uint8*>(view.payload) + sizeof(*head));
+                    MG_Pipe::MGPipeClientOnGpuWritten(
+                        MG_Pipe::MGPipeHandle{head->Resource.Slot, head->Resource.Gen},
+                        static_cast<Uint>(head->RangeCount), ranges);
+                    ++delivered;
                     break;
                 }
                 case Transport::kEventSurfaceChanged: {
                     if (view.payloadSize < sizeof(Transport::EventSurfaceChangedHead)) break;
-                    if (MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged != nullptr) {
-                        const auto* head =
-                            static_cast<const Transport::EventSurfaceChangedHead*>(view.payload);
-                        MG_Pipe::MGPSurfaceInfo info{};
-                        info.Width = head->Width;
-                        info.Height = head->Height;
-                        info.InternalFormat = head->InternalFormat;
-                        info.Samples = head->Samples;
-                        info.Layers = head->Layers;
-                        info.IsDefault = head->IsDefault;
-                        MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged(&info);
-                        ++delivered;
+                    const auto* head =
+                        static_cast<const Transport::EventSurfaceChangedHead*>(view.payload);
+                    MG_Pipe::MGPSurfaceInfo info{};
+                    info.Width = head->Width;
+                    info.Height = head->Height;
+                    info.InternalFormat = head->InternalFormat;
+                    info.Samples = head->Samples;
+                    info.Layers = head->Layers;
+                    info.IsDefault = head->IsDefault;
+                    ApplySurfaceChangedToClient(info);
+                    ++delivered;
+                    break;
+                }
+                case Transport::kEventGlError: {
+                    if (view.payloadSize < sizeof(Transport::EventGlErrorHead)) break;
+                    const auto* head =
+                        static_cast<const Transport::EventGlErrorHead*>(view.payload);
+                    const char* message =
+                        reinterpret_cast<const char*>(static_cast<const Uint8*>(view.payload) +
+                                                      sizeof(*head));
+                    const Uint64 tail = view.payloadSize - sizeof(*head);
+                    // MessageBytes == 0 is the corrupt shape, never "no message": the NUL
+                    // travels (CONTRACT-P5C §1, rule A's twin), so a legal record carries at
+                    // least one byte and that byte terminates the string.
+                    if (head->MessageBytes == 0 || tail < head->MessageBytes ||
+                        message[head->MessageBytes - 1] != '\0') {
+                        MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"kEventGlError\"} - "
+                                "MessageBytes %u against a %llu-byte tail, or the terminating "
+                                "NUL is missing",
+                                static_cast<unsigned>(head->MessageBytes),
+                                static_cast<unsigned long long>(tail));
+                        std::abort();
                     }
+                    // The error queue is CLIENT state, written here on the GL thread. The
+                    // observation point is the next drain after the post - P9 owns the
+                    // ordering (CONTRACT-P5C §4.2).
+                    if (MG_State::pGLContext != nullptr) {
+                        MG_State::pGLContext->RecordError(
+                            static_cast<ErrorCode>(head->Code),
+                            MakeUnique<GenericErrorInfo>(
+                                String(message, static_cast<SizeT>(head->MessageBytes - 1))));
+                    } else {
+                        MGLOG_E_ONCE("MG_Remote client: a kEventGlError (code %u) arrived with "
+                                     "no live context and is dropped",
+                                     static_cast<unsigned>(head->Code));
+                    }
+                    ++delivered;
                     break;
                 }
                 default:
                     MGLOG_W("MG_Remote client: reverse-channel record kind %u is not consumed in "
-                            "P5 (R-12 takes three and a half of the ten callbacks)",
+                            "P5c (four of the ten callbacks are armed; the rest are P9's)",
                             static_cast<unsigned>(view.kind));
                     break;
                 }
@@ -943,6 +1031,8 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     Transport::EventRingConsumer& ClientSession::Events() { return m_events; }
+
+    Wire::SegmentTable& ClientSession::Segments() { return m_segments; }
 
     Transport::RingControl* ClientSession::Control() { return m_shm.CmdControl(); }
 

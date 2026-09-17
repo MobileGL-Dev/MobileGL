@@ -158,6 +158,18 @@ namespace MobileGL::MG_Remote::Server {
         // caller and therefore compiles for every wrong pairing; the session is the thing
         // that knows which bell belongs to the client.
         void PublishEvents();
+
+        // ---- P5c ev: the reverse channel's producers (CONTRACT-P5C §4) -------------------
+        //
+        // With an active transport the three reverse MGPipeCallbacks entries are THIS
+        // session's producer callbacks (Accept installs them, Close uninstalls them), and
+        // the fourth event kind is posted through here: PipeInputs::RecordError's transport
+        // arm calls PostGlError with the frontend ErrorCode widened and the ErrorInfo's
+        // message. `message` may be null; a longer message than
+        // Transport::kEventGlErrorMaxMessageBytes is truncated, which is the contract's
+        // ruling (§1), not a check. A session that has not accepted drops the error with a
+        // loud line, exactly as RecordError's own no-live-context arm does.
+        void PostGlError(Uint32 code, const char* message);
         Transport::ITransport* Control_Plane();
 
         // completedFrameSerial / presentAckSerial: the two watermarks only the server can

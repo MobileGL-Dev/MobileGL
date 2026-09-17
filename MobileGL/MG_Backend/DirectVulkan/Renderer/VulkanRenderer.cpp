@@ -15,6 +15,10 @@
 
 #include "MG_State/GLState/Core.h"
 #include <MG_Pipe/PipeInputsSwitch.h>
+#if MOBILEGL_PIPE_PUSH
+// P5c ev: the GPU-write announcement routes through the reverse channel (R2).
+#include <MG_Impl/Pipe/ResourceTracker.h>
+#endif
 #include "MG_State/GLState/ProgramState/ProgramObject.h"
 #include "MG_State/GLState/ProgramState/ShaderObject.h"
 #include "MG_State/GLState/SamplerState/SamplerObject.h"
@@ -11675,7 +11679,13 @@ void main() {
             // have happened, so the buffer is also flagged for the wait that a later CPU
             // read has to perform - the capture is a GPU write like any shader's.
             bufferObject->EnsureGpuResidentStorage();
+#if MOBILEGL_PIPE_PUSH
+            // P5c ev (R2, CONTRACT-P5C §4.2): through the reverse channel, not a direct poke
+            // of the client object from the apply thread.
+            MG_Pipe::MGPipeAnnounceBufferGpuWritten(bufferObject);
+#else
             bufferObject->MarkGpuWritten();
+#endif
             BufferSlice slice{};
             if (!m_bufferManager.AcquireResidentSlice(BufferKind::Vertex, bufferObject, slice)) {
                 MGLOG_E_ONCE("BeginXfbCaptureForDraw: failed to acquire capture buffer %zu", i);
