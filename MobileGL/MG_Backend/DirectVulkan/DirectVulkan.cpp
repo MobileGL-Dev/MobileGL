@@ -1,4 +1,4 @@
-﻿// MobileGL - MobileGL/MG_Backend/DirectVulkan/DirectVulkan.cpp
+// MobileGL - MobileGL/MG_Backend/DirectVulkan/DirectVulkan.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -17,6 +17,10 @@
 #include "MG_Util/Metrics/PipeStats.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
 #include "MG_Util/Miscellany/IndexGenerator.h"
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <Config.h>
+#include <MG_Remote/Server/ServerLoop.h>
+#endif
 #include <atomic>
 #include <bit>
 #include <cstring>
@@ -710,9 +714,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding) {
         auto* programObject = TryGetDirectVulkanProgram(program);
         if (!programObject || storageBlockName == nullptr) return;
-        const Int maxBindings = pActiveBackendObject
-            ? pActiveBackendObject->GetDynamicParameters().MaxShaderStorageBufferBindings
-            : 0;
+        const Int maxBindings =
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5c (hd, CONTRACT-P5C §3.7): with an active transport the dynamic parameters are
+            // the SERVER's own backend's - the client caps mirror (pActiveBackendObject) is
+            // client memory the apply thread may not name (rule E). Monolith reads the mirror
+            // as it always did.
+            MG_Config::Transport != MG_Config::TransportMode::Monolith
+                ? (MG_Remote::Server::ServerLoopInstance().Backend() != nullptr
+                       ? static_cast<Int>(MG_Remote::Server::ServerLoopInstance().Backend()
+                                              ->GetDynamicParameters()
+                                              .MaxShaderStorageBufferBindings)
+                       : 0)
+                :
+#endif
+            pActiveBackendObject
+                ? pActiveBackendObject->GetDynamicParameters().MaxShaderStorageBufferBindings
+                : 0;
         if (storageBlockBinding >= static_cast<GLuint>(maxBindings)) {
             MGB_CTX->RecordError(
                 ErrorCode::InvalidValue,

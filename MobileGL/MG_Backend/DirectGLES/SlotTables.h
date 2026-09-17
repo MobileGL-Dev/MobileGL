@@ -75,6 +75,12 @@
 // belong on the client, and the backend should receive the handle in the verb payload. It is
 // NOT part of "Track H done" and check_include_closure.py does not probe MG_Backend headers,
 // so nothing catches it automatically.
+//
+// P5c (hd, CONTRACT-P5C §3.1) is what gives the debt teeth: with an active transport the
+// minting GetOrCreate, HandleOf and OnFrontendObjectDestroyed raise
+// Fatal{RoleViolation, "MGPipeSlots"} when reached from the apply thread (the same check the
+// allocator's own three entries carry, repeated here so the refusal names this surface), and
+// the split paths resolve through GetOrCreate(handle) / ReleaseByHandle instead.
 namespace MobileGL::MG_Backend::DirectGLES {
 
 #if MOBILEGL_PIPE_PUSH
@@ -228,6 +234,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // arm StateBackendObjectRegistry::GetOrCreate arms it itself.
             EnsureProcessTeardownSentinel();
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5c (hd, CONTRACT-P5C §3.1): this overload MINTS - it is monolith glue, and with
+            // an active transport a call from the apply thread is Fatal{RoleViolation,
+            // "MGPipeSlots"} before the allocator is touched. Split paths call the handle
+            // overload below. (The check also lives at the allocator's own three entries; it
+            // is repeated at this entry so the refusal names this surface even if the entry
+            // set changes.)
+            MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("GetOrCreate(StatePtr)");
+#endif
+
             const MG_Pipe::MGPipeHandle handle =
                 MG_Pipe::MGPipeSlots().Acquire(kKind, stateObj->GetLifetimeId());
             MOBILEGL_ASSERT(!MG_Pipe::MGPipeHandleIsNull(handle),
@@ -334,6 +350,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return entry.Live ? entry.Gen : 0;
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (hd): remember the frontend object a HANDLE-keyed twin was synced from. The
+        // minting overload sets stateRef itself; the handle overload cannot (no object
+        // crosses), so a caller that legitimately holds the object - the record-driven sync,
+        // which arrived holding it through the object-class barrier-pulled rows - notes it
+        // here. It is what lets a later handle-only resolution (P5c's named blit) reach the
+        // frontend object the twin's sync body still walks, without probing the client's slot
+        // allocator (T2). Same liveness rules as the minted stateRef: never an identity test,
+        // never read to decide the slot is dead.
+        void NoteStateForHandle(MG_Pipe::MGPipeHandle handle, const StatePtr& stateObj) {
+            if (MG_Pipe::MGPipeHandleIsNull(handle) || handle.Slot >= m_slots.size()) return;
+            Entry& entry = m_slots[handle.Slot];
+            if (!entry.Live || entry.Gen != handle.Gen) return;
+            entry.stateRef = stateObj;
+        }
+
+        // The frontend object noted for this handle, or null. The handle answers identity;
+        // this answers only "which object was this twin last synced from".
+        StatePtr StateForHandle(MG_Pipe::MGPipeHandle handle) const {
+            if (MG_Pipe::MGPipeHandleIsNull(handle) || handle.Slot >= m_slots.size()) {
+                return nullptr;
+            }
+            const Entry& entry = m_slots[handle.Slot];
+            if (!entry.Live || entry.Gen != handle.Gen) return nullptr;
+            return entry.stateRef.lock();
+        }
+#endif
+
         // P3a: the death half of the overload above, for a kind whose announcement is its own
         // destroy CALL rather than the shared death notice (D-L). Hands the twin OUT rather
         // than destroying it in place, because the caller may still have to decide what
@@ -391,6 +435,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // allocator probe it always cost; a hit is refreshed the moment anyone acquires.
         MG_Pipe::MGPipeHandle HandleOf(const StateObject* stateObj) const {
             if (stateObj == nullptr) return MG_Pipe::kMGPipeNullHandle;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5c (hd): same guard as the minting overload - a lifetime-id probe from the
+            // apply thread is Fatal{RoleViolation, "MGPipeSlots"} with an active transport.
+            MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("HandleOf");
+#endif
             const Uint64 lifetimeId = stateObj->GetLifetimeId();
             if (lifetimeId == m_memoLifetimeId) return m_memoHandle;
             const MG_Pipe::MGPipeHandle handle =
@@ -414,6 +463,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Returns whether the object had a slot of this kind, i.e. whether anything was freed;
         // a second call for the same id answers false because the allocator no longer maps it.
         static Bool OnFrontendObjectDestroyed(Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5c (hd): the Find/Free pair below is monolith-only with an active transport -
+            // a frontend death is announced to the server by the object_death record (ct),
+            // and a direct call from the apply thread is Fatal{RoleViolation, "MGPipeSlots"}.
+            MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("OnFrontendObjectDestroyed");
+#endif
             const MG_Pipe::MGPipeHandle handle =
                 MG_Pipe::MGPipeSlots().FindByLifetimeId(kKind, lifetimeId);
             if (MG_Pipe::MGPipeHandleIsNull(handle)) return false;

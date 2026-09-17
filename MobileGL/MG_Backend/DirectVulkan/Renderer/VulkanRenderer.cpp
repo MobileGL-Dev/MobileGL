@@ -33,6 +33,9 @@
 #include "MG_Util/SelfTest/PrimitivesGeneratedNoXfbProbe.h"
 #include "MG_Util/Texture/PixelStoreProcessor.h"
 #include <Config.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Remote/Server/ServerLoop.h>
+#endif
 #include <algorithm>
 #include <bit>
 #include <cstdlib>
@@ -664,6 +667,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     static void ApplyLineWidthState(VkCommandBuffer commandBuffer) {
         Float lineWidth = MGB_CTX->GetLineWidth();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (hd, CONTRACT-P5C §3.7): with an active transport the dynamic parameters are the
+        // SERVER's own backend's - the client caps mirror is client memory (rule E). Monolith
+        // reads the mirror as it always did.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            if (MG_Backend::BackendObject* server = MG_Remote::Server::ServerLoopInstance().Backend()) {
+                const auto& dynamicParameters = server->GetDynamicParameters();
+                const Float minLineWidth = dynamicParameters.AliasedLineWidthRangeMin;
+                const Float maxLineWidth = dynamicParameters.AliasedLineWidthRangeMax;
+                if (lineWidth < minLineWidth) {
+                    lineWidth = minLineWidth;
+                } else if (lineWidth > maxLineWidth) {
+                    lineWidth = maxLineWidth;
+                }
+            }
+        } else
+#endif
         if (MG_Backend::pActiveBackendObject != nullptr) {
             const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
             const Float minLineWidth = dynamicParameters.AliasedLineWidthRangeMin;

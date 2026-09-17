@@ -229,16 +229,35 @@ namespace MobileGL::MG_Remote::Server {
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("blit");
         if (table == nullptr) return false;
         if (table->GL.BlitFramebuffer == nullptr) return false;
-        // Same ruling as OnClear's: the read and draw framebuffers are already bound by the
-        // set_framebuffer_state records that preceded this one, so the unnamed entry point is
-        // the one that matches what the server's state actually is. For the named form the
-        // client temporarily binds the two named objects and validates before emitting; its
-        // existing BARRIER-PULLED fields stay fixed until this call returns. ReadFbo/DrawFbo
-        // retain the original identities for the later handle-only endpoint (CONTRACT-P5B §6).
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (hd, CONTRACT-P5C §3.3): the record's handles cross to the backend as the verb's
+        // own state. The bound form carries two nulls and nothing changes; the named form's
+        // pair is what the backend's named-blit arm resolves - the sink no longer relies on
+        // "the read and draw framebuffers are already bound" (the client's ScopedBlitBindings
+        // staging is deleted with this), and a backend that does not consume the pair has no
+        // named arm, which is a loud decline rather than a blit of whatever is bound.
+        auto& applierState = MG_Pipe::MGPipeApplier();
+        applierState.ClearVerbHandles();
+        applierState.VerbBlitReadFbo = blit.ReadFbo;
+        applierState.VerbBlitDrawFbo = blit.DrawFbo;
+        const Bool named = !MG_Pipe::MGPipeHandleIsNull(blit.ReadFbo) ||
+                           !MG_Pipe::MGPipeHandleIsNull(blit.DrawFbo);
+#endif
         table->GL.BlitFramebuffer(blit.SrcX0, blit.SrcY0, blit.SrcX1, blit.SrcY1, blit.DstX0,
                                   blit.DstY0, blit.DstX1, blit.DstY1,
                                   static_cast<GLbitfield>(blit.Mask),
                                   static_cast<GLenum>(blit.Filter));
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (named && !applierState.VerbBlitNamedConsumed) {
+            MGLOG_E_ONCE("MGPipe: a named blit (read {%u, %u}, draw {%u, %u}) reached a backend "
+                         "with no named-blit arm; the verb is DECLINED rather than applied to "
+                         "the bound framebuffers",
+                         blit.ReadFbo.Slot, blit.ReadFbo.Gen, blit.DrawFbo.Slot, blit.DrawFbo.Gen);
+            applierState.VerbBlitReadFbo = MG_Pipe::kMGPipeNullHandle;
+            applierState.VerbBlitDrawFbo = MG_Pipe::kMGPipeNullHandle;
+            return false;
+        }
+#endif
         ++m_blits;
         return true;
     }
@@ -447,6 +466,15 @@ namespace MobileGL::MG_Remote::Server {
         if (indirect != nullptr) {
             // The layout already refused a record that sets both flags or declares ranges
             // beside the block, so NumDraws is 0 and there is no span here.
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5c (hd, CONTRACT-P5C §3.5): the command/parameter buffer handles cross as the
+            // verb's own state; the backend's indirect arm resolves the buffer twins from
+            // them instead of reading the client's GL_DRAW_INDIRECT_BUFFER binding slot.
+            auto& applierState = MG_Pipe::MGPipeApplier();
+            applierState.ClearVerbHandles();
+            applierState.VerbIndirectBuffer = indirect->Buffer;
+            applierState.VerbIndirectParameterBuffer = indirect->ParameterBuffer;
+#endif
             const auto offset = reinterpret_cast<const void*>(static_cast<std::uintptr_t>(indirect->Offset));
             const auto drawCount = static_cast<GLsizei>(indirect->DrawCount);
             const auto stride = static_cast<GLsizei>(indirect->Stride);
@@ -650,6 +678,14 @@ namespace MobileGL::MG_Remote::Server {
             // IndirectBuffer travels for P7's sake; the BINDING is server state, put there by
             // the set_buffer_bindings record that preceded this one, exactly as OnClear's Fbo
             // is not re-resolved here. glDispatchComputeIndirect takes only the offset.
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5c (hd, CONTRACT-P5C §3.5): the buffer handle itself is now also the verb's own
+            // state, so the backend's dispatch-indirect arm resolves the twin from the record
+            // rather than from the client's GL_DISPATCH_INDIRECT_BUFFER binding slot.
+            auto& applierState = MG_Pipe::MGPipeApplier();
+            applierState.ClearVerbHandles();
+            applierState.VerbDispatchIndirectBuffer = grid.IndirectBuffer;
+#endif
             gl.DispatchComputeIndirect(static_cast<GLintptr>(grid.IndirectOffset));
         } else {
             if (gl.DispatchCompute == nullptr) return false;
@@ -870,6 +906,15 @@ namespace MobileGL::MG_Remote::Server {
     Bool ServerVerbSink::OnGenerateMipmap(const MG_Pipe::MGPMipPlan& plan) {
         const auto* table = Table("GenerateMipmap");
         if (table == nullptr || table->GL.GenerateMipmap == nullptr) return false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (hd, CONTRACT-P5C §3.2): the texture the client resolved at Target on the active
+        // unit crosses as the verb's own state; the backend's mip-descriptor check resolves
+        // the record from it instead of probing the client allocator for the bound object's
+        // lifetime id (T2's mip half).
+        auto& applierState = MG_Pipe::MGPipeApplier();
+        applierState.ClearVerbHandles();
+        applierState.VerbMipRes = plan.Res;
+#endif
         table->GL.GenerateMipmap(plan.Target);
         return true;
     }
@@ -877,6 +922,14 @@ namespace MobileGL::MG_Remote::Server {
     Bool ServerVerbSink::OnCopyFramebufferToTexture(const MG_Pipe::MGPCopyFromFramebuffer& copy) {
         const auto* table = Table(copy.SubImage ? "CopyTexSubImage2D" : "CopyTexImage2D");
         if (table == nullptr) return false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (hd, CONTRACT-P5C §3.4): the destination texture the client resolved at the
+        // active unit crosses as the verb's own state; the backend resolves its twin from the
+        // handle instead of reading the client's texture-unit binding slot (T4).
+        auto& applierState = MG_Pipe::MGPipeApplier();
+        applierState.ClearVerbHandles();
+        applierState.VerbCopyTexDst = copy.Dst;
+#endif
         if (copy.SubImage) {
             if (table->GL.CopyTexSubImage2D == nullptr) return false;
             table->GL.CopyTexSubImage2D(copy.Target, copy.Level, copy.XOffset, copy.YOffset,

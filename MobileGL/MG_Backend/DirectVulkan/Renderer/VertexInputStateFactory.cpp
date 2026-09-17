@@ -10,6 +10,10 @@
 #include "MagmaPipeArms.h"
 #include "MG_Util/Converters/MGToStr/DataTypeConverter.h"
 #include <MG_Backend/BackendObjects.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <Config.h>
+#include <MG_Remote/Server/ServerLoop.h>
+#endif
 #include <utility>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
@@ -246,6 +250,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // set, a dvec3/dvec4 would be declined by ToVkVertexFormat AND left 64-bit in the
             // module, so a float32 stream would be fed to a Float64 input.
             const Bool narrowFloat64Arrays =
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P5c (hd, CONTRACT-P5C §3.7): with an active transport the answer is the
+                // SERVER's own backend's - the client caps mirror is client memory (rule E).
+                MG_Config::Transport != MG_Config::TransportMode::Monolith
+                    ? (MG_Remote::Server::ServerLoopInstance().Backend() == nullptr ||
+                       !MG_Remote::Server::ServerLoopInstance().Backend()
+                            ->GetDynamicParameters()
+                            .SupportsFloat64VertexAttributes)
+                    :
+#endif
                 MG_Backend::pActiveBackendObject == nullptr ||
                 !MG_Backend::pActiveBackendObject->GetDynamicParameters().SupportsFloat64VertexAttributes;
             if (sourceVkFormat == VK_FORMAT_UNDEFINED && attr.Type == DataType::Float64 && narrowFloat64Arrays) {
@@ -499,7 +513,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // demoted `vec` input - the same thing DirectGLES does for the same state. The
             // frontend RECORDS the format either way, so this gate is the only thing standing
             // between a legal glVertexAttribLFormat and a mismatched pipeline.
-            if (MG_Backend::pActiveBackendObject == nullptr ||
+            if (
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P5c (hd, CONTRACT-P5C §3.7): see the narrowFloat64Arrays site above.
+                MG_Config::Transport != MG_Config::TransportMode::Monolith
+                    ? (MG_Remote::Server::ServerLoopInstance().Backend() == nullptr ||
+                       !MG_Remote::Server::ServerLoopInstance().Backend()
+                            ->GetDynamicParameters()
+                            .SupportsFloat64VertexAttributes)
+                    :
+#endif
+                MG_Backend::pActiveBackendObject == nullptr ||
                 !MG_Backend::pActiveBackendObject->GetDynamicParameters().SupportsFloat64VertexAttributes) {
                 return VK_FORMAT_UNDEFINED;
             }

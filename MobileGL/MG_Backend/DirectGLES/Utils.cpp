@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <regex>
@@ -46,6 +47,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (MG_Backend::BackendObject* server = MG_Remote::Server::ServerLoopInstance().Backend()) {
                 return &server->GetFormatCapabilities();
             }
+            // P5c (hd, CONTRACT-P5C §3.7): the mirror fallback is REFUSED with an active
+            // transport. The server's backend exists whenever the session does, so reaching
+            // here is a bring-up ordering defect, and a silent read of the client caps mirror
+            // (pActiveBackendObject is client memory, rule E) would hide it.
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"caps-mirror\"} - the format-capability "
+                    "fallback to the client caps mirror was reached with an active transport "
+                    "but no server backend; the server's own backend is the only legal source "
+                    "on the apply thread");
+            std::abort();
         }
         return pActiveBackendObject ? &pActiveBackendObject->GetFormatCapabilities() : nullptr;
     }

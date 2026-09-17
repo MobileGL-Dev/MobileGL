@@ -734,42 +734,19 @@ namespace MobileGL::MG_Remote::Client {
                                 nullptr, 0, nullptr);
         }
 
-        // DSA blits use the existing bound-form backend while the verb barrier holds.
-        // Only client shadow bindings change here; no driver call or frontend pointer crosses
-        // the wire. Bind() bumps their versions on entry and restore, so the next ordinary
-        // verb republishes the application's original bindings even if no GL bind intervenes.
-        class ScopedBlitBindings {
-        public:
-            using Fbo = MG_State::GLState::FramebufferObject;
-            ScopedBlitBindings(const SharedPtr<Fbo>& read, const SharedPtr<Fbo>& draw)
-                : m_read(MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read)),
-                  m_draw(MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw)),
-                  m_savedRead(m_read.GetBoundObject()), m_savedDraw(m_draw.GetBoundObject()) {
-                m_read.Bind(read);
-                m_draw.Bind(draw);
-            }
-            ~ScopedBlitBindings() {
-                m_read.Bind(m_savedRead);
-                m_draw.Bind(m_savedDraw);
-            }
-            ScopedBlitBindings(const ScopedBlitBindings&) = delete;
-            ScopedBlitBindings& operator=(const ScopedBlitBindings&) = delete;
-        private:
-            BindingSlot<Fbo>& m_read;
-            BindingSlot<Fbo>& m_draw;
-            SharedPtr<Fbo> m_savedRead;
-            SharedPtr<Fbo> m_savedDraw;
-        };
-
         void EmitBlitNamedFramebuffer(
             const SharedPtr<MG_State::GLState::FramebufferObject>& read,
             const SharedPtr<MG_State::GLState::FramebufferObject>& draw,
             GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0,
             GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
             ClientSession& session = RequireSession("BlitNamedFramebuffer");
-            const ScopedBlitBindings bindings(read, draw);
-            // The frontend's first validate preceded this temporary lowering. Refresh both
-            // emitted framebuffer state and the existing BARRIER-PULLED binding fields now.
+            // P5c (hd, CONTRACT-P5C §3.3): the scoped rebind of the client's own read/draw
+            // binding slots is DELETED. It existed only to stage values for the server's
+            // binding-slot read, and that read is gone: the sink resolves both framebuffers
+            // from the record's handles. The validate still refreshes both framebuffers'
+            // emitted state (their Named set_framebuffer_state records), which is now the
+            // only description the server syncs from. No driver call or binding change
+            // happens on the client.
             MG_Pipe::MGPipeValidateForVerb(MG_Pipe::MGPipeVerb::BlitNamedFramebuffer);
             BeforeReadOnlyVerb();
             MG_Pipe::MGPBlit record{};

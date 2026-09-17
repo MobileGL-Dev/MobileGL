@@ -467,6 +467,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return m_slotTable.LiveGenAt(slot);
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (hd): the two halves of SlotTables.h's state note, forwarded. A caller holding
+        // both the record's handle and the frontend object (the record-driven sync) notes the
+        // object so a later handle-only resolution can reach it without the client allocator.
+        void NoteStateForHandle(MG_Pipe::MGPipeHandle handle, const StatePtr& stateObj) {
+            if (EsprytSlotTablesEnabled()) {
+                m_slotTable.NoteStateForHandle(handle, stateObj);
+            }
+        }
+        StatePtr StateForHandle(MG_Pipe::MGPipeHandle handle) const {
+            if (EsprytSlotTablesEnabled()) {
+                return m_slotTable.StateForHandle(handle);
+            }
+            return nullptr;
+        }
+#endif
+
         // NO ReleaseByHandle HERE, AND THAT IS A DECISION (review M-4). The death half of
         // GetOrCreateByHandle exists for a kind whose announcement is its own destroy CALL
         // rather than the shared death notice - which is the BUFFER family
@@ -891,6 +908,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // MGPipeSlots(): the handle ARRIVED already minted by the side that owns minting.
         GLESBufferResource* GetOrCreateBufferResourceForHandle(MG_Pipe::MGPipeHandle res);
         GLESBufferResource* FindBufferResourceForHandle(MG_Pipe::MGPipeHandle res);
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (hd): the staged-coverage assertion (StagedShadowStore::RequireCoverage) for a
+        // read of the server shadow outside the upload ladders - the indirect command-byte
+        // resolver. A no-op for a base that is not this resource's server shadow.
+        void RequireStagedCoverage(GLESBufferResource& resource, const Uint8* hostBase, SizeT start,
+                                   SizeT end, const char* site);
+#endif
 
         // MONOLITH GLUE, and named as such: the handle of a resource this backend is looking
         // at through a frontend object, resolved through the client allocator's lifetime-id
@@ -1810,6 +1835,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // still run when SyncCurrentFBO skips the READ-target sync because the same GL FBO is
             // bound as both draw and read (otherwise glReadBuffer changes would be silently dropped).
             void SyncReadBufferToBackend(const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBOObject);
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5c (hd, CONTRACT-P5C §3.2): the framebuffer handle the CURRENT sync is keyed on.
+            // A caller applying a record sets it before SyncToBackend / SyncReadBufferToBackend,
+            // which then read the applier's record for THAT handle instead of probing the
+            // client's slot allocator for the frontend object's lifetime id (T2). Read only
+            // with an active transport; monolith resolves through HandleOf as it always did.
+            MG_Pipe::MGPipeHandle m_pushedSyncHandle = MG_Pipe::kMGPipeNullHandle;
+#endif
             void InvalidateSyncedState();
             Uint GetBackendFramebufferId() const { return m_backendFBOId; }
             void Bind(FramebufferTarget target) const;

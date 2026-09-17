@@ -163,4 +163,14 @@ namespace MobileGL::MG_Pipe {
 
     // The monolith's one client allocator. Under split there is one per client context.
     MGPipeSlotAllocator& MGPipeSlots();
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P5c (hd, CONTRACT-P5C §3.1 / §6 layer 1): with an active transport this allocator is a
+    // CLIENT-only surface. Acquire, FindByLifetimeId and Free called from the apply thread -
+    // i.e. a server that resolves or mints handles off a frontend object's lifetime id (T2),
+    // which is memory that will not exist on its side of a real split - are
+    // Fatal{RoleViolation, "MGPipeSlots"}. Compiled out entirely outside split builds, so the
+    // pull build's bytes do not move (G1).
+    void MGPipeRefuseAllocatorFromApplyThread(const char* entry);
+#endif
 } // namespace MobileGL::MG_Pipe

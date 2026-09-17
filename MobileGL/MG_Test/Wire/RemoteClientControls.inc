@@ -419,22 +419,26 @@ TEST(RemoteClientControls, BoundPackBufferOffsetReadRefusesByName) {
 }
 
 TEST(RemoteClientControls, ServerRoleRespecifyDoesNotEmitClientInitialBytes) {
+    // P5c (hd): the in-process server-role drive itself is now refused by name. The emit
+    // path's first move is the client allocator's Acquire for the buffer's handle, and with
+    // an active transport that entry is Fatal{RoleViolation, "MGPipeSlots"} from the apply
+    // thread (CONTRACT-P5C §3.1, rule E). "No client initial bytes" therefore holds the
+    // strong way - there is no client-emitter path for the server role to reach at all; ev's
+    // SEG_EVENT producers are what replaces the mechanism this case used to drive.
     const auto child = RunInChild([] {
         CapsPeer backend;
         Srv::ServerSessionInstance().SetBackend(&backend);
         StartControlSession();
         MG_Config::Features.PipePush |= kMGPipeSubsystemResources;
-        const auto before = ClientWireRecordsEmitted();
-        if (Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+        Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
             MG_State::GLState::BufferObject buffer(701);
             Uint8 data[64]{};
             buffer.Respecify(sizeof(data), data);
             return MOBILEGL_OK;
-        }, nullptr) != MOBILEGL_OK) ::_exit(92);
-        if (ClientWireRecordsEmitted() != before) ::_exit(93);
+        }, nullptr);
         ClientSessionInstance().Stop();
     });
-    ExpectChildSuccess(child);
+    ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
 }
 
 TEST(RemoteClientControls, HeaderOnlyDynamicStateCrossesWithoutBlobMissing) {
@@ -451,34 +455,33 @@ TEST(RemoteClientControls, HeaderOnlyDynamicStateCrossesWithoutBlobMissing) {
 }
 
 TEST(RemoteClientControls, ServerRoleFlushDoesNotRunTheClientSubDataFollowup) {
+    // P5c (hd): same refusal as the respecify sibling above - a server-role flush reaching the
+    // client emit path is stopped at the allocator entry before any follow-up question arises
+    // (Fatal{RoleViolation, "MGPipeSlots"}; ev's events replace the mechanism).
     const auto child = RunInChild([] {
         CapsPeer backend;
         Srv::ServerSessionInstance().SetBackend(&backend);
         StartControlSession();
         MG_Config::Features.PipePush |= kMGPipeSubsystemResources;
-        const auto rc = Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
-            static int subdata = 0, flushes = 0;
+        Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
             MGPipeResourceOps ops{};
             ops.Create = [](MGPipeHandle, const MGPResourceDesc&) {};
             ops.Respecify = [](MGPipeHandle, const MGPResourceDesc&, const void*) {};
-            ops.SubData = [](MGPipeHandle, const MGPSubData&, const void*) { ++subdata; };
-            ops.FlushRange = [](MGPipeHandle, const MGPFlushRange&, const void*) { ++flushes; };
+            ops.SubData = [](MGPipeHandle, const MGPSubData&, const void*) {};
+            ops.FlushRange = [](MGPipeHandle, const MGPFlushRange&, const void*) {};
             ops.Destroy = [](MGPipeHandle) {};
             MGPipeSetResourceOps(&ops);
             {
                 MG_State::GLState::BufferObject buffer(702);
                 buffer.Resize(64);
-                subdata = flushes = 0;
                 MGPipeEmitResourceFlushRange(buffer, 16, 16, 0);
-                if (subdata != 0 || flushes != 1) ::_exit(95);
             }
             MGPipeSetResourceOps(nullptr);
             return MOBILEGL_OK;
         }, nullptr);
-        if (rc != MOBILEGL_OK) ::_exit(96);
         ClientSessionInstance().Stop();
     });
-    ExpectChildSuccess(child);
+    ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
 }
 // Uses the shipped EGL/GL frontend and real DirectGLES driver. Invoked explicitly by the
 // package gate because a native driver is not a prerequisite of the unit lane.

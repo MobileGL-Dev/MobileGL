@@ -670,6 +670,50 @@ namespace MobileGL::MG_Pipe {
         MGPipeHandle BoundShaderCso = kMGPipeNullHandle;
         Uint64 ProgramBindingSerial = 0;
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // ---- P5c (hd, CONTRACT-P5C §3.2): THE CURRENT VERB'S OWN HANDLES. ----------------
+        //
+        // Server state, written by ServerVerbSink at the top of a verb's dispatch and read by
+        // the backend DURING THAT SAME VERB, so the apply thread resolves the verb's objects
+        // from the handles the record carried instead of probing the client's slot allocator
+        // for a frontend object's lifetime id (T2). It is per-verb WORKING state, not object
+        // state: every writer overwrites the whole set for its verb (null included), so a
+        // value is only ever read between its verb's write and that verb's return, and there
+        // is nothing to clear at a reset.
+        //
+        // Blit: both null = the bound-form blit (the bindings answer, as before). A non-null
+        // pair names the read/draw framebuffers of a NAMED blit (MGPBlit::ReadFbo/DrawFbo);
+        // the backend must then run its named-blit arm and raise VerbBlitNamedConsumed - the
+        // sink reads that flag back so a backend with no named arm is a loud decline rather
+        // than a silent blit of whatever is bound.
+        MGPipeHandle VerbBlitReadFbo = kMGPipeNullHandle;
+        MGPipeHandle VerbBlitDrawFbo = kMGPipeNullHandle;
+        Bool VerbBlitNamedConsumed = false;
+        // copy_framebuffer_to_texture's destination texture (MGPCopyFromFramebuffer::Dst).
+        MGPipeHandle VerbCopyTexDst = kMGPipeNullHandle;
+        // generate_mipmap's texture (MGPMipPlan::Res).
+        MGPipeHandle VerbMipRes = kMGPipeNullHandle;
+        // The current indirect draw's command buffer and (for the *Count forms) parameter
+        // buffer (MGPDrawIndirect::Buffer / ParameterBuffer).
+        MGPipeHandle VerbIndirectBuffer = kMGPipeNullHandle;
+        MGPipeHandle VerbIndirectParameterBuffer = kMGPipeNullHandle;
+        // dispatch_indirect's command buffer (MGPGridInfo::IndirectBuffer).
+        MGPipeHandle VerbDispatchIndirectBuffer = kMGPipeNullHandle;
+
+        // Every verb's writer calls this FIRST and then sets its own fields, so no field ever
+        // outlives the verb that wrote it and a reader can treat non-null as "this verb's".
+        void ClearVerbHandles() {
+            VerbBlitReadFbo = kMGPipeNullHandle;
+            VerbBlitDrawFbo = kMGPipeNullHandle;
+            VerbBlitNamedConsumed = false;
+            VerbCopyTexDst = kMGPipeNullHandle;
+            VerbMipRes = kMGPipeNullHandle;
+            VerbIndirectBuffer = kMGPipeNullHandle;
+            VerbIndirectParameterBuffer = kMGPipeNullHandle;
+            VerbDispatchIndirectBuffer = kMGPipeNullHandle;
+        }
+#endif
+
         // ---- THE THREE FRAMEBUFFER ACCESSORS (ID-19(b)/(d)). They are functions rather than
         // members because the storage moved under them and their callers must not have to know
         // it did: `DrawFramebuffer()` / `ReadFramebuffer()` answer the question the two members

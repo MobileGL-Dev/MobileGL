@@ -2702,6 +2702,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return twin ? twin->get() : nullptr;
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        void RequireStagedCoverage(GLESBufferResource& resource, const Uint8* hostBase, SizeT start,
+                                   SizeT end, const char* site) {
+            ServerStaged().RequireCoverage(&resource, hostBase, start, end, site);
+        }
+#endif
+
         MG_Pipe::MGPipeHandle HandleOfBuffer(const MG_State::GLState::BufferObject* bufferObject) {
             if (bufferObject == nullptr) return MG_Pipe::kMGPipeNullHandle;
             // Through the table's own single-entry front memo rather than straight into
@@ -3100,7 +3107,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // D-N keeps this call here for P3a. It can queue ranges and move the record, so
             // everything below is read AFTER it.
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5c (hd, CONTRACT-P5C §3.8): under an active transport the frontend accessor is a
+            // layer-1 surface ("buffer-legacy-arm") and the client's own pre-verb
+            // persistent-map push is the only producer; the call is skipped outright. Under
+            // monolith D-N's placement stands.
+            if (bufferObject && MG_Config::Transport == MG_Config::TransportMode::Monolith) {
+                bufferObject->SyncPersistentMappedRange();
+            }
+#else
             if (bufferObject) bufferObject->SyncPersistentMappedRange();
+#endif
 
             const auto* record = ResourceRecordOf(res);
             const SizeT size = record != nullptr ? static_cast<SizeT>(record->Desc.Width) : 0;
@@ -3128,24 +3145,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // and its bytes are read through persistentPtr.
             if (hostBase != nullptr) resource->hostBytes = hostBase;
             // "DOES THE SHADOW THIS PATH IS ABOUT TO UPLOAD HOLD MEANINGFUL BYTES?" - and it has
-            // to be asked of the SAME thing the bytes come from, which is why it is not
-            // record->Desc.HasDefinedContent. The descriptor states what was true at the last
-            // resource_respecify and NOTHING refreshes it afterwards: resource_subdata,
-            // resource_flush_range, buffer_subdata_resident and OnGpuWritten all define content
-            // (BufferObject.cpp:85, :101, :127, :365, :441) without re-emitting a descriptor,
-            // and re-emitting one per glBufferSubData would be new wire traffic D-J forbids. So
-            // after the ordinary glBufferData(NULL) + glBufferSubData idiom the descriptor still
-            // says "undefined", this full re-upload passed nullptr, RespecifyStorageWith
-            // CLEARED the queued ranges and stamped syncedChangeSerial - i.e. an empty store
-            // declared current, with the application's bytes dropped and nothing saying so.
-            // The legacy arm pairs bufferObject.MappedData() with bufferObject.HasDefinedContent()
-            // (RespecifyStorageNow) and this arm pairs the same two, so the source of the bytes
-            // and the statement about them can never disagree. Declared, like C-1's IsMapped():
-            // it is a frontend read this function keeps for P3a and it retires the moment the
-            // client publishes a live content flag beside the descriptor (P5/P8). With no
-            // frontend object (the handle-only drains) the descriptor is all there is.
+            // to be asked of the SAME thing the bytes come from. The legacy arm pairs
+            // bufferObject.MappedData() with bufferObject.HasDefinedContent() (RespecifyStorageNow)
+            // and this arm pairs the same two, so the source of the bytes and the statement about
+            // them can never disagree.
+            //
+            // P5c (hd, CONTRACT-P5C §3.6 / B1): with an active transport the answer is the
+            // DESCRIPTOR's bit - which the client publishes on ResourceCreate/Respecify - OR the
+            // staged coverage the content records behind it delivered. The coverage half is what
+            // keeps the answer equal to the frontend flag's in the one case the descriptor alone
+            // cannot see: an ORPHANING respecify (descriptor clear) followed by glBufferSubData,
+            // which defines content without a new descriptor - the bytes crossed as
+            // resource_subdata and the staged store's coverage is exactly "content defined since
+            // the last orphan". With no coverage and a clear bit the store is undefined by the
+            // application's own declaration and the upload stays a pure NULL reallocation.
             const Bool shadowHasContent =
-                bufferObject ? bufferObject->HasDefinedContent() : (record->Desc.HasDefinedContent != 0);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                MG_Config::Transport != MG_Config::TransportMode::Monolith
+                    ? (record->Desc.HasDefinedContent != 0 ||
+                       ServerStaged().CoveredRunCount(resource) != 0)
+                    :
+#endif
+                (bufferObject ? bufferObject->HasDefinedContent() : (record->Desc.HasDefinedContent != 0));
             const void* initialData = shadowHasContent ? hostBase : nullptr;
             // M-3 / codex 4: a RespecifyStorageWith(..., initialData != nullptr) is a WHOLE-STORE
             // [0, size) upload from the base, so it owes the same coverage the pending-range drain
@@ -9143,7 +9164,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                  surface.Res.Slot, surface.Res.Gen);
                     return false;
                 }
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P5c (hd): the corroborating cross-check against the frontend object's handle
+                // is a client-allocator probe (T2). Under an active transport the record is the
+                // ONLY statement of identity (rule E) and the check does not run; monolith
+                // keeps it verbatim. The record's own handle was already validated above (N-3).
+                if (MG_Config::Transport == MG_Config::TransportMode::Monolith &&
+                    !(TextureImpl::g_backendTextureObjects.HandleOf(textureObject.get()) == surface.Res)) {
+#else
                 if (!(TextureImpl::g_backendTextureObjects.HandleOf(textureObject.get()) == surface.Res)) {
+#endif
                     MGLOG_E_ONCE("MGPipe: attachment record names texture {%u, %u} but the frontend "
                                  "attachment's texture %u is handle {%u, %u} - refusing rather than "
                                  "attaching one of them",
@@ -9358,7 +9388,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // FramebufferAttachmentType::None, i.e. GL_NONE. A surface that matches no colour
             // point cannot be a legal read buffer and is refused rather than guessed.
             if (FramebufferSubsystemEnabled()) {
-                const MG_Pipe::MGPipeHandle fbo = g_backendFramebufferObjects.HandleOf(stateFBOObject.get());
+                // P5c (hd): with an active transport the handle is the caller's
+                // (m_pushedSyncHandle), never the client allocator's - see SyncToBackend.
+                const MG_Pipe::MGPipeHandle fbo =
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    MG_Config::Transport != MG_Config::TransportMode::Monolith
+                        ? m_pushedSyncHandle
+                        :
+#endif
+                        g_backendFramebufferObjects.HandleOf(stateFBOObject.get());
                 // ID-19: the OBJECT's record, not "the record of whatever is bound to READ". A
                 // framebuffer whose read buffer is being pushed need not be the read binding at
                 // all - glNamedFramebufferReadBuffer and the DSA clears reach here by name - and
@@ -9586,7 +9624,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // there is no framebuffer create or destroy in the catalogue and none is invented
                 // - so the handle exists purely to key set_framebuffer_state, which is exactly
                 // what it is used for here.
-                const MG_Pipe::MGPipeHandle fbo = g_backendFramebufferObjects.HandleOf(stateFBOObject.get());
+                //
+                // P5c (hd): with an active transport the handle is the one the caller is applying
+                // (m_pushedSyncHandle - the record-driven sync set it), and the client allocator
+                // is never probed (T2). A null there means a caller reached this arm without a
+                // record, which the null-record refusal below names.
+                const MG_Pipe::MGPipeHandle fbo =
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    MG_Config::Transport != MG_Config::TransportMode::Monolith
+                        ? m_pushedSyncHandle
+                        :
+#endif
+                        g_backendFramebufferObjects.HandleOf(stateFBOObject.get());
                 pushedRecord = PushedFramebufferRecord(fbo);
                 if (pushedRecord == nullptr) {
                     MGLOG_E_ONCE("MGPipe: framebuffer %u has no applier record on the handle arm, so it "
