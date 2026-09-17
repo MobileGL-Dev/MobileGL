@@ -1634,6 +1634,33 @@ namespace MobileGL::MG_Pipe {
     MGP_ASSERT_POD(MGPCopyFromFramebuffer, 48);
 
     // ---------------------------------------------------------------------------------
+    // P5c: the two appended rows (MG_Remote/CONTRACT-P5C.md §5). APPENDED, never inserted:
+    // applier_reset is opcode 77 and object_death opcode 78, and no earlier opcode moved.
+    //
+    // Neither has an MGPipeApply* entry point and neither gains one. Both reach
+    // MG_Remote::Wire::WireVerbSink like the five P5b verbs, and under monolith neither has a
+    // producer - the reset is the GL thread's direct MGPipeApplierReset() call and the death
+    // notice's mailbox hop, byte for byte as today (G1/G2).
+    // ---------------------------------------------------------------------------------
+
+    // applier_reset = tracker.FreshlyPrimed()'s server half (P5c §5.1). The one field is the
+    // client-side context's make-current serial at the edge that primed it: 0 is the first
+    // make-current. P5c has exactly one context per session, so the sink ASSERTS the value
+    // against the session's own count rather than dispatching on it; P6's multi-context shape
+    // is what reads it for real.
+    struct MGPApplierReset {
+        Uint64 ContextSerial;
+    };
+    MGP_ASSERT_POD(MGPApplierReset, 8);
+
+    // object_death carries no payload of its own: MGPHandleOnly (:93-98) IS the payload
+    // (CONTRACT-P5C.md §1) - Handle the dead frontend object's handle, Kind its MGPipeKind
+    // widened, one row for all seven kinds the death switch handles. A null handle never
+    // crosses: the client emits nothing when its own allocator cannot resolve the dying
+    // object (§5.2), so a null handle arriving is Fatal{ProtocolCorruption,
+    // "ObjectDeath.Handle"} at the sink.
+
+    // ---------------------------------------------------------------------------------
     // Reverse channel payloads (section 7.1)
     // ---------------------------------------------------------------------------------
 

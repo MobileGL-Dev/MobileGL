@@ -534,6 +534,25 @@ namespace MobileGL::MG_Remote::Wire {
             (void)copy;
             return false;
         }
+
+        // ---- P5c (MG_Remote/CONTRACT-P5C.md §5): the two control records, opcodes 77..78.
+        //
+        // Same hand-over shape as the P5b rows: the codec validates the record (a fixed-size
+        // POD, no blob, no tail) and the SERVER'S sink does the work - OnApplierReset runs the
+        // server's own MGPipeApplierReset() after asserting ContextSerial against the
+        // session's (§5.1: ASSERTED, never dispatched on, P5c has one context per session),
+        // and OnObjectDeath releases the kind's twin table by the handle the record carried
+        // (§5.2). The default bodies return false ("this build does not implement it"), so a
+        // unit decoder without a server declines by the same answer every other unimplemented
+        // row gives.
+        virtual Bool OnApplierReset(const MG_Pipe::MGPApplierReset& reset) {
+            (void)reset;
+            return false;
+        }
+        virtual Bool OnObjectDeath(const MG_Pipe::MGPHandleOnly& death) {
+            (void)death;
+            return false;
+        }
     };
 
     // Not thread safe: one decoder on the apply thread, by construction.

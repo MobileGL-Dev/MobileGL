@@ -38,6 +38,10 @@
 #include <Config.h>
 #include <MG_Remote/Server/PipeApplier.h>
 #include <MG_Backend/DirectGLES/BackendObject_DirectGLES.h>
+// P5c ct: object_death's round trip releases REAL Espryt twin-table entries, so the suite
+// drives the same registries the sink dispatches to (Managers.h). A suite that substituted a
+// mock here would pin the dispatch and nothing about the release (R-16).
+#include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 #include <MG_Pipe/PipeApply.h>
@@ -268,6 +272,16 @@ namespace {
                 FramebufferCopies.push_back(copy);
                 return true;
             }
+            // ---- P5c's rows (CONTRACT-P5C.md §5): the two control records, recorded the same
+            // way so a round trip asserts the arm and the record intact.
+            Bool OnApplierReset(const MGPApplierReset& reset) override {
+                ApplierResets.push_back(reset);
+                return true;
+            }
+            Bool OnObjectDeath(const MGPHandleOnly& death) override {
+                ObjectDeaths.push_back(death);
+                return true;
+            }
             std::vector<MGPClear> Clears;
             std::vector<MGPBlit> Blits;
             std::vector<MGPPresent> Presents;
@@ -293,6 +307,8 @@ namespace {
             std::vector<MGPPatchParameter> Patches;
             std::vector<MGPMipPlan> MipPlans;
             std::vector<MGPCopyFromFramebuffer> FramebufferCopies;
+            std::vector<MGPApplierReset> ApplierResets;
+            std::vector<MGPHandleOnly> ObjectDeaths;
         };
 
         Replies& Answers() { return m_replies; }
@@ -1241,6 +1257,73 @@ TEST_F(PipeWireCodecTest, BindStreamOutputReachesTheSink) {
     ASSERT_EQ(wire.Sink().StreamOutputBinds.size(), 1u);
     EXPECT_EQ(wire.Sink().StreamOutputBinds[0].GlName, 12u);
     EXPECT_EQ(wire.Sink().StreamOutputBinds[0].LifetimeId, 0x1234567890ull);
+}
+
+// =====================================================================================
+// P5c ct (MG_Remote/CONTRACT-P5C.md §5): the two control records round-trip
+// =====================================================================================
+//
+// Same shape as the P5b rows above: encode, pump, and assert the record reached the RIGHT
+// sink method intact. What a serial ASSERT or a twin release does with the record is the
+// SERVER sink's layer (SessionTest drives that); here the codec proves the bytes and the
+// dispatch.
+
+TEST_F(PipeWireCodecTest, ApplierResetReachesTheSinkWithItsSerial) {
+    Wire2 wire;
+    MGPApplierReset reset{};
+    reset.ContextSerial = 0; // 0 = the first make-current (CONTRACT-P5C.md §1)
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ApplierReset, &reset, sizeof(reset)),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_EQ(wire.Sink().ApplierResets.size(), 1u);
+    EXPECT_EQ(wire.Sink().ApplierResets[0].ContextSerial, 0u);
+
+    // A second edge carries the next serial, and the two records arrive in order.
+    reset.ContextSerial = 1;
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ApplierReset, &reset, sizeof(reset)),
+              kInvalidSeq);
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_EQ(wire.Sink().ApplierResets.size(), 2u);
+    EXPECT_EQ(wire.Sink().ApplierResets[1].ContextSerial, 1u);
+    EXPECT_EQ(wire.Decoder().AppliedSeq(), 2u);
+}
+
+TEST_F(PipeWireCodecTest, ObjectDeathReachesTheSinkWithItsHandleAndKind) {
+    Wire2 wire;
+    // One record per kind the death switch handles (CONTRACT-P5C.md §1: one payload for all
+    // seven), because the kind is what the sink dispatches on and a row that widened it
+    // wrong would drop every death of that kind.
+    const MGPipeKind kinds[] = {
+        MGPipeKind::Texture,      MGPipeKind::Framebuffer,      MGPipeKind::Renderbuffer,
+        MGPipeKind::SamplerCso,   MGPipeKind::ShaderCso,        MGPipeKind::SamplerViewCso,
+        MGPipeKind::VertexElementsCso,
+    };
+    Uint32 slot = 40;
+    for (MGPipeKind kind : kinds) {
+        MGPHandleOnly death = HandleOnly(slot, kind);
+        ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ObjectDeath, &death, sizeof(death)),
+                  kInvalidSeq)
+            << static_cast<Uint32>(kind);
+        ++slot;
+    }
+    bool applied = false;
+    constexpr SizeT kKindCount = sizeof(kinds) / sizeof(kinds[0]);
+    for (SizeT i = 0; i < kKindCount; ++i) {
+        ASSERT_TRUE(wire.PumpOne(&applied)) << i;
+        EXPECT_TRUE(applied) << i;
+    }
+    ASSERT_EQ(wire.Sink().ObjectDeaths.size(), kKindCount);
+    slot = 40;
+    for (SizeT i = 0; i < kKindCount; ++i) {
+        EXPECT_EQ(wire.Sink().ObjectDeaths[i].Handle.Slot, slot) << i;
+        EXPECT_EQ(wire.Sink().ObjectDeaths[i].Handle.Gen, 1u) << i;
+        EXPECT_EQ(wire.Sink().ObjectDeaths[i].Kind, static_cast<Uint32>(kinds[i])) << i;
+        ++slot;
+    }
+    EXPECT_EQ(wire.Decoder().AppliedSeq(), static_cast<Uint64>(kKindCount));
 }
 
 // =====================================================================================
@@ -2893,3 +2976,185 @@ TEST(FenceWireRoundTrip, MissingConsumerDeclinesWithoutInventingASignaledAnswer)
     EXPECT_EQ(wire.Answers().All[0].Status, ReplySink::kStatusDeclined);
     EXPECT_TRUE(wire.Answers().All[0].Bytes.empty());
 }
+
+
+// =====================================================================================
+// P5c ct (MG_Remote/CONTRACT-P5C.md §5): the two control records, through the REAL sink
+// =====================================================================================
+//
+// The codec cases above pin the bytes and the dispatch with a recording sink; these pin what
+// the SERVER's sink does with the record: the serial assert, the applier reset that actually
+// runs, the twin release that actually retires the table entry, and the layer-2 guard that
+// turns the reverted GL-thread direct call red.
+
+TEST(ApplierResetWireRoundTrip, TheSerialSequenceIsAssertedAndTheServerResetRuns) {
+    Wire2 wire;
+    Server::ServerVerbSink sink;
+    wire.Decoder().SetVerbSink(&sink);
+    auto send = [&](Uint64 serial) {
+        const MGPApplierReset reset{serial};
+        EXPECT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ApplierReset, &reset, sizeof(reset)),
+                  kInvalidSeq);
+        bool applied = false;
+        EXPECT_TRUE(wire.PumpOne(&applied));
+        EXPECT_TRUE(applied);
+    };
+
+    // The reset RUNS - asserted on the applier's own state, not on the tally (R-16: a probe
+    // may not arm against a stub, and a tally a stub could also move is a stub's witness).
+    // BoundVertexElements is one of the fields MGPipeApplierReset clears (PipeApply.cpp).
+    MGPipeApplier().BoundVertexElements = MakeHandle(77);
+    send(0); // 0 = the first make-current (CONTRACT-P5C.md §1)
+    EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundVertexElements));
+    EXPECT_EQ(sink.ApplierResets(), 1u);
+    EXPECT_EQ(sink.ExpectedApplierResetSerial(), 1u);
+
+    // The second edge carries the next serial and is accepted in order.
+    MGPipeApplier().BoundVertexElements = MakeHandle(78);
+    send(1);
+    EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundVertexElements));
+    EXPECT_EQ(sink.ApplierResets(), 2u);
+    EXPECT_EQ(sink.ExpectedApplierResetSerial(), 2u);
+}
+
+TEST(ObjectDeathWireRoundTrip, TheTextureAndFramebufferTwinsReleaseByHandleAndNeverByAStaleGeneration) {
+    Wire2 wire;
+    Server::ServerVerbSink sink;
+    wire.Decoder().SetVerbSink(&sink);
+    namespace gles = MG_Backend::DirectGLES;
+
+    // The handle arm answers only when kMGPipeSubsystemEsprytSlots is set, and a unit binary
+    // never runs ConfigLoader: Features.PipePush is 0 here, not the shipping default
+    // (kMGPipeSubsystemsMigratedAtP4a). Set the bit the way SanityTest's pipe fixtures do;
+    // the arm verdict latches on first use and this case is the first use in its process.
+    const Uint64 savedPush = MG_Config::Features.PipePush;
+    MG_Config::Features.PipePush = savedPush | kMGPipeSubsystemEsprytSlots;
+    struct RestorePush {
+        Uint64 bits;
+        ~RestorePush() { MG_Config::Features.PipePush = bits; }
+    } restore{savedPush};
+
+    // Texture AND Framebuffer - the two kinds R-16 names for the death-recycle path. The
+    // others share the one dispatch and the one table walk, so two kinds pin the shape: one
+    // whose death also crosses as resource_destroy (Texture: the idempotent second path),
+    // and the kind whose FIRST wire delete opcode object_death is (Framebuffer).
+    struct KindCase {
+        MGPipeKind kind;
+        Uint32 slot;
+    };
+    const KindCase cases[] = {{MGPipeKind::Texture, 901}, {MGPipeKind::Framebuffer, 902}};
+    for (const KindCase& one : cases) {
+        const auto getOrCreate = [&](MGPipeHandle h) -> void* {
+            if (one.kind == MGPipeKind::Texture) {
+                return gles::TextureImpl::g_backendTextureObjects.GetOrCreateByHandle(h);
+            }
+            return gles::FramebufferImpl::g_backendFramebufferObjects.GetOrCreateByHandle(h);
+        };
+        const auto liveGen = [&](Uint32 slot) -> Uint32 {
+            if (one.kind == MGPipeKind::Texture) {
+                return gles::TextureImpl::g_backendTextureObjects.LiveGenAt(slot);
+            }
+            return gles::FramebufferImpl::g_backendFramebufferObjects.LiveGenAt(slot);
+        };
+        ASSERT_NE(getOrCreate(MakeHandle(one.slot, 1)), nullptr)
+            << "the Espryt handle arm did not go live with kMGPipeSubsystemEsprytSlots set; "
+               "the verdict latched elsewhere in this process";
+        ASSERT_EQ(liveGen(one.slot), 1u) << static_cast<Uint32>(one.kind);
+
+        // The death crosses and the twin retires: the slot's live generation goes back to 0.
+        const Uint64 deathsBefore = sink.ObjectDeaths();
+        const MGPHandleOnly death{MakeHandle(one.slot, 1), static_cast<Uint32>(one.kind), 0};
+        EXPECT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ObjectDeath, &death, sizeof(death)),
+                  kInvalidSeq);
+        bool applied = false;
+        EXPECT_TRUE(wire.PumpOne(&applied));
+        EXPECT_TRUE(applied);
+        EXPECT_EQ(liveGen(one.slot), 0u) << static_cast<Uint32>(one.kind);
+        EXPECT_EQ(sink.ObjectDeaths(), deathsBefore + 1u);
+
+        // THE ABA HALF (LiveGenAt's semantics): the slot is recycled forward to a NEW object
+        // at generation 2, and the dead object's handle - replayed, as a duplicated or
+        // reordered record would replay it - must not answer for the new object. The record
+        // is still APPLIED (idempotency is legal; a generation mismatch is a no-op), but the
+        // new twin survives it.
+        ASSERT_NE(getOrCreate(MakeHandle(one.slot, 2)), nullptr);
+        ASSERT_EQ(liveGen(one.slot), 2u);
+        EXPECT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ObjectDeath, &death, sizeof(death)),
+                  kInvalidSeq);
+        ASSERT_TRUE(wire.PumpOne(&applied));
+        EXPECT_TRUE(applied);
+        EXPECT_EQ(liveGen(one.slot), 2u)
+            << "a stale handle released the recycled slot's new twin (kind "
+            << static_cast<Uint32>(one.kind) << ")";
+
+        // And the new object's own death retires it, leaving the table as the case found it.
+        const MGPHandleOnly newDeath{MakeHandle(one.slot, 2), static_cast<Uint32>(one.kind), 0};
+        EXPECT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ObjectDeath, &newDeath, sizeof(newDeath)),
+                  kInvalidSeq);
+        ASSERT_TRUE(wire.PumpOne(&applied));
+        EXPECT_TRUE(applied);
+        EXPECT_EQ(liveGen(one.slot), 0u);
+    }
+}
+
+#if MGTEST_HAVE_FORK
+
+// The three Fatal arms, driven through the encoder and the REAL sink in a forked child (the
+// file's rule: never EXPECT_DEATH here - it re-runs the whole binary and re-enters the
+// applier's globals).
+
+TEST(CtWireFatals, ASerialTheSessionCannotProveIsProtocolCorruption) {
+    const ChildResult r = RunInChild([] {
+        Wire2 wire;
+        Server::ServerVerbSink sink;
+        wire.Decoder().SetVerbSink(&sink);
+        // The FIRST reset a session sees must carry serial 0 (one context, the count is the
+        // session's own); leading with 1 is a sequence the session cannot prove.
+        const MGPApplierReset reset{1};
+        (void)wire.Encoder().EncodeRecord(MGPWireOp::ApplierReset, &reset, sizeof(reset));
+        bool applied = false;
+        (void)wire.PumpOne(&applied);
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{ProtocolCorruption, \"ApplierReset.ContextSerial\"}"),
+              std::string::npos)
+        << r.Log;
+}
+
+TEST(CtWireFatals, ANullDeathHandleIsProtocolCorruption) {
+    const ChildResult r = RunInChild([] {
+        Wire2 wire;
+        Server::ServerVerbSink sink;
+        wire.Decoder().SetVerbSink(&sink);
+        // §1's zero ruling: a null handle means "the object never crossed", and the client
+        // emits NOTHING then - so a null handle ON the wire is corruption, not a no-op.
+        const MGPHandleOnly death{kMGPipeNullHandle, static_cast<Uint32>(MGPipeKind::Texture), 0};
+        (void)wire.Encoder().EncodeRecord(MGPWireOp::ObjectDeath, &death, sizeof(death));
+        bool applied = false;
+        (void)wire.PumpOne(&applied);
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{ProtocolCorruption, \"ObjectDeath.Handle\"}"), std::string::npos)
+        << r.Log;
+}
+
+// THE GUARD'S TWO NON-FATAL ARMS, as unit controls. The Fatal arm itself needs a LIVE client
+// session (the guard deliberately exempts the configured-but-wireless window - §6 layer 2's
+// documented bring-up exception), which a unit binary has no handshake for; that arm is the
+// integration lane's CtWireScenario.TheDirectApplierResetCallOnTheGLThreadIsRoleViolation,
+// and the manual revert of PipeFill's FreshlyPrimed arm is the red-once beside it. What is
+// pinnable here is that neither monolith nor a wireless transport is stopped.
+TEST(CtWireFatals, TheDirectApplierResetCallSurvivesMonolithAndAWirelessTransport) {
+    const ChildResult wireless = RunInChild([] {
+        // Transport=InProcess with NO client session - the ServerLoop fixture's shape. The
+        // direct call is the only reset that exists there, so it must NOT be stopped.
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        MGPipeApplierReset();
+    });
+    EXPECT_FALSE(DiedOfAbort(wireless)) << DescribeStatus(wireless) << "\n" << wireless.Log;
+
+    const ChildResult monolith = RunInChild([] { MGPipeApplierReset(); });
+    EXPECT_FALSE(DiedOfAbort(monolith)) << DescribeStatus(monolith) << "\n" << monolith.Log;
+}
+
+#endif // MGTEST_HAVE_FORK

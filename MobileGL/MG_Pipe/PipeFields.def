@@ -262,6 +262,12 @@
     F(Dst) F(Target) F(Level) F(InternalFormat) F(X) F(Y) F(Width) F(Height) F(XOffset) F(YOffset) \
     F(SubImage)
 
+// ---- P5c's two appended rows (MG_Remote/CONTRACT-P5C.md §5). object_death's payload IS
+// MGPHandleOnly, whose list already exists above; applier_reset's is one field.
+
+#define MGP_FIELDS_MGPApplierReset(F) \
+    F(ContextSerial)
+
 // ---- the value structs and the host span (P1 brief D8). Not call payloads themselves, but
 // members of ones (ResidualValueBlock, MGPPixelPackState, MGPCaps) and of PipeInputs, so the
 // comparator has to see INTO them: with these lists the memcmp fallback of MGPipeFieldEqual is
@@ -379,6 +385,7 @@
     P(MGPSurfaceInfo) \
     P(MGPImageBind) P(MGPPatchParameter) P(MGPStreamOutputBind) P(MGPStorageBlockBinding) \
     P(MGPCopyFromFramebuffer) \
+    P(MGPApplierReset) \
     P(RenderStateParameters) P(PixelStoreParameters) P(SamplerParameters) P(PerBufferBlendState) \
     P(StencilFaceState) \
     P(DynamicBackendParameters) P(MGHostSpan) \

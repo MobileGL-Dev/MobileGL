@@ -150,6 +150,32 @@ namespace MobileGL::MG_Remote::Server {
         Bool OnGenerateMipmap(const MG_Pipe::MGPMipPlan& plan) override;
         Bool OnCopyFramebufferToTexture(const MG_Pipe::MGPCopyFromFramebuffer& copy) override;
 
+        // ---- P5c ct (MG_Remote/CONTRACT-P5C.md §5): the two control records ----------------
+        //
+        // REAL BODIES FROM THE DAY THE ROWS EXIST, not the P5b stub shape: the rows were
+        // appended by the same package that lands these bodies, so there is no window in
+        // which a client can emit ahead of its server half.
+        //
+        // OnApplierReset (§5.1): the make-current edge's server half. ContextSerial is
+        // ASSERTED against this session's own count of applier_reset records - one context
+        // per session in P5c, so the legal sequence is 0, 1, 2, ... - and only then is
+        // MGPipeApplierReset() run, here, on the apply thread that owns g_applier.
+        // OnObjectDeath (§5.2): a null handle never crosses (the client emits nothing for an
+        // object its allocator cannot resolve), so one arriving is
+        // Fatal{ProtocolCorruption, "ObjectDeath.Handle"}; otherwise the per-kind release
+        // runs by the record's handle (SlotTables.h's ReleaseTwinByHandle).
+        Bool OnApplierReset(const MG_Pipe::MGPApplierReset& reset) override;
+        Bool OnObjectDeath(const MG_Pipe::MGPHandleOnly& death) override;
+
+        // P5c ct's tallies, for the same reason every other row's tally exists (R-16: a probe
+        // may not arm against a stub). ApplierResets counts the records ACCEPTED (serial
+        // checked, reset run); ObjectDeaths counts every record the sink dispatched.
+        Uint64 ApplierResets() const { return m_applierResets; }
+        Uint64 ObjectDeaths() const { return m_objectDeaths; }
+        // The ContextSerial the NEXT applier_reset record must carry. Exposed so a case can
+        // assert the sequence rather than only the count.
+        Uint64 ExpectedApplierResetSerial() const { return m_applierResetSerial; }
+
         // Per-verb tallies. The lane asserts these moved, because "the scenario passed" on a
         // split build is also what a scenario that ran entirely on the monolith path looks
         // like (R-16: a probe may not arm against a stub).
@@ -231,6 +257,14 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 m_streamOutputControls = 0;
         Uint64 m_streamOutputBinds = 0;
         Uint64 m_patchParameters = 0;
+        // P5c ct. m_applierResetSerial is BOTH the expected ContextSerial of the next record
+        // and the count of accepted resets: the two are one number because the serial is the
+        // session's own count of applier_reset records (CONTRACT-P5C.md §1: asserted, never
+        // dispatched on). m_objectDeaths counts records dispatched, released twin or not -
+        // the idempotent second path answering "nothing held it" is a legal record.
+        Uint64 m_applierResetSerial = 0;
+        Uint64 m_applierResets = 0;
+        Uint64 m_objectDeaths = 0;
         // ReadPixels' destination. The pixels go into the reply slot, but GLFunctionsTable::
         // ReadPixels writes into a caller buffer, so one staging vector per session sits
         // between them. Grown, never shrunk, and never handed out past the call.

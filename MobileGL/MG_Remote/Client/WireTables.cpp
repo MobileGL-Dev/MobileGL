@@ -38,6 +38,10 @@
 
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/PipeRoute.h>
+// P5c (ct): EmitObjectDeathRecord resolves the dying object's handle in the CLIENT's own
+// allocator - a client surface, asked on the client thread, which is the one place the lookup
+// is legal under rule E (CONTRACT-P5C.md §5.2).
+#include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #include <MG_Util/Debug/Log.h>
 
@@ -502,6 +506,81 @@ namespace MobileGL::MG_Remote::Client {
         }
 
     } // namespace
+
+    // =====================================================================================
+    // P5c (ct), CONTRACT-P5C.md §5: the two control records' producers
+    // =====================================================================================
+
+    namespace {
+        // The ContextSerial of the NEXT applier_reset record. NOWHERE IN THE FRONTEND NUMBERS
+        // A MAKE-CURRENT: the tracker knows the EDGE (FreshlyPrimed) and no session or context
+        // carries a serial for it (checked at the contract commit), so the serial is this
+        // client's own count of applier_reset emissions - 0 for the first make-current, one
+        // more per primed edge. That is the only value the server can hold the client to in a
+        // one-context session: the sink keeps the same count and ASSERTS equality
+        // (CONTRACT-P5C.md §1: the value is asserted, never dispatched on; P6's multi-context
+        // shape is what will read it for real). GL-thread only, like every emitter here.
+        Uint64 g_applierResetContextSerial = 0;
+    } // namespace
+
+    Bool EmitApplierResetRecord() {
+        // NO SESSION, NO RECORD - and false rather than the RequireSession Fatal, because a
+        // validate can legitimately prime with a transport CONFIGURED but no live session:
+        // the bring-up window before ClientSession::Start() (§6 layer 2's documented
+        // exception), and the server-role-only shape a ServerLoop fixture drives with
+        // Transport=InProcess and no client at all. In both this process has no wire for the
+        // reset to cross, and the caller answers with the direct call the record replaced.
+        ClientSession* session = ClientSession::Active();
+        if (session == nullptr || !session->Started()) return false;
+        if (g_clientTablesUninstalled.load(std::memory_order_acquire)) return false;
+        MG_Pipe::MGPApplierReset record{};
+        record.ContextSerial = g_applierResetContextSerial++;
+        session->EmitAndWait(MGPWireOp::ApplierReset, &record, sizeof(record), nullptr, 0, nullptr,
+                             0, nullptr);
+        ++g_emitted;
+        return true;
+    }
+
+    ObjectDeathEmit EmitObjectDeathRecord(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
+        using MG_Pipe::MGPipeHandle;
+
+        // NO SESSION, NO RECORD - and that is NOT the RequireSession shape on purpose. A death
+        // notice can outlive the session by construction: frontend objects die at context
+        // teardown and at process exit, after Stop has joined the apply thread and freed the
+        // rings, and the twins this record would kill died with the server. Emitting into that
+        // window is a use-after-free; Fatal-ing on it is an abort at exit() for a legal death.
+        // NoSession is its own answer (not folded into NoHandle) because the caller's fallback
+        // for "no wire exists" is delivery to the server loop this process still has, while
+        // "no handle" means there is nothing to deliver at all.
+        ClientSession* session = ClientSession::Active();
+        if (session == nullptr || !session->Started()) return ObjectDeathEmit::NoSession;
+        // The same window, one step earlier: Stop has raised the teardown refusal but not yet
+        // joined the apply thread. A death landing here is destructor-driven, not an app bug,
+        // and the twin it would kill dies with the backend Stop is destroying - so it is
+        // skipped, where a routed call in the same window is Fatal{ClientTablesUninstalled}.
+        if (g_clientTablesUninstalled.load(std::memory_order_acquire)) {
+            return ObjectDeathEmit::NoSession;
+        }
+
+        // THE CLIENT'S OWN ALLOCATOR, ON THE CLIENT'S OWN THREAD (§5.2 step 1). A lifetime id
+        // the allocator cannot resolve names an object that never crossed - no create record
+        // ever carried its handle, so the server has no twin to kill and NOTHING is emitted.
+        // This replaces the mailbox's unconditional delivery, which hopped every death to the
+        // apply thread whether or not the server had ever seen the object.
+        const MGPipeHandle handle = MG_Pipe::MGPipeSlots().FindByLifetimeId(kind, lifetimeId);
+        if (MG_Pipe::MGPipeHandleIsNull(handle)) return ObjectDeathEmit::NoHandle;
+
+        MG_Pipe::MGPHandleOnly record{};
+        record.Handle = handle;
+        record.Kind = static_cast<Uint32>(kind);
+        // The WAIT is the only property the blocking mailbox hop provided and the only one P5c
+        // keeps (§5.2 step 3): it orders the death against in-flight verbs that name the
+        // handle, so the server's twin cannot be released underneath a verb that is using it.
+        session->EmitAndWait(MGPWireOp::ObjectDeath, &record, sizeof(record), nullptr, 0, nullptr,
+                             0, nullptr);
+        ++g_emitted;
+        return ObjectDeathEmit::Emitted;
+    }
 
     void RequireClientTablesInstalled(const char* row) {
         if (g_clientTablesUninstalled.load(std::memory_order_acquire)) {

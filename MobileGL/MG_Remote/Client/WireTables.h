@@ -35,6 +35,8 @@
 #pragma once
 #include <Includes.h>
 
+#include <MG_Pipe/MGPipeHandles.h>
+
 #if MOBILEGL_BUILD_DISAGGREGATED
 
 namespace MobileGL::MG_Remote::Client {
@@ -85,6 +87,33 @@ namespace MobileGL::MG_Remote::Client {
     // apply thread, which produces none - the InitialBytesNotCarried self-check would abort the
     // server otherwise). Declared here so PipeFill does not have to include a server header.
     Bool RunsAsTheServerRole();
+
+    // ---- P5c (ct), CONTRACT-P5C.md §5: the two control records' client halves --------------
+    //
+    // NOT ROUTED ROWS - the two are appended to PipeCalls.def with no MGPipeApply* entry point
+    // and no table slot at all, so their producers call these directly. PipeFill.cpp's
+    // FreshlyPrimed arm calls the first; DirectGLES' OnFrontendStateObjectDestroyed calls the
+    // second.
+
+    // applier_reset (§5.1). Emitted on the GL thread at the tracker.FreshlyPrimed() edge,
+    // BEFORE the block's client-side resets, so the record's barrier orders the server's
+    // MGPipeApplierReset() against every verb that follows. ContextSerial is the client's own
+    // count of applier_reset emissions (0 = the first make-current): nothing in the frontend
+    // numbers a make-current today, and the sink asserts the value against its own count of
+    // the same records rather than dispatching on it (P5c: one context per session; P6 reads
+    // it for real). Returns false - nothing emitted - when no live session could carry the
+    // record (the bring-up window before Start, a server-role-only fixture, teardown); the
+    // caller then makes the direct call the record replaced.
+    Bool EmitApplierResetRecord();
+
+    // The three answers a death notice can produce (§5.2): the record crossed; the client's
+    // own allocator cannot resolve the dying object (the server never saw it, so there is no
+    // twin to kill and NOTHING crossed); or no live session could carry the record. The
+    // third is NOT folded into the second: a server role with no wire at all - a ServerLoop
+    // fixture's shape, never a real split's - still has a server loop the caller delivers to,
+    // where a handle that never existed has nothing to deliver.
+    enum class ObjectDeathEmit : Uint8 { Emitted, NoHandle, NoSession };
+    ObjectDeathEmit EmitObjectDeathRecord(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId);
 
 } // namespace MobileGL::MG_Remote::Client
 

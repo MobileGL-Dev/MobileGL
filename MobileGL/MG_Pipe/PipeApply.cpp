@@ -37,6 +37,13 @@
 // MOBILEGL_PIPE_VERIFY block above on purpose: the tier is a property of the BUILD, not of the
 // comparator, and a split build without the comparator still declines every acquisition.
 #include <MG_Remote/Client/PersistentMapTracker.h>
+// P5c (ct), CONTRACT-P5C.md §6 layer 2: MGPipeApplierReset's role guard asks
+// ServerLoop::OnApplyThread() - the one predicate that tells the GL thread from the thread
+// that owns g_applier under an active transport - and ClientSession::Active(), which is what
+// tells a live wire from a configured-but-wireless one (the bring-up window and the
+// server-role-only fixture: there the direct call is the only reset that exists).
+#include <MG_Remote/Client/ClientSession.h>
+#include <MG_Remote/Server/ServerLoop.h>
 #endif
 
 #include <algorithm>
@@ -1212,6 +1219,28 @@ namespace MobileGL::MG_Pipe {
     } // namespace
 
     void MGPipeApplierReset() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (ct), CONTRACT-P5C.md §5.1 / §6 layer 2. With an active transport g_applier is
+        // SERVER-PRIVATE and the GL thread's reset crosses as the applier_reset RECORD
+        // (PipeFill.cpp's FreshlyPrimed arm emits it; ServerVerbSink::OnApplierReset runs this
+        // function ON the apply thread). Reaching here from any other thread WITH A LIVE WIRE
+        // is the direct call the record replaced - a write into server memory with no wire
+        // shape, and exactly the revert the red-once gate must catch - so it is a named Fatal
+        // rather than a silent reset of state another role owns. The window the Fatal
+        // deliberately does NOT cover is a configured-but-wireless transport: before
+        // ClientSession::Start() there is no wire for a record to cross (§6 layer 2's
+        // documented bring-up exception), and a ServerLoop fixture with no client at all has
+        // none either - there this call is the only reset that exists. Monolith keeps the
+        // direct call, byte for byte (G1); in a pull build none of this is compiled at all.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            MG_Remote::Client::ClientSession::Active() != nullptr &&
+            !MG_Remote::Server::ServerLoop::OnApplyThread()) {
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"g_applier\"} - MGPipeApplierReset() called "
+                    "off the apply thread with an active transport; under split the reset "
+                    "crosses as the applier_reset record (CONTRACT-P5C.md §5.1)");
+            std::abort();
+        }
+#endif
         g_applier.RenderStateCsos.clear();
         g_applier.BoundRenderStateCso = kMGPipeNullHandle;
         g_applier.Residual = ResidualValueBlock{};

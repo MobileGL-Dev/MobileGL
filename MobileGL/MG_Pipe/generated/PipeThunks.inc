@@ -320,3 +320,11 @@ inline void MGP_SetStorageBlockBinding(const MGPStorageBlockBinding* payload, co
 inline void MGP_CopyFramebufferToTexture(const MGPCopyFromFramebuffer* payload) {
     gMGPipeContext.CopyFramebufferToTexture(payload);
 }
+
+inline void MGP_ApplierReset(const MGPApplierReset* payload) {
+    gMGPipeScreen.ApplierReset(payload);
+}
+
+inline void MGP_ObjectDeath(const MGPHandleOnly* payload) {
+    gMGPipeContext.ObjectDeath(payload);
+}

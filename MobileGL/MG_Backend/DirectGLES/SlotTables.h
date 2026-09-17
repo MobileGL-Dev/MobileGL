@@ -484,6 +484,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
+        // P5c (ct), CONTRACT-P5C.md §5.2: the handle-keyed half of the above, for a death that
+        // arrived AS A WIRE RECORD (object_death) rather than as the shared notice. The
+        // handle IS the resolution - it crossed in the record's payload - so the client's
+        // allocator is never asked: under an active transport MGPipeSlots() is a client-only
+        // surface (rule E, §3.1) and this function runs on the apply thread. Every holder
+        // lets go exactly as the notice arm does, in the same successor-first order. What
+        // does NOT happen here is the allocator Free: the slot's owner - the client -
+        // returned it itself after the record went out (PipeFill.cpp's NotifyAndFree), and a
+        // double Free would be refused by generation anyway. Idempotent against the kind's
+        // own delete opcode, exactly as the notice arm is: a twin the delete already released
+        // fails ReleaseTwinAt's generation check and the walk moves on.
+        static Bool ReleaseTwinByHandle(MG_Pipe::MGPipeHandle handle) {
+            if (MG_Pipe::MGPipeHandleIsNull(handle)) return false;
+            Bool released = false;
+            for (BackendSlotTable* holder = s_firstHolder; holder != nullptr;) {
+                BackendSlotTable* const next = holder->m_nextHolder;
+                released = holder->ReleaseTwinAt(handle) || released;
+                holder = next;
+            }
+            return released;
+        }
+
         // How many tables of this type exist right now. For the tests that pin the holder
         // list; nothing on a shipping path asks.
         static Uint32 HolderCount() {

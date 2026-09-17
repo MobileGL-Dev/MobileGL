@@ -484,17 +484,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 #endif
 
-        // NO ReleaseByHandle HERE, AND THAT IS A DECISION (review M-4). The death half of
-        // GetOrCreateByHandle exists for a kind whose announcement is its own destroy CALL
-        // rather than the shared death notice - which is the BUFFER family
+        // NO ReleaseByHandle HERE THROUGH P5, AND THAT WAS A DECISION (review M-4). The death
+        // half of GetOrCreateByHandle existed only for a kind whose announcement is its own
+        // destroy CALL rather than the shared death notice - which was the BUFFER family
         // (BackendBufferResourceTable::ReleaseByHandle, SlotTables.h, called from
-        // resource_destroy) and none of the five kinds this registry serves: every one of them
-        // dies through DestroyByLifetimeId below, because P4a adds no server-side destroy arm
-        // for a texture, a renderbuffer, a framebuffer, a sampler CSO or a shader CSO. v1
-        // declared one here anyway and it had no caller on either arm, which made its bound and
-        // its wording things nobody would exercise until P5. The one-line wrapper comes back in
-        // the commit that gives it a caller; SlotTable::ReleaseByHandle underneath is untouched
-        // and is what SanityTest drives directly.
+        // resource_destroy) and none of the five kinds this registry serves: every one of
+        // them died through DestroyByLifetimeId below, because P4a added no server-side
+        // destroy arm for a texture, a renderbuffer, a framebuffer, a sampler CSO or a shader
+        // CSO. P5c (ct) is the commit that gives the wrapper its caller: object_death carries
+        // the dead object's HANDLE on the wire (CONTRACT-P5C.md §5.2), and the static
+        // ReleaseByHandle below is what the sink's per-kind dispatch calls.
+
+        // P5c (ct), CONTRACT-P5C.md §5.2: the wrapper M-4 below deferred, given its caller by
+        // object_death. The record carried the handle, so the release is keyed by it and the
+        // client's allocator is never asked from this side (rule E); every holder of the kind
+        // lets go, exactly as DestroyByLifetimeId walks them. What this does NOT do is the
+        // allocator Free the notice arm performs - the slot's owner is the client, which
+        // already returned it after the record went out. STATIC for the same reason
+        // DestroyByLifetimeId is: a death is about an object, not a table instance.
+        static Bool ReleaseByHandle(MG_Pipe::MGPipeHandle handle) {
+            if (EsprytSlotTablesEnabled()) {
+                return SlotTable::ReleaseTwinByHandle(handle);
+            }
+            return false;
+        }
 
         // P2 step e2. STATIC, because a death notice is about an object and not about a
         // registry instance: it is answered by EVERY table of this kind that exists - this
@@ -2806,4 +2819,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         extern TwinRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject, MG_Pipe::MGPipeKind::Renderbuffer>
             g_backendRenderbufferObjects;
     } // namespace RenderbufferImpl
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P5c (ct), CONTRACT-P5C.md §5.2: object_death's per-kind release, one entry point for all
+    // seven kinds for the same reason the notice switch is one - the answer is the same for
+    // all of them: every holder of the kind's twin table lets go of the twin at this handle.
+    // Called from ServerVerbSink::OnObjectDeath ON THE APPLY THREAD, with the handle the
+    // record carried; the client's allocator is never consulted (rule E). Returns whether any
+    // table released a twin - false for a kind this backend does not twin (Buffer: its death
+    // crosses as resource_destroy) and for a handle no holder holds, which the kind's own
+    // delete opcode may already have released (the idempotent-second-path shape the notice
+    // arms document).
+    Bool ReleaseTwinsForWireObjectDeath(MG_Pipe::MGPipeHandle handle, MG_Pipe::MGPipeKind kind);
+#endif
 } // namespace MobileGL::MG_Backend::DirectGLES

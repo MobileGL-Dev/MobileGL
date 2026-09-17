@@ -125,11 +125,13 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
     EXPECT_EQ(kMGPipeContextCallCount, kMGPipeCallCount - ClassCount<kScreen>());
 
     // The per-class counts PipeCalls.def documents in its header.
-    EXPECT_EQ(ClassCount<kScreen>(), 11u);
+    // kScreen is 11 + P5c's applier_reset (MG_Remote/CONTRACT-P5C.md §5.1); kCtxObject is
+    // 9 + P5c's object_death (§5.2), the framebuffer family's first wire delete opcode.
+    EXPECT_EQ(ClassCount<kScreen>(), 12u);
     EXPECT_EQ(ClassCount<kCtxQuery>(), 8u);
     EXPECT_EQ(ClassCount<kCtxCso>(), 13u);
     EXPECT_EQ(ClassCount<kCtxState>(), 17u);
-    EXPECT_EQ(ClassCount<kCtxObject>(), 9u);
+    EXPECT_EQ(ClassCount<kCtxObject>(), 10u);
     // 13 + the five P5b-appended verbs (MG_Remote/CONTRACT-P5B.md): bind_shader_image,
     // patch_parameter, bind_stream_output, set_storage_block_binding,
     // copy_framebuffer_to_texture.
@@ -139,8 +141,9 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
 // A row nobody has migrated is null - which is exactly what "this subsystem has not been
 // migrated, keep pulling" means (plan B section 4.1).
 //
-// UNTIL P5 R-17 THAT WAS EVERY ROW, and this case said so. It is now EXACTLY THE 34 ROWS WITH
-// NO MGPipeApply* ENTRY POINT: the other 37 have an applier, R-17 installs adapters over them,
+// UNTIL P5 R-17 THAT WAS EVERY ROW, and this case said so. It is now EXACTLY THE 41 ROWS WITH
+// NO MGPipeApply* ENTRY POINT (78 - the 37 that have one; the number was 34 at P5, 39 after
+// P5b's five sink-only verbs): the other 37 have an applier, R-17 installs adapters over them,
 // and a null there would no longer mean "keep pulling" - `MG_Impl/Pipe`'s call sites go through
 // the thunks, so a null would mean "call through a null pointer". The number is asserted rather
 // than the emptiness, because "37 installed" and "34 still null" are the two halves of a
@@ -156,10 +159,12 @@ TEST(PipeCatalogue, UninstalledTablesAreAllNull) {
     const void* const* context = reinterpret_cast<const void* const*>(&gMGPipeContext);
 #if MOBILEGL_PIPE_PUSH
     MGPipeInstallMonolithTables();
-    // The 34 rows with no MGPipeApply* entry point are still null, and null still means "this
+    // The 41 rows with no MGPipeApply* entry point are still null, and null still means "this
     // subsystem has not been migrated, keep pulling". Named rather than counted, because the
     // count is the other case's job and two cases asserting the same number would both go red
-    // for one change.
+    // for one change. P5c's two control records are among them by design (CONTRACT-P5C.md §5:
+    // no MGPipeApply* entry point, no monolith producer - under a transport they reach
+    // WireVerbSink instead).
     EXPECT_EQ(gMGPipeContext.SetShaderBuffers, nullptr);
     EXPECT_EQ(gMGPipeContext.SetStreamOutputTargets, nullptr);
     EXPECT_EQ(gMGPipeContext.DrawVbo, nullptr);
@@ -168,6 +173,8 @@ TEST(PipeCatalogue, UninstalledTablesAreAllNull) {
     EXPECT_EQ(gMGPipeScreen.GetCaps, nullptr);
     EXPECT_EQ(gMGPipeContext.QueryCreate, nullptr);
     EXPECT_EQ(gMGPipeScreen.FenceCreate, nullptr);
+    EXPECT_EQ(gMGPipeScreen.ApplierReset, nullptr);
+    EXPECT_EQ(gMGPipeContext.ObjectDeath, nullptr);
 #else
     // A pull build compiles no applier and no routing, so the pre-migration statement is the
     // whole truth there and this case is the one that says so.
@@ -235,6 +242,12 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     EXPECT_EQ(gMGPipeContext.Present, nullptr);
     EXPECT_EQ(gMGPipeContext.SetSwapInterval, nullptr);
     EXPECT_EQ(gMGPipeScreen.GetCaps, nullptr);
+    // P5c's two control records (CONTRACT-P5C.md §5) take the same answer for a different
+    // reason: no MGPipeApply* exists for either and none may be installed - under a transport
+    // they cross to WireVerbSink, under monolith the GL thread's direct call and the death
+    // notice's mailbox are the producers, byte for byte as before (G1/G2).
+    EXPECT_EQ(gMGPipeScreen.ApplierReset, nullptr);
+    EXPECT_EQ(gMGPipeContext.ObjectDeath, nullptr);
 #else
     // A pull build compiles no applier and no routing, so the pre-migration statement is still
     // the whole truth there.
@@ -557,7 +570,15 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::BindStreamOutput), 74);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::SetStorageBlockBinding), 75);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::CopyFramebufferToTexture), 76);
-    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 77);
+    // P5c (MG_Remote/CONTRACT-P5C.md §5) appended the two control records AFTER P5b's five, by
+    // the same rule: opcodes 77..78, and nothing before them moved. applier_reset is a kScreen
+    // row (a make-current is a whole-server edge, exactly as FenceWaitServer is a screen call)
+    // and object_death a kCtxObject one; both carry no blob, no reply and no tail.
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::ApplierReset), 77);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::ObjectDeath), 78);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 79);
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ApplierReset), static_cast<Uint32>(kNone));
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ObjectDeath), static_cast<Uint32>(kNone));
     // And the P5b rows carry what their contract says: one blob (the block name) and nothing
     // else, and the extended draw row keeps its two flags.
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::SetStorageBlockBinding), static_cast<Uint32>(kHasBlob));
@@ -575,6 +596,11 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     EXPECT_EQ(sizeof(MGPCopyFromFramebuffer), 48u);
     EXPECT_EQ(sizeof(MGPCopyRegion), 72u);
     EXPECT_EQ(sizeof(MGPDrawIndirect), 40u);
+    // The P5c payload, pinned like every other MGP_ASSERT_POD at runtime: one Uint64, no
+    // padding. object_death REUSES MGPHandleOnly (CONTRACT-P5C.md §1), so there is no second
+    // struct to pin - the 16 bytes are pinned above with the handle family.
+    EXPECT_EQ(sizeof(MGPApplierReset), 8u);
+    EXPECT_EQ(sizeof(MGPHandleOnly), 16u);
     // The two draw-flag bits P5b's d1 arms are exclusive by contract and distinct by value.
     EXPECT_EQ(static_cast<Uint32>(kDrawIsIndirect), 1u << 5);
     EXPECT_EQ(static_cast<Uint32>(kDrawHasUserIndices) & static_cast<Uint32>(kDrawIsIndirect), 0u);
@@ -771,8 +797,10 @@ TEST(PipeCatalogue, FloatVectorsCompareBitwise) {
 TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
     // 72 through P5; P5b appended five call payloads (MG_Remote/CONTRACT-P5B.md: MGPImageBind,
     // MGPPatchParameter, MGPStreamOutputBind, MGPStorageBlockBinding, MGPCopyFromFramebuffer),
-    // each with its own field list, so the comparator sees every one of them: 77.
-    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 77u);
+    // each with its own field list, so the comparator sees every one of them: 77. P5c appended
+    // applier_reset's MGPApplierReset (CONTRACT-P5C.md §5.1) - object_death reuses
+    // MGPHandleOnly, which has had a list since P0 - so: 78.
+    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 78u);
     static_assert(MGPipeHasFieldVerifier<RenderStateParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PixelStoreParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PerBufferBlendState>::value);
