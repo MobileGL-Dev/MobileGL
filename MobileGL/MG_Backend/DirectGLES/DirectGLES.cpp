@@ -21,6 +21,10 @@
 // P3a: the applier's vertex-input records the re-keyed draw-buffer memo is validated against.
 #include <MG_Pipe/PipeApply.h>
 #endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+// P5c (tx): §1's server-side per-level extent derivation, for GenerateMipmap's shape reads.
+#include <MG_Remote/Server/StagedTextureStore.h>
+#endif
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
@@ -8494,6 +8498,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(texture.get());
         MOBILEGL_ASSERT(mipmapTexture != nullptr, "Depth mipmap generation requires mipmap storage.");
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (tx): the per-level extents are §1's derivation from the descriptor under an
+        // active transport - GetMipmapTexelSize is the client's per-level shape and the apply
+        // thread may not name it (rule E). Texture2D only, so x and y shrink and z stays 1.
+        // The record resolution is the same registry lookup texture sync and
+        // EnsureGenerateMipmapStorageAllocated's disaggregated arm already make.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            const auto pushedHandle = TextureImpl::g_backendTextureObjects.HandleOf(texture.get());
+            const auto* pushedRecord = PipeTextureRecordForHandle(pushedHandle);
+            if (pushedRecord == nullptr || pushedRecord->Desc.Width == 0 || pushedRecord->Desc.Levels == 0) {
+                MG_Pipe::MGPipeUnmigratedEmulation("generate-mipmap-shape");
+            }
+            const auto& desc = pushedRecord->Desc;
+            const GLuint textureId = backendTexture->GetBackendTextureId();
+            for (Uint32 level = 1; level < desc.Levels; ++level) {
+                const IntVec3 srcSize = MG_Remote::Server::StagedTextureMipExtent(
+                    desc.Target, desc.Width, desc.Height, desc.Depth, level - 1);
+                const IntVec3 dstSize = MG_Remote::Server::StagedTextureMipExtent(
+                    desc.Target, desc.Width, desc.Height, desc.Depth, level);
+                BlitDepthTexture2D(textureId, static_cast<GLint>(level - 1), 0, 0,
+                                   static_cast<GLsizei>(srcSize.x()), static_cast<GLsizei>(srcSize.y()),
+                                   textureId, static_cast<GLint>(level), 0, 0,
+                                   static_cast<GLsizei>(dstSize.x()), static_cast<GLsizei>(dstSize.y()));
+            }
+            return;
+        }
+#endif
+
         const Uint mipLevelCount = mipmapTexture->GetMipmapLevelCount();
         MOBILEGL_ASSERT(mipLevelCount > 0, "Depth mipmap generation requires allocated storage.");
 
@@ -8519,6 +8552,36 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(texture.get());
         MOBILEGL_ASSERT(mipmapTexture != nullptr, "Color mipmap generation requires mipmap storage.");
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (tx): GenerateDepthTexture2DMipmap's descriptor arm, for the color filter path -
+        // same §1 extent derivation, same registry resolution, same refusal when the handle
+        // arm has no record to read.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            const auto pushedHandle = TextureImpl::g_backendTextureObjects.HandleOf(texture.get());
+            const auto* pushedRecord = PipeTextureRecordForHandle(pushedHandle);
+            if (pushedRecord == nullptr || pushedRecord->Desc.Width == 0 || pushedRecord->Desc.Levels == 0) {
+                MG_Pipe::MGPipeUnmigratedEmulation("generate-mipmap-shape");
+            }
+            const auto& desc = pushedRecord->Desc;
+            const GLenum filter =
+                IsIntegerColorFormat(static_cast<TextureInternalFormat>(desc.InternalFormat)) ? GL_NEAREST
+                                                                                              : GL_LINEAR;
+            const GLuint textureId = backendTexture->GetBackendTextureId();
+            for (Uint32 level = 1; level < desc.Levels; ++level) {
+                const IntVec3 srcSize = MG_Remote::Server::StagedTextureMipExtent(
+                    desc.Target, desc.Width, desc.Height, desc.Depth, level - 1);
+                const IntVec3 dstSize = MG_Remote::Server::StagedTextureMipExtent(
+                    desc.Target, desc.Width, desc.Height, desc.Depth, level);
+                BlitColorTexture2D(textureId, static_cast<GLint>(level - 1), 0, 0,
+                                   static_cast<GLsizei>(srcSize.x()), static_cast<GLsizei>(srcSize.y()),
+                                   textureId, static_cast<GLint>(level), 0, 0,
+                                   static_cast<GLsizei>(dstSize.x()), static_cast<GLsizei>(dstSize.y()), filter);
+            }
+            return;
+        }
+#endif
+
         const Uint mipLevelCount = mipmapTexture->GetMipmapLevelCount();
         MOBILEGL_ASSERT(mipLevelCount > 0, "Color mipmap generation requires allocated storage.");
 

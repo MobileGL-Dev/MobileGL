@@ -73,18 +73,21 @@ gtest_discover_tests(PipeWireCodecTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS un
 # main() of its own. All three also reach MG_Pipe, MG_Backend and MG_State, so all three carry
 # those include paths.
 #
-#   RemoteClientTest      the 71-slot emit table, the caps mirror, R-8's liveness gates, R-17's
-#                         routing and ID-47/ID-49's readback rules (c1)
-#   ServerLoopTest        the apply thread, the blocking control mailbox, the verb stamp and
-#                         R-11's server-owned staging copy (v1)
-#   SessionHandshakeTest  the two null-union guards driven THROUGH ServerSession::Accept and
-#                         ClientSession::StartOverTransportPair, and the ABI fingerprint's
-#                         sensitivity case driven from CapsAbiFingerprint() (s1, ID-46 6 and 7)
+#   RemoteClientTest       the 71-slot emit table, the caps mirror, R-8's liveness gates, R-17's
+#                          routing and ID-47/ID-49's readback rules (c1)
+#   ServerLoopTest         the apply thread, the blocking control mailbox, the verb stamp and
+#                          R-11's server-owned staging copy (v1)
+#   SessionHandshakeTest   the two null-union guards driven THROUGH ServerSession::Accept and
+#                          ClientSession::StartOverTransportPair, and the ABI fingerprint's
+#                          sensitivity case driven from CapsAbiFingerprint() (s1, ID-46 6 and 7)
+#   StagedTextureStoreTest the texture half of R-11: tx's staged-texture store, its
+#                          Fatal{StageSnapshotTooNarrow}, and the E-P5c #2 production wiring
+#                          through the real resource op table (P5c tx)
 #
 # THIS FILE IS THE PHASE'S ONE RECURRING MERGE CONFLICT, and it is the same-point-append shape
 # BRIEF §5's ownership table exists to prevent: three packages, three targets, one end-of-file.
 # The loop is what stops there being a fourth: a package adding a suite adds a NAME.
-foreach (wiretest IN ITEMS RemoteClientTest ServerLoopTest SessionHandshakeTest)
+foreach (wiretest IN ITEMS RemoteClientTest ServerLoopTest SessionHandshakeTest StagedTextureStoreTest)
     add_executable(${wiretest} ${wiretest}.cpp)
 
     target_include_directories(${wiretest} PRIVATE

@@ -41,6 +41,9 @@ namespace MobileGL::MG_State::GLState {
 
 namespace MobileGL::MG_Pipe {
     struct PipeInputs;
+    // P5c (tx): MGPipeResourceOps::TextureRespecify names it; the definition is beside the
+    // applier entry point that produces one (below, with MGPipeApplyResourceRespecify).
+    struct MGPRespecifiedLevel;
 
     // ---------------------------------------------------------------------------------
     // The CSO store
@@ -94,6 +97,26 @@ namespace MobileGL::MG_Pipe {
         void (*Destroy)(MGPipeHandle res);
         void* (*MapPersistent)(MGPipeHandle res, Uint64 size, const void* seedBytes);
         void (*UnmapPersistent)(MGPipeHandle res);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (tx): the TEXTURE half of the resource family, appended so every positional
+        // initialiser of the nine P3a members keeps its meaning. TextureSubData is called
+        // from ApplyTextureUpload AFTER the gate, the accumulation and the serial, while
+        // `bytes` still names the staged run (SEG_STAGE retires when the record does, so an
+        // adoption anywhere later would read dead bytes - rule C); the backend copies the
+        // run into the server's staged-texture store (MG_Remote/Server/StagedTextureStore.h)
+        // and does nothing in monolith. TextureRespecify is the defined-ness/drop channel:
+        // it rides MGPipeApplyResourceRespecify's own scope rules (a named level redefines
+        // that level, a whole-resource respecify drops them all, a metadata update is not
+        // delivered). TextureDestroy is resource_destroy's texture arm - the applier hands
+        // only a buffer to Destroy, and a store keyed by the handle needs the death to drop
+        // its key. All three may be null together: a backend that has not adopted the staged
+        // shadow leaves them null and keeps the pre-tx shape.
+        void (*TextureSubData)(MGPipeHandle res, const MGPSubData& record, const void* bytes,
+                               const MGPSubRegion* regions);
+        void (*TextureRespecify)(MGPipeHandle res, const MGPResourceDesc& desc,
+                                 const MGPRespecifiedLevel* level);
+        void (*TextureDestroy)(MGPipeHandle res);
+#endif
     };
 
     // Install / read the table. A null argument uninstalls, which is what a backend does at

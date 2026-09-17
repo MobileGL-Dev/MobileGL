@@ -986,11 +986,13 @@ namespace MobileGL::MG_Pipe {
             return true;
         }
 
-        // The texture half of resource_subdata, and it DISPATCHES TO NOBODY. Nothing in this
-        // family reaches the backend at GL-call time today: a texture write marks a level dirty
-        // and Espryt uploads it at its own sync point, out of the accumulated set below. So the
-        // whole of this function is the gate, the accumulation and the serial - which is also
-        // why MGPipeResourceOps did not have to grow a member for it.
+        // The texture half of resource_subdata, and it DISPATCHES TO NOBODY at GL-call time:
+        // a texture write marks a level dirty and Espryt uploads it at its own sync point, out
+        // of the accumulated set below. So the whole of this function is the gate, the
+        // accumulation, the serial and - P5c (tx), disaggregated builds only - the adoption
+        // hook that moves the staged bytes into the server's staged-texture store while they
+        // are still alive. MGPipeResourceOps grew its three texture members for exactly that
+        // hook; the monolith shape of everything above them is unchanged.
         Bool ApplyTextureUpload(const MGPSubData& record, const void* bytes, const MGPSubRegion* regions) {
             MGPipeResourceRecord* stored =
                 ResolveResourceIn(g_applier.TextureResources, "resource_subdata", record.Res);
@@ -1032,6 +1034,16 @@ namespace MobileGL::MG_Pipe {
             // record was accumulated, so the texels are the server's now, and that is the true
             // this returns.
             ++stored->Serial;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5c (tx): THE STAGED BYTES ARE ADOPTED HERE, at the last instant `bytes` is known
+            // alive (rule C: SEG_STAGE retires when this record does, and PendingUpload
+            // deliberately holds no byte pointer). The hook copies the run into the server's
+            // staged-texture store keyed by this record's own handle; it is a no-op in
+            // monolith, so the monolith shape keeps P5's pointer-dropping expression exactly.
+            if (g_resourceOps != nullptr && g_resourceOps->TextureSubData != nullptr) {
+                g_resourceOps->TextureSubData(record.Res, record, bytes, regions);
+            }
+#endif
             return true;
         }
 
@@ -1782,6 +1794,22 @@ namespace MobileGL::MG_Pipe {
             record->PendingUploads.clear();
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (tx): the staged-texture store's defined-ness and drop bookkeeping rides THE SAME
+        // scope rules as the pending-set drops above - a named level redefines that one
+        // (uploadTarget, level), a whole-resource respecify drops every level, and a metadata
+        // update replaces no storage and is not delivered. Without this the store could not say
+        // whether a level exists at all (a null-data glTexImage*D carries no sub-data), and a
+        // whole-resource respecify would leave levels keyed against a replaced coordinate
+        // system. Textures only: a buffer's storage is the ops table's own Respecify hook, and
+        // a renderbuffer has no levels.
+        if (desc.Target != kMGPipeResourceTargetBuffer &&
+            desc.Target != static_cast<Uint8>(MGPipeResourceTarget::Renderbuffer) && !metadataOnly &&
+            g_resourceOps != nullptr && g_resourceOps->TextureRespecify != nullptr) {
+            g_resourceOps->TextureRespecify(desc.Resource, desc, level);
+        }
+#endif
+
         // resource_respecify is the catalogue's only kNeedsAck call, and the per-record half
         // of that flag is MGPipeResourceRespecifyNeedsAck(desc): glBufferStorage is a real
         // synchronous allocation and the only entry point allowed a synchronous ack, while
@@ -1978,6 +2006,15 @@ namespace MobileGL::MG_Pipe {
         // AND ONLY A BUFFER IS HANDED ON, for resource_create's reason: the op table is the
         // buffer family's, its Destroy takes a handle whose kind that backend registered for,
         // and a texture's death is read out of the record at the sync that would have used it.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (tx): with ONE exception - the staged-texture store is keyed by the handle, so
+        // the death must reach it or a recycled slot's stale levels would answer for the
+        // successor. This does not hand the texture to the buffer family's Destroy.
+        if (static_cast<MGPipeKind>(handle.Kind) == MGPipeKind::Texture &&
+            g_resourceOps != nullptr && g_resourceOps->TextureDestroy != nullptr) {
+            g_resourceOps->TextureDestroy(handle.Handle);
+        }
+#endif
         if (static_cast<MGPipeKind>(handle.Kind) != MGPipeKind::Buffer) return;
         if (g_resourceOps != nullptr && g_resourceOps->Destroy != nullptr) {
             g_resourceOps->Destroy(handle.Handle);

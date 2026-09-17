@@ -33,6 +33,10 @@
 #include "MG_Util/SelfTest/PrimitivesGeneratedNoXfbProbe.h"
 #include "MG_Util/Texture/PixelStoreProcessor.h"
 #include <Config.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+// P5c (T5 / tx): the server's staged-texture shadow GenerateMipmap defines its chain on.
+#include <MG_Remote/Server/StagedTextureStore.h>
+#endif
 #include <algorithm>
 #include <bit>
 #include <cstdlib>
@@ -1607,6 +1611,52 @@ void main() {
             }
             return true;
         }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (T5 / tx): the split arm of EnsureGenerateMipmapStorageAllocated. Under an active
+        // transport the apply thread may not WRITE the client's level storage - AllocateStorage
+        // and MarkStorageDirty on a frontend TextureObjectMipmap are §6 layer-1 surfaces
+        // (CONTRACT-P5C §2.3) - so the generated chain is defined on the SERVER's staged-texture
+        // shadow instead, keyed by this renderer's own texture twin (the TextureResource,
+        // node-stable in VkTextureManager's map). Same levels, same extents - derived from the
+        // Vulkan-space base extent, whose depth is already 1 for every array target (layers
+        // live in arrayLayers there, so the fixed-component split the GL-space derivation
+        // needs is unnecessary here; these shadow extents answer in Vulkan space, which every
+        // consumer of a Magma-keyed entry shares) - and every generated level is marked
+        // dirty-in-shadow, because its texels are generated on the GPU and no byte answer
+        // exists on this side. The client's chain is left stale, which §2.3 rules CORRECT: the
+        // two readers that could observe the staleness are both named refusals under split.
+        // The upload-target list still comes from the frontend object - a shape READ, the P7
+        // registry's residual, not one of the writes this arm exists to remove.
+        static Bool EnsureGenerateMipmapShadowAllocated(const VkTextureManager::TextureResource& resource,
+                                                        Uint32 baseMipLevel,
+                                                        const Vector<TextureUploadTarget>& uploadTargets) {
+            if (resource.mipLevels <= baseMipLevel || uploadTargets.empty()) {
+                return false;
+            }
+            const IntVec3 storageBaseTexelSize = {static_cast<Int>(resource.extent.width),
+                                                  static_cast<Int>(resource.extent.height),
+                                                  static_cast<Int>(resource.depth)};
+            const IntVec3 baseTexelSize = ComputeMipTexelSize(storageBaseTexelSize, baseMipLevel);
+            if (baseTexelSize.x() <= 0 || baseTexelSize.y() <= 0 || baseTexelSize.z() <= 0) {
+                return false;
+            }
+            const Uint32 requiredMipLevelCount = baseMipLevel + ComputeFullMipLevelCount(baseTexelSize);
+            auto& store = MG_Remote::Server::ServerStagedTexture();
+            const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForTwinAddress(&resource);
+            for (const auto uploadTarget : uploadTargets) {
+                for (Uint32 level = baseMipLevel + 1; level < requiredMipLevelCount; ++level) {
+                    // A level the shadow already tracks (an adopted base chain) keeps its bytes;
+                    // the generation made the GPU newer than either, which the mark says.
+                    store.NoteLevelDefined(key, static_cast<Uint16>(uploadTarget), static_cast<Uint16>(level),
+                                           ComputeMipTexelSize(storageBaseTexelSize, level));
+                    store.MarkLevelGpuDirty(key, static_cast<Uint16>(uploadTarget), static_cast<Uint16>(level),
+                                            true);
+                }
+            }
+            return true;
+        }
+#endif
 
         static VkImageLayout ResolveGenerateMipmapFinalLayout(VkImageAspectFlags aspectMask) {
             return (aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0
@@ -11314,7 +11364,17 @@ void main() {
                             "GenerateMipmap: depth-stencil mipmap generation is not supported yet.");
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c (T5 / tx): under an active transport the generated chain is defined on the
+        // server's staged shadow (keyed by the synced TextureResource above) and the client's
+        // level storage is never written; in monolith the client-object path runs unchanged.
+        const Bool allocatedMipmapStorage =
+            MG_Config::Transport != MG_Config::TransportMode::Monolith
+                ? EnsureGenerateMipmapShadowAllocated(*resource, baseMipLevel, texture->GetUploadTargets())
+                : EnsureGenerateMipmapStorageAllocated(*mipmapTexture, baseMipLevel);
+#else
         const Bool allocatedMipmapStorage = EnsureGenerateMipmapStorageAllocated(*mipmapTexture, baseMipLevel);
+#endif
         MOBILEGL_ASSERT(allocatedMipmapStorage, "GenerateMipmap could not allocate a full mip chain for this texture.");
 
         resource = m_textureManager->SyncTextureAndGetDescriptor(*texture);
