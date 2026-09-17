@@ -248,11 +248,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }, &death);
                 return;
             }
-            // P5c merge coordination: while the death notice still rides the mailbox it lands
-            // HERE, on the apply thread, and every arm's DestroyByLifetimeId probes the client
-            // allocator. That hop is exactly what ct's object_death record replaces (the sink
-            // then resolves by the record's handle and the scope dies with the mailbox); until
-            // ct lands the probes are named debt inside the G6 scope, not unwrapped violations.
+            // P5c merge coordination: the record arm above carries every death a real split
+            // sees; what still lands HERE through the mailbox is the NoSession server-only
+            // fixture arm, whose DestroyByLifetimeId probes the client allocator from the
+            // apply thread. Those probes ride inside the G6 scope (CONTRACT-P5C §5.2, the
+            // amended ruling) - named debt that dies with the mailbox hop.
             const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
 #endif
             switch (kind) {

@@ -16,7 +16,7 @@ MGPipe 是 MobileGL 前端（`MG_State` + `MG_Impl`）与后端（`MG_Backend`�
 应用 GL 调用
   → MG_Impl（GL 语义、错误、shadow）
   → MG_Impl/Pipe/Tracker：在每条 verb 之前 validate，把变化推成 MGPipe 调用
-  → MGPipeScreen / MGPipeContext（两张函数指针表，76 条调用，单一真相源 PipeCalls.def）
+  → MGPipeScreen / MGPipeContext（两张函数指针表，79 条调用，单一真相源 PipeCalls.def）
       monolith：直调 backend 函数          split：发射器写 SEG_CMD ring → server applier（apply 线程）
   → server 对象表（按 {slot, gen} 句柄索引的数组）+ PipeInputs（后端被推送的状态块）
   → MG_Backend（Espryt / Magma），两个后端的 ring / pool / memo / lowering pass 原样不动
