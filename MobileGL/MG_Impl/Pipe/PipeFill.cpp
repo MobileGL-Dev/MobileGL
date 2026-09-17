@@ -48,6 +48,9 @@
 // lanes must keep answering exactly what they answered before.
 #include <MG_Remote/Client/CapsMirror.h>
 #include <MG_Remote/Client/WireTables.h>
+// P5c ev (CONTRACT-P5C §4.2): RecordError's transport arm posts kEventGlError through the
+// server session, and InvalidateCompileEnv's forward is deleted with an active transport.
+#include <MG_Remote/Server/ServerSession.h>
 #endif
 
 #include <atomic>
@@ -662,7 +665,18 @@ namespace MobileGL::MG_Pipe {
         // the resource subsystem bit would make the vertex-input subsystem emit null handles
         // in exactly the A/B arm that exists to isolate the two. It costs one free-list pop
         // and one map insert per buffer object and emits nothing.
+        //
+        // The client resource callbacks are MONOLITH-ONLY (CONTRACT-P5C §4.1): with an
+        // active transport the server session installs its producer callbacks at Accept and
+        // the client's consumers are invoked by name from DrainEventRing, so installing
+        // them here would be the double installation the check now aborts on.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) {
+            MGPipeInstallClientResourceCallbacks();
+        }
+#else
         MGPipeInstallClientResourceCallbacks();
+#endif
         MGPipeResourceTrackerInstance().Acquire(buffer);
     }
 
@@ -1752,6 +1766,16 @@ namespace MobileGL::MG_Pipe {
 
     void PipeInputs::InvalidateCompileEnv() {
         MGP_STICKY_FORWARD_PULL(InvalidateCompileEnv);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            // DELETED with an active transport (CONTRACT-P5C §4.2): R-12's caps
+            // re-publication already invalidates the CLIENT's compile environment when the
+            // second snapshot arrives (CapsMirror.cpp:78-80), and this forward is a write
+            // into the frontend with no wire shape. A caller that still needs it under a
+            // transport is a defect to fix, not a pull to serve.
+            return;
+        }
+#endif
         if (auto* ctx = LiveContext()) ctx->InvalidateCompileEnv();
     }
 
@@ -1763,6 +1787,20 @@ namespace MobileGL::MG_Pipe {
 
     void PipeInputs::RecordError(ErrorCode code, UniquePtr<ErrorInfo> info) {
         MGP_STICKY_FORWARD_PULL(RecordError);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            // The error queue is CLIENT state and the apply thread may not write it (R4).
+            // kEventGlError carries the code and the message; the client records it into its
+            // own queue at the next drain point. ORDERING IS P9's (CONTRACT-P5C §4.2): the
+            // event is observed at the next EmitAndWait drain, which preserves per-thread
+            // program order of error-then-read but not cross-verb interleaving - the
+            // accepted P5c shape, stated in the contract rather than discovered in P6.
+            const String message = info != nullptr ? info->toString() : String{};
+            MG_Remote::Server::ServerSessionInstance().PostGlError(static_cast<Uint32>(code),
+                                                                   message.c_str());
+            return;
+        }
+#endif
         auto* ctx = LiveContext();
         if (ctx == nullptr) {
             MGLOG_E_ONCE("PipeInputs::RecordError: no live context, dropping error %d", static_cast<int>(code));

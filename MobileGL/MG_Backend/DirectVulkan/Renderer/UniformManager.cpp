@@ -11,6 +11,10 @@
 #include "MG_Backend/DirectVulkan/DirectVulkanResourceState.h"
 #include "MG_State/GLState/Core.h"
 #include <MG_Pipe/PipeInputsSwitch.h>
+#if MOBILEGL_PIPE_PUSH
+// P5c ev: the GPU-write announcement routes through the reverse channel (R2).
+#include <MG_Impl/Pipe/ResourceTracker.h>
+#endif
 #include "MG_State/GLState/ProgramState/ProgramObject.h"
 #include "MG_State/GLState/TextureState/TextureObject1D.h"
 #include "MG_State/GLState/TextureState/TextureObject2D.h"
@@ -1072,7 +1076,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // changed a byte of it.
         bufferObject->EnsureGpuResidentStorage();
         if (imageBinding.Access != GL_READ_ONLY) {
+#if MOBILEGL_PIPE_PUSH
+            // P5c ev (R2, CONTRACT-P5C §4.2): the announcement goes through the reverse
+            // channel - the apply thread may not poke the client object directly.
+            MG_Pipe::MGPipeAnnounceBufferGpuWritten(bufferObject);
+#else
             bufferObject->MarkGpuWritten();
+#endif
         }
 
         BufferSlice slice{};
@@ -1228,7 +1238,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // results are visible without a readback path, exactly as for a capture buffer.
         bufferObject->EnsureGpuResidentStorage();
         // ... and the read that follows has to wait for this draw or dispatch to retire.
+#if MOBILEGL_PIPE_PUSH
+        // P5c ev (R2, CONTRACT-P5C §4.2): through the reverse channel, not a direct poke of
+        // the client object from the apply thread.
+        MG_Pipe::MGPipeAnnounceBufferGpuWritten(bufferObject);
+#else
         bufferObject->MarkGpuWritten();
+#endif
 
         BufferSlice slice{};
         if (!m_bufferManager->AcquireResidentSlice(BufferKind::ShaderStorage, bufferObject, slice) || !slice.IsValid()) {

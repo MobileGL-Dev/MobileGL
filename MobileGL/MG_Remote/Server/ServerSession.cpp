@@ -16,9 +16,11 @@
 
 #include <Config.h>
 #include <MGGitHash.h>
+#include <MG_Pipe/MGPipeCallbacks.h>
 #include <MG_Util/Debug/Log.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 namespace MobileGL::MG_Remote::Server {
@@ -153,6 +155,120 @@ namespace MobileGL::MG_Remote::Server {
                     (!capBitsSet && !consumedSet) ? " and " : "",
                     consumedSet ? "" : "SetConsumedSubsystems");
             std::abort();
+        }
+
+        // ---- P5c ev: the reverse channel's PRODUCER callbacks (CONTRACT-P5C §4.1) --------
+        //
+        // With an active transport the three reverse entries of gMGPipeCallbacks belong to
+        // the SERVER session, never to the client: the backend calls them with exactly the
+        // arguments it always passed (a writeback blobref whose Offset IS the backend's own
+        // mapped pointer, a range array, a surface info), and what the callback does with
+        // the call is Reserve + fill the head + copy the payload + PublishEvents. The host
+        // pointer NEVER reaches the wire - what crosses is the inline copy inside the
+        // SEG_EVENT record, which is rule B binding the reverse direction exactly as it
+        // binds MGHostSpan (R-2).
+        //
+        // OVERFLOW IS A DEFECT, NOT A DROP (§4.4): all four events are lossless in P5c, so
+        // a Reserve that returns nullptr is Fatal{EventRingOverflow}. CountDrop and the
+        // eventRingFull latch stay built and stay unused-by-policy; P9 owns the policy.
+        [[noreturn]] void FatalEventRingOverflow(const char* eventName, Uint64 payloadBytes) {
+            MGLOG_F("MGPipe: Fatal{EventRingOverflow} - the producer of %s could not reserve "
+                    "%llu bytes on SEG_EVENT. P5c's events are lossless and a full ring under "
+                    "lockstep is a producer burst no measured workload has, so this is a "
+                    "defect, not a drop (CONTRACT-P5C §4.4; the drop policy is P9's)",
+                    eventName, static_cast<unsigned long long>(payloadBytes));
+            std::abort();
+        }
+
+        void ServerOnBufferWriteback(MG_Pipe::MGPipeHandle res, Uint64 offset,
+                                     MG_Pipe::MGPBlobRef bytes) {
+            if (bytes.Seg != MG_Pipe::kMGHostSpanSegNone) {
+                // The backend handed over a segment-tagged blobref. The ONLY legal shape at
+                // this boundary is the monolith one - Offset is the mapped address, valid
+                // for this call - because the segment copy is THIS function's own job.
+                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"OnBufferWriteback.Seg\"} - the "
+                        "writeback producer was handed Seg %u; at the backend boundary the "
+                        "blobref names the backend's own mapped bytes (Seg = "
+                        "kMGHostSpanSegNone) and the copy into SEG_EVENT is the producer's",
+                        bytes.Seg);
+                std::abort();
+            }
+            ServerSession& session = ServerSessionInstance();
+            const Uint64 payloadBytes = sizeof(Transport::EventBufferWritebackHead) + bytes.Size;
+            void* slot = session.Events().Reserve(Transport::kEventBufferWriteback, payloadBytes);
+            if (slot == nullptr) {
+                FatalEventRingOverflow("kEventBufferWriteback", payloadBytes);
+            }
+            Transport::EventBufferWritebackHead head{};
+            head.Resource = Transport::EventHandle{res.Slot, res.Gen};
+            head.Offset = offset;
+            head.Size = bytes.Size;
+            std::memcpy(slot, &head, sizeof(head));
+            if (bytes.Size != 0) {
+                std::memcpy(static_cast<Uint8*>(slot) + sizeof(head),
+                            reinterpret_cast<const void*>(static_cast<std::uintptr_t>(bytes.Offset)),
+                            static_cast<SizeT>(bytes.Size));
+            }
+            session.PublishEvents();
+        }
+
+        void ServerOnGpuWritten(MG_Pipe::MGPipeHandle res, Uint rangeCount,
+                                const MG_Pipe::MGPRange* ranges) {
+            ServerSession& session = ServerSessionInstance();
+            const Uint64 tailBytes = static_cast<Uint64>(rangeCount) * sizeof(Transport::EventRange);
+            const Uint64 payloadBytes = sizeof(Transport::EventGpuWrittenHead) + tailBytes;
+            void* slot = session.Events().Reserve(Transport::kEventGpuWritten, payloadBytes);
+            if (slot == nullptr) {
+                FatalEventRingOverflow("kEventGpuWritten", payloadBytes);
+            }
+            Transport::EventGpuWrittenHead head{};
+            head.Resource = Transport::EventHandle{res.Slot, res.Gen};
+            head.RangeCount = static_cast<std::uint32_t>(rangeCount);
+            std::memcpy(slot, &head, sizeof(head));
+            if (tailBytes != 0) {
+                // EventRange and MGPRange are the same two Uint64s (EventRing.h:61-66 asserts
+                // it), so the tail is a plain copy rather than a per-element conversion.
+                std::memcpy(static_cast<Uint8*>(slot) + sizeof(head), ranges,
+                            static_cast<SizeT>(tailBytes));
+            }
+            session.PublishEvents();
+        }
+
+        void ServerOnSurfaceChanged(const MG_Pipe::MGPSurfaceInfo* info) {
+            ServerSession& session = ServerSessionInstance();
+            constexpr Uint64 payloadBytes = sizeof(Transport::EventSurfaceChangedHead);
+            void* slot = session.Events().Reserve(Transport::kEventSurfaceChanged, payloadBytes);
+            if (slot == nullptr) {
+                FatalEventRingOverflow("kEventSurfaceChanged", payloadBytes);
+            }
+            Transport::EventSurfaceChangedHead head{};
+            if (info != nullptr) {
+                head.Width = info->Width;
+                head.Height = info->Height;
+                head.InternalFormat = info->InternalFormat;
+                head.Samples = info->Samples;
+                head.Layers = info->Layers;
+                head.IsDefault = info->IsDefault;
+            }
+            std::memcpy(slot, &head, sizeof(head));
+            session.PublishEvents();
+        }
+
+        // One installer for both roles' tables, so the check exists in exactly one spelling:
+        // writing over an entry somebody else claimed is Fatal{RoleViolation,
+        // "callback-double-install"} - MGPipeCallbacks' "never over an entry a backend
+        // already claimed" comment, made a check (CONTRACT-P5C §4.1). Finding OUR OWN
+        // function there is the idempotent repeat, not a second installation.
+        template <typename Fn>
+        void InstallReverseCallback(Fn& entry, Fn producer) {
+            if (entry != nullptr && entry != producer) {
+                MGLOG_F("MGPipe: Fatal{RoleViolation, \"callback-double-install\"} - a reverse "
+                        "MGPipeCallbacks entry is already claimed by a different function. With "
+                        "an active transport the three reverse entries are the server "
+                        "session's producers; the client installs them under monolith only");
+                std::abort();
+            }
+            entry = producer;
         }
 
         ServerSession* g_active = nullptr;
@@ -337,6 +453,19 @@ namespace MobileGL::MG_Remote::Server {
 
         m_accepted = true;
         g_active = this;
+
+        // ---- P5c ev: the three reverse-channel producers are THIS session's (CONTRACT-P5C
+        // §4.1), installed before the apply thread can apply a record that produces one and
+        // uninstalled at Close after the join. Under monolith these entries are the
+        // client's (MGPipeInstallClientResourceCallbacks, monolith-only now); a session is
+        // by definition not monolith, so finding one of them claimed here is the double
+        // installation the check exists to name.
+        InstallReverseCallback(MG_Pipe::gMGPipeCallbacks.OnBufferWriteback,
+                               &ServerOnBufferWriteback);
+        InstallReverseCallback(MG_Pipe::gMGPipeCallbacks.OnGpuWritten, &ServerOnGpuWritten);
+        InstallReverseCallback(MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged,
+                               &ServerOnSurfaceChanged);
+
         LogMemory("accept");
 
         if (!CallMaskIsSet()) {
@@ -415,6 +544,17 @@ namespace MobileGL::MG_Remote::Server {
             // Uninstall AFTER the apply thread has joined, never before: a record still in
             // flight can still resolve a segment offset (table 3's fourth column).
             Wire::SegmentTable::UninstallProcessResolver();
+            // The reverse-channel producers go with the session that owns them - release
+            // only the entries that are still OURS, never one a later owner installed.
+            if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback == &ServerOnBufferWriteback) {
+                MG_Pipe::gMGPipeCallbacks.OnBufferWriteback = nullptr;
+            }
+            if (MG_Pipe::gMGPipeCallbacks.OnGpuWritten == &ServerOnGpuWritten) {
+                MG_Pipe::gMGPipeCallbacks.OnGpuWritten = nullptr;
+            }
+            if (MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged == &ServerOnSurfaceChanged) {
+                MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged = nullptr;
+            }
         }
         m_consumer.Detach();
         m_commands = Transport::RingConsumer();
@@ -489,6 +629,40 @@ namespace MobileGL::MG_Remote::Server {
         // the bell so that no caller can pair the right ring with the wrong flag.
         m_events.Ring().Publish();
         m_consumer.NotifyClient();
+    }
+
+    void ServerSession::PostGlError(Uint32 code, const char* message) {
+        if (!m_accepted) {
+            // The same answer PipeInputs::RecordError's own no-live-context arm gives: a
+            // dropped driver error is loud, never silent.
+            MGLOG_E_ONCE("MG_Remote server: PostGlError (code %u) before Accept - the error is "
+                         "dropped, because there is no SEG_EVENT to carry it on",
+                         static_cast<unsigned>(code));
+            return;
+        }
+        // The message rides INLINE, NUL-terminated, MessageBytes = strlen + 1 (CONTRACT-P5C
+        // §1), truncated to the cap at the producer - which is here, and is why the cap is a
+        // constant of the wire header rather than a negotiated value.
+        SizeT length = message == nullptr ? 0 : std::strlen(message);
+        if (length >= Transport::kEventGlErrorMaxMessageBytes) {
+            length = Transport::kEventGlErrorMaxMessageBytes - 1;
+        }
+        const Uint32 messageBytes = static_cast<Uint32>(length) + 1;
+        const Uint64 payloadBytes = sizeof(Transport::EventGlErrorHead) + messageBytes;
+        void* slot = m_events.Reserve(Transport::kEventGlError, payloadBytes);
+        if (slot == nullptr) {
+            FatalEventRingOverflow("kEventGlError", payloadBytes);
+        }
+        Transport::EventGlErrorHead head{};
+        head.Code = code;
+        head.MessageBytes = messageBytes;
+        std::memcpy(slot, &head, sizeof(head));
+        auto* tail = reinterpret_cast<char*>(static_cast<Uint8*>(slot) + sizeof(head));
+        if (length != 0) {
+            std::memcpy(tail, message, length);
+        }
+        tail[length] = '\0';
+        PublishEvents();
     }
 
     // Both of these advance AND ring, through SessionConsumer. The free functions in namespace

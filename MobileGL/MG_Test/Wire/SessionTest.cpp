@@ -822,6 +822,55 @@ TEST(SessionTest, TheEventRingCarriesTheThreeReverseCallbacks) {
     EXPECT_EQ(session.eventIn.DroppedEvents(), 0u);
 }
 
+// P5c ev (CONTRACT-P5C §1, §4.5): the fourth event kind's unit round-trip, in the same shape
+// as the three above - the producer writes the head plus the inline NUL-terminated message,
+// the consumer reads every field back, the in-segment offset of the message stays inside
+// SEG_EVENT, and a drained ring reports zero drops.
+TEST(SessionTest, TheEventRingCarriesAGlError) {
+    SessionFixture session;
+    ASSERT_TRUE(session.Build(TestSizes()));
+
+    const char message[] = "DirectVulkan: vkCreateGraphicsPipelines failed";
+    const std::uint32_t messageBytes = static_cast<std::uint32_t>(sizeof(message)); // NUL included
+    ASSERT_LT(messageBytes, kEventGlErrorMaxMessageBytes);
+    {
+        void* slot = session.eventOut.Reserve(kEventGlError,
+                                              sizeof(EventGlErrorHead) + messageBytes);
+        ASSERT_NE(slot, nullptr);
+        EventGlErrorHead head{};
+        head.Code = 4; // ErrorCode::InvalidOperation, widened
+        head.MessageBytes = messageBytes;
+        std::memcpy(slot, &head, sizeof(head));
+        std::memcpy(static_cast<std::uint8_t*>(slot) + sizeof(head), message, messageBytes);
+    }
+    session.eventOut.PublishAndNotify(session.clientTransport->SelfDoorbell(),
+                                      session.Control().producerParked);
+
+    RingRecordView view{};
+    ASSERT_TRUE(session.eventIn.Pop(view));
+    EXPECT_EQ(view.kind, kEventGlError);
+    // The record's payload is rounded up to the ring's 8-byte alignment; the head's
+    // MessageBytes is the authoritative inline length.
+    ASSERT_GE(view.payloadSize, sizeof(EventGlErrorHead) + messageBytes);
+    EventGlErrorHead head{};
+    std::memcpy(&head, view.payload, sizeof(head));
+    EXPECT_EQ(head.Code, 4u);
+    EXPECT_EQ(head.MessageBytes, messageBytes);
+    const char* inlineMessage =
+        reinterpret_cast<const char*>(static_cast<const std::uint8_t*>(view.payload) + sizeof(head));
+    EXPECT_STREQ(inlineMessage, message);
+    // The offset a consumer would resolve the inline message at: inside SEG_EVENT and past
+    // its control page, never a host address.
+    const std::uint64_t offset = session.eventIn.OffsetInSegment(inlineMessage);
+    EXPECT_GE(offset, sizeof(RingControl));
+    EXPECT_LT(offset, session.clientSegments.AnnouncedSize(SessionSegmentSlot::Event));
+
+    EXPECT_FALSE(session.eventIn.Pop(view));
+    session.eventIn.Drained();
+    EXPECT_FALSE(session.eventIn.RingIsFull());
+    EXPECT_EQ(session.eventIn.DroppedEvents(), 0u);
+}
+
 TEST(SessionTest, AFullEventRingLatchesTheFlagRatherThanDecidingWhatToDoAboutIt) {
     SessionFixture session;
     ASSERT_TRUE(session.Build(TestSizes()));

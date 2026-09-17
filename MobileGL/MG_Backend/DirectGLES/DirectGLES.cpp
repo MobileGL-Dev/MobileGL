@@ -20,6 +20,8 @@
 #if MOBILEGL_PIPE_PUSH
 // P3a: the applier's vertex-input records the re-keyed draw-buffer memo is validated against.
 #include <MG_Pipe/PipeApply.h>
+// P5c ev: the surface-changed event's producer callback, installed by the server session.
+#include <MG_Pipe/MGPipeCallbacks.h>
 #endif
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
@@ -11601,8 +11603,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         auto* depthTexture = defaultFBOInfo->depthAttachment.get();
         auto* stencilTexture = defaultFBOInfo->stencilAttachment.get();
-        if (depthTexture) depthTexture->SetInternalFormat(depthFormat);
-        if (stencilTexture) stencilTexture->SetInternalFormat(stencilFormat);
+#if MOBILEGL_PIPE_PUSH
+        if (MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged != nullptr) {
+            // P5c ev (CONTRACT-P5C §4.2): with an active transport the attachments are CLIENT
+            // memory and this thread may not write them - the backend fills MGPSurfaceInfo
+            // and posts, and the client applies it to its own pDefaultFramebufferInfo on the
+            // GL thread. FORMAT ONLY, exactly as the monolith arm below: Width/Height stay 0,
+            // which is the consumer's cue to leave the placeholder extent untouched. The
+            // callback's presence IS the transport probe - the server session installs it at
+            // Accept, and under monolith nobody ever does.
+            MG_Pipe::MGPSurfaceInfo info{};
+            info.InternalFormat = static_cast<Uint32>(depthFormat);
+            info.IsDefault = 1;
+            MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged(&info);
+        } else
+#endif
+        {
+            if (depthTexture) depthTexture->SetInternalFormat(depthFormat);
+            if (stencilTexture) stencilTexture->SetInternalFormat(stencilFormat);
+        }
         MGLOG_D("DirectGLES: default framebuffer depth=%d stencil=%d float=%d; published attachment "
                 "formats depth=%d stencil=%d",
                 depthBits, stencilBits, floatDepth ? 1 : 0, static_cast<int>(depthFormat),

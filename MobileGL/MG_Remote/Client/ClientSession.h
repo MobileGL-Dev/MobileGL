@@ -202,6 +202,11 @@ namespace MobileGL::MG_Remote::Client {
         // OnSurfaceChanged. Drained by the GL thread between verbs.
         Transport::EventRingConsumer& Events();
 
+        // The CLIENT's own segment table (P5c ev, CONTRACT-P5C §4.3): the writeback
+        // consumer resolves a SEG_EVENT blobref through it. Never the process resolver -
+        // table 3 installs that one on the server role only.
+        Wire::SegmentTable& Segments();
+
         Transport::RingControl* Control();
         Transport::SessionSegments& Shm();
         Transport::ITransport* Control_Plane();

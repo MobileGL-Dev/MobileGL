@@ -11,6 +11,11 @@
 #include "MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h"
 #include "MG_State/GLState/TextureState/TextureObject2D.h"
 
+#if MOBILEGL_PIPE_PUSH
+// P5c ev: the surface-changed event's producer callback, installed by the server session.
+#include <MG_Pipe/MGPipeCallbacks.h>
+#endif
+
 #if defined(__has_include)
 #if __has_include(<vulkan/vk_enum_string_helper.h>)
 #include <vulkan/vk_enum_string_helper.h>
@@ -280,11 +285,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             static_cast<SizeT>(defaultFramebufferExtent.width) *
             static_cast<SizeT>(defaultFramebufferExtent.height) * 4;
 
-        auto* colorTex = static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->colorAttachment.get());
-        colorTex->AllocateStorage(
-            TextureUploadTarget::Texture2D, 0, {
-                {extentWidth, extentHeight, 1},
-                defaultAttachmentByteSize}); // TODO: 4 is format size
         TextureInternalFormat depthFormat = TextureInternalFormat::Depth24Stencil8;
         switch (m_depthStencilFormat) {
             case VK_FORMAT_D24_UNORM_S8_UINT:
@@ -300,11 +300,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 depthFormat = TextureInternalFormat::Depth24Stencil8;
                 break;
         }
-        auto* depthTex = static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->depthAttachment.get());
-        depthTex->SetInternalFormat(depthFormat);
-        depthTex->AllocateStorage(TextureUploadTarget::Texture2D, 0, {
-            {extentWidth, extentHeight, 1},
-            defaultAttachmentByteSize}); // TODO: 4 is format size
 
         // The default FBO's stencil attachment must track the swapchain extent:
         // FramebufferObject::CheckCompleteness requires every valid attachment
@@ -324,11 +319,44 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 stencilFormat = depthFormat;
                 break;
         }
-        auto* stencilTex = static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->stencilAttachment.get());
-        stencilTex->SetInternalFormat(stencilFormat);
-        stencilTex->AllocateStorage(TextureUploadTarget::Texture2D, 0, {
-            {extentWidth, extentHeight, 1},
-            defaultAttachmentByteSize}); // TODO: 4 is format size
+
+#if MOBILEGL_PIPE_PUSH
+        if (MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged != nullptr) {
+            // P5c ev (CONTRACT-P5C §4.2): with an active transport the default FBO's
+            // attachments are CLIENT memory and this thread may not write them - the backend
+            // fills MGPSurfaceInfo and posts, and the client's consumer replays exactly the
+            // allocate/format writes of the monolith arm below on the GL thread. The two
+            // formats are always equal by the switches above, so one InternalFormat carries
+            // both. The callback's presence IS the transport probe - the server session
+            // installs it at Accept, and under monolith nobody ever does.
+            MG_Pipe::MGPSurfaceInfo info{};
+            info.Width = defaultFramebufferExtent.width;
+            info.Height = defaultFramebufferExtent.height;
+            info.InternalFormat = static_cast<Uint32>(depthFormat);
+            info.Samples = 1;
+            info.Layers = 1;
+            info.IsDefault = 1;
+            MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged(&info);
+        } else
+#endif
+        {
+            auto* colorTex = static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->colorAttachment.get());
+            colorTex->AllocateStorage(
+                TextureUploadTarget::Texture2D, 0, {
+                    {extentWidth, extentHeight, 1},
+                    defaultAttachmentByteSize}); // TODO: 4 is format size
+            auto* depthTex = static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->depthAttachment.get());
+            depthTex->SetInternalFormat(depthFormat);
+            depthTex->AllocateStorage(TextureUploadTarget::Texture2D, 0, {
+                {extentWidth, extentHeight, 1},
+                defaultAttachmentByteSize}); // TODO: 4 is format size
+
+            auto* stencilTex = static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->stencilAttachment.get());
+            stencilTex->SetInternalFormat(stencilFormat);
+            stencilTex->AllocateStorage(TextureUploadTarget::Texture2D, 0, {
+                {extentWidth, extentHeight, 1},
+                defaultAttachmentByteSize}); // TODO: 4 is format size
+        }
 
     }
 

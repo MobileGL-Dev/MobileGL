@@ -49,7 +49,16 @@
 
 #include <Config.h>
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+// P5c ev (CONTRACT-P5C §4.3): the writeback consumer's SEG_EVENT arm resolves the blobref
+// through the client session's own SegmentTable, and the transport check below is the same
+// MG_Config::Transport probe PipeFill.cpp uses. Behind the build option for G1's reason -
+// nothing under MG_Remote may be reachable from a pull build.
+#include <MG_Remote/Client/ClientSession.h>
+#endif
+
 #include <cstdint>
+#include <cstdlib>
 
 namespace MobileGL::MG_Pipe {
 
@@ -550,6 +559,19 @@ namespace MobileGL::MG_Pipe {
     // The client resolves the handle to its own object and writes the shadow; the epoch bump
     // stays SERVER-side and happens AFTER this returns, never before (ARCHITECTURE.md 7.4:
     // the reverse channel needs the same ordering guarantee as the forward one).
+    //
+    // THE BLOBREF'S THREE ARMS (CONTRACT-P5C §4.3, replacing the P3a monolith guard that
+    // rejected every Seg != kMGHostSpanSegNone and would have dropped every writeback EVENT
+    // on arrival):
+    //   Seg == kSegEvent          -> the wire shape (CONTRACT-P5C §1's reverse-channel row):
+    //                                Offset is the byte offset of the inline payload inside
+    //                                SEG_EVENT, resolved through the client session's OWN
+    //                                SegmentTable, bounds-checked against the announced size;
+    //   Seg == kMGHostSpanSegNone -> monolith only: Offset IS the backend's mapped address
+    //                                (MGPipeTypes.h says so in as many words). With an active
+    //                                transport this is rule B in the reverse direction and is
+    //                                Fatal{ProtocolCorruption, "OnBufferWriteback.Seg"};
+    //   anything else             -> the same Fatal.
     inline void MGPipeClientOnBufferWriteback(MGPipeHandle res, Uint64 offset, MGPBlobRef bytes) {
         auto* buffer = MGPipeResourceTrackerInstance().Resolve(res);
         if (buffer == nullptr) {
@@ -557,18 +579,62 @@ namespace MobileGL::MG_Pipe {
                          res.Slot, res.Gen);
             return;
         }
-        if (bytes.Seg != kMGHostSpanSegNone) {
-            MGLOG_E_ONCE("MGPipe: OnBufferWriteback carried a transport segment (%u); P3a is monolith only",
+        void* bytePtr = nullptr;
+        if (bytes.Seg == kMGHostSpanSegNone) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"OnBufferWriteback.Seg\"} - a "
+                        "writeback blobref carried Seg = kMGHostSpanSegNone (a raw host "
+                        "address) with an active transport. Rule B binds the reverse "
+                        "direction exactly as it binds MGHostSpan: on the wire the blobref "
+                        "names SEG_EVENT and an in-segment offset, never a host address");
+                std::abort();
+            }
+#endif
+            bytePtr = reinterpret_cast<void*>(static_cast<std::uintptr_t>(bytes.Offset));
+        }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        else if (bytes.Seg == MG_Remote::Wire::kSegEvent) {
+            // Size == 0 with a live resource is legal - a zero-length writeback
+            // (CONTRACT-P5C §1) - and SegmentTable::Resolve answers nullptr for a zero size,
+            // so only a non-empty run goes through the bounds-checked resolve.
+            if (bytes.Size != 0) {
+                auto* session = MG_Remote::Client::ClientSession::Active();
+                const void* resolved =
+                    session == nullptr
+                        ? nullptr
+                        : session->Segments().Resolve(MG_Remote::Wire::kSegEvent, bytes.Offset,
+                                                      bytes.Size);
+                if (resolved == nullptr) {
+                    MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"OnBufferWriteback.Offset\"} - "
+                            "the writeback blobref's {%llu + %llu} does not resolve inside the "
+                            "session's SEG_EVENT segment",
+                            static_cast<unsigned long long>(bytes.Offset),
+                            static_cast<unsigned long long>(bytes.Size));
+                    std::abort();
+                }
+                bytePtr = const_cast<void*>(resolved);
+            }
+        } else {
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"OnBufferWriteback.Seg\"} - a writeback "
+                    "blobref carried Seg %u, which is neither kMGHostSpanSegNone (monolith) nor "
+                    "kSegEvent (the wire shape)",
+                    bytes.Seg);
+            std::abort();
+        }
+#else
+        else {
+            // The pre-P5c guard's monolith spelling, kept for builds with no transport layer:
+            // a segment tag cannot legitimately arrive here and the write must not be made
+            // from a null pointer.
+            MGLOG_E_ONCE("MGPipe: OnBufferWriteback carried a transport segment (%u) in a build "
+                         "with no transport; the writeback is dropped",
                          bytes.Seg);
             return;
         }
-        // Monolith: Seg is kMGHostSpanSegNone and Offset IS the address of the backend's
-        // mapped bytes (MGPipeTypes.h says so in as many words). Under a transport the
-        // segment resolves first, and that is the phase's edit, not this one's.
-        buffer->WritebackFromBackend(
-            DataPtr{reinterpret_cast<void*>(static_cast<std::uintptr_t>(bytes.Offset)),
-                    static_cast<SizeT>(bytes.Size)},
-            static_cast<SizeT>(offset));
+#endif
+        buffer->WritebackFromBackend(DataPtr{bytePtr, static_cast<SizeT>(bytes.Size)},
+                                     static_cast<SizeT>(offset));
     }
 
     // A draw or dispatch wrote these ranges. ARCHITECTURE.md 7.1 calls this a NARROWING
@@ -600,16 +666,67 @@ namespace MobileGL::MG_Pipe {
         buffer->MarkGpuWritten();
     }
 
-    // Installed once, and never over an entry a backend already claimed: these two are the
-    // CLIENT's implementations of a backend -> frontend callback, so the backend installs
-    // the rest of the table and these two answer for it.
+    // MONOLITH ONLY (CONTRACT-P5C §4.1): with an active transport the three reverse entries
+    // of gMGPipeCallbacks are the SERVER session's producer callbacks and the client
+    // consumers are invoked BY NAME from DrainEventRing - the global table is a
+    // producer-side surface under split. The caller (MGPipeMintResourceHandle) gates on the
+    // resolved transport, exactly as PipeFill.cpp's other transport arms do.
+    //
+    // Installed over only an EMPTY or OUR OWN entry: writing over one somebody else claimed
+    // is Fatal{RoleViolation, "callback-double-install"} - the "never over an entry a
+    // backend already claimed" comment, made a check. Finding our own function is the
+    // idempotent repeat this helper runs once per buffer mint, not a second installation.
     inline void MGPipeInstallClientResourceCallbacks() {
-        if (gMGPipeCallbacks.OnBufferWriteback == nullptr) {
-            gMGPipeCallbacks.OnBufferWriteback = &MGPipeClientOnBufferWriteback;
-        }
+        const auto install = [](auto& entry, auto* fn, const char* name) {
+            if (entry != nullptr && entry != fn) {
+                MGLOG_F("MGPipe: Fatal{RoleViolation, \"callback-double-install\"} - %s is "
+                        "already claimed by a different function. With an active transport "
+                        "the reverse entries are the server session's producers; the client "
+                        "installs them under monolith only",
+                        name);
+                std::abort();
+            }
+            entry = fn;
+        };
+        install(gMGPipeCallbacks.OnBufferWriteback, &MGPipeClientOnBufferWriteback,
+                "OnBufferWriteback");
+        install(gMGPipeCallbacks.OnGpuWritten, &MGPipeClientOnGpuWritten, "OnGpuWritten");
+    }
+
+    // The GPU-write announcement for a buffer the backend holds only a FRONTEND POINTER to -
+    // Magma's barrier-pulled binding-point reads (UniformManager / VulkanRenderer), whose
+    // direct bufferObject->MarkGpuWritten() was the apply thread poking client memory (R2).
+    // Routed through the reverse channel exactly as DirectGLES' MarkBufferGpuWritten routes
+    // its own sites: ONE whole-buffer range, stated rather than implied (zero ranges is the
+    // shape a fully narrowed announcement will legitimately have at P8/P9, and the two must
+    // not be the same record). The handle comes from the client allocator's lifetime-id
+    // probe - the mint is unconditional at the BufferObject constructor
+    // (MGPipeMintResourceHandle), so a live buffer always has one.
+    //
+    // The fallback is the monolith shape, preserved byte for byte: no reverse channel
+    // installed (a pull-arm build, or a process with no session) pokes the object directly,
+    // which is exactly what these sites did before. A MISSING HANDLE with a live channel is
+    // loud rather than a silent drop, the same choice MarkBufferGpuWritten makes.
+    inline void MGPipeAnnounceBufferGpuWritten(
+        const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
+        if (bufferObject == nullptr) return;
         if (gMGPipeCallbacks.OnGpuWritten == nullptr) {
-            gMGPipeCallbacks.OnGpuWritten = &MGPipeClientOnGpuWritten;
+            bufferObject->MarkGpuWritten();
+            return;
         }
+        const MGPipeHandle res =
+            MGPipeSlots().FindByLifetimeId(MGPipeKind::Buffer, bufferObject->GetLifetimeId());
+        if (MGPipeHandleIsNull(res)) {
+            MGLOG_E_ONCE("MGPipe: no handle for the GPU-write announcement of buffer %u - the "
+                         "reverse channel is installed but the mint is missing, so the mark "
+                         "would be dropped at the consumer; poking the object directly rather "
+                         "than losing it",
+                         bufferObject->GetExternalIndex());
+            bufferObject->MarkGpuWritten();
+            return;
+        }
+        const MGPRange whole{0, kMGPipeWholeBuffer};
+        gMGPipeCallbacks.OnGpuWritten(res, 1, &whole);
     }
 } // namespace MobileGL::MG_Pipe
 #endif // MOBILEGL_PIPE_PUSH
