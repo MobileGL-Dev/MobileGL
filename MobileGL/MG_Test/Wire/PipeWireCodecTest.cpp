@@ -366,10 +366,19 @@ namespace {
     // Runs `body` in a forked child. The child must not use gtest assertions; it _exit(0)s
     // when `body` returns, so a body expected to die must be ASSERTED dead by the parent
     // (WIFSIGNALED), never assumed.
+    //
+    // THE LOG IS EMPTIED FIRST, AND READ WHOLE. The library TRUNCATES its log file the first
+    // time a process writes to it, so a child's diagnostic is not an append to what the parent
+    // already holds. Reading the delta (the file minus the parent's length before the fork)
+    // works for one child and silently reads NOTHING for the second: the file the second child
+    // truncated is shorter than the offset the delta slices from. That is how P5b's user-index
+    // span cases - one refusal driven through the encoder, the forged decoder and the sink, so
+    // no layer leans on the one before it - passed their first side and lost the diagnostic of
+    // the other two.
     template <class Body>
     ChildResult RunInChild(Body body) {
         ChildResult result;
-        const std::string before = ReadLog();
+        { std::ofstream empty(g_logPath, std::ios::binary | std::ios::trunc); }
         std::fflush(nullptr);
         const pid_t pid = ::fork();
         if (pid < 0) return result;
@@ -380,7 +389,7 @@ namespace {
         int status = 0;
         if (::waitpid(pid, &status, 0) != pid) return result;
         result.Status = status;
-        result.Log = ReadLog().substr(before.size());
+        result.Log = ReadLog();
         return result;
     }
 
