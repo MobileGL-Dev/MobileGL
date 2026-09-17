@@ -8,7 +8,7 @@
 //
 // Scenario - A PERSISTENT|WRITE|COHERENT MAPPING, WRITTEN THROUGH WITH NO GL CALL ANNOUNCING IT.
 //
-// Target C of P5's reduced path, spelled out in full at docs/Disaggregated/ARCHITECTURE.md:500:
+// Target C of P5's reduced path, spelled out in full at docs/Disaggregated/ARCHITECTURE.md section 12:
 // map PERSISTENT|WRITE|COHERENT, write through the pointer, MAKE NO OTHER GL CALL, draw, read
 // back and check.
 //

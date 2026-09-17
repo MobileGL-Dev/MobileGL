@@ -1,42 +1,42 @@
 # MGPipe 设计与架构
 
-> 本文描述**已决定**的设计。每条决定附一行理由；数字凡有实测的取实测（见 `MEASUREMENTS.md`）。落地状态以 `feat/disaggregated@eec0e836` 为准：P0–P5 已落地；明确标成 P6+ 的仍是后续形状（阶段号见 `ROADMAP.md`）。
+> 本文只写**已决定**的设计，每条决定附一行理由。落地状态：P0–P5b 已落地（代码头 `82683d4a`）；标 **P6+** 的是后续形状，阶段号见 `ROADMAP.md`；实测数字见 `MEASUREMENTS.md`；P5 / P5b 的 wire 契约原文在 `MobileGL/MG_Remote/CONTRACT-P5.md`、`CONTRACT-P5B.md`。
 
 ## 1. 边界
 
 ### 1.1 一句话
 
-`MG_Backend` 已经是一台贴着目标 API 的状态机（Espryt 有逐字节的渲染状态镜像、6 个 twin registry、三条 persistent ring；Magma 有 `SetupDrawSnapshot`、pipeline memo、5 个 `Vk*Manager`）。它缺的不是状态，而是一份"我被告知了什么"的显式声明。MGPipe 就是那份声明：前端在每条 verb 之前把变化**推**过去，后端不再拉 `MG_State::pGLContext`。server 进程因此只装 `MG_Backend` + MGPipe 对象表，不链接 `MG_State`、`MG_Impl`、glslang。
+`MG_Backend` 已经是一台贴着目标 API 的状态机（Espryt：逐字节渲染状态镜像、twin registry、三条 persistent ring；Magma：`SetupDrawSnapshot`、pipeline memo、五个 `Vk*Manager`）。它缺的不是状态，而是一份"我被告知了什么"的显式声明。MGPipe 就是那份声明：前端在每条 verb 之前把变化**推**过去，后端不再拉 `MG_State::pGLContext`；server 进程因此只装 `MG_Backend` + MGPipe 对象表，不链接 `MG_State`、`MG_Impl`、glslang。
 
-接口不是从 gallium 自顶向下设计的，而是从两个后端自己维护的关键结构反推出来的：`SetupDrawSnapshot` 的字段并集 → `set_*` 组；`DrawTextureSyncKeys` → `set_sampler_views`+`create_sampler_view`+`set_texture_params`；`ResolvedDrawBuffers`/`ResolvedVertexBindings` → vertex elements 三件；`g_syncedRenderStateParameters` → render-state CSO；`UnpackStagingBlock` → `MGPSubData` 的 region 形状；`BufferBackendOps`（7 个 hook，注释自称 `pipe_context` 类比）→ `resource_*` 全族。gallium 是目的地（词汇可读、可迁移），不是推导前提；与 gallium 的十条偏离见 §3.5。
+接口是从两个后端自己维护的关键结构反推出来的（`SetupDrawSnapshot` 字段并集 → `set_*`；`DrawTextureSyncKeys` → sampler view 三件；`ResolvedDrawBuffers` / `ResolvedVertexBindings` → vertex elements 三件；`g_syncedRenderStateParameters` → render-state CSO；`UnpackStagingBlock` → `MGPSubData` 的 region 形状；`BufferBackendOps` 七个 hook → `resource_*` 全族）。gallium 是目的地（词汇可读、可迁移），不是推导前提。
 
 ### 1.2 两张函数指针表
 
-`MGPipeScreen`（share-group 作用域：caps、resource、persistent map、fence）与 `MGPipeContext`（其余全部：query 命名空间、CSO、`set_*`、对象操作、verb），由 `PipeCalls.def` 经 G1 生成（`MG_Pipe/generated/PipeTables.inc`）。**P0 已落地。**
+`MGPipeScreen`（share-group 作用域：caps、resource、persistent map、fence）与 `MGPipeContext`（其余全部），由 `PipeCalls.def` 经 G1 生成（`MG_Pipe/generated/PipeTables.inc`）。
 
-- 函数指针 struct 而非虚基类：边界今天就是函数指针 struct（`gBackendFunctionsTable`）；**null 项已经表示"未实现，前端回退"**，正好就是"这个子系统还没迁移，继续拉取"；`MG_Test` 已用替换整张表的方式 mock 后端。
-- 两张表从第一天分开：事后拆分意味着给记录重新编号。v1 只有一个 screen、一个 context、一条 flow（`pGLContext` 是进程全局，share group 全库无人读取）。
+- 函数指针 struct 而非虚基类：边界今天就是函数指针 struct（`gBackendFunctionsTable`），**null 项已经表示"未实现，前端回退"**，`MG_Test` 已用替换整张表的方式 mock 后端。
+- 两张表从第一天分开：事后拆分意味着给记录重新编号。v1 只有一个 screen、一个 context、一条 flow。
 - EGL 生命周期 8 项与 caps 面留在 `pActiveBackendObject` 的虚函数上（罕见路径）。
 
 ### 1.3 三种形态，一份后端
 
 | 形态 | 表里装的是什么 | 用途 |
 |---|---|---|
-| `monolith`（默认） | backend 自己的函数；`MGPipeCallbacks` 是对 `MG_State` 的直调；`MGHostSpan.Ptr` 指向 client shadow（零新增拷贝） | 出货 |
-| `inproc` | 发射器 → 同进程第二个线程上的 applier | CI 形态；同时就是 monolith 的**渲染线程**（把 `PrepareForDraw` 与驱动调用搬离 GL 线程，是本项目手上最大的单一 CPU 杠杆） |
-| `spawn` | 发射器 → SPSC shm ring → 另一个进程的 applier → 同一批 backend 函数 | 两进程出货形态 |
+| `monolith`（默认） | backend 自己的函数；回调直调 `MG_State`；`MGHostSpan.Ptr` 指向 client shadow | 出货 |
+| `inproc` | 发射器 → 同进程第二个线程上的 applier | CI 形态；同时就是 monolith 的**渲染线程**（把 `PrepareForDraw` 与驱动调用搬离 GL 线程） |
+| `spawn`（P6） | 发射器 → SPSC shm ring → 另一个进程的 applier → 同一批 backend 函数 | 两进程出货形态 |
 
-唯一 hook 点是 `MG_Backend::Init()`（`MG_Backend/Init.cpp`）里一个 `#if MOBILEGL_BUILD_DISAGGREGATED` 分支：`MG_Config::Transport != Monolith` 时装 `MG_Remote::BackendObject_Remote`，否则走今天的 `switch`。下游 `MG_Impl` 的边界调用点零 `#ifdef`。（分支在 P5 落地；P0 的 `Init.cpp` 尚未含它。）
+唯一 hook 点是 `MG_Backend::Init()` 里一个 `#if MOBILEGL_BUILD_DISAGGREGATED` 分支：`MG_Config::Transport != Monolith` 时装 `MG_Remote::BackendObject_Remote`，否则走今天的 `switch`。`MG_Impl` 的边界调用点零 `#ifdef`。
 
 ## 2. 对象模型
 
-### 2.1 句柄 = `{slot, gen}`（P0 已落地，`MG_Pipe/MGPipeHandles.h`）
+### 2.1 句柄 = `{slot, gen}`（`MG_Pipe/MGPipeHandles.h`）
 
 - 8 字节 POD，按值走寄存器对；**client 铸造，server 永不返回句柄** → 整份目录零创建 round trip（对 gallium 的偏离 D1）。
-- slot 稠密、**按 kind 分配**（free list + 高水位），server 对象表是数组而非哈希表。与 `IndexGenerator` 无关——后者的 LIFO 名字复用正是句柄要关掉的问题。
-- `gen` 只在 slot 复用时 ++，不在 respecify 时 ++；同一 slot 复用 2³² 次才回绕（1000 fps 逐帧复用约 50 天），debug 分配器断言回绕。
+- slot 稠密、按 kind 分配（free list + 高水位），server 对象表是数组不是哈希表；`IndexGenerator` 的 LIFO 名字复用正是句柄要关掉的问题。
+- `gen` 只在 slot 复用时 ++，不在 respecify 时 ++；同一 slot 复用 2³² 次才回绕，debug 分配器断言回绕。
 - kind：`Buffer, Texture, Renderbuffer, Framebuffer, Xfb, RenderStateCso, VertexElementsCso, SamplerCso, SamplerViewCso, ShaderCso, Fence, Query, Context`。
-- 保留句柄：`{0,0}` = null；`{0,1}` of `Framebuffer` = 默认帧缓冲（退役 Espryt 四处 `pDefaultFramebufferInfo->defaultFBO` 身份比较）；`ShaderCso` slot 空间的高 1/16 保留给 program pipeline 合成体（`MobileGL/MG_Pipe/MGPipeHandles.h:88-90`）。
+- 保留句柄：`{0,0}` = null；`{0,1}` of `Framebuffer` = 默认帧缓冲（退役 Espryt 的 `defaultFBO` 身份比较）；`ShaderCso` slot 空间的高段保留给 program pipeline 合成体（`kMGPipeShaderCsoCompositeSlotBase`）。
 - GL name 只以 `GlNameForDiag` 出现在 `MGPResourceDesc` 里，永不做身份、永不进 memo 键或 content hash；`GetLifetimeId()` 留在 client 作 tracker 自己的身份，client 维护 `lifetimeId → slot`。
 
 ### 2.2 两种世代，严格分开
@@ -44,128 +44,112 @@
 | | 拥有者 | 回答 | 过线 |
 |---|---|---|---|
 | `MGPipeHandle::Gen` | client | "还是同一个 GL 对象吗？" | 是 |
-| `MGGen`（`g_bufferMutationEpoch`、`m_textureImageEpoch`、`m_cacheStructureEpoch` 等 12 个后端纪元） | server | "我自己是否重铸了驱动对象？" | **永不**；server→client 只以纹理拉取请求出现（§8.4） |
+| `MGGen`（`g_bufferMutationEpoch`、`m_textureImageEpoch` 等后端纪元） | server | "我自己是否重铸了驱动对象？" | **永不**；server→client 只以纹理拉取请求出现（§8.4） |
 
-规范：任何 MGPipe 调用不得要求 client 提供或知晓 `MGGen`；反过来，client 的回绕 `Uint16` 版本计数器永远不是新鲜度的唯一证明——过线时要么加宽、要么与 `{slot, gen}` 同行。
+规范：任何 MGPipe 调用不得要求 client 提供或知晓 `MGGen`；client 的回绕 `Uint16` 版本计数器永远不是新鲜度的唯一证明——过线时要么加宽、要么与 `{slot, gen}` 同行。
 
 ### 2.3 CSO 与可变对象
 
 | 类别 | 形态 | 对应后端已有缓存 |
 |---|---|---|
-| `VertexElementsCso` | create/bind/delete | `VertexInputStateFactory::m_cache` |
-| `SamplerCso` | create/delete + `bind_sampler_states` | `VkSamplerManager::m_samplers`、`BackendSamplerObject` |
-| `SamplerViewCso` | create/delete + `set_sampler_views` | `TextureResource::{perMipViews,…}`、`SyncTextureViewToBackend` |
+| `VertexElementsCso` | create/bind/delete | `VertexInputStateFactory::m_cache`（Magma）；Espryt 逐 VAO twin |
+| `SamplerCso` | create/delete + `bind_sampler_states` | `VkSamplerManager`、`BackendSamplerObject` |
+| `SamplerViewCso` | create/delete + `set_sampler_views` | `TextureResource::perMipViews`、`SyncTextureViewToBackend` |
 | `ShaderCso` | create/bind/delete + server 侧惰性特化 | `ProgramFactory::m_cache`、`BackendProgramObjectImpl` |
 | `RenderStateCso` | create/bind/delete，身份 = pipeline 子集 | Espryt 值镜像；Magma `ComputePipelineStateHash` |
 | Buffer / Texture / Renderbuffer | create / respecify / subdata / destroy | 各自 twin |
 | Framebuffer / Xfb | per-context 身份 + `set_*` payload | `BackendFramebufferObject`、`m_xfbCounterSlotByObject` |
 
-CSO 在 client 侧内容寻址（Mesa `cso_cache` 先例）：每类一张 `ska::flat_hash_map<xxHash, MGPipeHandle>`，容量上限 render-state 64 / vertex-elements 1024 / sampler 256 / sampler-view 4096 / shader 跟随 `ProgramObject` 生命周期，LRU 淘汰时发 `delete_*`。两个不同 program 设置了相同状态时 server 零状态转换。
+CSO 在 client 侧内容寻址（Mesa `cso_cache` 先例）：每类一张 `flat_hash_map<xxHash, MGPipeHandle>`，LRU 淘汰时发 `delete_*`；render-state 容量 64（`kMGPipeCsoCacheCapacity`，P13 重调）、sampler state 256。两条已落地的偏离：
 
-> **[deviation] D-F2（P4a 落地）**：上面这行的 **sampler-view 4096 项内容寻址是 P7（Magma）的形状**；Espryt 这一波把 sampler **view** 做成**按纹理对象身份寻址**——一纹理一视图，按纹理自己的 lifetime id 铸造，视图限制变了就在**同一个句柄**上重发。理由是 Espryt 的视图没有可共享的驱动侧对象，内容寻址只会多一张表和一次哈希。sampler **state** 的 256 项内容寻址照做，并且 P4a 给它加了**引用计数**：`MGPTextureParams::BuiltinSampler` 指着的项不允许被 LRU 挤掉（全被引用时超容铸造，计数在 `OverCapacityMints`），否则一次驱逐就会让一条标准记录指向一个已经换代的句柄。
+- **D-G1（P3a）**：Espryt 的 vertex-elements CSO **按 VAO 身份寻址**（一 VAO 一句柄，配置变化在同一句柄上重发）——Espryt 的 twin 持有驱动 VAO 名与 scratch buffer，两个格式相同的 VAO 不能共享；1024 项的内容寻址是 P7（Magma）在同一组调用之上加的。
+- **D-F2（P4a）**：Espryt 的 sampler **view** 按纹理对象身份寻址（Espryt 没有可共享的驱动侧视图对象）；sampler **state** 内容寻址并带**引用计数**——`MGPTextureParams::BuiltinSampler` 指着的项不允许被 LRU 挤掉（超容铸造计入 `OverCapacityMints`），否则一条标准记录会指向已换代的句柄。
 
-**[deviation] D-G1（P3a 落地）：vertex-elements CSO 在 P3a 是身份寻址，不是内容寻址。** Espryt 根本没有 vertex-elements CSO，它有的是**逐 VAO 的 twin**（`BackendVertexArrayObject`，`MobileGL/MG_Backend/DirectGLES/Managers.h:957-1163`），twin 持有一个驱动 VAO 名（`:1096`）、32 个 client-array scratch buffer id（`:1097`）与 32 个 fp64 scratch id（`:1101`）；两个格式相同的前端 VAO 不能共享它，因为驱动 VAO 同时持有 element-array 绑定与逐属性缓冲绑定，共享 CSO 会把它们变成每次 `BindVertexElements` 都要重发——严格比今天更慢。所以 P3a 逐前端 `VertexArrayObject` 铸一个 `VertexElementsCso` 句柄（配置变化时**在同一句柄上重发** `CreateVertexElements`，`MGPipeHandle::Gen` 只在槽位复用时递增），**这是一个命中率恒为 1 的合法内容寻址缓存**。上面那张 1024 项的内容寻址表是 **P7** 的活——Magma 的 `VertexInputStateFactory` 接管 CSO 时，`VkPipelineVertexInputStateCreateInfo` 要的正是内容寻址；它加在 P3a 同一组 `CreateVertexElements`/`BindVertexElements`/`DeleteVertexElements` 与同一个 slot 分配器**之上**，P3a 的线上形状与 applier 记录都不妨碍它。
-
-## 3. 调用目录（P0 已落地）
+## 3. 调用目录
 
 ### 3.1 单一真相源
 
-`MobileGL/MG_Pipe/PipeCalls.def`：一行一个调用 `X(Name, PayloadStruct, Class, Flags)`。**线上 opcode 就是行在文件里的位置**（1-based），所以目录必须是唯一记录的集合，新调用只能**追加**到文件末尾、退役的调用保留槽位。`MGP_CALL_LIST_DOCUMENTED_COUNT = 71`（`MobileGL/MG_Pipe/PipeCalls.def:69`）由 `MG_Test/Pipe/PipeCatalogueTest.cpp` 钉住。
+`MobileGL/MG_Pipe/PipeCalls.def`：一行一个调用 `X(Name, PayloadStruct, Class, Flags)`。**线上 opcode 就是行的位置**（1-based），新调用只能**追加**、退役的调用保留槽位。`MGP_CALL_LIST_DOCUMENTED_COUNT = 76`（P5b 契约追加了 5 条 verb），由 `MG_Test/Pipe/PipeCatalogueTest.cpp` 钉住。
 
-七个生成器（`scripts/gen_pipe.py`，产物提交进树，CI `pipe-gates` 重生成并 `git diff --exit-code`）：
+生成器（产物提交进树，CI `pipe-gates` 重生成并 `git diff --exit-code`）：
 
 | | 产物 | 内容 |
 |---|---|---|
 | G1 | `PipeTables.inc` | 两张函数指针表 |
-| G2 | `PipeThunks.inc` | monolith 直调 thunk `MGP_<Name>()`，`MG_Impl` 的约 93 个 `gBackendFunctionsTable.GL.*` 站点逐名改到它上面 |
+| G2 | `PipeThunks.inc` | monolith 直调 thunk `MGP_<Name>()`，`MG_Impl` 的边界站点逐名改到它上面 |
 | G3 | `PipeWire.inc` | wire 记录 + 每种一条尺寸 `static_assert` + applier 分发前的运行期边界检查 → `Fatal{ProtocolCorruption}` |
-| G4 | `PipeVerify.inc` | `MOBILEGL_PIPE_VERIFY` 的逐字段比对器（字段表来自 `PipeFields.def`；浮点按位比较，NaN patch level 不会误报） |
-| G5 | `PipeFilled.inc` | `PipeInputs` 字段 id（**63 个**，`static_assert(kMGPipeInputFieldCount == 63)`）与逐 verb 世代 poison |
-| G6 | `PipeCoverage.inc` | 477 行后端读点清单 → MGPipe 调用的映射（`Coverage.def` 手工维护一半）：299 → 调用、5 client 自答、6 反向通道、167 结构性句柄、**0 UNMAPPED** |
-| G7 | `PipeSpanTable.inc` | render-state pipeline 子集的成员名表（24 个，取自 `ComputePipelineStateHash` 今天哈希的字段，`scripts/gen_pipe.py:67-92`）；带 `offsetof` 的 chunk 表与 setter 一致性测试在 P2 |
+| G4 | `PipeVerify.inc` | `MOBILEGL_PIPE_VERIFY` 的逐字段比对器（字段表 `PipeFields.def`；浮点按位比较） |
+| G5 | `PipeFilled.inc` | `PipeInputs` 字段 id（63 个，`static_assert`）与逐 verb 世代 poison |
+| G6 | `PipeCoverage.inc` | 后端读点清单 → MGPipe 调用的映射（`Coverage.def`），**0 UNMAPPED** 是门 |
+| G7 | `PipeSpanTable.inc` | render-state pipeline 子集的成员名表；chunk 表与 setter 一致性测试在 `RenderStateSpansTest` |
+| G8 | `PipeFieldOwnership.inc`（`gen_pipe_field_ownership.py`） | 每个 `PipeInputs` 字段恰好属于 `RECORD-SUPPLIED / APPLIER-DERIVED / BARRIER-PULLED / FATAL` 之一，不在任何一类 = 构建失败；目前 33 / 2 / 36 / 4。从 `MG_Backend/MGPipe/PipeInputs.h` include，**不从 `MG_Pipe/MGPipe.h`**（后者在 pull 构建的 include 闭包里，G1 不允许符号位移） |
 
-**G8（P5 新增，另一个生成器）** `scripts/gen_pipe_field_ownership.py` → `generated/PipeFieldOwnership.inc`：
-`CONTRACT-P5.md` §3 的表 2，63 个字段 + 7 个 sticky forward = **70 行**，每行恰好属于
-`RECORD-SUPPLIED / APPLIER-DERIVED / BARRIER-PULLED / FATAL` 之一，**不在任何一类里 = 构建失败**（R-7.1）。
-`RECORD-SUPPLIED` 是**推导**出来的（`Coverage.def` 的 emitted 列表减去 `PipeFill.cpp` 的
-`EmittedCallSuppliesTheWholeField` 拒绝项），手工那一半在 `MG_Pipe/FieldOwnership.def`。
-它从 `MG_Backend/MGPipe/PipeInputs.h` include，**不从 `MG_Pipe/MGPipe.h`**——后者在 pull 构建的
-include 闭包里，而 G1 不允许那里有任何符号位移。`--check` 与 `--self-test`（11 条阴性对照）与
-`gen_pipe.py` 的同样在 CI 里跑。
+另有 `PipeFillPoints.inc`（`FillPoints.def`，83 条 `MGP_FILL` 覆盖 69 个 verb）与 `DirtySurface.def`（`gen_pipe_dirty_surface.py`，§5.2）。
 
-**G1 的 P5 codegen 陷阱（实测，`c1-v2.md` §9）。** capability gate 若替换的是指针表达式，就必须保留它的**表达式形状**，不能只保留真假值。两个 `if (const auto f = TABLE.GL.Slot)` 被 Bool-valued macro 改写成 block 后，pull `.text` **−144 B**，`GLImpl::GetInteger64v` −150、`GLImpl::GetIntegerv` +2；语义没变，G1 仍正确地判红。落地形状分成 `MGL_BACKEND_SLOT_CAP` 与 pointer-valued `MGL_BACKEND_SLOT_PTR_CAP` / `_PTR_LOCAL`，后者在 pull 展开回原 slot expression。规则不是“宏结果相等”，而是“byte-identical gate 必须保住 init-statement / short-circuit / pointer 的原表达式形状”。
+**G1 的 codegen 规则**：capability gate 若替换的是指针表达式，必须保留其**表达式形状**（init-statement / short-circuit / pointer），不能只保留真假值——`MGL_BACKEND_SLOT_CAP` 与 pointer-valued `MGL_BACKEND_SLOT_PTR_CAP` / `_PTR_LOCAL` 分开，后者在 pull 展开回原 slot expression，否则 pull `.text` 会漂移。
 
 ### 3.2 分组与计数
 
 | Class | 条 | 内容 |
 |---|---|---|
-| `kScreen` | 11 | `GetCaps`(R)、`ResourceCreate/Respecify/Destroy`、`MapPersistent`(R,O)/`UnmapPersistent`(O)、`FenceCreate/Status(R)/Wait(R)/Destroy`、追加的 `FenceWaitServer`（`glWaitSync`，GPU 侧等待） |
-| `kCtxQuery` | 8 | `QueryCreate/Begin/End/Available(R)/Result(R)/Destroy`、追加的 `QueryTimestamp`(R)（`glGetInteger64v(GL_TIMESTAMP)`）与 `QueryCounter`（`glQueryCounter`） |
-| `kCtxCso` | 13 | create/delete × {render state, vertex elements, sampler, sampler view, shader} + bind × {render state, vertex elements, shader}；sampler 与 sampler view 的绑定是下一组的批量调用 |
+| `kScreen` | 11 | `GetCaps`(R)、`ResourceCreate/Respecify/Destroy`、`MapPersistent`(R,O)/`UnmapPersistent`(O)、`FenceCreate/Status(R)/Wait(R)/Destroy`、`FenceWaitServer` |
+| `kCtxQuery` | 8 | `QueryCreate/Begin/End/Available(R)/Result(R)/Destroy`、`QueryTimestamp`(R)、`QueryCounter` |
+| `kCtxCso` | 13 | create/delete × {render state, vertex elements, sampler, sampler view, shader} + bind × {render state, vertex elements, shader} |
 | `kCtxState` | 17 | `SetDynamicState`(B)、`SetFramebufferState`、`SetVertexBuffers`(V)、`SetIndexBuffer`、`SetIndirectBuffers`、`SetSamplerViews`(V)、`BindSamplerStates`(V)、`SetShaderImages`(V)、`SetShaderBuffers`(V,H)、`SetStreamOutputTargets`(V)、`SetGlobalConstants`(B)、`SetVertexAttribDefaults`(V)、`SetPixelPackState`、`SetPatchState`、`SetDrawProgram`、`SetDispatchProgram`、迁移期临时的 `SetResidualValueState`(B) |
-| `kCtxObject` | 9 | 按资源寻址：`SetTextureParams`、`ResourceSubData`(B,V)、`BufferSubDataResident`(B,O)、`ResourceSubDataComplete`、`ResourceFlushRange`、`ResourceReadback`(R)、`ResourceCopyRegion`、`GenerateMipmap`、`GetTextureImage`(R) |
-| `kCtxVerb` | 13 | 按上下文寻址：`Blit`、`Clear`、`ReadPixels`(R)、`DrawVbo`(H,V)、`LaunchGrid`、`MemoryBarrier`、`Begin/End/Pause/ResumeStreamOutput`、`Flush`、`Present`、`SetSwapInterval`(O) |
+| `kCtxObject` | 9 | `SetTextureParams`、`ResourceSubData`(B,V)、`BufferSubDataResident`(B,O)、`ResourceSubDataComplete`、`ResourceFlushRange`、`ResourceReadback`(R)、`ResourceCopyRegion`、`GenerateMipmap`、`GetTextureImage`(R) |
+| `kCtxVerb` | 18 | `Blit`、`Clear`、`ReadPixels`(R)、`DrawVbo`(H,V)、`LaunchGrid`、`MemoryBarrier`、`Begin/End/Pause/ResumeStreamOutput`、`Flush`、`Present`、`SetSwapInterval`(O)；P5b 追加 `BindShaderImage`、`PatchParameter`、`BindStreamOutput`、`SetStorageBlockBinding`、`CopyFramebufferToTexture` |
 
-Flags：`kNeedsAck`（调用方等 server 确认；目录里目前无条目携带，见 §8.3）、`kHasBlob`(B)、`kVarTail`(V)、`kHostSpan`(H)、`kReplySlot`(R，答进 `MGPReplySlot`，永不阻塞)、`kOptional`(O，后端表里可为 null：Magma 故意不注册 `BufferSubDataResident` 与 `SetSwapInterval`)。
+Flags：`kNeedsAck`、`kHasBlob`(B，payload 拥有一个 `MGPBlobRef` 成员，不弱于此)、`kVarTail`(V)、`kHostSpan`(H)、`kReplySlot`(R，答进 `MGPReplySlot`)、`kOptional`(O，后端表里可为 null：Magma 不注册 `BufferSubDataResident` 与 `SetSwapInterval`)。
 
-- 今天 20 个 draw 入口塌成 `DrawVbo` 一条，`MGPDrawRange[]` 就是 `MultiDraw*` 族今天的形状；`Clear` 一条判别式合并 `glClear` + 4 个 `glClearBuffer*` + 4 个 `glClearNamedFramebuffer*`。
-- `SetSamplerViews` / `BindSamplerStates` **没有 stage 维度**：MobileGL 的纹理单元空间是合并的（`TextureState::m_textureUnits` 是 192 个单元的一个数组，每 stage 32 只是广告数字），同一单元可被两个 stage 采样；stage 只在目标 API 需要时由 server 从反射归档推导。
-- `SetTextureParams` 按资源寻址、与 sampler view 分开（D10）：只作 FBO attachment / image 单元 / `glCopyImageSubData` 端点的纹理没有 sampler view，但 Espryt 对 attachment 也同步纹理参数，且 `RequireImageBindableStorage` 需要在前端参数版本不动时强制重同步。**P4a 有意把这个缺口关掉了**（Espryt 从 `SyncNeccessaryTextures` 侧补上 READ-only attachment 的参数同步），并且**证明它此前确实是坏的**：证据不是公共 GL 的图——回读模拟自己会写 `GL_DEPTH_STENCIL_TEXTURE_MODE`、`IsDrawSyncClean` 又在首次采样时把参数推下去，所以任何纯 GL 序列都看不见它——而是 `MG_IntegrationTest/Harness/PipeApplyPeek.{h,cpp}` 的白盒断言（读 applier 的参数记录与 Espryt 已应用状态），变异注入下 4/4 变红。
-- `SetIndexBuffer` 独立于 VAO 配置版本（D5）：索引 slot 重绑不移动 VAO config version。
-- `SetGlobalConstants` 只覆盖默认 uniform block（D6）：`globalUboScratch` 是 link phase B 的 CPU 数组，没有 GL name、没有 `BufferObject`。
+- 20 个 draw 入口塌成 `DrawVbo` 一条，`MGPDrawRange[]` 是 `MultiDraw*` 族的形状；`Clear` 一条判别式合并 `glClear` + `glClearBuffer*` + `glClearNamedFramebuffer*`。
+- `SetSamplerViews` / `BindSamplerStates` **没有 stage 维度**：MobileGL 的纹理单元空间是合并的（192 个单元一个数组），stage 只在目标 API 需要时由 server 从反射归档推导。
+- `SetTextureParams` 按资源寻址、与 sampler view 分开（D10）：只作 attachment / image 单元 / copy 端点的纹理没有 sampler view，但 Espryt 对 attachment 也同步纹理参数。P4a 用白盒断言（`MG_IntegrationTest/Harness/PipeApplyPeek`）证明这个缺口此前确实是坏的。
+- `SetIndexBuffer` 独立于 VAO 配置版本（D5）；`SetGlobalConstants` 只覆盖默认 uniform block（D6）。
 
-**显式不移植**：`GetIntegeri_v`/`GetInteger64i_v`/`GetProgramiv`（后两项 P0 已从 `GLFunctionsTable` 删除，`50815a23`；唯一属于后端的带下标答案 `GL_MAX_COMPUTE_WORK_GROUP_COUNT/SIZE` 进 `MGPCaps`，`e8ee7b1a`；`GL_COMPUTE_WORK_GROUP_SIZE` 是前端反射查询）、`ShaderStorageBlockBinding`（折进反射归档）、`set_pixel_unpack_state`（不存在：前端已在 `glTexImage` 时解析压缩格式、强制默认 unpack）、压缩格式概念、`pipe_transfer`。
+**显式不移植**：`GetIntegeri_v`/`GetInteger64i_v`/`GetProgramiv`（后两项已从 `GLFunctionsTable` 删除；`GL_MAX_COMPUTE_WORK_GROUP_*` 进 `MGPCaps`）、`ShaderStorageBlockBinding` 的反射折叠、`set_pixel_unpack_state`（前端已在 `glTexImage` 时解析压缩格式、强制默认 unpack）、压缩格式概念、`pipe_transfer`。
 
 ### 3.3 能力位（`MGPCapBit`）
 
-`kCapViewportArray`、`kCapFloat64VertexAttrib`、`kCapResidentSubData`、`kCapCpuXfbPrimitiveAccounting`、`kCapTimerQuery`、`kCapOcclusionQuery`、`kCapXfbPrimitivesQuery`、`kCapNeedsHostIndexBytes`（server 做 restart 重写 / multi-draw 展平，split 下开启索引宿主镜像，§10.3）、`kCapNeedsHostUboBytes`（server 把具名 UBO 打进自己的 ring，需要 `SetShaderBuffers` 的 host payload）。`CallMask` 取代"槽位是否为 null"这个隐式能力探测。
+`kCapViewportArray`、`kCapFloat64VertexAttrib`、`kCapResidentSubData`、`kCapCpuXfbPrimitiveAccounting`、`kCapTimerQuery`、`kCapOcclusionQuery`、`kCapXfbPrimitivesQuery`、`kCapNeedsHostIndexBytes`（server 做 restart 重写 / multi-draw 展平，split 下开启索引宿主镜像，§10.3）、`kCapNeedsHostUboBytes`（server 把具名 UBO 打进自己的 ring）、`kCapBackendOwnsXfbCapture`（P5b）。`CallMask` 取代"槽位是否为 null"这个隐式能力探测。
 
-不存在 `kCapPrimitiveRestart` / `kCapMultiDraw*` 一类"归属开关"（D-B7）：`ResolveTierForBatch` 逐 batch 用 `programReadsDrawID`（转译后 ESSL 的性质，只存在于 server）选档，两个后端都做 restart 重写，所以这类归属不可用 cap 表达。规则一句话：**multi-draw 分档与 restart 重写永远由 server 拥有；client 在 caps 说需要时提供索引字节。**
+不存在 `kCapPrimitiveRestart` / `kCapMultiDraw*` 一类"归属开关"（D-B7）：**multi-draw 分档与 restart 重写永远由 server 拥有；client 在 caps 说需要时提供索引字节。** `MGPCaps` = `DynamicBackendParameters` 整块 + `CallMask` + 两个 blob（format 能力表、renderer 字符串），握手后一次快照，取代 40 个 `pActiveBackendObject->` 站点与 89 个 caps 读点。
 
-一个待转显式能力位的现有陷阱：`GL_Drawing.cpp` 把 `EndTransformFeedback` 槽位的非空当作"后端按 GL 顶点序捕获"来跳过 `FixupGsStripCaptureOrder`。MGPipe 下改为显式 `kCapDriverOrderedXfbCapture` 一类的位（P8/P9）。
+## 4. 记录与 payload 约定（`MG_Pipe/MGPipeTypes.h`）
 
-`MGPCaps` = `DynamicBackendParameters`（整块包含，~90 个标量含六个 compute 限制）+ `CallMask` + 两个 blob（format 能力表、renderer 字符串），握手后一次快照，取代 40 个 `pActiveBackendObject->` 站点与 89 个 caps 读点。
-
-## 4. 记录与 payload 约定（P0 已落地，`MG_Pipe/MGPipeTypes.h`）
-
-- 每个 payload 是平坦 POD、显式 padding、`static_assert` 平凡可复制与**精确尺寸**；**永不含指针**。
-- `MGPBlobRef{Offset, Size, Seg}`（24 B）指向 blob 区：monolith 下 `Seg == kMGHostSpanSegNone`、Offset 是调用方 staging arena 内地址；split 下 Seg 命名传输段。
-- `MGHostSpan`（32 B，`MG_Pipe/MGPipeHostSpan.h`）是整份接口里**唯一形状随传输而变**的东西：monolith 下 `Ptr` 指向 shadow 或应用内存；split 下 `Ptr == nullptr`、字节在 `Seg/Offset` 命名的 `SEG_STAGE`，或 `Seg == kMGHostSpanSegFromServerIndexMirror`（`MobileGL/MG_Pipe/MGPipeHostSpan.h:26`）表示"字节已在你那边的索引镜像里"。`MGPipeHostBytes()` 是一次可预测分支；split 解析器 `gMGPipeSegmentResolver` 由 `MG_Remote` 安装。它只进变长尾（`DrawVbo` 的用户索引、`SetShaderBuffers` 的具名 UBO 字节），永不内联进定长 payload——VBO 路径（MC/Sodium 的全部 draw）不为它付字节。
-- 变长记录（`kVarTail`）= 定长前缀 + 自描述长度的内联尾巴；`kHasBlob` 记录额外校验 `BlobRef` 落在其声明的段内。运行期边界纪律：`SEG_CMD` 是对端并发写入的区域，`static_assert` 管不到运行期损坏，违反一律 `Fatal{ProtocolCorruption}`。
-- wire 记录头 `MGPWireRecHeader{Op:u16, Flags:u16, Size:u32}`（8 B），Size 含头、8 字节倍数；**没有逐记录序号字段**——seq 就是记录序数（producer `m_emitSeq++` / consumer `m_applySeq++`）。
-- **分块上界 = ring 容量的一半**（`RingProducer::MaxRecordBytes()`）：这是每个 head 偏移都能放下的最大记录（wrap pad 最多花 total−8 字节），超过它的 payload（大 `ResourceSubData`、`CreateShaderState` 归档）由发射器切成多条；ring 对更大的记录直接拒绝（nullptr + `MGLOG_E`）而不是让 producer 等一个永远不够的空闲量。
-- `MGPSubData` 的 buffer 半边：`Target == Buffer` 时没有 level 与 box，目的字节范围搭在 `UnionBox.X`（offset）与 `UnionBox.W`（size）上，`MGPipeSetSubDataBufferRange()` 是唯一拼写；单条记录上限 offset 2³¹−1 / size 2³²−1，越界由发射器拆分。
+- 每个 payload 是平坦 POD、显式 padding、`static_assert` 平凡可复制与精确尺寸；**永不含指针**。
+- `MGPBlobRef{Offset, Size, Seg}`（24 B）指向 blob 区：monolith 下 `Seg == kMGHostSpanSegNone`；split 下 Seg 命名传输段。
+- `MGHostSpan`（32 B）是唯一形状随传输而变的东西：monolith 下 `Ptr` 指向 shadow 或应用内存；split 下 `Ptr == nullptr`、字节在 `SEG_STAGE`，或 `Seg == kMGHostSpanSegFromServerIndexMirror`（P8）。它只进变长尾（`DrawVbo` 的用户索引、`SetShaderBuffers` 的具名 UBO 字节），永不内联进定长 payload——VBO 路径不为它付字节。
+- 变长记录（`kVarTail`）= 定长前缀 + 自描述长度的内联尾巴；`kHasBlob` 记录额外校验 `BlobRef` 落在其声明的段内。`SEG_CMD` 是对端并发写入的区域，运行期违反一律 `Fatal{ProtocolCorruption}`。
+- wire 记录头 `MGPWireRecHeader{Op:u16, Flags:u16, Size:u32}`（8 B），Size 含头、8 字节倍数；**没有逐记录序号字段**——seq 就是记录序数（producer `m_emitSeq++` / consumer `m_applySeq++`）。`Flags` 是 ring 封帧，永不是 call flags（R-17）。
+- 单条记录上界 = ring 容量的一半（`RingProducer::MaxRecordBytes()`），超过的记录被具名拒绝（`Fatal{RingOverrun}`），不分块（R-10；实测 `maxrec` 见 `MEASUREMENTS.md` §6.3）。
+- `MGPSubData` 的 buffer 半边：`Target == Buffer` 时目的字节范围搭在 `UnionBox.X/W` 上，`MGPipeSetSubDataBufferRange()` 是唯一拼写；单条记录上限 offset 2³¹−1 / size 2³²−1。
 
 ### 4.1 关键 payload
 
 | payload | 尺寸 | 要点 |
 |---|---|---|
-| `MGPResourceDesc` | 88 | buffer / 全部纹理 target / renderbuffer 一个判别式 create/respecify 形状；`BindMask` 的 `ELEMENT_ARRAY` 位是索引镜像的开关；`ImageBindableHint` 预防性分配 image-bindable 存储；`ViewOf` 是纹理视图的存储属主（server 侧 keep-alive）；`BufferForTexBuffer/BufOffset/BufSize` 实时解析（`kMGPipeWholeBuffer = ~0`）。Renderbuffer 保持独立类（自己的 format-capability target、`ComponentSizes`、twin） |
-| `MGPRenderStateDesc` / `MGPBindRenderState` / `MGPDynamicState` | 48 / **12** / 32 | §5.3 |
-| `MGPVertexElements` | 40 | blob 同时带解析后的 `MGPVertexAttribWire[]` **和** `MGPVertexBindingPointWire[]`（P3a 落地的两个 POD 线上形，24 B / 16 B，`MobileGL/MG_Pipe/MGPipeValueTypes.h:568-600`）。**两个视图都过线的理由是记录自洽，不是 stride 消歧**：前端已经把 pointer 调用的 stride 0 解析成 element size，一个活到 `VertexAttribute::Stride` 的 0 只可能来自 binding 模型（`MobileGL/MG_Pipe/MGPipeValueTypes.h:496-503`），后端从来不读 binding point（`MG_Backend` 里 `VertexBufferBindingPoint` / `GetAttributeBindingIndex` / `GetAttributeRelativeOffset` 零命中）；真正承重的是 `MGPVertexElements` **声明**了 `BindingPointCount`，一条不描述自己 blob 的记录会让 applier 的边界门永远无法收口。代价按配置变化付一次、不按 draw 付（blob 只搭 `CreateVertexElements`），裁掉第二个视图是 P13 的重调项。`IsLong` 与 `Type == Float64` 分开携带；`Divisor` 不在属性视图里（走 `MGPVertexBuffer::Divisor`）；仅供查询的 `LegacyStride/LegacyPointer` 留在 client |
-| `MGPSamplerDesc` | 32 | `SamplerParameters` 逐字节过线**含 `borderColorForm`**（三种 border color 表示永远都被数值填满，没有它后端无法在 `Iiv`/`fv` 或 `VkBorderColor` 家族间选择） |
-| `MGPSamplerView` / `MGPTextureParams` | 36 / **40**（P4a） | view 只带视图限制（min/num level、min/num layer、别名格式）；纹理参数（base/max level、swizzle、depth-stencil mode、LOD 钳、`ForceResync`）挂在纹理对象上。**[deviation] D-E1**：`MGPTextureParams` 从 32 涨到 **40**，多出 `BuiltinSampler`（该纹理自带 `SamplerObject` 所对应的 sampler CSO 句柄，**不允许是空句柄**——每个 `ITextureObject` 都有一个 sampler 对象，空句柄是协议损坏而不是"没有 sampler"）与第二个 resync 位 `SamplerResync`；参数本身一项没变。句柄从 client 的**内容寻址 cache** 取（`MGPipeSamplerCsoCacheInstance().Acquire`），不是按纹理身份铸的——这条缝在 P4a 里被踩了两次：客户端一度按对象身份铸、Espryt 的 twin 一度按身份查，两边都拿不到那条内容寻址的记录 |
-| `MGPProgramDesc` | 192 | 逐 stage SPIR-V blob ×6 + 反射归档 blob + `StageMask`/`GlobalUboSize`/`ReservedNumSamplesOffset` + 四个状态字节，§7 |
-| `MGPFramebufferState` | 304 | 8 color + depth + stencil + **client 解析后的 `ReadSurface`**（按结构消灭 read-buffer-shared-FBO 缺陷类）；`MGPSurface::InternalFormat` 内联（四个跨对象 mask 推送时零查表——P4a 发现只有格式不够，`MGPSurface` 的 `Pad0` 因此变成 `TextureTarget`，否则 `ShouldUseCaveatTextureFormat` 这类 mask 仍得回前端问纹理目标）；`ContentHash` 既是 server 的 render-pass memo 键也是 client 的发射抑制器。**P4a：多一个 `Target` 字节，记录按绑定目标发**（`Draw` / `Read` / `Both`，`Complete` 是后端无关的 `CheckCompleteness()` 答案，D-C3），**并且 applier 把记录按 framebuffer 句柄存成每对象一张表**外加两个"当前绑定"句柄——第四个取值 `Named = 3` 就是"这条记录描述它点名的那个 framebuffer，不动任何绑定"，`BlitNamedFramebuffer` 与四个 `ClearNamedFramebuffer*` 之前正是因为只有两条绑定记录而打进了一个从未收到附件的 FBO |
+| `MGPResourceDesc` | 88 | buffer / 全部纹理 target / renderbuffer 一个判别式 create/respecify 形状；`BindMask` 的 `ELEMENT_ARRAY` 位是索引镜像的开关；`ImageBindableHint` 预防性分配 image-bindable 存储；`ViewOf` 是纹理视图的存储属主；`BufferForTexBuffer/BufOffset/BufSize` 实时解析；`HasDefinedContent` 陈述的是上一次 respecify 当时的事实 |
+| `MGPRenderStateDesc` / `MGPBindRenderState` / `MGPDynamicState` | 48 / 12 / 32 | §5.3 |
+| `MGPVertexElements` | 40 | blob 带解析后的 `MGPVertexAttribWire[]` **和** `MGPVertexBindingPointWire[]`（记录自洽：一条不描述自己 blob 的记录让边界门无法收口；代价按配置变化付一次；裁掉第二个视图是 P13 的重调项）；`IsLong` 与 `Type == Float64` 分开携带 |
+| `MGPSamplerDesc` | 32 | `SamplerParameters` 逐字节过线**含 `borderColorForm`** |
+| `MGPSamplerView` / `MGPTextureParams` | 36 / 40 | view 只带视图限制；纹理参数挂在纹理对象上。**D-E1**：`MGPTextureParams::BuiltinSampler` 是该纹理自带 `SamplerObject` 对应的 sampler CSO 句柄（从内容寻址 cache 取，**不允许为空**——空句柄是协议损坏）+ `SamplerResync` 位 |
+| `MGPProgramDesc` | 192 | 逐 stage SPIR-V blob ×6 + 反射归档 blob + `StageMask`/`GlobalUboSize`/`ReservedNumSamplesOffset`，§7 |
+| `MGPFramebufferState` | 304 | 8 color + depth + stencil + **client 解析后的 `ReadSurface`**；`MGPSurface::InternalFormat` 与 `TextureTarget` 内联；`ContentHash` 既是 render-pass memo 键也是发射抑制器；`Target` 字节按绑定目标发（`Draw` / `Read` / `Both` / **`Named = 3`**），applier 按 framebuffer 句柄存成每对象一张表外加两个"当前绑定"句柄——否则 `BlitNamedFramebuffer` / `ClearNamedFramebuffer*` 会打进一个从未收到附件的 FBO |
 | `MGPSubData` / `MGPSubRegion` | 72 / 40 | §6 |
-| `MGPDrawInfo` / `MGPDrawRange` / `MGPDrawIndirect` | **56** / 12 / 40 | `Flags` 门控 `MinIndex/MaxIndex`（只在 client-memory 数组路径算）与 `XfbCpuCapturedVertices`（只在 XFB scatter 路径读）——不是每 draw 都算；`NumDraws` 个 `MGPDrawRange` 在变长尾；用户索引的 `MGHostSpan` 只在 `kDrawHasUserIndices` 时进变长尾；indirect 的 `DrawCount` 由 client 解析，server 永不读 indirect 命令块来数 draw |
-| `MGPShaderBuffers` / `MGPBufferRange` | 32 / 24 | range 不内联 host span；`kCapNeedsHostUboBytes` 下 Uniform 类带第二个变长尾 `MGHostSpan[HostSpanCount]`，与 range 数组下标对齐 |
-| `MGPPixelPackState` | 28 | 只有 PACK 方向（D5） |
-| `MGPPatchState` | 40 | 同时是 shader variant 输入 |
-| `MGPClear` | 48 | Whole / Color / Depth / Stencil / DepthStencil 判别式 |
-| `MGPGlobalConstants` | 40 | `(ShaderCso, Version)` 键控，每 program 每帧至多一次 |
-| `MGPSubDataComplete` | 24 | 纹理拉取的正向终止符，可携带零个 region |
-| `ResidualValueBlock` | **8**（P2 前 1248） | 迁移期 Track V 载体，§9.4 |
+| `MGPDrawInfo` / `MGPDrawRange` / `MGPDrawIndirect` | 56 / 12 / 40 | `Flags` 门控 `MinIndex/MaxIndex`（只在 client-memory 数组路径算）与 `XfbCpuCapturedVertices`；`NumDraws` 个 `MGPDrawRange` 在变长尾；用户索引的 `MGHostSpan` 只在 `kDrawHasUserIndices` 时进变长尾；indirect 的 `DrawCount` 由 client 解析 |
+| `MGPShaderBuffers` / `MGPBufferRange` | 32 / 24 | `kCapNeedsHostUboBytes` 下 Uniform 类带第二个变长尾 `MGHostSpan[HostSpanCount]` |
+| `MGPPixelPackState` / `MGPPatchState` / `MGPClear` / `MGPGlobalConstants` / `MGPSubDataComplete` | 28 / 40 / 48 / 40 / 24 | 只有 PACK 方向（D5）；patch 同时是 shader variant 输入；clear 五种判别式；`(ShaderCso, Version)` 键控；纹理拉取的正向终止符，可携带零个 region |
+| `ResidualValueBlock` | 8 | 迁移期 Track V 载体，§9.4 |
 
-每条 `kVarTail` 的 `set_*`（`SetVertexBuffers`、`SetSamplerViews`、`BindSamplerStates`、`SetShaderImages`、`SetShaderBuffers`、`SetStreamOutputTargets`）都带 `ContentHash`——与 `MGPFramebufferState` 同一模式，hash 未变就不发（§5.4）。
+每条 `kVarTail` 的 `set_*` 都带 `ContentHash`——hash 未变就不发（§5.4）。
 
-## 5. 前端 state tracker（`MG_Impl/Pipe/Tracker`，P2 起）
+## 5. 前端 state tracker（`MG_Impl/Pipe/Tracker`）
 
 ### 5.1 推送发生在 verb 之前的 validate 时刻，不在 GL setter 里
 
-Blaze3D 每个 batch 用 `glEnable/glDisable(GL_BLEND)` 包住（Espryt 代码自己标它为最热路径），per-setter 推送会把每次冗余开关变成一次接口调用加一次 server 侧 CSO 查表，严格慢于今天。正确形态是 gallium `st_validate_state`。
+Blaze3D 每个 batch 用 `glEnable/glDisable(GL_BLEND)` 包住，per-setter 推送会把每次冗余开关变成一次接口调用加一次 server 侧 CSO 查表，严格慢于今天。正确形态是 gallium `st_validate_state`。
 
-**九个** validate 类（P2 落地，`MGP_FILL_CLASS_LIST`，`MobileGL/MG_Pipe/FillPoints.def:146-147`）：`kDraw`（20 个 draw 入口）、`kDispatch`、`kClear`、`kBlitOrCopy`、`kTextureOp`（GenerateMipmap / CopyTex* / BindImageTexture）、`kReadback`、`kXfbSpan`、`kProgramOp`、`kQuery`。落地形态**不是**九个 `ValidateForX` 函数：`MGP_FILL(Verb)` 展开成唯一的 `MGPipeValidateForVerb(MGPipeVerb)`（`MobileGL/MG_Impl/Pipe/PipeFill.h:35`，宏在 `:84`），它已经恰好是每次经函数指针表调用之前的一条语句、位于每个提前返回之后（83 条语句覆盖 69 个 verb），verb 到类的映射由生成表回答。九个而不是四个，因为 `MG_Impl` 用到的 70 个表项里只有约 22 个是 draw/dispatch，其余 ~48 个（clear、blit、copy、回读、barrier、XFB 跨度、program op、query/sync）很多自己就读 `pGLContext`。
+**九个** validate 类（`FillPoints.def`）：`kDraw`、`kDispatch`、`kClear`、`kBlitOrCopy`、`kTextureOp`、`kReadback`、`kXfbSpan`、`kProgramOp`、`kQuery`。落地形态是唯一的 `MGPipeValidateForVerb(MGPipeVerb)`（`MG_Impl/Pipe/PipeFill.h`），恰好是每次经函数指针表调用之前的一条语句、位于每个提前返回之后，verb 到类的映射由生成表回答。九个而不是四个，因为约 48 个非 draw 表项自己就读 `pGLContext`。
 
 **只有今天就在 GL 调用时刻分发的资源 op 在 GL 调用时刻推送**——即 `BufferBackendOps` 的七个 hook。纹理 subdata 不在此列（§6）。
 
@@ -174,19 +158,17 @@ Blaze3D 每个 batch 用 `glEnable/glDisable(GL_BLEND)` 包住（Espryt 代码�
 | dirty 位 | 类 | 快门来源 |
 |---|---|---|
 | `NEW_RENDER_STATE` / `NEW_PIPELINE_STATE` | 值 | `m_version` / `m_pipelineStateVersion` |
-| `NEW_PIXEL_PACK`、`NEW_PATCH_STATE`（`BitwiseEqual`，NaN 合法）、`NEW_VERTEX_ATTRIB_DEFAULTS`、`NEW_VERTEX_ELEMENTS`（VAO config version） | 值 | 既有计数器 |
-| `NEW_SHADER`、`NEW_SHADER_BINDINGS`、`NEW_GLOBAL_CONSTANTS` | 值 | link/image-unit/backend-state/block-binding/uniform-write-set/UBO-content 版本 |
-| `NEW_VERTEX_BUFFERS` | 对象 | **`VertexArrayState::m_anyVaoAttributeGeneration`**（新增）→ 命中后走 32 属性前缀 |
+| `NEW_PIXEL_PACK`、`NEW_PATCH_STATE`（`BitwiseEqual`，NaN 合法）、`NEW_VERTEX_ATTRIB_DEFAULTS`、`NEW_VERTEX_ELEMENTS` | 值 | 既有计数器 |
+| `NEW_SHADER`、`NEW_SHADER_BINDINGS`、`NEW_GLOBAL_CONSTANTS` | 值 | link / image-unit / backend-state / block-binding / uniform-write-set / UBO-content 版本 |
+| `NEW_VERTEX_BUFFERS` | 对象 | `VertexArrayState::m_anyVaoAttributeGeneration` → 命中后走 32 属性前缀 |
 | `NEW_INDEX_BUFFER` | 对象 | 索引 slot 版本 + 绑定对象 `{slot,gen}` |
-| `NEW_FRAMEBUFFER` | 对象 | **`FramebufferState::m_anyAttachmentGeneration`**（新增）+ 对象/slot 版本 → 重算 `ContentHash` |
-| `NEW_SAMPLER_VIEWS`、`NEW_SAMPLERS`、`NEW_SHADER_IMAGES` | 对象 | **`TextureState::m_anyTextureContentGeneration` + `m_anyTextureParamsGeneration`**（新增）+ bind/sampling-resolution generation → 走 `GetMaxTouchedUnit()` 前缀、重算集合 hash |
-| `NEW_CONST_BUFFERS` / `NEW_SHADER_BUFFERS` / `NEW_SO_TARGETS` | 对象 | **`BufferState::m_anyBufferChangeGeneration`**（新增）→ 走 `GetTouchedBindPointCount()` 前缀 |
+| `NEW_FRAMEBUFFER` | 对象 | `FramebufferState::m_anyAttachmentGeneration` + 对象/slot 版本 → 重算 `ContentHash` |
+| `NEW_SAMPLER_VIEWS`、`NEW_SAMPLERS`、`NEW_SHADER_IMAGES` | 对象 | `TextureState::m_anyTextureContentGeneration` + `m_anyTextureParamsGeneration` + bind / sampling-resolution generation → `GetMaxTouchedUnit()` 前缀、重算集合 hash |
+| `NEW_CONST_BUFFERS` / `NEW_SHADER_BUFFERS` / `NEW_SO_TARGETS` | 对象 | `BufferState::m_anyBufferChangeGeneration` → `GetTouchedBindPointCount()` 前缀 |
 
-五个聚合世代全部落在既有 bump 点上（约 20 行），把对象类组的快门从"每 validate 走查 192 单元 / 84×4 绑定点 / 32 属性 / 40 attachment"降成一次 `Uint64` 比较；对象类不能靠轮询逐对象版本（没有聚合能回答"有没有哪张已绑定纹理动了"，这正是 Magma 不得不用有损 `sampledContentSum` 的原因）。
+五个聚合世代落在既有 bump 点上，把对象类组的快门降成一次 `Uint64` 比较；对象类不能靠轮询逐对象版本（没有聚合能回答"有没有哪张已绑定纹理动了"）。完整性由 `scripts/gen_pipe_dirty_surface.py` 保证：枚举每个 mutator → 必须 bump 的聚合世代，未映射或映射行点名一个已不存在的 mutator 即失败（`--check` + `--self-test` 都是 CI 门）。**快门看不见自己的主体**是 P4a 踩过三次的坑（`glBindSampler`、SSO 下 `GetCurrentProgram()`、`glBindImageTexture` 只换 level）——新增字段必须带"记录字段 → setter → 快门"一行，且优先混入已有世代（新增计数器会撑大 pull 对象，G1 不允许）。
 
-完整性由 `scripts/gen_pipe_dirty_surface.py` 保证：枚举 `MG_Impl/GLImpl` 里每个 mutator → 必须 bump 的聚合世代，未映射、或映射行点名一个已不存在的 mutator 即失败（**P2 起成为门**：`pipe-gates` 跑 `--check` 与 `--self-test` 两半，`.github/workflows/test.yml:1601-1604`；`--self-test` 的 21 个阴性对照是让 `--check` 保持诚实的那一半，信息性的 `--summary` 步骤随之退役）。**实测规模**：926 次 mutator 调用落在 73 个不同 mutator 上，其中 92 次（7 个 mutator，绝大多数 `RecordError`）位于同函数内也会到达后端的"即时发布点"，其余 834 次由紧随其后的 verb 发布——映射表是 73 条目的问题。
-
-三个回绕 `Uint16` 在 tracker 边界加宽（`m_lastPushed[]` 是 tracker 自己的字段，不改 `MG_State`）；回绕在 tracker 本地无害（多一次重推，永不漏推），且被集合 hash 抑制器吞掉。
+三个回绕 `Uint16` 在 tracker 边界加宽（`m_lastPushed[]` 是 tracker 自己的字段）；回绕在 tracker 本地无害（多一次重推，永不漏推）。
 
 ### 5.3 渲染状态：整块 blob 过线，身份只取 pipeline 子集，动态状态单独走（D-B1）
 
@@ -196,33 +178,30 @@ bind_render_state(cso, Uint16 version, Uint16 pipelineVersion)  // 稳态 12 B
 set_dynamic_state(MGPBlobRef dynamicChunks, Uint16 version)     // 只带动态子集的变化 chunk
 ```
 
-- 整块的理由：`RenderStateParameters` 是平凡可复制 POD，Espryt 自己 `static_assert` 并做 head/blend/tail 三段 memcmp，**字段顺序承重**（`ScissorBoxWrittenMask`、`ClipDistanceEnabledMask` 故意放在 tail 段）；拆成 blend/depth-stencil/rasterizer 三个 CSO 要手工维护 ~150 字段划分表且无绊线。
-- 子集身份的理由：整块内容寻址会让 `glViewport`/`glScissor`/`glBlendColor`/`glClearColor` 每次铸造新 CSO、冲掉 server 的 pipeline memo——`RenderState.h` 记录的那次回归。`RenderState.cpp` 里 viewport/scissor/line-width 族只 `++m_version`，`SET_CAPABILITY` 与 pipeline 相关 setter 才 `BumpVersions()`。
-- 动态子集：viewport、scissor、depth range、blend color、line width、polygon offset、stencil ref/write mask、clear 值、sample coverage、hints、point-size 族。
-- 划分只写在一处，**P2 已落地**：`MG_Pipe/MGPipeRenderStateSpans.{h,cpp}` 的 chunk 表 + `MGPipeComputePipelineSubsetHash()`，从 Magma 的 `ComputePipelineStateHash` 搬来，client 与两个后端共用。表的形态是**头文件里的 16 个 `constexpr` 边界**（不是 15 个区间，因为两半完美交替：chunk 0 dynamic、chunk 1 pipeline……），每个边界都是一个 `offsetof` 或 `sizeof`；**7 个 pipeline chunk 共 396 B + 8 个 dynamic chunk 共 772 B = 1168**，总数、划分完整性与边界严格递增都是 `static_assert`（`MobileGL/MG_Pipe/MGPipeRenderStateSpans.h:190-191`）——一个缺口是编译错误，不是测试失败。G7 的 `MG_Test/Pipe/RenderStateSpansTest.cpp` 遍历每个 `RenderState` public setter，断言 `pipelineSubsetHash 变 ⟺ m_pipelineStateVersion 变`；把一个成员从 pipeline 半边挪到 dynamic 半边（划分仍完整，仍能编译）会让它点名那个 setter 变红（`scripts/g7_negative_control.sh`）。
-- server 侧：每 context 一份 working `RenderStateParameters`（1168 B），`bind` 与 `set_dynamic_state` 各把自己的 chunk 散射进去。**Espryt 的 `SyncRenderState`（693 行）拿到的仍是 `const RenderStateParameters&`，单 `Uint16` 早退、三段 memcmp 一行不动**；Magma 的 pipeline memo 键是 `cso.slot`，动态尾巴仍走 `ApplyDynamicDrawStateTail`。Espryt 的 head/blend/tail 划分（驱动侧增量）与 pipeline/dynamic 划分（线上与身份）是两回事，并存、各有绊线。
-- client 取值顺序：`m_pipelineStateVersion` 未变 → 复用上一个 CSO handle，零哈希；变了 → 对 pipeline 子集算 xxHash（**396 B = 49.5 个 64-bit 字**，7 个 chunk 拼起来；Magma 今天就在算）→ CSO map 探测 → 命中发 12 B bind，未命中发变化 chunk 的 create 再 bind；`m_version` 变而子集未变 → 只发 `set_dynamic_state`（~200 B）。
-- **P2 已补真存储的三个 capability**：`FramebufferSrgb`、`DepthClamp` 与 `TextureCubeMapSeamless`——`RenderState::SetCapability` 的 `default:` 分支把这三个都静默吞掉（不存储也不报 `GL_INVALID_ENUM`，`FramebufferSrgb` 的六个后端读点恒为编译期 false，另两个零读点）。三个 `Bool` 落进 `ColorMasks` 与 `ClearColor` 之间那 3 字节的空洞（偏移 581/582/583，`MobileGL/MG_Pipe/MGPipeValueTypes.h:303-305`），所以 `sizeof(RenderStateParameters)` 仍是 1168 且**既有成员一个都没挪位**——Espryt 的 `kBlendSpanBegin`/`kBlendSpanEnd` 与整张手推偏移表因此仍然有效。三个都在 pipeline 半边（setter 都走 `BumpVersions()`）。
+- 整块：`RenderStateParameters` 是平凡可复制 POD，Espryt 做 head/blend/tail 三段 memcmp，**字段顺序承重**；拆成三个 CSO 要手工维护 ~150 字段划分表且无绊线。
+- 子集身份：整块内容寻址会让 `glViewport`/`glScissor`/`glClearColor` 每次铸造新 CSO、冲掉 server 的 pipeline memo（`RenderState.h` 记录的那次回归）。
+- 划分只写在一处：`MG_Pipe/MGPipeRenderStateSpans.{h,cpp}` 的 chunk 表（16 个 `constexpr` 边界，两半交替：**7 个 pipeline chunk 共 396 B + 8 个 dynamic chunk 共 772 B = 1168**，总数与划分完整性是 `static_assert`）+ `MGPipeComputePipelineSubsetHash()`，client 与两个后端共用。G7 的 `RenderStateSpansTest` 遍历每个 setter，断言 `pipelineSubsetHash 变 ⟺ m_pipelineStateVersion 变`。
+- server 侧：每 context 一份 working `RenderStateParameters`，`bind` 与 `set_dynamic_state` 各把自己的 chunk 散射进去；**Espryt 的 `SyncRenderState` 一行不动**；Magma 的 pipeline memo 键是 `cso.slot`。
+- client 取值顺序：`m_pipelineStateVersion` 未变 → 复用上一个 CSO handle，零哈希；变了 → 对 396 B 子集算 xxHash → map 探测 → 命中发 12 B bind，未命中发 create 再 bind；`m_version` 变而子集未变 → 只发 `set_dynamic_state`。
+- P2 补了三个此前无存储的 capability：`FramebufferSrgb`、`DepthClamp`、`TextureCubeMapSeamless`，落在 `ColorMasks` 与 `ClearColor` 之间的 3 字节空洞，`sizeof` 仍 1168、既有成员一个没挪位。
 
 ### 5.4 验证不变式、合并与抑制器
 
-规范（D-B3）：**一条 verb 的全部 `set_*`/`bind_*` 必须在该 verb 之前完成；server 在 verb 处、从它此刻持有的全部已推送状态惰性特化 shader 与 pipeline。除"资源 create 先于对它的 bind"外，`set_*` 之间没有顺序要求。** 推荐实现顺序（framebuffer → program → 纹理/sampler/image/buffer/global constants → render state/dynamic → vertex elements/buffers/index/attrib defaults → patch/XFB → verb）只是代码组织，不是契约。退役 Espryt 的 fragColor 重推导 workaround、`g_broadcastMemo*` 与 `ImageUnitFormatsStillMatch` 的机制是惰性特化，不是调用顺序。
+规范（D-B3）：**一条 verb 的全部 `set_*`/`bind_*` 必须在该 verb 之前完成；server 在 verb 处从它此刻持有的全部已推送状态惰性特化 shader 与 pipeline。除"资源 create 先于对它的 bind"外，`set_*` 之间没有顺序要求。** 退役 Espryt 的 fragColor 重推导 workaround、`g_broadcastMemo*` 与 `ImageUnitFormatsStillMatch` 的机制是惰性特化，不是调用顺序。
 
-`create_shader_state` 从编译池的终止 continuation 发出（不是从 draw），SPIR-V 在首个用到它的 draw 之前到达 server——monolith 拿不到的异步收益。
+`create_shader_state` 从编译池的终止 continuation 发出（不是从 draw），SPIR-V 在首个用到它的 draw 之前到达 server。
 
-四条合并规则：整块结构优于逐字段；高水位标记（`GetTouchedBindPointCount`、`GetMaxTouchedUnit`）留在 tracker 走查里，直接就是 `count` 实参；只发 program 解析过的集合（`uniformSamplerOrImageUnitIndex`）；**集合 hash 抑制器**——每条 `kVarTail` `set_*` 在 client 算已解析集合的 xxHash，未变不发。最后一条是从后端搬到 client 的 ~175 行去抖（`UnitBindingsSnapshot`/`PairingsIntact`/`g_fboTextureSyncList` 族）的载体：`GetTextureBindGeneration()` 在冗余重绑时也 bump（MC 26.2 每次纹理单元切换都重绑同一个 sampler），没有抑制器每个 batch 都会重发一条几百字节的变长记录并冲掉 server 的两个 memo。
-
-索引绑定范围在 validate 时刻实时解析（`glBindBufferBase` 之后再 `glBufferData` 是普通应用代码）。
+合并规则：整块结构优于逐字段；高水位标记留在 tracker 走查里、直接是 `count` 实参；只发 program 解析过的集合；**集合 hash 抑制器**——每条 `kVarTail` `set_*` 在 client 算已解析集合的 xxHash，未变不发（从后端搬到 client 的 ~175 行去抖；MC 26.2 每次纹理单元切换都重绑同一个 sampler）。索引绑定范围在 validate 时刻实时解析。
 
 ### 5.5 sampler view 在 client 侧解析
 
-GL 是每 unit 每 target 各一个绑定；shader 看见哪一个取决于 sampler uniform 类型、mipmap 完备性（`IsMipmapCompleteForFilter`、`SamplesAsIncompleteTexture`）与 `IsUndefinedDefaultTexture`。gallium 的"每槽一个 view"就是解析后的形态，解析留在 client 并带自己的 memo（~40 行搬迁）。两处后端特定后处理留在 server、作用于已解析集合：Espryt 的 raw-depth-fetch sampler 替换、Magma 的 feedback-loop 检测。
+GL 是每 unit 每 target 各一个绑定；shader 看见哪一个取决于 sampler uniform 类型、mipmap 完备性与 `IsUndefinedDefaultTexture`。gallium 的"每槽一个 view"就是解析后的形态，解析留在 client 并带自己的 memo。两处后端特定后处理留在 server：Espryt 的 raw-depth-fetch sampler 替换、Magma 的 feedback-loop 检测。
 
 ### 5.6 生命周期、共享组、composite program
 
-- `resource_create` 在前端对象构造时发，存储由 `resource_respecify` 惰性定义；`resource_destroy` 在析构时发。三条顺序约束由 payload 表达：view 先于存储属主销毁（`ViewOf` + server keep-alive）、FBO attachment 钉住纹理（surface handle 隐含 keep-alive）、buffer texture 钉住 buffer（`BufferForTexBuffer`，范围实时解析）。
-- 共享组：v1 一个 screen、一个 context、一条 flow；`eglMakeCurrent` 是 flow 所有权转移，在既有 `EGLOperationMutex` 下发射（顺手让 `ReleaseThread` 与 `SwapInterval` 也取该锁）。
-- program pipeline 合成体（**P4a 落地：`MobileGL/MG_Impl/Pipe/CompositeResolver.h`**）：`GLContext::GetProgramForDraw()` 今天就完全在前端合成（join、签名查 cache、`Link(true)`）。tracker 拿到 `SharedPtr<ProgramObject>` 推**一个** handle，slot 从 `ShaderCso` 保留高位段分配（段基 983040，独立稠密表——按 slot 索引的向量在这个段上要 ~236 MB），pipeline cache 淘汰时释放 slot、`gen++`、发 `delete_shader_state`。**释放有两条路，都必须恰好一次**：合成体自己被换掉时由 resolver 释放，程序对象死亡时由 `~ProgramObject` → `MGPipeEmitShaderCsoDestroyAndFree` 释放（D-H7）。**记忆按 `(ContextId, 管线 GL 名)` 键控**——resolver 是进程级单例而 GL 名是每上下文的，只按名字记会在两个上下文用同一个管线名时把对方还活着的合成体释放掉（复审在真实 make-current 序列上打出来的）；`Reset()` 只清"新鲜度"，不清"该释放"这件事，否则一次 make-current 之后释放路径就永久失灵。合成体从不过线，server 不需要任何"解析后的 draw program"钩子；副带收益是阻塞的 `JoinLinkAndSpirv()` 离开 server 的 draw path。
+- `resource_create` 在前端对象构造时发，存储由 `resource_respecify` 惰性定义；`resource_destroy` 在析构时发。顺序约束由 payload 表达：view 先于存储属主销毁（`ViewOf` + server keep-alive）、FBO attachment 钉住纹理、buffer texture 钉住 buffer。死亡在 wire delete 与 slot free 之间转发给每个 emitter（六个死亡 helper 只释放 slot 曾导致 UAF）。
+- 共享组：v1 一个 screen、一个 context、一条 flow；`eglMakeCurrent` 是 flow 所有权转移。
+- program pipeline 合成体（`MG_Impl/Pipe/CompositeResolver.h`）：`GLContext::GetProgramForDraw()` 完全在前端合成，tracker 推**一个** handle，slot 从 `ShaderCso` 保留段分配，pipeline cache 淘汰时释放 slot、`gen++`、发 `delete_shader_state`。释放有两条路且必须恰好一次：合成体被换掉时由 resolver 释放，程序对象死亡时由 `~ProgramObject` 释放（D-H7）。**记忆按 `(ContextId, 管线 GL 名)` 键控**——resolver 是进程级单例而 GL 名是每上下文的。
 
 ### 5.7 emulation 的归属
 
@@ -230,122 +209,96 @@ GL 是每 unit 每 target 各一个绑定；shader 看见哪一个取决于 samp
 
 | emulation | 归属 | 过线的是什么 |
 |---|---|---|
-| client 顶点数组（`(first+count-1)*stride+elementSize`） | client | 字节（`MGHostSpan`），永不是指针 |
-| 最大索引扫描（`TryComputeMaxIndexFromHostBytes`，唯一无界的应用指针读，只有 client 同时持有两个数组） | client | `MGPDrawInfo::MinIndex/MaxIndex`（flag 门控，`~0` = 未知） |
+| client 顶点数组 | client | 字节（`MGHostSpan`），永不是指针 |
+| 最大索引扫描（`TryComputeMaxIndexFromHostBytes`） | client | `MGPDrawInfo::MinIndex/MaxIndex`（flag 门控） |
 | client 索引数组 | client | 变长尾里的 `MGHostSpan` |
-| `*IndirectCount` 计数解析（从 parameter buffer 的 shadow 读实际 draw 数） | client | 解析后的 `MGPDrawRange[]`（几十字节） |
-| primitive-restart 重写（整 EBO 重写，`kMaxRestartRewriteBytes` = 64 MiB） | **server** | 零线上流量：从索引宿主镜像读（§10.3） |
-| multi-draw 五档分档 + 展平（`ResolveTierForBatch`，CPU 展平是回退） | **server** | 同上 |
-| viewport-array N 遍回放 | server | 无新增：16 组 viewport/scissor/depth-range 已在渲染状态里 |
+| `*IndirectCount` 计数解析 | client | 解析后的 `MGPDrawRange[]` |
+| primitive-restart 重写（整 EBO） | **server** | 零线上流量：从索引宿主镜像读（§10.3） |
+| multi-draw 五档分档 + 展平 | **server** | 同上 |
+| viewport-array N 遍回放 | server | 无新增（16 组 viewport/scissor/depth-range 已在渲染状态里） |
 | fp64 顶点窄化 | server | 原始字节；`IsLong` 与 `Type` 分开过线 |
 | image-bindable 存储加宽/拆分 | server | 正向 `ImageBindableHint`；反向纹理拉取 + 终止符 |
-| 生成 mipmap 的前端存储 | 拆开：client 分配 level 存储，server 生成 | `MGPMipPlan`；`OnMipLevelsGenerated` 只带形状不带字节 |
-| CopyImage shadow 镜像 | client | 只回"拷贝成功"，删掉一整条 server→client 字节通道 |
-| XFB CPU 图元计数 | client | `XfbCpuCapturedVertices`（flag 门控）+ `EndStreamOutput` 的 `MGPXfbAccounting` |
-| XFB scatter 的 read-modify-write | client | §8.5 |
+| 生成 mipmap 的前端存储 | 拆开：client 分配 level 存储，server 生成 | `MGPMipPlan`；`OnMipLevelsGenerated` 只带形状 |
+| CopyImage shadow 镜像 | client | 只回"拷贝成功" |
+| XFB CPU 图元计数 / scatter 的 read-modify-write | client | `XfbCpuCapturedVertices`、`MGPXfbAccounting`；§8.5 |
 | 压缩纹理 / pixel unpack 规整 | client | 无 |
 
-**陈旧索引纪律是逐站点表，不是一条笼统规则**（client 侧扫描/解析之前要做的 reconcile 必须逐字复现 monolith 的集合）：
-
-| client 侧动作 | 必须做的 reconcile |
-|---|---|
-| client 顶点数组范围计算 + 暂存 | 无（应用内存，无 GPU 写者） |
-| 最大索引扫描（EBO 源） | `SyncPersistentMappedRange()` **+** `SyncGpuWrites()` |
-| 最大索引扫描（client 指针源） | 无 |
-| `*IndirectCount` 计数解析 | **只** `SyncPersistentMappedRange()`，不加 `SyncGpuWrites()`——monolith 今天就只做这一个，加了会给 Create/Flywheel 的每 batch 平白加一次 publish-and-wait |
-| server 侧 restart 重写 / multi-draw 展平 | server 从镜像读；GPU 写者可见性由 `OnGpuWritten` 收窄集在 server 本地判定 |
-
-前两条 client reconcile 的形态：publish → 等 `appliedSeq` → 排空事件 → 再碰 shadow。门：`ClientArrayAfterComputeWriteScenario`（去掉等待必须看到几何缺失）；`create-indirect` fixture 上 `roundtrips-per-frame` 必须读零（P8）。
+**陈旧索引纪律是逐站点表**，client 侧扫描/解析之前的 reconcile 必须逐字复现 monolith 的集合：最大索引扫描（EBO 源）= `SyncPersistentMappedRange()` **+** `SyncGpuWrites()`；`*IndirectCount` 计数解析 = **只** `SyncPersistentMappedRange()`（monolith 今天就只做这一个）；client 顶点数组范围计算与 client 指针源扫描 = 无；server 侧重写 / 展平从镜像读，GPU 写者可见性由 `OnGpuWritten` 收窄集在 server 本地判定。门：`ClientArrayAfterComputeWriteScenario`（去掉等待必须看到几何缺失）；`create-indirect` fixture 上 `roundtrips-per-frame` 必须读零（P8）。
 
 ## 6. 纹理 subdata 与 dirty 归属
 
-- `glTexSubImage*` 根本不调后端表：全部纹理上传由 Espryt 在 sync 时刻按**累积**区域做，那里跑 `MipmapStorage` 的 96-rect 级联合并与 `summedArea*4 >= unionArea*3` 的 union-box 回退，并在 unpack ring 可用时刻意塌成一个 box——Mali 按**作业数**给上传计价，~100 个精灵 rect 对一个 union box 实测 +6 ms/frame。逐 `glTexSubImage` 发一条记录会精确复现那个形状。
-- 因此：client 在自己的 `MipmapStorage` rect 模型里累积，在**下一个 validate / flush 点**把合并后的形状作为**一条** `ResourceSubData` 发出。`MOBILEGL_PIPE_STATS` 单列逐帧发射次数与上传作业数（`TextureUploadEmissions/Box/Rect/Jobs`）。
-- **同时携带 union box 与 region 列表，由 server 选上传形状**：决策留在付 GPU 代价的那一侧。实测（`MEASUREMENTS.md`）：vanilla 世界同样 185 次发射，Espryt 的整 box 路径每帧 635 KB 纹素、Magma 的 rect 路径 40 KB，16×。
-- `MGPSubRegion` 显式携带 `SrcRowStride/SrcSliceStride`，`MGPSubData::SourceIsVerbatimLevelShadow` 显式携带原来由 `uploadData == mipData` 指针比较回答的问题："这批字节是未经转换的 level shadow 吗"。split 下 client 既不发整 level 也不在 server 留整 level 镜像，指针比较不成立；Espryt 的上传路径改为从描述符取步长，`UNPACK_ROW_LENGTH` 从 `SrcRowStride/bpp` 设。形状照抄已存在的 `UnpackStagingBlock`（ring 路径本来就紧密重打包、不发 `glPixelStorei`）。
-- **dirty 归属反转**：client 保留 rect 模型、维护一份发射游标、发射后清自己的标志，server 从不碰 client 的标志。安全，因为 `MG_Impl` 里没有任何 `IsStorageDirty/GetStorageDirtyRects/GetStorageDirtyRegion` 调用点（前端从不读自己的 dirty 状态）。逐 level "server 权威位"与纹理 ack 协议因此不必存在。
-- 发射游标按**存储属主**键控 `(storageOwnerHandle, ownerUploadTarget, ownerLevel)`：`TextureObjectView` 把 dirty 查询/清除全部转发给属主并做索引重映射，view 与属主共用同一份 dirty 状态。门：通过 view 上传、经属主采样（及反向），跨 draw 边界各一次。
-
-> **P4a 落到哪一步**：**排水列表（drain list）是这一波的**——client 在 validate 点把每个脏的 `(存储属主, 上传目标, level)` 发成**一条** `resource_subdata`，逐区带 `SrcOffset`/`SrcRowStride`/`SrcSliceStride`，`RegionCount == 0` 合法且表示"并集框就是全部"。**上面那条按存储属主键控的发射游标与索引重映射仍然是 P3b/P4b 的**，P4a 没有做。两条 P4a 学到的规矩写在这里：(1) **清 dirty 要等 applier 的 acceptance**，不是发射即清——`MGPipeApplyResourceSubData` 返回 `Bool`，被拒的记录必须让 level 留在脏表里（否则拉取路径再也不会补它）；(2) **服务端自己的重新变脏是服务端的事**——`RequireImageBindableStorage` 会让一个已经上传过的 level 重新需要上传，client 的标志早就清了，所以 twin 直接重新武装 applier 记录里的待上传项。`TextureUploadShapeScenario`（形状金标）**已经建好但只记录不设门**，要等 Mali 侧的帧时增量才升级成门。
-- 后端真正在 shadow 里写字节的两处——CPU 回退生成 mip（RGB16F/RGB32F）与 `glCopyImageSubData` 目的地镜像——分别由 `OnTextureWriteback` 与"CopyImage 镜像搬到 client"处理。
-- Unpack PBO 完全在 client 解析；压缩纹理永不到达后端；`glCopyTexSubImage*` 与 `glClearTexImage` 整体留在 client（今天就是纯前端操作：借一次 `ReadPixels` 进 CPU scratch 再写 shadow），拆分后恰好是一次阻塞 ReadPixels round trip，脏区按普通 subdata 下发。
+- `glTexSubImage*` 根本不调后端表：全部纹理上传由 Espryt 在 sync 时刻按**累积**区域做（96-rect 级联合并、union-box 回退、unpack ring 可用时塌成一个 box）——Mali 按**作业数**给上传计价，~100 个精灵 rect 对一个 union box 实测 +6 ms/frame。逐 `glTexSubImage` 发一条记录会精确复现那个形状。
+- 因此 client 在自己的 `MipmapStorage` rect 模型里累积，在**下一个 validate / flush 点**把合并后的形状作为**一条** `ResourceSubData` 发出，**同时携带 union box 与 region 列表，由 server 选上传形状**（决策留在付 GPU 代价的那一侧；`MEASUREMENTS.md` §1.3：vanilla 世界同样 185 次发射，Espryt 整 box 635 KB/帧、Magma rect 40 KB）。
+- `MGPSubRegion` 显式携带 `SrcRowStride/SrcSliceStride`，`MGPSubData::SourceIsVerbatimLevelShadow` 显式回答原来由指针比较回答的问题；Espryt 的上传路径改为从描述符取步长。
+- **dirty 归属反转**：client 保留 rect 模型、维护发射游标、发射后清自己的标志，server 从不碰 client 的标志（`MG_Impl` 里没有任何 `IsStorageDirty` 调用点）。**P4a 落地的是排水列表**——client 在 validate 点把每个脏的 `(存储属主, 上传目标, level)` 发成一条 `resource_subdata`；按存储属主键控的发射游标与 view 索引重映射是 P3b/P4b 的。两条规矩：**清 dirty 要等 applier 的 acceptance**（被拒的记录必须让 level 留在脏表里）；**服务端自己的重新变脏是服务端的事**（twin 直接重新武装 applier 记录里的待上传项）。
+- 后端在 shadow 里写字节的两处——CPU 回退生成 mip 与 `glCopyImageSubData` 目的地镜像——分别由 `OnTextureWriteback` 与"CopyImage 镜像搬到 client"处理。Unpack PBO 完全在 client 解析；`glCopyTexSubImage*` 与 `glClearTexImage` 整体留在 client。
+- `TextureUploadShapeScenario`（形状金标）已建好但只记录不设门，等 Mali 侧的帧时增量才升级成门。
 
 ## 7. Shader state = SPIR-V + 反射归档
 
-- `CreateShaderState` 的 payload 是逐 stage SPIR-V + 反射归档（`LinkArtifacts` + `SpirvArtifacts` 全结构体），**不是源码**。"server 从源码重新 link"这条路显式关闭：链接真 `ProgramObject` 就链接 glslang。glslang 全在 client，SPIRV-Cross（`TranspileSpirvToEssl`）全在 server，文件级切割。没有 `MOBILEGL_IPC_PROGRAM` 开关、没有 server 侧 compile pool。
-- 归档机制：`Visit()` + `sizeof` 绊线（`static_assert(sizeof(LinkArtifacts) == MGL_LINKARTIFACTS_SIZE)`），一份字段表服务序列化两个方向。**P4a 落地：序列化器在树里了**（`MobileGL/MG_Pipe/ProgramArtifactsCodec.{h,cpp}`），但 **monolith 只在 verify 构建里调它**——句柄臂上 server 读的仍是前端自己的归档（D-H3：制品不在 monolith 过线，编解码因此不在热路径上），真正逐帧走 codec 是 P5 之后的事。**未完的一件配套**：`ProgramArtifacts.h` 的 libc++/NDK 尺寸钉仍是惰性的（`MGL_ARTIFACT_SIZES_LIBCXX_PINNED` 没定义），也就是说 Android 构建上这个 58 成员结构还没有绊线——记在 P3b/P4b 的清单里。必须覆盖四个 `ResourceReflection`（各带 `TypeFacts`）、`uniformSamplerOrImageUnitIndex`、`uniformBlockBinding`、`shaderStorageBlockBinding`（按名字）、`explicitOpaqueUniformBindings`、`xfbVaryings/xfbStrides/xfbPackedStride/xfbNeedsScatteredCapture`、`computeLocalSize`、GS/TCS/TES 事实、`usesReservedNumSamples`、`uniformOffsets`。`XfbVarying` 带两套拼写（GL 名字 + block 实例/成员/元素）。
-- **P0.5 硬前置**：反射类型今天声明在 `ProgramObject.h` 里，而它 include `ShaderObject.h`（→ glslang）与 `SpvcSession.h`（→ spirv_reflect）。P0.5 把 `TypeFacts`、`ResourceReflection`、`XfbVarying`、`LinkArtifacts`、`SpirvArtifacts` 抽到 `MG_State/GLState/ProgramState/ProgramArtifacts.h`（只 include `<Includes.h>` 与容器），8 个 includer 靠类内 `using` 别名零改动，加 CI `-H` 闭包断言（已落地，见 `ROADMAP.md` P0.5 行；`DynamicBackendParameters` 留在 `BackendObject.h`，所以闭包门 A 断言的是 `MGPipeValueTypes.h` 而不是 `MGPipeTypes.h`）。同批抽取 `MG_Pipe/MGPipeValueTypes.h`（`MAX_DRAW_BUFFERS`、`PerBufferBlendState`、`StencilFaceState`、`PixelStoreParameters`、`RenderStateParameters`、`SamplerParameters`、`BorderColorForm`、`VertexAttribute`、`VertexBufferBindingPoint`），它不 include `MG_State/GLState` 任何东西；`MGPipeTypes.h` 今天为此临时 include 了 `BackendObject.h` 与 `RenderState.h`（文件头注明为 P0.5 债务）。没有这一步，P7 的 `nm -D | grep glslang` 判据不可达。
-- server 侧惰性特化（D-B2）：后端 program 还依赖 8 个额外输入（draw FBO 的 snorm/unorm clamp mask、fragColor 广播数、storage-block 绑定签名、atomic counter 集、活的 image 格式、patch 参数；Magma 另加 FragCoord-Y-flip 的 default-FB 高度与 XFB 布局），`create_shader_state` 发布**制品**，server 在 verb 时刻从已推送状态特化——正是两个后端今天的做法，也是 gallium `st_variant` 的做法。
-- 后端 link/compile 失败不需要同步返回：今天只是一行 `MGLOG_E` 加 bind program 0 的空 draw，`GL_LINK_STATUS` 永不撤回，同步查询由 client 从 `ProgramObject` 回答。`OnLog` 逐字复现——由此要求日志按严重级分级（§8.3）。
-- Magma 的两个内部 shader（blit、depth-mipmap）烘焙成签进树的 SPIR-V + uniform location + UBO 布局，用一个 `MG_Test` 重跑树内 glslang 逐字节比对守新鲜度（`MOBILEGL_BAKED_INTERNAL_SHADERS`，P7）；顺带把一次 glslang 编译从 monolith 启动路径上删掉。
+- `CreateShaderState` 的 payload 是逐 stage SPIR-V + 反射归档（`LinkArtifacts` + `SpirvArtifacts` 全结构体），**不是源码**。glslang 全在 client，SPIRV-Cross 全在 server，文件级切割；没有 `MOBILEGL_IPC_PROGRAM` 开关、没有 server 侧 compile pool。
+- 归档机制：`Visit()` + `sizeof` 绊线。序列化器在树里（`MG_Pipe/ProgramArtifactsCodec.{h,cpp}`），**monolith 只在 verify 构建里调它**（D-H3：制品不在 monolith 过线，编解码不在热路径上）。未完：`ProgramArtifacts.h` 的 libc++/NDK 尺寸钉仍是惰性的（`MGL_ARTIFACT_SIZES_LIBCXX_PINNED` 未定义），记在 P3b/P4b。
+- P0.5 把反射类型抽到 `MG_State/GLState/ProgramState/ProgramArtifacts.h`、值类型抽到 `MG_Pipe/MGPipeValueTypes.h`（不 include `MG_State/GLState`），CI `-H` 闭包断言把关；没有这一步 P7 的 `nm -D | grep glslang` 判据不可达。
+- server 侧惰性特化（D-B2）：后端 program 还依赖 8 个额外输入（draw FBO 的 clamp mask、fragColor 广播数、storage-block 绑定签名、atomic counter 集、活的 image 格式、patch 参数；Magma 另加 Y-flip 高度与 XFB 布局），`create_shader_state` 发布**制品**，server 在 verb 时刻从已推送状态特化——正是两个后端今天的做法。
+- 后端 link/compile 失败不需要同步返回：`GL_LINK_STATUS` 永不撤回，同步查询由 client 从 `ProgramObject` 回答，失败以 `OnLog` ≥ERROR 无损呈现。
+- Magma 的两个内部 shader（blit、depth-mipmap）烘焙成签进树的 SPIR-V，`MG_Test` 重跑树内 glslang 逐字节比对守新鲜度（`MOBILEGL_BAKED_INTERNAL_SHADERS`，P7）。
 
 ## 8. 反向通道
 
-### 8.1 `MGPipeCallbacks`（P0 已落地，`MobileGL/MG_Pipe/MGPipeCallbacks.h:27-51`）
+### 8.1 `MGPipeCallbacks`（`MG_Pipe/MGPipeCallbacks.h`）
 
-十个具名回调 + 一个正向终止符（`ResourceSubDataComplete`），取代今天 95 个调用点 / 17 个方法直接 poke 前端对象。gallium 没有 shadow writeback、GPU-write 通知、纹理重发请求、default-FB 几何这些词汇（Mesa 里两者共享地址空间），具名化是有意偏离（D8）。monolith 下直调，split 下是 `SEG_EVENT` 上的记录。
+十个具名回调 + 一个正向终止符（`ResourceSubDataComplete`），取代今天 95 个调用点 / 17 个方法直接 poke 前端对象。gallium 没有这些词汇（Mesa 里两者共享地址空间），具名化是有意偏离（D8）。monolith 下直调，split 下是 `SEG_EVENT` 上的记录。
 
 | 回调 | 取代 |
 |---|---|
-| `OnGlError(code)` | 6 处 `RecordError`；**必须对命令流有序**，否则 `glGetError` 答错（`glGetError` 本身永远本地） |
-| `OnGpuWritten(res, ranges[])` | 6 处 `MarkGpuWritten`：client 在每个 draw/dispatch 发射点**保守自建** pending 集，这是**收窄**通道 |
-| `OnBufferWriteback(res, offset, bytes)` | PBO 回读、XFB 捕获；**按操作级批处理**（今天两处逐行循环绝不能变成每扫描线一次 IPC）；必须与 epoch bump 有序 |
+| `OnGlError(code)` | 6 处 `RecordError`；**必须对命令流有序**（`glGetError` 本身永远本地） |
+| `OnGpuWritten(res, ranges[])` | 6 处 `MarkGpuWritten`：client 在每个 draw/dispatch 发射点保守自建 pending 集，这是**收窄**通道 |
+| `OnBufferWriteback(res, offset, bytes)` | PBO 回读、XFB 捕获；按操作级批处理；必须与 epoch bump 有序 |
 | `OnTextureWriteback(res, box, bytes)` | CPU 回退生成 mip 的纹素（唯一生产者） |
 | `OnTexturePullRequest(res, target, firstLevel, levelCount, pullSerial)` | §8.4 |
-| `OnMipLevelsGenerated(res, base, count)` | 只带形状：monolith 的 `EnsureGenerateMipmapStorageAllocated` 也只 `AllocateStorage` + `MarkStorageDirty(false)` 不填内容，split 行为一致 |
+| `OnMipLevelsGenerated(res, base, count)` | 只带形状，与 monolith 的 `EnsureGenerateMipmapStorageAllocated` 行为一致 |
 | `OnSurfaceChanged(info)` | `SwapchainObject` 写 `pDefaultFramebufferInfo` 的分层倒置；client 自己合成 default-FB 对象 |
 | `OnCapsInvalidated()` | 2 处 `InvalidateCompileEnv` |
 | `OnLog(level, text)` | ≤WARN 有损，≥ERROR 无损 + 速率限制 |
 | `OnXfbScatterReady(scratch, packedStride, vertices)` | §8.5 |
 
-95 个写回点的其余归属：`MarkStorageDirty` 大多是 server 本地记账（零消息）；后端凭空造的前端对象（Magma 占位纹理、swapchain default-FB 占位）→ server 原生；`SetBackendResource` 删除（server 拥有资源表）——**[deviation] D-K（P3a）：P3a 并没有删它**。`PipeResource::m_backend`、`SetBackendResource`、`ReleaseBackend`、`BackendBufferResource` 在 push 下只是**不再被写**（buffer twin 已经搬进第七张 slot 表，§9.5），真删掉会移动 pull 构建里 `sizeof(BufferObject)`，那是直接的 G1 破坏；这组删除随 pull 路径在 **P13** 退役。`SetBackendStateMemo`（前端 VAO 里存后端堆裸指针）直接删除；`SetBackendHashMemo/AuxMemo` → server 侧 per-slot 字段。20 处 `SyncPersistentMappedRange` + 6 处 `SyncGpuWrites` 按 §5.7 逐站点归属，其中至少一处消费者搬不走：Magma 的 `ResolveUniformBufferPayload` 把具名 UBO 打进自己的 UBO ring → `SetShaderBuffers` 的 host payload（D-B8）。
+95 个写回点的其余归属：`MarkStorageDirty` 大多是 server 本地记账；后端凭空造的前端对象（Magma 占位纹理、swapchain default-FB 占位）→ server 原生；`SetBackendStateMemo` 直接删除；`SetBackendHashMemo/AuxMemo` → server 侧 per-slot 字段。**D-K（P3a）**：`PipeResource::m_backend` / `SetBackendResource` / `ReleaseBackend` / `BackendBufferResource` 在 push 下只是不再被写，真删会移动 pull 构建里 `sizeof(BufferObject)`（G1 破坏），随 pull 路径在 P13 退役。
 
 ### 8.2 有序性是正确性要求
 
-每一次 `WritebackFromBackend` 后面都紧跟 `BumpBufferMutationEpoch()`，否则 server 的 draw-clean memo 会在 epoch 背后变陈旧——split 里这变成反向通道上的排序规则：写回的 epoch bump 必须在任何后续读该 handle 的命令之前被 server 应用。**反向通道需要与正向通道相同的有序保证。**
+每一次 `WritebackFromBackend` 后面都紧跟 `BumpBufferMutationEpoch()`，否则 server 的 draw-clean memo 会在 epoch 背后变陈旧——split 里这是反向通道上的排序规则：写回的 epoch bump 必须在任何后续读该 handle 的命令之前被 server 应用。**反向通道需要与正向通道相同的有序保证。**
 
 ### 8.3 错误、ack 与日志
 
-- 纹理分配的 OOM 在 monolith 里就已推迟到 sync 时刻（`glTexImage*`/`glTexStorage*` 只 `MarkStorageDirty`，Espryt 惰性分配；连 `glRenderbufferStorage*` 也在 `SyncToBackend` 里惰性做），拆分不改变可观察行为，这批不同步 ack。
-- **唯一允许同步 ack 的入口是 `glBufferStorage`（真同步分配）**。`glRenderbufferStorage*` 不 ack：41 个 trace fixture 里 OOM 探测惯用法出现 0 次（9 次调用散在 5 个 fixture，无一在 3 个调用内跟 `glGetError`；语料里的成功性检查是 `glCheckFramebufferStatus`，client 本地作答）。**P3a 起 `ResourceRespecify` 携带 `kNeedsAck`，并且带一个逐记录谓词**：flag 是**逐调用**的静态属性，而 `ResourceRespecify` 同时服务 `glBufferData` 与 `glBufferStorage`，裸 flag 会把 Minecraft 的整块 chunk 上传变成每 store 一次往返。所以真正拍板的是 `MGPipeResourceRespecifyNeedsAck(desc) == (desc.Immutable != 0)`（`MobileGL/MG_Pipe/MGPipeTypes.h:680`），`PipeCalls.def:18-24` 的图例把这条规则写在目录里（调用行 `:82`），`MG_Test/Pipe/PipeCatalogueTest.cpp:552-585` 的 `ResourceRespecifyAcksOnlyImmutableStorage` 对两种惯用法各钉一次。monolith 下 ack 是 `((void)0)`（applier 只隔一次函数调用），P5 把门铃接到这个谓词上。**P4a 把这个谓词收窄到 buffer 目标（D-A2）**：纹理与 renderbuffer 从这一波起也走 `resource_respecify`，而 `glTexStorage*` 的 `Immutable` 同样是 1——不收窄的话每一次不可变纹理分配都会变成一次同步往返。收窄之后 `ResourceRespecify` 还多了两条 P4a 的语义：一是**逐 level 作用域**（带 `MGPRespecifiedLevel` 尾，说明这次重定义的是哪一级；空指针才是"整个资源"），二是**元数据更新**（存储定义字段与已存描述符逐项相同时，只换 `BindMask`/`ImageBindableHint`，不 ack、不清待上传）——前者是终审抓出的 critical：不带 level 时 `glTexImage2D(level 1)` 会把同一纹理上已经被 applier 接受、客户端也已清了 dirty 标记的第 0 级待上传一起丢掉，画面读回全黑。
-- 其余错误一律晚到，走有序的 `OnGlError`。
-- `OnLog` 分级：≤WARN 有损（覆盖最旧 + `eventDropped` 计数）；≥ERROR 无损，加入触发 `eventRingFull` + 停止 apply 的语义事件集；每秒 ERROR 速率限制器，超限发一条 "N errors suppressed"；`MGLOG_E_ONCE` 的 latch 变 per-server。理由：后端 link 失败只以一行 ERROR 呈现，统一有损会让最有诊断价值的那一行在日志压力下消失。
+- 纹理分配的 OOM 在 monolith 里就已推迟到 sync 时刻，拆分不改变可观察行为，不同步 ack。**唯一允许同步 ack 的入口是 `glBufferStorage`**；`glRenderbufferStorage*` 不 ack（41 个 trace fixture 里 OOM 探测惯用法出现 0 次，语料里的成功性检查是 `glCheckFramebufferStatus`，client 本地作答）。
+- `ResourceRespecify` 携带 `kNeedsAck` 并带逐记录谓词 `MGPipeResourceRespecifyNeedsAck(desc)`（`Immutable != 0` **且是 buffer 目标**，D-A2——`glTexStorage*` 的 `Immutable` 同样是 1，不收窄每次不可变纹理分配都会变成同步往返）；另有**逐 level 作用域**（`MGPRespecifiedLevel` 尾；不带 level 时 `glTexImage2D(level 1)` 会把已接受的第 0 级待上传一起丢掉）与**元数据更新**（描述符逐项相同时只换 `BindMask`/`ImageBindableHint`，不 ack、不清待上传）。
+- 其余错误一律晚到，走有序的 `OnGlError`。`OnLog` ≤WARN 有损（覆盖最旧 + `eventDropped`）；≥ERROR 无损，加入触发 `eventRingFull` + 停止 apply 的语义事件集，每秒速率限制器。
 
 ### 8.4 唯一的新停顿类：server 发起的纹理重铸拉取（D-B6）
 
-server 不保留纹素，三个原因会要求重发已发过的 level：`RequireImageBindableStorage` 的 re-dirty、整格式再生、view 源重铸。四条缓解同时上：
-
-1. **预防主因**：client 给纹理打 `everImageBound`，`ResourceCreate/Respecify` 一直携带 `ImageBindableHint`，image-bindable 存储前期分配好。
-2. **拉取异步**：server 发 `OnTexturePullRequest` 并把 twin 标 not-ready，client 下次 publish 时重发；阻塞的是 `mgl-srv-apply` 线程不是应用线程。
-3. **有上限的保留，默认关**：`MOBILEGL_PIPE_TEXEL_RETAIN_MB` 默认 0——`MipmapStorage` 保有每 level 完整 CPU 影子，拉取总能被服务，缓存买的是延迟不是正确性。只有实测拉取率非平凡才开。
-4. **显式终止符**：拉取是 request/response 对，由 `ResourceSubDataComplete(res, target, firstLevel, levelCount, pullSerial)` 终止，**可携带零个 region**——内容只来自渲染、被 `CanMirrorCopyImageShadow` 拒绝的 copy、或 GPU 侧 mip 生成的 level，client 根本没有字节；收到零 region 时 server 带着"已分配但为空"的存储继续（正是 monolith 的行为）并记 `MGLOG_W`。没有终止符 apply 线程会永久 park。
-
-门：`TextureRemintPullScenario`（含无解用例，且在终止符落地前必须是红的）；拉取次数逐 trace 用例发布。本设计从不声称"零 round trip"，它测量并公布。
+server 不保留纹素，三个原因会要求重发已发过的 level：`RequireImageBindableStorage` 的 re-dirty、整格式再生、view 源重铸。四条缓解：(1) **预防主因**：`ResourceCreate/Respecify` 一直携带 `ImageBindableHint`；(2) **拉取异步**：server 发 `OnTexturePullRequest` 并把 twin 标 not-ready，阻塞的是 apply 线程不是应用线程；(3) 有上限的保留默认关（`MOBILEGL_PIPE_TEXEL_RETAIN_MB=0`，`MipmapStorage` 保有每 level 完整 CPU 影子，缓存买的是延迟不是正确性）；(4) **显式终止符** `ResourceSubDataComplete`，可携带零个 region（内容只来自渲染 / GPU mip 的 level，client 没有字节；server 带着"已分配但为空"的存储继续）。真实语料上重铸拉取率见 `ROADMAP.md` 开放问题 2（780 个窗口 2 次）。P5b 下这条路径是 `Fatal{UnmigratedEmulation,"texture-remint-pull"}`（三条 trace 的首阻塞），P9 落地。
 
 ### 8.5 XFB scatter 搬到 client
 
-Espryt 的 `ScatterCapturedRecords` 是对 client shadow 的 read-modify-write：从应用已有的字节起步，只把捕获到的 varying 补进去（`gl_SkipComponents` 的空洞保留应用原本的内容，`KHR-GL46.transform_feedback.capture_special_interleaved_test` 走到它）。server 没有 `MappedData()`，所以：server 把紧密打包的 scratch 通过 `OnBufferWriteback` 推给 client，用 `OnXfbScatterReady` 告知布局；client 拥有目的 shadow 与反射归档里的 varying/stride，原样跑补丁循环；补好的范围作为普通 `ResourceSubData` 重发并 bump change serial。不新增停顿类。
+Espryt 的 `ScatterCapturedRecords` 是对 client shadow 的 read-modify-write（`gl_SkipComponents` 的空洞保留应用原本的内容）。server 没有 `MappedData()`，所以 server 把紧密打包的 scratch 经 `OnBufferWriteback` 推给 client，用 `OnXfbScatterReady` 告知布局；client 拥有目的 shadow 与反射归档里的 varying/stride，原样跑补丁循环，补好的范围作为普通 `ResourceSubData` 重发。不新增停顿类。
 
 ## 9. 后端状态机改造
 
 ### 9.1 原样不动的东西
 
-Espryt：三条 persistent-mapped ring 与 `PersistentRing` 算法、buffer pool、7 条 fallback-repack 路径、`m_backendColorSlots` 置换表、三个 scratch FBO 及驱动侧影子、`PackState`、全部驱动绑定影子、Adreno 禁用属性 SIGSEGV workaround、Mali XFB 捕获丢失 workaround、`ScopedDefaultUnpackState`、SPIRV-Cross 会话与 post-emission ESSL 重写、驱动 POST 自检族、restart 重写与 multi-draw 五档。
-Magma：`VulkanRenderer` 全部 memo 与 scratch、`PipelineFactory`、`ProgramFactory`、`UniformManager` 的 ring 与描述符集、五个 `Vk*Manager`、`FrameContext`、`SwapchainObject`、`DynamicStateShadow`、`VertexInputStateFactory` 的 cache 本体、**D18 的节点式容器纪律**（`m_renderbufferResources`/`m_textureResources` 故意用 `std::unordered_map`，调用方跨查表缓存 `Resource*`；postmortem 注释逐字进 review checklist）。
+Espryt：三条 persistent-mapped ring 与 `PersistentRing` 算法、buffer pool、fallback-repack 路径、`m_backendColorSlots` 置换表、scratch FBO 及驱动侧影子、全部驱动绑定影子、Adreno / Mali workaround、SPIRV-Cross 会话与 ESSL 重写、驱动 POST 自检、restart 重写与 multi-draw 五档。Magma：`VulkanRenderer` 全部 memo 与 scratch、`PipelineFactory`、`ProgramFactory`、`UniformManager`、五个 `Vk*Manager`、`FrameContext`、`SwapchainObject`、`DynamicStateShadow`、`VertexInputStateFactory` 的 cache 本体、**D18 的节点式容器纪律**。从"不动"里移出的一项：Espryt 的 sub-rect 上传判定与跨步计算（§6）。
 
-从"不动"里移出的一项：Espryt 的 sub-rect 上传判定与跨步计算（§6，从描述符取步长）。
+**字节一致门 G5**（`scripts/p3a_untouched_regions.sh`：pool / 延迟释放 / ring / flush 梯十一函数；`scripts/p4a_untouched_regions.sh`：depth-stencil 采样模拟与格式 caveat 两族 17 区 / 3 文件）：这些是"被推送的记录改变了输入、但算法本身不许动"的那一类，字节一致是唯一能证明这点的门；两份脚本都对固定 pin 比较，re-pin 必须同时改两份。仍在 `MG_Backend` 里的前端类型：`g_rawDepthFetchSamplerState`（Espryt 自己为原始深度取样铸的 `SamplerObject`，client 从没见过它），原生化归 P3b/P4b。
 
-**P4a 的字节一致行**（`scripts/p4a_untouched_regions.sh`，17 个区 / 3 个文件，8 个阴性对照按名变红；与 P3a 的十一函数并列）：Espryt 的 depth-stencil 采样模拟与格式 caveat 两族——`ShouldUseCaveatTextureFormat`、`BackendTextureFormatAddsAlpha`、`StageBlocksIntoUnpackRing`、`UnpackRingAvailable`、`UnpackRingAllocate`、`RecomputeBackendColorSlots` 等——它们是"被推送的记录改变了输入、但算法本身不许动"的那一类，字节一致是唯一能证明这点的门。**仍在 `MG_Backend` 里的前端类型**：`g_rawDepthFetchSamplerState` 是一个前端 `SamplerObject`（Espryt 自己为原始深度取样铸的，client 从没见过它，因此永远不会有记录——句柄臂上"对象即权威"的那条分支就是为它留的），它的原生化归 P3b/P4b，是句柄化之后 Espryt 侧最大的一处残留。
-
-唯一两处必须真改的 `MG_State` 类型内部用法（都在 Magma）：占位纹理（构造真的 `TextureObject2D*` 只为复用 `SyncTextureAndGetDescriptor(ITextureObject&)` 签名，~120 行木偶戏 → ~60 行原生 `VkImage`+view+descriptor，34 个 `MOBILEGL_ASSERT(pGLContext)` 里的 9 个随之消失）；两个内部 shader 烘焙（§7）。Espryt 的小号同类：`g_rawDepthFetchSamplerState` → 后端原生 sampler。
+必须真改的 `MG_State` 类型内部用法（都在 Magma，P7）：占位纹理（~120 行木偶戏 → 原生 `VkImage`）、两个内部 shader 烘焙（§7）。
 
 ### 9.2 strangler 脚手架：`PipeInputs` + 逐 verb 填充 + poison 世代（P1）
 
 ```cpp
-// MG_Backend/MGPipe/PipeInputs.h —— 按 memo 键组织，不按读点组织（~20 KB，字段集全迁移期稳定）
+// MG_Backend/MGPipe/PipeInputs.h —— 按 memo 键组织，不按读点组织
 struct PipeInputs {
-    const RenderStateParameters& GetRenderStateParameters() const;   // 阶段 A：类型与后端今天读到的完全一致
-    // … 每个后端真正用到的 GLContext 方法一个访问器（Espryt 32 / Magma 55）
+    const RenderStateParameters& GetRenderStateParameters() const;   // 类型与后端今天读到的完全一致
+    // … 每个后端真正用到的 GLContext 方法一个访问器（Espryt 32 / Magma 56）
 #if MOBILEGL_DEBUG || MOBILEGL_BUILD_DISAGGREGATED
     Uint64 m_filledGen[kFieldCount];   // 逐字段"上次填充的 verb 序号"
     Uint64 m_currentVerbSerial;
@@ -360,272 +313,255 @@ struct PipeInputs {
 
 | 阶段 | 改什么 | 证明 |
 |---|---|---|
-| A 别名 | 机械 `sed`：`MG_State::pGLContext->` → `MGB_CTX->`（**实测 277 处**，293 出自过期的 vendored 清单）+ 手工转换 58 行非箭头用法（~34 处 `MOBILEGL_ASSERT` 删除、7 处空守卫、3 处三元、`.get()` 裸指针捕获与 `decltype` 别名、14 处 `!= nullptr`、1 处注释）；逐 verb 类填充点填 `gPipeInputs` | `nm --defined-only` 不变；`.text` 差异可逐行归因（空守卫/三元的重写推迟到 P2） |
-| B 推送 | tracker 填 `gPipeInputs`，填充器按 `MOBILEGL_PIPE_PUSH` 位图逐字段让位 | `MOBILEGL_PIPE_VERIFY=1`：tracker 再填一份快照版，G4 比对器逐字段每 draw 比一次 |
-| C 句柄化 | `SharedPtr<前端对象>` 字段 → `MGPipeHandle` + POD 描述符；memo 重键；写回变回调 | 全套门（§13） |
+| A 别名（P1） | 机械替换 `MG_State::pGLContext->` → `MGB_CTX->`（277 处）+ 58 行非箭头用法；逐 verb 类填充点填 `gPipeInputs` | `nm --defined-only` 不变；`.text` 差异可逐行归因 |
+| B 推送（P2） | tracker 填 `gPipeInputs`，填充器按 `MOBILEGL_PIPE_PUSH` 位图逐字段让位 | `MOBILEGL_PIPE_VERIFY=1`：tracker 再填一份快照版，G4 比对器逐字段每 draw 比一次 |
+| C 句柄化（P3a–P4a、P7） | `SharedPtr<前端对象>` 字段 → `MGPipeHandle` + POD 描述符；memo 重键；写回变回调 | 全套门（§13） |
 
-- 填充点逐 verb 类，不只 `PrepareForDraw`/`SetupDraw` 两处：G5 从 `PipeCalls.def` 生成"每个 `kCtxVerb`/`kCtxObject` 调用可能读哪些字段"的表，在 `MG_Impl` 的 ~93 个边界站点生成 validate/fill 调用。
-- poison 是**逐 verb 世代**不是位图：每次 verb 递增 `m_currentVerbSerial`，字段被填时记下序号，读取时断言相等（跨 verb 有效的字段显式标 sticky）。位图看不见"上一个 draw 填过、紧随的 `glTexSubImage` 读到陈旧值"。debug 与 disaggregated 构建里读一个当前 verb 未填的字段是 `Fatal{UnmigratedPipeInput, "GetStencilState@DrawVbo"}`。纯度门 grep 的是 `pGLContext` 不是 `pGLContext->`。
+poison 是**逐 verb 世代**不是位图：每次 verb 递增 `m_currentVerbSerial`，字段被填时记下序号，读取时断言相等（跨 verb 有效的字段显式标 sticky）。读一个当前 verb 未填的字段是 `Fatal{UnmigratedPipeInput, "GetStencilState@DrawVbo"}`。纯度门 grep 的是 `pGLContext` 不是 `pGLContext->`。`FillPoints.def` 里 8 条静态过近似的填充行有意保留（能退役它们的证据只能是动态的：`MOBILEGL_PIPE_POISON_OMIT` 跑遍完整 CTS caselist，P3a 之后未做）。
 
 ### 9.3 Track V / Track H
 
-- Track V（值类型：`GetRenderStateParameters`、`GetPixelStoreParameters`、capability 位、stencil/colormask/depthmask/scissor/patch/attrib 默认值、Magma ~22 个标量 getter……约 B 类读点的 55%）：机械。
-- Track H（对象类型：167 个 `SharedPtr<MG_State…>` 点）：真活。
-- 读点分类实测（静态）：A 探测变化 ~35（12%）、B 翻译输入 ~216（74%）、C 瞬时参数 ~4、D 身份/缓存键 ~48（与 B 重叠）、E 数据字节 3、写 8。74% 是 B 类——"bump 一个版本让 server 自己拉"行不通，值本身必须过去。
+Track V（值类型：render state、pixel store、capability 位、stencil/colormask/depthmask/scissor/patch/attrib 默认值、Magma 标量 getter，约 B 类读点的 55%）：机械。Track H（对象类型：167 个 `SharedPtr<MG_State…>` 点）：真活。读点分类（静态）：探测变化 ~12%、翻译输入 ~74%、瞬时参数 / 身份键 / 数据字节其余——74% 是翻译输入，"bump 一个版本让 server 自己拉"行不通，值本身必须过去。
 
 ### 9.4 残余值块
 
-Track V 的 55% 不需要逐字段接口条目就能跑起来，所以 P2 发一个**显式临时**调用 `SetResidualValueState(MGPBlobRef)`，payload `ResidualValueBlock{RenderStateParameters, PixelStoreParameters, CapabilityBits, patch 三字段}`。三条纪律：退役是编译错误（`MGL_RESIDUAL_BLOCK_SIZE` 只降不升，`MobileGL/MG_Pipe/MGPipeTypes.h:546`，P13 变成 `static_assert(sizeof == 0)`）——P2 已把它从 **1248 棘轮到 8**：`create/bind_render_state` + `set_dynamic_state`、`set_pixel_pack_state`、`set_patch_state` 落地之后，块里只剩一个 `Uint64 CapabilityBits`；布局逐成员 `offsetof` 断言且 split 下逐字段序列化（异质 POD 并集的 padding 差异 monolith verify 看不见）；只在 P2..P13 存在，`MOBILEGL_PIPE_STATS` 单独计一类字节（`ResidualValueBlock`，P0 已占位）。
+P2 发一个**显式临时**调用 `SetResidualValueState(MGPBlobRef)`，payload `ResidualValueBlock`。三条纪律：退役是编译错误（`MGL_RESIDUAL_BLOCK_SIZE` 只降不升，P2 已从 1248 棘轮到 **8**——只剩 `Uint64 CapabilityBits`，P13 变成 `static_assert(sizeof == 0)`）；布局逐成员 `offsetof` 断言且 split 下逐字段序列化；`MOBILEGL_PIPE_STATS` 单独计一类字节。
 
 ### 9.5 21 条身份 memo 的重键
 
-统一事实：每个进入 memo 键的版本计数器要么是回绕 `Uint16`，要么根本不会被它害怕的那个 mutation bump；身份比较是堵回绕洞的补丁。`{slot, gen}` + 显式 destroy 让 **11 条直接删除**（registry 的同址 `weak_ptr` + GC ×6、`TwinLookupMemo` ×3 + `OwnerEquals`、`UnitSamplerLookupMemo` 的 `WeakPtr` 测试、`SetBackendStateMemo`、`VkTextureManager::TextureIdentity` 存活探测、`ConvertedVertexStreamKey` 的 `sourcePin`……），**2 条** server 删除但去抖搬到 client（§5.4），**7 条重键**成更便宜的比较（`StampSyncedFBO` 四元组 → `ContentHash` + server 私有 `attachmentRemintEpoch`；`ResolvedTextureBindingMemo` 9 键 → `(shaderCso.slot, viewSetSerial)`；`SetupDrawSnapshot` 的 ~14 探测字段与两个有损求和 → 三个 handle + 两个 server 纪元 + dirty mask；`VertexInputStateFactory::ComputeHash` 里的 lifetimeId → `gen` **混进** server 侧每个 content hash），**1 条**（D18）原样不动。两个顺带修掉的潜伏 bug 已先独立落地：`m_xfbCounterSlotByObject` 用裸 GL name 做键（`bd2b4158`）、`RenderbufferObject` 缺 `GetLifetimeId()`（`9c7339b2`）。
+统一事实：每个进入 memo 键的版本计数器要么是回绕 `Uint16`，要么根本不会被它害怕的那个 mutation bump；身份比较是堵回绕洞的补丁。`{slot, gen}` + 显式 destroy 让 **11 条直接删除**（registry 的同址 `weak_ptr` + GC ×6、`TwinLookupMemo` ×3 + `OwnerEquals`、`SetBackendStateMemo`、`VkTextureManager::TextureIdentity` 存活探测、`ConvertedVertexStreamKey` 的 `sourcePin`……），**2 条** server 删除但去抖搬到 client（§5.4），**7 条重键**成更便宜的比较（`StampSyncedFBO` 四元组 → `ContentHash` + server 私有 `attachmentRemintEpoch`；`ResolvedTextureBindingMemo` 9 键 → `(shaderCso.slot, viewSetSerial)`；`SetupDrawSnapshot` 的 ~14 探测字段 → 三个 handle + 两个 server 纪元 + dirty mask；`VertexInputStateFactory::ComputeHash` 里的 lifetimeId → `gen` 混进 server 侧每个 content hash），**1 条**（D18）原样不动。P2 付了 11 条删除与 2 条重键，P3a 付了 buffer/VAO 的重键（`MEASUREMENTS.md` §4.3）。
 
 ### 9.6 A/B 与口径收窄
 
-`MOBILEGL_PIPE_PUSH` 子系统位图（含一位关闭 CSO 内容寻址，负面对照）在阶段 B 是真正的旧-vs-新 A/B；阶段 C 之后不是——位清零时 `SnapshotFromGLContext()` 仍要合成句柄，后端仍跑重键后的 memo 代码，一个重键 bug 两臂都在。对策：**编译期** `MOBILEGL_PIPE_LEGACY_MEMOS`（默认 ON）在 P3a/P4a 期间保留 registry / `TwinLookupMemo` 实现活在同一个 `PipeInputs` 接口之下，随 pull 路径在 P13 退役（各阶段 +1 天维护）。
+`MOBILEGL_PIPE_PUSH` 子系统位图在阶段 B 是真正的旧-vs-新 A/B；阶段 C 之后不是——位清零时后端仍跑重键后的 memo 代码。对策：**编译期** `MOBILEGL_PIPE_LEGACY_MEMOS`（默认 ON）保留 pre-handle 臂活在同一个 `PipeInputs` 接口之下，随 pull 路径在 P13 退役。
 
-**P3a 的臂，逐项点名**（两个子系统的 arm 判定在 `MobileGL/MG_Backend/DirectGLES/Managers.cpp:2292`（resources，位 7）与 `:2312`（vertex input，位 8），逐进程各打一行 `MGLOG_D`）：
+- buffer 家族的 pre-handle 臂是 `Ops_*` 表加 `g_glesBufferBackendOps`，无条件编译；VAO twin 与 P4a 六种 twin 的前端读取臂在 `MOBILEGL_PIPE_LEGACY_MEMOS` 之下，位清零 + `LEGACY_MEMOS=0` 是没有任何臂的配置，arm resolver **响亮地**报 `Fatal{PipeLegacyMemosDisabled}` 而不是静默。
+- 位依赖两侧都拒：服务端在各族 arm resolver 里拒绝并跑旧臂，客户端在 `PipeFill.cpp` 的族门里**根本不发射**——只在服务端拒会出现"客户端已按 acceptance 清了 dirty、服务端却走旧臂"的丢上传。同一族门上挂着**消费者条件**：没有任何后端注册 `MGPipeResourceOps` 时 P4a 四族一条不发（Magma 就是这种情形，P7 之前）。
+- 退役的 twin 成员（VAO twin 的五个同步 memo、`g_pendingFetchBaseInstance` 与 `ScopedFetchBaseInstance`、D-K 那组）都**仍在 pull 构建里编译**——真删会移走 pull 符号或改 `sizeof`，G1 的 0/0/0/0 就是这条的度量。
 
-- **buffer 家族的 pre-handle 臂是 `Ops_*` 表加 `g_glesBufferBackendOps`，它们无条件编译**，不在 `MOBILEGL_PIPE_LEGACY_MEMOS` 之下——所以位 7 单独清零永远有一条真臂可跑，`NoArm` 对这个家族不可达（`Managers.cpp:2294-2298` 把这句写在代码里）。前端的十一处分发点（`MobileGL/MG_State/GLState/BufferState/BufferObject.cpp:45`、`:71`、`:87`、`:103`、`:237`、`:375`、`:438`、`:450`、`:493`、`:602`、`:656`）按 `MGPipeResourceSubsystemEnabled()` 二选一。
-- **VAO twin 的前端读取臂是有条件的**：pre-handle 的 `SyncToBackend` 本体与它读的那组 memo（`m_syncedIndexBufferVersion` / `m_syncedIndexBufferObject` / `m_hasSyncedConfigVersion` / `m_syncedConfigVersion` / `m_syncedAttributeVersions`）都在 `MOBILEGL_PIPE_LEGACY_MEMOS` 里（`MobileGL/MG_Backend/DirectGLES/Managers.h:1109-1130`）。位 8 清零 + `LEGACY_MEMOS=0` 是**没有任何 vertex-input 臂**的配置，`Managers.cpp:2343-2351` 明确报 `PipeLegacyMemosDisabled` 而不是静默。位 8 还要求位 7（属性的缓冲 id 经资源 slot 表解析），`0x17f` 会点名拒绝并回落到 legacy 臂。
-- **P4a 的六种 twin 同样有条件臂**（纹理、renderbuffer、framebuffer、sampler、sampler view、program）：pre-handle 的本体与它读的那批身份 memo 都在 `MOBILEGL_PIPE_LEGACY_MEMOS` 之下，`#if !MOBILEGL_PIPE_LEGACY_MEMOS` 的分支留着但不可达（arm resolver 在第一次查找就停进程），保持**响亮**。这条开关给这一波多加了约一天：pull 构建被 `CMakeLists.txt` 强制打开它，所以每个"删掉旧 memo"的动作都只是让新臂不再读它、`sizeof` 一点不动——G1 的 0/0/0/0 正是这条的度量，真正的删除跟着 pull 路径在 P13 发生。
-- **base-instance 的 ambient 作用域同在其中**：`SetPendingFetchBaseInstance` / `GetPendingFetchBaseInstance` / `ScopedFetchBaseInstance` 与 `DirectGLES.cpp:5293` 的三个 scope（`Managers.h:1189-1200`）。句柄臂改由 `MGPipeApplierState::VertexFetchBaseInstance` 供给，但这三个声明**不能删**：删掉会从 pull 构建移走两个符号（G1）。
-
-P13：删 `SnapshotFromGLContext()` 的非 verify 分支、`MGB_CTX`、`MOBILEGL_PIPE_PUSH`、`MOBILEGL_PIPE_LEGACY_MEMOS`；**保留 `MOBILEGL_PIPE_VERIFY` 连同它需要的 `SnapshotFromGLContext()` 与 `MG_State` include**（D-B5，verify 构建永不出货）；三道纯度门在非 verify 构建上转绿。
+P13：删 `SnapshotFromGLContext()` 的非 verify 分支、`MGB_CTX`、`MOBILEGL_PIPE_PUSH`、`MOBILEGL_PIPE_LEGACY_MEMOS`；**保留 `MOBILEGL_PIPE_VERIFY`**（D-B5，verify 构建永不出货）；三道纯度门在非 verify 构建上转绿。
 
 ## 10. server 侧
 
 ### 10.1 对象表与 applier
 
-- `MG_Remote/Server/PipeObjectTables`：按 kind 的 slot 数组，不是对象图；server 不持有任何 buffer 的完整副本、不持有纹素、不持有前端对象图。
-- `PipeApplier`：解码 → 更新对象表与 `PipeInputs` → 调后端函数指针。debug 断言：任何传输下都不得有 `SharedPtr` 或裸前端指针跨过 applier 边界。`InProcessTransport` 走与 spawn **完全相同**的 G3 编解码路径，只在门铃/拷贝机制上不同。
+- `MG_Remote/Server/PipeApplier`：解码 → 更新对象表与 `PipeInputs` → 调后端函数指针。server 不持有任何 buffer 的完整副本、不持有纹素、不持有前端对象图；debug 断言任何传输下都不得有 `SharedPtr` 或裸前端指针跨过 applier 边界。`InProcessTransport` 走与 spawn **完全相同**的 G3 编解码路径，只在门铃/拷贝机制上不同。
 - 每 context 一份 working `RenderStateParameters`（§5.3）。
 
 ### 10.2 monolith 侧的净收益
 
-即使 IPC 永不上线：复用地址 ABA 一整类不可表达；FBO → program 排序 hazard 消失；`SwapchainObject` 写 `MG_Impl` 的分层倒置消失；两个潜伏 bug 已修；一次 glslang 编译离开启动路径；`inproc` = 渲染线程；`MG_Test` 的 mock 后端变成 MGPipe recorder（§13.3）。monolith 净代码量是**增加**的（约 +6,650 手写 + 4,000 生成，对 ~372 行真删除），所以 monolith 论据是逐线程 CPU 数字（§13.2-④），不是删除行数。
+即使 IPC 永不上线：复用地址 ABA 一整类不可表达；FBO → program 排序 hazard 消失；`SwapchainObject` 写 `MG_Impl` 的分层倒置消失；一次 glslang 编译离开启动路径；`inproc` = 渲染线程；`MG_Test` 的 mock 后端变成 MGPipe recorder（§13.3）。monolith 净代码量是**增加**的，所以 monolith 论据是逐线程 CPU 数字，不是删除行数。
 
-### 10.3 索引宿主镜像（`MG_Remote/Server/IndexHostMirror`，P8）
+### 10.3 索引宿主镜像（`Server/IndexHostMirror`，P8）
 
-- 覆盖：`BindMask & ELEMENT_ARRAY` 的资源，且仅当 `kCapNeedsHostIndexBytes`（split 且 server 需要索引字节做 restart 重写 / multi-draw 展平）。
-- 由 server 本来就要收的 `ResourceCreate/Respecify/SubData` 流增量维护：零额外线上流量、零 round trip。GPU 写者对镜像的影响由 `OnGpuWritten` 收窄集在 server 本地判定。
-- 预算 `MOBILEGL_PIPE_INDEX_MIRROR_MB`（默认 64），逐帧发布 `index-mirror-bytes`；超预算时该 buffer 退化为逐 draw 经 `MGHostSpan` 传送（`Seg` 指向 `SEG_STAGE`），计入 `index-bytes-shipped`。
-- 必须是它：`kMaxRestartRewriteBytes` = 64 MiB 是默认 `SEG_STAGE` 的两倍，`kMaxFlattenedIndices` = 1<<24 同量级，逐 draw 塞进 32 MiB 的段既不可行也无必要。它是本设计里唯一的"数据副本"。
+覆盖 `BindMask & ELEMENT_ARRAY` 的资源，且仅当 `kCapNeedsHostIndexBytes`。由 server 本来就要收的 `ResourceCreate/Respecify/SubData` 流增量维护：零额外线上流量、零 round trip；GPU 写者对镜像的影响由 `OnGpuWritten` 收窄集在 server 本地判定。预算 `MOBILEGL_PIPE_INDEX_MIRROR_MB`（默认 64），超预算时该 buffer 退化为逐 draw 经 `MGHostSpan` 传送（计入 `index-bytes-shipped`）。必须是它：`kMaxRestartRewriteBytes` = 64 MiB 是默认 `SEG_STAGE` 的两倍。它是本设计里唯一的"数据副本"。
 
-## 11. 传输与数据面（骨架 P0 已落地，`MobileGL/MG_Remote/`）
+## 11. 传输与数据面（`MobileGL/MG_Remote/`）
 
 ### 11.1 段
 
-| 段 | 拥有者 | 默认 | 内容 |
-|---|---|---|---|
-| `SEG_CMD` | client（server 只读） | 8 MiB，2 的幂 | `RingControl`（4 KiB 页）+ POD 记录 + ≤4 KiB 内联负载 |
-| `SEG_STAGE` | client | 32 MiB，上限实测定 | bulk 字节：buffer sub-data、纹理紧密重打包区域、UBO scratch、client 顶点/索引/indirect 数组、multi-draw 参数块、具名 UBO host payload、persistent-map 脏块 |
-| `SEG_REPLY` | server（client 只读） | 16 MiB，8 个 2 MiB slot（ID-47：按最大场景读回 640×480 RGBA8 定尺，超过即 client 侧具名拒绝） | readback 像素、buffer writeback |
-| `SEG_EVENT` | server | 256 KiB SPSC ring | 十个回调的事件 + `EvQueryResult/EvFenceSignaled/EvReadbackDone` |
-| `SEG_SHADOW[n]` | client | 每对象，≥256 KiB shadow（Phase 2） | 零拷贝 buffer/texture shadow |
-| `SEG_ADOPT[n]` | server（client RW） | 每 buffer，≥16 MiB adopted store（P11） | 应用直写 GPU 内存 |
+| 段 | id | 拥有者 | 默认 | 内容 |
+|---|---|---|---|---|
+| `SEG_CMD` | 1 | client（server 只读） | 8 MiB，2 的幂 | `RingControl`（4 KiB 页）+ POD 记录 + ≤4 KiB 内联负载 |
+| `SEG_STAGE` | 2 | client | 32 MiB | bulk 字节：buffer sub-data、纹理紧密重打包区域、UBO scratch、client 顶点/索引/indirect 数组、multi-draw 参数块、具名 UBO host payload、persistent-map 脏块 |
+| `SEG_REPLY` | 3 | server（client 只读） | 16 MiB，8 个 2 MiB slot（ID-47） | readback 像素、buffer writeback、acceptance 答案 |
+| `SEG_EVENT` | 4 | server | 256 KiB SPSC ring | 十个回调的事件 + `EvQueryResult/EvFenceSignaled/EvReadbackDone` |
+| `SEG_SHADOW[n]` | 5 | client | 每对象 ≥256 KiB（Phase 2） | 零拷贝 buffer/texture shadow |
+| `SEG_ADOPT[n]` | 6 | server（client RW） | 每 buffer ≥16 MiB（P11） | 应用直写 GPU 内存 |
 
-创建（`ShmSegment`）：Android `ASharedMemory_create`（API 26；libc 的 `memfd_create` wrapper 是 API 30）；桌面 Linux `syscall(SYS_memfd_create)`；其他 POSIX `shm_open`+`shm_unlink`；Windows `CreateFileMappingW`(`Local\`)。传递：POSIX `SCM_RIGHTS`（`FdPassing`，专用 `AF_UNIX SOCK_DGRAM` socketpair——消息边界保住 ancillary data 与 payload 不被拆开，sideband ≤256 B）；Windows 段名走 `SegmentRef`。fd 传递在第一个 transport commit 里实现——没有它数据面在唯一重要的平台上一字节过不去。
+`SEG_STAGE` 默认 32 MiB 装不下 P5b 目标负载的单次 128 MiB 上传；**默认不改**，普查与设备用显式 `MOBILEGL_IPC_STAGE_MB=256` profile，分块 / 专用 carrier 是 P8 的设计（`ROADMAP.md` 开放问题 11）。
 
-不进 `SEG_STAGE` 的：restart 重写的整 EBO 与 multi-draw 展平的索引流（走索引镜像）。`SEG_SHADOW` 块的退休规则：释放的块进 pending 链表，`appliedSeq`（借入 GPU 时间线的 slot 用 `retiredSeq`）越过最后一条引用它的记录后才归还 arena。
+创建（`ShmSegment`）：Android `ASharedMemory_create`（API 26）；桌面 Linux `memfd_create`；其他 POSIX `shm_open`；Windows `CreateFileMappingW`。传递：POSIX `SCM_RIGHTS`（`FdPassing`，专用 `AF_UNIX SOCK_DGRAM` socketpair）；Windows 段名走 `SegmentRef`。不进 `SEG_STAGE` 的：restart 重写的整 EBO 与 multi-draw 展平的索引流（走索引镜像）。`SEG_SHADOW` 块的退休：释放的块进 pending 链表，`appliedSeq`（借入 GPU 时间线的 slot 用 `retiredSeq`）越过最后一条引用它的记录后才归还。
 
 ### 11.2 `RingControl`（`Ring.h`）
 
-一页 4 KiB，每个争用组各占一条 cache line：`SEG_CMD` 游标三元组 `cmdHead / cmdAppliedTail / cmdRetiredTail`；`SEG_STAGE` 独立三元组（`stageHead / stageAppliedTail / stageRetiredTail`——"`SEG_STAGE` 余量 < 1/4"是 publish 触发器，占用率不能从另一个 ring 算出，且 stage slot 的退休条件不同）；三个严格区分的水位 `appliedSeq`（释放 `*AppliedTail`）/ `submittedSeq`（释放 staging）/ `retiredSeq` + `completedFrameSerial`（释放 `*RetiredTail` 与 `SEG_ADOPT`）+ `presentAckSerial`；`serverEpoch`（context 丢失 / server 重启 ++）、`ringGeneration`（硬 drain 后 ++，作废缓存 offset）、`consumerParked`/`producerParked`、`eventRingFull`、`eventDropped`。两个 tail 是必须的：P11 之后 server 会**借用** ring slot 而不是再拷一次，那种 slot 只能在 `completedFrameSerial` 之后回收。游标是单调字节计数、2 的幂掩码、永不重置。
+一页 4 KiB，每个争用组各占一条 cache line：`SEG_CMD` 游标三元组 `cmdHead / cmdAppliedTail / cmdRetiredTail`；`SEG_STAGE` 独立三元组；三个水位 `appliedSeq`（释放 `*AppliedTail`）/ `submittedSeq`（释放 staging）/ `retiredSeq` + `completedFrameSerial`（释放 `*RetiredTail` 与 `SEG_ADOPT`）+ `presentAckSerial`；`serverEpoch`、`ringGeneration`、`consumerParked`/`producerParked`、`eventRingFull`、`eventDropped`。两个 tail 是必须的：P11 之后 server 会**借用** ring slot 而不是再拷一次。游标是单调字节计数、2 的幂掩码、永不重置。
 
-记录头 `RingRecordHeader{kind, flags, size}`，kind 0 保留给 wrap 填充；`RingProducer::Reserve` 在记录会跨 wrap 边界时自动发 pad 记录，保证每条记录连续；`MaxRecordBytes() == Capacity()/2`；`RingConsumer::Pop` 拒绝不可能的头（非 8 对齐、小于头、大于已发布）并置 corrupt → `Fatal{ProtocolCorruption}`；`HardDrainRing` 只在两侧静默且 ring 全空时 bump generation。
+记录头 `RingRecordHeader{kind, flags, size}`，kind 0 保留给 wrap 填充；`RingProducer::Reserve` 在记录会跨 wrap 边界时自动发 pad 记录；`RingConsumer::Pop` 拒绝不可能的头并置 corrupt → `Fatal{ProtocolCorruption}`；`HardDrainRing` 只在两侧静默且 ring 全空时 bump generation。
 
 ### 11.3 双向 doorbell（`Doorbell.h`）
 
-- client → server：consumer 自旋 → 置 `consumerParked=1` → 阻塞；producer release-store `cmdHead` 之后仅当 `consumerParked` 时敲（字节码 `0x01`）。
-- server → client：client 在**任何**等待（present credit、`kNeedsAck`、ring/stage 满）先自旋 `MOBILEGL_IPC_SPIN_US`（默认 50 µs）→ 置 `producerParked=1` → 阻塞；server 在 release-store 任何 watermark 之后仅当 `producerParked` 时敲（`0x02`）。没有第二个方向，每处 client 等待都退化成跨进程自旋一条 cache line——手机上一颗大核满频空转一整帧，而全库没有亲和性控制。
-- 两个实现，零 futex/eventfd/named-event 平台代码：`CondVarDoorbell`（`inproc`，带 `Kill()` 死亡态让 `Shutdown` 能 join 一个 parked 的等待者）与 `SocketDoorbell`（`spawn`，一字节；`SOCK_STREAM` 端在对端关闭时报 `POLLIN|POLLHUP` + `recv()==0`，这是死亡检测）。
-- 丢失唤醒窗口由**两个 `seq_cst` fence** 关闭（等待者置标志 → fence → 再测条件；通知者发布 watermark → fence → 读标志），标志本身的访问是 relaxed。`NotifyIfParked` 的前置条件：watermark 已发布。死亡的 doorbell 让 `Wait` 停止重新 park。
+- client → server：consumer 自旋 → 置 `consumerParked=1` → 阻塞；producer release-store `cmdHead` 之后仅当 `consumerParked` 时敲。
+- server → client：client 在**任何**等待先自旋 `MOBILEGL_IPC_SPIN_US`（默认 50 µs）→ 置 `producerParked=1` → 阻塞；server 在 release-store 任何 watermark 之后仅当 `producerParked` 时敲。没有第二个方向，每处 client 等待都退化成跨进程自旋一条 cache line。
+- 两个实现：`CondVarDoorbell`（`inproc`，带 `Kill()` 死亡态让 `Shutdown` 能 join 一个 parked 的等待者）与 `SocketDoorbell`（`spawn`，一字节；对端关闭时 `POLLIN|POLLHUP` + `recv()==0` 是死亡检测）。丢失唤醒窗口由两个 `seq_cst` fence 关闭。
 
 ### 11.4 控制面（`protocol.fbs`、`Framing.h`、`ITransport.h`）
 
-- 一份 schema，两种用法：热路径 → FlatBuffers `struct`（定长、无 vtable、只需边界检查）直接进 ring——即 G3 生成的记录，与 `MGPipeTypes.h` 的 POD 逐条 `static_assert` 尺寸/`offsetof` 对齐；罕见/变长/需演进 → `table` 走 CTRL socket。今天 `protocol.fbs` 只含控制面（`MobileGL/MG_Remote/Protocol/protocol.fbs:218-228` 的 `CtrlMsg`：`Hello`、`Welcome`（四个段的 `SegmentRef`）、`CapsSnapshot`、`SurfaceOp/SurfaceReply`、`ResyncRequest/Done`、`AuxRequest`（外来线程的 fence wait / query result / scalar get）、`Fatal`（`ProtocolCorruption/RingOverrun/SegmentMismatch/DeviceLost/ServerCrashed/AbiMismatch`）、`LogLine`），`file_identifier "MGLC"`；union tag 是 wire 值，只追加。
-- `protocol_generated.h` 提交进树，`scripts/gen_protocol.py` 再生成（只用 `MOBILEGL_FLATC_EXECUTABLE` 或从 pinned submodule 在仓库外构建一次的 flatc，不用 PATH 上的），CI `flatc-check`（`.github/workflows/test.yml:304`）重生成并 diff。**codegen 绝不进默认构建图**；运行时 header-only。
-- 封帧 `[u32 'MGLF'][u32 len][payload]`，64 MiB 上限，**读时校验**：坏 magic / 超长长度立即 latch 失败并报 `MOBILEGL_ERR_PROTOCOL_MISMATCH`（不是静默永久挂起）；接收缓冲不足**返回所需大小并保留消息**（`MOBILEGL_ERR_BUFFER_TOO_SMALL`）。
-- `ITransport`：`SendFrame / ReceiveFrame / PeekFrameSize / ShareFd / ReceiveFd / Shutdown / Role`；热路径完全绕过它。`Shutdown` 拆掉整个连接（两端都不能再发，等待者全部解锁，已排队消息仍可读完）。`WireLog.h` 是唯一的日志入口，让 `Transport/` 的头不 include 前端 umbrella（纯度门 A 断言 `-H` 输出）。
-- `mg_protocol_base.h`：纯 C、无依赖的结果码 / span / `ShmRegion` / id 词汇，structSize-first 版本纪律（追加 = minor，改动 = major，major 不符是结构化失败）。
+- 一份 schema，两种用法：热路径 → FlatBuffers `struct` 直接进 ring（即 G3 生成的记录，与 `MGPipeTypes.h` 的 POD 逐条 `static_assert` 对齐）；罕见/变长/需演进 → `table` 走 CTRL socket（`CtrlMsg`：`Hello`、`Welcome`、`CapsSnapshot`、`SurfaceOp/SurfaceReply`、`ResyncRequest/Done`、`AuxRequest`、`Fatal`、`LogLine`），`file_identifier "MGLC"`，union tag 只追加。
+- `protocol_generated.h` 提交进树，`scripts/gen_protocol.py` 再生成（只用 `MOBILEGL_FLATC_EXECUTABLE` 或 pinned submodule 构建的 flatc），CI `flatc-check` 重生成并 diff；**codegen 绝不进默认构建图**。
+- 封帧 `[u32 'MGLF'][u32 len][payload]`，64 MiB 上限，**读时校验**：坏 magic / 超长长度立即 latch 失败并报 `MOBILEGL_ERR_PROTOCOL_MISMATCH`；接收缓冲不足返回所需大小并保留消息。
+- `ITransport`：`SendFrame / ReceiveFrame / PeekFrameSize / ShareFd / ReceiveFd / Shutdown / Role`；热路径完全绕过它。`WireLog.h` 是 `Transport/` 唯一的日志入口（纯度门 A）。`mg_protocol_base.h`：纯 C 的结果码 / span / `ShmRegion` 词汇，structSize-first 版本纪律。
 
 ### 11.5 WAR 危害、拷贝账与背压
 
-- Phase 1（P5–P8）：GL 调用时刻把字节拷进 ring slot，slot 到 `stageAppliedTail` 越过它为止不可变，危害按构造消除；代价一次 memcpy，`Ops_ResidentSubData` 与 `StageBlocksIntoUnpackRing` 在 monolith 里已经在付。
-- Phase 2（shadow-in-shm，零拷贝）：≥256 KiB 的 shadow 分配在 `SEG_SHADOW`（`PipeResource::MapAlignedAllocator` 增加 shm arena，保留 64 B 对齐契约；`MipmapStorage` 的 level vector 同理），`ResourceSubData` 只带 `{seg, offset, size}`。WAR 用 per-shadow 64 KiB 块发送水位：应用写某块而该块上次发送尚未被 `appliedSeq` 覆盖 → 这次写走 `SEG_STAGE`。必须整段 `#if MOBILEGL_BUILD_DISAGGREGATED` 包裹（改容器 allocator 就改了类型，option OFF 时逐字折叠回今天的 allocator）。
+Phase 1（P5–P8）：GL 调用时刻把字节拷进 ring slot，slot 到 `stageAppliedTail` 越过它为止不可变，危害按构造消除；代价一次 memcpy。Phase 2（shadow-in-shm，零拷贝）：≥256 KiB 的 shadow 分配在 `SEG_SHADOW`，`ResourceSubData` 只带 `{seg, offset, size}`，WAR 用 per-shadow 64 KiB 块发送水位；必须整段 `#if MOBILEGL_BUILD_DISAGGREGATED` 包裹。
 
 | 路径 | monolith | Phase 1 | Phase 2 |
 |---|---|---|---|
-| `glBufferSubData` → shadow store | 2 | 3 | **2** |
+| `glBufferSubData` → shadow store | 2 | 3 | 2 |
 | `glBufferSubData` → adopted store（P11） | 2 | 2 | 2 |
 | `glMapBufferRange(WRITE)`+unmap | 3 | 4 | 3 |
 | persistent coherent map 推送（§12） | 0 | 1/发射点 | 1/发射点（精确块） |
 | `glTexSubImage` | 2 | 2 | 2 |
 | 全局 UBO / draw | 1 | 2 | 1 |
-| adopted ≥16 MiB（P11 T1/T0） | 0 | 0 | 0 |
+| adopted ≥16 MiB（P11） | 0 | 0 | 0 |
 
-server 没有第二份 `BufferObject`，所以不存在"staging → server 侧 shadow"这次中间拷贝。字节计数器装在 wire 两侧，验收看总量。
-
-- 分配与背压：逐字移植 `PersistentRing`（单调 head/tail、2 的幂掩码、frame mark）。分配失败升级：扩容（翻倍）→ 对最老未 retire 批次有界等待（默认 50 ms，走 `producerParked` doorbell）→ 硬 `Drain` + `ringGeneration` bump。硬 drain 后恢复便宜：正向流是自洽的推送流，tracker 把全部 dirty 位置为"必须重推"，下一个 verb 重发完整 `set_*` 集合，纹理侧由发射游标负责，没有"重发未 apply 对象状态"的特殊协议。`SEG_CMD` 与 `SEG_STAGE` 各自独立跑这套升级。
+server 没有第二份 `BufferObject`，不存在"staging → server 侧 shadow"这次中间拷贝。分配与背压：逐字移植 `PersistentRing`；分配失败升级：扩容 → 对最老未 retire 批次有界等待（走 `producerParked` doorbell）→ 硬 `Drain` + `ringGeneration` bump；硬 drain 后恢复便宜：tracker 把全部 dirty 位置为"必须重推"。P5 落地形状：staging 与 command ring 的等待都以未退休发布记录的真实退休为条件（`ringwaits` 只计真正阻塞的分配），超大单记录仍拒绝。
 
 ### 11.6 publish、序号与 credit
 
-- 不设"records ≥ 64 KiB"一类阈值（那是一整帧的流水线气泡，且否掉 `inproc` 的全部意义）。规则：每条记录（或每 8–16 条摊销）release-store `cmdHead`，仅当 `consumerParked` 时敲门铃。
-- 显式门铃点：`present`、任何 `kNeedsAck` 请求、`eglMakeCurrent`、`glFlush`（刷出不等待）、`SEG_STAGE` 余量 < 1/4、**轮询类入口**（`glClientWaitSync` 任意 timeout、`glGetSynciv(GL_SYNC_STATUS)`、`glGetQueryObject*(AVAILABLE|NO_WAIT)`——否则 `while (glClientWaitSync(s, FLUSH_COMMANDS_BIT, 0) == TIMEOUT_EXPIRED) {}` 永久自旋）；带 `GL_SYNC_FLUSH_COMMANDS_BIT` 无条件 publish。
-- 饥饿升级：同一 handle 连续 N 次（`MOBILEGL_IPC_POLL_ESCALATE`，默认 64）本地回答"未就绪"而 watermark 毫无移动 → 升级为一次阻塞 round trip。
-- `glFinish`/`glFlush` 保持纯 no-op。
-- seq = 记录序数；两个互相独立的窗口：字节 credit（两个 ring 各自占用）与 present credit（`presentsSent - presentAckSerial >= MOBILEGL_IPC_PRESENT_CREDIT` 时 `eglSwapBuffers` 阻塞）。server 不发 credit 消息：对 `RingControl` release store，consumer 每 64 条记录更新一次 `appliedSeq`，`producerParked` 时敲反向门铃。
+- 不设"records ≥ 64 KiB"一类阈值。规则：每条记录（或每 8–16 条摊销）release-store `cmdHead`，仅当 `consumerParked` 时敲门铃。
+- 显式门铃点：`present`、任何 `kNeedsAck` 请求、`eglMakeCurrent`、`glFlush`、`SEG_STAGE` 余量 < 1/4、**轮询类入口**（`glClientWaitSync` 任意 timeout、`glGetSynciv(GL_SYNC_STATUS)`、`glGetQueryObject*(AVAILABLE|NO_WAIT)`）；带 `GL_SYNC_FLUSH_COMMANDS_BIT` 无条件 publish。饥饿升级：同一 handle 连续 N 次（`MOBILEGL_IPC_POLL_ESCALATE`，默认 64）本地回答"未就绪"而 watermark 毫无移动 → 升级为一次阻塞 round trip（P10）。
+- `glFinish`/`glFlush` 保持纯 no-op。seq = 记录序数；两个互相独立的窗口：字节 credit 与 present credit（`presentsSent - presentAckSerial >= MOBILEGL_IPC_PRESENT_CREDIT` 时 `eglSwapBuffers` 阻塞）。server 不发 credit 消息，consumer 每 64 条记录更新一次 `appliedSeq`。
 
-### 11.7 事件回传与溢出
+### 11.7 事件回传与溢出（P9）
 
-`SEG_EVENT` 承载十个回调加回读完成通知。client 排空点：`glGetError`、`glGetQueryObject*`、`glClientWaitSync`、`glGetSynciv`、`eglSwapBuffers`、`glMapBuffer*`/`glGetBufferSubData`/`glCopyBufferSubData`，以及**每一次等待循环的每一轮**。溢出策略（修一个双向死锁：client 卡在 present credit、server apply 线程卡在生产事件）：`EvLogLine` ≤WARN 有损；语义承载事件（`EvGpuWritten`、`EvReadbackDone`、`EvFenceSignaled`、writeback、pull request、mip、scatter、`EvGlError`、surface、caps、`EvLogLine ≥ERROR`）无损——ring 满时 server 置 `eventRingFull=1`、**在记录边界停止 apply**、敲反向门铃，client 排空后清标志并敲正向门铃；ERROR 速率限制器。故障注入：client 被 credit 阻塞时灌满 `SEG_EVENT`；日志洪泛下注入一次 link 失败，那行 ERROR 必须出现且两侧恢复。server 侧 `MGLOG` 按流顺序 replay 进 client 日志流（复用 `DeferredLogLine` 机制）。
+`SEG_EVENT` 承载十个回调加回读完成通知。client 排空点：`glGetError`、`glGetQueryObject*`、`glClientWaitSync`、`glGetSynciv`、`eglSwapBuffers`、`glMapBuffer*`/`glGetBufferSubData`/`glCopyBufferSubData`，以及每一次等待循环的每一轮。溢出策略（修一个双向死锁）：`EvLogLine` ≤WARN 有损；语义承载事件无损——ring 满时 server 置 `eventRingFull=1`、**在记录边界停止 apply**、敲反向门铃，client 排空后清标志并敲正向门铃。故障注入：client 被 credit 阻塞时灌满 `SEG_EVENT`；日志洪泛下注入一次 link 失败，那行 ERROR 必须出现且两侧恢复。
 
-### 11.8 fence 与无 present 负载
+### 11.8 fence 与无 present 负载（P10）
 
-- fence 完成度必须来自**真的逐 fence 退休**，不是 present 水位：DirectGLES 的 `g_completedFrameSerial` 只在 `Present()` 与 `WaitForFrameSerialCompleted` 里前进，帧中 fence 会退化成帧计数推断——`DirectVulkan.cpp` 写明这是被修掉的 bug（MC 1.21.5 的 fence-paced ring 曾因此 native-heap OOM）。规则：`FenceCreate` 转成真实的后端 `FenceSync()`，server 用自己已有的逐 fence 轮询在非 present 时刻也推进并发 `EvFenceSignaled`。
-- 无 present 循环（CTS、回读循环、从不 swap 的集成场景）下 `retiredTail` 会饿死、`SEG_STAGE` 填满、每个用例都跑到硬 drain。规则：DirectGLES 的 server 加**非 present fence tick**——距上次 `Present` 超过 8 ms 或每 4096 条已 apply 记录插一个 `glFenceSync` 并轮询 fence ring；ring 占用率与升级次数进计数器；P8 加一个无 present 的 split 用例。
+fence 完成度必须来自**真的逐 fence 退休**，不是 present 水位（DirectGLES 的 `g_completedFrameSerial` 只在 `Present()` 里前进，帧中 fence 会退化成帧计数推断——`DirectVulkan.cpp` 写明这是被修掉的 bug）。无 present 循环下 `retiredTail` 会饿死：DirectGLES 的 server 加**非 present fence tick**（距上次 `Present` 超过 8 ms 或每 4096 条已 apply 记录插一个 `glFenceSync`）；P8 加一个无 present 的 split 用例。P5b 已把五条 sync 槽搬上 apply 线程（§17.5）。
 
 ## 12. persistent map 与 ≥16 MiB 采纳
 
-`AcquirePersistentMap` 是永久的地址空间捐赠（返回 host-visible coherent 指针，成为该 buffer 的唯一真相源；≥16 MiB 可变 store 由 `TryAdoptLargeStorage` 自动走到，实测 MC 26.3 p99 163→21 ms、40→115 fps、省 ~400 MB）。**整个 monolith 改造期一动不动**（D-B4），只有 IPC 那一步会打破它。
+`AcquirePersistentMap` 是永久的地址空间捐赠（返回 host-visible coherent 指针；≥16 MiB 可变 store 由 `TryAdoptLargeStorage` 自动走到，实测 MC 26.3 p99 163→21 ms、40→115 fps、省 ~400 MB）。**整个 monolith 改造期一动不动**（D-B4）。
 
-三档，由运行时 POST 探针选择（本项目"后端限制一律探针判定、不硬编码驱动名"的既定规则），**spike B 已在两台设备上给出答案**（`MEASUREMENTS.md` §2）：
+三档，由运行时 POST 探针选择，spike B 已在两台设备上给出答案（`MEASUREMENTS.md` §1.2）：
 
 | 档 | 形态 | 实测 |
 |---|---|---|
-| **T0 — server 导入 client 分配**（P11 主攻） | client 分配 `AHardwareBuffer` BLOB，socket 交接；server 以 `VK_ANDROID_external_memory_android_hardware_buffer`（Magma）或 `EGL_ANDROID_get_native_client_buffer` + `glBufferStorageExternalEXT`（Espryt）导入，两侧 persistent+coherent 映射 | **Adreno 830 与 Mali 都是完整读写往返**，含 GPU 访问与两侧字节校验——唯一在两台设备、两个后端上都成立的档 |
-| T1 — server 导出自己的映射 | `VK_KHR_external_memory_fd` opaque fd，client `mmap` + 导入 | 只有 Adreno 的 Vulkan 路径可用；Adreno 的 GLES 导入 `glMapBufferRange` 全部 `GL_INVALID_OPERATION`；Mali 不可导出。**每次存储定义一次 round trip**（不是每 store 一次），`StorageBufferRegrowScenario` 发布 `map-persistent-roundtrips` |
-| T3 — host pointer 导入（`VK_EXT_external_memory_host`） | | Adreno 无扩展；Mali 只读（GPU 写对宿主映射不可见） |
-| T2 — 拒绝（永久正确回退） | `AcquirePersistentMap` 返回 `nullptr`，前端已在三处容忍 | 此档下 client 侧推送强制 |
+| **T0 — server 导入 client 分配**（P11 主攻） | client 分配 `AHardwareBuffer` BLOB，socket 交接；server 以 `VK_ANDROID_external_memory_android_hardware_buffer`（Magma）或 `EGL_ANDROID_get_native_client_buffer` + `glBufferStorageExternalEXT`（Espryt）导入 | 唯一在两台设备、两个后端上都成立的完整读写档 |
+| T1 — server 导出自己的映射 | `VK_KHR_external_memory_fd` opaque fd | 只有 Adreno 的 Vulkan 路径可用；每次存储定义一次 round trip |
+| T3 — host pointer 导入 | `VK_EXT_external_memory_host` | Adreno 无扩展；Mali 只读 |
+| T2 — 拒绝（永久正确回退） | `AcquirePersistentMap` 返回 `nullptr` | 此档下 client 侧推送强制；**P5 split 使用的档**（`MOBILEGL_IPC_ADOPT_TIER=2`） |
 
-**`map-persistent-roundtrips`（`mpr`）的定义，P3a 拍板并落地**：它数的是**每一次 `MapPersistent` 发射，铸成还是拒绝都算**（`MobileGL/MG_Impl/Pipe/PipeFill.cpp:736`，client 侧发射器，`CallClass::MapPersistentRoundtrips`，`MobileGL/MG_Util/Metrics/PipeStats.h:126`，摘要行印 `mpr=`）。理由是 `ROADMAP.md:7` 的"每个门必须能因它存在的理由变红"：定义成"真正发生的往返次数"在 monolith 下按构造恒为 0，永远红不了。按"每次获取尝试"计数则两种模式下**数字相同**，恰好等于上表 T1 那句"每次存储定义一次 round trip"，在 monolith 下就非零、就可断言，而一个改成逐 draw 获取的回归立刻现形。门是 `StorageBufferRegrowScenario.NStorageDefinitionsCostNMapPersistentRoundtripsNotOnePerDraw`（`MobileGL/MG_IntegrationTest/Scenarios/StorageBufferRegrowScenario.cpp:255`）与 `LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip`（`MobileGL/MG_IntegrationTest/Scenarios/LargeArenaAdoptionScenario.cpp:450`）。
+`map-persistent-roundtrips`（`mpr`）数的是**每一次 `MapPersistent` 发射，铸成还是拒绝都算**——按"真正发生的往返"定义在 monolith 下按构造恒为 0，永远红不了；按获取尝试计数两种模式下数字相同、在 monolith 下就可断言（门：`StorageBufferRegrowScenario`、`LargeArenaAdoptionScenario`）。
 
-`MOBILEGL_IPC_ADOPT_TIER`（`auto`/0/1/2）做负面对照；与 `MOBILEGL_IPC_RESPAWN` 互斥（被采纳的 store 是 server 拥有的内存）。
-
-**client 侧 persistent map 推送三件套**（T2 档强制，P5）：
-
-1. 不做 map/unmap 命令对：server 唯一需要知道的是"这个资源现在有没有活的宿主写入者"（`IsBufferDrawClean` 那一行要表达的东西），所以 `ResourceRespecify/SubData` 的 payload 带一个 `hasLiveHostWrites` 位，零新增记录种类。
-2. 块粒度脏块推送：tracker 维护 `m_livePersistentMaps`（persistent+write+非 FlushExplicit+非 GpuResident），在每个 validate 点对本次操作可达的每个这类 buffer（VAO/index/indirect/UBO/SSBO/atomic/XFB target——即后端 20 个 `SyncPersistentMappedRange` 站点的并集）按 `MOBILEGL_IPC_PERSISTENT_BLOCK_KB`（默认 64）切块发送。Phase 1 保守版（整个 mapped span 当脏，按块拆）；Phase 2 精确版（shadow-in-shm 的 64 KiB 块脏位，`memcmp` 先行）。P5 验收记录 `persistent-map-push` 字节量；若保守版在 Create/Flywheel fixture 上不可接受，精确版提前——计划里唯一允许因测量改变阶段顺序的地方。
-3. 门从第一天就有：`PersistentCoherentMapScenario`（map PERSISTENT|WRITE|COHERENT、写、不做任何其它 GL 调用、draw、readback 校验）。
-
-`MOBILEGL_COHERENT_AS_FLUSH` 在拆分模式下照常生效：两个带 `coherent_as_flush: true` 的 Create fixture 在 split 与 monolith 下走同一条 buffer 路径，逐名对比才有意义。
+**client 侧 persistent map 推送三件套**（T2 档强制，P5 落地）：(1) 不做 map/unmap 命令对，`ResourceRespecify/SubData` 的 payload 带 `hasLiveHostWrites` 位；(2) 块粒度脏块推送：tracker 维护 `m_livePersistentMaps`，在每个 validate 点对本次操作可达的每个这类 buffer 按 `MOBILEGL_IPC_PERSISTENT_BLOCK_KB`（默认 64）切块发送——Phase 1 保守版（整个 mapped span 当脏），Phase 2 精确版（shadow-in-shm 的块脏位）；(3) 门 `PersistentCoherentMapScenario`（map PERSISTENT|WRITE|COHERENT、写、不做任何其它 GL 调用、draw、readback 校验）。R-1（§17.1）的 apply-role producer guard 保证 server 不会重入 client 的 persistent-map producer。`MOBILEGL_COHERENT_AS_FLUSH` 在拆分模式下照常生效。
 
 ## 13. 回读、roundtrip 清单与验证
 
 ### 13.1 稳态零 roundtrip 与不可避免的阻塞点
 
-零 round trip：全部 draw/clear/blit/copy/dispatch/barrier/XFB 跨度/bind/CSO/`set_*`/上传/`present`（单向记录）；全部 caps 站点（握手快照）；`glGetError`/`glFinish`/`glFlush`（本地 / no-op）；fence 与 query 的创建及非阻塞轮询（client 铸造 handle，未命中合法地答"未就绪"）；`glGetTexImage`（DirectGLES，含 GPU 生成的 mip）；`glReadPixels` → pack PBO（fire-and-forget + client 侧 `MarkGpuWritten`，严格优于 monolith 的无条件停等）；`glEndTransformFeedback`（取消无限 fence 等待，对 capture target 置 `MarkGpuWritten`）；`eglSwapBuffers`（只查 credit）；`*IndirectCount`；restart/multi-draw。
+零 round trip：全部 draw/clear/blit/copy/dispatch/barrier/XFB 跨度/bind/CSO/`set_*`/上传/`present`；全部 caps 站点；`glGetError`/`glFinish`/`glFlush`；fence 与 query 的创建及非阻塞轮询；`glGetTexImage`（DirectGLES）；`glReadPixels` → pack PBO（fire-and-forget + client 侧 `MarkGpuWritten`，P6+）；`glEndTransformFeedback`；`eglSwapBuffers`；`*IndirectCount`；restart/multi-draw。
 
-不可避免（全部罕见）：握手一次；surface 生命周期与首次 `MakeCurrent`+`InitCapabilities` 每 surface 至多一次；`glReadPixels` → 客户内存（像素进 `SEG_REPLY`，逐行写回循环留在 server 内按操作级批成一段）；`glGetTexImage`（DirectVulkan，对"无 GPU 背书"的 level 回答"请用你自己的 shadow"）；GPU-write pending 的 buffer 首次 CPU 读（monolith 本来就 `glFinish()`；由 `writableMask` 与 `OnGpuWritten` 收窄）；`glClientWaitSync(timeout>0)`、`GL_QUERY_RESULT` 未完成、`glBeginConditionalRender`（谓词只解析一次，之后每个条件 draw 在 client 丢弃，server 永远不需要那个 query）；`glBufferStorage` 的 ack；`MapPersistent`（仅 T1，每次存储定义一次）；纹理拉取（§8.4）；client 侧索引扫描当源 EBO 在 pending 集里；ring/stage 耗尽与 present credit（节奏，非语义）。
+不可避免（全部罕见）：握手一次；surface 生命周期与首次 `MakeCurrent`+`InitCapabilities` 每 surface 至多一次；`glReadPixels` → 客户内存（像素进 `SEG_REPLY`）；`glGetTexImage`（DirectVulkan）；GPU-write pending 的 buffer 首次 CPU 读；`glClientWaitSync(timeout>0)`、`GL_QUERY_RESULT` 未完成、`glBeginConditionalRender`（谓词只解析一次）；`glBufferStorage` 的 ack；`MapPersistent`（仅 T1）；纹理拉取（§8.4）；client 侧索引扫描当源 EBO 在 pending 集里；ring/stage 耗尽与 present credit。
 
-验收措辞：在全部 40 个 trace 用例上发布逐用例的 roundtrip 计数器、纹理拉取计数器、索引镜像字节数与 `index-bytes-shipped`；零 timeout 轮询循环必须在有界时间内退出。
+验收措辞：在全部 trace 用例上发布逐用例的 roundtrip 计数器、纹理拉取计数器、索引镜像字节数；零 timeout 轮询循环必须在有界时间内退出。
 
 ### 13.2 五部分验证门（取代 monolith 的字节一致门）
 
-"改前改后 `nm --defined-only` 与 `.text` size 完全相等"的门在本方案里按构造死亡（不存在能让旧字节回来的配置）；替换是：
+1. **接口纯度三道门**：**A 门 include 图**（disaggregated 配置编译 `MG_Backend` 时把 `MG_State/GLState` 从 include 搜索路径移除，`scripts/check_include_closure.py`）；**B 门符号** `nm --undefined-only libMobileGLServer.so | grep -E 'MG_State::GLState::|glslang'` 为空；**C 门** `grep -c 'pGLContext' MG_Backend/` == 0。外加 debug 断言"每个后端 memo 键都是 `{slot, gen}`"，由 `HandleRecycleScenario` 支撑（重键前必须在至少一个后端上是红的）。
+2. **语义影子比对 `MOBILEGL_PIPE_VERIFY=1`**——决定性的一条：两套状态模型活在同一地址空间，tracker 再用 `SnapshotFromGLContext()` 填一份 `PipeInputs`，G4 比对器逐字段每 draw 比对，打印第一个分歧字段与 draw 序号。第三种 CI 模式（`build-linux-verify` / `integration-verify` / `retrace-verify`），~5–10× 慢，永不出货。**保留模式**：消费即清的组（纹理 dirty rect）verify 时保留清除前的集合并比对发射出去的 `(UnionBox, RegionCount, Regions[])`。活过 P13。
+3. **行为 A/B**：trace 语料在 `{monolith-pull, monolith-push, split}` 下 SSIM ≥ 0.99；`ctest -L integration-gpu` 在 `DirectGLES.` 与 `DirectGLES.Split.`（DirectVulkan 同）之间逐名相同（G2）；测试名只增不删（G14）；单元全绿；CTS 逐后端 conformance 在 0.5 pp 内（只在五个架构边界与合并 `dev` 之前跑完整 caselist）。`TextureUploadShapeScenario` 把逐纹理逐帧的上传形状录金标比对——+6 ms 悬崖由形状相等把关，SSIM 对它完全不敏感。
+4. **性能**：Redmi `2f7cbe2e` reboot-clean、同热窗口、配对 A/B（`devices/pin-verification-2026-09-07.md`），trace replay `--benchmark` 逐帧 JSON（`frameTimesMs[]` + `frameCpuTimesMs[]`）；**指标是逐线程 CPU 时间**，p50 与 p99；tracker 每 draw 的绝对 ns（`DriverBench` T1/T2）与 Blaze3D blend-toggle 微基准单列；关掉 CSO 内容寻址的负面对照。**口径（用户 2026-09-08 起）：对着 pull 臂记录，不作阻塞门**；专门的优化阶段排在路线图之后。
+5. **覆盖 + poison + 句柄纪律**：G6 重生成 0 UNMAPPED；`gen_pipe_dirty_surface.py` 0 未映射 mutator；G8 字段归属完备；逐 verb 世代 poison；G7 setter 一致性；`ResidualValueBlock` 棘轮。
 
-1. **接口纯度三道门**（只跑非 verify 构建）：**A 门 include 图**——disaggregated 配置编译 `MG_Backend` 时把 `MG_State/GLState` 从 include 搜索路径移除（`nm --undefined-only` 对"只 include 不调用"是瞎的，而 `RenderState.h → FramebufferObject.h → TextureObject.h` 正是这种耦合），依赖 P0.5；**B 门符号**——`nm --undefined-only libMobileGLServer.so | grep -E 'MG_State::GLState::|glslang'` 为空；**C 门未声明**——`grep -c 'pGLContext' MG_Backend/` == 0。外加 debug 断言"每个后端 memo 键都是 `{slot, gen}`，永不是裸前端指针"，由 `HandleRecycleScenario` 支撑（重键前必须在至少一个后端上是红的）。
-2. **语义影子比对 `MOBILEGL_PIPE_VERIFY=1`**——决定性的一条：两套状态模型活在同一地址空间，tracker 再用 `SnapshotFromGLContext()` 填一份 `PipeInputs`，G4 比对器逐字段、每 draw 比对，打印第一个分歧字段与 draw 序号。抓 tracker 忘推的字段、**dirty 位触发得太少**（危险方向）、两条路径变换不一致的值。第三种 CI 模式，40 个 trace + 全部集成测试，~5–10× 慢，永不出货。逐字段而非 `memcmp`（padding 会 false-DIFFER）。**保留模式**：消费即清的组（纹理 dirty rect）发射后无法重算，verify 时 tracker 保留清除前的集合并比对发射出去的 `(UnionBox, RegionCount, Regions[])`。**活过 P13**。
-3. **行为 A/B**：40 个 trace 在 `{monolith-pull, monolith-push, split}` 下 SSIM ≥ 0.99（默认阈值）；`ctest -L integration-gpu` 在 `DirectGLES.` 与 `DirectGLES.Pipe.`/`DirectGLES.Split.`（DirectVulkan 同）之间逐名相同；单元测试全绿；CTS 逐后端 conformance 在 0.5 pp 内（行 = GL 版本/扩展，列 = 状态计数，rate = Pass/(Pass+Fail)，NS 不进分母）。`TextureUploadShapeScenario` 把逐纹理逐帧的上传形状（box vs N region、作业数）录金标比对——+6 ms 悬崖由形状相等把关，SSIM 对它完全不敏感。逐名功能基线是"P1 出口的重构后 monolith"（P1 出口先用 verify 证明等价于 `81b17c0b`）；`81b17c0b` 只作性能锚点。
-4. **monolith 性能**：两台设备 reboot-clean、同热窗口、配对 A/B，`tools/device_bench/bench.sh` + trace replay `--benchmark` 逐帧 JSON（P2 起 `benchmark.json` 除 `frameTimesMs[]` 外还带 `frameCpuTimesMs[]`，任意分位数在主机侧算）；定频与设备档案在同一处：`tools/device_bench/pin_device.sh` 与 `tools/device_bench/devices/*.env`（`odinlite`、`xiaomi-adreno830`、`oppo-mali`；未经核验的档案带 `PROFILE_VERIFIED=0`，脚本默认拒跑，两台战役设备的核验记录在 `docs/Disaggregated/devices/pin-verification-2026-09-07.md`）。**指标是逐线程 CPU 时间**，p50 与 p99；tracker 每 draw 的**绝对 ns** 公布（真实拉取基线只有每 draw 6.5–9.3 次 accessor，相对噪声阈值会平凡通过）；Blaze3D blend-toggle 微基准单列；关掉 CSO 内容寻址的负面对照。**口径（2026-09-08 起）**：这一条对着 pull 臂**记录**而不阻塞——push 比 pull 多约 10% 逐线程 CPU 已被接受，绝对 ns 上限降为记录项，专门的优化阶段排在路线图之后。
-5. **覆盖 + poison + 句柄纪律**：G6 重生成 0 UNMAPPED；`gen_pipe_dirty_surface.py` 重生成 0 未映射 mutator；逐 verb 世代 poison；G7 setter 一致性测试；`ResidualValueBlock` 的 `offsetof` 断言与 P13 的 `sizeof == 0`。
+两条幸存的字节级等式：`MOBILEGL_BUILD_DISAGGREGATED=OFF` 时 `nm --defined-only libMobileGL.so | grep MG_Remote` 为空；**G1**：pull 构建的符号集与 `.text` 字节对 P3a 起的基线恒等（`scripts/symbol_report.py --threshold 0`，每阶段 0 增 / 0 删 / 0 resize / 0 重命名）。**每个门必须能因它存在的理由变红**：每个门都带阴性对照并真跑过一次红（R-16）；公共 GL 看不见的改白盒断言（`PipeApplyPeek`、`PipeSlotPeek`、`BackendCapsPeek`）；`ctest -V` 做拒绝普查是假零（console sink 在发布配置里被编译掉，必须逐用例读自己的日志文件）。
 
-两条幸存的字节级等式：`MOBILEGL_BUILD_DISAGGREGATED=OFF` 时 `nm --defined-only libMobileGL.so | grep MG_Remote` 为空且链接行不增加库；`nm -D libMobileGL.so | grep mobilegl_server_main` 在 RelWithDebInfo 里命中。符号与 `.text` 漂移每阶段作为信息性指标发布。
+### 13.3 长期语义门：MGPipe recorder（P13）
 
-### 13.3 长期语义门：MGPipe recorder
-
-P13 把 `MG_Test` 的 mock 后端变成 MGPipe recorder：在一组 fixture 上录下每 draw 的已推送状态，后续构建对比录像。它不依赖 `MG_State`，是 P13 之后不靠 verify 构建的语义门，也给 `tools/trace_replay` 一种记录**已解析**状态的、比 apitrace 精确得多的录制格式。它只覆盖推送内容，不覆盖后端对它的解释（split-only 的渲染 bug 仍无 server 侧第二意见）。
+`MG_Test` 的 mock 后端变成 MGPipe recorder：在一组 fixture 上录下每 draw 的已推送状态，后续构建对比录像。它不依赖 `MG_State`，也给 `tools/trace_replay` 一种记录**已解析**状态的录制格式。它只覆盖推送内容，不覆盖后端对它的解释。
 
 ## 14. Present、线程与帧节奏
 
-- `eglSwapBuffers` → `present{frameSerial}`（swap interval 搭在同一条记录上）→ publish + 敲门铃 → 返回，除非超出 credit。**`present` 与 `eglSwapBuffers` 严格 1:1**：两个后端的帧边界排空（Magma 四次 `OnFrameBoundary` 老化、`TryDrainFrameTransients`、`BeginFrame`；Espryt 三个 ring 与 `TrimBufferPool` 的 retire）只在 `Present` 内发生，批量会饿死它们。
-- **`MOBILEGL_IPC_PRESENT_CREDIT` 默认 1**（可配 1–4）：延迟叠加，`端到端 ≈ client credit + server 帧数 + 驱动深度`；server 的 `Present` 末尾已在 `vkWaitForFences` 上等 2–3 帧，credit 2 就是端到端 4–5 帧（60 Hz 下 66–83 ms）。P10/P12 用 `GetGpuTimestampNs` 与 `--benchmark` 逐帧 JSON 构建输入延迟直方图，只有实测吞吐收益能抵掉延迟代价才调高。
-- Magma 从不注册 `SetSwapInterval` 且偏好 `MAILBOX`/`IMMEDIATE`，IPC credit 是它唯一的显式限帧器；若需要 FIFO 作为独立 `dev` 变更。
-- 线程——client：**v1 不加线程**，编码在 GL 线程上直接写 ring（前端本就是 per-context 单线程契约）；外来线程的 sync/query 读全部从 `RingControl` 无锁回答，必须发射的少数取 `ctrlMutex` 走 CTRL socket 的 `AuxRequest`（SPSC ring 不允许第二个 producer）；`ShaderCompilePool` 原样在 client；可选 `mgl-client-tx` 凭测量决定。server：`mgl-srv-io`（asio、封帧、`SCM_RIGHTS`、doorbell、CTRL RPC）、`mgl-srv-apply`（**终身持有原生 context**：`g_backendContextOwnerThread` 只写一次，`MakeCurrent` 的缓存失效风暴变启动期一次性，每帧 EGL 复核恒真，off-thread 降级消失）、可选 `mgl-srv-dec`。
-- **核心放置**：拆分的全部性能主张押在两半落在两个都快的核上。全库无亲和性控制，server 是独立进程不继承 launcher 的亲和性。规则：报总 CPU 工作量差（client tracker + encode + decode + server apply vs monolith `PrepareForDraw`）；复用 `ShaderCompilePool` 的大核探测把 `mgl-srv-apply` 绑到大核（`MOBILEGL_IPC_SERVER_AFFINITY`，默认 auto，解析出的 mask 打进日志）；每阶段报逐线程 CPU 时间。
-- 拆机顺序：publish + server 排空并 ack → 停 apply 线程 → 关 transport → client 排空 compile pool（先于 `glslang::FinalizeProcess()` 与 `pGLContext` 析构）→ `MobileGL::Destroy()` → 释放 sync/query handle。
+- `eglSwapBuffers` → `present{frameSerial}` → publish + 敲门铃 → 返回，除非超出 credit。**`present` 与 `eglSwapBuffers` 严格 1:1**：两个后端的帧边界排空只在 `Present` 内发生，批量会饿死它们。
+- **`MOBILEGL_IPC_PRESENT_CREDIT` 默认 1**（P10）：延迟叠加，server 的 `Present` 末尾已在 `vkWaitForFences` 上等 2–3 帧，credit 2 就是端到端 4–5 帧；只有实测吞吐收益能抵掉延迟代价才调高。Magma 从不注册 `SetSwapInterval`，IPC credit 是它唯一的显式限帧器。
+- 线程——client：**v1 不加线程**，编码在 GL 线程上直接写 ring；外来线程的 sync/query 读从 `RingControl` 无锁回答，必须发射的少数取 `ctrlMutex` 走 `AuxRequest`（SPSC ring 不允许第二个 producer）。server：`mgl-srv-io`（封帧、`SCM_RIGHTS`、doorbell、CTRL RPC）、`mgl-srv-apply`（**终身持有原生 context**，`MakeCurrent` 的缓存失效风暴变启动期一次性）。
+- **核心放置**：全库无亲和性控制。规则：报总 CPU 工作量差（client tracker + encode + decode + server apply vs monolith `PrepareForDraw`）；复用 `ShaderCompilePool` 的大核探测把 `mgl-srv-apply` 绑到大核（`MOBILEGL_IPC_SERVER_AFFINITY`，默认 auto）。
+- 拆机顺序：publish + server 排空并 ack → 停 apply 线程 → 关 transport → client 排空 compile pool → `MobileGL::Destroy()` → 释放 sync/query handle（P5 落地形状见 §17.3）。
 
-## 15. 进程、EGL 与平台
+## 15. 进程、EGL 与平台（P6 / P12）
 
 ### 15.1 启动与握手
 
-- server 定位：`MOBILEGL_IPC_SERVER_PATH`（主要）→ `dladdr(&MobileGL::Initialize)` 同目录的 `libMobileGLServer.so`（兜底；不能当主要机制，因为集成测试静态链接 `MobileGL_s`、trace replay 的可执行文件不在库目录）。配套：`MobileGLServer` 的 `RUNTIME_OUTPUT_DIRECTORY` 设为 `$<TARGET_FILE_DIR:MobileGL>`，每条新 ctest `ENVIRONMENT` 与 `add_trace_replay_test` 的 `SPLIT` 分支带 `MOBILEGL_IPC_SERVER_PATH`。
-- 启动：`socketpair(AF_UNIX, SOCK_STREAM)` + `fork`/`execve`，fd 3 = socket。无文件系统 socket 路径、无 abstract namespace、Android 上无 SELinux 争议。
-- **子进程强制 monolith**（修无界 fork 链——server stub `dlopen(libMobileGL.so)` 后必然走 `MG_Backend::Init()`，继承的 `MOBILEGL_TRANSPORT=spawn` 会再 spawn）：spawn 时构造显式 envp 剔除 `MOBILEGL_TRANSPORT` 与全部 `MOBILEGL_IPC_*`；`mobilegl_server_main` 在到达 `Init()` 之前把 `MG_Config::Transport` 硬置为 `Monolith`。两条都做。`MG_Test/Wire` 测试：spawn 一个 server，进程树只多出恰好一个子进程。
-- `Hello{abi, backendType, buildFingerprint, configBlob}` → `Welcome{四个段}`。`configBlob` 转发 client 解析好的 `MG_Config::Features`，两半不可能对 quirk 开关有分歧；`buildFingerprint`（git hash + `PipeCalls.def` hash）不匹配 → 握手期 `Fatal{AbiMismatch}`。
-- `mobilegl_server_main` 声明为 `extern "C" __attribute__((visibility("default")))`：非 Debug 构建设了 hidden visibility，而 FCL/plugin 出货的是 RelWithDebInfo，否则 `dlsym` 在设备上静默失败。
+- server 定位：`MOBILEGL_IPC_SERVER_PATH`（主要）→ `dladdr(&MobileGL::Initialize)` 同目录的 `libMobileGLServer.so`（兜底；集成测试静态链接 `MobileGL_s`、trace replay 的可执行文件不在库目录）。
+- 启动：`socketpair(AF_UNIX, SOCK_STREAM)` + `fork`/`execve`，fd 3 = socket。无文件系统 socket 路径、无 abstract namespace。
+- **子进程强制 monolith**（修无界 fork 链）：spawn 时构造显式 envp 剔除 `MOBILEGL_TRANSPORT` 与全部 `MOBILEGL_IPC_*`；`mobilegl_server_main` 在到达 `Init()` 之前把 `MG_Config::Transport` 硬置为 `Monolith`。两条都做。`MG_Test/Wire` 测试：进程树只多出恰好一个子进程。
+- `Hello{abi, backendType, buildFingerprint, configBlob}` → `Welcome{四个段}`。`configBlob` 转发 client 解析好的 `MG_Config::Features`；`buildFingerprint`（git hash + `PipeCalls.def` hash）不匹配 → `Fatal{AbiMismatch}`；segment 尺寸尚未混入 fingerprint（ID-47 债）。
+- `mobilegl_server_main` 声明为 `extern "C" __attribute__((visibility("default")))`（非 Debug 构建设了 hidden visibility）。
 
-### 15.2 Android（spike A 已证）
+### 15.2 Android（spike A 已证，`MEASUREMENTS.md` §1.1）
 
-- 交付链：APK 唯一可 exec 的位置是 `lib/<abi>/`，打包器只收 `lib*.so`，所以 server 以 `add_executable` + `PREFIX "lib"/SUFFIX ".so"` 构建（真 PIE），并把 `RUNTIME_OUTPUT_DIRECTORY` 指到 AGP 收集原生产物的 `CMAKE_LIBRARY_OUTPUT_DIRECTORY`（`CMakeLists.txt:784-808`，`MOBILEGL_BUILD_SERVER_SPIKE`）。**两台设备上都已证明**：从 `TraceReplayActivity` 自身的 `untrusted_app` 进程 `fork`+`execve` `<nativeLibraryDir>/libMobileGLServer.so`，子进程落在同一域、同一 MLS category，exit 0，零 avc denial（`MEASUREMENTS.md` §1）。
-- `fork`+`execve` 而非 `posix_spawn`：bionic 从 API 28 才声明后者，minSdk 26（`android-plugin/app/src/trace/cpp/spawn_spike.cpp:63-68`）。fork 与 execve 之间只做 async-signal-safe 的 open/dup2/execve/write/_exit（父进程是多线程 JVM）。
-- 应用进程的 stdout/stderr 是 `/dev/null`：子进程用 **marker 文件** 证明自己活过，exec 被拒的 errno 经 close-on-exec pipe 回传（EACCES 与 ENOEXEC 是完全不同的判决）。
-- 生产 server 主体是 ~30 行 stub：`dlopen(libMobileGL.so)` → `dlsym("mobilegl_server_main")`。一份共享库、两个角色、版本必然匹配（Android 上那份库仍含 glslang/SPIRV-Cross，因为它同时服务 client；B 门检的是 server 侧代码有没有引用它们）。
-- minSdk 26 没有公开 NDK API 能扁平化 `ANativeWindow`（`libbinder_ndk`、`ASurfaceControl` 都是 API 29）。**P5–P11 验证路径无窗口**：pbuffer 或 `AImageReader` 的 `ANativeWindow`，trace replay 默认 pbuffer。**P12 生产路径**：Java `Surface`（Parcelable）→ Messenger/AIDL → `MobileGLServerService`（`android:process=":mgl"`）→ JNI `ANativeWindow_fromSurface`（FCLauncher 今天在 `egl_bridge.c` 做的那一次调用）；仓内先例是 `android:process=":bench"` 的 `BenchService`。代价：server 进程多一个 ART（~15–25 MB）。FCL 把游戏 JVM 跑在主进程，第二个进程必须新建。
-- `HeadlessGL` 的 fork 预检会 fork 一个子进程跑完整 EGL bring-up 然后 `_exit`——拆分模式下那个子进程会 spawn 一个孤儿 server。规则：server 的 EOF 检测**即时且无条件退出**（亚秒级）；client 的 socket fd 设成 `_exit` 会确定性关闭的形态；就绪握手有界重试。列为 P6 验收。
-- 通用 env 透传 `--env K=V`（`run_android_retrace_local.py` → intent extra `mobilegl_env` → `trace_replay_core.cpp` 在加载 `libMobileGL.so` 前 `setenv`）已接进 retrace 通道，取代逐 knob 加 `--es/--ez`。
+- 交付链：APK 唯一可 exec 的位置是 `lib/<abi>/`，server 以 `add_executable` + `PREFIX "lib"/SUFFIX ".so"` 构建（真 PIE），`RUNTIME_OUTPUT_DIRECTORY` 指到 AGP 收集原生产物的目录（`MOBILEGL_BUILD_SERVER_SPIKE`）。**两台设备上都已证明**：从 `untrusted_app` 进程 `fork`+`execve` 子进程落在同一域、exit 0、零 avc denial。
+- `fork`+`execve` 而非 `posix_spawn`：bionic 从 API 28 才声明后者，minSdk 26。fork 与 execve 之间只做 async-signal-safe 调用。应用进程的 stdout/stderr 是 `/dev/null`：子进程用 marker 文件证明自己活过，exec 被拒的 errno 经 close-on-exec pipe 回传。
+- 生产 server 主体是 ~30 行 stub：`dlopen(libMobileGL.so)` → `dlsym("mobilegl_server_main")`。一份共享库、两个角色。
+- minSdk 26 没有公开 NDK API 能扁平化 `ANativeWindow`。**P5–P11 验证路径无窗口**（pbuffer / `AImageReader`）。**P12 生产路径**：Java `Surface` → Messenger/AIDL → `MobileGLServerService`（`android:process=":mgl"`）→ JNI `ANativeWindow_fromSurface`；代价 server 进程多一个 ART（~15–25 MB）。
+- `HeadlessGL` 的 fork 预检会 fork 一个子进程跑完整 EGL bring-up 然后 `_exit`——拆分模式下那个子进程会 spawn 一个孤儿 server。规则：server 的 EOF 检测**即时且无条件退出**；client 的 socket fd 设成 `_exit` 会确定性关闭的形态；握手有界重试。P6 验收。
+- 通用 env 透传 `--env K=V`（`run_android_retrace_local.py` → intent extra → `trace_replay_core.cpp` 在加载库前 `setenv`）已接进 retrace 通道。
 
 ### 15.3 Linux / Windows / 崩溃
 
-- Linux/X11：`Window` 是 XID，`nativeToken:u64` 直接送，backend 自己 `XOpenDisplay(getenv("DISPLAY"))`；Wayland 维持不支持。WSL/CI 永不开窗：`EGL_PLATFORM=surfaceless` + `EnsureHeadlessPlatform()`。
-- Windows：`HWND` 进 `nativeToken`，Vulkan 可行，WGL/ANGLE-DXGI 对外进程 HWND 不受支持 → headless only。transport 默认 named pipe：asio `windows::stream_handle` 要求 overlapped 句柄，所以用 GUID 命名的 `CreateNamedPipeW(FILE_FLAG_OVERLAPPED)` + `CreateFileW(FILE_FLAG_OVERLAPPED)` 造句柄对再继承给 `CreateProcess`；AF_UNIX-everywhere 是可选简化。Windows 机器不是正确性门。macOS 不拆分（`CAMetalLayer` 无跨进程表示）。
-- server 死：client 读到 EOF/EPIPE → device-lost 闩锁（GL 调用 no-op、`eglSwapBuffers` 返回 `EGL_FALSE`+`EGL_CONTEXT_LOST`、`glGetGraphicsResetStatus` 返回 `GL_UNKNOWN_CONTEXT_RESET`）；`MOBILEGL_IPC_RESPAWN=1` 时重启并全量重推（默认关，静默重启会掩盖 bug）。client 死：server 读到 EOF → 立即销毁原生 context 并退出；`MOBILEGL_IPC_IDLE_EXIT_S`（默认 30）只作最后保险。
+- Linux/X11：`Window` 是 XID，`nativeToken:u64` 直接送；Wayland 维持不支持；WSL/CI 永不开窗（`EGL_PLATFORM=surfaceless`）。Windows：`HWND` 进 `nativeToken`，Vulkan 可行，WGL/ANGLE 对外进程 HWND 不受支持 → headless only；transport 默认 named pipe。Windows 机器不是正确性门。macOS 不拆分。
+- server 死：client 读到 EOF/EPIPE → device-lost 闩锁（GL 调用 no-op、`eglSwapBuffers` 返回 `EGL_FALSE`+`EGL_CONTEXT_LOST`、`glGetGraphicsResetStatus` 返回 `GL_UNKNOWN_CONTEXT_RESET`）；`MOBILEGL_IPC_RESPAWN=1` 时重启并全量重推（默认关）。client 死：server 读到 EOF → 立即销毁原生 context 并退出；`MOBILEGL_IPC_IDLE_EXIT_S`（默认 30）只作最后保险。
 
 ## 16. 构建布局
 
 ```
-MobileGL/MG_Pipe/                  永远进构建（monolith 的架构，不在任何 option 之后）         [P0]
-MobileGL/MG_Impl/Pipe/             Tracker、SlotAllocator、CsoCache、HostResolve、CompositeResolver  [P2+]
-MobileGL/MG_Backend/MGPipe/        PipeInputs.h + MGPipeImpl_DirectGLES/DirectVulkan.cpp             [P1+]
+MobileGL/MG_Pipe/                  永远进构建（monolith 的架构）
+  PipeCalls.def PipeFields.def Coverage.def FieldOwnership.def FillPoints.def DirtySurface.def
+  MGPipe.h MGPipeTypes.h MGPipeValueTypes.h MGPipeHandles.h MGPipeHostSpan.h MGPipeCallbacks.h
+  MGPipeRenderStateSpans.{h,cpp} PipeApply.{h,cpp} PipeRoute.{h,cpp} PipeMutation.h PipeInputsSwitch.h
+  generated/ PipeTables PipeThunks PipeWire PipeVerify PipeFilled PipeCoverage PipeSpanTable PipeFieldOwnership PipeFillPoints (.inc)
+MobileGL/MG_Impl/Pipe/             Tracker.h PipeFill.{h,cpp} SlotAllocator CsoCache CompositeResolver ResourceTracker
+                                   SetHashSuppressor {VertexInput,Framebuffer,Texture,Sampler,Image,Program}Emit.h
+MobileGL/MG_Backend/MGPipe/        PipeInputs.{h,cpp}
 MobileGL/MG_Remote/                仅 MOBILEGL_BUILD_DISAGGREGATED
-  Protocol/  protocol.fbs  generated/protocol_generated.h  mg_protocol_base.h                       [P0]
-  Transport/ ITransport  InProcessTransport  Framing  Ring  ShmSegment(+Posix/Win32)  FdPassing  Doorbell  WireLog  [P0]
-             SocketTransport                                                                        [P6]
-  Client/    PipeEmitter  EmitTables  BackendObject_Remote  CapsMirror  ShadowArena  PersistentMapTracker  GpuWritePending  Surface/{X11,Win32,Android,Headless}  [P5+]
-  Server/    PipeApplier  PipeObjectTables  IndexHostMirror  ServerLoop  ReplyPool  EventRing  ServerMain  [P5+]
-  ServerJni.cpp                                                                                     [P12]
+  CONTRACT-P5.md CONTRACT-P5B.md CapsCodec.{h,cpp}
+  Protocol/  protocol.fbs generated/protocol_generated.h mg_protocol_base.h
+  Transport/ ITransport InProcessTransport Framing Ring SessionRings ReplySlot EventRing RoleMemory
+             ShmSegment(+Posix/Win32) FdPassing Doorbell WireLog          SocketTransport [P6]
+  Wire/      PipeWireCodec.{h,cpp}（记录编解码、WireVerbSink）
+  Client/    BackendObject_Remote ClientSession EmitTables WireTables SlotCaps CapsMirror
+             PersistentMapTracker GpuWritePending
+  Server/    PipeApplier（ServerVerbSink）ServerLoop ServerSession StagedShadow   IndexHostMirror ServerMain [P6/P8]
 ```
 
-- CMake option（`CMakeLists.txt:23`）：`MOBILEGL_BUILD_DISAGGREGATED`（默认 OFF）追加 `MG_Remote/**` 进 `SOURCE_FILES`（`CMakeLists.txt:454-469`）并定义 `-DMOBILEGL_BUILD_DISAGGREGATED=1`；OFF 时 `MG_Config::Transport` 是 `constexpr Monolith`，`Init.cpp` 的分支编译期消失。`3rdparty/flatbuffers/include` 缺失时把 option 强制回 OFF 并 `message(WARNING)`（`CMakeLists.txt:440-451`）。`MobileGL` 与 `MobileGL_s` 都拿到同一份源。`MG_Test/Wire` 只在该 option 下注册（`MobileGL/MG_Test/CMakeLists.txt:93-95`）。
-- `MOBILEGL_BUILD_DISAGGREGATED_INPROC`（P5 已落地）：CI/调试形态，隐含开启前者并加角色隔离。MGPipe 让需要角色分身的进程全局从四个（`pGLContext`、`gBackendFunctionsTable`、`pActiveBackendObject`、`pDefaultFramebufferInfo`）降到**两个**（pipe 表与 `pActiveBackendObject`）：server 角色不读 `pGLContext`，`pDefaultFramebufferInfo` 由保留句柄 `{0,1}` + surface forwarder 取代。两个角色通过 apply thread 与控制 mailbox 分开，而不是给 1494 个 `pGLContext->` 读点加 TLS。
-- `MobileGLServer`：桌面 `add_executable` 链接 `MobileGL_s`；Android `add_executable` 改名 `lib*.so` 链接共享 `MobileGL`，由 AGP 打进 `jniLibs`。
-- `MOBILEGL_TRANSPORT = monolith | inproc | spawn | unix:<path> | pipe:<name>`（P5 起在 `ConfigLoader.cpp` 解析），免费换来 ctest `ENVIRONMENT` 变体、trace-replay 的 `setenv` 块、FCL 用户可编辑 env、plugin APK 的 V2 开关表、`/data/local/tmp` CTS 路径。
-- 测试接线陷阱：ctest `ENVIRONMENT` 是替换而非追加、`;` 必须转义、property 覆盖 job env，必须用 `mgl_itest_join_environment(... ${MGL_ITEST_COMMON_ENV})` 构造；`add_trace_replay_test` 加 `SPLIT` 后缀（否则与同 case+backend 重名）并加 `-DTRACE_TRANSPORT=` 给 `run_trace_case.cmake` 消费。
-- CI（`.github/workflows/test.yml:1538` `pipe-gates`，P0 已落地）：`gen_pipe.py` 重生成 + diff；`MG_Backend`/`MG_State` 下禁止 stdio 插桩的 grep 门；`gen_pipe_dirty_surface.py --check` + `--self-test`（**P2 起成为门**，`.github/workflows/test.yml:1601-1604`，取代原来信息性的 `--summary` 步骤）；`check_doc_citations.py`（警告级，文档定稿后 `--strict`）。独立 job `flatc-check`。已落地：`include-graph-check`（P0.5）、`monolith-symbol-report`、`build-linux-verify` / `integration-verify` / `retrace-verify`（P1）。
+- CMake option：`MOBILEGL_BUILD_DISAGGREGATED`（默认 OFF）追加 `MG_Remote/**` 并定义 `-DMOBILEGL_BUILD_DISAGGREGATED=1`；OFF 时 `MG_Config::Transport` 是 `constexpr Monolith`。`MOBILEGL_BUILD_DISAGGREGATED_INPROC` 隐含前者并加角色隔离：MGPipe 让需要角色分身的进程全局从四个降到两个（pipe 表与 `pActiveBackendObject`），两个角色通过 apply thread 与控制 mailbox 分开，而不是给 1494 个 `pGLContext->` 读点加 TLS。`3rdparty/flatbuffers/include` 缺失时把 option 强制回 OFF。
+- `MobileGLServer`（P6）：桌面 `add_executable` 链接 `MobileGL_s`；Android 改名 `lib*.so` 链接共享 `MobileGL`。
+- `MOBILEGL_TRANSPORT = monolith | inproc | spawn | unix:<path> | pipe:<name>`（`ConfigLoader.cpp` 解析；P5 只接受前两个，其余具名拒绝并回落 monolith），免费换来 ctest `ENVIRONMENT` 变体、trace-replay 的 `setenv` 块、FCL 用户 env、plugin APK 的开关表。**split build 不设 `MOBILEGL_TRANSPORT=inproc` 时是 monolith control arm**。
+- 测试接线陷阱：ctest `ENVIRONMENT` 是替换而非追加、`;` 必须转义，必须用 `mgl_itest_join_environment(... ${MGL_ITEST_COMMON_ENV})` 构造；`add_trace_replay_test` 加 `SPLIT` 后缀并 `-DTRACE_TRANSPORT=`；每条 `DirectGLES.Split.*` 条目带独立 `MOBILEGL_LOG_FILE_PATH`。
+- CI（`.github/workflows/test.yml`）：`pipe-gates`（G1–G8 重生成 + diff、生成器 self-test、符号报告门、`MG_Backend`/`MG_State` 禁止 stdio 插桩、dirty-surface、字段归属、R-16 阴性对照 smoke、G5 两族、文档引用 lint）；`flatc-check`；`include-graph-check`；`monolith-symbol-report`；`build-linux` / `build-linux-verify` / `build-linux-split`；`integration` / `integration-verify` / `integration-split`（含 `scripts/ci/split_negative_controls.sh` 的 E1/E3(a)/E2 硬门，broad inproc 车道只记录普查）；`retrace` / `retrace-verify` / `retrace-split`。`apk.yml` 构建 pull / push / split 三份 APK 并在 AVD 上 retrace。两份 workflow 里的 `feat/disaggregated` 触发器是 **TEMPORARY**，合入 dev 前移除。
 
-## 17. P5 落地形状：lockstep `inproc`、reply 与 apply-thread server
+## 17. P5 / P5b 落地形状：lockstep `inproc`、reply、apply-thread server 与 verb 迁移
 
 ### 17.1 verb barrier 与诚实的同地址空间传输
 
-P5 的 `inproc` 是真第二线程，但还是 **lockstep**：每条 class-B verb 发射后，client 的 `EmitAndWait` 等到 `appliedSeq == emitSeq`；`MOBILEGL_IPC_VERB_BARRIER=1` 默认开启。理由不是吞吐，而是 27 个 BARRIER-PULLED 字段尚无记录载体；在这些字段退役前让两线程同时跑，会让 server 读到 client 的“未来值”（R-1，ID-4）。barrier 是逐族可退役对象，不是 P6 transport 的要求。
+P5 的 `inproc` 是真第二线程，但还是 **lockstep**：每条 class-B verb 发射后 client 的 `EmitAndWait` 等到 `appliedSeq == emitSeq`；`MOBILEGL_IPC_VERB_BARRIER=1` 默认开启。理由不是吞吐，而是 BARRIER-PULLED 字段（G8 表里目前 36 行）尚无记录载体；在这些字段退役前让两线程同时跑，server 会读到 client 的"未来值"（R-1）。barrier 是逐族可退役对象，不是 P6 transport 的要求；它的设备代价（barrier tax）见 `MEASUREMENTS.md` §7.4。
 
-同一地址空间不得成为旁路（R-2）：encoder 把 `MGHostSpan::Ptr` 恒写成 `nullptr`，内容 blob 必须带真实 `SEG_STAGE` / 段内 offset / 非零 size；decoder 对四种形状分别 `Fatal{ProtocolCorruption}`——非空 `Ptr`、内容记录 size 为 0、非零 size 却无 segment、`offset+size` 越界。`MapPersistent` 在 split 恒 decline；`MOBILEGL_IPC_AUDIT=1` 在 retire 后把 staging 填 `0xDD`，让跨 applier 返回持针的实现下一次读取时可见地失败。四个 Fatal 与 audit 使 `inproc` 和未来 spawn 表达同一份所有权。
+同一地址空间不得成为旁路（R-2）：encoder 把 `MGHostSpan::Ptr` 恒写成 `nullptr`，内容 blob 必须带真实 `SEG_STAGE` offset / 非零 size；decoder 对四种形状分别 `Fatal{ProtocolCorruption}`。`MapPersistent` 在 split 恒 decline；`MOBILEGL_IPC_AUDIT=1` 在 retire 后把 staging 填 `0xDD`，让跨 applier 返回持针的实现下一次读取时可见地失败（R-11：任何 widened read 先过 `RequireStagedCoverageForPendingRanges`，否则 `Fatal{StageSnapshotTooNarrow}`）。apply 角色不得进入 client 的 persistent-map producer（r1）。
 
-reply mailbox 以**记录序号作为 slot id**（R-3）：slot header 是 `{Seq, Status, Size}`，acceptance 的四个 Bool 答案与 `MapPersistent` decline 都在既有 verb wait 内读取，不增加第二次等待。`Status=ERROR` 一律 `Fatal{ReplyError}`，不能退化成 false；读到 reply 之前先由 `appliedSeq` 证明该记录已离开 applier（R-5）。P9 才把这套同步 mailbox 推广成异步池。
+reply mailbox 以**记录序号作为 slot id**（R-3）：slot header 是 `{Seq, Status, Size}`，acceptance 的 Bool 答案与 `MapPersistent` decline 都在既有 verb wait 内读取；`Status=ERROR` 一律 `Fatal{ReplyError}`，未知 status 是 `Fatal{ReplyStatusInvalid}`；读到 reply 之前先由 `appliedSeq` 证明该记录已离开 applier（R-5）。P9 才把这套同步 mailbox 推广成异步池。等待预算：普通 verb / 容量等待 30 s（`Fatal{BarrierTimeout}`）；`ClientWaitSync` 的 applied/reply 预算 = ceil(timeout ns / 1e6) + 30 000 ms，有限 chunk 避开溢出。
 
-### 17.2 71 槽的路由、caps 与 tight readback
+### 17.2 71 槽的三类、caps 与 tight readback
 
-client 表只有三类（`CONTRACT-P5.md` §7）：2 个 getter 从 caps mirror 本地回答；5 个 P5 verb 发射；其余 64 个 `Fatal{UnmigratedVerb}`。实现不是手写 switch：**33 条**走 generated route tables，**4 条 escape** 保留专用 reply/资源语义，`PipeCatalogueTest` 同时钉住 **37**。R-17 的第一轮只替换 `MGPipeApply<Name>(` 调用表达式，漏掉了五个 `&MGPipeApply<Name>` 地址获取点，四条 delete/resource row 于是仍在 GL thread 同步执行；落地门因此既扫调用也扫 address-of。教训：生成路由的完备性必须覆盖值调用与函数地址，两者不是同一张 grep 表（ID-58/61）。
+client 表（`Client/EmitTables.cpp`）把后端函数表的 71 个槽分成三类，`static_assert` 钉住 **A = 2**（getter 从 caps mirror 本地回答）/ **B = 54**（发射：P5 的 `Clear`、`DrawArrays`、`ReadPixels`、`Blit`、`Present` + P5b 的 d1 19、i1 7、t2 6、f1 11、`BlitNamedFramebuffer`、sync 5）/ **C = 15**（`Fatal{UnmigratedVerb}` 具名拒绝，永不回落到 monolith applier——R-4）。applier 侧 33 条走生成路由表 + 4 条 escape，`PipeCatalogueTest` 钉 37；生成路由的完备性覆盖值调用与 `&MGPipeApply*` 地址取用（R-17）。
 
-能力存活只读 `CapsMirror` 中的 `MGPCaps::CallMask`；server 的 consumer mask 由 backend 类型显式设置并以实际 op table 校验，**永不**从进程级 `MGPipeGetResourceOps()` 推导。41 个旧 slot-null probe 也改读对应 cap，否则 non-null emit table 会把所有 fallback 错判成“支持”（R-8）。成功的 `MakeEGLCurrent` / `InitCapabilities` 重新发布 snapshot；client 按 generation 采纳（R-12）。
+能力存活只读 `CapsMirror` 中的 `MGPCaps::CallMask`（R-8）；server 的 consumer mask 由 backend 类型显式设置并以实际 op table 校验，**永不**从进程级 `MGPipeGetResourceOps()` 推导。成功的 `MakeEGLCurrent` / `InitCapabilities` 重新发布 snapshot，client 按 generation 采纳（R-12）；相同 (dpy, draw, read, ctx) tuple 的重复 make-current 不重发（ID-67）。
 
-`ReadPixels` 在线上恒为 **tight**：server 临时设 neutral pack（row length / skips = 0，alignment = 1），只向 reply 写 `width*height*bytesPerPixel`；client 用自己持有的 pack state scatter，row gap 保持原字节（ID-49）。绑定 PACK PBO 时 P5 在 client 侧、发射和解引用之前 `Fatal{UnmigratedVerb, "ReadPixels+PACK_BUFFER"}`；server 直接写 buffer resource 并 `MarkGpuWritten` 是 P6+ 的真实形状（ID-57）。reply 单槽 payload 上限是 `2 MiB - 16`，更大 readback 的 carrier 同样留给 P6+。
+`ReadPixels` 在线上恒为 **tight**：server 临时设 neutral pack，只向 reply 写 `width*height*bytesPerPixel`；client 用自己持有的 pack state scatter（含 `PACK_SWAP_BYTES` 的 component / packed-word swap，r1）。绑定 PACK PBO 时在 client 侧 `Fatal{UnmigratedVerb, "ReadPixels+PACK_BUFFER"}`；reply 单槽 payload 上限 `2 MiB - 16`，更大 readback 的 carrier 留给 P6+（ID-47/57）。
 
 ### 17.3 server 角色、shadow 与退出
 
-`ServerLoop` 的 `mgl-srv-apply` 是 native context 的终身 owner。`ServerMakeEGLCurrent` 对 `(dpy, draw, read, ctx)` tuple **只 bind 一次**；相同 tuple 是 no-op，client release 只记账、绝不让 apply thread native-unbind，context 直到 destroy / context loss 才离开该线程（ID-54）。罕见 EGL 操作经 caller-serialised one-slot control mailbox 进 apply thread；十二个 `Server*` forwarder 是唯一缝，其中 make-current 与 init-caps 成功时执行 R-12 republish。mailbox 在 stop 判定与 publish 上共用 mutex；有 backend 却无 thread 时 `Fatal{ApplyThreadNotRunning}`，不允许回落到 app thread。
+`ServerLoop` 的 `mgl-srv-apply` 是 native context 的终身 owner。`ServerMakeEGLCurrent` 对 tuple **只 bind 一次**，client release 只记账、绝不让 apply thread native-unbind（ID-54）。罕见 EGL 操作经 caller-serialised one-slot control mailbox 进 apply thread；十二个 `Server*` forwarder 是唯一缝。有 backend 却无 thread 时 `Fatal{ApplyThreadNotRunning}`，不允许回落到 app thread。framebuffer death 的驱动调用也经 mailbox 上 apply thread（r1）。
 
-`PipeApplier::ApplyOne` 依次 stamp verb、decode/apply、清 stamp；只有 `SessionConsumer::ApplyOne` 每条记录把 `appliedSeq` 加一，pad 不计数。五条没有 `MGPipeApply*` 的 class-B verb 由 `ServerVerbSink` 消费。`StagedShadowStore` 按 resource twin 复制并合并**精确覆盖范围**；`Ops_H_SubData` / flush / respecify 只把 server-owned copy 交给后端，任何 widened read 先过 `RequireStagedCoverageForPendingRanges`，否则 `Fatal{StageSnapshotTooNarrow}`（R-11）。
+`PipeApplier::ApplyOne` 依次 stamp verb、decode/apply、清 stamp；只有 `SessionConsumer::ApplyOne` 每条记录把 `appliedSeq` 加一。`StagedShadowStore` 按 resource twin 复制并合并**精确覆盖范围**；`Ops_H_SubData` / flush / respecify 只把 server-owned copy 交给后端；有传输时 `liveHostBase()` 不得回落到 client 的 `MappedData()`（ID-50/52）。
 
-退出顺序承重：`ShutdownSplitRoles` 先让 client publish 并 bounded-drain，再 shutdown transport / 唤醒 wait，随后 bounded-join apply thread；线程在仍持 context 时 detach decoder、销毁 private backend，最后才销毁 emitter 与 transport。这样 stats dump、`pActiveBackendObject.reset()` 与 ring unmap 都发生在 thread 退出之后。
+退出顺序：`ShutdownSplitRoles` 先让 client publish 并 bounded-drain，再 shutdown transport / 唤醒 wait，随后 bounded-join apply thread；线程在仍持 context 时 detach decoder、销毁 private backend，最后才销毁 emitter 与 transport。
 
-### 17.4 lane 隔离、G5 与阶段边界
+### 17.4 lane 隔离与阶段边界
 
-每条 `DirectGLES.Split.*` entry 有独立 `MOBILEGL_LOG_FILE_PATH`；E1/E3 控制从被选 entry 的私有文件取 Fatal，不能从并行 lane 的公共日志“借红”（ID-53）。G5 的第十一行 `FlushPendingRangesFrom` 因 P5 的 range 参数化被承认，但两份 untouched-region script 都**始终**对固定 pin `172b0222…` 比较；re-pin 必须同时改两份脚本，不能让 ref-a/ref-b 漂移掩掉改变（ID-41）。
+每条 `DirectGLES.Split.*` entry 有独立 `MOBILEGL_LOG_FILE_PATH`；E1/E3 控制从被选 entry 的私有文件取 Fatal，且把"选中条目被跳过"判为失败（ID-53/62）。`integration-split` 是缩减路径的硬门；broad inproc `integration-gpu` 车道只记录普查、不设门（ID-65）。
 
-P5 到此只声称 reduced path：private lane、barrier、reply、shadow 与 context ownership 已落地；class-C verb、27 个 readback/query wrong-answer、`rsp` residual inputs、PACK-PBO 真 carrier、>2 MiB readback、GetCaps 的两个 server→client blob carrier 与 ABI fingerprint 的 segment-size 混入都属于 P6+ / P7 / P3b-P4b，逐项见 `ROADMAP.md`，不由 `inproc` 同地址空间替它们背书。
+### 17.5 P5b：class-C verb 迁移
+
+- **顺序由动态普查决定**（ID-68）：79 个 trace × 集成车道在 inproc 下的首阻塞统计（`~/w7/notes/p6/census-classC.md`），所有 Minecraft trace 首阻塞 = `DrawElements` → Minecraft 优先，四包并行（d1 draws、i1 image/compute、t2 XFB/tess、f1 clear/copy/mip）+ 尾包（sync、具名 blit、GLES mip）。
+- **一次迁移 = 一个发射器 + 一个 sink 体**：c0b 先给 25 个已测量槽铺 wire 记录（`Wire/PipeWireCodec` 的行）、`WireVerbSink` 分派与 `ServerVerbSink` 具名 Fatal stub；包只在 `EmitTables.cpp` 把槽从 C 挪到 B、在 `PipeApplier.cpp` 填 sink 体（apply 线程、只从记录与 server 状态取输入）。这些槽到达的是 sink，不是 `MGPipeApply*`。
+- **规则 D**：记录把 GL 调用逐字带在句柄旁边（draw 的 mode/count/type/offset/instance/base 字段、clear 的值类与 drawbuffer 下标、named-framebuffer 的句柄形式），后端保留它的 barrier-pulled 读；未测量的形式**按名拒绝**（`+RENDERBUFFER`、`+UNBOUND` 等）而不是猜。
+- **draw 家族**：19 个索引 / 实例 / multi-draw / indirect 槽全部下沉到 `draw_vbo`；用户索引 span 的 shape/extent 门在 encoder / decoder / sink 三端共用（单 range、宽度 1/2/4、`Uint64(Count) × IndexSize ≤ Size`）。
+- **sync**：`FenceSync` / `ClientWaitSync` / `GetSyncStatus` / `WaitSync` / `DeleteSync` 五条现有 opcode 接线，client 铸造 Fence 句柄，wire 只过 `{slot,gen}`，native fence 归 apply 线程；顺带修掉 `MGL_BACKEND_SLOT_PTR_LOCAL` 对 split 恒返回 nullptr。
+- **具名 blit**：`BlitNamedFramebuffer` 经作用域化 client-shadow read/draw 绑定发布，降为现有 bound backend 调用，退出恢复公开绑定。**GLES mip storage**：前端先定义并发布层级，server 只验证 applier descriptor 的 Levels/extent；registry 身份解析只 Find 不 mint。
+- **P5b 留下的 inproc 依赖，P6 必须替换**：具名 blit 的 scoped client binding + barrier；mip descriptor 的 barrier-held registry 查询；FBO death 的 inproc mailbox。三者跨地址空间都不成立。
 
 ## 附 A：开关
 
@@ -634,29 +570,44 @@ CMake：
 | 选项 | 默认 | 状态 |
 |---|---|---|
 | `MOBILEGL_BUILD_DISAGGREGATED` | OFF | 已落地 |
+| `MOBILEGL_BUILD_DISAGGREGATED_INPROC` | OFF | 已落地（P5，隐含前者） |
 | `MOBILEGL_BUILD_SERVER_SPIKE` | OFF（仅 Android） | 已落地（spike A，非出货） |
-| `MOBILEGL_BUILD_DISAGGREGATED_INPROC` | OFF | 已落地（P5） |
-| `MOBILEGL_PIPE_VERIFY` | OFF | 计划（P1；构建期开关，编译进 `SnapshotFromGLContext()` 与 G4 比对器，P13 后保留） |
-| `MOBILEGL_PIPE_LEGACY_MEMOS` | ON（P2..P13） | 已落地（P2；`CMakeLists.txt:36`，OFF 时不编译 pre-handle 臂；`MOBILEGL_PIPE_PUSH=OFF` 会把它强制回 ON 并 `message(STATUS)`，`CMakeLists.txt:476-479`，因为 pull 构建里 pre-handle 臂就是唯一的实现） |
-| `MOBILEGL_FLATC_EXECUTABLE` | 空 | 已落地（只服务 `flatc-check`） |
-| `MOBILEGL_BAKED_INTERNAL_SHADERS` | ON（P7+） | 计划 |
+| `MOBILEGL_PIPE_PUSH` | OFF | 已落地（P1；push / verify / split flavour 都打开它） |
+| `MOBILEGL_PIPE_VERIFY` | OFF | 已落地（P1；隐含 `PIPE_PUSH`，编译 `SnapshotFromGLContext()` 与 G4 比对器，永不出货，P13 后保留） |
+| `MOBILEGL_PIPE_LEGACY_MEMOS` | ON | 已落地（P2；OFF 时不编译 pre-handle 臂；`PIPE_PUSH=OFF` 强制回 ON） |
+| `MOBILEGL_FLATC_EXECUTABLE` | 空 | 只服务 `flatc-check` |
+| `MOBILEGL_BAKED_INTERNAL_SHADERS` | ON | 计划（P7） |
 
-运行时，MGPipe（`MobileGL/Config.h:319-398`，`MobileGL/ConfigLoader.cpp:247-278`；P0 已落地，P2 扩了 push 位图的默认值与两个对照旋钮）：
+运行时，MGPipe（`MobileGL/Config.h`、`ConfigLoader.cpp`）：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `MOBILEGL_PIPE_PUSH` | pull 构建 `0`；**push 构建 `0x1fff`**（`kMGPipeSubsystemsMigratedAtP4a`；`0x1ff` = `kMGPipeSubsystemsMigratedAtP3a`、`0x7f` = `...AtP2` 都保留作分阶段对照，`MobileGL/MG_Pipe/MGPipe.h`，读入点 `MobileGL/ConfigLoader.cpp`）。**P4a 的四位与它们的三条依赖拒绝**：位 9 framebuffer、位 10 纹理资源、位 11 sampler、位 12 program；位 11 要位 10（每个 `MGPBoundView::Texture` / `MGPImageView::Res` 都是纹理句柄）、位 9 要位 10（`MGPSurface::Res` 同理）、位 10 要位 7（buffer texture 的 `BufferForTexBuffer`）**外加 P4a 加的第四条：位 10 要位 11**（`MGPTextureParams::BuiltinSampler` 是 sampler CSO 句柄，只有位 11 铸它，空句柄是 `Fatal{ProtocolCorruption}`）。**两侧都要拒**：服务端在各族的 arm resolver 里拒绝并跑旧臂，客户端在 `PipeFill.cpp` 的族门里**根本不发射**——只在服务端拒会出现"客户端已按 acceptance 清了 dirty、服务端却走旧臂"的丢上传（`0x7ff` 一度 438/491）。同一个族门上还挂着**消费者条件**：没有任何后端注册 `MGPipeResourceOps` 时四族一条不发（Magma 就是这种情形） | 子系统位图，十进制或 `0x`；位按 ROADMAP 顺序分配、永不复用（`MobileGL/MG_Pipe/MGPipe.h:72-95`）：`0x01` 渲染状态、`0x02` pixel pack、`0x04` patch state、`0x08` vertex attrib defaults、`0x10` residual values、`0x20` Espryt slots（Track H）、`0x40` Magma vertex input（Track H）、**`0x80` 位 7 resources（P3a：`resource_*` 家族，`kMGPipeSubsystemResources`，`MGPipe.h:84`）**、**`0x100` 位 8 vertex input（P3a：vertex elements / vertex buffers / index buffer，`kMGPipeSubsystemVertexInput`，`MGPipe.h:85`）**；位 9..62 留给后续阶段。**位 8 依赖位 7**：属性的缓冲 id 经资源 slot 表解析，只有位 7 填那张表，所以 `0x17f` 会打一行 ERROR 点名拒绝位 8 并回落到 legacy vertex-input 臂（`MobileGL/MG_Backend/DirectGLES/Managers.cpp:2312`）。**位 63 不是子系统而是行为**：`kMGPipeBehaviourNoCsoContentAddressing`（`MGPipe.h:90`）关掉 client 侧 CSO 内容寻址（每次 pipeline 版本变化都铸新 CSO、永不探测 map），即 P2 的负面对照。`0` = 全 pull，但 P2 之后只有在 `MOBILEGL_PIPE_LEGACY_MEMOS` 编进了 pre-handle 臂时才是有效对照 |
-| `MOBILEGL_PIPE_HANDLE_ABA_CONTROL` | 0 | 负面对照 C（push 构建才有，`MobileGL/Config.h:360-371`）：故意打掉句柄身份，让 `HandleRecycle` 的 ABA 臂重现旧的 A-B-A 污染。它变绿即为控制失效 |
-| `MOBILEGL_PIPE_VERIFY` | 0 | 逐 draw 逐字段影子比对 |
-| `MOBILEGL_PIPE_STATS` | 0 | 边界计数器（§附 B） |
+| `MOBILEGL_PIPE_PUSH` | pull 构建 `0`；push 构建 `0x1fff` | 子系统位图（`MG_Pipe/MGPipe.h`，位永不复用）：`0x01` 渲染状态、`0x02` pixel pack、`0x04` patch、`0x08` attrib defaults、`0x10` residual、`0x20` Espryt slots、`0x40` Magma vertex input（以上 P2 = `0x7f`）、`0x80` resources、`0x100` vertex input（P3a = `0x1ff`）、`0x200` framebuffer、`0x400` 纹理资源、`0x800` sampler、`0x1000` program（P4a = `0x1fff`）。依赖（两侧都拒，客户端不发射）：位 8 要 7；位 11 要 10；位 9 要 10；位 10 要 7 和 11。位 63 `kMGPipeBehaviourNoCsoContentAddressing` 是行为对照不是子系统。`0` = 全 pull，只在 `LEGACY_MEMOS` 编进了 pre-handle 臂时才是有效对照 |
+| `MOBILEGL_PIPE_VERIFY` / `_VERIFY_FATAL` / `_VERIFY_CORRUPT` / `_POISON_OMIT` | 0 / 1 / 空 / 空 | 逐 draw 逐字段影子比对；首个分歧是否 abort；篡改字段 / 抽掉填充戳记两个阴性对照（verify 构建才有） |
+| `MOBILEGL_PIPE_HANDLE_ABA_CONTROL` | 0 | 阴性对照 C：故意打掉句柄身份让 `HandleRecycle` 的 ABA 臂重现旧污染 |
+| `MOBILEGL_PIPE_STATS` / `_STATS_PERIOD` / `_STATS_FILE` | 0 / 120 / 空 | 边界计数器（附 B）；每多少帧一条汇总行；teardown JSON（trace app 从不到达 teardown，设备上只有周期行） |
 | `MOBILEGL_PIPE_LEGACY_MEMOS` | ON | 三态读取，只有显式 falsy 才关 |
 | `MOBILEGL_PIPE_TEXEL_RETAIN_MB` | 0（0–4096） | 纹理拉取保留 LRU |
-| `MOBILEGL_PIPE_INDEX_MIRROR_MB` | 64（0–4096） | 索引宿主镜像预算 |
-| `MOBILEGL_PIPE_STATS_PERIOD` | 120（1–10⁶） | 每多少帧一条汇总行 |
-| `MOBILEGL_PIPE_STATS_FILE` | 空 | teardown 时的 JSON 转储路径 |
+| `MOBILEGL_PIPE_INDEX_MIRROR_MB` | 64（0–4096） | 索引宿主镜像预算（P8） |
 
-运行时，传输与 IPC（P5 已落地的核心项）：`MOBILEGL_TRANSPORT`(monolith)、`MOBILEGL_IPC_VERB_BARRIER`(1)、`MOBILEGL_IPC_RING_MB`(8)、`MOBILEGL_IPC_STAGE_MB`(32)、`MOBILEGL_IPC_PERSISTENT_BLOCK_KB`(64)、`MOBILEGL_IPC_ADOPT_TIER`(2)、`MOBILEGL_IPC_STRICT_ERRORS`(0)、`MOBILEGL_IPC_AUDIT`(0)、`MOBILEGL_IPC_SERVER_AFFINITY`(auto)。`MOBILEGL_IPC_SERVER_PATH`、present credit、poll escalation、shadow shm、attach/respawn/idle-exit 等随 P6+ 生效。显式不设立：`MOBILEGL_IPC_PROGRAM`（没有 relink 档）、`MOBILEGL_IPC_VALIDATE_SERVER`（server 没有 `MG_Impl` 校验器）。既有负面对照开关全部保留。
+运行时，传输与 IPC：
 
-## 附 B：边界计数器（`MobileGL/MG_Util/Metrics/PipeStats.h:46-122`，P0 已落地）
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `MOBILEGL_TRANSPORT` | `monolith` | `inproc` 已落地；`spawn` / `unix:` / `pipe:` 是 P6，当前具名拒绝并回落 monolith |
+| `MOBILEGL_IPC_RING_MB` | 8 | `SEG_CMD`；单条记录至多一半 |
+| `MOBILEGL_IPC_STAGE_MB` | 32 | `SEG_STAGE`；目标负载 profile 显式 256 |
+| `MOBILEGL_IPC_SPIN_US` | 50 | park 前自旋 |
+| `MOBILEGL_IPC_PERSISTENT_BLOCK_KB` | 64 | persistent-map 推送块粒度；`0` 是 E3(a) 阴性对照 |
+| `MOBILEGL_IPC_ADOPT_TIER` | 2 | `auto/0/1/2`；P5 split 用 emulated（T2） |
+| `MOBILEGL_IPC_VERB_BARRIER` | 1 | 每 verb 等 `appliedSeq == emitSeq`；`0` 只作 E1 阴性对照 |
+| `MOBILEGL_IPC_STRICT_ERRORS` | 0 | BARRIER-PULLED residual input 提升为具名 Fatal |
+| `MOBILEGL_IPC_AUDIT` | 0 | retire 后 `0xDD` 填退休 staging |
+| `MOBILEGL_IPC_SERVER_AFFINITY` | `auto` | apply 线程亲和性 |
+| `MOBILEGL_IPC_SERVER_PATH` | 空 | P6 消费 |
 
-关闭时每站点一次全局 load + 一条永不命中的分支。字节类：`stage-buffer`、`stage-texture`、`stage-ubo-global`、`stage-ubo-named`（只有 Magma 贡献，D-B8 的不对称）、`stage-vertex-client`、`stage-index-client`、`stage-indirect-cmd`（Espryt 独有）、`persistent-map-push`（P0 未接线：monolith 期不存在推送）、`residual-value-block`（占位）。调用类：`draws`、`accessor-calls`（实际执行的 GLContext accessor 次数，在约 10 个热入口做静态计数，是**下界**）、`texture-upload-emissions/box/rect/jobs`。六个 memo 门（`SyncRenderState` 早退、`SyncNeccessaryTextures` 键比较、`CurrentUnitBindingsEpoch` 快门、`TrySetupDrawFastPath`、pipeline memo、`ApplyDynamicDrawStateTail`）各计 hit/miss。每 draw payload 直方图（24 桶）已实现，等第一个发射器接入。每 `MOBILEGL_PIPE_STATS_PERIOD` 帧一条 `MGPipe stats:` 汇总行（`MGLOG_I`），`TRACY_ENABLE` 下逐帧 `TracyPlot`，teardown 时可选 JSON。站点清单——哪些路径**没有**接线——写在 `MobileGL/MG_Util/Metrics/PipeStats.cpp:16-100`，那份清单是契约。
+P6+ 生效：`MOBILEGL_IPC_PRESENT_CREDIT`、`MOBILEGL_IPC_POLL_ESCALATE`、shadow shm、`MOBILEGL_IPC_RESPAWN`、`MOBILEGL_IPC_IDLE_EXIT_S`。显式不设立：`MOBILEGL_IPC_PROGRAM`（没有 relink 档）、`MOBILEGL_IPC_VALIDATE_SERVER`（server 没有 `MG_Impl` 校验器）。
+
+## 附 B：边界计数器（`MobileGL/MG_Util/Metrics/PipeStats.h`）
+
+关闭时每站点一次全局 load + 一条永不命中的分支。字节类：`stage-buffer`、`stage-texture`、`stage-ubo-global`、`stage-ubo-named`（只有 Magma 贡献，D-B8）、`stage-vertex-client`、`stage-index-client`、`stage-indirect-cmd`、`persistent-map-push`（`pmap`）、`residual-value-block`（`resid`）、`cso-blob-bytes`（`csob-blob`）。调用类：`draws`、`accessor-calls`（约 10 个热入口的**静态**计数，是下界——把读点搬走与把工作去掉在它上面长得一样，判性能只看 CPU 时间序列与 memo 门）、`texture-upload-emissions/box/rect/jobs`、`csom`/`csob`（CSO 铸造 / 绑定）、`mpr`、`trp`（纹理重铸拉取）、`rsp`（residual reads，只是有 stamp 读点的下界）、`maxrec`/`ringwraps`/`ringpads`/`ringwaits`（run totals）。六个 memo 门（`ers`/`etl`/`eub`、`mfp`/`mpm`/`mdt`）各计 hit/miss。每 `MOBILEGL_PIPE_STATS_PERIOD` 帧一条 `MGPipe stats:` 汇总行；站点清单——哪些路径**没有**接线——写在 `PipeStats.cpp` 头部，那份清单是契约。逐 dirty 位触发率与每 draw payload 直方图已实现但从未接进汇总行（未测）。
