@@ -18,7 +18,8 @@
 //                    the client for it. THIS CLASS IS DERIVED, NOT LISTED: it is
 //                    kMGPipeFieldEmittedBy != kNone (Coverage.def's MGP_COVERAGE_EMITTED_LIST)
 //                    minus the fields EmittedCallSuppliesTheWholeField refuses
-//                    (MG_Impl/Pipe/PipeFill.cpp). 32 fields today. A row below that names a
+//                    (MG_Impl/Pipe/PipeFill.cpp). 41 fields since P5c rv (32 before it). A row
+//                    below that names a
 //                    field the derivation already placed here is a CONTRADICTION and stops
 //                    the generator - which is the only way this file can stay true as the
 //                    emitted list grows.
@@ -50,14 +51,20 @@
 // whose row stops the pull. It is a string, not an enum, because two of them name two
 // phases for the two backends and flattening that would lose the half that matters.
 #define MGP_FIELD_OWNERSHIP_LIST(X)                                                                  \
-    /* ---- BARRIER_PULLED: the 20 non-sticky rows the reduced path actually reads ----          */  \
+    /* ---- BARRIER_PULLED: the 9 non-sticky rows the reduced path actually reads ----          */  \
     /* scout-unmigrated-census section 3 intersects each verb class's may-read mask with "no     */  \
     /* record supplies it" and unions kClear (7 of 18), kDraw (19 of 47) and kReadback (12 of    */  \
-    /* 17). That union is 21 fields; GetPixelStoreParameters is the 21st and it is               */  \
-    /* APPLIER_DERIVED below, for the reason written there. OpenRA adds no field to this set -   */  \
-    /* it widens the SITE set, not the field set.                                                */  \
-    X(GetActiveTextureUnit,               BARRIER_PULLED, "P3b/P4b",                                 \
-      "the server answers from its own state; Coverage.def:215-219 says no call carries it")     \
+    /* 17). That union was 21 fields at P5; P5c rv (CONTRACT-P5C.md §5.3) retired NINE of them   */  \
+    /* to RECORD_SUPPLIED through set_context_values (the two texture-unit counters, the         */  \
+    /* touched-count array, the five XFB values) plus GetCurrentVertexAttribute (the amended     */  \
+    /* set_vertex_attrib_defaults payload), and moved the three texture SHUTTERS to              */  \
+    /* APPLIER_DERIVED (their own rows said it since P5: "a shutter, not a value: the server     */  \
+    /* answers from its own Serial" - rv made the accessor DO it). GetPixelStoreParameters is    */  \
+    /* the 21st of the census and it is APPLIER_DERIVED below, for the reason written there.     */  \
+    /* WHAT IS LEFT IS EXACTLY THE OBJECT CLASS: nine fields whose storage is a frontend heap    */  \
+    /* reference no record can carry, each with the phase that retires it, and                  */  \
+    /* FieldOwnershipTest pins this list as ALL the remaining non-sticky rows. OpenRA adds no    */  \
+    /* field to this set - it widens the SITE set, not the field set.                            */  \
     /* DirectGLES.cpp:4486, PrepareForDraw, UNCONDITIONAL ON EVERY DRAW. No #if, no arm guard,   */  \
     /* no record fallback, and PipeFill.cpp:1902-1905 says outright that what retires the pull   */  \
     /* is P8, not a better applier: the storage is a SharedPtr<VertexArrayObject> and            */  \
@@ -72,14 +79,6 @@
       "7 of 15 BufferTargets have no call; the field is one array over all 15")                   \
     X(GetBufferBindingPoint,              BARRIER_PULLED, "P3b/P4b, P7",                             \
       "frontend BindingSlotRange1D pointer")                                                      \
-    X(GetTouchedBufferBindingPointCount,  BARRIER_PULLED, "P3b/P4b",                                 \
-      "no call carries the touched-count high-water mark")                                        \
-    /* The applier CANNOT reproduce GLContext's cross-view conversion: the frontend writes       */  \
-    /* (Int32)value into intValue while MGPipeApplySetVertexAttribDefaults memcpys one Data[4]   */  \
-    /* into all three views (PipeFill.cpp:1884-1896). So the record exists, the applier writes   */  \
-    /* the field, and the value is still wrong - which is BARRIER_PULLED, not APPLIER_DERIVED.   */  \
-    X(GetCurrentVertexAttribute,          BARRIER_PULLED, "P3b/P4b",                                 \
-      "the applier writes it but cannot reproduce the cross-view conversion")                     \
     /* 8 Espryt sites through GetFramebufferBindingSlotChecked + 13 Magma. SyncCurrentFBO        */  \
     /* (:2995) is SELF-DECLARED monolith glue (DirectGLES.cpp:2961-2965) while BindCurrentFBO    */  \
     /* (:4303-4353) is already split-clean - the bind is migrated, the sync is not.              */  \
@@ -87,19 +86,6 @@
       "frontend BindingSlot<FramebufferObject> pointer")                                          \
     X(GetImageTextureBinding,             BARRIER_PULLED, "P3b/P4b, P7",                             \
       "frontend ImageTextureBinding base pointer")                                                \
-    /* set_sampler_views' Count IS this value plus one, but the set is suppressed on an          */  \
-    /* unchanged content hash while the high-water mark still moves (PipeFill.cpp:1917-1923).    */  \
-    X(GetMaxTouchedTextureUnit,           BARRIER_PULLED, "P3b/P4b",                                 \
-      "hash-suppressed set, high-water mark still moves")                                         \
-    /* The three texture SHUTTERS. Coverage.def:220-224 is explicit that no call carries them    */  \
-    /* and none should: what replaces them server-side is the applier's own Serial, a different  */  \
-    /* value with a different owner. So these are not values to migrate.                         */  \
-    X(GetSamplingResolutionGeneration,    BARRIER_PULLED, "P3b/P4b",                                 \
-      "a shutter, not a value: the server answers from its own Serial")                           \
-    X(GetTextureBindGeneration,           BARRIER_PULLED, "P3b/P4b",                                 \
-      "a shutter, not a value: the server answers from its own Serial")                           \
-    X(GetTextureContextId,                BARRIER_PULLED, "P3b/P4b",                                 \
-      "a shutter, not a value: the server answers from its own Serial")                           \
     X(GetTextureUnitObject,               BARRIER_PULLED, "P3b/P4b, P7",                             \
       "frontend TextureUnit base pointer; 13 Espryt + 8 Magma sites")                             \
     /* DirectGLES.cpp:4497, PrepareForDraw, the second unconditional pointer read of every draw. */  \
@@ -113,24 +99,15 @@
     /* phases. Overturned by: nothing in P5b; P7/P8 retire both rows together.                   */  \
     X(GetProgramForDispatch,              BARRIER_PULLED, "P7 (Magma), P8 (Espryt)",                 \
       "frontend SharedPtr<ProgramObject>; the record carries a handle")                           \
-    /* The XFB six. XFB itself is off the reduced path, but kDraw's may-read mask carries all    */  \
-    /* six and the draw walk reads them regardless - which is exactly the case a field census    */  \
-    /* taken from "what the scenario does" rather than from the mask would miss.                 */  \
-    X(IsTransformFeedbackActive,          BARRIER_PULLED, "P3b/P4b (Espryt), P7 (Magma)",            \
-      "read on every kDraw walk although XFB is off the reduced path")                            \
-    X(IsTransformFeedbackPaused,          BARRIER_PULLED, "P3b/P4b (Espryt), P7 (Magma)",            \
-      "read on every kDraw walk although XFB is off the reduced path")                            \
+    /* The XFB family's one OBJECT row. XFB itself is off the reduced path, but kDraw's          */  \
+    /* may-read mask carries it and the draw walk reads it regardless - which is exactly the     */  \
+    /* case a field census taken from "what the scenario does" rather than from the mask would   */  \
+    /* miss. The family's five VALUE rows rode set_context_values out of this list at P5c rv.    */  \
     X(GetTransformFeedbackProgram,        BARRIER_PULLED, "P3b/P4b (Espryt), P7 (Magma)",            \
       "frontend SharedPtr<ProgramObject>")                                                        \
-    X(GetTransformFeedbackGeneration,     BARRIER_PULLED, "P3b/P4b (Espryt), P7 (Magma)",            \
-      "no call carries it")                                                                       \
-    X(GetBoundTransformFeedbackLifetimeId, BARRIER_PULLED, "P3b/P4b (Espryt), P7 (Magma)",           \
-      "the D21 counter-slot rekey's key; no call carries it")                                     \
-    X(GetTransformFeedbackCapturedVertices, BARRIER_PULLED, "P3b/P4b (Espryt), P7 (Magma)",          \
-      "no call carries it")                                                                       \
                                                                                                      \
     /* ---- APPLIER_DERIVED ----                                                                 */  \
-    /* THE ONE ROW, and it is the one the contract asked P5 to split into two field ids. It is   */  \
+    /* THE FIRST ROW, and it is the one the contract asked P5 to split into two field ids. It is */  \
     /* split HERE INSTEAD, by ARGUMENT, in the argument-exception list below - see that list's   */  \
     /* header for the evidence and for what would overturn the decision. The field itself is     */  \
     /* APPLIER_DERIVED because set_pixel_pack_state arrives and MGPipeApplyAccess::PackState     */  \
@@ -139,6 +116,19 @@
     /* half of it).                                                                              */  \
     X(GetPixelStoreParameters,            APPLIER_DERIVED, "-",                                      \
       "set_pixel_pack_state; the applier writes m_pixelStore[0] (PipeApply.cpp:1373)")            \
+    /* THE THREE TEXTURE SHUTTERS (P5c rv, CONTRACT-P5C.md §5.3). No call carries them and none  */  \
+    /* should (Coverage.def's emitted-list header): what replaces them server-side is the        */  \
+    /* applier's own Serial - a different value with a different owner. rv is the edit that      */  \
+    /* makes the accessor DO it: under a server-stamped verb the PipeInputs accessor answers     */  \
+    /* MGPipeApplierTextureShutterSerial() / MGPipeApplierContextSerial() (PipeApply.cpp)        */  \
+    /* instead of the client's residual-fill copy, and the class flips from BARRIER_PULLED to    */  \
+    /* here. Under monolith the storage answer is kept, byte for byte (G1).                      */  \
+    X(GetSamplingResolutionGeneration,    APPLIER_DERIVED, "-",                                      \
+      "a shutter, not a value: the server answers from its own Serial")                           \
+    X(GetTextureBindGeneration,           APPLIER_DERIVED, "-",                                      \
+      "a shutter, not a value: the server answers from its own Serial")                           \
+    X(GetTextureContextId,                APPLIER_DERIVED, "-",                                      \
+      "a shutter, not a value: the server answers from its own Serial")                           \
                                                                                                      \
     /* ---- FATAL: two non-sticky fields, each off the reduced path for a checkable reason ----- */  \
     /* Three until P5b: GetProgramForDispatch moved up to BARRIER_PULLED when package i1 put     */  \

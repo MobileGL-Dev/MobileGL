@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The MONOLITH arm of R-17's routing: thirty-seven adapters that unpack a generated table
+// The MONOLITH arm of R-17's routing: thirty-eight adapters that unpack a generated table
 // row's parameters and call the MGPipeApply* entry point the call site used to call directly.
 // Owner: package c1. See PipeRoute.h for why the arm exists and what R-17 actually cost.
 //
@@ -164,11 +164,11 @@ namespace MobileGL::MG_Pipe {
     Bool MGPipeTablesAreInstalled() { return g_arm != MGPipeRouteArm::kNone; }
 
     // ---------------------------------------------------------------------------------
-    // The thirty-seven monolith adapters
+    // The thirty-eight monolith adapters
     // ---------------------------------------------------------------------------------
     //
     // Three shapes, so the eye can check them against PipeTables.inc in one pass rather than
-    // reading thirty-seven bodies. A row that does not fit one of the three is written out by
+    // reading thirty-eight bodies. A row that does not fit one of the three is written out by
     // hand BELOW the macros, never by widening a macro - a macro that grew a special case is
     // how one of these silently stops being a parameter shuffle.
 
@@ -207,6 +207,11 @@ namespace MobileGL::MG_Pipe {
         MGP_MONO_PLAIN(SetIndexBuffer, MGPIndexBuffer)
         MGP_MONO_PLAIN(SetPixelPackState, MGPPixelPackState)
         MGP_MONO_PLAIN(SetPatchState, MGPPatchState)
+        // P5c (rv): dormant under monolith - PipeFill.cpp's producer is transport-gated, so
+        // nothing routes here without a live wire. It exists because the row has an
+        // MGPipeApply* entry point (unlike the two control records) and because the wire
+        // emitter's server-role arm forwards to this table (WireTables.cpp).
+        MGP_MONO_PLAIN(SetContextValues, MGPContextValues)
 
         // -- context, blob companion --------------------------------------------------
         MGP_MONO_BLOB(CreateRenderState, MGPRenderStateDesc)
@@ -341,6 +346,7 @@ namespace MobileGL::MG_Pipe {
         gMGPipeContext.SetVertexAttribDefaults = &Mono_SetVertexAttribDefaults;
         gMGPipeContext.SetPixelPackState = &Mono_SetPixelPackState;
         gMGPipeContext.SetPatchState = &Mono_SetPatchState;
+        gMGPipeContext.SetContextValues = &Mono_SetContextValues;
         gMGPipeContext.SetResidualValueState = &Mono_SetResidualValueState;
         gMGPipeContext.SetTextureParams = &Mono_SetTextureParams;
         gMGPipeContext.ResourceSubData = &Mono_ResourceSubData;

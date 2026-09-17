@@ -213,6 +213,23 @@ namespace MobileGL::MG_Pipe {
             inputs.m_patchDefaultOuterLevel = outer;
             inputs.m_patchDefaultInnerLevel = inner;
         }
+        // P5c (rv, CONTRACT-P5C.md §5.3): set_context_values' write, one field per payload
+        // member, on the server side of the wire. Like PackState it is a plain store - the
+        // stamp is the filler/verb boundary's statement, not the applier's (see the struct's
+        // header comment).
+        static void SetContextValues(PipeInputs& inputs, const MGPContextValues& values) {
+            inputs.m_activeTextureUnit = static_cast<Int>(values.ActiveTextureUnit);
+            inputs.m_maxTouchedTextureUnit = static_cast<Int>(values.MaxTouchedTextureUnit);
+            for (SizeT i = 0; i < PipeInputs::kBufferTargetCount; ++i) {
+                inputs.m_touchedBindingPointCount[i] =
+                    static_cast<SizeT>(values.TouchedBufferBindingPointCount[i]);
+            }
+            inputs.m_transformFeedbackActive = values.IsTransformFeedbackActive != 0;
+            inputs.m_transformFeedbackPaused = values.IsTransformFeedbackPaused != 0;
+            inputs.m_transformFeedbackGeneration = values.TransformFeedbackGeneration;
+            inputs.m_boundTransformFeedbackLifetimeId = values.BoundTransformFeedbackLifetimeId;
+            inputs.m_transformFeedbackCapturedVertices = values.TransformFeedbackCapturedVertices;
+        }
 
         // ----------------------------------------------------------------------------
         // D5: the 29 PipeInputs fields that are PURE FUNCTIONS of RenderStateParameters.
@@ -1189,6 +1206,12 @@ namespace MobileGL::MG_Pipe {
 
     MGPipeApplierState& MGPipeApplier() { return g_applier; }
 
+    // P5c (rv, CONTRACT-P5C.md §5.3): the three texture shutters' server-side answers. See
+    // MGPipeApplierState::TextureShutterSerial / ContextSerial for the bump rule.
+    Uint64 MGPipeApplierTextureShutterSerial() { return g_applier.TextureShutterSerial; }
+    Uint64 MGPipeApplierContextSerial() { return g_applier.ContextSerial; }
+    void MGPipeApplierNoteTextureStateMoved() { ++g_applier.TextureShutterSerial; }
+
     void MGPipeSetResourceOps(const MGPipeResourceOps* ops) { g_resourceOps = ops; }
     const MGPipeResourceOps* MGPipeGetResourceOps() { return g_resourceOps; }
 
@@ -1306,6 +1329,13 @@ namespace MobileGL::MG_Pipe {
         //     the first compare after the switch is a mismatch, which is the safe direction.
         ++g_applier.VertexBuffersSerial;
         ++g_applier.IndexBufferSerial;
+        // P5c (rv): a make-current is a fresh server, and the two shutter serials are what the
+        // PipeInputs texture-shutter accessors answer with - so both ADVANCE here, for the
+        // serials' own reason: a counter that restarts walks back through values already
+        // stamped into a memo that outlived the switch. ContextSerial's move is also
+        // GetTextureContextId's whole job (the backends key their per-context memos on it).
+        ++g_applier.TextureShutterSerial;
+        ++g_applier.ContextSerial;
 
         // ---- P4a's working state, cleared for the same reason and with the same serial rule
         // (D-J4). The OBJECT records - texture and renderbuffer resources, sampler CSOs,
@@ -1351,6 +1381,10 @@ namespace MobileGL::MG_Pipe {
         g_applier.BoundVertexElements = kMGPipeNullHandle;
         ++g_applier.VertexBuffersSerial;
         ++g_applier.IndexBufferSerial;
+        // P5c (rv): same rule for the shutter serials - the served context is going away, and
+        // a memo that outlives it must not match a value these have already answered with.
+        ++g_applier.TextureShutterSerial;
+        ++g_applier.ContextSerial;
         // P4a's five object tables go with them, and the working handles they could name go
         // too - a bound shader CSO whose record has just been dropped must not survive as a
         // handle the next call resolves against.
@@ -1493,6 +1527,18 @@ namespace MobileGL::MG_Pipe {
         MGPipeApplyAccess::PackState(gPipeInputs) = pack.Pack;
     }
 
+    // set_context_values (P5c rv, CONTRACT-P5C.md §5.3): the residual-value record's server
+    // half. A plain store of the whole POD - there is no dirty mask and no field-level gate,
+    // because the record crosses only when one of its source values moved (the client's
+    // whole-record hash suppression) and a suppressed record means "nothing moved", never
+    // "field invalid" (§1).
+    void MGPipeApplySetContextValues(const MGPContextValues& values) {
+        static_assert(std::extent_v<decltype(MGPContextValues::TouchedBufferBindingPointCount)> ==
+                          PipeInputs::kBufferTargetCount,
+                      "the record's per-target array and PipeInputs' have drifted");
+        MGPipeApplyAccess::SetContextValues(gPipeInputs, values);
+    }
+
     void MGPipeApplySetPatchState(const MGPPatchState& patch) {
         PipeInputs& inputs = gPipeInputs;
         RenderStateParameters& working = MGPipeApplyAccess::RenderState(inputs);
@@ -1581,11 +1627,16 @@ namespace MobileGL::MG_Pipe {
                 continue;
             }
             PipeInputs::CurrentVertexAttributeValue& slot = slots[location];
-            // The three views are always populated; which one a shader input consumes is
-            // ClassifyVertexAttribType's answer, not the carrier's, so all three cross.
-            std::memcpy(slot.floatValue.data(), value.Data, sizeof(slot.floatValue));
-            std::memcpy(slot.intValue.data(), value.Data, sizeof(slot.intValue));
-            std::memcpy(slot.uintValue.data(), value.Data, sizeof(slot.uintValue));
+            // P5c (rv, CONTRACT-P5C.md §5.3): the record carries ALL THREE VIEWS VERBATIM, as
+            // the frontend computed them, and the applier writes each view from its own array.
+            // The pre-rv shape - one Data[4] memcpied into all three views - could not
+            // reproduce the frontend's NUMERIC cross-view conversion (glVertexAttrib4f(loc,
+            // 1.5f, ...) leaves 1 in intValue and 0x3FC00000 in floatValue), which is exactly
+            // why the field stayed EMITTED-AND-STILL-PULLED until rv. ValueClass rides along
+            // for the comparator; the applier no longer needs it to rebuild anything.
+            std::memcpy(slot.floatValue.data(), value.FloatView, sizeof(slot.floatValue));
+            std::memcpy(slot.intValue.data(), value.IntView, sizeof(slot.intValue));
+            std::memcpy(slot.uintValue.data(), value.UintView, sizeof(slot.uintValue));
         }
         if (fault == nullptr && consumed != hdr.Count) {
             fault = "Count does not match the attributes Mask names";
@@ -1767,6 +1818,9 @@ namespace MobileGL::MG_Pipe {
         // the twin re-derives its storage flags from the new mask at its next sync and decides
         // for itself whether the backend needs a recreate.
         ++record->Serial;
+        // P5c (rv): a respecify can move a texture's shape, which is exactly what the
+        // sampling-resolution shutter guarded - the server-side answer moves with it.
+        MGPipeApplierNoteTextureStateMoved();
 
         // A RESPECIFY REDEFINES A STORE, SO THE PENDING UPLOADS AGAINST THE STORE IT REPLACES
         // GO WITH IT - AND ONLY THOSE. They are boxes and rects in a level's coordinate system
@@ -2025,6 +2079,10 @@ namespace MobileGL::MG_Pipe {
         const Uint32 gen = record->Gen;
         *record = MGPipeResourceRecord{};
         record->Gen = gen;
+        // P5c (rv): a destroyed object may still be BOUND somewhere the texture shutters guard;
+        // the server's answer for them moves with the death rather than waiting for the next
+        // unit-set record to say so.
+        MGPipeApplierNoteTextureStateMoved();
 
         // The applier's own state is consistent before the backend hears the news, so a hook
         // that looked back at this applier could not see a resource that is already gone. The
@@ -2700,6 +2758,8 @@ namespace MobileGL::MG_Pipe {
         // bytes are CARRIED, never cleared here: the server ORs them into its own flags and
         // clears its own copy, and the client never clears a server flag.
         ++record->ParamsSerial;
+        // P5c (rv): a parameter change is what the sampling-resolution shutter guarded.
+        MGPipeApplierNoteTextureStateMoved();
         return true;
     }
 
@@ -2729,6 +2789,8 @@ namespace MobileGL::MG_Pipe {
             return;
         }
         ++g_applier.SamplerViewsSerial;
+        // P5c (rv): a texture bind is what the bind-generation shutter guarded.
+        MGPipeApplierNoteTextureStateMoved();
     }
 
     void MGPipeApplyBindSamplerStates(const MGPSamplerStates& hdr, const MGPipeHandle* tail) {
@@ -2739,6 +2801,8 @@ namespace MobileGL::MG_Pipe {
             return;
         }
         ++g_applier.SamplerStatesSerial;
+        // P5c (rv): a sampler bind or parameter change is what the shutters guarded.
+        MGPipeApplierNoteTextureStateMoved();
     }
 
     void MGPipeApplySetShaderImages(const MGPShaderImages& hdr, const MGPImageView* tail) {
@@ -2754,6 +2818,8 @@ namespace MobileGL::MG_Pipe {
             return;
         }
         ++g_applier.ShaderImagesSerial;
+        // P5c (rv): an image bind moves the texture bind generation's guarded set too.
+        MGPipeApplierNoteTextureStateMoved();
     }
 
     // ================================================================================

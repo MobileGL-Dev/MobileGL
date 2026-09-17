@@ -45,14 +45,15 @@
 //                         appended server-side fence wait 1 and P5c's applier_reset 1
 //   kCtxQuery       8     query object namespace 6, plus the appended timestamp pair 2
 //   kCtxCso        13     CSO create/bind/delete
-//   kCtxState      17     16 of the 17 set_* calls + the temporary set_residual_value_state
+//   kCtxState      18     16 of the 18 set_* calls + the temporary set_residual_value_state
+//                         + P5c rv's set_context_values
 //   kCtxObject     10     set_texture_params (the 17th set_*) + 8 object-scoped transfers, plus
 //                         P5c's object_death 1
 //   kCtxVerb       18     3 context-reading transfer calls + the 10 commands, plus the five
 //                         P5b-appended verbs (bind_shader_image, patch_parameter,
 //                         bind_stream_output, set_storage_block_binding,
 //                         copy_framebuffer_to_texture - MG_Remote/CONTRACT-P5B.md)
-//   total          78
+//   total          79
 //
 // Reconciliation with the plan's headline numbers (section 4.4 / appendix A), because they
 // do not add up to a set of UNIQUE records and this file has to hold unique records:
@@ -94,10 +95,15 @@
 //     GL-thread direct call into server memory, and object_death, the framebuffer family's
 //     FIRST wire delete opcode and the handle-keyed replacement for the death-notice mailbox.
 //     Neither has an MGPipeApply* entry point and neither gains one; both reach WireVerbSink.
-//     78 unique records.
+//   - P5c rv (§5.3) appended ONE more (opcode 79): set_context_values, the residual-value
+//     record that retires the value-class BARRIER_PULLED rows. Unlike the two control records
+//     it IS an ordinary set_* row: MGPipeApplySetContextValues writes gPipeInputs, the row is
+//     routed through gMGPipeContext like its seventeen siblings, and under monolith it has no
+//     producer at all - the fields keep coming through the residual fill, byte for byte as
+//     before (G1). 79 unique records.
 // ---------------------------------------------------------------------------------------
 
-#define MGP_CALL_LIST_DOCUMENTED_COUNT 78
+#define MGP_CALL_LIST_DOCUMENTED_COUNT 79
 
 // clang-format off
 #define MGP_CALL_LIST(X)                                                                            \
@@ -256,7 +262,15 @@
     /* twin table by handle. The framebuffer family's FIRST wire delete opcode: its death used */    \
     /* to hop to the apply thread through a stack-struct mailbox and a lifetime-id probe of    */    \
     /* the client's allocator, both rule-E surfaces.                                           */    \
-    X(ObjectDeath,              MGPHandleOnly,              kCtxObject, kNone)
+    X(ObjectDeath,              MGPHandleOnly,              kCtxObject, kNone)                      \
+    /* ---- P5c rv (CONTRACT-P5C.md §5.3), opcode 79: the residual-value record. One POD that  ---- */ \
+    /* ---- carries every value-class BARRIER_PULLED field left after the set_* catalogue: the  ---- */ \
+    /* ---- two texture-unit counters, the 15 per-target touched-buffer-binding counts and the  ---- */ \
+    /* ---- five transform-feedback values. Emitted at validate when any covered value moved    ---- */ \
+    /* ---- (whole-record hash suppression, D11's shape), ACTIVE ONLY with an active transport  ---- */ \
+    /* ---- (PipeFill.cpp gates both the emission and the residual-fill skip on it): under       ---- */ \
+    /* ---- monolith there is no producer and the fields keep being pulled, byte for byte (G1). ---- */ \
+    X(SetContextValues,         MGPContextValues,           kCtxState,  kNone)
 // clang-format on
 
 // Explicitly NOT migrated (plan 4.4.6 / appendix A "explicit deletions"):

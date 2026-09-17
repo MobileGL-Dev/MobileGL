@@ -693,6 +693,27 @@ namespace MobileGL::MG_Pipe {
         MGPipeHandle BoundShaderCso = kMGPipeNullHandle;
         Uint64 ProgramBindingSerial = 0;
 
+        // ---- P5c (rv, CONTRACT-P5C.md §5.3): the server-side answer for the three texture
+        // SHUTTERS. FieldOwnership.def moves GetSamplingResolutionGeneration /
+        // GetTextureBindGeneration / GetTextureContextId to APPLIER_DERIVED - "a shutter, not
+        // a value: the server answers from its own Serial", which their rows have said since
+        // P5 - and THESE are the serials, read by the PipeInputs accessors under a
+        // server-stamped verb instead of the client's residual-fill copy.
+        //
+        // TextureShutterSerial answers the two GENERATIONS. It is an MGGen like its seven
+        // siblings above: server-owned, monotone, ++ on every applied record that can move
+        // what the frontend's bind / sampling-resolution generations guard - the three unit
+        // sets, set_texture_params, a respecify or destroy of any resource, a bind_shader_image
+        // verb (the sink bumps it, PipeApplier.cpp) - and ADVANCED, never zeroed, by
+        // MGPipeApplierReset / MGPipeApplierReleaseObjectRecords. Over-firing is the safe
+        // direction for a memo key: a moved serial costs a re-sync, a stuck one renders stale.
+        //
+        // ContextSerial answers GetTextureContextId: stable within the served context, moved
+        // by every MGPipeApplierReset (a make-current is a fresh server, §5.1), which is all
+        // the backends' per-context memo keys need.
+        Uint64 TextureShutterSerial = 0;
+        Uint64 ContextSerial = 0;
+
 #if MOBILEGL_BUILD_DISAGGREGATED
         // ---- P5c (hd, CONTRACT-P5C §3.2): THE CURRENT VERB'S OWN HANDLES. ----------------
         //
@@ -760,6 +781,17 @@ namespace MobileGL::MG_Pipe {
 
     // The monolith's single applier. Under split there is one per served context.
     MGPipeApplierState& MGPipeApplier();
+
+    // P5c (rv): the two serials the PipeInputs texture-shutter accessors answer with under a
+    // server-stamped verb (FieldOwnership.def, APPLIER_DERIVED). Free functions rather than
+    // member reads so PipeInputs.h needs this header's DECLARATIONS only... and because the
+    // bump rule - advance, never zero - is stated once, beside the state.
+    Uint64 MGPipeApplierTextureShutterSerial();
+    Uint64 MGPipeApplierContextSerial();
+    // The one writer-side helper: every applier entry point that can move what the frontend's
+    // texture bind / sampling-resolution generations guard bumps the shutter serial through
+    // this, so the bump rule lives in exactly one place.
+    void MGPipeApplierNoteTextureStateMoved();
 
     // A MAKE-CURRENT, NOT A TEARDOWN - and the distinction is the whole of this function's
     // contract. It runs on every change of the current GLContext (MGPipeTracker::Update resets
@@ -829,6 +861,12 @@ namespace MobileGL::MG_Pipe {
     // set_patch_state. The trio also travels in pipeline chunk P0, and the applier asserts
     // under verify that the two carriers agree - the redundancy is a trip wire, not waste.
     void MGPipeApplySetPatchState(const MGPPatchState& patch);
+    // set_context_values (P5c rv, CONTRACT-P5C.md §5.3): the residual-value record. Writes
+    // every field it carries into gPipeInputs through MGPipeApplyAccess - the server-owned
+    // write that retires the eight value-class BARRIER_PULLED rows. Emitted only with an
+    // active transport; under monolith there is no producer and the fields keep coming
+    // through the residual fill (G1).
+    void MGPipeApplySetContextValues(const MGPContextValues& values);
     // set_vertex_attrib_defaults: `tail` is hdr.Count MGPAttribValues for the attributes
     // named by hdr.Mask, in ascending location order.
     void MGPipeApplySetVertexAttribDefaults(const MGPVertexAttribDefaults& hdr, const MGPAttribValue* tail);

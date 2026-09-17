@@ -892,30 +892,35 @@ namespace {
         const MGPAttribValue value = PayloadFor(3);
         EXPECT_EQ(value.Location, 3u);
         EXPECT_EQ(value.ValueClass, MG_State::GLState::kVertexAttribValueClassFloat);
-        EXPECT_EQ(value.Data[0], Word(1.5f));
-        EXPECT_EQ(value.Data[1], Word(-2.5f));
-        // The defect this exists to stop: 1.5f's int VIEW is 1, and a carrier that sent the
-        // float bits while calling them class 0 for every attribute would be sending
-        // 0x3FC00000 where the frontend holds 1.
-        EXPECT_NE(value.Data[0], static_cast<Uint32>(Ctx().GetCurrentVertexAttribute(3).intValue[0]));
+        EXPECT_EQ(value.FloatView[0], Word(1.5f));
+        EXPECT_EQ(value.FloatView[1], Word(-2.5f));
+        // P5c rv: the record carries ALL THREE VIEWS VERBATIM (CONTRACT-P5C.md §5.3), so the
+        // frontend's converted int view travels too - 1.5f's int VIEW is 1, and the carrier
+        // that used to send the float bits into all three views would be sending 0x3FC00000
+        // where the frontend holds 1.
+        EXPECT_EQ(value.IntView[0],
+                  static_cast<Uint32>(Ctx().GetCurrentVertexAttribute(3).intValue[0]));
+        EXPECT_NE(value.FloatView[0], value.IntView[0]);
     }
 
     TEST_F(TrackerAttribPayload, AnIntWriteCarriesTheIntWordsAndNamesItsClass) {
         Ctx().SetCurrentVertexAttributeInt(5, Array<Int32, 4>{7, -9, 11, 13});
         const MGPAttribValue value = PayloadFor(5);
         EXPECT_EQ(value.ValueClass, MG_State::GLState::kVertexAttribValueClassInt);
-        EXPECT_EQ(static_cast<Int32>(value.Data[0]), 7);
-        EXPECT_EQ(static_cast<Int32>(value.Data[1]), -9);
-        // and NOT the float view the frontend converted it into
-        EXPECT_NE(value.Data[0], Word(7.0f));
+        EXPECT_EQ(static_cast<Int32>(value.IntView[0]), 7);
+        EXPECT_EQ(static_cast<Int32>(value.IntView[1]), -9);
+        // and the float view is the frontend's CONVERSION of it, not the int bits
+        EXPECT_EQ(value.FloatView[0], Word(7.0f));
+        EXPECT_NE(value.IntView[0], Word(7.0f));
     }
 
     TEST_F(TrackerAttribPayload, AUintWriteCarriesTheUintWordsAndNamesItsClass) {
         Ctx().SetCurrentVertexAttributeUint(6, Array<Uint32, 4>{4000000000u, 2u, 3u, 4u});
         const MGPAttribValue value = PayloadFor(6);
         EXPECT_EQ(value.ValueClass, MG_State::GLState::kVertexAttribValueClassUint);
-        EXPECT_EQ(value.Data[0], 4000000000u);
-        EXPECT_NE(value.Data[0], Word(4000000000.0f));
+        EXPECT_EQ(value.UintView[0], 4000000000u);
+        EXPECT_EQ(value.FloatView[0], Word(4000000000.0f));
+        EXPECT_NE(value.UintView[0], Word(4000000000.0f));
     }
 
     // The class is PER ATTRIBUTE and it is the last writer's, not the context's - a payload
@@ -925,9 +930,9 @@ namespace {
         Ctx().SetCurrentVertexAttributeInt(2, Array<Int32, 4>{1, 2, 3, 4});
         EXPECT_EQ(PayloadFor(1).ValueClass, MG_State::GLState::kVertexAttribValueClassFloat);
         EXPECT_EQ(PayloadFor(2).ValueClass, MG_State::GLState::kVertexAttribValueClassInt);
-        // Same numbers, different classes, so the same four words mean different things:
-        // 1.0f is 0x3F800000 and the integer 1 is 0x00000001.
-        EXPECT_NE(PayloadFor(1).Data[0], PayloadFor(2).Data[0]);
+        // Same numbers, different classes, so the WRITTEN views differ: 1.0f is 0x3F800000
+        // and the integer 1 is 0x00000001.
+        EXPECT_NE(PayloadFor(1).FloatView[0], PayloadFor(2).IntView[0]);
         // An attribute nobody wrote answers Float, which is what the GL default (0,0,0,1) is.
         EXPECT_EQ(PayloadFor(7).ValueClass, MG_State::GLState::kVertexAttribValueClassFloat);
         // and a later write of the other class moves the class of THAT attribute only

@@ -13,6 +13,15 @@
 // the live context happens on the client side, in MG_Impl/Pipe/PipeFill.cpp.
 #include <MG_State/GLState/Core.h>
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+// P5c (rv, CONTRACT-P5C.md §5.3): the three texture shutters' server-side answer lives in the
+// applier - MGPipeApplierTextureShutterSerial() / MGPipeApplierContextSerial(), declared here
+// so the accessors below can answer with them under a server-stamped verb. MG_Pipe is below
+// MG_Backend, so this direction is the layering's, and PipeApply.h forward-declares
+// PipeInputs rather than including this header, so there is no cycle.
+#include <MG_Pipe/PipeApply.h>
+#endif
+
 // MOBILEGL_PIPE_POISON: the per-verb generation stamps and the read-side
 // Fatal{UnmigratedPipeInput} check. Derived here, once. The repository's debug gate is
 // MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG (Defines.h); the verify CI build is
@@ -471,9 +480,19 @@ namespace MobileGL::MG_Pipe {
             MGP_INPUT_VERIFY_READ(MGPipeInputField::GetRenderStateParameters, 0, 0);
             return m_renderState;
         }
+        // THE THREE TEXTURE SHUTTERS (P5c rv, CONTRACT-P5C.md §5.3). Their FieldOwnership rows
+        // have said "a shutter, not a value: the server answers from its own Serial" since P5;
+        // rv is the edit that makes the accessor DO it. Under a SERVER-STAMPED verb the answer
+        // is the applier's own serial (APPLIER_DERIVED): server-owned, monotone, moved by every
+        // applied record that can move what the frontend generation guarded. Everywhere else -
+        // monolith, a split build on monolith transport, any read outside a stamped verb - the
+        // storage answer is kept, byte for byte (G1).
         Uint64 GetSamplingResolutionGeneration() const {
             MGP_INPUT_CHECK(MGPipeInputField::GetSamplingResolutionGeneration);
             MGP_INPUT_VERIFY_READ(MGPipeInputField::GetSamplingResolutionGeneration, 0, 0);
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (m_serverStampedVerb) return MGPipeApplierTextureShutterSerial();
+#endif
             return m_samplingResolutionGeneration;
         }
         const IntVec4& GetScissorBox() const {
@@ -489,11 +508,21 @@ namespace MobileGL::MG_Pipe {
         Uint64 GetTextureBindGeneration() const {
             MGP_INPUT_CHECK(MGPipeInputField::GetTextureBindGeneration);
             MGP_INPUT_VERIFY_READ(MGPipeInputField::GetTextureBindGeneration, 0, 0);
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // See GetSamplingResolutionGeneration: the server answers from its own Serial.
+            if (m_serverStampedVerb) return MGPipeApplierTextureShutterSerial();
+#endif
             return m_textureBindGeneration;
         }
         Uint64 GetTextureContextId() const {
             MGP_INPUT_CHECK(MGPipeInputField::GetTextureContextId);
             MGP_INPUT_VERIFY_READ(MGPipeInputField::GetTextureContextId, 0, 0);
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // A context IDENTITY rather than a generation: stable within the served context,
+            // moved by every MGPipeApplierReset - which is all the backends' per-context memo
+            // keys ask of it.
+            if (m_serverStampedVerb) return MGPipeApplierContextSerial();
+#endif
             return m_textureContextId;
         }
         Uint64 GetTransformFeedbackCapturedVertices() const {

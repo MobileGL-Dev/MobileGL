@@ -1304,6 +1304,9 @@ namespace {
         // set_vertex_attrib_defaults: a var-tail call, and the one consumer of the set-hash
         // suppressor. The tail is in ascending location order and Count matches Mask, which
         // is the contract the applier now enforces in every build rather than in a debug one.
+        // P5c rv: each entry carries all THREE views verbatim (CONTRACT-P5C.md §5.3) and the
+        // applier writes each view from its own array - a float-written attribute keeps the
+        // frontend's converted int/uint words, which is what the pre-rv shape could not do.
         {
             MG_Test::ScopedPipeVerb draw(MGPipeVerb::DrawArrays);
             MGPVertexAttribDefaults hdr{};
@@ -1311,16 +1314,26 @@ namespace {
             hdr.Count = 2;
             MGPAttribValue tail[2]{};
             tail[0].Location = 2;
+            tail[0].ValueClass = MG_State::GLState::kVertexAttribValueClassFloat;
             const float first[4] = {1.5f, 2.5f, 3.5f, 4.5f};
-            std::memcpy(tail[0].Data, first, sizeof(first));
+            std::memcpy(tail[0].FloatView, first, sizeof(first));
+            const Int32 firstInt[4] = {1, 2, 3, 4}; // the frontend's conversion of 1.5f & co
+            std::memcpy(tail[0].IntView, firstInt, sizeof(firstInt));
             tail[1].Location = 9;
+            tail[1].ValueClass = MG_State::GLState::kVertexAttribValueClassFloat;
             const float second[4] = {-1.f, 0.f, 0.5f, 1.f};
-            std::memcpy(tail[1].Data, second, sizeof(second));
+            std::memcpy(tail[1].FloatView, second, sizeof(second));
+            const Int32 secondInt[4] = {-1, 0, 0, 1};
+            std::memcpy(tail[1].IntView, secondInt, sizeof(secondInt));
             MGPipeApplySetVertexAttribDefaults(hdr, tail);
 
             EXPECT_EQ(gPipeInputs.GetCurrentVertexAttribute(2).floatValue[0], 1.5f);
             EXPECT_EQ(gPipeInputs.GetCurrentVertexAttribute(2).floatValue[3], 4.5f);
             EXPECT_EQ(gPipeInputs.GetCurrentVertexAttribute(9).floatValue[2], 0.5f);
+            // ... and the CONVERTED views are the record's, not a memcpy of the float bits:
+            // 1.5f's bits are 0x3FC00000, and the frontend's int view of it is 1.
+            EXPECT_EQ(gPipeInputs.GetCurrentVertexAttribute(2).intValue[0], 1);
+            EXPECT_EQ(gPipeInputs.GetCurrentVertexAttribute(9).intValue[0], -1);
         }
 
         // delete_render_state: the record stops being live and a bound handle stops being

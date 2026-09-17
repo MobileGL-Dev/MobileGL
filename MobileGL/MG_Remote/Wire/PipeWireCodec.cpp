@@ -241,7 +241,8 @@ namespace MobileGL::MG_Remote::Wire {
     X(SetStorageBlockBinding, MGPStorageBlockBinding)                                          \
     X(CopyFramebufferToTexture, MGPCopyFromFramebuffer)                                        \
     X(ApplierReset, MGPApplierReset)                                                           \
-    X(ObjectDeath, MGPHandleOnly)
+    X(ObjectDeath, MGPHandleOnly)                                                              \
+    X(SetContextValues, MGPContextValues)
 
     namespace {
 
@@ -2100,6 +2101,17 @@ namespace MobileGL::MG_Remote::Wire {
         case MGPWireOp::ObjectDeath:
             return m_verbs != nullptr &&
                    m_verbs->OnObjectDeath(*static_cast<const MGPHandleOnly*>(payload));
+
+        // ---- P5c rv (CONTRACT-P5C.md §5.3): the residual-value record, opcode 79 -------------
+        //
+        // An ordinary set_* row, unlike the two control records beside it: a fixed-width POD
+        // with no blob, no tail and no reply, so the bounds gate is the whole validation and
+        // the arm is the applier entry point - the same shape as set_pixel_pack_state beside
+        // it. There is no sink half and no acceptance answer: the write into gPipeInputs is
+        // the whole effect.
+        case MGPWireOp::SetContextValues:
+            MGPipeApplySetContextValues(*static_cast<const MGPContextValues*>(payload));
+            return true;
 
         case MGPWireOp::SetSwapInterval:
             // Class C, wave 3 (census-classC.md "static cross"); not a verb (FillPoints.def:21).

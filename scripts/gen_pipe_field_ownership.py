@@ -558,10 +558,13 @@ def self_test():
     # substring is not decoration: see expect_trip.
 
     # 1. THE HEADLINE CONTROL (exit gate E4): take one field out of the table. It is in no
-    #    class, and that is a build failure rather than a silent default.
-    dropped = edit(r"X\(GetActiveTextureUnit," + GAP + r"BARRIER_PULLED," + GAP + r"\"[^\"]*\","
-                   + GAP + r"\"[^\"]*\"\)", "", "remove GetActiveTextureUnit's row")
-    controls = [("a field in NO class (GetActiveTextureUnit's row removed)",
+    #    class, and that is a build failure rather than a silent default. GetBoundVertexArray is
+    #    the control's field since P5c rv (it keeps a hand-written BARRIER_PULLED row; the value
+    #    rows the first version used are RECORD_SUPPLIED-derived now, so they have no row to
+    #    edit).
+    dropped = edit(r"X\(GetBoundVertexArray," + GAP + r"BARRIER_PULLED," + GAP + r"\"[^\"]*\","
+                   + GAP + r"\"[^\"]*\"\)", "", "remove GetBoundVertexArray's row")
+    controls = [("a field in NO class (GetBoundVertexArray's row removed)",
                  "field(s) in NO class",
                  lambda: run(own_text=dropped))]
 
@@ -575,9 +578,9 @@ def self_test():
                      lambda: run(own_text=doubled)))
 
     # 3. A row naming something that is not a field at all.
-    typo = edit(r"X\(GetActiveTextureUnit,", "X(GetActiveTextureUnitt,", "misspell a field name")
+    typo = edit(r"X\(GetBoundVertexArray,", "X(GetBoundVertexArrayy,", "misspell a field name")
     controls.append(("a row naming a non-field",
-                     "GetActiveTextureUnitt, which is not a PipeInputs field",
+                     "GetBoundVertexArrayy, which is not a PipeInputs field",
                      lambda: run(own_text=typo)))
 
     # 4. A BARRIER_PULLED row with no retiring phase: the debt is only sized if every row
@@ -585,17 +588,17 @@ def self_test():
     #    THE REPLACEMENT IS NOT A RAW STRING. It was, and the backslashes survived into the
     #    substitution, mangled the row past ROW_RE's reach and made this control a silent
     #    duplicate of #1 for a whole round.
-    unphased = edit(r"(X\(GetActiveTextureUnit," + GAP + r"BARRIER_PULLED,)" + GAP + r"\"[^\"]*\",",
+    unphased = edit(r"(X\(GetBoundVertexArray," + GAP + r"BARRIER_PULLED,)" + GAP + r"\"[^\"]*\",",
                     "\\1 \"-\",", "blank a BARRIER_PULLED row's retiring phase")
     controls.append(("a BARRIER_PULLED row with no retiring phase",
-                     "GetActiveTextureUnit is BARRIER_PULLED and names no retiring phase",
+                     "GetBoundVertexArray is BARRIER_PULLED and names no retiring phase",
                      lambda: run(own_text=unphased)))
 
     # 5. A class that is not one of the four.
-    bogus = edit(r"(X\(GetActiveTextureUnit,)" + GAP + r"BARRIER_PULLED,",
+    bogus = edit(r"(X\(GetBoundVertexArray,)" + GAP + r"BARRIER_PULLED,",
                  "\\1 SOMEHOW_FINE,", "introduce a fifth class")
     controls.append(("a fifth class",
-                     "GetActiveTextureUnit is in class SOMEHOW_FINE",
+                     "GetBoundVertexArray is in class SOMEHOW_FINE",
                      lambda: run(own_text=bogus)))
 
     # 6. A sticky forward that lost its own row - the seven most dangerous fields are exactly
@@ -699,9 +702,9 @@ def self_test():
                  "the field set (%d of %d)" % (total, len(accessors)))
     if len(sticky) != 7:
         sys.exit("gen_pipe_field_ownership: self-test: Coverage.def no longer has seven sticky fields")
-    if len(refused) != 9:
+    if len(refused) != 7:
         sys.exit("gen_pipe_field_ownership: self-test: EmittedCallSuppliesTheWholeField refuses %d "
-                 "fields, not the nine the contract's derivation is written against" % len(refused))
+                 "fields, not the seven the contract's derivation is written against" % len(refused))
     if trips == 0:
         sys.exit("gen_pipe_field_ownership: self-test: no negative control tripped - the gates are "
                  "not checking anything")
@@ -710,7 +713,7 @@ def self_test():
                  % (len(controls) - trips, len(controls)))
     print("gen_pipe_field_ownership: self-test: %d negative-control trip(s), each asserted against "
           "its OWN message; harness control OK; positive control OK "
-          "(%d fields partitioned, 7 sticky forwards, 9 refusals)" % (trips, total))
+          "(%d fields partitioned, 7 sticky forwards, 7 refusals)" % (trips, total))
     return 0
 
 

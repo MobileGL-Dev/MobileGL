@@ -148,7 +148,8 @@ enum class MGPWireOp : Uint16 {
     CopyFramebufferToTexture = 76,
     ApplierReset = 77,
     ObjectDeath = 78,
-    kOpCount = 79,
+    SetContextValues = 79,
+    kOpCount = 80,
 };
 
 // THE FLAGS, EXPORTED ONCE, INDEXED BY OPCODE (P5 R-13.4). MGPWireRecHeader::Flags is
@@ -248,6 +249,7 @@ inline constexpr Uint32 kMGPipeCallFlags[static_cast<SizeT>(MGPWireOp::kOpCount)
     /* 76 CopyFramebufferToTexture*/ static_cast<Uint32>(kNone),
     /* 77 ApplierReset            */ static_cast<Uint32>(kNone),
     /* 78 ObjectDeath             */ static_cast<Uint32>(kNone),
+    /* 79 SetContextValues        */ static_cast<Uint32>(kNone),
 };
 static_assert(sizeof(kMGPipeCallFlags) / sizeof(kMGPipeCallFlags[0]) ==
                   static_cast<SizeT>(MGPWireOp::kOpCount),
@@ -925,6 +927,14 @@ static_assert(sizeof(MGPWireRec_ObjectDeath) ==
                   ((sizeof(MGPWireRecHeader) + sizeof(MGPHandleOnly) + 7u) & ~SizeT(7u)),
               "MGPWireRec_ObjectDeath gained padding; the wire format moved");
 
+struct alignas(8) MGPWireRec_SetContextValues {
+    MGPWireRecHeader Header;
+    MGPContextValues Payload;
+};
+static_assert(sizeof(MGPWireRec_SetContextValues) ==
+                  ((sizeof(MGPWireRecHeader) + sizeof(MGPContextValues) + 7u) & ~SizeT(7u)),
+              "MGPWireRec_SetContextValues gained padding; the wire format moved");
+
 [[noreturn]] inline void MGPipeWireProtocolFatal(const char* call, Uint64 size, Uint64 remaining) {
     MGLOG_F("MGPipe: protocol corruption applying %s: size=%llu remaining=%llu", call,
             static_cast<unsigned long long>(size), static_cast<unsigned long long>(remaining));
@@ -1207,6 +1217,9 @@ inline Bool MGPipeApplyWireRecord(MGPWireOp op, const void* record, Uint64 size,
         break;
     case MGPWireOp::ObjectDeath:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_ObjectDeath, "ObjectDeath");
+        break;
+    case MGPWireOp::SetContextValues:
+        MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetContextValues, "SetContextValues");
         break;
     case MGPWireOp::kInvalid:
     case MGPWireOp::kOpCount:

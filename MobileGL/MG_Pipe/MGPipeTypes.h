@@ -936,14 +936,29 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPGlobalConstants, 40);
 
-    // The float/int/uint view is resolved on the CLIENT by ClassifyVertexAttribType.
+    // One attribute default, resolved on the CLIENT. P5c (rv, CONTRACT-P5C.md §5.3) AMENDED
+    // the shape: a CurrentVertexAttributeValue is one value in THREE views and GLContext
+    // converts between them NUMERICALLY (SetCurrentVertexAttributeFloat writes (Int32)value
+    // into intValue), so the four words of the written class alone were never the value -
+    // glVertexAttrib4f(loc, 1.5f, ...) leaves 1 in intValue and 0x3FC00000 in floatValue. The
+    // record now carries all three views VERBATIM, as the frontend computed them, and the
+    // applier writes each view from its own array; ValueClass stays as the record of which
+    // view the application wrote directly (the verify comparator covers it, and the
+    // emission-side suppressor compares the three views, not it). This is the catalogue's
+    // second payload-size amendment after P5b's MGPCopyRegion 64 -> 72 (CONTRACT-P5C.md §7.6):
+    // 24 -> 56 bytes, and PipeCatalogueTest pins the new size.
     struct MGPAttribValue {
         Uint32 Location;
         Uint8 ValueClass; // Float | Int | Uint | Double
         Uint8 Pad0[3];
-        Uint32 Data[4];
+        // The frontend's three views, VERBATIM - floatValue / intValue / uintValue of the
+        // CurrentVertexAttributeValue, converted between each other by the CLIENT. The
+        // applier writes each view from its own array and never reconverts.
+        Uint32 FloatView[4];
+        Uint32 IntView[4];
+        Uint32 UintView[4];
     };
-    MGP_ASSERT_POD(MGPAttribValue, 24);
+    MGP_ASSERT_POD(MGPAttribValue, 56);
 
     // Var-tail header: MGPAttribValue[popcount(Mask)] follows.
     struct MGPVertexAttribDefaults {
@@ -1634,13 +1649,16 @@ namespace MobileGL::MG_Pipe {
     MGP_ASSERT_POD(MGPCopyFromFramebuffer, 48);
 
     // ---------------------------------------------------------------------------------
-    // P5c: the two appended rows (MG_Remote/CONTRACT-P5C.md §5). APPENDED, never inserted:
-    // applier_reset is opcode 77 and object_death opcode 78, and no earlier opcode moved.
+    // P5c: the three appended rows (MG_Remote/CONTRACT-P5C.md §5). APPENDED, never inserted:
+    // applier_reset is opcode 77, object_death opcode 78, and set_context_values (rv, §5.3)
+    // opcode 79 - and no earlier opcode moved.
     //
-    // Neither has an MGPipeApply* entry point and neither gains one. Both reach
+    // THE TWO CONTROL RECORDS have no MGPipeApply* entry point and never gain one. Both reach
     // MG_Remote::Wire::WireVerbSink like the five P5b verbs, and under monolith neither has a
     // producer - the reset is the GL thread's direct MGPipeApplierReset() call and the death
-    // notice's mailbox hop, byte for byte as today (G1/G2).
+    // notice's mailbox hop, byte for byte as today (G1/G2). set_context_values is the ordinary
+    // shape instead: a routed set_* row with an MGPipeApply* entry point, emitted at validate
+    // with an active transport and never produced under monolith (G1).
     // ---------------------------------------------------------------------------------
 
     // applier_reset = tracker.FreshlyPrimed()'s server half (P5c §5.1). The one field is the
@@ -1659,6 +1677,32 @@ namespace MobileGL::MG_Pipe {
     // crosses: the client emits nothing when its own allocator cannot resolve the dying
     // object (§5.2), so a null handle arriving is Fatal{ProtocolCorruption,
     // "ObjectDeath.Handle"} at the sink.
+
+    // set_context_values = opcode 79, P5c rv (CONTRACT-P5C.md §5.3): the rv field table as
+    // ONE fixed-width POD. It carries every value-class field that no set_* call supplies -
+    // the two texture-unit counters, the per-target touched-buffer-binding high-water marks
+    // (indexed by BufferTarget, all 15, the four bind-point targets today and the rest
+    // zero), and the five transform-feedback values - and it retires their BARRIER_PULLED
+    // rows to RECORD_SUPPLIED. There is NO dirty mask in the payload: the record is
+    // whole-record hash-suppressed like every other set_* call, and a suppressed record
+    // means "nothing moved", never "field invalid" (§1). The three texture SHUTTERS
+    // (GetSamplingResolutionGeneration / GetTextureBindGeneration / GetTextureContextId)
+    // deliberately carry NO field here: they are APPLIER_DERIVED, answered by the accessor
+    // from the applier's own Serial (MG_Backend/MGPipe/PipeInputs.h).
+    struct MGPContextValues {
+        Uint32 ActiveTextureUnit;   // feeds GetActiveTextureUnit
+        Uint32 MaxTouchedTextureUnit; // feeds GetMaxTouchedTextureUnit
+        // 15 = BufferTarget::BufferTargetCount (BufferObject.h:15-33). MG_Pipe may not include
+        // MG_State, so the pairing is asserted where both sides are visible (PipeFill.cpp).
+        Uint32 TouchedBufferBindingPointCount[15];
+        Uint8 IsTransformFeedbackActive;
+        Uint8 IsTransformFeedbackPaused;
+        Uint8 Pad0[2];
+        Uint64 TransformFeedbackGeneration;
+        Uint64 BoundTransformFeedbackLifetimeId;
+        Uint64 TransformFeedbackCapturedVertices;
+    };
+    MGP_ASSERT_POD(MGPContextValues, 96);
 
     // ---------------------------------------------------------------------------------
     // Reverse channel payloads (section 7.1)

@@ -308,6 +308,7 @@ enum class MGPipeFieldEmitter : Uint8 {
     BindRenderState,
     BindVertexElements,
     CreateRenderState,
+    SetContextValues,
     SetDispatchProgram,
     SetDrawProgram,
     SetDynamicState,
@@ -323,6 +324,7 @@ inline constexpr const char* kMGPipeFieldEmitterNames[] = {
     "BindRenderState",
     "BindVertexElements",
     "CreateRenderState",
+    "SetContextValues",
     "SetDispatchProgram",
     "SetDrawProgram",
     "SetDynamicState",
@@ -334,7 +336,7 @@ inline constexpr const char* kMGPipeFieldEmitterNames[] = {
 };
 
 inline constexpr MGPipeFieldEmitter kMGPipeFieldEmittedBy[kMGPipeInputFieldCount] = {
-    MGPipeFieldEmitter::kNone, // GetActiveTextureUnit
+    MGPipeFieldEmitter::SetContextValues, // GetActiveTextureUnit
     MGPipeFieldEmitter::SetDynamicState, // GetBlendColor
     MGPipeFieldEmitter::CreateRenderState, // GetBlendEquationIndexed
     MGPipeFieldEmitter::CreateRenderState, // GetBlendFuncIndexed
@@ -343,7 +345,7 @@ inline constexpr MGPipeFieldEmitter kMGPipeFieldEmittedBy[kMGPipeInputFieldCount
     MGPipeFieldEmitter::kNone, // GetBufferBindingSlot
     MGPipeFieldEmitter::kNone, // GetBufferBindingPoint
     MGPipeFieldEmitter::kNone, // GetBufferBindingPointCount
-    MGPipeFieldEmitter::kNone, // GetTouchedBufferBindingPointCount
+    MGPipeFieldEmitter::SetContextValues, // GetTouchedBufferBindingPointCount
     MGPipeFieldEmitter::SetDynamicState, // GetClampReadColor
     MGPipeFieldEmitter::SetDynamicState, // GetClearColor
     MGPipeFieldEmitter::SetDynamicState, // GetClearDepth
@@ -358,7 +360,7 @@ inline constexpr MGPipeFieldEmitter kMGPipeFieldEmittedBy[kMGPipeInputFieldCount
     MGPipeFieldEmitter::SetShaderImages, // GetImageTextureBinding
     MGPipeFieldEmitter::SetDynamicState, // GetLineWidth
     MGPipeFieldEmitter::CreateRenderState, // GetLogicOp
-    MGPipeFieldEmitter::SetSamplerViews, // GetMaxTouchedTextureUnit
+    MGPipeFieldEmitter::SetContextValues, // GetMaxTouchedTextureUnit
     MGPipeFieldEmitter::CreateRenderState, // GetMinSampleShadingValue
     MGPipeFieldEmitter::SetPatchState, // GetPatchDefaultInnerLevel
     MGPipeFieldEmitter::SetPatchState, // GetPatchDefaultOuterLevel
@@ -382,23 +384,23 @@ inline constexpr MGPipeFieldEmitter kMGPipeFieldEmittedBy[kMGPipeInputFieldCount
     MGPipeFieldEmitter::kNone, // GetTextureContextId
     MGPipeFieldEmitter::kNone, // GetTextureObject
     MGPipeFieldEmitter::SetSamplerViews, // GetTextureUnitObject
-    MGPipeFieldEmitter::kNone, // GetTransformFeedbackCapturedVertices
-    MGPipeFieldEmitter::kNone, // GetTransformFeedbackGeneration
+    MGPipeFieldEmitter::SetContextValues, // GetTransformFeedbackCapturedVertices
+    MGPipeFieldEmitter::SetContextValues, // GetTransformFeedbackGeneration
     MGPipeFieldEmitter::kNone, // GetTransformFeedbackPausedPrimitiveCounter
     MGPipeFieldEmitter::kNone, // GetTransformFeedbackProgram
     MGPipeFieldEmitter::SetDynamicState, // GetViewport
     MGPipeFieldEmitter::SetDynamicState, // GetViewportIndexed
     MGPipeFieldEmitter::CreateRenderState, // IsCapabilityEnabled
     MGPipeFieldEmitter::CreateRenderState, // IsCapabilityEnabledIndexed
-    MGPipeFieldEmitter::kNone, // IsTransformFeedbackActive
-    MGPipeFieldEmitter::kNone, // IsTransformFeedbackPaused
+    MGPipeFieldEmitter::SetContextValues, // IsTransformFeedbackActive
+    MGPipeFieldEmitter::SetContextValues, // IsTransformFeedbackPaused
     MGPipeFieldEmitter::kNone, // InvalidateCompileEnv
     MGPipeFieldEmitter::kNone, // ValidateProgramName
     MGPipeFieldEmitter::kNone, // RecordError
-    MGPipeFieldEmitter::kNone, // GetBoundTransformFeedbackLifetimeId
+    MGPipeFieldEmitter::SetContextValues, // GetBoundTransformFeedbackLifetimeId
     MGPipeFieldEmitter::kNone, // HasOpenTransformFeedbackSpan
 };
-inline constexpr SizeT kMGPipeEmittedFieldCount = 40;
+inline constexpr SizeT kMGPipeEmittedFieldCount = 47;
 
 struct MGPipeFilledState {
     Uint64 CurrentVerbSerial;

@@ -197,11 +197,15 @@ TEST_F(FieldOwnershipTest, TheClassSizesPartitionTheFieldSet) {
     EXPECT_EQ(counted[static_cast<SizeT>(MGPipeFieldOwnership::kBarrierPulled)],
               kMGPipeBarrierPulledFieldCount);
     EXPECT_EQ(counted[static_cast<SizeT>(MGPipeFieldOwnership::kFatal)], kMGPipeFatalFieldCount);
-    // The census's own arithmetic (scout-unmigrated-census section 2.1): 31 of the 63 fields
-    // are served by NO pushed record - 24 non-sticky plus the seven sticky - so 32 are.
-    EXPECT_EQ(kMGPipeRecordSuppliedFieldCount, SizeT{32});
+    // The census's own arithmetic (scout-unmigrated-census section 2.1), updated by P5c rv
+    // (CONTRACT-P5C.md §5.3): rv moved the NINE value-class rows to RECORD-SUPPLIED through
+    // set_context_values / the amended set_vertex_attrib_defaults and the three texture
+    // shutters to APPLIER-DERIVED, so 22 of the 63 fields are served by NO pushed record -
+    // 15 BARRIER-PULLED (the object class: nine non-sticky rows plus six of the seven sticky
+    // forwards), four APPLIER-DERIVED and three FATAL - and 41 are.
+    EXPECT_EQ(kMGPipeRecordSuppliedFieldCount, SizeT{41});
     EXPECT_EQ(kMGPipeApplierDerivedFieldCount + kMGPipeBarrierPulledFieldCount + kMGPipeFatalFieldCount,
-              SizeT{31});
+              SizeT{22});
 }
 
 TEST_F(FieldOwnershipTest, EveryBarrierPulledRowNamesTheRetiringPhase) {
@@ -217,36 +221,56 @@ TEST_F(FieldOwnershipTest, EveryBarrierPulledRowNamesTheRetiringPhase) {
 }
 
 // The 21 the reduced path actually reads (scout-unmigrated-census section 3: the union of
-// kClear's 7, kDraw's 19 and kReadback's 12). Twenty of them are BARRIER-PULLED; the
-// twenty-first is GetPixelStoreParameters, whose PACK half the applier writes and whose UNPACK
-// half has no carrier and no backend reader at all.
+// kClear's 7, kDraw's 19 and kReadback's 12) - AS P5c rv LEFT THEM (CONTRACT-P5C.md §5.3):
+// NINE moved to RECORD-SUPPLIED through set_context_values (the two texture-unit counters,
+// the touched-count array, the five XFB values) plus GetCurrentVertexAttribute through the
+// amended set_vertex_attrib_defaults payload, and the three texture shutters moved to
+// APPLIER-DERIVED ("a shutter, not a value: the server answers from its own Serial"). What
+// remains BARRIER-PULLED is EXACTLY the object class - nine non-sticky fields whose storage
+// is a frontend heap reference no record can carry - plus GetPixelStoreParameters, whose
+// PACK half the applier writes and whose UNPACK half has no carrier and no backend reader at
+// all.
 TEST_F(FieldOwnershipTest, TheReducedPathsUnmigratedFieldsAreAllAccountedFor) {
     const MGPipeInputField pulled[] = {
-        MGPipeInputField::GetActiveTextureUnit,
         MGPipeInputField::GetBoundVertexArray,
         MGPipeInputField::GetBufferBindingSlot,
         MGPipeInputField::GetBufferBindingPoint,
-        MGPipeInputField::GetTouchedBufferBindingPointCount,
-        MGPipeInputField::GetCurrentVertexAttribute,
         MGPipeInputField::GetFramebufferBindingSlot,
         MGPipeInputField::GetImageTextureBinding,
-        MGPipeInputField::GetMaxTouchedTextureUnit,
-        MGPipeInputField::GetProgramForDraw,
-        MGPipeInputField::GetSamplingResolutionGeneration,
-        MGPipeInputField::GetTextureBindGeneration,
-        MGPipeInputField::GetTextureContextId,
         MGPipeInputField::GetTextureUnitObject,
-        MGPipeInputField::GetTransformFeedbackCapturedVertices,
-        MGPipeInputField::GetTransformFeedbackGeneration,
+        MGPipeInputField::GetProgramForDraw,
+        MGPipeInputField::GetProgramForDispatch,
         MGPipeInputField::GetTransformFeedbackProgram,
-        MGPipeInputField::GetBoundTransformFeedbackLifetimeId,
-        MGPipeInputField::IsTransformFeedbackActive,
-        MGPipeInputField::IsTransformFeedbackPaused,
     };
     for (const auto field : pulled) {
         EXPECT_EQ(MGPipeFieldOwnershipOf(field), MGPipeFieldOwnership::kBarrierPulled)
             << kMGPipeInputFieldNames[Index(field)] << " left the reduced path's debt";
     }
+    // rv's exit line, pinned as a SET and not only as nine rows: the non-sticky
+    // BARRIER-PULLED list above is ALL the non-sticky debt - value-class membership is zero
+    // (CONTRACT-P5C.md §7 table 2) - and the only other BARRIER-PULLED rows are six of the
+    // seven sticky forwards (the seventh, InvalidateCompileEnv, is FATAL since P5c ev).
+    const MGPipeInputField pulledSticky[] = {
+        MGPipeInputField::GetBufferBindingPointCount,
+        MGPipeInputField::GetProgramObject,
+        MGPipeInputField::GetTextureObject,
+        MGPipeInputField::HasOpenTransformFeedbackSpan,
+        MGPipeInputField::ValidateProgramName,
+        MGPipeInputField::RecordError,
+    };
+    SizeT pulledCount = 0;
+    for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
+        const auto field = static_cast<MGPipeInputField>(i);
+        if (kMGPipeFieldOwnership[i] != MGPipeFieldOwnership::kBarrierPulled) continue;
+        ++pulledCount;
+        Bool named = false;
+        for (const auto f : pulled) named = named || field == f;
+        for (const auto f : pulledSticky) named = named || field == f;
+        EXPECT_TRUE(named) << kMGPipeInputFieldNames[i]
+                           << " is BARRIER-PULLED and not in the pinned object-class list";
+    }
+    EXPECT_EQ(pulledCount, 15u) << "9 non-sticky object rows + 6 sticky forwards";
+    EXPECT_EQ(pulledCount, kMGPipeBarrierPulledFieldCount);
     EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetPixelStoreParameters),
               MGPipeFieldOwnership::kApplierDerived);
     EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetPixelStoreParameters, 0u),
@@ -271,6 +295,36 @@ TEST_F(FieldOwnershipTest, TheReducedPathsUnmigratedFieldsAreAllAccountedFor) {
     EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetProgramForDispatch),
               MGPipeFieldOwnershipOf(MGPipeInputField::GetProgramForDraw))
         << "GetProgramForDispatch is GetProgramForDraw's twin and must share its class";
+
+    // AND THE NINE rv RETIRED, asserted in their NEW classes rather than deleted: a row that
+    // quietly fell back to BARRIER-PULLED is exactly what this list is for.
+    const MGPipeInputField suppliedByContextValues[] = {
+        MGPipeInputField::GetActiveTextureUnit,
+        MGPipeInputField::GetMaxTouchedTextureUnit,
+        MGPipeInputField::GetTouchedBufferBindingPointCount,
+        MGPipeInputField::IsTransformFeedbackActive,
+        MGPipeInputField::IsTransformFeedbackPaused,
+        MGPipeInputField::GetTransformFeedbackGeneration,
+        MGPipeInputField::GetBoundTransformFeedbackLifetimeId,
+        MGPipeInputField::GetTransformFeedbackCapturedVertices,
+    };
+    for (const auto field : suppliedByContextValues) {
+        EXPECT_EQ(MGPipeFieldOwnershipOf(field), MGPipeFieldOwnership::kRecordSupplied)
+            << kMGPipeInputFieldNames[Index(field)] << " no longer rides set_context_values";
+    }
+    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetCurrentVertexAttribute),
+              MGPipeFieldOwnership::kRecordSupplied)
+        << "the amended set_vertex_attrib_defaults payload carries all three views";
+    const MGPipeInputField shutters[] = {
+        MGPipeInputField::GetSamplingResolutionGeneration,
+        MGPipeInputField::GetTextureBindGeneration,
+        MGPipeInputField::GetTextureContextId,
+    };
+    for (const auto field : shutters) {
+        EXPECT_EQ(MGPipeFieldOwnershipOf(field), MGPipeFieldOwnership::kApplierDerived)
+            << kMGPipeInputFieldNames[Index(field)]
+            << " is a shutter: the server answers from its own Serial";
+    }
 }
 
 TEST_F(FieldOwnershipTest, TheSevenStickyForwardsAgreeWithTheirFieldRows) {
@@ -395,19 +449,76 @@ TEST_F(FieldOwnershipTest, ARecordSuppliedFieldIsReadableAfterAServerStamp) {
     (void)gPipeInputs.GetRenderStateParameters();
     EXPECT_EQ(MGPipeResidualPullCount(), Uint64{0});
     // The pixel store is in kReadback's class, not kClear's, so its readable half is exercised
-    // under the verb that actually reads it.
+    // under the verb that actually reads it. And P5c rv's record-supplied rows join it there:
+    // GetActiveTextureUnit is exactly the read that used to count into `rsp`.
     MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
     (void)gPipeInputs.GetPixelStoreParameters(false); // the half that has a carrier
+    (void)gPipeInputs.GetActiveTextureUnit();         // P5c rv: set_context_values carries it
+    (void)gPipeInputs.GetMaxTouchedTextureUnit();
+    EXPECT_EQ(MGPipeResidualPullCount(), Uint64{0});
+    // And a shutter answers the applier's own Serial under a server stamp (APPLIER-DERIVED),
+    // not the client's residual-fill copy: still zero pulls, and the answer MOVES when the
+    // applier's texture state does.
+    (void)gPipeInputs.GetTextureBindGeneration();
+    EXPECT_EQ(MGPipeResidualPullCount(), Uint64{0});
+}
+
+// P5c rv (CONTRACT-P5C.md §5.3): the residual-value record's applier write, read back through
+// the accessors a backend uses, under the stamps that publish them - and the three texture
+// shutters answering the applier's own serials rather than the client's fill. kReadback's
+// class carries the two texture-unit counters, kDraw's the rest.
+TEST_F(FieldOwnershipTest, SetContextValuesLandsInPipeInputsAndTheShuttersAnswerTheApplier) {
+    MGPContextValues values{};
+    values.ActiveTextureUnit = 5;
+    values.MaxTouchedTextureUnit = 23;
+    values.TouchedBufferBindingPointCount[static_cast<Uint32>(BufferTarget::Uniform)] = 7;
+    values.IsTransformFeedbackActive = 1;
+    values.IsTransformFeedbackPaused = 0;
+    values.TransformFeedbackGeneration = 0x1112131415161718ull;
+    values.BoundTransformFeedbackLifetimeId = 0x2122232425262728ull;
+    values.TransformFeedbackCapturedVertices = 0x3132333435363738ull;
+    MGPipeApplySetContextValues(values);
+
+    MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
+    EXPECT_EQ(gPipeInputs.GetActiveTextureUnit(), 5);
+    EXPECT_EQ(gPipeInputs.GetMaxTouchedTextureUnit(), 23);
+    MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
+    EXPECT_EQ(gPipeInputs.GetTouchedBufferBindingPointCount(BufferTarget::Uniform), SizeT{7});
+    EXPECT_EQ(gPipeInputs.GetTouchedBufferBindingPointCount(BufferTarget::Vertex), SizeT{0});
+    EXPECT_TRUE(gPipeInputs.IsTransformFeedbackActive());
+    EXPECT_FALSE(gPipeInputs.IsTransformFeedbackPaused());
+    EXPECT_EQ(gPipeInputs.GetTransformFeedbackGeneration(), 0x1112131415161718ull);
+    EXPECT_EQ(gPipeInputs.GetBoundTransformFeedbackLifetimeId(), 0x2122232425262728ull);
+    EXPECT_EQ(gPipeInputs.GetTransformFeedbackCapturedVertices(), 0x3132333435363738ull);
+    // Eight record-supplied reads and not one residual pull.
+    EXPECT_EQ(MGPipeResidualPullCount(), Uint64{0});
+
+    // The three shutters answer the applier's own serials under a stamped verb. They are
+    // SHUTTERS - the value matters only in that it MOVES when the server's texture state does
+    // and never walks backwards - so the pin is the identity with the applier's counters, not
+    // any particular number.
+    EXPECT_EQ(gPipeInputs.GetTextureBindGeneration(), MGPipeApplierTextureShutterSerial());
+    EXPECT_EQ(gPipeInputs.GetSamplingResolutionGeneration(), MGPipeApplierTextureShutterSerial());
+    EXPECT_EQ(gPipeInputs.GetTextureContextId(), MGPipeApplierContextSerial());
+    const Uint64 before = MGPipeApplierTextureShutterSerial();
+    MGPipeApplierNoteTextureStateMoved();
+    EXPECT_EQ(gPipeInputs.GetTextureBindGeneration(), before + 1)
+        << "a texture-state apply moved the serial but the shutter did not answer with it";
     EXPECT_EQ(MGPipeResidualPullCount(), Uint64{0});
 }
 
 TEST_F(FieldOwnershipTest, ABarrierPulledReadAfterAServerStampIsCountedNotFatal) {
-    MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
+    // P5c rv: the exemplars are OBJECT-class now - the value rows this case used to read
+    // (GetActiveTextureUnit / GetTextureContextId / GetMaxTouchedTextureUnit) are
+    // RECORD-SUPPLIED / APPLIER-DERIVED since rv, and reading them here would count nothing.
+    // The three below are all of kDraw's class, all SharedPtr reads, and all safe on
+    // never-filled storage.
+    MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
     ASSERT_EQ(MGPipeResidualPullCount(), Uint64{0});
-    (void)gPipeInputs.GetActiveTextureUnit();
+    (void)gPipeInputs.GetBoundVertexArray();
     EXPECT_EQ(MGPipeResidualPullCount(), Uint64{1});
-    (void)gPipeInputs.GetTextureContextId();
-    (void)gPipeInputs.GetMaxTouchedTextureUnit();
+    (void)gPipeInputs.GetProgramForDraw();
+    (void)gPipeInputs.GetTransformFeedbackProgram();
     EXPECT_EQ(MGPipeResidualPullCount(), Uint64{3});
 }
 
@@ -452,16 +563,18 @@ TEST_F(FieldOwnershipTest, TheAppliersOwnClearDisarmsTheStampWithoutTheClientsFi
 }
 
 // The verb's own may-read table still holds on the server: kClear does not read
-// GetActiveTextureUnit, so reading it there is a stale answer rather than a residual pull,
+// GetProgramForDraw, so reading it there is a stale answer rather than a residual pull,
 // and it stays Fatal. Counting it would trade a loud staleness for a quiet one.
+// (P5c rv: the exemplar moved - GetActiveTextureUnit is RECORD-SUPPLIED since rv and would
+// say nothing about the pulled set here.)
 TEST_F(FieldOwnershipTest, ABarrierPulledFieldOutsideTheVerbsClassIsStillFatal) {
 #if MGTEST_HAVE_FORK
     const ChildResult r = RunInChild([] {
         MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
-        (void)gPipeInputs.GetActiveTextureUnit(); // BARRIER-PULLED, but not in kClear's class
+        (void)gPipeInputs.GetProgramForDraw(); // BARRIER-PULLED, but not in kClear's class
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetActiveTextureUnit@Clear\"}"), std::string::npos)
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetProgramForDraw@Clear\"}"), std::string::npos)
         << r.Log;
     EXPECT_EQ(r.Log.find("BARRIER-PULLED"), std::string::npos) << r.Log;
 #else
@@ -473,8 +586,8 @@ TEST_F(FieldOwnershipTest, ResidualPullsReachThePublishedPerFrameCounter) {
     namespace PS = MG_Util::PipeStats;
     PS::SetEnabledForTesting(true);
     PS::ResetForTesting();
-    MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
-    (void)gPipeInputs.GetActiveTextureUnit();
+    MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
+    (void)gPipeInputs.GetBoundVertexArray();
     EXPECT_EQ(PS::FrameCalls(PS::CallClass::ResidualPulls), Uint64{1});
     EXPECT_NE(PS::FormatWindowLine().find("rsp="), std::string::npos) << PS::FormatWindowLine();
     PS::ResetForTesting();
@@ -484,28 +597,30 @@ TEST_F(FieldOwnershipTest, ResidualPullsReachThePublishedPerFrameCounter) {
 #if MGTEST_HAVE_FORK
 
 // R-7.3's proof that the instrumentation can go red. An instrumentation that cannot is
-// decoration, and the set it counts is not empty.
+// decoration, and the set it counts is not empty. (P5c rv: the exemplar is object-class now -
+// the value rows this case was written against ride set_context_values and answer
+// RECORD-SUPPLIED.)
 TEST_F(FieldOwnershipTest, StrictErrorsTurnsABarrierPulledReadIntoANamedAbort) {
     const ChildResult r = RunInChild([] {
         MG_Config::Ipc.StrictErrors = true;
-        MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
-        (void)gPipeInputs.GetActiveTextureUnit();
+        MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
+        (void)gPipeInputs.GetBoundVertexArray();
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetActiveTextureUnit@ReadPixels\"}"),
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"),
               std::string::npos)
         << r.Log;
     EXPECT_NE(r.Log.find("BARRIER-PULLED"), std::string::npos) << r.Log;
     EXPECT_NE(r.Log.find("MOBILEGL_IPC_STRICT_ERRORS=1"), std::string::npos) << r.Log;
     // The strict line names the phase that owes the answer; a strict abort that did not would
     // leave the reader exactly where the gate found them.
-    EXPECT_NE(r.Log.find("retires in P3b/P4b"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("retires in P8]"), std::string::npos) << r.Log;
 }
 
 TEST_F(FieldOwnershipTest, TheSameReadWithoutStrictErrorsSurvivesAndIsCounted) {
     const ChildResult r = RunInChild([] {
-        MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
-        (void)gPipeInputs.GetActiveTextureUnit();
+        MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
+        (void)gPipeInputs.GetBoundVertexArray();
         if (MGPipeResidualPullCount() != 1) ::_exit(7);
     });
     ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;

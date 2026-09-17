@@ -256,8 +256,9 @@ namespace MobileGL {
                 // four words on a wire are not the value unless the class travels with them:
                 // glVertexAttrib4f(loc, 1.5f, ...) leaves 1 in intValue and 0x3FC00000 in
                 // floatValue. set_vertex_attrib_defaults carries this as MGPAttribValue's
-                // ValueClass so the applier can redo the conversion instead of memcpying one
-                // view into all three.
+                // ValueClass AND, since P5c rv (CONTRACT-P5C.md §5.3), all three views
+                // verbatim - the applier writes each view from its own array rather than
+                // redoing the conversion.
                 //
                 // It is kept BESIDE the array rather than inside CurrentVertexAttributeValue
                 // because that struct is mirrored into PipeInputs and compared there by a

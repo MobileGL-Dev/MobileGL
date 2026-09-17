@@ -1064,7 +1064,7 @@ TEST(PipeRouting, AnErrorStatusIsNotFoldedIntoAcceptedOrRefused) {
 #endif // MGTEST_HAVE_FORK
 
 // =====================================================================================
-// B3 / codex 9: the CLIENT arm's 37 rows are observed, not just the monolith install
+// B3 / codex 9: the CLIENT arm's 38 rows are observed, not just the monolith install
 // =====================================================================================
 
 namespace {
@@ -1127,6 +1127,11 @@ TEST(PipeRouting, TheInstalledClientArmIsWireAndNotMonolithAndEveryRoutedRowMove
     C1F_MOVED(Context, SetVertexAttribDefaults);
     C1F_MOVED(Context, SetPixelPackState);
     C1F_MOVED(Context, SetPatchState);
+    // P5c rv (CONTRACT-P5C.md §5.3): the residual-value record is the 34th routed row - an
+    // ordinary set_* row with an MGPipeApply* entry point, so it rides BOTH tables like its
+    // siblings (its producer is transport-gated in PipeFill.cpp, which is a different gate's
+    // business).
+    C1F_MOVED(Context, SetContextValues);
     C1F_MOVED(Context, SetResidualValueState);
     C1F_MOVED(Context, SetTextureParams);
     C1F_MOVED(Context, ResourceSubData);
@@ -1140,8 +1145,9 @@ TEST(PipeRouting, TheInstalledClientArmIsWireAndNotMonolithAndEveryRoutedRowMove
     C1F_ESCAPE(CreateShaderState);
 #undef C1F_ESCAPE
     const SizeT movedContext = CountDifferingCells(gMGPipeContext, MGPipeMonolithContext());
-    EXPECT_EQ(movedScreen + movedContext, 33u)
-        << "exactly the 33 generated routed rows must differ from the monolith adapters; "
+    EXPECT_EQ(movedScreen + movedContext, 34u)
+        << "exactly the 34 generated routed rows must differ from the monolith adapters "
+           "(33 at P5, + set_context_values at P5c rv); "
         << movedScreen + movedContext
         << " did, so a row was left on the monolith adapter (it would run the applier on the GL "
            "thread under split) or an unrouted row was overwritten";

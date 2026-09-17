@@ -113,8 +113,10 @@ namespace MobileGL::MG_Pipe {
     // (EmitVertexAttribDefaults). It is the ONE observable of that repair: the window it
     // covers is a verb whose class does not read m_currentVertexAttribute, where reading the
     // storage to check it would be the poison violation the fill table exists to forbid. So
-    // TrackerShippedEmitter asserts on this counter instead, and the day package A's applier
-    // switches on MGPAttribValue::ValueClass the counter stops moving.
+    // TrackerShippedEmitter asserts on this counter instead. Since P5c rv the record carries
+    // all three views verbatim (CONTRACT-P5C.md §5.3) and the applier writes each from its own
+    // array, so the counter is expected to stay at 0 - the check that increments it is the
+    // trip wire that remains.
     //
     // Not hot-path instrumentation: it is incremented only inside the repair branch, which
     // runs only when the call actually went out, which is only when an attribute default

@@ -821,31 +821,30 @@ namespace MobileGL::MG_Pipe {
         Uint64 m_walks[kMGPipeVerbClassCount]{};
     };
 
-    // ONE attribute default, flattened onto the wire (P2 brief D10). A named function rather
-    // than four lines inside the emitter because this flattening is the whole correctness
-    // question of set_vertex_attrib_defaults: a CurrentVertexAttributeValue is one value in
-    // three views and GLContext converts NUMERICALLY between them, so four words alone are
-    // not the value - glVertexAttrib4f(loc, 1.5f, ...) leaves 1 in intValue and 0x3FC00000 in
-    // floatValue. MGPAttribValue::ValueClass is what makes the four words readable again, and
-    // TrackerAttribPayload pins that here instead of leaving it to the emitter's shape.
+    // ONE attribute default, flattened onto the wire (P2 brief D10, AMENDED at P5c rv). A
+    // named function rather than four lines inside the emitter because this flattening is the
+    // whole correctness question of set_vertex_attrib_defaults: a CurrentVertexAttributeValue
+    // is one value in three views and GLContext converts NUMERICALLY between them, so four
+    // words alone are not the value - glVertexAttrib4f(loc, 1.5f, ...) leaves 1 in intValue
+    // and 0x3FC00000 in floatValue. Since rv the record carries ALL THREE VIEWS VERBATIM
+    // (MGPAttribValue::FloatView/IntView/UintView, CONTRACT-P5C.md §5.3) and the applier writes
+    // each view from its own array; ValueClass is the record of which view the application
+    // wrote directly, kept for the comparator and for readers - the applier no longer needs
+    // it to rebuild anything.
     inline void MGPipeFillAttribValue(Uint32 location,
                                       const MG_State::GLState::CurrentVertexAttributeValue& value,
                                       Uint32 writtenClass, MGPAttribValue& out) {
         out = MGPAttribValue{};
         out.Location = location;
         out.ValueClass = static_cast<Uint8>(writtenClass);
-        static_assert(sizeof(out.Data) == sizeof(value.floatValue), "MGPAttribValue::Data is four words");
-        switch (writtenClass) {
-        case MG_State::GLState::kVertexAttribValueClassInt:
-            std::memcpy(out.Data, value.intValue.data(), sizeof(out.Data));
-            break;
-        case MG_State::GLState::kVertexAttribValueClassUint:
-            std::memcpy(out.Data, value.uintValue.data(), sizeof(out.Data));
-            break;
-        default:
-            std::memcpy(out.Data, value.floatValue.data(), sizeof(out.Data));
-            break;
-        }
+        static_assert(sizeof(out.FloatView) == sizeof(value.floatValue),
+                      "MGPAttribValue's views are four words each");
+        static_assert(sizeof(out.IntView) == sizeof(value.intValue) &&
+                          sizeof(out.UintView) == sizeof(value.uintValue),
+                      "MGPAttribValue's views are four words each");
+        std::memcpy(out.FloatView, value.floatValue.data(), sizeof(out.FloatView));
+        std::memcpy(out.IntView, value.intValue.data(), sizeof(out.IntView));
+        std::memcpy(out.UintView, value.uintValue.data(), sizeof(out.UintView));
     }
 
     // The monolith's one tracker. Under split there is one per client context; the context
