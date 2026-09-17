@@ -561,7 +561,13 @@ client 表（`Client/EmitTables.cpp`）把后端函数表的 71 个槽分成三�
 - **draw 家族**：19 个索引 / 实例 / multi-draw / indirect 槽全部下沉到 `draw_vbo`；用户索引 span 的 shape/extent 门在 encoder / decoder / sink 三端共用（单 range、宽度 1/2/4、`Uint64(Count) × IndexSize ≤ Size`）。
 - **sync**：`FenceSync` / `ClientWaitSync` / `GetSyncStatus` / `WaitSync` / `DeleteSync` 五条现有 opcode 接线，client 铸造 Fence 句柄，wire 只过 `{slot,gen}`，native fence 归 apply 线程；顺带修掉 `MGL_BACKEND_SLOT_PTR_LOCAL` 对 split 恒返回 nullptr。
 - **具名 blit**：`BlitNamedFramebuffer` 经作用域化 client-shadow read/draw 绑定发布，降为现有 bound backend 调用，退出恢复公开绑定。**GLES mip storage**：前端先定义并发布层级，server 只验证 applier descriptor 的 Levels/extent；registry 身份解析只 Find 不 mint。
-- **P5b 留下的 inproc 依赖，P6 必须替换**：具名 blit 的 scoped client binding + barrier；mip descriptor 的 barrier-held registry 查询；FBO death 的 inproc mailbox。三者跨地址空间都不成立。
+- **P5b 留下的 inproc 依赖**：具名 blit 的 scoped client binding + barrier；mip descriptor 的 barrier-held registry 查询；FBO death 的 inproc mailbox。三者跨地址空间都不成立——它们只是 §17.6 清单里的三行。
+
+### 17.6 `inproc` 仍经共享地址空间的访问，与 P5c 的形状（计划，未实现）
+
+P5 / P5b 的 wire 只覆盖 verb 记录、`SEG_STAGE` blob、reply 与 caps 快照。对 `a79a0af6` 的只读静态审计（`ROADMAP.md` "P5c 计划"，报告 `~/w7/notes/p5c/p5c-audit-v1.md`）列出 59 处仍靠 verb barrier 与同一地址空间才正确的直接访问，最重的四类：**纹理纹素**虽已过 `SEG_STAGE` 但 applier 丢掉指针、Espryt 回读 client 的 `MipmapStorage`（整个纹理家族不在 `FieldOwnership.def`，`rsp` / strict / audit 都看不见）；**反向通道**是 apply 线程直接调进 client `MG_State`（`OnBufferWriteback` 传裸指针，`SEG_EVENT` 已铺好但零 producer，十个回调只装了两个）；**server 用前端 `GetLifetimeId()` 去 client 的 slot 分配器查找甚至铸造句柄**，而记录里其实已带句柄；**Magma** 直接读 client 的 caps 镜像、直接 `MarkGpuWritten`、直接写 client 的 mip 存储。
+
+P5c 的设计决定：(1) **server 端纹理 staged shadow**——`ApplyTextureUpload` 采纳 `SEG_STAGE` 字节，`SyncMipmapsToBackend` 只读它与描述符，`0xDD` audit 因此覆盖纹理；(2) **`SEG_EVENT` 成为唯一反向通道**——`OnBufferWriteback` 的 `MGPBlobRef` 约定 `Seg = kSegEvent`，`OnGpuWritten` / `OnSurfaceChanged` 走同一 ring，Magma 与 Espryt 共用回调，溢出策略按 §11.7；(3) **sink 与 twin 按记录里的句柄解析**（`GetOrCreate(MGPipeHandle)`），server 永不触 `MGPipeSlots()`；(4) **两条控制记录** `applier_reset`（make-current 边）与 `object_death`（framebuffer 首次有 delete opcode），mailbox 只剩 EGL forwarder 给 P6；(5) **值类 BARRIER-PULLED 行改为每 verb 残余值记录或 server 自答**，对象类行保持 barrier 直到 twin 表落地（P3b/P4b、P7、P8）；(6) **角色守卫**——split 构建有传输时，apply 线程触前端对象表面、GL 线程触 server 状态表面都是 `Fatal{RoleViolation}`；这是 P5c 的出口门，也是 P6 只做传输替换的前提。
 
 ## 附 A：开关
 

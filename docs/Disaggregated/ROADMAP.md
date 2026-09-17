@@ -1,6 +1,6 @@
 # MGPipe 路线图
 
-> 状态：**P0、P0.5、P1、P2、P3a、P4a、P5、P5b 已收官**（2026-09-16，代码头 `82683d4a`）。当前头、逐门数字、开放项与下一步见 **[`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md)**；设计见 `ARCHITECTURE.md`；逐阶段实测见 `MEASUREMENTS.md`。**下一个是 P6 spawn transport**。
+> 状态：**P0、P0.5、P1、P2、P3a、P4a、P5、P5b 已收官**（2026-09-16，代码头 `82683d4a`）。当前头、逐门数字、开放项与下一步见 **[`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md)**；设计见 `ARCHITECTURE.md`；逐阶段实测见 `MEASUREMENTS.md`。**下一个是 P5c**（`inproc` 的共享内存读点归零，2026-09-17 已审计、已计划、未开始，见下文"P5c 计划"），**然后才是 P6 spawn transport**。
 
 ## 通用纪律（每个 commit）
 
@@ -12,7 +12,7 @@
 - **拆分不借机顺手修 `dev` 的 bug**：句柄化过程中发现的 `dev` 侧缺陷记成独立条目、独立 PR（开放问题 15、17）。
 - 过程（用户 2026-09-16，ID-66）：不过度验证；轮次间不做对抗性审查，每个 P 阶段收官由 Codex 审一次，发现进入下一阶段首轮；只读 / 非核心任务派给 Codex；实现方与审查方错开模型族。
 
-两条跑道分开：**monolith 跑道** P0 → P0.5 → P1 → P2 → P3a → P4a → P3b/P4b → P7 → P8 → P13，每段可独立交付、可随时中止；**IPC 跑道** P5 → P5b → P6 → P9 → P10 → P11 → P12。目标顺序：先完整的 separate-thread rendering（P5b，已达成），再 separate-process transport（P6）。
+两条跑道分开：**monolith 跑道** P0 → P0.5 → P1 → P2 → P3a → P4a → P3b/P4b → P7 → P8 → P13，每段可独立交付、可随时中止；**IPC 跑道** P5 → P5b → **P5c** → P6 → P9 → P10 → P11 → P12。目标顺序：先完整的 separate-thread rendering（P5b，已达成），再让 `inproc` 变成只经 wire 交换的诚实两角色（P5c），最后才是 separate-process transport（P6，此时只是传输替换）。
 
 ## 阶段
 
@@ -26,7 +26,8 @@
 | **P4a** handle wave 2（Espryt）：FBO / 纹理 / sampler / program | ✅ `8c458cd5` | 十四条族调用接线（framebuffer state、sampler state / view、texture params、shader images、shader state、draw / dispatch program、global constants）；纹理 / renderbuffer 复用 `resource_*`（目录不加行）；六种 kind 按 `{slot, gen}` 重键；`CompositeResolver`；`Named = 3` framebuffer 记录；消费者门 + 客户端依赖表；位 9–12，push 默认 `0x1fff`；emulation 在 split 下具名 Fatal | 全门：G1 0/0/0/0；G5 17 区；G2 2902；单元 1785×3；`integration-gpu` 1117 七臂；verify 920；retrace 79/79；八族拒绝普查 0；`PipeApplyPeek` 白盒对照。实际 1 天。§5 |
 | **P5** 传输 + inproc applier + 发射表 | ✅ `ff2994d9..37fc4fdb` | 同一 codec 上的 `InProcessTransport`；四种 build flavour；发射表三类 / caps mirror / reply mailbox；apply-thread context 终身持有；lockstep verb barrier；tight ReadPixels；persistent-map 块推送；G8 字段归属生成器；split 测试 / CI / APK 车道；八包（c0 契约、w1 codec、s1 session、p1 归属、b1 persistent map、t1 车道、c1 路由、v1 server）+ j0 / x2 / v1-r3 收尾 | joint：OpenRA inproc 2/2 SSIM 1.0；`integration-split` 21/21；E1 14/14 红；G1 0/0/0/0。收尾头全门在 E3(a) 停止（设计性 skip 被判红），Part 2/4 未到达；收官审查 1 blocker / 10 major / 2 minor → P5b r1/r2。§6 |
 | **P5b** `inproc` verb migration | ✅ `37fc4fdb..82683d4a` | class-C 普查决定顺序；d1 19 / i1 7 / t2 6 / f1 11 槽迁移；sync 五槽；具名 blit；GLES mip descriptor；r1 / r2；收官审查三项修复。发射表 A=2 / B=54 / C=15 | 主机全门 `348d22a4` complete；`integration-split` 107/107；合并普查零回退、79 trace 72/6/1；**Redmi 正确性 8/8 + 四臂 A/B、barrier tax 首测**。§7 |
-| **P6** spawn transport | 下一个 | `SocketTransport`（socketpair + fork/execve，envp 剔除 + 强制 monolith 双保险）；`ServerMain`；`MOBILEGL_IPC_SERVER_PATH` + `dladdr` 兜底；有界重试握手；EOF 即时退出；device-lost latch；替换 P5b 的三处 inproc 依赖 | P5b 的完整渲染路径在 `spawn` 下绿；进程树只多一个子进程；`HeadlessGL` fork 预检无孤儿；OpenRA 在 Adreno 830 上 split SSIM ≥ 0.99 |
+| **P5c** `inproc` 共享内存读点归零 | **下一个**（2026-09-17 已计划，未开始） | server 端纹理 staged shadow；`SEG_EVENT` 的三个 producer；sink / twin 按记录里的句柄解析；`applier_reset` / `object_death` 控制记录；值类 BARRIER-PULLED 行改残余值记录；角色守卫门。详见下文"P5c 计划" | 角色守卫开启下 `integration-split` / 普查 / 79 trace 全绿且每层守卫能红；纹理 `0xDD` audit 红一次；`SEG_EVENT` 往返红一次；`rsp` 只剩对象类行且按帧测得；Redmi 四臂复测记录 | P5b |
+| **P6** spawn transport | P5c 之后 | `SocketTransport`（socketpair + fork/execve，envp 剔除 + 强制 monolith 双保险）；`ServerMain`；`MOBILEGL_IPC_SERVER_PATH` + `dladdr` 兜底；有界重试握手；EOF 即时退出；device-lost latch；EGL forwarder 的控制面帧；P5c 留下的 `s_synced` / `g_syncedRenderStateParameters` 按 context 世代重置 | P5b 的完整渲染路径在 `spawn` 下绿；进程树只多一个子进程；`HeadlessGL` fork 预检无孤儿；OpenRA 在 Adreno 830 上 split SSIM ≥ 0.99 |
 | **P3b / P4b** 深化（Espryt） | 待排 | 按存储属主键控的发射游标与 view 索引重映射；`g_fboTextureSyncList`；`ResolvedTextureBindingMemo` / `SamplerPassMemo` / image sweep / program registry 重键；XFB scatter 搬到 client；删 fragColor 重推导 workaround 与 `g_broadcastMemo*`；raw-depth-fetch sampler 原生化；回读 / pack state；P4a 记下的 R-3 / R-4 / R-5 / R-7 / R-10 / R-11；`ProgramArtifacts.h` 的 NDK 尺寸钉 | 纹理 / program 场景；CTS `texture_*` / `shader_image_*` / `packed_pixels` 在 0.5 pp 内；每一个 Iris trace；`TextureUploadShapeScenario` 升级成门 |
 | **P7** DirectVulkan（Magma）全量迁移 | 待排 | 其余 10 个子系统：`SetupDrawSnapshot` 探测字段塌成 dirty mask；占位纹理原生化；具名 UBO host payload（D-B8）；内部 shader 烘焙；`VertexInputStateFactory` 内容寻址 CSO；D18 容器纪律保留 | 集成 + trace 在 Magma 的 push 与 split 下全绿；verify 零分歧；`nm -D libMobileGLServer.so \| grep glslang` 为空；CTS 0.5 pp 内。**再基线检查点：中点完成子系统 < 40% 立即重定基线** |
 | **P8** emulation 下放 + 索引宿主镜像 + 协议广度 | 待排 | `MG_Impl/Pipe/HostResolve.cpp`（client 数组范围、最大索引扫描、`*IndirectCount` 解析，逐站点 reconcile）；`Server/IndexHostMirror`；CopyImage 镜像搬到 client；viewport-array 回放验证；`generate_mipmap` 计划 + CPU 回退纹素；大 blob carrier（开放问题 11）；无 present fence tick；`kCapDriverOrderedXfbCapture` | `'^DirectGLES\.Split\.'` 与 `'^DirectGLES\.'` 逐名相同；trace split 双后端 SSIM ≥ 0.99 含两个 `coherent_as_flush` fixture；`ClientArrayAfterComputeWriteScenario`；`create-indirect` 上 `roundtrips-per-frame` 读零；`index-mirror-bytes` 逐用例发布 |
@@ -37,6 +38,66 @@
 | **P13** 退役 pull 路径 | 待排 | 删 `SnapshotFromGLContext()` 非 verify 分支、`MGB_CTX`、`MOBILEGL_PIPE_PUSH`、`MOBILEGL_PIPE_LEGACY_MEMOS`；保留 `MOBILEGL_PIPE_VERIFY`；MGPipe recorder；删 `set_residual_value_state`；在计数器活着的情况下重调幸存缓存容量 | `static_assert(sizeof(ResidualValueBlock) == 0)`；三道纯度门在非 verify 构建上转绿；recorder 金标建立；monolith 逐线程 CPU 不差于 P0 基线 |
 
 CTS 周转单独计价（`gl44to46` 约 56,271 例）：逐阶段只跑该阶段可能影响的具名块；完整 caselist 只在架构边界与合并 `dev` 之前跑，放 CI 不放关键路径。
+
+## P5c 计划：`inproc` 的共享内存读点归零（审计头 `a79a0af6`，2026-09-17）
+
+**为什么插在 P6 之前**：P5 / P5b 的 `inproc` 只把 verb 记录、`SEG_STAGE` blob、reply 与 caps 快照做成了 wire。对 `a79a0af6` 的只读静态审计（`~/w7/notes/p5c/p5c-audit-v1.md`，59 行清单，逐条在该头上重新解析）证明两个角色之间仍有一批**不经任何载体的直接内存读写**，靠 verb barrier 与同一地址空间才正确。它们不是传输问题：`spawn` 换掉的只是 ring 的传递方式，而这些读写在另一个进程里根本没有对应内存。P5c 的目标是让 `inproc` 诚实——两线程之间除 `SEG_CMD` / `SEG_STAGE` / `SEG_REPLY` / `SEG_EVENT` / caps 快照 / 控制帧之外零直接访问——从而 P6 只是传输替换。**本节只是计划，尚未实现。**
+
+### 审计清单（按家族；`file:line` 以 `a79a0af6` 为准，完整 59 行见报告）
+
+| # | 方向 | 直接访问的是什么 | 站点 | 今天为何能工作 | 现有守卫 | P5c 载体 |
+|---|---|---|---|---|---|---|
+| T1 | S→C 读 | **纹理纹素**：`resource_subdata` 已把 level 字节放进 `SEG_STAGE`，但 `ApplyTextureUpload` 只做门与累积、把指针丢掉，Espryt 同步时从 client 的 `MipmapStorage` 重读纹素；纹理对象的形状与脏区也直接读前端对象 | 丢指针 `MobileGL/MG_Pipe/PipeApply.cpp:989-1008`；重读 `DirectGLES/Managers.cpp:7315`（`MapMipmapData`）、`:6940`、`:7129`、`:7198`；形状 `:7314`、`:7332`、`:6878-6880`、`DirectGLES/DirectGLES.cpp:8502-8507`、`:8528-8529`；脏区 `DirectGLES/Managers.cpp:7360`、`:7371` | barrier + 同地址空间 | **无**：整个纹理家族不在 `FieldOwnership.def`，`rsp` / `MOBILEGL_IPC_STRICT_ERRORS` / `MOBILEGL_IPC_AUDIT` 都看不见 | server 端纹理 staged shadow（buffer `StagedShadowStore` 的纹理半边）；`SyncMipmapsToBackend` 改读它，形状与脏区读描述符 |
+| T2 | S→C 读写 | client 的 slot 分配器 `MGPipeSlots()`：mip / CopyTex / twin 创建时按前端 `GetLifetimeId()` 在 client 分配器里查找甚至铸造 | `DirectGLES/DirectGLES.cpp:8087` → `DirectGLES/SlotTables.h:392-400`（`HandleOf` → `FindByLifetimeId`）；铸造 `DirectGLES/SlotTables.h:232`（`GetOrCreate`）、`:418`、`:428`；`DirectGLES/Managers.cpp:2708`、`:4293`、`:5627`；`DirectGLES/DirectGLES.cpp:6706`、`:8185`、`:8564`、`:8659` | barrier；mip 只 Find 不 mint | 无（`MOBILEGL_ASSERT` 在 INFO 构建失效） | 记录已带句柄（`MGPMipPlan::Res`、`MGPCopyFromFramebuffer::Dst`、`MGPBlit::ReadFbo/DrawFbo`）→ `GetOrCreate(MGPipeHandle)`（`DirectGLES/SlotTables.h:278`） |
+| T3 | S→C 读 | 具名 blit：client 临时改绑自己的 read / draw 绑定槽，server 经 `MGB_CTX` 读绑定槽 | client `MobileGL/MG_Remote/Client/EmitTables.cpp:741-786`；server `DirectGLES/DirectGLES.cpp:7782-7785` | barrier + RAII 恢复 | `rsp`（`GetFramebufferBindingSlot`） | 记录里的 `ReadFbo` / `DrawFbo`，sink 侧按句柄解析（`MobileGL/MG_Remote/Server/PipeApplier.cpp:228-244`） |
+| T4 | S→C 读 | `CopyTexImage2D` / `CopyTexSubImage2D` 经纹理单元绑定槽取目的纹理 | `DirectGLES/DirectGLES.cpp:8561-8563`、`:8656-8658` | barrier | `rsp`（`GetTextureUnitObject`） | 记录里的 `Dst` 句柄 |
+| T5 | S→C 写 | Magma 生成 mip 直接写 client 的 level 存储（Espryt 的重推导臂没有 Magma 对应） | `DirectVulkan/Renderer/VulkanRenderer.cpp:1562-1590`（调用 `:11317`） | barrier | 无 | 与 GLES 同形：只按描述符验证 |
+| B1 | S→C 读 | `BufferObject::HasDefinedContent()`，每个 ensure 的 draw 都读 | `DirectGLES/Managers.cpp:3147-3148`（`EnsureBufferResourceForHandle`；`:3141-3146` 自述为债） | barrier | 无 | 描述符旁的 live-content 位，client 发布 |
+| B2 | S→C 读 | `HandleOfBuffer` 每次 ensure 读前端 `GetLifetimeId()` | `DirectGLES/Managers.cpp:2705-2716` | barrier + memo | 无 | 记录里的句柄 |
+| B3 | S→C 读 | 旧 buffer 臂（`MappedData()` / `IsMapped()` / `GetChangeSerial()`）在 split 构建里位 7 清零时可达，arm resolver 只打一行 `MGLOG_D` | `DirectGLES/Managers.cpp:2586-2620`；臂体 `:1012-1022`、`:1119-1121`、`:2944-2949`、`:3281-3327` | 同进程 | 无 | 有传输时具名拒绝（同 `Fatal{PipeLegacyMemosDisabled}` 的形状） |
+| B4 | S→C 读写 | XFB：`SharedPtr<BufferObject>` 跨整个 span 持有，结束时 `WritebackFromBackend`，scatter 对 client shadow 读改写 | `DirectGLES/DirectGLES.cpp:950`、`:1060`、`:1077`、`:1081`、`:1172`、`:1185` | barrier | 无 | `OnBufferWriteback` / `OnXfbScatterReady` 事件——P9 的题材，P5c 只记账 |
+| R1 | S→C 写 | 反向通道是 apply 线程直接调进 client 的 `MG_State`：`OnBufferWriteback` 把**裸指针**塞进 `MGPBlobRef.Offset`，client 侧再转回指针；consumer 会拒绝任何真实段 | 生产 `DirectGLES/Managers.cpp:2339-2343`（`Ops_H_Readback`）；消费 `MobileGL/MG_Impl/Pipe/ResourceTracker.h:553-572`（拒绝真实段 `:560-564`） | 同地址空间 + barrier | 无 | `SEG_EVENT` `kEventBufferWriteback`：consumer 已在（`MobileGL/MG_Remote/Client/ClientSession.cpp:176-267`），**全仓零 producer**（`MobileGL/MG_Remote/Server/ServerSession.cpp:484-492` 无调用者） |
+| R2 | S→C 写 | `OnGpuWritten` 直接调进 client tracker；Magma 更是绕过回调直接 `MarkGpuWritten()` | Espryt `DirectGLES/Managers.cpp:2729-2752`，喂入 `DirectGLES/DirectGLES.cpp:568`、`:616`、`:2601`；Magma `DirectVulkan/Renderer/UniformManager.cpp:1075`、`:1231`、`DirectVulkan/Renderer/VulkanRenderer.cpp:11618` | 同地址空间 | `MGLOG_E_ONCE` | `SEG_EVENT` `kEventGpuWritten`（consumer `MobileGL/MG_Remote/Client/ClientSession.cpp:227-236`） |
+| R3 | S→C 写 | 默认 framebuffer 附件（`pDefaultFramebufferInfo`）由 server 在 surface 创建时写 | `DirectGLES/DirectGLES.cpp:11519-11620`；Magma `DirectVulkan/Renderer/SwapchainObject.cpp:276-335` | barrier；罕见 | 无 | `SEG_EVENT` `kEventSurfaceChanged`（consumer stub `MobileGL/MG_Remote/Client/ClientSession.cpp:242-253`） |
+| R4 | S→C 写 | sticky forward：`RecordError` 写 client 错误队列；`InvalidateCompileEnv` 写 client 编译环境（在 stamped verb 之外静默 no-op） | `MobileGL/MG_Impl/Pipe/PipeFill.cpp:1753-1756`、`:1764-1772` | barrier | `rsp`；strict 下 Fatal | `RecordError` → `OnGlError` 事件（顺序保证是 P9 的）；`InvalidateCompileEnv` 的活已由 R-12 caps 重发布完成（`MobileGL/MG_Remote/Client/CapsMirror.cpp:78-80`），删 forward |
+| R5 | — | `MGPipeCallbacks` 十个回调只装了两个，且都是 apply 线程内联调用；`SEG_EVENT` 段已创建、映射、握手公告、每个 reply verb 后排空，但没有任何生产者 | 安装 `MobileGL/MG_Impl/Pipe/ResourceTracker.h:606-613`；段 `MobileGL/MG_Remote/Server/ServerSession.cpp:285-301`；排空 `MobileGL/MG_Remote/Client/ClientSession.cpp:836` | — | 溢出 latch 与 `eventDropped` 已建未用 | 本身就是载体 |
+| C1 | S→C 读 | Magma 四处直接读 client 镜像 `pActiveBackendObject->GetDynamicParameters()`（Espryt 已改走 server 自己的 backend）；Espryt 的格式表回落臂在 server backend 为空时读 client 镜像 | `DirectVulkan/DirectVulkan.cpp:713-715`；`DirectVulkan/Renderer/VulkanRenderer.cpp:667-676`；`DirectVulkan/Renderer/VertexInputStateFactory.cpp:249-250`、`:502-503`；`DirectGLES/Utils.cpp:50` | 镜像值等于快照 | 无 | server 自己的 `Backend()->GetDynamicParameters()`；回落臂拒绝 |
+| G1 | shared | `gPipeInputs`：client 残余填充写、applier 写、server 的 36 行 BARRIER-PULLED 读 | `MobileGL/MG_Backend/MGPipe/PipeInputs.h:806`；填充 `MobileGL/MG_Impl/Pipe/PipeFill.cpp:2798`；applier `MobileGL/MG_Pipe/PipeApply.cpp:1415-1560`；stamp `MobileGL/MG_Backend/MGPipe/PipeInputs.cpp:103-132`；`rsp` `MobileGL/MG_Backend/MGPipe/PipeInputs.cpp:72` | **只靠 verb barrier** 保证单写者 | `rsp` + strict Fatal + poison | 值类行（`GetActiveTextureUnit`、`GetMaxTouchedTextureUnit`、`GetTouchedBufferBindingPointCount`、`GetCurrentVertexAttribute`、XFB 六项、三个世代）→ 每 verb 一条残余值记录或按 `Coverage.def` 由 server 自答；**对象类行**（`GetBoundVertexArray`、`GetProgramForDraw/Dispatch`、`GetTextureUnitObject`、`GetImageTextureBinding`、`GetFramebufferBindingSlot`、`GetBufferBindingSlot/Point`、sticky `GetTextureObject` / `GetProgramObject`）返回前端对象指针、无法序列化，留 P3b/P4b/P7/P8 的 twin 表 |
+| G2 | C→S 写 | GL 线程在 `FreshlyPrimed` 时整体 `MGPipeApplierReset()` server 的 `g_applier` | `MobileGL/MG_Impl/Pipe/PipeFill.cpp:2654-2656` → `MobileGL/MG_Pipe/PipeApply.cpp:1202-1299` | barrier 的后置条件（validate 时无在飞记录） | 无 | make-current 边上的 `applier_reset` 控制记录 |
+| G3 | C→S 写 | 六种前端对象死亡：栈上结构体指针经 mailbox 送到 apply 线程（framebuffer 没有 wire delete opcode） | `DirectGLES/Managers.cpp:206-228` | 阻塞 + 同地址空间 | 无 | `object_death` wire 记录 |
+| G4 | C→S 控制 | 十二个 `Server*` EGL forwarder 经 one-slot mailbox 传**函数指针 + `void*` 栈局部** | `MobileGL/MG_Remote/Client/BackendObject_Remote.cpp:125-264`；`MobileGL/MG_Remote/Server/ServerLoop.cpp:543-598` | 阻塞 | `Fatal{ApplyThreadNotRunning}` | P6 的控制面帧（P5c 不做） |
+| G5 | C→S 读 | `ServerLoop::OnApplyThread()` 每条 routed 记录读；bring-up 直接读 `loop.Backend()` / `MGPipeGetResourceOps()` | `MobileGL/MG_Remote/Client/WireTables.cpp:71`；`MobileGL/MG_Backend/Init.cpp:100`、`:145`、`:164-170`、`:247` | 同进程 | — | client 本地角色标志；caps 快照的 cap 位（P6 顺手） |
+| G6 | shared | 前端地址 / lifetime-id 键控的 Espryt twin registry；持前端裸指针的 memo（`ResolvedDrawBuffers::Entry::frontend`、三张 texture sync list）；server 读 `pDefaultFramebufferInfo`；`g_rawDepthFetchSamplerState`；`ScopedDefaultUnpackState::s_synced` 从不按 context 世代重置 | `DirectGLES/Managers.h:309-377`、`:1185`；`DirectGLES/DirectGLES.cpp:61-62`、`:1958-1987`、`:2846`；`DirectGLES/Managers.cpp:5806-5812` | barrier / server 私有 | — | P3b/P4b 的 twin 表重键与 D-C1；`s_synced` 按 context 世代重置归 P6 |
+| A1 | — | barrier 的 client 半边断言从未接线：`InBarrierWait()` 零调用点，只有 `ApplyThreadIsInsideApplier` 在 emit 时检查 | `MobileGL/MG_Remote/Client/ClientSession.cpp:880`、`:748-753` | — | — | 接上，或删掉契约里的这句声明 |
+
+已确认 wire-clean、不进 P5c：buffer 全家族（`Ops_H_*` 只拿句柄 + 记录 + `SEG_STAGE` 字节，`StagedShadowStore::Adopt` 复制，`Fatal{StageSnapshotTooNarrow}` 六处）；`resource_respecify` 初始字节双向拒绝；persistent map 仿真档按块过 `SEG_STAGE`，`Fatal{RoleViolation}` 挡住 apply 线程；`CreateShaderState` 归档是一个 blob；caps 的格式表与 renderer 字符串走 `CapsSnapshot` 控制帧（`GetCaps` 记录本身已死，只是卫生项）；tight ReadPixels；`DrawVbo` 用户索引；fence 家族；`gMGPipeSegmentResolver` 与 `gBackendFunctionsTable` 的角色划分。
+
+### 包与顺序
+
+| 包 | 内容 | 关闭的行 |
+|---|---|---|
+| **c0c** 契约 | `MG_Remote/CONTRACT-P5C.md`：纹理 staged shadow 的所有权与覆盖规则；`SEG_EVENT` 记录与 blobref 约定（`Seg = kSegEvent`）；sink / twin 按句柄解析的规则；`applier_reset` / `object_death` 记录；角色守卫的语义（有传输时 apply 线程触前端对象表面、GL 线程触 server 状态表面都是 `Fatal{RoleViolation}`）；残余值记录的字段表；把纹理家族补进 `FieldOwnership.def` | — |
+| **tx** 纹理 | `StagedTextureStore`：`ApplyTextureUpload` 采纳 `SEG_STAGE` 字节到 server 侧 level shadow；`SyncMipmapsToBackend`、形状读、脏区改读描述符与 shadow；Magma mip 改按描述符；`MOBILEGL_IPC_AUDIT` 的 `0xDD` 覆盖纹理 | T1、T5（T2 的 mip 半边随之） |
+| **ev** 反向通道 | `ServerSession::PublishEvents` 接三个 producer（writeback / gpu-written / surface-changed），consumer 的段臂改为解析 `kSegEvent`；Magma `MarkGpuWritten` 改走回调；`RecordError` 进事件（顺序仍 P9）；删 `InvalidateCompileEnv` forward；溢出策略沿用 `ARCHITECTURE.md` §11.7 | R1–R5 |
+| **hd** 句柄解析 | blit / mip / CopyTex / `HandleOfBuffer` 的 sink 与 twin 按记录里的句柄解析（`GetOrCreate(MGPipeHandle)`），server 不再触 `MGPipeSlots()`；`HasDefinedContent` 改读描述符的 live-content 位；Magma 四处 caps 读改 server backend，`Utils.cpp` 回落臂拒绝 | T2、T3、T4、B1、B2、C1 |
+| **ct** 控制记录 | `applier_reset` 与 `object_death` 两条 wire 记录（framebuffer 首次有 delete opcode）；mailbox 只剩 EGL forwarder 给 P6 | G2、G3 |
+| **rv** 残余值 | 值类 BARRIER-PULLED 行改为每 verb 的残余值记录（或 server 自答），`gen_pipe_field_ownership.py` 把它们改成 RECORD-SUPPLIED；对象类行保持 BARRIER-PULLED 并逐行标注归属阶段 | G1 的值类半边 |
+| **gt** 门 | 角色守卫（两层 `Fatal{RoleViolation}`，仅 split 构建、有传输时生效）；`InBarrierWait` 接线；旧 buffer 臂传输拒绝；`rsp` 按帧进 stats 行并在四条 A/B trace 上测得；CI 加一条 `MOBILEGL_IPC_STRICT_ERRORS=1` + 角色守卫的 `integration-split` 车道 | A1、B3，以及所有行的红一次证据 |
+
+顺序：c0c → tx / ev / hd 并行 → ct / rv → gt 收口。每包自带 red-once（R-16），阶段末一次 Codex / Kimi 审查（ID-66）。
+
+### 出口门（E-P5c）
+
+1. **角色守卫下全绿**：守卫开启时 `integration-split`（107）、broad inproc 车道对 `348d22a4` 普查零回退、79 trace 无新增首阻塞；关掉任一层守卫必须能在一条具名用例上变红。
+2. **纹理字节不再回读 client**：`MOBILEGL_IPC_AUDIT=1` 对纹理 staged 字节的 `0xDD` 填充在四条 A/B trace 上无失败；把采纳改回丢指针必须变红。
+3. **`SEG_EVENT` 有生产者**：三条事件的往返单元与集成用例；排空点上 `eventDropped == 0`；把 producer 改回裸指针必须变红。
+4. **`rsp` 分类完成**：四条 A/B trace 每帧 `rsp` 已测；剩余读全部是对象类行，名单由 `FieldOwnershipTest` 钉住，值类行为 0。
+5. **Redmi 四臂复测**（记录，不设门）：writeback / gpu-written 改走事件后 barrier tax 重新记录。
+6. G1 0/0/0/0、G2 / G14、G5 照旧。
+
+### 留给后续阶段的（P5c 不碰）
+
+对象类 BARRIER-PULLED 行与 twin registry 的前端键（P3b/P4b、P7）；XFB scatter / `OnXfbScatterReady`、`OnTexturePullRequest` 与终止符、`OnGlError` 有序化（P9）；EGL forwarder 的控制面（P6）；`copy-image-shadow-mirror` 与 CopyTex 纹素回写（P8 / P9）；`s_synced` / `g_syncedRenderStateParameters` 的 context 世代重置（P6）。
 
 ## 里程碑
 

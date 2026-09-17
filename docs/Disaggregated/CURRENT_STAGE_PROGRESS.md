@@ -9,7 +9,8 @@
 | P0 / P0.5 / P1 / P2 / P3a / P4a（monolith 跑道） | 已落地 | `ROADMAP.md` 阶段表；`MEASUREMENTS.md` §1–§5 |
 | **P5** 首个 IPC 帧（reduced path，lockstep inproc） | 已收官 | `ff2994d9..37fc4fdb`；`MEASUREMENTS.md` §6 |
 | **P5b** inproc 下的 verb 迁移（Minecraft 优先） | **已收官（2026-09-16）** | `37fc4fdb..82683d4a`；`MEASUREMENTS.md` §7 |
-| P6 spawn transport | 未开始 | 设备出口已完成，可以开始 |
+| **P5c** `inproc` 共享内存读点归零 | **已审计、已计划（2026-09-17），未开始** | 审计 `~/w7/notes/p5c/p5c-audit-v1.md`（59 行，头 `a79a0af6`）；计划 `ROADMAP.md` "P5c 计划"；设计 `ARCHITECTURE.md` §17.6 |
+| P6 spawn transport | P5c 之后 | 届时只是传输替换 |
 
 ## 2. 当前头实测
 
@@ -57,7 +58,7 @@
 | Magma（DirectVulkan）split compute/image 路径：89 个错答中 82 个 | `p5b-results/i1-v1.md` |
 | rd12 GLES `InitialBytesNotCarried/resource_respecify`、rd12 VK `BarrierTimeout/Present`、`iris-bsl-esc-menu-854` GLES、三条 `texture-remint-pull` 仿真槽、`create-indirect` VK 内存膨胀 | 79 trace 普查 `counts.json` / `trace-transitions.json` |
 | RGB 三通道 CPU mip 回退仍是具名 Fatal | `p5b-results/mip-codex-v1.md` |
-| P5b 的 inproc 依赖：具名 blit 的 scoped client binding + barrier、mip descriptor 的 barrier-held registry 查询、FBO death 的 inproc mailbox | P6 必须替换（`ROADMAP.md` 债务表） |
+| **`inproc` 仍有 59 处不经 wire 的直接内存访问**（2026-09-17 审计）：纹理纹素已过 `SEG_STAGE` 却被 applier 丢掉、Espryt 回读 client `MipmapStorage`（整个纹理家族不在 `FieldOwnership.def`，`rsp` / strict / audit 看不见）；反向通道是 apply 线程直接调进 client（`OnBufferWriteback` 传裸指针，`SEG_EVENT` 零 producer，十个回调只装两个）；server 用前端 `GetLifetimeId()` 查 / 铸 client 的 slot 分配器（记录已带句柄）；Magma 四处直读 client caps 镜像、直接 `MarkGpuWritten`、直接写 client mip 存储；`MGPipeApplierReset` 与对象死亡经裸指针跨角色；`InBarrierWait` 从未接线。P5b 记下的三处 inproc 依赖只是其中三行 | `~/w7/notes/p5c/p5c-audit-v1.md`；`ROADMAP.md` "P5c 计划"（T1–A1 清单、包、出口门） |
 | 27 个 P5 inproc 错答：22 纹理读回走 client-shadow 回退、3 query、1 inspection、1 FBO/RBO 删除后生命期 | P4b / P7 / P6 债 |
 | `rsp` 残余输入；`SEG_REPLY` 2 MiB 单槽上限；GetCaps 两个 blobref 的载体；PACK-PBO 读回真实形式 | P3b/P4b、P6+ |
 | 15 个 class-C 槽（query / sync 尾 / `GetTexImage` / `SetSwapInterval` 等）无负载命中，仍具名拒绝 | P9 / P10 |
@@ -66,9 +67,10 @@
 
 ## 6. 下一步
 
-1. **P6 spawn transport**：`SocketTransport` + `ServerMain` + 握手 / 退出语义；替换 P5b 的三处 inproc 依赖（上表）。
-2. 剩余首阻塞一轮（Magma compute/image、rd12、RGB mip、`texture-remint-pull` 仿真槽）。
-3. P6 出口门：P5b 的完整渲染路径在 `spawn` 下绿；OpenRA 在 Adreno 830 上 split SSIM ≥ 0.99。
+1. **P5c**：c0c 契约 → tx（纹理 staged shadow）/ ev（`SEG_EVENT` producer）/ hd（按句柄解析、caps 改读 server backend）并行 → ct（`applier_reset` / `object_death` 记录）/ rv（值类残余值记录）→ gt（角色守卫门、`rsp` 按帧实测）。出口门 E-P5c 见 `ROADMAP.md`。
+2. **P6 spawn transport**：`SocketTransport` + `ServerMain` + 握手 / 退出语义 + EGL forwarder 的控制面帧；届时只换传输。
+3. 剩余首阻塞一轮（Magma compute/image、rd12、RGB mip、`texture-remint-pull` 仿真槽）。
+4. P6 出口门：P5b 的完整渲染路径在 `spawn` 下绿；OpenRA 在 Adreno 830 上 split SSIM ≥ 0.99。
 
 ## 7. 记录位置
 
@@ -81,6 +83,7 @@
 | P5b 合并普查 | `~/w7/p5b-final-census-348d22a4/`（+ `-resume1/2/3`）、`p5b-results/joint-codex-v1.md` census 块 |
 | P5b 设备证据 | `~/w7/notes/p5b/apk/p5bcodex2/`（APK + proof）；`MobileGL/.trace-work/p5b-redmi/p5bcodex2/2f7cbe2e/`（correctness 8/8、`ab-tables.md` 与 bsl 补充表） |
 | class-C 普查 | `~/w7/notes/p6/census-classC.md`；基线 `~/w7/p5b-c0b-census-logs/results.json` |
+| P5c 审计 | `~/w7/notes/p5c/p5c-audit-v1.md`（59 行清单、wire-clean 清单、与契约的分歧、已有 `rsp` 数字）+ `BRIEF-p5c-audit.md`；Kimi K3 只读静态审计，头 `a79a0af6`，关键行已由集成者逐条抽查 |
 | 门日志 | `~/w7/p5-joint-gate.log`、`~/w7/p5b-quickgate.log`、`~/w7/p5-joint-evidence/` |
 | 脚本 | `~/w7/notes/tools/`（`wsl_p5_gate.sh`、`p5_ab_redmi.sh`、`p5b_codex_redmi.sh`、`wsl_build_p5_apks.sh`、`p6_census_*.{sh,py}`、`p5b-c0b-census.sh`） |
 
@@ -105,3 +108,4 @@
 | 68 | class-C 普查决定迁移顺序（所有 Minecraft trace 首阻塞 = `DrawElements` → Minecraft 优先） |
 | 76 | P5b 出口 = 主机门 `348d22a4` complete + 79 trace 普查 + Redmi 正确性 8/8 + 四臂 A/B |
 | 77 | Redmi 钉频期望 1050 → 1100 MHz（2026-09-16）；iris-bsl 8 组判为 fixture 123 帧上限，补充表不进 200 帧尾门表 |
+| 78 | **P5c 插在 P6 之前**（2026-09-17）：`inproc` 先做到两角色之间除 wire 零直接内存访问，P6 只换传输；值类 BARRIER-PULLED 行在 P5c 过线，对象类行留 twin 表阶段；codex 无额度期间只读审计改派 Kimi（K3） |

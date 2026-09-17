@@ -1,6 +1,6 @@
 # MGPipe：MobileGL 前后端拆分
 
-> 状态：**P0–P5b 已收官**（2026-09-16，代码头 `82683d4a`）。目标负载（四条 Minecraft A/B trace）已在 Redmi Adreno 830 上以 `inproc`（独立 apply 线程）双后端渲染，barrier tax 首次实测。**下一个是 P6 spawn transport**。当前头、逐门数字与开放项见 [`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md)。
+> 状态：**P0–P5b 已收官**（2026-09-16，代码头 `82683d4a`）。目标负载（四条 Minecraft A/B trace）已在 Redmi Adreno 830 上以 `inproc`（独立 apply 线程）双后端渲染，barrier tax 首次实测。**下一个是 P5c**：审计（2026-09-17）显示 `inproc` 的两个角色仍有 59 处不经 wire 的直接内存访问（纹理纹素回读 client、反向通道裸指针、server 用 client 的 slot 分配器等），P5c 先把它们归零，**然后才是 P6 spawn transport**（计划见 `ROADMAP.md` "P5c 计划"）。当前头、逐门数字与开放项见 [`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md)。
 >
 > 性能纪律（2026-09-08 起）：逐线程 CPU 与 tracker 绝对 ns **对着 pull 臂基线记录**，不作阻塞门；专门的优化阶段排在路线图推完之后。
 
