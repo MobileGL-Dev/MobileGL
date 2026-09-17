@@ -1886,6 +1886,11 @@ namespace MobileGL::MG_Pipe {
             case MGPipeFieldEmitter::SetDrawProgram:
             case MGPipeFieldEmitter::SetDispatchProgram:
                 return kMGPipeSubsystemPrograms;
+            // P5c rv (CONTRACT-P5C.md §5.3): the residual-value record rides the residual
+            // subsystem - the one family with no dirty bit of its own, which is why its
+            // emission gate is the subsystem bit plus the whole-record hash and nothing else.
+            case MGPipeFieldEmitter::SetContextValues:
+                return kMGPipeSubsystemResidualValues;
             case MGPipeFieldEmitter::kNone:
                 break;
             }
@@ -2062,10 +2067,15 @@ namespace MobileGL::MG_Pipe {
         // commit, not at the merge, and no file is touched twice.
         //
         // The sampler bit covers SamplerEmit.h AND ImageEmit.h: one family, one A/B.
+        // P5c rv: the residual subsystem joins the wired mask for set_context_values - the
+        // record's emission is NOT gated on a dirty bit (there is none for the family,
+        // NoDirtyBitOwnsTheResidualSubsystem says so), so this bit is what the residual-fill
+        // skip consults for the eight fields the record supplies.
         constexpr Uint64 kMGPipeWiredSubsystems = kMGPipeSubsystemRenderState |
                                                   kMGPipeSubsystemPixelPack |
                                                   kMGPipeSubsystemPatchState |
                                                   kMGPipeSubsystemVertexAttribDefaults |
+                                                  kMGPipeSubsystemResidualValues |
                                                   kMGPipeSubsystemResources |
                                                   kMGPipeSubsystemVertexInput |
                                                   kMGPipeWiredFramebufferSubsystem |
@@ -2097,17 +2107,6 @@ namespace MobileGL::MG_Pipe {
         //     (ARCHITECTURE.md 4.6 D5, MGPipeTypes.h). The unpack half has no carrier at all,
         //     so the field keeps being pulled and the verify comparator keeps proving it.
         //
-        //   GetCurrentVertexAttribute's three views are NOT bit-identical: GLContext
-        //     CONVERTS between them (SetCurrentVertexAttributeFloat writes (Int32)value into
-        //     intValue), while MGPipeApplySetVertexAttribDefaults (package A's) memcpys one
-        //     Data[4] into all three views and ignores MGPAttribValue::ValueClass. The CLIENT
-        //     half of that is fixed - the call now carries the class the frontend actually
-        //     wrote and that class's own bytes - but the APPLIER still cannot reproduce the
-        //     conversion, so this row stays SHAPE-ONLY: the field keeps being pulled, and
-        //     retiring that pull is blocked on A teaching the applier to switch on
-        //     ValueClass. EmitVertexAttribDefaults checks rather than trusts, and repairs the
-        //     mirror when the applier's write does not reproduce the value.
-        //
         //   GetBoundVertexArray is P3a's row, and Coverage.def asks for the decision to be
         //     taken HERE, deliberately, rather than inherited from the row's presence. THE
         //     ANSWER IS NO, and it is not a matter of degree: the field's storage is a
@@ -2137,25 +2136,21 @@ namespace MobileGL::MG_Pipe {
         //     null on every draw of every push build. What retires them is not a better
         //     applier, it is the phase where the backend stops reading a frontend object.
         //
-        //     GetMaxTouchedTextureUnit is the sixth and its argument is different, which is
-        //     why it is written out: it is a plain Int, and set_sampler_views' Count IS that
-        //     value plus one. But the set is SUPPRESSED on an unchanged content hash and is
-        //     emitted only when NEW_SAMPLER_VIEWS fires, and that bit's shutter -
-        //     Mix(textureContent, GetTextureBindGeneration()) - does NOT move on a redundant
-        //     re-bind of the object a unit already holds, while the high-water mark DOES. So
-        //     the applier's Count can lag the frontend's mark by exactly the case the
-        //     suppressor exists to swallow, and the field keeps being pulled.
+        //     GetMaxTouchedTextureUnit was the sixth and its argument was different - a plain
+        //     Int whose carrier (set_sampler_views' Count) is hash-suppressed while the
+        //     high-water mark still moves on a redundant re-bind. P5c rv RETIRED it from this
+        //     list (CONTRACT-P5C.md §5.3): set_context_values carries the mark as a VALUE of
+        //     its own, whole-record suppressed, so the lag the suppressor could introduce is
+        //     gone and the derivation's RECORD_SUPPLIED answer is honest.
         constexpr Bool EmittedCallSuppliesTheWholeField(MGPipeInputField field) {
             switch (field) {
             case MGPipeInputField::GetPixelStoreParameters:
-            case MGPipeInputField::GetCurrentVertexAttribute:
             case MGPipeInputField::GetBoundVertexArray:
             case MGPipeInputField::GetFramebufferBindingSlot:
             case MGPipeInputField::GetImageTextureBinding:
             case MGPipeInputField::GetTextureUnitObject:
             case MGPipeInputField::GetProgramForDraw:
             case MGPipeInputField::GetProgramForDispatch:
-            case MGPipeInputField::GetMaxTouchedTextureUnit:
                 return false;
             default:
                 return true;
@@ -2175,6 +2170,16 @@ namespace MobileGL::MG_Pipe {
             case MGPipeInputField::GetPatchDefaultOuterLevel:
             case MGPipeInputField::GetPatchDefaultInnerLevel:
             case MGPipeInputField::GetCurrentVertexAttribute:
+            // P5c rv's eight: MGPipeApplySetContextValues writes them out of the record,
+            // field for field, through MGPipeApplyAccess::SetContextValues.
+            case MGPipeInputField::GetActiveTextureUnit:
+            case MGPipeInputField::GetMaxTouchedTextureUnit:
+            case MGPipeInputField::GetTouchedBufferBindingPointCount:
+            case MGPipeInputField::IsTransformFeedbackActive:
+            case MGPipeInputField::IsTransformFeedbackPaused:
+            case MGPipeInputField::GetTransformFeedbackGeneration:
+            case MGPipeInputField::GetBoundTransformFeedbackLifetimeId:
+            case MGPipeInputField::GetTransformFeedbackCapturedVertices:
                 return true;
             default:
                 return false;
@@ -2256,15 +2261,18 @@ namespace MobileGL::MG_Pipe {
         // when the hash has not moved. That is coalescing rule 4, and this is its one wired
         // consumer in P2.
         //
-        // THE PAYLOAD AND ITS ONE MISSING HALF. A CurrentVertexAttributeValue is one value in
-        // three views, and GLContext CONVERTS between them numerically, so "the bytes of one
-        // view" is not the value: glVertexAttrib4f(loc, 1.5f, ...) leaves 1 in intValue and
-        // 0x3FC00000 in floatValue, and every glVertexAttribI4i/ui is a different pair again.
-        // MGPAttribValue carries ValueClass for exactly this reason, so the client sends the
-        // class the frontend actually wrote (GLContext::GetCurrentVertexAttributeClass) and
-        // THAT class's own four words. What is still missing is the other half:
-        // MGPipeApplySetVertexAttribDefaults (package A's file) memcpys the four words into
-        // all three views regardless of ValueClass, which cannot reproduce the conversion.
+        // THE PAYLOAD, SINCE P5c rv (CONTRACT-P5C.md §5.3). A CurrentVertexAttributeValue is
+        // one value in three views, and GLContext CONVERTS between them numerically, so "the
+        // bytes of one view" is not the value: glVertexAttrib4f(loc, 1.5f, ...) leaves 1 in
+        // intValue and 0x3FC00000 in floatValue, and every glVertexAttribI4i/ui is a different
+        // pair again. MGPAttribValue now carries all three views VERBATIM
+        // (FloatView/IntView/UintView) plus the class the frontend actually wrote
+        // (GLContext::GetCurrentVertexAttributeClass), and MGPipeApplySetVertexAttribDefaults
+        // writes each view from its own array - the cross-view conversion's authoritative
+        // answer is the client's, and the applier no longer reconverts anything. The pre-rv
+        // shape (one Data[4] memcpied into all three views, ValueClass ignored) is exactly
+        // what kept this row EMITTED-AND-STILL-PULLED in EmittedCallSuppliesTheWholeField;
+        // with the applier fixed, the field is RECORD_SUPPLIED outright.
         //
         // The suppressing memcmp below is over the three VIEWS only, and that is not an
         // oversight: the class decides how the views are REBUILT, so two writes that leave
@@ -2277,8 +2285,9 @@ namespace MobileGL::MG_Pipe {
         // and says so once. That is what keeps the block correct in the window this call used
         // to corrupt - a glVertexAttrib4f followed by a non-kDraw verb, where the residual
         // fill does not run for this field and nothing else would have put the value back.
-        // The day the applier honours ValueClass the compare stops failing and the repair
-        // stops happening, with no edit here.
+        // Since rv the applier writes all three views verbatim, so the compare below is
+        // expected to pass on every emission; it stays armed because it is the one observable
+        // of that write being verbatim in a window no other gate looks at.
         Uint64 g_attribDefaultRepairs = 0;
 
         // The header of the last set_vertex_attrib_defaults that actually went out. Count == 0
@@ -2349,13 +2358,72 @@ namespace MobileGL::MG_Pipe {
             }
             if (!reproduced) {
                 ++g_attribDefaultRepairs;
-                MGLOG_W_ONCE("MGPipe: MGPipeApplySetVertexAttribDefaults does not reproduce the "
-                             "carried value on this build (it ignores MGPAttribValue::ValueClass) "
-                             "- the client is keeping m_currentVertexAttribute authoritative");
+                MGLOG_W_ONCE("MGPipe: MGPipeApplySetVertexAttribDefaults did not reproduce the "
+                             "carried three views on this build - the client is keeping "
+                             "m_currentVertexAttribute authoritative");
                 MGPipeFillAccess::CopyField(gPipeInputs, ctx, MGPipeInputField::GetCurrentVertexAttribute);
             }
             return sizeof(MGPVertexAttribDefaults) + header.Count * sizeof(MGPAttribValue);
         }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // set_context_values (P5c rv, CONTRACT-P5C.md §5.3): the residual-value record. One
+        // POD carrying every value-class field no other set_* supplies - the two texture-unit
+        // counters, the 15 per-target touched-buffer-binding counts and the five XFB values -
+        // emitted at validate WHEN ANY COVERED VALUE MOVED, which the whole-record hash says:
+        // there is deliberately no dirty bit for the family (the tracker's value-class dirty
+        // accounting is untouched - "零新增记账", ARCHITECTURE.md 5.2) and no dirty mask in the
+        // payload, so a suppressed record means "nothing moved", never "field invalid" (§1).
+        //
+        // THE PRODUCER IS TRANSPORT-GATED, and the residual-fill skip for the same eight fields
+        // is gated on the same answer (MGPipeValidateForVerb's contextValuesWireLive): under
+        // monolith - or with a transport configured but no live session (the bring-up window, a
+        // server-role-only fixture) - nothing is emitted and the fields keep being pulled, byte
+        // for byte as before (G1).
+        Uint64 EmitContextValues(GLContext& ctx) {
+            MGPContextValues values{};
+            values.ActiveTextureUnit = static_cast<Uint32>(ctx.GetActiveTextureUnit());
+            values.MaxTouchedTextureUnit = static_cast<Uint32>(ctx.GetMaxTouchedTextureUnit());
+            // The array is indexed by BufferTarget value, all 15 of them (MGPipeTypes.h);
+            // targets with no binding points answer 0 (BufferState::GetTouchedBindPointCount).
+            static_assert(
+                std::extent_v<decltype(MGPContextValues::TouchedBufferBindingPointCount)> ==
+                    static_cast<SizeT>(BufferTarget::BufferTargetCount),
+                "MGPContextValues' per-target array and BufferTargetCount have drifted");
+            for (Uint32 t = 0; t < static_cast<Uint32>(BufferTarget::BufferTargetCount); ++t) {
+                values.TouchedBufferBindingPointCount[t] =
+                    static_cast<Uint32>(ctx.GetTouchedBufferBindingPointCount(static_cast<BufferTarget>(t)));
+            }
+            values.IsTransformFeedbackActive = ctx.IsTransformFeedbackActive() ? 1 : 0;
+            values.IsTransformFeedbackPaused = ctx.IsTransformFeedbackPaused() ? 1 : 0;
+            values.TransformFeedbackGeneration = ctx.GetTransformFeedbackGeneration();
+            values.BoundTransformFeedbackLifetimeId = ctx.GetBoundTransformFeedbackLifetimeId();
+            values.TransformFeedbackCapturedVertices = ctx.GetTransformFeedbackCapturedVertices();
+            // The whole record is the hash input, padding included - `values{}` zeroes it, so
+            // the pad bytes are defined and the hash is stable.
+            const Uint64 contentHash = XXH64(&values, sizeof(values), 0);
+            if (!MGPipeSetHashSuppressorInstance().ShouldEmit(MGPipeSuppressorSlot::SetContextValues,
+                                                             contentHash)) {
+                return 0;
+            }
+            MGPipeRouteSetContextValues(values);
+            return sizeof(MGPContextValues);
+        }
+
+        // The fields set_context_values supplies. A validate whose verb class reads NONE of
+        // them skips the record build entirely - the record exists so a verb's reads are
+        // answered, and a verb that never reads them needs no publication.
+        constexpr Bool VerbMaskReadsContextValues(const MGPipeFieldMask& mask) {
+            return MGPipeFieldMaskHas(mask, MGPipeInputField::GetActiveTextureUnit) ||
+                   MGPipeFieldMaskHas(mask, MGPipeInputField::GetMaxTouchedTextureUnit) ||
+                   MGPipeFieldMaskHas(mask, MGPipeInputField::GetTouchedBufferBindingPointCount) ||
+                   MGPipeFieldMaskHas(mask, MGPipeInputField::IsTransformFeedbackActive) ||
+                   MGPipeFieldMaskHas(mask, MGPipeInputField::IsTransformFeedbackPaused) ||
+                   MGPipeFieldMaskHas(mask, MGPipeInputField::GetTransformFeedbackGeneration) ||
+                   MGPipeFieldMaskHas(mask, MGPipeInputField::GetBoundTransformFeedbackLifetimeId) ||
+                   MGPipeFieldMaskHas(mask, MGPipeInputField::GetTransformFeedbackCapturedVertices);
+        }
+#endif
 
 
         // set_residual_value_state (P2 brief D9, ARCHITECTURE.md 9.4).
@@ -2669,6 +2737,19 @@ namespace MobileGL::MG_Pipe {
         // emission the server refuses is an emission whose acceptance already cleared a frontend
         // dirty flag the legacy arm still owed. Same table, same four families, one place.
         const Uint64 pushMask = MG_Config::Features.PipePush;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c rv (CONTRACT-P5C.md §5.3): set_context_values is the carrier for the eight
+        // value-class fields ONLY with a live wire. ONE answer gates both halves - the emission
+        // below and the residual-fill skip in step 4 - so they can never disagree about who
+        // supplies a field: with no live session (a monolith transport, the bring-up window, a
+        // server-role-only fixture) nothing is emitted and the fields keep being pulled, byte
+        // for byte as before (G1).
+        const Bool contextValuesWireLive =
+            MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            MG_Remote::Client::ContextValuesWireLive();
+#else
+        constexpr Bool contextValuesWireLive = false;
+#endif
         const auto wants = [&](MGPipeDirty bit) {
             const Uint64 subsystem = MGPipeSubsystemForDirty(bit);
             return subsystem != 0 && (pushMask & subsystem) != 0 &&
@@ -2808,6 +2889,19 @@ namespace MobileGL::MG_Pipe {
             payloadBytes += EmitVertexAttribDefaults(*ctx, tracker.FreshlyPrimed());
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5c rv (CONTRACT-P5C.md §5.3): the residual-value record, emitted when any covered
+        // value moved. THE GATE IS THE SUBSYSTEM BIT PLUS THE WIRE BEING LIVE - the family has
+        // no dirty bit (NoDirtyBitOwnsTheResidualSubsystem) and no P4a consumer predicate (it
+        // is not one of the four families), and the "did anything move" question is the
+        // whole-record hash inside EmitContextValues. The class-mask test skips the build for
+        // verbs that read none of the eight fields.
+        if (contextValuesWireLive && (pushMask & kMGPipeSubsystemResidualValues) != 0 &&
+            VerbMaskReadsContextValues(mask)) {
+            payloadBytes += EmitContextValues(*ctx);
+        }
+#endif
+
         // P3a's vertex segment, in the order the design fixes: vertex elements, then the
         // vertex buffers that fill them, then the index binding. All three are LIVE now (m1):
         // bits 5 / 9 / 10 map onto kMGPipeSubsystemVertexInput in Tracker.h:145-148 and all
@@ -2857,12 +2951,20 @@ namespace MobileGL::MG_Pipe {
             // FIELD, and on a backend with no consumer - or at a mask that leaves one of the
             // family's D-K2 dependency bits clear - no P4a call went out at all, so withholding
             // the pull here would leave the field unfilled at the very verb that reads it.
+            //
+            // AND THE LAST CONJUNCT IS P5c rv's (CONTRACT-P5C.md §5.3): set_context_values has
+            // NO PRODUCER without a live wire (its emission is transport-gated, above), so its
+            // eight fields keep being pulled under monolith - G1's byte-for-byte rule - and are
+            // skipped only when the record really crosses. The two sides read the ONE answer
+            // computed at the top of this function, so they cannot disagree.
             const Bool supplied = subsystem != 0 && (subsystem & kMGPipeWiredSubsystems) != 0 &&
                                   (pushMask & subsystem) != 0 &&
                                   P4aFamilyHasItsConsumer(subsystem) &&
                                   P4aFamilyDependenciesAreSet(subsystem, pushMask) &&
                                   EmittedCallSuppliesTheWholeField(field) &&
-                                  (applierDerives || AppliedWithoutDerivation(field));
+                                  (applierDerives || AppliedWithoutDerivation(field)) &&
+                                  (emitter != MGPipeFieldEmitter::SetContextValues ||
+                                   contextValuesWireLive);
             if (!supplied) MGPipeFillAccess::CopyField(inputs, *ctx, field);
 #if MOBILEGL_PIPE_POISON
             // The value is copied either way; only the stamp is withheld for the omitted pair.

@@ -127,10 +127,11 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
     // The per-class counts PipeCalls.def documents in its header.
     // kScreen is 11 + P5c's applier_reset (MG_Remote/CONTRACT-P5C.md §5.1); kCtxObject is
     // 9 + P5c's object_death (§5.2), the framebuffer family's first wire delete opcode.
+    // kCtxState is 17 + P5c rv's set_context_values (§5.3), the residual-value record.
     EXPECT_EQ(ClassCount<kScreen>(), 12u);
     EXPECT_EQ(ClassCount<kCtxQuery>(), 8u);
     EXPECT_EQ(ClassCount<kCtxCso>(), 13u);
-    EXPECT_EQ(ClassCount<kCtxState>(), 17u);
+    EXPECT_EQ(ClassCount<kCtxState>(), 18u);
     EXPECT_EQ(ClassCount<kCtxObject>(), 10u);
     // 13 + the five P5b-appended verbs (MG_Remote/CONTRACT-P5B.md): bind_shader_image,
     // patch_parameter, bind_stream_output, set_storage_block_binding,
@@ -142,11 +143,12 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
 // migrated, keep pulling" means (plan B section 4.1).
 //
 // UNTIL P5 R-17 THAT WAS EVERY ROW, and this case said so. It is now EXACTLY THE 41 ROWS WITH
-// NO MGPipeApply* ENTRY POINT (78 - the 37 that have one; the number was 34 at P5, 39 after
-// P5b's five sink-only verbs): the other 37 have an applier, R-17 installs adapters over them,
+// NO MGPipeApply* ENTRY POINT (79 - the 38 that have one; the number was 34 at P5, 39 after
+// P5b's five sink-only verbs, and rv's set_context_values grew BOTH sides of the difference):
+// the other 38 have an applier, R-17 installs adapters over them,
 // and a null there would no longer mean "keep pulling" - `MG_Impl/Pipe`'s call sites go through
 // the thunks, so a null would mean "call through a null pointer". The number is asserted rather
-// than the emptiness, because "37 installed" and "34 still null" are the two halves of a
+// than the emptiness, because "38 installed" and "41 still null" are the two halves of a
 // partition and a case that checked only one of them would pass an installer that had
 // overwritten rows it does not own.
 // THE NAME IS KEPT, AND SO IS THE STATEMENT IT MAKES - only the ROWS it makes it about have
@@ -209,8 +211,9 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     EXPECT_EQ(installed + nulls, static_cast<SizeT>(kMGPipeCallCount));
 
 #if MOBILEGL_PIPE_PUSH
-    // 33 + 4 = 37, and the split is the honest shape of R-17 rather than an implementation
-    // detail: 37 is the number of MGPipeApply* entry points PipeApply.h declares, 33 of them
+    // 34 + 4 = 38, and the split is the honest shape of R-17 rather than an implementation
+    // detail: 38 is the number of MGPipeApply* entry points PipeApply.h declares (37 at P5, and
+    // P5c rv's set_context_values - CONTRACT-P5C.md §5.3 - is the 38th), 34 of them
     // fit a GENERATED row and go in the two tables, and FOUR cannot be expressed by any
     // generated signature and go in the hand-written escape table beside them
     // (ResourceRespecify's uncarried initialBytes, ResourceFlushRange's likewise,
@@ -220,8 +223,8 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     // BOTH NUMBERS ARE ASSERTED. If the escape table were left out of this case, moving a row
     // out of the generated tables and forgetting to install its escape would read as a smaller
     // "installed" count and nothing else - and the call site would take a null.
-    EXPECT_EQ(installed, 33u) << "the routed rows and the applier's entry points disagree";
-    EXPECT_EQ(nulls, static_cast<SizeT>(kMGPipeCallCount) - 33u);
+    EXPECT_EQ(installed, 34u) << "the routed rows and the applier's entry points disagree";
+    EXPECT_EQ(nulls, static_cast<SizeT>(kMGPipeCallCount) - 34u);
     const void* const* escapes = reinterpret_cast<const void* const*>(&gMGPipeRouteEscapes);
     SizeT escapesInstalled = 0;
     for (SizeT i = 0; i < sizeof(MGPipeRouteEscapes) / sizeof(void*); ++i) {
@@ -229,7 +232,7 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     }
     EXPECT_EQ(escapesInstalled, 4u) << "an escape row is null; its call site would take a null "
                                        "pointer rather than fall back to anything";
-    EXPECT_EQ(installed + escapesInstalled, 37u)
+    EXPECT_EQ(installed + escapesInstalled, 38u)
         << "the two tables plus the escapes must be exactly PipeApply.h's entry points";
 
     // And the rows that MUST still be null, named rather than counted: these are calls with no
@@ -576,9 +579,15 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     // and object_death a kCtxObject one; both carry no blob, no reply and no tail.
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::ApplierReset), 77);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::ObjectDeath), 78);
-    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 79);
+    // P5c rv (§5.3) appended the residual-value record AFTER the two control records, by the
+    // same rule: opcode 79, and nothing before it moved. It is an ordinary kCtxState set_* row
+    // - fixed POD, no blob, no tail, no reply - with an MGPipeApply* entry point, which the two
+    // control records deliberately do not have.
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::SetContextValues), 79);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 80);
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ApplierReset), static_cast<Uint32>(kNone));
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ObjectDeath), static_cast<Uint32>(kNone));
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::SetContextValues), static_cast<Uint32>(kNone));
     // And the P5b rows carry what their contract says: one blob (the block name) and nothing
     // else, and the extended draw row keeps its two flags.
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::SetStorageBlockBinding), static_cast<Uint32>(kHasBlob));
@@ -601,6 +610,14 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     // struct to pin - the 16 bytes are pinned above with the handle family.
     EXPECT_EQ(sizeof(MGPApplierReset), 8u);
     EXPECT_EQ(sizeof(MGPHandleOnly), 16u);
+    // rv's two (§5.3/§7.6): the residual-value POD - 2 + 15 Uint32s, 2 Uint8s and 2 pad bytes,
+    // then the three Uint64s - and the AMENDED attribute carrier, which grew 24 -> 56 to carry
+    // all three views verbatim (the frontend's cross-view conversion is the authoritative
+    // answer; the applier no longer reconverts).
+    EXPECT_EQ(sizeof(MGPContextValues), 96u);
+    EXPECT_EQ(sizeof(MGPContextValues::TouchedBufferBindingPointCount), 60u);
+    EXPECT_EQ(sizeof(MGPAttribValue), 56u);
+    EXPECT_EQ(sizeof(MGPVertexAttribDefaults), 8u);
     // The two draw-flag bits P5b's d1 arms are exclusive by contract and distinct by value.
     EXPECT_EQ(static_cast<Uint32>(kDrawIsIndirect), 1u << 5);
     EXPECT_EQ(static_cast<Uint32>(kDrawHasUserIndices) & static_cast<Uint32>(kDrawIsIndirect), 0u);
@@ -799,8 +816,9 @@ TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
     // MGPPatchParameter, MGPStreamOutputBind, MGPStorageBlockBinding, MGPCopyFromFramebuffer),
     // each with its own field list, so the comparator sees every one of them: 77. P5c appended
     // applier_reset's MGPApplierReset (CONTRACT-P5C.md §5.1) - object_death reuses
-    // MGPHandleOnly, which has had a list since P0 - so: 78.
-    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 78u);
+    // MGPHandleOnly, which has had a list since P0 - and rv added set_context_values'
+    // MGPContextValues (§5.3): 79.
+    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 79u);
     static_assert(MGPipeHasFieldVerifier<RenderStateParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PixelStoreParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PerBufferBlendState>::value);

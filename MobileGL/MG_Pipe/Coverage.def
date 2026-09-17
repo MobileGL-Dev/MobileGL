@@ -212,33 +212,36 @@
 // mirrors null on every draw of every push build. What retires those pulls is not a better
 // applier, it is the phase where the backend stops reading a frontend object at all.
 //
-// THE SIXTH IS A DIFFERENT ARGUMENT AND IT IS WORTH WRITING DOWN, because it looks like the
-// easy one. GetMaxTouchedTextureUnit is a plain Int, and set_sampler_views' Count IS that
-// value plus one (the second merge rule: a high-water mark is directly the count argument).
-// But the set is SUPPRESSED on an unchanged content hash and is emitted only when bit 12 fires,
-// and bit 12's shutter is Mix(textureContent, GetTextureBindGeneration()) - which does NOT
-// move on a redundant re-bind of the object a unit already holds, while the high-water mark
-// DOES (see NoteUnitTouched in DirtySurface.def). So the applier's Count can lag the frontend's
-// high-water mark by exactly the case the suppressor exists to swallow, and the field keeps
-// being pulled. Narrowing that is P3b/P4b's, with the backend debounce it takes over.
+// THE SIXTH left that arm at P5c rv: GetMaxTouchedTextureUnit is a plain Int whose problem was
+// never shape, it was the CARRIER - set_sampler_views' Count is the set's window, and the set
+// is suppressed on an unchanged content hash while the high-water mark still moves on a
+// redundant re-bind. set_context_values (CONTRACT-P5C.md §5.3) carries the mark as a VALUE of
+// its own, whole-record suppressed, so the mark rides an unsuppressed field and the row is
+// RECORD_SUPPLIED outright.
 //
-// FOUR ACCESSORS THAT MAP TO A P4a CALL ARE DELIBERATELY NOT HERE, for GetPixelStoreParameters'
-// reason - a row here says "this field is supplied", and for these it would be a half-truth:
-//   GetActiveTextureUnit  - glActiveTexture's selector. set_sampler_views carries the RESOLVED
-//     per-unit set and no active-unit selector at all; nothing on the wire carries it.
-//   GetTextureContextId   - a context identity the backend keys its own tables on. No call
-//     carries it and none should: it is the server's question about the client, not state.
-//   GetTextureBindGeneration / GetSamplingResolutionGeneration - frontend SHUTTERS. What
-//     replaces them server-side is the applier's own Serial, which is a different value with a
-//     different owner; claiming the sets supply the generations would make the fill loop skip
-//     two counters no record carries.
+// P5c rv ADDS EIGHT ROWS, and they are the whole of the value-class debt that was left
+// (CONTRACT-P5C.md §5.3): seven residual values no set_* call carried - the two texture-unit
+// counters, the 15-target touched-count array and the five transform-feedback values - plus
+// GetMaxTouchedTextureUnit re-homed from SetSamplerViews. All eight name SetContextValues, one
+// POD emitted at validate when any covered value moved, hash-suppressed whole. The OBJECT rows
+// (GetTextureUnitObject and its four P4a siblings above) stay BARRIER_PULLED with their
+// retiring phases; the three texture shutters (below) take no row here either - they carry no
+// wire value at all, the accessors answer the applier's own Serial.
+//
+// GetTextureContextId / GetTextureBindGeneration / GetSamplingResolutionGeneration stay out
+// DELIBERATELY, and the reason is ownership rather than coverage: they are frontend SHUTTERS,
+// and what replaces them server-side is the applier's own Serial - a different value with a
+// different owner. A row here would claim the sets supply the generations, and the fill loop
+// would skip two counters no record carries.
 // And GetTextureObject / GetProgramObject are STICKY (see MGP_COVERAGE_STICKY_LIST): they are
 // keyed by GL name, they are object lookups rather than verb state, and a forwarded field has
 // no storage for an emitted call to supply.
 #define MGP_COVERAGE_EMITTED_LIST(X)                                     \
+    X(GetActiveTextureUnit,                     SetContextValues)        \
     X(GetBlendColor,                            SetDynamicState)         \
     X(GetBlendEquationIndexed,                  CreateRenderState)       \
     X(GetBlendFuncIndexed,                      CreateRenderState)       \
+    X(GetBoundTransformFeedbackLifetimeId,      SetContextValues)        \
     X(GetBoundVertexArray,                      BindVertexElements)      \
     X(GetClampReadColor,                        SetDynamicState)         \
     X(GetClearColor,                            SetDynamicState)         \
@@ -254,7 +257,7 @@
     X(GetImageTextureBinding,                   SetShaderImages)         \
     X(GetLineWidth,                             SetDynamicState)         \
     X(GetLogicOp,                               CreateRenderState)       \
-    X(GetMaxTouchedTextureUnit,                 SetSamplerViews)         \
+    X(GetMaxTouchedTextureUnit,                 SetContextValues)        \
     X(GetMinSampleShadingValue,                 CreateRenderState)       \
     X(GetPatchDefaultInnerLevel,                SetPatchState)           \
     X(GetPatchDefaultOuterLevel,                SetPatchState)           \
@@ -272,9 +275,14 @@
     X(GetScissorBox,                            SetDynamicState)         \
     X(GetStencilState,                          CreateRenderState)       \
     X(GetTextureUnitObject,                     SetSamplerViews)         \
+    X(GetTouchedBufferBindingPointCount,        SetContextValues)        \
+    X(GetTransformFeedbackCapturedVertices,     SetContextValues)        \
+    X(GetTransformFeedbackGeneration,           SetContextValues)        \
     X(GetViewport,                              SetDynamicState)         \
     X(GetViewportIndexed,                       SetDynamicState)         \
     X(IsCapabilityEnabled,                      CreateRenderState)       \
-    X(IsCapabilityEnabledIndexed,               CreateRenderState)
+    X(IsCapabilityEnabledIndexed,               CreateRenderState)       \
+    X(IsTransformFeedbackActive,                SetContextValues)        \
+    X(IsTransformFeedbackPaused,                SetContextValues)
 
 // clang-format on

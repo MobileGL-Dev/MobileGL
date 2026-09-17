@@ -45,7 +45,9 @@ namespace MobileGL::MG_Pipe {
     // One slot per kVarTail set_* (ARCHITECTURE.md 5.1's call list), PLUS
     // SetFramebufferState, which is not kVarTail at all: MGPFramebufferState carries a
     // ContentHash for TWO jobs - the server's render-pass memo key and the client's emission
-    // suppressor - and the second one needs a slot here like any other. The enum is
+    // suppressor - and the second one needs a slot here like any other, PLUS
+    // SetContextValues (P5c rv), also not kVarTail: one fixed-width POD whose whole-record
+    // hash is the "did any covered value move" answer. The enum is
     // CLIENT-ONLY and is not a wire opcode, so appending before Count is safe.
     enum class MGPipeSuppressorSlot : Uint32 {
         SetVertexBuffers = 0,     // P3a - wired, and its hash includes BaseInstance
@@ -64,6 +66,12 @@ namespace MobileGL::MG_Pipe {
         SetStreamOutputTargets,   // P4b
         SetVertexAttribDefaults,  // P2 - the one consumer that is wired
         SetFramebufferState,      // P4a - wired
+        // P5c rv (CONTRACT-P5C.md §5.3). NOT kVarTail either - the same shape as
+        // SetFramebufferState's note: MGPContextValues is one fixed-width POD, and the
+        // whole-record hash IS its "did any covered value move" answer (there is deliberately
+        // no dirty mask in the payload - a suppressed record means "nothing moved", never
+        // "field invalid").
+        SetContextValues,         // P5c rv - wired, split+transport only (PipeFill.cpp gates)
         Count,
     };
 

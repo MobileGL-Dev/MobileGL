@@ -6,12 +6,12 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The ENCODE TWIN of gMGPipeWireRecordApply: thirty-seven emitters that turn a table call into
+// The ENCODE TWIN of gMGPipeWireRecordApply: thirty-eight emitters that turn a table call into
 // a wire record. Owner: package c1 (P5 ruling R-17). See WireTables.h for the install order
 // and MG_Pipe/PipeRoute.h for what R-17 actually cost.
 //
 // EVERY EMITTER IS THE SAME FOUR STEPS, and the macros below exist so that a reader can check
-// thirty-seven rows against PipeTables.inc in one pass instead of reading thirty-seven bodies:
+// thirty-eight rows against PipeTables.inc in one pass instead of reading thirty-eight bodies:
 //
 //     1. require a session - a slot that fell through to a driver this role does not have is
 //        the failure R-4 exists to prevent, and there is no fall-through here either;
@@ -22,7 +22,7 @@
 //     4. post the answer, for the rows that have one, into MG_Pipe's reply mailbox.
 //
 // WHAT IS DELIBERATELY NOT HERE. b1's `PushPersistentMapsBeforeVerb` / `MarkGpuWritesFor*` are
-// NOT called from these thirty-seven. They are pre-VERB hooks and these are not verbs: they
+// NOT called from these thirty-eight. They are pre-VERB hooks and these are not verbs: they
 // are the resource, CSO and state records that a verb is later drawn against. The five class-B
 // verbs in EmitTables.cpp call them, once each, immediately before their record, which is the
 // ordering b1's B-1 fix depends on. Calling them here as well would push a persistent map
@@ -196,6 +196,11 @@ namespace MobileGL::MG_Remote::Client {
         MGP_WIRE_PLAIN(SetIndexBuffer, MGPIndexBuffer, Context)
         MGP_WIRE_PLAIN(SetPixelPackState, MGPPixelPackState, Context)
         MGP_WIRE_PLAIN(SetPatchState, MGPPatchState, Context)
+        // P5c (rv), CONTRACT-P5C.md §5.3: the residual-value record is an ordinary routed
+        // set_* row - a fixed POD, no blob, no tail, no reply. The PRODUCER is transport-gated
+        // (PipeFill.cpp's EmitContextValues), so under monolith this wrapper is never reached;
+        // the server-role arm forwards to the monolith adapter exactly like its siblings.
+        MGP_WIRE_PLAIN(SetContextValues, MGPContextValues, Context)
 
         // -- context, mandatory blob --------------------------------------------------
         MGP_WIRE_BLOB(CreateRenderState, MGPRenderStateDesc, Blob)
@@ -541,6 +546,17 @@ namespace MobileGL::MG_Remote::Client {
         return true;
     }
 
+    // P5c (rv), CONTRACT-P5C.md §5.3. Whether set_context_values can cross RIGHT NOW: a live,
+    // started session whose tables are not being torn down. PipeFill.cpp gates BOTH halves of
+    // the row on this - the emission and the residual-fill skip - so a configured-but-wireless
+    // transport (the bring-up window, a server-role-only fixture) keeps the pull, and the two
+    // can never disagree about who supplies the eight fields.
+    Bool ContextValuesWireLive() {
+        ClientSession* session = ClientSession::Active();
+        return session != nullptr && session->Started() &&
+               !g_clientTablesUninstalled.load(std::memory_order_acquire);
+    }
+
     ObjectDeathEmit EmitObjectDeathRecord(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
         using MG_Pipe::MGPipeHandle;
 
@@ -628,6 +644,7 @@ namespace MobileGL::MG_Remote::Client {
         gMGPipeContext.SetVertexAttribDefaults = &Wire_SetVertexAttribDefaults;
         gMGPipeContext.SetPixelPackState = &Wire_SetPixelPackState;
         gMGPipeContext.SetPatchState = &Wire_SetPatchState;
+        gMGPipeContext.SetContextValues = &Wire_SetContextValues;
         gMGPipeContext.SetResidualValueState = &Wire_SetResidualValueState;
         gMGPipeContext.SetTextureParams = &Wire_SetTextureParams;
         gMGPipeContext.ResourceSubData = &Wire_ResourceSubData;

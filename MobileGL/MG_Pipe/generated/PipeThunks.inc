@@ -328,3 +328,7 @@ inline void MGP_ApplierReset(const MGPApplierReset* payload) {
 inline void MGP_ObjectDeath(const MGPHandleOnly* payload) {
     gMGPipeContext.ObjectDeath(payload);
 }
+
+inline void MGP_SetContextValues(const MGPContextValues* payload) {
+    gMGPipeContext.SetContextValues(payload);
+}

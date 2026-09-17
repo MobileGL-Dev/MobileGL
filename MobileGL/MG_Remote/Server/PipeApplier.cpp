@@ -783,6 +783,11 @@ namespace MobileGL::MG_Remote::Server {
                                    static_cast<GLenum>(bind.Access),
                                    static_cast<GLenum>(bind.Format));
         ++m_imageBinds;
+        // P5c (rv): an image bind moves the frontend's texture bind generation, and this verb
+        // carries no set_shader_images alongside it - so the server-side shutter serial the
+        // accessors now answer with (CONTRACT-P5C.md §5.3) moves here, at the one place the
+        // event reaches the applier's side.
+        MG_Pipe::MGPipeApplierNoteTextureStateMoved();
         return true;
     }
 

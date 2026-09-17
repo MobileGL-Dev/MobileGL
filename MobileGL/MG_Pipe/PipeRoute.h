@@ -6,7 +6,8 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// THE CLIENT -> WIRE ROUTING OF THE 37 MGPipeApply* ENTRY POINTS (P5, integrator ruling R-17).
+// THE CLIENT -> WIRE ROUTING OF THE 38 MGPipeApply* ENTRY POINTS (P5, integrator ruling R-17;
+// 38 since P5c rv added set_context_values, CONTRACT-P5C.md section 5.3).
 // Owner: package c1.
 //
 // WHAT WAS MISSING. `gMGPipeWireRecordApply` is the DECODE hook and it has existed since w1:
@@ -218,7 +219,7 @@ namespace MobileGL::MG_Pipe {
     void MGPipeNoteInstalledArm(MGPipeRouteArm arm);
 
     // ---------------------------------------------------------------------------------
-    // The call-site names: MGPipeRoute<Name> for each of the thirty-seven
+    // The call-site names: MGPipeRoute<Name> for each of the thirty-eight
     // ---------------------------------------------------------------------------------
     //
     // EVERY ONE TAKES THE APPLIER'S OWN SIGNATURE, so converting a call site is a rename and
@@ -307,6 +308,14 @@ namespace MobileGL::MG_Pipe {
         MGP_SetPixelPackState(&pack);
     }
     inline void MGPipeRouteSetPatchState(const MGPPatchState& patch) { MGP_SetPatchState(&patch); }
+    // P5c (rv, CONTRACT-P5C.md §5.3): emitted ONLY with an active transport (PipeFill.cpp
+    // gates on it); under monolith the row is never produced and the fields keep coming
+    // through the residual fill (G1). The row IS an ordinary routed set_* otherwise - the
+    // monolith adapter exists so the wire emitter's server-role arm has something defined to
+    // forward to, and the catalogue's null-row accounting (PipeCatalogueTest) counts it.
+    inline void MGPipeRouteSetContextValues(const MGPContextValues& values) {
+        MGP_SetContextValues(&values);
+    }
     inline void MGPipeRouteSetVertexAttribDefaults(const MGPVertexAttribDefaults& hdr,
                                                    const MGPAttribValue* tail) {
         MGP_SetVertexAttribDefaults(&hdr, tail, hdr.Count);

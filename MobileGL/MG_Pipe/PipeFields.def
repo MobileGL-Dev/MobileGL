@@ -149,7 +149,7 @@
     F(ShaderCso) F(Version) F(Blob)
 
 #define MGP_FIELDS_MGPAttribValue(F) \
-    F(Location) F(ValueClass) F(Data)
+    F(Location) F(ValueClass) F(FloatView) F(IntView) F(UintView)
 
 #define MGP_FIELDS_MGPVertexAttribDefaults(F) \
     F(Mask) F(Count)
@@ -268,6 +268,14 @@
 #define MGP_FIELDS_MGPApplierReset(F) \
     F(ContextSerial)
 
+// P5c rv (CONTRACT-P5C.md §5.3): set_context_values' POD, one row per member. The 15-entry
+// array is one field, exactly as MGPFramebufferState's Color[8] is one.
+#define MGP_FIELDS_MGPContextValues(F) \
+    F(ActiveTextureUnit) F(MaxTouchedTextureUnit) F(TouchedBufferBindingPointCount) \
+    F(IsTransformFeedbackActive) F(IsTransformFeedbackPaused) \
+    F(TransformFeedbackGeneration) F(BoundTransformFeedbackLifetimeId) \
+    F(TransformFeedbackCapturedVertices)
+
 // ---- the value structs and the host span (P1 brief D8). Not call payloads themselves, but
 // members of ones (ResidualValueBlock, MGPPixelPackState, MGPCaps) and of PipeInputs, so the
 // comparator has to see INTO them: with these lists the memcmp fallback of MGPipeFieldEqual is
@@ -385,7 +393,7 @@
     P(MGPSurfaceInfo) \
     P(MGPImageBind) P(MGPPatchParameter) P(MGPStreamOutputBind) P(MGPStorageBlockBinding) \
     P(MGPCopyFromFramebuffer) \
-    P(MGPApplierReset) \
+    P(MGPApplierReset) P(MGPContextValues) \
     P(RenderStateParameters) P(PixelStoreParameters) P(SamplerParameters) P(PerBufferBlendState) \
     P(StencilFaceState) \
     P(DynamicBackendParameters) P(MGHostSpan) \

@@ -38,6 +38,10 @@
 #include <Config.h>
 #include <MG_Remote/Server/PipeApplier.h>
 #include <MG_Backend/DirectGLES/BackendObject_DirectGLES.h>
+// P5c rv (CONTRACT-P5C.md §5.3): set_context_values' round trip reads the applied record back
+// out of gPipeInputs, which needs the stamp machinery (a RECORD-SUPPLIED read outside a
+// server-stamped verb is the monolith answer's business, and this fixture has no client fill).
+#include <MG_Backend/MGPipe/PipeInputs.h>
 // P5c ct: object_death's round trip releases REAL Espryt twin-table entries, so the suite
 // drives the same registries the sink dispatches to (Managers.h). A suite that substituted a
 // mock here would pin the dispatch and nothing about the release (R-16).
@@ -1324,6 +1328,52 @@ TEST_F(PipeWireCodecTest, ObjectDeathReachesTheSinkWithItsHandleAndKind) {
         ++slot;
     }
     EXPECT_EQ(wire.Decoder().AppliedSeq(), static_cast<Uint64>(kKindCount));
+}
+
+// =====================================================================================
+// P5c rv (MG_Remote/CONTRACT-P5C.md §5.3): the residual-value record round-trips
+// =====================================================================================
+//
+// Not a sink row: the decoder's arm runs the REAL applier (MGPipeApplySetContextValues), so
+// the round trip is read back out of gPipeInputs - under a server stamp, because a
+// RECORD-SUPPLIED read outside one is the pre-stamp behaviour this build still tests
+// elsewhere, and the fields' own poison would otherwise (correctly) refuse the read.
+
+TEST_F(PipeWireCodecTest, SetContextValuesRoundTripsIntoPipeInputs) {
+    Wire2 wire;
+    MGPContextValues values{};
+    values.ActiveTextureUnit = 9;
+    values.MaxTouchedTextureUnit = 41;
+    for (Uint32 t = 0; t < 15; ++t) values.TouchedBufferBindingPointCount[t] = 100 + t;
+    values.IsTransformFeedbackActive = 1;
+    values.IsTransformFeedbackPaused = 1;
+    values.TransformFeedbackGeneration = 0xA1A2A3A4A5A6A7A8ull;
+    values.BoundTransformFeedbackLifetimeId = 0xB1B2B3B4B5B6B7B8ull;
+    values.TransformFeedbackCapturedVertices = 0xC1C2C3C4C5C6C7C8ull;
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetContextValues, &values, sizeof(values)),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    EXPECT_EQ(wire.Decoder().AppliedSeq(), 1u);
+
+    // kReadback's class carries the two texture-unit counters, kDraw's the rest
+    // (FillPoints.def) - the stamp is what publishes a RECORD-SUPPLIED field for the read.
+    MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
+    EXPECT_EQ(gPipeInputs.GetActiveTextureUnit(), 9);
+    EXPECT_EQ(gPipeInputs.GetMaxTouchedTextureUnit(), 41);
+    MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
+    for (Uint32 t = 0; t < 15; ++t) {
+        EXPECT_EQ(gPipeInputs.GetTouchedBufferBindingPointCount(static_cast<BufferTarget>(t)),
+                  SizeT{100 + t})
+            << "target " << t;
+    }
+    EXPECT_TRUE(gPipeInputs.IsTransformFeedbackActive());
+    EXPECT_TRUE(gPipeInputs.IsTransformFeedbackPaused());
+    EXPECT_EQ(gPipeInputs.GetTransformFeedbackGeneration(), 0xA1A2A3A4A5A6A7A8ull);
+    EXPECT_EQ(gPipeInputs.GetBoundTransformFeedbackLifetimeId(), 0xB1B2B3B4B5B6B7B8ull);
+    EXPECT_EQ(gPipeInputs.GetTransformFeedbackCapturedVertices(), 0xC1C2C3C4C5C6C7C8ull);
+    MGPipeServerClearVerbBoundary();
 }
 
 // =====================================================================================

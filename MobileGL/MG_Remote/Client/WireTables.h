@@ -8,7 +8,7 @@
 
 // THE CLIENT ARM OF R-17's ROUTING: the encode twin of `gMGPipeWireRecordApply`. Owner: c1.
 //
-// Thirty-seven thin emitters over `ClientSession::EmitAndWait`, installed over the two
+// Thirty-eight thin emitters over `ClientSession::EmitAndWait`, installed over the two
 // generated tables and the escape table that `MG_Pipe/PipeRoute.h` declares, so that under
 // split every resource, CSO, texture and program record leaves the GL thread as a WIRE RECORD
 // instead of executing synchronously against a context the apply thread now owns.
@@ -41,7 +41,7 @@
 
 namespace MobileGL::MG_Remote::Client {
 
-    // Installs the thirty-seven wire emitters over gMGPipeScreen / gMGPipeContext /
+    // Installs the thirty-eight wire emitters over gMGPipeScreen / gMGPipeContext /
     // gMGPipeRouteEscapes and records the arm. Idempotent.
     void InstallClientWireTables();
 
@@ -59,7 +59,7 @@ namespace MobileGL::MG_Remote::Client {
     // deletes that reach a process with no session run the applier as they do under monolith.
     void ReinstallMonolithAfterTeardown();
 
-    // How many records the thirty-seven emitters have published. It counts the ROUTED rows
+    // How many records the thirty-eight emitters have published. It counts the ROUTED rows
     // only - a resource_create, a set_vertex_buffers, a create_shader_state - and never the
     // five class-B verbs, so it is the one number that says "the resource/CSO/state path really
     // ran" as opposed to "a Clear crossed".
@@ -105,6 +105,12 @@ namespace MobileGL::MG_Remote::Client {
     // record (the bring-up window before Start, a server-role-only fixture, teardown); the
     // caller then makes the direct call the record replaced.
     Bool EmitApplierResetRecord();
+
+    // P5c (rv), CONTRACT-P5C.md §5.3: whether set_context_values can cross right now (a live,
+    // started session, tables not being torn down). PipeFill.cpp gates the record's emission
+    // AND the residual-fill skip for its eight fields on this one answer, so the two halves
+    // can never disagree about who supplies them.
+    Bool ContextValuesWireLive();
 
     // The three answers a death notice can produce (§5.2): the record crossed; the client's
     // own allocator cannot resolve the dying object (the server never saw it, so there is no

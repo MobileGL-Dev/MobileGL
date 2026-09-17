@@ -462,6 +462,25 @@ def check_field_lists_cover_struct_members(field_lists, payloads, header_texts=N
 ACCESSOR_READ_RE = re.compile(r"\b(?:MGB_CTX|pGLContext)\s*->\s*(\w+)")
 
 
+# The scanner's NAMED exemptions: accessors a backend reads through MGB_CTX-> / pGLContext->
+# that are NOT PipeInputs fields and never will be, each with the reason written down. A name
+# here is a DEBT ENTRY, not a silence: it exists so the gate can tell "scoped, named, phased"
+# from "forgot the row".
+#
+# P5c (the tx/ev/hd merge): the G6 frontend-keyed registry's framebuffer arm - two probes a
+# backend makes inside MGPipeFrontendKeyedRegistryScope (CONTRACT-P5C.md section 3.1's second
+# named exemption: the registry probes ride the scope, an unwrapped probe still aborts, and
+# the scope retires with the twin tables at P3b/P4b). They are object-registry lookups, not
+# PipeInputs state reads, so no Coverage.def row can ever describe them - a row there is a
+# field in the fill table, and these have no storage to fill.
+SCAN_EXEMPT_ACCESSORS = {
+    "GetFramebufferObject": "P5c G6 registry probe (the default framebuffer's object), inside "
+                          "MGPipeFrontendKeyedRegistryScope; retires with the twin tables (P3b/P4b)",
+    "FindFramebufferObjectByLifetimeId": "P5c G6 registry probe, inside "
+                          "MGPipeFrontendKeyedRegistryScope; retires with the twin tables (P3b/P4b)",
+}
+
+
 def scan_live_accessors(accessors, backend_dir=None, verbose=True):
     """Every accessor a backend reads through MGB_CTX-> or pGLContext-> (comments and
     strings masked) must have a Coverage.def row - a read without a row is a PipeInputs
@@ -479,7 +498,7 @@ def scan_live_accessors(accessors, backend_dir=None, verbose=True):
             masked = mask_comments_and_strings(read(path))
             for match in ACCESSOR_READ_RE.finditer(masked):
                 read_names.setdefault(match.group(1), set()).add(os.path.relpath(path, REPO_ROOT))
-    unknown = sorted(n for n in read_names if n not in known)
+    unknown = sorted(n for n in read_names if n not in known and n not in SCAN_EXEMPT_ACCESSORS)
     if unknown:
         sys.exit("Coverage.def: accessor(s) read by a backend with no row: %s"
                  % ", ".join("%s (%s)" % (n, ", ".join(sorted(read_names[n]))) for n in unknown))
