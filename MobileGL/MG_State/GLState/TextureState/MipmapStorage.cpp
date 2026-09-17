@@ -8,10 +8,50 @@
 
 #include "MipmapStorage.h"
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <Config.h>
+#include <MG_Remote/Server/ServerLoop.h>
+#include <MG_Util/Debug/Log.h>
+
+#include <cstdlib>
+#endif
+
 namespace MobileGL {
     namespace MG_State {
         namespace GLState {
             namespace {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P5c (gt, CONTRACT-P5C §6 layer 1): the frontend TextureObjectMipmap's
+                // mutable surfaces - the maps, the storage (re)definitions and the
+                // storage-dirty model - are a layer-1 surface, and MipmapStorage is the one
+                // funnel every concrete texture class reaches them through (the cube's six
+                // faces included, and a view's forwards land on its owner's storage). With an
+                // active transport the apply thread calling one is
+                // Fatal{RoleViolation, "texture-legacy-arm"} - the texture twin of hd's
+                // BufferObject guard (BufferObject.cpp): the server reads its own staged
+                // texture shadow and the descriptor (tx), never this memory. Client-thread
+                // callers (the GL thread's own state) are unaffected, and the guard compiles
+                // out of every non-split build, so the pull build's bytes do not move (G1).
+                //
+                // The message names the TEXTURE-side method, not this storage's: the pinned
+                // surface list (MG_Test/Wire/RemoteClientTest.cpp's RemoteGuards) is written
+                // in TextureObjectMipmap's vocabulary.
+                void RefuseLegacyTextureArmFromApplyThread(const char* surface) {
+                    if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+                    if (!MG_Remote::Server::ServerLoop::OnApplyThread()) return;
+                    // The named exemption (MipmapStorage.h): Magma's texture sync is tx's
+                    // declared leftover and retires with P7.
+                    if (MGPipeTextureLegacyArmScope::Active()) return;
+                    MGLOG_F("MGPipe: Fatal{RoleViolation, \"texture-legacy-arm\"} - the apply thread "
+                            "called TextureObjectMipmap::%s on a frontend object. With an active "
+                            "transport the server reads the staged-texture store and the resource "
+                            "descriptor (CONTRACT-P5C §2, rule E); a frontend texture's level "
+                            "storage is client memory and this arm is monolith-only",
+                            surface);
+                    std::abort();
+                }
+#endif
+
                 // Overlapping OR abutting ([lo, hi) intervals meeting edge-to-edge) in
                 // every axis: merging abutting boxes keeps scanline/tile write patterns
                 // as one rect instead of a picket fence.
@@ -28,11 +68,32 @@ namespace MobileGL {
                 }
             } // namespace
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+            namespace {
+                thread_local Uint32 g_textureLegacyArmScopeDepth = 0;
+            }
+
+            MGPipeTextureLegacyArmScope::MGPipeTextureLegacyArmScope() {
+                ++g_textureLegacyArmScopeDepth;
+            }
+
+            MGPipeTextureLegacyArmScope::~MGPipeTextureLegacyArmScope() {
+                --g_textureLegacyArmScopeDepth;
+            }
+
+            Bool MGPipeTextureLegacyArmScope::Active() {
+                return g_textureLegacyArmScopeDepth != 0;
+            }
+#endif
+
             SizeT MipmapStorage::GetLevelCount() const {
                 return m_data.size();
             }
 
             void MipmapStorage::AllocateLevel(Uint level, MipmapInput input) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("AllocateStorage");
+#endif
                 // Grow only. GL respecifies exactly the level it is handed, so allocating level 0
                 // must not disturb the levels above it - but resize() shrinks as readily as it
                 // grows, so this used to truncate the whole chain to a single level. Callers that
@@ -125,6 +186,9 @@ namespace MobileGL {
             }
 
             void MipmapStorage::TruncateToLevelCount(SizeT levelCount) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("TruncateMipmapLevels");
+#endif
                 if (levelCount >= m_data.size()) return;
 
                 m_data.resize(levelCount);
@@ -138,6 +202,9 @@ namespace MobileGL {
             }
 
             void MipmapStorage::UpdateSubData(Uint level, DataPtr input) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("UpdateMipmapSubData");
+#endif
                 auto& targetData = m_data;
                 MOBILEGL_ASSERT(level < targetData.size(), "UpdateSubData: level out of range");
                 auto& levelData = targetData[level];
@@ -152,6 +219,9 @@ namespace MobileGL {
             }
 
             void* MipmapStorage::MapData(Uint level) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("MapMipmapData");
+#endif
                 auto& targetData = m_data;
                 MOBILEGL_ASSERT(level < targetData.size(), "UpdateSubData: level out of range");
                 auto& levelData = targetData[level];
@@ -170,6 +240,9 @@ namespace MobileGL {
             }
 
             void MipmapStorage::MarkDirty(Uint level, bool dirty) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("MarkStorageDirty");
+#endif
                 MOBILEGL_ASSERT(level < m_isDirty.size(), "MarkDirty: level out of range");
                 m_isDirty[level] = dirty;
                 if (level < m_dirtyRegions.size()) {
@@ -191,11 +264,17 @@ namespace MobileGL {
             }
 
             bool MipmapStorage::IsDirty(Uint level) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("IsStorageDirty");
+#endif
                 MOBILEGL_ASSERT(level < m_isDirty.size(), "IsDirty: level out of range");
                 return m_isDirty[level];
             }
 
             void MipmapStorage::MarkDirtyRegion(Uint level, IntVec3 offset, IntVec3 size) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("MarkStorageDirtyRegion");
+#endif
                 MOBILEGL_ASSERT(level < m_isDirty.size(), "MarkDirtyRegion: level out of range");
                 const IntVec3 levelSize = level < m_texelSizes.size() ? m_texelSizes[level] : IntVec3{0, 0, 0};
                 MipmapDirtyRegion incoming;
@@ -280,11 +359,17 @@ namespace MobileGL {
             }
 
             MipmapDirtyRegion MipmapStorage::GetDirtyRegion(Uint level) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("GetStorageDirtyRegion");
+#endif
                 if (level >= m_dirtyRegions.size()) return {};
                 return m_dirtyRegions[level];
             }
 
             SizeT MipmapStorage::GetDirtyRects(Uint level, MipmapDirtyRegion* outRects, SizeT maxRects) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("GetStorageDirtyRects");
+#endif
                 if (outRects == nullptr || level >= m_dirtyRects.size() || level >= m_dirtyRegions.size()) {
                     return 0;
                 }

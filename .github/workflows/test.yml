@@ -1,4 +1,4 @@
-﻿name: Test
+name: Test
 
 on:
   push:
@@ -1115,6 +1115,121 @@ jobs:
           name: integration-split-core-dumps
           path: /tmp/core.*
           if-no-files-found: ignore
+
+  # P5c gt (CONTRACT-P5C §6): the strict twin of integration-split. The role guards (the two
+  # layers of Fatal{RoleViolation, ...}) are COMPILED into every split build - there is no
+  # knob to arm them - so "guards armed" below means MOBILEGL_IPC_STRICT_ERRORS=1, the knob
+  # that promotes a BARRIER-PULLED residual read from counted debt to a named abort.
+  #
+  # TWO ASSERTIONS, NOT ONE, because the two halves of "strict is armed" are different
+  # statements:
+  #
+  #   * the unit label must stay GREEN under it. A unit case that newly aborts under strict
+  #     is a value-class read that crept back in (P5c rv's exit line is value-class = 0), and
+  #     this step is what says so. FieldOwnershipTest owns the strict arms' behaviour cases;
+  #
+  #   * the integration-split scenarios must all ABORT under it, BY DESIGN: the remaining
+  #     residual pulls are the pinned object-class rows (GetFramebufferBindingSlot & co.,
+  #     P3b/P4b/P7's), every drawing scenario reads one, and strict turns the first read into
+  #     Fatal{UnmigratedPipeInput, ...} [BARRIER-PULLED, MOBILEGL_IPC_STRICT_ERRORS=1, ...].
+  #     A lane that "passed" a scenario here would mean strict never armed - the same
+  #     two-state shape as the E1/E3(a) negative controls, so the step asserts the abort AND
+  #     greps the entry's private split-log for the strict marker. This half flips meaning
+  #     when the object-class rows retire (P7): the scenarios then PASS under strict and the
+  #     step is rewritten as an ordinary green lane.
+  integration-split-strict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: build-linux-split
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Get CMake
+        uses: lukka/get-cmake@v4.3.3
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
+
+      - name: Download Linux split runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: mobilegl-linux-runtime-split
+          path: .
+
+      - name: Unpack Linux split runtime
+        run: |
+          tar -xzf mobilegl-linux-runtime-split.tgz
+          test -f build-split/libMobileGL.so
+
+      - name: Normalize CTest command paths
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          for path in Path('build-split').rglob('CTestTestfile.cmake'):
+              text = path.read_text()
+              text = re.sub(r'"[^"]*/cmake-[^"]*/bin/cmake"', '"cmake"', text)
+              path.write_text(text)
+          PY
+
+      # The green half: no unit case may pull harder under strict. This includes the
+      # RemoteGuards suite (the layer-1/layer-2 Fatal drives) and FieldOwnershipTest's strict
+      # arms, so the guards are provably armed in the lane that gates on them.
+      - name: Unit tests on the split runtime under MOBILEGL_IPC_STRICT_ERRORS=1
+        working-directory: build-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_IPC_STRICT_ERRORS: "1"
+        run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)"
+
+      # The expected-red half: every integration-split entry aborts on its first BARRIER-PULLED
+      # read under strict. The run is EXPECTED to fail; what the step gates on is that the
+      # failure is the strict Fatal and nothing else. A scenario that PASSED would mean strict
+      # never armed, and one whose private log lacks the marker failed for another reason.
+      - name: Integration-split aborts under strict with the strict marker
+        working-directory: build-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_IPC_STRICT_ERRORS: "1"
+          MOBILEGL_TRANSPORT: "inproc"
+        run: |
+          ulimit -c unlimited
+          rc=0
+          ctest -L integration-split --no-tests=error -j 4 > "${RUNNER_TEMP}/strict-split.txt" 2>&1 || rc=$?
+          cat "${RUNNER_TEMP}/strict-split.txt" | tail -5
+          if [ "${rc}" -eq 0 ]; then
+            echo "::error::integration-split under MOBILEGL_IPC_STRICT_ERRORS=1 went GREEN - the object-class residual pulls (P3b/P4b/P7) are still pinned, so strict must abort every drawing scenario. If the object-class rows have just retired, rewrite this step as the green lane it then becomes."
+            exit 1
+          fi
+          failed=$(grep -cE '^ *[0-9]+ - .* \(.*(Failed|Subprocess aborted).*\)' "${RUNNER_TEMP}/strict-split.txt" || true)
+          # Every entry that RAN (did not skip) must have failed; entries skipped by a missing
+          # GPU or an unmet pre-flight are reported, not counted.
+          ran=$(grep -cE 'tests passed, [0-9]+ tests failed out of [0-9]+' "${RUNNER_TEMP}/strict-split.txt" || true)
+          echo "strict run: rc=${rc}"
+          # The strict marker, from the split entries' own private logs: the run's red must be
+          # the strict Fatal and not a bring-up defect.
+          marker='BARRIER-PULLED, MOBILEGL_IPC_STRICT_ERRORS=1'
+          hits=$(grep -rl "${marker}" MobileGL/MG_IntegrationTest/split-logs/ 2>/dev/null | wc -l)
+          if [ "${hits}" -lt 1 ]; then
+            echo "::error::no split entry's private log carries the strict marker '${marker}' - the lane went red without the strict Fatal firing, which is a defect, not the control"
+            exit 1
+          fi
+          echo "integration-split under strict is red by design; ${hits} private log(s) carry the strict marker"
+
+      - name: Upload strict lane logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-split-strict-logs
+          path: |
+            build-split/MobileGL/MG_IntegrationTest/*.log*
+            build-split/MobileGL/MG_IntegrationTest/split-logs/*.log
+          if-no-files-found: warn
 
   # MobileGL/MG_Remote/Protocol/generated/protocol_generated.h is COMMITTED, and
   # flatc is deliberately absent from the default build graph (a codegen step in

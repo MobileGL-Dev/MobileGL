@@ -47,6 +47,7 @@
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Pipe/PipeMutation.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_Impl/Pipe/PipeFill.h>
 #include <Init.h>
 #include <MG_Impl/EGLImpl/EGLImpl.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
@@ -1835,6 +1836,7 @@ MGL_BUFFER_GUARD_TEST(BufferIsMappedFromTheApplyThreadIsFatalByName, 704, (void)
 MGL_BUFFER_GUARD_TEST(BufferChangeSerialFromTheApplyThreadIsFatalByName, 705, (void)buffer.GetChangeSerial())
 MGL_BUFFER_GUARD_TEST(BufferSyncPersistentMappedRangeFromTheApplyThreadIsFatalByName, 706,
                       buffer.SyncPersistentMappedRange())
+MGL_BUFFER_GUARD_TEST(BufferHasDefinedContentFromTheApplyThreadIsFatalByName, 707, (void)buffer.HasDefinedContent())
 #undef MGL_BUFFER_GUARD_TEST
 
 TEST(RemoteGuards, CapsMirrorFallbackWithNoServerBackendIsFatalByName) {
@@ -1845,6 +1847,88 @@ TEST(RemoteGuards, CapsMirrorFallbackWithNoServerBackendIsFatalByName) {
         (void)MG_Backend::DirectGLES::ActiveBackendFormatCaps();
     });
     ExpectNamedAbort(child, "Fatal{RoleViolation, \"caps-mirror\"}");
+}
+
+// P5c (gt, CONTRACT-P5C §6 layer 1): the TEXTURE family's object-surface list, in executable
+// form - this block IS the pinned list §5.4(b) asks for (the buffer family's five are the
+// MGL_BUFFER_GUARD_TEST block above). Every drive shares the buffer family's shape: the texture
+// is constructed on the CLIENT thread (its resource_create mint and emission are legal
+// client-side), and only the probed method runs on the apply thread, where the guard fires
+// BEFORE any level precondition could - the method names below are exactly the ones the guard
+// (MipmapStorage.cpp's RefuseLegacyTextureArmFromApplyThread) is hung on:
+//
+//   AllocateStorage, TruncateMipmapLevels, UpdateMipmapSubData, MapMipmapData,
+//   MarkStorageDirty, MarkStorageDirtyRegion, IsStorageDirty, GetStorageDirtyRegion,
+//   GetStorageDirtyRects
+//
+// Deliberately NOT in the list: the shape reads (GetMipmapTexelSize / GetMipmapByteSize /
+// GetMipmapLevelCount / GetUploadTargets / GetTarget / IsComplete), which the pinned
+// BARRIER-PULLED object-class rows still answer through the unit-object pointer
+// (FieldOwnershipTest's list, P3b/P4b/P7) - the per-draw binding walk reads them every draw.
+#define MGL_TEXTURE_GUARD_TEST(Name, Id, Call)                                                         \
+    TEST(RemoteGuards, Name) {                                                                         \
+        const auto child = RunInChild([] {                                                             \
+            StartControlSession();                                                                     \
+            MG_State::GLState::TextureObject2D texture(Id);                                            \
+            Srv::ServerLoopInstance().RunOnApplyThread(                                                \
+                [](void* self) {                                                                       \
+                    auto& texture = *static_cast<MG_State::GLState::TextureObject2D*>(self);           \
+                    Call;                                                                              \
+                    return MOBILEGL_OK;                                                                \
+                },                                                                                     \
+                &texture);                                                                             \
+            ClientSessionInstance().Stop();                                                            \
+        });                                                                                            \
+        ExpectNamedAbort(child, "Fatal{RoleViolation, \"texture-legacy-arm\"}");                       \
+    }
+MGL_TEXTURE_GUARD_TEST(TextureAllocateStorageFromTheApplyThreadIsFatalByName, 711,
+                       texture.AllocateStorage(TextureUploadTarget::Texture2D, 0,
+                                               {{4, 4, 1}, 64}))
+MGL_TEXTURE_GUARD_TEST(TextureTruncateMipmapLevelsFromTheApplyThreadIsFatalByName, 712,
+                       texture.TruncateMipmapLevels(TextureUploadTarget::Texture2D, 1))
+MGL_TEXTURE_GUARD_TEST(TextureUpdateMipmapSubDataFromTheApplyThreadIsFatalByName, 713,
+                       texture.UpdateMipmapSubData(TextureUploadTarget::Texture2D, 0, {}))
+MGL_TEXTURE_GUARD_TEST(TextureMapMipmapDataFromTheApplyThreadIsFatalByName, 714,
+                       (void)texture.MapMipmapData(TextureUploadTarget::Texture2D, 0))
+MGL_TEXTURE_GUARD_TEST(TextureMarkStorageDirtyFromTheApplyThreadIsFatalByName, 715,
+                       texture.MarkStorageDirty(TextureUploadTarget::Texture2D, 0, true))
+MGL_TEXTURE_GUARD_TEST(TextureMarkStorageDirtyRegionFromTheApplyThreadIsFatalByName, 716,
+                       texture.MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0,
+                                                      {0, 0, 0}, {1, 1, 1}))
+MGL_TEXTURE_GUARD_TEST(TextureIsStorageDirtyFromTheApplyThreadIsFatalByName, 717,
+                       (void)texture.IsStorageDirty(TextureUploadTarget::Texture2D, 0))
+MGL_TEXTURE_GUARD_TEST(TextureGetStorageDirtyRegionFromTheApplyThreadIsFatalByName, 718,
+                       (void)texture.GetStorageDirtyRegion(TextureUploadTarget::Texture2D, 0))
+MGL_TEXTURE_GUARD_TEST(TextureGetStorageDirtyRectsFromTheApplyThreadIsFatalByName, 719,
+                       (void)texture.GetStorageDirtyRects(TextureUploadTarget::Texture2D, 0,
+                                                          nullptr, 0))
+#undef MGL_TEXTURE_GUARD_TEST
+
+// P5c (gt, CONTRACT-P5C §6 layer 2 / audit A1): the client-side half of the gPipeInputs
+// single-writer rule. The apply thread is NOT actually inside the applier in this case - the
+// flag is raised by hand, which is the exact overlap window the check exists to refuse: a fill
+// that ran while a real apply was in flight would race the applier's reads of gPipeInputs.
+TEST(RemoteGuards, ClientPipeInputsFillWhileTheApplierOwnsItIsFatalByName) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        ClientSession::NoteApplyThreadEnteredApplier();
+        MGPipeValidateForVerb(MGPipeVerb::Clear);
+        ClientSession::NoteApplyThreadLeftApplier();
+        ClientSessionInstance().Stop();
+    });
+    ExpectNamedAbort(child, "Fatal{RoleViolation, \"gPipeInputs\"}");
+}
+
+// The same fill with the flag down is the legal shape - this is the control that keeps the
+// check from being "abort unconditionally".
+TEST(RemoteGuards, ClientPipeInputsFillWithTheApplierIdleIsAllowed) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        MGPipeValidateForVerb(MGPipeVerb::Clear);
+        MGPipeLeaveVerb();
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
 }
 #endif
 

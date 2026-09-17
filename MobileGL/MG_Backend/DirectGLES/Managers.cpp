@@ -5893,6 +5893,41 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              stateTextureObject->GetExternalIndex());
             }
 #endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5c (gt): under an active transport the replay loop below reaches the layer-1
+            // texture guard (MarkStorageDirty on a frontend object is Fatal{RoleViolation,
+            // "texture-legacy-arm"}) BEFORE the N-4 marker it owns - so the marker is hoisted
+            // here, ahead of the first guarded contact, with its semantics unchanged: raised
+            // only when a level would actually be replayed. The predicate is answered by the
+            // server's own staged-texture store rather than the frontend's extent walk: a
+            // Defined level has a non-zero extent and bytes on the frontend (the two conditions
+            // the loop tests), and an undefined one reads {0,0,0} and is skipped. A texture with
+            // no applier record (rearmRes null, the MGLOG_E_ONCE arm above) falls through to the
+            // guard, which names the same violation one level down.
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                !MG_Pipe::MGPipeHandleIsNull(rearmRes)) {
+                const auto* rearmRecord = PipeTextureRecordForHandle(rearmRes);
+                if (rearmRecord != nullptr) {
+                    auto& rearmStore = MG_Remote::Server::ServerStagedTexture();
+                    const Uint64 rearmKey = MG_Remote::Server::StagedTextureStore::KeyForHandle(rearmRes);
+                    Bool anyLevelWouldReplay = false;
+                    for (const auto& uploadTarget :
+                         BufferImpl::StagedUploadTargetsForPipeTarget(rearmRecord->Desc.Target)) {
+                        for (Uint32 level = 0; level < rearmRecord->Desc.Levels; ++level) {
+                            if (rearmStore.IsLevelDefined(rearmKey, static_cast<Uint16>(uploadTarget),
+                                                          static_cast<Uint16>(level))) {
+                                anyLevelWouldReplay = true;
+                                break;
+                            }
+                        }
+                        if (anyLevelWouldReplay) break;
+                    }
+                    if (anyLevelWouldReplay) {
+                        MG_Pipe::MGPipeUnmigratedEmulation("texture-remint-pull");
+                    }
+                }
+            }
+#endif
             if (auto* mipmapObject = MG_State::GLState::AsMipmapTexture(stateTextureObject.get())) {
                 const auto levelCount = mipmapObject->GetMipmapLevelCount();
                 for (const auto& uploadTarget : stateTextureObject->GetUploadTargets()) {
@@ -7153,6 +7188,48 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // left the backend name with no levels whatsoever, so the level that WAS defined could
             // never be sampled or read back. Sync whenever some level holds an image; the per-level
             // loops below skip the degenerate ones individually.
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5c (gt, CONTRACT-P5C §6 layer 1): on the staged arm the same question is answered
+            // out of the SERVER's staged-texture store, never out of the frontend object - the
+            // store's Defined-ness (fed by the respecify hook and the sub-data adoption) IS "some
+            // level holds an image", and IsComplete()'s sampling half is redundant with it: a
+            // complete mipmap chain has a defined level 0, and the gate's whole job is to let an
+            // incomplete-but-partly-defined chain through. The one divergence is deliberate and
+            // stated: a chain whose EVERY level is 0x0 is complete-by-quirk on the frontend (the
+            // "0x0 in last level" relaxation, TextureObject.cpp) and undefined here - and syncing
+            // it would upload nothing either way, because every per-level loop below skips a
+            // {0,0,0} level individually. A BUFFER texture never has staged levels, so its gate
+            // is the descriptor's format - exactly what TextureObjectBase::IsComplete() reduces
+            // to for that storage kind.
+            if (MGB_STAGED_TEXTURE_LIVE) {
+                const auto& stagedDesc = pushedStorage->Desc;
+                Bool anyDefined = false;
+                if (static_cast<TextureStorageType>(stagedDesc.StorageKind) == TextureStorageType::Buffer) {
+                    // A buffer texture has no staged levels; its gate is the descriptor's
+                    // format, which is what TextureObjectBase::IsComplete() reduces to here.
+                    anyDefined = static_cast<TextureInternalFormat>(stagedDesc.InternalFormat) !=
+                                 TextureInternalFormat::Unknown;
+                } else {
+                    auto& stagedStore = MG_Remote::Server::ServerStagedTexture();
+                    const Uint64 stagedKey = MG_Remote::Server::StagedTextureStore::KeyForHandle(pushedRes);
+                    for (const auto& uploadTarget : BufferImpl::StagedUploadTargetsForPipeTarget(stagedDesc.Target)) {
+                        for (Uint32 level = 0; level < stagedDesc.Levels; ++level) {
+                            if (stagedStore.IsLevelDefined(stagedKey, static_cast<Uint16>(uploadTarget),
+                                                           static_cast<Uint16>(level))) {
+                                anyDefined = true;
+                                break;
+                            }
+                        }
+                        if (anyDefined) break;
+                    }
+                }
+                if (!anyDefined) {
+                    MGLOG_D("Texture object with ID: %u has no defined image level, skipping sync.",
+                            stateTextureObject->GetExternalIndex());
+                    return;
+                }
+            } else
+#endif
             if (!stateTextureObject->IsComplete() && !HasAnyDefinedMipmapLevel(stateTextureObject.get())) {
                 MGLOG_D("Texture object with ID: %u has no defined image level, skipping sync.",
                         stateTextureObject->GetExternalIndex());
@@ -7321,7 +7398,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 break;
                             default:
                                 MGLOG_E_ONCE("Unhandled texture target %s",
-                                        MG_Util::ConvertTextureTargetToString(stateTextureObject->GetTarget()).c_str());
+                                        MG_Util::ConvertTextureTargetToString(MGB_TEXTURE_TARGET(stateTextureObject)).c_str());
                                 break;
                             }
                             DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__,
@@ -8127,7 +8204,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 break;
                             default:
                                 MGLOG_E_ONCE("Unhandled texture target %s",
-                                        MG_Util::ConvertTextureTargetToString(stateTextureObject->GetTarget()).c_str());
+                                        MG_Util::ConvertTextureTargetToString(MGB_TEXTURE_TARGET(stateTextureObject)).c_str());
                                 break;
                             }
                             if (ringStaged) {
