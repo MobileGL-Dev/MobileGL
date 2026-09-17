@@ -1,6 +1,6 @@
 # MGPipe 路线图
 
-> 状态：**P0、P0.5、P1、P2、P3a、P4a、P5 已落地，P5b 收尾中**。迁移集成头 `348d22a4` 已有 A=2 / B=54 / C=15；一次主机阶段门与合并普查正在完成，阶段唯一收官审查为 0 blocker / 2 major / 1 minor，三项已在 `82683d4a` 修复，包内定向 9/9 与 7/7（均 0 skip），合并确认待汇总。最后 APK/Redmi 出口未完成，不能标记 P5b 收官。P6 仍排在四个目标 trace 的 Redmi `inproc` 渲染之后。设计见 `ARCHITECTURE.md`，分头证据见 `MEASUREMENTS.md` §26–35。
+> 状态：**P0、P0.5、P1、P2、P3a、P4a、P5 已落地；P5b 代码已落地（`feat/disaggregated@7cb29d46`），测量未收口**。当前头、逐门数字、开放项与下一步见 **[`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md)**（随每次落地更新）。P5b 收官仍需：新头上的完整普查、一次主机全门、APK 与红米 A/B。P6 排在四个目标 trace 的红米 `inproc` 渲染之后。设计见 `ARCHITECTURE.md`，分头证据见 `MEASUREMENTS.md` §26–35。
 
 ## 通用纪律（每个 commit）
 
