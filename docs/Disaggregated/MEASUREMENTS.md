@@ -842,9 +842,9 @@ E1 与 E3(a) 的控制步骤 rc=0，各自 selected entry 必须自己的诊断�
 
 **执行异常独立记账：**为归档 E1/E3 私有日志而在运行中追加 runner 行，Bash 的读取偏移触发过一次 `-test-dir: command not found`；外层未设置 set-e。该 shell 异常保留在原始会话输出，不冒充测试失败，也不能省略。verify / audit 自己的 JUnit 均完整且步骤 rc=0，后续 E2 正常；`negative-private-logs` 已提前手动归档。最终须用全部必需步骤状态、JUnit 数量及回放计数确认没有缺步，而不是仅凭最后一个 shell exit 宣称通过。
 
-主机 push / verify 的各 79 replay 结果与最终 complete/exit 尚待记录。
+主机 push / verify 的各 79 replay 与最终 complete/exit **已收口（2026-09-16）**：retrace-push **79/79**（原始会话内完成，rc=0）；retrace-verify 在 WSL 重启前完成 4/79，其余 75 条以 `verify-recovery-r1/` 里 SHA-256 钉住的同一 verify 库串行续跑（`p5b_codex_resume_verify.py --run`，exit 0），合并 **79/79**（`retrace-verify-combined/summary.json`）。逐步对账无缺失步骤、无非零退出（`reconciliation-20260916.md`），`exit-code.txt=0`、`complete=true`，`summary-counts.{json,md}` 已按最终状态重算。
 
-合并 inproc 普查由独立 frozen runner 在 `~/w7/p5b-final-census-348d22a4/` 记录：integration lane 显式 **32 MiB**，完整 trace 显式 **256 MiB**。后者容纳目标负载的单次 128 MiB 上传；这不是默认容量修复。integration lane 已执行 **1267 selected = 811 passed + 203 skipped + 62 aborted + 191 failed**。旧 1149 名全部保留，新增 118、删除 0；旧 **432 passes 全保留、零回退**。旧 505 abort → 265 passed / 18 skipped / 58 aborted / 164 failed；旧 27 failed → 1 passed / 26 failed。后续错误被执行到不等于这些路径已正确，新增测试也不计入旧名回归判断。完整 trace 的 79 项仍在运行；最终同名 transition、逐 trace first blocker/SSIM 以 `joint-codex-v1.md` 的 census 块及 `identity.json`、`counts.json` 为准。
+合并 inproc 普查由独立 frozen runner 在 `~/w7/p5b-final-census-348d22a4/` 记录：integration lane 显式 **32 MiB**，完整 trace 显式 **256 MiB**。后者容纳目标负载的单次 128 MiB 上传；这不是默认容量修复。integration lane 已执行 **1267 selected = 811 passed + 203 skipped + 62 aborted + 191 failed**。旧 1149 名全部保留，新增 118、删除 0；旧 **432 passes 全保留、零回退**。旧 505 abort → 265 passed / 18 skipped / 58 aborted / 164 failed；旧 27 failed → 1 passed / 26 failed。后续错误被执行到不等于这些路径已正确，新增测试也不计入旧名回归判断。完整 trace 的 79 项**已收口（2026-09-16）**：**72 passed / 6 aborted / 1 failed**。主跑在 WSL 重启时止于 73/79，续跑三轮补齐——resume1 命中 `create-indirect` DirectVulkan 的内存膨胀（进程组 >60 GiB RSS，守护 SIGKILL）；resume2 重试同例再次被内存守护杀死（本条记为 failed，证据在案），其余 5 条因内存水位未恢复被守护推迟；resume3 在干净实例上跑完（4 passed / 1 aborted）。7 条未过项及其首阻塞：`minecraft-1.21.4-rd12-odinlite-in-world` DirectGLES `Fatal{InitialBytesNotCarried,"resource_respecify"}` 与 DirectVulkan `Fatal{BarrierTimeout,"Present"}`；`iris-photon-v1.3b`、`iris-derivative-main-d24.4.14`、`minecraft-1.21.1-neoforge-create-indirect` 三个 DirectGLES 均为 `Fatal{UnmigratedEmulation,"texture-remint-pull"}`；`minecraft-1.21.4-fabric-iris-bsl-esc-menu-854` DirectGLES `Fatal{InitialBytesNotCarried,"resource_respecify"}`；`create-indirect` DirectVulkan 为内存守护杀死（llvmpipe/lvp 上的真实膨胀，两次复现）。通过项含 `improved-transparency-minecraft-26.3` DirectGLES SSIM 1.0 / DirectVulkan 0.999914、`iris-iterationrp` DirectVulkan 0.995833、`iris-bsl-esc-menu-854` DirectVulkan 0.998402。逐 trace first blocker/SSIM 以 `joint-codex-v1.md` 的 census 块及 `identity.json`、`counts.json`、`trace-transitions.json` 为准。
 
 ## 34. P5b 唯一收官审查与定向修复
 
@@ -856,12 +856,29 @@ E1 与 E3(a) 的控制步骤 rc=0，各自 selected entry 必须自己的诊断�
 | Major 2 | ClientWaitSync 保留 64-bit 原 timeout，但 applied/reply 等待一律 30 秒，合法长 wait 会被 BarrierTimeout 打断 | 集成 `82683d4a`（包 `6388035f`）：applied/reply 预算为 ceil(timeout ns / 1,000,000) + 30,000 ms，以有限 chunk 避开溢出和 forever sentinel；普通容量等待/FenceWaitServer 仍为 30 秒，shutdown 可唤醒 |
 | Minor 3 | ReadPixels exact-size reply 的未知 status 仍可穿过 production helper | 集成 `82683d4a`（包 `6388035f`）：tight 与 bounce 实际 return path 拒绝 status=3，报 ReplyStatusInvalid；既有 ERROR/DECLINED 诊断保留 |
 
-`6388035f` 的定向 RemoteClientTest **7 selected / 7 passed / 0 skipped / 0 failed**（80 ms）：真实 EmitAndWait 的 0 ns、1 ns、60 s、UINT64_MAX 预算，FenceWaitServer、shutdown，以及 tight/bounce 的未知状态控制。报告 `~/w7/notes/p5b/p5b-results/wait-codex-v1.md`；该结果属于后续修复包；index span 的报告为 `indexspan-codex-v1.md`。最终代码源头 **`82683d4a83b5c8f4f7c375a7a92ebee9a1854646`** 包含三项修复，合并后定向确认待集成者汇总。
+`6388035f` 的定向 RemoteClientTest **7 selected / 7 passed / 0 skipped / 0 failed**（80 ms）：真实 EmitAndWait 的 0 ns、1 ns、60 s、UINT64_MAX 预算，FenceWaitServer、shutdown，以及 tight/bounce 的未知状态控制。报告 `~/w7/notes/p5b/p5b-results/wait-codex-v1.md`；该结果属于后续修复包；index span 的报告为 `indexspan-codex-v1.md`。最终代码源头 **`82683d4a83b5c8f4f7c375a7a92ebee9a1854646`** 包含三项修复。**合并后定向确认已汇总（2026-09-16）**：`7cb29d46` 之前最后一次 quickgate 里 split 单元车道仅有的 2 个失败（`PipeWireCodecTest.UserIndexSpan*`）是测试日志捕获缺陷（库按进程截断日志、fork 子进程增量读读空），由 `7cb29d46` 修复；在 `c77831e0` 的 build-split 上 `PipeWireCodecTest.UserIndexSpan*` **3/3 通过**，三项修复在最终头上均有绿色定向证据。
 
 本阶段不再做第二轮全门或收官审查。原始全门的源头仍为 `348d22a4`，后续三项只以修复提交上的定向证据补齐；最终 APK/设备源头另行明确，不能倒改历史 gate 身份。
 
-## 35. P5b Redmi 出口与四臂 A/B（待完成）
+## 35. P5b Redmi 出口与四臂 A/B
 
-最终代码源头 **`82683d4a83b5c8f4f7c375a7a92ebee9a1854646`** 正在构建 pull / push / split 三个 APK，split APK分别运行 monolith control（splitctl）与 inproc（split）。四条目标 trace × 双后端共 **8 个正确性组合**；四臂性能共 **32 个组合**。全部显式使用 **`MOBILEGL_IPC_STAGE_MB=256`**，默认 32 MiB 保持不变。运行前检查源头与 APK/library 身份，使用独立 attempt 目录保留正确性 SSIM、Fatal 日志与性能数据。
+最终代码源头 **`82683d4a83b5c8f4f7c375a7a92ebee9a1854646`**，APK 相位 `p5bcodex2`（pull / push / split 三个签名 APK，provenance 与 proof 在 `~/w7/notes/p5b/apk/p5bcodex2/`），split APK 分别运行 monolith control（splitctl）与 inproc（split）。设备 Redmi M332BF（SM8750 / Adreno 830v2，串号 `2f7cbe2e`），证据根 `MobileGL/.trace-work/p5b-redmi/p5bcodex2/2f7cbe2e/`。全部组合显式 **`MOBILEGL_IPC_STAGE_MB=256`**，默认 32 MiB 保持不变（容量决定见 §33 与 ROADMAP 开放问题 11）。**设备钉频口径变更**：2026-09-11 记录的厂商 GPU 频率上限（thermal_pwrlevel 锁 1、1050 MHz）在本机已消失，2026-09-16 实测 deterministic pin 为 **1100 MHz**（`pin_device.sh` 已按实测更新）；本节数字与 1050 MHz 时代钉频的活动不可直接比钟频，仅同场四臂配对可比。
 
-最终 sourcehead 已固定，设备尚无 DEVICE_DONE，**本节不填结果、不标 P5b 收官，也不从主机 SSIM 推断设备成功**。设备实际 selected/passed/skip、每个组合的 SSIM、barrier tax 与逐线程 CPU 汇总待同源证据到齐后填写。性能仍只记录，不作 landing 阻塞门；P6 spawn 要在设备出口之后开始。
+**正确性矩阵 8/8**（4 条目标 trace × 双后端，inproc split 臂，逐组钉频前后取证、PNG/target_call/SSIM 阈值、inproc + apply 线程 + 正 wire 记录三证，skip 即失败）：`improved-transparency-minecraft-26.3`、`minecraft-1.21.4-in-world`（GLES SSIM 0.999995）、`minecraft-1.21.4-fabric-sodium-in-world`、`minecraft-1.21.4-fabric-iris-bsl-in-world` 双后端全部通过。**这是四条 A/B trace 首次在 Redmi 上以 inproc 独立 apply 线程渲染——P5b 的出口判据（BRIEF-P5B §5）达成。**
+
+**四臂性能 A/B（barrier tax 首次实测）**：32 组中 **24 组带 200 帧尾验证全绿**（improved-transparency / in-world / sodium 三例的全部组）；配对口径为三次重复取 wall-time 均值最低者、尾 200 帧（`ab-tables.md`）。逐线程 CPU p50 的 push−pull 与 **barrier tax（split−push）**：
+
+| trace | 后端 | push−pull CPU p50 | barrier tax CPU p50 | barrier tax 帧 p50 |
+|---|---|---:|---:|---:|
+| improved-transparency-26.3 | DirectGLES | +15.6% | **+10.3%** | +0.1% |
+| improved-transparency-26.3 | DirectVulkan | +8.8% | **+13.1%** | +13.3% |
+| minecraft-1.21.4-in-world | DirectGLES | +21.4% | **+18.2%** | +0.2% |
+| minecraft-1.21.4-in-world | DirectVulkan | +11.8% | **+17.9%** | +19.7% |
+| minecraft-1.21.4-fabric-sodium | DirectGLES | +10.9% | **+5.9%** | -0.1% |
+| minecraft-1.21.4-fabric-sodium | DirectVulkan | +7.6% | **+8.3%** | +4.3% |
+
+splitctl−push 全部在 ±1.6% 内（monolith control 与 push 同源等价），证明上述增量来自 inproc 传输与 barrier 而非 APK/构建差。p99 方向同向放大（sodium DirectVulkan 帧 p99 +107.7% 为离群尾帧，原始序列在 `ab-tables.md`）。inproc 臂 peak RSS 389 MiB–2.5 GiB、全角色映射 560.5 MiB（256 MiB × 角色视图是虚拟映射容量，不是 RSS 增量）。
+
+**fixture 受限的 8 组**：`iris-bsl-in-world` 全部四臂 × 双后端验证失败，原因是 fixture 本身只有 **123 个 benchmark 帧**，低于跑器的 200 帧尾规则——pull 臂同样失败，是 fixture 上限不是回归。保留的 123 帧完整序列按同法（三次取均值最低）单独折算成带标注的补充表 `ab-tables-bsl-123frame-supplement.md`（全程 123 帧、无尾裁剪；p99 在各臂均被着色器编译主导，与 P2 基线记录一致）：barrier tax CPU p50 DirectGLES **+7.1%**、DirectVulkan **+9.1%**，不混入上表。
+
+性能仍按 2026-09-08 口径只记录、不作 landing 阻塞门。设备出口完成，**P5b 收官**；P6 spawn transport 自此开始（其 inproc 依赖替换清单见 ROADMAP 的 P5/P5b 债务表）。
