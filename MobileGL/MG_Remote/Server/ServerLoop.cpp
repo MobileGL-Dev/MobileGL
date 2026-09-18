@@ -377,15 +377,27 @@ namespace MobileGL::MG_Remote::Server {
         // CondVarDoorbell::Kill() breaks that, and Kill is the CLIENT's teardown call, not
         // something an EGL make-current request may perform. So the predicate carries all
         // three arming conditions and the doorbell wakes the thread for any of them.
+        // P5e (ra, CONTRACT-P5E §2.6) ADDS A FOURTH, AND IT IS THE ONE THAT SAYS "NOT NOW"
+        // RATHER THAN "WAKE UP". A full SEG_EVENT means the apply thread has nowhere to put
+        // the events the next record's apply would produce, so a waiting record is NOT work
+        // yet: applying it would only park the producer half way through. Stop and Control
+        // still win - a teardown may not be held up by a client that stopped draining - which
+        // is why they are tested first and the ring test sits between them and the queue.
+        //
+        // The wake comes from EventRingConsumer::Drained(), which clears the latch AND rings
+        // this bell (that pairing is the whole of the flow-control protocol; a cleared flag
+        // with no bell is the lost wakeup the forward direction's publish-then-ring order
+        // exists to prevent).
         const auto ready = [this, &control, &ring] {
-            return control.cmdHead.load(std::memory_order_acquire) != ring.LocalTail() ||
-                   m_stopRequested.load(std::memory_order_acquire) || ControlIsPending();
+            if (m_stopRequested.load(std::memory_order_acquire) || ControlIsPending()) return true;
+            if (control.eventRingFull.load(std::memory_order_acquire) != 0) return false;
+            return control.cmdHead.load(std::memory_order_acquire) != ring.LocalTail();
         };
 
         for (;;) {
             PumpControlRequest();
             if (m_stopRequested.load(std::memory_order_acquire)) break;
-            DrainRing();
+            if (control.eventRingFull.load(std::memory_order_acquire) == 0) DrainRing();
             if (m_stopRequested.load(std::memory_order_acquire)) break;
             if (ready()) continue;
 

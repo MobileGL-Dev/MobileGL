@@ -325,6 +325,22 @@ namespace MobileGL::MG_Remote::Transport {
         SessionWait WaitForApplied(std::uint64_t seq, std::uint32_t timeoutMs);
         // Present throttle.
         SessionWait WaitForPresentAck(std::uint64_t serial, std::uint32_t timeoutMs);
+
+        // ---- P5e (ra), CONTRACT-P5E §2.6: the same two waits, PLUS the event ring ---------
+        //
+        // A parked client must be wakeable by a server that ran out of SEG_EVENT, or the
+        // flow-control deadlock is one burst wide: the server stops producing, so it stops
+        // applying, so appliedSeq never reaches the seq this waiter is parked on, so the ring
+        // is never drained. Both predicates therefore break on `eventRingFull` as well, and
+        // the CALLER re-reads the watermark to find out which of the two woke it - a third
+        // SessionWait value would have made every existing `== Reached` site a bug.
+        //
+        // The old entry points above are unchanged and keep their callers: teardown's
+        // WaitForApplied has no ring to drain and must not learn about one.
+        SessionWait WaitForAppliedOrEventBacklog(std::uint64_t seq, std::uint32_t timeoutMs);
+        SessionWait WaitForPresentAckOrEventBacklog(std::uint64_t serial, std::uint32_t timeoutMs);
+        // True when the peer latched "SEG_EVENT is full and I stopped producing".
+        bool EventRingIsFull() const;
         // Back-pressure when Reserve returned nullptr. NEVER call this when
         // FreeBytes() is already >= the record: Ring.h:226-233 - a nullptr with
         // enough free bytes can only mean "too big, chunk", and waiting on it

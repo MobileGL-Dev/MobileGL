@@ -1187,11 +1187,24 @@ jobs:
           MOBILEGL_IPC_STRICT_ERRORS: "1"
         run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)"
 
-      # The expected-red half: every integration-split entry aborts on its first BARRIER-PULLED
-      # read under strict. The run is EXPECTED to fail; what the step gates on is that the
-      # failure is the strict Fatal and nothing else. A scenario that PASSED would mean strict
-      # never armed, and one whose private log lacks the marker failed for another reason.
-      - name: Integration-split aborts under strict with the strict marker
+      # ---- P5e (ra), MG_Remote/CONTRACT-P5E.md §7: ONE STEP, TWO ARMS, AND THE TREE PICKS ----
+      #
+      # This lane was written as an EXPECTED-RED control: under strict every integration-split
+      # entry aborts on its first BARRIER-PULLED read, so the step gated on the run failing and
+      # on the strict marker being the reason. P5e turns it into a HARD GREEN GATE - once the
+      # client runs ahead, an unbarriered record's pull is a Fatal whatever this knob says
+      # (§3.3), so what strict adds is only the BARRIERED rows' pulls, and those are a short,
+      # named list. A revert of any handle arm in vi/sb/pg/tx2/fb then goes red HERE, by field
+      # and verb, instead of in a picture nobody diffs.
+      #
+      # THE ARM IS CHOSEN BY THE TREE, NOT BY A SECOND EDIT. kMGPipeP5eRunAheadReady in
+      # MG_Backend/Init.cpp is the one constant the integration commit flips, and it is exactly
+      # the fact this lane's expectation depends on: with it false no server publishes
+      # kCapRunAheadApply, every record is barriered, every scenario still aborts on its first
+      # pull and the expected-red control is the honest gate. Reading it here means the lane
+      # changes meaning in the same commit the runtime does - a lane whose flip is a separate
+      # human step is a lane that is wrong for as long as that step is outstanding.
+      - name: Integration-split under strict - expected-red before the P5e flip, hard green after
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -1199,27 +1212,83 @@ jobs:
           MOBILEGL_TRANSPORT: "inproc"
         run: |
           ulimit -c unlimited
+          ready=$(grep -oE 'kMGPipeP5eRunAheadReady = (true|false)' "${GITHUB_WORKSPACE}/MobileGL/MG_Backend/Init.cpp" | head -1 | awk '{print $3}')
+          echo "kMGPipeP5eRunAheadReady = ${ready}"
           rc=0
           ctest -L integration-split --no-tests=error -j 4 > "${RUNNER_TEMP}/strict-split.txt" 2>&1 || rc=$?
-          cat "${RUNNER_TEMP}/strict-split.txt" | tail -5
-          if [ "${rc}" -eq 0 ]; then
-            echo "::error::integration-split under MOBILEGL_IPC_STRICT_ERRORS=1 went GREEN - the object-class residual pulls (P3b/P4b/P7) are still pinned, so strict must abort every drawing scenario. If the object-class rows have just retired, rewrite this step as the green lane it then becomes."
-            exit 1
-          fi
-          failed=$(grep -cE '^ *[0-9]+ - .* \(.*(Failed|Subprocess aborted).*\)' "${RUNNER_TEMP}/strict-split.txt" || true)
-          # Every entry that RAN (did not skip) must have failed; entries skipped by a missing
-          # GPU or an unmet pre-flight are reported, not counted.
-          ran=$(grep -cE 'tests passed, [0-9]+ tests failed out of [0-9]+' "${RUNNER_TEMP}/strict-split.txt" || true)
+          tail -5 "${RUNNER_TEMP}/strict-split.txt"
           echo "strict run: rc=${rc}"
-          # The strict marker, from the split entries' own private logs: the run's red must be
-          # the strict Fatal and not a bring-up defect.
-          marker='BARRIER-PULLED, MOBILEGL_IPC_STRICT_ERRORS=1'
-          hits=$(grep -rl "${marker}" MobileGL/MG_IntegrationTest/split-logs/ 2>/dev/null | wc -l)
-          if [ "${hits}" -lt 1 ]; then
-            echo "::error::no split entry's private log carries the strict marker '${marker}' - the lane went red without the strict Fatal firing, which is a defect, not the control"
+
+          if [ "${ready}" != "true" ]; then
+            # ---- the pre-flip arm, unchanged from P5c ----
+            if [ "${rc}" -eq 0 ]; then
+              echo "::error::integration-split under MOBILEGL_IPC_STRICT_ERRORS=1 went GREEN while kMGPipeP5eRunAheadReady is false - the object-class residual pulls (P3b/P4b/P7) are still pinned, so strict must abort every drawing scenario. If P5e has just landed, flip that constant in the same commit."
+              exit 1
+            fi
+            marker='BARRIER-PULLED, MOBILEGL_IPC_STRICT_ERRORS=1'
+            hits=$(grep -rl "${marker}" MobileGL/MG_IntegrationTest/split-logs/ 2>/dev/null | wc -l)
+            if [ "${hits}" -lt 1 ]; then
+              echo "::error::no split entry's private log carries the strict marker '${marker}' - the lane went red without the strict Fatal firing, which is a defect, not the control"
+              exit 1
+            fi
+            echo "integration-split under strict is red by design; ${hits} private log(s) carry the strict marker"
+            exit 0
+          fi
+
+          # ---- the post-flip arm: HARD GREEN, with §7's allowlist ----
+          #
+          # EVERY ENTRY MUST COMPLETE. An abort here is either an unbarriered pull (§3.3's
+          # unconditional Fatal, which is a missed migration) or a barriered row that is not on
+          # the list below, and both are the lane's job to catch.
+          if [ "${rc}" -ne 0 ]; then
+            echo "::error::integration-split under MOBILEGL_IPC_STRICT_ERRORS=1 is RED on a run-ahead server. CONTRACT-P5E §7 makes this lane a hard green gate: an unbarriered record's pull aborts whatever the knob says, so a red here names a field and a verb in the failing entry's private log."
+            grep -hoE 'Fatal\{UnmigratedPipeInput, "[^"]*"\}' MobileGL/MG_IntegrationTest/split-logs/*.log 2>/dev/null | sort | uniq -c | sort -rn | head -20
             exit 1
           fi
-          echo "integration-split under strict is red by design; ${hits} private log(s) carry the strict marker"
+
+          # THE ADMITTED MARKERS, `<field>@<verb>`, AND NOTHING ELSE. These are the barriered
+          # rows of §2.2 - the ones whose apply still pulls a row, and whose legality is the
+          # client's own wait (ruling 4). Each line names the package that retires it; a row
+          # that leaves this list leaves it by deletion, never by widening.
+          #   readbacks / the pack PBO ......... P8/P9 (read_pixels, get_texture_image)
+          #   CopyTex endpoint ................. tx2's trailing item
+          #   GenerateMipmap ................... tx2, until the VerbMipRes arm lands
+          #   set_storage_block_binding ........ pg's trailing item (by MGPStorageBlockBinding::ShaderCso)
+          #   XFB ............................... P3b/P4b/P9 (escalation (i) keeps the span lockstep)
+          #   resource_copy_region's names ..... the declared P5b debt
+          printf '%s\n' \
+            'GetTextureUnitObject@ReadPixels' \
+            'GetTextureUnitObject@GetTextureImage' \
+            'GetTextureUnitObject@CopyTexImage2D' \
+            'GetTextureUnitObject@GenerateMipmap' \
+            'GetBufferBindingSlot@ReadPixels' \
+            'GetBufferBindingSlot@GetTextureImage' \
+            'GetProgramObject@ShaderStorageBlockBinding' \
+            'ValidateProgramName@ShaderStorageBlockBinding' \
+            'GetTextureObject@CopyImageSubData' \
+            'GetTransformFeedbackProgram@BeginTransformFeedback' \
+            'GetTransformFeedbackProgram@EndTransformFeedback' \
+            'GetBufferBindingPoint@BeginTransformFeedback' \
+            'GetBufferBindingPoint@EndTransformFeedback' \
+            > "${RUNNER_TEMP}/allowed.txt"
+
+          grep -rhoE '\[BARRIER-PULLED[^]]*\]' MobileGL/MG_IntegrationTest/split-logs/ 2>/dev/null > "${RUNNER_TEMP}/markers-raw.txt" || true
+          grep -rhoE 'Fatal\{UnmigratedPipeInput, "[^"]*"\}' MobileGL/MG_IntegrationTest/split-logs/ 2>/dev/null \
+            | sed -E 's/.*"([^"]*)".*/\1/' | sort -u > "${RUNNER_TEMP}/markers.txt" || true
+          bad=$(comm -23 "${RUNNER_TEMP}/markers.txt" <(sort -u "${RUNNER_TEMP}/allowed.txt") || true)
+          if [ -n "${bad}" ]; then
+            echo "::error::a BARRIER-PULLED marker outside CONTRACT-P5E §7's allowlist appeared on a run-ahead server. Each one is a field an apply still reads out of client memory:"
+            echo "${bad}"
+            exit 1
+          fi
+
+          # `rsp` = 0 ON UNBARRIERED RECORDS, in every summary that printed it. A non-zero count
+          # would be an abort that did not fire, which is the one failure §3.3's unconditional
+          # arm cannot report by itself.
+          if grep -rhoE 'rsp=[0-9]+' MobileGL/MG_IntegrationTest/split-logs/ 2>/dev/null | grep -qvE 'rsp=0$'; then
+            echo "::warning::a scenario summary reports a non-zero rsp; under P5e every remaining pull is a BARRIERED row on the allowlist above, and the count belongs in the trailing inventory rather than in this lane"
+          fi
+          echo "integration-split under strict is GREEN with only the §7 allowlist admitted ($(wc -l < "${RUNNER_TEMP}/markers.txt") distinct marker(s))"
 
       - name: Upload strict lane logs
         if: always()

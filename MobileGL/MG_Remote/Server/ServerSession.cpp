@@ -180,6 +180,87 @@ namespace MobileGL::MG_Remote::Server {
             std::abort();
         }
 
+        // ---- P5e (ra), CONTRACT-P5E §2.6: the ring stops being a Fatal and becomes a queue --
+        //
+        // THE FATAL'S PREMISE DIES WITH THE LOCKSTEP. "A full ring is a producer burst no
+        // workload has" was true because the client drained at EVERY verb: the ring was empty
+        // whenever the server started a record, so filling 256 KiB inside one apply meant a
+        // defect. A run-ahead client drains at its waits, which on the steady path are one
+        // present apart, so a full ring is now an ordinary backlog and aborting on it would
+        // turn the reverse channel's capacity into a workload limit.
+        //
+        // SO THE PRODUCER BLOCKS. It publishes what is already in the ring and rings the
+        // client (a client that has not yet noticed cannot drain), then parks on its own bell
+        // until the client's Drained() clears the latch and rings back. The deadlock argument
+        // is the contract's, and it needs BOTH halves: the server blocks only here, the client
+        // blocks only on watermarks the server advances, and every client park breaks on
+        // `eventRingFull` as well (SessionProducer::WaitFor*OrEventBacklog) - so a parked
+        // client is always wakeable by the server that is waiting for it.
+        //
+        // TWO NAMED REFUSALS SURVIVE, and they are the impossible cases rather than the busy
+        // ones: a single event larger than the ring can EVER hold (no amount of draining
+        // helps), and a wait that ran out of patience (the peer is gone or wedged). A server
+        // that does not publish kCapRunAheadApply keeps P5C's Fatal unchanged.
+        Bool ServerPublishesRunAhead(const ServerSession& session) {
+            if (!session.CallMaskIsSet()) return false;
+            return (session.CallMask() & static_cast<Uint64>(MG_Pipe::kCapRunAheadApply)) != 0;
+        }
+
+        constexpr Uint32 kEventBacklogWaitMs = 30000;
+
+        void* ReserveEventOrBlock(ServerSession& session, Transport::EventKind kind,
+                                  const char* eventName, Uint64 payloadBytes) {
+            void* slot = session.Events().Reserve(kind, payloadBytes);
+            if (slot != nullptr) return slot;
+            if (!ServerPublishesRunAhead(session)) FatalEventRingOverflow(eventName, payloadBytes);
+
+            // Impossible case one: the record does not fit an EMPTY ring. Reserve caps one
+            // record at capacity/2 (Ring.h), so no drain can ever make room and blocking would
+            // be a hang with a comment on it.
+            const Uint64 cap = session.Events().Ring().MaxRecordBytes();
+            if (payloadBytes + sizeof(Transport::RingRecordHeader) > cap) {
+                MGLOG_F("MGPipe: Fatal{EventRingOverflow} - %s needs %llu bytes and SEG_EVENT "
+                        "caps ONE record at %llu (half its capacity). Flow control cannot help: "
+                        "no amount of draining makes a record fit a ring that is too small for "
+                        "it. Raise MOBILEGL_IPC_EVENT_KB or slice the event at its producer, as "
+                        "the writeback path already does",
+                        eventName, static_cast<unsigned long long>(payloadBytes),
+                        static_cast<unsigned long long>(cap));
+                std::abort();
+            }
+
+            Transport::RingControl& control = session.Control();
+            Transport::Doorbell& bell = session.ConsumerDoorbell();
+            const auto drained = [&control] {
+                return control.eventRingFull.load(std::memory_order_acquire) == 0;
+            };
+            for (Uint32 round = 0; round < 2; ++round) {
+                // PUBLISH AND RING FIRST. The client cannot drain a ring whose head it has not
+                // been shown, and the latch Reserve just set is only useful to a client that
+                // gets a bell with it.
+                session.PublishEvents();
+                if (!drained() && !bell.Wait(control.consumerParked, drained, /*spinUs=*/0,
+                                             kEventBacklogWaitMs)) {
+                    MGLOG_F("MGPipe: Fatal{EventRingOverflow} - %s waited %u ms for the client "
+                            "to drain SEG_EVENT and it never did. Under run-ahead the apply "
+                            "thread parks on this ring (CONTRACT-P5E §2.6); a client that does "
+                            "not drain is one that is not running",
+                            eventName, kEventBacklogWaitMs);
+                    std::abort();
+                }
+                slot = session.Events().Reserve(kind, payloadBytes);
+                if (slot != nullptr) return slot;
+            }
+            // Two full rounds against a ring the record provably fits: something else is
+            // producing into it, which on this side is impossible (one producer, the apply
+            // thread, by construction).
+            MGLOG_F("MGPipe: Fatal{EventRingOverflow} - %s could not reserve %llu bytes on an "
+                    "emptied SEG_EVENT. The apply thread is SEG_EVENT's only producer, so a "
+                    "drained ring that still refuses a record it fits is a corrupt cursor set",
+                    eventName, static_cast<unsigned long long>(payloadBytes));
+            std::abort();
+        }
+
         void ServerOnBufferWriteback(MG_Pipe::MGPipeHandle res, Uint64 offset,
                                      MG_Pipe::MGPBlobRef bytes) {
             if (bytes.Seg != MG_Pipe::kMGHostSpanSegNone) {
@@ -195,10 +276,8 @@ namespace MobileGL::MG_Remote::Server {
             }
             ServerSession& session = ServerSessionInstance();
             const Uint64 payloadBytes = sizeof(Transport::EventBufferWritebackHead) + bytes.Size;
-            void* slot = session.Events().Reserve(Transport::kEventBufferWriteback, payloadBytes);
-            if (slot == nullptr) {
-                FatalEventRingOverflow("kEventBufferWriteback", payloadBytes);
-            }
+            void* slot = ReserveEventOrBlock(session, Transport::kEventBufferWriteback,
+                                             "kEventBufferWriteback", payloadBytes);
             Transport::EventBufferWritebackHead head{};
             head.Resource = Transport::EventHandle{res.Slot, res.Gen};
             head.Offset = offset;
@@ -217,10 +296,8 @@ namespace MobileGL::MG_Remote::Server {
             ServerSession& session = ServerSessionInstance();
             const Uint64 tailBytes = static_cast<Uint64>(rangeCount) * sizeof(Transport::EventRange);
             const Uint64 payloadBytes = sizeof(Transport::EventGpuWrittenHead) + tailBytes;
-            void* slot = session.Events().Reserve(Transport::kEventGpuWritten, payloadBytes);
-            if (slot == nullptr) {
-                FatalEventRingOverflow("kEventGpuWritten", payloadBytes);
-            }
+            void* slot = ReserveEventOrBlock(session, Transport::kEventGpuWritten,
+                                             "kEventGpuWritten", payloadBytes);
             Transport::EventGpuWrittenHead head{};
             head.Resource = Transport::EventHandle{res.Slot, res.Gen};
             head.RangeCount = static_cast<std::uint32_t>(rangeCount);
@@ -237,10 +314,8 @@ namespace MobileGL::MG_Remote::Server {
         void ServerOnSurfaceChanged(const MG_Pipe::MGPSurfaceInfo* info) {
             ServerSession& session = ServerSessionInstance();
             constexpr Uint64 payloadBytes = sizeof(Transport::EventSurfaceChangedHead);
-            void* slot = session.Events().Reserve(Transport::kEventSurfaceChanged, payloadBytes);
-            if (slot == nullptr) {
-                FatalEventRingOverflow("kEventSurfaceChanged", payloadBytes);
-            }
+            void* slot = ReserveEventOrBlock(session, Transport::kEventSurfaceChanged,
+                                             "kEventSurfaceChanged", payloadBytes);
             Transport::EventSurfaceChangedHead head{};
             if (info != nullptr) {
                 head.Width = info->Width;
@@ -649,10 +724,8 @@ namespace MobileGL::MG_Remote::Server {
         }
         const Uint32 messageBytes = static_cast<Uint32>(length) + 1;
         const Uint64 payloadBytes = sizeof(Transport::EventGlErrorHead) + messageBytes;
-        void* slot = m_events.Reserve(Transport::kEventGlError, payloadBytes);
-        if (slot == nullptr) {
-            FatalEventRingOverflow("kEventGlError", payloadBytes);
-        }
+        void* slot = ReserveEventOrBlock(*this, Transport::kEventGlError, "kEventGlError",
+                                         payloadBytes);
         Transport::EventGlErrorHead head{};
         head.Code = code;
         head.MessageBytes = messageBytes;

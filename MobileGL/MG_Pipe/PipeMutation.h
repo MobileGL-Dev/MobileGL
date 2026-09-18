@@ -231,8 +231,38 @@ namespace MobileGL::MG_Pipe {
     // BeforeReadOnlyVerb) through MGPipeDrainDeferredDestroys. A delayed free is safe:
     // slots are plentiful, reuse is delayed rather than corrupted, and the replay runs the
     // helper itself, so every helper's own three-step order is untouched.
+    // P5e (ra), CONTRACT-P5E §2.7 / ruling 13 (ID-91): THE QUEUE STAYS LIVE, AND AN
+    // UNBARRIERED ENQUEUE IS A FINDING. After the family packages land, an unbarriered apply
+    // holds no frontend SharedPtr at all - every object is resolved from a handle - so the
+    // only apply thread that can still be a last owner is one inside a BARRIERED record (a
+    // fill's O-class rows, XFB's pinned targets). An enqueue from an unbarriered record
+    // therefore means some site still pins a frontend object across a record, which is a
+    // migration this phase believes it finished: it logs once with the kind, and is Fatal
+    // under MOBILEGL_IPC_STRICT_ERRORS so the strict lane owns the red. The queue itself is
+    // NOT removed - it is the belt that keeps the barriered case from corrupting the
+    // allocator while the finding is being read.
     Bool MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind kind, Uint64 lifetimeId);
     void MGPipeDrainDeferredDestroys();
+
+    // P5e (ra), CONTRACT-P5E §2.3: drop the four O-class SharedPtr rows the residual fill left
+    // in gPipeInputs (the bound VAO and the three programs, PipeInputs.h's O block). Called by
+    // ClientSession on the GL thread once a BARRIERED apply has returned - the one instant
+    // under run-ahead at which the applier is provably idle and this block has no other
+    // reader. Under lockstep nothing calls it: the next verb's fill overwrites those rows
+    // within a verb, and dropping them early would only cost a re-pin.
+    //
+    // It is HERE rather than in ClientSession because the rows are PipeInputs' private storage
+    // and MGPipeFillAccess - the client-side door to it - lives in MG_Impl (PipeFill.cpp).
+    // MG_Remote says when; MG_Impl says what.
+    void MGPipeReleaseResidualFillPins();
+
+    // P5e (ra), CONTRACT-P5E §2.5: glFinish's whole body under a transport. Declared here
+    // rather than on ClientSession so that MG_Impl's GL entry points - which are BELOW
+    // MG_Remote - can reach it without learning that a session exists; the implementation in
+    // PipeFill.cpp is one forward to ClientSession::Finish. A no-op with no live session, on a
+    // monolith transport, and on a lockstep one (there the client waited out every command it
+    // issued before it could reach the call).
+    void MGPipeClientFinish();
 #endif
 
     void MGPipeEmitResourceCreate(MG_State::GLState::BufferObject& buffer);

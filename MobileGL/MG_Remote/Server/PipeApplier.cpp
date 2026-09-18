@@ -10,6 +10,7 @@
 
 #include "PipeApplier.h"
 
+#include "ServerSession.h"
 #include "../Transport/ReplySlot.h"
 
 #include <Config.h>
@@ -28,6 +29,20 @@
 #include <cstring>
 
 namespace MobileGL::MG_Remote::Server {
+
+    namespace {
+        // P5e (ra, CONTRACT-P5E §1 / §6): DOES THIS SERVER PUBLISH kCapRunAheadApply? The
+        // question is asked of the server's OWN CallMask and not of a build constant, because
+        // "the client may run ahead" is exactly what that bit says and Magma never sets it.
+        // A session with no CallMask yet (the bring-up window, a fixture that never called
+        // SetCapabilityBits) answers false: no client can have latched run-ahead against a
+        // snapshot that was never published.
+        Bool ServerPublishesRunAhead() {
+            const ServerSession* session = ServerSession::Active();
+            if (session == nullptr || !session->CallMaskIsSet()) return false;
+            return (session->CallMask() & static_cast<Uint64>(MG_Pipe::kCapRunAheadApply)) != 0;
+        }
+    } // namespace
 
     ReplyPool::ReplyPool(void* base, Uint64 sizeBytes, Uint32 slotCount, Uint32 slotBytes)
         : m_base(static_cast<Uint8*>(base)), m_size(sizeBytes), m_slots(slotCount), m_slotBytes(slotBytes) {}
@@ -288,7 +303,30 @@ namespace MobileGL::MG_Remote::Server {
         ++m_presents;
         // FrameSerial 0 means "the server stamps its own" (c1-v1 8.3): P5 has no client-side
         // present credit, so the client sends 0 and the frame count on this side IS the serial.
+        //
+        // P5e (ra, CONTRACT-P5E §1, §2.4): IT IS THE CLIENT'S NOW, 1-BASED AND MINTED BY THE
+        // PAYER. A credit can only be paced in an id space the waiter advances, and the waiter
+        // is the client (`WaitForPresentAck(m_presentsSent + 1 - credit)`), so a server-stamped
+        // serial would be the server acknowledging its own count. The 0 arm survives for a
+        // peer that has not been re-built - and on a server that PUBLISHES the run-ahead cap it
+        // is a protocol fault, because such a client is pacing on this answer and a 0 would
+        // acknowledge a frame nobody asked about.
+        if (present.FrameSerial == 0 && ServerPublishesRunAhead()) {
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"Present.FrameSerial\"} - a run-ahead "
+                    "server was handed present serial 0. The client mints this 1-based and "
+                    "waits on it for its credit (CONTRACT-P5E §2.4); returning a credit for "
+                    "serial 0 would release a wait that is asking about frame N");
+            std::abort();
+        }
         m_lastPresentSerial = present.FrameSerial != 0 ? present.FrameSerial : m_presents;
+        // §2.4's other half, and the reason ServerSession::ReturnPresentCredit has had no
+        // production caller since v1 wrote it: ONE CREDIT PER SWAP, returned after Present()
+        // has returned rather than before it, because what the client is waiting for is the
+        // swap and not the record's apply. It advances presentAckSerial AND rings the client's
+        // bell - a client parked in WaitForPresentAck(kWaitForever) needs the pair.
+        if (ServerSession* session = ServerSession::Active()) {
+            session->ReturnPresentCredit(m_lastPresentSerial);
+        }
         return true;
     }
 

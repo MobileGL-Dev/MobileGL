@@ -108,7 +108,18 @@ DECLARE_GL_FUNCTION_HEAD(void, DrawArrays, GLenum mode, GLint first, GLsizei cou
 DECLARE_GL_FUNCTION_HEAD(void, DrawElements, GLenum mode, GLsizei count, GLenum type, const void* indices) DECLARE_GL_FUNCTION_END_NO_RETURN(void, DrawElements, mode, count, type, indices)
 DECLARE_GL_FUNCTION_HEAD(void, Enable, GLenum cap) DECLARE_GL_FUNCTION_END_NO_RETURN(void, Enable, cap)
 DECLARE_GL_FUNCTION_HEAD(void, EnableVertexAttribArray, GLuint index) DECLARE_GL_FUNCTION_END_NO_RETURN(void, EnableVertexAttribArray, index)
-MOBILEGL_GL_API void glFinish() { MGLOG_D("Implementing function: %s(...)", __FUNCTION__); }
+// P5e (ra), CONTRACT-P5E §2.5. STILL NOTHING ON THE WIRE - Flush and Finish have no record
+// (ARCHITECTURE §11) and this stays a no-op on every monolith build. What it is not any more
+// is a no-op on a RUN-AHEAD client: "the commands issued so far have completed" is a promise a
+// queue the client never waits on can break, and this is the only place an application can ask
+// for it. Under lockstep the client had already waited out every command it issued, so the
+// call really did have nothing to do; MGPipeClientFinish answers false-cheap there too.
+MOBILEGL_GL_API void glFinish() {
+    MGLOG_D("Implementing function: %s(...)", __FUNCTION__);
+#if MOBILEGL_BUILD_DISAGGREGATED
+    MobileGL::MG_Pipe::MGPipeClientFinish();
+#endif
+}
 MOBILEGL_GL_API void glFlush() { MGLOG_D("Implementing function: %s(...)", __FUNCTION__); }
 DECLARE_GL_FUNCTION_HEAD(void, FramebufferRenderbuffer, GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer) DECLARE_GL_FUNCTION_END_NO_RETURN(void, FramebufferRenderbuffer, target, attachment, renderbuffertarget, renderbuffer)
 DECLARE_GL_FUNCTION_HEAD(void, FramebufferTexture2D, GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) DECLARE_GL_FUNCTION_END_NO_RETURN(void, FramebufferTexture2D, target, attachment, textarget, texture, level)

@@ -896,11 +896,19 @@ namespace MobileGL::MG_Remote::Wire {
                 // The allocation still cannot progress after reclamation. Count this
                 // blocked allocation once, not each watermark poll or each reclaimed mark.
                 if (!waited) { ++m_stageReclaimWaits; waited = true; }
-                if (!m_stageRetirementBell->Wait(m_control->producerParked, ready, 0, 5000)) {
+                // P5e (ra, CONTRACT-P5E §2.6): drain BEFORE parking and again after waking.
+                // Before, because the ring may already be full and the server already stopped
+                // - in which case retiredSeq will never move and there is nothing to wake us;
+                // after, because the wake may have come from a server that is about to fill it
+                // again. The hook is null in every standalone codec, which has no session and
+                // therefore no reverse channel to drain.
+                if (m_stageWaitHook != nullptr) m_stageWaitHook(m_stageWaitSelf);
+                if (!ready() && !m_stageRetirementBell->Wait(m_control->producerParked, ready, 0, 5000)) {
                     MGLOG_F("MGPipe: Fatal{RetirementWaitFailed, \"SEG_STAGE\"} producer wait "
                             "ended before the pending allocation retired (shutdown or timeout)");
                     std::abort();
                 }
+                if (m_stageWaitHook != nullptr) m_stageWaitHook(m_stageWaitSelf);
             }
             ReclaimStagedBytes();
         }
