@@ -9659,8 +9659,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // (D-C1), which is every point a framebuffer can hold on the handle arm: D-C3 refuses
         // bit 9 outright on a driver reporting more than 8 colour attachments, and the
         // FRONT/BACK points belong to the DEFAULT framebuffer, which has no twin at all.
-        static const MG_Pipe::MGPSurface* PushedSurfaceForAttachment(const MG_Pipe::MGPFramebufferState& record,
-                                                                     FramebufferAttachmentType point) {
+        const MG_Pipe::MGPSurface* PushedSurfaceForAttachment(const MG_Pipe::MGPFramebufferState& record,
+                                                              FramebufferAttachmentType point) {
             if (point == FramebufferAttachmentType::Depth) return &record.Depth;
             if (point == FramebufferAttachmentType::Stencil) return &record.Stencil;
             if (point < FramebufferAttachmentType::Color0 || point > FramebufferAttachmentType::Color31) {

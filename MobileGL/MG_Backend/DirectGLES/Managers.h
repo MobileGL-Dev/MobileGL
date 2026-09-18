@@ -2090,6 +2090,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void NoteFramebufferTextureAttachments(MG_Pipe::MGPipeHandle fbo,
                                                const MG_Pipe::MGPFramebufferState& record);
         Vector<MG_Pipe::MGPipeHandle> FramebuffersAttachingTexture(MG_Pipe::MGPipeHandle texture);
+
+        // The record's surface for an attachment POINT, or null when this record does not
+        // describe that point at all (Color8..Color31, and the default framebuffer's FRONT/BACK
+        // tokens). MGPFramebufferState carries Color[8] + Depth + Stencil, which is every point
+        // a framebuffer can hold on the handle arm - D-C3 refuses bit 9 outright on a driver
+        // reporting more than 8 colour attachments. P5e (fb) exports it: the twin's attachment
+        // walk, the named blit's aspect plan and the detach walk all ask the same question of
+        // the same record, and a second copy of the Color/Depth/Stencil dispatch beside each of
+        // them is how one of them ends up describing a point differently from the others.
+        const MG_Pipe::MGPSurface* PushedSurfaceForAttachment(const MG_Pipe::MGPFramebufferState& record,
+                                                              FramebufferAttachmentType point);
 #endif
         // True when the read buffer names a fixed-point (norm/snorm) attachment that the
         // backend actually stores in a floating-point format. GL clamps a read from a
