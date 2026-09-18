@@ -1,6 +1,6 @@
 # 当前阶段进度
 
-分支 `feat/disaggregated`；代码头 `1f8de61b`（2026-09-18，P5d 三轮收官；P5c 收官头 `b88e8487`）。本文随每次落地更新。ID-1..75 的逐条裁定长文在 git 历史（`ef35ea0c` 之前版本的本文件）。
+分支 `feat/disaggregated`；代码头 `3cc4e1ec`（2026-09-18，P5e wave 2 + fix1 + ID-110；P5d 收官头 `1f8de61b`，P5c 收官头 `b88e8487`）。本文随每次落地更新。ID-1..75 的逐条裁定长文在 git 历史（`ef35ea0c` 之前版本的本文件）。
 
 ## 1. 阶段状态
 
@@ -11,7 +11,7 @@
 | **P5b** inproc 下的 verb 迁移（Minecraft 优先） | **已收官（2026-09-16）** | `37fc4fdb..82683d4a`；`MEASUREMENTS.md` §7 |
 | **P5c** `inproc` 共享内存读点归零 | **已收官（2026-09-17）** | `11ac3de6..b88e8487` + triage 修复；契约 `MobileGL/MG_Remote/CONTRACT-P5C.md`；审计 `~/w7/notes/p5c/p5c-audit-v1.md` |
 | **P5d** `inproc` 性能专项 | **已收官（2026-09-18，三轮）** | `cb06538c`、`56a77348`、`1f8de61b`；报告 [`P5D-INPROC-PERFORMANCE.md`](P5D-INPROC-PERFORMANCE.md)；`MEASUREMENTS.md` §9 |
-| **P5e** 退役 Espryt draw path 的 lockstep | **进行中** | 契约 `MobileGL/MG_Remote/CONTRACT-P5E.md`（c0e 落地）；计划 `~/w7/notes/p5e/BRIEF-P5E.md`、裁定 `~/w7/notes/p5e/INTEGRATOR-DECISIONS-P5E.md`（ID-80..98）；包序 c0e → id → {vi, sb, pg, tx2, fb} ∥ ra，集成 commit 翻 `kMGPipeP5eRunAheadReady` |
+| **P5e** 退役 Espryt draw path 的 lockstep | **进行中** | 契约 `MobileGL/MG_Remote/CONTRACT-P5E.md`（c0e 落地）；计划 `~/w7/notes/p5e/BRIEF-P5E.md`、裁定 `~/w7/notes/p5e/INTEGRATOR-DECISIONS-P5E.md`（ID-80..98）；包序 c0e → id → {vi, sb, pg, tx2, fb} ∥ ra，集成 commit 翻 `kMGPipeP5eRunAheadReady`。**八包已全部落地合并**，当前头 `3cc4e1ec`，逐门数字与设备验证见 §2.5 |
 | P6 spawn transport | P5e 之后 | 届时只是传输替换 |
 
 ## 2. 当前头实测
@@ -32,6 +32,42 @@
 | `rsp` 按帧实测（`MOBILEGL_PIPE_STATS_PERIOD=1`） | bsl 948.5/帧（38.7/draw）、complementary 1591.9/帧；值类 = 0，残留即 FieldOwnershipTest 钉住的 15 行对象类 |
 | Redmi 四臂复测 | **未做**（E-P5c #5 是记录项；本机无设备，需 Redmi `2f7cbe2e` 窗口） |
 | 79 trace 普查 | **未重跑**（全集语料不在本机；本机可用语料的实测见 `rsp` 与 audit 行）。P5b 收官数字（72/6/1）仍以其头为准 |
+
+## 2.5 P5e 当前进度（头 `3cc4e1ec`）
+
+八包全部落地并合并：wave 1 = **c0e**（契约 + 线上行）+ **id**（身份按 `{slot, gen}` 重键），wave 2 = **vi / sb / pg / tx2 / fb** ∥ **ra**，集成提交 `44f91c74` 解了三处两包相接的 seam。**`kMGPipeP5eRunAheadReady` 与 `kMGPipeP5eClientWaitRuleLanded` 仍为 false**：翻转它们的门是 BRIEF-P5E §3（strict 车道转硬绿，只余 §7 白名单）与 §4（设备出口），前者尚未达成。裁定见 `~/w7/notes/p5e/INTEGRATOR-DECISIONS-P5E.md`（ID-80..110）。
+
+### 设备验证发现的 monolith 回归与修复（ID-107 → fix1 `66621767` → ID-109 / ID-110 `3cc4e1ec`）
+
+| | |
+|---|---|
+| 症状 | `MOBILEGL_TRANSPORT=monolith` 下游戏启动即 SIGSEGV：`Lightmap.<init>` → `clearColorTexture` → `glClear` → `SyncCurrentFBO` → `SyncToBackend(前端 FBO)` → `SyncAttachmentSurface` → `SyncMipmapsToBackend(空 SharedPtr)` |
+| 根因 | fb 的 `SyncAttachmentSurface` 把**存储同步**指向 tx2 的 by-handle 座，后者传空 `SharedPtr` 并依赖记录臂被选中；而记录臂自身由 `Transport != Monolith` 选择（ID-81）。push 构建自 P4a 起**两条臂都由记录驱动附件**（`FramebufferSubsystemEnabled()` 单独门控，无传输测试），于是 monolith 臂走进了一个无法作答的座 |
+| 覆盖漏洞 | 结构性，而非"少写了一个用例"：门禁跑 `unit` + `integration-split`，而 `integration-split` 的**每一条**都导出 `MOBILEGL_TRANSPORT=inproc`；凡是"清一个带纹理附件的 FBO"的场景又都在 `SetUp` 里按 `SplitRuntimeSkipReason` 自跳过——**push 构建的第二条运行时臂在门禁集合里一条条目都没有**。实测 `44f91c74` 上 `ctest -L integration-gpu` = **1157/1294，137 个 SEGFAULT、横跨 38 个 scenario**，全部是带纹理附件的 FBO 用例。回归从来不只在 Lightmap 一条路径上 |
+| 修复 `66621767` | (1) `SyncAttachmentSurface` 的存储同步按 `MG_Config::Transport` 选臂——monolith 臂拿回 `f6cfcbd3` 的前端同步，经一个**只用于存储同步**的 monolith 胶水指针（附件形状、空点测试、twin 认领两臂都仍归记录，N-6 的洞不重开）；renderbuffer 半边同理，它的 by-handle 形丢掉了应用可见的 OOM `RecordError`。(2) 三个纹理同步体改用 `RefuseNullFrontendTextureOffTheHandleArm`：空前端对象落到无法作答的臂上是 `Fatal{RoleViolation, "texture-handle-arm"}` 具名中止，而不是空指针解引用；pull 构建里折成与修复前逐 token 相同的常量，不新增调用（D-P）。(3) 新增 `MonolithAttachmentClearScenario`（可变纹理 / 不可变纹理 / renderbuffer 三例，**断言像素而非"没崩"**——附件点未填的 clear 会静默抛 `GL_INVALID_FRAMEBUFFER_OPERATION`，那是同一缺陷的无声形态）与 `DirectGLES.PushMonolithArm.` 注册（ctest ENVIRONMENT 钉 `MOBILEGL_TRANSPORT=monolith`，挂 `integration-split` 标签） |
+| ID-109 | 标签保留（`integration-split` 指"门禁要跑的集合"而非"跑 inproc"；ID-81 给 push 构建两条服务端臂，只有一条在集合里，"门禁全绿"就一直等于"两条里的一条全绿"），**并把 `integration-gpu` 升为集成分支的常设门禁步骤**（`p5e_gate.sh gpu`，-j 4 约 10 分钟），不下放到每个包 |
+| ID-110 | 新增 `MGB_TEXTURE_RECORD_ARM_SELECTED()`（`Transport != Monolith` 且 `TextureResourceSubsystemEnabled()`），把"记录臂被选中"这句话只说一次；`texBufferByRecord` 那处"靠链条安全"的座改为自述式传输测试。有传输时该合取项已被 `pushedStorage != nullptr` 蕴含，故行为不变、不关门 |
+
+### 头 `3cc4e1ec` 的门（WSL `~/w7/p5e-int`，split flavour）
+
+| 门 | 结果 |
+|---|---|
+| build | rc=0 |
+| unit | **2250/2250** |
+| `integration-split` | **116/116**（113 + 三条新的 monolith 臂条目） |
+| `integration-gpu`（ID-109 新增步） | **1294/1294**（修复前同机 1157/1294） |
+| 生成器 / 卫生门 | `gen_pipe`、`gen_pipe_field_ownership`、`gen_pipe_dirty_surface` 的 --check/--self-test 与 include 闭包共七项全 rc=0；doc 引用只余 `CONTRACT-P5.md:524` 的既有歧义行 |
+| `integration-split-strict` | **7/116**（预期红，与 fix1 的基线逐数相同；本阶段进度以其"具名标记集合"而非通过数衡量） |
+
+### 设备验证（Redmi `2f7cbe2e`，FCL fordebug + Minecraft 26.3-rc-3 世界 "test"，进世界后 60 s 采样）
+
+| 臂 | 进世界 | fps | draws/帧 | 进程 | Fatal / crash buffer |
+|---|---|---|---|---|---|
+| monolith | 31 s | **263.5** | 845 | 存活 | 无 |
+| inproc | 31 s | **136.1** | 853 | 存活 | 无 |
+| inproc（复跑） | 32 s | **140.3** | 852 | 存活 | 无 |
+
+两臂截图为同一视角同一世界，画面正确。monolith 这一次未被 120 Hz vsync 封顶（与 P5d 的 205.8 那次同类），故**不与 inproc 直接比大小**——本轮问的是"改完还能不能正常跑"，不是配对性能。inproc 的 136-140 与 ID-107 记的 140.0 / 144.9 同档，说明 fix1 触到的那行（臂选择本身，两臂都读）没有拖慢 split 臂。库版本以符号探针确认（`texture-handle-arm` 等四个字符串在 APK 的 `lib/arm64-v8a/libMobileGL.so` 内），不看游戏内的 `GIT@` 戳记——增量构建下它是旧的。
 
 ## 3. P5c 落地内容
 

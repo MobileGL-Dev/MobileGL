@@ -476,3 +476,35 @@ splitctl−push 全部在 ±1.6% 内（增量来自 inproc 传输与 barrier，�
 
 `wait[]` 计数（三轮加入 stats 行）：审查前构建 inproc 30 s 窗口累计 srv=7.56M / srvpark=76k、cli=6.70M / clipark=17k；`SPIN_US=2000` 下 park 各降两个量级、fps 不变——park 已不是主项。持久映射线流量 pmap ≈ 0.36 MB/帧（二轮 0.23，三轮多了首推与脏页排空）。
 
+## 10. P5e（wave 1 `f6cfcbd3` → wave 2 `44f91c74` → fix1 `66621767` → ID-110 `3cc4e1ec`）
+
+P5e 尚未收官（`kMGPipeP5eRunAheadReady` 仍为 false），本节记的是**设备验证一轮**，问题是"八包合并后两条传输臂还能不能正常跑游戏"，不是配对性能。
+
+### 主机门（WSL `~/w7/p5e-int`，split flavour，头 `3cc4e1ec`）
+
+| 门 | `44f91c74` | `3cc4e1ec` |
+|---|---|---|
+| unit | 2250/2250 | **2250/2250** |
+| `integration-split` | 113/113 | **116/116** |
+| `integration-gpu`（两条运行时臂，ID-109 起为常设步） | **1157/1294**（137 SEGFAULT / 38 scenario） | **1294/1294** |
+| `integration-split-strict` | 7/116 | 7/116（预期红） |
+
+`integration-gpu` 那一列是本阶段最重要的一个数：`44f91c74` 的 137 个 SEGFAULT 在当时**没有任何门禁步骤会看到**——`integration-split` 的每一条都导出 `MOBILEGL_TRANSPORT=inproc`，而 push 构建有两条服务端臂。详见 `CURRENT_STAGE_PROGRESS.md` §2.5。
+
+### 设备（Redmi `2f7cbe2e`，FCL fordebug + Minecraft 26.3-rc-3 世界 "test"，VD12，DirectGLES；进世界后 60 s 采样）
+
+| 臂 | 进世界 | fps | draws/帧 | 进程 | Fatal / crash buffer |
+|---|---|---|---|---|---|
+| monolith（`44f91c74`，修复前） | — | — | — | **65 s 后进程消失** | SIGSEGV，栈见 §2.5 |
+| monolith（`3cc4e1ec`） | 31 s | 263.5 | 845 | 存活 | 无 |
+| inproc（`3cc4e1ec`） | 31 s | 136.1 | 853 | 存活 | 无 |
+| inproc 复跑（`3cc4e1ec`） | 32 s | 140.3 | 852 | 存活 | 无 |
+
+monolith 这一次未被 120 Hz vsync 封顶（与 §9 的 205.8 那次同类），两臂 fps 不可直接相比。inproc 的 136-140 与修复前记录的 140.0 / 144.9 同档：fix1 改的那行两臂都读，split 臂没有被拖慢。
+
+### 测量纪律（本轮与上一轮踩到的坑，全部是污染而非代码问题）
+
+- `adb install` 的收尾会在一两分钟后杀掉正在跑的同包进程（`am_kill … due to installPackageLI`）：装包与测量之间必须等到 `dex2oat` 退出。
+- 派给外部 CLI 的任务，其进程会活过 harness 的完成通知；**派出后不得自己再跑同一件事**，否则两套实验同时对一台手机 force-stop / 清 logcat，得出假失败。
+- 不得在脚本正被 bash 执行时修改它（边读边执行）；要改先冻结副本。
+- 游戏内 F3 的 `GIT@` 戳记在增量构建下是旧的，**判断库版本要看 APK 里 `.so` 的符号 / 字符串**，不看戳记。
