@@ -488,6 +488,110 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // TODO: deletion for deleted objects
 
     namespace BufferImpl {
+        // P5e (vi), CONTRACT-P5E §5.1 + §5.8 (ruling 1 / ID-81): THE ARM SELECTOR for this
+        // family, and it is a conjunction on purpose.
+        //
+        //   Transport != Monolith   the record arm exists because there is no frontend VAO on
+        //                           this side of a real split. Under Transport=monolith the
+        //                           push build keeps its frontend arms token for token - that
+        //                           is what the verify comparator compares against, and what
+        //                           makes MOBILEGL_IPC_RUN_AHEAD=0 a pure wait-rule A/B on
+        //                           identical server code rather than an arm swap.
+        //   the family bit          `0x0ff` (bit 7 on, bit 8 off) is a supported A/B and must
+        //                           keep running the legacy vertex-input walk; the bit is
+        //                           already the gate the rest of this family reads.
+        //
+        // It is NOT gated on run-ahead. The records carry the whole family either way, so a
+        // lockstep split session reads them too and the wait rule changes nothing here - which
+        // is the only reason ra can flip one constant at the end of the phase and change no
+        // backend code at all.
+        inline Bool VertexInputReadsRecords() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            return MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                   VertexInputSubsystemEnabled();
+#else
+            return false;
+#endif
+        }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5e (vi): "does this draw fetch any attribute out of the application's own memory",
+        // answered FROM THE RECORD instead of from the frontend VAO. The emitter publishes
+        // Res == kMGPipeNullHandle for a client-memory array (VertexInputEmit.h says so in as
+        // many words: "A client-memory array is Res == kMGPipeNullHandle, and that is not a
+        // hole"), and the window is truncated at the highest ENABLED attribute, so a null Res
+        // inside [Start, Start+Count) is exactly the client-sourced case and nothing else.
+        //
+        // BOTH VIEWS ARE NEEDED, and taking only the buffer one would be wrong in the common
+        // direction: the window covers [0, highest enabled + 1), so a VAO whose attribute 0 is
+        // DISABLED and whose attribute 1 feeds from a VBO publishes entry[0].Res == null too.
+        // A null Res is "client-sourced" only for an attribute the CONFIGURATION has enabled,
+        // which is what the vertex-elements record answers. Reading one view and not the other
+        // would send every such ordinary draw back to the frontend VAO and keep the row this
+        // package is retiring alive for no reason.
+        //
+        // A prefix scan rather than a memo: Count is 1-3 on the measured workload, not 32, and
+        // this replaces a cross-TU accessor call plus a SharedPtr dereference per DrawArrays.
+        Bool AnyClientSideVertexArrayInRecord() {
+            const auto& st = MG_Pipe::MGPipeApplier();
+            if (st.VertexBufferCount == 0) return false;
+            const MG_Pipe::MGPipeHandle elements = st.BoundVertexElements;
+            if (MG_Pipe::MGPipeHandleIsNull(elements) || elements.Slot >= st.VertexElementsCsos.size()) {
+                return false;
+            }
+            const auto& record = st.VertexElementsCsos[elements.Slot];
+            if (!record.Live || record.Gen != elements.Gen) return false;
+
+            const Uint32 begin = st.VertexBufferStart;
+            const Uint32 end = begin + st.VertexBufferCount;
+            for (Uint32 i = begin; i < end && i < MG_Pipe::kMGPipeMaxVertexAttribs; ++i) {
+                if (!record.Attributes[i].Enabled) continue;
+                if (MG_Pipe::MGPipeHandleIsNull(st.VertexBuffers[i].Res)) return true;
+            }
+            return false;
+        }
+
+        // See Managers.h for why these two are named functions over the applier state and
+        // nothing else.
+        Uint ResolveDrawVertexBuffersFromRecord(const MG_Pipe::MGPipeApplierState& st,
+                                                DrawVertexBufferRequest* out, Uint capacity) {
+            Uint count = 0;
+            const Uint32 begin = st.VertexBufferStart;
+            const Uint32 end = begin + st.VertexBufferCount;
+            for (Uint32 i = begin; i < end && i < MG_Pipe::kMGPipeMaxVertexAttribs; ++i) {
+                const MG_Pipe::MGPVertexBuffer& binding = st.VertexBuffers[i];
+                if (MG_Pipe::MGPipeHandleIsNull(binding.Res)) continue;
+
+                // A {slot, gen} compare, not a raw address compare: an address a successor
+                // object can reproduce is the identity hazard this phase exists to remove.
+                Bool alreadySeen = false;
+                for (Uint j = 0; j < count; ++j) {
+                    if (out[j].Res == binding.Res) {
+                        alreadySeen = true;
+                        break;
+                    }
+                }
+                if (alreadySeen) continue;
+                if (count >= capacity) {
+                    MGLOG_E_ONCE("MGPipe: the vertex-buffer window named more distinct buffers than "
+                                 "a draw can hold (%u); the tail is dropped", capacity);
+                    break;
+                }
+                out[count].Res = binding.Res;
+                out[count].BindingIndex = binding.BindingIndex;
+                ++count;
+            }
+            return count;
+        }
+
+        DrawIndexBufferRequest ResolveDrawIndexBufferFromRecord(const MG_Pipe::MGPipeApplierState& st) {
+            DrawIndexBufferRequest request;
+            request.Res = st.IndexBuffer.Res;
+            request.Serial = st.IndexBufferSerial;
+            return request;
+        }
+#endif
+
         void SyncBufferBindingPoints(BufferTarget target, GLenum glTarget) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -784,6 +888,108 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 memo->vboCleanEpoch = 0;
             }
         }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5e (vi), CONTRACT-P5E §5.1: THE SAME MEMO, THE SAME THREE-VALUE KEY, AND A WALK THAT
+        // READS NO FRONTEND AT ALL. The arm above keeps the frontend attribute walk because the
+        // push-monolith build has to keep its bytes (§5.8); this one is what a server with no
+        // client objects on its side runs, and the difference between them is exactly three
+        // substitutions:
+        //
+        //   the walk       st.VertexBuffers[Start .. Start+Count) instead of
+        //                  GetAllAttributes(): the SAME set, because the emitter resolves the
+        //                  attributes on the client and publishes one entry per attribute slot
+        //                  (VertexInputEmit.h's EmitVertexBuffers), with Res == null for a
+        //                  client-memory array and for a disabled slot - which is why the null
+        //                  skip below is not a hole but the record's own "nothing to ensure".
+        //   the dedupe     a {slot, gen} compare instead of a raw address compare. An address
+        //                  a successor object can reproduce is the identity hazard this whole
+        //                  phase is about; a handle cannot be reproduced (Gen moves on reuse).
+        //   the ensure     EnsureBufferResourceForHandle(nullptr, Res). The frontend argument
+        //                  is only ever used for BufferObject::SyncPersistentMappedRange, which
+        //                  that function already skips under a transport (D-N), so passing
+        //                  nullptr removes a read rather than dropping work - and (nullptr, h)
+        //                  is already the live shape of the indirect-buffer ensure two hundred
+        //                  lines below.
+        //
+        // The IBO half lives in SyncNeccessaryBuffers beside the legacy one, for the reason it
+        // always did: the index slot is not part of the configuration (D5).
+        void SyncVaoAttributeBuffersByRecord(
+            VertexArrayImpl::BackendVertexArrayObject::ResolvedDrawBuffers* memo, Uint64 bufferEpoch) {
+            const auto& st = MG_Pipe::MGPipeApplier();
+            const MG_Pipe::MGPipeHandle elements = st.BoundVertexElements;
+            Uint64 elementsSerial = 0;
+            Bool haveElementsRecord = false;
+            if (!MG_Pipe::MGPipeHandleIsNull(elements) && elements.Slot < st.VertexElementsCsos.size()) {
+                const auto& record = st.VertexElementsCsos[elements.Slot];
+                if (record.Live && record.Gen == elements.Gen) {
+                    elementsSerial = record.ContentSerial;
+                    haveElementsRecord = true;
+                }
+            }
+            const Uint64 buffersSerial = st.VertexBuffersSerial;
+
+            // NO LIVE ELEMENTS RECORD IS A MISS, NEVER A HIT - the arm above states the whole
+            // argument (MGPipeApplierReset empties the table at every context change and the
+            // key would then never move again).
+            const Bool memoKeyIsMeaningful = haveElementsRecord;
+
+            if (memo && memo->valid && memoKeyIsMeaningful && memo->elementsHandle == elements &&
+                memo->elementsSerial == elementsSerial && memo->buffersSerial == buffersSerial) {
+                if (memo->vboCleanEpoch != bufferEpoch) {
+                    Bool allClean = true;
+                    for (Uint i = 0; i < memo->count; ++i) {
+                        auto& entry = memo->entries[i];
+                        // nullptr, not entry.frontend: the frontend question inside
+                        // IsBufferDrawCleanByHandle is monolith-only already
+                        // (askTheObjectWhetherItIsMapped), and a raw client address held across
+                        // records is precisely what §4.4 stops the apply thread dereferencing.
+                        if (IsBufferDrawCleanByHandle(entry.handle, entry.resource, nullptr)) continue;
+                        allClean = false;
+                        // Re-ensured BY HANDLE. The legacy repair went back through the memoed
+                        // attribute index to re-read attrib.Buffer; here the entry already
+                        // names the resource the record named, so the repair needs nothing the
+                        // walk did not already have.
+                        entry.resource = EnsureBufferResourceForHandle(nullptr, entry.handle);
+                    }
+                    memo->vboCleanEpoch = allClean ? bufferEpoch : 0;
+                }
+                return;
+            }
+
+            // Full walk, once per distinct buffer, rebuilding the memo as it goes. WHICH
+            // buffers is ResolveDrawVertexBuffersFromRecord's answer and only its answer - see
+            // Managers.h: that separation is what lets a unit case drive the source decision
+            // this package changed without an ES context, and what makes a revert of it visible
+            // rather than duplicated.
+            DrawVertexBufferRequest requests[MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS];
+            const Uint syncedBufferCount = ResolveDrawVertexBuffersFromRecord(
+                st, requests, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS);
+            for (Uint i = 0; i < syncedBufferCount; ++i) {
+                auto* resource = EnsureBufferResourceForHandle(nullptr, requests[i].Res);
+                if (memo) {
+                    auto& entry = memo->entries[i];
+                    // Explicitly cleared rather than left as whatever the previous build of
+                    // this memo stored: nothing on this arm may dereference it, and a stale
+                    // address that merely happens never to be read is the kind of thing a
+                    // later reader takes for a live one.
+                    entry.frontend = nullptr;
+                    entry.attribIndex = static_cast<Uint8>(requests[i].BindingIndex);
+                    entry.resource = resource;
+                    entry.handle = requests[i].Res;
+                }
+            }
+            if (memo) {
+                memo->count = syncedBufferCount;
+                memo->elementsHandle = elements;
+                memo->elementsSerial = elementsSerial;
+                memo->buffersSerial = buffersSerial;
+                memo->valid = memoKeyIsMeaningful;
+                // Rebuilt via the ensure, not probed clean: the next probe pass stamps it.
+                memo->vboCleanEpoch = 0;
+            }
+        }
+#endif // MOBILEGL_BUILD_DISAGGREGATED
 #endif // MOBILEGL_PIPE_PUSH
 
         // `vaoConfigVersion` is the caller's early read of currentVAOObject->GetConfigVersion():
@@ -804,7 +1010,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //   1.VBO 2.IBO (if needed) 3.UBO 4.IndirectBuffer (if needed)
             // PBO is not needed since it should be handled in frontend
 
-            if (!currentVAOObject) {
+            // P5e (vi): on the record arm there is deliberately no frontend VAO to check - the
+            // question "is a VAO bound" is answered by st.BoundVertexElements at the twin
+            // resolve, and a null there already produced a null twin (and therefore a null
+            // memo) before this function was called. Asking for an object this side does not
+            // have would make every split draw log and return.
+            if (!currentVAOObject && !VertexInputReadsRecords()) {
                 MGLOG_E_ONCE("No VAO is currently bound, cannot sync necessary buffers.");
                 return;
             }
@@ -825,6 +1036,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Uint64 bufferEpoch = CurrentBufferMutationEpoch();
             auto* memo = vaoTwin ? &vaoTwin->GetResolvedDrawBuffersMemo() : nullptr;
             const Uint32 configVersion = vaoConfigVersion;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (VertexInputReadsRecords()) {
+                SyncVaoAttributeBuffersByRecord(memo, bufferEpoch);
+            } else
+#endif
 #if MOBILEGL_PIPE_PUSH
             if (VertexInputSubsystemEnabled()) {
                 SyncVaoAttributeBuffersByHandle(currentVAOObject, memo, bufferEpoch);
@@ -894,47 +1110,88 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the config version). A stale identity hit is impossible in effect: the
             // clean probe re-validates the resource against the LIVE bound object.
             if (includeIBO) {
-                const auto& possibleIBO = currentVAOObject->GetIndexBufferBindingSlot().GetBoundObject();
-                if (possibleIBO) {
-                    // The epoch stamp alone is NOT enough here: the index slot can
-                    // rebind another buffer with no epoch (and no config-version) move,
-                    // so the identity compare always runs; only the clean PROBE is
-                    // elided while the stamp holds.
-#if MOBILEGL_PIPE_PUSH
-                    if (ResourceSubsystemEnabled()) {
-                        // Same three cases, with the identity re-keyed off the raw frontend
-                        // address onto the resource's {slot, gen} (D-G4).
-                        const MG_Pipe::MGPipeHandle iboHandle = HandleOfBuffer(possibleIBO.get());
-                        if (memo && memo->iboHandle == iboHandle && memo->iboCleanEpoch == bufferEpoch) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P5e (vi), CONTRACT-P5E §5.1: the index buffer is st.IndexBuffer.Res and the
+                // "has it moved" question is st.IndexBufferSerial. The identity compare stays -
+                // it always did, because the index slot is outside the configuration version
+                // (D5) - but it now compares a handle the RECORD named instead of a frontend
+                // address the slot was probed for, and the serial joins it because this arm has
+                // no live slot to re-read: see ResolvedDrawBuffers::iboSerial in Managers.h.
+                //
+                // A null Res is "no element buffer bound" and is a no-op here exactly as the
+                // absent `possibleIBO` is below: SyncToBackendFromApplier is what binds
+                // GL_ELEMENT_ARRAY_BUFFER back to 0 for such a draw, and it keys on the same
+                // serial.
+                if (VertexInputReadsRecords()) {
+                    const DrawIndexBufferRequest request =
+                        ResolveDrawIndexBufferFromRecord(MG_Pipe::MGPipeApplier());
+                    const MG_Pipe::MGPipeHandle iboHandle = request.Res;
+                    const Uint64 iboSerial = request.Serial;
+                    if (!MG_Pipe::MGPipeHandleIsNull(iboHandle)) {
+                        const Bool identityHolds =
+                            memo != nullptr && memo->iboHandle == iboHandle && memo->iboSerial == iboSerial;
+                        if (identityHolds && memo->iboCleanEpoch == bufferEpoch) {
                             // probed fully clean at this epoch; nothing can have dirtied it
-                        } else if (memo && memo->iboHandle == iboHandle &&
-                                   IsBufferDrawCleanByHandle(iboHandle, memo->iboResource,
-                                                             possibleIBO.get())) {
+                        } else if (identityHolds &&
+                                   IsBufferDrawCleanByHandle(iboHandle, memo->iboResource, nullptr)) {
                             memo->iboCleanEpoch = bufferEpoch;
                         } else {
-                            auto* resource = EnsureBufferResource(possibleIBO);
+                            auto* resource = EnsureBufferResourceForHandle(nullptr, iboHandle);
                             if (memo) {
                                 memo->iboHandle = iboHandle;
-                                memo->iboFrontend = possibleIBO.get();
+                                memo->iboSerial = iboSerial;
+                                memo->iboFrontend = nullptr; // see Entry::frontend's note
                                 memo->iboResource = resource;
                                 // Repaired, not probed clean: stamp on the next clean probe.
                                 memo->iboCleanEpoch = 0;
                             }
                         }
-                    } else
+                    }
+                } else
 #endif
-                    if (memo && memo->iboFrontend == possibleIBO.get() && memo->iboCleanEpoch == bufferEpoch) {
-                        // probed fully clean at this epoch; nothing can have dirtied it
-                    } else if (memo && memo->iboFrontend == possibleIBO.get() &&
-                               IsBufferDrawClean(memo->iboFrontend, memo->iboResource)) {
-                        memo->iboCleanEpoch = bufferEpoch;
-                    } else {
-                        auto* resource = EnsureBufferResource(possibleIBO);
-                        if (memo) {
-                            memo->iboFrontend = possibleIBO.get();
-                            memo->iboResource = resource;
-                            // Repaired, not probed clean: stamp on the next clean probe.
-                            memo->iboCleanEpoch = 0;
+                {
+                    const auto& possibleIBO = currentVAOObject->GetIndexBufferBindingSlot().GetBoundObject();
+                    if (possibleIBO) {
+                        // The epoch stamp alone is NOT enough here: the index slot can
+                        // rebind another buffer with no epoch (and no config-version) move,
+                        // so the identity compare always runs; only the clean PROBE is
+                        // elided while the stamp holds.
+#if MOBILEGL_PIPE_PUSH
+                        if (ResourceSubsystemEnabled()) {
+                            // Same three cases, with the identity re-keyed off the raw frontend
+                            // address onto the resource's {slot, gen} (D-G4).
+                            const MG_Pipe::MGPipeHandle iboHandle = HandleOfBuffer(possibleIBO.get());
+                            if (memo && memo->iboHandle == iboHandle && memo->iboCleanEpoch == bufferEpoch) {
+                                // probed fully clean at this epoch; nothing can have dirtied it
+                            } else if (memo && memo->iboHandle == iboHandle &&
+                                       IsBufferDrawCleanByHandle(iboHandle, memo->iboResource,
+                                                                 possibleIBO.get())) {
+                                memo->iboCleanEpoch = bufferEpoch;
+                            } else {
+                                auto* resource = EnsureBufferResource(possibleIBO);
+                                if (memo) {
+                                    memo->iboHandle = iboHandle;
+                                    memo->iboFrontend = possibleIBO.get();
+                                    memo->iboResource = resource;
+                                    // Repaired, not probed clean: stamp on the next clean probe.
+                                    memo->iboCleanEpoch = 0;
+                                }
+                            }
+                        } else
+#endif
+                        if (memo && memo->iboFrontend == possibleIBO.get() && memo->iboCleanEpoch == bufferEpoch) {
+                            // probed fully clean at this epoch; nothing can have dirtied it
+                        } else if (memo && memo->iboFrontend == possibleIBO.get() &&
+                                   IsBufferDrawClean(memo->iboFrontend, memo->iboResource)) {
+                            memo->iboCleanEpoch = bufferEpoch;
+                        } else {
+                            auto* resource = EnsureBufferResource(possibleIBO);
+                            if (memo) {
+                                memo->iboFrontend = possibleIBO.get();
+                                memo->iboResource = resource;
+                                // Repaired, not probed clean: stamp on the next clean probe.
+                                memo->iboCleanEpoch = 0;
+                            }
                         }
                     }
                 }
@@ -1599,14 +1856,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // legacy arm that is TwinLookupMemo's contract, and on the {slot, gen} arm it is
         // simply that nothing but the sweep frees a slot and the sweep only takes slots
         // whose frontend object is already gone.
+        // MONOLITH GLUE AS OF P5e (vi), CONTRACT-P5E §4.1 / §5.8, AND THE SCOPE IS GONE WITH THE
+        // DEBT IT NAMED. This overload is reached only when there IS a frontend VAO to resolve
+        // from, i.e. from the push-monolith and legacy arms of PrepareForDraw; a live transport
+        // takes ResolveVaoTwin(st.BoundVertexElements) instead (Managers.cpp, id's body). The
+        // MGPipeFrontendKeyedRegistryScope that used to wrap this - one of the three scope sites
+        // this family owned - is DELETED rather than narrowed, and that deletion is what makes
+        // the revert loud: putting `Find(vao.get())` back on the transport arm now aborts
+        // Fatal{RoleViolation, "MGPipeSlots"} from HandleOf instead of being quietly exempted.
         BackendVertexArrayObject* ResolveVaoTwin(const SharedPtr<MG_State::GLState::VertexArrayObject>& vao) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
-#endif
-#if MOBILEGL_BUILD_DISAGGREGATED
-            // P5c (G6, CONTRACT-P5C §5.4): frontend-keyed twin resolution, named debt inside
-            // the scope - P3b/P4b rekeys the registry onto handles.
-            const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
 #endif
 #if MOBILEGL_PIPE_PUSH
             if (EsprytSlotTablesEnabled()) {
@@ -1653,6 +1913,84 @@ namespace MobileGL::MG_Backend::DirectGLES {
             vaoTwin->SyncToBackend(currentVAOObject);
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5e (vi): the record arm's entry, and it takes NO frontend object - CONTRACT-P5E §4.1
+        // ("the object parameter is deleted from the transport overload, not defaulted to
+        // null"). A null twin here is the null BoundVertexElements, i.e. "no VAO bound", which
+        // PrepareForDraw turns into BindBackendVAOId(0) exactly as a null frontend VAO did;
+        // logging about it would fire on every draw of a session that legitimately has no
+        // vertex-elements CSO yet.
+        void SyncCurrentVAOFromRecords(BackendVertexArrayObject* vaoTwin) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            // Kept for symmetry with the overload above and free on this arm: the slot table's
+            // sweep is a no-op (Managers.h's CollectGarbageIfNeeded on the handle registry).
+            g_backendVertexArrayObjects.CollectGarbageIfNeeded();
+            if (!vaoTwin) return;
+            vaoTwin->SyncToBackendFromApplier();
+        }
+#endif // MOBILEGL_BUILD_DISAGGREGATED
+
+        // THE CLIENT-MEMORY VERTEX ARRAY UPLOAD, and the one read of this family that P5e does
+        // NOT retire - it MOVES the decision instead, which is what ID-82 / ruling 2 settles.
+        //
+        // The bytes of a client-memory array exist only in the application's own memory: the
+        // emitter publishes Res == kMGPipeNullHandle for such an attribute by design
+        // (VertexInputEmit.h) and this upload is where the server used to dereference
+        // attrib.Offset as a raw client pointer (Managers.cpp's
+        // SyncClientSideAttributesForDrawArrays, kimi audit row 14). Under run-ahead those bytes
+        // are movable and the read is torn by construction, so the CLIENT refuses the draw by
+        // name before it is ever emitted (EmitTables.cpp, Fatal{UnmigratedVerb,
+        // "DrawArrays+CLIENT_ARRAYS"}); staging them as a record tail is P8's.
+        //
+        // What is left here is therefore reachable in exactly two situations, and both are safe:
+        //   * monolith / the push-monolith build  - one process, one thread, no wire;
+        //   * a LOCKSTEP split session            - the client is parked in WaitForApplied for
+        //                                           this very record, so its memory is stable
+        //                                           (rule F is scoped to unbarriered records,
+        //                                           ruling 4). Escalation (ii) of §2.1 pins the
+        //                                           same thing from the other side: a draw
+        //                                           carrying kDrawClientArrays is BARRIERED.
+        // Making it monolith-only instead would silently drop the attribute upload of a
+        // lockstep split session, which is a wrong picture today - before ra has landed
+        // anything - so the refusal is the client's to raise, not this arm's to assume.
+        //
+        // The frontend VAO is taken ONLY when the applier's own vertex-buffer window says a
+        // client-sourced attribute exists, which is what retires the per-draw
+        // GetBoundVertexArray row of the ordinary (VBO-backed) DrawArrays - the strict lane's
+        // `GetBoundVertexArray@DrawArrays` marker - without touching this path's behaviour.
+        // `static` on purpose (G1): the pull build must not gain an exported name for a
+        // function that only re-homes two identical inline blocks the two DrawArrays entry
+        // points used to carry.
+        static void SyncClientSideVertexArraysForDrawArrays(GLint first, GLsizei count) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (BufferImpl::VertexInputReadsRecords()) {
+                if (!BufferImpl::AnyClientSideVertexArrayInRecord()) return;
+                if (MG_Pipe::MGPipeApplierIsUnbarrieredApply()) {
+                    MGLOG_F("MGPipe: Fatal{RoleViolation, \"MGPipeSlots\"} - a draw carrying a "
+                            "client-memory vertex array is being applied UNBARRIERED. Both the "
+                            "client's refusal (Fatal{UnmigratedVerb, \"DrawArrays+CLIENT_ARRAYS\"}) "
+                            "and escalation (ii) of CONTRACT-P5E §2.1 exist to make this "
+                            "unreachable; the bytes below are the application's and are moving");
+                    std::abort();
+                }
+                auto* twin = ResolveVaoTwin(MG_Pipe::MGPipeApplier().BoundVertexElements);
+                if (twin == nullptr) return;
+                const auto& currentVAO = MGB_CTX->GetBoundVertexArray();
+                if (!currentVAO) return;
+                twin->SyncClientSideAttributesForDrawArrays(currentVAO, first, count);
+                return;
+            }
+#endif
+            const auto& currentVAO = MGB_CTX->GetBoundVertexArray();
+            if (!currentVAO) return;
+            auto* backendVAOSlot = g_backendVertexArrayObjects.Find(currentVAO.get());
+            if (backendVAOSlot && *backendVAOSlot) {
+                (*backendVAOSlot)->SyncClientSideAttributesForDrawArrays(currentVAO, first, count);
+            }
+        }
+
         // GL: a shader input whose generic attribute array is DISABLED reads that attribute's *current
         // value* (context state set by glVertexAttrib*, default (0,0,0,1)) rather than any buffer.
         // MobileGL stores those values in MG_State only, so without this step the ES driver would feed
@@ -1665,9 +2003,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             if (!program) return;
+            if (!vaoTwin) return;
 
-            const auto& vao = MGB_CTX->GetBoundVertexArray();
-            if (!vao || !vaoTwin) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5e (vi), CONTRACT-P5E §5.1: the bound-VAO row is retired here. On the record arm
+            // the twin IS the bound vertex-elements CSO (the caller resolved it from
+            // st.BoundVertexElements), so "is a VAO bound" is already answered by vaoTwin being
+            // non-null and GetBoundVertexArray() has nothing left to add.
+            //
+            // WHAT IS NOT RETIRED HERE, and it is S4/pg's not vi's: the two program reads below
+            // (GetActiveAttributeLocationMask, GetAttribType). They are frontend object rows of
+            // the PROGRAM family and stay until pg carries the attribute mask and types in the
+            // ShaderCso record. Until then this function is still a frontend reader on the
+            // apply thread - a BARRIERED one, which is legal (§4.4 / ruling 4) and is why vi
+            // does its half now rather than waiting: the VAO half is what this package owns and
+            // leaving it would keep GetBoundVertexArray alive for a reason that is not the
+            // program's.
+            const Bool fromRecords = BufferImpl::VertexInputReadsRecords();
+            const MG_Pipe::MGPipeVertexElementsRecord* elementsRecord = nullptr;
+            MG_Pipe::MGPipeHandle elementsHandle = MG_Pipe::kMGPipeNullHandle;
+            Uint64 elementsSerial = 0;
+            if (fromRecords) {
+                const auto& st = MG_Pipe::MGPipeApplier();
+                elementsHandle = st.BoundVertexElements;
+                if (!MG_Pipe::MGPipeHandleIsNull(elementsHandle) &&
+                    elementsHandle.Slot < st.VertexElementsCsos.size()) {
+                    const auto& record = st.VertexElementsCsos[elementsHandle.Slot];
+                    if (record.Live && record.Gen == elementsHandle.Gen) {
+                        elementsRecord = &record;
+                        elementsSerial = record.ContentSerial;
+                    }
+                }
+                // No record is "the configuration was never described": there is nothing to
+                // decide which locations lack an array from, and guessing would either
+                // re-issue every current value every draw or silently skip the ones that need
+                // it. The next create_vertex_elements re-opens the memo by serial.
+                if (elementsRecord == nullptr) return;
+            }
+#else
+            constexpr Bool fromRecords = false;
+#endif
+
+            const SharedPtr<MG_State::GLState::VertexArrayObject> noVao;
+            const auto& vao = fromRecords ? noVao : MGB_CTX->GetBoundVertexArray();
+            if (!fromRecords && !vao) return;
 
             const Uint32 activeAttribMask = program->GetActiveAttributeLocationMask();
             if (activeAttribMask == 0) return;
@@ -1680,17 +2059,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // cycled section VAOs, re-reading the cold attribute slots each time; here a
             // cycle re-hits every VAO's own entry. The rebuild visits only ACTIVE locations.
             auto& memo = vaoTwin->GetPendingAttribValueMaskMemo();
-            const Uint32 configVersion = vao->GetConfigVersion();
-            if (!memo.valid || configVersion != memo.configVersion || activeAttribMask != memo.activeMask) {
-                Uint32 pending = 0;
-                for (Uint32 remaining = activeAttribMask; remaining != 0; remaining &= remaining - 1) {
-                    const Uint32 location = static_cast<Uint32>(std::countr_zero(remaining));
-                    if (!vao->GetAttribute(location).Enabled) pending |= (1u << location);
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (fromRecords) {
+                // The re-keyed memo: {elementsHandle, ContentSerial, activeMask}. Every
+                // Enable/DisableVertexAttribArray moves the frontend configuration version, the
+                // client re-emits create_vertex_elements on the same handle for it, and the
+                // applier ++s ContentSerial - so this key opens exactly when the old one did
+                // and never wraps (Managers.h states the strictly-stronger argument).
+                if (!memo.valid || !(memo.elementsHandle == elementsHandle) ||
+                    memo.elementsSerial != elementsSerial || activeAttribMask != memo.activeMask) {
+                    Uint32 pending = 0;
+                    for (Uint32 remaining = activeAttribMask; remaining != 0; remaining &= remaining - 1) {
+                        const Uint32 location = static_cast<Uint32>(std::countr_zero(remaining));
+                        // rec->Attributes[] IS what was last pushed for this configuration; the
+                        // record carries all 32 slots and zeroes the tail
+                        // (MGPipeApplyCreateVertexElements), so a location past AttributeCount
+                        // reads Enabled = 0, which is the same answer the frontend's cold
+                        // attribute slot gave.
+                        if (location >= MG_Pipe::kMGPipeMaxVertexAttribs ||
+                            !elementsRecord->Attributes[location].Enabled) {
+                            pending |= (1u << location);
+                        }
+                    }
+                    memo.elementsHandle = elementsHandle;
+                    memo.elementsSerial = elementsSerial;
+                    memo.activeMask = activeAttribMask;
+                    memo.pendingMask = pending;
+                    memo.valid = true;
                 }
-                memo.configVersion = configVersion;
-                memo.activeMask = activeAttribMask;
-                memo.pendingMask = pending;
-                memo.valid = true;
+            } else
+#endif
+            {
+                const Uint32 configVersion = vao->GetConfigVersion();
+                if (!memo.valid || configVersion != memo.configVersion ||
+                    activeAttribMask != memo.activeMask) {
+                    Uint32 pending = 0;
+                    for (Uint32 remaining = activeAttribMask; remaining != 0; remaining &= remaining - 1) {
+                        const Uint32 location = static_cast<Uint32>(std::countr_zero(remaining));
+                        if (!vao->GetAttribute(location).Enabled) pending |= (1u << location);
+                    }
+                    memo.configVersion = configVersion;
+                    memo.activeMask = activeAttribMask;
+                    memo.pendingMask = pending;
+                    memo.valid = true;
+                }
             }
             if (memo.pendingMask == 0) return;
 
@@ -4767,12 +5179,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // resolved-buffers memo on the twin), the VAO sync and the draw-time bind
         // below. Nothing in between can invalidate it — the bound VAO is pinned by
         // the context, and no step here erases or replaces a live VAO's twin.
-        const auto& currentVAO = MGB_CTX->GetBoundVertexArray();
-        VertexArrayImpl::BackendVertexArrayObject* vaoTwin =
-            currentVAO ? VertexArrayImpl::ResolveVaoTwin(currentVAO) : nullptr;
-        // Early config-version read: see the note on SyncNeccessaryBuffers - issuing
-        // the (cold-line) load here overlaps its miss with the resolves below.
-        const Uint32 vaoConfigVersion = currentVAO ? currentVAO->GetConfigVersion() : 0;
+        //
+        // P5e (vi), CONTRACT-P5E §4.2 / §5.1: under a transport the twin is resolved from
+        // st.BoundVertexElements - THE SAME HANDLE the frontend probe used to mint, since
+        // EmitVertexElements acquires it off the VAO's own lifetime id - and neither the bound
+        // VAO row nor the configuration version is read at all. `currentVAO` stays null on that
+        // arm, which is what the two callees' record arms expect; the null twin case (no
+        // vertex-elements CSO bound) reaches the same BindBackendVAOId(0) below that a null
+        // frontend VAO always did.
+        const Bool vertexInputFromRecords = BufferImpl::VertexInputReadsRecords();
+        const SharedPtr<MG_State::GLState::VertexArrayObject> noFrontendVao;
+        const auto& currentVAO = vertexInputFromRecords ? noFrontendVao : MGB_CTX->GetBoundVertexArray();
+        VertexArrayImpl::BackendVertexArrayObject* vaoTwin = nullptr;
+        Uint32 vaoConfigVersion = 0;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (vertexInputFromRecords) {
+            vaoTwin = VertexArrayImpl::ResolveVaoTwin(MG_Pipe::MGPipeApplier().BoundVertexElements);
+        } else
+#endif
+        {
+            vaoTwin = currentVAO ? VertexArrayImpl::ResolveVaoTwin(currentVAO) : nullptr;
+            // Early config-version read: see the note on SyncNeccessaryBuffers - issuing
+            // the (cold-line) load here overlaps its miss with the resolves below. DEAD on the
+            // record arm: SyncNeccessaryBuffers only reads it in the legacy branch.
+            vaoConfigVersion = currentVAO ? currentVAO->GetConfigVersion() : 0;
+        }
         // One program resolve and one texture-key capture serve the whole draw, for
         // the same reason the twin resolve does: only frontend GL entry points move
         // either, and none can run inside this preparation. GetProgramForDraw is a
@@ -4785,14 +5216,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // counted by the callees that are instrumented; the rest is not counted (see
             // the inventory in PipeStats.cpp).
             MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::Draws, 1);
-            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 2);
+            // ONE on the record arm, not two: P5e (vi) retired the bound-VAO accessor call and
+            // the ledger has to say so, or the phase's own "accessor calls per draw" number
+            // would keep counting a read that no longer happens.
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls,
+                                         vertexInputFromRecords ? 1 : 2);
         }
         const TextureImpl::DrawTextureSyncKeys textureKeys = TextureImpl::CaptureDrawTextureSyncKeys();
 
         BufferImpl::SyncNeccessaryBuffers(currentVAO, vaoTwin, vaoConfigVersion,
                                           syncBit & DrawSyncBit::IndexBuffer,
                                           syncBit & DrawSyncBit::IndirectBuffer);
-        VertexArrayImpl::SyncCurrentVAO(currentVAO, vaoTwin);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (vertexInputFromRecords) {
+            VertexArrayImpl::SyncCurrentVAOFromRecords(vaoTwin);
+        } else
+#endif
+        {
+            VertexArrayImpl::SyncCurrentVAO(currentVAO, vaoTwin);
+        }
         TextureImpl::SyncNeccessaryTextures(textureKeys);
         // A draw reads and writes through its image units too, so the unit bindings have to be
         // as current as the sampled ones. Gated (see the sweep): a program with no image binding
@@ -6444,8 +6886,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
+        // MONOLITH GLUE, AND LOUD ABOUT IT AS OF P5e (vi). CONTRACT-P5E §5.1 makes the restart
+        // substitution read st.IndexBuffer.Res, and the constructor above already does: its
+        // transport arm resolves the element buffer and the bytes from the applier and its own
+        // staged shadow (P5c hd), and it sets serverElementBinding >= 0 BEFORE the null test,
+        // so the tail at BoundElementArrayBufferId() is unreachable with a live transport.
+        // These two are therefore only called from the monolith branch - and the refusal below
+        // is what keeps that a fact rather than a reading: a future caller that reaches them
+        // from the apply thread aborts by name instead of pulling GetBoundVertexArray behind
+        // the family's back.
+        void RefuseElementArrayBufferFromTheFrontend(const char* entry) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+            if (!BufferImpl::VertexInputReadsRecords()) return;
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"MGPipeSlots\"} - %s read the frontend VAO's "
+                    "element-array slot with a live transport. The index buffer of this family is "
+                    "MGPipeApplier().IndexBuffer.Res (CONTRACT-P5E §5.1); the frontend slot is "
+                    "monolith glue and answers for whatever the CLIENT has bound now, not for the "
+                    "record this draw is being applied from",
+                    entry);
+            std::abort();
+#else
+            (void)entry;
+#endif
+        }
+
         const SharedPtr<MG_State::GLState::BufferObject>& BoundElementArrayBuffer() {
             static const SharedPtr<MG_State::GLState::BufferObject> none;
+            RefuseElementArrayBufferFromTheFrontend("BoundElementArrayBuffer");
             const auto& vao = MGB_CTX->GetBoundVertexArray();
             if (!vao) return none;
             return vao->GetIndexBufferBindingSlot().GetBoundObject();
@@ -6454,6 +6922,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The GL name PrepareForDraw left on GL_ELEMENT_ARRAY_BUFFER, i.e. what the
         // substitution has to put back.
         Uint BoundElementArrayBufferId() {
+            RefuseElementArrayBufferFromTheFrontend("BoundElementArrayBufferId");
             const auto& ibo = BoundElementArrayBuffer();
             if (!ibo) return 0;
             const auto* resource = BufferImpl::EnsureBufferResource(ibo);
@@ -6721,18 +7190,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
         DrawSyncFlags syncBit = DrawSyncBit::None;
         PrepareForDraw(syncBit);
-        const auto& currentVAO = MGB_CTX->GetBoundVertexArray();
-        if (currentVAO) {
-#if MOBILEGL_BUILD_DISAGGREGATED
-            // P5c (G6, CONTRACT-P5C §5.4): frontend-keyed twin resolution, named debt inside
-            // the scope - P3b/P4b rekeys the registry onto handles.
-            const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
-#endif
-            auto* backendVAOSlot = VertexArrayImpl::g_backendVertexArrayObjects.Find(currentVAO.get());
-            if (backendVAOSlot && *backendVAOSlot) {
-                (*backendVAOSlot)->SyncClientSideAttributesForDrawArrays(currentVAO, first, count);
-            }
-        }
+        VertexArrayImpl::SyncClientSideVertexArraysForDrawArrays(first, count);
         ForEachViewportRoutingPass([&] {
             g_GLESFuncs.glDrawArrays(mode, first, count);
         });
@@ -6765,20 +7223,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // ladder and the indirect executors do. Without it every sub-draw of a
         // glMultiDrawArrays read draw index 0.
         const Bool feedDrawID = CurrentProgramReadsDrawID();
-        const auto& currentVAO = MGB_CTX->GetBoundVertexArray();
         for (GLsizei i = 0; i < drawcount; ++i) {
             // Client-side arrays are uploaded per sub-draw range, like the single DrawArrays path.
-            if (currentVAO) {
-#if MOBILEGL_BUILD_DISAGGREGATED
-                // P5c (G6, CONTRACT-P5C §5.4): frontend-keyed twin resolution, named debt
-                // inside the scope - P3b/P4b rekeys the registry onto handles.
-                const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
-#endif
-                auto* backendVAOSlot = VertexArrayImpl::g_backendVertexArrayObjects.Find(currentVAO.get());
-                if (backendVAOSlot && *backendVAOSlot) {
-                    (*backendVAOSlot)->SyncClientSideAttributesForDrawArrays(currentVAO, first[i], count[i]);
-                }
-            }
+            VertexArrayImpl::SyncClientSideVertexArraysForDrawArrays(first[i], count[i]);
             if (feedDrawID) SetCurrentDrawID(static_cast<Uint32>(i));
             ForEachViewportRoutingPass([&] {
                 g_GLESFuncs.glDrawArrays(mode, first[i], count[i]);

@@ -789,6 +789,52 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // AcquirePersistentMap or (FLUSH_EXPLICIT) publish only via FlushMappedRange.
         Uint64 CurrentBufferMutationEpoch();
         void BumpBufferMutationEpoch();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5e (vi), CONTRACT-P5E §5.1's first pin: how many bumps came from a thread other than
+        // the apply thread WHILE an apply thread was running, under a live transport. The
+        // record arm's clean gate stamps this counter and skips its probes while the stamp
+        // holds, so "who may move it" is a question the phase has to answer with a number
+        // rather than with a reading of the call graph. Expected 0 for any session; the bump
+        // itself is Fatal on that path under the strict lane, and the answer at this head is
+        // that the only non-apply-thread bump in the tree happens at bring-up, BEFORE the apply
+        // thread exists (BackendObject_DirectGLES::Initialize's RegisterBufferBackendOps), and
+        // is therefore not counted here.
+        Uint64 BufferMutationEpochBumpsOffTheApplyThread();
+
+        // ---- P5e (vi): THE TWO SOURCE DECISIONS OF THE DRAW'S BUFFER SYNC ------------------
+        //
+        // CONTRACT-P5E §5.1 is, for this family, two substitutions and nothing else: the
+        // attribute walk's buffer set comes from st.VertexBuffers[Start..+Count) instead of the
+        // frontend VAO's GetAllAttributes(), and the index buffer comes from st.IndexBuffer.Res
+        // + IndexBufferSerial instead of the VAO's element slot. Both are lifted out of
+        // SyncNeccessaryBuffers' arms and given names HERE, and the reason is the red-once:
+        // these take the applier state AND NOTHING ELSE, so the only way to revert the
+        // substitution is to put a frontend read back inside one of them, and
+        // MG_Test/SanityTest.cpp drives exactly these two with a frontend VAO deliberately
+        // pointing somewhere else. A test that drove a copy of the decision instead would stay
+        // green through that revert, which is the fake-green ID-102 names.
+        //
+        // The ensure, the memo and the clean probe stay where they are: they need an ES context
+        // and are the integration lane's to exercise.
+        struct DrawVertexBufferRequest {
+            MG_Pipe::MGPipeHandle Res = MG_Pipe::kMGPipeNullHandle;
+            // MGPVertexBuffer::BindingIndex, carried for the memo's diagnostics only.
+            Uint32 BindingIndex = 0;
+        };
+        // The DISTINCT buffers the draw's enabled attributes fetch from, deduped on {slot, gen}.
+        // A null Res is skipped: it is a disabled slot below the window's high-water mark, or a
+        // client-memory array whose bytes have no store to ensure (P8 stages those).
+        Uint ResolveDrawVertexBuffersFromRecord(const MG_Pipe::MGPipeApplierState& st,
+                                                DrawVertexBufferRequest* out, Uint capacity);
+
+        struct DrawIndexBufferRequest {
+            MG_Pipe::MGPipeHandle Res = MG_Pipe::kMGPipeNullHandle;
+            // IndexBufferSerial, which joins the identity compare because this arm has no live
+            // frontend slot to re-read - see ResolvedDrawBuffers::iboSerial.
+            Uint64 Serial = 0;
+        };
+        DrawIndexBufferRequest ResolveDrawIndexBufferFromRecord(const MG_Pipe::MGPipeApplierState& st);
+#endif
 
         // The DirectGLES storage behind one frontend buffer. Owned (refcounted) by
         // the frontend BufferObject; immediate BufferBackendOps keep it current, so
@@ -1203,6 +1249,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             BackendVertexArrayObject();
             ~BackendVertexArrayObject();
             void SyncToBackend(const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject);
+#if MOBILEGL_PIPE_PUSH
+            // PUBLIC AS OF P5e (vi), and the move is the point rather than a convenience: with
+            // a live transport there is no frontend VAO on this side to hand to the overload
+            // above, so VertexArrayImpl::SyncCurrentVAOFromRecords calls this ENTRY directly
+            // instead of passing a null SharedPtr into a function whose signature promises one.
+            // CONTRACT-P5E §4.1's rule ("the object parameter is deleted from the transport
+            // overload, not defaulted to null") is what this obeys. The body is unchanged and
+            // was already record-only - it is this family's existence proof (scout S1 §2).
+            void SyncToBackendFromApplier();
+#endif
             void SyncClientSideAttributesForDrawArrays(
                 const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject, GLint first, GLsizei count);
             Uint GetBackendVertexArrayId() const { return m_backendVAOId; }
@@ -1222,6 +1278,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // and is not covered by the config version).
             struct ResolvedDrawBuffers {
                 struct Entry {
+                    // MONOLITH GLUE AFTER P5e (vi), CONTRACT-P5E §5.1: the RECORD arm
+                    // (SyncVaoAttributeBuffersByRecord) never writes this and never reads it -
+                    // it stores nullptr and hands nullptr to IsBufferDrawCleanByHandle, whose
+                    // frontend question is itself monolith-only (Managers.cpp's
+                    // askTheObjectWhetherItIsMapped). It stays DECLARED because the legacy arm
+                    // and the push-monolith arm still key on it and because moving it would
+                    // move sizeof(ResolvedDrawBuffers) in the pull build (G1). That also
+                    // retires, on the split arm, the dangling-pointer hazard the note below
+                    // has to state.
                     MG_State::GLState::BufferObject* frontend = nullptr;
                     // A RAW TWIN POINTER, AND IT MAY DANGLE - the invariant that makes that safe
                     // is stated here rather than left in the two callers (espryt-v3 §8, m8).
@@ -1240,6 +1305,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // owning a reference from a per-draw memo - is what keeps a dead driver
                     // buffer alive, which is the leak class P2's death notice exists to remove.
                     BufferImpl::GLESBufferResource* resource = nullptr;
+                    // P5e (vi): on the record arm this is the BINDING index the applier's
+                    // vertex-buffer entry carried (MGPVertexBuffer::BindingIndex, which for
+                    // Espryt's resolved attributes IS the attribute index) and it is kept for
+                    // DIAGNOSTICS only - that arm's repair re-ensures by `handle`, never by
+                    // walking back into a frontend attribute slot.
                     Uint8 attribIndex = 0;
 #if MOBILEGL_PIPE_PUSH
                     // P3a re-key: the entry's identity on the handle arm. A {slot, gen} cannot
@@ -1266,6 +1336,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Uint64 elementsSerial = 0;
                 Uint64 buffersSerial = 0;
                 MG_Pipe::MGPipeHandle iboHandle = MG_Pipe::kMGPipeNullHandle;
+                // P5e (vi), CONTRACT-P5E §5.1: the index slot's own server-owned serial, and
+                // the reason it has to join the identity compare is the one D5 gives for the
+                // slot version - the ELEMENT BUFFER IS NOT PART OF THE CONFIGURATION. The
+                // legacy and push-monolith arms re-read the frontend slot on every indexed
+                // draw and so notice a rebind for free; the record arm reads nothing, so
+                // "the applier was told about this index buffer again" has to be a value in
+                // the key. A rebind of the SAME handle still moves IndexBufferSerial
+                // (MGPipeApplySetIndexBuffer bumps unconditionally), which is exactly the
+                // case an identity-only compare would call a hit: a client that respecified
+                // the store behind an unchanged {slot, gen} re-emits set_index_buffer and
+                // this is what re-opens the ensure.
+                Uint64 iboSerial = 0;
 #endif
                 // Buffer-mutation epoch (BufferImpl::CurrentBufferMutationEpoch) at which
                 // the LAST probe pass found every entry / the IBO clean; 0 = not stamped
@@ -1290,6 +1372,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Uint32 configVersion = 0;
                 Uint32 activeMask = 0;
                 Uint32 pendingMask = 0;
+#if MOBILEGL_PIPE_PUSH
+                // P5e (vi), CONTRACT-P5E §5.1: the record arm's half of the key. It replaces
+                // the frontend VAO's configuration version with the bound vertex-elements CSO's
+                // identity and its server-owned content serial, and the substitution is
+                // STRICTLY STRONGER rather than merely equivalent: GetConfigVersion() is a
+                // wrapping Uint16-derived counter shared by every VAO, while every
+                // configuration change re-creates the record on the same handle and ++s
+                // ContentSerial (PipeApply.h's MGPipeVertexElementsRecord), and a DIFFERENT VAO
+                // is a different {slot, gen} rather than another value of the same counter.
+                MG_Pipe::MGPipeHandle elementsHandle = MG_Pipe::kMGPipeNullHandle;
+                Uint64 elementsSerial = 0;
+#endif
             };
             PendingAttribValueMask& GetPendingAttribValueMaskMemo() { return m_pendingAttribValueMask; }
 
@@ -1312,8 +1406,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the applier's records - the bound CSO's two views, the vertex-buffer set, the
             // index buffer and the resolved fetch base instance - so it takes no argument at
             // all and touches no frontend type. The legacy arm above it is unchanged and both
-            // compile in every push build (ARCHITECTURE.md 9.6).
-            void SyncToBackendFromApplier();
+            // compile in every push build (ARCHITECTURE.md 9.6). DECLARED IN THE PUBLIC SECTION
+            // as of P5e (vi) - see the note there.
             // Same narrowing, same memo, same Adreno disable; the source bytes are the shadow
             // base the resource call carried and the memo key is the buffer's {slot, gen}.
             Bool SyncFloat64AttributeAsFloat32ByHandle(Uint attribIndex, const MGPVertexAttribWire& attrib,

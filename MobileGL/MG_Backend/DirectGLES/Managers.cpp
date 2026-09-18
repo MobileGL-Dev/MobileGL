@@ -2777,7 +2777,74 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return g_bufferMutationEpoch.load(std::memory_order_acquire);
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        namespace {
+            // P5e (vi): how many times BumpBufferMutationEpoch ran off the apply thread while
+            // one was running, with a live transport. See the note in the bump itself; the
+            // accessor is what a test can assert zero on instead of reading a call graph.
+            std::atomic<Uint64> g_bufferMutationEpochBumpsOffTheApplyThread{0};
+        } // namespace
+
+        Uint64 BufferMutationEpochBumpsOffTheApplyThread() {
+            return g_bufferMutationEpochBumpsOffTheApplyThread.load(std::memory_order_relaxed);
+        }
+#endif
+
         void BumpBufferMutationEpoch() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5e (vi), CONTRACT-P5E §5.1's first pin (scout S1 R2, BRIEF-P5E's open question 2):
+            // "does any GL-THREAD path bump this under a transport". PINNED HERE RATHER THAN
+            // ARGUED, because the argument is the kind that is true until someone adds a caller.
+            //
+            // It matters because this counter is the ONE non-serial input left in the record
+            // arm's clean gate: SyncVaoAttributeBuffersByRecord stamps the pre-pass value and
+            // skips every IsBufferDrawCleanByHandle probe while the stamp holds. A bump from the
+            // GL thread would make that stamp a cross-thread read of a value the applier never
+            // observed - the memo would go on reading clean over buffers the client had just
+            // dirtied - and under run-ahead the client is a frame ahead, so the window is a
+            // frame wide rather than a record wide.
+            //
+            // THE MEASURED ANSWER, and it is not the clean "no" the scout expected: there is
+            // EXACTLY ONE class of non-apply-thread bump under a transport, and it happens
+            // BEFORE THERE IS AN APPLY THREAD AT ALL. BackendObject_DirectGLES::Initialize()
+            // runs on the app thread by design ("the backend object is BUILT on the app thread
+            // while its context is never OWNED by it", ServerLoop.h) and calls
+            // RegisterBufferBackendOps(), whose last act is a bump. An unguarded refusal aborts
+            // the whole split lane in EGL bring-up, which is how this was found rather than
+            // reasoned.
+            //
+            // That class is harmless and the apply-thread key tells it apart from the one that
+            // would not be: with g_applyThreadKey == 0 no record has been applied, so no twin
+            // exists, so no memo holds a stamp for the bump to slide under.
+            //
+            // WHAT IS COUNTED AND WHAT IS FATAL, and why they are not the same thing. Every
+            // bump taken off the apply thread WHILE ONE IS RUNNING is counted and named once,
+            // and is Fatal UNDER THE STRICT LANE - which is where this phase's pins live, and
+            // which is the lane the answer is claimed for. It is not Fatal by default because
+            // the unit fixtures that drive the production op tables directly
+            // (StagedShadowProductionTest / ServerLoopTest, which register the real tables and
+            // call them from the test thread beside a started loop) are the server role without
+            // being the apply thread, and taking those down would be this pin policing a
+            // fixture rather than the draw path.
+            const Uint64 applyThreadKey =
+                MG_Remote::Server::Detail::g_applyThreadKey.load(std::memory_order_relaxed);
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith && applyThreadKey != 0 &&
+                !MG_Remote::Server::ServerLoop::OnApplyThread()) {
+                g_bufferMutationEpochBumpsOffTheApplyThread.fetch_add(1, std::memory_order_relaxed);
+                if (MG_Config::Ipc.StrictErrors) {
+                    MGLOG_F("MGPipe: Fatal{RoleViolation, \"CurrentBufferMutationEpoch\"} - the "
+                            "buffer-mutation epoch was bumped off the apply thread while an apply "
+                            "thread was running, with a live transport. The draw-path memos stamp "
+                            "this counter and skip their clean probes while the stamp holds "
+                            "(CONTRACT-P5E §5.1), so a producer on the client's thread means the "
+                            "backend is reachable from a thread that owns none of this state");
+                    std::abort();
+                }
+                MGLOG_E_ONCE("MGPipe: the buffer-mutation epoch was bumped off the apply thread "
+                             "with a live transport (CONTRACT-P5E §5.1's pin). Run the strict lane "
+                             "to make this fatal at the producer");
+            }
+#endif
             g_bufferMutationEpoch.fetch_add(1, std::memory_order_release);
         }
 
