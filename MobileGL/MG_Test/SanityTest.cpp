@@ -3164,38 +3164,30 @@ TEST(DirectGLESTextureSync, ARecycledTextureSlotReMintsTheTwinOnTheHandleArm) {
     using namespace MobileGL;
     using namespace MobileGL::MG_Backend::DirectGLES;
     ScopedDirectGLESTextureBindings scoped; // fresh GLContext + registry + binding caches
-    if (!TextureResourceSubsystemEnabled()) {
-        GTEST_SKIP() << "the texture-resource subsystem bit is clear in this configuration";
+    // The {slot, gen} table is what this case is about; the FAMILY bit is not.
+    if (!EsprytSlotTablesEnabled()) {
+        GTEST_SKIP() << "the {slot, gen} twin table arm is not selected in this configuration";
     }
 
-    auto& registry = TextureImpl::g_backendTextureObjects;
-
-    // Two lifetime ids standing in for two frontend textures, so the client allocator hands
-    // back the SAME SLOT at a higher generation for the second - which is the whole hazard.
+    // ON THE REAL TEXTURE REGISTRY, not a fake one: id's DirectGLESSlotTable cases pin the
+    // TABLE's rule in isolation, and this pins that the table tx2's work list indexes is the one
+    // that keeps it. Two lifetime ids stand in for two frontend textures, so the client
+    // allocator hands the SAME SLOT back at a higher generation for the second - the hazard.
+    //
+    // No applier record and no SyncTextureToBackendByHandle here: MGPipeApplyResourceCreate
+    // declines for a texture on a process with no P4a consumer (NoP4aConsumer), which is every
+    // unit-lane process, and the ABA answer is the twin TABLE's rather than the record's.
     auto firstOwner = MakeShared<MG_State::GLState::SamplerObject>(0u);
     const MG_Pipe::MGPipeHandle first =
         MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Texture, firstOwner->GetLifetimeId());
     ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(first));
 
-    const auto describe = [](MG_Pipe::MGPipeHandle res, Uint32 size) {
-        MG_Pipe::MGPResourceDesc desc{};
-        desc.Resource = res;
-        desc.Target = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D);
-        desc.StorageKind = static_cast<Uint8>(TextureStorageType::Mipmap);
-        desc.InternalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8);
-        desc.Width = size;
-        desc.Height = size;
-        desc.Depth = 1;
-        desc.ArrayLayers = 1;
-        desc.Levels = 1;
-        EXPECT_TRUE(MG_Pipe::MGPipeApplyResourceCreate(desc));
-    };
-    describe(first, 8);
-
-    auto* firstTwin = TextureImpl::ResolveTextureTwin(first);
-    ASSERT_NE(firstTwin, nullptr) << "the record-first resolver declined a handle whose record it "
-                                     "had just been given";
-    firstTwin->NotePushedSyncHandle(first);
+    auto& registry = TextureImpl::g_backendTextureObjects;
+    auto* firstSlot = registry.GetOrCreateByHandle(first);
+    ASSERT_NE(firstSlot, nullptr);
+    if (!*firstSlot) *firstSlot = MakeShared<TextureImpl::BackendTextureObject>();
+    (*firstSlot)->NotePushedSyncHandle(first);
+    ASSERT_EQ((*firstSlot)->PushedSyncHandle().Slot, first.Slot);
 
     // The recycle: the client frees the slot and hands it straight back out at {s, g+1}.
     MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Texture, first);
@@ -3206,22 +3198,28 @@ TEST(DirectGLESTextureSync, ARecycledTextureSlotReMintsTheTwinOnTheHandleArm) {
     ASSERT_EQ(second.Slot, first.Slot) << "the allocator did not recycle the slot, so this case "
                                           "is not exercising ABA at all";
     ASSERT_GT(second.Gen, first.Gen);
-    describe(second, 16);
 
-    auto* reMinted = TextureImpl::ResolveTextureTwin(second);
-    ASSERT_NE(reMinted, nullptr);
-    EXPECT_NE(reMinted, firstTwin)
+    auto* secondSlot = registry.GetOrCreateByHandle(second);
+    ASSERT_NE(secondSlot, nullptr);
+    EXPECT_EQ(*secondSlot, nullptr)
         << "the successor at a recycled texture slot inherited its predecessor's twin: it would "
-           "sample the dead object's driver texture, and the twin's synced serials would tell "
-           "the clean gate there is nothing to do";
-    EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(reMinted->PushedSyncHandle()))
+           "sample the dead object's driver texture, and the twin's synced serials and noted "
+           "handle would tell the clean gate there is nothing to do";
+    // DELIBERATELY NOT A POINTER COMPARE against the predecessor's twin: the reset released it,
+    // so the allocator is free to hand the successor's twin the very same heap address - which
+    // it does, and which is exactly why a raw address is never an identity in this tree
+    // (section 4.2.1). "The slot came back empty" is the assertion; "it came back at a different
+    // address" is a coincidence that would make this case pass for the wrong reason.
+    if (!*secondSlot) *secondSlot = MakeShared<TextureImpl::BackendTextureObject>();
+    EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull((*secondSlot)->PushedSyncHandle()))
         << "the re-minted twin kept the dead handle, so its sync prologues would resolve the "
            "predecessor's record";
 
     // ...and the predecessor's handle stops resolving, which is what makes a stale entry left in
-    // a work list harmless: its record lookup answers null and the entry is skipped.
-    EXPECT_EQ(PipeTextureRecordForHandle(first), nullptr)
-        << "the predecessor's record still answers at a recycled slot";
+    // a by-handle work list harmless: the lookup answers null and the entry is skipped, where a
+    // borrowed slot would have been replayed against the wrong object.
+    EXPECT_EQ(registry.FindByHandle(first), nullptr)
+        << "the predecessor's handle still resolves at a recycled slot";
 
     MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Texture, second);
 }
