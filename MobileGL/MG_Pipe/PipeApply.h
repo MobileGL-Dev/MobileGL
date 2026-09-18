@@ -917,9 +917,19 @@ namespace MobileGL::MG_Pipe {
     // EmitAndWaitTails the client still blocks after every record, so the answer the server
     // must stamp is `true` whatever the wire says - the two named exemption scopes (§4.4) are
     // legal exactly while the client is parked, and it is parked behind all of them today.
-    // Package ra flips this to true in the same commit that lands the wait rule; the sink's
-    // stamp then follows the predicate. Computing the predicate anyway (PipeApplier::ApplyOne)
-    // is deliberate: it keeps the function exercised on every record for the whole phase.
+    // IT FLIPS WITH kMGPipeP5eRunAheadReady, IN THE INTEGRATION COMMIT, AND NOT WHEN ra LANDS
+    // (ra's amendment to ID-103's wording, which said "the same commit that lands the wait
+    // rule"). The argument ID-103 makes is about whether the CLIENT is parked, not about
+    // whether ra's code exists: RunAheadArmed() is a conjunction whose third term is the
+    // server's caps bit, so between ra landing and the caps bit being published the client
+    // still blocks after every record - and stamping `false` there would withdraw §4.4's
+    // exemptions from probes that client's own wait still makes safe, which is exactly the
+    // "refusal with no defect behind it" ID-103 refused. The two constants are therefore ONE
+    // switch with two spellings, and the integration commit throws both.
+    //
+    // Computing the predicate anyway (PipeApplier::ApplyOne) is deliberate: it keeps the
+    // function exercised on every record for the whole phase rather than first run on the day
+    // it starts deciding.
     inline constexpr Bool kMGPipeP5eClientWaitRuleLanded = false;
 
     // P5c (rv): the two serials the PipeInputs texture-shutter accessors answer with under a

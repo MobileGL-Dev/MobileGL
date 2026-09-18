@@ -47,6 +47,7 @@
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Pipe/PipeMutation.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Impl/Pipe/PipeFill.h>
 #include <Init.h>
 #include <MG_Impl/EGLImpl/EGLImpl.h>
@@ -2062,7 +2063,378 @@ TEST(RemoteGuards, ClientPipeInputsFillWithTheApplierIdleIsAllowed) {
     });
     ExpectChildSuccess(child);
 }
+
+// ===========================================================================================
+// P5e (ra) - the wait rule, the present credit and gPipeInputs' ownership
+// (MG_Remote/CONTRACT-P5E.md §1, §2.3, §2.4, §3.1, §3.3, §3.5)
+// ===========================================================================================
+//
+// EVERY CASE BELOW ARMS RUN-AHEAD BY PUBLISHING THE CAP BIT, because that is the only thing
+// that arms it: RunAheadArmed() is a conjunction whose third term is the SERVER's own
+// statement that it applies an unbarriered record without reading client memory, and in a
+// tree where kMGPipeP5eRunAheadReady is still false no production session sets it. Driving the
+// arm through the caps mirror rather than through a test-only setter is deliberate (ID-102's
+// lesson): what these cases exercise is then the production latch and not a branch beside it.
+//
+// NONE OF THEM DRAWS. The draw path is the family packages' to migrate; until they land, a
+// draw under run-ahead would abort inside the backend for a reason that has nothing to do with
+// what is being asserted here.
+void StartRunAheadSession() {
+    ::alarm(15);
+    MG_Config::Transport = MG_Config::TransportMode::InProcess;
+    MG_Config::Ipc.RunAhead = 1;
+    Srv::ServerSessionInstance().SetCapabilityBits(
+        static_cast<Uint64>(MG_Pipe::kCapRunAheadApply));
+    Srv::ServerSessionInstance().SetConsumedSubsystems(kMGPipeSubsystemsMigratedAtP4a);
+    // THE MIRROR IS ADOPTED BEFORE Start, AND THAT IS THE LATCH'S RULE MADE VISIBLE. This
+    // process has no server backend, so PublishCapsSnapshot is deferred and the handshake
+    // carries no snapshot at all - and §1 says a later snapshot may only turn run-ahead OFF,
+    // never on. So the arm has to be true at the FIRST adoption, which for a fixture means
+    // before the session takes its latch. A test that adopted afterwards and found the client
+    // still lockstep would be reading the contract's own rule as a failure.
+    {
+        MG_Pipe::MGPCaps caps{};
+        caps.CallMask = static_cast<Uint64>(MG_Pipe::kCapRunAheadApply) |
+                        MG_Remote::MGCapsConsumerBits(kMGPipeSubsystemsMigratedAtP4a);
+        CapsMirrorInstance().Adopt(caps, MG_Backend::FormatCapabilityCache{}, RendererInfo{},
+                                   String{"4.6"}, BackendType::DirectGLES);
+    }
+    if (ClientSessionInstance().Start(MG_Config::TransportMode::InProcess, {}) != MOBILEGL_OK) {
+        ::_exit(81);
+    }
+    if (!ClientSessionInstance().RunAheadArmed()) ::_exit(83); // the latch never took
+}
+
+// THE SERVER HALF OF §2.4, SUBSTITUTED - and it is substituted because this fixture has no
+// backend object at all, so ServerVerbSink::OnPresent DECLINES before it can reach
+// ServerSession::ReturnPresentCredit ("present arrived with no backend object"). What the
+// cases below assert is therefore the CLIENT's half of the credit: that it pays, when, and in
+// whose id space. That the server returns exactly one credit per swap, after Present() has
+// returned, is PipeApplier::OnPresent's own three lines and the device exit's `credit-waits`
+// reading; a peer here cannot pin it without a backend to swap on.
+struct PresentCreditPeer : Codec::WireVerbSink {
+    std::atomic<Uint64> lastSerial{0};
+    Bool OnPresent(const MGPPresent& present) override {
+        lastSerial.store(present.FrameSerial);
+        Srv::ServerSessionInstance().ReturnPresentCredit(present.FrameSerial);
+        return true;
+    }
+    void Install() {
+        if (Srv::ServerLoopInstance().RunOnApplyThread(
+                [](void* self) {
+                    auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
+                    decoder.SetVerbSink(static_cast<PresentCreditPeer*>(self));
+                    return MOBILEGL_OK;
+                },
+                this) != MOBILEGL_OK) {
+            ::_exit(82);
+        }
+    }
+};
+
+// §1: the conjunction, and the half of it that is not the client's to decide. The cap bit is
+// absent here, so the knob alone changes nothing - which is the whole reason the knob is
+// parsed on every arm rather than only where it means something (Config.h).
+TEST(RemoteRunAhead, TheKnobAloneDoesNotArmRunAheadWithoutTheServersCapBit) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.RunAhead = 1;
+        StartControlSession(); // SetCapabilityBits(0)
+        if (ClientSessionInstance().RunAheadArmed()) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+// §1 again, from the other side: MOBILEGL_IPC_VERB_BARRIER=0 is the LOCKSTEP arm's negative
+// control and it disarms run-ahead outright, because the barrier is the first term of the
+// conjunction. Under run-ahead its documented red is the first barriered row's stale pull -
+// that one is a scenario, not a unit case; what is pinned here is that the two controls do not
+// silently compose into a third mode nobody designed.
+TEST(RemoteRunAhead, ClearingTheVerbBarrierDisarmsRunAheadEvenWithTheCapBit) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.RunAhead = 1;
+        MG_Config::Ipc.VerbBarrier = 0;
+        ::alarm(15);
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        Srv::ServerSessionInstance().SetCapabilityBits(
+            static_cast<Uint64>(MG_Pipe::kCapRunAheadApply));
+        Srv::ServerSessionInstance().SetConsumedSubsystems(kMGPipeSubsystemsMigratedAtP4a);
+        MG_Pipe::MGPCaps caps{};
+        caps.CallMask = static_cast<Uint64>(MG_Pipe::kCapRunAheadApply) |
+                        MG_Remote::MGCapsConsumerBits(kMGPipeSubsystemsMigratedAtP4a);
+        CapsMirrorInstance().Adopt(caps, MG_Backend::FormatCapabilityCache{}, RendererInfo{},
+                                   String{"4.6"}, BackendType::DirectGLES);
+        if (ClientSessionInstance().Start(MG_Config::TransportMode::InProcess, {}) != MOBILEGL_OK) {
+            ::_exit(81);
+        }
+        if (ClientSessionInstance().RunAheadArmed()) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+// §2.4's RED-ONCE, BY COUNT. With a credit of 1 the client may have one present in flight, so
+// the second and third presents each pay the credit before they encode - `credit-waits` is 2
+// after three presents and the present-ack watermark has reached 2. Delete the
+// WaitForPresentAck arm from ClientSession::AcquirePresentCredit and the counter stays 0 while
+// all three presents publish: red by count, which is the only way a wait that is usually
+// already satisfied can be tested at all.
+//
+// The serial is asserted too, because the counter alone would survive a credit paid against
+// the wrong id space (the pre-P5e FrameSerial was 0 and the server stamped its own).
+TEST(RemoteRunAhead, ACreditOneClientPaysTheCreditAtEveryPresentAfterTheFirst) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.PresentCredit = 1;
+        StartRunAheadSession();
+        PresentCreditPeer peer;
+        peer.Install();
+        ClientSession& session = ClientSessionInstance();
+        if (session.PresentCreditWaits() != 0) ::_exit(101);
+        RemoteEmitTable().Present();
+        if (session.PresentCreditWaits() != 0) ::_exit(102); // the first one is free
+        RemoteEmitTable().Present();
+        RemoteEmitTable().Present();
+        if (session.PresentCreditWaits() != 2) ::_exit(103);
+        // ONE CREDIT PER SWAP, in the client's own 1-based space: the server returned the
+        // second present's credit, so the watermark is at least 2.
+        if (session.Control() == nullptr ||
+            session.Control()->presentAckSerial.load() < 2u) {
+            ::_exit(104);
+        }
+        session.Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+// §2.4's other half: with the credit raised the client stops paying until it is that far
+// ahead. It is the control that keeps the case above from passing because of an unconditional
+// counter rather than because of the credit.
+TEST(RemoteRunAhead, ACreditThreeClientPaysNothingForItsFirstThreePresents) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.PresentCredit = 3;
+        StartRunAheadSession();
+        PresentCreditPeer peer;
+        peer.Install();
+        ClientSession& session = ClientSessionInstance();
+        RemoteEmitTable().Present();
+        RemoteEmitTable().Present();
+        RemoteEmitTable().Present();
+        if (session.PresentCreditWaits() != 0) ::_exit(101);
+        RemoteEmitTable().Present();
+        if (session.PresentCreditWaits() != 1) ::_exit(102);
+        session.Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+// §3.1 / §3.5's RED-ONCE. `Clear` is a kWaitNone row, so under run-ahead the client publishes
+// it and moves on - and therefore does not fill gPipeInputs for it. This case is the GREEN
+// half: the validate point runs the tracker walk and the emitters and touches the block not at
+// all, so nothing aborts.
+//
+// THE RED: in MGPipeValidateForVerb change `const Bool fillOwed = barriered;` to `= true` -
+// which is exactly "leave one CopyField in an unbarriered fill" - and the guard below it fires
+// Fatal{RoleViolation, "gPipeInputs"} on this very call.
+TEST(RemoteRunAhead, AnUnbarrieredVerbDoesNotFillPipeInputsAndIsAllowed) {
+    const auto child = RunInChild([] {
+        StartRunAheadSession();
+        MGPipeValidateForVerb(MGPipeVerb::Clear);
+        MGPipeLeaveVerb();
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+// §3.5, the aborting arm, driven at the guard itself: a GL-thread touch that is NOT the
+// residual fill of a barriered record. Under lockstep this same call is a no-op (the apply
+// thread is not inside the applier and MOBILEGL_IPC_BATCH_WAITS is 1); under run-ahead there
+// is no such window to be outside of, because the client never parks for an unbarriered
+// record - so the answer stops depending on timing and becomes the rule.
+TEST(RemoteGuards, ClientPipeInputsTouchOutsideABarrieredFillUnderRunAheadIsFatalByName) {
+    const auto child = RunInChild([] {
+        StartRunAheadSession();
+        ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt("ra-test-surface",
+                                                               /*isBarrieredFill=*/false);
+        ClientSessionInstance().Stop();
+    });
+    ExpectNamedAbort(child, "Fatal{RoleViolation, \"gPipeInputs\"}");
+}
+
+// ... and the control: the barriered fill says so and is let through. Without this the case
+// above would pass just as well against "abort unconditionally".
+TEST(RemoteGuards, ClientPipeInputsTouchInsideABarrieredFillUnderRunAheadIsAllowed) {
+    const auto child = RunInChild([] {
+        StartRunAheadSession();
+        ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt("ra-test-surface",
+                                                               /*isBarrieredFill=*/true);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+// §3.3's RED-ONCE, and the one that turns the strict lane into a gate. The probe is the
+// sticky forward itself, run on the apply thread inside a server-stamped verb with the
+// current record marked UNBARRIERED - which is the state the sink puts that thread in for
+// every kWaitNone row once the wait rule is live. MOBILEGL_IPC_STRICT_ERRORS is deliberately
+// NOT set: the point is that the knob has stopped being the deciding input, because a row the
+// client never filled has no value to count.
+//
+// THE RED: put CountBarrierPull's first line back to `if (MG_Config::Ipc.StrictErrors)` only
+// and this case stops aborting - and, on the lane, every scenario that still pulls a row goes
+// from a named abort to a wrong picture with a number beside it.
+TEST(RemoteGuards, AResidualPullUnderAnUnbarrieredRecordIsFatalWithoutTheStrictKnob) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.StrictErrors = false;
+        StartRunAheadSession();
+        Srv::ServerLoopInstance().RunOnApplyThread(
+            +[](void*) -> MobileGLResult {
+                MG_Pipe::MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
+                MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(false);
+                MG_Pipe::MGPipeStickyForwardPull(MGPipeInputField::GetProgramObject);
+                return MOBILEGL_OK;
+            },
+            nullptr);
+        ClientSessionInstance().Stop();
+    });
+    ExpectNamedAbort(child, "Fatal{UnmigratedPipeInput, \"GetProgramObject@Clear\"}");
+}
+
+// The control: the SAME probe inside a BARRIERED record is P5C's counted residual pull, and
+// with the strict knob off it counts and carries on. Ruling 4 is this line - a barriered
+// record keeps P5C's semantics exactly, because the client is parked in its own wait.
+TEST(RemoteGuards, AResidualPullUnderABarrieredRecordStillOnlyCounts) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.StrictErrors = false;
+        StartRunAheadSession();
+        Srv::ServerLoopInstance().RunOnApplyThread(
+            +[](void*) -> MobileGLResult {
+                MG_Pipe::MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
+                MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(true);
+                const Uint64 before = MG_Pipe::MGPipeResidualPullCount();
+                MG_Pipe::MGPipeStickyForwardPull(MGPipeInputField::GetProgramObject);
+                if (MG_Pipe::MGPipeResidualPullCount() != before + 1) ::_exit(101);
+                return MOBILEGL_OK;
+            },
+            nullptr);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+// §2.6's RED-ONCE, and the one the brief names: ~300 KiB of kEventGpuWritten published from
+// the apply thread behind a sequence nobody waited for. SEG_EVENT is 256 KiB, so this is
+// several ringfuls; under P5C's rule the FIRST Reserve that failed was Fatal{EventRingOverflow}
+// and this case aborts by that name. With flow control the producer publishes, rings, parks on
+// the latch and retries, and the burst completes.
+//
+// THE DRAIN RUNS ON A THREAD OF ITS OWN, and that is forced by the fixture rather than chosen:
+// RunOnApplyThread is synchronous, so the thread that posted the burst cannot also be the
+// thread that empties the ring. In production it is the GL thread draining at its own waits
+// (§2.6's deadlock argument); here it is a drainer beside the poster, which puts the producer
+// in exactly the state that argument describes.
+TEST(RemoteRunAhead, AnEventBurstBehindAnUnwaitedSequenceFlowControlsInsteadOfAborting) {
+    const auto child = RunInChild([] {
+        StartRunAheadSession();
+        std::atomic<bool> stop{false};
+        std::atomic<Uint64> delivered{0};
+        std::thread drainer([&stop, &delivered] {
+            // THE FIRST DRAIN IS DELAYED ON PURPOSE. A drainer that starts immediately can
+            // keep a 256 KiB ring from ever being full, and a red-once that depends on the
+            // scheduler losing a race is not a red-once. 50 ms is four orders of magnitude
+            // more than the burst needs to fill the ring, so the producer is provably parked
+            // on the latch before anything empties it.
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            while (!stop.load(std::memory_order_acquire)) {
+                delivered.fetch_add(ClientSessionInstance().DrainPublishedEvents());
+                std::this_thread::yield();
+            }
+            delivered.fetch_add(ClientSessionInstance().DrainPublishedEvents());
+        });
+        // 3000 records of 64 ranges each is ~3 MB against a 256 KiB ring - twelve ringfuls,
+        // with a drainer racing it - so the full latch is hit many times over rather than
+        // maybe once. That margin is what makes the red-once (restore the Fatal) reliable:
+        // a burst that merely might fill the ring would be a red-once that merely might be red.
+        Srv::ServerLoopInstance().RunOnApplyThread(
+            +[](void*) -> MobileGLResult {
+                MG_Pipe::MGPRange ranges[64];
+                for (Uint32 r = 0; r < 64; ++r) ranges[r] = MG_Pipe::MGPRange{r * 64ull, 64ull};
+                for (Uint32 i = 0; i < 3000; ++i) {
+                    MG_Pipe::gMGPipeCallbacks.OnGpuWritten(MG_Pipe::MGPipeHandle{7, 1}, 64, ranges);
+                }
+                return MOBILEGL_OK;
+            },
+            nullptr);
+        stop.store(true, std::memory_order_release);
+        drainer.join();
+        // LOSSLESS, which is the property flow control had to preserve: every one of the 3000
+        // records crossed. A drop policy would have been the other way to survive a full ring,
+        // and P5C's §4.4 refuses it - a writeback or a GPU-write mark that did not arrive is a
+        // stale buffer, not a missing statistic.
+        if (delivered.load() < 3000u) ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+// §2.7 / ruling 13: the deferred-destroy queue stays, and an enqueue from an unbarriered
+// apply is the finding. Under strict it is the abort; this is the arm the lane owns.
+TEST(RemoteGuards, ADeferredDestroyFromAnUnbarrieredApplyIsFatalUnderStrict) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.StrictErrors = true;
+        StartRunAheadSession();
+        Srv::ServerLoopInstance().RunOnApplyThread(
+            +[](void*) -> MobileGLResult {
+                MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(false);
+                (void)MG_Pipe::MGPipeDeferDestroyAndFreeIfOnApplyThread(MG_Pipe::MGPipeKind::Texture,
+                                                                        4242);
+                return MOBILEGL_OK;
+            },
+            nullptr);
+        ClientSessionInstance().Stop();
+    });
+    ExpectNamedAbort(child, "Fatal{RoleViolation, \"deferred-destroy\"}");
+}
+
+// The control, and the whole of ruling 13: a BARRIERED apply may still be a last owner (its
+// fill's O-class rows, XFB's pinned targets), so the queue takes the death and the GL thread
+// replays it. Deleting the queue would have made this an allocator touch from the server role.
+TEST(RemoteGuards, ADeferredDestroyFromABarrieredApplyIsStillServed) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.StrictErrors = true;
+        StartRunAheadSession();
+        Srv::ServerLoopInstance().RunOnApplyThread(
+            +[](void*) -> MobileGLResult {
+                MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(true);
+                if (!MG_Pipe::MGPipeDeferDestroyAndFreeIfOnApplyThread(MG_Pipe::MGPipeKind::Texture,
+                                                                        4243)) {
+                    ::_exit(101);
+                }
+                return MOBILEGL_OK;
+            },
+            nullptr);
+        MG_Pipe::MGPipeDrainDeferredDestroys();
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
 #endif
+
+// §2.5 / ruling 15 (ID-93): which half of resource_subdata wants its answer. One predicate,
+// read by MGPipeRouteResourceSubData and by Wire_ResourceSubData - a second spelling of it is
+// how the client comes to wait for an answer the emitter told the server not to bother with.
+// The buffer target's whole packed field is 0 (MGPipeTypes.h asserts it beside the packer),
+// which is what makes the test a comparison and not a mask.
+TEST(RemoteRunAhead, OnlyTheTextureHalfOfResourceSubDataWantsItsReply) {
+    MG_Pipe::MGPSubData buffer{};
+    buffer.Target = MG_Pipe::MGPipePackSubDataTarget(MG_Pipe::kMGPipeResourceTargetBuffer, 0u);
+    EXPECT_FALSE(MG_Pipe::MGPipeSubDataWantsItsReply(buffer));
+
+    MG_Pipe::MGPSubData texture{};
+    texture.Target = MG_Pipe::MGPipePackSubDataTarget(
+        static_cast<Uint32>(MG_Pipe::MGPipeResourceTarget::Tex2D),
+        static_cast<Uint32>(TextureUploadTarget::Texture2D));
+    EXPECT_TRUE(MG_Pipe::MGPipeSubDataWantsItsReply(texture));
+}
 
 
 int main(int argc, char** argv) {

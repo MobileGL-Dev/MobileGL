@@ -387,11 +387,19 @@ namespace MobileGL::MG_Pipe {
         // AN OP WITH NO VERB ROW ANSWERS BARRIERED. A verb the join does not know is one this
         // file cannot reason about, and the safe answer - fill it, wait for it - is also the
         // pre-P5e answer.
-        Bool ClientVerbIsBarriered(MGPipeVerb verb, GLContext& ctx) {
+        // `ctx` MAY BE NULL, and that is not a convenience: the validate point asks this
+        // question BEFORE it has decided whether there is anything to fill, so that the answer
+        // is about the RECORD and not about the state of the block. A null context has no open
+        // transform-feedback span, so clause 2 is false for it - and the verb is a no-op below
+        // either way.
+        Bool ClientVerbIsBarriered(MGPipeVerb verb, GLContext* ctx) {
             const MGPWireOp op = WireOpForVerb(verb);
             if (op == MGPWireOp::kOpCount) return true;
             if (MGPipeWaitClassFor(op) != kWaitNone) return true;
-            if (MGPipeCallClassFor(op) == kCtxVerb && ctx.IsTransformFeedbackActive()) return true;
+            if (MGPipeCallClassFor(op) == kCtxVerb && ctx != nullptr &&
+                ctx->IsTransformFeedbackActive()) {
+                return true;
+            }
             return false;
         }
 
@@ -3191,9 +3199,8 @@ namespace MobileGL::MG_Pipe {
         // process rather than a value the wire owes it.
         MGPipeFillAccess::SetIdentity(inputs, ctx);
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // §2.1's predicate, client-side (see ClientVerbIsBarriered). A null context makes the
-        // verb a no-op below anyway, so it answers barriered and the old path runs whole.
-        const Bool barriered = !runAhead || ctx == nullptr || ClientVerbIsBarriered(verb, *ctx);
+        // §2.1's predicate, client-side (see ClientVerbIsBarriered).
+        const Bool barriered = !runAhead || ClientVerbIsBarriered(verb, ctx);
         // THE ONE LINE THE RED-ONCE FLIPS: `= true` here is "fill for every verb", the
         // pre-P5e behaviour, and it turns the guard below into the abort §3.5 names.
         const Bool fillOwed = barriered;
