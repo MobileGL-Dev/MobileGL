@@ -1971,10 +1971,23 @@ TEST(RemoteGuards, CapsMirrorFallbackWithNoServerBackendIsFatalByName) {
 //   MarkStorageDirty, MarkStorageDirtyRegion, IsStorageDirty, GetStorageDirtyRegion,
 //   GetStorageDirtyRects
 //
-// Deliberately NOT in the list: the shape reads (GetMipmapTexelSize / GetMipmapByteSize /
-// GetMipmapLevelCount / GetUploadTargets / GetTarget / IsComplete), which the pinned
-// BARRIER-PULLED object-class rows still answer through the unit-object pointer
-// (FieldOwnershipTest's list, P3b/P4b/P7) - the per-draw binding walk reads them every draw.
+// P5e (tx2): THE SHAPE READS JOIN THE LIST, and the sentence that stood here is why they could
+// not before - "the per-draw binding walk reads them every draw". P5e is the commit that makes
+// that untrue: the unit work list is st.BoundSamplerViews[], the clean gate is
+// IsDrawSyncCleanByRecord, and the three sync bodies read the resource record and the server's
+// staged-texture store. Nothing on the draw path asks a frontend texture for a level count, a
+// level extent, a level byte size or a compressed level any more, so the exemption becomes a
+// guard and reverting any handle arm aborts BY ACCESSOR NAME:
+//
+//   GetMipmapLevelCount, GetMipmapTexelSize, GetMipmapByteSize,
+//   GetCompressedFormat, GetCompressedByteSize, MapCompressedMipmapData,
+//   GetRequestedCompressedFormat
+//
+// Keyed on the SERVER BACKEND being DirectGLES (ruling 12's shape): Magma is lockstep through
+// P7 and its named blit still asks a frontend texture IsComplete(), which is legal for a client
+// parked in its own wait. Still NOT in the list: GetUploadTargets / GetTarget / IsComplete,
+// which are TextureObject's own and not MipmapStorage's - their rows retire with the object
+// class in P7/P9.
 #define MGL_TEXTURE_GUARD_TEST(Name, Id, Call)                                                         \
     TEST(RemoteGuards, Name) {                                                                         \
         const auto child = RunInChild([] {                                                             \
@@ -2012,6 +2025,21 @@ MGL_TEXTURE_GUARD_TEST(TextureGetStorageDirtyRegionFromTheApplyThreadIsFatalByNa
 MGL_TEXTURE_GUARD_TEST(TextureGetStorageDirtyRectsFromTheApplyThreadIsFatalByName, 719,
                        (void)texture.GetStorageDirtyRects(TextureUploadTarget::Texture2D, 0,
                                                           nullptr, 0))
+// ---- P5e (tx2): the seven shape reads the P4a/P5c list exempted ----------------------------
+MGL_TEXTURE_GUARD_TEST(TextureGetMipmapLevelCountFromTheApplyThreadIsFatalByName, 721,
+                       (void)texture.GetMipmapLevelCount())
+MGL_TEXTURE_GUARD_TEST(TextureGetMipmapTexelSizeFromTheApplyThreadIsFatalByName, 722,
+                       (void)texture.GetMipmapTexelSize(TextureUploadTarget::Texture2D, 0))
+MGL_TEXTURE_GUARD_TEST(TextureGetMipmapByteSizeFromTheApplyThreadIsFatalByName, 723,
+                       (void)texture.GetMipmapByteSize(TextureUploadTarget::Texture2D, 0))
+MGL_TEXTURE_GUARD_TEST(TextureGetCompressedFormatFromTheApplyThreadIsFatalByName, 724,
+                       (void)texture.GetMipmapCompressedFormat(TextureUploadTarget::Texture2D, 0))
+MGL_TEXTURE_GUARD_TEST(TextureGetCompressedByteSizeFromTheApplyThreadIsFatalByName, 725,
+                       (void)texture.GetMipmapCompressedByteSize(TextureUploadTarget::Texture2D, 0))
+MGL_TEXTURE_GUARD_TEST(TextureMapCompressedMipmapDataFromTheApplyThreadIsFatalByName, 726,
+                       (void)texture.MapMipmapCompressedImage(TextureUploadTarget::Texture2D, 0))
+MGL_TEXTURE_GUARD_TEST(TextureGetRequestedCompressedFormatFromTheApplyThreadIsFatalByName, 727,
+                       (void)texture.GetMipmapRequestedCompressedFormat(TextureUploadTarget::Texture2D, 0))
 #undef MGL_TEXTURE_GUARD_TEST
 
 // P5c (gt, CONTRACT-P5C §6 layer 2 / audit A1): the client-side half of the gPipeInputs
