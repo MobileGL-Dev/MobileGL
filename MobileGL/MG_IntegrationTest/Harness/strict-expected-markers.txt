@@ -20,15 +20,23 @@
 # and put the census it prints here.
 #
 # ---------------------------------------------------------------------------------------------
-# MEASURED AT p5e/gl's BASE, 7c6f6886, WHICH IS BEFORE pa AND mv LANDED. That is stated rather
-# than hidden: the wave-3 integration commit retires GetProgramForDraw@DrawArrays,
-# GetProgramForDispatch@DispatchCompute and the ordinary GetBoundVertexArray@DrawArrays, so the
-# three escalated rows below WILL stop appearing and the ratchet will say so by name. Removing
-# them is part of that merge, not a failure of it.
+# RE-MEASURED ON THE WAVE-3 INTEGRATION TREE (pa + mv + gl merged), 181 lane entries, 181 green,
+# ZERO Fatal pairs. The note this block used to carry - that it was measured at gl's base and the
+# merge would retire three rows - was discharged exactly as written: the ratchet named
+# GetProgramForDraw@DrawArrays as an expected pair that no longer appears, and named
+# GetBufferBindingSlot@DrawArrays as one the lane had not seen before. Both are reconciled below.
+# GetProgramForDispatch@DispatchCompute never reached this file (pa retired it before it was
+# written) and the ordinary GetBoundVertexArray@DrawArrays is gone; the two that remain under that
+# name are the client-vertex-array entries, which are escalation-barriered and P8's.
 # ---------------------------------------------------------------------------------------------
 #
 # Admitted by the generated table (disjuncts 1 and 2 of ID-116 / ID-125):
 GetBufferBindingSlot@ReadPixels
+# NEW IN WAVE 3, and it was named before it could fire: mv's report called
+# BoundDrawIndirectBufferId's GetBufferBindingSlot(DrawIndirect) a latent row that "would surface
+# as GetBufferBindingSlot@DrawArrays if an indirect tier were ever forced under strict", and then
+# gated the five multi-draw tiers, which forced it. Retires in P8 (FieldOwnership.def:78).
+GetBufferBindingSlot@DrawArrays
 GetFramebufferBindingSlot@ReadPixels
 GetProgramObject@ShaderStorageBlockBinding
 GetTextureObject@CopyImageSubData
@@ -42,4 +50,3 @@ ValidateProgramName@ShaderStorageBlockBinding
 # are NOT the ordinary draw path.
 GetBoundVertexArray@DrawArrays
 GetBufferBindingPoint@DrawArrays
-GetProgramForDraw@DrawArrays
