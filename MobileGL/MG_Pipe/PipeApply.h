@@ -992,7 +992,7 @@ namespace MobileGL::MG_Pipe {
     // Computing the predicate anyway (PipeApplier::ApplyOne) is deliberate: it keeps the
     // function exercised on every record for the whole phase rather than first run on the day
     // it starts deciding.
-    inline constexpr Bool kMGPipeP5eClientWaitRuleLanded = false;
+    inline constexpr Bool kMGPipeP5eClientWaitRuleLanded = true;
 
     // P5c (rv): the two serials the PipeInputs texture-shutter accessors answer with under a
     // server-stamped verb (FieldOwnership.def, APPLIER_DERIVED). Free functions rather than
