@@ -382,8 +382,39 @@ namespace MobileGL::MG_Remote::Client {
                                 nullptr, 0, nullptr, 0, nullptr);
         }
 
+        // P5e (vi), ID-82: declared here because the REDUCED DrawArrays path below predates the
+        // nineteen-slot block that defines them, and it needs the same two answers. One
+        // definition each, further down, beside the rest of the draw plan.
+        [[noreturn]] void RefuseDrawByName(const char* slot, const char* qualifier);
+        Bool RunAheadWouldSkipTheWait(ClientSession& session);
+
+        // Does the bound VAO fetch any ENABLED attribute out of the application's own memory.
+        // The test is EmitVertexBuffers' own (`attrib.Enabled && !attrib.Buffer` is exactly what
+        // it publishes as Res == kMGPipeNullHandle), so the flag on the wire and the record the
+        // server applies agree by construction.
+        Bool BoundVaoHasClientVertexArrays(MG_State::GLState::GLContext* ctx) {
+            if (ctx == nullptr) return false;
+            const auto& vao = ctx->GetBoundVertexArray();
+            if (!vao) return false;
+            const auto& attributes = vao->GetAllAttributes();
+            for (SizeT i = 0; i < attributes.size(); ++i) {
+                if (attributes[i].Enabled && !attributes[i].Buffer) return true;
+            }
+            return false;
+        }
+
         void EmitDrawArrays(GLenum mode, GLint first, GLsizei count) {
             ClientSession& session = RequireSession("DrawArrays");
+
+            // P5e (vi): the same refusal the nineteen-slot block raises in EmitDrawRecord, and
+            // this is the entry point the contract names by name - "DrawArrays+CLIENT_ARRAYS".
+            // The probe runs only on this path's own draw, before the hooks, and it is inert
+            // under lockstep (see RunAheadWouldSkipTheWait).
+            const Bool clientArrays = BoundVaoHasClientVertexArrays(MG_State::pGLContext.get());
+            if (clientArrays && RunAheadWouldSkipTheWait(session)) {
+                RefuseDrawByName("DrawArrays", "CLIENT_ARRAYS");
+            }
+
             BeforeDrawVerb();
 
             if (g_dropDrawEmission) {
@@ -399,7 +430,10 @@ namespace MobileGL::MG_Remote::Client {
             MG_Pipe::MGPDrawInfo info{};
             info.Mode = static_cast<Uint32>(mode);
             info.IndexSize = 0; // arrays
-            info.Flags = 0;     // NO kDrawHasUserIndices: the reduced path draws from a VBO
+            // NO kDrawHasUserIndices: the reduced path draws from a VBO. kDrawClientArrays IS
+            // set when one is present, because the wait rule is computed from the record on
+            // both sides and this path publishes its own record rather than PlanDrawInfo's.
+            info.Flags = clientArrays ? static_cast<Uint8>(MG_Pipe::kDrawClientArrays) : 0;
             info.InstanceCount = 1;
             info.StartInstance = 0;
             info.RestartIndex = 0;
@@ -446,6 +480,27 @@ namespace MobileGL::MG_Remote::Client {
         //                      indices (or past 2^32 of them): the record spells Start in
         //                      indices, and rounding would draw from the wrong element.
 
+        // P5e (vi), ID-82 / CONTRACT-P5E §5.1: "would this session publish a draw and move on".
+        //
+        // IT IS THE CONJUNCTION MGPipeTypes.h STATES FOR RunAheadArmed(), spelled here rather
+        // than called, and that is a SEAM, not a duplication: ClientSession::RunAheadArmed() is
+        // package ra's to land (it latches the same three at the first caps adoption after Start
+        // and may afterwards only turn OFF). Until it exists this is the same answer computed
+        // from the same three inputs, and it is inert for the whole phase because the third one
+        // - the server's kCapRunAheadApply - is not published until the integration commit
+        // (kMGPipeP5eRunAheadReady). WHEN ra LANDS, THIS BODY BECOMES `session.RunAheadArmed()`:
+        // one latch, one answer, and no way for the refusal to disagree with the wait rule about
+        // which arm the session is on.
+        Bool RunAheadWouldSkipTheWait(ClientSession& session) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            return session.BarrierArmed() && MG_Config::Ipc.RunAhead != 0 &&
+                   session.Caps().HasCap(MG_Pipe::kCapRunAheadApply);
+#else
+            (void)session;
+            return false;
+#endif
+        }
+
         [[noreturn]] void RefuseDrawByName(const char* slot, const char* qualifier) {
             char name[96];
             std::snprintf(name, sizeof(name), "%s+%s", slot, qualifier);
@@ -464,6 +519,19 @@ namespace MobileGL::MG_Remote::Client {
                 if (const auto& bound = vao->GetIndexBufferBindingSlot().GetBoundObject()) {
                     b.ElementBufferBound = true;
                     b.ElementBuffer = MG_Pipe::MGPipeResourceTrackerInstance().Find(*bound);
+                }
+                // P5e (vi): the client-array probe, in the SAME single read of the bindings the
+                // rest of the plan is made from rather than in a second walk at the refusal -
+                // this runs on the GL thread once per draw and the refusal must not add its own
+                // frontend pass. The test is the emitter's own: EmitVertexBuffers publishes
+                // Res == kMGPipeNullHandle for exactly `attrib.Enabled && !attrib.Buffer`, so
+                // the flag and the record agree by construction instead of by inspection.
+                const auto& attributes = vao->GetAllAttributes();
+                for (SizeT i = 0; i < attributes.size(); ++i) {
+                    if (attributes[i].Enabled && !attributes[i].Buffer) {
+                        b.ClientVertexArrays = true;
+                        break;
+                    }
                 }
             }
             if (const auto& di = ctx->GetBufferBindingSlot(::MobileGL::BufferTarget::DrawIndirect).GetBoundObject()) {
@@ -486,6 +554,24 @@ namespace MobileGL::MG_Remote::Client {
                             const void* clientIndices, Uint64 clientIndexBytes,
                             const MG_Pipe::MGPDrawIndirect* indirect) {
             ClientSession& session = RequireSession(slot);
+
+            // P5e (vi), ID-82 / ruling 2, BEFORE the pre-verb hooks and before the record: a
+            // draw that fetches vertices out of the application's own memory has no wire form,
+            // and under run-ahead the server would dereference a client pointer into memory
+            // this thread is already past. It is refused BY NAME on the GL thread, in the
+            // shape ID-57 gives every unmigrated draw shape, rather than rendered wrong (R-4).
+            //
+            // Under LOCKSTEP it is not refused and nothing here changes: the client is parked
+            // in WaitForApplied for exactly this record, so the server's upload reads memory
+            // that is not moving - which is ruling 4's "barriered records keep P5C's
+            // semantics", and is why this is a run-ahead gate and not a transport gate.
+            // Staging the bytes as a per-attribute {BindingIndex, MGHostSpan} tail, shaped like
+            // kDrawHasUserIndices, is P8's and retires the refusal with it.
+            if ((info.Flags & static_cast<Uint8>(MG_Pipe::kDrawClientArrays)) != 0 &&
+                RunAheadWouldSkipTheWait(session)) {
+                RefuseDrawByName(slot, "CLIENT_ARRAYS");
+            }
+
             BeforeDrawVerb();
 
             if (g_dropDrawEmission) {
@@ -1853,6 +1939,13 @@ namespace MobileGL::MG_Remote::Client {
         // on its side). kDrawHasUserIndices / kDrawIsIndirect are added by the emission itself,
         // kDrawHasIndexRange by the two DrawRangeElements* callers.
         info.Flags = bindings.PrimitiveRestart ? static_cast<Uint8>(MG_Pipe::kDrawPrimitiveRestart) : 0;
+        // P5e (vi), CONTRACT-P5E §2.1 (ii) / §5.1. On the wire BECAUSE the server needs it: the
+        // barriered predicate is computed identically by both roles from the record alone, and
+        // "does this draw fetch from client memory" is not derivable from anything else in it -
+        // a null Res inside the vertex-buffer window is also what a DISABLED attribute below
+        // the high-water mark publishes. Set for every draw shape, not just the array ones: a
+        // glDrawElements can fetch its VERTICES from client memory too.
+        if (bindings.ClientVertexArrays) info.Flags |= static_cast<Uint8>(MG_Pipe::kDrawClientArrays);
         // A negative count has already been refused by the frontend (INVALID_VALUE); 0 crosses
         // as 0 and draws nothing, which is what the driver does with it.
         info.InstanceCount = instanceCount > 0 ? static_cast<Uint32>(instanceCount) : 0u;

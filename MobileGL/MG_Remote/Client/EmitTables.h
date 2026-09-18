@@ -187,6 +187,16 @@ namespace MobileGL::MG_Remote::Client {
         // carried verbatim (informational in P5b: the backend reads its own barrier-pulled copy).
         Bool PrimitiveRestart = false;
         Uint32 RestartIndex = 0;
+        // P5e (vi), ID-82 / CONTRACT-P5E §5.1: TRUE when the bound VAO has at least one ENABLED
+        // attribute with no buffer object behind it, i.e. an array whose vertices live in the
+        // application's own memory. The server has no such memory: today it dereferences
+        // `attrib.Offset` as a raw client pointer from the apply thread
+        // (Managers.cpp's SyncClientSideAttributesForDrawArrays), which is legal only while the
+        // client is parked behind the record. It rides in MGPDrawInfo::Flags as kDrawClientArrays
+        // so BOTH roles can decide from the wire - the client refuses such a draw under
+        // run-ahead, and MGPipeBarriered's escalation (ii) keeps it barriered if one ever
+        // arrives anyway. Staging the bytes is P8's.
+        Bool ClientVertexArrays = false;
     };
 
     // 1 / 2 / 4 for the three GL index types, 0 for anything else (the frontend has already

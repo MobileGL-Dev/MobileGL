@@ -5004,6 +5004,168 @@ TEST(DirectGLESSlotTable, ACompositeHandleDoesNotGrowTheOrdinaryTable) {
     EXPECT_EQ(table.CompositeCapacityForTest(), 4u) << "the recycle re-grew the band";
 }
 
+// ==========================================================================================
+// P5e (vi), CONTRACT-P5E §5.1: THE DRAW'S BUFFERS COME FROM THE RECORD, NOT FROM THE VAO.
+// ==========================================================================================
+//
+// The two cases below are BRIEF-P5E's red-onces (2) and (3) for this package, and they are
+// built the way ID-102 says a red-once has to be: the thing under test is THE PRODUCTION
+// DECISION ITSELF (BufferImpl::ResolveDrawVertexBuffersFromRecord and
+// ResolveDrawIndexBufferFromRecord, which are the only enumeration
+// SyncNeccessaryBuffers' record arm has), not a copy of it written here. Both take the applier
+// state and NOTHING ELSE, so the only way to revert §5.1's substitution is to put a frontend
+// read back inside one of them - and then these go red naming the field.
+//
+// THE SETUP IS THE DIVERGENCE ITSELF: the frontend VAO is pointed at a buffer the RECORD does
+// not name. That state is unreachable in one process today (the client re-emits at every
+// validate point, so the two always agree); under run-ahead it is the ordinary state of the
+// world, because the client has moved on by the time the record is applied. Producing it here
+// by hand is the only way to ask "which one did you read" at all.
+//
+// WHAT IS NOT HERE, and deliberately: the ensure, the memo and the clean probe. They need an ES
+// context and a driver, and DirectGLES.Split.* is where they are exercised
+// (ClientVertexArrayScenario, TriangleScenario, IndexedDrawFamilyScenario and the rest of the
+// lane draw through exactly this arm).
+TEST(DirectGLESVertexInputDraw, TheAttributeWalkTakesItsBuffersFromTheRecordNotTheFrontendVao) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    using namespace MobileGL::MG_State::GLState;
+#if !MOBILEGL_BUILD_DISAGGREGATED
+    GTEST_SKIP() << "the record arm of the attribute walk is compiled only under "
+                    "MOBILEGL_BUILD_DISAGGREGATED";
+#else
+    // A, B and C, with handles minted the way the client mints them.
+    auto bufferA = MakeShared<BufferObject>(0u);
+    auto bufferB = MakeShared<BufferObject>(0u);
+    auto bufferC = MakeShared<BufferObject>(0u);
+    const MG_Pipe::MGPipeHandle a =
+        MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Buffer, bufferA->GetLifetimeId());
+    const MG_Pipe::MGPipeHandle b =
+        MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Buffer, bufferB->GetLifetimeId());
+    const MG_Pipe::MGPipeHandle c =
+        MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Buffer, bufferC->GetLifetimeId());
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(a));
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(b));
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(c));
+
+    // THE PUBLISHED STATE: attribute 0 fetches from A, attribute 1 from B, attribute 2 from A
+    // again (the dedupe), attribute 3 is a client-memory array (null Res, nothing to ensure).
+    MG_Pipe::MGPipeApplierState& st = MG_Pipe::MGPipeApplier();
+    const MG_Pipe::MGPipeApplierState saved = st;
+    st.VertexBufferStart = 0;
+    st.VertexBufferCount = 4;
+    for (Uint32 i = 0; i < 4; ++i) {
+        st.VertexBuffers[i] = MG_Pipe::MGPVertexBuffer{};
+        st.VertexBuffers[i].BindingIndex = i;
+    }
+    st.VertexBuffers[0].Res = a;
+    st.VertexBuffers[1].Res = b;
+    st.VertexBuffers[2].Res = a;
+    st.VertexBuffers[3].Res = MG_Pipe::kMGPipeNullHandle;
+
+    // THE FRONTEND, MOVED ON: every enabled attribute now points at C, and nothing was
+    // re-emitted. A walk that read GetAllAttributes() answers {C}. The VAO is BOUND IN A REAL
+    // CONTEXT rather than free-standing, because that is the only shape in which the revert
+    // this case exists to catch - MGB_CTX->GetBoundVertexArray()->GetAllAttributes() - has
+    // anything to read at all; a free-standing object would make the revert crash instead of
+    // disagree, which is a red for the wrong reason.
+    UniquePtr<GLContext> previousContext = Move(MG_State::pGLContext);
+    MG_State::pGLContext = MakeUnique<GLContext>();
+    MG_State::pGLContext->CreateVertexArrayObject(1);
+    MG_State::pGLContext->BindVertexArray(1);
+    const SharedPtr<VertexArrayObject> vao = MG_State::pGLContext->GetBoundVertexArray();
+    ASSERT_NE(vao, nullptr);
+    for (Uint i = 0; i < 4; ++i) {
+        vao->SetAttributeFormat(i, 2, DataType::Float32, false, 8, 0, false, false, 8);
+        vao->BindAttributeBuffer(i, bufferC);
+        vao->EnableAttribute(i);
+    }
+
+    BufferImpl::DrawVertexBufferRequest requests[VertexArrayObject::MAX_VERTEX_ATTRIBS];
+    const Uint count = BufferImpl::ResolveDrawVertexBuffersFromRecord(
+        st, requests, VertexArrayObject::MAX_VERTEX_ATTRIBS);
+
+    ASSERT_EQ(count, 2u)
+        << "the walk did not resolve st.VertexBuffers[Start..+Count): two DISTINCT handles are "
+           "named there (A twice and B), plus one client-memory array with no store to ensure";
+    EXPECT_EQ(requests[0].Res, a)
+        << "the first buffer is not st.VertexBuffers[0].Res. If it is the frontend VAO's C, the "
+           "walk went back to GetAllAttributes() and §5.1's substitution is reverted";
+    EXPECT_EQ(requests[1].Res, b) << "the second buffer is not st.VertexBuffers[1].Res";
+    EXPECT_EQ(requests[0].BindingIndex, 0u);
+    EXPECT_EQ(requests[1].BindingIndex, 1u);
+    for (Uint i = 0; i < count; ++i) {
+        EXPECT_NE(requests[i].Res, c)
+            << "the walk ensured the buffer the FRONTEND VAO points at, which is the object a "
+               "run-ahead client has already moved on from";
+    }
+
+    st = saved;
+    MG_State::pGLContext.reset();
+    MG_State::pGLContext = Move(previousContext);
+    MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, a);
+    MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, b);
+    MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, c);
+#endif
+}
+
+// Red-once (3), the index half. The claim has TWO parts and the second is what this package
+// added: the handle comes from st.IndexBuffer.Res, and IndexBufferSerial comes with it - the
+// legacy and push-monolith arms re-read the VAO's element slot on every indexed draw and so see
+// a rebind for free, while this arm reads nothing and needs the serial in the key
+// (ResolvedDrawBuffers::iboSerial). A rebind of the SAME buffer still moves the serial, which is
+// exactly the case an identity-only compare would call a hit.
+TEST(DirectGLESVertexInputDraw, TheIndexArmTakesItsBufferAndItsSerialFromTheRecord) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    using namespace MobileGL::MG_State::GLState;
+#if !MOBILEGL_BUILD_DISAGGREGATED
+    GTEST_SKIP() << "the record arm of the index-buffer sync is compiled only under "
+                    "MOBILEGL_BUILD_DISAGGREGATED";
+#else
+    auto published = MakeShared<BufferObject>(0u);
+    auto rebound = MakeShared<BufferObject>(0u);
+    const MG_Pipe::MGPipeHandle publishedHandle =
+        MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Buffer, published->GetLifetimeId());
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(publishedHandle));
+
+    MG_Pipe::MGPipeApplierState& st = MG_Pipe::MGPipeApplier();
+    const MG_Pipe::MGPipeApplierState saved = st;
+    st.IndexBuffer = MG_Pipe::MGPIndexBuffer{};
+    st.IndexBuffer.Res = publishedHandle;
+    st.IndexBufferSerial = 11;
+
+    // The frontend's element slot has moved to another buffer with nothing emitted, in a real
+    // context for the reason the case above gives.
+    UniquePtr<GLContext> previousContext = Move(MG_State::pGLContext);
+    MG_State::pGLContext = MakeUnique<GLContext>();
+    MG_State::pGLContext->CreateVertexArrayObject(1);
+    MG_State::pGLContext->BindVertexArray(1);
+    const SharedPtr<VertexArrayObject> vao = MG_State::pGLContext->GetBoundVertexArray();
+    ASSERT_NE(vao, nullptr);
+    vao->GetIndexBufferBindingSlot().Bind(rebound);
+
+    BufferImpl::DrawIndexBufferRequest request = BufferImpl::ResolveDrawIndexBufferFromRecord(st);
+    EXPECT_EQ(request.Res, publishedHandle)
+        << "the index arm did not read st.IndexBuffer.Res; if it answered the VAO's element "
+           "slot it is reading a binding the client has already changed";
+    EXPECT_EQ(request.Serial, 11u) << "IndexBufferSerial did not travel with the handle";
+
+    // The same buffer re-bound: the handle is unchanged and ONLY the serial says so.
+    st.IndexBufferSerial = 12;
+    request = BufferImpl::ResolveDrawIndexBufferFromRecord(st);
+    EXPECT_EQ(request.Res, publishedHandle);
+    EXPECT_EQ(request.Serial, 12u)
+        << "a re-emitted set_index_buffer on the SAME handle is invisible to this arm without "
+           "the serial, and the memo would read clean over it";
+
+    st = saved;
+    MG_State::pGLContext.reset();
+    MG_State::pGLContext = Move(previousContext);
+    MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, publishedHandle);
+#endif
+}
+
 #else
 // G2 wants the pull and the push build to list the SAME ctest entries. The twin table only
 // exists under MOBILEGL_PIPE_PUSH, so in the pull build each case above keeps its name and
@@ -5102,5 +5264,12 @@ TEST(DirectGLESBufferDrawProbe, UnderSplitTheRecordAloneAnswersTheLiveHostMapQue
 
 TEST(DirectGLESBufferDrawProbe, ACapsMaskWithoutTheResourceFamilyEmitsNothingAndCountsTheRefusal) {
     GTEST_SKIP() << "the handle-keyed resource table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+// P5e (vi): G2/G14's skip twins for the two record-arm cases above.
+TEST(DirectGLESVertexInputDraw, TheAttributeWalkTakesItsBuffersFromTheRecordNotTheFrontendVao) {
+    GTEST_SKIP() << "the record arm of the attribute walk is compiled only under MOBILEGL_PIPE_PUSH";
+}
+TEST(DirectGLESVertexInputDraw, TheIndexArmTakesItsBufferAndItsSerialFromTheRecord) {
+    GTEST_SKIP() << "the record arm of the index-buffer sync is compiled only under MOBILEGL_PIPE_PUSH";
 }
 #endif // MOBILEGL_PIPE_PUSH
