@@ -2257,19 +2257,45 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 endif()
 
 # P5b measured named-blit blockers, exercising both backend bound-form lowerings.
+#
+# P5e (gl), CONTRACT-P5E §7: THE TWO BACKENDS GET DIFFERENT LABELS, because under strict they are
+# answering different questions.
+#
+# Both DirectVulkan entries abort on GetFramebufferBindingSlot@Clear (VulkanRenderer.cpp:7648).
+# That field's row retires in P5e ON ESPRYT and in P7 ON MAGMA, and FieldOwnership.def carries ONE
+# retiring-phase string for both - so the derived allowlist cannot admit the pair without admitting
+# it for Espryt too, where it would forgive exactly the regression fb's handle arm exists to
+# prevent (an Espryt Clear reading the frontend's binding slot again would become a warning line).
+# The alternative to a label is therefore not "admit one row"; it is "stop the Espryt lane from
+# being able to see that row at all", which is a real loss of gate strength.
+#
+# So the lane is SPLIT rather than the allowlist WIDENED: `integration-split` stays a statement
+# about Espryt and goes hard green, and the Magma entries get the expected-red step the contract
+# already promises them for the backend it keeps in lockstep all phase (ID-90).
 if (MOBILEGL_BUILD_DISAGGREGATED)
     foreach(namedBlitBackend DirectGLES DirectVulkan)
         mgl_itest_join_environment(MGL_ITEST_NAMED_BLIT_ENVIRONMENT
             "MOBILEGL_BACKEND_TYPE=${namedBlitBackend}" "MOBILEGL_TRANSPORT=inproc"
             "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
             ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+        # THE LABEL IS `integration-magma-split` AND NOT `integration-split-magma`, and that is not
+        # a preference: `ctest -L` takes a REGEX, not an exact name, so `-L integration-split`
+        # MATCHES a label spelled `integration-split-magma` as a substring. The obvious name would
+        # have left both entries in the Espryt lane while every listing showed them relabelled - a
+        # split that looks done and is not. Measured: with that spelling
+        # `ctest -N -L integration-split` still listed both DirectVulkan entries.
+        if (namedBlitBackend STREQUAL "DirectVulkan")
+            set(MGL_ITEST_NAMED_BLIT_LABELS "integration-magma-split")
+        else()
+            set(MGL_ITEST_NAMED_BLIT_LABELS "integration-split")
+        endif()
         foreach(namedBlitCase NamedBlitPreservesBindingsAndRestoresNextVerbsPixels NamedBlitDefaultEndpointPixels)
             gtest_discover_tests(MobileGLIntegrationTest
                 TEST_PREFIX "${namedBlitBackend}.Split.NamedBlit."
                 TEST_FILTER "F1WireScenario.${namedBlitCase}"
                 DISCOVERY_TIMEOUT 30
                 PROPERTIES
-                    LABELS "integration-split"
+                    LABELS "${MGL_ITEST_NAMED_BLIT_LABELS}"
                     TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ENVIRONMENT "${MGL_ITEST_NAMED_BLIT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5b-${namedBlitBackend}-${namedBlitCase}.log")
         endforeach()

@@ -1341,6 +1341,45 @@ jobs:
           fi
           echo "integration-split under strict is GREEN, two-sided, with the arming control present"
 
+      # ---- P5e (gl), CONTRACT-P5E §7: MAGMA'S OWN LANE, EXPECTED RED -----------------------
+      #
+      # The two DirectVulkan.Split.NamedBlit entries abort on GetFramebufferBindingSlot@Clear
+      # (VulkanRenderer.cpp:7648). That field retires in P5e ON ESPRYT and in P7 ON MAGMA, and
+      # FieldOwnership.def carries ONE retiring-phase string for both - so admitting the pair to
+      # keep them in the Espryt lane would forgive an Espryt Clear reading the frontend's binding
+      # slot again, which is exactly the regression fb's handle arm exists to prevent. Splitting
+      # the lane costs two entries; admitting the row would cost the gate.
+      #
+      # THE LABEL IS `integration-magma-split` AND THE SPELLING MATTERS: `ctest -L` is a REGEX, so
+      # a label named `integration-split-magma` is still matched by `-L integration-split` and the
+      # entries would never have left. Measured before the rename.
+      #
+      # IT IS ASSERTED RED, WITH ITS MARKER. "Magma is red" must not be allowed to decay into
+      # "Magma did not run": the step fails both when the run goes green (P7 landed early, or the
+      # entries stopped drawing) and when it goes red without the named abort in a private log.
+      - name: Integration-magma-split under strict - expected red until P7 (CONTRACT-P5E section 7)
+        working-directory: build-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_IPC_STRICT_ERRORS: "1"
+          MOBILEGL_TRANSPORT: "inproc"
+        run: |
+          ulimit -c unlimited
+          rc=0
+          ctest -L integration-magma-split --no-tests=error -j 2 > "${RUNNER_TEMP}/strict-magma.txt" 2>&1 || rc=$?
+          tail -5 "${RUNNER_TEMP}/strict-magma.txt"
+          if [ "${rc}" -eq 0 ]; then
+            echo "::error::integration-magma-split went GREEN under strict. Magma is in lockstep for the whole of P5e (ID-90) and GetFramebufferBindingSlot retires there in P7, so these entries are expected to abort. If P7 has landed, delete this step and fold the entries back into integration-split."
+            exit 1
+          fi
+          marker='Fatal{UnmigratedPipeInput, "GetFramebufferBindingSlot@Clear"}'
+          if ! grep -rqF "${marker}" MobileGL/MG_IntegrationTest/p5b-DirectVulkan-*.log 2>/dev/null; then
+            echo "::error::integration-magma-split is red but no private log carries ${marker} - the lane failed for some OTHER reason, which is a defect rather than the expected-red control"
+            grep -rhoE '(Fatal|Admitted)\{[A-Za-z]*, "[^"]*"\}' MobileGL/MG_IntegrationTest/p5b-DirectVulkan-*.log 2>/dev/null | sort | uniq -c | sort -rn | head
+            exit 1
+          fi
+          echo "integration-magma-split is red by design on ${marker}"
+
       - name: Upload strict lane logs
         if: always()
         uses: actions/upload-artifact@v7

@@ -518,6 +518,12 @@ and asserts `vbs > 0` — the server stamped a verb boundary. Everything strict 
 of that stamp and the monolith arm never stamps, so without it "the lane is green" and "strict was
 never armed" are the same observation.
 
+**Magma keeps the expected-red step, in a lane of its own.** The two `DirectVulkan.Split.NamedBlit`
+entries carry `integration-magma-split` (so spelled: `ctest -L` is a regex and
+`-L integration-split` matches `integration-split-magma`) and are asserted RED on
+`Fatal{UnmigratedPipeInput, "GetFramebufferBindingSlot@Clear"}`. Admitting that pair instead would
+forgive the same read on Espryt, where it is this phase's debt — one retiring-phase string serves
+both backends.
 
 ---
 
