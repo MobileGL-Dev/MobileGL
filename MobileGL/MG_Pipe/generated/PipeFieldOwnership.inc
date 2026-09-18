@@ -106,9 +106,9 @@ inline constexpr const char* kMGPipeFieldRetiringPhase[kMGPipeInputFieldCount] =
     "-", // GetBlendEquationIndexed
     "-", // GetBlendFuncIndexed
     "-", // GetBoundTransformFeedbackName
-    "P8", // GetBoundVertexArray
+    "P5e (Espryt unbarriered), P7 (Magma)", // GetBoundVertexArray
     "P8 (indirect), P9 (readback), P13 (transfer)", // GetBufferBindingSlot
-    "P3b/P4b, P7", // GetBufferBindingPoint
+    "P5e (Espryt unbarriered), P7 (Magma)", // GetBufferBindingPoint
     "P7/P13", // GetBufferBindingPointCount
     "-", // GetTouchedBufferBindingPointCount
     "-", // GetClampReadColor
@@ -121,8 +121,8 @@ inline constexpr const char* kMGPipeFieldRetiringPhase[kMGPipeInputFieldCount] =
     "-", // GetDepthFunc
     "-", // GetDepthMask
     "-", // GetDepthRangeIndexed
-    "P3b/P4b (Espryt), P7 (Magma)", // GetFramebufferBindingSlot
-    "P3b/P4b, P7", // GetImageTextureBinding
+    "P5e (Espryt unbarriered), P7 (Magma)", // GetFramebufferBindingSlot
+    "P5e (Espryt unbarriered), P7 (Magma)", // GetImageTextureBinding
     "-", // GetLineWidth
     "-", // GetLogicOp
     "-", // GetMaxTouchedTextureUnit
@@ -136,8 +136,8 @@ inline constexpr const char* kMGPipeFieldRetiringPhase[kMGPipeInputFieldCount] =
     "-", // GetPolygonOffsetFactor
     "-", // GetPolygonOffsetUnits
     "-", // GetPrimitiveRestartIndex
-    "P7 (Magma), P8 (Espryt)", // GetProgramForDispatch
-    "P8 (Espryt), P7 (Magma)", // GetProgramForDraw
+    "P5e (Espryt unbarriered), P7 (Magma)", // GetProgramForDispatch
+    "P5e (Espryt unbarriered), P7 (Magma)", // GetProgramForDraw
     "P9", // GetProgramObject
     "-", // GetProvokingVertexMode
     "-", // GetRenderStateParameters
@@ -148,7 +148,7 @@ inline constexpr const char* kMGPipeFieldRetiringPhase[kMGPipeInputFieldCount] =
     "-", // GetTextureBindGeneration
     "-", // GetTextureContextId
     "P7", // GetTextureObject
-    "P3b/P4b, P7", // GetTextureUnitObject
+    "P5e (Espryt unbarriered), P7 (Magma)", // GetTextureUnitObject
     "-", // GetTransformFeedbackCapturedVertices
     "-", // GetTransformFeedbackGeneration
     "-", // GetTransformFeedbackPausedPrimitiveCounter

@@ -1537,6 +1537,13 @@ namespace MobileGL::MG_Pipe {
                           PipeInputs::kBufferTargetCount,
                       "the record's per-target array and PipeInputs' have drifted");
         MGPipeApplyAccess::SetContextValues(gPipeInputs, values);
+        // P5e (CONTRACT-P5E.md §2.1, escalation (i)): mirror the XFB-active flag into the
+        // applier state as well. The barriered predicate has to be computable on the SERVER
+        // from applier state alone - gPipeInputs is the block the run-ahead client stops
+        // filling, so a predicate that read the answer out of THERE would be reading the very
+        // memory the rule exists to stop it reading. One store, inert until the caps bit is
+        // published, and it is what makes the two roles' third clause the same clause.
+        g_applier.IsTransformFeedbackActive = values.IsTransformFeedbackActive != 0;
     }
 
     void MGPipeApplySetPatchState(const MGPPatchState& patch) {
@@ -2820,6 +2827,90 @@ namespace MobileGL::MG_Pipe {
         ++g_applier.ShaderImagesSerial;
         // P5c (rv): an image bind moves the texture bind generation's guarded set too.
         MGPipeApplierNoteTextureStateMoved();
+    }
+
+    // ---------------------------------------------------------------------------------
+    // P5e's two entry points, DECLARED AND REFUSED HERE (MG_Remote/CONTRACT-P5E.md §1)
+    // ---------------------------------------------------------------------------------
+    //
+    // Package sb writes the first body and package pg the second. Until then a record that
+    // reached either one would be a binding set the server accepted and dropped, so the answer
+    // is a named abort rather than a quiet return: the picture would be wrong and the lane
+    // would be green, which is the one failure mode this campaign spends its refusals on.
+    //
+    // Neither is reachable today - no route row installs the table slot and the wire decoder's
+    // arms for both opcodes validate and decline (PipeCatalogueTest pins both slots null) - so
+    // this is a link-time seam, not a runtime one.
+    void MGPipeApplySetShaderBuffers(const MGPShaderBuffers& hdr, const MGPBufferRange* tail) {
+        (void)tail;
+        MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"set_shader_buffers\"} - the applier entry point "
+                "is declared by P5e package c0e and bodied by package sb; a record for class %u "
+                "with %u range(s) reached it, which means a route was installed ahead of its "
+                "consumer",
+                hdr.Class, hdr.Count);
+        std::abort();
+    }
+
+    void MGPipeApplySetProgramBindings(const MGPProgramBindings& hdr, const Int32* blockBindings,
+                                       const MGPProgramSamplerUnit* samplerUnits,
+                                       const MGPProgramStorageOverride* storageOverrides,
+                                       const char* const* storageOverrideNames) {
+        (void)blockBindings;
+        (void)samplerUnits;
+        (void)storageOverrides;
+        (void)storageOverrideNames;
+        MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"set_program_bindings\"} - the applier entry point "
+                "is declared by P5e package c0e and bodied by package pg; a record for shader CSO "
+                "{%u, %u} with %u/%u/%u tail entries reached it, which means a route was installed "
+                "ahead of its consumer",
+                hdr.Cso.Slot, hdr.Cso.Gen, hdr.BlockBindingCount, hdr.SamplerUnitCount,
+                hdr.StorageOverrideCount);
+        std::abort();
+    }
+
+    // ---------------------------------------------------------------------------------
+    // P5e: the barriered predicate and the applier's current-record flag (§2.1, §4.4)
+    // ---------------------------------------------------------------------------------
+
+    Bool MGPipeBarriered(MGPWireOp op, const void* payload, const MGPipeApplierState& st) {
+        // 1. The static column. Every reply row, present, and the rows whose apply still pulls
+        //    a BARRIER_PULLED field or probes the client allocator.
+        if (MGPipeWaitClassFor(op) != kWaitNone) return true;
+        // 2. Escalation (i): an open transform-feedback span makes every verb inside it
+        //    barriered. XFB is not migrated by P5e - StartPendingTransformFeedback holds
+        //    frontend SharedPtrs across two verbs, which rule C forbids an applier entry point
+        //    outright - so the span keeps P5C's semantics and the cost on the steady Espryt
+        //    path is one bool test per draw.
+        if (MGPipeCallClassFor(op) == kCtxVerb && st.IsTransformFeedbackActive) return true;
+        // 3. Escalation (ii): a draw whose enabled attributes include a client-memory array.
+        //    The server uploads those bytes by dereferencing a raw client pointer, so the draw
+        //    cannot run ahead. Under run-ahead the client refuses it before it is published
+        //    (§5.1), so this clause is what the LOCKSTEP arm - where the draw is legal - uses.
+        if (op == MGPWireOp::DrawVbo && payload != nullptr) {
+            const auto& draw = *static_cast<const MGPDrawInfo*>(payload);
+            if ((draw.Flags & static_cast<Uint8>(kDrawClientArrays)) != 0) return true;
+        }
+        return false;
+    }
+
+    // Server-private and deliberately NOT a member of MGPipeApplierState: it is not per-context
+    // state the applier owns, it is "which record is the apply thread inside right now", and a
+    // reader (the allocator guard) that had to find the right context's applier first would be
+    // asking a harder question than the one it needs answered.
+    //
+    // TRUE IS THE DEFAULT AND THE LOCKSTEP ANSWER. On a server that does not publish
+    // kCapRunAheadApply every record is barriered, the client is parked in its own wait for
+    // each of them, and the two named exemption scopes of CONTRACT-P5C §3.1 keep working
+    // exactly as they do today. Nothing writes this until package id sets it from
+    // MGPipeBarriered in the sink's ApplyOne.
+    namespace {
+        thread_local Bool g_currentRecordBarriered = true;
+    } // namespace
+
+    Bool MGPipeApplierCurrentRecordIsBarriered() { return g_currentRecordBarriered; }
+
+    void MGPipeApplierSetCurrentRecordBarriered(Bool barriered) {
+        g_currentRecordBarriered = barriered;
     }
 
     // ================================================================================

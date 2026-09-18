@@ -236,6 +236,23 @@
 // And GetTextureObject / GetProgramObject are STICKY (see MGP_COVERAGE_STICKY_LIST): they are
 // keyed by GL name, they are object lookups rather than verb state, and a forwarded field has
 // no storage for an emitted call to supply.
+//
+// P5e ADDS ONE ROW, GetBufferBindingPoint -> SetShaderBuffers (MG_Remote/CONTRACT-P5E.md §5.6),
+// and it is SHAPE-ONLY like P3a's and P4a's six: the field's storage is four raw bases into the
+// frontend's Array<Array<BindingSlotRange1D, 84>, 4>, and set_shader_buffers carries RESOLVED
+// {handle, offset, size} ranges per class. The applier has no way to produce a pointer and P5e
+// deliberately does not give it one, so the row lands in PipeFill.cpp's
+// EmittedCallSuppliesTheWholeField FALSE arm and the decision is taken THERE. What retires the
+// pull is not a better applier, it is the four Espryt consumers reading the applier's
+// BoundShaderBuffers instead of the frontend's binding points - at which point the
+// FieldOwnership.def row flips to RECORD_SUPPLIED.
+//
+// THE ROW IS INERT AT THIS COMMIT for GetBoundVertexArray's reason one phase on: the emission
+// and the fill skip both test kMGPipeWiredSubsystems, and the buffer-binding family's wired
+// constant is 0 until the package that gives MG_Impl/Pipe/ShaderBufferEmit.h its body sets it.
+// It lands here, with its two PipeFill.cpp switch arms, because this file and that one belong
+// to the contract package for the whole phase - a family package that had to add an enumerator
+// AND the arm that dispatches on it would be editing the one file the merge trap lives in.
 #define MGP_COVERAGE_EMITTED_LIST(X)                                     \
     X(GetActiveTextureUnit,                     SetContextValues)        \
     X(GetBlendColor,                            SetDynamicState)         \
@@ -243,6 +260,7 @@
     X(GetBlendFuncIndexed,                      CreateRenderState)       \
     X(GetBoundTransformFeedbackLifetimeId,      SetContextValues)        \
     X(GetBoundVertexArray,                      BindVertexElements)      \
+    X(GetBufferBindingPoint,                    SetShaderBuffers)        \
     X(GetClampReadColor,                        SetDynamicState)         \
     X(GetClearColor,                            SetDynamicState)         \
     X(GetClearDepth,                            SetDynamicState)         \

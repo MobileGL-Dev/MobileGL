@@ -964,8 +964,23 @@ namespace MobileGL::MG_Pipe {
     // Var-tail header: MGPBufferRange[Count], then MGHostSpan[HostSpanCount]. HostSpanCount is
     // 0, or Count for the Uniform class under kCapNeedsHostUboBytes (a range with nothing to
     // ship carries an empty span, so the two arrays stay index-aligned).
+    // MGPShaderBuffers::Class's three values, and the ONLY spelling of them (P5e,
+    // MG_Remote/CONTRACT-P5E.md §1). The payload's comment has named them since P4a and
+    // nothing numbered them, so the emitter and the applier were one literal each away from
+    // disagreeing. Uniform is 0 so a zeroed record describes the uniform binding points, which
+    // is the class every workload has.
+    //
+    // XFB IS NOT ONE OF THEM: set_stream_output_targets carries a Generation this payload has
+    // no field for and its capture points are span-scoped state latched at Begin, so the
+    // catalogue's split between the two rows stays (§5.7).
+    inline constexpr Uint32 kMGPipeShaderBufferClassUniform = 0;
+    inline constexpr Uint32 kMGPipeShaderBufferClassShaderStorage = 1;
+    inline constexpr Uint32 kMGPipeShaderBufferClassAtomicCounter = 2;
+    inline constexpr Uint32 kMGPipeShaderBufferClassCount = 3;
+
     struct MGPShaderBuffers {
-        Uint32 Class; // Uniform | ShaderStorage | AtomicCounter
+        Uint32 Class; // MGPipeTypes.h's kMGPipeShaderBufferClass* - Uniform | ShaderStorage |
+                      // AtomicCounter
         Uint32 Start;
         Uint32 Count;
         Uint32 WritableMask;

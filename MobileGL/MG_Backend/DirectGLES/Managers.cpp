@@ -13697,4 +13697,88 @@ namespace MobileGL::MG_Backend::DirectGLES {
         TwinRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject, MG_Pipe::MGPipeKind::Renderbuffer>
             g_backendRenderbufferObjects;
     } // namespace RenderbufferImpl
+
+#if MOBILEGL_PIPE_PUSH
+    // =====================================================================================
+    // P5e SEAMS: DECLARED AND REFUSED HERE, BODIED BY THE FAMILY PACKAGES
+    // (MG_Remote/CONTRACT-P5E.md §4.2; BRIEF-P5E §1's "each such seam is a declared signature
+    // in c0e so both sides compile from day one")
+    // =====================================================================================
+    //
+    // WHY THEY ARE ALL IN ONE BLOCK AND WHY THE BODIES ABORT. P5e lands as eight packages in
+    // eight parallel worktrees, and five of them are on opposite sides of these calls: tx2
+    // writes SyncTextureToBackendByHandle and SyncMipmapsToBackendByHandle while fb's
+    // attachment sync and image sweep CALL them; fb writes the two SyncToBackendByHandle
+    // overloads while tx2's detach walk needs the reverse index behind them; id rekeys the
+    // registries the three resolvers read. A package that had to add its own declaration would
+    // collide with the package that added the other half, which is the merge trap P4a's
+    // contract package was written to avoid.
+    //
+    // So the signature is fixed HERE, once, and each family's commit replaces a body. The body
+    // ABORTS BY NAME rather than returning null or doing nothing: a resolver that answered null
+    // would render a blank draw and a sync that did nothing would render stale pixels, and both
+    // would be green lanes. Nothing calls any of them at this commit - every call site is still
+    // on the frontend overload beside it - so the abort is a link-time seam, not a runtime one.
+    //
+    // A package REPLACES the body in place and deletes the matching comment; it does not add a
+    // second definition elsewhere, or the linker's answer depends on link order.
+    namespace {
+        [[noreturn]] void MGPipeP5eSeamNotLanded(const char* name, const char* owner,
+                                                 MG_Pipe::MGPipeHandle handle) {
+            MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"%s\"} - the P5e by-handle seam is declared by "
+                    "package c0e and bodied by package %s; it was called for handle {%u, %u} "
+                    "before that package landed",
+                    name, owner, handle.Slot, handle.Gen);
+            std::abort();
+        }
+    } // namespace
+
+    namespace VertexArrayImpl {
+        BackendVertexArrayObject* ResolveVaoTwin(MG_Pipe::MGPipeHandle vertexElements) {
+            MGPipeP5eSeamNotLanded("VertexArrayImpl::ResolveVaoTwin", "id/vi", vertexElements);
+        }
+    } // namespace VertexArrayImpl
+
+    namespace TextureImpl {
+        SharedPtr<BackendTextureObject>& SyncTextureToBackendByHandle(MG_Pipe::MGPipeHandle texture,
+                                                                      Bool imageBindableStorageRequired) {
+            (void)imageBindableStorageRequired;
+            MGPipeP5eSeamNotLanded("TextureImpl::SyncTextureToBackendByHandle", "tx2", texture);
+        }
+
+        BackendTextureObject* ResolveTextureTwin(MG_Pipe::MGPipeHandle texture) {
+            MGPipeP5eSeamNotLanded("TextureImpl::ResolveTextureTwin", "id/tx2", texture);
+        }
+
+        void BackendTextureObject::SyncMipmapsToBackendByHandle(MG_Pipe::MGPipeHandle texture) {
+            MGPipeP5eSeamNotLanded("BackendTextureObject::SyncMipmapsToBackendByHandle", "tx2",
+                                   texture);
+        }
+    } // namespace TextureImpl
+
+    namespace FramebufferImpl {
+        void BackendFramebufferObject::SyncToBackendByHandle(MG_Pipe::MGPipeHandle fbo,
+                                                             FramebufferTarget asTarget) {
+            (void)asTarget;
+            MGPipeP5eSeamNotLanded("BackendFramebufferObject::SyncToBackendByHandle", "fb", fbo);
+        }
+    } // namespace FramebufferImpl
+
+    namespace PrgramImpl {
+        BackendProgramObjectImpl* ResolveProgramTwin(MG_Pipe::MGPipeHandle cso) {
+            MGPipeP5eSeamNotLanded("PrgramImpl::ResolveProgramTwin", "id/pg", cso);
+        }
+
+        void BackendProgramObjectImpl::SyncToBackendByHandle(MG_Pipe::MGPipeHandle cso) {
+            MGPipeP5eSeamNotLanded("BackendProgramObjectImpl::SyncToBackendByHandle", "pg", cso);
+        }
+    } // namespace PrgramImpl
+
+    namespace RenderbufferImpl {
+        void BackendRenderbufferObject::SyncToBackendByHandle(MG_Pipe::MGPipeHandle renderbuffer) {
+            MGPipeP5eSeamNotLanded("BackendRenderbufferObject::SyncToBackendByHandle", "fb",
+                                   renderbuffer);
+        }
+    } // namespace RenderbufferImpl
+#endif // MOBILEGL_PIPE_PUSH
 } // namespace MobileGL::MG_Backend::DirectGLES
