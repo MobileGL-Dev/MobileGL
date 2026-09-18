@@ -2276,6 +2276,59 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_SMALL_RING_ENVIRONMENT}"
         )
     endforeach()
+
+    # ---- P5e package pa: THE STRICT LANE GETS ENTRIES OF ITS OWN ------------------------------
+    #
+    # pa retired the two per-draw program rows - Fatal{UnmigratedPipeInput,
+    # "GetProgramForDraw@DrawArrays"} and "...GetProgramForDispatch@DispatchCompute", 69 of the
+    # 109 entries the strict lane was red on. NOTHING GATED THEM. MOBILEGL_IPC_STRICT_ERRORS=1 is
+    # a knob the phase's gate driver sets by hand, no REGISTERED entry exports it, and package
+    # pg's declared red-once for this exact marker never landed - so the row could come back and
+    # every gate would stay green. That is ID-109's finding in miniature: the gap was never a
+    # missing test case, it was a missing gated ENTRY for a whole reading.
+    #
+    # WHICH SCENARIOS MAY JOIN is decided by the knob itself: under it every BARRIER-PULLED read
+    # is Fatal, and most split scenarios end in a readback, whose GetFramebufferBindingSlot@ReadPixels
+    # is an allowlisted row that only P7 retires. So a scenario is eligible exactly when it
+    # reaches PrepareForDraw / PrepareForCompute and then does NOT read pixels back. Two do, one
+    # per half of pa, and both were red with pa's own marker before it landed:
+    #   * MultiDrawScenario.BaseVertexDrawsRejectMalformedArguments - the DRAW half; it prepares a
+    #     draw and then asserts on GL errors rather than on pixels.
+    #   * AtomicCounterScenario.* - the DISPATCH half, and all three cases were
+    #     GetProgramForDispatch@DispatchCompute entries.
+    #
+    # LABELS IS integration-split ALONE, deliberately, and it is not the hole ID-109 names. That
+    # hole was a runtime ARM with no entry anywhere; here the monolith arm of these same scenarios
+    # is registered under DirectGLES. already and this knob is a no-op on it - a monolith client
+    # fills and stamps all 63 fields at every verb, so no read is unfresh and nothing can trip.
+    # An entry that cannot fail for the reason it exists is worse than none (R-16), so this lane
+    # names the arm it is for in its own prefix. The F1. lane sets the same precedent.
+    mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_STRICT_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc"
+        "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
+        "MOBILEGL_IPC_STRICT_ERRORS=1"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Split.StrictProgramArm."
+        TEST_LIST MGL_SPLIT_PA_STRICT_DRAW_TESTS
+        TEST_FILTER "MultiDrawScenario.BaseVertexDrawsRejectMalformedArguments"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-split"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_STRICT_ENVIRONMENT}"
+    )
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Split.StrictProgramArm."
+        TEST_LIST MGL_SPLIT_PA_STRICT_DISPATCH_TESTS
+        TEST_FILTER "AtomicCounterScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-split"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_STRICT_ENVIRONMENT}"
+    )
     # Apply per-entry paths after GoogleTest discovery has populated the TEST_LISTs.
     configure_file(Harness/SplitLogPaths.cmake.in SplitLogPaths.cmake @ONLY)
     set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
