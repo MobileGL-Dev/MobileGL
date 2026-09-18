@@ -81,6 +81,22 @@ namespace MobileGL::MG_Backend {
         // DirectVulkan registers NO resource ops - MGPipeSetResourceOps has exactly one caller
         // in the whole tree and it is Managers.cpp:2594 - so bit 7 is CLEAR for it, which is
         // the same fact ObjectSubsystemControlScenario already pins from the client side.
+        // P5e (MG_Remote/CONTRACT-P5E.md §6.2). THE ONE CONSTANT THE WHOLE PHASE HANGS ON.
+        //
+        // kCapRunAheadApply says "this server applies an unbarriered record without reading
+        // client memory". That is only true once EVERY per-draw family reads records instead
+        // of the frontend - vi, sb, pg, tx2 and fb all land before it is - so the caps arm
+        // below is gated on this constant, which the P5e INTEGRATION COMMIT flips to true
+        // after the last of them. Until then every P5e package lands with the wait rule, the
+        // static WaitClass column and the barriered predicate compiled and INERT: the client
+        // never latches RunAheadArmed, so it runs today's lockstep path byte for byte.
+        //
+        // It is a constant and not a knob on purpose. An operator cannot turn a half-migrated
+        // server into a run-ahead one, because the failure mode is not a slow frame - it is
+        // the apply thread reading client memory that has already moved, which renders wrong
+        // rather than aborting.
+        constexpr Bool kMGPipeP5eRunAheadReady = false;
+
         Uint64 ConsumedSubsystemsFor(BackendType type) {
             switch (type) {
             case BackendType::DirectGLES: return MG_Pipe::kMGPipeSubsystemsMigratedAtP4a;
@@ -166,6 +182,21 @@ namespace MobileGL::MG_Backend {
                 serverBackend->GetBackendFunctions().GL.EndTransformFeedback != nullptr) {
                 capBits |= MG_Pipe::kCapBackendOwnsXfbCapture;
             }
+            // P5e (CONTRACT-P5E.md §1, §6): kCapRunAheadApply, THE DIRECTGLES ARM AND ONLY IT.
+            //
+            // Magma is deliberately absent and is not an omission: it keeps the lockstep for
+            // the whole of P5e, its four apply-thread allocator sites are real debt P7 retires,
+            // and MGPipeApplierCurrentRecordIsBarriered() answers true for every record on a
+            // server that does not publish this bit - which is exactly what keeps those probes
+            // and its BARRIER_PULLED reads inside P5C's semantics and its rsp accounting
+            // honest. Publishing the bit here for DirectVulkan would turn accounted pulls into
+            // torn ones, so MagmaPipeIdentityTest pins its absence.
+            //
+            // The Espryt arm is gated on kMGPipeP5eRunAheadReady, which is false until the
+            // integration commit: the bit is what ARMS the client, so every package before it
+            // lands inert.
+            capBits |= MG_Pipe::MGPipeRunAheadCapBitsFor(MG_Config::ActiveBackendType,
+                                                         kMGPipeP5eRunAheadReady);
             session.SetCapabilityBits(capBits);
             session.SetBackend(loop.Backend());
 
