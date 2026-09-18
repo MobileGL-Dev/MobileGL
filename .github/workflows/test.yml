@@ -1214,35 +1214,66 @@ jobs:
           ulimit -c unlimited
           ready=$(grep -oE 'kMGPipeP5eRunAheadReady = (true|false)' "${GITHUB_WORKSPACE}/MobileGL/MG_Backend/Init.cpp" | head -1 | awk '{print $3}')
           echo "kMGPipeP5eRunAheadReady = ${ready}"
+          helper="${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/split_log_paths.py"
+          expected="${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/strict-expected-markers.txt"
+
+          # THE LOG SET COMES FROM ctest, NOT FROM A DIRECTORY (P5e gl, ID-119). This step used to
+          # grep MobileGL/MG_IntegrationTest/split-logs/, which holds 90 of the lane's entries.
+          # The 26 it could not see were the F1. readback block, both NamedBlit pairs, the four
+          # Ct. entries and PersistentMapArm - i.e. PRECISELY the readback population the
+          # allowlist is about, plus the only DirectVulkan entries in the lane. A directory is a
+          # guess about where the lane put its logs; `--show-only=json-v1` is the lane saying so.
+          ctest -L integration-split --show-only=json-v1 > "${RUNNER_TEMP}/lane.json"
+
+          # Stale logs from an earlier job would be read as this run's evidence: an entry that
+          # never starts leaves the previous file in place, and "no marker" is exactly what a
+          # lane that never ran looks like.
+          python3 - "${RUNNER_TEMP}/lane.json" "${helper}" <<'PY'
+          import importlib.util, json, os, sys
+          spec = importlib.util.spec_from_file_location("slp", sys.argv[2])
+          slp = importlib.util.module_from_spec(spec); spec.loader.exec_module(slp)
+          logs = slp.marker_log_paths(json.load(open(sys.argv[1])))
+          for path in set(logs.values()):
+              try:
+                  os.unlink(path)
+              except OSError:
+                  pass
+          print(f"reset {len(set(logs.values()))} private log(s) across {len(logs)} entries")
+          PY
+
           rc=0
           ctest -L integration-split --no-tests=error -j 4 > "${RUNNER_TEMP}/strict-split.txt" 2>&1 || rc=$?
           tail -5 "${RUNNER_TEMP}/strict-split.txt"
           echo "strict run: rc=${rc}"
 
+          python3 "${GITHUB_WORKSPACE}/scripts/gen_pipe_field_ownership.py" --print-admitted \
+            > "${RUNNER_TEMP}/allowed.txt"
+          echo "§7 allowlist (derived): $(wc -l < "${RUNNER_TEMP}/allowed.txt") admitted pair(s)"
+
           if [ "${ready}" != "true" ]; then
-            # ---- the pre-flip arm, unchanged from P5c ----
+            # ---- the pre-flip arm ----
             if [ "${rc}" -eq 0 ]; then
               echo "::error::integration-split under MOBILEGL_IPC_STRICT_ERRORS=1 went GREEN while kMGPipeP5eRunAheadReady is false - the object-class residual pulls (P3b/P4b/P7) are still pinned, so strict must abort every drawing scenario. If P5e has just landed, flip that constant in the same commit."
               exit 1
             fi
-            marker='BARRIER-PULLED, MOBILEGL_IPC_STRICT_ERRORS=1'
-            hits=$(grep -rl "${marker}" MobileGL/MG_IntegrationTest/split-logs/ 2>/dev/null | wc -l)
-            if [ "${hits}" -lt 1 ]; then
-              echo "::error::no split entry's private log carries the strict marker '${marker}' - the lane went red without the strict Fatal firing, which is a defect, not the control"
-              exit 1
-            fi
-            echo "integration-split under strict is red by design; ${hits} private log(s) carry the strict marker"
+            # The census, and the ADMITTED half of the ratchet, run in this arm too: the Fatal
+            # half is expected here (it is what "red by design" MEANS), but a debt that appeared
+            # or vanished on the admitted side is news whichever arm the tree is in.
+            python3 "${helper}" markers "${RUNNER_TEMP}/lane.json" '.' \
+              "${RUNNER_TEMP}/allowed.txt" "${expected}"
+            echo "integration-split under strict is red by design, and its marker census above is the evidence"
             exit 0
           fi
 
-          # ---- the post-flip arm: HARD GREEN, with §7's allowlist ----
+          # ---- the post-flip arm: HARD GREEN, two-sided ----
           #
-          # EVERY ENTRY MUST COMPLETE. An abort here is either an unbarriered pull (§3.3's
-          # unconditional Fatal, which is a missed migration) or a barriered row that is not on
-          # the list below, and both are the lane's job to catch.
+          # EVERY ENTRY MUST COMPLETE, and the census is what says why when one does not: an abort
+          # is either an unbarriered pull (§3.3's unconditional Fatal, a missed migration) or a
+          # barriered pull nothing admits, and both come out of the census by field and verb.
           if [ "${rc}" -ne 0 ]; then
-            echo "::error::integration-split under MOBILEGL_IPC_STRICT_ERRORS=1 is RED on a run-ahead server. CONTRACT-P5E §7 makes this lane a hard green gate: an unbarriered record's pull aborts whatever the knob says, so a red here names a field and a verb in the failing entry's private log."
-            grep -hoE 'Fatal\{UnmigratedPipeInput, "[^"]*"\}' MobileGL/MG_IntegrationTest/split-logs/*.log 2>/dev/null | sort | uniq -c | sort -rn | head -20
+            echo "::error::integration-split under MOBILEGL_IPC_STRICT_ERRORS=1 is RED on a run-ahead server. CONTRACT-P5E §7 makes this lane a hard green gate; the census below names the field and the verb of every entry that aborted."
+            python3 "${helper}" markers "${RUNNER_TEMP}/lane.json" '.' \
+              "${RUNNER_TEMP}/allowed.txt" "${expected}" || true
             exit 1
           fi
 
@@ -1269,27 +1300,46 @@ jobs:
           # from, so this shell and the C++ cannot drift: retiring a verb's wait class narrows
           # the lane with no edit here, and a new BARRIER_PULLED row widens it only on verbs
           # that wait.
-          python3 "${GITHUB_WORKSPACE}/scripts/gen_pipe_field_ownership.py" --print-admitted \
-            > "${RUNNER_TEMP}/allowed.txt"
-          echo "§7 allowlist (derived): $(wc -l < "${RUNNER_TEMP}/allowed.txt") admitted pair(s)"
+          # THE RATCHET, BOTH SIDES (ID-119). `no-fatal` is what makes this arm the hard gate:
+          #   - any Fatal marker fails;
+          #   - an ADMITTED marker outside the generated allowlist fails, which can only mean the
+          #     committed PipeFieldOwnership.inc and the generator disagree;
+          #   - a pair that appears and is not in strict-expected-markers.txt fails: it is a debt
+          #     somebody now owes and it gets written down with the phase that retires it;
+          #   - AND a pair in that file that no longer appears fails, so the lane CANNOT ROT
+          #     GREEN. Without that half, a retired debt leaves its row behind as a permanent
+          #     licence and the next regression to re-introduce the read reads as "expected".
+          # ADMITTED-ESCALATED markers are checked against the expected set but NOT against the
+          # allowlist: they are a runtime fact about the record's payload (an open XFB span, a
+          # draw carrying client vertex arrays) that no table indexed by (field, verb) can carry,
+          # and widening the static list to hold them would forgive the ordinary draw path too.
+          python3 "${helper}" markers "${RUNNER_TEMP}/lane.json" '.' \
+            "${RUNNER_TEMP}/allowed.txt" "${expected}" no-fatal
 
-          grep -rhoE '\[BARRIER-PULLED[^]]*\]' MobileGL/MG_IntegrationTest/split-logs/ 2>/dev/null > "${RUNNER_TEMP}/markers-raw.txt" || true
-          grep -rhoE 'Fatal\{UnmigratedPipeInput, "[^"]*"\}' MobileGL/MG_IntegrationTest/split-logs/ 2>/dev/null \
-            | sed -E 's/.*"([^"]*)".*/\1/' | sort -u > "${RUNNER_TEMP}/markers.txt" || true
-          bad=$(comm -23 "${RUNNER_TEMP}/markers.txt" <(sort -u "${RUNNER_TEMP}/allowed.txt") || true)
-          if [ -n "${bad}" ]; then
-            echo "::error::a BARRIER-PULLED marker outside CONTRACT-P5E §7's allowlist appeared on a run-ahead server. Each one is a field an apply still reads out of client memory:"
-            echo "${bad}"
+          # `rsp`, AND THE PIN THAT REPLACED A VACUOUS ONE (ID-119). What stood here was a grep
+          # for `rsp=` over split-logs/ - a counter no entry in that directory emits, because
+          # PipeStats is off unless a lane asks for it - testing a sentence that was true of every
+          # possible implementation: CountBarrierPull's unbarriered arm is [[noreturn]] and runs
+          # BEFORE ++g_residualPulls, so an unbarriered pull can never reach the counter whatever
+          # the code does. It has been replaced by an assertion inside a lane entry that actually
+          # counts: DirectGLES.Split.StrictArming., which runs with MOBILEGL_PIPE_STATS=1,
+          # MOBILEGL_PIPE_STATS_PERIOD=1 and a private log path of its own (a whole-lane env flip
+          # races under -j, since the library opens that path "w"), and asserts
+          #   vbs > 0    - the server stamped a verb boundary on a DRAWING inproc entry, which is
+          #                ID-115's positive control: everything strict checks is downstream of
+          #                that stamp, and before it existed "the lane is green" and "strict was
+          #                never armed" were the same observation;
+          #   rsp == 0 or rsp >= draws - the checkable shape of the debt. While the draw path's
+          #                pull is unretired every draw pulls, so rsp scales with draws; the
+          #                retirement is visible as rsp ceasing to scale. That is what the device
+          #                measured (rsp ~= the draw count under inproc, 0 under monolith).
+          # So the assertion lives where the counter is, and this step only has to insist the
+          # entry RAN - a positive control that can be skipped away is not one.
+          if ! grep -q 'DirectGLES\.Split\.StrictArming\.' "${RUNNER_TEMP}/strict-split.txt"; then
+            echo "::error::the strict lane did not run DirectGLES.Split.StrictArming., so nothing in this run proves the server ever stamped a verb boundary. A green lane without it is indistinguishable from a lane where strict was never armed (ID-115)."
             exit 1
           fi
-
-          # `rsp` = 0 ON UNBARRIERED RECORDS, in every summary that printed it. A non-zero count
-          # would be an abort that did not fire, which is the one failure §3.3's unconditional
-          # arm cannot report by itself.
-          if grep -rhoE 'rsp=[0-9]+' MobileGL/MG_IntegrationTest/split-logs/ 2>/dev/null | grep -qvE 'rsp=0$'; then
-            echo "::warning::a scenario summary reports a non-zero rsp; under P5e every remaining pull is a BARRIERED row on the allowlist above, and the count belongs in the trailing inventory rather than in this lane"
-          fi
-          echo "integration-split under strict is GREEN with only the §7 allowlist admitted ($(wc -l < "${RUNNER_TEMP}/markers.txt") distinct marker(s))"
+          echo "integration-split under strict is GREEN, two-sided, with the arming control present"
 
       - name: Upload strict lane logs
         if: always()

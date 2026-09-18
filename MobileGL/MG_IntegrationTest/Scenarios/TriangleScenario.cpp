@@ -47,6 +47,7 @@
 #include <vector>
 
 #include "../Harness/HeadlessGL.h"
+#include "../Harness/PipeStatsWindow.h"
 #include "../Harness/ScenarioFixture.h"
 #include "../Harness/SplitLane.h"
 #include "../Harness/WireLedgerChecks.h"
@@ -283,6 +284,109 @@ void main() { oColor = vec4(vColor, 1.0); }
             WireLedger::ExpectSmallRingWrappedAtLeastOnce(
                 "TriangleScenario.TheSameVboAndVaoRedrawAcrossAFrameBoundary", driven);
         }
+    }
+
+    // ===================================================================================
+    // P5e (gl), ID-115 / ID-119: THE STRICT LANE'S POSITIVE CONTROL
+    // ===================================================================================
+    //
+    // WHY THE LANE NEEDS ONE AT ALL. Of the seven entries that passed `integration-split` under
+    // MOBILEGL_IPC_STRICT_ERRORS=1 before this phase, three were MOBILEGL_TRANSPORT=monolith -
+    // where the server never stamps a verb boundary, so the entire strict mechanism is
+    // structurally unreachable - two self-skipped, one was a death test and one was a Python
+    // check. Not one was a record-carrying split GL scenario. So "116/116 under strict" and
+    // "strict was never armed on anything that draws" were indistinguishable from outside, and
+    // a gate that cannot tell those apart is not a gate (ID-115).
+    //
+    // WHAT IT ASSERTS, AND WHY EACH PART IS NECESSARY.
+    //   `vbs` > 0   - the server stamped at least one verb boundary IN THIS ENTRY. Everything
+    //                 strict checks is downstream of that stamp. This is the arming proof and
+    //                 it is deliberately not rsp: rsp goes to ZERO exactly when the phase
+    //                 SUCCEEDS, so a control built on it would start failing on the day the
+    //                 debt is paid.
+    //   `draws` > 0 - and the entry really drew, so "armed" is not "armed on a clear".
+    //   rsp vs draws (ID-119) - the old pin, "rsp = 0 on unbarriered records", was VACUOUS: the
+    //                 unbarriered arm of CountBarrierPull is [[noreturn]] and runs before the
+    //                 counter, so no implementation could ever have made it false. What is
+    //                 checkable is the SHAPE: while the draw path's debt is unretired every draw
+    //                 pulls, so rsp scales with draws; when it retires, rsp goes to 0. The
+    //                 measured device numbers are the same statement - rsp was ~852 (the draw
+    //                 count) under inproc and 0 under monolith. So the assertion is "rsp is 0 or
+    //                 it scales with draws", and the retirement is visible as the transition.
+    //
+    // THE WINDOW IS READ, NOT INFERRED. `found == false` means the stats channel never reached
+    // this process, which is a DIFFERENT failure from "the counter read zero" and is reported as
+    // one - otherwise a lane that lost MOBILEGL_PIPE_STATS would report the arming proof as a
+    // clean zero. The lane entry that runs this case owns its own MOBILEGL_LOG_FILE_PATH for
+    // PipeStatsWindow.h's reason: the library opens it "w", so two entries sharing a path under
+    // `ctest -j` race into an empty read that looks exactly like "never emitted".
+    TEST_F(TriangleScenario, TheServerStampedAVerbBoundaryOnThisDrawingFrame) {
+        if (!Ready() || IsSkipped()) return;
+
+        const std::string skip = SplitLane::SkipReasonForSplitOnlyAssertions();
+        if (!skip.empty()) {
+            // The monolith arms' skip twin (G2/G14), and it is LOUD rather than silent because
+            // this case's whole subject is a counter that is zero there BY CONSTRUCTION -
+            // nothing stamps a verb boundary in a monolith build, and a case that "passed"
+            // by reading that zero would be the exact confusion it exists to prevent.
+            RecordProperty("strict_arming_skip_reason", skip);
+            GTEST_SKIP() << "the server verb stamp exists only under split: " << skip;
+            return;
+        }
+        // ONE LANE OWNS THIS CASE, and it declares itself by name the way MGITEST_PMAP_LANE does.
+        // TriangleScenario.* is discovered by several blocks (the plain split lane, the small-ring
+        // lane, the monolith lanes), and every one of them gives its entries a private
+        // MOBILEGL_LOG_FILE_PATH - so "is there a log path" cannot distinguish the lane that
+        // asked for counters from the lanes that merely have somewhere to log. Reading the window
+        // in those would assert on a summary line nobody enabled.
+        if (!SplitLane::MarkerIsOne("MGITEST_STRICT_ARMING_LANE")) {
+            GTEST_SKIP() << "not the strict-arming lane: this case reads a PipeStats window and "
+                            "only DirectGLES.Split.StrictArming. sets MOBILEGL_PIPE_STATS=1, "
+                            "MOBILEGL_PIPE_STATS_PERIOD=1 and a log path of its own";
+            return;
+        }
+        if (PipeStatsWindow::LibraryLogPath().empty()) {
+            GTEST_SKIP() << "the lane configured no MOBILEGL_LOG_FILE_PATH, and the library's "
+                            "summary line is the only channel this module has for PipeStats";
+            return;
+        }
+
+        // Close the setup window, run the workload, close it again: the LAST line then covers
+        // the draw and nothing else (PipeStatsWindow.h's "since the previous line").
+        Gl().EndFrame();
+        const Image image = ClearThenDrawThenRead(0.0f, 0.0f, 1.0f);
+        EXPECT_EQ(FirstGLError(), 0u);
+        ExpectTriangleInterior(image, "green", "the drawing frame the counters are taken over");
+        Gl().EndFrame();
+
+        const PipeStatsWindow::Window window = PipeStatsWindow::LastFromLaneLog();
+        ASSERT_TRUE(window.found)
+            << "the library emitted no `MGPipe stats:` line, so this lane's arming proof is "
+               "MISSING rather than zero - check MOBILEGL_PIPE_STATS=1, "
+               "MOBILEGL_PIPE_STATS_PERIOD=1 and this entry's private MOBILEGL_LOG_FILE_PATH";
+
+        const long long draws = PipeStatsWindow::CounterOrAbsent(window, "draws");
+        const long long stamps = PipeStatsWindow::CounterOrAbsent(window, "vbs");
+        const long long residual = PipeStatsWindow::CounterOrAbsent(window, "rsp");
+        RecordProperty("pipe_stats_window", window.line);
+        RecordProperty("server_verb_boundaries", std::to_string(stamps));
+        RecordProperty("residual_pulls", std::to_string(residual));
+
+        EXPECT_GT(draws, 0) << "no draw reached the instrumented entry point in the window this "
+                               "case took, so there is nothing for the arming proof to be about: "
+                            << window.line;
+        EXPECT_GT(stamps, 0)
+            << "the server stamped NO verb boundary on a drawing split entry. Every strict check "
+               "- the poison, rsp, the BARRIER-PULLED verdict - is downstream of that stamp, so "
+               "a green strict lane containing only entries like this one would mean the knob "
+               "was never armed rather than that the debt was paid (ID-115): "
+            << window.line;
+        EXPECT_TRUE(residual == 0 || residual >= draws)
+            << "rsp neither scales with draws nor is zero (" << residual << " vs " << draws
+            << "). ID-119: while this phase's draw-path debt is unretired every draw pulls at "
+               "least one BARRIER-PULLED row, and the retirement is visible as rsp ceasing to "
+               "scale with draws - a value strictly between is neither state: "
+            << window.line;
     }
 
 } // namespace MGITest

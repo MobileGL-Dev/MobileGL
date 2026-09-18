@@ -264,6 +264,17 @@ namespace MobileGL::MG_Pipe {
 
     void MGPipeServerStampVerbBoundary(MGPipeVerb verb) {
         PipeInputs& inputs = gPipeInputs;
+        // P5e (gl), ID-115: THE POSITIVE CONTROL'S ONLY HONEST SIGNAL, and it belongs HERE
+        // because this is the line the whole strict mechanism hangs off. The poison, rsp and
+        // the BARRIER-PULLED verdict are all reachable only after this stamp, and the monolith
+        // arm never stamps at all - so "the strict lane is green" and "strict was never armed"
+        // were observationally identical, which is how a lane whose seven passing entries
+        // included no record-carrying split GL scenario read as rigour. Behind Enabled(), which
+        // is the file's rule for counters (`rsp` beside it does the same) and keeps the stamp a
+        // table lookup and a branch-free fill when stats are off.
+        if (MG_Util::PipeStats::Enabled()) {
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ServerVerbBoundaries, 1);
+        }
         MGPipeFilledState& filled = MGPipeStampAccess::Filled(inputs);
         MGPipeStampAccess::SetVerb(inputs, verb);
         // Starts at 1 for MGPipeValidateForVerb's reason: FilledGen == 0 is "never filled" on
