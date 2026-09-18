@@ -2014,6 +2014,79 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         )
     endforeach()
 
+    # ---- P5e mv: THE MULTI-DRAW TIERS, INSIDE THE GATED SET (ID-109's rule, one level down) --
+    #
+    # WHY FIVE MORE LANES FOR ONE FILE. MultiDrawImpl asks the bound index buffer three questions
+    # and P5e (mv) moved all three onto the applier's record. Five of this driver's six tiers ask
+    # them from a DIFFERENT place in the batch - `RunIndirect` before any GL work, the rebased
+    # tier from the CPU shadow, `FlattenWithCompute` before PrepareForDraw has even run - and the
+    # resolved tier is ONE process-wide read of MOBILEGL_ESPRYT_MULTIDRAW_MODE (MultiDraw.cpp's
+    # ResolveTierOnce). The d1 block above leaves it at `auto`, and on every driver this gate has
+    # run against, `auto` lands on `ext` - a real multi-draw entry point that asks the index
+    # buffer nothing at all. Three of the five migrated sites therefore had no gated entry.
+    #
+    # That is ID-107's shape exactly one level down: code on a real arm, with no entry in the set
+    # the gate runs. The phase already paid 137 SEGFAULTs across 38 scenarios for the version of
+    # this that lived at the transport level, and the lesson ID-109 drew - "the gate runs the SET,
+    # so put the second arm in the set" - does not stop being true because the selector is an env
+    # knob rather than MG_Config::Transport. A manual sweep run once by one package decays to
+    # nothing by the next one.
+    #
+    # MOBILEGL_ESPRYT_MULTIDRAW_MODE IS A ctest ENVIRONMENT PROPERTY, not a job-level export, for
+    # review finding N-6's reason and the PushMonolithArm block's: the property overrides the job
+    # environment, so a gate that exported a mode of its own could not silently collapse these
+    # five lanes into five more copies of the `auto` one - the single failure mode a lane whose
+    # whole purpose is to pin a tier cannot survive.
+    #
+    # `ext` IS NOT REGISTERED HERE, deliberately: it is what `auto` already resolves to, so the
+    # d1 block above IS the ext lane and a sixth block would only run it twice. Every other tier
+    # was confirmed to resolve to ITSELF on this driver rather than falling back
+    # (`ResolveTier`'s "MOBILEGL_ESPRYT_MULTIDRAW_MODE=<x> -> <x> (driver supports: ext,
+    # basevertex, multiindirect, indirect, drawelements, compute (opt-in))"); a tier the driver
+    # refuses would resolve to `ext` and register an entry that quietly proves nothing, so if this
+    # list ever runs somewhere poorer, drop the refused tier rather than keeping a green that
+    # means "ext again".
+    #
+    # THE FILTER IS THE TIER-SENSITIVE WORKLOAD and nothing else, which is this file's own rule
+    # for an armed Split entry: MultiDrawScenario (its whole point is that a batch matches the
+    # unrolled draws, which is precisely what a wrong index buffer breaks quietly) and
+    # IndexedDrawFamilyScenario's three MultiDraw cases. The client-side-indices case keeps the
+    # d1 block's exclusion - it is refused by name under split before any tier is chosen.
+    #
+    # NOTE FOR THE STRICT-MARKER CENSUS (PREAMBLE-ADDENDUM-WAVE3 §4): these entries carry a THIRD
+    # name segment, so `strict_census2.sh` re-derives their gtest filter from the last two
+    # components and re-runs them WITHOUT the mode this block pins - which for these lanes is the
+    # whole point of the entry. They join Ct. / F1. / SmallRing. / PersistentMapArm. / NamedBlit.
+    # in that blind spot, so SplitLogPaths.cmake.in gives each of them a private log path: read
+    # the marker out of `build-split/MobileGL/MG_IntegrationTest/split-logs/<entry>.log`, which
+    # the LANE wrote under its own pin, instead of out of a re-run that lost it.
+    set(MGL_SPLIT_MULTIDRAW_TIERS basevertex multiindirect indirect drawelements compute)
+    set(MGL_SPLIT_MULTIDRAW_TIER_PREFIX_basevertex "BaseVertex")
+    set(MGL_SPLIT_MULTIDRAW_TIER_PREFIX_multiindirect "MultiIndirect")
+    set(MGL_SPLIT_MULTIDRAW_TIER_PREFIX_indirect "Indirect")
+    set(MGL_SPLIT_MULTIDRAW_TIER_PREFIX_drawelements "DrawElements")
+    set(MGL_SPLIT_MULTIDRAW_TIER_PREFIX_compute "Compute")
+    set(MGL_SPLIT_MULTIDRAW_TIER_FILTER
+        "MultiDrawScenario.*:IndexedDrawFamilyScenario.MultiDraw*-MultiDrawScenario.ClientSideIndicesBatchMatchesUnrolledDraws")
+    foreach(mglItestMultiDrawTier IN LISTS MGL_SPLIT_MULTIDRAW_TIERS)
+        mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_MULTIDRAW_ENVIRONMENT
+            "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc"
+            "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
+            "MOBILEGL_ESPRYT_MULTIDRAW_MODE=${mglItestMultiDrawTier}"
+            ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX
+                "DirectGLES.Split.MultiDrawTier${MGL_SPLIT_MULTIDRAW_TIER_PREFIX_${mglItestMultiDrawTier}}."
+            TEST_LIST "MGL_SPLIT_MULTIDRAW_${mglItestMultiDrawTier}_TESTS"
+            TEST_FILTER "${MGL_SPLIT_MULTIDRAW_TIER_FILTER}"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-gpu\;integration-split"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_MULTIDRAW_ENVIRONMENT}"
+        )
+    endforeach()
+
     # ---- P5b package i1 (MG_Remote/CONTRACT-P5B.md §2 i1) --------------------------------
     #
     # THE LANE CASE THAT PROVES THE RECORDS CROSSED, and it is a RESULT and not a probe (R-16:
