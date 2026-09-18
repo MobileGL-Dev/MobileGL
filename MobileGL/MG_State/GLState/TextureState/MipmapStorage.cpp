@@ -36,6 +36,21 @@ namespace MobileGL {
                 // The message names the TEXTURE-side method, not this storage's: the pinned
                 // surface list (MG_Test/Wire/RemoteClientTest.cpp's RemoteGuards) is written
                 // in TextureObjectMipmap's vocabulary.
+                //
+                // P5e (tx2): THE READ-ONLY SHAPE ACCESSORS JOIN THE LIST. P5c guarded the
+                // MUTATORS and deliberately exempted the shape reads, with the reason written
+                // into RemoteClientTest: "the per-draw binding walk reads them every draw", so
+                // guarding them would have aborted a lane that was still correct. P5e is the
+                // commit that makes that untrue - the unit work list, the clean gate and the
+                // three sync bodies read the resource RECORD and the server's staged-texture
+                // store, and nothing on the draw path asks the frontend object for a level count,
+                // a level extent, a level byte size or a compressed level again. So the exemption
+                // becomes a guard, and reverting any handle arm aborts here BY ACCESSOR NAME
+                // instead of rendering from client memory.
+                //
+                // A client-thread caller is unaffected (this is the frontend's own state, and the
+                // guard returns unless ServerLoop::OnApplyThread()); Magma's texture sync keeps
+                // its named scope exemption; the pull build compiles none of it.
                 void RefuseLegacyTextureArmFromApplyThread(const char* surface) {
                     if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
                     if (!MG_Remote::Server::ServerLoop::OnApplyThread()) return;
@@ -49,6 +64,21 @@ namespace MobileGL {
                             "storage is client memory and this arm is monolith-only",
                             surface);
                     std::abort();
+                }
+
+                // P5e (tx2), ruling 12's shape (ID-90): THE NEW READ-ONLY ROWS ARE KEYED ON THE
+                // BACKEND KIND, and that is not a softening - it is the same line §6 draws for
+                // every other P5e guard. MAGMA KEEPS THE LOCKSTEP: a DirectVulkan server's
+                // records are all barriered and its blit path still asks a frontend texture
+                // whether it IsComplete() (VulkanRenderer's ResolveColorBlitBinding), which is a
+                // P7 debt and legal under P5C's rules for a client parked in its own wait. What
+                // P5e retires is ESPRYT's per-draw shape reads, so the new rows abort on a
+                // DirectGLES server and are silent on a DirectVulkan one. The MUTATOR rows above
+                // stay unconditional: no backend may write a frontend texture's storage from the
+                // apply thread, and none does.
+                void RefuseLegacyTextureShapeReadFromApplyThread(const char* surface) {
+                    if (MG_Config::ActiveBackendType != BackendType::DirectGLES) return;
+                    RefuseLegacyTextureArmFromApplyThread(surface);
                 }
 #endif
 
@@ -97,6 +127,9 @@ namespace MobileGL {
 #endif
 
             SizeT MipmapStorage::GetLevelCount() const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureShapeReadFromApplyThread("GetMipmapLevelCount");
+#endif
                 return m_data.size();
             }
 
@@ -171,16 +204,25 @@ namespace MobileGL {
             }
 
             GLenum MipmapStorage::GetCompressedFormat(Uint level) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureShapeReadFromApplyThread("GetCompressedFormat");
+#endif
                 if (level >= m_compressedFormats.size()) return GL_NONE;
                 return m_compressedFormats[level];
             }
 
             SizeT MipmapStorage::GetCompressedByteSize(Uint level) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureShapeReadFromApplyThread("GetCompressedByteSize");
+#endif
                 if (level >= m_compressedData.size()) return 0;
                 return m_compressedData[level].size();
             }
 
             const void* MipmapStorage::MapCompressedData(Uint level) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureShapeReadFromApplyThread("MapCompressedMipmapData");
+#endif
                 if (level >= m_compressedData.size()) return nullptr;
                 return m_compressedData[level].data();
             }
@@ -191,6 +233,9 @@ namespace MobileGL {
             }
 
             GLenum MipmapStorage::GetRequestedCompressedFormat(Uint level) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureShapeReadFromApplyThread("GetRequestedCompressedFormat");
+#endif
                 if (level >= m_requestedCompressedFormats.size()) return GL_NONE;
                 return m_requestedCompressedFormats[level];
             }
@@ -239,12 +284,18 @@ namespace MobileGL {
             }
 
             IntVec3 MipmapStorage::GetTexelSize(Uint level) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureShapeReadFromApplyThread("GetMipmapTexelSize");
+#endif
                 auto& targetTexelSizes = m_texelSizes;
                 if (level >= targetTexelSizes.size()) return {0, 0, 0};
                 return targetTexelSizes[level];
             }
 
             SizeT MipmapStorage::GetByteSize(Uint level) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureShapeReadFromApplyThread("GetMipmapByteSize");
+#endif
                 if (level >= m_data.size()) return 0;
                 return m_data[level].size();
             }
