@@ -54,6 +54,30 @@ namespace MobileGL::MG_Pipe {
         kOptional = 1u << 5,
     };
 
+    // P5e (MG_Remote/CONTRACT-P5E.md §2.2). THE FIFTH COLUMN OF PipeCalls.def: what the client
+    // does after publishing a record of this call, on a server that publishes
+    // kCapRunAheadApply. Unscoped for MGPipeCallClass's reason - PipeCalls.def spells these as
+    // bare tokens so the same file can be read by the C++ preprocessor and by
+    // scripts/gen_pipe.py, which generates MGPipeWaitClassFor(op) from it.
+    //
+    // IT IS A VALUE, NOT AN OPCODE AND NOT A FLAG. The wire carries the opcode and both roles
+    // recover the class from it, exactly as they recover the flags - which is the whole reason
+    // MGPipeBarriered(op, payload, applierState) can be one function computed identically by
+    // the emit table and by the sink instead of two copies that agree until they do not.
+    //
+    // kWaitNone is 0 so that an uninitialised read is the SAFE direction in exactly one sense
+    // and the dangerous one in the other, which is why nothing reads this table without an
+    // opcode that came out of the catalogue: MGPipeWaitClassFor answers kWaitClassCount for an
+    // opcode it does not know, and a caller holding bytes off a stream must reach its own
+    // Fatal{ProtocolCorruption} rather than a wait decision.
+    enum MGPipeWaitClass : Uint8 {
+        kWaitNone = 0,
+        kWaitApplied,
+        kWaitReply,
+        kWaitPresent,
+        kWaitClassCount,
+    };
+
     // The pipeline/dynamic split of RenderStateParameters, defined exactly once (section
     // 4.5.2): MG_Pipe/MGPipeRenderStateSpans.{h,cpp}, which landed with P2 and computes
     // every chunk boundary with offsetof. Include that header to use it; what stays here
@@ -106,7 +130,17 @@ namespace MobileGL::MG_Pipe {
                                                                           // the three unit sets
     inline constexpr Uint64 kMGPipeSubsystemPrograms = 1ull << 12;         // shader CSO, draw/dispatch
                                                                           // program, global constants
-    // bits 13..62 reserved for the later phases, allocated in ROADMAP order.
+    // P5e's one (MG_Remote/CONTRACT-P5E.md §1). The INDEXED BUFFER BINDING POINTS: the three
+    // dirty bits NewConstBuffers / NewShaderBuffers / NewSoTargets, the set_shader_buffers
+    // emitter, and the backend's four binding-point walks. It is its own bit and not part of
+    // bit 7's resource family for the reason every other split here has: a UBO/SSBO binding
+    // path that regressed and a buffer path that regressed are different findings, and
+    // clearing one must not disarm the other.
+    //
+    // BIT 13 REQUIRES BIT 7, and for bit 11's reason: every MGPBufferRange::Res names a Buffer
+    // handle, and only bit 7 puts one in the slot table.
+    inline constexpr Uint64 kMGPipeSubsystemBufferBindings = 1ull << 13;
+    // bits 14..62 reserved for the later phases, allocated in ROADMAP order.
     // NOT a subsystem, a BEHAVIOUR: turn OFF client-side content addressing of CSOs, so
     // every pipeline-version change mints a fresh CSO and the map is never probed. This is
     // the negative control the whole CSO design is measured against (ROADMAP.md P2).
@@ -124,6 +158,13 @@ namespace MobileGL::MG_Pipe {
                        kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers |
                        kMGPipeSubsystemPrograms),
                   "the P4a phase constant and P4a's four subsystem bits have drifted");
+    // P5e's, and P4a's is NOT edited: 0x1fff stays P5e's "everything P4a had and nothing of
+    // mine" control, exactly as 0x1ff was P4a's and 0x7f was P3a's. The push default becomes
+    // 0x3fff, so the A/B that reproduces today's picture is one bit cleared.
+    inline constexpr Uint64 kMGPipeSubsystemsMigratedAtP5e = 0x3fffull; // bits 0..13
+    static_assert(kMGPipeSubsystemsMigratedAtP5e ==
+                      (kMGPipeSubsystemsMigratedAtP4a | kMGPipeSubsystemBufferBindings),
+                  "the P5e phase constant and P5e's subsystem bit have drifted");
 
     // The catalogue itself. Only macros, so it is safe to expand inside the namespace, and
     // consumers (the unit test, later the transport) get MGP_CALL_LIST from this header.

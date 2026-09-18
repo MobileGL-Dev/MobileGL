@@ -48,6 +48,31 @@
 
 namespace MobileGL::MG_Pipe {
 
+    // GL_READ_ONLY / GL_WRITE_ONLY / GL_READ_WRITE folded into the one byte the wire carries.
+    // A value the enum does not name would otherwise truncate silently into a Uint8, which is
+    // the class of bug the descriptors exist to close.
+    //
+    // P5e (CONTRACT-P5E.md §1, ruling 16) MOVED THE NUMBERS OUT FROM UNDER THIS FUNCTION and
+    // left the GLenum half here, where the GLenum is. The three values are
+    // MGPipeValueTypes.h's MGPipeImageAccess, which the server decodes through, so the encode
+    // and the decode are one table instead of two literals that happened to agree. It is also
+    // why the function is a free function now rather than a private static: the unit case that
+    // pins the three constants has to reach BOTH halves (MG_Test/Pipe/ImageEmitTest.cpp).
+    inline Uint32 MGPipeEncodeImageAccess(GLenum access) {
+        switch (access) {
+        case GL_READ_ONLY:
+            return kMGPipeImageAccessReadOnly;
+        case GL_WRITE_ONLY:
+            return kMGPipeImageAccessWriteOnly;
+        case GL_READ_WRITE:
+            return kMGPipeImageAccessReadWrite;
+        default:
+            MOBILEGL_ASSERT(false, "glBindImageTexture access 0x%x is not one of the three GL names",
+                            static_cast<Uint>(access));
+            return kMGPipeImageAccessReadOnly;
+        }
+    }
+
     // D-G3. Over the tail with Start and Count mixed in, the same shape the two sampler sets
     // use - and it covers InternalFormat and Access because those are live glBindImageTexture
     // state that the format-less image bake keys on, not decoration.
@@ -157,24 +182,6 @@ namespace MobileGL::MG_Pipe {
         Uint32 Window() const { return m_window; }
 
     private:
-        // GL_READ_ONLY / GL_WRITE_ONLY / GL_READ_WRITE folded into the one byte the wire
-        // carries. A value the enum does not name would otherwise truncate silently into a
-        // Uint8, which is the class of bug the descriptors exist to close.
-        static Uint32 MGPipeEncodeImageAccess(GLenum access) {
-            switch (access) {
-            case GL_READ_ONLY:
-                return 0;
-            case GL_WRITE_ONLY:
-                return 1;
-            case GL_READ_WRITE:
-                return 2;
-            default:
-                MOBILEGL_ASSERT(false, "glBindImageTexture access 0x%x is not one of the three GL names",
-                                static_cast<Uint>(access));
-                return 0;
-            }
-        }
-
         Array<MGPImageView, kMGPipeMaxImageUnits> m_entries{};
         MGPShaderImages m_lastImages{};
         Uint32 m_window = 0;

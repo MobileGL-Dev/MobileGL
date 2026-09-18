@@ -62,8 +62,23 @@ namespace MobileGL::MG_Pipe {
         SetSamplerViews,          // P4a - wired (backend debounce deletion: P3b/P4b)
         BindSamplerStates,        // P4a - wired (backend debounce deletion: P3b/P4b)
         SetShaderImages,          // P4a - wired (backend debounce deletion: P3b/P4b)
-        SetShaderBuffers,         // P4b
+        // P5e (MG_Remote/CONTRACT-P5E.md §1, ruling 11): THREE SLOTS, ONE PER CLASS, not one
+        // for the call. set_shader_buffers is emitted per Class (Uniform / ShaderStorage /
+        // AtomicCounter) because the record's own Class field says which binding-point array
+        // it describes - so a single slot would make every emission of one class cancel the
+        // previous emission of another, and the shader-storage set would be suppressed as
+        // "unchanged" by a uniform set that happened to hash the same way. Three slots also
+        // keep the per-family fire tally and the A/B meaningful, which one keyed on
+        // (slot, Class) would not.
+        SetShaderBuffersUniform,       // P5e (sb)
+        SetShaderBuffersShaderStorage, // P5e (sb)
+        SetShaderBuffersAtomicCounter, // P5e (sb)
         SetStreamOutputTargets,   // P4b
+        // P5e (CONTRACT-P5E.md §1): set_program_bindings, the post-link binding record. Not
+        // kVarTail-only - it has three tails - but the same rule applies: the emitter latches
+        // on (Cso, backendStateVersion, blockBindingVersion) and the whole-record hash is what
+        // says "nothing moved".
+        SetProgramBindings,       // P5e (pg)
         SetVertexAttribDefaults,  // P2 - the one consumer that is wired
         SetFramebufferState,      // P4a - wired
         // P5c rv (CONTRACT-P5C.md §5.3). NOT kVarTail either - the same shape as
