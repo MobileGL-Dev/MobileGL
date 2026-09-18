@@ -1641,6 +1641,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // parameter and sampler halves are unchanged and run on this name as on any other.
             void SyncTextureViewToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             void StampViewSyncKeys(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5e (tx2). THE VIEW ARM UNDER A TRANSPORT, and what it can and cannot answer.
+            //
+            // `Desc.ViewOf` names the storage owner BY HANDLE, so the STEADY question - "is my ES
+            // name still a view of the same storage name" - is answered entirely server-side: sync
+            // the storage twin by handle, compare its id against m_viewSourceBackendTextureId,
+            // stamp the record's Serial. That is the per-draw cost of every already-synced view
+            // and it reads nothing from the client.
+            //
+            // The CREATION of the view is the gap and it is named rather than papered over: the
+            // glTextureView call needs (minLevel, numLevels, minLayer, numLayers) and MGPResourceDesc
+            // carries none of the four - `ViewOf` is the only view field on the wire. So a view whose
+            // ES name has not been made a view YET, or whose storage was re-minted underneath it,
+            // still needs the frontend object and takes it when one is reachable; with no object it
+            // declines LOUDLY and the view samples its own (empty) name. Listed as trailing in the
+            // tx2 report with the wire fields it needs.
+            void SyncTextureViewToBackendByRecord(
+                MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPipeResourceRecord& record,
+                const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
+#endif
             // The storage half of the sync for a texture created by glTextureView. Instead of
             // allocating storage and replaying uploads, it makes this object's ES name BE a view
             // of the storage texture's ES name (EXT/OES_texture_view), which is what gives the
@@ -1654,6 +1674,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // re-mint allocates fresh storage and only replays what the shadow still calls dirty.
             void RequireImageBindableStorage(
                 const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
+#if MOBILEGL_PIPE_PUSH
+            // P5e (tx2), CONTRACT-P5E §5.2 / G-S2-5. THE SAME TRANSITION WITH NO FRONTEND
+            // ARGUMENT, and with the re-dirty NAMED AT THE ENTRY instead of three frames deep.
+            //
+            // The frontend overload's whole second half is the re-dirty: it walks the CLIENT's
+            // level shadows to re-arm every level the widened carrier owes. A server has no
+            // client address space to walk, so under a transport that half is not "not migrated
+            // yet", it is not expressible - ImageBindableHint is the prevention (a texture that
+            // has ever been image-bound is allocated in the carrier from the start) and P9 owns
+            // the pull. The refusal is raised here, at the entry, where the reason can still be
+            // stated, rather than at the MarkStorageDirty guard the loop would reach.
+            //
+            // A texture arriving here with NO backend storage yet pulls nothing - it is simply
+            // allocated image-bindable up front - so that case is not refused, it is the whole
+            // point of the hint.
+            void RequireImageBindableStorageByHandle(MG_Pipe::MGPipeHandle res,
+                                                     const MG_Pipe::MGPipeResourceRecord& record);
+#endif
             // Whether this texture's ES storage was minted in an image carrier rather than in the
             // frontend format's own layout - the readback has to ask, because for a NORMALIZED
             // carrier the storage is an integer texture holding codes and glGetTexImage still owes
@@ -1701,6 +1739,39 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 return t->GetStorageType() == TextureStorageType::Mipmap;
             }
+
+#if MOBILEGL_PIPE_PUSH
+            // P5e (tx2), CONTRACT-P5E §5.2. THE SAME AGGREGATE GATE WITH NO FRONTEND OBJECT IN
+            // IT, and it is EXACTLY the conjunction of the three handle-arm prologues' own
+            // early-outs - the relation IsDrawSyncClean states above for the frontend versions,
+            // restated over the server's serials:
+            //
+            //   SyncMipmapsToBackend        m_isInitialized && m_syncedResourceSerial == Serial
+            //                               && PendingUploads.empty()
+            //   SyncTextureParamsToBackend  m_syncedParamsSerial == ParamsSerial
+            //                               && !Params.ForceResync && !m_forceTextureParamsResync
+            //   SyncBuiltinSamplerToBackend m_syncedBuiltinSampler == Params.BuiltinSampler
+            //                               && m_syncedBuiltinSamplerSerial == that CSO's Serial
+            //                               && !Params.SamplerResync && !m_forceSamplerResync
+            //
+            // plus the storage-kind restriction the frontend gate carries, answered from
+            // Desc.StorageKind. No new member and no new wire field: every input already
+            // exists, which is the whole reason the memo-HIT path can stop being frontend-bound.
+            //
+            // BOTH SIDES OF THE RESYNC PAIR ARE READ AND NEITHER CLEARS THE OTHER'S (D-E2, now
+            // load-bearing for a GATE rather than only for a push, scout R4). `Params.ForceResync`
+            // and `Params.SamplerResync` are the CLIENT's bits: the server reads them, acts on
+            // them and never writes them back. `m_forceTextureParamsResync`/`m_forceSamplerResync`
+            // are the SERVER's: set by RecreateBackendTexture / RequireImageBindableStorage and
+            // cleared only by the prologue that consumed them. A gate that read one side would
+            // skip the sync the other side is asking for, which for the sampler half is not
+            // mis-filtering but an INCOMPLETE texture sampling (0,0,0,1).
+            //
+            // The contextId / samplingGeneration arguments are GONE: the applier's ContextSerial
+            // and TextureShutterSerial are what the caller's keys already carry.
+            Bool IsDrawSyncCleanByRecord(MG_Pipe::MGPipeHandle res,
+                                         const MG_Pipe::MGPipeResourceRecord& record) const;
+#endif
 
         private:
             void RecreateBackendTexture();
@@ -1811,8 +1882,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // over, and quietly re-reading the object would hide a missing record behind a
             // picture that still looks right - which is precisely what the subsystem A/B exists
             // to expose (MarkBufferGpuWritten's note, P3a).
+            //
+            // P5e (tx2): the HANDLE comes from m_pushedSyncHandle when the caller adopted this
+            // twin by handle, and only then from the client allocator - which is what retires
+            // the two `HandleOf` probes this pair used to make on every feature path. The record
+            // is resolved once by ResolveOwnRecord below and passed to the sampler half rather
+            // than looked up twice.
+            const MG_Pipe::MGPipeResourceRecord* ResolveOwnRecord(
+                const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) const;
             const SamplerParameters* ResolvePushedBuiltinSampler(
-                const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
+                const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject,
+                const MG_Pipe::MGPipeResourceRecord* record);
             // Hands back the whole RECORD rather than its Params, because the parameter push
             // reads two things from beside them: Desc.InternalFormat, which decides the two
             // channel-widening swizzle compositions, and Params.BuiltinSampler, which is where
@@ -1854,6 +1934,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // (two textures sharing one CSO, then one of them diverging).
             Uint64 m_syncedBuiltinSamplerSerial = 0;
             MG_Pipe::MGPipeHandle m_syncedBuiltinSampler = MG_Pipe::kMGPipeNullHandle;
+
+            // P5e (tx2), CONTRACT-P5E §4.1's `m_handle` (the m_pushedSyncHandle pattern the
+            // framebuffer twin already carries). THE HANDLE THIS TWIN WAS ADOPTED FOR.
+            //
+            // It is what replaces `g_backendTextureObjects.HandleOf(stateTextureObject.get())`
+            // in the three sync prologues: the by-handle entry point knows the handle before it
+            // knows anything else, so the prologues stop probing the client allocator to
+            // re-derive an answer the caller already had. It is ALSO the arm selector - a twin
+            // with a handle noted syncs from the record and tolerates a null frontend object,
+            // one without it is the monolith-glue half and reads the object as it always did.
+            //
+            // Stamped by SyncTextureToBackendByHandle / ResolveTextureTwin and never cleared:
+            // a slot recycled to {s, g+1} RESETS the twin (SlotTables.h's forward-Gen rule), so
+            // a stale handle cannot outlive the object it names.
+            MG_Pipe::MGPipeHandle m_pushedSyncHandle = MG_Pipe::kMGPipeNullHandle;
+
+        public:
+            void NotePushedSyncHandle(MG_Pipe::MGPipeHandle res) { m_pushedSyncHandle = res; }
+            MG_Pipe::MGPipeHandle PushedSyncHandle() const { return m_pushedSyncHandle; }
+
+        private:
 #endif
         };
 

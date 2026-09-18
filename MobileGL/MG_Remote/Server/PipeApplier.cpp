@@ -427,6 +427,66 @@ namespace MobileGL::MG_Remote::Server {
     // with a span (the client refuses "MultiDrawElements+CLIENT_INDICES" first; P8's
     // HostResolve.cpp flattens it) and a multi-draw that claims instancing (no GL entry point
     // produces one; the client never sends it).
+#if MOBILEGL_BUILD_DISAGGREGATED
+    namespace {
+        // P5e (tx2), CONTRACT-P5E §5.3 / ruling 19 (ID-95, A8 closed). THE TWO UNIT WINDOWS MUST
+        // COVER [0, MaxTouchedTextureUnit], AND THIS IS WHERE THAT PROMISE IS CHECKED.
+        //
+        // Everything the texture and sampler families do per draw now reads
+        // [SamplerViewStart, +SamplerViewCount) and [SamplerStateStart, +SamplerStateCount).
+        // Under run-ahead a window NARROWER than the frontend's high-water mark silently drops a
+        // sync of a texture the draw is about to sample, or leaves an earlier draw's sampler
+        // object on a unit - and a decline is exactly what run-ahead cannot take, because the
+        // client has already moved on and there is no wait in which to notice.
+        //
+        // A SERVER-SIDE RE-DERIVATION IS REFUSED, and that is the ruling's point: the client owns
+        // the high-water mark (it is the `count` argument SamplerEmit.h passes, Start=0 /
+        // Count=maxTouched+1) and the server's job is to check the promise, not to invent a
+        // second authority for it. So this is a CHECK and its failure is corruption.
+        //
+        // WHERE THE MARK COMES FROM: MGPContextValues::MaxTouchedTextureUnit, applied by
+        // set_context_values, which precedes the verb on the ring - the same ordering §2.1's
+        // XFB clause leans on. It is RECORD_SUPPLIED, so reading it is reading what a record
+        // put there and not client memory (rule F).
+        //
+        // WIDER IS FINE. A window larger than the mark costs a walk over provably-empty units;
+        // only SMALLER is unrepresentable. An empty window on a draw that touches no unit at all
+        // (mark 0 with nothing ever touched) is the correct and only possible emission, so a
+        // count of 0 is admitted exactly while the applied counters say no unit was touched.
+        //
+        // THE ONE ADMITTED SILENCE, and it is the A/B rather than a hole: a client whose sampler
+        // subsystem bit is CLEAR emits neither record, the backend then runs its pre-handle
+        // frontend walk, and there is no window to check because there is no window. That is
+        // "both counts are still 0", and it is distinguishable from the narrowing this refuses
+        // (a narrowed window carries a non-zero count that is merely too small). The moment
+        // either set has been received, the rule binds.
+        void CheckUnitWindows(const MG_Pipe::MGPipeApplierState& st, const char* verb) {
+            if (st.SamplerViewCount == 0 && st.SamplerStateCount == 0) return;
+            const Int maxTouched = MG_Pipe::gPipeInputs.GetMaxTouchedTextureUnit();
+            if (maxTouched < 0) return;
+            const Uint32 required = static_cast<Uint32>(maxTouched) + 1u;
+            if (st.SamplerViewStart != 0 || st.SamplerViewCount < required) {
+                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"SetSamplerViews.Count\"} - %s applies with "
+                        "units 0..%d touched, so set_sampler_views must carry Start=0 and Count >= %u "
+                        "(CONTRACT-P5E.md §5.3); the applied window is Start=%u Count=%u, which drops "
+                        "the sync of at least one texture this draw samples",
+                        verb, static_cast<int>(maxTouched), required, st.SamplerViewStart,
+                        st.SamplerViewCount);
+                std::abort();
+            }
+            if (st.SamplerStateStart != 0 || st.SamplerStateCount < required) {
+                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"BindSamplerStates.Count\"} - %s applies with "
+                        "units 0..%d touched, so bind_sampler_states must carry Start=0 and Count >= %u "
+                        "(CONTRACT-P5E.md §5.3); the applied window is Start=%u Count=%u, which leaves "
+                        "an earlier draw's sampler object on at least one unit",
+                        verb, static_cast<int>(maxTouched), required, st.SamplerStateStart,
+                        st.SamplerStateCount);
+                std::abort();
+            }
+        }
+    } // namespace
+#endif
+
     Bool ServerVerbSink::OnDrawVbo(const MG_Pipe::MGPDrawInfo& info,
                                    const MG_Pipe::MGPDrawRange* ranges,
                                    const MG_Pipe::MGHostSpan* userIndices,
@@ -449,6 +509,11 @@ namespace MobileGL::MG_Remote::Server {
         }
         ++m_drawRecords;
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Ruling 19 / ID-95: the window promise, checked at every draw, before the backend is
+        // asked to resolve anything out of the windows.
+        CheckUnitWindows(MG_Pipe::MGPipeApplier(), "draw_vbo");
+#endif
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("draw_vbo");
         if (table == nullptr) return false;
         const MG_Backend::GLFunctionsTable& gl = table->GL;
@@ -668,6 +733,10 @@ namespace MobileGL::MG_Remote::Server {
     // identical - and it is also the honest statement of the debt, which `rsp` counts.
 
     Bool ServerVerbSink::OnLaunchGrid(const MG_Pipe::MGPGridInfo& grid) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Ruling 19 / ID-95: a dispatch samples through the same unit windows a draw does.
+        CheckUnitWindows(MG_Pipe::MGPipeApplier(), "launch_grid");
+#endif
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("launch_grid");
         if (table == nullptr) return false;
         const MG_Backend::GLFunctionsTable& gl = table->GL;

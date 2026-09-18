@@ -36,6 +36,21 @@ namespace MobileGL {
                 // The message names the TEXTURE-side method, not this storage's: the pinned
                 // surface list (MG_Test/Wire/RemoteClientTest.cpp's RemoteGuards) is written
                 // in TextureObjectMipmap's vocabulary.
+                //
+                // P5e (tx2): THE READ-ONLY SHAPE ACCESSORS JOIN THE LIST. P5c guarded the
+                // MUTATORS and deliberately exempted the shape reads, with the reason written
+                // into RemoteClientTest: "the per-draw binding walk reads them every draw", so
+                // guarding them would have aborted a lane that was still correct. P5e is the
+                // commit that makes that untrue - the unit work list, the clean gate and the
+                // three sync bodies read the resource RECORD and the server's staged-texture
+                // store, and nothing on the draw path asks the frontend object for a level count,
+                // a level extent, a level byte size or a compressed level again. So the exemption
+                // becomes a guard, and reverting any handle arm aborts here BY ACCESSOR NAME
+                // instead of rendering from client memory.
+                //
+                // A client-thread caller is unaffected (this is the frontend's own state, and the
+                // guard returns unless ServerLoop::OnApplyThread()); Magma's texture sync keeps
+                // its named scope exemption; the pull build compiles none of it.
                 void RefuseLegacyTextureArmFromApplyThread(const char* surface) {
                     if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
                     if (!MG_Remote::Server::ServerLoop::OnApplyThread()) return;
@@ -97,6 +112,9 @@ namespace MobileGL {
 #endif
 
             SizeT MipmapStorage::GetLevelCount() const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("GetMipmapLevelCount");
+#endif
                 return m_data.size();
             }
 
@@ -171,16 +189,25 @@ namespace MobileGL {
             }
 
             GLenum MipmapStorage::GetCompressedFormat(Uint level) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("GetCompressedFormat");
+#endif
                 if (level >= m_compressedFormats.size()) return GL_NONE;
                 return m_compressedFormats[level];
             }
 
             SizeT MipmapStorage::GetCompressedByteSize(Uint level) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("GetCompressedByteSize");
+#endif
                 if (level >= m_compressedData.size()) return 0;
                 return m_compressedData[level].size();
             }
 
             const void* MipmapStorage::MapCompressedData(Uint level) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("MapCompressedMipmapData");
+#endif
                 if (level >= m_compressedData.size()) return nullptr;
                 return m_compressedData[level].data();
             }
@@ -191,6 +218,9 @@ namespace MobileGL {
             }
 
             GLenum MipmapStorage::GetRequestedCompressedFormat(Uint level) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("GetRequestedCompressedFormat");
+#endif
                 if (level >= m_requestedCompressedFormats.size()) return GL_NONE;
                 return m_requestedCompressedFormats[level];
             }
@@ -239,12 +269,18 @@ namespace MobileGL {
             }
 
             IntVec3 MipmapStorage::GetTexelSize(Uint level) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("GetMipmapTexelSize");
+#endif
                 auto& targetTexelSizes = m_texelSizes;
                 if (level >= targetTexelSizes.size()) return {0, 0, 0};
                 return targetTexelSizes[level];
             }
 
             SizeT MipmapStorage::GetByteSize(Uint level) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("GetMipmapByteSize");
+#endif
                 if (level >= m_data.size()) return 0;
                 return m_data[level].size();
             }
