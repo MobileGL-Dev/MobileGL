@@ -1055,6 +1055,15 @@ namespace MobileGL::MG_Remote::Server {
         // dropped before this function returns, and s1's SessionConsumer::ApplyOne publishes
         // appliedSeq only after that - so by the time the client is runnable the flag is down.
         const Client::ClientSession::ScopedApplierEntry insideApplier;
+        // P5e (id), CONTRACT-P5E §2.1 / §4.4: STAMP WHETHER THE CLIENT IS PARKED BEHIND THIS
+        // RECORD, before anything can ask. It is the input to the allocator guard's exemption
+        // (SlotAllocator.cpp) and to every frontend-keyed twin member that survives as monolith
+        // glue (SlotTables.h), and it has to be up before DecodeAndApply because the sinks those
+        // reach are exactly the askers. MGPipeBarriered answers true for every record until ra
+        // lands the wait rule, so this line changes nothing this phase and is the line ra
+        // rebases onto rather than adds.
+        MG_Pipe::MGPipeApplier().CurrentRecordBarriered = MG_Pipe::MGPipeBarriered(
+            static_cast<MG_Pipe::MGPWireOp>(record.kind), record.payload, MG_Pipe::MGPipeApplier());
         // ORDER IS THE CONTRACT'S: stamp, then apply. The stamp is what makes any server-side
         // read of gPipeInputs legal at all (PipeApplier.h's block 1), so a record applied
         // before it aborts on the FIRST field inside SyncRenderState.

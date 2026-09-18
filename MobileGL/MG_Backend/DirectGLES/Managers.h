@@ -467,10 +467,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return m_slotTable.LiveGenAt(slot);
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
         // P5c (hd): the two halves of SlotTables.h's state note, forwarded. A caller holding
         // both the record's handle and the frontend object (the record-driven sync) notes the
         // object so a later handle-only resolution can reach it without the client allocator.
+        //
+        // P5e (id): under MOBILEGL_PIPE_PUSH rather than MOBILEGL_BUILD_DISAGGREGATED, because
+        // the re-typed ForEachLive's caller resolves its object through StateForHandle in the
+        // push-monolith build too. Each half is a named Fatal from an unbarriered apply
+        // (SlotTables.h); on the legacy arm there is no note and StateForHandle answers null,
+        // which is the answer the legacy walk's own weak_ptr test already gives.
         void NoteStateForHandle(MG_Pipe::MGPipeHandle handle, const StatePtr& stateObj) {
             if (EsprytSlotTablesEnabled()) {
                 m_slotTable.NoteStateForHandle(handle, stateObj);
@@ -482,7 +487,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             return nullptr;
         }
-#endif
 
         // NO ReleaseByHandle HERE THROUGH P5, AND THAT WAS A DECISION (review M-4). The death
         // half of GetOrCreateByHandle existed only for a kind whose announcement is its own
@@ -527,23 +531,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
-        // fn(const StatePtr& state, const BackendPtr& twin) over every live entry. The legacy
-        // begin()/end() handed out the map key, i.e. the raw frontend address - exactly the
-        // identity the backend must stop reading - and handed it out for entries whose state
-        // object had already died, so the one caller had to test stateRef.expired() itself
-        // before dereferencing it. Here the state object arrives as a strong reference.
+        // P5e (id), CONTRACT-P5E §4.1: fn(MGPipeHandle, const BackendPtr& twin) over every live
+        // entry of the HANDLE ARM, and of that arm only.
+        //
+        // IT NO LONGER SERVES THE LEGACY ARM, and that is a narrowing rather than a loss. The
+        // legacy map is keyed by the raw frontend address and has no handle to hand over - a
+        // synthesised null one would be a lie the callee could not tell from a real answer -
+        // and its one caller (ScopedDetachedTextureFramebufferAttachments) has always had its
+        // own `#if MOBILEGL_PIPE_LEGACY_MEMOS` begin()/end() walk beside the call, because the
+        // legacy entry needs its stateRef.expired() test done by hand. So the arm check here
+        // was answering a question no caller asked, and leaving it would have meant inventing a
+        // second signature for a walk the P5e rule exists to delete.
         template <typename Fn>
         void ForEachLive(Fn&& fn) const {
             if (EsprytSlotTablesEnabled()) {
                 m_slotTable.ForEachLive(fn);
-                return;
-            }
-            for (const auto& [stateKey, entry] : m_entries) {
-                (void)stateKey;
-                if (!entry.backend) continue;
-                const StatePtr state = entry.stateRef.lock();
-                if (!state) continue;
-                fn(state, entry.backend);
             }
         }
 #endif
@@ -1423,6 +1425,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
         extern TwinRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject, MG_Pipe::MGPipeKind::VertexElementsCso>
             g_backendVertexArrayObjects;
 
+#if MOBILEGL_PIPE_PUSH
+        // P5e (id), CONTRACT-P5E §4.1 / §4.2: THE VAO TWIN, RESOLVED BY THE HANDLE THE RECORD
+        // CARRIED - `MGPipeApplierState::BoundVertexElements` at a draw, never
+        // `Find(vao.get())`. One of the three resolvers the identity package lands so the
+        // per-family packages have a by-handle door from day one; SamplerImpl's
+        // ResolveSamplerCsoTwin is the shape all four share.
+        //
+        // WHAT IT DOES AND, AS IMPORTANTLY, WHAT IT DOES NOT. Record first (a handle with no
+        // applier record is a seam defect, and adopting a slot for it would leave a twin that
+        // syncs nothing), then AdoptTwinByHandle, then a twin if the slot is empty. It never
+        // touches a frontend object and never probes the client's slot allocator - those two
+        // absences ARE the deliverable - and it does not SYNC: which serials gate a VAO sync,
+        // and what the sync reads, is the vi package's, and a resolver that synced would have
+        // to know. Null, loudly, for a handle with no record or a generation behind the live
+        // twin's; null silently for the null handle.
+        BackendVertexArrayObject* ResolveVaoTwin(MG_Pipe::MGPipeHandle elements);
+#endif
+
         // Shadowed glBindVertexArray: every backend VAO bind goes through here so a
         // draw's second bind of the same VAO (SyncToBackend, then PrepareForDraw's
         // re-bind) reaches the driver once. Invalidate whenever the ES context is
@@ -1841,6 +1861,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void UnbindTexture(Uint unit, GLenum target);
         extern TwinRegistry<MG_State::GLState::ITextureObject, BackendTextureObject, MG_Pipe::MGPipeKind::Texture>
             g_backendTextureObjects;
+
+#if MOBILEGL_PIPE_PUSH
+        // P5e (id), CONTRACT-P5E §4.1 / §4.2: THE TEXTURE TWIN BY HANDLE - the handle a record
+        // carried (`BoundSamplerViews[u].Texture`, `BoundShaderImages[u].Res`, a framebuffer
+        // record's `MGPSurface::Res`, `VerbMipRes`, `VerbCopyTexDst`, `MGPCopyImage`'s two
+        // endpoints), never `Find(textureObject.get())`. Same shape and the same three
+        // absences as VertexArrayImpl::ResolveVaoTwin: record first, no frontend touch, no
+        // allocator probe, and NO SYNC - the three texture syncs and the clean condition that
+        // gates them are the tx2 package's.
+        //
+        // The by-value twin copy plus second Find that SyncTextureObjectToBackend pays today
+        // (the registry's Find could relocate its own return) is not reproduced here: the slot
+        // table's answer is an array element and only a GetOrCreate that GROWS the table moves
+        // it, which this function has already done by the time it returns.
+        BackendTextureObject* ResolveTextureTwin(MG_Pipe::MGPipeHandle res);
+#endif
         SharedPtr<BackendTextureObject>& SyncTextureObjectToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
             Bool imageBindableStorageRequired = false);
@@ -2597,6 +2633,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
         extern Uint g_lastUsedBackendProgramId;
         extern TwinRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl, MG_Pipe::MGPipeKind::ShaderCso>
             g_backendProgramObjects;
+
+#if MOBILEGL_PIPE_PUSH
+        // P5e (id), CONTRACT-P5E §4.1 / §4.2: THE PROGRAM TWIN BY HANDLE - `st.DrawProgram` at
+        // a draw, `st.DispatchProgram` at a dispatch, `st.BoundShaderCso` at a bind - never
+        // `Find(currentProgram.get())` and never the raw-pointer stash. Same shape and the same
+        // three absences as the VAO and texture resolvers beside it: record first, no frontend
+        // touch, no allocator probe, no sync (the nine-clause clean condition and what feeds it
+        // are the pg package's).
+        //
+        // THE BAND IS WHY THIS ONE MATTERS MOST. A program-pipeline composite's ShaderCso slot
+        // is >= kMGPipeShaderCsoCompositeSlotBase, and before P5e the by-handle path would have
+        // grown g_backendProgramObjects to ~983k entries to reach it. SlotTables.h's m_band
+        // lands in this package for exactly that reason - the rekey makes the composite the
+        // ordinary path, so the band is a prerequisite and not a follow-up. The record reader
+        // (PipeShaderCsoRecordForHandle) has been band-aware since P4a.
+        BackendProgramObjectImpl* ResolveProgramTwin(MG_Pipe::MGPipeHandle cso);
+#endif
 
         // Points one shader storage block of an ALREADY-LINKED backend program at
         // `binding`. `blockName` is the frontend interface-query spelling; the real

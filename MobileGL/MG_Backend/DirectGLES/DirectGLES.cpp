@@ -8844,14 +8844,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // The one direct-iteration site over a twin table. The legacy walk reads the map
             // KEY, i.e. the raw frontend address, and has to test the entry's weak_ptr by hand
-            // before it dares dereference it. ForEachLive hands over a strong reference instead,
-            // so that hazard cannot arise; the body is otherwise identical, which is why it is
-            // lifted into a lambda both arms call.
+            // before it dares dereference it; the body is otherwise identical, which is why it
+            // is lifted into a lambda both arms call.
 #if MOBILEGL_PIPE_PUSH
-            // The push arm walks the twin table through ForEachLive, which hands over a
-            // STRONG reference to the state object; the legacy map walk below it reads the
-            // map key - the raw frontend address - and has to test the entry weak_ptr by
-            // hand first. The body is shared between the two arms through the lambda.
+            // P5e (id, CONTRACT-P5E §4.1): the push arm walks the twin table through
+            // ForEachLive, which now hands over the entry's HANDLE and its twin - never a
+            // frontend SharedPtr, because a walk that produced one on every step was the last
+            // place the server held a frontend object across records. This site asks for the
+            // object BY HANDLE instead, through StateForHandle, inside the frontend-keyed
+            // registry scope opened above: one named, greppable read that the fb package
+            // replaces with its reverse index (texture -> FBO slots), rather than a property of
+            // the iteration that nothing could name.
+            //
+            // The set of framebuffers walked is UNCHANGED: an entry whose state object the old
+            // walk could not lock is one StateForHandle answers null for, and detachFrom
+            // returns immediately on a null FBO.
             const auto detachFrom = [&](MG_State::GLState::FramebufferObject* stateFBO,
                                         const SharedPtr<FramebufferImpl::BackendFramebufferObject>& backendFBO) {
                 if (stateFBO == nullptr || !backendFBO || stateFBO->IsDefaultFramebuffer()) {
@@ -8902,8 +8909,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // below is the RUNTIME one.
             if (EsprytSlotTablesEnabled()) {
                 FramebufferImpl::g_backendFramebufferObjects.ForEachLive(
-                    [&](const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBO,
+                    [&](MG_Pipe::MGPipeHandle fbo,
                         const SharedPtr<FramebufferImpl::BackendFramebufferObject>& backendFBO) {
+                        const auto stateFBO =
+                            FramebufferImpl::g_backendFramebufferObjects.StateForHandle(fbo);
                         detachFrom(stateFBO.get(), backendFBO);
                     });
                 return;

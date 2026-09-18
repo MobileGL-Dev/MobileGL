@@ -3410,6 +3410,12 @@ namespace {
         BackendSlotTable<FakeStateObject, FakeBackendObject, MobileGL::MG_Pipe::MGPipeKind::Query>;
     using FakeSharedKindSlotTable = MobileGL::MG_Backend::DirectGLES::
         BackendSlotTable<FakeStateObject, FakeBackendObject, MobileGL::MG_Pipe::MGPipeKind::Fence>;
+    // P5e (id): ShaderCso is the ONE kind with a composite band, so the band case needs a table
+    // of that kind. It never touches MGPipeSlots() - the whole case runs through the by-handle
+    // overloads - and the holder list is per TABLE TYPE, so this instantiation shares nothing
+    // with the real g_backendProgramObjects.
+    using FakeShaderCsoSlotTable = MobileGL::MG_Backend::DirectGLES::
+        BackendSlotTable<FakeStateObject, FakeBackendObject, MobileGL::MG_Pipe::MGPipeKind::ShaderCso>;
 
     // A log file path no other process and no other case can be writing to: the pid keeps two
     // SanityTest processes on one host apart, the counter keeps two cases in one process apart.
@@ -4932,6 +4938,72 @@ TEST(DirectGLESSlotTable, AGenerationBehindTheLiveTwinIsRefusedRatherThanAdopted
     EXPECT_EQ(table.FindByHandle(MG_Pipe::MGPipeHandle{FakeSlotTable::kMaxHandleSlot, 1u}), nullptr);
 }
 
+// P5e (id), CONTRACT-P5E §4.3's last paragraph: THE COMPOSITE BAND, and why it is a P5e
+// prerequisite rather than a follow-up.
+//
+// A program-pipeline composite's ShaderCso slot comes out of the reserved top 1/16 of the slot
+// space (kMGPipeShaderCsoCompositeSlotBase = 983040). EntryAt indexes BY SLOT and resizes to
+// it, so before the band a single composite grew g_backendProgramObjects to ~983k entries of
+// ~40 B - ~40 MB for one glBindProgramPipeline. That was reachable only through
+// GetOrCreate(StatePtr) for a composite program; after id's rekey the by-handle resolution IS
+// the ordinary path (ResolveProgramTwin), so every composite bind would pay it.
+//
+// THE RED: make EntryAt index m_slots unconditionally again (drop the SlotIsBanded branch) and
+// the first assertion below goes from 0 to 983044. LiveCount alone could not see that - the
+// table would hold exactly one live entry either way - which is why the case asserts on the
+// two spaces' CAPACITIES and not on liveness.
+TEST(DirectGLESSlotTable, ACompositeHandleDoesNotGrowTheOrdinaryTable) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+
+    FakeShaderCsoSlotTable table;
+    const MG_Pipe::MGPipeHandle composite{MG_Pipe::kMGPipeShaderCsoCompositeSlotBase + 3u, 1u};
+    ASSERT_TRUE(MG_Pipe::MGPipeIsCompositeShaderSlot(composite.Slot));
+
+    auto& twin = table.GetOrCreate(composite);
+    twin = MakeShared<FakeBackendObject>();
+    twin->marker = 0x5A;
+
+    EXPECT_EQ(table.OrdinaryCapacityForTest(), 0u)
+        << "a composite slot grew the ORDINARY table - one program pipeline is ~40 MB of twin "
+           "entries for a single live program";
+    EXPECT_EQ(table.CompositeCapacityForTest(), 4u)
+        << "the band is indexed by (slot - base), so slot base+3 needs exactly four entries";
+    EXPECT_EQ(table.LiveCount(), 1u);
+    EXPECT_EQ(table.CompositeLiveCount(), 1u) << "the live composite was counted in the wrong space";
+
+    auto* const found = table.FindByHandle(composite);
+    ASSERT_NE(found, nullptr) << "the band entry is invisible to the lookup that has to find it";
+    EXPECT_EQ((*found)->marker, 0x5A);
+
+    // An ordinary ShaderCso lands in the ordinary space and disturbs neither the band's
+    // contents nor its size: the two are dense against their OWN high-water marks.
+    auto& ordinary = table.GetOrCreate(MG_Pipe::MGPipeHandle{5u, 1u});
+    ordinary = MakeShared<FakeBackendObject>();
+    EXPECT_EQ(table.OrdinaryCapacityForTest(), 6u);
+    EXPECT_EQ(table.CompositeCapacityForTest(), 4u);
+    EXPECT_EQ(table.CompositeLiveCount(), 1u);
+
+    // ForEachLive reports the composite at THE SLOT THE CLIENT MINTED, never the band index -
+    // the handle it hands over is the one a caller turns straight back into a record lookup.
+    Vector<Uint32> walked;
+    table.ForEachLive([&](MG_Pipe::MGPipeHandle handle, const SharedPtr<FakeBackendObject>&) {
+        walked.push_back(handle.Slot);
+    });
+    ASSERT_EQ(walked.size(), 2u);
+    EXPECT_EQ(walked[0], 5u) << "the ordinary space is walked first, at its own slot";
+    EXPECT_EQ(walked[1], composite.Slot)
+        << "the band was reported at its INDEX rather than at the client's slot, so a caller "
+           "resolving the record for it would read another program's";
+
+    // §4.3's recycle answer holds inside the band exactly as it does outside it.
+    auto& recycled = table.GetOrCreate(MG_Pipe::MGPipeHandle{composite.Slot, 2u});
+    EXPECT_EQ(recycled, nullptr) << "a successor at a recycled composite slot inherited its "
+                                   "predecessor's driver program";
+    EXPECT_EQ(table.FindByHandle(composite), nullptr) << "the predecessor's handle still resolves";
+    EXPECT_EQ(table.CompositeCapacityForTest(), 4u) << "the recycle re-grew the band";
+}
+
 #else
 // G2 wants the pull and the push build to list the SAME ctest entries. The twin table only
 // exists under MOBILEGL_PIPE_PUSH, so in the pull build each case above keeps its name and
@@ -5009,6 +5081,10 @@ TEST(DirectGLESSlotTable, TheArmlessCasesLeaveTheLogPathAndTheConfigAsTheyFoundT
 }
 
 TEST(DirectGLESSlotTable, AGenerationBehindTheLiveTwinIsRefusedRatherThanAdopted) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, ACompositeHandleDoesNotGrowTheOrdinaryTable) {
     GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 

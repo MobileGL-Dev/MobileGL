@@ -819,6 +819,23 @@ namespace MobileGL::MG_Pipe {
         // dispatch_indirect's command buffer (MGPGridInfo::IndirectBuffer).
         MGPipeHandle VerbDispatchIndirectBuffer = kMGPipeNullHandle;
 
+        // ---- P5e (id, CONTRACT-P5E §2.1 / §4.4): IS THE RECORD BEING APPLIED BARRIERED? ----
+        //
+        // SERVER-PRIVATE and per-record: PipeApplier::ApplyOne writes it from MGPipeBarriered()
+        // before the decode and nothing else may. It is what §4.4's exemption is keyed on - a
+        // frontend probe inside a named scope is legal only while the CLIENT IS PARKED behind
+        // this record, because the wait is the whole of what makes the client's memory stable
+        // to read. An unbarriered record's apply has no such wait, so the same probe would
+        // read memory the client is concurrently moving, and the scope stops exempting it.
+        //
+        // TRUE IS THE ONLY VALUE THIS PHASE PRODUCES, and that is deliberate: MGPipeBarriered
+        // answers true for every record until ra lands the wait rule, so id changes no
+        // behaviour at all (lockstep is unchanged) while every site that must one day ask the
+        // question already asks it. It is also the value a MONOLITH applier keeps - nothing
+        // writes it there and there is no client to run ahead - which is what keeps Magma and
+        // the push-monolith build on P5C's semantics (§6.1).
+        Bool CurrentRecordBarriered = true;
+
         // Every verb's writer calls this FIRST and then sets its own fields, so no field ever
         // outlives the verb that wrote it and a reader can treat non-null as "this verb's".
         void ClearVerbHandles() {
@@ -914,6 +931,38 @@ namespace MobileGL::MG_Pipe {
     // texture bind / sampling-resolution generations guard bumps the shutter serial through
     // this, so the bump rule lives in exactly one place.
     void MGPipeApplierNoteTextureStateMoved();
+
+    // ---- P5e: the two halves of the barriered predicate (CONTRACT-P5E §2.1, §4.4) ---------
+    //
+    // OWNERSHIP NOTE, so the duplicate is not mistaken for a fork: package c0e owns the final
+    // declaration of both names in this header. id declares them here because the identity
+    // guard (§4.4) cannot compile without them and the two packages are implemented in
+    // parallel; the integrator resolves the textual overlap at landing.
+    //
+    // MGPWireOp is declared opaquely rather than by including MGPipe.h: the enum is generated
+    // into generated/PipeWire.inc, which MGPipe.h includes INSIDE this namespace, and this
+    // header sits below it (PipeRoute.h includes both). An opaque enum declaration with the
+    // same fixed underlying type is the whole coupling the predicate needs.
+    enum class MGPWireOp : Uint16;
+
+    // "Does the client block after publishing this record?" - a pure function of wire-visible
+    // data, computed identically by the emit table and by the sink (§2.1):
+    //
+    //     MGPipeWaitClassFor(op) != kWaitNone                                   // static column
+    //  || (MGPipeCallClassFor(op) == kCtxVerb && st.IsTransformFeedbackActive)  // (i) XFB
+    //  || (op == DrawVbo && (payload.Flags & kDrawClientArrays))                // (ii)
+    //
+    // UNTIL ra LANDS THE WAIT RULE THE ANSWER IS TRUE FOR EVERY RECORD, and that is what keeps
+    // this package behaviour-free: the client waits exactly where it waits today, so every
+    // apply-thread frontend read that is legal today stays legal today. `op` and `payload` are
+    // therefore unread by the body id ships; they are in the signature because ra rebases onto
+    // it rather than onto a narrower one.
+    Bool MGPipeBarriered(MGPWireOp op, const void* payload, const MGPipeApplierState& st);
+
+    // The record currently being applied, as ApplyOne stamped it. Server-private; `true` on a
+    // server that does not publish kCapRunAheadApply and in every monolith process, which is
+    // what leaves Magma (§6.1) and the push-monolith build on P5C's semantics.
+    Bool MGPipeApplierCurrentRecordIsBarriered();
 
     // A MAKE-CURRENT, NOT A TEARDOWN - and the distinction is the whole of this function's
     // contract. It runs on every change of the current GLContext (MGPipeTracker::Update resets
