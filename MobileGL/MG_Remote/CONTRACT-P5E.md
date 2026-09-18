@@ -250,7 +250,8 @@ window rule makes it unrepresentable. The creation moment is LAZY everywhere (no
 not introduced. `applier_reset` touches neither twins nor object records (`PipeApply.h:800-832`).
 
 ### 4.3 ABA
-`Gen` moves only on reuse (`SlotAllocator.cpp:410-419`). At the server every record naming `{s,g}`
+`Gen` moves only on reuse (`SlotAllocator.cpp:176-189`, and `:240-258` for the composite band —
+"the one place Gen may move", in the file's own words). At the server every record naming `{s,g}`
 is applied before `object_death{s,g}`, which is applied before `create{s,g+1}`. `GetOrCreate({s,g+1})`
 on a live `{s,g}` entry resets it (`SlotTables.h:338`); `FindByHandle({s,g})` after the recycle
 answers null (`:424`); a backward `{s,g-1}` is refused (`:331`). Even with a death skipped (an
