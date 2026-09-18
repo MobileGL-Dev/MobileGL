@@ -13837,21 +13837,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     } // namespace
 
-    namespace VertexArrayImpl {
-        BackendVertexArrayObject* ResolveVaoTwin(MG_Pipe::MGPipeHandle vertexElements) {
-            MGPipeP5eSeamNotLanded("VertexArrayImpl::ResolveVaoTwin", "id/vi", vertexElements);
-        }
-    } // namespace VertexArrayImpl
-
     namespace TextureImpl {
         SharedPtr<BackendTextureObject>& SyncTextureToBackendByHandle(MG_Pipe::MGPipeHandle texture,
                                                                       Bool imageBindableStorageRequired) {
             (void)imageBindableStorageRequired;
             MGPipeP5eSeamNotLanded("TextureImpl::SyncTextureToBackendByHandle", "tx2", texture);
-        }
-
-        BackendTextureObject* ResolveTextureTwin(MG_Pipe::MGPipeHandle texture) {
-            MGPipeP5eSeamNotLanded("TextureImpl::ResolveTextureTwin", "id/tx2", texture);
         }
 
         void BackendTextureObject::SyncMipmapsToBackendByHandle(MG_Pipe::MGPipeHandle texture) {
@@ -13869,10 +13859,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace FramebufferImpl
 
     namespace PrgramImpl {
-        BackendProgramObjectImpl* ResolveProgramTwin(MG_Pipe::MGPipeHandle cso) {
-            MGPipeP5eSeamNotLanded("PrgramImpl::ResolveProgramTwin", "id/pg", cso);
-        }
-
         void BackendProgramObjectImpl::SyncToBackendByHandle(MG_Pipe::MGPipeHandle cso) {
             MGPipeP5eSeamNotLanded("BackendProgramObjectImpl::SyncToBackendByHandle", "pg", cso);
         }

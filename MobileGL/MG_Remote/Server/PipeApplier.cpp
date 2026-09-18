@@ -1062,8 +1062,17 @@ namespace MobileGL::MG_Remote::Server {
         // reach are exactly the askers. MGPipeBarriered answers true for every record until ra
         // lands the wait rule, so this line changes nothing this phase and is the line ra
         // rebases onto rather than adds.
-        MG_Pipe::MGPipeApplier().CurrentRecordBarriered = MG_Pipe::MGPipeBarriered(
+        //
+        // AND THE STAMP IS `true` UNTIL ra LANDS THE CLIENT'S HALF (ID-103). The predicate
+        // describes what the client WILL do once EmitAndWaitTails follows the wait classes;
+        // today it still blocks after every record, so a `false` stamp here would withdraw the
+        // §4.4 exemptions from a probe the client's own wait still makes safe - a refusal with
+        // no defect behind it. The predicate is computed on every record all the same, so it is
+        // exercised for the whole phase rather than first run on the day it starts deciding.
+        const Bool wireSaysBarriered = MG_Pipe::MGPipeBarriered(
             static_cast<MG_Pipe::MGPWireOp>(record.kind), record.payload, MG_Pipe::MGPipeApplier());
+        MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(
+            MG_Pipe::kMGPipeP5eClientWaitRuleLanded ? wireSaysBarriered : true);
         // ORDER IS THE CONTRACT'S: stamp, then apply. The stamp is what makes any server-side
         // read of gPipeInputs legal at all (PipeApplier.h's block 1), so a record applied
         // before it aborts on the FIRST field inside SyncRenderState.

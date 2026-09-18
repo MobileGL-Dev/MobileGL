@@ -1915,8 +1915,10 @@ TEST(RemoteGuards, AnAllocatorProbeInsideAnExemptionScopeFromTheApplyThreadIsFat
         Srv::ServerLoopInstance().RunOnApplyThread(
             +[](void* self) -> MobileGLResult {
                 auto& probe = *static_cast<Probe*>(self);
-                // The record being applied is one the client did NOT park behind.
-                MG_Pipe::MGPipeApplier().CurrentRecordBarriered = false;
+                // The record being applied is one the client did NOT park behind. The stamp is
+                // the thread_local the sink writes (ID-103), so setting it here puts this
+                // thread in exactly the state an unbarriered apply is in.
+                MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(false);
                 const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
                 probe.table->HandleOf(probe.texture);
                 return MOBILEGL_OK;
