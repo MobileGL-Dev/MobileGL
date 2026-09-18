@@ -428,7 +428,7 @@ inline constexpr Uint8 kMGPipeWaitClasses[static_cast<SizeT>(MGPWireOp::kOpCount
     /* 50 ResourceSubDataComplete */ static_cast<Uint8>(kWaitNone),
     /* 51 ResourceFlushRange      */ static_cast<Uint8>(kWaitNone),
     /* 52 ResourceReadback        */ static_cast<Uint8>(kWaitReply),
-    /* 53 ResourceCopyRegion      */ static_cast<Uint8>(kWaitNone),
+    /* 53 ResourceCopyRegion      */ static_cast<Uint8>(kWaitApplied),
     /* 54 GenerateMipmap          */ static_cast<Uint8>(kWaitApplied),
     /* 55 GetTextureImage         */ static_cast<Uint8>(kWaitReply),
     /* 56 Blit                    */ static_cast<Uint8>(kWaitNone),

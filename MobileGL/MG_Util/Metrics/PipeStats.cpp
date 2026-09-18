@@ -211,7 +211,7 @@ namespace MobileGL::MG_Util::PipeStats {
             "render-state-cso-mints", "render-state-cso-binds", "map-persistent-roundtrips",
             "framebuffer-emissions", "sampler-view-emissions", "sampler-state-emissions",
             "shader-image-emissions", "client-tex-upload-emissions", "tex-remint-pulls",
-            "residual-pulls",
+            "residual-pulls", "server-verb-boundaries",
 #endif
         };
         const char* const kGateNames[kGateCount] = {
@@ -514,6 +514,14 @@ namespace MobileGL::MG_Util::PipeStats {
         // tracks the draw count is a pull inside a loop, and one that tracks the frame count is
         // a pull per verb. Zero in every monolith lane by construction.
         line += " rsp=" + std::to_string(calls[static_cast<Uint32>(CallClass::ResidualPulls)]);
+        // P5e (gl), ID-115: `vbs` is the server's verb-boundary stamp count, and it is on this
+        // line so that "strict was armed on this entry" is a number a lane can read rather than
+        // an inference from an absence. Everything strict checks is downstream of that stamp and
+        // the monolith arm never stamps, so a green lane with vbs=0 says only that the mechanism
+        // never ran. It is deliberately NOT rsp: rsp reaches zero when the phase SUCCEEDS, so a
+        // positive control built on it would fail on the day the debt is paid.
+        line += " vbs=" +
+                std::to_string(calls[static_cast<Uint32>(CallClass::ServerVerbBoundaries)]);
         // P5's three wire gauges, and THEY ARE RUN TOTALS on a line whose every other field is
         // a window - see the Gauge enum for the argument. `maxrec` is R-10's proof obligation
         // (BRIEF 8 item 3): the largest single record this run wrote, in BYTES, beside the cap

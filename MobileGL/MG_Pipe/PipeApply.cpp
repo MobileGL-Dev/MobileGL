@@ -3031,12 +3031,25 @@ namespace MobileGL::MG_Pipe {
     // MGPipeBarriered in the sink's ApplyOne.
     namespace {
         thread_local Bool g_currentRecordBarriered = true;
+        // P5e (gl), ID-128. FALSE IS THE DEFAULT AND IT IS THE STRICT ANSWER: "this record was
+        // barriered by escalation" admits a pull that neither the wait class nor the retiring
+        // phase admits, so a reader that runs before any writer must say no. The stamp above
+        // defaults the other way because ITS safe answer is "the client is parked".
+        thread_local Bool g_currentRecordBarrieredByEscalation = false;
     } // namespace
 
     Bool MGPipeApplierCurrentRecordIsBarriered() { return g_currentRecordBarriered; }
 
     void MGPipeApplierSetCurrentRecordBarriered(Bool barriered) {
         g_currentRecordBarriered = barriered;
+    }
+
+    Bool MGPipeApplierCurrentRecordIsBarrieredByEscalation() {
+        return g_currentRecordBarrieredByEscalation;
+    }
+
+    void MGPipeApplierSetCurrentRecordBarrieredByEscalation(Bool escalated) {
+        g_currentRecordBarrieredByEscalation = escalated;
     }
 
     // ================================================================================

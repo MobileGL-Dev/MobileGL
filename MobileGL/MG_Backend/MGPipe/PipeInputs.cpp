@@ -74,6 +74,48 @@ namespace MobileGL::MG_Pipe {
             std::abort();
         }
 
+        // P5e (gl), ID-117: THE ADMITTED MARKER, AND WHY IT IS ONLY THE TAG THAT CHANGED.
+        //
+        // `<field>@<verb>` and the `[BARRIER-PULLED, …, retires in <phase>]` tail are IDENTICAL
+        // to the Fatal above; the leading tag is `Admitted{` instead of `Fatal{`. Every filter
+        // written since P5c matches `Fatal{UnmigratedPipeInput`, so all of them keep meaning
+        // exactly "red" and none of them has to learn a new grammar to keep meaning it. A reader
+        // grepping for the pair still finds it, and the lane can ratchet on both sets with one
+        // regex per tag (ID-119's two-sided ratchet).
+        //
+        // THE DEDUPE IS NOT TIDINESS. An 852-draw Minecraft frame reaches an admitted readback
+        // row once per draw; without this, one frame writes 852 identical lines, the log file is
+        // the size of the run and the marker census cannot be read at all. So it is once per
+        // (field, verb) per process, which is the granularity the allowlist is written in.
+        //
+        // A PLAIN ARRAY, NOT AN ATOMIC, and that is the file's existing rule rather than a
+        // shortcut: CountBarrierPull is reachable only after the server stamped a verb boundary,
+        // which happens on the apply thread inside PipeApplier::ApplyOne, and g_residualPulls
+        // beside it is a plain Uint64 for the same reason. A racing writer here would at worst
+        // log a duplicate line, never lose one.
+        void AdmittedBarrierPullOnce(MGPipeInputField field, MGPipeVerb verb, Bool escalated) {
+            const SizeT fieldIndex = static_cast<SizeT>(field);
+            const SizeT verbIndex = static_cast<SizeT>(verb);
+            if (fieldIndex >= kMGPipeInputFieldCount || verbIndex >= kMGPipeVerbCount) return;
+            static Uint64 seen[(kMGPipeVerbCount * kMGPipeInputFieldCount + 63) / 64] = {};
+            const SizeT bit = verbIndex * kMGPipeInputFieldCount + fieldIndex;
+            const Uint64 mask = Uint64{1} << (bit % 64);
+            if ((seen[bit / 64] & mask) != 0) return;
+            seen[bit / 64] |= mask;
+            // P5e (gl), ID-128: WHICH DISJUNCT ADMITTED IT, in the slot the grammar already has
+            // for the reason. `ADMITTED` means the generated table said so, and the lane can
+            // check that against `--print-admitted`. `ADMITTED-ESCALATED` means the table did
+            // NOT and the record was barriered by an escalation the table cannot see, which is a
+            // RUNTIME fact about that record's payload - so the lane must not look for it in a
+            // static list. Saying which is what keeps the lane's comparison exact instead of
+            // widening the list with every pair that could ever escalate.
+            MGLOG_W("MGPipe: Admitted{UnmigratedPipeInput, \"%s@%s\"} [BARRIER-PULLED, %s, "
+                    "retires in %s]",
+                    kMGPipeInputFieldNames[fieldIndex], MGPipeVerbName(verb),
+                    escalated ? "ADMITTED-ESCALATED" : "ADMITTED",
+                    kMGPipeFieldRetiringPhase[fieldIndex]);
+        }
+
         // One place decides what a BARRIER-PULLED read does, so the field accessors and the
         // seven sticky forwards cannot drift apart on it.
         //
@@ -89,8 +131,34 @@ namespace MobileGL::MG_Pipe {
         // torn or stale BY CONSTRUCTION and there is nothing for a counter to count. A
         // "count it" arm here would be a wrong picture with a number beside it.
         //
-        // rsp is therefore 0 on unbarriered records in every scenario summary (§7's pin): a
-        // non-zero count would be an abort that did not fire.
+        // P5e (gl), ID-119: THE OLD PIN HERE - "rsp is 0 on unbarriered records" - WAS VACUOUS
+        // AND HAS BEEN WITHDRAWN. The unbarriered arm below is [[noreturn]] and runs BEFORE
+        // ++g_residualPulls, so an unbarriered pull can never reach the counter whatever this
+        // function is written to do; the sentence was true of every possible implementation and
+        // therefore checked nothing. What rsp actually counts is BARRIERED pulls, and under the
+        // strict knob it counts exactly the ADMITTED ones, because every other barriered pull
+        // aborts two lines down. That is the form CONTRACT-P5E §7 now states and the lane checks.
+        //
+        // ---- P5e (gl), ID-117: AN ADMITTED PULL IS LOUD, NOT FATAL ---------------------------
+        //
+        // Before this, strict aborted on EVERY barrier-pulled read, admitted or not - which made
+        // the CI's allowlist comparison unreachable code (the run's rc != 0 exits first) and made
+        // "hard green" impossible with the knob as written. So there is a third state, and the
+        // two existing ones are untouched:
+        //
+        //   unbarriered            -> Fatal, no knob. The value is torn by construction.
+        //   barriered, unadmitted  -> Fatal under strict. A debt no phase has taken.
+        //   barriered, admitted    -> ONE MGLOG_W per (field, verb), and the entry completes.
+        //
+        // "Admitted" has three disjuncts and the third is a runtime one (ID-128): the generated
+        // table answers the first two, and the record's own escalation flag answers the third.
+        //
+        // An admitted pull is a debt this phase deliberately leaves standing: the field's row is
+        // BARRIER_PULLED, the verb's op is statically barriered so the client really is parked
+        // behind the record, and the field is inside the verb's own may-read mask - so the value
+        // is real, ordered and fresh, exactly ruling 4's "barriered records keep P5C semantics".
+        // MGPipeBarrierPullAdmitted is generated from those three tables (ID-116); there is no
+        // list here to drift.
         void CountBarrierPull(MGPipeInputField field, MGPipeVerb verb) {
             if (!MGPipeApplierCurrentRecordIsBarriered()) {
                 StrictBarrierPullFatal(field, verb, "UNBARRIERED, the client did not fill it");
@@ -100,7 +168,21 @@ namespace MobileGL::MG_Pipe {
                 MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ResidualPulls, 1);
             }
             if (MG_Config::Ipc.StrictErrors) {
-                StrictBarrierPullFatal(field, verb, "MOBILEGL_IPC_STRICT_ERRORS=1");
+                // THE THIRD DISJUNCT (P5e gl, ID-128), and it has to be asked at RUNTIME because
+                // it is a fact about this record's payload rather than about its opcode. The
+                // static table admits a pair when the verb's op waits (disjunct 1) or when the
+                // field's retiring phase is not this phase (disjunct 2); an escalated record is
+                // one the client parks behind for a reason only the payload knows - an open
+                // transform-feedback span, or a draw carrying client vertex arrays. Both are
+                // outside this phase by ruling (§5.7, ID-82), and the client-array read site
+                // aborts by its own name if it is ever applied unbarriered, so the pull is legal
+                // and P5e is not the phase that owes it.
+                const Bool statically = MGPipeBarrierPullAdmitted(field, verb);
+                const Bool escalated = MGPipeApplierCurrentRecordIsBarrieredByEscalation();
+                if (!statically && !escalated) {
+                    StrictBarrierPullFatal(field, verb, "MOBILEGL_IPC_STRICT_ERRORS=1");
+                }
+                AdmittedBarrierPullOnce(field, verb, !statically);
             }
         }
 
@@ -182,6 +264,17 @@ namespace MobileGL::MG_Pipe {
 
     void MGPipeServerStampVerbBoundary(MGPipeVerb verb) {
         PipeInputs& inputs = gPipeInputs;
+        // P5e (gl), ID-115: THE POSITIVE CONTROL'S ONLY HONEST SIGNAL, and it belongs HERE
+        // because this is the line the whole strict mechanism hangs off. The poison, rsp and
+        // the BARRIER-PULLED verdict are all reachable only after this stamp, and the monolith
+        // arm never stamps at all - so "the strict lane is green" and "strict was never armed"
+        // were observationally identical, which is how a lane whose seven passing entries
+        // included no record-carrying split GL scenario read as rigour. Behind Enabled(), which
+        // is the file's rule for counters (`rsp` beside it does the same) and keeps the stamp a
+        // table lookup and a branch-free fill when stats are off.
+        if (MG_Util::PipeStats::Enabled()) {
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ServerVerbBoundaries, 1);
+        }
         MGPipeFilledState& filled = MGPipeStampAccess::Filled(inputs);
         MGPipeStampAccess::SetVerb(inputs, verb);
         // Starts at 1 for MGPipeValidateForVerb's reason: FilledGen == 0 is "never filled" on

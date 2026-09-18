@@ -179,6 +179,22 @@ namespace MobileGL::MG_Util::PipeStats {
         // forwards cannot drift apart on it. It is zero in every monolith lane by
         // construction: nothing arms it but a server verb-boundary stamp.
         ResidualPulls,
+        // P5e (gl), ID-115: `vbs` - SERVER VERB BOUNDARIES STAMPED. One per record that IS a
+        // verb boundary, counted at MGPipeServerStampVerbBoundary itself.
+        //
+        // IT EXISTS BECAUSE "THE STRICT LANE IS GREEN" AND "STRICT WAS NEVER ARMED" WERE
+        // OBSERVATIONALLY IDENTICAL. Every strict check downstream - the poison, rsp, the
+        // BARRIER-PULLED verdict - is reachable ONLY after this stamp, and the monolith arm
+        // never stamps at all. So of the entries that passed strict before this counter existed,
+        // three were monolith transport (where the whole mechanism is structurally unreachable),
+        // two self-skipped, one was a death test and one was a Python check: not one was a
+        // record-carrying split GL scenario, and the lane could not tell that from rigour.
+        //
+        // rsp CANNOT PLAY THIS PART, which is the reason for a counter rather than a reused one:
+        // rsp goes to zero exactly when the phase SUCCEEDS, so a positive control built on it
+        // would start failing on the day the debt is paid. `vbs` is non-zero whenever the
+        // server applied a verb at all, before and after retirement alike.
+        ServerVerbBoundaries,
 #endif
         Count
     };

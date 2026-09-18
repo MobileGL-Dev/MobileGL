@@ -236,7 +236,22 @@
     /* only way bytes reach it - a blobref here would be a SECOND way to say the same thing. */  \
     X(ResourceFlushRange,       MGPFlushRange,              kCtxObject, kNone,                      kWaitNone)        \
     X(ResourceReadback,         MGPReadback,                kCtxObject, kReplySlot,                 kWaitReply)       \
-    X(ResourceCopyRegion,       MGPCopyRegion,              kCtxObject, kNone,                      kWaitNone)        \
+    /* P5e (gl), ID-118: kWaitNone -> kWaitApplied, AND IT IS THE FIELD'S RETIRING PHASE THAT  */  \
+    /* forces it. This row's verb is CopyImageSubData, whose apply reads GetTextureObject -    */  \
+    /* a BARRIER_PULLED row whose retiring phase is P7, not P5e. Left kWaitNone, the flip      */  \
+    /* would make a genuinely UNBARRIERED record read client memory: an unconditional Fatal    */  \
+    /* (PipeInputs.cpp), no knob, for two whole phases. The alternative was to special-case    */  \
+    /* the field into section 7's allowlist, which ID-118 refused: the allowlist is DERIVED    */  \
+    /* (ID-116), and an exception written into it would be a real defect kept quiet rather     */  \
+    /* than a debt stated. With the wait class moved, the derivation admits the pair with no   */  \
+    /* exception at all and P7 retires the field on its own schedule.                          */  \
+    /* kWaitApplied AND NOT kWaitReply: the call posts no reply slot and needs no answer - the */  \
+    /* client parks until the record applies, which is exactly what CopyFramebufferToTexture   */  \
+    /* below already does for the two framebuffer-sourced copies. Same verb class              */  \
+    /* (kBlitOrCopy), same shape, a wait that is already carried in this lane. THE COST IS     */  \
+    /* MEASURED, NOT ASSUMED: glCopyImageSubData is zero per frame in the Minecraft 26.3-rc-3  */  \
+    /* scene (~849 draws/frame), so the wait is not on any per-frame path.                     */  \
+    X(ResourceCopyRegion,       MGPCopyRegion,              kCtxObject, kNone,                      kWaitApplied)     \
     X(GenerateMipmap,           MGPMipPlan,                 kCtxObject, kNone,                      kWaitApplied)     \
     X(GetTextureImage,          MGPReadbackInfo,            kCtxObject, kReplySlot,                 kWaitReply)       \
     /* ---- context: transfer calls that read whole-context state, and the commands ---- */         \

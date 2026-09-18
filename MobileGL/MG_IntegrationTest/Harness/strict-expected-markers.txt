@@ -1,0 +1,45 @@
+# The admitted barrier-pull markers the integration-split lane ACTUALLY WRITES under
+# MOBILEGL_IPC_STRICT_ERRORS=1, one `<field>@<verb>` per line.
+#
+# P5e (gl), ruling ID-119. THIS IS THE OTHER SIDE OF THE RATCHET, and it is the side that was
+# missing. The generated allowlist (scripts/gen_pipe_field_ownership.py --print-admitted) says
+# which pairs MAY be admitted - it is a statement about the tables. This file says which ones the
+# lane DOES produce - a statement about the run. A lane checked only against the first kind
+# ROTS GREEN: a debt retires, its marker stops being written, and nothing notices, so the day a
+# regression re-introduces that read the lane calls it "expected".
+#
+# So Harness/split_log_paths.py's `markers` mode fails BOTH ways:
+#   - a pair here that no longer appears  -> delete it, in the commit that retired it;
+#   - a pair that appears and is not here -> add it with the phase that owes it, or retire it.
+#
+# HOW TO REFRESH (never by hand from a guess):
+#   ctest -L integration-split --show-only=json-v1 > lane.json
+#   MOBILEGL_IPC_STRICT_ERRORS=1 ctest -L integration-split -j 4
+#   python3 MobileGL/MG_IntegrationTest/Harness/split_log_paths.py markers lane.json . \
+#       <(python3 scripts/gen_pipe_field_ownership.py --print-admitted) this-file
+# and put the census it prints here.
+#
+# ---------------------------------------------------------------------------------------------
+# MEASURED AT p5e/gl's BASE, 7c6f6886, WHICH IS BEFORE pa AND mv LANDED. That is stated rather
+# than hidden: the wave-3 integration commit retires GetProgramForDraw@DrawArrays,
+# GetProgramForDispatch@DispatchCompute and the ordinary GetBoundVertexArray@DrawArrays, so the
+# three escalated rows below WILL stop appearing and the ratchet will say so by name. Removing
+# them is part of that merge, not a failure of it.
+# ---------------------------------------------------------------------------------------------
+#
+# Admitted by the generated table (disjuncts 1 and 2 of ID-116 / ID-125):
+GetBufferBindingSlot@ReadPixels
+GetFramebufferBindingSlot@ReadPixels
+GetProgramObject@ShaderStorageBlockBinding
+GetTextureObject@CopyImageSubData
+GetTextureUnitObject@CopyTexImage2D
+GetTransformFeedbackProgram@DrawArrays
+ValidateProgramName@ShaderStorageBlockBinding
+#
+# Admitted by ESCALATION only (disjunct 3, ID-128): the record was barriered because its payload
+# said so - an open transform-feedback span, or a draw carrying client vertex arrays - which no
+# table indexed by (field, verb) can see. All three are pulls on the draw verb by entries that
+# are NOT the ordinary draw path.
+GetBoundVertexArray@DrawArrays
+GetBufferBindingPoint@DrawArrays
+GetProgramForDraw@DrawArrays

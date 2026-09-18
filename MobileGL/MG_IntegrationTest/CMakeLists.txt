@@ -2383,21 +2383,95 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 endif()
 
 # P5b measured named-blit blockers, exercising both backend bound-form lowerings.
+#
+# P5e (gl), CONTRACT-P5E §7: THE TWO BACKENDS GET DIFFERENT LABELS, because under strict they are
+# answering different questions.
+#
+# Both DirectVulkan entries abort on GetFramebufferBindingSlot@Clear (VulkanRenderer.cpp:7648).
+# That field's row retires in P5e ON ESPRYT and in P7 ON MAGMA, and FieldOwnership.def carries ONE
+# retiring-phase string for both - so the derived allowlist cannot admit the pair without admitting
+# it for Espryt too, where it would forgive exactly the regression fb's handle arm exists to
+# prevent (an Espryt Clear reading the frontend's binding slot again would become a warning line).
+# The alternative to a label is therefore not "admit one row"; it is "stop the Espryt lane from
+# being able to see that row at all", which is a real loss of gate strength.
+#
+# So the lane is SPLIT rather than the allowlist WIDENED: `integration-split` stays a statement
+# about Espryt and goes hard green, and the Magma entries get the expected-red step the contract
+# already promises them for the backend it keeps in lockstep all phase (ID-90).
 if (MOBILEGL_BUILD_DISAGGREGATED)
     foreach(namedBlitBackend DirectGLES DirectVulkan)
         mgl_itest_join_environment(MGL_ITEST_NAMED_BLIT_ENVIRONMENT
             "MOBILEGL_BACKEND_TYPE=${namedBlitBackend}" "MOBILEGL_TRANSPORT=inproc"
             "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
             ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+        # THE LABEL IS `integration-magma-split` AND NOT `integration-split-magma`, and that is not
+        # a preference: `ctest -L` takes a REGEX, not an exact name, so `-L integration-split`
+        # MATCHES a label spelled `integration-split-magma` as a substring. The obvious name would
+        # have left both entries in the Espryt lane while every listing showed them relabelled - a
+        # split that looks done and is not. Measured: with that spelling
+        # `ctest -N -L integration-split` still listed both DirectVulkan entries.
+        if (namedBlitBackend STREQUAL "DirectVulkan")
+            set(MGL_ITEST_NAMED_BLIT_LABELS "integration-magma-split")
+        else()
+            set(MGL_ITEST_NAMED_BLIT_LABELS "integration-split")
+        endif()
         foreach(namedBlitCase NamedBlitPreservesBindingsAndRestoresNextVerbsPixels NamedBlitDefaultEndpointPixels)
             gtest_discover_tests(MobileGLIntegrationTest
                 TEST_PREFIX "${namedBlitBackend}.Split.NamedBlit."
                 TEST_FILTER "F1WireScenario.${namedBlitCase}"
                 DISCOVERY_TIMEOUT 30
                 PROPERTIES
-                    LABELS "integration-split"
+                    LABELS "${MGL_ITEST_NAMED_BLIT_LABELS}"
                     TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ENVIRONMENT "${MGL_ITEST_NAMED_BLIT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5b-${namedBlitBackend}-${namedBlitCase}.log")
         endforeach()
     endforeach()
+endif()
+
+# =====================================================================================
+# P5e (gl), ID-115 / ID-119: THE STRICT LANE'S POSITIVE CONTROL, AND THE ONE COUNTING ENTRY
+# =====================================================================================
+#
+# ONE ENTRY, TWO JOBS, AND BOTH NEED THE SAME THING - a drawing split scenario that can read its
+# own PipeStats window.
+#
+#   ID-115: prove strict was ARMED. Of the seven entries that passed the strict lane before this
+#   phase, three were monolith transport (where nothing stamps a verb boundary and the whole
+#   mechanism is structurally unreachable), two self-skipped, one was a death test and one was a
+#   Python check - so "116/116" and "strict never ran on anything that draws" were the same
+#   observation. `vbs` on the summary line is the arming proof and this entry is where it is read.
+#
+#   ID-119: the `rsp` pin. The old wording ("rsp = 0 on unbarriered records") was true of every
+#   possible implementation, because CountBarrierPull's unbarriered arm is [[noreturn]] and runs
+#   BEFORE the counter. The checkable statement is the relation to `draws`, which is what the
+#   device measured (rsp ~= the draw count under inproc, 0 under monolith).
+#
+# IT IS ITS OWN ENTRY WITH ITS OWN LOG PATH, NOT A WHOLE-LANE ENV FLIP. The library opens
+# MOBILEGL_LOG_FILE_PATH with "w", so every process in a lane TRUNCATES it; two entries sharing
+# one path under `ctest -j` race into an empty read that looks exactly like "the counter was
+# never emitted" (Harness/PipeStatsWindow.h:19-24 has the long version). RESOURCE_LOCK is the
+# same belt as the PersistentMapArm entry's.
+#
+# BLOCK PLACED AT THE END OF THE FILE ON PURPOSE (wave-3 integration): `pa`'s
+# DirectGLES.Split.StrictProgramArm. block and `mv`'s multi-draw tiers are added inside the big
+# disaggregated section above, so keeping this one textually apart lets all three merge cleanly.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_STRICT_ARMING_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc"
+        "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
+        "MGITEST_STRICT_ARMING_LANE=1"
+        "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5e-strict-arming-DirectGLES.log"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Split.StrictArming."
+        TEST_FILTER "TriangleScenario.TheServerStampedAVerbBoundaryOnThisDrawingFrame"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-split"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            RESOURCE_LOCK p5e-strict-arming-DirectGLES.log
+            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_STRICT_ARMING_ENVIRONMENT}"
+    )
 endif()

@@ -659,4 +659,61 @@ TEST(RemoteClientControls, StagingWaitsForRetirementAfterThePriorRecordApplied) 
     });
     ExpectChildSuccess(child);
 }
+
+// P5e (gl) RED-ONCE, ID-111. THE SERVER-SIDE MIRROR OF THE CLIENT LATCH - the line that makes
+// ID-90 ("Magma keeps the lockstep for the whole of P5e") true in code rather than in prose.
+//
+// The control session calls SetCapabilityBits(0), so its CallMask IS set and does NOT carry
+// bit 10. That is a Magma server's answer for ever (MGPipeRunAheadCapBitsFor returns kCapNone
+// off DirectGLES) and an Espryt server's answer for the whole bring-up window. A DrawVbo then
+// crosses for real, so what is under test is the stamp PipeApplier::ApplyOne writes and not a
+// test-only branch beside it.
+//
+// FOUR ASSERTIONS, because each one alone can be true for the wrong reason:
+//   1. the session really lacks the bit, said in its own words rather than inferred from the
+//      stamp being tested (ID-102: the action under test is the probe itself);
+//   2. the wire really answers UNBARRIERED for this record - draw_vbo is kWaitNone - so the
+//      `wireSaysBarriered` arm is the one a flipped constant would take;
+//   3. the record that actually crossed was stamped barriered;
+//   4. and the stamp is STILL barriered at the POST-FLIP value of the wait-rule constant.
+//
+// (4) IS THE ONE THAT MATTERS AND IT IS STATED AT `true` RATHER THAN READ FROM THE CONSTANT.
+// kMGPipeP5eClientWaitRuleLanded is false today, so (3) alone would pass for a server that had
+// no capability conjunct at all - and would keep passing until the integration commit, at which
+// point Magma SIGSEGVs on its first draw with the lane still green. Asking the pure function
+// for the post-flip answer is how the claim gets tested before the day it starts deciding.
+//
+// THE RED: delete `serverPublishesRunAhead &&` from MGPipeApplierStampsBarriered
+// (MG_Remote/Server/PipeApplier.h) and (4) flips to false - the child exits 124.
+TEST(RemoteClientControls, ADrawOnASessionWithoutTheRunAheadBitStaysStampedBarriered) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        DrawPeer peer;
+        peer.Install();
+        MGPDrawInfo info{};
+        info.NumDraws = 1;
+        MGPDrawRange range{};
+        if (ClientSessionInstance().EmitAndWait(MGPWireOp::DrawVbo, &info, sizeof(info), &range,
+                                                sizeof(range), nullptr, 0, nullptr) == 0)
+            ::_exit(120);
+        // Read the stamp on the thread that owns it: it is a thread_local describing "which
+        // record is the apply thread inside right now", and ApplyOne leaves it standing.
+        if (Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+                if (Srv::MGPipeServerPublishesRunAhead()) ::_exit(121);
+                MGPDrawInfo probe{};
+                probe.NumDraws = 1;
+                if (MGPipeBarriered(MGPWireOp::DrawVbo, &probe, MGPipeApplier())) ::_exit(122);
+                if (!MGPipeApplierCurrentRecordIsBarriered()) ::_exit(123);
+                if (!Srv::MGPipeApplierStampsBarriered(/*clientWaitRuleLanded=*/true,
+                                                       Srv::MGPipeServerPublishesRunAhead(),
+                                                       /*wireSaysBarriered=*/false))
+                    ::_exit(124);
+                return MOBILEGL_OK;
+            },
+            nullptr) != MOBILEGL_OK)
+            ::_exit(125);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
 #endif

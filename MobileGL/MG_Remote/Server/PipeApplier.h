@@ -48,6 +48,39 @@
 
 namespace MobileGL::MG_Remote::Server {
 
+    // P5e (gl, ID-111): DOES THIS SERVER PUBLISH kCapRunAheadApply? Asked of the server's OWN
+    // CallMask and not of a build constant - that bit IS the sentence "the client may run ahead
+    // of this apply", and Magma never sets it (MGPipeRunAheadCapBitsFor returns kCapNone for
+    // every backend but DirectGLES, ID-90). A session with no CallMask yet answers false: no
+    // client can have latched run-ahead against a snapshot that was never published.
+    //
+    // PUBLIC because the red-once has to be able to say "the session I built lacks bit 10" in
+    // its own words rather than inferring it from the stamp it is testing (ID-102's rule: the
+    // action under test is the probe itself).
+    Bool MGPipeServerPublishesRunAhead();
+
+    // ---- the barriered stamp, AS A PURE FUNCTION (ID-111) ---------------------------------
+    //
+    // ApplyOne stamps "is the client parked behind this record" before anything can ask
+    // (CONTRACT-P5E §2.1 / §4.4). Until the P5e integration commit the answer is `true` for
+    // every record whatever the wire says, because the client still blocks after each one
+    // (ID-103) - but the day the constant flips, the answer must ALSO ask whether this server
+    // published the run-ahead bit at all. It is `wireSaysBarriered` only when BOTH halves of
+    // the run-ahead arm are true; Magma publishes no bit 10, so a Magma server keeps stamping
+    // `true` and its lockstep client keeps being safe. Without the second conjunct a Magma
+    // server would stamp every draw_vbo / blit / clear / launch_grid UNBARRIERED (they are all
+    // kWaitNone) while its client is still parked, and CountBarrierPull aborts unconditionally
+    // on an unbarriered pull - Magma dies on its first draw, no knob involved.
+    //
+    // IT IS A PURE FUNCTION for MGPipeRunAheadCapBitsFor's reason: "Magma never runs ahead" is
+    // then something a unit case can hold AT THE POST-FLIP VALUE of the constant, rather than a
+    // claim that first becomes testable on the day the integration commit throws the switch.
+    constexpr Bool MGPipeApplierStampsBarriered(Bool clientWaitRuleLanded,
+                                                Bool serverPublishesRunAhead,
+                                                Bool wireSaysBarriered) {
+        return (clientWaitRuleLanded && serverPublishesRunAhead) ? wireSaysBarriered : true;
+    }
+
     // Writes answers into SEG_REPLY at seq % slots, stamping the seq back into the slot header
     // so a wrong-slot read is detectable rather than plausible (table 0's slot header row:
     // {Uint64 Seq; Int32 Status; Uint32 Size;}).
