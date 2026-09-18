@@ -394,7 +394,39 @@ namespace MobileGL::MG_Pipe {
         // transform-feedback span, so clause 2 is false for it - and the verb is a no-op below
         // either way.
         Bool ClientVerbIsBarriered(MGPipeVerb verb, GLContext* ctx) {
-            const MGPWireOp op = WireOpForVerb(verb);
+            MGPWireOp op = WireOpForVerb(verb);
+            // ---- P5e (ra2): THE JOIN IS MANY-TO-ONE ON THE DRAW FAMILY, SO THE INVERSE IS NOT
+            // A FUNCTION, AND THE DEFAULT BELOW WAS ANSWERING FOR NINETEEN VERBS -----------------
+            //
+            // MGP_VERB_OP_LIST carries ONE row for the whole draw family - `DrawVbo ->
+            // DrawArrays` - because that is the direction the SERVER needs: a draw_vbo record
+            // stamps a verb boundary and DrawArrays is the name it prints. Inverting it
+            // verb-first therefore answers kOpCount for DrawElements, DrawElementsBaseVertex,
+            // DrawElementsIndirect, MultiDrawElementsBaseVertex and every other indexed /
+            // instanced / multi / indirect verb - all of which emit exactly that same draw_vbo.
+            //
+            // The conservative default below reads "a verb the join does not know answers
+            // BARRIERED: fill it, wait for it". THE FILL HAPPENS AND THE WAIT DOES NOT. The wait
+            // is not decided here - it is decided per RECORD, by MGPipeBarriered(op, payload,
+            // st) at the publish (§2.1) - and the record is a draw_vbo, whose wait class is
+            // kWaitNone. So every indexed draw filled gPipeInputs while telling
+            // RefusePipeInputsTouchWhileApplierOwnsIt, through isBarrieredFill, that this thread
+            // was about to park behind it, and then ran on without parking. The apply thread was
+            // measured inside a record at that instant, and the abort it produced named the
+            // CLIENT's verb - a verb the applier cannot stamp, which is what identifies the
+            // writer (report §2).
+            //
+            // So the family's one row is applied to the family. Every other unknown verb keeps
+            // the conservative answer, which is now honest rather than hoped for: the fill site
+            // establishes quiescence before it writes (MGPipeValidateForVerb below), so a
+            // barriered fill no longer rests on a park that may never come.
+            static_assert(MGPipeVerbForWireOp(MGPWireOp::DrawVbo) == MGPipeVerb::DrawArrays,
+                          "the draw family's representative row moved; the fallback below names "
+                          "draw_vbo because that is the record every kDraw verb emits");
+            if (op == MGPWireOp::kOpCount &&
+                kMGPipeVerbClass[static_cast<SizeT>(verb)] == MGPipeVerbClass::kDraw) {
+                op = MGPWireOp::DrawVbo;
+            }
             if (op == MGPWireOp::kOpCount) return true;
             if (MGPipeWaitClassFor(op) != kWaitNone) return true;
             if (MGPipeCallClassFor(op) == kCtxVerb && ctx != nullptr &&
@@ -402,6 +434,40 @@ namespace MobileGL::MG_Pipe {
                 return true;
             }
             return false;
+        }
+
+        // ---- P5e (ra2), CONTRACT-P5E §3.5 AMENDED: A BARRIERED FILL MAKES ITSELF QUIESCENT ----
+        //
+        // §3.5 exempted the residual fill of a BARRIERED record from the single-writer rule on
+        // the ground that "this thread is about to park behind it". That is a claim about the
+        // FUTURE, and the write is in the PRESENT: the order at the validate point is fill,
+        // then emit, then park, and between the fill and the park the apply thread is still
+        // draining the UNBARRIERED records the client ran ahead of. The claim was therefore
+        // never an argument about this instant, and the guard that took it - the
+        // `if (isBarrieredFill) return;` arm of RefusePipeInputsTouchWhileApplierOwnsIt - could
+        // not fire however wrong the fill was.
+        //
+        // This makes the claim TRUE instead of asserting it. §2.5's forced wait is exactly
+        // "publish nothing, wait for the applier to reach LastPublishedSeq, drain the reverse
+        // channel", which is the definition of the window the fill needs, and it already exists
+        // for glFinish and for BackendObject_Remote's forwarders.
+        //
+        // IT IS CALLED AT EVERY GL-THREAD WRITE INTO THE BLOCK, not once per verb, because the
+        // validate point writes the block in TWO phases that straddle record publication: the
+        // serial bump / stamp withdrawal / verb rename run BEFORE the emitters, and the 63-field
+        // walk of step 4 runs AFTER them - and the records the emitters published are records
+        // whose apply READS the block. One wait cannot cover both halves.
+        //
+        // THE ARM IS STATED, NOT INFERRED (ID-81): WaitForApplyToCatchUp's own first test is
+        // `m_runAheadArmed && m_started`, and m_runAheadArmed is the latch of
+        // `Transport != Monolith && Ipc.RunAhead && kMGPipeP5eRunAheadReady && the caps bit`. So
+        // on the monolith arm, on the pull build and under MOBILEGL_IPC_RUN_AHEAD=0 this is a
+        // call that returns, and the lockstep client's behaviour is unchanged byte for byte
+        // (G1) - under lockstep appliedSeq is already at LastPublishedSeq by construction.
+        void QuiesceApplierBeforeFill(const char* surface) {
+            MG_Remote::Client::ClientSession* session = MG_Remote::Client::ClientSession::Active();
+            if (session == nullptr) return; // no session: this process has no applier to outrun
+            session->WaitForApplyToCatchUp(surface);
         }
 
         // Whether the LAST fill actually happened, i.e. whether the rows in the block describe
@@ -637,6 +703,14 @@ namespace MobileGL::MG_Pipe {
         // P5c (gt, layer 2): the single-field refresh is a client write into gPipeInputs too -
         // same gate as the fill, and it makes the same claim the fill made: the rows it is
         // touching belong to a record this thread is parked behind (or will park behind).
+        //
+        // P5e (ra2): SO IT TAKES THE SAME WAIT. This one runs at a frontend mutation point, not
+        // at a verb, so "will park behind" is even weaker here than it is at the fill - the
+        // mutation can land anywhere between two verbs, with the whole run-ahead backlog in
+        // flight. The wait is a no-op unless run-ahead is armed, and at a mutation point after a
+        // barriered verb the applier is usually already caught up, so this is a watermark test
+        // rather than a park in the common case.
+        QuiesceApplierBeforeFill("MGPipeNoteFrontendMutation");
         MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(
             "MGPipeNoteFrontendMutation", /*isBarrieredFill=*/true);
 #endif
@@ -3315,6 +3389,17 @@ namespace MobileGL::MG_Pipe {
             // thread is about to park behind it. The second argument is which of the two
             // claims the caller is making, and a fill that made the second one falsely is the
             // named abort.
+            //
+            // P5e (ra2): AND IT IS MADE TRUE FIRST. Phase 1 of the block write is three lines
+            // below - the serial bump, MGPipeServerClearVerbBoundary() and SetVerb - and every
+            // one of them is a scalar the apply thread reads at each field access inside the
+            // record it is currently applying. Withdrawing the server's own stamp from under it
+            // is what produced `Fatal{UnmigratedPipeInput, "<RECORD-SUPPLIED field>@<this
+            // thread's verb>"}` on the apply thread (report §2). THE RED-ONCE IS THIS LINE:
+            // delete it and the guard below aborts with Fatal{RoleViolation, "gPipeInputs"}
+            // naming MGPipeValidateForVerb, because the guard now tests the fact rather than
+            // taking the claim.
+            QuiesceApplierBeforeFill("MGPipeValidateForVerb");
             MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(
                 "MGPipeValidateForVerb", /*isBarrieredFill=*/barriered);
         }
@@ -3630,6 +3715,20 @@ namespace MobileGL::MG_Pipe {
         // own boundary and §3.3's detector turns any field it still needs from here into
         // Fatal{UnmigratedPipeInput, "<field>@<verb>"} by name, which is what makes the strict
         // lane a gate rather than a count.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5e (ra2): PHASE 2 OF THE BLOCK WRITE, AND IT NEEDS ITS OWN WAIT. Everything between
+        // the phase-1 wait and here PUBLISHED RECORDS - the fourteen emitters above - and the
+        // apply thread reads gPipeInputs while it applies them. So the window the fill opened at
+        // the top of this function was closed again by this function's own emissions, and the
+        // 63-field walk below would run straight into it. Same call, same arm, same no-op
+        // everywhere run-ahead is not armed; the guard beside it is what turns a missing one
+        // into a named abort rather than a torn read.
+        if (fillOwed) {
+            QuiesceApplierBeforeFill("MGPipeValidateForVerb/residual");
+            MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(
+                "MGPipeValidateForVerb/residual", /*isBarrieredFill=*/true);
+        }
+#endif
         const Bool applierDerives = ApplierDerivesRenderStateFields();
         // BY VALUE, NOT BY REFERENCE: the memo's storage is rebuilt in place when the key moves,
         // and the walk below holds this across 63 iterations.

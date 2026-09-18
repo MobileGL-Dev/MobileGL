@@ -2297,11 +2297,78 @@ TEST(RemoteGuards, ClientPipeInputsTouchOutsideABarrieredFillUnderRunAheadIsFata
 
 // ... and the control: the barriered fill says so and is let through. Without this the case
 // above would pass just as well against "abort unconditionally".
+//
+// P5e (ra2): THIS CONTROL IS NOW ALSO HALF OF A PAIR, and the half it does NOT state is the
+// one that cost the flip its lane. "The applier is not inside" is true here because nothing in
+// this child ever entered it; the case below is the same call with that one fact reversed.
 TEST(RemoteGuards, ClientPipeInputsTouchInsideABarrieredFillUnderRunAheadIsAllowed) {
     const auto child = RunInChild([] {
         StartRunAheadSession();
         ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt("ra-test-surface",
                                                                /*isBarrieredFill=*/true);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+// ---- P5e (ra2): THE FLIP'S OWN RED-ONCE, AND THE CLASS THE STRICT LANE CANNOT SEE ----------
+//
+// The strict lane runs under LOCKSTEP - ApplyOne stamps every record barriered - so nothing
+// that happens only once the client stops waiting is visible to it, by construction (ID-132).
+// This pair is what measures it instead, and it runs in the ordinary unit lane on any head,
+// flip thrown or not, because StartRunAheadSession arms run-ahead itself.
+//
+// WHAT IT PINS: `isBarrieredFill` is the caller's sentence "this touch is the residual fill of
+// a record this thread is about to park behind". That is a claim about the FUTURE. The order at
+// the validate point is fill, then emit, then park, so at the instant of the write the apply
+// thread is still draining the UNBARRIERED records the client ran ahead of - and the exemption
+// that took the claim on trust made this guard unfireable on precisely the class it exists for.
+// Measured on the flipped head: the GL thread bumped CurrentVerbSerial, withdrew the server's
+// stamp and renamed m_currentVerb underneath a record the applier was inside, and the applier
+// aborted with `Fatal{UnmigratedPipeInput, "<field>@<the CLIENT's verb>"}` - a verb no applier
+// stamp can produce, which is what identifies the writer.
+//
+// THE PROBE IS THE GUARD CALL ITSELF (ID-102): the flag is raised by the same raw entry point
+// PipeApplier's ScopedApplierEntry uses, on the client thread, BEFORE the call under test - so
+// what aborts is this probe and not some object built on the wrong thread.
+//
+// THE RED: in ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt put the run-ahead arm back
+// to `if (isBarrieredFill) return;` and this case stops aborting, while the control above keeps
+// passing - which is the difference between a rule and an exemption.
+TEST(RemoteGuards, ClientBarrieredFillWhileTheApplierIsInsideUnderRunAheadIsFatalByName) {
+    const auto child = RunInChild([] {
+        StartRunAheadSession();
+        ClientSession::NoteApplyThreadEnteredApplier();
+        ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt("ra-test-surface",
+                                                               /*isBarrieredFill=*/true);
+        ClientSession::NoteApplyThreadLeftApplier();
+        ClientSessionInstance().Stop();
+    });
+    ExpectNamedAbort(child, "Fatal{RoleViolation, \"gPipeInputs\"}");
+}
+
+// ---- P5e (ra2): AND THE OTHER HALF - AN INDEXED DRAW IS AN UNBARRIERED VERB ----------------
+//
+// MGP_VERB_OP_LIST joins the whole draw family through ONE row, `DrawVbo -> DrawArrays`, so
+// inverting it verb-first answers kOpCount for DrawElements and for every other indexed /
+// instanced / multi / indirect verb. The "unknown verb answers barriered" default then made the
+// client FILL for each of them while never parking, because the wait is decided per record and
+// the record is a draw_vbo (kWaitNone). On the flipped lane that was 21 of the 69 red entries.
+//
+// The case states it where it is decidable without a GL context: the guard runs before the
+// validate point's null-context return, so a verb that answers UNBARRIERED never reaches the
+// guard at all and the child exits 0 even with the applier flag up.
+//
+// THE RED: delete the kDraw fallback in ClientVerbIsBarriered (PipeFill.cpp) and DrawElements
+// answers barriered again - the fill runs, the guard above it sees the raised flag, and this
+// case aborts with Fatal{RoleViolation, "gPipeInputs"} instead of exiting 0.
+TEST(RemoteRunAhead, AnIndexedDrawVerbIsUnbarrieredAndTouchesPipeInputsNotAtAll) {
+    const auto child = RunInChild([] {
+        StartRunAheadSession();
+        ClientSession::NoteApplyThreadEnteredApplier();
+        MGPipeValidateForVerb(MGPipeVerb::DrawElements);
+        ClientSession::NoteApplyThreadLeftApplier();
+        MGPipeLeaveVerb();
         ClientSessionInstance().Stop();
     });
     ExpectChildSuccess(child);

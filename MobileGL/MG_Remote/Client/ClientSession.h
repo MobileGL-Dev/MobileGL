@@ -208,11 +208,18 @@ namespace MobileGL::MG_Remote::Client {
         // P5e (ra, CONTRACT-P5E §3.5) RE-DERIVES IT UNDER RUN-AHEAD, and `isBarrieredFill` is
         // what the caller says about ITSELF: "this touch is the residual fill of a record this
         // thread is about to park behind". With run-ahead armed the block is server-role
-        // memory for every other touch, so the rule stops being "not while the applier is
-        // inside" - which is unanswerable when the client never waits - and becomes "not at
-        // all, unless you are that fill". The MOBILEGL_IPC_BATCH_WAITS early return goes with
+        // memory for every other touch. The MOBILEGL_IPC_BATCH_WAITS early return goes with
         // it: batching is about how many round trips a lockstep client pays, and it says
         // nothing about a client that pays none.
+        //
+        // P5e (ra2) KEEPS THE ARGUMENT AND STOPS TAKING IT ON TRUST. "About to park behind it"
+        // is a claim about the future; the write is now. Between the fill and the park the
+        // apply thread is still draining the unbarriered records the client ran ahead of, so an
+        // unconditional exemption made this guard unfireable on exactly the class it was
+        // written for - measured as the apply thread aborting on a field whose stamp the GL
+        // thread had just withdrawn. So the rule is "not while the applier is inside" again,
+        // for barriered fills too; what changed is that the fill sites MAKE it true first, with
+        // §2.5's forced wait (PipeFill.cpp's QuiesceApplierBeforeFill), instead of asserting it.
         static void RefusePipeInputsTouchWhileApplierOwnsIt(const char* surface,
                                                             Bool isBarrieredFill = false);
 
