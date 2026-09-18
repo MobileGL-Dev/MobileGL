@@ -72,6 +72,15 @@ namespace MobileGL::MG_Remote::Client {
     // NOT in the anonymous namespace, because M5 needs it from MG_Impl/Pipe/PipeFill.cpp too
     // (its split-only respecify/flush branches must not run on the apply thread). Declared in
     // WireTables.h.
+    //
+    // AND IT STAYS OUT OF LINE (P5d round 3, package D). OnApplyThread() became an inline
+    // relaxed load plus a thread-pointer compare in ServerLoop.h, so the body this forwards to
+    // is now smaller than the call that reaches it - but inlining THIS would mean including a
+    // server header from WireTables.h, and the declaration above exists precisely so PipeFill
+    // does not have to. One PLT hop per verb is the price of that boundary; the four-part
+    // predicate behind it, which was the measured cost (2.66% self on the client thread at
+    // head 56a77348), is gone either way. The "one atomic load" the paragraph above promised
+    // is now literally what it costs.
     Bool RunsAsTheServerRole() { return Server::ServerLoop::OnApplyThread(); }
 
     namespace {

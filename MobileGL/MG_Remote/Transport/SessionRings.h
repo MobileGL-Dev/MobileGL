@@ -267,7 +267,7 @@ namespace MobileGL::MG_Remote::Transport {
     enum class SessionWait : std::uint32_t {
         Reached = 0,
         // The doorbell died: the peer shut the session down. The ONLY thing that
-        // can un-park a waiter on kWaitForever (Doorbell.h:211-221), and the
+        // can un-park a waiter on kWaitForever (CondVarDoorbell::Kill), and the
         // reason a bounded join is possible at all.
         ShutDown = 1,
         TimedOut = 2,
@@ -302,7 +302,7 @@ namespace MobileGL::MG_Remote::Transport {
         bool Valid() const { return m_control != nullptr && m_cmd != nullptr; }
 
         // Publish the command ring's head, record submittedSeq, THEN ring - in
-        // that order and never any other. Doorbell.h:186-193: the fence only
+        // that order and never any other. NotifyIfParked's PRECONDITION: the fence only
         // orders what precedes it, so ringing before publishing reopens the very
         // lost-wakeup window the fences exist to close. RingTest.cpp:446 pins the
         // call order; this is the one place production code performs it.
@@ -337,6 +337,29 @@ namespace MobileGL::MG_Remote::Transport {
         Doorbell* SelfDoorbell() const { return m_selfBell; }
         std::uint32_t SpinUs() const { return m_spinUs; }
 
+        // THE WAIT LEDGER'S CLIENT HALF (P5d round 3, package T item 4), and it is a PAIR
+        // because one number without the other says nothing. `Waits()` is every entry into
+        // Park - the R-1 barrier's wait, the present throttle and the ring-space wait, which
+        // simpleperf at head 56a77348 measured as WaitForApplied 27.9% self on the GL thread;
+        // `Parks()` is how many of them ran out of spin budget and actually blocked. A high
+        // wait count with near-zero parks is a thread spinning on a server that is nearly
+        // there; a high park count is a server that is not. The two readings are what tell
+        // those apart, and the split's whole frame budget turns on which one it is.
+        //
+        // Both counters are OURS, and the park one deliberately is not the bell's own
+        // ParkEntries(). Doorbell::Wait is the only code that knows whether its spin budget
+        // ran out, so it does the counting - but a bell belongs to an ENDPOINT, not to a wait
+        // path, and this one is shared: ClientSession hands the very same object to the
+        // encoder as its SEG_STAGE retirement bell (ClientSession::Start ->
+        // PipeWireCodec::SetStageRetirementDoorbell), whose waits never pass through
+        // SessionProducer::Park and so never reach m_waits. Reading ParkEntries() here would
+        // fold that second subsystem's parks into a number this header, PipeStats and the
+        // summary line all describe as the subset of OUR waits - and with the retirement
+        // wait's spinUs of 0 it parks every time, so the subset could print larger than the
+        // set it is a subset of. Wait's `parkTally` out-parameter exists for exactly this.
+        std::uint64_t Waits() const { return m_waits.load(std::memory_order_relaxed); }
+        std::uint64_t Parks() const { return m_parks.load(std::memory_order_relaxed); }
+
     private:
         template <class Ready>
         SessionWait Park(Ready&& ready, std::uint32_t timeoutMs);
@@ -347,6 +370,13 @@ namespace MobileGL::MG_Remote::Transport {
         Doorbell* m_selfBell = nullptr;
         std::uint32_t m_spinUs = kDefaultSpinUs;
         std::uint64_t m_lastPublishedSeq = 0;
+        // Relaxed atomics, not plain integers: the GL thread owns this producer, but
+        // ClientSession::Stop's bounded drain waits through it from whichever thread is tearing
+        // the session down, and a diagnostic is not worth a data race. Relaxed costs the same
+        // as a plain add on both architectures the split runs on. m_parks is incremented by
+        // Doorbell::Wait through the `parkTally` pointer, once per wait that really blocked.
+        std::atomic<std::uint64_t> m_waits{0};
+        std::atomic<std::uint64_t> m_parks{0};
     };
 
     // -----------------------------------------------------------------------
@@ -449,7 +479,7 @@ namespace MobileGL::MG_Remote::Transport {
 
         // Ring the client's bell, but only when it said it is parked: a store to
         // a shared cache line otherwise burns a big core for a whole frame on a
-        // phone (Doorbell.h:13-22).
+        // phone (Doorbell.h's file header, the bidirectional argument).
         void NotifyClient();
 
         std::uint64_t AppliedSeq() const { return m_appliedSeq; }

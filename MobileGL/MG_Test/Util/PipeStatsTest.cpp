@@ -171,6 +171,14 @@ namespace {
         // And the new ByteClass rides the ordinary bytes[] bracket under a short name that is
         // NOT "csob": the cso[] bracket above already prints csob= for the CSO bind count.
         EXPECT_NE(line.find("csob-blob="), String::npos) << line;
+        // P5d round 3's wait ledger. Four fields on a bracket of their own, and they are
+        // pinned here for the reason every other short name is: they are what the inproc
+        // performance work reads out of a run's log, so a rename or a dropped field breaks
+        // every recorded measurement of the split's handoff.
+        EXPECT_NE(line.find("wait[srv="), String::npos) << line;
+        EXPECT_NE(line.find("srvpark="), String::npos) << line;
+        EXPECT_NE(line.find("cli="), String::npos) << line;
+        EXPECT_NE(line.find("clipark="), String::npos) << line;
 #endif
     }
 

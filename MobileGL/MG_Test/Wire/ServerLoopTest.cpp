@@ -326,6 +326,115 @@ TEST(ServerLoopTest, AControlRequestRunsOnTheApplyThreadAndUnparksIt) {
     fixture.Stop();
 }
 
+// P5d round 3, package T item 1: the mailbox's one-bit shadow. ControlIsPending() no longer
+// takes m_controlMutex - it reads m_controlPosted - and that word has TWO failure modes, only
+// one of which any existing case can see.
+//
+// THE SET SIDE is already covered: a poster that failed to publish the shadow leaves the park
+// predicate with nothing to see, and AControlRequestRunsOnTheApplyThreadAndUnparksIt above says
+// so in its own words within five seconds.
+//
+// THE CLEAR SIDE IS THIS CASE, and it is the one nothing else can reach. A shadow that the pump
+// takes the request from but never clears makes `ready` permanently true: the loop then spins at
+// full clock for the rest of the session, never sets consumerParked again, and every symptom is
+// a performance one - the process stays correct, the phone gets hot and a core is gone.
+//
+// IT HAS TO OBSERVE THE WINDOW, NOT THE END STATE, and that is the whole shape of the case.
+// PumpControlRequest clears the shadow TWICE: once when it takes the request (the load-bearing
+// clear) and once defensively, on the next iteration, when it finds the shadow set with
+// m_controlPending false. Assert only "the shadow is clear after the request was answered" and
+// the defensive clear covers for a missing take-clear on the very next pump - the case then
+// passes with the line it exists to pin deleted. So the request's work BLOCKS on a gate this
+// thread holds, and the shadow is read while the apply thread is still inside work(): in that
+// window m_controlPending is still true, the pump is not running, and the ONLY thing that can
+// make ControlIsPending() false is the clear at the take. Delete it and this read returns true,
+// deterministically, on every run.
+TEST(ServerLoopTest, TheControlShadowIsClearedWhenThePumpTakesTheRequest) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked())
+        << "the apply thread never parked in the first place, so this case could prove nothing "
+           "about it parking AGAIN";
+    EXPECT_FALSE(loop.ControlIsPending())
+        << "the shadow is set with no request posted: `ready` is true for ever and the loop "
+           "will never park";
+
+    // The gate the posted work blocks on. `running` is released by the apply thread once it is
+    // INSIDE work(); `release` is set by this thread once it has read the shadow.
+    struct Gate {
+        std::atomic<Bool> running{false};
+        std::atomic<Bool> release{false};
+    };
+    Gate gate;
+
+    // Posted from a helper for N-9's reason - a predicate that cannot see the request blocks the
+    // poster for ever, and the case has to say that rather than hit ctest's timeout.
+    std::atomic<Bool> answered{false};
+    MobileGLResult rc = MOBILEGL_ERR_INVALID_ARGUMENT;
+    std::thread poster([&] {
+        rc = loop.RunOnApplyThread(
+            +[](void* user) -> MobileGLResult {
+                Gate* g = static_cast<Gate*>(user);
+                g->running.store(true, std::memory_order_release);
+                const auto gateDeadline =
+                    std::chrono::steady_clock::now() + std::chrono::seconds(5);
+                while (!g->release.load(std::memory_order_acquire) &&
+                       std::chrono::steady_clock::now() < gateDeadline) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                return MOBILEGL_OK;
+            },
+            &gate);
+        answered.store(true, std::memory_order_release);
+    });
+
+    // Wait until the work is really running, i.e. until the pump has taken the request.
+    const auto startDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!gate.running.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < startDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const Bool started = gate.running.load(std::memory_order_acquire);
+    if (started) {
+        // THE ASSERTION. The apply thread is inside work(), so nothing is pumping and
+        // m_controlPending is still true; the shadow is false only because the take cleared it.
+        EXPECT_FALSE(loop.ControlIsPending())
+            << "the pump took a control request and left the shadow set: `ready` stays true for "
+               "as long as the request runs, and if the take-clear is gone entirely the idle "
+               "poll spins a core at full clock for the rest of the session";
+    } else {
+        ADD_FAILURE() << "the posted control request never started running: the shadow's SET side "
+                         "is broken, so the park predicate no longer carries the control flag";
+    }
+    gate.release.store(true, std::memory_order_release);
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!answered.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const Bool gotAnswer = answered.load(std::memory_order_acquire);
+    if (!gotAnswer) {
+        ADD_FAILURE() << "the posted control request was never answered";
+        fixture.Stop();
+        poster.join();
+        return;
+    }
+    poster.join();
+    EXPECT_EQ(rc, MOBILEGL_OK);
+
+    // And the loop must be able to BLOCK again - the end state the defensive clear also
+    // guarantees, kept because it is the symptom an operator would actually see.
+    EXPECT_TRUE(fixture.WaitUntilTrulyParked())
+        << "the apply thread never re-entered the blocking park after a control request: the "
+           "shadow is stuck set, so the idle poll now spins a core at full clock for the rest "
+           "of the session";
+
+    fixture.Stop();
+}
+
 // Re-entrancy is not a deadlock: ~BackendObject_DirectGLES reaches ReleaseEGLResources FROM the
 // apply thread, so a post from there must run inline.
 TEST(ServerLoopTest, APostFromTheApplyThreadItselfRunsInlineRatherThanDeadlocking) {
@@ -806,6 +915,59 @@ TEST(ServerLoopTest, AForwarderCallAfterTheLoopStoppedReturnsNotInitializedAndDo
     EXPECT_EQ(rc, MOBILEGL_ERR_NOT_INITIALIZED)
         << "a forwarder call after Stop() did not return NOT_INITIALIZED (old code ran it inline)";
     EXPECT_FALSE(probe.ran) << "the work ran on the caller after the loop stopped";
+}
+
+// P5d round 3, package D: THE IDENTITY MUST DIE WITH THE THREAD, and this is the case that says
+// so. OnApplyThread() is no longer `m_running && id == mine` - it is one relaxed load of
+// Server::Detail::g_applyThreadKey compared against the caller's own thread pointer - so there
+// is no second term left to make a stale identity harmless. If ApplyThreadMain's exit block
+// stops clearing the key (deleted, or lost in a merge with a package that rewrites that same C2
+// critical section), the key keeps naming a thread that no longer exists, and libc hands that
+// thread's freed TLS block - hence the very thread-pointer value the key holds - to the NEXT
+// thread the process creates: a ShaderCompilePool worker, or the GL thread of a second context
+// after a context-loss restart. That thread then answers OnApplyThread() TRUE, which inverts
+// RunsAsTheServerRole() and PersistentMapTracker::OnServerRole() on the client, aborts
+// BufferObject's accessors with Fatal{RoleViolation, "buffer-legacy-arm"}, and makes
+// RunOnApplyThread run EGL work inline on it - the "EGL on the app thread" outcome R-1 exists to
+// make impossible.
+//
+// Two halves, because the mechanism and the consequence fail differently. (a) is deterministic
+// on every platform: after the join the key is 0, full stop. (b) is the one that would have
+// caught the real bug: threads created after the join must not inherit the answer. (b) is not
+// guaranteed to reproduce recycling on every allocator, which is exactly why (a) is here too.
+TEST(ServerLoopTest, AThreadCreatedAfterTheLoopStoppedIsNotMistakenForTheApplyThread) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked());
+
+    // The key really was published while the thread ran - otherwise (a) below would pass for the
+    // wrong reason (a key that was never set is also 0).
+    ASSERT_NE(Server::Detail::g_applyThreadKey.load(std::memory_order_relaxed), 0ull)
+        << "the apply thread is parked and running but published no identity: ApplyThreadMain's "
+           "first statement no longer stores Detail::CurrentThreadKey()";
+
+    fixture.Stop();
+    ASSERT_FALSE(Server::ServerLoopInstance().Running());
+
+    // (a) the clear itself.
+    EXPECT_EQ(Server::Detail::g_applyThreadKey.load(std::memory_order_relaxed), 0ull)
+        << "the apply-thread identity outlived the apply thread: ApplyThreadMain's C2 exit block "
+           "no longer clears Detail::g_applyThreadKey beside m_running";
+
+    // (b) what the clear is FOR. Sequentially, so each thread is created after the previous one
+    // has been joined and is therefore the likeliest candidate to receive the recycled block.
+    for (int i = 0; i < 8; ++i) {
+        std::atomic<Bool> onApplyThread{true};
+        std::thread probe([&] {
+            onApplyThread.store(Server::ServerLoop::OnApplyThread(), std::memory_order_release);
+        });
+        probe.join();
+        ASSERT_FALSE(onApplyThread.load(std::memory_order_acquire))
+            << "thread " << i << " created after the apply thread was joined answers "
+               "OnApplyThread() TRUE - it inherited the exited thread's TLS block and the stale "
+               "key still names it. Every role guard in the tree is now inverted on that thread";
+    }
 }
 
 // M-7: the OTHER !m_running arm - a backend built but no thread (Start refused / std::thread

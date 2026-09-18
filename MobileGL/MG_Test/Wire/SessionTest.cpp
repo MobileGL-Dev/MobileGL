@@ -1121,6 +1121,43 @@ TEST(SessionTest, TheProducerRemembersWhatItPublishedEvenIfTheWatermarkLags) {
     EXPECT_EQ(session.Control().submittedSeq.load(), 4u);
 }
 
+// P5d round 3, package T item 4. The client's wait ledger is a PAIR - waits, and the subset of
+// them that blocked - and the summary line prints it as a ratio. That only reads as a ratio if
+// both halves count the same events, which is why the park counter is the producer's own rather
+// than the self bell's ParkEntries(): a bell belongs to an ENDPOINT and every waiter on that
+// endpoint shares it. In the real client that second waiter is the encoder's SEG_STAGE
+// retirement wait, which ClientSession points at this very bell
+// (PipeWireCodec::SetStageRetirementDoorbell) and which never passes through
+// SessionProducer::Park - so it would have inflated `clipark` while leaving `cli` untouched, and
+// with its spinUs of 0 it parks EVERY time.
+TEST(SessionTest, TheProducersParkLedgerCountsItsOwnWaitsAndNotTheBellsOtherWaiters) {
+    SessionFixture session;
+    ASSERT_TRUE(session.Build(TestSizes()));
+
+    const std::uint64_t waitsBefore = session.producer.Waits();
+    const std::uint64_t parksBefore = session.producer.Parks();
+
+    // A SECOND SUBSYSTEM waits on the same bell, exactly as the encoder does. spinUs 0 and a
+    // condition that never flips, so it goes straight to the blocking park.
+    std::atomic<std::uint32_t> parked{0};
+    EXPECT_FALSE(session.clientTransport->SelfDoorbell().Wait(
+        parked, [] { return false; }, 0, 20));
+    EXPECT_EQ(session.producer.Waits(), waitsBefore)
+        << "a foreign wait on the shared bell moved the producer's wait count";
+    EXPECT_EQ(session.producer.Parks(), parksBefore)
+        << "a foreign wait on the shared bell moved the producer's PARK count: `clipark` is not "
+           "the subset of `cli` the summary line says it is, and on a lane with stage "
+           "retirement it can print larger than the number it is a subset of";
+
+    // And the producer's own wait moves both, exactly once: 50 us of spin cannot outlast a
+    // 20 ms timeout, so this wait blocks, and it blocks once.
+    EXPECT_EQ(session.producer.WaitForApplied(1, 20), SessionWait::TimedOut);
+    EXPECT_EQ(session.producer.Waits(), waitsBefore + 1);
+    EXPECT_EQ(session.producer.Parks(), parksBefore + 1)
+        << "the producer's own blocking wait was not counted as a park, so the ledger would "
+           "report a spin budget that covers a handoff it does not";
+}
+
 // M-3. FlatBuffers' Verifier::VerifyTable is `return !table || table->Verify(*this)`, so a NULL
 // union member PASSES verification: a 24-byte frame verifies, carries the file identifier,
 // reports msg_type() == Hello, and returns nullptr from msg_as_Hello(). Both handshakes fold

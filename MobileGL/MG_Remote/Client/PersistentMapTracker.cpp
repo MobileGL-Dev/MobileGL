@@ -62,6 +62,15 @@ namespace MobileGL::MG_Remote::Client {
         constexpr SizeT kMaxTrackedMaps = 64;
         constexpr SizeT kPageShift = 12;
         constexpr SizeT kPageBytes = 1u << kPageShift;
+        // THE PAGE-GRANULAR SHADOW IS THE TRACKER'S PRECONDITION, NOT A COINCIDENCE. Every
+        // shadow a split build hands out is SHADOW_ALLOCATION_ALIGNMENT-aligned AND sized to
+        // a multiple of it (PipeResource.h, ShadowAllocationBytesFor), so a shadow owns every
+        // byte of every page it touches; the outward alignment in TrackWriteMap rests on
+        // that, and it is only true when the allocator's unit is a whole number of the
+        // tracker's pages.
+        static_assert(MG_State::GLState::SHADOW_ALLOCATION_ALIGNMENT % kPageBytes == 0,
+                      "the shadow allocator's granule must be a whole number of tracker pages, "
+                      "or a page-granular shadow could still end mid-page");
         // The bitmap is FIXED-CAPACITY and never reallocated: a handler mid-flight on
         // another thread can hold the pointer it loaded before a retire, so a grow-and-free
         // would be a use-after-free no memory ordering can close. 64 K pages = 256 MB per
@@ -76,10 +85,16 @@ namespace MobileGL::MG_Remote::Client {
         TrackedWriteMap g_trackedMaps[kMaxTrackedMaps];
         struct sigaction g_prevSegvAction {};
         std::atomic<Bool> g_segvInstalled{false};
-        // Bumped by the handler for every write fault it answers. PushDrawConsumers
-        // compares it against the GL thread's last-walk value: an unmoved epoch proves
-        // no interior byte of any tracked map changed, because interior dirtiness can
-        // only ever arrive through a fault.
+        // Bumped by the handler for every write fault it answers, and by TrackWriteMap
+        // for every registration (a fresh slot has EVERY page marked, which is a fault of
+        // every page as far as the push is concerned). PushDrawConsumers compares it
+        // against the GL thread's last-walk value: an unmoved epoch proves no page of any
+        // tracked map was marked since the last walk, because a mark can only ever arrive
+        // through one of those two events - and the walk drains every marked page of
+        // every tracked member, which is what makes the proof worth having. The bump is a
+        // RELEASE and the walk's load an ACQUIRE, so the bit the handler set before it
+        // bumped is visible to a walk that saw the bump; a chunk builder writing an arena
+        // off the GL thread is the ordinary case, not a corner.
         std::atomic<Uint64> g_faultEpoch{0};
 
         // THE OWNERSHIP TESTS. "Ours" is a NARROW claim, and every fault that fails any
@@ -200,11 +215,13 @@ namespace MobileGL::MG_Remote::Client {
         void PersistentWriteFaultHandler(int sig, siginfo_t* info, void* ucontext) {
             if (info != nullptr && info->si_code == SEGV_ACCERR) {
                 const uintptr_t address = reinterpret_cast<uintptr_t>(info->si_addr);
-                // EVERY overlapping slot gets its bit, not just the first: two tracked
-                // shadows can share an edge page (separate heap allocations, one page
-                // granularity), and unprotecting after only the first mark would leave the
-                // second buffer's block permanently un-pushed - the page is writable now,
-                // so it never faults again.
+                // EVERY overlapping slot gets its bit, not just the first: unprotecting
+                // after only the first mark would leave a second owner's block permanently
+                // un-pushed - the page is writable now, so it never faults again. With
+                // page-granular shadows no two tracked ranges can share a page any more
+                // (each protected page is one shadow's own), so the loop finds at most one
+                // owner; it stays in this form because a fault is rare and the exhaustive
+                // scan is what makes the claim checkable rather than assumed.
                 Bool matched = false;
                 Bool bitWasSet = false;
                 for (SizeT i = 0; i < kMaxTrackedMaps; ++i) {
@@ -227,8 +244,10 @@ namespace MobileGL::MG_Remote::Client {
                 if (matched &&
                     !RefaultOfANonWriteAccess(FaultPcFrom(ucontext), address, bitWasSet)) {
                     // The epoch moves BEFORE the unprotect: a walk that starts the
-                    // moment the page becomes writable must still see this fault.
-                    g_faultEpoch.fetch_add(1, std::memory_order_relaxed);
+                    // moment the page becomes writable must still see this fault. And it
+                    // moves with RELEASE, after the bit: a walk that acquires the moved
+                    // epoch is guaranteed to see the bit that goes with it.
+                    g_faultEpoch.fetch_add(1, std::memory_order_release);
                     // Un-arm is a raw syscall, deliberately not the libc wrapper's
                     // bookkeeping: the handler's whole job is to get out of the way.
                     mprotect(reinterpret_cast<void*>(address & ~(kPageBytes - 1)),
@@ -239,7 +258,32 @@ namespace MobileGL::MG_Remote::Client {
             ChainToPreviousSegvHandler(sig, info, ucontext);
         }
 
+        // THE KERNEL'S PAGE MUST BE THE TRACKER'S PAGE. Every ownership argument here -
+        // above all "a protected page holds only this shadow's bytes" - is made at
+        // kPageBytes granularity, and mprotect protects at the KERNEL's. On a 16 KB-page
+        // kernel (Android 15 admits them) a kPageBytes mprotect would silently cover
+        // three neighbouring 4 KB quarters that may be foreign memory, which is exactly
+        // the process-killer the page-granular shadow exists to keep out. So on such a
+        // kernel the arm is not installed at all and every persistent write map takes
+        // the hash arm: slower, never unsafe. Said once, not per map - and decided BEFORE
+        // g_segvInstalled can read true to anyone: a function-static answers exactly once,
+        // on whichever thread asks first, and every other asker waits on that answer, so
+        // no caller can pass TrackWriteMap's installed gate while the page size is still
+        // being checked.
+        Bool KernelPageIsTheTrackerPage() {
+            static const Bool answer = [] {
+                const long kernelPage = sysconf(_SC_PAGESIZE);
+                if (kernelPage == static_cast<long>(kPageBytes)) return true;
+                MGLOG_W("MGPipe: persistent-map mprotect tracking unavailable (kernel page %ld "
+                        "is not the tracker's %zu); persistent write maps fall back to the hash scan",
+                        kernelPage, kPageBytes);
+                return false;
+            }();
+            return answer;
+        }
+
         void InstallWriteFaultHandler() {
+            if (!KernelPageIsTheTrackerPage()) return;
             Bool expected = false;
             if (!g_segvInstalled.compare_exchange_strong(expected, true)) return;
             struct sigaction action {};
@@ -256,35 +300,81 @@ namespace MobileGL::MG_Remote::Client {
 
         void UntrackWriteMap(Uint64 lifetimeId);
 
+        // `shadowExtent` is the shadow allocation's own size in bytes as its allocator
+        // sized it (BufferObject::ShadowAllocationBytes), or 0 when the caller cannot vouch
+        // for it; it is what decides between the two alignments below.
         Bool TrackWriteMap(Uint64 lifetimeId, const Uint8* shadow,
-                           SizeT rangeBegin, SizeT rangeEnd) {
+                           SizeT rangeBegin, SizeT rangeEnd, SizeT shadowExtent) {
             if (shadow == nullptr || rangeEnd <= rangeBegin) return false;
             InstallWriteFaultHandler();
             if (!g_segvInstalled.load()) return false;
-            // INWARD alignment, and the reason is a process-killer: with OUTWARD
-            // alignment the protected edge pages hold FOREIGN bytes (the shadow is a
-            // heap allocation; malloc metadata and other allocations share its first
-            // and last page). A foreign write to such a page is fine for a thread
-            // that runs our handler - it is marked and unprotected - but driver and
-            // runtime worker threads commonly block every signal, and a fault there
-            // with SIGSEGV blocked ends the process on the spot, undebuggable.
-            // Protecting only pages FULLY inside the mapped range means every byte of
-            // a protected page is the shadow's own, and no other allocation can ever
-            // be made to fault by us. The head/tail partial pages stay writable and
-            // their blocks are pushed unconditionally at every push (at most two).
-            const uintptr_t rawBegin = reinterpret_cast<uintptr_t>(shadow + rangeBegin);
-            const uintptr_t rawEnd = reinterpret_cast<uintptr_t>(shadow + rangeEnd);
-            uintptr_t base = (rawBegin + kPageBytes - 1) &
-                             ~static_cast<uintptr_t>(kPageBytes - 1);
-            uintptr_t end = rawEnd & ~static_cast<uintptr_t>(kPageBytes - 1);
-            // A SUB-PAGE range is not refused; it is registered with an EMPTY interior
-            // (no pages are protected, no bitmap is needed) and hasEdges set, so the
-            // whole range is served by the two edge hashes - bounded at 8 KB per push -
-            // instead of falling to the hash arm, where as an "untracked" member it
-            // would veto the epoch skip for every tracked buffer in the process and
-            // force the full binding walk at every draw (measured on device). end is
-            // clamped up to base so the [base, end) arithmetic below never underflows.
-            if (end < base) end = base;
+            // WHICH WAY TO ALIGN IS A QUESTION OF OWNERSHIP, and the reason is a
+            // process-killer: a protected page that holds FOREIGN bytes can be written by
+            // a thread that does not run our handler - driver and runtime worker threads
+            // commonly block every signal - and a fault there with SIGSEGV blocked ends the
+            // process on the spot, undebuggable (the ctest-only SmallRing segfault of
+            // cb06538c). So a page may be protected only when every byte of it is this
+            // shadow's own, and the two alignments are the two ways of guaranteeing that:
+            //
+            //   OUTWARD, when the shadow is PAGE-GRANULAR: its base is on a page boundary
+            //   and its allocation is a whole number of pages (PipeResource.h's allocator
+            //   promises both in a split build, and `shadowExtent` is what it promised).
+            //   Then every page that intersects the mapped range lies inside
+            //   [shadow, shadow + shadowExtent), and every byte of that span belongs to
+            //   this allocation and to no other - the heap handed it out as ONE block of
+            //   that size, and its own metadata lives before the block, never inside it.
+            //   The mapped range's containing pages are protected whole, there are NO
+            //   unprotected edge bytes, and a sub-page map is one protected page. The bytes
+            //   of a head/tail page that lie OUTSIDE the mapped range are still the
+            //   shadow's: only the client's own API paths write them (a SubData /
+            //   FlushMappedRange memcpy into the shadow, a readback writeback landing on
+            //   the client thread), on threads that run this handler, and such a fault is
+            //   answered like any interior one - the push then clamps to [begin, end), so
+            //   at worst one block ships redundantly, and the byte itself crossed by its own
+            //   record.
+            //
+            //   INWARD, for anything else (an unaligned base, an extent the caller could not
+            //   vouch for, a range running past the extent it was told): only pages FULLY
+            //   inside the mapped range are protected, which are the shadow's own by
+            //   construction, and the head/tail partial pages stay writable. Nothing tells
+            //   us they changed, so they are hashed per push (the edge hashes) - which was
+            //   8.5% of the client thread at VD12 on every draw for every live map, and
+            //   the reason the outward arm exists. A sub-page range still registers here
+            //   with an EMPTY interior and hasEdges set rather than falling to the hash
+            //   arm, where as an "untracked" member it would veto the epoch skip for every
+            //   tracked buffer in the process (measured on device); end is clamped up to
+            //   base so the [base, end) arithmetic never underflows.
+            const uintptr_t shadowBase = reinterpret_cast<uintptr_t>(shadow);
+            const uintptr_t rawBegin = shadowBase + rangeBegin;
+            const uintptr_t rawEnd = shadowBase + rangeEnd;
+            constexpr uintptr_t kPageMask = ~static_cast<uintptr_t>(kPageBytes - 1);
+            const Bool pageGranular = (shadowBase & (kPageBytes - 1)) == 0 && shadowExtent != 0 &&
+                                      (shadowExtent & (kPageBytes - 1)) == 0 && rangeEnd <= shadowExtent;
+            uintptr_t base = 0;
+            uintptr_t end = 0;
+            Bool outward = pageGranular;
+            if (outward) {
+                base = rawBegin & kPageMask;
+                end = (rawEnd + kPageBytes - 1) & kPageMask;
+                // Already implied by rangeEnd <= shadowExtent and the extent's own page
+                // granularity; the clamp is kept because it is the line the ownership
+                // argument rests on, and it must not depend on a caller's arithmetic.
+                if (end > shadowBase + shadowExtent) end = shadowBase + shadowExtent;
+                // WIDENING NEVER DEMOTES A MAP THE INWARD ARM COULD HOLD. Outward covers up
+                // to one page more than inward does for the same range (both ends rounded
+                // away instead of towards), so a map sitting on the bitmap's capacity that
+                // was tracked inward before this round would otherwise fall off the tracker
+                // altogether - onto the hash arm, where as an untracked member it vetoes the
+                // epoch skip for every buffer in the process. It keeps the inward arm and
+                // its two hashed edges instead: the old cost, on the one ~256 MB map that
+                // can pay it, and nothing else changes.
+                if (((end - base) >> kPageShift) > kMaxTrackedPages) outward = false;
+            }
+            if (!outward) {
+                base = (rawBegin + kPageBytes - 1) & kPageMask;
+                end = rawEnd & kPageMask;
+                if (end < base) end = base;
+            }
             const SizeT pageCount = (end - base) >> kPageShift;
             if (pageCount > kMaxTrackedPages) {
                 MGLOG_W("MGPipe: persistent write map of %zu pages exceeds the mprotect "
@@ -309,7 +399,10 @@ namespace MobileGL::MG_Remote::Client {
                 g_trackedMaps[i].lifetimeId = lifetimeId;
                 g_trackedMaps[i].edgeHashHead = 0;
                 g_trackedMaps[i].edgeHashTail = 0;
-                g_trackedMaps[i].hasEdges = base != rawBegin || end != rawEnd;
+                // Edges are UNPROTECTED mapped bytes: the range starts before the first
+                // protected page or ends after the last. Outward alignment never leaves
+                // any (base <= rawBegin, end >= rawEnd); inward leaves one per unaligned end.
+                g_trackedMaps[i].hasEdges = base > rawBegin || end < rawEnd;
                 // EVERY BIT SET, NOT ZEROED - the same "fresh state pushes everything
                 // once" rule the hash arm keeps: the server has never seen these bytes,
                 // so the first push must ship the whole interior, not just the pages the
@@ -318,8 +411,9 @@ namespace MobileGL::MG_Remote::Client {
                 // does on a pre-first-push fault is answered once and unprotected -
                 // harmless, and the invariant (bit set <=> writable) holds from the
                 // first push onward. The last word is masked: a set bit past pageCount
-                // would re-arm a page outside the interior - a foreign page, which is
-                // the process-killer the inward alignment exists to keep out.
+                // would re-arm a page outside the protected span - past the shadow's
+                // extent, a foreign page, which is the process-killer both alignments
+                // exist to keep out.
                 const SizeT wordCount = (pageCount + 63) / 64;
                 for (SizeT w = 0; w < wordCount; ++w) {
                     const SizeT bitsInWord =
@@ -337,6 +431,13 @@ namespace MobileGL::MG_Remote::Client {
                 // it can observe is only ever one whose end is already visible.
                 g_trackedMaps[i].end.store(end, std::memory_order_release);
                 g_trackedMaps[i].base.store(base, std::memory_order_release);
+                // AND THE EPOCH MOVES, as it would for a fault of every page: the bits just
+                // set are exactly what a fault leaves behind, and the epoch is the only thing
+                // PushDrawConsumers reads before deciding it has nothing to drain. Without
+                // this a member registered between two draws sits fully marked and fully
+                // protected until something else faults - "first push ships everything
+                // once" would then be true only of the read-only verbs' whole push.
+                g_faultEpoch.fetch_add(1, std::memory_order_release);
                 return true;
             }
             MGLOG_W("MGPipe: the mprotect tracker is full (%zu live persistent write maps); "
@@ -395,6 +496,19 @@ namespace MobileGL::MG_Remote::Client {
             return nullptr;
         }
 
+        // Whether any page of a live slot is marked - faulted since its last push, or never
+        // pushed since registration. Read on the GL thread by the consumer walk only (a
+        // walk runs when the epoch moved, never per draw in steady state), and it costs
+        // one word load per 64 pages: 40 loads for a 10 MB arena. A slot with an empty
+        // interior (the inward fallback's sub-page case) has no words and no marks.
+        Bool AnyPageMarked(const TrackedWriteMap& slot) {
+            const SizeT words = (slot.pageCount + 63) / 64;
+            for (SizeT w = 0; w < words; ++w) {
+                if (slot.pageBits[w].load(std::memory_order_relaxed) != 0) return true;
+            }
+            return false;
+        }
+
     } // namespace
 
     PersistentMapTracker& PersistentMapTracker::Instance() {
@@ -413,11 +527,23 @@ namespace MobileGL::MG_Remote::Client {
         return MG_Config::Transport != MG_Config::TransportMode::Monolith;
     }
 
+    // P5d round 3 (package D): the body this forwards to is now one relaxed load of the apply
+    // thread's key and one thread-pointer compare (ServerLoop.h), instead of a function-static
+    // guard, two acquire loads and an out-of-line thread::id comparison. It stays out of line
+    // here for WireTables.cpp's reason beside RunsAsTheServerRole: inlining it would put a
+    // server header inside PersistentMapTracker.h, which MG_State's BufferObject.cpp includes.
     Bool PersistentMapTracker::OnServerRole() { return Server::ServerLoop::OnApplyThread(); }
 
     // SyncPersistentMappedRange's early-out chain (BufferObject.cpp:341-353), in its order,
     // read as a membership test. Every line here has a line there; if one of them moves, the
     // unit case that drives both against each other is what says so.
+    //
+    // THE ORDER IS THE CONTRACT, so package D did not touch it even though the first row is the
+    // only guarded accessor in the chain (IsMapped -> RefuseLegacyBufferArmFromApplyThread) and
+    // moving it last would have saved a guard on the members that fail rows 2-6. It would also
+    // have stopped being the same chain as the one in BufferObject, which is the property this
+    // predicate exists to have. Item 1 made that guard two loads instead, which is cheaper than
+    // the reorder would have been and costs nothing in meaning.
     Bool PersistentMapTracker::IsLivePersistentMap(const BufferObject& buffer) {
         if (!buffer.IsMapped()) return false;
         // GPU-resident: the application already wrote into coherent GPU memory and there is
@@ -445,17 +571,25 @@ namespace MobileGL::MG_Remote::Client {
         // set must follow the arm the member actually runs on. Erase is a no-op for a
         // member that was never large-untracked.
         m_untrackedMembers.erase(key);
+        m_edgedMembers.erase(key);
         if (IsLivePersistentMap(buffer)) {
             const auto range = buffer.GetMappedRange();
             // The mprotect arm registers beside the hash arm: tracked buffers are pushed
             // from the fault bitmap, everything else keeps the content scan. A failed
             // registration (handler unavailable, table full, unaligned zero range) quietly
-            // leaves the buffer on the hash path.
+            // leaves the buffer on the hash path. The shadow's own extent goes along so
+            // the tracker can align outward (TrackWriteMap): a live member's MappedData()
+            // IS the shadow vector's storage - the predicate's IsBackendPersistentMapped
+            // row keeps every adopted store out - so the extent describes that pointer.
             TrackWriteMap(key, buffer.MappedData(), static_cast<SizeT>(range.start),
-                          static_cast<SizeT>(range.end));
+                          static_cast<SizeT>(range.end), buffer.ShadowAllocationBytes());
             TrackedWriteMap* slot = TrackedMapFor(key);
             m_livePersistentMaps[key] = MemberEntry{&buffer, slot};
-            if (slot == nullptr) m_untrackedMembers[key] = 1;
+            if (slot == nullptr) {
+                m_untrackedMembers[key] = 1;
+            } else if (slot->hasEdges) {
+                m_edgedMembers[key] = 1;
+            }
             return;
         }
         m_livePersistentMaps.erase(key);
@@ -465,6 +599,7 @@ namespace MobileGL::MG_Remote::Client {
     void PersistentMapTracker::Forget(const BufferObject& buffer) {
         const Uint64 key = buffer.GetLifetimeId();
         m_untrackedMembers.erase(key);
+        m_edgedMembers.erase(key);
         m_livePersistentMaps.erase(key);
         m_blockHashes.erase(key);
         UntrackWriteMap(key);
@@ -474,9 +609,32 @@ namespace MobileGL::MG_Remote::Client {
         m_livePersistentMaps.clear();
         m_blockHashes.clear();
         m_untrackedMembers.clear();
+        m_edgedMembers.clear();
         UntrackAllWriteMaps();
         m_lastFaultEpoch = 0;
         ResetCountersForTest();
+    }
+
+    Bool PersistentMapTracker::MprotectArmAvailableForTest() {
+        InstallWriteFaultHandler();
+        return g_segvInstalled.load();
+    }
+
+    const TrackedWriteMap* PersistentMapTracker::TrackedSlotForTest(const BufferObject& buffer) {
+        return TrackedMapFor(buffer.GetLifetimeId());
+    }
+
+    const TrackedWriteMap* PersistentMapTracker::TrackForTest(Uint64 lifetimeId, const Uint8* shadow,
+                                                              SizeT rangeBegin, SizeT rangeEnd,
+                                                              SizeT shadowExtent) {
+        TrackWriteMap(lifetimeId, shadow, rangeBegin, rangeEnd, shadowExtent);
+        return TrackedMapFor(lifetimeId);
+    }
+
+    void PersistentMapTracker::UntrackForTest(Uint64 lifetimeId) { UntrackWriteMap(lifetimeId); }
+
+    Uint64 PersistentMapTracker::FaultEpochForTest() {
+        return g_faultEpoch.load(std::memory_order_acquire);
     }
 
     void PersistentMapTracker::PushBlocksFor(BufferObject& buffer) {
@@ -532,10 +690,12 @@ namespace MobileGL::MG_Remote::Client {
         // 64 KB block per block that contains at least one faulted page, shipped with
         // the whole machinery of every other arm (serial bump, HasDefinedContent,
         // wire record), then the page is cleared and re-armed read-only. No scan, no
-        // hash, no per-draw cost for buffers the application did not touch. The two
-        // partial-page EDGE ranges beside the page-aligned interior (see TrackWriteMap's
-        // inward alignment) are never protected, so nothing tells us they changed -
-        // their blocks ride along on every push, at most two.
+        // hash, no per-draw cost for buffers the application did not touch. A
+        // page-granular shadow's protected span is the mapped range's containing pages
+        // (TrackWriteMap's outward alignment), so it can start BEFORE `begin` and end
+        // AFTER `end`, and the block clamp below is what keeps every push inside
+        // [begin, end). Only the inward fallback has the two unprotected partial-page
+        // EDGE ranges that nothing faults for; those are hashed per push, at most two.
         TrackedWriteMap* tracked = nullptr;
         if (const auto it = m_livePersistentMaps.find(buffer.GetLifetimeId());
             it != m_livePersistentMaps.end() && it->second.tracked != nullptr &&
@@ -547,10 +707,11 @@ namespace MobileGL::MG_Remote::Client {
             const uintptr_t trackedEnd = tracked->end.load(std::memory_order_acquire);
             const uintptr_t shadowBase = reinterpret_cast<uintptr_t>(buffer.MappedData());
             if (trackedBase != 0 && trackedEnd > trackedBase && shadowBase != 0) {
-                const Uint64 interiorBegin =
-                    static_cast<Uint64>(trackedBase - shadowBase); // >= begin
-                const Uint64 interiorEnd =
-                    static_cast<Uint64>(trackedEnd - shadowBase); // <= end
+                // The protected span in buffer offsets: <= begin / >= end when aligned
+                // outward, >= begin / <= end when aligned inward. Both are read below only
+                // to find the inward fallback's edges; the page loop never needs them.
+                const Uint64 interiorBegin = static_cast<Uint64>(trackedBase - shadowBase);
+                const Uint64 interiorEnd = static_cast<Uint64>(trackedEnd - shadowBase);
                 // Pushes are made in ASCENDING offset order, and `pushedUpTo` trims each
                 // span against the one before it: edge spans, duplicate pages inside one
                 // 64 KB block and faulted blocks overlapping an edge all collapse to one
@@ -561,7 +722,12 @@ namespace MobileGL::MG_Remote::Client {
                 // And an edge span ships ONLY when its bytes changed since the last push
                 // (the struct comment says why unconditional was measured and rejected):
                 // no faults happen on unprotected bytes, so the hash is the only change
-                // detector there is for them.
+                // detector there is for them. The two conditions below are self-gating:
+                // under outward alignment interiorBegin <= begin and interiorEnd >= end,
+                // so neither hash runs for a page-granular shadow - every shadow in steady
+                // state - and that, not a flag, is what took the per-draw XXH3 off the
+                // client thread. hasEdges is the same fact recorded at registration for
+                // the epoch skip's benefit, not a second gate here.
                 Uint64 pushedUpTo = begin;
                 const auto pushSpan = [&](Uint64 spanBegin, Uint64 spanEnd) {
                     if (spanBegin < pushedUpTo) spanBegin = pushedUpTo;
@@ -609,11 +775,15 @@ namespace MobileGL::MG_Remote::Client {
                         mprotect(reinterpret_cast<void*>(trackedBase + (pageIndex << kPageShift)),
                                  (runEnd - pageIndex) << kPageShift, PROT_READ);
                         for (SizeT runPage = pageIndex; runPage < runEnd; ++runPage) {
-                            // The interior was page-aligned INSIDE the mapped range at
-                            // registration, so a faulted page's offset in buffer space is
-                            // never negative; its containing block can still start before
-                            // `begin` (a block is 64 KB, a page is 4 KB), and the clamp is
-                            // what keeps the push inside [begin, end).
+                            // A faulted page's offset in buffer space is never negative
+                            // (the span starts at or after the shadow base either way),
+                            // but under outward alignment the head page can start before
+                            // `begin` and the tail page runs past `end`; and a containing
+                            // block starts before `begin` in any case (a block is 64 KB, a
+                            // page is 4 KB). The clamp is what keeps the push inside
+                            // [begin, end): a write to the shadow's own bytes outside the
+                            // mapped range faults here too and ships, at worst, one block
+                            // of the range redundantly.
                             const Uint64 pageOffset =
                                 (trackedBase + (runPage << kPageShift)) - shadowBase;
                             const Uint64 blockFloor = (pageOffset / blockBytes) * blockBytes;
@@ -709,46 +879,56 @@ namespace MobileGL::MG_Remote::Client {
             std::abort();
         }
         if (m_livePersistentMaps.empty()) return;
-        // THE EPOCH SKIP. Interior dirtiness can only arrive as a write fault, and the
-        // handler bumps the fault epoch for every one it answers before it unprotects;
-        // an unmoved epoch therefore proves no interior byte of any tracked map changed
-        // since the last walk. The skip still serves a tracked member's partial-page
-        // edge spans right here, per member, with no binding state read at all - they
-        // are never protected, so their two spans are hashed per push. An untracked
-        // (hash-arm) member vetoes the skip outright: only the binding walk knows
-        // whether this draw consumes it, and scanning every untracked member on faith
-        // measured strictly worse than the walk (VD12, on device). With none present
-        // and the epoch unmoved, nearly every draw in steady flight costs a handful of
-        // 4 KB edge hashes.
+        // THE EPOCH SKIP, AND WHAT IT RESTS ON. A page of a tracked map is marked by
+        // exactly two events - the handler answering a write fault, and TrackWriteMap
+        // setting every bit of a fresh slot - and both move the fault epoch after the
+        // mark. An unmoved epoch therefore proves no page of any tracked map was marked
+        // since the last walk. That is only the whole answer if the last walk DRAINED
+        // every marked page there was, and it does: the walk below pushes every tracked
+        // member with a marked page whether or not this draw consumes it (see there).
+        // Before this round the skip's per-member edge service did that drain by
+        // accident - it ran PushBlocksForChecked, bitmap walk included, on every member
+        // with edges, and nearly every member had edges; with page-granular shadows no
+        // member has, so the drain has to be where the argument says it is. With every
+        // byte of every tracked map protected (TrackWriteMap's outward alignment) the
+        // skip then costs one atomic load and two empties. The one exception is a
+        // member on the inward fallback, whose unprotected edge spans are served right
+        // here, per such member, with no binding state read at all - the m_edgedMembers
+        // set is exactly those and is empty in steady state. An untracked (hash-arm)
+        // member vetoes the skip outright: only the binding walk knows whether this draw
+        // consumes it, and scanning every untracked member on faith measured strictly
+        // worse than the walk (VD12, on device).
         const Uint64 epoch = g_faultEpoch.load(std::memory_order_acquire);
         if (m_untrackedMembers.empty() && epoch == m_lastFaultEpoch) {
-            for (const auto& entry : m_livePersistentMaps) {
-                BufferObject* member = entry.second.buffer;
-                if (member == nullptr) continue;
-                // The cached slot pointer, validated against the slot's own lifetimeId:
-                // a slot retired since the cache was written fails the test, as does one
-                // re-claimed by a different buffer.
-                const TrackedWriteMap* tracked = entry.second.tracked;
-                if (tracked != nullptr && tracked->lifetimeId == member->GetLifetimeId() &&
-                    tracked->hasEdges) {
-                    PushBlocksForChecked(*member);
+            if (!m_edgedMembers.empty()) {
+                // Keys copied out first: PushBlocksForChecked can Forget() a member that
+                // stopped being one, and ska::flat_hash_map invalidates on erase.
+                Vector<Uint64> edged;
+                edged.reserve(m_edgedMembers.size());
+                for (const auto& entry : m_edgedMembers) edged.push_back(entry.first);
+                for (const Uint64 key : edged) {
+                    const auto it = m_livePersistentMaps.find(key);
+                    if (it == m_livePersistentMaps.end() || it->second.buffer == nullptr) continue;
+                    // The cached slot pointer, validated against the slot's own
+                    // lifetimeId: a slot retired since the cache was written fails the
+                    // test, as does one re-claimed by a different buffer.
+                    const TrackedWriteMap* tracked = it->second.tracked;
+                    if (tracked != nullptr && tracked->lifetimeId == key && tracked->hasEdges) {
+                        PushBlocksForChecked(*it->second.buffer);
+                    }
                 }
             }
             return;
         }
+        // Taken BEFORE the drain, on purpose: a fault landing while the drain runs moves
+        // the epoch past this value, and the next draw walks again for it.
         m_lastFaultEpoch = epoch;
-        const auto& ctx = MG_State::pGLContext;
-        if (ctx == nullptr) return;
 
-        // The buffers the upcoming draw or dispatch can read, and only those. Every one is
-        // named by the frontend's own binding state, read on this (the GL) thread - VAO
-        // attribute and element buffers, the indexed binding points of every indexed
-        // target, and the indirect / parameter slots. Client-sourced attributes (no
-        // BufferObject) live on this side already and need no push.
+        // The buffers this walk pushes: every tracked member with a marked page, and the
+        // buffers the upcoming draw or dispatch can read. One entry per buffer, not per
+        // binding point: an arena bound to six attribute slots would otherwise get its
+        // predicate re-check, bitmap walk and edge hashes run six times per draw.
         Vector<BufferObject*> consumers;
-        // One entry per buffer, not per binding point: an arena bound to six attribute
-        // slots would otherwise get its predicate re-check, bitmap walk and edge hashes
-        // run six times per draw.
         const auto consume = [&consumers](BufferObject* buffer) {
             if (buffer == nullptr) return;
             for (const BufferObject* existing : consumers) {
@@ -756,57 +936,91 @@ namespace MobileGL::MG_Remote::Client {
             }
             consumers.push_back(buffer);
         };
-        if (const auto& vao = ctx->GetBoundVertexArray()) {
-            for (Uint i = 0; i < MG_Pipe::kMGPipeMaxVertexAttribs; ++i) {
-                const auto& attrib = vao->GetAttribute(i);
-                if (attrib.Enabled && attrib.Buffer != nullptr) {
-                    consume(attrib.Buffer.get());
-                }
-            }
-            if (const auto& element = vao->GetIndexBufferBindingSlot().GetBoundObject()) {
-                consume(element.get());
+
+        // THE DRAIN THE SKIP RESTS ON: every tracked member with a marked page, whether
+        // or not this draw consumes it. The epoch says "some page of some tracked map was
+        // marked" and nothing about which; pushing only the consumers would advance the
+        // watermark past a mark on a buffer the draw did not bind, and that buffer would
+        // then never move the epoch again (its faulted page is writable, its bit is set,
+        // nothing re-arms it) - the next draw that DOES consume it would skip, and the
+        // server would draw stale bytes. Such a push is bitmap-driven, so it ships only
+        // the faulted blocks, not the range: the cost the consumer filter exists to avoid
+        // is the whole-range rescan of the hash arm, which no tracked member pays. The
+        // cached slot pointer is validated against the slot's own lifetimeId: a slot
+        // retired since the cache was written fails the test, as does one re-claimed by
+        // a different buffer.
+        for (const auto& entry : m_livePersistentMaps) {
+            const TrackedWriteMap* tracked = entry.second.tracked;
+            if (tracked != nullptr && tracked->lifetimeId == entry.first && AnyPageMarked(*tracked)) {
+                consume(entry.second.buffer);
             }
         }
-        static constexpr BufferTarget kIndexedTargets[] = {
-                BufferTarget::Uniform, BufferTarget::ShaderStorage, BufferTarget::AtomicCounter,
-                BufferTarget::TransformFeedback, BufferTarget::CopyRead, BufferTarget::CopyWrite,
-                BufferTarget::Query, BufferTarget::Texture};
-        for (const BufferTarget target : kIndexedTargets) {
-            const SizeT count = ctx->GetBufferBindingPointCount(target);
-            for (SizeT i = 0; i < count; ++i) {
-                if (const auto& bound = ctx->GetBufferBindingPoint(target, i).GetBoundObject()) {
+
+        // The buffers the upcoming draw or dispatch can read, and only those. Every one is
+        // named by the frontend's own binding state, read on this (the GL) thread - VAO
+        // attribute and element buffers, the indexed binding points of every indexed
+        // target, and the indirect / parameter slots. Client-sourced attributes (no
+        // BufferObject) live on this side already and need no push. This is the half of
+        // the walk that serves the hash-arm (untracked) members and the inward fallback's
+        // edges: nothing but a binding can say whether this draw reads them.
+        if (const auto& ctx = MG_State::pGLContext) {
+            if (const auto& vao = ctx->GetBoundVertexArray()) {
+                for (Uint i = 0; i < MG_Pipe::kMGPipeMaxVertexAttribs; ++i) {
+                    const auto& attrib = vao->GetAttribute(i);
+                    if (attrib.Enabled && attrib.Buffer != nullptr) {
+                        consume(attrib.Buffer.get());
+                    }
+                }
+                if (const auto& element = vao->GetIndexBufferBindingSlot().GetBoundObject()) {
+                    consume(element.get());
+                }
+            }
+            static constexpr BufferTarget kIndexedTargets[] = {
+                    BufferTarget::Uniform, BufferTarget::ShaderStorage, BufferTarget::AtomicCounter,
+                    BufferTarget::TransformFeedback, BufferTarget::CopyRead, BufferTarget::CopyWrite,
+                    BufferTarget::Query, BufferTarget::Texture};
+            for (const BufferTarget target : kIndexedTargets) {
+                const SizeT count = ctx->GetBufferBindingPointCount(target);
+                for (SizeT i = 0; i < count; ++i) {
+                    if (const auto& bound = ctx->GetBufferBindingPoint(target, i).GetBoundObject()) {
+                        consume(bound.get());
+                    }
+                }
+            }
+            static constexpr BufferTarget kSlotTargets[] = {BufferTarget::DrawIndirect,
+                                                            BufferTarget::DispatchIndirect,
+                                                            BufferTarget::Parameter};
+            for (const BufferTarget target : kSlotTargets) {
+                if (const auto& bound = ctx->GetBufferBindingSlot(target).GetBoundObject()) {
                     consume(bound.get());
                 }
             }
-        }
-        static constexpr BufferTarget kSlotTargets[] = {BufferTarget::DrawIndirect,
-                                                        BufferTarget::DispatchIndirect,
-                                                        BufferTarget::Parameter};
-        for (const BufferTarget target : kSlotTargets) {
-            if (const auto& bound = ctx->GetBufferBindingSlot(target).GetBoundObject()) {
-                consume(bound.get());
-            }
-        }
-        // BUFFER TEXTURES (the cloud renderer's shape, and the gap the binding-point walk
-        // cannot see): a texture attached to a buffer with glTexBuffer is read by the draw
-        // through a texture unit, never through a buffer binding point. Walking the touched
-        // units and following a buffer-backed texture to its backing buffer is the only way
-        // those bytes earn their push - without this arm a persistent-mapped TexBuffer is
-        // only refreshed by the read-only verbs' whole push (once per present), which is
-        // exactly the per-frame-cadence cloud twitch this comment is written against.
-        const Int maxUnit = ctx->GetMaxTouchedTextureUnit();
-        for (Int unit = 0; unit <= maxUnit; ++unit) {
-            const auto& texture =
-                ctx->GetTextureUnitObject(unit).GetBindingSlot(TextureTarget::TextureBuffer).GetBoundObject();
-            if (texture == nullptr || texture->GetStorageType() != TextureStorageType::Buffer) {
-                continue;
-            }
-            auto* bufferTexture = static_cast<MG_State::GLState::TextureObjectBuffer*>(texture.get());
-            if (const auto& backing = bufferTexture->GetBufferBindingSlot().GetBoundObject()) {
-                consume(backing.get());
+            // BUFFER TEXTURES (the cloud renderer's shape, and the gap the binding-point
+            // walk cannot see): a texture attached to a buffer with glTexBuffer is read by
+            // the draw through a texture unit, never through a buffer binding point.
+            // Walking the touched units and following a buffer-backed texture to its
+            // backing buffer is the only way those bytes earn their push - without this
+            // arm a persistent-mapped TexBuffer is only refreshed by the read-only verbs'
+            // whole push (once per present), which is exactly the per-frame-cadence cloud
+            // twitch this comment is written against.
+            const Int maxUnit = ctx->GetMaxTouchedTextureUnit();
+            for (Int unit = 0; unit <= maxUnit; ++unit) {
+                const auto& texture = ctx->GetTextureUnitObject(unit)
+                                          .GetBindingSlot(TextureTarget::TextureBuffer)
+                                          .GetBoundObject();
+                if (texture == nullptr || texture->GetStorageType() != TextureStorageType::Buffer) {
+                    continue;
+                }
+                auto* bufferTexture = static_cast<MG_State::GLState::TextureObjectBuffer*>(texture.get());
+                if (const auto& backing = bufferTexture->GetBufferBindingSlot().GetBoundObject()) {
+                    consume(backing.get());
+                }
             }
         }
         if (consumers.empty()) return;
+        // The membership test is what keeps a bound non-member (an ordinary buffer, an
+        // adopted store) out of PushBlocksForChecked; PushBlocksForChecked can Forget()
+        // a member that stopped being one, which is why the list was copied out first.
         for (BufferObject* buffer : consumers) {
             if (buffer != nullptr && m_livePersistentMaps.count(buffer->GetLifetimeId()) != 0) {
                 PushBlocksForChecked(*buffer);

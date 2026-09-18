@@ -50,13 +50,27 @@ namespace MobileGL {
             // held, and greppable as exactly this name; retiring the scope is P7's server-side
             // Magma texture sync. Every OTHER apply-thread touch of a guarded surface is still
             // Fatal{RoleViolation, "texture-legacy-arm"}.
+            //
+            // The depth is counted ONLY on the apply thread (P5d round 3, package D), exactly
+            // as hd's two scopes in MG_Impl/Pipe/SlotAllocator.h are: the guard above is the
+            // counter's only reader and it returns before it looks unless
+            // ServerLoop::OnApplyThread() is true, so a depth kept on any other thread could
+            // never change an answer. m_counted remembers the constructor's decision so the
+            // destructor undoes exactly what the constructor did. The query is spelled
+            // ActiveOnApplyThread() rather than Active() because the precondition belongs in
+            // the name: off the apply thread it now answers false however many scopes are
+            // open, and a future second reader must be made to see that rather than trust a
+            // bare Active().
             class MGPipeTextureLegacyArmScope {
             public:
                 MGPipeTextureLegacyArmScope();
                 ~MGPipeTextureLegacyArmScope();
                 MGPipeTextureLegacyArmScope(const MGPipeTextureLegacyArmScope&) = delete;
                 MGPipeTextureLegacyArmScope& operator=(const MGPipeTextureLegacyArmScope&) = delete;
-                static Bool Active();
+                static Bool ActiveOnApplyThread();
+
+            private:
+                Bool m_counted;
             };
 #endif
 

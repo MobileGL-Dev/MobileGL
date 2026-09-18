@@ -226,6 +226,35 @@ namespace MobileGL::MG_Util::PipeStats {
         RingWraps,
         RingWrapPads,
         RingWaits,
+        // P5d ROUND 3's WAIT LEDGER, the four numbers that say where the split's frame went.
+        // Under `inproc` the lockstep frame is "client work + server apply + handoff", and the
+        // handoff is made of waits: simpleperf on the workload device measured
+        // SessionProducer::WaitForApplied at 27.9% self of the GL thread and the apply thread's
+        // idle poll at ~49% of its own. A wait that SPUN and a wait that PARKED cost three
+        // orders of magnitude apart, so each side publishes both: `ServerWaits` /
+        // `ClientWaits` are entries into Doorbell::Wait, `ServerParks` / `ClientParks` are the
+        // subset that ran out of spin budget and blocked.
+        //
+        // EACH SIDE PUBLISHES ITS OWN. CONTRACT-P5C rule E forbids either role naming the
+        // other's memory, so the client does NOT read ServerLoop::ParkCount() across the role
+        // line - the apply thread publishes the server pair from its own loop and the GL thread
+        // publishes the client pair from EmitPresent. PipeStats is the meeting point precisely
+        // because it is below both - IN ONE PROCESS. Under `spawn` the server pair is published
+        // into the SERVER process's PipeStats, so the client's summary line prints
+        // `srv=0 srvpark=0` for the whole run: a zero that means "another process", printed in
+        // the shape of a zero that means "never waited". That is how `rsp` and the rest of the
+        // server-published gauges already behave; the round this pair was added for is `inproc`.
+        //
+        // THE PARK NUMBER IS THE SUBSET OF THE WAIT NUMBER ON PURPOSE, and stays one only
+        // because both halves of each pair are counted by the same code path: Doorbell::Wait
+        // increments a tally the WAITER owns (its `parkTally` out-parameter), once per wait that
+        // really blocked. A per-bell counter would not do - a bell belongs to an endpoint and
+        // every waiter on it shares it - and a park counted per Park() call would not either,
+        // since one wait can park, wake on a remembered notify and park again.
+        ServerWaits,
+        ServerParks,
+        ClientWaits,
+        ClientParks,
         Count
     };
 

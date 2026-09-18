@@ -356,7 +356,8 @@ TEST(ImageEmit, AMakeCurrentClearsTheImageSetAndAdvancesItsSerial) {
     X(ImageEmit, AnAccessModeChangeAloneStillEmitsTheSet)                                           \
     X(ImageEmit, AnInternalFormatChangeAloneStillEmitsTheSet)                                       \
     X(ImageEmit, TheApplicationsFormatAndAccessTravelUnrecast)                                    \
-    X(ImageEmit, AnImageBoundTextureIsMarkedShaderImageBoundAtTheBind)
+    X(ImageEmit, AnImageBoundTextureIsMarkedShaderImageBoundAtTheBind)                            \
+    X(ImageEmit, TheBindFeedsTheImageUnitHighWaterMark)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -410,10 +411,12 @@ namespace {
     // binds an image pays one integer test per draw, taken BEFORE any hash and before any
     // 192-entry walk.
     //
-    // The frontend has no image-unit high-water mark of its own - NoteUnitTouched is the
-    // TEXTURE-unit path and glBindImageTexture does not reach it - so the window is derived
-    // from the highest image unit the CURRENT PROGRAM names. A program with no image uniform
-    // names none, and the set is not emitted at all.
+    // The window is derived from the highest image unit the CURRENT PROGRAM names, and it stays
+    // that way now that the frontend DOES keep an image-unit high-water mark (P5d round 3,
+    // package C, TextureState::NoteImageUnitTouched): the mark answers "which units could hold a
+    // binding", and this emitter's question is the narrower "which units could a shader READ".
+    // A program with no image uniform names none, and the set is not emitted at all - even with
+    // a texture sitting on unit 0, as below.
     TEST(ImageEmit, AZeroHighWaterMarkEmitsNothingWithoutHashing) {
         EmitterScope scope;
         static const char* kNoImages = R"(#version 430 core
@@ -561,6 +564,42 @@ void main() { imageStore(img, ivec2(0, 0), vec4(1.0)); }
             << "the emitted image set's walk does not carry the bit either";
         GL::UseProgram(0);
         GL::BindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+    }
+
+    // P5d round 3, package C: glBindImageTexture IS THE PRODUCER OF THE IMAGE-UNIT HIGH-WATER
+    // MARK, and this case is the reason a reader may bound a walk with it. The split client's
+    // per-draw GPU-write sweep (MG_Remote/Client/GpuWritePending.cpp) stops at the mark instead
+    // of walking all MAX_TEXTURE_IMAGE_UNITS units; drop the NoteImageUnitTouched call from
+    // GL_Texture.cpp's BindImageTexture and this goes red here, where the entry point is, rather
+    // than as a missed GPU write in a scenario nobody runs on a desktop lane.
+    //
+    // AND THE UNBIND HALF IS THE OTHER ASSERTION. The mark only ever grows: a binding that goes
+    // away leaves it standing, so the walk stays an over-approximation of the units that hold a
+    // binding - the one direction a conservative GPU-write set may fail in.
+    TEST(ImageEmit, TheBindFeedsTheImageUnitHighWaterMark) {
+        EmitterScope scope;
+        const GLuint name = MakeImageTexture();
+        // UNIT 1, LIKE EVERY OTHER CASE IN THIS FILE, and deliberately not a higher one:
+        // BindImageTexture refuses `unit >= GetAdvertisedImageUnitCount()` before it reaches
+        // either the slot or the mark, and that count comes from the backend's
+        // DynamicParameters.MaxImageUnits - so a case that needs unit 4 fails on a lane whose
+        // backend advertises fewer, for a reason that has nothing to do with the mark. Unit 1
+        // still separates "the mark moved" from "the mark is trivially 0".
+        constexpr Int kUnit = 1;
+        GL::BindImageTexture(static_cast<GLuint>(kUnit), name, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+        // And the bind is checked before the mark is, so a REFUSED bind says so rather than
+        // reading as a missing NoteImageUnitTouched.
+        ASSERT_TRUE(Ctx().GetImageTextureBinding(kUnit).Texture != nullptr)
+            << "glBindImageTexture did not take: this lane's backend advertises fewer than "
+            << (kUnit + 1) << " image units, so the case cannot observe the mark at all";
+        EXPECT_GE(Ctx().GetMaxTouchedImageUnit(), kUnit)
+            << "glBindImageTexture did not move the image-unit high-water mark, so every reader "
+               "that bounds a per-draw walk with it now walks past this binding";
+
+        GL::BindImageTexture(static_cast<GLuint>(kUnit), 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+        EXPECT_GE(Ctx().GetMaxTouchedImageUnit(), kUnit)
+            << "the mark must not shrink on an unbind: a walk bounded by it has to stay an "
+               "over-approximation";
     }
 } // namespace
 #endif // MOBILEGL_PIPE_PUSH

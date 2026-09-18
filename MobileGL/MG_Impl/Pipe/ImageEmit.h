@@ -64,12 +64,20 @@ namespace MobileGL::MG_Pipe {
 
         // set_shader_images. Start is 0 and Count is the image-unit window described below.
         //
-        // WHERE THE HIGH-WATER MARK COMES FROM, because the frontend has none and this is the
-        // one place a reader will look for it. DirectGLES keeps g_imageUnitHighWaterMark, but
-        // that is written from inside its own per-unit sync and lives on the far side of the
-        // boundary; TextureState::NoteUnitTouched is the TEXTURE-unit path and
-        // glBindImageTexture does not reach it. Adding a counter to TextureState would edit
-        // another package's file and resize the pull build's object, which G1 forbids outright.
+        // WHERE THE HIGH-WATER MARK COMES FROM, because this is the one place a reader will look
+        // for it. DirectGLES keeps g_imageUnitHighWaterMark, but that is written from inside its
+        // own per-unit sync and lives on the far side of the boundary.
+        //
+        // AND IT IS STILL NOT TextureState's MARK, EVEN THOUGH ONE NOW EXISTS. P5d round 3
+        // (package C) added TextureState::NoteImageUnitTouched - a push-build-only image-unit
+        // high-water mark, fed by glBindImageTexture - for the split client's per-draw
+        // GPU-write sweep. That mark answers "which units could hold a binding"; the window
+        // below answers the strictly narrower "which units could a SHADER READ", which is what
+        // makes the zero early-out fire for an application that binds an image no shader names.
+        // Swapping one for the other would widen this emitter for no record's benefit, and the
+        // paragraph that used to stand here - "adding a counter to TextureState would resize the
+        // pull build's object, which G1 forbids outright" - is answered by that mark being
+        // compiled only into push builds, where the object is already a different size.
         //
         // So the window is derived instead, from the one thing that decides whether an image
         // unit can matter at all: the highest image unit the CURRENT PROGRAM names, memoised

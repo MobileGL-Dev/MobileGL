@@ -87,14 +87,29 @@ namespace MobileGL::MG_Remote::Client {
             if (!context) return;
             // The backend keeps a bitset of writable image-buffer units
             // (DirectGLES.cpp:2350-2352, maintained from its own SyncImageTextureBinding) and
-            // the client has no equivalent, so it sweeps. The sweep is bounded by the array,
-            // not by a device limit read: MaxImageUnits would be a backend read, and a stale
-            // or absent backend object would silently shorten the walk - which is the one
-            // direction this set may not fail in. The loop body is a null test on a
-            // contiguous array until a unit is actually bound. P5 records cost and does not
-            // gate on it (2026-09-08 rule); an image-unit high-water mark on GLContext is the
-            // obvious narrowing and belongs with P8's binding-walk migration.
-            for (Int unit = 0; unit < MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS; ++unit) {
+            // the client has no equivalent, so it sweeps. The sweep is NOT bounded by a device
+            // limit read: MaxImageUnits would be a backend read, and a stale or absent backend
+            // object would silently shorten the walk - which is the one direction this set may
+            // not fail in.
+            //
+            // IT IS BOUNDED BY THE FRONTEND's OWN IMAGE-UNIT HIGH-WATER MARK (P5d round 3,
+            // package C). The paragraph that stood here said the narrowing "belongs with P8's
+            // binding-walk migration"; the 2026-09-17 inproc profile moved it forward -
+            // MarkWritableImageBufferTextures was 2.15% self / 3.59% inclusive of the GL thread
+            // (GetImageTextureBinding 1.37 of it) at ~852 draws/frame, in a workload that never
+            // binds an image at all, purely because the walk was MAX_TEXTURE_IMAGE_UNITS (192)
+            // units wide unconditionally - 192 GetImageTextureBinding reads per draw for a
+            // context that has never bound one.
+            //
+            // AND THE MARK IS SAFE IN THE ONLY DIRECTION THAT MATTERS. It is written by
+            // glBindImageTexture itself (GL_Texture.cpp, TextureState::NoteImageUnitTouched) and
+            // it only ever grows - an unbind, a delete-unbind, a context that stops using an
+            // image unit all leave it where it was - so `unit <= mark` can only be WIDER than
+            // the set of units that hold a binding, never narrower. -1 means no image unit has
+            // ever been bound in this context, and then this is one compare.
+            const Int highest = context->GetMaxTouchedImageUnit();
+            for (Int unit = 0; unit <= highest && unit < MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS;
+                 ++unit) {
                 const auto& binding = context->GetImageTextureBinding(unit);
                 if (!ImageUnitIsAWritableBufferTexture(binding)) continue;
                 auto* textureBuffer = static_cast<MG_State::GLState::TextureObjectBuffer*>(binding.Texture.get());

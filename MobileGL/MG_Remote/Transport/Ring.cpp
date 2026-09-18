@@ -466,7 +466,15 @@ namespace MobileGL::MG_Remote::Transport {
         if (!Valid() || m_selfBell == nullptr) {
             return SessionWait::TimedOut;
         }
-        if (m_selfBell->Wait(m_control->producerParked, ready, m_spinUs, timeoutMs)) {
+        // COUNTED BEFORE THE WAIT AND ONLY WHEN ONE REALLY HAPPENS - after the two refusals
+        // above, which answer TimedOut without ever reaching the bell. See Waits()/Parks() in
+        // the header for why the pair is the reading and either number alone is not.
+        m_waits.fetch_add(1, std::memory_order_relaxed);
+        // &m_parks is the OTHER half of the pair, and it is passed rather than read off the
+        // bell: the bell is this endpoint's and the encoder waits on it too, so its own
+        // ParkEntries() is not a subset of the waits counted one line above. See Parks() in
+        // SessionRings.h.
+        if (m_selfBell->Wait(m_control->producerParked, ready, m_spinUs, timeoutMs, &m_parks)) {
             return SessionWait::Reached;
         }
         // Wait == false && Dead() is "the session was shut down", and it is the

@@ -70,6 +70,29 @@ namespace MobileGL::MG_Pipe {
     // through it, and this returns that same expression rather than a second copy of it.
     Bool MGPipeP4aFamilyEmits(Uint64 subsystem, Uint64 wired);
 
+    // PipeFill.cpp. DOES AN EMITTED CALL SUPPLY THIS FIELD at the environment named, i.e. would
+    // the validate point's residual fill SKIP it? This is step 4's own predicate, which P5d
+    // round 3 (package C) turned from a per-field-per-verb conjunction into a memo keyed on the
+    // three arguments plus the P4a consumer signal it reads for itself - the profile had it at
+    // 63 CapsMirror reads per verb for one answer.
+    //
+    // IT IS EXPORTED FOR THE UNIT GATE AND FOR NO OTHER CALLER, for MGPipeP4aFamilyEmits'
+    // reason and one of its own: which fields the fill copies has NO other observable, because
+    // in a push build every emission this predicate asks about is routed straight into the
+    // applier, which writes the same storage the fill would have written. So the only way to
+    // state "the memo's key is complete" - the one thing a memo can get wrong that the
+    // expression it replaced could not - is to ask it directly. A call re-keys the memo, which
+    // is exactly what the case is for.
+    //
+    // AND A STALE ANSWER IS SILENT, WHICH IS WHY THAT CASE IS THE ONLY GUARD. It is tempting to
+    // say a wrongly-skipped field aborts as Fatal{UnmigratedPipeInput}; it does not. The walk
+    // stamps FilledGen from the verb serial whether or not it copied (PipeFill.cpp, step 4), so
+    // a field the fill skips reads FRESH with the PREVIOUS verb's value - a stale binding slot
+    // rendered without a word, caught only by the verify lane's comparison. Poison catches an
+    // UNSTAMPED read, not a stamped-but-uncopied one.
+    Bool MGPipeResidualFillSuppliesField(MGPipeInputField field, Uint64 pushMask, Bool applierDerives,
+                                         Bool contextValuesWireLive);
+
     // PipeFill.cpp. P3a D-H2.1: the DRAW's raw vertex-fetch base instance, which
     // set_vertex_buffers now carries as an explicit field.
     //

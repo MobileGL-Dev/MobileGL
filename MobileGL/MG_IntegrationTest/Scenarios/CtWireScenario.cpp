@@ -143,6 +143,13 @@ namespace {
         glBindTexture(GL_TEXTURE_2D, 0);
         const MobileGL::Uint64 deathsBefore = ServerVerbs().ObjectDeaths();
         glDeleteTextures(1, &texture);
+        // THE FENCE, the framebuffer case's exactly (MOBILEGL_IPC_BATCH_WAITS, default on):
+        // object_death is a kCtxObject value-class record, published WITHOUT waiting for its
+        // own apply, and the server-side tally only moves at apply time. Without a wait
+        // boundary this read races the apply thread - it passed by timing until P5d round 3's
+        // clock-free spin changed that timing, then failed 1 in 5. A clear is kCtxVerb and
+        // still waits, and its wait covers the death.
+        glClear(GL_COLOR_BUFFER_BIT);
         EXPECT_GT(ServerVerbs().ObjectDeaths(), deathsBefore)
             << "the texture's death produced no object_death record; the server's twin was "
                "never told to let go";

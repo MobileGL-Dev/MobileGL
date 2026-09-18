@@ -6745,6 +6745,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(unit))
             .Bind(textureObject, level, layered, layer, access, format);
         MG_State::pGLContext->NoteTextureUnitTouched(static_cast<Int>(unit));
+#if MOBILEGL_PIPE_PUSH
+        // AND THE IMAGE-UNIT MARK BESIDE IT. The line above moves the TEXTURE-unit high-water
+        // mark, which is a different array: a reader that needs "the highest image unit ever
+        // bound" cannot take it from there without either over-walking (a texture bind at unit
+        // 31 with no image bound anywhere) or, worse, under-walking if that line ever moves. The
+        // split client's per-draw writable-image sweep is that reader
+        // (MG_Remote/Client/GpuWritePending.cpp). Push builds only, so the pull build's bytes do
+        // not move (G1).
+        MG_State::pGLContext->NoteImageUnitTouched(static_cast<Int>(unit));
+#endif
         MGP_FILL(BindImageTexture);
         bindImageTexture(unit, texture, level, layered, layer, access, format);
     }

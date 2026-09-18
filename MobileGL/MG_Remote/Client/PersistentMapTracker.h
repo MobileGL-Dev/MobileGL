@@ -74,16 +74,23 @@ namespace MobileGL::MG_Remote::Client {
         std::atomic<Uint64>* pageBits = nullptr; // allocated once, never freed or moved
         SizeT pageCount = 0;                     // GL thread only
         Uint64 lifetimeId = 0;                   // GL thread only
-        // GL thread only. The two partial-page edge spans are never protected (see
-        // TrackWriteMap's inward alignment), so nothing faults for them; pushing their
-        // blocks unconditionally measured ~2 x 64 KB x every draw for a hot unaligned
-        // buffer (112 MB/frame). They are hashed per push instead - 8 KB of XXH3 at
-        // worst - and their containing block ships only on a change.
+        // GL thread only, and only on the INWARD fallback (TrackWriteMap: a shadow that
+        // failed the page-granular test). There the two partial-page edge spans are
+        // never protected, so nothing faults for them; pushing their blocks
+        // unconditionally measured ~2 x 64 KB x every draw for a hot unaligned buffer
+        // (112 MB/frame). They are hashed per push instead - 8 KB of XXH3 at worst - and
+        // their containing block ships only on a change. A page-granular shadow (every
+        // shadow the allocator hands out in a split build) is aligned OUTWARD and has no
+        // edges, so these are never read for it - that per-draw XXH3 was 8.5% of the
+        // client thread at VD12 (P5d round 3), on nearly every live map.
         Uint64 edgeHashHead = 0;
         Uint64 edgeHashTail = 0;
-        // GL thread only: whether the mapped range has partial-page edge spans at all.
-        // Feeds the epoch skip's per-member edge service (PushDrawConsumers) - edge
-        // bytes are never protected, so their dirtiness is invisible to the fault epoch.
+        // GL thread only: whether the mapped range has UNPROTECTED partial-page edge spans
+        // at all - true only on the inward fallback. Feeds the epoch skip's per-member edge
+        // service (PushDrawConsumers, through m_edgedMembers) - edge bytes are never
+        // protected, so their dirtiness is invisible to the fault epoch. The push itself
+        // does not read it: its two edge hashes are gated by the span geometry, which
+        // says the same thing.
         Bool hasEdges = false;
     };
 
@@ -151,6 +158,22 @@ namespace MobileGL::MG_Remote::Client {
         // Unit tests only: clears the membership, the hash cache and the mprotect tracked
         // slots (restoring every tracked page writable first), and resets the counters.
         void ClearForTest();
+        // Unit tests only: the mprotect arm's white-box surface, for the alignment cases
+        // (SplitBufferTest) that the public GL surface cannot see - which pages a map
+        // protected is not observable through any push count. MprotectArmAvailableForTest
+        // is the arm's precondition (handler installable, kernel page == tracker page);
+        // a case that needs the arm skips on it rather than going red on a host that has
+        // no arm. TrackedSlotForTest reads a member's live slot (nullptr on the hash arm).
+        // TrackForTest / UntrackForTest register an arbitrary range with an arbitrary
+        // declared extent, which is the only way to reach the inward fallback on a build
+        // whose allocator never hands out an unaligned shadow. FaultEpochForTest is the
+        // handler's answered-fault counter, the one observable a protected page has.
+        static Bool MprotectArmAvailableForTest();
+        static const TrackedWriteMap* TrackedSlotForTest(const MG_State::GLState::BufferObject& buffer);
+        static const TrackedWriteMap* TrackForTest(Uint64 lifetimeId, const Uint8* shadow, SizeT rangeBegin,
+                                                   SizeT rangeEnd, SizeT shadowExtent);
+        static void UntrackForTest(Uint64 lifetimeId);
+        static Uint64 FaultEpochForTest();
 
     private:
         // One live member. tracked is the member's tracker slot when it is on the
@@ -183,13 +206,22 @@ namespace MobileGL::MG_Remote::Client {
         Uint64 m_blocksPushed = 0;
         Uint64 m_bytesPushed = 0;
         // THE EPOCH SKIP's state (see PushDrawConsumers). m_lastFaultEpoch is the fault
-        // counter's value at the last consumer walk. m_untrackedMembers holds EVERY
+        // counter's value at the last walk - and the walk drains every tracked member
+        // with a marked page, consumer or not, which is the only reason an unmoved
+        // counter can stand for "nothing to push". m_untrackedMembers holds EVERY
         // live member that fell back to the hash arm, and any one of them vetoes the
         // skip: the walk is what tells an untracked member's consumption, and scanning
         // every untracked member unconditionally (the alternative, measured on device
         // at VD12) costs more than the walk it replaced.
         Uint64 m_lastFaultEpoch = 0;
         UnorderedMap<Uint64, Uint8> m_untrackedMembers;
+        // The tracked members whose slot has UNPROTECTED edge spans (the inward fallback,
+        // TrackedWriteMap::hasEdges): the epoch skip serves exactly these per draw and
+        // nobody else, so it walks this set and not the membership. Empty in steady state
+        // on a split build - every shadow is page-granular and aligns outward - which is
+        // what makes the skip's common path a handful of loads with no per-member work.
+        // Maintained beside m_untrackedMembers at the same three events.
+        UnorderedMap<Uint64, Uint8> m_edgedMembers;
         // Everything of PushBlocksFor after the two role guards, for callers that already
         // ran them once (the two Members hooks) - the guard's thread-local read was a
         // measurable per-buffer-per-draw cost on the emutls path.

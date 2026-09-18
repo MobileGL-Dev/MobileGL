@@ -29,6 +29,112 @@
 namespace MobileGL::MG_Remote::Transport {
 
     // -----------------------------------------------------------------------
+    // The spin calibration (Doorbell.h's SpinItersPerUs block has the argument)
+    // -----------------------------------------------------------------------
+
+    namespace Detail {
+
+        std::atomic<std::uint32_t> g_spinItersPerUs{0};
+
+        namespace {
+
+            // The probe's length. Big enough that one steady_clock read at each end is
+            // a rounding error against it (a few microseconds of loop), small enough
+            // that a thread calibrating on its first wait does not visibly stall: at
+            // any plausible rate this is 2-30 us.
+            constexpr std::uint32_t kProbeIterations = 8192;
+
+            // The clamps. Neither is a guess about a device - they are the bounds
+            // outside which the READING itself cannot be true. A real iteration is an
+            // acquire load plus a yield/pause: below ~0.5 ns each (2000/us) no core
+            // retires it, and above ~250 ns each (4/us) the probe was preempted or the
+            // clock is lying. Clamping is what keeps a bad reading from turning a 50 us
+            // hint into a millisecond spin or into no spin at all.
+            constexpr std::uint32_t kMinSpinItersPerUs = 4;
+            constexpr std::uint32_t kMaxSpinItersPerUs = 2000;
+
+            // What a platform with a clock too coarse to measure the probe gets. 200
+            // iterations per microsecond is the middle of the plausible range (5 ns an
+            // iteration); the fallback exists so that an unmeasurable clock produces a
+            // spin of roughly the right order rather than none. It is NOT what a
+            // measurably slow probe gets - see the clamp at the bottom of this
+            // function, which keeps the two readings apart.
+            constexpr std::uint32_t kFallbackSpinItersPerUs = 200;
+
+        } // namespace
+
+        std::uint32_t CalibrateSpinItersPerUs() {
+            // The probe body is the spin loop's body with the caller's `ready()` replaced
+            // by an atomic load the compiler may not hoist and may not fold: an atomic
+            // the optimiser cannot prove constant is the only portable way to keep the
+            // loop from vanishing, and it is also the closest thing to what a real
+            // `ready()` costs.
+            std::atomic<std::uint32_t> probe{0};
+
+            // TWO PASSES, AND THE FASTER ONE WINS. The first pass pays the i-cache miss,
+            // the branch predictor's warm-up and - on a big.LITTLE phone - the tail of a
+            // frequency ramp; the second is the reading. Taking the MAXIMUM rather than
+            // the last value is the deliberate choice: a pass that was preempted reads
+            // absurdly slow, and under-spinning costs a park (a syscall and a context
+            // switch) while over-spinning costs cycles the thread had nothing else to do
+            // with. Both directions stay inside the clamps.
+            //
+            // "Did any pass produce a number at all?" - which is a DIFFERENT question
+            // from "was the number small?", and conflating them is how a starved machine
+            // ends up with the largest spin in the table. See the clamp below.
+            bool sawUsableClock = false;
+            std::uint32_t best = 0;
+            for (int pass = 0; pass < 2; ++pass) {
+                const auto start = std::chrono::steady_clock::now();
+                for (std::uint32_t i = 0; i < kProbeIterations; ++i) {
+                    if (probe.load(std::memory_order_acquire) != 0) {
+                        break;
+                    }
+                    CpuRelax();
+                }
+                const auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                           std::chrono::steady_clock::now() - start)
+                                           .count();
+                if (elapsedNs <= 0) {
+                    continue; // clock too coarse to see this probe at all
+                }
+                sawUsableClock = true;
+                const std::uint64_t perUs = (static_cast<std::uint64_t>(kProbeIterations) * 1000ull) /
+                                            static_cast<std::uint64_t>(elapsedNs);
+                const std::uint32_t clamped =
+                    perUs > kMaxSpinItersPerUs ? kMaxSpinItersPerUs : static_cast<std::uint32_t>(perUs);
+                if (clamped > best) {
+                    best = clamped;
+                }
+            }
+            // THE TWO READINGS THAT BOTH ARRIVE AS best == 0 ARE OPPOSITE, and the first
+            // cut of this clamp answered them the same way. `perUs` is
+            // kProbeIterations*1000/elapsedNs, so it truncates to zero as soon as a pass
+            // takes longer than 8.192 ms - that is EXACTLY the heavily preempted probe on
+            // an oversubscribed runner or a thermally throttled device, and handing it
+            // kFallbackSpinItersPerUs would install 200 iters/us (50x the floor, ~10 ms of
+            // busy spin per 50 us wait) on the one machine that can least afford it. A
+            // probe that never saw a usable clock is the opposite case: nothing was
+            // measured, the machine may be perfectly fast, and a mid-range guess is the
+            // only sane answer. So: measured-but-slow clamps UP to the floor, unmeasurable
+            // takes the fallback.
+            if (best < kMinSpinItersPerUs) {
+                best = sawUsableClock ? kMinSpinItersPerUs : kFallbackSpinItersPerUs;
+            }
+            // Relaxed, and a race here is not a bug: two threads that calibrate at the
+            // same moment both store a legitimate budget, and the loser's is as usable as
+            // the winner's. A once_flag would put a guard-variable load on every Wait,
+            // which is the cost this whole change exists to remove.
+            g_spinItersPerUs.store(best, std::memory_order_relaxed);
+            MGLOG_D("MG_Remote doorbell: spin calibrated at %u iterations per microsecond "
+                    "(clock-free spin budget = that times MOBILEGL_IPC_SPIN_US)",
+                    static_cast<unsigned>(best));
+            return best;
+        }
+
+    } // namespace Detail
+
+    // -----------------------------------------------------------------------
     // CondVarDoorbell
     // -----------------------------------------------------------------------
 

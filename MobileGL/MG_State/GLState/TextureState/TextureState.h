@@ -108,6 +108,39 @@ namespace MobileGL::MG_State::GLState {
             }
         }
         Int GetMaxTouchedUnit() const { return m_maxTouchedUnit; }
+#if MOBILEGL_PIPE_PUSH
+        // High-water mark of IMAGE units ever bound by glBindImageTexture, and it is a SECOND
+        // mark rather than a widening of the one above because the two index different
+        // namespaces: GL 4.6 core 8.22's image units are their own array, and folding them
+        // together would make a bind of image unit 7 push every per-draw TEXTURE-unit scan out
+        // to eight slots for nothing - and a bind of the last advertised image unit push it out
+        // to MAX_TEXTURE_IMAGE_UNITS (191), which is the whole array.
+        //
+        // WHAT IT IS FOR. The split client's per-draw GPU-write set swept ALL
+        // MAX_TEXTURE_IMAGE_UNITS image units looking for a writable image-BUFFER texture
+        // (MG_Remote/Client/GpuWritePending.cpp), because the frontend had no such mark - the
+        // 2026-09-17 inproc profile measured that sweep at 2.15% self / 3.59% inclusive of the
+        // GL thread in an application (Minecraft) that never binds an image at all. With the
+        // mark that application's sweep is one compare against -1.
+        //
+        // IT ONLY EVER GROWS, which is NoteUnitTouched's rule one notch stronger and is the
+        // whole safety argument: an unbind - glBindImageTexture(unit, 0, ...), or the
+        // delete-unbind in MarkTextureObjectForDeletion - leaves the mark where it was, so a
+        // scan bounded by it is an OVER-approximation. Over-approximating a GPU-write set costs
+        // a readback the narrowing channel removes; under-approximating it reads a stale buffer
+        // and says nothing, which is the one direction that set may not fail in.
+        //
+        // PUSH BUILDS ONLY, so the pull build's TextureState keeps its layout and its .text byte
+        // for byte (G1): the only reader is a push-build path and the only writer -
+        // MG_Impl/GLImpl/Texture/GL_Texture.cpp's BindImageTexture - is guarded the same way.
+        void NoteImageUnitTouched(Int unit) {
+            if (unit > m_maxTouchedImageUnit && unit < MAX_TEXTURE_IMAGE_UNITS) {
+                m_maxTouchedImageUnit = unit;
+            }
+        }
+        // -1 until an image unit is bound for the first time, i.e. "there is nothing to sweep".
+        Int GetMaxTouchedImageUnit() const { return m_maxTouchedImageUnit; }
+#endif
         Uint64 GetTextureBindGeneration() const { return m_textureBindGeneration; }
         // Both counters below are pushed PipeInputs fields AND are moved by writes the
         // backends make into frontend objects during their own verb - a synthesised fallback
@@ -164,6 +197,8 @@ namespace MobileGL::MG_State::GLState {
 #if MOBILEGL_PIPE_PUSH
         Uint64 m_anyTextureContentGeneration = 0;
         Uint64 m_anyTextureParamsGeneration = 0;
+        // See NoteImageUnitTouched: the image-unit twin of m_maxTouchedUnit, push builds only.
+        Int m_maxTouchedImageUnit = -1;
 #endif
         static Uint64 AllocateContextId();
 

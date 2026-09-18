@@ -41,7 +41,7 @@ namespace MobileGL {
                     if (!MG_Remote::Server::ServerLoop::OnApplyThread()) return;
                     // The named exemption (MipmapStorage.h): Magma's texture sync is tx's
                     // declared leftover and retires with P7.
-                    if (MGPipeTextureLegacyArmScope::Active()) return;
+                    if (MGPipeTextureLegacyArmScope::ActiveOnApplyThread()) return;
                     MGLOG_F("MGPipe: Fatal{RoleViolation, \"texture-legacy-arm\"} - the apply thread "
                             "called TextureObjectMipmap::%s on a frontend object. With an active "
                             "transport the server reads the staged-texture store and the resource "
@@ -70,18 +70,28 @@ namespace MobileGL {
 
 #if MOBILEGL_BUILD_DISAGGREGATED
             namespace {
-                thread_local Uint32 g_textureLegacyArmScopeDepth = 0;
+                // NOT thread_local (P5d round 3, package D), for hd's reason in
+                // MG_Impl/Pipe/SlotAllocator.cpp: RefuseLegacyTextureArmFromApplyThread above
+                // is this counter's ONLY reader in the tree and it returns before it looks
+                // unless the transport is active and ServerLoop::OnApplyThread() is true, so
+                // the apply thread is the only thread whose depth could change an answer. The
+                // scope below therefore counts only there, which makes the apply thread the
+                // single writer and the single reader - no race to defend, and no
+                // __emutls_get_address call per access (7.4% of the apply thread, 7.7% and the
+                // top symbol on the monolith's GL thread).
+                Uint32 g_textureLegacyArmScopeDepth = 0;
             }
 
-            MGPipeTextureLegacyArmScope::MGPipeTextureLegacyArmScope() {
-                ++g_textureLegacyArmScopeDepth;
+            MGPipeTextureLegacyArmScope::MGPipeTextureLegacyArmScope()
+                : m_counted(MG_Remote::Server::ServerLoop::OnApplyThread()) {
+                if (m_counted) ++g_textureLegacyArmScopeDepth;
             }
 
             MGPipeTextureLegacyArmScope::~MGPipeTextureLegacyArmScope() {
-                --g_textureLegacyArmScopeDepth;
+                if (m_counted) --g_textureLegacyArmScopeDepth;
             }
 
-            Bool MGPipeTextureLegacyArmScope::Active() {
+            Bool MGPipeTextureLegacyArmScope::ActiveOnApplyThread() {
                 return g_textureLegacyArmScopeDepth != 0;
             }
 #endif

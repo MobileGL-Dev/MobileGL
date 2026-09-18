@@ -166,6 +166,9 @@ TEST(FieldOwnershipTest, TheSevenStickyForwardsAgreeWithTheirFieldRows) {
 TEST(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
     GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
 }
+TEST(FieldOwnershipTest, TheResidualFillsSuppliedMemoReKeysOnEveryInputThatMovesAnAnswer) {
+    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
+}
 
 #else // MOBILEGL_PIPE_PUSH
 
@@ -386,6 +389,124 @@ TEST_F(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
 // The behaviour: the table is load-bearing. Split builds only - it is the server verb stamp
 // that arms all of it, and nothing in a monolith lane stamps.
 // ---------------------------------------------------------------------------------------
+
+// P5d round 3 (package C): THE RESIDUAL FILL's SUPPLIED-SET MEMO, and the one thing about it
+// that can be wrong. The predicate is the same expression step 4 used to spell once per field
+// per verb, so the change carries no new verdict - what it carries is a KEY, and a key that
+// misses one of its inputs answers the PREVIOUS environment's question at the new one. In the
+// direction that loses that means the fill SKIPS a field no call supplied - and that is SILENT,
+// not an abort: the walk stamps FilledGen from the verb serial whether or not it copied, so the
+// field reads FRESH with the previous verb's value and the draw goes out with a stale binding
+// slot. Poison catches an UNSTAMPED read; it cannot catch a stamped-but-uncopied one. That is
+// exactly why this case exists - there is no second line of defence behind it.
+//
+// So each input is moved on its own with the answer read back in between, and in an order where
+// a memo that ignored that input would have to return the stale answer rather than the right one
+// by luck. This case lives outside the split-only block because the memo is in the push build
+// too (PipeFill.cpp is compiled at MOBILEGL_PIPE_PUSH), and the fields it names are the same
+// three in both.
+//
+// THE FOURTH KEY INPUT - the P4a consumer signal - GETS STEP 4 AND A DIFFERENT SHAPE, because
+// it cannot move an answer today and no honest case can pretend otherwise: every field whose
+// emitter belongs to a P4a family is also a field the applier cannot supply whole (its storage
+// is a frontend pointer), so that conjunct is DOMINATED and the mask is identical either way.
+// Step 4 moves the signal for real and pins the domination instead, so that the day a P4a row
+// gains a twin the case goes red and says what to write - the same day PipeFill.cpp's
+// NoP4aFamilyFieldIsWhollySupplied() static_assert fires.
+TEST_F(FieldOwnershipTest, TheResidualFillsSuppliedMemoReKeysOnEveryInputThatMovesAnAnswer) {
+    constexpr Uint64 kNoSubsystems = 0;
+    constexpr Uint64 kEverySubsystem = ~Uint64{0};
+
+    // 1. THE PUSH MASK. create_render_state carries GetRenderStateParameters whole and the
+    //    applier writes it without deriving, so at a mask that carries the render-state bit the
+    //    fill skips it - and at 0, which is what a unit lane runs at (Features.PipePush defaults
+    //    to 0), nothing is emitted and every field is pulled.
+    EXPECT_FALSE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetRenderStateParameters,
+                                                 kNoSubsystems, true, false));
+    EXPECT_TRUE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetRenderStateParameters,
+                                                kEverySubsystem, true, false));
+    EXPECT_FALSE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetRenderStateParameters,
+                                                 kNoSubsystems, true, false))
+        << "the memo answered the previous mask: MOBILEGL_PIPE_PUSH is not in its key, and a "
+           "per-subsystem A/B would then fill from the wrong subsystem set";
+
+    // 2. THE DERIVATION LATCH. GetViewport reaches PipeInputs only through
+    //    MGPipeDeriveRenderStateFields, so a build whose derivation is a stub must keep PULLING
+    //    it - skipping it there leaves the mirror unwritten and the backend reading a default.
+    EXPECT_TRUE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetViewport, kEverySubsystem,
+                                                true, false));
+    EXPECT_FALSE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetViewport, kEverySubsystem,
+                                                 false, false))
+        << "the memo answered the previous latch: ApplierDerivesRenderStateFields is not in its key";
+
+    // 3. P5c rv's WIRE GATE (CONTRACT-P5C.md §5.3). set_context_values has no producer without a
+    //    live wire, so its eight value-class fields keep being pulled under monolith - G1's
+    //    byte-for-byte rule - and are skipped only when the record really crosses.
+    EXPECT_FALSE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetActiveTextureUnit,
+                                                 kEverySubsystem, true, false));
+    EXPECT_TRUE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetActiveTextureUnit,
+                                                kEverySubsystem, true, true))
+        << "the memo answered the previous wire state: contextValuesWireLive is not in its key, "
+           "and the emission's half of the gate and the fill's half would then disagree";
+
+    // 4. THE P4a CONSUMER SIGNAL, which is in the key and is DOMINATED, so this step pins the
+    //    domination rather than pretending to move an answer. Under monolith the signal IS "did
+    //    a backend register the resource op table" (P4aFamilyHasItsConsumer, PipeFill.cpp), and
+    //    MG_Config::Transport is a constexpr Monolith in every lane but a split one - so the
+    //    signal really moves here, at a mask that carries all four P4a bits, which is the only
+    //    mask at which the fill reads it at all.
+    if (MG_Config::Transport == MG_Config::TransportMode::Monolith) {
+        const MGPipeResourceOps* const savedOps = MGPipeGetResourceOps();
+        MGPipeResourceOps ops{};
+        MGPipeFieldMask withConsumer{};
+        MGPipeFieldMask withoutConsumer{};
+
+        // An EMPTY table is enough: the predicate only asks whether ONE IS REGISTERED, which is
+        // how MG_Test/Pipe arms this subsystem everywhere else.
+        MGPipeSetResourceOps(&ops);
+        ASSERT_NE(MGPipeGetResourceOps(), nullptr)
+            << "the fixture did not move the signal it names, so this step observes nothing";
+        for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
+            if (MGPipeResidualFillSuppliesField(static_cast<MGPipeInputField>(i), kEverySubsystem,
+                                                true, true)) {
+                withConsumer.Words[i / 64] |= (Uint64{1} << (i % 64));
+            }
+        }
+
+        MGPipeSetResourceOps(nullptr);
+        ASSERT_EQ(MGPipeGetResourceOps(), nullptr);
+        for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
+            if (MGPipeResidualFillSuppliesField(static_cast<MGPipeInputField>(i), kEverySubsystem,
+                                                true, true)) {
+                withoutConsumer.Words[i / 64] |= (Uint64{1} << (i % 64));
+            }
+        }
+        MGPipeSetResourceOps(savedOps);
+
+        // THE NAMED ROW, both ways: GetFramebufferBindingSlot is emitted by set_framebuffer_state
+        // and so rides the framebuffer family's consumer gate - and is pulled regardless, because
+        // its storage is a BindingSlot<FramebufferObject> no payload can carry.
+        EXPECT_FALSE(MGPipeFieldMaskHas(withConsumer, MGPipeInputField::GetFramebufferBindingSlot));
+        EXPECT_FALSE(
+            MGPipeFieldMaskHas(withoutConsumer, MGPipeInputField::GetFramebufferBindingSlot));
+
+        for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
+            const auto field = static_cast<MGPipeInputField>(i);
+            EXPECT_EQ(MGPipeFieldMaskHas(withConsumer, field),
+                      MGPipeFieldMaskHas(withoutConsumer, field))
+                << kMGPipeInputFieldNames[i]
+                << "'s supplied answer moved with the P4a consumer signal. That is CORRECT "
+                   "behaviour and this assertion is a trip wire, not a defect report: the "
+                   "conjunct stopped being dominated, so the memo's fourth key input is now "
+                   "observable and needs the move-it-and-read-it-back pair steps 1-3 give the "
+                   "other three - under split through CapsMirrorInstance().Adopt() with and "
+                   "without kMGPipeSubsystemResources in the CallMask, as "
+                   "SanityTest.ACapsMaskWithoutTheResourceFamilyEmitsNothingAndCountsTheRefusal "
+                   "already does. Rewrite this step into that pair; PipeFill.cpp's "
+                   "NoP4aFamilyFieldIsWhollySupplied() static_assert fires on the same change";
+        }
+    }
+}
 
 #if MOBILEGL_BUILD_DISAGGREGATED
 

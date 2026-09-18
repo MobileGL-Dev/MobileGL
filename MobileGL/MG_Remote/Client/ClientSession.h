@@ -84,7 +84,7 @@ namespace MobileGL::MG_Remote::Client {
 
         // Teardown order matters and is table 3's fourth column: publish and let the server
         // drain, Doorbell::Kill() (the ONLY thing that wakes an apply thread parked on
-        // kWaitForever, Doorbell.h:211-221), then join, and only then release anything an
+        // kWaitForever, CondVarDoorbell::Kill), then join, and only then release anything an
         // emitter owns - a tail still referenced by an unapplied record is a use-after-free
         // the join is what prevents.
         void Stop();
@@ -103,7 +103,7 @@ namespace MobileGL::MG_Remote::Client {
         // this and refuses `replySize != DstSize` by name rather than trust the copy.
         //
         // Waiting is spin(MOBILEGL_IPC_SPIN_US) then park, through Doorbell::Wait, with
-        // producerParked set before blocking - the shape Doorbell.h:121 already implements.
+        // producerParked set before blocking - the shape Doorbell::Wait already implements.
         Uint64 EmitAndWait(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
                            const void* varTail, Uint64 varTailBytes, void* replyOut,
                            Uint64 replyBytes, Int32* statusOut, Uint64* replySizeOut = nullptr);

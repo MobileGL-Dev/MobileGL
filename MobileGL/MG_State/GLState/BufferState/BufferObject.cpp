@@ -39,9 +39,12 @@ namespace MobileGL::MG_State::GLState {
         // the same shape as Fatal{PipeLegacyMemosDisabled} - so a cleared subsystem bit 7 no
         // longer leaves the arm silently readable. Client-thread callers (the GL thread's
         // own state) are unaffected.
-        void RefuseLegacyBufferArmFromApplyThread(const char* accessor) {
-            if (!MG_Remote::Client::PersistentMapTracker::PushIsArmed()) return;
-            if (!MG_Remote::Client::PersistentMapTracker::OnServerRole()) return;
+        // The refusal's BODY, split out from its two probes (P5d round 3, package D). A caller
+        // that has already asked "am I the server role" for its own reasons -
+        // SyncPersistentMappedRange does, one line later - calls this and pays for
+        // ServerLoop::OnApplyThread() once instead of twice. It is a Fatal, so it never
+        // returns; the probes live in RefuseLegacyBufferArmFromApplyThread below.
+        [[noreturn]] void FatalLegacyBufferArmFromApplyThread(const char* accessor) {
             MGLOG_F("MGPipe: Fatal{RoleViolation, \"buffer-legacy-arm\"} - the apply thread "
                     "called BufferObject::%s on a frontend object. With an active transport "
                     "the server reads the applier's resource record and its own staged shadow; "
@@ -49,6 +52,17 @@ namespace MobileGL::MG_State::GLState {
                     "is monolith-only",
                     accessor);
             std::abort();
+        }
+
+        // The accessors' own guard: two loads and two branches on the client thread, which is
+        // where MappedData/IsMapped/GetChangeSerial/HasDefinedContent are called from per draw
+        // (IsLivePersistentMap reads two of them for every live map). PushIsArmed() is a read
+        // of MG_Config::Transport and OnServerRole() is now one relaxed load of the apply
+        // thread's key (ServerLoop.h), so the monolith answer costs a load each.
+        void RefuseLegacyBufferArmFromApplyThread(const char* accessor) {
+            if (!MG_Remote::Client::PersistentMapTracker::PushIsArmed()) return;
+            if (!MG_Remote::Client::PersistentMapTracker::OnServerRole()) return;
+            FatalLegacyBufferArmFromApplyThread(accessor);
         }
 #endif
     }
@@ -400,14 +414,27 @@ namespace MobileGL::MG_State::GLState {
 
     void BufferObject::SyncPersistentMappedRange() {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // P5c (hd): the named refusal comes FIRST - the silent return below used to let a
+        // P5c (hd): the named refusal comes FIRST - a silent return here used to let a
         // server-side caller slip through with one MGLOG_D's worth of evidence (B3).
-        RefuseLegacyBufferArmFromApplyThread("SyncPersistentMappedRange");
+        //
+        // ONE ROLE PROBE, NOT TWO (P5d round 3, package D). This used to call
+        // RefuseLegacyBufferArmFromApplyThread and then re-ask PushIsArmed()/OnServerRole()
+        // for the early-out below - the same two questions, answered twice on the same line of
+        // execution, on a function the draw path reaches per mapped buffer. The refusal's
+        // condition and the early-out's condition were already IDENTICAL, which is why the
+        // early-out's `return` was unreachable: with the push armed, the apply thread aborts
+        // in the refusal and never gets there. Folding them keeps the refusal first and drops
+        // the duplicate probe rather than the guard.
+        //
         // Split's client pre-verb hook publishes these bytes. The retained backend sync
         // sites must do nothing on the apply thread: re-entering this producer there would
-        // overwrite the server shadow through the monolith adapter without crossing the wire.
+        // overwrite the server shadow through the monolith adapter without crossing the wire -
+        // and "do nothing" is spelled Fatal, not `return`, because a server-side caller here
+        // is a role violation and not a shape the design tolerates.
         if (MG_Remote::Client::PersistentMapTracker::PushIsArmed()) {
-            if (MG_Remote::Client::PersistentMapTracker::OnServerRole()) return;
+            if (MG_Remote::Client::PersistentMapTracker::OnServerRole()) {
+                FatalLegacyBufferArmFromApplyThread("SyncPersistentMappedRange");
+            }
             MG_Remote::Client::PersistentMapTracker::Instance().PushBlocksFor(*this);
             return;
         }
@@ -966,6 +993,16 @@ namespace MobileGL::MG_State::GLState {
 #endif
         return m_resource.Bytes();
     }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    SizeT BufferObject::ShadowAllocationBytes() const {
+        // The extent of the very pointer MappedData() hands out, read by the same caller
+        // (the tracker's registration) on the same thread: the same rule-E surface, the
+        // same refusal.
+        RefuseLegacyBufferArmFromApplyThread("ShadowAllocationBytes");
+        return m_resource.ShadowAllocationBytes();
+    }
+#endif
 
     Bool BufferObject::IsBackendPersistentMapped() const {
         return m_resource.IsGpuResident();

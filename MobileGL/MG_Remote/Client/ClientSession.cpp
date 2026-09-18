@@ -748,7 +748,7 @@ namespace MobileGL::MG_Remote::Client {
         }
 
         // 2. Doorbell::Kill(). THE ONLY thing that can wake an apply thread parked on
-        //    kWaitForever (Doorbell.h:211-221): a Notify is consumed by one Park, after which
+        //    kWaitForever (CondVarDoorbell::Kill): a Notify is consumed by one Park, after which
         //    Doorbell::Wait re-tests a condition nothing published, finds the bell alive and
         //    parks again, forever. InProcessChannel::Close kills both bells.
         if (m_transport != nullptr) {
@@ -896,7 +896,24 @@ namespace MobileGL::MG_Remote::Client {
         // the number of round trips between them changes. Set / CSO / object records carry
         // their whole value in the payload and are consumed at the next (waited) sync, which
         // the in-order ring guarantees precedes that sync's apply.
-        if (!ownsReplySlot && MG_Config::Ipc.BatchWaits != 0) {
+        //
+        // WITH ONE NAMED EXCEPTION, FOUND BY ITS OWN FATAL (P5d round 3): generate_mipmap is
+        // catalogued kCtxObject, but its sink is the backend's GenerateMipmap, which reads
+        // MGB_CTX->GetActiveTextureUnit() and the unit's binding slot - residual inputs whose
+        // freshness is the CLIENT's verb serial. Published without a wait, the record sits in
+        // the ring while this thread runs the next verb's MGPipeValidateForVerb, which moves
+        // that serial and withdraws the server stamp; the apply thread then reads the unit
+        // stale and aborts Fatal{UnmigratedPipeInput, "GetActiveTextureUnit@<next verb>"}
+        // (F1WireScenario.GenerateMipmap*Pixels, reproduced on the gate tree once the round-3
+        // spin no longer read the clock). So it waits, exactly as the four stamping verbs
+        // do. The rule this encodes: a record may skip its wait only if its apply reads
+        // nothing the residual fill writes - the value carried in the payload is the whole
+        // input. No other kCtxObject row has a backend body behind it that reads MGB_CTX
+        // (set_texture_params, resource_subdata, resource_readback and get_texture_image
+        // own reply slots and wait anyway; the resource_* transfers and object_death resolve
+        // by handle).
+        if (!ownsReplySlot && MG_Config::Ipc.BatchWaits != 0 &&
+            op != MG_Pipe::MGPWireOp::GenerateMipmap) {
             const MG_Pipe::MGPipeCallClass callClass = MG_Pipe::MGPipeCallClassFor(op);
             if (callClass == MG_Pipe::kCtxState || callClass == MG_Pipe::kCtxCso ||
                 callClass == MG_Pipe::kCtxObject) {
@@ -996,13 +1013,21 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     void ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(const char* surface) {
-        if (Server::ServerLoop::OnApplyThread()) return; // the applier owns the block inside a verb
+        // THE CHAIN IS A CONJUNCTION, SO ITS ORDER IS FREE - AND IT IS ORDERED CHEAPEST-FIRST
+        // (P5d round 3, package D). Every line below is a pure predicate whose only effect is
+        // "no violation, go home"; the Fatal fires on the AND of all of them, so reordering
+        // cannot change which touches abort. It changes only what a touch that does NOT abort
+        // pays, and this guard sits on the per-verb fill path (PipeFill.cpp:542, :1951, :2789
+        // - MGPipeValidateForVerb is 4.11% self / 10.9% inclusive of the client thread), so
+        // "what it costs to answer no" is the whole of its cost in a healthy process.
+        //
+        // The two config reads come first because they are the two answers that are constant
+        // for the life of the process and true for nearly every process that runs this code:
+        // a monolith build never has a role split at all, and MOBILEGL_IPC_BATCH_WAITS
+        // defaults to 1, which retires this guard by design (see its note below). Only after
+        // both miss do we pay for a role probe, two singleton reads, a shared atomic and the
+        // thread_local at the end.
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
-        if (!ClientSessionInstance().Started()) return; // the bring-up window pre-dates the roles
-        // MOBILEGL_IPC_VERB_BARRIER=0 is R-1's NEGATIVE CONTROL: the single-writer rule is off
-        // by the operator's own hand there, and EmitAndWait's Fatal{BarrierViolation} owns the
-        // red. Firing here instead would pre-empt the control's evidence line.
-        if (!ClientSessionInstance().BarrierArmed()) return;
         // MOBILEGL_IPC_BATCH_WAITS=1 makes "the fill runs while the apply thread applies an
         // earlier value record" the INTENDED shape: the fill writes only fields no record
         // supplies (the wire-live skips are the same answer the emitters use), the applier
@@ -1010,7 +1035,16 @@ namespace MobileGL::MG_Remote::Client {
         // pulled reads fenced. This guard exists for the model where that is not true, so
         // it stands only while the batch is off.
         if (MG_Config::Ipc.BatchWaits != 0) return;
+        if (Server::ServerLoop::OnApplyThread()) return; // the applier owns the block inside a verb
+        if (!ClientSessionInstance().Started()) return; // the bring-up window pre-dates the roles
+        // MOBILEGL_IPC_VERB_BARRIER=0 is R-1's NEGATIVE CONTROL: the single-writer rule is off
+        // by the operator's own hand there, and EmitAndWait's Fatal{BarrierViolation} owns the
+        // red. Firing here instead would pre-empt the control's evidence line.
+        if (!ClientSessionInstance().BarrierArmed()) return;
         if (!ApplyThreadIsInsideApplier()) return;
+        // LAST, because it is the only thread_local left in the chain: an emutls call per
+        // access in a shared library, and it must stay thread-local (see InBarrierWait's note
+        // above - a second GL thread would otherwise read the first one's wait as its own).
         if (InBarrierWait()) return;
         MGLOG_F("MGPipe: Fatal{RoleViolation, \"gPipeInputs\"} - the GL thread touched gPipeInputs "
                 "(%s) while the apply thread was inside the applier and this thread was not in a "
@@ -1133,8 +1167,9 @@ namespace MobileGL::MG_Remote::Client {
         MGLOG_I("MG_Remote client: wire ledger: maxrec=%llu maxrecop=%s cap=%llu (%llu.%llu%% of "
                 "RingProducer::MaxRecordBytes, half of a %llu byte SEG_CMD) cmdbytes=%llu "
                 "ringwraps=%llu ringpads=%llu "
-                "ringwaits=%llu emitseq=%llu - R-10's proof obligation and R-9's producer "
-                "readings, published from the session that produced them",
+                "ringwaits=%llu emitseq=%llu cliwait=%llu clipark=%llu - R-10's proof obligation, "
+                "R-9's producer readings and P5d round 3's client wait pair, published from the "
+                "session that produced them",
                 static_cast<unsigned long long>(maxRecord), m_encoder.MaxRecordOpName(),
                 static_cast<unsigned long long>(cap),
                 static_cast<unsigned long long>(permille / 10),
@@ -1144,7 +1179,13 @@ namespace MobileGL::MG_Remote::Client {
                 static_cast<unsigned long long>(m_encoder.CmdWraps()),
                 static_cast<unsigned long long>(m_encoder.CmdWrapPads()),
                 static_cast<unsigned long long>(m_encoder.StageReclaimWaits()),
-                static_cast<unsigned long long>(m_encoder.EmitSeq()));
+                static_cast<unsigned long long>(m_encoder.EmitSeq()),
+                // The same pair the summary line's wait[] carries, on the channel that exists
+                // in EVERY split private log rather than in the two counting lanes: the round-3
+                // profile runs did not set MOBILEGL_PIPE_STATS either, and "did the barrier spin
+                // or did it park" is the question their logs have to be able to answer.
+                static_cast<unsigned long long>(m_producer.Waits()),
+                static_cast<unsigned long long>(m_producer.Parks()));
     }
 
 #undef MGP5_C0_STUB

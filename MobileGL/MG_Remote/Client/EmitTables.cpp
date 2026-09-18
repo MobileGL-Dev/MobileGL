@@ -1003,6 +1003,17 @@ namespace MobileGL::MG_Remote::Client {
                 MG_Util::PipeStats::PublishGauge(Gauge::RingWrapPads, encoder.CmdWrapPads());
                 MG_Util::PipeStats::PublishGauge(Gauge::RingWaits, encoder.StageReclaimWaits());
 
+                // P5d round 3's wait ledger, CLIENT HALF, and it rides this frame boundary for
+                // the same two reasons the five above it do: the producer keeps both as run
+                // totals, so it is two relaxed stores per frame rather than two per wait, and
+                // publishing before the present record means the first summary line of a run
+                // carries real numbers instead of two zeroes that mean "not published yet".
+                // The SERVER half is published by the apply thread from its own loop - rule E
+                // does not let this thread read ServerLoop's counters.
+                const Transport::SessionProducer& producer = session.Producer();
+                MG_Util::PipeStats::PublishGauge(Gauge::ClientWaits, producer.Waits());
+                MG_Util::PipeStats::PublishGauge(Gauge::ClientParks, producer.Parks());
+
                 // AND THE ROW, WHENEVER THE MAXIMUM MOVES. The summary line can carry the
                 // number but not the name - MG_Util is below MG_Remote and has no WireOpName -
                 // and the name is the actionable half: R-10 makes the integrator choose between

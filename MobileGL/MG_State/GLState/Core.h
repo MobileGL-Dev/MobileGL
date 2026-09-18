@@ -140,6 +140,14 @@ namespace MobileGL {
                     m_textureState.NoteUnitTouched(unit, bindingChanged);
                 }
                 Int GetMaxTouchedTextureUnit() const { return m_textureState.GetMaxTouchedUnit(); }
+#if MOBILEGL_PIPE_PUSH
+                // The IMAGE-unit high-water mark, which is a different namespace from the
+                // texture-unit one above - see TextureState::NoteImageUnitTouched for why it is a
+                // second mark and why it only grows. Push builds only, so the pull build's
+                // GLContext is untouched (G1).
+                void NoteImageUnitTouched(Int unit) { m_textureState.NoteImageUnitTouched(unit); }
+                Int GetMaxTouchedImageUnit() const { return m_textureState.GetMaxTouchedImageUnit(); }
+#endif
                 // Monotonic counter bumped whenever a texture bind/unbind/delete changes which
                 // texture is bound at a unit; lets a backend skip re-resolving an unchanged
                 // per-draw sampled-texture set.

@@ -530,6 +530,18 @@ namespace MobileGL::MG_Util::PipeStats {
         line += " ringwraps=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWraps)]));
         line += " ringpads=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWrapPads)]));
         line += " ringwaits=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWaits)]));
+        // P5d round 3's wait ledger, on a bracket of its own so one grep reads the whole
+        // family, and RUN TOTALS like the gauges above it for the same reason: both sides
+        // publish a monotone counter of their own, and a windowed difference of two counters
+        // published by two threads at two different moments is not a quantity either of them
+        // ever held. `srv`/`cli` are entries into Doorbell::Wait; `srvpark`/`clipark` are the
+        // subset that stopped spinning and blocked. Read them as a ratio: parks near zero means
+        // the spin budget is covering the handoff, parks tracking the waits means it is not and
+        // every verb is paying a futex round trip.
+        line += "] wait[srv=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ServerWaits)]));
+        line += " srvpark=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ServerParks)]));
+        line += " cli=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientWaits)]));
+        line += " clipark=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientParks)]));
 #endif
         line += "] gates[";
         for (Uint32 i = 0; i < kGateCount; ++i) {
@@ -597,7 +609,16 @@ namespace MobileGL::MG_Util::PipeStats {
         json += "    \"ring-wrap-pads\": " +
                 std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWrapPads)])) + ",\n";
         json += "    \"ring-waits\": " +
-                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWaits)])) + "\n";
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWaits)])) + ",\n";
+        // The wait ledger under its long names, same run totals as the summary line's wait[].
+        json += "    \"server-waits\": " +
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ServerWaits)])) + ",\n";
+        json += "    \"server-parks\": " +
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ServerParks)])) + ",\n";
+        json += "    \"client-waits\": " +
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientWaits)])) + ",\n";
+        json += "    \"client-parks\": " +
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientParks)])) + "\n";
 #endif
         json += "  },\n  \"cmd-bytes-per-draw-histogram\": [";
         for (Uint32 i = 0; i < kPayloadHistogramBuckets; ++i) {

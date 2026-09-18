@@ -1847,6 +1847,71 @@ MGL_BUFFER_GUARD_TEST(BufferSyncPersistentMappedRangeFromTheApplyThreadIsFatalBy
 MGL_BUFFER_GUARD_TEST(BufferHasDefinedContentFromTheApplyThreadIsFatalByName, 707, (void)buffer.HasDefinedContent())
 #undef MGL_BUFFER_GUARD_TEST
 
+// P5d round 3 (package D): the two NAMED EXEMPTION scopes of CONTRACT-P5C §3.1 / §5.4 stopped
+// keeping their depth in a thread_local and now count ONLY while ServerLoop::OnApplyThread() is
+// true (SlotAllocator.cpp). The claim that makes that legal is "the apply-thread guard is the
+// counter's only reader, so a depth kept on any other thread cannot change an answer" - and
+// these three cases are that claim in executable form. They are the red-once for the change:
+//
+//   (a) drop the `if (m_counted)` from the constructor (or make it unconditional again on a
+//       thread that is not the apply thread) and (c) goes red - a GL-thread scope would start
+//       exempting the apply thread, which is exactly the leak the thread_local used to prevent;
+//   (b) drop the increment altogether and (a) goes red - the exemption stops exempting and
+//       the debt's own sites (DirectGLES' HandleOf probes) abort the server;
+//   (c) drop the guard's `MGPipeReverseAnnouncementScope::ActiveOnApplyThread()` /
+//       `FrontendKeyedRegistryScope::ActiveOnApplyThread()` rows and (b) - the control - stops
+//       being the only aborting arm.
+TEST(RemoteGuards, AnAllocatorProbeFromTheApplyThreadOutsideEveryScopeIsFatalByName) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        Srv::ServerLoopInstance().RunOnApplyThread(
+            +[](void*) -> MobileGLResult {
+                MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("FindByLifetimeId");
+                return MOBILEGL_OK;
+            },
+            nullptr);
+        ClientSessionInstance().Stop();
+    });
+    ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
+}
+
+TEST(RemoteGuards, AnAllocatorProbeInsideAnExemptionScopeOnTheApplyThreadIsAllowed) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        Srv::ServerLoopInstance().RunOnApplyThread(
+            +[](void*) -> MobileGLResult {
+                const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
+                MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("FindByLifetimeId");
+                const MG_Pipe::MGPipeReverseAnnouncementScope reverseAnnouncement;
+                MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("Acquire");
+                return MOBILEGL_OK;
+            },
+            nullptr);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+// THE ONE THAT PINS THE SINGLE-WRITER ARGUMENT. The scope is open on the GL thread for the
+// whole of the posted request; the apply thread's probe must still abort, because the exemption
+// belongs to the thread that entered the scope and never to another one. With the depth kept in
+// a plain counter that every thread incremented, this case would go green - and a real
+// apply-thread violation would be silently exempted for as long as any GL thread held a scope.
+TEST(RemoteGuards, AnExemptionScopeHeldOnTheGLThreadDoesNotExemptTheApplyThread) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
+        Srv::ServerLoopInstance().RunOnApplyThread(
+            +[](void*) -> MobileGLResult {
+                MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("FindByLifetimeId");
+                return MOBILEGL_OK;
+            },
+            nullptr);
+        ClientSessionInstance().Stop();
+    });
+    ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
+}
+
 TEST(RemoteGuards, CapsMirrorFallbackWithNoServerBackendIsFatalByName) {
     const auto child = RunInChild([] {
         MG_Config::Transport = MG_Config::TransportMode::InProcess;

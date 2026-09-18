@@ -151,7 +151,7 @@ namespace MobileGL::MG_Remote::Transport {
         }
 
         // Publish, THEN ring - the same order as the forward direction, and for
-        // the same reason (Doorbell.h:186-193: the fence only orders what
+        // the same reason (NotifyIfParked's PRECONDITION: the fence only orders what
         // precedes it, so ringing first reopens the lost-wakeup window).
         void PublishAndNotify(Doorbell& clientBell, std::atomic<std::uint32_t>& producerParked) {
             m_producer.Publish();

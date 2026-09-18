@@ -181,13 +181,31 @@ namespace MobileGL::MG_Pipe {
     // ONE read-only lifetime-id probe stays legal; the scope is the debt's measurable,
     // greppable form, and it retires with P4b's emission (Espryt) and P7's server-side
     // binding table (Magma). Every other apply-thread allocator access stays Fatal.
+    //
+    // THE DEPTH IS COUNTED ONLY ON THE APPLY THREAD (P5d round 3, package D). The counter's
+    // only reader is MGPipeRefuseAllocatorFromApplyThread, which returns before it looks unless
+    // ServerLoop::OnApplyThread() is true, so a depth kept on any OTHER thread could never
+    // change an answer - it was pure cost. The query is called ActiveOnApplyThread() and not
+    // Active() BECAUSE OF THAT (review round 3): a name that promised "is a scope open" would
+    // now be quietly answering "is a scope open ON THE APPLY THREAD", and the next reader to
+    // come along - a P4b/P7 probe deciding on the GL thread whether to emit a record - would
+    // read a truthful-looking false and take the wrong branch with nothing to warn it. The name
+    // carries the precondition so a second reader has to notice it. m_counted remembers what the constructor decided so
+    // the destructor undoes exactly what the constructor did; asking the predicate twice would
+    // leak a count for a scope that outlived the apply thread. On the GL thread (and in every
+    // monolith process) both ends are now one inlined predicate and a branch instead of an
+    // emutls call, which is where 32.7% of the monolith GL thread's __emutls_get_address - its
+    // top symbol at 7.7% - was going.
     class MGPipeReverseAnnouncementScope {
     public:
         MGPipeReverseAnnouncementScope();
         ~MGPipeReverseAnnouncementScope();
         MGPipeReverseAnnouncementScope(const MGPipeReverseAnnouncementScope&) = delete;
         MGPipeReverseAnnouncementScope& operator=(const MGPipeReverseAnnouncementScope&) = delete;
-        static Bool Active();
+        static Bool ActiveOnApplyThread();
+
+    private:
+        Bool m_counted;
     };
 
     // The SECOND named exemption family (CONTRACT-P5C §5.4): the frontend-keyed twin
@@ -197,13 +215,21 @@ namespace MobileGL::MG_Pipe {
     // P3b/P4b's, not P5c's. A probe inside this scope stays a read-only, barrier-held debt;
     // wrapping a NEW site in it is the greppable act of naming that debt, and an unwrapped
     // probe from the apply thread is still Fatal{RoleViolation, "MGPipeSlots"}.
+    //
+    // Apply-thread-only depth, and m_counted, for MGPipeReverseAnnouncementScope's reasons
+    // above. This is the scope that pays: it is constructed at ~20 sites in DirectGLES.cpp,
+    // several of them inside StateBackendObjectRegistry::HandleOf on the per-draw path, and
+    // its ctor/dtor alone were 18.75% + 13.95% of the monolith GL thread's emutls samples.
     class MGPipeFrontendKeyedRegistryScope {
     public:
         MGPipeFrontendKeyedRegistryScope();
         ~MGPipeFrontendKeyedRegistryScope();
         MGPipeFrontendKeyedRegistryScope(const MGPipeFrontendKeyedRegistryScope&) = delete;
         MGPipeFrontendKeyedRegistryScope& operator=(const MGPipeFrontendKeyedRegistryScope&) = delete;
-        static Bool Active();
+        static Bool ActiveOnApplyThread();
+
+    private:
+        Bool m_counted;
     };
 #endif
 } // namespace MobileGL::MG_Pipe

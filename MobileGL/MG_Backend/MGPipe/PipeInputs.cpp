@@ -87,6 +87,58 @@ namespace MobileGL::MG_Pipe {
             const MGPipeVerbClass verbClass = kMGPipeVerbClass[verbIndex];
             return MGPipeFieldMaskHas(kMGPipeClassFieldMask[static_cast<SizeT>(verbClass)], field);
         }
+
+        // ---- the same verdict, per verb CLASS, as a constant (P5d round 3, package C) ----
+        //
+        // THE STAMP's ANSWER IS A CONSTANT OF THE VERB CLASS AND OF NOTHING ELSE. Both halves of
+        // `answerable` below read constexpr tables only - kMGPipeFieldOwnership, kMGPipeVerbClass
+        // and kMGPipeClassFieldMask - so the 63-field loop was recomputing, at every verb on the
+        // apply thread, a table the compiler can build once. The 2026-09-17 inproc profile put
+        // MGPipeServerStampVerbBoundary at 1.1% self of the apply thread (Minecraft 26.3-rc-3,
+        // ~852 draws/frame), and every cycle taken there is a cycle the lockstep client waits for.
+        //
+        // IT IS A MASK, NOT A BOOL ARRAY, so the stamp loop's body stays a shift and a store with
+        // no branch: FilledGen[i] = serial & -bit, which is `serial` for an answerable field and
+        // the WITHDRAWAL 0 for every other. The verdict itself is unchanged, and it is still
+        // computed by the one expression argued at the stamp - it just runs at compile time.
+        constexpr MGPipeFieldMask AnswerableMaskForClass(MGPipeVerbClass verbClass) {
+            MGPipeFieldMask mask{};
+            for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
+                const auto field = static_cast<MGPipeInputField>(i);
+                const MGPipeFieldOwnership ownership = kMGPipeFieldOwnership[i];
+                const Bool answerable = (ownership == MGPipeFieldOwnership::kRecordSupplied ||
+                                         ownership == MGPipeFieldOwnership::kApplierDerived) &&
+                                        MGPipeFieldMaskHas(
+                                            kMGPipeClassFieldMask[static_cast<SizeT>(verbClass)], field);
+                if (answerable) mask.Words[i / 64] |= (Uint64{1} << (i % 64));
+            }
+            return mask;
+        }
+
+        struct AnswerableMaskTable {
+            MGPipeFieldMask ByClass[kMGPipeVerbClassCount];
+        };
+
+        constexpr AnswerableMaskTable MakeAnswerableMaskTable() {
+            AnswerableMaskTable table{};
+            for (SizeT i = 0; i < kMGPipeVerbClassCount; ++i) {
+                table.ByClass[i] = AnswerableMaskForClass(static_cast<MGPipeVerbClass>(i));
+            }
+            return table;
+        }
+
+        constexpr AnswerableMaskTable kAnswerableByClass = MakeAnswerableMaskTable();
+
+        // A verb id outside the table answers NOTHING, which is exactly what FieldIsInVerbClass
+        // said for it (`verbIndex >= kMGPipeVerbCount` -> false for every field) and therefore
+        // what the stamp said: all 63 withdrawn, every read the poison Fatal.
+        constexpr MGPipeFieldMask kNoFieldIsAnswerable{};
+
+        const MGPipeFieldMask& AnswerableMaskForVerb(MGPipeVerb verb) {
+            const SizeT verbIndex = static_cast<SizeT>(verb);
+            if (verbIndex >= kMGPipeVerbCount) return kNoFieldIsAnswerable;
+            return kAnswerableByClass.ByClass[static_cast<SizeT>(kMGPipeVerbClass[verbIndex])];
+        }
     } // namespace
 
     // The third door into the storage (see PipeInputs.h). It exists because neither of the
@@ -108,23 +160,25 @@ namespace MobileGL::MG_Pipe {
         // BOTH branches of MGPipeInputFieldIsFresh, so the zeroing below is a real withdrawal
         // rather than a stamp that happens to be old.
         ++filled.CurrentVerbSerial;
+        // STAMPED: in this verb's class AND answerable out of the records the applier has
+        // already applied. WITHDRAWN (0): everything else - which is BARRIER-PULLED, FATAL,
+        // and anything the verb's own may-read table says this verb does not read.
+        //
+        // The withdrawal is the load-bearing half of the rule: the client's residual fill
+        // stamped all 63 fields at its own verb boundary, so without it every field would
+        // read fresh on the server, `rsp` would be identically 0 and the exit gate would be
+        // decoration. It also cancels the sticky exemption for free - generated/
+        // PipeFilled.inc tests "never filled" BEFORE it tests sticky, so 0 wins over
+        // kMGPipeInputFieldSticky without a line of the generated file changing.
+        //
+        // THE VERDICT IS THE SAME EXPRESSION; it is just precomputed per verb class
+        // (AnswerableMaskForClass above) instead of re-derived 63 times per verb, so what is
+        // left here is a table lookup and a branch-free fill.
+        const MGPipeFieldMask& answerable = AnswerableMaskForVerb(verb);
+        const Uint64 serial = filled.CurrentVerbSerial;
         for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
-            const auto field = static_cast<MGPipeInputField>(i);
-            const MGPipeFieldOwnership ownership = kMGPipeFieldOwnership[i];
-            // STAMPED: in this verb's class AND answerable out of the records the applier has
-            // already applied. WITHDRAWN (0): everything else - which is BARRIER-PULLED, FATAL,
-            // and anything the verb's own may-read table says this verb does not read.
-            //
-            // The withdrawal is the load-bearing half of the rule: the client's residual fill
-            // stamped all 63 fields at its own verb boundary, so without it every field would
-            // read fresh on the server, `rsp` would be identically 0 and the exit gate would be
-            // decoration. It also cancels the sticky exemption for free - generated/
-            // PipeFilled.inc tests "never filled" BEFORE it tests sticky, so 0 wins over
-            // kMGPipeInputFieldSticky without a line of the generated file changing.
-            const Bool answerable = (ownership == MGPipeFieldOwnership::kRecordSupplied ||
-                                     ownership == MGPipeFieldOwnership::kApplierDerived) &&
-                                    FieldIsInVerbClass(field, verb);
-            filled.FilledGen[i] = answerable ? filled.CurrentVerbSerial : 0;
+            const Uint64 bit = (answerable.Words[i / 64] >> (i % 64)) & Uint64{1};
+            filled.FilledGen[i] = serial & (Uint64{0} - bit);
         }
         MGPipeStampAccess::SetServerStamped(inputs, true);
     }

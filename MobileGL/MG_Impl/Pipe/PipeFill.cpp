@@ -361,7 +361,16 @@ namespace MobileGL::MG_Pipe {
         // An empty value never clears an omission a test armed through MGPipeSetPoisonOmission.
         void ParsePoisonOmissionKnob() {
             const String& knob = MG_Config::Features.PipePoisonOmit;
-            if (g_omissionKnobParsed && knob == g_omissionKnobValue) return;
+            // THE UNSET KNOB IS TWO LENGTH LOADS AND A BRANCH, inline, and that is the whole
+            // change (P5d r3, package C): this runs at every verb - 852 draws a frame on the
+            // profiled workload - and `knob == g_omissionKnobValue` is an out-of-line String
+            // compare even when both sides are empty, which is every shipping configuration.
+            // Sizes first, contents only when a non-empty value is involved; the re-parse
+            // condition is unchanged (the value differing from what the last parse latched).
+            if (g_omissionKnobParsed && knob.size() == g_omissionKnobValue.size() &&
+                (knob.empty() || knob == g_omissionKnobValue)) {
+                return;
+            }
             g_omissionKnobParsed = true;
             g_omissionKnobValue = knob;
             if (knob.empty()) return;
@@ -2355,6 +2364,168 @@ namespace MobileGL::MG_Pipe {
             return answer;
         }
 
+        // ---- the residual fill's SUPPLIED SET, computed once per environment (P5d r3, C) ----
+        //
+        // WHY THIS CACHE EXISTS, AND WHAT IT DOES NOT CHANGE. Step 4 of the validate point asks,
+        // for every one of the 63 fields and at EVERY verb, whether an emitted call already
+        // supplied it. The question is the seven-term conjunction spelled below - and it is still
+        // spelled exactly once, so there is ONE copy of it: five of its terms are constants of the
+        // FIELD, and the other two are facts about the PROCESS - which subsystems the operator's
+        // mask carries, and whether the backend consumes the P4a families - that move a handful of
+        // times in a process's life and never inside a verb. So the conjunction is evaluated per
+        // field once per distinct environment and read back as a bit. Nothing about WHICH fields
+        // are copied moves: same expression, same inputs, same answer.
+        //
+        // AND THE PROFILE IS WHY IT IS WORTH A CACHE AT ALL. The 2026-09-17 inproc profile
+        // (Minecraft 26.3-rc-3, view distance 12, ~852 draws/frame) put MGPipeValidateForVerb at
+        // 4.11% self / 10.9% inclusive of the GL thread, of which MGPipeTracker::Update is 1.46
+        // and CopyField 2.54; most of the rest is this walk's per-field predicate.
+        // P4aFamilyHasItsConsumer alone is a CapsMirror read under split, and it was taken 63
+        // times per verb for an answer that is the same 63 times.
+        //
+        // THE KEY IS THE WHOLE OF WHAT THE EXPRESSION READS BESIDE THE FIELD ID, which is what
+        // makes this a memo rather than a latch that goes stale:
+        //   - the push mask (MG_Config::Features.PipePush), which the per-subsystem A/B lanes move;
+        //   - ApplierDerivesRenderStateFields(), a one-shot probe - in the key anyway, so that a
+        //     build where it ever stopped being one-shot cannot keep a stale answer silently;
+        //   - contextValuesWireLive, which flips when a session starts, stops, or tears its tables
+        //     down (P5c rv, CONTRACT-P5C.md 5.3) - the half that must never disagree with the
+        //     emission's half at the validate point, which is why it is PASSED IN rather than
+        //     re-read here;
+        //   - P4aFamilyHasItsConsumer, which flips when the caps mirror adopts a snapshot (R-12: a
+        //     second arrival IS the invalidation) or a backend registers its resource op table.
+        //     ALL FOUR FAMILIES RIDE THE ONE SIGNAL - that is P4aFamilyHasItsConsumer's own rule,
+        //     argued where it is defined - so asking it once for the whole family mask is asking
+        //     it for every family at once, and the rebuild re-asks it per subsystem from the same
+        //     unchanged mirror. It is also the one key input that CANNOT MOVE AN ANSWER TODAY,
+        //     and the static_assert below is that fact's trip wire rather than a claim in prose.
+        //
+        // NOT THREAD-LOCAL, AND THAT IS THIS FILE'S EXISTING RULE RATHER THAN A NEW ONE:
+        // g_residualDue, g_omission and the verify latches beside it are file-scope too, and what
+        // keeps a single writer on them is the verb barrier (ROADMAP.md's G1 row states it for
+        // gPipeInputs itself). A validate that runs on the apply thread is inside that barrier by
+        // construction.
+        //
+        // BUT THE ANSWER IS HANDED OUT BY VALUE, WHICH IS NOT THE SAME ARGUMENT (P5d r3 package C
+        // review, minor 1). Those latches are single BITS: a reader cannot observe one
+        // half-written. A 2x64-bit mask can, so the rebuild below fills a LOCAL and publishes it
+        // into the memo in one assignment, and the caller gets a copy rather than a reference into
+        // storage the next rebuild would zero under it. Sixteen bytes is cheaper at the use site
+        // than the indirection was anyway - the walk reads the copy 63 times.
+
+        // AND THE FOURTH KEY INPUT CANNOT MOVE AN ANSWER TODAY, WHICH IS A FACT WITH A TRIP WIRE
+        // RATHER THAN A COMMENT (P5d r3 package C review, the major).
+        //
+        // The consumer conjunct sits in the expression because the expression reads it, and the
+        // key carries it because a key that omits an input the expression reads is how a memo
+        // goes stale. But every field whose emitter belongs to a P4a family - the five of them:
+        // GetFramebufferBindingSlot, GetImageTextureBinding, GetTextureUnitObject,
+        // GetProgramForDraw, GetProgramForDispatch - is ALSO a field
+        // EmittedCallSuppliesTheWholeField() answers `false` for: their storage
+        // is a frontend heap reference (a BindingSlot, an ImageTextureBinding, a TextureUnit,
+        // two SharedPtr<ProgramObject>) that a payload cannot carry, so the fill pulls them
+        // whatever the consumer says. The consumer conjunct is therefore DOMINATED: no motion of
+        // the caps mirror or of MGPipeGetResourceOps() can change one bit of the mask, and no
+        // unit case can distinguish a key that carries it from one that does not.
+        //
+        // WHEN THIS FIRES, that stopped being true - P3b/P4b/P7/P8 gave one of those rows a twin
+        // the applier can write - and the consumer signal became observable through
+        // MGPipeResidualFillSuppliesField. At that point the memo's key needs the same
+        // move-it-and-read-it-back pair steps 1-3 of
+        // FieldOwnershipTest.TheResidualFillsSuppliedMemoReKeysOnEveryInputThatMovesAnAnswer
+        // give the other three inputs, and that case's step 4 (which today pins the domination
+        // instead) has to become it. Do that rather than deleting this line.
+        constexpr Bool NoP4aFamilyFieldIsWhollySupplied() {
+            for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
+                const auto field = static_cast<MGPipeInputField>(i);
+                const Uint64 subsystem = SubsystemForEmitter(kMGPipeFieldEmittedBy[i]);
+                if ((subsystem & kMGPipeP4aFamilySubsystems) != 0 &&
+                    EmittedCallSuppliesTheWholeField(field)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        static_assert(NoP4aFamilyFieldIsWhollySupplied(),
+                      "a P4a-family field became whole-supplied: the residual fill's supplied-set "
+                      "memo can now answer differently for the consumer signal, so that key input "
+                      "needs the unit case the paragraph above names");
+
+        struct ResidualFillPlan {
+            Bool Valid = false;
+            Uint64 PushMask = 0;
+            Bool ApplierDerives = false;
+            Bool ContextValuesWireLive = false;
+            Bool P4aConsumer = false;
+            // One bit per FIELD - not per verb class. The class mask is applied at the walk
+            // exactly as it always was, so "does this verb read this field" stays the walk's
+            // business and this stays a statement about EMISSION alone.
+            MGPipeFieldMask Supplied{};
+        };
+        ResidualFillPlan g_fillPlan;
+
+        MGPipeFieldMask SuppliedFieldMask(Uint64 pushMask, Bool applierDerives,
+                                          Bool contextValuesWireLive) {
+            // THE CONSUMER SIGNAL IS READ ONLY WHERE THE WALK BELOW COULD REACH IT, and that
+            // guard is not a micro-optimisation - it is what keeps R-8's DIAGNOSTIC COUNTERS
+            // where they were (P5d r3 package C review, minor 2). In the conjunction below
+            // P4aFamilyHasItsConsumer sits AFTER `(pushMask & subsystem) != 0`, and it answers a
+            // constant `true` for every subsystem outside the P4a families - so at a mask that
+            // carries no P4a bit NO field reaches the caps mirror at all. Asking it here anyway
+            // would have moved CapsMirror::ServerConsumes' refusal count and its one-shot
+            // MGLOG_W at exactly the hand-picked A/B lanes (and the bring-up window, CallMask 0)
+            // where the baseline never touched the mirror, which is the opposite direction from
+            // the one this change is supposed to move them in. The key stays COMPLETE because
+            // pushMask is itself in the key: a mask that gains a P4a bit re-keys on the mask.
+            const Bool p4aConsumer = (pushMask & kMGPipeP4aFamilySubsystems) != 0 &&
+                                     P4aFamilyHasItsConsumer(kMGPipeP4aFamilySubsystems);
+            if (g_fillPlan.Valid && g_fillPlan.PushMask == pushMask &&
+                g_fillPlan.ApplierDerives == applierDerives &&
+                g_fillPlan.ContextValuesWireLive == contextValuesWireLive &&
+                g_fillPlan.P4aConsumer == p4aConsumer) {
+                return g_fillPlan.Supplied;
+            }
+            MGPipeFieldMask built{};
+            for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
+                const auto field = static_cast<MGPipeInputField>(i);
+                // A field a P2 call now supplies is not pulled again - that second pull is exactly
+                // the cost P2 exists to remove. THE STAMP IS UNCHANGED either way: a stamp says
+                // "this verb published this field", which is as true of an emitted field as of a
+                // copied one, and withholding it would abort every backend read of the very fields
+                // the migration just took over. The stamp is still written at the walk; only the
+                // QUESTION moved up here.
+                const MGPipeFieldEmitter emitter = kMGPipeFieldEmittedBy[i];
+                const Uint64 subsystem = SubsystemForEmitter(emitter);
+                // P4aFamilyHasItsConsumer and P4aFamilyDependenciesAreSet are in this conjunction
+                // for the reason they are in `wants()`: "supplied" means A CALL WENT OUT CARRYING
+                // THIS FIELD, and on a backend with no consumer - or at a mask that leaves one of
+                // the family's D-K2 dependency bits clear - no P4a call went out at all, so
+                // withholding the pull here would leave the field unfilled at the very verb that
+                // reads it.
+                //
+                // AND THE LAST CONJUNCT IS P5c rv's (CONTRACT-P5C.md 5.3): set_context_values has
+                // NO PRODUCER without a live wire (its emission is transport-gated at the validate
+                // point), so its eight fields keep being pulled under monolith - G1's byte-for-byte
+                // rule - and are skipped only when the record really crosses.
+                const Bool supplied = subsystem != 0 && (subsystem & kMGPipeWiredSubsystems) != 0 &&
+                                      (pushMask & subsystem) != 0 &&
+                                      P4aFamilyHasItsConsumer(subsystem) &&
+                                      P4aFamilyDependenciesAreSet(subsystem, pushMask) &&
+                                      EmittedCallSuppliesTheWholeField(field) &&
+                                      (applierDerives || AppliedWithoutDerivation(field)) &&
+                                      (emitter != MGPipeFieldEmitter::SetContextValues ||
+                                       contextValuesWireLive);
+                if (supplied) built.Words[i / 64] |= (Uint64{1} << (i % 64));
+            }
+            // PUBLISHED IN ONE ASSIGNMENT, after the walk - see the paragraph above the struct.
+            g_fillPlan.Valid = true;
+            g_fillPlan.PushMask = pushMask;
+            g_fillPlan.ApplierDerives = applierDerives;
+            g_fillPlan.ContextValuesWireLive = contextValuesWireLive;
+            g_fillPlan.P4aConsumer = p4aConsumer;
+            g_fillPlan.Supplied = built;
+            return built;
+        }
 
         // set_pixel_pack_state. PACK only, deliberately: nothing on the far side of the
         // boundary reads unpack state, and the staged-repack upload path does not even issue
@@ -2777,6 +2948,16 @@ namespace MobileGL::MG_Pipe {
     Uint64 MGPipeVertexAttribDefaultRepairCount() { return g_attribDefaultRepairs; }
     MGPVertexAttribDefaults MGPipeVertexAttribDefaultsLastHeader() { return g_attribDefaultLastHeader; }
 
+    // The unit gate's door onto step 4's predicate (PipeFill.h says why it needs one). It
+    // returns the memo's answer rather than a second copy of the expression, so a case that
+    // moves one input and reads the answer back is a statement about the MEMO and not about a
+    // re-implementation of it.
+    Bool MGPipeResidualFillSuppliesField(MGPipeInputField field, Uint64 pushMask, Bool applierDerives,
+                                         Bool contextValuesWireLive) {
+        return MGPipeFieldMaskHas(SuppliedFieldMask(pushMask, applierDerives, contextValuesWireLive),
+                                  field);
+    }
+
     // ---- the validate point (P2 brief D1) ----
     void MGPipeValidateForVerb(MGPipeVerb verb) {
         PipeInputs& inputs = gPipeInputs;
@@ -3057,7 +3238,17 @@ namespace MobileGL::MG_Pipe {
         tracker.ClearPendingBaseInstance();
 
         // ---- step 4: the residual fill, for what an emitted call did NOT supply ----
+        // THE SUPPLIED QUESTION IS ASKED ONCE PER ENVIRONMENT, NOT ONCE PER FIELD PER VERB
+        // (SuppliedFieldMask above, P5d r3 package C): the conjunction it used to spell inline
+        // here reads nothing about the verb, so it is a memo keyed on the four process facts it
+        // does read. The two halves of P5c rv's gate still read the ONE `contextValuesWireLive`
+        // computed at the top of this function - it is the memo's key AND its argument - so they
+        // cannot disagree about who supplies the eight value-class fields.
         const Bool applierDerives = ApplierDerivesRenderStateFields();
+        // BY VALUE, NOT BY REFERENCE: the memo's storage is rebuilt in place when the key moves,
+        // and the walk below holds this across 63 iterations.
+        const MGPipeFieldMask supplied =
+            SuppliedFieldMask(pushMask, applierDerives, contextValuesWireLive);
         for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
             const auto field = static_cast<MGPipeInputField>(i);
             if (!MGPipeFieldMaskHas(mask, field)) continue;
@@ -3071,33 +3262,7 @@ namespace MobileGL::MG_Pipe {
 #else
             if (kMGPipeInputFieldSticky[i]) continue;
 #endif
-            // A field a P2 call now supplies is not pulled again - that second pull is
-            // exactly the cost P2 exists to remove. THE STAMP IS UNCHANGED either way: a
-            // stamp says "this verb published this field", which is as true of an emitted
-            // field as of a copied one, and withholding it would abort every backend read of
-            // the very fields the migration just took over.
-            const MGPipeFieldEmitter emitter = kMGPipeFieldEmittedBy[i];
-            const Uint64 subsystem = SubsystemForEmitter(emitter);
-            // P4aFamilyHasItsConsumer and P4aFamilyDependenciesAreSet are in this conjunction for
-            // the reason they are in `wants()`: "supplied" means A CALL WENT OUT CARRYING THIS
-            // FIELD, and on a backend with no consumer - or at a mask that leaves one of the
-            // family's D-K2 dependency bits clear - no P4a call went out at all, so withholding
-            // the pull here would leave the field unfilled at the very verb that reads it.
-            //
-            // AND THE LAST CONJUNCT IS P5c rv's (CONTRACT-P5C.md §5.3): set_context_values has
-            // NO PRODUCER without a live wire (its emission is transport-gated, above), so its
-            // eight fields keep being pulled under monolith - G1's byte-for-byte rule - and are
-            // skipped only when the record really crosses. The two sides read the ONE answer
-            // computed at the top of this function, so they cannot disagree.
-            const Bool supplied = subsystem != 0 && (subsystem & kMGPipeWiredSubsystems) != 0 &&
-                                  (pushMask & subsystem) != 0 &&
-                                  P4aFamilyHasItsConsumer(subsystem) &&
-                                  P4aFamilyDependenciesAreSet(subsystem, pushMask) &&
-                                  EmittedCallSuppliesTheWholeField(field) &&
-                                  (applierDerives || AppliedWithoutDerivation(field)) &&
-                                  (emitter != MGPipeFieldEmitter::SetContextValues ||
-                                   contextValuesWireLive);
-            if (!supplied) MGPipeFillAccess::CopyField(inputs, *ctx, field);
+            if (!MGPipeFieldMaskHas(supplied, field)) MGPipeFillAccess::CopyField(inputs, *ctx, field);
 #if MOBILEGL_PIPE_POISON
             // The value is copied either way; only the stamp is withheld for the omitted pair.
             if (!IsOmitted(verb, field)) filled.FilledGen[i] = filled.CurrentVerbSerial;

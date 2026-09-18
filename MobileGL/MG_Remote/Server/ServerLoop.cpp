@@ -13,6 +13,7 @@
 #include <Config.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Util/Debug/Log.h>
+#include <MG_Util/Metrics/PipeStats.h>
 
 #include <chrono>
 #include <cstdlib>
@@ -211,6 +212,7 @@ namespace MobileGL::MG_Remote::Server {
         // tally - and a developer running the binary directly gets the count CI sees.
         m_drained.store(0, std::memory_order_release);
         m_parks.store(0, std::memory_order_release);
+        m_parkBlocks.store(0, std::memory_order_release);
         m_nativeBinds.store(0, std::memory_order_release);
         m_clientReleases.store(0, std::memory_order_release);
         m_makeCurrentRepublishes.store(0, std::memory_order_release);
@@ -226,15 +228,17 @@ namespace MobileGL::MG_Remote::Server {
 
     Bool ServerLoop::Running() const { return m_running.load(std::memory_order_acquire); }
 
-    Bool ServerLoop::OnApplyThread() {
-        ServerLoop& loop = ServerLoopInstance();
-        return loop.m_running.load(std::memory_order_acquire) &&
-               loop.m_applyThreadId.load(std::memory_order_acquire) == std::this_thread::get_id();
-    }
+    // OnApplyThread() is inline in the header now (P5d round 3, package D). Its whole body is
+    // one relaxed load of Detail::g_applyThreadKey and one comparison against the caller's own
+    // thread pointer; the two writes to that key are in ApplyThreadMain, below.
 
     Uint64 ServerLoop::ResolvedAffinityMask() const { return m_affinityMask; }
     Uint64 ServerLoop::DrainedRecords() const { return m_drained.load(std::memory_order_acquire); }
     Uint64 ServerLoop::ParkCount() const { return m_parks.load(std::memory_order_acquire); }
+
+    Uint64 ServerLoop::ParkBlockCount() const {
+        return m_parkBlocks.load(std::memory_order_relaxed);
+    }
     Uint64 ServerLoop::NativeBindCount() const { return m_nativeBinds.load(std::memory_order_acquire); }
     Uint64 ServerLoop::ClientReleaseCount() const {
         return m_clientReleases.load(std::memory_order_acquire);
@@ -325,7 +329,12 @@ namespace MobileGL::MG_Remote::Server {
     }
 
     void ServerLoop::ApplyThreadMain() {
-        m_applyThreadId.store(std::this_thread::get_id(), std::memory_order_release);
+        // THE IDENTITY IS PUBLISHED FIRST, BEFORE THE THREAD HAS A NAME OR AN AFFINITY. Every
+        // role guard in the tree reads it, and the very first record this thread applies must
+        // already answer "yes" to OnApplyThread() - otherwise the applier's own reads would
+        // look like client reads to the guards. Relaxed for the reason stated beside the key's
+        // declaration: it is an identity, not a handshake, and this thread is the only writer.
+        Detail::g_applyThreadKey.store(Detail::CurrentThreadKey(), std::memory_order_relaxed);
         NameThisThread("mgl-srv-apply");
 
         Bool recognised = true;
@@ -380,8 +389,31 @@ namespace MobileGL::MG_Remote::Server {
             if (m_stopRequested.load(std::memory_order_acquire)) break;
             if (ready()) continue;
 
-            m_parks.fetch_add(1, std::memory_order_acq_rel);
-            const bool woke = bell.Wait(control.consumerParked, ready, spinUs, Transport::kWaitForever);
+            const Uint64 waits = m_parks.fetch_add(1, std::memory_order_acq_rel) + 1;
+            // THE WAIT LEDGER'S SERVER HALF (P5d round 3, package T item 4). The client may not
+            // name this counter - CONTRACT-P5C rule E, layer 2: a GL-thread read of
+            // ServerLoop's memory is exactly the cross-role access P5c zeroed - so the server
+            // publishes its own reading and MG_Util::PipeStats is the meeting point. Two
+            // relaxed stores behind the stats latch, on the one path in this loop that is about
+            // to spin or block anyway; with MOBILEGL_PIPE_STATS unset it is a global load and a
+            // predicted branch.
+            //
+            // BOTH NUMBERS, because they answer different questions. `srv` is how often the
+            // loop reached Doorbell::Wait at all (ParkCount()'s long-standing meaning: an
+            // intention, counted on the way TOWARD a park - ServerLoopTest's C10 note); `srvpark`
+            // is how often it really blocked. The ratio is what says whether the spin budget is
+            // sized for this workload, and it is only readable as a ratio because the two
+            // numbers count the same events: m_parkBlocks is THIS loop's tally, handed to the
+            // Wait below, not the bell's own ParkEntries(). A bell counts every waiter on its
+            // endpoint, so reading it here would have made `srvpark` a superset of `srv` the
+            // moment anything else waited on the consumer bell.
+            if (MG_Util::PipeStats::Enabled()) {
+                using MG_Util::PipeStats::Gauge;
+                MG_Util::PipeStats::PublishGauge(Gauge::ServerWaits, waits);
+                MG_Util::PipeStats::PublishGauge(Gauge::ServerParks, ParkBlockCount());
+            }
+            const bool woke = bell.Wait(control.consumerParked, ready, spinUs,
+                                        Transport::kWaitForever, &m_parkBlocks);
             if (!woke) {
                 // Wait returns false only on a dead bell or an expired deadline, and this park
                 // has no deadline. A dead bell IS the shutdown signal (table 3's teardown step
@@ -393,7 +425,9 @@ namespace MobileGL::MG_Remote::Server {
                     break;
                 }
                 MGLOG_E("MG_Remote server: Doorbell::Wait(kWaitForever) returned false on a live "
-                        "bell - that is impossible by Doorbell.h:139-178 and means the bell's "
+                        "bell - that is impossible by Doorbell::Wait's park loop (the only "
+                        "false returns are the Dead() arm and an expired deadline) and means "
+                        "the bell's "
                         "Dead() answer moved under the waiter. Shutting the loop down rather "
                         "than spinning");
                 break;
@@ -435,6 +469,10 @@ namespace MobileGL::MG_Remote::Server {
         // NOT_INITIALIZED without publishing). There is no third order.
         {
             const std::lock_guard<std::mutex> lock(m_controlMutex);
+            // The shadow dies with the mailbox it shadows, under the same lock and inside the
+            // same critical section as the m_running clear: nothing will ever pump again, so a
+            // `true` left here would be a claim no thread can retire.
+            m_controlPosted.store(false, std::memory_order_release);
             if (m_controlPending) {
                 m_controlPending = false;
                 m_controlFinished = true;
@@ -443,6 +481,30 @@ namespace MobileGL::MG_Remote::Server {
                         "exited; it is answered NOT_INITIALIZED rather than left blocking");
             }
             m_running.store(false, std::memory_order_release);
+            // THE IDENTITY DIES WITH m_running, IN THE SAME CRITICAL SECTION, because it IS
+            // m_running as far as OnApplyThread() is concerned (P5d round 3, package D): the
+            // old predicate was `m_running && id == mine`, so it stopped answering true at
+            // exactly this store, and the key has to stop meaning "this thread" at exactly the
+            // same store or the window would have moved. Everything that must still run as the
+            // server role - the final PumpControlRequest/DrainRing, Applier().Detach(),
+            // ~BackendObject_DirectGLES and the ReleaseEGLResources it posts back to itself -
+            // is already above this block.
+            //
+            // DO NOT MOVE THIS STORE UP ON THE STRENGTH OF A GREEN ctest (review round 3). That
+            // this line EXISTS is pinned below (ServerLoopTest's
+            // AThreadCreatedAfterTheLoopStoppedIsNotMistakenForTheApplyThread: delete the store
+            // and the key survives the join, and the next thread that inherits this one's TLS
+            // block - hence its thread pointer - answers OnApplyThread() TRUE). That it sits
+            // HERE rather than fifteen lines earlier is NOT pinned by any unit case and cannot
+            // be: ServerLoopTest has no GL context, so CreateBackend is never called and the
+            // ~BackendObject_DirectGLES -> ReleaseEGLResources self-post named above is never
+            // built. Move the store above m_backend.reset() and that post misses
+            // RunOnApplyThread's re-entrancy arm (ServerLoop.cpp: `if (OnApplyThread()) return
+            // work(user);`) while m_running is still true, so it publishes into the one-slot
+            // mailbox and waits on m_controlDone for an answer only THIS thread could ever
+            // give. The integration lane - a real EGL teardown - is the only thing that would
+            // catch that, and it would catch it as a hang, not as a failed assertion.
+            Detail::g_applyThreadKey.store(0, std::memory_order_relaxed);
         }
         m_controlDone.notify_all();
 
@@ -450,18 +512,38 @@ namespace MobileGL::MG_Remote::Server {
     }
 
     Bool ServerLoop::ControlIsPending() const {
-        const std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(m_controlMutex));
-        return m_controlPending;
+        // ONE ACQUIRE LOAD, NO LOCK - see the header block on m_controlPosted. This is the
+        // hottest call in the whole loop (the `ready` lambda runs it on every spin iteration of
+        // every wait) and it used to be a mutex round trip.
+        return m_controlPosted.load(std::memory_order_acquire);
     }
 
     Bool ServerLoop::PumpControlRequest() {
+        // THE IDLE POLL'S FAST NEGATIVE. The loop calls this once per iteration whether or not
+        // anything was posted, and the common answer is "nothing". Taking m_controlMutex to
+        // learn that was the other half of package T's finding; the shadow answers it with a
+        // load, and everything below this line still runs under the lock exactly as before.
+        if (!m_controlPosted.load(std::memory_order_acquire)) return false;
+
         ControlWork work = nullptr;
         void* user = nullptr;
         {
             const std::lock_guard<std::mutex> lock(m_controlMutex);
-            if (!m_controlPending) return false;
+            if (!m_controlPending) {
+                // The shadow outlived its request - it cannot happen through the poster's
+                // path, but a `true` that nobody clears would make `ready` permanently true
+                // and the loop would never park again, so it is cleared here rather than
+                // trusted.
+                m_controlPosted.store(false, std::memory_order_release);
+                return false;
+            }
             work = m_controlWork;
             user = m_controlUser;
+            // CLEARED WHEN THE REQUEST IS TAKEN, not when it finishes. m_controlPending stays
+            // true for the duration of `work` (the C2 exit block reads it), but the thread that
+            // would act on the shadow is THIS one and it is busy running the request; leaving
+            // the shadow set would only make the post-work iteration spin instead of park.
+            m_controlPosted.store(false, std::memory_order_release);
         }
         const MobileGLResult result = work == nullptr ? MOBILEGL_ERR_INVALID_ARGUMENT : work(user);
         {
@@ -475,6 +557,14 @@ namespace MobileGL::MG_Remote::Server {
     }
 
     Uint64 ServerLoop::DrainRing() {
+        // THE EMPTY-RING ANSWER COSTS TWO LOADS AND NOTHING ELSE, and that was AUDITED rather
+        // than assumed (P5d round 3, package T item 2): the idle poll calls this on every
+        // iteration, so a lock or a clock read in here would be the same defect
+        // PumpControlRequest had. The path is SessionConsumer::ApplyOne -> RingConsumer::Pop,
+        // and Pop's first act on an empty ring is one acquire load of cmdHead compared against
+        // the consumer's own m_localTail (Ring.cpp:222-232) - no mutex, no steady_clock, no
+        // allocation; `applied == 0` then skips the retire block below entirely. Keep it that
+        // way: anything added here runs ~900 times a frame doing nothing.
         ServerSession& session = *m_session;
         Transport::SessionConsumer& consumer = session.Consumer();
         PipeApplier& applier = session.Applier();
@@ -584,7 +674,14 @@ namespace MobileGL::MG_Remote::Server {
         m_controlUser = user;
         m_controlPending = true;
         m_controlFinished = false;
-        // Publish THEN ring, in that order and never the other (Doorbell.h:186-193). The bell
+        // THE SHADOW IS PUBLISHED LAST OF THE FOUR AND WITH A RELEASE, inside this same
+        // critical section: the apply thread's park predicate reads ONLY this word, so an
+        // acquire load that returns true must also see the three fields above it. Storing it
+        // first would let a pump that is already past its own fast-negative read a slot that
+        // does not name the work yet.
+        m_controlPosted.store(true, std::memory_order_release);
+        // Publish THEN ring, in that order and never the other (Doorbell.h, NotifyIfParked's
+        // PRECONDITION block: the fence only orders what precedes it). The bell
         // is rung unconditionally rather than through NotifyIfParked because this side does not
         // know whether the apply thread is parked or spinning, and CondVarDoorbell remembers a
         // wakeup that arrives while nobody is waiting. Held under m_controlMutex: wait() releases
@@ -643,7 +740,8 @@ namespace MobileGL::MG_Remote::Server {
             MGLOG_F("MGPipe: Fatal{ApplyThreadJoinTimeout} - mgl-srv-apply did not exit within "
                     "%u ms of Stop(). Stop() published m_stopRequested (in the park predicate) "
                     "BEFORE it rang, so a plain Notify should already have un-parked the thread; "
-                    "Doorbell::Kill() (Doorbell.h:211-221, table 3 step 2) is the belt to that "
+                    "Doorbell::Kill() (Doorbell.h, CondVarDoorbell::Kill; table 3 step 2) is "
+                    "the belt to that "
                     "Notify's braces. If the thread is still parked after both, the wakeup was "
                     "lost, not slow. Aborting rather than detaching: a detached apply thread still "
                     "owns the context and would read rings the client is about to unmap",
@@ -651,7 +749,10 @@ namespace MobileGL::MG_Remote::Server {
             std::abort();
         }
         m_thread.join();
-        m_applyThreadId.store(std::thread::id{}, std::memory_order_release);
+        // The identity is NOT cleared here any more: the thread clears it itself, under
+        // m_controlMutex, beside the m_running store it used to be paired with. Clearing it a
+        // second time after the join would be harmless but would also be the second place a
+        // reader has to check to know when the key stops meaning "the apply thread".
         m_running.store(false, std::memory_order_release);
         m_session = nullptr;
     }

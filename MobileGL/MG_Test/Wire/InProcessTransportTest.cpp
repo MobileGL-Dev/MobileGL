@@ -316,6 +316,84 @@ TEST(InProcessTransportTest, DoorbellReturnsImmediatelyWhenAlreadyReady) {
     EXPECT_EQ(parked.load(), 0u);
 }
 
+// P5d round 3, package T item 3: the spin phase is a CALIBRATED ITERATION BUDGET and reads no
+// clock. Two things have to be true of it and neither is visible from the outside without the
+// park counter, which is why ParkEntries() exists: a condition that flips WITHIN the budget must
+// be caught by the spin (no park, no syscall - that is the whole saving), and a condition that
+// never flips must still reach the park (a budget that silently came out as zero, or a
+// calibration that returned zero iterations per microsecond, would turn every wait into a park
+// and would be invisible in a test that only checked the return value).
+TEST(InProcessTransportTest, DoorbellSpinsWithoutParkingWhenReadyFlipsInsideTheBudget) {
+    std::unique_ptr<InProcessTransport> client;
+    std::unique_ptr<InProcessTransport> server;
+    InProcessTransport::CreatePair(client, server);
+
+    // The budget itself must be a usable number: SpinItersPerUs() is what multiplies spinUs,
+    // so a zero here would mean "never spin" and the case below would pass for the wrong reason.
+    ASSERT_GT(SpinItersPerUs(), 0u);
+
+    std::atomic<std::uint32_t> parked{0};
+    Doorbell& bell = client->SelfDoorbell();
+    const std::uint64_t parksBefore = bell.ParkEntries();
+
+    // Flips on the 8th probe - far inside a 50 us budget on any core that can run this suite,
+    // and deliberately NOT on the first, so the spin loop really iterates.
+    int probes = 0;
+    EXPECT_TRUE(bell.Wait(
+        parked, [&probes] { return ++probes >= 8; }, kDefaultSpinUs, 5000));
+    EXPECT_GE(probes, 8);
+    EXPECT_EQ(bell.ParkEntries(), parksBefore)
+        << "the wait blocked although its condition flipped inside the spin budget: the "
+           "clock-free spin is not spinning, and every verb barrier is paying a futex round "
+           "trip it does not need";
+    EXPECT_EQ(parked.load(), 0u);
+}
+
+TEST(InProcessTransportTest, DoorbellStillParksWhenTheSpinBudgetRunsOut) {
+    std::unique_ptr<InProcessTransport> client;
+    std::unique_ptr<InProcessTransport> server;
+    InProcessTransport::CreatePair(client, server);
+
+    std::atomic<std::uint32_t> parked{0};
+    Doorbell& bell = client->SelfDoorbell();
+    const std::uint64_t parksBefore = bell.ParkEntries();
+
+    EXPECT_FALSE(bell.Wait(
+        parked, [] { return false; }, kDefaultSpinUs, 30));
+    EXPECT_GT(bell.ParkEntries(), parksBefore)
+        << "the wait never reached the blocking park, so a waiter with no deadline would burn "
+           "a core at full clock for ever";
+    EXPECT_EQ(parked.load(), 0u);
+}
+
+// The park number is published as the SUBSET of the waits that blocked, and it only stays one
+// if a Wait that traverses the park loop twice counts once. That is not a contrived path: a
+// CondVarDoorbell REMEMBERS a notify delivered while nobody was waiting, so the first Park
+// returns at once, the condition is still false (the peer had already drained what it
+// published) and the wait parks again. Counting per Park() rather than per Wait() made
+// `srvpark`/`clipark` able to print LARGER than `srv`/`cli`, which turns the one ratio the
+// ledger exists to publish into an argument for the opposite conclusion.
+TEST(InProcessTransportTest, AWaitThatParksTwiceOnARememberedNotifyIsStillOnePark) {
+    std::unique_ptr<InProcessTransport> client;
+    std::unique_ptr<InProcessTransport> server;
+    InProcessTransport::CreatePair(client, server);
+
+    std::atomic<std::uint32_t> parked{0};
+    Doorbell& bell = client->SelfDoorbell();
+    // Delivered with nobody waiting: the bell remembers it, so the FIRST Park below returns
+    // immediately with the condition still false and the loop parks a second time.
+    bell.Notify();
+
+    const std::uint64_t parksBefore = bell.ParkEntries();
+    EXPECT_FALSE(bell.Wait(
+        parked, [] { return false; }, kDefaultSpinUs, 30));
+    EXPECT_EQ(bell.ParkEntries(), parksBefore + 1)
+        << "one wait counted more than one park: the ledger's parks are no longer a subset of "
+           "its waits, and `clipark > cli` reads as 'every verb pays a futex round trip' when "
+           "the truth is one remembered notify";
+    EXPECT_EQ(parked.load(), 0u);
+}
+
 TEST(InProcessTransportTest, DoorbellTimesOutWhenNothingHappens) {
     std::unique_ptr<InProcessTransport> client;
     std::unique_ptr<InProcessTransport> server;

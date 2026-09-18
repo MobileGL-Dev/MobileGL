@@ -228,6 +228,16 @@ namespace MobileGL {
             // object can express that. Split-only so the pull build's layout and inlining do
             // not move (G1).
             Bool HasOutstandingGpuWrite() const { return m_gpuWritePending; }
+
+            // The shadow allocation's own extent in bytes - page-aligned base, page-granular
+            // size, every byte this shadow's and nobody else's (PipeResource.h,
+            // ShadowAllocationBytesFor). Read by the persistent-map tracker at registration
+            // so it can protect the mapped range's containing pages OUTWARD and hash no
+            // edges; zero for an adopted store, which the tracker never registers. Split-only
+            // for G1's reason, like the rest of this block, and out of line because it is a
+            // layer-1 read of client memory like MappedData (CONTRACT-P5C rule E) and carries
+            // the same apply-thread refusal.
+            SizeT ShadowAllocationBytes() const;
 #endif
 
             Bool IsMapped() const;

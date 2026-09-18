@@ -26,8 +26,8 @@
 // kWaitForever waiter, not one, and the difference is the whole of review m-4: for the STOP case a
 // plain Doorbell::Notify() is sufficient, because m_stopRequested is in the park predicate and
 // Stop() publishes it BEFORE it rings (Doorbell.h re-tests ready() after every Park return);
-// Doorbell::Kill() (Doorbell.h:211-221) is load-bearing only for a predicate that has NOTHING to
-// see, which is why the redcheck's park-predicate-loses-control entry - the one that drops the
+// Doorbell::Kill() (Doorbell.h, CondVarDoorbell::Kill) is load-bearing only for a predicate
+// that has NOTHING to see, which is why the redcheck's park-predicate-loses-control entry - the one that drops the
 // control flag FROM the predicate - is the case that actually times out. Kill BEFORE join; join
 // before the client frees any emitter-owned Vector; and the join must be bounded (that test uses
 // 5 s) so a regression is a red test and not a hung CI job.
@@ -74,10 +74,117 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
+#include <cstring>
 #include <mutex>
 #include <thread>
+#include <type_traits>
 
 namespace MobileGL::MG_Remote::Server {
+
+    // ---------------------------------------------------------------------------------
+    // THE APPLY-THREAD IDENTITY, AS ONE INTEGER (P5d round 3, package D)
+    // ---------------------------------------------------------------------------------
+    //
+    // OnApplyThread() is the predicate under EVERY role guard on both hot paths -
+    // RefuseLegacyBufferArmFromApplyThread in BufferObject's accessors, PersistentMapTracker::
+    // OnServerRole, ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt, RunsAsTheServerRole,
+    // MGPipeRefuseAllocatorFromApplyThread, RefuseLegacyTextureArmFromApplyThread. simpleperf at
+    // head 56a77348 (FCL + Minecraft, VD12, Adreno 830) measured it at 2.66% self / 3.64%
+    // inclusive ON THE CLIENT THREAD, for an answer that is "no" every single time.
+    //
+    // The old body paid five times over for that "no": ServerLoopInstance()'s function-static
+    // guard byte, an acquire load of m_running, an acquire load of an atomic<std::thread::id>,
+    // std::this_thread::get_id(), and a thread::id comparison that is an out-of-line
+    // pthread_equal through the PLT (@plt was 6.1% of the apply thread). None of it carries
+    // information the guard needs. A live thread's identity is already sitting in a
+    // register-cheap place - the thread pointer, TPIDR_EL0 on aarch64 - so the loop publishes
+    // ITS identity as a plain integer here and every caller compares one relaxed load against
+    // one register read, inline, with no call and no singleton.
+    //
+    // ZERO MEANS "NO APPLY THREAD IS RUNNING", which is exactly the answer m_running == false
+    // used to give: the key is published as the apply thread's FIRST act (ApplyThreadMain) and
+    // cleared in the same m_controlMutex critical section that clears m_running on the way out
+    // (ApplyThreadMain's C2 exit block), so "key != 0" and "m_running" move together and the
+    // window in which a live-but-exiting apply thread answers true is byte-for-byte the old
+    // one. The ServerLoop object still OWNS the key - nothing but ApplyThreadMain writes it -
+    // it simply no longer has to be reached through the singleton to be read.
+    namespace Detail {
+        // RELAXED ON BOTH SIDES, and that is a claim about recycling, not a shrug. The only
+        // dangerous outcome would be a NEW thread that reuses the exited apply thread's TLS
+        // block (hence its thread pointer) while still reading the pre-clear key. It cannot
+        // happen: the clear is sequenced before the apply thread's exit, the exit releases the
+        // TLS block under libc's own lock, and the thread that later receives that block takes
+        // the same lock - so the clear happens-before any load the new thread performs, and
+        // coherence forbids a relaxed load from reading a value that a happens-before store
+        // overwrote. A stale ZERO is harmless in the other direction: a thread that is not the
+        // apply thread wants "false" anyway, and the apply thread always reads its own store.
+        //
+        // No acquire is needed for a second reason: this is an IDENTITY, not a handshake. No
+        // caller publishes data through it; the real ordering lives in the ring, the doorbell
+        // and m_controlMutex.
+        inline std::atomic<Uint64> g_applyThreadKey{0};
+
+        // The calling thread's identity as the same integer. aarch64 - the split's only
+        // measured target - reads TPIDR_EL0 with a single instruction and no call. Everywhere
+        // else falls back to std::this_thread::get_id() memcpy'd into the key: still one libc
+        // call, but the atomic<thread::id> load and the out-of-line pthread_equal that
+        // dominated the old body are gone either way. x86_64 is deliberately NOT on the
+        // builtin path - __builtin_thread_pointer only grew x86 support in clang 17 / GCC 11
+        // and older toolchains accept __has_builtin for it and then fail in codegen, which is
+        // a build break on the desktop ctest lane for a target whose frame rate nobody
+        // measures.
+        //
+        // A LIVE THREAD'S KEY IS NEVER 0 on either path (a thread pointer is a real TLS
+        // address; std::this_thread::get_id() on a running thread is never the
+        // default-constructed id, whose object representation is the all-zero one on every
+        // library in scope), which is what lets 0 mean "nobody".
+        //
+        // THE SELECTOR IS A BUILD KNOB, NOT A HEADER SECRET (review round 3). This header is
+        // pulled into MG_State, MG_Impl and MG_Test translation units now, so the name carries
+        // the MOBILEGL_DETAIL_ prefix to read as internal, it is #ifndef-guarded so a toolchain
+        // whose __has_builtin(__builtin_thread_pointer) answers 1 and then fails in codegen can
+        // be steered off the path with -DMOBILEGL_DETAIL_APPLY_THREAD_POINTER=0 instead of a
+        // header edit, and it is always DEFINED - to 0 when unavailable - and tested with #if
+        // rather than #ifdef, so that a -D...=0 really disables it instead of being ignored.
+#ifndef MOBILEGL_DETAIL_APPLY_THREAD_POINTER
+#if defined(__aarch64__) && defined(__has_builtin)
+#if __has_builtin(__builtin_thread_pointer)
+#define MOBILEGL_DETAIL_APPLY_THREAD_POINTER 1
+#endif
+#endif
+#endif
+#ifndef MOBILEGL_DETAIL_APPLY_THREAD_POINTER
+#define MOBILEGL_DETAIL_APPLY_THREAD_POINTER 0
+#endif
+        inline Uint64 CurrentThreadKey() {
+#if MOBILEGL_DETAIL_APPLY_THREAD_POINTER
+            return static_cast<Uint64>(reinterpret_cast<std::uintptr_t>(__builtin_thread_pointer()));
+#else
+            const std::thread::id id = std::this_thread::get_id();
+            static_assert(sizeof(std::thread::id) <= sizeof(Uint64),
+                          "std::thread::id does not fit the apply-thread key; this fallback has "
+                          "to hash rather than copy on that platform");
+            // AND IT MUST HAVE NO PADDING (review round 3). Copying the OBJECT REPRESENTATION of
+            // a type that has padding bytes would let two calls ON THE SAME THREAD return
+            // different keys, and OnApplyThread() would then answer FALSE ON THE APPLY THREAD -
+            // a role guard that has stopped guarding, which is the one direction CONTRACT-P5C
+            // rule E says a guard may never fail in (RunOnApplyThread would also lose its
+            // re-entrancy shortcut and the EGL teardown post would deadlock on m_controlDone).
+            // Every library this fallback is built against today wraps a single scalar
+            // (libstdc++ __gthread_t, libc++ __libcpp_thread_id, MSVC unsigned int) and
+            // satisfies this; one that did not is a BUILD ERROR here rather than a silently
+            // dead guard at run time.
+            static_assert(std::has_unique_object_representations_v<std::thread::id>,
+                          "std::thread::id has padding on this platform: copying its object "
+                          "representation would make the apply-thread key unstable within one "
+                          "thread. Hash the id (std::hash<std::thread::id>) instead.");
+            Uint64 key = 0;
+            std::memcpy(&key, &id, sizeof(id));
+            return key;
+#endif
+        }
+    } // namespace Detail
 
     class ServerLoop {
     public:
@@ -131,7 +238,18 @@ namespace MobileGL::MG_Remote::Server {
         // True on the apply thread itself. RunOnApplyThread uses it to run inline rather than
         // deadlock when the apply thread posts to itself - which the EGL teardown path does,
         // because ~BackendObject_DirectGLES runs THERE and reaches ReleaseEGLResources.
-        static Bool OnApplyThread();
+        //
+        // INLINE, AND THAT IS THE POINT (P5d round 3, package D): see the Detail block above.
+        // Every role guard in MG_State, MG_Impl, MG_Pipe and MG_Remote/Client asks this once
+        // or more per draw, so the call itself - a cross-library PLT hop - was a measurable
+        // share of the cost of the answer.
+        static Bool OnApplyThread() {
+            const Uint64 key = Detail::g_applyThreadKey.load(std::memory_order_relaxed);
+            // Short-circuit ON PURPOSE: with TransportMode::Monolith, and in every process
+            // before Start() and after Stop(), the key is 0 and the caller pays one relaxed
+            // load and one branch - it never even reads its own identity.
+            return key != 0 && key == Detail::CurrentThreadKey();
+        }
 
         // The CPU mask MOBILEGL_IPC_SERVER_AFFINITY resolved to and sched_setaffinity accepted.
         // 0 means "no affinity was applied" - the honest answer for `off`, for a platform with
@@ -146,6 +264,13 @@ namespace MobileGL::MG_Remote::Server {
         // fail for its own reason.
         Uint64 DrainedRecords() const;
         Uint64 ParkCount() const;
+        // How many of those waits ran out of spin budget and really blocked. ParkCount is an
+        // INTENTION (counted on the way toward a park, C10's note); this is the outcome, and
+        // the pair is what says whether MOBILEGL_IPC_SPIN_US is sized for the workload. It is
+        // this loop's OWN tally rather than the consumer bell's ParkEntries() because a bell
+        // belongs to an endpoint and counts every waiter on it; only a tally passed into the
+        // one Wait this loop makes is guaranteed to stay a subset of ParkCount().
+        Uint64 ParkBlockCount() const;
         // Scheduling perturbation only: the hook runs after application, before retirement.
         // Integration tests use it to observe real producer back-pressure from GL uploads.
         void SetBeforeRetireHookForTesting(void (*hook)()) {
@@ -192,11 +317,35 @@ namespace MobileGL::MG_Remote::Server {
         void ForgetCurrentTuple();
         void ForgetCurrentTupleIfItNames(EGLSurface surface);
 
-    private:
-        void ApplyThreadMain();
         // Part of the apply thread's park predicate: a posted control request must be able to
         // un-park a thread waiting on kWaitForever, which a Notify alone cannot do.
+        //
+        // IT READS ONE ATOMIC AND TAKES NO LOCK (P5d round 3, package T item 1). It used to
+        // take m_controlMutex on every call, and the idle poll calls it on every iteration -
+        // once inside the `ready` lambda and once more through PumpControlRequest - which
+        // simpleperf at head 56a77348 measured as ~49% of the whole apply thread's cycles
+        // (mutex::lock 12.4 + mutex::unlock 13.6 + the two pthread_* halves, 58-60% of them
+        // with ApplyThreadMain as the DIRECT caller). An idle poll on an empty ring must cost
+        // loads, not a futex-backed critical section. m_controlPosted is that load; the
+        // mailbox's own fields stay under the mutex and the handshake below is unchanged.
+        //
+        // PUBLIC because ServerLoopTest reads it: the clear side of the shadow has a failure
+        // mode - a shadow left set makes `ready` permanently true and the loop never parks
+        // again - that no other public surface can see.
+        //
+        // READ THE PREDICATE LITERALLY: "a request is POSTED AND NOT YET TAKEN", which is
+        // narrower than the name's "a control request is in flight". The shadow is cleared
+        // when the pump takes the work, not when the work returns, so for the whole duration
+        // of `work(user)` this answers false although m_controlPending is still true and the
+        // poster is still blocked in RunOnApplyThread. That is deliberate - it is a PARK
+        // PREDICATE, and the thread that would act on it is the one running the work - but it
+        // means this is not a liveness query and must not be used as one. The only in-tree
+        // reader outside the test is the apply thread's own `ready` lambda, which by
+        // construction cannot be inside that window.
         Bool ControlIsPending() const;
+
+    private:
+        void ApplyThreadMain();
         // Runs a posted control request, if there is one. Returns true if it ran one.
         Bool PumpControlRequest();
         // Pops and applies every record currently in the ring; returns how many it applied.
@@ -207,7 +356,9 @@ namespace MobileGL::MG_Remote::Server {
         std::atomic<Bool> m_running{false};
         std::atomic<Bool> m_stopRequested{false};
         std::thread m_thread;
-        std::atomic<std::thread::id> m_applyThreadId{};
+        // The apply thread's identity used to live here as an atomic<std::thread::id>. It is
+        // Detail::g_applyThreadKey now - see the block at the top of this header for why the
+        // identity had to stop being a member reachable only through ServerLoopInstance().
 
         // The private backend object. Destroyed ON the apply thread while it still owns the
         // context - see Stop().
@@ -217,7 +368,19 @@ namespace MobileGL::MG_Remote::Server {
         // client thread runnable at a time; m_callerMutex serialises anything that is not.
         std::mutex m_callerMutex;
         std::mutex m_controlMutex;
-        std::condition_variable m_controlPosted;
+        // THE MAILBOX'S ONE-BIT SHADOW, and the only field of it the idle poll may read.
+        // Written to `true` by the poster under m_controlMutex AFTER m_controlPending, and
+        // back to `false` under the same lock by whoever TAKES the request (PumpControlRequest,
+        // or ApplyThreadMain's exit block when it answers NOT_INITIALIZED). A reader that sees
+        // `true` through the release/acquire pair therefore also sees m_controlPending; a
+        // reader that sees `false` cannot be missing a request, because the store precedes the
+        // poster's Notify and Doorbell::Wait re-tests its predicate after every Park return.
+        // The mutex still owns every other field - this is a fast NEGATIVE answer, not a second
+        // copy of the mailbox.
+        //
+        // It replaces a std::condition_variable of the same name that had no waiter and no
+        // notifier anywhere in the tree (m_controlDone is the one that carries the handshake).
+        std::atomic<Bool> m_controlPosted{false};
         std::condition_variable m_controlDone;
         ControlWork m_controlWork = nullptr;
         void* m_controlUser = nullptr;
@@ -235,6 +398,9 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 m_affinityMask = 0;
         std::atomic<Uint64> m_drained{0};
         std::atomic<Uint64> m_parks{0};
+        // Incremented by Doorbell::Wait through its `parkTally` out-parameter, once per wait
+        // that reached the blocking Park. Relaxed everywhere: it is a gauge.
+        std::atomic<Uint64> m_parkBlocks{0};
         std::atomic<void (*)()> m_beforeRetireHook{nullptr};
 
         // C7 / ID-54: the (dpy, draw, read, ctx) currently bound on the apply thread. Written and

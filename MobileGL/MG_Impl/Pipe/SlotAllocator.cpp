@@ -25,8 +25,8 @@ namespace MobileGL::MG_Pipe {
         // The named exemption of CONTRACT-P5C §3.1: the sites whose handle-carrying records
         // are not emitted yet (P4b/P7) probe read-only inside the scope. The G6
         // frontend-keyed registry family (P3b/P4b) does the same inside its own scope.
-        if (MGPipeReverseAnnouncementScope::Active()) return;
-        if (MGPipeFrontendKeyedRegistryScope::Active()) return;
+        if (MGPipeReverseAnnouncementScope::ActiveOnApplyThread()) return;
+        if (MGPipeFrontendKeyedRegistryScope::ActiveOnApplyThread()) return;
         MGLOG_F("MGPipe: Fatal{RoleViolation, \"MGPipeSlots\"} - the apply thread called "
                 "MGPipeSlots().%s. With an active transport the client slot allocator is "
                 "client-only memory (CONTRACT-P5C §3.1, rule E): a handle arrives already "
@@ -38,34 +38,67 @@ namespace MobileGL::MG_Pipe {
     }
 
     namespace {
-        thread_local Uint32 g_reverseAnnouncementScopeDepth = 0;
+        // NOT thread_local any more, and not atomic either (P5d round 3, package D).
+        //
+        // WHY THERE IS NO DATA RACE. Both depths have exactly ONE reader in the whole tree:
+        // MGPipeRefuseAllocatorFromApplyThread above, whose first two lines return unless the
+        // transport is active AND ServerLoop::OnApplyThread() is true. So the only thread whose
+        // depth could ever change an answer is the apply thread - and the four scope bodies
+        // below now increment and decrement ONLY when OnApplyThread() says so. That makes the
+        // apply thread the single writer and the single reader of both counters; no other
+        // thread touches them, and a monolith process never even reads them (the guard's first
+        // line returns on TransportMode::Monolith and there is no apply thread to make the
+        // second true). Single-writer-single-reader on one thread needs no lock, no atomic and
+        // no TLS.
+        //
+        // WHY IT WAS WORTH DOING. A shared-library thread_local costs an __emutls_get_address
+        // call per access. On the MONOLITH's GL thread that symbol is the TOP entry of the
+        // profile at 7.7%, and these two scopes' ctor/dtor are 32.7% of its samples
+        // (MGPipeFrontendKeyedRegistryScope 18.75 ctor + 13.95 dtor, MGPipeReverseAnnouncement
+        // 8.4); on the split's apply thread emutls is 7.4%. The scope is constructed at ~20
+        // sites in DirectGLES.cpp, several inside StateBackendObjectRegistry::HandleOf, which
+        // is per-draw. The cost on the GL thread is now one inlined predicate per end.
+        //
+        // The query's meaning ON THE APPLY THREAD is unchanged, which is the only meaning
+        // the guard reads. Off it the answer is now always false, and the query is named
+        // ActiveOnApplyThread() rather than Active() so that a reader who needs the other
+        // meaning cannot ask for it by accident: whoever wants "is a scope open on THIS
+        // thread" has to add it, and move the counting back, rather than read a false that
+        // looks like an answer.
+        Uint32 g_reverseAnnouncementScopeDepth = 0;
     }
 
-    MGPipeReverseAnnouncementScope::MGPipeReverseAnnouncementScope() {
-        ++g_reverseAnnouncementScopeDepth;
+    MGPipeReverseAnnouncementScope::MGPipeReverseAnnouncementScope()
+        // Decided ONCE and remembered: the destructor must undo exactly what the constructor
+        // did, and re-asking the predicate would leak a count across a scope that straddled
+        // the apply thread's exit block.
+        : m_counted(MG_Remote::Server::ServerLoop::OnApplyThread()) {
+        if (m_counted) ++g_reverseAnnouncementScopeDepth;
     }
 
     MGPipeReverseAnnouncementScope::~MGPipeReverseAnnouncementScope() {
-        --g_reverseAnnouncementScopeDepth;
+        if (m_counted) --g_reverseAnnouncementScopeDepth;
     }
 
-    Bool MGPipeReverseAnnouncementScope::Active() {
+    Bool MGPipeReverseAnnouncementScope::ActiveOnApplyThread() {
         return g_reverseAnnouncementScopeDepth != 0;
     }
 
     namespace {
-        thread_local Uint32 g_frontendKeyedRegistryScopeDepth = 0;
+        // Same counter, same argument, same single reader - see the block above.
+        Uint32 g_frontendKeyedRegistryScopeDepth = 0;
     }
 
-    MGPipeFrontendKeyedRegistryScope::MGPipeFrontendKeyedRegistryScope() {
-        ++g_frontendKeyedRegistryScopeDepth;
+    MGPipeFrontendKeyedRegistryScope::MGPipeFrontendKeyedRegistryScope()
+        : m_counted(MG_Remote::Server::ServerLoop::OnApplyThread()) {
+        if (m_counted) ++g_frontendKeyedRegistryScopeDepth;
     }
 
     MGPipeFrontendKeyedRegistryScope::~MGPipeFrontendKeyedRegistryScope() {
-        --g_frontendKeyedRegistryScopeDepth;
+        if (m_counted) --g_frontendKeyedRegistryScopeDepth;
     }
 
-    Bool MGPipeFrontendKeyedRegistryScope::Active() {
+    Bool MGPipeFrontendKeyedRegistryScope::ActiveOnApplyThread() {
         return g_frontendKeyedRegistryScopeDepth != 0;
     }
 #endif

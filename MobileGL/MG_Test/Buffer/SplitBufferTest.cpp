@@ -171,6 +171,11 @@ TEST_F(SplitBufferSet, Row2OnlyAWritableImageBufferTextureCounts) {
 }
 
 // Row 2's WALK, through the image unit the context actually holds.
+//
+// THE FIXTURE BINDS THE UNIT BY HAND, so it has to move the image-unit high-water mark by hand
+// too (P5d round 3, package C): the walk is bounded by that mark now, and a case that writes the
+// binding straight into the slot never went through glBindImageTexture, which is what feeds it.
+// The mark's own producer has its own case - ImageEmit.TheBindFeedsTheImageUnitHighWaterMark.
 TEST_F(SplitBufferSet, Row2AWritableImageBufferTextureIsMarkedByADraw) {
     auto texture = MakeShared<MG_State::GLState::TextureObjectBuffer>(8u);
     auto backing = MakeBuffer(14u, 128);
@@ -178,10 +183,46 @@ TEST_F(SplitBufferSet, Row2AWritableImageBufferTextureIsMarkedByADraw) {
     auto& binding = MG_State::pGLContext->GetImageTextureBinding(0);
     binding.Texture = texture;
     binding.Access = GL_WRITE_ONLY;
+    MG_State::pGLContext->NoteImageUnitTouched(0);
 
     MG_Remote::Client::MarkGpuWritesForDraw();
 
     EXPECT_EQ(MG_Remote::Client::ProducerMarkCount(GpuWriteProducer::WritableImageBufferTexture), 1u);
+
+    binding = MG_State::GLState::ImageTextureBinding{};
+}
+
+// Row 2's BOUND, and it is the half an optimisation is allowed to get wrong in exactly one
+// direction (P5d round 3, package C). The sweep used to be MAX_TEXTURE_IMAGE_UNITS wide on every
+// draw - 2.15% self of the GL thread on the Minecraft inproc profile, in a workload with no image
+// binding anywhere - and is now bounded by the frontend's image-unit high-water mark.
+//
+// THE CASE PINS BOTH ENDS OF THAT BOUND. Below the mark a writable image-buffer texture is still
+// found; a mark that has never moved means the walk does not run at all, which is the whole
+// saving and is what makes "the mark only ever grows" load-bearing rather than decorative. Revert
+// the bound to `unit < MAX_TEXTURE_IMAGE_UNITS` and the second half goes red; drop
+// NoteImageUnitTouched from glBindImageTexture and ImageEmit.TheBindFeedsTheImageUnitHighWaterMark
+// goes red instead - the two together are what say the narrowing is safe.
+TEST_F(SplitBufferSet, Row2TheSweepIsBoundedByTheImageUnitHighWaterMark) {
+    ASSERT_EQ(MG_State::pGLContext->GetMaxTouchedImageUnit(), -1)
+        << "a fresh context has bound no image unit, so the sweep has nothing to walk";
+
+    auto texture = MakeShared<MG_State::GLState::TextureObjectBuffer>(9u);
+    auto backing = MakeBuffer(18u, 128);
+    texture->GetBufferBindingSlot().Bind(backing);
+    constexpr Int kUnit = 5;
+    auto& binding = MG_State::pGLContext->GetImageTextureBinding(kUnit);
+    binding.Texture = texture;
+    binding.Access = GL_READ_WRITE;
+
+    MG_Remote::Client::MarkGpuWritesForDraw();
+    EXPECT_EQ(MG_Remote::Client::ProducerMarkCount(GpuWriteProducer::WritableImageBufferTexture), 0u)
+        << "the mark has never moved, so the sweep must not walk a single unit";
+
+    MG_State::pGLContext->NoteImageUnitTouched(kUnit);
+    MG_Remote::Client::MarkGpuWritesForDraw();
+    EXPECT_EQ(MG_Remote::Client::ProducerMarkCount(GpuWriteProducer::WritableImageBufferTexture), 1u)
+        << "a unit at the mark is inside the walk";
 
     binding = MG_State::GLState::ImageTextureBinding{};
 }
@@ -506,9 +547,195 @@ TEST_F(SplitBufferSet, OnlyAdoptTierTwoIsImplemented) {
     MG_Config::Ipc.AdoptTier = 2;
 }
 
+// =====================================================================================
+// THE MPROTECT TRACKER'S OUTWARD ALIGNMENT (P5d round 3). A split build's shadow is
+// page-aligned AND page-granular (PipeResource.h), so every page a mapped range touches is
+// the shadow's own and the tracker protects the range's containing pages whole: no
+// unprotected edge bytes, no per-draw XXH3 (8.5% of the client thread at VD12 before this).
+// White-box on purpose - which pages a map protected is not observable through any push
+// count, and the epoch (the one thing a protected page moves) is the tracker's own.
+// =====================================================================================
+
+// A sub-page map used to register with an EMPTY interior and two hashed edges; now it is
+// one protected page, and a write through the pointer FAULTS - which is the whole point.
+TEST_F(SplitBufferSet, ASubPageMapIsOneProtectedPageAndAWriteThroughItFaults) {
+    if (!PersistentMapTracker::MprotectArmAvailableForTest()) {
+        GTEST_SKIP() << "no mprotect arm on this host (handler not installable, or the kernel "
+                        "page is not the tracker's 4 KB); the hash arm serves every map here";
+    }
+    constexpr SizeT kSize = 100; // well under a page, and not a multiple of anything
+    auto buffer = MakeBuffer(26u, kSize);
+    ASSERT_EQ(buffer->ShadowAllocationBytes() % 4096u, 0u)
+        << "the split build's shadow allocator rounds the SIZE to whole pages, not just the base";
+    ASSERT_GE(buffer->ShadowAllocationBytes(), kSize);
+    auto* mapped = static_cast<Uint8*>(buffer->AcquireMemoryRange(
+        Range1D{0, kSize}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent));
+    ASSERT_NE(mapped, nullptr);
+    ASSERT_EQ(reinterpret_cast<uintptr_t>(mapped) % 4096u, 0u) << "the shadow base is page-aligned";
+
+    const auto* slot = PersistentMapTracker::TrackedSlotForTest(*buffer);
+    ASSERT_NE(slot, nullptr) << "a page-aligned, page-granular shadow registers on the mprotect arm";
+    EXPECT_EQ(slot->pageCount, 1u)
+        << "a sub-page map is ONE protected page under outward alignment, not an empty interior";
+    EXPECT_FALSE(slot->hasEdges) << "outward alignment leaves no unprotected edge bytes to hash";
+    const uintptr_t base = slot->base.load();
+    const uintptr_t end = slot->end.load();
+    EXPECT_EQ(base, reinterpret_cast<uintptr_t>(mapped));
+    EXPECT_EQ(end, base + 4096u);
+    EXPECT_LE(end, reinterpret_cast<uintptr_t>(mapped) + buffer->ShadowAllocationBytes())
+        << "the protected span never runs past the shadow's own allocation";
+
+    // Fresh state ships everything once, then re-arms; with nothing written a second push
+    // ships nothing (and, with no edges, hashes nothing).
+    MG_Remote::Client::PushPersistentMapsBeforeVerb();
+    EXPECT_EQ(PersistentMapTracker::Instance().BlocksPushed(), 1u);
+    EXPECT_EQ(PersistentMapTracker::Instance().BytesPushed(), static_cast<Uint64>(kSize));
+    MG_Remote::Client::PushPersistentMapsBeforeVerb();
+    EXPECT_EQ(PersistentMapTracker::Instance().BlocksPushed(), 1u);
+
+    // The one page IS protected: a write through the application's pointer faults into the
+    // handler (the epoch moves), and the next push ships the page's block clamped to the
+    // mapped range. Under the old empty-interior registration nothing faulted here.
+    const Uint64 epochBefore = PersistentMapTracker::FaultEpochForTest();
+    mapped[kSize - 1] = 0x5A;
+    EXPECT_GT(PersistentMapTracker::FaultEpochForTest(), epochBefore)
+        << "the sub-page map's page was not protected: the write did not fault";
+    MG_Remote::Client::PushPersistentMapsBeforeVerb();
+    EXPECT_EQ(PersistentMapTracker::Instance().BlocksPushed(), 2u);
+    EXPECT_EQ(PersistentMapTracker::Instance().BytesPushed(), static_cast<Uint64>(2 * kSize))
+        << "the push is clamped to [begin, end) even though the protected page is wider";
+
+    // The unmap retires the slot and restores the page writable: an API write into the
+    // shadow afterwards must not fault (an unowned fault chains to SIG_DFL and dies).
+    buffer->ReleaseMemory(false);
+    EXPECT_EQ(PersistentMapTracker::TrackedSlotForTest(*buffer), nullptr);
+    const Uint8 byte = 0x3C;
+    buffer->UploadSubData(DataPtr{const_cast<Uint8*>(&byte), 1}, 0);
+}
+
+// The inward fallback is kept for any shadow that fails the page-granular test, and the
+// only way to reach it on this build - whose allocator never hands out such a shadow - is
+// to register a range by hand with a base or an extent the tracker cannot vouch for.
+TEST_F(SplitBufferSet, AShadowThatFailsThePageGranularTestKeepsTheInwardAlignmentAndItsEdges) {
+    if (!PersistentMapTracker::MprotectArmAvailableForTest()) {
+        GTEST_SKIP() << "no mprotect arm on this host (handler not installable, or the kernel "
+                        "page is not the tracker's 4 KB); the hash arm serves every map here";
+    }
+    // Three whole pages from the shadow allocator itself: page-aligned, page-granular.
+    MG_State::GLState::MapAlignedData store(3u * 4096u);
+    const auto storeBase = reinterpret_cast<uintptr_t>(store.data());
+    ASSERT_EQ(storeBase % 4096u, 0u);
+    const SizeT extent = MG_State::GLState::ShadowAllocationBytesFor(store.capacity());
+    ASSERT_EQ(extent, 3u * 4096u);
+    // Never a real buffer's id: BufferObject lifetime ids count up from 1.
+    constexpr Uint64 kId = ~0ull - 7u;
+
+    // An UNALIGNED base (the shadow's own storage, offset by 64) with a range of two pages:
+    // only the one page fully inside [base+64, base+64+8192) is protected, both ends are
+    // edges - the pre-round-3 shape, and still the safe answer for a base like this.
+    const auto* slot = PersistentMapTracker::TrackForTest(kId, store.data() + 64, 0, 2u * 4096u, extent);
+    ASSERT_NE(slot, nullptr);
+    EXPECT_EQ(slot->pageCount, 1u);
+    EXPECT_TRUE(slot->hasEdges);
+    EXPECT_EQ(slot->base.load(), storeBase + 4096u);
+    EXPECT_EQ(slot->end.load(), storeBase + 2u * 4096u);
+    PersistentMapTracker::UntrackForTest(kId);
+
+    // An aligned base with an extent the caller could NOT vouch for (0): inward as well.
+    slot = PersistentMapTracker::TrackForTest(kId, store.data(), 64, 2u * 4096u + 64, 0);
+    ASSERT_NE(slot, nullptr);
+    EXPECT_EQ(slot->pageCount, 1u);
+    EXPECT_TRUE(slot->hasEdges);
+    PersistentMapTracker::UntrackForTest(kId);
+
+    // A range that runs PAST the extent it was told about is never widened into it.
+    slot = PersistentMapTracker::TrackForTest(kId, store.data(), 64, 2u * 4096u + 64, 2u * 4096u);
+    ASSERT_NE(slot, nullptr);
+    EXPECT_EQ(slot->pageCount, 1u);
+    EXPECT_TRUE(slot->hasEdges);
+    PersistentMapTracker::UntrackForTest(kId);
+
+    // And the same range on the same aligned base with the TRUE extent widens outward to
+    // its three containing pages - exactly the extent, so the clamp sits on its boundary.
+    slot = PersistentMapTracker::TrackForTest(kId, store.data(), 64, 2u * 4096u + 64, extent);
+    ASSERT_NE(slot, nullptr);
+    EXPECT_EQ(slot->pageCount, 3u);
+    EXPECT_FALSE(slot->hasEdges);
+    EXPECT_EQ(slot->base.load(), storeBase);
+    EXPECT_EQ(slot->end.load(), storeBase + extent);
+    PersistentMapTracker::UntrackForTest(kId);
+    // Restored writable before the store goes out of scope: freeing a still-protected page
+    // would fault inside the allocator with no owner to answer.
+    store[0] = 1;
+    store[extent - 1] = 1;
+}
+
+// THE DRAIN THE EPOCH SKIP RESTS ON. A fault marks a page and moves the epoch; the next
+// draw's walk consumes the epoch. If that walk pushed only the buffers the draw bound, a
+// faulted map the draw did NOT bind would be left marked, writable and unable to move the
+// epoch ever again - and the next draw that does bind it would skip, and the server would
+// draw its pre-write bytes. Before round 3 the skip's edge service drained every member
+// with edges by accident (nearly all of them); with page-granular shadows nothing has
+// edges, so the walk drains every marked member on purpose. Two maps, one bound: the write
+// to the unbound one must ship before the draw that binds it. Driven through
+// PushDrawConsumers itself - PushPersistentMapsBeforeVerb never reaches the skip.
+TEST_F(SplitBufferSet, AFaultedMapTheDrawDidNotBindStillShipsBeforeTheDrawThatDoes) {
+    if (!PersistentMapTracker::MprotectArmAvailableForTest()) {
+        GTEST_SKIP() << "no mprotect arm on this host (handler not installable, or the kernel "
+                        "page is not the tracker's 4 KB); the hash arm serves every map here";
+    }
+    constexpr SizeT kSize = 4096; // one page, one block each
+    auto a = MakeBuffer(29u, kSize);
+    auto b = MakeBuffer(30u, kSize);
+    auto* aMapped = static_cast<Uint8*>(a->AcquireMemoryRange(
+        Range1D{0, kSize}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent));
+    b->AcquireMemoryRange(Range1D{0, kSize},
+                          BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
+    ASSERT_NE(aMapped, nullptr);
+    ASSERT_NE(PersistentMapTracker::TrackedSlotForTest(*a), nullptr)
+        << "both maps must be on the mprotect arm, or the epoch is not what decides";
+    ASSERT_NE(PersistentMapTracker::TrackedSlotForTest(*b), nullptr);
+    auto& tracker = PersistentMapTracker::Instance();
+    auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, 0);
+
+    // Draw 1 binds B only. Both maps are fresh - every page marked, and the registration
+    // moved the epoch - so this walk ships both once: the unbound A as well.
+    point.Bind(b);
+    tracker.PushDrawConsumers();
+    EXPECT_EQ(tracker.BlocksPushed(), 2u) << "first push ships everything once, the unbound map too";
+    // Draw 2, nothing written: the epoch is unmoved and the skip ships nothing.
+    tracker.PushDrawConsumers();
+    EXPECT_EQ(tracker.BlocksPushed(), 2u);
+
+    // The application writes A through its pointer (a fault: A's page is marked, the epoch
+    // moves) and the next draw binds B only.
+    const Uint64 epochBefore = PersistentMapTracker::FaultEpochForTest();
+    aMapped[kSize / 2] = 0x5A;
+    ASSERT_GT(PersistentMapTracker::FaultEpochForTest(), epochBefore)
+        << "the write did not fault: A's page was not re-armed by its first push";
+    tracker.PushDrawConsumers();
+    EXPECT_EQ(tracker.BlocksPushed(), 3u)
+        << "the walk that consumed the epoch must drain A's marked page although this draw "
+           "bound only B - nothing will ever move the epoch for that page again";
+
+    // Draw 4 binds A. The epoch is unmoved and the skip fires - correctly, because A's
+    // write already crossed. With the drain reverted, this is the draw that reads stale.
+    point.Bind(a);
+    tracker.PushDrawConsumers();
+    EXPECT_EQ(tracker.BlocksPushed(), 3u) << "nothing left to ship";
+    EXPECT_EQ(tracker.BytesPushed(), static_cast<Uint64>(3u * kSize));
+
+    point.Bind(nullptr);
+    a->ReleaseMemory(false);
+    b->ReleaseMemory(false);
+}
+
 #else
 
-// THE SAME SIXTEEN NAMES, SO THE ctest NAME SET DOES NOT MOVE BETWEEN LANES. G2 compares the
+// THE SAME NAMES, ONE FOR ONE, SO THE ctest NAME SET DOES NOT MOVE BETWEEN LANES. (The count
+// is deliberately NOT written out here: it read "SIXTEEN" against seventeen stubs before this
+// commit and "SEVENTEEN" against eighteen after, so it has never once matched the list it
+// claims to describe - and the list below is the authority either way.) G2 compares the
 // pull and push name lists line for line and G14 allows build-split to ADD names but never to
 // remove one, so a case that exists only where it can run would break both gates for a reason
 // that has nothing to do with what it tests. It skips instead, and says why.
@@ -516,6 +743,7 @@ TEST(SplitBufferSet, Row0EverySsboBindingPointIsMarkedByADraw) { MGL_SPLIT_ONLY_
 TEST(SplitBufferSet, Row1EveryBoundAtomicCounterIsMarkedByADraw) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, Row2OnlyAWritableImageBufferTextureCounts) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, Row2AWritableImageBufferTextureIsMarkedByADraw) { MGL_SPLIT_ONLY_OR_SKIP(); }
+TEST(SplitBufferSet, Row2TheSweepIsBoundedByTheImageUnitHighWaterMark) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, Row3TransformFeedbackTargetsAreOnlyMarkedWhileACaptureIsActive) {
     MGL_SPLIT_ONLY_OR_SKIP();
 }
@@ -531,6 +759,11 @@ TEST(SplitBufferSet, AZeroBlockSizeTurnsThePushOffRatherThanMakingItUnlimited) {
 TEST(SplitBufferSet, ADestroyedBufferLeavesTheSet) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, UnderSplitTheWritebackClearsThePendingFlagAndNotTheRequest) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, OnlyAdoptTierTwoIsImplemented) { MGL_SPLIT_ONLY_OR_SKIP(); }
+TEST(SplitBufferSet, ASubPageMapIsOneProtectedPageAndAWriteThroughItFaults) { MGL_SPLIT_ONLY_OR_SKIP(); }
+TEST(SplitBufferSet, AShadowThatFailsThePageGranularTestKeepsTheInwardAlignmentAndItsEdges) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
+TEST(SplitBufferSet, AFaultedMapTheDrawDidNotBindStillShipsBeforeTheDrawThatDoes) { MGL_SPLIT_ONLY_OR_SKIP(); }
 
 #endif // MOBILEGL_BUILD_DISAGGREGATED
 

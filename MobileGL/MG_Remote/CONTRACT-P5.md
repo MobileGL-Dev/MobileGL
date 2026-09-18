@@ -352,7 +352,7 @@ make-current and teardown do to it — the column `ARCHITECTURE.md` does not hav
 
 1. client publishes and waits for the server to drain and acknowledge;
 2. **`Doorbell::Kill()`** — *the only thing that can wake an apply thread parked on
-   `kWaitForever`* (`Doorbell.h:211-221`; the shape is already pinned by
+   `kWaitForever`* (`CondVarDoorbell::Kill` in `Doorbell.h`; the shape is already pinned by
    `InProcessTransportTest.cpp:344`);
 3. **join**, bounded (that test uses 5 s) so a regression is a red test and not a hung CI job;
 4. only then may the client free anything an emitter owns — a tail still referenced by an
