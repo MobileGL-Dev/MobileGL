@@ -90,8 +90,6 @@ MGPipeBarriered(op, payload, st) =
     MGPipeWaitClassFor(op) != kWaitNone                                  // static column, §2.2
  || (MGPipeCallClassFor(op) == kCtxVerb && st.IsTransformFeedbackActive) // (i) XFB stays lockstep
  || (op == DrawVbo && (payload.Flags & kDrawClientArrays))               // (ii) client arrays
- || (op == DrawVbo && payload.NumDraws > 1
-                   && !(payload.Flags & kDrawIsIndirect))                // (iii) plain multi-draw
 ```
 `st.IsTransformFeedbackActive` is `MGPContextValues`' value (`MGPipeTypes.h:1698`): on the client
 it is `ctx.IsTransformFeedbackActive()` at emit, on the server the applied value — `set_context_values`
@@ -105,36 +103,31 @@ must not be told a draw is unbarriered on that account. Escalation (ii) is a ref
 (§5.1), so on a run-ahead server it never reaches the sink; it is listed so the predicate is total.
 **No other runtime escalation exists**; adding one is an integrator ruling and a row here.
 
-**Escalation (iii) is ID-133's, added by ra2, and it follows ID-118's precedent** — move the
-record into a barriered class rather than special-case the field its apply still pulls. Espryt's
-multi-draw tier is chosen on the SERVER and per batch (`MultiDraw.cpp`'s `ResolveTierForBatch`),
-and the two indirect tiers reach `MultiDrawImpl::RunIndirect`, whose apply still reads the
-client's `GL_DRAW_INDIRECT_BUFFER` binding slot (`BoundDrawIndirectBufferId`, `MultiDraw.cpp:87`)
-— `GetBufferBindingSlot`, whose retiring phase is P8. Unbarriered, that is
-`Fatal{UnmigratedPipeInput, "GetBufferBindingSlot@DrawArrays"}`: 18 lane entries on the two
-tier-pinned lanes.
+**There was an escalation (iii) and it was WITHDRAWN — ID-133 added it, ID-136 took it back out,
+and the reason is the most reusable thing P5e learned about escalations.** ID-133 barriered a
+plain multi-draw (`NumDraws > 1 && !kDrawIsIndirect`) so that `MultiDrawImpl::RunIndirect`'s read
+of the client's `GL_DRAW_INDIRECT_BUFFER` binding became a legal barriered pull instead of
+`Fatal{UnmigratedPipeInput, "GetBufferBindingSlot@DrawArrays"}` on 18 lane entries. It worked, and
+it was the wrong instrument:
 
-**Why the key is the RECORD and not the tier.** There is exactly one draw opcode — all twenty
-draw entry points collapse onto `draw_vbo` — and the tier is resolved on the server from driver
-caps the client does not hold, so "escalate the indirect multi-draw op" has no op to name and no
-predicate both roles could compute. `NumDraws > 1` is the narrowest wire fact that CONTAINS the
-reaching set (`RunIndirect` is reachable only from `DrawElementsBatch`, which only a multi-draw
-record enters). `kDrawIsIndirect` is excluded because a genuinely indirect record carries its
-buffer as a handle in the second tail and resolves from that, pulling nothing. **The cost is
-therefore NOT confined to the opt-in tier lanes**: a plain `glMultiDraw*` now waits on every tier,
-including the `auto` → `ext` default. That is a real charge against §0's goal and the device arm
-owns measuring it. **It can be withdrawn outright** once `BoundDrawIndirectBufferId` takes the
-handle arm its own neighbour `ResolveBoundIndexBuffer` already has (three lines, `MultiDraw.cpp`,
-mv's file per ID-113): the read is a SAVE/RESTORE of a GL binding name around the tier's scratch
-buffer, not a data dependency, so the server can answer it from its own binding record and the
-pull disappears rather than being legalised.
+- There is exactly **one draw opcode** — all twenty draw entry points collapse onto `draw_vbo` —
+  and the multi-draw tier is resolved on the SERVER, per batch (`MultiDraw.cpp`'s
+  `ResolveTierForBatch`), from driver caps the client does not hold. So "escalate the indirect
+  multi-draw op" has no op to name and no predicate both roles can compute, and the narrowest
+  available key charged **every plain `glMultiDraw*` on every tier**, including the `auto` → `ext`
+  default the phone ships — a per-batch rendezvous on the shipping arm, added to satisfy a lane.
+- And the read was never a data dependency: `BoundDrawIndirectBufferId` SAVES AND RESTORES a GL
+  binding name around the tier's own scratch command buffer. Giving it the handle arm its
+  neighbour `ResolveBoundIndexBuffer` already had retires the pull outright.
 
-The client's half is asked at the validate point, before the record exists, so it cannot read
-`NumDraws`; it asks the verb, and `{MultiDrawArrays, MultiDrawElements, MultiDrawElementsBaseVertex}`
-is exactly the set whose record can carry `NumDraws > 1` without `kDrawIsIndirect`. **The
-inclusion must go that way round**: a record the server calls barriered whose fields the client
-did not fill would be an ADMITTED pull of a stale value, which is worse than the abort; a verb the
-client fills for and the server then calls unbarriered costs only a fill nobody reads.
+**The rule this leaves for the next candidate escalation: ask WHICH ARM PAYS FOR IT, not which
+lane it turns green.** A wait added to make a lane green is a real cost on a real path; if the
+predicate cannot name the arm that needs it, the escalation is charging arms that do not.
+
+The two halves — retiring the pull and withdrawing the clause — landed in one commit (ID-136
+overrode ID-113's package boundary for it): the pull retired without the clause withdrawn is a
+cost with no reason, and the clause withdrawn without the pull retired puts the 18 entries back
+on the unbarriered arm.
 
 ### 2.2 The static column, row by row
 

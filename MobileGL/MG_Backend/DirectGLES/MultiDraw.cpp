@@ -84,13 +84,8 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         constexpr SizeT kMaxComputeWorkGroups = 65535;
         constexpr SizeT kMaxComputeFlattenedIndices = kMaxComputeWorkGroups * kComputeWorkGroupSize;
 
-        Uint BoundDrawIndirectBufferId() {
-            const auto& indirect =
-                MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
-            if (!indirect) return 0;
-            const auto* resource = BufferImpl::EnsureBufferResource(indirect);
-            return resource ? resource->id : 0;
-        }
+        // BoundDrawIndirectBufferId MOVED (P5e ra2, ID-136) to sit beside BoundIndexBufferId,
+        // which is the same question about the other target and now has the same two arms.
 
         // ---------------------------------------------------------------------------
         // The bound index buffer, and WHICH SIDE ANSWERS FOR IT
@@ -147,6 +142,24 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
                     "ID-81); falling back to the frontend VAO's element slot here would draw this "
                     "multi-draw from whatever the CLIENT has bound now",
                     entry, missing, res.Slot, res.Gen);
+            std::abort();
+        }
+
+        // ---- P5e (ra2), ID-136: THE SAME REFUSAL FOR THE INDIRECT TARGET -------------------
+        //
+        // A sibling of mv's rather than a second idiom, because it is the same sentence about
+        // the other buffer target: a missing record on the handle arm aborts by name and never
+        // falls back to the frontend binding slot, which answers for whatever the CLIENT has
+        // bound NOW - a later verb than the one being applied.
+        [[noreturn]] void RefuseMissingIndirectBufferRecord(const char* entry,
+                                                            MG_Pipe::MGPipeHandle res) {
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"multidraw-indirect-buffer-arm\"} - %s found no "
+                    "backend resource for the indirect buffer {%u, %u} this verb's record named. "
+                    "The indirect buffer of this family is MGPipeApplier().VerbIndirectBuffer "
+                    "(CONTRACT-P5E §2.1) and the arm is selected by Transport != Monolith "
+                    "(ID-81); falling back to the frontend GL_DRAW_INDIRECT_BUFFER slot here "
+                    "would restore whatever the CLIENT has bound now",
+                    entry, res.Slot, res.Gen);
             std::abort();
         }
 
@@ -245,6 +258,57 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // index binding and will not re-issue it on the next draw.
         Uint BoundIndexBufferId() {
             return ResolveBoundIndexBuffer(IndexBufferQuestion::DriverName, "BoundIndexBufferId").Id;
+        }
+
+        // The GL name on GL_DRAW_INDIRECT_BUFFER, i.e. what a tier that swaps in its own scratch
+        // COMMAND buffer has to put back - the exact twin of BoundIndexBufferId above, and now
+        // with the same two arms.
+        //
+        // ---- P5e (ra2), ID-136: THE SEAT THIS FILE'S OWN RULE HAD MISSED -------------------
+        //
+        // This was the LAST unguarded frontend read on the multi-draw apply path, and it sat
+        // twenty lines above the function that retired its neighbour. It asked
+        // `MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect)` and then
+        // `EnsureBufferResource(<frontend object>)` - a registry lookup keyed by the client's
+        // identity, which is §4.4's rule and not only the allocator's. Under run-ahead that is
+        // `Fatal{UnmigratedPipeInput, "GetBufferBindingSlot@DrawArrays"}` on every batch the
+        // indirect tiers execute: 18 lane entries, and the only thing standing between the flip
+        // and a green lane once the fill race was fixed.
+        //
+        // WHAT IT IS NOT: a data dependency. The tier does not want the client's indirect
+        // buffer - it never reads a byte of it. It binds its OWN scratch command buffer
+        // (g_indirectCommands) and wants to put back the name that was there. So the answer is
+        // not "migrate the value" (which is what P8 owes for the ordinary indirect draw path);
+        // it is "ask the side that did the binding". ID-133's escalation (iii) legalised the
+        // pull instead, at the price of a rendezvous on every plain glMultiDraw* on the DEFAULT
+        // tier - a real cost on the shipping arm, paid to make a lane green. ID-136 withdraws
+        // that escalation and retires the read, in the commit that adds this arm.
+        //
+        // WHY MGPipeApplier().VerbIndirectBuffer IS THE WHOLE ANSWER ON THIS ARM: with a
+        // transport, the ONLY writer of this process's GL_DRAW_INDIRECT_BUFFER outside this
+        // function is DirectGLES.cpp's DrawSyncBit::IndirectBuffer arm, which binds from exactly
+        // that handle and nothing else. So "what was bound" IS "what the verb's record named",
+        // and a null handle is "this verb bound none" - the same 0 the monolith arm returns for
+        // an empty slot, and not the arm test (ID-110: the arm was decided by the transport
+        // above, never inferred from a null).
+        Uint BoundDrawIndirectBufferId() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                const MG_Pipe::MGPipeHandle res = MG_Pipe::MGPipeApplier().VerbIndirectBuffer;
+                if (MG_Pipe::MGPipeHandleIsNull(res)) return 0;
+                auto* resource = BufferImpl::EnsureBufferResourceForHandle(nullptr, res);
+                if (resource == nullptr) {
+                    RefuseMissingIndirectBufferRecord("BoundDrawIndirectBufferId", res);
+                }
+                return resource->id;
+            }
+#endif
+            // MONOLITH GLUE from here down, token for token what this function did before.
+            const auto& indirect =
+                MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+            if (!indirect) return 0;
+            const auto* resource = BufferImpl::EnsureBufferResource(indirect);
+            return resource ? resource->id : 0;
         }
 
         // ---------------------------------------------------------------------------

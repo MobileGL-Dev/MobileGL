@@ -916,13 +916,18 @@ namespace MobileGL::MG_Pipe {
     //   1. MGPipeWaitClassFor(op) != kWaitNone            the static column (§2.2)
     //   2. kCtxVerb with an open transform-feedback span  escalation (i): XFB stays lockstep
     //   3. draw_vbo carrying kDrawClientArrays            escalation (ii): client vertex arrays
-    //   4. draw_vbo with NumDraws > 1 and NOT indirect    escalation (iii): plain multi-draw
     //
     // NO OTHER RUNTIME ESCALATION EXISTS. Adding one is an integrator ruling and a row in the
-    // contract, not a condition somebody adds at a call site - because a fifth clause that only
-    // one side computes is the same silent failure one level down. (iii) is ID-133's, and
-    // ID-118's precedent is the one it follows: move the record into a barriered class rather
-    // than special-case the field its apply still pulls.
+    // contract, not a condition somebody adds at a call site - because a fourth clause that only
+    // one side computes is the same silent failure one level down.
+    //
+    // THERE WAS AN ESCALATION (iii) AND IT WAS WITHDRAWN, which is worth a line here rather than
+    // only in the history: ID-133 barriered a plain multi-draw to legalise a pull in Espryt's
+    // indirect multi-draw tier, ID-136 retired the pull instead (MultiDraw.cpp's
+    // BoundDrawIndirectBufferId) and took the clause back out. The rule it leaves behind is the
+    // one to apply to the next candidate: ask WHICH ARM PAYS for an escalation, not which lane
+    // it turns green - (iii) was keyed on the only wire fact available and therefore charged the
+    // default tier for a read only two opt-in tiers made.
     //
     // Escalation (ii) is a REFUSAL under run-ahead (§5.1), so on a run-ahead server it never
     // reaches the sink at all; it is here so the predicate is TOTAL and so the lockstep arm,

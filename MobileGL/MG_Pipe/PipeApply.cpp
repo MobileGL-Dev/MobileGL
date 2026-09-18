@@ -3015,33 +3015,27 @@ namespace MobileGL::MG_Pipe {
         if (op == MGPWireOp::DrawVbo && payload != nullptr) {
             const auto& draw = *static_cast<const MGPDrawInfo*>(payload);
             if ((draw.Flags & static_cast<Uint8>(kDrawClientArrays)) != 0) return true;
-            // 4. Escalation (iii), ID-133: a PLAIN multi-draw - NumDraws > 1 and not indirect.
-            //    Espryt's multi-draw tiers are chosen on the SERVER and per batch
-            //    (MultiDraw.cpp's ResolveTierForBatch), and the two indirect tiers reach
-            //    MultiDrawImpl::RunIndirect, whose apply still reads the client's
-            //    GL_DRAW_INDIRECT_BUFFER binding slot (BoundDrawIndirectBufferId, :87). That
-            //    is a BARRIER_PULLED field whose retiring phase is P8, so under run-ahead an
-            //    unbarriered record reading it is `Fatal{UnmigratedPipeInput,
-            //    "GetBufferBindingSlot@DrawArrays"}` - 18 lane entries on the two tier lanes.
+            // ---- ESCALATION (iii) WAS HERE AND IS WITHDRAWN (P5e ra2, ID-133 then ID-136) ---
             //
-            //    WHY THE KEY IS THE RECORD AND NOT THE TIER, which is the thing a reader will
-            //    want to check: there is exactly ONE draw opcode. Every one of the twenty draw
-            //    entry points collapses onto draw_vbo (MGPDrawInfo's header says so), and the
-            //    tier is resolved on the server, per batch, from driver caps the client does
-            //    not hold - so "escalate the indirect multi-draw op" has no op to name and no
-            //    predicate both roles could compute. NumDraws > 1 is the narrowest wire fact
-            //    that CONTAINS the reaching set: RunIndirect is reachable only from
-            //    DrawElementsBatch, which only a multi-draw record enters.
+            // ID-133 escalated a PLAIN multi-draw (`NumDraws > 1 && !kDrawIsIndirect`) so that
+            // MultiDrawImpl::RunIndirect's read of the client's GL_DRAW_INDIRECT_BUFFER binding
+            // became a legal barriered pull instead of an unbarriered Fatal. It worked, and it
+            // cost a rendezvous on EVERY plain glMultiDraw* on the DEFAULT tier: there is one
+            // draw opcode - all twenty entry points collapse onto draw_vbo - and the tier is
+            // chosen on the server per batch (MultiDraw.cpp's ResolveTierForBatch), so no
+            // predicate both roles can compute names the arm that actually needed it.
             //
-            //    AND kDrawIsIndirect IS EXCLUDED, which is what keeps Sodium's draw call out of
-            //    it: a genuinely indirect record carries its buffer as a handle in the second
-            //    tail and its apply resolves from that (ResolveIndirectCommandBytes' split
-            //    arm), so it pulls nothing and needs no wait. NumDraws is 0 there, so the test
-            //    is written `> 1` and the flag test is belt to that brace - both are stated
-            //    because the reason each holds is different.
-            if (draw.NumDraws > 1 && (draw.Flags & static_cast<Uint8>(kDrawIsIndirect)) == 0) {
-                return true;
-            }
+            // THE CHECK ON AN ESCALATION IS "WHICH ARM PAYS FOR IT", NOT "WHICH LANE GOES
+            // GREEN", and that is the rule this pair of rulings exists to record. The read was
+            // a save/restore of a GL binding NAME around the tier's own scratch buffer, not a
+            // data dependency, so the answer was to ask the side that did the binding:
+            // BoundDrawIndirectBufferId now takes the handle arm its neighbour
+            // ResolveBoundIndexBuffer already had, and the pull is GONE rather than legalised.
+            //
+            // Both halves landed in ONE commit on purpose: the pull retired without this clause
+            // withdrawn is a cost with no reason, and this clause withdrawn without the pull
+            // retired puts 18 lane entries back on the unbarriered arm. Neither is a state to
+            // gate or to measure, so neither was ever a head.
         }
         return false;
     }
