@@ -6968,6 +6968,52 @@ namespace MobileGL::MG_Backend::DirectGLES {
 // pull build has no such member at all and this has to fold to a constant there (D-P: the pull
 // build's preprocessed text may not gain a call).
 #define MGB_TEXTURE_HANDLE_ARM_OFF(twin) (MG_Pipe::MGPipeHandleIsNull((twin).PushedSyncHandle()))
+
+        // P5e (fix1, ID-81 / CONTRACT-P5E §5.8): THE NULL FRONTEND OBJECT IS A CONTRACT AND THIS
+        // IS WHERE IT IS CHECKED, ONCE, FOR ALL THREE SYNC BODIES.
+        //
+        // tx2's three sync bodies accept a null `stateTextureObject` because the RECORD answers
+        // every read they make - but only where the record arm is actually SELECTED. Two reads
+        // inside SyncMipmapsToBackend are gated on `Transport != Monolith` (the texture-VIEW test
+        // and RequireImageBindableStorage's re-dirty transition, §5.2), and every read in all
+        // three is gated on TextureResourceSubsystemEnabled() through `pushedStorage`. So a null
+        // object is servable exactly when BOTH hold, and the by-handle entries beside them
+        // (SyncTextureToBackendByHandle / SyncMipmapsToBackendByHandle) pass null on the strength
+        // of a NOTED HANDLE, which says nothing about either.
+        //
+        // The device found the gap: with MOBILEGL_TRANSPORT=monolith the push build still drives
+        // its framebuffer attachments from the record (P4a, D-C2), fb's SyncAttachmentSurface
+        // called the by-handle storage sync from that arm, and `stateTextureObject->IsTextureView()`
+        // dereferenced the null SharedPtr in Lightmap.<init> -> clearColorTexture -> glClear.
+        // The arm selection is repaired at that call site; this refusal is what makes the shape
+        // UNREPEATABLE rather than merely repaired - a null frontend object reaching a body that
+        // can still read one aborts BY NAME instead of taking a SIGSEGV three frames deep.
+        //
+        // Returns true when the caller must decline (no handle noted: the caller's bug it always
+        // was, named by the caller's own log line), false when the record arm can serve the call,
+        // and never returns at all when a handle was noted on an arm that cannot serve it.
+        static Bool RefuseNullFrontendTextureOffTheHandleArm(const char* entry,
+                                                            MG_Pipe::MGPipeHandle notedHandle) {
+            if (MG_Pipe::MGPipeHandleIsNull(notedHandle)) return true;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                TextureResourceSubsystemEnabled()) {
+                return false;
+            }
+#endif
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"texture-handle-arm\"} - %s was handed a NULL "
+                    "frontend texture for handle {%u, %u} on an arm that cannot answer without "
+                    "one. The by-handle entries pass null on the strength of a noted handle, and "
+                    "the record arm they rely on is selected by Transport != Monolith AND the "
+                    "texture-resource subsystem bit (CONTRACT-P5E §5.8, ID-81); neither holds "
+                    "here, so the body below would read a frontend object that does not exist",
+                    entry, notedHandle.Slot, notedHandle.Gen);
+            std::abort();
+        }
+// The guard the three sync bodies spell. In the PULL build it folds to the constant the
+// pre-fix1 text folded to, so that build's preprocessed text gains no call (D-P).
+#define MGB_TEXTURE_NULL_FRONTEND_REFUSED(twin, entry)                                                                 \
+    (RefuseNullFrontendTextureOffTheHandleArm((entry), (twin).PushedSyncHandle()))
 // P5e (tx2), CONTRACT-P5E §5.2: THE TEXTURE'S TARGET, from the descriptor whenever a record was
 // resolved. The two live `GetTarget()` reads left INSIDE the handle arm (scout G-S2-2, the
 // parameter sync and the built-in sampler sync) read Desc.Target here, through the same
@@ -6984,6 +7030,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     ((rec) != nullptr ? static_cast<TextureStorageType>((rec)->Desc.StorageKind) : (obj)->GetStorageType())
 #else
 #define MGB_TEXTURE_HANDLE_ARM_OFF(twin) (true)
+#define MGB_TEXTURE_NULL_FRONTEND_REFUSED(twin, entry) (true)
 #define MGB_TEXPARAM_TARGET(rec, obj) ((obj)->GetTarget())
 #define MGB_TEXTURE_DIAG_NAME(rec, obj) ((obj)->GetExternalIndex())
 #define MGB_TEXTURE_STORAGE_KIND(rec, obj) ((obj)->GetStorageType())
@@ -7351,8 +7398,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void BackendTextureObject::SyncMipmapsToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
             // P5e (tx2): null IS the by-handle arm once a handle has been noted on this twin;
-            // see the twin note in SyncBuiltinSamplerToBackend.
-            if (!stateTextureObject && MGB_TEXTURE_HANDLE_ARM_OFF(*this)) {
+            // see the twin note in SyncBuiltinSamplerToBackend. P5e (fix1): "a handle was noted"
+            // is not on its own the statement that the record arm will be SELECTED - the view
+            // test below and RequireImageBindableStorage's transition are transport-gated - so
+            // the check is the one shared refusal and a noted handle on an arm that cannot serve
+            // it aborts by name rather than falling into the frontend reads.
+            if (!stateTextureObject && MGB_TEXTURE_NULL_FRONTEND_REFUSED(*this, "SyncMipmapsToBackend")) {
                 MGLOG_E_ONCE("State texture object is null, cannot sync to backend.");
                 return;
             }
@@ -8939,8 +8990,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // P5e (tx2): NULL IS THE BY-HANDLE ARM, not an error, once a handle has been noted on
             // this twin - the record and the built-in sampler's CSO answer everything below and
             // the frontend object is not consulted at all. Without a handle it is still the
-            // caller's bug it always was.
-            if (!stateTextureObject && MGB_TEXTURE_HANDLE_ARM_OFF(*this)) {
+            // caller's bug it always was. P5e (fix1): and with a handle noted on an arm that
+            // cannot serve it, it is Fatal{RoleViolation, "texture-handle-arm"} - see the
+            // refusal's own comment beside MGB_TEXTURE_HANDLE_ARM_OFF.
+            if (!stateTextureObject && MGB_TEXTURE_NULL_FRONTEND_REFUSED(*this, "SyncBuiltinSamplerToBackend")) {
                 MGLOG_E_ONCE("State texture object is null, cannot sync to backend.");
                 return;
             }
@@ -9198,7 +9251,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // P5e (tx2): null IS the by-handle arm once a handle has been noted on this twin;
             // see the twin note in SyncBuiltinSamplerToBackend.
-            if (!stateTextureObject && MGB_TEXTURE_HANDLE_ARM_OFF(*this)) {
+            if (!stateTextureObject && MGB_TEXTURE_NULL_FRONTEND_REFUSED(*this, "SyncTextureParamsToBackend")) {
                 MGLOG_E_ONCE("State texture object is null, cannot sync to backend.");
                 return;
             }
@@ -10012,8 +10065,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // is deleted by the rekey rather than gated, which is what CONTRACT-P5E §4.4 asks for:
         // gating it would have left a client-allocator probe compiled into a path a run-ahead
         // apply reaches, and there is no longer anything for it to say.
+        //
+        // P5e (fix1, ID-81 / §5.8): THE STORAGE SYNC IS ARM-SELECTED AND THE MONOLITH ARM KEEPS
+        // ITS FRONTEND OBJECT. This function has TWO callers and they are on opposite arms: the
+        // handle form (SyncToBackendByHandle) has no frontend object and must not acquire one,
+        // while the OBJECT form (SyncToBackend, the push-monolith arm - P4a drives its
+        // attachments from the record too, gated on FramebufferSubsystemEnabled() alone, D-C2)
+        // is holding the frontend attachment the whole time. fb dropped the parameter for both,
+        // which routed the monolith arm into tx2's by-handle storage seam; that seam passes a
+        // NULL SharedPtr and relies on the record arm being selected, and under
+        // Transport == Monolith it is not - `stateTextureObject->IsTextureView()` then
+        // dereferenced null (the device's Lightmap.<init> -> clearColorTexture -> glClear
+        // SIGSEGV). So the parameter comes back as MONOLITH GLUE, used for nothing but the
+        // storage sync: the attach SHAPE, the empty-point test and the twin adoption stay the
+        // record's on both arms, which is what keeps N-6's hole closed and the cross-checks
+        // deleted. It is a pointer and it is null on the handle arm, so "which arm am I on" is
+        // never inferred from it - MG_Config::Transport decides, as §5.8 requires, and a
+        // monolith arm that somehow arrives without one refuses by name instead of attaching a
+        // texture whose levels were never pushed.
         static Bool SyncAttachmentSurface(GLenum glFBOTarget, const MG_Pipe::MGPSurface& surface,
-                                          GLenum glBackendAttachment) {
+                                          GLenum glBackendAttachment,
+                                          const MG_State::GLState::FramebufferAttachmentObject* monolithAttachment) {
             if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone ||
                 MG_Pipe::MGPipeHandleIsNull(surface.Res)) {
                 // An empty point: the caller detached it on exactly this test, so attaching
@@ -10045,8 +10117,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 // P5e (fb): the storage sync BY HANDLE (tx2's seam). The level shadow it reads
                 // is the applier's staged texture store, not a frontend object, which is what
-                // let the object parameter go.
-                backendTextureObject->SyncMipmapsToBackendByHandle(surface.Res);
+                // let the object parameter go - UNDER A TRANSPORT. P5e (fix1, ID-81): the
+                // push-monolith arm keeps the frontend sync it had at f6cfcbd3, token for token,
+                // because tx2's record arm inside SyncMipmapsToBackend is itself selected by
+                // `Transport != Monolith` and cannot answer here.
+#if MOBILEGL_BUILD_DISAGGREGATED
+                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                    backendTextureObject->SyncMipmapsToBackendByHandle(surface.Res);
+                } else
+#endif
+                {
+                    const SharedPtr<MG_State::GLState::ITextureObject> monolithTexture =
+                        (monolithAttachment != nullptr && monolithAttachment->IsTexture())
+                            ? monolithAttachment->GetTexture()
+                            : nullptr;
+                    if (!monolithTexture) {
+                        MGLOG_E_ONCE("MGPipe: attachment record names texture {%u, %u} on the "
+                                     "push-monolith arm, where the storage sync needs the frontend "
+                                     "texture and this caller supplied none - refusing to attach a "
+                                     "texture whose levels were never pushed",
+                                     surface.Res.Slot, surface.Res.Gen);
+                        return false;
+                    }
+                    backendTextureObject->SyncMipmapsToBackend(monolithTexture);
+                }
                 const auto uploadTarget = static_cast<TextureUploadTarget>(surface.UploadTarget);
                 if (surface.Layered != 0) {
                     g_GLESFuncs.glFramebufferTexture(glFBOTarget, glBackendAttachment,
@@ -10103,7 +10197,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // P5e (fb): the four allocation values were already record-supplied (D-D2); what
                 // moves here is the LOOKUP - the handle the surface carries, never HandleOf on
                 // an object the apply thread was handed.
-                backendRenderbufferObject->SyncToBackendByHandle(surface.Res);
+                //
+                // P5e (fix1, ID-81): arm-selected for the texture arm's reason, and here it is a
+                // BEHAVIOUR difference even though the by-handle body dereferences nothing: the
+                // object form reports a refused allocation to the application through the live
+                // GLContext (RecordError) and the by-handle form deliberately does not, because
+                // under a transport there is no application on this side to report it to. On the
+                // push-monolith arm there is, so the monolith arm keeps the object form.
+#if MOBILEGL_BUILD_DISAGGREGATED
+                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                    backendRenderbufferObject->SyncToBackendByHandle(surface.Res);
+                } else
+#endif
+                {
+                    const SharedPtr<MG_State::GLState::RenderbufferObject> monolithRenderbuffer =
+                        (monolithAttachment != nullptr && monolithAttachment->IsRenderbuffer())
+                            ? monolithAttachment->GetRenderbuffer()
+                            : nullptr;
+                    if (!monolithRenderbuffer) {
+                        MGLOG_E_ONCE("MGPipe: attachment record names renderbuffer {%u, %u} on the "
+                                     "push-monolith arm, where the storage allocation needs the "
+                                     "frontend renderbuffer and this caller supplied none - refusing "
+                                     "to attach a renderbuffer with no storage",
+                                     surface.Res.Slot, surface.Res.Gen);
+                        return false;
+                    }
+                    backendRenderbufferObject->SyncToBackend(monolithRenderbuffer);
+                }
                 backendRenderbufferObject->Bind();
                 g_GLESFuncs.glFramebufferRenderbuffer(glFBOTarget, glBackendAttachment, GL_RENDERBUFFER,
                                                       backendRenderbufferObject->GetBackendRenderbufferId());
@@ -10756,7 +10876,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             }
                         } else {
                             attachmentSynced =
-                                SyncAttachmentSurface(glFBOTarget, *pushedSurface, glBackendAttachment);
+                                SyncAttachmentSurface(glFBOTarget, *pushedSurface, glBackendAttachment,
+                                                      &attachmentObject);
                         }
                     } else {
                         attachmentSynced = SyncAttachmentObject(glFBOTarget, attachmentObject, glBackendAttachment);
@@ -11072,7 +11193,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         }
                         return;
                     }
-                    SyncAttachmentSurface(glFBOTarget, surface, glBackendAttachment);
+                    // No frontend attachment on this arm, by construction: the record IS the
+                    // point set here (§5.4). Null is what selects nothing - the transport test
+                    // inside is what selects the by-handle storage syncs.
+                    SyncAttachmentSurface(glFBOTarget, surface, glBackendAttachment,
+                                          /*monolithAttachment=*/nullptr);
                 };
                 for (Uint i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
                     applyPoint(static_cast<FramebufferAttachmentType>(

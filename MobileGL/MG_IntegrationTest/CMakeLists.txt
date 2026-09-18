@@ -72,6 +72,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/SampledSetStalenessScenario.cpp
     Scenarios/ThreeChannelAttachmentScenario.cpp
     Scenarios/SnormAttachmentScenario.cpp
+    Scenarios/MonolithAttachmentClearScenario.cpp
     Scenarios/PipelineFailureScenario.cpp
     Scenarios/AdvertisedLimitsScenario.cpp
     Scenarios/PixelStoreSweepScenario.cpp
@@ -1936,6 +1937,45 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             LABELS "integration-gpu\;integration-split"
             TIMEOUT ${MGL_ITEST_TIMEOUT}
             ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
+    )
+
+    # ---- P5e fix1: THE PUSH-MONOLITH ARM, INSIDE THE GATED SET (ID-107) ----------------------
+    #
+    # WHY A MONOLITH LANE CARRIES THE `integration-split` LABEL. That label does not mean "runs
+    # inproc" - it means "the set the disaggregation gate runs", which is exactly why it is
+    # registered inside this `if (MOBILEGL_BUILD_DISAGGREGATED)` and why the block above argues
+    # that a build without the option must match NOTHING under it. ID-81 gives the push build TWO
+    # server arms, selected at runtime by MG_Config::Transport, and until now only one of them had
+    # a gated entry: every Split block above exports MOBILEGL_TRANSPORT=inproc, and every
+    # split-only scenario skips itself the moment the runtime is not split (SplitRuntimeSkipReason
+    # in their SetUp), so the ambient monolith registration of those files runs zero cases. The
+    # arm the phone actually ships on was therefore ungated, and P5e landed a null dereference on
+    # it under 2250 green unit entries and 113 green split entries (ID-107: the game died in
+    # Lightmap.<init> -> clearColorTexture -> glClear). A second arm needs a second lane, in the
+    # same set, or "the gate is green" keeps meaning "one of the two arms is green".
+    #
+    # MOBILEGL_TRANSPORT=monolith IS NAMED, for review finding N-6's reason exactly as the
+    # PersistentMapArm pair above names it: a ctest ENVIRONMENT property overrides the job
+    # environment, and without it a gate-level `MOBILEGL_TRANSPORT=inproc` export would quietly
+    # turn this block into a fourth copy of the split lane - the one failure mode a lane whose
+    # whole purpose is to be the OTHER arm cannot survive.
+    #
+    # The scenario is registered ambiently as well (its source is in the list above), so
+    # `DirectGLES.MonolithAttachmentClearScenario.*` and `DirectVulkan.…` still exist in
+    # integration-gpu; this block is the copy the gate can see, under a prefix that says which arm
+    # it pins.
+    mgl_itest_join_environment(MGL_ITEST_GLES_PUSH_MONOLITH_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=monolith"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.PushMonolithArm."
+        TEST_LIST MGL_PUSH_MONOLITH_ATTACHMENT_TESTS
+        TEST_FILTER "MonolithAttachmentClearScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-split"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_PUSH_MONOLITH_ENVIRONMENT}"
     )
 
     # ---- P5b d1: the indexed / instanced / multi-draw / indirect draw family under inproc ----
