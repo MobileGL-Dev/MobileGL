@@ -242,6 +242,14 @@ namespace MobileGL::MG_State::GLState {
         // (ProgramArtifacts.h's libc++ branch until the integrator fills it in) this is 0,
         // which still round-trips within one build - the echo compares what THIS build wrote
         // against what THIS build expects - and stops mattering the moment the pin lands.
+        //
+        // P5e (pg) READ THIS LINE AS THE CONTRACT ASKED (CONTRACT-P5E §5.5) and its verdict is
+        // in ProgramArtifactsCodec.h's header comment: the caveat is about the ECHO WORD, not
+        // about a member the codec skips - the one member VisitFields omits is
+        // `LinkArtifacts::program`, and no backend twin reads it. A 0 echo is exact for an
+        // in-process split, where the writer and the reader are one build, and becomes a real
+        // cross-toolchain check when P6 puts a client and a server in different processes
+        // built by different compilers.
 #ifdef MGL_LINKARTIFACTS_SIZE
         inline constexpr Uint64 kLinkArtifactsSizeEcho = MGL_LINKARTIFACTS_SIZE;
 #else
@@ -298,6 +306,57 @@ namespace MobileGL::MG_State::GLState {
         }
         // Never written, never read, and stated here so it cannot be added by reflex.
         link.program = nullptr;
+        return true;
+    }
+
+    // ---- P5e (pg): the frame -------------------------------------------------------------
+    //
+    // ONE MORE LENGTH-PREFIXED RUN IN FRONT, and deliberately in front rather than behind:
+    // DecodeProgramArtifacts refuses trailing bytes ("the format accounts for every byte it
+    // writes"), which is a rule worth keeping, so the stage list is consumed BEFORE the
+    // codec's own stream is handed the exact remainder. The version word inside that stream
+    // still governs the archive proper; the frame has no version of its own because it is one
+    // count and one run of Uint32 and there is nothing about it a future reader could
+    // misinterpret without the count already disagreeing.
+    void EncodeProgramArchive(const LinkArtifacts& link, const SpirvArtifacts& spirv,
+                              const Vector<Uint32>& linkedStages, Vector<Uint8>& out) {
+        PutRaw(out, static_cast<Uint32>(linkedStages.size()));
+        for (const Uint32 stage : linkedStages) PutRaw(out, stage);
+        EncodeProgramArtifacts(link, spirv, out);
+    }
+
+    Bool DecodeProgramArchive(const Uint8* bytes, SizeT size, ProgramArchive& out) {
+        out = ProgramArchive{};
+        if (bytes == nullptr) return false;
+        if (size < sizeof(Uint32)) return false;
+
+        Uint32 stageCount = 0;
+        std::memcpy(&stageCount, bytes, sizeof(stageCount));
+        // BOUNDED BEFORE IT IS MULTIPLIED, the same rule the codec's own TakeCount keeps: a
+        // corrupt count must not become a four-billion-element resize, and a count past the
+        // declared maximum is a program this frame cannot describe rather than one to truncate.
+        if (static_cast<SizeT>(stageCount) > kProgramArchiveMaxStages) return false;
+        const SizeT framed = sizeof(Uint32) + static_cast<SizeT>(stageCount) * sizeof(Uint32);
+        if (size < framed) return false;
+
+        out.LinkedStages.resize(stageCount);
+        for (Uint32 i = 0; i < stageCount; ++i) {
+            std::memcpy(&out.LinkedStages[i], bytes + sizeof(Uint32) + i * sizeof(Uint32),
+                        sizeof(Uint32));
+        }
+        if (!DecodeProgramArtifacts(bytes + framed, size - framed, out.Link, out.Spirv)) {
+            out = ProgramArchive{};
+            return false;
+        }
+        // THE TWO HALVES MUST AGREE, and this is the only place that can say so: the backend
+        // pairs linkedStages[i] with generatedSpirv[i] and indexes both by one running index,
+        // so a frame whose count disagrees with the decoded module count would read off the
+        // end of one of them. The frontend builds both from one snapshot loop, so a mismatch
+        // here is a wire fault and not a program shape.
+        if (out.LinkedStages.size() != out.Spirv.generatedSpirv.size()) {
+            out = ProgramArchive{};
+            return false;
+        }
         return true;
     }
 } // namespace MobileGL::MG_State::GLState

@@ -44,6 +44,9 @@
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #include <MG_Util/Debug/Log.h>
+// P5e (pg): ID-87 asks this package for bytes-per-link measured rather than argued, and the
+// archive's byte count exists exactly once - here, where it is serialised.
+#include <MG_Util/Metrics/PipeStats.h>
 
 #include <atomic>
 #include <cstdlib>
@@ -492,9 +495,11 @@ namespace MobileGL::MG_Remote::Client {
         // Spirv[i] is Fatal on the far side rather than ignored.
         void Wire_Escape_CreateShaderState(const MG_Pipe::MGPProgramDesc* desc,
                                            const MG_State::GLState::LinkArtifacts* link,
-                                           const MG_State::GLState::SpirvArtifacts* spirv) {
+                                           const MG_State::GLState::SpirvArtifacts* spirv,
+                                           const Uint32* linkedStages, Uint32 linkedStageCount) {
             if (RunsAsTheServerRole()) {
-                MG_Pipe::MGPipeMonolithEscapes().CreateShaderState(desc, link, spirv);
+                MG_Pipe::MGPipeMonolithEscapes().CreateShaderState(desc, link, spirv, linkedStages,
+                                                                   linkedStageCount);
                 return;
             }
             ClientSession& session = RequireSession("CreateShaderState");
@@ -506,11 +511,23 @@ namespace MobileGL::MG_Remote::Client {
                         "code");
                 std::abort();
             }
-            // EncodeProgramArtifacts APPENDS and never fails - everything it walks is owned
+            // EncodeProgramArchive APPENDS and never fails - everything it walks is owned
             // plain data - so an empty archive means the two structs themselves were empty,
             // which is a linked program with no artefacts and is not a codec question.
+            //
+            // P5e (pg): THE FRAMED form, so the record's own copy on the far side can pair each
+            // module with its stage. The bare EncodeProgramArtifacts is still what the verify
+            // build's round-trip pin uses; this is the one that crosses.
             Vector<Uint8> archive;
-            MG_State::GLState::EncodeProgramArtifacts(*link, *spirv, archive);
+            Vector<Uint32> stages(linkedStages, linkedStages + linkedStageCount);
+            MG_State::GLState::EncodeProgramArchive(*link, *spirv, stages, archive);
+            if (MG_Util::PipeStats::Enabled()) {
+                // ID-87's measurement, taken where the bytes actually exist rather than
+                // estimated: one sample per link, so the steady-state cost is (links this
+                // frame) x (bytes per link) and both halves are countable from the stats line.
+                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::CsoBlobBytes,
+                                             static_cast<Uint64>(archive.size()));
+            }
             if (archive.empty()) {
                 MGLOG_F("MGPipe: Fatal{ArchiveEmpty, \"create_shader_state\"} - the program's "
                         "artefacts serialised to nothing");
@@ -521,6 +538,71 @@ namespace MobileGL::MG_Remote::Client {
             record.Reflection = session.Encoder().StageBytes(archive.data(), archive.size());
             session.EmitAndWait(MGPWireOp::CreateShaderState, &record, sizeof(record), nullptr, 0,
                                 nullptr, 0, nullptr);
+            ++g_emitted;
+        }
+
+        // set_program_bindings (P5e, pg). THE FIFTH ESCAPE, for PipeRoute.h's reason: three
+        // tails in three index spaces plus a parallel name array, which no generated
+        // (payload, varTail, varTailCount) row can express.
+        //
+        // THE NAMES ARE STAGED ONE BY ONE and each element's own MGHostSpan names its run, so
+        // the third tail is self-describing the way set_storage_block_binding's single name
+        // already is. Staged rather than packed into one run with offsets, because the honesty
+        // pass the decoder runs is per span and a packed run would have to be re-split there
+        // against arithmetic nothing on the wire declares.
+        void Wire_Escape_SetProgramBindings(const MG_Pipe::MGPProgramBindings* hdr,
+                                            const Int32* blockBindings,
+                                            const MG_Pipe::MGPProgramSamplerUnit* samplerUnits,
+                                            const MG_Pipe::MGPProgramStorageOverride* storageOverrides,
+                                            const char* const* storageOverrideNames) {
+            if (RunsAsTheServerRole()) {
+                MG_Pipe::MGPipeMonolithEscapes().SetProgramBindings(hdr, blockBindings, samplerUnits,
+                                                                    storageOverrides,
+                                                                    storageOverrideNames);
+                return;
+            }
+            ClientSession& session = RequireSession("SetProgramBindings");
+            MG_Pipe::MGPProgramBindings record = *hdr;
+
+            // The override tail is COPIED before it is emitted, because the span is the one
+            // field the client must write after the caller is done with it - the same reason
+            // MGP_WIRE_BLOB copies its payload.
+            Vector<MG_Pipe::MGPProgramStorageOverride> overrides;
+            overrides.reserve(record.StorageOverrideCount);
+            for (Uint32 i = 0; i < record.StorageOverrideCount; ++i) {
+                MG_Pipe::MGPProgramStorageOverride entry = storageOverrides[i];
+                const char* const name = storageOverrideNames[i];
+                // Size = strlen + 1: THE NUL TRAVELS, exactly as set_storage_block_binding's
+                // name does (contract table 0's block-name row), and the decoder refuses a run
+                // whose last byte is not NUL.
+                const Uint64 nameBytes = static_cast<Uint64>(std::strlen(name)) + 1ull;
+                const MG_Pipe::MGPBlobRef staged = session.Encoder().StageBytes(name, nameBytes);
+                // A HOST SPAN AND NOT A BLOBREF, which is what the row's kHostSpan flag means:
+                // the same run, described in the shape the decoder's honesty pass reads. Ptr
+                // stays null - rule B, "the encoder writes nullptr and names SEG_STAGE" - so
+                // the name is unreachable on a second process except through the segment table,
+                // which is the whole point of the flag.
+                entry.Name = MG_Pipe::MGHostSpan{};
+                entry.Name.Ptr = nullptr;
+                entry.Name.Seg = staged.Seg;
+                entry.Name.Offset = staged.Offset;
+                entry.Name.Size = staged.Size;
+                overrides.push_back(entry);
+            }
+
+            const Wire::WireTail tails[3] = {
+                {blockBindings, static_cast<Uint64>(record.BlockBindingCount) * sizeof(Int32)},
+                {samplerUnits, static_cast<Uint64>(record.SamplerUnitCount) *
+                                   sizeof(MG_Pipe::MGPProgramSamplerUnit)},
+                {overrides.empty() ? nullptr : overrides.data(),
+                 static_cast<Uint64>(record.StorageOverrideCount) *
+                     sizeof(MG_Pipe::MGPProgramStorageOverride)},
+            };
+            // ALWAYS THREE, even when a count is 0 - the decoder derives the third tail's
+            // offset from the first two, so declaring fewer would put the same bytes somewhere
+            // else (PipeWireCodec.cpp's layout arm says this from the other side).
+            session.EmitAndWaitTails(MGPWireOp::SetProgramBindings, &record, sizeof(record), tails, 3,
+                                     nullptr, 0, nullptr);
             ++g_emitted;
         }
 
@@ -670,6 +752,7 @@ namespace MobileGL::MG_Remote::Client {
         gMGPipeRouteEscapes.ResourceFlushRange = &Wire_Escape_ResourceFlushRange;
         gMGPipeRouteEscapes.MapPersistent = &Wire_Escape_MapPersistent;
         gMGPipeRouteEscapes.CreateShaderState = &Wire_Escape_CreateShaderState;
+        gMGPipeRouteEscapes.SetProgramBindings = &Wire_Escape_SetProgramBindings;
 
         MGPipeNoteInstalledArm(MGPipeRouteArm::kClientWire);
     }

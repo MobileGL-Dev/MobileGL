@@ -42,6 +42,26 @@
 //   * and `LinkArtifacts::program` is NEVER visited. It is the live glslang TProgram, it is
 //     null for every archived instance by construction, and VisitFields deliberately omits it
 //     (57 of the 58 members). Decode leaves it null.
+//
+// P5e (pg), CONTRACT-P5E §5.5 "codec completeness": THE SKIPPED MEMBER IS NAMED, AND IT IS
+// `LinkArtifacts::program`. The contract asks this package either to carry it or to prove the
+// twin never reads it, and the proof is a closed grep rather than an argument: every read of
+// that member in the tree is inside `ProgramLinkTask.cpp` (`DoReflection`, which is the only
+// code that may dereference it at all) and the three sites that `reset()` it -
+// `ProgramLinkTask.cpp:678,764,877` and `ProgramObject::ResetLinkArtifacts`. `MG_Backend/`
+// contains NO read of it, in either backend; `ProgramTranslationCache` asserts it is null at
+// insert. So the archive answers every reflection question the program twin asks, and the one
+// member it does not carry is one no twin has ever asked for. It could not be carried in any
+// case: it points into a glslang arena that no archived instance owns.
+//
+// AND THE OTHER HALF OF THAT CONTRACT LINE - `ProgramArtifactsCodec.cpp`'s libc++ caveat - is
+// about the STRUCT-SIZE ECHO, not about a member: under a toolchain whose `MGL_LINKARTIFACTS_SIZE`
+// is not pinned yet (the NDK's libc++ branch of `ProgramArtifacts.h`, inert until the integrator
+// fills it in) the echo word is 0. That is SAFE FOR P5e AND NOT A GAP: the echo compares what
+// this build wrote against what this build expects, so a round trip within one build is exact,
+// and P5e is an in-process split where the writer and the reader ARE one build. It becomes a
+// real check the day a client and a server built by different toolchains share a wire, which is
+// P6's boundary and P6's problem - stated here so it cannot be discovered instead.
 namespace MobileGL::MG_State::GLState {
 
     // Bumped whenever the byte format changes in a way a previous reader would misread. A
@@ -59,6 +79,45 @@ namespace MobileGL::MG_State::GLState {
     // is always null on return.
     Bool DecodeProgramArtifacts(const Uint8* bytes, SizeT size, LinkArtifacts& link,
                                 SpirvArtifacts& spirv);
+
+    // ---- P5e (pg): the archive as the SERVER OWNS it -------------------------------------
+    //
+    // WHAT THE TWO STRUCTS ABOVE DO NOT CARRY, and why a package that makes the server answer
+    // every reflection question out of them had to notice: THE STAGE OF EACH MODULE.
+    // `SpirvArtifacts::generatedSpirv` is one module per SHADER OBJECT the link consumed, in
+    // snapshot order, and the stage of each lives in `ProgramObject::m_linkedShaderSnapshot` -
+    // GL-thread state, not an artifact. `MGPProgramDesc::StageMask` cannot stand in for it: it
+    // is a bit SET, and GL lets two shader objects of the same stage be attached to one
+    // program, so a list rebuilt from the mask would be shorter than `generatedSpirv` and the
+    // backend's "linked stages and modules must agree" refusal would fire on a perfectly good
+    // program.
+    //
+    // So the frame is [stage count][stage words][the codec's own bytes], written and read by
+    // this package on both sides, and `ProgramArchive` is what a decode produces: the record's
+    // OWN copy, with the lifetime of the record rather than of the staged run that carried it
+    // (rule C). Stages travel as Uint32 rather than as `ShaderStage` so this header keeps its
+    // include closure - `ProgramArtifacts.h` beside it may not reach `ShaderStage.h`.
+    struct ProgramArchive {
+        LinkArtifacts Link;
+        SpirvArtifacts Spirv;
+        // ShaderStage, one per Spirv.generatedSpirv entry, at the same index.
+        Vector<Uint32> LinkedStages;
+    };
+
+    // The bound a decode refuses past: six is what MGPProgramDesc::Spirv[] can name and what
+    // ProgramEmit.h's own truncation counter already watches, doubled so that a program this
+    // stack can build is never refused here for a reason the emitter did not already count.
+    inline constexpr SizeT kProgramArchiveMaxStages = 12;
+
+    // Appends the framed archive to `out` (not cleared, so a caller may frame it further).
+    // `linkedStages` must be index-aligned with `spirv.generatedSpirv`.
+    void EncodeProgramArchive(const LinkArtifacts& link, const SpirvArtifacts& spirv,
+                              const Vector<Uint32>& linkedStages, Vector<Uint8>& out);
+
+    // Replaces `out` with what `bytes` describes. Same refusal terms as
+    // DecodeProgramArtifacts, plus: a stage count past kProgramArchiveMaxStages, and a stage
+    // count that does not match the decoded module count.
+    Bool DecodeProgramArchive(const Uint8* bytes, SizeT size, ProgramArchive& out);
 
     // How many fields a type's VisitFields table actually visits. The codec walks exactly that
     // table, so this is what pins "the codec did not quietly grow an arm of its own" - most of

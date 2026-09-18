@@ -315,8 +315,33 @@ namespace MobileGL::MG_Pipe {
 
         void Mono_Escape_CreateShaderState(const MGPProgramDesc* desc,
                                            const MG_State::GLState::LinkArtifacts* link,
-                                           const MG_State::GLState::SpirvArtifacts* spirv) {
-            MGPipeApplyCreateShaderState(*desc, link, spirv);
+                                           const MG_State::GLState::SpirvArtifacts* spirv,
+                                           const Uint32* linkedStages, Uint32 linkedStageCount) {
+            // The stage list is the CLIENT ARM's framing input and this arm has no use for it:
+            // the monolith twin reads GetLinkedShaderStages() off the frontend object it is
+            // handed. Named and discarded rather than left out of the signature, so the two
+            // arms stay one row.
+            (void)linkedStages;
+            (void)linkedStageCount;
+            // P5e (pg): NO ARCHIVE ON THIS ARM, and the null is the arm selection rather than a
+            // hole. Under monolith the two companion pointers ARE the frontend's own archive,
+            // the backend twin reads it through its frontend overload (ruling 1 keeps that arm
+            // token for token), and serialising here to deserialise into the record would put
+            // EncodeProgramArtifacts on the monolith path - which PipeRoute.h's escape note
+            // and PipeApply.h both promise it is not.
+            MGPipeApplyCreateShaderState(*desc, link, spirv, nullptr);
+        }
+
+        // P5e (pg), the fifth escape. A pass-through like the four above: the caller already
+        // holds the three tails and the parallel name array, and under monolith there is no
+        // segment to resolve - the names ARE the frontend's own String::c_str()s, alive for
+        // the duration of the call, which is exactly the lifetime the applier's copy-in needs.
+        void Mono_Escape_SetProgramBindings(const MGPProgramBindings* hdr, const Int32* blockBindings,
+                                            const MGPProgramSamplerUnit* samplerUnits,
+                                            const MGPProgramStorageOverride* storageOverrides,
+                                            const char* const* storageOverrideNames) {
+            MGPipeApplySetProgramBindings(*hdr, blockBindings, samplerUnits, storageOverrides,
+                                          storageOverrideNames);
         }
 
     } // namespace
@@ -363,6 +388,7 @@ namespace MobileGL::MG_Pipe {
         gMGPipeRouteEscapes.ResourceFlushRange = &Mono_Escape_ResourceFlushRange;
         gMGPipeRouteEscapes.MapPersistent = &Mono_Escape_MapPersistent;
         gMGPipeRouteEscapes.CreateShaderState = &Mono_Escape_CreateShaderState;
+        gMGPipeRouteEscapes.SetProgramBindings = &Mono_Escape_SetProgramBindings;
 
         // KEPT, not merely installed. The client arm overwrites the three tables above; these
         // three copies are what it forwards to when it finds itself on the server's own thread.

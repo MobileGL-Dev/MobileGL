@@ -1522,7 +1522,7 @@ namespace {
         MGPipeApplySetSamplerViews(viewSet, viewTail);
         MGPipeApplyBindSamplerStates(stateSet, stateTail);
         MGPipeApplySetShaderImages(imageSet, imageTail);
-        MGPipeApplyCreateShaderState(program, &link, &spirv);
+        MGPipeApplyCreateShaderState(program, &link, &spirv, nullptr);
         MGPipeApplyBindShaderState(csoHandle);
         MGPipeApplySetDrawProgram(csoHandle);
         MGPipeApplySetDispatchProgram(csoHandle);
@@ -1583,7 +1583,7 @@ namespace {
             MGPipeApplySetSamplerViews(viewSet, viewTail);
             MGPipeApplyBindSamplerStates(stateSet, stateTail);
             MGPipeApplySetShaderImages(imageSet, imageTail);
-            MGPipeApplyCreateShaderState(program, &link, &spirv);
+            MGPipeApplyCreateShaderState(program, &link, &spirv, nullptr);
             MGPipeApplyBindShaderState(csoHandle);
             MGPipeApplySetDrawProgram(csoHandle);
             MGPipeApplySetDispatchProgram(csoHandle);

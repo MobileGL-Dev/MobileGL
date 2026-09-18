@@ -15,6 +15,10 @@
 #include <MG_Pipe/MGPipeCallbacks.h>
 #include <MG_Pipe/MGPipeHostSpan.h>
 #include <MG_Pipe/PipeApply.h>
+// P5e (pg): the DEFINITION of the archive MGPipeShaderCsoRecord holds by SharedPtr. PipeApply.h
+// needs only the name - the deleter is captured where the archive is constructed - but the
+// program build reads through it, so the one translation unit that does needs the whole type.
+#include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #endif
 #if MOBILEGL_BUILD_DISAGGREGATED
 // R-11's server-owned staging copy. Header-only and package v1's; see its own header block for
@@ -742,9 +746,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // layout(binding) reflected at link time, or whatever glUniform1i stored afterwards.
     // Rewrite every image uniform declaration to that unit so imageLoad/Store hits the
     // unit the app bound with glBindImageTexture.
-    String RebindImageUniformsToFrontendUnits(
-        String source, const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject) {
-        if (!stateProgramObject || source.find("image") == String::npos) {
+    String RebindImageUniformsToFrontendUnits(String source, const PrgramImpl::ProgramBuildSource& src) {
+        // P5e (pg): the SOURCE, not the frontend object. The two reads below - the uniform's
+        // location and the unit glUniform1i put there - are exactly the pair the record's
+        // set_program_bindings tail carries, so on the handle arm this bakes the unit the client
+        // observed rather than one it would have had to dereference a live ProgramObject for.
+        // The null test the SharedPtr form carried moved to the caller, which returned early on
+        // a null program long before it reached here.
+        if (source.find("image") == String::npos) {
             return source;
         }
         static const std::regex imageDeclRegex(
@@ -762,12 +771,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             std::smatch match;
             if (std::regex_search(line, match, imageDeclRegex)) {
                 const String name = match[3].str();
-                Int location = stateProgramObject->GetUniformLocation(name);
+                Int location = src.GetUniformLocation(name);
                 if (location < 0) {
-                    location = stateProgramObject->GetUniformLocation(name + "[0]");
+                    location = src.GetUniformLocation(name + "[0]");
                 }
                 if (location >= 0) {
-                    const Int unit = stateProgramObject->GetUniformSamplerOrImageUnitIndex(location);
+                    const Int unit = src.GetUniformSamplerOrImageUnitIndex(location);
                     if (unit >= 0) {
                         const String bindingText = "binding = " + std::to_string(unit);
                         if (std::regex_search(line, bindingValueRegex)) {
@@ -10907,6 +10916,222 @@ namespace MobileGL::MG_Backend::DirectGLES {
         TwinRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl, MG_Pipe::MGPipeKind::ShaderCso> g_backendProgramObjects;
 
 #if MOBILEGL_PIPE_PUSH
+        // ---- P5e (pg): the source, both ways round ---------------------------------------
+
+        Int ProgramArchiveSource::GetUniformLocation(const String& name) const {
+            // ProgramObject::GetUniformLocation over the archive. Reproduced rather than called
+            // because the frontend's form is a non-static member over Artifacts() and this arm
+            // has no ProgramObject to call it on; the ARRAY RULES are the whole body and they
+            // are the part a paraphrase would get wrong, so they are transcribed exactly.
+            const auto it = Link->uniformLocations.find(name);
+            if (it != Link->uniformLocations.end()) return static_cast<Int>(it->second);
+            if (name.empty()) return -1;
+            // Reflection stores GL-style names: an array uniform is keyed "arr[0]" at its base
+            // location, so a bare "arr" resolves to that entry.
+            if (name.back() != ']') {
+                const auto suffixed = Link->uniformLocations.find(name + "[0]");
+                if (suffixed != Link->uniformLocations.end()) return static_cast<Int>(suffixed->second);
+                return -1;
+            }
+            if (name.length() < 4) return -1;
+            // An ARRAY OF ARRAYS is keyed by its full "[0]"-terminated spelling ("a[2][1][0]"),
+            // so a query that already ends in a subscript may still be the NAME of an array
+            // rather than an element of one. That reading is tried FIRST; only then is the
+            // trailing subscript read as an element index.
+            {
+                const auto arrayOfArrays = Link->uniformLocations.find(name + "[0]");
+                if (arrayOfArrays != Link->uniformLocations.end()) {
+                    return static_cast<Int>(arrayOfArrays->second);
+                }
+            }
+            const SizeT bracket = name.rfind('[');
+            if (bracket == String::npos || bracket + 1 >= name.length() - 1) return -1;
+            Uint element = 0;
+            for (SizeT i = bracket + 1; i < name.length() - 1; ++i) {
+                if (name[i] < '0' || name[i] > '9') return -1;
+                element = element * 10 + static_cast<Uint>(name[i] - '0');
+                if (element > 0x0FFFFFFFu) return -1;
+            }
+            auto base = Link->uniformLocations.find(name.substr(0, bracket) + "[0]");
+            if (base == Link->uniformLocations.end()) {
+                base = Link->uniformLocations.find(name.substr(0, bracket));
+                if (base == Link->uniformLocations.end()) return -1;
+            }
+            const Int baseLocation = static_cast<Int>(base->second);
+            if (!IsValidUniformLocation(baseLocation)) return -1;
+            const Int index = Link->uniformIndexInTProgram[baseLocation];
+            if (!UniformAt(index).type.isArray) return -1;
+            if (static_cast<GLint>(element) >=
+                MG_State::GLState::ProgramObject::GetUniformArraySizeByTIndex(*Link, index)) {
+                return -1;
+            }
+            const Int location = baseLocation + static_cast<Int>(element);
+            if (!UniformLocationsAliasSameUniform(baseLocation, location)) return -1;
+            return location;
+        }
+
+        const String& ProgramArchiveSource::GetUniformBlockName(Uint index) const {
+            static const String kEmpty;
+            if (index >= Link->glBlockIndexToTProgram.size()) return kEmpty;
+            const Int tBlockIndex = Link->glBlockIndexToTProgram[index];
+            if (tBlockIndex < 0 || static_cast<SizeT>(tBlockIndex) >= Link->blockReflection.size()) {
+                return kEmpty;
+            }
+            return Link->blockReflection[tBlockIndex].name;
+        }
+
+        Uint ProgramArchiveSource::GetUniformBlockBinding(Uint index) const {
+            // THE OVERLAY WINS WHEN THERE IS ONE, and the archive's link-time value stands when
+            // there is not. glUniformBlockBinding moves this AFTER the link that produced the
+            // archive, so a twin answering from the archive alone would bind the program's
+            // blocks to the points it was LINKED with rather than the ones it is BOUND with.
+            if (OverlayGoverns && BlockBindingOverlay != nullptr) {
+                if (index < BlockBindingOverlay->size()) {
+                    return static_cast<Uint>((*BlockBindingOverlay)[index]);
+                }
+                // A block past the tail the record declared. The tail is dense over
+                // GetActiveUniformBlocksCount(), so this is a record and an archive that
+                // disagree about how many blocks the program has - which can only happen if a
+                // create and a bindings record crossed. 0 is GL's own default and is the safe
+                // answer; the mismatch is the emitter's to fix, not this read's to hide.
+                return 0;
+            }
+            if (index >= Link->uniformBlockBinding.size()) return 0;
+            return static_cast<Uint>(Link->uniformBlockBinding[index]);
+        }
+
+        Int ProgramArchiveSource::GetUniformSamplerOrImageUnitIndex(Uint location) const {
+            if (OverlayGoverns) {
+                // THE TAIL IS THE WHOLE SET, so a location it does not name has no unit - NOT
+                // whatever the archive's link-time snapshot said. The client emits every
+                // assigned unit it can see, including the ones the link seeded from
+                // layout(binding=N), so "absent" really does mean -1.
+                //
+                // Sparse and ASCENDING BY LOCATION on the wire (CONTRACT-P5E §1), which is what
+                // lets this be a binary search: the build walks every location from 0 to
+                // maxUniformLocation, and a linear scan per location would be quadratic on a
+                // program with a thousand locations and a handful of samplers.
+                if (SamplerUnitOverlay == nullptr) return -1;
+                const auto it = std::lower_bound(
+                    SamplerUnitOverlay->begin(), SamplerUnitOverlay->end(), location,
+                    [](const MG_Pipe::MGPProgramSamplerUnit& entry, Uint value) {
+                        return entry.Location < value;
+                    });
+                if (it == SamplerUnitOverlay->end() || it->Location != location) return -1;
+                return static_cast<Int>(it->Unit);
+            }
+            if (location >= Link->uniformSamplerOrImageUnitIndex.size()) return -1;
+            return Link->uniformSamplerOrImageUnitIndex[location];
+        }
+
+        ProgramArchiveSource ProgramArchiveSource::FromFrontend(
+            const MG_State::GLState::ProgramObject& program) {
+            // THE MONOLITH-GLUE HALF (ruling 1 / ID-81). The "archive" is the frontend's own
+            // live tables, which is what makes this arm byte-for-byte what it was: there is no
+            // overlay because the three mutable fields ARE those tables' members, and the
+            // program object is pinned by the draw that is reading it.
+            ProgramArchiveSource source;
+            source.Link = &program.GetLinkReflection();
+            source.Spirv = &program.GetSpirvReflection();
+            source.Identity = program.GetExternalIndex();
+            source.IdentityIsHandleSlot = false;
+            source.Linked = program.GetLinkStatus();
+            source.SpirvUsable = program.GetSpirvStatus();
+            source.SpirvValidationEnabled = program.GetSpirvValidationEnabled();
+            source.PointSizeWasDemoted = program.PointSizeDemoted();
+            source.GlobalUboSize = program.GetUBOSize();
+            source.LinkedStages = program.GetLinkedShaderStages();
+            source.OverlayGoverns = false;
+            source.StorageOverrides = program.GetShaderStorageBlockBindingOverrides();
+            // The function this source's ComputeShaderStorageBlockBindingSignature overload
+            // replaces, so the monolith answer is unchanged and there is still exactly one
+            // place the number comes from on this arm.
+            source.StorageOverrideSignature = ComputeShaderStorageBlockBindingSignatureOf(program);
+            return source;
+        }
+
+        ProgramArchiveSource ProgramArchiveSource::FromRecord(
+            MG_Pipe::MGPipeHandle cso, const MG_Pipe::MGPipeShaderCsoRecord& record) {
+            // THE HANDLE ARM. Every field below is server-owned: the archive the create adopted,
+            // the descriptor the create stored, and the three tails set_program_bindings
+            // carried. Nothing here touches a ProgramObject, which is the property the strict
+            // lane measures.
+            ProgramArchiveSource source;
+            source.Link = &record.Archive->Link;
+            source.Spirv = &record.Archive->Spirv;
+            source.Identity = cso.Slot;
+            source.IdentityIsHandleSlot = true;
+            // LinkStatus IS A FIELD NOW, and that is the whole point of c0e adding it: before
+            // P5e "linked" was only implied by the create existing, which is a different
+            // statement - create_shader_state is re-issued at every link that moves the link
+            // version, and a FAILED relink of a bound program moves it too (ID-88).
+            source.Linked = record.Desc.LinkStatus != 0;
+            source.SpirvUsable = record.Desc.SpirvStatus != 0;
+            source.SpirvValidationEnabled = record.Desc.EnableSpirvValidation != 0;
+            source.PointSizeWasDemoted = record.Desc.PointSizeDemoted != 0;
+            source.GlobalUboSize = record.Desc.GlobalUboSize;
+            source.LinkedStages.reserve(record.Archive->LinkedStages.size());
+            for (const Uint32 stage : record.Archive->LinkedStages) {
+                source.LinkedStages.push_back(static_cast<ShaderStage>(stage));
+            }
+            // "HAS A BINDINGS RECORD EVER BEEN APPLIED TO THIS RECORD" - not "is the tail
+            // non-empty". A program with no uniform blocks, no sampler and no override emits a
+            // record with three empty tails, and that record is the statement that the archive's
+            // link-time values are no longer the answer.
+            source.OverlayGoverns = record.BindingsSerial != 0;
+            source.BlockBindingOverlay = &record.BlockBindings;
+            source.SamplerUnitOverlay = &record.SamplerUnits;
+            if (source.OverlayGoverns) {
+                source.StorageOverrides.reserve(record.StorageOverrides.size());
+                for (const auto& entry : record.StorageOverrides) {
+                    source.StorageOverrides[entry.Name] = entry.Binding;
+                }
+            } else {
+                source.StorageOverrides = record.Archive->Link.shaderStorageBlockBinding;
+            }
+            // THE RECORD'S NUMBER EITHER WAY, and deliberately not a recomputation when the
+            // overlay is absent. This is the value the twin STAMPS and the draw path's clean
+            // clause COMPARES (CONTRACT-P5E §5.5 names record.Signature as the input), so the
+            // two have to be the same field or every draw of a program with an override
+            // rebuilds. A record with no bindings applied carries 0 while the archive may hold
+            // a link-time override map - the next set_program_bindings then produces a non-zero
+            // signature and forces exactly one rebuild, which is correct and, since the emitter
+            // sends the bindings in the same breath as the create, not a state a draw reaches.
+            source.StorageOverrideSignature = record.Signature;
+            return source;
+        }
+
+        Uint ProgramBlockBindingFromRecord(const MG_Pipe::MGPipeShaderCsoRecord& record, Int blockIndex) {
+            if (blockIndex < 0) return 0;
+            const SizeT index = static_cast<SizeT>(blockIndex);
+            if (record.BindingsSerial != 0) {
+                // The tail is the whole set; a block past it is a record and an archive that
+                // disagree about the block count, and GL's own default of 0 is the safe answer.
+                return index < record.BlockBindings.size()
+                           ? static_cast<Uint>(record.BlockBindings[index])
+                           : 0;
+            }
+            if (!record.Archive || index >= record.Archive->Link.uniformBlockBinding.size()) return 0;
+            return static_cast<Uint>(record.Archive->Link.uniformBlockBinding[index]);
+        }
+
+        Int ProgramSamplerUnitFromRecord(const MG_Pipe::MGPipeShaderCsoRecord& record, Uint location) {
+            if (record.BindingsSerial != 0) {
+                const auto it = std::lower_bound(
+                    record.SamplerUnits.begin(), record.SamplerUnits.end(), location,
+                    [](const MG_Pipe::MGPProgramSamplerUnit& entry, Uint value) {
+                        return entry.Location < value;
+                    });
+                if (it == record.SamplerUnits.end() || it->Location != location) return -1;
+                return static_cast<Int>(it->Unit);
+            }
+            if (!record.Archive ||
+                location >= record.Archive->Link.uniformSamplerOrImageUnitIndex.size()) {
+                return -1;
+            }
+            return record.Archive->Link.uniformSamplerOrImageUnitIndex[location];
+        }
+
         // P5e (id), CONTRACT-P5E §4.1. See Managers.h for the contract - in particular why the
         // composite band had to land in the same package as this function.
         BackendProgramObjectImpl* ResolveProgramTwin(MG_Pipe::MGPipeHandle cso) {
@@ -10978,8 +11203,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         void ReseedShaderStorageBlockBindings(Uint backendProgramId,
-                                              const MG_State::GLState::ProgramObject& stateProgramObject) {
-            const auto& overrides = stateProgramObject.GetShaderStorageBlockBindingOverrides();
+                                              const ProgramBuildSource& src) {
+            const auto& overrides = src.GetShaderStorageBlockBindingOverrides();
             if (overrides.empty()) return; // the overwhelming majority of programs
             for (const auto& [blockName, binding] : overrides) {
                 if (binding < 0) continue;
@@ -10987,9 +11212,51 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
-        Uint64 ComputeShaderStorageBlockBindingSignature(
-            const MG_State::GLState::ProgramObject& stateProgramObject) {
-            const auto& overrides = stateProgramObject.GetShaderStorageBlockBindingOverrides();
+#if MOBILEGL_PIPE_PUSH
+        // P5e (pg). ON A PUSH BUILD THE SIGNATURE IS THE SOURCE'S, TAKEN VERBATIM, and it is not
+        // recomputed here for a reason worth stating: on the handle arm the number the DRAW PATH
+        // compares against is MGPipeShaderCsoRecord::Signature - the CLIENT's commutative hash,
+        // computed in MG_Impl/Pipe/ProgramEmit.h. If the server recomputed its own from the
+        // record's override tail, the two formulas would have to stay bit-identical for ever or
+        // every draw of every program with an override would rebuild. Taking the client's number
+        // verbatim removes that coupling: there is one authority, and the twin's stamp and the
+        // clean clause read the same field. The monolith arm's source carries the answer of the
+        // function this replaces, computed from the frontend map, so its behaviour is unchanged.
+        Uint64 ComputeShaderStorageBlockBindingSignature(const ProgramBuildSource& src) {
+            return src.StorageOverrideSignature;
+        }
+
+        // The COMPUTATION, still here and still the only one on this side: FromFrontend seeds a
+        // monolith source with it, and the monolith arm of SyncCurrentProgram's clean condition
+        // asks it per draw exactly as it always did. In a pull build this function does not
+        // exist and the overload above IS this body (see the #else), so the pull build gains no
+        // symbol - G1's rule for every new name in this phase.
+        Uint64 ComputeShaderStorageBlockBindingSignatureOf(
+            const MG_State::GLState::ProgramObject& program) {
+            const auto& overrides = program.GetShaderStorageBlockBindingOverrides();
+            if (overrides.empty()) return 0; // the overwhelming majority of programs
+            // Order-independent on purpose: the source is an UnorderedMap, so any signature that
+            // depended on iteration order would differ between two identical override sets and
+            // rebuild the program for nothing. Built from the VALUES, not from a change counter,
+            // so re-setting a block to the binding it already carries forces no rebuild - which
+            // is what the pipeline composite's per-draw uniform mirror depends on.
+            //
+            // MG_Impl/Pipe/ProgramEmit.h's MGPipeStorageOverrideSignatureEntry is this entry
+            // mix, verbatim, on the client side; the two are twins with a named pointer at each
+            // other because MG_Backend includes nothing from MG_Impl.
+            Uint64 signature = 0;
+            for (const auto& [blockName, binding] : overrides) {
+                if (binding < 0) continue; // never rebound; the declared qualifier still stands
+                Uint64 entry = std::hash<String>{}(blockName);
+                entry ^= (static_cast<Uint64>(static_cast<Uint32>(binding)) + 0x9e3779b97f4a7c15ull +
+                          (entry << 6) + (entry >> 2));
+                signature += entry; // commutative combine
+            }
+            return signature;
+        }
+#else
+        Uint64 ComputeShaderStorageBlockBindingSignature(const ProgramBuildSource& src) {
+            const auto& overrides = src.GetShaderStorageBlockBindingOverrides();
             if (overrides.empty()) return 0; // the overwhelming majority of programs
             // Order-independent on purpose: the source is an UnorderedMap, so any signature that
             // depended on iteration order would differ between two identical override sets and
@@ -11011,6 +11278,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             return signature;
         }
+#endif
 
         namespace {
             // The GL internal format bound to an image unit right now. GL_NONE for a unit
@@ -11187,8 +11455,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // reflection: which image uniforms declared NO format (the only ones a bake may touch -
         // a declared format is authoritative and stays), what the units they address currently
         // hold, and whether any format in play - declared or baked - is outside the ES core set.
-        ImageFormatBakeInputs CollectImageFormatBakeInputs(
-            const MG_State::GLState::ProgramObject& stateProgramObject) {
+        ImageFormatBakeInputs CollectImageFormatBakeInputs(const ProgramBuildSource& src) {
             ImageFormatBakeInputs inputs;
             // A format GLSL ES cannot spell on a driver with no GL_NV_image_formats to spell it
             // with. There is no legal ESSL for such a shader at all, so the stage will not
@@ -11206,12 +11473,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 ++unspellableCount;
             };
 
-            const Uint maxUniformLoc = stateProgramObject.GetMaxUniformLocation();
+            const Uint maxUniformLoc = src.GetMaxUniformLocation();
             for (Uint loc = 0; loc <= maxUniformLoc; ++loc) {
-                const auto& name = stateProgramObject.GetUniformName(loc);
+                const auto& name = src.GetUniformName(loc);
                 if (name.empty()) continue;
-                if (!IsImageUniformType(stateProgramObject.GetUniformType(loc))) continue;
-                const auto& type = stateProgramObject.GetUniformTypeFacts(loc);
+                if (!IsImageUniformType(src.GetUniformType(loc))) continue;
+                const auto& type = src.GetUniformTypeFacts(loc);
                 if (type.hasFormat) {
                     // Declared, and therefore never overridden by the BAKE - but a non-core
                     // spelling still has to become legal ESSL somehow.
@@ -11237,7 +11504,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                     continue;
                 }
-                const Int unit = stateProgramObject.GetUniformSamplerOrImageUnitIndex(loc);
+                const Int unit = src.GetUniformSamplerOrImageUnitIndex(loc);
                 if (unit < 0 || unit >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) continue;
                 const Uint boundFormat = BoundImageUnitFormat(unit);
 
@@ -11356,27 +11623,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // so there is nothing to fix at the API end and the emitted text has to carry it
         // (RemapImageArrayElementUnits). Empty for every program that does not do this, which is
         // very nearly all of them - one walk of the reflection and no allocation in that case.
-        Vector<ImageArrayUnitPlan> CollectNonConsecutiveImageArrayPlans(
-            const MG_State::GLState::ProgramObject& stateProgramObject) {
+        Vector<ImageArrayUnitPlan> CollectNonConsecutiveImageArrayPlans(const ProgramBuildSource& src) {
             Vector<ImageArrayUnitPlan> plans;
-            const Uint maxUniformLoc = stateProgramObject.GetMaxUniformLocation();
+            const Uint maxUniformLoc = src.GetMaxUniformLocation();
             for (Uint loc = 0; loc <= maxUniformLoc; ++loc) {
-                const auto& name = stateProgramObject.GetUniformName(loc);
+                const auto& name = src.GetUniformName(loc);
                 if (name.empty()) continue;
-                if (!IsImageUniformType(stateProgramObject.GetUniformType(loc))) continue;
+                if (!IsImageUniformType(src.GetUniformType(loc))) continue;
                 // Reflection repeats the array's "g_image[0]" spelling at EVERY location the array
                 // spans, so only the location that name resolves back to is the array itself.
-                if (stateProgramObject.GetUniformLocation(name) != static_cast<Int>(loc)) continue;
+                if (src.GetUniformLocation(name) != static_cast<Int>(loc)) continue;
                 const String baseName = ImageUniformBaseName(name);
                 if (baseName == name) continue; // a scalar image: one binding says it all
 
                 ImageArrayUnitPlan plan;
                 plan.name = baseName;
                 for (Uint element = loc; element <= maxUniformLoc &&
-                                         stateProgramObject.UniformLocationsAliasSameUniform(
+                                         src.UniformLocationsAliasSameUniform(
                                              static_cast<Int>(loc), static_cast<Int>(element));
                      ++element) {
-                    plan.units.push_back(stateProgramObject.GetUniformSamplerOrImageUnitIndex(element));
+                    plan.units.push_back(src.GetUniformSamplerOrImageUnitIndex(element));
                 }
                 if (plan.units.size() < 2) continue;
 
@@ -11972,7 +12238,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the program exactly as dead as it already was - but with a driver log that says why,
         // where today there is an empty one.
         void BackendProgramObjectImpl::AttachPassthroughTessControlStage(
-            const MG_State::GLState::ProgramObject& stateProgramObject, const Int tessEvalShaderIndex,
+            const ProgramBuildSource& src, const Int tessEvalShaderIndex,
             const Vector<Vector<unsigned int>>& shaderSpirvs, const String& vertexStageEssl,
             const String& tessEvalStageEssl) {
             // PATCH_VERTICES is dynamic state, and it decides the synthesized stage's output
@@ -11999,7 +12265,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_E("Program %u has a tessellation evaluation stage with no control stage, but no "
                         "SPIR-V for it; the pass-through control stage GL describes cannot be checked, so "
                         "the program is left to fail its ES link.",
-                        stateProgramObject.GetExternalIndex());
+                        src.GetExternalIndex());
                 m_backendProgramUsable = false;
                 return;
             }
@@ -12015,7 +12281,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_E("Program %u has a tessellation evaluation stage with no control stage AND reads a "
                         "user-defined input through it; a synthesized pass-through control stage cannot "
                         "forward that, so the program is declined rather than fed an undefined varying.",
-                        stateProgramObject.GetExternalIndex());
+                        src.GetExternalIndex());
                 m_backendProgramUsable = false;
                 return;
             }
@@ -12053,7 +12319,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (backendShaderId == 0) {
                 MGLOG_E("Failed to create the synthesized pass-through tessellation control shader for "
                         "program %u.",
-                        stateProgramObject.GetExternalIndex());
+                        src.GetExternalIndex());
                 m_backendProgramUsable = false;
                 return;
             }
@@ -12061,7 +12327,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const char* sourceCStr = source.c_str();
             MGLOG_D("Synthesized pass-through tessellation control stage for program %u (patch vertices "
                     "%u):\n%s",
-                    stateProgramObject.GetExternalIndex(), patchVertices, sourceCStr);
+                    src.GetExternalIndex(), patchVertices, sourceCStr);
             g_GLESFuncs.glShaderSource(backendShaderId, 1, &sourceCStr, nullptr);
             g_GLESFuncs.glCompileShader(backendShaderId);
 
@@ -12078,7 +12344,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 log.back() = '\0';
                 MGLOG_E("The synthesized pass-through tessellation control stage failed to compile for "
                         "program %u. Driver log: %s\nSource:\n%s",
-                        stateProgramObject.GetExternalIndex(), log.data(), sourceCStr);
+                        src.GetExternalIndex(), log.data(), sourceCStr);
                 m_backendProgramUsable = false;
                 g_GLESFuncs.glDeleteShader(backendShaderId);
                 return;
@@ -12090,6 +12356,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_GLESFuncs.glDeleteShader(backendShaderId);
         }
 
+        // ---- THE PROGRAM BUILD, AND THE ONE SOURCE IT READS (P5e pg) ----------------------
+        //
+        // ONE BODY, TWO HEADS, AND THE PULL BUILD'S HEAD IS THE ORIGINAL ONE. In the pull build
+        // `ProgramBuildSource` IS `MG_State::GLState::ProgramObject`, this function keeps its
+        // name, its signature and its null guard, and `src` is a reference to the object it was
+        // already dereferencing on every line - so the pull build compiles the same reads
+        // through the same accessors and G1's byte identity survives a rename and nothing else.
+        //
+        // In a PUSH build the body is a private worker that the two public overloads feed:
+        // SyncToBackend(program) - the monolith-glue half, ruling 1 - wraps the frontend's own
+        // archive, and SyncToBackendByHandle(cso) wraps the RECORD's. That is the whole of this
+        // family's rule F: after this, nothing in a program build dereferences a frontend
+        // object, and the forty accessor calls below read memory the server owns.
+#if MOBILEGL_PIPE_PUSH
+        void BackendProgramObjectImpl::SyncToBackendFromSource(const ProgramBuildSource& src) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+#else
         void BackendProgramObjectImpl::SyncToBackend(
             const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject) {
 #ifdef TRACY_ENABLE
@@ -12099,24 +12384,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_E_ONCE("State program object is null, skipping backend sync.");
                 return;
             }
+            const ProgramBuildSource& src = *stateProgramObject;
+#endif
             // Recorded before either early return below, so Use() can always name the GL
             // program a no-op draw belongs to - including the "linked but not drawable" exit.
-            m_frontendProgramId = stateProgramObject->GetExternalIndex();
+            m_frontendProgramId = src.GetExternalIndex();
 
             // GetSpirvStatus() as well as GetLinkStatus(): a program whose phase-B job was
             // cancelled (teardown) or whose optimizer run failed is fully linked and fully
             // queryable, but has no SPIR-V to build a driver program out of. GL cannot retract
             // a LINK_STATUS it already reported true, so "linked but not drawable" is the
             // answer, and this is where the ES backend expresses it.
-            if (!stateProgramObject->GetLinkStatus() || !stateProgramObject->GetSpirvStatus()) {
+            if (!src.GetLinkStatus() || !src.GetSpirvStatus()) {
                 MGLOG_E_ONCE("Program object is not linked or has no generated SPIR-V, skipping backend sync. State "
                         "program ID: %u",
-                        stateProgramObject->GetExternalIndex());
+                        src.GetExternalIndex());
                 return;
             }
 
             MGLOG_D("Syncing program to backend. State program ID: %u, Backend ID: %u",
-                    stateProgramObject->GetExternalIndex(), m_backendProgramId);
+                    src.GetExternalIndex(), m_backendProgramId);
             // Every link-derived cache below (incl. m_samplerUniformBindings and its
             // lastAssignedUnit/lastAssignedLodBias program-state mirrors) is rebuilt;
             // the sampler-pass memo keyed on them must not survive.
@@ -12128,8 +12415,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // The generated ESSL bakes these in (see the SetShaderStorageBlockBinding call in the
             // transpile loop below), so the set they were generated against is part of what makes
             // this build current - the draw path compares the signature and rebuilds on a change.
-            const auto& storageBlockBindingOverrides = stateProgramObject->GetShaderStorageBlockBindingOverrides();
-            m_shaderStorageBlockBindingSignature = ComputeShaderStorageBlockBindingSignature(*stateProgramObject);
+            const auto& storageBlockBindingOverrides = src.GetShaderStorageBlockBindingOverrides();
+            m_shaderStorageBlockBindingSignature = ComputeShaderStorageBlockBindingSignature(src);
             // Rebuilt by the transpile loop below, one entry per atomic-counter block it finds.
             // The top is snapshotted here so every stage of this program - and the draw path
             // reading it afterwards - resolves the same slot for the same GL binding.
@@ -12146,19 +12433,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // compiles to depends on live glBindImageTexture state, so the pairs it was built
             // against are recorded here and compared per draw (ImageUnitFormatsStillMatch).
             // Taken BEFORE the transpile loop so both the bake and the key see one snapshot.
-            const ImageFormatBakeInputs imageFormatBake = CollectImageFormatBakeInputs(*stateProgramObject);
+            const ImageFormatBakeInputs imageFormatBake = CollectImageFormatBakeInputs(src);
             m_formatlessImageUnits = imageFormatBake.units;
             m_imageUnitFormatSignature = imageFormatBake.signature;
             for (const auto& conflicted : imageFormatBake.conflictedNames) {
                 MGLOG_D("Image uniform '%s' of program %u declares no format and its elements address units with "
                         "different bound formats; left format-less.",
-                        conflicted.c_str(), stateProgramObject->GetExternalIndex());
+                        conflicted.c_str(), src.GetExternalIndex());
             }
             // ...and once more for image ARRAYS whose per-element units are not consecutive, which
             // ESSL has no way to express in one declaration. Program-wide, like the bake, and read
             // from the same snapshot of the reflection; the per-stage rewrite happens below.
             const Vector<ImageArrayUnitPlan> nonConsecutiveImageArrays =
-                CollectNonConsecutiveImageArrayPlans(*stateProgramObject);
+                CollectNonConsecutiveImageArrayPlans(src);
 
             // Detach all existing shaders
             GLint attachedCount = 0;
@@ -12195,19 +12482,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // straight off the end of shaderSpirvs (a std::vector copy from garbage, which is
             // how this crashed). GetLinkedShaderStages() is the list the modules were generated
             // from, one entry per module, in module order.
-            const Vector<ShaderStage> linkedStages = stateProgramObject->GetLinkedShaderStages();
-            auto& shaderSpirvs = stateProgramObject->GetGeneratedSpirv();
+            const Vector<ShaderStage> linkedStages = src.GetLinkedShaderStages();
+            auto& shaderSpirvs = src.GetGeneratedSpirv();
             // Both come from the same Link(), so they agree by construction. If they ever did
             // not there would be no index this function could safely use for EITHER array, so
             // this refuses the build instead of picking one and hoping.
             if (linkedStages.size() != shaderSpirvs.size()) {
                 MGLOG_E_ONCE("Program %u: %zu linked stage(s) but %zu generated SPIR-V module(s); refusing to "
                              "build a backend program from mismatched link artifacts.",
-                             stateProgramObject->GetExternalIndex(), linkedStages.size(), shaderSpirvs.size());
+                             src.GetExternalIndex(), linkedStages.size(), shaderSpirvs.size());
                 m_backendProgramUsable = false;
                 return;
             }
-            if (stateProgramObject->PointSizeDemoted()) {
+            if (src.PointSizeDemoted()) {
                 // THE ARMING SIGNAL, INFO on purpose and latched: the integration lane that
                 // pins MOBILEGL_POINT_SIZE_DEMOTION=1 asserts on exactly this line, because
                 // every rendering assertion stays green on a healthy driver whether the
@@ -12217,7 +12504,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              "in those stages.");
             }
             MGLOG_D("Attaching %zu shaders to program %u", linkedStages.size(), m_backendProgramId);
-            for (const auto& ref : stateProgramObject->GetLinkedShaderSnapshot()) {
+            for (const auto& ref : src.GetLinkedShaderSnapshot()) {
                 if (!ref.shader) continue;
                 const auto& stage =
                     MG_Util::ConvertGLEnumToString(MG_Util::ConvertShaderStageToGLEnum(ref.shader->GetShaderStage()));
@@ -12226,7 +12513,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("Original src @ %s: \n", stage.c_str());
                 MGLOG_D("%s:", src.empty() ? "" : src.c_str());
             }
-            const Bool enableSpirvValidation = stateProgramObject->GetSpirvValidationEnabled();
+            const Bool enableSpirvValidation = src.GetSpirvValidationEnabled();
 
             // Blocks a transform-feedback capture request names a member of ("StageData" of
             // "StageData.attrib[0]"). The Adreno ES driver accepts such a request, links, and
@@ -12235,7 +12522,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // consumer keep matching. gl_PerVertex members ("gl_Position") carry no block
             // prefix and so never enter this set.
             std::set<String> xfbCaptureBlockNames;
-            for (const auto& xfbVarying : stateProgramObject->GetTransformFeedbackVaryings()) {
+            for (const auto& xfbVarying : src.GetTransformFeedbackVaryings()) {
                 const SizeT dot = xfbVarying.name.find('.');
                 if (dot != String::npos && dot > 0) {
                     xfbCaptureBlockNames.insert(xfbVarying.name.substr(0, dot));
@@ -12562,7 +12849,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // KHR-GL43.vertex_attrib_binding family behind "the draw captured zeros".
                         MGLOG_E("Shader transpilation to ESSL failed. State program ID: %u, stage: %s, "
                                 "SPIRV-Cross error: %s",
-                                stateProgramObject->GetExternalIndex(),
+                                src.GetExternalIndex(),
                                 MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
                                 transpileError.c_str());
                         m_backendProgramUsable = false;
@@ -12654,13 +12941,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                          "available on this device.",
                                          tessellationStage ? "tessellation" : "geometry",
                                          tessellationStage ? "tessellation" : "geometry",
-                                         stateProgramObject->GetExternalIndex());
+                                         src.GetExternalIndex());
                         }
                         source = RequestPointSizeExtension(std::move(source), pointSizeExtension);
                     }
                 }
 
-                source = RebindImageUniformsToFrontendUnits(std::move(source), stateProgramObject);
+                source = RebindImageUniformsToFrontendUnits(std::move(source), src);
                 // The completion half of the format bake, for the formats SPIRV-Cross throws on
                 // rather than prints (r8ui and the rest of its desktop-only set). Empty for every
                 // program whose format-less images bound a format the module could carry, which
@@ -12690,7 +12977,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         MGLOG_E("Image array %s. Its elements address image units GLSL ES cannot be made to reach "
                                 "from one declaration, so this stage will read and write the WRONG units. State "
                                 "program ID: %u, stage: %s.",
-                                declined.c_str(), stateProgramObject->GetExternalIndex(),
+                                declined.c_str(), src.GetExternalIndex(),
                                 MG_Util::ConvertGLEnumToString(glShaderType).c_str());
                     }
                 }
@@ -12735,7 +13022,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             MGLOG_E("Program %u routes gl_ViewportIndex but its fragment stage has no "
                                     "entry point to gate, so the routing cannot be emulated: every "
                                     "index will rasterize against viewport 0. State program ID: %u.",
-                                    m_backendProgramId, stateProgramObject->GetExternalIndex());
+                                    m_backendProgramId, src.GetExternalIndex());
                         }
                     } else if (PromoteViewportIndexGlobalToVarying(source)) {
                         programRoutesViewportIndex = true;
@@ -12816,7 +13103,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                     MGLOG_E("Shader compilation failed. State program ID: %u, stage: %s, backend shader ID: "
                             "%u, driver log: %s\nSource:\n%s",
-                            stateProgramObject->GetExternalIndex(),
+                            src.GetExternalIndex(),
                             MG_Util::ConvertGLEnumToString(glShaderType).c_str(), backendShaderId,
                             log.data(), sourceForLog);
                     m_backendProgramUsable = false;
@@ -12857,7 +13144,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             if (needsPassthroughTessControl) {
-                AttachPassthroughTessControlStage(*stateProgramObject, tessEvalShaderIndex, shaderSpirvs,
+                AttachPassthroughTessControlStage(src, tessEvalShaderIndex, shaderSpirvs,
                                                   vertexStageEssl, tessEvalStageEssl);
             }
 
@@ -12877,9 +13164,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the transpiled ESSL (`out vec4 result_0;` stays `result_0`), so the
             // frontend's requested names carry over unchanged.
             SizeT declaredXfbVaryingCount = 0;
-            if (stateProgramObject->GetTransformFeedbackVaryingCount() > 0 &&
+            if (src.GetTransformFeedbackVaryingCount() > 0 &&
                 g_GLESFuncs.glTransformFeedbackVaryings != nullptr) {
-                const auto& xfbVaryings = stateProgramObject->GetTransformFeedbackVaryings();
+                const auto& xfbVaryings = src.GetTransformFeedbackVaryings();
                 Vector<const GLchar*> xfbNames;
                 xfbNames.reserve(xfbVaryings.size());
                 // A block this build flattened no longer HAS the member the application asked
@@ -12894,7 +13181,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // capture stage is the vertex shader keeps the built-in and its spelling,
                 // whatever happened to a control stage behind it.
                 Bool captureStageDemoted = false;
-                if (stateProgramObject->PointSizeDemoted()) {
+                if (src.PointSizeDemoted()) {
                     for (const ShaderStage linkedStage : linkedStages) {
                         if (linkedStage == ShaderStage::TessEval || linkedStage == ShaderStage::Geometry) {
                             captureStageDemoted = true;
@@ -12927,7 +13214,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 g_GLESFuncs.glTransformFeedbackVaryings(m_backendProgramId, static_cast<GLsizei>(xfbNames.size()),
                                                         xfbNames.data(),
-                                                        stateProgramObject->GetTransformFeedbackBufferMode());
+                                                        src.GetTransformFeedbackBufferMode());
                 // Unchecked before. A rejected capture set leaves the program linking happily
                 // with NO capture set at all, and then every draw of every span records
                 // nothing while the application reads its buffer's pre-draw bytes and
@@ -12942,8 +13229,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             "%s (mode %s): [%s]. Every capture made with GL program %u will record nothing.",
                             m_backendProgramId, MG_Util::ConvertGLEnumToString(xfbError).c_str(),
                             MG_Util::ConvertGLEnumToString(
-                                stateProgramObject->GetTransformFeedbackBufferMode()).c_str(),
-                            declared.c_str(), stateProgramObject->GetExternalIndex());
+                                src.GetTransformFeedbackBufferMode()).c_str(),
+                            declared.c_str(), src.GetExternalIndex());
                 }
                 declaredXfbVaryingCount = xfbNames.size();
             }
@@ -12966,7 +13253,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // links nothing no-ops every draw that uses it, and that has to be readable
                 // in an INFO-level artifact.
                 MGLOG_E("Program linking failed. State program ID: %u, backend program ID: %u, driver log: %s",
-                        stateProgramObject->GetExternalIndex(), m_backendProgramId, log.data());
+                        src.GetExternalIndex(), m_backendProgramId, log.data());
                 // The one link failure MobileGL can name a cause for that the driver's log never
                 // will: ESSL has no legal single declaration for a read+write image outside
                 // r32f/r32i/r32ui, so those are split into a coherent pair and the stage ends up
@@ -13006,13 +13293,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                &linkedXfbBufferMode);
                     for (Int i = 0; i < kMaxDrainedProgramErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {
                     }
-                    const GLenum requestedMode = stateProgramObject->GetTransformFeedbackBufferMode();
+                    const GLenum requestedMode = src.GetTransformFeedbackBufferMode();
                     if (static_cast<SizeT>(std::max(linkedXfbVaryings, 0)) != declaredXfbVaryingCount ||
                         static_cast<GLenum>(linkedXfbBufferMode) != requestedMode) {
                         MGLOG_E("Backend program %u (GL program %u) linked with a capture set the driver does not "
                                 "agree with: asked for %zu varying(s) in mode %s, the driver reports %d varying(s) "
                                 "in mode %s. Captures made with it will be empty or wrongly laid out.",
-                                m_backendProgramId, stateProgramObject->GetExternalIndex(), declaredXfbVaryingCount,
+                                m_backendProgramId, src.GetExternalIndex(), declaredXfbVaryingCount,
                                 MG_Util::ConvertGLEnumToString(requestedMode).c_str(), linkedXfbVaryings,
                                 MG_Util::ConvertGLEnumToString(
                                     static_cast<GLenum>(linkedXfbBufferMode)).c_str());
@@ -13077,55 +13364,75 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             // Create global UBO
-            if (stateProgramObject->GetUBOSize() > 0) {
+            if (src.GetUBOSize() > 0) {
                 g_GLESFuncs.glGenBuffers(1, &m_backendGlobalUBOId);
                 g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, m_backendGlobalUBOId);
-                g_GLESFuncs.glBufferData(GL_UNIFORM_BUFFER, stateProgramObject->GetUBOSize(), nullptr, GL_STREAM_DRAW);
+                g_GLESFuncs.glBufferData(GL_UNIFORM_BUFFER, src.GetUBOSize(), nullptr, GL_STREAM_DRAW);
                 g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, 0);
             } else {
                 m_backendGlobalUBOId = 0;
             }
 
-            CacheResourceLocations(stateProgramObject);
+            CacheResourceLocations(src);
             // NOT the mechanism that makes a rebinding work - the transpiled qualifier above is.
             // glShaderStorageBlockBinding is a GL 4.3 entry point that no real ES driver exposes,
             // so this replay is a no-op almost everywhere; it stays because it is still correct
             // (and cheaper than a rebuild) on a driver that does expose it, e.g. a desktop GL
             // driver used as the ES backend. AFTER the link either way, because it needs the
             // driver's linked interface.
-            ReseedShaderStorageBlockBindings(m_backendProgramId, *stateProgramObject);
+            ReseedShaderStorageBlockBindings(m_backendProgramId, src);
+#if !MOBILEGL_PIPE_PUSH
+            m_syncedLinkVersion = src.GetLinkVersion();
+            m_syncedImageUnitVersion = src.GetImageUnitVersion();
+#endif
+
+            m_isInitialized = true;
+            MGLOG_D("Program sync completed. backend ID %u", m_backendProgramId);
+        }
+
+#if MOBILEGL_PIPE_PUSH
+        // ---- the two public heads (P5e pg) -----------------------------------------------
+        //
+        // THE CLEAN KEYS ARE STAMPED HERE AND NOT IN THE WORKER, because which key is
+        // authoritative is exactly what distinguishes the two arms - and a worker that stamped
+        // both would be claiming to know something it was not told. The monolith half keeps the
+        // frontend's two versions (and the record serial P4a added beside them); the handle half
+        // keeps the record's two serials and leaves the frontend versions at their
+        // never-matched sentinel, which is honest: on that arm nothing may ask a ProgramObject
+        // what its link version is.
+        void BackendProgramObjectImpl::SyncToBackend(
+            const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (!stateProgramObject) {
+                MGLOG_E_ONCE("State program object is null, skipping backend sync.");
+                return;
+            }
+            SyncToBackendFromSource(ProgramArchiveSource::FromFrontend(*stateProgramObject));
             m_syncedLinkVersion = stateProgramObject->GetLinkVersion();
             m_syncedImageUnitVersion = stateProgramObject->GetImageUnitVersion();
-#if MOBILEGL_PIPE_PUSH
             // P4a (D-B3): the ShaderCso record's Serial, stamped in the same breath as the two
             // frontend versions it replaces. GetSyncedShaderCsoSerial() beside
             // GetSyncedLinkVersion()/GetSyncedImageUnitVersion() is what the draw path's
             // nine-clause rebuild condition reads on the handle arm; the clause COUNT does not
             // shrink, its inputs move (D-H5).
-            //
-            // WHAT DOES *NOT* MOVE, and it is a design statement rather than an omission: the
-            // ARTEFACTS. D-H3 rules that in monolith all seven MGPBlobRefs are declared with
-            // Size 0 - "this record does not declare its blob" - and the LinkArtifacts /
-            // SpirvArtifacts ride beside the record through the entry point's companion
-            // pointers, so the applier stores the DESCRIPTOR and the identity and the server
-            // reads the frontend's own archive. That is what keeps the codec off the monolith
-            // hot path entirely, and it is why every artefact read above is still a read of
-            // stateProgramObject. The verify build is where the codec is exercised, by
-            // serialising, deserialising and field-comparing before storing.
             if (ProgramSubsystemEnabled()) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-                // P5c (G6, CONTRACT-P5C §5.4): the program's ShaderCso handle is resolved by
-                // frontend identity below - frontend-keyed twin resolution, named debt inside
-                // the scope - P3b/P4b rekeys the registry onto handles.
+                // P5c (G6, CONTRACT-P5C §5.4): MONOLITH GLUE ONLY. This is the frontend-keyed
+                // lookup the phase exists to retire, and it survives here for the reason
+                // ruling 1 (ID-81) gives: under Transport=monolith the push build keeps its
+                // frontend arms token for token, and this arm is only ever reached from them.
+                // The handle half below names no frontend identity at all.
                 const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
 #endif
-                // MONOLITH GLUE: the ShaderCso handle of a program this backend still arrives
-                // holding. The reader hides the composite band, so a program-pipeline composite
-                // - which the server must never learn is one - resolves through the same call.
+                // The reader hides the composite band, so a program-pipeline composite - which
+                // the server must never learn is one - resolves through the same call.
                 const MG_Pipe::MGPipeHandle cso = g_backendProgramObjects.HandleOf(stateProgramObject.get());
                 const auto* record = PipeShaderCsoRecordForHandle(cso);
                 if (record != nullptr) {
                     m_syncedShaderCsoSerial = record->Serial;
+                    m_syncedBindingsSerial = record->BindingsSerial;
                 } else {
                     // NOT a fall-back and not a silent zero: a stamped 0 would make every later
                     // serial compare fire for ever, which is the safe direction but hides the
@@ -13135,11 +13442,49 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                  stateProgramObject->GetExternalIndex(), cso.Slot, cso.Gen);
                 }
             }
-#endif
-
-            m_isInitialized = true;
-            MGLOG_D("Program sync completed. backend ID %u", m_backendProgramId);
         }
+
+        // P5e (pg), CONTRACT-P5E §5.5: THE BUILD THAT NAMES NO CLIENT MEMORY. Everything it
+        // reads is the record: the archive create_shader_state carried, the three binding tails
+        // set_program_bindings carried, and the descriptor. Nothing here resolves a frontend
+        // identity, probes the client allocator or holds a SharedPtr to a frontend object - the
+        // three absences rule F is made of.
+        void BackendProgramObjectImpl::SyncToBackendByHandle(MG_Pipe::MGPipeHandle cso) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            const auto* record = PipeShaderCsoRecordForHandle(cso);
+            if (record == nullptr) {
+                MGLOG_E_ONCE("MGPipe: shader CSO {%u, %u} has no applier record, so no driver "
+                             "program can be built for it",
+                             cso.Slot, cso.Gen);
+                return;
+            }
+            // THE ARCHIVE IS THE RECORD'S OR THE BUILD DOES NOT HAPPEN. A record with no archive
+            // is one the transport arm never filled - a monolith create that reached a handle
+            // arm - and building from an empty reflection would produce a program with no
+            // uniforms and no modules, i.e. a black screen with no marker anywhere. The
+            // create's own trip wire already refuses a record that declares no blobs AND
+            // carries no artefacts (PipeApply.cpp); this is the same statement one level later,
+            // where the twin can name the handle.
+            if (!record->Archive) {
+                MGLOG_E_ONCE("MGPipe: shader CSO {%u, %u} carries no server-owned archive; its "
+                             "create_shader_state was emitted by the monolith arm and this is "
+                             "the handle arm, so there is nothing to build from",
+                             cso.Slot, cso.Gen);
+                m_backendProgramUsable = false;
+                return;
+            }
+            SyncToBackendFromSource(ProgramArchiveSource::FromRecord(cso, *record));
+            // The two server-owned keys the draw path's clean condition reads instead of
+            // GetLinkVersion()/GetImageUnitVersion(). BindingsSerial is the second because a
+            // glUniform1i on an IMAGE uniform is baked into the generated ESSL rather than
+            // re-issued per draw - the record that carries it must therefore force a rebuild,
+            // exactly as m_imageUnitVersion used to.
+            m_syncedShaderCsoSerial = record->Serial;
+            m_syncedBindingsSerial = record->BindingsSerial;
+        }
+#endif
 
         namespace {
             // The GL name of the array element that lives at `location`, given the reflection
@@ -13148,7 +13493,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // repeatedly; this turns it back into "goku[k]". Anything that is not an array
             // (or whose base location cannot be resolved) comes back unchanged, so the only
             // behaviour that moves is the array case.
-            String SubscriptUniformNameForElement(const MG_State::GLState::ProgramObject& program, const String& name,
+            String SubscriptUniformNameForElement(const ProgramBuildSource& program, const String& name,
                                                   Uint location) {
                 if (name.size() < 3 || name.compare(name.size() - 3, 3, "[0]") != 0) return name;
                 const Int base = program.GetUniformLocation(name);
@@ -13163,13 +13508,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // (BindCurrentProgramWithResources) never issues glGetUniformBlockIndex /
         // glGetUniformLocation string queries; block-to-binding-point assignments are
         // program state and only need to be established here.
-        void BackendProgramObjectImpl::CacheResourceLocations(
-            const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject) {
+        void BackendProgramObjectImpl::CacheResourceLocations(const ProgramBuildSource& src) {
             m_globalUboBackendBlockIndex = -1;
             m_globalUboBackendBlockSize = 0;
             m_lastUploadedGlobalUboVersion = ~0u;
             m_globalUboRingAllocation = {};
-            if (stateProgramObject->GetUBOSize() > 0) {
+            if (src.GetUBOSize() > 0) {
                 const Uint blockIndex =
                     g_GLESFuncs.glGetUniformBlockIndex(m_backendProgramId, MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME);
                 if (blockIndex != GL_INVALID_INDEX) {
@@ -13186,16 +13530,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                 } else {
                     MGLOG_W_ONCE("Program %u has frontend global UBO storage, but backend has no %s block.",
-                            stateProgramObject->GetExternalIndex(), MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME);
+                            src.GetExternalIndex(), MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME);
                 }
             }
 
-            const Int uboCount = stateProgramObject->GetActiveUniformBlocksCount();
+            const Int uboCount = src.GetActiveUniformBlocksCount();
             m_uniformBlockBackendIndices.assign(static_cast<SizeT>(std::max(uboCount, 0)), -1);
             Uint lastUBOBinding = 0; // binding 0 is reserved for the global UBO
             for (Int i = 0; i < uboCount; ++i) {
                 ++lastUBOBinding;
-                const auto& name = stateProgramObject->GetUniformBlockName(static_cast<Uint>(i));
+                const auto& name = src.GetUniformBlockName(static_cast<Uint>(i));
                 const GLuint backendBlkIdx = g_GLESFuncs.glGetUniformBlockIndex(m_backendProgramId, name.c_str());
                 if (backendBlkIdx == GL_INVALID_INDEX) {
                     // Either eliminated as unused, or an SSBO block (frontend reflection
@@ -13205,16 +13549,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_uniformBlockBackendIndices[static_cast<SizeT>(i)] = static_cast<Int>(backendBlkIdx);
                 g_GLESFuncs.glUniformBlockBinding(m_backendProgramId, backendBlkIdx, lastUBOBinding);
                 MGLOG_D("CACHE prog=%u beProg=%u blk[%d]='%s' beIdx=%u -> bePoint=%u",
-                        stateProgramObject->GetExternalIndex(), m_backendProgramId, i, name.c_str(), backendBlkIdx,
+                        src.GetExternalIndex(), m_backendProgramId, i, name.c_str(), backendBlkIdx,
                         lastUBOBinding);
             }
 
             m_samplerUniformBindings.clear();
-            const Uint maxUniformLoc = stateProgramObject->GetMaxUniformLocation();
+            const Uint maxUniformLoc = src.GetMaxUniformLocation();
             for (Uint loc = 0; loc <= maxUniformLoc; ++loc) {
-                const auto& name = stateProgramObject->GetUniformName(loc);
+                const auto& name = src.GetUniformName(loc);
                 if (name.empty()) continue;
-                const GLenum uniformType = stateProgramObject->GetUniformType(loc);
+                const GLenum uniformType = src.GetUniformType(loc);
                 if (IsImageUniformType(uniformType)) {
                     // ES image units come exclusively from the layout(binding=N) qualifier
                     // (preserved in the transpiled ESSL); glUniform1i on an image uniform
@@ -13230,7 +13574,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Address each element by its own name instead; the frontend already
                 // reserves one location per element, so the element index is the distance
                 // from the array's base location.
-                const String elementName = SubscriptUniformNameForElement(*stateProgramObject, name, loc);
+                const String elementName = SubscriptUniformNameForElement(src, name, loc);
                 const Int backendLoc = g_GLESFuncs.glGetUniformLocation(m_backendProgramId, elementName.c_str());
                 if (backendLoc < 0) continue;
                 SamplerUniformBinding binding;
@@ -13925,11 +14269,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     } // namespace FramebufferImpl
 
-    namespace PrgramImpl {
-        void BackendProgramObjectImpl::SyncToBackendByHandle(MG_Pipe::MGPipeHandle cso) {
-            MGPipeP5eSeamNotLanded("BackendProgramObjectImpl::SyncToBackendByHandle", "pg", cso);
-        }
-    } // namespace PrgramImpl
+    // PrgramImpl's seam is GONE, not stubbed: package pg wrote
+    // BackendProgramObjectImpl::SyncToBackendByHandle's real body beside the frontend overload
+    // it is the twin of (above, with the two ProgramArchiveSource heads). A second definition
+    // here would make the linker's answer depend on link order, which is the one failure this
+    // block's own comment was written to prevent.
 
     namespace RenderbufferImpl {
         void BackendRenderbufferObject::SyncToBackendByHandle(MG_Pipe::MGPipeHandle renderbuffer) {

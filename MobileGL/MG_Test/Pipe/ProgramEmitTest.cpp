@@ -66,6 +66,9 @@
 // drives create_shader_state needs their definitions - the applier's own header deliberately
 // only forward-declares them.
 #include <MG_State/GLState/ProgramState/ProgramArtifacts.h>
+// P5e (pg): the FRAMED archive - ProgramArchive and the two frame entry points - is what
+// crosses under split, and the record holds one; the round-trip case below drives it directly.
+#include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #include <MG_State/GLState/Core.h>
 #endif
 
@@ -258,7 +261,7 @@ TEST(ProgramEmit, ACreateStoresTheDescriptorAndARelinkCountsUpAndDropsTheBlockKe
     const MGPipeHandle cso{5, 2};
     const Uint8 block[64] = {};
 
-    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 64), &link, &spirv);
+    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 64), &link, &spirv, nullptr);
     EXPECT_TRUE(ProgramRecordOf(5).Live);
     EXPECT_EQ(ProgramRecordOf(5).Gen, 2u);
     EXPECT_EQ(ProgramRecordOf(5).Serial, 0u) << "a create is not a mutation";
@@ -274,7 +277,7 @@ TEST(ProgramEmit, ACreateStoresTheDescriptorAndARelinkCountsUpAndDropsTheBlockKe
     const Uint64 blockSerial = ProgramRecordOf(5).GlobalConstantsSerial;
 
     // The relink.
-    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x7u, 32), &link, &spirv);
+    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x7u, 32), &link, &spirv, nullptr);
     EXPECT_EQ(ProgramRecordOf(5).Serial, 1u);
     EXPECT_EQ(ProgramRecordOf(5).Desc.StageMask, 0x7u);
     EXPECT_TRUE(ProgramRecordOf(5).GlobalConstants.empty())
@@ -285,7 +288,7 @@ TEST(ProgramEmit, ACreateStoresTheDescriptorAndARelinkCountsUpAndDropsTheBlockKe
 
     // A RECYCLED SLOT STARTS OVER: inheriting one field of the previous occupant is how a
     // program at a recycled slot inherits its predecessor's reflection.
-    MGPipeApplyCreateShaderState(ProgramDesc(MGPipeHandle{5, 3}, 0x1u, 16), &link, &spirv);
+    MGPipeApplyCreateShaderState(ProgramDesc(MGPipeHandle{5, 3}, 0x1u, 16), &link, &spirv, nullptr);
     EXPECT_EQ(ProgramRecordOf(5).Gen, 3u);
     EXPECT_EQ(ProgramRecordOf(5).Serial, 0u) << "a recycled slot kept its predecessor's serial";
     EXPECT_EQ(ProgramRecordOf(5).Desc.StageMask, 0x1u);
@@ -305,23 +308,23 @@ TEST(ProgramEmit, ACreateWithNoArtefactsAnOversizedBlockOrACorruptSlotIsRefusedN
     const MGPProgramDesc desc = ProgramDesc(MGPipeHandle{4, 1}, 0x3u, 0);
     ExpectRefusedNaming("create_shader_state {slot=4, gen=1}: the record declares no blobs and carries no "
                         "artefacts",
-                        [&desc, &spirv]() { MGPipeApplyCreateShaderState(desc, nullptr, &spirv); });
+                        [&desc, &spirv]() { MGPipeApplyCreateShaderState(desc, nullptr, &spirv, nullptr); });
     ExpectRefusedNaming("create_shader_state {slot=4, gen=1}: the record declares no blobs and carries no "
                         "artefacts",
-                        [&desc, &link]() { MGPipeApplyCreateShaderState(desc, &link, nullptr); });
+                        [&desc, &link]() { MGPipeApplyCreateShaderState(desc, &link, nullptr, nullptr); });
     EXPECT_TRUE(MGPipeApplier().ShaderCsos.empty());
 
     const MGPProgramDesc huge = ProgramDesc(MGPipeHandle{4, 1}, 0x3u, kMGPipeMaxGlobalConstantsBytes + 1);
     ExpectRefusedNaming("create_shader_state {slot=4, gen=1}: the default uniform block is larger than any "
                         "program may declare",
-                        [&huge, &link, &spirv]() { MGPipeApplyCreateShaderState(huge, &link, &spirv); });
+                        [&huge, &link, &spirv]() { MGPipeApplyCreateShaderState(huge, &link, &spirv, nullptr); });
     EXPECT_TRUE(MGPipeApplier().ShaderCsos.empty()) << "the table was grown by a refused record";
 
     const MGPProgramDesc pastTheBound = ProgramDesc(MGPipeHandle{kMGPipeMaxShaderCsoSlots, 1}, 0x3u, 0);
     ExpectRefusedNaming("create_shader_state {slot=1048576, gen=1}: the slot is outside the record table's "
                         "bound",
                         [&pastTheBound, &link, &spirv]() {
-                            MGPipeApplyCreateShaderState(pastTheBound, &link, &spirv);
+                            MGPipeApplyCreateShaderState(pastTheBound, &link, &spirv, nullptr);
                         });
     EXPECT_TRUE(MGPipeApplier().ShaderCsos.empty());
     EXPECT_TRUE(MGPipeApplier().CompositeShaderCsos.empty());
@@ -340,8 +343,8 @@ TEST(ProgramEmit, TheThreeBindingsFollowTheirOwnHandleAndADeadOneLeavesThePrevio
     const SpirvArtifacts spirv;
     const MGPipeHandle draw{2, 1};
     const MGPipeHandle dispatch{3, 1};
-    MGPipeApplyCreateShaderState(ProgramDesc(draw, 0x3u, 0), &link, &spirv);
-    MGPipeApplyCreateShaderState(ProgramDesc(dispatch, 0x20u, 0), &link, &spirv);
+    MGPipeApplyCreateShaderState(ProgramDesc(draw, 0x3u, 0), &link, &spirv, nullptr);
+    MGPipeApplyCreateShaderState(ProgramDesc(dispatch, 0x20u, 0), &link, &spirv, nullptr);
 
     const Uint64 serialBefore = MGPipeApplier().ProgramBindingSerial;
     MGPipeApplyBindShaderState(ProgramHandle(draw));
@@ -383,7 +386,7 @@ TEST(ProgramEmit, ADeleteDropsTheRecordAndClearsEveryBindingThatNamedIt) {
     const LinkArtifacts link;
     const SpirvArtifacts spirv;
     const MGPipeHandle cso{6, 4};
-    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 0), &link, &spirv);
+    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 0), &link, &spirv, nullptr);
     MGPipeApplyBindShaderState(ProgramHandle(cso));
     MGPipeApplySetDrawProgram(ProgramHandle(cso));
     MGPipeApplySetDispatchProgram(ProgramHandle(cso));
@@ -420,7 +423,7 @@ TEST(ProgramEmit, TheDefaultUniformBlockLandsOnTheProgramsRecordAndTheSentinelIs
     const LinkArtifacts link;
     const SpirvArtifacts spirv;
     const MGPipeHandle cso{7, 1};
-    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 8), &link, &spirv);
+    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 8), &link, &spirv, nullptr);
 
     Uint8 block[8] = {1, 2, 3, 4, 5, 6, 7, 8};
     MGPipeApplySetGlobalConstants(GlobalConstants(cso, 11), block);
@@ -473,7 +476,7 @@ TEST(ProgramEmit, TheProgramRecordSurvivesAMakeCurrentWhileTheThreeBindingsDoNot
     const SpirvArtifacts spirv;
     const MGPipeHandle cso{8, 1};
     const Uint8 block[4] = {9, 9, 9, 9};
-    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 4), &link, &spirv);
+    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 4), &link, &spirv, nullptr);
     MGPipeApplySetGlobalConstants(GlobalConstants(cso, 21), block);
     MGPipeApplyBindShaderState(ProgramHandle(cso));
     MGPipeApplySetDrawProgram(ProgramHandle(cso));
@@ -509,7 +512,11 @@ TEST(ProgramEmit, TheProgramRecordSurvivesAMakeCurrentWhileTheThreeBindingsDoNot
     X(ProgramEmit, TheDrawAndDispatchProgramsAreTwoIndependentSlots)                                \
     X(ProgramEmit, AnUnchangedProgramEmitsNothingAtAll)                                             \
     X(ProgramEmit, AReIssuedCreateReSendsTheDefaultUniformBlock)                                    \
-    X(ProgramEmit, ADeadProgramsRecordLatchIsRetiredAtItsDeath)
+    X(ProgramEmit, ADeadProgramsRecordLatchIsRetiredAtItsDeath)                                     \
+    X(ProgramEmit, AUniformBlockBindingAfterTheLinkTravelsOnItsOwnRecord)                           \
+    X(ProgramEmit, TheThreeBindingTailsAreWholeSetsAndAReIssuedCreateDropsThem)                     \
+    X(ProgramEmit, AFailedRelinkReIssuesWithLinkStatusZeroAndNeverAnObjectDeath)                    \
+    X(ProgramEmit, TheFramedArchiveRoundTripsWithTheStageOfEveryModule)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -801,6 +808,199 @@ void main() { gl_Position = vec4(0.0); EmitVertex(); }
         EXPECT_FALSE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, handle));
         EXPECT_FALSE(Emitter().RecordIsPublished(handle))
             << "a dead program still reads as published in the program emitter's memo";
+    }
+
+    // =====================================================================================
+    // P5e (pg): set_program_bindings, and the archive as the server owns it
+    // =====================================================================================
+
+    // THE CASE THE PACKAGE'S FIRST RED-ONCE IS BUILT ON. glUniformBlockBinding moves a block's
+    // binding INSIDE LinkArtifacts after the link that produced the archive, so a server that
+    // answered a draw from the archive alone would bind the uniform blocks the program was
+    // LINKED with rather than the ones it is BOUND with. The record is what closes that, and
+    // this is the case that says the client sends it.
+    TEST(ProgramEmit, AUniformBlockBindingAfterTheLinkTravelsOnItsOwnRecord) {
+        EmitterScope scope;
+        const GLuint name = MakeVsFsProgram();
+        const SharedPtr<ProgramObject>& program = Ctx().GetProgramObject(name);
+        ASSERT_TRUE(program);
+        Uint64 bytes = 0;
+        const MGPipeHandle cso = Emitter().AcquireShaderCso(*program, bytes);
+        ASSERT_FALSE(MGPipeHandleIsNull(cso));
+
+        // The create clears the latch, so the first bindings emission always goes out - which
+        // is the ordering the applier depends on (a re-issued create wipes all three tails).
+        const Uint64 before = Emitter().ProgramBindingsSetCount();
+        Emitter().EmitProgramBindings(*program, cso);
+        EXPECT_EQ(Emitter().ProgramBindingsSetCount(), before + 1)
+            << "the bindings that follow a create were suppressed, so the server would draw "
+               "this program off its archive's link-time snapshot for ever";
+        EXPECT_EQ(Emitter().LastProgramBindings().Cso, cso);
+        EXPECT_EQ(Emitter().ProgramBindingsRefusalCount(), 0u);
+
+        // UNCHANGED STATE EMITS NOTHING. The latch is (Cso, backendStateVersion,
+        // blockBindingVersion) and neither setter moves a counter on an unchanged value, which
+        // is what keeps a program-pipeline composite's per-draw uniform mirror free.
+        const Uint64 latched = Emitter().ProgramBindingsSetCount();
+        Emitter().EmitProgramBindings(*program, cso);
+        EXPECT_EQ(Emitter().ProgramBindingsSetCount(), latched)
+            << "an unchanged binding set was re-sent";
+
+        // A REAL glUniformBlockBinding, after the link, on a program that declares no block:
+        // the frontend's setter bails out on an out-of-range index, so this drives the other
+        // half - glUniform1i on the sampler-shaped uniform the test shader declares - which
+        // moves m_backendStateVersion and must unlatch the record.
+        const Int location = program->GetUniformLocation("u_value");
+        if (location >= 0) {
+            program->SetUniformSamplerOrImageUnitIndex(static_cast<Uint>(location), 3);
+            Emitter().EmitProgramBindings(*program, cso);
+            EXPECT_EQ(Emitter().ProgramBindingsSetCount(), latched + 1)
+                << "a post-link unit assignment did not move the latch, so it never travels";
+            const auto& hdr = Emitter().LastProgramBindings();
+            EXPECT_EQ(hdr.Cso, cso);
+            EXPECT_GE(hdr.SamplerUnitCount, 1u)
+                << "the assigned unit is not in the record's second tail";
+        }
+    }
+
+    // The applier's half: whole-set replacement in all three tails, and a re-issued create
+    // drops them because they are INDICES INTO the archive it has just replaced.
+    TEST(ProgramEmit, TheThreeBindingTailsAreWholeSetsAndAReIssuedCreateDropsThem) {
+        ApplierGuard guard;
+        const LinkArtifacts link;
+        const SpirvArtifacts spirv;
+        const MGPipeHandle cso{9, 1};
+        MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 0), &link, &spirv, nullptr);
+        ASSERT_TRUE(ProgramRecordOf(9).Live) << "the create did not land, so nothing below is about "
+                                                "set_program_bindings at all";
+        const Uint64 bindingsSerialAfterCreate = ProgramRecordOf(9).BindingsSerial;
+        const Uint64 refusalsBefore = MGPipeApplier().RefusedObjectCalls;
+
+        const Int32 blocks[3] = {0, 5, 2};
+        const MGPProgramSamplerUnit units[2] = {{4u, 1}, {9u, 7}};
+        MGPProgramStorageOverride overrides[1]{};
+        overrides[0].Binding = 6;
+        const char* const names[1] = {"Blocky"};
+        MGPProgramBindings hdr{};
+        hdr.Cso = cso;
+        hdr.Signature = 0xABCDEFull;
+        hdr.BlockBindingCount = 3;
+        hdr.SamplerUnitCount = 2;
+        hdr.StorageOverrideCount = 1;
+        MGPipeApplySetProgramBindings(hdr, blocks, units, overrides, names);
+        ASSERT_EQ(MGPipeApplier().RefusedObjectCalls, refusalsBefore)
+            << "the record the bindings name was not resolved";
+
+        ASSERT_EQ(ProgramRecordOf(9).BlockBindings.size(), 3u);
+        EXPECT_EQ(ProgramRecordOf(9).BlockBindings[1], 5);
+        ASSERT_EQ(ProgramRecordOf(9).SamplerUnits.size(), 2u);
+        EXPECT_EQ(ProgramRecordOf(9).SamplerUnits[1].Location, 9u);
+        EXPECT_EQ(ProgramRecordOf(9).SamplerUnits[1].Unit, 7);
+        ASSERT_EQ(ProgramRecordOf(9).StorageOverrides.size(), 1u);
+        // COPIED, NOT POINTED AT (rule C): the wire's name is a host span into SEG_STAGE, which
+        // retires with the record that named it, and the rebuild that reads this may be a frame
+        // later.
+        EXPECT_EQ(ProgramRecordOf(9).StorageOverrides[0].Name, String("Blocky"));
+        EXPECT_EQ(ProgramRecordOf(9).StorageOverrides[0].Binding, 6);
+        EXPECT_EQ(ProgramRecordOf(9).Signature, 0xABCDEFull);
+        EXPECT_GT(ProgramRecordOf(9).BindingsSerial, bindingsSerialAfterCreate)
+            << "BindingsSerial did not advance, so both texture memos and the twin's clean "
+               "condition would match state they have never seen";
+
+        // A SHORTER SET REPLACES, never merges: a merge would leave a binding the application
+        // has since reset to its declared default standing for ever.
+        const Int32 oneBlock[1] = {4};
+        MGPProgramBindings second = hdr;
+        second.BlockBindingCount = 1;
+        second.SamplerUnitCount = 0;
+        second.StorageOverrideCount = 0;
+        MGPipeApplySetProgramBindings(second, oneBlock, nullptr, nullptr, nullptr);
+        ASSERT_EQ(ProgramRecordOf(9).BlockBindings.size(), 1u);
+        EXPECT_TRUE(ProgramRecordOf(9).SamplerUnits.empty());
+        EXPECT_TRUE(ProgramRecordOf(9).StorageOverrides.empty());
+
+        // THE RE-ISSUE DROPS ALL THREE, for the reason it drops the default uniform block.
+        MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x7u, 0), &link, &spirv, nullptr);
+        EXPECT_TRUE(ProgramRecordOf(9).BlockBindings.empty())
+            << "a tail indexing an archive the relink replaced survived it";
+        EXPECT_EQ(ProgramRecordOf(9).Signature, 0u);
+    }
+
+    // ID-88 / ruling 9, VERIFIED IN THE FRONTEND rather than assumed: Link()'s prologue bumps
+    // the link version and assigns `m_artifacts = {}` - "the complete not-linked state" in its
+    // own words - BEFORE the link body runs, so a failed relink reports UNLINKED. The emitter
+    // therefore re-issues on the same handle with LinkStatus = 0, and nothing needs an
+    // object_death: the program object is alive and its twin must survive to be rebuilt.
+    TEST(ProgramEmit, AFailedRelinkReIssuesWithLinkStatusZeroAndNeverAnObjectDeath) {
+        EmitterScope scope;
+        const GLuint name = MakeVsFsProgram();
+        const SharedPtr<ProgramObject>& program = Ctx().GetProgramObject(name);
+        ASSERT_TRUE(program);
+        Uint64 bytes = 0;
+        const MGPipeHandle cso = Emitter().AcquireShaderCso(*program, bytes);
+        ASSERT_FALSE(MGPipeHandleIsNull(cso));
+        EXPECT_TRUE(program->GetLinkStatus());
+        EXPECT_EQ(Emitter().LastProgramDesc().LinkStatus, 1u);
+        const Uint64 creates = Emitter().CreateCount();
+
+        // A relink with a shader that cannot compile. Detaching everything is the cleanest
+        // failure this suite can produce without a compiler diagnostic of its own: Link() with
+        // no shaders attached is the "No shader objects are attached" arm, which leaves
+        // linkStatus false.
+        for (const auto& attached : program->GetAttachedShaders()) {
+            GL::DetachShader(name, attached->GetExternalIndex());
+        }
+        GL::LinkProgram(name);
+        ASSERT_FALSE(program->GetLinkStatus()) << "the frontend did NOT withdraw LINK_STATUS on a "
+                                                  "failed relink; ID-88's 'iff' is then false and "
+                                                  "the emitter's rule has to be re-decided";
+
+        const MGPipeHandle again = Emitter().AcquireShaderCso(*program, bytes);
+        EXPECT_EQ(again, cso) << "a relink minted a second handle; the twin table would be asked "
+                                 "for two twins of one GL object";
+        EXPECT_EQ(Emitter().CreateCount(), creates + 1)
+            << "the failed relink did not re-issue, so the server keeps drawing an executable "
+               "the frontend reports unlinked";
+        EXPECT_EQ(Emitter().LastProgramDesc().LinkStatus, 0u)
+            << "the re-issue claims the program linked";
+        EXPECT_TRUE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, cso))
+            << "a failed relink must never be modelled as an object_death";
+    }
+
+    // The frame, both ways round. SpirvArtifacts carries no stage list and MGPProgramDesc::
+    // StageMask cannot stand in for one - it is a bit SET, and GL lets two shader objects of
+    // one stage be attached to a program, so a list rebuilt from the mask can be SHORTER than
+    // generatedSpirv while the backend pairs the two by one running index.
+    TEST(ProgramEmit, TheFramedArchiveRoundTripsWithTheStageOfEveryModule) {
+        MG_State::GLState::LinkArtifacts link;
+        MG_State::GLState::SpirvArtifacts spirv;
+        spirv.spirvStatus = true;
+        // TWO MODULES OF THE SAME STAGE, which is the shape a mask cannot describe.
+        spirv.generatedSpirv.resize(2);
+        spirv.generatedSpirv[0].assign(3, 0x07230203u);
+        spirv.generatedSpirv[1].assign(5, 0x07230204u);
+        const Vector<Uint32> stages{static_cast<Uint32>(ShaderStage::Vertex),
+                                    static_cast<Uint32>(ShaderStage::Vertex)};
+
+        Vector<Uint8> framed;
+        MG_State::GLState::EncodeProgramArchive(link, spirv, stages, framed);
+        ASSERT_FALSE(framed.empty());
+
+        MG_State::GLState::ProgramArchive back;
+        ASSERT_TRUE(MG_State::GLState::DecodeProgramArchive(framed.data(), framed.size(), back));
+        EXPECT_EQ(back.LinkedStages, stages);
+        ASSERT_EQ(back.Spirv.generatedSpirv.size(), 2u);
+        EXPECT_EQ(back.Spirv.generatedSpirv[1].size(), 5u);
+        EXPECT_EQ(back.Link.program, nullptr)
+            << "the one member the codec skips is the live glslang TProgram, and decode must "
+               "leave it null";
+
+        // A TRUNCATED FRAME IS REFUSED, not guessed, and both outputs come back defined.
+        MG_State::GLState::ProgramArchive refused;
+        EXPECT_FALSE(
+            MG_State::GLState::DecodeProgramArchive(framed.data(), framed.size() - 1, refused));
+        EXPECT_TRUE(refused.LinkedStages.empty());
+        EXPECT_TRUE(refused.Spirv.generatedSpirv.empty());
     }
 } // namespace
 #endif // MOBILEGL_PIPE_PUSH

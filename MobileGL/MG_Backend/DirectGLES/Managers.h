@@ -696,6 +696,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return enabled;
     }
 
+#if MOBILEGL_PIPE_PUSH
+    // P5e (pg), CONTRACT-P5E.md §5.8 / ruling 1 (ID-81): THE HANDLE ARM'S SELECTOR for the
+    // program family. Transport AND the family bit, in that order and both required:
+    //
+    //   * `Transport != Monolith` because the push-MONOLITH build keeps its frontend arms token
+    //     for token - the verify comparator needs them, and it is what makes
+    //     MOBILEGL_IPC_RUN_AHEAD=0 a pure wait-rule A/B on identical server code rather than a
+    //     comparison of two different backends;
+    //   * the family bit because the A/B that switches this family off has to switch off the
+    //     arm too, not only the emission - a server reading records nobody sends would draw
+    //     with no program at all.
+    //
+    // NOT LATCHED, unlike the four above: Transport is configuration read once at bring-up and
+    // ProgramSubsystemEnabled() already latches, so this is one load and one test, and a latch
+    // here would only hide which half answered.
+    inline Bool ProgramHandleArm() {
+        return MG_Config::Transport != MG_Config::TransportMode::Monolith && ProgramSubsystemEnabled();
+    }
+#endif
+
     // ---- P4a: what the twins read INSTEAD of the frontend object ----
     //
     // One reader per record kind, all const, all null-on-miss, and all bounds-checked against
@@ -2436,6 +2456,173 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Defined further down, next to CollectImageFormatBakeInputs; only referenced here.
         struct ImageFormatBakeInputs;
 
+#if MOBILEGL_PIPE_PUSH
+        // ---- P5e (pg), CONTRACT-P5E.md §5.5: THE ONE SOURCE A PROGRAM BUILD READS ----------
+        //
+        // WHY THIS TYPE EXISTS AT ALL. Building a driver program asks the frontend
+        // ProgramObject sixteen distinct questions and asks its reflection tables thousands of
+        // times, and EVERY ONE OF THEM used to be a read of client-owned memory on the apply
+        // thread. Under run-ahead that is not a race to be careful about, it is wrong by
+        // construction: ProgramObject::Link() REPLACES m_artifacts and m_spirv in place, and by
+        // the time the server builds, the client may be several links past the one the record
+        // describes. So the build reads THIS instead, and the two arms differ only in where it
+        // points.
+        //
+        // AND IT IS DELIBERATELY NOT A SECOND ProgramObject. Nothing here constructs a frontend
+        // object on the apply thread - ID-102's lesson, learned by id: a ProgramObject's own
+        // constructor mints a lifetime id, so an "object" built server-side would trip the very
+        // guards this phase installs and would make a red-once falsely green.
+        //
+        // THE OVERLAY IS THE OTHER HALF. Three reflection fields - the block-to-point map, the
+        // sampler unit per uniform LOCATION and the name-keyed storage-block override set - are
+        // members of LinkArtifacts that glUniformBlockBinding, glUniform1i and
+        // glShaderStorageBlockBinding move AFTER the link that produced the archive, without
+        // relinking. On the handle arm the record's set_program_bindings tails are the whole
+        // truth for all three (whole-set replacement, not a merge) and the archive's link-time
+        // values are shadowed; on the monolith arm there is no overlay because the "archive"
+        // IS the frontend's live table.
+        //
+        // THE ACCESSORS BELOW MIRROR ProgramObject's, one for one, and that duplication is
+        // deliberate rather than lazy: MG_Backend includes nothing from MG_State's program
+        // internals beyond the archive structs themselves, and ProgramObject's own forms are
+        // non-static members over Artifacts(). The three that ARE already static over
+        // LinkArtifacts (IsValidUniformLocation, UniformAtIn, GetUniformArraySizeByTIndex) are
+        // called rather than copied, which is where the boundary sits.
+        struct ProgramArchiveSource {
+            using LinkArtifacts = MG_State::GLState::LinkArtifacts;
+            using SpirvArtifacts = MG_State::GLState::SpirvArtifacts;
+            using UniformReflection = MG_State::GLState::ResourceReflection;
+            using TypeFacts = MG_State::GLState::TypeFacts;
+            using XfbVarying = MG_State::GLState::XfbVarying;
+
+            // Both are non-null for the whole lifetime of a source; a source is a local of the
+            // build that made it and never outlives the record or the object it points into.
+            const LinkArtifacts* Link = nullptr;
+            const SpirvArtifacts* Spirv = nullptr;
+
+            // WHAT A LOG LINE NAMES. The frontend's GL program name on the monolith arm; the
+            // ShaderCso slot on the handle arm, because the server does not know GL names and
+            // must not learn them (the handle is the identity the whole phase speaks in).
+            Uint Identity = 0;
+            // True when Identity is a handle slot rather than a GL name, so a message can say
+            // which it printed instead of leaving a reader to guess.
+            Bool IdentityIsHandleSlot = false;
+
+            Bool Linked = false;
+            Bool SpirvUsable = false;
+            Bool SpirvValidationEnabled = false;
+            Bool PointSizeWasDemoted = false;
+            Uint GlobalUboSize = 0;
+
+            // One entry per Spirv->generatedSpirv module, at the same index. Owned rather than
+            // referenced because the monolith arm builds it (GetLinkedShaderStages() returns by
+            // value) and the handle arm converts the frame's Uint32 words.
+            Vector<ShaderStage> LinkedStages;
+
+            // The post-link overlay. Governs iff OverlayGoverns; see the type comment.
+            Bool OverlayGoverns = false;
+            const Vector<Int32>* BlockBindingOverlay = nullptr;
+            const Vector<MG_Pipe::MGPProgramSamplerUnit>* SamplerUnitOverlay = nullptr;
+            // Built once per build from whichever side owns it, because TranspileSpirvToEssl
+            // takes the map by const reference and the record carries a vector.
+            UnorderedMap<String, Int> StorageOverrides;
+            // The client's commutative hash on the handle arm, ComputeShaderStorageBlockBinding-
+            // Signature's on the monolith one. Same function, computed on whichever side owns
+            // the map (MG_Impl/Pipe/ProgramEmit.h names its twin).
+            Uint64 StorageOverrideSignature = 0;
+
+            // ---- the archive's own answers ----
+            //
+            // EVERY NAME HERE IS ProgramObject's NAME, and that is load-bearing rather than
+            // tidy: the build body below is written once against `src`, whose TYPE is the
+            // build's (ProgramBuildSource), so the pull build compiles the very same text
+            // against a ProgramObject and G1's byte identity survives.
+            Uint GetExternalIndex() const { return Identity; }
+            Bool GetLinkStatus() const { return Linked; }
+            Bool GetSpirvStatus() const { return SpirvUsable; }
+            Bool GetSpirvValidationEnabled() const { return SpirvValidationEnabled; }
+            Bool PointSizeDemoted() const { return PointSizeWasDemoted; }
+            Uint GetUBOSize() const { return GlobalUboSize; }
+            const Vector<ShaderStage>& GetLinkedShaderStages() const { return LinkedStages; }
+            const UnorderedMap<String, Int>& GetShaderStorageBlockBindingOverrides() const {
+                return StorageOverrides;
+            }
+            // THE DEBUG LOG IS DELETED ON THIS ARM (CONTRACT-P5E §5.5). The snapshot is
+            // GL-thread-owned ShaderObject SharedPtrs - the exact shape rule C forbids an
+            // applier entry point to reach - and its one consumer in the build is an MGLOG_D
+            // dump of each stage's original GLSL, which the server does not have and does not
+            // need. An empty list makes that loop a no-op rather than a special case.
+            const Vector<MG_State::GLState::ProgramObject::LinkedShaderRef>& GetLinkedShaderSnapshot() const {
+                static const Vector<MG_State::GLState::ProgramObject::LinkedShaderRef> kNone;
+                return kNone;
+            }
+
+            Uint GetMaxUniformLocation() const { return Link->maxUniformLocation; }
+            Bool IsValidUniformLocation(Int location) const {
+                return MG_State::GLState::ProgramObject::IsValidUniformLocation(*Link, location);
+            }
+            const UniformReflection& UniformAt(Int tIndex) const {
+                return MG_State::GLState::ProgramObject::UniformAtIn(*Link, tIndex);
+            }
+            // Bounds-checked, exactly as ProgramObject::GetUniformName is not: the frontend's
+            // form indexes uniformIndexInTProgram raw because every caller there has already
+            // walked a legal location, and this one is reached from a handle arm where the
+            // location space comes off a record.
+            const String& GetUniformName(Uint location) const {
+                static const String kEmpty;
+                if (location >= Link->uniformIndexInTProgram.size()) return kEmpty;
+                return UniformAt(Link->uniformIndexInTProgram[location]).name;
+            }
+            GLenum GetUniformType(Uint location) const {
+                if (location >= Link->uniformIndexInTProgram.size()) return 0;
+                return UniformAt(Link->uniformIndexInTProgram[location]).glDefineType;
+            }
+            const TypeFacts& GetUniformTypeFacts(Uint location) const {
+                static const TypeFacts kEmpty{};
+                if (location >= Link->uniformIndexInTProgram.size()) return kEmpty;
+                return UniformAt(Link->uniformIndexInTProgram[location]).type;
+            }
+            Bool UniformLocationsAliasSameUniform(Int a, Int b) const {
+                if (!IsValidUniformLocation(a) || !IsValidUniformLocation(b)) return false;
+                return Link->uniformIndexInTProgram[a] == Link->uniformIndexInTProgram[b];
+            }
+            // ProgramObject::GetUniformLocation, reproduced over the archive. The array rules
+            // are the whole body: reflection keys an array under "arr[0]" at its base location,
+            // a bare "arr" resolves to that, an "arr[k]" resolves to base + k, and an array of
+            // arrays is keyed by its full "[0]"-terminated spelling - which is why the
+            // suffixed lookup is tried before the trailing subscript is read as an index.
+            Int GetUniformLocation(const String& name) const;
+            Int GetActiveUniformBlocksCount() const {
+                return static_cast<Int>(Link->glBlockIndexToTProgram.size());
+            }
+            const String& GetUniformBlockName(Uint index) const;
+
+            GLenum GetTransformFeedbackBufferMode() const { return Link->xfbBufferMode; }
+            SizeT GetTransformFeedbackVaryingCount() const { return Link->xfbVaryings.size(); }
+            const Vector<XfbVarying>& GetTransformFeedbackVaryings() const { return Link->xfbVaryings; }
+            const Vector<Vector<unsigned>>& GetGeneratedSpirv() const { return Spirv->generatedSpirv; }
+
+            // ---- the three the overlay governs ----
+            Uint GetUniformBlockBinding(Uint index) const;
+            Int GetUniformSamplerOrImageUnitIndex(Uint location) const;
+
+            // The monolith-glue constructor: the archive IS the frontend's live tables, so
+            // there is no overlay and the three mutable fields answer from them directly.
+            static ProgramArchiveSource FromFrontend(const MG_State::GLState::ProgramObject& program);
+            // The handle arm: the record's own archive, with its three tails overlaid.
+            static ProgramArchiveSource FromRecord(MG_Pipe::MGPipeHandle cso,
+                                                   const MG_Pipe::MGPipeShaderCsoRecord& record);
+        };
+
+        // THE BUILD'S SOURCE TYPE, per build. This alias is what lets the program build have one
+        // body: in a push build it is the record-or-frontend view above, in a pull build it is
+        // the frontend object the body always read, spelled through the same name so the text
+        // does not move (G1).
+        using ProgramBuildSource = ProgramArchiveSource;
+#else
+        using ProgramBuildSource = MG_State::GLState::ProgramObject;
+#endif
+
         class BackendProgramObjectImpl {
         public:
             // Per-link cache of a sampler-style uniform's backend location: built once in
@@ -2496,11 +2683,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ~BackendProgramObjectImpl();
             void SyncToBackend(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
 #if MOBILEGL_PIPE_PUSH
-            // P5e SEAM (MG_Remote/CONTRACT-P5E.md §5.5; declared by c0e, bodied by pg): the same
-            // sync keyed on the ShaderCso HANDLE and answered from the record - the archive the
-            // create carries and the three binding tails set_program_bindings carries. It is an
-            // OVERLOAD beside the frontend one, which stays as the monolith-glue half, so the
-            // pull build's mangled names do not move.
+            // P5e (pg), CONTRACT-P5E.md §5.5: the same sync keyed on the ShaderCso HANDLE and
+            // answered from the record - the archive the create carries and the three binding
+            // tails set_program_bindings carries. It is an OVERLOAD beside the frontend one,
+            // which stays as the monolith-glue half, so the pull build's mangled names do not
+            // move (ruling 1 / ID-81: two overloads, not an #if inside one body).
             void SyncToBackendByHandle(MG_Pipe::MGPipeHandle cso);
 #endif
             void Use();
@@ -2601,6 +2788,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // parameters - are all still specialised at the verb, from state this backend holds.
             // 0 means "never stamped", which is a guaranteed miss (applier serials start at 1).
             Uint64 GetSyncedShaderCsoSerial() const { return m_syncedShaderCsoSerial; }
+            // P5e (pg): the SECOND server-owned key, and it replaces GetImageUnitVersion() on
+            // the handle arm rather than duplicating the one above. A glUniform1i on an IMAGE
+            // uniform is BAKED into the generated ESSL (ES forbids the call outright), so the
+            // record that carries the new unit has to force a rebuild; BindingsSerial moves on
+            // every applied set_program_bindings, which is exactly when one can have changed.
+            // 0 means "never stamped", a guaranteed miss, because applier serials start at 1.
+            Uint64 GetSyncedBindingsSerial() const { return m_syncedBindingsSerial; }
 #endif
             // Whether the (unit, bound format) pairs this program's FORMAT-LESS image uniforms
             // resolve to are still the ones its ESSL was generated against.
@@ -2626,7 +2820,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint64 ComputeImageUnitFormatSignature() const;
 
         private:
-            void CacheResourceLocations(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
+#if MOBILEGL_PIPE_PUSH
+            // The one body both public heads feed; see its definition for why it is a worker in
+            // a push build and IS SyncToBackend in a pull build.
+            void SyncToBackendFromSource(const ProgramBuildSource& src);
+#endif
+            void CacheResourceLocations(const ProgramBuildSource& src);
 
             // Builds, compiles and attaches the pass-through tessellation control stage GL 4.6
             // core 11.2.2 describes, for a program that has an evaluation stage and none of its
@@ -2634,7 +2833,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // stage has been attached and before the link; see the definition for why it cannot
             // regress a program that works today.
             void AttachPassthroughTessControlStage(
-                const MG_State::GLState::ProgramObject& stateProgramObject, Int tessEvalShaderIndex,
+                const ProgramBuildSource& src, Int tessEvalShaderIndex,
                 const Vector<Vector<unsigned int>>& shaderSpirvs, const String& vertexStageEssl,
                 const String& tessEvalStageEssl);
 
@@ -2705,6 +2904,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // P4a's replacement for the two above on the handle arm; see GetSyncedShaderCsoSerial.
             // Push-only, so the pull build's object is byte-for-byte the pre-P4a one (D-P).
             Uint64 m_syncedShaderCsoSerial = 0;
+            Uint64 m_syncedBindingsSerial = 0;
 #endif
             // Image units addressed by the program's FORMAT-LESS image uniforms, and the digest
             // of the (unit, format) pairs the generated ESSL baked. Empty/0 for every program
@@ -2763,15 +2963,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // program that was just built - best effort, on the same "only where the driver has
         // the entry point" terms as ApplyShaderStorageBlockBinding above. Mirrors
         // DirectVulkan's reseed-on-rebuild in BuildProgramResourceCache.
-        void ReseedShaderStorageBlockBindings(Uint backendProgramId,
-                                              const MG_State::GLState::ProgramObject& stateProgramObject);
+        void ReseedShaderStorageBlockBindings(Uint backendProgramId, const ProgramBuildSource& src);
         // Order-independent digest of the program's glShaderStorageBlockBinding overrides.
         // The generated ESSL carries them (ES has no way to move a storage block's binding
         // after link), so a program built against a different set is stale and the draw path
         // has to rebuild it. Computed from the values, so re-setting a block to the binding it
         // already has costs nothing. 0 when nothing was ever rebound.
-        Uint64 ComputeShaderStorageBlockBindingSignature(
-            const MG_State::GLState::ProgramObject& stateProgramObject);
+        Uint64 ComputeShaderStorageBlockBindingSignature(const ProgramBuildSource& src);
+#if MOBILEGL_PIPE_PUSH
+        // P5e (pg): the computation itself, for the monolith arm - the source constructor seeds
+        // itself with it and the monolith draw path asks it per draw. Push-only: in a pull build
+        // the overload above IS this body, so no name is added there.
+        Uint64 ComputeShaderStorageBlockBindingSignatureOf(
+            const MG_State::GLState::ProgramObject& program);
+#endif
 
         // Everything the image-format bake needs from one walk of a program's uniform
         // reflection. GLSL ES requires a format layout qualifier on every image uniform;
@@ -2812,8 +3017,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // keeps the module it already had.
             Bool declaresWidenableImageFormat = false;
         };
-        ImageFormatBakeInputs CollectImageFormatBakeInputs(
-            const MG_State::GLState::ProgramObject& stateProgramObject);
+        ImageFormatBakeInputs CollectImageFormatBakeInputs(const ProgramBuildSource& src);
 
 #if MOBILEGL_PIPE_PUSH
         // ---- P5e SEAM (MG_Remote/CONTRACT-P5E.md §4.2, §5.5; declared by c0e, bodied by
@@ -2830,6 +3034,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // ResolveSamplerCsoTwin set - and null silently for the null handle, which is the legal
         // "nothing bound".
         BackendProgramObjectImpl* ResolveProgramTwin(MG_Pipe::MGPipeHandle cso);
+
+        // P5e (pg): the two PER-DRAW reads of set_program_bindings' tails, as free functions
+        // rather than through a ProgramArchiveSource - building a source per draw would copy the
+        // override map for a question that is one indexed read. Both answer exactly what their
+        // frontend twins do when the record carries no bindings yet: the archive's own link-time
+        // value, which for an untouched program IS the right answer.
+        //
+        // The block binding is dense in the BLOCK index space; the sampler unit is sparse and
+        // ascending by LOCATION, so it is a binary search (a program has thousands of locations
+        // and a handful of samplers, and a linear scan per sampler would be quadratic).
+        Uint ProgramBlockBindingFromRecord(const MG_Pipe::MGPipeShaderCsoRecord& record, Int blockIndex);
+        Int ProgramSamplerUnitFromRecord(const MG_Pipe::MGPipeShaderCsoRecord& record, Uint location);
 #endif
     } // namespace PrgramImpl
 
