@@ -14193,48 +14193,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace
 
     namespace TextureImpl {
-        // ================================================================================
-        // P5e SCAFFOLD (fb) - THIS COMMIT IS REVERTED BEFORE fb's HEAD. DO NOT LAND IT.
-        // ================================================================================
-        // tx2 owns these two bodies and is being written in parallel. fb CALLS them from the
-        // attachment surface sync, the two attachment texture lists, the image sweep and the
-        // named blit, so with the c0e stubs in place every integration-split entry that touches
-        // a texture aborts on the seam rather than on anything fb wrote - which leaves fb's own
-        // isplit and strict numbers unmeasurable.
-        //
-        // So these two are bodied HERE, temporarily, in the ONLY way that does not pre-empt
-        // tx2's design: the frontend texture is resolved from the record's own GL name through
-        // the BARRIER-PULLED sticky forward GetTextureObject - exactly as the copy-image sink
-        // resolves its endpoints (PipeApplier.cpp) - and the existing frontend overloads then
-        // do the work. That is correct under lockstep (the client is parked, which is what
-        // makes a sticky forward legal) and it is deliberately NOT what tx2 will write: tx2
-        // drives the storage from the descriptor and has no frontend object at all.
-        //
-        // What it costs, and what to read past when reading fb's numbers: each call adds a
-        // GetTextureObject pull, so the strict lane sees GetTextureObject@<verb> markers that
-        // belong to this scaffold and not to fb.
         SharedPtr<BackendTextureObject>& SyncTextureToBackendByHandle(MG_Pipe::MGPipeHandle texture,
                                                                       Bool imageBindableStorageRequired) {
-            static SharedPtr<BackendTextureObject> s_scaffoldNone;
-            const auto* record = PipeTextureRecordForHandle(texture);
-            if (record == nullptr) {
-                s_scaffoldNone = nullptr;
-                return s_scaffoldNone;
-            }
-            const auto& stateObj = MGB_CTX->GetTextureObject(static_cast<Uint>(record->Desc.GlNameForDiag));
-            if (!stateObj) {
-                s_scaffoldNone = nullptr;
-                return s_scaffoldNone;
-            }
-            return SyncTextureObjectToBackend(stateObj, imageBindableStorageRequired);
+            (void)imageBindableStorageRequired;
+            MGPipeP5eSeamNotLanded("TextureImpl::SyncTextureToBackendByHandle", "tx2", texture);
         }
 
         void BackendTextureObject::SyncMipmapsToBackendByHandle(MG_Pipe::MGPipeHandle texture) {
-            const auto* record = PipeTextureRecordForHandle(texture);
-            if (record == nullptr) return;
-            const auto& stateObj = MGB_CTX->GetTextureObject(static_cast<Uint>(record->Desc.GlNameForDiag));
-            if (!stateObj) return;
-            SyncMipmapsToBackend(stateObj);
+            MGPipeP5eSeamNotLanded("BackendTextureObject::SyncMipmapsToBackendByHandle", "tx2",
+                                   texture);
         }
     } // namespace TextureImpl
 
