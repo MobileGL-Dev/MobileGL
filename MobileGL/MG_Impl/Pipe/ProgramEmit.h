@@ -79,6 +79,25 @@ namespace MobileGL::MG_Pipe {
     // would describe a program that does not exist yet. GetLinkedShaderStages() is also what
     // indexes GetGeneratedSpirv(), so the two halves of this descriptor are guaranteed to agree
     // by construction rather than by care.
+    // P5e (pg). ONE ENTRY OF THE STORAGE-OVERRIDE SIGNATURE, and it is a VERBATIM copy of the
+    // mix in `MG_Backend/DirectGLES/Managers.cpp`'s ComputeShaderStorageBlockBindingSignature -
+    // the function whose answer this record replaces on the handle arm. The two halves cannot
+    // share one definition today because MG_Backend includes nothing from MG_Impl (checked at
+    // this head), so they are twins with a named pointer at each other and a unit case in
+    // ProgramEmitTest that pins the number. Order-independent by construction: the source is an
+    // UnorderedMap, the combine is commutative, and the entry mixes name and binding so two
+    // entries cannot trade halves and cancel out.
+    //
+    // OVER THE VALUES, NOT OVER A CHANGE COUNTER, which is the property the pipeline composite's
+    // uniform mirror depends on: it re-sets every override every draw, and re-setting a block to
+    // the binding it already carries must produce the same signature and force no rebuild.
+    inline Uint64 MGPipeStorageOverrideSignatureEntry(const String& blockName, Int binding) {
+        Uint64 entry = std::hash<String>{}(blockName);
+        entry ^= (static_cast<Uint64>(static_cast<Uint32>(binding)) + 0x9e3779b97f4a7c15ull +
+                  (entry << 6) + (entry >> 2));
+        return entry;
+    }
+
     inline Uint32 MGPipeStageMaskOf(const MG_State::GLState::ProgramObject& program) {
         Uint32 mask = 0;
         for (const ShaderStage stage : program.GetLinkedShaderStages()) {
@@ -109,6 +128,17 @@ namespace MobileGL::MG_Pipe {
 
             const MGPipeHandle drawCso =
                 drawProgram ? AcquireShaderCso(*drawProgram, bytes) : kMGPipeNullHandle;
+            // P5e (pg): AFTER the create and never before it. The draft note on
+            // MGPProgramBindings said "emitted BEFORE create_shader_state at the same validate
+            // point", and that ordering is wrong against the applier the same contract
+            // specifies: a re-issued create CLEARS all three tails, for the reason it clears
+            // GlobalConstants (a relink replaces the archive the tails index into), so bindings
+            // published ahead of it are wiped by the create that follows. What the draft was
+            // protecting - "a rebuild inside the verb must already see the bindings" - is
+            // satisfied by both records going out at the SAME validate point, ahead of the verb,
+            // which is what this ordering does. See MG_Remote/CONTRACT-P5E.md §5.5 and the
+            // record's own comment in PipeApply.h.
+            if (drawProgram) bytes += EmitProgramBindings(*drawProgram, drawCso);
             // THE COMPOSITE'S SECOND RELEASE PATH is spoken here, not in a destructor: when the
             // bound pipeline's draw-program signature moves, the resolver releases the slot the
             // previous composite held. Whichever of the two paths runs second - this one or the
@@ -130,6 +160,9 @@ namespace MobileGL::MG_Pipe {
                 dispatchProgram ? (dispatchProgram == drawProgram ? drawCso
                                                                   : AcquireShaderCso(*dispatchProgram, bytes))
                                 : kMGPipeNullHandle;
+            if (dispatchProgram && dispatchProgram != drawProgram) {
+                bytes += EmitProgramBindings(*dispatchProgram, dispatchCso);
+            }
 
             // THE BOUND CSO IS THE DRAW ONE WHEN THERE IS ONE. bind_shader_state names what
             // glUseProgram selected, and when a program pipeline is bound instead that is the
@@ -208,6 +241,136 @@ namespace MobileGL::MG_Pipe {
             return bytes + sizeof(MGPGlobalConstants) + size;
         }
 
+        // ---- P5e (pg): set_program_bindings, opcode 80 -----------------------------------
+        //
+        // THE THREE POST-LINK MUTABLE REFLECTION FIELDS, and why an archive alone is not an
+        // answer. `uniformBlockBinding[i]`, `uniformSamplerOrImageUnitIndex[loc]` and the
+        // name-keyed `shaderStorageBlockBinding` map are all MEMBERS OF LinkArtifacts - so the
+        // archive create_shader_state carries does hold them - but glUniformBlockBinding,
+        // glUniform1i on a sampler uniform and glShaderStorageBlockBinding all move them AFTER
+        // the link that produced that archive, without relinking. A server answering a draw
+        // from the archive alone would bind the uniform blocks the program was LINKED with
+        // rather than the ones it is BOUND with. This record is the delta carrier; the applier
+        // overlays it on the archive, and a re-issued create drops it because the indices no
+        // longer mean anything.
+        //
+        // LATCHED ON THE TWO COUNTERS THAT MOVE WHEN ANY OF THE THREE DOES, plus the handle:
+        // m_backendStateVersion (glUniformBlockBinding and glUniform1i both bump it) and
+        // m_blockBindingVersion (glUniformBlockBinding and glShaderStorageBlockBinding both
+        // bump it, and the storage setter deliberately bumps ONLY it). Neither setter moves a
+        // counter on an unchanged value - both have an equality bail-out - so an application
+        // that re-sets the same bindings every frame emits nothing, which is what the pipeline
+        // composite's uniform mirror needs (it replays every override per draw).
+        Uint64 EmitProgramBindings(const ProgramObject& program, MGPipeHandle cso) {
+            if (MGPipeHandleIsNull(cso)) return 0;
+            const Uint32 backendStateVersion = program.GetBackendStateVersion();
+            const Uint32 blockBindingVersion = program.GetBlockBindingVersion();
+            Latch& latch = LatchFor(cso);
+            if (latch.BindingsLive && latch.BindingsGen == cso.Gen &&
+                latch.BindingsBackendStateVersion == backendStateVersion &&
+                latch.BindingsBlockBindingVersion == blockBindingVersion) {
+                return 0;
+            }
+
+            m_blockBindings.clear();
+            m_samplerUnits.clear();
+            m_storageOverrides.clear();
+            m_storageOverrideNames.clear();
+
+            // TAIL 1: dense, in BLOCK index order - the space GetActiveUniformBlocksCount(),
+            // GetUniformBlockName(i) and GetUniformBlockBinding(i) all speak, which is exactly
+            // the space the server's CacheResourceLocations walks. Dense because the server
+            // indexes it by i and a sparse form would need a second index space on the wire.
+            const Int blockCount = program.GetActiveUniformBlocksCount();
+            if (static_cast<Uint32>(std::max(blockCount, 0)) > kMGPipeMaxProgramBlockBindings) {
+                // A COUNTED REFUSAL AND NOT A TRUNCATION (D-J3): a program with more uniform
+                // blocks than the record can name would have the tail of its block set bound
+                // to whatever the archive's link-time snapshot said, silently. The counter is
+                // what makes that visible; the record is not emitted at all, so the server
+                // keeps the archive's values for every block rather than for some of them.
+                ++m_bindingRefusals;
+                return 0;
+            }
+            m_blockBindings.reserve(static_cast<SizeT>(std::max(blockCount, 0)));
+            for (Int i = 0; i < blockCount; ++i) {
+                m_blockBindings.push_back(static_cast<Int32>(program.GetUniformBlockBinding(static_cast<Uint>(i))));
+            }
+
+            // TAIL 2: sparse, ascending by LOCATION, because the frontend's array is indexed by
+            // uniform location and maxUniformLocation runs into the thousands while the
+            // sampler count is a handful. -1 is "never assigned" and is what the server's own
+            // default already is, so it is not worth a wire entry.
+            const Uint maxUniformLoc = program.GetMaxUniformLocation();
+            for (Uint loc = 0; loc <= maxUniformLoc; ++loc) {
+                // The same guard CacheResourceLocations uses one level down: a location with no
+                // uniform behind it has an empty name and must not index the type tables.
+                if (program.GetUniformName(loc).empty()) continue;
+                const Int unit = program.GetUniformSamplerOrImageUnitIndex(loc);
+                if (unit < 0) continue;
+                if (m_samplerUnits.size() >= kMGPipeMaxProgramSamplerUnits) {
+                    ++m_bindingRefusals;
+                    return 0;
+                }
+                MGPProgramSamplerUnit entry{};
+                entry.Location = loc;
+                entry.Unit = static_cast<Int32>(unit);
+                m_samplerUnits.push_back(entry);
+            }
+
+            // TAIL 3: name-keyed BY DESIGN. A shader storage block has three index spaces - the
+            // frontend interface query, DirectVulkan's descriptor order and the real driver's -
+            // and the name is the only coordinate all three agree on (ProgramObject.h says so
+            // over the setter). Empty for the overwhelming majority of programs, which is why
+            // the signature below exists: the server compares one Uint64 and touches the names
+            // only on a rebuild.
+            const auto& overrides = program.GetShaderStorageBlockBindingOverrides();
+            if (overrides.size() > kMGPipeMaxProgramStorageOverrides) {
+                ++m_bindingRefusals;
+                return 0;
+            }
+            Uint64 signature = 0;
+            m_storageOverrides.reserve(overrides.size());
+            m_storageOverrideNames.reserve(overrides.size());
+            for (const auto& [blockName, binding] : overrides) {
+                if (binding < 0) continue; // never rebound; the declared qualifier still stands
+                MGPProgramStorageOverride entry{};
+                entry.Binding = binding;
+                m_storageOverrides.push_back(entry);
+                m_storageOverrideNames.push_back(blockName);
+                signature += MGPipeStorageOverrideSignatureEntry(blockName, binding);
+            }
+            m_storageOverrides.resize(m_storageOverrideNames.size());
+
+            m_lastBindings = MGPProgramBindings{};
+            m_lastBindings.Cso = cso;
+            m_lastBindings.Signature = signature;
+            m_lastBindings.BlockBindingCount = static_cast<Uint32>(m_blockBindings.size());
+            m_lastBindings.SamplerUnitCount = static_cast<Uint32>(m_samplerUnits.size());
+            m_lastBindings.StorageOverrideCount = static_cast<Uint32>(m_storageOverrides.size());
+
+            // The name POINTERS, index-aligned with the override tail. Built here rather than
+            // inside the loop because push_back on m_storageOverrideNames may reallocate and
+            // every c_str() taken before that would dangle.
+            m_storageOverrideNamePtrs.clear();
+            m_storageOverrideNamePtrs.reserve(m_storageOverrideNames.size());
+            for (const String& name : m_storageOverrideNames) m_storageOverrideNamePtrs.push_back(name.c_str());
+
+            MGPipeRouteSetProgramBindings(
+                m_lastBindings, m_blockBindings.empty() ? nullptr : m_blockBindings.data(),
+                m_samplerUnits.empty() ? nullptr : m_samplerUnits.data(),
+                m_storageOverrides.empty() ? nullptr : m_storageOverrides.data(),
+                m_storageOverrideNamePtrs.empty() ? nullptr : m_storageOverrideNamePtrs.data());
+            ++m_bindingSets;
+
+            latch.BindingsLive = true;
+            latch.BindingsGen = cso.Gen;
+            latch.BindingsBackendStateVersion = backendStateVersion;
+            latch.BindingsBlockBindingVersion = blockBindingVersion;
+            return sizeof(MGPProgramBindings) + m_blockBindings.size() * sizeof(Int32) +
+                   m_samplerUnits.size() * sizeof(MGPProgramSamplerUnit) +
+                   m_storageOverrides.size() * sizeof(MGPProgramStorageOverride);
+        }
+
         // D-H4's re-issue rule, and it is the CreateVertexElements shape one for one: the
         // record goes out again on the SAME handle whenever the link version moves, which is
         // legal because MGPipeHandle::Gen increments only on slot reuse and never on a
@@ -232,6 +395,21 @@ namespace MobileGL::MG_Pipe {
             m_lastDesc.GlobalUboSize = static_cast<Uint32>(program.GetUBOSize());
             m_lastDesc.ReservedNumSamplesOffset = static_cast<Uint32>(spirv.reservedNumSamplesOffset);
             m_lastDesc.SpirvStatus = spirv.spirvStatus ? 1 : 0;
+            // P5e (pg), ID-88 / ruling 9: THE FAILED RELINK OF A BOUND PROGRAM, and the ruling
+            // asked this package to verify the frontend's actual behaviour rather than assume
+            // it. VERIFIED, at ProgramObject.cpp:510-531: `Link()`'s PROLOGUE bumps
+            // m_linkVersion and then assigns `m_artifacts = {}` - "the complete not-linked
+            // state" in its own words - before the link body runs, and every failure arm of
+            // ProgramLinkTask leaves `linkStatus = false`. So a failed relink reports UNLINKED
+            // through GetLinkStatus(), the re-issue this latch triggers is the one the ruling
+            // names, and it carries LinkStatus = 0.
+            //
+            // AND NEVER AN object_death: the program object is alive, its handle is alive, and
+            // its twin must stay alive to be rebuilt by the next successful link. What the
+            // server does with LinkStatus = 0 is exactly what the monolith arm already does
+            // with GetLinkStatus() == false - glUseProgram(0), a visible no-op draw - which is
+            // also what GL requires, since MobileGL's frontend withdraws LINK_STATUS here.
+            m_lastDesc.LinkStatus = program.GetLinkStatus() ? 1 : 0;
             m_lastDesc.NativeFloat64 = spirv.nativeFloat64 ? 1 : 0;
             m_lastDesc.PointSizeDemoted = spirv.pointSizeDemoted ? 1 : 0;
             m_lastDesc.EnableSpirvValidation = spirv.enableSpirvValidation ? 1 : 0;
@@ -260,7 +438,20 @@ namespace MobileGL::MG_Pipe {
             m_lastDesc.Reflection.Offset = reinterpret_cast<Uint64>(&link);
             m_lastDesc.Reflection.Size = 0;
 
-            MGPipeRouteCreateShaderState(m_lastDesc, &link, &spirv);
+            // P5e (pg): THE STAGE OF EACH MODULE, beside the modules and not folded into
+            // StageMask. StageMask is a bit SET and GL lets two shader objects of one stage be
+            // attached to a program, so a list rebuilt from it can be SHORTER than
+            // generatedSpirv - and the server pairs the two by one running index. The client
+            // arm frames this in front of the archive; the monolith arm discards it and reads
+            // the snapshot off the object it is handed. Taken from the same accessor
+            // MGPipeStageMaskOf walks, so the mask and the list cannot disagree.
+            m_linkedStageWords.clear();
+            for (const ShaderStage stage : program.GetLinkedShaderStages()) {
+                m_linkedStageWords.push_back(static_cast<Uint32>(stage));
+            }
+
+            MGPipeRouteCreateShaderState(m_lastDesc, &link, &spirv, m_linkedStageWords.data(),
+                                         static_cast<Uint32>(m_linkedStageWords.size()));
             // THE CREATE WENT OUT, so the publication latch is taken here and nowhere else
             // (contract-v2 §3.1). MGPipeEmitShaderCsoDestroyAndFree reads it, and without it
             // delete_shader_state can never go out - for an ordinary program or for a
@@ -283,6 +474,14 @@ namespace MobileGL::MG_Pipe {
                 m_constantsVersion = kMGPipeGlobalConstantsNeverUploaded;
             }
 
+            // P5e (pg): THE BINDINGS LATCH GOES WITH THE GLOBAL-CONSTANTS ONE, and for the same
+            // reason stated one branch up. The applier clears all three binding tails on a
+            // re-issued create (the indices point into an archive that has just been replaced),
+            // so a latch that survived it would suppress the very record that has to re-establish
+            // them and the server would draw the whole program off the archive's link-time
+            // snapshot. Invalidated rather than emitted here: EmitShaderState sends the bindings
+            // immediately after this returns, which is also the ONLY order that works.
+            latch.BindingsLive = false;
             latch.RecordLive = true;
             latch.RecordGen = handle.Gen;
             latch.LinkVersion = linkVersion;
@@ -304,7 +503,13 @@ namespace MobileGL::MG_Pipe {
         // validate-point emission and has no payload budget to report into.
         void EmitShaderCso(ProgramObject& program) {
             Uint64 bytes = 0;
-            AcquireShaderCso(program, bytes);
+            const MGPipeHandle cso = AcquireShaderCso(program, bytes);
+            // P5e (pg): the birth hook publishes the bindings too, for the same reason the
+            // validate point does. A program born here and drawn before the next validate point
+            // would otherwise reach the server with its archive's LINK-TIME snapshot and no
+            // delta, which is right only for a program nothing has rebound since - and this
+            // hook is exactly where a program that WAS rebound at creation time arrives.
+            EmitProgramBindings(program, cso);
         }
 
         // The emitter's OWN record memo - "have I already published a create_shader_state at
@@ -378,6 +583,7 @@ namespace MobileGL::MG_Pipe {
         void ResetCounters() {
             m_creates = m_binds = m_drawSets = m_dispatchSets = m_constantSets = 0;
             m_moduleTruncations = 0;
+            m_bindingSets = m_bindingRefusals = 0;
         }
 
         // ---- what a unit case reads ----
@@ -399,6 +605,15 @@ namespace MobileGL::MG_Pipe {
         Uint64 DrawProgramSetCount() const { return m_drawSets; }
         Uint64 DispatchProgramSetCount() const { return m_dispatchSets; }
         Uint64 GlobalConstantsSetCount() const { return m_constantSets; }
+        // P5e (pg). The record a case reads back, and the two counters D-J3's rule asks for:
+        // how many set_program_bindings went out, and how many programs were REFUSED because
+        // one of their three sets is larger than the record can name. A refusal leaves the
+        // server on the archive's link-time snapshot for that program - correct for anything
+        // that was never rebound after the link, wrong for anything that was, and countable
+        // either way, which is the whole point of not truncating.
+        const MGPProgramBindings& LastProgramBindings() const { return m_lastBindings; }
+        Uint64 ProgramBindingsSetCount() const { return m_bindingSets; }
+        Uint64 ProgramBindingsRefusalCount() const { return m_bindingRefusals; }
 
     private:
         // THE ONE PLACE THE BAND CAN ENTER. An ordinary program's slot comes from the ordinary
@@ -426,6 +641,15 @@ namespace MobileGL::MG_Pipe {
             Bool RecordLive = false;
             Uint32 RecordGen = 0;
             Uint32 LinkVersion = 0;
+            // P5e (pg): set_program_bindings' own key, in the SAME latch because it is keyed on
+            // the same handle and a slot recycle has to invalidate both at once. Kept separate
+            // from RecordLive because the two records have different triggers - a create fires
+            // on a link-version move, the bindings fire on a binding move without a relink, and
+            // most frames have neither.
+            Bool BindingsLive = false;
+            Uint32 BindingsGen = 0;
+            Uint32 BindingsBackendStateVersion = 0;
+            Uint32 BindingsBlockBindingVersion = 0;
         };
 
         // TWO TABLES, NOT A WIDER ONE, and it is the allocator's own reason repeated where it
@@ -461,6 +685,19 @@ namespace MobileGL::MG_Pipe {
 
         MGPProgramDesc m_lastDesc{};
         MGPGlobalConstants m_lastConstants{};
+        // P5e (pg): the three tails and their names, MEMBERS rather than locals so the steady
+        // frame allocates nothing - the same reason every other emitter in this directory keeps
+        // its scratch. Cleared and refilled per emission; none of them outlives the route call
+        // except as the record's own copy on the far side (rule C).
+        MGPProgramBindings m_lastBindings{};
+        Vector<Int32> m_blockBindings;
+        Vector<MGPProgramSamplerUnit> m_samplerUnits;
+        Vector<MGPProgramStorageOverride> m_storageOverrides;
+        Vector<String> m_storageOverrideNames;
+        Vector<const char*> m_storageOverrideNamePtrs;
+        // The stage of each module of the descriptor being built, index-aligned with
+        // GetGeneratedSpirv(); the client arm frames it in front of the archive.
+        Vector<Uint32> m_linkedStageWords;
 
         Vector<Latch> m_latch;
         Vector<Latch> m_compositeLatch;
@@ -476,6 +713,8 @@ namespace MobileGL::MG_Pipe {
         Uint64 m_dispatchSets = 0;
         Uint64 m_constantSets = 0;
         Uint64 m_moduleTruncations = 0;
+        Uint64 m_bindingSets = 0;
+        Uint64 m_bindingRefusals = 0;
     };
 
     inline MGPipeProgramEmitter& MGPipeProgramEmitterInstance() {

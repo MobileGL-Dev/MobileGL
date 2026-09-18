@@ -2851,21 +2851,69 @@ namespace MobileGL::MG_Pipe {
         std::abort();
     }
 
+    // P5e (pg) WRITES THE SECOND BODY. The three post-link mutable reflection fields -
+    // glUniformBlockBinding's block-to-point map, glUniform1i's sampler unit per uniform
+    // LOCATION, and glShaderStorageBlockBinding's name-keyed override set - all live INSIDE
+    // the frontend's LinkArtifacts and all move after the link that produced it. An archive
+    // snapshot alone therefore answers the wrong question: a twin built from it would bind the
+    // uniform blocks the program was LINKED with rather than the ones it is BOUND with.
     void MGPipeApplySetProgramBindings(const MGPProgramBindings& hdr, const Int32* blockBindings,
                                        const MGPProgramSamplerUnit* samplerUnits,
                                        const MGPProgramStorageOverride* storageOverrides,
                                        const char* const* storageOverrideNames) {
-        (void)blockBindings;
-        (void)samplerUnits;
-        (void)storageOverrides;
-        (void)storageOverrideNames;
-        MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"set_program_bindings\"} - the applier entry point "
-                "is declared by P5e package c0e and bodied by package pg; a record for shader CSO "
-                "{%u, %u} with %u/%u/%u tail entries reached it, which means a route was installed "
-                "ahead of its consumer",
-                hdr.Cso.Slot, hdr.Cso.Gen, hdr.BlockBindingCount, hdr.SamplerUnitCount,
-                hdr.StorageOverrideCount);
-        std::abort();
+        // THE BOUNDS ARE THE DECODER'S AND ARE RE-ASSERTED HERE, because the monolith adapter
+        // reaches this entry point without passing the decoder at all: under monolith the only
+        // validation a record ever gets is the one the applier does itself, which is the rule
+        // every sibling in this file already keeps.
+        const char* fault = nullptr;
+        if (hdr.BlockBindingCount > kMGPipeMaxProgramBlockBindings) fault = "BlockBindingCount";
+        else if (hdr.SamplerUnitCount > kMGPipeMaxProgramSamplerUnits) fault = "SamplerUnitCount";
+        else if (hdr.StorageOverrideCount > kMGPipeMaxProgramStorageOverrides) fault = "StorageOverrideCount";
+        else if (hdr.BlockBindingCount != 0 && blockBindings == nullptr) fault = "BlockBindings";
+        else if (hdr.SamplerUnitCount != 0 && samplerUnits == nullptr) fault = "SamplerUnits";
+        else if (hdr.StorageOverrideCount != 0 &&
+                 (storageOverrides == nullptr || storageOverrideNames == nullptr)) {
+            fault = "StorageOverrides";
+        }
+        if (fault != nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " set_program_bindings {slot=%u, gen=%u}: %s is out of range or "
+                                 "its tail is absent (%u/%u/%u declared)",
+                                 hdr.Cso.Slot, hdr.Cso.Gen, fault, hdr.BlockBindingCount,
+                                 hdr.SamplerUnitCount, hdr.StorageOverrideCount);
+            return;
+        }
+        // P4a's belt, for MGPipeApplyBindShaderState's reason: with no consumer this applier
+        // holds no shader CSO record at all, so the resolution below would report the designed
+        // state as RefusedObjectCalls.
+        if (NoP4aConsumer()) return;
+
+        MGPipeShaderCsoRecord* record = ResolveShaderCso("set_program_bindings", hdr.Cso);
+        if (record == nullptr) return;
+
+        // WHOLE-SET REPLACEMENT, NOT A MERGE, in all three tails. Each one describes the
+        // program's complete state for its index space as the client observed it at emit; a
+        // merge would leave a block binding the application has since reset to its declared
+        // default sitting on top of the archive's value for ever, and there is no per-entry
+        // "cleared" token on the wire that could say otherwise.
+        record->BlockBindings.assign(blockBindings, blockBindings + hdr.BlockBindingCount);
+        record->SamplerUnits.assign(samplerUnits, samplerUnits + hdr.SamplerUnitCount);
+        record->StorageOverrides.clear();
+        record->StorageOverrides.reserve(hdr.StorageOverrideCount);
+        for (Uint32 i = 0; i < hdr.StorageOverrideCount; ++i) {
+            MGPipeProgramStorageOverride entry;
+            // COPIED, NOT POINTED AT (rule C). The name rides SEG_STAGE and the staged run
+            // retires with the record that named it; the rebuild that reads this may be a
+            // frame later, and by then those bytes are somebody else's.
+            entry.Name = storageOverrideNames[i] != nullptr ? String(storageOverrideNames[i]) : String();
+            entry.Binding = storageOverrides[i].Binding;
+            record->StorageOverrides.push_back(Move(entry));
+        }
+        record->Signature = hdr.Signature;
+        // ADVANCED, NEVER RETURNED TO A VALUE IT HAS HANDED OUT - VertexBuffersSerial's rule.
+        // Both texture-unit memos and the program twin's clean condition key on it (ruling 6),
+        // so a serial that went backwards would make a memo match state it has never seen.
+        ++record->BindingsSerial;
     }
 
     // ---------------------------------------------------------------------------------
@@ -2932,7 +2980,8 @@ namespace MobileGL::MG_Pipe {
 
     void MGPipeApplyCreateShaderState(const MGPProgramDesc& desc,
                                       const MG_State::GLState::LinkArtifacts* link,
-                                      const MG_State::GLState::SpirvArtifacts* spirv) {
+                                      const MG_State::GLState::SpirvArtifacts* spirv,
+                                      SharedPtr<const MG_State::GLState::ProgramArchive> archive) {
         MOBILEGL_ASSERT(desc.Cso.Slot >= kMGPipeFirstAllocatableSlot,
                         "create_shader_state named the reserved slot 0");
         if (desc.Cso.Slot < kMGPipeFirstAllocatableSlot) return;
@@ -3005,6 +3054,31 @@ namespace MobileGL::MG_Pipe {
         // deserialised archive is attached to. Either way the applier owns identity, extent and
         // order, and never content.
         record.Desc = desc;
+        // P5e (pg), gap G-A: "under split the descriptor is what the deserialised archive is
+        // attached to" is now literally true, and this is the attachment. ADOPTED
+        // UNCONDITIONALLY, INCLUDING A NULL: a monolith create must CLEAR an archive a
+        // previous split-arm create left behind, because the record outlives a transport
+        // change (MGPipeApplierReset keeps the CSO table - a program lives in a share group)
+        // and a stale archive is worse than none.
+        //
+        // AFTER Desc, so a reader that sees the new descriptor sees the artefacts it describes;
+        // the apply thread is the only writer and the only reader, so ordering here is about
+        // reading this function rather than about memory visibility.
+        record.Archive = Move(archive);
+        // THE RE-ISSUE CLEARS THE THREE BINDING TAILS for the reason it clears GlobalConstants
+        // one branch up: they are indices INTO the archive that has just been replaced, so a
+        // surviving tail would name block indices and uniform locations of a program that no
+        // longer exists. Unconditional rather than inside the else-branch above, because a
+        // recycled slot must not inherit its predecessor's bindings either - and a fresh record
+        // has empty tails, so the clear costs a live program nothing. The client re-emits
+        // set_program_bindings immediately after this create (ProgramEmit.h), which is the
+        // ordering the applier relies on: emitting them BEFORE would put them where this line
+        // wipes them.
+        record.BlockBindings.clear();
+        record.SamplerUnits.clear();
+        record.StorageOverrides.clear();
+        record.Signature = 0;
+        ++record.BindingsSerial;
     }
 
     void MGPipeApplyBindShaderState(const MGPHandleOnly& handle) {

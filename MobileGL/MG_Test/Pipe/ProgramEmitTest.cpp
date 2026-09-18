@@ -258,7 +258,7 @@ TEST(ProgramEmit, ACreateStoresTheDescriptorAndARelinkCountsUpAndDropsTheBlockKe
     const MGPipeHandle cso{5, 2};
     const Uint8 block[64] = {};
 
-    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 64), &link, &spirv);
+    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 64), &link, &spirv, nullptr);
     EXPECT_TRUE(ProgramRecordOf(5).Live);
     EXPECT_EQ(ProgramRecordOf(5).Gen, 2u);
     EXPECT_EQ(ProgramRecordOf(5).Serial, 0u) << "a create is not a mutation";
@@ -274,7 +274,7 @@ TEST(ProgramEmit, ACreateStoresTheDescriptorAndARelinkCountsUpAndDropsTheBlockKe
     const Uint64 blockSerial = ProgramRecordOf(5).GlobalConstantsSerial;
 
     // The relink.
-    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x7u, 32), &link, &spirv);
+    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x7u, 32), &link, &spirv, nullptr);
     EXPECT_EQ(ProgramRecordOf(5).Serial, 1u);
     EXPECT_EQ(ProgramRecordOf(5).Desc.StageMask, 0x7u);
     EXPECT_TRUE(ProgramRecordOf(5).GlobalConstants.empty())
@@ -285,7 +285,7 @@ TEST(ProgramEmit, ACreateStoresTheDescriptorAndARelinkCountsUpAndDropsTheBlockKe
 
     // A RECYCLED SLOT STARTS OVER: inheriting one field of the previous occupant is how a
     // program at a recycled slot inherits its predecessor's reflection.
-    MGPipeApplyCreateShaderState(ProgramDesc(MGPipeHandle{5, 3}, 0x1u, 16), &link, &spirv);
+    MGPipeApplyCreateShaderState(ProgramDesc(MGPipeHandle{5, 3}, 0x1u, 16), &link, &spirv, nullptr);
     EXPECT_EQ(ProgramRecordOf(5).Gen, 3u);
     EXPECT_EQ(ProgramRecordOf(5).Serial, 0u) << "a recycled slot kept its predecessor's serial";
     EXPECT_EQ(ProgramRecordOf(5).Desc.StageMask, 0x1u);
@@ -305,23 +305,23 @@ TEST(ProgramEmit, ACreateWithNoArtefactsAnOversizedBlockOrACorruptSlotIsRefusedN
     const MGPProgramDesc desc = ProgramDesc(MGPipeHandle{4, 1}, 0x3u, 0);
     ExpectRefusedNaming("create_shader_state {slot=4, gen=1}: the record declares no blobs and carries no "
                         "artefacts",
-                        [&desc, &spirv]() { MGPipeApplyCreateShaderState(desc, nullptr, &spirv); });
+                        [&desc, &spirv]() { MGPipeApplyCreateShaderState(desc, nullptr, &spirv, nullptr); });
     ExpectRefusedNaming("create_shader_state {slot=4, gen=1}: the record declares no blobs and carries no "
                         "artefacts",
-                        [&desc, &link]() { MGPipeApplyCreateShaderState(desc, &link, nullptr); });
+                        [&desc, &link]() { MGPipeApplyCreateShaderState(desc, &link, nullptr, nullptr); });
     EXPECT_TRUE(MGPipeApplier().ShaderCsos.empty());
 
     const MGPProgramDesc huge = ProgramDesc(MGPipeHandle{4, 1}, 0x3u, kMGPipeMaxGlobalConstantsBytes + 1);
     ExpectRefusedNaming("create_shader_state {slot=4, gen=1}: the default uniform block is larger than any "
                         "program may declare",
-                        [&huge, &link, &spirv]() { MGPipeApplyCreateShaderState(huge, &link, &spirv); });
+                        [&huge, &link, &spirv]() { MGPipeApplyCreateShaderState(huge, &link, &spirv, nullptr); });
     EXPECT_TRUE(MGPipeApplier().ShaderCsos.empty()) << "the table was grown by a refused record";
 
     const MGPProgramDesc pastTheBound = ProgramDesc(MGPipeHandle{kMGPipeMaxShaderCsoSlots, 1}, 0x3u, 0);
     ExpectRefusedNaming("create_shader_state {slot=1048576, gen=1}: the slot is outside the record table's "
                         "bound",
                         [&pastTheBound, &link, &spirv]() {
-                            MGPipeApplyCreateShaderState(pastTheBound, &link, &spirv);
+                            MGPipeApplyCreateShaderState(pastTheBound, &link, &spirv, nullptr);
                         });
     EXPECT_TRUE(MGPipeApplier().ShaderCsos.empty());
     EXPECT_TRUE(MGPipeApplier().CompositeShaderCsos.empty());
@@ -340,8 +340,8 @@ TEST(ProgramEmit, TheThreeBindingsFollowTheirOwnHandleAndADeadOneLeavesThePrevio
     const SpirvArtifacts spirv;
     const MGPipeHandle draw{2, 1};
     const MGPipeHandle dispatch{3, 1};
-    MGPipeApplyCreateShaderState(ProgramDesc(draw, 0x3u, 0), &link, &spirv);
-    MGPipeApplyCreateShaderState(ProgramDesc(dispatch, 0x20u, 0), &link, &spirv);
+    MGPipeApplyCreateShaderState(ProgramDesc(draw, 0x3u, 0), &link, &spirv, nullptr);
+    MGPipeApplyCreateShaderState(ProgramDesc(dispatch, 0x20u, 0), &link, &spirv, nullptr);
 
     const Uint64 serialBefore = MGPipeApplier().ProgramBindingSerial;
     MGPipeApplyBindShaderState(ProgramHandle(draw));
@@ -383,7 +383,7 @@ TEST(ProgramEmit, ADeleteDropsTheRecordAndClearsEveryBindingThatNamedIt) {
     const LinkArtifacts link;
     const SpirvArtifacts spirv;
     const MGPipeHandle cso{6, 4};
-    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 0), &link, &spirv);
+    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 0), &link, &spirv, nullptr);
     MGPipeApplyBindShaderState(ProgramHandle(cso));
     MGPipeApplySetDrawProgram(ProgramHandle(cso));
     MGPipeApplySetDispatchProgram(ProgramHandle(cso));
@@ -420,7 +420,7 @@ TEST(ProgramEmit, TheDefaultUniformBlockLandsOnTheProgramsRecordAndTheSentinelIs
     const LinkArtifacts link;
     const SpirvArtifacts spirv;
     const MGPipeHandle cso{7, 1};
-    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 8), &link, &spirv);
+    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 8), &link, &spirv, nullptr);
 
     Uint8 block[8] = {1, 2, 3, 4, 5, 6, 7, 8};
     MGPipeApplySetGlobalConstants(GlobalConstants(cso, 11), block);
@@ -473,7 +473,7 @@ TEST(ProgramEmit, TheProgramRecordSurvivesAMakeCurrentWhileTheThreeBindingsDoNot
     const SpirvArtifacts spirv;
     const MGPipeHandle cso{8, 1};
     const Uint8 block[4] = {9, 9, 9, 9};
-    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 4), &link, &spirv);
+    MGPipeApplyCreateShaderState(ProgramDesc(cso, 0x3u, 4), &link, &spirv, nullptr);
     MGPipeApplySetGlobalConstants(GlobalConstants(cso, 21), block);
     MGPipeApplyBindShaderState(ProgramHandle(cso));
     MGPipeApplySetDrawProgram(ProgramHandle(cso));

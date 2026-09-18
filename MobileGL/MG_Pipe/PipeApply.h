@@ -38,9 +38,16 @@
 // this header needs their NAMES and never their definitions; the forward declaration is the
 // whole coupling and the closure gate is what keeps it one. The verify build is the only
 // place the codec runs, and it runs from PipeApply.cpp.
+// P5e (pg) ADDS A THIRD NAME AND KEEPS THE RULE: ProgramArchive is what a SPLIT create carries
+// - the record's OWN copy of both structs plus the stage of each module - and the record holds
+// it through a SharedPtr, which needs no definition either (the deleter is captured where the
+// archive is constructed, in the decoder's TU). So the coupling is still three names and no
+// closure change, and MG_Backend, which does need the definition, includes
+// ProgramArtifactsCodec.h for it.
 namespace MobileGL::MG_State::GLState {
     struct LinkArtifacts;
     struct SpirvArtifacts;
+    struct ProgramArchive;
 } // namespace MobileGL::MG_State::GLState
 
 namespace MobileGL::MG_Pipe {
@@ -391,6 +398,28 @@ namespace MobileGL::MG_Pipe {
         Vector<Uint8> GlobalConstants;
         Uint64 GlobalConstantsSerial = 0;
         Uint64 Serial = 0;
+
+        // ---- P5e's server-owned archive (CONTRACT-P5E.md §5.5, gap G-A) --------------------
+        //
+        // FILLED BY PACKAGE pg, AND ONLY UNDER A TRANSPORT. This is the whole of rule F for
+        // this family: before P5e the record stored the DESCRIPTOR and the artefacts rode
+        // beside it as two companion pointers into the frontend's own ProgramObject, so every
+        // reflection question the program twin asked - forty accessors in SyncToBackend alone -
+        // was a read of client memory that `ProgramObject::Link()` REPLACES IN PLACE. Under
+        // run-ahead the client is already several records past the create, so those reads are
+        // torn or stale by construction and no amount of care at the read site can fix it.
+        //
+        // The client encodes the archive once per link (ProgramEmit.h -> SEG_STAGE), the
+        // decoder frames and deserialises it, and the record ADOPTS it here - a SharedPtr and
+        // not a Vector, because a program-pipeline composite and its stage programs are three
+        // records over one link's artefacts, and because the twin holds the pointer across the
+        // build it is running. It retires with the record, which is rule C: the staged run the
+        // bytes arrived in belongs to somebody else by the next frame.
+        //
+        // NULL UNDER MONOLITH, and that is the arm selection and not an omission (ruling 1):
+        // the push-monolith build keeps its frontend arms token for token, so its twin reads
+        // the frontend's archive as it always has and this pointer is never consulted.
+        SharedPtr<const MG_State::GLState::ProgramArchive> Archive;
 
         // ---- P5e's set_program_bindings tails (CONTRACT-P5E.md §1, §5.5) -------------------
         //
@@ -1324,9 +1353,20 @@ namespace MobileGL::MG_Pipe {
     // field-compares before storing, and a mismatch is Fatal{PipeVerifyDiffer, "program-archive"}.
     // Splitting this record for a transport whose ring caps one record at half its capacity is
     // P5's problem, not this entry point's.
+    //
+    // P5e (pg) ADDS THE FOURTH ARGUMENT AND DID NOT DEFAULT IT, for the reason PipeRoute.h
+    // gives about the three byte counts it also refused to default: a caller that HAS the
+    // archive and forgets to pass it would compile, and the failure would be a program twin
+    // reading the frontend's artefacts on the apply thread - silent, and exactly what this
+    // package exists to end. `archive` is null under monolith (the two companion pointers are
+    // the frontend's own and the handle arm is not taken there) and non-null under a
+    // transport, where `link` and `spirv` point INTO it: the record adopts it, so every later
+    // reflection read is of memory the server owns. A non-null archive whose Link/Spirv are
+    // not the two pointers passed beside it is a caller bug this entry point asserts on.
     void MGPipeApplyCreateShaderState(const MGPProgramDesc& desc,
                                       const MG_State::GLState::LinkArtifacts* link,
-                                      const MG_State::GLState::SpirvArtifacts* spirv);
+                                      const MG_State::GLState::SpirvArtifacts* spirv,
+                                      SharedPtr<const MG_State::GLState::ProgramArchive> archive);
     void MGPipeApplyBindShaderState(const MGPHandleOnly& handle);
     void MGPipeApplyDeleteShaderState(const MGPHandleOnly& handle);
     void MGPipeApplySetDrawProgram(const MGPHandleOnly& handle);

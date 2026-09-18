@@ -1756,17 +1756,28 @@ namespace MobileGL::MG_Remote::Wire {
                     std::abort();
                 }
             }
-            const void* archive = ResolveOrFatal(op, desc.Reflection);
-            MG_State::GLState::LinkArtifacts link;
-            MG_State::GLState::SpirvArtifacts spirv;
-            if (!MG_State::GLState::DecodeProgramArtifacts(static_cast<const Uint8*>(archive),
-                                                           static_cast<SizeT>(desc.Reflection.Size),
-                                                           link, spirv)) {
+            const void* archiveBytes = ResolveOrFatal(op, desc.Reflection);
+            // P5e (pg), gap G-A: DECODED ONTO THE HEAP AND HANDED TO THE RECORD, not onto this
+            // stack. Before P5e these were two locals that died at the closing brace and the
+            // applier kept only the descriptor, so every reflection question the program twin
+            // later asked went back to the frontend's own ProgramObject - which Link() replaces
+            // in place, and which a run-ahead client is several records past by then. The
+            // record adopts the archive here and answers from it for the rest of its life.
+            //
+            // AND THE FRAME, not the bare codec stream: ProgramArchive carries the stage of
+            // each module beside the modules, because SpirvArtifacts does not and StageMask
+            // cannot stand in for it (two shader objects may share a stage). See
+            // ProgramArtifactsCodec.h.
+            auto archive = MakeShared<MG_State::GLState::ProgramArchive>();
+            if (!MG_State::GLState::DecodeProgramArchive(static_cast<const Uint8*>(archiveBytes),
+                                                         static_cast<SizeT>(desc.Reflection.Size),
+                                                         *archive)) {
                 WireProtocolFatal("CreateShaderState.Reflection",
-                                  "DecodeProgramArtifacts refused the archive - a truncated "
-                                  "stream, a codec version mismatch or a struct-size mismatch");
+                                  "DecodeProgramArchive refused the archive - a truncated "
+                                  "stream, a codec version mismatch, a struct-size mismatch, or "
+                                  "a stage list that does not match the modules it frames");
             }
-            MGPipeApplyCreateShaderState(desc, &link, &spirv);
+            MGPipeApplyCreateShaderState(desc, &archive->Link, &archive->Spirv, archive);
             return true;
         }
 
@@ -1861,12 +1872,11 @@ namespace MobileGL::MG_Remote::Wire {
             return false;
 
         case MGPWireOp::SetProgramBindings: {
-            // P5e, opcode 80 (MG_Remote/CONTRACT-P5E.md §1). NO APPLIER ENTRY POINT EXISTS YET
-            // and c0e does not invent one: the record's consumer is the program twin's
-            // rebuild, which package pg writes. What the record needs NOW and cannot get later
-            // is its shape - the three declared counts against their bounds and the three-tail
-            // arithmetic, both of which MGPipeWireRecordLayout above has already run - plus the
-            // honesty of every name span it carries.
+            // P5e, opcode 80 (MG_Remote/CONTRACT-P5E.md §1). c0e wrote the shape check and left
+            // the arm declining; PACKAGE pg COMPLETES IT. What the record needs before its
+            // consumer sees it is its shape - the three declared counts against their bounds
+            // and the three-tail arithmetic, both of which MGPipeWireRecordLayout above has
+            // already run - plus the honesty of every name span it carries.
             //
             // THE SPANS ARE WALKED HERE RATHER THAN BY THE ENCODER'S BLANKET PASS because they
             // are MEMBERS of the third tail's 40-byte elements, not a bare MGHostSpan array:
@@ -1874,17 +1884,48 @@ namespace MobileGL::MG_Remote::Wire {
             // pad} would read one span and a quarter of garbage. All four arms of
             // CheckHostSpanIsHonest run, the segment-range one included, so an override name
             // pointing outside SEG_STAGE is caught on the way in rather than at the rebuild.
+            const auto& bindings = *static_cast<const MGPProgramBindings*>(payload);
+            // RESOLVED HERE AND VALID ONLY FOR THIS CALL (rule C): the names live in the staged
+            // run this record named, and the applier copies them into the record before it
+            // returns. A Vector of resolved pointers rather than a second pass inside the
+            // applier, because segment resolution is the decoder's job and the applier has no
+            // segment table - it is reached by the monolith adapter too, where the names are
+            // the frontend's own c_str()s and there is nothing to resolve.
+            Vector<const char*> overrideNames;
+            const MGPProgramStorageOverride* overrides = nullptr;
             if (layout.TailCount == 3 && layout.TailBytes[2] != 0 && m_segments != nullptr) {
-                const auto* overrides = tailAt(2);
+                overrides = reinterpret_cast<const MGPProgramStorageOverride*>(tailAt(2));
                 const Uint64 count = layout.TailBytes[2] / sizeof(MGPProgramStorageOverride);
+                overrideNames.reserve(static_cast<SizeT>(count));
                 for (Uint64 i = 0; i < count; ++i) {
                     MGPProgramStorageOverride entry{};
-                    std::memcpy(&entry, overrides + i * sizeof(MGPProgramStorageOverride),
+                    std::memcpy(&entry, reinterpret_cast<const Uint8*>(overrides) +
+                                            i * sizeof(MGPProgramStorageOverride),
                                 sizeof(MGPProgramStorageOverride));
                     CheckHostSpanIsHonest(entry.Name, *m_segments);
+                    // THE NUL IS THE CLIENT'S AND IS CHECKED, not assumed: the emitter stages
+                    // the name with its terminator (ProgramEmit.h), and a span whose last byte
+                    // is not 0 would make the applier's String(const char*) walk off the end of
+                    // SEG_STAGE. Honest-but-unterminated is the one shape CheckHostSpanIsHonest
+                    // cannot see.
+                    const auto* name = static_cast<const char*>(
+                        m_segments->Resolve(entry.Name.Seg, entry.Name.Offset, entry.Name.Size));
+                    if (entry.Name.Size == 0 || name == nullptr ||
+                        name[entry.Name.Size - 1] != '\0') {
+                        WireProtocolFatal("SetProgramBindings.StorageOverrides.Name",
+                                          "an override name span is empty or is not "
+                                          "NUL-terminated; the applier copies it as a C string");
+                    }
+                    overrideNames.push_back(name);
                 }
             }
-            return false;
+            MGPipeApplySetProgramBindings(
+                bindings,
+                layout.TailBytes[0] != 0 ? reinterpret_cast<const Int32*>(tailAt(0)) : nullptr,
+                layout.TailBytes[1] != 0 ? reinterpret_cast<const MGPProgramSamplerUnit*>(tailAt(1))
+                                         : nullptr,
+                overrides, overrideNames.empty() ? nullptr : overrideNames.data());
+            return true;
         }
 
         case MGPWireOp::SetGlobalConstants: {

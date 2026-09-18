@@ -144,6 +144,16 @@ namespace MobileGL::MG_Pipe {
     //                      `EncodeProgramArtifacts` on the monolith path, which `PipeApply.h`
     //                      explicitly promises it is not ("zero serialisation cost on the
     //                      monolith path").
+    //   SetProgramBindings THREE tails in three index spaces plus a PARALLEL NAME ARRAY
+    //                      (P5e, MG_Remote/CONTRACT-P5E.md §1/§5.5). One `varTail` +
+    //                      `varTailCount` pair cannot express three runs at all, and the
+    //                      fourth argument is not a run: the storage-override key is a
+    //                      `MGHostSpan` on the wire and a plain `const char*` under monolith,
+    //                      so the applier takes the resolved names beside the tail rather
+    //                      than resolving segments itself (rule C - a span retires with the
+    //                      record that named it, and the applier copies the bytes it keeps).
+    //                      The generated `gMGPipeContext.SetProgramBindings` row therefore
+    //                      STAYS NULL, which is what PipeCatalogueTest already pins.
     //
     // OVERTURN CONDITIONS, one per row: give `MGPResourceDesc` and `MGPFlushRange` a blobref
     // (overturns R-13.2/R-13.3, and c0 owns `MGPipeTypes.h`); give `MGPHandleOnly` a size
@@ -154,9 +164,19 @@ namespace MobileGL::MG_Pipe {
                                   const MGPRespecifiedLevel* level);
         void (*ResourceFlushRange)(const MGPFlushRange* record, const void* bytes);
         void* (*MapPersistent)(const MGPHandleOnly* handle, Uint64 size, const void* seedBytes);
+        // P5e (pg) grew this row by the STAGE LIST, and it belongs on the route rather than in
+        // the two structs: `SpirvArtifacts::generatedSpirv` is one module per shader object and
+        // the stage of each lives in `ProgramObject::m_linkedShaderSnapshot`, which is GL-thread
+        // state and not an artifact. The client arm frames it in front of the archive; the
+        // monolith arm ignores it, because its twin reads the snapshot directly.
         void (*CreateShaderState)(const MGPProgramDesc* desc,
                                   const MG_State::GLState::LinkArtifacts* link,
-                                  const MG_State::GLState::SpirvArtifacts* spirv);
+                                  const MG_State::GLState::SpirvArtifacts* spirv,
+                                  const Uint32* linkedStages, Uint32 linkedStageCount);
+        void (*SetProgramBindings)(const MGPProgramBindings* hdr, const Int32* blockBindings,
+                                   const MGPProgramSamplerUnit* samplerUnits,
+                                   const MGPProgramStorageOverride* storageOverrides,
+                                   const char* const* storageOverrideNames);
     };
     inline MGPipeRouteEscapes gMGPipeRouteEscapes{};
 
@@ -384,8 +404,9 @@ namespace MobileGL::MG_Pipe {
     // ---- programs ----------------------------------------------------------------------
     inline void MGPipeRouteCreateShaderState(const MGPProgramDesc& desc,
                                              const MG_State::GLState::LinkArtifacts* link,
-                                             const MG_State::GLState::SpirvArtifacts* spirv) {
-        gMGPipeRouteEscapes.CreateShaderState(&desc, link, spirv);
+                                             const MG_State::GLState::SpirvArtifacts* spirv,
+                                             const Uint32* linkedStages, Uint32 linkedStageCount) {
+        gMGPipeRouteEscapes.CreateShaderState(&desc, link, spirv, linkedStages, linkedStageCount);
     }
     inline void MGPipeRouteBindShaderState(const MGPHandleOnly& handle) {
         MGP_BindShaderState(&handle);
@@ -402,6 +423,18 @@ namespace MobileGL::MG_Pipe {
     inline void MGPipeRouteSetGlobalConstants(const MGPGlobalConstants& record, const void* bytes,
                                               Uint64 byteCount) {
         MGP_SetGlobalConstants(&record, bytes, byteCount);
+    }
+    // P5e (pg), opcode 80. The fifth escape; see MGPipeRouteEscapes above for why this row has
+    // no generated shape. `storageOverrideNames` is index-aligned with `storageOverrides` and
+    // is what the applier copies into the record - the MGHostSpan inside each override element
+    // describes where the name lives on the WIRE and is resolved by the decoder, never here.
+    inline void MGPipeRouteSetProgramBindings(const MGPProgramBindings& hdr,
+                                              const Int32* blockBindings,
+                                              const MGPProgramSamplerUnit* samplerUnits,
+                                              const MGPProgramStorageOverride* storageOverrides,
+                                              const char* const* storageOverrideNames) {
+        gMGPipeRouteEscapes.SetProgramBindings(&hdr, blockBindings, samplerUnits, storageOverrides,
+                                               storageOverrideNames);
     }
 
 } // namespace MobileGL::MG_Pipe

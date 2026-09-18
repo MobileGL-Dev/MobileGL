@@ -1144,6 +1144,9 @@ TEST(PipeRouting, TheInstalledClientArmIsWireAndNotMonolithAndEveryRoutedRowMove
     C1F_ESCAPE(ResourceFlushRange);
     C1F_ESCAPE(MapPersistent);
     C1F_ESCAPE(CreateShaderState);
+    // P5e (pg): set_program_bindings is the fifth escape - three tails in three index spaces
+    // plus a parallel name array, which no generated row can express (MG_Pipe/PipeRoute.h).
+    C1F_ESCAPE(SetProgramBindings);
 #undef C1F_ESCAPE
     const SizeT movedContext = CountDifferingCells(gMGPipeContext, MGPipeMonolithContext());
     EXPECT_EQ(movedScreen + movedContext, 34u)
@@ -1154,8 +1157,8 @@ TEST(PipeRouting, TheInstalledClientArmIsWireAndNotMonolithAndEveryRoutedRowMove
            "thread under split) or an unrouted row was overwritten";
 
     const SizeT movedEscapes = CountDifferingCells(gMGPipeRouteEscapes, MGPipeMonolithEscapes());
-    EXPECT_EQ(movedEscapes, 4u)
-        << "the four escape routes must move off the monolith escapes too";
+    EXPECT_EQ(movedEscapes, 5u)
+        << "the five escape routes must move off the monolith escapes too";
 
     // Restore the monolith arm for the sibling cases that assert it (and for a clean binary).
     MGPipeInstallMonolithTables();

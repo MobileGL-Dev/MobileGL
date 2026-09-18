@@ -255,9 +255,14 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     for (SizeT i = 0; i < sizeof(MGPipeRouteEscapes) / sizeof(void*); ++i) {
         if (escapes[i] != nullptr) ++escapesInstalled;
     }
-    EXPECT_EQ(escapesInstalled, 4u) << "an escape row is null; its call site would take a null "
+    // P5e (pg) MADE IT FIVE: set_program_bindings carries three tails in three index spaces
+    // plus a parallel name array, which no generated (payload, varTail, varTailCount) row can
+    // express - so opcode 80's `gMGPipeContext` slot stays null (pinned below, unchanged) and
+    // its adapter lives in the escape table beside create_shader_state's. The applier's entry
+    // points are 39 with it.
+    EXPECT_EQ(escapesInstalled, 5u) << "an escape row is null; its call site would take a null "
                                        "pointer rather than fall back to anything";
-    EXPECT_EQ(installed + escapesInstalled, 38u)
+    EXPECT_EQ(installed + escapesInstalled, 39u)
         << "the two tables plus the escapes must be exactly PipeApply.h's entry points";
 
     // And the rows that MUST still be null, named rather than counted: these are calls with no

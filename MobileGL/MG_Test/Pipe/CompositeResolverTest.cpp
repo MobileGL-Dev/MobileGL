@@ -279,7 +279,7 @@ TEST(CompositeResolver, ACompositeRecordLandsInTheBandsOwnTableAndNeverGrowsTheO
     const MGPipeHandle composite{kMGPipeShaderCsoCompositeSlotBase + 2, 1};
     ASSERT_TRUE(MGPipeIsCompositeShaderSlot(composite.Slot));
 
-    MGPipeApplyCreateShaderState(CompositeDesc(composite, 0x3u), &link, &spirv);
+    MGPipeApplyCreateShaderState(CompositeDesc(composite, 0x3u), &link, &spirv, nullptr);
     EXPECT_TRUE(MGPipeApplier().ShaderCsos.empty())
         << "one composite grew the ordinary table to the band's base - that is the 236 MB spike";
     ASSERT_EQ(MGPipeApplier().CompositeShaderCsos.size(), 3u)
@@ -298,7 +298,7 @@ TEST(CompositeResolver, ACompositeRecordLandsInTheBandsOwnTableAndNeverGrowsTheO
 
     // An ordinary program lands in the other table, and the two do not see each other even
     // though the composite's record is at index 2 of its own.
-    MGPipeApplyCreateShaderState(CompositeDesc(MGPipeHandle{2, 1}, 0x7u), &link, &spirv);
+    MGPipeApplyCreateShaderState(CompositeDesc(MGPipeHandle{2, 1}, 0x7u), &link, &spirv, nullptr);
     ASSERT_GT(MGPipeApplier().ShaderCsos.size(), 2u);
     EXPECT_EQ(MGPipeApplier().ShaderCsos[2].Desc.StageMask, 0x7u);
     EXPECT_EQ(MGPipeApplier().CompositeShaderCsos[2].Desc.StageMask, 0x3u)
@@ -319,7 +319,7 @@ TEST(CompositeResolver, ASecondDeleteOfACompositeIsARefusedNoOpRatherThanASecond
     const SpirvArtifacts spirv;
     const MGPipeHandle composite{kMGPipeShaderCsoCompositeSlotBase, 3};
 
-    MGPipeApplyCreateShaderState(CompositeDesc(composite, 0x3u), &link, &spirv);
+    MGPipeApplyCreateShaderState(CompositeDesc(composite, 0x3u), &link, &spirv, nullptr);
     MGPipeApplySetDrawProgram(ProgramHandle(composite));
     ASSERT_EQ(MGPipeApplier().DrawProgram, composite);
 
@@ -337,7 +337,7 @@ TEST(CompositeResolver, ASecondDeleteOfACompositeIsARefusedNoOpRatherThanASecond
 
     // And the band's slot is re-usable afterwards: a recycled composite is a new identity and
     // starts its record over.
-    MGPipeApplyCreateShaderState(CompositeDesc(MGPipeHandle{composite.Slot, 4}, 0x1u), &link, &spirv);
+    MGPipeApplyCreateShaderState(CompositeDesc(MGPipeHandle{composite.Slot, 4}, 0x1u), &link, &spirv, nullptr);
     EXPECT_TRUE(MGPipeApplier().CompositeShaderCsos[0].Live);
     EXPECT_EQ(MGPipeApplier().CompositeShaderCsos[0].Gen, 4u);
     EXPECT_EQ(MGPipeApplier().CompositeShaderCsos[0].Serial, 0u);
@@ -358,7 +358,7 @@ TEST(CompositeResolver, ASlotAtTheShaderCsoLimitIsRefusedWhileTheLastBandSlotIsN
     // The positive control: the LAST slot of the band is a legal composite handle.
     const MGPipeHandle last{kMGPipeShaderCsoSlotLimit - 1, 1};
     ASSERT_TRUE(MGPipeIsCompositeShaderSlot(last.Slot));
-    MGPipeApplyCreateShaderState(CompositeDesc(last, 0x3u), &link, &spirv);
+    MGPipeApplyCreateShaderState(CompositeDesc(last, 0x3u), &link, &spirv, nullptr);
     ASSERT_EQ(MGPipeApplier().CompositeShaderCsos.size(),
               static_cast<SizeT>(kMGPipeShaderCsoSlotLimit - kMGPipeShaderCsoCompositeSlotBase));
     EXPECT_TRUE(MGPipeApplier().CompositeShaderCsos.back().Live);
@@ -367,7 +367,7 @@ TEST(CompositeResolver, ASlotAtTheShaderCsoLimitIsRefusedWhileTheLastBandSlotIsN
     const MGPProgramDesc past = CompositeDesc(MGPipeHandle{kMGPipeShaderCsoSlotLimit, 1}, 0x3u);
     ExpectRefusedNaming("create_shader_state {slot=1048576, gen=1}: the slot is outside the record table's "
                         "bound",
-                        [&past, &link, &spirv]() { MGPipeApplyCreateShaderState(past, &link, &spirv); });
+                        [&past, &link, &spirv]() { MGPipeApplyCreateShaderState(past, &link, &spirv, nullptr); });
 
     // And an ORDINARY slot at or above the band's base is out of range by definition: the
     // allocator refuses the band for an ordinary program, so nothing legal can name one.
@@ -684,7 +684,7 @@ void main() { o_color = vec4(0.5); }
         const MGPipeHandle handleB = MGPipeSlots().AllocateComposite(compositeB->GetLifetimeId());
         ASSERT_NE(handleA, handleB);
         for (const MGPipeHandle handle : {handleA, handleB}) {
-            MGPipeApplyCreateShaderState(CompositeDesc(handle, 0x3u), &link, &spirv);
+            MGPipeApplyCreateShaderState(CompositeDesc(handle, 0x3u), &link, &spirv, nullptr);
             MGPipeNoteHandlePublished(MGPipeKind::ShaderCso, handle);
         }
         const Uint64 releasesBefore = resolver.GetCounters().Releases;
@@ -736,7 +736,7 @@ void main() { o_color = vec4(0.5); }
         const ProgramPipelineObject pipeline{kPipelineName};
         SharedPtr<ProgramObject> composite = MakeShared<ProgramObject>(0u);
         const MGPipeHandle handle = MGPipeSlots().AllocateComposite(composite->GetLifetimeId());
-        MGPipeApplyCreateShaderState(CompositeDesc(handle, 0x3u), &link, &spirv);
+        MGPipeApplyCreateShaderState(CompositeDesc(handle, 0x3u), &link, &spirv, nullptr);
         MGPipeNoteHandlePublished(MGPipeKind::ShaderCso, handle);
         ASSERT_EQ(resolver.Observe(kDoomedContext, pipeline, *composite, handle), handle);
         ASSERT_EQ(resolver.Size(), sizeBefore + 1u);

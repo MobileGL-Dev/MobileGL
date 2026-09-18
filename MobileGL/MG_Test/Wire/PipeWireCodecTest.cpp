@@ -1557,8 +1557,14 @@ TEST_F(PipeWireCodecTest, CreateShaderStateCrossesAsOneArchiveAndSixUndeclaredRu
     }
     spirv.globalUboScratch.assign(32, 0xAB);
 
+    // P5e (pg): THE FRAMED archive is what crosses now - the codec's own stream with the stage
+    // of each module in front of it. SpirvArtifacts does not carry the stages and StageMask
+    // cannot stand in for them (two shader objects may share a stage, so a list rebuilt from
+    // the mask can be shorter than generatedSpirv), and the server pairs the two by one running
+    // index. See ProgramArtifactsCodec.h.
+    const Vector<Uint32> stages{0, 1, 2, 3, 4, 5};
     Vector<Uint8> archive;
-    MG_State::GLState::EncodeProgramArtifacts(link, spirv, archive);
+    MG_State::GLState::EncodeProgramArchive(link, spirv, stages, archive);
     ASSERT_FALSE(archive.empty());
 
     MGPProgramDesc desc{};
@@ -1582,16 +1588,16 @@ TEST_F(PipeWireCodecTest, CreateShaderStateCrossesAsOneArchiveAndSixUndeclaredRu
     EXPECT_TRUE(applied);
 
     // And the archive really did carry the six modules: decode it the way the arm does.
-    MG_State::GLState::LinkArtifacts back;
-    MG_State::GLState::SpirvArtifacts backSpirv;
-    ASSERT_TRUE(MG_State::GLState::DecodeProgramArtifacts(archive.data(), archive.size(), back,
-                                                          backSpirv));
-    ASSERT_EQ(backSpirv.generatedSpirv.size(), 6u);
+    MG_State::GLState::ProgramArchive back;
+    ASSERT_TRUE(MG_State::GLState::DecodeProgramArchive(archive.data(), archive.size(), back));
+    ASSERT_EQ(back.Spirv.generatedSpirv.size(), 6u);
     for (std::size_t stage = 0; stage < 6; ++stage) {
-        EXPECT_EQ(backSpirv.generatedSpirv[stage].size(), 4 + stage);
-        EXPECT_EQ(backSpirv.generatedSpirv[stage][0], 0x07230203u + stage);
+        EXPECT_EQ(back.Spirv.generatedSpirv[stage].size(), 4 + stage);
+        EXPECT_EQ(back.Spirv.generatedSpirv[stage][0], 0x07230203u + stage);
     }
-    EXPECT_TRUE(backSpirv.spirvStatus);
+    EXPECT_TRUE(back.Spirv.spirvStatus);
+    // The frame's own half: one stage word per module, at the same index.
+    EXPECT_EQ(back.LinkedStages, stages);
 }
 
 // =====================================================================================
