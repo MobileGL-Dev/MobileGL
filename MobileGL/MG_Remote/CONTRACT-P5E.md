@@ -539,9 +539,29 @@ both backends.
    re-derived as `MGPipeBarriered`. 7. **§3.3's state note** is retired by fb (§5.4).
 8. **`FieldOwnership.def`**: `GetBoundVertexArray`, `GetTextureUnitObject`, `GetImageTextureBinding`,
    `GetFramebufferBindingSlot`, `GetProgramForDraw/Dispatch`, `GetBufferBindingPoint` gain retiring
-   phase "P5e (Espryt unbarriered), P7 (Magma)"; `GetBufferBindingPointCount`'s forward → FATAL under
-   split; `GetTransformFeedbackProgram`, `GetProgramObject`, `GetTextureObject`, `ValidateProgramName`,
-   `HasOpenTransformFeedbackSpan`, `RecordError` keep their rows (barriered-only readers).
+   phase "P5e (Espryt unbarriered), P7 (Magma)"; ~~`GetBufferBindingPointCount`'s forward → FATAL under
+   split~~ (**UNLANDED — see below**); `GetTransformFeedbackProgram`, `GetProgramObject`,
+   `GetTextureObject`, `ValidateProgramName`, `HasOpenTransformFeedbackSpan`, `RecordError` keep
+   their rows (barriered-only readers).
+
+   > **UNLANDED, and deliberately so (P5e gl, ruling ID-120). Lands with P7/P13.** The clause
+   > "`GetBufferBindingPointCount`'s forward → FATAL under split" is NOT in the code and must not
+   > be put there this phase. `FieldOwnership.def:147` (the field row) and `:179` (the forward row)
+   > both say `BARRIER_PULLED`, and the generator refuses a field/forward pair that disagrees —
+   > pinned by `FieldOwnershipTest.TheSevenStickyForwardsAgreeWithTheirFieldRows`. So landing the
+   > clause as written would either trip the generator or drag the FIELD row to FATAL with it, and
+   > that second reading changes **23 pairs** of the derived admitted set (§7, measured with
+   > `--print-admitted | grep -c '^GetBufferBindingPointCount@'`; ID-120 said 10, which was
+   > counted before ID-125's retiring-phase disjunct widened the set). The row's retiring phase is
+   > "P7/P13", which is exactly what admits it on every stamped verb today; a FATAL row is
+   > admitted nowhere, so those reads would start aborting on a migration this phase never
+   > promised.
+   >
+   > The divergence is STATED HERE rather than discovered from a red gate, for ID-105's reason:
+   > when a contract clause is arithmetically impossible against the code, the contract is what
+   > changes. The phase that retires the buffer-binding-point family (P7 for the Magma half, P13
+   > for the transfer half) lands the field row and its forward TOGETHER, in one commit, and
+   > deletes this note.
 9. **Table 1** gains `set_program_bindings` (80), appended; `set_shader_buffers` (38) gains its
    route, sink and emitter (`PipeCatalogueTest.cpp:170-171, 242-243` invert). **Table 0** gains §1's
    thirteen rows. **Table 3** gains `IpcTable::RunAhead/PresentCredit`.
