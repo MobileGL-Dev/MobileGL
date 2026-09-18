@@ -412,11 +412,17 @@ server 没有第二份 `BufferObject`，不存在"staging → server 侧 shadow"
 
 - 不设"records ≥ 64 KiB"一类阈值。规则：每条记录（或每 8–16 条摊销）release-store `cmdHead`，仅当 `consumerParked` 时敲门铃。
 - 显式门铃点：`present`、任何 `kNeedsAck` 请求、`eglMakeCurrent`、`glFlush`、`SEG_STAGE` 余量 < 1/4、**轮询类入口**（`glClientWaitSync` 任意 timeout、`glGetSynciv(GL_SYNC_STATUS)`、`glGetQueryObject*(AVAILABLE|NO_WAIT)`）；带 `GL_SYNC_FLUSH_COMMANDS_BIT` 无条件 publish。饥饿升级：同一 handle 连续 N 次（`MOBILEGL_IPC_POLL_ESCALATE`，默认 64）本地回答"未就绪"而 watermark 毫无移动 → 升级为一次阻塞 round trip（P10）。
-- `glFinish`/`glFlush` 保持纯 no-op。seq = 记录序数；两个互相独立的窗口：字节 credit 与 present credit（`presentsSent - presentAckSerial >= MOBILEGL_IPC_PRESENT_CREDIT` 时 `eglSwapBuffers` 阻塞）。server 不发 credit 消息，consumer 每 64 条记录更新一次 `appliedSeq`。
+- `glFlush` 保持纯 no-op。**`glFinish` 在 P5e 之后不再是**：wire 上仍然没有它的记录，但"至此发出的命令都已完成"是一条 run-ahead 队列能违背的承诺，所以它变成 `WaitForApplyToCatchUp`——等到 `appliedSeq` 追上最后一条发布的记录，再排空反向通道（`CONTRACT-P5E.md` §2.5）。lockstep 下它照旧什么都不做，因为那里 client 本来就把自己发出的每条命令都等完了。
+- seq = 记录序数；两个互相独立的窗口：字节 credit 与 present credit（`presentsSent - presentAckSerial >= MOBILEGL_IPC_PRESENT_CREDIT` 时 `eglSwapBuffers` 阻塞）。server 不发 credit 消息，consumer 每 64 条记录更新一次 `appliedSeq`。
+- **P5e：等待规则由生成的 `WaitClass` 列决定，不再由 call class 决定。**`MGPipeWaitClassFor(op)`（`PipeCalls.def` 的第五列）把每一行分成 `kWaitReply` / `kWaitPresent` / `kWaitApplied` / `kWaitNone`，`EmitAndWaitTails` 在 `RunAheadArmed()` 为真时照这一列走：`kWaitNone` 发布即返回，`kWaitApplied` 等一次 apply 再放掉 fill 的四个 O 类 pin，`kWaitPresent` 的等待已经在 `EmitPresent` 编码之前付过（下条）。它**替换**而不是叠加 `MOBILEGL_IPC_BATCH_WAITS` 的跳过规则：batch 读的是 call class，这一列读的是"这条记录的 apply 会读什么"，而 server 侧的 `MGPipeBarriered` 读的是后者——两条规则并存就是线两端对"client 现在是否被 park 着"给出不同答案。
+- **强制等待点**（§2.5）：`MapBuffer(READ)` / `GetBufferSubData` / `CopyBufferSubData` 源走 `SyncGpuWrites`（reply 行，不变）；`glFinish` 如上；每一个 `Server*` EGL forwarder 之前等一次——control mailbox 是在两批 drain **之间**泵的，make-current 落在两条 run-ahead 记录中间不是画错一个像素而是全错。`ServerSwapEGLBuffers` 不在此列：present 就是那次 swap。`glGetError` 的放宽也在这里具名：run-ahead verb 的 `kEventGlError` 在下一个排空点被看到，即最多晚一个 present credit。
 
-### 11.7 事件回传与溢出（P9）
+### 11.7 事件回传与溢出（P9 定策略，P5e 落地）
 
 `SEG_EVENT` 承载十个回调加回读完成通知。client 排空点：`glGetError`、`glGetQueryObject*`、`glClientWaitSync`、`glGetSynciv`、`eglSwapBuffers`、`glMapBuffer*`/`glGetBufferSubData`/`glCopyBufferSubData`，以及每一次等待循环的每一轮。溢出策略（修一个双向死锁）：`EvLogLine` ≤WARN 有损；语义承载事件无损——ring 满时 server 置 `eventRingFull=1`、**在记录边界停止 apply**、敲反向门铃，client 排空后清标志并敲正向门铃。故障注入：client 被 credit 阻塞时灌满 `SEG_EVENT`；日志洪泛下注入一次 link 失败，那行 ERROR 必须出现且两侧恢复。
+
+**P5e 把上面这段从计划变成代码（`CONTRACT-P5E.md` §2.6）。**`Fatal{EventRingOverflow}` 的前提是"client 每个 verb 都排空，所以 256 KiB 满环是没有工作负载会产生的突发"；run-ahead 的 client 在自己的等待点排空，稳态上相隔一个 present，满环因此是普通积压，为它中止等于把反向通道的容量变成工作负载上限。现在 producer 改为阻塞：发布已在环里的部分、敲 client 门铃、park 在自己的 bell 上等标志清掉、重试。两条具名拒绝留下，而且是**不可能**而非**繁忙**的情形——单条事件大于半个环（再怎么排空也放不下），以及 30 秒都等不到排空（对端不在跑）。不发布 `kCapRunAheadApply` 的 server 原样保留 P5C 的 Fatal。
+死锁论证要两半才成立，所以两半都在：`EventRingConsumer::Drained()` **清标志的同时敲门铃**（清了不敲就是正向那条"先 publish 再敲"专门在防的丢唤醒），而 `SessionProducer::WaitForAppliedOrEventBacklog` / `WaitForPresentAckOrEventBacklog` 让 client 的每一次 park 都能被 `eventRingFull` 打断——于是"等着 client 排空的 server" 总能叫醒那个 client。`ServerLoop` 的 park 条件因此多一条：环满时等待中的记录**还不是**工作，因为 apply 它只会让 producer 停在半路；Stop 与 Control 仍然优先，拆机不被一个不排空的 client 拖住。
 
 ### 11.8 fence 与无 present 负载（P10）
 
@@ -466,7 +472,9 @@ fence 完成度必须来自**真的逐 fence 退休**，不是 present 水位（
 ## 14. Present、线程与帧节奏
 
 - `eglSwapBuffers` → `present{frameSerial}` → publish + 敲门铃 → 返回，除非超出 credit。**`present` 与 `eglSwapBuffers` 严格 1:1**：两个后端的帧边界排空只在 `Present` 内发生，批量会饿死它们。
-- **`MOBILEGL_IPC_PRESENT_CREDIT` 默认 1**（P10）：延迟叠加，server 的 `Present` 末尾已在 `vkWaitForFences` 上等 2–3 帧，credit 2 就是端到端 4–5 帧；只有实测吞吐收益能抵掉延迟代价才调高。Magma 从不注册 `SetSwapInterval`，IPC credit 是它唯一的显式限帧器。
+- **`MOBILEGL_IPC_PRESENT_CREDIT` 默认 1**（P10 提出，P5e 落地，range 1..8）：延迟叠加，server 的 `Present` 末尾已在 `vkWaitForFences` 上等 2–3 帧，credit 2 就是端到端 4–5 帧；只有实测吞吐收益能抵掉延迟代价才调高。Magma 从不注册 `SetSwapInterval`，IPC credit 是它唯一的显式限帧器。
+- **P5e：credit 是 run-ahead 的唯一稳态背压，字节不是**（`CONTRACT-P5E.md` §2.4）。`MGPPresent::FrameSerial` 从"0，由 server 盖自己的帧数"改成**由 client 铸造、1 起算**——一个 credit 只能在付账方能推进的 id 空间里计量，而付账方是 client；`ServerVerbSink::OnPresent` 在 `Present()` 返回之后调 `ServerSession::ReturnPresentCredit(FrameSerial)`，一次 swap 一个 credit（那个函数自 v1 写下以来一直没有生产调用者，这是它的第一个）。credit 1 = client 在 server 应用并交换第 N 帧时发布第 N+1 帧的记录：一帧重叠，最多一帧附加延迟。等待发生在**编码之前**——先编码再 park 会把一次 SEG_CMD 预留持有整整一帧 server 时间。run-ahead server 上 `FrameSerial == 0` 是 `Fatal{ProtocolCorruption, "Present.FrameSerial"}`。
+- 预算（~850 draw + ~0.36 MB pmap/帧）：SEG_CMD 每帧 ~70 KB 对 8 MiB，SEG_STAGE ~1 MB/帧对 32 MiB，SEG_REPLY 不变。`WaitForCmdSpace` 与 stage bell 是安全网而不是节奏器，两者退出时都排空 SEG_EVENT。stats 行与 wire ledger 多一个 `credit-waits`：credit 1 下它是 0 就说明 server 从来不在帧的关键路径上，接近帧数就说明它一直是。
 - 线程——client：**v1 不加线程**，编码在 GL 线程上直接写 ring；外来线程的 sync/query 读从 `RingControl` 无锁回答，必须发射的少数取 `ctrlMutex` 走 `AuxRequest`（SPSC ring 不允许第二个 producer）。server：`mgl-srv-io`（封帧、`SCM_RIGHTS`、doorbell、CTRL RPC）、`mgl-srv-apply`（**终身持有原生 context**，`MakeCurrent` 的缓存失效风暴变启动期一次性）。
 - **核心放置**：全库无亲和性控制。规则：报总 CPU 工作量差（client tracker + encode + decode + server apply vs monolith `PrepareForDraw`）；复用 `ShaderCompilePool` 的大核探测把 `mgl-srv-apply` 绑到大核（`MOBILEGL_IPC_SERVER_AFFINITY`，默认 auto）。
 - 拆机顺序：publish + server 排空并 ack → 停 apply 线程 → 关 transport → client 排空 compile pool → `MobileGL::Destroy()` → 释放 sync/query handle（P5 落地形状见 §17.3）。
@@ -571,6 +579,16 @@ P5c 的设计决定（六条全部落地，落地形状与偏差以 `MobileGL/MG
 
 落地时的三条结构性补充（契约 §3.1 与 §5.4 的具名豁免）：审计漏了三族无句柄站点——绑定记录 P4b 才发射的 ensure/通告族（`MGPipeReverseAnnouncementScope`）、G6 前端键 twin registry（`MGPipeFrontendKeyedRegistryScope`，P3b/P4b 重键）、Magma 拆除期的隐藏资源；两个 scope 内的只读探测是具名、可 grep、带退役阶段的债，不是守卫的洞。
 
+### 17.7 P5e：client 在 Espryt draw 路径上跑在 apply 前面（权威为 `MobileGL/MG_Remote/CONTRACT-P5E.md`）
+
+P5d 把 `inproc` 变成 client 线程 CPU-bound，帧仍是 `client 工作 +（每 draw）等 apply + 交接`。那个等待存在，是因为 draw 的 apply 仍在解引用 client 拥有的内存：`FieldOwnership.def` 的对象类 BARRIER-PULLED 行，以及两个 P5C 具名豁免 scope 里的前端键 twin registry。**P5e 的一句话：client 发布完就走；server 用记录带的句柄解析每一个对象；它唯一可以读的 client 内存，是一条 client 确实被挡在后面的记录的残余 fill。**
+
+- **barriered 谓词**（§2.1，裁定 3 / ID-83）：`MGPipeBarriered(op, payload, applierState)` = 静态 `WaitClass` 列 ≠ `kWaitNone`，或 XFB span 打开时的 `kCtxVerb`，或带 `kDrawClientArrays` 的 draw。两侧算同一个函数、同一份数据——client 在 emit 时用 `ctx.IsTransformFeedbackActive()`，server 用应用过的 `MGPContextValues` 镜像，而 `set_context_values` 在 ring 上先于 verb，所以两者一致。没有第四条升级；加一条是整合者的裁定加契约里的一行。
+- **规则 F**（§0）：**unbarriered 记录的 apply 不读任何 client 内存**——不解引用前端对象、不读 BARRIER-PULLED 行、不探测也不铸造 `MGPipeSlots()`、不持有前端对象的 `SharedPtr`。违反是具名 Fatal，**与 `MOBILEGL_IPC_STRICT_ERRORS` 无关**：那个值按构造就是撕裂或陈旧的，没有"计一笔"的臂。barriered 记录原样保留 P5C 的语义（裁定 4 / ID-84），这正是第一次落地能做小的原因：回读、CopyTex、`GetTexImage`、`set_storage_block_binding`、XFB 都留在 barriered 且拖后。
+- **`gPipeInputs` 变成 server 角色内存**（§3）：unbarriered verb 的 validate 只跑第 2 步（tracker 走查）和第 3 步（发射器）——它们产出记录，这正是 unbarriered verb 被允许交给 server 的全部——序号自增、verb 戳、撤回 server 戳与整个第 4 步都不跑。`MGPipeInputUnfreshRead` 的计数器在 unbarriered 记录下变成**无条件中止**，这是把 `integration-split-strict` 从"预期红"变成硬绿门的那一处（§7）。
+- **run-ahead 的臂**：`RunAheadArmed()` = `m_barrierArmed && Ipc.RunAhead && Caps().HasCap(kCapRunAheadApply)`，在 `Start` 之后第一次 caps 采纳时**锁存**，此后只能被关掉、不能被打开——已经不等就发布出去的记录收不回来。Magma 的 `CallMask` 永远不带 bit 10（`MGPipeRunAheadCapBitsFor` 是纯函数，`MagmaPipeIdentityTest` 钉住），Espryt 则由 `MG_Backend/Init.cpp` 的 `kMGPipeP5eRunAheadReady` 一个常量把整相位关在惰性里，直到整合提交把它翻过来。
+- **对照臂**：`MOBILEGL_IPC_RUN_AHEAD=0` 是 A/B 的**对照**而不是负控制——server 代码、fill 决定、每一条记录两臂都一样，唯一的差别是 client 等不等；`MOBILEGL_IPC_VERB_BARRIER=0` 保留它自己的意思，并且因为它是那个合取式的第一项，它会直接把 run-ahead 关掉。
+
 ## 附 A：开关
 
 CMake：
@@ -610,13 +628,15 @@ CMake：
 | `MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS` | 1 | 推送只发内容变了的块（追踪 buffer 走 mprotect 位图，未追踪走内容哈希）；`0` 恢复全范围推送（A/B 对照） |
 | `MOBILEGL_IPC_BATCH_WAITS` | 1 | 值类记录（无 reply slot 的 kCtxState/kCtxCso/kCtxObject）发布即返回，barrier 推迟到下一个拉取类 verb；**`generate_mipmap` 例外**（它的 apply 读 `MGB_CTX->GetActiveTextureUnit()`，规则：只有 apply 不读残余填充字段的记录才可免等）；`0` 恢复 R-1 逐条 barrier（`MOBILEGL_PIPE_VERIFY` 强制 0） |
 | `MOBILEGL_IPC_ADOPT_TIER` | 2 | `auto/0/1/2`；P5 split 用 emulated（T2） |
-| `MOBILEGL_IPC_VERB_BARRIER` | 1 | 每 verb 等 `appliedSeq == emitSeq`；`0` 只作 E1 阴性对照 |
+| `MOBILEGL_IPC_VERB_BARRIER` | 1 | 每 verb 等 `appliedSeq == emitSeq`；`0` 只作 E1 阴性对照，并且因为它是 `RunAheadArmed()` 合取式的第一项，它同时把 run-ahead 关掉 |
+| `MOBILEGL_IPC_RUN_AHEAD` | 1 | P5e：发布完 unbarriered 记录即返回（§11.6 的 `WaitClass` 列）。**只是合取式的一半**——server 不发布 `kCapRunAheadApply` 时它等于 0 并日志一次；`0` 是 **A/B 对照**（两臂 server 代码与记录完全相同，只差 client 等不等），不是阴性对照。`MOBILEGL_PIPE_VERIFY` 强制 0 |
+| `MOBILEGL_IPC_PRESENT_CREDIT` | 1 | P5e：client 可以在手的 present 数，range 1..8。credit 1 = 一帧重叠、最多一帧附加延迟；2 是设备测量臂。stats 行的 `credit-waits` 是它真正阻塞的次数 |
 | `MOBILEGL_IPC_STRICT_ERRORS` | 0 | BARRIER-PULLED residual input 提升为具名 Fatal |
 | `MOBILEGL_IPC_AUDIT` | 0 | retire 后 `0xDD` 填退休 staging |
 | `MOBILEGL_IPC_SERVER_AFFINITY` | `auto` | apply 线程亲和性；日志报告内核实际采纳的掩码（Redmi 的内核对 app 线程一律忽略 `sched_setaffinity`，解析为 0xff） |
 | `MOBILEGL_IPC_SERVER_PATH` | 空 | P6 消费 |
 
-P6+ 生效：`MOBILEGL_IPC_PRESENT_CREDIT`、`MOBILEGL_IPC_POLL_ESCALATE`、shadow shm、`MOBILEGL_IPC_RESPAWN`、`MOBILEGL_IPC_IDLE_EXIT_S`。显式不设立：`MOBILEGL_IPC_PROGRAM`（没有 relink 档）、`MOBILEGL_IPC_VALIDATE_SERVER`（server 没有 `MG_Impl` 校验器）。
+P6+ 生效：`MOBILEGL_IPC_POLL_ESCALATE`、shadow shm、`MOBILEGL_IPC_RESPAWN`、`MOBILEGL_IPC_IDLE_EXIT_S`（`MOBILEGL_IPC_PRESENT_CREDIT` 已在 P5e 生效，见上表）。显式不设立：`MOBILEGL_IPC_PROGRAM`（没有 relink 档）、`MOBILEGL_IPC_VALIDATE_SERVER`（server 没有 `MG_Impl` 校验器）。
 
 ## 附 B：边界计数器（`MobileGL/MG_Util/Metrics/PipeStats.h`）
 
