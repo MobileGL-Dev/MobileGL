@@ -259,7 +259,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
     [[noreturn]] static void RefuseFramebufferBindingSlotRead() {
         MG_Pipe::MGPipeInputPoisonFatalForVerb(MG_Pipe::MGPipeInputField::GetFramebufferBindingSlot,
-                                               MGB_CTX->CurrentVerb());
+                                               MG_Pipe::gPipeInputs.CurrentVerb());
     }
 #endif // MOBILEGL_BUILD_DISAGGREGATED
 #endif // MOBILEGL_PIPE_PUSH
