@@ -29,7 +29,7 @@ struct MGPipeScreen {
     void (*ApplierReset)(const MGPApplierReset* payload);
 };
 
-// context: 67 calls. A null entry means the backend does not implement this
+// context: 68 calls. A null entry means the backend does not implement this
 // call and the frontend keeps its own path (plan B section 4.1).
 struct MGPipeContext {
     void (*QueryCreate)(const MGPQueryDesc* payload);
@@ -99,11 +99,12 @@ struct MGPipeContext {
     void (*CopyFramebufferToTexture)(const MGPCopyFromFramebuffer* payload);
     void (*ObjectDeath)(const MGPHandleOnly* payload);
     void (*SetContextValues)(const MGPContextValues* payload);
+    void (*SetProgramBindings)(const MGPProgramBindings* payload, const void* varTail, Uint32 varTailCount);
 };
 
 inline constexpr SizeT kMGPipeScreenCallCount = 12;
-inline constexpr SizeT kMGPipeContextCallCount = 67;
-inline constexpr SizeT kMGPipeCallCount = 79;
+inline constexpr SizeT kMGPipeContextCallCount = 68;
+inline constexpr SizeT kMGPipeCallCount = 80;
 
 // A table that is not exactly its call count of function pointers has grown a
 // member that no generator knows about.

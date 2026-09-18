@@ -242,7 +242,8 @@ namespace MobileGL::MG_Remote::Wire {
     X(CopyFramebufferToTexture, MGPCopyFromFramebuffer)                                        \
     X(ApplierReset, MGPApplierReset)                                                           \
     X(ObjectDeath, MGPHandleOnly)                                                              \
-    X(SetContextValues, MGPContextValues)
+    X(SetContextValues, MGPContextValues)                                                      \
+    X(SetProgramBindings, MGPProgramBindings)
 
     namespace {
 
@@ -602,6 +603,7 @@ namespace MobileGL::MG_Remote::Wire {
         // believed, and the bound is the header's own 32-bit Size field.
         Uint64 tail0 = 0;
         Uint64 tail1 = 0;
+        Uint64 tail2 = 0; // P5e: set_program_bindings is the one three-tail row
         Uint32 tails = 0;
         switch (op) {
         case MGPWireOp::SetVertexBuffers: {
@@ -665,6 +667,47 @@ namespace MobileGL::MG_Remote::Wire {
             tail0 = TailBytesFor(p.Count, sizeof(MGPBufferRange));
             tail1 = TailBytesFor(p.Count, sizeof(Uint32));
             tails = 2;
+            break;
+        }
+        case MGPWireOp::SetProgramBindings: {
+            // THREE TAILS, THREE COUNTS, THREE INDEX SPACES (P5e,
+            // MG_Remote/CONTRACT-P5E.md §1): Int32[BlockBindingCount] in GL uniform-block index
+            // order, MGPProgramSamplerUnit[SamplerUnitCount] ascending by Location, and
+            // MGPProgramStorageOverride[StorageOverrideCount] whose Name is a host span staged
+            // whole - the override map is name-keyed by design.
+            //
+            // EACH COUNT IS REFUSED AGAINST ITS DECLARED BOUND, never truncated: a sampler
+            // array past 256 locations is a program this record cannot describe, and silently
+            // describing 256 of them would put uniforms on the wrong units with no marker
+            // anywhere. The counts come off the wire, so every one is bounded before it is
+            // multiplied.
+            const auto& p = *static_cast<const MGPProgramBindings*>(payload);
+            if (p.BlockBindingCount > kMGPipeMaxProgramBlockBindings) {
+                WireProtocolFatalAt("SetProgramBindings.BlockBindingCount", p.BlockBindingCount,
+                                    kMGPipeMaxProgramBlockBindings);
+            }
+            if (p.SamplerUnitCount > kMGPipeMaxProgramSamplerUnits) {
+                WireProtocolFatalAt("SetProgramBindings.SamplerUnitCount", p.SamplerUnitCount,
+                                    kMGPipeMaxProgramSamplerUnits);
+            }
+            if (p.StorageOverrideCount > kMGPipeMaxProgramStorageOverrides) {
+                WireProtocolFatalAt("SetProgramBindings.StorageOverrideCount",
+                                    p.StorageOverrideCount, kMGPipeMaxProgramStorageOverrides);
+            }
+            tail0 = TailBytesFor(p.BlockBindingCount, sizeof(Int32));
+            tail1 = TailBytesFor(p.SamplerUnitCount, sizeof(MGPProgramSamplerUnit));
+            tail2 = TailBytesFor(p.StorageOverrideCount, sizeof(MGPProgramStorageOverride));
+            // ALWAYS THREE, even when a count is 0. The tails are positional and the third one's
+            // offset is derived from the first two, so a record that declared "one tail" when
+            // only the block bindings were present would put the same bytes at a different
+            // offset than a record that declared three - and the two halves of the wire would
+            // disagree about where the overrides start. An empty tail is zero bytes at an
+            // 8-aligned offset, which costs nothing.
+            tails = 3;
+            // NOT SecondTailIsHostSpans: the spans are MEMBERS of the third tail's elements,
+            // not a bare MGHostSpan array, so the encoder's blanket honesty pass would read 40
+            // bytes of {span, binding, pad} as one span and a quarter of garbage. The arm in
+            // ApplyChecked walks the elements and checks each Name itself.
             break;
         }
         case MGPWireOp::SetVertexAttribDefaults: {
@@ -748,6 +791,15 @@ namespace MobileGL::MG_Remote::Wire {
             out.TailOffset[1] = Align8(out.TailOffset[0] + tail0);
             out.TailBytes[1] = tail1;
             out.TotalBytes = out.TailOffset[1] + tail1;
+        }
+        // P5e: the third tail, realigned to 8 for the second one's reason - set_program_bindings'
+        // first tail is Int32[] and its elements are four bytes, so the array behind it would
+        // otherwise start at a 4-aligned offset and every MGHostSpan in the third would be
+        // misaligned on a host that cares.
+        if (tails >= 3) {
+            out.TailOffset[2] = Align8(out.TailOffset[1] + tail1);
+            out.TailBytes[2] = tail2;
+            out.TotalBytes = out.TailOffset[2] + tail2;
         }
         out.TailCount = tails;
         out.TotalBytes = Align8(out.TotalBytes);
@@ -1435,12 +1487,14 @@ namespace MobileGL::MG_Remote::Wire {
         // record declaring Count = 4000 while carrying 8 bytes to its own arithmetic.
         if (size != layout.TotalBytes) {
             MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s\"} the record declares Size=%llu and "
-                    "its own count fields describe %llu bytes (fixed payload %llu + tails %llu/%llu)",
+                    "its own count fields describe %llu bytes (fixed payload %llu + tails "
+                    "%llu/%llu/%llu)",
                     WireOpName(op), static_cast<unsigned long long>(size),
                     static_cast<unsigned long long>(layout.TotalBytes),
                     static_cast<unsigned long long>(layout.PayloadBytes),
                     static_cast<unsigned long long>(layout.TailBytes[0]),
-                    static_cast<unsigned long long>(layout.TailBytes[1]));
+                    static_cast<unsigned long long>(layout.TailBytes[1]),
+                    static_cast<unsigned long long>(layout.TailBytes[2]));
             std::abort();
         }
 
@@ -1805,6 +1859,33 @@ namespace MobileGL::MG_Remote::Wire {
         case MGPWireOp::SetStreamOutputTargets:
             // Same as above: no applier, off the reduced path, both tails validated.
             return false;
+
+        case MGPWireOp::SetProgramBindings: {
+            // P5e, opcode 80 (MG_Remote/CONTRACT-P5E.md §1). NO APPLIER ENTRY POINT EXISTS YET
+            // and c0e does not invent one: the record's consumer is the program twin's
+            // rebuild, which package pg writes. What the record needs NOW and cannot get later
+            // is its shape - the three declared counts against their bounds and the three-tail
+            // arithmetic, both of which MGPipeWireRecordLayout above has already run - plus the
+            // honesty of every name span it carries.
+            //
+            // THE SPANS ARE WALKED HERE RATHER THAN BY THE ENCODER'S BLANKET PASS because they
+            // are MEMBERS of the third tail's 40-byte elements, not a bare MGHostSpan array:
+            // SecondTailIsHostSpans reads a tail AS spans, and doing that to {span, binding,
+            // pad} would read one span and a quarter of garbage. All four arms of
+            // CheckHostSpanIsHonest run, the segment-range one included, so an override name
+            // pointing outside SEG_STAGE is caught on the way in rather than at the rebuild.
+            if (layout.TailCount == 3 && layout.TailBytes[2] != 0 && m_segments != nullptr) {
+                const auto* overrides = tailAt(2);
+                const Uint64 count = layout.TailBytes[2] / sizeof(MGPProgramStorageOverride);
+                for (Uint64 i = 0; i < count; ++i) {
+                    MGPProgramStorageOverride entry{};
+                    std::memcpy(&entry, overrides + i * sizeof(MGPProgramStorageOverride),
+                                sizeof(MGPProgramStorageOverride));
+                    CheckHostSpanIsHonest(entry.Name, *m_segments);
+                }
+            }
+            return false;
+        }
 
         case MGPWireOp::SetGlobalConstants: {
             const auto& rec = *static_cast<const MGPGlobalConstants*>(payload);

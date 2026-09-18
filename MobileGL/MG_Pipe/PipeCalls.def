@@ -11,11 +11,42 @@
 // (scripts/gen_pipe.py -> MG_Pipe/generated/*.inc) and one unit test
 // (MG_Test/Pipe/PipeCatalogueTest.cpp) pins the arithmetic.
 //
-//   X(Name, PayloadStruct, Class, Flags)
+//   X(Name, PayloadStruct, Class, Flags, WaitClass)
 //     Class : kScreen | kCtxCso | kCtxState | kCtxObject | kCtxVerb | kCtxQuery
 //             kScreen lands in struct MGPipeScreen, every other class in struct
 //             MGPipeContext (plan section 4.3).
 //     Flags : kNone | kNeedsAck | kHasBlob | kVarTail | kHostSpan | kReplySlot | kOptional
+//     WaitClass : kWaitNone | kWaitApplied | kWaitReply | kWaitPresent
+//             P5e (MG_Remote/CONTRACT-P5E.md section 2.2). WHAT THE CLIENT DOES AFTER IT HAS
+//             PUBLISHED A RECORD OF THIS CALL, on a server that publishes kCapRunAheadApply.
+//             It is A VALUE AND NOT A NEW OP: the opcode order and the flag column are
+//             untouched, and gen_pipe.py emits the column beside kMGPipeCallFlags as
+//             MGPipeWaitClassFor(op) in generated/PipeWire.inc, so the emit table and the
+//             sink compute the barriered predicate from one table instead of two copies.
+//
+//             kWaitReply     the answer is not derivable and the client acts on it (R-5), so
+//                            it blocks on the reply slot. EVERY kReplySlot ROW CARRIES IT and
+//                            gen_pipe.py refuses a row where the two disagree - a reply-slot
+//                            row that did not wait would be a waiter that hangs, and a waiting
+//                            row with no slot would block on an answer nobody posts.
+//                            resource_subdata is here because the row OWNS a slot; the buffer
+//                            half's wantReply=false is a per-record ROUTE decision one level
+//                            down (CONTRACT-P5E.md section 2.5), not a second wait class.
+//             kWaitPresent   present, whose pacing is the present CREDIT taken BEFORE the
+//                            encode rather than a wait after the publish (section 2.4).
+//             kWaitApplied   the record's apply still reads a BARRIER_PULLED row or probes the
+//                            client allocator, so the client parks in its own wait and the row
+//                            keeps CONTRACT-P5C's semantics exactly: its pulls count into rsp
+//                            and its probes are legal inside a scope. This column is the
+//                            static half of MGPipeBarriered(op, payload, applierState); the
+//                            other two escalations (an open XFB span, a draw with client
+//                            vertex arrays) are payload-derived and live in that function.
+//             kWaitNone      rule F holds for this row's sink: its apply names no client
+//                            memory at all, so the client publishes and moves on.
+//
+//             THE COLUMN IS INERT UNTIL THE INTEGRATION COMMIT publishes kCapRunAheadApply
+//             (MG_Backend/Init.cpp's kMGPipeP5eRunAheadReady): with the bit unpublished the
+//             client runs today's lockstep path and never reads the table.
 //             kNeedsAck on a call means records of this call MAY require an ack; a
 //             per-record predicate decides. resource_respecify carries it for
 //             glBufferStorage - a real synchronous allocation, and the only entry point
@@ -45,15 +76,15 @@
 //                         appended server-side fence wait 1 and P5c's applier_reset 1
 //   kCtxQuery       8     query object namespace 6, plus the appended timestamp pair 2
 //   kCtxCso        13     CSO create/bind/delete
-//   kCtxState      18     16 of the 18 set_* calls + the temporary set_residual_value_state
-//                         + P5c rv's set_context_values
+//   kCtxState      19     16 of the 18 set_* calls + the temporary set_residual_value_state
+//                         + P5c rv's set_context_values + P5e's set_program_bindings
 //   kCtxObject     10     set_texture_params (the 17th set_*) + 8 object-scoped transfers, plus
 //                         P5c's object_death 1
 //   kCtxVerb       18     3 context-reading transfer calls + the 10 commands, plus the five
 //                         P5b-appended verbs (bind_shader_image, patch_parameter,
 //                         bind_stream_output, set_storage_block_binding,
 //                         copy_framebuffer_to_texture - MG_Remote/CONTRACT-P5B.md)
-//   total          79
+//   total          80
 //
 // Reconciliation with the plan's headline numbers (section 4.4 / appendix A), because they
 // do not add up to a set of UNIQUE records and this file has to hold unique records:
@@ -101,9 +132,17 @@
 //     routed through gMGPipeContext like its seventeen siblings, and under monolith it has no
 //     producer at all - the fields keep coming through the residual fill, byte for byte as
 //     before (G1). 79 unique records.
+//   - P5e (MG_Remote/CONTRACT-P5E.md section 1) appended ONE more (opcode 80):
+//     set_program_bindings, the three POST-LINK mutable reflection fields - the uniform-block
+//     bindings, the sampler uniform units and the name-keyed storage-block override map. They
+//     live inside the LinkArtifacts the reflection archive snapshots, and all three move AFTER
+//     the link, so no existing row can carry them: create_shader_state describes the link and
+//     this one describes what happened to it since. It lands with a NULL ROUTE and a sink that
+//     refuses it by name until package pg wires the emitter, exactly as set_shader_buffers has
+//     sat catalogued-and-dead since P4a. 80 unique records.
 // ---------------------------------------------------------------------------------------
 
-#define MGP_CALL_LIST_DOCUMENTED_COUNT 79
+#define MGP_CALL_LIST_DOCUMENTED_COUNT 80
 
 // clang-format off
 #define MGP_CALL_LIST(X)                                                                            \
@@ -112,7 +151,7 @@
     /* RendererInfo (MGPipeTypes.h). It carried none until P5 R-13.1; the flag is a        */  \
     /* property of the payload, so its absence was simply wrong. Adding a flag does not    */  \
     /* move an opcode: the opcode is this line's 1-based position.                          */  \
-    X(GetCaps,                  MGPCaps,                    kScreen,    kReplySlot|kHasBlob)     \
+    X(GetCaps,                  MGPCaps,                    kScreen,    kReplySlot|kHasBlob,        kWaitReply)       \
     /* THE FOUR ACCEPTANCE ROWS (P5 R-5, R-16). These four and map_persistent are the only    */  \
     /* applier entry points that RETURN something the client acts on destructively - clearing  */  \
     /* per-level dirty flags, latching parameters, advancing its own bookkeeping - so the      */  \
@@ -120,7 +159,7 @@
     /* until P5, because in monolith the answer is the return value of a direct call and there */  \
     /* was nothing to declare. kMGPipeCallFlags is now what sizes the reply pool and what the  */  \
     /* decoder posts against, so a row that answers without the flag is a waiter that hangs.   */  \
-    X(ResourceCreate,           MGPResourceDesc,            kScreen,    kReplySlot)                 \
+    X(ResourceCreate,           MGPResourceDesc,            kScreen,    kReplySlot,                 kWaitReply)       \
     /* NO kHasBlob, BY RULING (P5 R-13.3; CONTRACT-P5.md table 1 row 19). MGPResourceDesc   */  \
     /* owns no MGPBlobRef and gains none: under split `initialBytes` is always nullptr and  */  \
     /* the initial content of a glBufferData(size, data) / glTexImage*(..., data) arrives   */  \
@@ -129,65 +168,65 @@
     /* cost is one extra record. NOTE the SECOND uncarried companion on this call, the      */  \
     /* MGPRespecifiedLevel* scope (PipeApply.h:792) - it is NOT bytes and NOT covered by    */  \
     /* this ruling; table 1 row 19 gives it the two pad fields of MGPResourceDesc.          */  \
-    X(ResourceRespecify,        MGPResourceDesc,            kScreen,    kNeedsAck|kReplySlot)       \
-    X(ResourceDestroy,          MGPHandleOnly,              kScreen,    kNone)                      \
-    X(MapPersistent,            MGPHandleOnly,              kScreen,    kReplySlot|kOptional)       \
-    X(UnmapPersistent,          MGPHandleOnly,              kScreen,    kOptional)                  \
-    X(FenceCreate,              MGPHandleOnly,              kScreen,    kNone)                      \
-    X(FenceStatus,              MGPHandleOnly,              kScreen,    kReplySlot)                 \
-    X(FenceWait,                MGPFenceWait,               kScreen,    kReplySlot)                 \
-    X(FenceDestroy,             MGPHandleOnly,              kScreen,    kNone)                      \
+    X(ResourceRespecify,        MGPResourceDesc,            kScreen,    kNeedsAck|kReplySlot,       kWaitReply)       \
+    X(ResourceDestroy,          MGPHandleOnly,              kScreen,    kNone,                      kWaitNone)        \
+    X(MapPersistent,            MGPHandleOnly,              kScreen,    kReplySlot|kOptional,       kWaitReply)       \
+    X(UnmapPersistent,          MGPHandleOnly,              kScreen,    kOptional,                  kWaitNone)        \
+    X(FenceCreate,              MGPHandleOnly,              kScreen,    kNone,                      kWaitNone)        \
+    X(FenceStatus,              MGPHandleOnly,              kScreen,    kReplySlot,                 kWaitReply)       \
+    X(FenceWait,                MGPFenceWait,               kScreen,    kReplySlot,                 kWaitReply)       \
+    X(FenceDestroy,             MGPHandleOnly,              kScreen,    kNone,                      kWaitNone)        \
     /* ---- context: query objects (plan 4.3 gives the namespace to the context) ---- */            \
-    X(QueryCreate,              MGPQueryDesc,               kCtxQuery,  kNone)                      \
-    X(QueryBegin,               MGPQueryDesc,               kCtxQuery,  kNone)                      \
-    X(QueryEnd,                 MGPQueryDesc,               kCtxQuery,  kNone)                      \
-    X(QueryAvailable,           MGPHandleOnly,              kCtxQuery,  kReplySlot)                 \
-    X(QueryResult,              MGPQueryResultRequest,      kCtxQuery,  kReplySlot)                 \
-    X(QueryDestroy,             MGPHandleOnly,              kCtxQuery,  kNone)                      \
+    X(QueryCreate,              MGPQueryDesc,               kCtxQuery,  kNone,                      kWaitNone)        \
+    X(QueryBegin,               MGPQueryDesc,               kCtxQuery,  kNone,                      kWaitNone)        \
+    X(QueryEnd,                 MGPQueryDesc,               kCtxQuery,  kNone,                      kWaitNone)        \
+    X(QueryAvailable,           MGPHandleOnly,              kCtxQuery,  kReplySlot,                 kWaitReply)       \
+    X(QueryResult,              MGPQueryResultRequest,      kCtxQuery,  kReplySlot,                 kWaitReply)       \
+    X(QueryDestroy,             MGPHandleOnly,              kCtxQuery,  kNone,                      kWaitNone)        \
     /* ---- context: CSO create/bind/delete (plan 4.4.2, 4.5.2-4.5.5) ---- */                       \
-    X(CreateRenderState,        MGPRenderStateDesc,         kCtxCso,    kHasBlob)                   \
-    X(BindRenderState,          MGPBindRenderState,         kCtxCso,    kNone)                      \
-    X(DeleteRenderState,        MGPHandleOnly,              kCtxCso,    kNone)                      \
-    X(CreateVertexElements,     MGPVertexElements,          kCtxCso,    kHasBlob)                   \
-    X(BindVertexElements,       MGPHandleOnly,              kCtxCso,    kNone)                      \
-    X(DeleteVertexElements,     MGPHandleOnly,              kCtxCso,    kNone)                      \
+    X(CreateRenderState,        MGPRenderStateDesc,         kCtxCso,    kHasBlob,                   kWaitNone)        \
+    X(BindRenderState,          MGPBindRenderState,         kCtxCso,    kNone,                      kWaitNone)        \
+    X(DeleteRenderState,        MGPHandleOnly,              kCtxCso,    kNone,                      kWaitNone)        \
+    X(CreateVertexElements,     MGPVertexElements,          kCtxCso,    kHasBlob,                   kWaitNone)        \
+    X(BindVertexElements,       MGPHandleOnly,              kCtxCso,    kNone,                      kWaitNone)        \
+    X(DeleteVertexElements,     MGPHandleOnly,              kCtxCso,    kNone,                      kWaitNone)        \
     /* kHasBlob because MGPSamplerDesc owns an MGPBlobRef member, `Parameters` - the        */  \
     /* SamplerParameters POD byte for byte, borderColorForm included (P5 R-13.1). The       */  \
     /* companion pointer beside the record today is a TYPED frontend pointer               */  \
     /* (const SamplerParameters*), which is exactly what split may not carry.              */  \
-    X(CreateSamplerState,       MGPSamplerDesc,             kCtxCso,    kHasBlob)                   \
-    X(DeleteSamplerState,       MGPHandleOnly,              kCtxCso,    kNone)                      \
-    X(CreateSamplerView,        MGPSamplerView,             kCtxCso,    kNone)                      \
-    X(DeleteSamplerView,        MGPHandleOnly,              kCtxCso,    kNone)                      \
-    X(CreateShaderState,        MGPProgramDesc,             kCtxCso,    kHasBlob)                   \
-    X(BindShaderState,          MGPHandleOnly,              kCtxCso,    kNone)                      \
-    X(DeleteShaderState,        MGPHandleOnly,              kCtxCso,    kNone)                      \
+    X(CreateSamplerState,       MGPSamplerDesc,             kCtxCso,    kHasBlob,                   kWaitNone)        \
+    X(DeleteSamplerState,       MGPHandleOnly,              kCtxCso,    kNone,                      kWaitNone)        \
+    X(CreateSamplerView,        MGPSamplerView,             kCtxCso,    kNone,                      kWaitNone)        \
+    X(DeleteSamplerView,        MGPHandleOnly,              kCtxCso,    kNone,                      kWaitNone)        \
+    X(CreateShaderState,        MGPProgramDesc,             kCtxCso,    kHasBlob,                   kWaitNone)        \
+    X(BindShaderState,          MGPHandleOnly,              kCtxCso,    kNone,                      kWaitNone)        \
+    X(DeleteShaderState,        MGPHandleOnly,              kCtxCso,    kNone,                      kWaitNone)        \
     /* ---- context: set_* (plan 4.4.3) ---- */                                                     \
-    X(SetDynamicState,          MGPDynamicState,            kCtxState,  kHasBlob)                   \
-    X(SetFramebufferState,      MGPFramebufferState,        kCtxState,  kNone)                      \
-    X(SetVertexBuffers,         MGPVertexBuffers,           kCtxState,  kVarTail)                   \
-    X(SetIndexBuffer,           MGPIndexBuffer,             kCtxState,  kNone)                      \
-    X(SetIndirectBuffers,       MGPIndirectBuffers,         kCtxState,  kNone)                      \
-    X(SetSamplerViews,          MGPSamplerViews,            kCtxState,  kVarTail)                   \
-    X(BindSamplerStates,        MGPSamplerStates,           kCtxState,  kVarTail)                   \
-    X(SetShaderImages,          MGPShaderImages,            kCtxState,  kVarTail)                   \
-    X(SetShaderBuffers,         MGPShaderBuffers,           kCtxState,  kVarTail|kHostSpan)         \
-    X(SetStreamOutputTargets,   MGPStreamOutputTargets,     kCtxState,  kVarTail)                   \
-    X(SetGlobalConstants,       MGPGlobalConstants,         kCtxState,  kHasBlob)                   \
-    X(SetVertexAttribDefaults,  MGPVertexAttribDefaults,    kCtxState,  kVarTail)                   \
-    X(SetPixelPackState,        MGPPixelPackState,          kCtxState,  kNone)                      \
-    X(SetPatchState,            MGPPatchState,              kCtxState,  kNone)                      \
-    X(SetDrawProgram,           MGPHandleOnly,              kCtxState,  kNone)                      \
-    X(SetDispatchProgram,       MGPHandleOnly,              kCtxState,  kNone)                      \
+    X(SetDynamicState,          MGPDynamicState,            kCtxState,  kHasBlob,                   kWaitNone)        \
+    X(SetFramebufferState,      MGPFramebufferState,        kCtxState,  kNone,                      kWaitNone)        \
+    X(SetVertexBuffers,         MGPVertexBuffers,           kCtxState,  kVarTail,                   kWaitNone)        \
+    X(SetIndexBuffer,           MGPIndexBuffer,             kCtxState,  kNone,                      kWaitNone)        \
+    X(SetIndirectBuffers,       MGPIndirectBuffers,         kCtxState,  kNone,                      kWaitNone)        \
+    X(SetSamplerViews,          MGPSamplerViews,            kCtxState,  kVarTail,                   kWaitNone)        \
+    X(BindSamplerStates,        MGPSamplerStates,           kCtxState,  kVarTail,                   kWaitNone)        \
+    X(SetShaderImages,          MGPShaderImages,            kCtxState,  kVarTail,                   kWaitNone)        \
+    X(SetShaderBuffers,         MGPShaderBuffers,           kCtxState,  kVarTail|kHostSpan,         kWaitNone)        \
+    X(SetStreamOutputTargets,   MGPStreamOutputTargets,     kCtxState,  kVarTail,                   kWaitNone)        \
+    X(SetGlobalConstants,       MGPGlobalConstants,         kCtxState,  kHasBlob,                   kWaitNone)        \
+    X(SetVertexAttribDefaults,  MGPVertexAttribDefaults,    kCtxState,  kVarTail,                   kWaitNone)        \
+    X(SetPixelPackState,        MGPPixelPackState,          kCtxState,  kNone,                      kWaitNone)        \
+    X(SetPatchState,            MGPPatchState,              kCtxState,  kNone,                      kWaitNone)        \
+    X(SetDrawProgram,           MGPHandleOnly,              kCtxState,  kNone,                      kWaitNone)        \
+    X(SetDispatchProgram,       MGPHandleOnly,              kCtxState,  kNone,                      kWaitNone)        \
     /* Migration-only carrier for Track V, retired field by field across P2..P13. Its       */      \
     /* retirement is a compile error: MGL_RESIDUAL_BLOCK_SIZE only ever goes DOWN and the   */      \
     /* final step asserts sizeof(ResidualValueBlock) == 0 (plan 6.3).                       */      \
-    X(SetResidualValueState,    MGPResidualValueState,      kCtxState,  kHasBlob)                   \
+    X(SetResidualValueState,    MGPResidualValueState,      kCtxState,  kHasBlob,                   kWaitNone)        \
     /* ---- context: per-object state and transfer (plan 4.4.3 set_texture_params, 4.4.4) ---- */   \
-    X(SetTextureParams,         MGPTextureParams,           kCtxObject, kReplySlot)                 \
-    X(ResourceSubData,          MGPSubData,                 kCtxObject, kHasBlob|kVarTail|kReplySlot) \
-    X(BufferSubDataResident,    MGPSubData,                 kCtxObject, kHasBlob|kOptional)         \
-    X(ResourceSubDataComplete,  MGPSubDataComplete,         kCtxObject, kNone)                      \
+    X(SetTextureParams,         MGPTextureParams,           kCtxObject, kReplySlot,                 kWaitReply)       \
+    X(ResourceSubData,          MGPSubData,                 kCtxObject, kHasBlob|kVarTail|kReplySlot, kWaitReply)     \
+    X(BufferSubDataResident,    MGPSubData,                 kCtxObject, kHasBlob|kOptional,         kWaitNone)        \
+    X(ResourceSubDataComplete,  MGPSubDataComplete,         kCtxObject, kNone,                      kWaitNone)        \
     /* NO kHasBlob AND NO MGPBlobRef, BY RULING (P5 R-13.2; CONTRACT-P5.md table 1 row 21). */  \
     /* It takes a content pointer today, but under split it CARRIES NO BYTES AT ALL: it is  */  \
     /* a {range, AccessFlags} control record, and the bytes of [Offset, Offset+Size) arrive  */  \
@@ -195,36 +234,36 @@
     /* drives rewrites its range "from the authoritative shadow" (Managers.cpp:1047-1076),   */  \
     /* and under split the authoritative shadow is server-owned (R-11), so subdata is the    */  \
     /* only way bytes reach it - a blobref here would be a SECOND way to say the same thing. */  \
-    X(ResourceFlushRange,       MGPFlushRange,              kCtxObject, kNone)                      \
-    X(ResourceReadback,         MGPReadback,                kCtxObject, kReplySlot)                 \
-    X(ResourceCopyRegion,       MGPCopyRegion,              kCtxObject, kNone)                      \
-    X(GenerateMipmap,           MGPMipPlan,                 kCtxObject, kNone)                      \
-    X(GetTextureImage,          MGPReadbackInfo,            kCtxObject, kReplySlot)                 \
+    X(ResourceFlushRange,       MGPFlushRange,              kCtxObject, kNone,                      kWaitNone)        \
+    X(ResourceReadback,         MGPReadback,                kCtxObject, kReplySlot,                 kWaitReply)       \
+    X(ResourceCopyRegion,       MGPCopyRegion,              kCtxObject, kNone,                      kWaitNone)        \
+    X(GenerateMipmap,           MGPMipPlan,                 kCtxObject, kNone,                      kWaitApplied)     \
+    X(GetTextureImage,          MGPReadbackInfo,            kCtxObject, kReplySlot,                 kWaitReply)       \
     /* ---- context: transfer calls that read whole-context state, and the commands ---- */         \
-    X(Blit,                     MGPBlit,                    kCtxVerb,   kNone)                      \
-    X(Clear,                    MGPClear,                   kCtxVerb,   kNone)                      \
-    X(ReadPixels,               MGPReadbackInfo,            kCtxVerb,   kReplySlot)                 \
-    X(DrawVbo,                  MGPDrawInfo,                kCtxVerb,   kHostSpan|kVarTail)         \
-    X(LaunchGrid,               MGPGridInfo,                kCtxVerb,   kNone)                      \
-    X(MemoryBarrier,            MGPMemoryBarrier,           kCtxVerb,   kNone)                      \
-    X(BeginStreamOutput,        MGPStreamOutputBegin,       kCtxVerb,   kNone)                      \
-    X(EndStreamOutput,          MGPXfbAccounting,           kCtxVerb,   kNone)                      \
-    X(PauseStreamOutput,        MGPStreamOutputControl,     kCtxVerb,   kNone)                      \
-    X(ResumeStreamOutput,       MGPStreamOutputControl,     kCtxVerb,   kNone)                      \
-    X(Flush,                    MGPFlush,                   kCtxVerb,   kNone)                      \
-    X(Present,                  MGPPresent,                 kCtxVerb,   kNone)                      \
-    X(SetSwapInterval,          MGPSwapInterval,            kCtxVerb,   kOptional)                  \
+    X(Blit,                     MGPBlit,                    kCtxVerb,   kNone,                      kWaitNone)        \
+    X(Clear,                    MGPClear,                   kCtxVerb,   kNone,                      kWaitNone)        \
+    X(ReadPixels,               MGPReadbackInfo,            kCtxVerb,   kReplySlot,                 kWaitReply)       \
+    X(DrawVbo,                  MGPDrawInfo,                kCtxVerb,   kHostSpan|kVarTail,         kWaitNone)        \
+    X(LaunchGrid,               MGPGridInfo,                kCtxVerb,   kNone,                      kWaitNone)        \
+    X(MemoryBarrier,            MGPMemoryBarrier,           kCtxVerb,   kNone,                      kWaitNone)        \
+    X(BeginStreamOutput,        MGPStreamOutputBegin,       kCtxVerb,   kNone,                      kWaitApplied)     \
+    X(EndStreamOutput,          MGPXfbAccounting,           kCtxVerb,   kNone,                      kWaitApplied)     \
+    X(PauseStreamOutput,        MGPStreamOutputControl,     kCtxVerb,   kNone,                      kWaitApplied)     \
+    X(ResumeStreamOutput,       MGPStreamOutputControl,     kCtxVerb,   kNone,                      kWaitApplied)     \
+    X(Flush,                    MGPFlush,                   kCtxVerb,   kNone,                      kWaitNone)        \
+    X(Present,                  MGPPresent,                 kCtxVerb,   kNone,                      kWaitPresent)     \
+    X(SetSwapInterval,          MGPSwapInterval,            kCtxVerb,   kOptional,                  kWaitNone)        \
     /* ---- APPENDED. Opcodes are positional, so a late arrival goes at the END, never into ---- */ \
     /* ---- its group: three live GLFunctionsTable entries the catalogue had no carrier for. ---- */ \
     /* glGetInteger64v(GL_TIMESTAMP) - GetGpuTimestampNs, a synchronous server answer, which  */    \
     /* the reply slot carries. The query namespace is the context's (plan 4.3).                */    \
-    X(QueryTimestamp,           MGPTimestampRequest,        kCtxQuery,  kReplySlot)                 \
+    X(QueryTimestamp,           MGPTimestampRequest,        kCtxQuery,  kReplySlot,                 kWaitReply)       \
     /* glQueryCounter(GL_TIMESTAMP) - QueryCounterTimestamp, a one-shot stamp into a query    */    \
     /* object, NOT a begin/end pair. Kind carries GL_TIMESTAMP.                                */    \
-    X(QueryCounter,             MGPQueryDesc,               kCtxQuery,  kNone)                      \
+    X(QueryCounter,             MGPQueryDesc,               kCtxQuery,  kNone,                      kWaitNone)        \
     /* glWaitSync - WaitSync, the GPU-side wait, distinct from FenceWait's client-side one.   */    \
     /* TimeoutNs is GL_TIMEOUT_IGNORED by contract.                                            */    \
-    X(FenceWaitServer,          MGPFenceWait,               kScreen,    kNone)                      \
+    X(FenceWaitServer,          MGPFenceWait,               kScreen,    kNone,                      kWaitNone)        \
     /* ---- APPENDED BY P5b (MG_Remote/CONTRACT-P5B.md): five GLFunctionsTable verbs the      ---- */ \
     /* ---- class-C census measured as first blockers and that no existing row could carry.   ---- */ \
     /* ---- Opcodes 72..76. Every one reaches WireVerbSink, none has an MGPipeApply* entry    ---- */ \
@@ -232,18 +271,18 @@
     /* ---- directly, as today. The payload comments in MGPipeTypes.h say why each exists.   ---- */ \
     /* glBindImageTexture - Espryt syncs the unit's binding to the driver AT THE CALL           */    \
     /* (SyncImageTextureBinding), so the validate-time set_shader_images cannot stand in.       */    \
-    X(BindShaderImage,          MGPImageBind,               kCtxVerb,   kNone)                      \
+    X(BindShaderImage,          MGPImageBind,               kCtxVerb,   kNone,                      kWaitNone)        \
     /* glPatchParameteri(GL_PATCH_VERTICES) - Espryt pushes glPatchParameteri at the call.      */    \
-    X(PatchParameter,           MGPPatchParameter,          kCtxVerb,   kNone)                      \
+    X(PatchParameter,           MGPPatchParameter,          kCtxVerb,   kNone,                      kWaitNone)        \
     /* glBindTransformFeedback - the driver object rebind and the capture-binding shadow       */    \
     /* invalidation happen at the call; the XFB namespace has no wire lifetime.                 */    \
-    X(BindStreamOutput,         MGPStreamOutputBind,        kCtxVerb,   kNone)                      \
+    X(BindStreamOutput,         MGPStreamOutputBind,        kCtxVerb,   kNone,                      kWaitApplied)     \
     /* glShaderStorageBlockBinding - the block NAME is the coordinate all three sides share    */    \
     /* (BackendObject.h), and a name is bytes: kHasBlob, staged whole in SEG_STAGE, NUL included. */  \
-    X(SetStorageBlockBinding,   MGPStorageBlockBinding,     kCtxVerb,   kHasBlob)                   \
+    X(SetStorageBlockBinding,   MGPStorageBlockBinding,     kCtxVerb,   kHasBlob,                   kWaitApplied)     \
     /* glCopyTexImage2D / glCopyTexSubImage2D - a copy whose SOURCE is the read framebuffer,   */    \
     /* which resource_copy_region (resource -> resource) cannot express.                        */    \
-    X(CopyFramebufferToTexture, MGPCopyFromFramebuffer,     kCtxVerb,   kNone)                      \
+    X(CopyFramebufferToTexture, MGPCopyFromFramebuffer,     kCtxVerb,   kNone,                      kWaitApplied)     \
     /* ---- APPENDED BY P5c (MG_Remote/CONTRACT-P5C.md §5): the two control records. Opcodes ---- */ \
     /* ---- 77..78. Neither has an MGPipeApply* entry point and neither gains one: both reach  ---- */ \
     /* ---- WireVerbSink, and under monolith neither has a producer - the reset is a direct    ---- */ \
@@ -255,14 +294,14 @@
     /* against every verb that follows. ContextSerial is the client context's make-current     */    \
     /* serial at the edge - ASSERTED against the session's, never dispatched on (P5c: one      */    \
     /* context per session).                                                                   */    \
-    X(ApplierReset,             MGPApplierReset,            kScreen,    kNone)                      \
+    X(ApplierReset,             MGPApplierReset,            kScreen,    kNone,                      kWaitApplied)     \
     /* A frontend state object died. The record carries the HANDLE (and kind) the client's own */    \
     /* allocator resolves for it - nothing is emitted for an object that never crossed (the    */    \
     /* server never saw it, so there is no twin to kill) - and the sink releases the kind's    */    \
     /* twin table by handle. The framebuffer family's FIRST wire delete opcode: its death used */    \
     /* to hop to the apply thread through a stack-struct mailbox and a lifetime-id probe of    */    \
     /* the client's allocator, both rule-E surfaces.                                           */    \
-    X(ObjectDeath,              MGPHandleOnly,              kCtxObject, kNone)                      \
+    X(ObjectDeath,              MGPHandleOnly,              kCtxObject, kNone,                      kWaitNone)        \
     /* ---- P5c rv (CONTRACT-P5C.md §5.3), opcode 79: the residual-value record. One POD that  ---- */ \
     /* ---- carries every value-class BARRIER_PULLED field left after the set_* catalogue: the  ---- */ \
     /* ---- two texture-unit counters, the 15 per-target touched-buffer-binding counts and the  ---- */ \
@@ -270,7 +309,20 @@
     /* ---- (whole-record hash suppression, D11's shape), ACTIVE ONLY with an active transport  ---- */ \
     /* ---- (PipeFill.cpp gates both the emission and the residual-fill skip on it): under       ---- */ \
     /* ---- monolith there is no producer and the fields keep being pulled, byte for byte (G1). ---- */ \
-    X(SetContextValues,         MGPContextValues,           kCtxState,  kNone)
+    X(SetContextValues,         MGPContextValues,           kCtxState,  kNone,                      kWaitNone)        \
+    /* ---- P5e (MG_Remote/CONTRACT-P5E.md §1), opcode 80: the post-link binding record. ------ */ \
+    /* ---- THREE POST-LINK MUTABLE REFLECTION FIELDS LIVE INSIDE THE FRONTEND'S LinkArtifacts  ---- */ \
+    /* ---- and therefore inside the archive create_shader_state carries - but glUniformBlock-  ---- */ \
+    /* ---- Binding, glUniform1i on a sampler and glShaderStorageBlockBinding all move one      ---- */ \
+    /* ---- AFTER the link. So an archive snapshot alone answers a draw with the bindings the   ---- */ \
+    /* ---- program was LINKED with rather than the ones it is BOUND with, and the server's     ---- */ \
+    /* ---- twin rebuilds against the wrong uniform-block points. Three tails, three index      ---- */ \
+    /* ---- spaces (dense block index, sparse uniform location, and a NAME span for the storage ---- */ \
+    /* ---- override map, which is name-keyed by design). Emitted BEFORE create_shader_state at ---- */ \
+    /* ---- the same validate point: a rebuild inside the verb must already see the bindings.   ---- */ \
+    /* ---- kWaitNone: nothing about it is read back, and under run-ahead a kCtxState row that  ---- */ \
+    /* ---- names only handles and values is exactly what rule F admits.                        ---- */ \
+    X(SetProgramBindings,       MGPProgramBindings,         kCtxState,  kVarTail|kHostSpan,         kWaitNone)
 // clang-format on
 
 // Explicitly NOT migrated (plan 4.4.6 / appendix A "explicit deletions"):

@@ -136,12 +136,15 @@ def read(path):
 
 
 class Call(object):
-    def __init__(self, index, name, payload, cls, flags):
+    def __init__(self, index, name, payload, cls, flags, wait="kWaitNone"):
         self.Index = index  # 1-based; this is the wire opcode
         self.Name = name
         self.Payload = payload
         self.Class = cls
         self.Flags = flags
+        # P5e: PipeCalls.def's fifth column. Defaulted so the self-test's canned Calls -
+        # which exercise the FLAG gates and say nothing about waiting - stay one line.
+        self.Wait = wait
 
     @property
     def IsScreen(self):
@@ -176,7 +179,8 @@ class Call(object):
         return ", ".join(params), ", ".join(args)
 
 
-CALL_RE = re.compile(r"^\s*X\(\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*,\s*([\w|]+?)\s*\)\s*\\?\s*$")
+CALL_RE = re.compile(r"^\s*X\(\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*,\s*([\w|]+?)\s*,"
+                     r"\s*(\w+)\s*\)\s*\\?\s*$")
 
 
 def parse_calls():
@@ -195,7 +199,7 @@ def parse_calls():
         match = CALL_RE.match(line)
         if match:
             calls.append(Call(len(calls) + 1, match.group(1), match.group(2), match.group(3),
-                              match.group(4).split("|")))
+                              match.group(4).split("|"), match.group(5)))
         # The macro ends at the first line without a continuation backslash.
         if not line.rstrip().endswith("\\"):
             inside = False
@@ -564,6 +568,60 @@ def check_call_flags_are_known(calls):
                      % (call.Name, "|".join(f for f in call.Flags if f != "kNone")))
 
 
+WAIT_ENUM_RE = re.compile(r"enum\s+MGPipeWaitClass\s*:\s*Uint8\s*\{(.*?)\}\s*;", re.S)
+WAIT_MEMBER_RE = re.compile(r"^\s*(kWait\w+)\s*(?:=\s*\d+\s*)?,", re.M)
+
+
+def parse_wait_classes():
+    """The MGPipeWaitClass enumerators, READ OUT OF MGPipe.h, for parse_call_flags' reason:
+    this list is what the generated kMGPipeWaitClasses[] table spells into C++, and a copy
+    here would go stale in exactly the case that matters. kWaitClassCount is the terminator and
+    is NOT a class a row may carry - a row that named it would generate a table entry the
+    lookup uses to mean 'this opcode never came from the catalogue'."""
+    text = read(os.path.join(PIPE_DIR, "MGPipe.h"))
+    body = WAIT_ENUM_RE.search(text)
+    if not body:
+        sys.exit("MGPipe.h: enum MGPipeWaitClass : Uint8 is missing or has changed shape")
+    names = WAIT_MEMBER_RE.findall(body.group(1))
+    if "kWaitClassCount" not in names:
+        sys.exit("MGPipe.h: enum MGPipeWaitClass has no kWaitClassCount terminator")
+    classes = [n for n in names if n != "kWaitClassCount"]
+    if not classes:
+        sys.exit("MGPipe.h: enum MGPipeWaitClass declares no wait classes")
+    return classes
+
+
+KNOWN_WAIT_CLASSES = tuple(parse_wait_classes())
+
+
+def check_wait_classes_are_known(calls):
+    """P5e (CONTRACT-P5E.md §2.2). Two gates over PipeCalls.def's fifth column, both in --check
+    as well, because the column is what the client's wait rule and the sink's barriered
+    predicate are BOTH computed from - a typo here is a wrong wait on a live wire rather than a
+    compile error in one consumer.
+
+      1. The token must be an MGPipeWaitClass enumerator, and never the kWaitClassCount
+         terminator, which the generated lookup uses for "not from this catalogue".
+      2. kReplySlot and kWaitReply must agree, BOTH WAYS. A reply-slot row that did not wait
+         would be a waiter that hangs - the client would run on and read a slot nobody had
+         posted into yet; a waiting row with no slot would block on an answer nobody posts.
+         This is the same class of defect R-13.4 found between the flag column and the payloads,
+         and it is stated here for the same reason: nothing else has both facts in one place."""
+    for call in calls:
+        if call.Wait not in KNOWN_WAIT_CLASSES:
+            sys.exit("PipeCalls.def: %s carries wait class %s, which is not an MGPipeWaitClass "
+                     "enumerator (%s)" % (call.Name, call.Wait, ", ".join(KNOWN_WAIT_CLASSES)))
+        owns_slot = "kReplySlot" in call.Flags
+        waits_reply = call.Wait == "kWaitReply"
+        if owns_slot and not waits_reply:
+            sys.exit("PipeCalls.def: %s owns a reply slot but its wait class is %s; a "
+                     "kReplySlot row must be kWaitReply or the client reads a slot nobody "
+                     "posted into" % (call.Name, call.Wait))
+        if waits_reply and not owns_slot:
+            sys.exit("PipeCalls.def: %s is kWaitReply but carries no kReplySlot; it would "
+                     "block on an answer nobody posts" % call.Name)
+
+
 def parse_coverage():
     text = read(os.path.join(PIPE_DIR, "Coverage.def"))
     accessors = []
@@ -799,6 +857,48 @@ inline constexpr MGPipeCallClass MGPipeCallClassFor(MGPWireOp op) {
                    ? static_cast<MGPipeCallClass>(kMGPipeCallClasses[index])
                    : kCallClassCount;
 }
+
+// P5e (MG_Remote/CONTRACT-P5E.md 2.2): THE WAIT CLASS OF EVERY OPCODE, indexed the same way.
+// Index 0 is kWaitClassCount - never a real class - for the flags table's reason: the one
+// caller that can pass an opcode this catalogue never produced is a decoder holding bytes off
+// a stream, and it must reach its own Fatal{ProtocolCorruption} rather than a wait decision.
+//
+// This is the STATIC HALF of MGPipeBarriered(op, payload, applierState), the predicate the emit
+// table and the sink compute identically. The other half is payload-derived (an open
+// transform-feedback span, a draw carrying client vertex arrays) and lives in that function,
+// because it depends on state a table indexed by opcode cannot see.
+inline constexpr Uint8 kMGPipeWaitClasses[static_cast<SizeT>(MGPWireOp::kOpCount)] = {
+    /*  0                         */ static_cast<Uint8>(kWaitClassCount),
+""")
+    for call in calls:
+        out.append("    /* %2d %-24s*/ static_cast<Uint8>(%s)," % (call.Index, call.Name, call.Wait))
+    out.append("};")
+    out.append("static_assert(sizeof(kMGPipeWaitClasses) / sizeof(kMGPipeWaitClasses[0]) ==")
+    out.append("                  static_cast<SizeT>(MGPWireOp::kOpCount),")
+    out.append("              \"the wait-class table and the opcode space disagree\");")
+    out.append("""
+inline constexpr MGPipeWaitClass MGPipeWaitClassFor(MGPWireOp op) {
+    const SizeT index = static_cast<SizeT>(op);
+    return index < static_cast<SizeT>(MGPWireOp::kOpCount)
+                   ? static_cast<MGPipeWaitClass>(kMGPipeWaitClasses[index])
+                   : kWaitClassCount;
+}
+
+// THE COLUMN'S OWN INVARIANT, stated in C++ as well as in the generator: a reply-slot row
+// waits for its reply and a waiting row owns a slot. gen_pipe.py refuses a catalogue where the
+// two disagree, and this is the same statement where a reader of the generated table will look
+// for it - a kReplySlot row that did not wait would run on and read a slot nobody had posted
+// into, and a kWaitReply row with no slot would block on an answer nobody posts.
+static_assert(MGPipeWaitClassFor(MGPWireOp::kInvalid) == kWaitClassCount,
+              "opcode 0 is not a call and has no wait class");
+static_assert(MGPipeWaitClassFor(MGPWireOp::Present) == kWaitPresent,
+              "present is paced by the credit, not by a wait after the publish");
+static_assert(MGPipeWaitClassFor(MGPWireOp::DrawVbo) == kWaitNone,
+              "the steady draw path is what P5e exists to stop waiting on");
+static_assert(MGPipeWaitClassFor(MGPWireOp::ApplierReset) == kWaitApplied,
+              "a make-current is a fresh server and every verb after it must see the reset");
+static_assert(MGPipeWaitClassFor(MGPWireOp::ReadPixels) == kWaitReply,
+              "a readback's answer is not derivable (R-5)");
 
 // Spot checks the generator states about its own output, so that a catalogue edit that
 // silently drops a flag is a build break here and not a wrong decode six packages away.
@@ -1515,6 +1615,23 @@ def self_test(accessors):
                      "combines kNone with",
                      lambda: check_call_flags_are_known([flag_kNone])))
 
+    # P5e's two gates over the fifth column (CONTRACT-P5E.md §2.2). The column decides whether
+    # a live client waits after publishing, so a typo or a disagreement with the flag column is
+    # a wrong wait on the wire rather than a compile error in one consumer - which is exactly
+    # the shape R-13.4 found between the flag column and the payloads.
+    wait_typo = Call(1, "Canned", "MGPHandleOnly", "kScreen", ["kNone"], "kWaitApplyed")
+    wait_slot_no_wait = Call(1, "Canned", "MGPHandleOnly", "kScreen", ["kReplySlot"], "kWaitNone")
+    wait_no_slot = Call(1, "Canned", "MGPHandleOnly", "kScreen", ["kNone"], "kWaitReply")
+    controls.append(("wait class that is not an MGPipeWaitClass enumerator",
+                     "which is not an MGPipeWaitClass enumerator",
+                     lambda: check_wait_classes_are_known([wait_typo])))
+    controls.append(("a kReplySlot row that does not wait for its reply",
+                     "owns a reply slot but its wait class is",
+                     lambda: check_wait_classes_are_known([wait_slot_no_wait])))
+    controls.append(("a kWaitReply row with no reply slot",
+                     "but carries no kReplySlot",
+                     lambda: check_wait_classes_are_known([wait_no_slot])))
+
     # R-16 meta-control (codex review finding 9; verified by execution in
     # p5-results/wave1-codex-verify.md §9). The exact perturbation there replaced the
     # flag-typo control's callback with `sys.exit("unrelated parser failure")` and,
@@ -1540,8 +1657,9 @@ def self_test(accessors):
     # The positive control: the canned struct's exact list passes, and the parser sees the
     # padding member as padding and the function as not a member.
     check_field_lists_cover_struct_members({"Canned": ["A", "B", "C"]}, ["Canned"], [canned_struct])
-    # ... and the real catalogue's real flags pass the same gate.
+    # ... and the real catalogue's real flags and wait classes pass the same gates.
     check_call_flags_are_known(calls_for_control)
+    check_wait_classes_are_known(calls_for_control)
     if trips == 0:
         sys.exit("gen_pipe: self-test: no negative control tripped - the gates are not checking anything")
     if trips != len(controls):
@@ -1561,6 +1679,7 @@ def main():
     calls = parse_calls()
     payloads = parse_verify_payloads()
     check_call_flags_are_known(calls)
+    check_wait_classes_are_known(calls)
     check_call_payloads_have_field_lists(calls, payloads)
     check_field_lists_cover_struct_members(parse_field_lists(), payloads)
     accessors, deltas, sticky, emitted = parse_coverage()

@@ -149,7 +149,8 @@ enum class MGPWireOp : Uint16 {
     ApplierReset = 77,
     ObjectDeath = 78,
     SetContextValues = 79,
-    kOpCount = 80,
+    SetProgramBindings = 80,
+    kOpCount = 81,
 };
 
 // THE FLAGS, EXPORTED ONCE, INDEXED BY OPCODE (P5 R-13.4). MGPWireRecHeader::Flags is
@@ -250,6 +251,7 @@ inline constexpr Uint32 kMGPipeCallFlags[static_cast<SizeT>(MGPWireOp::kOpCount)
     /* 77 ApplierReset            */ static_cast<Uint32>(kNone),
     /* 78 ObjectDeath             */ static_cast<Uint32>(kNone),
     /* 79 SetContextValues        */ static_cast<Uint32>(kNone),
+    /* 80 SetProgramBindings      */ static_cast<Uint32>(kVarTail | kHostSpan),
 };
 static_assert(sizeof(kMGPipeCallFlags) / sizeof(kMGPipeCallFlags[0]) ==
                   static_cast<SizeT>(MGPWireOp::kOpCount),
@@ -349,6 +351,7 @@ inline constexpr Uint8 kMGPipeCallClasses[static_cast<SizeT>(MGPWireOp::kOpCount
     /* 77 ApplierReset            */ static_cast<Uint8>(kScreen),
     /* 78 ObjectDeath             */ static_cast<Uint8>(kCtxObject),
     /* 79 SetContextValues        */ static_cast<Uint8>(kCtxState),
+    /* 80 SetProgramBindings      */ static_cast<Uint8>(kCtxState),
 };
 static_assert(sizeof(kMGPipeCallClasses) / sizeof(kMGPipeCallClasses[0]) ==
                   static_cast<SizeT>(MGPWireOp::kOpCount),
@@ -360,6 +363,126 @@ inline constexpr MGPipeCallClass MGPipeCallClassFor(MGPWireOp op) {
                    ? static_cast<MGPipeCallClass>(kMGPipeCallClasses[index])
                    : kCallClassCount;
 }
+
+// P5e (MG_Remote/CONTRACT-P5E.md 2.2): THE WAIT CLASS OF EVERY OPCODE, indexed the same way.
+// Index 0 is kWaitClassCount - never a real class - for the flags table's reason: the one
+// caller that can pass an opcode this catalogue never produced is a decoder holding bytes off
+// a stream, and it must reach its own Fatal{ProtocolCorruption} rather than a wait decision.
+//
+// This is the STATIC HALF of MGPipeBarriered(op, payload, applierState), the predicate the emit
+// table and the sink compute identically. The other half is payload-derived (an open
+// transform-feedback span, a draw carrying client vertex arrays) and lives in that function,
+// because it depends on state a table indexed by opcode cannot see.
+inline constexpr Uint8 kMGPipeWaitClasses[static_cast<SizeT>(MGPWireOp::kOpCount)] = {
+    /*  0                         */ static_cast<Uint8>(kWaitClassCount),
+
+    /*  1 GetCaps                 */ static_cast<Uint8>(kWaitReply),
+    /*  2 ResourceCreate          */ static_cast<Uint8>(kWaitReply),
+    /*  3 ResourceRespecify       */ static_cast<Uint8>(kWaitReply),
+    /*  4 ResourceDestroy         */ static_cast<Uint8>(kWaitNone),
+    /*  5 MapPersistent           */ static_cast<Uint8>(kWaitReply),
+    /*  6 UnmapPersistent         */ static_cast<Uint8>(kWaitNone),
+    /*  7 FenceCreate             */ static_cast<Uint8>(kWaitNone),
+    /*  8 FenceStatus             */ static_cast<Uint8>(kWaitReply),
+    /*  9 FenceWait               */ static_cast<Uint8>(kWaitReply),
+    /* 10 FenceDestroy            */ static_cast<Uint8>(kWaitNone),
+    /* 11 QueryCreate             */ static_cast<Uint8>(kWaitNone),
+    /* 12 QueryBegin              */ static_cast<Uint8>(kWaitNone),
+    /* 13 QueryEnd                */ static_cast<Uint8>(kWaitNone),
+    /* 14 QueryAvailable          */ static_cast<Uint8>(kWaitReply),
+    /* 15 QueryResult             */ static_cast<Uint8>(kWaitReply),
+    /* 16 QueryDestroy            */ static_cast<Uint8>(kWaitNone),
+    /* 17 CreateRenderState       */ static_cast<Uint8>(kWaitNone),
+    /* 18 BindRenderState         */ static_cast<Uint8>(kWaitNone),
+    /* 19 DeleteRenderState       */ static_cast<Uint8>(kWaitNone),
+    /* 20 CreateVertexElements    */ static_cast<Uint8>(kWaitNone),
+    /* 21 BindVertexElements      */ static_cast<Uint8>(kWaitNone),
+    /* 22 DeleteVertexElements    */ static_cast<Uint8>(kWaitNone),
+    /* 23 CreateSamplerState      */ static_cast<Uint8>(kWaitNone),
+    /* 24 DeleteSamplerState      */ static_cast<Uint8>(kWaitNone),
+    /* 25 CreateSamplerView       */ static_cast<Uint8>(kWaitNone),
+    /* 26 DeleteSamplerView       */ static_cast<Uint8>(kWaitNone),
+    /* 27 CreateShaderState       */ static_cast<Uint8>(kWaitNone),
+    /* 28 BindShaderState         */ static_cast<Uint8>(kWaitNone),
+    /* 29 DeleteShaderState       */ static_cast<Uint8>(kWaitNone),
+    /* 30 SetDynamicState         */ static_cast<Uint8>(kWaitNone),
+    /* 31 SetFramebufferState     */ static_cast<Uint8>(kWaitNone),
+    /* 32 SetVertexBuffers        */ static_cast<Uint8>(kWaitNone),
+    /* 33 SetIndexBuffer          */ static_cast<Uint8>(kWaitNone),
+    /* 34 SetIndirectBuffers      */ static_cast<Uint8>(kWaitNone),
+    /* 35 SetSamplerViews         */ static_cast<Uint8>(kWaitNone),
+    /* 36 BindSamplerStates       */ static_cast<Uint8>(kWaitNone),
+    /* 37 SetShaderImages         */ static_cast<Uint8>(kWaitNone),
+    /* 38 SetShaderBuffers        */ static_cast<Uint8>(kWaitNone),
+    /* 39 SetStreamOutputTargets  */ static_cast<Uint8>(kWaitNone),
+    /* 40 SetGlobalConstants      */ static_cast<Uint8>(kWaitNone),
+    /* 41 SetVertexAttribDefaults */ static_cast<Uint8>(kWaitNone),
+    /* 42 SetPixelPackState       */ static_cast<Uint8>(kWaitNone),
+    /* 43 SetPatchState           */ static_cast<Uint8>(kWaitNone),
+    /* 44 SetDrawProgram          */ static_cast<Uint8>(kWaitNone),
+    /* 45 SetDispatchProgram      */ static_cast<Uint8>(kWaitNone),
+    /* 46 SetResidualValueState   */ static_cast<Uint8>(kWaitNone),
+    /* 47 SetTextureParams        */ static_cast<Uint8>(kWaitReply),
+    /* 48 ResourceSubData         */ static_cast<Uint8>(kWaitReply),
+    /* 49 BufferSubDataResident   */ static_cast<Uint8>(kWaitNone),
+    /* 50 ResourceSubDataComplete */ static_cast<Uint8>(kWaitNone),
+    /* 51 ResourceFlushRange      */ static_cast<Uint8>(kWaitNone),
+    /* 52 ResourceReadback        */ static_cast<Uint8>(kWaitReply),
+    /* 53 ResourceCopyRegion      */ static_cast<Uint8>(kWaitNone),
+    /* 54 GenerateMipmap          */ static_cast<Uint8>(kWaitApplied),
+    /* 55 GetTextureImage         */ static_cast<Uint8>(kWaitReply),
+    /* 56 Blit                    */ static_cast<Uint8>(kWaitNone),
+    /* 57 Clear                   */ static_cast<Uint8>(kWaitNone),
+    /* 58 ReadPixels              */ static_cast<Uint8>(kWaitReply),
+    /* 59 DrawVbo                 */ static_cast<Uint8>(kWaitNone),
+    /* 60 LaunchGrid              */ static_cast<Uint8>(kWaitNone),
+    /* 61 MemoryBarrier           */ static_cast<Uint8>(kWaitNone),
+    /* 62 BeginStreamOutput       */ static_cast<Uint8>(kWaitApplied),
+    /* 63 EndStreamOutput         */ static_cast<Uint8>(kWaitApplied),
+    /* 64 PauseStreamOutput       */ static_cast<Uint8>(kWaitApplied),
+    /* 65 ResumeStreamOutput      */ static_cast<Uint8>(kWaitApplied),
+    /* 66 Flush                   */ static_cast<Uint8>(kWaitNone),
+    /* 67 Present                 */ static_cast<Uint8>(kWaitPresent),
+    /* 68 SetSwapInterval         */ static_cast<Uint8>(kWaitNone),
+    /* 69 QueryTimestamp          */ static_cast<Uint8>(kWaitReply),
+    /* 70 QueryCounter            */ static_cast<Uint8>(kWaitNone),
+    /* 71 FenceWaitServer         */ static_cast<Uint8>(kWaitNone),
+    /* 72 BindShaderImage         */ static_cast<Uint8>(kWaitNone),
+    /* 73 PatchParameter          */ static_cast<Uint8>(kWaitNone),
+    /* 74 BindStreamOutput        */ static_cast<Uint8>(kWaitApplied),
+    /* 75 SetStorageBlockBinding  */ static_cast<Uint8>(kWaitApplied),
+    /* 76 CopyFramebufferToTexture*/ static_cast<Uint8>(kWaitApplied),
+    /* 77 ApplierReset            */ static_cast<Uint8>(kWaitApplied),
+    /* 78 ObjectDeath             */ static_cast<Uint8>(kWaitNone),
+    /* 79 SetContextValues        */ static_cast<Uint8>(kWaitNone),
+    /* 80 SetProgramBindings      */ static_cast<Uint8>(kWaitNone),
+};
+static_assert(sizeof(kMGPipeWaitClasses) / sizeof(kMGPipeWaitClasses[0]) ==
+                  static_cast<SizeT>(MGPWireOp::kOpCount),
+              "the wait-class table and the opcode space disagree");
+
+inline constexpr MGPipeWaitClass MGPipeWaitClassFor(MGPWireOp op) {
+    const SizeT index = static_cast<SizeT>(op);
+    return index < static_cast<SizeT>(MGPWireOp::kOpCount)
+                   ? static_cast<MGPipeWaitClass>(kMGPipeWaitClasses[index])
+                   : kWaitClassCount;
+}
+
+// THE COLUMN'S OWN INVARIANT, stated in C++ as well as in the generator: a reply-slot row
+// waits for its reply and a waiting row owns a slot. gen_pipe.py refuses a catalogue where the
+// two disagree, and this is the same statement where a reader of the generated table will look
+// for it - a kReplySlot row that did not wait would run on and read a slot nobody had posted
+// into, and a kWaitReply row with no slot would block on an answer nobody posts.
+static_assert(MGPipeWaitClassFor(MGPWireOp::kInvalid) == kWaitClassCount,
+              "opcode 0 is not a call and has no wait class");
+static_assert(MGPipeWaitClassFor(MGPWireOp::Present) == kWaitPresent,
+              "present is paced by the credit, not by a wait after the publish");
+static_assert(MGPipeWaitClassFor(MGPWireOp::DrawVbo) == kWaitNone,
+              "the steady draw path is what P5e exists to stop waiting on");
+static_assert(MGPipeWaitClassFor(MGPWireOp::ApplierReset) == kWaitApplied,
+              "a make-current is a fresh server and every verb after it must see the reset");
+static_assert(MGPipeWaitClassFor(MGPWireOp::ReadPixels) == kWaitReply,
+              "a readback's answer is not derivable (R-5)");
 
 // Spot checks the generator states about its own output, so that a catalogue edit that
 // silently drops a flag is a build break here and not a wrong decode six packages away.
@@ -1031,6 +1154,14 @@ static_assert(sizeof(MGPWireRec_SetContextValues) ==
                   ((sizeof(MGPWireRecHeader) + sizeof(MGPContextValues) + 7u) & ~SizeT(7u)),
               "MGPWireRec_SetContextValues gained padding; the wire format moved");
 
+struct alignas(8) MGPWireRec_SetProgramBindings {
+    MGPWireRecHeader Header;
+    MGPProgramBindings Payload;
+};
+static_assert(sizeof(MGPWireRec_SetProgramBindings) ==
+                  ((sizeof(MGPWireRecHeader) + sizeof(MGPProgramBindings) + 7u) & ~SizeT(7u)),
+              "MGPWireRec_SetProgramBindings gained padding; the wire format moved");
+
 [[noreturn]] inline void MGPipeWireProtocolFatal(const char* call, Uint64 size, Uint64 remaining) {
     MGLOG_F("MGPipe: protocol corruption applying %s: size=%llu remaining=%llu", call,
             static_cast<unsigned long long>(size), static_cast<unsigned long long>(remaining));
@@ -1316,6 +1447,9 @@ inline Bool MGPipeApplyWireRecord(MGPWireOp op, const void* record, Uint64 size,
         break;
     case MGPWireOp::SetContextValues:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetContextValues, "SetContextValues");
+        break;
+    case MGPWireOp::SetProgramBindings:
+        MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetProgramBindings, "SetProgramBindings");
         break;
     case MGPWireOp::kInvalid:
     case MGPWireOp::kOpCount:
