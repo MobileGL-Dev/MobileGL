@@ -802,6 +802,14 @@ namespace MobileGL::MG_Remote::Client {
         m_serverTransport.reset();
         m_transport = nullptr;
         m_started = false;
+        // P5e (ra, §1): the LATCH GOES DOWN WITH THE SESSION. It is "what the first caps
+        // adoption of THIS session said", and a session that starts again - the same singleton,
+        // a second Start - must take it again from that session's own first snapshot rather
+        // than inherit a verdict about a server that is gone. The present serial goes with it
+        // for the same reason: the credit's id space belongs to the session that paces on it.
+        m_runAheadArmed = false;
+        m_runAheadLatched = false;
+        m_presentsSent = 0;
         if (g_active == this) {
             g_active = nullptr;
         }
