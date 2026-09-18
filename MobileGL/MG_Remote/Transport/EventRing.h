@@ -189,9 +189,25 @@ namespace MobileGL::MG_Remote::Transport {
         void Drained() {
             m_consumer.PublishRetired();
             if (m_cmdControl != nullptr) {
-                m_cmdControl->eventRingFull.store(0, std::memory_order_release);
+                // P5e (ra, CONTRACT-P5E §2.6): CLEARING THE LATCH IS ONLY HALF OF IT. Under
+                // flow control the server is PARKED on this flag - either inside a producer
+                // that could not Reserve, or at a record boundary refusing to start the next
+                // record - and a cleared flag with no bell is a wakeup lost exactly the way
+                // the forward direction's publish-then-ring order exists to prevent. The
+                // exchange is what makes the ring one-shot: only the drain that actually found
+                // the flag up rings, so a steady stream of drains costs one relaxed RMW.
+                const bool wasFull =
+                    m_cmdControl->eventRingFull.exchange(0, std::memory_order_acq_rel) != 0;
+                if (wasFull && m_serverBell != nullptr) {
+                    NotifyIfParked(*m_serverBell, m_cmdControl->consumerParked);
+                }
             }
         }
+
+        // The bell the SERVER parks on, lent by the session so that Drained() can ring it.
+        // Null in every fixture that consumes a ring without a server behind it, and the
+        // ring's clear then behaves exactly as it did before P5e.
+        void SetServerDoorbell(Doorbell* bell) { m_serverBell = bell; }
 
         // Byte offset of `payload` inside SEG_EVENT, which is what an
         // OnBufferWriteback MGPBlobRef must carry (Seg = kSegEvent, Offset =
@@ -217,6 +233,8 @@ namespace MobileGL::MG_Remote::Transport {
         RingControl* m_cmdControl = nullptr;
         RingConsumer m_consumer;
         const std::uint8_t* m_segmentBase = nullptr;
+        // P5e (ra): the server's bell, rung by Drained() when it cleared a full latch.
+        Doorbell* m_serverBell = nullptr;
     };
 
 } // namespace MobileGL::MG_Remote::Transport

@@ -501,6 +501,40 @@ namespace MobileGL::MG_Remote::Transport {
                     timeoutMs);
     }
 
+    // P5e (ra), CONTRACT-P5E §2.6. Two predicates, one OR each, and the caller decides which
+    // of the two happened by reading the watermark it actually cares about.
+    bool SessionProducer::EventRingIsFull() const {
+        return m_control != nullptr && m_control->eventRingFull.load(std::memory_order_acquire) != 0;
+    }
+
+    SessionWait SessionProducer::WaitForAppliedOrEventBacklog(std::uint64_t seq,
+                                                              std::uint32_t timeoutMs) {
+        if (!Valid()) {
+            return SessionWait::TimedOut;
+        }
+        RingControl* control = m_control;
+        return Park(
+            [control, seq] {
+                return Watermark::Reached(control->appliedSeq, seq) ||
+                       control->eventRingFull.load(std::memory_order_acquire) != 0;
+            },
+            timeoutMs);
+    }
+
+    SessionWait SessionProducer::WaitForPresentAckOrEventBacklog(std::uint64_t serial,
+                                                                 std::uint32_t timeoutMs) {
+        if (!Valid()) {
+            return SessionWait::TimedOut;
+        }
+        RingControl* control = m_control;
+        return Park(
+            [control, serial] {
+                return Watermark::Reached(control->presentAckSerial, serial) ||
+                       control->eventRingFull.load(std::memory_order_acquire) != 0;
+            },
+            timeoutMs);
+    }
+
     SessionWait SessionProducer::WaitForCmdSpace(std::uint64_t bytes, std::uint32_t timeoutMs) {
         if (!Valid()) {
             return SessionWait::TimedOut;
