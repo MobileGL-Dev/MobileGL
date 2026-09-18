@@ -2722,6 +2722,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Almost every program (every Minecraft draw) leaves it at zero, which is what keeps the
         // draw-path staleness check below at one integer test.
         static Uint g_imageUnitHighWaterMark = 0;
+
+#if MOBILEGL_PIPE_PUSH && MOBILEGL_BUILD_DISAGGREGATED
+        // P5e (fb): the eager glBindImageTexture funnel's HANDLE ARM, and it binds nothing.
+        //
+        // `bind_shader_image` is an unbarriered row (§2.2) whose backend entry point takes GL
+        // arguments and a GL NAME - the record's own MGPipeHandle (MGPImageBind::Res) stops at
+        // the sink - so there is no way to resolve the texture's twin from what arrives here,
+        // and the frontend binding this used to read is a BARRIER_PULLED row.
+        //
+        // Nothing is lost by deferring: SyncImageTextureBindings at the next validate point
+        // re-binds every unit up to the mark from the applier's own MGPImageView array, and the
+        // sink bumps the texture shutter serial immediately after this call
+        // (MGPipeApplierNoteTextureStateMoved), which is one of the four values the sweep's gate
+        // is keyed on - so the sweep that follows this bind cannot be suppressed. An image unit
+        // has no reader but a shader, and no shader runs between here and that validate point.
+        //
+        // WHAT MUST STILL HAPPEN HERE is the high-water mark: it is the "no draw in this context
+        // can be reading an image" early-out, so a unit that is given a texture without raising
+        // it would be skipped by every sweep afterwards.
+        static void NoteImageUnitBoundWithoutReadingTheFrontend(Uint unit, Bool holdsTexture) {
+            if (!holdsTexture) return;
+            if (unit + 1 > g_imageUnitHighWaterMark) {
+                g_imageUnitHighWaterMark = unit + 1;
+            }
+        }
+#endif
         // ---- P5e (fb, CONTRACT-P5E.md §5.4 / ruling 16 / ID-94): the image unit's bind ------
         //
         // P4a e3's ResolveShaderImageRecord IS GONE, identity test, I5 seam log and all. It
@@ -10590,12 +10616,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void BindImageTexture(GLuint unit, GLuint texture, GLint level, GLboolean layered, GLint layer, GLenum access,
                           GLenum format) {
-        (void)texture;
         (void)level;
         (void)layered;
         (void)layer;
         (void)access;
         (void)format;
+#if MOBILEGL_PIPE_PUSH && MOBILEGL_BUILD_DISAGGREGATED
+        // P5e (fb): see NoteImageUnitBoundWithoutReadingTheFrontend. Under a transport this
+        // entry point records the high-water mark and lets the next validate point's sweep do
+        // the bind from the record; reading the frontend image binding here is the
+        // GetImageTextureBinding row that rule F forbids, and `bind_shader_image` is not a
+        // barriered row.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            TextureImpl::NoteImageUnitBoundWithoutReadingTheFrontend(unit, texture != 0);
+            return;
+        }
+#endif
+        (void)texture;
         TextureImpl::SyncImageTextureBinding(unit);
     }
 
