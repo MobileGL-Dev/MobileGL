@@ -103,6 +103,32 @@ must not be told a draw is unbarriered on that account. Escalation (ii) is a ref
 (§5.1), so on a run-ahead server it never reaches the sink; it is listed so the predicate is total.
 **No other runtime escalation exists**; adding one is an integrator ruling and a row here.
 
+**There was an escalation (iii) and it was WITHDRAWN — ID-133 added it, ID-136 took it back out,
+and the reason is the most reusable thing P5e learned about escalations.** ID-133 barriered a
+plain multi-draw (`NumDraws > 1 && !kDrawIsIndirect`) so that `MultiDrawImpl::RunIndirect`'s read
+of the client's `GL_DRAW_INDIRECT_BUFFER` binding became a legal barriered pull instead of
+`Fatal{UnmigratedPipeInput, "GetBufferBindingSlot@DrawArrays"}` on 18 lane entries. It worked, and
+it was the wrong instrument:
+
+- There is exactly **one draw opcode** — all twenty draw entry points collapse onto `draw_vbo` —
+  and the multi-draw tier is resolved on the SERVER, per batch (`MultiDraw.cpp`'s
+  `ResolveTierForBatch`), from driver caps the client does not hold. So "escalate the indirect
+  multi-draw op" has no op to name and no predicate both roles can compute, and the narrowest
+  available key charged **every plain `glMultiDraw*` on every tier**, including the `auto` → `ext`
+  default the phone ships — a per-batch rendezvous on the shipping arm, added to satisfy a lane.
+- And the read was never a data dependency: `BoundDrawIndirectBufferId` SAVES AND RESTORES a GL
+  binding name around the tier's own scratch command buffer. Giving it the handle arm its
+  neighbour `ResolveBoundIndexBuffer` already had retires the pull outright.
+
+**The rule this leaves for the next candidate escalation: ask WHICH ARM PAYS FOR IT, not which
+lane it turns green.** A wait added to make a lane green is a real cost on a real path; if the
+predicate cannot name the arm that needs it, the escalation is charging arms that do not.
+
+The two halves — retiring the pull and withdrawing the clause — landed in one commit (ID-136
+overrode ID-113's package boundary for it): the pull retired without the clause withdrawn is a
+cost with no reason, and the clause withdrawn without the pull retired puts the 18 entries back
+on the unbarriered arm.
+
 ### 2.2 The static column, row by row
 
 | class | rows | why |
@@ -211,6 +237,39 @@ UNBARRIERED apply is a finding: `MGLOG_E_ONCE` with the kind, Fatal under strict
    `BatchWaits` early return at `:1037` goes; under `RunAheadArmed` any GL-thread write to the block
    outside a barriered fill is `Fatal{RoleViolation, "gPipeInputs"}` by name.
    `Fatal{BarrierViolation}` (`:840`) stays for `BatchWaits==0 && !RunAhead`.
+
+   **AMENDED by ra2 (ID-132, and it is the sentence this section got wrong).** "Outside a
+   barriered fill" was the whole test, and a barriered fill was exempted on the strength of what
+   the caller SAID about itself: *"this touch is the residual fill of a record this thread is
+   about to park behind"*. That is a claim about the **future**, and the write is in the
+   **present** — the order at the validate point is fill, then emit, then park, so at the instant
+   of the write the apply thread is still draining the unbarriered records the client ran ahead
+   of. **A guard whose exemption cannot be false on the class it exists for is not a guard.** It
+   never fired on any of the 70 red lane entries; what fired instead was the apply thread, on
+   `Fatal{UnmigratedPipeInput, "<field>@<the CLIENT's verb>"}`, after the GL thread had bumped
+   `CurrentVerbSerial`, withdrawn `m_serverStampedVerb` and renamed `m_currentVerb` underneath a
+   record it was inside.
+
+   **The rule as landed:** under `RunAheadArmed` a GL-thread write to the block is legal only
+   while `ApplyThreadIsInsideApplier()` is false, barriered fill or not; and the three fill sites
+   (`MGPipeValidateForVerb` phase 1, its step-4 residual walk, `MGPipeNoteFrontendMutation`)
+   establish that by taking §2.5's forced wait first (`QuiesceApplierBeforeFill`,
+   `PipeFill.cpp`). **Two waits per filling verb, not one**, because the block is written in two
+   phases that straddle publication — the serial bump / stamp withdrawal / verb rename before the
+   emitters, the 63-field walk after them — and the records those emitters published are records
+   whose apply reads the block. The red-once is deleting a wait; the guard then aborts by name on
+   the first filling verb behind a run-ahead backlog. Pinned by
+   `RemoteGuards.ClientBarrieredFillWhileTheApplierIsInsideUnderRunAheadIsFatalByName` with its
+   green control beside it; both run in the `unit` lane, because the strict lane runs under
+   lockstep and cannot see this class by construction.
+
+   The same correction applies to **§3.2 above, which is UNLANDED and was never marked as such**:
+   "the server's stamp is server-private … never into the shared block" describes storage the
+   applier owns, and `MGPipeServerStampVerbBoundary` still writes `m_filled` / `m_currentVerb` /
+   `m_serverStampedVerb` into `gPipeInputs` itself. That gap is exactly what made the race
+   possible, and splitting the stamp is the P11 item — but note that per-role stamps **without**
+   versioning the BARRIER_PULLED values would be worse than today, because it turns a loud
+   `Fatal{UnmigratedPipeInput}` into a silent stale read. Both, or the values retired first.
 
 ---
 

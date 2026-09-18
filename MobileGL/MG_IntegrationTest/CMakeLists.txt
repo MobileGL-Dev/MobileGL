@@ -2192,13 +2192,34 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # them by dereferencing a client pointer per draw - and it is therefore both the positive
     # control for vi's decision to KEEP that arm alive under lockstep and the only entry that
     # can reach the run-ahead refusal when ra publishes the caps bit.
+    #
+    # ---- P5e (ra2), ID-134: AND WITH THE CAPS BIT PUBLISHED IT IS A LANE OF ITS OWN ----------
+    #
+    # "When ra publishes the caps bit" is now, and what these two entries reach is
+    # `Fatal{UnmigratedVerb, "DrawArrays+CLIENT_ARRAYS"}` / `"MultiDrawArrays+CLIENT_ARRAYS"` -
+    # ID-82's NAMED REFUSAL, working exactly as ruled. They cannot be green under run-ahead and
+    # they should not be: a lane that demanded them green would be demanding that the refusal
+    # not fire, which is the opposite of what vi registered them for. Staging the bytes is P8's.
+    #
+    # THE LABEL IS `integration-clientarrays-split` AND THE SPELLING IS THE POINT (ID-131, and
+    # gl's `integration-magma-split` above is the worked example): `ctest -L` takes a REGEX, so a
+    # label spelled `integration-split-clientarrays` is still MATCHED by `-L integration-split`
+    # and the entries would never have left the lane they were moved out of - a split that reads
+    # as done in every listing and is not. Counted rather than assumed: `ctest -N -L
+    # integration-split` is 179 after this change and was 181 before, and `-L integration-gpu`
+    # is 1357 against 1359. `integration-gpu` goes with it for the same reason `integration-
+    # magma-split` dropped it - a lane that must be green cannot contain an entry that must not.
+    #
+    # The two entries keep their private, distinct log paths (SplitLogPaths.cmake.in lists
+    # MGL_SPLIT_VI_CLIENT_ARRAY_TESTS by name), which is what lets the expected-red CI step
+    # assert the MARKER rather than merely tolerate a failure.
     gtest_discover_tests(MobileGLIntegrationTest
         TEST_PREFIX "DirectGLES.Split."
         TEST_LIST MGL_SPLIT_VI_CLIENT_ARRAY_TESTS
         TEST_FILTER "ClientVertexArrayScenario.*"
         DISCOVERY_TIMEOUT 30
         PROPERTIES
-            LABELS "integration-gpu\;integration-split"
+            LABELS "integration-clientarrays-split"
             TIMEOUT ${MGL_ITEST_TIMEOUT}
             ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
     )

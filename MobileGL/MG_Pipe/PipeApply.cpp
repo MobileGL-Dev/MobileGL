@@ -3015,6 +3015,27 @@ namespace MobileGL::MG_Pipe {
         if (op == MGPWireOp::DrawVbo && payload != nullptr) {
             const auto& draw = *static_cast<const MGPDrawInfo*>(payload);
             if ((draw.Flags & static_cast<Uint8>(kDrawClientArrays)) != 0) return true;
+            // ---- ESCALATION (iii) WAS HERE AND IS WITHDRAWN (P5e ra2, ID-133 then ID-136) ---
+            //
+            // ID-133 escalated a PLAIN multi-draw (`NumDraws > 1 && !kDrawIsIndirect`) so that
+            // MultiDrawImpl::RunIndirect's read of the client's GL_DRAW_INDIRECT_BUFFER binding
+            // became a legal barriered pull instead of an unbarriered Fatal. It worked, and it
+            // cost a rendezvous on EVERY plain glMultiDraw* on the DEFAULT tier: there is one
+            // draw opcode - all twenty entry points collapse onto draw_vbo - and the tier is
+            // chosen on the server per batch (MultiDraw.cpp's ResolveTierForBatch), so no
+            // predicate both roles can compute names the arm that actually needed it.
+            //
+            // THE CHECK ON AN ESCALATION IS "WHICH ARM PAYS FOR IT", NOT "WHICH LANE GOES
+            // GREEN", and that is the rule this pair of rulings exists to record. The read was
+            // a save/restore of a GL binding NAME around the tier's own scratch buffer, not a
+            // data dependency, so the answer was to ask the side that did the binding:
+            // BoundDrawIndirectBufferId now takes the handle arm its neighbour
+            // ResolveBoundIndexBuffer already had, and the pull is GONE rather than legalised.
+            //
+            // Both halves landed in ONE commit on purpose: the pull retired without this clause
+            // withdrawn is a cost with no reason, and this clause withdrawn without the pull
+            // retired puts 18 lane entries back on the unbarriered arm. Neither is a state to
+            // gate or to measure, so neither was ever a head.
         }
         return false;
     }

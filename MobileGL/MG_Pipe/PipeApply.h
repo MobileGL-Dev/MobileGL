@@ -921,6 +921,14 @@ namespace MobileGL::MG_Pipe {
     // contract, not a condition somebody adds at a call site - because a fourth clause that only
     // one side computes is the same silent failure one level down.
     //
+    // THERE WAS AN ESCALATION (iii) AND IT WAS WITHDRAWN, which is worth a line here rather than
+    // only in the history: ID-133 barriered a plain multi-draw to legalise a pull in Espryt's
+    // indirect multi-draw tier, ID-136 retired the pull instead (MultiDraw.cpp's
+    // BoundDrawIndirectBufferId) and took the clause back out. The rule it leaves behind is the
+    // one to apply to the next candidate: ask WHICH ARM PAYS for an escalation, not which lane
+    // it turns green - (iii) was keyed on the only wire fact available and therefore charged the
+    // default tier for a read only two opt-in tiers made.
+    //
     // Escalation (ii) is a REFUSAL under run-ahead (§5.1), so on a run-ahead server it never
     // reaches the sink at all; it is here so the predicate is TOTAL and so the lockstep arm,
     // where such a draw is legal, gets the barrier it needs.
@@ -992,7 +1000,7 @@ namespace MobileGL::MG_Pipe {
     // Computing the predicate anyway (PipeApplier::ApplyOne) is deliberate: it keeps the
     // function exercised on every record for the whole phase rather than first run on the day
     // it starts deciding.
-    inline constexpr Bool kMGPipeP5eClientWaitRuleLanded = false;
+    inline constexpr Bool kMGPipeP5eClientWaitRuleLanded = true;
 
     // P5c (rv): the two serials the PipeInputs texture-shutter accessors answer with under a
     // server-stamped verb (FieldOwnership.def, APPLIER_DERIVED). Free functions rather than

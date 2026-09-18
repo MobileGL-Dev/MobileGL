@@ -95,7 +95,7 @@ namespace MobileGL::MG_Backend {
         // server into a run-ahead one, because the failure mode is not a slow frame - it is
         // the apply thread reading client memory that has already moved, which renders wrong
         // rather than aborting.
-        constexpr Bool kMGPipeP5eRunAheadReady = false;
+        constexpr Bool kMGPipeP5eRunAheadReady = true;
 
         // P5e (sb, ID-106). DirectGLES GAINS BIT 13 - the indexed buffer binding points - and
         // Magma deliberately does not. c0e landed the phase constant and the dirty-bit map with

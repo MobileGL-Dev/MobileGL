@@ -1316,14 +1316,40 @@ namespace MobileGL::MG_Remote::Client {
         //
         // This is where a fill left standing for an unbarriered record lands, by name.
         if (ClientSessionInstance().RunAheadArmed()) {
-            if (isBarrieredFill) return;
+            // ---- P5e (ra2): THE EXEMPTION IS A FACT NOW, NOT A CLAIM ------------------------
+            //
+            // This arm used to read `if (isBarrieredFill) return;`, i.e. the caller's own
+            // sentence "this touch is the residual fill of a record this thread is about to park
+            // behind" was accepted as the whole argument. It is an argument about the FUTURE.
+            // The order at the validate point is fill, then emit, then park, so at the instant
+            // of the write the apply thread is still draining the unbarriered records the client
+            // ran ahead of - and the measured consequence was the GL thread bumping
+            // CurrentVerbSerial, withdrawing MGPipeServerClearVerbBoundary's flag and renaming
+            // m_currentVerb underneath a record the applier was inside, which surfaced as
+            // Fatal{UnmigratedPipeInput, "<field>@<the client's verb>"} on the apply thread.
+            // Because the exemption was unconditional, this guard could not fire on any of it:
+            // that is the answer to "does RefusePipeInputsTouchWhileApplierOwnsIt fire, and if
+            // not, why not".
+            //
+            // So the sentence still exempts the fill, but only once it is TRUE of this instant.
+            // The fill sites establish it by taking §2.5's forced wait first
+            // (QuiesceApplierBeforeFill, PipeFill.cpp); removing that wait is the red-once and
+            // lands here, by name, on the first barriered verb behind a run-ahead backlog.
+            //
+            // ApplyThreadIsInsideApplier() is an acquire load of the flag PipeApplier raises for
+            // the whole of ApplyOne - stamp, decode and LeaveApplier included - so "not inside"
+            // is exactly "no record is being applied" and not merely "not decoding".
+            if (isBarrieredFill && !ApplyThreadIsInsideApplier()) return;
             if (Server::ServerLoop::OnApplyThread()) return; // the applier owns the block
             MGLOG_F("MGPipe: Fatal{RoleViolation, \"gPipeInputs\"} - the GL thread touched "
-                    "gPipeInputs (%s) on a RUN-AHEAD session outside a barriered fill. With "
-                    "the client running ahead the block is the server's to read for as long "
-                    "as an unbarriered record is in flight (CONTRACT-P5E §3), and this thread "
-                    "has no wait that would make the touch quiescent",
-                    surface);
+                    "gPipeInputs (%s) on a RUN-AHEAD session %s. With the client running ahead "
+                    "the block is the server's to read for as long as ANY record is in flight "
+                    "(CONTRACT-P5E §3), so the only legal GL-thread write is a barriered fill "
+                    "that has first taken §2.5's forced wait (QuiesceApplierBeforeFill)",
+                    surface,
+                    isBarrieredFill ? "in a barriered fill that did not first wait for the "
+                                      "applier to catch up"
+                                    : "outside a barriered fill");
             std::abort();
         }
         // MOBILEGL_IPC_BATCH_WAITS=1 makes "the fill runs while the apply thread applies an
