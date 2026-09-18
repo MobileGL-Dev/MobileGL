@@ -4885,6 +4885,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!record.Live || record.Gen != cso.Gen) return nullptr;
             return &record;
         }
+
+        // P5e (id), CONTRACT-P5E §4.1. See Managers.h for the contract; the body is the one
+        // SamplerImpl::ResolveSamplerCsoTwin already runs, with the sync left to vi.
+        BackendVertexArrayObject* ResolveVaoTwin(MG_Pipe::MGPipeHandle elements) {
+            if (MG_Pipe::MGPipeHandleIsNull(elements)) return nullptr;
+            // THE RECORD FIRST, before the table is touched: a handle with no record means the
+            // client named a vertex-elements CSO it never described (or one it deleted while a
+            // binding still names it), and adopting a slot for it would leave a twin nothing
+            // can ever sync. The applier's own Gen check is what turns a stale handle into this
+            // null rather than into its successor's record.
+            if (PipeRecordAt(MG_Pipe::MGPipeApplier().VertexElementsCsos, elements) == nullptr) {
+                MGLOG_E_ONCE("MGPipe: vertex-elements CSO {%u, %u} has no applier record on the handle "
+                             "arm, so no driver VAO can be built for it and the draw keeps what is bound",
+                             elements.Slot, elements.Gen);
+                return nullptr;
+            }
+            auto* slot = AdoptTwinByHandle(g_backendVertexArrayObjects, elements, "vertex-elements CSO");
+            if (slot == nullptr) return nullptr;
+            if (!*slot) *slot = MakeShared<BackendVertexArrayObject>();
+            return slot->get();
+        }
 #endif // MOBILEGL_PIPE_PUSH
 
         void BackendVertexArrayObject::SyncToBackend(
@@ -9105,6 +9126,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
               MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundTexturesCache;
         TwinRegistry<MG_State::GLState::ITextureObject, BackendTextureObject, MG_Pipe::MGPipeKind::Texture> g_backendTextureObjects;
+
+#if MOBILEGL_PIPE_PUSH
+        // P5e (id), CONTRACT-P5E §4.1. See Managers.h for the contract.
+        BackendTextureObject* ResolveTextureTwin(MG_Pipe::MGPipeHandle res) {
+            if (MG_Pipe::MGPipeHandleIsNull(res)) return nullptr;
+            // THE RECORD FIRST: a texture handle with no resource record is a seam defect - the
+            // client named a texture it never created, or one whose resource_destroy has
+            // already applied while a binding still names it - and a twin adopted for it would
+            // own a driver texture nothing ever uploads to.
+            if (PipeTextureRecordForHandle(res) == nullptr) {
+                MGLOG_E_ONCE("MGPipe: texture {%u, %u} has no applier resource record on the handle "
+                             "arm, so no driver texture can be built for it and the unit keeps what "
+                             "it holds",
+                             res.Slot, res.Gen);
+                return nullptr;
+            }
+            auto* slot = AdoptTwinByHandle(g_backendTextureObjects, res, "texture");
+            if (slot == nullptr) return nullptr;
+            if (!*slot) *slot = MakeShared<BackendTextureObject>();
+            return slot->get();
+        }
+#endif
     } // namespace TextureImpl
 
     namespace FramebufferImpl {
@@ -10764,6 +10807,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // then spin forever.
         constexpr Int kMaxDrainedProgramErrors = 32;
         TwinRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl, MG_Pipe::MGPipeKind::ShaderCso> g_backendProgramObjects;
+
+#if MOBILEGL_PIPE_PUSH
+        // P5e (id), CONTRACT-P5E §4.1. See Managers.h for the contract - in particular why the
+        // composite band had to land in the same package as this function.
+        BackendProgramObjectImpl* ResolveProgramTwin(MG_Pipe::MGPipeHandle cso) {
+            if (MG_Pipe::MGPipeHandleIsNull(cso)) return nullptr;
+            // THE RECORD FIRST, and through the BAND-AWARE reader: a composite pipeline's CSO
+            // lives in the applier's CompositeShaderCsos table, and asking the ordinary one for
+            // it would answer null for a program that is perfectly live.
+            if (PipeShaderCsoRecordForHandle(cso) == nullptr) {
+                MGLOG_E_ONCE("MGPipe: shader CSO {%u, %u} has no applier record on the handle arm, so "
+                             "no driver program can be built for it and the draw keeps what is bound",
+                             cso.Slot, cso.Gen);
+                return nullptr;
+            }
+            auto* slot = AdoptTwinByHandle(g_backendProgramObjects, cso, "shader CSO");
+            if (slot == nullptr) return nullptr;
+            if (!*slot) *slot = MakeShared<BackendProgramObjectImpl>();
+            return slot->get();
+        }
+#endif
 
         BackendProgramObjectImpl::BackendProgramObjectImpl() {
 #ifdef TRACY_ENABLE
