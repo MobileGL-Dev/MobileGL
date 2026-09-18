@@ -274,10 +274,17 @@ namespace MobileGL::MG_Remote::Client {
             // their blocks are pushed unconditionally at every push (at most two).
             const uintptr_t rawBegin = reinterpret_cast<uintptr_t>(shadow + rangeBegin);
             const uintptr_t rawEnd = reinterpret_cast<uintptr_t>(shadow + rangeEnd);
-            const uintptr_t base = (rawBegin + kPageBytes - 1) &
-                                   ~static_cast<uintptr_t>(kPageBytes - 1);
-            const uintptr_t end = rawEnd & ~static_cast<uintptr_t>(kPageBytes - 1);
-            if (end <= base) return false; // sub-page range: the hash arm has it
+            uintptr_t base = (rawBegin + kPageBytes - 1) &
+                             ~static_cast<uintptr_t>(kPageBytes - 1);
+            uintptr_t end = rawEnd & ~static_cast<uintptr_t>(kPageBytes - 1);
+            // A SUB-PAGE range is not refused; it is registered with an EMPTY interior
+            // (no pages are protected, no bitmap is needed) and hasEdges set, so the
+            // whole range is served by the two edge hashes - bounded at 8 KB per push -
+            // instead of falling to the hash arm, where as an "untracked" member it
+            // would veto the epoch skip for every tracked buffer in the process and
+            // force the full binding walk at every draw (measured on device). end is
+            // clamped up to base so the [base, end) arithmetic below never underflows.
+            if (end < base) end = base;
             const SizeT pageCount = (end - base) >> kPageShift;
             if (pageCount > kMaxTrackedPages) {
                 MGLOG_W("MGPipe: persistent write map of %zu pages exceeds the mprotect "
@@ -295,7 +302,7 @@ namespace MobileGL::MG_Remote::Client {
                 }
                 // Claimed. From here until the final base store the slot reads as
                 // (base=1, end=0), which the handler skips on both tests.
-                if (g_trackedMaps[i].pageBits == nullptr) {
+                if (pageCount > 0 && g_trackedMaps[i].pageBits == nullptr) {
                     g_trackedMaps[i].pageBits = new std::atomic<Uint64>[kPageBitsWords];
                 }
                 g_trackedMaps[i].pageCount = pageCount;
@@ -321,7 +328,8 @@ namespace MobileGL::MG_Remote::Client {
                         bitsInWord == 64 ? ~0ull : ((1ull << bitsInWord) - 1),
                         std::memory_order_relaxed);
                 }
-                if (mprotect(reinterpret_cast<void*>(base), end - base, PROT_READ) != 0) {
+                if (end > base &&
+                    mprotect(reinterpret_cast<void*>(base), end - base, PROT_READ) != 0) {
                     g_trackedMaps[i].base.store(0, std::memory_order_release);
                     return false;
                 }
@@ -353,7 +361,9 @@ namespace MobileGL::MG_Remote::Client {
                 g_trackedMaps[i].base.store(0, std::memory_order_release);
                 g_trackedMaps[i].end.store(0, std::memory_order_release);
                 g_trackedMaps[i].lifetimeId = 0;
-                mprotect(reinterpret_cast<void*>(base), end - base, PROT_READ | PROT_WRITE);
+                if (end > base) {
+                    mprotect(reinterpret_cast<void*>(base), end - base, PROT_READ | PROT_WRITE);
+                }
                 return;
             }
         }
@@ -369,7 +379,9 @@ namespace MobileGL::MG_Remote::Client {
                 g_trackedMaps[i].base.store(0, std::memory_order_release);
                 g_trackedMaps[i].end.store(0, std::memory_order_release);
                 g_trackedMaps[i].lifetimeId = 0;
-                mprotect(reinterpret_cast<void*>(base), end - base, PROT_READ | PROT_WRITE);
+                if (end > base) {
+                    mprotect(reinterpret_cast<void*>(base), end - base, PROT_READ | PROT_WRITE);
+                }
             }
         }
 

@@ -27,7 +27,18 @@ namespace MobileGL::MG_State::GLState {
     // MG_Util/ShaderTranspiler/Types.h.
     inline constexpr SizeT MIN_MAP_BUFFER_ALIGNMENT = 64;
 
-    // Allocator that gives every allocation MIN_MAP_BUFFER_ALIGNMENT. Deliberately minimal: the
+    // The shadow's ALLOCATION alignment is a full page, not the advertised 64: a
+    // page-aligned shadow owns every byte of every page it occupies, which is what lets
+    // the persistent-map mprotect tracker write-protect the mapped interior without ever
+    // covering a neighbour allocation's byte (a foreign thread with signals blocked
+    // faulting on a shared page is a process kill). GL_MIN_MAP_BUFFER_ALIGNMENT keeps
+    // answering 64 - over-aligning an allocation is invisible to the application, and a
+    // glMapBufferRange base that is page-aligned is 64-aligned. The cost is allocator
+    // rounding on small buffers, paid so the tracker never has to make the unsafe choice.
+    inline constexpr SizeT SHADOW_ALLOCATION_ALIGNMENT = 4096;
+
+    // Allocator that gives every allocation SHADOW_ALLOCATION_ALIGNMENT. Deliberately
+    // minimal: the
     // vectors it backs hold raw bytes and are only ever sized, so allocate/deallocate plus the
     // rebinding and equality boilerplate std::vector requires is the whole interface.
     template <typename T>
@@ -41,10 +52,10 @@ namespace MobileGL::MG_State::GLState {
         T* allocate(SizeT count) {
             if (count == 0) return nullptr;
             return static_cast<T*>(
-                ::operator new(count * sizeof(T), std::align_val_t{MIN_MAP_BUFFER_ALIGNMENT}));
+                ::operator new(count * sizeof(T), std::align_val_t{SHADOW_ALLOCATION_ALIGNMENT}));
         }
         void deallocate(T* pointer, SizeT) noexcept {
-            ::operator delete(pointer, std::align_val_t{MIN_MAP_BUFFER_ALIGNMENT});
+            ::operator delete(pointer, std::align_val_t{SHADOW_ALLOCATION_ALIGNMENT});
         }
 
         template <typename U>
