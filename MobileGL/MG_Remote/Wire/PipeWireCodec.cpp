@@ -652,6 +652,17 @@ namespace MobileGL::MG_Remote::Wire {
             // (MGPipeTypes.h:820-823), because the two arrays stay index-aligned; a third
             // value would let a record describe spans for ranges it does not have.
             const auto& p = *static_cast<const MGPShaderBuffers*>(payload);
+            // P5e (sb, CONTRACT-P5E.md §1): the class and the window, bounded HERE as well as
+            // in the applier and for the reason SetShaderImages' Count is bounded here - this
+            // is the arm that turns Count into a byte length, so a forged count has to be
+            // refused before it is multiplied rather than after.
+            if (p.Class >= kMGPipeShaderBufferClassCount) {
+                WireProtocolFatalAt("SetShaderBuffers.Class", p.Class, kMGPipeShaderBufferClassCount);
+            }
+            if (static_cast<Uint64>(p.Start) + p.Count > kMGPipeMaxBufferBindingPoints) {
+                WireProtocolFatalAt("SetShaderBuffers.Count", static_cast<Uint64>(p.Start) + p.Count,
+                                    kMGPipeMaxBufferBindingPoints);
+            }
             if (p.HostSpanCount != 0 && p.HostSpanCount != p.Count) {
                 WireProtocolFatalAt("SetShaderBuffers.HostSpanCount", p.HostSpanCount, p.Count);
             }
@@ -1830,16 +1841,17 @@ namespace MobileGL::MG_Remote::Wire {
             return true;
 
         case MGPWireOp::SetShaderBuffers: {
-            // NO APPLIER ENTRY POINT EXISTS, and P5 does not invent one: the call is on
-            // BRIEF §4's exclusion list, so a consumer written here would be a semantics
-            // nobody can test this phase. What the record needs and cannot get later is its
-            // TAIL ARITHMETIC, which MGPipeWireRecordLayout above has already run - including
-            // the HostSpanCount-is-0-or-Count rule, the thing that keeps the two arrays
-            // index-aligned.
+            // P5e (sb, MG_Remote/CONTRACT-P5E.md §5.6): THE APPLIER ENTRY POINT EXISTS NOW and
+            // this is the row's sink. The paragraph that stood here said "no applier entry
+            // point exists, and P5 does not invent one: the call is on BRIEF §4's exclusion
+            // list" - true for the whole of P5 through P5d, and withdrawn by the phase whose
+            // entire point is that the server stops walking the client's binding-point table.
             //
-            // kCapNeedsHostUboBytes is 0 for the whole of P5 (table 0), so the second tail is
-            // always absent here; the honesty pass below is what says so out loud if it ever
-            // is not.
+            // THE HOST-SPAN PASS STILL RUNS FIRST, and it runs whether or not the record is
+            // applied: kCapNeedsHostUboBytes is 0 for the whole of P5 (table 0), so the second
+            // tail is always absent here, and this pass is what says so out loud if it ever is
+            // not. A span that was going to be refused must be refused BEFORE the applier has
+            // stored the window it rides with.
             if (layout.TailCount == 2 && layout.TailBytes[1] != 0) {
                 const auto* spans = reinterpret_cast<const MGHostSpan*>(tailAt(1));
                 const Uint64 count = layout.TailBytes[1] / sizeof(MGHostSpan);
@@ -1853,11 +1865,16 @@ namespace MobileGL::MG_Remote::Wire {
                     CheckHostSpanIsHonest(span, *m_segments);
                 }
             }
-            return false;
+            MGPipeApplySetShaderBuffers(*static_cast<const MGPShaderBuffers*>(payload),
+                                        reinterpret_cast<const MGPBufferRange*>(tailAt(0)));
+            return true;
         }
 
         case MGPWireOp::SetStreamOutputTargets:
-            // Same as above: no applier, off the reduced path, both tails validated.
+            // No applier entry point, off the reduced path, both tails validated. UNLIKE
+            // set_shader_buffers above this row stays unemitted for the whole of P5e (§5.7):
+            // XFB is lockstep, its capture points are span-scoped state latched at Begin, and
+            // the payload carries a Generation that no applier state has a home for.
             return false;
 
         case MGPWireOp::SetProgramBindings: {

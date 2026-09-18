@@ -162,14 +162,16 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
 // A row nobody has migrated is null - which is exactly what "this subsystem has not been
 // migrated, keep pulling" means (plan B section 4.1).
 //
-// UNTIL P5 R-17 THAT WAS EVERY ROW, and this case said so. It is now EXACTLY THE 42 ROWS WITH
-// NO MGPipeApply* ENTRY POINT (80 - the 38 that have one; the number was 34 at P5, 39 after
-// P5b's five sink-only verbs, rv's set_context_values grew BOTH sides of the difference, and
-// P5e's set_program_bindings grew the null side alone):
-// the other 38 have an applier, R-17 installs adapters over them,
+// UNTIL P5 R-17 THAT WAS EVERY ROW, and this case said so. It is now EXACTLY THE 41 ROWS WITH
+// NO BODIED MGPipeApply* ENTRY POINT (80 - the 39 that have one; the number was 34 at P5, 39
+// after P5b's five sink-only verbs, rv's set_context_values grew BOTH sides of the difference,
+// P5e's set_program_bindings grew the null side alone, and P5e's set_shader_buffers moved one
+// row from the null side to the other - sb gave it its applier, its adapter and its emitter in
+// one commit):
+// the other 39 have an applier, R-17 installs adapters over them,
 // and a null there would no longer mean "keep pulling" - `MG_Impl/Pipe`'s call sites go through
 // the thunks, so a null would mean "call through a null pointer". The number is asserted rather
-// than the emptiness, because "38 installed" and "41 still null" are the two halves of a
+// than the emptiness, because "39 installed" and "41 still null" are the two halves of a
 // partition and a case that checked only one of them would pass an installer that had
 // overwritten rows it does not own.
 // THE NAME IS KEPT, AND SO IS THE STATEMENT IT MAKES - only the ROWS it makes it about have
@@ -182,13 +184,18 @@ TEST(PipeCatalogue, UninstalledTablesAreAllNull) {
     const void* const* context = reinterpret_cast<const void* const*>(&gMGPipeContext);
 #if MOBILEGL_PIPE_PUSH
     MGPipeInstallMonolithTables();
-    // The 42 rows with no MGPipeApply* entry point are still null, and null still means "this
+    // The 41 rows with no MGPipeApply* body are still null, and null still means "this
     // subsystem has not been migrated, keep pulling". Named rather than counted, because the
     // count is the other case's job and two cases asserting the same number would both go red
     // for one change. P5c's two control records are among them by design (CONTRACT-P5C.md §5:
     // no MGPipeApply* entry point, no monolith producer - under a transport they reach
     // WireVerbSink instead).
-    EXPECT_EQ(gMGPipeContext.SetShaderBuffers, nullptr);
+    //
+    // P5e (sb): SetShaderBuffers HAS LEFT THIS LIST and the inversion is itself the proof the
+    // route landed - the row was pinned null "since P4a" by two cases, and its applier, its
+    // adapter and its emitter all arrive together. SetStreamOutputTargets stays, because XFB
+    // stays lockstep for the whole of P5e (CONTRACT-P5E.md §5.7).
+    EXPECT_NE(gMGPipeContext.SetShaderBuffers, nullptr);
     EXPECT_EQ(gMGPipeContext.SetStreamOutputTargets, nullptr);
     EXPECT_EQ(gMGPipeContext.DrawVbo, nullptr);
     EXPECT_EQ(gMGPipeContext.Present, nullptr);
@@ -236,20 +243,24 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     EXPECT_EQ(installed + nulls, static_cast<SizeT>(kMGPipeCallCount));
 
 #if MOBILEGL_PIPE_PUSH
-    // 34 + 4 = 38, and the split is the honest shape of R-17 rather than an implementation
-    // detail: 38 is the number of MGPipeApply* entry points PipeApply.h declares (37 at P5, and
-    // P5c rv's set_context_values - CONTRACT-P5C.md §5.3 - is the 38th), 34 of them
-    // fit a GENERATED row and go in the two tables, and FOUR cannot be expressed by any
-    // generated signature and go in the hand-written escape table beside them
+    // 35 + 4 = 39, and the split is the honest shape of R-17 rather than an implementation
+    // detail: 39 is the number of MGPipeApply* entry points PipeApply.h declares WITH A BODY
+    // (37 at P5, P5c rv's set_context_values was the 38th, and P5e sb's set_shader_buffers is
+    // the 39th), 35 of them fit a GENERATED row and go in the two tables, and FOUR cannot be
+    // expressed by any generated signature and go in the hand-written escape table beside them
     // (ResourceRespecify's uncarried initialBytes, ResourceFlushRange's likewise,
     // MapPersistent's size + seedBytes + void* return, CreateShaderState's seven blobrefs and
     // two typed pointers - each one a CONTRACT-P5 ruling, see MG_Pipe/PipeRoute.h).
     //
+    // set_program_bindings (opcode 80) is DECLARED and still aborting by name until package pg
+    // writes its body, so it is not counted here and its row is pinned null below - which is
+    // the same statement this pair of numbers has always made about an unimplemented row.
+    //
     // BOTH NUMBERS ARE ASSERTED. If the escape table were left out of this case, moving a row
     // out of the generated tables and forgetting to install its escape would read as a smaller
     // "installed" count and nothing else - and the call site would take a null.
-    EXPECT_EQ(installed, 34u) << "the routed rows and the applier's entry points disagree";
-    EXPECT_EQ(nulls, static_cast<SizeT>(kMGPipeCallCount) - 34u);
+    EXPECT_EQ(installed, 35u) << "the routed rows and the applier's entry points disagree";
+    EXPECT_EQ(nulls, static_cast<SizeT>(kMGPipeCallCount) - 35u);
     const void* const* escapes = reinterpret_cast<const void* const*>(&gMGPipeRouteEscapes);
     SizeT escapesInstalled = 0;
     for (SizeT i = 0; i < sizeof(MGPipeRouteEscapes) / sizeof(void*); ++i) {
@@ -257,14 +268,17 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     }
     EXPECT_EQ(escapesInstalled, 4u) << "an escape row is null; its call site would take a null "
                                        "pointer rather than fall back to anything";
-    EXPECT_EQ(installed + escapesInstalled, 38u)
-        << "the two tables plus the escapes must be exactly PipeApply.h's entry points";
+    EXPECT_EQ(installed + escapesInstalled, 39u)
+        << "the two tables plus the escapes must be exactly PipeApply.h's bodied entry points";
 
     // And the rows that MUST still be null, named rather than counted: these are calls with no
     // applier at all (CONTRACT-P5 table 1 rows 13, 14: "no applier entry point exists"), plus
     // the two verbs the census measured as having zero MG_Impl call sites. An installer that
     // filled one of these would be claiming an implementation that does not exist.
-    EXPECT_EQ(gMGPipeContext.SetShaderBuffers, nullptr);
+    //
+    // P5e (sb): row 13 (set_shader_buffers) is no longer one of them - see the sibling case
+    // above. Row 14 (set_stream_output_targets) still is.
+    EXPECT_NE(gMGPipeContext.SetShaderBuffers, nullptr);
     EXPECT_EQ(gMGPipeContext.SetStreamOutputTargets, nullptr);
     EXPECT_EQ(gMGPipeContext.DrawVbo, nullptr);
     EXPECT_EQ(gMGPipeContext.Present, nullptr);
@@ -1095,7 +1109,15 @@ TEST(PipeCatalogue, HostSpanResolvesTheMonolithPointer) {
 // ranges - the majority - pay nothing for a payload whose shape is not frozen yet.
 TEST(PipeCatalogue, BufferRangeCarriesNoInlineHostSpan) {
     static_assert(sizeof(MGPBufferRange) == 24);
-    static_assert(sizeof(MGPShaderBuffers) == 32);
+    // P5e (sb, ID-104): 32 -> 40. WritableMask was ONE Uint32 against an 84-point window, so
+    // it could describe only the first 32 points and a storage buffer bound at point 32 or
+    // above read as read-only with nothing able to see it. The ruling widens the FIELD rather
+    // than narrowing the window - narrowing would change what an application may bind - and the
+    // eight bytes are paid by a record that fires at most once per class per change, in a push
+    // build only. The ABI fingerprint already moved this phase for opcode 80.
+    static_assert(sizeof(MGPShaderBuffers) == 40);
+    static_assert(sizeof(MGPShaderBuffers::WritableMask) * 8u >= kMGPipeMaxBufferBindingPoints,
+                  "the mask must cover the window the same record declares");
     EXPECT_LT(sizeof(MGPBufferRange), sizeof(MGHostSpan));
 
     // The call still declares the span it may carry, so the transport lays the tail out.
@@ -1114,6 +1136,21 @@ TEST(PipeCatalogue, BufferRangeCarriesNoInlineHostSpan) {
     b.HostSpanCount = 4;
     EXPECT_FALSE(MGPipeVerify(a, b, &field));
     EXPECT_STREQ(field, "HostSpanCount");
+
+    // P5e (sb, ID-104): THE COMPARATOR SEES EVERY WORD OF THE WIDENED MASK, and the HIGH one
+    // is what the case is for. PipeFields.def names WritableMask once and the array overload
+    // of MGPipeFieldEqual walks it, so this would have passed before the widening too - on the
+    // 32 points that existed. Point 83 is the one the old field could not describe at all.
+    b = a;
+    ASSERT_TRUE(MGPipeVerify(a, b, &field));
+    MGPipeShaderBufferMaskSet(b.WritableMask, kMGPipeMaxBufferBindingPoints - 1);
+    EXPECT_TRUE(MGPipeShaderBufferMaskHas(b.WritableMask, kMGPipeMaxBufferBindingPoints - 1));
+    EXPECT_FALSE(MGPipeShaderBufferMaskHas(a.WritableMask, kMGPipeMaxBufferBindingPoints - 1));
+    EXPECT_FALSE(MGPipeVerify(a, b, &field));
+    EXPECT_STREQ(field, "WritableMask");
+    // And out of range is "not writable" / "write nothing" rather than a word past the end.
+    MGPipeShaderBufferMaskSet(b.WritableMask, kMGPipeMaxBufferBindingPoints);
+    EXPECT_FALSE(MGPipeShaderBufferMaskHas(b.WritableMask, kMGPipeMaxBufferBindingPoints));
 }
 
 // The buffer half of resource_subdata has no level and no box of its own: [offset, size)

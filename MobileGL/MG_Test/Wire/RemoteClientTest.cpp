@@ -1124,6 +1124,10 @@ TEST(PipeRouting, TheInstalledClientArmIsWireAndNotMonolithAndEveryRoutedRowMove
     C1F_MOVED(Context, SetSamplerViews);
     C1F_MOVED(Context, BindSamplerStates);
     C1F_MOVED(Context, SetShaderImages);
+    // P5e (sb, CONTRACT-P5E.md §5.6): set_shader_buffers is the 35th routed row. It rides both
+    // tables like every other set_* with an applier entry point - the class is a FIELD of the
+    // payload, so all three binding-point classes go through this one cell.
+    C1F_MOVED(Context, SetShaderBuffers);
     C1F_MOVED(Context, SetGlobalConstants);
     C1F_MOVED(Context, SetVertexAttribDefaults);
     C1F_MOVED(Context, SetPixelPackState);
@@ -1146,9 +1150,9 @@ TEST(PipeRouting, TheInstalledClientArmIsWireAndNotMonolithAndEveryRoutedRowMove
     C1F_ESCAPE(CreateShaderState);
 #undef C1F_ESCAPE
     const SizeT movedContext = CountDifferingCells(gMGPipeContext, MGPipeMonolithContext());
-    EXPECT_EQ(movedScreen + movedContext, 34u)
-        << "exactly the 34 generated routed rows must differ from the monolith adapters "
-           "(33 at P5, + set_context_values at P5c rv); "
+    EXPECT_EQ(movedScreen + movedContext, 35u)
+        << "exactly the 35 generated routed rows must differ from the monolith adapters "
+           "(33 at P5, + set_context_values at P5c rv, + set_shader_buffers at P5e sb); "
         << movedScreen + movedContext
         << " did, so a row was left on the monolith adapter (it would run the applier on the GL "
            "thread under split) or an unrouted row was overwritten";

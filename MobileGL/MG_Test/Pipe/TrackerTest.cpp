@@ -19,6 +19,9 @@
 
 #if MOBILEGL_PIPE_PUSH
 #include <Config.h>
+// P5e (sb): the binding-point shutter cases drive the REAL glBindBufferBase entry point,
+// because the claim they make is about what a frontend mutator publishes.
+#include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/Pipe/CsoCache.h>
 #include <MG_Impl/Pipe/PipeFill.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
@@ -85,6 +88,8 @@ namespace {
     X(TrackerWalk, AProgramSwitchAloneFiresTheSamplerViewBit) \
     X(TrackerWalk, ATextureParameterAloneFiresTheSamplerViewBit) \
     X(TrackerWalk, AProgramSwitchBetweenEqualImageUnitCountersFiresTheShaderImageBit) \
+    X(TrackerWalk, ARebindOfOneUniformPointToADifferentBufferFiresTheConstBufferBit) \
+    X(TrackerWalk, TheBindingPointBitsDoNotFireOnAnUnrelatedBufferWrite) \
     X(TrackerAttribPayload, AFloatWriteCarriesTheFloatBitsAndNamesItsClass) \
     X(TrackerAttribPayload, AnIntWriteCarriesTheIntWordsAndNamesItsClass) \
     X(TrackerAttribPayload, AUintWriteCarriesTheUintWordsAndNamesItsClass) \
@@ -579,6 +584,76 @@ namespace {
     //
     // THIS IS THE ONE CASE THE OLD SHUTTER COULD NOT PASS, which is why it is here rather
     // than in the narrowing commit's prose.
+    // ---- P5e (sb): the indexed binding points, bits 15/16/17 -------------------------
+    //
+    // THE RED-ONCE FOR THE SHUTTER REWRITE (CONTRACT-P5E.md §5.6, brief red-once (b)). Until
+    // P5e all three bits shuttered on the buffer CONTENT aggregate, and glBindBufferBase moves
+    // a binding point through a returned reference - BindingSlotRange1D::Bind, which advances
+    // the slot's own Uint16 version - so this sequence fired NOTHING. Harmless while nothing
+    // was emitted for the bits; an under-fire the moment set_shader_buffers is, because the
+    // server would go on binding the first buffer. Same defect class as P4a's glBindSampler
+    // hole, closed the same way: the shutter reads the generation the mutator moves.
+    //
+    // The action under test is the BIND ITSELF, through the real GL entry point, because the
+    // claim is about what a frontend mutator publishes and not about what a generation does
+    // once bumped (ID-102).
+    TEST_F(TrackerWalk, ARebindOfOneUniformPointToADifferentBufferFiresTheConstBufferBit) {
+        GLuint a = 0;
+        GLuint b = 0;
+        MG_Impl::GLImpl::GenBuffers(1, &a);
+        MG_Impl::GLImpl::GenBuffers(1, &b);
+
+        MG_Impl::GLImpl::BindBufferBase(GL_UNIFORM_BUFFER, 1, a);
+        Walk();
+        Walk();
+        ASSERT_EQ(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewConstBuffers), 0u)
+            << "the steady state must be quiet before the interesting half of this case";
+
+        // The same point, a different buffer. Nothing about any buffer's CONTENTS moved.
+        MG_Impl::GLImpl::BindBufferBase(GL_UNIFORM_BUFFER, 1, b);
+        Walk();
+        EXPECT_NE(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewConstBuffers), 0u)
+            << "NEW_CONST_BUFFERS did not fire when a uniform binding point moved onto another "
+               "buffer - the emitted window would still name the first one";
+        // And the unbind, which is the case a shutter may least afford to miss: it leaves the
+        // high-water mark where it was, so nothing but the generation can carry it.
+        Walk();
+        ASSERT_EQ(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewConstBuffers), 0u);
+        MG_Impl::GLImpl::BindBufferBase(GL_UNIFORM_BUFFER, 1, 0);
+        Walk();
+        EXPECT_NE(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewConstBuffers), 0u)
+            << "NEW_CONST_BUFFERS did not fire for an unbind";
+        m_cache.Reset();
+    }
+
+    // The other half of the rewrite, and the reason it is a narrowing rather than a swap: the
+    // content aggregate LEFT all three bits, so a glBufferSubData into an unrelated buffer no
+    // longer republishes every binding-point set in the context. Whether the BYTES behind a
+    // bound buffer moved is the resource family's question, answered server-side by the
+    // resource record's own Serial; what these records carry is {handle, offset, size}.
+    TEST_F(TrackerWalk, TheBindingPointBitsDoNotFireOnAnUnrelatedBufferWrite) {
+        GLuint bound = 0;
+        MG_Impl::GLImpl::GenBuffers(1, &bound);
+        MG_Impl::GLImpl::BindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, bound);
+        Walk();
+        Walk();
+        const Uint32 family = MGPipeDirtyBit(MGPipeDirty::NewConstBuffers) |
+                              MGPipeDirtyBit(MGPipeDirty::NewShaderBuffers) |
+                              MGPipeDirtyBit(MGPipeDirty::NewSoTargets);
+        ASSERT_EQ(m_tracker.LastDirty() & family, 0u)
+            << "the steady state must be quiet before the interesting half of this case";
+
+        const SharedPtr<MG_State::GLState::BufferObject> unrelated = Ctx().CreateBufferObject(64);
+        unrelated->Respecify(4096, nullptr);
+        Array<Uint8, 16> bytes{};
+        unrelated->UploadSubData(DataPtr{bytes.data(), bytes.size()}, 0);
+        ASSERT_NE(Ctx().GetAnyBufferChangeGeneration(), 0u) << "the buffer aggregate did move";
+        Walk();
+        EXPECT_EQ(m_tracker.LastDirty() & family, 0u)
+            << "a write to a buffer bound to no binding point republished the binding-point sets";
+        m_cache.Reset();
+    }
+
     TEST_F(TrackerWalk, TheIndexBufferBitDoesNotFireOnAnUnrelatedBufferWrite) {
         const SharedPtr<MG_State::GLState::BufferObject> indices = Ctx().CreateBufferObject(1);
         indices->Respecify(64, nullptr);

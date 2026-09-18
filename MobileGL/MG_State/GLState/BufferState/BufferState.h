@@ -71,11 +71,44 @@ namespace MobileGL::MG_State::GLState {
     // shutter on in P2 - five bits over one aggregate until P3b splits them.
     void NoteBufferChanged() { ++m_anyBufferChangeGeneration; }
     Uint64 GetAnyBufferChangeGeneration() const { return m_anyBufferChangeGeneration; }
+
+    // P5e (sb, MG_Remote/CONTRACT-P5E.md §1, §5.6). "DID ANY INDEXED BINDING POINT OF THIS
+    // TARGET MOVE" - one counter per BufferBindPointTargets entry, and it is the P4b hole
+    // closed rather than a new convenience.
+    //
+    // WHAT WAS WRONG. Dirty bits 15/16/17 shuttered on GetAnyBufferChangeGeneration() - the
+    // CONTENT aggregate - while glBindBufferBase / glBindBufferRange mutate a binding point
+    // through a returned reference (BindingSlotRange1D::Bind / SetRange), which moves the
+    // slot's own Uint16 version and nothing the tracker reads. So
+    // `glBindBufferBase(UNIFORM,1,A); draw; glBindBufferBase(UNIFORM,1,B); draw` fired no bit
+    // at all: harmless while nothing was emitted for those bits, and an UNDER-FIRE the moment
+    // set_shader_buffers is, because the server would go on binding A. It is the same defect
+    // class as P4a's glBindSampler hole (c0d) and it is closed the same way - the shutter
+    // reads the generation the mutator moves.
+    //
+    // A COUNTER AND NOT THE SLOT'S OWN VERSION: the slot version is a WRAPPING Uint16 per
+    // point, and a shutter over 84 of them would have to observe all 84 through the widened
+    // counter every draw. One monotone Uint64 per target answers "could this target's window
+    // have moved" in one read, which is what a per-draw shutter can afford.
+    //
+    // #if MOBILEGL_PIPE_PUSH so the pull build's BufferState does not resize (G1) - the same
+    // licence TextureState::NoteImageUnitTouched took at P5d r3.
+    void NoteBindPointChanged(const BufferTarget target) {
+        auto it = std::find(BufferBindPointTargets.begin(), BufferBindPointTargets.end(), target);
+        if (it == BufferBindPointTargets.end()) return;
+        ++m_bindPointGeneration[std::distance(BufferBindPointTargets.begin(), it)];
+    }
+    Uint64 GetBindPointGeneration(const BufferTarget target) const {
+        auto it = std::find(BufferBindPointTargets.begin(), BufferBindPointTargets.end(), target);
+        if (it == BufferBindPointTargets.end()) return 0;
+        return m_bindPointGeneration[std::distance(BufferBindPointTargets.begin(), it)];
+    }
 #endif
 
     private:
 #if MOBILEGL_PIPE_PUSH
     Uint64 m_anyBufferChangeGeneration = 0;
+    Array<Uint64, BufferBindPointTargets.size()> m_bindPointGeneration{};
 #endif
         UnorderedMap<Uint, SharedPtr<BufferObject>> m_bufferObjects;
         IndexGenerator<Uint> m_indexGenerator;

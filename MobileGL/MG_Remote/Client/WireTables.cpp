@@ -222,6 +222,11 @@ namespace MobileGL::MG_Remote::Client {
         MGP_WIRE_TAIL(SetSamplerViews, MGPSamplerViews, MGPBoundView)
         MGP_WIRE_TAIL(BindSamplerStates, MGPSamplerStates, MGPipeHandle)
         MGP_WIRE_TAIL(SetShaderImages, MGPShaderImages, MGPImageView)
+        // P5e (sb, CONTRACT-P5E.md §5.6): the indexed buffer binding points, one record per
+        // class. The generic tail wrapper carries the FIRST tail only, which is the whole of
+        // the record on Espryt - the optional MGHostSpan tail exists for kCapNeedsHostUboBytes
+        // and that bit is 0 for the whole of P5.
+        MGP_WIRE_TAIL(SetShaderBuffers, MGPShaderBuffers, MGPBufferRange)
         MGP_WIRE_TAIL(SetVertexAttribDefaults, MGPVertexAttribDefaults, MGPAttribValue)
 
 #undef MGP_WIRE_PLAIN
@@ -649,6 +654,7 @@ namespace MobileGL::MG_Remote::Client {
         gMGPipeContext.SetSamplerViews = &Wire_SetSamplerViews;
         gMGPipeContext.BindSamplerStates = &Wire_BindSamplerStates;
         gMGPipeContext.SetShaderImages = &Wire_SetShaderImages;
+        gMGPipeContext.SetShaderBuffers = &Wire_SetShaderBuffers;
         gMGPipeContext.SetGlobalConstants = &Wire_SetGlobalConstants;
         gMGPipeContext.SetVertexAttribDefaults = &Wire_SetVertexAttribDefaults;
         gMGPipeContext.SetPixelPackState = &Wire_SetPixelPackState;

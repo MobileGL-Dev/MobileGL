@@ -752,7 +752,14 @@ namespace MobileGL::MG_Pipe {
         // the backend's own GPU-write marking walk (DirectGLES.cpp's three MarkBufferGpuWritten
         // sites), which sb deletes under a transport because the client already owns the
         // GPU-write set and the server's walk is over client memory.
-        Uint32 ShaderBufferWritableMask[kMGPipeShaderBufferClassCount] = {0, 0, 0};
+        //
+        // THREE WORDS PER CLASS, NOT ONE (P5e, ID-104): the window is 84 points and c0e's
+        // single Uint32 could describe only the first 32 of them, so a storage buffer bound at
+        // point 32 or above read as read-only here while the record said nothing was wrong.
+        // Always through MGPipeShaderBufferMaskHas / ...Set (MGPipeTypes.h), which is the same
+        // arithmetic the payload's own mask goes through - one table, both sides.
+        Uint32 ShaderBufferWritableMask[kMGPipeShaderBufferClassCount]
+                                       [kMGPipeShaderBufferWritableMaskWords] = {};
         // ONE serial for all three classes, ++ on every applied record and ADVANCED (never
         // zeroed) by MGPipeApplierReset, for VertexBuffersSerial's reason - and the emitter's
         // latch resets with it, or the first emission after a make-current is suppressed as

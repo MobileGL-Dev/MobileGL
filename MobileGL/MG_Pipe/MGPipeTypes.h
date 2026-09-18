@@ -978,17 +978,57 @@ namespace MobileGL::MG_Pipe {
     inline constexpr Uint32 kMGPipeShaderBufferClassAtomicCounter = 2;
     inline constexpr Uint32 kMGPipeShaderBufferClassCount = 3;
 
+    // P5e, ID-104. HOW MANY Uint32 WORDS THE WRITABLE MASK NEEDS TO COVER THE WINDOW IT IS
+    // ATTACHED TO, and it is a derived number rather than a literal because the two used to
+    // disagree: WritableMask was ONE Uint32 while the window has been 84 points since P4a, so
+    // the mask could only ever describe the first 32 of them and a shader-storage buffer bound
+    // at point 32 or above was silently unwritable as far as the record was concerned.
+    //
+    // THE RULING WIDENS THE FIELD RATHER THAN NARROWING THE WINDOW (ID-104): narrowing to 32
+    // would change what an application can bind, which is an observable, while the POD growing
+    // 32 -> 40 bytes is paid by a record that fires at most once per class per change and is
+    // confined to the push build. THREE Uint32 WORDS AND NOT A Uint64+Uint32 PAIR: 96 >= 84
+    // either way, but one word type means one shift width, so the set and the test below are a
+    // single expression each instead of a low half and a high half that have to agree.
+    inline constexpr Uint32 kMGPipeShaderBufferWritableMaskWords = 3;
+
     struct MGPShaderBuffers {
         Uint32 Class; // MGPipeTypes.h's kMGPipeShaderBufferClass* - Uniform | ShaderStorage |
                       // AtomicCounter
         Uint32 Start;
         Uint32 Count;
-        Uint32 WritableMask;
+        // Bit i (LSB-first within word i/32) = "the shader may WRITE through binding point i",
+        // for classes 1 and 2. Always read and written through the two helpers below, never by
+        // hand: an open-coded shift is how the emitter and the four consumers come to disagree
+        // about which word a point lives in.
+        Uint32 WritableMask[kMGPipeShaderBufferWritableMaskWords];
         Uint32 HostSpanCount; // 0, or Count when the kHostSpan tail is present (D-B8)
         Uint32 Pad0;
         Uint64 ContentHash;
     };
-    MGP_ASSERT_POD(MGPShaderBuffers, 32);
+    MGP_ASSERT_POD(MGPShaderBuffers, 40);
+
+    // THE ONE SPELLING OF THE MASK, for the reason kMGPipeShaderBufferClass* is the one
+    // spelling of the class: the emitter sets these bits on the client and four backend sites
+    // read them on the server, and a mask indexed by hand in five places is five chances to
+    // pick the wrong word. Both take the words rather than the record so the APPLIER's copy of
+    // the mask - which is per class and lives in MGPipeApplierState, not in a payload - goes
+    // through exactly the same arithmetic.
+    //
+    // OUT OF RANGE IS "NOT WRITABLE" AND "WRITE NOTHING", never an out-of-bounds word: the
+    // capacity is the wire's bound and the codec refuses a record past it, so this is the
+    // second belt rather than the first.
+    inline constexpr Bool MGPipeShaderBufferMaskHas(const Uint32* words, Uint32 index) {
+        if (index >= kMGPipeMaxBufferBindingPoints) return false;
+        return (words[index >> 5] & (Uint32{1} << (index & 31u))) != 0;
+    }
+    inline constexpr void MGPipeShaderBufferMaskSet(Uint32* words, Uint32 index) {
+        if (index >= kMGPipeMaxBufferBindingPoints) return;
+        words[index >> 5] |= Uint32{1} << (index & 31u);
+    }
+    static_assert(kMGPipeShaderBufferWritableMaskWords * 32u >= kMGPipeMaxBufferBindingPoints,
+                  "the writable mask no longer covers the binding-point window it describes "
+                  "(ID-104: widen the mask, never narrow the window)");
 
     // Var-tail header: MGPBufferRange[Count] then Uint32 offsets[Count].
     struct MGPStreamOutputTargets {

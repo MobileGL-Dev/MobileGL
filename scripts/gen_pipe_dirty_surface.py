@@ -84,8 +84,17 @@ SCAN_ROOTS = (os.path.join(REPO_ROOT, "MobileGL", "MG_Impl", "GLImpl"),
 # which is that they create or destroy objects rather than move a pushed field, and each
 # object class's creation and destruction is already answered by its own Mark*ForDeletion row
 # plus the constructor-time resource_create.
+# P5e WIDENS IT BY ONE MORE WORD, `Touch`, and the hole it closes is the same coverage hole
+# `Use` and `Bind` closed at P4a. `GLContext::TouchBufferBindingPoint` is the high-water mark
+# every indexed-binding-point walk is bounded by - the backend's, the client's GPU-write sweep's
+# and, since P5e, set_shader_buffers' emitted window - so a call that moves it moves the SIZE of
+# a pushed record, and none of the three sites that call it was visible to this scan because
+# none begins with one of the twelve words the pattern matched. The complete set the widening
+# surfaces was enumerated by grep before the change landed: ONE name on two call sites, both in
+# GL_Buffer.cpp's BindBufferBase_State / BindBufferRange_State, which already carry rows for
+# their other mutators.
 MUTATOR_PREFIXES = ("Add", "Set", "Mark", "Bump", "Allocate", "Truncate", "Record", "Notify",
-                    "Begin", "End", "Use", "Bind")
+                    "Begin", "End", "Use", "Bind", "Touch")
 
 MUTATOR_RE = re.compile(r"pGLContext->\s*((?:%s)\w*)\s*\(" % "|".join(MUTATOR_PREFIXES))
 # The SECOND publish mechanism (MG_Pipe/PipeMutation.h). It carries the FIELD, not a mutator
@@ -1604,22 +1613,27 @@ def self_test(scanned, bits, publishers, movers, moved, outside=None, undecided_
     tripped(any(p.startswith("MISSING publisher") for p in problems),
             "5 (a dropped render-state publisher)")
 
-    # 6. THE CONTROL FOR THE OBJECT-CLASS HALF, and it is again the shape of a defect that
-    #    was actually in this file: X(SetNamedTransformFeedbackBinding, NEW_SO_TARGETS)
-    #    named a shutter (the buffer-content aggregate mixed with the transform-feedback
-    #    generation) that GLContext::SetNamedTransformFeedbackBinding moves on no path - it
-    #    binds a BufferState binding point or writes a saved-bindings entry, and neither is
-    #    a buffer CONTENT write or a BeginTransformFeedback. The row has to be RED - and
-    #    the analysis reaches (by name, through `Bind(`) a body it cannot fully read, so the
-    #    red it can honestly print is "UNDECIDED and unmarked", never "supported".
+    # 6. THE CONTROL FOR THE OBJECT-CLASS HALF, on a mutator the analysis CANNOT fully read,
+    #    so the red it can honestly print is "UNDECIDED and unmarked" rather than "supported".
+    #    The pair is dead in the plainest way available: glTransformFeedbackBufferBase writes
+    #    a transform-feedback binding point or a named object's saved-bindings entry, and
+    #    NEW_VERTEX_ELEMENTS' shutter reads the bound VAO's identity and attribute generation.
+    #
+    #    IT USED TO NAME NEW_SO_TARGETS, because that pairing was a defect this file actually
+    #    carried: bit 17 mixed the buffer-CONTENT aggregate, which no binding has ever moved.
+    #    P5e (sb) gave the binding points a generation of their own and bit 17 now reads it, so
+    #    the old pair is a LIVE answer (kPulledPartialShutter|NEW_SO_TARGETS, marked undecided
+    #    for this same taint) and could no longer be the control - a negative control that has
+    #    quietly become positive is the failure this whole self-test exists to make loud, and
+    #    it was loud: this one stopped tripping in the commit that rewrote the row.
     with_dead_shutter = dict(real)
-    with_dead_shutter["SetNamedTransformFeedbackBinding"] = "NEW_SO_TARGETS"
+    with_dead_shutter["SetNamedTransformFeedbackBinding"] = "NEW_VERTEX_ELEMENTS"
     problems = check_mapping(with_dead_shutter, real_duplicates, scanned, bits, publishers,
                              movers, moved, outside, real_marks)
     verdicts = derive_bit_answers(with_dead_shutter, bits, movers, moved, outside)
-    tripped(any(("NEW_SO_TARGETS for SetNamedTransformFeedbackBinding" in p
+    tripped(any(("NEW_VERTEX_ELEMENTS for SetNamedTransformFeedbackBinding" in p
                  and p.startswith(("UNDER-FIRING", "UNDECIDED"))) for p in problems)
-            and verdicts[("SetNamedTransformFeedbackBinding", "NEW_SO_TARGETS")][0] != SUPPORTED,
+            and verdicts[("SetNamedTransformFeedbackBinding", "NEW_VERTEX_ELEMENTS")][0] != SUPPORTED,
             "6 (an object-class answer whose shutter the mutator never moves)")
     # 6b. the same family, on a mutator the analysis reads completely, so the red is the
     #     verdict itself: a texture-bind bump moves nothing NEW_GLOBAL_CONSTANTS compares.

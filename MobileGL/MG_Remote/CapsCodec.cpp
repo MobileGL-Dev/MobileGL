@@ -60,6 +60,10 @@ namespace MobileGL::MG_Remote {
     // assertion that turns "room to P8" from a comment into a build break.
     static_assert(MG_Pipe::kMGPipeSubsystemsMigratedAtP4a <= 0xFFFFull,
                   "the subsystem mask no longer fits CallMask's sixteen consumer bits");
+    // P5e (sb): and the phase constant that is actually published now, so the assertion tracks
+    // the highest allocated bit rather than the highest bit at the time it was written.
+    static_assert(MG_Pipe::kMGPipeSubsystemsMigratedAtP5e <= 0xFFFFull,
+                  "the subsystem mask no longer fits CallMask's sixteen consumer bits");
 
     namespace {
 

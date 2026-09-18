@@ -31,6 +31,7 @@
 #include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Impl/Pipe/SamplerEmit.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
+#include <MG_Impl/Pipe/ShaderBufferEmit.h>
 #include <MG_Impl/Pipe/TextureEmit.h>
 #include <MG_Impl/Pipe/Tracker.h>
 #include <MG_Impl/Pipe/VertexInputEmit.h>
@@ -1319,11 +1320,41 @@ namespace MobileGL::MG_Pipe {
         // the commit that gives the emitter its body - so a client path that lands before its
         // emitter does is inert by construction rather than by everyone remembering to check; the
         // third is P4aFamilyHasItsConsumer above and the fourth is P4aFamilyDependenciesAreSet.
+        // P5e (sb, ID-106 and CONTRACT-P5E.md §1). THE BINDING-POINT FAMILY's TWO EXTRA
+        // CONJUNCTS, kept beside P4a's rather than folded into them, because it asks a
+        // DIFFERENT consumer question. P4a's four families all ride the resource family's one
+        // signal (P4aFamilyHasItsConsumer says why); bit 13's consumer question is bit 13's
+        // own - MG_Backend/Init.cpp publishes it in the same commit that sets
+        // ShaderBufferEmit.h's wired constant, and a server that does not publish it is a
+        // server whose four binding-point walks still read the frontend, so a record sent to it
+        // would be stored and never looked at while the client latched its suppressor.
+        //
+        // AND BIT 13 REQUIRES BIT 7, for bit 11's reason one family over: every
+        // MGPBufferRange::Res names a Buffer handle and only bit 7 puts one in the resource
+        // slot table, so without it every EnsureBufferResourceForHandle on the server would
+        // mint a twin with no record behind it. Withholding the whole family is the safe
+        // direction - the legacy frontend walk runs untouched on both sides.
+        Bool P5eFamilyIsLive(Uint64 subsystem, Uint64 pushMask) {
+            if ((subsystem & kMGPipeSubsystemBufferBindings) == 0) return true;
+            if ((pushMask & kMGPipeSubsystemResources) == 0) return false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                return MG_Remote::Client::CapsMirrorInstance().ServerConsumes(
+                    kMGPipeSubsystemBufferBindings);
+            }
+#endif
+            // Under monolith the "consumer" is the backend that registered the resource op
+            // table, exactly as it is for P4a's four: there is no caps snapshot to ask and the
+            // binding-point walks live in the same DirectGLES that registers it.
+            return MGPipeGetResourceOps() != nullptr;
+        }
+
         Bool FamilyIsLive(Uint64 subsystem, Uint64 wired) {
             const Uint64 pushMask = MG_Config::Features.PipePush;
             return (pushMask & subsystem) != 0 && (wired & subsystem) != 0 &&
                    P4aFamilyHasItsConsumer(subsystem) &&
-                   P4aFamilyDependenciesAreSet(subsystem, pushMask);
+                   P4aFamilyDependenciesAreSet(subsystem, pushMask) &&
+                   P5eFamilyIsLive(subsystem, pushMask);
         }
 
         // ---- THE FAMILY SEAM ----
@@ -2248,7 +2279,14 @@ namespace MobileGL::MG_Pipe {
                                                   kMGPipeWiredFramebufferSubsystem |
                                                   kMGPipeWiredTextureSubsystem |
                                                   kMGPipeWiredSamplerSubsystem |
-                                                  kMGPipeWiredProgramSubsystem;
+                                                  kMGPipeWiredProgramSubsystem |
+                                                  // P5e (sb): the indexed buffer binding
+                                                  // points, by the same rule and from the same
+                                                  // kind of header. ID-106 pins the other half
+                                                  // of the switch: MG_Backend/Init.cpp's
+                                                  // consumer mask gains bit 13 in the same
+                                                  // commit, or R-8 withholds the whole family.
+                                                  kMGPipeWiredBufferBindingSubsystem;
         // Each family constant is either 0 or its own subsystem bit and nothing else. Without
         // this a header that set the wrong constant - the sampler bit in the program header,
         // say - would switch the wrong family on and every gate would still pass.
@@ -2264,6 +2302,9 @@ namespace MobileGL::MG_Pipe {
         static_assert(kMGPipeWiredProgramSubsystem == 0 ||
                           kMGPipeWiredProgramSubsystem == kMGPipeSubsystemPrograms,
                       "ProgramEmit.h's wired constant must be 0 or the program bit");
+        static_assert(kMGPipeWiredBufferBindingSubsystem == 0 ||
+                          kMGPipeWiredBufferBindingSubsystem == kMGPipeSubsystemBufferBindings,
+                      "ShaderBufferEmit.h's wired constant must be 0 or the binding-point bit");
 
         // A field an emitted call supplies COMPLETELY, so the residual fill may stop pulling
         // it. Two rows of Coverage.def's emitted list do not qualify and each has its reason
@@ -2985,6 +3026,22 @@ namespace MobileGL::MG_Pipe {
         Uint64 DrainTextureSubData(GLContext& ctx) {
             return MGPipeTextureEmitterInstance().DrainTextureSubData(ctx);
         }
+
+        // ---- P5e's two, and they are TWO adapters over THREE records (sb, §5.6) ----
+        //
+        // The split is the DIRTY BITS' and not the classes': bit 15 is the uniform binding
+        // points and bit 16 is the two writable classes, which share a shutter because a
+        // storage bind and a counter bind are the same event to every reader of the record.
+        // Bit 17's family (set_stream_output_targets) has no adapter at all - XFB stays
+        // lockstep for the whole of P5e (§5.7) - and that absence is the catalogue's split,
+        // not an omission.
+        Uint64 EmitConstBuffers(GLContext& ctx) {
+            return MGPipeShaderBufferEmitterInstance().EmitConstBuffers(ctx);
+        }
+
+        Uint64 EmitShaderBuffers(GLContext& ctx) {
+            return MGPipeShaderBufferEmitterInstance().EmitShaderBuffers(ctx);
+        }
     } // namespace
 
     Uint64 MGPipeVertexAttribDefaultRepairCount() { return g_attribDefaultRepairs; }
@@ -3105,12 +3162,17 @@ namespace MobileGL::MG_Pipe {
 #else
         constexpr Bool contextValuesWireLive = false;
 #endif
+        // AND THE SEVENTH IS P5eFamilyIsLive (ID-106), which is the same sentence for the
+        // binding-point family and asks bit 13's OWN consumer bit rather than the resource
+        // family's. It answers true for every subsystem but bit 13, so nothing that emitted
+        // before P5e changes.
         const auto wants = [&](MGPipeDirty bit) {
             const Uint64 subsystem = MGPipeSubsystemForDirty(bit);
             return subsystem != 0 && (pushMask & subsystem) != 0 &&
                    (kMGPipeWiredSubsystems & subsystem) != 0 &&
                    P4aFamilyHasItsConsumer(subsystem) &&
                    P4aFamilyDependenciesAreSet(subsystem, pushMask) &&
+                   P5eFamilyIsLive(subsystem, pushMask) &&
                    (dirty & MGPipeDirtyBit(bit)) != 0;
         };
         Uint64 payloadBytes = 0;
@@ -3182,6 +3244,13 @@ namespace MobileGL::MG_Pipe {
             MGPipeSamplerEmitterInstance().Reset();
             MGPipeImageEmitterInstance().Reset();
             MGPipeProgramEmitterInstance().Reset();
+            // P5e (sb): and the binding-point emitter's mirrors. MGPipeApplierReset clears all
+            // three of the applier's windows and ADVANCES ShaderBuffersSerial, so the emitter's
+            // latch has to reset with it - the three suppressor slots are already cleared by
+            // InvalidateAll() above, and without that the first emission after a make-current
+            // would be suppressed as unchanged and the server would draw against a window it
+            // had just been told to empty.
+            MGPipeShaderBufferEmitterInstance().Reset();
             g_residualDue = true;
         }
 
@@ -3229,6 +3298,24 @@ namespace MobileGL::MG_Pipe {
         }
         if (wants(MGPipeDirty::NewGlobalConstants)) {
             payloadBytes += EmitGlobalConstants(*ctx);
+        }
+
+        // P5e's segment (sb, §5.6): the indexed buffer binding points, AFTER the program
+        // segment for the same "code organisation, not a contract" reason ARCHITECTURE.md 5.4
+        // gives for P4a's order - all of a verb's set_*/bind_* complete before the verb, and
+        // the server resolves a point against its own descriptor at its sync point. It reads
+        // better here because the uniform window is what the program's block bindings INDEX
+        // (DirectGLES.cpp's UBO loop), so the two records that describe a draw's uniform
+        // buffers stand together.
+        //
+        // NOTHING FOR BIT 17: set_stream_output_targets stays unemitted for the whole of P5e
+        // (§5.7). The bit is still computed, counted and mapped onto this subsystem, so an
+        // operator clearing bit 13 gets the whole family's frontend walk back.
+        if (wants(MGPipeDirty::NewConstBuffers)) {
+            payloadBytes += EmitConstBuffers(*ctx);
+        }
+        if (wants(MGPipeDirty::NewShaderBuffers)) {
+            payloadBytes += EmitShaderBuffers(*ctx);
         }
 
         if (wants(MGPipeDirty::NewPipelineState) || wants(MGPipeDirty::NewRenderState)) {
