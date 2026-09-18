@@ -1212,6 +1212,30 @@ namespace MobileGL::MG_Pipe {
     Uint64 MGPipeApplierContextSerial() { return g_applier.ContextSerial; }
     void MGPipeApplierNoteTextureStateMoved() { ++g_applier.TextureShutterSerial; }
 
+    // P5e (id), CONTRACT-P5E §2.1. THE BODY ra REPLACES, and the reason it is a constant here
+    // rather than absent: every caller of the predicate lands with this package, so a missing
+    // body would be a link error in six worktrees at once, and a body that guessed at the wait
+    // rule would change behaviour in the package whose whole claim is that it changes none.
+    // True for every record IS today's rule - the client blocks after publishing every verb
+    // (ClientSession.cpp's :915-959 lockstep path) - so this is a restatement, not a stub.
+    Bool MGPipeBarriered(MGPWireOp op, const void* payload, const MGPipeApplierState& st) {
+        (void)op;
+        (void)payload;
+        (void)st;
+        return true;
+    }
+
+    // §4.4's input. Outside a disaggregated build there is no ApplyOne to stamp it and no
+    // client that could run ahead, so the answer is the constant the monolith has always
+    // behaved as.
+    Bool MGPipeApplierCurrentRecordIsBarriered() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return g_applier.CurrentRecordBarriered;
+#else
+        return true;
+#endif
+    }
+
     void MGPipeSetResourceOps(const MGPipeResourceOps* ops) { g_resourceOps = ops; }
     const MGPipeResourceOps* MGPipeGetResourceOps() { return g_resourceOps; }
 

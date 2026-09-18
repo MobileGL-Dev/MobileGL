@@ -4551,7 +4551,12 @@ void main() {
         // delete, so the scope admits the probe as named debt rather than letting the guard
         // Fatal at server teardown. P7 gives these resources storage that is not a frontend
         // object.
-        const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
+        //
+        // P5e (id), ruling 12: one of Magma's FOUR apply-thread allocator debts, and the scope
+        // is now named after that debt rather than after the frontend-keyed registry - Espryt's
+        // half of which P5e is retiring, while this one waits for P7. The exemption is keyed on
+        // a DirectVulkan server, which is what this file always is.
+        const MG_Pipe::MagmaP7AllocatorDebtScope magmaP7AllocatorDebt;
 #endif
         m_blitResources = {};
     }
@@ -4630,8 +4635,9 @@ void main() {
 #if MOBILEGL_BUILD_DISAGGREGATED
         // Same shape as ShutdownBlitResources above: the hidden depth-mipmap program is a
         // frontend object created and destroyed by the server backend on the apply thread, and
-        // its destructor's lifetime-id probe is admitted here as named debt.
-        const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
+        // its destructor's lifetime-id probe is admitted here as named debt - Magma's, P7's to
+        // retire, which is what the scope's P5e name says (ruling 12).
+        const MG_Pipe::MagmaP7AllocatorDebtScope magmaP7AllocatorDebt;
 #endif
         m_depthMipmapResources = {};
     }
@@ -8974,8 +8980,11 @@ void main() {
         // the resolution here is frontend-keyed - the handle was minted over the frontend
         // object's lifetime id, and the two probes below (the client allocator's slot entry
         // and the frontend context's framebuffer pool) are named debt inside the scope, the
-        // same shape as Espryt's StateForHandle arm: P3b/P4b retire it by carrying the object
-        // identity in the record.
+        // same shape as Espryt's StateForHandle arm: P7 retires it by carrying the object
+        // identity in the record. P5e (id), ruling 12: the third of Magma's four debts, so the
+        // scope it rides in is MagmaP7AllocatorDebtScope. Magma stays lockstep for the whole of
+        // P5e (CONTRACT-P5E §6.1), so the record being applied here is always barriered and the
+        // exemption still holds.
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             auto& applierState = MG_Pipe::MGPipeApplier();
             const MG_Pipe::MGPipeHandle readHandle = applierState.VerbBlitReadFbo;
@@ -8983,7 +8992,7 @@ void main() {
             if (!MG_Pipe::MGPipeHandleIsNull(readHandle) || !MG_Pipe::MGPipeHandleIsNull(drawHandle)) {
                 const auto resolveEndpoint = [](MG_Pipe::MGPipeHandle handle)
                         -> SharedPtr<MG_State::GLState::FramebufferObject> {
-                    const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
+                    const MG_Pipe::MagmaP7AllocatorDebtScope magmaP7AllocatorDebt;
                     if (handle == MG_Pipe::kMGPipeDefaultFramebuffer) {
                         return MG_State::pGLContext ? MG_State::pGLContext->GetFramebufferObject(0) : nullptr;
                     }

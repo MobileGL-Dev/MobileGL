@@ -717,10 +717,15 @@ namespace MobileGL::MG_Pipe {
         const MGPipeHandle res = [&]() {
 #if MOBILEGL_BUILD_DISAGGREGATED
             // CONTRACT-P5C §3.1's named exemption, Magma's half: the binding records that
-            // would carry this buffer's handle are P4b's to emit and Magma's server-side
+            // would carry this buffer's handle are sb's to emit and Magma's server-side
             // binding table is P7's, so until then the probe runs inside the scope - the
             // debt's named, greppable form rather than a silent guard removal.
-            const MGPipeReverseAnnouncementScope reverseAnnouncement;
+            //
+            // P5e (id), ruling 12: the FOURTH of Magma's apply-thread allocator debts and the
+            // last user of the scope P5e renamed. Espryt never reaches this arm under a
+            // transport - MarkBufferGpuWrittenByHandle carries the handle from the record side
+            // (sb/fb) - so the DirectVulkan key on the exemption costs it nothing.
+            const MagmaP7AllocatorDebtScope magmaP7AllocatorDebt;
 #endif
             return MGPipeSlots().FindByLifetimeId(MGPipeKind::Buffer, bufferObject->GetLifetimeId());
         }();

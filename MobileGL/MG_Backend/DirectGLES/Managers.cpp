@@ -2932,10 +2932,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
             // P5c merge coordination (CONTRACT-P5C §3.1's named exemption): every caller of
             // this function is a site whose handle-carrying records (set_shader_buffers /
-            // set_stream_output_targets) the client does not emit until P4b, so the probe
+            // set_stream_output_targets) the client does not emit until sb, so the probe
             // below runs inside the scoped exemption. The scope, not a silent guard removal,
             // is what keeps the debt named and greppable.
-            const MG_Pipe::MGPipeReverseAnnouncementScope reverseAnnouncement;
+            //
+            // P5e (id), ruling 12: THE SCOPE CHANGED UNDER THIS SITE AND THE SITE HAD TO MOVE.
+            // The exemption it used to name is now MagmaP7AllocatorDebtScope and is keyed on a
+            // DirectVulkan server (Magma's four P7 debts); this is Espryt's, and it belongs to
+            // the frontend-keyed registry family with the rest of the Espryt debt. Which scope
+            // it names is not cosmetic: the Magma one would not exempt it here at all. It
+            // retires when vi/sb carry the handle into EnsureBufferResourceForHandle /
+            // IsBufferDrawCleanByHandle / MarkBufferGpuWrittenByHandle, which is the last
+            // caller set this function has.
+            const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
 #endif
             return g_backendBufferResources.HandleOf(bufferObject);
         }
