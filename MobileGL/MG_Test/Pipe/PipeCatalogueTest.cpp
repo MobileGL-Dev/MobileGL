@@ -65,8 +65,8 @@ TEST(PipeCatalogue, FrontendNeverTakesAnApplierAddress) {
 namespace {
     // Counting expansions of the catalogue. The Class parameter is a real enumerator, so a
     // per-class count is a constant expression too.
-#define MGP_COUNT_ONE(Name, Payload, Class, Flags) +1
-#define MGP_COUNT_CLASS(Name, Payload, Class, Flags) +((Class) == countedClass ? 1 : 0)
+#define MGP_COUNT_ONE(Name, Payload, Class, Flags, Wait) +1
+#define MGP_COUNT_CLASS(Name, Payload, Class, Flags, Wait) +((Class) == countedClass ? 1 : 0)
 
     constexpr SizeT kExpandedCallCount = 0 MGP_CALL_LIST(MGP_COUNT_ONE);
 
@@ -77,13 +77,32 @@ namespace {
 
     // Every payload named in the catalogue must be a memcpy-able POD, and so must every
     // payload the verify comparator knows about.
-#define MGP_ASSERT_CALL_PAYLOAD_POD(Name, Payload, Class, Flags)                                                       \
+#define MGP_ASSERT_CALL_PAYLOAD_POD(Name, Payload, Class, Flags, Wait)                                                       \
     static_assert(std::is_trivially_copyable_v<Payload>, #Name "'s payload " #Payload " is not trivially copyable");
     MGP_CALL_LIST(MGP_ASSERT_CALL_PAYLOAD_POD)
 
 #define MGP_ASSERT_VERIFY_PAYLOAD_POD(Payload)                                                                         \
     static_assert(std::is_trivially_copyable_v<Payload>, #Payload " is not trivially copyable");
     MGP_VERIFY_PAYLOAD_LIST(MGP_ASSERT_VERIFY_PAYLOAD_POD)
+
+    // The catalogue's own spelling of an opcode, for a failure message. The wire codec has one
+    // of these and MG_Pipe may not reach it (MG_Remote is above this layer), so the table is
+    // expanded from the catalogue here rather than a name being duplicated per EXPECT.
+#define MGP_CATALOGUE_NAME_ROW(Name, Payload, Class, Flags, Wait) #Name,
+    constexpr const char* kCatalogueOpNames[] = {
+        "<kInvalid>",
+        MGP_CALL_LIST(MGP_CATALOGUE_NAME_ROW)
+    };
+#undef MGP_CATALOGUE_NAME_ROW
+    static_assert(sizeof(kCatalogueOpNames) / sizeof(kCatalogueOpNames[0]) ==
+                      static_cast<SizeT>(MGPWireOp::kOpCount),
+                  "the diagnostic name table and the opcode space disagree");
+
+    const char* WireOpNameForDiag(MGPWireOp op) {
+        const SizeT index = static_cast<SizeT>(op);
+        return index < static_cast<SizeT>(MGPWireOp::kOpCount) ? kCatalogueOpNames[index]
+                                                               : "<opcode out of range>";
+    }
 } // namespace
 
 // The handle is the whole object model. Eight bytes, a register pair, no padding.
@@ -127,11 +146,12 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
     // The per-class counts PipeCalls.def documents in its header.
     // kScreen is 11 + P5c's applier_reset (MG_Remote/CONTRACT-P5C.md §5.1); kCtxObject is
     // 9 + P5c's object_death (§5.2), the framebuffer family's first wire delete opcode.
-    // kCtxState is 17 + P5c rv's set_context_values (§5.3), the residual-value record.
+    // kCtxState is 17 + P5c rv's set_context_values (§5.3), the residual-value record, + P5e's
+    // set_program_bindings (MG_Remote/CONTRACT-P5E.md §1), the post-link binding record.
     EXPECT_EQ(ClassCount<kScreen>(), 12u);
     EXPECT_EQ(ClassCount<kCtxQuery>(), 8u);
     EXPECT_EQ(ClassCount<kCtxCso>(), 13u);
-    EXPECT_EQ(ClassCount<kCtxState>(), 18u);
+    EXPECT_EQ(ClassCount<kCtxState>(), 19u);
     EXPECT_EQ(ClassCount<kCtxObject>(), 10u);
     // 13 + the five P5b-appended verbs (MG_Remote/CONTRACT-P5B.md): bind_shader_image,
     // patch_parameter, bind_stream_output, set_storage_block_binding,
@@ -142,9 +162,10 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
 // A row nobody has migrated is null - which is exactly what "this subsystem has not been
 // migrated, keep pulling" means (plan B section 4.1).
 //
-// UNTIL P5 R-17 THAT WAS EVERY ROW, and this case said so. It is now EXACTLY THE 41 ROWS WITH
-// NO MGPipeApply* ENTRY POINT (79 - the 38 that have one; the number was 34 at P5, 39 after
-// P5b's five sink-only verbs, and rv's set_context_values grew BOTH sides of the difference):
+// UNTIL P5 R-17 THAT WAS EVERY ROW, and this case said so. It is now EXACTLY THE 42 ROWS WITH
+// NO MGPipeApply* ENTRY POINT (80 - the 38 that have one; the number was 34 at P5, 39 after
+// P5b's five sink-only verbs, rv's set_context_values grew BOTH sides of the difference, and
+// P5e's set_program_bindings grew the null side alone):
 // the other 38 have an applier, R-17 installs adapters over them,
 // and a null there would no longer mean "keep pulling" - `MG_Impl/Pipe`'s call sites go through
 // the thunks, so a null would mean "call through a null pointer". The number is asserted rather
@@ -161,7 +182,7 @@ TEST(PipeCatalogue, UninstalledTablesAreAllNull) {
     const void* const* context = reinterpret_cast<const void* const*>(&gMGPipeContext);
 #if MOBILEGL_PIPE_PUSH
     MGPipeInstallMonolithTables();
-    // The 41 rows with no MGPipeApply* entry point are still null, and null still means "this
+    // The 42 rows with no MGPipeApply* entry point are still null, and null still means "this
     // subsystem has not been migrated, keep pulling". Named rather than counted, because the
     // count is the other case's job and two cases asserting the same number would both go red
     // for one change. P5c's two control records are among them by design (CONTRACT-P5C.md §5:
@@ -177,6 +198,10 @@ TEST(PipeCatalogue, UninstalledTablesAreAllNull) {
     EXPECT_EQ(gMGPipeScreen.FenceCreate, nullptr);
     EXPECT_EQ(gMGPipeScreen.ApplierReset, nullptr);
     EXPECT_EQ(gMGPipeContext.ObjectDeath, nullptr);
+    // P5e's opcode 80 joins them: the row is catalogued, its codec layout is written and its
+    // tails are validated, but there is no MGPipeApplySetProgramBindings and no route - package
+    // pg installs both. A null here is the contract, not an omission.
+    EXPECT_EQ(gMGPipeContext.SetProgramBindings, nullptr);
 #else
     // A pull build compiles no applier and no routing, so the pre-migration statement is the
     // whole truth there and this case is the one that says so.
@@ -251,6 +276,9 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     // notice's mailbox are the producers, byte for byte as before (G1/G2).
     EXPECT_EQ(gMGPipeScreen.ApplierReset, nullptr);
     EXPECT_EQ(gMGPipeContext.ObjectDeath, nullptr);
+    // P5e's set_program_bindings (CONTRACT-P5E.md §1): catalogued with a null route until pg
+    // installs the applier entry point and the adapter beside it.
+    EXPECT_EQ(gMGPipeContext.SetProgramBindings, nullptr);
 #else
     // A pull build compiles no applier and no routing, so the pre-migration statement is still
     // the whole truth there.
@@ -584,7 +612,14 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     // - fixed POD, no blob, no tail, no reply - with an MGPipeApply* entry point, which the two
     // control records deliberately do not have.
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::SetContextValues), 79);
-    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 80);
+    // P5e (MG_Remote/CONTRACT-P5E.md §1) appended ONE more, by the same rule: opcode 80, and
+    // nothing before it moved. set_program_bindings is a kCtxState row with THREE tails and a
+    // host span in the third; it lands with a null route and a sink that refuses it by name,
+    // exactly as set_shader_buffers has sat catalogued-and-dead since P4a.
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::SetProgramBindings), 80);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 81);
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::SetProgramBindings),
+              static_cast<Uint32>(kVarTail | kHostSpan));
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ApplierReset), static_cast<Uint32>(kNone));
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ObjectDeath), static_cast<Uint32>(kNone));
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::SetContextValues), static_cast<Uint32>(kNone));
@@ -618,14 +653,150 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     EXPECT_EQ(sizeof(MGPContextValues::TouchedBufferBindingPointCount), 60u);
     EXPECT_EQ(sizeof(MGPAttribValue), 56u);
     EXPECT_EQ(sizeof(MGPVertexAttribDefaults), 8u);
+    // P5e's payloads (CONTRACT-P5E.md §1), pinned at runtime like every other MGP_ASSERT_POD.
+    //
+    // MGPProgramDesc GREW 192 -> 200, and that is the phase's one wire-format widening: the
+    // descriptor's four trailing Uint8s end exactly at offset 24 and MGPBlobRef is 8-aligned,
+    // so there was no spare byte for LinkStatus and the draft's "in the descriptor's existing
+    // pad" was wrong. Pinned here, by value, because a record whose size moved silently is a
+    // protocol break no other test would see - and because THIS number is the red-once the
+    // phase names: change MGPProgramBindings' or the descriptor's size and this case fails.
+    EXPECT_EQ(sizeof(MGPProgramDesc), 200u);
+    EXPECT_EQ(sizeof(MGPProgramBindings), 32u);
+    EXPECT_EQ(sizeof(MGPProgramSamplerUnit), 8u);
+    EXPECT_EQ(sizeof(MGPProgramStorageOverride), 40u);
+    // The three declared tail bounds. A program past one of them is a COUNTED REFUSAL and never
+    // a truncation, so the numbers are the contract rather than an implementation detail.
+    EXPECT_EQ(kMGPipeMaxProgramBlockBindings, 64u);
+    EXPECT_EQ(kMGPipeMaxProgramSamplerUnits, 256u);
+    EXPECT_EQ(kMGPipeMaxProgramStorageOverrides, 64u);
+    // LinkStatus is a real byte and a zeroed descriptor means "not linked", which is what makes
+    // the server's decline the safe default.
+    MGPProgramDesc program{};
+    EXPECT_EQ(program.LinkStatus, 0u);
+    // set_shader_buffers' capacity, pinned on the wire side; MG_Impl/Pipe/PipeFill.cpp is the
+    // one translation unit that also sees BufferState.h's constant and pins them together.
+    EXPECT_EQ(kMGPipeMaxBufferBindingPoints, 84u);
     // The two draw-flag bits P5b's d1 arms are exclusive by contract and distinct by value.
     EXPECT_EQ(static_cast<Uint32>(kDrawIsIndirect), 1u << 5);
     EXPECT_EQ(static_cast<Uint32>(kDrawHasUserIndices) & static_cast<Uint32>(kDrawIsIndirect), 0u);
+    // P5e's draw flag: the next free bit, and disjoint from all five before it.
+    EXPECT_EQ(static_cast<Uint32>(kDrawClientArrays), 1u << 6);
+    EXPECT_EQ(static_cast<Uint32>(kDrawClientArrays) &
+                  static_cast<Uint32>(kDrawHasUserIndices | kDrawPrimitiveRestart |
+                                      kDrawIndicesAreClient | kDrawHasIndexRange |
+                                      kDrawHasXfbCount | kDrawIsIndirect),
+              0u);
+    // ... and it still fits the one byte MGPDrawInfo::Flags is, which is why the record did not
+    // grow: MGPDrawInfo stays 56 bytes.
+    EXPECT_EQ(sizeof(MGPDrawInfo), 56u);
+    EXPECT_LE(static_cast<Uint32>(kDrawClientArrays), 0xFFu);
     // The clear discriminants have ONE spelling now, and Whole is 0 so a zeroed record is a
     // whole-framebuffer clear.
     EXPECT_EQ(kMGPipeClearKindWhole, 0u);
     EXPECT_EQ(kMGPipeClearKindDepthStencil + 1, kMGPipeClearKindCount);
     EXPECT_EQ(kMGPipeClearValueClassUint + 1, kMGPipeClearValueClassCount);
+}
+
+// ---- P5e: the wait-class column (MG_Remote/CONTRACT-P5E.md §2.2) --------------------------
+//
+// THE POINT OF THIS CASE IS THAT IT DOES NOT READ PipeCalls.def. Every other statement about
+// the column - the generated table, the two gates in gen_pipe.py, the static_asserts in
+// PipeWire.inc - is derived from the def, so all of them move together when a row is edited.
+// This case re-states CONTRACT-P5E §2.2's table BY NAME, in the contract's own grouping, so a
+// row silently moved from kWaitApplied to kWaitNone has to be argued in two places or it goes
+// red here. That is the difference between a table and a contract.
+//
+// It matters because the column is not decoration: on a run-ahead server kWaitNone is a promise
+// that the record's apply reads NOTHING of the client's (rule F), and a row demoted to it by
+// accident is a torn read that renders wrong rather than aborting.
+TEST(PipeCatalogue, EveryRowCarriesTheWaitClassTheContractGivesIt) {
+    // kWaitPresent: present alone, paced by the credit taken BEFORE the encode (§2.4).
+    EXPECT_EQ(MGPipeWaitClassFor(MGPWireOp::Present), kWaitPresent);
+
+    // kWaitReply: every row whose answer is not derivable (R-5). Named, all fourteen, because
+    // the flag-to-class agreement is what keeps a waiter from hanging on a slot nobody posts.
+    const MGPWireOp replyRows[] = {
+        MGPWireOp::GetCaps,         MGPWireOp::ResourceCreate,   MGPWireOp::ResourceRespecify,
+        MGPWireOp::MapPersistent,   MGPWireOp::FenceStatus,      MGPWireOp::FenceWait,
+        MGPWireOp::QueryAvailable,  MGPWireOp::QueryResult,      MGPWireOp::QueryTimestamp,
+        MGPWireOp::SetTextureParams, MGPWireOp::ResourceSubData, MGPWireOp::ResourceReadback,
+        MGPWireOp::GetTextureImage, MGPWireOp::ReadPixels,
+    };
+    for (const MGPWireOp op : replyRows) {
+        EXPECT_EQ(MGPipeWaitClassFor(op), kWaitReply) << WireOpNameForDiag(op);
+        EXPECT_NE(MGPipeCallFlagsFor(op) & static_cast<Uint32>(kReplySlot), 0u)
+            << WireOpNameForDiag(op);
+    }
+
+    // kWaitApplied: the rows whose apply STILL reads a BARRIER_PULLED row or probes the client
+    // allocator, so the client parks in its own wait and CONTRACT-P5C's semantics hold for them
+    // unchanged - their pulls count into rsp and their probes are legal inside a scope. Two of
+    // them are trailing items and are expected to leave this list in a later package:
+    // generate_mipmap the moment tx2 resolves the texture from VerbMipRes instead of the active
+    // unit, and set_storage_block_binding the moment pg resolves it through
+    // MGPStorageBlockBinding::ShaderCso. When they do, THIS list is what has to be edited.
+    const MGPWireOp appliedRows[] = {
+        MGPWireOp::ApplierReset,      MGPWireOp::GenerateMipmap,
+        MGPWireOp::SetStorageBlockBinding, MGPWireOp::BeginStreamOutput,
+        MGPWireOp::EndStreamOutput,   MGPWireOp::PauseStreamOutput,
+        MGPWireOp::ResumeStreamOutput, MGPWireOp::BindStreamOutput,
+        MGPWireOp::CopyFramebufferToTexture,
+    };
+    for (const MGPWireOp op : appliedRows) {
+        EXPECT_EQ(MGPipeWaitClassFor(op), kWaitApplied) << WireOpNameForDiag(op);
+    }
+
+    // kWaitNone: the steady draw path and every state/CSO/object row without a reply. Named for
+    // the rows the phase exists for, and then counted for the rest, so a new row cannot join
+    // the set unnoticed.
+    const MGPWireOp noneRows[] = {
+        MGPWireOp::DrawVbo,        MGPWireOp::LaunchGrid,        MGPWireOp::Clear,
+        MGPWireOp::Blit,           MGPWireOp::MemoryBarrier,     MGPWireOp::Flush,
+        MGPWireOp::SetSwapInterval, MGPWireOp::BindShaderImage,  MGPWireOp::PatchParameter,
+        MGPWireOp::ObjectDeath,    MGPWireOp::ResourceDestroy,   MGPWireOp::UnmapPersistent,
+        MGPWireOp::FenceCreate,    MGPWireOp::FenceDestroy,      MGPWireOp::FenceWaitServer,
+        MGPWireOp::QueryCreate,    MGPWireOp::QueryBegin,        MGPWireOp::QueryEnd,
+        MGPWireOp::QueryDestroy,   MGPWireOp::QueryCounter,      MGPWireOp::SetContextValues,
+        MGPWireOp::SetProgramBindings, MGPWireOp::SetShaderBuffers,
+        MGPWireOp::SetVertexBuffers, MGPWireOp::SetFramebufferState,
+        MGPWireOp::CreateShaderState, MGPWireOp::SetDrawProgram,
+    };
+    for (const MGPWireOp op : noneRows) {
+        EXPECT_EQ(MGPipeWaitClassFor(op), kWaitNone) << WireOpNameForDiag(op);
+    }
+
+    // The partition, by count. 14 + 1 + 9 = 24 rows wait; every other row of the catalogue does
+    // not. A row that changed class moves two of these numbers at once.
+    SizeT reply = 0, applied = 0, present = 0, none = 0, other = 0;
+    for (SizeT i = 1; i < static_cast<SizeT>(MGPWireOp::kOpCount); ++i) {
+        switch (MGPipeWaitClassFor(static_cast<MGPWireOp>(i))) {
+        case kWaitReply: ++reply; break;
+        case kWaitApplied: ++applied; break;
+        case kWaitPresent: ++present; break;
+        case kWaitNone: ++none; break;
+        default: ++other; break;
+        }
+    }
+    EXPECT_EQ(reply, 14u);
+    EXPECT_EQ(applied, 9u);
+    EXPECT_EQ(present, 1u);
+    EXPECT_EQ(none, static_cast<SizeT>(kMGPipeCallCount) - 24u);
+    EXPECT_EQ(other, 0u) << "a row carries the kWaitClassCount terminator as its class";
+
+    // And the reply half of the partition BOTH WAYS, over the whole catalogue: exactly the rows
+    // that own a slot wait for one. gen_pipe.py refuses a catalogue where they disagree; this
+    // is the same statement where a reader of the table will look for it.
+    for (SizeT i = 1; i < static_cast<SizeT>(MGPWireOp::kOpCount); ++i) {
+        const auto op = static_cast<MGPWireOp>(i);
+        const Bool ownsSlot = (MGPipeCallFlagsFor(op) & static_cast<Uint32>(kReplySlot)) != 0;
+        EXPECT_EQ(ownsSlot, MGPipeWaitClassFor(op) == kWaitReply) << WireOpNameForDiag(op);
+    }
+
+    // Opcode 0 is not a call and has no class, for the flags table's reason: a decoder holding
+    // a byte off a corrupt stream must reach its own Fatal rather than a wait decision.
+    EXPECT_EQ(MGPipeWaitClassFor(MGPWireOp::kInvalid), kWaitClassCount);
+    EXPECT_EQ(MGPipeWaitClassFor(MGPWireOp::kOpCount), kWaitClassCount);
 }
 
 // A well-formed record passes the applier's bounds gate. P0 has no applier, so "accepted"
@@ -817,8 +988,12 @@ TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
     // each with its own field list, so the comparator sees every one of them: 77. P5c appended
     // applier_reset's MGPApplierReset (CONTRACT-P5C.md §5.1) - object_death reuses
     // MGPHandleOnly, which has had a list since P0 - and rv added set_context_values'
-    // MGPContextValues (§5.3): 79.
-    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 79u);
+    // MGPContextValues (§5.3): 79. P5e appended set_program_bindings' MGPProgramBindings AND
+    // the two TAIL ELEMENT types beside it, MGPProgramSamplerUnit and MGPProgramStorageOverride
+    // (MG_Remote/CONTRACT-P5E.md §1) - the tails are listed for the same reason MGPBufferRange
+    // and MGPVertexAttribWire are: the comparator has to see INTO an element whose members
+    // include an MGHostSpan and a pad word, or it would memcmp the padding: 82.
+    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 82u);
     static_assert(MGPipeHasFieldVerifier<RenderStateParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PixelStoreParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PerBufferBlendState>::value);
@@ -925,7 +1100,7 @@ TEST(PipeCatalogue, BufferRangeCarriesNoInlineHostSpan) {
 
     // The call still declares the span it may carry, so the transport lays the tail out.
     Uint32 flags = 0;
-#define MGP_FLAGS_OF_SET_SHADER_BUFFERS(Name, Payload, Class, Flags)                                                   \
+#define MGP_FLAGS_OF_SET_SHADER_BUFFERS(Name, Payload, Class, Flags, Wait)                                                   \
     if (std::strcmp(#Name, "SetShaderBuffers") == 0) flags = static_cast<Uint32>(Flags);
     MGP_CALL_LIST(MGP_FLAGS_OF_SET_SHADER_BUFFERS)
 #undef MGP_FLAGS_OF_SET_SHADER_BUFFERS
@@ -1048,7 +1223,7 @@ TEST(PipeCatalogue, VertexWireViewsAreFlatAndCarryIsLongSeparately) {
 // inherits this pin rather than the guess.
 TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
     Uint32 flags = 0;
-#define MGP_FLAGS_OF_RESOURCE_RESPECIFY(Name, Payload, Class, Flags)                                                   \
+#define MGP_FLAGS_OF_RESOURCE_RESPECIFY(Name, Payload, Class, Flags, Wait)                                                   \
     if (std::strcmp(#Name, "ResourceRespecify") == 0) flags = static_cast<Uint32>(Flags);
     MGP_CALL_LIST(MGP_FLAGS_OF_RESOURCE_RESPECIFY)
 #undef MGP_FLAGS_OF_RESOURCE_RESPECIFY
@@ -1056,7 +1231,7 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
     // And it is the ONLY call that carries it: a second one would be a second decision, and
     // this predicate answers for exactly one call.
     Uint32 ackingCalls = 0;
-#define MGP_COUNT_ACKING_CALLS(Name, Payload, Class, Flags)                                                            \
+#define MGP_COUNT_ACKING_CALLS(Name, Payload, Class, Flags, Wait)                                                            \
     if ((static_cast<Uint32>(Flags) & static_cast<Uint32>(kNeedsAck)) != 0) ++ackingCalls;
     MGP_CALL_LIST(MGP_COUNT_ACKING_CALLS)
 #undef MGP_COUNT_ACKING_CALLS
@@ -1071,7 +1246,7 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
     // ROWS, whose applier entry points return a Bool the client acts on destructively and which
     // carried no flag because in monolith that answer is a direct call's return value.
     Uint32 replySlotCalls = 0;
-#define MGP_COUNT_REPLY_SLOT_CALLS(Name, Payload, Class, Flags)                                                        \
+#define MGP_COUNT_REPLY_SLOT_CALLS(Name, Payload, Class, Flags, Wait)                                                        \
     if ((static_cast<Uint32>(Flags) & static_cast<Uint32>(kReplySlot)) != 0) ++replySlotCalls;
     MGP_CALL_LIST(MGP_COUNT_REPLY_SLOT_CALLS)
 #undef MGP_COUNT_REPLY_SLOT_CALLS
@@ -1082,7 +1257,7 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
     // (PipeApply.h:820, :868, :897, :1023); map_persistent's void* is the fifth answer and was
     // already declared.
     Uint32 acceptanceWithSlot = 0;
-#define MGP_COUNT_ACCEPTANCE_ROWS(Name, Payload, Class, Flags)                                                         \
+#define MGP_COUNT_ACCEPTANCE_ROWS(Name, Payload, Class, Flags, Wait)                                                         \
     if ((std::strcmp(#Name, "ResourceCreate") == 0 || std::strcmp(#Name, "ResourceRespecify") == 0 ||                   \
          std::strcmp(#Name, "ResourceSubData") == 0 || std::strcmp(#Name, "SetTextureParams") == 0) &&                 \
         (static_cast<Uint32>(Flags) & static_cast<Uint32>(kReplySlot)) != 0) {                                         \

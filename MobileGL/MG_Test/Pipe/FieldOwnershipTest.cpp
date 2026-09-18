@@ -734,8 +734,13 @@ TEST_F(FieldOwnershipTest, StrictErrorsTurnsABarrierPulledReadIntoANamedAbort) {
     EXPECT_NE(r.Log.find("BARRIER-PULLED"), std::string::npos) << r.Log;
     EXPECT_NE(r.Log.find("MOBILEGL_IPC_STRICT_ERRORS=1"), std::string::npos) << r.Log;
     // The strict line names the phase that owes the answer; a strict abort that did not would
-    // leave the reader exactly where the gate found them.
-    EXPECT_NE(r.Log.find("retires in P8]"), std::string::npos) << r.Log;
+    // leave the reader exactly where the gate found them. P5e re-annotated this row (and the
+    // five object-class rows beside it) from "P8" to the phase that actually retires the pull,
+    // which is why the expected text moved with FieldOwnership.def rather than the case being
+    // re-pointed at another field: the string IS the debt entry, read out of the generated
+    // table, and a case that stopped checking it would let the annotation rot.
+    EXPECT_NE(r.Log.find("retires in P5e (Espryt unbarriered), P7 (Magma)]"), std::string::npos)
+        << r.Log;
 }
 
 TEST_F(FieldOwnershipTest, TheSameReadWithoutStrictErrorsSurvivesAndIsCounted) {

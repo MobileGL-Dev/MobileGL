@@ -11,7 +11,8 @@
 | **P5b** inproc 下的 verb 迁移（Minecraft 优先） | **已收官（2026-09-16）** | `37fc4fdb..82683d4a`；`MEASUREMENTS.md` §7 |
 | **P5c** `inproc` 共享内存读点归零 | **已收官（2026-09-17）** | `11ac3de6..b88e8487` + triage 修复；契约 `MobileGL/MG_Remote/CONTRACT-P5C.md`；审计 `~/w7/notes/p5c/p5c-audit-v1.md` |
 | **P5d** `inproc` 性能专项 | **已收官（2026-09-18，三轮）** | `cb06538c`、`56a77348`、`1f8de61b`；报告 [`P5D-INPROC-PERFORMANCE.md`](P5D-INPROC-PERFORMANCE.md)；`MEASUREMENTS.md` §9 |
-| P6 spawn transport | **下一个** | 届时只是传输替换 |
+| **P5e** 退役 Espryt draw path 的 lockstep | **进行中** | 契约 `MobileGL/MG_Remote/CONTRACT-P5E.md`（c0e 落地）；计划 `~/w7/notes/p5e/BRIEF-P5E.md`、裁定 `~/w7/notes/p5e/INTEGRATOR-DECISIONS-P5E.md`（ID-80..98）；包序 c0e → id → {vi, sb, pg, tx2, fb} ∥ ra，集成 commit 翻 `kMGPipeP5eRunAheadReady` |
+| P6 spawn transport | P5e 之后 | 届时只是传输替换 |
 
 ## 2. 当前头实测
 
@@ -85,10 +86,11 @@
 ## 6. 下一步
 
 0. P5d 的遗留（`P5D-INPROC-PERFORMANCE.md` "什么没完成"）：R-1 序列化留给 P3b/P4b → P11（`gPipeInputs` 版本化已写进 P11 行）；线程放置记录；小项随 P3b/P4b 顺手。
-1. **P6 spawn transport**：`SocketTransport` + `ServerMain` + 握手 / 退出语义 + EGL forwarder 的控制面帧；P5c 之后这只是传输替换。注意 P5c 留下的：`s_synced` / `g_syncedRenderStateParameters` 按 context 世代重置；两个豁免 scope 里的探测在 spawn 下根本不存在对应内存，P6 第一天的红就是它们的清单。
-2. 剩余首阻塞一轮（Magma compute/image、rd12、RGB mip、`texture-remint-pull` 仿真槽）。
-3. P6 出口门：P5b 的完整渲染路径在 `spawn` 下绿；OpenRA 在 Adreno 830 上 split SSIM ≥ 0.99。
-4. Redmi 四臂复测（P5c 的记录项，需设备窗口）；79 trace 普查重跑（需全集语料）。
+1. **P5e 退役 draw path 的 lockstep**（进行中）：c0e 已落地契约与线上行——`PipeCalls.def` 的第五列 `WaitClass` + 生成的 `MGPipeWaitClassFor(op)`、`set_program_bindings`（opcode 80，空路由）、`kCapRunAheadApply`（位 10，只在 DirectGLES 臂且只在 `kMGPipeP5eRunAheadReady` 为真时发布）、`kDrawClientArrays`、子系统位 13 与 push 默认 `0x3fff`、`MGPipeImageAccess` 一张表、`MOBILEGL_IPC_RUN_AHEAD` / `MOBILEGL_IPC_PRESENT_CREDIT`、以及跨包 seam（`MGPipeBarriered`、两个 applier 入口、六个 by-handle 后端签名）。全部 inert：caps 位未发布前 client 跑今天的 lockstep 路径。下一个是 **id**（registry 重键 + by-handle resolver + 分配器守卫），然后 {vi, sb, pg, tx2, fb} 并行、ra 从第一天起并行。
+2. **P6 spawn transport**：`SocketTransport` + `ServerMain` + 握手 / 退出语义 + EGL forwarder 的控制面帧；P5c 之后这只是传输替换。注意 P5c 留下的：`s_synced` / `g_syncedRenderStateParameters` 按 context 世代重置；两个豁免 scope 里的探测在 spawn 下根本不存在对应内存，P6 第一天的红就是它们的清单。
+3. 剩余首阻塞一轮（Magma compute/image、rd12、RGB mip、`texture-remint-pull` 仿真槽）。
+4. P5e 出口门（`~/w7/notes/p5e/BRIEF-P5E.md` §3 / §4）：`integration-split-strict` 转硬绿车道、三条阴性对照、Redmi 四臂（monolith / lockstep / credit 1 / credit 2）。P6 出口门：P5b 的完整渲染路径在 `spawn` 下绿；OpenRA 在 Adreno 830 上 split SSIM ≥ 0.99。
+5. Redmi 四臂复测（P5c 的记录项，需设备窗口）；79 trace 普查重跑（需全集语料）。
 
 ## 7. 记录位置
 

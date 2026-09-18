@@ -599,6 +599,55 @@ namespace MobileGL {
         Uint32 Divisor; // 12
     };
 
+    // ---- MGPImageView::Access, P5e (CONTRACT-P5E.md §1, ruling 16) -----------------------
+    //
+    // ONE TABLE, BOTH ROLES. The CLIENT has encoded this byte since P4a
+    // (MG_Impl/Pipe/ImageEmit.h's MGPipeEncodeImageAccess, which folds the three GL names into
+    // 0/1/2 and asserts on anything else); the SERVER open-coded the reverse mapping at its one
+    // reader and carried a comment saying the encoding "does not exist", which was stale. The
+    // numbers now live HERE, in the value header both sides already include, so the encode and
+    // the decode cannot drift - the client emitter names these enumerators instead of literals
+    // and the backend decodes through the function below.
+    //
+    // The enum is NOT the GLenum: this header is pure (no MG_State, MG_Impl, MG_Backend or
+    // MG_Remote - scripts/check_include_closure.py probe "value-header") and a GL token is a
+    // frontend spelling. The GLenum <-> enumerator half stays at the one client site that has
+    // a GLenum in its hand.
+    enum class MGPipeImageAccess : Uint8 {
+        ReadOnly = 0,  // GL_READ_ONLY
+        WriteOnly = 1, // GL_WRITE_ONLY
+        ReadWrite = 2, // GL_READ_WRITE
+        Count = 3,
+    };
+
+    // 0 IS READ-ONLY AND THAT IS WHY THE ORDER IS THIS ONE, not the low byte of the GL tokens:
+    // a zeroed MGPImageView must decode to the most restrictive access, so a record that forgot
+    // to set the field can only ever lose a write, never invent one.
+    inline constexpr Uint8 kMGPipeImageAccessReadOnly = static_cast<Uint8>(MGPipeImageAccess::ReadOnly);
+    inline constexpr Uint8 kMGPipeImageAccessWriteOnly = static_cast<Uint8>(MGPipeImageAccess::WriteOnly);
+    inline constexpr Uint8 kMGPipeImageAccessReadWrite = static_cast<Uint8>(MGPipeImageAccess::ReadWrite);
+
+    // The decoder's own precondition. Any other value is Fatal{ProtocolCorruption,
+    // "ImageView.Access"} at the READER - this header may not log, so it answers the question
+    // and the caller owns the refusal.
+    inline constexpr Bool MGPipeImageAccessIsValid(Uint8 encoded) {
+        return encoded < static_cast<Uint8>(MGPipeImageAccess::Count);
+    }
+
+    inline constexpr MGPipeImageAccess MGPipeDecodeImageAccess(Uint8 encoded) {
+        return static_cast<MGPipeImageAccess>(encoded);
+    }
+
+    // "May the shader read / write through this binding." Stated here rather than at each
+    // reader because the image sweep's writable set and the backend's barrier plan ask the
+    // same question of the same three values.
+    inline constexpr Bool MGPipeImageAccessReads(MGPipeImageAccess access) {
+        return access == MGPipeImageAccess::ReadOnly || access == MGPipeImageAccess::ReadWrite;
+    }
+    inline constexpr Bool MGPipeImageAccessWrites(MGPipeImageAccess access) {
+        return access == MGPipeImageAccess::WriteOnly || access == MGPipeImageAccess::ReadWrite;
+    }
+
     // ---- trip wires (P0.5). Sizes are what every ABI MobileGL ships on produces: every
     // member is a fixed-width scalar, an enum of one, or an array of those - no pointer, no
     // SizeT - except the vertex types, which carry SharedPtr<BufferObject> by design and are

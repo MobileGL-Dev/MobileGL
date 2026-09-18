@@ -69,7 +69,7 @@
     /* no record fallback, and PipeFill.cpp:1902-1905 says outright that what retires the pull   */  \
     /* is P8, not a better applier: the storage is a SharedPtr<VertexArrayObject> and            */  \
     /* bind_vertex_elements carries an eight-byte {slot, gen}.                                   */  \
-    X(GetBoundVertexArray,                BARRIER_PULLED, "P8",                                      \
+    X(GetBoundVertexArray,                BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
       "frontend heap reference; the record carries a handle, the mirror is a pointer")           \
     /* 18 Espryt sites + 11 Magma. Coverage.def:37-70 splits the 15 BufferTargets across three   */  \
     /* calls and leaves SEVEN with no carrier at all (CopyRead, CopyWrite, PixelPack,            */  \
@@ -77,19 +77,19 @@
     /* though eight targets are covered.                                                         */  \
     X(GetBufferBindingSlot,               BARRIER_PULLED, "P8 (indirect), P9 (readback), P13 (transfer)", \
       "7 of 15 BufferTargets have no call; the field is one array over all 15")                   \
-    X(GetBufferBindingPoint,              BARRIER_PULLED, "P3b/P4b, P7",                             \
+    X(GetBufferBindingPoint,              BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
       "frontend BindingSlotRange1D pointer")                                                      \
     /* 8 Espryt sites through GetFramebufferBindingSlotChecked + 13 Magma. SyncCurrentFBO        */  \
     /* (:2995) is SELF-DECLARED monolith glue (DirectGLES.cpp:2961-2965) while BindCurrentFBO    */  \
     /* (:4303-4353) is already split-clean - the bind is migrated, the sync is not.              */  \
-    X(GetFramebufferBindingSlot,          BARRIER_PULLED, "P3b/P4b (Espryt), P7 (Magma)",            \
+    X(GetFramebufferBindingSlot,          BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
       "frontend BindingSlot<FramebufferObject> pointer")                                          \
-    X(GetImageTextureBinding,             BARRIER_PULLED, "P3b/P4b, P7",                             \
+    X(GetImageTextureBinding,             BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
       "frontend ImageTextureBinding base pointer")                                                \
-    X(GetTextureUnitObject,               BARRIER_PULLED, "P3b/P4b, P7",                             \
+    X(GetTextureUnitObject,               BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
       "frontend TextureUnit base pointer; 13 Espryt + 8 Magma sites")                             \
     /* DirectGLES.cpp:4497, PrepareForDraw, the second unconditional pointer read of every draw. */  \
-    X(GetProgramForDraw,                  BARRIER_PULLED, "P8 (Espryt), P7 (Magma)",                 \
+    X(GetProgramForDraw,                  BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
       "frontend SharedPtr<ProgramObject>; the record carries a handle")                           \
     /* P5b package i1 (CONTRACT-P5B.md §6.9, the one row the contract grants a package). This    */  \
     /* was FATAL "reachable only from kDispatch; there is no compute on the reduced path" - and  */  \
@@ -97,7 +97,7 @@
     /* PrepareForCompute pulls this inside it (DirectGLES.cpp:5779, VulkanRenderer.cpp:7327).    */  \
     /* It is GetProgramForDraw's twin in every respect, so it takes its class and its retiring   */  \
     /* phases. Overturned by: nothing in P5b; P7/P8 retire both rows together.                   */  \
-    X(GetProgramForDispatch,              BARRIER_PULLED, "P7 (Magma), P8 (Espryt)",                 \
+    X(GetProgramForDispatch,              BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
       "frontend SharedPtr<ProgramObject>; the record carries a handle")                           \
     /* The XFB family's one OBJECT row. XFB itself is off the reduced path, but kDraw's          */  \
     /* may-read mask carries it and the draw walk reads it regardless - which is exactly the     */  \

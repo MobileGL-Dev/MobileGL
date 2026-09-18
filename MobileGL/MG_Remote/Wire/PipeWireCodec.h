@@ -171,10 +171,19 @@ namespace MobileGL::MG_Remote::Wire {
     // holds a pointer and two Uint64s. P5 emits no host span at all, so this rule costs
     // nothing now and is stated now because the phase that arms kDrawHasUserIndices would
     // otherwise have to discover it as a misaligned load on a device.
+    // THREE TAILS AND NOT TWO SINCE P5e. set_program_bindings (opcode 80,
+    // MG_Remote/CONTRACT-P5E.md §1) carries the uniform-block bindings, the sampler units and
+    // the storage-override map as three arrays in three different index spaces, so the array
+    // that used to be exactly "the two-tail rows plus draw_vbo's conditional second" grew by
+    // one. Every loop over TailCount below already reads the count rather than the literal 2;
+    // what changed is the storage and the assembly.
+    inline constexpr Uint32 kMaxWireRecordTails = 3;
+
     struct WireRecordLayout {
         Uint64 PayloadBytes = 0;   // sizeof the op's payload struct
-        Uint64 TailOffset[2] = {0, 0}; // from the START of the record, header included
-        Uint64 TailBytes[2] = {0, 0};
+        Uint64 TailOffset[kMaxWireRecordTails] = {0, 0, 0}; // from the START of the record,
+                                                            // header included
+        Uint64 TailBytes[kMaxWireRecordTails] = {0, 0, 0};
         Uint32 TailCount = 0;
         Uint64 TotalBytes = 0; // header + payload + gaps + tails, rounded up to 8
         // P5b: WHAT THE SECOND TAIL IS. SetShaderBuffers' second tail is MGHostSpan[HostSpanCount]
@@ -194,9 +203,9 @@ namespace MobileGL::MG_Remote::Wire {
     // The catalogue's own spelling of an opcode, for a Fatal line. Out of range is "<opcode>".
     const char* WireOpName(MG_Pipe::MGPWireOp op);
 
-    // One tail array. Two of the 71 rows carry two (SetShaderBuffers, SetStreamOutputTargets)
-    // and DrawVbo carries a conditional second one, which is why EncodeRecord's one-tail form
-    // could not stay the only one.
+    // One tail array. Two of the rows carry two (SetShaderBuffers, SetStreamOutputTargets),
+    // DrawVbo carries a conditional second one and P5e's SetProgramBindings carries three,
+    // which is why EncodeRecord's one-tail form could not stay the only one.
     struct WireTail {
         const void* Bytes = nullptr;
         Uint64 Size = 0;
@@ -234,8 +243,10 @@ namespace MobileGL::MG_Remote::Wire {
         Uint64 EncodeRecord(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
                             const void* varTail = nullptr, Uint64 varTailBytes = 0);
 
-        // The same call for the three rows that carry TWO tails. The one-tail form above is
-        // this one with tailCount <= 1; nothing is duplicated between them.
+        // The same call for the rows that carry more than one tail - two for
+        // set_shader_buffers, set_stream_output_targets and draw_vbo's conditional second,
+        // three for P5e's set_program_bindings. The one-tail form above is this one with
+        // tailCount <= 1; nothing is duplicated between them.
         //
         // The tails a caller hands over are CROSS-CHECKED against the layout the payload
         // itself declares (MGPipeWireRecordLayout): a caller whose Count says 4000 while its

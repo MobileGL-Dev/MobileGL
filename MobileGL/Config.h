@@ -322,9 +322,9 @@ namespace MobileGL::MG_Config {
         // 0 - the only shipped value until the migration lands - is "pull everything",
         // i.e. exactly today's behaviour, and is the default of a PULL build, where the
         // knob is meaningless anyway. A PUSH build defaults to every subsystem migrated so
-        // far (MG_Pipe::kMGPipeSubsystemsMigratedAtP4a), so MOBILEGL_PIPE_PUSH=0 in the
-        // environment is the all-pull control and 0x1ff (kMGPipeSubsystemsMigratedAtP3a) is
-        // the "everything before P4a" control P4a's A/B is run against - each phase's
+        // far (MG_Pipe::kMGPipeSubsystemsMigratedAtP5e = 0x3fff), so MOBILEGL_PIPE_PUSH=0 in
+        // the environment is the all-pull control and 0x1fff (kMGPipeSubsystemsMigratedAtP4a)
+        // is the "everything before P5e" control P5e's A/B is run against - each phase's
         // constant survives as the next phase's control, which is why none of them is ever
         // edited. Accepts decimal or 0x-prefixed hex, and operators pass it as hex, so the
         // bits are listed here (MG_Pipe/MGPipe.h owns them):
@@ -342,6 +342,9 @@ namespace MobileGL::MG_Config {
         //   0x800 samplers (sampler CSO, sampler view, set_sampler_views /
         //         bind_sampler_states / set_shader_images)         - requires 0x400
         //   0x1000 programs (shader CSO, set_draw/dispatch_program, global constants)
+        //   0x2000 buffer binding points (set_shader_buffers, the three indexed binding-point
+        //         classes and the dirty bits 15/16/17)             - requires 0x80
+        //         (every MGPBufferRange::Res names a Buffer handle; P5e)
         //   A dependency that is not met is REFUSED with one ERROR naming both bits and the
         //   family runs its legacy arm; it is never half-run.
         //   1<<63 NOT a subsystem, a BEHAVIOUR: turn OFF client-side content addressing of
@@ -502,6 +505,32 @@ namespace MobileGL::MG_Config {
         // GLContext by the client's residual fill and a free-running queue lets the server
         // read a FUTURE value of them.
         Uint32 VerbBarrier = 1;
+        // MOBILEGL_IPC_RUN_AHEAD (P5e, MG_Remote/CONTRACT-P5E.md §1): 1 = after publishing an
+        // UNBARRIERED record the client returns immediately instead of waiting for its apply.
+        // It is one half of a conjunction and never a switch on its own - the client arms
+        // run-ahead only when the server also publishes kCapRunAheadApply, so on Magma, and on
+        // Espryt before the P5e integration commit, 1 means exactly what 0 means and logs once
+        // saying so.
+        //
+        // 0 IS THE A/B CONTROL AND NOT A NEGATIVE ONE: the server code, the fill decision and
+        // every record are identical on both arms, and the only difference is whether the
+        // client waits. That is what makes "is the picture the same" a question about the wait
+        // rule alone. MOBILEGL_IPC_VERB_BARRIER=0 keeps its own meaning and stays the
+        // lockstep arm's negative control; under run-ahead it is the one that must go red, at
+        // the first barriered row's stale pull.
+        //
+        // Forced to 0 by MOBILEGL_PIPE_VERIFY, beside BatchWaits: the comparator needs a
+        // client-filled gPipeInputs block for every verb, and run-ahead is precisely the
+        // arm that stops filling it.
+        Uint32 RunAhead = 1;
+        // MOBILEGL_IPC_PRESENT_CREDIT (P5e, ruling 4 / ID-92): how many presents the client may
+        // have in flight before it waits for a swap to come back. 1 = the client publishes
+        // frame N+1's records while the server applies and swaps frame N - one frame of
+        // overlap, at most one frame of added latency - and the CREDIT, never the ring's bytes,
+        // is what paces a run-ahead client. 2 is a device MEASUREMENT arm: it buys no CPU on a
+        // client that is already CPU-bound and costs a frame of latency, which is why the
+        // default is 1 and not "as deep as the ring".
+        Uint32 PresentCredit = 1;
         // MOBILEGL_IPC_STRICT_ERRORS: promote a BARRIER-PULLED field read - and, in a split
         // build, the seven sticky forwards that are otherwise exempt - from "count it in
         // rsp" to Fatal (R-7.3).

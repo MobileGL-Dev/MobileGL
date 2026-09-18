@@ -136,6 +136,19 @@ namespace MobileGL::MG_Pipe {
         MGPipeDirtyBit(MGPipeDirty::NewFramebuffer) | MGPipeDirtyBit(MGPipeDirty::NewSamplerViews) |
         MGPipeDirtyBit(MGPipeDirty::NewSamplers) | MGPipeDirtyBit(MGPipeDirty::NewShaderImages);
 
+    // The THREE P5e adds, all one subsystem (kMGPipeSubsystemBufferBindings): the indexed
+    // buffer binding points, whose three bits have been computed and counted since P2 and have
+    // named no subsystem since. Added rather than edited in, for the reason above.
+    //
+    // NewSoTargets rides the same bit even though set_stream_output_targets stays UNEMITTED
+    // for the whole of P5e (XFB is lockstep by escalation, CONTRACT-P5E.md §5.7): the bit is
+    // "which A/B switch owns this family's legacy arm", and an operator clearing bit 13 has to
+    // get the whole binding-point family's frontend walk back rather than two thirds of it -
+    // the rule P3a's three and P4a's two triples already state.
+    inline constexpr Uint32 kMGPipeDirtyEmittedAtP5e =
+        kMGPipeDirtyEmittedAtP4a | MGPipeDirtyBit(MGPipeDirty::NewConstBuffers) |
+        MGPipeDirtyBit(MGPipeDirty::NewShaderBuffers) | MGPipeDirtyBit(MGPipeDirty::NewSoTargets);
+
     inline constexpr const char* kMGPipeDirtyNames[kMGPipeDirtyCount] = {
         "NEW_RENDER_STATE",
         "NEW_PIPELINE_STATE",
@@ -198,6 +211,22 @@ namespace MobileGL::MG_Pipe {
         case MGPipeDirty::NewSamplers:
         case MGPipeDirty::NewShaderImages:
             return kMGPipeSubsystemSamplers;
+        // P5e's three, one subsystem (MG_Remote/CONTRACT-P5E.md §1): the indexed buffer
+        // binding points. Bits 15/16/17 have been computed and counted since P2 and have named
+        // no subsystem since - "the remaining bits have no call of their own until P4b", which
+        // the default arm below used to say for them. set_shader_buffers is the call, and
+        // set_stream_output_targets stays unemitted while riding the same A/B bit, for the
+        // reason kMGPipeDirtyEmittedAtP5e states.
+        //
+        // NAMING THE SUBSYSTEM IS NOT THE SAME AS EMITTING. The emission gate is five
+        // conjuncts (PipeFill.cpp's `wants()`), one of which is kMGPipeWiredSubsystems - and
+        // the buffer-binding family's wired constant is 0 until the package that gives the
+        // emitter its body sets it, exactly as P4a's four families were. So this map moves
+        // here, inert, and nothing is emitted and no field is skipped on its account yet.
+        case MGPipeDirty::NewConstBuffers:
+        case MGPipeDirty::NewShaderBuffers:
+        case MGPipeDirty::NewSoTargets:
+            return kMGPipeSubsystemBufferBindings;
         // NO BIT NAMES kMGPipeSubsystemTextureResources, and that is deliberate rather than an
         // omission: the texture and renderbuffer resource_* calls and set_texture_params are
         // dispatched from the GL entry points that cause them - a constructor, a storage
@@ -205,8 +234,8 @@ namespace MobileGL::MG_Pipe {
         // is. Bit 10 gates those dispatch sites; there is no dirty bit to map onto it and
         // there must not be one, or the emission would be gated twice and disagree with itself.
         default:
-            // The remaining bits have no call of their own until P4b, so there is no
-            // subsystem to switch and the residual fill keeps supplying their fields.
+            // Every dirty bit now names a subsystem; the arm stays because the switch is over
+            // a value cast from an index and a future bit must not fall off the end.
             return 0;
         }
     }

@@ -56,7 +56,8 @@ namespace {
     X(MagmaPipeIdentityTest, AnIdleSlotIsRetiredAndReusedWithANewGeneration)  \
     X(MagmaPipeIdentityTest, AReusedSlotDoesNotServeItsPredecessorsMemo)      \
     X(MagmaPipeIdentityTest, TheAbaControlKnobServesTheStaleMemoAcrossAReusedSlot) \
-    X(MagmaPipeIdentityTest, ALiveObjectKeepsItsSlotItsGenerationAndItsMemo)
+    X(MagmaPipeIdentityTest, ALiveObjectKeepsItsSlotItsGenerationAndItsMemo)             \
+    X(MagmaPipeIdentityTest, AMagmaServerNeverPublishesTheRunAheadCapBit)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -212,6 +213,49 @@ namespace {
         EXPECT_EQ(MagmaPipeClaimSlotMemos(memos, again).Payload, 0xBEEFull)
             << "a live object's memo was cleared without its slot changing owner";
         EXPECT_EQ(mint.Count(), 1u);
+    }
+
+    // ---- P5e (MG_Remote/CONTRACT-P5E.md §1, §6, ruling 12) -------------------------------
+    //
+    // MAGMA DOES NOT RUN AHEAD, AND THIS IS WHERE THAT IS A TEST RATHER THAN A COMMENT.
+    // kCapRunAheadApply is the client's whole permission to publish a record and move on: the
+    // moment a server sets it, the apply thread promises it reads nothing of the client's. That
+    // promise is FALSE for Magma for the whole of P5e - the four apply-thread allocator sites
+    // inside MagmaP7AllocatorDebtScope are real debt P7 retires, and
+    // MGPipeApplierCurrentRecordIsBarriered() answering true for every record on a server
+    // without the bit is exactly what keeps them inside P5C's semantics and keeps rsp honest.
+    //
+    // The arm is a pure function precisely so this case can reach it: InitSplitRoles needs a
+    // live session, a backend and a handshake, and none of those belong in a unit lane. RED
+    // ONCE by making MGPipeRunAheadCapBitsFor answer for DirectVulkan too (the exact
+    // perturbation the phase's red-once list names) - both EXPECTs below fail, by name.
+    TEST_F(MagmaPipeIdentityTest, AMagmaServerNeverPublishesTheRunAheadCapBit) {
+        // Whatever the integration constant says. `true` is what the P5e integration commit
+        // will pass, so the Magma answer is pinned on BOTH sides of that flip and the case
+        // does not quietly stop asserting anything the day the constant moves.
+        EXPECT_EQ(MG_Pipe::MGPipeRunAheadCapBitsFor(BackendType::DirectVulkan, /*ready=*/false) &
+                      static_cast<Uint64>(MG_Pipe::kCapRunAheadApply),
+                  0u);
+        EXPECT_EQ(MG_Pipe::MGPipeRunAheadCapBitsFor(BackendType::DirectVulkan, /*ready=*/true) &
+                      static_cast<Uint64>(MG_Pipe::kCapRunAheadApply),
+                  0u);
+
+        // And the Espryt half, so the case says what the arm IS and not only what it is not:
+        // the bit is published for DirectGLES and ONLY once the integration commit flips
+        // kMGPipeP5eRunAheadReady. Until then every P5e package lands with the wait rule inert.
+        EXPECT_EQ(MG_Pipe::MGPipeRunAheadCapBitsFor(BackendType::DirectGLES, /*ready=*/false) &
+                      static_cast<Uint64>(MG_Pipe::kCapRunAheadApply),
+                  0u);
+        EXPECT_EQ(MG_Pipe::MGPipeRunAheadCapBitsFor(BackendType::DirectGLES, /*ready=*/true) &
+                      static_cast<Uint64>(MG_Pipe::kCapRunAheadApply),
+                  static_cast<Uint64>(MG_Pipe::kCapRunAheadApply));
+
+        // Bit 10 and nothing else: the arm contributes ONE bit, so a future editor cannot fold
+        // an unrelated capability into it and have the two pins above still pass.
+        EXPECT_EQ(MG_Pipe::MGPipeRunAheadCapBitsFor(BackendType::DirectGLES, /*ready=*/true),
+                  static_cast<Uint64>(MG_Pipe::kCapRunAheadApply));
+        static_assert(static_cast<Uint64>(MG_Pipe::kCapRunAheadApply) == (1ull << 10),
+                      "kCapRunAheadApply moved bit; CONTRACT-P5E table 0 names bit 10");
     }
 #endif // MOBILEGL_PIPE_PUSH
 } // namespace

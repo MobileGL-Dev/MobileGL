@@ -2023,6 +2023,15 @@ namespace MobileGL::MG_Pipe {
             // emission gate is the subsystem bit plus the whole-record hash and nothing else.
             case MGPipeFieldEmitter::SetContextValues:
                 return kMGPipeSubsystemResidualValues;
+            // P5e's one emitted row (MG_Remote/CONTRACT-P5E.md §5.6): the indexed buffer
+            // binding points. Written HERE at the contract commit, with the Coverage.def row
+            // and EmittedCallSuppliesTheWholeField's arm beside it, for the reason
+            // kMGPipeWiredSubsystems' block states one paragraph down - this file belongs to
+            // the contract package for the whole phase, and an emitter enumerator whose
+            // dispatch arm lived in the family's own worktree is the merge trap that block
+            // exists to close. It is inert until that family's wired constant leaves 0.
+            case MGPipeFieldEmitter::SetShaderBuffers:
+                return kMGPipeSubsystemBufferBindings;
             case MGPipeFieldEmitter::kNone:
                 break;
             }
@@ -2091,6 +2100,15 @@ namespace MobileGL::MG_Pipe {
                           MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS,
                       "the MGPipe vertex-attribute capacity and the frontend's have drifted");
 
+        // P5e (MG_Remote/CONTRACT-P5E.md §1, ruling 10), pinned here for the same reason and in
+        // the same place: this translation unit sees the frontend constant and the MG_Pipe one,
+        // and nothing else does. 84 is what the emitter may describe and what the wire carries;
+        // the BACKEND clamps to the device's real GL_MAX_UNIFORM_BUFFER_BINDINGS, as it does
+        // today, because a client-side clamp would read a device capability from the wrong side.
+        static_assert(kMGPipeMaxBufferBindingPoints ==
+                          MG_State::GLState::BufferBindingPointCount,
+                      "the MGPipe buffer-binding-point capacity and the frontend's have drifted");
+
         // ---- P4a's SEVEN pairings, and EVERY ONE OF THEM COMPARES AGAINST
         // SubsystemForEmitter RATHER THAN AGAINST A CONSTANT. That is the lesson written out
         // twenty lines above and it is not a style preference: naming the subsystem constant
@@ -2127,6 +2145,23 @@ namespace MobileGL::MG_Pipe {
         static_assert(SubsystemForEmitter(MGPipeFieldEmitter::SetDrawProgram) ==
                           SubsystemForEmitter(MGPipeFieldEmitter::SetDispatchProgram),
                       "set_draw_program and set_dispatch_program are one family and one A/B");
+
+        // P5e's pairing, in the same shape and for the same reason as P4a's seven: the two maps
+        // answer different questions - one takes a field's EMITTER, the other a dirty BIT - and
+        // the emission is gated on one while the residual-fill skip is gated on the other, so a
+        // divergence would push a call whose field is still pulled, or skip a field whose call
+        // was never emitted. Compared against SubsystemForEmitter rather than against the
+        // constant, because pinning the two MAPS to each other is the statement that cannot
+        // drift.
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewShaderBuffers) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetShaderBuffers),
+                      "set_shader_buffers and NEW_SHADER_BUFFERS must name one subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewConstBuffers) ==
+                          MGPipeSubsystemForDirty(MGPipeDirty::NewShaderBuffers),
+                      "the three binding-point bits are one family and one A/B");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewSoTargets) ==
+                          MGPipeSubsystemForDirty(MGPipeDirty::NewShaderBuffers),
+                      "the three binding-point bits are one family and one A/B");
 
         // THE TEXTURE-RESOURCE SUBSYSTEM HAS NO DIRTY BIT, and that has to be asserted rather
         // than left as an absence: its calls are dispatched from the GL entry points that
@@ -2283,6 +2318,13 @@ namespace MobileGL::MG_Pipe {
             case MGPipeInputField::GetTextureUnitObject:
             case MGPipeInputField::GetProgramForDraw:
             case MGPipeInputField::GetProgramForDispatch:
+            // P5e (CONTRACT-P5E.md §5.6): the same answer for the same reason. The field is
+            // four raw bases into the frontend's binding-point table and set_shader_buffers
+            // carries resolved {handle, offset, size} ranges; the applier cannot produce a
+            // pointer, so skipping the pull would leave the mirror null on every draw of every
+            // push build. What retires it is the four Espryt consumers reading the applier's
+            // BoundShaderBuffers, not this row.
+            case MGPipeInputField::GetBufferBindingPoint:
                 return false;
             default:
                 return true;

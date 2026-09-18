@@ -114,6 +114,9 @@ inline Bool MGPipeVerify(const MGPStorageBlockBinding& a, const MGPStorageBlockB
 inline Bool MGPipeVerify(const MGPCopyFromFramebuffer& a, const MGPCopyFromFramebuffer& b, const char** outField);
 inline Bool MGPipeVerify(const MGPApplierReset& a, const MGPApplierReset& b, const char** outField);
 inline Bool MGPipeVerify(const MGPContextValues& a, const MGPContextValues& b, const char** outField);
+inline Bool MGPipeVerify(const MGPProgramBindings& a, const MGPProgramBindings& b, const char** outField);
+inline Bool MGPipeVerify(const MGPProgramSamplerUnit& a, const MGPProgramSamplerUnit& b, const char** outField);
+inline Bool MGPipeVerify(const MGPProgramStorageOverride& a, const MGPProgramStorageOverride& b, const char** outField);
 inline Bool MGPipeVerify(const RenderStateParameters& a, const RenderStateParameters& b, const char** outField);
 inline Bool MGPipeVerify(const PixelStoreParameters& a, const PixelStoreParameters& b, const char** outField);
 inline Bool MGPipeVerify(const SamplerParameters& a, const SamplerParameters& b, const char** outField);
@@ -264,6 +267,12 @@ template <>
 struct MGPipeHasFieldVerifier<MGPApplierReset> : std::true_type {};
 template <>
 struct MGPipeHasFieldVerifier<MGPContextValues> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<MGPProgramBindings> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<MGPProgramSamplerUnit> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<MGPProgramStorageOverride> : std::true_type {};
 template <>
 struct MGPipeHasFieldVerifier<RenderStateParameters> : std::true_type {};
 template <>
@@ -678,6 +687,21 @@ inline Bool MGPipeVerify(const MGPContextValues& a, const MGPContextValues& b, c
     return true;
 }
 
+inline Bool MGPipeVerify(const MGPProgramBindings& a, const MGPProgramBindings& b, const char** outField) {
+    MGP_FIELDS_MGPProgramBindings(MGP_VERIFY_FIELD)
+    return true;
+}
+
+inline Bool MGPipeVerify(const MGPProgramSamplerUnit& a, const MGPProgramSamplerUnit& b, const char** outField) {
+    MGP_FIELDS_MGPProgramSamplerUnit(MGP_VERIFY_FIELD)
+    return true;
+}
+
+inline Bool MGPipeVerify(const MGPProgramStorageOverride& a, const MGPProgramStorageOverride& b, const char** outField) {
+    MGP_FIELDS_MGPProgramStorageOverride(MGP_VERIFY_FIELD)
+    return true;
+}
+
 inline Bool MGPipeVerify(const RenderStateParameters& a, const RenderStateParameters& b, const char** outField) {
     MGP_FIELDS_RenderStateParameters(MGP_VERIFY_FIELD)
     return true;
@@ -725,4 +749,4 @@ inline Bool MGPipeVerify(const MGPVertexBindingPointWire& a, const MGPVertexBind
 
 #undef MGP_VERIFY_FIELD
 
-inline constexpr SizeT kMGPipeVerifiedPayloadCount = 79;
+inline constexpr SizeT kMGPipeVerifiedPayloadCount = 82;

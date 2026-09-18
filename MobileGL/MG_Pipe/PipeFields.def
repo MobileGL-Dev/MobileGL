@@ -93,7 +93,7 @@
 
 #define MGP_FIELDS_MGPProgramDesc(F) \
     F(Cso) F(StageMask) F(GlobalUboSize) F(ReservedNumSamplesOffset) F(SpirvStatus) F(NativeFloat64) \
-    F(PointSizeDemoted) F(EnableSpirvValidation) F(Spirv) F(Reflection)
+    F(PointSizeDemoted) F(EnableSpirvValidation) F(LinkStatus) F(Spirv) F(Reflection)
 
 // P4a, ID-12 / esprytobj DV-5: Pad0 became Uint16 TextureTarget. Same trip wire as
 // MGPFramebufferState's Target below - PADDING_MEMBER_RE only excludes a member still NAMED
@@ -144,6 +144,19 @@
 
 #define MGP_FIELDS_MGPStreamOutputTargets(F) \
     F(Count) F(Generation) F(ContentHash)
+
+// P5e (MG_Remote/CONTRACT-P5E.md §1): set_program_bindings and its two tail element types. The
+// third tail's element embeds an MGHostSpan, which has a list of its own below, so the
+// comparator sees the NAME SPAN's four members rather than memcmp'ing a struct with a pointer
+// and a pad word in it - the exact false-difference MGPSamplerDesc's blob used to produce.
+#define MGP_FIELDS_MGPProgramBindings(F) \
+    F(Cso) F(Signature) F(BlockBindingCount) F(SamplerUnitCount) F(StorageOverrideCount)
+
+#define MGP_FIELDS_MGPProgramSamplerUnit(F) \
+    F(Location) F(Unit)
+
+#define MGP_FIELDS_MGPProgramStorageOverride(F) \
+    F(Name) F(Binding)
 
 #define MGP_FIELDS_MGPGlobalConstants(F) \
     F(ShaderCso) F(Version) F(Blob)
@@ -394,6 +407,7 @@
     P(MGPImageBind) P(MGPPatchParameter) P(MGPStreamOutputBind) P(MGPStorageBlockBinding) \
     P(MGPCopyFromFramebuffer) \
     P(MGPApplierReset) P(MGPContextValues) \
+    P(MGPProgramBindings) P(MGPProgramSamplerUnit) P(MGPProgramStorageOverride) \
     P(RenderStateParameters) P(PixelStoreParameters) P(SamplerParameters) P(PerBufferBlendState) \
     P(StencilFaceState) \
     P(DynamicBackendParameters) P(MGHostSpan) \

@@ -362,29 +362,44 @@ namespace {
     // keeps the name it was born with and follows the phase constant instead of a literal
     // five: what it has always asserted is "a bit names a subsystem if and only if this build
     // emits a call for it", which is the property the emission gate and the residual-fill
-    // skip both rest on. P3a took the vertex-input family over and P4a takes seven more bits
-    // across four subsystems, so the set it compares against is now kMGPipeDirtyEmittedAtP4a -
-    // and a bit that gained an arm without gaining an emitter, or the reverse, still fails
-    // here.
+    // skip both rest on. P3a took the vertex-input family over, P4a took seven more bits across
+    // four subsystems, and P5e takes THE LAST THREE onto kMGPipeSubsystemBufferBindings, so the
+    // set it compares against is now kMGPipeDirtyEmittedAtP5e - and a bit that gained an arm
+    // without gaining an emitter, or the reverse, still fails here.
     TEST_F(TrackerWalk, OnlyTheFiveEmittedBitsNameASubsystem) {
         for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
             const auto bit = static_cast<MGPipeDirty>(i);
-            const Bool emitted = (kMGPipeDirtyEmittedAtP4a & MGPipeDirtyBit(bit)) != 0;
+            const Bool emitted = (kMGPipeDirtyEmittedAtP5e & MGPipeDirtyBit(bit)) != 0;
             EXPECT_EQ(MGPipeSubsystemForDirty(bit) != 0, emitted) << kMGPipeDirtyNames[i];
         }
         // Each phase's constant SURVIVES as the next phase's A/B control, so the three are
         // pinned as a chain rather than one being edited into the next: 0x1ff is P4a's "T2"
         // arm and 0x7f is P3a's, and an operator's recorded mask has to keep meaning what it
         // meant.
+        EXPECT_EQ(kMGPipeDirtyEmittedAtP5e & kMGPipeDirtyEmittedAtP4a, kMGPipeDirtyEmittedAtP4a);
         EXPECT_EQ(kMGPipeDirtyEmittedAtP4a & kMGPipeDirtyEmittedAtP3a, kMGPipeDirtyEmittedAtP3a);
         EXPECT_EQ(kMGPipeDirtyEmittedAtP3a & kMGPipeDirtyEmittedAtP2, kMGPipeDirtyEmittedAtP2);
-        // The three bits P4a still does not emit for - the const-buffer, shader-buffer and
-        // stream-output sets - name no subsystem, so their fields keep going through the
-        // residual fill. Stated positively as well as through the loop above, because "only
-        // these three are left" is the phase's own scope statement.
-        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewConstBuffers), 0u);
-        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewShaderBuffers), 0u);
-        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewSoTargets), 0u);
+        // THE LAST THREE BITS, which P4a still did not emit for and P5e takes: the const-buffer,
+        // shader-buffer and stream-output sets are ONE family - the indexed buffer binding
+        // points - on ONE subsystem, so an operator clearing bit 13 gets the whole family's
+        // frontend walk back rather than two thirds of it. Stated positively as well as through
+        // the loop above, because "these three, together" is the phase's own scope statement.
+        //
+        // set_stream_output_targets stays UNEMITTED for the whole of P5e (XFB is lockstep by
+        // escalation, MG_Remote/CONTRACT-P5E.md §5.7) and still names the subsystem, for the
+        // same reason: the bit answers "which A/B switch owns this family's legacy arm", not
+        // "is there a record on the wire for me today".
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewConstBuffers),
+                  kMGPipeSubsystemBufferBindings);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewShaderBuffers),
+                  kMGPipeSubsystemBufferBindings);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewSoTargets),
+                  kMGPipeSubsystemBufferBindings);
+        // AND THE PHASE CONSTANT IS NOW THE WHOLE BIT SET: after P5e every dirty bit names a
+        // subsystem, so the loop above has no "names none" case left to exercise, and this is
+        // what says so rather than leaving the loop looking stronger than it is.
+        EXPECT_EQ(kMGPipeDirtyEmittedAtP5e,
+                  static_cast<Uint32>((Uint64{1} << kMGPipeDirtyCount) - 1u));
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewRenderState), kMGPipeSubsystemRenderState);
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewPixelPack), kMGPipeSubsystemPixelPack);
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewPatchState), kMGPipeSubsystemPatchState);

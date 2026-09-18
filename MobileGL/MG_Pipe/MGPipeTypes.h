@@ -133,7 +133,37 @@ namespace MobileGL::MG_Pipe {
         // buffer. So the answer is the SERVER's table, published as a bit and read through
         // MGL_BACKEND_SLOT_CAP. The first of the "XFB span family" bits SlotCaps.h predicted.
         kCapBackendOwnsXfbCapture = 1ull << 9,
+        // P5e (MG_Remote/CONTRACT-P5E.md §1, §6). THE SERVER APPLIES AN UNBARRIERED RECORD
+        // WITHOUT READING CLIENT MEMORY: every object it needs is resolved from a handle the
+        // record or the applier state carries, so the client may publish and move on instead
+        // of waiting for appliedSeq at every verb (rule F).
+        //
+        // It is set in the DirectGLES arm of the server's CallMask and NEVER in the
+        // DirectVulkan one - Magma keeps the lockstep for the whole of P5e (§6), its
+        // apply-thread allocator debt is real, and a bit published there would turn that debt
+        // into torn reads rather than into the accounted pulls it is today. On Espryt the arm
+        // is gated on kMGPipeP5eRunAheadReady (MG_Backend/Init.cpp), false until the P5e
+        // integration commit, so every package lands with the wait rule inert.
+        //
+        // The client latches RunAheadArmed() = m_barrierArmed && Ipc.RunAhead &&
+        // Caps().HasCap(kCapRunAheadApply) at the first caps adoption after Start; a later
+        // snapshot may only turn it OFF, because a caps re-run must not be able to make a
+        // lockstep server run-ahead in the middle of a frame.
+        kCapRunAheadApply = 1ull << 10,
     };
+
+    // THE RUN-AHEAD ARM, AS A PURE FUNCTION, so that "Magma never" is something a unit case can
+    // hold rather than a line inside MG_Backend/Init.cpp's InitSplitRoles that only a live
+    // split session reaches. `ready` is Init.cpp's kMGPipeP5eRunAheadReady - false until the
+    // P5e integration commit - and the BACKEND TYPE is the half that must not depend on it:
+    // whatever `ready` says, a DirectVulkan server publishes no bit 10, because Magma keeps the
+    // lockstep for the whole of P5e (CONTRACT-P5E.md §6) and its apply thread really does read
+    // client memory inside MagmaP7AllocatorDebtScope. MG_Test/Pipe/MagmaPipeIdentityTest.cpp
+    // pins both halves; reverting the type test there is the phase's named red.
+    inline constexpr Uint64 MGPipeRunAheadCapBitsFor(BackendType type, Bool ready) {
+        return (ready && type == BackendType::DirectGLES) ? static_cast<Uint64>(kCapRunAheadApply)
+                                                          : static_cast<Uint64>(kCapNone);
+    }
 
     struct MGPCaps {
         // The ~90 flat scalars the backends already publish, by inclusion rather than by
@@ -591,10 +621,26 @@ namespace MobileGL::MG_Pipe {
         Uint8 NativeFloat64;
         Uint8 PointSizeDemoted;
         Uint8 EnableSpirvValidation;
+        // P5e (CONTRACT-P5E.md §1). 1 = the link this record describes SUCCEEDED. Today
+        // "linked" is only implied by the create existing, which is not the same statement:
+        // create_shader_state is re-issued on the same handle at every link that moves
+        // GetLinkVersion, and a FAILED relink of a bound program moves it too. The server's
+        // clean condition needs the difference spelled, because a draw on a program the
+        // frontend reports unlinked DECLINES (the frontend raises INVALID_OPERATION) and a
+        // record that cannot say so leaves the twin rebuilding from empty artefacts.
+        //
+        // THE DESCRIPTOR GREW 192 -> 200 AND THE DRAFT'S "in the descriptor's existing pad"
+        // WAS WRONG: the four bytes above end at offset 24 and MGPBlobRef is 8-aligned, so
+        // there is no spare byte and a fifth one costs the alignment slack below. It is paid
+        // once, on a record that fires at most once per link, and it is confined to the push
+        // build (this payload is only ever instantiated under MOBILEGL_PIPE_PUSH), which is
+        // why G1 does not see it. PipeCatalogueTest pins the new size.
+        Uint8 LinkStatus;
+        Uint8 Pad0[7];
         MGPBlobRef Spirv[6]; // per stage
         MGPBlobRef Reflection;
     };
-    MGP_ASSERT_POD(MGPProgramDesc, 192);
+    MGP_ASSERT_POD(MGPProgramDesc, 200);
 
     // ---------------------------------------------------------------------------------
     // set_*
@@ -802,6 +848,17 @@ namespace MobileGL::MG_Pipe {
     inline constexpr Uint32 kMGPipeMaxTextureUnits = 192;
     inline constexpr Uint32 kMGPipeMaxImageUnits = 192;
 
+    // P5e (CONTRACT-P5E.md §1, ruling 10). How many INDEXED BUFFER BINDING POINTS one
+    // set_shader_buffers record may describe per class. 84 is the frontend's capacity
+    // (MG_State/GLState/BufferState/BufferState.h's BufferBindingPointCount, itself the GL 4.5
+    // core minimum for GL_MAX_UNIFORM_BUFFER_BINDINGS) and it is what travels: the BACKEND
+    // clamps to the device's real ceiling, as it does today, because a client-side clamp would
+    // read a device capability from the wrong side of the wire.
+    //
+    // Pinned against the frontend constant in MG_Impl/Pipe/PipeFill.cpp, the one translation
+    // unit that sees both, exactly as the two above are.
+    inline constexpr Uint32 kMGPipeMaxBufferBindingPoints = 84;
+
     struct MGPVertexBuffer {
         MGPipeHandle Res;
         Uint64 Offset;
@@ -907,8 +964,23 @@ namespace MobileGL::MG_Pipe {
     // Var-tail header: MGPBufferRange[Count], then MGHostSpan[HostSpanCount]. HostSpanCount is
     // 0, or Count for the Uniform class under kCapNeedsHostUboBytes (a range with nothing to
     // ship carries an empty span, so the two arrays stay index-aligned).
+    // MGPShaderBuffers::Class's three values, and the ONLY spelling of them (P5e,
+    // MG_Remote/CONTRACT-P5E.md §1). The payload's comment has named them since P4a and
+    // nothing numbered them, so the emitter and the applier were one literal each away from
+    // disagreeing. Uniform is 0 so a zeroed record describes the uniform binding points, which
+    // is the class every workload has.
+    //
+    // XFB IS NOT ONE OF THEM: set_stream_output_targets carries a Generation this payload has
+    // no field for and its capture points are span-scoped state latched at Begin, so the
+    // catalogue's split between the two rows stays (§5.7).
+    inline constexpr Uint32 kMGPipeShaderBufferClassUniform = 0;
+    inline constexpr Uint32 kMGPipeShaderBufferClassShaderStorage = 1;
+    inline constexpr Uint32 kMGPipeShaderBufferClassAtomicCounter = 2;
+    inline constexpr Uint32 kMGPipeShaderBufferClassCount = 3;
+
     struct MGPShaderBuffers {
-        Uint32 Class; // Uniform | ShaderStorage | AtomicCounter
+        Uint32 Class; // MGPipeTypes.h's kMGPipeShaderBufferClass* - Uniform | ShaderStorage |
+                      // AtomicCounter
         Uint32 Start;
         Uint32 Count;
         Uint32 WritableMask;
@@ -926,6 +998,60 @@ namespace MobileGL::MG_Pipe {
         Uint64 ContentHash;
     };
     MGP_ASSERT_POD(MGPStreamOutputTargets, 24);
+
+    // ---- set_program_bindings (P5e, opcode 80; CONTRACT-P5E.md §1 and §5.5) --------------
+    //
+    // THE THREE POST-LINK MUTABLE REFLECTION FIELDS. create_shader_state carries the archive
+    // as LINKED; glUniformBlockBinding, glUniform1i on a sampler and glShaderStorageBlockBinding
+    // all move a binding AFTER the link, inside the frontend's LinkArtifacts, so an archive
+    // snapshot alone is wrong and the server would answer a draw with the bindings the program
+    // was linked with rather than the ones it is bound with.
+    //
+    // Three tails, in this order, because the three live in three different index spaces:
+    //   Int32                     BlockBindings[BlockBindingCount]   dense, GL uniform-block index
+    //   MGPProgramSamplerUnit     SamplerUnits[SamplerUnitCount]     sparse, ascending Location
+    //   MGPProgramStorageOverride StorageOverrides[StorageOverrideCount]
+    // The storage-override map is NAME-keyed BY DESIGN (ProgramObject.h: three index spaces,
+    // one coordinate), so its key travels as a host span staged whole, exactly as
+    // set_storage_block_binding's single name does.
+    //
+    // Emitted BEFORE create_shader_state at the same validate point: a rebuild inside the verb
+    // must already see the bindings. A re-issued create CLEARS all three tails, for the reason
+    // GlobalConstants is cleared - a relink replaces the archive the tails index into.
+    struct MGPProgramSamplerUnit {
+        Uint32 Location; // the frontend uniform location
+        Int32 Unit;      // the texture image unit glUniform1i put there
+    };
+    MGP_ASSERT_POD(MGPProgramSamplerUnit, 8);
+
+    struct MGPProgramStorageOverride {
+        MGHostSpan Name; // the block name, NUL included, staged whole
+        Int32 Binding;
+        Uint32 Pad0;
+    };
+    MGP_ASSERT_POD(MGPProgramStorageOverride, 40);
+
+    // The three declared bounds. A program that exceeds one is a COUNTED REFUSAL and never a
+    // truncation: a sampler array larger than 256 locations is a program this record cannot
+    // describe, and silently describing 256 of them is the class of bug the descriptors exist
+    // to close. The codec raises Fatal{ProtocolCorruption, "SetProgramBindings.<field>"}.
+    inline constexpr Uint32 kMGPipeMaxProgramBlockBindings = 64;
+    inline constexpr Uint32 kMGPipeMaxProgramSamplerUnits = 256;
+    inline constexpr Uint32 kMGPipeMaxProgramStorageOverrides = 64;
+
+    struct MGPProgramBindings {
+        MGPipeHandle Cso;
+        // The client's commutative hash of the override MAP, the same function the backend
+        // computes today (Managers.cpp's ComputeShaderStorageBlockBindingSignature), so the
+        // server's "do I have to rebuild" clause is one Uint64 compare and the name tail is
+        // touched only on a rebuild.
+        Uint64 Signature;
+        Uint32 BlockBindingCount;
+        Uint32 SamplerUnitCount;
+        Uint32 StorageOverrideCount;
+        Uint32 Pad0;
+    };
+    MGP_ASSERT_POD(MGPProgramBindings, 32);
 
     // Covers the DEFAULT UNIFORM BLOCK only (D6).
     struct MGPGlobalConstants {
@@ -1413,6 +1539,18 @@ namespace MobileGL::MG_Pipe {
         // server never reads the indirect buffer to learn a count and the client never sends
         // ranges it does not have.
         kDrawIsIndirect = 1u << 5,
+        // P5e (CONTRACT-P5E.md §1, §5.1, ruling 2). AT LEAST ONE ENABLED ATTRIBUTE OF THE
+        // BOUND VAO HAS NO BUFFER: the draw's vertex bytes live in client memory and the
+        // server uploads them today by dereferencing the raw client pointer the record's
+        // Offset carries (Managers.cpp's SyncClientSideAttributesForDrawArrays). That is
+        // exactly the read rule F forbids, and it is NOT refused under split at this head -
+        // only client INDEX arrays are. So the flag exists to make the case VISIBLE on the
+        // wire: the barriered predicate escalates on it, and under run-ahead the client
+        // refuses the draw by name (Fatal{UnmigratedVerb, "DrawArrays+CLIENT_ARRAYS"}) rather
+        // than publishing bytes that may move before they are read. The staged form - a
+        // per-attribute {BindingIndex, MGHostSpan} tail, shaped like kDrawHasUserIndices - is
+        // P8's; the lockstep arm is unchanged.
+        kDrawClientArrays = 1u << 6,
     };
 
     // = pipe_draw_info. Today's twenty draw entry points collapse onto this one call, with

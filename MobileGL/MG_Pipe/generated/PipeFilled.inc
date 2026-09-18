@@ -315,6 +315,7 @@ enum class MGPipeFieldEmitter : Uint8 {
     SetFramebufferState,
     SetPatchState,
     SetSamplerViews,
+    SetShaderBuffers,
     SetShaderImages,
     SetVertexAttribDefaults,
 };
@@ -331,6 +332,7 @@ inline constexpr const char* kMGPipeFieldEmitterNames[] = {
     "SetFramebufferState",
     "SetPatchState",
     "SetSamplerViews",
+    "SetShaderBuffers",
     "SetShaderImages",
     "SetVertexAttribDefaults",
 };
@@ -343,7 +345,7 @@ inline constexpr MGPipeFieldEmitter kMGPipeFieldEmittedBy[kMGPipeInputFieldCount
     MGPipeFieldEmitter::kNone, // GetBoundTransformFeedbackName
     MGPipeFieldEmitter::BindVertexElements, // GetBoundVertexArray
     MGPipeFieldEmitter::kNone, // GetBufferBindingSlot
-    MGPipeFieldEmitter::kNone, // GetBufferBindingPoint
+    MGPipeFieldEmitter::SetShaderBuffers, // GetBufferBindingPoint
     MGPipeFieldEmitter::kNone, // GetBufferBindingPointCount
     MGPipeFieldEmitter::SetContextValues, // GetTouchedBufferBindingPointCount
     MGPipeFieldEmitter::SetDynamicState, // GetClampReadColor
@@ -400,7 +402,7 @@ inline constexpr MGPipeFieldEmitter kMGPipeFieldEmittedBy[kMGPipeInputFieldCount
     MGPipeFieldEmitter::SetContextValues, // GetBoundTransformFeedbackLifetimeId
     MGPipeFieldEmitter::kNone, // HasOpenTransformFeedbackSpan
 };
-inline constexpr SizeT kMGPipeEmittedFieldCount = 47;
+inline constexpr SizeT kMGPipeEmittedFieldCount = 48;
 
 struct MGPipeFilledState {
     Uint64 CurrentVerbSerial;

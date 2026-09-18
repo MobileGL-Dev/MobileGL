@@ -8,7 +8,7 @@
 
 #include "Config.h"
 #if MOBILEGL_PIPE_PUSH
-// For kMGPipeSubsystemsMigratedAtP4a, the push build's PipePush default (the P2 and P3a
+// For kMGPipeSubsystemsMigratedAtP5e, the push build's PipePush default (the P2, P3a and P4a
 // constants beside it are the phase-by-phase controls, not the default). Push-only, so the
 // pull build's translation unit is unchanged.
 #include <MG_Pipe/MGPipe.h>
@@ -263,7 +263,7 @@ namespace MobileGL::MG_ConfigLoader {
         // environment is the all-subsystems-pull control that reproduces P1 exactly, and
         // kMGPipeSubsystemsMigratedAtP3a (0x1ff) is the phase-by-phase control - P4a's four
         // subsystems off, everything P3a landed still on.
-        features.PipePush = QueryEnvUint64("MOBILEGL_PIPE_PUSH", MG_Pipe::kMGPipeSubsystemsMigratedAtP4a);
+        features.PipePush = QueryEnvUint64("MOBILEGL_PIPE_PUSH", MG_Pipe::kMGPipeSubsystemsMigratedAtP5e);
 #else
         // Meaningless in a pull build: there is nothing to push. Config.h documents 0 as
         // "pull everything" and that stays literally true.
@@ -379,6 +379,17 @@ namespace MobileGL::MG_ConfigLoader {
         // point of use, which is where the "P11" in the message belongs.
         ipc.AdoptTier = QueryEnvUint32("MOBILEGL_IPC_ADOPT_TIER", 2, 0, 2);
         ipc.VerbBarrier = QueryEnvUint32("MOBILEGL_IPC_VERB_BARRIER", 1, 0, 1);
+        // P5e (MG_Remote/CONTRACT-P5E.md §1). The wait rule's A/B, parsed here like every
+        // other IPC knob and armed only where the server publishes kCapRunAheadApply.
+        ipc.RunAhead = QueryEnvUint32("MOBILEGL_IPC_RUN_AHEAD", 1, 0, 1);
+        // ... and forced OFF by the verify harness for BatchWaits' reason, one step further:
+        // run-ahead's whole point is that the client stops filling gPipeInputs for an
+        // unbarriered record, and the comparator has nothing left to compare when it does.
+        if (MG_Config::Features.PipeVerify) ipc.RunAhead = 0;
+        // The present credit (ruling 4). 1 is one frame of overlap; 8 is the ceiling because a
+        // deeper queue buys nothing on a CPU-bound client and pays for it in latency. 0 is NOT
+        // admitted: a credit of zero would mean "publish no present at all".
+        ipc.PresentCredit = QueryEnvUint32("MOBILEGL_IPC_PRESENT_CREDIT", 1, 1, 8);
         ipc.StrictErrors = QueryEnvFlag("MOBILEGL_IPC_STRICT_ERRORS");
         ipc.Audit = QueryEnvFlag("MOBILEGL_IPC_AUDIT");
         QueryEnvVariable("MOBILEGL_IPC_SERVER_AFFINITY", ipc.ServerAffinity, "auto");
@@ -387,9 +398,11 @@ namespace MobileGL::MG_ConfigLoader {
         // One line, on the arm where these numbers decide behaviour, because every one of
         // them is a number a bug report has to quote.
         MGLOG_I("Config: IPC ring=%uMiB stage=%uMiB spin=%uus persistent-block=%uKiB "
-                "adopt-tier=%u verb-barrier=%u strict=%d audit=%d affinity='%s'",
+                "adopt-tier=%u verb-barrier=%u run-ahead=%u present-credit=%u strict=%d "
+                "audit=%d affinity='%s'",
                 ipc.RingMb, ipc.StageMb, ipc.SpinUs, ipc.PersistentBlockKb, ipc.AdoptTier,
-                ipc.VerbBarrier, static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit),
+                ipc.VerbBarrier, ipc.RunAhead, ipc.PresentCredit,
+                static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit),
                 ipc.ServerAffinity.c_str());
         if (ipc.VerbBarrier == 0) {
             MGLOG_W("Config: MOBILEGL_IPC_VERB_BARRIER=0 is the R-1 NEGATIVE CONTROL and is "

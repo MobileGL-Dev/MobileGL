@@ -332,3 +332,7 @@ inline void MGP_ObjectDeath(const MGPHandleOnly* payload) {
 inline void MGP_SetContextValues(const MGPContextValues* payload) {
     gMGPipeContext.SetContextValues(payload);
 }
+
+inline void MGP_SetProgramBindings(const MGPProgramBindings* payload, const void* varTail, Uint32 varTailCount) {
+    gMGPipeContext.SetProgramBindings(payload, varTail, varTailCount);
+}

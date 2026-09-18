@@ -11,6 +11,10 @@
 
 #include "MGPipeRenderStateSpans.h"
 #include "MGPipeTypes.h"
+// P5e (MG_Remote/CONTRACT-P5E.md §2.1): MGPipeBarriered takes an MGPWireOp and reads the
+// generated wait-class and call-class tables, all of which live in MGPipe.h. It is a sibling
+// header in the same layer - MG_Pipe includes MG_Pipe - so the closure does not move.
+#include "MGPipe.h"
 
 // The in-process applier: the SERVER half of the calls P2 emits. Under split this file is
 // MG_Remote/Server/PipeApplier (ARCHITECTURE.md 8.3); in the monolith it writes
@@ -367,6 +371,16 @@ namespace MobileGL::MG_Pipe {
     // GlobalConstants is the one allocation P4a adds per program, it is bounded by
     // Desc.GlobalUboSize, and it is NOT on the hot path: set_global_constants is
     // (ShaderCso, Version) keyed and fires at most once per program per frame.
+    // P5e (MG_Remote/CONTRACT-P5E.md §1): one entry of set_program_bindings' third tail as the
+    // RECORD owns it. The wire carries the block name as an MGHostSpan into SEG_STAGE, which
+    // retires with the record that named it (rule C), so the applier copies the bytes here
+    // rather than keeping the span: a rebuild happens at the next bind, which may be a frame
+    // later, and by then the staged run is somebody else's.
+    struct MGPipeProgramStorageOverride {
+        String Name;
+        Int32 Binding = 0;
+    };
+
     struct MGPipeShaderCsoRecord {
         Uint32 Gen = 0;
         Bool Live = false;
@@ -377,6 +391,31 @@ namespace MobileGL::MG_Pipe {
         Vector<Uint8> GlobalConstants;
         Uint64 GlobalConstantsSerial = 0;
         Uint64 Serial = 0;
+
+        // ---- P5e's set_program_bindings tails (CONTRACT-P5E.md §1, §5.5) -------------------
+        //
+        // DECLARED BY c0e, FILLED BY PACKAGE pg. THE THREE POST-LINK MUTABLE REFLECTION FIELDS
+        // the archive cannot answer: glUniformBlockBinding, glUniform1i on a sampler uniform and
+        // glShaderStorageBlockBinding all move a binding INSIDE the frontend's LinkArtifacts
+        // after the link, so a twin that answered a draw from the archive alone would bind the
+        // uniform blocks the program was LINKED with rather than the ones it is BOUND with.
+        //
+        // A RE-ISSUED create_shader_state CLEARS ALL OF THEM, for the reason it clears
+        // GlobalConstants: a relink replaces the archive these index into, so a surviving tail
+        // would name block indices and uniform locations of a program that no longer exists.
+        // The client re-emits set_program_bindings before the create that describes the relink.
+        Vector<Int32> BlockBindings;                        // dense, GL uniform-block index order
+        Vector<MGPProgramSamplerUnit> SamplerUnits;         // sparse, ascending Location
+        Vector<MGPipeProgramStorageOverride> StorageOverrides; // name-keyed by design
+        // The client's commutative hash of the override MAP, so the twin's "must I rebuild the
+        // storage-block bindings" clause is one Uint64 compare and the name tail is touched only
+        // on a rebuild. 0 is "no overrides", which is what an untouched program has.
+        Uint64 Signature = 0;
+        // Server-owned MGGen, ++ on every applied set_program_bindings for this record. It is
+        // what the program twin's clean condition and both texture-unit memos key on (ruling 6),
+        // so it obeys VertexBuffersSerial's rule: ADVANCED, never returned to a value it has
+        // already handed out.
+        Uint64 BindingsSerial = 0;
     };
 
     // The vertex-elements CSO as the applier holds it: the unpacked blob, both views, plus
@@ -693,6 +732,42 @@ namespace MobileGL::MG_Pipe {
         MGPipeHandle BoundShaderCso = kMGPipeNullHandle;
         Uint64 ProgramBindingSerial = 0;
 
+        // ---- P5e: THE INDEXED BUFFER BINDING POINTS (CONTRACT-P5E.md §5.6, rulings 10/11) ---
+        //
+        // DECLARED BY c0e, FILLED BY PACKAGE sb. One window per CLASS, because the record is
+        // per class - a set_shader_buffers names Uniform, ShaderStorage or AtomicCounter and
+        // describes THAT target's array. XFB does NOT ride this state: its targets are span-
+        // scoped and carry a Generation this payload has no field for, so set_stream_output_
+        // targets keeps its own row and XFB stays lockstep (§5.7).
+        //
+        // THE VAR-TAIL WINDOW IS THE BOUND, exactly as it is for the three unit sets above:
+        // Start is 0 by contract, Count is the touched high-water mark, and a binding at or
+        // above Count means "nothing bound" - which is what the frontend array's default says
+        // too, so the server does not have to clear entries outside the window to be right.
+        Array<MGPBufferRange, kMGPipeMaxBufferBindingPoints>
+            BoundShaderBuffers[kMGPipeShaderBufferClassCount]{};
+        Uint32 ShaderBufferStart[kMGPipeShaderBufferClassCount] = {0, 0, 0};
+        Uint32 ShaderBufferCount[kMGPipeShaderBufferClassCount] = {0, 0, 0};
+        // Which entries of classes 1 and 2 the shader may WRITE through. It is what replaces
+        // the backend's own GPU-write marking walk (DirectGLES.cpp's three MarkBufferGpuWritten
+        // sites), which sb deletes under a transport because the client already owns the
+        // GPU-write set and the server's walk is over client memory.
+        Uint32 ShaderBufferWritableMask[kMGPipeShaderBufferClassCount] = {0, 0, 0};
+        // ONE serial for all three classes, ++ on every applied record and ADVANCED (never
+        // zeroed) by MGPipeApplierReset, for VertexBuffersSerial's reason - and the emitter's
+        // latch resets with it, or the first emission after a make-current is suppressed as
+        // unchanged.
+        Uint64 ShaderBuffersSerial = 0;
+
+        // ---- P5e: the applied value the barriered predicate's XFB escalation reads ---------
+        //
+        // MGPContextValues::IsTransformFeedbackActive as set_context_values last delivered it.
+        // It is mirrored HERE, beside the applier's other working state, and not only written
+        // into gPipeInputs, because MGPipeBarriered must be computable on the SERVER from
+        // applier state alone: the record that carries it precedes the verb on the ring, so
+        // both roles evaluate the same predicate over the same value (§2.1, escalation (i)).
+        Bool IsTransformFeedbackActive = false;
+
         // ---- P5c (rv, CONTRACT-P5C.md §5.3): the server-side answer for the three texture
         // SHUTTERS. FieldOwnership.def moves GetSamplingResolutionGeneration /
         // GetTextureBindGeneration / GetTextureContextId to APPLIER_DERIVED - "a shutter, not
@@ -781,6 +856,53 @@ namespace MobileGL::MG_Pipe {
 
     // The monolith's single applier. Under split there is one per served context.
     MGPipeApplierState& MGPipeApplier();
+
+    // ---------------------------------------------------------------------------------
+    // P5e: THE BARRIERED PREDICATE (MG_Remote/CONTRACT-P5E.md §2.1, ruling 3)
+    // ---------------------------------------------------------------------------------
+    //
+    // ONE FUNCTION, TWO CALLERS, AND THAT IS THE WHOLE POINT. The client calls it at the emit
+    // table to decide whether to wait after publishing; the sink calls it in ApplyOne to decide
+    // whether the record it is about to apply may read client memory. If the two answers ever
+    // differ the failure is silent: the client runs on while the server reads a value that has
+    // already moved. So it is a PURE FUNCTION OF WIRE-VISIBLE DATA - the static wait-class
+    // column, the record's own payload, and applier state that a record earlier on the ring put
+    // there - and both roles evaluate the same three clauses:
+    //
+    //   1. MGPipeWaitClassFor(op) != kWaitNone            the static column (§2.2)
+    //   2. kCtxVerb with an open transform-feedback span  escalation (i): XFB stays lockstep
+    //   3. draw_vbo carrying kDrawClientArrays            escalation (ii): client vertex arrays
+    //
+    // NO OTHER RUNTIME ESCALATION EXISTS. Adding one is an integrator ruling and a row in the
+    // contract, not a condition somebody adds at a call site - because a fourth clause that only
+    // one side computes is the same silent failure one level down.
+    //
+    // Escalation (ii) is a REFUSAL under run-ahead (§5.1), so on a run-ahead server it never
+    // reaches the sink at all; it is here so the predicate is TOTAL and so the lockstep arm,
+    // where such a draw is legal, gets the barrier it needs.
+    //
+    // `payload` may be null, which answers "the fixed payload is not available here" and makes
+    // clause 3 fall through - a caller that has an opcode but no bytes (the emit table before it
+    // has built the record) must not be told a draw is unbarriered on that account, so DrawVbo
+    // with a null payload is treated as carrying no client arrays and the emit site passes the
+    // real MGPDrawInfo it is about to publish.
+    Bool MGPipeBarriered(MGPWireOp op, const void* payload, const MGPipeApplierState& st);
+
+    // Whether the record the apply thread is INSIDE is a barriered one. Server-private: written
+    // by the sink's ApplyOne from MGPipeBarriered before it dispatches, read by
+    // MGPipeRefuseAllocatorFromApplyThread (§4.4) to decide whether a frontend-keyed registry
+    // probe is a named, accounted debt or a role violation.
+    //
+    // IT ANSWERS `true` BY DEFAULT AND THAT IS THE LANDED LOCKSTEP ANSWER, not a stub: on a
+    // server that does not publish kCapRunAheadApply - Magma always, and Espryt until the
+    // integration commit - EVERY record is barriered, the client is parked in its own wait for
+    // each of them, and P5C's semantics hold unchanged. An asserting body here would abort the
+    // monolith and the lockstep split alike, which is why this one seam is implemented rather
+    // than declared: the safe answer and the correct answer are the same answer.
+    Bool MGPipeApplierCurrentRecordIsBarriered();
+    // The one writer, called by the sink at the top of every record's dispatch. Package id owns
+    // the call site (it is the line ra rebases onto); c0e owns the storage so both compile.
+    void MGPipeApplierSetCurrentRecordBarriered(Bool barriered);
 
     // P5c (rv): the two serials the PipeInputs texture-shutter accessors answer with under a
     // server-stamped verb (FieldOwnership.def, APPLIER_DERIVED). Free functions rather than
@@ -1144,6 +1266,37 @@ namespace MobileGL::MG_Pipe {
     void MGPipeApplySetSamplerViews(const MGPSamplerViews& hdr, const MGPBoundView* tail);
     void MGPipeApplyBindSamplerStates(const MGPSamplerStates& hdr, const MGPipeHandle* tail);
     void MGPipeApplySetShaderImages(const MGPShaderImages& hdr, const MGPImageView* tail);
+
+    // ---------------------------------------------------------------------------------
+    // P5e's two entry points: DECLARED BY c0e, BODIED BY sb AND pg
+    // ---------------------------------------------------------------------------------
+    //
+    // Both are declared here, with bodies in PipeApply.cpp that ABORT BY NAME, so that every
+    // P5e package compiles and links against the same signatures from day one and the family
+    // that lands one of them changes a body rather than adding a symbol. An abort and not a
+    // silent no-op: a record that reached an unimplemented applier and returned quietly is a
+    // dropped binding set, which renders wrong rather than stopping - the exact failure mode
+    // ID-39's sixty-six lost uploads had. Nothing routes either opcode until its package lands
+    // (PipeCatalogueTest pins both table slots null), so the abort is unreachable today.
+
+    // set_shader_buffers, per Class. `tail` is hdr.Count MGPBufferRanges starting at hdr.Start;
+    // Class >= kMGPipeShaderBufferClassCount and Start + Count above the capacity are
+    // Fatal{ProtocolCorruption, "SetShaderBuffers.Class"} / "SetShaderBuffers.Count". Entries
+    // outside the declared window are NOT cleared - the record is "the last set as received",
+    // exactly as set_vertex_buffers is.
+    void MGPipeApplySetShaderBuffers(const MGPShaderBuffers& hdr, const MGPBufferRange* tail);
+
+    // set_program_bindings. The three tails in the order the record declares them, plus the
+    // RESOLVED block names for the override tail: the names ride SEG_STAGE as host spans and
+    // SEG_STAGE retires with the record that named them, so the applier must copy them into the
+    // record before this call returns (rule C) and the decoder hands over pointers that are
+    // valid only for the duration of the call. `storageOverrideNames[i]` belongs to
+    // `storageOverrides[i]`, NUL-terminated, exactly as set_storage_block_binding's single name
+    // is. Any of the four pointers may be null when its count is 0.
+    void MGPipeApplySetProgramBindings(const MGPProgramBindings& hdr, const Int32* blockBindings,
+                                       const MGPProgramSamplerUnit* samplerUnits,
+                                       const MGPProgramStorageOverride* storageOverrides,
+                                       const char* const* storageOverrideNames);
 
     // create_shader_state. THE ARTEFACTS TRAVEL BESIDE THE RECORD, by pointer: all seven of
     // desc.Spirv[] and desc.Reflection are declared with Size 0 ("this record does not declare

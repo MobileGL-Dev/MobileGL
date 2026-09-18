@@ -1466,6 +1466,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the attribute-offset emulation must stay out of the way. Applied to whatever the
         // applier stored, so the answer is the same whichever side resolved it first.
         Bool BackendUsesNativeBaseInstance();
+
+        // ---- P5e SEAM (MG_Remote/CONTRACT-P5E.md §4.2; declared by c0e, bodied by id/vi) ----
+        //
+        // THE VAO TWIN, RESOLVED FROM THE HANDLE THE RECORD CARRIED - MGPipeApplierState::
+        // BoundVertexElements - instead of from the frontend VertexArrayObject the draw's
+        // BARRIER_PULLED row hands over. The frontend overload above it stays as the
+        // monolith-glue half, in the shape ResolveSamplerCsoTwin already established for the
+        // sampler CSO family: two overloads, not an #if inside one body, so which arm a caller
+        // is on is visible at the call site.
+        //
+        // It is declared HERE, with a body that aborts by name, because the packages that fill
+        // it in land in parallel worktrees: id rekeys the registry under it, vi moves
+        // PrepareForDraw's call onto it, and neither may edit the other's file. A missing
+        // declaration would make that a merge conflict; a declaration with a quiet body would
+        // make it a null twin and a blank draw.
+        BackendVertexArrayObject* ResolveVaoTwin(MG_Pipe::MGPipeHandle vertexElements);
 #endif
     } // namespace VertexArrayImpl
 
@@ -1590,6 +1606,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             BackendTextureObject(const BackendTextureObject&) = delete;
             BackendTextureObject& operator=(const BackendTextureObject&) = delete;
             void SyncMipmapsToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
+#if MOBILEGL_PIPE_PUSH
+            // P5e SEAM (declared by c0e, bodied by tx2): the same storage sync keyed on the
+            // texture HANDLE, reading the applier's resource record and the server's staged
+            // store instead of the frontend object's levels and pending uploads. fb's
+            // attachment sync and the image sweep both call it, which is why it is declared
+            // once here rather than twice in two packages' worktrees.
+            void SyncMipmapsToBackendByHandle(MG_Pipe::MGPipeHandle texture);
+#endif
             // The storage half of the sync for a texture created by glTextureView. Instead of
             // allocating storage and replaying uploads, it makes this object's ES name BE a view
             // of the storage texture's ES name (EXT/OES_texture_view), which is what gives the
@@ -1820,6 +1844,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
         SharedPtr<BackendTextureObject>& SyncTextureObjectToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
             Bool imageBindableStorageRequired = false);
+#if MOBILEGL_PIPE_PUSH
+        // ---- P5e SEAM (MG_Remote/CONTRACT-P5E.md §4.2, §5.2; declared by c0e, bodied by
+        // id/tx2) --------------------------------------------------------------------------
+        //
+        // EVERY DRAW-PATH TEXTURE ENTRY, BY HANDLE. The caller holds a Texture handle - a
+        // sampler view's Texture, an image unit's Res, a framebuffer surface's Res, VerbMipRes,
+        // VerbCopyTexDst, a copy-image endpoint - and the sync resolves the RECORD first and the
+        // twin by GetOrCreateByHandle, so nothing on the apply thread dereferences a frontend
+        // ITextureObject. The frontend overload above stays as the monolith-glue half.
+        //
+        // ResolveTextureTwin is the lookup without the sync, for the callers that need the twin
+        // to answer a shape question (an image bind's target and storage format come off the
+        // twin, not off a new wire field) after tx2's sync has already run this frame.
+        SharedPtr<BackendTextureObject>& SyncTextureToBackendByHandle(
+            MG_Pipe::MGPipeHandle texture, Bool imageBindableStorageRequired = false);
+        BackendTextureObject* ResolveTextureTwin(MG_Pipe::MGPipeHandle texture);
+#endif
         // Brings every texture the next draw reads - the touched units' bindings and the draw
         // FBO's texture attachments - onto the backend, through the two borrowed-pair memos
         // documented at their definitions. Declared here so tests can drive those memos directly.
@@ -1844,6 +1885,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             BackendFramebufferObject& operator=(const BackendFramebufferObject&) = delete;
             void SyncToBackend(const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBOObject,
                                FramebufferTarget asTarget);
+#if MOBILEGL_PIPE_PUSH
+            // P5e SEAM (MG_Remote/CONTRACT-P5E.md §5.4; declared by c0e, bodied by fb): the same
+            // sync keyed on the framebuffer HANDLE. The record's eleven surfaces ARE the point
+            // set - the emitter refuses a point at or above the wire width - so the attachment
+            // walk needs no frontend FramebufferObject and no m_pushedSyncHandle handshake: the
+            // handle is the argument. An OVERLOAD rather than a changed signature, so the
+            // monolith arm and the pull build see no token move.
+            void SyncToBackendByHandle(MG_Pipe::MGPipeHandle fbo, FramebufferTarget asTarget);
+#endif
             // Apply only this FBO's read buffer (glReadBuffer) to the backend. Split out so it can
             // still run when SyncCurrentFBO skips the READ-target sync because the same GL FBO is
             // bound as both draw and read (otherwise glReadBuffer changes would be silently dropped).
@@ -2315,6 +2365,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             BackendProgramObjectImpl();
             ~BackendProgramObjectImpl();
             void SyncToBackend(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
+#if MOBILEGL_PIPE_PUSH
+            // P5e SEAM (MG_Remote/CONTRACT-P5E.md §5.5; declared by c0e, bodied by pg): the same
+            // sync keyed on the ShaderCso HANDLE and answered from the record - the archive the
+            // create carries and the three binding tails set_program_bindings carries. It is an
+            // OVERLOAD beside the frontend one, which stays as the monolith-glue half, so the
+            // pull build's mangled names do not move.
+            void SyncToBackendByHandle(MG_Pipe::MGPipeHandle cso);
+#endif
             void Use();
             void SetBaseInstance(Uint32 baseInstance) const;
             void SetBaseInstanceWordIndex(Int32 wordIndex) const;
@@ -2609,6 +2667,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
         };
         ImageFormatBakeInputs CollectImageFormatBakeInputs(
             const MG_State::GLState::ProgramObject& stateProgramObject);
+
+#if MOBILEGL_PIPE_PUSH
+        // ---- P5e SEAM (MG_Remote/CONTRACT-P5E.md §4.2, §5.5; declared by c0e, bodied by
+        // id/pg) ---------------------------------------------------------------------------
+        //
+        // THE PROGRAM TWIN, RESOLVED FROM MGPipeApplierState::DrawProgram / DispatchProgram /
+        // BoundShaderCso instead of from GetProgramForDraw()'s frontend SharedPtr - the second
+        // unconditional pointer read of every draw, and one of the two rows whose retirement is
+        // what P5e is for. Composite pipeline programs resolve through the same call: their
+        // slots come out of the allocator's composite band, which the server's slot table gains
+        // a band for so the ordinary table does not grow to a million entries.
+        //
+        // Null, loudly, when the handle names no record or cannot be adopted - the shape
+        // ResolveSamplerCsoTwin set - and null silently for the null handle, which is the legal
+        // "nothing bound".
+        BackendProgramObjectImpl* ResolveProgramTwin(MG_Pipe::MGPipeHandle cso);
+#endif
     } // namespace PrgramImpl
 
     namespace SamplerImpl {
@@ -2789,6 +2864,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             BackendRenderbufferObject(const BackendRenderbufferObject&) = delete;
             BackendRenderbufferObject& operator=(const BackendRenderbufferObject&) = delete;
             void SyncToBackend(const SharedPtr<MG_State::GLState::RenderbufferObject>& stateRBOObject);
+#if MOBILEGL_PIPE_PUSH
+            // P5e SEAM (declared by c0e, bodied by fb): the renderbuffer twin of the
+            // framebuffer overload above. MGPSurface::Res names the renderbuffer and the
+            // resource record already carries its format, extent and sample count (P4a), so the
+            // attachment sync needs no frontend RenderbufferObject - which is what deletes the
+            // one live identity probe left in the attachment path (Managers.cpp's renderbuffer
+            // cross-check, the sibling that never got the Transport == Monolith gate its
+            // texture counterpart has).
+            void SyncToBackendByHandle(MG_Pipe::MGPipeHandle renderbuffer);
+#endif
             Uint GetBackendRenderbufferId() const { return m_backendRBOId; }
             void Bind() const;
 
