@@ -841,6 +841,53 @@ TEST_F(FieldOwnershipTest, StrictErrorsAlsoPromotesTheStickyForwards) {
         << r.Log;
 }
 
+// P5e (gl) RED-ONCE, ID-117: THE THIRD STATE, AND IT IS THE SAME FIELD AS THE CASE ABOVE.
+//
+// ValidateProgramName@DrawArrays aborts (draw_vbo is kWaitNone: the client will not be parked
+// behind that record and the read is torn by construction). ValidateProgramName@ReadPixels is
+// the same sticky forward under a verb whose op IS statically barriered, so the client is
+// parked, the value is real and ordered, and the debt is P9's rather than this phase's - it
+// says so and the entry COMPLETES. One field, two verbs, opposite verdicts: that is the whole
+// of ID-84 in two cases, and before this change the lane could not tell them apart because
+// strict aborted on both, which made CI's allowlist comparison unreachable code.
+//
+// THE RED: delete the `if (!MGPipeBarrierPullAdmitted(...))` guard in CountBarrierPull so the
+// strict arm is unconditional again, and this case dies of SIGABRT instead of exiting 0.
+TEST_F(FieldOwnershipTest, AnAdmittedBarrierPullIsLoudOnceAndNotFatal) {
+    const ChildResult r = RunInChild([] {
+        MG_Config::Ipc.StrictErrors = true;
+        MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
+        (void)gPipeInputs.ValidateProgramName(1u);
+        (void)gPipeInputs.ValidateProgramName(1u);
+        (void)gPipeInputs.ValidateProgramName(2u);
+        // rsp counts every barriered pull, and under strict every surviving barriered pull is an
+        // admitted one - ID-119's reworded pin, from the counter's side.
+        if (MGPipeResidualPullCount() != 3) ::_exit(7);
+    });
+    ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_EQ(r.Log.find("Fatal{UnmigratedPipeInput"), std::string::npos)
+        << "an admitted pull aborted: the lane can never be green while a debt this phase "
+           "deliberately leaves standing is fatal\n"
+        << r.Log;
+    // THE GRAMMAR, VERBATIM. `<field>@<verb>` and the bracketed tail are the Fatal's, character
+    // for character; only the leading tag differs, so every filter written since P5c that
+    // matches `Fatal{UnmigratedPipeInput` still means exactly "red".
+    EXPECT_NE(r.Log.find("MGPipe: Admitted{UnmigratedPipeInput, \"ValidateProgramName@ReadPixels\"}"
+                         " [BARRIER-PULLED, ADMITTED, retires in P9]"),
+              std::string::npos)
+        << r.Log;
+    // DEDUPED PER (field, verb): three pulls, one line. An 852-draw frame must not write 852.
+    SizeT lines = 0;
+    for (std::size_t at = r.Log.find("Admitted{UnmigratedPipeInput"); at != std::string::npos;
+         at = r.Log.find("Admitted{UnmigratedPipeInput", at + 1)) {
+        ++lines;
+    }
+    EXPECT_EQ(lines, SizeT{1})
+        << "the admitted marker is not deduped per (field, verb); a frame of draws would write "
+           "one line per pull and the marker census could not be read\n"
+        << r.Log;
+}
+
 // A FATAL-class read aborts whatever the knob says: no carrier, and the reduced path never
 // reads it, so it is a real defect rather than a debt.
 // P5b i1: the exemplar MOVED. This case used GetProgramForDispatch, which is BARRIER-PULLED
