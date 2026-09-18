@@ -1447,8 +1447,16 @@ TEST(RemoteF1, GenerateMipmapFieldsCross) {
     const auto child = RunInChild([] {
         StartControlSession(); F1Peer peer; peer.Install(); const auto tex = F1Texture();
         RemoteEmitTable().GL.GenerateMipmap(GL_TEXTURE_2D);
+        // THE FENCE. Under MOBILEGL_IPC_BATCH_WAITS (default on) GenerateMipmap is kCtxObject -
+        // a value-class record whose emit no longer waits for its own apply (production-safe:
+        // the record carries its whole value and the in-order ring applies it before the next
+        // waited verb). The peer lives on the apply thread, so reading it needs a wait
+        // boundary: a following kCtxVerb still waits, and its wait covers everything emitted
+        // before it. When this clear returns, the peer has seen both records.
+        const GLfloat fence[4] = {0, 0, 0, 0};
+        RemoteEmitTable().GL.ClearBufferfv(GL_COLOR, 0, fence);
         const auto& r = peer.mip;
-        if (peer.calls != 1 || r.Res != MGPipeTextureEmitterInstance().FindTexture(*tex) ||
+        if (peer.calls != 2 || r.Res != MGPipeTextureEmitterInstance().FindTexture(*tex) ||
             MGPipeHandleIsNull(r.Res) || r.Target != GL_TEXTURE_2D || r.BaseLevel != 1 || r.LevelCount != 3)
             ::_exit(101);
         ClientSessionInstance().Stop();
@@ -1908,8 +1916,14 @@ MGL_TEXTURE_GUARD_TEST(TextureGetStorageDirtyRectsFromTheApplyThreadIsFatalByNam
 // single-writer rule. The apply thread is NOT actually inside the applier in this case - the
 // flag is raised by hand, which is the exact overlap window the check exists to refuse: a fill
 // that ran while a real apply was in flight would race the applier's reads of gPipeInputs.
+//
+// MOBILEGL_IPC_BATCH_WAITS (default 1) makes that overlap the INTENDED shape (the fill
+// writes only fields no record supplies; pulled reads stay fenced by the pull-verbs' own
+// wait), so the guard fires only with the batch off. This case forces it off and keeps the
+// Fatal; the case below it pins the batched arm as legal.
 TEST(RemoteGuards, ClientPipeInputsFillWhileTheApplierOwnsItIsFatalByName) {
     const auto child = RunInChild([] {
+        MG_Config::Ipc.BatchWaits = 0;
         StartControlSession();
         ClientSession::NoteApplyThreadEnteredApplier();
         MGPipeValidateForVerb(MGPipeVerb::Clear);
@@ -1917,6 +1931,22 @@ TEST(RemoteGuards, ClientPipeInputsFillWhileTheApplierOwnsItIsFatalByName) {
         ClientSessionInstance().Stop();
     });
     ExpectNamedAbort(child, "Fatal{RoleViolation, \"gPipeInputs\"}");
+}
+
+// The batched arm: with MOBILEGL_IPC_BATCH_WAITS=1 the fill is expected to run while the
+// apply thread is inside the applier - that is the batch's whole point, and the disjoint-
+// field model (record-supplied fields are never filled; pulled reads stay fenced) is what
+// makes it safe.
+TEST(RemoteGuards, ClientPipeInputsFillWhileTheApplierOwnsItIsAllowedWhenBatchingIsOn) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.BatchWaits = 1;
+        StartControlSession();
+        ClientSession::NoteApplyThreadEnteredApplier();
+        MGPipeValidateForVerb(MGPipeVerb::Clear);
+        ClientSession::NoteApplyThreadLeftApplier();
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
 }
 
 // The same fill with the flag down is the legal shape - this is the control that keeps the

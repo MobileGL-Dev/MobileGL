@@ -481,6 +481,16 @@ namespace MobileGL::MG_Config {
         // 0 IS A NEGATIVE CONTROL, NOT "unlimited": it disables the push, and
         // PersistentCoherentMapScenario must go RED under it (exit gate E3(a)).
         Uint32 PersistentBlockKb = 64;
+        // MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS: 1 = the persistent-map push ships only
+        // blocks whose xxHash64 changed since the last push, instead of the whole mapped
+        // range every verb. 0 restores the whole-range push (A/B control).
+        Uint32 PersistentHashSuppress = 1;
+        // MOBILEGL_IPC_BATCH_WAITS: 1 = value-class records (kCtxState / kCtxCso / kCtxObject
+        // with no reply slot) are published without waiting for their own apply; the barrier
+        // is taken at the next pull-reading verb (kCtxVerb syncs, queries, screen rows, and
+        // every reply-slot row), which is the only place BARRIER-PULLED fields are read. 0
+        // restores the per-record barrier of R-1.
+        Uint32 BatchWaits = 1;
         // MOBILEGL_IPC_ADOPT_TIER: 2 = emulate (client keeps the shadow and pushes), which
         // is the only tier P5 implements and the reason persistent-map-push can be non-zero
         // at all (R-6). 0 and 1 parse and are Fatal at use with "P11"; they exist now so the

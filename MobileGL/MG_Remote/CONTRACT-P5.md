@@ -387,6 +387,8 @@ is a pull-build symbol and G1 admits **no resize**, which is the same reason the
 | `MOBILEGL_IPC_STAGE_MB` | 32 | SEG_STAGE. Every blob and every var-tail's bytes. |
 | `MOBILEGL_IPC_SPIN_US` | 50 | spin before parking, either direction. |
 | `MOBILEGL_IPC_PERSISTENT_BLOCK_KB` | 64 | **0 is the E3(a) negative control, not "unlimited"**: it turns the push off and `PersistentCoherentMapScenario` must go red. |
+| `MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS` | 1 | 1 = the push ships only blocks whose hash changed since the last push (tracked buffers: the mprotect fault bitmap; untracked: the content scan). 0 restores the whole-range push (A/B control). |
+| `MOBILEGL_IPC_BATCH_WAITS` | 1 | 1 = value-class records (kCtxState / kCtxCso / kCtxObject with no reply slot) publish without waiting for their own apply; the barrier is taken at the next pull-reading verb, the only place BARRIER-PULLED fields are read. 0 restores R-1's per-record barrier, and `MOBILEGL_PIPE_VERIFY` forces 0 (the shadow compare reads the pulled fields at every record). |
 | `MOBILEGL_IPC_ADOPT_TIER` | 2 | 2 = emulate, the only tier P5 implements. 0 and 1 parse and are `Fatal` at use, naming P11. |
 | `MOBILEGL_IPC_VERB_BARRIER` | 1 | 0 is R-1's negative control and is **expected** to be red. |
 | `MOBILEGL_IPC_STRICT_ERRORS` | 0 | promotes BARRIER-PULLED reads — and, in a split build, the seven sticky forwards — to `Fatal`. |

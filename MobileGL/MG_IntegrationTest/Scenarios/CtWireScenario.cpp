@@ -192,6 +192,12 @@ namespace {
         glBindRenderbuffer(GL_RENDERBUFFER, 0);
         const MobileGL::Uint64 deathsBefore = ServerVerbs().ObjectDeaths();
         glDeleteFramebuffers(1, &fbo);
+        // THE FENCE (MOBILEGL_IPC_BATCH_WAITS, default on): object_death is a kCtxObject
+        // value-class record - published WITHOUT waiting for its own apply (production-safe:
+        // the in-order ring applies it before any record that recycles the slot). The
+        // server-side counter this assertion reads only moves at apply time, so it needs a
+        // wait boundary: a clear is kCtxVerb and still waits, and its wait covers the death.
+        glClear(GL_COLOR_BUFFER_BIT);
         EXPECT_GT(ServerVerbs().ObjectDeaths(), deathsBefore)
             << "the framebuffer's death produced no object_death record - and no other "
                "opcode can carry it";

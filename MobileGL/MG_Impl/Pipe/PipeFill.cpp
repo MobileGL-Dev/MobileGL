@@ -57,6 +57,7 @@
 #endif
 
 #include <atomic>
+#include <mutex>
 #include <cstdlib>
 #include <cstring>
 
@@ -971,7 +972,79 @@ namespace MobileGL::MG_Pipe {
         return published;
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    namespace {
+        struct MGPipeDeferredDestroy {
+            MGPipeKind kind;
+            Uint64 lifetimeId;
+        };
+        // A plain mutex, not a lock-free queue: producers are destructors that lost the
+        // last-reference race (rare), the consumer is the GL thread's verb hook, and neither
+        // holds the lock past a vector push/swap. The count is the fast no-work check for
+        // the per-verb drain.
+        std::mutex g_deferredDestroyMutex;
+        Vector<MGPipeDeferredDestroy> g_deferredDestroys;
+        std::atomic<Uint32> g_deferredDestroyCount{0};
+    } // namespace
+
+    Bool MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind kind, Uint64 lifetimeId) {
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return false;
+        if (!MG_Remote::Client::RunsAsTheServerRole()) return false;
+        {
+            std::lock_guard<std::mutex> lock(g_deferredDestroyMutex);
+            g_deferredDestroys.push_back(MGPipeDeferredDestroy{kind, lifetimeId});
+        }
+        g_deferredDestroyCount.fetch_add(1, std::memory_order_release);
+        return true;
+    }
+
+    void MGPipeDrainDeferredDestroys() {
+        if (g_deferredDestroyCount.load(std::memory_order_acquire) == 0) return;
+        Vector<MGPipeDeferredDestroy> drained;
+        {
+            std::lock_guard<std::mutex> lock(g_deferredDestroyMutex);
+            drained.swap(g_deferredDestroys);
+            g_deferredDestroyCount.store(0, std::memory_order_release);
+        }
+        for (const MGPipeDeferredDestroy& one : drained) {
+            // Each replay lands back in the helper itself, on the GL thread this time, so
+            // the deferral branch passes and the helper's own order runs unchanged.
+            switch (one.kind) {
+            case MGPipeKind::VertexElementsCso:
+                MGPipeEmitVertexElementsDestroyAndFree(one.lifetimeId);
+                break;
+            case MGPipeKind::SamplerViewCso:
+                MGPipeEmitSamplerViewCsoDestroyAndFree(one.lifetimeId);
+                break;
+            case MGPipeKind::Texture:
+                MGPipeEmitTextureDestroyAndFree(one.lifetimeId);
+                break;
+            case MGPipeKind::Renderbuffer:
+                MGPipeEmitRenderbufferDestroyAndFree(one.lifetimeId);
+                break;
+            case MGPipeKind::Framebuffer:
+                MGPipeEmitFramebufferDestroyAndFree(one.lifetimeId);
+                break;
+            case MGPipeKind::SamplerCso:
+                MGPipeEmitSamplerCsoDestroyAndFree(one.lifetimeId);
+                break;
+            case MGPipeKind::ShaderCso:
+                MGPipeEmitShaderCsoDestroyAndFree(one.lifetimeId);
+                break;
+            default:
+                break;
+            }
+        }
+    }
+#endif
+
     Bool MGPipeEmitVertexElementsDestroyAndFree(Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind::VertexElementsCso,
+                                                     lifetimeId)) {
+            return false;
+        }
+#endif
         // C-1. THE SAME SHAPE AS MGPipeEmitResourceDestroyAndFree ABOVE, and for the same
         // reason: whatever mints a handle owns the death of that handle, and the mint for this
         // kind is MGPipeVertexInputEmitter::EmitVertexElements - i.e. the client, on every
@@ -1585,6 +1658,11 @@ namespace MobileGL::MG_Pipe {
     // none per object (its death is the cache's LRU, ID-17). Unconditional in a push build,
     // like the mints: the entries exist whether or not the family bit is set.
     Bool MGPipeEmitSamplerViewCsoDestroyAndFree(Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind::SamplerViewCso, lifetimeId)) {
+            return false;
+        }
+#endif
         const MGPipeHandle handle =
             MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerViewCso, lifetimeId);
         const Bool published =
@@ -1607,6 +1685,11 @@ namespace MobileGL::MG_Pipe {
     }
 
     Bool MGPipeEmitTextureDestroyAndFree(Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind::Texture, lifetimeId)) {
+            return false;
+        }
+#endif
         const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, lifetimeId);
         const Bool published =
             EmitDeleteIfPublished(MGPipeKind::Texture, handle, &MGPipeRouteResourceDestroy);
@@ -1647,6 +1730,11 @@ namespace MobileGL::MG_Pipe {
     }
 
     Bool MGPipeEmitRenderbufferDestroyAndFree(Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind::Renderbuffer, lifetimeId)) {
+            return false;
+        }
+#endif
         const MGPipeHandle handle =
             MGPipeSlots().FindByLifetimeId(MGPipeKind::Renderbuffer, lifetimeId);
         const Bool published =
@@ -1658,6 +1746,11 @@ namespace MobileGL::MG_Pipe {
     }
 
     Bool MGPipeEmitFramebufferDestroyAndFree(Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind::Framebuffer, lifetimeId)) {
+            return false;
+        }
+#endif
         // NO WIRE DELETE EXISTS FOR THIS KIND, and none is invented: PipeCalls.def has
         // resource_destroy and the five delete_* rows and no framebuffer delete, because a
         // framebuffer is not a resource and is not a CSO - it is STATE, and
@@ -1684,6 +1777,11 @@ namespace MobileGL::MG_Pipe {
     }
 
     Bool MGPipeEmitSamplerCsoDestroyAndFree(Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind::SamplerCso, lifetimeId)) {
+            return false;
+        }
+#endif
         const MGPipeHandle handle =
             MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerCso, lifetimeId);
         const Bool published =
@@ -1698,6 +1796,11 @@ namespace MobileGL::MG_Pipe {
     }
 
     Bool MGPipeEmitShaderCsoDestroyAndFree(Uint64 lifetimeId) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind::ShaderCso, lifetimeId)) {
+            return false;
+        }
+#endif
         // ORDINARY PROGRAMS AND PIPELINE COMPOSITES TAKE THE SAME PATH, deliberately: the
         // server never learns a composite is a composite, and the only difference on this side
         // is which band the slot came out of. A composite's slot has TWO independent release

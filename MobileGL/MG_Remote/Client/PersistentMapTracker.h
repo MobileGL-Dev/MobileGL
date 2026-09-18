@@ -54,11 +54,38 @@
 
 #include <Config.h>
 
+#include <atomic>
+#include <cstdint>
+
 namespace MobileGL::MG_State::GLState {
     class BufferObject;
 }
 
 namespace MobileGL::MG_Remote::Client {
+
+    // The mprotect tracker's per-map slot, declared at namespace scope rather than in the
+    // .cpp's anonymous namespace so PersistentMapTracker's membership map can CACHE a
+    // pointer to a member's slot (the 64-slot rescan per buffer per draw was measured on
+    // device). Every field's reader/writer discipline is unchanged and lives in the .cpp;
+    // only the type's visibility moved.
+    struct TrackedWriteMap {
+        std::atomic<uintptr_t> base{0};
+        std::atomic<uintptr_t> end{0};
+        std::atomic<Uint64>* pageBits = nullptr; // allocated once, never freed or moved
+        SizeT pageCount = 0;                     // GL thread only
+        Uint64 lifetimeId = 0;                   // GL thread only
+        // GL thread only. The two partial-page edge spans are never protected (see
+        // TrackWriteMap's inward alignment), so nothing faults for them; pushing their
+        // blocks unconditionally measured ~2 x 64 KB x every draw for a hot unaligned
+        // buffer (112 MB/frame). They are hashed per push instead - 8 KB of XXH3 at
+        // worst - and their containing block ships only on a change.
+        Uint64 edgeHashHead = 0;
+        Uint64 edgeHashTail = 0;
+        // GL thread only: whether the mapped range has partial-page edge spans at all.
+        // Feeds the epoch skip's per-member edge service (PushDrawConsumers) - edge
+        // bytes are never protected, so their dirtiness is invisible to the fault epoch.
+        Bool hasEdges = false;
+    };
 
     class PersistentMapTracker {
     public:
@@ -100,6 +127,18 @@ namespace MobileGL::MG_Remote::Client {
         // THE VALIDATE-POINT HOOK. Every member, before the verb record is emitted.
         void PushAllMembers();
 
+        // THE DRAW-VERB HOOK, FILTERED. A draw or dispatch can only read the buffers its
+        // own bindings name (the VAO's attribute and element buffers, the indexed
+        // uniform/storage/atomic/XFB binding points, the indirect and parameter slots), so
+        // pushing every live persistent map at every draw is a whole-range rescan of
+        // buffers the verb can never touch - the dominant cost on a real workload (the
+        // whole-range scan ran ~135x per frame over every arena in the process). Pushing
+        // only the consumers keeps the guarantee ("a changed byte reaches the server before
+        // the verb that reads it") and drops the rest. Read-only verbs (clear / blit /
+        // readback / present) keep PushAllMembers: they read no binding points and their
+        // rate is a few per frame, so the conservative whole push is cheap there.
+        void PushDrawConsumers();
+
         SizeT MemberCount() const { return m_livePersistentMaps.size(); }
         Uint64 BlocksPushed() const { return m_blocksPushed; }
         Uint64 BytesPushed() const { return m_bytesPushed; }
@@ -109,20 +148,52 @@ namespace MobileGL::MG_Remote::Client {
             m_bytesPushed = 0;
             m_blockZeroAnnounced = false;
         }
-        void ClearForTest() {
-            m_livePersistentMaps.clear();
-            ResetCountersForTest();
-        }
+        // Unit tests only: clears the membership, the hash cache and the mprotect tracked
+        // slots (restoring every tracked page writable first), and resets the counters.
+        void ClearForTest();
 
     private:
+        // One live member. tracked is the member's tracker slot when it is on the
+        // mprotect arm, nullptr on the hash arm; it is REFRESHED at every
+        // NoteMapStateChanged (a resize can re-claim a different slot) and validated
+        // against the slot's lifetimeId before every use, which is what makes a slot
+        // retired and re-claimed by another buffer safe to have pointed at.
+        struct MemberEntry {
+            MG_State::GLState::BufferObject* buffer = nullptr;
+            TrackedWriteMap* tracked = nullptr;
+        };
         // Keyed on BufferObject::GetLifetimeId(), which is globally unique and never reused -
         // never the GL name (LIFO-recycled by glGenBuffers) and never the heap address
         // (recycled by the allocator). The raw pointer is safe because every removal path is
         // explicit: ~BufferObject and ReleaseMemory both call Forget/NoteMapStateChanged, and
         // PushBlocksFor re-checks the predicate before it dereferences anything it kept.
-        UnorderedMap<Uint64, MG_State::GLState::BufferObject*> m_livePersistentMaps;
+        UnorderedMap<Uint64, MemberEntry> m_livePersistentMaps;
+        // Per-buffer per-block xxHash64 of the client shadow, for the dirty-block push
+        // (MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS): a block is pushed only when its content
+        // changed since the last push, instead of the whole mapped range every verb. Keyed
+        // the same way as m_livePersistentMaps and retired beside it in Forget(). Zero
+        // hashes mean "unknown", never "a block of zeros" (XXH64 of zero bytes is not zero).
+        struct BlockHashState {
+            Uint64 begin = 0;
+            Uint64 end = 0;
+            Uint64 blockBytes = 0;
+            Vector<Uint64> hashes;
+        };
+        UnorderedMap<Uint64, BlockHashState> m_blockHashes;
         Uint64 m_blocksPushed = 0;
         Uint64 m_bytesPushed = 0;
+        // THE EPOCH SKIP's state (see PushDrawConsumers). m_lastFaultEpoch is the fault
+        // counter's value at the last consumer walk. m_untrackedMembers holds EVERY
+        // live member that fell back to the hash arm, and any one of them vetoes the
+        // skip: the walk is what tells an untracked member's consumption, and scanning
+        // every untracked member unconditionally (the alternative, measured on device
+        // at VD12) costs more than the walk it replaced.
+        Uint64 m_lastFaultEpoch = 0;
+        UnorderedMap<Uint64, Uint8> m_untrackedMembers;
+        // Everything of PushBlocksFor after the two role guards, for callers that already
+        // ran them once (the two Members hooks) - the guard's thread-local read was a
+        // measurable per-buffer-per-draw cost on the emutls path.
+        void PushBlocksForChecked(MG_State::GLState::BufferObject& buffer);
         // E3(a)'s diagnostic is emitted ONCE per process. PushBlocksFor runs at every validate
         // point of every member, so an unlatched MGLOG_W would be one line per draw per mapping
         // - and a control that has to grep a log cannot tell a message that fired from a

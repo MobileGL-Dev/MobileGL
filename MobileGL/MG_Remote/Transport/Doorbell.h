@@ -129,7 +129,14 @@ namespace MobileGL::MG_Remote::Transport {
                                       : start + std::chrono::milliseconds(timeoutMs);
 
             const auto spinEnd = start + std::chrono::microseconds(spinUs);
-            while (std::chrono::steady_clock::now() < spinEnd) {
+            // The clock is read once per 64 spins, not per spin: on the
+            // workload device a steady_clock read is a REAL syscall (no vDSO),
+            // and per-iteration reads made this loop the profile's top line
+            // (~20% of the whole process at ~1000 waits per frame). The spin
+            // duration is a hint, so the overshoot - one batch of yields at
+            // most - costs nothing.
+            std::uint32_t spinBatch = 0;
+            while ((++spinBatch & 63) != 0 || std::chrono::steady_clock::now() < spinEnd) {
                 if (ready()) {
                     return true;
                 }

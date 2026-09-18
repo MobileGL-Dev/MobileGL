@@ -213,6 +213,28 @@ namespace MobileGL::MG_Pipe {
     // proven no-op.
     Bool MGPipeEmitShaderCsoDestroyAndFree(Uint64 lifetimeId);
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // ---- THE DEFERRED DESTROY QUEUE (the MOBILEGL_IPC_BATCH_WAITS class) ----
+    //
+    // Every helper above speaks on the CLIENT's behalf: it resolves the handle through the
+    // client allocator, emits a client wire record and frees a client slot - so it may only
+    // ever run on the GL thread. The per-record barrier made that free: the client waited
+    // out every apply, so a server-side SharedPtr (an applier's endpoint local, a
+    // gPipeInputs entry) could never be an object's last owner. Batched waits remove the
+    // guarantee - the client races ahead, drops its own references at teardown, and the
+    // apply thread's local CopyImageEndpoint becomes a texture's last owner, whose
+    // destructor then touches the client allocator from the server role
+    // (Fatal{RoleViolation, "MGPipeSlots"}). The helpers therefore START with
+    // MGPipeDeferDestroyAndFreeIfOnApplyThread: on the apply thread it enqueues the
+    // (kind, lifetime id) pair - the only thing a death announcement needs - and the GL
+    // thread replays the helper at the next verb hook (EmitTables' BeforeDrawVerb /
+    // BeforeReadOnlyVerb) through MGPipeDrainDeferredDestroys. A delayed free is safe:
+    // slots are plentiful, reuse is delayed rather than corrupted, and the replay runs the
+    // helper itself, so every helper's own three-step order is untouched.
+    Bool MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind kind, Uint64 lifetimeId);
+    void MGPipeDrainDeferredDestroys();
+#endif
+
     void MGPipeEmitResourceCreate(MG_State::GLState::BufferObject& buffer);
     void MGPipeEmitResourceRespecify(MG_State::GLState::BufferObject& buffer);
     void MGPipeEmitResourceSubData(MG_State::GLState::BufferObject& buffer, SizeT offset, SizeT size);

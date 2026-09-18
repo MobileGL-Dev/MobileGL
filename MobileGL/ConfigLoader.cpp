@@ -366,6 +366,15 @@ namespace MobileGL::MG_ConfigLoader {
         // 0 is admitted ON PURPOSE and is the negative control of exit gate E3(a): it turns
         // the persistent-map push OFF, and PersistentCoherentMapScenario must go red.
         ipc.PersistentBlockKb = QueryEnvUint32("MOBILEGL_IPC_PERSISTENT_BLOCK_KB", 64, 0, 65536);
+        // Whole-range push is the 0 arm; with it on (default) only blocks whose
+        // xxHash64 changed since the last push are shipped.
+        ipc.PersistentHashSuppress = QueryEnvUint32("MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS", 1, 0, 1);
+        ipc.BatchWaits = QueryEnvUint32("MOBILEGL_IPC_BATCH_WAITS", 1, 0, 1);
+        // The verify harness compares the pushed block against the applier per verb; a
+        // batched queue lets the comparer read a supplied field mid-apply, which is a
+        // torn read rather than a divergence. The batch is therefore off whenever the
+        // shadow comparer is armed.
+        if (MG_Config::Features.PipeVerify) ipc.BatchWaits = 0;
         // 2 is the only tier P5 implements (R-6). 0 and 1 parse here and are refused at the
         // point of use, which is where the "P11" in the message belongs.
         ipc.AdoptTier = QueryEnvUint32("MOBILEGL_IPC_ADOPT_TIER", 2, 0, 2);

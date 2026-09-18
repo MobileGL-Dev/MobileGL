@@ -265,6 +265,102 @@ inline constexpr Uint32 MGPipeCallFlagsFor(MGPWireOp op) {
                                                            : static_cast<Uint32>(kNone);
 }
 
+// The catalogue class of every opcode, indexed the same way; index 0 is kCallClassCount,
+// never a real class, for the flags table's reason.
+inline constexpr Uint8 kMGPipeCallClasses[static_cast<SizeT>(MGPWireOp::kOpCount)] = {
+    /*  0                         */ static_cast<Uint8>(kCallClassCount),
+
+    /*  1 GetCaps                 */ static_cast<Uint8>(kScreen),
+    /*  2 ResourceCreate          */ static_cast<Uint8>(kScreen),
+    /*  3 ResourceRespecify       */ static_cast<Uint8>(kScreen),
+    /*  4 ResourceDestroy         */ static_cast<Uint8>(kScreen),
+    /*  5 MapPersistent           */ static_cast<Uint8>(kScreen),
+    /*  6 UnmapPersistent         */ static_cast<Uint8>(kScreen),
+    /*  7 FenceCreate             */ static_cast<Uint8>(kScreen),
+    /*  8 FenceStatus             */ static_cast<Uint8>(kScreen),
+    /*  9 FenceWait               */ static_cast<Uint8>(kScreen),
+    /* 10 FenceDestroy            */ static_cast<Uint8>(kScreen),
+    /* 11 QueryCreate             */ static_cast<Uint8>(kCtxQuery),
+    /* 12 QueryBegin              */ static_cast<Uint8>(kCtxQuery),
+    /* 13 QueryEnd                */ static_cast<Uint8>(kCtxQuery),
+    /* 14 QueryAvailable          */ static_cast<Uint8>(kCtxQuery),
+    /* 15 QueryResult             */ static_cast<Uint8>(kCtxQuery),
+    /* 16 QueryDestroy            */ static_cast<Uint8>(kCtxQuery),
+    /* 17 CreateRenderState       */ static_cast<Uint8>(kCtxCso),
+    /* 18 BindRenderState         */ static_cast<Uint8>(kCtxCso),
+    /* 19 DeleteRenderState       */ static_cast<Uint8>(kCtxCso),
+    /* 20 CreateVertexElements    */ static_cast<Uint8>(kCtxCso),
+    /* 21 BindVertexElements      */ static_cast<Uint8>(kCtxCso),
+    /* 22 DeleteVertexElements    */ static_cast<Uint8>(kCtxCso),
+    /* 23 CreateSamplerState      */ static_cast<Uint8>(kCtxCso),
+    /* 24 DeleteSamplerState      */ static_cast<Uint8>(kCtxCso),
+    /* 25 CreateSamplerView       */ static_cast<Uint8>(kCtxCso),
+    /* 26 DeleteSamplerView       */ static_cast<Uint8>(kCtxCso),
+    /* 27 CreateShaderState       */ static_cast<Uint8>(kCtxCso),
+    /* 28 BindShaderState         */ static_cast<Uint8>(kCtxCso),
+    /* 29 DeleteShaderState       */ static_cast<Uint8>(kCtxCso),
+    /* 30 SetDynamicState         */ static_cast<Uint8>(kCtxState),
+    /* 31 SetFramebufferState     */ static_cast<Uint8>(kCtxState),
+    /* 32 SetVertexBuffers        */ static_cast<Uint8>(kCtxState),
+    /* 33 SetIndexBuffer          */ static_cast<Uint8>(kCtxState),
+    /* 34 SetIndirectBuffers      */ static_cast<Uint8>(kCtxState),
+    /* 35 SetSamplerViews         */ static_cast<Uint8>(kCtxState),
+    /* 36 BindSamplerStates       */ static_cast<Uint8>(kCtxState),
+    /* 37 SetShaderImages         */ static_cast<Uint8>(kCtxState),
+    /* 38 SetShaderBuffers        */ static_cast<Uint8>(kCtxState),
+    /* 39 SetStreamOutputTargets  */ static_cast<Uint8>(kCtxState),
+    /* 40 SetGlobalConstants      */ static_cast<Uint8>(kCtxState),
+    /* 41 SetVertexAttribDefaults */ static_cast<Uint8>(kCtxState),
+    /* 42 SetPixelPackState       */ static_cast<Uint8>(kCtxState),
+    /* 43 SetPatchState           */ static_cast<Uint8>(kCtxState),
+    /* 44 SetDrawProgram          */ static_cast<Uint8>(kCtxState),
+    /* 45 SetDispatchProgram      */ static_cast<Uint8>(kCtxState),
+    /* 46 SetResidualValueState   */ static_cast<Uint8>(kCtxState),
+    /* 47 SetTextureParams        */ static_cast<Uint8>(kCtxObject),
+    /* 48 ResourceSubData         */ static_cast<Uint8>(kCtxObject),
+    /* 49 BufferSubDataResident   */ static_cast<Uint8>(kCtxObject),
+    /* 50 ResourceSubDataComplete */ static_cast<Uint8>(kCtxObject),
+    /* 51 ResourceFlushRange      */ static_cast<Uint8>(kCtxObject),
+    /* 52 ResourceReadback        */ static_cast<Uint8>(kCtxObject),
+    /* 53 ResourceCopyRegion      */ static_cast<Uint8>(kCtxObject),
+    /* 54 GenerateMipmap          */ static_cast<Uint8>(kCtxObject),
+    /* 55 GetTextureImage         */ static_cast<Uint8>(kCtxObject),
+    /* 56 Blit                    */ static_cast<Uint8>(kCtxVerb),
+    /* 57 Clear                   */ static_cast<Uint8>(kCtxVerb),
+    /* 58 ReadPixels              */ static_cast<Uint8>(kCtxVerb),
+    /* 59 DrawVbo                 */ static_cast<Uint8>(kCtxVerb),
+    /* 60 LaunchGrid              */ static_cast<Uint8>(kCtxVerb),
+    /* 61 MemoryBarrier           */ static_cast<Uint8>(kCtxVerb),
+    /* 62 BeginStreamOutput       */ static_cast<Uint8>(kCtxVerb),
+    /* 63 EndStreamOutput         */ static_cast<Uint8>(kCtxVerb),
+    /* 64 PauseStreamOutput       */ static_cast<Uint8>(kCtxVerb),
+    /* 65 ResumeStreamOutput      */ static_cast<Uint8>(kCtxVerb),
+    /* 66 Flush                   */ static_cast<Uint8>(kCtxVerb),
+    /* 67 Present                 */ static_cast<Uint8>(kCtxVerb),
+    /* 68 SetSwapInterval         */ static_cast<Uint8>(kCtxVerb),
+    /* 69 QueryTimestamp          */ static_cast<Uint8>(kCtxQuery),
+    /* 70 QueryCounter            */ static_cast<Uint8>(kCtxQuery),
+    /* 71 FenceWaitServer         */ static_cast<Uint8>(kScreen),
+    /* 72 BindShaderImage         */ static_cast<Uint8>(kCtxVerb),
+    /* 73 PatchParameter          */ static_cast<Uint8>(kCtxVerb),
+    /* 74 BindStreamOutput        */ static_cast<Uint8>(kCtxVerb),
+    /* 75 SetStorageBlockBinding  */ static_cast<Uint8>(kCtxVerb),
+    /* 76 CopyFramebufferToTexture*/ static_cast<Uint8>(kCtxVerb),
+    /* 77 ApplierReset            */ static_cast<Uint8>(kScreen),
+    /* 78 ObjectDeath             */ static_cast<Uint8>(kCtxObject),
+    /* 79 SetContextValues        */ static_cast<Uint8>(kCtxState),
+};
+static_assert(sizeof(kMGPipeCallClasses) / sizeof(kMGPipeCallClasses[0]) ==
+                  static_cast<SizeT>(MGPWireOp::kOpCount),
+              "the class table and the opcode space disagree");
+
+inline constexpr MGPipeCallClass MGPipeCallClassFor(MGPWireOp op) {
+    const SizeT index = static_cast<SizeT>(op);
+    return index < static_cast<SizeT>(MGPWireOp::kOpCount)
+                   ? static_cast<MGPipeCallClass>(kMGPipeCallClasses[index])
+                   : kCallClassCount;
+}
+
 // Spot checks the generator states about its own output, so that a catalogue edit that
 // silently drops a flag is a build break here and not a wrong decode six packages away.
 static_assert(MGPipeCallFlagsFor(MGPWireOp::kInvalid) == static_cast<Uint32>(kNone),

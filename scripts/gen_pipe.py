@@ -781,6 +781,25 @@ inline constexpr Uint32 MGPipeCallFlagsFor(MGPWireOp op) {
                                                            : static_cast<Uint32>(kNone);
 }
 
+// The catalogue class of every opcode, indexed the same way; index 0 is kCallClassCount,
+// never a real class, for the flags table's reason.
+inline constexpr Uint8 kMGPipeCallClasses[static_cast<SizeT>(MGPWireOp::kOpCount)] = {
+    /*  0                         */ static_cast<Uint8>(kCallClassCount),
+""")
+    for call in calls:
+        out.append("    /* %2d %-24s*/ static_cast<Uint8>(%s)," % (call.Index, call.Name, call.Class))
+    out.append("};")
+    out.append("static_assert(sizeof(kMGPipeCallClasses) / sizeof(kMGPipeCallClasses[0]) ==")
+    out.append("                  static_cast<SizeT>(MGPWireOp::kOpCount),")
+    out.append("              \"the class table and the opcode space disagree\");")
+    out.append("""
+inline constexpr MGPipeCallClass MGPipeCallClassFor(MGPWireOp op) {
+    const SizeT index = static_cast<SizeT>(op);
+    return index < static_cast<SizeT>(MGPWireOp::kOpCount)
+                   ? static_cast<MGPipeCallClass>(kMGPipeCallClasses[index])
+                   : kCallClassCount;
+}
+
 // Spot checks the generator states about its own output, so that a catalogue edit that
 // silently drops a flag is a build break here and not a wrong decode six packages away.
 static_assert(MGPipeCallFlagsFor(MGPWireOp::kInvalid) == static_cast<Uint32>(kNone),

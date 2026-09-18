@@ -62,6 +62,7 @@
 #include <MG_Impl/Pipe/FramebufferEmit.h>
 #include <MG_Impl/Pipe/PipeFill.h>
 #include <MG_Impl/Pipe/TextureEmit.h>
+#include <MG_Pipe/PipeMutation.h>
 
 namespace MobileGL::MG_Remote::Client {
 
@@ -214,16 +215,23 @@ namespace MobileGL::MG_Remote::Client {
 
         // The two hooks b1 wrote and deliberately left with no caller, because the call site is
         // this file's. ORDER: the push first (it produces resource_subdata records that must
-        // precede the verb on SEG_CMD), then the mark walk, then the verb record.
+        // precede the verb on SEG_CMD), then the mark walk, then the verb record. The deferred
+        // destroy drain rides the same boundary: it replays, on this GL thread, the death
+        // announcements whose last SharedPtr dropped on the apply thread (PipeMutation.h's
+        // deferred destroy queue), and its records must also precede this verb.
         void BeforeDrawVerb() {
-            PushPersistentMapsBeforeVerb();
+            PersistentMapTracker::Instance().PushDrawConsumers();
+            MG_Pipe::MGPipeDrainDeferredDestroys();
             MarkGpuWritesForDraw();
         }
 
         // A verb that reads buffers but starts no shader: clear, blit, readback, present. The
         // push still has to run - a coherent map is read by the GPU on any of them - but there
         // is no shader that could write one, so no mark walk.
-        void BeforeReadOnlyVerb() { PushPersistentMapsBeforeVerb(); }
+        void BeforeReadOnlyVerb() {
+            PushPersistentMapsBeforeVerb();
+            MG_Pipe::MGPipeDrainDeferredDestroys();
+        }
 
         // =============================================================================
         // CLASS B - the five slots the verb census measured (CONTRACT-P5.md §7)
@@ -1110,7 +1118,7 @@ namespace MobileGL::MG_Remote::Client {
         // slot would inherit a call site that was already correct.
         void EmitDispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
             ClientSession& session = RequireSession("DispatchCompute");
-            PushPersistentMapsBeforeVerb();
+            PersistentMapTracker::Instance().PushDrawConsumers();
             MarkGpuWritesForDispatch();
 
             MG_Pipe::MGPGridInfo record{};
@@ -1129,7 +1137,7 @@ namespace MobileGL::MG_Remote::Client {
 
         void EmitDispatchComputeIndirect(GLintptr indirect) {
             ClientSession& session = RequireSession("DispatchComputeIndirect");
-            PushPersistentMapsBeforeVerb();
+            PersistentMapTracker::Instance().PushDrawConsumers();
             MarkGpuWritesForDispatch();
 
             MG_Pipe::MGPGridInfo record{};

@@ -827,13 +827,17 @@ namespace MobileGL::MG_Remote::Client {
             std::abort();
         }
 
-        // R-1's INVARIANT, AS A RUNTIME CHECK RATHER THAN A SENTENCE. While the barrier holds,
-        // at most one of {GL thread, apply thread} is runnable - and that is the whole reason a
-        // single process-wide gPipeInputs is legal (table 3). The client is about to publish a
-        // record whose fields the applier will read out of gPipeInputs, so the apply thread
-        // being inside the applier right now means the invariant has already been broken and
-        // the next record would be read against a half-written residual fill.
-        if (ApplyThreadIsInsideApplier()) {
+        // R-1's INVARIANT, AS A RUNTIME CHECK RATHER THAN A SENTENCE - but only while the
+        // per-record barrier is the fencing model. With MOBILEGL_IPC_BATCH_WAITS=1 the
+        // intended shape is exactly "the apply thread is inside the applier while the GL
+        // thread emits the next value record", and the check would fire on the first batch:
+        // its protection is already carried by the disjoint-field model (record-supplied
+        // fields are written only by the applier from records and are never filled by the
+        // client while the wire is live; BARRIER-PULLED fields are written only by the
+        // client's residual fill and are read only at the pull-verbs, whose own wait makes
+        // the fill quiescent during that apply). With the batch off, the original check
+        // stands as written.
+        if (MG_Config::Ipc.BatchWaits == 0 && ApplyThreadIsInsideApplier()) {
             MGLOG_F("MGPipe: Fatal{BarrierViolation, \"%s\"} - the apply thread is inside the "
                     "applier while the GL thread is emitting. R-1 makes at most one of them "
                     "runnable, which is what keeps one process-wide gPipeInputs legal",
@@ -878,6 +882,27 @@ namespace MobileGL::MG_Remote::Client {
         // that forgot to pass a buffer from silently turning an answer into a guess.
         const Bool ownsReplySlot =
             (MG_Pipe::MGPipeCallFlagsFor(op) & static_cast<Uint32>(MG_Pipe::kReplySlot)) != 0;
+
+        // MOBILEGL_IPC_BATCH_WAITS (default 1): a value-class record is published WITHOUT
+        // waiting for its own apply. The barrier's one load-bearing reader is the backend
+        // sync that pulls the object-class fields (CONTRACT-P5 table 2's remaining rows), and
+        // those reads happen only at the kCtxVerb applies - draw / clear / blit / dispatch /
+        // readback / XFB - plus the screen and query classes, and EVERY ONE OF THOSE STILL
+        // WAITS below (as does every reply-slot row, whose answer the client consumes). So
+        // the pulled fields are exactly as fresh at every read point as the per-record
+        // barrier made them: between two waits the residual fill may move a field, but no
+        // apply is reading it in between, and the next pull-verb's fill runs after the
+        // previous pull-verb's apply was waited - the R-1 fence posts are untouched, only
+        // the number of round trips between them changes. Set / CSO / object records carry
+        // their whole value in the payload and are consumed at the next (waited) sync, which
+        // the in-order ring guarantees precedes that sync's apply.
+        if (!ownsReplySlot && MG_Config::Ipc.BatchWaits != 0) {
+            const MG_Pipe::MGPipeCallClass callClass = MG_Pipe::MGPipeCallClassFor(op);
+            if (callClass == MG_Pipe::kCtxState || callClass == MG_Pipe::kCtxCso ||
+                callClass == MG_Pipe::kCtxObject) {
+                return seq;
+            }
+        }
 
         if (!m_barrierArmed && !ownsReplySlot) {
             // R-1's NEGATIVE CONTROL ARM, and the only thing it turns off is the barrier. A
@@ -978,6 +1003,13 @@ namespace MobileGL::MG_Remote::Client {
         // by the operator's own hand there, and EmitAndWait's Fatal{BarrierViolation} owns the
         // red. Firing here instead would pre-empt the control's evidence line.
         if (!ClientSessionInstance().BarrierArmed()) return;
+        // MOBILEGL_IPC_BATCH_WAITS=1 makes "the fill runs while the apply thread applies an
+        // earlier value record" the INTENDED shape: the fill writes only fields no record
+        // supplies (the wire-live skips are the same answer the emitters use), the applier
+        // writes only record-supplied fields, and the pull-verbs' own wait keeps their
+        // pulled reads fenced. This guard exists for the model where that is not true, so
+        // it stands only while the batch is off.
+        if (MG_Config::Ipc.BatchWaits != 0) return;
         if (!ApplyThreadIsInsideApplier()) return;
         if (InBarrierWait()) return;
         MGLOG_F("MGPipe: Fatal{RoleViolation, \"gPipeInputs\"} - the GL thread touched gPipeInputs "
