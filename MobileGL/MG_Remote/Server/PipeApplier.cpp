@@ -1199,6 +1199,17 @@ namespace MobileGL::MG_Remote::Server {
         MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(
             MGPipeApplierStampsBarriered(MG_Pipe::kMGPipeP5eClientWaitRuleLanded,
                                          MGPipeServerPublishesRunAhead(), wireSaysBarriered));
+        // P5e (gl), ID-128: AND WHETHER IT WAS BARRIERED BY ESCALATION RATHER THAN BY ITS CLASS.
+        // The predicate above is the static wait class plus two payload-derived escalations
+        // (ID-83: an open transform-feedback span, a draw carrying client vertex arrays), so the
+        // difference between it and the table IS the escalation - both halves are already
+        // computed here, and the second flag costs one compare. The strict knob is the only
+        // reader: a pull on an escalated record is a debt the phase that owns XFB (§5.7) or
+        // client arrays (ID-82) owes, neither of which is this one.
+        MG_Pipe::MGPipeApplierSetCurrentRecordBarrieredByEscalation(
+            wireSaysBarriered &&
+            MG_Pipe::MGPipeWaitClassFor(static_cast<MG_Pipe::MGPWireOp>(record.kind)) ==
+                MG_Pipe::kWaitNone);
         // ORDER IS THE CONTRACT'S: stamp, then apply. The stamp is what makes any server-side
         // read of gPipeInputs legal at all (PipeApplier.h's block 1), so a record applied
         // before it aborts on the FIRST field inside SyncRenderState.

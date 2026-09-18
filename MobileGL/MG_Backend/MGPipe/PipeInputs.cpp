@@ -93,7 +93,7 @@ namespace MobileGL::MG_Pipe {
         // which happens on the apply thread inside PipeApplier::ApplyOne, and g_residualPulls
         // beside it is a plain Uint64 for the same reason. A racing writer here would at worst
         // log a duplicate line, never lose one.
-        void AdmittedBarrierPullOnce(MGPipeInputField field, MGPipeVerb verb) {
+        void AdmittedBarrierPullOnce(MGPipeInputField field, MGPipeVerb verb, Bool escalated) {
             const SizeT fieldIndex = static_cast<SizeT>(field);
             const SizeT verbIndex = static_cast<SizeT>(verb);
             if (fieldIndex >= kMGPipeInputFieldCount || verbIndex >= kMGPipeVerbCount) return;
@@ -102,9 +102,17 @@ namespace MobileGL::MG_Pipe {
             const Uint64 mask = Uint64{1} << (bit % 64);
             if ((seen[bit / 64] & mask) != 0) return;
             seen[bit / 64] |= mask;
-            MGLOG_W("MGPipe: Admitted{UnmigratedPipeInput, \"%s@%s\"} [BARRIER-PULLED, ADMITTED, "
+            // P5e (gl), ID-128: WHICH DISJUNCT ADMITTED IT, in the slot the grammar already has
+            // for the reason. `ADMITTED` means the generated table said so, and the lane can
+            // check that against `--print-admitted`. `ADMITTED-ESCALATED` means the table did
+            // NOT and the record was barriered by an escalation the table cannot see, which is a
+            // RUNTIME fact about that record's payload - so the lane must not look for it in a
+            // static list. Saying which is what keeps the lane's comparison exact instead of
+            // widening the list with every pair that could ever escalate.
+            MGLOG_W("MGPipe: Admitted{UnmigratedPipeInput, \"%s@%s\"} [BARRIER-PULLED, %s, "
                     "retires in %s]",
                     kMGPipeInputFieldNames[fieldIndex], MGPipeVerbName(verb),
+                    escalated ? "ADMITTED-ESCALATED" : "ADMITTED",
                     kMGPipeFieldRetiringPhase[fieldIndex]);
         }
 
@@ -142,6 +150,9 @@ namespace MobileGL::MG_Pipe {
         //   barriered, unadmitted  -> Fatal under strict. A debt no phase has taken.
         //   barriered, admitted    -> ONE MGLOG_W per (field, verb), and the entry completes.
         //
+        // "Admitted" has three disjuncts and the third is a runtime one (ID-128): the generated
+        // table answers the first two, and the record's own escalation flag answers the third.
+        //
         // An admitted pull is a debt this phase deliberately leaves standing: the field's row is
         // BARRIER_PULLED, the verb's op is statically barriered so the client really is parked
         // behind the record, and the field is inside the verb's own may-read mask - so the value
@@ -157,10 +168,21 @@ namespace MobileGL::MG_Pipe {
                 MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ResidualPulls, 1);
             }
             if (MG_Config::Ipc.StrictErrors) {
-                if (!MGPipeBarrierPullAdmitted(field, verb)) {
+                // THE THIRD DISJUNCT (P5e gl, ID-128), and it has to be asked at RUNTIME because
+                // it is a fact about this record's payload rather than about its opcode. The
+                // static table admits a pair when the verb's op waits (disjunct 1) or when the
+                // field's retiring phase is not this phase (disjunct 2); an escalated record is
+                // one the client parks behind for a reason only the payload knows - an open
+                // transform-feedback span, or a draw carrying client vertex arrays. Both are
+                // outside this phase by ruling (§5.7, ID-82), and the client-array read site
+                // aborts by its own name if it is ever applied unbarriered, so the pull is legal
+                // and P5e is not the phase that owes it.
+                const Bool statically = MGPipeBarrierPullAdmitted(field, verb);
+                const Bool escalated = MGPipeApplierCurrentRecordIsBarrieredByEscalation();
+                if (!statically && !escalated) {
                     StrictBarrierPullFatal(field, verb, "MOBILEGL_IPC_STRICT_ERRORS=1");
                 }
-                AdmittedBarrierPullOnce(field, verb);
+                AdmittedBarrierPullOnce(field, verb, !statically);
             }
         }
 

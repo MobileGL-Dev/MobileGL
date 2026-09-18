@@ -94,11 +94,16 @@ namespace {
             MG_Config::Ipc.StrictErrors = false;
             MGPipeServerClearVerbBoundary();
             MGPipeResetResidualPullCountForTesting();
+            // P5e (gl), ID-128: the escalation flag is per-thread state PipeApplier::ApplyOne
+            // stamps on every record, so a case that set it would otherwise hand its answer to
+            // the next one - and the arm it selects is "admitted", so the leak is silent.
+            MGPipeApplierSetCurrentRecordBarrieredByEscalation(false);
 #endif
         }
         void TearDown() override {
 #if MOBILEGL_BUILD_DISAGGREGATED
             MGPipeServerClearVerbBoundary();
+            MGPipeApplierSetCurrentRecordBarrieredByEscalation(false);
             MG_Config::Ipc.StrictErrors = false;
 #endif
             MG_State::pGLContext = Move(m_previous);
@@ -896,6 +901,49 @@ TEST_F(FieldOwnershipTest, TheSameReadWithoutStrictErrorsSurvivesAndIsCounted) {
     });
     ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_EQ(r.Log.find("Fatal{"), std::string::npos) << r.Log;
+}
+
+// P5e (gl) RED-ONCE, ID-128: THE THIRD DISJUNCT, AND IT IS A RUNTIME FACT ABOUT THE RECORD.
+//
+// GetBoundVertexArray@DrawArrays is this phase's debt on an unbarriered verb, so the static
+// table rejects it and strict aborts - that is the case two blocks up, and it must keep doing
+// that for the ORDINARY draw path vi and mv retired. But the two
+// DirectGLES.Split.ClientVertexArrayScenario entries pull the same pair on a record the client
+// IS parked behind: MGPipeBarriered escalates a draw carrying client vertex arrays (ID-83), and
+// ID-82 puts client arrays outside P5e entirely - under run-ahead the client refuses them by
+// name and staging is P8's. The read site (SyncClientSideVertexArraysForDrawArrays) aborts with
+// Fatal{RoleViolation, "MGPipeSlots"} if it is ever applied unbarriered, so the pull is legal.
+//
+// ONE PAIR, TWO VERDICTS, DECIDED BY THE RECORD AND NOT BY THE TABLE. That is why the flag is
+// stamped in ApplyOne beside the barriered stamp rather than folded into the generated table:
+// no table indexed by (field, verb) can tell these two entries apart.
+//
+// THE RED: drop `&& !escalated` from CountBarrierPull's strict arm and this case dies of
+// SIGABRT on Fatal{UnmigratedPipeInput, "GetBoundVertexArray@DrawArrays"}.
+//
+// THE CONTROL IS THE CASE TWO BLOCKS UP, NOT A SECOND CHILD HERE.
+// StrictErrorsTurnsABarrierPulledReadIntoANamedAbort drives the IDENTICAL pull - same field,
+// same verb, same knob - with the escalation flag at its `false` default, and asserts the abort.
+// Reading the log delta of two forks in one case is what a shared log file cannot support.
+TEST_F(FieldOwnershipTest, AnEscalatedRecordsPullIsAdmittedAndSaysWhy) {
+    const ChildResult escalated = RunInChild([] {
+        MG_Config::Ipc.StrictErrors = true;
+        // What PipeApplier::ApplyOne stamps for a draw whose payload carries kDrawClientArrays:
+        // MGPipeBarriered says barriered, the static wait class of draw_vbo says kWaitNone.
+        MGPipeApplierSetCurrentRecordBarrieredByEscalation(true);
+        MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
+        (void)gPipeInputs.GetBoundVertexArray();
+        if (MGPipeResidualPullCount() != 1) ::_exit(7);
+    });
+    ASSERT_TRUE(ExitedWith(escalated, 0)) << DescribeStatus(escalated) << "\n" << escalated.Log;
+    EXPECT_EQ(escalated.Log.find("Fatal{UnmigratedPipeInput"), std::string::npos) << escalated.Log;
+    // THE MARKER SAYS WHICH DISJUNCT, and that is what keeps the lane's comparison exact: a pair
+    // admitted by the table is checkable against `--print-admitted`, one admitted by escalation
+    // is not in any static list and must not widen one.
+    EXPECT_NE(escalated.Log.find("Admitted{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"
+                                 " [BARRIER-PULLED, ADMITTED-ESCALATED, retires in "),
+              std::string::npos)
+        << escalated.Log;
 }
 
 // THE SEVEN STICKY FORWARDS ARE NOT EXEMPT FROM THE DETECTOR, which is what this case has

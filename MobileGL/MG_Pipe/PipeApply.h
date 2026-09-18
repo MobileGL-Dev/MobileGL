@@ -948,6 +948,32 @@ namespace MobileGL::MG_Pipe {
     // the call site (it is the line ra rebases onto); c0e owns the storage so both compile.
     void MGPipeApplierSetCurrentRecordBarriered(Bool barriered);
 
+    // ---- P5e (gl), ID-128: WAS THIS RECORD BARRIERED BY ESCALATION? ----------------------
+    //
+    // MGPipeBarriered is the static wait class PLUS two payload-derived escalations (ID-83): an
+    // open transform-feedback span makes every context verb inside it barriered, and a draw
+    // carrying client vertex arrays makes that draw barriered. "Escalated" is therefore exactly
+    //
+    //     MGPipeBarriered(op, payload, st) && MGPipeWaitClassFor(op) == kWaitNone
+    //
+    // and BOTH HALVES ARE ALREADY COMPUTED on every record - ApplyOne computes the predicate
+    // unconditionally for ID-103's reason and the static class is a table - so this is a bit
+    // carried beside the existing stamp rather than new plumbing.
+    //
+    // IT IS A SEPARATE FLAG AND NOT A REFINEMENT OF THE ONE ABOVE, because the two answer
+    // different questions. The stamp above answers "is the client parked behind this record",
+    // which the allocator guard and the frontend-keyed registry guard ask. This one answers "and
+    // was it parked for a reason the STATIC table cannot see", which only the strict knob asks -
+    // and it asks because the escalations happen exactly for XFB-active and client-array draws,
+    // both of which CONTRACT-P5E puts outside this phase (§5.7 and ID-82). A pull on such a
+    // record is a debt some later phase owes, not a migration P5e skipped.
+    //
+    // FALSE IS THE DEFAULT, which is the opposite of the stamp's default and deliberately so:
+    // "not escalated" is the answer that admits nothing, so a reader that runs before any writer
+    // is strict rather than lax.
+    Bool MGPipeApplierCurrentRecordIsBarrieredByEscalation();
+    void MGPipeApplierSetCurrentRecordBarrieredByEscalation(Bool escalated);
+
     // THE CLIENT'S HALF OF THE WAIT RULE IS NOT LANDED YET, AND THIS CONSTANT IS THAT FACT.
     // MGPipeBarriered above describes what the client WILL do; until package ra changes
     // EmitAndWaitTails the client still blocks after every record, so the answer the server
