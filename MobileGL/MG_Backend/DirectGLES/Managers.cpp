@@ -4376,6 +4376,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return PipeRecordAt(MG_Pipe::MGPipeApplier().RenderbufferResources, res);
     }
 
+    MobileGL::TextureTarget PipeTextureTargetForHandle(MG_Pipe::MGPipeHandle res) {
+        const auto* record = PipeTextureRecordForHandle(res);
+        if (record == nullptr) return MobileGL::TextureTarget::Unknown;
+        // THE INVERSE OF MG_Pipe::MGPipeResourceTargetForTextureTarget, COMPUTED FROM IT rather
+        // than restated as a second table. MGPipeTypes.h already static_asserts that the
+        // forward map covers the frontend enum and that it separates the one pair anybody has
+        // ever folded together (2D vs rectangle), so a linear search over a dozen enumerators
+        // is total, cannot drift, and runs at most once per image unit per sweep. A second
+        // switch here is exactly how the two spellings end up disagreeing about a target that
+        // was added to only one of them.
+        for (SizeT i = 0; i < static_cast<SizeT>(MobileGL::TextureTarget::TextureTargetCount); ++i) {
+            const auto target = static_cast<MobileGL::TextureTarget>(i);
+            if (MG_Pipe::MGPipeResourceTargetForTextureTarget(target) ==
+                static_cast<Uint32>(record->Desc.Target)) {
+                return target;
+            }
+        }
+        return MobileGL::TextureTarget::Unknown;
+    }
+
     const MG_Pipe::MGPipeSamplerCsoRecord* PipeSamplerCsoRecordForHandle(MG_Pipe::MGPipeHandle cso) {
         return PipeRecordAt(MG_Pipe::MGPipeApplier().SamplerCsos, cso);
     }
@@ -9655,38 +9675,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // is adopted from MGPSurface::Res through the slot table instead of being looked up by
         // the frontend object's ADDRESS, and the attach SHAPE - layered, level, layer, the
         // upload target and the texture target - is read off the surface instead of off the
-        // frontend attachment object. What does NOT move is the storage sync itself: the twins'
-        // SyncMipmapsToBackend / SyncToBackend still take the frontend object, because that is
-        // the monolith glue this phase keeps (they read the level shadow for the texels, which
-        // no record carries), and because those two functions have their OWN handle arms that
-        // drive the storage from the descriptor.
+        // frontend attachment object.
         //
-        // The frontend object is therefore still handed over, and it is also CROSS-CHECKED: if
-        // the record's Res does not name the same twin the frontend attachment does, that is a
-        // seam defect - two sides that disagree about which texture is attached - and it is
-        // refused loudly rather than resolved in favour of either.
+        // P5e (fb, CONTRACT-P5E.md §5.4): THE FRONTEND ATTACHMENT PARAMETER IS GONE. It was
+        // here for two things and P5e retires both. The storage syncs now have by-handle forms
+        // (SyncMipmapsToBackendByHandle / SyncToBackendByHandle), so the object is no longer
+        // needed to reach the texels; and the record is now the ONLY statement of what is
+        // attached, so the cross-checks had nothing left to corroborate against - a second
+        // answer that only a monolith build could produce is not a check, it is a second
+        // writer. With the object gone, review N-6's hole ("record empty, frontend still
+        // holding") is UNREPRESENTABLE rather than refused: the caller's detach and this
+        // function's attach now read the SAME test, `Kind == None || Res null`.
+        //
+        // The two P5c cross-checks that ran HandleOf on the apply thread go with it. The
+        // renderbuffer one (the one that was NOT transport-gated, unlike its texture sibling)
+        // is deleted by the rekey rather than gated, which is what CONTRACT-P5E §4.4 asks for:
+        // gating it would have left a client-allocator probe compiled into a path a run-ahead
+        // apply reaches, and there is no longer anything for it to say.
         static Bool SyncAttachmentSurface(GLenum glFBOTarget, const MG_Pipe::MGPSurface& surface,
-                                          const MG_State::GLState::FramebufferAttachmentObject& attachmentObject,
                                           GLenum glBackendAttachment) {
             if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone ||
                 MG_Pipe::MGPipeHandleIsNull(surface.Res)) {
-                // An empty point. The caller has already detached it where the two sides AGREE
-                // that the point is empty; attaching nothing is what the legacy arm does here too.
-                //
-                // Review N-6: the detach above is decided by the FRONTEND
-                // (attachmentObject.IsEmpty()) and the attach here by the RECORD, so the one
-                // direction in which neither fires is "record empty, frontend still holding an
-                // attachment" - no detach, no attach, and the caller then stamps this point's
-                // synced version, marking it done with the PREVIOUS owner's image still on the
-                // driver. Every other record-versus-frontend disagreement in this function is
-                // loud; this one was the only silent hole and it is closed here rather than
-                // left one direction wide.
-                if (!attachmentObject.IsEmpty()) {
-                    MGLOG_E_ONCE("MGPipe: attachment record describes an EMPTY point but the frontend "
-                                 "attachment still holds an object - refusing rather than leaving the "
-                                 "previous image attached and calling the point synced");
-                    return false;
-                }
+                // An empty point: the caller detached it on exactly this test, so attaching
+                // nothing here is the whole of the agreement. (The legacy arm does the same.)
                 return true;
             }
             if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture) {
@@ -9695,31 +9706,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // asking in this order is what gives the two adoption refusals a reachable
                 // caller at all.
                 if (!PipeTwinHandleIsAdoptable(TextureImpl::g_backendTextureObjects, surface.Res, "texture")) {
-                    return false;
-                }
-                const auto& textureObject = attachmentObject.GetTexture();
-                if (!textureObject) {
-                    MGLOG_E_ONCE("MGPipe: attachment record names texture {%u, %u} but the frontend "
-                                 "attachment holds no texture - refusing to attach",
-                                 surface.Res.Slot, surface.Res.Gen);
-                    return false;
-                }
-#if MOBILEGL_BUILD_DISAGGREGATED
-                // P5c (hd): the corroborating cross-check against the frontend object's handle
-                // is a client-allocator probe (T2). Under an active transport the record is the
-                // ONLY statement of identity (rule E) and the check does not run; monolith
-                // keeps it verbatim. The record's own handle was already validated above (N-3).
-                if (MG_Config::Transport == MG_Config::TransportMode::Monolith &&
-                    !(TextureImpl::g_backendTextureObjects.HandleOf(textureObject.get()) == surface.Res)) {
-#else
-                if (!(TextureImpl::g_backendTextureObjects.HandleOf(textureObject.get()) == surface.Res)) {
-#endif
-                    MGLOG_E_ONCE("MGPipe: attachment record names texture {%u, %u} but the frontend "
-                                 "attachment's texture %u is handle {%u, %u} - refusing rather than "
-                                 "attaching one of them",
-                                 surface.Res.Slot, surface.Res.Gen, textureObject->GetExternalIndex(),
-                                 TextureImpl::g_backendTextureObjects.HandleOf(textureObject.get()).Slot,
-                                 TextureImpl::g_backendTextureObjects.HandleOf(textureObject.get()).Gen);
                     return false;
                 }
                 auto* twinSlot = AdoptTwinByHandle(TextureImpl::g_backendTextureObjects, surface.Res, "texture");
@@ -9737,7 +9723,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     MGLOG_E_ONCE("%s: No backend texture found for FBO attachment, cannot bind texture.", __func__);
                     return false;
                 }
-                backendTextureObject->SyncMipmapsToBackend(textureObject);
+                // P5e (fb): the storage sync BY HANDLE (tx2's seam). The level shadow it reads
+                // is the applier's staged texture store, not a frontend object, which is what
+                // let the object parameter go.
+                backendTextureObject->SyncMipmapsToBackendByHandle(surface.Res);
                 const auto uploadTarget = static_cast<TextureUploadTarget>(surface.UploadTarget);
                 if (surface.Layered != 0) {
                     g_GLESFuncs.glFramebufferTexture(glFBOTarget, glBackendAttachment,
@@ -9778,27 +9767,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                "renderbuffer")) {
                     return false;
                 }
-                const auto& renderbufferObject = attachmentObject.GetRenderbuffer();
-                if (!renderbufferObject) {
-                    MGLOG_E_ONCE("MGPipe: attachment record names renderbuffer {%u, %u} but the frontend "
-                                 "attachment holds no renderbuffer - refusing to attach",
-                                 surface.Res.Slot, surface.Res.Gen);
-                    return false;
-                }
-#if MOBILEGL_BUILD_DISAGGREGATED
-                // P5c (G6, CONTRACT-P5C §5.4): the corroborating cross-check below resolves the
-                // frontend renderbuffer's handle by frontend identity - named debt inside the
-                // scope - P3b/P4b rekeys the registry onto handles.
-                const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
-#endif
-                if (!(RenderbufferImpl::g_backendRenderbufferObjects.HandleOf(renderbufferObject.get()) ==
-                      surface.Res)) {
-                    MGLOG_E_ONCE("MGPipe: attachment record names renderbuffer {%u, %u} but the frontend "
-                                 "attachment's renderbuffer %u is a different handle - refusing rather "
-                                 "than attaching one of them",
-                                 surface.Res.Slot, surface.Res.Gen, renderbufferObject->GetExternalIndex());
-                    return false;
-                }
                 auto* twinSlot = AdoptTwinByHandle(RenderbufferImpl::g_backendRenderbufferObjects, surface.Res,
                                                    "renderbuffer");
                 if (twinSlot == nullptr) {
@@ -9812,7 +9780,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     MGLOG_E_ONCE("%s: No backend renderbuffer found for FBO attachment.", __func__);
                     return false;
                 }
-                backendRenderbufferObject->SyncToBackend(renderbufferObject);
+                // P5e (fb): the four allocation values were already record-supplied (D-D2); what
+                // moves here is the LOOKUP - the handle the surface carries, never HandleOf on
+                // an object the apply thread was handed.
+                backendRenderbufferObject->SyncToBackendByHandle(surface.Res);
                 backendRenderbufferObject->Bind();
                 g_GLESFuncs.glFramebufferRenderbuffer(glFBOTarget, glBackendAttachment, GL_RENDERBUFFER,
                                                       backendRenderbufferObject->GetBackendRenderbufferId());
@@ -9914,6 +9885,89 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 #endif
 
+#if MOBILEGL_PIPE_PUSH
+        // P5e (fb, §5.4): the record half of SyncReadBufferToBackend, lifted out of it so the
+        // by-handle sync can run it WITHOUT a frontend object. Nothing inside reads one: the
+        // frontend index was only ever a diagnostic, and it is passed as a number now
+        // (GlNameForDiag is 0 on the handle arm, which reads as "the record did not say").
+        void BackendFramebufferObject::ApplyReadBufferFromRecord(const MG_Pipe::MGPFramebufferState& record,
+                                                                 Uint glNameForDiag) {
+            // D-C1 makes the NULL Res the spelling of "no attachment" and c0c's
+            // kMGPipeSurfaceKindNone makes Kind agree with it on a zero-initialised record.
+            // Res stays the test - it is the one D-C1 fixes - and Kind is CROSS-CHECKED
+            // rather than consulted: the two are one statement the emitter has to make
+            // twice, and a record where they disagree is a seam defect, not an empty point.
+            // Picking a winner silently is what this refuses to do.
+            const Bool readSurfaceEmpty = MG_Pipe::MGPipeHandleIsNull(record.ReadSurface.Res);
+            if (readSurfaceEmpty != (record.ReadSurface.Kind == MG_Pipe::kMGPipeSurfaceKindNone)) {
+                MGLOG_E_ONCE("MGPipe: framebuffer %u's resolved read surface says Res={%u, %u} and "
+                             "Kind=%u, which disagree about whether it names anything - refusing "
+                             "rather than choosing one of them",
+                             glNameForDiag, record.ReadSurface.Res.Slot, record.ReadSurface.Res.Gen,
+                             record.ReadSurface.Kind);
+                return;
+            }
+            FramebufferAttachmentType pushedReadBuf = FramebufferAttachmentType::None;
+            if (!readSurfaceEmpty) {
+                // EVERY FIELD THAT IDENTIFIES THE IMAGE, not the three v1 compared (m-4).
+                // The same image legally sits at two colour points - a layered attachment of
+                // one array and a single slice of it are different surfaces of one Res - so a
+                // partial comparison resolves to the lower index and the refusal branch below
+                // ("refusing to guess") would then be doing part of the guessing itself.
+                // InternalFormat and TextureTarget are properties of the RESOURCE rather than
+                // of the point, so they add nothing to the identity and are left out.
+                Bool matched = false;
+                for (Uint i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
+                    const auto& color = record.Color[i];
+                    if (color.Res == record.ReadSurface.Res && color.Kind == record.ReadSurface.Kind &&
+                        color.Layered == record.ReadSurface.Layered &&
+                        color.Level == record.ReadSurface.Level && color.Layer == record.ReadSurface.Layer &&
+                        color.UploadTarget == record.ReadSurface.UploadTarget) {
+                        pushedReadBuf = static_cast<FramebufferAttachmentType>(
+                            static_cast<Int>(FramebufferAttachmentType::Color0) + static_cast<Int>(i));
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) {
+                    MGLOG_E_ONCE("MGPipe: framebuffer %u's resolved read surface {%u, %u} matches no "
+                                 "colour attachment of its own record - refusing to guess a read "
+                                 "buffer",
+                                 glNameForDiag, record.ReadSurface.Res.Slot, record.ReadSurface.Res.Gen);
+                    return;
+                }
+            }
+            if (pushedReadBuf == m_frontendReadBuffer) {
+                return;
+            }
+            m_frontendReadBuffer = pushedReadBuf;
+
+            const GLenum glPushedReadBuffer = GetBackendAttachmentType(pushedReadBuf);
+            if (m_backendReadBuffer != glPushedReadBuffer) {
+                m_backendReadBuffer = glPushedReadBuffer;
+                // Still bound as READ first, for the reason the legacy arm gives below:
+                // glReadBuffer targets whatever FBO is bound to GL_READ_FRAMEBUFFER.
+                Bind(FramebufferTarget::Read);
+                g_GLESFuncs.glReadBuffer(glPushedReadBuffer);
+            }
+        }
+
+        // P5e (fb): the by-handle entry, for SyncCurrentFBOByRecord's "one object on both
+        // bindings" skip - the one path that applies a read buffer without doing the rest of
+        // the sync. A framebuffer with no record is the caller's seam defect, not a silent
+        // no-op, so it says so.
+        void BackendFramebufferObject::SyncReadBufferToBackendByHandle(MG_Pipe::MGPipeHandle fbo) {
+            const auto* record = PushedFramebufferRecord(fbo);
+            if (record == nullptr) {
+                MGLOG_E_ONCE("MGPipe: framebuffer handle {%u, %u} has no applier record, so its read "
+                             "buffer cannot be pushed",
+                             fbo.Slot, fbo.Gen);
+                return;
+            }
+            ApplyReadBufferFromRecord(*record, 0);
+        }
+#endif // MOBILEGL_PIPE_PUSH
+
         void BackendFramebufferObject::SyncReadBufferToBackend(
             const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBOObject) {
             if (!stateFBOObject) {
@@ -9933,6 +9987,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // spelling of "no attachment" independently of Kind's numbering) is
             // FramebufferAttachmentType::None, i.e. GL_NONE. A surface that matches no colour
             // point cannot be a legal read buffer and is refused rather than guessed.
+            //
+            // P5e (fb): THAT DECISION now lives in ApplyReadBufferFromRecord, which takes no
+            // frontend object; what is left in this overload is the monolith glue that finds
+            // the handle by identity. Under an active transport nothing reaches it -
+            // SyncToBackendByHandle runs the record form directly.
             if (FramebufferSubsystemEnabled()) {
                 // P5c (hd): with an active transport the handle is the caller's
                 // (m_pushedSyncHandle), never the client allocator's - see SyncToBackend.
@@ -9955,66 +10014,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                  stateFBOObject->GetExternalIndex(), fbo.Slot, fbo.Gen);
                     return;
                 }
-                // D-C1 makes the NULL Res the spelling of "no attachment" and c0c's
-                // kMGPipeSurfaceKindNone makes Kind agree with it on a zero-initialised record.
-                // Res stays the test - it is the one D-C1 fixes - and Kind is CROSS-CHECKED
-                // rather than consulted: the two are one statement the emitter has to make
-                // twice, and a record where they disagree is a seam defect, not an empty point.
-                // Picking a winner silently is what this refuses to do.
-                const Bool readSurfaceEmpty = MG_Pipe::MGPipeHandleIsNull(record->ReadSurface.Res);
-                if (readSurfaceEmpty != (record->ReadSurface.Kind == MG_Pipe::kMGPipeSurfaceKindNone)) {
-                    MGLOG_E_ONCE("MGPipe: framebuffer %u's resolved read surface says Res={%u, %u} and "
-                                 "Kind=%u, which disagree about whether it names anything - refusing "
-                                 "rather than choosing one of them",
-                                 stateFBOObject->GetExternalIndex(), record->ReadSurface.Res.Slot,
-                                 record->ReadSurface.Res.Gen, record->ReadSurface.Kind);
-                    return;
-                }
-                FramebufferAttachmentType pushedReadBuf = FramebufferAttachmentType::None;
-                if (!readSurfaceEmpty) {
-                    // EVERY FIELD THAT IDENTIFIES THE IMAGE, not the three v1 compared (m-4).
-                    // The same image legally sits at two colour points - a layered attachment of
-                    // one array and a single slice of it are different surfaces of one Res - so a
-                    // partial comparison resolves to the lower index and the refusal branch below
-                    // ("refusing to guess") would then be doing part of the guessing itself.
-                    // InternalFormat and TextureTarget are properties of the RESOURCE rather than
-                    // of the point, so they add nothing to the identity and are left out.
-                    Bool matched = false;
-                    for (Uint i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
-                        const auto& color = record->Color[i];
-                        if (color.Res == record->ReadSurface.Res && color.Kind == record->ReadSurface.Kind &&
-                            color.Layered == record->ReadSurface.Layered &&
-                            color.Level == record->ReadSurface.Level &&
-                            color.Layer == record->ReadSurface.Layer &&
-                            color.UploadTarget == record->ReadSurface.UploadTarget) {
-                            pushedReadBuf = static_cast<FramebufferAttachmentType>(
-                                static_cast<Int>(FramebufferAttachmentType::Color0) + static_cast<Int>(i));
-                            matched = true;
-                            break;
-                        }
-                    }
-                    if (!matched) {
-                        MGLOG_E_ONCE("MGPipe: framebuffer %u's resolved read surface {%u, %u} matches no "
-                                     "colour attachment of its own record - refusing to guess a read "
-                                     "buffer",
-                                     stateFBOObject->GetExternalIndex(), record->ReadSurface.Res.Slot,
-                                     record->ReadSurface.Res.Gen);
-                        return;
-                    }
-                }
-                if (pushedReadBuf == m_frontendReadBuffer) {
-                    return;
-                }
-                m_frontendReadBuffer = pushedReadBuf;
-
-                const GLenum glPushedReadBuffer = GetBackendAttachmentType(pushedReadBuf);
-                if (m_backendReadBuffer != glPushedReadBuffer) {
-                    m_backendReadBuffer = glPushedReadBuffer;
-                    // Still bound as READ first, for the reason the legacy arm gives below:
-                    // glReadBuffer targets whatever FBO is bound to GL_READ_FRAMEBUFFER.
-                    Bind(FramebufferTarget::Read);
-                    g_GLESFuncs.glReadBuffer(glPushedReadBuffer);
-                }
+                ApplyReadBufferFromRecord(*record, stateFBOObject->GetExternalIndex());
                 return;
             }
 #endif
@@ -10390,7 +10390,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         frontendType <= FramebufferAttachmentType::Color31 &&
                         (static_cast<Int>(frontendType) - static_cast<Int>(FramebufferAttachmentType::Color0)) <
                             g_GLESCapabilities.MaxColorAttachments;
-                    if (isColorPoint && attachmentObject.IsEmpty() && glBackendAttachment != GL_NONE) {
+#if MOBILEGL_PIPE_PUSH
+                    // P5e (fb, §5.4): ON THE RECORD ARM THE EMPTY POINT IS THE RECORD'S, and it
+                    // is the SAME test SyncAttachmentSurface attaches on - `Kind == None ||
+                    // Res null`. Asking the frontend here and the record there is what left
+                    // review N-6's one-directional hole; one test closes it by construction.
+                    const Bool pointIsEmpty =
+                        pushedRecord != nullptr
+                            ? [&] {
+                                  const MG_Pipe::MGPSurface* s =
+                                      PushedSurfaceForAttachment(*pushedRecord, frontendType);
+                                  return s == nullptr || s->Kind == MG_Pipe::kMGPipeSurfaceKindNone ||
+                                         MG_Pipe::MGPipeHandleIsNull(s->Res);
+                              }()
+                            : attachmentObject.IsEmpty();
+#else
+                    const Bool pointIsEmpty = attachmentObject.IsEmpty();
+#endif
+                    if (isColorPoint && pointIsEmpty && glBackendAttachment != GL_NONE) {
                         g_GLESFuncs.glFramebufferRenderbuffer(glFBOTarget, glBackendAttachment, GL_RENDERBUFFER, 0);
                     }
 #if MOBILEGL_PIPE_PUSH
@@ -10418,8 +10435,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 attachmentSynced = false;
                             }
                         } else {
-                            attachmentSynced = SyncAttachmentSurface(glFBOTarget, *pushedSurface, attachmentObject,
-                                                                     glBackendAttachment);
+                            attachmentSynced =
+                                SyncAttachmentSurface(glFBOTarget, *pushedSurface, glBackendAttachment);
                         }
                     } else {
                         attachmentSynced = SyncAttachmentObject(glFBOTarget, attachmentObject, glBackendAttachment);
@@ -10510,6 +10527,253 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 SyncToBackend(stateFBOObject, asTarget);
             }
         }
+
+#if MOBILEGL_PIPE_PUSH
+        // ---- P5e (fb, CONTRACT-P5E.md §5.4): the reverse index, texture -> framebuffers ------
+        //
+        // WHY IT EXISTS. ScopedDetachedTextureFramebufferAttachments used to answer "which
+        // framebuffers currently have this texture attached" by walking every live twin and
+        // reading each one's FRONTEND attachment array. Under P5e that walk is the last place
+        // the server holds a frontend framebuffer across records - id re-typed ForEachLive and
+        // left the StateForHandle read greppable, naming this package as the one that replaces
+        // it. The records already carry the answer: every applied set_framebuffer_state names
+        // its eleven surfaces, so the relation is maintained where the record is consumed.
+        //
+        // KEYED ON THE TEXTURE SLOT rather than on {slot, gen}. The question a detach asks is
+        // "does the driver have this texture id hanging off some framebuffer", the points are
+        // re-derived from the record on every hit, and a stale entry left by a recycled slot
+        // therefore costs one record walk that matches nothing. The FRAMEBUFFER handles are
+        // stored whole, so a recycled framebuffer slot never answers for its predecessor
+        // (FindByHandle refuses a moved Gen).
+        //
+        // MAINTAINED AT THE SYNC, NOT AT THE APPLY, and that is the same set rather than a
+        // smaller one: a framebuffer whose record was never synced has no driver attachment to
+        // detach, and every path that can have one runs this sync first.
+        namespace {
+            UnorderedMap<Uint32, Vector<MG_Pipe::MGPipeHandle>> g_framebuffersByAttachedTextureSlot;
+            UnorderedMap<Uint32, Vector<Uint32>> g_attachedTextureSlotsByFramebufferSlot;
+
+            void ForgetFramebufferTextureAttachmentsLocked(Uint32 fboSlot) {
+                auto it = g_attachedTextureSlotsByFramebufferSlot.find(fboSlot);
+                if (it == g_attachedTextureSlotsByFramebufferSlot.end()) return;
+                for (const Uint32 textureSlot : it->second) {
+                    auto listIt = g_framebuffersByAttachedTextureSlot.find(textureSlot);
+                    if (listIt == g_framebuffersByAttachedTextureSlot.end()) continue;
+                    auto& list = listIt->second;
+                    list.erase(std::remove_if(list.begin(), list.end(),
+                                              [&](MG_Pipe::MGPipeHandle h) { return h.Slot == fboSlot; }),
+                               list.end());
+                    if (list.empty()) g_framebuffersByAttachedTextureSlot.erase(listIt);
+                }
+                g_attachedTextureSlotsByFramebufferSlot.erase(it);
+            }
+        } // namespace
+
+        void NoteFramebufferTextureAttachments(MG_Pipe::MGPipeHandle fbo,
+                                               const MG_Pipe::MGPFramebufferState& record) {
+            if (MG_Pipe::MGPipeHandleIsNull(fbo)) return;
+            ForgetFramebufferTextureAttachmentsLocked(fbo.Slot);
+            Vector<Uint32> textureSlots;
+            const auto note = [&](const MG_Pipe::MGPSurface& surface) {
+                if (surface.Kind != MG_Pipe::kMGPipeSurfaceKindTexture) return;
+                if (MG_Pipe::MGPipeHandleIsNull(surface.Res)) return;
+                if (std::find(textureSlots.begin(), textureSlots.end(), surface.Res.Slot) != textureSlots.end()) {
+                    return; // one texture at two points is one entry
+                }
+                textureSlots.push_back(surface.Res.Slot);
+                g_framebuffersByAttachedTextureSlot[surface.Res.Slot].push_back(fbo);
+            };
+            for (Uint i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) note(record.Color[i]);
+            note(record.Depth);
+            note(record.Stencil);
+            if (textureSlots.empty()) return; // the common Minecraft frame: renderbuffers only
+            g_attachedTextureSlotsByFramebufferSlot[fbo.Slot] = std::move(textureSlots);
+        }
+
+        // BY VALUE, and deliberately: the caller re-binds framebuffers while it walks the
+        // answer, and anything that syncs one re-enters NoteFramebufferTextureAttachments and
+        // can rehash the map underneath an iterator.
+        //
+        // NOTHING PRUNES A DEAD FRAMEBUFFER'S ENTRY and nothing needs to. A stale handle is
+        // refused by FindByHandle (its Gen has moved), so it contributes nothing; and the
+        // moment the slot is reused, the successor's first sync clears its predecessor's rows
+        // here. The index is therefore bounded by the live framebuffer slot count, which is
+        // the same bound the twin table itself carries.
+        Vector<MG_Pipe::MGPipeHandle> FramebuffersAttachingTexture(MG_Pipe::MGPipeHandle texture) {
+            if (MG_Pipe::MGPipeHandleIsNull(texture)) return {};
+            auto it = g_framebuffersByAttachedTextureSlot.find(texture.Slot);
+            if (it == g_framebuffersByAttachedTextureSlot.end()) return {};
+            return it->second;
+        }
+
+        // ---- P5e (fb, §5.4): BackendFramebufferObject::SyncToBackend BY HANDLE ---------------
+        //
+        // The record's ELEVEN SURFACES ARE THE POINT SET. The object form walks the frontend's
+        // 41 attachment points to learn which exist; this one does not have to, because the
+        // emitter REFUSES a framebuffer holding a point at or above the wire width
+        // (FramebufferEmit.h's two refusals) and the FRONT/BACK tokens belong to the default
+        // framebuffer, which has no twin. So Color[0..7] + Depth + Stencil is the whole of it,
+        // and a framebuffer that could not be described that way never produced a record at all.
+        //
+        // THE PER-POINT VERSION MEMO IS GONE and is not replaced. On the object form it is a
+        // second, narrower gate under the record hash, hedging against "a frontend attachment
+        // moved without the record moving" - which is unrepresentable once the record is the
+        // only statement of what is attached (the hash covers every surface, and Fbo is inside
+        // it, so a recycled handle cannot be suppressed against its predecessor). Keeping it
+        // would have meant keeping the frontend array that carries it, which is the whole point
+        // of this arm. The two SERVER-owned gates stay, because no client-side value can answer
+        // what they answer: g_attachmentBackendIdGeneration ("did I re-mint a driver id") and
+        // the re-entry it drives.
+        void BackendFramebufferObject::SyncToBackendByHandle(MG_Pipe::MGPipeHandle fbo,
+                                                             FramebufferTarget asTarget) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            const MG_Pipe::MGPFramebufferState* const recordPtr = PushedFramebufferRecord(fbo);
+            if (recordPtr == nullptr) {
+                MGLOG_E_ONCE("MGPipe: framebuffer handle {%u, %u} has no applier record, so it is not "
+                             "configured here; nothing is bound by this refusal, but the caller's own "
+                             "bind still targets it",
+                             fbo.Slot, fbo.Gen);
+                return;
+            }
+            const MG_Pipe::MGPFramebufferState& record = *recordPtr;
+            if (record.IsDefault != 0) {
+                // The default framebuffer has no twin (pDefaultFramebufferInfo->defaultFBO is the
+                // frontend object and MGPipeHandles.h reserves {0,1} for it), so reaching this
+                // body with one is a caller that skipped its own IsDefault branch.
+                MGLOG_E_ONCE("MGPipe: framebuffer handle {%u, %u} describes the DEFAULT framebuffer, "
+                             "which has no twin to configure",
+                             fbo.Slot, fbo.Gen);
+                return;
+            }
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // Kept in step for the monolith-glue overloads that still resolve their record
+            // through it (SyncReadBufferToBackend's push arm).
+            m_pushedSyncHandle = fbo;
+#endif
+            const GLenum glFBOTarget = MG_Util::ConvertFramebufferTargetToGLEnum(asTarget);
+            Bind(asTarget);
+
+            FramebufferObject::FramebufferAttachmentArray stateDrawBuffers{};
+            DecodePushedDrawBuffers(record, stateDrawBuffers.data());
+
+            // 1. Remap draw buffers. Same rule as the object form: glDrawBuffers writes the
+            //    DRAW-bound framebuffer's state, so a READ-only sync must neither issue it nor
+            //    stamp the memo (the Minecraft 26.x OIT bug the object form names).
+            Bool attachmentPointsMoved = false;
+            const Bool drawBufferClean =
+                memcmp(m_frontendDrawBuffers, stateDrawBuffers.data(),
+                       FramebufferObject::MAX_DRAW_BUFFERS * sizeof(FramebufferAttachmentType)) == 0;
+            if (!drawBufferClean && asTarget == FramebufferTarget::Draw) {
+                memcpy(m_frontendDrawBuffers, stateDrawBuffers.data(),
+                       FramebufferObject::MAX_DRAW_BUFFERS * sizeof(FramebufferAttachmentType));
+                std::fill(m_backendDrawBuffers, m_backendDrawBuffers + FramebufferObject::MAX_DRAW_BUFFERS, GL_NONE);
+                int nEffectiveBuffers = 0;
+                for (GLint i = 0; i < FramebufferObject::MAX_DRAW_BUFFERS; ++i) {
+                    const auto frontendBuf = stateDrawBuffers[i];
+                    if (frontendBuf == FramebufferAttachmentType::None) {
+                        m_backendDrawBuffers[i] = GL_NONE;
+                        continue;
+                    }
+                    // DecodePushedDrawBuffers cannot produce a FRONT/BACK token - those are the
+                    // default framebuffer's own and it has no twin - so the object form's
+                    // "shouldn't remap" branch has no counterpart here.
+                    m_backendDrawBuffers[i] = GL_COLOR_ATTACHMENT0 + i;
+                    nEffectiveBuffers = i + 1;
+                }
+                g_GLESFuncs.glDrawBuffers(nEffectiveBuffers, m_backendDrawBuffers);
+                if (RecomputeBackendColorSlots(stateDrawBuffers)) {
+                    m_frontendReadBuffer = FramebufferAttachmentType::Unknown;
+                    attachmentPointsMoved = true;
+                }
+            }
+
+            // The four cross-object masks, off the record's own surfaces (ID-12 DV-5).
+            if (asTarget == FramebufferTarget::Draw) {
+                Uint32 snormClampOutputMask = 0;
+                Uint32 unormClampOutputMask = 0;
+                Uint32 alphaWidenedMask = 0;
+                Uint32 integerColorMask = 0;
+                for (Uint i = 0; i < FramebufferObject::MAX_DRAW_BUFFERS && i < 32; ++i) {
+                    const auto frontendBuf = stateDrawBuffers[i];
+                    if (frontendBuf < FramebufferAttachmentType::Color0 ||
+                        frontendBuf > FramebufferAttachmentType::Color31) {
+                        continue;
+                    }
+                    const MG_Pipe::MGPSurface* surface = PushedSurfaceForAttachment(record, frontendBuf);
+                    if (surface == nullptr) continue; // unrepresentable: DecodePushedDrawBuffers' range
+                    if (IsSnormFallbackSurface(*surface)) {
+                        snormClampOutputMask |= (1u << i);
+                    } else if (IsUnormFallbackSurface(*surface)) {
+                        unormClampOutputMask |= (1u << i);
+                    }
+                    if (IsAlphaWidenedColorSurface(*surface)) alphaWidenedMask |= (1u << i);
+                    if (IsIntegerColorSurface(*surface)) integerColorMask |= (1u << i);
+                }
+                PrgramImpl::g_snormFallbackClampOutputMask = snormClampOutputMask;
+                PrgramImpl::g_unormFallbackClampOutputMask = unormClampOutputMask;
+                g_alphaWidenedDrawBufferMask = alphaWidenedMask;
+                g_integerColorDrawBufferMask = integerColorMask;
+            }
+
+            // 2. Remap read buffer, READ-target only, for the reason the object form gives.
+            if (asTarget == FramebufferTarget::Read) {
+                ApplyReadBufferFromRecord(record, 0);
+            }
+
+            // 3. The attachments. Two gates, both server-owned.
+            const Bool idGenerationMoved = m_syncedBackendIdGeneration != g_attachmentBackendIdGeneration;
+            if (idGenerationMoved) {
+                m_syncedBackendIdGeneration = g_attachmentBackendIdGeneration;
+            }
+            if (idGenerationMoved || attachmentPointsMoved ||
+                m_syncedRecordHashes[SizeT(asTarget)] != record.ContentHash) {
+                const auto applyPoint = [&](FramebufferAttachmentType point,
+                                            const MG_Pipe::MGPSurface& surface) {
+                    const Bool isColorPoint = point >= FramebufferAttachmentType::Color0 &&
+                                              point <= FramebufferAttachmentType::Color31;
+                    const GLenum glBackendAttachment =
+                        isColorPoint ? GetBackendAttachmentType(point)
+                                     : MG_Util::ConvertFramebufferAttachmentTypeToGLEnum(point);
+                    if (glBackendAttachment == GL_NONE || glBackendAttachment == GL_UNKNOWN_MGL) return;
+                    const Bool empty = surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone ||
+                                       MG_Pipe::MGPipeHandleIsNull(surface.Res);
+                    // The detach that keeps m_backendColorSlots a permutation of the PHYSICAL
+                    // layout: a colour point whose record says empty must not keep the previous
+                    // owner's image, or glReadBuffer returns it. Bounded by the driver's cap,
+                    // because GL_COLOR_ATTACHMENTn above it is INVALID_ENUM.
+                    if (isColorPoint && empty) {
+                        const Int index =
+                            static_cast<Int>(point) - static_cast<Int>(FramebufferAttachmentType::Color0);
+                        if (index < g_GLESCapabilities.MaxColorAttachments) {
+                            g_GLESFuncs.glFramebufferRenderbuffer(glFBOTarget, glBackendAttachment,
+                                                                  GL_RENDERBUFFER, 0);
+                        }
+                        return;
+                    }
+                    SyncAttachmentSurface(glFBOTarget, surface, glBackendAttachment);
+                };
+                for (Uint i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
+                    applyPoint(static_cast<FramebufferAttachmentType>(
+                                   static_cast<Int>(FramebufferAttachmentType::Color0) + static_cast<Int>(i)),
+                               record.Color[i]);
+                }
+                applyPoint(FramebufferAttachmentType::Depth, record.Depth);
+                applyPoint(FramebufferAttachmentType::Stencil, record.Stencil);
+                m_syncedRecordHashes[SizeT(asTarget)] = record.ContentHash;
+                NoteFramebufferTextureAttachments(fbo, record);
+            }
+
+            // The walk itself can re-mint a driver id (the storage sync behind a texture
+            // surface), invalidating points this walk already attached. Re-enter until the
+            // generation is quiescent, exactly as the object form does - every pass syncs each
+            // dirty texture clean, so each repeat finds strictly fewer re-mints.
+            if (m_syncedBackendIdGeneration != g_attachmentBackendIdGeneration) {
+                SyncToBackendByHandle(fbo, asTarget);
+            }
+        }
+#endif // MOBILEGL_PIPE_PUSH
 
         GLenum BackendFramebufferObject::GetBackendAttachmentType(FramebufferAttachmentType frontendAtt) const {
             // Only colour attachments are ever relocated; depth/stencil, the default framebuffer's
@@ -10950,6 +11214,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // outside the frontend's array, which cannot be addressed at all.
             Uint BoundImageUnitFormat(Int unit) {
                 if (unit < 0 || unit >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) return 0;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P5e (fb, §5.4): the format-less image bake asks what format the APPLICATION
+                // named at this unit, and under a transport the record is the only statement of
+                // it - MGPImageView::InternalFormat is that same GLenum, copied by the client
+                // out of the unit's own binding. A unit the applier has never been told about
+                // answers 0, which is what an unbound unit answers on the frontend arm too.
+                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                    const auto& st = MG_Pipe::MGPipeApplier();
+                    if (static_cast<SizeT>(unit) >= st.BoundShaderImages.size()) return 0;
+                    return static_cast<Uint>(st.BoundShaderImages[static_cast<SizeT>(unit)].InternalFormat);
+                }
+#endif
                 return static_cast<Uint>(MGB_CTX->GetImageTextureBinding(unit).Format);
             }
 
@@ -13798,6 +14074,85 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #undef MGB_RBO_HEIGHT
 #undef MGB_RBO_SAMPLES
 
+#if MOBILEGL_PIPE_PUSH
+        // P5e (fb, CONTRACT-P5E.md §5.4): the same allocation, keyed on the renderbuffer HANDLE.
+        //
+        // THE FOUR VALUES WERE ALREADY THE RECORD'S at P4a (D-D2) - what the object form still
+        // needed the frontend for was the LOOKUP, `HandleOf(stateRBOObject.get())`, a
+        // client-allocator probe on the apply thread. On this arm the handle arrives from the
+        // attachment surface that named it, so nothing is probed and nothing is dereferenced.
+        // An OVERLOAD rather than a changed signature (the monolith glue keeps its tokens).
+        void BackendRenderbufferObject::SyncToBackendByHandle(MG_Pipe::MGPipeHandle renderbuffer) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            const MG_Pipe::MGPipeResourceRecord* const pushedRecord =
+                PipeRenderbufferRecordForHandle(renderbuffer);
+            if (pushedRecord == nullptr) {
+                MGLOG_E_ONCE("MGPipe: renderbuffer handle {%u, %u} has no applier record, so its "
+                             "storage cannot be allocated from the pushed descriptor",
+                             renderbuffer.Slot, renderbuffer.Gen);
+                return;
+            }
+            if (m_isInitialized && m_syncedResourceSerial != 0 &&
+                m_syncedResourceSerial == pushedRecord->Serial) {
+                return;
+            }
+
+            // A RE-STORAGE IS A REDEFINITION ON THE SAME DRIVER ID (P4a fable seam F-3): the
+            // allocation below re-defines the storage behind the name the framebuffer twins
+            // already attached, and no record of THEIRS moves for it, so the attachment memo
+            // has to be re-armed the same way a texture re-mint arms it. The first allocation
+            // is not a redefinition.
+            if (m_isInitialized) {
+                ++FramebufferImpl::g_attachmentBackendIdGeneration;
+            }
+
+            Bind();
+
+            const auto internalFormat = static_cast<TextureInternalFormat>(pushedRecord->Desc.InternalFormat);
+            const Int width = static_cast<Int>(pushedRecord->Desc.Width);
+            const Int height = static_cast<Int>(pushedRecord->Desc.Height);
+            const Int samples = static_cast<Int>(pushedRecord->Desc.Samples);
+            GLenum glInternalFormat, glType, glFormat;
+            TextureImpl::GenerateRenderbufferFormatInfo(internalFormat, &glInternalFormat, &glFormat, &glType);
+
+            // Drain first, for the object form's reason: a driver that refuses the allocation
+            // (a multi-gigabyte renderbuffer is refused routinely) used to leave the twin
+            // claiming storage it does not have, and the attachment then rendered nowhere.
+            DebugImpl::ErrorLopper::Clear();
+            if (samples > 0) {
+                const auto backendSamples = static_cast<GLsizei>(ClampSamplesToBackendSupport(
+                    GetRenderbufferFormatCapabilityTargetIndex(), internalFormat, glFormat, samples));
+                g_GLESFuncs.glRenderbufferStorageMultisample(GL_RENDERBUFFER, backendSamples, glInternalFormat,
+                                                             static_cast<GLsizei>(width),
+                                                             static_cast<GLsizei>(height));
+            } else {
+                g_GLESFuncs.glRenderbufferStorage(GL_RENDERBUFFER, glInternalFormat, static_cast<GLsizei>(width),
+                                                  static_cast<GLsizei>(height));
+            }
+            if (g_GLESFuncs.glGetError() == GL_OUT_OF_MEMORY) {
+                MGLOG_E_ONCE("Renderbuffer {%u, %u} storage allocation ran out of memory: %dx%d, "
+                             "samples=%d, format=%s",
+                             renderbuffer.Slot, renderbuffer.Gen, width, height, samples,
+                             MG_Util::ConvertGLEnumToString(glInternalFormat).c_str());
+                // NO RecordError HERE. The object form reports the OOM to the application
+                // through the live GLContext; on this arm there is no application on this side
+                // of the wire to report it to, and MGB_CTX->RecordError is itself one of the
+                // BARRIER-PULLED rows (FieldOwnership.def) that rule F forbids an unbarriered
+                // apply to touch. The client raises its own errors from its own validator.
+            }
+            DebugImpl::ErrorLopper::Clear();
+
+            m_cacheInternalFormat = internalFormat;
+            m_cacheWidth = width;
+            m_cacheHeight = height;
+            m_cacheSamples = samples;
+            m_syncedResourceSerial = pushedRecord->Serial;
+            m_isInitialized = true;
+        }
+#endif // MOBILEGL_PIPE_PUSH
+
         TwinRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject, MG_Pipe::MGPipeKind::Renderbuffer>
             g_backendRenderbufferObjects;
     } // namespace RenderbufferImpl
@@ -13850,13 +14205,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     } // namespace TextureImpl
 
-    namespace FramebufferImpl {
-        void BackendFramebufferObject::SyncToBackendByHandle(MG_Pipe::MGPipeHandle fbo,
-                                                             FramebufferTarget asTarget) {
-            (void)asTarget;
-            MGPipeP5eSeamNotLanded("BackendFramebufferObject::SyncToBackendByHandle", "fb", fbo);
-        }
-    } // namespace FramebufferImpl
+    // FramebufferImpl::BackendFramebufferObject::SyncToBackendByHandle and
+    // RenderbufferImpl::BackendRenderbufferObject::SyncToBackendByHandle LANDED with package fb
+    // (P5e); their bodies are beside the object forms they overload, where the attachment walk
+    // and the storage allocation they share can be read side by side.
 
     namespace PrgramImpl {
         void BackendProgramObjectImpl::SyncToBackendByHandle(MG_Pipe::MGPipeHandle cso) {
@@ -13864,11 +14216,5 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     } // namespace PrgramImpl
 
-    namespace RenderbufferImpl {
-        void BackendRenderbufferObject::SyncToBackendByHandle(MG_Pipe::MGPipeHandle renderbuffer) {
-            MGPipeP5eSeamNotLanded("BackendRenderbufferObject::SyncToBackendByHandle", "fb",
-                                   renderbuffer);
-        }
-    } // namespace RenderbufferImpl
 #endif // MOBILEGL_PIPE_PUSH
 } // namespace MobileGL::MG_Backend::DirectGLES
