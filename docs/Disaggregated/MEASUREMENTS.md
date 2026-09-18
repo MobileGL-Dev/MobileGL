@@ -447,3 +447,32 @@ splitctl−push 全部在 ±1.6% 内（增量来自 inproc 传输与 barrier，�
 | 79 trace 普查 | **未重跑**（全集语料不在本机；P5b 的 72/6/1 仍以其头为准） |
 
 审计的 59 处直接访问的终态：纹理纹素 / 形状 / 脏区改读 server staged shadow（tx）；反向通道四条事件（ev）；句柄解析全部按记录（hd）；`applier_reset` / `object_death` 上 wire（ct）；值类残余读清零（rv）；双层角色守卫 + `InBarrierWait`（gt）。**未到期的具名债**：`MGPipeReverseAnnouncementScope`（绑定记录 P4b 才发射的 ensure/通告族）与 `MGPipeFrontendKeyedRegistryScope`（G6 前端键 twin registry，P3b/P4b 重键）两个 scope 内的只读探测，以及对象类 15 行 BARRIER-PULLED——全部具名、可 grep、有退役阶段。
+
+## 9. P5d（`cb06538c`、`56a77348`、`1f8de61b`；Redmi `2f7cbe2e`，FCL + Minecraft 26.3-rc-3 世界 "test"，VD12，DirectGLES）
+
+协议：CPU 定频（大核 1958400 / 小核 1555200，`pin_device.sh`）、风扇二档、世界内 20 s 静置后取 30 s 窗口；fps = `MGPipe stats:` 行的帧数 / 时间（应用侧 swap 计数），逐线程 CPU = `/proc/<pid>/task/*/stat` 的 utime+stime 差 / 帧数。两个已知的不受控变量：GPU 由厂商守护进程在每次启动时把 `min_pwrlevel` 打回 12（inproc 各臂 GPU 都在 342 MHz 空转、CPU 受限，不受影响；monolith 或受 GPU 或 120 Hz vsync 封顶）；内核对 app 线程忽略 `sched_setaffinity`，client GL 线程常落在中核（cpu2/4/5）、apply 线程常驻大核 cpu7。因此配对比较以 **client 线程 CPU ms/帧** 为主指标。
+
+| 构建 | 臂 | fps p50 | client ms/帧（核） | apply ms/帧（核） | 备注 |
+|---|---|---|---|---|---|
+| 二轮头 `56a77348` | inproc | 64.3 | 15.03 (cpu5) | 12.42 (cpu7) | 起点；`SPIN_US=2000` 68-73（三次），`=10000` 63，`SERVER_AFFINITY=off` 65.9 |
+| 二轮头 `56a77348` | monolith | 116.5 | 5.85 (cpu7) | — | 75% 忙，vsync 120 Hz 封顶 |
+| 三轮审查前构建 | inproc | 114.0 | 8.68 (cpu4) | 6.93 (cpu7) | `SPIN_US=2000` 112.3（不再有收益） |
+| 三轮审查前构建 | monolith | 115.7 | 5.70 (cpu5) | — | 封顶 |
+| 三轮（本提交） | inproc | 103-106 | 9.2 | 7.0-7.4 | 交错会话，见下 |
+| 三轮（本提交） | monolith | 115（封顶）/ 206（一次未封顶） | 5.0-6.2 (cpu7) | — | 三次：115.3 / 115.1（120 Hz 封顶）与 205.8（未封顶） |
+
+交错会话（三轮头，post-review 构建，同一次定频、同一天）：
+
+| 臂（顺序） | fps p50 (min / max) | client ms/帧（核） | apply ms/帧（核） | 备注 |
+|---|---|---|---|---|
+| mono1 | 205.8 (110 / 280) | 5.0 (cpu7) | — | 未封顶的一次；窗口内 110→280 摆动 |
+| inproc1 | 106.1 (91 / 112) | 9.24 (cpu4) | 7.0 (cpu7) | |
+| mono2 | 115.3 (108 / 117) | 6.2 (cpu7) | — | 120 Hz 封顶 |
+| inproc2 | 103.3 (82 / 111) | 9.2 (cpu5) | 7.4 (cpu7) | |
+| inproc3 | 101.9 (83 / 109) | 9.1 (cpu5) | 7.3 (cpu7) | |
+| mono3 | 115.1 (109 / 117) | 6.1 (cpu7) | — | 封顶 |
+
+审查前构建（同一天早些、机身 50.8 °C 起）inproc 114.0 / client 8.68 ms（cpu4）/ apply 6.93；post-review 构建 pmap 线流量与之逐字节相同（364.7 KB/帧），差在运行间漂移（机身 53-54 °C 起、中核放置）之内。
+
+`wait[]` 计数（三轮加入 stats 行）：审查前构建 inproc 30 s 窗口累计 srv=7.56M / srvpark=76k、cli=6.70M / clipark=17k；`SPIN_US=2000` 下 park 各降两个量级、fps 不变——park 已不是主项。持久映射线流量 pmap ≈ 0.36 MB/帧（二轮 0.23，三轮多了首推与脏页排空）。
+

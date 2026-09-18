@@ -605,15 +605,15 @@ CMake：
 | `MOBILEGL_TRANSPORT` | `monolith` | `inproc` 已落地；`spawn` / `unix:` / `pipe:` 是 P6，当前具名拒绝并回落 monolith |
 | `MOBILEGL_IPC_RING_MB` | 8 | `SEG_CMD`；单条记录至多一半 |
 | `MOBILEGL_IPC_STAGE_MB` | 32 | `SEG_STAGE`；目标负载 profile 显式 256 |
-| `MOBILEGL_IPC_SPIN_US` | 50 | park 前自旋 |
+| `MOBILEGL_IPC_SPIN_US` | 50 | park 前自旋；P5d 三轮起自旋按一次性校准的迭代预算走、稳态不读时钟，`0` = 不自旋直接 park |
 | `MOBILEGL_IPC_PERSISTENT_BLOCK_KB` | 64 | persistent-map 推送块粒度；`0` 是 E3(a) 阴性对照 |
 | `MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS` | 1 | 推送只发内容变了的块（追踪 buffer 走 mprotect 位图，未追踪走内容哈希）；`0` 恢复全范围推送（A/B 对照） |
-| `MOBILEGL_IPC_BATCH_WAITS` | 1 | 值类记录（无 reply slot 的 kCtxState/kCtxCso/kCtxObject）发布即返回，barrier 推迟到下一个拉取类 verb；`0` 恢复 R-1 逐条 barrier（`MOBILEGL_PIPE_VERIFY` 强制 0） |
+| `MOBILEGL_IPC_BATCH_WAITS` | 1 | 值类记录（无 reply slot 的 kCtxState/kCtxCso/kCtxObject）发布即返回，barrier 推迟到下一个拉取类 verb；**`generate_mipmap` 例外**（它的 apply 读 `MGB_CTX->GetActiveTextureUnit()`，规则：只有 apply 不读残余填充字段的记录才可免等）；`0` 恢复 R-1 逐条 barrier（`MOBILEGL_PIPE_VERIFY` 强制 0） |
 | `MOBILEGL_IPC_ADOPT_TIER` | 2 | `auto/0/1/2`；P5 split 用 emulated（T2） |
 | `MOBILEGL_IPC_VERB_BARRIER` | 1 | 每 verb 等 `appliedSeq == emitSeq`；`0` 只作 E1 阴性对照 |
 | `MOBILEGL_IPC_STRICT_ERRORS` | 0 | BARRIER-PULLED residual input 提升为具名 Fatal |
 | `MOBILEGL_IPC_AUDIT` | 0 | retire 后 `0xDD` 填退休 staging |
-| `MOBILEGL_IPC_SERVER_AFFINITY` | `auto` | apply 线程亲和性 |
+| `MOBILEGL_IPC_SERVER_AFFINITY` | `auto` | apply 线程亲和性；日志报告内核实际采纳的掩码（Redmi 的内核对 app 线程一律忽略 `sched_setaffinity`，解析为 0xff） |
 | `MOBILEGL_IPC_SERVER_PATH` | 空 | P6 消费 |
 
 P6+ 生效：`MOBILEGL_IPC_PRESENT_CREDIT`、`MOBILEGL_IPC_POLL_ESCALATE`、shadow shm、`MOBILEGL_IPC_RESPAWN`、`MOBILEGL_IPC_IDLE_EXIT_S`。显式不设立：`MOBILEGL_IPC_PROGRAM`（没有 relink 档）、`MOBILEGL_IPC_VALIDATE_SERVER`（server 没有 `MG_Impl` 校验器）。

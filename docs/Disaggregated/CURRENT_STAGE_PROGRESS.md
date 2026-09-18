@@ -1,6 +1,6 @@
 # 当前阶段进度
 
-分支 `feat/disaggregated`；代码头 `b88e8487`（2026-09-17，P5c 收官）。本文随每次落地更新。ID-1..75 的逐条裁定长文在 git 历史（`ef35ea0c` 之前版本的本文件）。
+分支 `feat/disaggregated`；代码头 `1f8de61b`（2026-09-18，P5d 三轮收官；P5c 收官头 `b88e8487`）。本文随每次落地更新。ID-1..75 的逐条裁定长文在 git 历史（`ef35ea0c` 之前版本的本文件）。
 
 ## 1. 阶段状态
 
@@ -10,13 +10,16 @@
 | **P5** 首个 IPC 帧（reduced path，lockstep inproc） | 已收官 | `ff2994d9..37fc4fdb`；`MEASUREMENTS.md` §6 |
 | **P5b** inproc 下的 verb 迁移（Minecraft 优先） | **已收官（2026-09-16）** | `37fc4fdb..82683d4a`；`MEASUREMENTS.md` §7 |
 | **P5c** `inproc` 共享内存读点归零 | **已收官（2026-09-17）** | `11ac3de6..b88e8487` + triage 修复；契约 `MobileGL/MG_Remote/CONTRACT-P5C.md`；审计 `~/w7/notes/p5c/p5c-audit-v1.md` |
+| **P5d** `inproc` 性能专项 | **已收官（2026-09-18，三轮）** | `cb06538c`、`56a77348`、`1f8de61b`；报告 [`P5D-INPROC-PERFORMANCE.md`](P5D-INPROC-PERFORMANCE.md)；`MEASUREMENTS.md` §9 |
 | P6 spawn transport | **下一个** | 届时只是传输替换 |
 
 ## 2. 当前头实测
 
 | 门 | 结果 |
 |---|---|
-| 构建 | pull / push / verify / split 四个 flavour 全部通过 |
+| P5d 三轮门（WSL `~/w7/p5d-gate`，split flavour，头 `1f8de61b`） | unit **2203/2203**（tcache_count=0）、`integration-split` **111/111**、两条曾 flaky 用例 `--repeat until-fail:5` 全绿；双生成器 --check/--self-test、include 闭包、dirty-surface、doc 引用全绿；G1 由 CI 核（四包自报 pull 构建零变化） |
+| P5d 三轮设备（Redmi，CPU 定频，VD12 世界内 30 s） | inproc p50 **103-106 fps**（起点 64.3），client 线程 CPU 9.2 ms/帧（起点 15.0）、apply 7.0-7.4（起点 12.4）；monolith 115（封顶）/ 206（一次未封顶）（此设备 120 Hz vsync 封顶与线程放置不受控，见报告"数字"节） |
+| 构建（P5c 收官时） | pull / push / verify / split 四个 flavour 全部通过 |
 | G1（pull 符号恒等） | `.text` −16 B，0 增 / 0 删 / **3 认定 resize** / 0 重命名（`SwapchainObject::Create` ev 的表面事件化、`CopyTexSubImage2D` hd 的传输臂、`ScopedRestartIndexSubstitution` 的 server-shadow 臂，均已在合并提交具名）；pull 构建零 `MG_Remote` 符号 |
 | 发射表分区（`EmitTables.cpp` 的 `static_assert`） | A 2 / B 54 / C 15，共 71 槽（未变） |
 | unit | split **2187/2187**（`MOBILEGL_IPC_STRICT_ERRORS=1` 下同绿） |
@@ -81,6 +84,7 @@
 
 ## 6. 下一步
 
+0. P5d 的遗留（`P5D-INPROC-PERFORMANCE.md` "什么没完成"）：R-1 序列化留给 P3b/P4b → P11（`gPipeInputs` 版本化已写进 P11 行）；线程放置记录；小项随 P3b/P4b 顺手。
 1. **P6 spawn transport**：`SocketTransport` + `ServerMain` + 握手 / 退出语义 + EGL forwarder 的控制面帧；P5c 之后这只是传输替换。注意 P5c 留下的：`s_synced` / `g_syncedRenderStateParameters` 按 context 世代重置；两个豁免 scope 里的探测在 spawn 下根本不存在对应内存，P6 第一天的红就是它们的清单。
 2. 剩余首阻塞一轮（Magma compute/image、rd12、RGB mip、`texture-remint-pull` 仿真槽）。
 3. P6 出口门：P5b 的完整渲染路径在 `spawn` 下绿；OpenRA 在 Adreno 830 上 split SSIM ≥ 0.99。
@@ -98,6 +102,7 @@
 | P5b 设备证据 | `~/w7/notes/p5b/apk/p5bcodex2/`（APK + proof）；`MobileGL/.trace-work/p5b-redmi/p5bcodex2/2f7cbe2e/`（correctness 8/8、`ab-tables.md` 与 bsl 补充表） |
 | class-C 普查 | `~/w7/notes/p6/census-classC.md`；基线 `~/w7/p5b-c0b-census-logs/results.json` |
 | P5c 审计 | `~/w7/notes/p5c/p5c-audit-v1.md`（59 行清单、wire-clean 清单、与契约的分歧、已有 `rsp` 数字）+ `BRIEF-p5c-audit.md`；Kimi K3 只读静态审计，头 `a79a0af6`，关键行已由集成者逐条抽查 |
+| P5d 三轮 | brief `~/w7/notes/p5d/BRIEF-P5D-R3.md`；设备记录 `~/w7/notes/p5d/RESULTS-P5D-R3.md`；四包报告与 lockstep 研究 `~/w7/notes/p5d/reports/`（`E-lockstep-feasibility.md`）；profile 数据 `~/w7/notes/p5d/perf/`（`mg-vd12-8`/`mg-mono-1` 为二轮头 `56a77348`）；bench 脚本 `~/w7/notes/tools/p5d_bench_*.sh` |
 | P5c 契约 / 实测 | `MobileGL/MG_Remote/CONTRACT-P5C.md`（含落地修订）；`MEASUREMENTS.md` §8（逐门数字）；普查逐名 Fatal 证据 `~/p5c-fatal-map.tsv`；G1 报告 `~/p5c-g1-report.json`；audit 日志 `~/p5c-audit-{bsl,comp}.log` |
 | 门日志 | `~/w7/p5-joint-gate.log`、`~/w7/p5b-quickgate.log`、`~/w7/p5-joint-evidence/` |
 | 脚本 | `~/w7/notes/tools/`（`wsl_p5_gate.sh`、`p5_ab_redmi.sh`、`p5b_codex_redmi.sh`、`wsl_build_p5_apks.sh`、`p6_census_*.{sh,py}`、`p5b-c0b-census.sh`） |
@@ -123,4 +128,5 @@
 | 68 | class-C 普查决定迁移顺序（所有 Minecraft trace 首阻塞 = `DrawElements` → Minecraft 优先） |
 | 76 | P5b 出口 = 主机门 `348d22a4` complete + 79 trace 普查 + Redmi 正确性 8/8 + 四臂 A/B |
 | 77 | Redmi 钉频期望 1050 → 1100 MHz（2026-09-16）；iris-bsl 8 组判为 fixture 123 帧上限，补充表不进 200 帧尾门表 |
+| 79 | **P5d 三轮规则（2026-09-18）**：批处理免等只允许 apply 不读残余填充任何字段的记录（`generate_mipmap` 因后端读 `GetActiveTextureUnit` 而必须等）；性能诊断以符号化调用图为准、不再从 self% 猜归属；Redmi 上 fps > ~115 的 monolith 数字视为 120 Hz vsync 封顶，配对比较以逐线程 CPU ms/帧为主指标；`sched_setaffinity` / `taskset` 在该内核对 app 线程无效，线程放置只记录 |
 | 78 | **P5c 插在 P6 之前**（2026-09-17）：`inproc` 先做到两角色之间除 wire 零直接内存访问，P6 只换传输；值类 BARRIER-PULLED 行在 P5c 过线，对象类行留 twin 表阶段；codex 无额度期间只读审计改派 Kimi（K3） |
