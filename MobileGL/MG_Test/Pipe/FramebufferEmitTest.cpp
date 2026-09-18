@@ -242,7 +242,9 @@ TEST(FramebufferEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
     X(FramebufferEmit, ADrawBufferTokenAboveTheWireWidthIsRefusedNotTruncated)                     \
     X(FramebufferEmit, ALayeredCubeAttachmentDoesNotAssertAFaceItCannotKnow)                       \
     X(FramebufferEmit, EveryNonTexturePointCarriesTheUnknownSentinelsRatherThanZero)              \
-    X(FramebufferEmit, ADeadFramebuffersNamedRecordLatchIsRetired)
+    X(FramebufferEmit, ADeadFramebuffersNamedRecordLatchIsRetired)                                 \
+    X(FramebufferEmit, TheRecordsElevenSurfacesAreTheWholePointSetTheServerReads)                \
+    X(FramebufferEmit, ADefaultFramebufferResizeReEmitsTheRecordWithItsNewExtent)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -577,6 +579,130 @@ TEST(FramebufferEmit, AnAttachmentPointAboveTheWireWidthIsRefusedNotTruncated) {
     EXPECT_EQ(Framebuffers().EmissionCount(), 1u)
         << "an attachment above the wire width was truncated into a record instead of refused";
     EXPECT_GE(Framebuffers().RefusedCount(), 1u) << "the refusal was not counted";
+}
+
+// ============================ P5e (fb), CONTRACT-P5E.md §5.4 ============================
+//
+// THE SERVER TWIN of AnAttachmentPointAboveTheWireWidthIsRefusedNotTruncated above.
+//
+// That case pins the CLIENT half: a framebuffer holding a point at or above the wire width is
+// refused rather than truncated. P5e turns that refusal into a licence the server SPENDS - the
+// by-handle attachment walk stopped iterating the frontend's 41 points and now walks
+// Color[0..7] + Depth + Stencil and nothing else, on the argument that the record's eleven
+// surfaces ARE the point set. So the statement the server relies on needs a case of its own,
+// and it has two halves:
+//
+//   1. a framebuffer that fills every point the wire can describe round-trips ALL of them into
+//      the applier's record - so "eleven" is not eleven minus whatever the emitter dropped;
+//   2. when a point above the width appears, the record the server is holding does not change
+//      at all. The refusal is not merely counted: the server keeps describing the framebuffer
+//      as it last legally was, rather than a truncated version of what it now is.
+//
+// Half 2 is the one that would go quiet on its own. A truncating emitter would still refuse
+// nothing, publish a record, and leave the server's walk perfectly self-consistent over eight
+// colour points while one attachment silently stopped existing.
+TEST(FramebufferEmit, TheRecordsElevenSurfacesAreTheWholePointSetTheServerReads) {
+    FramebufferScope scope;
+    const auto fbo = MakeShared<FramebufferObject>(21);
+    Vector<SharedPtr<TextureObject2D>> colors;
+    for (Uint i = 0; i < kMGPipeMaxColorAttachments; ++i) {
+        colors.push_back(MakeColorTexture(70 + i, 32));
+        fbo->AttachTexture(static_cast<FramebufferAttachmentType>(
+                               static_cast<Int>(FramebufferAttachmentType::Color0) + static_cast<Int>(i)),
+                           colors.back(), TextureUploadTarget::Texture2D);
+    }
+    const auto depth = MakeShared<RenderbufferObject>(21);
+    depth->SetInternalFormat(TextureInternalFormat::Depth24Stencil8);
+    depth->AllocateStorage(IntVec2{32, 32});
+    fbo->AttachRenderbuffer(FramebufferAttachmentType::Depth, depth);
+    const auto stencil = MakeShared<RenderbufferObject>(22);
+    stencil->SetInternalFormat(TextureInternalFormat::Depth24Stencil8);
+    stencil->AllocateStorage(IntVec2{32, 32});
+    fbo->AttachRenderbuffer(FramebufferAttachmentType::Stencil, stencil);
+    BindDrawAndRead(fbo, fbo);
+    Framebuffers().EmitFramebufferState(Ctx());
+    ASSERT_EQ(Framebuffers().RefusedCount(), 0u) << "a full but legal framebuffer was refused";
+
+    // The wire's colour width and the server's walk width are ONE number.
+    static_assert(std::size(MGPFramebufferState{}.Color) == kMGPipeMaxColorAttachments,
+                  "the server walks Color[0..kMGPipeMaxColorAttachments); the array must be that wide");
+
+    const MGPFramebufferState* const applied = MGPipeApplier().DrawFramebuffer();
+    ASSERT_NE(applied, nullptr);
+    for (Uint i = 0; i < kMGPipeMaxColorAttachments; ++i) {
+        const MGPipeHandle expected =
+            MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, colors[i]->GetLifetimeId());
+        EXPECT_FALSE(MGPipeHandleIsNull(expected)) << "colour point " << i << " minted no handle";
+        EXPECT_TRUE(applied->Color[i].Res == expected)
+            << "colour point " << i << " did not reach the server's record";
+        EXPECT_EQ(applied->Color[i].Kind, kMGPipeSurfaceKindTexture) << "at colour point " << i;
+    }
+    EXPECT_EQ(applied->Depth.Kind, kMGPipeSurfaceKindRenderbuffer) << "the Depth point";
+    EXPECT_EQ(applied->Stencil.Kind, kMGPipeSurfaceKindRenderbuffer) << "the Stencil point";
+
+    // HALF 2. A point the wire cannot describe appears; the record the server holds must not
+    // move, because a moved one would be a description of a framebuffer that does not exist.
+    const Uint64 hashBefore = applied->ContentHash;
+    const Uint64 serialBefore = MGPipeApplier().FramebufferSerial;
+    const auto beyond = MakeColorTexture(90, 32);
+    fbo->AttachTexture(static_cast<FramebufferAttachmentType>(
+                           static_cast<Int>(FramebufferAttachmentType::Color0) +
+                           static_cast<Int>(kMGPipeMaxColorAttachments)),
+                       beyond, TextureUploadTarget::Texture2D);
+    Framebuffers().EmitFramebufferState(Ctx());
+    EXPECT_GE(Framebuffers().RefusedCount(), 1u) << "the over-wide framebuffer was not refused";
+    const MGPFramebufferState* const after = MGPipeApplier().DrawFramebuffer();
+    ASSERT_NE(after, nullptr);
+    EXPECT_EQ(after->ContentHash, hashBefore)
+        << "a refused framebuffer still moved the record the server walks - the eleven surfaces "
+           "are no longer the whole point set";
+    EXPECT_EQ(MGPipeApplier().FramebufferSerial, serialBefore)
+        << "a refused framebuffer advanced FramebufferSerial, which is the server's clean gate";
+}
+
+// ============================ P5e (fb), ruling 15 / ID-98's §5.4 note ====================
+//
+// AN EGL SURFACE RESIZE RE-EMITS THE DEFAULT FRAMEBUFFER'S RECORD, extent and all.
+//
+// S3 could not settle this and flagged it: FramebufferEmit's dirty rule is
+// m_anyAttachmentGeneration plus the object/slot version, and a resize that moved NEITHER would
+// be suppressed - leaving the server with the old extent and no other source for it, because
+// under run-ahead the frontend's is unreachable. The brief's ruling 15 verified the path
+// (ClientSession's surface-changed consumer -> TextureObjectBase::PipePublishLevelDescriptor ->
+// MGP_NOTE_AGGREGATE(FramebufferAttachment) -> the framebuffer shutter) and told fb to pin it.
+//
+// THE CASE DRIVES THE CONSUMER'S OWN CALL, not a synthetic bump: AllocateStorage on the colour
+// attachment at the new extent is literally what ClientSession does when the swapchain
+// publishes a new size. No rebind, no re-attach, no draw-buffer edit - which is exactly the
+// shape that would have been suppressed.
+TEST(FramebufferEmit, ADefaultFramebufferResizeReEmitsTheRecordWithItsNewExtent) {
+    FramebufferScope scope;
+    const auto color = MakeColorTexture(95, 64);
+    const auto fbo = MakeShared<FramebufferObject>(22);
+    fbo->AttachTexture(FramebufferAttachmentType::Color0, color, TextureUploadTarget::Texture2D);
+    BindDrawAndRead(fbo, fbo);
+    Framebuffers().EmitFramebufferState(Ctx());
+
+    const MGPFramebufferState* applied = MGPipeApplier().DrawFramebuffer();
+    ASSERT_NE(applied, nullptr);
+    ASSERT_EQ(applied->Width, 64u);
+    ASSERT_EQ(applied->Height, 64u);
+    const Uint64 hashBefore = applied->ContentHash;
+    const Uint64 emissionsBefore = Framebuffers().EmissionCount();
+
+    // THE RESIZE, exactly as the surface-changed consumer performs it.
+    color->AllocateStorage(TextureUploadTarget::Texture2D, 0,
+                           MipmapInput{IntVec3{128, 96, 1}, static_cast<SizeT>(128 * 96 * 4)});
+    Framebuffers().EmitFramebufferState(Ctx());
+
+    EXPECT_GT(Framebuffers().EmissionCount(), emissionsBefore)
+        << "a resize of an attached surface published no framebuffer record - under run-ahead the "
+           "server would keep the old extent and has no other source for it";
+    applied = MGPipeApplier().DrawFramebuffer();
+    ASSERT_NE(applied, nullptr);
+    EXPECT_NE(applied->ContentHash, hashBefore) << "the resize did not move the record's content hash";
+    EXPECT_EQ(applied->Width, 128u);
+    EXPECT_EQ(applied->Height, 96u);
 }
 
 // ============================ D-D2 ============================

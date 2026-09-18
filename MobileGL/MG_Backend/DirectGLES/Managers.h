@@ -744,6 +744,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // composite: this reader hides the split behind one lookup, exactly as the wire does.
     const MG_Pipe::MGPipeShaderCsoRecord* PipeShaderCsoRecordForHandle(MG_Pipe::MGPipeHandle cso);
 
+    // P5e (fb): the texture's own TARGET, from its descriptor. The image-unit bind needs it
+    // (glBindImageTexture's layered/format rules are per target) and MGPImageView has no room
+    // for it - 24 bytes, no pad - so it is read off the resource record instead of being added
+    // to the wire. TextureTarget::Unknown when the handle names no live texture record, which
+    // every caller treats as "decline", never as a default.
+    MobileGL::TextureTarget PipeTextureTargetForHandle(MG_Pipe::MGPipeHandle res);
+
     // The pending-upload entry the applier accumulated for this (uploadTarget, level) of this
     // texture record, or null (D-D5). SERVER-SIDE STATE, and that is the whole point: the
     // client clears its own dirty flags at EMISSION for the levels the applier accepted, while
@@ -2150,6 +2157,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // still run when SyncCurrentFBO skips the READ-target sync because the same GL FBO is
             // bound as both draw and read (otherwise glReadBuffer changes would be silently dropped).
             void SyncReadBufferToBackend(const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBOObject);
+#if MOBILEGL_PIPE_PUSH
+            // P5e (fb, §5.4): the same read-buffer push keyed on the handle, for the one path
+            // that applies a read buffer without doing the rest of the sync - SyncCurrentFBO's
+            // "one object is bound to BOTH bindings" skip, where the DRAW pass already did the
+            // attachment work and only glReadBuffer is READ-target-specific.
+            void SyncReadBufferToBackendByHandle(MG_Pipe::MGPipeHandle fbo);
+#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
             // P5c (hd, CONTRACT-P5C §3.2): the framebuffer handle the CURRENT sync is keyed on.
             // A caller applying a record sets it before SyncToBackend / SyncReadBufferToBackend,
@@ -2239,6 +2253,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // did. 0 is never a live hash (a computed 0 is remapped to 1 by the client's
             // suppressor), so a zeroed memo is a guaranteed miss.
             Array<Uint64, SizeT(FramebufferTarget::FramebufferTargetCount)> m_syncedRecordHashes = {0};
+            // P5e (fb): the read-buffer decision, taken from the record alone. Both
+            // SyncReadBufferToBackend overloads funnel through it, so the rule lives in one
+            // place and the object form is visibly the half that only finds the handle.
+            // glNameForDiag is 0 on the handle arm, which reads as "the record did not say".
+            void ApplyReadBufferFromRecord(const MG_Pipe::MGPFramebufferState& record, Uint glNameForDiag);
 #endif
         };
 
@@ -2270,6 +2289,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // describes an object without claiming any binding for it, so asking the record would
         // give the wrong answer by construction.
         Bool PushedFramebufferIsBoundTo(FramebufferTarget target, MG_Pipe::MGPipeHandle fbo);
+
+        // ---- P5e (fb, CONTRACT-P5E.md §5.4): the reverse index, texture -> framebuffers ------
+        //
+        // "Which framebuffers currently have this texture attached." The detach walk
+        // (ScopedDetachedTextureFramebufferAttachments) used to answer it by iterating every
+        // live twin and reading each one's FRONTEND attachment array, which is the last place
+        // the server held a frontend framebuffer across records - id re-typed ForEachLive and
+        // named this package as the one that replaces the read. The relation is maintained
+        // where the record is consumed (SyncToBackendByHandle's attachment walk), because the
+        // record's eleven surfaces already say it.
+        //
+        // The index answers about a TEXTURE SLOT and returns whole FRAMEBUFFER handles, so a
+        // recycled framebuffer slot never answers for its predecessor. See the definition for
+        // why nothing prunes a dead row.
+        void NoteFramebufferTextureAttachments(MG_Pipe::MGPipeHandle fbo,
+                                               const MG_Pipe::MGPFramebufferState& record);
+        Vector<MG_Pipe::MGPipeHandle> FramebuffersAttachingTexture(MG_Pipe::MGPipeHandle texture);
+
+        // The record's surface for an attachment POINT, or null when this record does not
+        // describe that point at all (Color8..Color31, and the default framebuffer's FRONT/BACK
+        // tokens). MGPFramebufferState carries Color[8] + Depth + Stencil, which is every point
+        // a framebuffer can hold on the handle arm - D-C3 refuses bit 9 outright on a driver
+        // reporting more than 8 colour attachments. P5e (fb) exports it: the twin's attachment
+        // walk, the named blit's aspect plan and the detach walk all ask the same question of
+        // the same record, and a second copy of the Color/Depth/Stencil dispatch beside each of
+        // them is how one of them ends up describing a point differently from the others.
+        const MG_Pipe::MGPSurface* PushedSurfaceForAttachment(const MG_Pipe::MGPFramebufferState& record,
+                                                              FramebufferAttachmentType point);
 #endif
         // True when the read buffer names a fixed-point (norm/snorm) attachment that the
         // backend actually stores in a floating-point format. GL clamps a read from a

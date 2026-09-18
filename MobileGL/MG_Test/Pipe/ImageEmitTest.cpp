@@ -357,7 +357,8 @@ TEST(ImageEmit, AMakeCurrentClearsTheImageSetAndAdvancesItsSerial) {
     X(ImageEmit, AnInternalFormatChangeAloneStillEmitsTheSet)                                       \
     X(ImageEmit, TheApplicationsFormatAndAccessTravelUnrecast)                                    \
     X(ImageEmit, AnImageBoundTextureIsMarkedShaderImageBoundAtTheBind)                            \
-    X(ImageEmit, TheBindFeedsTheImageUnitHighWaterMark)
+    X(ImageEmit, TheBindFeedsTheImageUnitHighWaterMark)                                          \
+    X(ImageEmit, TheThreeAccessConstantsArePinnedOnBothSidesOfTheWire)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -485,6 +486,87 @@ void main() { imageStore(img, ivec2(0), vec4(1.0)); }
         EXPECT_EQ(view.Layered, 0u);
         EXPECT_EQ(view.Layer, 0u);
         GL::UseProgram(0);
+    }
+
+    // ============================ P5e, ruling 16 / ID-94 ============================
+    //
+    // THE THREE CONSTANTS, PINNED ON BOTH SIDES OF THE WIRE, in one case, because the whole of
+    // ruling 16 is that they are ONE table and not two that happen to agree.
+    //
+    // Before P5e the client folded the three GL names into 0/1/2 in ImageEmit.h and the server
+    // read MGPImageBinding::Access off the FRONTEND instead of decoding the byte, under a
+    // comment saying the encoding "does not exist at the contract commit" - which was stale
+    // when it was written. c0e moved the numbers into MG_Pipe/MGPipeValueTypes.h and fb made
+    // the backend decode through them, so the failure this case exists to catch is the two
+    // halves drifting: an encode that writes 1 for GL_WRITE_ONLY against a decode that reads 1
+    // as GL_READ_WRITE is a `writeonly` image the shader can read back, and no pixel test on a
+    // lockstep tree would see it because the frontend value was answering.
+    //
+    // 0 IS READ-ONLY AND THAT IS ASSERTED RATHER THAN ASSUMED: a zeroed MGPImageView must
+    // decode to the most restrictive access, so a record that forgot to set the field can only
+    // lose a write, never invent one.
+    TEST(ImageEmit, TheThreeAccessConstantsArePinnedOnBothSidesOfTheWire) {
+        // --- the numbers themselves -------------------------------------------------------
+        EXPECT_EQ(kMGPipeImageAccessReadOnly, 0u);
+        EXPECT_EQ(kMGPipeImageAccessWriteOnly, 1u);
+        EXPECT_EQ(kMGPipeImageAccessReadWrite, 2u);
+        EXPECT_EQ(static_cast<Uint8>(MGPipeImageAccess::Count), 3u);
+
+        // --- the CLIENT half: the encode names those enumerators, not literals -------------
+        EXPECT_EQ(MGPipeEncodeImageAccess(GL_READ_ONLY), kMGPipeImageAccessReadOnly);
+        EXPECT_EQ(MGPipeEncodeImageAccess(GL_WRITE_ONLY), kMGPipeImageAccessWriteOnly);
+        EXPECT_EQ(MGPipeEncodeImageAccess(GL_READ_WRITE), kMGPipeImageAccessReadWrite);
+
+        // --- the SERVER half: the decode is the inverse, and only those three are valid -----
+        EXPECT_TRUE(MGPipeImageAccessIsValid(kMGPipeImageAccessReadOnly));
+        EXPECT_TRUE(MGPipeImageAccessIsValid(kMGPipeImageAccessWriteOnly));
+        EXPECT_TRUE(MGPipeImageAccessIsValid(kMGPipeImageAccessReadWrite));
+        EXPECT_FALSE(MGPipeImageAccessIsValid(3))
+            << "a fourth value must be Fatal{ProtocolCorruption, \"ImageView.Access\"} at the reader";
+        EXPECT_EQ(MGPipeDecodeImageAccess(kMGPipeImageAccessReadOnly), MGPipeImageAccess::ReadOnly);
+        EXPECT_EQ(MGPipeDecodeImageAccess(kMGPipeImageAccessWriteOnly), MGPipeImageAccess::WriteOnly);
+        EXPECT_EQ(MGPipeDecodeImageAccess(kMGPipeImageAccessReadWrite), MGPipeImageAccess::ReadWrite);
+
+        // The two predicates the backend's writable-image set and the barrier plan ask with.
+        EXPECT_TRUE(MGPipeImageAccessReads(MGPipeImageAccess::ReadOnly));
+        EXPECT_FALSE(MGPipeImageAccessWrites(MGPipeImageAccess::ReadOnly));
+        EXPECT_FALSE(MGPipeImageAccessReads(MGPipeImageAccess::WriteOnly));
+        EXPECT_TRUE(MGPipeImageAccessWrites(MGPipeImageAccess::WriteOnly));
+        EXPECT_TRUE(MGPipeImageAccessReads(MGPipeImageAccess::ReadWrite));
+        EXPECT_TRUE(MGPipeImageAccessWrites(MGPipeImageAccess::ReadWrite));
+
+        // --- and the byte that actually crosses, for each of the three -------------------
+        //
+        // ROUND TRIP THROUGH A REAL BIND, not through the encode alone: what the case is about
+        // is the value the SERVER will decode, and that is MGPImageView::Access as the emitter
+        // wrote it.
+        const struct {
+            GLenum gl;
+            Uint8 encoded;
+            MGPipeImageAccess decoded;
+        } kCases[] = {
+            {GL_READ_ONLY, kMGPipeImageAccessReadOnly, MGPipeImageAccess::ReadOnly},
+            {GL_WRITE_ONLY, kMGPipeImageAccessWriteOnly, MGPipeImageAccess::WriteOnly},
+            {GL_READ_WRITE, kMGPipeImageAccessReadWrite, MGPipeImageAccess::ReadWrite},
+        };
+        for (const auto& c : kCases) {
+            EmitterScope scope;
+            const GLuint program = MakeComputeProgram(kImageCompute);
+            GL::UseProgram(program);
+            const GLuint texture = MakeImageTexture();
+            GL::BindImageTexture(1, texture, 0, GL_FALSE, 0, c.gl, GL_RGBA8);
+            Emitter().EmitShaderImages(Ctx());
+            ASSERT_GE(Emitter().ImageSetCount(), 1u);
+            ASSERT_GE(Emitter().LastShaderImages().Count, 2u);
+            const MGPImageView& view = Emitter().LastImageViews()[1];
+            EXPECT_EQ(view.Access, c.encoded)
+                << "glBindImageTexture(access=0x" << std::hex << static_cast<Uint>(c.gl) << std::dec
+                << ") did not travel as the shared constant";
+            ASSERT_TRUE(MGPipeImageAccessIsValid(view.Access));
+            EXPECT_EQ(MGPipeDecodeImageAccess(view.Access), c.decoded)
+                << "the server's decode does not invert the client's encode";
+            GL::UseProgram(0);
+        }
     }
 
     TEST(ImageEmit, AnAccessModeChangeAloneStillEmitsTheSet) {
