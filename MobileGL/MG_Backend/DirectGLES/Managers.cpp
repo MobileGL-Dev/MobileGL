@@ -223,37 +223,45 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // nor the client's allocator is touched from there any more.
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
                 !MG_Remote::Server::ServerLoop::OnApplyThread()) {
-                if (MG_Remote::Client::EmitObjectDeathRecord(kind, lifetimeId) !=
-                    MG_Remote::Client::ObjectDeathEmit::NoSession) {
-                    return;
-                }
-                // NoSession is the ONE shape the record cannot carry: a transport configured
-                // with no client session at all - a ServerLoop fixture driving a server role
-                // with no client, never a real split (there a session exists whenever the
-                // server does). The server loop IS there, so the death takes the delivery
-                // that predates the record, kept VERBATIM for exactly this arm: a stack
-                // struct hopped to the apply thread, which runs the switch below. NoHandle
-                // does NOT land here - a handle that never existed has no twin to kill (§5.2)
-                // - and a loop that is not RUNNING (teardown, pre-Start) has no thread to hop
-                // to; the twin dies with the server either way.
-                if (!MG_Remote::Server::ServerLoopInstance().Running()) {
-                    return;
-                }
-                struct Death { MG_Pipe::MGPipeKind kind; Uint64 lifetimeId; } death{kind, lifetimeId};
-                MG_Remote::Server::ServerLoopInstance().RunOnApplyThread(
-                    +[](void* user) -> MobileGLResult {
-                        const auto& death = *static_cast<Death*>(user);
-                        OnFrontendStateObjectDestroyed(death.kind, death.lifetimeId);
-                        return MOBILEGL_OK;
-                    }, &death);
+                // P5e (id), CONTRACT-P5E §4.4: THE RECORD IS THE ONLY DELIVERY NOW. What used
+                // to sit here was a mailbox hop for the ONE shape the record cannot carry - a
+                // transport configured with no client session at all, i.e. a ServerLoop
+                // fixture driving a server role with no client, never a real split (there a
+                // session exists whenever the server does). It posted a stack struct to the
+                // apply thread, which re-entered this function and ran the switch below; that
+                // switch's DestroyByLifetimeId probes and FREES in the CLIENT'S allocator from
+                // the apply thread, which is precisely the read P5e is retiring - and it is
+                // not a read a barrier could ever make safe, because under run-ahead there is
+                // no wait behind which the allocator stands still.
+                //
+                // WHAT REPLACES IT: nothing, and that is the answer rather than an omission. A
+                // fixture with no client session has no client allocator worth the name and no
+                // handle ever crossed, so there is no twin the server built from a record; its
+                // twins die with the backend at Stop (InProcessTeardown / the registry's own
+                // destruction), which is what already happened for every death raised past
+                // `Running() == false`. ID-96 enumerates the fixtures this changed and what
+                // each one drives instead; every one of them now drives `object_death` by
+                // handle through the applier, which is the delivery a real split uses.
+                // ID-96, ANSWERED BY MEASUREMENT: the set of fixtures that lose death delivery
+                // here is EMPTY. A probe that aborted in exactly this branch (NoSession with a
+                // RUNNING server loop, i.e. the only shape the deleted hop ever fired for) was
+                // run over the whole unit lane (2204 entries) and the whole integration-split
+                // lane (111) and never fired once. The one fixture family that could reach it -
+                // ServerLoopTest.cpp's ServerFixture / EglServerFixture, the only server role in
+                // the tree with no client session - has exactly one case that lets a re-keyed
+                // frontend object die off the apply thread
+                // (ServerLoopEglTest.FrontendFramebufferDeathDeletesOnTheContextOwner), and that
+                // case is already refused at its FIRST step by P5c's allocator guard, so its
+                // `framebuffer.reset()` was unreachable at 2fde7034 too.
+                (void)MG_Remote::Client::EmitObjectDeathRecord(kind, lifetimeId);
                 return;
             }
-            // P5c merge coordination: the record arm above carries every death a real split
-            // sees; what still lands HERE through the mailbox is the NoSession server-only
-            // fixture arm, whose DestroyByLifetimeId probes the client allocator from the
-            // apply thread. Those probes ride inside the G6 scope (CONTRACT-P5C §5.2, the
-            // amended ruling) - named debt that dies with the mailbox hop.
-            const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
+            // Falling through HERE under a transport means the death was raised ON the apply
+            // thread - the server backend destroying a frontend object it created itself
+            // (Magma's hidden blit/depth-mipmap resources). Those sites carry their own named
+            // scope (MagmaP7AllocatorDebtScope), so the allocator probe below is admitted
+            // there and refused everywhere else; this function no longer opens a scope of its
+            // own, because the one arm that needed it is the mailbox hop that just went.
 #endif
             switch (kind) {
             case MG_Pipe::MGPipeKind::Texture:
@@ -325,6 +333,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace
 
 #if MOBILEGL_BUILD_DISAGGREGATED
+    // P5e (id), CONTRACT-P5E §4.2 / §4.3: THE TWIN DEATH MOMENT, AND THE ABA ANSWER.
+    //
+    // The moment: the apply of `object_death` / the kind's own delete opcode / `resource_destroy`
+    // - in RING ORDER, i.e. after every verb that named the dying generation and before any
+    // record that names the slot's next owner - or the server backend's own destruction at Stop
+    // (InProcessTeardown). `applier_reset` touches neither twins nor object records
+    // (PipeApply.h's MGPipeApplierReset), so a make-current kills nothing.
+    //
+    // The ABA answer, which is what makes "no wait is added at any delete" (§2.7) safe: Gen
+    // moves ONLY on reuse (SlotAllocator.cpp), the client frees a slot only AFTER its death
+    // record went out (PipeFill.cpp's NotifyAndFree), and the ring is in order. So at the
+    // server every record naming {s, g} is applied before object_death{s, g}, which is applied
+    // before create{s, g+1}. THE ORDERING IS THE ARGUMENT AND THE GEN COMPARE IS THE PROOF:
+    //   * GetOrCreate({s, g+1}) on a live {s, g} entry RE-MINTS - it resets the twin, so the
+    //     successor never inherits the dead object's driver ids (SlotTables.h);
+    //   * FindByHandle({s, g}) after the recycle answers NULL, so a stale handle resolves to
+    //     nothing rather than to its successor's twin;
+    //   * a backward {s, g-1} is REFUSED rather than adopted, so a late record cannot destroy
+    //     the incumbent.
+    // Which means even a SKIPPED death (an object that never crossed emits none,
+    // WireTables.cpp) is answered by the forward-Gen reset alone. Pinned by
+    // DirectGLESSlotTable.AGenerationBehindTheLiveTwinIsRefusedRatherThanAdopted (all three
+    // clauses, on the table itself) and end to end by the CtWireScenario recycle cases.
     Bool ReleaseTwinsForWireObjectDeath(MG_Pipe::MGPipeHandle handle, MG_Pipe::MGPipeKind kind) {
         // The handle-keyed twin of the notice switch above, and deliberately NOT that switch:
         // the record carried the handle, so no lifetime id is probed and the client's
