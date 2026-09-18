@@ -522,31 +522,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // TODO: deletion for deleted objects
 
     namespace BufferImpl {
-        // P5e (vi), CONTRACT-P5E §5.1 + §5.8 (ruling 1 / ID-81): THE ARM SELECTOR for this
-        // family, and it is a conjunction on purpose.
-        //
-        //   Transport != Monolith   the record arm exists because there is no frontend VAO on
-        //                           this side of a real split. Under Transport=monolith the
-        //                           push build keeps its frontend arms token for token - that
-        //                           is what the verify comparator compares against, and what
-        //                           makes MOBILEGL_IPC_RUN_AHEAD=0 a pure wait-rule A/B on
-        //                           identical server code rather than an arm swap.
-        //   the family bit          `0x0ff` (bit 7 on, bit 8 off) is a supported A/B and must
-        //                           keep running the legacy vertex-input walk; the bit is
-        //                           already the gate the rest of this family reads.
-        //
-        // It is NOT gated on run-ahead. The records carry the whole family either way, so a
-        // lockstep split session reads them too and the wait rule changes nothing here - which
-        // is the only reason ra can flip one constant at the end of the phase and change no
-        // backend code at all.
-        inline Bool VertexInputReadsRecords() {
-#if MOBILEGL_BUILD_DISAGGREGATED
-            return MG_Config::Transport != MG_Config::TransportMode::Monolith &&
-                   VertexInputSubsystemEnabled();
-#else
-            return false;
-#endif
-        }
+        // P5e (mv): THE ARM SELECTOR of this family - VertexInputReadsRecords() - moved to
+        // Managers.h, unchanged. MultiDraw.cpp is a second translation unit on the same draw
+        // path and has to select the same arm; a copy of the conjunction there would be two
+        // selectors for one family. Its rationale travelled with it.
 
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P5e (vi): "does this draw fetch any attribute out of the application's own memory",
