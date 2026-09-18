@@ -30,19 +30,21 @@
 
 namespace MobileGL::MG_Remote::Server {
 
-    namespace {
-        // P5e (ra, CONTRACT-P5E §1 / §6): DOES THIS SERVER PUBLISH kCapRunAheadApply? The
-        // question is asked of the server's OWN CallMask and not of a build constant, because
-        // "the client may run ahead" is exactly what that bit says and Magma never sets it.
-        // A session with no CallMask yet (the bring-up window, a fixture that never called
-        // SetCapabilityBits) answers false: no client can have latched run-ahead against a
-        // snapshot that was never published.
-        Bool ServerPublishesRunAhead() {
-            const ServerSession* session = ServerSession::Active();
-            if (session == nullptr || !session->CallMaskIsSet()) return false;
-            return (session->CallMask() & static_cast<Uint64>(MG_Pipe::kCapRunAheadApply)) != 0;
-        }
-    } // namespace
+    // P5e (ra, CONTRACT-P5E §1 / §6): DOES THIS SERVER PUBLISH kCapRunAheadApply? The
+    // question is asked of the server's OWN CallMask and not of a build constant, because
+    // "the client may run ahead" is exactly what that bit says and Magma never sets it.
+    // A session with no CallMask yet (the bring-up window, a fixture that never called
+    // SetCapabilityBits) answers false: no client can have latched run-ahead against a
+    // snapshot that was never published.
+    //
+    // P5e (gl, ID-111): PROMOTED OUT OF THE ANONYMOUS NAMESPACE, unchanged in body. It is now
+    // the second conjunct of the barriered stamp as well as Present's frame-serial gate, and
+    // the red-once has to be able to assert what it answers for the session it built.
+    Bool MGPipeServerPublishesRunAhead() {
+        const ServerSession* session = ServerSession::Active();
+        if (session == nullptr || !session->CallMaskIsSet()) return false;
+        return (session->CallMask() & static_cast<Uint64>(MG_Pipe::kCapRunAheadApply)) != 0;
+    }
 
     ReplyPool::ReplyPool(void* base, Uint64 sizeBytes, Uint32 slotCount, Uint32 slotBytes)
         : m_base(static_cast<Uint8*>(base)), m_size(sizeBytes), m_slots(slotCount), m_slotBytes(slotBytes) {}
@@ -311,7 +313,7 @@ namespace MobileGL::MG_Remote::Server {
         // peer that has not been re-built - and on a server that PUBLISHES the run-ahead cap it
         // is a protocol fault, because such a client is pacing on this answer and a 0 would
         // acknowledge a frame nobody asked about.
-        if (present.FrameSerial == 0 && ServerPublishesRunAhead()) {
+        if (present.FrameSerial == 0 && MGPipeServerPublishesRunAhead()) {
             MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"Present.FrameSerial\"} - a run-ahead "
                     "server was handed present serial 0. The client mints this 1-based and "
                     "waits on it for its credit (CONTRACT-P5E §2.4); returning a credit for "
@@ -1176,10 +1178,27 @@ namespace MobileGL::MG_Remote::Server {
         // §4.4 exemptions from a probe the client's own wait still makes safe - a refusal with
         // no defect behind it. The predicate is computed on every record all the same, so it is
         // exercised for the whole phase rather than first run on the day it starts deciding.
+        //
+        // AND THE SERVER'S OWN CAPABILITY IS THE SECOND CONJUNCT (P5e gl, ID-111). The constant
+        // above says what the CLIENT will do once ra's wait rule is live; it says nothing about
+        // which server this is. kCapRunAheadApply is never published on DirectVulkan (ID-90,
+        // MGPipeRunAheadCapBitsFor), yet draw_vbo / blit / clear / launch_grid are all
+        // kWaitNone - so a stamp that read the build constant alone would, on the day it flips,
+        // have a MAGMA server mark every draw record UNBARRIERED while its client is still
+        // lockstep. CountBarrierPull (PipeInputs.cpp) is an unconditional Fatal on an
+        // unbarriered pull, no knob involved, and Magma's residual fill is its ONLY source for
+        // the seven pointer-backed fields: Magma would die on its first draw and take
+        // MagmaP7AllocatorDebtScope's exemption with it.
+        //
+        // BOTH PREDICATES ARE COMPUTED UNCONDITIONALLY, as arguments rather than as the arms of
+        // a short-circuit, which is ID-103's reason extended to the capability probe: they are
+        // exercised on every record for the whole phase rather than first running on the day
+        // they start deciding.
         const Bool wireSaysBarriered = MG_Pipe::MGPipeBarriered(
             static_cast<MG_Pipe::MGPWireOp>(record.kind), record.payload, MG_Pipe::MGPipeApplier());
         MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(
-            MG_Pipe::kMGPipeP5eClientWaitRuleLanded ? wireSaysBarriered : true);
+            MGPipeApplierStampsBarriered(MG_Pipe::kMGPipeP5eClientWaitRuleLanded,
+                                         MGPipeServerPublishesRunAhead(), wireSaysBarriered));
         // ORDER IS THE CONTRACT'S: stamp, then apply. The stamp is what makes any server-side
         // read of gPipeInputs legal at all (PipeApplier.h's block 1), so a record applied
         // before it aborts on the FIRST field inside SyncRenderState.
