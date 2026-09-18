@@ -9775,14 +9775,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             const MG_Pipe::MGPipeHandle dstHandle = MG_Pipe::MGPipeApplier().VerbCopyTexDst;
             const auto* dstRecord = PipeTextureRecordForHandle(dstHandle);
-            auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.FindByHandle(dstHandle);
-            if (backendTextureSlot == nullptr || *backendTextureSlot == nullptr || dstRecord == nullptr) {
+            // P5e (tx2): SYNCED, not merely looked up. The destination of a copy is not sampled
+            // by the draw program, so the per-draw unit list - which is the sampler-view window
+            // now - never brings it across; before P5e the frontend walk over every slot of every
+            // touched unit happened to sync it as a side effect. The named narrowing (P5e-5) says
+            // the union that still covers every texture includes "the waited texture ops", and
+            // this is one of them: it syncs its own endpoint by handle.
+            auto& backendTexture = TextureImpl::SyncTextureToBackendByHandle(dstHandle);
+            if (!backendTexture || dstRecord == nullptr) {
                 MGLOG_E_ONCE("CopyTexImage2D: the verb's destination texture {%u, %u} has no twin "
                              "or no applier record on this side",
                              dstHandle.Slot, dstHandle.Gen);
                 return;
             }
-            dstBackendTexture = backendTextureSlot->get();
+            dstBackendTexture = backendTexture.get();
             mgInternalFormat = static_cast<TextureInternalFormat>(dstRecord->Desc.InternalFormat);
         } else
 #endif
@@ -9890,14 +9896,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // client's unit binding slot or the client allocator (T2/T4).
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             const MG_Pipe::MGPipeHandle dstHandle = MG_Pipe::MGPipeApplier().VerbCopyTexDst;
-            auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.FindByHandle(dstHandle);
-            if (backendTextureSlot == nullptr || *backendTextureSlot == nullptr) {
+            // P5e (tx2): synced by handle - see CopyTexImage2D's note. A copy destination is not
+            // in the sampler-view window, so nothing else on this path would build its twin.
+            auto& backendTexture = TextureImpl::SyncTextureToBackendByHandle(dstHandle);
+            if (!backendTexture) {
                 MGLOG_E_ONCE("CopyTexSubImage2D: the verb's destination texture {%u, %u} has no "
                              "twin on this side",
                              dstHandle.Slot, dstHandle.Gen);
                 return;
             }
-            dstBackendTexture = backendTextureSlot->get();
+            dstBackendTexture = backendTexture.get();
         } else
 #endif
         {
