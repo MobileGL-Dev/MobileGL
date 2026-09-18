@@ -423,6 +423,27 @@ namespace MobileGL::MG_Pipe {
             static_assert(MGPipeVerbForWireOp(MGPWireOp::DrawVbo) == MGPipeVerb::DrawArrays,
                           "the draw family's representative row moved; the fallback below names "
                           "draw_vbo because that is the record every kDraw verb emits");
+            // ---- P5e (ra2), ID-133: AND THE CLIENT'S HALF OF ESCALATION (iii) --------------
+            //
+            // The server escalates a PLAIN multi-draw record (`NumDraws > 1` and not indirect)
+            // because Espryt's indirect tiers still pull the client's GL_DRAW_INDIRECT_BUFFER
+            // binding at apply. The fill decision is asked HERE, before the record exists, so
+            // it cannot read NumDraws - it asks the verb instead, and the three verbs below are
+            // exactly the ones whose record can carry NumDraws > 1 without kDrawIsIndirect.
+            //
+            // THE DIRECTION OF THE INEQUALITY IS THE SAFETY ARGUMENT, and it is worth stating
+            // because the two clauses are spelled differently. The client's set must CONTAIN
+            // the server's: a record the server calls barriered whose fields the client did not
+            // fill would be an ADMITTED pull of a stale value - legal-looking and wrong, which
+            // is worse than the abort. It does contain it, because `NumDraws > 1` can only come
+            // from a glMultiDraw* entry point, and the `MultiDraw*Indirect*` verbs set
+            // kDrawIsIndirect and are therefore NOT escalated on either side. The reverse
+            // inclusion is not needed: a verb the client fills for and the server then calls
+            // unbarriered costs a fill nobody reads, never a wrong answer.
+            const Bool plainMultiDraw = verb == MGPipeVerb::MultiDrawArrays ||
+                                        verb == MGPipeVerb::MultiDrawElements ||
+                                        verb == MGPipeVerb::MultiDrawElementsBaseVertex;
+            if (plainMultiDraw) return true;
             if (op == MGPWireOp::kOpCount &&
                 kMGPipeVerbClass[static_cast<SizeT>(verb)] == MGPipeVerbClass::kDraw) {
                 op = MGPWireOp::DrawVbo;

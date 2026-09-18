@@ -916,10 +916,13 @@ namespace MobileGL::MG_Pipe {
     //   1. MGPipeWaitClassFor(op) != kWaitNone            the static column (§2.2)
     //   2. kCtxVerb with an open transform-feedback span  escalation (i): XFB stays lockstep
     //   3. draw_vbo carrying kDrawClientArrays            escalation (ii): client vertex arrays
+    //   4. draw_vbo with NumDraws > 1 and NOT indirect    escalation (iii): plain multi-draw
     //
     // NO OTHER RUNTIME ESCALATION EXISTS. Adding one is an integrator ruling and a row in the
-    // contract, not a condition somebody adds at a call site - because a fourth clause that only
-    // one side computes is the same silent failure one level down.
+    // contract, not a condition somebody adds at a call site - because a fifth clause that only
+    // one side computes is the same silent failure one level down. (iii) is ID-133's, and
+    // ID-118's precedent is the one it follows: move the record into a barriered class rather
+    // than special-case the field its apply still pulls.
     //
     // Escalation (ii) is a REFUSAL under run-ahead (§5.1), so on a run-ahead server it never
     // reaches the sink at all; it is here so the predicate is TOTAL and so the lockstep arm,

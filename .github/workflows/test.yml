@@ -1380,6 +1380,66 @@ jobs:
           fi
           echo "integration-magma-split is red by design on ${marker}"
 
+      # ---- P5e (ra2), ID-134 / ID-82: THE CLIENT-ARRAY LANE, EXPECTED RED UNDER RUN-AHEAD ----
+      #
+      # The two DirectGLES.Split.ClientVertexArrayScenario entries draw from a vertex array in
+      # the application's OWN memory. The server uploads those bytes by dereferencing a raw
+      # client pointer per draw, which is exactly the read rule F forbids once the client stops
+      # waiting - so ID-82 makes the draw a NAMED REFUSAL under run-ahead and gives the staging
+      # form to P8. Aborting is therefore the DESIGNED behaviour, and a lane that demanded these
+      # entries green would be demanding that the refusal not fire.
+      #
+      # THE LABEL, AND WHY IT IS NOT `integration-split-clientarrays` (ID-131): `ctest -L` is a
+      # REGEX. That spelling is matched by `-L integration-split` as a substring, so the entries
+      # would still be in the lane they were moved out of while every listing showed them
+      # renamed. Counted, not assumed: `-L integration-split` went 181 -> 179 and
+      # `-L integration-gpu` 1359 -> 1357 when this label landed.
+      #
+      # IT BRANCHES ON WHETHER RUN-AHEAD IS ACTUALLY ARMED, and that is not hedging - it is the
+      # only formulation that is a real assertion on BOTH heads. kMGPipeP5eRunAheadReady is a
+      # BUILD constant (MG_Backend/Init.cpp): on a head where it is false no environment can arm
+      # run-ahead, the refusal is unreachable, and these entries are green - so a step that
+      # simply demanded red would fail for the one reason that is not a defect. The client says
+      # which world it is in, in its own log line, and the step reads that and then demands the
+      # matching outcome. When the flip lands for good, delete the green branch.
+      - name: Integration-clientarrays-split - expected red under run-ahead (ID-82 / ID-134)
+        working-directory: build-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_TRANSPORT: "inproc"
+        run: |
+          ulimit -c unlimited
+          logs=MobileGL/MG_IntegrationTest/split-logs
+          rm -f "${logs}"/*ClientVertexArrayScenario*.log 2>/dev/null || true
+          rc=0
+          ctest -L integration-clientarrays-split --no-tests=error -j 1 \
+            > "${RUNNER_TEMP}/clientarrays.txt" 2>&1 || rc=$?
+          tail -5 "${RUNNER_TEMP}/clientarrays.txt"
+          if ! grep -rqF "run-ahead ARMED" "${logs}"/*ClientVertexArrayScenario*.log 2>/dev/null; then
+            # kMGPipeP5eRunAheadReady is false on this head: the client is lockstep, vi's arm is
+            # alive and these entries are the positive control they were registered as.
+            if [ "${rc}" -ne 0 ]; then
+              echo "::error::integration-clientarrays-split is red WITHOUT run-ahead armed. Under lockstep the client-memory array path is legal and vi keeps it working, so this is a real regression in that arm and not ID-82's refusal."
+              exit 1
+            fi
+            echo "integration-clientarrays-split is green: run-ahead is not armed on this build, so ID-82's refusal is unreachable"
+            exit 0
+          fi
+          if [ "${rc}" -eq 0 ]; then
+            echo "::error::integration-clientarrays-split went GREEN with run-ahead ARMED. ID-82 refuses a client-memory vertex array under run-ahead by name, so a green run means the refusal did not fire and the server dereferenced a client pointer from an unbarriered record. If P8 has landed the staged form, delete this step and fold the entries back into integration-split."
+            exit 1
+          fi
+          marker='Fatal{UnmigratedVerb, "'
+          if ! grep -rhoE 'Fatal\{UnmigratedVerb, "(Multi)?DrawArrays\+CLIENT_ARRAYS"\}' \
+                 "${logs}"/*ClientVertexArrayScenario*.log 2>/dev/null | sort -u | grep -q CLIENT_ARRAYS; then
+            echo "::error::integration-clientarrays-split is red but no private log carries ${marker}...+CLIENT_ARRAYS\"} - the lane failed for some OTHER reason, which is a defect rather than the expected-red control"
+            grep -rhoE '(Fatal|Admitted)\{[A-Za-z]*, "[^"]*"\}' "${logs}"/*ClientVertexArrayScenario*.log 2>/dev/null | sort | uniq -c | sort -rn | head
+            exit 1
+          fi
+          echo "integration-clientarrays-split is red by design on:"
+          grep -rhoE 'Fatal\{UnmigratedVerb, "(Multi)?DrawArrays\+CLIENT_ARRAYS"\}' \
+            "${logs}"/*ClientVertexArrayScenario*.log | sort -u
+
       - name: Upload strict lane logs
         if: always()
         uses: actions/upload-artifact@v7

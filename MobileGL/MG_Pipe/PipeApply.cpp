@@ -3015,6 +3015,33 @@ namespace MobileGL::MG_Pipe {
         if (op == MGPWireOp::DrawVbo && payload != nullptr) {
             const auto& draw = *static_cast<const MGPDrawInfo*>(payload);
             if ((draw.Flags & static_cast<Uint8>(kDrawClientArrays)) != 0) return true;
+            // 4. Escalation (iii), ID-133: a PLAIN multi-draw - NumDraws > 1 and not indirect.
+            //    Espryt's multi-draw tiers are chosen on the SERVER and per batch
+            //    (MultiDraw.cpp's ResolveTierForBatch), and the two indirect tiers reach
+            //    MultiDrawImpl::RunIndirect, whose apply still reads the client's
+            //    GL_DRAW_INDIRECT_BUFFER binding slot (BoundDrawIndirectBufferId, :87). That
+            //    is a BARRIER_PULLED field whose retiring phase is P8, so under run-ahead an
+            //    unbarriered record reading it is `Fatal{UnmigratedPipeInput,
+            //    "GetBufferBindingSlot@DrawArrays"}` - 18 lane entries on the two tier lanes.
+            //
+            //    WHY THE KEY IS THE RECORD AND NOT THE TIER, which is the thing a reader will
+            //    want to check: there is exactly ONE draw opcode. Every one of the twenty draw
+            //    entry points collapses onto draw_vbo (MGPDrawInfo's header says so), and the
+            //    tier is resolved on the server, per batch, from driver caps the client does
+            //    not hold - so "escalate the indirect multi-draw op" has no op to name and no
+            //    predicate both roles could compute. NumDraws > 1 is the narrowest wire fact
+            //    that CONTAINS the reaching set: RunIndirect is reachable only from
+            //    DrawElementsBatch, which only a multi-draw record enters.
+            //
+            //    AND kDrawIsIndirect IS EXCLUDED, which is what keeps Sodium's draw call out of
+            //    it: a genuinely indirect record carries its buffer as a handle in the second
+            //    tail and its apply resolves from that (ResolveIndirectCommandBytes' split
+            //    arm), so it pulls nothing and needs no wait. NumDraws is 0 there, so the test
+            //    is written `> 1` and the flag test is belt to that brace - both are stated
+            //    because the reason each holds is different.
+            if (draw.NumDraws > 1 && (draw.Flags & static_cast<Uint8>(kDrawIsIndirect)) == 0) {
+                return true;
+            }
         }
         return false;
     }
