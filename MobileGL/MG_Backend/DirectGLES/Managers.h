@@ -1945,7 +1945,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // with a handle noted syncs from the record and tolerates a null frontend object,
             // one without it is the monolith-glue half and reads the object as it always did.
             //
-            // Stamped by SyncTextureToBackendByHandle / ResolveTextureTwin and never cleared:
+            // Stamped by SyncTextureToBackendByHandle and SyncMipmapsToBackendByHandle - the two
+            // entries that HAVE a handle - and never cleared afterwards:
             // a slot recycled to {s, g+1} RESETS the twin (SlotTables.h's forward-Gen rule), so
             // a stale handle cannot outlive the object it names.
             MG_Pipe::MGPipeHandle m_pushedSyncHandle = MG_Pipe::kMGPipeNullHandle;
