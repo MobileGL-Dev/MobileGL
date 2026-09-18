@@ -166,6 +166,9 @@ TEST(FieldOwnershipTest, TheSevenStickyForwardsAgreeWithTheirFieldRows) {
 TEST(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
     GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
 }
+TEST(FieldOwnershipTest, TheAdmittedPullTableIsID84sDerivationAndNotAList) {
+    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
+}
 TEST(FieldOwnershipTest, TheResidualFillsSuppliedMemoReKeysOnEveryInputThatMovesAnAnswer) {
     GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
 }
@@ -383,6 +386,79 @@ TEST_F(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
     // ... and a record that is part of a verb rather than a boundary of one.
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::SetDynamicState), MGPipeVerb::kVerbCount);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::GetCaps), MGPipeVerb::kVerbCount);
+}
+
+// P5e (gl), ID-116: THE §7 ALLOWLIST IS A DERIVATION, AND THIS RESTATES ITS RULE INDEPENDENTLY.
+//
+// The generator emits kMGPipeAdmittedPullMask by joining three tables; the header carries a
+// static_assert that every admitted bit is a BARRIER-PULLED field of its verb's class. What no
+// static_assert in that header can check is the SECOND conjunct, because the wait column lives
+// in another generated file: this case walks the stamp map itself and asserts that a verb with
+// an admitted bit has an op the client actually waits behind. A derivation that dropped that
+// term would still produce a plausible table - which is precisely how the hand-kept copy in
+// test.yml came to admit GetTextureObject@CopyImageSubData, a read of client memory on a record
+// nothing parks behind.
+TEST_F(FieldOwnershipTest, TheAdmittedPullTableIsID84sDerivationAndNotAList) {
+    // The largest survivor of the lane, and the row the hand-kept copy omitted (21 entries).
+    EXPECT_TRUE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetFramebufferBindingSlot,
+                                          MGPipeVerb::ReadPixels))
+        << "read_pixels is kWaitReply and GetFramebufferBindingSlot is BARRIER-PULLED in the "
+           "kReadback mask, so ID-84 admits it; a lane that calls this red is red on a debt "
+           "that P7 owes, not on anything P5e broke";
+    // ... and the debt P5e exists to RETIRE is not forgiven: draw_vbo is kWaitNone, so the
+    // client is not parked behind the record and there is nothing for an allowlist to admit.
+    EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetProgramForDraw,
+                                           MGPipeVerb::DrawArrays))
+        << "the draw path's pull became admitted - the allowlist is now forgiving the 61 lane "
+           "entries this phase is being run to fix";
+    EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetBoundVertexArray,
+                                           MGPipeVerb::DrawArrays));
+    // A field that is not a debt at all is never admitted, on any verb.
+    EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetRenderStateParameters,
+                                           MGPipeVerb::ReadPixels));
+    // An out-of-range verb answers false rather than reading off the end: CountBarrierPull is
+    // reached from a stamp, and a stamp is only as good as the op that produced it.
+    EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetFramebufferBindingSlot,
+                                           MGPipeVerb::kVerbCount));
+
+    // THE RULE, RESTATED OVER THE WHOLE TABLE. The stamp map is inverted here rather than
+    // assumed: only an op MGPipeVerbForWireOp names can ever be the record a pull is reported
+    // against, so a verb with no op admits nothing, and a verb whose every op is kWaitNone
+    // admits nothing either.
+    Bool waitedFor[kMGPipeVerbCount] = {};
+    for (SizeT op = 0; op < static_cast<SizeT>(MGPWireOp::kOpCount); ++op) {
+        const MGPipeVerb verb = MGPipeVerbForWireOp(static_cast<MGPWireOp>(op));
+        if (verb == MGPipeVerb::kVerbCount) continue;
+        if (MGPipeWaitClassFor(static_cast<MGPWireOp>(op)) != kWaitNone) {
+            waitedFor[static_cast<SizeT>(verb)] = true;
+        }
+    }
+    SizeT admitted = 0;
+    for (SizeT v = 0; v < kMGPipeVerbCount; ++v) {
+        const auto verb = static_cast<MGPipeVerb>(v);
+        for (SizeT f = 0; f < kMGPipeInputFieldCount; ++f) {
+            const auto field = static_cast<MGPipeInputField>(f);
+            if (!MGPipeBarrierPullAdmitted(field, verb)) continue;
+            ++admitted;
+            EXPECT_TRUE(waitedFor[v])
+                << kMGPipeInputFieldNames[f] << "@" << kMGPipeVerbNames[v]
+                << " is admitted on a verb no barriered op stamps: after the flip that record's "
+                   "read is torn by construction, and admitting it turns an unconditional Fatal "
+                   "into a warning line";
+            EXPECT_EQ(kMGPipeFieldOwnership[f], MGPipeFieldOwnership::kBarrierPulled)
+                << kMGPipeInputFieldNames[f] << " is admitted but is not a BARRIER-PULLED row";
+            EXPECT_TRUE(MGPipeFieldMaskHas(
+                kMGPipeClassFieldMask[static_cast<SizeT>(kMGPipeVerbClass[v])], field))
+                << kMGPipeInputFieldNames[f] << "@" << kMGPipeVerbNames[v]
+                << " is admitted but is outside the verb class's may-read mask, so the residual "
+                   "fill never copied it for this verb";
+        }
+    }
+    EXPECT_EQ(admitted, kMGPipeAdmittedPullPairCount)
+        << "the walk and the generator disagree about how many pairs are admitted";
+    EXPECT_GT(admitted, SizeT{0})
+        << "the admitted set is EMPTY, which reads in the lane as rigour and is blindness: "
+           "every barriered readback row would be reported as a fresh defect";
 }
 
 // ---------------------------------------------------------------------------------------

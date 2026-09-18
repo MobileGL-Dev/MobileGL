@@ -1246,31 +1246,25 @@ jobs:
             exit 1
           fi
 
-          # THE ADMITTED MARKERS, `<field>@<verb>`, AND NOTHING ELSE. These are the barriered
-          # rows of §2.2 - the ones whose apply still pulls a row, and whose legality is the
-          # client's own wait (ruling 4). Each line names the package that retires it; a row
-          # that leaves this list leaves it by deletion, never by widening.
-          #   readbacks / the pack PBO ......... P8/P9 (read_pixels, get_texture_image)
-          #   CopyTex endpoint ................. tx2's trailing item
-          #   GenerateMipmap ................... tx2, until the VerbMipRes arm lands
-          #   set_storage_block_binding ........ pg's trailing item (by MGPStorageBlockBinding::ShaderCso)
-          #   XFB ............................... P3b/P4b/P9 (escalation (i) keeps the span lockstep)
-          #   resource_copy_region's names ..... the declared P5b debt
-          printf '%s\n' \
-            'GetTextureUnitObject@ReadPixels' \
-            'GetTextureUnitObject@GetTextureImage' \
-            'GetTextureUnitObject@CopyTexImage2D' \
-            'GetTextureUnitObject@GenerateMipmap' \
-            'GetBufferBindingSlot@ReadPixels' \
-            'GetBufferBindingSlot@GetTextureImage' \
-            'GetProgramObject@ShaderStorageBlockBinding' \
-            'ValidateProgramName@ShaderStorageBlockBinding' \
-            'GetTextureObject@CopyImageSubData' \
-            'GetTransformFeedbackProgram@BeginTransformFeedback' \
-            'GetTransformFeedbackProgram@EndTransformFeedback' \
-            'GetBufferBindingPoint@BeginTransformFeedback' \
-            'GetBufferBindingPoint@EndTransformFeedback' \
+          # THE ADMITTED MARKERS COME FROM THE GENERATOR, NOT FROM THIS FILE (ID-116).
+          #
+          # A hand-kept copy of §7 lived here for one round and was wrong in BOTH directions at
+          # once: it omitted GetFramebufferBindingSlot@ReadPixels - 21 entries, the largest
+          # survivor in the lane - and it carried GetTextureObject@CopyImageSubData, which
+          # nothing made safe, because resource_copy_region is kWaitNone. Neither error is
+          # visible by reading the list; both are obvious the moment the list is DERIVED.
+          #
+          # The rule is ID-84 said in tables that already exist: a <field>@<verb> pull is
+          # admitted iff the field's ownership row is BARRIER_PULLED, the verb's wire op is
+          # statically barriered (kMGPipeWaitClasses != kWaitNone, i.e. the client really is
+          # parked behind the record) and the field is inside the verb class's may-read mask.
+          # `--print-admitted` prints exactly the table MGPipeBarrierPullAdmitted() answers
+          # from, so this shell and the C++ cannot drift: retiring a verb's wait class narrows
+          # the lane with no edit here, and a new BARRIER_PULLED row widens it only on verbs
+          # that wait.
+          python3 "${GITHUB_WORKSPACE}/scripts/gen_pipe_field_ownership.py" --print-admitted \
             > "${RUNNER_TEMP}/allowed.txt"
+          echo "§7 allowlist (derived): $(wc -l < "${RUNNER_TEMP}/allowed.txt") admitted pair(s)"
 
           grep -rhoE '\[BARRIER-PULLED[^]]*\]' MobileGL/MG_IntegrationTest/split-logs/ 2>/dev/null > "${RUNNER_TEMP}/markers-raw.txt" || true
           grep -rhoE 'Fatal\{UnmigratedPipeInput, "[^"]*"\}' MobileGL/MG_IntegrationTest/split-logs/ 2>/dev/null \

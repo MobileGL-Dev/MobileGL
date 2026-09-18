@@ -42,6 +42,12 @@ OWNERSHIP_DEF = os.path.join(PIPE_DIR, "FieldOwnership.def")
 PIPE_FILL = os.path.join(REPO_ROOT, "MobileGL", "MG_Impl", "Pipe", "PipeFill.cpp")
 PIPE_CALLS = os.path.join(PIPE_DIR, "PipeCalls.def")
 FILL_POINTS = os.path.join(PIPE_DIR, "FillPoints.def")
+# P5e (gl, ID-116): the two generated tables the admission derivation joins. They are READ, not
+# restated - the whole point of ID-116 is that the allowlist is derived from the tables that
+# already exist, so that retiring a verb's wait class narrows it and adding a BARRIER_PULLED row
+# widens it only on barriered verbs, with no third place to keep in step.
+PIPE_WIRE_INC = os.path.join(GENERATED_DIR, "PipeWire.inc")
+FILL_POINTS_INC = os.path.join(GENERATED_DIR, "PipeFillPoints.inc")
 OUT_NAME = "PipeFieldOwnership.inc"
 
 CLASSES = ("RECORD_SUPPLIED", "APPLIER_DERIVED", "BARRIER_PULLED", "FATAL")
@@ -206,6 +212,130 @@ def parse_ops_and_verbs(calls_text=None, fill_points_text=None):
     return calls, [v for v, _ in verbs]
 
 
+def array_block(text, declaration):
+    """The braced initialiser of a generated `... <declaration> = {` table, comments KEPT.
+
+    The generated tables carry the row's name in a trailing comment (`// DrawArrays`) and in a
+    leading one (`/* 58 ReadPixels */`), and those comments are the only place the row's NAME
+    appears - the values themselves are enumerators and hex words. So this masker's opposite is
+    what is wanted here: the comments are the data."""
+    start = text.find(declaration)
+    if start < 0:
+        sys.exit("gen_pipe_field_ownership: %r is not in the generated table it should be in - "
+                 "the admission derivation (ID-116) reads it rather than restating it, so a "
+                 "renamed or moved table has to stop this script rather than produce an empty "
+                 "allowlist" % declaration)
+    open_at = text.find("{", start)
+    depth = 0
+    i = open_at
+    while i < len(text):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_at + 1:i]
+        i += 1
+    sys.exit("gen_pipe_field_ownership: %r never closes its initialiser" % declaration)
+
+
+WAIT_ROW_RE = re.compile(r"/\*\s*\d+\s+(\w+)\s*\*/\s*static_cast<Uint8>\(\s*(k\w+)\s*\)")
+
+
+def parse_wait_classes(text=None):
+    """{op name: wait class enumerator} out of generated/PipeWire.inc's kMGPipeWaitClasses.
+
+    This is the STATIC half of MGPipeBarriered - the same column the emit table and the sink
+    both compute from - and it is what decides whether a record is one the client is parked
+    behind. A pair may only be admitted on a verb whose op is in it and is not kWaitNone."""
+    text = read(PIPE_WIRE_INC) if text is None else text
+    block = array_block(text, "kMGPipeWaitClasses[static_cast<SizeT>(MGPWireOp::kOpCount)] =")
+    rows = WAIT_ROW_RE.findall(block)
+    if not rows:
+        sys.exit("gen_pipe_field_ownership: kMGPipeWaitClasses did not parse - with no wait "
+                 "column every op would look unbarriered and the admitted set would be silently "
+                 "empty, which reads as 'the lane is clean' (ID-116)")
+    waits = {}
+    for op, wait in rows:
+        waits[op] = wait
+    return waits
+
+
+VERB_CLASS_ROW_RE = re.compile(r"MGPipeVerbClass::(\w+)\s*,\s*//\s*(\w+)")
+CLASS_MASK_ROW_RE = re.compile(r"//\s*(k\w+):[^\n]*\n\s*\{\{\s*(0x[0-9a-fA-F]+)ull\s*,\s*"
+                               r"(0x[0-9a-fA-F]+)ull\s*\}\}")
+
+
+def parse_verb_classes(text=None):
+    """({verb: class}, {class: (word0, word1)}) out of generated/PipeFillPoints.inc.
+
+    kMGPipeClassFieldMask is the verb's OWN may-read table: a field outside it is one the
+    client's residual fill never copied for that verb, so it can never be a legitimate read
+    there whatever its ownership row says. Intersecting with it is ID-84's third term."""
+    text = read(FILL_POINTS_INC) if text is None else text
+    verb_rows = VERB_CLASS_ROW_RE.findall(
+        array_block(text, "kMGPipeVerbClass[kMGPipeVerbCount] ="))
+    mask_rows = CLASS_MASK_ROW_RE.findall(
+        array_block(text, "kMGPipeClassFieldMask[kMGPipeVerbClassCount] ="))
+    if not verb_rows:
+        sys.exit("gen_pipe_field_ownership: kMGPipeVerbClass did not parse - the admitted set "
+                 "would lose its class intersection (ID-116)")
+    if not mask_rows:
+        sys.exit("gen_pipe_field_ownership: kMGPipeClassFieldMask did not parse - the admitted "
+                 "set would lose its class intersection (ID-116)")
+    verb_class = {}
+    for cls, verb in verb_rows:
+        verb_class[verb] = cls
+    class_mask = {}
+    for cls, low, high in mask_rows:
+        class_mask[cls] = (int(low, 16), int(high, 16))
+    for verb, cls in verb_class.items():
+        if cls not in class_mask:
+            sys.exit("gen_pipe_field_ownership: verb %s is in class %s, which has no field mask"
+                     % (verb, cls))
+    return verb_class, class_mask
+
+
+def build_admitted(accessors, ownership, verbs, verb_ops, waits, verb_class, class_mask):
+    """ID-84 AS A DERIVATION, which is the whole of ID-116: a <field>@<verb> pull is ADMITTED
+    iff (1) the field's row is BARRIER_PULLED, (2) the verb's wire op is STATICALLY BARRIERED
+    (MGPipeWaitClassFor(op) != kWaitNone, so the client really is parked behind the record and
+    P5C's semantics hold), and (3) the field is inside kMGPipeClassFieldMask[class of verb].
+
+    A verb with no stamp row admits NOTHING, and that is not an omission: the server stamps only
+    the ops MGP_VERB_OP_LIST names, so no other verb can ever be the one CountBarrierPull is
+    told about. Answering "admitted" for a verb that cannot arrive would widen the allowlist
+    by a row nothing can exercise.
+
+    Returns (per-verb (word0, word1), the sorted <field>@<verb> pairs)."""
+    field_index = {name: i for i, name in enumerate(accessors)}
+    op_for_verb = {}
+    for op, verb in verb_ops:
+        op_for_verb[verb] = op
+
+    masks = []
+    pairs = []
+    for verb in verbs:
+        words = [0, 0]
+        op = op_for_verb.get(verb)
+        barriered = op is not None and waits.get(op) not in (None, "kWaitNone")
+        if barriered:
+            cls = verb_class.get(verb)
+            if cls is None:
+                sys.exit("gen_pipe_field_ownership: verb %s has a stamp row but no verb class"
+                         % verb)
+            allowed = class_mask[cls]
+            for field, index in field_index.items():
+                if ownership[field] != "BARRIER_PULLED":
+                    continue
+                if not ((allowed[index // 64] >> (index % 64)) & 1):
+                    continue
+                words[index // 64] |= 1 << (index % 64)
+                pairs.append("%s@%s" % (field, verb))
+        masks.append((words[0], words[1]))
+    return masks, sorted(pairs)
+
+
 def verb_shaped_calls(calls, verbs):
     """The calls that MUST have a stamp row or an exemption, by two derived tests: the
     catalogue's own kind (kCtxVerb) and a name that is also a verb's. Neither can see a call
@@ -343,7 +473,7 @@ def build(accessors, sticky, emitted, refused, rows, forwards, args):
 
 
 def emit(accessors, sticky, ownership, phase, why, forward_map, arg_rows, counts, verb_ops,
-         exemptMap):
+         exemptMap, verbs, admitted_masks, admitted_pairs):
     out = [BANNER.format(name=OUT_NAME)]
     add = out.append
     add("""
@@ -472,6 +602,64 @@ static_assert(MGPipeEveryFieldIsClassified(),
     add("inline constexpr SizeT kMGPipeVerbBoundaryOpCount = %d;" % len(verb_ops))
     add("inline constexpr SizeT kMGPipeVerbBoundaryExemptCount = %d;" % len(exemptMap))
     add("")
+    add("""// ---- THE §7 ALLOWLIST, DERIVED RATHER THAN WRITTEN (ID-116) --------------------------
+//
+// CONTRACT-P5E §7 lists the barrier-pulled reads the phase ADMITS: debts that are real, ordered
+// and fresh because the client is parked behind the record, and that a LATER phase retires. It
+// was also kept by hand in .github/workflows/test.yml, and that copy was wrong in both
+// directions at once - it omitted GetFramebufferBindingSlot@ReadPixels, the largest survivor,
+// and carried GetTextureObject@CopyImageSubData, which nothing made safe.
+//
+// THE RULE IS ID-84 SAID IN TABLES THAT ALREADY EXIST. A <field>@<verb> pull is admitted iff
+//
+//   1. the field's ownership row is BARRIER-PULLED - it is a debt and not a defect;
+//   2. the verb's wire op is STATICALLY BARRIERED (kMGPipeWaitClasses[op] != kWaitNone), which
+//      is exactly "the client is parked in its own wait for this record", so P5C's semantics
+//      survive the flip for it; and
+//   3. the field is inside kMGPipeClassFieldMask[class of the verb] - a field outside the
+//      verb's own may-read table was never filled for it, so a read there is stale by
+//      construction whatever its ownership row says.
+//
+// Which makes the allowlist move with the code instead of beside it: retiring a verb's wait
+// class NARROWS it with no edit, and a new BARRIER_PULLED row widens it only on verbs that
+// wait. A verb with no stamp row admits nothing - the server stamps only MGP_VERB_OP_LIST's
+// ops, so no other verb can be the one a residual pull is reported against.""")
+    add("inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {")
+    for verb, (low, high) in zip(verbs, admitted_masks):
+        add("    {{0x%016xull, 0x%016xull}}, // %s" % (low, high, verb))
+    add("};\n")
+    add("inline constexpr SizeT kMGPipeAdmittedPullPairCount = %d;" % len(admitted_pairs))
+    add("""
+// THE PREDICATE THE STRICT KNOB ASKS (ID-117). A 69 x 128-bit table, so this costs a shift and
+// a test on the apply thread - the same shape MGPipeFieldMaskHas already has.
+constexpr Bool MGPipeBarrierPullAdmitted(MGPipeInputField field, MGPipeVerb verb) {
+    const SizeT index = static_cast<SizeT>(verb);
+    return index < kMGPipeVerbCount && MGPipeFieldMaskHas(kMGPipeAdmittedPullMask[index], field);
+}
+
+// THE HAND-EDIT CONTROL, MGPipeEveryFieldIsClassified's shape and for its reason: the generator
+// cannot emit a bit that fails this, so it can only fire on an edited header - which is exactly
+// the edit the DO NOT EDIT banner cannot prevent on its own. An admitted bit that was not a
+// BARRIER-PULLED field of its verb's class would be the allowlist quietly forgiving a read that
+// is torn rather than merely unmigrated.
+constexpr Bool MGPipeEveryAdmittedPullIsADebtOfItsVerbsClass() {
+    for (SizeT v = 0; v < kMGPipeVerbCount; ++v) {
+        const MGPipeFieldMask& admitted = kMGPipeAdmittedPullMask[v];
+        const MGPipeFieldMask& mayRead =
+            kMGPipeClassFieldMask[static_cast<SizeT>(kMGPipeVerbClass[v])];
+        for (SizeT f = 0; f < kMGPipeInputFieldCount; ++f) {
+            const auto field = static_cast<MGPipeInputField>(f);
+            if (!MGPipeFieldMaskHas(admitted, field)) continue;
+            if (kMGPipeFieldOwnership[f] != MGPipeFieldOwnership::kBarrierPulled) return false;
+            if (!MGPipeFieldMaskHas(mayRead, field)) return false;
+        }
+    }
+    return true;
+}
+static_assert(MGPipeEveryAdmittedPullIsADebtOfItsVerbsClass(),
+              "an admitted barrier pull is not a BARRIER-PULLED field of its verb's class "
+              "(CONTRACT-P5E section 7, ID-84 / ID-116)");
+""")
     add("// The class sizes, as constants a test can pin without recounting the table.")
     for cls in CLASSES:
         add("inline constexpr SizeT kMGPipe%sFieldCount = %d;"
@@ -531,6 +719,8 @@ def self_test():
     refused = parse_supplies_whole_field(fill)
 
     calls, verbs = parse_ops_and_verbs()
+    wire_inc = read(PIPE_WIRE_INC)
+    points_inc = read(FILL_POINTS_INC)
 
     def run(own_text=None, cov=None, fill_text=None, calls_text=None):
         acc, stk, emt = parse_coverage(cov if cov is not None else coverage)
@@ -679,6 +869,38 @@ def self_test():
                      "is exempted from the stamp map but is not verb-shaped",
                      lambda: run(calls_text=kindless)))
 
+    # ---- 16-18: THE ADMISSION DERIVATION'S OWN SOURCES (P5e gl, ID-116) -------------------
+    #
+    # The allowlist is DERIVED from three generated tables. Each of them is read rather than
+    # restated, so each of them can go missing - and a missing one does not produce a visibly
+    # broken allowlist, it produces a SILENTLY EMPTY or SILENTLY WIDER one. An empty admitted
+    # set reads in the lane as "nothing is admitted", which looks like rigour and is blindness.
+    def admitted_pairs_for(own_text=None, wire_text=None, points_text=None):
+        own, _, _, _, _, _ = run(own_text=own_text)
+        _, _, _, verb_ops_now, _ = parse_ownership(
+            own_text if own_text is not None else ownership_text)
+        waits_now = parse_wait_classes(wire_text if wire_text is not None else wire_inc)
+        verb_class_now, class_mask_now = parse_verb_classes(
+            points_text if points_text is not None else points_inc)
+        return build_admitted(accessors, own, verbs, verb_ops_now, waits_now, verb_class_now,
+                              class_mask_now)[1]
+
+    no_waits = wire_inc.replace("kMGPipeWaitClasses[static_cast<SizeT>(MGPWireOp::kOpCount)] =",
+                                "kMGPipeWaitClassesXX[static_cast<SizeT>(MGPWireOp::kOpCount)] =", 1)
+    controls.append(("the wait-class column renamed away",
+                     "kMGPipeWaitClasses",
+                     lambda: admitted_pairs_for(wire_text=no_waits)))
+    no_verb_class = points_inc.replace("kMGPipeVerbClass[kMGPipeVerbCount] =",
+                                       "kMGPipeVerbClassXX[kMGPipeVerbCount] =", 1)
+    controls.append(("the verb-class column renamed away",
+                     "kMGPipeVerbClass[kMGPipeVerbCount]",
+                     lambda: admitted_pairs_for(points_text=no_verb_class)))
+    no_class_mask = points_inc.replace("kMGPipeClassFieldMask[kMGPipeVerbClassCount] =",
+                                       "kMGPipeClassFieldMaskXX[kMGPipeVerbClassCount] =", 1)
+    controls.append(("the class field mask renamed away",
+                     "kMGPipeClassFieldMask[kMGPipeVerbClassCount]",
+                     lambda: admitted_pairs_for(points_text=no_class_mask)))
+
     # THE HARNESS'S OWN CONTROL, and it is the durable form of how M-1 was found. The defect was
     # not the escaping in control #4; it was that expect_trip asked "did something exit" rather
     # than "did THIS exit", so a control could silently become a duplicate of another. Prove the
@@ -711,6 +933,70 @@ def self_test():
     if len(refused) != 8:
         sys.exit("gen_pipe_field_ownership: self-test: EmittedCallSuppliesTheWholeField refuses %d "
                  "fields, not the eight the contract's derivation is written against" % len(refused))
+    # ---- THE ADMISSION DERIVATION, MOVED AND READ BACK (P5e gl, ID-116) ------------------
+    #
+    # Controls 16-18 prove the three sources are READ. These prove the three CONJUNCTS are
+    # USED: move each input and watch the derived allowlist move with it. A derivation that
+    # quietly ignored one of them would still produce a plausible table - which is exactly how
+    # the hand-kept copy in test.yml came to be wrong in BOTH directions at once.
+    derived = admitted_pairs_for()
+    derivation = []
+
+    def expect(name, condition):
+        derivation.append((name, bool(condition)))
+
+    expect("GetFramebufferBindingSlot@ReadPixels is admitted (ID-116's named survivor)",
+           "GetFramebufferBindingSlot@ReadPixels" in derived)
+
+    # Conjunct 2, the wait class. ReadPixels is kWaitReply so its pairs are admitted; make the
+    # op kWaitNone and every @ReadPixels pair must leave, because an unbarriered record's read
+    # is torn BY CONSTRUCTION and no ownership row can make it legal.
+    # THE EDIT IS COUNTED, NOT DIFFED. ResourceCopyRegion below is ALREADY kWaitNone today, so a
+    # "did the text change" guard would call its own control broken while it was working
+    # perfectly - and once item 5 moves that op, the same guard would start passing for a
+    # different reason. What has to hold is that the row was FOUND.
+    def unbarrier(op):
+        edited, count = re.subn(
+            r"(/\*\s*\d+\s+" + op + r"\s*\*/\s*static_cast<Uint8>\()kWait\w+(\))",
+            r"\1kWaitNone\2", wire_inc, count=1)
+        if count != 1:
+            sys.exit("gen_pipe_field_ownership: self-test: could not unbarrier %s - the control's "
+                     "own edit no longer matches generated/PipeWire.inc" % op)
+        return edited
+
+    unwaited = unbarrier("ReadPixels")
+    expect("unbarriering ReadPixels' op removes every @ReadPixels pair",
+           not any(p.endswith("@ReadPixels") for p in admitted_pairs_for(wire_text=unwaited)))
+
+    # The same conjunct from the other side, and it is ID-118's whole argument: an op that is
+    # kWaitNone admits NOTHING on its verb, so GetTextureObject cannot be forgiven on
+    # CopyImageSubData by a field row alone. Written as a MOVEMENT rather than as a fixed
+    # expectation, so that it keeps its meaning once ResourceCopyRegion's wait class moves.
+    uncopied = unbarrier("ResourceCopyRegion")
+    expect("unbarriering ResourceCopyRegion removes every @CopyImageSubData pair",
+           not any(p.endswith("@CopyImageSubData")
+                   for p in admitted_pairs_for(wire_text=uncopied)))
+
+    # Conjunct 1, the ownership row: a field that stops being a debt stops being admitted.
+    not_a_debt = edit(r"X\(GetFramebufferBindingSlot," + GAP + r"BARRIER_PULLED," + GAP
+                      + r"\"[^\"]*\"," + GAP,
+                      "X(GetFramebufferBindingSlot, FATAL, \"-\", ",
+                      "make GetFramebufferBindingSlot FATAL")
+    expect("a field that stops being BARRIER_PULLED leaves the allowlist",
+           not any(p.startswith("GetFramebufferBindingSlot@")
+                   for p in admitted_pairs_for(own_text=not_a_debt)))
+
+    # And the pairs this phase is actually paying off are NOT admitted: draw_vbo is kWaitNone,
+    # which is why 61 lane entries abort on GetProgramForDraw@DrawArrays today. If this ever
+    # goes false the allowlist has started forgiving the debt P5e exists to retire.
+    expect("no pair is admitted on an unbarriered verb (DrawArrays)",
+           not any(p.endswith("@DrawArrays") for p in derived))
+
+    failed = [name for name, ok in derivation if not ok]
+    if failed:
+        sys.exit("gen_pipe_field_ownership: self-test: %d admission-derivation control(s) did "
+                 "not hold: %s" % (len(failed), "; ".join(failed)))
+
     if trips == 0:
         sys.exit("gen_pipe_field_ownership: self-test: no negative control tripped - the gates are "
                  "not checking anything")
@@ -720,6 +1006,9 @@ def self_test():
     print("gen_pipe_field_ownership: self-test: %d negative-control trip(s), each asserted against "
           "its OWN message; harness control OK; positive control OK "
           "(%d fields partitioned, 7 sticky forwards, 8 refusals)" % (trips, total))
+    print("gen_pipe_field_ownership: self-test: %d admission-derivation control(s) held; the "
+          "derived section 7 allowlist is %d <field>@<verb> pair(s)"
+          % (len(derivation), len(derived)))
     return 0
 
 
@@ -729,6 +1018,10 @@ def main():
                         help="do not write; exit 1 if regenerating would change anything")
     parser.add_argument("--self-test", action="store_true",
                         help="run the negative controls (each gate must trip) and exit")
+    parser.add_argument("--print-admitted", action="store_true",
+                        help="print the derived CONTRACT-P5E section 7 allowlist, one "
+                             "<field>@<verb> per line, and exit - so the CI shell and the C++ "
+                             "read the SAME table (ID-116)")
     args = parser.parse_args()
 
     if args.self_test:
@@ -741,13 +1034,25 @@ def main():
     _, exemptMap, required = check_verb_ops(verb_ops, exempt, calls, verbs)
     ownership, phase, why, forward_map, arg_list, counts = build(
         accessors, sticky, emitted, refused, rows, forwards, arg_rows)
+    waits = parse_wait_classes()
+    verb_class, class_mask = parse_verb_classes()
+    admitted_masks, admitted_pairs = build_admitted(
+        accessors, ownership, verbs, verb_ops, waits, verb_class, class_mask)
+
+    if args.print_admitted:
+        # STDOUT IS THE INTERFACE. One pair per line, sorted, nothing else - the lane's marker
+        # ratchet reads this and compares it against what the run actually logged, so a
+        # decorated line here is a false red there.
+        for pair in admitted_pairs:
+            print(pair)
+        return 0
 
     if not os.path.isdir(GENERATED_DIR):
         os.makedirs(GENERATED_DIR)
     changed = []
     write(os.path.join(GENERATED_DIR, OUT_NAME),
           emit(accessors, sticky, ownership, phase, why, forward_map, arg_list, counts, verb_ops,
-               exemptMap),
+               exemptMap, verbs, admitted_masks, admitted_pairs),
           args.check, changed)
 
     print("gen_pipe_field_ownership: %d fields + %d sticky forwards = %d rows; "
@@ -759,6 +1064,10 @@ def main():
     print("gen_pipe_field_ownership: stamp map: %d verb-shaped call(s) = %d row(s) + %d "
           "exemption(s), 0 unanswered"
           % (len(required), len(verb_ops), len(exemptMap)))
+    admitted_verbs = sorted({pair.split("@", 1)[1] for pair in admitted_pairs})
+    print("gen_pipe_field_ownership: section 7 allowlist (derived): %d admitted <field>@<verb> "
+          "pair(s) across %d barriered verb(s): %s"
+          % (len(admitted_pairs), len(admitted_verbs), ", ".join(admitted_verbs) or "-"))
     pulled = [(f, phase[f]) for f in accessors if ownership[f] == "BARRIER_PULLED"]
     print("gen_pipe_field_ownership: the debt, by retiring phase:")
     by_phase = {}
