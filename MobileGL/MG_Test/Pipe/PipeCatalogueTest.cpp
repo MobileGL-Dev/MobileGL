@@ -243,18 +243,20 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     EXPECT_EQ(installed + nulls, static_cast<SizeT>(kMGPipeCallCount));
 
 #if MOBILEGL_PIPE_PUSH
-    // 35 + 4 = 39, and the split is the honest shape of R-17 rather than an implementation
-    // detail: 39 is the number of MGPipeApply* entry points PipeApply.h declares WITH A BODY
-    // (37 at P5, P5c rv's set_context_values was the 38th, and P5e sb's set_shader_buffers is
-    // the 39th), 35 of them fit a GENERATED row and go in the two tables, and FOUR cannot be
+    // 35 + 5 = 40, and the split is the honest shape of R-17 rather than an implementation
+    // detail: 40 is the number of MGPipeApply* entry points PipeApply.h declares WITH A BODY
+    // (37 at P5, P5c rv's set_context_values was the 38th, P5e sb's set_shader_buffers is the
+    // 39th and P5e pg's set_program_bindings the 40th - the two landed in parallel packages,
+    // each of which read 38 as its base and wrote 39; this is the merge saying so), 35 of them
+    // fit a GENERATED row and go in the two tables, and FIVE cannot be
     // expressed by any generated signature and go in the hand-written escape table beside them
     // (ResourceRespecify's uncarried initialBytes, ResourceFlushRange's likewise,
     // MapPersistent's size + seedBytes + void* return, CreateShaderState's seven blobrefs and
     // two typed pointers - each one a CONTRACT-P5 ruling, see MG_Pipe/PipeRoute.h).
     //
-    // set_program_bindings (opcode 80) is DECLARED and still aborting by name until package pg
-    // writes its body, so it is not counted here and its row is pinned null below - which is
-    // the same statement this pair of numbers has always made about an unimplemented row.
+    // set_program_bindings (opcode 80) HAS its body since package pg, and it is the fifth
+    // escape rather than a generated row; its `gMGPipeContext` slot therefore stays null and is
+    // pinned null below, which is what an escaped row looks like here.
     //
     // BOTH NUMBERS ARE ASSERTED. If the escape table were left out of this case, moving a row
     // out of the generated tables and forgetting to install its escape would read as a smaller
@@ -270,10 +272,10 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     // plus a parallel name array, which no generated (payload, varTail, varTailCount) row can
     // express - so opcode 80's `gMGPipeContext` slot stays null (pinned below, unchanged) and
     // its adapter lives in the escape table beside create_shader_state's. The applier's entry
-    // points are 39 with it.
+    // points are 40 with it and with sb's generated row.
     EXPECT_EQ(escapesInstalled, 5u) << "an escape row is null; its call site would take a null "
                                        "pointer rather than fall back to anything";
-    EXPECT_EQ(installed + escapesInstalled, 39u)
+    EXPECT_EQ(installed + escapesInstalled, 40u)
         << "the two tables plus the escapes must be exactly PipeApply.h's bodied entry points";
 
     // And the rows that MUST still be null, named rather than counted: these are calls with no
