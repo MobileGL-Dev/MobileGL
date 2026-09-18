@@ -296,16 +296,47 @@ def parse_verb_classes(text=None):
     return verb_class, class_mask
 
 
-def build_admitted(accessors, ownership, verbs, verb_ops, waits, verb_class, class_mask):
-    """ID-84 AS A DERIVATION, which is the whole of ID-116: a <field>@<verb> pull is ADMITTED
-    iff (1) the field's row is BARRIER_PULLED, (2) the verb's wire op is STATICALLY BARRIERED
-    (MGPipeWaitClassFor(op) != kWaitNone, so the client really is parked behind the record and
-    P5C's semantics hold), and (3) the field is inside kMGPipeClassFieldMask[class of verb].
+THIS_PHASE = "P5e"
+PHASE_TOKEN_RE = re.compile(r"\bP\d+[a-z]*\b")
 
-    A verb with no stamp row admits NOTHING, and that is not an omission: the server stamps only
-    the ops MGP_VERB_OP_LIST names, so no other verb can ever be the one CountBarrierPull is
-    told about. Answering "admitted" for a verb that cannot arrive would widen the allowlist
-    by a row nothing can exercise.
+
+def phase_is_owed_by_this_phase(retires):
+    """Does this row's RetiringPhase column name THIS phase?
+
+    Tokenised rather than substring-matched: the column is prose ("P5e (Espryt unbarriered),
+    P7 (Magma)", "P3b/P4b (Espryt), P7 (Magma)", "P8 (indirect), P9 (readback), P13
+    (transfer)"), and a substring test would let a future "P5e2" or a "P5" answer for "P5e"."""
+    return THIS_PHASE in PHASE_TOKEN_RE.findall(retires)
+
+
+def build_admitted(accessors, ownership, phase, verbs, verb_ops, waits, verb_class, class_mask):
+    """ID-84 AS A DERIVATION (ID-116), WITH ID-125's SECOND DISJUNCT.
+
+    A <field>@<verb> pull is ADMITTED iff the field's row is BARRIER_PULLED, the field is inside
+    kMGPipeClassFieldMask[class of verb] - a field outside the verb's own may-read table was
+    never filled for it - and EITHER
+
+      1. the verb's wire op is STATICALLY BARRIERED (MGPipeWaitClassFor(op) != kWaitNone), so the
+         client is parked in its own wait and P5C's semantics hold for the record; OR
+      2. the field's RETIRING PHASE does not name this phase.
+
+    ID-125 ADDED (2) AND IT IS THE HONEST STATEMENT OF ID-84. At runtime this table is only ever
+    consulted on a record the server already stamped BARRIERED - CountBarrierPull's unbarriered
+    arm is [[noreturn]] and fires first - so the record's pull is legal by construction and the
+    only remaining question is whether THIS PHASE still owes the migration. The retiring-phase
+    column is precisely that answer, and it is already in the table.
+
+    Disjunct (1) survives as its own term because it is a stronger claim about the same pair: it
+    says the client waits for the record STATICALLY, which is what lets a row whose phase IS this
+    one (GetFramebufferBindingSlot@ReadPixels, GetTextureUnitObject@CopyTexImage2D) still be
+    admitted. Without (1) those two would fail the lane; without (2)
+    GetTransformFeedbackProgram@DrawArrays would fail it, and CONTRACT-P5E §5.7 rules transform
+    feedback out of this phase entirely - so the lane would be red on a row no package here is
+    allowed to touch.
+
+    A verb with no stamp row still admits NOTHING under (1): the server stamps only the ops
+    MGP_VERB_OP_LIST names. Under (2) it admits its non-P5e debts, which is correct for the same
+    reason - the mask is consulted only where a stamp already happened.
 
     Returns (per-verb (word0, word1), the sorted <field>@<verb> pairs)."""
     field_index = {name: i for i, name in enumerate(accessors)}
@@ -319,19 +350,27 @@ def build_admitted(accessors, ownership, verbs, verb_ops, waits, verb_class, cla
         words = [0, 0]
         op = op_for_verb.get(verb)
         barriered = op is not None and waits.get(op) not in (None, "kWaitNone")
-        if barriered:
-            cls = verb_class.get(verb)
-            if cls is None:
-                sys.exit("gen_pipe_field_ownership: verb %s has a stamp row but no verb class"
-                         % verb)
-            allowed = class_mask[cls]
-            for field, index in field_index.items():
-                if ownership[field] != "BARRIER_PULLED":
-                    continue
-                if not ((allowed[index // 64] >> (index % 64)) & 1):
-                    continue
-                words[index // 64] |= 1 << (index % 64)
-                pairs.append("%s@%s" % (field, verb))
+        # A VERB WITH NO STAMP ROW ADMITS NOTHING UNDER EITHER DISJUNCT, and that is not an
+        # omission - it is the precondition both disjuncts are stated under. This table is read
+        # only from CountBarrierPull, which is reachable only after MGPipeServerStampVerbBoundary,
+        # and the server stamps only the ops MGP_VERB_OP_LIST names. A bit set for any other verb
+        # would be a row of the allowlist that nothing can exercise and nobody can retire.
+        if op is None:
+            masks.append((0, 0))
+            continue
+        cls = verb_class.get(verb)
+        if cls is None:
+            sys.exit("gen_pipe_field_ownership: verb %s has a stamp row but no verb class" % verb)
+        allowed = class_mask[cls]
+        for field, index in field_index.items():
+            if ownership[field] != "BARRIER_PULLED":
+                continue
+            if not ((allowed[index // 64] >> (index % 64)) & 1):
+                continue
+            if not barriered and phase_is_owed_by_this_phase(phase[field]):
+                continue
+            words[index // 64] |= 1 << (index % 64)
+            pairs.append("%s@%s" % (field, verb))
         masks.append((words[0], words[1]))
     return masks, sorted(pairs)
 
@@ -876,13 +915,13 @@ def self_test():
     # broken allowlist, it produces a SILENTLY EMPTY or SILENTLY WIDER one. An empty admitted
     # set reads in the lane as "nothing is admitted", which looks like rigour and is blindness.
     def admitted_pairs_for(own_text=None, wire_text=None, points_text=None):
-        own, _, _, _, _, _ = run(own_text=own_text)
+        own, ph, _, _, _, _ = run(own_text=own_text)
         _, _, _, verb_ops_now, _ = parse_ownership(
             own_text if own_text is not None else ownership_text)
         waits_now = parse_wait_classes(wire_text if wire_text is not None else wire_inc)
         verb_class_now, class_mask_now = parse_verb_classes(
             points_text if points_text is not None else points_inc)
-        return build_admitted(accessors, own, verbs, verb_ops_now, waits_now, verb_class_now,
+        return build_admitted(accessors, own, ph, verbs, verb_ops_now, waits_now, verb_class_now,
                               class_mask_now)[1]
 
     no_waits = wire_inc.replace("kMGPipeWaitClasses[static_cast<SizeT>(MGPWireOp::kOpCount)] =",
@@ -940,13 +979,32 @@ def self_test():
     # quietly ignored one of them would still produce a plausible table - which is exactly how
     # the hand-kept copy in test.yml came to be wrong in BOTH directions at once.
     derived = admitted_pairs_for()
+    waits_real = parse_wait_classes(wire_inc)
     derivation = []
 
     def expect(name, condition):
         derivation.append((name, bool(condition)))
 
-    expect("GetFramebufferBindingSlot@ReadPixels is admitted (ID-116's named survivor)",
+    # ---- ID-125's six survivors, each by the disjunct that carries it --------------------
+    expect("GetFramebufferBindingSlot@ReadPixels is admitted by disjunct 1 (read_pixels waits)",
            "GetFramebufferBindingSlot@ReadPixels" in derived)
+    expect("GetTextureUnitObject@CopyTexImage2D is admitted by disjunct 1",
+           "GetTextureUnitObject@CopyTexImage2D" in derived)
+    # Disjunct 2's three. Each is a debt some LATER phase owes, on a verb this phase does not
+    # barrier - and CONTRACT-P5E §5.7 rules transform feedback out of P5e entirely, so the
+    # static rule alone would have failed the lane on a row no package here may touch.
+    expect("GetTransformFeedbackProgram@DrawArrays is admitted by disjunct 2 (retires P3b/P4b)",
+           "GetTransformFeedbackProgram@DrawArrays" in derived)
+    expect("GetTextureObject@CopyImageSubData is admitted (retires P7)",
+           "GetTextureObject@CopyImageSubData" in derived)
+    expect("ValidateProgramName@ShaderStorageBlockBinding is admitted (retires P9)",
+           "ValidateProgramName@ShaderStorageBlockBinding" in derived)
+    # ... and the two rows this phase OWES are still rejected: both are P5e rows on an
+    # unbarriered verb, which is exactly the debt pa and mv are retiring.
+    expect("GetProgramForDraw@DrawArrays is REJECTED (a P5e row on an unbarriered verb)",
+           "GetProgramForDraw@DrawArrays" not in derived)
+    expect("GetBoundVertexArray@DrawArrays is REJECTED (a P5e row on an unbarriered verb)",
+           "GetBoundVertexArray@DrawArrays" not in derived)
 
     # Conjunct 2, the wait class. ReadPixels is kWaitReply so its pairs are admitted; make the
     # op kWaitNone and every @ReadPixels pair must leave, because an unbarriered record's read
@@ -965,17 +1023,32 @@ def self_test():
         return edited
 
     unwaited = unbarrier("ReadPixels")
-    expect("unbarriering ReadPixels' op removes every @ReadPixels pair",
-           not any(p.endswith("@ReadPixels") for p in admitted_pairs_for(wire_text=unwaited)))
+    expect("unbarriering ReadPixels' op drops its P5e-owed pair "
+           "(GetFramebufferBindingSlot@ReadPixels) and keeps the later phases' pairs",
+           "GetFramebufferBindingSlot@ReadPixels" not in admitted_pairs_for(wire_text=unwaited)
+           and "GetTextureObject@ReadPixels" in admitted_pairs_for(wire_text=unwaited))
 
-    # The same conjunct from the other side, and it is ID-118's whole argument: an op that is
-    # kWaitNone admits NOTHING on its verb, so GetTextureObject cannot be forgiven on
-    # CopyImageSubData by a field row alone. Written as a MOVEMENT rather than as a fixed
-    # expectation, so that it keeps its meaning once ResourceCopyRegion's wait class moves.
+    # The same disjunct from the other side. ID-118 moved ResourceCopyRegion to a barriered wait
+    # class; unbarrier it again and its P5e-owed pairs go, while GetTextureObject stays admitted
+    # on ID-125's second disjunct because it retires in P7. BOTH disjuncts hold for that pair
+    # today and this control is what says they are independent rather than one masking the other.
     uncopied = unbarrier("ResourceCopyRegion")
-    expect("unbarriering ResourceCopyRegion removes every @CopyImageSubData pair",
-           not any(p.endswith("@CopyImageSubData")
-                   for p in admitted_pairs_for(wire_text=uncopied)))
+    expect("unbarriering ResourceCopyRegion drops its P5e-owed @CopyImageSubData pairs",
+           "GetFramebufferBindingSlot@CopyImageSubData"
+           not in admitted_pairs_for(wire_text=uncopied))
+    expect("GetTextureObject@CopyImageSubData is admitted by BOTH disjuncts (ID-118 and ID-125)",
+           "GetTextureObject@CopyImageSubData" in admitted_pairs_for(wire_text=uncopied)
+           and "GetTextureObject@CopyImageSubData" in derived)
+
+    # ID-125's DISJUNCT 2, MOVED: make the transform-feedback row this phase's debt and it must
+    # leave the allowlist on the unbarriered draw verb. Without this the second disjunct could
+    # be a constant `true` and every control above would still hold.
+    owed_now = edit(r"X\(GetTransformFeedbackProgram," + GAP + r"BARRIER_PULLED," + GAP
+                    + r"\"[^\"]*\",",
+                    "X(GetTransformFeedbackProgram, BARRIER_PULLED, \"P5e (moved by the control)\",",
+                    "make GetTransformFeedbackProgram this phase's debt")
+    expect("a row whose retiring phase becomes P5e leaves the unbarriered verb's allowlist",
+           "GetTransformFeedbackProgram@DrawArrays" not in admitted_pairs_for(own_text=owed_now))
 
     # Conjunct 1, the ownership row: a field that stops being a debt stops being admitted.
     not_a_debt = edit(r"X\(GetFramebufferBindingSlot," + GAP + r"BARRIER_PULLED," + GAP
@@ -986,11 +1059,19 @@ def self_test():
            not any(p.startswith("GetFramebufferBindingSlot@")
                    for p in admitted_pairs_for(own_text=not_a_debt)))
 
-    # And the pairs this phase is actually paying off are NOT admitted: draw_vbo is kWaitNone,
-    # which is why 61 lane entries abort on GetProgramForDraw@DrawArrays today. If this ever
-    # goes false the allowlist has started forgiving the debt P5e exists to retire.
-    expect("no pair is admitted on an unbarriered verb (DrawArrays)",
-           not any(p.endswith("@DrawArrays") for p in derived))
+    # AND THE RULE OVER THE WHOLE TABLE, not just its six named rows: nothing THIS PHASE owes is
+    # ever admitted on a verb no barriered op stamps. If this goes false the allowlist has
+    # started forgiving the debt P5e exists to retire.
+    op_for_verb = {verb: op for op, verb in parse_ownership(ownership_text)[3]}
+    ownership_now, phase_now = run()[0], run()[1]
+    unbarriered_p5e = sorted(
+        pair for pair in derived
+        if (lambda f, v: (op_for_verb.get(v) is None
+                          or waits_real.get(op_for_verb[v]) in (None, "kWaitNone"))
+                         and phase_is_owed_by_this_phase(phase_now[f]))(*pair.split("@", 1)))
+    expect("no pair this phase owes is admitted on an unbarriered verb: "
+           + (", ".join(unbarriered_p5e) or "none"),
+           not unbarriered_p5e)
 
     failed = [name for name, ok in derivation if not ok]
     if failed:
@@ -1037,7 +1118,7 @@ def main():
     waits = parse_wait_classes()
     verb_class, class_mask = parse_verb_classes()
     admitted_masks, admitted_pairs = build_admitted(
-        accessors, ownership, verbs, verb_ops, waits, verb_class, class_mask)
+        accessors, ownership, phase, verbs, verb_ops, waits, verb_class, class_mask)
 
     if args.print_admitted:
         # STDOUT IS THE INTERFACE. One pair per line, sorted, nothing else - the lane's marker

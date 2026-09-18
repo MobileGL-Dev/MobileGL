@@ -1254,10 +1254,17 @@ jobs:
           # nothing made safe, because resource_copy_region is kWaitNone. Neither error is
           # visible by reading the list; both are obvious the moment the list is DERIVED.
           #
-          # The rule is ID-84 said in tables that already exist: a <field>@<verb> pull is
-          # admitted iff the field's ownership row is BARRIER_PULLED, the verb's wire op is
-          # statically barriered (kMGPipeWaitClasses != kWaitNone, i.e. the client really is
-          # parked behind the record) and the field is inside the verb class's may-read mask.
+          # The rule is ID-84 said in tables that already exist (ID-116, refined by ID-125): a
+          # <field>@<verb> pull is admitted iff the field's ownership row is BARRIER_PULLED, the
+          # verb has a stamp row, the field is inside the verb class's may-read mask, and EITHER
+          # the verb's wire op is statically barriered (kMGPipeWaitClasses != kWaitNone, i.e. the
+          # client really is parked behind the record) OR the field's retiring phase does not
+          # name P5e. The second disjunct is the honest reading of ID-84: this comparison only
+          # ever sees pulls on records the server stamped BARRIERED - an unbarriered one aborts
+          # before any of this - so the pull is legal by construction and the only question left
+          # is whether THIS phase still owes the migration. Without it the lane would go red on
+          # GetTransformFeedbackProgram@DrawArrays, a row CONTRACT-P5E §5.7 rules out of P5e
+          # entirely and no package here is allowed to touch.
           # `--print-admitted` prints exactly the table MGPipeBarrierPullAdmitted() answers
           # from, so this shell and the C++ cannot drift: retiring a verb's wait class narrows
           # the lane with no edit here, and a new BARRIER_PULLED row widens it only on verbs

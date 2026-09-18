@@ -323,7 +323,7 @@ inline constexpr SizeT kMGPipeVerbBoundaryExemptCount = 3;
 // wait. A verb with no stamp row admits nothing - the server stamps only MGP_VERB_OP_LIST's
 // ops, so no other verb can be the one a residual pull is reported against.
 inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
-    {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawArrays
+    {{0x5808402000000140ull, 0x0000000000000000ull}}, // DrawArrays
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawElements
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawElementsBaseVertex
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // MultiDrawArrays
@@ -343,7 +343,7 @@ inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawArraysInstanced
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawElementsIndirect
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawArraysIndirect
-    {{0x0000000000000000ull, 0x0000000000000000ull}}, // Clear
+    {{0x5800402000000100ull, 0x0000000000000000ull}}, // Clear
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearBufferfi
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearBufferfv
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearBufferuiv
@@ -352,7 +352,7 @@ inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearNamedFramebufferfi
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearNamedFramebufferiv
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearNamedFramebufferuiv
-    {{0x0000000000000000ull, 0x0000000000000000ull}}, // BlitFramebuffer
+    {{0x5800402000000100ull, 0x0000000000000000ull}}, // BlitFramebuffer
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // BlitNamedFramebuffer
     {{0x5800c02000300180ull, 0x0000000000000000ull}}, // CopyTexImage2D
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // CopyTexSubImage2D
@@ -361,17 +361,17 @@ inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
     {{0x5800c02000300140ull, 0x0000000000000000ull}}, // ReadPixels
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // GetTexImage
     {{0x5800c02000300140ull, 0x0000000000000000ull}}, // GetTextureImage
-    {{0x0000000000000000ull, 0x0000000000000000ull}}, // DispatchCompute
+    {{0x5800402000000140ull, 0x0000000000000000ull}}, // DispatchCompute
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DispatchComputeIndirect
-    {{0x0000000000000000ull, 0x0000000000000000ull}}, // MemoryBarrier
+    {{0x5800402000000100ull, 0x0000000000000000ull}}, // MemoryBarrier
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // MemoryBarrierByRegion
-    {{0x0000000000000000ull, 0x0000000000000000ull}}, // BindImageTexture
+    {{0x5800402000000100ull, 0x0000000000000000ull}}, // BindImageTexture
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // GetIntegeri_v
     {{0x5800c02000300100ull, 0x0000000000000000ull}}, // ShaderStorageBlockBinding
-    {{0x0000000000000000ull, 0x0000000000000000ull}}, // FenceSync
+    {{0x5800402000000100ull, 0x0000000000000000ull}}, // FenceSync
     {{0x5800402000000100ull, 0x0000000000000000ull}}, // ClientWaitSync
-    {{0x0000000000000000ull, 0x0000000000000000ull}}, // WaitSync
-    {{0x0000000000000000ull, 0x0000000000000000ull}}, // DeleteSync
+    {{0x5800402000000100ull, 0x0000000000000000ull}}, // WaitSync
+    {{0x5800402000000100ull, 0x0000000000000000ull}}, // DeleteSync
     {{0x5800402000000100ull, 0x0000000000000000ull}}, // GetSyncStatus
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // IsTimerQuerySupported
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // BeginTimeElapsedQuery
@@ -384,7 +384,7 @@ inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // EndOcclusionQuery
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // BeginXfbPrimitivesQuery
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // EndXfbPrimitivesQuery
-    {{0x0000000000000000ull, 0x0000000000000000ull}}, // PatchParameteri
+    {{0x5800402000000100ull, 0x0000000000000000ull}}, // PatchParameteri
     {{0x5808402000000180ull, 0x0000000000000000ull}}, // BeginTransformFeedback
     {{0x5808402000000180ull, 0x0000000000000000ull}}, // EndTransformFeedback
     {{0x5808402000000180ull, 0x0000000000000000ull}}, // PauseTransformFeedback
@@ -394,7 +394,7 @@ inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // GetGpuTimestampNs
 };
 
-inline constexpr SizeT kMGPipeAdmittedPullPairCount = 111;
+inline constexpr SizeT kMGPipeAdmittedPullPairCount = 174;
 
 // THE PREDICATE THE STRICT KNOB ASKS (ID-117). A 69 x 128-bit table, so this costs a shift and
 // a test on the apply thread - the same shape MGPipeFieldMaskHas already has.

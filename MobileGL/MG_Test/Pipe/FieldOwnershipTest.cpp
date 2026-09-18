@@ -28,6 +28,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -388,40 +389,86 @@ TEST_F(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::GetCaps), MGPipeVerb::kVerbCount);
 }
 
-// P5e (gl), ID-116: THE §7 ALLOWLIST IS A DERIVATION, AND THIS RESTATES ITS RULE INDEPENDENTLY.
+// P5e (gl), ID-116 + ID-125: THE §7 ALLOWLIST IS A DERIVATION, RESTATED HERE INDEPENDENTLY.
 //
-// The generator emits kMGPipeAdmittedPullMask by joining three tables; the header carries a
-// static_assert that every admitted bit is a BARRIER-PULLED field of its verb's class. What no
-// static_assert in that header can check is the SECOND conjunct, because the wait column lives
-// in another generated file: this case walks the stamp map itself and asserts that a verb with
-// an admitted bit has an op the client actually waits behind. A derivation that dropped that
-// term would still produce a plausible table - which is precisely how the hand-kept copy in
-// test.yml came to admit GetTextureObject@CopyImageSubData, a read of client memory on a record
-// nothing parks behind.
+// The generator emits kMGPipeAdmittedPullMask by joining four columns; the header's own
+// static_assert can only check two of them, because the wait column and the stamp map live in
+// other generated files. This case walks those and asserts the rule end to end. A derivation
+// that quietly dropped a term would still produce a plausible table - which is precisely how the
+// hand-kept copy in test.yml came to admit GetTextureObject@CopyImageSubData while omitting
+// GetFramebufferBindingSlot@ReadPixels.
+//
+// THE RULE (ID-125). Admitted iff the field is BARRIER-PULLED, the verb has a stamp row, the
+// field is inside the verb class's may-read mask, and EITHER the verb's op is statically
+// barriered OR the field's retiring phase does not name P5e. The second disjunct is the honest
+// statement of ID-84: this table is consulted only on a record the server already stamped
+// BARRIERED - CountBarrierPull's unbarriered arm is [[noreturn]] and fires first - so the pull
+// is legal by construction and the only open question is whether THIS phase still owes the
+// migration. The retiring-phase column is exactly that answer.
 TEST_F(FieldOwnershipTest, TheAdmittedPullTableIsID84sDerivationAndNotAList) {
-    // The largest survivor of the lane, and the row the hand-kept copy omitted (21 entries).
+    // "Does this row's retiring phase name P5e", tokenised rather than substring-matched for
+    // the generator's reason: a "P5" or a future "P5e2" must not answer for "P5e".
+    const auto owedByThisPhase = [](const char* retires) {
+        const std::string phase(retires == nullptr ? "" : retires);
+        for (std::size_t at = phase.find("P5e"); at != std::string::npos;
+             at = phase.find("P5e", at + 1)) {
+            const Bool leftOk = at == 0 || !std::isalnum(static_cast<unsigned char>(phase[at - 1]));
+            const std::size_t after = at + 3;
+            const Bool rightOk = after >= phase.size() ||
+                                 !std::isalnum(static_cast<unsigned char>(phase[after]));
+            if (leftOk && rightOk) return true;
+        }
+        return false;
+    };
+
+    // ---- ID-125's survivors, each named with the disjunct that carries it ----------------
+    // Disjunct 1, and the largest survivor in the lane (21 entries) - the row the hand-kept
+    // copy omitted. The field IS this phase's debt; read_pixels is kWaitReply, so the client
+    // is parked behind the record and P5C's semantics hold for it.
     EXPECT_TRUE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetFramebufferBindingSlot,
-                                          MGPipeVerb::ReadPixels))
-        << "read_pixels is kWaitReply and GetFramebufferBindingSlot is BARRIER-PULLED in the "
-           "kReadback mask, so ID-84 admits it; a lane that calls this red is red on a debt "
-           "that P7 owes, not on anything P5e broke";
-    // ... and the debt P5e exists to RETIRE is not forgiven: draw_vbo is kWaitNone, so the
-    // client is not parked behind the record and there is nothing for an allowlist to admit.
+                                          MGPipeVerb::ReadPixels));
+    EXPECT_TRUE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetTextureUnitObject,
+                                          MGPipeVerb::CopyTexImage2D));
+    // Disjunct 2: a debt a LATER phase owes, on a verb this phase does not barrier.
+    // CONTRACT-P5E §5.7 rules transform feedback out of P5e entirely and this row retires in
+    // P3b/P4b, so the static rule alone would have failed the lane on a row no package in this
+    // phase is allowed to touch.
+    EXPECT_TRUE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetTransformFeedbackProgram,
+                                          MGPipeVerb::DrawArrays))
+        << "the lane would be red on a transform-feedback row CONTRACT-P5E §5.7 rules out of "
+           "this phase; ID-125's second disjunct is what admits it";
+    EXPECT_TRUE(MGPipeBarrierPullAdmitted(MGPipeInputField::ValidateProgramName,
+                                          MGPipeVerb::ShaderStorageBlockBinding));
+    // BOTH DISJUNCTS, ASSERTED SEPARATELY (ID-118 and ID-125 on one pair). GetTextureObject
+    // retires in P7, so disjunct 2 admits it whatever the wire says - and ID-118 ALSO moved
+    // resource_copy_region to a barriered class, so disjunct 1 holds independently. Putting
+    // that op back to kWaitNone must therefore leave the pair admitted and still be wrong, so
+    // the wait class is asserted here in its own words rather than through the allowlist.
+    EXPECT_TRUE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetTextureObject,
+                                          MGPipeVerb::CopyImageSubData));
+    EXPECT_NE(MGPipeWaitClassFor(MGPWireOp::ResourceCopyRegion), kWaitNone)
+        << "resource_copy_region is unbarriered again (ID-118): after the flip, a copy record "
+           "reading the client's texture object is an unconditional Fatal - the allowlist still "
+           "admits the pair on the retiring-phase disjunct, so THIS is the assertion that sees it";
+    EXPECT_FALSE(owedByThisPhase(
+        kMGPipeFieldRetiringPhase[static_cast<SizeT>(MGPipeInputField::GetTextureObject)]));
+
+    // ---- and the two rows THIS phase owes stay rejected ---------------------------------
     EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetProgramForDraw,
                                            MGPipeVerb::DrawArrays))
-        << "the draw path's pull became admitted - the allowlist is now forgiving the 61 lane "
+        << "the draw path's pull became admitted - the allowlist is now forgiving the lane "
            "entries this phase is being run to fix";
     EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetBoundVertexArray,
                                            MGPipeVerb::DrawArrays));
-    // P5e (gl), ID-118: the pair that made resource_copy_region's wait class move. The field
-    // retires in P7, so it had to be admitted somewhere - and it is admitted HERE, by the
-    // derivation and with no exception, only because the op is kWaitApplied. Put that row back
-    // to kWaitNone in PipeCalls.def and this goes red, which is the whole argument for moving
-    // the wait class rather than writing the field into a list.
-    EXPECT_TRUE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetTextureObject,
-                                          MGPipeVerb::CopyImageSubData))
-        << "resource_copy_region is unbarriered again: after the flip, a copy record reading "
-           "the client's texture object is an unconditional Fatal and P7 is two phases away";
+    EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetProgramForDispatch,
+                                           MGPipeVerb::DispatchCompute));
+    // Magma's row: GetFramebufferBindingSlot retires in P5e on Espryt and P7 on Magma, and the
+    // phase column is ONE string for both, so the derivation cannot admit it on the unbarriered
+    // Clear verb. That is deliberate rather than a gap - the DirectVulkan entries carry their
+    // own expected-red lane label instead, so the Espryt allowlist stays a statement about
+    // Espryt (this package's item 7).
+    EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetFramebufferBindingSlot,
+                                           MGPipeVerb::Clear));
     // A field that is not a debt at all is never admitted, on any verb.
     EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetRenderStateParameters,
                                            MGPipeVerb::ReadPixels));
@@ -430,30 +477,39 @@ TEST_F(FieldOwnershipTest, TheAdmittedPullTableIsID84sDerivationAndNotAList) {
     EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetFramebufferBindingSlot,
                                            MGPipeVerb::kVerbCount));
 
-    // THE RULE, RESTATED OVER THE WHOLE TABLE. The stamp map is inverted here rather than
-    // assumed: only an op MGPipeVerbForWireOp names can ever be the record a pull is reported
-    // against, so a verb with no op admits nothing, and a verb whose every op is kWaitNone
-    // admits nothing either.
+    // ---- THE RULE, RESTATED OVER THE WHOLE TABLE ----------------------------------------
+    // The stamp map is INVERTED here rather than assumed: only an op MGPipeVerbForWireOp names
+    // can ever be the verb a pull is reported against.
+    Bool stamped[kMGPipeVerbCount] = {};
     Bool waitedFor[kMGPipeVerbCount] = {};
     for (SizeT op = 0; op < static_cast<SizeT>(MGPWireOp::kOpCount); ++op) {
         const MGPipeVerb verb = MGPipeVerbForWireOp(static_cast<MGPWireOp>(op));
         if (verb == MGPipeVerb::kVerbCount) continue;
+        stamped[static_cast<SizeT>(verb)] = true;
         if (MGPipeWaitClassFor(static_cast<MGPWireOp>(op)) != kWaitNone) {
             waitedFor[static_cast<SizeT>(verb)] = true;
         }
     }
     SizeT admitted = 0;
+    SizeT byWaitClass = 0;
+    SizeT byRetiringPhase = 0;
     for (SizeT v = 0; v < kMGPipeVerbCount; ++v) {
         const auto verb = static_cast<MGPipeVerb>(v);
         for (SizeT f = 0; f < kMGPipeInputFieldCount; ++f) {
             const auto field = static_cast<MGPipeInputField>(f);
             if (!MGPipeBarrierPullAdmitted(field, verb)) continue;
             ++admitted;
-            EXPECT_TRUE(waitedFor[v])
+            if (waitedFor[v]) ++byWaitClass;
+            if (!owedByThisPhase(kMGPipeFieldRetiringPhase[f])) ++byRetiringPhase;
+            EXPECT_TRUE(stamped[v])
                 << kMGPipeInputFieldNames[f] << "@" << kMGPipeVerbNames[v]
-                << " is admitted on a verb no barriered op stamps: after the flip that record's "
-                   "read is torn by construction, and admitting it turns an unconditional Fatal "
-                   "into a warning line";
+                << " is admitted on a verb the server never stamps, so it is a row of the "
+                   "allowlist nothing can exercise and nobody can retire";
+            EXPECT_TRUE(waitedFor[v] || !owedByThisPhase(kMGPipeFieldRetiringPhase[f]))
+                << kMGPipeInputFieldNames[f] << "@" << kMGPipeVerbNames[v]
+                << " is admitted although this phase owes the row AND no barriered op stamps the "
+                   "verb: after the flip that record's read is torn by construction, and "
+                   "admitting it turns an unconditional Fatal into a warning line";
             EXPECT_EQ(kMGPipeFieldOwnership[f], MGPipeFieldOwnership::kBarrierPulled)
                 << kMGPipeInputFieldNames[f] << " is admitted but is not a BARRIER-PULLED row";
             EXPECT_TRUE(MGPipeFieldMaskHas(
@@ -468,6 +524,10 @@ TEST_F(FieldOwnershipTest, TheAdmittedPullTableIsID84sDerivationAndNotAList) {
     EXPECT_GT(admitted, SizeT{0})
         << "the admitted set is EMPTY, which reads in the lane as rigour and is blindness: "
            "every barriered readback row would be reported as a fresh defect";
+    // BOTH DISJUNCTS CARRY REAL WEIGHT. If either count were zero the rule would have collapsed
+    // to the other one and a whole class of rows would be silently mis-classified.
+    EXPECT_GT(byWaitClass, SizeT{0}) << "no pair is admitted by its verb's wait class";
+    EXPECT_GT(byRetiringPhase, SizeT{0}) << "no pair is admitted by its retiring phase";
 }
 
 // ---------------------------------------------------------------------------------------
@@ -838,15 +898,38 @@ TEST_F(FieldOwnershipTest, TheSameReadWithoutStrictErrorsSurvivesAndIsCounted) {
     EXPECT_EQ(r.Log.find("Fatal{"), std::string::npos) << r.Log;
 }
 
-TEST_F(FieldOwnershipTest, StrictErrorsAlsoPromotesTheStickyForwards) {
+// THE SEVEN STICKY FORWARDS ARE NOT EXEMPT FROM THE DETECTOR, which is what this case has
+// always been for - it was written as "strict PROMOTES them to a Fatal" because before ID-125
+// every barrier-pulled read under strict aborted.
+//
+// P5e (gl), ID-125 CHANGED THE VERDICT AND NOT THE REACH, and the rename says which. All seven
+// sticky forwards retire in a LATER phase (P7, P7/P9, P7/P13, P9 - FieldOwnership.def's forward
+// list; not one names P5e), so on any stamped verb the second disjunct admits them: the record
+// is barriered, the pull is legal by construction, and the phase that owes the migration is not
+// this one. The thing that would be a defect is a sticky forward the detector never REACHED -
+// a read that answered out of gPipeInputs without being counted or named - and that is what is
+// asserted here, by the counter moving and by the marker naming the field and its phase.
+//
+// The Fatal half of the mechanism keeps its own case beside this one:
+// StrictErrorsTurnsABarrierPulledReadIntoANamedAbort uses GetBoundVertexArray, which IS this
+// phase's debt on an unbarriered verb and therefore still aborts.
+TEST_F(FieldOwnershipTest, StrictErrorsReachTheStickyForwardsAndNameThemByField) {
     const ChildResult r = RunInChild([] {
         MG_Config::Ipc.StrictErrors = true;
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
         (void)gPipeInputs.ValidateProgramName(1u);
+        // NOT EXEMPT: the forward went through CountBarrierPull like any field accessor. Without
+        // this, "it did not abort" would be indistinguishable from "it was never detected", and
+        // the sticky set is exactly where the gate is structurally blind if it is.
+        if (MGPipeResidualPullCount() != 1) ::_exit(7);
     });
-    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"ValidateProgramName@DrawArrays\"}"),
+    ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_EQ(r.Log.find("Fatal{UnmigratedPipeInput"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("Admitted{UnmigratedPipeInput, \"ValidateProgramName@DrawArrays\"} "
+                         "[BARRIER-PULLED, ADMITTED, retires in P9]"),
               std::string::npos)
+        << "the sticky forward was neither aborted on nor named; a debt nobody prints is a debt "
+           "nobody retires\n"
         << r.Log;
 }
 
