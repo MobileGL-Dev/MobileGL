@@ -508,3 +508,56 @@ monolith 这一次未被 120 Hz vsync 封顶（与 §9 的 205.8 那次同类）
 - 派给外部 CLI 的任务，其进程会活过 harness 的完成通知；**派出后不得自己再跑同一件事**，否则两套实验同时对一台手机 force-stop / 清 logcat，得出假失败。
 - 不得在脚本正被 bash 执行时修改它（边读边执行）；要改先冻结副本。
 - 游戏内 F3 的 `GIT@` 戳记在增量构建下是旧的，**判断库版本要看 APK 里 `.so` 的符号 / 字符串**，不看戳记。
+
+## 11. P5e wave 3 — run-ahead 武装后的设备矩阵（头 `25fba0d5`）
+
+Redmi `2f7cbe2e`，FCL fordebug + Minecraft 26.3-rc-3 世界 `test`，VD12，DirectGLES，~850 draws/帧。
+**CPU 定频**（见下），GPU 钉 pwrlevel 0 且每臂重新断言，风扇开，进世界后 20 s 稳定再取 30 s 窗口，臂交错。
+
+### 定频，以及为什么这一节必须先讲它
+
+第一轮矩阵没有定频，于是 **monolith 自己那一臂**的逐帧 CPU 在两次运行之间从 4.43 ms 跳到 7.07 ms，
+而慢的那次**温度更低**（53.5 °C vs 58.9 °C）——不是热降频，是 walt governor 把 policy0 从 2745 MHz
+拉到 748 MHz。未定频的逐线程 CPU ms/帧**不能跨臂比较**，那一轮矩阵作废。
+
+`tools/device_bench/pin_device.sh` 不认识本机 serial，并**明确拒绝猜**（"pin path 因 SoC 而异，猜错会静默失败"）——
+这是对的，也正是它没有静默半应用的原因。按本机实测节点另写 `pin_redmi.sh`：写序 min→硬件底、max→目标、
+min→目标（顺序要紧，否则按 stock 相对目标的位置会半应用），并**回读 `scaling_cur_freq` 确认**，跑完再 check 一次。
+
+### 结果（每臂两次，离散度 < 2%）
+
+定频 little 1555200 / big 1958400：
+
+| 臂 | fps p50 | fps max | client ms/帧 | apply ms/帧 |
+|---|---|---|---|---|
+| monolith | 115.1 | 117.0 | 6.19 | — |
+| inproc run-ahead | 117.6 / 117.9 | 118.3 / 118.6 | 6.71 / 6.63 | 4.30 / 4.32 |
+| inproc lockstep (`MOBILEGL_IPC_RUN_AHEAD=0`) | 111.1 / 110.7 | 114.9 / 115.1 | 8.27 / 8.09 | 6.44 / 6.41 |
+
+定频 little 1996800 / big 1958400（更高会被厂商限幅器夹住）：
+
+| 臂 | fps p50 | fps max | client ms/帧 | apply ms/帧 |
+|---|---|---|---|---|
+| monolith | 115.6 / 115.4 | 117.2 / 117.5 | 6.45 / 6.25 | — |
+| inproc run-ahead | 117.6 / 118.0 | 118.5 / 118.6 | 6.92 / 6.87 | 4.43 / 4.35 |
+| inproc lockstep | 111.6 | 113.7 | 8.16 | 6.53 |
+
+### 读法
+
+- **配对 A/B**：`MOBILEGL_IPC_RUN_AHEAD=0` 与默认是同一构建、同一份记录、同一定频，唯一差别是客户端等不等
+  （ID-114：**不得**用 `VERB_BARRIER=0`，它是 `RunAheadArmed()` 的第一个合取项，会顺手关掉 run-ahead，
+  而且实测几秒内即 `Fatal{UnmigratedPipeInput, "IsCapabilityEnabled@ClientWaitSync"}`）。
+  差值：client **−18%**、apply **−33%**、fps p50 **+6%**。
+- **两个定频档下 monolith 与 run-ahead 都撞到 120 Hz 面板上限**（max 117-118.6），**只有 lockstep 撞不到**
+  （max 113.7-115.1）。所以"inproc 是否追平 monolith"在本机真实负载上的答案是**追平了**；阶段开始时是
+  **0.62-0.74 倍**（见 §10）。
+- 逐帧 client CPU：run-ahead 6.9 / monolith 6.3，多约 **8%**，两者都在上限之下有余量。
+- **未回答**：面板上限之上谁更快。本机定不住更高频率；一次未定频的高频窗口给出 monolith p50 201 /
+  run-ahead p50 181（约 1.10 倍），但那次不可配对，只作方向性提示。需要关 vsync 或换上限更高的设备。
+
+### 侧写（`25fba0d5` 之前，`7c6f6886`，说明 run-ahead 为什么值得做）
+
+symbolized `simpleperf cpu-cycles`，客户端 GL 线程：`SessionProducer::WaitForAppliedOrEventBacklog`
+**31.58% 自身时间**，其后第二名只有 3.72%。设备计数器同期显示客户端每帧进入 doorbell 等待约 **916 次**
+（对 ~849 次 draw），其中 99.8% 靠自旋解决——`MOBILEGL_IPC_SPIN_US=0` 让每次等待都 park，帧率塌到 20.9。
+所以代价是**会合本身**，不是自旋参数，这也是为什么修法是"不再每次 draw 会合"而不是"把每次会合做便宜"。

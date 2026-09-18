@@ -1,6 +1,6 @@
 # 当前阶段进度
 
-分支 `feat/disaggregated`；代码头 `3cc4e1ec`（2026-09-18，P5e wave 2 + fix1 + ID-110；P5d 收官头 `1f8de61b`，P5c 收官头 `b88e8487`）。本文随每次落地更新。ID-1..75 的逐条裁定长文在 git 历史（`ef35ea0c` 之前版本的本文件）。
+分支 `feat/disaggregated`；代码头 `25fba0d5`（2026-09-18，P5e wave 3：strict 硬绿 + run-ahead 武装；P5d 收官头 `1f8de61b`，P5c 收官头 `b88e8487`）。本文随每次落地更新。ID-1..75 的逐条裁定长文在 git 历史（`ef35ea0c` 之前版本的本文件）。
 
 ## 1. 阶段状态
 
@@ -68,6 +68,94 @@
 | inproc（复跑） | 32 s | **140.3** | 852 | 存活 | 无 |
 
 两臂截图为同一视角同一世界，画面正确。monolith 这一次未被 120 Hz vsync 封顶（与 P5d 的 205.8 那次同类），故**不与 inproc 直接比大小**——本轮问的是"改完还能不能正常跑"，不是配对性能。inproc 的 136-140 与 ID-107 记的 140.0 / 144.9 同档，说明 fix1 触到的那行（臂选择本身，两臂都读）没有拖慢 split 臂。库版本以符号探针确认（`texture-handle-arm` 等四个字符串在 APK 的 `lib/arm64-v8a/libMobileGL.so` 内），不看游戏内的 `GIT@` 戳记——增量构建下它是旧的。
+
+## 2.6 P5e wave 3：strict 硬绿、run-ahead 武装（头 `25fba0d5`）
+
+四个包：**pa**（program 家族，逐 draw 的那次拉取）、**mv**（multi-draw 的 VAO 读点 + 五个档位的门禁条目）、
+**gl**（门禁机制本身 + 两处潜伏崩溃）、**ra2**（翻开开关后暴露的竞态）。裁定 ID-111..136。
+
+### 2.6.1 strict 车道成为可被脚本判定的硬绿
+
+`GetProgramForDraw@DrawArrays` 从 62 条归零（**无线上改动**：记录早就带着每次 link 的 `ProgramArchive`，
+缺的是仍去问前端对象的读者），`GetProgramForDispatch@DispatchCompute` 7 → 0，
+`GetBoundVertexArray@DrawArrays` 9 → 0。采纳规则最终是**三个析取项**：
+
+1. 该 verb 的线上 op 静态设障（ID-116）；
+2. 该字段的退役相不指向本阶段（ID-125）；
+3. 记录是**按升级**而非按静态类设障的（ID-128，XFB 活跃与客户端数组两种 draw）。
+
+三条都不是预想出来的，都是被真实条目逼出来的。白名单由 `gen_pipe_field_ownership.py` **生成**而非手抄
+（ra 原本手抄的 13 行在两个方向上都错），棘轮**两侧**都会失败——新出现的对要认领，不再出现的对要删除，
+否则车道会"烂绿"。合并当天棘轮就自己点名了两处：pa 退役的行不再出现，mv 的间接档位逼出了一行新的。
+
+### 2.6.2 覆盖面
+
+| | wave 3 前 | 现在 |
+|---|---|---|
+| `unit` | 2250 | **2256** |
+| `integration-split` | 116 | **179**（+ 2 条 clientarrays 预期红、2 条 magma 预期红） |
+| `integration-gpu` | 1294 | **1357** |
+| 构建 flavour | 只有 split 编得过 | **pull / push / split 全绿**（ID-124） |
+
+新增的 65 条条目全部覆盖此前**一条门禁条目都没有**的臂或档位。
+
+### 2.6.3 翻开开关之后：strict 硬绿是必要而**不充分**的
+
+翻开两个常量后 `unit`/`gens`/`flavours` 仍全绿，而 `isplit` 掉到 112/181、`gpu` 掉到 1290/1359，**且 flaky**。
+70 条红只涉及四个字段、横跨十一个 verb——一个字段一个 verb 稳定失败是漏迁移，**四个字段散在十一个 verb 上且
+flaky 是竞态**。根因（ra2 实测，推翻了我 ID-132 的机制猜测）：`gPipeInputs` 的**字段值**已由 `SuppliedFieldMask`
+分区、不竞态；竞态的是**元数据标量**。而让它长期不可见的是守卫本身——
+`RefusePipeInputsTouchWhileApplierOwnsIt` 的 run-ahead 臂对任何 `isBarrieredFill` 一律豁免，依据是一句
+**关于未来**的断言（"客户端马上就要 park"），而真实顺序是 fill → emit → park。修法是把那句断言**变成事实**。
+同源的第二个缺陷：`MGP_VERB_OP_LIST` 把整个 draw 家族并到一行，十九个索引 draw verb 都答"设障"、都填充、都不 park。
+
+**教训（ID-132）**：strict 跑在 lockstep 下，`ApplyOne` 把每条记录都盖成 barriered，所以"只在客户端不再等待时
+才发生"的事它按构造看不见。阶段出口必须有一条**独立的、翻开开关后的**车道。
+
+### 2.6.4 头 `25fba0d5` 的门（run-ahead 已武装）
+
+| 门 | 结果 |
+|---|---|
+| build | rc=0 |
+| unit | **2256/2256** |
+| `integration-split` | **179/179** |
+| `integration-gpu` | **1357/1357** |
+| `flavours` | rc=0（pull 915 TU push=absent，push 929 TU push=1） |
+| 生成器 / 卫生门 | 全 rc=0 |
+| 逐条普查（strict） | **179/179 绿，`Fatal{` 为零**，`Admitted{` 恰为 ID-128 的八行 |
+| 预期红车道 | `integration-clientarrays-split` 2 条（`(Multi)DrawArrays+CLIENT_ARRAYS`）、`integration-magma-split` 2 条（`GetFramebufferBindingSlot@Clear`），均具名断言 |
+
+### 2.6.5 设备（Redmi `2f7cbe2e`，MC 26.3-rc-3，~850 draws/帧，**CPU 定频**，风扇开，30 s 窗口，交错）
+
+**先记一条测量纠错**：第一轮矩阵**没有定频**，monolith 自己那一臂的逐帧 CPU 在两次之间从 4.43 跳到 7.07 ms，
+而那次慢的**温度更低**——是 walt governor 把 policy0 从 2745 拉到 748 MHz，不是热降频。
+`tools/device_bench/pin_device.sh` 不认识本机 serial 且**拒绝猜**（正确），故按本机节点另写了 `pin_redmi.sh`，
+写序 min→底、max→目标、min→目标，并**回读 `scaling_cur_freq` 验证定频生效**。
+
+定频 little 1555200 / big 1958400（每臂两次，离散度 < 2%）：
+
+| 臂 | fps p50 | fps max | client ms/帧 | apply ms/帧 |
+|---|---|---|---|---|
+| monolith | 115.1 | 117.0 | 6.19 | — |
+| inproc **run-ahead** | **117.6 / 117.9** | 118.3 / 118.6 | 6.71 / 6.63 | 4.30 / 4.32 |
+| inproc lockstep（`RUN_AHEAD=0`，配对对照） | 111.1 / 110.7 | 114.9 / 115.1 | 8.27 / 8.09 | 6.44 / 6.41 |
+
+定频 little 1996800 / big 1958400（本机允许的最高，再高被厂商限幅器夹住）：
+
+| 臂 | fps p50 | fps max | client ms/帧 | apply ms/帧 |
+|---|---|---|---|---|
+| monolith | 115.6 / 115.4 | 117.2 / 117.5 | 6.45 / 6.25 | — |
+| inproc **run-ahead** | **117.6 / 118.0** | 118.5 / 118.6 | 6.92 / 6.87 | 4.43 / 4.35 |
+| inproc lockstep | 111.6 | 113.7 | 8.16 | 6.53 |
+
+**配对 A/B（同一构建、同一定频，唯一差别是客户端等不等）**：client −18%、apply −33%、fps p50 +6%。
+
+**结论**：两个定频档下，**monolith 与 run-ahead 都撞到 120 Hz 面板上限（max 117-118.6），只有 lockstep 撞不到**
+（max 113.7-115.1）。也就是说在这台设备的真实负载里，**inproc 现在与 monolith 齐平**，而阶段开始时是 0.62-0.74 倍。
+逐帧 client CPU 上 run-ahead 比 monolith 多约 8%（6.9 vs 6.3），两者都在上限之下留有余量。
+
+**尚未回答的**：面板上限之上谁更快。本机定不住更高的频率，而未定频的一次高频窗口里 monolith p50 201 / run-ahead
+p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提示。要回答它需要关掉 vsync 或换一台上限更高的设备。
 
 ## 3. P5c 落地内容
 
