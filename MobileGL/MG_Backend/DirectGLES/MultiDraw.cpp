@@ -11,6 +11,7 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_Pipe/PipeInputsSwitch.h>
 #include <MG_Util/Metrics/PipeStats.h>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 
@@ -91,11 +92,151 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             return resource ? resource->id : 0;
         }
 
-        const SharedPtr<MG_State::GLState::BufferObject>& BoundIndexBuffer() {
-            static const SharedPtr<MG_State::GLState::BufferObject> none;
+        // ---------------------------------------------------------------------------
+        // The bound index buffer, and WHICH SIDE ANSWERS FOR IT
+        //
+        // P5e (mv), CONTRACT-P5E §5.1 + §5.8 (ruling ID-81): this file asks the bound element
+        // array buffer exactly three questions - "is one bound at all", "what GL name did
+        // PrepareForDraw leave on GL_ELEMENT_ARRAY_BUFFER (and how big is its store)", and
+        // "give me its bytes on the CPU" - and until now it asked all three of the FRONTEND
+        // VAO, on the apply thread, once per indexed multi-draw. That was the last unguarded
+        // `MGB_CTX->GetBoundVertexArray()` in the backend: package vi retired the ordinary
+        // draw path's copy (DirectGLES.cpp's SyncCurrentVertexAttributeValues / PrepareForDraw)
+        // and this one survived only because these batches used to die earlier, on the
+        // framebuffer row fb has since retired.
+        //
+        // THE ARM IS STATED, NEVER INFERRED. BufferImpl::VertexInputReadsRecords() is the
+        // family's own selector and reduces to `Transport != Monolith && the vertex-input bit`;
+        // it is the same conjunction RefuseElementArrayBufferFromTheFrontend guards the
+        // single-draw path with. Nothing below decides an arm by noticing that a handle or a
+        // pointer happens to be null - conflating "a handle was noted" with "the record arm is
+        // selected" is what ID-107 cost this phase 137 scenarios.
+        // ---------------------------------------------------------------------------
+
+        // How much of the index buffer a caller needs. DELIBERATELY not nested levels: each
+        // value is exactly the work its original call site did, in its original order, so the
+        // monolith arm makes the same calls in the same sequence it made before this package.
+        enum class IndexBufferQuestion {
+            Presence,         // is an element array buffer bound at all
+            DriverName,       // + the GL name currently bound to GL_ELEMENT_ARRAY_BUFFER
+            DriverNameAndSize,// + the store's size in bytes (the compute tier's source)
+            HostBytes,        // a CPU-readable copy of the whole store, and its size
+        };
+
+        struct BoundIndexBufferView {
+            Bool Present = false;
+            Uint Id = 0;                      // DriverName*: 0 when there is no backend store yet
+            SizeT Size = 0;                   // DriverNameAndSize / HostBytes
+            const Uint8* HostBytes = nullptr; // HostBytes: null when there is no CPU copy
+        };
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // A missing record on the handle arm is a NAMED refusal and never a quiet fall-back to
+        // the frontend (TASK-mv requirement 2; the shape is Managers.cpp's
+        // RefuseNullFrontendTextureOffTheHandleArm). The frontend element slot is not a second
+        // opinion on this side: it answers for whatever the CLIENT has bound NOW, which is a
+        // later draw than the one being applied. Drawing a batch from it would be a silently
+        // wrong picture, which is precisely what MultiDrawScenario's batch-matches-unrolled
+        // assertions exist to catch and what a fall-back would hide from them.
+        [[noreturn]] void RefuseMissingIndexBufferRecord(const char* entry, MG_Pipe::MGPipeHandle res,
+                                                         const char* missing) {
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"multidraw-index-buffer-arm\"} - %s found no %s for "
+                    "the index buffer {%u, %u} this batch's record named. The index buffer of this "
+                    "family is MGPipeApplier().IndexBuffer.Res (CONTRACT-P5E §5.1) and the arm is "
+                    "selected by Transport != Monolith AND the vertex-input subsystem bit (§5.8, "
+                    "ID-81); falling back to the frontend VAO's element slot here would draw this "
+                    "multi-draw from whatever the CLIENT has bound now",
+                    entry, missing, res.Slot, res.Gen);
+            std::abort();
+        }
+
+        // Does the applier's record say the application SUPPLIED this store's content? The M-3
+        // rule ScopedRestartIndexSubstitution spells: for a supplied store a coverage gap in the
+        // server shadow is a missing record and Fatal by name; for one the application ORPHANED
+        // the gap is its own undefined content, and reading the shadow's zero-fill is exactly
+        // what the monolith arm's MappedData() hands back.
+        Bool IndexBufferRecordHasDefinedContent(const MG_Pipe::MGPipeApplierState& st,
+                                                MG_Pipe::MGPipeHandle res) {
+            if (res.Slot >= st.Resources.size()) return false;
+            const auto& candidate = st.Resources[res.Slot];
+            if (!candidate.Live || candidate.Gen != res.Gen) return false;
+            return candidate.Desc.HasDefinedContent != 0;
+        }
+#endif
+
+        BoundIndexBufferView ResolveBoundIndexBuffer(IndexBufferQuestion question, const char* entry) {
+            BoundIndexBufferView view;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (BufferImpl::VertexInputReadsRecords()) {
+                const auto& st = MG_Pipe::MGPipeApplier();
+                const MG_Pipe::MGPipeHandle res = BufferImpl::ResolveDrawIndexBufferFromRecord(st).Res;
+                // A null Res is "no element array buffer bound", exactly as a null frontend slot
+                // is on the arm below - the batch's indices are a client array, and every caller
+                // already has an arm for that. It is NOT the arm test; the arm was decided above.
+                if (MG_Pipe::MGPipeHandleIsNull(res)) return view;
+                view.Present = true;
+                if (question == IndexBufferQuestion::Presence) return view;
+
+                if (question == IndexBufferQuestion::HostBytes) {
+                    // No Sync* pair here and none is missing: on this side the applier has
+                    // already consumed the persistent-map blocks and the shader writebacks for
+                    // this resource before the draw verb replayed, so the server's staged shadow
+                    // IS the synced copy. That is also why this arm cannot be expressed as "find
+                    // the object and run the monolith body".
+                    auto* resource = BufferImpl::FindBufferResourceForHandle(res);
+                    if (resource == nullptr) RefuseMissingIndexBufferRecord(entry, res, "backend resource");
+                    view.Size = BufferImpl::ResourceWidthForHandle(res);
+                    view.HostBytes = resource->hostBytes;
+                    if (view.HostBytes != nullptr && IndexBufferRecordHasDefinedContent(st, res)) {
+                        BufferImpl::RequireStagedCoverage(*resource, view.HostBytes, 0, view.Size,
+                                                          "multidraw_index_rebase");
+                    }
+                    // A null HostBytes is not a refusal: MappedData() on the monolith arm is
+                    // equally allowed to be null (an adopted coherent map keeps its bytes
+                    // elsewhere), and the one caller that asks declines the tier for it.
+                    return view;
+                }
+
+                auto* resource = BufferImpl::EnsureBufferResourceForHandle(nullptr, res);
+                if (resource == nullptr) RefuseMissingIndexBufferRecord(entry, res, "backend resource");
+                view.Id = resource->id;
+                if (question == IndexBufferQuestion::DriverNameAndSize) {
+                    view.Size = BufferImpl::ResourceWidthForHandle(res);
+                }
+                return view;
+            }
+#endif
+            // MONOLITH GLUE from here down, token for token what each call site did before.
             const auto& vao = MGB_CTX->GetBoundVertexArray();
-            if (!vao) return none;
-            return vao->GetIndexBufferBindingSlot().GetBoundObject();
+            if (!vao) return view;
+            const auto& ibo = vao->GetIndexBufferBindingSlot().GetBoundObject();
+            if (!ibo) return view;
+            view.Present = true;
+            switch (question) {
+            case IndexBufferQuestion::Presence:
+                break;
+            case IndexBufferQuestion::DriverName: {
+                const auto* resource = BufferImpl::EnsureBufferResource(ibo);
+                view.Id = resource ? resource->id : 0;
+                break;
+            }
+            case IndexBufferQuestion::DriverNameAndSize: {
+                const auto* resource = BufferImpl::EnsureBufferResource(ibo);
+                view.Id = resource ? resource->id : 0;
+                view.Size = ibo->GetSize();
+                break;
+            }
+            case IndexBufferQuestion::HostBytes:
+                // The shadow is the source of truth for CPU reads, but a persistent map or
+                // a shader write may have moved past it since the last sync.
+                ibo->SyncPersistentMappedRange();
+                ibo->SyncGpuWrites();
+                view.HostBytes = ibo->MappedData();
+                view.Size = ibo->GetSize();
+                break;
+            }
+            (void)entry;
+            return view;
         }
 
         // The GL name PrepareForDraw left on GL_ELEMENT_ARRAY_BUFFER, i.e. what a tier
@@ -103,10 +244,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // matters beyond tidiness: the VAO twin memoises that it already synced this
         // index binding and will not re-issue it on the next draw.
         Uint BoundIndexBufferId() {
-            const auto& ibo = BoundIndexBuffer();
-            if (!ibo) return 0;
-            const auto* resource = BufferImpl::EnsureBufferResource(ibo);
-            return resource ? resource->id : 0;
+            return ResolveBoundIndexBuffer(IndexBufferQuestion::DriverName, "BoundIndexBufferId").Id;
         }
 
         // ---------------------------------------------------------------------------
@@ -361,13 +499,18 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             }
         }
 
-        // CPU-readable bytes of one sub-draw's indices, from the frontend shadow of the
-        // bound index buffer or straight from the client array. Null when the sub-draw
-        // would read outside the buffer.
-        const Uint8* ResolveSubDrawIndices(const SharedPtr<MG_State::GLState::BufferObject>& indexBuffer,
-                                           const Uint8* indexBufferBytes, SizeT indexBufferSize, const void* indices,
-                                           SizeT indexCount, SizeT indexSize) {
-            if (!indexBuffer) {
+        // CPU-readable bytes of one sub-draw's indices, from the CPU copy of the bound index
+        // buffer (the frontend shadow on the monolith arm, the server's staged shadow on the
+        // record arm) or straight from the client array. Null when the sub-draw would read
+        // outside the buffer.
+        //
+        // P5e (mv): `hasIndexBuffer` is a Bool and not the frontend object it used to be,
+        // because presence is the only thing this function ever asked of it - and on the record
+        // arm there is no such object on this side to hand it.
+        const Uint8* ResolveSubDrawIndices(Bool hasIndexBuffer, const Uint8* indexBufferBytes,
+                                           SizeT indexBufferSize, const void* indices, SizeT indexCount,
+                                           SizeT indexSize) {
+            if (!hasIndexBuffer) {
                 return static_cast<const Uint8*>(indices);
             }
             if (!indexBufferBytes) return nullptr;
@@ -410,8 +553,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             if (indexSize == 0) return false;
             // Indirect commands address indices as an element offset into the bound element
             // array buffer, and an indirect draw is not defined without one.
-            const auto& indexBuffer = BoundIndexBuffer();
-            if (!indexBuffer) return false;
+            if (!ResolveBoundIndexBuffer(IndexBufferQuestion::Presence, "RunIndirect").Present) return false;
 
             g_commandStaging.resize(static_cast<SizeT>(drawcount));
             for (GLsizei i = 0; i < drawcount; ++i) {
@@ -502,17 +644,10 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             if (total == 0) return true;
             if (total > kMaxFlattenedIndices) return false;
 
-            const auto& indexBuffer = BoundIndexBuffer();
-            const Uint8* indexBufferBytes = nullptr;
-            SizeT indexBufferSize = 0;
-            if (indexBuffer) {
-                // The shadow is the source of truth for CPU reads, but a persistent map or
-                // a shader write may have moved past it since the last sync.
-                indexBuffer->SyncPersistentMappedRange();
-                indexBuffer->SyncGpuWrites();
-                indexBufferBytes = indexBuffer->MappedData();
-                indexBufferSize = indexBuffer->GetSize();
-            }
+            const BoundIndexBufferView indexBuffer =
+                ResolveBoundIndexBuffer(IndexBufferQuestion::HostBytes, "RunRebasedDrawElements");
+            const Uint8* const indexBufferBytes = indexBuffer.HostBytes;
+            const SizeT indexBufferSize = indexBuffer.Size;
 
             const Bool restartActive = RestartActive();
             const Uint32 restartSentinel = RestartSentinelFor(type);
@@ -531,8 +666,8 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             for (GLsizei i = 0; i < drawcount; ++i) {
                 if (count[i] <= 0) continue;
                 const SizeT subDrawCount = static_cast<SizeT>(count[i]);
-                const Uint8* source = ResolveSubDrawIndices(indexBuffer, indexBufferBytes, indexBufferSize, indices[i],
-                                                            subDrawCount, indexSize);
+                const Uint8* source = ResolveSubDrawIndices(indexBuffer.Present, indexBufferBytes, indexBufferSize,
+                                                            indices[i], subDrawCount, indexSize);
                 if (!source) {
                     MGLOG_E_ONCE("DirectGLES multi-draw (drawelements tier): sub-draw %d reads outside the bound index "
                             "buffer; skipping the batch",
@@ -714,16 +849,18 @@ void main() {
 
             // The shader reads the source indices as a storage buffer, so there has to be
             // a real buffer to read - a client-memory index array has none.
-            const auto& indexBuffer = BoundIndexBuffer();
-            if (!indexBuffer) return;
+            if (!ResolveBoundIndexBuffer(IndexBufferQuestion::Presence, "FlattenWithCompute").Present) return;
 
             // A dispatch inside an open capture span is not legal, and the span would also
             // observe one merged draw rather than the batch it asked for.
             if (XfbImpl::IsCaptureSpanOpen()) return;
 
-            auto* sourceResource = BufferImpl::EnsureBufferResource(indexBuffer);
-            if (!sourceResource || sourceResource->id == 0) return;
-            const SizeT sourceSize = indexBuffer->GetSize();
+            // Asked a second time, and one question later: the ensure below may do GL work, so
+            // it stays BEHIND the capture-span check exactly as it was before P5e (mv).
+            const BoundIndexBufferView source =
+                ResolveBoundIndexBuffer(IndexBufferQuestion::DriverNameAndSize, "FlattenWithCompute");
+            if (source.Id == 0) return;
+            const SizeT sourceSize = source.Size;
             // std430 addresses the source as uint[]; a tail shorter than a word is not
             // reachable, so a narrow index type needs a word-multiple buffer.
             if (indexSize < 4 && (sourceSize % 4) != 0) return;
@@ -762,7 +899,7 @@ void main() {
                 return;
             }
 
-            BufferImpl::BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, 0, sourceResource->id);
+            BufferImpl::BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, 0, source.Id);
             BufferImpl::BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, 1, g_drawInfo.id);
             BufferImpl::BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, 2, g_flattenedIndices.id);
 
@@ -906,7 +1043,8 @@ void main() {
         const Bool arbitraryRestart = restartKind == RestartSubstitutionKind::RewriteIndices;
         const ScopedSuppressedPrimitiveRestart restartCapOverride(restartKind);
 
-        const Bool hasIndexBuffer = BoundIndexBuffer() != nullptr;
+        const Bool hasIndexBuffer =
+            ResolveBoundIndexBuffer(IndexBufferQuestion::Presence, "DrawElementsBatch").Present;
 
         // The compute tier dispatches BEFORE the draw state is established: doing it
         // afterwards would mean unpicking the program, SSBO and index bindings
