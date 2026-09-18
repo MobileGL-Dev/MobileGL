@@ -251,6 +251,15 @@ namespace MobileGL {
                 Uint64 GetAnyBufferChangeGeneration() const {
                     return m_bufferState.GetAnyBufferChangeGeneration();
                 }
+                // P5e (sb): the per-target INDEXED BINDING POINT generation, which is what dirty
+                // bits 15/16/17 shutter on now. See BufferState::NoteBindPointChanged for why
+                // the content aggregate above could not answer the question.
+                void NoteBufferBindPointChanged(BufferTarget target) {
+                    m_bufferState.NoteBindPointChanged(target);
+                }
+                Uint64 GetBufferBindPointGeneration(BufferTarget target) const {
+                    return m_bufferState.GetBindPointGeneration(target);
+                }
                 // The sixth aggregate lives here rather than on a state container because
                 // the values it guards do too (m_currentVertexAttributes).
                 void NoteVertexAttribDefaultChanged() { ++m_anyVertexAttribDefaultGeneration; }

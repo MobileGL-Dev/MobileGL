@@ -284,16 +284,37 @@
     /* which is the window no shutter and no pull can cover, and the reason those sites     */  \
     /* had to come inside this gate rather than stay a recorded blind spot.                 */  \
     X(NoteUnitTouched,                    kPulledPartialShutter|NEW_SAMPLER_VIEWS)              \
-    /* NOT NEW_SO_TARGETS, and this one was false on EVERY path: GLContext::SetNamed        */  \
-    /* TransformFeedbackBinding either binds a BufferState binding point (index == the      */  \
-    /* bound XFB object) or writes a saved-bindings entry, and NEW_SO_TARGETS mixes the     */  \
-    /* buffer-CONTENT aggregate with the transform-feedback generation - the first moves    */  \
-    /* only at BufferObject.cpp's content sites, the second only in BeginTransformFeedback. */  \
-    /* A binding moves neither. It reaches the backend the same way every other buffer      */  \
-    /* binding point does, through GetBufferBindingPoint in the verb class's may-read mask, */  \
-    /* so the honest answer is the pull. Narrowing it is P3b's, when it takes the subsystem */  \
-    /* over and the binding points get a generation of their own.                           */ \
-    X(SetNamedTransformFeedbackBinding,   kPulledEveryVerb)                                     \
+    /* P5e (sb) REWRITES THIS ROW, AND THE OLD ONE ENDED WITH ITS OWN CONDITION: "narrowing */  \
+    /* it is P3b's, when it takes the subsystem over and the binding points get a           */  \
+    /* generation of their own". They have one now (BufferState::NoteBindPointChanged), bit */  \
+    /* 17's shutter reads it, and this function bumps it - so the paragraph that said       */  \
+    /* NEW_SO_TARGETS was "false on EVERY path" is withdrawn, because what made it false    */  \
+    /* was that the bit mixed the buffer-CONTENT aggregate, which no binding has ever moved.*/  \
+    /*                                                                                       */ \
+    /* kPulledPartialShutter AND NOT A BARE BIT, because the function has two arms: with     */ \
+    /* `index == m_boundTransformFeedback` it binds a real BufferState binding point and     */ \
+    /* bumps, and otherwise it writes the NAMED object's saved-bindings entry, which is not  */ \
+    /* a binding point at all and deliberately bumps nothing. So the bit fires on some of    */ \
+    /* the paths that mutate and not all, which is exactly what this answer is for; what     */ \
+    /* holds on every mutating path is still the pull through GetBufferBindingPoint.         */ \
+    X(SetNamedTransformFeedbackBinding,   kPulledPartialShutter|NEW_SO_TARGETS)                 \
+    /* P5e (sb), THE ONE NAME THE `Touch` PREFIX SURFACES, on two call sites - GL_Buffer.cpp's*/ \
+    /* BindBufferBase_State and BindBufferRange_State. It moves the per-target high-water    */ \
+    /* mark that bounds every indexed-binding-point walk there is: the backend's, the        */ \
+    /* client's GPU-write sweep's, and set_shader_buffers' emitted window.                   */ \
+    /*                                                                                       */ \
+    /* kPulledEveryVerb, in GetMaxTouchedTextureUnit's exact words one family over: the      */ \
+    /* field it writes (GetTouchedBufferBindingPointCount) has no shutter of its own and     */ \
+    /* needs none - it is in kDraw's, kDispatch's and kXfbSpan's may-read masks, so the      */ \
+    /* residual fill copies it at every verb of those classes, and since P5c rv              */ \
+    /* set_context_values carries it as a value whose gate is the whole-record hash.         */ \
+    /*                                                                                       */ \
+    /* IT NAMES NO BIT, AND THAT IS NOT THE SAME AS THE MUTATION GOING UNPUBLISHED. Both     */ \
+    /* call sites bump the bind-point generation on the line below this call, so bits 15/16/ */ \
+    /* 17 fire for the bind - but they fire for the BINDING, through a different member, and */ \
+    /* a row here that named them would claim this mutator moves a shutter it does not touch */ \
+    /* (the derivation refutes exactly that, which is how the claim was tested).             */ \
+    X(TouchBufferBindingPoint,            kPulledEveryVerb)                                     \
     /* ---- P4a, THE FOUR THE WIDENED PREFIX SET SURFACES. Every one of them moves a field */  \
     /* P3a or P4a pushes and none of them was visible to the scan before, because none     */  \
     /* begins with one of the ten words the pattern matched.                                */ \
@@ -415,10 +436,23 @@
 //
 // The ten mutators that reach a tainted body (--check prints the count) all carry a prose
 // answer, which no derivation checks; these two mutators are the first that carry a bit answer.
+//
+// P5e (sb) ADDS A THIRD, for the same property of the scanner and a third unplaceable write:
+//
+//   SetNamedTransformFeedbackBinding
+//                   -> MGPipeSlots().Acquire() calls GetLifetimeId() through its reference
+//                      parameter `buffer`, which the analysis cannot root in a member
+//
+// The claim it marks is plain: the bound arm of this function bumps the transform-feedback
+// target's bind-point generation (BufferState::NoteBindPointChanged), which is exactly what
+// bit 17's shutter reads since P5e. The mark is on the BIT the kPulledPartialShutter row
+// names, not on the pull, so what this list suspends is the narrowing claim and never the
+// answer that holds on every path.
 #define MGP_DIRTY_SURFACE_UNDECIDED_LIST(X)                                                     \
     X(UseProgram,      NEW_SHADER)                                                              \
     X(UseProgram,      NEW_SAMPLER_VIEWS)                                                       \
     X(UseProgram,      NEW_SHADER_IMAGES)                                                       \
-    X(BindVertexArray, NEW_VERTEX_ELEMENTS)
+    X(BindVertexArray, NEW_VERTEX_ELEMENTS)                                                     \
+    X(SetNamedTransformFeedbackBinding, NEW_SO_TARGETS)
 
 // clang-format on

@@ -381,6 +381,18 @@ namespace MobileGL::MG_Pipe {
         MGP_SetShaderImages(&hdr, tail, hdr.Count);
     }
 
+    // ---- indexed buffer binding points (P5e, sb) ----------------------------------------
+    //
+    // ONE ROUTE FOR THREE RECORDS: the class is a FIELD, not an opcode, so Uniform,
+    // ShaderStorage and AtomicCounter all come through here and the applier keys on hdr.Class.
+    // The second var-tail (MGHostSpan[HostSpanCount], D-B8) is never present on Espryt -
+    // kCapNeedsHostUboBytes is 0 for the whole of P5 - so this wrapper states one tail, and the
+    // codec's honesty pass is the guard that says so out loud if a backend ever asks for the
+    // other one.
+    inline void MGPipeRouteSetShaderBuffers(const MGPShaderBuffers& hdr, const MGPBufferRange* tail) {
+        MGP_SetShaderBuffers(&hdr, tail, hdr.Count);
+    }
+
     // ---- programs ----------------------------------------------------------------------
     inline void MGPipeRouteCreateShaderState(const MGPProgramDesc& desc,
                                              const MG_State::GLState::LinkArtifacts* link,

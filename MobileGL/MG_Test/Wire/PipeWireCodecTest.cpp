@@ -756,9 +756,11 @@ TEST_F(PipeWireCodecTest, KHostSpanClassIsValidatedEvenThoughP5ProducesNone) {
               kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
-    // No applier entry point exists and the call is off the reduced path, so the honest answer
-    // is "this build does not implement it" - after the tails have been checked.
-    EXPECT_FALSE(applied);
+    // P5e (sb): the applier entry point EXISTS now, so the record is applied after the tails
+    // have been checked. The case's own subject is unchanged and is what its name says - the
+    // kHostSpan class is validated whether or not P5 ever produces one - and the flip is the
+    // proof that the honesty pass runs IN FRONT of the apply rather than instead of it.
+    EXPECT_TRUE(applied);
 }
 
 // =====================================================================================
@@ -877,7 +879,9 @@ TEST_F(PipeWireCodecTest, SetShaderBuffersCarriesBothTailsWhenTheSpanTailIsPrese
               kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
-    EXPECT_FALSE(applied);
+    // P5e (sb): applied, for the reason the sibling case above states. BOTH tails still cross
+    // and both are still laid out by MGPipeWireRecordLayout, which is what this case is about.
+    EXPECT_TRUE(applied);
 }
 
 TEST_F(PipeWireCodecTest, ResourceSubDataCarriesABlobAndARegionTailTogether) {

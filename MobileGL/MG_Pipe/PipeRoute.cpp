@@ -225,6 +225,11 @@ namespace MobileGL::MG_Pipe {
         MGP_MONO_TAIL(SetSamplerViews, MGPSamplerViews, MGPBoundView)
         MGP_MONO_TAIL(BindSamplerStates, MGPSamplerStates, MGPipeHandle)
         MGP_MONO_TAIL(SetShaderImages, MGPShaderImages, MGPImageView)
+        // P5e (sb, CONTRACT-P5E.md §5.6). Catalogued since P4a with no producer and no
+        // consumer; the adapter lands with the applier's body. The generic tail shape fits
+        // because the SECOND tail is absent on every Espryt configuration (HostSpanCount is 0
+        // while kCapNeedsHostUboBytes is 0, which is the whole of P5).
+        MGP_MONO_TAIL(SetShaderBuffers, MGPShaderBuffers, MGPBufferRange)
         MGP_MONO_TAIL(SetVertexAttribDefaults, MGPVertexAttribDefaults, MGPAttribValue)
 
 #undef MGP_MONO_PLAIN
@@ -342,6 +347,7 @@ namespace MobileGL::MG_Pipe {
         gMGPipeContext.SetSamplerViews = &Mono_SetSamplerViews;
         gMGPipeContext.BindSamplerStates = &Mono_BindSamplerStates;
         gMGPipeContext.SetShaderImages = &Mono_SetShaderImages;
+        gMGPipeContext.SetShaderBuffers = &Mono_SetShaderBuffers;
         gMGPipeContext.SetGlobalConstants = &Mono_SetGlobalConstants;
         gMGPipeContext.SetVertexAttribDefaults = &Mono_SetVertexAttribDefaults;
         gMGPipeContext.SetPixelPackState = &Mono_SetPixelPackState;

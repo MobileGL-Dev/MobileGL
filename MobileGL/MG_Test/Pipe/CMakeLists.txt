@@ -141,7 +141,10 @@ endif()
 # have to come back to this file to add a case.
 #
 # P4a's six are FramebufferEmitTest, TextureEmitTest, SamplerEmitTest, ImageEmitTest,
-# ProgramEmitTest and CompositeResolverTest. Each lands from the contract commit with one case
+# ProgramEmitTest and CompositeResolverTest; P5e's one is ShaderBufferEmitTest (package sb, the
+# indexed buffer binding points), which takes the same shape because it has the same needs - a
+# live frontend context, a route that reaches the applier, and refusals that are a log line in
+# a shipped push build. Each lands from the contract commit with one case
 # that pins the shape its later cases depend on - the emitter is one never-destroyed process
 # singleton, or the composite band has exactly one door - so none of them is an empty file
 # waiting for a package, and none of them can be registered wrongly without a red test.
@@ -153,7 +156,8 @@ endif()
 # HERE is what keeps the later packages out of this file.
 foreach(pipeTest ResourceEmitTest VertexInputEmitTest
                  FramebufferEmitTest TextureEmitTest SamplerEmitTest ImageEmitTest
-                 ProgramEmitTest CompositeResolverTest)
+                 ProgramEmitTest CompositeResolverTest
+                 ShaderBufferEmitTest)
         add_executable(${pipeTest} ${pipeTest}.cpp)
 
         target_include_directories(${pipeTest} PRIVATE
@@ -212,7 +216,8 @@ gtest_discover_tests(PipeCatalogueTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS un
 gtest_discover_tests(FieldOwnershipTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 foreach(pipeTest ResourceEmitTest VertexInputEmitTest
                  FramebufferEmitTest TextureEmitTest SamplerEmitTest ImageEmitTest
-                 ProgramEmitTest CompositeResolverTest)
+                 ProgramEmitTest CompositeResolverTest
+                 ShaderBufferEmitTest)
         gtest_discover_tests(${pipeTest} DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 endforeach()
 gtest_discover_tests(MagmaPipeIdentityTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

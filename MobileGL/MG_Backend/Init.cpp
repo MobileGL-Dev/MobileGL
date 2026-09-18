@@ -97,9 +97,21 @@ namespace MobileGL::MG_Backend {
         // rather than aborting.
         constexpr Bool kMGPipeP5eRunAheadReady = false;
 
+        // P5e (sb, ID-106). DirectGLES GAINS BIT 13 - the indexed buffer binding points - and
+        // Magma deliberately does not. c0e landed the phase constant and the dirty-bit map with
+        // this row still reading P4a's mask, because withholding a consumer bit is the safe
+        // direction while no emitter exists: the client's R-8 gate then keeps the whole family
+        // on the legacy pull path. The moment ShaderBufferEmit.h's wired constant leaves 0 the
+        // two have to move together, so they are one commit.
+        //
+        // DIRECTVULKAN STAYS ON P4a's MASK. The bit says "this server reads set_shader_buffers
+        // instead of walking the client's binding-point table", and Magma's UniformManager does
+        // no such thing - it has no binding-point records at all, and P5e leaves it lockstep
+        // (CONTRACT-P5E.md §6). Claiming the bit there would make the client emit a family
+        // nothing consumes, which is ID-39's failure with a different family's name on it.
         Uint64 ConsumedSubsystemsFor(BackendType type) {
             switch (type) {
-            case BackendType::DirectGLES: return MG_Pipe::kMGPipeSubsystemsMigratedAtP4a;
+            case BackendType::DirectGLES: return MG_Pipe::kMGPipeSubsystemsMigratedAtP5e;
             case BackendType::DirectVulkan:
                 return MG_Pipe::kMGPipeSubsystemsMigratedAtP4a & ~MG_Pipe::kMGPipeSubsystemResources;
             default: return 0;

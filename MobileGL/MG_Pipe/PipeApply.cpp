@@ -1239,6 +1239,22 @@ namespace MobileGL::MG_Pipe {
             ++g_applier.RefusedNoConsumer;
             return true;
         }
+
+        // P5e (sb, CONTRACT-P5E.md §5.6): the three binding-point windows, cleared in one
+        // place because BOTH resets clear them and the two used to drift on exactly this kind
+        // of member (the framebuffer family's four). The SERIAL is deliberately NOT touched
+        // here - each caller advances it beside its own siblings, where the "advance, never
+        // zero" rule is written out.
+        void ClearShaderBufferWindows() {
+            for (Uint32 cls = 0; cls < kMGPipeShaderBufferClassCount; ++cls) {
+                g_applier.BoundShaderBuffers[cls] = {};
+                g_applier.ShaderBufferStart[cls] = 0;
+                g_applier.ShaderBufferCount[cls] = 0;
+                for (Uint32 w = 0; w < kMGPipeShaderBufferWritableMaskWords; ++w) {
+                    g_applier.ShaderBufferWritableMask[cls][w] = 0;
+                }
+            }
+        }
     } // namespace
 
     void MGPipeApplierReset() {
@@ -1363,11 +1379,22 @@ namespace MobileGL::MG_Pipe {
         g_applier.DrawProgram = kMGPipeNullHandle;
         g_applier.DispatchProgram = kMGPipeNullHandle;
         g_applier.BoundShaderCso = kMGPipeNullHandle;
+        // P5e (sb, CONTRACT-P5E.md §5.6): the three binding-point windows are per-context
+        // WORKING state and go with the rest of it - a returning context has its own
+        // glBindBufferBase history and may not inherit the one this applier was left holding.
+        // The SERIAL advances rather than restarting, for the reason written out above: the
+        // clearing is itself a change every backend memo has to hear about, and a counter that
+        // restarts walks back through values already stamped into a memo that outlived the
+        // switch. The EMITTER's latch resets with it (PipeFill.cpp's FreshlyPrimed arm
+        // invalidates the three suppressor slots), or the first emission after a make-current
+        // would be suppressed as unchanged and the server would draw with a cleared window.
+        ClearShaderBufferWindows();
         ++g_applier.FramebufferSerial;
         ++g_applier.SamplerViewsSerial;
         ++g_applier.SamplerStatesSerial;
         ++g_applier.ShaderImagesSerial;
         ++g_applier.ProgramBindingSerial;
+        ++g_applier.ShaderBuffersSerial;
     }
 
     void MGPipeApplierReleaseObjectRecords() {
@@ -1424,11 +1451,18 @@ namespace MobileGL::MG_Pipe {
         g_applier.BoundShaderImages = {};
         g_applier.ShaderImageStart = 0;
         g_applier.ShaderImageCount = 0;
+        // P5e (sb): and the three binding-point windows, for the paragraph above's reason in
+        // its own words - every MGPBufferRange::Res names a resource record this function has
+        // just dropped, so a window left populated here is a set of handles into an empty
+        // table, which the next resolve either refuses or answers with somebody else's record
+        // on a slot the next context re-mints.
+        ClearShaderBufferWindows();
         ++g_applier.FramebufferSerial;
         ++g_applier.SamplerViewsSerial;
         ++g_applier.SamplerStatesSerial;
         ++g_applier.ShaderImagesSerial;
         ++g_applier.ProgramBindingSerial;
+        ++g_applier.ShaderBuffersSerial;
     }
 
     void MGPipeApplyCreateRenderState(const MGPRenderStateDesc& desc, const void* chunkBytes) {
@@ -2830,25 +2864,69 @@ namespace MobileGL::MG_Pipe {
     }
 
     // ---------------------------------------------------------------------------------
-    // P5e's two entry points, DECLARED AND REFUSED HERE (MG_Remote/CONTRACT-P5E.md §1)
+    // P5e's two entry points, DECLARED BY c0e (MG_Remote/CONTRACT-P5E.md §1)
     // ---------------------------------------------------------------------------------
     //
-    // Package sb writes the first body and package pg the second. Until then a record that
-    // reached either one would be a binding set the server accepted and dropped, so the answer
-    // is a named abort rather than a quiet return: the picture would be wrong and the lane
-    // would be green, which is the one failure mode this campaign spends its refusals on.
+    // set_shader_buffers HAS ITS BODY (package sb); set_program_bindings still refuses by name
+    // until package pg writes its own. A record that reached an unbodied one would be a binding
+    // set the server accepted and dropped, so the answer there is a named abort rather than a
+    // quiet return: the picture would be wrong and the lane would be green, which is the one
+    // failure mode this campaign spends its refusals on.
+
+    // set_shader_buffers, ONE RECORD PER CLASS (CONTRACT-P5E.md §5.6, rulings 10/11). The whole
+    // body is "validate the window, copy the tail into that class's array, take the mask, move
+    // the serial" - the binding points are WORKING STATE and the objects they name are resolved
+    // by the backend at its own sync point, from the handle each range carries.
     //
-    // Neither is reachable today - no route row installs the table slot and the wire decoder's
-    // arms for both opcodes validate and decline (PipeCatalogueTest pins both slots null) - so
-    // this is a link-time seam, not a runtime one.
+    // IT DOES NOT GO THROUGH ApplyUnitWindow, and the reason is worth a line rather than a
+    // diff: that helper's refusal message names "the merged texture-unit space" and the three
+    // unit sets share one capacity, while this row has THREE windows keyed by Class and two
+    // refusals of its own that the contract names by string ("SetShaderBuffers.Class" /
+    // ".Count"). A shared helper that had to grow a class parameter and a message parameter
+    // would be the same code with more ways to pass the wrong one.
+    //
+    // AND THERE IS NO NoP4aConsumer BELT HERE, deliberately. P4a's belt exists because a client
+    // clears a per-level dirty flag on ACCEPTANCE, so accepting on a backend that consumes
+    // nothing loses uploads (ID-39). This family's liveness gate is the client's own
+    // P5eFamilyIsLive (PipeFill.cpp), which asks R-8 for bit 13 in particular - a server that
+    // does not publish bit 13 never receives one of these records at all - and storing a window
+    // no backend reads costs nothing and loses nothing, because the emitter's only latch is the
+    // set-hash suppressor and the record it latched did cross.
     void MGPipeApplySetShaderBuffers(const MGPShaderBuffers& hdr, const MGPBufferRange* tail) {
-        (void)tail;
-        MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"set_shader_buffers\"} - the applier entry point "
-                "is declared by P5e package c0e and bodied by package sb; a record for class %u "
-                "with %u range(s) reached it, which means a route was installed ahead of its "
-                "consumer",
-                hdr.Class, hdr.Count);
-        std::abort();
+        if (hdr.Class >= kMGPipeShaderBufferClassCount) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " SetShaderBuffers.Class - class %u names no binding-point "
+                                 "array; the three are Uniform=0, ShaderStorage=1, "
+                                 "AtomicCounter=2",
+                                 hdr.Class);
+            return;
+        }
+        const Uint64 end = Uint64{hdr.Start} + Uint64{hdr.Count};
+        if (end > kMGPipeMaxBufferBindingPoints || (hdr.Count != 0 && tail == nullptr)) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " SetShaderBuffers.Count {class=%u, start=%u, count=%u}: the "
+                                 "window runs past the %u binding points the wire carries, or a "
+                                 "non-empty set carries no ranges",
+                                 hdr.Class, hdr.Start, hdr.Count,
+                                 static_cast<unsigned>(kMGPipeMaxBufferBindingPoints));
+            return;
+        }
+        // THE WINDOW IS THE BOUND AND ENTRIES OUTSIDE IT ARE NOT CLEARED, exactly as the three
+        // unit sets and set_vertex_buffers work: the record is "the last set as received", and
+        // a binding at or above Count means "nothing bound" to every reader (the frontend
+        // array's default says the same thing, which is what makes the two pictures agree).
+        auto& destination = g_applier.BoundShaderBuffers[hdr.Class];
+        for (Uint32 i = 0; i < hdr.Count; ++i) destination[hdr.Start + i] = tail[i];
+        g_applier.ShaderBufferStart[hdr.Class] = hdr.Start;
+        g_applier.ShaderBufferCount[hdr.Class] = hdr.Count;
+        for (Uint32 w = 0; w < kMGPipeShaderBufferWritableMaskWords; ++w) {
+            g_applier.ShaderBufferWritableMask[hdr.Class][w] = hdr.WritableMask[w];
+        }
+        // ONE SERIAL FOR ALL THREE CLASSES, and it moves on EVERY applied record - a backend
+        // memo that asks "have the binding points moved since I last bound them" must hear
+        // about a uniform set exactly as it hears about a storage set, and splitting the serial
+        // per class would make each of the four consumers pick which one to read.
+        ++g_applier.ShaderBuffersSerial;
     }
 
     void MGPipeApplySetProgramBindings(const MGPProgramBindings& hdr, const Int32* blockBindings,

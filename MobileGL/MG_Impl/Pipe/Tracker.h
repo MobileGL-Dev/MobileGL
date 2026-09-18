@@ -551,7 +551,11 @@ namespace MobileGL::MG_Pipe {
             // ---- the object-class bits 9..17 ----
             const Uint64 textureContent = ctx.GetAnyTextureContentGeneration();
             const Uint64 textureParams = ctx.GetAnyTextureParamsGeneration();
-            const Uint64 buffers = ctx.GetAnyBufferChangeGeneration();
+            // P5e (sb): the buffer CONTENT aggregate is no longer read here at all. It was
+            // bits 15/16/17's whole shutter and it answered the wrong question for every one of
+            // them (see those bits below); the aggregate itself stays, because
+            // MGPipeAggregate::BufferChange is still one of the six the walk reports and a
+            // counter with no reader is a different removal from a shutter with a better input.
 
             // Bit 9. The VAO attribute aggregate mixed with the bound VAO's identity is
             // already exact for the SET - it is bumped by all three Bump*Version functions,
@@ -662,10 +666,50 @@ namespace MobileGL::MG_Pipe {
             now[Index(MGPipeDirty::NewShaderImages)] = MGPipeMixShutter(
             MGPipeMixShutter(MGPipeMixShutter(textureContent, textureParams), programImages),
             ctx.GetTextureBindGeneration());
-            now[Index(MGPipeDirty::NewConstBuffers)] = buffers;
-            now[Index(MGPipeDirty::NewShaderBuffers)] = buffers;
-            now[Index(MGPipeDirty::NewSoTargets)] =
-                MGPipeMixShutter(buffers, ctx.GetTransformFeedbackGeneration());
+            // ---- bits 15/16/17, REWRITTEN AT P5e (sb, MG_Remote/CONTRACT-P5E.md §5.6) ----
+            //
+            // ALL THREE USED TO READ `buffers` - the buffer CONTENT aggregate - AND THAT WAS
+            // WRONG IN BOTH DIRECTIONS AT ONCE. Over: any glBufferSubData anywhere fired all
+            // three, which is the same width bit 10 was narrowed out of at P3a. Under, and this
+            // is the half that mattered: glBindBufferBase / glBindBufferRange mutate a binding
+            // point through a returned reference, which moves the slot's own Uint16 version and
+            // NOTHING the content aggregate reads - so
+            // `glBindBufferBase(UNIFORM,1,A); draw; glBindBufferBase(UNIFORM,1,B); draw` fired
+            // no bit at all. Harmless while nothing was emitted for these three; an
+            // under-fire the moment set_shader_buffers is, and under-firing renders stale,
+            // which this file's own rule calls the dangerous direction. Same defect class as
+            // P4a's glBindSampler hole (c0d), closed the same way: the shutter reads the
+            // generation the mutator actually moves (BufferState::NoteBindPointChanged).
+            //
+            // THE CONTENT AGGREGATE LEAVES ALL THREE and is not replaced by anything: whether
+            // the BYTES behind a bound buffer moved is the resource family's question, answered
+            // server-side by the resource record's own Serial, and the record these bits emit
+            // carries {handle, offset, size} - none of which a glBufferSubData changes. A base
+            // binding's extent is the one thing that could, and it does not travel resolved:
+            // Size is kMGPipeWholeBuffer and the server re-resolves it at use (§5.6).
+            //
+            // BIT 15 MIXES THE PROGRAM IDENTITY IN, for bit 12's and bit 14's reason one family
+            // over (fable seams F-1/F-2): the uniform window is resolved FOR THE PROGRAM IN USE
+            // - the UBO loop indexes it by the program's own block bindings - so a glUseProgram
+            // alone must re-open it. `shader` is that identity in both arms (lifetime id x link
+            // version, or stageLinks under a pipeline).
+            //
+            // BIT 16 IS TWO TARGETS, one bit: a storage-buffer bind and an atomic-counter bind
+            // are both "the shader's writable binding points moved", they are emitted together
+            // at the same validate point, and splitting them would buy one suppressed record on
+            // a workload that binds one without the other.
+            //
+            // BIT 17 KEEPS THE TRANSFORM-FEEDBACK GENERATION beside the new bind-point one:
+            // the capture points are span-scoped state latched at Begin, so when a span opens
+            // matters as much as what is bound. Nothing is emitted for it this phase (§5.7).
+            now[Index(MGPipeDirty::NewConstBuffers)] = MGPipeMixShutter(
+                ctx.GetBufferBindPointGeneration(BufferTarget::Uniform), shader);
+            now[Index(MGPipeDirty::NewShaderBuffers)] = MGPipeMixShutter(
+                ctx.GetBufferBindPointGeneration(BufferTarget::ShaderStorage),
+                ctx.GetBufferBindPointGeneration(BufferTarget::AtomicCounter));
+            now[Index(MGPipeDirty::NewSoTargets)] = MGPipeMixShutter(
+                ctx.GetBufferBindPointGeneration(BufferTarget::TransformFeedback),
+                ctx.GetTransformFeedbackGeneration());
 
             Uint32 dirty = 0;
             for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
