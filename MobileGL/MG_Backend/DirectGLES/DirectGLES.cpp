@@ -4096,6 +4096,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // never be consumed (the stale pair is overwritten before any consumer runs).
         static const MG_State::GLState::ProgramObject* g_currentDrawFrontendProgram = nullptr;
         static BackendProgramObjectImpl* g_currentDrawBackendProgram = nullptr;
+#if MOBILEGL_PIPE_PUSH
+        // P5e (pg), CONTRACT-P5E.md §5.5: THE SAME STASH, KEYED ON THE HANDLE. The raw frontend
+        // pointer above is one of the five frontend-keyed reads this family retires: every
+        // consumer compared it against GetProgramForDraw().get(), which under run-ahead is a
+        // pointer to an object the client may already have relinked or freed. The handle arm
+        // compares against MGPipeApplier().DrawProgram instead - a {slot, gen} the record
+        // carried, which cannot be recycled behind the server's back because the gen moves with
+        // the slot.
+        //
+        // BOTH HALVES SURVIVE because the two arms do (ruling 1): the pointer is the monolith
+        // glue's key and the handle is the transport's, and SyncCurrentProgram* clears the one
+        // it does not use so a stale key can never be consumed.
+        static MG_Pipe::MGPipeHandle g_currentDrawProgramHandle = MG_Pipe::kMGPipeNullHandle;
+#endif
 
         // Memo of the per-draw enabled-draw-buffers walk feeding g_fragColorBroadcastCount:
         // the answer is a pure function of WHICH FBO is bound and its draw-buffer edits, so
@@ -4227,19 +4241,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //     the upload copies GetUBOSize() bytes and a short record would read past it.
         //
         // Anything else and the frontend's own MapUBO answers, exactly as it does today.
-        static const MG_Pipe::MGPipeShaderCsoRecord* ResolveGlobalConstantsRecord(
-            const MG_State::GLState::ProgramObject* program) {
-#if MOBILEGL_BUILD_DISAGGREGATED
-            // P5c (G6, CONTRACT-P5C §5.4): the program's handle is resolved by frontend
-            // identity below - frontend-keyed twin resolution, named debt inside the scope -
-            // P3b/P4b rekeys the registry onto handles.
-            const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
-#endif
-            // P4a decline-site P1: M - the mask says this family is not switched on, or there
-            //   is no current program at all; it IS D's ProgramSubsystemEnabled() now. Silent,
-            //   confirmed at the verification round.
-            if (!ProgramSubsystemEnabled() || program == nullptr) return nullptr;
-            const MG_Pipe::MGPipeHandle handle = g_backendProgramObjects.HandleOf(program);
+        // P5e (pg): `uboSize` is what the block image is checked against, and it is a PARAMETER
+        // now rather than a `program->GetUBOSize()` read inside the body - on the handle arm the
+        // size is the record's own Desc.GlobalUboSize and there is no ProgramObject to ask.
+        // `program` is null on that arm and is used for nothing but the monolith identity
+        // resolution below.
+        static const MG_Pipe::MGPipeShaderCsoRecord* ResolveGlobalConstantsRecordForHandle(
+            MG_Pipe::MGPipeHandle handle, Uint uboSize) {
             const MG_Pipe::MGPipeShaderCsoRecord* const record = FindShaderCsoRecord(handle);
             // P4a decline-site P4: S - FOLDED INTO P2/P3 AT THE VERIFICATION ROUND, which is
             //   what the review asked for and is why this one stays silent: both reasons
@@ -4277,7 +4285,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              "of a program with a %u-byte default uniform block; running the "
                              "frontend's own uniform block.",
                              static_cast<unsigned>(handle.Slot), static_cast<unsigned>(handle.Gen),
-                             static_cast<unsigned>(program->GetUBOSize()));
+                             static_cast<unsigned>(uboSize));
                 return nullptr;
             }
             // P4a decline-site P7: S, and LOUD (ID-19) - this one is not a missing record,
@@ -4294,7 +4302,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //   defect has to be caught - never reach MapUBO() at all, and a shipped build does
             //   not abort a running game over a client-side bug. If the integrator wants the
             //   stop on every arm, it is one #if away and this comment is where to say so.
-            if (record->GlobalConstants.size() < static_cast<SizeT>(program->GetUBOSize())) {
+            if (record->GlobalConstants.size() < static_cast<SizeT>(uboSize)) {
 #if MOBILEGL_PIPE_POISON || MOBILEGL_PIPE_VERIFY
                 MGLOG_F("MGPipe: Fatal{ProtocolCorruption} "
                         "A program record does not describe the binding it names: the ShaderCso "
@@ -4302,7 +4310,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         "%llu-byte default uniform block.",
                         static_cast<unsigned>(handle.Slot), static_cast<unsigned>(handle.Gen),
                         static_cast<unsigned long long>(record->GlobalConstants.size()),
-                        static_cast<unsigned long long>(program->GetUBOSize()));
+                        static_cast<unsigned long long>(uboSize));
                 std::abort();
 #else
                 MGLOG_E_ONCE("A program record does not describe the binding it names: the ShaderCso "
@@ -4310,13 +4318,133 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              "%llu-byte default uniform block; running the frontend's own uniform block.",
                              static_cast<unsigned>(handle.Slot), static_cast<unsigned>(handle.Gen),
                              static_cast<unsigned long long>(record->GlobalConstants.size()),
-                             static_cast<unsigned long long>(program->GetUBOSize()));
+                             static_cast<unsigned long long>(uboSize));
 #endif
                 return nullptr;
             }
             return record;
         }
+
+        // THE MONOLITH-GLUE HALF (ruling 1 / ID-81), unchanged in what it does: resolve the
+        // program's handle by frontend identity inside the named scope, then ask the body above.
+        // Reached only when `Transport == Monolith`, which is what keeps the push-monolith build
+        // token for token.
+        static const MG_Pipe::MGPipeShaderCsoRecord* ResolveGlobalConstantsRecord(
+            const MG_State::GLState::ProgramObject* program) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P5c (G6, CONTRACT-P5C §5.4): frontend-keyed twin resolution, named debt inside the
+            // scope. P5e does not delete it - it stops REACHING it under a transport, which is
+            // the thing the allocator guard measures.
+            const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
 #endif
+            // P4a decline-site P1: M - the mask says this family is not switched on, or there
+            //   is no current program at all; it IS D's ProgramSubsystemEnabled() now. Silent,
+            //   confirmed at the verification round.
+            if (!ProgramSubsystemEnabled() || program == nullptr) return nullptr;
+            return ResolveGlobalConstantsRecordForHandle(g_backendProgramObjects.HandleOf(program),
+                                                         program->GetUBOSize());
+        }
+#endif
+
+        // Read from the frontend rather than from the backend framebuffer sync, which
+        // only runs later in PrepareForDraw: a program compiled against a stale count
+        // would not be relinked until the draw after the one that needed it.
+        //
+        // P5e (pg): ITS OWN FUNCTION AND ITS OWN POLICY, because the three callers want three
+        // different answers when the record arm has nothing to say:
+        //
+        //   FrontendFallback - the monolith arm, unchanged: read the draw-FBO binding slot.
+        //   RefuseFallback   - the handle arm AT A DRAW. With a live wire that binding slot is a
+        //                      BARRIER_PULLED row the client may already have moved, so a count
+        //                      read from it would compile the program against a framebuffer that
+        //                      is not the one being drawn to - silently, and only sometimes.
+        //                      The record is the answer or there is no answer (rule F).
+        //   RecordOnly       - the handle arm AT A DISPATCH. A compute program has no fragment
+        //                      stage and a dispatch has no draw framebuffer, so this count is not
+        //                      an input to what is being built; PrepareForCompute also does not
+        //                      run SyncCurrentFBO, so the framebuffer records are legitimately
+        //                      untrusted here and a refusal would abort a correct program. The
+        //                      previous resolution stands, which is what the monolith arm
+        //                      effectively does too when nothing rebound between the two calls.
+        enum class BroadcastCountPolicy { FrontendFallback, RefuseFallback, RecordOnly };
+
+        static void ResolveFragColorBroadcastCount(BroadcastCountPolicy policy) {
+            Bool broadcastCountResolved = false;
+#if MOBILEGL_PIPE_PUSH
+            // The trust latch is fresh here and costs nothing: PrepareForDraw runs
+            // SyncCurrentFBO immediately before this, so the records have just been
+            // checked against the two bindings.
+            if (FramebufferSubsystemEnabled() && FramebufferImpl::g_fboRecordsTrusted) {
+                const MG_Pipe::MGPFramebufferState* const recordPtr =
+                    BoundFramebufferRecord(FramebufferTarget::Draw);
+                // P4a decline-site F7: FLIPPED AT THE VERIFICATION ROUND from a silent
+                //   decline to an assertion, because it is unreachable and a silent decline
+                //   here is indistinguishable from a legitimate one. g_fboRecordsTrusted
+                //   implies a record with a non-null handle on BOTH targets:
+                //   SyncCurrentFBOByRecord sets the latch only after F2 has rejected a null
+                //   pointer or handle on either, and it runs immediately before this in
+                //   PrepareForDraw. Kept as a checked decline rather than deleted so a
+                //   release build cannot dereference null if that ordering ever changes.
+                MOBILEGL_ASSERT(recordPtr != nullptr && !MG_Pipe::MGPipeHandleIsNull(recordPtr->Fbo));
+                if (recordPtr != nullptr && !MG_Pipe::MGPipeHandleIsNull(recordPtr->Fbo)) {
+                    const MG_Pipe::MGPFramebufferState& record = *recordPtr;
+                    if (!g_broadcastMemoHandleValid || g_broadcastMemoContentHash != record.ContentHash) {
+                        Uint enabledDrawBuffers = 0;
+                        for (Uint i = 0; i < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++i) {
+                            // -1 is FramebufferAttachmentType::None on the wire; every
+                            // other value is an attachment index.
+                            if (record.DrawBuffers[i] >= 0) {
+                                enabledDrawBuffers = i + 1;
+                            }
+                        }
+                        g_broadcastMemoContentHash = record.ContentHash;
+                        g_broadcastMemoHandleCount = std::max<Uint>(enabledDrawBuffers, 1);
+                        g_broadcastMemoHandleValid = true;
+                    }
+                    g_fragColorBroadcastCount = g_broadcastMemoHandleCount;
+                    broadcastCountResolved = true;
+                }
+            }
+#endif
+            if (policy == BroadcastCountPolicy::RecordOnly) return;
+            if (policy == BroadcastCountPolicy::RefuseFallback && !broadcastCountResolved) {
+                // The record arm declined under a transport. g_fboRecordsTrusted is set by
+                // SyncCurrentFBOByRecord, which PrepareForDraw runs immediately before this,
+                // so reaching here means the framebuffer family's own records are missing or
+                // untrusted - and the frontend fallback below is exactly the read this phase
+                // exists to retire.
+                MGLOG_F("MGPipe: Fatal{UnmigratedPipeInput, "
+                        "\"GetFramebufferBindingSlot@SyncCurrentProgram\"} - the draw "
+                        "framebuffer's record did not answer the fragColor broadcast count on "
+                        "the handle arm, and the frontend binding slot is a row the client owns");
+                std::abort();
+            }
+            if (!broadcastCountResolved) {
+                const auto& drawSlot = GetFramebufferBindingSlotChecked(FramebufferTarget::Draw);
+                const auto& drawFBO = drawSlot.GetBoundObject();
+                const Uint16 slotVersion = drawSlot.GetVersion();
+                const Uint16 objectVersion = drawFBO ? drawFBO->GetObjectVersion() : 0;
+                if (!g_broadcastMemoValid || g_broadcastMemoFbo != drawFBO.get() ||
+                    g_broadcastMemoSlotVersion != slotVersion ||
+                    g_broadcastMemoObjectVersion != objectVersion) {
+                    Uint enabledDrawBuffers = 0;
+                    if (drawFBO) {
+                        const auto& drawBuffers = drawFBO->GetDrawBuffers();
+                        for (Uint i = 0; i < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++i) {
+                            if (drawBuffers[i] != FramebufferAttachmentType::None) {
+                                enabledDrawBuffers = i + 1;
+                            }
+                        }
+                    }
+                    g_broadcastMemoFbo = drawFBO.get();
+                    g_broadcastMemoSlotVersion = slotVersion;
+                    g_broadcastMemoObjectVersion = objectVersion;
+                    g_broadcastMemoCount = std::max<Uint>(enabledDrawBuffers, 1);
+                    g_broadcastMemoValid = true;
+                }
+                g_fragColorBroadcastCount = g_broadcastMemoCount;
+            }
+        }
 
         void SyncCurrentProgram(const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram) {
 #ifdef TRACY_ENABLE
@@ -4341,73 +4469,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_lastUsedBackendProgramId = 0;
                 return;
             }
-            // Read from the frontend rather than from the backend framebuffer sync, which
-            // only runs later in PrepareForDraw: a program compiled against a stale count
-            // would not be relinked until the draw after the one that needed it.
-            {
-                Bool broadcastCountResolved = false;
-#if MOBILEGL_PIPE_PUSH
-                // The trust latch is fresh here and costs nothing: PrepareForDraw runs
-                // SyncCurrentFBO immediately before this, so the records have just been
-                // checked against the two bindings.
-                if (FramebufferSubsystemEnabled() && FramebufferImpl::g_fboRecordsTrusted) {
-                    const MG_Pipe::MGPFramebufferState* const recordPtr =
-                        BoundFramebufferRecord(FramebufferTarget::Draw);
-                    // P4a decline-site F7: FLIPPED AT THE VERIFICATION ROUND from a silent
-                    //   decline to an assertion, because it is unreachable and a silent decline
-                    //   here is indistinguishable from a legitimate one. g_fboRecordsTrusted
-                    //   implies a record with a non-null handle on BOTH targets:
-                    //   SyncCurrentFBOByRecord sets the latch only after F2 has rejected a null
-                    //   pointer or handle on either, and it runs immediately before this in
-                    //   PrepareForDraw. Kept as a checked decline rather than deleted so a
-                    //   release build cannot dereference null if that ordering ever changes.
-                    MOBILEGL_ASSERT(recordPtr != nullptr && !MG_Pipe::MGPipeHandleIsNull(recordPtr->Fbo));
-                    if (recordPtr != nullptr && !MG_Pipe::MGPipeHandleIsNull(recordPtr->Fbo)) {
-                        const MG_Pipe::MGPFramebufferState& record = *recordPtr;
-                        if (!g_broadcastMemoHandleValid || g_broadcastMemoContentHash != record.ContentHash) {
-                            Uint enabledDrawBuffers = 0;
-                            for (Uint i = 0; i < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++i) {
-                                // -1 is FramebufferAttachmentType::None on the wire; every
-                                // other value is an attachment index.
-                                if (record.DrawBuffers[i] >= 0) {
-                                    enabledDrawBuffers = i + 1;
-                                }
-                            }
-                            g_broadcastMemoContentHash = record.ContentHash;
-                            g_broadcastMemoHandleCount = std::max<Uint>(enabledDrawBuffers, 1);
-                            g_broadcastMemoHandleValid = true;
-                        }
-                        g_fragColorBroadcastCount = g_broadcastMemoHandleCount;
-                        broadcastCountResolved = true;
-                    }
-                }
-#endif
-                if (!broadcastCountResolved) {
-                    const auto& drawSlot = GetFramebufferBindingSlotChecked(FramebufferTarget::Draw);
-                    const auto& drawFBO = drawSlot.GetBoundObject();
-                    const Uint16 slotVersion = drawSlot.GetVersion();
-                    const Uint16 objectVersion = drawFBO ? drawFBO->GetObjectVersion() : 0;
-                    if (!g_broadcastMemoValid || g_broadcastMemoFbo != drawFBO.get() ||
-                        g_broadcastMemoSlotVersion != slotVersion ||
-                        g_broadcastMemoObjectVersion != objectVersion) {
-                        Uint enabledDrawBuffers = 0;
-                        if (drawFBO) {
-                            const auto& drawBuffers = drawFBO->GetDrawBuffers();
-                            for (Uint i = 0; i < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++i) {
-                                if (drawBuffers[i] != FramebufferAttachmentType::None) {
-                                    enabledDrawBuffers = i + 1;
-                                }
-                            }
-                        }
-                        g_broadcastMemoFbo = drawFBO.get();
-                        g_broadcastMemoSlotVersion = slotVersion;
-                        g_broadcastMemoObjectVersion = objectVersion;
-                        g_broadcastMemoCount = std::max<Uint>(enabledDrawBuffers, 1);
-                        g_broadcastMemoValid = true;
-                    }
-                    g_fragColorBroadcastCount = g_broadcastMemoCount;
-                }
-            }
+            ResolveFragColorBroadcastCount(BroadcastCountPolicy::FrontendFallback);
 
             BackendProgramObjectImpl* twin = nullptr;
 #if MOBILEGL_PIPE_PUSH
@@ -4461,7 +4523,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 twin->GetUnormFallbackClampOutputMask() != g_unormFallbackClampOutputMask ||
                 twin->GetFragColorBroadcastCount() != g_fragColorBroadcastCount ||
                 twin->GetShaderStorageBlockBindingSignature() !=
-                    ComputeShaderStorageBlockBindingSignature(*currentProgram) ||
+                    ComputeShaderStorageBlockBindingSignatureOf(*currentProgram) ||
                 // A fourth of the same shape, and the reason glBindImageTexture itself does
                 // nothing: GLSL ES demands a format layout qualifier on an image where desktop
                 // GLSL lets a writeonly declaration omit one, so a format-less declaration is
@@ -4508,7 +4570,82 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             g_currentDrawFrontendProgram = currentProgram.get();
             g_currentDrawBackendProgram = twin;
+#if MOBILEGL_PIPE_PUSH
+            g_currentDrawProgramHandle = MG_Pipe::kMGPipeNullHandle;
+#endif
         }
+
+#if MOBILEGL_PIPE_PUSH
+        // P5e (pg), CONTRACT-P5E.md §5.5: THE SAME SYNC, FROM THE HANDLE THE RECORD CARRIED.
+        // Two overloads and not an `#if` inside one body (ruling 1 / ID-81): the frontend one
+        // above is visibly the monolith-glue half, this one names no frontend object at all.
+        //
+        // WHAT THE NINE-CLAUSE CONDITION BECOMES, and the clause COUNT does not shrink - its
+        // inputs move (D-H5, §5.5):
+        //   GetLinkVersion()            -> record.Serial       vs GetSyncedShaderCsoSerial()
+        //   GetImageUnitVersion()       -> record.BindingsSerial vs GetSyncedBindingsSerial()
+        //   ComputeShaderStorage...()   -> record.Signature
+        //   GetLinkStatus/SpirvStatus   -> Desc.LinkStatus / Desc.SpirvStatus, above
+        // and the clamp masks, the broadcast count, ImageUnitFormatsStillMatch and the three
+        // patch clauses are unchanged - they are backend globals, fb's row and VALUE rows of the
+        // residual block, none of which this family owns.
+        void SyncCurrentProgramByHandle(MG_Pipe::MGPipeHandle cso, Bool forDraw) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            g_backendProgramObjects.CollectGarbageIfNeeded();
+            SamplerImpl::g_backendSamplerObjects.CollectGarbageIfNeeded();
+
+            g_currentDrawFrontendProgram = nullptr;
+            g_currentDrawBackendProgram = nullptr;
+            g_currentDrawProgramHandle = MG_Pipe::kMGPipeNullHandle;
+
+            const MG_Pipe::MGPipeShaderCsoRecord* const record = FindShaderCsoRecord(cso);
+            // THE SAME THREE-PART TEST THE FRONTEND ARM MAKES, from the descriptor. LinkStatus
+            // is a field rather than an implication (ID-88): create_shader_state is re-issued at
+            // every link that moves the link version and a FAILED relink of a bound program
+            // moves it too, so "a record exists" and "the program linked" are different
+            // statements. A program the frontend reports unlinked draws nothing, which is
+            // exactly what the monolith arm does with GetLinkStatus() == false.
+            if (record == nullptr || record->Desc.LinkStatus == 0 || record->Desc.SpirvStatus == 0) {
+                g_GLESFuncs.glUseProgram(0);
+                g_lastUsedBackendProgramId = 0;
+                return;
+            }
+            // REFUSED at a draw, record-only at a dispatch: see the policy's own note.
+            ResolveFragColorBroadcastCount(forDraw ? BroadcastCountPolicy::RefuseFallback
+                                                   : BroadcastCountPolicy::RecordOnly);
+
+            BackendProgramObjectImpl* const twin = ResolveProgramTwin(cso);
+            if (twin == nullptr) {
+                // ResolveProgramTwin has already named the handle. A draw with no twin binds
+                // nothing, which is the visible no-op Use() makes of an unusable program rather
+                // than a draw with somebody else's shader.
+                g_GLESFuncs.glUseProgram(0);
+                g_lastUsedBackendProgramId = 0;
+                return;
+            }
+            if (!twin->GetBackendProgramId() ||
+                twin->GetSyncedShaderCsoSerial() != record->Serial ||
+                twin->GetSyncedBindingsSerial() != record->BindingsSerial ||
+                twin->GetSnormFallbackClampOutputMask() != g_snormFallbackClampOutputMask ||
+                twin->GetUnormFallbackClampOutputMask() != g_unormFallbackClampOutputMask ||
+                twin->GetFragColorBroadcastCount() != g_fragColorBroadcastCount ||
+                twin->GetShaderStorageBlockBindingSignature() != record->Signature ||
+                !twin->ImageUnitFormatsStillMatch() ||
+                (twin->GetPassthroughTessControlPatchVertices() >= 0 &&
+                 (twin->GetPassthroughTessControlPatchVertices() !=
+                      static_cast<Int>(MGB_CTX->GetPatchVertices()) ||
+                  !BitwiseEqual(twin->GetPassthroughTessControlOuterLevel(),
+                                MGB_CTX->GetPatchDefaultOuterLevel()) ||
+                  !BitwiseEqual(twin->GetPassthroughTessControlInnerLevel(),
+                                MGB_CTX->GetPatchDefaultInnerLevel())))) {
+                twin->SyncToBackendByHandle(cso);
+            }
+            g_currentDrawProgramHandle = cso;
+            g_currentDrawBackendProgram = twin;
+        }
+#endif
     } // namespace PrgramImpl
 
     void BindCurrentFBO(FramebufferTarget target) {
@@ -4755,7 +4892,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     static void BindCurrentProgramWithResources(
         const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram,
-        const TextureImpl::DrawTextureSyncKeys& keys);
+        const TextureImpl::DrawTextureSyncKeys& keys, MG_Pipe::MGPipeHandle programCso);
     static void BindCurrentTextures(const TextureImpl::DrawTextureSyncKeys& keys,
                                     const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram);
 
@@ -4803,7 +4940,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // stores into a buffer texture from the FRAGMENT stage, not from a dispatch.
         TextureImpl::MarkWritableImageBufferTexturesGpuWritten();
         FramebufferImpl::SyncCurrentFBO();
-        PrgramImpl::SyncCurrentProgram(currentProgram);
+#if MOBILEGL_PIPE_PUSH
+        // P5e (pg), kimi row 91 / S4 1.1: the SharedPtr pull above is the row this family
+        // retires. On the handle arm the program is MGPipeApplier().DrawProgram - a handle the
+        // set_draw_program record carried - and `currentProgram` is not consulted for the sync
+        // at all; the remaining uses of it below are the two callees' own, and both have a
+        // handle arm of their own.
+        if (ProgramHandleArm()) {
+            PrgramImpl::SyncCurrentProgramByHandle(MG_Pipe::MGPipeApplier().DrawProgram, true);
+        } else
+#endif
+        {
+            PrgramImpl::SyncCurrentProgram(currentProgram);
+        }
         RenderStateImpl::SyncRenderState();
 
         BindCurrentFBO(FramebufferTarget::Draw);
@@ -4822,7 +4971,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         VertexArrayImpl::SyncCurrentVertexAttributeValues(vaoTwin, currentProgram);
 
         BindCurrentTextures(textureKeys, currentProgram);
-        BindCurrentProgramWithResources(currentProgram, textureKeys);
+        BindCurrentProgramWithResources(currentProgram, textureKeys,
+#if MOBILEGL_PIPE_PUSH
+                                        MG_Pipe::MGPipeApplier().DrawProgram
+#else
+                                        MG_Pipe::kMGPipeNullHandle
+#endif
+        );
 
         // Last: opening the capture span needs the program current and the capture
         // buffers bound, and ES rejects most binding changes once it is open.
@@ -5222,6 +5377,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Uint32 programBackendStateVersion = 0;
         Bool programLinked = false;
         Uint contextGeneration = 0;
+        // P5e (pg) -> tx2, ruling 6 / ID-86: THE PROGRAM HALF OF THIS KEY HAS TO GO BY HANDLE,
+        // and this struct is tx2's line, so pg states the shape rather than writing it. The four
+        // program fields above are read off the frontend ProgramObject on EVERY DRAW, memo hit
+        // included (kimi row 100, the worst row of the program family). What replaces them on
+        // the handle arm is {DrawProgram.Slot, DrawProgram.Gen, ShaderCso record Serial,
+        // BindingsSerial}: Serial moves on every applied create_shader_state (how a relink
+        // travels) and BindingsSerial on every applied set_program_bindings (how a glUniform1i
+        // on a sampler travels). Both are needed - ruling 6's "both" - because a relink with
+        // UNCHANGED texture resolution still hands the twin new unit assignments.
         decltype(TextureImpl::g_boundTexturesCache) boundTextures{};
     };
     // Small per-PROGRAM memo set, not one global: the program is part of the key
@@ -5316,27 +5480,63 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // _FlwFrameUniforms block and the _flw_depthPyramid sampler.
     static void BindCurrentProgramWithResources(
         const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram,
-        const TextureImpl::DrawTextureSyncKeys& keys) {
-        if (currentProgram && currentProgram->GetLinkStatus() && currentProgram->GetSpirvStatus()) {
+        const TextureImpl::DrawTextureSyncKeys& keys, MG_Pipe::MGPipeHandle programCso) {
+#if MOBILEGL_PIPE_PUSH
+        // P5e (pg): THE HANDLE ARM'S GATE, from the record rather than from the object. Hoisted
+        // out of the `if` below because the whole body's entry condition is "the program linked
+        // and has SPIR-V", and on this arm both answers are fields of the descriptor
+        // (Desc.LinkStatus is ID-88's, Desc.SpirvStatus P4a's).
+        const Bool handleArm = ProgramHandleArm();
+        const MG_Pipe::MGPipeShaderCsoRecord* programRecord = nullptr;
+        if (handleArm) {
+            programRecord = PrgramImpl::FindShaderCsoRecord(programCso);
+            if (programRecord != nullptr &&
+                (programRecord->Desc.LinkStatus == 0 || programRecord->Desc.SpirvStatus == 0)) {
+                programRecord = nullptr;
+            }
+        }
+        const Bool programUsable =
+            handleArm ? programRecord != nullptr
+                      : (currentProgram && currentProgram->GetLinkStatus() && currentProgram->GetSpirvStatus());
+#else
+        const Bool programUsable =
+            currentProgram && currentProgram->GetLinkStatus() && currentProgram->GetSpirvStatus();
+#endif
+        if (programUsable) {
 #ifdef TRACY_ENABLE
             ZoneScopedNC("BindCurrentProgram", TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BUILD_DISAGGREGATED
-            // P5c (G6, CONTRACT-P5C §5.4): the program/sampler twin resolutions below still key
-            // on frontend objects - named debt inside the scope - P3b/P4b rekeys the registry
-            // onto handles.
-            const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
+            PrgramImpl::BackendProgramObjectImpl* twin = nullptr;
+#if MOBILEGL_PIPE_PUSH
+            if (handleArm) {
+                // THE STASH, KEYED ON THE HANDLE (CONTRACT-P5E §5.5). SyncCurrentProgramByHandle
+                // wrote it a few lines ago in the same Prepare; the fallback is the by-handle
+                // resolver, which is record-first and touches no frontend identity - so unlike
+                // the frontend fallback below it is not a registry probe at all.
+                twin = PrgramImpl::g_currentDrawProgramHandle == programCso
+                           ? PrgramImpl::g_currentDrawBackendProgram
+                           : nullptr;
+                if (!twin) twin = PrgramImpl::ResolveProgramTwin(programCso);
+            } else
 #endif
-            // The twin SyncCurrentProgram just resolved for this draw; the registry
-            // Find only runs if the stash somehow does not match (defensive fallback).
-            PrgramImpl::BackendProgramObjectImpl* twin =
-                PrgramImpl::g_currentDrawFrontendProgram == currentProgram.get()
-                    ? PrgramImpl::g_currentDrawBackendProgram
-                    : nullptr;
-            if (!twin) {
-                auto* backendProgramSlot = PrgramImpl::g_backendProgramObjects.Find(currentProgram.get());
-                if (backendProgramSlot) {
-                    twin = backendProgramSlot->get();
+            {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P5c (G6, CONTRACT-P5C §5.4): MONOLITH GLUE ONLY now. The frontend-keyed twin
+                // resolution below is the fourth of this family's five named scope sites, and
+                // P5e does not delete it - it stops reaching it under a transport, which is what
+                // the allocator guard measures.
+                const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
+#endif
+                // The twin SyncCurrentProgram just resolved for this draw; the registry
+                // Find only runs if the stash somehow does not match (defensive fallback).
+                twin = PrgramImpl::g_currentDrawFrontendProgram == currentProgram.get()
+                           ? PrgramImpl::g_currentDrawBackendProgram
+                           : nullptr;
+                if (!twin) {
+                    auto* backendProgramSlot = PrgramImpl::g_backendProgramObjects.Find(currentProgram.get());
+                    if (backendProgramSlot) {
+                        twin = backendProgramSlot->get();
+                    }
                 }
             }
             if (twin) {
@@ -5346,7 +5546,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Global UBO: block index and binding-point assignment are cached at
                 // link time (CacheResourceLocations); re-upload only when the CPU shadow
                 // actually changed since the last upload for this program.
-                if (currentProgram->GetUBOSize() > 0 && backendProgram.HasGlobalUboBlock()) {
+#if MOBILEGL_PIPE_PUSH
+                // P5e (pg): the block's SIZE is Desc.GlobalUboSize on the handle arm. It is the
+                // same number GetUBOSize() answers - the emitter takes it from there - but it is
+                // the record's copy, which is the point.
+                const Uint globalUboSize =
+                    handleArm ? programRecord->Desc.GlobalUboSize : currentProgram->GetUBOSize();
+#else
+                const Uint globalUboSize = currentProgram->GetUBOSize();
+#endif
+                if (globalUboSize > 0 && backendProgram.HasGlobalUboBlock()) {
 #ifdef TRACY_ENABLE
                     ZoneScopedNC("UpdateGlobalUBO", TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -5363,14 +5572,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // block right after this one and they are P4b's (dirty bits 15-17), which
                     // is why nothing here touches them.
                     const MG_Pipe::MGPipeShaderCsoRecord* const globalConstants =
-                        PrgramImpl::ResolveGlobalConstantsRecord(currentProgram.get());
+                        handleArm ? PrgramImpl::ResolveGlobalConstantsRecordForHandle(programCso,
+                                                                                      globalUboSize)
+                                  : PrgramImpl::ResolveGlobalConstantsRecord(currentProgram.get());
+                    // P5e (pg), gap G-C: `MapUBO()` HAS NO RUN-AHEAD ANSWER. It returns
+                    // ProgramObject::globalUboScratch - the live CPU array every glUniform*
+                    // writes into - so under a transport it is a torn read of client memory by
+                    // construction, not a read that happens to race. Every reason
+                    // ResolveGlobalConstantsRecord* can decline is a SEAM DEFECT here (bit 12
+                    // off, the mis-keyed descriptor, the never-uploaded sentinel, a short block
+                    // image), and each of them has already said so by name one level down; what
+                    // this adds is that on the handle arm there is nothing legal to fall back
+                    // to. CONTRACT-P5E §5.5: Fatal{UnmigratedVerb, "set_global_constants"}, not
+                    // a torn upload.
+                    if (handleArm && globalConstants == nullptr) {
+                        MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"set_global_constants\"} - the "
+                                "ShaderCso record {%u, %u} does not answer the default uniform "
+                                "block for a draw of a program that declares %u bytes of it, and "
+                                "MapUBO() is the client's live scratch array",
+                                programCso.Slot, programCso.Gen, globalUboSize);
+                        std::abort();
+                    }
 #endif
                     const Uint32 uboContentVersion =
 #if MOBILEGL_PIPE_PUSH
                         globalConstants ? globalConstants->GlobalConstantsVersion :
 #endif
                                         currentProgram->GetUBOContentVersion();
-                    const SizeT uboSize = static_cast<SizeT>(currentProgram->GetUBOSize());
+                    const SizeT uboSize = static_cast<SizeT>(globalUboSize);
                     // Substituted at the two upload sites rather than hoisted into a local:
                     // MapUBO() is called there today and only there, and hoisting it would
                     // call it on paths that skip the upload entirely.
@@ -5422,12 +5651,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // failed): the original in-place upload.
                         if (backendProgram.GetLastUploadedGlobalUboVersion() != uboContentVersion) {
                             g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, backendProgram.GetBackendGlobalUBOId());
-                            g_GLESFuncs.glBufferSubData(GL_UNIFORM_BUFFER, 0, currentProgram->GetUBOSize(),
+                            g_GLESFuncs.glBufferSubData(GL_UNIFORM_BUFFER, 0, globalUboSize,
                                                         MGB_UBO_BYTES);
                             if (MG_Util::PipeStats::Enabled()) {
                                 MG_Util::PipeStats::AddBytes(
                                     MG_Util::PipeStats::ByteClass::StageUboGlobal,
-                                    static_cast<Uint64>(currentProgram->GetUBOSize()));
+                                    static_cast<Uint64>(globalUboSize));
                             }
                             g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, 0);
                             backendProgram.SetLastUploadedGlobalUboVersion(uboContentVersion);
@@ -5459,8 +5688,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             continue;
                         }
 
-                        // Connect buffer to backend binding point
-                        auto binding = currentProgram->GetUniformBlockBinding(i);
+                        // Connect buffer to backend binding point.
+                        //
+                        // P5e (pg): glUniformBlockBinding MOVES THIS AFTER THE LINK, so it is
+                        // one of the three post-link mutable reflection fields the archive alone
+                        // cannot answer - set_program_bindings' first tail carries it, dense in
+                        // this very index space. The BINDING POINT it names is sb's row (the
+                        // GetBufferBindingPoint below); this line is the boundary S4 R5 named.
+                        auto binding =
+#if MOBILEGL_PIPE_PUSH
+                            handleArm ? PrgramImpl::ProgramBlockBindingFromRecord(*programRecord, i)
+                                      :
+#endif
+                                      currentProgram->GetUniformBlockBinding(i);
                         auto& point = MGB_CTX->GetBufferBindingPoint(BufferTarget::Uniform, binding);
                         auto& bufferObj = point.GetBoundObject();
                         auto range = point.GetRange();
@@ -5519,7 +5759,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // and every previously touched unit's sampler-shadow row is exactly
                     // what this pass last left there, re-running it is a provable no-op.
                     auto& samplerPassMemo = backendProgram.GetSamplerPassMemo();
-                    const Uint32 programBackendStateVersion = currentProgram->GetBackendStateVersion();
+                    // P5e (pg), CONTRACT-P5E §5.5: THE SAMPLER PASS MEMO KEYS ON BindingsSerial
+                    // on the handle arm. m_backendStateVersion is a frontend counter read on
+                    // every draw (kimi row 105); what it is standing in for here is "has a
+                    // sampler uniform's unit moved", and that is exactly what an applied
+                    // set_program_bindings means. Truncated to the memo's Uint32 field, which is
+                    // safe for a memo key - it is a change detector, not an ordering - and the
+                    // record's serial would need four billion binding records to wrap.
+                    const Uint32 programBackendStateVersion =
+#if MOBILEGL_PIPE_PUSH
+                        handleArm ? static_cast<Uint32>(programRecord->BindingsSerial) :
+#endif
+                                  currentProgram->GetBackendStateVersion();
                     Bool samplerPassClean =
                         samplerPassMemo.valid && samplerPassMemo.contextId == keys.contextId &&
                         samplerPassMemo.unitBindingsEpoch == keys.unitBindingsEpoch &&
@@ -5542,8 +5793,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         samplerPassMemo.count = 0;
                         Bool memoisable = true;
                         for (auto& samplerBinding : backendProgram.GetSamplerUniformBindings()) {
+                            // P5e (pg): the unit glUniform1i put on this sampler - the second
+                            // of the three post-link mutable fields, carried sparse and ascending
+                            // by location in set_program_bindings' second tail.
                             const auto unit =
-                                currentProgram->GetUniformSamplerOrImageUnitIndex(samplerBinding.frontendLocation);
+#if MOBILEGL_PIPE_PUSH
+                                handleArm
+                                    ? PrgramImpl::ProgramSamplerUnitFromRecord(
+                                          *programRecord, samplerBinding.frontendLocation)
+                                    :
+#endif
+                                    currentProgram->GetUniformSamplerOrImageUnitIndex(
+                                        samplerBinding.frontendLocation);
                             if (unit == -1) continue;
                             // Record the touched unit for the memo; a pass touching more
                             // units than the memo can carry (or an out-of-range unit)
@@ -5676,6 +5937,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // PrepareForCompute, where the current program (and therefore its registry twin)
     // is pinned for the duration. Prefers the per-draw stash those preparations wrote.
     static PrgramImpl::BackendProgramObjectImpl* GetCurrentBackendProgram() {
+#if MOBILEGL_PIPE_PUSH
+        // P5e (pg), kimi row 107: THE PER-SUB-DRAW ROW. This is reached once per indirect
+        // sub-draw for the gl_DrawID / gl_BaseVertex / gl_BaseInstance uniforms, and before P5e
+        // every one of those pulled GetProgramForDraw() and, on a stash miss, probed the client
+        // allocator. On the handle arm the stash key is the applier's own DrawProgram and the
+        // miss path is the by-handle resolver, which is record-first and names no frontend
+        // identity - so the whole entry point leaves the frontend.
+        if (ProgramHandleArm()) {
+            const MG_Pipe::MGPipeHandle cso = MG_Pipe::MGPipeApplier().DrawProgram;
+            if (MG_Pipe::MGPipeHandleIsNull(cso)) return nullptr;
+            const auto* const record = PrgramImpl::FindShaderCsoRecord(cso);
+            if (record == nullptr || record->Desc.LinkStatus == 0 || record->Desc.SpirvStatus == 0) {
+                return nullptr;
+            }
+            if (PrgramImpl::g_currentDrawProgramHandle == cso) {
+                return PrgramImpl::g_currentDrawBackendProgram;
+            }
+            return PrgramImpl::ResolveProgramTwin(cso);
+        }
+#endif
         const auto& currentProgram = MGB_CTX->GetProgramForDraw();
         if (!currentProgram || !currentProgram->GetLinkStatus() || !currentProgram->GetSpirvStatus()) {
             return nullptr;
@@ -5684,8 +5965,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return PrgramImpl::g_currentDrawBackendProgram;
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // P5c (G6, CONTRACT-P5C §5.4): frontend-keyed twin resolution, named debt inside the
-        // scope - P3b/P4b rekeys the registry onto handles.
+        // P5c (G6, CONTRACT-P5C §5.4): MONOLITH GLUE ONLY now - the fifth of this family's five
+        // named scope sites, unreachable under a transport by the arm above.
         const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
 #endif
         if (auto* backendProgramSlot = PrgramImpl::g_backendProgramObjects.Find(currentProgram.get())) {
@@ -5731,10 +6012,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // flattening a batch that turns out to need per-sub-draw values is unrecoverable -
     // so an unanswerable program counts as needing them.
     Bool CurrentProgramMayNeedPerSubDrawBuiltins(Bool batchCarriesBaseVertices) {
-        const auto& currentProgram = MGB_CTX->GetProgramForDraw();
         const auto program = GetCurrentBackendProgram();
-        if (!currentProgram || program == nullptr ||
-            program->GetSyncedLinkVersion() != currentProgram->GetLinkVersion()) {
+        if (program == nullptr) return true;
+#if MOBILEGL_PIPE_PUSH
+        // P5e (pg), kimi row 108: the same "is this twin current" question, from the record's
+        // serial instead of the frontend's link version. The ANSWER TO AN UNANSWERABLE PROGRAM
+        // IS STILL `true` - a flattened batch that turns out to need per-sub-draw values is
+        // unrecoverable, so "not known yet" has to count as "may need them", and a missing
+        // record is the most not-known-yet a program can be.
+        if (ProgramHandleArm()) {
+            const auto* const record =
+                PrgramImpl::FindShaderCsoRecord(MG_Pipe::MGPipeApplier().DrawProgram);
+            if (record == nullptr || program->GetSyncedShaderCsoSerial() != record->Serial) {
+                return true;
+            }
+            return program->ReadsDrawID() || (batchCarriesBaseVertices && program->ReadsBaseVertex());
+        }
+#endif
+        const auto& currentProgram = MGB_CTX->GetProgramForDraw();
+        if (!currentProgram || program->GetSyncedLinkVersion() != currentProgram->GetLinkVersion()) {
             return true;
         }
         return program->ReadsDrawID() || (batchCarriesBaseVertices && program->ReadsBaseVertex());
@@ -6130,8 +6426,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
         TextureImpl::SyncNeccessaryTextures(textureKeys);
         TextureImpl::SyncImageTextureBindings();
         TextureImpl::MarkWritableImageBufferTexturesGpuWritten();
-        PrgramImpl::SyncCurrentProgram(currentProgram);
+#if MOBILEGL_PIPE_PUSH
+        // P5e (pg), kimi row 92: the DISPATCH half of the same retirement -
+        // MGPipeApplier().DispatchProgram, which set_dispatch_program carried. A compute-only
+        // pipeline has no draw program at all, which is why the two applier fields are separate.
+        const Bool programHandleArm = ProgramHandleArm();
+        const MG_Pipe::MGPipeHandle dispatchCso =
+            programHandleArm ? MG_Pipe::MGPipeApplier().DispatchProgram : MG_Pipe::kMGPipeNullHandle;
+        if (programHandleArm) {
+            PrgramImpl::SyncCurrentProgramByHandle(dispatchCso, false);
+        } else
+#endif
+        {
+            PrgramImpl::SyncCurrentProgram(currentProgram);
+        }
 
+#if MOBILEGL_PIPE_PUSH
+        if (programHandleArm) {
+            // The same gate as the frontend one below, from the record: a dispatch of a program
+            // the frontend reports unlinked, or one whose SPIR-V never arrived, binds nothing.
+            const auto* const record = PrgramImpl::FindShaderCsoRecord(dispatchCso);
+            if (record == nullptr || record->Desc.LinkStatus == 0 || record->Desc.SpirvStatus == 0) {
+                g_GLESFuncs.glUseProgram(0);
+                PrgramImpl::g_lastUsedBackendProgramId = 0;
+                return;
+            }
+        } else
+#endif
         if (!currentProgram || !currentProgram->GetLinkStatus() || !currentProgram->GetSpirvStatus()) {
             g_GLESFuncs.glUseProgram(0);
             PrgramImpl::g_lastUsedBackendProgramId = 0;
@@ -6145,7 +6466,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Compute programs need the same per-program resource sync as draws:
         // uniform-block bindings and sampler units only exist through the API
         // because layout(binding) is stripped from the transpiled ESSL.
-        BindCurrentProgramWithResources(currentProgram, textureKeys);
+        BindCurrentProgramWithResources(currentProgram, textureKeys,
+#if MOBILEGL_PIPE_PUSH
+                                        dispatchCso
+#else
+                                        MG_Pipe::kMGPipeNullHandle
+#endif
+        );
     }
 
     GLuint GetBackendProgramId(GLuint program) {
