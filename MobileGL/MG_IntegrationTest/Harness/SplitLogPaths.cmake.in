@@ -6,9 +6,12 @@ file(MAKE_DIRECTORY "@CMAKE_CURRENT_BINARY_DIR@/split-logs")
 # P5e vi's client-array lane joins the same list for the same reason: its two entries are the
 # only ones that can reach Fatal{UnmigratedVerb, "DrawArrays+CLIENT_ARRAYS"} once ra publishes
 # the caps bit, and a shared log file is a marker nobody can attribute.
+# P5e pa's strict lane joins it for the same reason as vi's: its four entries exist to CARRY a
+# Fatal marker (the two program rows), and a shared log file is a marker nobody can attribute.
 foreach(entry IN LISTS MGL_SPLIT_CLEAR_TESTS MGL_SPLIT_TRIANGLE_TESTS MGL_SPLIT_PMAP_TESTS
                       MGL_SPLIT_T2_TESS_TESTS MGL_SPLIT_T2_XFB_TESTS MGL_SPLIT_SYNC_TESTS
-                      MGL_SPLIT_VI_CLIENT_ARRAY_TESTS)
+                      MGL_SPLIT_VI_CLIENT_ARRAY_TESTS
+                      MGL_SPLIT_PA_STRICT_DRAW_TESTS MGL_SPLIT_PA_STRICT_DISPATCH_TESTS)
     set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
         "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
 endforeach()
