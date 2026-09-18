@@ -5724,8 +5724,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 twin->GetSnormFallbackClampOutputMask() != g_snormFallbackClampOutputMask ||
                 twin->GetUnormFallbackClampOutputMask() != g_unormFallbackClampOutputMask ||
                 twin->GetFragColorBroadcastCount() != g_fragColorBroadcastCount ||
+#if MOBILEGL_PIPE_PUSH
+                // P5e (ID-124): ComputeShaderStorageBlockBindingSignatureOf is declared only
+                // under MOBILEGL_PIPE_PUSH (Managers.h:3122) and this clause read it from an
+                // UNGUARDED condition list, so the pull flavour did not compile. The clause is
+                // push-only in substance too: the signature it compares is over the override
+                // map the wire carries, and without the wire there is nothing to compare.
                 twin->GetShaderStorageBlockBindingSignature() !=
                     ComputeShaderStorageBlockBindingSignatureOf(*currentProgram) ||
+#endif
                 // A fourth of the same shape, and the reason glBindImageTexture itself does
                 // nothing: GLSL ES demands a format layout qualifier on an image where desktop
                 // GLSL lets a writeonly declaration omit one, so a format-less declaration is
@@ -6936,16 +6943,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const SizeT shadowBytes =
             static_cast<SizeT>(maxTouchedUnit + 1) * sizeof(TextureImpl::g_boundTexturesCache[0]);
         const Uint64 unitBindingsEpoch = keys.unitBindingsEpoch;
-#if MOBILEGL_BUILD_DISAGGREGATED
-        const Bool keysMatch =
-            byHandle ? (memo.valid && memo.byHandle && memo.maxTouchedUnit == maxTouchedUnit &&
-                        memo.contextSerial == contextSerial && memo.samplerViewsSerial == samplerViewsSerial &&
-                        memo.drawProgram.Slot == drawProgram.Slot && memo.drawProgram.Gen == drawProgram.Gen &&
-                        memo.shaderCsoSerial == shaderCsoSerial && memo.bindingsSerial == bindingsSerial &&
-                        memo.contextGeneration == g_backendContextGeneration)
-                     :
-#endif
-                     (memo.valid && memo.glContextId == keys.contextId &&
+        // P5e (ID-124): the legacy key is a LAZY LAMBDA, not an eagerly-computed Bool. It was
+        // the else-arm of a ternary whose declaration sat inside `#if MOBILEGL_BUILD_DISAGGREGATED`
+        // while the arm itself and every use of `keysMatch` sat outside it, so neither
+        // non-disaggregated flavour compiled. Hoisting it to an eager Bool would have been
+        // WORSE than the build break: it reads `currentProgram`, which is null on the handle
+        // arm, so the laziness the ternary gave for free is load-bearing (ID-81 / ID-110 -
+        // the arm decides, and the other arm's reads must not happen at all).
+        const auto legacyKeysMatch = [&]() -> Bool {
+            return (memo.valid && memo.glContextId == keys.contextId &&
                                memo.maxTouchedUnit == maxTouchedUnit &&
                                memo.unitBindingsEpoch == unitBindingsEpoch &&
                                memo.samplingResolutionGeneration == keys.samplingGeneration &&
@@ -6955,6 +6961,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                    (currentProgram ? currentProgram->GetBackendStateVersion() : 0) &&
                                memo.programLinked == (currentProgram && currentProgram->GetLinkStatus()) &&
                                memo.contextGeneration == g_backendContextGeneration);
+        };
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const Bool keysMatch =
+            byHandle ? (memo.valid && memo.byHandle && memo.maxTouchedUnit == maxTouchedUnit &&
+                        memo.contextSerial == contextSerial && memo.samplerViewsSerial == samplerViewsSerial &&
+                        memo.drawProgram.Slot == drawProgram.Slot && memo.drawProgram.Gen == drawProgram.Gen &&
+                        memo.shaderCsoSerial == shaderCsoSerial && memo.bindingsSerial == bindingsSerial &&
+                        memo.contextGeneration == g_backendContextGeneration)
+                     : legacyKeysMatch();
+#else
+        const Bool keysMatch = legacyKeysMatch();
+#endif
         // Short-circuited: the shadow compare is only meaningful once the key (and with it the
         // snapshotted row count) matches.
         if (!keysMatch || std::memcmp(memo.boundTextures.data(), TextureImpl::g_boundTexturesCache.data(),

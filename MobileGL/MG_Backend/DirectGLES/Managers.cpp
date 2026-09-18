@@ -2671,6 +2671,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
+// P5e (ID-124): OUT OF THE DISAGGREGATED BLOCK ON PURPOSE. This is a pure
+// MGPipeResourceTarget -> TextureTarget switch with no wire, no record and no role in it, but
+// it sat inside the nested `#if MOBILEGL_BUILD_DISAGGREGATED` below while its only caller,
+// MGB_TEXPARAM_TARGET, is guarded by `#if MOBILEGL_PIPE_PUSH` alone - so a push build without
+// disaggregation did not compile. The narrower fix (guarding the macro block too) is wrong:
+// that block also carries TextureDiagName and MGB_TEXTURE_RECORD_ARM_SELECTED, which the push
+// flavour does need. Caught by the `flavours` gate step; see ID-124.
+#endif // MOBILEGL_BUILD_DISAGGREGATED
             // The inverse of MG_Pipe::MGPipeResourceTargetForTextureTarget, for the sync's
             // target reads (ConvertTextureTargetToBackendGLEnum and MapToBackendTextureTarget
             // both want the frontend enum).
@@ -2690,6 +2698,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 default: return TextureTarget::Unknown;
                 }
             }
+#if MOBILEGL_BUILD_DISAGGREGATED
 
             void Ops_H_TextureSubData(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPSubData& record,
                                       const void* bytes, const MG_Pipe::MGPSubRegion* regions) {
