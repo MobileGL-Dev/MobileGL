@@ -77,6 +77,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/PixelStoreSweepScenario.cpp
     Scenarios/PrimitiveRestartScenario.cpp
     Scenarios/FragCoordOriginScenario.cpp
+    Scenarios/ClientVertexArrayScenario.cpp
     Scenarios/ClearThenReadPixelsScenario.cpp
     Scenarios/SampleVariablesScenario.cpp
     Scenarios/DepthStencilReadbackScenario.cpp
@@ -2062,6 +2063,26 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         TEST_PREFIX "DirectGLES.Split."
         TEST_LIST MGL_SPLIT_T2_XFB_TESTS
         TEST_FILTER "XfbCaptureBufferReuseScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-split"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
+    )
+
+    # ---- P5e package vi (MG_Remote/CONTRACT-P5E.md §5.1, ID-82 / ruling 2) --------------------
+    #
+    # THE LANE ENTRY THAT DID NOT EXIST, and its absence was the brief's open item (a). Nothing
+    # else registered here draws from a vertex array in the APPLICATION's own memory: every
+    # other scenario binds GL_ARRAY_BUFFER first, so its glVertexAttribPointer argument is a
+    # byte offset. This is the one draw shape whose bytes have no wire form - the server uploads
+    # them by dereferencing a client pointer per draw - and it is therefore both the positive
+    # control for vi's decision to KEEP that arm alive under lockstep and the only entry that
+    # can reach the run-ahead refusal when ra publishes the caps bit.
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Split."
+        TEST_LIST MGL_SPLIT_VI_CLIENT_ARRAY_TESTS
+        TEST_FILTER "ClientVertexArrayScenario.*"
         DISCOVERY_TIMEOUT 30
         PROPERTIES
             LABELS "integration-gpu\;integration-split"

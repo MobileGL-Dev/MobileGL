@@ -129,6 +129,7 @@ namespace {
     X(VertexInputEmit, IsLongAndFloat64TravelSeparately)                                            \
     X(VertexInputEmit, ABaseInstanceChangeAloneStillEmitsTheVertexBufferSet)                        \
     X(VertexInputEmit, AnUnchangedSetWithAnUnchangedBaseInstanceEmitsNothing)                       \
+    X(VertexInputEmit, TheVertexBufferWindowCoversEveryAttributeTheCsoDeclaresEnabled)              \
     X(VertexInputEmit, RebindingTheSameVaoEmitsABindAndNoCreate)                                    \
     X(VertexInputEmit, PingPongingBetweenTwoVaosNeverRecreatesEither)                               \
     X(VertexInputEmit, DestroyedVertexArraysReturnTheirCsoSlotsAndRecords)                          \
@@ -431,6 +432,78 @@ namespace {
         vao->SetAttributeDivisor(0, 4);
         EXPECT_GT(Emitter().EmitVertexBuffers(Ctx(), 3), 0u);
         EXPECT_EQ(Emitter().VertexBufferSetCount(), 2u);
+    }
+
+    // ==================== P5e (vi), ID-95 / ruling 19 / CONTRACT-P5E §5.3 ====================
+    //
+    // THE WINDOW RULE, PINNED RATHER THAN ARGUED: set_vertex_buffers' window must COVER every
+    // attribute the vertex-elements CSO declares ENABLED.
+    //
+    // Why it needs a case at all (scout S1's caveat R4). The two views are emitted from the
+    // same validate step and both walk the same `Enabled` bits, so today they cannot disagree -
+    // which is exactly the shape of unpinned invariant that a later narrowing turns into a
+    // silent wrong picture. An attribute the RECORD says is enabled but that falls outside the
+    // window resolves VertexBufferForAttributeIndex == nullptr on the server and is SKIPPED at
+    // the attribute walk (Managers.cpp): the array stays enabled in the driver VAO with no
+    // buffer bound under it, which is not a refusal and not a black triangle, it is whatever
+    // that attribute last pointed at.
+    //
+    // The oracle is the RECORD, not the emitter's arithmetic: whatever create_vertex_elements
+    // declared enabled must be inside [Start, Start+Count). Sparse on purpose - a hole at 1..6
+    // is what distinguishes "the window covers the enabled set" from "the window happens to be
+    // as long as the attribute array".
+    //
+    // The sink half is CheckUnitWindows (tx2's, called at every draw/dispatch), whose verdict
+    // for a narrow window is Fatal{ProtocolCorruption, "SetVertexBuffers.Count"}. This case is
+    // the PRODUCER half and is the one that goes red if the emitter narrows.
+    TEST(VertexInputEmit, TheVertexBufferWindowCoversEveryAttributeTheCsoDeclaresEnabled) {
+        EmitterScope scope;
+        const SharedPtr<VertexArrayObject> vao = MakeVao(1);
+        const SharedPtr<BufferObject> buffer = Ctx().CreateBufferObject(1);
+        buffer->Respecify(4096, nullptr);
+
+        // Enabled: 0 and 7. Disabled: everything between, and everything above.
+        const Uint kEnabled[] = {0u, 7u};
+        for (Uint index : kEnabled) {
+            vao->SetAttributeFormat(index, 4, DataType::Float32, false, 16, 0, false);
+            vao->BindAttributeBuffer(index, buffer);
+            vao->EnableAttribute(index);
+        }
+
+        ASSERT_GT(Emitter().EmitVertexElements(Ctx()), 0u);
+        ASSERT_GT(Emitter().EmitVertexBuffers(Ctx(), 0), 0u);
+
+        const MGPVertexBuffers& window = Emitter().LastVertexBuffers();
+        const auto& declared = Emitter().LastAttributes();
+        const Uint32 declaredCount = Emitter().LastElements().AttributeCount;
+
+        Uint32 covered = 0;
+        for (Uint32 i = 0; i < declaredCount; ++i) {
+            if (!declared[i].Enabled) continue;
+            ++covered;
+            SCOPED_TRACE(::testing::Message() << "attribute " << i);
+            EXPECT_GE(i, window.Start)
+                << "create_vertex_elements declares attribute " << i
+                << " ENABLED but set_vertex_buffers' window starts at " << window.Start
+                << ". The backend resolves no binding for it and SKIPS it, leaving the driver "
+                   "array enabled over whatever it last pointed at (ID-95 / ruling 19)";
+            EXPECT_LT(i, window.Start + window.Count)
+                << "create_vertex_elements declares attribute " << i
+                << " ENABLED but set_vertex_buffers' window ends at " << (window.Start + window.Count)
+                << " - the same skip, at the other end. A narrower window is the sink's "
+                   "Fatal{ProtocolCorruption, \"SetVertexBuffers.Count\"}";
+        }
+        ASSERT_EQ(covered, 2u)
+            << "the record did not declare the two attributes this case enabled, so the window "
+               "check above had nothing to be about";
+
+        // And the window's own entries agree with the record about WHICH attribute each is, so
+        // "covered" cannot be satisfied by a window of the right LENGTH over the wrong indices.
+        for (Uint32 i = 0; i < window.Count; ++i) {
+            EXPECT_EQ(Emitter().LastEntries()[i].BindingIndex, window.Start + i)
+                << "entry " << i << " of the window does not name attribute " << (window.Start + i)
+                << "; the server indexes this window BY ATTRIBUTE";
+        }
     }
 
     // D-G3's per-handle latch. create_vertex_elements is re-issued on the SAME handle when a
