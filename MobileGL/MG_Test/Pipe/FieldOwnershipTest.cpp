@@ -413,6 +413,15 @@ TEST_F(FieldOwnershipTest, TheAdmittedPullTableIsID84sDerivationAndNotAList) {
            "entries this phase is being run to fix";
     EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetBoundVertexArray,
                                            MGPipeVerb::DrawArrays));
+    // P5e (gl), ID-118: the pair that made resource_copy_region's wait class move. The field
+    // retires in P7, so it had to be admitted somewhere - and it is admitted HERE, by the
+    // derivation and with no exception, only because the op is kWaitApplied. Put that row back
+    // to kWaitNone in PipeCalls.def and this goes red, which is the whole argument for moving
+    // the wait class rather than writing the field into a list.
+    EXPECT_TRUE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetTextureObject,
+                                          MGPipeVerb::CopyImageSubData))
+        << "resource_copy_region is unbarriered again: after the flip, a copy record reading "
+           "the client's texture object is an unconditional Fatal and P7 is two phases away";
     // A field that is not a debt at all is never admitted, on any verb.
     EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetRenderStateParameters,
                                            MGPipeVerb::ReadPixels));

@@ -356,7 +356,7 @@ inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // BlitNamedFramebuffer
     {{0x5800c02000300180ull, 0x0000000000000000ull}}, // CopyTexImage2D
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // CopyTexSubImage2D
-    {{0x0000000000000000ull, 0x0000000000000000ull}}, // CopyImageSubData
+    {{0x5800c02000300180ull, 0x0000000000000000ull}}, // CopyImageSubData
     {{0x5800c02000300180ull, 0x0000000000000000ull}}, // GenerateMipmap
     {{0x5800c02000300140ull, 0x0000000000000000ull}}, // ReadPixels
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // GetTexImage
@@ -394,7 +394,7 @@ inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // GetGpuTimestampNs
 };
 
-inline constexpr SizeT kMGPipeAdmittedPullPairCount = 101;
+inline constexpr SizeT kMGPipeAdmittedPullPairCount = 111;
 
 // THE PREDICATE THE STRICT KNOB ASKS (ID-117). A 69 x 128-bit table, so this costs a shift and
 // a test on the apply thread - the same shape MGPipeFieldMaskHas already has.
