@@ -1034,10 +1034,20 @@ namespace MobileGL::MG_Remote::Client {
             }
 
             MG_Pipe::MGPPresent record{};
-            // FrameSerial 0 = "the server stamps its own". P5 has no client-side present credit
-            // (MOBILEGL_IPC_PRESENT_CREDIT is P6's), so a client-minted serial would be a second
-            // id space with no consumer.
-            record.FrameSerial = 0;
+            // P5e (ra, CONTRACT-P5E §1, §2.4). FrameSerial USED TO BE 0 - "the server stamps
+            // its own" - and that was honest while nothing paced on it. It is now minted here,
+            // 1-based, by AcquirePresentCredit, which also PAYS the credit: if this client
+            // already has MOBILEGL_IPC_PRESENT_CREDIT presents in flight it parks until the
+            // server's OnPresent returns one, and only then does it mint.
+            //
+            // THE CREDIT WAIT IS BEFORE THE ENCODE, WHICH IS NOT A DETAIL: EmitAndWait
+            // reserves SEG_CMD bytes as its first act, so a client that encoded and then
+            // parked would hold a ring reservation across a whole frame of server time. It
+            // also drains SEG_EVENT on its way out, like every other wait (§2.6).
+            //
+            // With run-ahead disarmed this is a counter and nothing else, and the record below
+            // travels exactly as it did - the present row's own barrier is the pacing there.
+            record.FrameSerial = session.AcquirePresentCredit();
             session.EmitAndWait(MG_Pipe::MGPWireOp::Present, &record, sizeof(record), nullptr, 0,
                                 nullptr, 0, nullptr);
 

@@ -172,6 +172,27 @@ namespace MobileGL::MG_Remote::Client {
         return CapsMirrorInstance().Backend();
     }
 
+    namespace {
+        // P5e (ra), CONTRACT-P5E §2.5: THE WAIT BEFORE EVERY `Server*` EGL FORWARDER.
+        //
+        // These calls do not travel on SEG_CMD. They go through ServerLoop's control mailbox,
+        // which is pumped BETWEEN drain batches (ServerLoop.cpp's PumpControlRequest, above
+        // DrainRing) - so a make-current, a surface creation or a resize can land between two
+        // records the client published and never waited for. Under lockstep that was
+        // impossible: the client had waited out every record it issued before it could reach
+        // this line. Under run-ahead it is one queued frame wide, and a context switch applied
+        // in the middle of another context's draws is not a wrong pixel, it is a wrong
+        // everything.
+        //
+        // ServerSwapEGLBuffers is deliberately NOT on this list, and its own virtual says why:
+        // present IS the swap and it travels as a record, in order, with its own credit.
+        void WaitForApplyBeforeEglForwarder(const char* forwarder) {
+            if (ClientSession* session = ClientSession::Active()) {
+                session->WaitForApplyToCatchUp(forwarder);
+            }
+        }
+    } // namespace
+
     // ---- the nine EGL lifecycle virtuals ---------------------------------------------------
     //
     // FORWARD FIRST, THEN RUN THE BASE. The server has to own the context before the client's
@@ -180,6 +201,7 @@ namespace MobileGL::MG_Remote::Client {
     // InitCapabilities has run.
 
     Bool BackendObject_Remote::InitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor) {
+        WaitForApplyBeforeEglForwarder("InitializeEGLDisplay");
         if (!Server::ServerInitializeEGLDisplay(dpy, major, minor)) return false;
         return MG_Backend::BackendObject::InitializeEGLDisplay(dpy, major, minor);
     }
@@ -188,6 +210,7 @@ namespace MobileGL::MG_Remote::Client {
                                                       const MG_Backend::WindowHandle& handle) {
         // The handle first: the server's backend has to know which window it is about to make
         // a surface for, and ServerSetWindowHandle is the only way to tell it.
+        WaitForApplyBeforeEglForwarder("CreateEGLWindowSurface");
         Server::ServerSetWindowHandle(handle);
         if (!Server::ServerCreateEGLWindowSurface(surface, handle)) return false;
         // The server's surface init published the default framebuffer's shape as a
@@ -202,6 +225,7 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     Bool BackendObject_Remote::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
+        WaitForApplyBeforeEglForwarder("ResizeEGLWindowSurface");
         if (!Server::ServerResizeEGLWindowSurface(surface, width, height)) return false;
         // A resize re-creates the server's swapchain, which re-posts the surface-changed
         // event - same drain, same reason as CreateEGLWindowSurface.
@@ -210,6 +234,7 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     Bool BackendObject_Remote::CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
+        WaitForApplyBeforeEglForwarder("CreateEGLPbufferSurface");
         if (!Server::ServerCreateEGLPbufferSurface(surface, width, height)) return false;
         // Same drain as the window surface: InitPbufferSurface publishes the default
         // framebuffer's depth/stencil format on SEG_EVENT from inside this very RPC.
@@ -223,6 +248,7 @@ namespace MobileGL::MG_Remote::Client {
         // class latches "the surface is initialised" and calls InitCapabilities, because
         // InitCapabilities' answer comes from a snapshot the server can only publish once its
         // own InitCapabilities has run - and ServerMakeEGLCurrent is what publishes it.
+        WaitForApplyBeforeEglForwarder("MakeEGLCurrent");
         if (!Server::ServerMakeEGLCurrent(dpy, draw, read, ctx)) return false;
         if (!MG_Backend::BackendObject::MakeEGLCurrent(dpy, draw, read, ctx)) return false;
 

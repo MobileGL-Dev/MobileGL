@@ -58,22 +58,50 @@ namespace MobileGL::MG_Pipe {
         // existing filter on Fatal{UnmigratedPipeInput still matches, plus the class and the
         // phase that retires it - a strict abort that did not say which phase owes the answer
         // would leave the reader exactly where the gate found them.
-        [[noreturn]] void StrictBarrierPullFatal(MGPipeInputField field, MGPipeVerb verb) {
+        // P5e (ra): `why` is the second half of the marker, because the lane's allowlist step
+        // reads this line and the two reasons mean different things to it. "MOBILEGL_IPC_
+        // STRICT_ERRORS=1" is the operator asking for a real, ordered value to be loud;
+        // "UNBARRIERED" is the value not existing (§3.3). The `<field>@<verb>` prefix and the
+        // Fatal{UnmigratedPipeInput tag are unchanged, so every filter written since P5c still
+        // matches.
+        [[noreturn]] void StrictBarrierPullFatal(MGPipeInputField field, MGPipeVerb verb,
+                                                 const char* why) {
             const SizeT index = static_cast<SizeT>(field);
-            MGLOG_F("MGPipe: Fatal{UnmigratedPipeInput, \"%s@%s\"} [BARRIER-PULLED, "
-                    "MOBILEGL_IPC_STRICT_ERRORS=1, retires in %s]",
-                    kMGPipeInputFieldNames[index], MGPipeVerbName(verb), kMGPipeFieldRetiringPhase[index]);
+            MGLOG_F("MGPipe: Fatal{UnmigratedPipeInput, \"%s@%s\"} [BARRIER-PULLED, %s, "
+                    "retires in %s]",
+                    kMGPipeInputFieldNames[index], MGPipeVerbName(verb), why,
+                    kMGPipeFieldRetiringPhase[index]);
             std::abort();
         }
 
         // One place decides what a BARRIER-PULLED read does, so the field accessors and the
         // seven sticky forwards cannot drift apart on it.
+        //
+        // ---- P5e (ra), CONTRACT-P5E §3.3: THE DETECTOR IS UNCONDITIONAL UNDER AN UNBARRIERED
+        // RECORD, AND THAT IS WHAT MAKES THE STRICT LANE A GATE -------------------------------
+        //
+        // The knob exists because under LOCKSTEP a pulled row is a real, ordered, fresh value:
+        // the client filled it and then parked, so "count it and carry on" is an honest
+        // measurement of remaining debt and MOBILEGL_IPC_STRICT_ERRORS is the operator asking
+        // for the debt to be loud instead. None of that survives run-ahead. With the client
+        // running ahead of this apply, the row was either never filled for this verb (§3.1
+        // skips the fill) or is being overwritten by a verb two frames later - so the value is
+        // torn or stale BY CONSTRUCTION and there is nothing for a counter to count. A
+        // "count it" arm here would be a wrong picture with a number beside it.
+        //
+        // rsp is therefore 0 on unbarriered records in every scenario summary (§7's pin): a
+        // non-zero count would be an abort that did not fire.
         void CountBarrierPull(MGPipeInputField field, MGPipeVerb verb) {
+            if (!MGPipeApplierCurrentRecordIsBarriered()) {
+                StrictBarrierPullFatal(field, verb, "UNBARRIERED, the client did not fill it");
+            }
             ++g_residualPulls;
             if (MG_Util::PipeStats::Enabled()) {
                 MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ResidualPulls, 1);
             }
-            if (MG_Config::Ipc.StrictErrors) StrictBarrierPullFatal(field, verb);
+            if (MG_Config::Ipc.StrictErrors) {
+                StrictBarrierPullFatal(field, verb, "MOBILEGL_IPC_STRICT_ERRORS=1");
+            }
         }
 
         // The verb's OWN may-read table (FillPoints.def, kMGPipeClassFieldMask). The stamp

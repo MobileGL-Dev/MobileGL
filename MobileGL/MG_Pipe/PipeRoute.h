@@ -267,12 +267,41 @@ namespace MobileGL::MG_Pipe {
     }
 
     // ---- resources ---------------------------------------------------------------------
+
+    // P5e (ra), CONTRACT-P5E §2.5 / ruling 15 (ID-93): DOES THIS SUB-DATA RECORD WANT ITS
+    // ANSWER? One predicate, two callers - this route and the wire emit table - because the
+    // route cannot pass a flag through the thunk (the call table's signature is the
+    // catalogue's) and two hand-written copies of "is this the buffer half" is exactly the
+    // drift that would make the client wait for an answer the emitter told the server not to
+    // bother with, or read a slot that was never posted.
+    //
+    // THE BUFFER HALF DOES NOT: its Bool is discarded at the only call site there is
+    // (MGPipeEmitResourceSubData), and because the row carries kReplySlot the client used to
+    // wait for it anyway - one full round trip per 64 KB persistent-map block, whose answer
+    // nobody looked at. THE TEXTURE HALF DOES: DrainTextureSubData clears the level's dirty
+    // flag on an ACCEPTED reply, so its answer is load-bearing (D-D5; making that half
+    // fire-and-forget is a trailing item, not this package's).
+    //
+    // The test is MGPSubData::Target == kMGPipeResourceTargetBuffer, whole field, which is the
+    // invariant MGPipeTypes.h asserts beside the packer and which the applier's own
+    // SubDataNamesABuffer already reads.
+    inline Bool MGPipeSubDataWantsItsReply(const MGPSubData& record) {
+        return record.Target != kMGPipeResourceTargetBuffer;
+    }
+
     inline Bool MGPipeRouteResourceSubData(const MGPSubData& record, const void* bytes,
                                            Uint64 byteCount,
                                            const MGPSubRegion* regions = nullptr) {
+        // THE SLOT IS STILL MINTED AND STILL TAKEN, even for the buffer half. The row keeps
+        // kReplySlot on the wire, the server still posts, and the mailbox's "every minted slot
+        // is taken" rule is what the next row's ReplyOverrun Fatal is looking for - so the
+        // half that does not WAIT still has to collect. What changes is that under run-ahead
+        // the emit table publishes and returns, and the answer it collects is the emitter's
+        // accept-by-construction rather than the server's.
         MGPReplySlot reply = MGPipeMintReplySlot();
         MGP_ResourceSubData(&record, bytes, byteCount, regions, record.RegionCount, &reply);
-        return MGPipeTakeReplyBool(reply, "resource_subdata");
+        const Bool accepted = MGPipeTakeReplyBool(reply, "resource_subdata");
+        return MGPipeSubDataWantsItsReply(record) ? accepted : true;
     }
     inline void MGPipeRouteBufferSubDataResident(const MGPSubData& record, const void* bytes,
                                                  Uint64 byteCount) {

@@ -112,14 +112,78 @@ namespace MobileGL::MG_Remote::Client {
         // or its MGPDrawIndirect block behind the range array). The one-tail form above is this
         // one with a single WireTail; the barrier policy lives in exactly one body. A distinct
         // name rather than an overload, because `nullptr, 0` would match both.
+        // P5e (ra, CONTRACT-P5E §2.5): `wantReply` is the ONE caller-side relaxation of the
+        // catalogue's reply rule, and it exists for exactly one row - resource_subdata's
+        // BUFFER half, whose Bool the only caller discards (PipeFill.cpp's
+        // MGPipeEmitResourceSubData). The row keeps kReplySlot on the wire (the server still
+        // posts; an unread slot is harmless, ReplySlot.h:16, 105), so nothing about the
+        // protocol moves - what moves is that under run-ahead this client neither waits for
+        // the answer nor reads it, which is what makes the 64 KB persistent-map push
+        // fire-and-forget instead of a hidden round trip per block. It is NOT a licence to
+        // skip an answer a caller uses: R-5 still forbids re-deriving one locally, and every
+        // other kReplySlot row passes true (the default) and waits.
         Uint64 EmitAndWaitTails(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
                                 const Wire::WireTail* tails, Uint32 tailCount, void* replyOut,
                                 Uint64 replyBytes, Int32* statusOut,
-                                Uint64* replySizeOut = nullptr);
+                                Uint64* replySizeOut = nullptr, Bool wantReply = true);
 
         // MOBILEGL_IPC_VERB_BARRIER. False is the R-1 negative control and is EXPECTED to be
         // red; it must be run once and the way it goes red recorded.
         Bool BarrierArmed() const;
+
+        // ---- P5e (ra): the wait rule (CONTRACT-P5E §1, §2.3, §2.4, §2.5) -------------------
+
+        // A CONJUNCTION OF THREE, LATCHED ONCE: `m_barrierArmed && Ipc.RunAhead &&
+        // Caps().HasCap(kCapRunAheadApply)`. The third conjunct is the server's own statement
+        // that it applies an unbarriered record without reading client memory, so run-ahead is
+        // never something the client can turn on by itself - on Magma, and on Espryt until the
+        // integration commit publishes bit 10, this answers false and EmitAndWaitTails runs
+        // today's lockstep path byte for byte.
+        //
+        // LATCHED AT THE FIRST CAPS ADOPTION AFTER Start, AND A LATER SNAPSHOT MAY ONLY TURN IT
+        // OFF. A caps re-run cannot promote a lockstep server to a run-ahead one mid-frame:
+        // records already published without a wait would have been published against the wrong
+        // rule, and there is no way to un-publish them. Demotion is safe in the other
+        // direction - it only adds waits - so it is allowed.
+        Bool RunAheadArmed() const;
+
+        // §2.3: the four O-class SharedPtr rows of gPipeInputs (PipeInputs.h:801-809 - the
+        // bound VAO and the three programs), dropped on the GL thread once a barriered apply
+        // has returned. Under lockstep the next fill overwrites them within a verb; under
+        // run-ahead the next fill may be a frame away, and a pinned VAO whose last owner ends
+        // up being the apply thread is exactly the deferred-destroy hazard §2.7 keeps a queue
+        // for. Releasing them at the one instant the applier is provably idle costs four
+        // refcount drops per barriered record and removes the pin entirely.
+        void ReleaseFillPins();
+
+        // §2.5's forced wait, as one named entry point: publish nothing, wait for the apply
+        // thread to reach LastPublishedSeq, drain the reverse channel. `why` names the caller
+        // in the timeout Fatal, because "which forced wait wedged" is the whole diagnostic.
+        // A no-op when run-ahead is not armed (the client is already in step by construction).
+        void WaitForApplyToCatchUp(const char* why);
+
+        // glFinish. Flush and Finish stay no-ops ON THE WIRE (ARCHITECTURE §11, :415) - there
+        // is no record to emit - but "the GL commands issued so far have completed" cannot be
+        // true while a run-ahead queue still holds them, so under run-ahead glFinish becomes
+        // exactly WaitForApplyToCatchUp + the drain that comes with it.
+        void Finish();
+
+        // The last seq this session published, whether or not it waited for it. The forced
+        // waits above are defined against it.
+        Uint64 LastPublishedSeq() const;
+
+        // §2.4's counter, published on the stats line as `credit-waits`: how often the client
+        // actually blocked for a swap to come back. Zero with a credit of 1 means the server
+        // is never the frame's critical path; a number close to the frame count means the
+        // credit is what paces this workload, which is what the device exit measures.
+        Uint64 PresentCreditWaits() const;
+
+        // §2.4, called by EmitPresent immediately before it encodes: pay the credit (parking
+        // if this client already has `MOBILEGL_IPC_PRESENT_CREDIT` presents in flight), then
+        // mint and return this frame's 1-based MGPPresent::FrameSerial. The credit wait is
+        // BEFORE the encode on purpose: a client that encoded first would hold a SEG_CMD
+        // reservation across the park.
+        Uint64 AcquirePresentCredit();
 
         // R-1's invariant made checkable rather than only written down: true while this
         // thread is inside a barrier wait. The apply thread sets its own flag on entry to the
@@ -140,7 +204,17 @@ namespace MobileGL::MG_Remote::Client {
         // split session is live, when the caller IS the apply thread, and when the barrier is
         // disarmed - MOBILEGL_IPC_VERB_BARRIER=0 is R-1's negative control and its red belongs
         // to Fatal{BarrierViolation}, not to this check.
-        static void RefusePipeInputsTouchWhileApplierOwnsIt(const char* surface);
+        //
+        // P5e (ra, CONTRACT-P5E §3.5) RE-DERIVES IT UNDER RUN-AHEAD, and `isBarrieredFill` is
+        // what the caller says about ITSELF: "this touch is the residual fill of a record this
+        // thread is about to park behind". With run-ahead armed the block is server-role
+        // memory for every other touch, so the rule stops being "not while the applier is
+        // inside" - which is unanswerable when the client never waits - and becomes "not at
+        // all, unless you are that fill". The MOBILEGL_IPC_BATCH_WAITS early return goes with
+        // it: batching is about how many round trips a lockstep client pays, and it says
+        // nothing about a client that pays none.
+        static void RefusePipeInputsTouchWhileApplierOwnsIt(const char* surface,
+                                                            Bool isBarrieredFill = false);
 
         // ---- c1's additions ---------------------------------------------------------------
 
@@ -250,9 +324,20 @@ namespace MobileGL::MG_Remote::Client {
         void LogWireLedger() const;
 
     private:
+        // P5e (ra): the latch, taken from PumpControlPlane after every adoption. Private
+        // because "when may run-ahead start" is this class's own rule and not a caller's.
+        void LatchRunAheadFromCaps();
+
         Wire::PipeWireEncoder m_encoder;
         Wire::SegmentTable m_segments;
         Bool m_barrierArmed = true;
+        // P5e (ra): the latch of RunAheadArmed() and the fact that it has been taken once.
+        Bool m_runAheadArmed = false;
+        Bool m_runAheadLatched = false;
+        // §2.4: presents published (the 1-based FrameSerial space) and how often the credit
+        // wait really blocked.
+        Uint64 m_presentsSent = 0;
+        Uint64 m_presentCreditWaits = 0;
 
         std::unique_ptr<Transport::InProcessTransport> m_clientTransport;
         std::unique_ptr<Transport::InProcessTransport> m_serverTransport;

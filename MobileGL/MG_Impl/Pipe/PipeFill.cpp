@@ -85,6 +85,20 @@ namespace MobileGL::MG_Pipe {
             return inputs.m_currentVertexAttribute;
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5e (ra, CONTRACT-P5E §2.3). THE FOUR O-CLASS ROWS, AND ONLY THEY: these are the only
+        // members of this block that own a frontend object rather than point into one, so they
+        // are the only ones through which the apply thread can become a last owner. The raw
+        // pointer rows (the binding-slot bases) are borrowed from a live GLContext and own
+        // nothing, so releasing them would buy no lifetime and lose the monolith's arms.
+        static void ReleaseObjectPins(PipeInputs& inputs) {
+            inputs.m_boundVertexArray.reset();
+            inputs.m_programForDispatch.reset();
+            inputs.m_programForDraw.reset();
+            inputs.m_transformFeedbackProgram.reset();
+        }
+#endif
+
         static void CopyField(PipeInputs& dst, GLContext& ctx, MGPipeInputField field) {
             using F = MGPipeInputField;
             using MG_State::GLState::BufferBindPointTargets;
@@ -330,6 +344,64 @@ namespace MobileGL::MG_Pipe {
     namespace {
         GLContext* LiveContext() { return MG_State::pGLContext.get(); }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // ---- P5e (ra): the fill decision (CONTRACT-P5E §3.1) -----------------------------
+        //
+        // Is this process a run-ahead CLIENT right now? Three questions, cheapest first, and
+        // the last one is the latch ClientSession took at its first caps adoption - so this is
+        // one pointer test and one bool load on the verb path once the first two are constant.
+        Bool ClientRunsAhead() {
+            if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return false;
+            if (MG_Remote::Client::RunsAsTheServerRole()) return false;
+            const MG_Remote::Client::ClientSession* session = MG_Remote::Client::ClientSession::Active();
+            return session != nullptr && session->RunAheadArmed();
+        }
+
+        // THE WIRE OP A VERB BOUNDARY BECOMES, which is the join MGPipeVerbForWireOp draws in
+        // the other direction. Built by walking the op space once at compile time rather than
+        // written out, because a second hand-written table is a second thing to forget a row
+        // in - and the generator already refuses a verb-shaped op with no row.
+        constexpr MGPWireOp WireOpForVerb(MGPipeVerb verb) {
+            for (SizeT i = 0; i < static_cast<SizeT>(MGPWireOp::kOpCount); ++i) {
+                const auto op = static_cast<MGPWireOp>(i);
+                if (MGPipeVerbForWireOp(op) == verb) return op;
+            }
+            return MGPWireOp::kOpCount;
+        }
+
+        // CONTRACT-P5E §2.1's predicate, ASKED AT THE VALIDATE POINT - which is before the
+        // record exists, so it is asked of the verb and the live context rather than of the
+        // payload. The two halves must agree with MGPipeBarriered(op, payload, applierState),
+        // which is what the server computes, so each clause is the same clause:
+        //
+        //   1. the static WaitClass column          - the same generated table, same op;
+        //   2. kCtxVerb inside an open XFB span     - ctx.IsTransformFeedbackActive() here,
+        //      the applied MGPContextValues mirror there, and set_context_values precedes the
+        //      verb on the ring, so the two read the same value (§2.1);
+        //   3. a draw carrying kDrawClientArrays    - NOT asked here, because under run-ahead
+        //      such a draw never reaches a record at all: vi refuses it on this very thread in
+        //      EmitDrawRecord's array arm (§5.1, ruling 2). Asking it here would be a second
+        //      spelling of vi's "does any enabled attribute lack a buffer" walk, and two
+        //      spellings of an escalation is precisely what ruling 3 replaced.
+        //
+        // AN OP WITH NO VERB ROW ANSWERS BARRIERED. A verb the join does not know is one this
+        // file cannot reason about, and the safe answer - fill it, wait for it - is also the
+        // pre-P5e answer.
+        Bool ClientVerbIsBarriered(MGPipeVerb verb, GLContext& ctx) {
+            const MGPWireOp op = WireOpForVerb(verb);
+            if (op == MGPWireOp::kOpCount) return true;
+            if (MGPipeWaitClassFor(op) != kWaitNone) return true;
+            if (MGPipeCallClassFor(op) == kCtxVerb && ctx.IsTransformFeedbackActive()) return true;
+            return false;
+        }
+
+        // Whether the LAST fill actually happened, i.e. whether the rows in the block describe
+        // the verb in flight. Read by MGPipeNoteFrontendMutation, which refreshes one field of
+        // that fill: with no fill behind it there is nothing to refresh and the write would be
+        // the role violation §3.5 names.
+        Bool g_lastFillWasBarriered = true;
+#endif
+
         template <class T>
         const SharedPtr<T>& NullShared() {
             static const SharedPtr<T> null;
@@ -546,10 +618,18 @@ namespace MobileGL::MG_Pipe {
     void MGPipeNoteFrontendMutation(MGPipeInputField field) {
         PipeInputs& inputs = gPipeInputs;
 #if MOBILEGL_BUILD_DISAGGREGATED
+        // P5e (ra, CONTRACT-P5E §3.1): THIS REFRESHES ONE FIELD OF THE LAST FILL, so with no
+        // fill behind it there is nothing to refresh. Under run-ahead the last verb may have
+        // been unbarriered, in which case the block describes an older verb the server is no
+        // longer being asked about and a write here would be a GL-thread touch of server-role
+        // memory. It returns instead - the same answer, one line earlier, as the class-mask
+        // test below gives for a field the verb never pushed.
+        if (!g_lastFillWasBarriered) return;
         // P5c (gt, layer 2): the single-field refresh is a client write into gPipeInputs too -
-        // same gate as the fill.
+        // same gate as the fill, and it makes the same claim the fill made: the rows it is
+        // touching belong to a record this thread is parked behind (or will park behind).
         MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(
-            "MGPipeNoteFrontendMutation");
+            "MGPipeNoteFrontendMutation", /*isBarrieredFill=*/true);
 #endif
         auto* ctx = LiveContext();
         if (ctx == nullptr) return;
@@ -999,12 +1079,59 @@ namespace MobileGL::MG_Pipe {
     Bool MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind kind, Uint64 lifetimeId) {
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return false;
         if (!MG_Remote::Client::RunsAsTheServerRole()) return false;
+        // P5e (ra), CONTRACT-P5E §2.7 / ruling 13. The queue stays - a BARRIERED record's apply
+        // may still pin a frontend object (its fill's O-class rows, XFB's targets), so the
+        // apply thread can still be a last owner and this is still the belt that keeps that
+        // death off the client's allocator. But an enqueue from an UNBARRIERED record is a
+        // FINDING, not a service: rule F says such an apply names no client memory at all, so
+        // a SharedPtr it could be the last owner of means some site is still pinning a
+        // frontend object across a record and the migration this phase believes it finished is
+        // not finished. Named once with the kind so the site is findable, and Fatal under
+        // strict so the lane owns the red rather than a log nobody reads.
+        if (!MG_Pipe::MGPipeApplierCurrentRecordIsBarriered()) {
+            if (MG_Config::Ipc.StrictErrors) {
+                MGLOG_F("MGPipe: Fatal{RoleViolation, \"deferred-destroy\"} - an UNBARRIERED "
+                        "apply was the last owner of a frontend object of kind %u (lifetime "
+                        "%llu). CONTRACT-P5E rule F says an unbarriered apply reads no client "
+                        "memory, so nothing it touched should have been a SharedPtr at all",
+                        static_cast<unsigned>(kind), static_cast<unsigned long long>(lifetimeId));
+                std::abort();
+            }
+            MGLOG_E_ONCE("MGPipe: an UNBARRIERED apply deferred the destruction of a frontend "
+                         "object of kind %u - CONTRACT-P5E §2.7's finding: some apply-thread "
+                         "site still holds a frontend SharedPtr across a record",
+                         static_cast<unsigned>(kind));
+        }
         {
             std::lock_guard<std::mutex> lock(g_deferredDestroyMutex);
             g_deferredDestroys.push_back(MGPipeDeferredDestroy{kind, lifetimeId});
         }
         g_deferredDestroyCount.fetch_add(1, std::memory_order_release);
         return true;
+    }
+
+    // P5e (ra), CONTRACT-P5E §2.3. Declared in PipeMutation.h, where its WHY is argued.
+    //
+    // NO GUARD ON THE CALLER'S BEHALF: ClientSession calls this only after a barriered apply
+    // has returned on a run-ahead session, and adding a second "is run-ahead armed" test here
+    // would be a copy of a decision that belongs on the other side. What this side owns is
+    // WHICH rows go, and that answer is ReleaseObjectPins' four.
+    //
+    // THE STAMPS ARE LEFT ALONE, deliberately. A released row reads back as null, and a
+    // BARRIERED verb's fill re-copies it before that verb's apply can pull it (§3.1 skips the
+    // fill only for UNBARRIERED records); an unbarriered apply may not read it at all, and
+    // §3.3's detector is what says so by name. Clearing the stamps as well would trade that
+    // named abort for the poison Fatal, which names the field but not the rule it broke.
+    void MGPipeReleaseResidualFillPins() { MGPipeFillAccess::ReleaseObjectPins(gPipeInputs); }
+
+    // P5e (ra), CONTRACT-P5E §2.5. Declared in PipeMutation.h; see there for why it is not a
+    // ClientSession call at the GL entry point.
+    void MGPipeClientFinish() {
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        if (MG_Remote::Client::RunsAsTheServerRole()) return;
+        if (MG_Remote::Client::ClientSession* session = MG_Remote::Client::ClientSession::Active()) {
+            session->Finish();
+        }
     }
 
     void MGPipeDrainDeferredDestroys() {
@@ -1955,9 +2082,20 @@ namespace MobileGL::MG_Pipe {
     void MGPipeLeaveVerb() {
         PipeInputs& inputs = gPipeInputs;
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // Same layer-2 gate as the fill: the serial bump and the verb reset below are writes
-        // into gPipeInputs (gt).
-        MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt("MGPipeLeaveVerb");
+        // P5e (ra, §3.1): a verb whose fill was skipped has no stamps of this thread's to
+        // retire, and the bump below would move a serial the SERVER's stamp owns. Leave
+        // returns, and the tracker's base-instance clear - which is frontend state, not block
+        // state - still runs at the bottom.
+        if (g_lastFillWasBarriered) {
+            // Same layer-2 gate as the fill: the serial bump and the verb reset below are
+            // writes into gPipeInputs (gt).
+            MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(
+                "MGPipeLeaveVerb", /*isBarrieredFill=*/true);
+        }
+        if (!g_lastFillWasBarriered) {
+            MGPipeTrackerInstance().ClearPendingBaseInstance();
+            return;
+        }
 #endif
 #if MOBILEGL_PIPE_POISON
         // Same bump the next fill would make, without a verb to fill from: no field is
@@ -2686,6 +2824,18 @@ namespace MobileGL::MG_Pipe {
             // Did the applier reproduce it? Byte for byte, over the attributes this call
             // named - anything less would be a mirror that disagrees with the frontend in a
             // window no gate looks at.
+            //
+            // P5e (ra, CONTRACT-P5E §3.4): NOT UNDER RUN-AHEAD. The mirror is the APPLIER's
+            // copy of this record, and set_vertex_attrib_defaults is a kWaitNone row - so
+            // under run-ahead this thread has not waited for the apply and the read races it,
+            // and the repair below (a CopyField straight into the block) is precisely the
+            // GL-thread write §3.5 refuses. The client's own authority is `resolved` and
+            // `g_attribDefaultLastHeader`, which is what it just published; there is nothing
+            // the mirror could add that the wire does not already carry. A build that ever
+            // needs the repair arm again has to earn it with a barriered row.
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (ClientRunsAhead()) return sizeof(MGPVertexAttribDefaults) + header.Count * sizeof(MGPAttribValue);
+#endif
             const auto* mirror = MGPipeFillAccess::VertexAttribDefaultsOf(gPipeInputs);
             Bool reproduced = true;
             for (SizeT i = 0; i < kAttribs && reproduced; ++i) {
@@ -3004,13 +3154,20 @@ namespace MobileGL::MG_Pipe {
     void MGPipeValidateForVerb(MGPipeVerb verb) {
         PipeInputs& inputs = gPipeInputs;
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // P5c (gt, CONTRACT-P5C §6 layer 2): the residual fill is THE client-side write into
-        // gPipeInputs, and it is legal only because it runs before the record is published -
-        // under an armed barrier the apply thread's in-applier flag is provably down here. If
-        // that ever stops being true this is the check that says so, rather than the applier
-        // reading a half-written fill.
-        MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(
-            "MGPipeValidateForVerb");
+        // ---- P5e (ra), CONTRACT-P5E §3: WHO OWNS gPipeInputs FOR THIS VERB ----------------
+        //
+        // Under run-ahead the block is SERVER-ROLE MEMORY for an unbarriered record: the
+        // client does not fill it, does not stamp it and does not withdraw the server's stamp,
+        // because it will not be parked while the apply runs and every one of those writes
+        // would race the applier's own reads. What still runs, unchanged, is the tracker walk
+        // and the emitters (steps 2 and 3): those PRODUCE RECORDS, which is the whole of what
+        // an unbarriered verb is allowed to hand the server.
+        //
+        // `fillOwed` is deliberately a separate name from `barriered`, and that is what makes
+        // the red-once one line: setting it to `true` restores the old behaviour (a fill for
+        // every verb) and the guard below then fires Fatal{RoleViolation, "gPipeInputs"} on
+        // the first unbarriered verb, by name.
+        const Bool runAhead = ClientRunsAhead();
 #endif
         ParsePoisonOmissionKnob();
 #if MOBILEGL_PIPE_VERIFY
@@ -3023,24 +3180,64 @@ namespace MobileGL::MG_Pipe {
                          "(configure with -DMOBILEGL_PIPE_VERIFY=ON)");
         }
 #endif
+        auto* ctx = LiveContext();
+        // THE IDENTITY / LIVENESS PAIR IS WRITTEN ON EVERY VERB, run-ahead or not, and that is
+        // a NAMED DEVIATION from CONTRACT-P5E §3.1's list (see the report): `m_live` and
+        // `m_contextIdentity` are not FIELDS of the residual model - no FieldOwnership.def row
+        // owns them, no applier record carries them, and no server stamp can answer them -
+        // they are "does this process still have a GL context", which every null-context guard
+        // in the backend reads and which only this thread can know. Two stores, no freshness
+        // and no stamp, so an unbarriered apply reading them reads a fact about the client's
+        // process rather than a value the wire owes it.
+        MGPipeFillAccess::SetIdentity(inputs, ctx);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // §2.1's predicate, client-side (see ClientVerbIsBarriered). A null context makes the
+        // verb a no-op below anyway, so it answers barriered and the old path runs whole.
+        const Bool barriered = !runAhead || ctx == nullptr || ClientVerbIsBarriered(verb, *ctx);
+        // THE ONE LINE THE RED-ONCE FLIPS: `= true` here is "fill for every verb", the
+        // pre-P5e behaviour, and it turns the guard below into the abort §3.5 names.
+        const Bool fillOwed = barriered;
+        g_lastFillWasBarriered = fillOwed;
+        if (fillOwed) {
+            // P5c (gt, CONTRACT-P5C §6 layer 2) / P5e §3.5: the residual fill is THE
+            // client-side write into gPipeInputs. Under lockstep it is legal because it runs
+            // before the record is published - the apply thread's in-applier flag is provably
+            // down here. Under run-ahead it is legal because this record is BARRIERED: this
+            // thread is about to park behind it. The second argument is which of the two
+            // claims the caller is making, and a fill that made the second one falsely is the
+            // named abort.
+            MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(
+                "MGPipeValidateForVerb", /*isBarrieredFill=*/barriered);
+        }
+#else
+        constexpr Bool fillOwed = true;
+#endif
+        if (fillOwed) {
 #if MOBILEGL_PIPE_POISON
-        MGPipeFilledState& filled = MGPipeFillAccess::Filled(inputs);
-        // Starts at 1: FilledGen == 0 is "never filled", and MGPipeInputFieldIsFresh refuses
-        // it on both branches, so a read before this first bump is
-        // Fatal{UnmigratedPipeInput, "<Field>@<none>"} rather than default storage.
-        ++filled.CurrentVerbSerial;
+            // Starts at 1: FilledGen == 0 is "never filled", and MGPipeInputFieldIsFresh
+            // refuses it on both branches, so a read before this first bump is
+            // Fatal{UnmigratedPipeInput, "<Field>@<none>"} rather than default storage.
+            ++MGPipeFillAccess::Filled(inputs).CurrentVerbSerial;
 #endif
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // The client is filling, so whatever the server stamped at its last verb boundary is
-        // withdrawn: the stamps below are the CLIENT's again and a stale read is a defect, not
-        // a residual pull. Disarming here rather than at the end of the applier's work is what
-        // makes the arming flag say "the current stamps are the server's" no matter which of
-        // the two roles ran last.
-        MGPipeServerClearVerbBoundary();
+            // The client is filling, so whatever the server stamped at its last verb boundary
+            // is withdrawn: the stamps below are the CLIENT's again and a stale read is a
+            // defect, not a residual pull. Disarming here rather than at the end of the
+            // applier's work is what makes the arming flag say "the current stamps are the
+            // server's" no matter which of the two roles ran last.
+            //
+            // P5e (§3.2): under run-ahead this runs only inside a barriered fill, which is the
+            // whole of the E note's hazard (b.4) - a GL thread withdrawing the SERVER's stamp
+            // while the apply thread is inside a record that depends on it. For an unbarriered
+            // verb the stamp is not touched at all, and the applier's own LeaveApplier is then
+            // its only writer.
+            MGPipeServerClearVerbBoundary();
 #endif
-        MGPipeFillAccess::SetVerb(inputs, verb);
-        auto* ctx = LiveContext();
-        MGPipeFillAccess::SetIdentity(inputs, ctx);
+            MGPipeFillAccess::SetVerb(inputs, verb);
+        }
+#if MOBILEGL_PIPE_POISON
+        MGPipeFilledState& filled = MGPipeFillAccess::Filled(inputs);
+#endif
         if (ctx == nullptr) {
             // The pending base instance belongs to THIS verb, and this exit skips step 3's
             // clear, so it has to make the same promise here: a base-instanced draw with no
@@ -3286,12 +3483,20 @@ namespace MobileGL::MG_Pipe {
         // does read. The two halves of P5c rv's gate still read the ONE `contextValuesWireLive`
         // computed at the top of this function - it is the memo's key AND its argument - so they
         // cannot disagree about who supplies the eight value-class fields.
+        //
+        // P5e (ra, §3.1): AND IT DOES NOT RUN AT ALL FOR AN UNBARRIERED RECORD. Every write
+        // below - the CopyField and the FilledGen stamp alike - is a GL-thread write into a
+        // block the apply thread is about to read without this thread being parked, which is
+        // exactly what rule F forbids. The server does not go without an answer: it stamps its
+        // own boundary and §3.3's detector turns any field it still needs from here into
+        // Fatal{UnmigratedPipeInput, "<field>@<verb>"} by name, which is what makes the strict
+        // lane a gate rather than a count.
         const Bool applierDerives = ApplierDerivesRenderStateFields();
         // BY VALUE, NOT BY REFERENCE: the memo's storage is rebuilt in place when the key moves,
         // and the walk below holds this across 63 iterations.
         const MGPipeFieldMask supplied =
             SuppliedFieldMask(pushMask, applierDerives, contextValuesWireLive);
-        for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
+        for (SizeT i = 0; fillOwed && i < kMGPipeInputFieldCount; ++i) {
             const auto field = static_cast<MGPipeInputField>(i);
             if (!MGPipeFieldMaskHas(mask, field)) continue;
 #if MOBILEGL_PIPE_POISON

@@ -340,6 +340,20 @@ namespace MobileGL::MG_Remote::Wire {
         // without a consumer cannot wait for retirement and retain the named refusal.
         void SetStageRetirementDoorbell(Transport::Doorbell* bell) { m_stageRetirementBell = bell; }
 
+        // P5e (ra, CONTRACT-P5E §2.6): THE STAGE BELL IS A CLIENT WAIT, so it has to drain the
+        // reverse channel like every other one. The encoder cannot drain it itself - SEG_EVENT
+        // and its consumers belong to the session - so the session installs a hook and this
+        // layer only says WHEN. Without it the flow-control deadlock is one buffer upload
+        // wide: the server stops applying on a full event ring, retiredSeq stops moving, and a
+        // client parked here for staged bytes never drains the ring that would release it.
+        // A raw function pointer rather than std::function: this header sits below MG_Impl and
+        // the call is on a path that is already about to park.
+        using StageWaitHook = void (*)(void* self);
+        void SetStageWaitHook(StageWaitHook hook, void* self) {
+            m_stageWaitHook = hook;
+            m_stageWaitSelf = self;
+        }
+
         // Bytes this encoder has ever written into SEG_CMD, pad fillers included: the
         // producer's monotonic head cursor. It is the DENOMINATOR the wrap count only means
         // anything against - "0 wraps" is a defect when the run pushed more bytes than the ring
@@ -383,6 +397,9 @@ namespace MobileGL::MG_Remote::Wire {
         Uint64 m_cmdWrapPads = 0;
         Uint64 m_stageReclaimWaits = 0;
         Transport::Doorbell* m_stageRetirementBell = nullptr;
+        // P5e (ra): the session's event drain, called around the stage-bell park (§2.6).
+        StageWaitHook m_stageWaitHook = nullptr;
+        void* m_stageWaitSelf = nullptr;
         Vector<StageMark> m_stageMarks;
         SizeT m_stageMarkFront = 0;
         Uint8* m_stageBase = nullptr;

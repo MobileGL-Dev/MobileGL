@@ -340,15 +340,33 @@ namespace MobileGL::MG_Remote::Client {
             ClientSession& session = RequireSession("ResourceSubData");
             MG_Pipe::MGPSubData record = *payload;
             record.Blob = StageOptional(session, blobBytes, blobByteCount);
+            // P5e (ra, CONTRACT-P5E §2.5 / ruling 15): the BUFFER half does not want its
+            // answer, and MGPipeSubDataWantsItsReply is the one place that decides - the same
+            // function the route reads, so the two halves of this call cannot disagree about
+            // whether a wait is owed. Under run-ahead the record is published and this thread
+            // returns; the persistent-map push (PersistentMapTracker's 64 KB blocks) stops
+            // being a hidden round trip per block, which is the single biggest wait left on
+            // the steady path that is not a draw.
+            //
+            // THE ANSWER IS ACCEPT-BY-CONSTRUCTION, AND THAT IS HONEST HERE AND NOWHERE ELSE:
+            // the only caller discards it (PipeFill.cpp's MGPipeEmitResourceSubData), so
+            // "accepted" is not a re-derivation of a server decision - it is the absence of a
+            // question. The server still posts the real answer into the slot; nothing reads
+            // it, which ReplySlot.h:16, 105 makes legal. A row whose acceptance a caller USES
+            // may never take this path - R-5 has not moved.
+            const Bool wantReply = MG_Pipe::MGPipeSubDataWantsItsReply(record);
             Int32 status = 0;
-            const Uint64 seq = session.EmitAndWait(
-                MGPWireOp::ResourceSubData, &record, sizeof(record), varTail,
-                static_cast<Uint64>(varTailCount) * sizeof(MG_Pipe::MGPSubRegion), nullptr, 0,
-                &status);
+            const Wire::WireTail tail{varTail, static_cast<Uint64>(varTailCount) *
+                                                   sizeof(MG_Pipe::MGPSubRegion)};
+            const Uint64 seq = session.EmitAndWaitTails(
+                MGPWireOp::ResourceSubData, &record, sizeof(record),
+                varTail != nullptr ? &tail : nullptr, varTail != nullptr ? 1u : 0u, nullptr, 0,
+                &status, nullptr, wantReply);
             reply->Id = seq;
-            MG_Pipe::MGPipePostReply(*reply, status, status == 0 ? 1u : 0u);
+            MG_Pipe::MGPipePostReply(*reply, wantReply ? status : 0,
+                                     (wantReply ? status == 0 : true) ? 1u : 0u);
             ++g_emitted;
-            if (status == 1) ++g_declined;
+            if (wantReply && status == 1) ++g_declined;
         }
 
         void Wire_BufferSubDataResident(const MG_Pipe::MGPSubData* payload, const void* blobBytes,

@@ -139,7 +139,12 @@ namespace MobileGL::MG_Remote::Client {
             return timeoutNs / 1000000 + (timeoutNs % 1000000 != 0) + kBarrierTimeoutMs;
         }
 
+        // Defined below; declared here because the applied wait has to be able to drain
+        // SEG_EVENT while it is parked (P5e §2.6).
+        Uint32 DrainEventRing(Transport::EventRingConsumer& events);
+
         Transport::SessionWait WaitForAppliedBudget(Transport::SessionProducer& producer,
+                                                    Transport::EventRingConsumer& events,
                                                     Uint64 seq, Uint64 remainingMs) {
             // The transport takes Uint32 milliseconds with UINT32_MAX meaning forever.
             // Keep even the largest GL timeout finite, using bounded chunks and preserving
@@ -148,7 +153,23 @@ namespace MobileGL::MG_Remote::Client {
             for (;;) {
                 const Uint32 chunkMs = remainingMs > kMaxFiniteWaitMs
                                            ? kMaxFiniteWaitMs : static_cast<Uint32>(remainingMs);
-                const auto wait = producer.WaitForApplied(seq, chunkMs);
+                // P5e (ra, CONTRACT-P5E §2.6): THE PARK BREAKS ON TWO THINGS. A server that
+                // ran out of SEG_EVENT stops producing and therefore stops applying, so a
+                // waiter that could only be woken by appliedSeq would wait for a watermark
+                // nothing is going to move - and it is holding the only drain there is. The
+                // second exit is that case: drain, clear the latch, ring the server, park
+                // again. `remainingMs` is deliberately NOT charged for it; a wake that did
+                // the queue's work is not the caller's budget being spent.
+                const auto wait = producer.WaitForAppliedOrEventBacklog(seq, chunkMs);
+                if (wait == Transport::SessionWait::Reached) {
+                    Transport::RingControl* control = producer.Control();
+                    if (control == nullptr ||
+                        Transport::Watermark::Reached(control->appliedSeq, seq)) {
+                        return wait;
+                    }
+                    DrainEventRing(events);
+                    continue;
+                }
                 if (wait != Transport::SessionWait::TimedOut || remainingMs <= chunkMs) return wait;
                 remainingMs -= chunkMs;
             }
@@ -592,6 +613,9 @@ namespace MobileGL::MG_Remote::Client {
         m_events = Transport::EventRingConsumer(m_shm.EventControl(), control,
                                                 m_shm.EventRingBase(), m_shm.EventRingCapacity(),
                                                 m_shm.EventSegmentBase());
+        // P5e (ra, §2.6): the drain's other half. A server parked on a full SEG_EVENT is woken
+        // by the drain that emptied it, not by the next thing this client happens to publish.
+        m_events.SetServerDoorbell(&m_clientTransport->PeerDoorbell());
         if (!m_replies.Valid() || !m_events.Valid()) {
             Stop();
             return MOBILEGL_ERR_INVALID_ARGUMENT;
@@ -629,6 +653,10 @@ namespace MobileGL::MG_Remote::Client {
         // half-wired shape this session exists not to have.
         m_encoder = Wire::PipeWireEncoder(control, &m_cmd, nullptr, &m_segments);
         m_encoder.SetStageRetirementDoorbell(m_producer.SelfDoorbell());
+        // P5e (ra, §2.6): the stage bell is a client wait and every client wait drains. The
+        // encoder owns the park; the session owns SEG_EVENT, so the session lends it a drain.
+        m_encoder.SetStageWaitHook(
+            +[](void* self) { DrainEventRing(static_cast<ClientSession*>(self)->Events()); }, this);
 
         // ---- 7. the first CapsSnapshot, if the server had a backend to publish one from.
         // ONE DRAIN, ONE ADOPTER (c1): PumpControlPlane below is the only thing in the client
@@ -814,7 +842,8 @@ namespace MobileGL::MG_Remote::Client {
     Uint64 ClientSession::EmitAndWaitTails(MG_Pipe::MGPWireOp op, const void* payload,
                                            Uint64 payloadBytes, const Wire::WireTail* tails,
                                            Uint32 tailCount, void* replyOut, Uint64 replyBytes,
-                                           Int32* statusOut, Uint64* replySizeOut) {
+                                           Int32* statusOut, Uint64* replySizeOut,
+                                           Bool wantReply) {
         Uint64 varTailBytes = 0;
         for (Uint32 i = 0; i < tailCount; ++i) varTailBytes += tails[i].Size;
         if (statusOut != nullptr) *statusOut = Wire::ReplySink::kStatusError;
@@ -863,6 +892,12 @@ namespace MobileGL::MG_Remote::Client {
                         wait == Transport::SessionWait::ShutDown ? "shutdown" : "timeout");
                 std::abort();
             }
+            // P5e (ra, §2.6): EVERY WAIT EXIT DRAINS. The cmd-space wait is one of the two
+            // safety nets under run-ahead (the stage bell is the other), and a client parked
+            // here without draining is the other half of the flow-control deadlock: the server
+            // stops applying on a full event ring, so retiredSeq stops moving, so this wait
+            // never completes. One drain on the way out closes it.
+            DrainEventRing(m_events);
             seq = m_encoder.EncodeRecord(op, payload, payloadBytes, tails, tailCount);
             if (seq == Wire::kInvalidSeq) {
                 MGLOG_F("MGPipe: Fatal{RingOverrun, \"SEG_CMD\"} - %s refused after sufficient "
@@ -880,8 +915,63 @@ namespace MobileGL::MG_Remote::Client {
         // (R-16 / ID-31) - fourteen rows now, because the four Bool acceptance entry points
         // gained the flag. Asking the catalogue rather than the caller is what stops a caller
         // that forgot to pass a buffer from silently turning an answer into a guess.
-        const Bool ownsReplySlot =
+        //
+        // P5e (ra) ADDS ONE CALLER-SIDE CONJUNCT AND NO SECOND SOURCE OF TRUTH: `wantReply`.
+        // The catalogue still says which rows CARRY a slot; a caller that passes false says it
+        // will not read this one (resource_subdata's buffer half, §2.5 - the only such caller).
+        // The server posts either way, so the wire is unchanged and the row keeps its flag.
+        const Bool rowCarriesReplySlot =
             (MG_Pipe::MGPipeCallFlagsFor(op) & static_cast<Uint32>(MG_Pipe::kReplySlot)) != 0;
+        const Bool ownsReplySlot = rowCarriesReplySlot && wantReply;
+
+        // ---- THE P5e WAIT RULE (CONTRACT-P5E §2.3) ---------------------------------------
+        //
+        // IT STANDS BEFORE THE BATCH SKIP AND REPLACES IT WHOLE, rather than adding a clause to
+        // it. The batch skip is a rule about CALL CLASSES ("a set/CSO/object record carries its
+        // whole value in the payload"); the wait class is a rule about WHAT AN APPLY READS, and
+        // it is generated from the same PipeCalls.def row the class comes from
+        // (MGPipeWaitClassFor, c0e). Two rules layered would mean a row could be skipped by the
+        // class rule and waited by the column, and the column is the one the SERVER's
+        // MGPipeBarriered reads - so the two halves of the wire would disagree about whether
+        // the client is parked behind this record, which is the single fact §4.4's exemptions
+        // and §3.3's detector both rest on.
+        //
+        // WITH RUN-AHEAD DISARMED NOTHING BELOW RUNS and the file's original shape continues -
+        // Magma, a monolith transport, MOBILEGL_IPC_RUN_AHEAD=0 and every build before the
+        // integration commit take the old path byte for byte, which is what makes RUN_AHEAD=0
+        // a pure wait-rule A/B on identical server code (§5.8).
+        if (RunAheadArmed() && !ownsReplySlot) {
+            MG_Pipe::MGPipeWaitClass waitClass = MG_Pipe::MGPipeWaitClassFor(op);
+            // §2.5's named relaxation, and the ONLY place a static column answer is overridden:
+            // a kWaitReply row whose caller does not want the answer has nothing to wait FOR.
+            // It is spelled here rather than in the column because the column is per-op and
+            // this is per-call - the texture half of the same row still waits.
+            if (!wantReply && waitClass == MG_Pipe::kWaitReply) waitClass = MG_Pipe::kWaitNone;
+            switch (waitClass) {
+            case MG_Pipe::kWaitNone:
+                // Published and gone. Rule F is what makes this legal: the apply of an
+                // unbarriered record names no client memory at all (§3, §4, §5).
+                return seq;
+            case MG_Pipe::kWaitPresent:
+                // The credit wait already ran, in EmitPresent, BEFORE the encode (§2.4). There
+                // is nothing left to do here and waiting would turn the credit into a barrier.
+                return seq;
+            case MG_Pipe::kWaitApplied:
+                // §2.2's barriered rows: applier_reset, generate_mipmap (until tx2 lands its
+                // VerbMipRes arm), set_storage_block_binding, the five XFB span verbs and the
+                // CopyTex endpoint. Each still pulls a row or probes a registry, and the
+                // client's wait is exactly what keeps P5C's semantics legal for it (ruling 4).
+                // Falls through to the wait below.
+                break;
+            case MG_Pipe::kWaitReply:
+            case MG_Pipe::kWaitClassCount:
+                // Unreachable: `ownsReplySlot` is false here, and gen_pipe refuses a kWaitReply
+                // row without a slot and a kReplySlot row that does not wait (c0e's three
+                // negative controls). Treated as a wait rather than as a skip, because the
+                // wrong answer to "does this hang" is the recoverable one.
+                break;
+            }
+        }
 
         // MOBILEGL_IPC_BATCH_WAITS (default 1): a value-class record is published WITHOUT
         // waiting for its own apply. The barrier's one load-bearing reader is the backend
@@ -912,7 +1002,13 @@ namespace MobileGL::MG_Remote::Client {
         // (set_texture_params, resource_subdata, resource_readback and get_texture_image
         // own reply slots and wait anyway; the resource_* transfers and object_death resolve
         // by handle).
-        if (!ownsReplySlot && MG_Config::Ipc.BatchWaits != 0 &&
+        //
+        // AND IT IS DISARMED WHOLE UNDER RUN-AHEAD (P5e §2.3): the wait class above is the
+        // rule there, and a second skip rule reading a different column is how the two halves
+        // of the wire end up disagreeing about whether the client is parked. Written as a
+        // conjunct here rather than left to "the classes happen not to overlap", because the
+        // classes overlapping is one PipeCalls.def row away at any time.
+        if (!ownsReplySlot && !RunAheadArmed() && MG_Config::Ipc.BatchWaits != 0 &&
             op != MG_Pipe::MGPWireOp::GenerateMipmap) {
             const MG_Pipe::MGPipeCallClass callClass = MG_Pipe::MGPipeCallClassFor(op);
             if (callClass == MG_Pipe::kCtxState || callClass == MG_Pipe::kCtxCso ||
@@ -931,7 +1027,8 @@ namespace MobileGL::MG_Remote::Client {
 
         const BarrierWaitScope waiting;
         const Uint64 waitBudgetMs = AppliedWaitBudgetMs(op, payload);
-        const Transport::SessionWait wait = WaitForAppliedBudget(m_producer, seq, waitBudgetMs);
+        const Transport::SessionWait wait =
+            WaitForAppliedBudget(m_producer, m_events, seq, waitBudgetMs);
         if (wait == Transport::SessionWait::ShutDown) {
             // The doorbell died: the server went away. The only thing that returns from a
             // kWaitForever park, and therefore the only way a client blocked in the barrier
@@ -965,7 +1062,17 @@ namespace MobileGL::MG_Remote::Client {
         // clears when the writeback lands, and the writeback lands on this ring.
         DrainEventRing(m_events);
 
-        if (!ownsReplySlot) return seq;
+        if (!ownsReplySlot) {
+            // P5e (ra, §2.3). A barriered record's apply has returned and this thread is the
+            // only runnable one, so the four O-class SharedPtr rows the last fill left in
+            // gPipeInputs can go. Under lockstep they were harmless - the next verb's fill
+            // overwrote them - but under run-ahead the next fill may be a frame away, and a
+            // frontend VAO or program whose LAST owner is that block is one the apply thread
+            // can end up destroying (§2.7's deferred-destroy hazard). Released here rather
+            // than at the fill, because here is where the applier is provably idle.
+            if (RunAheadArmed()) ReleaseFillPins();
+            return seq;
+        }
 
         // THE SAME WAIT, NOT A SECOND ONE. appliedSeq >= seq already means the server wrote
         // this record's answer, because it writes the slot before it advances the watermark.
@@ -1000,6 +1107,166 @@ namespace MobileGL::MG_Remote::Client {
 
     Bool ClientSession::BarrierArmed() const { return m_barrierArmed; }
 
+    // ---- P5e (ra): the run-ahead latch and the waits it leaves behind ---------------------
+
+    Bool ClientSession::RunAheadArmed() const { return m_runAheadArmed; }
+    // THE PRODUCER'S NUMBER, NOT A SECOND ONE. SessionProducer records it inside
+    // PublishAndNotify, which is the only place a record becomes published at all; a copy kept
+    // here would be a second thing to forget to write on a path that publishes without waiting
+    // - which, after P5e, is most of them.
+    Uint64 ClientSession::LastPublishedSeq() const { return m_producer.LastPublishedSeq(); }
+    Uint64 ClientSession::PresentCreditWaits() const { return m_presentCreditWaits; }
+
+    void ClientSession::LatchRunAheadFromCaps() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // THE CONJUNCTION, IN THE CONTRACT'S OWN ORDER (§1). The caps read is last because it
+        // is the only one that costs a mirror load, and because it is the only one whose answer
+        // can change: the other two are process configuration.
+        const Bool armed = m_barrierArmed && MG_Config::Ipc.RunAhead != 0 &&
+                           Caps().HasCap(MG_Pipe::kCapRunAheadApply);
+        if (!m_runAheadLatched) {
+            m_runAheadLatched = true;
+            m_runAheadArmed = armed;
+            if (armed) {
+                MGLOG_I("MG_Remote client: run-ahead ARMED - the server publishes "
+                        "kCapRunAheadApply, so an unbarriered record is published and not "
+                        "waited for (CONTRACT-P5E §2.3), paced by a present credit of %u",
+                        MG_Config::Ipc.PresentCredit);
+            } else if (MG_Config::Ipc.RunAhead != 0 && m_barrierArmed) {
+                // THE KNOB IS NOT A SWITCH ON ITS OWN, and an operator who set it has to be
+                // told that, or an A/B arm that measured nothing looks like an A/B arm that
+                // measured no difference (Config.h's own argument for parsing it everywhere).
+                MGLOG_W_ONCE("MG_Remote client: run-ahead requested, server does not publish "
+                             "kCapRunAheadApply - running lockstep. This is Magma always, and "
+                             "Espryt until the P5e integration commit flips "
+                             "kMGPipeP5eRunAheadReady");
+            }
+            return;
+        }
+        // A LATER SNAPSHOT MAY ONLY TURN IT OFF. Promotion would mean the records already
+        // published without a wait were published against a rule this server never agreed to,
+        // and nothing can un-publish them; demotion only adds waits, so it is safe and is
+        // exactly what a server that lost its run-ahead backend needs.
+        if (!armed && m_runAheadArmed) {
+            m_runAheadArmed = false;
+            MGLOG_W("MG_Remote client: run-ahead DISARMED by a later caps snapshot - every "
+                    "record from here waits as it did before P5e");
+        }
+#endif
+    }
+
+    void ClientSession::ReleaseFillPins() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The block's own door: PipeInputs' O-class rows are private and MG_Remote has no
+        // business knowing which four they are. MG_Impl owns the fill, so MG_Impl owns the
+        // un-fill (PipeFill.cpp), and this side only says WHEN.
+        MG_Pipe::MGPipeReleaseResidualFillPins();
+#endif
+    }
+
+    void ClientSession::WaitForApplyToCatchUp(const char* why) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // A NO-OP WITHOUT RUN-AHEAD, and that is not an optimisation: under lockstep the
+        // client already waited for every record it published, so appliedSeq is at
+        // LastPublishedSeq by construction and a second wait would only add a park on a
+        // watermark that is already reached.
+        if (!m_runAheadArmed || !m_started) return;
+        const Uint64 target = m_producer.LastPublishedSeq();
+        if (target == 0) return;
+        const BarrierWaitScope waiting;
+        const Transport::SessionWait wait =
+            WaitForAppliedBudget(m_producer, m_events, target, kBarrierTimeoutMs);
+        if (wait == Transport::SessionWait::ShutDown) {
+            // The doorbell died: teardown, not a fault - the same answer EmitAndWaitTails
+            // gives, and for the same reason.
+            MGLOG_E("MG_Remote client: the forced wait for %s woke on a dead doorbell; the "
+                    "server is gone", why);
+            return;
+        }
+        if (wait != Transport::SessionWait::Reached) {
+            MGLOG_F("MGPipe: Fatal{BarrierTimeout, \"%s\"} - a forced run-ahead wait did not "
+                    "reach appliedSeq %llu within %u ms. The forced waits of CONTRACT-P5E §2.5 "
+                    "are the points at which the client must be in step again, so a wedge here "
+                    "is a wedge in the queue and not a slow frame",
+                    why, static_cast<unsigned long long>(target), kBarrierTimeoutMs);
+            std::abort();
+        }
+        // EVERY WAIT EXIT DRAINS (§2.6). It is what the flow-control deadlock argument rests
+        // on: the server blocks only on a full event ring, the client blocks only on
+        // watermarks the server advances, and every client wait drains - so at most one side
+        // is parked at any instant.
+        DrainEventRing(m_events);
+        ReleaseFillPins();
+#else
+        (void)why;
+#endif
+    }
+
+    void ClientSession::Finish() {
+        // glFinish. Nothing goes on the wire - Flush and Finish have no record (ARCHITECTURE
+        // §11) - and under lockstep there was nothing to do, because the client had already
+        // waited out every command it issued. Under run-ahead "the commands issued so far have
+        // completed" is a promise the queue can break, so this is where it is kept.
+        WaitForApplyToCatchUp("glFinish");
+    }
+
+    Uint64 ClientSession::AcquirePresentCredit() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // MINTED CLIENT-SIDE AND 1-BASED (§1). Before P5e the client sent 0 and the server
+        // stamped its own frame count, which was honest while nothing paced on it; a credit
+        // needs an id space only the payer can advance, and that is this one.
+        const Uint64 serial = m_presentsSent + 1;
+        if (!m_runAheadArmed) {
+            // Lockstep: the present record's own barrier IS the pacing, one frame deep by
+            // construction. The serial is still minted so that both arms carry the same field
+            // and the server's ReturnPresentCredit is fed on both - an A/B whose two arms
+            // disagree about a wire field is not an A/B (Config.h's rule for the knobs).
+            m_presentsSent = serial;
+            return serial;
+        }
+        const Uint32 credit = MG_Config::Ipc.PresentCredit;
+        if (m_presentsSent >= credit) {
+            // Wait for swap number (serial - credit) to have come back. With credit 1 that is
+            // the previous frame: the client publishes frame N+1's records while the server
+            // applies and swaps frame N, and blocks here until swap N returned - one frame of
+            // overlap and at most one frame of added latency (ruling 4 / ID-92).
+            const Uint64 awaited = serial - credit;
+            ++m_presentCreditWaits;
+            const BarrierWaitScope waiting;
+            Transport::SessionWait wait = Transport::SessionWait::TimedOut;
+            for (;;) {
+                // §2.6 again: the credit park breaks on a full SEG_EVENT too, for the same
+                // reason the applied park does - a server that stopped producing stopped
+                // swapping, and this waiter holds the only drain.
+                wait = m_producer.WaitForPresentAckOrEventBacklog(awaited, kBarrierTimeoutMs);
+                if (wait != Transport::SessionWait::Reached) break;
+                Transport::RingControl* control = m_producer.Control();
+                if (control == nullptr ||
+                    Transport::Watermark::Reached(control->presentAckSerial, awaited)) {
+                    break;
+                }
+                DrainEventRing(m_events);
+            }
+            if (wait == Transport::SessionWait::TimedOut) {
+                MGLOG_F("MGPipe: Fatal{PresentCreditTimeout} - present %llu waited %u ms for "
+                        "swap %llu to come back with a credit of %u. The credit, never the "
+                        "ring's bytes, is what paces a run-ahead client (CONTRACT-P5E §2.4), "
+                        "so a credit that never returns is a server that stopped swapping",
+                        static_cast<unsigned long long>(serial), kBarrierTimeoutMs,
+                        static_cast<unsigned long long>(awaited), credit);
+                std::abort();
+            }
+            // ShutDown is teardown and returns: the present did not happen, the same answer
+            // the barrier gives on a dead doorbell.
+            if (wait == Transport::SessionWait::Reached) DrainEventRing(m_events);
+        }
+        m_presentsSent = serial;
+        return serial;
+#else
+        return ++m_presentsSent;
+#endif
+    }
+
     // R-1's mutual-exclusion invariant, as two probes that answer honestly.
     //
     // THE CLIENT'S FLAG IS THREAD-LOCAL AND THE SERVER'S IS NOT, and the asymmetry is the
@@ -1012,7 +1279,8 @@ namespace MobileGL::MG_Remote::Client {
         return g_applyThreadInsideApplier.load(std::memory_order_acquire);
     }
 
-    void ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(const char* surface) {
+    void ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(const char* surface,
+                                                                Bool isBarrieredFill) {
         // THE CHAIN IS A CONJUNCTION, SO ITS ORDER IS FREE - AND IT IS ORDERED CHEAPEST-FIRST
         // (P5d round 3, package D). Every line below is a pure predicate whose only effect is
         // "no violation, go home"; the Fatal fires on the AND of all of them, so reordering
@@ -1028,6 +1296,28 @@ namespace MobileGL::MG_Remote::Client {
         // both miss do we pay for a role probe, two singleton reads, a shared atomic and the
         // thread_local at the end.
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        // ---- P5e (ra), CONTRACT-P5E §3.5: THE RUN-AHEAD RULE IS A DIFFERENT RULE -----------
+        //
+        // It is first, before the BatchWaits return, because BatchWaits' argument does not
+        // survive run-ahead: "the pull-verbs' own wait keeps their pulled reads fenced" is a
+        // statement about a client that waits at every verb, and this one does not. Under
+        // run-ahead the block is SERVER-ROLE memory (§3) and the single legal GL-thread write
+        // is the residual fill of a BARRIERED record - the one the client is about to park
+        // behind. Every other touch races the applier by construction, so there is no
+        // in-applier flag to consult and no "count it" arm: the value would be torn.
+        //
+        // This is where a fill left standing for an unbarriered record lands, by name.
+        if (ClientSessionInstance().RunAheadArmed()) {
+            if (isBarrieredFill) return;
+            if (Server::ServerLoop::OnApplyThread()) return; // the applier owns the block
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"gPipeInputs\"} - the GL thread touched "
+                    "gPipeInputs (%s) on a RUN-AHEAD session outside a barriered fill. With "
+                    "the client running ahead the block is the server's to read for as long "
+                    "as an unbarriered record is in flight (CONTRACT-P5E §3), and this thread "
+                    "has no wait that would make the touch quiescent",
+                    surface);
+            std::abort();
+        }
         // MOBILEGL_IPC_BATCH_WAITS=1 makes "the fill runs while the apply thread applies an
         // earlier value record" the INTENDED shape: the fill writes only fields no record
         // supplies (the wire-live skips are the same answer the emitters use), the applier
@@ -1090,6 +1380,14 @@ namespace MobileGL::MG_Remote::Client {
             }
             if (AdoptCapsSnapshot(envelope->msg_as_CapsSnapshot())) ++adopted;
         }
+        // P5e (ra, §1): the run-ahead latch rides R-12's invalidation edge, because "the first
+        // caps adoption after Start" and "the one place a CapsSnapshot becomes a mirror
+        // generation" are the same instant, and a latch taken anywhere else would be reading a
+        // mirror whose generation nobody had adopted yet. Called even when `adopted` is 0: the
+        // first call in Start() is what takes the latch, and a pump that adopted nothing still
+        // has to leave it taken (a handshake with no snapshot latches "not armed", which is
+        // the honest answer for a server that never said what it consumes).
+        if (adopted != 0 || !m_runAheadLatched) LatchRunAheadFromCaps();
         return adopted;
     }
 
@@ -1167,9 +1465,9 @@ namespace MobileGL::MG_Remote::Client {
         MGLOG_I("MG_Remote client: wire ledger: maxrec=%llu maxrecop=%s cap=%llu (%llu.%llu%% of "
                 "RingProducer::MaxRecordBytes, half of a %llu byte SEG_CMD) cmdbytes=%llu "
                 "ringwraps=%llu ringpads=%llu "
-                "ringwaits=%llu emitseq=%llu cliwait=%llu clipark=%llu - R-10's proof obligation, "
-                "R-9's producer readings and P5d round 3's client wait pair, published from the "
-                "session that produced them",
+                "ringwaits=%llu emitseq=%llu cliwait=%llu clipark=%llu credit-waits=%llu - "
+                "R-10's proof obligation, R-9's producer readings, P5d round 3's client wait "
+                "pair and P5e's present credit, published from the session that produced them",
                 static_cast<unsigned long long>(maxRecord), m_encoder.MaxRecordOpName(),
                 static_cast<unsigned long long>(cap),
                 static_cast<unsigned long long>(permille / 10),
@@ -1185,7 +1483,13 @@ namespace MobileGL::MG_Remote::Client {
                 // profile runs did not set MOBILEGL_PIPE_STATS either, and "did the barrier spin
                 // or did it park" is the question their logs have to be able to answer.
                 static_cast<unsigned long long>(m_producer.Waits()),
-                static_cast<unsigned long long>(m_producer.Parks()));
+                static_cast<unsigned long long>(m_producer.Parks()),
+                // P5e (ra, §2.4). The number the device exit reads to say whether the present
+                // credit is what paces this workload: 0 with credit 1 means the server is
+                // never the frame's critical path, and a count near the frame count means it
+                // always is. It is on this line rather than only on the stats line for
+                // LogWireLedger's own reason - a trace replay never reaches a stats summary.
+                static_cast<unsigned long long>(m_presentCreditWaits));
     }
 
 #undef MGP5_C0_STUB
