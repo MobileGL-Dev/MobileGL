@@ -58,14 +58,20 @@
 // of the six kinds has exactly one table type in this backend. Magma's subsystem-4 table mints
 // out of its own per-renderer allocator, not MGPipeSlots(), so it is not a holder here.)
 //
-// The weak_ptr per entry survives for exactly one reason: ForEachLive() hands the callee a
-// STRONG reference to the frontend object, which the one direct-iteration site
-// (ScopedDetachedTextureFramebufferAttachments) needs. It is never an identity test - that is
-// what Gen is for - and it is never read to decide whether an entry is dead: a destructor that
-// runs after exit() has begun has its notice dropped by InProcessTeardown(), and that twin is
-// then a DELIBERATE leak (the process is exiting, the driver reclaims the object, and a twin
-// destructor must not call into a driver that may already be unloaded), not something to be
-// collected later.
+// The weak_ptr per entry survives as the MONOLITH-GLUE half of the table's identity: the
+// minting GetOrCreate stores it, NoteStateForHandle/StateForHandle read it, and the legacy
+// death notice walks it. It is never an identity test - that is what Gen is for - and it is
+// never read to decide whether an entry is dead: a destructor that runs after exit() has begun
+// has its notice dropped by InProcessTeardown(), and that twin is then a DELIBERATE leak (the
+// process is exiting, the driver reclaims the object, and a twin destructor must not call into
+// a driver that may already be unloaded), not something to be collected later.
+//
+// P5e (id, CONTRACT-P5E §4.1): ForEachLive() NO LONGER HANDS IT OUT. It answers
+// fn(MGPipeHandle, const BackendPtr&), because a walk that produced a frontend SharedPtr out
+// of server memory was the last place the server could hold one across records - and a caller
+// that still needs the object (the detach walk) asks StateForHandle for it BY HANDLE, inside
+// the scope that names the debt, so the read is one greppable site rather than a property of
+// the iteration.
 //
 // P3+ DEBT, recorded rather than hidden: this header is under MG_Backend/ and it MINTS
 // handles (MGPipeSlots().Acquire below) off a frontend SharedPtr's GetLifetimeId().
@@ -81,6 +87,20 @@
 // Fatal{RoleViolation, "MGPipeSlots"} when reached from the apply thread (the same check the
 // allocator's own three entries carry, repeated here so the refusal names this surface), and
 // the split paths resolve through GetOrCreate(handle) / ReleaseByHandle instead.
+//
+// P5e (id, CONTRACT-P5E §4.1 / §5.8) SETTLES WHAT HAPPENS TO THE FRONTEND-KEYED HALF: it is
+// NOT deleted. The push build under Transport=monolith keeps its frontend arms token for token
+// (ruling 1), which is what the MOBILEGL_PIPE_VERIFY comparator needs and what makes
+// MOBILEGL_IPC_RUN_AHEAD=0 a pure wait-rule A/B on identical server code. So
+// GetOrCreate(StatePtr), Find(StateObject*), HandleOf, NoteStateForHandle/StateForHandle,
+// Entry::stateRef and the resolution memo all survive - as MONOLITH GLUE, each of them a NAMED
+// FATAL the moment it is reached from an apply thread that is applying an UNBARRIERED record
+// (§4.4: the client's wait is the only thing that makes such a read stable, and an unbarriered
+// record has none). The refusal is raised either by the allocator guard, for the three members
+// that call the allocator, or by MGPipeRefuseFrontendKeyedRegistryFromUnbarrieredApply for the
+// three that do not. There is no silent path: the phase's claim is that the twin is resolved
+// from the handle the record carried, and a surface that quietly answered from a frontend
+// pointer instead would make that claim untestable.
 namespace MobileGL::MG_Backend::DirectGLES {
 
 #if MOBILEGL_PIPE_PUSH
@@ -153,12 +173,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // is letting a corrupt 32-bit slot decide a vector resize. See GetOrCreate(MGPipeHandle).
         static constexpr Uint32 kMaxHandleSlot = 1u << 20;
 
+        // P5e (id), CONTRACT-P5E §4.3: THE COMPOSITE BAND, and it is a P5e PREREQUISITE rather
+        // than a follow-up. ShaderCso's top 1/16 of slot space (from
+        // kMGPipeShaderCsoCompositeSlotBase = 983040) is the program-pipeline composites'
+        // (MGPipeHandles.h); EntryAt below indexes m_slots BY SLOT and resizes to it, so a
+        // single composite used to grow g_backendProgramObjects to ~983k entries of ~40 B -
+        // ~40 MB for one program pipeline. Today that is reachable only through
+        // GetOrCreate(StatePtr) for a composite program; after the rekey the by-handle
+        // resolution IS the ordinary path, so every composite bind would pay it.
+        //
+        // A SECOND VECTOR RATHER THAN MORE OF THE FIRST, exactly as the allocator
+        // (SlotAllocator.h's KindState::BandSlots) and the applier (PipeApply.h's
+        // CompositeShaderCsos) already do, and for the same reason: both spaces stay dense
+        // against their own high-water mark, which is the property that lets the server index
+        // rather than hash. The band is EMPTY for every kind but ShaderCso and costs those
+        // kinds one empty Vector per table.
+        static constexpr Bool kHasCompositeBand = (kKind == MG_Pipe::MGPipeKind::ShaderCso);
+        static constexpr SizeT kMaxBandSlots =
+            MG_Pipe::kMGPipeShaderCsoSlotLimit - MG_Pipe::kMGPipeShaderCsoCompositeSlotBase;
+
         struct Entry {
             BackendPtr backend;
-            // LIVENESS ONLY, and only for ForEachLive(), which locks it so the callee holds a
-            // strong ref. Never compared against another object to decide identity - that is
-            // what Gen is for - never dereferenced for its address, and never read to decide
-            // whether the slot is dead: death is announced, not discovered.
+            // THE MONOLITH-GLUE HALF of the entry (P5e, CONTRACT-P5E §4.1): written by the
+            // minting GetOrCreate and by NoteStateForHandle, read only by StateForHandle and
+            // the legacy death notice. Never compared against another object to decide identity
+            // - that is what Gen is for - never dereferenced for its address, and never read to
+            // decide whether the slot is dead: death is announced, not discovered. ForEachLive
+            // stopped reading it at P5e: a walk that handed a frontend SharedPtr out of server
+            // memory on every step was the last place the server could hold one across records.
             StateWeakPtr stateRef;
             // The generation this entry's twin was built for. An entry whose Gen no longer
             // matches the allocator's is a twin of the slot's PREVIOUS owner.
@@ -173,6 +215,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         BackendSlotTable() { LinkHolder(); }
         BackendSlotTable(const BackendSlotTable& other):
             m_slots(other.m_slots),
+            m_band(other.m_band),
             m_nullTwin(other.m_nullTwin),
             m_memoLifetimeId(other.m_memoLifetimeId),
             m_memoHandle(other.m_memoHandle) {
@@ -180,16 +223,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         BackendSlotTable(BackendSlotTable&& other) noexcept:
             m_slots(std::move(other.m_slots)),
+            m_band(std::move(other.m_band)),
             m_nullTwin(std::move(other.m_nullTwin)),
             m_memoLifetimeId(other.m_memoLifetimeId),
             m_memoHandle(other.m_memoHandle) {
             other.m_slots.clear();
+            other.m_band.clear();
             other.ForgetHandle();
             LinkHolder();
         }
         BackendSlotTable& operator=(const BackendSlotTable& other) {
             if (this != &other) {
                 m_slots = other.m_slots;
+                m_band = other.m_band;
                 m_nullTwin = other.m_nullTwin;
                 m_memoLifetimeId = other.m_memoLifetimeId;
                 m_memoHandle = other.m_memoHandle;
@@ -199,10 +245,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         BackendSlotTable& operator=(BackendSlotTable&& other) noexcept {
             if (this != &other) {
                 m_slots = std::move(other.m_slots);
+                m_band = std::move(other.m_band);
                 m_nullTwin = std::move(other.m_nullTwin);
                 m_memoLifetimeId = other.m_memoLifetimeId;
                 m_memoHandle = other.m_memoHandle;
                 other.m_slots.clear();
+                other.m_band.clear();
                 other.ForgetHandle();
             }
             return *this;
@@ -241,6 +289,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // overload below. (The check also lives at the allocator's own three entries; it
             // is repeated at this entry so the refusal names this surface even if the entry
             // set changes.)
+            //
+            // P5e (id, §4.4): that one call is also this member's unbarriered-apply refusal.
+            // The guard exempts a probe only inside a named scope AND while the record being
+            // applied is barriered, so reaching a MINT from an unbarriered apply aborts here
+            // whatever scope is open - which is what "kept only as monolith glue" has to mean
+            // if it is to be checkable.
             MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("GetOrCreate(StatePtr)");
 #endif
 
@@ -279,10 +333,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // so the twin at it describes driver ids the new resource never made) and hand back
         // the twin pointer. FindByHandle beside it is the same shape and already existed.
         //
-        // No StatePtr, therefore no Entry::stateRef: the weak pointer is liveness for
-        // ForEachLive() and a handle-keyed entry has no frontend object to weakly hold. Such
-        // an entry is therefore invisible to ForEachLive, which is correct - the one direct
-        // iteration site walks texture twins, and it is not one of these tables.
+        // No StatePtr, therefore no Entry::stateRef unless a caller that holds the object notes
+        // it (NoteStateForHandle): a handle-keyed entry has no frontend object to weakly hold
+        // by itself. P5e (§4.1) makes that stop mattering for the iteration - ForEachLive keys
+        // on Live && backend, so such an entry is VISIBLE to the walk and it is StateForHandle,
+        // asked by the one caller that needs the object, that answers null for it. Which is the
+        // same set the old stateRef-locking walk produced, decided at one site instead of in
+        // the loop.
         //
         // Death stays ANNOUNCED, as it is on the other overload: for a handle-keyed kind the
         // announcement is the family's own destroy call, not the shared death notice, and the
@@ -345,38 +402,48 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // holds no live entry. It exists so a caller can DIAGNOSE - in a release build, where
         // MOBILEGL_ASSERT is inert - the refusal GetOrCreate(handle) above performs silently.
         Uint32 LiveGenAt(Uint32 slot) const {
-            if (slot >= m_slots.size()) return 0;
-            const Entry& entry = m_slots[slot];
-            return entry.Live ? entry.Gen : 0;
+            const Entry* const entry = EntryOrNull(slot);
+            if (entry == nullptr) return 0;
+            return entry->Live ? entry->Gen : 0;
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
         // P5c (hd): remember the frontend object a HANDLE-keyed twin was synced from. The
         // minting overload sets stateRef itself; the handle overload cannot (no object
         // crosses), so a caller that legitimately holds the object - the record-driven sync,
         // which arrived holding it through the object-class barrier-pulled rows - notes it
-        // here. It is what lets a later handle-only resolution (P5c's named blit) reach the
-        // frontend object the twin's sync body still walks, without probing the client's slot
-        // allocator (T2). Same liveness rules as the minted stateRef: never an identity test,
-        // never read to decide the slot is dead.
+        // here. It is what lets a later handle-only resolution (P5c's named blit, and P5e's
+        // re-typed ForEachLive) reach the frontend object the twin's sync body still walks,
+        // without probing the client's slot allocator (T2). Same liveness rules as the minted
+        // stateRef: never an identity test, never read to decide the slot is dead.
+        //
+        // P5e (id): the pair is now compiled under MOBILEGL_PIPE_PUSH rather than
+        // MOBILEGL_BUILD_DISAGGREGATED, because ForEachLive's caller needs it in the
+        // push-monolith build too, where the note is simply always present. And each half is a
+        // NAMED FATAL from an unbarriered apply (§4.4): they answer from a frontend SharedPtr
+        // that only the client's wait pins, so without that wait the object they hand back may
+        // already be the client's next one. Neither touches the allocator, so the allocator
+        // guard never sees them - this is their own refusal.
         void NoteStateForHandle(MG_Pipe::MGPipeHandle handle, const StatePtr& stateObj) {
-            if (MG_Pipe::MGPipeHandleIsNull(handle) || handle.Slot >= m_slots.size()) return;
-            Entry& entry = m_slots[handle.Slot];
-            if (!entry.Live || entry.Gen != handle.Gen) return;
-            entry.stateRef = stateObj;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromUnbarrieredApply("NoteStateForHandle");
+#endif
+            if (MG_Pipe::MGPipeHandleIsNull(handle)) return;
+            Entry* const entry = EntryOrNull(handle.Slot);
+            if (entry == nullptr || !entry->Live || entry->Gen != handle.Gen) return;
+            entry->stateRef = stateObj;
         }
 
         // The frontend object noted for this handle, or null. The handle answers identity;
         // this answers only "which object was this twin last synced from".
         StatePtr StateForHandle(MG_Pipe::MGPipeHandle handle) const {
-            if (MG_Pipe::MGPipeHandleIsNull(handle) || handle.Slot >= m_slots.size()) {
-                return nullptr;
-            }
-            const Entry& entry = m_slots[handle.Slot];
-            if (!entry.Live || entry.Gen != handle.Gen) return nullptr;
-            return entry.stateRef.lock();
-        }
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromUnbarrieredApply("StateForHandle");
 #endif
+            if (MG_Pipe::MGPipeHandleIsNull(handle)) return nullptr;
+            const Entry* const entry = EntryOrNull(handle.Slot);
+            if (entry == nullptr || !entry->Live || entry->Gen != handle.Gen) return nullptr;
+            return entry->stateRef.lock();
+        }
 
         // P3a: the death half of the overload above, for a kind whose announcement is its own
         // destroy CALL rather than the shared death notice (D-L). Hands the twin OUT rather
@@ -394,13 +461,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         BackendPtr ReleaseByHandle(MG_Pipe::MGPipeHandle handle) {
             if (MG_Pipe::MGPipeHandleIsNull(handle)) return BackendPtr{};
             if (m_memoHandle.Slot == handle.Slot) ForgetHandle();
-            if (handle.Slot >= m_slots.size()) return BackendPtr{};
-            Entry& entry = m_slots[handle.Slot];
-            if (!entry.Live || entry.Gen != handle.Gen) return BackendPtr{};
-            BackendPtr dead = std::move(entry.backend);
-            entry.backend.reset();
-            entry.stateRef.reset();
-            entry.Live = false;
+            Entry* const entry = EntryOrNull(handle.Slot);
+            if (entry == nullptr || !entry->Live || entry->Gen != handle.Gen) return BackendPtr{};
+            BackendPtr dead = std::move(entry->backend);
+            entry->backend.reset();
+            entry->stateRef.reset();
+            entry->Live = false;
             return dead;
         }
 
@@ -419,10 +485,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         BackendPtr* FindByHandle(MG_Pipe::MGPipeHandle handle) {
             if (MG_Pipe::MGPipeHandleIsNull(handle)) return nullptr;
-            if (handle.Slot >= m_slots.size()) return nullptr;
-            Entry& entry = m_slots[handle.Slot];
-            if (!entry.Live || entry.Gen != handle.Gen) return nullptr;
-            return &entry.backend;
+            Entry* const entry = EntryOrNull(handle.Slot);
+            if (entry == nullptr || !entry->Live || entry->Gen != handle.Gen) return nullptr;
+            return &entry->backend;
         }
 
         // The handle this object's twin is keyed on, or the null handle. This is what a backend
@@ -438,6 +503,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
             // P5c (hd): same guard as the minting overload - a lifetime-id probe from the
             // apply thread is Fatal{RoleViolation, "MGPipeSlots"} with an active transport.
+            // P5e (id, §4.4): and now also whenever the record being applied is UNBARRIERED,
+            // scope or no scope. This member and Find(StateObject*) below it are the two the
+            // per-family packages retire by passing the handle the record carried instead.
             MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("HandleOf");
 #endif
             const Uint64 lifetimeId = stateObj->GetLifetimeId();
@@ -517,11 +585,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return count;
         }
 
-        // fn(const StatePtr& state, const BackendPtr& twin) over every live, still-owned entry.
-        // Replaces the registry's begin()/end(), whose iterator exposed the raw frontend
-        // address as the map key - the one place the backend read an identity it must not have.
-        // The state object is handed over as a STRONG reference, so the callee cannot be handed
-        // a dangling key the way the old iteration could.
+        // P5e (id), CONTRACT-P5E §4.1: fn(MGPipeHandle, const BackendPtr& twin) over every
+        // live, twinned entry. Replaces the registry's begin()/end(), whose iterator exposed
+        // the raw frontend address as the map key - the one place the backend read an identity
+        // it must not have - and replaces P3a's own fn(StatePtr, BackendPtr), which handed a
+        // frontend SharedPtr OUT OF SERVER MEMORY on every step.
+        //
+        // WHAT THE CALLER LOST AND HOW IT GETS IT BACK, because the two are not the same thing.
+        // The walk no longer locks Entry::stateRef, so a caller that needs the frontend object
+        // asks StateForHandle(handle) for it - which is the same weak reference, read at one
+        // named site inside the scope that owns the debt, instead of at every step of an
+        // iteration. Coverage is UNCHANGED by construction: an entry ForEachLive used to skip
+        // because its stateRef did not lock is one whose StateForHandle answers null, and the
+        // caller skips it there instead.
+        //
+        // The handle is the entry's own {slot, gen}, band-aware: a composite ShaderCso's slot
+        // is reported as kMGPipeShaderCsoCompositeSlotBase + its band index, i.e. the slot the
+        // client minted, never the index into m_band.
         template <typename Fn>
         void ForEachLive(Fn&& fn) const {
             // Index loop and a COPIED twin, not a range-for over references: fn is arbitrary
@@ -529,13 +609,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // invalidate both the iterator and any reference into the vector that outlives the
             // call. The one caller today happens not to insert; that is not a property the
             // walk should depend on.
-            for (SizeT slot = 0; slot < m_slots.size(); ++slot) {
-                const Entry& entry = m_slots[slot];
+            for (SizeT index = 0; index < m_slots.size(); ++index) {
+                const Entry& entry = m_slots[index];
                 if (!entry.Live || !entry.backend) continue;
-                const StatePtr state = entry.stateRef.lock();
-                if (!state) continue;
                 const BackendPtr twin = entry.backend;
-                fn(state, twin);
+                fn(MG_Pipe::MGPipeHandle{static_cast<Uint32>(index), entry.Gen}, twin);
+            }
+            for (SizeT index = 0; index < m_band.size(); ++index) {
+                const Entry& entry = m_band[index];
+                if (!entry.Live || !entry.backend) continue;
+                const BackendPtr twin = entry.backend;
+                fn(MG_Pipe::MGPipeHandle{
+                       static_cast<Uint32>(index) + MG_Pipe::kMGPipeShaderCsoCompositeSlotBase,
+                       entry.Gen},
+                   twin);
             }
         }
 
@@ -544,8 +631,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (const Entry& entry : m_slots) {
                 if (entry.Live) ++count;
             }
+            for (const Entry& entry : m_band) {
+                if (entry.Live) ++count;
+            }
             return count;
         }
+
+        // The band's own live count, so a case can tell "the composite is twinned" from "the
+        // ordinary table grew to reach it" - which is the whole assertion the band exists for
+        // and is untestable from LiveCount alone.
+        Uint32 CompositeLiveCount() const {
+            Uint32 count = 0;
+            for (const Entry& entry : m_band) {
+                if (entry.Live) ++count;
+            }
+            return count;
+        }
+
+        // How many entries each space has ALLOCATED, live or not. A leak case asserts on these
+        // rather than on LiveCount: growth is what the band prevents, and a dense table that
+        // never shrinks is invisible to a liveness count.
+        SizeT OrdinaryCapacityForTest() const { return m_slots.size(); }
+        SizeT CompositeCapacityForTest() const { return m_band.size(); }
 
     private:
         // Drop the twin at `handle` if THIS table holds it. Frees nothing: the slot belongs to
@@ -556,31 +663,61 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // there: a memo can be a handle learned from the allocator for an object another
             // holder twinned, and it must not survive the slot's next handout.
             if (m_memoHandle.Slot == handle.Slot) ForgetHandle();
-            if (handle.Slot >= m_slots.size()) return false;
             // The twin's destructor is a driver call and could, in principle, re-enter
             // GetOrCreate on this table and resize m_slots. So NOTHING that outlives the
             // destructor may be a reference into m_slots: the twin is moved out into a local,
             // the entry is finished with, and only then is the local released.
             BackendPtr dead;
             {
-                Entry& entry = m_slots[handle.Slot];
-                if (!entry.Live || entry.Gen != handle.Gen) return false;
-                dead = std::move(entry.backend);
-                entry.backend.reset();
-                entry.stateRef.reset();
-                entry.Live = false;
+                Entry* const entry = EntryOrNull(handle.Slot);
+                if (entry == nullptr || !entry->Live || entry->Gen != handle.Gen) return false;
+                dead = std::move(entry->backend);
+                entry->backend.reset();
+                entry->stateRef.reset();
+                entry->Live = false;
             }
             dead.reset();
             return true;
         }
 
-        // Grows the table to hold `slot`. Every caller bounds `slot` first - the minting
+        // ---- P5e (id): the two slot spaces, resolved in ONE place ---------------------------
+        //
+        // Every reader and writer below goes through these three, so a caller that forgot the
+        // band cannot exist - the shape MGPipeSlotAllocator::EntryOf already uses one level
+        // out. kHasCompositeBand folds to `false` at compile time for the five non-ShaderCso
+        // instantiations, so their band is dead code and an empty Vector.
+        static constexpr Bool SlotIsBanded(Uint32 slot) {
+            return kHasCompositeBand && MG_Pipe::MGPipeIsCompositeShaderSlot(slot);
+        }
+        static constexpr SizeT IndexOfSlot(Uint32 slot) {
+            return SlotIsBanded(slot)
+                       ? static_cast<SizeT>(slot - MG_Pipe::kMGPipeShaderCsoCompositeSlotBase)
+                       : static_cast<SizeT>(slot);
+        }
+
+        // The entry a slot names, or null when its space has never grown that far. NEVER grows:
+        // a lookup that resized would turn every miss into an allocation, which is the hazard
+        // Find documents.
+        Entry* EntryOrNull(Uint32 slot) {
+            Vector<Entry>& table = SlotIsBanded(slot) ? m_band : m_slots;
+            const SizeT index = IndexOfSlot(slot);
+            if (index >= table.size()) return nullptr;
+            return &table[index];
+        }
+        const Entry* EntryOrNull(Uint32 slot) const {
+            return const_cast<BackendSlotTable*>(this)->EntryOrNull(slot);
+        }
+
+        // Grows the right space to hold `slot`. Every caller bounds `slot` first - the minting
         // overload because the allocator produced it, the handle overload against
         // kMaxHandleSlot - because this is the one place a client-supplied number decides an
-        // allocation size.
+        // allocation size. A composite slot grows m_band by (slot - base) + 1, so the ordinary
+        // table never learns the band exists.
         Entry& EntryAt(Uint32 slot) {
-            if (slot >= m_slots.size()) m_slots.resize(static_cast<SizeT>(slot) + 1);
-            return m_slots[slot];
+            Vector<Entry>& table = SlotIsBanded(slot) ? m_band : m_slots;
+            const SizeT index = IndexOfSlot(slot);
+            if (index >= table.size()) table.resize(index + 1);
+            return table[index];
         }
 
         void RememberHandle(Uint64 lifetimeId, MG_Pipe::MGPipeHandle handle) const {
@@ -621,6 +758,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         // Indexed by MGPipeHandle::Slot; [0] is the reserved slot and is never live.
         Vector<Entry> m_slots;
+        // P5e (id): the ShaderCso COMPOSITE band, indexed by (slot -
+        // kMGPipeShaderCsoCompositeSlotBase) and EMPTY for every other kind. See
+        // kHasCompositeBand above for why it is a second vector and not more of the first.
+        Vector<Entry> m_band;
         // Handed back by GetOrCreate for a null state object. Never live, never handed a handle.
         BackendPtr m_nullTwin;
 
