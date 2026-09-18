@@ -2680,6 +2680,51 @@ namespace MobileGL::MG_Pipe {
                       "memo can now answer differently for the consumer signal, so that key input "
                       "needs the unit case the paragraph above names");
 
+        // ---- P5e (gl), ID-112: THE SAME TRIP WIRE FOR THE TWO ROWS THAT ONE CANNOT SEE ------
+        //
+        // The assertion above is keyed on the EMITTER'S SUBSYSTEM, so it covers exactly the five
+        // P4a-family rows. GetBoundVertexArray (P3a's, emitted by BindVertexElements) and
+        // GetBufferBindingPoint (P5e sb's, emitted by SetShaderBuffers) sit outside
+        // kMGPipeP4aFamilySubsystems and had therefore no compile-time protection at all.
+        //
+        // WHY THAT IS A DEVICE CRASH AND NOT A STYLE POINT. This residual fill is MAGMA'S ONLY
+        // SOURCE for all seven pointer-backed rows, and Magma dereferences them on its first
+        // draw: it is in lockstep for the whole of P5e (ID-90) and reads them through
+        // MagmaP7AllocatorDebtScope. A package retiring a DirectGLES consumer that "tidied up"
+        // by deleting one of these two rows from EmittedCallSuppliesTheWholeField would not
+        // break the build - it would SIGSEGV Magma on a phone, which is the exact shape that
+        // cost this phase 38 scenarios once already (ID-107). So the seven are NAMED, and the
+        // naming is the deliverable: it converts the most likely mistake of every remaining
+        // package from a device crash into a build break.
+        //
+        // IF THIS ASSERTION FIRED ON YOU: the answer for each row is argued above
+        // EmittedCallSuppliesTheWholeField and it is the same argument every time - the field's
+        // storage is a frontend heap reference and no payload may carry a pointer. What retires
+        // a row is the phase where the BACKEND stops reading a frontend object (P7 for the
+        // texture/framebuffer/program mirrors, P8 for the VAO), never a consumer-side cleanup
+        // in the package you are writing.
+        constexpr MGPipeInputField kMGPipePointerBackedResidualRows[] = {
+            MGPipeInputField::GetBoundVertexArray,       MGPipeInputField::GetBufferBindingPoint,
+            MGPipeInputField::GetFramebufferBindingSlot, MGPipeInputField::GetImageTextureBinding,
+            MGPipeInputField::GetTextureUnitObject,      MGPipeInputField::GetProgramForDraw,
+            MGPipeInputField::GetProgramForDispatch,
+        };
+        static_assert(sizeof(kMGPipePointerBackedResidualRows) / sizeof(MGPipeInputField) == 7,
+                      "ID-112 names SEVEN pointer-backed residual rows; this list is the whole of "
+                      "them and a row removed from it is a row with no trip wire");
+        constexpr Bool NoPointerBackedRowIsWhollySupplied() {
+            for (const MGPipeInputField field : kMGPipePointerBackedResidualRows) {
+                if (EmittedCallSuppliesTheWholeField(field)) return false;
+            }
+            return true;
+        }
+        static_assert(NoPointerBackedRowIsWhollySupplied(),
+                      "a pointer-backed residual row stopped being pulled (ID-112). This fill is "
+                      "Magma's ONLY source for GetBoundVertexArray, GetBufferBindingPoint and the "
+                      "five P4a-family mirrors, and Magma dereferences them on its first draw - so "
+                      "this is a build break standing in for a device SIGSEGV. Retire the row in "
+                      "the phase that stops the backend reading a frontend object (P7/P8)");
+
         struct ResidualFillPlan {
             Bool Valid = false;
             Uint64 PushMask = 0;
