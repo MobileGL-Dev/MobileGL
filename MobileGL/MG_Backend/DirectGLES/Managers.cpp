@@ -6989,18 +6989,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // UNREPEATABLE rather than merely repaired - a null frontend object reaching a body that
         // can still read one aborts BY NAME instead of taking a SIGSEGV three frames deep.
         //
+// P5e (fix1 follow-up, ID-110): THE RECORD ARM'S SELECTOR, STATED ONCE AND SPELLED WHEREVER IT
+// IS RELIED ON. fix1's root cause was a seam that read "a handle was noted" as "the record arm
+// is selected"; those are different statements and this is the second one. Everything a null
+// frontend texture object is servable by lives behind BOTH conjuncts: the transport (the
+// texture-VIEW test and RequireImageBindableStorage's re-dirty transition are
+// `Transport != Monolith` arms, CONTRACT-P5E §5.2) and the subsystem bit (every `pushedStorage`
+// read). Sites that were previously correct only because every writer of a handle-note happens
+// to be transport-gated now say so themselves, so a future by-handle noter cannot quietly
+// re-open ID-107's hole somewhere else.
+#if MOBILEGL_BUILD_DISAGGREGATED
+#define MGB_TEXTURE_RECORD_ARM_SELECTED()                                                                          \
+    (MG_Config::Transport != MG_Config::TransportMode::Monolith && TextureResourceSubsystemEnabled())
+#else
+#define MGB_TEXTURE_RECORD_ARM_SELECTED() (false)
+#endif
+
         // Returns true when the caller must decline (no handle noted: the caller's bug it always
         // was, named by the caller's own log line), false when the record arm can serve the call,
         // and never returns at all when a handle was noted on an arm that cannot serve it.
         static Bool RefuseNullFrontendTextureOffTheHandleArm(const char* entry,
                                                             MG_Pipe::MGPipeHandle notedHandle) {
             if (MG_Pipe::MGPipeHandleIsNull(notedHandle)) return true;
-#if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
-                TextureResourceSubsystemEnabled()) {
-                return false;
-            }
-#endif
+            if (MGB_TEXTURE_RECORD_ARM_SELECTED()) return false;
             MGLOG_F("MGPipe: Fatal{RoleViolation, \"texture-handle-arm\"} - %s was handed a NULL "
                     "frontend texture for handle {%u, %u} on an arm that cannot answer without "
                     "one. The by-handle entries pass null on the strength of a noted handle, and "
@@ -8642,8 +8653,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         return;
                     }
                 }
-                const Bool texBufferByRecord =
-                    pushedStorage != nullptr && MGB_TEXTURE_HANDLE_ARM_OFF(*this) == false;
+                // P5e (fix1 follow-up, ID-110): the third conjunct is the one fix1's report
+                // asked for a ruling about. This arm hands the backing-buffer lookup
+                // kNoFrontendBuffer and leans on the record answering; it was unreachable
+                // under monolith only because every writer of a handle-note is
+                // transport-gated - safe by a chain rather than by its own statement, which
+                // is exactly the shape that cost the monolith arm 137 scenarios. Under a
+                // transport the conjunct is already implied by `pushedStorage != nullptr`, so
+                // this changes no behaviour and closes no door; it says the thing instead of
+                // depending on it.
+                const Bool texBufferByRecord = pushedStorage != nullptr &&
+                                               MGB_TEXTURE_HANDLE_ARM_OFF(*this) == false &&
+                                               MGB_TEXTURE_RECORD_ARM_SELECTED();
 #else
                 const Bool texBufferByRecord = false;
 #endif
