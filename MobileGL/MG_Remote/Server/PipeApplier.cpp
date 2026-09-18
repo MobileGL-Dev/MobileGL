@@ -778,12 +778,19 @@ namespace MobileGL::MG_Remote::Server {
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("launch_grid");
         if (table == nullptr) return false;
         const MG_Backend::GLFunctionsTable& gl = table->GL;
-        // The compute program is NOT named by this record and must not be: it is
-        // GetProgramForDispatch, GetProgramForDraw's twin, which the backend pulls inside its
-        // own PrepareForCompute (DirectGLES.cpp:5779). i1 is what puts compute on the path, so
-        // the field moves FATAL -> BARRIER_PULLED in FieldOwnership.def (contract §6.9, the
-        // one row this package is granted). Block* are 0 on the wire for the same reason: the
-        // local size is a link artifact the backend reads from its own program.
+        // The compute program is NOT named by THIS record and must not be - but it IS named, by
+        // the set_dispatch_program record that preceded it, and the backend's PrepareForCompute
+        // reads MGPipeApplier().DispatchProgram from there.
+        //
+        // P5e (pa): that is what this comment used to get wrong. Until P5e the backend PULLED
+        // GetProgramForDispatch - GetProgramForDraw's twin - inside PrepareForCompute, and the
+        // field's FATAL -> BARRIER_PULLED move in FieldOwnership.def (contract §6.9, i1's one
+        // granted row) is what made the pull legal. pg gave the sync and the link/SPIR-V gate a
+        // handle arm and pa retired the pull itself, so on the handle arm the row is not read at
+        // all; the BARRIER_PULLED class stays because the monolith arm still reads it (ID-81).
+        // Block* are 0 on the wire for the unchanged reason: the local size is a link artifact
+        // the backend reads from the program it resolved, which on that arm is the record's
+        // archive.
         if (grid.IsIndirect != 0) {
             if (gl.DispatchComputeIndirect == nullptr) return false;
             // IndirectBuffer travels for P7's sake; the BINDING is server state, put there by

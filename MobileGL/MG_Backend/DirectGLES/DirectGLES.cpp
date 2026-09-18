@@ -22,6 +22,11 @@
 #include <MG_Pipe/PipeApply.h>
 // P5c ev: the surface-changed event's producer callback, installed by the server session.
 #include <MG_Pipe/MGPipeCallbacks.h>
+// P5e (pa): MGPipeShaderCsoRecord::Archive is a SharedPtr<const ProgramArchive> and PipeApply.h
+// deliberately only forward-declares the type (its own note at :46 says to come here for it).
+// The draw path's attribute-values sync reads Archive->Link, so this TU needs it complete -
+// Managers.cpp already includes it for ProgramArchiveSource, which is the same reason.
+#include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #endif
 #if MOBILEGL_BUILD_DISAGGREGATED
 // P5c (tx): §1's server-side per-level extent derivation, for GenerateMipmap's shape reads.
@@ -2372,6 +2377,175 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
         }
+
+#if MOBILEGL_PIPE_PUSH
+        // P5e (pa), CONTRACT-P5E §5.5 / §5.8 (ruling ID-81): THE SAME SYNC, OFF THE RECORD.
+        //
+        // The overload above is the MONOLITH GLUE and keeps its text token for token; this one is
+        // what the handle arm calls, and it answers the note vi left inside it - "the two program
+        // reads below (GetActiveAttributeLocationMask, GetAttribType) ... stay until pg carries
+        // the attribute mask and types in the ShaderCso record". pg's archive carries both:
+        // `attribs` and `attribTypes` are members of LinkArtifacts, the record ADOPTS the whole of
+        // it at create_shader_state, and neither is one of the three post-link mutable fields the
+        // bindings tails exist for (glUniformBlockBinding / glUniform1i on a sampler /
+        // glShaderStorageBlockBinding move those, and nothing moves these without a relink, which
+        // re-issues the create). So this arm adds NOTHING to the wire and changes no record - it
+        // reads rows that already arrived.
+        //
+        // WHY A SECOND FUNCTION rather than an `#if` inside the body above: §5.8's idiom, and G1 -
+        // the frontend overload's preprocessed text does not move, so the pull build gains no
+        // symbol and no byte. The price is that vi's memo arm is COPIED rather than shared; a
+        // shared tail would have rewritten the pull build's one, which G1 measures at 0/0/0/0.
+        void SyncCurrentVertexAttributeValues(BackendVertexArrayObject* vaoTwin, MG_Pipe::MGPipeHandle cso) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            // THE SAME THREE-PART TEST SyncCurrentProgramByHandle MAKES, from the descriptor, and
+            // it is this arm's spelling of `if (!program) return;` above rather than a weaker one.
+            // LinkStatus is a FIELD and not an implication (ID-88): create_shader_state is
+            // re-issued at every link that moves the link version and a FAILED relink of a bound
+            // program moves it too, so "a record exists" and "the program linked" are different
+            // statements. A program that did not link, or whose SPIR-V never arrived, is one the
+            // same Prepare has just bound program 0 for - there is no shader to feed a current
+            // generic attribute to, which is what the frontend arm gets from an unlinked
+            // program's empty `attribs`.
+            const MG_Pipe::MGPipeShaderCsoRecord* const record = PipeShaderCsoRecordForHandle(cso);
+            if (record == nullptr || record->Desc.LinkStatus == 0 || record->Desc.SpirvStatus == 0) {
+                return;
+            }
+            // A NULL ARCHIVE ON THIS ARM IS A NAMED REFUSAL, NEVER A FALL-BACK TO THE FRONTEND -
+            // the shape of RefuseNullFrontendTextureOffTheHandleArm / MGB_TEXTURE_RECORD_ARM_-
+            // SELECTED (Managers.cpp, ID-110). This function is reached from ProgramHandleArm()
+            // only, i.e. Transport != Monolith AND the program subsystem bit, and under a
+            // transport pg fills Archive at every create_shader_state; so a LIVE record with a
+            // LINKED descriptor and no archive is a seam defect and not a state a draw may run
+            // in. Reaching back for GetProgramForDraw() here would answer the two rows out of the
+            // client's own live LinkArtifacts - the memory Link() replaces in place, i.e. exactly
+            // the read this package retires - and would do it behind a picture that still looks
+            // right, which is what the subsystem A/B exists to expose.
+            if (!record->Archive) {
+                MGLOG_F("MGPipe: Fatal{RoleViolation, \"program-handle-arm\"} - "
+                        "SyncCurrentVertexAttributeValues needs the active-attribute mask and the "
+                        "attribute types of ShaderCso {%u, %u} and that record carries no "
+                        "server-owned archive. The arm is selected by Transport != Monolith AND "
+                        "the program subsystem bit (CONTRACT-P5E §5.8, ID-81), so this record's "
+                        "create_shader_state was applied under a transport and must have adopted "
+                        "one; the frontend ProgramObject is not a fall-back here, it IS the client "
+                        "memory this row retires",
+                        cso.Slot, cso.Gen);
+                std::abort();
+            }
+            const MG_State::GLState::LinkArtifacts& link = record->Archive->Link;
+            if (!vaoTwin) return;
+
+            // vi's half, unchanged in meaning and copied rather than shared (see above). The two
+            // family bits are independent A/Bs, so a program on the handle arm says nothing about
+            // whether the vertex-input family is - this arm has to carry both of vi's.
+            const Bool fromRecords = BufferImpl::VertexInputReadsRecords();
+            const MG_Pipe::MGPipeVertexElementsRecord* elementsRecord = nullptr;
+            MG_Pipe::MGPipeHandle elementsHandle = MG_Pipe::kMGPipeNullHandle;
+            Uint64 elementsSerial = 0;
+            if (fromRecords) {
+                const auto& st = MG_Pipe::MGPipeApplier();
+                elementsHandle = st.BoundVertexElements;
+                if (!MG_Pipe::MGPipeHandleIsNull(elementsHandle) &&
+                    elementsHandle.Slot < st.VertexElementsCsos.size()) {
+                    const auto& elements = st.VertexElementsCsos[elementsHandle.Slot];
+                    if (elements.Live && elements.Gen == elementsHandle.Gen) {
+                        elementsRecord = &elements;
+                        elementsSerial = elements.ContentSerial;
+                    }
+                }
+                if (elementsRecord == nullptr) return;
+            }
+
+            const SharedPtr<MG_State::GLState::VertexArrayObject> noVao;
+            const auto& vao = fromRecords ? noVao : MGB_CTX->GetBoundVertexArray();
+            if (!fromRecords && !vao) return;
+
+            // ProgramObject::GetActiveAttributeLocationMask, over the archive's own `attribs`:
+            // the same 32-location bound and the same "an empty name is not an active attribute"
+            // rule, computed where the names live instead of through an accessor MG_Backend
+            // cannot reach without a frontend object.
+            Uint32 activeAttribMask = 0;
+            {
+                const SizeT attribCount = std::min<SizeT>(link.attribs.size(), 32);
+                for (SizeT index = 0; index < attribCount; ++index) {
+                    if (!link.attribs[index].empty()) activeAttribMask |= (1u << index);
+                }
+            }
+            if (activeAttribMask == 0) return;
+
+            auto& memo = vaoTwin->GetPendingAttribValueMaskMemo();
+            if (fromRecords) {
+                if (!memo.valid || !(memo.elementsHandle == elementsHandle) ||
+                    memo.elementsSerial != elementsSerial || activeAttribMask != memo.activeMask) {
+                    Uint32 pending = 0;
+                    for (Uint32 remaining = activeAttribMask; remaining != 0; remaining &= remaining - 1) {
+                        const Uint32 location = static_cast<Uint32>(std::countr_zero(remaining));
+                        if (location >= MG_Pipe::kMGPipeMaxVertexAttribs ||
+                            !elementsRecord->Attributes[location].Enabled) {
+                            pending |= (1u << location);
+                        }
+                    }
+                    memo.elementsHandle = elementsHandle;
+                    memo.elementsSerial = elementsSerial;
+                    memo.activeMask = activeAttribMask;
+                    memo.pendingMask = pending;
+                    memo.valid = true;
+                }
+            } else {
+                const Uint32 configVersion = vao->GetConfigVersion();
+                if (!memo.valid || configVersion != memo.configVersion ||
+                    activeAttribMask != memo.activeMask) {
+                    Uint32 pending = 0;
+                    for (Uint32 remaining = activeAttribMask; remaining != 0; remaining &= remaining - 1) {
+                        const Uint32 location = static_cast<Uint32>(std::countr_zero(remaining));
+                        if (!vao->GetAttribute(location).Enabled) pending |= (1u << location);
+                    }
+                    memo.configVersion = configVersion;
+                    memo.activeMask = activeAttribMask;
+                    memo.pendingMask = pending;
+                    memo.valid = true;
+                }
+            }
+            if (memo.pendingMask == 0) return;
+
+            for (Uint32 remaining = memo.pendingMask; remaining != 0; remaining &= remaining - 1) {
+                const Uint32 location = static_cast<Uint32>(std::countr_zero(remaining));
+
+                // BOUNDS-CHECKED, exactly as ProgramObject::GetAttribType is not: the frontend's
+                // form indexes attribTypes raw because the mask it walked came off the same
+                // artefacts instance, and here the two vectors arrived over a wire. A short tail
+                // is an archive whose halves disagree; 0 classifies as Unsupported and says so
+                // below rather than reading past the end.
+                const GLenum attribType =
+                    location < link.attribTypes.size() ? link.attribTypes[location] : 0;
+                const auto& currentValue = MGB_CTX->GetCurrentVertexAttribute(location);
+                const auto typeInfo = MG_State::GLState::ClassifyVertexAttribType(attribType);
+                switch (typeInfo.baseType) {
+                case MG_State::GLState::VertexAttribBaseType::Float:
+                    g_GLESFuncs.glVertexAttrib4fv(location, currentValue.floatValue.data());
+                    break;
+                case MG_State::GLState::VertexAttribBaseType::Int:
+                    g_GLESFuncs.glVertexAttribI4iv(location, currentValue.intValue.data());
+                    break;
+                case MG_State::GLState::VertexAttribBaseType::Uint:
+                    g_GLESFuncs.glVertexAttribI4uiv(location, currentValue.uintValue.data());
+                    break;
+                case MG_State::GLState::VertexAttribBaseType::Unsupported:
+                    // THE HANDLE, NOT A GL NAME: the server does not know the client's program
+                    // names and must not learn them (ProgramArchiveSource::Identity states the
+                    // same rule for the twin's log lines).
+                    MGLOG_E_ONCE("SyncCurrentVertexAttributeValues: ShaderCso {%u, %u} location=%u has no "
+                            "enabled array and its shader input type 0x%x is not supported as a current "
+                            "generic vertex attribute",
+                            cso.Slot, cso.Gen, location, attribType);
+                    break;
+                }
+            }
+        }
+#endif
     } // namespace VertexArrayImpl
 
     namespace TextureImpl {
@@ -5965,6 +6139,45 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static void BindCurrentTextures(const TextureImpl::DrawTextureSyncKeys& keys,
                                     const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram);
 
+    // P5e (pa), CONTRACT-P5E §5.5 / §5.8, ruling ID-81: "IS THERE ANYBODY LEFT WHO NEEDS THE
+    // FRONTEND PROGRAM OBJECT FOR THIS DRAW", stated once, as a CONJUNCTION - and the conjunction
+    // is the whole point of the row.
+    //
+    // PrepareForDraw / PrepareForCompute hoist ONE GetProgramForDraw() (kimi rows 91 / 92; the
+    // 68 strict-lane entries of markers GetProgramForDraw@DrawArrays and
+    // GetProgramForDispatch@DispatchCompute are this one call) and hand it to four callees. The
+    // call itself is what trips MGP_INPUT_CHECK (PipeInputs.h), so retiring the row means not
+    // making it - which is only legal once EVERY consumer can be served without the object:
+    //
+    //   * ProgramHandleArm() answers SyncCurrentProgram / SyncCurrentVertexAttributeValues /
+    //     BindCurrentProgramWithResources. All three have a by-handle arm selected by that very
+    //     test, and none of them reads `currentProgram` on it.
+    //   * TextureImpl::UnitTexturesByHandle() answers BindCurrentTextures, whose LEGACY arm
+    //     reads the program twice: the memo key's four frontend rows, and
+    //     ResolveAndBindUnitTextures' sampledTargetForUnit lambda, which arbitrates aliased
+    //     native targets out of the program's sampler uniforms. Its handle arm returns before
+    //     either.
+    //
+    // THE SECOND CONJUNCT IS NOT REDUNDANT. The family bits are independently settable A/Bs
+    // (0x0ff - bit 7 on, bit 8 off - is supported and must keep running the legacy walk), so
+    // "the program family is on the handle arm" does NOT imply "no consumer needs the object";
+    // those are different statements, and reading the first as the second is precisely the shape
+    // that cost the phase 137 scenarios (ID-107 / ID-109 / ID-110, fix commit 66621767). Both
+    // conjuncts reduce to `Transport != Monolith && <family bit>`, so the push-MONOLITH build is
+    // false here and keeps the frontend hoist token for token (ruling ID-81), and the pull build
+    // folds the whole thing to a constant.
+    //
+    // The guard is MOBILEGL_BUILD_DISAGGREGATED and not MOBILEGL_PIPE_PUSH because the SECOND
+    // conjunct only exists there (UnitTexturesByHandle is tx2's, split-only); a push-VERIFY build
+    // therefore keeps the frontend hoist, which is what the comparator compares against.
+    inline Bool DrawProgramFromRecords() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return ProgramHandleArm() && TextureImpl::UnitTexturesByHandle();
+#else
+        return false;
+#endif
+    }
+
     void PrepareForDraw(DrawSyncFlags syncBit) {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -6003,18 +6216,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // either, and none can run inside this preparation. GetProgramForDraw is a
         // cross-TU call with a guarded static inside - repeating it per stage showed
         // up in draw-loop profiles.
-        const auto& currentProgram = MGB_CTX->GetProgramForDraw();
+        //
+        // P5e (pa), kimi row 91 / S4 1.1: AND ON THE RECORD ARM IT IS NOT MADE AT ALL. The row
+        // this package retires is this single call - it is what MGP_INPUT_CHECK trips on, once
+        // per draw, and it is 61 of the strict lane's 109 red entries. The arm is
+        // DrawProgramFromRecords(), which names every consumer of the value rather than this
+        // family alone; `currentProgram` stays null on it and the four callees below take their
+        // own handle arms, none of which consults it. The null twin case (no program bound)
+        // reaches the same "nothing to bind" answers a null frontend program always did.
+        const SharedPtr<MG_State::GLState::ProgramObject> noFrontendProgram;
+        const Bool programFromRecords = DrawProgramFromRecords();
+        const auto& currentProgram = programFromRecords ? noFrontendProgram : MGB_CTX->GetProgramForDraw();
         if (MG_Util::PipeStats::Enabled()) {
             // THE per-draw denominator for Espryt, plus this function's own two accessor
             // calls (the VAO and the draw program). Everything the callees below read is
             // counted by the callees that are instrumented; the rest is not counted (see
             // the inventory in PipeStats.cpp).
             MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::Draws, 1);
-            // ONE on the record arm, not two: P5e (vi) retired the bound-VAO accessor call and
-            // the ledger has to say so, or the phase's own "accessor calls per draw" number
-            // would keep counting a read that no longer happens.
+            // ZERO on the record arm, one per row still pulled otherwise: P5e (vi) retired the
+            // bound-VAO accessor call and P5e (pa) the draw-program one, and the ledger has to
+            // say so or the phase's own "accessor calls per draw" number would keep counting
+            // reads that no longer happen. Two independent bits, so it is a sum and not a
+            // three-way pick.
             MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls,
-                                         vertexInputFromRecords ? 1 : 2);
+                                         (vertexInputFromRecords ? 0 : 1) + (programFromRecords ? 0 : 1));
         }
         const TextureImpl::DrawTextureSyncKeys textureKeys = TextureImpl::CaptureDrawTextureSyncKeys();
 
@@ -6044,7 +6269,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // retires. On the handle arm the program is MGPipeApplier().DrawProgram - a handle the
         // set_draw_program record carried - and `currentProgram` is not consulted for the sync
         // at all; the remaining uses of it below are the two callees' own, and both have a
-        // handle arm of their own.
+        // handle arm of their own. P5e (pa) finished it: the pull itself is gone on that arm and
+        // `currentProgram` is a null SharedPtr there, which this branch never reaches for.
         if (ProgramHandleArm()) {
             PrgramImpl::SyncCurrentProgramByHandle(MG_Pipe::MGPipeApplier().DrawProgram, true);
         } else
@@ -6067,7 +6293,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
-        VertexArrayImpl::SyncCurrentVertexAttributeValues(vaoTwin, currentProgram);
+#if MOBILEGL_PIPE_PUSH
+        // P5e (pa): the third consumer, on ITS OWN arm and not on the hoist's. The hoist above is
+        // a conjunction over four callees; this one is served by the record whenever the PROGRAM
+        // family is on the handle arm, which includes the mixed A/B where the texture bits are
+        // off and `currentProgram` above is therefore still a real object.
+        if (ProgramHandleArm()) {
+            VertexArrayImpl::SyncCurrentVertexAttributeValues(vaoTwin, MG_Pipe::MGPipeApplier().DrawProgram);
+        } else
+#endif
+        {
+            VertexArrayImpl::SyncCurrentVertexAttributeValues(vaoTwin, currentProgram);
+        }
 
         BindCurrentTextures(textureKeys, currentProgram);
         BindCurrentProgramWithResources(currentProgram, textureKeys,
@@ -6087,6 +6324,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // false when the resolution could not be completed from the state it read - a bound
     // texture that has no backend object yet is skipped, and a later draw would bind it
     // without any of the memo keys below moving - so the caller must not memoise it.
+    //
+    // P5e (pa): `currentProgram` IS THE LEGACY WALK'S PARAMETER and is null under
+    // TextureImpl::UnitTexturesByHandle(), where the by-handle pass below returns before the
+    // only reader of it (sampledTargetForUnit) is even declared. The caller drops the object
+    // only once that same test holds, so this is the arm speaking and not a pointer test.
     static Bool ResolveAndBindUnitTextures(const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram,
                                            Int maxTouchedUnit) {
 #ifdef TRACY_ENABLE
@@ -6172,6 +6414,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Frontend target the current program samples at a given unit; resolves an
         // aliased native binding when two real textures compete for it (see below).
         // Only consulted on a conflict, so the ordinary unit costs nothing.
+        //
+        // P5e (pa): THE LAST PROGRAM READ ON THIS PATH, and it stays where it is because the
+        // path it is on is the one the handle arm above already returned from. It is also the
+        // reason PrepareForDraw's hoist tests UnitTexturesByHandle() as well as
+        // ProgramHandleArm(): with the texture bits off and the program bits on, this lambda
+        // still runs and still needs a real object.
         const auto sampledTargetForUnit = [&currentProgram](Int unit) {
             if (!currentProgram || !currentProgram->GetLinkStatus()) {
                 return TextureTarget::Unknown;
@@ -6632,6 +6880,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // sample whatever texture the last sync left behind (e.g. Flywheel's depth
     // pyramid downsample reading a stale unit-0 binding instead of the depth
     // attachment).
+    //
+    // P5e (pa): `currentProgram` IS NULL ON THE HANDLE ARM, and that is a statement about the
+    // caller's arm rather than something this body may test for. Every read of it below sits on
+    // the `byHandle == false` side of a branch whose condition is TextureImpl::UnitTexturesByHandle()
+    // - the memo's entry selection, the four frontend key rows, and ResolveAndBindUnitTextures'
+    // sampledTargetForUnit lambda, which its own handle arm returns before reaching. The hoist in
+    // PrepareForDraw only drops the object once THAT test holds too (DrawProgramFromRecords), so
+    // this parameter is null exactly where nothing consults it.
     static void BindCurrentTextures(const TextureImpl::DrawTextureSyncKeys& keys,
                                     const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram) {
 #ifdef TRACY_ENABLE
@@ -6665,7 +6921,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // victim. WHICH entry is used is only a performance choice - correctness sits
         // entirely in the full key + shadow compare below, unchanged from the single
         // memo this set replaces.
-        const void* programKey = static_cast<const void*>(currentProgram.get());
+        //
+        // P5e (pa): NOT EVEN THE POINTER, on the handle arm. The by-handle branch below selects
+        // and keys on {DrawProgram, ShaderCso.Serial, BindingsSerial} (ruling ID-86) and never
+        // looks at this value, but it was still being loaded out of the caller's SharedPtr every
+        // draw - and once the caller stops holding one there is nothing there to load.
+        const void* programKey =
+#if MOBILEGL_BUILD_DISAGGREGATED
+            byHandle ? nullptr :
+#endif
+                     static_cast<const void*>(currentProgram.get());
         ResolvedTextureBindingMemo* memoSlot = nullptr;
         for (auto& candidate : g_resolvedTextureBindingMemos) {
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -6722,9 +6987,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 memo.unitBindingsEpoch = unitBindingsEpoch;
                 memo.samplingResolutionGeneration = keys.samplingGeneration;
                 memo.program = programKey;
-                memo.programLifetimeId = currentProgram ? currentProgram->GetLifetimeId() : 0;
-                memo.programBackendStateVersion = currentProgram ? currentProgram->GetBackendStateVersion() : 0;
-                memo.programLinked = currentProgram && currentProgram->GetLinkStatus();
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P5e (pa): the four frontend program rows belong to the LEGACY key and are not
+                // written on the handle arm - decided by `byHandle`, which is the arm, and not by
+                // the object happening to be null, which is only a consequence of it. They are
+                // zeroed rather than skipped so an entry cannot carry a row nobody wrote.
+                if (byHandle) {
+                    memo.programLifetimeId = 0;
+                    memo.programBackendStateVersion = 0;
+                    memo.programLinked = false;
+                } else
+#endif
+                {
+                    memo.programLifetimeId = currentProgram ? currentProgram->GetLifetimeId() : 0;
+                    memo.programBackendStateVersion =
+                        currentProgram ? currentProgram->GetBackendStateVersion() : 0;
+                    memo.programLinked = currentProgram && currentProgram->GetLinkStatus();
+                }
                 memo.contextGeneration = g_backendContextGeneration;
 #if MOBILEGL_BUILD_DISAGGREGATED
                 memo.byHandle = byHandle;
@@ -6743,7 +7022,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void BindCurrentTextures() {
-        BindCurrentTextures(TextureImpl::CaptureDrawTextureSyncKeys(), MGB_CTX->GetProgramForDraw());
+        // P5e (pa): the exported no-argument entry (DirectGLES.h) takes the SAME arm the hoist in
+        // PrepareForDraw does, and for the same reason: the pull is what trips the input check, so
+        // an entry point that keeps it would keep the row alive for whichever caller reaches this
+        // overload next. Today that is SanityTest's unit cases, which run under monolith
+        // transport and therefore take the frontend arm below unchanged.
+        const SharedPtr<MG_State::GLState::ProgramObject> noFrontendProgram;
+        BindCurrentTextures(TextureImpl::CaptureDrawTextureSyncKeys(),
+                            DrawProgramFromRecords() ? noFrontendProgram : MGB_CTX->GetProgramForDraw());
     }
 
     // Binds the current program's backend object and re-establishes its per-program
@@ -6752,6 +7038,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // association must be rebuilt through the API). Compute dispatches depend on
     // this as much as draws do — e.g. Flywheel's cull shader reads the
     // _FlwFrameUniforms block and the _flw_depthPyramid sampler.
+    //
+    // P5e (pa): `currentProgram` IS NULL WHENEVER `handleArm` HOLDS. Every read of it in the
+    // body below is on the `:` side of a `handleArm ? <record> :` pick or inside the `else` of
+    // `if (handleArm)`, with one pair that is guarded instead - the two `globalConstants ? ... :`
+    // reads, which the [[noreturn]] refusal a few lines above them makes unreachable on that arm
+    // (its note says so). The parameter stays for the monolith arm, which is ruling ID-81: that
+    // build keeps this function's frontend text token for token.
     static void BindCurrentProgramWithResources(
         const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram,
         const TextureImpl::DrawTextureSyncKeys& keys, MG_Pipe::MGPipeHandle programCso) {
@@ -6859,6 +7152,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // this adds is that on the handle arm there is nothing legal to fall back
                     // to. CONTRACT-P5E §5.5: Fatal{UnmigratedVerb, "set_global_constants"}, not
                     // a torn upload.
+                    //
+                    // P5e (pa): AND IT IS ALSO WHAT KEEPS THE TWO `globalConstants ? ... :
+                    // currentProgram->...` READS BELOW OFF THE FRONTEND. std::abort() is
+                    // [[noreturn]], so past this statement `handleArm` implies
+                    // `globalConstants != nullptr` in one step and in this function - not by a
+                    // chain through other files, which is the distinction ID-110 draws. It
+                    // matters now: pa's caller passes a NULL ProgramObject on that arm, so the
+                    // `:` sides are unreachable rather than merely unused.
                     if (handleArm && globalConstants == nullptr) {
                         MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"set_global_constants\"} - the "
                                 "ShaderCso record {%u, %u} does not answer the default uniform "
@@ -7833,7 +8134,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // PrepareForDraw (nothing below can move either). The DISPATCH accessor: with a
         // pipeline bound this is its compute stage program, which is a whole program on its
         // own - the graphics composite a draw builds carries no compute stage.
-        const auto& currentProgram = MGB_CTX->GetProgramForDispatch();
+        //
+        // P5e (pa), kimi row 92: THE DISPATCH TWIN OF THE SAME RETIREMENT, the same arm and the
+        // same conjunction - the three callees this value reaches are the ones PrepareForDraw
+        // reaches, minus the attribute-values sync (a dispatch has no vertex stage) and the
+        // frontend link/SPIR-V gate below, which already has a record arm of its own. These are
+        // the 7 strict-lane entries of GetProgramForDispatch@DispatchCompute.
+        const SharedPtr<MG_State::GLState::ProgramObject> noFrontendProgram;
+        const auto& currentProgram =
+            DrawProgramFromRecords() ? noFrontendProgram : MGB_CTX->GetProgramForDispatch();
         const TextureImpl::DrawTextureSyncKeys textureKeys = TextureImpl::CaptureDrawTextureSyncKeys();
 
         BufferImpl::SyncComputeBuffers(includeDispatchIndirectBuffer);
