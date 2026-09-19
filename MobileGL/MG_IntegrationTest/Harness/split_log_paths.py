@@ -113,6 +113,107 @@ def print_marker_table(title, table):
         print(f"    {len(table[pair]):4d}  {pair}")
 
 
+def expect_fatal(document, junit_path, expected_path):
+    """THE DUAL-BLOCK LANE'S CENSUS AND TWO-SIDED RATCHET (P5f f1, P5F §4/§6).
+
+    The markers mode above ratchets the strict lane's ADMITTED pairs; the dual-block lane's
+    currency is the FATAL pair, because under MOBILEGL_IPC_ROLE_SPLIT_STATE=1 every
+    BARRIER-PULLED read aborts unconditionally (CountBarrierPull's dual-block arm) - the red
+    IS the list of fields that still read the other role's memory.
+
+    Three checks, all load-bearing:
+
+      1. EVERY failed entry with a private log carries at least one Fatal{UnmigratedPipeInput}
+         marker in it. A red entry without one is an UNNAMED crash - a segfault or an abort
+         from something else - which is precisely what the rehearsal must make impossible
+         (the O-class fields have no null check; without the Fatal arm they die nameless).
+      2. No ADMITTED marker anywhere: under the dual-block arm the Fatal fires before the
+         admission question is asked, so an Admitted line means the arm did not fire.
+      3. The Fatal pair set equals the committed expected file, BOTH ways - a new pair is a
+         debt somebody now owes, a vanished pair means a later f package retired it and the
+         file must lose the row in the same commit (the strict file's rule, ID-119).
+
+    A green entry needs no marker and asserts nothing; the lane turning fully green with an
+    empty expected file IS the P5f exit state, which this mode then verifies rather than
+    obstructs."""
+    logs = marker_log_paths(document)
+    cases = ET.parse(junit_path).getroot().findall(".//testcase")
+    by_name = {}
+    for case in cases:
+        by_name.setdefault(case.get("name"), []).append(case)
+
+    problems = []
+    fatal, admitted, escalated = {}, {}, {}
+    scanned = 0
+    skipped = 0
+    green = 0
+    red = 0
+    for name, entries in sorted(by_name.items()):
+        if any(c.find("skipped") is not None for c in entries):
+            skipped += 1
+            continue
+        failed = any(c.find("failure") is not None or c.get("status") == "fail"
+                     for c in entries)
+        if not failed:
+            green += 1
+            continue
+        red += 1
+        path = logs.get(name)
+        if path is None:
+            problems.append(f"{name} is RED and declares no MOBILEGL_LOG_FILE_PATH, so the "
+                            "red cannot be shown to be a named Fatal - an unnamed crash is "
+                            "exactly what this lane exists to forbid")
+            continue
+        if not Path(path).is_file():
+            problems.append(f"{name} is RED and its private log {path} does not exist - the "
+                            "process died before it could write one, which is an unnamed crash")
+            continue
+        scanned += 1
+        text = Path(path).read_text(errors="replace")
+        entry_fatal = set()
+        for tag, field, verb, why in MARKER_RE.findall(text):
+            pair = f"{field}@{verb}"
+            if tag == "Fatal":
+                entry_fatal.add(pair)
+                fatal.setdefault(pair, set()).add(name)
+            elif (why or "").strip() == "ADMITTED-ESCALATED":
+                escalated.setdefault(pair, set()).add(name)
+            else:
+                admitted.setdefault(pair, set()).add(name)
+        if not entry_fatal:
+            problems.append(f"{name} is RED but its private log carries no "
+                            "Fatal{UnmigratedPipeInput} marker - an unnamed failure, not a "
+                            "census entry")
+
+    print(f"SplitLogPaths expect-fatal: {len(by_name)} entrie(s) in the run - "
+          f"{green} green, {skipped} skipped, {red} red ({scanned} with a private log scanned)")
+    print_marker_table("Fatal{UnmigratedPipeInput", fatal)
+    if admitted or escalated:
+        problems.append("%d Admitted marker(s) under the dual-block knob - the unconditional "
+                        "Fatal arm in CountBarrierPull did not fire first: %s"
+                        % (len(admitted) + len(escalated),
+                           ", ".join(sorted(set(admitted) | set(escalated)))))
+
+    expected = read_pair_set(expected_path)
+    observed = set(fatal)
+    appeared = sorted(observed - expected)
+    vanished = sorted(expected - observed)
+    if appeared:
+        problems.append("%d Fatal pair(s) the lane has not seen before: %s. Each is a field "
+                        "that reads the other role's memory - add it to %s with the package "
+                        "that retires it, or retire it."
+                        % (len(appeared), ", ".join(appeared), Path(expected_path).name))
+    if vanished:
+        problems.append("%d expected pair(s) no longer appear: %s. Remove them from %s in the "
+                        "commit that retired them - an expected set that keeps rows nothing "
+                        "writes any more is how this lane rots green."
+                        % (len(vanished), ", ".join(vanished), Path(expected_path).name))
+    if problems:
+        raise ValueError("the dual-block lane's fatal ratchet: " + " | ".join(problems))
+    print(f"SplitLogPaths expect-fatal: ratchet OK - {len(observed)} fatal pair(s), "
+          f"zero admitted, every red entry named")
+
+
 def markers(document, selector, allowed_path, expected_path, require_no_fatal):
     """THE TWO-SIDED RATCHET (ID-119).
 
@@ -189,6 +290,9 @@ def main():
     if mode == "markers":
         markers(json.loads(Path(sys.argv[2]).read_text()), sys.argv[3], sys.argv[4], sys.argv[5],
                 len(sys.argv) > 6 and sys.argv[6] == "no-fatal")
+        return
+    if mode == "expect-fatal":
+        expect_fatal(json.loads(Path(sys.argv[2]).read_text()), sys.argv[3], sys.argv[4])
         return
     selected = paths(json.loads(Path(sys.argv[2]).read_text()))
     selected = {name: path for name, path in selected.items() if re.search(sys.argv[3], name)}

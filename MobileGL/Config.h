@@ -535,6 +535,17 @@ namespace MobileGL::MG_Config {
         // build, the seven sticky forwards that are otherwise exempt - from "count it in
         // rsp" to Fatal (R-7.3).
         Bool StrictErrors = false;
+        // MOBILEGL_IPC_ROLE_SPLIT_STATE (P5f f1, P5F-WIRE-COMPLETENESS.md §4): the dual-block
+        // rehearsal. 1 = the client's residual fill writes a CLIENT-ROLE PipeInputs block and
+        // the backend/applier keep reading the SERVER-ROLE one, so every path that today works
+        // only because the two roles share one object turns into a named
+        // Fatal{UnmigratedPipeInput, "<field>@<verb>"} instead of a silent cross-role read.
+        // Meaningless under monolith transport (the two roles are one thread there, so the
+        // selection folds to the single shared block) and forced off by MOBILEGL_PIPE_VERIFY
+        // (the comparator owns the one fill block it compares against). 0 is not merely the
+        // default, it is the negative control: the lane's distinctness case must go red
+        // without it (P5F §6).
+        Bool RoleSplitState = false;
         // MOBILEGL_IPC_AUDIT: after a record retires, the server fills the SEG_STAGE bytes
         // it referenced with 0xDD (R-2.5). This is the ONLY mechanical control that an
         // inproc implementation did not quietly keep using a pointer past its lifetime.

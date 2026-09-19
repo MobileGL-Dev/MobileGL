@@ -1,0 +1,30 @@
+# The Fatal{UnmigratedPipeInput} pairs the dual-block lane ACTUALLY PRODUCES under
+# MOBILEGL_IPC_ROLE_SPLIT_STATE=1 + MOBILEGL_IPC_STRICT_ERRORS=1, one `<field>@<verb>` per line.
+#
+# P5f (f1), P5F-WIRE-COMPLETENESS.md §4. This is the strict-expected-markers.txt shape turned
+# around: the strict lane ratchets ADMITTED pulls (debts a phase has agreed to leave standing);
+# this file ratchets the FATAL census of the dual-block rehearsal, which is the full list of
+# "this read only ever worked because both roles shared one gPipeInputs". Every entry in the
+# census lane aborts on its FIRST such read, so the pairs below are first-blockers, and retiring
+# one advances the entry to its next one - the file shrinks package by package (fm/fs/fr/fv)
+# and P5f's exit is this file empty with the lane green.
+#
+# TWO-SIDED, same rule as the strict file (ID-119): split_log_paths.py's `expect-fatal` mode
+# fails when a pair appears that is not listed here AND when a pair listed here no longer
+# appears. Remove a row in the commit that retires it.
+#
+# HOW TO REFRESH (never by hand from a guess):
+#   ctest --test-dir build-split -L 'integration-split|integration-magma-split' \
+#       --show-only=json-v1 > lane.json
+#   # reset the private logs, then:
+#   MOBILEGL_IPC_ROLE_SPLIT_STATE=1 MOBILEGL_IPC_STRICT_ERRORS=1 \
+#       ctest --test-dir build-split -L 'integration-split|integration-magma-split' -j 4 \
+#       --output-junit dualblock.xml
+#   python3 MobileGL/MG_IntegrationTest/Harness/split_log_paths.py expect-fatal \
+#       lane.json dualblock.xml this-file
+# and put the census it prints here.
+#
+# ---------------------------------------------------------------------------------------------
+# INITIAL CENSUS (f1, measured on the WSL gate tree - see docs/Disaggregated/notes/p5f/
+# f1-report.md for the run):
+# ---------------------------------------------------------------------------------------------

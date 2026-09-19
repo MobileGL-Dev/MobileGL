@@ -834,6 +834,61 @@ namespace MobileGL::MG_Pipe {
     // (P3a; the exit-time heap corruption this closes is p3a-results/exit-order-v1.md.)
     inline PipeInputs& gPipeInputs = *new PipeInputs();
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // ============================================================================
+    // P5f (f1), P5F-WIRE-COMPLETENESS.md §4: THE DUAL-BLOCK REHEARSAL
+    // ============================================================================
+    //
+    // One gPipeInputs served both roles because the verb barrier (R-1) made "the client filled
+    // it" and "the server is reading it" mutually exclusive in TIME on the same object. The
+    // rehearsal removes the same-object half of that sentence: under
+    // MOBILEGL_IPC_ROLE_SPLIT_STATE=1 the client's residual fill writes the CLIENT block below
+    // and the backend/applier keep reading gPipeInputs, which is the SERVER block. Every path
+    // that worked only because the two were one object - a BARRIER-PULLED field, a sticky
+    // forward's read of the fill side's stamps - then has no value to read, and the read
+    // becomes a NAMED Fatal{UnmigratedPipeInput, "<field>@<verb>"} (CountBarrierPull's
+    // dual-block arm, PipeInputs.cpp) instead of a silent cross-role answer.
+    //
+    // THE READ SIDE'S SPELLING DOES NOT MOVE. gPipeInputs remains the server-role block, so the
+    // 379 MGB_CTX sites and PipeApply.cpp's applier writes are untouched; the only new spelling
+    // is on the fill side (MG_Impl/Pipe/PipeFill.cpp), which asks MGPipeClientInputs(). Under
+    // monolith transport - every unit and integration-gpu lane of a split build - the selection
+    // folds back to the single shared block and behaviour is byte-for-byte the old one.
+    //
+    // Same leak-at-exit storage as gPipeInputs above, for the same reason.
+    inline PipeInputs& gPipeInputsClientBlock = *new PipeInputs();
+
+    // PipeInputs.cpp. Whether the rehearsal is armed: the knob AND a real transport (and not
+    // the verify build, which ConfigLoader forces off). Constant for the life of the process.
+    Bool MGPipeRoleSplitActive();
+    // PipeInputs.cpp. THE FILL SIDE'S ONE NEW SPELLING: the client block when the rehearsal is
+    // armed, gPipeInputs otherwise. Everything in MG_Impl/Pipe/PipeFill.cpp that used to spell
+    // gPipeInputs spells this instead.
+    PipeInputs& MGPipeClientInputs();
+    // PipeInputs.cpp. The client-role half of MGPipeServerClearVerbBoundary: clears the stamp
+    // flag on the FILL side's block. With the rehearsal off that IS gPipeInputs, so the two
+    // client call sites keep their old semantics exactly; with it on the client block's flag is
+    // never raised (nothing server-stamps it) and the clear is a no-op - which is the point:
+    // the client no longer reaches into the server's block at all.
+    void MGPipeClientClearVerbBoundary();
+    // PipeInputs.cpp. CONTRACT-P5E §3.2's other half: the server block's identity is
+    // SERVER-OWNED. Called from PipeApplier::Attach and from MGPipeServerStampVerbBoundary;
+    // with the rehearsal armed it sets m_live and points m_contextIdentity at a token derived
+    // from MGPipeApplierContextSerial() - the server's own served-context clock, which is what
+    // moves when the served context does. Without it the server block's ContextIdentity() would
+    // stay nullptr, and DirectGLES' fb-slot memo cache compares identity FIRST (a nullptr
+    // against its own nullptr initialiser reads as a hit and hands out a null slot): an
+    // unnamed crash where the rehearsal exists to produce a named one. A no-op with the
+    // rehearsal off, so the client's per-verb SetIdentity keeps owning the shared block there.
+    void MGPipeServerBlockNoteIdentity();
+#else
+    // The push-without-transport build has one role and one block, so the fill side's spelling
+    // folds onto gPipeInputs and PipeFill.cpp reads identically in both build flavours. An
+    // inline that no caller in such a build ever has a reason to call twice - the disaggregated
+    // arm above is the real one.
+    inline PipeInputs& MGPipeClientInputs() { return gPipeInputs; }
+#endif
+
     // Every field has storage or is forwarded, and nothing else.
 #define MGP_INPUT_COUNT_ONE(Field, Member) +1
     static_assert(0 MGP_INPUT_STORAGE_LIST(MGP_INPUT_COUNT_ONE) + kMGPipeForwardedFieldCount == kMGPipeInputFieldCount,

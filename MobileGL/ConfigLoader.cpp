@@ -393,17 +393,28 @@ namespace MobileGL::MG_ConfigLoader {
         ipc.StrictErrors = QueryEnvFlag("MOBILEGL_IPC_STRICT_ERRORS");
         ipc.Audit = QueryEnvFlag("MOBILEGL_IPC_AUDIT");
         QueryEnvVariable("MOBILEGL_IPC_SERVER_AFFINITY", ipc.ServerAffinity, "auto");
+        // P5f f1: the dual-block rehearsal (P5F-WIRE-COMPLETENESS.md §4). Forced OFF by the
+        // verify harness: the comparator's entry compare and compare-at-read hook are built on
+        // there being ONE filled block (the hook pins itself to &gPipeInputs,
+        // PipeFill.cpp's MGPipeVerifyReadHook), which is exactly what the rehearsal splits.
+        ipc.RoleSplitState = QueryEnvFlag("MOBILEGL_IPC_ROLE_SPLIT_STATE");
+        if (MG_Config::Features.PipeVerify && ipc.RoleSplitState) {
+            MGLOG_W("Config: MOBILEGL_IPC_ROLE_SPLIT_STATE=1 is incompatible with "
+                    "MOBILEGL_PIPE_VERIFY (the comparator owns the single fill block); "
+                    "the dual-block rehearsal is OFF for this run");
+            ipc.RoleSplitState = false;
+        }
 
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
         // One line, on the arm where these numbers decide behaviour, because every one of
         // them is a number a bug report has to quote.
         MGLOG_I("Config: IPC ring=%uMiB stage=%uMiB spin=%uus persistent-block=%uKiB "
                 "adopt-tier=%u verb-barrier=%u run-ahead=%u present-credit=%u strict=%d "
-                "audit=%d affinity='%s'",
+                "audit=%d role-split-state=%d affinity='%s'",
                 ipc.RingMb, ipc.StageMb, ipc.SpinUs, ipc.PersistentBlockKb, ipc.AdoptTier,
                 ipc.VerbBarrier, ipc.RunAhead, ipc.PresentCredit,
                 static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit),
-                ipc.ServerAffinity.c_str());
+                static_cast<int>(ipc.RoleSplitState), ipc.ServerAffinity.c_str());
         if (ipc.VerbBarrier == 0) {
             MGLOG_W("Config: MOBILEGL_IPC_VERB_BARRIER=0 is the R-1 NEGATIVE CONTROL and is "
                     "expected to fail: the client still pulls 31 of 63 PipeInputs fields from a "

@@ -160,6 +160,20 @@ namespace MobileGL::MG_Pipe {
         // MGPipeBarrierPullAdmitted is generated from those three tables (ID-116); there is no
         // list here to drift.
         void CountBarrierPull(MGPipeInputField field, MGPipeVerb verb) {
+            // P5f (f1), P5F-WIRE-COMPLETENESS.md §4: UNDER THE DUAL-BLOCK REHEARSAL EVERY
+            // BARRIER-PULLED READ IS A NAMED FATAL, unconditionally - ahead of the barriered
+            // question, ahead of the strict knob, ahead of the counter. The server block has no
+            // residual fill to answer from, so the value the read would return is not "torn"
+            // or "stale" but ABSENT: the field's stamp was withdrawn by the server's own verb
+            // boundary and nothing on this side of the role split ever writes it. Letting the
+            // read proceed would hand the backend default storage - or, for the O-class rows
+            // with no null check, an empty SharedPtr to dereference - which is an UNNAMED
+            // crash exactly where the rehearsal exists to produce a named one. The red is the
+            // census (Harness/dualblock-expected-fatals.txt), so the marker keeps the strict
+            // grammar with the knob's own name as the reason.
+            if (MGPipeRoleSplitActive()) {
+                StrictBarrierPullFatal(field, verb, "MOBILEGL_IPC_ROLE_SPLIT_STATE=1");
+            }
             if (!MGPipeApplierCurrentRecordIsBarriered()) {
                 StrictBarrierPullFatal(field, verb, "UNBARRIERED, the client did not fill it");
             }
@@ -260,7 +274,49 @@ namespace MobileGL::MG_Pipe {
         static void SetServerStamped(PipeInputs& inputs, Bool stamped) {
             inputs.m_serverStampedVerb = stamped;
         }
+        // P5f (f1): the server block's identity half of the stamp door (CONTRACT-P5E §3.2).
+        // The client's SetIdentity lives in MG_Impl's MGPipeFillAccess and writes the CLIENT
+        // block now; this one is how the server block learns which served context it describes
+        // without MG_Impl being in the process at all.
+        static void SetIdentity(PipeInputs& inputs, Bool live, const void* identity) {
+            inputs.m_live = live;
+            inputs.m_contextIdentity = identity;
+        }
     };
+
+    // ---- P5f (f1): the dual-block rehearsal's selection functions (PipeInputs.h) -----------
+    //
+    // MGPipeRoleSplitActive is deliberately NOT latched: it is two global loads, asked once per
+    // verb on the fill side and once per verb boundary on the stamp side, and a latch is a
+    // second thing a test that flips the knob mid-process would have to know about.
+    Bool MGPipeRoleSplitActive() {
+        return MG_Config::Ipc.RoleSplitState &&
+               MG_Config::Transport != MG_Config::TransportMode::Monolith;
+    }
+
+    PipeInputs& MGPipeClientInputs() {
+        return MGPipeRoleSplitActive() ? gPipeInputsClientBlock : gPipeInputs;
+    }
+
+    void MGPipeClientClearVerbBoundary() {
+        MGPipeStampAccess::SetServerStamped(MGPipeClientInputs(), false);
+    }
+
+    void MGPipeServerBlockNoteIdentity() {
+        if (!MGPipeRoleSplitActive()) return;
+        // The server cannot name the client's GLContext - under a real transport it is in
+        // another process - so the identity the server block carries is the server's OWN
+        // served-context clock: MGPipeApplierContextSerial moves exactly when the served
+        // context does (MGPipeApplierReset), which is all the backends' per-context memo keys
+        // ask of an identity. The odd-encoding keeps the token non-null at serial 0: a null
+        // identity reads as a hit against DirectGLES' zero-initialised fb-slot memo cache and
+        // hands out a null slot - an unnamed crash where the rehearsal exists to produce a
+        // named one.
+        const Uint64 serial = MGPipeApplierContextSerial();
+        MGPipeStampAccess::SetIdentity(gPipeInputs, true,
+                                       reinterpret_cast<const void*>(static_cast<std::uintptr_t>(
+                                           (serial << 1) | Uint64{1})));
+    }
 
     void MGPipeServerStampVerbBoundary(MGPipeVerb verb) {
         PipeInputs& inputs = gPipeInputs;
@@ -302,6 +358,11 @@ namespace MobileGL::MG_Pipe {
             filled.FilledGen[i] = serial & (Uint64{0} - bit);
         }
         MGPipeStampAccess::SetServerStamped(inputs, true);
+        // P5f (f1): the server block's identity rides the stamp (CONTRACT-P5E §3.2's
+        // "SetIdentity moves to ApplyOne" - the stamp is the per-verb half of ApplyOne, and
+        // refreshing here rather than once at Attach keeps the token in step with
+        // MGPipeApplierContextSerial across a context switch). A no-op with the rehearsal off.
+        MGPipeServerBlockNoteIdentity();
     }
 
     void MGPipeServerClearVerbBoundary() { MGPipeStampAccess::SetServerStamped(gPipeInputs, false); }

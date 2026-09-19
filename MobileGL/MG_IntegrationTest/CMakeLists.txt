@@ -2496,3 +2496,58 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_STRICT_ARMING_ENVIRONMENT}"
     )
 endif()
+
+# =====================================================================================
+# P5f (f1), P5F-WIRE-COMPLETENESS.md §4/§6: THE DUAL-BLOCK REHEARSAL'S OWN LANE
+# =====================================================================================
+#
+# The lane has TWO halves, and only one of them registers entries here:
+#
+#   - the CENSUS half is an environment-variable lane, exactly like strict: the gate runs the
+#     EXISTING `integration-split` entries under MOBILEGL_IPC_ROLE_SPLIT_STATE=1 +
+#     MOBILEGL_IPC_STRICT_ERRORS=1, and every BARRIER-PULLED read there aborts with a named
+#     Fatal{UnmigratedPipeInput, "<field>@<verb>"} - the red IS the census, collected and
+#     ratcheted against Harness/dualblock-expected-fatals.txt by split_log_paths.py's
+#     `expect-fatal` mode. Re-registering the whole set under a second prefix would double the
+#     discovered test count for zero new information.
+#
+#   - the CONTROL half is the one entry below: DualBlockScenario is the mechanism's negative
+#     control (§6: turning the knob OFF must turn a named case from green to red), so it needs
+#     an entry of its own, under a label of its own.
+#
+# THE LABEL IS `integration-dualblock-split`, and the spelling is load-bearing twice over
+# (ID-131): `ctest -L` is a REGEX, so a label CONTAINING `integration-split` as a substring
+# would be selected by the main lane's runs - and this one is expected-red there, which must
+# never poison the hard-green gate. Checked both directions: `-L integration-split` does not
+# match it (`dualblock` stands between the two words), and `-L integration-dualblock-split`
+# matches nothing else in the tree. It does not carry `integration-gpu` either: that label must
+# be able to go green, and this entry goes green only under the armed knob.
+#
+# THE KNOB IS NOT PINNED IN THE ENTRY'S ENVIRONMENT, deliberately, and that is the ONE deviation
+# from the N-6 pinning rule every other split entry follows: a ctest ENVIRONMENT property
+# overrides the process environment, so pinning MOBILEGL_IPC_ROLE_SPLIT_STATE=1 here would make
+# the knob=0 form - which IS the negative control - unreachable through ctest. The failure
+# direction is safe: a bare `-L integration-dualblock-split` run without the knob is RED by
+# name, never silently green.
+#
+# MOBILEGL_IPC_RUN_AHEAD=0 IS pinned: the serial-separation half asserts on the fill side's
+# behaviour per verb boundary, and under run-ahead an unbarriered verb fills nothing, which
+# would make the assertion timing-dependent instead of deterministic.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    target_sources(MobileGLIntegrationTest PRIVATE
+        Scenarios/DualBlockScenario.cpp Harness/DualBlockPeek.cpp)
+    mgl_itest_join_environment(MGL_ITEST_GLES_DUALBLOCK_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc"
+        "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
+        "MOBILEGL_IPC_RUN_AHEAD=0"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Split.DualBlock."
+        TEST_FILTER "DualBlockScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-dualblock-split"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_DUALBLOCK_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/split-logs/DirectGLES.Split.DualBlock.TheTwoRolesHaveDistinctBlocks.log"
+    )
+endif()

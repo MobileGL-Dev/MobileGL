@@ -865,6 +865,104 @@ TEST_F(FieldOwnershipTest, ResidualPullsReachThePublishedPerFrameCounter) {
     PS::SetEnabledForTesting(false);
 }
 
+// ================================================================================
+// P5f (f1): THE DUAL-BLOCK REHEARSAL AT THE BLOCK LEVEL (P5F-WIRE-COMPLETENESS.md §4)
+// ================================================================================
+//
+// MOBILEGL_IPC_ROLE_SPLIT_STATE=1 gives the fill side its own PipeInputs block
+// (MGPipeClientInputs()) and leaves gPipeInputs to the server alone. These cases pin the
+// mechanism's three arms without a transport running: the selection folds to the shared block
+// when the knob is off OR the transport is monolith, the two blocks are distinct objects when
+// it is armed, and a BARRIER-PULLED read under it is a NAMED Fatal with no strict knob
+// involved (the fork cases below).
+
+namespace {
+    // Arms the rehearsal by hand - the knob is parsed from the environment once per process,
+    // so a case sets the two globals directly, and the guard puts them back on every exit
+    // path, ASSERT death included.
+    struct RoleSplitArm {
+        RoleSplitArm() {
+            m_previousTransport = MG_Config::Transport;
+            m_previousKnob = MG_Config::Ipc.RoleSplitState;
+        }
+        ~RoleSplitArm() {
+            MG_Config::Transport = m_previousTransport;
+            MG_Config::Ipc.RoleSplitState = m_previousKnob;
+        }
+        void Arm(Bool arm) {
+            MG_Config::Ipc.RoleSplitState = arm;
+            MG_Config::Transport = arm ? MG_Config::TransportMode::InProcess
+                                       : MG_Config::TransportMode::Monolith;
+        }
+        MG_Config::TransportMode m_previousTransport;
+        Bool m_previousKnob;
+    };
+} // namespace
+
+TEST_F(FieldOwnershipTest, RoleSplitOffFoldsTheFillSideOntoTheSharedBlock) {
+    EXPECT_FALSE(MGPipeRoleSplitActive());
+    EXPECT_EQ(&MGPipeClientInputs(), &gPipeInputs);
+}
+
+// The knob alone is not the arm: under monolith transport the two roles are one thread and
+// there is exactly one block, or every read would starve. This is the fold the whole unit
+// lane and the integration-gpu lane of a split build stand on.
+TEST_F(FieldOwnershipTest, RoleSplitUnderMonolithTransportIsStillOneBlock) {
+    RoleSplitArm guard;
+    MG_Config::Ipc.RoleSplitState = true;
+    MG_Config::Transport = MG_Config::TransportMode::Monolith;
+    EXPECT_FALSE(MGPipeRoleSplitActive());
+    EXPECT_EQ(&MGPipeClientInputs(), &gPipeInputs);
+}
+
+TEST_F(FieldOwnershipTest, RoleSplitGivesTheFillSideADistinctBlockTheStampNeverTouches) {
+    RoleSplitArm guard;
+    guard.Arm(true);
+    ASSERT_TRUE(MGPipeRoleSplitActive());
+    ASSERT_NE(&MGPipeClientInputs(), &gPipeInputs);
+
+    const Uint64 serverSerialBefore = gPipeInputs.FilledState().CurrentVerbSerial;
+    const Uint64 clientSerialBefore = MGPipeClientInputs().FilledState().CurrentVerbSerial;
+    MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
+    EXPECT_EQ(gPipeInputs.FilledState().CurrentVerbSerial, serverSerialBefore + 1);
+    EXPECT_EQ(MGPipeClientInputs().FilledState().CurrentVerbSerial, clientSerialBefore)
+        << "the server's verb stamp reached into the client block";
+    EXPECT_TRUE(gPipeInputs.ServerStampedVerb());
+    EXPECT_FALSE(MGPipeClientInputs().ServerStampedVerb());
+
+    // The fill side's clear is the client block's own: it must not disarm the server's stamp,
+    // which is CONTRACT-P5E §3.2's "the server's stamp is server-private" as a fact rather
+    // than as a comment.
+    MGPipeClientClearVerbBoundary();
+    EXPECT_TRUE(gPipeInputs.ServerStampedVerb())
+        << "the client-role clear withdrew the SERVER's stamp";
+    MGPipeServerClearVerbBoundary();
+    EXPECT_FALSE(gPipeInputs.ServerStampedVerb());
+
+    // And the server block's identity is server-owned under the rehearsal (§3.2's other half):
+    // the stamp set it, and it is non-null - a null identity reads as a hit against
+    // DirectGLES' zero-initialised fb-slot memo cache, which is the unnamed crash this line
+    // exists to preclude.
+    EXPECT_NE(gPipeInputs.ContextIdentity(), nullptr);
+}
+
+// The fill side's writers land in the client block alone. MGPipeLeaveVerb rather than
+// MGPipeValidateForVerb: the validate point's step 3 EMITS, which is session machinery this
+// process does not have, while LeaveVerb's serial bump and verb reset are exactly the fill
+// side's write shape with nothing else in the way.
+TEST_F(FieldOwnershipTest, TheClientVerbLeaveWritesTheClientBlockAlone) {
+    RoleSplitArm guard;
+    guard.Arm(true);
+    ASSERT_NE(&MGPipeClientInputs(), &gPipeInputs);
+    const Uint64 serverSerialBefore = gPipeInputs.FilledState().CurrentVerbSerial;
+    const Uint64 clientSerialBefore = MGPipeClientInputs().FilledState().CurrentVerbSerial;
+    MGPipeLeaveVerb();
+    EXPECT_EQ(MGPipeClientInputs().FilledState().CurrentVerbSerial, clientSerialBefore + 1);
+    EXPECT_EQ(gPipeInputs.FilledState().CurrentVerbSerial, serverSerialBefore)
+        << "a fill-side write reached the server block";
+    EXPECT_EQ(MGPipeClientInputs().CurrentVerb(), MGPipeVerb::kVerbCount);
+}
+
 #if MGTEST_HAVE_FORK
 
 // R-7.3's proof that the instrumentation can go red. An instrumentation that cannot is
@@ -1115,6 +1213,42 @@ TEST_F(FieldOwnershipTest, AnUnmigratedEmulationIsFatalUnderARealTransportAndIne
     ASSERT_TRUE(DiedOfAbort(split)) << DescribeStatus(split) << "\n" << split.Log;
     EXPECT_NE(split.Log.find("Fatal{UnmigratedEmulation, \"get-tex-image-shadow\"}"), std::string::npos)
         << split.Log;
+}
+
+// P5f (f1): THE REHEARSAL'S FATAL ARM, AND THE PROOF IT NEEDS NO OTHER KNOB. Under
+// MOBILEGL_IPC_ROLE_SPLIT_STATE=1 a BARRIER-PULLED read is Fatal{UnmigratedPipeInput} with
+// StrictErrors FALSE - the server block has no residual fill to answer from, so the read has
+// no legal value whatever the strict knob says, and the marker names the knob that armed it.
+// This is also the red-once for the lane's "no unnamed crashes" gate: the read below is an
+// O-class SharedPtr field, which without this arm would hand the backend an empty pointer to
+// dereference.
+TEST_F(FieldOwnershipTest, DualBlockMakesABarrierPulledReadANamedAbortWithoutStrict) {
+    const ChildResult r = RunInChild([] {
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        MG_Config::Ipc.RoleSplitState = true;
+        MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
+        (void)gPipeInputs.GetBoundVertexArray();
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"),
+              std::string::npos)
+        << r.Log;
+    EXPECT_NE(r.Log.find("BARRIER-PULLED"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("MOBILEGL_IPC_ROLE_SPLIT_STATE=1"), std::string::npos) << r.Log;
+}
+
+// ... and the same read with the knob set but the transport MONOLITH is the folded arm: one
+// block, the pull counted, no Fatal. The knob is not the mechanism; the knob AND a real
+// transport are.
+TEST_F(FieldOwnershipTest, DualBlockDoesNotArmUnderMonolithTransport) {
+    const ChildResult r = RunInChild([] {
+        MG_Config::Ipc.RoleSplitState = true; // the knob, with no transport behind it
+        MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
+        (void)gPipeInputs.GetBoundVertexArray();
+        if (MGPipeResidualPullCount() != 1) ::_exit(7);
+    });
+    ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_EQ(r.Log.find("Fatal{"), std::string::npos) << r.Log;
 }
 
 #endif // MGTEST_HAVE_FORK

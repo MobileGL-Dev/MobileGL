@@ -624,9 +624,9 @@ namespace MobileGL::MG_Pipe {
         }
 
         void ReportDivergence(MGPipeInputField field, const char* where) {
-            const Uint64 serial = MGPipeFillAccess::Filled(gPipeInputs).CurrentVerbSerial;
+            const Uint64 serial = MGPipeFillAccess::Filled(MGPipeClientInputs()).CurrentVerbSerial;
             MGLOG_F("MGPipe: Fatal{PipeVerifyDiffer, \"%s@%s\", verb=%llu, where=%s}",
-                    kMGPipeInputFieldNames[static_cast<SizeT>(field)], MGPipeVerbName(gPipeInputs.CurrentVerb()),
+                    kMGPipeInputFieldNames[static_cast<SizeT>(field)], MGPipeVerbName(MGPipeClientInputs().CurrentVerb()),
                     static_cast<unsigned long long>(serial), where);
             if (g_verify.Fatal) std::abort();
             g_verify.Divergences.fetch_add(1, std::memory_order_relaxed);
@@ -650,7 +650,7 @@ namespace MobileGL::MG_Pipe {
     void SnapshotFromGLContext(PipeInputs& snapshot, const MGPipeFieldMask& mask) {
         auto* ctx = LiveContext();
         MGPipeFillAccess::SetIdentity(snapshot, ctx);
-        MGPipeFillAccess::SetVerb(snapshot, gPipeInputs.CurrentVerb());
+        MGPipeFillAccess::SetVerb(snapshot, MGPipeClientInputs().CurrentVerb());
         if (ctx == nullptr) return;
         for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
             const auto field = static_cast<MGPipeInputField>(i);
@@ -700,7 +700,7 @@ namespace MobileGL::MG_Pipe {
     // filled must stay Fatal{UnmigratedPipeInput} on the next read rather than be healed by
     // an unrelated frontend write.
     void MGPipeNoteFrontendMutation(MGPipeInputField field) {
-        PipeInputs& inputs = gPipeInputs;
+        PipeInputs& inputs = MGPipeClientInputs();
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P5e (ra, CONTRACT-P5E §3.1): THIS REFRESHES ONE FIELD OF THE LAST FILL, so with no
         // fill behind it there is nothing to refresh. Under run-ahead the last verb may have
@@ -1214,7 +1214,7 @@ namespace MobileGL::MG_Pipe {
     // fill only for UNBARRIERED records); an unbarriered apply may not read it at all, and
     // §3.3's detector is what says so by name. Clearing the stamps as well would trade that
     // named abort for the poison Fatal, which names the field but not the rule it broke.
-    void MGPipeReleaseResidualFillPins() { MGPipeFillAccess::ReleaseObjectPins(gPipeInputs); }
+    void MGPipeReleaseResidualFillPins() { MGPipeFillAccess::ReleaseObjectPins(MGPipeClientInputs()); }
 
     // P5e (ra), CONTRACT-P5E §2.5. Declared in PipeMutation.h; see there for why it is not a
     // ClientSession call at the GL entry point.
@@ -2202,7 +2202,7 @@ namespace MobileGL::MG_Pipe {
     Uint32 MGPipePendingBaseInstance() { return MGPipeTrackerInstance().PendingBaseInstance(); }
 
     void MGPipeLeaveVerb() {
-        PipeInputs& inputs = gPipeInputs;
+        PipeInputs& inputs = MGPipeClientInputs();
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P5e (ra, §3.1): a verb whose fill was skipped has no stamps of this thread's to
         // retire, and the bump below would move a serial the SERVER's stamp owns. Leave
@@ -2225,7 +2225,7 @@ namespace MobileGL::MG_Pipe {
         ++MGPipeFillAccess::Filled(inputs).CurrentVerbSerial;
 #endif
 #if MOBILEGL_BUILD_DISAGGREGATED
-        MGPipeServerClearVerbBoundary();
+        MGPipeClientClearVerbBoundary();
 #endif
         MGPipeFillAccess::SetVerb(inputs, MGPipeVerb::kVerbCount);
         // The pending base instance belongs to the verb that was about to run, so leaving
@@ -3013,7 +3013,7 @@ namespace MobileGL::MG_Pipe {
 #if MOBILEGL_BUILD_DISAGGREGATED
             if (ClientRunsAhead()) return sizeof(MGPVertexAttribDefaults) + header.Count * sizeof(MGPAttribValue);
 #endif
-            const auto* mirror = MGPipeFillAccess::VertexAttribDefaultsOf(gPipeInputs);
+            const auto* mirror = MGPipeFillAccess::VertexAttribDefaultsOf(MGPipeClientInputs());
             Bool reproduced = true;
             for (SizeT i = 0; i < kAttribs && reproduced; ++i) {
                 if ((header.Mask & (Uint32{1} << static_cast<Uint32>(i))) == 0) continue;
@@ -3024,7 +3024,7 @@ namespace MobileGL::MG_Pipe {
                 MGLOG_W_ONCE("MGPipe: MGPipeApplySetVertexAttribDefaults did not reproduce the "
                              "carried three views on this build - the client is keeping "
                              "m_currentVertexAttribute authoritative");
-                MGPipeFillAccess::CopyField(gPipeInputs, ctx, MGPipeInputField::GetCurrentVertexAttribute);
+                MGPipeFillAccess::CopyField(MGPipeClientInputs(), ctx, MGPipeInputField::GetCurrentVertexAttribute);
             }
             return sizeof(MGPVertexAttribDefaults) + header.Count * sizeof(MGPAttribValue);
         }
@@ -3345,7 +3345,10 @@ namespace MobileGL::MG_Pipe {
 
     // ---- the validate point (P2 brief D1) ----
     void MGPipeValidateForVerb(MGPipeVerb verb) {
-        PipeInputs& inputs = gPipeInputs;
+        // P5f (f1): the fill side's one new spelling. With MOBILEGL_IPC_ROLE_SPLIT_STATE=1 this
+        // is the CLIENT-role block and gPipeInputs is the server's alone; off, or under
+        // monolith transport, it folds back onto gPipeInputs and nothing below changes.
+        PipeInputs& inputs = MGPipeClientInputs();
 #if MOBILEGL_BUILD_DISAGGREGATED
         // ---- P5e (ra), CONTRACT-P5E §3: WHO OWNS gPipeInputs FOR THIS VERB ----------------
         //
@@ -3434,7 +3437,14 @@ namespace MobileGL::MG_Pipe {
             // while the apply thread is inside a record that depends on it. For an unbarriered
             // verb the stamp is not touched at all, and the applier's own LeaveApplier is then
             // its only writer.
-            MGPipeServerClearVerbBoundary();
+            //
+            // P5f (f1): this is now the CLIENT block's flag (MGPipeClientClearVerbBoundary).
+            // With the rehearsal off both names denote the one shared block and the semantics
+            // above are unchanged; with it on the client block's flag is never raised and the
+            // clear is a no-op, and withdrawing the SERVER's stamp is the applier's job alone
+            // (PipeApplier::LeaveApplier) - which is CONTRACT-P5E §3.2's per-role stamp
+            // ownership, landed as the dual block rather than as moved fields.
+            MGPipeClientClearVerbBoundary();
 #endif
             MGPipeFillAccess::SetVerb(inputs, verb);
         }

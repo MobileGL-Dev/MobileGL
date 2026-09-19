@@ -1341,6 +1341,70 @@ jobs:
           fi
           echo "integration-split under strict is GREEN, two-sided, with the arming control present"
 
+      # ---- P5f (f1), P5F-WIRE-COMPLETENESS.md §4: THE DUAL-BLOCK CENSUS LANE ---------------
+      #
+      # The same integration-split entries (plus Magma's own lane), re-run under
+      # MOBILEGL_IPC_ROLE_SPLIT_STATE=1: the client's residual fill writes a client-role block
+      # and the backend reads a server-role one, so every BARRIER-PULLED read aborts with a
+      # named Fatal{UnmigratedPipeInput, "<field>@<verb>"}. THE RED IS THE CENSUS - it is the
+      # machine-checked list of what still depends on the two roles sharing one object, and it
+      # is ratcheted two-sided against Harness/dualblock-expected-fatals.txt: a new pair is a
+      # debt somebody now owes, a vanished pair must be removed in the commit that retired it.
+      #
+      # THE STEP ALSO FAILS WHEN THE LANE IS GREEN while the expected file still has rows -
+      # "green" would mean the knob stopped arming, which is exactly the decay ID-122 assigns
+      # to a control rather than to a lane's good mood. At P5f's exit the file is empty and the
+      # green arm is the correct one; delete the red expectation in the same commit.
+      - name: Integration-split under the dual-block rehearsal - expected red, census ratcheted (P5f f1)
+        working-directory: build-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_TRANSPORT: "inproc"
+          MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
+          MOBILEGL_IPC_STRICT_ERRORS: "1"
+        run: |
+          ulimit -c unlimited
+          helper="${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/split_log_paths.py"
+          expected="${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/dualblock-expected-fatals.txt"
+
+          ctest -L 'integration-split|integration-magma-split' --show-only=json-v1 \
+            > "${RUNNER_TEMP}/dualblock-lane.json"
+
+          # Stale logs from an earlier step would be read as this run's evidence (ID-119's rule).
+          python3 - "${RUNNER_TEMP}/dualblock-lane.json" "${helper}" <<'PY'
+          import importlib.util, json, os, sys
+          spec = importlib.util.spec_from_file_location("slp", sys.argv[2])
+          slp = importlib.util.module_from_spec(spec); spec.loader.exec_module(slp)
+          logs = slp.marker_log_paths(json.load(open(sys.argv[1])))
+          for path in set(logs.values()):
+              try:
+                  os.unlink(path)
+              except OSError:
+                  pass
+          print(f"reset {len(set(logs.values()))} private log(s) across {len(logs)} entries")
+          PY
+
+          rc=0
+          ctest -L 'integration-split|integration-magma-split' --no-tests=error -j 4 \
+            --output-junit "${RUNNER_TEMP}/dualblock.xml" \
+            > "${RUNNER_TEMP}/dualblock-split.txt" 2>&1 || rc=$?
+          tail -5 "${RUNNER_TEMP}/dualblock-split.txt"
+          echo "dual-block census run: rc=${rc}"
+
+          rows=$(grep -cvE '^\s*(#|$)' "${expected}")
+          if [ "${rc}" -eq 0 ] && [ "${rows}" -gt 0 ]; then
+            echo "::error::the dual-block census lane went GREEN with ${rows} expected pair(s) outstanding - the knob stopped arming, or the fields retired and dualblock-expected-fatals.txt was not emptied in the same commit"
+            exit 1
+          fi
+          python3 "${helper}" expect-fatal "${RUNNER_TEMP}/dualblock-lane.json" \
+            "${RUNNER_TEMP}/dualblock.xml" "${expected}"
+
+      # The mechanism's own negative control (P5F §6): the same named case must be green with
+      # the knob on and red - on its own assertion text - with it off.
+      - name: Dual-block negative control (P5f f1, P5F section 6)
+        working-directory: build-split
+        run: bash "${GITHUB_WORKSPACE}/scripts/ci/dualblock_negative_control.sh"
+
       # ---- P5e (gl), CONTRACT-P5E §7: MAGMA'S OWN LANE, EXPECTED RED -----------------------
       #
       # The two DirectVulkan.Split.NamedBlit entries abort on GetFramebufferBindingSlot@Clear

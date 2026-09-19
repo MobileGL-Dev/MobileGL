@@ -1145,6 +1145,12 @@ namespace MobileGL::MG_Remote::Server {
         m_verbs.SetBackend(backend);
         m_decoder = Wire::PipeWireDecoder(control, m_segments, m_replies);
         m_decoder.SetVerbSink(&m_verbs);
+        // P5f (f1), CONTRACT-P5E §3.2: the server block's identity, once per session (the
+        // per-verb stamp refreshes it against the served-context serial). A no-op unless the
+        // dual-block rehearsal is armed; without it the server block's ContextIdentity() stays
+        // nullptr and the backend's identity-keyed memo caches read that as a HIT on their
+        // zero-initialised slot - an unnamed null dereference instead of a named marker.
+        MG_Pipe::MGPipeServerBlockNoteIdentity();
         m_attached = true;
     }
 
