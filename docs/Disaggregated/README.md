@@ -1,6 +1,6 @@
 # MGPipe：MobileGL 前后端拆分
 
-> 状态：**P0–P5d 已收官**，**P5e 进行中且 run-ahead 已武装**（十二包落地，strict 车道硬绿 179/179、`integration-gpu` 1357/1357、pull/push/split 三个构建 flavour 全绿；设备上渲染距离 32 下 `inproc` 已与 `monolith` 齐平，相对它取代的 lockstep p50 +69%。报告 [`P5E-RUNAHEAD.md`](P5E-RUNAHEAD.md)）（P5c 2026-09-17 `b88e8487`；P5d 三轮 2026-09-18，代码头 `1f8de61b`——`inproc` 性能专项，VD12 Minecraft 上 split 从 7-13 fps 拉到 103-106 fps、client 线程 CPU/帧从 15 ms 到 9.2 ms，报告 [`P5D-INPROC-PERFORMANCE.md`](P5D-INPROC-PERFORMANCE.md)）。目标负载（四条 Minecraft A/B trace）已在 Redmi Adreno 830 上以 `inproc`（独立 apply 线程）双后端渲染，barrier tax 首次实测；P5c 把审计出的 59 处不经 wire 的直接内存访问全部归零（契约 `MobileGL/MG_Remote/CONTRACT-P5C.md`），`inproc` 成为只经 wire 交换的诚实两角色。P5e 之后才是 **P6 spawn transport**——此时只是传输替换。当前头、逐门数字与开放项见 [`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md)。
+> 状态：**P0–P5e 已收官**（P5e 2026-09-19 收官，附一条具名未决：E1 对照需按 ID-114 重新定义），**当前在 P6 spawn transport**（计划 [`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md)、契约草稿 [`P6-CONTRACT-DRAFT.md`](P6-CONTRACT-DRAFT.md)，均尚未开工）。P5e：run-ahead 已武装（十二包落地，strict 车道硬绿 179/179、`integration-gpu` 1357/1357、pull/push/split 三个构建 flavour 全绿；设备上渲染距离 32 下 `inproc` 已与 `monolith` 齐平，相对它取代的 lockstep p50 +69%。报告 [`P5E-RUNAHEAD.md`](P5E-RUNAHEAD.md)）（P5c 2026-09-17 `b88e8487`；P5d 三轮 2026-09-18，代码头 `1f8de61b`——`inproc` 性能专项，VD12 Minecraft 上 split 从 7-13 fps 拉到 103-106 fps、client 线程 CPU/帧从 15 ms 到 9.2 ms，报告 [`P5D-INPROC-PERFORMANCE.md`](P5D-INPROC-PERFORMANCE.md)）。目标负载（四条 Minecraft A/B trace）已在 Redmi Adreno 830 上以 `inproc`（独立 apply 线程）双后端渲染，barrier tax 首次实测；P5c 把审计出的 59 处不经 wire 的直接内存访问全部归零（契约 `MobileGL/MG_Remote/CONTRACT-P5C.md`），`inproc` 成为只经 wire 交换的诚实两角色。**P6 只是传输替换**——但这句话的证据是 P5c 时代的，P6 的第一个包是重新证明它的只读审计。当前头、逐门数字与开放项见 [`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md)。
 >
 > 性能纪律（2026-09-08 起）：逐线程 CPU 与 tracker 绝对 ns **对着 pull 臂基线记录**，不作阻塞门；专门的优化阶段排在路线图推完之后。
 
@@ -54,6 +54,8 @@ Android 三份 APK flavour：pull、push、split（Gradle 属性 `mobilegl.pipeP
 | `CURRENT_STAGE_PROGRESS.md` | 当前头实测、P5b 落地内容、开放项、下一步、证据位置、仍在生效的裁定；随每次落地更新 |
 | `ARCHITECTURE.md` | 已定稿的设计：句柄与世代、调用目录与生成器、记录约定、tracker、纹理路径、shader 制品、反向通道、后端改造、传输、persistent map 分档、进程 / EGL / 平台、构建与门、P5 / P5b 落地形状、开关表 |
 | `ROADMAP.md` | 纪律、两条跑道、P0…P13 阶段表、里程碑、债务表、开放问题 |
+| `P6-SPAWN-PLAN.md` | P6 的包计划：树上已有什么（传输原语基本已就绪且有测试）、真正要造什么、P6 与 P12 的边界、七个包与依赖序、出口门与阴性对照 |
+| `P6-CONTRACT-DRAFT.md` | P6 契约草稿（规则 G、令牌、控制面帧、死亡与 run-ahead、阶段修正）；`c6` 落地时移为 `MobileGL/MG_Remote/CONTRACT-P6.md` |
 | `MEASUREMENTS.md` | 逐阶段实测：P0 spike 与基线、P1 verify、P2 门与 DriverBench、P3a / P4a 门与设备 A/B、P5 全门 / E1–E6 / Redmi 四臂、P5b 主机门 / 普查 / 审查 / Redmi 出口 |
 | `devices/pin-verification-2026-09-07.md` | 设备定频档案与核验（Redmi 当前口径；小米 / Oppo 历史核验） |
 
