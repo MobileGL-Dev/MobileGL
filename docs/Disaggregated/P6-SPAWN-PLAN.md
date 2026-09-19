@@ -2,6 +2,8 @@
 
 > 基线 `feat/disaggregated @ f23fbc1b`。路径在 `MobileGL/` 下，行号以该头为准。
 > 契约草稿 [`P6-CONTRACT-DRAFT.md`](P6-CONTRACT-DRAFT.md)，`c6` 落地时移为 `MobileGL/MG_Remote/CONTRACT-P6.md`。
+> **⏸ 阻塞于 P5f**（2026-09-19）：本计划假定“P6 只是传输替换”，而那句话今天不成立——`BARRIER_PULLED` 还有 15 个字段靠 client 填共享的 `gPipeInputs`，Magma 一条未动。先跑 [`P5F-WIRE-COMPLETENESS.md`](P5F-WIRE-COMPLETENESS.md)。
+>
 > **未开工。** 标 `待 a6` 的条目由审计确认，现在不下结论。
 
 ---

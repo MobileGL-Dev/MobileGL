@@ -1,5 +1,10 @@
 # CONTRACT-P6 (DRAFT) — the backend runs in a second process
 
+> **⏸ Blocked on P5f** (2026-09-19): this draft assumes P6 is only a transport
+> swap, which is not true today - 15 `BARRIER_PULLED` fields are still filled by the
+> client into a shared `gPipeInputs`, and Magma has not moved at all. See
+> [`P5F-WIRE-COMPLETENESS.md`](P5F-WIRE-COMPLETENESS.md).
+>
 > **Draft, written before its own audit.** Package `a6` ([`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md) §5)
 > is a read-only audit whose output is this file's input. Rows that depend on it are marked
 > **`PENDING a6`**. `c6` moves this file to `MobileGL/MG_Remote/CONTRACT-P6.md`, where it becomes

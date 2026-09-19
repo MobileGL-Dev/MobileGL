@@ -12,7 +12,8 @@
 | **P5c** `inproc` 共享内存读点归零 | **已收官（2026-09-17）** | `11ac3de6..b88e8487` + triage 修复；契约 `MobileGL/MG_Remote/CONTRACT-P5C.md`；审计 `~/w7/notes/p5c/p5c-audit-v1.md` |
 | **P5d** `inproc` 性能专项 | **已收官（2026-09-18，三轮）** | `cb06538c`、`56a77348`、`1f8de61b`；报告 [`P5D-INPROC-PERFORMANCE.md`](P5D-INPROC-PERFORMANCE.md)；`MEASUREMENTS.md` §9 |
 | **P5e** 退役 Espryt draw path 的 lockstep | **已收官（2026-09-19）**，附一条具名未决（E1 对照，ID-122） | 契约 `MobileGL/MG_Remote/CONTRACT-P5E.md`；计划 `~/w7/notes/p5e/BRIEF-P5E.md`、裁定 `~/w7/notes/p5e/INTEGRATOR-DECISIONS-P5E.md`（**ID-80..136**）；**十二个包已全部落地合并**（§2.7），`kMGPipeP5eRunAheadReady` 与 `kMGPipeP5eClientWaitRuleLanded` 均已翻。strict 车道硬绿 179/179、`integration-gpu` 1357/1357、三个构建 flavour 全绿；设备上 VD32 已与 monolith 齐平。报告 [`P5E-RUNAHEAD.md`](P5E-RUNAHEAD.md)，未完成项见 §5 |
-| **P6** spawn transport | **计划与契约草稿已起草（2026-09-19）**，未开工 | 计划 [`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md)（a6 只读审计 → c6 契约 → so / sm / cp / st / t6 并行）；契约草稿 [`P6-CONTRACT-DRAFT.md`](P6-CONTRACT-DRAFT.md)。传输原语（`SocketDoorbell`、SCM_RIGHTS fd 传递、`ShmSegment::Adopt`、`SurfaceOp` schema）**已在树上且有测试**；缺的是进程、控制面，以及 P5e 留下的“不等待的客户端 + 会死的服务端” |
+| **P5f** 一切状态上 wire | **计划已起草（2026-09-19）**，未开工 | 计划 [`P5F-WIRE-COMPLETENESS.md`](P5F-WIRE-COMPLETENESS.md)。插在 P6 之前：跨角色的直接共享尚未归零（`BARRIER_PULLED` 21 行 / 15 字段，其中八个 Magma 未动；EGL 控制面仍走函数指针邮箱；per-context 语义的进程级静态量） |
+| **P6** spawn transport | **阻塞于 P5f**；计划与契约草稿已起草 | 计划 [`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md)（a6 只读审计 → c6 契约 → so / sm / cp / st / t6 并行）；契约草稿 [`P6-CONTRACT-DRAFT.md`](P6-CONTRACT-DRAFT.md)。传输原语（`SocketDoorbell`、SCM_RIGHTS fd 传递、`ShmSegment::Adopt`、`SurfaceOp` schema）**已在树上且有测试**；缺的是进程、控制面，以及 P5e 留下的“不等待的客户端 + 会死的服务端” |
 
 ## 2. 当前头实测
 
@@ -236,7 +237,8 @@ p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提�
 
 0. P5d 的遗留（`P5D-INPROC-PERFORMANCE.md` "什么没完成"）：R-1 序列化留给 P3b/P4b → P11（`gPipeInputs` 版本化已写进 P11 行）；线程放置记录；小项随 P3b/P4b 顺手。
 1. **P5e 已收官**（2026-09-19，报告 [`P5E-RUNAHEAD.md`](P5E-RUNAHEAD.md)）：出口门已逐条跑过（逐项结果记在 `ROADMAP.md` 的 P5e 出口门格）：unit 两臂 2256/2256、`integration-split` 179/179 零 `Fatal{`、三条阴性对照按预期、逐包 red-once 各得恰好一个具名对。**剩下的只有 E1 对照**（ID-122）：修掉它两个遮蔽性缺陷后仍红，而它索要的 `Fatal{BarrierViolation}` 在整次运行里出现 0 次，需要重新定义它证伪什么而不是调阈值。契约 §3.2（per-role stamp 存储）与 §8 修正 8 仍标为 UNLANDED，随后续阶段；G1 仍由 CI 断言（ID-123）。
-2. **P6 spawn transport**：计划与契约草稿已起草（[`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md)、[`P6-CONTRACT-DRAFT.md`](P6-CONTRACT-DRAFT.md)），**下一步是跑 `a6` 那次只读审计，不写代码**：“P6 只是传输替换”这句话的证据是 P5c 时代的，P5e 之后已经过期。审计要点名去查：进程级静态里语义属于 context 的那一类（`s_synced` / `g_syncedRenderStateParameters` 是已知的两个，问题是还有几个——这类缺陷`inproc` 永远看不见）；十二个 EGL forwarder 对 `SurfaceOpKind` 缺几个枚举；server 是否真能不链 `MG_Impl`。
+2. **P5f 一切状态上 wire**（[`P5F-WIRE-COMPLETENESS.md`](P5F-WIRE-COMPLETENESS.md)）：插在 P6 之前。下一步是 `f0` 普查（只读）与 `f1` 双块机制——让红先出现，红就是清单。
+3. **P6 spawn transport**（阻塞于 P5f）：计划与契约草稿已起草（[`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md)、[`P6-CONTRACT-DRAFT.md`](P6-CONTRACT-DRAFT.md)），**下一步是跑 `a6` 那次只读审计，不写代码**：“P6 只是传输替换”这句话的证据是 P5c 时代的，P5e 之后已经过期。审计要点名去查：进程级静态里语义属于 context 的那一类（`s_synced` / `g_syncedRenderStateParameters` 是已知的两个，问题是还有几个——这类缺陷`inproc` 永远看不见）；十二个 EGL forwarder 对 `SurfaceOpKind` 缺几个枚举；server 是否真能不链 `MG_Impl`。
 3. 剩余首阻塞一轮（Magma compute/image、rd12、RGB mip、`texture-remint-pull` 仿真槽）。
 4. P5e 出口门（`~/w7/notes/p5e/BRIEF-P5E.md` §3 / §4）：`integration-split-strict` 转硬绿车道、三条阴性对照、Redmi 四臂（monolith / lockstep / credit 1 / credit 2）。P6 出口门：P5b 的完整渲染路径在 `spawn` 下绿；OpenRA 在 Adreno 830 上 split SSIM ≥ 0.99。
 5. Redmi 四臂复测（P5c 的记录项，需设备窗口）；79 trace 普查重跑（需全集语料）。
