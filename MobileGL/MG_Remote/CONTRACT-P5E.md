@@ -175,8 +175,8 @@ bell), the four EGL RPC returns (`BackendObject_Remote.cpp:200-245`), `Stop`. Fo
 `MapBuffer(READ)` / `GetBufferSubData` / a `CopyBufferSubData` source → `SyncGpuWrites` (reply
 row, unchanged); `glFinish` → `WaitForApplied(LastPublishedSeq)` + drain (a new client `Finish`
 slot; `Flush`/`Finish` stay no-ops on the wire, ARCHITECTURE:415); every `Server*` EGL forwarder
-waits `WaitForApplied(LastPublishedSeq)` BEFORE the RPC (the mailbox is pumped between drain
-batches, `ServerLoop.cpp:385-390`, so a make-current would otherwise land between two run-ahead
+waits `WaitForApplied(LastPublishedSeq)` BEFORE the RPC (the control channel is pumped between
+drain batches, `ServerLoop.cpp:400-404`, so a make-current would otherwise land between two run-ahead
 records); `ServerSwapEGLBuffers` is not on that list — present is the swap. **`glGetError`
 relaxation:** a run-ahead verb's `kEventGlError` is observed at the next drain point, i.e. at most
 one present credit later than the call after it; P5C §4.2 already assigns ordering to P9 and P5e
@@ -190,7 +190,7 @@ push (`PersistentMapTracker.cpp:735, 850`) fire-and-forget; the TEXTURE half kee
 
 On a run-ahead server `Reserve == nullptr` is NOT `Fatal{EventRingOverflow}`: the producer latches
 `eventRingFull` (exists, `EventRing.h:135-143`), publishes, rings, and `ApplyThreadMain` parks at
-the record boundary with `eventRingFull == 0` added to `ready` (`ServerLoop.cpp:380-383`). The
+the record boundary with `eventRingFull == 0` added to `ready` (`ServerLoop.cpp:391-398`). The
 client re-checks `m_events.RingIsFull()` at every park exit and drains before re-parking. Deadlock
 argument: the server blocks only on the event ring; the client blocks only on watermarks the
 server advances; every client wait drains; so at most one side is parked at any instant. The

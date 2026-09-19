@@ -60,7 +60,7 @@ struct FenceBudgetPeer : Codec::WireVerbSink {
     }
     Bool OnFenceWaitServer(const MGPFenceWait&) override { AwaitPark(); return true; }
     void Install() {
-        if (Srv::ServerLoopInstance().RunOnApplyThread([](void* self) {
+        if (Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void* self) {
             auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
             decoder.SetVerbSink(static_cast<FenceBudgetPeer*>(self));
             return MOBILEGL_OK;
@@ -95,7 +95,7 @@ struct ReadPeer : Codec::WireVerbSink {
         return true;
     }
     void Install() {
-        auto rc = Srv::ServerLoopInstance().RunOnApplyThread([](void* self) {
+        auto rc = Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void* self) {
             auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
             decoder.SetVerbSink(static_cast<ReadPeer*>(self));
             return MOBILEGL_OK;
@@ -111,7 +111,7 @@ struct ErrorPeer : Codec::ReplySink {
         Srv::ServerSessionInstance().Replies().PostReply(seq, status, nullptr, 0);
     }
     void Install() {
-        auto rc = Srv::ServerLoopInstance().RunOnApplyThread([](void* self) {
+        auto rc = Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void* self) {
             auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
             decoder.*PeerMember(RepliesTag{}) = static_cast<ErrorPeer*>(self);
             return MOBILEGL_OK;
@@ -307,7 +307,7 @@ TEST(RemoteClientControls, MapPersistentErrorIsNotADecline) {
 TEST(RemoteClientControls, AnIdenticalRepeatedMakeCurrentRepublishesNothing) {
     const auto child = RunInChild([] {
         StartControlSession();
-        if (Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+        if (Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
             auto backend = MakeUnique<CapsPeer>();
             backend->dynamic.MaxComputeWorkGroupCount[0] = 113;
             Srv::ServerSessionInstance().SetBackend(backend.get());
@@ -335,7 +335,7 @@ TEST(RemoteClientControls, AnIdenticalRepeatedMakeCurrentRepublishesNothing) {
 TEST(RemoteClientControls, ADifferentTupleMakeCurrentIsAdoptedWithoutAPumpOrPresent) {
     const auto child = RunInChild([] {
         StartControlSession();
-        if (Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+        if (Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
             auto backend = MakeUnique<CapsPeer>();
             backend->dynamic.MaxComputeWorkGroupCount[0] = 113;
             Srv::ServerSessionInstance().SetBackend(backend.get());
@@ -354,7 +354,7 @@ TEST(RemoteClientControls, ADifferentTupleMakeCurrentIsAdoptedWithoutAPumpOrPres
         GLint before = 0;
         remote.GetBackendFunctions().GL.GetIntegeri_v(0x91BE, 0, &before);
         if (before != 113) ::_exit(92);
-        if (Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+        if (Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
             static_cast<CapsPeer*>(Srv::ServerLoopInstance().Backend())->dynamic.MaxComputeWorkGroupCount[0] = 227;
             return MOBILEGL_OK;
         }, nullptr) != MOBILEGL_OK) ::_exit(93);
@@ -430,7 +430,7 @@ TEST(RemoteClientControls, ServerRoleRespecifyDoesNotEmitClientInitialBytes) {
         Srv::ServerSessionInstance().SetBackend(&backend);
         StartControlSession();
         MG_Config::Features.PipePush |= kMGPipeSubsystemResources;
-        Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
             MG_State::GLState::BufferObject buffer(701);
             Uint8 data[64]{};
             buffer.Respecify(sizeof(data), data);
@@ -463,7 +463,7 @@ TEST(RemoteClientControls, ServerRoleFlushDoesNotRunTheClientSubDataFollowup) {
         Srv::ServerSessionInstance().SetBackend(&backend);
         StartControlSession();
         MG_Config::Features.PipePush |= kMGPipeSubsystemResources;
-        Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
             MGPipeResourceOps ops{};
             ops.Create = [](MGPipeHandle, const MGPResourceDesc&) {};
             ops.Respecify = [](MGPipeHandle, const MGPResourceDesc&, const void*) {};
@@ -555,7 +555,7 @@ struct DrawPeer : Codec::WireVerbSink {
     Bool OnDrawVbo(const MGPDrawInfo&, const MGPDrawRange*, const MGHostSpan*,
                    const MGPDrawIndirect*) override { return true; }
     void Install() {
-        Srv::ServerLoopInstance().RunOnApplyThread([](void* self) {
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void* self) {
             auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
             decoder.SetVerbSink(static_cast<DrawPeer*>(self));
             return MOBILEGL_OK;
@@ -606,7 +606,7 @@ TEST(RemoteClientControls, ReadPixelsSwapsComponentsInTightAndScatteredReplies) 
 TEST(RemoteClientControls, PersistentMapProducerRefusesTheApplyThread) {
     const auto child = RunInChild([] {
         StartControlSession();
-        Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
             PersistentMapTracker::Instance().PushAllMembers();
             return MOBILEGL_OK;
         }, nullptr);
@@ -698,7 +698,7 @@ TEST(RemoteClientControls, ADrawOnASessionWithoutTheRunAheadBitStaysStampedBarri
             ::_exit(120);
         // Read the stamp on the thread that owns it: it is a thread_local describing "which
         // record is the apply thread inside right now", and ApplyOne leaves it standing.
-        if (Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+        if (Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
                 if (Srv::MGPipeServerPublishesRunAhead()) ::_exit(121);
                 MGPDrawInfo probe{};
                 probe.NumDraws = 1;

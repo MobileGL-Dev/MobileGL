@@ -216,6 +216,8 @@ namespace MobileGL::MG_Remote::Server {
         m_nativeBinds.store(0, std::memory_order_release);
         m_clientReleases.store(0, std::memory_order_release);
         m_makeCurrentRepublishes.store(0, std::memory_order_release);
+        m_controlSeq.store(0, std::memory_order_release);
+        m_controlFramesDispatched.store(0, std::memory_order_release);
         m_haveCurrentTuple = false;
         {
             const std::lock_guard<std::mutex> lock(m_exitMutex);
@@ -269,7 +271,8 @@ namespace MobileGL::MG_Remote::Server {
     ServerLoop::MakeCurrentOutcome ServerLoop::ApplyMakeCurrent(MG_Backend::BackendObject* backend,
                                                                EGLDisplay dpy, EGLSurface draw,
                                                                EGLSurface read, EGLContext ctx) {
-        // Apply thread only (RunOnApplyThread put us here), so m_haveCurrentTuple/m_cur* need no
+        // Apply thread only (RunSurfaceControlFrame's dispatch put us here), so
+        // m_haveCurrentTuple/m_cur* need no
         // lock. The counters are atomic for the reader on the test thread.
         MakeCurrentOutcome outcome;
         const EglBindAction action = ClassifyEglMakeCurrent(m_haveCurrentTuple, m_curDpy, m_curDraw,
@@ -477,7 +480,7 @@ namespace MobileGL::MG_Remote::Server {
         // m_controlDone with no answer possible (the bounded join has already succeeded, so there
         // is not even a Fatal{ApplyThreadJoinTimeout}). With the clear under the lock, a caller
         // either takes the lock FIRST (its request is here and answered NOT_INITIALIZED) or takes
-        // it AFTER (it sees !m_running under the lock in RunOnApplyThread and returns
+        // it AFTER (it sees !m_running under the lock in RunSurfaceControlFrame and returns
         // NOT_INITIALIZED without publishing). There is no third order.
         {
             const std::lock_guard<std::mutex> lock(m_controlMutex);
@@ -511,11 +514,12 @@ namespace MobileGL::MG_Remote::Server {
             // be: ServerLoopTest has no GL context, so CreateBackend is never called and the
             // ~BackendObject_DirectGLES -> ReleaseEGLResources self-post named above is never
             // built. Move the store above m_backend.reset() and that post misses
-            // RunOnApplyThread's re-entrancy arm (ServerLoop.cpp: `if (OnApplyThread()) return
-            // work(user);`) while m_running is still true, so it publishes into the one-slot
-            // mailbox and waits on m_controlDone for an answer only THIS thread could ever
-            // give. The integration lane - a real EGL teardown - is the only thing that would
-            // catch that, and it would catch it as a hang, not as a failed assertion.
+            // RunSurfaceControlFrame's re-entrancy arm (`if (OnApplyThread()) return
+            // ApplySurfaceControlFrame(frame);`) while m_running is still true, so it publishes
+            // into the one-slot channel and waits on m_controlDone for an answer only THIS
+            // thread could ever give. The integration lane - a real EGL teardown - is the only
+            // thing that would catch that, and it would catch it as a hang, not as a failed
+            // assertion.
             Detail::g_applyThreadKey.store(0, std::memory_order_relaxed);
         }
         m_controlDone.notify_all();
@@ -537,8 +541,7 @@ namespace MobileGL::MG_Remote::Server {
         // load, and everything below this line still runs under the lock exactly as before.
         if (!m_controlPosted.load(std::memory_order_acquire)) return false;
 
-        ControlWork work = nullptr;
-        void* user = nullptr;
+        SurfaceControlFrame frame;
         {
             const std::lock_guard<std::mutex> lock(m_controlMutex);
             if (!m_controlPending) {
@@ -549,17 +552,20 @@ namespace MobileGL::MG_Remote::Server {
                 m_controlPosted.store(false, std::memory_order_release);
                 return false;
             }
-            work = m_controlWork;
-            user = m_controlUser;
+            frame = m_controlFrame;
             // CLEARED WHEN THE REQUEST IS TAKEN, not when it finishes. m_controlPending stays
-            // true for the duration of `work` (the C2 exit block reads it), but the thread that
-            // would act on the shadow is THIS one and it is busy running the request; leaving
+            // true for the duration of the dispatch (the C2 exit block reads it), but the thread
+            // that would act on the shadow is THIS one and it is busy running the frame; leaving
             // the shadow set would only make the post-work iteration spin instead of park.
             m_controlPosted.store(false, std::memory_order_release);
         }
-        const MobileGLResult result = work == nullptr ? MOBILEGL_ERR_INVALID_ARGUMENT : work(user);
+        // The dispatch runs OUTSIDE the lock, exactly as the old work(user) did, and fills the
+        // frame's reply half; the reply is then published back into the slot under the lock so
+        // the poster's copy-out after m_controlDone sees it.
+        const MobileGLResult result = ApplySurfaceControlFrame(frame);
         {
             const std::lock_guard<std::mutex> lock(m_controlMutex);
+            m_controlFrame = frame;
             m_controlResult = result;
             m_controlPending = false;
             m_controlFinished = true;
@@ -642,13 +648,17 @@ namespace MobileGL::MG_Remote::Server {
         return applied;
     }
 
-    MobileGLResult ServerLoop::RunOnApplyThread(ControlWork work, void* user) {
-        if (work == nullptr) return MOBILEGL_ERR_INVALID_ARGUMENT;
+    MobileGLResult ServerLoop::RunSurfaceControlFrame(SurfaceControlFrame& frame) {
+        if (frame.kind == SurfaceControlOp::None) return MOBILEGL_ERR_INVALID_ARGUMENT;
+        // Minted here and echoed back with the reply half: inproc it is purely diagnostic; under
+        // spawn it is how a SurfaceReply names its op. Atomic rather than under m_callerMutex
+        // because the re-entrant arm below mints without taking that lock.
+        frame.seq = m_controlSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
         // RE-ENTRANCY IS NOT A DEADLOCK. The teardown path posts from the apply thread itself -
         // ~BackendObject_DirectGLES reaches ReleaseEGLResources - and so does anything the
         // applier calls that wants "run this where the context is". Running inline is the
         // correct answer there and the only non-hanging one.
-        if (OnApplyThread()) return work(user);
+        if (OnApplyThread()) return ApplySurfaceControlFrame(frame);
 
         const std::lock_guard<std::mutex> callerLock(m_callerMutex);
         std::unique_lock<std::mutex> lock(m_controlMutex);
@@ -662,35 +672,34 @@ namespace MobileGL::MG_Remote::Server {
             if (backendAlive) {
                 // M-7: the backend exists but no thread owns it - ClientSession::Start refused
                 // (ServerLoop.cpp Start's !Accepted arm) or std::thread's constructor threw.
-                // Running `work` inline here would issue eglMakeCurrent on the APP thread and
-                // stamp g_backendContextOwnerThread with it, so a lane called split would render
-                // correctly with the context on the wrong thread - the one outcome R-1 exists to
-                // make impossible. Fatal by name, never a fallback; compare CreateBackend's
-                // default: arm, which also refuses rather than substitutes.
+                // Dispatching the frame inline here would issue eglMakeCurrent on the APP thread
+                // and stamp g_backendContextOwnerThread with it, so a lane called split would
+                // render correctly with the context on the wrong thread - the one outcome R-1
+                // exists to make impossible. Fatal by name, never a fallback; compare
+                // CreateBackend's default: arm, which also refuses rather than substitutes.
                 MGLOG_F("MGPipe: Fatal{ApplyThreadNotRunning, \"EGL on the app thread\"} - a "
-                        "control request reached RunOnApplyThread with the server's backend built "
-                        "but no mgl-srv-apply thread running (ClientSession::Start failed after "
-                        "ServerLoop::CreateBackend). Running it inline would make the context "
-                        "current on the APP thread - the split lane's whole premise. Refusing by "
-                        "name rather than falling back to monolith");
+                        "control frame reached RunSurfaceControlFrame with the server's backend "
+                        "built but no mgl-srv-apply thread running (ClientSession::Start failed "
+                        "after ServerLoop::CreateBackend). Dispatching it inline would make the "
+                        "context current on the APP thread - the split lane's whole premise. "
+                        "Refusing by name rather than falling back to monolith");
                 std::abort();
             }
-            // Backend already gone (post-Stop teardown, or the pre-Init window): the forwarders'
-            // ServerBackendOrNull() would answer null anyway, so NOT_INITIALIZED is the honest
-            // result and running inline is pointless. This is the deterministic half of C2 - a
-            // forwarder call after the loop stopped returns NOT_INITIALIZED, it does not hang and
-            // it does not run on the caller.
+            // Backend already gone (post-Stop teardown, or the pre-Init window): the dispatch's
+            // null-backend arm would answer NOT_INITIALIZED anyway, so that is the honest result
+            // and running inline is pointless. This is the deterministic half of C2 - a forwarder
+            // call after the loop stopped returns NOT_INITIALIZED, it does not hang and it does
+            // not run on the caller.
             return MOBILEGL_ERR_NOT_INITIALIZED;
         }
-        m_controlWork = work;
-        m_controlUser = user;
+        m_controlFrame = frame;
         m_controlPending = true;
         m_controlFinished = false;
-        // THE SHADOW IS PUBLISHED LAST OF THE FOUR AND WITH A RELEASE, inside this same
+        // THE SHADOW IS PUBLISHED LAST OF THE THREE AND WITH A RELEASE, inside this same
         // critical section: the apply thread's park predicate reads ONLY this word, so an
-        // acquire load that returns true must also see the three fields above it. Storing it
+        // acquire load that returns true must also see the slot and flags above it. Storing it
         // first would let a pump that is already past its own fast-negative read a slot that
-        // does not name the work yet.
+        // does not hold the frame yet.
         m_controlPosted.store(true, std::memory_order_release);
         // Publish THEN ring, in that order and never the other (Doorbell.h, NotifyIfParked's
         // PRECONDITION block: the fence only orders what precedes it). The bell
@@ -703,7 +712,23 @@ namespace MobileGL::MG_Remote::Server {
             m_session->ConsumerDoorbell().Notify();
         }
         m_controlDone.wait(lock, [this] { return m_controlFinished; });
+        frame = m_controlFrame; // the reply half, written by the dispatch
         return m_controlResult;
+    }
+
+    MobileGLResult ServerLoop::RunProbeOnApplyThreadForTesting(ControlProbeHook hook, void* user) {
+        // The hook pair is published BEFORE the frame: the mailbox handshake (publish under
+        // m_controlMutex, shadow last, then the bell) orders these two relaxed-typed stores for
+        // the apply thread, which reads them inside the dispatch.
+        m_controlProbeHook.store(hook, std::memory_order_release);
+        m_controlProbeUser.store(user, std::memory_order_release);
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::ProbeForTesting;
+        return RunSurfaceControlFrame(frame);
+    }
+
+    Uint64 ServerLoop::ControlFramesDispatched() const {
+        return m_controlFramesDispatched.load(std::memory_order_acquire);
     }
 
     void ServerLoop::SignalExited() {
@@ -776,192 +801,328 @@ namespace MobileGL::MG_Remote::Server {
     }
 
     // ---------------------------------------------------------------------------------
-    // The twelve EGL forwarders
+    // The control-frame dispatch and the twelve EGL forwarders (P5f, package fc)
     // ---------------------------------------------------------------------------------
+    //
+    // THE MAILBOX'S PAYLOAD CHANGED SHAPE, NOT ITS PROTOCOL. The channel is still one blocking
+    // slot pumped between drain batches, with the shadow, the publish-then-ring doorbell and the
+    // C2 exit block exactly as before; what is gone is the payload - a raw function pointer (the
+    // op's identity) plus a void* to a stack-local Args (its arguments and out-pointers), neither
+    // of which means anything in another address space (P5c audit row G4). The slot now carries
+    // one SurfaceControlFrame BY VALUE: `kind` is the op, the scalar fields are the arguments,
+    // and the reply half (ok / eglMajor / eglMinor) comes back in the same value. Nine of the
+    // twelve forwarders map onto protocol.fbs's ten SurfaceOp kinds; the three without a wire
+    // kind (f0-egl's census: present is a record, capabilities are a CapsSnapshot, and
+    // InitWindowSurface has no caller) ride the same channel as inproc-only kinds rather than
+    // keeping a second, pointer-shaped path alive for dead or answered code.
 
     namespace {
 
-        // One captureless trampoline for every call: ControlWork is a raw function pointer
-        // plus a void*, not a std::function, because these run on the TEARDOWN path and the
-        // teardown path may not allocate (ID-8 exists because frontend destructors reach here
-        // from exit handlers).
-        template <class Args>
-        MobileGLResult RunOnApply(Args& args) {
-            return ServerLoopInstance().RunOnApplyThread(
-                +[](void* user) -> MobileGLResult { return static_cast<Args*>(user)->Run(); },
-                &args);
+        // EGL handles are pointers on every platform in scope; the frame carries them as Uint64
+        // tokens. Inproc the token IS the handle value bit-cast (same process, same driver), so
+        // the round-trip is exact and the N-3 tuple bookkeeping - which compares handle VALUES -
+        // is unchanged. Under spawn the client mints dense tokens instead (P6-CONTRACT-DRAFT
+        // table 0); the field width is already the token's.
+        template <class Handle>
+        Uint64 TokenFromHandle(Handle handle) {
+            static_assert(std::is_pointer_v<Handle>, "an EGL handle is a pointer");
+            return static_cast<Uint64>(reinterpret_cast<std::uintptr_t>(handle));
+        }
+        template <class Handle>
+        Handle HandleFromToken(Uint64 token) {
+            static_assert(std::is_pointer_v<Handle>, "an EGL handle is a pointer");
+            return reinterpret_cast<Handle>(static_cast<std::uintptr_t>(token));
         }
 
-        // Null means the hook never ran or the session is already down. Every forwarder
-        // answers false / no-op rather than dereferencing: a client that calls eglMakeCurrent
-        // on a process whose split bring-up failed must see a refusal, not a crash.
-        MG_Backend::BackendObject* ServerBackendOrNull() { return ServerLoopInstance().Backend(); }
+        // WindowHandle -> frame values (the forwarder side). The frame carries the BACKEND tag,
+        // not the wire's WindowKind: the WindowKind mapping belongs to the wire codec
+        // (Protocol/SurfaceOpCodec.cpp) and must not leak into the inproc path.
+        void PackWindowHandle(SurfaceControlFrame& frame, const MG_Backend::WindowHandle& handle) {
+            frame.windowBackend = static_cast<Int>(handle.Backend);
+            frame.nativeToken = TokenFromHandle(handle.Handle);
+            frame.width = static_cast<Int>(handle.Width);
+            frame.height = static_cast<Int>(handle.Height);
+        }
+
+        // The dispatch-side range check. Inproc the value came from the poster's own
+        // WindowHandle, so an out-of-range tag is a memory-corruption shape, not bad input -
+        // same discipline as the ring's Fatal{ProtocolCorruption} on a header the producer could
+        // not have written.
+        MG_Backend::WindowBackend WindowBackendFromFrameValue(Int value) {
+            if (value < static_cast<Int>(MG_Backend::WindowBackend::Unknown) ||
+                value >= static_cast<Int>(MG_Backend::WindowBackend::WindowBackendCount)) {
+                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp.windowBackend\"} - a "
+                        "control frame carried window backend tag %d, which names no "
+                        "WindowBackend", value);
+                std::abort();
+            }
+            return static_cast<MG_Backend::WindowBackend>(value);
+        }
+
+        MG_Backend::WindowHandle UnpackWindowHandle(const SurfaceControlFrame& frame) {
+            MG_Backend::WindowHandle handle;
+            handle.Backend = WindowBackendFromFrameValue(frame.windowBackend);
+            handle.Handle = HandleFromToken<void*>(frame.nativeToken);
+            handle.Width = static_cast<Uint32>(frame.width);
+            handle.Height = static_cast<Uint32>(frame.height);
+            return handle;
+        }
 
     } // namespace
 
-    Bool ServerInitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor) {
-        struct Args {
-            EGLDisplay dpy;
-            EGLint* major;
-            EGLint* minor;
-            Bool ok = false;
-            MobileGLResult Run() {
-                MG_Backend::BackendObject* backend = ServerBackendOrNull();
-                if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
-                ok = backend->InitializeEGLDisplay(dpy, major, minor);
-                return MOBILEGL_OK;
+    MobileGLResult ServerLoop::ApplySurfaceControlFrame(SurfaceControlFrame& frame) {
+        // The frame channel's own tally, bumped for EVERY dispatch including probes: a forwarder
+        // that stopped posting frames (the fc red-once revert shape) leaves this unmoved, which
+        // is what ServerLoopTest's AVoidForwarderCrossesAsOneDispatchedFrame reads.
+        m_controlFramesDispatched.fetch_add(1, std::memory_order_acq_rel);
+        if (frame.kind == SurfaceControlOp::ProbeForTesting) {
+            const ControlProbeHook hook = m_controlProbeHook.load(std::memory_order_acquire);
+            if (hook == nullptr) return MOBILEGL_ERR_INVALID_ARGUMENT;
+            return hook(m_controlProbeUser.load(std::memory_order_acquire));
+        }
+        // Null means the hook never ran or the session is already down. Every op answers
+        // NOT_INITIALIZED rather than dereferencing: a client that calls eglMakeCurrent on a
+        // process whose split bring-up failed must see a refusal, not a crash.
+        MG_Backend::BackendObject* backend = m_backend.get();
+        if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
+        switch (frame.kind) {
+        case SurfaceControlOp::InitializeDisplay: {
+            // The old Args carried the poster's `major`/`minor` OUT-POINTERS; here they are
+            // reply fields. A pointer to the caller's stack is exactly what does not survive a
+            // process boundary, so the version numbers travel back in the frame's value.
+            EGLint major = 0;
+            EGLint minor = 0;
+            frame.ok = backend->InitializeEGLDisplay(HandleFromToken<EGLDisplay>(frame.display),
+                                                     &major, &minor);
+            frame.eglMajor = major;
+            frame.eglMinor = minor;
+            return MOBILEGL_OK;
+        }
+        case SurfaceControlOp::CreateWindowSurface: {
+            frame.ok = backend->CreateEGLWindowSurface(HandleFromToken<EGLSurface>(frame.surface),
+                                                       UnpackWindowHandle(frame));
+            // N-3: BackendObject_DirectGLES destroys and recreates the native context to create
+            // a DIFFERENT surface, so whatever tuple was bound names a dead context.
+            if (frame.ok) ForgetCurrentTuple();
+            return MOBILEGL_OK;
+        }
+        case SurfaceControlOp::ResizeWindowSurface:
+            frame.ok = backend->ResizeEGLWindowSurface(HandleFromToken<EGLSurface>(frame.surface),
+                                                       static_cast<Uint32>(frame.width),
+                                                       static_cast<Uint32>(frame.height));
+            return MOBILEGL_OK;
+        case SurfaceControlOp::CreatePbufferSurface:
+            frame.ok = backend->CreateEGLPbufferSurface(HandleFromToken<EGLSurface>(frame.surface),
+                                                        frame.width, frame.height);
+            // N-3: as for the window surface - a (re)creation may have destroyed the context the
+            // held tuple named. The surface's own creation binds natively, so the client's
+            // make-current that follows is forwarded and deduped one layer down (ID-54).
+            if (frame.ok) ForgetCurrentTuple();
+            return MOBILEGL_OK;
+        case SurfaceControlOp::MakeCurrent: {
+            // C7 / ID-54: the apply thread binds the native context ONCE per context lifetime
+            // and holds it for life. ApplyMakeCurrent forwards a bind only for a tuple it does
+            // not hold and treats an identical repeat as a no-op; the native call for a surface
+            // already current on this thread is skipped one layer down
+            // (BackendObject_DirectGLES's ID-54 arm), which is what makes "the owner slot is
+            // written once" TRUE and measured (ServerLoopTest's C7 control) rather than claimed.
+            const MakeCurrentOutcome outcome =
+                ApplyMakeCurrent(backend, HandleFromToken<EGLDisplay>(frame.display),
+                                 HandleFromToken<EGLSurface>(frame.surface),
+                                 HandleFromToken<EGLSurface>(frame.readSurface),
+                                 HandleFromToken<EGLContext>(frame.context));
+            frame.ok = outcome.ok;
+            if (!outcome.ok || !outcome.boundNatively) return MOBILEGL_OK;
+            // R-12, arm (a): the caps snapshot is REPUBLISHED because InitCapabilities has now
+            // run for real - on every forwarded bind of a tuple this loop did not hold (the
+            // first, and every DIFFERENT tuple after it), and NEVER on an identical repeat
+            // (ID-67: a repeat is a native no-op AND publishes nothing, so the client's mirror
+            // generation does not move and nothing accumulates). DirectGLES has no
+            // OnCapsInvalidated producer at all, and c0's answer is that a SECOND arrival IS the
+            // invalidation - so the client's mirror is refreshed with no dev-shaped backend edit
+            // and with no eleventh MGPipeCallbacks slot (MGPipeCallbacks.h:56-58's static_assert
+            // exists to make that cost visible). Red once by republishing only on the first
+            // bind: the ID-67 control's different tuple reads 1 republish where 2 are required.
+            ServerSession* session = ServerSession::Active();
+            if (session != nullptr && session->Accepted()) {
+                const MobileGLResult published = session->PublishCapsSnapshot();
+                if (published == MOBILEGL_OK) NoteMakeCurrentRepublished();
+                if (published != MOBILEGL_OK) {
+                    MGLOG_E("MG_Remote server: the post-make-current CapsSnapshot could not be "
+                            "published (rc=%d); the client's mirror still holds the empty "
+                            "snapshot Accept() sent before any context existed",
+                            static_cast<int>(published));
+                }
             }
-        } args{dpy, major, minor};
-        return RunOnApply(args) == MOBILEGL_OK && args.ok;
+            return MOBILEGL_OK;
+        }
+        case SurfaceControlOp::ReleaseCurrent: {
+            // The release request's own op on the wire. It reaches the same ClientRelease arm of
+            // ApplyMakeCurrent as before (recorded, NOT forwarded - ID-54: the context stays
+            // current on this thread until ~BackendObject_DirectGLES or context loss, so
+            // forwarding would unbind and reinstate the off-thread degradation the phase
+            // removes). A client release never republishes: nothing ran that could move caps.
+            const MakeCurrentOutcome outcome =
+                ApplyMakeCurrent(backend, HandleFromToken<EGLDisplay>(frame.display),
+                                 EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+            frame.ok = outcome.ok;
+            return MOBILEGL_OK;
+        }
+        case SurfaceControlOp::SetSwapInterval:
+            backend->SetEGLSwapInterval(frame.swapInterval);
+            return MOBILEGL_OK;
+        case SurfaceControlOp::ReleaseSurface: {
+            const EGLSurface surface = HandleFromToken<EGLSurface>(frame.surface);
+            backend->ReleaseEGLSurface(surface);
+            // N-3: a released surface the held tuple names may have taken the context with it
+            // (BackendObject::ReleaseEGLSurface -> OnEGLSurfaceReleased -> DestroyEGLContext once
+            // nothing holds it current). Forgetting when the base class only DEFERRED the destroy
+            // costs one forwarded bind; remembering when it did not would cost a silent
+            // no-context-current.
+            ForgetCurrentTupleIfItNames(surface);
+            return MOBILEGL_OK;
+        }
+        case SurfaceControlOp::ReleaseResources:
+            // BLOCKING BY CONTRACT (the forwarder's own comment, below): EGLImpl.cpp's teardown
+            // walks into MobileGL::Destroy() the moment this answers. For DirectGLES this runs
+            // DestroyEGLContext - eglMakeCurrent(NO_SURFACE), eglDestroyContext, eglTerminate -
+            // on the thread that made the context current.
+            backend->ReleaseEGLResources();
+            // N-3: DestroyEGLContext just ran; the tuple names nothing. Without this a
+            // destroy-recreate with the same handle values (every EGL handle on this host is
+            // 0x1) classified as a RepeatNoOp, bound nothing, and republished no caps. Red once
+            // by deleting it: ServerLoopTest's recreate control reads NativeBindCount() == 1
+            // where 2 is required.
+            ForgetCurrentTuple();
+            return MOBILEGL_OK;
+        case SurfaceControlOp::SetWindowHandle:
+            backend->SetWindowHandle(UnpackWindowHandle(frame));
+            return MOBILEGL_OK;
+        case SurfaceControlOp::InitCapabilitiesInprocOnly:
+            // Inproc-only (f0-egl §4.2): on the wire the ANSWER to this op is the CapsSnapshot
+            // frame itself, so there is no SurfaceOp kind for it. The frame channel still has to
+            // carry it inproc because InitCapabilities runs GL queries and therefore belongs to
+            // the apply thread.
+            frame.ok = backend->InitCapabilities();
+            if (frame.ok) {
+                ServerSession* session = ServerSession::Active();
+                if (session != nullptr && session->Accepted()) {
+                    (void)session->PublishCapsSnapshot();
+                }
+            }
+            return MOBILEGL_OK;
+        case SurfaceControlOp::SwapBuffersInprocOnly:
+            // Inproc-only (f0-egl F8): present travels as a class-B record with its own credit;
+            // this forwarder has no production caller and survives for ServerLoopTest's N-3
+            // recreate control, which needs a swap that is NOT a record.
+            frame.ok = backend->SwapEGLBuffers(HandleFromToken<EGLDisplay>(frame.display),
+                                               HandleFromToken<EGLSurface>(frame.surface));
+            return MOBILEGL_OK;
+        case SurfaceControlOp::InitWindowSurfaceInprocOnly:
+            // Inproc-only (f0-egl F8): no caller at all (the client's InitWindowSurface is a
+            // no-op); kept because deleting the free function would delete the seam the
+            // inproc-only rule is stated against.
+            frame.ok = backend->InitWindowSurface();
+            return MOBILEGL_OK;
+        case SurfaceControlOp::None:
+        case SurfaceControlOp::ProbeForTesting:
+            // Unreachable in a correct process (None is refused at post, the probe is answered
+            // above the switch); a slot that still arrives here with one shares the Fatal below.
+            break;
+        }
+        // A kind the switch does not know never legitimately posts (RunSurfaceControlFrame
+        // refuses None), so reaching this line means the slot's bytes were not written by the
+        // poster at all - the ring's Fatal{ProtocolCorruption} discipline, one channel over.
+        MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp.kind\"} - the control slot held "
+                "kind %d, which names no dispatchable op", static_cast<int>(frame.kind));
+        std::abort();
+    }
+
+    // ---------------------------------------------------------------------------------
+    // The twelve forwarders: pack the frame, post it, unpack the reply
+    // ---------------------------------------------------------------------------------
+
+    Bool ServerInitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor) {
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::InitializeDisplay;
+        frame.display = TokenFromHandle(dpy);
+        const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
+        if (rc == MOBILEGL_OK) {
+            // Written back whenever the dispatch ran, success or not - the old out-pointers
+            // reached the backend directly, and a failed eglInitialize's partial writes are the
+            // caller's to ignore exactly as before.
+            if (major != nullptr) *major = frame.eglMajor;
+            if (minor != nullptr) *minor = frame.eglMinor;
+        }
+        return rc == MOBILEGL_OK && frame.ok;
     }
 
     Bool ServerCreateEGLWindowSurface(EGLSurface surface, const MG_Backend::WindowHandle& handle) {
-        struct Args {
-            EGLSurface surface;
-            const MG_Backend::WindowHandle* handle;
-            Bool ok = false;
-            MobileGLResult Run() {
-                MG_Backend::BackendObject* backend = ServerBackendOrNull();
-                if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
-                ok = backend->CreateEGLWindowSurface(surface, *handle);
-                // N-3: BackendObject_DirectGLES destroys and recreates the native context to
-                // create a DIFFERENT surface, so whatever tuple was bound names a dead context.
-                if (ok) ServerLoopInstance().ForgetCurrentTuple();
-                return MOBILEGL_OK;
-            }
-        } args{surface, &handle};
-        return RunOnApply(args) == MOBILEGL_OK && args.ok;
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::CreateWindowSurface;
+        frame.surface = TokenFromHandle(surface);
+        PackWindowHandle(frame, handle);
+        const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
+        return rc == MOBILEGL_OK && frame.ok;
     }
 
     Bool ServerResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
-        struct Args {
-            EGLSurface surface;
-            Uint32 width;
-            Uint32 height;
-            Bool ok = false;
-            MobileGLResult Run() {
-                MG_Backend::BackendObject* backend = ServerBackendOrNull();
-                if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
-                ok = backend->ResizeEGLWindowSurface(surface, width, height);
-                return MOBILEGL_OK;
-            }
-        } args{surface, width, height};
-        return RunOnApply(args) == MOBILEGL_OK && args.ok;
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::ResizeWindowSurface;
+        frame.surface = TokenFromHandle(surface);
+        frame.width = static_cast<Int>(width);
+        frame.height = static_cast<Int>(height);
+        const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
+        return rc == MOBILEGL_OK && frame.ok;
     }
 
     Bool ServerCreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
-        struct Args {
-            EGLSurface surface;
-            EGLint width;
-            EGLint height;
-            Bool ok = false;
-            MobileGLResult Run() {
-                MG_Backend::BackendObject* backend = ServerBackendOrNull();
-                if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
-                ok = backend->CreateEGLPbufferSurface(surface, width, height);
-                // N-3: as for the window surface - a (re)creation may have destroyed the context
-                // the held tuple named. The surface's own creation binds natively, so the client's
-                // make-current that follows is forwarded and deduped one layer down (ID-54).
-                if (ok) ServerLoopInstance().ForgetCurrentTuple();
-                return MOBILEGL_OK;
-            }
-        } args{surface, width, height};
-        return RunOnApply(args) == MOBILEGL_OK && args.ok;
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::CreatePbufferSurface;
+        frame.surface = TokenFromHandle(surface);
+        frame.width = width;
+        frame.height = height;
+        const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
+        return rc == MOBILEGL_OK && frame.ok;
     }
 
     Bool ServerMakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
-        struct Args {
-            EGLDisplay dpy;
-            EGLSurface draw;
-            EGLSurface read;
-            EGLContext ctx;
-            Bool ok = false;
-            MobileGLResult Run() {
-                MG_Backend::BackendObject* backend = ServerBackendOrNull();
-                if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
-                // C7 / ID-54: the apply thread binds the native context ONCE per context
-                // lifetime and holds it for life. ApplyMakeCurrent forwards a bind only for a
-                // tuple it does not hold, treats an identical repeat as a no-op, and records a
-                // client release-current WITHOUT unbinding; the native call for a surface already
-                // current on this thread is skipped one layer down (BackendObject_DirectGLES's
-                // ID-54 arm), which is what makes "the owner slot is written once" TRUE and
-                // measured (ServerLoopTest's C7 control) rather than claimed.
-                const ServerLoop::MakeCurrentOutcome outcome =
-                    ServerLoopInstance().ApplyMakeCurrent(backend, dpy, draw, read, ctx);
-                ok = outcome.ok;
-                if (!ok || !outcome.boundNatively) return MOBILEGL_OK;
-                // R-12, arm (a): the caps snapshot is REPUBLISHED because InitCapabilities has
-                // now run for real - on every forwarded bind of a tuple this loop did not hold
-                // (the first, and every DIFFERENT tuple after it), and NEVER on an identical
-                // repeat (ID-67: a repeat is a native no-op AND publishes nothing, so the client's
-                // mirror generation does not move and nothing accumulates). DirectGLES has no
-                // OnCapsInvalidated producer at all, and c0's answer is that a SECOND arrival IS the
-                // invalidation - so the client's mirror is refreshed with no dev-shaped backend edit
-                // and with no eleventh MGPipeCallbacks slot (MGPipeCallbacks.h:56-58's static_assert
-                // exists to make that cost visible). Red once by republishing only on the first
-                // bind: the ID-67 control's different tuple reads 1 republish where 2 are required.
-                ServerSession* session = ServerSession::Active();
-                if (session != nullptr && session->Accepted()) {
-                    const MobileGLResult published = session->PublishCapsSnapshot();
-                    if (published == MOBILEGL_OK) ServerLoopInstance().NoteMakeCurrentRepublished();
-                    if (published != MOBILEGL_OK) {
-                        MGLOG_E("MG_Remote server: the post-make-current CapsSnapshot could not "
-                                "be published (rc=%d); the client's mirror still holds the empty "
-                                "snapshot Accept() sent before any context existed",
-                                static_cast<int>(published));
-                    }
-                }
-                return MOBILEGL_OK;
-            }
-        } args{dpy, draw, read, ctx};
-        return RunOnApply(args) == MOBILEGL_OK && args.ok;
+        SurfaceControlFrame frame;
+        // The release request (the three NO_* markers, ClassifyEglMakeCurrent's ClientRelease
+        // shape) crosses as its own op: on the wire that is what ReleaseCurrent IS
+        // (protocol.fbs), and the dispatch reaches the same ApplyMakeCurrent arm either way.
+        frame.kind = (draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT)
+                         ? SurfaceControlOp::ReleaseCurrent
+                         : SurfaceControlOp::MakeCurrent;
+        frame.display = TokenFromHandle(dpy);
+        frame.surface = TokenFromHandle(draw);
+        frame.readSurface = TokenFromHandle(read);
+        frame.context = TokenFromHandle(ctx);
+        const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
+        return rc == MOBILEGL_OK && frame.ok;
     }
 
     Bool ServerSwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
-        struct Args {
-            EGLDisplay dpy;
-            EGLSurface draw;
-            Bool ok = false;
-            MobileGLResult Run() {
-                MG_Backend::BackendObject* backend = ServerBackendOrNull();
-                if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
-                ok = backend->SwapEGLBuffers(dpy, draw);
-                return MOBILEGL_OK;
-            }
-        } args{dpy, draw};
-        return RunOnApply(args) == MOBILEGL_OK && args.ok;
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::SwapBuffersInprocOnly;
+        frame.display = TokenFromHandle(dpy);
+        frame.surface = TokenFromHandle(draw);
+        const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
+        return rc == MOBILEGL_OK && frame.ok;
     }
 
     void ServerSetEGLSwapInterval(Int interval) {
-        struct Args {
-            Int interval;
-            MobileGLResult Run() {
-                MG_Backend::BackendObject* backend = ServerBackendOrNull();
-                if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
-                backend->SetEGLSwapInterval(interval);
-                return MOBILEGL_OK;
-            }
-        } args{interval};
-        (void)RunOnApply(args);
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::SetSwapInterval;
+        frame.swapInterval = interval;
+        (void)ServerLoopInstance().RunSurfaceControlFrame(frame);
     }
 
     void ServerReleaseEGLSurface(EGLSurface surface) {
-        struct Args {
-            EGLSurface surface;
-            MobileGLResult Run() {
-                MG_Backend::BackendObject* backend = ServerBackendOrNull();
-                if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
-                backend->ReleaseEGLSurface(surface);
-                // N-3: a released surface the held tuple names may have taken the context with
-                // it (BackendObject::ReleaseEGLSurface -> OnEGLSurfaceReleased -> DestroyEGLContext
-                // once nothing holds it current). Forgetting when the base class only DEFERRED
-                // the destroy costs one forwarded bind; remembering when it did not would cost a
-                // silent no-context-current.
-                ServerLoopInstance().ForgetCurrentTupleIfItNames(surface);
-                return MOBILEGL_OK;
-            }
-        } args{surface};
-        (void)RunOnApply(args);
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::ReleaseSurface;
+        frame.surface = TokenFromHandle(surface);
+        (void)ServerLoopInstance().RunSurfaceControlFrame(frame);
     }
 
     void ServerReleaseEGLResources() {
@@ -970,66 +1131,32 @@ namespace MobileGL::MG_Remote::Server {
         // runs DestroyEGLContext - eglMakeCurrent(NO_SURFACE), eglDestroyContext, eglTerminate -
         // and those must happen on the thread that made the context current. A fire-and-forget
         // here lets Destroy() walk on while the server still holds the context, which is
-        // scout-install 5.3's named hazard.
-        struct Args {
-            MobileGLResult Run() {
-                MG_Backend::BackendObject* backend = ServerBackendOrNull();
-                if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
-                backend->ReleaseEGLResources();
-                // N-3: DestroyEGLContext just ran; the tuple names nothing. Without this a
-                // destroy-recreate with the same handle values (every EGL handle on this host
-                // is 0x1) classified as a RepeatNoOp, bound nothing, and republished no caps.
-                // Red once by deleting it: ServerLoopTest's recreate control reads
-                // NativeBindCount() == 1 where 2 is required.
-                ServerLoopInstance().ForgetCurrentTuple();
-                return MOBILEGL_OK;
-            }
-        } args{};
-        (void)RunOnApply(args);
+        // scout-install 5.3's named hazard. The frame channel is blocking, so nothing about
+        // that changed with fc.
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::ReleaseResources;
+        (void)ServerLoopInstance().RunSurfaceControlFrame(frame);
     }
 
     Bool ServerInitCapabilities() {
-        struct Args {
-            Bool ok = false;
-            MobileGLResult Run() {
-                MG_Backend::BackendObject* backend = ServerBackendOrNull();
-                if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
-                ok = backend->InitCapabilities();
-                if (!ok) return MOBILEGL_OK;
-                ServerSession* session = ServerSession::Active();
-                if (session != nullptr && session->Accepted()) {
-                    (void)session->PublishCapsSnapshot();
-                }
-                return MOBILEGL_OK;
-            }
-        } args{};
-        return RunOnApply(args) == MOBILEGL_OK && args.ok;
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::InitCapabilitiesInprocOnly;
+        const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
+        return rc == MOBILEGL_OK && frame.ok;
     }
 
     Bool ServerInitWindowSurface() {
-        struct Args {
-            Bool ok = false;
-            MobileGLResult Run() {
-                MG_Backend::BackendObject* backend = ServerBackendOrNull();
-                if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
-                ok = backend->InitWindowSurface();
-                return MOBILEGL_OK;
-            }
-        } args{};
-        return RunOnApply(args) == MOBILEGL_OK && args.ok;
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::InitWindowSurfaceInprocOnly;
+        const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
+        return rc == MOBILEGL_OK && frame.ok;
     }
 
     void ServerSetWindowHandle(const MG_Backend::WindowHandle& handle) {
-        struct Args {
-            const MG_Backend::WindowHandle* handle;
-            MobileGLResult Run() {
-                MG_Backend::BackendObject* backend = ServerBackendOrNull();
-                if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
-                backend->SetWindowHandle(*handle);
-                return MOBILEGL_OK;
-            }
-        } args{&handle};
-        (void)RunOnApply(args);
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::SetWindowHandle;
+        PackWindowHandle(frame, handle);
+        (void)ServerLoopInstance().RunSurfaceControlFrame(frame);
     }
 
 } // namespace MobileGL::MG_Remote::Server

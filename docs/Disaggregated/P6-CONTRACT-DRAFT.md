@@ -39,7 +39,7 @@ other gate here.
 | row | encoding | invalid | consumer |
 |---|---|---|---|
 | `DisplayToken` / `SurfaceToken` / `ContextToken` | `Uint64`, minted by the client, dense from 1, never reused in a session. Server keeps token → native handle; it never sees the client's EGL values. `protocol.fbs:186-196`'s `display` / `surface` are already `ulong` and are these. | `0` on any op but `ReleaseCurrent` → `Fatal{ProtocolCorruption}` | the server's surface map |
-| `SurfaceOpKind` additions | Append-only to `protocol.fbs:166-175`. Expected `SetSwapInterval`, `ReleaseResources`, `SetWindowHandle` — **`PENDING a6`** (audit item 4). | unknown tag → `Fatal{ProtocolCorruption}`, never ignored | `ServerMain`'s control pump |
+| `SurfaceOpKind` additions | **LANDED by P5f `fc`** (append-only, `protocol.fbs:166-179`): `SetSwapInterval=8`, `ReleaseResources=9`, `SetWindowHandle=10`, plus `WindowKind::MetalLayer=6` and `SurfaceOp.readSurface/context` (f0-egl's schema gap list, confirmed to the letter). | unknown tag → `Fatal{ProtocolCorruption}`, never ignored | `ServerMain`'s control pump |
 | `WindowKind::AndroidNativeWindow` at the server | Refusal: `Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"}`. | — | §4.3 |
 | `FatalCode::ServerCrashed` / `DeviceLost` | Already allocated (`protocol.fbs:234-242`); P6 is the first phase that can produce either. | — | §5 |
 | ABI fingerprint | Unchanged. `CapsCodec.h:23-29`: spawn is same-machine, same-binary, so the existing `sizeof(DynamicBackendParameters)` / `sizeof(MGPCaps)` / build-fingerprint handshake is inherited. Fixed-width rewrite stays P7's. | mismatch → `Fatal{AbiMismatch}` | `SessionHandshakeTest.cpp:115` |
@@ -80,20 +80,30 @@ other gate here.
 
 ## §4 The control plane (`cp`)
 
-1. `Server/ServerLoop.cpp:802-1022`'s twelve `Server*` forwarders each post a function pointer plus
-   a stack-local `void*` to a one-slot mailbox (`ServerLoop.cpp:533-568`, `:645`) — P5c audit row
-   G4, recorded as P6's (`CONTRACT-P5C.md:537`). Neither has meaning across a process, so each
-   becomes a `SurfaceOp` / `SurfaceReply` pair.
-2. Reconciliation against the seven existing enumerators: `ServerSwapEGLBuffers` stays a record with
-   its own present credit (P5e ruling, `Client/BackendObject_Remote.cpp`); `ServerInitCapabilities`
-   is answered by `CapsSnapshot`; `ServerInitWindowSurface` is a client-side no-op. The remaining
-   nine map onto the seven plus §1's additions. **`PENDING a6`**.
+1. **The framing itself LANDED in P5f, package `fc`** (`docs/Disaggregated/notes/p5f/fc-report.md`).
+   The twelve `Server*` forwarders no longer post a function pointer plus a stack-local `void*` to a
+   one-slot mailbox (that was P5c audit row G4, recorded as P6's by `CONTRACT-P5C.md:537`): each
+   packs a value-only `Server::SurfaceControlFrame`
+   (`MG_Remote/Server/SurfaceControlFrame.h`) and the one blocking slot carries it by value. P6's
+   remainder is TRANSPORT ONLY: the client encodes the frame with
+   `MG_Remote::EncodeSurfaceOpFrame` (`MG_Remote/Protocol/SurfaceOpCodec.h`) onto the control
+   socket, the server's pump decodes and enters through
+   `MG_Remote::ServerApplyWireSurfaceOp`, and the reply crosses as `SurfaceReply`.
+2. Reconciliation against the enumerators (f0-egl §4.2, landed): `ServerSwapEGLBuffers` stays a
+   record with its own present credit (P5e ruling, `Client/BackendObject_Remote.cpp`);
+   `ServerInitCapabilities` is answered by `CapsSnapshot`; `ServerInitWindowSurface` is a
+   client-side no-op. The three ride the inproc frame channel as inproc-only kinds that the codec
+   refuses to encode (`SurfaceWireError::InprocOnlyOpOnTheWire`). The remaining nine map onto the
+   seven plus §1's additions - ten wire ops with `ReleaseCurrent`.
 3. **Real windows are refused, by name.** `WindowHandle::Handle` (`MG_Backend/BackendObject.h:561-566`)
-   is an `ANativeWindow*` on Android. P6 lands pbuffer / surfaceless / offscreen — what `HeadlessGL`,
-   the split-equivalent lane and trace replay need, and what P6's exit gate measures. **Real window
-   arrival is P12.**
-4. `ForgetCurrentTuple`'s N-3 rule (`ServerLoop.cpp:318-330`) is a backend property, not a transport
-   one, and must hold identically on the frame path.
+   is an `ANativeWindow*` on Android. fc landed the refusal at the wire entry: a decoded
+   `WindowKind::AndroidNativeWindow` dies `Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"}`
+   (`SurfaceOpCodec.cpp` `ServerApplyWireSurfaceOp`). P6 lands pbuffer / surfaceless / offscreen —
+   what `HeadlessGL`, the split-equivalent lane and trace replay need, and what P6's exit gate
+   measures. **Real window arrival is P12.**
+4. `ForgetCurrentTuple`'s N-3 rule holds identically on the frame path: the forgetting calls moved
+   INTO the dispatch (`ServerLoop.cpp` `ApplySurfaceControlFrame`), and ServerLoopTest's C7/N-3
+   controls drive them through framed posts unchanged.
 
 ## §5 Death, and what P5e changed
 

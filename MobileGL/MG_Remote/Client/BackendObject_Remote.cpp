@@ -32,7 +32,7 @@ namespace MobileGL::MG_Remote::Client {
         // ---- the EGL seam ------------------------------------------------------------------
         //
         // THE NINE EGL VIRTUALS CALL v1's TWELVE FORWARDERS AND NOTHING ELSE. c1 round 1 built
-        // its own trampolines over ServerLoop::RunOnApplyThread and ServerLoop::Backend(),
+        // its own trampolines over ServerLoop's control channel and ServerLoop::Backend(),
         // which ran the right driver call on the right thread and was still wrong, because
         // three of the twelve do MORE than forward:
         //
@@ -48,11 +48,12 @@ namespace MobileGL::MG_Remote::Client {
         // That is the failure this seam exists to make impossible: there is no second route to
         // the server's EGL, so there is no route that can skip what the forwarder does.
         //
-        // The forwarders block on mgl-srv-apply themselves and run INLINE when the caller is
-        // already on that thread, so this file no longer needs RunOnApplyThread, a per-call
-        // args struct, or a null-backend check of its own - ServerBackendOrNull() inside each
-        // forwarder is the one place that answers "the bring-up did not complete", and it
-        // answers `false` rather than crashing or succeeding locally.
+        // The forwarders pack a SurfaceControlFrame and block on mgl-srv-apply themselves (P5f
+        // fc; the channel was a function-pointer mailbox before that) and run INLINE when the
+        // caller is already on that thread, so this file needs no frame, no per-call args
+        // struct, and no null-backend check of its own - the dispatch's null-backend arm is the
+        // one place that answers "the bring-up did not complete", and it answers `false` rather
+        // than crashing or succeeding locally.
 
         // CapsMirror's adoption hook. A free function because the hook is a raw function
         // pointer (ID-8: this can fire on a path that must not allocate), and it reaches the

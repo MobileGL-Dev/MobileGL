@@ -122,11 +122,14 @@ enum class SurfaceOpKind : uint8_t {
   ReleaseSurface = 5,
   MakeCurrent = 6,
   ReleaseCurrent = 7,
+  SetSwapInterval = 8,
+  ReleaseResources = 9,
+  SetWindowHandle = 10,
   MIN = None,
-  MAX = ReleaseCurrent
+  MAX = SetWindowHandle
 };
 
-inline const SurfaceOpKind (&EnumValuesSurfaceOpKind())[8] {
+inline const SurfaceOpKind (&EnumValuesSurfaceOpKind())[11] {
   static const SurfaceOpKind values[] = {
     SurfaceOpKind::None,
     SurfaceOpKind::InitializeDisplay,
@@ -135,13 +138,16 @@ inline const SurfaceOpKind (&EnumValuesSurfaceOpKind())[8] {
     SurfaceOpKind::ResizeWindowSurface,
     SurfaceOpKind::ReleaseSurface,
     SurfaceOpKind::MakeCurrent,
-    SurfaceOpKind::ReleaseCurrent
+    SurfaceOpKind::ReleaseCurrent,
+    SurfaceOpKind::SetSwapInterval,
+    SurfaceOpKind::ReleaseResources,
+    SurfaceOpKind::SetWindowHandle
   };
   return values;
 }
 
 inline const char * const *EnumNamesSurfaceOpKind() {
-  static const char * const names[9] = {
+  static const char * const names[12] = {
     "None",
     "InitializeDisplay",
     "CreateWindowSurface",
@@ -150,13 +156,16 @@ inline const char * const *EnumNamesSurfaceOpKind() {
     "ReleaseSurface",
     "MakeCurrent",
     "ReleaseCurrent",
+    "SetSwapInterval",
+    "ReleaseResources",
+    "SetWindowHandle",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameSurfaceOpKind(SurfaceOpKind e) {
-  if (::flatbuffers::IsOutRange(e, SurfaceOpKind::None, SurfaceOpKind::ReleaseCurrent)) return "";
+  if (::flatbuffers::IsOutRange(e, SurfaceOpKind::None, SurfaceOpKind::SetWindowHandle)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesSurfaceOpKind()[index];
 }
@@ -168,37 +177,40 @@ enum class WindowKind : uint8_t {
   Win32Hwnd = 3,
   Surfaceless = 4,
   Pbuffer = 5,
+  MetalLayer = 6,
   MIN = None,
-  MAX = Pbuffer
+  MAX = MetalLayer
 };
 
-inline const WindowKind (&EnumValuesWindowKind())[6] {
+inline const WindowKind (&EnumValuesWindowKind())[7] {
   static const WindowKind values[] = {
     WindowKind::None,
     WindowKind::AndroidNativeWindow,
     WindowKind::X11,
     WindowKind::Win32Hwnd,
     WindowKind::Surfaceless,
-    WindowKind::Pbuffer
+    WindowKind::Pbuffer,
+    WindowKind::MetalLayer
   };
   return values;
 }
 
 inline const char * const *EnumNamesWindowKind() {
-  static const char * const names[7] = {
+  static const char * const names[8] = {
     "None",
     "AndroidNativeWindow",
     "X11",
     "Win32Hwnd",
     "Surfaceless",
     "Pbuffer",
+    "MetalLayer",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameWindowKind(WindowKind e) {
-  if (::flatbuffers::IsOutRange(e, WindowKind::None, WindowKind::Pbuffer)) return "";
+  if (::flatbuffers::IsOutRange(e, WindowKind::None, WindowKind::MetalLayer)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesWindowKind()[index];
 }
@@ -1052,7 +1064,9 @@ struct SurfaceOp FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_NATIVETOKEN = 14,
     VT_WIDTH = 16,
     VT_HEIGHT = 18,
-    VT_SWAPINTERVAL = 20
+    VT_SWAPINTERVAL = 20,
+    VT_READSURFACE = 22,
+    VT_CONTEXT = 24
   };
   uint64_t seq() const {
     return GetField<uint64_t>(VT_SEQ, 0);
@@ -1081,6 +1095,12 @@ struct SurfaceOp FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   int32_t swapInterval() const {
     return GetField<int32_t>(VT_SWAPINTERVAL, 0);
   }
+  uint64_t readSurface() const {
+    return GetField<uint64_t>(VT_READSURFACE, 0);
+  }
+  uint64_t context() const {
+    return GetField<uint64_t>(VT_CONTEXT, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1093,6 +1113,8 @@ struct SurfaceOp FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<int32_t>(verifier, VT_WIDTH, 4) &&
            VerifyField<int32_t>(verifier, VT_HEIGHT, 4) &&
            VerifyField<int32_t>(verifier, VT_SWAPINTERVAL, 4) &&
+           VerifyField<uint64_t>(verifier, VT_READSURFACE, 8) &&
+           VerifyField<uint64_t>(verifier, VT_CONTEXT, 8) &&
            verifier.EndTable();
   }
 };
@@ -1128,6 +1150,12 @@ struct SurfaceOpBuilder {
   void add_swapInterval(int32_t swapInterval) {
     fbb_.AddElement<int32_t>(SurfaceOp::VT_SWAPINTERVAL, swapInterval, 0);
   }
+  void add_readSurface(uint64_t readSurface) {
+    fbb_.AddElement<uint64_t>(SurfaceOp::VT_READSURFACE, readSurface, 0);
+  }
+  void add_context(uint64_t context) {
+    fbb_.AddElement<uint64_t>(SurfaceOp::VT_CONTEXT, context, 0);
+  }
   explicit SurfaceOpBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1149,8 +1177,12 @@ inline ::flatbuffers::Offset<SurfaceOp> CreateSurfaceOp(
     uint64_t nativeToken = 0,
     int32_t width = 0,
     int32_t height = 0,
-    int32_t swapInterval = 0) {
+    int32_t swapInterval = 0,
+    uint64_t readSurface = 0,
+    uint64_t context = 0) {
   SurfaceOpBuilder builder_(_fbb);
+  builder_.add_context(context);
+  builder_.add_readSurface(readSurface);
   builder_.add_nativeToken(nativeToken);
   builder_.add_surface(surface);
   builder_.add_display(display);

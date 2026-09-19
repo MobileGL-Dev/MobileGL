@@ -83,11 +83,14 @@ gtest_discover_tests(PipeWireCodecTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS un
 #   StagedTextureStoreTest the texture half of R-11: tx's staged-texture store, its
 #                          Fatal{StageSnapshotTooNarrow}, and the E-P5c #2 production wiring
 #                          through the real resource op table (P5c tx)
+#   SurfaceControlFrameTest P5f fc: the value frame that replaced the control mailbox's
+#                          function-pointer payload, its wire codec against protocol.fbs's
+#                          SurfaceOp/SurfaceReply, and the two named refusals at the wire entry
 #
 # THIS FILE IS THE PHASE'S ONE RECURRING MERGE CONFLICT, and it is the same-point-append shape
 # BRIEF §5's ownership table exists to prevent: three packages, three targets, one end-of-file.
 # The loop is what stops there being a fourth: a package adding a suite adds a NAME.
-foreach (wiretest IN ITEMS RemoteClientTest ServerLoopTest SessionHandshakeTest StagedTextureStoreTest)
+foreach (wiretest IN ITEMS RemoteClientTest ServerLoopTest SessionHandshakeTest StagedTextureStoreTest SurfaceControlFrameTest)
     add_executable(${wiretest} ${wiretest}.cpp)
 
     target_include_directories(${wiretest} PRIVATE

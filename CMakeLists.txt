@@ -595,6 +595,10 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         MobileGL/MG_Remote/Server/ServerSession.cpp
         MobileGL/MG_Remote/Server/PipeApplier.cpp
         MobileGL/MG_Remote/Server/ServerLoop.cpp
+        # P5f fc: the value frame that replaced the control mailbox's function-pointer payload,
+        # and its codec against protocol.fbs's SurfaceOp/SurfaceReply (the spawn arm's seam).
+        MobileGL/MG_Remote/Server/SurfaceControlFrame.cpp
+        MobileGL/MG_Remote/Protocol/SurfaceOpCodec.cpp
     )
 endif()
 

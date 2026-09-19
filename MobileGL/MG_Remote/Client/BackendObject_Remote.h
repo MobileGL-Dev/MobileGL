@@ -36,7 +36,8 @@
 // and SwapEGLBuffers' route into GetBackendFunctions().Present() - and the client needs all of
 // it, because Present is a class-B emitter reached through exactly that route (the verb census's
 // trap 3: Present has zero MG_Impl call sites). So each override does BOTH: it runs the real
-// EGL work on the apply thread, through v1's ServerLoop::RunOnApplyThread, and then lets the
+// EGL work on the apply thread, through ServerLoop's control-frame channel (P5f fc; v1's
+// function-pointer mailbox before it), and then lets the
 // base class keep the client-side books.
 //
 // SetEGLSwapInterval IS THE ONE THAT MUST NOT REACH THE TABLE. The base implementation

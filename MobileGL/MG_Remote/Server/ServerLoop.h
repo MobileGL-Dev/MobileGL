@@ -71,6 +71,7 @@
 #include <Includes.h>
 
 #include "ServerSession.h"
+#include "SurfaceControlFrame.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -169,7 +170,7 @@ namespace MobileGL::MG_Remote::Server {
             // a type that has padding bytes would let two calls ON THE SAME THREAD return
             // different keys, and OnApplyThread() would then answer FALSE ON THE APPLY THREAD -
             // a role guard that has stopped guarding, which is the one direction CONTRACT-P5C
-            // rule E says a guard may never fail in (RunOnApplyThread would also lose its
+            // rule E says a guard may never fail in (RunSurfaceControlFrame would also lose its
             // re-entrancy shortcut and the EGL teardown post would deadlock on m_controlDone).
             // Every library this fallback is built against today wraps a single scalar
             // (libstdc++ __gthread_t, libc++ __libcpp_thread_id, MSVC unsigned int) and
@@ -214,11 +215,29 @@ namespace MobileGL::MG_Remote::Server {
         // nine EGL lifecycle virtuals cross; it is deliberately NOT a queue of async messages,
         // because every one of them has a return value the caller acts on immediately.
         //
-        // A raw function pointer plus a user pointer, not std::function: this runs on the
-        // teardown path too, and the teardown path may not allocate - ID-8's leak-at-exit rule
-        // exists because frontend destructors reach here from exit handlers.
-        using ControlWork = MobileGLResult (*)(void* user);
-        MobileGLResult RunOnApplyThread(ControlWork work, void* user);
+        // THE REQUEST IS A VALUE FRAME (P5f, package fc). It used to be a raw function pointer
+        // plus a void* to a stack-local Args struct - neither has a meaning across a process
+        // boundary, which is the whole of P5c audit row G4. Now the slot carries one
+        // SurfaceControlFrame BY VALUE: the op's identity is the frame's `kind`, its arguments
+        // are scalars, and its reply fields come back in the same value when the wait returns.
+        // What did NOT move: the blocking handshake, the one slot, and the apply-thread
+        // ownership. Under spawn the same frame is what SurfaceOpCodec encodes into a
+        // Wire::SurfaceOp - this signature is the seam both transports share.
+        MobileGLResult RunSurfaceControlFrame(SurfaceControlFrame& frame);
+
+        // The TEST seam through the same channel: posts a ProbeForTesting frame whose dispatch
+        // runs the given hook on the apply thread. A raw function pointer held in a MEMBER (not
+        // in the mailbox slot, which carries the frame and nothing else), because the suites that
+        // drive guards and Fatal arms need arbitrary work on the apply thread and the teardown
+        // path's no-allocation rule (ID-8) forbids a std::function here. Same discipline as
+        // SetBeforeRetireHookForTesting.
+        using ControlProbeHook = MobileGLResult (*)(void* user);
+        MobileGLResult RunProbeOnApplyThreadForTesting(ControlProbeHook hook, void* user);
+
+        // How many frames this loop has dispatched (every kind, probe included). Reset by
+        // Start(). The frame channel's own red-once handle: a forwarder that stopped posting
+        // frames leaves this unmoved.
+        Uint64 ControlFramesDispatched() const;
 
         // ---- v1's additions beyond c0's signature block ---------------------------------
 
@@ -235,8 +254,8 @@ namespace MobileGL::MG_Remote::Server {
         // context is never OWNED by it.
         MobileGLResult CreateBackend(BackendType type);
 
-        // True on the apply thread itself. RunOnApplyThread uses it to run inline rather than
-        // deadlock when the apply thread posts to itself - which the EGL teardown path does,
+        // True on the apply thread itself. RunSurfaceControlFrame uses it to run inline rather
+        // than deadlock when the apply thread posts to itself - which the EGL teardown path does,
         // because ~BackendObject_DirectGLES runs THERE and reaches ReleaseEGLResources.
         //
         // INLINE, AND THAT IS THE POINT (P5d round 3, package D): see the Detail block above.
@@ -337,7 +356,7 @@ namespace MobileGL::MG_Remote::Server {
         // narrower than the name's "a control request is in flight". The shadow is cleared
         // when the pump takes the work, not when the work returns, so for the whole duration
         // of `work(user)` this answers false although m_controlPending is still true and the
-        // poster is still blocked in RunOnApplyThread. That is deliberate - it is a PARK
+        // poster is still blocked in RunSurfaceControlFrame. That is deliberate - it is a PARK
         // PREDICATE, and the thread that would act on it is the one running the work - but it
         // means this is not a liveness query and must not be used as one. The only in-tree
         // reader outside the test is the apply thread's own `ready` lambda, which by
@@ -346,8 +365,12 @@ namespace MobileGL::MG_Remote::Server {
 
     private:
         void ApplyThreadMain();
-        // Runs a posted control request, if there is one. Returns true if it ran one.
+        // Runs a posted control frame, if there is one. Returns true if it ran one.
         Bool PumpControlRequest();
+        // The dispatch, on the apply thread (or inline for a re-entrant post): executes the
+        // frame's op against the private backend and fills the frame's reply half. The eleven
+        // wire+inproc op bodies from the old forwarder Args structs live here now.
+        MobileGLResult ApplySurfaceControlFrame(SurfaceControlFrame& frame);
         // Pops and applies every record currently in the ring; returns how many it applied.
         Uint64 DrainRing();
         void SignalExited();
@@ -364,8 +387,11 @@ namespace MobileGL::MG_Remote::Server {
         // context - see Stop().
         UniquePtr<MG_Backend::BackendObject> m_backend;
 
-        // The blocking control mailbox. ONE slot, because the verb barrier already leaves one
+        // The blocking control channel. ONE slot, because the verb barrier already leaves one
         // client thread runnable at a time; m_callerMutex serialises anything that is not.
+        // The slot carries ONE SurfaceControlFrame BY VALUE (P5f, package fc) - no function
+        // pointer, no address of caller storage. The poster's frame is copied in at publish and
+        // the dispatch's reply half is copied back over it before m_controlDone is signalled.
         std::mutex m_callerMutex;
         std::mutex m_controlMutex;
         // THE MAILBOX'S ONE-BIT SHADOW, and the only field of it the idle poll may read.
@@ -382,11 +408,20 @@ namespace MobileGL::MG_Remote::Server {
         // notifier anywhere in the tree (m_controlDone is the one that carries the handshake).
         std::atomic<Bool> m_controlPosted{false};
         std::condition_variable m_controlDone;
-        ControlWork m_controlWork = nullptr;
-        void* m_controlUser = nullptr;
+        // The one slot. A frame by value; the reply half is written through it on the way back.
+        SurfaceControlFrame m_controlFrame;
         MobileGLResult m_controlResult = MOBILEGL_OK;
         Bool m_controlPending = false;
         Bool m_controlFinished = false;
+        // Minted per posted frame (0 = never posted) and the dispatch tally beside it. Both
+        // atomic: the re-entrant inline arm mints without taking m_callerMutex.
+        std::atomic<Uint64> m_controlSeq{0};
+        std::atomic<Uint64> m_controlFramesDispatched{0};
+        // The test probe (RunProbeOnApplyThreadForTesting). Members, NOT slot content - the slot
+        // carries only the frame. Written before the probe frame is published, so the mailbox's
+        // own release/acquire handshake orders them for the apply thread.
+        std::atomic<ControlProbeHook> m_controlProbeHook{nullptr};
+        std::atomic<void*> m_controlProbeUser{nullptr};
 
         // The BOUNDED join's other half. std::thread::join has no deadline, so a lost wakeup
         // would wedge CI rather than fail it; the thread signals here last and Stop() waits
@@ -456,6 +491,14 @@ namespace MobileGL::MG_Remote::Server {
     // WHY THEY ARE FREE FUNCTIONS AND NOT MEMBERS: c1 needs exactly this surface and nothing
     // else of the server, so the seam between the two packages is a list of twelve signatures
     // rather than a class with a lifecycle.
+    //
+    // P5f (package fc): each of the twelve packs its arguments into a SurfaceControlFrame and
+    // posts it through RunSurfaceControlFrame - the wire-shaped value channel that replaced the
+    // function-pointer mailbox (P5c audit row G4). Nine of them map onto the ten wire ops of
+    // protocol.fbs's SurfaceOp; ServerSwapEGLBuffers, ServerInitCapabilities and
+    // ServerInitWindowSurface ride the same channel as inproc-only kinds (present travels as a
+    // record, capabilities are answered by the CapsSnapshot frame, and the third has no caller -
+    // f0-egl's census, findings F8/§4.2).
     Bool ServerInitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor);
     Bool ServerCreateEGLWindowSurface(EGLSurface surface, const MG_Backend::WindowHandle& handle);
     Bool ServerResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);
