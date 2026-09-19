@@ -173,6 +173,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // and payload-only so tests can pin the contract without a VkDevice.
         static Bool ShouldSuppressDepthWrite(const PipelineCreatePayload& payload);
 
+        // Diagnostic: live pipeline entries.
+        SizeT GetCacheEntryCount() const { return m_cache.size(); }
+
     private:
         struct PipelineCacheEntry {
             VkPipeline pipeline = VK_NULL_HANDLE;

@@ -131,6 +131,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void Initialize();
         void Shutdown();
 
+        // Diagnostic (local only): logs VMA totals + live buffer/texture/
+        // program/pipeline counts to stderr for Jetsam triage.
+        void DumpMemoryStats() const;
+
         // IBufferCopyCommandProvider: recording command buffer, outside any
         // render pass, for immediate staged buffer copies.
         VkCommandBuffer AcquireBufferCopyCommandBuffer() override;

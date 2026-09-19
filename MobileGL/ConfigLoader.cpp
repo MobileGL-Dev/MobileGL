@@ -177,6 +177,7 @@ namespace MobileGL::MG_ConfigLoader {
         features.AdvertiseFp64 = QueryEnvFlag("MOBILEGL_ADVERTISE_FP64");
         features.MagmaR11G11B10FFallback = QueryEnvFlag("MOBILEGL_MAGMA_R11G11B10F_FALLBACK");
         features.MagmaFramesInFlight = QueryEnvUint32("MOBILEGL_MAGMA_FRAMESINFLIGHT", 3, 1, 64);
+        features.MagmaVmaBlockSizeMB = QueryEnvUint32("MOBILEGL_MAGMA_VMA_BLOCK_SIZE_MB", 32, 8, 256);
         features.EsprytAvoidSamplerMipmapMinFilter =
             QueryEnvFlag("MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
         features.EsprytAvoidExplicitLodBias = QueryEnvFlag("MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS");
@@ -189,6 +190,7 @@ namespace MobileGL::MG_ConfigLoader {
         features.EsprytDisableUploadRing = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_UPLOAD_RING");
         features.EsprytDisableInvalidateFlush = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH");
         features.DisableLargeBufferAdoption = QueryEnvFlag("MOBILEGL_DISABLE_LARGE_BUFFER_ADOPTION");
+        features.LargeBufferAdoptThresholdMB = QueryEnvUint32("MOBILEGL_LARGE_BUFFER_ADOPT_MB", 4, 1, 64);
         features.EsprytForceDepthStencilReadbackEmulation =
             QueryEnvFlag("MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION");
         features.RelaxedSemantics = QueryEnvFlag("MOBILEGL_RELAXED_SEMANTICS");

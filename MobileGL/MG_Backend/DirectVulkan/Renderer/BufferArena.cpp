@@ -7,6 +7,18 @@
 // End of Source File Header
 
 #include "BufferArena.h"
+#include <atomic>
+#include <cstdio>
+
+namespace {
+    // Diagnostic: cumulative transient-arena upload bytes + high-watermark.
+    std::atomic<MobileGL::Uint64> g_arenaUploadedBytes{0};
+    std::atomic<MobileGL::Uint64> g_arenaHighWatermark{0};
+} // namespace
+
+MobileGL::Uint64 MobileGL::MG_Backend::DirectVulkan::BufferArena::GetCumulativeUploadedBytes() {
+    return g_arenaUploadedBytes.load(std::memory_order_relaxed);
+}
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     Bool BufferArena::Initialize(const BufferArenaDesc& desc) {
@@ -69,6 +81,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool BufferArena::Upload(Uint32 frameIndex, const void* data, VkDeviceSize size, VkDeviceSize alignment,
                              BufferSlice& outSlice) {
         MOBILEGL_ASSERT(data != nullptr || size == 0, "BufferArena::Upload data pointer is null");
+        g_arenaUploadedBytes.fetch_add(static_cast<Uint64>(size), std::memory_order_relaxed);
         if (!Allocate(frameIndex, size, alignment, outSlice)) {
             return false;
         }
@@ -117,6 +130,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // memos). The release therefore has to survive every mid-frame reclaim and land on
             // the next ResetFrame of this slot - see VkBufferManager::CollectAllDeferredReleases.
             m_deferredReleases[frameIndex].push_back(std::move(buffer));
+            // Diagnostic: log arena outgrowths (high-watermark only) for Jetsam triage.
+            Uint64 prevMax = g_arenaHighWatermark.load(std::memory_order_relaxed);
+            while (newCapacity > prevMax &&
+                   !g_arenaHighWatermark.compare_exchange_weak(prevMax, static_cast<Uint64>(newCapacity),
+                                                               std::memory_order_relaxed)) {
+            }
+            if (newCapacity > prevMax) {
+                std::fprintf(stderr,
+                             "[MobileGL-MemStats] arena outgrown: newCapacity=%lluMB cumulativeUploaded=%lluMB\n",
+                             (unsigned long long)(newCapacity / 1048576),
+                             (unsigned long long)(g_arenaUploadedBytes.load(std::memory_order_relaxed) / 1048576));
+                std::fflush(stderr);
+            }
         }
 
         VkBufferObjectDesc bufferDesc{};

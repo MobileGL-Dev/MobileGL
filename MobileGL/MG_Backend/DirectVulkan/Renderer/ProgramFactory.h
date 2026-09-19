@@ -491,6 +491,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // A caller that memoised a VkProgramObject* may keep dereferencing it only while
         // this is unchanged; on a bump it must re-run GetOrCreateProgram.
         Uint64 GetCacheStructureEpoch() const { return m_cacheStructureEpoch; }
+        // Diagnostic: live program entries.
+        SizeT GetCacheEntryCount() const { return m_cache.size(); }
         // A memoised entry pointer bypasses GetOrCreateProgram, whose per-lookup stamp is
         // what keeps an in-use entry out of OnFrameBoundary's idle sweep - so such a
         // caller must re-stamp the entry itself, at least once per frame boundary.
