@@ -32,8 +32,8 @@ P5c 立过同样的规则（规则 E），但它的判据是**审计**——人�
 inline PipeInputs& gPipeInputs = *new PipeInputs();
 ```
 
-一个**普通的进程级全局对象**，不在任何共享内存段里。它是“后端被推送的状态块”——
-backend 不再每 draw 去读 `MG_State::pGLContext`，改为读这个块。每个字段带一个**归属类**
+一个**普通的进程级全局对象**，不在任何共享内存段里。它是“后端被推送的状态块”——backend 不再每
+draw 去读 `MG_State::pGLContext`，改为读这个块。每个字段带一个**归属类**
 （CONTRACT-P5 表 2 / R-7，手维护的一半在 `MG_Pipe/FieldOwnership.def`）：
 
 | 归属类 | 量 | 含义 |
@@ -43,38 +43,101 @@ backend 不再每 draw 去读 `MG_State::pGLContext`，改为读这个块。每�
 | `BARRIER_PULLED` | **21 行 / 15 个字段** | **P5 的债**：server 读的是 client 的残余填充留在“那唯一一份共享的 `gPipeInputs`”里的值 |
 | `FATAL` | 4 行 | 没有载体，缩减路径也不读；读到即 abort |
 
-写它的是 client（`MG_Impl/Pipe/PipeFill.cpp`），读它的是 backend。每个字段带一个**逐 verb 的
-世代戳**，读到比当前 verb 序号旧的戳就是
-`Fatal{UnmigratedPipeInput, "<Field>@<Verb>"}`（`MOBILEGL_PIPE_POISON`）。
+**最要紧的一点，先说：`BARRIER_PULLED` 里好几个字段存的不是值，是指向 client 对象的指针。**
 
-### 1.2 为什么今天能工作
+```cpp
+// MG_Impl/Pipe/PipeFill.cpp:274 —— 裸指针，指进 client 的纹理单元数组
+dst.m_textureUnitBase = &ctx.GetTextureUnitObject(0);
+// MG_Impl/Pipe/PipeFill.cpp:245 —— 前端对象的 SharedPtr
+dst.m_programForDraw  = ctx.GetProgramForDraw();
+```
+
+读侧照着解引用（`PipeInputs.h:669`）：
+
+```cpp
+TextureUnit& GetTextureUnitObject(Int unit) { return m_textureUnitBase[unit]; }
+```
+
+`PipeFill.cpp:2591-2592` 对 `set_shader_buffers` 那组的说法是同一件事：该字段是
+“four raw bases into the frontend's binding-point table”。**所以这不是一块照搬过去就能用的状态。**
+
+### 1.2 一次 draw 的完整生命周期
+
+以 `glBindTexture(GL_TEXTURE_2D, 7)` 之后一次 `glDrawArrays(GL_TRIANGLES, 0, 3)` 为例。
+
+**① `glBindTexture`**：MG_Impl 更新 `MG_State` 的影子状态，tracker 置脏位。**什么都不发。**
+推送只发生在 verb 边界。
+
+**② `glDrawArrays`** → `MGPipeValidateForVerb(kVerbDrawArrays)`（`MG_Impl/Pipe/PipeFill.cpp:3347`），
+四步：
+
+| 步 | 做什么 | 碰 `gPipeInputs` 吗 |
+|---|---|---|
+| 1 | 判定本条记录设不设障（`barriered` / `fillOwed`） | 决定第 4 步填不填 |
+| 2 | 脏位走查 `tracker.Update(*ctx, verbClass)` | 否 |
+| 3 | **发射**：14 个 emitter 把脏子系统变成**记录**；纹理绑定变成 `set_texture_bindings`，带的是**句柄** | 否 |
+| 4 | **残余填充**：记录没供给的字段，`CopyField(inputs, *ctx, field)` 从活的 GLContext 抄进块里，盖上本 verb 的世代戳 | **是——`BARRIER_PULLED` 就是这一步** |
+
+随后 draw 记录本身写进 `SEG_CMD` ring 并敲门铃。设障就等 `appliedSeq`；不设障就直接返回（P5e）。
+
+**③ server apply 线程**：从 ring 取记录 → `PipeApplier::ApplyOne` → 分发到 verb sink → 调后端
+`DirectGLES::DrawArrays`。
+
+**④ 后端 `PrepareForDraw()` 取它要的东西**，两条路：
+
+- **走记录**：用记录带来的句柄查 **server 自己的对象表**。跨进程成立。
+- **走 `gPipeInputs`**：`GetTextureUnitObject(0)` 返回 `m_textureUnitBase[0]`，而那个指针指进
+  **client 的数组**。今天成立，只因为两个角色同地址空间、且 barrier 保证此刻 client 停着。
+
+**⑤** 后端发出真正的 `glDrawArrays` 给厂商驱动。
+
+**字段的寿命**：第 4 步填入并盖上 verb N 的戳；后端在 verb N 的 apply 期间读；到 verb N+1 若不
+重填，读到的就是旧戳 → `Fatal{UnmigratedPipeInput, "<Field>@<Verb>"}`（`MOBILEGL_PIPE_POISON`）。
+**一个 verb 一次，不跨 verb 存活。**
+
+同一个例子今天分两条臂，正好是 §2.1 那张表的缩影：
+
+| | 纹理绑定怎么到后端 |
+|---|---|
+| **Espryt** | 走记录：`set_texture_bindings` 带句柄 → server 自己的表。P5e 已退役 `GetTextureUnitObject`。**跨进程成立。** |
+| **Magma** | 仍读 `gPipeInputs.GetTextureUnitObject(0)` → client 的数组。**跨进程不成立。** |
+
+`FieldOwnership.def` 里这一行的原文就是 `"P5e (Espryt unbarriered), P7 (Magma)"`。
+
+### 1.3 为什么今天能工作
 
 因为两个角色在**同一个进程、同一个 `gPipeInputs` 对象**上，而 verb barrier 保证同一时刻
 {GL 线程, apply 线程} 至多一个可运行——所以这个块任何瞬间只有一个写者
 （`PipeInputs.h:904-908` 的裁定）。client 填，server 读，中间不经过任何载体。
 
-`BARRIER_PULLED` 这一类的定义就是："server 在 barrier 把两个线程隔开时，读 client 的残余填充
-留在 `gPipeInputs` 里的值。**合法，并且被计数**（`PipeStats::CallClass::ResidualPulls`）。"
+`BARRIER_PULLED` 这一类的定义就是这句话：“server 在 barrier 把两个线程隔开时，读 client 的残余
+填充留在 `gPipeInputs` 里的值。**合法，并且被计数**（`PipeStats::CallClass::ResidualPulls`）。”
 
-### 1.3 拆进程后它会怎样
+### 1.4 拆进程后它会怎样
 
 **client 进程和 server 进程各有一个 `gPipeInputs`，是两个不同的对象。**
 
-- `RECORD_SUPPLIED` / `APPLIER_DERIVED` 的 **45 个字段**没问题：它们的值本来就由记录或 server
-  自身产生，server 侧的块会被正常填上。
-- `BARRIER_PULLED` 的 15 个字段**没有填充者**。client 进程里那次 fill 写的是 client 自己的块；
-  server 进程的块里那些字段的世代戳永远是旧的 → 每一次读都是
-  `Fatal{UnmigratedPipeInput}`。
-- `MG_Impl` 根本不在 server 进程里，所以连"让 server 自己去 fill"这条退路都没有。
+- `RECORD_SUPPLIED` / `APPLIER_DERIVED` 的 **45 个字段**没问题：值本来就由记录或 server 自身产生，
+  server 侧的块会被正常填上。
+- `BARRIER_PULLED` 的 **15 个字段没有填充者**。第 4 步写的是 **client 那一份**；server 那一份从来
+  没人写过，`FilledGen` 恒为 0 → 后端每次读都 `Fatal{UnmigratedPipeInput}`。
+- `MG_Impl` 根本不在 server 进程里，所以连“让 server 自己去 fill”这条退路都没有。
 
-头文件自己写着这件事（`PipeInputs.h:279`）：当前 verb 边界的清理"对 inproc 足够——两个角色共享
-一个进程、一个 `gPipeInputs`——**而对 P6 是误导的，那里 `MG_Impl` 根本不在 server 里**"。
-以及 `:902`：`rsp` 的值"**就是 P6/P7/P8 债务的大小**"。
+**而且不能靠“把这个块也放进共享内存”解决**（这是最容易想歪的一步）：里面存的是裸指针和
+`SharedPtr`（§1.1）。就算两个进程映射同一段内存，`m_textureUnitBase` 指向的 client 堆地址在
+server 进程里没有意义，`SharedPtr` 的引用计数更跨不过去。
 
-**所以 P5f 对 `gPipeInputs` 的要求**：`BARRIER_PULLED` 归零。每个字段要么升成
-`RECORD_SUPPLIED`（值随记录过线），要么升成 `APPLIER_DERIVED`（server 自己推），要么降成
-`FATAL`（缩减路径不读它）。**块本身不需要跨进程共享，它需要的是每个字段都有一个不依赖对方
-地址空间的来源。**
+头文件自己写着这件事（`PipeInputs.h:279`）：当前 verb 边界的清理“对 inproc 足够——两个角色共享
+一个进程、一个 `gPipeInputs`——**而对 P6 是误导的，那里 `MG_Impl` 根本不在 server 里**”。
+以及 `:902`：`rsp` 的值“**就是 P6/P7/P8 债务的大小**”。
+
+**所以 P5f 对 `gPipeInputs` 的要求**：不是共享它，而是让这 15 个字段**各自换一个不依赖对方地址
+空间的来源**——升成 `RECORD_SUPPLIED`（值随记录过线）、升成 `APPLIER_DERIVED`（server 自己推）、
+或确认缩减路径根本不读它而降成 `FATAL`。
+
+这也正是 §4 双块演练为什么有效：`inproc` 下就给两个角色各一份，第 4 步写 client 的、后端读
+server 的，**今天所有靠“其实是同一个对象”蒙混过去的路径立刻变成具名 Fatal**，带字段名和 verb 名
+——不用拆进程就拿到完整清单。
 
 ---
 
