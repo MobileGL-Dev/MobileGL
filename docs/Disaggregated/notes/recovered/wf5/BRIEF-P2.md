@@ -1,0 +1,462 @@
+# P2 implementation brief — the frontend state tracker, render state as a CSO + dynamic state, the residual value block, and the first Track H slice
+
+Tree: `feat/disaggregated @ 48268068` (worktree `C:/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg`). **This is the P2 base ref.** The scouts were written at `e7a6a72f`; the one commit since is CI-only (`48268068 [CI] (Workflows): run the test and apk lanes on every push to feat/disaggregated`, `.github/workflows/{apk,test}.yml`, +8 lines), so every scout `file:line` still holds and P2 branches from `48268068`.
+
+WSL: `~/w7/pipe` is a worktree of the same repo on `feat/disaggregated`; `~/w7/base` is `dev@81b17c0b` (the performance anchor, untouched). Tree creation is `scratchpad/wf4/wsl_p1_tree.sh <slug> <base-ref> [verify]` with `p1`→`p2` throughout (it creates `~/w7/p2-<slug>` on branch `p2/<slug>`, initialises submodules, copies `3rdparty/glslang/External` and the trace fixtures, then configures and builds `build-linux` (pull), `build-push`, and with a third argument `verify` also `build-verify`). The device-lock loop is `scratchpad/wf2/stats_baseline.sh:16-29` verbatim (mkdir lock under `.../8ab6b3cb-.../scratchpad/w7/locks/<serial>`, 1500 s acquire timeout, 20 s poll, one hold per run, `rm -rf` after).
+
+Every `file:line` below was re-opened at `48268068`. Corrections to the scouts are **[correction]**; deliberate departures from the design documents are **[deviation]** and carry their reason.
+
+**Scout verification summary.** All five scouts were read in full and their load-bearing claims re-opened. The following are wrong or incomplete and are fixed here:
+
+1. **[correction] Three capabilities have no storage, not two.** `RenderState::SetCapability`'s `default: // not supported currently` arm (`MobileGL/MG_State/GLState/RenderState/RenderState.cpp:381-382`) and `IsCapabilityEnabled`'s `default: return false;` (`:429-430`) swallow `DepthClamp`, `FramebufferSrgb` **and `TextureCubeMapSeamless`** — the last one is reachable from `glEnable` (`MG_Util/Converters/GLToMG/RenderStateEnumConverter.cpp:301` maps `GL_TEXTURE_CUBE_MAP_SEAMLESS` onto `CapabilityInput::TextureCubeMapSeamless`, `MGPipeValueTypes.h:202`) and has zero read points anywhere. `scout-render-state.md` §1.3, `generated/PipeSpanTable.inc:24-26`, `ROADMAP.md:78` and `MEASUREMENTS.md:84` all name only two. D8 gives all three real storage.
+2. **[correction] The free padding hole is exactly 3 bytes at `[581, 584)`**, between `ColorMasks` (offset 549, size 32, align 1) and `ClearColor` (offset 584, align 4). `scout-render-state.md:143-151` gropes at this and half-retracts it. It is verified from the declarations: `using Bool = bool` (`MG_Util/Types.h:33`), `BoolVec4 = Vec4<Bool>` = `VecBase<…, Bool, 4>` whose only member is `Array<Bool,4>` (`MG_Util/Math/VectorTypes.h:16-18`, alias `:222`) → align 1, size 4. Three bytes is exactly enough for the three new capability bools, so `sizeof(RenderStateParameters)` stays 1168 and **no existing member's offset moves** — which is what keeps Espryt's `kBlendSpanBegin`/`kBlendSpanEnd` (312/536) and the whole hand-derived offset table valid.
+3. **[correction] `RenderState`'s three value members are not value-initialised.** `RenderStateParameters m_parameters;` (`RenderState.h:172`) and the two `PixelStoreParameters` (`:175-176`) have no `{}`, so their padding bytes are indeterminate. A byte-range content hash over them (which is what the CSO key is) would then be stable only within one context. D3 adds `{}` to all three and pays for it with one attributed `.text` resize.
+4. **[correction] `ComputePipelineStateHash` is not a pure function of `RenderStateParameters`.** Its signature is `(Uint32 colorAttachmentCount, VkSampleCountFlagBits rasterizationSamples)` (`VulkanRenderer.cpp:4821-4822`) and it folds `ResolveEffectiveSampleMask` (`:4813-4819`, itself reading `Multisample`, `SampleMask` and `SampleMaskValue`). The scouts list the hashed fields but not that the signature makes the hash render-pass-dependent. Consequence, and it is load-bearing: a render-state CSO handle **cannot** replace `pipelineStateHash` on its own; the render-pass facts must stay in the memo key. D12 keeps `renderPassHash` as a separate key component, which already separates them.
+5. **[correction] `ARCHITECTURE.md:504` names `tools/bench.sh`; the script is `tools/device_bench/bench.sh`** (verified: `tools/device_bench/{README.md,bench.sh,profile.sh,session.sh,devices/odinlite.env}`). The integrator fixes the citation.
+6. **[correction] The eight/nine validate-entry disagreement resolves to nine.** `ARCHITECTURE.md:153` names eight; the landed `MGP_FILL_CLASS_LIST` has nine (`MG_Pipe/FillPoints.def:107-108`, with the reason in its own comment). P2 adopts nine and the integrator corrects the doc (D5).
+7. **[correction] The dirty-surface gate is not a gate yet.** `ARCHITECTURE.md:172` and `:568` say "P1 起成为门"; `.github/workflows/test.yml:1524-1528` says it stays informational and becomes a gate in P2. The workflow is what runs. P2 promotes it (D16).
+8. **Confirmed at `48268068`, unchanged from the scouts**: `python3 scripts/gen_pipe_dirty_surface.py --summary` still prints `41 files / 926 mutator calls / 73 distinct mutators / 92 in 36 IMMEDIATE PUBLISH POINTS across 7 distinct mutators / 834 DEFERRED`. `sizeof(RenderStateParameters)==1168`, `PerBufferBlendState`/`StencilFaceState`/`PixelStoreParameters` all 28 (`MGPipeValueTypes.h:536-544`). `StencilFaceState` is `Func(0) Ref(4) ValueMask(8) WriteMask(12) FailOp(16) PassDepthFailOp(20) PassDepthPassOp(24)` (`:229-237`) — so the pipeline half of a face is `[0,4) ∪ [16,28)` and the dynamic half `[4,16)`, exactly as `scout-render-state.md` §7.2 says. `ResidualValueBlock` is 1248 = 1168 + 28 + pad + 8 + 4 + 4 + 16 + 8 + 8 (`MGPipeTypes.h:516-537`). `kMGPipePipelineStateMembers[]` is 24 names (`generated/PipeSpanTable.inc:34-60`), `kMGPipePipelineChunks`/`kMGPipeDynamicChunks` are declared and never defined (`:66-67`). `VertexArrayObject`'s three backend memo triples are at `VertexArrayObject.h:106-150`, storage `:190-197`, and `SetBackendAuxMemo` has no live reader (only writer `VertexInputStateFactory.cpp:83-84`). `MGP_FILL(Verb)` expands to `MGPipeFillForVerb(MGPipeVerb::Verb)` (`MG_Impl/Pipe/PipeFill.h:52`) and `((void)0)` in the pull build (`:54`).
+9. **[correction] `scout-render-state.md` §6.4 under-counts the residual ratchet.** It says landing the render-state CSO takes 1248 → 80. P2 also lands `set_pixel_pack_state` and `set_patch_state`, so the ratchet is **1248 → 8** (D9).
+
+---
+
+## A. Goal and acceptance gate
+
+`docs/Disaggregated/ROADMAP.md:18`, verbatim:
+
+> | **P2** 渲染状态 CSO + 第一片 Track H + 残余值块 | 18–26 | `MG_Impl/Pipe/Tracker`（dirty 位、5 个聚合世代、抑制器骨架）；`gen_pipe_dirty_surface.py` 首轮映射成门；`MGPipeRenderStateSpans` + G7 setter 一致性测试；`CsoCache`（64 项，键 = pipeline 子集）；`create/bind_render_state` + `set_dynamic_state`（Espryt `SyncRenderState` 一行不动；Magma `ComputePipelineStateHash`/`GetOrCreatePipeline`/`ApplyDynamicDrawStateTail` 改从 CSO 与动态 payload 取）；`set_pixel_pack_state`、`set_patch_state`、`set_vertex_attrib_defaults`；`set_residual_value_state` + `ResidualValueBlock` 绊线；**第一片 Track H**：Espryt 0b（`SlotAllocator` + 6 个 registry → slot 数组 + 删 `TwinLookupMemo`×3/`OwnerEquals`/`g_fbSlotCache`/GC）与 Magma 子系统 4（`VertexInputStateFactory`/`VaoDrawMemo` 重键，删前端 VAO 里的后端裸指针）；`MOBILEGL_PIPE_LEGACY_MEMOS`；补 `FramebufferSrgb`/`DepthClamp` 存储 | 集成 × 2 后端 × {pull, push} 逐名相同；40 trace push 下 SSIM ≥ 0.99 双后端；verify 零分歧；`HandleRecycleScenario` 绿且重键前红；G7 测试绿且拿掉一个字段能红；两台设备配对逐线程 CPU p50/p99 不差且 tracker 绝对 ns 在上限内；Blaze3D blend-toggle 微基准；CSO 内容寻址关闭的负面对照 | P1 |
+
+Binding context: `ARCHITECTURE.md:147-155` (§5.1 — push happens at validate, before the verb, never in the GL setter, because Blaze3D brackets every batch with `glEnable/glDisable(GL_BLEND)`; only `BufferBackendOps`' seven hooks push at GL-call time), `:157-174` (§5.2 — the dirty-bit table, the five aggregate generations, wrap-around widened at the tracker boundary), `:176-190` (§5.3 — D-B1: whole blob on the wire, CSO identity = the pipeline subset only, the dynamic subset enumerated, the split written in exactly one place, `SyncRenderState` untouched, the client value-fetch order, the `FramebufferSrgb`/`DepthClamp` hole), `:192-200` (§5.4 — the D-B3 validation invariant and the four coalescing rules), `:357-359` (§9.4 — the residual value block and its three disciplines), `:363` (§9.5 — the 21-memo census the Track H slice pays into), `:365-369` (§9.6 — why `MOBILEGL_PIPE_LEGACY_MEMOS` must be a compile-time arm), `:497-507` (§13.2 — the five-part validation gate), `:552` (`MG_Impl/Pipe/` is where `Tracker`, `SlotAllocator`, `CsoCache` land), `:576-597` (the switch tables). `ROADMAP.md:7`: **每个门必须能因它存在的理由变红**; ALL must build; no hot-path instrumentation may be committed; Windows is not a correctness gate; device comparisons are reboot-clean, same-thermal-window, paired A/B. `ROADMAP.md:39`: **day 43 is the GO/NO-GO.** `ROADMAP.md:42-58` is the checklist and the verdict criteria; items 2–7 of it are P2's to produce.
+
+Decoded into checkable statements. Unless a row says otherwise, commands run in a P2 WSL worktree; `$BASE` = `48268068`.
+
+| # | statement | the exact command that checks it |
+|---|---|---|
+| **G1** | The **pull build** (`MOBILEGL_PIPE_PUSH=OFF`, `MOBILEGL_PIPE_VERIFY=OFF`, Release/INFO) has an identical `nm --defined-only` symbol set before and after P2 — 0 added, 0 removed, 0 renamed — and the only `.text` resize is `MG_State::GLState::RenderState::RenderState()` (D3's three `{}`), named in the commit message. | `python3 scripts/symbol_report.py --before ~/w7/p2-before-libMobileGL.so --after build-linux/libMobileGL.so --threshold 0 --json` → `added==removed==renamed==0`; `resized` is empty or exactly the one mangled `RenderState::RenderState()` symbol. |
+| **G2** | `ctest -L integration-gpu` is **name-for-name identical between the pull and the push build**, on both backends, and green in both. | `for d in build-linux build-push; do ctest --test-dir $d -N \| grep -E '^\s+Test #' \| sed 's/^ *Test *#[0-9]*: //' \| sort > ~/w7/p2-names-$d.txt; done; diff ~/w7/p2-names-build-linux.txt ~/w7/p2-names-build-push.txt` → empty; then `ctest --test-dir build-linux -L integration-gpu --no-tests=error -j 4` and the same on `build-push`, both green. |
+| **G3** | The 40-trace corpus replays **under push** with SSIM ≥ 0.99 on both backends (79 desktop cases: 40 × 2 minus `iterationrp × DirectGLES`). | `python3 ~/w7/retrace_gate.py --tree ~/w7/pipe --lib ~/w7/pipe/build-push/libMobileGL.so --out ~/w7/retrace-out/p2-push -j 4 --ssim 0.99` (the P0.5/P1 script, `scratchpad/wf2/retrace_gate.py`). |
+| **G4** | The **verify** build shows zero divergence: no `Fatal{PipeVerifyDiffer`, no `Fatal{UnmigratedPipeInput`, no `Fatal{PipeResidualDiverged`, and every case armed. | `ctest --test-dir build-verify -L integration-verify --no-tests=error -j 4`; `MOBILEGL_PIPE_VERIFY=1 python3 ~/w7/retrace_gate.py --tree ~/w7/pipe --lib ~/w7/pipe/build-verify/libMobileGL.so --out ~/w7/retrace-out/p2-verify -j 4`; then `grep -l 'Fatal{' ~/w7/retrace-out/p2-verify/*/mobilegl.log` empty and `grep -L 'MGPipe verify:' ~/w7/retrace-out/p2-verify/*/mobilegl.log` empty. |
+| **G5** | **`SyncRenderState` is not one line changed.** The whole of `namespace RenderStateImpl` in `DirectGLES.cpp` is byte-identical to the base ref (line numbers may move; the text may not). | `for r in $BASE HEAD; do git show $r:MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp \| awk '/^    namespace RenderStateImpl \{/,/^    \} \/\/ namespace RenderStateImpl/' \| sha256sum; done` → the two hashes are equal. |
+| **G6** | **G7 setter consistency**: for every public `RenderState` setter, the pipeline-subset hash moves ⟺ `m_pipelineStateVersion` moves; and the chunk table partitions `[0, sizeof(RenderStateParameters))` exactly (sorted, non-overlapping, complete). | `ctest --test-dir build-push -R 'RenderStateSpans\.' --no-tests=error --output-on-failure` (the partition half is a `static_assert` in `MGPipeRenderStateSpans.cpp`, so a gap is a build break). |
+| **G7** | **G6's negative control**: moving one member from `kMGPipePipelineChunks` to `kMGPipeDynamicChunks` (partition still complete, so it still compiles) turns the setter-consistency test red, naming that member's setter. | `scripts/g7_negative_control.sh` (D19) — patches `MGPipeRenderStateSpans.cpp` to demote `ColorMasks`, rebuilds, expects `ctest -R 'RenderStateSpans\.SetterConsistency'` to **fail**, then reverts. Non-zero rc from ctest is the pass. |
+| **G8** | **`HandleRecycleScenario` is green after the re-key and red before it**, on at least one backend, as three always-on ctest entries: handle arm green, legacy arm green, ABA-control arm red. | `ctest --test-dir build-verify -R 'HandleRecycle' --no-tests=error --output-on-failure` — `*.Handles` and `*.Legacy` pass, `*.AbaControl` passes **by asserting the corruption** (D18). |
+| **G9** | `gen_pipe_dirty_surface.py` is a **gate**: the mapping file covers all 73 mutators, an unmapped mutator or a mapping row naming a mutator that no longer exists fails the job, and the report regenerates with `git diff --exit-code`. | `python3 scripts/gen_pipe_dirty_surface.py --check` (rc 0) and `python3 scripts/gen_pipe_dirty_surface.py --self-test` (rc 0; canned negative controls). CI: `pipe-gates`. |
+| **G10** | The **`ResidualValueBlock` tripwire** holds: `MGL_RESIDUAL_BLOCK_SIZE` is **8** (down from 1248, never up), every member has an `offsetof` assertion, `MOBILEGL_PIPE_STATS`'s `resid=` byte class is **non-zero** in a device window, and a capability the residual block and the working block disagree about aborts. | build (the ratchet is a `static_assert`); `ctest --test-dir build-verify -R 'Residual' --no-tests=error`; on device `grep 'MGPipe stats:' mobilegl.log \| tail -1` shows `resid=` > 0. |
+| **G11** | **Two devices, reboot-clean, paired A/B: per-thread CPU p50 and p99 deltas are not negative on either device, and the tracker's absolute ns/draw is inside the pinned ceiling.** | D.4 — the `benchmark.json` `frameCpuTimesMs[]` series (E adds it) reduced host-side to p50/p99, plus the DriverBench `ns_per_op` decomposition T1/T2. The ceiling is pinned in `MEASUREMENTS.md` **before** the run (D.4.5). |
+| **G12** | The **Blaze3D blend-toggle microbenchmark** and the **CSO-content-addressing negative control** are both published, and the negative control cannot rot: a ctest entry proves the switch actually changes CSO mint/bind counts. | `MobileGL/MG_Benchmark/Driver/run_driver_bench.sh {native,espryt,magma}` on `mc_state_toggle`; `ctest --test-dir build-push -R 'CsoContentAddressing' --no-tests=error`. |
+| **G13** | Nothing reintroduces a purity violation: `pGLContext` still appears zero times under `MG_Backend/`, the include closure still holds, no stdio instrumentation, generators regenerate clean. | `grep -rc 'pGLContext' MobileGL/MG_Backend \| grep -v ':0$'` empty; `python3 scripts/check_include_closure.py`; `python3 scripts/gen_pipe.py --check && python3 scripts/gen_pipe.py --self-test`; the `pipe-gates` stdio grep. |
+| **G14** | Existing test names are never removed (additions only), and the full CI matrix is green. | `ctest --test-dir build-linux -N \| … \| comm -23 ~/w7/p2-before-ctest-names.txt -` empty; `gh workflow run test.yml --ref feat/disaggregated`. |
+
+Baseline captures the integrator takes **before** any package lands (in `~/w7/pipe` at `48268068`):
+
+```sh
+cp ~/w7/pipe/build-linux/libMobileGL.so ~/w7/p2-before-libMobileGL.so
+ctest --test-dir ~/w7/pipe/build-linux -N | grep -E '^\s+Test #' | sed 's/^ *Test *#[0-9]*: //' | sort > ~/w7/p2-before-ctest-names.txt
+git -C ~/w7/pipe show HEAD:MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp \
+  | awk '/^    namespace RenderStateImpl \{/,/^    \} \/\/ namespace RenderStateImpl/' | sha256sum > ~/w7/p2-before-syncrenderstate.sha
+python3 scripts/gen_pipe_dirty_surface.py > ~/w7/p2-before-dirty-surface.txt
+```
+
+---
+
+## B. Fixed design decisions
+
+Nothing in this section is re-decided inside a package. Where a decision departs from the design documents it is marked **[deviation]** and the doc line the integrator must correct is named.
+
+### D1 — Where the tracker runs: `MGP_FILL` stays; `MGPipeFillForVerb` becomes the tracker's entry point
+
+`MGP_FILL(Verb)` (`MG_Impl/Pipe/PipeFill.h:52`) is already exactly one statement before every `gBackendFunctionsTable.GL.*` call, after every early return (`PipeFill.h:10-15`, and the 83 statements over 69 verbs the P1 brief §B.7 enumerates). It is the validate point `ARCHITECTURE.md:151` demands and it is already generated-table-driven.
+
+**Decision: the macro spelling, the 83 call sites and the verb enum do not change. `MGPipeFillForVerb(MGPipeVerb)` is renamed `MGPipeValidateForVerb(MGPipeVerb)` and its body becomes the tracker's walk; `MGP_FILL` expands to the new name.** The tracker does **not** sit above `MGP_FILL` and there is no new `ValidateForDraw`/`ValidateForClear`/… family of functions.
+
+- **[deviation] against `ARCHITECTURE.md:153`**, which asks for eight named `ValidateFor*` entry points. Reason: the landed machinery already dispatches on `kMGPipeVerbClass[verb]` (`generated/PipeFillPoints.inc:197`) into **nine** classes (`FillPoints.def:107-108`), and eight separate entry points would either duplicate that table or force a merge of `kProgramOp` back into `kDraw` that `FillPoints.def:105-106` explicitly argues against. One entry point with a class-indexed switch is the same code with one call site per verb instead of nine. The integrator corrects `ARCHITECTURE.md:153` to nine classes and names them.
+- `MGPipeLeaveVerb()` (`PipeFill.h:34`, used by `MG_Test/ScopedPipeVerb.h`) keeps its name and semantics.
+- `MGP_NOTE_MUTATION` (`MG_Pipe/PipeMutation.h`, four statements over three fields at `TextureState.h:85,98,111,133`) **stays exactly as it is**. `MEASUREMENTS.md:117` is right that it is the shape the tracker needs; the tracker does not absorb it, because it answers a different question (a backend writing frontend state *inside* a verb, after the walk has run).
+
+The body of `MGPipeValidateForVerb(verb)`, in order:
+
+1. everything `MGPipeFillForVerb` does today up to and including `SetIdentity` / the null-context early return (`PipeFill.cpp:566-589`) — unchanged, including the poison serial bump and the verify arming;
+2. **the dirty walk** (D4): compare the tracker's `m_lastPushed` shutters against the live counters, producing a `Uint32` dirty mask;
+3. **emission** (D6, D7, D9, D10, D11): for each set dirty bit whose subsystem bit is on in the runtime `MOBILEGL_PIPE_PUSH` bitmask, build the payload and hand it to the applier (D2);
+4. **the residual fill**: the P1 per-class copy loop (`PipeFill.cpp:591-609`), restricted to the fields **not** covered by an emitted call (D5's `kMGPipeFieldEmittedBy[]`), with stamping unchanged;
+5. `EntryCompare(inputs, mask)` under verify (`PipeFill.cpp:611`) — unchanged, and now **no longer tautological**, which is the P1 brief's D8 promise coming due.
+
+### D2 — The applier and where the server's working state lives
+
+**Decision: in the monolith, the server's per-context working `RenderStateParameters` *is* `PipeInputs::m_renderState` (`MG_Backend/MGPipe/PipeInputs.h:645`).** `bind_render_state` and `set_dynamic_state` scatter their chunks straight into it. That is why Espryt's `const RenderStateParameters&` binding at `DirectGLES.cpp:2056` and the `Uint16` read at `:2028` need no change at all — the block they read is the assembled block. This is the mechanism behind "`SyncRenderState` 一行不动" (`ARCHITECTURE.md:188`, `ROADMAP.md:47`), and it is what makes the verify comparator a real oracle: the compare-at-read now proves *assembled == live*, field by field, at every backend read.
+
+New files: `MobileGL/MG_Pipe/PipeApply.{h,cpp}`, `namespace MobileGL::MG_Pipe`, compiled only under `MOBILEGL_PIPE_PUSH`.
+
+```cpp
+// PipeApply.h — the in-process applier. Under split this file is the server half
+// (ARCHITECTURE.md:375, MG_Remote/Server/PipeApplier); in the monolith it writes gPipeInputs
+// directly, so a call and its effect are one function call apart and nothing is serialised.
+void MGPipeApplyCreateRenderState(const MGPRenderStateDesc& desc, const void* chunkBytes);
+void MGPipeApplyBindRenderState(const MGPBindRenderState& bind);
+void MGPipeApplySetDynamicState(const MGPDynamicState& dyn, const void* chunkBytes);
+void MGPipeApplySetPixelPackState(const MGPPixelPackState& pack);
+void MGPipeApplySetPatchState(const MGPPatchState& patch);
+void MGPipeApplySetVertexAttribDefaults(const MGPVertexAttribDefaults& hdr, const MGPAttribValue* tail);
+void MGPipeApplySetResidualValueState(const ResidualValueBlock& block);
+```
+
+The applier owns a per-context CSO store: `Vector<RenderStateCsoRecord>` indexed by `MGPipeHandle::Slot`, each record holding the 396 pipeline bytes and a `Gen`. `MGPipeApplyBindRenderState` memcpy-scatters the record's seven pipeline chunks into `m_renderState`, then writes `m_renderStateParametersVersion = bind.Version` and `m_pipelineStateVersion = bind.PipelineVersion`. `MGPipeApplySetDynamicState` scatters the chunks named by `dyn.ChunkMask` and writes `m_renderStateParametersVersion = dyn.Version`.
+
+**After any scatter the applier calls `MGPipeDeriveRenderStateFields(PipeInputs&)`** — see D5.
+
+The applier `MOBILEGL_ASSERT`s (debug/verify only) that a `bind` names a live `{slot, gen}` and that `desc.ChunkMask` covers every chunk of a brand-new CSO.
+
+### D3 — Value-type changes in `MGPipeValueTypes.h` and `RenderState`
+
+1. **Three new members in `RenderStateParameters`**, declared *immediately after `Array<BoolVec4,8> ColorMasks;` and before `FloatVec4 ClearColor;`*, filling the 3-byte hole at `[581, 584)`:
+
+```cpp
+        // GL_FRAMEBUFFER_SRGB / GL_DEPTH_CLAMP / GL_TEXTURE_CUBE_MAP_SEAMLESS. Until P2 these
+        // three fell to SetCapability's `default:` arm - glEnable was swallowed and
+        // IsCapabilityEnabled answered a compile-time false, so DirectGLES' sRGB block
+        // (DirectGLES.cpp:2168) and five DirectVulkan read points consumed a constant.
+        // Placed HERE, in the three alignment bytes between ColorMasks and ClearColor, so
+        // sizeof(RenderStateParameters) stays 1168 and no existing offset moves: the Espryt
+        // span constants and the P2 chunk table both depend on that.
+        Bool FramebufferSrgbEnabled = false;
+        Bool DepthClampEnabled = false;
+        Bool TextureCubeMapSeamlessEnabled = false;
+```
+
+   The existing `static_assert(sizeof(RenderStateParameters) == 1168, ...)` (`:541`) is the check; if it fires, the hole is not where this brief computed it and the implementer must find the real one with a temporary `static_assert(offsetof(...))` rather than growing the struct (growing it is a `MGL_RESIDUAL_BLOCK_SIZE` violation).
+2. **Three rows in `MGP_FIELDS_RenderStateParameters(F)`** (`PipeFields.def:230-247`), in declaration order. `gen_pipe.py` asserts every direct member has a row (`PipeFields.def:224-228`), so omitting one fails `pipe-gates`.
+3. **Three `SET_CAPABILITY` arms and three `RETURN_CAPABILITY` arms** in `RenderState.cpp` (`:317-338`, `:390-413`), keeping the source order of `CapabilityInput`. All three therefore call `BumpVersions()` and land in the **pipeline** half (D6). `FramebufferSrgb` on the pipeline side is what `ARCHITECTURE.md:190` asks for; `DepthClamp` is `VkPipelineRasterizationStateCreateInfo::depthClampEnable` and `TextureCubeMapSeamless` changes sampler interpretation, so both belong there too.
+4. **`{}` on the three value members** of `RenderState` (`RenderState.h:172`, `:175`, `:176`) so padding is deterministic. Cost: one `.text` resize of `RenderState::RenderState()`, allowed by G1 and named in the commit message. Reason: the CSO key is a byte-range hash (D6); indeterminate padding would make a CSO handle reproducible only within one context, and would make the residual block's byte-level trip wire meaningless.
+
+**Behaviour change, and it is real, so it is gated.** With storage, `glEnable(GL_FRAMEBUFFER_SRGB)` now (a) makes `glIsEnabled` answer true and (b) makes Espryt issue a real `glEnable(GL_FRAMEBUFFER_SRGB)` at `DirectGLES.cpp:2170` — that block is **ungated** by the span dirty flags and already reads the accessor, so it needs no edit and is not a `SyncRenderState` change. `DepthClamp` and `TextureCubeMapSeamless` gain no reader on either backend (verified: no `depthClampEnable`/`alphaToOneEnable` anywhere in `PipelineFactory.{h,cpp}`/`VulkanRenderer.cpp`; `TextureCubeMapSeamless` appears only in the three enum converters), so their only effect is `glGet`/`glIsEnabled`. `MEASUREMENTS.md:84` records that none of the 41 fixtures enables any of them, so G3's SSIM gate is the check that no fixture output moves.
+
+### D4 — Dirty bits and the five aggregate generations
+
+**Representation.** `Uint32 MGPipeTracker::m_dirty`, one bit per row of `ARCHITECTURE.md:161-168`, declared as a plain `enum class MGPipeDirty : Uint32` in `MG_Impl/Pipe/Tracker.h` (hand-written, not generated — the list is 15 long and is design, not derived data), with `static_assert(kMGPipeDirtyCount <= 32)`:
+
+| bit | name | class | shutter the tracker compares |
+|---|---|---|---|
+| 0 | `NEW_RENDER_STATE` | value | `GetRenderStateParametersVersion()` (`Uint16`, widened) |
+| 1 | `NEW_PIPELINE_STATE` | value | `GetPipelineStateVersion()` (`Uint16`, widened) |
+| 2 | `NEW_PIXEL_PACK` | value | `PixelStoreParameters` pack, `BitwiseEqual` |
+| 3 | `NEW_PATCH_STATE` | value | the patch trio, `BitwiseEqual` (**NaN is legal**, `ARCHITECTURE.md:162`) |
+| 4 | `NEW_VERTEX_ATTRIB_DEFAULTS` | value | `ContentHash` over the 32 `CurrentVertexAttributeValue`s |
+| 5 | `NEW_VERTEX_ELEMENTS` | value | `VertexArrayObject::GetConfigVersion()` |
+| 6 | `NEW_SHADER` | value | `ProgramObject::GetLinkVersion()` |
+| 7 | `NEW_SHADER_BINDINGS` | value | image-unit / backend-state / block-binding / uniform-write-set versions |
+| 8 | `NEW_GLOBAL_CONSTANTS` | value | `GetUBOContentVersion()` |
+| 9 | `NEW_VERTEX_BUFFERS` | object | `VertexArrayState::m_anyVaoAttributeGeneration` **(new)** → 32-attribute prefix |
+| 10 | `NEW_INDEX_BUFFER` | object | index slot version + bound object `{slot, gen}` |
+| 11 | `NEW_FRAMEBUFFER` | object | `FramebufferState::m_anyAttachmentGeneration` **(new)** + object/slot version → recompute `ContentHash` |
+| 12 | `NEW_SAMPLER_VIEWS` | object | `TextureState::m_anyTextureContentGeneration` **(new)** + bind generation → `GetMaxTouchedUnit()` prefix |
+| 13 | `NEW_SAMPLERS` | object | `TextureState::m_anyTextureParamsGeneration` **(new)** + sampling-resolution generation |
+| 14 | `NEW_SHADER_IMAGES` | object | the same two texture aggregates + image-unit version |
+| 15 | `NEW_CONST_BUFFERS` / `NEW_SHADER_BUFFERS` / `NEW_SO_TARGETS` (three bits, 15–17) | object | `BufferState::m_anyBufferChangeGeneration` **(new)** → `GetTouchedBindPointCount()` prefix |
+
+**P2 only *emits* for bits 0–4.** Bits 5–17 are computed, counted and asserted by the tracker but their emission is P3a/P3b/P4a/P4b; their fields keep going through the residual fill loop. The tracker records, per verb class, how many draws each bit fired on, which is the first honest measurement of "does this shutter actually shut" and is what the dangerous direction (`ARCHITECTURE.md:502`, a dirty bit that fires too *rarely*) is judged against.
+
+**The five aggregate generations.** `Uint64`, monotonic, bumped at the existing bump points, all **`#if MOBILEGL_PIPE_PUSH`-guarded** so the pull build's `MG_State` objects do not change size or code (G1):
+
+| member | file | bumped at |
+|---|---|---|
+| `VertexArrayState::m_anyVaoAttributeGeneration` | `MG_State/GLState/VertexArrayState/VertexArrayState.h` | every `VertexArrayObject::BumpConfigVersion` site (`VertexArrayObject.cpp:299,305,311`) — reached through a new `NotifyAttributeChanged()` on the owning state |
+| `FramebufferState::m_anyAttachmentGeneration` | `.../FramebufferState/FramebufferState.h` | `FramebufferObject.cpp:192,203,215` |
+| `TextureState::m_anyTextureContentGeneration` | `.../TextureState/TextureState.h` | `TextureObject.cpp:285,354,365`; `TextureObject2DCube.cpp:51,62` |
+| `TextureState::m_anyTextureParamsGeneration` | `.../TextureState/TextureState.h` | `TextureObject.cpp:101,126,140,154,203,210,227,238,258,294,303`; `TextureObject.h:182`; `SamplerObject.cpp:27-35` |
+| `BufferState::m_anyBufferChangeGeneration` | `.../BufferState/BufferState.h` | `BufferObject.cpp:45,52,61,75,82,304,368` |
+
+The bump is spelled `MGP_NOTE_AGGREGATE(VaoAttribute);` — a new macro in `MG_Pipe/PipeMutation.h` next to `MGP_NOTE_MUTATION`, `((void)0)` in the pull build, exactly the same shape and for the same reason (`PipeMutation.h:29-40`). A per-object bump reaches its owning state through a back-pointer the object already has, or, where it does not, through a free function `MGPipeNoteAggregate(MGPipeAggregate)` that finds the live `GLContext` — the second form costs a global load on a cold path and is what `MGP_NOTE_MUTATION` already does (`PipeFill.cpp:479-491`).
+
+**Wrap-around.** Three shutters are `Uint16` (`RenderState::m_version`, `m_pipelineStateVersion`, `FramebufferObject::m_objectVersion`) and two more are `Uint16` on `SamplerObject`/`TextureObject` params. The tracker widens them in its **own** `m_lastPushed[]` (`Uint32` accumulator plus the last observed `Uint16`; a decrease means a wrap and adds 65536). **`MG_State` is not changed** (`ARCHITECTURE.md:174`). A wrap is harmless locally: one extra re-push, never a missed push.
+
+### D5 — The derivation step, and which `PipeInputs` fields stop being copied
+
+29 of the 47 `kDraw` `PipeInputs` fields are pure functions of `RenderStateParameters`. Once the applier assembles the working block, copying them again from `GLContext` would be a second pull. **Decision: the applier derives them from the working block.**
+
+`MGPipeDeriveRenderStateFields(PipeInputs&)` in `PipeApply.cpp` recomputes exactly:
+`m_blendColor`, `m_blendEquation[8][2]`, `m_blendFunc[8][4]`, `m_clampReadColor`, `m_clearColor`, `m_clearDepth`, `m_clearStencil`, `m_colorMask[8]`, `m_cullFaceMode`, `m_depthFunc`, `m_depthMask`, `m_depthRange[16]`, `m_lineWidth`, `m_logicOp`, `m_minSampleShading`, `m_patchInner`, `m_patchOuter`, `m_patchVertices`, `m_polygonModeFront`, `m_polygonOffsetFactor`, `m_polygonOffsetUnits`, `m_primitiveRestartIndex`, `m_provokingVertexMode`, `m_scissorBox`, `m_stencil[2]`, `m_viewport`, `m_viewportIndexed[16]`, `m_capability[35]`, `m_capabilityIndexed` (Blend×8, ScissorTest×16).
+
+- **[deviation] against P1 brief D4's "no derivation logic is re-implemented in `PipeInputs`".** Reason: the alternative is to keep pulling those 29 fields per verb, which is the cost P2 exists to remove. The derivations are one to four lines each and are mechanical transcriptions of `RenderState`'s getters (`RenderState.cpp:53-971`); two are non-trivial and must be transcribed exactly: `GetViewport()` returns viewport 0 **rounded to integers** (`RenderState.h:27-31`), and `IsCapabilityEnabled`/`IsCapabilityEnabledIndexed` are the 35-way and 2-way switches at `RenderState.cpp:387-432` and `:434-…`, including `Blend → BlendStates[0].Enabled` and `ScissorTest → ScissorTestEnabledMask & 1`.
+- **The guard is the oracle P1 built.** `MOBILEGL_PIPE_VERIFY`'s compare-at-read (`PipeInputs.h:62-63` → `PipeFill.cpp:439-463`) re-reads each of these from the live context at *every backend read* and compares field-wise. A transcription error is caught on the first draw that reads it, across 79 retraces and 818 integration-verify entries. On top of that, a unit test (`RenderStateSpansTest.DerivationMatchesTheFrontendGetters`) drives every setter and compares all 29 derived values against the `GLContext` getters.
+
+`gen_pipe.py` gains a generated table `kMGPipeFieldEmittedBy[]` (from a new `MGP_COVERAGE_EMITTED_LIST` in `Coverage.def`) naming, per `MGPipeInputField`, the P2 call that now supplies it. The residual fill loop skips any field whose entry is non-`kNone` **and** whose subsystem bit is on; that is one array lookup per field and it is what makes the runtime bitmask a true per-subsystem A/B.
+
+### D6 — The chunk table: the split, written in exactly one place
+
+New files `MobileGL/MG_Pipe/MGPipeRenderStateSpans.{h,cpp}`, compiled **only under `MOBILEGL_PIPE_PUSH`** (appended to `SOURCE_FILES` inside the existing `if (MOBILEGL_PIPE_PUSH)` block, `CMakeLists.txt:462-468`), which is how the pull build gains no symbol (G1). `generated/PipeSpanTable.inc:66-67` already declares `kMGPipePipelineChunks` / `kMGPipeDynamicChunks`; a declaration costs the pull build nothing.
+
+**The rule that decides the split, and it is the only rule:**
+
+> **A byte of `RenderStateParameters` is in the pipeline half if and only if some public `RenderState` setter that calls `BumpVersions()` writes it. Every other byte is in the dynamic half. There is no third set.**
+
+That makes `ARCHITECTURE.md:186`'s G7 invariant — *pipeline-subset hash moves ⟺ `m_pipelineStateVersion` moves* — true **by construction** rather than by inspection, and it resolves all six of the violations `scout-render-state.md` §2.5 found, in the direction of *growing the subset* rather than demoting setters:
+
+- **[deviation] the pipeline subset is a strict superset of the 24 members `ComputePipelineStateHash` hashes today.** It adds `SampleCoverageValue`, `SampleCoverageInvert`, `FrontFaceModeSetting`, `ProvokingVertexModeSetting`, `ScissorTestEnabledMask`, `PolygonModeBack`, the 11 unhashed capability bools (`DebugOutput`, `DebugOutputSynchronous`, `Dither`, `LineSmooth`, `PolygonOffsetLine`, `PolygonOffsetPoint`, `PolygonSmooth`, `SampleAlphaToCoverage`, `SampleAlphaToOne`, `SampleCoverage`, `ProgramPointSize`) and the three new bools of D3. Reason: the alternative — demoting those setters to `++m_version` — changes `MG_State` semantics in the **pull** build and breaks G1, and it is a behaviour change to the pull path for the sake of the push path. Growing the subset costs nothing measurable: hashing happens only when `m_pipelineStateVersion` moves, which is exactly when Magma already recomputes `ComputePipelineStateHash` today, and a scissor or sample-coverage toggle now mints a *second cached* CSO whose handle is reused thereafter, the same shape as the Blaze3D blend toggle the CsoCache is built for.
+- **[deviation] against `MGPipeTypes.h:232-235`**, whose comment puts "sample coverage" in the dynamic half. `SetSampleCoverage` (`RenderState.cpp:778-784`) calls `BumpVersions()`, so under the rule it is pipeline. The implementer fixes that comment in the same commit (hints, the point-size family, clear values, blend colour, line width, polygon offset, stencil ref/write mask, viewport, scissor and depth range all stay dynamic and the comment is right about them).
+- **[deviation] the patch trio is in the pipeline half *and* is carried by `set_patch_state`.** `Coverage.def:62-64` routes the three patch accessors to `SetPatchState`; `kMGPipePipelineStateMembers` lists all three. Both are right for different reasons: they are pipeline state (`VkPipelineTessellationStateCreateInfo::patchControlPoints`, hashed at `VulkanRenderer.cpp:4864-4878`) **and** a shader-variant input both backends bake into the synthesized control stage (`MGPipeTypes.h:498-499`, read from a shader-build path at `Managers.cpp:7194-7205`, not a draw path). So the bytes travel twice — 28 bytes on a state that changes about once per program — and the applier asserts under verify that the two carriers agree. Redundancy here is a trip wire, not waste.
+
+**The table.** `MGPipeRenderStateSpans.cpp` computes every boundary with `offsetof`/`sizeof` — never a literal — and carries `static_assert`s that the chunks are sorted, non-overlapping and cover exactly `[0, sizeof(RenderStateParameters))`. The offsets below are what this brief computes; **the file must derive them, and if it disagrees the file is right and this table is wrong.**
+
+| # | set | range | size | members |
+|---|---|---|---|---|
+| D0 | dynamic | `[0, 264)` | 264 | `Viewports[16]`, `LineWidth`, `PointSize` |
+| P0 | pipeline | `[264, 292)` | 28 | `PatchVertices`, `PatchDefaultOuterLevel`, `PatchDefaultInnerLevel` |
+| D1 | dynamic | `[292, 312)` | 20 | `PolygonOffsetFactor/Units/Clamp`, `ClipOrigin`, `ClipDepthMode` |
+| P1 | pipeline | `[312, 584)` | 272 | `BlendStates[8]`, `LogicOp`, `DepthTestEnabled`, `DepthFunc`, `DepthMask`, `ColorMasks[8]`, **`FramebufferSrgbEnabled`, `DepthClampEnabled`, `TextureCubeMapSeamlessEnabled`** |
+| D2 | dynamic | `[584, 752)` | 168 | `ClearColor`, `ClearDepth`, `ClearStencil`, `BlendColor`, `DepthRanges[16]` |
+| P2 | pipeline | `[752, 772)` | 20 | `SampleCoverageValue`, `SampleCoverageInvert`, `SampleMaskValue`, `MinSampleShadingValue` |
+| D3 | dynamic | `[772, 784)` | 12 | `StencilStates[0].{Ref, ValueMask, WriteMask}` |
+| P3 | pipeline | `[784, 800)` | 16 | `StencilStates[0].{FailOp, PassDepthFailOp, PassDepthPassOp}`, `StencilStates[1].Func` |
+| D4 | dynamic | `[800, 812)` | 12 | `StencilStates[1].{Ref, ValueMask, WriteMask}` |
+| P4 | pipeline | `[812, 840)` | 28 | `StencilStates[1].{FailOp, PassDepthFailOp, PassDepthPassOp}`, `CullFaceEnabled`, `CullFaceModeSetting`, `FrontFaceModeSetting`, `ProvokingVertexModeSetting` |
+| D5 | dynamic | `[840, 868)` | 28 | the four hints, `PointFadeThresholdSize`, `PointSpriteCoordOrigin`, `ClampReadColor` |
+| P5 | pipeline | `[868, 876)` | 8 | `PolygonModeFront`, `PolygonModeBack` |
+| D6 | dynamic | `[876, 880)` | 4 | `PrimitiveRestartIndex` |
+| P6 | pipeline | `[880, 904)` | 24 | the 20 capability bools `ColorLogicOpEnabled`…`ProgramPointSizeEnabled`, `ScissorTestEnabledMask` |
+| D7 | dynamic | `[904, 1168)` | 264 | `ScissorBoxes[16]`, `ScissorBoxWrittenMask`, `ClipDistanceEnabledMask` |
+
+**7 pipeline chunks totalling 396 bytes; 8 dynamic chunks totalling 772 bytes; 396 + 772 = 1168.** Both counts fit the `Uint32 ChunkMask` of `MGPRenderStateDesc` (`MGPipeTypes.h:215-221`) and `MGPDynamicState` (`:236-241`) with room to spare. `StencilStates` is the one member that straddles, at sub-member granularity, exactly as `scout-render-state.md` §7.2 predicted; **`StencilFaceState` is not reordered** — reordering would move Espryt's shadow bytes for no gain and would invalidate the offsets above.
+
+Note the two splits are orthogonal and coexist (`ARCHITECTURE.md:188`): Espryt's head `[0,312)` / blend `[312,536)` / tail `[536,1168)` cuts across this table, and D0/P0/D1 all live in Espryt's head while P1 spans Espryt's blend and tail. Nothing about Espryt's spans changes.
+
+`MGPipeComputePipelineSubsetHash(const RenderStateParameters&)` is `XXH64` over the seven pipeline chunks in ascending order, seeded with a compile-time table version so a chunk-table change invalidates every persisted key. 396 bytes ≈ 49.5 eight-byte words — **[deviation]** the doc estimates "~25-30 字" (`ARCHITECTURE.md:189`), which was the 24 hashed members without padding and without the 15 members added above; the integrator records 396 bytes / 49.5 words in `MEASUREMENTS.md`.
+
+### D7 — The CsoCache
+
+`MobileGL/MG_Impl/Pipe/CsoCache.{h,cpp}`, one instance per context, held by the tracker.
+
+- Storage: `ska::flat_hash_map<Uint64, Uint32>` (hash → cache-entry index) plus a `Vector<Entry>` of at most **64** entries and an intrusive LRU list. `Entry = { Uint64 Hash; MGPipeHandle Cso; Array<Uint8, 396> PipelineBytes; }` — 64 × ~412 B ≈ 26 KB per context.
+- Capacity **64** (`ROADMAP.md:18`, `ARCHITECTURE.md:63`). `ROADMAP.md:77` says 64 is provisional and the counters retune it; P2 ships 64 and publishes the mint/bind/evict counters that a P13 retune reads.
+- **[deviation] a hash hit is confirmed with a `memcmp` of the 396 pipeline bytes before the handle is reused.** `ARCHITECTURE.md:63` says content addressing on an xxHash; a bare 64-bit hash equality would let a collision alias two different render states onto one CSO, which is a silent wrong-pixels bug with no gate that can see it. Mesa's `cso_cache` memcmps for the same reason. The memcmp runs only when `m_pipelineStateVersion` moved, i.e. never in the steady state.
+- Eviction is LRU and emits `DeleteRenderState` (`PipeCalls.def:94`), which frees the applier's slot and bumps its `Gen`.
+- **The lookup algorithm** (`ARCHITECTURE.md:189` verbatim, implemented):
+  1. `m_pipelineStateVersion` (widened) unchanged → reuse `m_lastCso`, **zero hashing, zero probing**; emit nothing unless `m_version` also moved.
+  2. changed → hash the seven pipeline chunks → probe → **hit**: `memcmp` confirms, emit `MGPBindRenderState` (12 B). **miss**: mint a slot, emit `MGPRenderStateDesc` with the changed chunks (`ChunkMask`; all-ones for a brand-new CSO, else the chunks that differ from `BaseCso`), then the 12-byte bind.
+  3. `m_version` moved but the pipeline subset did not → emit `MGPDynamicState` only.
+- Counters: `PipeStats::AddCalls(CallClass::RenderStateCsoMints, 1)` and `…CsoBinds, 1)` (two new call classes, D17).
+
+### D8 — What `set_dynamic_state` carries
+
+`MGPDynamicState{ ChunkMask, Version, Pad0, Blob }` (`MGPipeTypes.h:236-241`, 32 B) plus a blob that is the concatenation, in ascending chunk index, of the dynamic chunks whose bit is set in `ChunkMask`. `Version` is `m_version` (widened `Uint16`, sent as the raw `Uint16` the wire type declares).
+
+**Granularity: per chunk, eight bits, chosen by `memcmp` of each dynamic chunk against the tracker's staging copy.** So a `glViewport` sends chunk D0 (264 B), a `glClearColor` sends D2 (168 B), a `glScissor` sends D7 (264 B), a `glStencilMask` on the front face sends D3 (12 B). `ROADMAP.md:77` defers the final granularity to the counters; P2 ships eight chunks and gives `PipeStats::RecordDrawPayloadBytes` (`PipeStats.h:154`, implemented, unit-tested and **called by nothing** today) its first emitter, so the 24-bucket histogram answers the retune question with data. `ARCHITECTURE.md:189`'s "~200 B" estimate is in the right range; the measured per-chunk sizes above go into `MEASUREMENTS.md`.
+
+The tracker keeps `RenderStateParameters m_staged{}` (value-initialised) as the "what the server has" mirror; a chunk that memcmp-matches is not sent, which is the chunk-level suppressor.
+
+### D9 — The residual value block, its ratchet and its tripwire
+
+After P2, `MGPipeTypes.h:516-525` becomes:
+
+```cpp
+    struct ResidualValueBlock {
+        Uint64 CapabilityBits; // the 35 CapabilityInput bits, packed in enum order
+    };
+```
+
+`#define MGL_RESIDUAL_BLOCK_SIZE 8` (down from 1248 — `RenderState` 1168 retires to the CSO, `Pack` 28 to `set_pixel_pack_state`, the patch quintet 52 to `set_patch_state`). The ratchet comment at `MGPipeTypes.h:527-535` stays; the number only ever goes down.
+
+**The three disciplines (`ARCHITECTURE.md:359`), implemented:**
+1. **Retirement is a compile error.** The `static_assert(sizeof(ResidualValueBlock) == MGL_RESIDUAL_BLOCK_SIZE, …)` at `:537` is what fires if a field is removed without lowering the number, or added at all.
+2. **Per-member `offsetof` assertions, and field-wise serialisation under split.** `gen_pipe.py` emits `static_assert(offsetof(ResidualValueBlock, CapabilityBits) == 0);` from `MGP_FIELDS_ResidualValueBlock` (`PipeFields.def:147-148`, which loses five of its six rows).
+3. **`MOBILEGL_PIPE_STATS` counts its bytes as their own class** — `ByteClass::ResidualValueBlock` (`PipeStats.h:73-75`), the placeholder that "stays at 0 until P2". P2 makes it non-zero (G10).
+
+**The tripwire.** `CapabilityBits` is now *redundant*: every one of the 35 capabilities is answerable from the working `RenderStateParameters` once D3 closes the three storage holes. That redundancy is the point. `MGPipeApplySetResidualValueState` compares, bit by bit, the block's answer against `MGPipeDeriveRenderStateFields`' answer, and a disagreement is `Fatal{PipeResidualDiverged, "<CapabilityName>"}` in a poison or verify build (counted and logged otherwise). So the day a later call takes a capability over and forgets to carry it, the residual block says so on the next draw. The block is emitted once per context and again whenever the capability set changes.
+
+### D10 — `set_pixel_pack_state`, `set_patch_state`, `set_vertex_attrib_defaults`
+
+| call | payload | shutter | emitted when |
+|---|---|---|---|
+| `SetPixelPackState` (`PipeCalls.def`, `kCtxState`) | `MGPPixelPackState{ PixelStoreParameters Pack; }`, 28 B (`MGPipeTypes.h:488-496`) | `BitwiseEqual` against the tracker's copy | `NEW_PIXEL_PACK`. Applier writes `PipeInputs::m_pixelStore[0]`. **PACK only** — there is deliberately no unpack counterpart (`ARCHITECTURE.md:107`, `MGPipeTypes.h:485-487`). |
+| `SetPatchState` | `MGPPatchState{ Vertices, Pad0, Outer[4], Inner[2], Pad1[2] }`, 40 B (`:500-507`) | `BitwiseEqual`, **NaN legal** (`ARCHITECTURE.md:162`: a NaN outer level is a legal `glPatchParameterfv` value and must compare equal to itself) | `NEW_PATCH_STATE`. Applier writes the three members of the working block **and** asserts they match what the pipeline chunk P0 delivered (D6). |
+| `SetVertexAttribDefaults` (`kVarTail`) | `MGPVertexAttribDefaults{ Mask, Count }`, 8 B (`:479-483`), plus a tail of `Count` `MGPAttribValue`s for the attributes named by `Mask` | `ContentHash` (xxHash over the emitted set) through the set-hash suppressor (D11) | `NEW_VERTEX_ATTRIB_DEFAULTS`. Applier writes `PipeInputs::m_currentVertexAttribute[i]` for the named attributes. |
+
+`BitwiseEqual` means `std::memcmp` over the value's bytes, which is why D3's `{}` matters for `PixelStoreParameters` (2 padding bytes at offsets 2–3).
+
+### D11 — The set-hash suppressor skeleton
+
+`MobileGL/MG_Impl/Pipe/SetHashSuppressor.h` — header-only:
+
+```cpp
+    // Coalescing rule 4 (ARCHITECTURE.md:198): every kVarTail set_* hashes the RESOLVED set on
+    // the client and does not emit when the hash has not moved. This is the carrier for the
+    // ~175 lines of debounce that move off the backends in P3b/P4b; P2 lands the mechanism and
+    // one real consumer so the shape is pinned by a test rather than by a plan.
+    class SetHashSuppressor {
+        Array<Uint64, kMGPipeSuppressorSlotCount> m_lastEmitted{};   // 0 == "never emitted"
+    public:
+        Bool ShouldEmit(MGPipeSuppressorSlot slot, Uint64 contentHash);   // and latches
+        void Invalidate(MGPipeSuppressorSlot slot);                        // context change, server reset
+        void InvalidateAll();
+    };
+```
+
+Slots, one per `kVarTail` `set_*` (`ARCHITECTURE.md:145`): `SetVertexBuffers`, `SetSamplerViews`, `BindSamplerStates`, `SetShaderImages`, `SetShaderBuffers`, `SetStreamOutputTargets`, `SetVertexAttribDefaults`. **P2 wires exactly one — `SetVertexAttribDefaults` — and unit-tests the class on all seven slots.** The other six are P3b/P4b (`ROADMAP.md:23`). A hash of 0 is reserved for "never emitted" so the first emission always goes out (the class remaps a computed 0 to 1).
+
+### D12 — Magma re-sourced from the CSO and the dynamic payload
+
+Nothing here is required for correctness — after D2 the working block is byte-identical to what Magma reads today, so an unmodified Magma is already correct under push. Everything in D12 is a **cost** deliverable, which is what makes it safe to land last.
+
+1. **`GetOrCreatePipeline`'s memo key** (`VulkanRenderer.cpp:4997-5013`): `entry.pipelineStateHash == pipelineStateHash` becomes `entry.renderStateCso == boundCso` (an `MGPipeHandle` compare). The version→hash gate at `:4985-4995` and the three cached-hash fields (`VulkanRenderer.h:855,856,860,861,862`) **are deleted**: the client already did the hashing, and `m_pipelineStateHashValid`/`…Version`/`…ColorCount`/`…SampleCount` existed only to avoid re-hashing. `InvalidatePipelineMemo()` (`:881-885`) keeps clearing the memo and loses the three hash fields.
+   **The render-pass facts stay in the key.** `entry.renderPassHash` already separates draws that differ only in `colorAttachmentCount`/`sampleCount` (correction 4 of the preamble), so collapsing `pipelineStateHash` to the CSO handle loses no discrimination. `ResolveEffectiveSampleMask` (`:4813-4819`) is **not** deleted — it is a *payload* computation that depends on `rasterizationSamples`, and it keeps reading `Multisample`/`SampleMask`/`SampleMaskValue` out of the working block.
+2. **`ComputePipelineStateHash`** (`:4821-4910`) is retained only under `MOBILEGL_PIPE_LEGACY_MEMOS` and is not called on the new arm. Its 20-line enumeration comment (`:4780-4794`) moves to `MGPipeRenderStateSpans.cpp` as the provenance of the pipeline chunk set, since that is now the contract it was.
+3. **`ApplyDynamicDrawStateTail`** (`:5902-6004`): the version gate at `:5920-5930` keeps reading `GetRenderStateParametersVersion()` — that value now comes from `MGPDynamicState::Version`, so it moves exactly when a dynamic chunk moved and no longer moves on a pipeline-only change. The `DynamicTailKey` build and compare (`:5944-5982`) stay; the `struct DynamicTailKey` (`:355-395`) and its input inventory (`:341-354`) are already an exact enumeration of the dynamic half and are the cross-check that D6's dynamic chunks are complete — the implementer asserts, in a unit test, that every field `DynamicTailKey` reads lies inside `kMGPipeDynamicChunks` (the two exceptions being `extentX`/`extentY`/`preTransform`/`isDefaultFbo`, which are backend facts, not GL state).
+4. **Subsystem 4** (Track H): `VertexInputStateFactory::ComputeHash`'s `const Uint64 bufferKey = attr.Buffer ? attr.Buffer->GetLifetimeId() : 0;` (`VertexInputStateFactory.cpp:48`) becomes `bufferHandle.Slot | (Uint64(bufferHandle.Gen) << 32)` — `ARCHITECTURE.md:363`'s "`lifetimeId` → `gen` 混进 server 侧每个 content hash". `VaoDrawMemo` (`VulkanRenderer.h:1244-1264`) drops `vaoKey` (raw pointer) and `vaoLifetimeId` for one `MGPipeHandle vaoHandle`; `LookupVaoDrawMemo` (`:3540-3579`) becomes a direct slot index into a grow-on-demand `Vector` with a `Gen` compare — no Fibonacci mix (`:3547-3548`), no 2-way probe, no frame-serial recycling (`:3564-3577`).
+5. **The frontend VAO loses its backend pointers.** `VertexArrayObject::{Get,Set}BackendStateMemo` and `m_backendStateMemo{,Epoch,Version}` (`VertexArrayObject.h:121-131`, `:192-194`) are **deleted outright** (`ARCHITECTURE.md:284`), and with them the eviction-epoch dance (`VertexInputStateFactory.cpp:78`, `:318`, `VertexInputStateFactory.h:141`, `s_evictionEpochSource`) — a slot-indexed table has stable entries. `{Get,Set}BackendHashMemo` and `{Get,Set}BackendAuxMemo` (`:106-114`, `:140-150`, storage `:190-191`, `:195-197`) become fields of the slot-indexed `VaoDrawMemo` entry. `SetBackendAuxMemo` has **no live reader** today (verified: its only writer is `VertexInputStateFactory.cpp:83-84`; the values moved into `VaoDrawMemo::layoutHash`/`layoutAuxMasks`, `VulkanRenderer.h:1257-1259`), so it is deleted rather than moved.
+   **Out of scope, do not touch:** `ProgramObject::{Get,Set}BackendHashMemo` (`ProgramObject.h:798-826`, used by `ProgramFactory.cpp:3446-3448`), and `SetupDrawSnapshot`'s wider re-key (`VulkanRenderer.h:958-979`) beyond replacing its `vao`/`vaoLifetimeId` pair with the handle.
+
+### D13 — Espryt 0b: what the first Track H slice replaces and what it must not break
+
+**New**: `MobileGL/MG_Impl/Pipe/SlotAllocator.{h,cpp}` (client side, in the contract commit because Magma needs it too) and `MobileGL/MG_Backend/DirectGLES/SlotTables.h` (per-kind dense twin arrays).
+
+`SlotAllocator` obeys `MGPipeHandles.h` exactly: per-`MGPipeKind` free list + high-water mark, first allocatable slot `kMGPipeFirstAllocatableSlot = 1` (`:81`), **`Gen` bumps only on slot reuse, never on respecify** (`:44-48`), a `MOBILEGL_ASSERT` on `Gen` wrap in a debug allocator, and a client-side `lifetimeId → slot` map per kind (`ARCHITECTURE.md:40`) so `GetLifetimeId()` stays the client's identity and a GL name never enters a key.
+
+**Replaced / deleted** (all in `MG_Backend/DirectGLES/`):
+
+| what | where | replacement |
+|---|---|---|
+| the six `StateBackendObjectRegistry` instances | `Managers.h:271-400`; instances at `Managers.h:803,1124,1215,1733,1833,1860`, definitions `Managers.cpp:2747,5075,5828,6139,8657,8769` | per-kind dense arrays indexed by `MGPipeHandle::Slot`, `Gen`-validated |
+| `Find`'s erase-on-expiry and the "a reference dies on the next call" hazard | `Managers.h:326-349` | O(1) indexed read; **`SyncTextureObjectToBackend`'s by-value copy and second `Find` (`DirectGLES.cpp:1310-1345`) are deleted in the same change**, not left as harmless |
+| `CollectGarbage` / `CollectGarbageIfNeeded` (7 call sites: `DirectGLES.cpp:1223,1533,1898,1899,1900,2728,2729`) | `Managers.h:356-391` | explicit destroy: `MarkXForDeletion` on the frontend emits `delete_*`, and the applier frees the slot |
+| `OwnerEquals` and the three `TwinLookupMemo`s | `DirectGLES.cpp:63-66`, `:83-132`; use sites `:1206,1214,2769,2777,2874,2879` | direct slot indexing — the memo existed only to avoid the hash probe |
+| `UnitSamplerLookupMemo`'s `WeakPtr` test | `DirectGLES.cpp:3157-3177` | `{slot, gen}` compare; the "a miss is never cached" contract (`:3148-3156`) survives verbatim |
+| `g_fbSlotCache` / `GetFramebufferBindingSlotFast` and its five callers (`:1613, 1907, 2745, 2860, 2935`) | `DirectGLES.cpp:134-157` | an ordinary `MGB_CTX->GetFramebufferBindingSlot(target)` read of pushed state. **This closes the P1 poison bypass** (`scout-track-h.md` §1.6): the fast getter ran the checked accessor once per context change and then handed out a raw pointer forever, so the per-verb poison stamp and the verify read-hook were skipped at those five sites. |
+| the four `pDefaultFramebufferInfo->defaultFBO` identity compares (`:1939, 2874, 2898, 6420`) | | `handle == kMGPipeDefaultFramebuffer` (`MGPipeHandles.h:71`) |
+
+**Must not break** (each gets a named assertion or an existing test):
+
+- `EnsureProcessTeardownSentinel()` (`Managers.h:59-60`, `Managers.cpp:161-170`) is armed by the first twin creation, today from `GetOrCreate` (`Managers.h:295`). The arming site moves to the slot table's first insertion. A registry destructor hook is **wrong** and the comment at `Managers.h:52-57` says why.
+- The twin destructors' `g_backendContextGeneration` compare (`Managers.h:64-70`) so a twin outliving its ES context does not `glDelete*` a recycled name. Pinned by `SanityTest.cpp:2650-2665, 2765-2773, 2786-2790`.
+- The whole-registry save / reset / restore fixture `ScopedDirectGLESTextureBindings` (`SanityTest.cpp:145-197`, `:160,164,178,195`) must keep working — the slot table needs the same copy-assign-and-restore shape.
+- The one direct-iteration site, `ScopedDetachedTextureFramebufferAttachments`' scan over all framebuffer twins (`DirectGLES.cpp:6413-6425`), needs a "which slots are live" bit per kind.
+- `UnitBindingsSnapshot` / `CaptureUnitBindings` / `UnitBindingsUnchanged` (`DirectGLES.cpp:1366-1400`) **stays on the backend** — moving that debounce to the client is P3b/P4b (`ROADMAP.md:23`) — but its two `OwnerEquals` calls (`:1392`, `:1394`) become `{slot, gen}` compares.
+- `g_attachmentBackendIdGeneration` (`DirectGLES.cpp:1891`), `BufferImpl::g_bufferBackendIdGeneration` (`Managers.h:800`) and `InProcessTeardown()` are *driver-object* epochs, not identity, and survive untouched.
+- Purity gate C: `grep -rc pGLContext MobileGL/MG_Backend` stays empty. The `g_fbSlotCache` rewrite is the one place tempted to break it.
+
+**Explicit destroy.** Today nothing tells the backend an object died except buffers (`BufferBackendOps::OnDestroy`, `BufferObject.h:103`, fired from `BufferObject.cpp:39-41`); `Managers.h:306-314` quantifies the resulting dead gigabytes. P2 adds the death notification for the six kinds by emitting `delete_*` from the frontend's `Mark*ForDeletion` path (`Core.cpp:116-140, 167-169, 279-307, 346-352, 1188-1190, 1213-1225, 1252-1254`) when the object's last `SharedPtr` drops — **not** when the name is marked, because a still-bound object keeps living (`TextureState.cpp:118-155`). The hook follows `BufferBackendOps`' shape.
+
+### D14 — `MOBILEGL_PIPE_LEGACY_MEMOS`: the compile-time arm and the runtime selector
+
+`ARCHITECTURE.md:367` is right that after phase C the `MOBILEGL_PIPE_PUSH` bitmap alone is not a valid A/B, because with a bit clear the backend still runs the re-keyed memo code. So:
+
+| switch | kind | default | meaning |
+|---|---|---|---|
+| `MOBILEGL_PIPE_LEGACY_MEMOS` | **new CMake `option()`** + `-DMOBILEGL_PIPE_LEGACY_MEMOS=1` | **ON** | compiles the pre-handle arm (the six registries, `OwnerEquals`, the three `TwinLookupMemo`s, `g_fbSlotCache`, `ComputePipelineStateHash`, the address-keyed `VaoDrawMemo`) alongside the handle arm, both behind the same `PipeInputs` interface. Forced ON with a `message(STATUS)` when `MOBILEGL_PIPE_PUSH=OFF`, where it is the only arm. |
+| `MOBILEGL_PIPE_LEGACY_MEMOS` | runtime, `Features.PipeLegacyMemos` (`Config.h:356-360`, `ConfigLoader.cpp:258-259`) — **already exists**, tri-state, only an explicitly falsy value turns it off | true | true: a Track-H subsystem whose bitmask bit is clear falls back to the legacy arm. false: the legacy arm is never entered, and a Track-H subsystem whose bit is clear is a startup `Fatal{PipeLegacyMemosDisabled}`. This is the lever `HandleRecycleScenario`'s arms use. |
+| `MOBILEGL_PIPE_PUSH` | runtime `Uint64` bitmask, `Features.PipePush` (`Config.h:319-326`, `ConfigLoader.cpp:245`) — **first consumed in P2** | see below | per-subsystem selector. |
+
+**The subsystem bit enum** (new, `MobileGL/MG_Pipe/MGPipe.h`, next to the call-class enum at `:31`):
+
+```cpp
+    inline constexpr Uint64 kMGPipeSubsystemRenderState          = 1ull << 0;
+    inline constexpr Uint64 kMGPipeSubsystemPixelPack            = 1ull << 1;
+    inline constexpr Uint64 kMGPipeSubsystemPatchState           = 1ull << 2;
+    inline constexpr Uint64 kMGPipeSubsystemVertexAttribDefaults = 1ull << 3;
+    inline constexpr Uint64 kMGPipeSubsystemResidualValues       = 1ull << 4;
+    inline constexpr Uint64 kMGPipeSubsystemEsprytSlots          = 1ull << 5;  // Espryt 0b
+    inline constexpr Uint64 kMGPipeSubsystemMagmaVertexInput     = 1ull << 6;  // Magma subsystem 4
+    // bits 7..62 reserved for the later phases, allocated in ROADMAP order.
+    // NOT a subsystem, a BEHAVIOUR: turn OFF client-side content addressing of CSOs, so every
+    // pipeline-version change mints a fresh CSO and the map is never probed. This is the
+    // negative control the CSO design is measured against (ROADMAP.md:18, ARCHITECTURE.md:367).
+    inline constexpr Uint64 kMGPipeBehaviourNoCsoContentAddressing = 1ull << 63;
+    inline constexpr Uint64 kMGPipeSubsystemsMigratedAtP2 = 0x7full;  // bits 0..6
+```
+
+**Default.** `Config.h:322-323` documents `0` as "pull everything", and that stays literally true. `ConfigLoader.cpp:245` becomes, under `#if MOBILEGL_PIPE_PUSH`, `QueryEnvUint64("MOBILEGL_PIPE_PUSH", kMGPipeSubsystemsMigratedAtP2)` and, in the pull build, keeps its `0` (where it is meaningless). So a push build with the knob unset runs every migrated subsystem, and `MOBILEGL_PIPE_PUSH=0` in the environment is the all-subsystems-pull control that reproduces P1's behaviour exactly. `QueryEnvUint64`'s decimal/`0x` contract (`ConfigLoader.cpp:167-192`) is unchanged; the Config.h comment gains the bit list because operators pass it as hex.
+
+### D15 — How the pull build stays symbol-identical
+
+Every P2 artefact lands in one of four places, and none of them touches the pull build:
+
+1. **New sources compiled only under `MOBILEGL_PIPE_PUSH`**, appended inside the existing `if (MOBILEGL_PIPE_PUSH)` block (`CMakeLists.txt:462-468`): `MG_Pipe/MGPipeRenderStateSpans.cpp`, `MG_Pipe/PipeApply.cpp`, `MG_Impl/Pipe/{Tracker,CsoCache,SlotAllocator}.cpp`. `generated/PipeSpanTable.inc:66-67`'s two `extern` declarations cost the pull build nothing (a declaration emits no symbol).
+2. **`#if MOBILEGL_PIPE_PUSH` arms inside existing backend files** for the Track H re-keys, with the legacy arm under `#if MOBILEGL_PIPE_LEGACY_MEMOS` (D14). In the pull build only the legacy arm is compiled and it is textually today's code.
+3. **`MGP_NOTE_AGGREGATE` and the five aggregate generations** in `MG_State`, guarded the same way, so the pull build's state objects do not change size (D4).
+4. **Three new members in `RenderStateParameters` plus three `SET_CAPABILITY`/`RETURN_CAPABILITY` arms plus three `{}`**, which *are* in the pull build. This is the one deliberate exception, and it is bounded: the members fit an existing padding hole so no offset and no `sizeof` moves; the switch arms grow two functions; the `{}` grows one constructor. **G1 therefore admits exactly the resizes of `RenderState::SetCapability`, `RenderState::IsCapabilityEnabled` and `RenderState::RenderState()`, named in the commit message, and zero added/removed/renamed symbols.**
+
+The check after every merge is `symbol_report.py --threshold 0`; anything outside that named set is a defect, not a rounding error.
+
+### D16 — The dirty-surface mapping file and its gate
+
+**New file `MobileGL/MG_Pipe/DirtySurface.def`**, one row per distinct mutator the scanner finds (73 today):
+
+```
+// X(Mutator, Answer) - what publishes this frontend mutation to the backend.
+// Answer is one of the MGPipeDirty bit names, or:
+//   kImmediate      - the mutating function also reaches the backend in the same body, so the
+//                     mutation is published inline and needs no aggregate generation
+//   kReverseChannel - not state: a write INTO the frontend from the backend's side (RecordError)
+//   kNoBackendRead  - no backend read point observes this state at all (with the read-point
+//                     inventory row that proves it)
+#define MGP_DIRTY_SURFACE_LIST(X) \
+    X(RecordError,                  kReverseChannel) \
+    X(SetActiveTextureUnit,         kImmediate)      \
+    X(SetPatchVertices,             kImmediate)      \
+    X(SetBlendColor,                NEW_RENDER_STATE) \
+    X(SetCapability,                NEW_PIPELINE_STATE) \
+    ...
+```
+
+`scripts/gen_pipe_dirty_surface.py` grows:
+- `--check`: parse `DirtySurface.def`, and exit 1 if any scanned mutator has no row, or any row names a mutator the scan no longer finds. Both directions, so a deleted mutator leaves no stale row.
+- `--self-test`: two canned negative controls (a mutator withheld from the def, a row naming a nonexistent mutator), each of which must trip; `trips == 0` is an error — the shape `check_include_closure.py:541-543` and `gen_pipe.py --self-test` already use.
+- the human report writes the mapped answer instead of `UNMAPPED`, and the summary line is regenerated into `docs/Disaggregated/MEASUREMENTS.md`'s §5 by the integrator.
+
+`RecordError` is **exempted explicitly by a row**, not by a filter: it is 836 of the 926 calls (90 % of the surface) and it is a reverse channel (`Coverage.def:99`, `PipeInputs.h:574`). That leaves 72 real mutators over 90 real calls.
+
+The scanner's three self-declared blind spots (`gen_pipe_dirty_surface.py:195-197` and its scan root) are recorded in the def's header comment as known gaps: a mutator inside a lambda is attributed to the enclosing function; a mutation published through a helper the entry point calls reads as deferred; and the scan root is `MG_Impl/GLImpl` only, so the four `MGP_NOTE_MUTATION` sites in `MG_State/GLState/TextureState/TextureState.h:85,98,111,133` are outside it entirely.
+
+CI: `.github/workflows/test.yml:1524-1528` loses its "Informational" comment and becomes `python3 scripts/gen_pipe_dirty_surface.py --check && python3 scripts/gen_pipe_dirty_surface.py --self-test`. Cost: the `pipe-gates` job runs in ~10 s and has no build dependency (`test.yml:1480-1481`); this adds nothing measurable.
+
+### D17 — Counters, and the rule against hot-path instrumentation
+
+`ROADMAP.md:7` forbids committing hot-path instrumentation. **The tracker gets no timer.** The absolute-ns number comes from `DriverBench`'s `ns_per_op` (D.4), which times whole frames from outside the library.
+
+Two new `CallClass` values only — `RenderStateCsoMints` and `RenderStateCsoBinds` — with short names `csom` / `csob`, added in the contract commit together with the `PipeStatsTest.cpp:260 CounterNamesAreStable` update that pins them. Everything else P2 needs already exists:
+
+- `ByteClass::ResidualValueBlock` (`PipeStats.h:73-75`) — the placeholder P2 makes non-zero.
+- `RecordDrawPayloadBytes` + the 24-bucket histogram (`PipeStats.h:129,154`) — implemented, unit-tested, **called by nothing**; the tracker becomes its first emitter, one call per emitted draw payload.
+- the six memo gates (`PipeStats.h:107-122`) — unchanged names, and they are the honest reading of the before/after (`PipeStats.cpp:93-99`).
+- `CallClass::AccessorCalls` — **a warning for the report**: it is a set of static tallies at ~10 hot entry points (`PipeStats.cpp:76-88`), so a tracker that *relocates* reads out of those functions scores a lower `acc/draw` without having removed any work. P2's report must therefore lead with the gate hit/miss pairs and the CPU-time series, and quote `acc/draw` only alongside a re-audit of the tally constants (`DirectGLES.cpp:1421,1524,2043,2053,2977`; `VulkanRenderer.cpp:5009,5016,5274,5927,5934,6416,6449,6462`).
+
+Every counting site keeps the `if (PipeStats::Enabled())` shape (`PipeStats.h:29`) so an off build pays one predicted branch.
+
+### D18 — `HandleRecycleScenario`, and how it goes red before the re-key
+
+New `MobileGL/MG_IntegrationTest/Scenarios/HandleRecycleScenario.cpp`, registered in `MG_IntegrationTest/CMakeLists.txt` (source list from `:55`), following `PipeVerifyArmingScenario` / `PoisonOmissionScenario` as the template for an always-on negative control (`CMakeLists.txt:700-725`).
+
+**What it reproduces**, through public GL only: delete a VAO that a backend memo slot holds; immediately create a replacement the allocator is very likely to place at the same heap address (the `void* volatile` sink trick from `MG_Test/State/ObjectLifetimeIdTest.cpp:44`) **and** give it a byte-identical attribute configuration so the content hash matches too; bind a *different* buffer to it; draw; read back and assert the pixels come from the new buffer (the red/green quad readback of `Scenarios/CrossFrameBufferScenario.cpp`). The same shape is then repeated for a texture (against `g_backendTextureObjects`) and a framebuffer.
+
+**Three ctest arms**, all always-on:
+
+| arm | environment | expected |
+|---|---|---|
+| `…HandleRecycleScenario.Handles` | `MOBILEGL_PIPE_PUSH` default (bits 5 and 6 set), `MOBILEGL_PIPE_LEGACY_MEMOS=0` | **green** — the `{slot, gen}` key cannot alias |
+| `…HandleRecycleScenario.Legacy` | `MOBILEGL_PIPE_PUSH=0`, legacy arm | **green** — today's `lifetimeId` + `weak_ptr` guards work |
+| `…HandleRecycleScenario.AbaControl` | `MOBILEGL_PIPE_PUSH=0` **and** `MOBILEGL_PIPE_HANDLE_ABA_CONTROL=1` | **green by asserting the corruption** — the knob makes `VertexInputStateFactory::ComputeHash` hash `attr.Buffer.get()` instead of `GetLifetimeId()` and makes `LookupVaoDrawMemo` skip the `vaoLifetimeId` compare, i.e. reverts exactly the two guards the re-key replaces; the scenario asserts the *wrong* pixels, so if the scenario ever stops reproducing the ABA it fails |
+
+`MOBILEGL_PIPE_HANDLE_ABA_CONTROL` is a new `Bool Features.PipeHandleAbaControl` under `#if MOBILEGL_PIPE_PUSH` (so it cannot exist in a shipping pull build), parsed with `QueryEnvFlag`, documented next to `MOBILEGL_PIPE_VERIFY_CORRUPT` as negative control C. That third arm is what makes "`HandleRecycleScenario` 绿且重键前红" (`ROADMAP.md:18`) an always-on CI fact instead of a one-off manual demonstration.
+
+### D19 — G7: the setter-consistency test and its negative control
+
+`MobileGL/MG_Test/Pipe/RenderStateSpansTest.cpp` (contract commit creates it; package A fills it):
+
+- `ChunkTablePartitionsTheBlock` — the sorted/non-overlapping/complete assertion is a `static_assert` in `MGPipeRenderStateSpans.cpp`; the test re-asserts it at run time so a reader sees it, and additionally asserts `kMGPipePipelineChunks` covers every member named in `kMGPipePipelineStateMembers` (`generated/PipeSpanTable.inc:34-59`).
+- `SetterConsistency` — the G7 test. Drive **every public setter** of `RenderState` (the 25 Group-A setters and 22 Group-B setters catalogued in `scout-render-state.md` §2.1–2.4, plus `SetPixelStoreParam`, which must move neither counter), each with a value that differs from the current one, and assert `MGPipeComputePipelineSubsetHash` moved **⟺** `GetPipelineStateVersion()` moved. Special cases the test must drive individually, or it does not test what it claims:
+  - `SetStencilFunc` **twice**: once changing only `Ref` (version moves, hash must not — `RenderState.cpp:629-642`, the `++m_pipelineStateVersion` at `:641` is conditional on `Func` moving at `:636`), once changing `Func` (both move).
+  - `SetPolygonMode` with only the back face changing (both move: `PolygonModeBack` is in P5).
+  - `SetCapability(ClipDistance0..7)` (`RenderState.cpp:360-380`): version moves, pipeline version does **not**, hash must not.
+  - All 25 `SET_CAPABILITY` names including D3's three new ones.
+  - `SetScissorBox` including the `ScissorBoxWrittenMask` transition (`:918-941`).
+- `DerivationMatchesTheFrontendGetters` — D5's 29 derived values against `GLContext`'s getters after each setter.
+- `DynamicChunksCoverMagmasDynamicTailKey` — every field `DynamicTailKey` (`VulkanRenderer.cpp:341-395`) reads is inside `kMGPipeDynamicChunks`.
+
+**The negative control (G7 in the gate list, `scripts/g7_negative_control.sh`)**: move `ColorMasks` out of chunk P1 into a new dynamic chunk. The partition stays complete so it still compiles; `SetColorMask` then bumps `m_pipelineStateVersion` without moving the hash and `SetterConsistency` fails naming `SetColorMask`. The script patches, builds, expects a non-zero `ctest` rc, and reverts. It is run by the integrator at D.3 and is not a CI lane (it rebuilds the library).
+
+### D20 — Naming, layering and generated-file discipline
+
+- New namespaces: none. Everything is `MobileGL::MG_Pipe`.
+- `MG_Pipe/PipeApply.h` forward-declares only; `PipeApply.cpp` may include `MG_State/GLState/RenderState/RenderState.h` (a `.cpp` in the shared directory, no cycle: `RenderState.h` includes `MGPipeValueTypes.h`, not `PipeApply.h`). Run `python3 scripts/check_include_closure.py` after adding it; if it objects, the file moves to `MG_Impl/Pipe/` (the client side is unrestricted) and nothing else changes.
+- `PipeCalls.def` is **not** edited: every call P2 emits already has an opcode (`:92-94` `CreateRenderState`/`BindRenderState`/`DeleteRenderState`, `:106` `SetDynamicState`, `:125` `SetResidualValueState`, plus `SetPixelPackState`/`SetPatchState`/`SetVertexAttribDefaults`). Opcodes are file positions, so new calls may only be appended and retired calls keep their slot (`ARCHITECTURE.md:75`); `MGP_CALL_LIST_DOCUMENTED_COUNT = 71` stays pinned by `PipeCatalogueTest.cpp`.
+- Generated files are regenerated and committed; CI diffs them (`test.yml:1492-1495`).
+- Commit messages: single-line `[Type] (Scope): description`. Never add `Co-Authored-By` or any other attribution line.
+- Logging: `MGLOG_D` for anything non-critical; `MGLOG_I` only where `PipeStats.cpp:225-229` already justifies it. No stdio anywhere under `MG_Backend`/`MG_State` (the `pipe-gates` grep, `test.yml:1515-1522`).
