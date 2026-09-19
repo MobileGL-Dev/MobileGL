@@ -11,7 +11,7 @@
 | **P5b** inproc 下的 verb 迁移（Minecraft 优先） | **已收官（2026-09-16）** | `37fc4fdb..82683d4a`；`MEASUREMENTS.md` §7 |
 | **P5c** `inproc` 共享内存读点归零 | **已收官（2026-09-17）** | `11ac3de6..b88e8487` + triage 修复；契约 `MobileGL/MG_Remote/CONTRACT-P5C.md`；审计 `~/w7/notes/p5c/p5c-audit-v1.md` |
 | **P5d** `inproc` 性能专项 | **已收官（2026-09-18，三轮）** | `cb06538c`、`56a77348`、`1f8de61b`；报告 [`P5D-INPROC-PERFORMANCE.md`](P5D-INPROC-PERFORMANCE.md)；`MEASUREMENTS.md` §9 |
-| **P5e** 退役 Espryt draw path 的 lockstep | **进行中** | 契约 `MobileGL/MG_Remote/CONTRACT-P5E.md`（c0e 落地）；计划 `~/w7/notes/p5e/BRIEF-P5E.md`、裁定 `~/w7/notes/p5e/INTEGRATOR-DECISIONS-P5E.md`（ID-80..98）；包序 c0e → id → {vi, sb, pg, tx2, fb} ∥ ra，集成 commit 翻 `kMGPipeP5eRunAheadReady`。**八包已全部落地合并**，当前头 `3cc4e1ec`，逐门数字与设备验证见 §2.5 |
+| **P5e** 退役 Espryt draw path 的 lockstep | **进行中（run-ahead 已武装）** | 契约 `MobileGL/MG_Remote/CONTRACT-P5E.md`；计划 `~/w7/notes/p5e/BRIEF-P5E.md`、裁定 `~/w7/notes/p5e/INTEGRATOR-DECISIONS-P5E.md`（**ID-80..136**）；**十二个包已全部落地合并**（§2.7），`kMGPipeP5eRunAheadReady` 与 `kMGPipeP5eClientWaitRuleLanded` 均已翻。strict 车道硬绿 179/179、`integration-gpu` 1357/1357、三个构建 flavour 全绿；设备上 VD32 已与 monolith 齐平。报告 [`P5E-RUNAHEAD.md`](P5E-RUNAHEAD.md)，未完成项见 §5 |
 | P6 spawn transport | P5e 之后 | 届时只是传输替换 |
 
 ## 2. 当前头实测
@@ -33,7 +33,7 @@
 | Redmi 四臂复测 | **未做**（E-P5c #5 是记录项；本机无设备，需 Redmi `2f7cbe2e` 窗口） |
 | 79 trace 普查 | **未重跑**（全集语料不在本机；本机可用语料的实测见 `rsp` 与 audit 行）。P5b 收官数字（72/6/1）仍以其头为准 |
 
-## 2.5 P5e 当前进度（头 `3cc4e1ec`）
+## 2.5 P5e wave 2 与 fix1：设备发现的 monolith 回归（历史，头 `3cc4e1ec`）
 
 八包全部落地并合并：wave 1 = **c0e**（契约 + 线上行）+ **id**（身份按 `{slot, gen}` 重键），wave 2 = **vi / sb / pg / tx2 / fb** ∥ **ra**，集成提交 `44f91c74` 解了三处两包相接的 seam。**`kMGPipeP5eRunAheadReady` 与 `kMGPipeP5eClientWaitRuleLanded` 仍为 false**：翻转它们的门是 BRIEF-P5E §3（strict 车道转硬绿，只余 §7 白名单）与 §4（设备出口），前者尚未达成。裁定见 `~/w7/notes/p5e/INTEGRATOR-DECISIONS-P5E.md`（ID-80..110）。
 
@@ -159,6 +159,24 @@ flaky 是竞态**。根因（ra2 实测，推翻了我 ID-132 的机制猜测）
 **尚未回答的**：VD12 下面板上限之上谁更快。本机定不住更高的频率，而未定频的一次高频窗口里 monolith p50 201 / run-ahead
 p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提示。要回答它需要关掉 vsync 或换一台上限更高的设备。
 
+## 2.7 P5e 落地内容
+
+| 波 | 包 | 内容 | 效果 |
+|---|---|---|---|
+| 1 | c0e | 契约与线上行：`PipeCalls.def` 第五列 `WaitClass` + `MGPipeWaitClassFor`、`set_program_bindings`（opcode 80）、`kCapRunAheadApply`（位 10，只在 DirectGLES 臂）、`kDrawClientArrays`、子系统位 13、`MGPipeImageAccess` 一张表、两个旋钮、跨包 seam | 十一个包按同一契约并行施工，且全部 inert |
+| 1 | id | registry 按 `{slot, gen}` 重键、三个 by-handle resolver、分配器守卫（含按对方身份索引自己表的第二道守卫，ID-101） | 身份不再是前端指针 |
+| 2 | vi | 顶点输入 / VAO / 索引 | 普通 draw 路径的 bound-VAO 行退役 |
+| 2 | sb | 缓冲绑定点；`MGPShaderBuffers::WritableMask` 加宽（ID-104）；consumer 位 13（ID-106） | 索引绑定点过线 |
+| 2 | pg | 逐 link 的反射归档进 SEG_STAGE；`set_program_bindings` 的三条 post-link 尾 | 后续 pa 的前提：数据已在线上 |
+| 2 | tx2 | 纹理与 sampler、staged store 的按句柄读、纹理单元窗口 | |
+| 2 | fb | framebuffer、附件、image、blit | |
+| 2 | ra | 等待规则 `EmitAndWaitTails`、present credit、`gPipeInputs` 变 server 角色内存、事件环流控 | 等待规则本体 |
+| 2.5 | fix1 | 设备发现的 monolith 臂回归（ID-107）：`SyncAttachmentSurface` 的存储同步按传输选臂；`MonolithAttachmentClearScenario` + `DirectGLES.PushMonolithArm.` 车道 | `integration-gpu` 1157→1294 |
+| 3 | pa | `PrepareForDraw` / `PrepareForCompute` 的 program 拉取离开前端，`SyncCurrentVertexAttributeValues` 改读 `record->Archive->Link` | `GetProgramForDraw@DrawArrays` 62→0、`GetProgramForDispatch@DispatchCompute` 7→0，**无线上改动** |
+| 3 | mv | `MultiDraw.cpp` 的 `BoundIndexBuffer` 改按句柄（ID-113）；五个 multi-draw 档位各自的门禁条目 | `GetBoundVertexArray@DrawArrays` 9→0；`integration-split` +60 条 |
+| 3 | gl | 生成式采纳谓词、strict 旋钮的第三态、车道两侧棘轮、`ResourceCopyRegion` 等待类、Magma 车道切分；以及两处潜伏崩溃（ID-111 的盖章、ID-112 的编译期绊线） | 车道成为可被脚本判定的硬绿 |
+| 3 | ra2 | 翻开开关后暴露的竞态（守卫把"关于未来的断言"当豁免依据）；`BoundDrawIndirectBufferId` 退役并撤回升级 (iii)（ID-136） | 翻开开关后 `isplit` 112→179 |
+
 ## 3. P5c 落地内容
 
 | 包 | 内容 | 效果 |
@@ -187,7 +205,7 @@ p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提�
 | r1 / r2 | P5 收官审查 13 项（coherent-map 服务器侧绕过、FBO 死亡在 client 线程、`PACK_SWAP_BYTES`、`RingOverrun` 等待、CI 对照九项） | — |
 | 收官审查修复 | 索引 span 上界（`Count × IndexSize` 必须装进声明的 run）、fence wait 预算、`Fatal{ReplyStatusInvalid, "ReadPixels"}` | P5b 审查 0 blocker |
 
-## 4. 真实负载（inproc，独立 apply 线程）
+## 4.1 真实负载（inproc，独立 apply 线程）
 
 - `DrawElements` 不再是阻塞：d1 普查时 77 个 Minecraft 后端用例中 28 个渲染通过（SSIM ≥ 0.99995）。
 - blit + mip 之后：`improved-transparency-minecraft-26.3` DirectGLES SSIM 1.0 / DirectVulkan 0.999914；`minecraft-1.21.4-fabric-iris-bsl-in-world` DirectVulkan 0.997324、DirectGLES 0.997496；OpenRA 双后端 1.0。
@@ -208,11 +226,16 @@ p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提�
 | 15 个 class-C 槽（query / sync 尾 / `GetTexImage` / `SetSwapInterval` 等）无负载命中，仍具名拒绝 | P9 / P10 |
 | Redmi 定频行只在树外 `~/w7/notes/p2/devices/pin_device.sh`；钉频口径 2026-09-16 起 1100 MHz（原 1050） | `devices/pin-verification-2026-09-07.md` |
 | `test.yml` / `apk.yml` 的 `feat/disaggregated` 触发器是临时的，合入 dev 前必须移除 | — |
+| **P5e：BRIEF §3 的三条阴性对照与逐包 red-once 重跑未执行**（ID-121 已把后者重排到车道变绿之后，现在可跑） | `~/w7/notes/p5e/FLIP-CHECKLIST.md` phase C |
+| **P5e：`split_negative_controls.sh` 的 E1 对照自检失败**，且索要的 `Fatal{BarrierViolation}` 在 `BATCH_WAITS=1` 下不可能触发——一个永远打不响的对照比没有对照更坏 | ID-122 |
+| **P5e：契约 §3.2 的 per-role stamp 存储未落地**，正是它让 run-ahead 的元数据竞态成立；§8 修正 8 同样 UNLANDED | ID-120 / ID-135；`CONTRACT-P5E.md` |
+| **P5e：VD12 面板上限之上谁更快未答**（本机定不住更高频）；VD32 那一轮回答了一般性问题 | `MEASUREMENTS.md` §11 / §11.1 |
+| **新机会（非缺陷）**：VD32 下 apply 11-12 ms 对 client 15.7 ms，两侧不平衡；把工作从 client 挪到 apply 会直接降瓶颈——lockstep 下无意义，run-ahead 才解锁 | `P5E-RUNAHEAD.md` 末节 |
 
 ## 6. 下一步
 
 0. P5d 的遗留（`P5D-INPROC-PERFORMANCE.md` "什么没完成"）：R-1 序列化留给 P3b/P4b → P11（`gPipeInputs` 版本化已写进 P11 行）；线程放置记录；小项随 P3b/P4b 顺手。
-1. **P5e 退役 draw path 的 lockstep**（进行中）：c0e 已落地契约与线上行——`PipeCalls.def` 的第五列 `WaitClass` + 生成的 `MGPipeWaitClassFor(op)`、`set_program_bindings`（opcode 80，空路由）、`kCapRunAheadApply`（位 10，只在 DirectGLES 臂且只在 `kMGPipeP5eRunAheadReady` 为真时发布）、`kDrawClientArrays`、子系统位 13 与 push 默认 `0x3fff`、`MGPipeImageAccess` 一张表、`MOBILEGL_IPC_RUN_AHEAD` / `MOBILEGL_IPC_PRESENT_CREDIT`、以及跨包 seam（`MGPipeBarriered`、两个 applier 入口、六个 by-handle 后端签名）。全部 inert：caps 位未发布前 client 跑今天的 lockstep 路径。下一个是 **id**（registry 重键 + by-handle resolver + 分配器守卫），然后 {vi, sb, pg, tx2, fb} 并行、ra 从第一天起并行。
+1. **P5e 收官**（十二包已落地、run-ahead 已武装，报告 [`P5E-RUNAHEAD.md`](P5E-RUNAHEAD.md)）。剩下的不是迁移而是证据：(a) BRIEF §3 item 4 的三条阴性对照；(b) item 5 的逐包 red-once 重跑——其证据形式当时**不可执行**（每个候选在 revert 之前就是红的），ID-121 已重排到车道变绿之后，现在可以跑了；(c) 修或删 `scripts/ci/split_negative_controls.sh` 的 E1 对照（ID-122：自检就失败，且索要的 Fatal 在 `BATCH_WAITS` 默认值下不可能触发）；(d) G1 仍由 CI 断言（ID-123）。契约 §3.2（per-role stamp 存储）与 §8 修正 8 标为 UNLANDED，随后续阶段。
 2. **P6 spawn transport**：`SocketTransport` + `ServerMain` + 握手 / 退出语义 + EGL forwarder 的控制面帧；P5c 之后这只是传输替换。注意 P5c 留下的：`s_synced` / `g_syncedRenderStateParameters` 按 context 世代重置；两个豁免 scope 里的探测在 spawn 下根本不存在对应内存，P6 第一天的红就是它们的清单。
 3. 剩余首阻塞一轮（Magma compute/image、rd12、RGB mip、`texture-remint-pull` 仿真槽）。
 4. P5e 出口门（`~/w7/notes/p5e/BRIEF-P5E.md` §3 / §4）：`integration-split-strict` 转硬绿车道、三条阴性对照、Redmi 四臂（monolith / lockstep / credit 1 / credit 2）。P6 出口门：P5b 的完整渲染路径在 `spawn` 下绿；OpenRA 在 Adreno 830 上 split SSIM ≥ 0.99。
@@ -257,4 +280,19 @@ p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提�
 | 76 | P5b 出口 = 主机门 `348d22a4` complete + 79 trace 普查 + Redmi 正确性 8/8 + 四臂 A/B |
 | 77 | Redmi 钉频期望 1050 → 1100 MHz（2026-09-16）；iris-bsl 8 组判为 fixture 123 帧上限，补充表不进 200 帧尾门表 |
 | 79 | **P5d 三轮规则（2026-09-18）**：批处理免等只允许 apply 不读残余填充任何字段的记录（`generate_mipmap` 因后端读 `GetActiveTextureUnit` 而必须等）；性能诊断以符号化调用图为准、不再从 self% 猜归属；Redmi 上 fps > ~115 的 monolith 数字视为 120 Hz vsync 封顶，配对比较以逐线程 CPU ms/帧为主指标；`sched_setaffinity` / `taskset` 在该内核对 app 线程无效，线程放置只记录 |
+| 81 | **P5e**：handle 臂只在 `Transport != Monolith`；push-monolith 构建保留其前端臂、字节不动 |
+| 84 | rule F 只约束**未设障**记录；设障记录保留 P5C 语义 |
+| 90 | Magma 整个 P5e 保持 lockstep；`kCapRunAheadApply` 从不在 DirectVulkan 上发布 |
+| 107/109/110 | 一整条运行时臂没被门禁（137 SEGFAULT / 38 scenario）；`gpu` 成为常设门禁步；**"记下了句柄"≠"记录臂被选中"**，要自述式传输测试 |
+| 111 | 盖章必须与服务端**自身**能力合取，否则翻开开关会当场打死 Magma |
+| 112 | `EmittedCallSuppliesTheWholeField` 上编译期绊线：把 Magma 的空指针崩溃换成构建断裂 |
+| 116/125/128 | 采纳规则**生成**而非手抄，三个析取项（静态设障 / 退役相不在本阶段 / 按升级设障） |
+| 117 | 被采纳的 pull **响而不致命**（`Admitted{` 标签），车道才可能真正变绿 |
+| 119/115 | `rsp` 的钉子改写为可检查的形式；车道必须有阳性对照 |
+| 121 | §3.5 的 red-once 证据形式在当时不可执行，重排到车道变绿之后 |
+| 124 | 四个构建 flavour 里只有 split 编得过；**一条臂的证据必须自证它确实是那条臂**（看生效的编译宏，不看 flag、不看 cache） |
+| 129 | 没有 stamp 行的 verb 什么都不采纳（采纳集合宁窄勿宽） |
+| 131 | `ctest -L` 是**正则**：新标签不得以既有标签为前缀，且要数一遍证明 |
+| 132/135 | **strict 硬绿是必要而结构性地不充分**（它跑在 lockstep 下）；竞态在元数据标量而非字段值，而**打不响的守卫比没有守卫更坏** |
+| 136 | 为让车道变绿而加的等待是真实路径上的真实代价：要问**哪条臂在买单**，不是哪条车道绿了 |
 | 78 | **P5c 插在 P6 之前**（2026-09-17）：`inproc` 先做到两角色之间除 wire 零直接内存访问，P6 只换传输；值类 BARRIER-PULLED 行在 P5c 过线，对象类行留 twin 表阶段；codex 无额度期间只读审计改派 Kimi（K3） |
