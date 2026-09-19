@@ -1,6 +1,6 @@
 # MGPipe：MobileGL 前后端拆分
 
-> 状态：**P0–P5d 已收官**（P5c 2026-09-17 `b88e8487`；P5d 三轮 2026-09-18，代码头 `1f8de61b`——`inproc` 性能专项，VD12 Minecraft 上 split 从 7-13 fps 拉到 103-106 fps、client 线程 CPU/帧从 15 ms 到 9.2 ms，报告 [`P5D-INPROC-PERFORMANCE.md`](P5D-INPROC-PERFORMANCE.md)）。目标负载（四条 Minecraft A/B trace）已在 Redmi Adreno 830 上以 `inproc`（独立 apply 线程）双后端渲染，barrier tax 首次实测；P5c 把审计出的 59 处不经 wire 的直接内存访问全部归零（契约 `MobileGL/MG_Remote/CONTRACT-P5C.md`），`inproc` 成为只经 wire 交换的诚实两角色。**下一个是 P6 spawn transport**——此时只是传输替换。当前头、逐门数字与开放项见 [`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md)。
+> 状态：**P0–P5d 已收官**，**P5e 进行中且 run-ahead 已武装**（十二包落地，strict 车道硬绿 179/179、`integration-gpu` 1357/1357、pull/push/split 三个构建 flavour 全绿；设备上渲染距离 32 下 `inproc` 已与 `monolith` 齐平，相对它取代的 lockstep p50 +69%。报告 [`P5E-RUNAHEAD.md`](P5E-RUNAHEAD.md)）（P5c 2026-09-17 `b88e8487`；P5d 三轮 2026-09-18，代码头 `1f8de61b`——`inproc` 性能专项，VD12 Minecraft 上 split 从 7-13 fps 拉到 103-106 fps、client 线程 CPU/帧从 15 ms 到 9.2 ms，报告 [`P5D-INPROC-PERFORMANCE.md`](P5D-INPROC-PERFORMANCE.md)）。目标负载（四条 Minecraft A/B trace）已在 Redmi Adreno 830 上以 `inproc`（独立 apply 线程）双后端渲染，barrier tax 首次实测；P5c 把审计出的 59 处不经 wire 的直接内存访问全部归零（契约 `MobileGL/MG_Remote/CONTRACT-P5C.md`），`inproc` 成为只经 wire 交换的诚实两角色。P5e 之后才是 **P6 spawn transport**——此时只是传输替换。当前头、逐门数字与开放项见 [`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md)。
 >
 > 性能纪律（2026-09-08 起）：逐线程 CPU 与 tracker 绝对 ns **对着 pull 臂基线记录**，不作阻塞门；专门的优化阶段排在路线图推完之后。
 
