@@ -229,7 +229,7 @@ p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提�
 | `test.yml` / `apk.yml` 的 `feat/disaggregated` 触发器是临时的，合入 dev 前必须移除 | — |
 | **P5e：BRIEF §3 的三条阴性对照与逐包 red-once 重跑未执行**（ID-121 已把后者重排到车道变绿之后，现在可跑） | `~/w7/notes/p5e/FLIP-CHECKLIST.md` phase C |
 | **P5e：`split_negative_controls.sh` 的 E1 对照自检失败**，且索要的 `Fatal{BarrierViolation}` 在 `BATCH_WAITS=1` 下不可能触发——一个永远打不响的对照比没有对照更坏 | ID-122 |
-| **P5e：契约 §3.2 的 per-role stamp 存储未落地**，正是它让 run-ahead 的元数据竞态成立；§8 修正 8 同样 UNLANDED | ID-120 / ID-135；`CONTRACT-P5E.md` |
+| ~~P5e：契约 §3.2 的 per-role stamp 存储未落地~~ **P5f f1 已落地**（双块臂：server 块即 applier 私有存储，client 的 clear 重指到自己块，SetIdentity 由 `MGPipeServerBlockNoteIdentity` 落 server 侧）；§8 修正 8 仍 UNLANDED | ID-135 已由 f1 关闭 / ID-120 仍开着；`CONTRACT-P5E.md` |
 | **P5e：VD12 面板上限之上谁更快未答**（本机定不住更高频）；VD32 那一轮回答了一般性问题 | `MEASUREMENTS.md` §11 / §11.1 |
 | **新机会（非缺陷）**：VD32 下 apply 11-12 ms 对 client 15.7 ms，两侧不平衡；把工作从 client 挪到 apply 会直接降瓶颈——lockstep 下无意义，run-ahead 才解锁 | `P5E-RUNAHEAD.md` 末节 |
 
@@ -237,7 +237,7 @@ p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提�
 
 0. P5d 的遗留（`P5D-INPROC-PERFORMANCE.md` "什么没完成"）：R-1 序列化留给 P3b/P4b → P11（`gPipeInputs` 版本化已写进 P11 行）；线程放置记录；小项随 P3b/P4b 顺手。
 1. **P5e 已收官**（2026-09-19，报告 [`P5E-RUNAHEAD.md`](P5E-RUNAHEAD.md)）：出口门已逐条跑过（逐项结果记在 `ROADMAP.md` 的 P5e 出口门格）：unit 两臂 2256/2256、`integration-split` 179/179 零 `Fatal{`、三条阴性对照按预期、逐包 red-once 各得恰好一个具名对。**剩下的只有 E1 对照**（ID-122）：修掉它两个遮蔽性缺陷后仍红，而它索要的 `Fatal{BarrierViolation}` 在整次运行里出现 0 次，需要重新定义它证伪什么而不是调阈值。契约 §3.2（per-role stamp 存储）与 §8 修正 8 仍标为 UNLANDED，随后续阶段；G1 仍由 CI 断言（ID-123）。
-2. **P5f 一切状态上 wire**（[`P5F-WIRE-COMPLETENESS.md`](P5F-WIRE-COMPLETENESS.md)）：插在 P6 之前。下一步是 `f0` 普查（只读）与 `f1` 双块机制——让红先出现，红就是清单。
+2. **P5f 一切状态上 wire**（[`P5F-WIRE-COMPLETENESS.md`](P5F-WIRE-COMPLETENESS.md)）：插在 P6 之前。`f0` 普查已落（`notes/p5f/` 八篇），`f1` 双块机制已落（报告 [`notes/p5f/f1-report.md`](notes/p5f/f1-report.md)）：`MOBILEGL_IPC_ROLE_SPLIT_STATE=1` 给两个角色各一份 PipeInputs，`integration-dualblock-split` 车道与 `dualblock-expected-fatals.txt` 棘轮已立，红清单即 fm/fs/fr/fv 的工作量。下一步是 `fm`（Magma 的 9 个字段）等逐包消红。
 3. **P6 spawn transport**（阻塞于 P5f）：计划与契约草稿已起草（[`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md)、[`P6-CONTRACT-DRAFT.md`](P6-CONTRACT-DRAFT.md)），**下一步是跑 `a6` 那次只读审计，不写代码**：“P6 只是传输替换”这句话的证据是 P5c 时代的，P5e 之后已经过期。审计要点名去查：进程级静态里语义属于 context 的那一类（`s_synced` / `g_syncedRenderStateParameters` 是已知的两个，问题是还有几个——这类缺陷`inproc` 永远看不见）；十二个 EGL forwarder 对 `SurfaceOpKind` 缺几个枚举；server 是否真能不链 `MG_Impl`。
 3. 剩余首阻塞一轮（Magma compute/image、rd12、RGB mip、`texture-remint-pull` 仿真槽）。
 4. P5e 出口门（`~/w7/notes/p5e/BRIEF-P5E.md` §3 / §4）：`integration-split-strict` 转硬绿车道、三条阴性对照、Redmi 四臂（monolith / lockstep / credit 1 / credit 2）。P6 出口门：P5b 的完整渲染路径在 `spawn` 下绿；OpenRA 在 Adreno 830 上 split SSIM ≥ 0.99。

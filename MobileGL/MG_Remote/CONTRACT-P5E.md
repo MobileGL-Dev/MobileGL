@@ -227,6 +227,22 @@ UNBARRIERED apply is a finding: `MGLOG_E_ONCE` with the kind, Fatal under strict
    transport. For a barriered record the server reads the client's fill (the client is parked) and
    its own stamp; for an unbarriered one it does not touch the block. `SetIdentity` (`:3001`) moves
    to `ApplyOne`, once per session. This removes the E note's hazard (b.4).
+
+   **LANDED by P5f f1 — as the dual block, not as moved fields** (`MOBILEGL_IPC_ROLE_SPLIT_STATE=1`,
+   `PipeInputs.h`'s `gPipeInputsClientBlock`). The client could not be stopped from writing the
+   server's stamp storage while both roles shared one object, so the split landed one level down:
+   the fill side writes the CLIENT block (`MGPipeClientInputs()`, `PipeFill.cpp`), the stamp and
+   every backend read keep the SERVER block (`gPipeInputs`), and "applier-owned storage" is the
+   server block itself. The GL-thread `MGPipeServerClearVerbBoundary()` calls are re-pointed, not
+   deleted: they now clear the client block's flag (`MGPipeClientClearVerbBoundary()`), which is
+   never raised, so withdrawing the server's stamp is the applier's job alone
+   (`PipeApplier::LeaveApplier`). `SetIdentity` landed as `MGPipeServerBlockNoteIdentity()`, called
+   from `PipeApplier::Attach` and refreshed by each server stamp from the applier's own
+   served-context serial. And the ra2 caveat below is discharged by the knob's other half: under
+   the dual block a BARRIER_PULLED read has no value to be stale WITH, so `CountBarrierPull` is an
+   unconditional named `Fatal{UnmigratedPipeInput}` there — never a silent stale read. The
+   knob-off arm keeps the shared block and the old semantics, byte for byte; it is the A/B arm and
+   the negative control, not a second contract.
 3. **The detector.** `MGPipeInputUnfreshRead` (`PipeInputs.cpp:191-224`) under an unbarriered
    record takes `StrictBarrierPullFatal` (`:60-66`) regardless of `StrictErrors`; the seven sticky
    forwards (`MGPipeStickyForwardPull`, `:251-257`) the same; `CountBarrierPull` stays for barriered
@@ -270,6 +286,9 @@ UNBARRIERED apply is a finding: `MGLOG_E_ONCE` with the kind, Fatal under strict
    possible, and splitting the stamp is the P11 item — but note that per-role stamps **without**
    versioning the BARRIER_PULLED values would be worse than today, because it turns a loud
    `Fatal{UnmigratedPipeInput}` into a silent stale read. Both, or the values retired first.
+   *(P5f f1: LANDED — see the LANDED note on §3.2 above. The dual block makes the server block
+   itself applier-owned, and the unconditional dual-block Fatal in `CountBarrierPull` is the
+   "both": no BARRIER_PULLED value survives to be read stale.)*
 
 ---
 

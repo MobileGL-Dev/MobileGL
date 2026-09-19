@@ -1,6 +1,9 @@
 # P5f — 一切状态上 wire：跨进程前的最后一次归零
 
-> 基线 `feat/disaggregated @ 7f1d2134`。路径在 `MobileGL/` 下。**未开工。**
+> 基线 `feat/disaggregated @ 7f1d2134`。路径在 `MobileGL/` 下。
+> **进度**：`f0` 普查已落（`notes/p5f/` 八篇）；`f1` 双块机制已落（报告
+> [`notes/p5f/f1-report.md`](notes/p5f/f1-report.md)：旋钮 `MOBILEGL_IPC_ROLE_SPLIT_STATE`、
+> 车道标签 `integration-dualblock-split`、棘轮 `Harness/dualblock-expected-fatals.txt`）。
 > **P6 在 P5f 之前不开工**：P6 的前提"只是传输替换"今天不成立，§2 是不成立的清单。
 
 ---
