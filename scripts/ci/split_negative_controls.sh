@@ -111,10 +111,16 @@ fi
 # Fatal is quoted", joint-v1.md 3) and ID-65 assigned the missing line here. With it, E3(a) no
 # longer rests on a pixel assertion alone: the red must carry the scenario's own diagnostic AND
 # the library's own statement that the push was disabled, from the entry's private file.
+# The optional 5th positional is a ctest -E EXCLUSION, applied to every ctest invocation this
+# function makes. It exists because ctest -R is POSIX ERE: there is no negative lookahead, so a
+# selection that must say "these, except that one" cannot say it in -R alone. E1 below is the
+# case that forced it (ID-122).
 run_control() {
-  name="$1"; filter="$2"; evidence="$3"; private_evidence="$4"; shift 4
+  name="$1"; filter="$2"; evidence="$3"; private_evidence="$4"; exclude="${5:-}"; shift 5
+  if [ -n "${exclude}" ]; then EX=(-E "${exclude}"); else EX=(); fi
+  export SPLIT_LOG_EXCLUDE="${exclude}"
 
-  matched=$("${CTEST}" -N -L integration-split -R "${filter}" | grep -cE '^ *Test *#[0-9]+:')
+  matched=$("${CTEST}" -N -L integration-split -R "${filter}" "${EX[@]}" | grep -cE '^ *Test *#[0-9]+:')
   if [ "${matched}" -lt 1 ]; then
     echo "::error::${name} selected ${matched} tests; its filter no longer matches anything"
     exit 1
@@ -128,7 +134,7 @@ run_control() {
   out="${CONTROL_TMPDIR}/control-output.txt"
   result="${CONTROL_TMPDIR}/control.xml"
   rm -f "${result}"
-  env "$@" "${CTEST}" --output-on-failure -L integration-split -R "${filter}" --no-tests=error --output-junit "${result}" > "${out}" 2>&1
+  env "$@" "${CTEST}" --output-on-failure -L integration-split -R "${filter}" "${EX[@]}" --no-tests=error --output-junit "${result}" > "${out}" 2>&1
   control_rc=$?
   cat "${out}"
 
@@ -166,10 +172,21 @@ run_control() {
 # This asserts an observed overlap with the applier, which is timing-dependent.
 # Without that Fatal in a fresh selected file E1 fails; pixel/status fallbacks do not count.
 # Keep the ID-53-approved SmallRing selection as well as the default lane.
+# ...MINUS TheServerStampedAVerbBoundaryOnThisDrawingFrame, and that exclusion is load-bearing
+# rather than tidying (P5e, ID-122). That case is package gl's ID-115 POSITIVE CONTROL: it reads
+# a PipeStats window out of the lane's own private log, so it runs ONLY in the strict-arming
+# lane and skips everywhere else BY DESIGN, whatever this knob is set to. E1's selection began
+# matching it the moment gl added it, and ID-62 makes a SKIPPED SELECTED entry a hard failure -
+# correctly, because a control that silently loses its subjects proves nothing. E1 then reported
+# "the knob killed the pre-flight, not the entry" while the knob was in fact working: four other
+# selected entries went red with the abort in the same run. So the bug was in WHO E1 selects,
+# not in what it asserts, and the fix excludes a case that can never run here rather than
+# teaching E1 to tolerate skips - which would have thrown ID-62 away.
 run_control "negative control E1 (MOBILEGL_IPC_VERB_BARRIER=0)" \
   'DirectGLES\.Split\.(SmallRing\.)?(Triangle|ClearThenReadPixels)' \
   'private-barrier-fatal' \
   '' \
+  'TheServerStampedAVerbBoundaryOnThisDrawingFrame' \
   MOBILEGL_IPC_VERB_BARRIER=0
 
 # E3(a): PersistentMapTracker::PushBlocksFor stops at blockBytes == 0 - deliberately, because 0
@@ -186,4 +203,5 @@ run_control "negative control E3(a) (MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0)" \
   'DirectGLES\.Split\.(SmallRing\.)?PersistentCoherentMapScenario\.(TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw|AWriteAfterAFrameBoundaryReachesTheNextFramesDraw)$' \
   "the SECOND write through the same mapping, announced by nothing|frame 1's write through the SAME mapping, after a Present" \
   'MGPipe: persistent-map push disabled - MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0' \
+  '' \
   MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0
