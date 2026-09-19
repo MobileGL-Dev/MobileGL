@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Validate discovered Split log ownership; read only freshly reset control logs."""
+import os
 import json
 from pathlib import Path
 import re
@@ -191,6 +192,12 @@ def main():
         return
     selected = paths(json.loads(Path(sys.argv[2]).read_text()))
     selected = {name: path for name, path in selected.items() if re.search(sys.argv[3], name)}
+    # The SAME exclusion run_control hands ctest -E. Without it this helper and ctest disagree
+    # about the subject set, and the helper reports an entry ctest never ran as "did not run"
+    # (P5e, ID-122). ctest -R is POSIX ERE and cannot express the exclusion inline.
+    _excl = os.environ.get("SPLIT_LOG_EXCLUDE", "")
+    if _excl:
+        selected = {n: q for n, q in selected.items() if not re.search(_excl, n)}
     if not selected:
         raise ValueError(f"integration-split: empty selection for {sys.argv[3]}")
     if mode == "reset":
