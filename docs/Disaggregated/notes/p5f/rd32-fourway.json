@@ -1,0 +1,594 @@
+{
+  "date": "2026-09-20",
+  "source": "194382c96a8a5f51ef23f412fdccfbd40a82bf78",
+  "library_sha256": "046d86c288ce891b16770148578ba1a6fea4057783b69c2359f5830e58b7b223",
+  "clock_control": "stock-dvfs",
+  "render_distance": 32,
+  "simulation_distance": 12,
+  "warmup_seconds": 180,
+  "fan_target": 2,
+  "arms": [
+    {
+      "name": "Espryt-monolith",
+      "mean_fps": 62.178237711677376,
+      "median_interval_fps": 59.97003214006533,
+      "p10_interval_fps": 56.94306106612412,
+      "sample_seconds": 60.020999908447266,
+      "intervals": 60,
+      "boot_id": "b19a24d3-bf9d-4c99-a64e-1e70fac40f0f",
+      "hardware_window": {
+        "samples": 11,
+        "all_observed_pins_match": null,
+        "fixed_clock_evaluation": "not_applicable_stock_dvfs",
+        "drift_samples": null,
+        "observed_clock_ranges": {
+          "policy0_min": {
+            "min": 556800,
+            "max": 556800,
+            "observed_values": [
+              556800
+            ]
+          },
+          "policy0_max": {
+            "min": 1555200,
+            "max": 1996800,
+            "observed_values": [
+              1555200,
+              1785600,
+              1996800
+            ]
+          },
+          "policy0_cur": {
+            "min": 1555200,
+            "max": 1996800,
+            "observed_values": [
+              1555200,
+              1785600,
+              1996800
+            ]
+          },
+          "policy6_min": {
+            "min": 1017600,
+            "max": 1017600,
+            "observed_values": [
+              1017600
+            ]
+          },
+          "policy6_max": {
+            "min": 1689600,
+            "max": 1958400,
+            "observed_values": [
+              1689600,
+              1958400
+            ]
+          },
+          "policy6_cur": {
+            "min": 1689600,
+            "max": 1958400,
+            "observed_values": [
+              1689600,
+              1958400
+            ]
+          },
+          "gpu": {
+            "min": 525000000,
+            "max": 660000000,
+            "observed_values": [
+              525000000,
+              607000000,
+              660000000
+            ]
+          },
+          "gpu_min": {
+            "min": 12,
+            "max": 12,
+            "observed_values": [
+              12
+            ]
+          },
+          "gpu_max": {
+            "min": 0,
+            "max": 0,
+            "observed_values": [
+              0
+            ]
+          },
+          "busy": {
+            "min": 65,
+            "max": 81,
+            "observed_values": [
+              65,
+              66,
+              69,
+              70,
+              71,
+              77,
+              80,
+              81
+            ]
+          }
+        },
+        "fan_observed_values": {
+          "fan_rpm": [
+            "14466",
+            "14487",
+            "14570",
+            "14591"
+          ],
+          "fan_target": [
+            "2"
+          ]
+        },
+        "temperature_c_min": 53.1,
+        "temperature_c_max": 55.8,
+        "sample_elapsed_seconds": [
+          219.111,
+          224.585,
+          230.177,
+          235.749,
+          241.223,
+          246.748,
+          252.337,
+          257.904,
+          263.443,
+          269.017,
+          274.616
+        ]
+      },
+      "actual_runtime": {
+        "backend_names": [
+          "Direct (OpenGL ES)"
+        ],
+        "ipc_lines": [],
+        "run_ahead_armed": false,
+        "caps_call_masks": [],
+        "run_ahead_cap_bit_seen": false,
+        "stats_rows": 137,
+        "residual_pulls_max": 0.0
+      },
+      "source_directory": "C:\\Users\\geekerwan\\.codex\\tmp\\rd32-fourway-20260920-stock-fan2-espryt\\Espryt-monolith"
+    },
+    {
+      "name": "Espryt-inproc",
+      "mean_fps": 64.02439006486937,
+      "median_interval_fps": 63.0,
+      "p10_interval_fps": 58.94104917019154,
+      "sample_seconds": 60.02400016784668,
+      "intervals": 60,
+      "boot_id": "ede56fd0-78de-44ec-8f52-125ea4c072b1",
+      "hardware_window": {
+        "samples": 11,
+        "all_observed_pins_match": null,
+        "fixed_clock_evaluation": "not_applicable_stock_dvfs",
+        "drift_samples": null,
+        "observed_clock_ranges": {
+          "policy0_min": {
+            "min": 556800,
+            "max": 556800,
+            "observed_values": [
+              556800
+            ]
+          },
+          "policy0_max": {
+            "min": 1555200,
+            "max": 1785600,
+            "observed_values": [
+              1555200,
+              1785600
+            ]
+          },
+          "policy0_cur": {
+            "min": 1555200,
+            "max": 1785600,
+            "observed_values": [
+              1555200,
+              1785600
+            ]
+          },
+          "policy6_min": {
+            "min": 1017600,
+            "max": 1017600,
+            "observed_values": [
+              1017600
+            ]
+          },
+          "policy6_max": {
+            "min": 1689600,
+            "max": 1689600,
+            "observed_values": [
+              1689600
+            ]
+          },
+          "policy6_cur": {
+            "min": 1689600,
+            "max": 1689600,
+            "observed_values": [
+              1689600
+            ]
+          },
+          "gpu": {
+            "min": 443000000,
+            "max": 607000000,
+            "observed_values": [
+              443000000,
+              525000000,
+              607000000
+            ]
+          },
+          "gpu_min": {
+            "min": 12,
+            "max": 12,
+            "observed_values": [
+              12
+            ]
+          },
+          "gpu_max": {
+            "min": 0,
+            "max": 0,
+            "observed_values": [
+              0
+            ]
+          },
+          "busy": {
+            "min": 68,
+            "max": 83,
+            "observed_values": [
+              68,
+              73,
+              77,
+              78,
+              79,
+              83
+            ]
+          }
+        },
+        "fan_observed_values": {
+          "fan_rpm": [
+            "14163",
+            "14262",
+            "14363"
+          ],
+          "fan_target": [
+            "2"
+          ]
+        },
+        "temperature_c_min": 53.9,
+        "temperature_c_max": 56.6,
+        "sample_elapsed_seconds": [
+          215.636,
+          221.183,
+          226.728,
+          232.298,
+          237.875,
+          243.496,
+          249.053,
+          254.657,
+          260.27,
+          265.886,
+          271.475
+        ]
+      },
+      "actual_runtime": {
+        "backend_names": [
+          "Direct (OpenGL ES)"
+        ],
+        "ipc_lines": [
+          "Config: IPC ring=8MiB stage=256MiB spin=50us persistent-block=64KiB adopt-tier=2 verb-barrier=1 run-ahead=1 present-credit=1 strict=1 audit=0 role-split-state=1 affinity='auto'"
+        ],
+        "run_ahead_armed": true,
+        "caps_call_masks": [
+          "0x0",
+          "0x3fff00000600"
+        ],
+        "run_ahead_cap_bit_seen": true,
+        "stats_rows": 137,
+        "residual_pulls_max": 0.0
+      },
+      "source_directory": "C:\\Users\\geekerwan\\.codex\\tmp\\rd32-fourway-20260920-stock\\Espryt-inproc"
+    },
+    {
+      "name": "Magma-monolith",
+      "mean_fps": 116.07722925432384,
+      "median_interval_fps": 116.0,
+      "p10_interval_fps": 114.8736338247419,
+      "sample_seconds": 60.02900004386902,
+      "intervals": 60,
+      "boot_id": "addd73b6-b29a-4f65-a359-7c2a39bb60a0",
+      "hardware_window": {
+        "samples": 11,
+        "all_observed_pins_match": null,
+        "fixed_clock_evaluation": "not_applicable_stock_dvfs",
+        "drift_samples": null,
+        "observed_clock_ranges": {
+          "policy0_min": {
+            "min": 556800,
+            "max": 556800,
+            "observed_values": [
+              556800
+            ]
+          },
+          "policy0_max": {
+            "min": 1555200,
+            "max": 1555200,
+            "observed_values": [
+              1555200
+            ]
+          },
+          "policy0_cur": {
+            "min": 1555200,
+            "max": 1555200,
+            "observed_values": [
+              1555200
+            ]
+          },
+          "policy6_min": {
+            "min": 1017600,
+            "max": 1017600,
+            "observed_values": [
+              1017600
+            ]
+          },
+          "policy6_max": {
+            "min": 1689600,
+            "max": 1689600,
+            "observed_values": [
+              1689600
+            ]
+          },
+          "policy6_cur": {
+            "min": 1689600,
+            "max": 1689600,
+            "observed_values": [
+              1689600
+            ]
+          },
+          "gpu": {
+            "min": 832000000,
+            "max": 900000000,
+            "observed_values": [
+              832000000,
+              900000000
+            ]
+          },
+          "gpu_min": {
+            "min": 12,
+            "max": 12,
+            "observed_values": [
+              12
+            ]
+          },
+          "gpu_max": {
+            "min": 0,
+            "max": 0,
+            "observed_values": [
+              0
+            ]
+          },
+          "busy": {
+            "min": 73,
+            "max": 78,
+            "observed_values": [
+              73,
+              74,
+              75,
+              76,
+              78
+            ]
+          }
+        },
+        "fan_observed_values": {
+          "fan_rpm": [
+            "14163",
+            "14182",
+            "14363",
+            "14384",
+            "14487"
+          ],
+          "fan_target": [
+            "2"
+          ]
+        },
+        "temperature_c_min": 55.8,
+        "temperature_c_max": 56.6,
+        "sample_elapsed_seconds": [
+          216.537,
+          222.12,
+          227.724,
+          233.316,
+          238.927,
+          244.534,
+          250.192,
+          255.859,
+          261.488,
+          267.099,
+          272.72
+        ]
+      },
+      "actual_runtime": {
+        "backend_names": [
+          "Direct (Vulkan)"
+        ],
+        "ipc_lines": [],
+        "run_ahead_armed": false,
+        "caps_call_masks": [],
+        "run_ahead_cap_bit_seen": false,
+        "stats_rows": 251,
+        "residual_pulls_max": 0.0
+      },
+      "source_directory": "C:\\Users\\geekerwan\\.codex\\tmp\\rd32-fourway-20260920-stock\\Magma-monolith"
+    },
+    {
+      "name": "Magma-inproc",
+      "mean_fps": 86.85293459363007,
+      "median_interval_fps": 84.5,
+      "p10_interval_fps": 70.0,
+      "sample_seconds": 60.021000146865845,
+      "intervals": 60,
+      "boot_id": "7627b982-c264-4d2f-a9cb-1ecf40146c9c",
+      "hardware_window": {
+        "samples": 11,
+        "all_observed_pins_match": null,
+        "fixed_clock_evaluation": "not_applicable_stock_dvfs",
+        "drift_samples": null,
+        "observed_clock_ranges": {
+          "policy0_min": {
+            "min": 556800,
+            "max": 556800,
+            "observed_values": [
+              556800
+            ]
+          },
+          "policy0_max": {
+            "min": 1555200,
+            "max": 1996800,
+            "observed_values": [
+              1555200,
+              1996800
+            ]
+          },
+          "policy0_cur": {
+            "min": 1363200,
+            "max": 1996800,
+            "observed_values": [
+              1363200,
+              1555200,
+              1785600,
+              1996800
+            ]
+          },
+          "policy6_min": {
+            "min": 1017600,
+            "max": 1017600,
+            "observed_values": [
+              1017600
+            ]
+          },
+          "policy6_max": {
+            "min": 1689600,
+            "max": 1958400,
+            "observed_values": [
+              1689600,
+              1958400
+            ]
+          },
+          "policy6_cur": {
+            "min": 1689600,
+            "max": 1958400,
+            "observed_values": [
+              1689600,
+              1958400
+            ]
+          },
+          "gpu": {
+            "min": 525000000,
+            "max": 734000000,
+            "observed_values": [
+              525000000,
+              607000000,
+              660000000,
+              734000000
+            ]
+          },
+          "gpu_min": {
+            "min": 12,
+            "max": 12,
+            "observed_values": [
+              12
+            ]
+          },
+          "gpu_max": {
+            "min": 0,
+            "max": 0,
+            "observed_values": [
+              0
+            ]
+          },
+          "busy": {
+            "min": 73,
+            "max": 82,
+            "observed_values": [
+              73,
+              75,
+              76,
+              78,
+              79,
+              80,
+              82
+            ]
+          }
+        },
+        "fan_observed_values": {
+          "fan_rpm": [
+            "14570",
+            "14591",
+            "14697",
+            "14783",
+            "14804"
+          ],
+          "fan_target": [
+            "2"
+          ]
+        },
+        "temperature_c_min": 52.3,
+        "temperature_c_max": 56.2,
+        "sample_elapsed_seconds": [
+          216.05,
+          221.629,
+          227.22,
+          232.809,
+          238.395,
+          243.946,
+          249.485,
+          255.097,
+          260.705,
+          266.288,
+          271.93
+        ]
+      },
+      "actual_runtime": {
+        "backend_names": [
+          "Direct (Vulkan)"
+        ],
+        "ipc_lines": [
+          "Config: IPC ring=8MiB stage=256MiB spin=50us persistent-block=64KiB adopt-tier=2 verb-barrier=1 run-ahead=1 present-credit=1 strict=1 audit=0 role-split-state=1 affinity='auto'"
+        ],
+        "run_ahead_armed": true,
+        "caps_call_masks": [
+          "0x0",
+          "0x3fff00000400"
+        ],
+        "run_ahead_cap_bit_seen": true,
+        "stats_rows": 183,
+        "residual_pulls_max": 0.0
+      },
+      "source_directory": "C:\\Users\\geekerwan\\.codex\\tmp\\rd32-fourway-20260920-stock\\Magma-inproc"
+    }
+  ],
+  "comparisons": [
+    {
+      "backend": "Espryt",
+      "monolith_fps": 62.178237711677376,
+      "inproc_fps": 64.02439006486937,
+      "inproc_over_monolith_ratio": 1.0296912942716816,
+      "scope": "One round of observed sustained stock-DVFS performance; clocks may differ across arms, so this is not isolated architecture overhead."
+    },
+    {
+      "backend": "Magma",
+      "monolith_fps": 116.07722925432384,
+      "inproc_fps": 86.85293459363007,
+      "inproc_over_monolith_ratio": 0.7482340434172177,
+      "scope": "One round of observed sustained stock-DVFS performance; clocks may differ across arms, so this is not isolated architecture overhead."
+    }
+  ],
+  "restoration": {
+    "world_files": 61,
+    "world_hashes_match_backup": true,
+    "config": {
+      "options.txt": "4d1cd0cb595819d924f8d5823910b643c865f12b3f59b6900abd54b04e2ee646",
+      "mg_env.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mg_transport.txt": "1d80cf637af2284a1763196d824b41f6f12bea849aa81f95ab8db0e5ce043c95"
+    },
+    "fan_target": "0",
+    "installed_library_sha256": "046d86c288ce891b16770148578ba1a6fea4057783b69c2359f5830e58b7b223"
+  }
+}

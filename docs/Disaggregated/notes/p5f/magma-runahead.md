@@ -2,6 +2,10 @@
 
 **已完成，2026-09-20**。最终生产与实机行为头 `194382c96a8a5f51ef23f412fdccfbd40a82bf78`。
 
+后续同包的 **render distance 32 四组合性能测量**见 [rd32-fourway.md](rd32-fourway.md)。
+该轮默认动态频率下，Espryt monolith/inproc 为62.18/64.02 FPS，Magma 为116.08/86.85 FPS；
+不要将下面的功能验证窗口替代这份高负载性能记录。
+
 本次是在已完成的 P5f 与 Magma inproc 游戏修复上继续实现异步排队，
 不是重开 P5f 包，也不宣称 P6 spawn 或 P7/P8 全量实现。
 契约见 `MobileGL/MG_Remote/CONTRACT-MAGMA-RUNAHEAD.md`。
