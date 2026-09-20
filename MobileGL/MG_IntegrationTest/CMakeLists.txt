@@ -752,7 +752,7 @@ include(GoogleTest)
 # Keep ordinary pixel/byte cases (including the other arena/regrow cases) on the
 # caller's transport. A separate label makes every exception inspectable.
 set(MGL_ITEST_MONOLITH_MECHANISM_FILTER
-    "HandleRecycleScenario.*:CsoContentAddressingScenario.*:ResourceSubsystemControlScenario.*:ObjectSubsystemControlScenario.*:TextureUploadShapeScenario.*:PipeVerifyArmingScenario.*:PoisonOmissionScenario.*:StorageBufferRegrowScenario.NStorageDefinitionsCostNMapPersistentRoundtripsNotOnePerDraw:LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip")
+    "HandleRecycleScenario.*:CsoContentAddressingScenario.*:ResourceSubsystemControlScenario.*:ObjectSubsystemControlScenario.*:PipeVerifyArmingScenario.*:PoisonOmissionScenario.*:StorageBufferRegrowScenario.NStorageDefinitionsCostNMapPersistentRoundtripsNotOnePerDraw:LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip")
 set(MGL_ITEST_GLES_VIEW_FILTER
     "TextureViewScenario.*:F1WireScenario.ComputeImageStoreThroughViewPreservesOtherRootLayer:F1WireScenario.TextureViewClearTargetsItsRootMipAndLayer")
 
@@ -1646,7 +1646,6 @@ gtest_discover_tests(MobileGLIntegrationTest
 #
 # Its own log path and its own single-case filter, for the per-lane-log reason above.
 mgl_itest_join_environment(MGL_ITEST_GLES_TEXTURE_UPLOAD_SHAPE_ENVIRONMENT
-    "MOBILEGL_TRANSPORT=monolith"
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_TEXTURE_UPLOAD_SHAPE_LANE=1"
     "MOBILEGL_PIPE_PUSH=0x1fff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/texture-upload-shape-DirectGLES.log"
@@ -1657,7 +1656,7 @@ gtest_discover_tests(MobileGLIntegrationTest
     TEST_FILTER "TextureUploadShapeScenario.TheEmittedUploadShapeIsRecordedAndTheTwoSidesAgree"
     DISCOVERY_TIMEOUT 30
     PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
+        LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_GLES_TEXTURE_UPLOAD_SHAPE_ENVIRONMENT}"
 )

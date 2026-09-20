@@ -65,6 +65,7 @@
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/PipeStatsWindow.h"
 #include "../Harness/ScenarioFixture.h"
+#include "../Harness/SplitRuntimePeek.h"
 
 #ifdef GLAPI
 #undef GLAPI
@@ -237,6 +238,13 @@ void main() { oColor = texture(uTex, vUv); }
             DrawSampled(m_contiguous);
             BindDefaultFramebuffer();
             Gl().EndFrame();
+            // The server closes/resets the stats window inside Present. Under
+            // run-ahead its client return is earlier: do not let this workload's
+            // client emissions enter the setup window that has not retired yet.
+            if (const auto runtime = PeekSplitRuntime(); runtime.transportResolved) {
+                ASSERT_TRUE(runtime.sessionActive);
+                ASSERT_TRUE(WaitForSplitAppliedForTesting(runtime.emitSeq));
+            }
 
             // ---- the counted window ----
             Image lastScattered;
@@ -274,6 +282,10 @@ void main() { oColor = texture(uTex, vUv); }
             }
             ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the upload workload left a GL error behind";
             Gl().EndFrame(); // the swap that emits the window covering exactly the work above
+            if (const auto runtime = PeekSplitRuntime(); runtime.transportResolved) {
+                ASSERT_TRUE(runtime.sessionActive);
+                ASSERT_TRUE(WaitForSplitAppliedForTesting(runtime.emitSeq));
+            }
 
             const PipeStatsWindow::Window window = PipeStatsWindow::LastFromLaneLog();
             ASSERT_TRUE(window.found)
