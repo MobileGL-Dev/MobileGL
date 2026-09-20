@@ -13089,6 +13089,18 @@ void main() {
             return false;
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            // Texture uploads submit on this queue with their own fences. The
+            // renderer watermark alone cannot prove images/views are idle.
+            if (m_textureManager && !m_textureManager->WireUploadsAreIdle()) return false;
+            // No preparation, recording or GPU work remains. A minimized Present
+            // may have abandoned a recording tagged for a submission that will
+            // never occur, so reclaim those future-tagged objects as well.
+            CollectWireObjects(m_completedSubmitCounter, true);
+        }
+#endif
+
         // Every submission is complete and nothing recorded references the
         // per-frame transients. Pure-reclaim work runs on every drain: it only
         // releases memory that is provably dead, never invalidates anything a

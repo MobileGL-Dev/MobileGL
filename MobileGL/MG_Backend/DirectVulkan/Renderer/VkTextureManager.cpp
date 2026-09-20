@@ -3525,6 +3525,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return current->mapped + alignedCursor;
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Bool VkTextureManager::WireUploadsAreIdle() {
+        // An open batch still owns references even before it has a fence. Poll
+        // submitted batches without waiting; reclamation is deferred if any lives.
+        if (m_uploadBatchOpen) return false;
+        ReclaimCompletedUploads();
+        return m_pendingUploadReclaims.empty();
+    }
+#endif
+
     void VkTextureManager::FlushPendingUploads() {
         if (!m_uploadBatchOpen) {
             return;

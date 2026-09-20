@@ -34,6 +34,23 @@ NEGATIVE = f"{PREFIX}1.MagmaRunAheadScenario.QueuedProgramRebindsKeepEachUniform
 CLEAR_ASSERTION = "the clear waited for apply instead of returning while its server batch was held"
 ERROR = re.compile(r"VUID-[A-Za-z0-9_-]+|SYNC-HAZARD-[A-Z_]+|Validation Error|\bERROR\b", re.I)
 LAYER = re.compile(r'Insert instance layer\s+["\']?VK_LAYER_KHRONOS_validation', re.I)
+# MobileGL's own diagnostics are not Vulkan-layer messages. Keep them visible
+# separately; an embedded validation/VUID/hazard message is never classified away.
+APPLICATION_ERROR = re.compile(r"^\[\d{2}:\d{2}:\d{2}(?:\.\d+)?\] \[(?:Linux|Android|Windows|macOS)[^\]]*/ERROR\]:")
+VALIDATION_MARKER = re.compile(r"VUID-|SYNC-HAZARD|\bvalidation\b", re.I)
+
+
+def split_diagnostics(stdout, private):
+    validation, application = [], []
+    for line in (stdout + "\n" + private).splitlines():
+        if not ERROR.search(line):
+            continue
+        if APPLICATION_ERROR.search(line) and not VALIDATION_MARKER.search(line):
+            application.append(line)
+        else:
+            validation.append(line)
+    return validation, application
+
 
 
 def write_json(path, data):
@@ -183,9 +200,11 @@ def validation(tests, build, out):
             copied = copy.deepcopy(case)
             copied.set("name", name)  # Raw gtest.xml remains unchanged beside this aggregate.
             junit.append(copied)
-            lines = [line for line in (stdout + "\n" + private).splitlines() if ERROR.search(line)]
+            lines, application_lines = split_diagnostics(stdout, private)
             (directory / "validation-errors.txt").write_text("\n".join(lines), encoding="utf-8")
-            result.update(validation_error_lines=len(lines), layer_inserted=bool(LAYER.search(stdout + private)))
+            (directory / "application-errors.txt").write_text("\n".join(application_lines), encoding="utf-8")
+            result.update(validation_error_lines=len(lines), application_error_lines=len(application_lines),
+                          layer_inserted=bool(LAYER.search(stdout + private)))
             if result["returncode"] or failed or not result["private_log_present"]:
                 raise RuntimeError("GPU case did not complete with a passing result and actual private log")
             if not result["layer_inserted"]:

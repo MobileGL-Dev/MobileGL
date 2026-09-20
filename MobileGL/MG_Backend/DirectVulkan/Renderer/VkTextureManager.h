@@ -480,6 +480,12 @@ public:
     // preserve-on-recreate copy are the existing callers. No-op when the
     // batch is empty.
     void FlushPendingUploads();
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // Non-blocking idle proof for wire-object retirement. Independent texture
+    // submissions are not represented by VulkanRenderer's submit counter.
+    Bool WireUploadsAreIdle();
+#endif
+
     // Drains every frame slot's deferred image/view releases. Only valid when
     // the caller has proven every queue submission complete; used by the
     // present-less frame-boundary drain.
