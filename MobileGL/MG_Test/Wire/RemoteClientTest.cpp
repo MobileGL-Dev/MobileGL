@@ -589,6 +589,49 @@ TEST(CapsMirrorTest, APlaceholderMirrorConsumesNothing) {
     (void)empty;
 }
 
+TEST(CapsMirrorTest, ObjectFamilyEmissionTracksIndependentConsumerCapsWithoutBufferOps) {
+#if MGTEST_HAVE_FORK
+    // Isolate every process global: transport, push mask, caps generation, refusal
+    // counters and the cached supply environment must not escape into another case.
+    const ChildResult result = RunInChild([] {
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        MG_Config::Features.PipePush = kMGPipeSubsystemsMigratedAtP5e;
+        MG_Pipe::MGPipeSetResourceOps(nullptr);
+        const auto emits = [](Uint64 family) { return MGPipeP4aFamilyEmits(family, family); };
+        Snapshot snapshot = MakeSnapshot(kMGPipeSubsystemTextureResources, 0);
+        snapshot.Backend = BackendType::DirectVulkan;
+        AdoptSnapshot(snapshot);
+        const Uint64 firstGeneration = CapsMirrorInstance().Generation();
+        EXPECT_FALSE(CapsMirrorInstance().ServerConsumes(kMGPipeSubsystemResources));
+        EXPECT_TRUE(emits(kMGPipeSubsystemTextureResources));
+        EXPECT_FALSE(emits(kMGPipeSubsystemFramebuffer));
+
+        // The former shared buffer-consumer gate cannot distinguish these two
+        // snapshots: both withhold bit 7. The production per-family gate must.
+        snapshot.Caps.CallMask = MGCapsConsumerBits(kMGPipeSubsystemFramebuffer);
+        AdoptSnapshot(snapshot);
+        EXPECT_GT(CapsMirrorInstance().Generation(), firstGeneration);
+        EXPECT_FALSE(CapsMirrorInstance().ServerConsumes(kMGPipeSubsystemResources));
+        EXPECT_FALSE(emits(kMGPipeSubsystemTextureResources));
+        EXPECT_TRUE(emits(kMGPipeSubsystemFramebuffer));
+        snapshot.Caps.CallMask = MGCapsConsumerBits(kMGPipeSubsystemTextureResources);
+        AdoptSnapshot(snapshot);
+        EXPECT_TRUE(emits(kMGPipeSubsystemTextureResources));
+        EXPECT_FALSE(emits(kMGPipeSubsystemFramebuffer));
+        // SuppliedFieldMask's object rows remain BARRIER_PULLED until the final
+        // ownership retirement. They cannot honestly expose a mask change yet;
+        // this checks the actual emitter gate, not a synthetic memo-only answer.
+        std::fflush(nullptr);
+        ::_exit(::testing::Test::HasFailure() ? 1 : 0);
+    });
+    ASSERT_GE(result.Status, 0) << "fork/waitpid failed";
+    ASSERT_TRUE(WIFEXITED(result.Status)) << DescribeStatus(result) << result.Log;
+    EXPECT_EQ(WEXITSTATUS(result.Status), 0) << result.Log;
+#else
+    GTEST_SKIP() << "process-global consumer isolation requires fork";
+#endif
+}
+
 TEST(CapsMirrorTest, TheConsumerBlockDoesNotCollideWithTheFeatureBits) {
     // The two halves of CallMask, asserted against each other rather than against a constant:
     // bits 0..8 are MGPCapBit and bits 32..47 are the consumer mask, and the whole reason R-8
