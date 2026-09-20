@@ -10287,6 +10287,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // (the three-channel colour-renderable widening). GL answers such a read with 1.0, but
         // the storage holds whatever the draw wrote there, so the readback has to overwrite it.
         Bool IsAlphaWidenedFallbackReadAttachment() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                const auto* record = MG_Pipe::MGPipeApplier().ReadFramebuffer();
+                return record && IsAlphaWidenedColorSurface(record->ReadSurface);
+            }
+#endif
             const auto* attachmentObject = GetReadColorAttachment();
             if (attachmentObject == nullptr) {
                 return false;
@@ -10295,6 +10301,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         Bool IsFixedPointFallbackReadAttachment() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                const auto* record = MG_Pipe::MGPipeApplier().ReadFramebuffer();
+                return record && record->ReadSurface.Kind != MG_Pipe::kMGPipeSurfaceKindNone &&
+                    IsSnormFormat(static_cast<TextureInternalFormat>(record->ReadSurface.InternalFormat));
+            }
+#endif
             const auto& readFBO =
                 MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
             if (!readFBO) {

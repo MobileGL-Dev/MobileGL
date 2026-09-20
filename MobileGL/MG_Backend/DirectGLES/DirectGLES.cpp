@@ -64,6 +64,14 @@
 #endif
 
 namespace MobileGL::MG_Backend::DirectGLES {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // read_pixels writes the server reply scratch; client-side scatter owns any PBO.
+    static const SharedPtr<MG_State::GLState::BufferObject>& SplitReadbackPackBuffer() {
+        static const SharedPtr<MG_State::GLState::BufferObject> none;
+        return none;
+    }
+#endif
+
     MG_External::EGLFunctionsTable g_EGLFuncs;
     MG_External::GLESFunctionsTable g_GLESFuncs;
     MG_External::GLESCapabilities g_GLESCapabilities;
@@ -10757,7 +10765,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ZoneScopedNC(__func__, TRACY_ZONECOLOR_BACKEND);
 #endif
         auto unit = MGB_CTX->GetActiveTextureUnit();
+#if !MOBILEGL_BUILD_DISAGGREGATED
         auto& textureUnit = MGB_CTX->GetTextureUnitObject(unit);
+#endif
 
         auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
         if (!TextureImpl::IsSupportedTextureTarget(textureTarget)) {
@@ -10789,6 +10799,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 #endif
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        auto& textureUnit = MGB_CTX->GetTextureUnitObject(unit);
+#endif
         const auto& bindingSlot = textureUnit.GetBindingSlot(textureTarget);
         {
             const auto& textureObject = bindingSlot.GetBoundObject();
@@ -12297,8 +12310,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // An endpoint that named nothing is the frontend validator's INVALID_VALUE and never
         // reaches here - but the assertion that says so is compiled out of a release build, and
         // SyncTextureObjectToBackend would register a null state object.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            out.texture = TextureImpl::SyncTextureToBackendByHandle(endpoint.TextureHandle);
+        } else
+#endif
+        {
         if (!endpoint.Texture) return false;
         out.texture = TextureImpl::SyncTextureObjectToBackend(endpoint.Texture);
+        }
         if (!out.texture) return false;
         const TextureTarget stateTarget = MG_Util::ConvertGLEnumToTextureTarget(appTarget);
         out.target = TextureImpl::ConvertTextureTargetToBackendGLEnum(stateTarget);
@@ -12316,6 +12336,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     static TextureInternalFormat GetCopyImageEndpointFormat(const CopyImageEndpoint& endpoint) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            const auto* record = PipeTextureRecordForHandle(endpoint.TextureHandle);
+            return record ? static_cast<TextureInternalFormat>(record->Desc.InternalFormat)
+                          : TextureInternalFormat::Unknown;
+        }
+#endif
         if (endpoint.IsRenderbuffer()) return endpoint.Renderbuffer->GetInternalFormat();
         return endpoint.Texture ? endpoint.Texture->GetFormat() : TextureInternalFormat::Unknown;
     }
@@ -12596,6 +12623,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // effect by the block's next use.
     void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding) {
         if (!storageBlockName) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            const auto handle = MG_Pipe::MGPipeApplier().VerbStorageBlockProgram;
+            auto* slot = PrgramImpl::g_backendProgramObjects.FindByHandle(handle);
+            if (slot && *slot && (*slot)->GetBackendProgramId()) {
+                PrgramImpl::ApplyShaderStorageBlockBinding((*slot)->GetBackendProgramId(),
+                                                           storageBlockName, storageBlockBinding);
+            }
+            return;
+        }
+#endif
         if (!MGB_CTX->ValidateProgramName(program)) return;
         auto& programObject = MGB_CTX->GetProgramObject(program);
         if (!programObject) return;
@@ -12806,6 +12844,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const SizeT rowBytes = static_cast<SizeT>(width) * dstPixelBytes;
         const SizeT packedSize = dstOffset + static_cast<SizeT>(height - 1) * dstRowStride + rowBytes;
         const auto& pixelPackBufferObject =
+            
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MG_Config::Transport != MG_Config::TransportMode::Monolith
+                ? SplitReadbackPackBuffer() :
+#endif
             MGB_CTX->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
         const SizeT pboOffset = reinterpret_cast<SizeT>(pixels);
         if (pixelPackBufferObject && pboOffset + packedSize > pixelPackBufferObject->GetSize()) {
@@ -13788,6 +13831,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
         const auto& pixelPackBufferObject =
+            
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MG_Config::Transport != MG_Config::TransportMode::Monolith
+                ? SplitReadbackPackBuffer() :
+#endif
             MGB_CTX->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
         if (!pixelPackBufferObject && pixels == nullptr) {
             return true;
@@ -14025,6 +14073,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MG_Pipe::MGPipeUnmigratedEmulation("get-tex-image-shadow");
 #endif
         const auto& pixelPackBufferObject =
+            
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MG_Config::Transport != MG_Config::TransportMode::Monolith
+                ? SplitReadbackPackBuffer() :
+#endif
             MGB_CTX->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
         if (!pixelPackBufferObject && pixels == nullptr) {
             return true;
@@ -14335,6 +14388,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // (the driver-level binding used to stay on the user PBO after this call,
         // capturing subsequent client-memory readbacks into it).
         auto& pixelPackBufferObject =
+            
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MG_Config::Transport != MG_Config::TransportMode::Monolith
+                ? SplitReadbackPackBuffer() :
+#endif
             MGB_CTX->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
         Bool usePBO = false;
         GLuint packBufferId = 0;
@@ -14766,6 +14824,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Handle PBO. The pack binding is scoped: it returns to the resting 0 state
         // on every exit path, so a later readback can never land in a stale PBO.
         auto& pixelPackBufferObject =
+            
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MG_Config::Transport != MG_Config::TransportMode::Monolith
+                ? SplitReadbackPackBuffer() :
+#endif
             MGB_CTX->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
         Bool usePBO = false;
         GLuint packBufferId = 0;
