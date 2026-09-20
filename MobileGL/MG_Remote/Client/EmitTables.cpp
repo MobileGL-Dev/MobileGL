@@ -902,6 +902,8 @@ namespace MobileGL::MG_Remote::Client {
             }
         }
 
+#include "TextureReadbackEmit.inc"
+
         void EmitReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
                             GLenum type, void* pixels) {
             ClientSession& session = RequireSession("ReadPixels");
@@ -968,6 +970,13 @@ namespace MobileGL::MG_Remote::Client {
             if (MG_State::pGLContext != nullptr) {
                 pack = MG_State::pGLContext->GetPixelStoreParameters(/*isUnpack=*/false);
             }
+            ReadbackLayout layout;
+            const SizeT pboOffset = reinterpret_cast<SizeT>(pixels);
+            if (!CheckedReadbackLayout(width, height, 1, bytesPerPixel, pack, false, layout) ||
+                (pbo && (pboOffset > pbo->GetSize() || layout.End > pbo->GetSize() - pboOffset))) {
+                RecordReadbackRangeError("ReadPixels");
+                return;
+            }
 
             Int32 status = 0;
             Uint64 replySize = 0;
@@ -1013,8 +1022,6 @@ namespace MobileGL::MG_Remote::Client {
             ScatterTightReadbackIntoPackState(bounce.data(), pixels, width, height, bytesPerPixel,
                                               pack);
         }
-
-#include "TextureReadbackEmit.inc"
 
         void EmitPresent() {
             ClientSession& session = RequireSession("Present");
