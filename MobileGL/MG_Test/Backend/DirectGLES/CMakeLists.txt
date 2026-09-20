@@ -49,6 +49,10 @@ target_link_libraries(
 )
 
 include(GoogleTest)
+add_executable(ContextEpochTest ContextEpochTest.cpp)
+target_include_directories(ContextEpochTest PRIVATE ${MGL_ROOT}/include ${MGL_ROOT}/MobileGL)
+target_link_libraries(ContextEpochTest PRIVATE GTest::gtest_main ${LINK_LIBRARIES})
+gtest_discover_tests(ContextEpochTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(EsslShaderPassTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(BaseInstanceInjectionTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(ViewportIndexRoutingTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

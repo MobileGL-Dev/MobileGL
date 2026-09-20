@@ -9,6 +9,7 @@
 // P5 package v1: the apply thread, its affinity, its parking, and the EGL ownership move.
 
 #include "ServerLoop.h"
+#include <MG_Backend/MGPipe/PipeInputs.h>
 
 #include <Config.h>
 #include <MG_Backend/BackendObjects.h>
@@ -286,10 +287,12 @@ namespace MobileGL::MG_Remote::Server {
             // removes. m_haveCurrentTuple is left intact so a later identical bind is still a
             // RepeatNoOp (the driver never lost the context).
             m_clientReleases.fetch_add(1, std::memory_order_acq_rel);
+            MG_Pipe::MGPipeServerSetContextLive(false);
             outcome.ok = true;
             outcome.boundNatively = false;
             return outcome;
         case EglBindAction::RepeatNoOp:
+            MG_Pipe::MGPipeServerSetContextLive(true);
             // ID-54's "a no-op apart from the R-12 republish decision": the decision for an
             // identical repeat is NO republish, because nothing ran that could have moved the
             // caps - InitCapabilities runs inside the backend's MakeEGLCurrent, which this arm
@@ -308,6 +311,7 @@ namespace MobileGL::MG_Remote::Server {
         // control counts THAT at the EGL function table. This counter counts forwards.
         outcome.ok = backend->MakeEGLCurrent(dpy, draw, read, ctx);
         if (!outcome.ok) return outcome;
+        MG_Pipe::MGPipeServerSetContextLive(true);
         m_haveCurrentTuple = true;
         m_curDpy = dpy;
         m_curDraw = draw;
@@ -468,6 +472,7 @@ namespace MobileGL::MG_Remote::Server {
                     "which is the context owner");
             m_backend.reset();
         }
+        MG_Pipe::MGPipeServerSetContextLive(false);
         // N-3: the context died with the backend; a tuple that outlives it would make the next
         // session's first make-current onto the same (recycled) handle values a RepeatNoOp.
         ForgetCurrentTuple();
@@ -753,6 +758,7 @@ namespace MobileGL::MG_Remote::Server {
             // thread called Stop. No context was ever made current from another thread in that
             // case, which is exactly the condition that makes this safe.
             if (m_backend != nullptr) m_backend.reset();
+            MG_Pipe::MGPipeServerSetContextLive(false);
             // N-3, same reason as ApplyThreadMain's exit: no thread runs, so the apply-thread-only
             // rule on the tuple has no other writer to race.
             ForgetCurrentTuple();
@@ -997,6 +1003,7 @@ namespace MobileGL::MG_Remote::Server {
             // DestroyEGLContext - eglMakeCurrent(NO_SURFACE), eglDestroyContext, eglTerminate -
             // on the thread that made the context current.
             backend->ReleaseEGLResources();
+            MG_Pipe::MGPipeServerSetContextLive(false);
             // N-3: DestroyEGLContext just ran; the tuple names nothing. Without this a
             // destroy-recreate with the same handle values (every EGL handle on this host is
             // 0x1) classified as a RepeatNoOp, bound nothing, and republished no caps. Red once

@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "DirectGLES.h"
+#include "ContextEpoch.h"
 #include "EGL/egl.h"
 #include "MG_Util/Types.h"
 #include "Utils.h"
@@ -308,6 +309,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // grep and a comment naming it is a hit) and for an MG_State type inside
     // MGPipeResourceOps, and this is neither.
     SamplerImpl::BackendSamplerObject* GetRawDepthFetchSampler() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            static UniquePtr<SamplerImpl::BackendSamplerObject> native;
+            static Uint generation = 0;
+            if (generation != g_backendContextGeneration) {
+                native.reset(); // old generation's destructor never deletes a successor id
+                generation = g_backendContextGeneration;
+            }
+            if (!native) {
+                native = MakeUnique<SamplerImpl::BackendSamplerObject>();
+                const GLuint id = native->GetBackendSamplerId();
+                g_GLESFuncs.glSamplerParameteri(id, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                g_GLESFuncs.glSamplerParameteri(id, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                g_GLESFuncs.glSamplerParameteri(id, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+                g_GLESFuncs.glSamplerParameteri(id, GL_TEXTURE_COMPARE_FUNC, GL_ALWAYS);
+            }
+            return native.get();
+        }
+#endif
         if (!g_rawDepthFetchSamplerState) {
             g_rawDepthFetchSamplerState = MakeShared<MG_State::GLState::SamplerObject>(0);
             g_rawDepthFetchSamplerState->SetMinFilter(SamplerFilterMode::Nearest);
@@ -1600,7 +1620,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // null instead of reasoning about stability, and CurrentXfb re-resolves lazily.
             XfbObjectState* g_currentXfbState = nullptr;
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+            struct RoleXfbState {
+                Uint NativeGeneration = 0;
+                // Server keys are record-supplied, never-reused XFB lifetime ids.
+                // The monolith role keeps its existing GL-name semantics separately.
+                UnorderedMap<Uint64, XfbObjectState> Objects;
+                Uint64 Current = 0;
+                XfbObjectState* Cached = nullptr;
+                GLuint ScatterBuffer = 0;
+                SizeT ScatterSize = 0;
+                Bool NeedsBind = true;
+            };
+            Array<RoleXfbState, 2> g_roleXfbState;
+            Int g_activeXfbRole = -1;
+
+            RoleXfbState& ActiveXfbState() {
+                const Int role = MG_Config::Transport != MG_Config::TransportMode::Monolith;
+                auto& state = g_roleXfbState[role];
+                if (state.NativeGeneration != g_backendContextGeneration) {
+                    state = {};
+                    state.NativeGeneration = g_backendContextGeneration;
+                }
+                if (g_activeXfbRole != role) {
+                    state.NeedsBind = true;
+                    g_activeXfbRole = role;
+                }
+                return state;
+            }
+#endif
+
             XfbObjectState& CurrentXfb() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                auto& state = ActiveXfbState();
+                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                    const Uint64 lifetime = MG_Pipe::MGPipeApplier().BoundStreamOutputLifetimeId;
+                    if (state.Current != lifetime || state.Cached == nullptr || state.NeedsBind)
+                        BindTransformFeedback(0); // identity is the applier's lifetime, not this argument
+                } else if (state.NeedsBind) {
+                    BindTransformFeedback(static_cast<GLuint>(state.Current));
+                }
+                auto& g_currentXfbState = state.Cached;
+                auto& g_xfbObjects = state.Objects;
+                const auto g_currentXfbName = state.Current;
+#endif
                 if (g_currentXfbState == nullptr) {
                     g_currentXfbState = &g_xfbObjects[g_currentXfbName];
                 }
@@ -1734,6 +1797,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // scratch storage cannot be provided, in which case the caller falls back to the
             // direct binding (which produces a wrong layout, but is what happened before).
             Bool BindScatterCaptureBuffer(SizeT packedStride, SizeT capacityVertices) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                auto& g_scatterBufferId = ActiveXfbState().ScatterBuffer;
+                auto& g_scatterBufferSize = ActiveXfbState().ScatterSize;
+#endif
                 if (packedStride == 0 || capacityVertices == 0) return false;
                 if (g_GLESFuncs.glGenBuffers == nullptr || g_GLESFuncs.glBufferData == nullptr) return false;
                 const SizeT required = packedStride * capacityVertices;
@@ -1770,6 +1837,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // occupies are written, so the holes gl_SkipComponents asks for keep whatever the
             // application had put there - which is the whole point of the feature.
             void ScatterCapturedRecords(XfbObjectState& xfb) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                auto& g_scatterBufferId = ActiveXfbState().ScatterBuffer;
+#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
                 const XfbProgramSource program{xfb.scatterProgram, xfb.scatterArchive};
 #else
@@ -2126,6 +2196,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         void BindTransformFeedback(GLuint name) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            auto& roleState = ActiveXfbState();
+            auto& g_currentXfbState = roleState.Cached;
+            auto& g_xfbObjects = roleState.Objects;
+            auto& g_currentXfbName = roleState.Current;
+            const Bool server = MG_Config::Transport != MG_Config::TransportMode::Monolith;
+            const Uint64 key = server ? MG_Pipe::MGPipeApplier().BoundStreamOutputLifetimeId : name;
+            roleState.NeedsBind = false;
+#endif
             g_currentXfbState = nullptr; // name changes; operator[] below may also rehash
             // The capture buffer bindings are the OBJECT's, not the context's: the bind below
             // swaps all of them for whatever the target object holds, which the redundant-bind
@@ -2134,18 +2213,44 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!AreTransformFeedbackObjectsSupported()) {
                 // Without driver objects there is only the default span; keep the frontend
                 // name so the bookkeeping below stays consistent.
-                g_currentXfbName = name;
+                g_currentXfbName =
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    key;
+#else
+                    name;
+#endif
                 return;
             }
+#if MOBILEGL_BUILD_DISAGGREGATED
+            auto& xfb = g_xfbObjects[key];
+            // Even each virtual context's name-0 object gets its own native object.
+            if ((server || name != 0) && xfb.esId == 0) {
+#else
             auto& xfb = g_xfbObjects[name];
             if (name != 0 && xfb.esId == 0) {
+#endif
                 g_GLESFuncs.glGenTransformFeedbacks(1, &xfb.esId);
             }
             g_GLESFuncs.glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, xfb.esId);
-            g_currentXfbName = name;
+            g_currentXfbName =
+#if MOBILEGL_BUILD_DISAGGREGATED
+                key;
+#else
+                name;
+#endif
         }
 
         void DeleteTransformFeedback(GLuint name) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // No delete_stream_output opcode exists yet; the client refuses this class-C
+            // verb before emission. Never reinterpret its GL name as a lifetime id.
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
+                MG_Pipe::MGPipeUnmigratedEmulation("delete-transform-feedback");
+            auto& roleState = ActiveXfbState();
+            auto& g_currentXfbState = roleState.Cached;
+            auto& g_xfbObjects = roleState.Objects;
+            auto& g_currentXfbName = roleState.Current;
+#endif
             const auto it = g_xfbObjects.find(name);
             if (it == g_xfbObjects.end()) return;
             if (it->second.esId != 0 && g_GLESFuncs.glDeleteTransformFeedbacks != nullptr) {
@@ -2162,6 +2267,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The ES context went away (or is being torn down): the spans, their buffer ids, the
         // driver objects and the frontend objects they pinned all belonged to it.
         void OnBackendContextDestroyed() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            for (auto& state : g_roleXfbState) state = {};
+            g_activeXfbRole = -1;
+#endif
             g_currentXfbState = nullptr;
             g_xfbObjects.clear();
             g_currentXfbName = 0;
@@ -4719,6 +4828,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_syncedBackendScissorBox = IntVec4(-1, -1, -1, -1);
         }
         void SyncRenderState(Bool forColorClear) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            static ContextEpoch syncedEpoch{};
+            const auto epoch = CurrentContextEpoch();
+            if (syncedEpoch != epoch) {
+                InvalidateSyncedRenderState();
+                syncedEpoch = epoch;
+            }
+#endif
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -16041,6 +16158,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void DestroyEGLContext() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
+            MG_Pipe::MGPipeServerSetContextLive(false);
+#endif
         BufferImpl::OnBackendContextDestroyed();
         XfbImpl::OnBackendContextDestroyed();
         MultiDrawImpl::OnBackendContextDestroyed();

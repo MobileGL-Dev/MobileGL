@@ -1694,6 +1694,63 @@ TEST(ServerLoopEglTest, ADestroyedContextForgetsTheTupleSoTheSameHandleValuesBin
     fixture.TearDown();
 }
 
+TEST(ServerLoopEglTest, RenderShadowCannotSkipAnUnchangedVersionAfterContextEpochChanges) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    ASSERT_TRUE(fixture.MakeCurrent());
+    Bool nativeRestored = false, servedRestored = false;
+    ASSERT_EQ(OnApply([&] {
+        using namespace MG_Backend::DirectGLES;
+        MG_Pipe::MGPipeServerStampVerbBoundary(MG_Pipe::MGPipeVerb::Clear);
+        RenderStateImpl::SyncRenderState(true);
+        // Simulate the successor driver's default/foreign state while retaining exactly
+        // the same parameter bytes and version. Epoch, not a value diff, must force it.
+        g_GLESFuncs.glEnable(GL_BLEND);
+        ++g_backendContextGeneration;
+        RenderStateImpl::SyncRenderState(true);
+        nativeRestored = g_GLESFuncs.glIsEnabled(GL_BLEND) == GL_FALSE;
+        g_GLESFuncs.glEnable(GL_BLEND);
+        MG_Pipe::MGPipeApplierReset();
+        MG_Pipe::MGPipeServerStampVerbBoundary(MG_Pipe::MGPipeVerb::Clear);
+        RenderStateImpl::SyncRenderState(true);
+        servedRestored = g_GLESFuncs.glIsEnabled(GL_BLEND) == GL_FALSE;
+        MG_Pipe::MGPipeServerClearVerbBoundary();
+    }), MOBILEGL_OK);
+    EXPECT_TRUE(nativeRestored) << "unchanged render version hid a new native context";
+    EXPECT_TRUE(servedRestored) << "unchanged render version hid a new served context";
+    fixture.TearDown();
+}
+
+TEST(ServerLoopEglTest, ServerLivenessFollowsControlFramesAcrossReleaseAndRecreation) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    const auto live = [] {
+        Bool answer = false;
+        EXPECT_EQ(OnApply([&] { answer = MG_Pipe::gPipeInputs.IsLive(); }), MOBILEGL_OK);
+        return answer;
+    };
+    EXPECT_FALSE(live()) << "surface creation alone is not a served current context";
+    ASSERT_TRUE(fixture.MakeCurrent());
+    EXPECT_TRUE(live());
+    auto client = Move(MG_State::pGLContext);
+    EXPECT_TRUE(live()) << "server liveness must not consult the client GLContext";
+    MG_State::pGLContext = Move(client);
+    ASSERT_TRUE(fixture.ReleaseCurrent());
+    EXPECT_FALSE(live());
+    ASSERT_TRUE(fixture.MakeCurrent()); // identical held native tuple, new logical binding
+    EXPECT_TRUE(live());
+    Server::ServerReleaseEGLResources();
+    EXPECT_FALSE(live());
+    EGLint major = 0, minor = 0;
+    ASSERT_TRUE(Server::ServerInitializeEGLDisplay(EglServerFixture::Dpy(), &major, &minor));
+    ASSERT_TRUE(Server::ServerCreateEGLPbufferSurface(EglServerFixture::Surf(), 64, 64));
+    EXPECT_FALSE(live());
+    ASSERT_TRUE(fixture.MakeCurrent());
+    EXPECT_TRUE(live());
+    fixture.TearDown();
+    EXPECT_FALSE(MG_Pipe::MGPipeServerContextIsLive());
+}
+
 // P5f (fc): InitializeEGLDisplay's out-pointers are the frame's reply fields now (the one place
 // the old mailbox carried pointers INTO the poster's stack). The answer is the driver's real
 // version through the frame - the BringUp already consumed one init; a second call is an

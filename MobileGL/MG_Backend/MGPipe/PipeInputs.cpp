@@ -302,6 +302,15 @@ namespace MobileGL::MG_Pipe {
         MGPipeStampAccess::SetServerStamped(MGPipeClientInputs(), false);
     }
 
+    namespace { Bool g_serverContextLive = false; }
+
+    void MGPipeServerSetContextLive(Bool live) {
+        g_serverContextLive = live;
+        MGPipeServerBlockNoteIdentity();
+    }
+
+    Bool MGPipeServerContextIsLive() { return g_serverContextLive; }
+
     void MGPipeServerBlockNoteIdentity() {
         if (!MGPipeRoleSplitActive()) return;
         // The server cannot name the client's GLContext - under a real transport it is in
@@ -313,7 +322,7 @@ namespace MobileGL::MG_Pipe {
         // hands out a null slot - an unnamed crash where the rehearsal exists to produce a
         // named one.
         const Uint64 serial = MGPipeApplierContextSerial();
-        MGPipeStampAccess::SetIdentity(gPipeInputs, true,
+        MGPipeStampAccess::SetIdentity(gPipeInputs, g_serverContextLive,
                                        reinterpret_cast<const void*>(static_cast<std::uintptr_t>(
                                            (serial << 1) | Uint64{1})));
     }
