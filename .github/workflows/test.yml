@@ -1152,7 +1152,7 @@ jobs:
       - name: Install runtime dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
+          sudo apt-get install -y libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri mesa-vulkan-drivers vulkan-validationlayers
 
       - name: Download Linux split runtime
         uses: actions/download-artifact@v8
@@ -1498,6 +1498,26 @@ jobs:
                       for credit in (1, 3) for name in cases]
           slp.require_green(json.load(open(sys.argv[2])), sys.argv[3], required)
           PY
+
+      - name: Magma run-ahead off loses real queue lead and restores green
+        run: |
+          python3 scripts/ci/magma_runahead_checks.py negative --build-dir build-split \
+            --out "${RUNNER_TEMP}/magma-runahead-negative" --execute
+
+      - name: Magma run-ahead passes Vulkan synchronization validation
+        run: |
+          python3 scripts/ci/magma_runahead_checks.py validation --build-dir build-split \
+            --out "${RUNNER_TEMP}/magma-runahead-syncval" --execute
+
+      - name: Upload Magma run-ahead control and validation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: magma-runahead-checks
+          path: |
+            ${{ runner.temp }}/magma-runahead-negative
+            ${{ runner.temp }}/magma-runahead-syncval
+          if-no-files-found: ignore
 
       - name: Magma P7 native mip format debt stays a named refusal
         working-directory: build-split
