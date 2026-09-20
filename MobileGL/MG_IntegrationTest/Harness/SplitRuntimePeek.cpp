@@ -89,6 +89,22 @@ namespace MGITest {
         return false;
 #endif
     }
+    bool WaitForSplitAppliedForTesting(unsigned long long seq, unsigned int timeoutMs) {
+#if defined(MGITEST_SPLIT_RUNTIME_PEEK_LIVE)
+        auto* session = MobileGL::MG_Remote::Client::ClientSession::Active();
+        auto* control = session ? session->Control() : nullptr;
+        if (!control) return false;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        do {
+            if (control->appliedSeq.load(std::memory_order_acquire) >= seq) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } while (std::chrono::steady_clock::now() < until);
+        return control->appliedSeq.load(std::memory_order_acquire) >= seq;
+#else
+        (void)seq; (void)timeoutMs;
+        return false;
+#endif
+    }
     void DelaySplitRetirementForTesting(bool enabled) {
 #if defined(MGITEST_SPLIT_RUNTIME_PEEK_LIVE)
         MobileGL::MG_Remote::Server::ServerLoopInstance().SetBeforeRetireHookForTesting(

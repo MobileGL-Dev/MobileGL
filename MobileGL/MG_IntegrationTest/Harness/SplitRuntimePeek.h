@@ -121,6 +121,9 @@ namespace MGITest {
     bool SplitApplyHoldIsActiveForTesting();
     void ReleaseSplitApplyHoldForTesting();
     bool SplitProducerIsParkedForTesting();
+    // Observe completion for assertions about an emitted frame; does not emit a
+    // GL command or change the production wait rule.
+    bool WaitForSplitAppliedForTesting(unsigned long long seq, unsigned int timeoutMs = 5000);
 
 
     // Empty when this process is a real split run that can be asserted about; otherwise the

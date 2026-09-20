@@ -161,6 +161,9 @@ void main() { color = vec4(value, 0.25, 0.75, 1.0); }
         EXPECT_NEAR(pixel[2], 191, 1);
         EXPECT_EQ(pixel[3], 255);
         Gl().EndFrame();
+        // Present returns before apply under run-ahead. Inspect this completed
+        // frame's window, not the previous (possibly empty setup) log line.
+        ASSERT_TRUE(WaitForSplitAppliedForTesting(PeekSplitRuntime().emitSeq));
         const auto window = PipeStatsWindow::LastFromLaneLog();
         ASSERT_TRUE(window.found) << "P5f rsp window missing on frame " << frame;
         // Magma does not publish Espryt's draw counter. The changing uniform and
