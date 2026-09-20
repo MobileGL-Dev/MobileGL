@@ -144,7 +144,7 @@ namespace {
         Codec::PipeWireEncoder encoder;
         Server::ServerSession* session = nullptr;
 
-        bool Handshake() {
+        bool Handshake(Server::ServerSession* owner = nullptr) {
             Transport::InProcessTransport::CreatePair(clientTransport, serverTransport);
             {
                 ::flatbuffers::FlatBufferBuilder builder(512);
@@ -160,7 +160,7 @@ namespace {
                     return false;
                 }
             }
-            session = &Server::ServerSessionInstance();
+            session = owner != nullptr ? owner : &Server::ServerSessionInstance();
             session->SetSegmentSizes(TestSizes());
             // The two halves v1 owns. Neither has a default and CallMask() Fatals on an unset
             // one, which is s1's BLOCKER fix and the reason this is stated rather than derived.
@@ -2585,6 +2585,109 @@ TEST(P5fReverseChannel, GlErrorMessagesShareFifoWithOtherReverseEvents) {
     EXPECT_FALSE(events.Pop(extra));
     events.Drained();
 }
+
+TEST(P5fReverseChannel, ANonSingletonSessionOwnsAllFourReverseCallbacks) {
+    FvGlobals restore;
+    ASSERT_EQ(Server::ServerSession::Active(), nullptr);
+    ASSERT_FALSE(Server::ServerSessionInstance().Accepted());
+    Server::ServerSession owner;
+    FvSession fixture;
+    ASSERT_TRUE(fixture.Handshake(&owner));
+    ASSERT_EQ(Server::ServerSession::Active(), &owner);
+    ASSERT_NE(fixture.session, &Server::ServerSessionInstance());
+    ASSERT_TRUE(fixture.StartLoop());
+    ASSERT_EQ(Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+        +[](void*) -> MobileGLResult {
+            MG_Pipe::gMGPipeCallbacks.OnGlError(static_cast<Uint32>(ErrorCode::InvalidOperation),
+                                               "non-singleton owner");
+            const MG_Pipe::MGPRange whole{0, MG_Pipe::kMGPipeWholeBuffer};
+            MG_Pipe::gMGPipeCallbacks.OnGpuWritten({41, 7}, 1, &whole);
+            const Uint8 bytes[] = {17, 34, 51, 68};
+            MG_Pipe::gMGPipeCallbacks.OnBufferWriteback({41, 7}, 20,
+                MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(bytes), sizeof(bytes),
+                                   MG_Pipe::kMGHostSpanSegNone, 0});
+            MG_Pipe::MGPSurfaceInfo surface{};
+            surface.Width = 321;
+            surface.Height = 123;
+            surface.InternalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8);
+            surface.Samples = 4;
+            surface.Layers = 2;
+            surface.IsDefault = 1;
+            MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged(&surface);
+            return MOBILEGL_OK;
+        }, nullptr), MOBILEGL_OK);
+
+    Transport::EventRingConsumer events(fixture.clientSegments.EventControl(),
+        fixture.clientSegments.CmdControl(), fixture.clientSegments.EventRingBase(),
+        fixture.clientSegments.EventRingCapacity(), fixture.clientSegments.EventSegmentBase());
+    ASSERT_TRUE(events.Valid());
+    Transport::RingRecordView event;
+    ASSERT_TRUE(events.Pop(event));
+    ASSERT_EQ(event.kind, Transport::kEventGlError);
+    const auto* error = static_cast<const Transport::EventGlErrorHead*>(event.payload);
+    EXPECT_EQ(error->Code, static_cast<Uint32>(ErrorCode::InvalidOperation));
+    EXPECT_STREQ(reinterpret_cast<const char*>(error + 1), "non-singleton owner");
+
+    ASSERT_TRUE(events.Pop(event));
+    ASSERT_EQ(event.kind, Transport::kEventGpuWritten);
+    const auto* written = static_cast<const Transport::EventGpuWrittenHead*>(event.payload);
+    EXPECT_EQ(written->Resource.Slot, 41u);
+    EXPECT_EQ(written->Resource.Gen, 7u);
+    ASSERT_EQ(written->RangeCount, 1u);
+    const auto* range = reinterpret_cast<const Transport::EventRange*>(written + 1);
+    EXPECT_EQ(range->Offset, 0u);
+    EXPECT_EQ(range->Size, MG_Pipe::kMGPipeWholeBuffer);
+
+    ASSERT_TRUE(events.Pop(event));
+    ASSERT_EQ(event.kind, Transport::kEventBufferWriteback);
+    const auto* writeback = static_cast<const Transport::EventBufferWritebackHead*>(event.payload);
+    EXPECT_EQ(writeback->Resource.Slot, 41u);
+    EXPECT_EQ(writeback->Resource.Gen, 7u);
+    EXPECT_EQ(writeback->Offset, 20u);
+    ASSERT_EQ(writeback->Size, 4u);
+    const Uint8 expected[] = {17, 34, 51, 68};
+    EXPECT_EQ(std::memcmp(writeback + 1, expected, sizeof(expected)), 0);
+
+    ASSERT_TRUE(events.Pop(event));
+    ASSERT_EQ(event.kind, Transport::kEventSurfaceChanged);
+    const auto* surface = static_cast<const Transport::EventSurfaceChangedHead*>(event.payload);
+    EXPECT_EQ(surface->Width, 321u);
+    EXPECT_EQ(surface->Height, 123u);
+    EXPECT_EQ(surface->InternalFormat, static_cast<Uint32>(TextureInternalFormat::RGBA8));
+    EXPECT_EQ(surface->Samples, 4u);
+    EXPECT_EQ(surface->Layers, 2u);
+    EXPECT_EQ(surface->IsDefault, 1u);
+    EXPECT_FALSE(events.Pop(event));
+    events.Drained();
+    EXPECT_FALSE(Server::ServerSessionInstance().Accepted());
+}
+
+#if !defined(_WIN32)
+TEST(P5fReverseChannel, CachedReverseCallbacksRejectAMissingSessionOwner) {
+    FvGlobals restore;
+    Server::ServerSession owner;
+    FvSession fixture;
+    ASSERT_TRUE(fixture.Handshake(&owner));
+    const auto callbacks = MG_Pipe::gMGPipeCallbacks;
+    fixture.Stop();
+    ASSERT_EQ(Server::ServerSession::Active(), nullptr);
+    const char* names[] = {"OnGlError", "OnGpuWritten", "OnBufferWriteback", "OnSurfaceChanged"};
+    for (Uint32 callback = 0; callback < 4; ++callback) {
+        const auto logSize = ReadLog().size();
+        EXPECT_EXIT({
+            switch (callback) {
+            case 0: callbacks.OnGlError(0, "retired"); break;
+            case 1: callbacks.OnGpuWritten(MG_Pipe::kMGPipeNullHandle, 0, nullptr); break;
+            case 2: callbacks.OnBufferWriteback(MG_Pipe::kMGPipeNullHandle, 0, MG_Pipe::MGPBlobRef{}); break;
+            case 3: callbacks.OnSurfaceChanged(nullptr); break;
+            }
+            std::_Exit(9);
+        }, ::testing::KilledBySignal(SIGABRT), "");
+        const auto marker = String(names[callback]) + ".session-missing";
+        EXPECT_NE(ReadLog().substr(logSize).find(marker), String::npos) << marker;
+    }
+}
+#endif
 
 int main(int argc, char** argv) {
     // Before anything logs: MG_Util::Debug::InitFile() reads the variable once, on the first

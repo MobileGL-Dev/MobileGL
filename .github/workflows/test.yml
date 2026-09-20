@@ -1392,12 +1392,31 @@ jobs:
           echo "dual-block census run: rc=${rc}"
 
           rows=$(awk '!/^[[:space:]]*(#|$)/ { n++ } END { print n+0 }' "${expected}")
+          if [ "${rows}" -eq 0 ] && [ "${rc}" -ne 0 ]; then
+            echo "::error::empty dual-block census requires ctest success, including infrastructure/execution status"
+            exit "${rc}"
+          fi
           if [ "${rc}" -eq 0 ] && [ "${rows}" -gt 0 ]; then
             echo "::error::the dual-block census lane went GREEN with ${rows} expected pair(s) outstanding - the knob stopped arming, or the fields retired and dualblock-expected-fatals.txt was not emptied in the same commit"
             exit 1
           fi
           python3 "${helper}" expect-fatal "${RUNNER_TEMP}/dualblock-lane.json" \
             "${RUNNER_TEMP}/dualblock.xml" "${expected}"
+
+      - name: P5f per-frame zero residual reads must execute on both backends
+        working-directory: build-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
+          MOBILEGL_IPC_STRICT_ERRORS: "1"
+        run: |
+          ctest -L integration-p5f-rsp --show-only=json-v1 > "${RUNNER_TEMP}/rsp-lane.json"
+          ctest -L integration-p5f-rsp --no-tests=error --output-on-failure \
+            --output-junit "${RUNNER_TEMP}/rsp.xml"
+          python3 "${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/split_log_paths.py" \
+            require-green "${RUNNER_TEMP}/rsp-lane.json" "${RUNNER_TEMP}/rsp.xml" \
+            DirectGLES.Split.P5fRsp.F1WireScenario.EachWireFrameHasZeroResidualPulls \
+            DirectVulkan.Split.P5fRsp.F1WireScenario.EachWireFrameHasZeroResidualPulls
 
       # The mechanism's own negative control (P5F §6): the same named case must be green with
       # the knob on and red - on its own assertion text - with it off.

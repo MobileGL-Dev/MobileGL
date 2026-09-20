@@ -262,8 +262,21 @@ namespace MobileGL::MG_Remote::Server {
             std::abort();
         }
 
+        // Accept owns the single process callback table. Its owner need not be the
+        // convenience singleton; every reverse event must use the accepted instance's ring.
+        ServerSession& ReverseCallbackOwner(const char* callback) {
+            auto* session = ServerSession::Active();
+            if (session == nullptr) {
+                MGLOG_F("MGPipe: Fatal{RoleViolation, \"%s.session-missing\"} - "
+                        "a reverse callback has no accepted session owner", callback);
+                std::abort();
+            }
+            return *session;
+        }
+
         void ServerOnBufferWriteback(MG_Pipe::MGPipeHandle res, Uint64 offset,
                                      MG_Pipe::MGPBlobRef bytes) {
+            ServerSession& session = ReverseCallbackOwner("OnBufferWriteback");
             if (bytes.Seg != MG_Pipe::kMGHostSpanSegNone) {
                 // The backend handed over a segment-tagged blobref. The ONLY legal shape at
                 // this boundary is the monolith one - Offset is the mapped address, valid
@@ -275,7 +288,6 @@ namespace MobileGL::MG_Remote::Server {
                         bytes.Seg);
                 std::abort();
             }
-            ServerSession& session = ServerSessionInstance();
             const Uint64 payloadBytes = sizeof(Transport::EventBufferWritebackHead) + bytes.Size;
             void* slot = ReserveEventOrBlock(session, Transport::kEventBufferWriteback,
                                              "kEventBufferWriteback", payloadBytes);
@@ -294,7 +306,7 @@ namespace MobileGL::MG_Remote::Server {
 
         void ServerOnGpuWritten(MG_Pipe::MGPipeHandle res, Uint rangeCount,
                                 const MG_Pipe::MGPRange* ranges) {
-            ServerSession& session = ServerSessionInstance();
+            ServerSession& session = ReverseCallbackOwner("OnGpuWritten");
             const Uint64 tailBytes = static_cast<Uint64>(rangeCount) * sizeof(Transport::EventRange);
             const Uint64 payloadBytes = sizeof(Transport::EventGpuWrittenHead) + tailBytes;
             void* slot = ReserveEventOrBlock(session, Transport::kEventGpuWritten,
@@ -313,7 +325,7 @@ namespace MobileGL::MG_Remote::Server {
         }
 
         void ServerOnSurfaceChanged(const MG_Pipe::MGPSurfaceInfo* info) {
-            ServerSession& session = ServerSessionInstance();
+            ServerSession& session = ReverseCallbackOwner("OnSurfaceChanged");
             constexpr Uint64 payloadBytes = sizeof(Transport::EventSurfaceChangedHead);
             void* slot = ReserveEventOrBlock(session, Transport::kEventSurfaceChanged,
                                              "kEventSurfaceChanged", payloadBytes);
@@ -333,12 +345,7 @@ namespace MobileGL::MG_Remote::Server {
         // P5f fv: OnGlError now has the same owner and lifetime as the other producers.
         // PostGlError copies message bytes synchronously into the existing FIFO event ring.
         void ServerOnGlError(Uint32 code, const char* message) {
-            auto* session = ServerSession::Active();
-            if (session == nullptr) {
-                MGLOG_F("MGPipe: Fatal{RoleViolation, \"OnGlError.session-missing\"}");
-                std::abort();
-            }
-            session->PostGlError(code, message);
+            ReverseCallbackOwner("OnGlError").PostGlError(code, message);
         }
 
         // One installer for both roles' tables, so the check exists in exactly one spelling:
