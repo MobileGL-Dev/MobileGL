@@ -1018,14 +1018,25 @@ namespace MobileGL::MG_Pipe {
         // Their staged bytes still belong to the server before SEG_STAGE retires. Keep the
         // existing backend hooks authoritative when present, and use this fallback otherwise.
         void AdoptTextureWithoutBackendHook(const MGPipeResourceRecord& stored, const MGPSubData& upload,
-                                           const void* bytes) {
+                                           const void* bytes, const MGPSubRegion* regions) {
             if (MG_Config::Transport == MG_Config::TransportMode::Monolith || !bytes || upload.Blob.Size == 0) return;
             auto& store = MG_Remote::Server::ServerStagedTexture();
             const auto& desc = stored.Desc;
-            store.Adopt(MG_Remote::Server::StagedTextureStore::KeyForHandle(upload.Res),
-                MGPipeSubDataUploadTargetOf(upload.Target), upload.Level,
-                MG_Remote::Server::StagedTextureUploadExtent(desc, upload),
-                bytes, static_cast<SizeT>(upload.Blob.Size));
+            const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(upload.Res);
+            const Uint16 target = MGPipeSubDataUploadTargetOf(upload.Target);
+            const IntVec3 extent = MG_Remote::Server::StagedTextureUploadExtent(desc, upload);
+            // RegionCount == 0 IS the whole-level spelling - "the run is the level shadow" - so it
+            // is adopted with the spelling that replaces the level; every other record names a RUN
+            // of the level by its own box (fix A2: a level too large to stage whole crosses as
+            // slabs, one record each, and the first of them is at the level's first byte).
+            if (upload.RegionCount == 0) {
+                store.Adopt(key, target, upload.Level, extent, bytes,
+                            static_cast<SizeT>(upload.Blob.Size));
+                return;
+            }
+            store.AdoptRun(key, target, upload.Level, extent,
+                           MG_Remote::Server::StagedTextureRunImageOffset(upload, regions), bytes,
+                           static_cast<SizeT>(upload.Blob.Size));
         }
 
         void DefineTextureWithoutBackendHook(const MGPResourceDesc& desc, const MGPRespecifiedLevel* level) {
@@ -1120,10 +1131,13 @@ namespace MobileGL::MG_Pipe {
             // deliberately holds no byte pointer). The hook copies the run into the server's
             // staged-texture store keyed by this record's own handle; it is a no-op in
             // monolith, so the monolith shape keeps P5's pointer-dropping expression exactly.
+            // The REGIONS travel with it because a record may carry a RUN of its level rather
+            // than the whole of it (fix A2): they are what places that run in the level image,
+            // and the applier's pending set - which already has them - is not the store's.
             if (g_resourceOps != nullptr && g_resourceOps->TextureSubData != nullptr) {
                 g_resourceOps->TextureSubData(record.Res, record, bytes, regions);
             } else {
-                AdoptTextureWithoutBackendHook(*stored, record, bytes);
+                AdoptTextureWithoutBackendHook(*stored, record, bytes, regions);
             }
 #endif
             return true;

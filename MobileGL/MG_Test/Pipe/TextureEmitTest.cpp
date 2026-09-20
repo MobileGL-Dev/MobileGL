@@ -74,6 +74,13 @@
 #include <MG_State/GLState/TextureState/TextureObjectView.h>
 
 #include <algorithm>
+#if MOBILEGL_BUILD_DISAGGREGATED
+// MGPipeStageChunkBytesFor: the cap the slab split is driven at. A unit process has no
+// session, so the live answer (MGPipeTextureStageChunkBytes) is 0 - "keep the whole level in
+// one record" - and the clamp is what a case can drive the cut at, exactly as
+// ResourceEmitTest does for the buffer half's walk.
+#include <MG_Remote/Client/GpuWritePending.h>
+#endif
 #endif
 
 using namespace MobileGL;
@@ -206,6 +213,7 @@ TEST(TextureEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
     X(TextureEmit, AScatteredUploadCarriesTheLevelShadowsStridesAndNotZero)                        \
     X(TextureEmit, AWholeLevelUploadCarriesZeroStrides)                                            \
     X(TextureEmit, MoreThanKMaxDirtyRectsCollapsesToTheBoxWithRegionCountZero)                     \
+    X(TextureEmit, ALevelTooLargeForTheStageChunkIsCutIntoSlabs)                                   \
     X(TextureEmit, AnUploadThroughAViewKeysOnTheStorageOwner)                                      \
     X(TextureEmit, EveryTexturesParamsNameItsBuiltinSamplerCso)                                    \
     X(TextureEmit, TwoTexturesWithIdenticalSamplingShareOneBuiltinCso)                             \
@@ -549,6 +557,9 @@ TEST(TextureEmit, AWholeLevelUploadCarriesZeroStrides) {
     EXPECT_EQ(record.Blob.Seg, kMGHostSpanSegNone);
     EXPECT_EQ(record.Blob.Size, 0u) << "a monolith record does not declare its blob";
     EXPECT_NE(record.Blob.Offset, 0u) << "Blob.Offset is the level shadow's address in monolith";
+    EXPECT_EQ(Textures().SubDataPieceCount(), 1u)
+        << "a level that fits one record is exactly one piece (fix A2's counter), so the "
+           "whole-level shape stays what it always was";
     // The upload target rides in the record's Target byte beside the resource target, which is
     // the only place a cube face could ever be carried.
     EXPECT_EQ(MGPipeSubDataResourceTargetOf(record.Target),
@@ -586,6 +597,220 @@ TEST(TextureEmit, MoreThanKMaxDirtyRectsCollapsesToTheBoxWithRegionCountZero) {
     EXPECT_EQ(Textures().LastRegions().size(), oracleCount);
 }
 
+// ==================== fix A2: the stage-chunk slab split ====================
+//
+// ONE RECORD'S BLOB IS STAGED WHOLE IN SEG_STAGE, a linear arena, so a level shadow larger than
+// the segment's chunk budget is Fatal{RingOverrun, "SEG_STAGE"} at the encoder rather than a
+// split - and it is not hypothetical: measured on the CI traces, a 512x128x33 GL_RGBA32F level
+// is 34,603,008 bytes and a 192-cube GL_RGBA16 level 56,623,104, both against the default 32 MiB
+// segment. EmitOneLevel cuts such a level into slabs; THIS case drives the arithmetic of the cut
+// at the cap MGPipeStageChunkBytesFor really returns, because a unit process has no ClientSession
+// and MGPipeTextureStageChunkBytes() therefore answers 0.
+//
+// THREE PROPERTIES, AND EACH IS LOAD-BEARING:
+//   * the pieces are CONTIGUOUS AND ASCENDING and their union is the level EXACTLY ONCE - the
+//     server assembles one level image out of the runs (StagedTextureStore::AdoptRun), so a gap
+//     loses texels and an overlap places them twice;
+//   * EACH PIECE'S RUN IS EXACTLY ITS OWN BOX'S BYTE EXTENT - that is what lets the far side place
+//     a run from the box and the carried strides alone, with no knowledge of the format;
+//   * EACH PIECE CARRIES AT LEAST ONE REGION, with the LEVEL's pitches - RegionCount == 0 is the
+//     whole-level spelling, so a piece with an empty tail would be read as one.
+TEST(TextureEmit, ALevelTooLargeForTheStageChunkIsCutIntoSlabs) {
+#if !MOBILEGL_PIPE_PUSH
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no emitter in this build";
+#elif !MOBILEGL_BUILD_DISAGGREGATED
+    GTEST_SKIP() << "there is no stage segment to size a content chunk against without the "
+                    "transport built in";
+#else
+    EXPECT_EQ(MGPipeTextureStageChunkBytes(), 0u)
+        << "a unit process has no ClientSession, so the drain must keep the whole-level record";
+    // SessionRings.h:89's default segment, and the cap is a quarter of it - the number the
+    // emitter really passes to the walk.
+    const SizeT cap = MG_Remote::Client::MGPipeStageChunkBytesFor(32ull * 1024ull * 1024ull);
+    ASSERT_EQ(cap, static_cast<SizeT>(8ull * 1024ull * 1024ull));
+
+    // THE CUT ITSELF, with the two properties that hold for every arm: the pieces tile the level
+    // exactly once, in order, each within the cap and each exactly its own box's byte extent.
+    const auto cut = [&](const IntVec3& levelSize, Uint64 levelBytes, SizeT chunk) {
+        std::vector<MGPipeTextureSlab> slabs;
+        const MGPipeLevelPitch pitch =
+            MGPipeLevelPitchOf(levelSize, static_cast<SizeT>(levelBytes));
+        EXPECT_TRUE(MGPipeForEachTextureSlab(levelSize, pitch, levelBytes, chunk,
+                                             [&](const MGPipeTextureSlab& slab) {
+                                                 slabs.push_back(slab);
+                                             }));
+        EXPECT_GE(slabs.size(), 2u) << "a level of " << levelBytes << " bytes was not cut at a "
+                                    << chunk << " byte cap";
+        Uint64 expectedOffset = 0;
+        Uint64 covered = 0;
+        for (const MGPipeTextureSlab& slab : slabs) {
+            EXPECT_GT(slab.RunBytes, 0u);
+            EXPECT_LE(slab.RunBytes, static_cast<Uint64>(chunk)) << "a piece is bigger than the cap";
+            EXPECT_EQ(slab.RunOffset, expectedOffset)
+                << "the pieces are not contiguous and ascending";
+            expectedOffset += slab.RunBytes;
+            covered += slab.RunBytes;
+            const Uint64 boxBytes = static_cast<Uint64>(slab.Box.D - 1) * pitch.SliceStride +
+                                    static_cast<Uint64>(slab.Box.H - 1) * pitch.RowStride +
+                                    static_cast<Uint64>(slab.Box.W) * pitch.BytesPerTexel;
+            EXPECT_EQ(boxBytes, slab.RunBytes)
+                << "the box does not describe the run, so the far side cannot place it";
+        }
+        EXPECT_EQ(covered, levelBytes) << "the pieces do not cover the level exactly once";
+        return slabs;
+    };
+
+    // (1) THE TRACE'S FIRST SHAPE: 512x128x33 RGBA32F, 34,603,008 bytes. Its slice pitch is
+    // 1 MiB, so the coarsest arm applies and the cut is by whole slices.
+    const IntVec3 volume{512, 128, 33};
+    const Uint64 volumeBytes = 512ull * 128ull * 33ull * 16ull;
+    const std::vector<MGPipeTextureSlab> volumeSlabs = cut(volume, volumeBytes, cap);
+    ASSERT_EQ(volumeSlabs.size(), 5u);
+    for (const MGPipeTextureSlab& slab : volumeSlabs) {
+        EXPECT_EQ(slab.Box.X, 0);
+        EXPECT_EQ(slab.Box.Y, 0);
+        EXPECT_EQ(slab.Box.W, 512u) << "a slab is not the level's full width";
+        EXPECT_EQ(slab.Box.H, 128u);
+        EXPECT_EQ(slab.Box.D, 8u);
+    }
+    EXPECT_EQ(volumeSlabs.back().Box.D, 1u) << "the remainder slice is its own piece";
+
+    // (2) THE TRACE'S SECOND SHAPE: 192-cubed RGBA16, 56,623,104 bytes, cut the same way.
+    const IntVec3 cube{192, 192, 192};
+    const Uint64 cubeBytes = 192ull * 192ull * 192ull * 8ull;
+    const std::vector<MGPipeTextureSlab> cubeSlabs = cut(cube, cubeBytes, cap);
+    ASSERT_EQ(cubeSlabs.size(), 7u);
+    EXPECT_EQ(cubeSlabs.back().Box.D, 24u);
+
+    // (3) A SLICE BIGGER THAN THE CAP: a 2D level degenerates to whole ROWS, and every piece is
+    // still the level's FULL WIDTH - the property that makes its box name its run.
+    const IntVec3 sheet{256, 256, 1};
+    const Uint64 sheetBytes = 256ull * 256ull * 4ull;
+    const SizeT sheetCap = MG_Remote::Client::MGPipeStageChunkBytesFor(256ull * 1024ull);
+    ASSERT_EQ(sheetCap, static_cast<SizeT>(64ull * 1024ull));
+    const std::vector<MGPipeTextureSlab> sheetSlabs = cut(sheet, sheetBytes, sheetCap);
+    ASSERT_EQ(sheetSlabs.size(), 4u) << "64 of 256 rows per piece";
+    for (const MGPipeTextureSlab& slab : sheetSlabs) {
+        EXPECT_EQ(slab.Box.X, 0);
+        EXPECT_EQ(slab.Box.W, 256u);
+        EXPECT_EQ(slab.Box.H, 64u);
+        EXPECT_EQ(slab.Box.D, 1u);
+        EXPECT_EQ(slab.RunBytes, 64ull * 1024ull);
+    }
+    EXPECT_EQ(sheetSlabs[1].Box.Y, 64);
+    EXPECT_EQ(sheetSlabs[1].RunOffset, 64ull * 1024ull);
+
+    // (4) THE LAST RESORT: a ROW wider than the cap leaves runs of whole texels inside one row.
+    // The full-width property is the one that goes, and nothing downstream depends on it - the
+    // box still names the run exactly.
+    const IntVec3 line{64, 4, 1};
+    const Uint64 lineBytes = 64ull * 4ull * 4ull;
+    const std::vector<MGPipeTextureSlab> lineSlabs = cut(line, lineBytes, static_cast<SizeT>(64));
+    ASSERT_EQ(lineSlabs.size(), 16u) << "16 texels per piece over 4 rows of 64";
+    for (const MGPipeTextureSlab& slab : lineSlabs) {
+        EXPECT_EQ(slab.Box.W, 16u);
+        EXPECT_EQ(slab.Box.H, 1u);
+        EXPECT_EQ(slab.Box.D, 1u);
+        EXPECT_EQ(slab.RunBytes, 64ull);
+    }
+
+    // (5) AND THE SHAPES THAT REFUSE TO CUT, which keep the whole-level record they had before the
+    // split existed: no cap at all, a pitch that does not tile the level's bytes exactly, and a cap
+    // below one texel.
+    std::vector<MGPipeTextureSlab> refusals;
+    const auto refuses = [&](const IntVec3& levelSize, const MGPipeLevelPitch& pitch,
+                             Uint64 levelBytes, SizeT chunk) {
+        return !MGPipeForEachTextureSlab(levelSize, pitch, levelBytes, chunk,
+                                         [&](const MGPipeTextureSlab& slab) {
+                                             refusals.push_back(slab);
+                                         });
+    };
+    const MGPipeLevelPitch volumePitch =
+        MGPipeLevelPitchOf(volume, static_cast<SizeT>(volumeBytes));
+    const MGPipeLevelPitch linePitch = MGPipeLevelPitchOf(line, static_cast<SizeT>(lineBytes));
+    EXPECT_TRUE(refuses(volume, volumePitch, volumeBytes, 0));
+    EXPECT_TRUE(refuses(volume, volumePitch, volumeBytes + 1, cap))
+        << "a level whose bytes the pitch does not tile has a tail no box describes";
+    EXPECT_TRUE(refuses(line, linePitch, lineBytes, 1)) << "a cap below one texel";
+    EXPECT_TRUE(refusals.empty()) << "a refused walk handed out pieces";
+
+    // (6) THE REGIONS OF A PIECE: every dirty rect CLIPPED to the slab, its SrcOffset REBASED onto
+    // the piece's own run (MGPipeTypes.h: SrcOffset is "into the blob") and the LEVEL's pitches
+    // kept. A slab the dirty set does not reach still carries its own box as ONE region.
+    const MGPBox dirty[5] = {
+        {0, 0, 0, 512, 128, 1},    // the whole first slice, inside slab 0
+        {0, 0, 4, 64, 64, 1},      // a small rect in the middle of slab 0
+        {10, 20, 8, 64, 64, 2},    // a rect spanning the first two slices of slab 1
+        {460, 100, 7, 64, 64, 3},  // clipped on X, Y and the slab-0/slab-1 boundary
+        {0, 0, 32, 512, 128, 1},   // the last slice, inside slab 4
+    };
+    SizeT regionCounts[5] = {0, 0, 0, 0, 0};
+    for (SizeT i = 0; i < volumeSlabs.size(); ++i) {
+        const MGPipeTextureSlab& slab = volumeSlabs[i];
+        MGPSubRegion regions[5]{};
+        const SizeT count = MGPipeBuildSlabRegions(dirty, 5, slab, volumePitch, regions, 5);
+        regionCounts[i] = count;
+        ASSERT_GE(count, 1u) << "a piece with no dirty rect must still carry one region";
+        for (SizeT r = 0; r < count; ++r) {
+            const MGPSubRegion& region = regions[r];
+            EXPECT_EQ(region.SrcRowStride, volumePitch.RowStride);
+            EXPECT_EQ(region.SrcSliceStride, volumePitch.SliceStride);
+            EXPECT_EQ(region.SrcOffset,
+                      static_cast<Uint64>(region.Z - slab.Box.Z) * volumePitch.SliceStride +
+                          static_cast<Uint64>(region.Y - slab.Box.Y) * volumePitch.RowStride +
+                          static_cast<Uint64>(region.X - slab.Box.X) * volumePitch.BytesPerTexel)
+                << "SrcOffset is not relative to the piece's own run";
+            EXPECT_GE(region.X, slab.Box.X);
+            EXPECT_GE(region.Y, slab.Box.Y);
+            EXPECT_GE(region.Z, slab.Box.Z);
+            EXPECT_LE(region.X + static_cast<Int32>(region.W),
+                      slab.Box.X + static_cast<Int32>(slab.Box.W))
+                << "a clipped rect reaches outside the piece's box";
+            EXPECT_LE(region.Y + static_cast<Int32>(region.H),
+                      slab.Box.Y + static_cast<Int32>(slab.Box.H));
+            EXPECT_LE(region.Z + static_cast<Int32>(region.D),
+                      slab.Box.Z + static_cast<Int32>(slab.Box.D));
+        }
+    }
+    // Slab 0 sees three rects (one of them clipped at its own z end), slab 1 two, slabs 2 and 3
+    // none at all - so their single region IS their box - and slab 4 the last slice.
+    EXPECT_EQ(regionCounts[0], 3u);
+    EXPECT_EQ(regionCounts[1], 2u);
+    EXPECT_EQ(regionCounts[2], 1u);
+    EXPECT_EQ(regionCounts[3], 1u);
+    EXPECT_EQ(regionCounts[4], 1u);
+    const MGPipeTextureSlab& unreached = volumeSlabs[2];
+    MGPSubRegion invented[1]{};
+    ASSERT_EQ(MGPipeBuildSlabRegions(dirty, 5, unreached, volumePitch, invented, 1), 1u);
+    EXPECT_EQ(invented[0].Z, unreached.Box.Z);
+    EXPECT_EQ(invented[0].W, unreached.Box.W);
+    EXPECT_EQ(invented[0].H, unreached.Box.H);
+    EXPECT_EQ(invented[0].D, unreached.Box.D);
+    EXPECT_EQ(invented[0].SrcOffset, 0u) << "the piece's own box starts at its own first byte";
+
+    // The fourth rect reaches past the level's width (460 + 64 > 512), and its Y and Z runs
+    // cross the slab's own end: the clip is what the emitted region shows, and its SrcOffset is
+    // the CLIPPED origin's offset into the piece.
+    bool sawClippedRect = false;
+    {
+        MGPSubRegion regions[5]{};
+        ASSERT_EQ(MGPipeBuildSlabRegions(dirty, 5, volumeSlabs[0], volumePitch, regions, 5), 3u);
+        for (SizeT i = 0; i < 3; ++i) {
+            if (regions[i].X != 460 || regions[i].W != 52u) continue;
+            sawClippedRect = true;
+            EXPECT_EQ(regions[i].Y, 100);
+            EXPECT_EQ(regions[i].H, 28u);
+            EXPECT_EQ(regions[i].Z, 7);
+            EXPECT_EQ(regions[i].D, 1u);
+            EXPECT_EQ(regions[i].SrcOffset,
+                      static_cast<Uint64>(7) * volumePitch.SliceStride +
+                          static_cast<Uint64>(100) * volumePitch.RowStride +
+                          static_cast<Uint64>(460) * volumePitch.BytesPerTexel);
+        }
+    }
+    EXPECT_TRUE(sawClippedRect) << "a rect wider than the level was not clipped to the piece";
+#endif
+}
 // ============================ D-D4 ============================
 TEST(TextureEmit, AnUploadThroughAViewKeysOnTheStorageOwner) {
     TextureScope scope;

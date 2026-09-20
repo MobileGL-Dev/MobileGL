@@ -41,20 +41,27 @@
 // (ResetLevels), resource_destroy drops the key (Ops_H_TextureDestroy), context death drops
 // all (OnBackendContextDestroyed, beside MGL_SERVER_STAGED_DROP_ALL).
 //
-// COVERAGE IS EXACTLY THE STAGED RUN, NEVER WIDENED AND NEVER NARROWER. The texture half of
-// resource_subdata ALWAYS stages the whole level shadow (TextureEmit.h:1285: "the bytes this
-// record declares ARE the level shadow", Blob.Size = the level's byte count), so one Adopt
-// covers its level whole. The record's region set is deliberately NOT the coverage unit: it
-// declares which texels CHANGED (the upload planner's shape, which the applier's pending set
-// already carries), while the full-level upload paths - every conversion fallback, and the
-// immutable/mutable regeneration arms - read the whole level including texels no region
-// named. Those texels crossed in the staged run; treating them as uncovered would Fatal a
-// legal glTexStorage-then-small-glTexSubImage sequence whose first (and only) record names a
-// small box, and moving them into the store is not the buffer half's silent-zero case
-// because they are the client's own shadow bytes, delivered and declared. A sync that asks
-// for a level this store has no covered run for is Fatal{StageSnapshotTooNarrow} - the same
-// words as the buffer half, for the same reason: the bytes have never existed on this side,
-// and inventing them is silent data loss, not a missing optimisation.
+// COVERAGE IS EXACTLY THE STAGED RUNS, NEVER WIDENED AND NEVER NARROWER. One resource_subdata
+// stages one RUN of the level shadow - the whole level for a level that fits one record's chunk
+// budget (TextureEmit.h: "the bytes this record declares ARE the level shadow", Blob.Size = the
+// level's byte count), a whole-width slab of it for one that does not
+// (TextureEmit.h's MGPipeForEachTextureSlab) - and what this store covers is the union of the
+// runs it has adopted, in the level's own byte coordinates. The record's region set is
+// deliberately NOT the coverage unit: it declares which texels CHANGED (the upload planner's
+// shape, which the applier's pending set already carries), while the full-level upload paths -
+// every conversion fallback, and the immutable/mutable regeneration arms - read the whole level
+// including texels no region named. Those texels crossed in the staged run; treating them as
+// uncovered would Fatal a legal glTexStorage-then-small-glTexSubImage sequence whose first (and
+// only) record names a small box, and moving them into the store is not the buffer half's
+// silent-zero case because they are the client's own shadow bytes, delivered and declared.
+//
+// SO A FULL-LEVEL READ ASKS FOR THE WHOLE LEVEL TO BE COVERED, which is where the texture half
+// parts company with the buffer half's one-range shape: the runs of a split level arrive as
+// several records of ONE apply batch - the same verb, so all of them land before the barrier
+// that lets the sync read - the set is complete exactly when every piece has landed, and a level
+// with a hole in it is Fatal{StageSnapshotTooNarrow}: the same words as the buffer half, for the
+// same reason, because those bytes have never existed on this side and inventing them is silent
+// data loss rather than a missing optimisation.
 //
 // DEFINED-NESS IS TRACKED, NOT DERIVED ALONE. §1's per-level extent derivation (max(1,
 // base >> level), layer axes fixed) computes the extent of a level that EXISTS; it cannot
@@ -87,6 +94,9 @@
 #include <Includes.h>
 
 #include <MG_Pipe/MGPipeTypes.h>
+// StagedShadowStore::CoverageAdd / CoverageHas: ONE spelling of the covered set, so the texture
+// half's runs and the buffer half's ranges cannot drift apart on what "covered" means.
+#include <MG_Remote/Server/StagedShadow.h>
 #include <MG_Util/Debug/Log.h>
 #include <MG_Util/Math/VectorTypes.h>
 
@@ -139,6 +149,45 @@ namespace MobileGL::MG_Remote::Server {
         return StagedTextureMipExtent(desc.Target, desc.Width, desc.Height, desc.Depth, upload.Level);
     }
 
+    // WHERE A RECORD'S STAGED RUN BEGINS IN THE SERVER-OWNED LEVEL IMAGE. The record itself says
+    // so, and the two shapes that reach AdoptRun are told apart by the run's own LENGTH - the one
+    // field of MGPSubData that differs between them:
+    //
+    //   * THE WHOLE-LEVEL RUN, which is what resource_subdata's texture half has always staged:
+    //     TextureEmit.h's "the bytes this record declares ARE the level shadow", so Blob.Size is
+    //     the level's byte count and the run begins at the level's FIRST byte whatever the record's
+    //     box says - the box describes the dirty texels, not the run. Answer: 0. That is also the
+    //     answer for the whole-level spelling that carries no regions at all (RegionCount == 0,
+    //     strides 0 = tightly packed).
+    //
+    //   * A SLAB of a level too large to stage whole (TextureEmit.h's MGPipeForEachTextureSlab),
+    //     whose run is exactly the byte extent of its own box and therefore begins at that box's
+    //     first byte: z0 * sliceStride + y0 * rowStride + x0 * bpp, every one of them carried in
+    //     the record's own regions. So the box names the placement, and the far side still needs no
+    //     knowledge of the level's format: the texel's byte size falls out of the carried row
+    //     stride and the carried level width - the two numbers the region and the record both
+    //     state.
+    //
+    // A run SHORTER than its box's byte extent is neither shape and answers 0 - not silently
+    // placed: no emitter produces one, and the whole-level reading is the only one that cannot
+    // lose texels the record did carry.
+    inline Uint64 StagedTextureRunImageOffset(const MG_Pipe::MGPSubData& upload,
+                                             const MG_Pipe::MGPSubRegion* regions) {
+        const MG_Pipe::MGPBox& box = upload.UnionBox;
+        if (regions == nullptr || upload.RegionCount == 0) return 0;
+        const Uint64 rowStride = regions[0].SrcRowStride;
+        const Uint64 sliceStride = regions[0].SrcSliceStride;
+        if (rowStride == 0 || sliceStride == 0 || upload.LevelWidth == 0) return 0;
+        const Uint64 texelBytes = rowStride / upload.LevelWidth;
+        if (texelBytes == 0 || box.W == 0 || box.H == 0 || box.D == 0) return 0;
+        const Uint64 boxBytes = static_cast<Uint64>(box.D - 1) * sliceStride +
+                                static_cast<Uint64>(box.H - 1) * rowStride +
+                                static_cast<Uint64>(box.W) * texelBytes;
+        if (upload.Blob.Size != boxBytes) return 0;
+        return static_cast<Uint64>(box.Z) * sliceStride + static_cast<Uint64>(box.Y) * rowStride +
+               static_cast<Uint64>(box.X) * texelBytes;
+    }
+
     class StagedTextureStore {
     public:
         // `copies` is "this process is really split". False reproduces the monolith expression
@@ -163,29 +212,46 @@ namespace MobileGL::MG_Remote::Server {
             return static_cast<Uint64>(reinterpret_cast<std::uintptr_t>(twin));
         }
 
-        // THE ADOPTION. Copies the record's staged run - the whole level shadow, byteSize =
-        // MGPSubData::Blob.Size under split - into server-owned storage and marks the level
-        // covered whole (see the header comment for why the run, not the region set, is the
-        // coverage). REPLACES the level's entry: the run is the level's complete current
-        // content, so nothing of a previous run survives, and a fresh adoption is by
-        // definition not GPU-dirty. Returns the server-owned base; under monolith it does
-        // nothing and returns nullptr, and the caller (Ops_H_TextureSubData) has already
-        // returned before reaching here.
+        // THE ADOPTION OF ONE RUN OF A LEVEL. `imageOffset` is where the run's first byte belongs
+        // in the server-owned level image and `byteSize` (MGPSubData::Blob.Size under split) is
+        // its length; the covered set grows by exactly [imageOffset, imageOffset + byteSize), so
+        // coverage stays EXACTLY the staged runs and a hole between them is what RequireLevelBytes
+        // refuses on. The caller gets the offset from the record itself
+        // (StagedTextureRunImageOffset below). Runs may arrive in any order: coverage is a set,
+        // and the level's extent comes from the record either way.
+        //
+        // THE RETURNED BASE IS ONLY VALID UNTIL THE NEXT RUN OF THE SAME LEVEL: growing the image
+        // reallocates it, which is StagedShadowStore::Adopt's note one level down. Nothing needs
+        // the base while a level is still being assembled - the readers run at the barrier, after
+        // the last piece - so callers here ignore it.
+        const Uint8* AdoptRun(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent,
+                              Uint64 imageOffset, const void* bytes, SizeT byteSize) {
+            if (!m_copies) return nullptr;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            LevelShadow& shadow = m_shadows[key].Levels[PackLevel(uploadTarget, level)];
+            shadow.Extent = extent;
+            shadow.Defined = true;
+            shadow.GpuDirty = false;
+            return CopyRunInto(shadow, imageOffset, bytes, byteSize);
+        }
+
+        // THE WHOLE-LEVEL SPELLING: the run is the level's COMPLETE current content, beginning at
+        // the level's first byte, so nothing of a previous run survives it - which is what makes a
+        // re-adoption the right answer for the image-promotion readback and for every
+        // monolith-shaped caller. AdoptRun(offset = 0) with the entry replaced rather than grown
+        // into; under monolith both do nothing and return nullptr, and the caller
+        // (Ops_H_TextureSubData) has already returned before reaching either.
         const Uint8* Adopt(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent,
                            const void* bytes, SizeT byteSize) {
             if (!m_copies) return nullptr;
             const std::lock_guard<std::mutex> lock(m_mutex);
             LevelShadow& shadow = m_shadows[key].Levels[PackLevel(uploadTarget, level)];
             shadow.Extent = extent;
-            shadow.Bytes.clear();
-            if (bytes != nullptr && byteSize != 0) {
-                const auto* raw = static_cast<const Uint8*>(bytes);
-                shadow.Bytes.assign(raw, raw + byteSize);
-            }
             shadow.Defined = true;
             shadow.GpuDirty = false;
-            m_any.store(true, std::memory_order_release);
-            return shadow.Bytes.empty() ? nullptr : shadow.Bytes.data();
+            shadow.Bytes.clear();
+            shadow.Covered.clear();
+            return CopyRunInto(shadow, 0, bytes, byteSize);
         }
 
         // A storage-defining respecify named this level: it EXISTS from here on, at this
@@ -200,6 +266,9 @@ namespace MobileGL::MG_Remote::Server {
             LevelShadow& shadow = m_shadows[key].Levels[PackLevel(uploadTarget, level)];
             if (!shadow.Defined || shadow.Extent != extent) {
                 shadow.Bytes.clear();
+                // The covered set is a statement about THIS coordinate system, so it goes with
+                // the bytes it described.
+                shadow.Covered.clear();
                 shadow.GpuDirty = false;
             }
             shadow.Extent = extent;
@@ -242,24 +311,31 @@ namespace MobileGL::MG_Remote::Server {
         // Fatal when a sync wants texels this store has no covered run for. This is THE data
         // -correctness refusal of the texture half: a pending upload with no adoption behind
         // it, a GPU-generated level (no bytes by construction), a level the client never
-        // defined, and a monolith-arm misuse all land here, because in every one of them the
-        // bytes have never existed on this side and re-reading the client's shadow for them
-        // is the cross-role access tx exists to end.
+        // defined, a level whose pieces did not all arrive, and a monolith-arm misuse all land
+        // here, because in every one of them the bytes have never existed on this side and
+        // re-reading the client's shadow for them is the cross-role access tx exists to end.
+        //
+        // THE QUESTION IS "IS THE WHOLE LEVEL COVERED", not "are there any bytes": a split
+        // level's pieces arrive as separate records of the same apply batch, and this caller
+        // reads the level image WHOLE (LevelByteSize / the sync's texel base), so a level with
+        // one piece missing is as unreadable as one with none.
         const Uint8* RequireLevelBytes(Uint64 key, Uint16 uploadTarget, Uint16 level, const char* site) const {
             if (!m_copies) return nullptr;
             const std::lock_guard<std::mutex> lock(m_mutex);
             const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
-            if (shadow != nullptr && shadow->Defined && !shadow->Bytes.empty()) {
+            if (shadow != nullptr && shadow->Defined && !shadow->Bytes.empty() &&
+                StagedShadowStore::CoverageHas(shadow->Covered, 0, shadow->Bytes.size())) {
                 return shadow->Bytes.data();
             }
             MGLOG_F("MGPipe: Fatal{StageSnapshotTooNarrow, \"%s\"} - the texture sync wants the "
                     "bytes of (uploadTarget=%u, level=%u) and the server's staged shadow has no "
-                    "covered run for it. Under split the authoritative shadow is SERVER-OWNED "
-                    "(rule C) and resource_subdata is the only way bytes reach it, so these "
-                    "texels have never existed on this side: the record that should have "
-                    "carried them is missing, or the level's texels were generated on the GPU "
-                    "and no byte answer exists at all. Re-reading the client's shadow would be "
-                    "the cross-role access this store exists to end",
+                    "COMPLETE covered run for it. Under split the authoritative shadow is "
+                    "SERVER-OWNED (rule C) and resource_subdata is the only way bytes reach it, "
+                    "so these texels have never existed on this side: the record that should "
+                    "have carried them is missing, a piece of a level cut into stage-chunk runs "
+                    "has not arrived, or the level's texels were generated on the GPU and no "
+                    "byte answer exists at all. Re-reading the client's shadow would be the "
+                    "cross-role access this store exists to end",
                     site, static_cast<Uint32>(uploadTarget), static_cast<Uint32>(level));
             std::abort();
         }
@@ -269,7 +345,20 @@ namespace MobileGL::MG_Remote::Server {
         Bool IsCovered(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
             const std::lock_guard<std::mutex> lock(m_mutex);
             const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
-            return shadow != nullptr && shadow->Defined && !shadow->Bytes.empty();
+            if (shadow == nullptr || !shadow->Defined || shadow->Bytes.empty()) return false;
+            // THE WHOLE LEVEL, not merely "some bytes": a level assembled out of stage-chunk
+            // pieces is covered only once every piece has landed, and both readers of this
+            // answer then read the image whole - the image-promotion merge and Magma's
+            // unbacked-level readback.
+            return StagedShadowStore::CoverageHas(shadow->Covered, 0, shadow->Bytes.size());
+        }
+        // How many runs this level's coverage is made of: 1 for a whole-level adoption, one per
+        // piece for a level cut into stage-chunk slabs. Diagnostics for the unit cases, so a
+        // check can assert WHAT happened rather than that nothing blew up.
+        SizeT LevelCoveredRunCount(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
+            return shadow == nullptr ? 0 : shadow->Covered.size();
         }
         Bool IsLevelDefined(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
             const std::lock_guard<std::mutex> lock(m_mutex);
@@ -314,7 +403,6 @@ namespace MobileGL::MG_Remote::Server {
             return it == m_shadows.end() ? 0 : it->second.Levels.size();
         }
 
-    private:
         static Uint32 PackLevel(Uint16 uploadTarget, Uint16 level) {
             return (static_cast<Uint32>(uploadTarget) << 16) | static_cast<Uint32>(level);
         }
@@ -322,14 +410,38 @@ namespace MobileGL::MG_Remote::Server {
         struct LevelShadow {
             IntVec3 Extent{0, 0, 0};
             // The level's whole staged run. EMPTY for a defined-but-byteless level (null-data
-            // definition, GPU-generated) - emptiness is the coverage answer, not an error.
+            // definition, GPU-generated) - emptiness is the coverage answer, not an error. For a
+            // level adopted in pieces it is the assembled image, grown to the high-water mark of
+            // the runs.
             Vector<Uint8> Bytes;
+            // Sorted, disjoint, in the level image's byte coordinates, and EXACTLY the runs
+            // adopted for this level: a gap in it is a piece that never arrived, which is the
+            // Fatal below (StagedShadowStore's coverage rules, same helpers).
+            Vector<Range1D> Covered;
             Bool Defined = false;
             Bool GpuDirty = false;
         };
         struct TextureShadow {
             ska::flat_hash_map<Uint32, LevelShadow> Levels;
         };
+
+        // The copy both adoption spellings share, with the lock already held: grow the image to
+        // hold the run, place it, and widen the covered set by exactly its range. An empty run
+        // (a level defined with no bytes, or a null pointer) covers nothing - emptiness is the
+        // coverage answer for such a level, not an error.
+        const Uint8* CopyRunInto(LevelShadow& shadow, Uint64 imageOffset, const void* bytes,
+                                 SizeT byteSize) {
+            if (bytes != nullptr && byteSize != 0) {
+                const auto* raw = static_cast<const Uint8*>(bytes);
+                const SizeT needed = static_cast<SizeT>(imageOffset) + byteSize;
+                if (shadow.Bytes.size() < needed) shadow.Bytes.resize(needed, 0);
+                std::memcpy(shadow.Bytes.data() + imageOffset, raw, byteSize);
+                StagedShadowStore::CoverageAdd(shadow.Covered, static_cast<SizeT>(imageOffset),
+                                               needed);
+            }
+            m_any.store(true, std::memory_order_release);
+            return shadow.Bytes.empty() ? nullptr : shadow.Bytes.data();
+        }
 
         const LevelShadow* FindLevel(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
             const auto textureIt = m_shadows.find(key);

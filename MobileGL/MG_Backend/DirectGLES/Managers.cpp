@@ -2713,20 +2713,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                       const void* bytes, const MG_Pipe::MGPSubRegion* regions) {
                 // The region set is the upload planner's shape and stays in the applier's
                 // pending set; the store's coverage is the staged run itself
-                // (StagedTextureStore.h's coverage ruling).
-                (void)regions;
+                // (StagedTextureStore.h's coverage ruling). It is ALSO what places that run in
+                // the level image when the record carries a piece of the level rather than the
+                // whole of it (fix A2), which is why it is read here now.
                 auto& store = MG_Remote::Server::ServerStagedTexture();
                 if (!store.CopiesIntoServerStorage()) return;
                 // The applier's gate has already faulted every shape that reaches here without
                 // bytes, and under split the codec declared the run's length (Blob.Size) -
-                // TextureEmit.h:1285's "the bytes this record declares ARE the level shadow".
+                // TextureEmit.h's "the bytes this record declares ARE the level shadow".
                 if (bytes == nullptr || record.Blob.Size == 0) return;
                 const auto* stored = PipeTextureRecordForHandle(res);
                 if (stored == nullptr) return;
+                const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(res);
+                const Uint16 uploadTarget = MG_Pipe::MGPipeSubDataUploadTargetOf(record.Target);
                 const IntVec3 extent = MG_Remote::Server::StagedTextureUploadExtent(stored->Desc, record);
-                store.Adopt(MG_Remote::Server::StagedTextureStore::KeyForHandle(res),
-                            MG_Pipe::MGPipeSubDataUploadTargetOf(record.Target), record.Level, extent,
-                            bytes, static_cast<SizeT>(record.Blob.Size));
+                const SizeT runBytes = static_cast<SizeT>(record.Blob.Size);
+                // RegionCount == 0 IS the whole-level spelling - "the run is the level shadow",
+                // beginning at the level's first byte - so it is adopted with the spelling that
+                // replaces the level; every other record names a RUN of the level by its own box.
+                if (record.RegionCount == 0) {
+                    store.Adopt(key, uploadTarget, record.Level, extent, bytes, runBytes);
+                    return;
+                }
+                store.AdoptRun(key, uploadTarget, record.Level, extent,
+                               MG_Remote::Server::StagedTextureRunImageOffset(record, regions), bytes,
+                               runBytes);
             }
 
             void Ops_H_TextureRespecify(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc,
@@ -8419,6 +8430,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             // derived pointer, which is what the legacy arm sends - and one named
                             // line says so. Gated on subRectEligible because bpp is 0 otherwise
                             // and the regions are not read at all.
+                            //
+                            // FIX A2 IS THE SECOND LEGITIMATE DISAGREEMENT, and the fallback is
+                            // exactly right for it: a level too large to stage whole crosses as
+                            // several slab records (TextureEmit.h's MGPipeForEachTextureSlab) whose
+                            // regions carry offsets into THEIR OWN run rather than into the level
+                            // shadow. Every piece of the level is merged into this one entry, the
+                            // entry's rects are then read out of the SERVER'S WHOLE LEVEL IMAGE -
+                            // which is what the derived pointer names - and those piece-relative
+                            // offsets are precisely the ones that must not be used here.
                             Bool pendingOffsetsAgree = true;
                             if (pendingUpload != nullptr && subRectEligible) {
                                 for (const auto& region : pendingUpload->Regions) {
@@ -8430,7 +8450,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     MGLOG_E_ONCE("MGPipe: texture %u level %u carries a region whose SrcOffset "
                                                  "%llu is not its own origin (%d,%d,%d) at the level's pitch "
                                                  "(%llu expected) - the carried offsets are dropped and every "
-                                                 "rect is read from the shadow instead",
+                                                 "rect is read from the shadow instead. Expected once for a "
+                                                 "level cut into stage-chunk pieces, whose regions index their "
+                                                 "own run; otherwise this names a record whose regions and "
+                                                 "origins disagree",
                                                  MGB_TEXTURE_DIAG_NAME(pushedStorage, stateTextureObject), static_cast<Uint>(level),
                                                  static_cast<unsigned long long>(region.SrcOffset), region.X,
                                                  region.Y, region.Z,

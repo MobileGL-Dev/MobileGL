@@ -67,6 +67,13 @@
 
 #include <Config.h>
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+// MGPipeStageChunkBytes: the cap one texture level's staged run is cut at (see
+// MGPipeTextureStageChunkBytes below). Behind the build option for ResourceTracker.h's reason -
+// nothing under MG_Remote may be reachable from a pull build.
+#include <MG_Remote/Client/GpuWritePending.h>
+#endif
+
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -398,6 +405,170 @@ namespace MobileGL::MG_Pipe {
         region.SrcRowStride = wholeLevel ? 0u : pitch.RowStride;
         region.SrcSliceStride = wholeLevel ? 0u : pitch.SliceStride;
         return region;
+    }
+
+    // ---------------------------------------------------------------------------------
+    // THE STAGE-CHUNK SLAB SPLIT (fix A2)
+    // ---------------------------------------------------------------------------------
+    //
+    // ONE RECORD'S BLOB IS STAGED WHOLE IN SEG_STAGE, a linear arena, so a level shadow larger
+    // than that arena is Fatal{RingOverrun, "SEG_STAGE"} at the encoder rather than a split
+    // (PipeWireCodec.cpp:856-864) - the same wall PipeFill.cpp's content walks are cut at. It is
+    // not hypothetical: measured on the CI traces, a 512x128x33 GL_RGBA32F level is 34,603,008
+    // bytes and a 192-cube GL_RGBA16 level is 56,623,104, both against the default 32 MiB
+    // segment, so those glTexImage3D calls aborted their replays at the emitter.
+    //
+    // THE SPLIT IS INTO WHOLE-WIDTH SLABS. A piece is a set of CONSECUTIVE ROWS OF THE LEVEL
+    // SHADOW - {x0, y0, z0, w, dy, dz} in level coordinates - because that is the one shape whose
+    // box names both its texels and its byte run: the run begins at
+    // z0 * sliceStride + y0 * rowStride + x0 * bpp and is exactly the box's own byte extent. So
+    // the run's placement is derivable from the strides and box the record carries, and the far
+    // side never has to know the level's format or pixel size. Whole slices are the coarsest cut
+    // and the two CI blobs take it; a slice bigger than the cap falls back to whole rows, and a
+    // ROW bigger than the cap to whole texels inside one row - still one box exactly matching its
+    // own run, which is the property everything downstream depends on.
+    //
+    // THE PIECES ARE CONTIGUOUS AND ASCENDING, and their union is the level exactly once: the
+    // server assembles one level image out of them (StagedTextureStore::AdoptRun), so a gap would
+    // lose texels and an overlap would place them twice.
+    struct MGPipeTextureSlab {
+        MGPBox Box{};         // level coordinates
+        Uint64 RunOffset = 0; // the run's first byte, as an offset into the level shadow
+        Uint64 RunBytes = 0;  // the run's length, which is exactly the box's own byte extent
+    };
+
+    // THE WALK. `chunkBytes` is how many bytes one record may stage - MGPipeTextureStageChunkBytes
+    // below, 0 meaning "do not cut". False is the answer when the level cannot be tiled at this
+    // cap (a pitch that does not describe the level's bytes exactly, or a cap too small for one
+    // texel), and NOTHING has been handed out when it returns false, so the caller keeps the
+    // whole-level record it would have emitted anyway.
+    template <class Fn>
+    inline Bool MGPipeForEachTextureSlab(const IntVec3& levelSize, const MGPipeLevelPitch& pitch,
+                                         Uint64 levelBytes, SizeT chunkBytes, Fn&& body) {
+        const Uint64 cap = static_cast<Uint64>(chunkBytes);
+        const Uint64 width = static_cast<Uint64>(std::max<Int>(levelSize.x(), 0));
+        const Uint64 height = static_cast<Uint64>(std::max<Int>(levelSize.y(), 0));
+        const Uint64 depth = static_cast<Uint64>(std::max<Int>(levelSize.z(), 1));
+        const Uint64 texelBytes = pitch.BytesPerTexel;
+        const Uint64 rowStride = pitch.RowStride;
+        const Uint64 sliceStride = pitch.SliceStride;
+        if (cap == 0 || width == 0 || height == 0 || texelBytes == 0) return false;
+        // The pitch has to TILE THE LEVEL EXACTLY, because every piece's box is its run's extent:
+        // a level whose byte size is not sliceStride * depth is the one shape that would leave a
+        // tail no box describes, and it stays on the whole-level record.
+        if (sliceStride * depth != levelBytes) return false;
+
+        const auto emit = [&](Uint64 x0, Uint64 y0, Uint64 z0, Uint64 w, Uint64 h, Uint64 d,
+                              Uint64 runOffset, Uint64 runBytes) {
+            MGPipeTextureSlab slab{};
+            slab.Box = MGPBox{static_cast<Int32>(x0), static_cast<Int32>(y0), static_cast<Int32>(z0),
+                              static_cast<Uint32>(w), static_cast<Uint32>(h),
+                              static_cast<Uint32>(d)};
+            slab.RunOffset = runOffset;
+            slab.RunBytes = runBytes;
+            body(slab);
+        };
+
+        if (sliceStride <= cap) {
+            const Uint64 slabDepth = std::max<Uint64>(cap / sliceStride, 1);
+            for (Uint64 z = 0; z < depth; z += slabDepth) {
+                const Uint64 d = std::min(slabDepth, depth - z);
+                emit(0, 0, z, width, height, d, z * sliceStride, d * sliceStride);
+            }
+            return true;
+        }
+        if (rowStride <= cap) {
+            // One slice is bigger than the cap, so the pieces are runs of whole rows and none
+            // spans two slices - a piece that did would have a box this arithmetic cannot name.
+            const Uint64 slabRows = std::max<Uint64>(cap / rowStride, 1);
+            for (Uint64 z = 0; z < depth; ++z) {
+                for (Uint64 y = 0; y < height; y += slabRows) {
+                    const Uint64 h = std::min(slabRows, height - y);
+                    emit(0, y, z, width, h, 1, (z * height + y) * rowStride, h * rowStride);
+                }
+            }
+            return true;
+        }
+        const Uint64 slabTexels = cap / texelBytes;
+        if (slabTexels == 0) return false;
+        for (Uint64 z = 0; z < depth; ++z) {
+            for (Uint64 y = 0; y < height; ++y) {
+                for (Uint64 x = 0; x < width; x += slabTexels) {
+                    const Uint64 w = std::min(slabTexels, width - x);
+                    emit(x, y, z, w, 1, 1, (z * height + y) * rowStride + x * texelBytes,
+                         w * texelBytes);
+                }
+            }
+        }
+        return true;
+    }
+
+    // ONE CLIPPED REGION OF A PIECE, with its SrcOffset rebased onto the piece's own run.
+    // MGPipeTypes.h says SrcOffset is "into the blob", and under this split the blob IS the
+    // piece's run rather than the level shadow; the two coincide only for the whole-level record,
+    // where box and piece are the same box and this leaves the field exactly as
+    // MGPipeBuildSubRegion computes it. THE STRIDES STAY THE LEVEL'S: a clipped rect's rows are no
+    // more contiguous inside the piece than inside the level, and a 0 would be read as "tightly
+    // packed" - the whole-level spelling - which would repack the wrong bytes.
+    inline MGPSubRegion MGPipeBuildPieceRegion(const MGPBox& box, const MGPBox& piece,
+                                               const MGPipeLevelPitch& pitch) {
+        MGPSubRegion region{};
+        region.X = box.X;
+        region.Y = box.Y;
+        region.Z = box.Z;
+        region.W = box.W;
+        region.H = box.H;
+        region.D = box.D;
+        region.SrcOffset = static_cast<Uint64>(box.Z - piece.Z) * pitch.SliceStride +
+                           static_cast<Uint64>(box.Y - piece.Y) * pitch.RowStride +
+                           static_cast<Uint64>(box.X - piece.X) * pitch.BytesPerTexel;
+        region.SrcRowStride = pitch.RowStride;
+        region.SrcSliceStride = pitch.SliceStride;
+        return region;
+    }
+
+    inline MGPBox MGPipeIntersectBoxes(const MGPBox& a, const MGPBox& b) {
+        const Int64 x0 = std::max<Int64>(a.X, b.X);
+        const Int64 y0 = std::max<Int64>(a.Y, b.Y);
+        const Int64 z0 = std::max<Int64>(a.Z, b.Z);
+        const Int64 x1 = std::min<Int64>(static_cast<Int64>(a.X) + a.W, static_cast<Int64>(b.X) + b.W);
+        const Int64 y1 = std::min<Int64>(static_cast<Int64>(a.Y) + a.H, static_cast<Int64>(b.Y) + b.H);
+        const Int64 z1 = std::min<Int64>(static_cast<Int64>(a.Z) + a.D, static_cast<Int64>(b.Z) + b.D);
+        if (x1 <= x0 || y1 <= y0 || z1 <= z0) return MGPBox{};
+        return MGPBox{static_cast<Int32>(x0), static_cast<Int32>(y0), static_cast<Int32>(z0),
+                      static_cast<Uint32>(x1 - x0), static_cast<Uint32>(y1 - y0),
+                      static_cast<Uint32>(z1 - z0)};
+    }
+
+    // THE REGIONS ONE PIECE CARRIES: every dirty rect clipped to the piece's box, each with its
+    // own run-relative offset. A piece the dirty set does not reach still carries ONE region - its
+    // own box - and that is not padding: RegionCount == 0 is the whole-level spelling (a bare box
+    // the far side reads as tightly packed), and the piece's bytes have to cross whether or not
+    // any of them changed, because the server's level image is assembled from these runs and a
+    // hole in it is a texel read nothing on that side can answer.
+    inline SizeT MGPipeBuildSlabRegions(const MGPBox* rects, SizeT rectCount,
+                                        const MGPipeTextureSlab& slab, const MGPipeLevelPitch& pitch,
+                                        MGPSubRegion* out, SizeT maxOut) {
+        if (out == nullptr || maxOut == 0) return 0;
+        SizeT count = 0;
+        for (SizeT i = 0; i < rectCount && count < maxOut; ++i) {
+            const MGPBox clipped = MGPipeIntersectBoxes(rects[i], slab.Box);
+            if (clipped.W == 0 || clipped.H == 0 || clipped.D == 0) continue;
+            out[count++] = MGPipeBuildPieceRegion(clipped, slab.Box, pitch);
+        }
+        if (count == 0) out[count++] = MGPipeBuildPieceRegion(slab.Box, slab.Box, pitch);
+        return count;
+    }
+
+    // The cap one level's staged run is cut at, or 0 for "keep the whole level in one record":
+    // monolith, the server role's own uploads and a process with no session - every unit gate -
+    // all answer 0, which is what keeps those lanes byte for byte what they were.
+    inline SizeT MGPipeTextureStageChunkBytes() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return MG_Remote::Client::MGPipeStageChunkBytes();
+#else
+        return 0;
+#endif
     }
 
     // ---------------------------------------------------------------------------------
@@ -984,6 +1155,10 @@ namespace MobileGL::MG_Pipe {
         const MGPTextureParams& LastParams() const { return m_lastParams; }
         const MGPSubData& LastSubData() const { return m_lastSubData; }
         const Vector<MGPSubRegion>& LastRegions() const { return m_regions; }
+        // HOW MANY resource_subdata records the last level's drain put on the wire: 1 for the
+        // whole-level shape, N for a stage-chunk split (fix A2). LastSubData() and LastRegions()
+        // are the LAST piece's, and that is the whole-level record in the 1 case.
+        Uint64 SubDataPieceCount() const { return m_subDataPieces; }
         Uint64 CreateCount() const { return m_creates; }
         Uint64 RespecifyCount() const { return m_respecifies; }
         Uint64 ParamCount() const { return m_paramSets; }
@@ -1205,7 +1380,15 @@ namespace MobileGL::MG_Pipe {
             }
         }
 
-        // True when the level's record went out and its flags may be cleared.
+        // True when the level's record(s) went out and its flags may be cleared.
+        //
+        // ONE LEVEL MAY TAKE MORE THAN ONE RECORD (fix A2). A level shadow larger than the
+        // staging segment's chunk budget is cut into whole-width slabs, each staged as its own
+        // resource_subdata (MGPipeForEachTextureSlab above; the buffer half's walks are cut the
+        // same way). Every piece is emitted even when nothing in it changed, because the
+        // server's level image is assembled out of these runs; and the level's dirty flag is
+        // cleared only when EVERY piece was accepted - a refusal anywhere leaves the whole level
+        // dirty and on the drain list, which is the safe direction and self-heals.
         Bool EmitOneLevel(const DrainEntry& pending, Uint64& bytes) {
             ITextureObject* texture = ResolveTexture(pending.Handle);
             if (texture == nullptr) return true; // the object is gone; nothing is owed
@@ -1231,69 +1414,122 @@ namespace MobileGL::MG_Pipe {
             // beats many small ones. The invariant that makes the server's choice safe is that
             // the two describe the SAME texels: every rect lies inside the box, and their union
             // is the box.
+            //
+            // READ AS BOXES, ONCE, because both shapes below want them in that form: the
+            // whole-level record converts each one straight back through MGPipeBuildSubRegion,
+            // and a piece clips each one to its own slab.
             MG_State::GLState::MipmapDirtyRegion rects[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
             const SizeT rectCount = mipmap->GetStorageDirtyRects(
                 uploadTarget, level, rects, MG_State::GLState::MipmapStorage::kMaxDirtyRects);
-            m_regions.clear();
-            m_regions.reserve(rectCount);
-            for (SizeT i = 0; i < rectCount; ++i) {
-                m_regions.push_back(
-                    MGPipeBuildSubRegion(MGPipeBoxOfDirtyRegion(rects[i]), levelSize, pitch));
-            }
+            MGPBox rectBoxes[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
+            for (SizeT i = 0; i < rectCount; ++i) rectBoxes[i] = MGPipeBoxOfDirtyRegion(rects[i]);
 
-            m_lastSubData = MGPSubData{};
-            m_lastSubData.Res = pending.Handle;
-            // The contract's packer takes two Uint32s (c0c keeps MGPipeTypes.h backend-neutral),
-            // so the frontend enumeration is widened here rather than there.
-            m_lastSubData.Target = MGPipePackSubDataTarget(
-                static_cast<Uint32>(MGPipeResourceTargetForTextureTarget(texture->GetTarget())),
-                static_cast<Uint32>(uploadTarget));
-            m_lastSubData.Level = static_cast<Uint16>(level);
-            m_lastSubData.LevelWidth = static_cast<Uint32>(levelSize.x());
-            m_lastSubData.LevelHeight = static_cast<Uint32>(levelSize.y());
-            m_lastSubData.LevelDepth = static_cast<Uint32>(levelSize.z());
-            // ALWAYS 1 ON THE CLIENT SIDE. The conversion fallbacks (the packed-norm, widened
-            // and fallback upload preparers) are the server's and run there, so the bytes this
-            // record declares ARE the level shadow. The server clears the flag internally when
-            // it converts, which is the `uploadData == mipData` pointer comparison turned into
-            // a carried fact.
-            m_lastSubData.SourceIsVerbatimLevelShadow = 1;
-            m_lastSubData.UnionBox = unionBox;
-            m_lastSubData.RegionCount = static_cast<Uint32>(m_regions.size());
-            // "THIS RECORD DOES NOT DECLARE ITS BLOB", which is what a monolith emission is:
-            // Seg is kMGHostSpanSegNone, Offset IS the address of the level shadow base, and a
-            // zero Size means the destination box is what bounds the write. A non-zero Size
-            // that did not match the record's own byte count would be Fatal{ProtocolCorruption}
-            // on the far side, and a texture record's byte count is the server's to compute
-            // once it has picked box-or-rects.
-            m_lastSubData.Blob.Seg = kMGHostSpanSegNone;
-            m_lastSubData.Blob.Offset = static_cast<Uint64>(reinterpret_cast<std::uintptr_t>(shadow));
-            m_lastSubData.Blob.Size = 0;
+            Bool dispatched = false;
+            Bool accepted = true;
+            m_subDataPieces = 0;
+
+            const auto fillRecord = [&](const MGPBox& box, Uint64 runAddress) {
+                m_lastSubData = MGPSubData{};
+                m_lastSubData.Res = pending.Handle;
+                // The contract's packer takes two Uint32s (c0c keeps MGPipeTypes.h backend-neutral),
+                // so the frontend enumeration is widened here rather than there.
+                m_lastSubData.Target = MGPipePackSubDataTarget(
+                    static_cast<Uint32>(MGPipeResourceTargetForTextureTarget(texture->GetTarget())),
+                    static_cast<Uint32>(uploadTarget));
+                m_lastSubData.Level = static_cast<Uint16>(level);
+                m_lastSubData.LevelWidth = static_cast<Uint32>(levelSize.x());
+                m_lastSubData.LevelHeight = static_cast<Uint32>(levelSize.y());
+                m_lastSubData.LevelDepth = static_cast<Uint32>(levelSize.z());
+                // ALWAYS 1 ON THE CLIENT SIDE. The conversion fallbacks (the packed-norm, widened
+                // and fallback upload preparers) are the server's and run there, so the bytes this
+                // record declares ARE the level shadow. The server clears the flag internally when
+                // it converts, which is the `uploadData == mipData` pointer comparison turned into
+                // a carried fact.
+                m_lastSubData.SourceIsVerbatimLevelShadow = 1;
+                m_lastSubData.UnionBox = box;
+                m_lastSubData.RegionCount = static_cast<Uint32>(m_regions.size());
+                // "THIS RECORD DOES NOT DECLARE ITS BLOB", which is what a monolith emission is:
+                // Seg is kMGHostSpanSegNone, Offset IS the address of this record's run in the
+                // level shadow, and a zero Size means the destination box is what bounds the
+                // write. A non-zero Size that did not match the record's own byte count would be
+                // Fatal{ProtocolCorruption} on the far side, and a texture record's byte count is
+                // the server's to compute once it has picked box-or-rects. Under split the encoder
+                // fills Seg/Size from the staged run it just cut.
+                m_lastSubData.Blob.Seg = kMGHostSpanSegNone;
+                m_lastSubData.Blob.Offset = runAddress;
+                m_lastSubData.Blob.Size = 0;
+            };
 
             // THE REGION LIST IS THE CALL'S VARIABLE TAIL AND IT IS HANDED OVER (M1). v1 built
             // m_regions, wrote its size into RegionCount and passed nothing, so on this base -
             // where the applier's tail exists - every scattered upload would have declared N
             // regions and supplied none (the applier faults on exactly that). A null tail is
             // correct ONLY for the whole-level shape, where RegionCount is 0.
-            Bool accepted = false;
-            Bool dispatched = false;
-            if constexpr (MGPipeTextureRecordsReachTheApplier()) {
-                dispatched = true;
-                // `levelBytes` closes CONTRACT-P5 table 1 row 7's open half. The record still
-                // declares Blob.Size 0 on the monolith arm - where the applier reads the
-                // companion pointer and the destination box bounds the write - but under split
-                // the staged run needs a length, and the comment above already says what it
-                // is: "the bytes this record declares ARE the level shadow". The regions' own
-                // SrcOffsets index into exactly that run.
-                accepted = MGPipeRouteResourceSubData(m_lastSubData, shadow,
-                                                      static_cast<Uint64>(levelBytes),
-                                                      m_regions.empty() ? nullptr : m_regions.data());
+            const auto emitRecord = [&](const void* run, Uint64 runBytes) {
+                Bool pieceAccepted = true;
+                if constexpr (MGPipeTextureRecordsReachTheApplier()) {
+                    dispatched = true;
+                    // `runBytes` closes CONTRACT-P5 table 1 row 7's open half. The record still
+                    // declares Blob.Size 0 on the monolith arm - where the applier reads the
+                    // companion pointer and the destination box bounds the write - but under split
+                    // the staged run needs a length, and the comment above already says what it
+                    // is: "the bytes this record declares ARE the level shadow". For a piece that
+                    // is the piece's own run of it, and the regions' SrcOffsets index into exactly
+                    // that run.
+                    pieceAccepted = MGPipeRouteResourceSubData(
+                        m_lastSubData, run, runBytes,
+                        m_regions.empty() ? nullptr : m_regions.data());
+                } else {
+                    (void)run;
+                    (void)runBytes;
+                }
+                ++m_subDatas;
+                ++m_subDataPieces;
+                if (MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ClientTextureUploadEmissions, 1);
+                }
+                bytes += sizeof(MGPSubData) + m_regions.size() * sizeof(MGPSubRegion);
+                return pieceAccepted;
+            };
+
+            // WHICH SHAPE THIS LEVEL TAKES. The split is taken only when the level's whole run
+            // does not fit one record's chunk budget; a level that fits keeps the single
+            // whole-level record, field for field what this emitter has always sent and what
+            // every existing expectation is written against.
+            const SizeT chunkBytes = MGPipeTextureStageChunkBytes();
+            Bool split = false;
+            if (chunkBytes != 0 && static_cast<Uint64>(levelBytes) > static_cast<Uint64>(chunkBytes)) {
+                split = MGPipeForEachTextureSlab(
+                    levelSize, pitch, levelBytes, chunkBytes, [&](const MGPipeTextureSlab& slab) {
+                        // One slot per rect plus one for a piece no rect reaches, which is the
+                        // most MGPipeBuildSlabRegions can write.
+                        m_regions.assign(std::max<SizeT>(rectCount, 1), MGPSubRegion{});
+                        const SizeT pieceRegions = MGPipeBuildSlabRegions(
+                            rectBoxes, rectCount, slab, pitch, m_regions.data(), m_regions.size());
+                        m_regions.resize(pieceRegions);
+                        fillRecord(slab.Box,
+                                   reinterpret_cast<Uint64>(reinterpret_cast<std::uintptr_t>(shadow)) +
+                                       slab.RunOffset);
+                        const Bool pieceAccepted = emitRecord(
+                            static_cast<const Uint8*>(shadow) + slab.RunOffset, slab.RunBytes);
+                        accepted = accepted && pieceAccepted;
+                    });
             }
-            ++m_subDatas;
-            if (MG_Util::PipeStats::Enabled()) {
-                MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ClientTextureUploadEmissions, 1);
+            if (!split) {
+                // THE WHOLE-LEVEL RECORD: one run, the level shadow itself, beginning at the
+                // level's first byte - which is why Blob.Offset is the shadow base and why the
+                // box may be the dirty union box without describing the run. The far side learned
+                // to tell the two shapes apart from the run's own length
+                // (StagedTextureStore::AdoptRunImageOffset).
+                m_regions.clear();
+                m_regions.reserve(rectCount);
+                for (SizeT i = 0; i < rectCount; ++i) {
+                    m_regions.push_back(MGPipeBuildSubRegion(rectBoxes[i], levelSize, pitch));
+                }
+                fillRecord(unionBox, static_cast<Uint64>(reinterpret_cast<std::uintptr_t>(shadow)));
+                accepted = emitRecord(shadow, static_cast<Uint64>(levelBytes));
             }
-            bytes += sizeof(MGPSubData) + m_regions.size() * sizeof(MGPSubRegion);
+
             // THE CLIENT CLEARS ITS OWN FLAG ONLY FOR A LEVEL THE APPLIER ACCEPTED (D-D5 step 1
             // read literally; ID-18 M3). v1 cleared on DISPATCH - and, with the wired constant
             // still 0, even on a call the `if constexpr` had discarded - so any refusal left the
@@ -1307,7 +1543,10 @@ namespace MobileGL::MG_Pipe {
             // direction and self-heals: the ordinary cause is a record the applier does not
             // hold, and the next respecify's self-healing create gives it one. It is LOUD
             // because a permanently refused level would otherwise re-emit once per verb for
-            // ever with nothing to show for it.
+            // ever with nothing to show for it. WITH PIECES IN FLIGHT it is the same rule one
+            // level up: every piece is still emitted, so a refusal leaves the server with a
+            // partial image and the WHOLE level dirty, and the next drain re-sends every piece -
+            // an adoption of the same bytes twice is idempotent.
             if (dispatched && !accepted) {
                 ++m_refusedSubDatas;
                 MGLOG_E_ONCE("MGPipe: resource_subdata for texture {slot=%u, gen=%u} level %u was refused; "
@@ -1333,6 +1572,8 @@ namespace MobileGL::MG_Pipe {
         Uint64 m_respecifies = 0;
         Uint64 m_paramSets = 0;
         Uint64 m_subDatas = 0;
+        // What the LAST EmitOneLevel put on the wire: 1 unless a level's run was cut into slabs.
+        Uint64 m_subDataPieces = 0;
         Uint64 m_refusedSubDatas = 0;
         Uint64 m_refusedParamSets = 0;
         Uint64 m_samplerCsoPayloadBytes = 0;
