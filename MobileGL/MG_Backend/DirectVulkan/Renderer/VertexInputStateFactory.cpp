@@ -442,33 +442,41 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (Uint32 location = 0; location < elements.AttributeCount; ++location) {
             const auto& attr = elements.Attributes[location];
             if (!attr.Enabled || !(activeMask & (1u << location))) continue;
+            const auto reject = [&](const char* reason, VkFormat format = VK_FORMAT_UNDEFINED) {
+                MGLOG_E("Magma wire vertex layout: %s location=%u type=%u size=%u normalized=%u integer=%u long=%u bgra=%u stride=%d offset=%llu format=%d bufferWindow=%u+%u activeMask=0x%x",
+                    reason, location, attr.Type, static_cast<Uint32>(attr.Size), static_cast<Uint32>(attr.Normalized),
+                    static_cast<Uint32>(attr.IsInteger), static_cast<Uint32>(attr.IsLong), static_cast<Uint32>(attr.IsBgra),
+                    attr.Stride, static_cast<unsigned long long>(attr.Offset), static_cast<Int>(format),
+                    state.VertexBufferStart, state.VertexBufferCount, activeMask);
+                return false;
+            };
             // set_vertex_buffers is flattened PER ATTRIBUTE (VertexInputEmit.h), not
             // indexed by the original ARB binding point in attr.BindingIndex.
             if (location < state.VertexBufferStart ||
-                location - state.VertexBufferStart >= state.VertexBufferCount) return false;
+                location - state.VertexBufferStart >= state.VertexBufferCount) return reject("buffer-window");
             const auto& buffer = state.VertexBuffers[location];
             const auto type = static_cast<DataType>(attr.Type);
-            if (attr.Stride < 0 || attr.Size < 1 || attr.Size > 4) return false;
+            if (attr.Stride < 0 || attr.Size < 1 || attr.Size > 4) return reject("attribute-shape");
             VkFormat format = ToVkVertexFormat(type, attr.Size, attr.Normalized, attr.IsInteger,
                                                attr.IsBgra, attr.IsLong);
             auto conversion = VertexStreamConversion::None;
             if (format == VK_FORMAT_UNDEFINED && type == DataType::Float64) {
                 const auto* backend = MG_Remote::Server::ServerLoopInstance().Backend();
-                if (backend && backend->GetDynamicParameters().SupportsFloat64VertexAttributes) return false;
+                if (backend && backend->GetDynamicParameters().SupportsFloat64VertexAttributes) return reject("native-fp64-format");
                 format = ToFloat32VertexFormat(attr.Size);
                 conversion = VertexStreamConversion::Float64ToFloat32;
             }
-            if (format == VK_FORMAT_UNDEFINED) return false;
+            if (format == VK_FORMAT_UNDEFINED) return reject("format-map");
             if (!SupportsVertexBufferFormat(format)) {
-                if (!IsScaledIntegerVertexFormat(format)) return false;
+                if (!IsScaledIntegerVertexFormat(format)) return reject("native-format-feature", format);
                 format = ToFloat32VertexFormat(attr.Size);
                 conversion = VertexStreamConversion::ScaledIntegerToFloat32;
-                if (!SupportsVertexBufferFormat(format)) return false;
+                if (!SupportsVertexBufferFormat(format)) return reject("converted-format-feature", format);
             }
             const SizeT elementSize = GetAttributeByteSize(type, attr.Size, attr.IsBgra);
-            if (!elementSize) return false;
+            if (!elementSize) return reject("element-size", format);
             const Uint64 offset = attr.Offset + buffer.Offset;
-            if (offset < attr.Offset) return false;
+            if (offset < attr.Offset) return reject("offset-overflow", format);
             const SizeT alignment = (type == DataType::Int2101010Rev || type == DataType::Uint2101010Rev)
                 ? elementSize : GetComponentSize(type);
             if (conversion == VertexStreamConversion::None && alignment > 1 &&
