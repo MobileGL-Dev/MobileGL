@@ -36,10 +36,8 @@ GetBufferBindingSlot@ReadPixels
 # BoundDrawIndirectBufferId's GetBufferBindingSlot(DrawIndirect) a latent row that "would surface
 # as GetBufferBindingSlot@DrawArrays if an indirect tier were ever forced under strict", and then
 # gated the five multi-draw tiers, which forced it. Retires in P8 (FieldOwnership.def:78).
-GetBufferBindingSlot@DrawArrays
 GetFramebufferBindingSlot@ReadPixels
 GetProgramObject@ShaderStorageBlockBinding
-GetTextureObject@CopyImageSubData
 GetTextureUnitObject@CopyTexImage2D
 GetTransformFeedbackProgram@DrawArrays
 ValidateProgramName@ShaderStorageBlockBinding
@@ -48,5 +46,9 @@ ValidateProgramName@ShaderStorageBlockBinding
 # said so - an open transform-feedback span, or a draw carrying client vertex arrays - which no
 # table indexed by (field, verb) can see. All three are pulls on the draw verb by entries that
 # are NOT the ordinary draw path.
-GetBoundVertexArray@DrawArrays
 GetBufferBindingPoint@DrawArrays
+# P5f fm remeasurement: 179/179 lane entries, Fatal=0, six ordinary pairs above plus
+# GetBufferBindingPoint@DrawArrays escalated. GetTextureObject@CopyImageSubData retired
+# through the shared fe/fm handle endpoint seam. The absent GetBoundVertexArray@DrawArrays
+# and GetBufferBindingSlot@DrawArrays were already baseline-stale (f1-report §8.1);
+# remove those two stale rows without widening either side of the ratchet.
