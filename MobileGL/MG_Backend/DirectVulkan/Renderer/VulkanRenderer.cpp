@@ -3154,9 +3154,15 @@ void main() {
 
     inline ProgramFactory::CompileOptionFlags GetShaderTransformFlags(VkSurfaceTransformFlagBitsKHR preTransform) {
         ProgramFactory::CompileOptionFlags flags = ProgramFactory::CompileOptionBit::PositionZRemap;
-        const auto& currentDrawFBO =
-            MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-        if (currentDrawFBO != nullptr && currentDrawFBO->IsDefaultFramebuffer()) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const auto* wireFbo = MG_Config::Transport != MG_Config::TransportMode::Monolith ? MG_Pipe::MGPipeApplier().DrawFramebuffer() : nullptr;
+        const Bool isDefault = wireFbo ? wireFbo->IsDefault :
+            MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject()->IsDefaultFramebuffer();
+#else
+        const auto& currentDrawFBO = MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+        const Bool isDefault = currentDrawFBO != nullptr && currentDrawFBO->IsDefaultFramebuffer();
+#endif
+        if (isDefault) {
             flags |= ProgramFactory::CompileOptionBit::PositionYFlip;
             // gl_FragCoord follows the same rule the default-framebuffer RECTANGLES follow
             // (GetDefaultFramebufferRectMapping): flipped for identity/180, left alone under a
@@ -3420,6 +3426,9 @@ void main() {
         if (m_device != VK_NULL_HANDLE) {
             VK_VERIFY(vkDeviceWaitIdle(m_device));
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        DestroyWireDrawPass();
+#endif
         OnSubmitsCompletedUpTo(m_submitCounter);
         DestroySubmitFencePool();
 
@@ -5210,7 +5219,7 @@ void main() {
 
     // A program that runs a geometry shader AND captures transform feedback. Both halves are
     // link-time properties, so this is safe to fold into a pipeline keyed on the program hash.
-    static Bool ProgramCapturesXfbFromGeometryStage(const MG_State::GLState::ProgramObject& program) {
+    static Bool ProgramCapturesXfbFromGeometryStage(const MagmaProgramSource& program) {
         if (program.GetTransformFeedbackVaryingCount() == 0) return false;
         // Both halves are link-time properties, so both are asked of the LAST LINK. Reading the
         // live attach list would let a glAttachShader that has not been linked in yet - which GL
@@ -5249,12 +5258,22 @@ void main() {
 
     VkPipeline VulkanRenderer::GetOrCreatePipeline(
             GLenum mode,
-            const MG_State::GLState::ProgramObject& program,
+            const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj,
             ProgramFactory::CompileOptionFlags transformFlags,
             const MG_State::GLState::VertexArrayObject& vao,
             const RenderPassEntry& renderPassEntry,
             Bool primitiveRestartEnable) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return GetOrCreatePipelineWithInput(mode, program, programObj, transformFlags,
+            m_vertexInputStateFactory->GetOrCreateVertexInputState(vao), renderPassEntry, primitiveRestartEnable);
+    }
+
+    VkPipeline VulkanRenderer::GetOrCreatePipelineWithInput(GLenum mode, const MagmaProgramSource& program,
+            const ProgramFactory::VkProgramObject& programObj, ProgramFactory::CompileOptionFlags transformFlags,
+            const VertexInputStateFactory::BackendVertexInputState& vis, const RenderPassEntry& renderPassEntry,
+            Bool primitiveRestartEnable) {
+#endif
         Bool invertClockwise = transformFlags & ProgramFactory::CompileOptionBit::PositionYFlip;
         if (programObj.stages.empty()) {
             MGLOG_D("GetOrCreatePipeline skipped: program has no shader stages");
@@ -5272,7 +5291,9 @@ void main() {
         // payload key on the resolved LAYOUT hash instead, so draws over identical
         // layouts share one pipeline.
         // The one-arg fetch rides the VAO's state-pointer memo (no hash, no map).
+#if !MOBILEGL_BUILD_DISAGGREGATED
         auto& vis = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
+#endif
         const Uint64 vertexLayoutHash = vis.layoutHash;
         const Uint64 renderPassHash = renderPassEntry.hash;
         // The pipeline-relevant subset only: glViewport / glScissor / glBlendColor / glStencilMask
@@ -5506,6 +5527,16 @@ void main() {
         // (stencil) test always passes and nothing is written - even when the bound
         // image is a packed depth-stencil texture attached through only one half.
         {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
+                if (fbo && !fbo->IsDefault) {
+                    if (fbo->Depth.Kind == MG_Pipe::kMGPipeSurfaceKindNone) depthTestEnabled = false;
+                    if (fbo->Stencil.Kind == MG_Pipe::kMGPipeSurfaceKindNone) stencilTestEnabled = false;
+                }
+            } else
+#endif
+            {
             const auto& gatingFbo =
                 MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
             if (gatingFbo != nullptr && !gatingFbo->IsDefaultFramebuffer()) {
@@ -5518,6 +5549,7 @@ void main() {
                     stencilTestEnabled = false;
                 }
             }
+        }
         }
         const StencilFaceState& frontStencil = MGB_CTX->GetStencilState(StencilFace::Front);
         const StencilFaceState& backStencil = MGB_CTX->GetStencilState(StencilFace::Back);
@@ -5726,12 +5758,31 @@ void main() {
         MOBILEGL_ASSERT(payload.colorAttachmentCount <= PipelineFactory::PipelineCreatePayload::kMaxColorAttachments,
                         "GetOrCreatePipeline: colorAttachmentCount=%u exceeds payload capacity",
                         payload.colorAttachmentCount);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const auto* wireFbo = MG_Config::Transport != MG_Config::TransportMode::Monolith ?
+            MG_Pipe::MGPipeApplier().DrawFramebuffer() : nullptr;
+        const auto drawFboBinding = wireFbo ? SharedPtr<MG_State::GLState::FramebufferObject>{} :
+            MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+#else
         const auto& drawFboBinding =
             MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+#endif
         MOBILEGL_ASSERT(drawFboBinding != nullptr, "GetOrCreatePipeline: draw framebuffer is null");
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const Bool isDefaultDrawFbo = wireFbo ? wireFbo->IsDefault : drawFboBinding->IsDefaultFramebuffer();
+        Array<FramebufferAttachmentType, MG_Pipe::kMGPipeMaxColorAttachments> wireDrawBuffers{};
+        if (wireFbo) for (SizeT i = 0; i < wireDrawBuffers.size(); ++i)
+            wireDrawBuffers[i] = wireFbo->DrawBuffers[i] < 0 ? FramebufferAttachmentType::None :
+                static_cast<FramebufferAttachmentType>(static_cast<Int>(FramebufferAttachmentType::Color0) + wireFbo->DrawBuffers[i]);
+        const auto& drawBuffers = wireFbo ? wireDrawBuffers : drawFboBinding->GetDrawBuffers();
+#else
         const Bool isDefaultDrawFbo = drawFboBinding->IsDefaultFramebuffer();
         const auto& drawBuffers = drawFboBinding->GetDrawBuffers();
+#endif
         auto resolveCompleteColorAttachmentTexture = [&](Uint32 drawBufferIndex) -> MG_State::GLState::ITextureObject* {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (wireFbo) return nullptr;
+#endif
             if (isDefaultDrawFbo || drawBufferIndex >= drawBuffers.size()) {
                 return nullptr;
             }
@@ -5782,6 +5833,15 @@ void main() {
                 attachmentColorWriteMask = 0;
                 effectiveBlendEnabled = false;
             }
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (wireFbo && !isDefaultDrawFbo) {
+                const Int32 slot = wireFbo->DrawBuffers[i];
+                if (slot < 0 || wireFbo->Color[slot].Kind == MG_Pipe::kMGPipeSurfaceKindNone) {
+                    attachmentColorWriteMask = 0;
+                    effectiveBlendEnabled = false;
+                }
+            } else
+#endif
             if (!isDefaultDrawFbo && i < drawBuffers.size()) {
                 const auto drawBuffer = drawBuffers[i];
                 colorAttachmentTexture = resolveCompleteColorAttachmentTexture(i);
@@ -5877,6 +5937,12 @@ void main() {
 
                 VkFormat colorAttachmentFormat = VK_FORMAT_UNDEFINED;
                 Int textureExternalIndex = -1;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                if (wireFbo && !isDefaultDrawFbo) {
+                    const Int32 slot = wireFbo->DrawBuffers[i];
+                    colorAttachmentFormat = ResolveWireImage(*wireFbo, wireFbo->Color[slot], VK_IMAGE_ASPECT_COLOR_BIT).format;
+                } else
+#endif
                 if (isDefaultDrawFbo) {
                     colorAttachmentFormat = m_swapchainObject.GetSurfaceFormat().format;
                 } else if (colorAttachmentRenderbuffer != nullptr) {
@@ -6004,7 +6070,7 @@ void main() {
 
     Bool VulkanRenderer::PrepareStorageImageTextures(
         FrameContext::FrameData& frame,
-        const MG_State::GLState::ProgramObject& program,
+        const MagmaProgramSource& program,
         const ProgramFactory::VkProgramObject& programObj) {
         if (!programObj.hasStorageImages) {
             return true;
@@ -6100,7 +6166,7 @@ void main() {
     }
     Bool VulkanRenderer::PrepareSamplerImageFeedbackSnapshots(
         FrameContext::FrameData& frame,
-        const MG_State::GLState::ProgramObject& program,
+        const MagmaProgramSource& program,
         const ProgramFactory::VkProgramObject& programObj,
         VkPipelineStageFlags consumerShaderStageMask) {
         auto& feedbackBindings = m_samplerImageFeedbackScratch;
@@ -6801,6 +6867,10 @@ void main() {
     Bool VulkanRenderer::SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
                                    const DrawCmdParam& drawParams,
                                    const IndexBufferView* pIndexBufferView) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
+            return SetupWireDraw(frame, mode, aspects, drawParams);
+#endif
         // Sync each sampled texture at most once across this whole draw: the layout
         // probe loop, the post-transition loop, and ResolveSamplerDescriptor would
         // otherwise each re-run the full SyncTexture path on the same textures.
@@ -7417,6 +7487,12 @@ void main() {
     }
 
     void VulkanRenderer::DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            DispatchWireCompute(numGroupsX, numGroupsY, numGroupsZ);
+            return;
+        }
+#endif
         m_textureManager->CollectGarbage();
         auto& frame = m_frameContext.GetCurrent();
         // The DISPATCH accessor: with a pipeline bound this is its compute stage program
@@ -7637,6 +7713,7 @@ void main() {
     }
 
     #include "WireFramebuffer.inc"
+    #include "WireDraw.inc"
 
     void VulkanRenderer::Clear(GLbitfield mask) {
 #if MOBILEGL_BUILD_DISAGGREGATED

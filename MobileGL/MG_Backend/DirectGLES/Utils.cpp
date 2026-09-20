@@ -38,6 +38,15 @@
 
 namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
+    // read_pixels writes server reply scratch. The client refuses PACK_BUFFER before
+    // emission, so no frontend pack binding can affect this destination.
+    static const SharedPtr<MG_State::GLState::BufferObject>& SplitReadbackPackBuffer() {
+        static const SharedPtr<MG_State::GLState::BufferObject> none;
+        return none;
+    }
+#endif
+
+#if MOBILEGL_BUILD_DISAGGREGATED
     const FormatCapabilityCache* ActiveBackendFormatCaps() {
         // Under a live split session the SERVER's private backend is what owns the context on the
         // apply thread (and these reads all run there), so its cache is the authoritative one.
@@ -2350,7 +2359,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool StoreClientRows(SizeT dstPixelBytes, SizeT swapGroupSize, GLsizei width, GLsizei sliceHeight,
                                     GLsizei sliceCount, void* pixels, Bool applyPackImageParams, FillRow&& fillRow) {
             const auto& pixelPackBufferObject =
-                MGB_CTX->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MG_Config::Transport != MG_Config::TransportMode::Monolith
+                ? SplitReadbackPackBuffer() :
+#endif
+            MGB_CTX->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
 
             // Destination layout is computed from the client-side PACK parameters; only the actual pixel
             // rows are written so skip regions of the destination stay untouched.

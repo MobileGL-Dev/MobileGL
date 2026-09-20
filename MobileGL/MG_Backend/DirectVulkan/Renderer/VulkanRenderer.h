@@ -457,6 +457,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void ReadWirePixels(GLint x, GLint y, GLsizei width, GLsizei height,
                             GLenum format, GLenum type, void* pixels);
         void GenerateWireMipmap();
+        Bool SetupWireDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
+                           const DrawCmdParam& drawParams);
+        void DestroyWireDrawPass();
+        void DispatchWireCompute(GLuint x, GLuint y, GLuint z);
+        UniquePtr<RenderPassEntry> m_wireDrawPass;
+        Vector<VkImageView> m_wireDrawViews;
+        VkPipeline GetOrCreatePipelineWithInput(GLenum mode, const MagmaProgramSource& program,
+            const ProgramFactory::VkProgramObject& programObj, ProgramFactory::CompileOptionFlags transformFlags,
+            const VertexInputStateFactory::BackendVertexInputState& vis, const RenderPassEntry& renderPassEntry,
+            Bool primitiveRestartEnable);
+
         void CopyWireFramebufferToTexture(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                                            GLint x, GLint y, GLsizei width, GLsizei height);
 #endif
@@ -1535,7 +1546,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         VkPipeline GetOrCreatePipeline(
             GLenum mode,
-            const MG_State::GLState::ProgramObject& program,
+            const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj,
             ProgramFactory::CompileOptionFlags transformFlags,
             const MG_State::GLState::VertexArrayObject& vao,
@@ -1547,14 +1558,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // flush the pending recording (see the body), which retires the current command buffer.
         Bool PrepareStorageImageTextures(
             FrameContext::FrameData& frame,
-            const MG_State::GLState::ProgramObject& program,
+            const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj);
         // Vulkan forbids a sampled descriptor and writable storage descriptor from naming the
         // same image subresource in one shader operation. Snapshot only the sampler side; the
         // storage descriptor continues to name the application texture.
         Bool PrepareSamplerImageFeedbackSnapshots(
             FrameContext::FrameData& frame,
-            const MG_State::GLState::ProgramObject& program,
+            const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj,
             VkPipelineStageFlags consumerShaderStageMask);
 
