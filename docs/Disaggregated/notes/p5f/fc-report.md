@@ -12,7 +12,7 @@
 |---|---|
 | `MobileGL/MG_Remote/Protocol/protocol.fbs` | **append-only**：`SurfaceOpKind` 补 `SetSwapInterval=8` / `ReleaseResources=9` / `SetWindowHandle=10`（与 P6-SPAWN-PLAN 的预测逐字一致）；`WindowKind` 补 `MetalLayer=6`（f0-egl schema 缺口 3：两枚举不互洽的另一半）；`SurfaceOp` 补 `readSurface`、`context` 两字段（MakeCurrent 的语义单元是四元组） |
 | `.../Protocol/generated/protocol_generated.h` | 用 pinned flatc（`~/w7/p5-s1-flatc-build/flatc`，25.12.19）重新生成；diff 仅 +58/−6 行，全部落在追加的枚举值与字段上 |
-| `.../Server/SurfaceControlFrame.{h,cpp}` | 纯值帧：`SurfaceControlOp`（10 个 wire op + 4 个 inproc-only kind）+ `SurfaceControlFrame`（`static_assert` 钉死 trivially-copyable / standard-layout——帧里**不可能**有指针） |
+| `.../Server/SurfaceControlFrame.{h,cpp}` | 纯值帧：`SurfaceControlOp`（10 个 wire op + 4 个 inproc-only kind）+ `SurfaceControlFrame`（constexpr 穷举结构化绑定 + 每成员 integer/enum 断言禁止指针；trivially-copyable / standard-layout 单独约束复制形态（§8 修正初版断言）） |
 | `.../Protocol/SurfaceOpCodec.{h,cpp}` | 帧 ↔ `Wire::SurfaceOp`/`SurfaceReply` 编解码；`WindowBackend` ↔ `WindowKind` 显式映射表（Surfaceless/Pbuffer 具名无后端）；wire 入口 `ServerApplyWireSurfaceOp` 的两个具名 Fatal（见 §3）；枚举对齐用 static_assert 钉死而非强转 |
 | `.../Server/ServerLoop.{h,cpp}` | **单槽邮箱的载荷从"函数指针 + 栈上 void\*"换成按值携带的一个帧**。`RunOnApplyThread(ControlWork, void*)` → `RunSurfaceControlFrame(SurfaceControlFrame&)`；十二个 forwarder 的 Args::Run 本体逐字搬进成员分发 `ApplySurfaceControlFrame`（C7/ID-54 分类、N-3 遗忘、R-12 重发布全部原位保留）；阻塞握手、影子位、publish-then-ring、C2 出口块全部不动。测试缝：`RunProbeOnApplyThreadForTesting`（hook 是成员变量，**不进槽位**） |
 | `MG_Test/Wire/SurfaceControlFrameTest.cpp` | 新套件 9 用例（见 §3） |
@@ -23,8 +23,8 @@
 
 **grep 证明**（验收项）：`grep -rn "ControlWork\|m_controlWork\|m_controlUser\|RunOnApplyThread"
 MobileGL/ --include="*.h" --include="*.cpp" --include="*.inc"` → **0 命中**；邮箱槽位类型是
-`SurfaceControlFrame m_controlFrame;`（按值，`ServerLoop.h:412`），其 trivially-copyable 由
-`SurfaceControlFrame.h` 的 static_assert 钉死。披露：测试缝的 `m_controlProbeHook` /
+`SurfaceControlFrame m_controlFrame;`（按值，`ServerLoop.h:412`），其无指针约束由
+`SurfaceControlFrame.h` 的穷举成员检查钉死；仅 trivially-copyable 并不能拒绝指针（§8）。披露：测试缝的 `m_controlProbeHook` /
 `m_controlProbeUser` 是 ServerLoop 的**成员**而非槽位内容（同 `m_beforeRetireHook` 的既有先例），
 只在 `ProbeForTesting` kind 的分发臂被读。
 
@@ -115,3 +115,47 @@ ID-67 的重发布计数、M-7/C2 的两个 !m_running 臂、影子位双清用�
   append-only 后重生成。
 - `docs/Disaggregated/ROADMAP.md` G4 行、`P5F-WIRE-COMPLETENESS.md` 进度行、`P6-CONTRACT-DRAFT.md`
   §4：文档同点编辑。
+
+
+## 8 集成前局部复审修复（2026-09-19）
+
+本节追加独立修复，§5 的全门数字保留为初版历史；本次只重跑受影响测试，集成全门由集成者负责。
+这次局部复审不代替 P5f 不同模型族终审。
+
+| 缺陷 | 修复与回归用例 |
+|---|---|
+| wire `seq` 在真实 dispatch 入口被重新 mint，codec-only 往返漏检 | 仅 `seq==0` 的本地帧 mint；wire 序号保留。`WireSequenceSurvivesRealDispatchAndFailureReply` 驱动 wire → apply → reply 编码，要求无 backend 的失败回复仍回声 4242；成功臂亦断言原序号。 |
+| 4 个 void 成功臂未填 `ok`，编码成 `false` | `SetSwapInterval` / `ReleaseSurface` / `ReleaseResources` / `SetWindowHandle` 完成后写 `ok=true`。`SuccessfulVoidWireOperationsReplyWithSuccessAndOriginalSequence` 用真实 EGL backend 驱动四种 op 并检查实际编码回复。 |
+| MetalLayer 与 Android 一样携带客户端对象地址，却未拒绝 | `DecodeWireSurfaceOp` 对两种 window op 都返回 `MetalLayerArrived`，入口具名 Fatal `MetalLayer@P12`；新增纯解码检查与死亡用例。 |
+| trivially-copyable + standard-layout 不能排除指针；初版的机械证明错误 | constexpr 结构化绑定穷举 14 个字段，每项只准 integral/enum。添加任何成员而不更新绑定会编译失败；将既有字段改为指针会触发 static_assert。保留旧两个 trait，并加入 object/function pointer 的 constexpr 反例和新用例。 |
+| probe hook/user 在 `m_callerMutex` 外写，可被并发或重入 probe 覆盖 | 发布移入 caller 临界区，锁覆盖整个握手；apply 线程重入用调用栈上的 hook/user 参数，不写共享 pair。8 个并发投递者各 128 次，每次再嵌套一个 probe，逐投递者计数并校验总分发数。 |
+
+真实 dispatch 测试还暴露 `SurfaceOpCodec.h` 的 include 顺序问题：`Wire::` 会被既有
+`MG_Remote::Wire` 命名空间遮蔽；已将公开声明限定为 `::MobileGL::Wire::`。
+
+**G14**：原测试全部保留，新增 5 条（SurfaceControlFrameTest +2、ServerLoopTest +2、
+ServerLoopEglTest +1）。两目标 `cmake --build build-split --target SurfaceControlFrameTest ServerLoopTest -j8`
+通过；`MOBILEGL_ITEST_REQUIRE_GPU=1 ctest --test-dir build-split -R
+'^(SurfaceControlFrameTest|ServerLoopTest|ServerLoopEglTest)[.]' --output-on-failure -j8`
+**42/42 通过，零 skip**。probe 的另外两组调用者也已覆盖：重建 `RemoteClientTest`，
+`RemoteClientControls` **26/26** 与该可执行文件的其余 8 套件 **116/116** 全绿，
+合计本次相关 unit **184/184**。
+
+**真实 red-once，全部在 WSL 验证副本修改并还原，没有提交故障代码：**
+
+| 单独回退 | 红证据 |
+|---|---|
+| seq 恢复无条件 mint | `WireSequenceSurvivesRealDispatchAndFailureReply` 失败：回复 1，预期 4242；ctest rc=8。 |
+| 删除四处 `frame.ok=true` | 四种操作均报 `successful void operation encoded failure`；ctest rc=8。 |
+| 删除 MetalLayer 解码拒绝 | 解码错误码不符，死亡测试 `failed to die`；ctest rc=8。 |
+| probe 恢复锁外共享 pair 发布，并让重入读共享 pair | 并发+nested 用例逐投递者计数不符，报 `another poster or nested probe replaced this hook/user pair`；ctest rc=8。 |
+| 额外新增第 15 个指针成员但不更新检查 | 用真实 SurfaceControlFrame.cpp TU 的 compile_commands 编译参数执行 `-fsyntax-only`，编译失败：`binds to 15 elements, but only 14 names were provided`，rc=1。 |
+| 将既有 nativeToken 改为 void* | 同样的真实 TU 编译失败，正是 `every surface control frame member must be an integer or enum` 断言，rc=1。 |
+
+还原后两目标重建通过，相关测试再次 **42/42 绿**。日志在 WSL
+`/tmp/p5f-fc-fix-{red-seq,red-ok,red-metal,red-probe,red-added-member,red-pointer-type,restored-green}.log`。
+第一次编译负例的检查脚本预期了另一种编译器措辞，实际已按正确原因编译失败；修正日志匹配词后
+单独重跑两个编译负例并恢复验证，没有重跑无关门。
+
+WSL 旧门树 HEAD `7257a372` 与 Windows `d5ed139c` 为兄弟提交，仅报告不同，不能 ff-only。
+本次仅覆盖已确认无本地修改的 7 个相关源/测试文件验证，未 reset WSL 树，未改动其既有子模块状态。

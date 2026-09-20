@@ -562,7 +562,9 @@ namespace MobileGL::MG_Remote::Server {
         // The dispatch runs OUTSIDE the lock, exactly as the old work(user) did, and fills the
         // frame's reply half; the reply is then published back into the slot under the lock so
         // the poster's copy-out after m_controlDone sees it.
-        const MobileGLResult result = ApplySurfaceControlFrame(frame);
+        const MobileGLResult result = ApplySurfaceControlFrame(
+            frame, m_controlProbeHook.load(std::memory_order_acquire),
+            m_controlProbeUser.load(std::memory_order_acquire));
         {
             const std::lock_guard<std::mutex> lock(m_controlMutex);
             m_controlFrame = frame;
@@ -650,10 +652,9 @@ namespace MobileGL::MG_Remote::Server {
 
     MobileGLResult ServerLoop::RunSurfaceControlFrame(SurfaceControlFrame& frame) {
         if (frame.kind == SurfaceControlOp::None) return MOBILEGL_ERR_INVALID_ARGUMENT;
-        // Minted here and echoed back with the reply half: inproc it is purely diagnostic; under
-        // spawn it is how a SurfaceReply names its op. Atomic rather than under m_callerMutex
-        // because the re-entrant arm below mints without taking that lock.
-        frame.seq = m_controlSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
+        // Zero marks an unnumbered local request. A wire request is already numbered by its
+        // client and MUST retain that number all the way through dispatch and the reply.
+        if (frame.seq == 0) frame.seq = m_controlSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
         // RE-ENTRANCY IS NOT A DEADLOCK. The teardown path posts from the apply thread itself -
         // ~BackendObject_DirectGLES reaches ReleaseEGLResources - and so does anything the
         // applier calls that wants "run this where the context is". Running inline is the
@@ -661,6 +662,10 @@ namespace MobileGL::MG_Remote::Server {
         if (OnApplyThread()) return ApplySurfaceControlFrame(frame);
 
         const std::lock_guard<std::mutex> callerLock(m_callerMutex);
+        return PostSurfaceControlFrameWithCallerLock(frame);
+    }
+
+    MobileGLResult ServerLoop::PostSurfaceControlFrameWithCallerLock(SurfaceControlFrame& frame) {
         std::unique_lock<std::mutex> lock(m_controlMutex);
         // C2 + M-7: the m_running check and the publish are ONE critical section, and m_running is
         // cleared under this same lock on the way out (ApplyThreadMain's exit block), so this read
@@ -717,14 +722,16 @@ namespace MobileGL::MG_Remote::Server {
     }
 
     MobileGLResult ServerLoop::RunProbeOnApplyThreadForTesting(ControlProbeHook hook, void* user) {
-        // The hook pair is published BEFORE the frame: the mailbox handshake (publish under
-        // m_controlMutex, shadow last, then the bell) orders these two relaxed-typed stores for
-        // the apply thread, which reads them inside the dispatch.
-        m_controlProbeHook.store(hook, std::memory_order_release);
-        m_controlProbeUser.store(user, std::memory_order_release);
         SurfaceControlFrame frame;
         frame.kind = SurfaceControlOp::ProbeForTesting;
-        return RunSurfaceControlFrame(frame);
+        frame.seq = m_controlSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
+        // Nested probes never touch the shared pair: another poster may already be waiting,
+        // and its arguments must survive a probe run inline on the apply thread.
+        if (OnApplyThread()) return ApplySurfaceControlFrame(frame, hook, user);
+        const std::lock_guard<std::mutex> callerLock(m_callerMutex);
+        m_controlProbeHook.store(hook, std::memory_order_release);
+        m_controlProbeUser.store(user, std::memory_order_release);
+        return PostSurfaceControlFrameWithCallerLock(frame);
     }
 
     Uint64 ServerLoop::ControlFramesDispatched() const {
@@ -870,15 +877,15 @@ namespace MobileGL::MG_Remote::Server {
 
     } // namespace
 
-    MobileGLResult ServerLoop::ApplySurfaceControlFrame(SurfaceControlFrame& frame) {
+    MobileGLResult ServerLoop::ApplySurfaceControlFrame(SurfaceControlFrame& frame,
+                                                        ControlProbeHook probeHook, void* probeUser) {
         // The frame channel's own tally, bumped for EVERY dispatch including probes: a forwarder
         // that stopped posting frames (the fc red-once revert shape) leaves this unmoved, which
         // is what ServerLoopTest's AVoidForwarderCrossesAsOneDispatchedFrame reads.
         m_controlFramesDispatched.fetch_add(1, std::memory_order_acq_rel);
         if (frame.kind == SurfaceControlOp::ProbeForTesting) {
-            const ControlProbeHook hook = m_controlProbeHook.load(std::memory_order_acquire);
-            if (hook == nullptr) return MOBILEGL_ERR_INVALID_ARGUMENT;
-            return hook(m_controlProbeUser.load(std::memory_order_acquire));
+            if (probeHook == nullptr) return MOBILEGL_ERR_INVALID_ARGUMENT;
+            return probeHook(probeUser);
         }
         // Null means the hook never ran or the session is already down. Every op answers
         // NOT_INITIALIZED rather than dereferencing: a client that calls eglMakeCurrent on a
@@ -970,6 +977,7 @@ namespace MobileGL::MG_Remote::Server {
         }
         case SurfaceControlOp::SetSwapInterval:
             backend->SetEGLSwapInterval(frame.swapInterval);
+            frame.ok = true;
             return MOBILEGL_OK;
         case SurfaceControlOp::ReleaseSurface: {
             const EGLSurface surface = HandleFromToken<EGLSurface>(frame.surface);
@@ -980,6 +988,7 @@ namespace MobileGL::MG_Remote::Server {
             // costs one forwarded bind; remembering when it did not would cost a silent
             // no-context-current.
             ForgetCurrentTupleIfItNames(surface);
+            frame.ok = true;
             return MOBILEGL_OK;
         }
         case SurfaceControlOp::ReleaseResources:
@@ -994,9 +1003,11 @@ namespace MobileGL::MG_Remote::Server {
             // by deleting it: ServerLoopTest's recreate control reads NativeBindCount() == 1
             // where 2 is required.
             ForgetCurrentTuple();
+            frame.ok = true;
             return MOBILEGL_OK;
         case SurfaceControlOp::SetWindowHandle:
             backend->SetWindowHandle(UnpackWindowHandle(frame));
+            frame.ok = true;
             return MOBILEGL_OK;
         case SurfaceControlOp::InitCapabilitiesInprocOnly:
             // Inproc-only (f0-egl §4.2): on the wire the ANSWER to this op is the CapsSnapshot

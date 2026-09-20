@@ -16,9 +16,9 @@
 // blocking, one-slot) channel by value; under spawn the SAME struct is what SurfaceOpCodec
 // encodes into a Wire::SurfaceOp. The thread model does not move - only the payload's shape.
 //
-// THE FRAME CARRIES NO POINTERS, and that is enforced by construction (the static_assert below)
-// rather than by review: a field that is a pointer would also be a compile error here. The three
-// places the old Args structs held client addresses map onto values:
+// THE FRAME CARRIES NO POINTERS, and that is enforced by the exhaustive member check below:
+// adding a member requires updating its structured binding; pointer types fail the assertion.
+// The three places the old Args structs held client addresses map onto values:
 //
 //   ServerInitializeEGLDisplay's major/minor out-pointers -> the reply fields eglMajor/eglMinor;
 //   ServerCreateEGLWindowSurface / ServerSetWindowHandle's const WindowHandle* -> windowBackend +
@@ -28,10 +28,9 @@
 //     under spawn the client mints dense tokens instead (P6-CONTRACT-DRAFT table 0) - the field
 //     width is already the token's, so nothing here changes shape on that day.
 //
-// AN ANativeWindow* ON THE WIRE IS REFUSED BY NAME, not carried: nativeToken is only meaningful
-// inside the client's process for AndroidNativeWindow, and a spawn-side decode of that kind dies
-// with Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"} (SurfaceOpCodec). Real window arrival
-// is P12.
+// PROCESS-LOCAL WINDOW OBJECTS ARE REFUSED BY NAME on the wire: ANativeWindow* and
+// CAMetalLayer* mean nothing in the server process. SurfaceOpCodec names their refusals
+// AndroidNativeWindow@P12 and MetalLayer@P12; real window arrival is P12.
 
 #pragma once
 #include <Includes.h>
@@ -93,13 +92,34 @@ namespace MobileGL::MG_Remote::Server {
         Int eglMinor = 0;
     };
 
-    // THE INVARIANT THE PACKAGE EXISTS FOR. The frame crosses by VALUE - copied into the one-slot
-    // channel inproc, encoded into a FlatBuffers table under spawn - so it can never carry an
-    // address: no pointer members, no ownership, trivially copyable, standard layout.
+    namespace Detail {
+        // Pointers are trivially copyable and standard-layout too. Only these value types are
+        // allowed; the constexpr negatives pin the distinction from the old, insufficient check.
+        template <typename T>
+        inline constexpr bool IsSurfaceControlValue = std::is_integral_v<T> || std::is_enum_v<T>;
+        static_assert(!IsSurfaceControlValue<void*> && !IsSurfaceControlValue<void (*)()>);
+
+        constexpr bool SurfaceControlFrameHasOnlyValues() {
+            SurfaceControlFrame frame{};
+            // Exhaustive by the language's aggregate decomposition rule: adding ANY member
+            // without extending this binding is a compile error, so new fields cannot evade it.
+            const auto& [kind, seq, display, surface, readSurface, context, windowBackend,
+                         nativeToken, width, height, swapInterval, ok, eglMajor, eglMinor] = frame;
+            return IsSurfaceControlValue<decltype(kind)> && IsSurfaceControlValue<decltype(seq)> &&
+                   IsSurfaceControlValue<decltype(display)> && IsSurfaceControlValue<decltype(surface)> &&
+                   IsSurfaceControlValue<decltype(readSurface)> && IsSurfaceControlValue<decltype(context)> &&
+                   IsSurfaceControlValue<decltype(windowBackend)> && IsSurfaceControlValue<decltype(nativeToken)> &&
+                   IsSurfaceControlValue<decltype(width)> && IsSurfaceControlValue<decltype(height)> &&
+                   IsSurfaceControlValue<decltype(swapInterval)> && IsSurfaceControlValue<decltype(ok)> &&
+                   IsSurfaceControlValue<decltype(eglMajor)> && IsSurfaceControlValue<decltype(eglMinor)>;
+        }
+    } // namespace Detail
+
+    static_assert(Detail::SurfaceControlFrameHasOnlyValues(),
+                  "every surface control frame member must be an integer or enum, never a pointer");
     static_assert(std::is_trivially_copyable_v<SurfaceControlFrame> &&
                       std::is_standard_layout_v<SurfaceControlFrame>,
-                  "the surface control frame must stay a plain bag of scalars - a pointer member "
-                  "would be a client address crossing to the server, which is what P5f removes");
+                  "the surface control frame must remain a trivially copyable value aggregate");
 
     const char* SurfaceControlOpName(SurfaceControlOp op);
 

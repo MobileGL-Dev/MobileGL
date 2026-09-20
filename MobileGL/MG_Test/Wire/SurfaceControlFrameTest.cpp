@@ -99,6 +99,17 @@ TEST(SurfaceControlFrameTest, TheFrameIsAPlainBagOfScalars) {
            "shapes must stay obvious to a reader";
 }
 
+TEST(SurfaceControlFrameTest, EveryMemberIsMechanicallyCheckedAsAnIntegerOrEnum) {
+    static_assert(Server::Detail::SurfaceControlFrameHasOnlyValues());
+    static_assert(!Server::Detail::IsSurfaceControlValue<void*>);
+    static_assert(!Server::Detail::IsSurfaceControlValue<void (*)()>);
+    EXPECT_TRUE(Server::Detail::SurfaceControlFrameHasOnlyValues());
+    // Why trivially-copyable alone did not enforce this invariant.
+    struct PointerBag { void* pointer; };
+    static_assert(std::is_trivially_copyable_v<PointerBag> && std::is_standard_layout_v<PointerBag>);
+    EXPECT_FALSE(Server::Detail::IsSurfaceControlValue<decltype(PointerBag::pointer)>);
+}
+
 TEST(SurfaceControlFrameTest, ExactlyTheTenFramedOpsHaveWireKindsAndTheValuesArePinned) {
     // The ten framed ops, in schema order. The numeric agreement with ::MobileGL::Wire::SurfaceOpKind is
     // asserted per op rather than trusted from the static_asserts, because THIS is the table a
@@ -322,6 +333,25 @@ TEST(SurfaceControlFrameTest, AnAndroidNativeWindowOnTheWireIsRefusedByName) {
 // A kind the schema does not define (a NEWER client's op reaching an OLDER server, or
 // corruption) is Fatal{ProtocolCorruption}, never ignored: an ignored control op is a client
 // waiting on a reply that never comes, which is a hang wearing a green lane.
+TEST(SurfaceControlFrameTest, AMetalLayerOnTheWireIsRefusedByName) {
+    // Both operations that consume a native window must refuse the process-local object.
+    for (const auto kind : {::MobileGL::Wire::SurfaceOpKind::CreateWindowSurface,
+                            ::MobileGL::Wire::SurfaceOpKind::SetWindowHandle}) {
+        flatbuffers::FlatBufferBuilder builder(256);
+        const auto op = ::MobileGL::Wire::CreateSurfaceOp(
+            builder, 19, kind, 1, 2, ::MobileGL::Wire::WindowKind::MetalLayer, 0x1234, 800, 600);
+        const auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(
+            builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
+        ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
+        const auto* wireOp = ::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer())->msg_as_SurfaceOp();
+        ASSERT_NE(wireOp, nullptr);
+        SurfaceControlFrame frame;
+        EXPECT_EQ(DecodeWireSurfaceOp(*wireOp, &frame), SurfaceWireError::MetalLayerArrived);
+        EXPECT_EXIT(ServerApplyWireSurfaceOp(*wireOp, nullptr), ::testing::KilledBySignal(SIGABRT), ".*");
+        EXPECT_NE(ReadLog().find("Fatal{UnmigratedSurface, \"MetalLayer@P12\"}"), std::string::npos);
+    }
+}
+
 TEST(SurfaceControlFrameTest, AnUnknownWireOpKindIsProtocolCorruptionByName) {
     flatbuffers::FlatBufferBuilder builder(256);
     const auto op = ::MobileGL::Wire::CreateSurfaceOp(builder, 9, static_cast<::MobileGL::Wire::SurfaceOpKind>(200), 1, 2,
