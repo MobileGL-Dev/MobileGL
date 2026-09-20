@@ -586,31 +586,17 @@ void main()
 
             EXPECT_EQ(glGetError(), GL_NO_ERROR);
 
-            // ...and, where the backend places this layout at all, the buffer it WAS asked to
-            // write gets the records. That placement is the DirectGLES scatter path, whose
-            // scratch sizing used to read each target's stride at its POSITION in a list that
-            // skips unbound capture buffers - which for a leading gl_NextBuffer read stride 0
-            // for every target and sized the scratch at zero. DirectVulkan does not implement a
-            // leading-gl_NextBuffer layout at all (it captures nothing into bufferB); that is a
-            // pre-existing gap of its own, and the assertion above - that it corrupts nothing
-            // while declining - is what matters for it.
-            const bool backendPlacesLeadingNextBuffer = Gl().BackendName() != "DirectVulkan";
-            if (backendPlacesLeadingNextBuffer) {
-                std::vector<int> bufferBAfter(capturedInts, kPoison);
-                glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, captureBytes, bufferBAfter.data());
-                EXPECT_TRUE(CapturedIs(bufferBAfter, spanAExpected));
-            }
+            // Sparse binding indices must be preserved by both GLES scatter and
+            // Vulkan capture: slot 1 receives the values while slot 0 stays untouched.
+            std::vector<int> bufferBAfter(capturedInts, kPoison);
+            glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, captureBytes, bufferBAfter.data());
+            EXPECT_TRUE(CapturedIs(bufferBAfter, spanAExpected));
 
-            // Unbound and deleted BEFORE any skip: a capture point left pointing at a buffer
-            // this test deleted would follow the process into the next scenario.
+            // A capture point must not retain a buffer deleted by this scenario.
             glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 1, 0);
             glDeleteBuffers(1, &bufferA);
             glDeleteBuffers(1, &bufferB);
 
-            if (!backendPlacesLeadingNextBuffer) {
-                GTEST_SKIP() << "DirectVulkan does not place a capture list beginning with gl_NextBuffer; it "
-                                "captures nothing, which the no-corruption assertion above has already covered.";
-            }
         }
 
         // The control for all of the above: a span that never draws must leave the capture

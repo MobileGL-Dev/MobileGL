@@ -7766,6 +7766,7 @@ void main() {
     }
 
     #include "WireFramebuffer.inc"
+    #include "WireTextureReadback.inc"
     #include "WireColorBlit.inc"
     #include "WireDraw.inc"
 
@@ -11934,6 +11935,7 @@ void main() {
         VkDeviceSize offsets[4] = {};
         VkDeviceSize sizes[4] = {};
         for (SizeT i = 0; i < bufferCount; ++i) {
+            if (!program->GetTransformFeedbackStride(static_cast<Uint>(i))) continue;
             auto& point = MGB_CTX->GetBufferBindingPoint(BufferTarget::TransformFeedback,
                                                                       static_cast<Uint>(i));
             const auto& bufferObject = point.GetBoundObject();
