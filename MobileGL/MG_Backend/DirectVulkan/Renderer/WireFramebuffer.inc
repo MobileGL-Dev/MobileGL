@@ -28,6 +28,13 @@
         if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone) return out;
         const Bool renderbuffer = surface.Kind == MG_Pipe::kMGPipeSurfaceKindRenderbuffer;
         Uint32 level = surface.Level, layer = surface.Layer, availableLayers = 1;
+        // FramebufferTexture2D names a cube face in UploadTarget; its Layer is
+        // still zero. Resolve that face before applying a texture view's window,
+        // just as the monolith attachment resolver does.
+        const auto uploadTarget = static_cast<TextureUploadTarget>(surface.UploadTarget);
+        if (!renderbuffer && !surface.Layered && uploadTarget >= TextureUploadTarget::CubeMapPositiveX &&
+            uploadTarget <= TextureUploadTarget::CubeMapNegativeZ)
+            layer = static_cast<Uint32>(uploadTarget) - static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX);
         VkFormat viewFormat = VK_FORMAT_UNDEFINED;
         out.storage = renderbuffer ? surface.Res : m_textureManager->ResolveWireTextureStorage(
             surface.Res, level, layer, &viewFormat, &availableLayers);
