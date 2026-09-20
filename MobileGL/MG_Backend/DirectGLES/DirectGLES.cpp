@@ -8417,6 +8417,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         );
     }
 
+#if !MOBILEGL_BUILD_DISAGGREGATED
+    // P5f (fr): no declaration, dispatch-table slot or caller remains for this legacy
+    // helper. Exclude it from the server-capable build; retain non-D-P bytes for G1.
     GLuint GetBackendProgramId(GLuint program) {
         if (!MGB_CTX->ValidateProgramName(program)) {
             MGLOG_E_ONCE("Invalid frontend program object: %u", program);
@@ -8445,6 +8448,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         return backendObj->GetBackendProgramId();
     }
+#endif
 
     void Clear(GLbitfield mask) {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER

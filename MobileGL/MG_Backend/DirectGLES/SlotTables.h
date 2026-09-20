@@ -88,19 +88,11 @@
 // allocator's own three entries carry, repeated here so the refusal names this surface), and
 // the split paths resolve through GetOrCreate(handle) / ReleaseByHandle instead.
 //
-// P5e (id, CONTRACT-P5E §4.1 / §5.8) SETTLES WHAT HAPPENS TO THE FRONTEND-KEYED HALF: it is
-// NOT deleted. The push build under Transport=monolith keeps its frontend arms token for token
-// (ruling 1), which is what the MOBILEGL_PIPE_VERIFY comparator needs and what makes
-// MOBILEGL_IPC_RUN_AHEAD=0 a pure wait-rule A/B on identical server code. So
-// GetOrCreate(StatePtr), Find(StateObject*), HandleOf, NoteStateForHandle/StateForHandle,
-// Entry::stateRef and the resolution memo all survive - as MONOLITH GLUE, each of them a NAMED
-// FATAL the moment it is reached from an apply thread that is applying an UNBARRIERED record
-// (§4.4: the client's wait is the only thing that makes such a read stable, and an unbarriered
-// record has none). The refusal is raised either by the allocator guard, for the three members
-// that call the allocator, or by MGPipeRefuseFrontendKeyedRegistryFromUnbarrieredApply for the
-// three that do not. There is no silent path: the phase's claim is that the twin is resolved
-// from the handle the record carried, and a surface that quietly answered from a frontend
-// pointer instead would make that claim untestable.
+// P5f (fr): the frontend-keyed half survives only as MONOLITH GLUE. HandleOf,
+// GetOrCreate(StatePtr), NoteStateForHandle and StateForHandle refuse EVERY transport
+// apply before touching a frontend object, with or without a barrier or named scope.
+// Find(StateObject*) delegates to HandleOf; handle-only iteration never reads stateRef.
+// The registry guard is independent of Magma's legacy allocator debt scope.
 namespace MobileGL::MG_Backend::DirectGLES {
 
 #if MOBILEGL_PIPE_PUSH
@@ -283,19 +275,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             EnsureProcessTeardownSentinel();
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-            // P5c (hd, CONTRACT-P5C §3.1): this overload MINTS - it is monolith glue, and with
-            // an active transport a call from the apply thread is Fatal{RoleViolation,
-            // "MGPipeSlots"} before the allocator is touched. Split paths call the handle
-            // overload below. (The check also lives at the allocator's own three entries; it
-            // is repeated at this entry so the refusal names this surface even if the entry
-            // set changes.)
-            //
-            // P5e (id, §4.4): that one call is also this member's unbarriered-apply refusal.
-            // The guard exempts a probe only inside a named scope AND while the record being
-            // applied is barriered, so reaching a MINT from an unbarriered apply aborts here
-            // whatever scope is open - which is what "kept only as monolith glue" has to mean
-            // if it is to be checkable.
-            MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("GetOrCreate(StatePtr)");
+            // This overload mints from frontend identity and is monolith-only. Refuse
+            // before either the client object or allocator is touched, even when a
+            // legacy named scope is open and the current record is barriered.
+            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread("GetOrCreate(StatePtr)");
 #endif
 
             const MG_Pipe::MGPipeHandle handle =
@@ -407,25 +390,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return entry->Live ? entry->Gen : 0;
         }
 
-        // P5c (hd): remember the frontend object a HANDLE-keyed twin was synced from. The
-        // minting overload sets stateRef itself; the handle overload cannot (no object
-        // crosses), so a caller that legitimately holds the object - the record-driven sync,
-        // which arrived holding it through the object-class barrier-pulled rows - notes it
-        // here. It is what lets a later handle-only resolution (P5c's named blit, and P5e's
-        // re-typed ForEachLive) reach the frontend object the twin's sync body still walks,
-        // without probing the client's slot allocator (T2). Same liveness rules as the minted
-        // stateRef: never an identity test, never read to decide the slot is dead.
-        //
-        // P5e (id): the pair is now compiled under MOBILEGL_PIPE_PUSH rather than
-        // MOBILEGL_BUILD_DISAGGREGATED, because ForEachLive's caller needs it in the
-        // push-monolith build too, where the note is simply always present. And each half is a
-        // NAMED FATAL from an unbarriered apply (§4.4): they answer from a frontend SharedPtr
-        // that only the client's wait pins, so without that wait the object they hand back may
-        // already be the client's next one. Neither touches the allocator, so the allocator
-        // guard never sees them - this is their own refusal.
+        // Remember/read the frontend object last used by the monolith sync path.
+        // Handles supplied to the server never need this weak state. Neither method
+        // touches the allocator, so each carries its own unconditional apply guard.
         void NoteStateForHandle(MG_Pipe::MGPipeHandle handle, const StatePtr& stateObj) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromUnbarrieredApply("NoteStateForHandle");
+            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread("NoteStateForHandle");
 #endif
             if (MG_Pipe::MGPipeHandleIsNull(handle)) return;
             Entry* const entry = EntryOrNull(handle.Slot);
@@ -437,7 +407,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // this answers only "which object was this twin last synced from".
         StatePtr StateForHandle(MG_Pipe::MGPipeHandle handle) const {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromUnbarrieredApply("StateForHandle");
+            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread("StateForHandle");
 #endif
             if (MG_Pipe::MGPipeHandleIsNull(handle)) return nullptr;
             const Entry* const entry = EntryOrNull(handle.Slot);
@@ -501,12 +471,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MG_Pipe::MGPipeHandle HandleOf(const StateObject* stateObj) const {
             if (stateObj == nullptr) return MG_Pipe::kMGPipeNullHandle;
 #if MOBILEGL_BUILD_DISAGGREGATED
-            // P5c (hd): same guard as the minting overload - a lifetime-id probe from the
-            // apply thread is Fatal{RoleViolation, "MGPipeSlots"} with an active transport.
-            // P5e (id, §4.4): and now also whenever the record being applied is UNBARRIERED,
-            // scope or no scope. This member and Find(StateObject*) below it are the two the
-            // per-family packages retire by passing the handle the record carried instead.
-            MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("HandleOf");
+            // Resolve frontend identity only in the monolith path. A cache hit is
+            // subject to the same guard as a fresh allocator lookup.
+            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread("HandleOf");
 #endif
             const Uint64 lifetimeId = stateObj->GetLifetimeId();
             if (lifetimeId == m_memoLifetimeId) return m_memoHandle;

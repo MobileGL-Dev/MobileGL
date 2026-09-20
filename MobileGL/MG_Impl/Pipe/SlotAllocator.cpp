@@ -11,9 +11,6 @@
 
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <Config.h>
-// P5e (id): the guard's exemption is keyed on whether the record being applied is BARRIERED
-// (CONTRACT-P5E §4.4), and MGPipeApplierCurrentRecordIsBarriered() is where ApplyOne stamps
-// that. Declarations only - this file names no applier state.
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Util/Debug/Log.h>
@@ -32,129 +29,32 @@ namespace MobileGL::MG_Pipe {
     void MGPipeRefuseAllocatorFromApplyThread(const char* entry) {
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
         if (!MG_Remote::Server::ServerLoop::OnApplyThread()) return;
-        // CONTRACT-P5E §4.4 AMENDS CONTRACT-P5C §3.1 HERE, AND IT IS THE WHOLE OF WHAT id
-        // CHANGES ABOUT THIS FUNCTION: a named exemption is a debt the CLIENT'S WAIT pays for.
-        // Behind a barriered record the client is parked in WaitForApplied and its allocator
-        // is not moving, so a read-only probe is stale-free; behind an unbarriered one it is
-        // running ahead, and the same probe reads a free list and a lifetimeId -> slot map the
-        // client is concurrently mutating. So the two scopes below exempt nothing at all once
-        // the record is unbarriered - regardless of MOBILEGL_IPC_STRICT_ERRORS, because the
-        // value would be wrong by construction and there is no "count it" arm for that
-        // (CONTRACT-P5E, rule F).
-        //
-        // Every record is barriered until ra lands the wait rule, so this reads exactly as it
-        // did at 2fde7034 for the whole of this phase.
-        if (MGPipeApplierCurrentRecordIsBarriered()) {
-            // Ruling 12: Magma's four P7 debts, and ONLY on a DirectVulkan server. The key is
-            // on the backend kind rather than on the site because the scope is a class anyone
-            // can construct, and an Espryt probe borrowing Magma's exemption is exactly the
-            // hole P5e is closing.
-            if (MagmaP7AllocatorDebtScope::ActiveOnApplyThread() &&
-                MG_Config::ActiveBackendType == BackendType::DirectVulkan) {
-                return;
-            }
-            // The G6 frontend-keyed registry family: the barriered-row sites the per-family
-            // packages have not carried a handle to yet (CONTRACT-P5E §4.4).
-            if (MGPipeFrontendKeyedRegistryScope::ActiveOnApplyThread()) return;
-        }
+        // P5f (fr): all named allocator exemptions are retired. A barrier can
+        // stabilize a client allocator but cannot make it server-owned memory.
         MGLOG_F("MGPipe: Fatal{RoleViolation, \"MGPipeSlots\"} - the apply thread called "
                 "MGPipeSlots().%s. With an active transport the client slot allocator is "
                 "client-only memory (CONTRACT-P5C §3.1, rule E; CONTRACT-P5E §4.4): a handle "
                 "arrives already minted in a record, and a server that resolves or mints one "
                 "off a frontend object's lifetime id is reading memory that will not exist on "
-                "its side of a real split. A named exemption scope admits it only while the "
-                "record being applied is BARRIERED (barriered=%d) and, for Magma's P7 debt, "
-                "only on a DirectVulkan server",
+                "its side of a real split. No scope or backend exempts a barriered record "
+                "(barriered=%d)",
                 entry, MGPipeApplierCurrentRecordIsBarriered() ? 1 : 0);
         std::abort();
     }
 
-    // P5e (id): the non-allocator half of the same rule. SlotTables.h's state note, its reader
-    // and ForEachLive's weak-reference walk read server memory KEYED BY FRONTEND IDENTITY and
-    // hand a frontend SharedPtr back, which is the same violation one step removed - no
-    // allocator call, so the guard above never sees it.
-    void MGPipeRefuseFrontendKeyedRegistryFromUnbarrieredApply(const char* entry) {
-        if (!MGPipeApplierIsUnbarrieredApply()) return;
+    // P5f (fr): all frontend-identity registry surfaces are monolith glue, including
+    // the ones that do not touch the allocator. Neither a wait nor a named scope can
+    // make a frontend SharedPtr exist in a separate server process.
+    void MGPipeRefuseFrontendKeyedRegistryFromApplyThread(const char* entry) {
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        if (!MG_Remote::Server::ServerLoop::OnApplyThread()) return;
         MGLOG_F("MGPipe: Fatal{RoleViolation, \"MGPipeSlots\"} - the apply thread reached "
-                "BackendSlotTable::%s while applying an UNBARRIERED record. The frontend-keyed "
-                "half of the twin table is monolith glue (CONTRACT-P5E §4.1, §5.8): it answers "
-                "from a frontend object the server has no wait pinning, so the SharedPtr it "
-                "would hand back may already be the client's next object. Resolve the twin "
-                "from the handle the record carried instead",
+                "BackendSlotTable::%s. Frontend-identity registry operations are monolith-only, "
+                "including barriered records; resolve the twin from the record's handle instead",
                 entry);
         std::abort();
     }
 
-    namespace {
-        // NOT thread_local any more, and not atomic either (P5d round 3, package D).
-        //
-        // WHY THERE IS NO DATA RACE. Both depths have exactly ONE reader in the whole tree:
-        // MGPipeRefuseAllocatorFromApplyThread above, whose first two lines return unless the
-        // transport is active AND ServerLoop::OnApplyThread() is true. So the only thread whose
-        // depth could ever change an answer is the apply thread - and the four scope bodies
-        // below now increment and decrement ONLY when OnApplyThread() says so. That makes the
-        // apply thread the single writer and the single reader of both counters; no other
-        // thread touches them, and a monolith process never even reads them (the guard's first
-        // line returns on TransportMode::Monolith and there is no apply thread to make the
-        // second true). Single-writer-single-reader on one thread needs no lock, no atomic and
-        // no TLS.
-        //
-        // WHY IT WAS WORTH DOING. A shared-library thread_local costs an __emutls_get_address
-        // call per access. On the MONOLITH's GL thread that symbol is the TOP entry of the
-        // profile at 7.7%, and these two scopes' ctor/dtor are 32.7% of its samples
-        // (MGPipeFrontendKeyedRegistryScope 18.75 ctor + 13.95 dtor, the scope P5e renamed
-        // MagmaP7AllocatorDebtScope 8.4); on the split's apply thread emutls is 7.4%. The
-        // measurement predates the rename and the numbers are quoted as measured. The scope is
-        // constructed at ~20
-        // sites in DirectGLES.cpp, several inside StateBackendObjectRegistry::HandleOf, which
-        // is per-draw. The cost on the GL thread is now one inlined predicate per end.
-        //
-        // The query's meaning ON THE APPLY THREAD is unchanged, which is the only meaning
-        // the guard reads. Off it the answer is now always false, and the query is named
-        // ActiveOnApplyThread() rather than Active() so that a reader who needs the other
-        // meaning cannot ask for it by accident: whoever wants "is a scope open on THIS
-        // thread" has to add it, and move the counting back, rather than read a false that
-        // looks like an answer.
-        Uint32 g_magmaP7AllocatorDebtScopeDepth = 0;
-    }
-
-    MagmaP7AllocatorDebtScope::MagmaP7AllocatorDebtScope()
-        // Decided ONCE and remembered: the destructor must undo exactly what the constructor
-        // did, and re-asking the predicate would leak a count across a scope that straddled
-        // the apply thread's exit block.
-        : m_counted(MG_Remote::Server::ServerLoop::OnApplyThread()) {
-        if (m_counted) ++g_magmaP7AllocatorDebtScopeDepth;
-    }
-
-    MagmaP7AllocatorDebtScope::~MagmaP7AllocatorDebtScope() {
-        if (m_counted) --g_magmaP7AllocatorDebtScopeDepth;
-    }
-
-    // The DEPTH is not backend-keyed and deliberately so: the backend kind is read by the
-    // GUARD, once, at the moment it decides. Counting only on DirectVulkan would make the
-    // depth's meaning depend on a global that a test can move between the constructor and the
-    // destructor, which is the m_counted bug one level out.
-    Bool MagmaP7AllocatorDebtScope::ActiveOnApplyThread() {
-        return g_magmaP7AllocatorDebtScopeDepth != 0;
-    }
-
-    namespace {
-        // Same counter, same argument, same single reader - see the block above.
-        Uint32 g_frontendKeyedRegistryScopeDepth = 0;
-    }
-
-    MGPipeFrontendKeyedRegistryScope::MGPipeFrontendKeyedRegistryScope()
-        : m_counted(MG_Remote::Server::ServerLoop::OnApplyThread()) {
-        if (m_counted) ++g_frontendKeyedRegistryScopeDepth;
-    }
-
-    MGPipeFrontendKeyedRegistryScope::~MGPipeFrontendKeyedRegistryScope() {
-        if (m_counted) --g_frontendKeyedRegistryScopeDepth;
-    }
-
-    Bool MGPipeFrontendKeyedRegistryScope::ActiveOnApplyThread() {
-        return g_frontendKeyedRegistryScopeDepth != 0;
-    }
 #endif
 
     namespace {
@@ -422,6 +322,12 @@ namespace MobileGL::MG_Pipe {
     }
 
     MGPipeSlotAllocator& MGPipeSlots() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Guard the client singleton itself too: Allocate/IsLive/HighWater and the
+        // bookkeeping accessors must not bypass the original three method guards.
+        // Backend-private allocator instances do not use this accessor.
+        MGPipeRefuseAllocatorFromApplyThread("client-singleton");
+#endif
         // NEVER DESTROYED, deliberately (one allocation for the life of the process). A
         // frontend object's destructor reaches this allocator - ~BufferObject through
         // MGPipeEmitResourceDestroyAndFree, ~VertexArrayObject through the death notice - and

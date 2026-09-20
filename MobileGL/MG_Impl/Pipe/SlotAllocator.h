@@ -166,119 +166,41 @@ namespace MobileGL::MG_Pipe {
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     // P5c (hd, CONTRACT-P5C §3.1 / §6 layer 1): with an active transport this allocator is a
-    // CLIENT-only surface. Acquire, FindByLifetimeId and Free called from the apply thread -
+    // CLIENT-only surface. Its singleton accessor and original three method guards reject apply -
     // i.e. a server that resolves or mints handles off a frontend object's lifetime id (T2),
     // which is memory that will not exist on its side of a real split - are
     // Fatal{RoleViolation, "MGPipeSlots"}. Compiled out entirely outside split builds, so the
     // pull build's bytes do not move (G1).
     void MGPipeRefuseAllocatorFromApplyThread(const char* entry);
 
-    // ---- P5e (id, CONTRACT-P5E §4.4): THE CONDITION UNDER WHICH A NAMED SCOPE EXEMPTS -----
-    //
-    // "This thread is applying a record the client is NOT parked behind." Both scopes below
-    // exempt a probe only while it is FALSE, because the client's wait is the whole of what
-    // makes a frontend read from the apply thread safe: behind a barriered record the client
-    // is blocked in WaitForApplied and its memory is stable; behind an unbarriered one it is
-    // running ahead and the same read is torn or stale BY CONSTRUCTION, which is why rule F
-    // has no "count it" arm and this answer does not consult MOBILEGL_IPC_STRICT_ERRORS.
-    //
-    // False in a monolith process and on any thread but the apply thread, so a GL-thread
-    // caller is never refused by it.
+    // Shared predicate for remaining field/verb guards. Registry and allocator
+    // guards below refuse both barriered and unbarriered transport apply.
     Bool MGPipeApplierIsUnbarrieredApply();
 
-    // The refusal for the frontend-keyed surfaces that do NOT touch the allocator and so are
-    // not covered by MGPipeRefuseAllocatorFromApplyThread: the state note, its reader, and
-    // ForEachLive's weak-reference walk (SlotTables.h). They survive P5e as MONOLITH GLUE
-    // (CONTRACT-P5E §5.8) and this is what keeps that claim honest - reaching one of them from
-    // an unbarriered apply is Fatal{RoleViolation, "MGPipeSlots"} naming the member, not a
-    // silently stale SharedPtr. Same name in the refusal as the allocator guard's on purpose:
-    // it is one surface, "server memory keyed by frontend identity", and a reader chasing the
-    // abort should land on the same rule either way.
-    void MGPipeRefuseFrontendKeyedRegistryFromUnbarrieredApply(const char* entry);
+    // P5f (fr): frontend-object twin lookup, minting and weak-state access are refused
+    // on EVERY transport apply, including barriered records and both named scopes.
+    // The handle overloads remain server-local; the frontend overloads remain monolith
+    // glue. The registry guard is independent of the allocator guard.
+    void MGPipeRefuseFrontendKeyedRegistryFromApplyThread(const char* entry);
 
-    // The NAMED EXEMPTION to the rule above (CONTRACT-P5C §3.1, as amended by CONTRACT-P5E
-    // §4.4): the family of sites whose handle-carrying records the client does not EMIT yet.
-    // set_shader_buffers and set_stream_output_targets exist in the catalogue but are P4b/sb's
-    // to emit (SetHashSuppressor.h says so), so the buffer binding-point ensures and the
-    // GPU-written announcement they feed have no record handle to resolve from today. Inside
-    // this scope ONE read-only lifetime-id probe stays legal WHILE THE CURRENT RECORD IS
-    // BARRIERED; the scope is the debt's measurable, greppable form, and it retires with P7's
-    // server-side binding table. Every other apply-thread allocator access stays Fatal.
-    //
-    // THE DEPTH IS COUNTED ONLY ON THE APPLY THREAD (P5d round 3, package D). The counter's
-    // only reader is MGPipeRefuseAllocatorFromApplyThread, which returns before it looks unless
-    // ServerLoop::OnApplyThread() is true, so a depth kept on any OTHER thread could never
-    // change an answer - it was pure cost. The query is called ActiveOnApplyThread() and not
-    // Active() BECAUSE OF THAT (review round 3): a name that promised "is a scope open" would
-    // now be quietly answering "is a scope open ON THE APPLY THREAD", and the next reader to
-    // come along - a P4b/P7 probe deciding on the GL thread whether to emit a record - would
-    // read a truthful-looking false and take the wrong branch with nothing to warn it. The name
-    // carries the precondition so a second reader has to notice it. m_counted remembers what the constructor decided so
-    // the destructor undoes exactly what the constructor did; asking the predicate twice would
-    // leak a count for a scope that outlived the apply thread. On the GL thread (and in every
-    // monolith process) both ends are now one inlined predicate and a branch instead of an
-    // emutls call, which is where 32.7% of the monolith GL thread's __emutls_get_address - its
-    // top symbol at 7.7% - was going.
-    //
-    // P5e (id), ruling 12: RENAMED FROM MGPipeReverseAnnouncementScope AND KEYED ON THE
-    // BACKEND KIND. The rename is the finding: what is left inside it after P5e is not "the
-    // reverse announcement" - Espryt's half of that moved to the frontend-keyed scope with the
-    // rest of the registry debt - it is MAGMA'S FOUR APPLY-THREAD ALLOCATOR TOUCHES, which P7
-    // retires (VulkanRenderer.cpp's two hidden-resource shutdowns and its named-blit endpoint
-    // resolve, plus MGPipeAnnounceBufferGpuWritten in ResourceTracker.h). Naming the scope
-    // after the debt rather than after one of its sites is what makes "has P7 landed yet" a
-    // grep; naming it after Magma is what stops a new Espryt site being wrapped in it.
-    //
-    // THE EXEMPTION IS REFUSED WHEN THE SERVER BACKEND IS NOT DirectVulkan, and that is the
-    // point of the key rather than a safety belt. Magma stays lockstep for the whole of P5e
-    // (§6.1: the DirectVulkan arm never publishes kCapRunAheadApply, so every record there is
-    // barriered and every probe inside this scope keeps P5C's semantics). Espryt is what P5e
-    // is retiring the lockstep for, so an Espryt probe must not be able to borrow Magma's
-    // exemption - even by wrapping itself in Magma's scope.
+    // P5f (fr): these historical scope names remain greppable markers around
+    // monolith glue until P3b/P4b remove those bodies. They hold no state and grant
+    // no exemption: allocator and frontend-registry access always refuse apply.
     class MagmaP7AllocatorDebtScope {
     public:
-        MagmaP7AllocatorDebtScope();
-        ~MagmaP7AllocatorDebtScope();
+        MagmaP7AllocatorDebtScope() = default;
+        ~MagmaP7AllocatorDebtScope() = default;
         MagmaP7AllocatorDebtScope(const MagmaP7AllocatorDebtScope&) = delete;
         MagmaP7AllocatorDebtScope& operator=(const MagmaP7AllocatorDebtScope&) = delete;
-        static Bool ActiveOnApplyThread();
-
-    private:
-        Bool m_counted;
     };
 
-    // The SECOND named exemption family (CONTRACT-P5C §5.4): the frontend-keyed twin
-    // registry (audit row G6). The texture / sampler-view / FBO-legacy HandleOf probes are
-    // how the server answers "which twin is this frontend object" while the registry is
-    // keyed by frontend identity - server-PRIVATE state whose rekey onto handles is
-    // P5e's per-family packages', not P5c's. A probe inside this scope stays a read-only,
-    // BARRIER-HELD debt - and P5e (id) makes the "barrier-held" half literal rather than
-    // documentary: the exemption now holds only while MGPipeApplierCurrentRecordIsBarriered()
-    // (§4.4), i.e. only while the client is actually parked behind the record being applied.
-    // Wrapping a NEW site in it is the greppable act of naming that debt, and an unwrapped
-    // probe from the apply thread is still Fatal{RoleViolation, "MGPipeSlots"}.
-    //
-    // WHAT THE CLASS IS FOR NOW, since P5e deletes most of its sites: vi/sb/pg/tx2/fb delete
-    // their ~20 draw-path constructions with the probes they wrap, and what survives is the
-    // set of BARRIERED-ROW sites (CONTRACT-P5E §4.4: DirectGLES.cpp's CopyTex / GetTexImage /
-    // mipmap-shape / set_storage_block_binding / detach-walk sites, the two verify arms, and -
-    // until vi/sb carry the handle - BufferImpl::HandleOfBuffer). Those keep P5C's semantics
-    // because their records are barriered and their client IS parked.
-    //
-    // Apply-thread-only depth, and m_counted, for MagmaP7AllocatorDebtScope's reasons
-    // above. This is the scope that pays: it is constructed at ~20 sites in DirectGLES.cpp,
-    // several of them inside StateBackendObjectRegistry::HandleOf on the per-draw path, and
-    // its ctor/dtor alone were 18.75% + 13.95% of the monolith GL thread's emutls samples.
     class MGPipeFrontendKeyedRegistryScope {
     public:
-        MGPipeFrontendKeyedRegistryScope();
-        ~MGPipeFrontendKeyedRegistryScope();
+        MGPipeFrontendKeyedRegistryScope() = default;
+        ~MGPipeFrontendKeyedRegistryScope() = default;
         MGPipeFrontendKeyedRegistryScope(const MGPipeFrontendKeyedRegistryScope&) = delete;
         MGPipeFrontendKeyedRegistryScope& operator=(const MGPipeFrontendKeyedRegistryScope&) = delete;
-        static Bool ActiveOnApplyThread();
-
-    private:
-        Bool m_counted;
     };
+
 #endif
 } // namespace MobileGL::MG_Pipe
