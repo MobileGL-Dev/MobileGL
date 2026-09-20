@@ -3155,9 +3155,12 @@ void main() {
     inline ProgramFactory::CompileOptionFlags GetShaderTransformFlags(VkSurfaceTransformFlagBitsKHR preTransform) {
         ProgramFactory::CompileOptionFlags flags = ProgramFactory::CompileOptionBit::PositionZRemap;
 #if MOBILEGL_BUILD_DISAGGREGATED
-        const auto* wireFbo = MG_Config::Transport != MG_Config::TransportMode::Monolith ? MG_Pipe::MGPipeApplier().DrawFramebuffer() : nullptr;
-        const Bool isDefault = wireFbo ? wireFbo->IsDefault :
-            MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject()->IsDefaultFramebuffer();
+        const Bool wire = MG_Config::Transport != MG_Config::TransportMode::Monolith;
+        const auto* wireFbo = wire ? MG_Pipe::MGPipeApplier().DrawFramebuffer() : nullptr;
+        const auto currentDrawFBO = wire ? SharedPtr<MG_State::GLState::FramebufferObject>{} :
+            MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+        const Bool isDefault = wire ? (wireFbo && wireFbo->IsDefault) :
+            (currentDrawFBO && currentDrawFBO->IsDefaultFramebuffer());
 #else
         const auto& currentDrawFBO = MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         const Bool isDefault = currentDrawFBO != nullptr && currentDrawFBO->IsDefaultFramebuffer();

@@ -41,7 +41,12 @@ namespace MobileGL {
 #endif
 
             Bool IsRenderbuffer() const { return Renderbuffer != nullptr; }
-            Bool Exists() const { return Texture != nullptr || Renderbuffer != nullptr; }
+            Bool Exists() const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                if (!MG_Pipe::MGPipeHandleIsNull(TextureHandle)) return true;
+#endif
+                return Texture != nullptr || Renderbuffer != nullptr;
+            }
         };
 
         enum class FormatCapability : Uint64 {
