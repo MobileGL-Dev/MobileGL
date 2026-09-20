@@ -12297,8 +12297,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // An endpoint that named nothing is the frontend validator's INVALID_VALUE and never
         // reaches here - but the assertion that says so is compiled out of a release build, and
         // SyncTextureObjectToBackend would register a null state object.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            out.texture = TextureImpl::SyncTextureToBackendByHandle(endpoint.TextureHandle);
+        } else
+#endif
+        {
         if (!endpoint.Texture) return false;
         out.texture = TextureImpl::SyncTextureObjectToBackend(endpoint.Texture);
+        }
         if (!out.texture) return false;
         const TextureTarget stateTarget = MG_Util::ConvertGLEnumToTextureTarget(appTarget);
         out.target = TextureImpl::ConvertTextureTargetToBackendGLEnum(stateTarget);
@@ -12316,6 +12323,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     static TextureInternalFormat GetCopyImageEndpointFormat(const CopyImageEndpoint& endpoint) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            const auto* record = PipeTextureRecordForHandle(endpoint.TextureHandle);
+            return record ? static_cast<TextureInternalFormat>(record->Desc.InternalFormat)
+                          : TextureInternalFormat::Unknown;
+        }
+#endif
         if (endpoint.IsRenderbuffer()) return endpoint.Renderbuffer->GetInternalFormat();
         return endpoint.Texture ? endpoint.Texture->GetFormat() : TextureInternalFormat::Unknown;
     }

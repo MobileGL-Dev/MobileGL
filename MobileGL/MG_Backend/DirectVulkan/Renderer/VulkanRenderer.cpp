@@ -9784,6 +9784,10 @@ void main() {
                        srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        dstBinding.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                        1, &copyRegion);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (wire) m_textureManager->MarkWireTextureGpuWritten(dstEndpoint.TextureHandle,
+            dstMipLevel, dstSlices.BaseArrayLayer(), dstSlices.slicesAreDepth ? 1u : copySliceCount);
+#endif
 
         VkPipelineStageFlags srcRestoreStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcRestoreAccessMask = 0;
@@ -9937,6 +9941,10 @@ void main() {
                                           const CopyImageEndpoint& dstEndpoint,
                                           GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                                           GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const Bool wire = MG_Config::Transport != MG_Config::TransportMode::Monolith;
+        if (wire && HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("copy-image-flush");
+#endif
         MOBILEGL_ASSERT(srcEndpoint.Exists() && dstEndpoint.Exists(),
                         "CopyImageSubData requires valid source and destination images.");
         // The frontend already declines a zero or negative extent, so anything else here is a
@@ -9963,7 +9971,11 @@ void main() {
             srcEndpoint.Texture ? &VkTextureManager::StorageTextureOf(*srcEndpoint.Texture) : nullptr;
         const auto* dstStorageTexture =
             dstEndpoint.Texture ? &VkTextureManager::StorageTextureOf(*dstEndpoint.Texture) : nullptr;
-        if (srcStorageTexture == dstStorageTexture && srcEndpoint.Renderbuffer == dstEndpoint.Renderbuffer) {
+        if (
+#if MOBILEGL_BUILD_DISAGGREGATED
+            !wire &&
+#endif
+            srcStorageTexture == dstStorageTexture && srcEndpoint.Renderbuffer == dstEndpoint.Renderbuffer) {
             MGLOG_E_ONCE("%s: in-place copy on objectId=%u is not supported; declining the copy", __func__,
                          CopyImageEndpointName(srcEndpoint));
             return;
@@ -9982,6 +9994,21 @@ void main() {
         // SyncTextureAndGetDescriptor the copy always used; the renderbuffer arm goes through the
         // render-pass manager, which is where a renderbuffer's VkImage lives.
         const auto resolveImage = [this](const CopyImageEndpoint& endpoint, CopyImageVkImage& out) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                auto* resource = m_textureManager->SyncTextureResourceByHandle(endpoint.TextureHandle);
+                if (!resource) MagmaWireFatal("copy-image-resource");
+                out.image = resource->image;
+                out.trackedLayout = &resource->layout;
+                out.aspect = resource->aspect;
+                out.mipLevels = resource->mipLevels;
+                out.extent = resource->extent;
+                out.depth = resource->depth;
+                out.arrayLayers = resource->arrayLayers;
+                out.format = resource->format;
+                return out.image != VK_NULL_HANDLE;
+            }
+#endif
             if (endpoint.IsRenderbuffer()) {
                 auto* resource = m_renderPassManager->GetOrCreateRenderbufferResource(endpoint.Renderbuffer);
                 if (resource == nullptr) return false;
@@ -10016,6 +10043,12 @@ void main() {
         CopyImageVkImage dstImage{};
         const Bool srcResolved = resolveImage(srcEndpoint, srcImage);
         const Bool dstResolved = resolveImage(dstEndpoint, dstImage);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (wire) {
+            if (srcImage.image == dstImage.image) MagmaWireFatal("copy-image-in-place@P7");
+            m_textureManager->FlushPendingUploads();
+        }
+#endif
         // Real checks, not MOBILEGL_ASSERT: the assertions this replaces compile to nothing in
         // a release build, which is where both observed failures happened - a null resource
         // dereferenced right below (lavapipe) and a mip level the VkImage does not have handed
@@ -10144,6 +10177,9 @@ void main() {
         }
 
         const auto materializeClear = [this, &frame](const CopyImageEndpoint& endpoint) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return true;
+#endif
             if (endpoint.IsRenderbuffer()) {
                 return MaterializePendingClearForRenderbuffer(frame.commandBuffer, endpoint.Renderbuffer);
             }
@@ -10255,6 +10291,10 @@ void main() {
                        srcImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        dstImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                        1, &copyRegion);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (wire) m_textureManager->MarkWireTextureGpuWritten(dstEndpoint.TextureHandle,
+            dstMipLevel, dstSlices.BaseArrayLayer(), dstSlices.slicesAreDepth ? 1u : copySliceCount);
+#endif
 
         VkPipelineStageFlags srcRestoreStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcRestoreAccessMask = 0;

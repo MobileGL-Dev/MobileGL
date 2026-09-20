@@ -551,9 +551,14 @@ public:
     //
     // The resource lives in m_wireTextureResources keyed by StagedTextureStore::KeyForHandle -
     // a NAMESPACE THE FRONTEND-KEYED m_textureResources NEVER MEETS, so a recycled {slot, gen}
-    // can never inherit its predecessor's image. Textures whose GL object is a VIEW of another
-    // (desc.ViewOf) or whose storage is a buffer are declined here: no view chain crosses today.
+    // can never inherit its predecessor's image. Texture views resolve the storage owner from
+    // Desc.ViewOf and the window from ViewCso; buffer-backed textures remain P7's buffer arm.
     TextureResource* SyncTextureResourceByHandle(MG_Pipe::MGPipeHandle handle, Bool renderbuffer = false);
+    // Map a texture/view-relative subresource to its live storage owner. layerCount, when
+    // supplied, receives the number of accessible layers starting at the input layer.
+    // viewFormat is UNDEFINED for an ordinary texture, or the outer view's format.
+    MG_Pipe::MGPipeHandle ResolveWireTextureStorage(MG_Pipe::MGPipeHandle handle, Uint32& level,
+        Uint32& layer, VkFormat* viewFormat = nullptr, Uint32* layerCount = nullptr);
     // Grows the live image of a handle-keyed resource to `requiredMipLevels`, carrying the
     // existing levels' content across with an in-command-buffer copy. The caller
     // (GenerateMipmap's record arm) has flushed every pending submission first, so the old
@@ -562,6 +567,10 @@ public:
     // stays as it was).
     Bool GrowWireTextureMipChain(MG_Pipe::MGPipeHandle handle, Uint32 requiredMipLevels,
                                  VkCommandBuffer commandBuffer);
+    // Records that GPU writes superseded the staged CPU snapshot of this level. Layer
+    // ranges select cube faces; array and 3D levels share one staged level shadow.
+    void MarkWireTextureGpuWritten(MG_Pipe::MGPipeHandle handle, Uint32 mipLevel,
+                                    Uint32 baseArrayLayer = 0, Uint32 layerCount = 1);
 #endif
     VkImageView GetOrCreateViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel);
     VkImageView GetOrCreateAttachmentViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel,

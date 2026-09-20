@@ -1806,8 +1806,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // the bytes were actually staged).
     //
     // What this arm deliberately does NOT have, and the loud answer each gets:
-    //   * GL texture VIEWS (desc.ViewOf non-null): no view chain crosses the wire yet -
-    //     declined, the texture stays unbacked;
     //   * buffer textures (StorageKind == Buffer): the buffer twin is P7's - declined;
     //   * sampled/storage VIEW construction: clear/blit/readback/mipmap name images and
     //     subresources, never descriptors, so no VkImageView is built here at all;
@@ -2017,11 +2015,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                          desc.Resource.Slot, desc.Resource.Gen);
             return false;
         }
-        if (!MG_Pipe::MGPipeHandleIsNull(desc.ViewOf)) {
-            MGLOG_W_ONCE("Magma wire texture {slot=%u, gen=%u}: GL texture views do not cross the wire yet; declined",
-                         desc.Resource.Slot, desc.Resource.Gen);
-            return false;
-        }
+        // ResolveWireTextureStorage has already followed ViewOf. Views share the storage
+        // owner's image and layout; allocating a second image would break aliasing.
+        if (!MG_Pipe::MGPipeHandleIsNull(desc.ViewOf)) return false;
         if (desc.Levels == 0) {
             // A create before the first respecify: no storage, nothing to back.
             return false;
@@ -2086,7 +2082,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_2dArrayCompatibleUnsupported.find(format) == m_2dArrayCompatibleUnsupported.end()) {
             imageCreateFlags |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;
         }
-        if (storageImageCapable && IsMutableStorageImageFormat(format) &&
+        // A view can be created after its storage was first used. Give wire color storage
+        // its legal format-compatibility class from birth, so that view creation needs no
+        // frontend identity lookup and cannot silently use an immutable-format VkImage.
+        if (IsMutableStorageImageFormat(format) &&
             m_mutableFormatUnsupported.find(format) == m_mutableFormatUnsupported.end()) {
             imageCreateFlags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
         }
@@ -2303,6 +2302,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint16 level = 0;
             Uint32 baseArrayLayer = 0;
             IntVec3 texelSize = {0, 0, 0};
+            VkOffset3D imageOffset{};
             const void* source = nullptr;
             SizeT byteSize = 0;
             Vector<Uint8> owned;
@@ -2353,13 +2353,75 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 incomplete = true;
                 continue;
             }
-            // Each VkBufferImageCopy offset must satisfy the format's texel-block alignment
-            // as well as Vulkan's four-byte rule. All supported blocks divide 16 bytes;
-            // AcquireUploadStagingSpace aligns the batch base to at least this boundary.
-            stagingSize = (stagingSize + 15u) & ~VkDeviceSize{15u};
-            item.offset = stagingSize;
-            stagingSize += static_cast<VkDeviceSize>(item.byteSize);
-            items.push_back(Move(item));
+            // Adoption covers the complete CPU shadow, but only the emitted regions are
+            // authoritative after a GPU write. Uploading the whole run here overwrites
+            // untouched texels of a prior clear/blit/mipmap with stale client bytes.
+            const SizeT levelTexels = static_cast<SizeT>(texelSize.x()) * texelSize.y() *
+                                      std::max(texelSize.z(), 1);
+            const Bool combined = (resource.aspect & VK_IMAGE_ASPECT_DEPTH_BIT) &&
+                                  (resource.aspect & VK_IMAGE_ASPECT_STENCIL_BIT);
+            if (vkuFormatIsCompressed(resource.format) || !levelTexels ||
+                item.byteSize % levelTexels != 0 || item.byteSize / levelTexels == 0) {
+                incomplete = true;
+                continue;
+            }
+            const SizeT texelBytes = combined ? 4u : item.byteSize / levelTexels;
+            const Bool arrayLayers = resource.viewType == VK_IMAGE_VIEW_TYPE_1D_ARRAY ||
+                                     resource.viewType == VK_IMAGE_VIEW_TYPE_2D_ARRAY ||
+                                     resource.viewType == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+            const auto addRegion = [&](const MG_Pipe::MGPBox& glBox) {
+                IntVec3 offset{glBox.X, glBox.Y, glBox.Z};
+                IntVec3 extent{static_cast<Int>(glBox.W), static_cast<Int>(glBox.H),
+                               static_cast<Int>(glBox.D)};
+                if (target == TextureTarget::Texture1DArray) {
+                    offset = {glBox.X, 0, glBox.Y};
+                    extent = {static_cast<Int>(glBox.W), 1, static_cast<Int>(glBox.H)};
+                }
+                for (Int axis = 0; axis < 3; ++axis) {
+                    if (offset[axis] < 0 || extent[axis] <= 0 ||
+                        static_cast<Uint64>(offset[axis]) + static_cast<Uint64>(extent[axis]) >
+                            static_cast<Uint64>(texelSize[axis])) {
+                        incomplete = true;
+                        return;
+                    }
+                }
+                WireUploadItem region{};
+                region.uploadTarget = uploadTarget;
+                region.level = level;
+                region.baseArrayLayer = item.baseArrayLayer + (arrayLayers ? offset.z() : 0);
+                region.texelSize = extent;
+                region.imageOffset = {offset.x(), offset.y(), arrayLayers ? 0 : offset.z()};
+                const SizeT regionTexels = static_cast<SizeT>(extent.x()) * extent.y() * extent.z();
+                region.owned.resize(regionTexels * (combined ? 5u : texelBytes));
+                const auto* source = static_cast<const Uint8*>(item.source);
+                for (Int z = 0; z < extent.z(); ++z) {
+                    for (Int y = 0; y < extent.y(); ++y) {
+                        const SizeT sourceTexel =
+                            (static_cast<SizeT>(offset.z() + z) * texelSize.y() + offset.y() + y) *
+                                texelSize.x() + offset.x();
+                        const SizeT destinationTexel =
+                            (static_cast<SizeT>(z) * extent.y() + y) * extent.x();
+                        std::memcpy(region.owned.data() + destinationTexel * texelBytes,
+                                    source + sourceTexel * texelBytes, extent.x() * texelBytes);
+                        if (combined) {
+                            std::memcpy(region.owned.data() + regionTexels * 4 + destinationTexel,
+                                        source + levelTexels * 4 + sourceTexel, extent.x());
+                        }
+                    }
+                }
+                region.source = region.owned.data();
+                region.byteSize = region.owned.size();
+                stagingSize = (stagingSize + 15u) & ~VkDeviceSize{15u};
+                region.offset = stagingSize;
+                stagingSize += static_cast<VkDeviceSize>(region.byteSize);
+                items.push_back(Move(region));
+            };
+            if (pending.Regions.empty()) {
+                addRegion(pending.UnionBox);
+            } else {
+                for (const auto& region : pending.Regions)
+                    addRegion({region.X, region.Y, region.Z, region.W, region.H, region.D});
+            }
         }
         if (incomplete) return false;
         if (items.empty()) {
@@ -2413,7 +2475,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             copy.imageSubresource.mipLevel = item.level;
             copy.imageSubresource.baseArrayLayer = item.baseArrayLayer;
             copy.imageSubresource.layerCount = depthSelectsArrayLayer ? depthOrLayers : 1;
-            copy.imageOffset = {0, 0, 0};
+            copy.imageOffset = item.imageOffset;
             copy.imageExtent = {static_cast<Uint32>(item.texelSize.x()),
                                 static_cast<Uint32>(item.texelSize.y()),
                                 depthSelectsArrayLayer ? 1u : depthOrLayers};
@@ -2459,6 +2521,54 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
+    MG_Pipe::MGPipeHandle VkTextureManager::ResolveWireTextureStorage(
+        MG_Pipe::MGPipeHandle handle, Uint32& level, Uint32& layer,
+        VkFormat* viewFormat, Uint32* layerCount) {
+        const auto& state = MG_Pipe::MGPipeApplier();
+        if (viewFormat) *viewFormat = VK_FORMAT_UNDEFINED;
+        Uint32 mappedLevel = level, mappedLayer = layer;
+        Uint32 remainingLayers = ~Uint32{0};
+        VkFormat outerFormat = VK_FORMAT_UNDEFINED;
+        // Production views point directly to their root. The bound also makes a corrupt
+        // or future multi-hop record graph terminate without ever following client data.
+        for (SizeT hop = 0; hop <= state.TextureResources.size(); ++hop) {
+            if (MG_Pipe::MGPipeHandleIsNull(handle) || handle.Slot >= state.TextureResources.size())
+                return MG_Pipe::kMGPipeNullHandle;
+            const auto& record = state.TextureResources[handle.Slot];
+            if (!record.Live || record.Gen != handle.Gen) return MG_Pipe::kMGPipeNullHandle;
+            if (MG_Pipe::MGPipeHandleIsNull(record.Desc.ViewOf)) {
+                if (mappedLevel >= record.Desc.Levels) return MG_Pipe::kMGPipeNullHandle;
+                const Uint32 layers = record.Desc.Target ==
+                    static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex3D)
+                        ? std::max(record.Desc.Depth >> mappedLevel, 1u)
+                        : std::max<Uint32>(record.Desc.ArrayLayers, 1u);
+                if (mappedLayer >= layers) return MG_Pipe::kMGPipeNullHandle;
+                level = mappedLevel;
+                layer = mappedLayer;
+                if (viewFormat) *viewFormat = outerFormat;
+                if (layerCount) *layerCount = std::min(remainingLayers, layers - mappedLayer);
+                return handle;
+            }
+            const auto viewHandle = record.ViewCso;
+            if (MG_Pipe::MGPipeHandleIsNull(viewHandle) || viewHandle.Slot >= state.SamplerViewCsos.size())
+                return MG_Pipe::kMGPipeNullHandle;
+            const auto& viewRecord = state.SamplerViewCsos[viewHandle.Slot];
+            const auto& view = viewRecord.View;
+            if (!viewRecord.Live || viewRecord.Gen != viewHandle.Gen || view.Texture != handle ||
+                mappedLevel >= view.NumLevels || mappedLayer >= view.NumLayers)
+                return MG_Pipe::kMGPipeNullHandle;
+            if (outerFormat == VK_FORMAT_UNDEFINED) {
+                outerFormat = ResolveTextureFormatInfo(static_cast<TextureInternalFormat>(view.InternalFormat)).format;
+                if (outerFormat == VK_FORMAT_UNDEFINED) return MG_Pipe::kMGPipeNullHandle;
+            }
+            remainingLayers = std::min(remainingLayers, static_cast<Uint32>(view.NumLayers) - mappedLayer);
+            mappedLevel += view.MinLevel;
+            mappedLayer += view.MinLayer;
+            handle = record.Desc.ViewOf;
+        }
+        return MG_Pipe::kMGPipeNullHandle;
+    }
+
     VkTextureManager::TextureResource* VkTextureManager::SyncTextureResourceByHandle(
         MG_Pipe::MGPipeHandle handle, Bool renderbuffer) {
         MOBILEGL_ASSERT(m_device != VK_NULL_HANDLE, "SyncTextureResourceByHandle: m_device == VK_NULL_HANDLE");
@@ -2466,6 +2576,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return nullptr;
         }
         auto& applier = MG_Pipe::MGPipeApplier();
+        if (!renderbuffer) {
+            Uint32 level = 0, layer = 0;
+            VkFormat viewFormat = VK_FORMAT_UNDEFINED;
+            const auto storage = ResolveWireTextureStorage(handle, level, layer, &viewFormat);
+            if (MG_Pipe::MGPipeHandleIsNull(storage)) return nullptr;
+            if (storage != handle) {
+                auto* resource = SyncTextureResourceByHandle(storage);
+                if (!resource) return nullptr;
+                if (viewFormat != resource->format &&
+                    ((resource->imageCreateFlags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) == 0 ||
+                     vkuFormatCompatibilityClass(viewFormat) != vkuFormatCompatibilityClass(resource->format))) {
+                    MGLOG_E_ONCE("Magma wire view: format %d cannot reinterpret storage format %d",
+                                 static_cast<Int>(viewFormat), static_cast<Int>(resource->format));
+                    return nullptr;
+                }
+                return resource;
+            }
+        }
         auto& records = renderbuffer ? applier.RenderbufferResources : applier.TextureResources;
         auto& resources = renderbuffer ? m_wireRenderbufferResources : m_wireTextureResources;
         if (handle.Slot >= records.size()) {
@@ -2498,6 +2626,41 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         resource.syncedWireSerial = record.Serial;
         return &resource;
+    }
+
+    void VkTextureManager::MarkWireTextureGpuWritten(MG_Pipe::MGPipeHandle handle, Uint32 mipLevel,
+                                                      Uint32 baseArrayLayer, Uint32 layerCount) {
+        Uint32 availableLayers = 0;
+        handle = ResolveWireTextureStorage(handle, mipLevel, baseArrayLayer, nullptr, &availableLayers);
+        layerCount = std::min(layerCount, availableLayers);
+        const auto& records = MG_Pipe::MGPipeApplier().TextureResources;
+        if (MG_Pipe::MGPipeHandleIsNull(handle) || handle.Slot >= records.size()) return;
+        const auto& record = records[handle.Slot];
+        if (!record.Live || record.Gen != handle.Gen) return;
+        using MG_Pipe::MGPipeResourceTarget;
+        TextureUploadTarget target;
+        switch (static_cast<MGPipeResourceTarget>(record.Desc.Target)) {
+        case MGPipeResourceTarget::Tex1D: target = TextureUploadTarget::Texture1D; break;
+        case MGPipeResourceTarget::Tex1DArray: target = TextureUploadTarget::Texture1DArray; break;
+        case MGPipeResourceTarget::Tex3D: target = TextureUploadTarget::Texture3D; break;
+        case MGPipeResourceTarget::TexRect: target = TextureUploadTarget::TextureRectangle; break;
+        case MGPipeResourceTarget::Tex2DMS: target = TextureUploadTarget::Texture2DMultisample; break;
+        case MGPipeResourceTarget::Tex2DMSArray: target = TextureUploadTarget::Texture2DMultisampleArray; break;
+        case MGPipeResourceTarget::Tex2DArray: target = TextureUploadTarget::Texture2DArray; break;
+        case MGPipeResourceTarget::TexCubeArray: target = TextureUploadTarget::CubeMapArray; break;
+        case MGPipeResourceTarget::TexCube: {
+            const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(handle);
+            for (Uint32 face = baseArrayLayer; face < 6 && face - baseArrayLayer < layerCount; ++face)
+                MG_Remote::Server::ServerStagedTexture().MarkLevelGpuDirty(key,
+                    static_cast<Uint16>(TextureUploadTarget::CubeMapPositiveX) + face,
+                    static_cast<Uint16>(mipLevel), true);
+            return;
+        }
+        default: target = TextureUploadTarget::Texture2D; break;
+        }
+        MG_Remote::Server::ServerStagedTexture().MarkLevelGpuDirty(
+            MG_Remote::Server::StagedTextureStore::KeyForHandle(handle),
+            static_cast<Uint16>(target), static_cast<Uint16>(mipLevel), true);
     }
 
     Bool VkTextureManager::GrowWireTextureMipChain(MG_Pipe::MGPipeHandle handle, Uint32 requiredMipLevels,

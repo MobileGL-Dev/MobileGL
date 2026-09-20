@@ -855,9 +855,9 @@ namespace MobileGL::MG_Remote::Server {
         // retires them by making the backend take the handles that travel beside the names.
         MG_Backend::CopyImageEndpoint src{};
         MG_Backend::CopyImageEndpoint dst{};
-        src.Texture = MG_Pipe::gPipeInputs.GetTextureObject(static_cast<Uint>(copy.SrcGlName));
-        dst.Texture = MG_Pipe::gPipeInputs.GetTextureObject(static_cast<Uint>(copy.DstGlName));
-        if (!src.Exists() || !dst.Exists()) {
+        src.TextureHandle = copy.Src;
+        dst.TextureHandle = copy.Dst;
+        if (MG_Pipe::MGPipeHandleIsNull(copy.Src) || MG_Pipe::MGPipeHandleIsNull(copy.Dst)) {
             // The monolith's own answer to this, in its own words (DirectGLES.cpp:9067
             // "source or destination image failed to sync; declining the copy"): the frontend
             // validator is what keeps it unreachable and what reports the INVALID_VALUE the
@@ -921,6 +921,8 @@ namespace MobileGL::MG_Remote::Server {
         // Both backends resolve the PROGRAM through the barrier-pulled GetProgramObject(GlName)
         // / TryGetDirectVulkanProgram - `rsp` again, retired by P9. ShaderCso travels beside the
         // name for the phase that dispatches on it.
+        MG_Pipe::MGPipeApplier().ClearVerbHandles();
+        MG_Pipe::MGPipeApplier().VerbStorageBlockProgram = binding.ShaderCso;
         table->GL.ShaderStorageBlockBinding(static_cast<GLuint>(binding.GlName), name,
                                             static_cast<GLuint>(binding.Binding));
         ++m_storageBlockBindings;

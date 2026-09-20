@@ -20,6 +20,7 @@
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <Config.h>
 #include <MG_Remote/Server/ServerLoop.h>
+#include <MG_Pipe/PipeApply.h>
 #endif
 #include <atomic>
 #include <bit>
@@ -712,6 +713,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            auto& state = MG_Pipe::MGPipeApplier();
+            const auto handle = state.VerbStorageBlockProgram;
+            if (handle.Slot >= state.ShaderCsos.size() || !state.ShaderCsos[handle.Slot].Live ||
+                state.ShaderCsos[handle.Slot].Gen != handle.Gen || !storageBlockName) {
+                MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"Magma:storage-block-program-record\"}");
+                std::abort();
+            }
+            auto& record = state.ShaderCsos[handle.Slot];
+            auto found = std::find_if(record.StorageOverrides.begin(), record.StorageOverrides.end(),
+                [&](const auto& entry) { return entry.Name == storageBlockName; });
+            if (found == record.StorageOverrides.end())
+                record.StorageOverrides.push_back({storageBlockName, static_cast<Int32>(storageBlockBinding)});
+            else found->Binding = static_cast<Int32>(storageBlockBinding);
+            ++record.BindingsSerial;
+            return;
+        }
+#endif
         auto* programObject = TryGetDirectVulkanProgram(program);
         if (!programObject || storageBlockName == nullptr) return;
         const Int maxBindings =

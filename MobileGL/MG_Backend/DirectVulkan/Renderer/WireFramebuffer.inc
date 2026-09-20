@@ -70,6 +70,7 @@
 
     void VulkanRenderer::ClearWireFramebuffer(const MG_Pipe::MGPFramebufferState& fbo,
                                               const ClearAttachmentPayload& payload, GLint drawbuffer) {
+        if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("wire-verb-flush");
         if (MGB_CTX->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) return;
         const auto clearSurface = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect,
                                       Uint32 colorIndex) {
@@ -165,6 +166,8 @@
             vkDestroyFramebuffer(m_device, fb, nullptr);
             vkDestroyRenderPass(m_device, pass, nullptr);
             vkDestroyImageView(m_device, view, nullptr);
+            if (!image.isDefault && surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
+                m_textureManager->MarkWireTextureGpuWritten(surface.Res, image.level, image.layer, image.layers);
             if (image.isDefault) {
                 if (color) m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired, true);
                 else m_swapchainObject.SetDepthStencilContentDefined(m_imageIndexAcquired, true);
@@ -185,6 +188,7 @@
     void VulkanRenderer::ReadWirePixels(GLint x, GLint y, GLsizei width, GLsizei height,
                                         GLenum format, GLenum type, void* pixels) {
         if (width <= 0 || height <= 0) return;
+        if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("wire-verb-flush");
         const auto* fbo = MG_Pipe::MGPipeApplier().ReadFramebuffer();
         if (!fbo) MagmaWireFatal("read-framebuffer-record");
         VkImageAspectFlags aspect = format == GL_DEPTH_COMPONENT ? VK_IMAGE_ASPECT_DEPTH_BIT :
@@ -238,6 +242,7 @@
 
     void VulkanRenderer::BlitWireFramebuffers(GLint sx0, GLint sy0, GLint sx1, GLint sy1,
         GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter) {
+        if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("wire-verb-flush");
         auto& state = MG_Pipe::MGPipeApplier();
         const Bool named = !MG_Pipe::MGPipeHandleIsNull(state.VerbBlitReadFbo) ||
                            !MG_Pipe::MGPipeHandleIsNull(state.VerbBlitDrawFbo);
@@ -270,6 +275,8 @@
             vkCmdBlitImage(m_frameContext.GetCurrent().commandBuffer,source.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 destination.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&region,
                 filter == GL_LINEAR ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+            if (!destination.isDefault && dst.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
+                m_textureManager->MarkWireTextureGpuWritten(dst.Res, destination.level, destination.layer, destination.layers);
             if (destination.isDefault) m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired,true);
         };
         if (mask & GL_COLOR_BUFFER_BIT) {
@@ -290,6 +297,7 @@
                                    "CopyTexSubImage2D currently only supports GL_TEXTURE_2D destinations.");
             return;
         }
+        if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("wire-verb-flush");
         auto& state = MG_Pipe::MGPipeApplier();
         const auto* read = state.ReadFramebuffer();
         if (!read) MagmaWireFatal("copy-framebuffer-record");
@@ -319,9 +327,11 @@
         }
         vkCmdBlitImage(m_frameContext.GetCurrent().commandBuffer,source.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             destination.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&region,VK_FILTER_NEAREST);
+        m_textureManager->MarkWireTextureGpuWritten(state.VerbCopyTexDst,destination.level,destination.layer);
     }
 
     void VulkanRenderer::GenerateWireMipmap() {
+        if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("wire-verb-flush");
         auto& state = MG_Pipe::MGPipeApplier();
         const auto handle = state.VerbMipRes;
         auto* resource = m_textureManager->SyncTextureResourceByHandle(handle);
