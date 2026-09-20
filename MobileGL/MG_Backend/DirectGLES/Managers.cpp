@@ -7293,22 +7293,46 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_syncedResourceSerial = record.Serial;
                 return;
             }
-            // TRAILING (tx2 report, "left barriered"): the glTextureView CALL needs the view
-            // window and MGPResourceDesc has no carrier for it. The frontend object is taken when
-            // the monolith-glue note still reaches one - which is every case a single-process
-            // split has - and the refusal is NAMED rather than silent for the case that does not.
-            if (stateTextureObject) {
-                SyncTextureViewToBackend(stateTextureObject);
-                m_syncedResourceSerial = record.Serial;
-                return;
+            // The view window is a sampler-view CSO, created even when this
+            // texture is only image-bound or attached to an FBO. It is not part
+            // of the resource descriptor, and needs no frontend fallback.
+            (void)stateTextureObject;
+            const auto& applier = MG_Pipe::MGPipeApplier();
+            const auto handle = record.ViewCso;
+            if (MG_Pipe::MGPipeHandleIsNull(handle) || handle.Slot >= applier.SamplerViewCsos.size()) {
+                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"texture-view-cso\"} {%u,%u}", res.Slot, res.Gen);
+                std::abort();
             }
-            MGLOG_E_ONCE("MGPipe: texture view {%u, %u} (GL %u) has to be (re-)created as a view of "
-                         "{%u, %u}, and MGPResourceDesc carries no view window - minLevel, "
-                         "numLevels, minLayer, numLayers have no wire field - so the by-handle arm "
-                         "cannot issue glTextureView. P5e leaves view CREATION on the frontend arm; "
-                         "this name will sample empty until it gets one.",
-                         res.Slot, res.Gen, record.Desc.GlNameForDiag, record.Desc.ViewOf.Slot,
-                         record.Desc.ViewOf.Gen);
+            const auto& cso = applier.SamplerViewCsos[handle.Slot];
+            const auto& view = cso.View;
+            if (!cso.Live || cso.Gen != handle.Gen || view.Texture != res || !view.NumLevels || !view.NumLayers) {
+                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"texture-view-window\"} {%u,%u}", res.Slot, res.Gen);
+                std::abort();
+            }
+            const auto viewTarget = BufferImpl::StagedTextureTargetForPipeTarget(record.Desc.Target);
+            const GLenum nativeTarget = ConvertTextureTargetToBackendGLEnum(viewTarget);
+            GLenum internalFormat = 0, transferFormat = 0, transferType = 0;
+            GenerateTextureFormatInfo(static_cast<TextureInternalFormat>(view.InternalFormat),
+                &internalFormat, &transferFormat, &transferType, viewTarget);
+            // A name already bound or used as a view cannot be redefined by
+            // glTextureView. This also invalidates native binding/FBO caches.
+            RecreateBackendTexture();
+            DebugImpl::ErrorLopper::Clear();
+            ResolveTextureViewEntryPoint()(m_backendTextureId, nativeTarget, storageBackendTextureId,
+                internalFormat, view.MinLevel, view.NumLevels, view.MinLayer, view.NumLayers);
+            const GLenum error = g_GLESFuncs.glGetError();
+            if (error != GL_NO_ERROR) {
+                MGLOG_F("MGPipe: Fatal{ResourceUnavailable, \"texture-view-native\"} {%u,%u} error=0x%x",
+                        res.Slot, res.Gen, error);
+                std::abort();
+            }
+            m_viewSourceBackendTextureId = storageBackendTextureId;
+            m_isInitialized = true;
+            m_backendStorageImmutable = true;
+            m_prevTextureInfo = {static_cast<TextureInternalFormat>(record.Desc.InternalFormat),
+                record.Desc.Width, record.Desc.Height, record.Desc.Depth, view.NumLevels, 0,
+                record.Desc.Samples, record.Desc.FixedSampleLocations != 0};
+            m_syncedResourceSerial = record.Serial;
         }
 #endif
 

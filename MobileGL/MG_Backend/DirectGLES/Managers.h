@@ -1827,13 +1827,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // stamp the record's Serial. That is the per-draw cost of every already-synced view
             // and it reads nothing from the client.
             //
-            // The CREATION of the view is the gap and it is named rather than papered over: the
-            // glTextureView call needs (minLevel, numLevels, minLayer, numLayers) and MGPResourceDesc
-            // carries none of the four - `ViewOf` is the only view field on the wire. So a view whose
-            // ES name has not been made a view YET, or whose storage was re-minted underneath it,
-            // still needs the frontend object and takes it when one is reachable; with no object it
-            // declines LOUDLY and the view samples its own (empty) name. Listed as trailing in the
-            // tx2 report with the wire fields it needs.
+            // Creation/recreation resolves record.ViewCso's complete view window
+            // and issues the native view call against that server-owned storage.
+            // No frontend texture is used to recover the level/layer range.
             void SyncTextureViewToBackendByRecord(
                 MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPipeResourceRecord& record,
                 const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
