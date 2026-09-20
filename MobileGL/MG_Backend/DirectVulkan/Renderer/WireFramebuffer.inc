@@ -77,8 +77,10 @@
             if (aspect == VK_IMAGE_ASPECT_COLOR_BIT) {
                 const auto mask = MGB_CTX->GetColorMaskIndexed(colorIndex);
                 if (!mask.r() && !mask.g() && !mask.b() && !mask.a()) return;
-                if (!mask.r() || !mask.g() || !mask.b() || !mask.a())
-                    MagmaWireFatal("partial-color-clear@P7");
+                if (!mask.r() || !mask.g() || !mask.b() || !mask.a()) {
+                    MGLOG_W_ONCE("DirectVulkan: glClear with a partial color mask is not supported");
+                    return;
+                }
             }
             if (aspect & VK_IMAGE_ASPECT_DEPTH_BIT) {
                 if (!MGB_CTX->GetDepthMask()) aspect &= ~VK_IMAGE_ASPECT_DEPTH_BIT;
@@ -86,7 +88,10 @@
             if (aspect & VK_IMAGE_ASPECT_STENCIL_BIT) {
                 const Uint32 mask = MGB_CTX->GetStencilState(StencilFace::Front).WriteMask & 255u;
                 if (!mask) aspect &= ~VK_IMAGE_ASPECT_STENCIL_BIT;
-                else if (mask != 255u) MagmaWireFatal("partial-stencil-clear@P7");
+                else if (mask != 255u) {
+                    MGLOG_W_ONCE("DirectVulkan: glClear with a partial stencil write mask is not supported");
+                    aspect &= ~VK_IMAGE_ASPECT_STENCIL_BIT;
+                }
             }
             if (!aspect) return;
             WireImage image = ResolveWireImage(fbo, surface, aspect);
@@ -185,13 +190,20 @@
         VkImageAspectFlags aspect = format == GL_DEPTH_COMPONENT ? VK_IMAGE_ASPECT_DEPTH_BIT :
                                    format == GL_STENCIL_INDEX ? VK_IMAGE_ASPECT_STENCIL_BIT :
                                    VK_IMAGE_ASPECT_COLOR_BIT;
-        if (format == GL_DEPTH_STENCIL) MagmaWireFatal("combined-depth-stencil-read@P7");
-        const auto& surface = aspect == VK_IMAGE_ASPECT_DEPTH_BIT ? fbo->Depth :
+        if (format == GL_DEPTH_STENCIL) aspect = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+        const auto& surface = (aspect & VK_IMAGE_ASPECT_DEPTH_BIT) ? fbo->Depth :
                               aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? fbo->Stencil : fbo->ReadSurface;
         WireImage source = ResolveWireImage(*fbo, surface, aspect);
         if (!source.image) return;
         m_textureManager->FlushPendingUploads();
         TransitionWireImage(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        if (aspect != VK_IMAGE_ASPECT_COLOR_BIT) {
+            ReadDepthStencilImageToClient(source.image,source.format,
+                source.trackedLayout ? source.trackedLayout : &source.layout,aspect,
+                source.level,source.layer,x,y,width,height,format,type,pixels,source.isDefault);
+            if (source.isDefault) m_swapchainObject.SetDepthStencilImageLayout(m_imageIndexAcquired,source.layout);
+            return;
+        }
         const SizeT texelSize = aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? 1 : GetReadbackTexelSize(source.format);
         if (!texelSize) MagmaWireFatal("read-format");
         const VkDeviceSize size = static_cast<VkDeviceSize>(width) * height * texelSize;
@@ -219,13 +231,6 @@
             if (!RemapDefaultFramebufferReadback(bytes,width,height,m_swapchainObject.GetPreTransform(),
                                                 texelSize,remapped.data())) MagmaWireFatal("read-remap");
             bytes = remapped.data();
-        }
-        if (aspect != VK_IMAGE_ASPECT_COLOR_BIT) {
-            if (format == GL_DEPTH_COMPONENT && type == GL_FLOAT && source.format == VK_FORMAT_D32_SFLOAT) {
-                std::memcpy(pixels,bytes,static_cast<SizeT>(size));
-                return;
-            }
-            MagmaWireFatal("depth-read-conversion@P7");
         }
         if (!PackReadbackToClientOrPbo(bytes,source.format,width,height,1,format,type,pixels,false,true))
             MagmaWireFatal("read-conversion");
@@ -341,9 +346,9 @@
             case MG_Pipe::MGPipeResourceTarget::Tex3D: upload=TextureUploadTarget::Texture3D; break;
             case MG_Pipe::MGPipeResourceTarget::Tex1DArray: upload=TextureUploadTarget::Texture1DArray; break;
             case MG_Pipe::MGPipeResourceTarget::Tex2DArray: upload=TextureUploadTarget::Texture2DArray; break;
-            case MG_Pipe::MGPipeResourceTarget::TexCubeArray: upload=TextureUploadTarget::TextureCubeMapArray; break;
+            case MG_Pipe::MGPipeResourceTarget::TexCubeArray: upload=TextureUploadTarget::CubeMapArray; break;
             case MG_Pipe::MGPipeResourceTarget::TexCube:
-                upload=static_cast<TextureUploadTarget>(static_cast<Uint32>(TextureUploadTarget::TextureCubeMapPositiveX)+face); break;
+                upload=static_cast<TextureUploadTarget>(static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX)+face); break;
             default: break;
             }
             for (Uint32 level=base+1;level<base+count;++level) {
