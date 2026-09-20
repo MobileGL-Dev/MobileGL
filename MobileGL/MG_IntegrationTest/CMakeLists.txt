@@ -2440,22 +2440,10 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endforeach()
 endif()
 
-# P5b measured named-blit blockers, exercising both backend bound-form lowerings.
-#
-# P5e (gl), CONTRACT-P5E §7: THE TWO BACKENDS GET DIFFERENT LABELS, because under strict they are
-# answering different questions.
-#
-# Both DirectVulkan entries abort on GetFramebufferBindingSlot@Clear (VulkanRenderer.cpp:7648).
-# That field's row retires in P5e ON ESPRYT and in P7 ON MAGMA, and FieldOwnership.def carries ONE
-# retiring-phase string for both - so the derived allowlist cannot admit the pair without admitting
-# it for Espryt too, where it would forgive exactly the regression fb's handle arm exists to
-# prevent (an Espryt Clear reading the frontend's binding slot again would become a warning line).
-# The alternative to a label is therefore not "admit one row"; it is "stop the Espryt lane from
-# being able to see that row at all", which is a real loss of gate strength.
-#
-# So the lane is SPLIT rather than the allowlist WIDENED: `integration-split` stays a statement
-# about Espryt and goes hard green, and the Magma entries get the expected-red step the contract
-# already promises them for the backend it keeps in lockstep all phase (ID-90).
+# P5b named-blit cases, now green on both backends after P5f fm's server framebuffer
+# and texture consumers. Keep the backend-specific label: the Magma lane has its own
+# strict + dual-block hard gate, while integration-split keeps the Espryt workset.
+# The separate spelling also avoids ctest's substring label match (see below).
 if (MOBILEGL_BUILD_DISAGGREGATED)
     foreach(namedBlitBackend DirectGLES DirectVulkan)
         mgl_itest_join_environment(MGL_ITEST_NAMED_BLIT_ENVIRONMENT
