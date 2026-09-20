@@ -68,6 +68,14 @@
 #include <MG_Impl/Pipe/VertexInputEmit.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_State/GLState/Core.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+// The two arms a split-only case has to raise: the caps mirror that the client's liveness gates
+// read instead of the server's op table (R-8), and the stage chunk the content walks are capped
+// with.
+#include <MG_Remote/CapsCodec.h>
+#include <MG_Remote/Client/CapsMirror.h>
+#include <MG_Remote/Client/GpuWritePending.h>
+#endif
 
 #include <vector>
 #endif
@@ -2070,6 +2078,182 @@ namespace {
         EXPECT_FALSE(MGPipeForEachSubDataRecordRange(kMGPipeSubDataMaxRecordOffset - kSegment,
                                                      kSegment * 4, collect, kSegment));
         EXPECT_TRUE(pieces.empty());
+    }
+
+    // THE SPLIT AT THE CAP THE EMITTER REALLY USES. The case above drives the walk at a
+    // transport-shaped constant; this one drives it at MGPipeStageChunkBytes' own clamp, which
+    // is what PipeFill.cpp's two content walks pass - because the record's own 2^32-1 bound is
+    // not the one a real upload meets first. One piece's bytes are staged WHOLE in SEG_STAGE, a
+    // linear arena, and a blob larger than that arena is Fatal{RingOverrun, "SEG_STAGE"} at the
+    // encoder rather than a split (PipeWireCodec.cpp:856-864); measured on the CI traces, where
+    // a 128 MiB arena's whole-buffer follow-up against a 32 MiB segment aborted there.
+    //
+    // A UNIT PROCESS HAS NO SESSION, so the live answer is 0 - "nothing to fit, keep the
+    // record's own bound" - and that is asserted here as its own property rather than assumed
+    // away. What makes the split reachable in a real lane is the clamp, and the clamp is a pure
+    // function of the segment's size, which is what the walk below is driven at.
+    TEST(ResourceEmit, AWideBufferSubDataSplitsAtTheStageChunkBytes) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#elif !MOBILEGL_BUILD_DISAGGREGATED
+        GTEST_SKIP() << "there is no stage segment to size a content chunk against without the "
+                        "transport built in";
+#else
+        EXPECT_EQ(MG_Remote::Client::MGPipeStageChunkBytes(), 0u)
+            << "a unit process has no ClientSession, so the emitter must keep the record's own "
+               "bound rather than invent a cap";
+        EXPECT_EQ(MG_Remote::Client::MGPipeStageChunkBytesFor(0), 0u);
+
+        // SessionRings.h:89's default segment, and the three shapes the clamp has to get right:
+        // an ordinary arena, a segment below the floor, and a segment equal to it.
+        constexpr Uint64 kStage = 32ull * 1024ull * 1024ull;
+        constexpr Uint64 kChunk = kStage / 4;
+        EXPECT_EQ(MG_Remote::Client::MGPipeStageChunkBytesFor(kStage), kChunk);
+        EXPECT_EQ(MG_Remote::Client::MGPipeStageChunkBytesFor(4096), 4096u);
+        // The floor may NEVER lift the cap above the arena itself: a 4096-byte cap over a 1 KiB
+        // segment would stage the very blob the encoder refuses.
+        EXPECT_EQ(MG_Remote::Client::MGPipeStageChunkBytesFor(1024), 1024u);
+
+        std::vector<std::pair<Uint64, Uint64>> pieces;
+        const auto collect = [&](Uint64 at, Uint64 length) { pieces.emplace_back(at, length); };
+        const auto checkCoverage = [&](Uint64 whole, Uint64 cap) {
+            EXPECT_GE(pieces.size(), 4u) << "a range of " << whole << " bytes was not cut at a "
+                                         << cap << " byte cap";
+            Uint64 covered = 0;
+            Uint64 expectedAt = 0;
+            for (const auto& piece : pieces) {
+                EXPECT_EQ(piece.first, expectedAt) << "the pieces are not contiguous and ascending";
+                EXPECT_LE(piece.second, cap) << "a piece is bigger than the stage chunk";
+                EXPECT_GT(piece.second, 0u);
+                covered += piece.second;
+                expectedAt += piece.second;
+                // And every piece the walk produced has to be encodable by the record builder -
+                // a piece the box refuses is a record the applier's bounds gate would abort on.
+                MGPSubData record{};
+                EXPECT_TRUE(MGPipeBuildSubDataRecord(MGPipeHandle{1, 1}, piece.first, piece.second,
+                                                     record, /*verbatimShadow=*/true))
+                    << "a piece the splitter produced does not fit one record";
+                EXPECT_EQ(MGPipeSubDataBufferOffset(record), piece.first);
+                EXPECT_EQ(MGPipeSubDataBufferSize(record), piece.second);
+            }
+            EXPECT_EQ(covered, whole) << "the split covered the range more or less than exactly once";
+        };
+
+        // Three chunks and a remainder: the smallest range that says the cap is being honoured
+        // rather than the record's own bound - and at that bound the same range is ONE record,
+        // so what cuts it below is the stage chunk and nothing else.
+        constexpr Uint64 kThreeChunks = kChunk * 3 + 7;
+        pieces.clear();
+        ASSERT_TRUE(MGPipeForEachSubDataRecordRange(0, kThreeChunks, collect));
+        ASSERT_EQ(pieces.size(), 1u);
+        pieces.clear();
+        ASSERT_TRUE(MGPipeForEachSubDataRecordRange(0, kThreeChunks, collect, kChunk));
+        checkCoverage(kThreeChunks, kChunk);
+
+        // AND THE SHAPE THE TRACE PRODUCED: a whole 128 MiB arena - the size
+        // BufferObject::TryAdoptLargeStorage maps persistently - against the default 32 MiB
+        // segment. Sixteen pieces, every one of them smaller than the arena it is staged in.
+        constexpr Uint64 kArena = 128ull * 1024ull * 1024ull;
+        pieces.clear();
+        ASSERT_TRUE(MGPipeForEachSubDataRecordRange(0, kArena, collect, kChunk));
+        EXPECT_EQ(pieces.size(), kArena / kChunk);
+        checkCoverage(kArena, kChunk);
+
+        // A range that starts at a non-zero offset splits from there, as the plain-cap case
+        // above pins: the first piece is not special.
+        pieces.clear();
+        ASSERT_TRUE(MGPipeForEachSubDataRecordRange(1024, kChunk + 1, collect, kChunk));
+        ASSERT_EQ(pieces.size(), 2u);
+        EXPECT_EQ(pieces[0].first, 1024u);
+        EXPECT_EQ(pieces[0].second, kChunk);
+        EXPECT_EQ(pieces[1].first, 1024u + kChunk);
+        EXPECT_EQ(pieces[1].second, 1u);
+#endif
+    }
+
+    // glBufferData(target, 0, NULL, usage): THE STORE IS DEFINED BY ITS SIZE ALONE. That is not
+    // the orphaning idiom - the store exists and it is empty - so the respecify must define it
+    // on the applier and carry no bytes, and the client's shadow cannot be asked whether there
+    // are bytes to carry: MappedData() answers a NON-NULL pointer for a zero-byte store
+    // (PipeResource.h:140-143 reserves one byte whatever the size). Reading it alone is what
+    // sent this call down the split arm's respecify(nullptr)-plus-follow-up shape, whose walk
+    // emits NOTHING for a zero-length range (ResourceTracker.h:253), so the self-check that
+    // exists to prove the content followed aborted by name:
+    //     Fatal{InitialBytesNotCarried, "resource_respecify"} ... 0 bytes
+    // measured on the first glBufferData(target, 0, NULL, ...) of the bsl-esc-menu trace.
+    //
+    // WHAT THIS PINS, ALL THREE IN ONE DRIVE: the call does not abort; the applier still receives
+    // the descriptor that DEFINES the empty store (Width == 0 && HasDefinedContent == 1); and NOT
+    // ONE resource_subdata record follows it, because there are no bytes to carry. The last is
+    // the direction a careless "never emit a follow-up" fix would also satisfy, which is exactly
+    // why the middle observation is here too.
+    //
+    // THE DRIVE RUNS IN A CHILD, because the defect's verdict is std::abort() and a case that
+    // aborts its own binary reports nothing. The child's three observations come back through a
+    // probe file rather than through gtest, whose state a forked child must not be trusted with.
+    TEST(ResourceEmit, AZeroByteRespecifyDefinesTheStoreAndCarriesNoContent) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#elif !MOBILEGL_BUILD_DISAGGREGATED
+        GTEST_SKIP() << "the arm that reads MappedData() as 'bytes to carry' is the split one; "
+                        "without the transport the respecify has no follow-up to get wrong";
+#elif !MGTEST_HAVE_FORK
+        GTEST_SKIP() << "no fork on this platform; the defect's verdict is std::abort()";
+#else
+        const std::string probePath = g_logPath + ".zerobyte-probe";
+        std::error_code ec;
+        std::filesystem::remove(probePath, ec);
+        std::fflush(nullptr);
+        const pid_t pid = ::fork();
+        ASSERT_GE(pid, 0);
+        if (pid == 0) {
+            PushArm arm;
+            // The transport is what puts this call on the split arm at all, and R-8's second
+            // half is the caps mirror: under split the resource family's liveness gate reads the
+            // mirror rather than the server's op table, and a placeholder mirror consumes
+            // nothing - so without this the create never goes out and there is no record for the
+            // respecify to land in.
+            MG_Config::Transport = MG_Config::TransportMode::InProcess;
+            MG_Pipe::MGPCaps caps{};
+            caps.CallMask = MG_Remote::MGCapsConsumerBits(MG_Pipe::kMGPipeSubsystemResources);
+            MG_Remote::Client::CapsMirrorInstance().Adopt(caps, MG_Backend::FormatCapabilityCache{},
+                                                          MobileGL::RendererInfo{}, String{},
+                                                          BackendType::DirectGLES);
+            // The spy IS the applier's consumer here, so "no resource_subdata followed" is
+            // counted rather than inferred from a missing log line.
+            g_spy = SpyState{};
+            MG_Pipe::MGPipeSetResourceOps(&kSpyOps);
+
+            const SharedPtr<BufferObject> owner = MakeBuffer(1);
+            owner->Respecify(0, nullptr);
+
+            String observed = "no-handle";
+            const MGPipeHandle res = MGPipeResourceTrackerInstance().Find(*owner);
+            if (!MGPipeHandleIsNull(res) && MGPipeApplier().Resources.size() > static_cast<SizeT>(res.Slot)) {
+                const MGPipeResourceRecord& record = MGPipeApplier().Resources[res.Slot];
+                observed = "live=" + std::to_string(record.Live ? 1 : 0) +
+                           " width=" + std::to_string(record.Desc.Width) +
+                           " defined=" + std::to_string(record.Desc.HasDefinedContent) +
+                           " subdatas=" + std::to_string(g_spy.SubDatas);
+            }
+            std::ofstream out(probePath, std::ios::binary);
+            out << observed;
+            out.close();
+            ::_exit(0);
+        }
+        int status = 0;
+        ASSERT_EQ(::waitpid(pid, &status, 0), pid);
+        const ChildResult child{status, ReadLog()};
+        ASSERT_FALSE(DiedOfAbort(child))
+            << "a zero-byte respecify aborted - the split arm carried an empty shadow as initial "
+               "content and the follow-up emitted nothing: "
+            << DescribeStatus(child) << "; log: " << child.Log;
+        std::ifstream in(probePath, std::ios::binary);
+        std::ostringstream probe;
+        probe << in.rdbuf();
+        EXPECT_EQ(probe.str(), "live=1 width=0 defined=1 subdatas=0")
+            << "the child observed \"" << probe.str() << "\"; log: " << child.Log;
+#endif
     }
 
     // B-C2 FROM THE CLIENT'S SIDE, with a real BufferObject rather than a synthetic handle.
