@@ -322,8 +322,16 @@ namespace MobileGL::MG_Pipe {
             now[Index(MGPipeDirty::NewVertexAttribDefaults)] = ctx.GetAnyVertexAttribDefaultGeneration();
 
             const auto& vao = ctx.GetBoundVertexArray();
+            const Uint64 vaoLifetime = vao ? vao->GetLifetimeId() : 0;
+            const Uint32 vaoConfig = vao ? vao->GetConfigVersion() : 0;
+            const Bool vaoChanged = !m_primed || vaoLifetime != m_lastVaoLifetime || vaoConfig != m_lastVaoConfig;
             const Uint64 vaoIdentity =
-                vao ? MGPipeMixShutter(vao->GetLifetimeId(), vao->GetConfigVersion()) : 0;
+                vao ? MGPipeMixShutter(vaoLifetime, vaoConfig) : 0;
+            if (m_primed && vaoChanged && vaoIdentity == m_lastPushed[Index(MGPipeDirty::NewVertexElements)]) {
+                MGLOG_W("MGPipe: VAO shutter collision repaired: old=%llu/%u new=%llu/%u",
+                    static_cast<unsigned long long>(m_lastVaoLifetime), m_lastVaoConfig,
+                    static_cast<unsigned long long>(vaoLifetime), vaoConfig);
+            }
             now[Index(MGPipeDirty::NewVertexElements)] = vaoIdentity;
 
             // Deliberately NOT GetProgramForDraw: that joins a pending link, and the tracker
@@ -722,6 +730,19 @@ namespace MobileGL::MG_Pipe {
                 m_lastPushed[i] = now[i];
             }
 
+            // The lifetime/configuration pair is an identity, not a content hash.
+            // hash_combine collides readily for nearby integer pairs; missing a
+            // VAO bind can pair the old layout with the new VAO's buffer window.
+            // Revalidate all three vertex families on an exact pair change. Their
+            // own emitters still suppress unchanged records.
+            if (vaoChanged) {
+                dirty |= MGPipeDirtyBit(MGPipeDirty::NewVertexElements) |
+                         MGPipeDirtyBit(MGPipeDirty::NewVertexBuffers) |
+                         MGPipeDirtyBit(MGPipeDirty::NewIndexBuffer);
+            }
+            m_lastVaoLifetime = vaoLifetime;
+            m_lastVaoConfig = vaoConfig;
+
             // ---- bit 2: the PACK half of the pixel store, BitwiseEqual ----
             const PixelStoreParameters pack = ctx.GetPixelStoreParameters(false);
             if (!m_primed || std::memcmp(&pack, &m_pack, sizeof(pack)) != 0) {
@@ -773,6 +794,8 @@ namespace MobileGL::MG_Pipe {
         // by MGPipeLeaveVerb, which is where a per-call argument belongs.
         void Reset() {
             std::memset(m_lastPushed, 0, sizeof(m_lastPushed));
+            m_lastVaoLifetime = 0;
+            m_lastVaoConfig = 0;
             m_renderStateVersion.Reset();
             m_pipelineStateVersion.Reset();
             m_framebufferBind.Reset();
@@ -861,6 +884,8 @@ namespace MobileGL::MG_Pipe {
         };
 
         Uint64 m_lastPushed[kMGPipeDirtyCount]{};
+        Uint64 m_lastVaoLifetime = 0;
+        Uint32 m_lastVaoConfig = 0;
         MGPipeWidenedCounter m_renderStateVersion;
         MGPipeWidenedCounter m_pipelineStateVersion;
         // The draw framebuffer BINDING slot version, widened for the same reason: a Uint16
