@@ -50,6 +50,17 @@
 // RetiringPhase is `-` for every class but BARRIER_PULLED, where it is the ROADMAP phase
 // whose row stops the pull. It is a string, not an enum, because two of them name two
 // phases for the two backends and flattening that would lose the half that matters.
+//
+// P5f fm: the Magma transport consumers of the nine object rows below have retired.
+// WireDraw/WireFramebuffer and MagmaProgramSource/UniformManager read server records;
+// enabled vertex arrays, EBO/indirect/named UBO/SSBO/texel-buffer uses meet the existing
+// named P7 buffer refusal before any frontend read. Texture sync uses handle-keyed images
+// and staged bytes, never GetTextureObject. The old getters remain reachable only through
+// the monolith implementation (or behind the named P7/class-C boundary). Keep these global
+// classifications until fe + fm are integrated and the residual-fill/generator invariants
+// are retired together; a missing wire branch must still poison, never read a default.
+// RecordError belongs to fv. Details and the no-buffer draw counterexample are in
+// docs/Disaggregated/notes/p5f/fm-report.md.
 #define MGP_FIELD_OWNERSHIP_LIST(X)                                                                  \
     /* ---- BARRIER_PULLED: the 9 non-sticky rows the reduced path actually reads ----          */  \
     /* scout-unmigrated-census section 3 intersects each verb class's may-read mask with "no     */  \

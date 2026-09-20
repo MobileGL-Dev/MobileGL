@@ -42,12 +42,10 @@ GetFramebufferBindingSlot@ReadPixels
 # The XFB program check at draw setup (FieldOwnership.def: "P3b/P4b (Espryt), P7 (Magma)").
 #   11 entries (the TessellationXfbCapture / XfbCaptureBufferReuse family)
 GetTransformFeedbackProgram@DrawArrays
-# CopyImageSubData resolves both textures through the sticky forward (def: "P7").
-#    6 entries
-GetTextureObject@CopyImageSubData
-# Magma's Clear path (the two DirectVulkan.Split.NamedBlit entries) - fm's first rows.
-#    2 entries
-GetFramebufferBindingSlot@Clear
+# P5f fm measured retirement: GetTextureObject@CopyImageSubData disappeared via
+# the shared fe/fm endpoint-handle seam; those six Espryt cases now reach ReadPixels.
+# P5f fm measured retirement: the two Magma NamedBlit entries are green; Clear,
+# readback and blit resolve server framebuffer/resource records.
 # CopyTexImage2D's texture-unit read (def: "P5e (Espryt unbarriered), P7 (Magma)").
 #    2 entries
 GetTextureUnitObject@CopyTexImage2D
