@@ -10059,6 +10059,10 @@ void main() {
         }
 
         Uint CopyImageEndpointName(const CopyImageEndpoint& endpoint) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
+                return endpoint.IsRenderbuffer() ? endpoint.RenderbufferHandle.Slot : endpoint.TextureHandle.Slot;
+#endif
             if (endpoint.IsRenderbuffer()) return endpoint.Renderbuffer->GetExternalIndex();
             return endpoint.Texture ? endpoint.Texture->GetExternalIndex() : 0u;
         }
@@ -10071,6 +10075,7 @@ void main() {
                                           GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
 #if MOBILEGL_BUILD_DISAGGREGATED
         const Bool wire = MG_Config::Transport != MG_Config::TransportMode::Monolith;
+        MG_Pipe::MGPipeHandle dstStorageHandle = dstEndpoint.TextureHandle;
         if (wire && HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("copy-image-flush");
 #endif
         MOBILEGL_ASSERT(srcEndpoint.Exists() && dstEndpoint.Exists(),
@@ -10124,8 +10129,13 @@ void main() {
         const auto resolveImage = [this](const CopyImageEndpoint& endpoint, CopyImageVkImage& out) {
 #if MOBILEGL_BUILD_DISAGGREGATED
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
-                auto* resource = m_textureManager->SyncTextureResourceByHandle(endpoint.TextureHandle);
+                const Bool renderbuffer = endpoint.IsRenderbuffer();
+                // The same handle-keyed allocation used by wire FBO clear/draw/read.
+                // The legacy render-pass manager owns a different, frontend-keyed map.
+                auto* resource = m_textureManager->SyncTextureResourceByHandle(
+                    renderbuffer ? endpoint.RenderbufferHandle : endpoint.TextureHandle, renderbuffer);
                 if (!resource) MagmaWireFatal("copy-image-resource");
+                out.isRenderbuffer = renderbuffer;
                 out.image = resource->image;
                 out.trackedLayout = &resource->layout;
                 out.aspect = resource->aspect;
@@ -10203,14 +10213,20 @@ void main() {
         // can index a subresource, exactly as at every other attachment boundary.
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (wire) {
-            Uint32 srcMip = static_cast<Uint32>(srcLevel), srcLayer = static_cast<Uint32>(srcZ);
-            Uint32 dstMip = static_cast<Uint32>(dstLevel), dstLayer = static_cast<Uint32>(dstZ);
-            if (MG_Pipe::MGPipeHandleIsNull(m_textureManager->ResolveWireTextureStorage(
-                    srcEndpoint.TextureHandle, srcMip, srcLayer)) ||
-                MG_Pipe::MGPipeHandleIsNull(m_textureManager->ResolveWireTextureStorage(
-                    dstEndpoint.TextureHandle, dstMip, dstLayer))) MagmaWireFatal("copy-image-view-record");
-            srcLevel = static_cast<GLint>(srcMip); srcZ = static_cast<GLint>(srcLayer);
-            dstLevel = static_cast<GLint>(dstMip); dstZ = static_cast<GLint>(dstLayer);
+            const auto mapSubresource = [this](const CopyImageEndpoint& endpoint, GLint& mip, GLint& layer) {
+                if (endpoint.IsRenderbuffer()) {
+                    if (mip != 0 || layer != 0) MagmaWireFatal("copy-image-renderbuffer-subresource");
+                    return endpoint.RenderbufferHandle;
+                }
+                Uint32 mappedMip = static_cast<Uint32>(mip), mappedLayer = static_cast<Uint32>(layer);
+                const auto storage = m_textureManager->ResolveWireTextureStorage(
+                    endpoint.TextureHandle, mappedMip, mappedLayer);
+                if (MG_Pipe::MGPipeHandleIsNull(storage)) MagmaWireFatal("copy-image-view-record");
+                mip = static_cast<GLint>(mappedMip); layer = static_cast<GLint>(mappedLayer);
+                return storage;
+            };
+            (void)mapSubresource(srcEndpoint, srcLevel, srcZ);
+            dstStorageHandle = mapSubresource(dstEndpoint, dstLevel, dstZ);
         }
 #endif
         srcLevel = static_cast<GLint>(ToStorageMipLevel(srcEndpoint.Texture.get(), srcLevel));
@@ -10432,7 +10448,9 @@ void main() {
                        dstImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                        1, &copyRegion);
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (wire) m_textureManager->MarkWireTextureGpuWritten(dstEndpoint.TextureHandle,
+        // The copy coordinates above are already storage-relative. Name that
+        // storage here too, so a texture view's offsets are not applied twice.
+        if (wire && !dstImage.isRenderbuffer) m_textureManager->MarkWireTextureGpuWritten(dstStorageHandle,
             dstMipLevel, dstSlices.BaseArrayLayer(), dstSlices.slicesAreDepth ? 1u : copySliceCount);
 #endif
 
