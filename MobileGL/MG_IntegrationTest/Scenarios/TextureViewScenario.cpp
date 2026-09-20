@@ -904,5 +904,141 @@ void main() {
                          "the view must still reach its storage after the original's name was deleted");
             DestroyColorFbo(destination);
         }
+
+        // ------------------------------------------------------------------------------------
+        // glGenerateMipmap THROUGH a view: the view's window is a write target, never a shape.
+        //
+        // THE DEFECT this pins. Generating through a view used to (re)allocate the storage
+        // OWNER from the VIEW's own level-zero extent. A view's level-zero extent is one slice
+        // of the owner's layers, so a two-layer view of a four-layer array resized every owner
+        // level it touched to two layers - the storage behind the owner's other layers was gone -
+        // and redefined the owner's other levels out of the view's window. GL 4.6 core 8.18 makes
+        // a view a window INTO storage it does not own: level sizes and layer counts belong to
+        // the owner, and generation through the view is a GPU-side write into that window.
+        //
+        // IT IS ASSERTED HERE, in the transport-agnostic view scenario, because the arm that
+        // reallocated is the MONOLITH one - what every application of a non-disaggregated library
+        // runs, and what the split-only F1WireScenario never reaches (its fixture skips under any
+        // other transport, which is why its copy of this rule runs nowhere).
+        //
+        // DirectGLES ONLY, for two facts about the other backend and neither of them this arm's:
+        // Magma reallocates the chain through the bound object in its OWN generate path
+        // (DirectVulkan/Renderer/VulkanRenderer.cpp's EnsureGenerateMipmapStorageAllocated), which
+        // through a view means its owner's levels - the same defect on the far side of the door this
+        // fix closes; and a CPU sub-image into layer 1 or 2 of mip 2 or 3 does not read back through
+        // Magma at all - a run with the generate removed fails identically - so the per-level colours
+        // this case is built on are unobservable there rather than wrong.
+        // ------------------------------------------------------------------------------------
+        TEST_F(TextureViewScenario, GenerateMipmapThroughAViewLeavesTheOwnerShapeAlone) {
+            if (!Ready() || IsSkipped()) return;
+            if (Gl().BackendName() != "DirectGLES") {
+                GTEST_SKIP() << "the DirectGLES monolith arm is the one that reallocated through the "
+                                "view; Magma does its own reallocation there and reads no such sub-image";
+            }
+
+            constexpr int kLevels = 5;
+            constexpr int kBase = 16;
+            constexpr int kLayers = 4;
+            constexpr int kViewMinLevel = 1;
+            constexpr int kViewNumLevels = 3;
+            constexpr int kViewMinLayer = 1;
+            constexpr int kViewNumLayers = 2;
+            // One colour per level, so a level that was redefined from the view's base extent reads
+            // as another level's colour rather than as a plausible one.
+            const Rgba8 levelColour[kLevels] = {{255, 0, 0, 255}, {0, 0, 255, 255}, {255, 255, 0, 255},
+                                                {255, 0, 255, 255}, {0, 255, 255, 255}};
+
+            const GLuint storage = MakeTexture();
+            glBindTexture(GL_TEXTURE_2D_ARRAY, storage);
+            glTexStorage3D(GL_TEXTURE_2D_ARRAY, kLevels, GL_RGBA8, kBase, kBase, kLayers);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            for (int level = 0; level < kLevels; ++level) {
+                const int side = kBase >> level;
+                std::vector<std::uint8_t> texels(static_cast<std::size_t>(side) * side * kLayers * 4);
+                for (std::size_t at = 0; at < texels.size(); at += 4) {
+                    texels[at + 0] = levelColour[level].r;
+                    texels[at + 1] = levelColour[level].g;
+                    texels[at + 2] = levelColour[level].b;
+                    texels[at + 3] = levelColour[level].a;
+                }
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, level, 0, 0, 0, side, side, kLayers, GL_RGBA,
+                                GL_UNSIGNED_BYTE, texels.data());
+            }
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR)) << "seeding the owner raised an error";
+
+            // Levels 0..2 of the view alias the owner's 1..3. Its nonzero BASE_LEVEL makes the
+            // owner's level 2 the source of the generation, and MAX_LEVEL 2 ends it at the owner's
+            // level 3 - both expressed in the VIEW's coordinates.
+            const GLuint view = MakeTexture();
+            glTextureView(view, GL_TEXTURE_2D_ARRAY, storage, GL_RGBA8, kViewMinLevel, kViewNumLevels,
+                          kViewMinLayer, kViewNumLayers);
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+            glTextureParameteri(view, GL_TEXTURE_BASE_LEVEL, 1);
+            glTextureParameteri(view, GL_TEXTURE_MAX_LEVEL, 2);
+
+            // The generation's source is the view's base level, the owner's level 2. Writing it in
+            // GREEN on the GPU gives the source and the level generated from it the same colour, so
+            // losing either one is visible below.
+            const GLuint fbo = MakeFbo();
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_STENCIL_TEST);
+            glDisable(GL_SCISSOR_TEST);
+            glViewport(0, 0, kBase >> 2, kBase >> 2);
+            for (int layer = kViewMinLayer; layer < kViewMinLayer + kViewNumLayers; ++layer) {
+                glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, storage, 2, layer);
+                ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE))
+                    << "the source level's layer " << layer << " is not attachable";
+                glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+            }
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR)) << "clearing the source level raised an error";
+
+            glGenerateTextureMipmap(view);
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR))
+                << "glGenerateTextureMipmap on a view raised an error";
+
+            // The view addresses two layers of the owner; the owner keeps its own four.
+            GLint viewDepth = 0;
+            glBindTexture(GL_TEXTURE_2D_ARRAY, view);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, 0, GL_TEXTURE_DEPTH, &viewDepth);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, storage);
+            EXPECT_EQ(viewDepth, kViewNumLayers);
+            for (int level = 0; level < kLevels; ++level) {
+                const int side = kBase >> level;
+                GLint width = 0, height = 0, depth = 0;
+                glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, level, GL_TEXTURE_WIDTH, &width);
+                glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, level, GL_TEXTURE_HEIGHT, &height);
+                glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, level, GL_TEXTURE_DEPTH, &depth);
+                EXPECT_EQ(width, side) << "the owner's mip " << level << " must keep its own width";
+                EXPECT_EQ(height, side) << "the owner's mip " << level << " must keep its own height";
+                ASSERT_EQ(depth, kLayers)
+                    << "generation through a " << kViewNumLayers << "-layer view must not resize its owner's mip "
+                    << level;
+                for (int layer = 0; layer < kLayers; ++layer) {
+                    // Per-layer FBO readback rather than glGetTexImage: the question is what the
+                    // GPU holds, and a layer outside the view's window proves it by still holding
+                    // its own pixels.
+                    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+                    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, storage, level, layer);
+                    glReadBuffer(GL_COLOR_ATTACHMENT0);
+                    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE))
+                        << "the owner's mip " << level << ", layer " << layer << " lost its storage";
+                    const Image image = ReadPixels(side, side);
+                    // Generation covers levels base+1..max of the view, i.e. the owner's levels 2
+                    // and 3, over the two layers the view names. Everything else keeps its own
+                    // image: the owner's level 4 is past the view's max level, and its layers 0 and
+                    // 3 are outside the view's layer window.
+                    const bool inWindow =
+                        level >= 2 && level <= 3 && layer >= kViewMinLayer && layer < kViewMinLayer + kViewNumLayers;
+                    const Rgba8 expected = inWindow ? Rgba8{0, 255, 0, 255} : levelColour[level];
+                    const std::string what =
+                        "the owner's mip " + std::to_string(level) + ", layer " + std::to_string(layer) +
+                        (inWindow ? ", inside the view's window" : ", outside the view's window");
+                    ExpectRegion(image, 0, side - 1, 0, side - 1, expected, 2, what.c_str());
+                }
+            }
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+        }
     } // namespace
 } // namespace MGITest

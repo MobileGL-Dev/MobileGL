@@ -508,65 +508,36 @@ namespace MobileGL::MG_Impl::GLImpl {
             return size;
         }
 
+        // glGenerateMipmap defines levels BASE_LEVEL+1 up to the level the base image's extent and
+        // MAX_LEVEL admit, and leaves every other level exactly as it was (GL 4.6 core 8.17). Both
+        // transports take this one path: the window, and the refusal to redefine the levels around
+        // it, are properties of the GL call rather than of how the backend is reached.
         Bool EnsureGeneratedMipmapStorageAllocated(
             MG_State::GLState::TextureObjectMipmap& texture,
             TextureUploadTarget uploadTarget) {
-#if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
-                const auto plan = ComputeMipmapGenerationRange(texture, uploadTarget);
-                if (plan.End <= plan.Base) return false;
-                // Immutable textures and views already own every generated level.
-                // Allocating through a view would redefine its owner's complete
-                // level, destroying layers and levels outside the view window.
-                if (texture.IsImmutable()) return true;
-                const IntVec3 baseSize = texture.GetMipmapTexelSize(uploadTarget, plan.Base);
-                const SizeT baseBytes = texture.GetMipmapByteSize(uploadTarget, plan.Base);
-                const SizeT texels = static_cast<SizeT>(baseSize.x()) * baseSize.y() * baseSize.z();
-                if (!baseBytes || !texels || baseBytes % texels) return false;
-                const SizeT pixelBytes = baseBytes / texels;
-                const Int axes = MipShrinkingAxisCount(texture.GetTarget());
-                for (Uint level = plan.Base + 1; level < plan.End; ++level) {
-                    const auto size = ComputeMipmapTexelSize(baseSize, level - plan.Base, axes);
-                    const SizeT bytes = pixelBytes * static_cast<SizeT>(size.x()) * size.y() * size.z();
-                    texture.AllocateStorage(uploadTarget, level, {size, bytes});
-                    texture.MarkStorageDirty(uploadTarget, level, false);
-                }
-                // Levels before BASE_LEVEL and after the generated end remain
-                // valid images. In particular, MAX_LEVEL is not a truncate call.
-                texture.BumpContentVersion();
-                return true;
-            }
-#endif
-            const Uint existingLevelCount = texture.GetMipmapLevelCount();
-            if (existingLevelCount == 0) {
-                return false;
-            }
-
-            const IntVec3 baseTexelSize = texture.GetMipmapTexelSize(uploadTarget, 0);
-            const SizeT baseByteSize = texture.GetMipmapByteSize(uploadTarget, 0);
-            const SizeT baseTexelCount = static_cast<SizeT>(baseTexelSize.x()) *
-                                         static_cast<SizeT>(baseTexelSize.y()) *
-                                         static_cast<SizeT>(baseTexelSize.z());
-            if (baseTexelSize.x() <= 0 || baseTexelSize.y() <= 0 || baseTexelSize.z() <= 0 ||
-                baseByteSize == 0 || baseTexelCount == 0 || (baseByteSize % baseTexelCount) != 0) {
-                return false;
-            }
-
-            const SizeT bytesPerTexel = baseByteSize / baseTexelCount;
-            const Int shrinkingAxes = MipShrinkingAxisCount(texture.GetTarget());
-            const Uint requiredLevelCount = ComputeFullMipmapLevelCount(baseTexelSize, shrinkingAxes);
-            for (Uint level = 1; level < requiredLevelCount; ++level) {
-                const IntVec3 levelTexelSize = ComputeMipmapTexelSize(baseTexelSize, level, shrinkingAxes);
-                const SizeT levelByteSize = bytesPerTexel * static_cast<SizeT>(levelTexelSize.x()) *
-                                            static_cast<SizeT>(levelTexelSize.y()) *
-                                            static_cast<SizeT>(levelTexelSize.z());
-                texture.AllocateStorage(uploadTarget, level, {levelTexelSize, levelByteSize});
+            const auto plan = ComputeMipmapGenerationRange(texture, uploadTarget);
+            if (plan.End <= plan.Base) return false;
+            // Immutable textures and views already own every level generation can write.
+            // Allocating through a view would redefine its owner's levels at the VIEW's base
+            // extent - one slice of the owner's layers - destroying the storage of every layer and
+            // level outside the view window.
+            if (texture.IsImmutable()) return true;
+            const IntVec3 baseSize = texture.GetMipmapTexelSize(uploadTarget, plan.Base);
+            const SizeT baseBytes = texture.GetMipmapByteSize(uploadTarget, plan.Base);
+            const SizeT texels = static_cast<SizeT>(baseSize.x()) * baseSize.y() * baseSize.z();
+            if (!baseBytes || !texels || baseBytes % texels) return false;
+            const SizeT pixelBytes = baseBytes / texels;
+            const Int axes = MipShrinkingAxisCount(texture.GetTarget());
+            for (Uint level = plan.Base + 1; level < plan.End; ++level) {
+                const auto size = ComputeMipmapTexelSize(baseSize, level - plan.Base, axes);
+                const SizeT bytes = pixelBytes * static_cast<SizeT>(size.x()) * size.y() * size.z();
+                texture.AllocateStorage(uploadTarget, level, {size, bytes});
                 texture.MarkStorageDirty(uploadTarget, level, false);
             }
-            // glGenerateMipmap defines exactly levels 0..requiredLevelCount-1. AllocateStorage only
-            // grows, so a previously longer chain (a bigger base image before respecification) would
-            // otherwise keep a tail of stale levels here and read as incomplete.
-            texture.TruncateMipmapLevels(uploadTarget, requiredLevelCount);
+            // Levels before BASE_LEVEL and after the generated end remain valid images and are left
+            // alone: neither MAX_LEVEL nor a generate truncates the chain. AllocateStorage only
+            // grows, so a longer chain a level-0 respecification left behind is dropped there
+            // (DiscardMipmapChainOnBaseRespecification) rather than here.
             // Mip generation grows/regenerates the level set on the GPU without marking any CPU
             // level dirty (MarkStorageDirty(...,false) above). Bump the content version so the
             // backend re-syncs: a cached sampled VkImageView built for the pre-generate level

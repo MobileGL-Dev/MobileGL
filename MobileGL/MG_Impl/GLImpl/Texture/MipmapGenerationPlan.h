@@ -8,7 +8,9 @@
 #pragma once
 #include <Includes.h>
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+// The plan is the GL call's own window, not a transport's, so both arms of
+// EnsureGeneratedMipmapStorageAllocated compute it here and the wire carrier
+// (MGPMipPlan::LevelCount) publishes the same end-exclusive number.
 #include <MG_State/GLState/TextureState/TextureObject.h>
 #include <algorithm>
 
@@ -42,4 +44,3 @@ namespace MobileGL::MG_Impl::GLImpl {
         return result;
     }
 }
-#endif
