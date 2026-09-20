@@ -237,9 +237,9 @@ namespace MobileGL::MG_Remote::Wire {
         // reply-slot id (R-3), or kInvalidSeq if the ring refused it.
         //
         // A record larger than RingProducer::MaxRecordBytes() is Fatal{RingOverrun}, NOT a
-        // wait: R-10 says P5 does no chunking and must instead PROVE it never needs any, so
-        // this is where the proof fails loudly if it is wrong. MaxRecordBytesSeen() is the
-        // counter that feeds that proof into MEASUREMENTS.
+        // wait: R-10's content rows cut their blobs at the stage chunk budget, so this bound is
+        // about a record's own bytes and this is where one that grew past it fails loudly.
+        // MaxRecordBytesSeen() is the counter that feeds that bound into MEASUREMENTS.
         Uint64 EncodeRecord(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
                             const void* varTail = nullptr, Uint64 varTailBytes = 0);
 

@@ -1058,7 +1058,7 @@ namespace MobileGL::MG_Remote::Client {
                 // AND THE ROW, WHENEVER THE MAXIMUM MOVES. The summary line can carry the
                 // number but not the name - MG_Util is below MG_Remote and has no WireOpName -
                 // and the name is the actionable half: R-10 makes the integrator choose between
-                // early chunking and a bigger ring, and that is a decision about a record
+                // a cut for that row and a bigger ring, and that is a decision about a record
                 // FAMILY. ClientSession::Stop prints the same pair at teardown, but a trace
                 // replay never reaches it (measured: the OpenRA lane's library log ends mid-run
                 // with no teardown line at all), so a stats-enabled run would otherwise publish
@@ -1067,7 +1067,7 @@ namespace MobileGL::MG_Remote::Client {
                 if (encoder.MaxRecordBytesSeen() > g_publishedMaxRecordBytes) {
                     g_publishedMaxRecordBytes = encoder.MaxRecordBytesSeen();
                     MGLOG_I("MGPipe: wire ledger: new maximum record - maxrec=%llu "
-                            "maxrecop=%s cap=%llu (R-10's proof obligation; P5 does not chunk)",
+                            "maxrecop=%s cap=%llu (R-10's proof obligation; blobs are cut, a record is not)",
                             static_cast<unsigned long long>(g_publishedMaxRecordBytes),
                             encoder.MaxRecordOpName(),
                             static_cast<unsigned long long>(encoder.MaxRecordBytesCap()));

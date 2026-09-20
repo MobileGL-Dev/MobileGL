@@ -9,8 +9,10 @@
 // THE TWO ASSERTIONS THE WIRE PRODUCER'S LEDGER MAKES POSSIBLE, in one place so the scenarios
 // that carry them cannot drift apart on what the numbers mean.
 //
-// R-10 (ExpectMaxRecordBytesUnderCap). P5 does no chunking and must instead PROVE it never
-// needs any: no record may exceed RingProducer::MaxRecordBytes() == MOBILEGL_IPC_RING_MB / 2.
+// R-10 (ExpectMaxRecordBytesUnderCap). No record may exceed
+// RingProducer::MaxRecordBytes() == MOBILEGL_IPC_RING_MB / 2: the content rows cut their BLOBS
+// at the stage chunk budget, so what is left uncut is the record itself, and it has to be shown
+// to stay under the bound.
 // Half of that proof is already a Fatal - PipeWireCodec.cpp aborts Fatal{RingOverrun} on a
 // record ABOVE the cap - and it is the loud half. The quiet half is the one this assertion
 // covers: the phase has to publish the MAXIMUM ACTUALLY SEEN on a real workload, so that a
@@ -91,10 +93,11 @@ namespace MGITest::WireLedger {
             << where << ": R-10 - the largest record this session wrote is " << state.maxRecordBytes
             << " bytes and RingProducer::MaxRecordBytes() is " << state.maxRecordBytesCap
             << " (half of a " << (state.maxRecordBytesCap * 2)
-            << " byte SEG_CMD, i.e. MOBILEGL_IPC_RING_MB). P5 does NOT chunk: a record at or "
-               "above the cap is Fatal{RingOverrun} at the encoder, and a maximum that has "
-               "climbed to it is the proof obligation failing. Report it to the integrator, who "
-               "decides between early chunking (P8) and a bigger default ring";
+            << " byte SEG_CMD, i.e. MOBILEGL_IPC_RING_MB). The content rows cut their blobs at "
+               "the stage chunk budget, so nothing cuts this record: one at or above the cap is "
+               "Fatal{RingOverrun} at the encoder, and a maximum that has climbed to it is the "
+               "proof obligation failing. Report it to the integrator, who decides between a "
+               "cut for that row and a bigger default ring";
         ::testing::Test::RecordProperty("max_record_bytes",
                                         static_cast<int>(state.maxRecordBytes));
         ::testing::Test::RecordProperty("max_record_bytes_cap",

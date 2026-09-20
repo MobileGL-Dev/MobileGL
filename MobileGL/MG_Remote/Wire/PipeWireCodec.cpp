@@ -856,8 +856,10 @@ namespace MobileGL::MG_Remote::Wire {
         const Uint64 need = Align8(size);
         if (need > m_stageCapacity) {
             MGLOG_F("MGPipe: Fatal{RingOverrun, \"SEG_STAGE\"} a %llu byte blob cannot fit a "
-                    "%llu byte staging segment at any occupancy; P5 does not chunk (R-10) - "
-                    "raise MOBILEGL_IPC_STAGE_MB or report the record to the integrator",
+                    "%llu byte staging segment at any occupancy; a blob is staged whole, so a "
+                    "row that cuts its content at MGPipeStageChunkBytes() never reaches this - "
+                    "raise MOBILEGL_IPC_STAGE_MB or report the record type with no cut to the "
+                    "integrator",
                     static_cast<unsigned long long>(size),
                     static_cast<unsigned long long>(m_stageCapacity));
             std::abort();
@@ -914,9 +916,9 @@ namespace MobileGL::MG_Remote::Wire {
             ReclaimStagedBytes();
         }
         MGLOG_F("MGPipe: Fatal{RingOverrun, \"SEG_STAGE\"} a %llu byte blob does not fit a %llu "
-                "byte staging segment with %llu bytes still in flight (retiredSeq=%llu); P5 "
-                "does not chunk (R-10) - raise MOBILEGL_IPC_STAGE_MB or report the record to "
-                "the integrator",
+                "byte staging segment with %llu bytes still in flight (retiredSeq=%llu); a "
+                "blob is staged whole and only the rows that cut at the stage chunk budget "
+                "stay small - raise MOBILEGL_IPC_STAGE_MB or report that row to the integrator",
                 static_cast<unsigned long long>(size),
                 static_cast<unsigned long long>(m_stageCapacity),
                 static_cast<unsigned long long>(m_stageHead - m_stageTail),
@@ -1016,12 +1018,12 @@ namespace MobileGL::MG_Remote::Wire {
 
         const Uint64 total = layout.TotalBytes;
         if (total > m_cmd->MaxRecordBytes()) {
-            // R-10: P5 does no chunking and must instead PROVE it never needs any. This is
-            // where the proof fails loudly if it was wrong.
+            // R-10's record bound. The content rows cut their BLOBS at the stage chunk budget
+            // (MGPipeStageChunkBytes); a record's own bytes have no such budget and die here.
             MGLOG_F("MGPipe: Fatal{RingOverrun, \"%s\"} a %llu byte record exceeds "
-                    "RingProducer::MaxRecordBytes() == %llu (half of a %llu byte SEG_CMD); P5 "
-                    "does not chunk (R-10) - report it to the integrator, who decides between "
-                    "early chunking and a bigger default ring",
+                    "RingProducer::MaxRecordBytes() == %llu (half of a %llu byte SEG_CMD); the stage chunk "
+                    "budget cuts blobs, not a record's own bytes - report the row to the "
+                    "integrator",
                     WireOpName(op), static_cast<unsigned long long>(total),
                     static_cast<unsigned long long>(m_cmd->MaxRecordBytes()),
                     static_cast<unsigned long long>(m_cmd->Capacity()));

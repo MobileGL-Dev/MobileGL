@@ -224,8 +224,9 @@ namespace MobileGL::MG_Util::PipeStats {
     enum class Gauge : Uint32 {
         // R-10's PROOF OBLIGATION. The largest single record the wire encoder has written, in
         // bytes, and the cap it must stay under - RingProducer::MaxRecordBytes() ==
-        // MOBILEGL_IPC_RING_MB / 2. P5 does no chunking and has to prove it needs none; before
-        // this pair existed the only consumers of PipeWireEncoder::MaxRecordBytesSeen() were
+        // MOBILEGL_IPC_RING_MB / 2. The content rows cut their blobs at the stage chunk
+        // budget, so what this measures is a record's own bytes. Until this pair existed the
+        // only consumers of PipeWireEncoder::MaxRecordBytesSeen() were
         // codec unit tests, so BRIEF 8 item 3 had no measurement from any real workload
         // (joint-v1.md 5, "Maximum record bytes: NO MEASUREMENT").
         MaxRecordBytes = 0,

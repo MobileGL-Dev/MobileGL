@@ -476,7 +476,9 @@ namespace MobileGL::MG_Config {
         // codec publish a max-record-bytes counter rather than assume that is enough.
         Uint32 RingMb = 8;
         // MOBILEGL_IPC_STAGE_MB: SEG_STAGE size. Every blob and every var-tail's bytes live
-        // here (R-10: no chunking in P5, so nothing may exceed it).
+        // here ONE BLOB AT A TIME: a row whose content can outgrow the segment cuts it at the
+        // stage chunk budget (MGPipeStageChunkBytes, a quarter of this), and a record type with
+        // no cut is Fatal{RingOverrun, "SEG_STAGE"} rather than allowed to exceed it.
         Uint32 StageMb = 32;
         // MOBILEGL_IPC_SPIN_US: spin before parking on a doorbell, either direction.
         Uint32 SpinUs = 50;

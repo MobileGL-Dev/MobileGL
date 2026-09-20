@@ -1774,7 +1774,7 @@ TEST_F(PipeWireCodecTest, TheDecoderWritesNoRingControlFieldOfItsOwn) {
 }
 
 TEST_F(PipeWireCodecTest, MaxRecordBytesSeenStaysFarBelowHalfTheRing) {
-    // R-10's proof obligation. P5 does no chunking and must instead show it never needed any.
+    // R-10's proof obligation, over a record's own bytes: the content rows cut their blobs.
     //
     // THE CAP IS ASKED FOR AT RUNTIME AND NEVER DERIVED FROM MOBILEGL_IPC_RING_MB, and this
     // phase is why: the number moved twice in one afternoon. s1 first found that the control
@@ -2329,7 +2329,7 @@ TEST_F(PipeWireCodecTest, ANonZeroSizeWithNoSegmentIsFatal) {
 
 TEST_F(PipeWireCodecTest, ARecordLargerThanHalfTheRingIsFatalRingOverrun) {
     // R-10's PROOF OBLIGATION, FAILING ON PURPOSE - the red-once for everything the phase
-    // publishes as `maxrec=`. P5 does no chunking: a record above
+    // publishes as `maxrec=`. Nothing cuts a record's own bytes, so a record above
     // RingProducer::MaxRecordBytes() == Capacity()/2 must abort by name at the ENCODER, on the
     // producing side, rather than becoming a nullptr from Reserve that some caller reads as
     // "the ring is full, wait" - which on an EMPTY ring would be a wait that never ends.
@@ -2351,9 +2351,10 @@ TEST_F(PipeWireCodecTest, ARecordLargerThanHalfTheRingIsFatalRingOverrun) {
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{RingOverrun,"), std::string::npos) << r.Log;
     EXPECT_NE(r.Log.find("exceeds RingProducer::MaxRecordBytes()"), std::string::npos) << r.Log;
-    // The diagnostic has to name R-10 and the decision it forces, because the person reading it
-    // has to choose between early chunking and a bigger ring and neither is a local fix.
-    EXPECT_NE(r.Log.find("does not chunk (R-10)"), std::string::npos) << r.Log;
+    // The diagnostic has to name the decision it forces, because the person reading it
+    // has to choose between a cut for this row and a bigger ring and neither is a local fix.
+    EXPECT_NE(r.Log.find("budget cuts blobs, not a record's own bytes"), std::string::npos)
+        << r.Log;
 }
 
 TEST_F(PipeWireCodecTest, ARunThatLeavesItsSegmentIsFatal) {

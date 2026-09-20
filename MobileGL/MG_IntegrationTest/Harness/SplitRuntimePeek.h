@@ -87,8 +87,9 @@ namespace MGITest {
         // ring and 0 wraps in a process whose ring never filled are the same number and
         // completely different facts.
         //
-        // maxRecordBytes / maxRecordBytesCap: R-10 says P5 does no chunking and must prove it
-        // needs none. The cap is RingProducer::MaxRecordBytes() == MOBILEGL_IPC_RING_MB / 2,
+        // maxRecordBytes / maxRecordBytesCap: R-10's bound on a record's OWN bytes - the
+        // content rows cut their blobs at the stage chunk budget, nothing cuts the record. The
+        // cap is RingProducer::MaxRecordBytes() == MOBILEGL_IPC_RING_MB / 2,
         // read from the ring this process actually got rather than recomputed from the
         // environment.
         //
