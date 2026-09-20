@@ -48,6 +48,8 @@
 // build-split runs MOBILEGL_TRANSPORT=monolith in every unit and integration-gpu lane and those
 // lanes must keep answering exactly what they answered before.
 #include <MG_Remote/Client/CapsMirror.h>
+// MGPipeStageChunkBytes: the resource emitters' content cap (see MGPipeContentChunkCap below).
+#include <MG_Remote/Client/GpuWritePending.h>
 #include <MG_Remote/Client/WireTables.h>
 // P5c gt (CONTRACT-P5C §6 layer 2, audit A1): the client-side gPipeInputs check consults
 // InBarrierWait() and ApplyThreadIsInsideApplier() - both live here.
