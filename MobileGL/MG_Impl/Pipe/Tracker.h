@@ -327,11 +327,6 @@ namespace MobileGL::MG_Pipe {
             const Bool vaoChanged = !m_primed || vaoLifetime != m_lastVaoLifetime || vaoConfig != m_lastVaoConfig;
             const Uint64 vaoIdentity =
                 vao ? MGPipeMixShutter(vaoLifetime, vaoConfig) : 0;
-            if (m_primed && vaoChanged && vaoIdentity == m_lastPushed[Index(MGPipeDirty::NewVertexElements)]) {
-                MGLOG_W("MGPipe: VAO shutter collision repaired: old=%llu/%u new=%llu/%u",
-                    static_cast<unsigned long long>(m_lastVaoLifetime), m_lastVaoConfig,
-                    static_cast<unsigned long long>(vaoLifetime), vaoConfig);
-            }
             now[Index(MGPipeDirty::NewVertexElements)] = vaoIdentity;
 
             // Deliberately NOT GetProgramForDraw: that joins a pending link, and the tracker
