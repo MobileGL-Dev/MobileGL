@@ -20,6 +20,9 @@ It allows only Magma's two pre-existing per-distance-enable limitations, matched
 exact case and skip reason. They are never counted as passes and must be identical across arms.
 Every other skip/failure is an error. Every actual stats window must have `rsp=0`; inproc must
 publish `vbs>0` and correct runtime/capability logs, monolith must keep `vbs=0`.
+The current verifier requires `run-ahead ARMED` on both inproc backends. To replay
+the historical P5f bundle where Magma withheld that capability, use the verifier
+from the bundle's source revision.
 
 Android's normal integration target omits F1/Ct/DualBlock and private peek bridges. This runner
 therefore does not claim those host cases ran on Android. See `device-report.md` in the P5f notes

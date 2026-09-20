@@ -65,8 +65,9 @@ vbs = [int(re.search(r'\bvbs=(\d+)', line)[1]) for line in stats]
 if arm['transport'] == 'inproc':
     assert any(v > 0 for v in vbs), 'no applied verb boundaries; transport not proven'
     assert re.search(r'Config: IPC .*strict=1 .*role-split-state=' + arm['role'] + r'\b', log)
-    expected = 'run-ahead ARMED' if arm['backend'] == 'DirectGLES' else 'run-ahead requested, server does not publish'
-    assert expected in log, 'missing runtime capability evidence'
+    # Current Magma publishes the capability after its queued-state migration.
+    # Historical P5f bundles should be checked with their matching source verifier.
+    assert 'run-ahead ARMED' in log, 'missing runtime capability evidence'
 else:
     assert all(v == 0 for v in vbs), 'monolith control has applied verb boundaries'
 print(f'PASS {arm}: {len(cases)-len(skipped)} passed, {len(skipped)} named legacy feature skips, {len(stats)} stats windows, rsp=0, vbs={sum(vbs)}')
