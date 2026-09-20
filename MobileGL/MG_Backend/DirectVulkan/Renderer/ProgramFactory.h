@@ -10,7 +10,7 @@
 
 #include "../VkIncludes.h"
 #include "PipelineFactory.h"
-#include "MG_State/GLState/ProgramState/ProgramObject.h"
+#include "MagmaProgramSource.h"
 #include "MG_State/GLState/ProgramState/ShaderObject.h"
 #include "MG_State/GLState/TextureState/TextureEnum.h"
 
@@ -471,9 +471,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ~ProgramFactory();
         ProgramFactory(const ProgramFactory&) = delete;
 
-        HashType ComputeHash(const MG_State::GLState::ProgramObject& program, CompileOptionFlags flags) const;
+        HashType ComputeHash(const MagmaProgramSource& program, CompileOptionFlags flags) const;
         const VkProgramObject& GetOrCreateProgram(
-            const MG_State::GLState::ProgramObject& program, CompileOptionFlags flags);
+            const MagmaProgramSource& program, CompileOptionFlags flags);
 
         // The default framebuffer's current image height, baked as a literal into every
         // FragCoordYFlip variant (there is no push-constant or specialization channel here, and
@@ -600,7 +600,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void ReflectFragmentOutputs(const Vector<ShaderStage>& stages,
                         const Vector<Vector<Uint>>& spirv,
                         VkProgramObject& entry) const;
-        void ReflectLayout(const MG_State::GLState::ProgramObject& program, const Vector<Vector<Uint>>& spirv,
+        void ReflectLayout(const MagmaProgramSource& program, const Vector<Vector<Uint>>& spirv,
                            VkProgramObject& entry) const;
         // Fills needsPassthroughTessControl / passthroughTessControlEmulatable off the linked
         // modules. Const and reflection-only: it decides nothing about the pipeline, it only
