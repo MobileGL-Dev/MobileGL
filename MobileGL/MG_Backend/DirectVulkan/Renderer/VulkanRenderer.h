@@ -437,6 +437,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         struct WireImage {
             VkImage image = VK_NULL_HANDLE;
             VkFormat format = VK_FORMAT_UNDEFINED;
+            VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
             VkExtent2D extent{};
             VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
             VkImageLayout* trackedLayout = nullptr;
