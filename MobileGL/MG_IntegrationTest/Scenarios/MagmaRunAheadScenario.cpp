@@ -168,6 +168,11 @@ void main(){vec2 p[3]=vec2[3](vec2(-1,-1),vec2(3,-1),vec2(-1,3));gl_Position=vec
     HeldApply hold; ASSERT_NO_FATAL_FAILURE(HoldNextBatch());
     DrawTile(0);
     glBufferSubData(GL_ARRAY_BUFFER,0,sizeof(g),g.data()); DrawTile(1);
+    ExpectQueued(2); hold.Release();
+    // Resource creation requires a reply, and storage definitions may require an
+    // allocation acknowledgement. Do not hold the apply owner across those legal
+    // waits. There is still no GPU readback/Finish before all four draws, so the
+    // old GPU store must survive respecify and deletion until its draws complete.
     glBufferData(GL_ARRAY_BUFFER,sizeof(b),b.data(),GL_STREAM_DRAW); DrawTile(2);
     glDeleteBuffers(1,&buffer);
     // Request the recycled name through the public allocator. Record reuse must
@@ -179,7 +184,6 @@ void main(){vec2 p[3]=vec2[3](vec2(-1,-1),vec2(3,-1),vec2(-1,3));gl_Position=vec
     glBindBuffer(GL_ARRAY_BUFFER,replacement);
     glBufferData(GL_ARRAY_BUFFER,sizeof(y),y.data(),GL_DYNAMIC_DRAW);
     glVertexAttribPointer(0,4,GL_FLOAT,GL_FALSE,16,nullptr); DrawTile(3);
-    ExpectQueued(4); hold.Release();
     ExpectPixel(4,4,red,"original buffer version"); ExpectPixel(12,4,green,"SubData version");
     ExpectPixel(20,4,blue,"respecified store"); ExpectPixel(28,4,yellow,"recreated GL name");
 }

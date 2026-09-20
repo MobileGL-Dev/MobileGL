@@ -56,7 +56,7 @@
         // Only shutdown/swapchain replacement calls this, after device idle.
         if (m_wireDrawPass && m_frameContext.GetFrameCount() != 0) {
             auto& frame = m_frameContext.GetCurrent();
-            if (frame.isCommandRecording && VkRenderPassManager::GetActiveRenderPass() == m_wireDrawPass.get())
+            if (frame.isCommandRecording && VkRenderPassManager::GetActiveRenderPass())
                 VkRenderPassManager::EndRenderPass(frame.commandBuffer);
         }
         m_wireDrawPass.reset();
