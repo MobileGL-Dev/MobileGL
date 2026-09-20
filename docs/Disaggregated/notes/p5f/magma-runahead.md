@@ -85,6 +85,11 @@ RSP 测试采样也修正了真实的 fixture race：异步 EndFrame 返回不�
 - pull / push 构建通过；G1 `.text 10806051 → 10806051`，27815 defined symbols，
   added/removed/resized/renamed **0/0/0/0**。G2 **3017 == 3017**。
   G14 完整 JSON 名称集合 **3774 → 3803，+29 / -0**。
+- G1 上述结论是仓库脚本的 section size / symbol name / symbol size 比较，
+  不声称不同构建的原始 `.text` 逐字节相等。额外只读反汇编核对发现原始差异全部
+  来自元数据：7255 条 RIP 引用因生成的 SPIRV-Tools version 字符串缩短7字节而
+  位移，解引用字符串相同；107 条 immediate 对应同一源码文本的 `__LINE__` 位移。
+  生成的版本字符串和时间戳也不同，未把这种构建可复现性差异记成运行逻辑变化。
 - wire/field/dirty generators、field self-test 与四个 include closure probes 全过。
   证据目录 `final-gates-194382c9/`、`negative-194382c9/`、`syncval-194382c9/`、
   `tracker-red-once-194382c9/`，均在上述主机日志根目录下。
