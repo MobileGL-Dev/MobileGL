@@ -38,7 +38,7 @@ MOBILEGL_TRANSPORT=inproc ctest --test-dir build-split -L integration-gpu --outp
 
 | 变量 | 默认 | 用途 |
 |---|---:|---|
-| `MOBILEGL_IPC_STAGE_MB` | `32` | `SEG_STAGE` 容量；目标负载 profile 显式 `256`（单次 128 MiB 上传），默认不改 |
+| `MOBILEGL_IPC_STAGE_MB` | `32` | `SEG_STAGE` 容量（一条记录一个整 blob）；**内容分块预算 = 本值的 1/4**（`MGPipeStageChunkBytes()`，默认 8 MiB），超预算的 buffer 范围 / 纹理级切成多条记录，故历史 profile 的显式 `256` 不再是这两条路径的必需 |
 | `MOBILEGL_IPC_VERB_BARRIER` | `1` | 每个 verb 等 `appliedSeq == emitSeq`；`0` 只作 E1 阴性控制 |
 | `MOBILEGL_IPC_AUDIT` | `0` | apply 返回后以 `0xDD` 填退休 staging，查跨返回持针 |
 | `MOBILEGL_IPC_STRICT_ERRORS` | `0` | BARRIER-PULLED residual input 提升为具名 Fatal |

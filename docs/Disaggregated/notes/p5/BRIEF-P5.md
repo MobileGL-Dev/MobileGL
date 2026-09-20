@@ -213,16 +213,24 @@ OpenRA 再加 blit/纹理/程序若干；总计 6–15 个。**其余 ~25 条目
 通用规则：**批处理只允许让水位线变晚，绝不允许让等待者看到"比实际做的更多"的值。**
 **pad 记录（`kRecPad`）不推进 seq**——两侧都必须跳过它再计数，否则每一次回绕都会让 seq 永久错位且无校验和。
 
-### R-10 — P5 不做分块，但必须证明不需要
+### R-10 — blob 走 `SEG_STAGE`，记录上界，以及内容侧的分块
 
 规则：**所有 blob 走 `SEG_STAGE`，记录本身只带 `{Seg, Offset, Size}`**，于是
 `CreateShaderState` 的记录是 192+8 字节而不是整个 archive。var-tail 的长度由 GL 上限或发射器自己的
 切分（`MGPipeForEachSubDataRecordRange`，`PipeFill.cpp:694-713`）界定。因此**没有一条记录会超过
-`RingProducer::MaxRecordBytes() == Capacity()/2`**，超过即 `Fatal{RingOverrun}`，分块留 P8
-（`ROADMAP.md:25`）。
-**证明义务**：wire 包加一个 `PipeStats` 最大记录字节的 max 计数器，在缩减路径 + OpenRA 上出数，
+`RingProducer::MaxRecordBytes() == Capacity()/2`**，超过即 `Fatal{RingOverrun}`——**记录本身永不分块**。
+**内容侧分块已落地（本节原写"P5 不做分块…分块留 P8"）**：`SEG_STAGE` 仍是"一条记录一个整 blob"的
+线性 arena，但会超出它的内容由发射侧按 stage chunk 预算切开——预算 `MGPipeStageChunkBytes()` =
+`clamp(segment/4, 4096, segment)`，默认 `MOBILEGL_IPC_STAGE_MB=32` → 8 MiB
+（`MG_Remote/Client/GpuWritePending.h:169`，无 session / monolith / server 角色自身返回 0 = 不切）。
+已接入的两条内容路径：**buffer 内容走查**（`PipeFill.cpp` 的 `MGPipeContentChunkCap`，`1e7c372e`）
+与**纹理一级的整宽 slab**（`TextureEmit.h` 的 slab 切分，服务端由 `StagedTextureStore::AdoptRun`
+按 run 拼回整级、覆盖不全即 `Fatal{StageSnapshotTooNarrow}`，`9469d48e`）。**未接入分片的 record
+类型、以及单片仍大于 arena 的情形，仍由编码器的 `Fatal{RingOverrun, "SEG_STAGE"}` 兜底**；编码器
+上界（一条记录的 header + payload + 内联尾）与这条 Fatal 都不因分块而放松。
+**证明义务（不变）**：wire 包加一个 `PipeStats` 最大记录字节的 max 计数器，在缩减路径 + OpenRA 上出数，
 写进 MEASUREMENTS。若实测有记录逼近 `Capacity()/2`（默认 `MOBILEGL_IPC_RING_MB=8` → 4 MiB），
-立刻上报集成者，由集成者决定是提前做分块还是调大默认 ring。
+立刻上报集成者，由集成者决定是为该 record 类型加分片还是调大默认 ring。
 
 ### R-11 — 暂存字节的生命期：**应用侧不得跨返回持有指针**
 

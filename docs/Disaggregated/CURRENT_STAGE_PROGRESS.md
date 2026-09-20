@@ -275,7 +275,7 @@ p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提�
 
 | 项 | 证据 / 去向 |
 |---|---|
-| `SEG_STAGE` 默认 32 MiB 装不下目标负载的单次 128 MiB 上传；**决定 = 默认不改**，普查与 Redmi 显式 `MOBILEGL_IPC_STAGE_MB=256`；分块 / 专用 carrier 留 P8（`ROADMAP.md` 开放问题 11） | `p5b-results/blit-codex-v1.md`；`MEASUREMENTS.md` §7.2 |
+| ~~`SEG_STAGE` 默认 32 MiB 装不下目标负载的单次 128 MiB 上传~~ | **内容侧分块已落地（2026-09-20）**：buffer 范围走查 `1e7c372e`、纹理整宽 slab `9469d48e`，预算 `MGPipeStageChunkBytes()`（默认 segment/4 = 8 MiB），默认 32 MiB 即可容纳；未接入分片的 record 类型与专用 carrier 仍归 P8（`ROADMAP.md` 开放问题 11）。历史证据 `p5b-results/blit-codex-v1.md`；`MEASUREMENTS.md` §7.2 |
 | Magma P7 剩余功能与性能 | 应用 VBO/EBO/UBO、已对齐 SSBO/atomic/texel、persistent 和 indirect 消费已随 `38919d45` 实际游戏修复落地；XFB buffer capture、部分不对齐 range/UBO byte-tail、placeholder/native-format 及批处理性能仍待做。P5b “82个错答”只属历史计数；见 [修复报告](notes/p5f/magma-inproc-fix.md) |
 | rd12 GLES `InitialBytesNotCarried/resource_respecify`、rd12 VK `BarrierTimeout/Present`、`iris-bsl-esc-menu-854` GLES、三条 `texture-remint-pull` 仿真槽、`create-indirect` VK 内存膨胀 | 79 trace 普查 `counts.json` / `trace-transitions.json` |
 | RGB 三通道 CPU mip 回退仍是具名 Fatal | `p5b-results/mip-codex-v1.md` |

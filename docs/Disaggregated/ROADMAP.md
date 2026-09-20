@@ -125,7 +125,7 @@ P5c 当时移交的对象类 BARRIER-PULLED、transport registry 前端键、EGL
 | `GetCaps` 的两个 blobref | 目前不骑 record；一旦运输，必须有 server→client carrier rule，不能套 `SEG_STAGE` |
 | PACK-PBO readback | P5 具名拒绝；真实形状是 server 写 buffer resource、client `MarkGpuWritten`，P6（ID-57） |
 | ABI fingerprint | 不混 segment sizes；改变 8/32/16 MiB + 256 KiB ledger 时仍欠这项 |
-| 默认 32 MiB staging | 目标负载单次 128 MiB 上传装不进默认 stage；普查 / Redmi 显式 256 MiB profile，默认不改；分块 / 专用 carrier 归 P8（开放问题 11） |
+| 默认 32 MiB staging | 目标负载单次 128 MiB 上传装不进默认 stage；**内容侧分块已落地**（buffer 范围走查 `1e7c372e`、纹理整宽 slab `9469d48e`，预算 `MGPipeStageChunkBytes()` = 默认 segment/4 = 8 MiB），故普查 / Redmi 的显式 256 MiB profile 不再是这两条路径的必需；未接入分片的 record 类型与专用 carrier 仍归 P8（开放问题 11） |
 | P5b 的 inproc 依赖 | 历史的 scoped client binding、mip registry 查询与 FBO death mailbox 已经 P5c/P5f 改为记录、句柄和控制/事件路径；P6 核验并装配已有载体，不再重做这些迁移 |
 | 未迁移与仿真路径 | 15 个 class-C 槽（query / sync 尾 / `GetTexImage` / `SetSwapInterval`）→ P9 / P10；client vertex arrays、multi-draw client indices、RGB 三通道 CPU mip、renderbuffer copy endpoint、未绑定 named clear、`texture-remint-pull` 仿真保留具名拒绝 → P8 / P9；Magma split compute / image 的“82 个错答”是 P5b 历史普查计数，不是当前失败清单；P5f 后续已补应用 buffer consumers 与 Android 旋转 blit，Magma inproc 已能运行所测 MC 世界；后续 run-ahead 已完成（[报告](notes/p5f/magma-runahead.md)）；XFB、部分不对齐范围、placeholder/native-format 及进一步性能工作仍归 P7（[报告](notes/p5f/magma-inproc-fix.md)） | **P5e 补**：client vertex arrays 在 run-ahead 下是**具名拒绝**（ID-82，`Fatal{UnmigratedVerb, "DrawArrays+CLIENT_ARRAYS"}`），并有自己的预期红车道 `integration-clientarrays-split`（ID-134）；staging 仍归 P8
 | E2 wire 内容控制 | draw-drop 是 OpenRA 的有效控制（758 draws，SSIM 0.000036）；clear-drop 被全屏 overdraw 掩盖，不能作控制 |
@@ -147,7 +147,7 @@ P0 已回答的不再列出（spike A 的域、spike B 的分档、`posix_spawn`
 8. **一份反射归档能否服务三个消费者。** Espryt 那一半已答（P4a）：能且不需要复制。Magma 的两个消费者（`DirectVulkan.cpp` 为 `glGetProgramResource*` 重跑反射）未答。P7。
 9. **viewport-array 回放能否塞进一次 `draw_vbo`**：各遍之间观察到的状态是否与今天一致未验证。P8。
 10. **`ResidentSubData` 的不对称。** P3a 原样保留：`SubDataResident` 是 `kOptional`，Magma 未补实现、`kCapResidentSubData` 未接线。P7 / 独立 `dev` PR。
-11. **`SEG_STAGE` 的上限。** 目标负载已实测单次 128 MiB 上传，超过默认 32 MiB；普查与 Redmi 统一显式 256 MiB，默认不变，分块路径未实现。P8 需要 MC in-world / Create 的占用分布与更大 blob 的 carrier 设计。
+11. **`SEG_STAGE` 的上限。** 内容侧已答（2026-09-20）：**分块已实现**——buffer 范围走查（`1e7c372e`）与纹理整宽 slab（`9469d48e`）按 `MGPipeStageChunkBytes()`（默认 32 MiB 的 1/4 = 8 MiB）切成多条 `resource_subdata`，所以单次 128 MiB 上传不再需要显式 `MOBILEGL_IPC_STAGE_MB=256`；单片仍超 arena 或该 record 类型未接入分片时仍是 `Fatal{RingOverrun, "SEG_STAGE"}` 兜底。**仍未答**：未接入分片的 record 类型（宿主索引 span、`SetGlobalConstants` 的整个 UBO 等）的更大 blob carrier 设计，以及 MC in-world / Create 的占用分布。P8。
 12. **P13 之后 split-only 渲染 bug 的 server 侧第二意见。** verify 构建 + recorder 只覆盖推送内容，不覆盖后端对它的解释。
 13. **烘焙后的内部 shader 能否在没有活 `ProgramObject` 的情况下表达 uniform location 与 UBO 布局。** 未做原型。P7。
 14. **推送模型改变哪些按拉取模式调过的缓存命中率。** 幸存者容量在 P13 重调。一条线索：设备上 26.3 Espryt 的 `sve` ≈ draw 数（每 draw 重发一次 sampler-view 集合），桌面只有 ~0.07/draw；列入 P3b/P4b 优化清单。

@@ -339,6 +339,8 @@ Espryt T1（`0x1fff` − pull）= +1076.1，T2（`0x1ff` − pull）= +1064.7，
 
 max record bytes（x2，`37fc4fdb`）：Triangle / persistent map / OpenRA 25 帧 / SmallRing 都是 **`maxrec=784 B` / `SetVertexAttribDefaults`**，默认 cap 4 MiB（占 0.019%）——这些负载不需要 chunking；oversized `DrawVbo` 尾的 unit 具名拒绝 `Fatal{RingOverrun, "DrawVbo"}`。
 
+**内容分块落地（2026-09-20，`1e7c372e` buffer / `9469d48e` texture）**：`SEG_STAGE` 仍是"一条记录一个整 blob"的 arena，但会超出它的内容由发射侧按 stage chunk 预算 `MGPipeStageChunkBytes()` = `clamp(segment/4, 4096, segment)`（默认 32 MiB → 8 MiB）切成多条 `resource_subdata`——buffer 范围走查与纹理一级的整宽 slab（服务端 `StagedTextureStore::AdoptRun` 拼回整级）。§7.2 普查为容纳单次 128 MiB 上传而显式设的 `MOBILEGL_IPC_STAGE_MB=256` 因此不再是这两条路径的必需；未接入分片的 record 类型仍由 `Fatal{RingOverrun, "SEG_STAGE"}` 具名拒绝。上段的 `maxrec` 数字是分块前的测量，分块后的逐 blob 字节分布尚无新测量。
+
 ### 6.4 Redmi 四臂 A/B（split 未测）
 
 会话 2026-09-16，runner `eec0e836`，三份 APK 源码头 joint `e61d0012`；臂 = pull APK / push APK / split APK + `MOBILEGL_TRANSPORT=inproc` / splitctl（split APK 不设 transport）。40 组前后 pin check 全 P/P，37.2–39.9 °C。**27 组完成 / 13 组失败：全部 10 组 split 在 benchmark 前中止**（improved-transparency 双后端 `DrawElementsInstancedBaseVertex`，其余 `DrawElements`），另 3 组是 rd12/DirectVulkan 的既有 `scudo` 崩溃。帧 p50 / p99（ms）：

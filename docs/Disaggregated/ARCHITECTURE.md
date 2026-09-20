@@ -121,7 +121,7 @@ Flags：`kNeedsAck`、`kHasBlob`(B，payload 拥有一个 `MGPBlobRef` 成员，
 - `MGHostSpan`（32 B）是唯一形状随传输而变的东西：monolith 下 `Ptr` 指向 shadow 或应用内存；split 下 `Ptr == nullptr`、字节在 `SEG_STAGE`，或 `Seg == kMGHostSpanSegFromServerIndexMirror`（P8）。它只进变长尾（`DrawVbo` 的用户索引、`SetShaderBuffers` 的具名 UBO 字节），永不内联进定长 payload——VBO 路径不为它付字节。
 - 变长记录（`kVarTail`）= 定长前缀 + 自描述长度的内联尾巴；`kHasBlob` 记录额外校验 `BlobRef` 落在其声明的段内。`SEG_CMD` 是对端并发写入的区域，运行期违反一律 `Fatal{ProtocolCorruption}`。
 - wire 记录头 `MGPWireRecHeader{Op:u16, Flags:u16, Size:u32}`（8 B），Size 含头、8 字节倍数；**没有逐记录序号字段**——seq 就是记录序数（producer `m_emitSeq++` / consumer `m_applySeq++`）。`Flags` 是 ring 封帧，永不是 call flags（R-17）。
-- 单条记录上界 = ring 容量的一半（`RingProducer::MaxRecordBytes()`），超过的记录被具名拒绝（`Fatal{RingOverrun}`），不分块（R-10；实测 `maxrec` 见 `MEASUREMENTS.md` §6.3）。
+- 单条记录上界 = ring 容量的一半（`RingProducer::MaxRecordBytes()`），超过的记录被具名拒绝（`Fatal{RingOverrun}`）——**记录本身永不分块**（R-10；实测 `maxrec` 见 `MEASUREMENTS.md` §6.3）。**内容侧已分块**：会超出 `SEG_STAGE` 的 blob 由发射侧按 stage chunk 预算 `MGPipeStageChunkBytes()`（`clamp(segment/4, 4096, segment)`，默认 8 MiB）切成多条记录——buffer 范围走查（`PipeFill.cpp`）与纹理一级的整宽 slab（`TextureEmit.h`，服务端 `StagedTextureStore::AdoptRun` 拼回整级）；单片仍超容量或该 record 类型未接入分片时仍是 `Fatal{RingOverrun, "SEG_STAGE"}` 兜底。
 - `MGPSubData` 的 buffer 半边：`Target == Buffer` 时目的字节范围搭在 `UnionBox.X/W` 上，`MGPipeSetSubDataBufferRange()` 是唯一拼写；单条记录上限 offset 2³¹−1 / size 2³²−1。
 
 ### 4.1 关键 payload
@@ -369,7 +369,7 @@ P13：删 `SnapshotFromGLContext()` 的非 verify 分支、`MGB_CTX`、`MOBILEGL
 | `SEG_SHADOW[n]` | 5 | client | 每对象 ≥256 KiB（Phase 2） | 零拷贝 buffer/texture shadow |
 | `SEG_ADOPT[n]` | 6 | server（client RW） | 每 buffer ≥16 MiB（P11） | 应用直写 GPU 内存 |
 
-`SEG_STAGE` 默认 32 MiB 装不下 P5b 目标负载的单次 128 MiB 上传；**默认不改**，普查与设备用显式 `MOBILEGL_IPC_STAGE_MB=256` profile，分块 / 专用 carrier 是 P8 的设计（`ROADMAP.md` 开放问题 11）。
+`SEG_STAGE` 默认 32 MiB 曾装不下 P5b 目标负载的单次 128 MiB 上传；**内容侧分块已落地（2026-09-20）**——buffer 范围走查（`1e7c372e`）与纹理整宽 slab（`9469d48e`）按 `MGPipeStageChunkBytes()`（默认 segment/4 = 8 MiB）切成多条记录，默认 32 MiB 即可容纳，历史普查 / 设备的显式 `MOBILEGL_IPC_STAGE_MB=256` profile 不再是这两条路径的必需；未接入分片的 record 类型与专用 carrier 仍是 P8 的设计（`ROADMAP.md` 开放问题 11）。
 
 创建（`ShmSegment`）：Android `ASharedMemory_create`（API 26）；桌面 Linux `memfd_create`；其他 POSIX `shm_open`；Windows `CreateFileMappingW`。传递：POSIX `SCM_RIGHTS`（`FdPassing`，专用 `AF_UNIX SOCK_DGRAM` socketpair）；Windows 段名走 `SegmentRef`。不进 `SEG_STAGE` 的：restart 重写的整 EBO 与 multi-draw 展平的索引流（走索引镜像）。`SEG_SHADOW` 块的退休：释放的块进 pending 链表，`appliedSeq`（借入 GPU 时间线的 slot 用 `retiredSeq`）越过最后一条引用它的记录后才归还。
 
