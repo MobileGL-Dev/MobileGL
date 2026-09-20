@@ -2379,7 +2379,8 @@ TEST(P5fReverseChannel, ASecondSessionCannotClaimTheSameReverseChannel) {
     EXPECT_EXIT({
         FvSession owner;
         if (!owner.Handshake()) std::_Exit(7);
-        std::unique_ptr<Transport::InProcessTransport> client, server;
+        std::unique_ptr<Transport::InProcessTransport> client;
+        std::unique_ptr<Transport::InProcessTransport> server;
         Transport::InProcessTransport::CreatePair(client, server);
         Server::ServerSession other;
         // The owner refusal precedes receiving a Hello or replacing the segment resolver.
