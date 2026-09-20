@@ -863,7 +863,7 @@ TEST_F(FieldOwnershipTest, AClientFreshStampCannotReviveARetiredServerGetter) {
         // Simulate a regressed writer stamping the old mirror as fresh. FATAL is a
         // representation verdict, not a freshness verdict, and must still reject it.
         auto& filled = const_cast<MGPipeFilledState&>(gPipeInputs.FilledState());
-        filled.FilledGen[Index(MGPipeInputField::GetBoundVertexArray)] = filled.VerbSerial;
+        filled.FilledGen[Index(MGPipeInputField::GetBoundVertexArray)] = filled.CurrentVerbSerial;
         (void)gPipeInputs.GetBoundVertexArray();
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
