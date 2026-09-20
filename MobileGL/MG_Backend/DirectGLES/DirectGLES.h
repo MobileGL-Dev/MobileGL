@@ -23,6 +23,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // Content uploads use scratch bindings, so draws and dispatches call this after
     // texture synchronization.
     void BindCurrentTextures();
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // Native/server-only color level readback. Returns tightly packed, owned
+    // bytes in the requested pair; never consults a frontend texture or PACK/PBO.
+    // The caller resolves identity/extent from its resource record and supplies
+    // whether the SOURCE allocation already uses an image carrier.
+    Bool ReadTextureLevelTight(GLuint texture, TextureTarget target, TextureUploadTarget uploadTarget,
+                               TextureInternalFormat logicalFormat, GLint level, const IntVec3& logicalExtent,
+                               Bool sourceUsesImageCarrier, GLenum format, GLenum type, Vector<Uint8>& bytes);
+#endif
     void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
     void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value);
     void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value);

@@ -1852,20 +1852,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void RequireImageBindableStorage(
                 const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
 #if MOBILEGL_PIPE_PUSH
-            // P5e (tx2), CONTRACT-P5E §5.2 / G-S2-5. THE SAME TRANSITION WITH NO FRONTEND
-            // ARGUMENT, and with the re-dirty NAMED AT THE ENTRY instead of three frames deep.
-            //
-            // The frontend overload's whole second half is the re-dirty: it walks the CLIENT's
-            // level shadows to re-arm every level the widened carrier owes. A server has no
-            // client address space to walk, so under a transport that half is not "not migrated
-            // yet", it is not expressible - ImageBindableHint is the prevention (a texture that
-            // has ever been image-bound is allocated in the carrier from the start) and P9 owns
-            // the pull. The refusal is raised here, at the entry, where the reason can still be
-            // stated, rather than at the MarkStorageDirty guard the loop would reach.
-            //
-            // A texture arriving here with NO backend storage yet pulls nothing - it is simply
-            // allocated image-bindable up front - so that case is not refused, it is the whole
-            // point of the hint.
+            // Server-owned promotion: preserve an already image-bindable native
+            // allocation, or capture the old native contents, merge pending
+            // upload regions and re-arm the server's whole-level replay set.
+            // First allocations use staged bytes directly. No frontend dirty
+            // flag, allocator or pixel-store object participates.
             void RequireImageBindableStorageByHandle(MG_Pipe::MGPipeHandle res,
                                                      const MG_Pipe::MGPipeResourceRecord& record);
 #endif

@@ -5988,42 +5988,111 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 #if MOBILEGL_BUILD_DISAGGREGATED
-            // THE REFUSAL, AT THE ENTRY. The predicate is the SAME one the frontend overload
-            // hoisted to ahead of its first guarded contact - "would any level actually be
-            // replayed", answered from the server's own staged-texture store - so this changes
-            // WHERE the abort happens and not WHETHER it happens. What it buys is that the
-            // reason can still be stated: three frames deeper it was a MarkStorageDirty guard
-            // naming "texture-legacy-arm", which says nothing about image bindability.
-            //
-            // A texture with nothing defined yet is NOT refused: it is allocated image-bindable
-            // up front and pulls nothing, which is exactly what ImageBindableHint exists to make
-            // the common case.
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                const auto format = static_cast<TextureInternalFormat>(record.Desc.InternalFormat);
+                // ES image binding needs immutable storage, but an already
+                // immutable core-format allocation needs no replacement. Keep
+                // its GPU contents and native name; normal serial/shape checks
+                // below still consume pending uploads and real redefinitions.
+                if (m_isInitialized && m_backendStorageImmutable && !GetImageBindableStorageWidening(format)) {
+                    m_imageBindableStorageRequired = true;
+                    m_forceTextureParamsResync = true;
+                    return;
+                }
                 auto& store = MG_Remote::Server::ServerStagedTexture();
                 const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(res);
-                Bool anyLevelWouldReplay = false;
+                const auto target = BufferImpl::StagedTextureTargetForPipeTarget(record.Desc.Target);
+                GLenum canonicalFormat = GL_NONE, canonicalType = GL_NONE;
+                MG_Util::TextureFormatProcessor::NormalizePixelFormat(
+                    MG_Util::ConvertTextureInternalFormatToGLEnum(format), {}, nullptr,
+                    &canonicalFormat, &canonicalType);
                 for (const auto& uploadTarget :
                      BufferImpl::StagedUploadTargetsForPipeTarget(record.Desc.Target)) {
                     for (Uint32 level = 0; level < record.Desc.Levels; ++level) {
-                        if (store.IsLevelDefined(key, static_cast<Uint16>(uploadTarget),
-                                                 static_cast<Uint16>(level))) {
-                            anyLevelWouldReplay = true;
-                            break;
+                        const auto targetCode = static_cast<Uint16>(uploadTarget);
+                        const auto levelCode = static_cast<Uint16>(level);
+                        const IntVec3 extent = store.LevelExtentOrUndefined(key, targetCode, levelCode);
+                        if (extent.x() <= 0 || extent.y() <= 0 || extent.z() <= 0) continue;
+                        const auto* pending = FindPipeTextureUpload(record, targetCode, levelCode);
+                        const Bool covered = store.IsCovered(key, targetCode, levelCode);
+                        const MG_Pipe::MGPBox whole{0, 0, 0, static_cast<Uint32>(extent.x()),
+                            static_cast<Uint32>(extent.y()), static_cast<Uint32>(extent.z())};
+                        // A genuinely full pending write owns every byte. A
+                        // union box covering the level is not sufficient when
+                        // its explicit rectangles leave GPU-written gaps.
+                        const auto coversWhole = [&](const auto& box) {
+                            return box.X == 0 && box.Y == 0 && box.Z == 0 &&
+                                   box.W == whole.W && box.H == whole.H && box.D == whole.D;
+                        };
+                        const Bool pendingWhole = pending && (pending->Regions.empty()
+                            ? coversWhole(pending->UnionBox)
+                            : std::any_of(pending->Regions.begin(), pending->Regions.end(), coversWhole));
+                        if (m_isInitialized && !(covered && pendingWhole)) {
+                            Vector<Uint8> snapshot;
+                            if (!ReadTextureLevelTight(m_backendTextureId, target, uploadTarget, format,
+                                    static_cast<GLint>(level), extent, /*sourceUsesImageCarrier=*/false,
+                                    canonicalFormat, canonicalType, snapshot)) {
+                                MGLOG_F("MGPipe: Fatal{ResourceUnavailable, \"image-promotion-readback\"} {%u,%u} level=%u",
+                                        res.Slot, res.Gen, level);
+                                std::abort();
+                            }
+                            if (pending) {
+                                // Native contents include prior draws/image
+                                // writes; the pending stage owns ONLY its boxes.
+                                // Merge those boxes before adopting a whole-level
+                                // snapshot, never overwrite untouched GPU texels
+                                // with the rest of a stale client staging run.
+                                const SizeT pixels = static_cast<SizeT>(extent.x()) * extent.y() * extent.z();
+                                const SizeT stagedSize = store.LevelByteSize(key, targetCode, levelCode);
+                                if (!covered || !pixels || snapshot.size() != stagedSize || stagedSize % pixels) {
+                                    MGLOG_F("MGPipe: Fatal{StageSnapshotTooNarrow, \"image-promotion-pending\"}");
+                                    std::abort();
+                                }
+                                const SizeT bpp = stagedSize / pixels;
+                                const Uint8* staged = store.RequireLevelBytes(key, targetCode, levelCode, "image-promotion");
+                                const auto merge = [&](Int32 x, Int32 y, Int32 z, Uint32 w, Uint32 h, Uint32 d) {
+                                    if (x < 0 || y < 0 || z < 0 || Uint64(x) + w > whole.W ||
+                                        Uint64(y) + h > whole.H || Uint64(z) + d > whole.D) {
+                                        MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"image-promotion-region\"}");
+                                        std::abort();
+                                    }
+                                    for (Uint32 slice = 0; slice < d; ++slice) {
+                                        for (Uint32 row = 0; row < h; ++row) {
+                                            const SizeT offset = ((static_cast<SizeT>(z + slice) * whole.H + y + row) * whole.W + x) * bpp;
+                                            Memcpy(snapshot.data() + offset, staged + offset, static_cast<SizeT>(w) * bpp);
+                                        }
+                                    }
+                                };
+                                if (pending->Regions.empty()) {
+                                    const auto& box = pending->UnionBox;
+                                    merge(box.X, box.Y, box.Z, box.W, box.H, box.D);
+                                } else {
+                                    for (const auto& box : pending->Regions)
+                                        merge(box.X, box.Y, box.Z, box.W, box.H, box.D);
+                                }
+                            }
+                            store.Adopt(key, targetCode, levelCode, extent, snapshot.data(), snapshot.size());
+                        }
+                        // Undefined contents have no byte run to preserve. A
+                        // first allocation can still be image-bindable without
+                        // inventing an upload or consulting the frontend.
+                        if (!store.IsCovered(key, targetCode, levelCode)) continue;
+                        if (!RearmPipeTextureLevelUpload(res,
+                                MG_Pipe::MGPipePackSubDataTarget(record.Desc.Target, static_cast<Uint32>(uploadTarget)),
+                                levelCode, whole)) {
+                            MGLOG_F("MGPipe: Fatal{ResourceUnavailable, \"image-promotion-pending-capacity\"}");
+                            std::abort();
                         }
                     }
-                    if (anyLevelWouldReplay) break;
-                }
-                if (anyLevelWouldReplay) {
-                    MG_Pipe::MGPipeUnmigratedEmulation("image-bindable-redirty");
                 }
             }
 #else
             (void)res;
             (void)record;
 #endif
-            // Nothing to replay, so the transition is just the two sticky flags plus the
-            // parameter resync the widening's swizzle needs - the whole of the frontend
-            // overload's first half, with its second half refused above.
+            // Every defined byte now belongs to the server and every required
+            // replay is in its pending set. The existing upload path builds and
+            // fills the immutable/widened carrier from those records.
             m_imageBindableStorageRequired = true;
             m_isInitialized = false;
             // The widened carrier's swizzle override, exactly as the frontend overload's tail
