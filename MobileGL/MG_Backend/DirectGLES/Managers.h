@@ -329,6 +329,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
 
         BackendPtr& GetOrCreate(const StatePtr& stateObj) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // Check before arm selection: disabling slot tables must not expose the
+            // legacy raw-pointer registry on a transport apply thread.
+            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread("Registry.GetOrCreate(StatePtr)");
+#endif
             MOBILEGL_ASSERT(stateObj != nullptr, "State object must not be null");
 
 #if MOBILEGL_PIPE_PUSH
@@ -389,6 +394,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // need the twin across another registry call must copy the BackendPtr out (or keep only
         // the pointee, which is heap-allocated and never moves).
         BackendPtr* Find(StateObject* stateObj) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // Check before arm selection: disabling slot tables must not expose the
+            // legacy raw-pointer registry on a transport apply thread.
+            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread("Registry.Find(StateObject*)");
+#endif
 #if MOBILEGL_PIPE_PUSH
             if (EsprytSlotTablesEnabled()) {
                 return m_slotTable.Find(stateObj);
@@ -409,8 +419,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return const_cast<StateBackendObjectRegistry*>(this)->Find(stateObj);
         }
 
-        iterator begin() { return m_entries.begin(); }
-        const_iterator begin() const { return m_entries.begin(); }
+        iterator begin() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread("Registry.begin");
+#endif
+            return m_entries.begin();
+        }
+        const_iterator begin() const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread("Registry.begin");
+#endif
+            return m_entries.begin();
+        }
         iterator end() { return m_entries.end(); }
         const_iterator end() const { return m_entries.end(); }
 

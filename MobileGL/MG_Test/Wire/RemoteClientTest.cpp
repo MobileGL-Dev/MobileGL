@@ -2004,6 +2004,34 @@ TEST(RemoteGuards, BarrieredFrontendRegistryMembersRefuseBothLegacyScopes) {
     }
 }
 
+TEST(RemoteGuards, LegacyRegistryWrapperCannotExposeFrontendKeysOnApply) {
+    using Registry = MG_Backend::DirectGLES::StateBackendObjectRegistry<
+        MG_State::GLState::TextureObject2D, FakeTwin, MGPipeKind::Texture>;
+    struct Probe { Registry* registry; SharedPtr<MG_State::GLState::TextureObject2D>* texture; int operation; };
+    for (int operation = 0; operation != 3; ++operation) {
+        const auto child = RunInChild([operation] {
+            StartControlSession();
+            auto texture = MakeShared<MG_State::GLState::TextureObject2D>(48);
+            Registry registry;
+            Probe probe{&registry, &texture, operation};
+            Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(+[](void* self) -> MobileGLResult {
+                auto& probe = *static_cast<Probe*>(self);
+                MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(true);
+                const MG_Pipe::MGPipeFrontendKeyedRegistryScope scope;
+                switch (probe.operation) {
+                case 0: probe.registry->Find(probe.texture->get()); break;
+                case 1: probe.registry->GetOrCreate(*probe.texture); break;
+                case 2: (void)probe.registry->begin(); break;
+                }
+                return MOBILEGL_OK;
+            }, &probe);
+            ClientSessionInstance().Stop();
+        });
+        ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
+        EXPECT_NE(child.Log.find("BackendSlotTable::Registry."), std::string::npos);
+    }
+}
+
 TEST(RemoteGuards, HandleRegistryMembersWorkOnBarrieredAndUnbarrieredApply) {
     const auto child = RunInChild([] {
         StartControlSession();
