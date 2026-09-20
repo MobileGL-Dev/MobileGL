@@ -267,6 +267,145 @@
             MagmaWireFatal("read-conversion");
     }
 
+    void VulkanRenderer::ResolveWireDepthStencil(WireImage source, WireImage destination,
+        GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1) {
+        const Int64 width = static_cast<Int64>(sx1) - sx0;
+        const Int64 height = static_cast<Int64>(sy1) - sy0;
+        if (!width || !height) return;
+        if (source.isDefault || destination.isDefault || source.is3D || destination.is3D ||
+            width <= 0 || height <= 0 || width != static_cast<Int64>(dx1) - dx0 ||
+            height != static_cast<Int64>(dy1) - dy0 || sx0 < 0 || sy0 < 0 || dx0 < 0 || dy0 < 0 ||
+            static_cast<Uint64>(sx1) > source.extent.width || static_cast<Uint64>(sy1) > source.extent.height ||
+            static_cast<Uint64>(dx1) > destination.extent.width || static_cast<Uint64>(dy1) > destination.extent.height)
+            MagmaWireFatal("multisample-depth-resolve-region");
+        VkImageAspectFlags formatAspects = VK_IMAGE_ASPECT_DEPTH_BIT;
+        if (source.format == VK_FORMAT_S8_UINT) formatAspects = VK_IMAGE_ASPECT_STENCIL_BIT;
+        else if (source.format == VK_FORMAT_D16_UNORM_S8_UINT || source.format == VK_FORMAT_D24_UNORM_S8_UINT ||
+                 source.format == VK_FORMAT_D32_SFLOAT_S8_UINT)
+            formatAspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+        if (!m_wireCreateRenderPass2 ||
+            ((formatAspects & VK_IMAGE_ASPECT_DEPTH_BIT) && !(m_wireDepthResolveModes & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT)) ||
+            ((formatAspects & VK_IMAGE_ASPECT_STENCIL_BIT) && !(m_wireStencilResolveModes & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT)))
+            MagmaWireFatal("multisample-depth-resolve-capability");
+
+        // vkCmdResolveImage is color-only. A depth/stencil resolve subpass must
+        // write at the source coordinates and may require both aspects to use
+        // the same mode. Resolve both into owned scratch storage, then copy
+        // only the GL-requested aspect, preserving the other destination aspect.
+        auto scratch = MakeUnique<VkTextureManager::TextureResource>();
+        VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = source.format;
+        imageInfo.extent = {source.extent.width, source.extent.height, 1};
+        imageInfo.mipLevels = imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VmaAllocationCreateInfo allocation{};
+        allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        allocation.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        if (vmaCreateImage(m_allocator, &imageInfo, &allocation, &scratch->image, &scratch->allocation, nullptr) != VK_SUCCESS)
+            MagmaWireFatal("multisample-depth-resolve-allocation");
+        scratch->format = source.format;
+        scratch->extent = source.extent;
+        scratch->aspect = formatAspects;
+        WireImage resolved{};
+        resolved.image = scratch->image;
+        resolved.format = scratch->format;
+        resolved.extent = scratch->extent;
+        resolved.aspect = formatAspects;
+        resolved.trackedLayout = &scratch->layout;
+        TransitionWireImage(source, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        TransitionWireImage(resolved, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+        VkImageView views[2]{};
+        VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        viewInfo.image = source.image;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = source.format;
+        viewInfo.subresourceRange = {formatAspects, source.level, 1, source.layer, 1};
+        VK_VERIFY(vkCreateImageView(m_device, &viewInfo, nullptr, &views[0]));
+        viewInfo.image = resolved.image;
+        viewInfo.subresourceRange = {formatAspects, 0, 1, 0, 1};
+        VK_VERIFY(vkCreateImageView(m_device, &viewInfo, nullptr, &views[1]));
+        VkAttachmentDescription2 attachments[2]{};
+        for (Uint32 i = 0; i < 2; ++i) {
+            auto& attachment = attachments[i];
+            attachment.sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2;
+            attachment.format = source.format;
+            attachment.samples = i == 0 ? source.samples : VK_SAMPLE_COUNT_1_BIT;
+            attachment.loadOp = attachment.stencilLoadOp = i == 0 ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            attachment.storeOp = attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+            attachment.initialLayout = attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        }
+        VkAttachmentReference2 sourceReference{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2};
+        sourceReference.attachment = 0;
+        sourceReference.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        sourceReference.aspectMask = formatAspects;
+        VkAttachmentReference2 resolveReference = sourceReference;
+        resolveReference.attachment = 1;
+        VkSubpassDescriptionDepthStencilResolve resolve{VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_DEPTH_STENCIL_RESOLVE};
+        resolve.depthResolveMode = (formatAspects & VK_IMAGE_ASPECT_DEPTH_BIT) ? VK_RESOLVE_MODE_SAMPLE_ZERO_BIT : VK_RESOLVE_MODE_NONE;
+        resolve.stencilResolveMode = (formatAspects & VK_IMAGE_ASPECT_STENCIL_BIT) ? VK_RESOLVE_MODE_SAMPLE_ZERO_BIT : VK_RESOLVE_MODE_NONE;
+        resolve.pDepthStencilResolveAttachment = &resolveReference;
+        VkSubpassDescription2 subpass{VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2};
+        subpass.pNext = &resolve;
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.pDepthStencilAttachment = &sourceReference;
+        VkRenderPassCreateInfo2 passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2};
+        passInfo.attachmentCount = 2;
+        passInfo.pAttachments = attachments;
+        passInfo.subpassCount = 1;
+        passInfo.pSubpasses = &subpass;
+        VkRenderPass pass = VK_NULL_HANDLE;
+        VK_VERIFY(m_wireCreateRenderPass2(m_device, &passInfo, nullptr, &pass));
+        VkFramebufferCreateInfo framebufferInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+        framebufferInfo.renderPass = pass;
+        framebufferInfo.attachmentCount = 2;
+        framebufferInfo.pAttachments = views;
+        framebufferInfo.width = source.extent.width;
+        framebufferInfo.height = source.extent.height;
+        framebufferInfo.layers = 1;
+        VkFramebuffer framebuffer = VK_NULL_HANDLE;
+        VK_VERIFY(vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &framebuffer));
+        VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+        begin.renderPass = pass;
+        begin.framebuffer = framebuffer;
+        begin.renderArea = {{sx0, sy0}, {static_cast<Uint32>(width), static_cast<Uint32>(height)}};
+        auto& frame = m_frameContext.GetCurrent();
+        vkCmdBeginRenderPass(frame.commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdEndRenderPass(frame.commandBuffer);
+        TransitionWireImage(resolved, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        TransitionWireImage(destination, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        if (source.format == destination.format) {
+            VkImageCopy copy{};
+            copy.srcSubresource = {source.aspect, 0, 0, 1};
+            copy.srcOffset = {sx0, sy0, 0};
+            copy.dstSubresource = {source.aspect, destination.level, destination.layer, 1};
+            copy.dstOffset = {dx0, dy0, 0};
+            copy.extent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
+            vkCmdCopyImage(frame.commandBuffer, resolved.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                          destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        } else {
+            // A logical GL depth format may use different native renderbuffer
+            // and texture formats. Re-encode only after producing real resolved
+            // samples. Keep all scratch objects local across this helper's flush.
+            if (!BlitDepthAcrossFormats(frame, resolved.image, resolved.format, &scratch->layout, 0, 0,
+                destination.image, destination.format, destination.trackedLayout, destination.level, destination.layer,
+                sx0, sy0, dx0, dy0, static_cast<GLint>(width), static_cast<GLint>(height),
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                source.aspect == VK_IMAGE_ASPECT_STENCIL_BIT))
+                MagmaWireFatal("multisample-depth-resolve-conversion");
+        }
+        WireRetiredObjects retired{};
+        retired.framebuffers.push_back(framebuffer);
+        retired.renderPasses.push_back(pass);
+        retired.imageViews = {views[0], views[1]};
+        retired.textures.push_back(Move(scratch));
+        RetireWireObjects(Move(retired));
+    }
+
     void VulkanRenderer::BlitWireFramebuffers(GLint sx0, GLint sy0, GLint sx1, GLint sy1,
         GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter) {
         RetireWireDrawPass();
@@ -314,6 +453,13 @@
             WireImage destination = ResolveWireImage(*draw,dst,aspect);
             if (!source.image || !destination.image) return;
             m_textureManager->FlushPendingUploads();
+            if (aspect != VK_IMAGE_ASPECT_COLOR_BIT && source.samples != VK_SAMPLE_COUNT_1_BIT &&
+                destination.samples == VK_SAMPLE_COUNT_1_BIT) {
+                ResolveWireDepthStencil(source, destination, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1);
+                if (dst.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
+                    m_textureManager->MarkWireTextureGpuWritten(destination.storage, destination.level, destination.layer, 1);
+                return;
+            }
             if (aspect == VK_IMAGE_ASPECT_COLOR_BIT && source.samples != VK_SAMPLE_COUNT_1_BIT &&
                 destination.samples == VK_SAMPLE_COUNT_1_BIT) {
                 // A resolve cannot flip axes or convert RGBA to a BGRA/default

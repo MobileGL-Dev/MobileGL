@@ -362,13 +362,13 @@ namespace MGITest {
             GTEST_SKIP() << "this driver cannot host a 4x multisample DEPTH24_STENCIL8 renderbuffer";
         }
         FirstGLError();
-        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.875f, 0);
+        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.875f, 63);
         ASSERT_EQ(FirstGLError(), 0u);
 
         // The destination starts at a depth the resolve must overwrite everywhere.
         DepthSource resolved = MakeTextureSource(GL_DEPTH24_STENCIL8);
         ASSERT_TRUE(SourceIsUsable());
-        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.125f, 0);
+        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.125f, 17);
         ASSERT_EQ(FirstGLError(), 0u);
 
         glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
@@ -381,6 +381,22 @@ namespace MGITest {
         const std::vector<float> depth = ReadDepthFloat(0, 0, kWidth, kHeight);
         EXPECT_EQ(FirstGLError(), 0u);
         ExpectAllDepth(depth, 0.875f, "resolved multisample depth");
+        const std::vector<int> stencil = ReadStencilInt(0, 0, kWidth, kHeight);
+        EXPECT_EQ(FirstGLError(), 0u);
+        ExpectAllStencil(stencil, 17, "depth-only resolve preserves destination stencil");
+
+        // Exercise stencil independently too: resolving a combined native image
+        // must not leak its depth into a stencil-only GL blit.
+        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.375f, 17);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolved.fbo);
+        glBlitFramebuffer(0, 0, kWidth, kHeight, 0, 0, kWidth, kHeight, GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+        ASSERT_EQ(FirstGLError(), 0u);
+        glBindFramebuffer(GL_FRAMEBUFFER, resolved.fbo);
+        ExpectAllStencil(ReadStencilInt(0, 0, kWidth, kHeight), 63, "resolved multisample stencil");
+        ExpectAllDepth(ReadDepthFloat(0, 0, kWidth, kHeight), 0.375f,
+                       "stencil-only resolve preserves destination depth");
+        EXPECT_EQ(FirstGLError(), 0u);
 
         DestroySource(resolved);
         DestroySource(multisampled);

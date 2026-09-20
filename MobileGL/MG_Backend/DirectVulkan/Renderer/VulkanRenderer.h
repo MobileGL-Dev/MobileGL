@@ -469,6 +469,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                   const ClearAttachmentPayload& payload, GLint drawbuffer = -1);
         void BlitWireFramebuffers(GLint sx0, GLint sy0, GLint sx1, GLint sy1,
                                  GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter);
+        void ResolveWireDepthStencil(WireImage source, WireImage destination,
+                                     GLint sx0, GLint sy0, GLint sx1, GLint sy1,
+                                     GLint dx0, GLint dy0, GLint dx1, GLint dy1);
+        PFN_vkCreateRenderPass2 m_wireCreateRenderPass2 = nullptr;
+        VkResolveModeFlags m_wireDepthResolveModes = 0;
+        VkResolveModeFlags m_wireStencilResolveModes = 0;
         Bool BlitWireColorToDefault(WireImage source, WireImage destination,
                                    GLint sx0, GLint sy0, GLint sx1, GLint sy1,
                                    GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter);

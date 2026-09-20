@@ -14378,6 +14378,38 @@ void main() {
             getPhysicalDeviceProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
                 vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceProperties2KHR"));
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Linux/Android request Vulkan 1.1: a 1.2 physical device alone does
+        // not expose the promoted renderpass2/depth-resolve API to this app.
+#ifdef VK_USE_PLATFORM_WIN32_KHR
+        const Bool wireDepthResolveCore = m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_2;
+#else
+        const Bool wireDepthResolveCore = false;
+#endif
+        const Bool wireDepthResolveExtensions =
+            m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_1 &&
+            IsExtensionSupported(availableExtensions, VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME) &&
+            IsExtensionSupported(availableExtensions, VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
+        const Bool wireDepthResolveEnabled = MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            getPhysicalDeviceProperties2 && (wireDepthResolveCore || wireDepthResolveExtensions);
+        m_wireCreateRenderPass2 = nullptr;
+        m_wireDepthResolveModes = m_wireStencilResolveModes = 0;
+        if (wireDepthResolveEnabled) {
+            if (!wireDepthResolveCore) {
+                EnableOptionalDeviceExtension(availableExtensions, enabledDeviceExtensions,
+                                              VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
+                EnableOptionalDeviceExtension(availableExtensions, enabledDeviceExtensions,
+                                              VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
+            }
+            VkPhysicalDeviceDepthStencilResolveProperties resolveProperties{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES};
+            VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            properties.pNext = &resolveProperties;
+            getPhysicalDeviceProperties2(m_physicalDevice.handle, &properties);
+            m_wireDepthResolveModes = resolveProperties.supportedDepthResolveModes;
+            m_wireStencilResolveModes = resolveProperties.supportedStencilResolveModes;
+        }
+#endif
         if ((descriptorIndexingCore || descriptorIndexingExtension) && getPhysicalDeviceFeatures2 != nullptr &&
             getPhysicalDeviceProperties2 != nullptr) {
             VkPhysicalDeviceFeatures2 featureQuery{};
@@ -14895,6 +14927,13 @@ void main() {
             deviceFeatures.multiDrawIndirect ? "true" : "false",
             m_shaderDrawParametersFeatureEnabled ? "true" : "false");
         VK_VERIFY(vkCreateDevice(m_physicalDevice.handle, &deviceCreateInfo, nullptr, &m_device), "vkCreateDevice");
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (wireDepthResolveEnabled) {
+            m_wireCreateRenderPass2 = reinterpret_cast<PFN_vkCreateRenderPass2>(
+                vkGetDeviceProcAddr(m_device, wireDepthResolveCore ? "vkCreateRenderPass2" : "vkCreateRenderPass2KHR"));
+        }
+#endif
 
         s_vkCmdDrawIndexedIndirectCount = reinterpret_cast<PFNDrawIndexedIndirectCountFunc>(
             vkGetDeviceProcAddr(m_device, "vkCmdDrawIndexedIndirectCountKHR"));
