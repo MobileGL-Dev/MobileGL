@@ -17,6 +17,10 @@
 
 ## 2. P5f 最终验收
 
+**Magma RD32 性能补修已完成**（`70fb6689`）：inproc平均从86.85提升至116.73 FPS，
+同包monolith为115.01 FPS。重复native对象与pipeline缓存键已修正，保留同步/角色边界；
+7项新缓存场景、Vulkan同步验证和主机全门通过。见 [报告](notes/p5f/magma-rd32-performance-fix.md)。
+
 **Magma run-ahead 已完成**（最终行为头 `194382c9`，2026-09-20）：异步 GPU 生命周期、
 真实 client lead、present credit 1/3、负控与 Vulkan 同步验证已通过；实机 VAO 哈希碰撞
 已修复。Redmi 同一 `.mgdebug.debug` APK 的 Magma RA=1 / RA=0、GLES RA=1 均完成

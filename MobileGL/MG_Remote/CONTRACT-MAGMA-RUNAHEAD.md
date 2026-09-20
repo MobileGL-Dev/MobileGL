@@ -36,6 +36,13 @@ their existing waits; a test that removes all waits would violate the protocol.
    is keyed to submit indices, not an assumed number of frames or client progress.
    Swapchain replacement/shutdown drains these after device idle, including abandoned
    recordings. Independent blits never overwrite a descriptor set still in flight.
+   Wire sampled views and draw framebuffer objects may be reused within a frame slot:
+   exact keys include native storage identity/generation and every view/window value,
+   and the slot is cleared only after its actual fence completes. Overflow still uses
+   submit-index retirement. A cache hit never skips the image dependencies or pass boundaries.
+   Pipelines use renderer-lifetime, non-recycled identities interned from exact render-pass
+   compatibility values. A creator's temporary native render-pass handle is not a wire
+   pipeline cache key or an eviction proof for another compatible pass using that pipeline.
 5. GPU writes retain their reverse notifications; readback waits for actual GPU
    completion and returns owned bytes. Removing a per-draw queue idle does not
    remove explicit GL synchronization or image/buffer memory dependencies.

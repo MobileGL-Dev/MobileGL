@@ -6,6 +6,10 @@
 > 阶段终审见 [close-review.md](close-review.md)。原 P5f 行为验收头 `cfca93c7`；
 > 后续 Magma run-ahead 的最终行为头为 `194382c9`，见下。
 >
+> **Magma RD32 性能补修（2026-09-20，`70fb6689`）**：修复重复view/framebuffer创建销毁和
+> 临时render-pass句柄造成的pipeline缓存退化；inproc **116.73 FPS**，同包monolith **115.01 FPS**。
+> 缓存回归、Vulkan同步验证及主机全门通过。见 [性能报告](magma-rd32-performance-fix.md)。
+>
 > **Magma run-ahead 已完成（2026-09-20）**：独立 readiness 已开启，GPU 提交/资源
 > 退休时序、真实排队/credit 1/3、负控、Vulkan 同步验证均通过。Redmi 同一
 > `.mgdebug.debug` APK 的 Magma RA=1 / RA=0 与 GLES RA=1 三臂均完成至少60秒

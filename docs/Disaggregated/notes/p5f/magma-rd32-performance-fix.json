@@ -1,0 +1,163 @@
+{
+  "production_head": "70fb6689",
+  "source_artifact": {
+    "source": "70fb6689",
+    "apk": "C:\\Users\\geekerwan\\.codex\\tmp\\magma-perf-fix\\FCL-magma-perf-70fb6689.apk",
+    "apk_sha256": "bfa352bcb3402d9a31252503bacf6fcdc21e28ffaaa929fd8c80e6f2e2781e4e",
+    "library_sha256": "11f26ca1f1d6c9a3d89134c31b2348306e669b1d9ebcc2fc77c7f5def2b4f818"
+  },
+  "baseline_fps": {
+    "Magma-inproc": 86.85293459363007,
+    "Magma-monolith": 116.07722925432384
+  },
+  "clock_control": "stock-dvfs",
+  "render_distance": 32,
+  "simulation_distance": 12,
+  "fan_target": 2,
+  "after": [
+    {
+      "name": "Magma-inproc",
+      "backend": "DirectVulkan",
+      "transport": "inproc",
+      "performance": {
+        "fps": 116.73138991101129,
+        "fps_median": 117.0,
+        "fps_p10": 115.0,
+        "fps_min": 106.0,
+        "fps_max": 119.0,
+        "fps_stdev": 1.8717476401816064,
+        "seconds": 61.02900004386902,
+        "intervals": 61,
+        "frames": 7124,
+        "method": "sum(reset-counter frames) / sum(actual adjacent-log seconds)"
+      },
+      "hardware": {
+        "clock_control": "stock-dvfs",
+        "samples": 11,
+        "temperature_c_min": 57.0,
+        "temperature_c_max": 58.1,
+        "fan": {
+          "fan_rpm": [
+            "14487",
+            "14591",
+            "14676",
+            "14697",
+            "14804"
+          ],
+          "fan_target": [
+            "2"
+          ]
+        },
+        "frequencies": {
+          "policy0_cur": {
+            "min": 1555200,
+            "max": 1555200
+          },
+          "policy6_cur": {
+            "min": 1209600,
+            "max": 1689600
+          },
+          "gpu": {
+            "min": 832000000,
+            "max": 900000000
+          },
+          "busy": {
+            "min": 82,
+            "max": 84
+          }
+        }
+      },
+      "boot_id": "e69d0329-2264-4a2d-9b00-e1a4ffb6154d",
+      "actual_runtime": {
+        "backend_names": [
+          "Direct (Vulkan)"
+        ],
+        "ipc_lines": [
+          "Config: IPC ring=8MiB stage=256MiB spin=50us persistent-block=64KiB adopt-tier=2 verb-barrier=1 run-ahead=1 present-credit=1 strict=1 audit=0 role-split-state=1 affinity='auto'"
+        ],
+        "run_ahead_armed": true,
+        "caps_call_masks": [
+          "0x0",
+          "0x3fff00000400"
+        ],
+        "run_ahead_cap_bit_seen": true,
+        "stats_rows": 237,
+        "residual_pulls_max": 0.0
+      }
+    },
+    {
+      "name": "Magma-monolith",
+      "backend": "DirectVulkan",
+      "transport": "monolith",
+      "performance": {
+        "fps": 115.00581747506094,
+        "fps_median": 115.0,
+        "fps_p10": 113.0,
+        "fps_min": 112.0,
+        "fps_max": 118.0,
+        "fps_stdev": 1.310503381393822,
+        "seconds": 61.02300000190735,
+        "intervals": 61,
+        "frames": 7018,
+        "method": "sum(reset-counter frames) / sum(actual adjacent-log seconds)"
+      },
+      "hardware": {
+        "clock_control": "stock-dvfs",
+        "samples": 11,
+        "temperature_c_min": 55.4,
+        "temperature_c_max": 58.9,
+        "fan": {
+          "fan_rpm": [
+            "14282",
+            "14363",
+            "14384",
+            "14487"
+          ],
+          "fan_target": [
+            "2"
+          ]
+        },
+        "frequencies": {
+          "policy0_cur": {
+            "min": 1363200,
+            "max": 1555200
+          },
+          "policy6_cur": {
+            "min": 1689600,
+            "max": 1689600
+          },
+          "gpu": {
+            "min": 734000000,
+            "max": 900000000
+          },
+          "busy": {
+            "min": 73,
+            "max": 76
+          }
+        }
+      },
+      "boot_id": "b52edced-93b3-416e-890b-5d9a2ea4e8d2",
+      "actual_runtime": {
+        "backend_names": [
+          "Direct (Vulkan)"
+        ],
+        "ipc_lines": [],
+        "run_ahead_armed": false,
+        "caps_call_masks": [],
+        "run_ahead_cap_bit_seen": false,
+        "stats_rows": 250,
+        "residual_pulls_max": 0.0
+      }
+    }
+  ],
+  "restoration": {
+    "original_world_files_unchanged": 61,
+    "config": {
+      "mg_env.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mg_transport.txt": "1d80cf637af2284a1763196d824b41f6f12bea849aa81f95ab8db0e5ce043c95",
+      "options.txt": "4d1cd0cb595819d924f8d5823910b643c865f12b3f59b6900abd54b04e2ee646"
+    },
+    "fan_restored": true,
+    "installed_library_sha256": "11f26ca1f1d6c9a3d89134c31b2348306e669b1d9ebcc2fc77c7f5def2b4f818"
+  }
+}

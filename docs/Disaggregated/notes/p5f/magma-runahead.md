@@ -2,6 +2,9 @@
 
 **已完成，2026-09-20**。最终生产与实机行为头 `194382c96a8a5f51ef23f412fdccfbd40a82bf78`。
 
+后续 `70fb6689` 已修复 RD32 下的 Magma inproc 性能差距：**86.85→116.73 FPS**，
+同包 monolith **115.01 FPS**；根因、缓存生命周期与复测见 [性能修复报告](magma-rd32-performance-fix.md)。
+
 后续同包的 **render distance 32 四组合性能测量**见 [rd32-fourway.md](rd32-fourway.md)。
 该轮默认动态频率下，Espryt monolith/inproc 为62.18/64.02 FPS，Magma 为116.08/86.85 FPS；
 不要将下面的功能验证窗口替代这份高负载性能记录。

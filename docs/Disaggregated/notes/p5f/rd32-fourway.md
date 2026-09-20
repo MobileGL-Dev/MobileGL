@@ -1,5 +1,8 @@
 # Redmi RD32 四组合性能记录
 
+> 本文保留 `194382c9` 的基线。后续 `70fb6689` 已修复 Magma inproc 的缓存退化，
+> 同RD32场景实测 inproc **116.73 FPS**、monolith **115.01 FPS**；见 [性能修复报告](magma-rd32-performance-fix.md)。
+
 2026-09-20。用户要求把 Espryt / Magma × monolith / inproc 的 render distance 都设为32，实测一轮。
 最终每组合选入一次完整窗口；原始数据、排除项与复算方法均保留。
 
