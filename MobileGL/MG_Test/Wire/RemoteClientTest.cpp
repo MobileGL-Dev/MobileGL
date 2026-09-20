@@ -2521,9 +2521,9 @@ TEST(RemoteGuards, AResidualPullUnderAnUnbarrieredRecordIsFatalWithoutTheStrictK
     ExpectNamedAbort(child, "Fatal{UnmigratedPipeInput, \"GetProgramObject@Clear\"}");
 }
 
-// The control: the SAME probe inside a BARRIERED record is P5C's counted residual pull, and
-// with the strict knob off it counts and carries on. Ruling 4 is this line - a barriered
-// record keeps P5C's semantics exactly, because the client is parked in its own wait.
+// P5f retires this formerly admitted read. A barrier can order a record but cannot
+// turn a client ProgramObject into a server-owned value. The historical name stays
+// registered for G14; both barrier states now have the same named refusal.
 TEST(RemoteGuards, AResidualPullUnderABarrieredRecordStillOnlyCounts) {
     const auto child = RunInChild([] {
         MG_Config::Ipc.StrictErrors = false;
@@ -2540,7 +2540,7 @@ TEST(RemoteGuards, AResidualPullUnderABarrieredRecordStillOnlyCounts) {
             nullptr);
         ClientSessionInstance().Stop();
     });
-    ExpectChildSuccess(child);
+    ExpectNamedAbort(child, "Fatal{UnmigratedPipeInput, \"GetProgramObject@Clear\"}");
 }
 
 // §2.6's RED-ONCE, and the one the brief names: ~300 KiB of kEventGpuWritten published from
