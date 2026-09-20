@@ -2393,6 +2393,22 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 TIMEOUT ${MGL_ITEST_TIMEOUT}
                 ENVIRONMENT "${MGL_ITEST_MAGMA_WIRE_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-fm-${fmSlot}.log")
     endforeach()
+    foreach(fmCase ClipDistanceScenario.AnEnabledClipDistanceRemovesTheNegativeHalf
+                   ClipDistanceScenario.ADisabledClipDistanceRemovesNothing
+                   ClipDistanceScenario.TheEnablesAreIndependentPerDistance
+                   CopyImageLayeredScenario.ArrayToArrayCopiesEverySlice
+                   CopyImageLayeredScenario.ArrayToArrayHonoursDifferentLayerOffsets
+                   CopyImageLayeredScenario.VolumeToVolumeHonoursNonZeroZ
+                   CopyImageLayeredScenario.VolumeToVolumeAtNonZeroMipLevel
+                   CopyImageLayeredScenario.ArrayToVolumeCopiesEverySlice
+                   CopyImageLayeredScenario.VolumeToArrayCopiesEverySlice)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.Split.Fm."
+            TEST_FILTER "${fmCase}"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "integration-magma-split" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${MGL_ITEST_MAGMA_WIRE_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-fm-${fmCase}.log")
+    endforeach()
 endif()
 
 # P5c ct (MG_Remote/CONTRACT-P5C.md §5): the two control records, split-only source for the

@@ -350,6 +350,74 @@ TEST(StagedTextureProductionTest, TextureSubDataThroughTheRealOpsTableCopiesAndS
         << "a destroyed texture's staged levels must not answer for the slot's next owner";
 }
 
+TEST(StagedTextureProductionTest, HooklessTextureConsumerOwnsBytesAndScopedStorageLifetime) {
+    // A record-only texture consumer has no texture callbacks in the buffer ops table.
+    // The empty fixture table admits records without installing any adoption callback.
+    const MG_Pipe::MGPipeResourceOps emptyOps{};
+    struct RestoreOps {
+        const MG_Pipe::MGPipeResourceOps* Previous = MG_Pipe::MGPipeGetResourceOps();
+        ~RestoreOps() { MG_Pipe::MGPipeSetResourceOps(Previous); }
+    } restore;
+    MG_Pipe::MGPipeSetResourceOps(&emptyOps);
+    auto& store = Server::ServerStagedTexture();
+    const auto res = TestHandle(47, 2);
+    const auto key = Server::StagedTextureStore::KeyForHandle(res);
+    MG_Pipe::MGPResourceDesc desc{};
+    desc.Resource = res;
+    desc.Target = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D);
+    ASSERT_TRUE(MG_Pipe::MGPipeApplyResourceCreate(desc));
+    desc.Width = 4;
+    desc.Height = 4;
+    desc.Depth = 1;
+    desc.Levels = 3;
+    MG_Pipe::MGPRespecifiedLevel level{};
+    level.UploadTarget = MG_Pipe::MGPipePackSubDataTarget(desc.Target, kTex2DTarget);
+    level.Level = 0;
+    ASSERT_TRUE(MG_Pipe::MGPipeApplyResourceRespecify(desc, nullptr, &level));
+    EXPECT_EQ(store.LevelExtentOrUndefined(key, kTex2DTarget, 0), IntVec3(4, 4, 1))
+        << "null-data glTexImage defines the level even though no upload follows";
+    EXPECT_FALSE(store.IsCovered(key, kTex2DTarget, 0));
+
+    Vector<Uint8> src(64, 0xAB);
+    MG_Pipe::MGPSubData upload{};
+    upload.Res = res;
+    upload.Target = level.UploadTarget;
+    upload.UnionBox = {0, 0, 0, 4, 4, 1};
+    upload.Blob.Size = src.size();
+    ASSERT_TRUE(MG_Pipe::MGPipeApplyResourceSubData(upload, src.data(), nullptr));
+    ASSERT_TRUE(store.IsCovered(key, kTex2DTarget, 0));
+    std::fill(src.begin(), src.end(), Uint8{0xDD});
+    EXPECT_EQ(store.RequireLevelBytes(key, kTex2DTarget, 0, "hookless_source_poison")[0], 0xAB);
+
+    // Defining another mip must retain bytes already accepted for the first mip.
+    level.Level = 1;
+    ASSERT_TRUE(MG_Pipe::MGPipeApplyResourceRespecify(desc, nullptr, &level));
+    EXPECT_EQ(store.LevelExtentOrUndefined(key, kTex2DTarget, 1), IntVec3(2, 2, 1));
+    EXPECT_TRUE(store.IsCovered(key, kTex2DTarget, 0));
+    desc.Width = 8;
+    desc.Height = 8;
+    desc.Immutable = 1;
+    ASSERT_TRUE(MG_Pipe::MGPipeApplyResourceRespecify(desc, nullptr, nullptr));
+    EXPECT_FALSE(store.IsCovered(key, kTex2DTarget, 0));
+    EXPECT_EQ(store.LevelExtentOrUndefined(key, kTex2DTarget, 0), IntVec3(8, 8, 1));
+    EXPECT_EQ(store.LevelExtentOrUndefined(key, kTex2DTarget, 2), IntVec3(2, 2, 1));
+    MG_Pipe::MGPHandleOnly death{};
+    death.Handle = res;
+    death.Kind = static_cast<Uint32>(MG_Pipe::MGPipeKind::Texture);
+    MG_Pipe::MGPipeApplyResourceDestroy(death);
+    EXPECT_FALSE(store.HasShadow(key));
+
+    // Context object release has the same ownership even without a backend hook.
+    desc.Resource = TestHandle(47, 3);
+    ASSERT_TRUE(MG_Pipe::MGPipeApplyResourceCreate(desc));
+    desc.Width = 16;
+    ASSERT_TRUE(MG_Pipe::MGPipeApplyResourceRespecify(desc, nullptr, nullptr));
+    const auto nextKey = Server::StagedTextureStore::KeyForHandle(desc.Resource);
+    ASSERT_TRUE(store.HasShadow(nextKey));
+    MG_Pipe::MGPipeApplierReleaseObjectRecords();
+    EXPECT_FALSE(store.HasShadow(nextKey));
+}
+
 int main(int argc, char** argv) {
     // Before anything logs: MG_Util::Debug::InitFile() reads the variable once, on the first
     // write, and caches the FILE*. The name carries this process's pid, because
