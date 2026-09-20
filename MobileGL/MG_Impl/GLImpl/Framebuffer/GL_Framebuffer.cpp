@@ -3096,18 +3096,9 @@ namespace MobileGL::MG_Impl::GLImpl {
     void ReadPixels_Backend(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
         MGP_FILL(ReadPixels);
         MG_Backend::gBackendFunctionsTable.GL.ReadPixels(x, y, width, height, format, type, pixels);
-#if MOBILEGL_BUILD_DISAGGREGATED
-        // P5 (b1), one of the two producers the client-side GPU-write set ADDS. A read into a
-        // bound GL_PIXEL_PACK_BUFFER is a GPU write to that buffer exactly as a shader's store
-        // is, and marking it is what makes the next glMapBuffer / glGetBufferSubData of the
-        // PBO reconcile. It is a no-op on the monolith path, where the backend still maps the
-        // PBO and copies it into the shadow inside the call
-        // (DirectGLES.cpp:10983-10993) - an unconditional stall on every glReadPixels whether
-        // or not anything ever reads the shadow. Deferring that to the first read that wants
-        // it is STRICTLY BETTER, which is the only reason a split build is allowed to differ
-        // here at all.
-        MG_Remote::Client::MarkReadPixelsPackBuffer();
-#endif
+        // The split emitter waits for an owned pixel reply, then uploads its
+        // packed rows into the client PBO. Its shadow is already authoritative;
+        // marking another GPU write here would invent a readback that never ran.
     }
 
     /* @INSERTION_POINT:FUNCTION_IMPLEMENTATION@ */

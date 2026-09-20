@@ -94,6 +94,7 @@
                 offset += info.DstSize;
             }
             ApplyReadbackByteSwap(bytes.data(), tight, type, pack);
+            if (pbo) pbo->SyncGpuWrites();
             for (Uint64 z = 0; z < depth; ++z) {
                 for (Int y = 0; y < size.y(); ++y) {
                     Uint8* source = bytes.data() + (z * size.y() + y) * layout.RowBytes;

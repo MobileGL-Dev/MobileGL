@@ -1009,6 +1009,7 @@ namespace MobileGL::MG_Remote::Client {
             if (pbo) {
                 // pixels is an offset, never a host pointer. Upload only the
                 // requested rows so PACK padding and untouched bytes survive.
+                pbo->SyncGpuWrites();
                 const Uint64 alignment = std::max<Int>(pack.Alignment, 1);
                 const Uint64 rowPixels = pack.RowLength > 0 ? pack.RowLength : width;
                 const Uint64 stride = (rowPixels * bytesPerPixel + alignment - 1) / alignment * alignment;
