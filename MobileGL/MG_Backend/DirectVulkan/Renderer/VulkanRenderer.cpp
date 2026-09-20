@@ -13445,6 +13445,11 @@ void main() {
     }
 
     void VulkanRenderer::Present() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Present has its own submit path. Tag its last wire pass before that
+        // submission, rather than retaining it until a draw in the next frame.
+        RetireWireDrawPass();
+#endif
         if (m_swapchainObject.GetHandle() == VK_NULL_HANDLE || m_presentSuspended) {
             // No usable swapchain: the window was zero-area at initialization, or
             // presentation was suspended when the window minimized. Try to bring a
