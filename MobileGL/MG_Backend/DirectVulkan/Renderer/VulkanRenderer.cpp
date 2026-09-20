@@ -10146,6 +10146,18 @@ void main() {
         // dstLevel and the z origins below arrived relative to whichever name the application
         // passed - so a view's level 0 has to become the parent level it opened onto before it
         // can index a subresource, exactly as at every other attachment boundary.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (wire) {
+            Uint32 srcMip = static_cast<Uint32>(srcLevel), srcLayer = static_cast<Uint32>(srcZ);
+            Uint32 dstMip = static_cast<Uint32>(dstLevel), dstLayer = static_cast<Uint32>(dstZ);
+            if (MG_Pipe::MGPipeHandleIsNull(m_textureManager->ResolveWireTextureStorage(
+                    srcEndpoint.TextureHandle, srcMip, srcLayer)) ||
+                MG_Pipe::MGPipeHandleIsNull(m_textureManager->ResolveWireTextureStorage(
+                    dstEndpoint.TextureHandle, dstMip, dstLayer))) MagmaWireFatal("copy-image-view-record");
+            srcLevel = static_cast<GLint>(srcMip); srcZ = static_cast<GLint>(srcLayer);
+            dstLevel = static_cast<GLint>(dstMip); dstZ = static_cast<GLint>(dstLayer);
+        }
+#endif
         srcLevel = static_cast<GLint>(ToStorageMipLevel(srcEndpoint.Texture.get(), srcLevel));
         dstLevel = static_cast<GLint>(ToStorageMipLevel(dstEndpoint.Texture.get(), dstLevel));
         srcZ = static_cast<GLint>(ToStorageArrayLayer(srcEndpoint.Texture.get(), srcZ));
