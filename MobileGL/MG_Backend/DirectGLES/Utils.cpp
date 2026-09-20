@@ -2359,7 +2359,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool StoreClientRows(SizeT dstPixelBytes, SizeT swapGroupSize, GLsizei width, GLsizei sliceHeight,
                                     GLsizei sliceCount, void* pixels, Bool applyPackImageParams, FillRow&& fillRow) {
             const auto& pixelPackBufferObject =
-                
 #if MOBILEGL_BUILD_DISAGGREGATED
             MG_Config::Transport != MG_Config::TransportMode::Monolith
                 ? SplitReadbackPackBuffer() :
