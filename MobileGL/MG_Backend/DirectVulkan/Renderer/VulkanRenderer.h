@@ -444,6 +444,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkImageAspectFlags aspect = 0;
             Uint32 level = 0, layer = 0, layers = 1, levels = 1;
             Bool isDefault = false;
+            Bool is3D = false;
+            MG_Pipe::MGPipeHandle storage = MG_Pipe::kMGPipeNullHandle;
         };
         WireImage ResolveWireImage(const MG_Pipe::MGPFramebufferState& fbo,
                                    const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect);

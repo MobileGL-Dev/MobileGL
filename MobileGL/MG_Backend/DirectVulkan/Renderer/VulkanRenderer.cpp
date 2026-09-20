@@ -9784,10 +9784,6 @@ void main() {
                        srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        dstBinding.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                        1, &copyRegion);
-#if MOBILEGL_BUILD_DISAGGREGATED
-        if (wire) m_textureManager->MarkWireTextureGpuWritten(dstEndpoint.TextureHandle,
-            dstMipLevel, dstSlices.BaseArrayLayer(), dstSlices.slicesAreDepth ? 1u : copySliceCount);
-#endif
 
         VkPipelineStageFlags srcRestoreStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcRestoreAccessMask = 0;

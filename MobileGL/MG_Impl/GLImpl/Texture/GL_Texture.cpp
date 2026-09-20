@@ -6077,6 +6077,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         viewObject->SetInternalFormat(viewInternalFormat);
         viewObject->SetSamples(storageOwner->GetSamples());
         viewObject->SetFixedSampleLocations(storageOwner->HasFixedSampleLocations());
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
+            MG_Pipe::MGPipeEmitSamplerViewCreate(*viewObject);
+#endif
     }
 
     void TexStorage1D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width) {

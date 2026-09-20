@@ -26,21 +26,28 @@
             return out;
         }
         if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone) return out;
-        auto* resource = m_textureManager->SyncTextureResourceByHandle(surface.Res,
-            surface.Kind == MG_Pipe::kMGPipeSurfaceKindRenderbuffer);
+        const Bool renderbuffer = surface.Kind == MG_Pipe::kMGPipeSurfaceKindRenderbuffer;
+        Uint32 level = surface.Level, layer = surface.Layer, availableLayers = 1;
+        VkFormat viewFormat = VK_FORMAT_UNDEFINED;
+        out.storage = renderbuffer ? surface.Res : m_textureManager->ResolveWireTextureStorage(
+            surface.Res, level, layer, &viewFormat, &availableLayers);
+        if (MG_Pipe::MGPipeHandleIsNull(out.storage)) MagmaWireFatal("framebuffer-view-record");
+        auto* resource = m_textureManager->SyncTextureResourceByHandle(out.storage, renderbuffer);
         if (!resource) MagmaWireFatal("framebuffer-resource");
         out.image = resource->image;
-        out.format = resource->format;
-        out.extent = {std::max(resource->extent.width >> surface.Level, 1u),
-                      std::max(resource->extent.height >> surface.Level, 1u)};
+        out.format = viewFormat != VK_FORMAT_UNDEFINED ? viewFormat : resource->format;
+        out.extent = {std::max(resource->extent.width >> level, 1u),
+                      std::max(resource->extent.height >> level, 1u)};
         out.layout = resource->layout;
         out.trackedLayout = &resource->layout;
         out.samples = resource->sampleCount;
-        out.level = surface.Level;
+        out.level = level;
         out.levels = resource->mipLevels;
-        out.layer = surface.Layer;
-        out.layers = surface.Layered ? resource->arrayLayers : 1;
-        if (out.level >= resource->mipLevels || out.layer + out.layers > resource->arrayLayers)
+        out.layer = layer;
+        out.is3D = resource->depth > 1;
+        out.layers = surface.Layered ? (out.is3D ? std::max(resource->depth >> level, 1u) : availableLayers) : 1;
+        if (out.level >= resource->mipLevels || out.layer + out.layers >
+            (out.is3D ? std::max(resource->depth >> level, 1u) : resource->arrayLayers))
             MagmaWireFatal("framebuffer-subresource");
         return out;
     }
@@ -167,7 +174,7 @@
             vkDestroyRenderPass(m_device, pass, nullptr);
             vkDestroyImageView(m_device, view, nullptr);
             if (!image.isDefault && surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
-                m_textureManager->MarkWireTextureGpuWritten(surface.Res, image.level, image.layer, image.layers);
+                m_textureManager->MarkWireTextureGpuWritten(image.storage, image.level, image.layer, image.layers);
             if (image.isDefault) {
                 if (color) m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired, true);
                 else m_swapchainObject.SetDepthStencilContentDefined(m_imageIndexAcquired, true);
@@ -220,8 +227,8 @@
         if (source.isDefault && !MapDefaultFramebufferReadbackRect(x,y,width,height,source.extent,
             m_swapchainObject.GetPreTransform(),&offset,&extent)) MagmaWireFatal("read-surface-transform");
         VkBufferImageCopy region{};
-        region.imageSubresource = {aspect,source.level,source.layer,1};
-        region.imageOffset = {offset.x,offset.y,0};
+        region.imageSubresource = {aspect,source.level,source.is3D ? 0u : source.layer,1};
+        region.imageOffset = {offset.x,offset.y,source.is3D ? static_cast<Int32>(source.layer) : 0};
         region.imageExtent = {extent.width,extent.height,1};
         auto& frame = m_frameContext.GetCurrent();
         vkCmdCopyImageToBuffer(frame.commandBuffer,source.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -256,8 +263,12 @@
             WireImage destination = ResolveWireImage(*draw,dst,aspect);
             if (!source.image || !destination.image) return;
             m_textureManager->FlushPendingUploads();
-            TransitionWireImage(source,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-            TransitionWireImage(destination,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            const Bool sameImage = source.image == destination.image;
+            const VkImageLayout srcLayout = sameImage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            const VkImageLayout dstLayout = sameImage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            TransitionWireImage(source,srcLayout);
+            if (sameImage) destination.layout = source.layout;
+            else TransitionWireImage(destination,dstLayout);
             VkImageBlit region{};
             region.srcSubresource = {aspect,source.level,source.layer,1};
             region.dstSubresource = {aspect,destination.level,destination.layer,1};
@@ -272,12 +283,15 @@
                 region.dstOffsets[0].y = static_cast<GLint>(destination.extent.height)-dy0;
                 region.dstOffsets[1].y = static_cast<GLint>(destination.extent.height)-dy1;
             }
-            vkCmdBlitImage(m_frameContext.GetCurrent().commandBuffer,source.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                destination.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&region,
+            vkCmdBlitImage(m_frameContext.GetCurrent().commandBuffer,source.image,srcLayout,
+                destination.image,dstLayout,1,&region,
                 filter == GL_LINEAR ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
             if (!destination.isDefault && dst.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
-                m_textureManager->MarkWireTextureGpuWritten(dst.Res, destination.level, destination.layer, destination.layers);
-            if (destination.isDefault) m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired,true);
+                m_textureManager->MarkWireTextureGpuWritten(destination.storage, destination.level, destination.layer, destination.layers);
+            if (destination.isDefault) {
+                if (aspect == VK_IMAGE_ASPECT_COLOR_BIT) m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired,true);
+                else m_swapchainObject.SetDepthStencilContentDefined(m_imageIndexAcquired,true);
+            }
         };
         if (mask & GL_COLOR_BUFFER_BIT) {
             for (Uint32 i=0;i<MG_Pipe::kMGPipeMaxColorAttachments;++i) {
@@ -327,7 +341,7 @@
         }
         vkCmdBlitImage(m_frameContext.GetCurrent().commandBuffer,source.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             destination.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&region,VK_FILTER_NEAREST);
-        m_textureManager->MarkWireTextureGpuWritten(state.VerbCopyTexDst,destination.level,destination.layer);
+        m_textureManager->MarkWireTextureGpuWritten(destination.storage,destination.level,destination.layer);
     }
 
     void VulkanRenderer::GenerateWireMipmap() {
