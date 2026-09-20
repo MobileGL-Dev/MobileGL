@@ -1992,6 +1992,46 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
+    Bool VkTextureManager::ReadUnbackedWireLevel(MG_Pipe::MGPipeHandle handle, TextureUploadTarget target,
+                                                Uint32 level, const IntVec3& extent, VkFormat& format,
+                                                Vector<Uint8>& bytes) {
+        const auto& records = MG_Pipe::MGPipeApplier().TextureResources;
+        if (!handle.Slot || handle.Slot >= records.size()) return false;
+        const auto& record = records[handle.Slot];
+        if (!record.Live || record.Gen != handle.Gen || !MG_Pipe::MGPipeHandleIsNull(record.Desc.ViewOf)) return false;
+        auto& store = MG_Remote::Server::ServerStagedTexture();
+        const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(handle);
+        const auto upload = static_cast<Uint16>(target);
+        const auto native = m_wireTextureResources.find(key);
+        if (native != m_wireTextureResources.end() && native->second.image && level < native->second.mipLevels) {
+            const auto& image = native->second;
+            const IntVec3 nativeExtent = ToVulkanLevelExtent(WireTextureTargetOfPipeTarget(record.Desc.Target), extent);
+            const Bool volume = image.viewType == VK_IMAGE_VIEW_TYPE_3D;
+            const Uint64 firstLayer = ResolveUploadArrayLayer(target);
+            if (nativeExtent.x() == static_cast<Int>(std::max(image.extent.width >> level, 1u)) &&
+                nativeExtent.y() == static_cast<Int>(std::max(image.extent.height >> level, 1u)) &&
+                (volume ? nativeExtent.z() == static_cast<Int>(std::max(image.depth >> level, 1u))
+                        : firstLayer + static_cast<Uint64>(nativeExtent.z()) <= image.arrayLayers))
+                return false; // a failed sync cannot substitute CPU bytes for this native image
+        }
+        if (!store.IsCovered(key, upload, level) || store.IsLevelGpuDirty(key, upload, level) ||
+            store.LevelExtentOrUndefined(key, upload, level) != extent) return false;
+        const auto logical = static_cast<TextureInternalFormat>(record.Desc.InternalFormat);
+        const auto formatInfo = ResolveTextureFormatInfo(logical);
+        format = formatInfo.format;
+        if (format == VK_FORMAT_UNDEFINED) return false;
+        const void* source = store.RequireLevelBytes(key, upload, level, "unbacked texture level readback");
+        const void* converted = nullptr;
+        SizeT convertedSize = 0;
+        Vector<Uint8> owned;
+        if (!ConvertWireLevelBytes(source, store.LevelByteSize(key, upload, level),
+                ToVulkanLevelExtent(WireTextureTargetOfPipeTarget(record.Desc.Target), extent), format,
+                GetAspectMaskForFormat(format), logical, formatInfo, owned, converted, convertedSize)) return false;
+        const auto* begin = static_cast<const Uint8*>(converted);
+        bytes.assign(begin, begin + convertedSize);
+        return true;
+    }
+
     // D-D5's consume, Magma-local: the level's entry leaves the applier's pending set ONLY
     // here, where its bytes were actually staged. (Espryt's twin is Managers.cpp's
     // ConsumePipeTextureUpload; the decode rule is the shared one.)
@@ -2100,7 +2140,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         VkImageUsageFlags desiredUsage =
             VK_IMAGE_USAGE_SAMPLED_BIT | (supportsStorageImage ? VK_IMAGE_USAGE_STORAGE_BIT : 0) |
-            ((aspect & VK_IMAGE_ASPECT_COLOR_BIT) ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0) |
+            ((aspect & VK_IMAGE_ASPECT_COLOR_BIT) &&
+             (formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)
+                 ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0) |
             (((aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || (aspect & VK_IMAGE_ASPECT_STENCIL_BIT))
                  ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
                  : 0);
@@ -2328,7 +2370,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: pending upload for level %u exceeds the "
                              "image's %u levels; left pending",
                              handle.Slot, handle.Gen, static_cast<Uint32>(level), resource.mipLevels);
-                incomplete = true;
                 continue;
             }
             const IntVec3 glExtent = store.LevelExtentOrUndefined(key, uploadTarget, level);
@@ -2341,6 +2382,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // Vulkan geometry, like the image this stages into: a 1D array's layers move out of
             // the shadow's height into z.
             const IntVec3 texelSize = ToVulkanLevelExtent(target, glExtent);
+            // GL permits independently defined mutable mip images. A Vulkan
+            // image can only hold the canonical halving chain. Keep an unusual
+            // level in owned staging instead of copying outside a VkImage mip.
+            const Bool volume = resource.viewType == VK_IMAGE_VIEW_TYPE_3D;
+            if (texelSize.x() != static_cast<Int>(std::max(resource.extent.width >> level, 1u)) ||
+                texelSize.y() != static_cast<Int>(std::max(resource.extent.height >> level, 1u)) ||
+                (volume && texelSize.z() != static_cast<Int>(std::max(resource.depth >> level, 1u))) ||
+                (!volume && Uint64(ResolveUploadArrayLayer(static_cast<TextureUploadTarget>(uploadTarget))) +
+                    static_cast<Uint64>(texelSize.z()) > resource.arrayLayers))
+                continue;
             if (texelSize.x() <= 0 || texelSize.y() <= 0 || byteSize == 0) {
                 incomplete = true;
                 continue;

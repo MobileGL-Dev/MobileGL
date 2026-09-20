@@ -559,6 +559,8 @@ public:
     // a NAMESPACE THE FRONTEND-KEYED m_textureResources NEVER MEETS, so a recycled {slot, gen}
     // can never inherit its predecessor's image. Texture views resolve the storage owner from
     // Desc.ViewOf and the window from ViewCso; buffer-backed textures remain P7's buffer arm.
+    Bool ReadUnbackedWireLevel(MG_Pipe::MGPipeHandle handle, TextureUploadTarget target, Uint32 level,
+                               const IntVec3& extent, VkFormat& format, Vector<Uint8>& bytes);
     TextureResource* SyncTextureResourceByHandle(MG_Pipe::MGPipeHandle handle, Bool renderbuffer = false,
                                                  Bool requireStorage = false);
     // Map a texture/view-relative subresource to its live storage owner. layerCount, when

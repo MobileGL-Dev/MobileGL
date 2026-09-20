@@ -67,6 +67,47 @@
         return true;
     }
 
+    static Bool PackWireColorTight(const Uint8* source, SizeT sourceBytes, VkFormat format,
+                                   TextureInternalFormat logicalFormat, const MG_Pipe::MGPReadbackInfo& info,
+                                   Vector<Uint8>& result) {
+        using namespace DirectGLES::ReadbackImpl;
+        ReadbackChannelMapping mapping{};
+        if (!GetReadbackChannelMapping(info.Format, mapping)) return false;
+        const SizeT sourcePixelSize = VulkanRenderer::GetReadbackTexelSize(format);
+        const SizeT pixelBytes = GetReadbackDstPixelSize(mapping, info.Type);
+        const Uint64 rows64 = Uint64(info.Box.H) * info.Box.D;
+        if (!info.Box.W || !rows64 || rows64 > std::numeric_limits<GLsizei>::max() ||
+            rows64 > std::numeric_limits<SizeT>::max() / 16 / info.Box.W) return false;
+        const SizeT pixels = static_cast<SizeT>(info.Box.W) * static_cast<SizeT>(rows64);
+        if (!sourcePixelSize || !pixelBytes || sourceBytes != pixels * sourcePixelSize ||
+            info.DstSize != pixels * pixelBytes) return false;
+        if (MG_Util::PixelStoreProcessor::IsRawPackedPixelTransfer(GetPackedReadbackInternalFormat(format),
+                MG_Util::ConvertGLEnumToTextureInputFormat(info.Format),
+                MG_Util::ConvertGLEnumToTexturePixelDataType(info.Type))) {
+            if (pixelBytes != sourcePixelSize) return false;
+            result.assign(source, source + sourceBytes);
+            return true;
+        }
+        Vector<Uint8> wide;
+        GLenum wideType = GL_NONE;
+        const GLsizei rows = static_cast<GLsizei>(Uint64(info.Box.H) * info.Box.D);
+        if (!DecodeReadbackRowsToWide(source, format, info.Box.W, rows, wide, wideType) ||
+            mapping.isInteger != (wideType == GL_INT || wideType == GL_UNSIGNED_INT)) return false;
+        if (ResolveTextureFormatInfo(logicalFormat).expandRgbToRgba) {
+            const Float floatOne = 1.0f;
+            const Uint32 integerOne = 1;
+            const void* alpha = wideType == GL_FLOAT ? static_cast<const void*>(&floatOne) : &integerOne;
+            for (SizeT i = 0; i < pixels; ++i)
+                Memcpy(wide.data() + (i * 4 + 3) * sizeof(Uint32), alpha, sizeof(Uint32));
+        }
+        result.resize(info.DstSize);
+        for (GLsizei row = 0; row < rows; ++row)
+            ConvertWideReadbackRow(wide.data() + row * static_cast<SizeT>(info.Box.W) * 16,
+                result.data() + row * static_cast<SizeT>(info.Box.W) * pixelBytes,
+                info.Box.W, wideType, mapping, info.Type);
+        return true;
+    }
+
     Bool VulkanRenderer::ReadTextureImageWire(const MG_Pipe::MGPReadbackInfo& info,
                                                Vector<Uint8>& ownedBytes) {
         ownedBytes.clear();
@@ -112,18 +153,33 @@
         VkFormat viewFormat = VK_FORMAT_UNDEFINED;
         const auto storage = m_textureManager->ResolveWireTextureStorage(info.Res, level, layer, &viewFormat, &availableLayers);
         if (MG_Pipe::MGPipeHandleIsNull(storage)) return false;
+        const Uint64 pixels64 = Uint64(box.W) * box.H * box.D;
+        if (pixels64 > std::numeric_limits<SizeT>::max() / 16) return false;
+        const auto readUnbacked = [&]() {
+            // Only a level the VkImage cannot represent may use its owned,
+            // non-GPU-dirty staging bytes. A failed GPU read never falls back.
+            if (storage != info.Res || info.Target == GL_TEXTURE_CUBE_MAP) return false;
+            Vector<Uint8> raw;
+            VkFormat nativeFormat = VK_FORMAT_UNDEFINED;
+            if (!m_textureManager->ReadUnbackedWireLevel(storage,
+                    MG_Util::ConvertGLEnumToTextureUploadTarget(info.Target), info.Level,
+                    IntVec3{static_cast<Int>(box.W), static_cast<Int>(box.H), static_cast<Int>(box.D)},
+                    nativeFormat, raw)) return false;
+            return PackWireColorTight(raw.data(), raw.size(), nativeFormat,
+                static_cast<TextureInternalFormat>(record.Desc.InternalFormat), info, ownedBytes);
+        };
         RetireWireDrawPass();
         MakeXfbWritesVisible();
         auto* resource = m_textureManager->SyncTextureResourceByHandle(storage);
-        if (!resource || !resource->image || level >= resource->mipLevels ||
-            resource->sampleCount != VK_SAMPLE_COUNT_1_BIT) return false;
+        if (!resource || !resource->image || level >= resource->mipLevels) return readUnbacked();
+        if (resource->sampleCount != VK_SAMPLE_COUNT_1_BIT) return false;
         m_textureManager->FlushPendingUploads();
         const Bool nativeVolume = resource->viewType == VK_IMAGE_VIEW_TYPE_3D;
         const Uint32 nativeDepth = nativeVolume ? std::max(resource->depth >> level, 1u) : resource->arrayLayers;
         if (extent.width != std::max(resource->extent.width >> level, 1u) ||
             extent.height != std::max(resource->extent.height >> level, 1u) ||
             layer >= nativeDepth || (nativeVolume ? extent.depth : layerCount) > nativeDepth - layer ||
-            (!nativeVolume && layerCount > availableLayers)) return false;
+            (!nativeVolume && layerCount > availableLayers)) return readUnbacked();
         // A view can reinterpret the same native words. Decode using the outer
         // view format, while Vulkan copies the storage allocation's bytes.
         const VkFormat format = viewFormat == VK_FORMAT_UNDEFINED ? resource->format : viewFormat;
@@ -133,8 +189,6 @@
         const VkImageAspectFlags aspects = depthStencil ?
             ((depth ? VK_IMAGE_ASPECT_DEPTH_BIT : 0) | (stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : 0)) : VK_IMAGE_ASPECT_COLOR_BIT;
         if ((resource->aspect & aspects) != aspects) return false;
-        const Uint64 pixels64 = Uint64(box.W) * box.H * box.D;
-        if (pixels64 > std::numeric_limits<SizeT>::max() / 16) return false;
         const SizeT pixels = static_cast<SizeT>(pixels64);
         const SizeT destinationPixelSize = MG_Util::GetInputBytesPerPixel(
             MG_Util::ConvertGLEnumToTextureInputFormat(info.Format), MG_Util::ConvertGLEnumToTexturePixelDataType(info.Type));
