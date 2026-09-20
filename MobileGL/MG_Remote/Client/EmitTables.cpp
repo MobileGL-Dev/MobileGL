@@ -62,6 +62,7 @@
 #include <MG_Impl/Pipe/FramebufferEmit.h>
 #include <MG_Impl/Pipe/PipeFill.h>
 #include <MG_Impl/Pipe/TextureEmit.h>
+#include <MG_Impl/Pipe/ProgramEmit.h>
 #include <MG_Pipe/PipeMutation.h>
 
 namespace MobileGL::MG_Remote::Client {
@@ -1412,6 +1413,24 @@ namespace MobileGL::MG_Remote::Client {
             // The GL token verbatim (contract table 0's "GL enums on the wire"): the sink hands
             // it to the backend slot that takes it, and nothing between here and there reads it.
             record.PrimitiveMode = static_cast<Uint32>(primitiveMode);
+            auto& context = *MG_State::pGLContext;
+            record.LifetimeId = context.GetBoundTransformFeedbackLifetimeId();
+            const auto& program = context.GetTransformFeedbackProgram();
+            if (program) {
+                Uint64 bytes = 0;
+                record.CaptureProgram = MG_Pipe::MGPipeProgramEmitterInstance().AcquireShaderCso(*program, bytes);
+            }
+            static_assert(MG_State::GLState::GLContext::MAX_TRANSFORM_FEEDBACK_BUFFERS == 4);
+            for (Uint i = 0; i < 4; ++i) {
+                const auto& point = context.GetBufferBindingPoint(BufferTarget::TransformFeedback, i);
+                const auto& buffer = point.GetBoundObject();
+                if (!buffer) continue;
+                const auto range = point.GetRange();
+                const SizeT start = std::min(range.start, buffer->GetSize());
+                const SizeT end = std::min(range.end, buffer->GetSize());
+                record.Targets[i] = {MG_Pipe::MGPipeBufferResources().Find(*buffer), start,
+                                     end > start ? end - start : 0};
+            }
             session.EmitAndWait(MG_Pipe::MGPWireOp::BeginStreamOutput, &record, sizeof(record),
                                 nullptr, 0, nullptr, 0, nullptr);
         }

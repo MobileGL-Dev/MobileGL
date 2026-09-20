@@ -2135,6 +2135,12 @@ namespace MobileGL::MG_Pipe {
     }
 
     Bool PipeInputs::HasOpenTransformFeedbackSpan(Uint64 lifetimeId) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            return lifetimeId != 0 && MGPipeApplier().StreamOutputSpans.count(lifetimeId) != 0;
+        }
+#endif
+
         MGP_STICKY_FORWARD_PULL(HasOpenTransformFeedbackSpan);
         const auto* ctx = LiveContext();
         return ctx != nullptr && ctx->HasOpenTransformFeedbackSpan(lifetimeId);

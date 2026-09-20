@@ -955,6 +955,9 @@ namespace MobileGL::MG_Remote::Server {
         // the buffer bindings are read through the pulls. So this record's effect is not
         // visible until a DRAW crosses - which is why an XFB scenario whose draw is still class
         // C moves its first blocker to that draw rather than rendering.
+        auto& state = MG_Pipe::MGPipeApplier();
+        state.BoundStreamOutputLifetimeId = begin.LifetimeId;
+        state.StreamOutputSpans[begin.LifetimeId] = begin;
         table->GL.BeginTransformFeedback(static_cast<GLenum>(begin.PrimitiveMode));
         ++m_streamOutputSpans;
         return true;
@@ -974,6 +977,8 @@ namespace MobileGL::MG_Remote::Server {
         // server-side scatter is what will need them.
         (void)accounting;
         table->GL.EndTransformFeedback();
+        auto& state = MG_Pipe::MGPipeApplier();
+        state.StreamOutputSpans.erase(state.BoundStreamOutputLifetimeId);
         ++m_streamOutputSpans;
         return true;
     }
@@ -1010,6 +1015,7 @@ namespace MobileGL::MG_Remote::Server {
         // lifetime of its own - it has no reader on this side today, and pretending otherwise
         // by folding it into the key is exactly the "a GL name is never an identity" confusion
         // the contract's GlName row is written against.
+        MG_Pipe::MGPipeApplier().BoundStreamOutputLifetimeId = bind.LifetimeId;
         table->GL.BindTransformFeedback(static_cast<GLuint>(bind.GlName));
         ++m_streamOutputBinds;
         return true;

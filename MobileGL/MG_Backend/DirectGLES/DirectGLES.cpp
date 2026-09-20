@@ -1528,8 +1528,39 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // gl_NextBuffer is the shape that makes them differ: buffer 0 has stride 0
                 // and nothing bound, so target 0 describes buffer 1.
                 SizeT bufferIndex = 0;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                MG_Pipe::MGPipeHandle handle = MG_Pipe::kMGPipeNullHandle;
+#endif
             };
 
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+            struct XfbProgramSource {
+                SharedPtr<MG_State::GLState::ProgramObject> Frontend;
+                SharedPtr<const MG_State::GLState::ProgramArchive> Archive;
+                explicit operator Bool() const { return Frontend || Archive; }
+                const XfbProgramSource* operator->() const { return this; }
+                SizeT GetTransformFeedbackBufferCount() const {
+                    return Archive ? Archive->Link.xfbStrides.size() : Frontend->GetTransformFeedbackBufferCount();
+                }
+                Uint32 GetTransformFeedbackStride(Uint32 index) const {
+                    return Archive ? (index < Archive->Link.xfbStrides.size() ? Archive->Link.xfbStrides[index] : 0)
+                                   : Frontend->GetTransformFeedbackStride(index);
+                }
+                Bool NeedsScatteredTransformFeedbackCapture() const {
+                    return Archive ? Archive->Link.xfbNeedsScatteredCapture : Frontend->NeedsScatteredTransformFeedbackCapture();
+                }
+                Uint32 GetTransformFeedbackPackedStride() const {
+                    return Archive ? Archive->Link.xfbPackedStride : Frontend->GetTransformFeedbackPackedStride();
+                }
+                GLenum GetTransformFeedbackBufferMode() const {
+                    return Archive ? Archive->Link.xfbBufferMode : Frontend->GetTransformFeedbackBufferMode();
+                }
+                const auto& GetTransformFeedbackVaryings() const {
+                    return Archive ? Archive->Link.xfbVaryings : Frontend->GetTransformFeedbackVaryings();
+                }
+            };
+#endif
             // Per frontend transform feedback object. The default object (name 0) maps to
             // the driver's default object (id 0) and is always present.
             struct XfbObjectState {
@@ -1544,6 +1575,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // End scatters them into `targets`.
                 Bool scattered = false;
                 SharedPtr<MG_State::GLState::ProgramObject> scatterProgram;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                SharedPtr<const MG_State::GLState::ProgramArchive> scatterArchive;
+#endif
                 SizeT scatterCapacityVertices = 0;
             };
 
@@ -1620,14 +1654,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 if (g_GLESFuncs.glMapBufferRange != nullptr && g_GLESFuncs.glUnmapBuffer != nullptr) {
                     for (const auto& target : targets) {
-                        if (!target.buffer) continue;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                        if (MG_Config::Transport == MG_Config::TransportMode::Monolith)
+#endif
+    #if MOBILEGL_BUILD_DISAGGREGATED
+                    if (MG_Config::Transport == MG_Config::TransportMode::Monolith)
+#endif
+                    if (!target.buffer) continue;
 #if MOBILEGL_BUILD_DISAGGREGATED
                         // P5c: under an active transport the frontend object is client
                         // memory (rule E), so the persistence question is the server
                         // resource's and the captured bytes go back as a writeback EVENT -
                         // WritebackFromBackend from the apply thread is the R1/R2 shape.
                         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
-                            const MG_Pipe::MGPipeHandle res = BufferImpl::HandleOfBuffer(target.buffer.get());
+                            const MG_Pipe::MGPipeHandle res = target.handle;
                             auto* resource = BufferImpl::FindBufferResourceForHandle(res);
                             if (resource == nullptr || resource->persistentMapped) continue;
                             const SizeT size = target.end - target.start;
@@ -1732,7 +1772,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // occupies are written, so the holes gl_SkipComponents asks for keep whatever the
             // application had put there - which is the whole point of the feature.
             void ScatterCapturedRecords(XfbObjectState& xfb) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                const XfbProgramSource program{xfb.scatterProgram, xfb.scatterArchive};
+#else
                 const auto& program = xfb.scatterProgram;
+#endif
                 if (!program || xfb.targets.empty()) return;
                 if (g_GLESFuncs.glMapBufferRange == nullptr || g_GLESFuncs.glUnmapBuffer == nullptr) return;
 
@@ -1769,6 +1813,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // whole range down once.
                 for (SizeT targetIndex = 0; targetIndex < xfb.targets.size(); ++targetIndex) {
                     const auto& target = xfb.targets[targetIndex];
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    if (MG_Config::Transport == MG_Config::TransportMode::Monolith)
+#endif
                     if (!target.buffer) continue;
                     // By BUFFER index, not by position in the compacted list - see XfbCaptureTarget.
                     const SizeT stride = program->GetTransformFeedbackStride(static_cast<Uint32>(target.bufferIndex));
@@ -1784,7 +1831,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     MG_Pipe::MGPipeHandle splitRes = MG_Pipe::kMGPipeNullHandle;
                     BufferImpl::GLESBufferResource* splitResource = nullptr;
                     if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
-                        splitRes = BufferImpl::HandleOfBuffer(target.buffer.get());
+                        splitRes = target.handle;
                         splitResource = BufferImpl::FindBufferResourceForHandle(splitRes);
                         const Uint8* hostBytes = splitResource != nullptr ? splitResource->hostBytes : nullptr;
                         if (splitResource == nullptr || hostBytes == nullptr) {
@@ -1876,7 +1923,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // not captured, and opening the span would also subject it to the capture
             // primitive-mode rule the paused draw is exempt from.
             if (!xfb.pending || xfb.paused) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            XfbProgramSource program;
+            const MG_Pipe::MGPStreamOutputBegin* span = nullptr;
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                const auto& state = MG_Pipe::MGPipeApplier();
+                const auto found = state.StreamOutputSpans.find(state.BoundStreamOutputLifetimeId);
+                if (found != state.StreamOutputSpans.end()) {
+                    span = &found->second;
+                    const auto* record = PipeShaderCsoRecordForHandle(span->CaptureProgram);
+                    if (record) program.Archive = record->Archive;
+                }
+            } else {
+                program.Frontend = MGB_CTX->GetTransformFeedbackProgram();
+            }
+#else
             const auto& program = MGB_CTX->GetTransformFeedbackProgram();
+#endif
             if (!program) {
                 // The pending flag is deliberately NOT consumed here. It used to be cleared
                 // before this check, so a single draw that could not see the capture program
@@ -1896,6 +1959,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // recording it here keeps End independent of the frontend capture state.
             const SizeT bufferCount = program->GetTransformFeedbackBufferCount();
             for (SizeT i = 0; i < bufferCount; ++i) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                    if (!span || i >= 4) continue;
+                    const auto& range = span->Targets[i];
+                    if (MG_Pipe::MGPipeHandleIsNull(range.Res) || range.Size == 0) continue;
+                    auto* resource = BufferImpl::EnsureBufferResourceForHandle(nullptr, range.Res);
+                    if (!resource || resource->id == 0) continue;
+                    xfb.targets.push_back({nullptr, resource->id, static_cast<SizeT>(range.Offset),
+                                           static_cast<SizeT>(range.Offset + range.Size), i, range.Res});
+                    BufferImpl::BindBufferRangeCached(GL_TRANSFORM_FEEDBACK_BUFFER, static_cast<GLuint>(i),
+                        resource->id, static_cast<GLintptr>(range.Offset), static_cast<GLsizeiptr>(range.Size));
+                    continue;
+                }
+#endif
                 auto& point = MGB_CTX->GetBufferBindingPoint(BufferTarget::TransformFeedback,
                                                                           static_cast<Uint>(i));
                 const auto& bufferObject = point.GetBoundObject();
@@ -1909,6 +1986,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 xfb.targets.push_back({bufferObject, backendResource->id, start, end, i});
             }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport == MG_Config::TransportMode::Monolith)
+#endif
             BufferImpl::SyncTransformFeedbackBindingPoints(bufferCount);
 
             // A layout with holes or several interleaved buffers is not expressible on ES:
@@ -1930,7 +2010,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (capacityVertices == ~SizeT(0)) capacityVertices = 0;
                 if (BindScatterCaptureBuffer(program->GetTransformFeedbackPackedStride(), capacityVertices)) {
                     xfb.scattered = true;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    xfb.scatterProgram = program.Frontend;
+                    xfb.scatterArchive = program.Archive;
+#else
                     xfb.scatterProgram = program;
+#endif
                     xfb.scatterCapacityVertices = capacityVertices;
                 } else {
                     // NO SPAN RATHER THAN A SPAN THAT WRITES SOMEWHERE ELSE. The ES program for a

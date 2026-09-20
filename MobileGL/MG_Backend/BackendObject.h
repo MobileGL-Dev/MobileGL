@@ -10,7 +10,7 @@
 #include <Includes.h>
 #include "MG_State/GLState/TextureState/TextureEnum.h"
 #if MOBILEGL_BUILD_DISAGGREGATED
-#include <MG_Pipe/MGPipeTypes.h>
+#include <MG_Pipe/MGPipeHandles.h>
 #endif
 
 namespace MobileGL {

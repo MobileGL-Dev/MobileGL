@@ -1669,8 +1669,12 @@ namespace MobileGL::MG_Pipe {
     struct MGPStreamOutputBegin {
         Uint32 PrimitiveMode;
         Uint32 Pad0;
+        // P5f: immutable span snapshot; no frontend pointers survive Begin.
+        MGPipeHandle CaptureProgram;
+        Uint64 LifetimeId;
+        MGPBufferRange Targets[4];
     };
-    MGP_ASSERT_POD(MGPStreamOutputBegin, 8);
+    MGP_ASSERT_POD(MGPStreamOutputBegin, 120);
 
     // end_stream_output carries the accounting the client owns; the scatter itself is a
     // read-modify-write of the client's shadow and lives there (section 7.2.1).

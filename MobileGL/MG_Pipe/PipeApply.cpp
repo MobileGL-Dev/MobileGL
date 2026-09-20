@@ -1379,6 +1379,10 @@ namespace MobileGL::MG_Pipe {
         g_applier.DrawProgram = kMGPipeNullHandle;
         g_applier.DispatchProgram = kMGPipeNullHandle;
         g_applier.BoundShaderCso = kMGPipeNullHandle;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        g_applier.BoundStreamOutputLifetimeId = 0;
+        g_applier.StreamOutputSpans.clear();
+#endif
         // P5e (sb, CONTRACT-P5E.md §5.6): the three binding-point windows are per-context
         // WORKING state and go with the rest of it - a returning context has its own
         // glBindBufferBase history and may not inherit the one this applier was left holding.
@@ -1431,6 +1435,10 @@ namespace MobileGL::MG_Pipe {
         g_applier.DrawProgram = kMGPipeNullHandle;
         g_applier.DispatchProgram = kMGPipeNullHandle;
         g_applier.BoundShaderCso = kMGPipeNullHandle;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        g_applier.BoundStreamOutputLifetimeId = 0;
+        g_applier.StreamOutputSpans.clear();
+#endif
         // AND "THE WORKING HANDLES THEY COULD NAME" IS ALL OF THEM, NOT JUST THE THREE ABOVE.
         // Every framebuffer record holds eleven MGPSurface::Res naming texture and renderbuffer
         // records this function has just dropped - which is why the table itself goes above -
@@ -3206,6 +3214,10 @@ namespace MobileGL::MG_Pipe {
         // bind_render_state's precedent for the same question.
         if (MGPipeHandleIsNull(handle.Handle)) {
             g_applier.BoundShaderCso = kMGPipeNullHandle;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        g_applier.BoundStreamOutputLifetimeId = 0;
+        g_applier.StreamOutputSpans.clear();
+#endif
             ++g_applier.ProgramBindingSerial;
             return;
         }
@@ -3238,6 +3250,10 @@ namespace MobileGL::MG_Pipe {
         Bool cleared = false;
         if (g_applier.BoundShaderCso == handle.Handle) {
             g_applier.BoundShaderCso = kMGPipeNullHandle;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        g_applier.BoundStreamOutputLifetimeId = 0;
+        g_applier.StreamOutputSpans.clear();
+#endif
             cleared = true;
         }
         if (g_applier.DrawProgram == handle.Handle) {
