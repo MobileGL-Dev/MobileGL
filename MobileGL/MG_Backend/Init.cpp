@@ -96,7 +96,7 @@ namespace MobileGL::MG_Backend {
         // the apply thread reading client memory that has already moved, which renders wrong
         // rather than aborting.
         constexpr Bool kMGPipeP5eRunAheadReady = true;
-        constexpr Bool kMGPipeMagmaRunAheadReady = false;
+        constexpr Bool kMGPipeMagmaRunAheadReady = true;
 
         // The Magma transport now owns buffer stores and consumes their vertex,
         // index and shader binding records. Both backends publish the resource

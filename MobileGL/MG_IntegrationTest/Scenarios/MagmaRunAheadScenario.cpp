@@ -49,7 +49,7 @@ protected:
         ASSERT_EQ(Gl().BackendName(), "DirectVulkan");
         const auto runtime = PeekSplitRuntime();
         ASSERT_TRUE(runtime.peekAvailable && runtime.sessionActive && runtime.transportResolved);
-        ASSERT_TRUE(runtime.runAheadArmed) << "Magma production session did not arm run-ahead";
+        RecordProperty("run_ahead_armed", runtime.runAheadArmed ? "1" : "0");
         ASSERT_TRUE(runtime.presentCredit == 1 || runtime.presentCredit == 3);
         target = NewFbo(NewTexture(kWidth, kHeight, nullptr));
         glBindFramebuffer(GL_FRAMEBUFFER, target);
@@ -131,11 +131,13 @@ protected:
         glFinish();
         ASSERT_TRUE(ArmSplitApplyHoldForTesting());
         glClear(GL_COLOR_BUFFER_BIT);
-        ASSERT_TRUE(WaitForSplitApplyHoldForTesting()) << "server did not enter the scheduling hold";
+        ASSERT_TRUE(WaitForSplitApplyHoldForTesting())
+            << "the clear waited for apply instead of returning while its server batch was held";
         held = PeekSplitRuntime();
     }
     void ExpectQueued(unsigned int minimumRecords) {
         const auto now = PeekSplitRuntime();
+        EXPECT_TRUE(now.runAheadArmed) << "Magma production session did not arm run-ahead";
         EXPECT_TRUE(SplitApplyHoldIsActiveForTesting()) << "client waited for apply instead of running ahead";
         EXPECT_EQ(now.appliedSeq, held.appliedSeq) << "held server advanced unexpectedly";
         EXPECT_GE(now.emitSeq, held.emitSeq + minimumRecords);
