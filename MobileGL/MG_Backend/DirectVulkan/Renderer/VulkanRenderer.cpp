@@ -3432,6 +3432,7 @@ void main() {
 #if MOBILEGL_BUILD_DISAGGREGATED
         DestroyWireDrawPass();
         CollectWireObjects(m_submitCounter, true);
+        ClearAllWireDrawPassCaches();
         DestroyWireColorBlitResources();
 #endif
         OnSubmitsCompletedUpTo(m_submitCounter);
@@ -13098,6 +13099,7 @@ void main() {
             // may have abandoned a recording tagged for a submission that will
             // never occur, so reclaim those future-tagged objects as well.
             CollectWireObjects(m_completedSubmitCounter, true);
+            ClearAllWireDrawPassCaches();
         }
 #endif
 
@@ -13666,6 +13668,11 @@ void main() {
         // inside OnSubmitsCompletedUpTo.
         OnSubmitsCompletedUpTo(m_frameContext.GetCurrent().lastSubmitIndex);
         CollectDeferredDepthMipmapCleanup(m_frameContext.GetCurrentFrameIndex());
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Its previous recording has completed. Drop cached attachment views
+        // before the texture manager can release their retired images.
+        ClearWireDrawPassCache(m_frameContext.GetCurrentFrameIndex());
+#endif
         m_textureManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         m_bufferManager.BeginFrame(m_frameContext.GetCurrentFrameIndex());
         m_convertedVertexStreams.clear();
@@ -15468,6 +15475,7 @@ void main() {
         // are being abandoned instead of submitted. Release all their views now.
         DestroyWireDrawPass();
         CollectWireObjects(m_submitCounter, true);
+        ClearAllWireDrawPassCaches();
 #endif
 
         if (m_timerQueryManager) {

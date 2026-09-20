@@ -62,6 +62,7 @@
         m_wireDrawPass.reset();
         for (const auto view : m_wireDrawViews) vkDestroyImageView(m_device, view, nullptr);
         m_wireDrawViews.clear();
+        m_wireDrawPassKey = {};
     }
 
     void VulkanRenderer::RetireWireObjects(WireRetiredObjects objects) {
@@ -76,24 +77,75 @@
         auto& frame = m_frameContext.GetCurrent();
         if (frame.isCommandRecording && VkRenderPassManager::GetActiveRenderPass())
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+        const Uint32 frameIndex = m_frameContext.GetCurrentFrameIndex();
+        if (m_wireDrawPassCaches.size() < m_frameContext.GetFrameCount())
+            m_wireDrawPassCaches.resize(m_frameContext.GetFrameCount());
+        auto& cache = m_wireDrawPassCaches[frameIndex];
+        // Bound a present-less stream of distinct framebuffer configurations.
+        // Overflow retains the original submit-index retirement path.
+        constexpr SizeT kMaxCachedWirePassesPerFrame = 32;
+        if (cache.size() < kMaxCachedWirePassesPerFrame) {
+            cache.push_back({Move(m_wireDrawPassKey), Move(m_wireDrawPass), Move(m_wireDrawViews)});
+            return;
+        }
         WireRetiredObjects retired{};
         retired.drawPass = Move(m_wireDrawPass);
         retired.imageViews = Move(m_wireDrawViews);
         RetireWireObjects(Move(retired));
+        m_wireDrawPassKey = {};
+    }
+
+    Bool VulkanRenderer::AcquireCachedWireDrawPass(const WireDrawPassKey& key) {
+        const Uint32 frameIndex = m_frameContext.GetCurrentFrameIndex();
+        if (frameIndex >= m_wireDrawPassCaches.size()) return false;
+        auto& cache = m_wireDrawPassCaches[frameIndex];
+        for (auto it = cache.begin(); it != cache.end(); ++it) {
+            // Exact values, not a compatibility hash: two FBOs with the same
+            // formats can name different images, windows or draw-buffer slots.
+            if (!(it->key == key)) continue;
+            m_wireDrawPassKey = Move(it->key);
+            m_wireDrawPass = Move(it->pass);
+            m_wireDrawViews = Move(it->views);
+            cache.erase(it);
+            return true;
+        }
+        return false;
+    }
+
+    void VulkanRenderer::ClearWireDrawPassCache(Uint32 frameIndex) {
+        if (frameIndex >= m_wireDrawPassCaches.size()) return;
+        auto& cache = m_wireDrawPassCaches[frameIndex];
+        for (auto& entry : cache) {
+            entry.pass.reset();
+            for (const auto view : entry.views) vkDestroyImageView(m_device, view, nullptr);
+        }
+        cache.clear();
+    }
+
+    void VulkanRenderer::ClearAllWireDrawPassCaches() {
+        for (Uint32 frameIndex = 0; frameIndex < m_wireDrawPassCaches.size(); ++frameIndex)
+            ClearWireDrawPassCache(frameIndex);
     }
 
     void VulkanRenderer::CollectWireObjects(Uint64 completedSubmit, Bool all) {
-        auto it = m_wireRetiredObjects.begin();
-        while (it != m_wireRetiredObjects.end()) {
-            if (!all && it->submitIndex > completedSubmit) { ++it; continue; }
+        SizeT retained = 0;
+        for (SizeT index = 0; index < m_wireRetiredObjects.size(); ++index) {
+            auto& entry = m_wireRetiredObjects[index];
+            if (!all && entry.submitIndex > completedSubmit) {
+                if (retained != index) m_wireRetiredObjects[retained] = Move(entry);
+                ++retained;
+                continue;
+            }
             // Framebuffers/descriptor sets stop naming their views first.
-            it->drawPass.reset();
-            for (const auto pool : it->descriptorPools) vkDestroyDescriptorPool(m_device, pool, nullptr);
-            for (const auto framebuffer : it->framebuffers) vkDestroyFramebuffer(m_device, framebuffer, nullptr);
-            for (const auto pass : it->renderPasses) vkDestroyRenderPass(m_device, pass, nullptr);
-            for (const auto view : it->imageViews) vkDestroyImageView(m_device, view, nullptr);
-            it = m_wireRetiredObjects.erase(it);
+            entry.drawPass.reset();
+            for (const auto pool : entry.descriptorPools) vkDestroyDescriptorPool(m_device, pool, nullptr);
+            for (const auto framebuffer : entry.framebuffers) vkDestroyFramebuffer(m_device, framebuffer, nullptr);
+            for (const auto pass : entry.renderPasses) vkDestroyRenderPass(m_device, pass, nullptr);
+            for (const auto view : entry.imageViews) vkDestroyImageView(m_device, view, nullptr);
         }
+        // Erase once: repeated front erases move the whole remaining cohort for
+        // every draw retired by a fence, turning a batch retirement quadratic.
+        m_wireRetiredObjects.resize(retained);
     }
 
     struct WirePreparationScope {
@@ -242,13 +294,20 @@
                 m_frameContext.GetCurrentFrameIndex(), VK_PIPELINE_BIND_POINT_GRAPHICS)) return false;
 
         Vector<VkAttachmentDescription> attachments;
-        Vector<VkImageView> views;
+        Vector<VkImageViewCreateInfo> viewInfos;
         Vector<VkAttachmentReference> colors;
         VkAttachmentReference depth{VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_GENERAL};
         VkExtent2D extent{~0u, ~0u};
         Uint32 layers = ~0u;
         VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
         Uint64 passHash = 0;
+        WireDrawPassKey passKey{};
+        passKey.isDefault = fbo->IsDefault;
+        passKey.framebufferSrgb = MGB_CTX->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
+        if (fbo->IsDefault) {
+            passKey.swapchain = m_swapchainObject.GetHandle();
+            passKey.swapchainImageIndex = m_imageIndexAcquired;
+        }
         const auto add = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect) -> Uint32 {
             WireImage image = ResolveWireImage(*fbo, surface, aspect);
             if (!image.image) return VK_ATTACHMENT_UNUSED;
@@ -266,10 +325,11 @@
             info.subresourceRange = {aspect, image.level, 1, image.layer, image.layers};
             if (image.format == VK_FORMAT_D24_UNORM_S8_UINT || image.format == VK_FORMAT_D32_SFLOAT_S8_UINT)
                 info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-            VkImageView view = VK_NULL_HANDLE;
-            VK_VERIFY(vkCreateImageView(m_device, &info, nullptr, &view));
-            m_wireDrawViews.push_back(view);
-            views.push_back(view);
+            viewInfos.push_back(info);
+            passKey.attachments.push_back({image.storage, static_cast<Uint32>(surface.Kind), image.image,
+                image.viewType, image.format, info.subresourceRange.aspectMask, aspect,
+                image.level, image.layer, image.layers, image.levels, image.extent.width, image.extent.height,
+                image.samples});
             VkAttachmentDescription description{};
             description.format = image.format;
             description.samples = image.samples;
@@ -301,6 +361,15 @@
         else if (fbo->Stencil.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
             depth.attachment = add(fbo->Stencil, VK_IMAGE_ASPECT_STENCIL_BIT);
         if (attachments.empty()) return false;
+        passKey.width = extent.width;
+        passKey.height = extent.height;
+        passKey.layers = layers;
+        passKey.depthReference = depth.attachment;
+        for (const auto& color : colors) passKey.colorReferences.push_back(color.attachment);
+        // A native handle can be recycled after image replacement or death.
+        // Sample epochs after every lazy resolve, then compare them with the key.
+        passKey.textureImageEpoch = m_textureManager->GetTextureImageEpoch();
+        passKey.resourceEraseEpoch = m_textureManager->GetResourceEraseEpoch();
         VkSubpassDescription subpass{};
         subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
         subpass.colorAttachmentCount = static_cast<Uint32>(colors.size());
@@ -311,22 +380,34 @@
         passInfo.pAttachments = attachments.data();
         passInfo.subpassCount = 1;
         passInfo.pSubpasses = &subpass;
-        m_wireDrawPass = MakeUnique<RenderPassEntry>();
+        if (!AcquireCachedWireDrawPass(passKey)) {
+            m_wireDrawPassKey = Move(passKey);
+            Vector<VkImageView> views;
+            views.reserve(viewInfos.size());
+            for (const auto& info : viewInfos) {
+                VkImageView view = VK_NULL_HANDLE;
+                VK_VERIFY(vkCreateImageView(m_device, &info, nullptr, &view));
+                m_wireDrawViews.push_back(view);
+                views.push_back(view);
+            }
+            m_wireDrawPass = MakeUnique<RenderPassEntry>();
+            auto& created = *m_wireDrawPass;
+            VK_VERIFY(vkCreateRenderPass(m_device, &passInfo, nullptr, &created.renderPass));
+            VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+            fbInfo.renderPass = created.renderPass;
+            fbInfo.attachmentCount = static_cast<Uint32>(views.size());
+            fbInfo.pAttachments = views.data();
+            fbInfo.width = extent.width; fbInfo.height = extent.height; fbInfo.layers = layers;
+            VK_VERIFY(vkCreateFramebuffer(m_device, &fbInfo, nullptr, &created.framebuffer));
+            created.attachmentCount = static_cast<Uint32>(attachments.size());
+            created.colorAttachmentCount = static_cast<Uint32>(colors.size());
+            created.hasDepthStencilAttachment = depth.attachment != VK_ATTACHMENT_UNUSED;
+            created.sampleCount = samples;
+            created.extent = {static_cast<Int>(extent.width), static_cast<Int>(extent.height)};
+            created.layers = layers;
+            created.hash = created.compatibilityHash = XXH64(colors.data(), colors.size() * sizeof(colors[0]), passHash);
+        }
         auto& pass = *m_wireDrawPass;
-        VK_VERIFY(vkCreateRenderPass(m_device, &passInfo, nullptr, &pass.renderPass));
-        VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-        fbInfo.renderPass = pass.renderPass;
-        fbInfo.attachmentCount = static_cast<Uint32>(views.size());
-        fbInfo.pAttachments = views.data();
-        fbInfo.width = extent.width; fbInfo.height = extent.height; fbInfo.layers = layers;
-        VK_VERIFY(vkCreateFramebuffer(m_device, &fbInfo, nullptr, &pass.framebuffer));
-        pass.attachmentCount = static_cast<Uint32>(attachments.size());
-        pass.colorAttachmentCount = static_cast<Uint32>(colors.size());
-        pass.hasDepthStencilAttachment = depth.attachment != VK_ATTACHMENT_UNUSED;
-        pass.sampleCount = samples;
-        pass.extent = {static_cast<Int>(extent.width), static_cast<Int>(extent.height)};
-        pass.layers = layers;
-        pass.hash = pass.compatibilityHash = XXH64(colors.data(), colors.size() * sizeof(colors[0]), passHash);
         const auto pipeline = GetOrCreatePipelineWithInput(mode, program, programObj, flags, input, pass,
             ResolvePrimitiveRestartEnable(aspects, indices));
         if (pipeline == VK_NULL_HANDLE) return false;

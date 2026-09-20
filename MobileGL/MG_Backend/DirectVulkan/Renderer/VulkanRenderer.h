@@ -474,6 +474,41 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                            const DrawCmdParam& drawParams, const IndexBufferView* indices);
         void DestroyWireDrawPass();
         void RetireWireDrawPass();
+        struct WireDrawAttachmentKey {
+            MG_Pipe::MGPipeHandle storage = MG_Pipe::kMGPipeNullHandle;
+            Uint32 resourceKind = 0;
+            VkImage image = VK_NULL_HANDLE;
+            VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
+            VkFormat format = VK_FORMAT_UNDEFINED;
+            VkImageAspectFlags aspect = 0, requestedAspect = 0;
+            Uint32 level = 0, layer = 0, layers = 1, imageLevels = 1;
+            Uint32 width = 0, height = 0;
+            VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+            Bool operator==(const WireDrawAttachmentKey&) const = default;
+        };
+        struct WireDrawPassKey {
+            Vector<WireDrawAttachmentKey> attachments;
+            Vector<Uint32> colorReferences;
+            Uint32 depthReference = VK_ATTACHMENT_UNUSED;
+            Uint32 width = 0, height = 0, layers = 1;
+            Uint64 textureImageEpoch = 0, resourceEraseEpoch = 0;
+            VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+            Uint32 swapchainImageIndex = 0;
+            Bool isDefault = false, framebufferSrgb = false;
+            Bool operator==(const WireDrawPassKey&) const = default;
+        };
+        struct WireDrawPassCacheEntry {
+            WireDrawPassKey key;
+            UniquePtr<RenderPassEntry> pass;
+            Vector<VkImageView> views;
+        };
+        // Objects only: every draw still ends/begins its pass and records the
+        // existing memory dependencies. Each slot is cleared after its fence.
+        Bool AcquireCachedWireDrawPass(const WireDrawPassKey& key);
+        void ClearWireDrawPassCache(Uint32 frameIndex);
+        void ClearAllWireDrawPassCaches();
+        Vector<Vector<WireDrawPassCacheEntry>> m_wireDrawPassCaches;
+        WireDrawPassKey m_wireDrawPassKey;
         struct WireRetiredObjects {
             Uint64 submitIndex = 0;
             UniquePtr<RenderPassEntry> drawPass;
