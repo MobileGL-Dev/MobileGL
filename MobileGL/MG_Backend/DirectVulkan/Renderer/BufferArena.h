@@ -40,6 +40,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkDeviceSize GetWriteCursor(Uint32 frameIndex) const;
         Uint32 GetFrameCount() const;
 
+        // Diagnostic: cumulative bytes ever uploaded through any arena.
+        static Uint64 GetCumulativeUploadedBytes();
+
     private:
         struct FrameResources {
             VkBufferObject buffer;

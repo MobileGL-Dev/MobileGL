@@ -178,7 +178,9 @@ namespace MobileGL::MG_State::GLState {
     // Only attempted for stores the size of mesh arenas: small buffers keep the
     // shadow model whose draw-time flush already prices them correctly.
     void BufferObject::TryAdoptLargeStorage() {
-        constexpr SizeT kLargeBufferAdoptBytes = 16u * 1024u * 1024u;
+        const SizeT kLargeBufferAdoptBytes =
+            static_cast<SizeT>(MG_Config::Features.LargeBufferAdoptThresholdMB > 0 ?
+                MG_Config::Features.LargeBufferAdoptThresholdMB : 4) * 1024u * 1024u;
         if (MG_Config::Features.DisableLargeBufferAdoption) return;
         if (m_size < kLargeBufferAdoptBytes) return;
         if (m_resource.IsGpuResident()) return;
@@ -534,15 +536,15 @@ namespace MobileGL::MG_State::GLState {
 
         if (access & BufferMappingAccessBit::Persistent) {
             m_ownsStagingData = false;
-            // Zero-copy: for a coherent (non-FLUSH_EXPLICIT) persistent write map, ask the
+            // Zero-copy: for a coherent persistent write map, ask the
             // active backend for host-visible, coherent GPU storage and adopt it as the
             // single source of truth. The backend seeds it from the current shadow before
             // returning; AdoptPersistentMap then releases the shadow. Falls back to the
             // shadow when the backend declines (returns null). Only attempted once - the
             // storage is immutable and outlives unmap/remap.
             if (!m_resource.IsGpuResident() && (access & BufferMappingAccessBit::Write) &&
-                !(access & BufferMappingAccessBit::FlushExplicit) && g_bufferBackendOps &&
-                g_bufferBackendOps->AcquirePersistentMap) {
+                (!(access & BufferMappingAccessBit::FlushExplicit) || MG_Config::Features.CoherentAsFlush) &&
+                g_bufferBackendOps && g_bufferBackendOps->AcquirePersistentMap) {
                 if (void* base = g_bufferBackendOps->AcquirePersistentMap(*this)) {
                     m_resource.AdoptPersistentMap(base);
                 }

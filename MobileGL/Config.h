@@ -132,6 +132,9 @@ namespace MobileGL::MG_Config {
         Bool MagmaR11G11B10FFallback = false;
         // MOBILEGL_MAGMA_FRAMESINFLIGHT: requested Magma frames in flight, defaulting to 3.
         Uint32 MagmaFramesInFlight = 3;
+        // MOBILEGL_MAGMA_VMA_BLOCK_SIZE_MB: preferred block size (in MB) for VMA large heap allocations.
+        // Defaults to 32MB on iOS to prevent Jetsam OOM kills (VMA default is 256MB).
+        Uint32 MagmaVmaBlockSizeMB = 32;
         // MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER: avoid mipmap min filters in samplers,
         // resolves certain rendering bugs on ANGLE + llvmpipe.
         Bool EsprytAvoidSamplerMipmapMinFilter = false;
@@ -206,6 +209,9 @@ namespace MobileGL::MG_Config {
         // route for the same write stalls the thread or ghost-copies the whole arena on
         // this class of Mali driver, and the arena stops costing its size again in RAM.
         Bool DisableLargeBufferAdoption = false;
+        // MOBILEGL_LARGE_BUFFER_ADOPT_MB: threshold size (in MB) above which buffers adopt GPU-resident storage
+        // and release their CPU shadow copy. Default 4MB (was hardcoded 16MB).
+        Uint32 LargeBufferAdoptThresholdMB = 4;
         // MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION: make DirectGLES skip the native ES
         // depth/stencil reads and always go through the shader-sampling emulation. Core GL
         // ES has no depth or stencil readback, but some drivers accept it anyway (Mesa does,

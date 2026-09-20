@@ -171,6 +171,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // back, and none was persistently mapped, in between - so a memo of resolved
         // slices needs no per-buffer re-check. See AcquirePersistentMap for the mapping half.
         Uint64 GetSliceEpochCounter() const { return m_sliceEpochCounter; }
+        // Diagnostic: live tracked resources (includes expired weak refs not yet
+        // pruned - trend matters, not the absolute value).
+        SizeT GetLiveResourceCount() const { return m_liveResources.size(); }
         // Highest frame serial whose GPU work is known complete; serials at or
         // below it may be considered signaled. Drives IsResourceBusy and the
         // backend GL fence objects.

@@ -126,6 +126,13 @@ public:
     // manager keys its per-draw fast path on this so an attachment's image recreation
     // invalidates the cached render pass (dirty-flag tracking; portable to Vulkan 1.1).
     Uint64 GetTextureImageEpoch() const { return m_textureImageEpoch; }
+    // Diagnostic: live tracked textures.
+    SizeT GetAliveTextureCount() const { return m_aliveObjects.size(); }
+    // Diagnostic: break live textures down by GL target class (2D / cube /
+    // array / 3D / other). Best-effort read for triage; the GL thread owns
+    // these maps, so treat counts as approximate under concurrency.
+    void CensusLiveTargets(SizeT& tex2D, SizeT& texCube, SizeT& texArray,
+                           SizeT& tex3D, SizeT& texOther) const;
     // Bumped whenever any tracked texture resource is erased; cached
     // TextureResource pointers are valid only while this is unchanged.
     Uint64 GetResourceEraseEpoch() const { return m_resourceEraseEpoch; }
