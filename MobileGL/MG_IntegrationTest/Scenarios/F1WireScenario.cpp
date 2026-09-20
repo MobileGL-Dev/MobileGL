@@ -403,6 +403,61 @@ void main() {
     glDeleteProgram(program);
 }
 
+TEST_F(F1WireScenario, ComputeImageStoreThroughViewPreservesOtherRootLayer) {
+    if (!Ready()) return;
+    GLuint root = 0, view = 0;
+    glGenTextures(1, &root);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, root);
+    glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, 8, 8, 2);
+    std::array<GLubyte, 8 * 8 * 2 * 4> red{};
+    for (size_t i = 0; i < red.size(); i += 4) {
+        red[i] = 255;
+        red[i + 3] = 255;
+    }
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, 8, 8, 2,
+                    GL_RGBA, GL_UNSIGNED_BYTE, red.data());
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, root, 0, 0);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    // Materialize the root's Vulkan image before any storage-image binding. The
+    // subsequent view-only bind must upgrade the root and preserve its other layer.
+    std::array<GLubyte, 4> initial{};
+    glReadPixels(2, 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, initial.data());
+    ASSERT_EQ(initial, (std::array<GLubyte, 4>{255, 0, 0, 255}));
+    glGenTextures(1, &view);
+    glTextureView(view, GL_TEXTURE_2D, root, GL_RGBA8, 0, 1, 1, 1);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    const char* compute = R"(#version 430 core
+layout(local_size_x=1, local_size_y=1, local_size_z=1) in;
+layout(rgba8, binding=2) writeonly uniform image2D destination;
+void main() { imageStore(destination, ivec2(gl_GlobalInvocationID.xy), vec4(0.0, 1.0, 0.0, 1.0)); }
+)";
+    const GLuint program = BuildWireProgram({{GL_COMPUTE_SHADER, compute}});
+    ASSERT_NE(program, 0u);
+    glBindImageTexture(2, view, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+    glUseProgram(program);
+    glDispatchCompute(8, 8, 1);
+    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
+    for (const int layer : {0, 1}) {
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, root, 0, layer);
+        std::array<GLubyte, 8 * 8 * 4> pixels{};
+        glReadPixels(0, 0, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+        const std::array<GLubyte, 4> expected = layer == 1
+            ? std::array<GLubyte, 4>{0, 255, 0, 255} : std::array<GLubyte, 4>{255, 0, 0, 255};
+        for (size_t at = 0; at < pixels.size(); at += 4) {
+            const std::array<GLubyte, 4> actual{pixels[at], pixels[at + 1], pixels[at + 2], pixels[at + 3]};
+            EXPECT_EQ(actual, expected) << "root layer " << layer << ", texel " << at / 4;
+        }
+    }
+    glBindImageTexture(2, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+    glUseProgram(0);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 0, 0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    glDeleteProgram(program);
+    glDeleteTextures(1, &view);
+    glDeleteTextures(1, &root);
+}
+
 TEST_F(F1WireScenario, EnabledVertexBufferDrawKeepsNamedP7Fatal) {
     if (!Ready()) return;
 #if !defined(_WIN32) && GTEST_HAS_DEATH_TEST
