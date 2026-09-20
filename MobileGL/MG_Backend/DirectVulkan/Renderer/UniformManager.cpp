@@ -165,7 +165,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         out.imageView = view;
         out.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         if (storage) {
-            if (state.BoundShaderImages[unit].Access != MG_Pipe::kMGPipeImageAccessReadOnly)
+            if (state.BoundShaderImages[unit].Access != kMGPipeImageAccessReadOnly)
                 m_textureManager->MarkWireTextureGpuWritten(handle, localLevel, localLayer, layers);
         } else {
             auto samplerHandle = state.BoundSamplerStates[unit];
