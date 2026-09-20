@@ -1999,7 +1999,8 @@ namespace MobileGL::MG_Pipe {
         // system. Textures only: a buffer's storage is the ops table's own Respecify hook, and
         // a renderbuffer has no levels.
         if (desc.Target != kMGPipeResourceTargetBuffer &&
-            desc.Target != static_cast<Uint8>(MGPipeResourceTarget::Renderbuffer) && !metadataOnly) {
+            desc.Target != static_cast<Uint8>(MGPipeResourceTarget::Renderbuffer) &&
+            (level != nullptr || !metadataOnly)) {
             if (g_resourceOps != nullptr && g_resourceOps->TextureRespecify != nullptr)
                 g_resourceOps->TextureRespecify(desc.Resource, desc, level);
             else
