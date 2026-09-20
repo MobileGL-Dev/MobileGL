@@ -99,17 +99,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!resource) WireDescriptorFatal("image-resource");
         m_textureManager->FlushPendingUploads();
 
+        const auto target = static_cast<MG_Pipe::MGPipeResourceTarget>(record.Desc.Target);
+        using Target = MG_Pipe::MGPipeResourceTarget;
+        const Bool layerable = target == Target::Tex1DArray || target == Target::Tex2DArray ||
+            target == Target::Tex2DMSArray || target == Target::Tex3D ||
+            target == Target::TexCube || target == Target::TexCubeArray;
         Uint32 level = storage ? state.BoundShaderImages[unit].Level : record.Params.BaseLevel;
-        Uint32 layer = storage && !state.BoundShaderImages[unit].Layered ? state.BoundShaderImages[unit].Layer : 0;
+        // GL ignores Layer/Layered for non-layerable targets. In particular image1D
+        // stays a 1D view, and an ignored nonzero Layer must not address another slice.
+        Uint32 layer = storage && layerable && !state.BoundShaderImages[unit].Layered
+            ? state.BoundShaderImages[unit].Layer : 0;
         const Uint32 localLevel = level;
         const Uint32 localLayer = layer;
         Uint32 layers = 0;
         VkFormat aliasFormat = VK_FORMAT_UNDEFINED;
         const auto root = m_textureManager->ResolveWireTextureStorage(handle, level, layer, &aliasFormat, &layers);
         if (MG_Pipe::MGPipeHandleIsNull(root)) WireDescriptorFatal("image-view-window");
-        const auto target = static_cast<MG_Pipe::MGPipeResourceTarget>(record.Desc.Target);
         VkImageViewType type = WireViewType(target);
-        if (storage && !state.BoundShaderImages[unit].Layered) {
+        if (storage && layerable && !state.BoundShaderImages[unit].Layered) {
             layers = 1;
             type = target == MG_Pipe::MGPipeResourceTarget::Tex1DArray ? VK_IMAGE_VIEW_TYPE_1D : VK_IMAGE_VIEW_TYPE_2D;
         }
