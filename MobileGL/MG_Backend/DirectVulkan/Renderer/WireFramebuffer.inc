@@ -369,14 +369,15 @@
     void VulkanRenderer::GenerateWireMipmap() {
         if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("wire-verb-flush");
         auto& state = MG_Pipe::MGPipeApplier();
-        const auto handle = state.VerbMipRes;
+        Uint32 base = state.VerbMipBaseLevel, baseLayer = 0, layerCount = 1;
+        const auto handle = m_textureManager->ResolveWireTextureStorage(state.VerbMipRes, base, baseLayer,
+                                                                       nullptr, &layerCount);
         auto* resource = m_textureManager->SyncTextureResourceByHandle(handle);
         if (!resource) MagmaWireFatal("mipmap-resource");
         m_textureManager->FlushPendingUploads();
         if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("mipmap-flush");
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording) m_frameContext.BeginCommandRecording();
-        const Uint32 base = state.VerbMipBaseLevel;
         const Uint32 count = state.VerbMipLevelCount;
         if (count <= 1) return;
         if (!m_textureManager->GrowWireTextureMipChain(handle,base+count,frame.commandBuffer))
@@ -401,8 +402,8 @@
                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT,resource->aspect,level-1,1);
             VkImageBlit blit{};
-            blit.srcSubresource = {resource->aspect,level-1,0,resource->arrayLayers};
-            blit.dstSubresource = {resource->aspect,level,0,resource->arrayLayers};
+            blit.srcSubresource = {resource->aspect,level-1,baseLayer,layerCount};
+            blit.dstSubresource = {resource->aspect,level,baseLayer,layerCount};
             blit.srcOffsets[1] = {static_cast<Int32>(std::max(resource->extent.width>>(level-1),1u)),
                 static_cast<Int32>(std::max(resource->extent.height>>(level-1),1u)),
                 static_cast<Int32>(std::max(resource->depth>>(level-1),1u))};
@@ -424,7 +425,8 @@
         const auto target = static_cast<MG_Pipe::MGPipeResourceTarget>(record.Desc.Target);
         // The resource descriptor determines the upload-target set; no texture unit or
         // client upload-target vector participates in defining the generated shadow.
-        for (Uint32 face=0;face<(target==MG_Pipe::MGPipeResourceTarget::TexCube ? 6u : 1u);++face) {
+        for (Uint32 face = target == MG_Pipe::MGPipeResourceTarget::TexCube ? baseLayer : 0;
+             face < (target == MG_Pipe::MGPipeResourceTarget::TexCube ? baseLayer + layerCount : 1u); ++face) {
             TextureUploadTarget upload = TextureUploadTarget::Texture2D;
             switch (target) {
             case MG_Pipe::MGPipeResourceTarget::Tex1D: upload=TextureUploadTarget::Texture1D; break;
@@ -437,9 +439,8 @@
             default: break;
             }
             for (Uint32 level=base+1;level<base+count;++level) {
-                const IntVec3 extent{static_cast<Int>(std::max(resource->extent.width>>level,1u)),
-                    static_cast<Int>(std::max(resource->extent.height>>level,1u)),
-                    static_cast<Int>(std::max(resource->depth>>level,1u))};
+                const IntVec3 extent = MG_Remote::Server::StagedTextureMipExtent(
+                    record.Desc.Target, record.Desc.Width, record.Desc.Height, record.Desc.Depth, level);
                 store.NoteLevelDefined(key,static_cast<Uint16>(upload),static_cast<Uint16>(level),extent);
                 store.MarkLevelGpuDirty(key,static_cast<Uint16>(upload),static_cast<Uint16>(level),true);
             }
