@@ -1017,7 +1017,7 @@ namespace MobileGL::MG_Pipe {
         // Texture records can have a server consumer without the buffer ops table (Magma).
         // Their staged bytes still belong to the server before SEG_STAGE retires. Keep the
         // existing backend hooks authoritative when present, and use this fallback otherwise.
-        void AdoptTextureWithoutBackendHook(const MGPResourceRecord& stored, const MGPSubData& upload,
+        void AdoptTextureWithoutBackendHook(const MGPipeResourceRecord& stored, const MGPSubData& upload,
                                            const void* bytes) {
             if (MG_Config::Transport == MG_Config::TransportMode::Monolith || !bytes || upload.Blob.Size == 0) return;
             auto& store = MG_Remote::Server::ServerStagedTexture();
