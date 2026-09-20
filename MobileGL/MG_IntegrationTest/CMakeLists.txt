@@ -2432,6 +2432,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             F1WireScenario.UniformBufferRangeAndRebindPixels
             F1WireScenario.ShortUniformBufferRangePadsMissingBytes
             F1WireScenario.ComputeWrittenVertexAndIndexBuffersDrawAndReadBack
+            F1WireScenario.ColorBlitToDefaultIgnoresViewportAndPreservesOrientation
+            F1WireScenario.ColorBlitToDefaultHonorsScissorAndReversedRect
             IndexedDrawFamilyScenario.AnElementBufferDrawElementsOffsetSelectsTheRightQuad
             IndexedDrawFamilyScenario.DrawElementsBaseVertexMovesTheSameIndicesToTheOtherQuad
             IndexedDrawFamilyScenario.DrawRangeElementsDrawsTheRangedRun

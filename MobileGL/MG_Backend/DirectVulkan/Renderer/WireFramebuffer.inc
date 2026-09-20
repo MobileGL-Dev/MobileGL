@@ -298,6 +298,19 @@
             WireImage destination = ResolveWireImage(*draw,dst,aspect);
             if (!source.image || !destination.image) return;
             m_textureManager->FlushPendingUploads();
+            // GL names logical window coordinates. Android's native swapchain may
+            // be quarter-turned (e.g. logical 2620x1280 over an image 1280x2620).
+            // An axis-aligned vkCmdBlitImage cannot express that rotation; issuing
+            // the logical rectangle directly also writes outside the native image.
+            if (aspect == VK_IMAGE_ASPECT_COLOR_BIT && destination.isDefault && !source.isDefault &&
+                source.samples == VK_SAMPLE_COUNT_1_BIT && destination.samples == VK_SAMPLE_COUNT_1_BIT &&
+                source.image != destination.image) {
+                if (!BlitWireColorToDefault(source, destination, sx0, sy0, sx1, sy1,
+                                            dx0, dy0, dx1, dy1, filter))
+                    MagmaWireFatal("default-color-blit-shape@P7");
+                m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired, true);
+                return;
+            }
             const Bool sameImage = source.image == destination.image;
             const VkImageLayout srcLayout = sameImage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             const VkImageLayout dstLayout = sameImage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;

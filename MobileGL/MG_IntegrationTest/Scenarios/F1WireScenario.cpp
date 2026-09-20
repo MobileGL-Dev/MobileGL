@@ -95,6 +95,28 @@ protected:
         if (attachment == GL_DEPTH_STENCIL_ATTACHMENT) { glDrawBuffer(GL_NONE); glReadBuffer(GL_NONE); }
         ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE)) << "F1.setup.framebuffer";
     }
+    void PaintNonSquareBlitSource() {
+        // GL coordinates: red/green on the bottom, blue/yellow on the top.
+        // A non-square source makes accidental extent/axis interchange visible.
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 6, 4);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+        ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+        constexpr GLfloat colors[4][4] = {{1, 0, 0, 1}, {0, 1, 0, 1}, {0, 0, 1, 1}, {1, 1, 0, 1}};
+        glEnable(GL_SCISSOR_TEST);
+        for (int quadrant = 0; quadrant < 4; ++quadrant) {
+            glScissor((quadrant % 2) * 3, (quadrant / 2) * 2, 3, 2);
+            glClearColor(colors[quadrant][0], colors[quadrant][1], colors[quadrant][2], colors[quadrant][3]);
+            glClear(GL_COLOR_BUFFER_BIT);
+        }
+        glDisable(GL_SCISSOR_TEST);
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "paint non-square source FBO";
+    }
+    std::array<GLubyte, 4> ReadOnePixel(int x, int y) {
+        std::array<GLubyte, 4> pixel{31, 47, 63, 79};
+        glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+        return pixel;
+    }
+
 };
 }
 
@@ -977,4 +999,62 @@ TEST_F(F1WireScenario, NamedBlitDefaultEndpointPixels) {
     EXPECT_EQ(pixel, (std::array<GLubyte, 4>{255, 0, 0, 255})) << "default read endpoint";
     EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
 }
+
+TEST_F(F1WireScenario, ColorBlitToDefaultIgnoresViewportAndPreservesOrientation) {
+    if (!Ready()) return;
+    ASSERT_GE(Gl().Width(), 16);
+    ASSERT_GE(Gl().Height(), 16);
+    ASSERT_NO_FATAL_FAILURE(PaintNonSquareBlitSource());
+    const int width = Gl().Width(), height = Gl().Height();
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0); // The destination really is the default framebuffer.
+    glClearColor(1, 0, 1, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glViewport(1, 2, 3, 5); // glBlitFramebuffer must ignore this unrelated viewport.
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    glBlitFramebuffer(0, 0, 6, 4, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    EXPECT_EQ(ReadOnePixel(width / 4, height / 4), (std::array<GLubyte, 4>{255, 0, 0, 255})) << "bottom left";
+    EXPECT_EQ(ReadOnePixel(3 * width / 4, height / 4), (std::array<GLubyte, 4>{0, 255, 0, 255})) << "bottom right";
+    EXPECT_EQ(ReadOnePixel(width / 4, 3 * height / 4), (std::array<GLubyte, 4>{0, 0, 255, 255})) << "top left";
+    EXPECT_EQ(ReadOnePixel(3 * width / 4, 3 * height / 4), (std::array<GLubyte, 4>{255, 255, 0, 255})) << "top right";
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    GLint viewport[4]{};
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    EXPECT_EQ((std::array<GLint, 4>{viewport[0], viewport[1], viewport[2], viewport[3]}),
+              (std::array<GLint, 4>{1, 2, 3, 5})) << "blit must not mutate the application's viewport";
+    Gl().EndFrame();
+}
+
+TEST_F(F1WireScenario, ColorBlitToDefaultHonorsScissorAndReversedRect) {
+    if (!Ready()) return;
+    ASSERT_GE(Gl().Width(), 16);
+    ASSERT_GE(Gl().Height(), 16);
+    ASSERT_NO_FATAL_FAILURE(PaintNonSquareBlitSource());
+    const int width = Gl().Width(), height = Gl().Height();
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glClearColor(1, 0, 1, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glViewport(2, 1, 5, 3);
+    // Copy into the centre half with BOTH destination axes reversed. Scissor
+    // keeps only its left half, so a plain unclipped vkCmdBlitImage is incorrect.
+    glScissor(width / 4, height / 4, width / 4, height / 2);
+    glEnable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    glBlitFramebuffer(0, 0, 6, 4, 3 * width / 4, 3 * height / 4,
+                      width / 4, height / 4, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    EXPECT_EQ(ReadOnePixel(3 * width / 8, 3 * height / 8), (std::array<GLubyte, 4>{255, 255, 0, 255}))
+        << "reversed bottom-left destination reads the source top-right yellow quadrant";
+    EXPECT_EQ(ReadOnePixel(3 * width / 8, 5 * height / 8), (std::array<GLubyte, 4>{0, 255, 0, 255}))
+        << "reversed top-left destination reads the source bottom-right green quadrant";
+    const std::array<GLubyte, 4> untouched{255, 0, 255, 255};
+    EXPECT_EQ(ReadOnePixel(5 * width / 8, 3 * height / 8), untouched) << "inside destination, outside scissor";
+    EXPECT_EQ(ReadOnePixel(5 * width / 8, 5 * height / 8), untouched) << "upper destination outside scissor";
+    EXPECT_EQ(ReadOnePixel(width / 8, height / 2), untouched) << "outside destination rectangle";
+    EXPECT_EQ(ReadOnePixel(3 * width / 8, height / 8), untouched) << "below destination and scissor";
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    glDisable(GL_SCISSOR_TEST);
+    Gl().EndFrame();
+}
+
 } // namespace MGITest

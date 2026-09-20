@@ -3431,6 +3431,7 @@ void main() {
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
         DestroyWireDrawPass();
+        DestroyWireColorBlitResources();
 #endif
         OnSubmitsCompletedUpTo(m_submitCounter);
         DestroySubmitFencePool();
@@ -7728,6 +7729,7 @@ void main() {
     }
 
     #include "WireFramebuffer.inc"
+    #include "WireColorBlit.inc"
     #include "WireDraw.inc"
 
     void VulkanRenderer::Clear(GLbitfield mask) {
