@@ -1779,18 +1779,38 @@ TEST(ServerLoopEglTest, TheInitializeDisplayReplyArrivesThroughTheFrame) {
 // the slot header the client reads. Red once, three ways: post at info.DstSize, size the scratch from
 // info.DstSize, compute `tight` from info.DstSize.
 TEST(ServerLoopEglTest, AReadPixelsReplyIsTheTightExtentWhateverDstSizeTheClientSent) {
+    // Arm the record consumers before any backend helper can latch its subsystem choice.
+    struct PushMaskScope {
+        Uint64 saved = MG_Config::Features.PipePush;
+        PushMaskScope() { MG_Config::Features.PipePush = MG_Pipe::kMGPipeSubsystemsMigratedAtP5e; }
+        ~PushMaskScope() { MG_Config::Features.PipePush = saved; }
+    } pushMaskScope;
     EglServerFixture fixture;
     MGL_EGL_BRING_UP_OR_BAIL(fixture);
     ASSERT_TRUE(fixture.MakeCurrent());
 
-    // THE CLIENT'S HALF OF THE VERB, exactly as glReadPixels runs it before it reaches a backend
-    // (MGP_FILL(ReadPixels) in MG_Impl): the validate point fills gPipeInputs' residual fields
-    // from the frontend context - the texture-unit base, the bound framebuffers, the pack state
-    // - which the server's ReadPixels reads BARRIER-PULLED under R-1 while the client is parked
-    // in the barrier (PipeInputs.h's class table). Without it the apply thread reads a block
-    // nobody filled and walks a null texture-unit base; with it the case drives the same two
-    // halves the inproc lane drives, in the same order, on the same process-wide block.
-    MG_Pipe::MGPipeValidateForVerb(MG_Pipe::MGPipeVerb::ReadPixels);
+    // This fixture owns its encoder directly, so publish the same record-owned inputs the
+    // normal client would send. Residual frontend pointers are deliberately not a source.
+    MG_Pipe::MGPFramebufferState framebuffer{};
+    framebuffer.Fbo = MG_Pipe::kMGPipeDefaultFramebuffer;
+    framebuffer.Target = static_cast<Uint8>(MG_Pipe::MGPipeFramebufferTarget::Both);
+    framebuffer.IsDefault = 1;
+    framebuffer.Complete = 1;
+    framebuffer.Width = framebuffer.Height = 64;
+    framebuffer.Layers = framebuffer.Samples = 1;
+    framebuffer.FixedSampleLocations = 1;
+    for (auto& drawBuffer : framebuffer.DrawBuffers) drawBuffer = -1;
+    framebuffer.DrawBuffers[0] = 0;
+    framebuffer.ContentHash = 1;
+    ASSERT_TRUE(fixture.EmitAndWait(MG_Pipe::MGPWireOp::SetFramebufferState,
+                                   &framebuffer, sizeof(framebuffer)));
+
+    MG_Pipe::MGPPixelPackState pack{};
+    pack.Pack.Alignment = 4;
+    pack.Pack.RowLength = 8; // the application's padded layout must not size server scratch
+    ASSERT_TRUE(fixture.EmitAndWait(MG_Pipe::MGPWireOp::SetPixelPackState, &pack, sizeof(pack)));
+    MG_Pipe::MGPContextValues context{}; // no textures touched and no open XFB capture
+    ASSERT_TRUE(fixture.EmitAndWait(MG_Pipe::MGPWireOp::SetContextValues, &context, sizeof(context)));
 
     MG_Pipe::MGPReadbackInfo info{};
     info.Res = MG_Pipe::kMGPipeNullHandle; // read_pixels: the bound read surface answers
