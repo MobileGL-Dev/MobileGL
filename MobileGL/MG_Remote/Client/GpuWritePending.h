@@ -157,4 +157,21 @@ namespace MobileGL::MG_Remote::Client {
     // active - the synchronous arm never slices.
     SizeT BufferWritebackSliceBytes();
 
+    // The same question for CONTENT: how many bytes one resource_subdata record may stage
+    // before the range has to be cut. SEG_STAGE is a linear arena, one record's blob is
+    // allocated from it whole, and a blob larger than the arena is
+    // Fatal{RingOverrun, "SEG_STAGE"} at the encoder rather than a split
+    // (PipeWireCodec.cpp:856-864) - measured on the CI traces, where a 128 MiB arena's
+    // whole-buffer follow-up against a 32 MiB segment aborted. 0 means "do not cut", i.e. the
+    // record's own bound (MGPipeForEachSubDataRecordRange's default), which is the answer for
+    // monolith, for the server role's own uploads (they run the monolith adapter) and for a
+    // process with no session - every unit gate.
+    SizeT MGPipeStageChunkBytes();
+
+    // The clamp itself, a pure function of the segment's size so that a unit gate can drive the
+    // splitter at exactly the value a live session produces. A quarter of the segment, never
+    // below 4096 (a zero-width piece is a refusal, ResourceTracker.h:254) and never above the
+    // segment (a larger cap would stage the very blob the arena refuses).
+    SizeT MGPipeStageChunkBytesFor(Uint64 stageCapacityBytes);
+
 } // namespace MobileGL::MG_Remote::Client

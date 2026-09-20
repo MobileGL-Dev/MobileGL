@@ -314,6 +314,12 @@ namespace MobileGL::MG_Remote::Client {
         // capacity/2, Ring.h:288).
         Uint64 EventRingCapacityBytes() const;
 
+        // SEG_STAGE's capacity, exposed so a content emitter can cut a range into records that
+        // always stage whole: the staging area is a linear arena of exactly these bytes (w1),
+        // and one blob larger than it is Fatal{RingOverrun, "SEG_STAGE"} at the encoder rather
+        // than a split (PipeWireCodec.cpp:856-864).
+        Uint64 StageCapacityBytes() const;
+
         // The CLIENT's own segment table (P5c ev, CONTRACT-P5C §4.3): the writeback
         // consumer resolves a SEG_EVENT blobref through it. Never the process resolver -
         // table 3 installs that one on the server role only.

@@ -984,6 +984,25 @@ namespace MobileGL::MG_Pipe {
         MGPipeRouteResourceRespecify(desc, initialBytes);
     }
 
+    // THE CAP THE TWO CONTENT WALKS BELOW CUT A RANGE AT. The record's own bound (2^32-1) is not
+    // the one a real upload meets first: one piece's bytes are staged WHOLE in SEG_STAGE, a
+    // linear arena, and a blob larger than that arena is Fatal{RingOverrun, "SEG_STAGE"} at the
+    // encoder rather than a split (PipeWireCodec.cpp:856-864). Measured on the CI traces: a
+    // 128 MiB arena's whole-buffer follow-up against a 32 MiB segment aborted there, which is
+    // the RingOverrun this walk exists to prevent.
+    //
+    // 0 from the helper means "nothing to fit" - monolith, the server role's own uploads (which
+    // run the monolith adapter), or a process with no session - and the record's own bound is
+    // then the answer, exactly as it was before the cap existed.
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Uint64 MGPipeContentChunkCap() {
+        const SizeT stageChunk = MG_Remote::Client::MGPipeStageChunkBytes();
+        return stageChunk == 0 ? kMGPipeSubDataMaxRecordSize : static_cast<Uint64>(stageChunk);
+    }
+#else
+    constexpr Uint64 MGPipeContentChunkCap() { return kMGPipeSubDataMaxRecordSize; }
+#endif
+
     void MGPipeEmitResourceSubData(BufferObject& buffer, SizeT offset, SizeT size) {
         const MGPipeHandle handle = ContentHandleFor(buffer, "resource_subdata");
         if (MGPipeHandleIsNull(handle)) return;
@@ -1009,7 +1028,7 @@ namespace MobileGL::MG_Pipe {
                 // rather than re-read so the staged run and the record's own claim come from
                 // one number.
                 MGPipeRouteResourceSubData(record, base + at, length);
-            });
+            }, MGPipeContentChunkCap());
         if (!encodable) {
             MGLOG_E_ONCE("MGPipe: resource_subdata range [%llu, +%llu) on buffer %u cannot be encoded - "
                          "one record's destination box caps the offset at 2^31-1",
@@ -1040,7 +1059,7 @@ namespace MobileGL::MG_Pipe {
 #endif
                 // The application's STAGING store, valid for the duration of the call only.
                 MGPipeRouteBufferSubDataResident(record, base + (at - offset), length);
-            });
+            }, MGPipeContentChunkCap());
         if (!encodable) {
             MGLOG_E_ONCE("MGPipe: buffer_subdata_resident range [%llu, +%llu) on buffer %u cannot be encoded",
                          static_cast<unsigned long long>(offset), static_cast<unsigned long long>(size),

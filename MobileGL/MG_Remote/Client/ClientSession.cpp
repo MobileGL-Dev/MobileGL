@@ -1467,6 +1467,8 @@ namespace MobileGL::MG_Remote::Client {
 
     Uint64 ClientSession::EventRingCapacityBytes() const { return m_shm.EventRingCapacity(); }
 
+    Uint64 ClientSession::StageCapacityBytes() const { return m_shm.StageBytes(); }
+
     Wire::SegmentTable& ClientSession::Segments() { return m_segments; }
 
     Transport::RingControl* ClientSession::Control() { return m_shm.CmdControl(); }
