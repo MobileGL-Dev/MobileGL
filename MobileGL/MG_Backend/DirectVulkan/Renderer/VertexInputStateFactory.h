@@ -183,6 +183,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const VulkanRendererConfig& m_config;
         VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Physical-device format capabilities never change during this factory's
+        // lifetime. The wire path rebuilds layouts without the legacy VAO memo.
+        mutable UnorderedMap<VkFormat, Bool> m_wireVertexFormatSupport;
+#endif
         // Values are heap-allocated: UnorderedMap is open-addressing, so INSERT
         // invalidates references to stored values - and so does ERASE, which shifts
         // the rest of the probe cluster into the hole and therefore moves entries

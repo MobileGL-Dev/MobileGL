@@ -787,6 +787,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (m_physicalDevice == VK_NULL_HANDLE || format == VK_FORMAT_UNDEFINED) {
             return false;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            const auto found = m_wireVertexFormatSupport.find(format);
+            if (found != m_wireVertexFormatSupport.end()) return found->second;
+            VkFormatProperties properties{};
+            vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &properties);
+            const Bool supported = (properties.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) != 0;
+            m_wireVertexFormatSupport.emplace(format, supported);
+            return supported;
+        }
+#endif
         VkFormatProperties properties{};
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &properties);
         return (properties.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) != 0;
