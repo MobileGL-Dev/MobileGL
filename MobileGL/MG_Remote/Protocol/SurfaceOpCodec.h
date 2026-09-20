@@ -7,17 +7,17 @@
 // End of Source File Header
 
 // P5f, package fc: the codec between the inproc SurfaceControlFrame and the wire's
-// Wire::SurfaceOp / Wire::SurfaceReply (protocol.fbs).
+// ::MobileGL::Wire::SurfaceOp / ::MobileGL::Wire::SurfaceReply (protocol.fbs).
 //
 // The frame is the inproc payload (Server/SurfaceControlFrame.h); this is the ONLY place the
 // frame meets the schema. Nothing in the inproc hot path encodes - the frame crosses the one-slot
 // channel by value - but the codec is what makes "the same struct encodes under spawn" a tested
 // claim rather than a plan, and it owns the two schema seams that are NOT integer translations:
 //
-//   * SurfaceControlOp <-> Wire::SurfaceOpKind: numerically aligned for the ten framed ops and
+//   * SurfaceControlOp <-> ::MobileGL::Wire::SurfaceOpKind: numerically aligned for the ten framed ops and
 //     PINNED by static_asserts in the .cpp, but mapped through an explicit table. The four
 //     inproc-only kinds have no wire kind and refuse to encode by name.
-//   * MG_Backend::WindowBackend <-> Wire::WindowKind: the two enums do not agree (WindowKind's
+//   * MG_Backend::WindowBackend <-> ::MobileGL::Wire::WindowKind: the two enums do not agree (WindowKind's
 //     Surfaceless/Pbuffer are surface shapes, not window backends; WindowBackend's MetalLayer had
 //     no wire enumerator until fc added it), so the mapping is a table with named failures, never
 //     a cast (f0-egl census, schema gap 3).
@@ -28,7 +28,8 @@
 // Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"} (the ANativeWindow* means nothing in the
 // server's process; real window arrival is P12) and everything else dies
 // Fatal{ProtocolCorruption, "SurfaceOp"}. P6's control pump is the intended caller; P5f's unit
-// tests drive it directly.
+// tests drive it directly. MetalLayerArrived likewise dies
+// Fatal{UnmigratedSurface, "MetalLayer@P12"}: CAMetalLayer* is also process-local.
 
 #pragma once
 #include <Includes.h>
@@ -53,6 +54,7 @@ namespace MobileGL::MG_Remote {
         InprocOnlyOpOnTheWire,   // a kind that may ride the inproc channel but never the wire
         WindowKindNamesNoBackend,// Surfaceless/Pbuffer where a window backend is required
         UnknownWindowKind,       // a WindowKind the mapping table does not know
+        MetalLayerArrived,       // -> Fatal{UnmigratedSurface, "MetalLayer@P12"}
         AndroidNativeWindowArrived, // -> Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"}
     };
 
@@ -60,15 +62,15 @@ namespace MobileGL::MG_Remote {
 
     // frame.kind <-> wire kind. Both answer false (and leave *out untouched) for None, the four
     // inproc-only kinds, and any wire value the schema does not define.
-    bool WireKindForSurfaceControlOp(Server::SurfaceControlOp op, Wire::SurfaceOpKind* out);
-    bool SurfaceControlOpForWireKind(Wire::SurfaceOpKind kind, Server::SurfaceControlOp* out);
+    bool WireKindForSurfaceControlOp(Server::SurfaceControlOp op, ::MobileGL::Wire::SurfaceOpKind* out);
+    bool SurfaceControlOpForWireKind(::MobileGL::Wire::SurfaceOpKind kind, Server::SurfaceControlOp* out);
 
     // The explicit WindowBackend <-> WindowKind table. WireWindowKindForWindowBackend also maps
     // WindowBackend::Unknown to WindowKind::None; WindowBackendForWireWindowKind maps
     // WindowKind::None back to Unknown and answers FALSE for Surfaceless/Pbuffer (surface shapes,
     // not window backends).
-    bool WireWindowKindForWindowBackend(MG_Backend::WindowBackend backend, Wire::WindowKind* out);
-    bool WindowBackendForWireWindowKind(Wire::WindowKind kind, MG_Backend::WindowBackend* out);
+    bool WireWindowKindForWindowBackend(MG_Backend::WindowBackend backend, ::MobileGL::Wire::WindowKind* out);
+    bool WindowBackendForWireWindowKind(::MobileGL::Wire::WindowKind kind, MG_Backend::WindowBackend* out);
 
     // Encode one frame as a complete CtrlEnvelope{SurfaceOp} buffer (the builder is left
     // Finished). Fails BEFORE touching the builder for a kind that may not cross.
@@ -77,17 +79,17 @@ namespace MobileGL::MG_Remote {
 
     // Validate + decode a wire SurfaceOp into a frame. Pure - it never aborts; the Fatal
     // decisions belong to ServerApplyWireSurfaceOp. The reply half of the frame is reset.
-    SurfaceWireError DecodeWireSurfaceOp(const Wire::SurfaceOp& op, Server::SurfaceControlFrame* frame);
+    SurfaceWireError DecodeWireSurfaceOp(const ::MobileGL::Wire::SurfaceOp& op, Server::SurfaceControlFrame* frame);
 
     // The reply direction, same shape (CtrlEnvelope{SurfaceReply}).
     void EncodeSurfaceReplyFrame(const Server::SurfaceControlFrame& frame,
                                  flatbuffers::FlatBufferBuilder* builder);
-    void DecodeWireSurfaceReply(const Wire::SurfaceReply& reply, Server::SurfaceControlFrame* frame);
+    void DecodeWireSurfaceReply(const ::MobileGL::Wire::SurfaceReply& reply, Server::SurfaceControlFrame* frame);
 
     // The server-side wire entry: decode, then post the frame through ServerLoop's channel and
     // hand the reply half back. A decode error is a NAMED Fatal (see the header block), never a
     // dropped message. No transport calls this yet - P6's control pump will.
-    MobileGLResult ServerApplyWireSurfaceOp(const Wire::SurfaceOp& op,
+    MobileGLResult ServerApplyWireSurfaceOp(const ::MobileGL::Wire::SurfaceOp& op,
                                             Server::SurfaceControlFrame* replyOut);
 
 } // namespace MobileGL::MG_Remote

@@ -65,6 +65,7 @@ namespace MobileGL::MG_Remote {
         case SurfaceWireError::InprocOnlyOpOnTheWire: return "InprocOnlyOpOnTheWire";
         case SurfaceWireError::WindowKindNamesNoBackend: return "WindowKindNamesNoBackend";
         case SurfaceWireError::UnknownWindowKind: return "UnknownWindowKind";
+        case SurfaceWireError::MetalLayerArrived: return "MetalLayerArrived";
         case SurfaceWireError::AndroidNativeWindowArrived: return "AndroidNativeWindowArrived";
         }
         return "<unknown SurfaceWireError>";
@@ -159,6 +160,10 @@ namespace MobileGL::MG_Remote {
                 // arrival is P12; until then this is refused by name at ServerApplyWireSurfaceOp.
                 return SurfaceWireError::AndroidNativeWindowArrived;
             }
+            if (op.windowKind() == ::MobileGL::Wire::WindowKind::MetalLayer) {
+                // CAMetalLayer* is a client-process object address, just like ANativeWindow*.
+                return SurfaceWireError::MetalLayerArrived;
+            }
             MG_Backend::WindowBackend backend;
             if (!WindowBackendForWireWindowKind(op.windowKind(), &backend)) {
                 return ::flatbuffers::IsOutRange(op.windowKind(), ::MobileGL::Wire::WindowKind::None,
@@ -199,6 +204,10 @@ namespace MobileGL::MG_Remote {
                         "CLIENT's process and means nothing here. Real window arrival is P12; "
                         "until then the spawn surface path is pbuffer/surfaceless only",
                         ::MobileGL::Wire::EnumNameSurfaceOpKind(op.kind()));
+            } else if (error == SurfaceWireError::MetalLayerArrived) {
+                MGLOG_F("MGPipe: Fatal{UnmigratedSurface, \"MetalLayer@P12\"} - a wire "
+                        "SurfaceOp named a CAMetalLayer* in the CLIENT's process. "
+                        "Real window arrival is P12");
             } else {
                 MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp\"} - a wire surface op "
                         "failed validation: %s (wire kind %u, window kind %u)",

@@ -17,11 +17,13 @@
    slot's content passes to the channel at publish; the dispatch on the apply thread fills the
    reply half (`ok`, `eglMajor`, `eglMinor`) into the same value; the poster's copy-out happens
    after the blocking handshake returns. No field is a pointer and none may become one — the
-   `static_assert(std::is_trivially_copyable_v<...>)` in `SurfaceControlFrame.h` is the
-   enforcement, not a courtesy.
-2. `seq` is minted by the channel's poster side (`RunSurfaceControlFrame`), monotonically from 1
-   per session, and echoed in the reply. Under spawn the client mints (P6-CONTRACT-DRAFT table 0);
-   the field does not change shape.
+   exhaustive constexpr structured binding in `SurfaceControlFrame.h` checks every member
+   as an integer or enum. Adding a member without extending the binding fails compilation;
+   changing a checked member to a pointer fails its static assertion. Trivially-copyable /
+   standard-layout remain separate copyability checks: neither trait rejects pointers.
+2. An unnumbered local request (`seq == 0`) is numbered by `RunSurfaceControlFrame`, from 1
+   per session. An already numbered wire request retains its client-minted sequence through
+   dispatch and reply (P6-CONTRACT-DRAFT table 0); the server never renumbers it.
 3. `display` / `surface` / `readSurface` / `context` are Uint64 **tokens**. Inproc they are the
    client's EGL handle values bit-cast — legal only because both roles share a process and a
    driver, and the N-3 tuple bookkeeping compares them by value. Under spawn they are
@@ -31,7 +33,8 @@
    names the **backend** enum, never the wire's `WindowKind`; the two enums meet only inside
    `SurfaceOpCodec.cpp`'s explicit tables (`Surfaceless`/`Pbuffer` are surface shapes and answer
    "no backend" there). A `nativeToken` whose backend is Android is an `ANativeWindow*` — an
-   address in the client's process — and may never cross (§3.4).
+   address in the client's process — and may never cross (§3.5). MetalLayer carries a
+   `CAMetalLayer*` and has the same restriction.
 
 ## 2. Ordering
 
@@ -58,16 +61,22 @@
    unchanged).
 3. Backend null at dispatch → `MOBILEGL_ERR_NOT_INITIALIZED` with `ok=false`; the forwarder's
    answer is the old `false`/void-drop, unchanged.
-4. Wire entry (`ServerApplyWireSurfaceOp`, the future P6 control pump's entry point; P5f drives
+4. Successful void operations (`SetSwapInterval`, `ReleaseSurface`, `ReleaseResources`,
+   `SetWindowHandle`) reply `ok=true` after completing on the apply thread; a null backend
+   replies `ok=false`. The wire therefore preserves the success/failure distinction even
+   though the inproc forwarder returns void.
+5. Wire entry (`ServerApplyWireSurfaceOp`, the future P6 control pump's entry point; P5f drives
    it from tests only): a decode failure is **`Fatal{ProtocolCorruption, "SurfaceOp"}`**, never a
    dropped frame (a dropped control frame is a client waiting on a reply that never comes); a
    decoded `WindowKind::AndroidNativeWindow` is
    **`Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"}`** — the window kind is legal schema,
    the token is the part that means nothing in the server's process, and real window arrival is
-   P12. Inproc-only kinds (`InitCapabilitiesInprocOnly`, `SwapBuffersInprocOnly`,
+   P12. A decoded `MetalLayer` is similarly **`Fatal{UnmigratedSurface, "MetalLayer@P12"}`**,
+   because its `CAMetalLayer*` also belongs to the client process. Inproc-only kinds
+   (`InitCapabilitiesInprocOnly`, `SwapBuffersInprocOnly`,
    `InitWindowSurfaceInprocOnly`, `ProbeForTesting`) cannot arrive: the encoder refuses them
    (`SurfaceWireError::InprocOnlyOpOnTheWire`).
-5. A frame that reaches the inproc dispatch with `kind == None` or a kind the switch does not know
+6. A frame that reaches the inproc dispatch with `kind == None` or a kind the switch does not know
    is `Fatal{ProtocolCorruption, "SurfaceOp.kind"}`; a `windowBackend` tag outside the enum is
    `Fatal{ProtocolCorruption, "SurfaceOp.windowBackend"}`. Inproc these are corruption shapes, not
    bad input — same discipline as the ring's header check.

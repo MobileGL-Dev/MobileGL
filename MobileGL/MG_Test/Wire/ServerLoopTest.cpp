@@ -42,6 +42,7 @@
 #include <MG_Remote/CapsCodec.h>
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/Protocol/generated/protocol_generated.h>
+#include <MG_Remote/Protocol/SurfaceOpCodec.h>
 #include <MG_Remote/Server/PipeApplier.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Remote/Server/ServerSession.h>
@@ -463,6 +464,72 @@ TEST(ServerLoopTest, APostFromTheApplyThreadItselfRunsInlineRatherThanDeadlockin
     EXPECT_EQ(outer.innerRc, MOBILEGL_OK);
     EXPECT_TRUE(outer.innerRan);
 
+    fixture.Stop();
+}
+
+TEST(ServerLoopTest, WireSequenceSurvivesRealDispatchAndFailureReply) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    flatbuffers::FlatBufferBuilder builder(256);
+    const auto op = ::MobileGL::Wire::CreateSurfaceOp(
+        builder, 4242, ::MobileGL::Wire::SurfaceOpKind::SetSwapInterval);
+    const auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(
+        builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
+    ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
+    Server::SurfaceControlFrame reply;
+    EXPECT_EQ(MG_Remote::ServerApplyWireSurfaceOp(
+                  *::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer())->msg_as_SurfaceOp(), &reply),
+              MOBILEGL_ERR_NOT_INITIALIZED);
+    EXPECT_EQ(Server::ServerLoopInstance().ControlFramesDispatched(), 1u);
+    flatbuffers::FlatBufferBuilder replies(256);
+    MG_Remote::EncodeSurfaceReplyFrame(reply, &replies);
+    const auto* wireReply = ::MobileGL::Wire::GetCtrlEnvelope(replies.GetBufferPointer())->msg_as_SurfaceReply();
+    EXPECT_EQ(wireReply->seq(), 4242u);
+    EXPECT_FALSE(wireReply->ok());
+    fixture.Stop();
+}
+
+TEST(ServerLoopTest, ConcurrentProbesKeepTheirArgumentsAcrossNestedProbes) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    constexpr int kPosters = 8;
+    constexpr int kCalls = 128;
+    struct Probe {
+        std::atomic<int> calls{0};
+        std::atomic<int> nested{0};
+        std::atomic<int> errors{0};
+    } probes[kPosters];
+    std::atomic<bool> go{false};
+    std::vector<std::thread> posters;
+    for (auto& probe : probes) {
+        posters.emplace_back([&go, &probe] {
+            while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+            for (int i = 0; i < kCalls; ++i) {
+                const auto rc = Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+                    +[](void* user) -> MobileGLResult {
+                        auto* p = static_cast<Probe*>(user);
+                        p->calls.fetch_add(1);
+                        // Same argument type keeps a regressed mixed pair observable without UB.
+                        return Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+                            +[](void* nestedUser) -> MobileGLResult {
+                                static_cast<Probe*>(nestedUser)->nested.fetch_add(1);
+                                return MOBILEGL_OK;
+                            }, p);
+                    }, &probe);
+                if (rc != MOBILEGL_OK) probe.errors.fetch_add(1);
+            }
+        });
+    }
+    go.store(true, std::memory_order_release);
+    for (auto& poster : posters) poster.join();
+    for (const auto& probe : probes) {
+        EXPECT_EQ(probe.calls.load(), kCalls) << "another poster or nested probe replaced this hook/user pair";
+        EXPECT_EQ(probe.nested.load(), kCalls);
+        EXPECT_EQ(probe.errors.load(), 0);
+    }
+    EXPECT_EQ(Server::ServerLoopInstance().ControlFramesDispatched(), 2u * kPosters * kCalls);
     fixture.Stop();
 }
 
@@ -1453,6 +1520,35 @@ namespace {
     }
 
 } // namespace
+
+TEST(ServerLoopEglTest, SuccessfulVoidWireOperationsReplyWithSuccessAndOriginalSequence) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    // Release last: it deliberately destroys the native context used by the preceding ops.
+    const auto kinds = {::MobileGL::Wire::SurfaceOpKind::SetSwapInterval,
+                        ::MobileGL::Wire::SurfaceOpKind::SetWindowHandle,
+                        ::MobileGL::Wire::SurfaceOpKind::ReleaseSurface,
+                        ::MobileGL::Wire::SurfaceOpKind::ReleaseResources};
+    Uint64 seq = 9000;
+    for (const auto kind : kinds) {
+        flatbuffers::FlatBufferBuilder builder(256);
+        const auto op = ::MobileGL::Wire::CreateSurfaceOp(
+            builder, ++seq, kind, 0, 0, ::MobileGL::Wire::WindowKind::None, 0, 0, 0, 1);
+        const auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(
+            builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
+        ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
+        Server::SurfaceControlFrame reply;
+        EXPECT_EQ(MG_Remote::ServerApplyWireSurfaceOp(
+                      *::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer())->msg_as_SurfaceOp(), &reply),
+                  MOBILEGL_OK) << static_cast<int>(kind);
+        flatbuffers::FlatBufferBuilder replies(256);
+        MG_Remote::EncodeSurfaceReplyFrame(reply, &replies);
+        const auto* wireReply = ::MobileGL::Wire::GetCtrlEnvelope(replies.GetBufferPointer())->msg_as_SurfaceReply();
+        EXPECT_EQ(wireReply->seq(), seq) << static_cast<int>(kind);
+        EXPECT_TRUE(wireReply->ok()) << "successful void operation encoded failure: " << static_cast<int>(kind);
+    }
+    fixture.TearDown();
+}
 
 // C7 / ID-54, THE NATIVE HALF, measured where the review said it was not: at the driver. Surface
 // creation binds the context natively on the apply thread (that is bind #1 of the "2 per process"

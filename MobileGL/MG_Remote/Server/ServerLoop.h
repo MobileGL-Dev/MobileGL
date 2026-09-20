@@ -370,7 +370,11 @@ namespace MobileGL::MG_Remote::Server {
         // The dispatch, on the apply thread (or inline for a re-entrant post): executes the
         // frame's op against the private backend and fills the frame's reply half. The eleven
         // wire+inproc op bodies from the old forwarder Args structs live here now.
-        MobileGLResult ApplySurfaceControlFrame(SurfaceControlFrame& frame);
+        MobileGLResult ApplySurfaceControlFrame(SurfaceControlFrame& frame,
+                                                 ControlProbeHook probeHook = nullptr, void* probeUser = nullptr);
+        // The caller already holds m_callerMutex; shared by normal and test-probe posting so
+        // the probe's metadata is protected for the same lifetime as its frame.
+        MobileGLResult PostSurfaceControlFrameWithCallerLock(SurfaceControlFrame& frame);
         // Pops and applies every record currently in the ring; returns how many it applied.
         Uint64 DrainRing();
         void SignalExited();
@@ -418,8 +422,8 @@ namespace MobileGL::MG_Remote::Server {
         std::atomic<Uint64> m_controlSeq{0};
         std::atomic<Uint64> m_controlFramesDispatched{0};
         // The test probe (RunProbeOnApplyThreadForTesting). Members, NOT slot content - the slot
-        // carries only the frame. Written before the probe frame is published, so the mailbox's
-        // own release/acquire handshake orders them for the apply thread.
+        // carries only the frame. Written under m_callerMutex before the probe frame is
+        // published; held until its reply returns. Re-entrant probes use call-local arguments.
         std::atomic<ControlProbeHook> m_controlProbeHook{nullptr};
         std::atomic<void*> m_controlProbeUser{nullptr};
 
