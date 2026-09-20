@@ -193,12 +193,12 @@ namespace MobileGL::MG_Pipe {
         // is the highest ENABLED attribute plus one, which is the 32-slot prefix walk the
         // dirty bit is specified over.
         //
-        // A client-memory array is Res == kMGPipeNullHandle, and that is not a hole: it is
-        // exactly how the server learns "this attribute is client-sourced, upload it
-        // yourself". Its store genuinely does not exist at this moment - the client-array
-        // uploader runs after PrepareForDraw, at the draw entry point - and moving that
-        // resolution to the client is P8's.
-        Uint64 EmitVertexBuffers(GLContext& ctx, Uint32 baseInstance) {
+        // Validate has no draw range yet, so a client-memory array initially names
+        // the null handle. Under a transport, OwnedDrawInputs snapshots the actual
+        // fetches at draw emission and calls this again with ownedClientBuffers.
+        // Monolith keeps its existing backend-side client-array upload.
+        Uint64 EmitVertexBuffers(GLContext& ctx, Uint32 baseInstance,
+                                const Array<MGPipeHandle, kMGPipeMaxVertexAttribs>* ownedClientBuffers = nullptr) {
             const auto& vao = ctx.GetBoundVertexArray();
             Uint32 count = 0;
             if (vao) {
@@ -212,6 +212,9 @@ namespace MobileGL::MG_Pipe {
                     entry.Res = attrib.Buffer ? MGPipeSlots().Acquire(MGPipeKind::Buffer,
                                                                      attrib.Buffer->GetLifetimeId())
                                               : kMGPipeNullHandle;
+                    if (ownedClientBuffers != nullptr && attrib.Enabled && !attrib.Buffer) {
+                        entry.Res = (*ownedClientBuffers)[i];
+                    }
                     // D-A3's sticky mask, ORed HERE rather than only sampled at a storage op.
                     // This is the bit that survives the DSA idiom: a buffer defined through
                     // glNamedBuffer* may never be bound at any resource emission, but a draw
@@ -380,9 +383,19 @@ namespace MobileGL::MG_Pipe {
             for (SizeT i = 0; i < kAttribs; ++i) {
                 m_attributes[i] = MGPipeBuildVertexAttribWire(vao.GetAttribute(static_cast<Uint>(i)),
                                                               vao.GetAttributeBindingIndex(static_cast<Uint>(i)));
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // Client addresses never cross the transport. Draw emission snapshots
+                // their referenced elements into owned buffers with a zero byte origin.
+                if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                    !vao.GetAttribute(static_cast<Uint>(i)).Buffer) m_attributes[i].Offset = 0;
+#endif
             }
             for (SizeT i = 0; i < kBindings; ++i) {
                 m_bindingPoints[i] = MGPipeBuildVertexBindingPointWire(vao.GetBindingPoint(static_cast<Uint>(i)));
+#if MOBILEGL_BUILD_DISAGGREGATED
+                if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                    !vao.GetBindingPoint(static_cast<Uint>(i)).Buffer) m_bindingPoints[i].Offset = 0;
+#endif
             }
             // Attributes first, then binding points, both ascending and contiguous.
             constexpr SizeT kAttribBytes = kAttribs * sizeof(MGPVertexAttribWire);

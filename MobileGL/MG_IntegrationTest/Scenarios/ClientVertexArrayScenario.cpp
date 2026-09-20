@@ -17,26 +17,17 @@
 // one draw shape whose bytes have no wire form was, until this file, never drawn over the wire
 // in any lane.
 //
-// WHAT IT PINS, in the two arms it can be in:
-//
-//   TODAY (lockstep, and the monolith control) the draw is NOT refused - ruling 4: the client
-//   is parked in WaitForApplied for exactly this record, so the server's per-draw upload of the
-//   application's bytes (Managers.cpp's SyncClientSideAttributesForDrawArrays, the kimi audit's
-//   row 14) reads memory that is not moving. The assertion is therefore about PIXELS: the quad
-//   has to arrive. That is what makes vi's "monolith-only would have been wrong here" concrete
-//   rather than an argument in a report - delete the split arm of the upload and this goes red.
-//
-//   UNDER RUN-AHEAD it is REFUSED BY NAME on the GL thread, Fatal{UnmigratedVerb,
-//   "DrawArrays+CLIENT_ARRAYS"} (CONTRACT-P5E §5.1), because the client is a frame ahead and
-//   those bytes are moving under the reader. This file is the red-once for that refusal: it is
-//   the only lane entry that can reach it. Staging the bytes as a per-attribute {BindingIndex,
-//   MGHostSpan} tail - the shape kDrawHasUserIndices already has for client INDICES - is P8's,
-//   and retires the refusal along with this scenario's second half.
+// Under a transport the client snapshots referenced elements into owned buffer
+// resources before returning. Both lockstep and run-ahead must render the pixels;
+// neither may borrow the application's addresses on the apply thread. The added
+// cases also cover host overwrites, instancing and GPU-produced fetch ranges.
 //
 // Both draw entry points that carry the upload are driven, because they are two arms and not
 // one: DrawArrays uploads the single range, MultiDrawArrays uploads one range per sub-draw.
 
 #include <cstdint>
+#include <algorithm>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -102,6 +93,35 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
             return image.At(width / 2, height / 2);
         }
 
+        GLuint ClientInputComputeProgram(const char* source) {
+            const GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
+            glShaderSource(shader, 1, &source, nullptr);
+            glCompileShader(shader);
+            GLint compiled = GL_FALSE;
+            glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+            if (!compiled) {
+                char log[4096]{};
+                glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
+                ADD_FAILURE() << log;
+                glDeleteShader(shader);
+                return 0;
+            }
+            const GLuint program = glCreateProgram();
+            glAttachShader(program, shader);
+            glLinkProgram(program);
+            glDeleteShader(shader);
+            GLint linked = GL_FALSE;
+            glGetProgramiv(program, GL_LINK_STATUS, &linked);
+            if (!linked) {
+                char log[4096]{};
+                glGetProgramInfoLog(program, sizeof(log), nullptr, log);
+                ADD_FAILURE() << log;
+                glDeleteProgram(program);
+                return 0;
+            }
+            return program;
+        }
+
     } // namespace
 
     TEST_F(ClientVertexArrayScenario, AClientMemoryVertexArrayReachesTheDrawItFeeds) {
@@ -128,9 +148,7 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
         const Rgba8 centre = CentreAfter(width, height);
         EXPECT_GT(static_cast<int>(centre.g), 200)
             << "the client-memory vertex array never reached the draw: the centre is " << centre
-            << ", i.e. still the clear colour. Under split this means the per-draw upload of "
-               "the application's own bytes did not run - the arm CONTRACT-P5E §5.1 keeps alive "
-               "for lockstep, and refuses only under run-ahead";
+            << ", i.e. still the clear colour. The draw did not consume its owned client-vertex snapshot";
         EXPECT_LT(static_cast<int>(centre.b), 60)
             << "the quad drew, but the clear colour is still showing through: " << centre;
 
@@ -183,6 +201,165 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
         quad.Release();
         glUseProgram(0);
         glDeleteProgram(program);
+        EXPECT_EQ(FirstGLError(), 0u);
+    }
+
+    TEST_F(ClientVertexArrayScenario, ClientVerticesAndIndicesKeepTheirBytesAfterTheDrawReturns) {
+        if (!Ready()) return;
+        std::string error;
+        const GLuint program = CompileProgram(kVS, kFS, &error);
+        ASSERT_NE(program, 0u) << error;
+        BindDefaultFramebuffer();
+        glViewport(0, 0, Gl().Width(), Gl().Height());
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_SCISSOR_TEST);
+        ClearTo(0, 0, 1, 1);
+        std::array<float, 8> positions{-1, -1, 0, -1, -1, 1, 0, 1};
+        std::array<GLushort, 6> indices{0, 1, 2, 2, 1, 3};
+        ClientArrayQuad quad;
+        quad.Bind(positions.data());
+        glUseProgram(program);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices.data());
+        for (size_t i = 0; i < positions.size(); i += 2) positions[i] += 1;
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices.data());
+        // No readback or Finish between the draws and the host writes.
+        std::fill(positions.begin(), positions.end(), -100.0f);
+        std::fill(indices.begin(), indices.end(), 0);
+        const Image image = ReadPixelsRect(0, 0, Gl().Width(), Gl().Height());
+        EXPECT_GT(image.At(Gl().Width() / 4, Gl().Height() / 2).g, 200);
+        EXPECT_GT(image.At(3 * Gl().Width() / 4, Gl().Height() / 2).g, 200);
+        quad.Release();
+        glUseProgram(0);
+        glDeleteProgram(program);
+        EXPECT_EQ(FirstGLError(), 0u);
+    }
+
+    TEST_F(ClientVertexArrayScenario, ClientAttributesKeepBaseVertexAndDividedBaseInstanceFetches) {
+        if (!Ready()) return;
+        const char* vertex = R"(#version 430 core
+layout(location=0) in vec2 aPos;
+layout(location=1) in vec2 aOffset;
+void main() { gl_Position = vec4(aPos + aOffset, 0.0, 1.0); }
+)";
+        std::string error;
+        const GLuint program = CompileProgram(vertex, kFS, &error);
+        ASSERT_NE(program, 0u) << error;
+        BindDefaultFramebuffer();
+        glViewport(0, 0, Gl().Width(), Gl().Height());
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_SCISSOR_TEST);
+        ClearTo(0, 0, 1, 1);
+        const float positions[]{-0.4f, -0.8f, 0.4f, -0.8f, -0.4f, 0.8f, 0.4f, 0.8f};
+        const float offsets[]{100, 100, -0.5f, 0, 0.5f, 0};
+        const GLushort indices[]{1, 2, 3, 3, 2, 4};
+        ClientArrayQuad quad;
+        quad.Bind(positions);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), offsets);
+        glVertexAttribDivisor(1, 2);
+        glUseProgram(program);
+        glDrawElementsInstancedBaseVertexBaseInstance(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices, 3, -1, 1);
+        const Image image = ReadPixelsRect(0, 0, Gl().Width(), Gl().Height());
+        EXPECT_GT(image.At(Gl().Width() / 4, Gl().Height() / 2).g, 200);
+        EXPECT_GT(image.At(3 * Gl().Width() / 4, Gl().Height() / 2).g, 200);
+        quad.Release();
+        glUseProgram(0);
+        glDeleteProgram(program);
+        EXPECT_EQ(FirstGLError(), 0u);
+    }
+
+    TEST_F(ClientVertexArrayScenario, GpuWrittenIndicesSelectTheClientVerticesBeforeTheyAreCopied) {
+        if (!Ready()) return;
+        const GLuint compute = ClientInputComputeProgram(R"(#version 430 core
+layout(local_size_x=1) in;
+layout(std430, binding=0) buffer Indices { uint value[]; };
+void main() {
+    value[0]=4u; value[1]=5u; value[2]=6u;
+    value[3]=6u; value[4]=5u; value[5]=7u;
+}
+)");
+        ASSERT_NE(compute, 0u);
+        std::string error;
+        const GLuint program = CompileProgram(kVS, kFS, &error);
+        ASSERT_NE(program, 0u) << error;
+        BindDefaultFramebuffer();
+        glViewport(0, 0, Gl().Width(), Gl().Height());
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_SCISSOR_TEST);
+        ClearTo(0, 0, 1, 1);
+        const float positions[]{100, 100, 100, 100, 100, 100, 100, 100,
+                                -1, -1, 1, -1, -1, 1, 1, 1};
+        ClientArrayQuad quad;
+        quad.Bind(positions);
+        GLuint ebo = 0;
+        glGenBuffers(1, &ebo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+        const GLuint poison[6]{};
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(poison), poison, GL_DYNAMIC_COPY);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, ebo);
+        glUseProgram(compute);
+        glDispatchCompute(1, 1, 1);
+        glMemoryBarrier(GL_ELEMENT_ARRAY_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, 0);
+        glUseProgram(program);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
+        EXPECT_GT(CentreAfter(Gl().Width(), Gl().Height()).g, 200);
+        quad.Release();
+        glUseProgram(0);
+        glDeleteBuffers(1, &ebo);
+        glDeleteProgram(program);
+        glDeleteProgram(compute);
+        EXPECT_EQ(FirstGLError(), 0u);
+    }
+
+    TEST_F(ClientVertexArrayScenario, GpuWrittenIndirectCommandsDefineTheClientAttributeSnapshot) {
+        if (!Ready()) return;
+        const GLuint compute = ClientInputComputeProgram(R"(#version 430 core
+layout(local_size_x=1) in;
+layout(std430, binding=0) buffer Command { uint value[]; };
+void main() { value[0]=4u; value[1]=1u; value[2]=4u; value[3]=1u; }
+)");
+        ASSERT_NE(compute, 0u);
+        const char* vertex = R"(#version 430 core
+layout(location=0) in vec2 aPos;
+layout(location=1) in vec2 aOffset;
+void main() { gl_Position = vec4(aPos + aOffset, 0.0, 1.0); }
+)";
+        std::string error;
+        const GLuint program = CompileProgram(vertex, kFS, &error);
+        ASSERT_NE(program, 0u) << error;
+        BindDefaultFramebuffer();
+        glViewport(0, 0, Gl().Width(), Gl().Height());
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_SCISSOR_TEST);
+        ClearTo(0, 0, 1, 1);
+        const float positions[]{100, 100, 100, 100, 100, 100, 100, 100,
+                                -1, -1, 1, -1, -1, 1, 1, 1};
+        const float offsets[]{100, 100, 0, 0};
+        ClientArrayQuad quad;
+        quad.Bind(positions);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), offsets);
+        glVertexAttribDivisor(1, 1);
+        GLuint commands = 0;
+        glGenBuffers(1, &commands);
+        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, commands);
+        const GLuint poison[4]{};
+        glBufferData(GL_DRAW_INDIRECT_BUFFER, sizeof(poison), poison, GL_DYNAMIC_COPY);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, commands);
+        glUseProgram(compute);
+        glDispatchCompute(1, 1, 1);
+        glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, 0);
+        glUseProgram(program);
+        glDrawArraysIndirect(GL_TRIANGLE_STRIP, nullptr);
+        EXPECT_GT(CentreAfter(Gl().Width(), Gl().Height()).g, 200);
+        quad.Release();
+        glUseProgram(0);
+        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
+        glDeleteBuffers(1, &commands);
+        glDeleteProgram(program);
+        glDeleteProgram(compute);
         EXPECT_EQ(FirstGLError(), 0u);
     }
 

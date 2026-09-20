@@ -53,10 +53,12 @@
 // set_index_buffer / the buffer's own constructor did that), for MGPDrawInfo::IndexResource and
 // the two indirect-buffer handles.
 #include <MG_Impl/Pipe/ResourceTracker.h>
+#include <MG_Impl/Pipe/OwnedDrawInputs.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 
 #include "WireTables.h"
 #include <MG_Impl/Pipe/FramebufferEmit.h>
@@ -212,18 +214,6 @@ namespace MobileGL::MG_Remote::Client {
                 std::abort();
             }
             return *session;
-        }
-
-        // The two hooks b1 wrote and deliberately left with no caller, because the call site is
-        // this file's. ORDER: the push first (it produces resource_subdata records that must
-        // precede the verb on SEG_CMD), then the mark walk, then the verb record. The deferred
-        // destroy drain rides the same boundary: it replays, on this GL thread, the death
-        // announcements whose last SharedPtr dropped on the apply thread (PipeMutation.h's
-        // deferred destroy queue), and its records must also precede this verb.
-        void BeforeDrawVerb() {
-            PersistentMapTracker::Instance().PushDrawConsumers();
-            MG_Pipe::MGPipeDrainDeferredDestroys();
-            MarkGpuWritesForDraw();
         }
 
         // A verb that reads buffers but starts no shader: clear, blit, readback, present. The
@@ -383,11 +373,12 @@ namespace MobileGL::MG_Remote::Client {
                                 nullptr, 0, nullptr, 0, nullptr);
         }
 
-        // P5e (vi), ID-82: declared here because the REDUCED DrawArrays path below predates the
-        // nineteen-slot block that defines them, and it needs the same two answers. One
-        // definition each, further down, beside the rest of the draw plan.
+        // All draw entry points share the owned-input preparation and emission below.
         [[noreturn]] void RefuseDrawByName(const char* slot, const char* qualifier);
-        Bool RunAheadWouldSkipTheWait(ClientSession& session);
+        void EmitDrawRecord(const char* slot, MG_Pipe::MGPDrawInfo& info,
+                            const MG_Pipe::MGPDrawRange* ranges, Uint32 numDraws,
+                            const void* clientIndices, Uint64 clientIndexBytes,
+                            const MG_Pipe::MGPDrawIndirect* indirect);
 
         // Does the bound VAO fetch any ENABLED attribute out of the application's own memory.
         // The test is EmitVertexBuffers' own (`attrib.Enabled && !attrib.Buffer` is exactly what
@@ -405,28 +396,7 @@ namespace MobileGL::MG_Remote::Client {
         }
 
         void EmitDrawArrays(GLenum mode, GLint first, GLsizei count) {
-            ClientSession& session = RequireSession("DrawArrays");
-
-            // P5e (vi): the same refusal the nineteen-slot block raises in EmitDrawRecord, and
-            // this is the entry point the contract names by name - "DrawArrays+CLIENT_ARRAYS".
-            // The probe runs only on this path's own draw, before the hooks, and it is inert
-            // under lockstep (see RunAheadWouldSkipTheWait).
             const Bool clientArrays = BoundVaoHasClientVertexArrays(MG_State::pGLContext.get());
-            if (clientArrays && RunAheadWouldSkipTheWait(session)) {
-                RefuseDrawByName("DrawArrays", "CLIENT_ARRAYS");
-            }
-
-            BeforeDrawVerb();
-
-            if (g_dropDrawEmission) {
-                // E2's LOAD-BEARING negative control. Same shape as the clear drop and the same
-                // rule: everything above still ran - the persistent-map push and the GPU-write
-                // mark walk both happened - so the ONLY difference from the live arm is that
-                // this frame's geometry never crossed the ring. A lane that still matches its
-                // golden with this armed did not get its picture from the wire.
-                ++g_droppedDrawEmissions;
-                return;
-            }
 
             MG_Pipe::MGPDrawInfo info{};
             info.Mode = static_cast<Uint32>(mode);
@@ -450,8 +420,7 @@ namespace MobileGL::MG_Remote::Client {
             // payload and Fatals on a disagreement, on THIS side - so a NumDraws that drifted
             // from the tail is a producer-side abort rather than a corrupt stream a peer has to
             // diagnose.
-            session.EmitAndWait(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), &range,
-                                sizeof(range), nullptr, 0, nullptr);
+            EmitDrawRecord("DrawArrays", info, &range, 1, nullptr, 0, nullptr);
         }
 
         // =============================================================================
@@ -467,11 +436,8 @@ namespace MobileGL::MG_Remote::Client {
         // ID-18), honours the E2 draw-drop control for every draw record and not only the P5
         // one, stages a client index array into SEG_STAGE when there is one, and emits.
         //
-        // WHAT IS REFUSED BY NAME, ID-57's shape (Fatal{UnmigratedVerb, "<slot>+<QUALIFIER>"}),
-        // never rendered wrong and never fallen through to the driver (R-4):
-        //   +CLIENT_INDICES    a glMultiDrawElements* with no element buffer bound: `indices[i]`
-        //                      are drawcount separate client pointers and one span names one run;
-        //                      P8's HostResolve.cpp flattens it. No measured workload has one.
+        // Client arrays and client indices become owned ordinary buffer resources.
+        // Remaining invalid/unrepresentable draw shapes are named before encoding:
         //   +CLIENT_COMMANDS   an indirect draw with no GL_DRAW_INDIRECT_BUFFER bound: `indirect`
         //                      would be a host pointer, which rule B forbids on the wire.
         //   +UNBOUND_PARAMETER an *IndirectCount with no GL_PARAMETER_BUFFER (the frontend has
@@ -480,27 +446,6 @@ namespace MobileGL::MG_Remote::Client {
         //   +INDEX_OFFSET      an element-buffer byte offset that is not a whole number of
         //                      indices (or past 2^32 of them): the record spells Start in
         //                      indices, and rounding would draw from the wrong element.
-
-        // P5e (vi), ID-82 / CONTRACT-P5E §5.1: "would this session publish a draw and move on".
-        //
-        // IT IS THE CONJUNCTION MGPipeTypes.h STATES FOR RunAheadArmed(), spelled here rather
-        // than called, and that is a SEAM, not a duplication: ClientSession::RunAheadArmed() is
-        // package ra's to land (it latches the same three at the first caps adoption after Start
-        // and may afterwards only turn OFF). Until it exists this is the same answer computed
-        // from the same three inputs, and it is inert for the whole phase because the third one
-        // - the server's kCapRunAheadApply - is not published until the integration commit
-        // (kMGPipeP5eRunAheadReady). WHEN ra LANDS, THIS BODY BECOMES `session.RunAheadArmed()`:
-        // one latch, one answer, and no way for the refusal to disagree with the wait rule about
-        // which arm the session is on.
-        Bool RunAheadWouldSkipTheWait(ClientSession& session) {
-#if MOBILEGL_BUILD_DISAGGREGATED
-            return session.BarrierArmed() && MG_Config::Ipc.RunAhead != 0 &&
-                   session.Caps().HasCap(MG_Pipe::kCapRunAheadApply);
-#else
-            (void)session;
-            return false;
-#endif
-        }
 
         [[noreturn]] void RefuseDrawByName(const char* slot, const char* qualifier) {
             char name[96];
@@ -555,25 +500,22 @@ namespace MobileGL::MG_Remote::Client {
                             const void* clientIndices, Uint64 clientIndexBytes,
                             const MG_Pipe::MGPDrawIndirect* indirect) {
             ClientSession& session = RequireSession(slot);
-
-            // P5e (vi), ID-82 / ruling 2, BEFORE the pre-verb hooks and before the record: a
-            // draw that fetches vertices out of the application's own memory has no wire form,
-            // and under run-ahead the server would dereference a client pointer into memory
-            // this thread is already past. It is refused BY NAME on the GL thread, in the
-            // shape ID-57 gives every unmigrated draw shape, rather than rendered wrong (R-4).
-            //
-            // Under LOCKSTEP it is not refused and nothing here changes: the client is parked
-            // in WaitForApplied for exactly this record, so the server's upload reads memory
-            // that is not moving - which is ruling 4's "barriered records keep P5C's
-            // semantics", and is why this is a run-ahead gate and not a transport gate.
-            // Staging the bytes as a per-attribute {BindingIndex, MGHostSpan} tail, shaped like
-            // kDrawHasUserIndices, is P8's and retires the refusal with it.
-            if ((info.Flags & static_cast<Uint8>(MG_Pipe::kDrawClientArrays)) != 0 &&
-                RunAheadWouldSkipTheWait(session)) {
-                RefuseDrawByName(slot, "CLIENT_ARRAYS");
+            PersistentMapTracker::Instance().PushDrawConsumers();
+            MG_Pipe::MGPipeDrainDeferredDestroys();
+            // Snapshot before marking THIS draw's potential GPU writes: resolving
+            // a GPU-produced EBO here must not clear its pending mark for this draw.
+            UniquePtr<MG_Pipe::MGPipeOwnedDrawInputs> ownedInputs;
+            if ((info.Flags & MG_Pipe::kDrawClientArrays) != 0 || clientIndexBytes != 0) {
+                if (MG_State::pGLContext == nullptr) RefuseDrawByName(slot, "NO_CONTEXT");
+                ownedInputs = MakeUnique<MG_Pipe::MGPipeOwnedDrawInputs>(*MG_State::pGLContext);
+                if (!ownedInputs->Prepare(info, ranges, numDraws, clientIndices, clientIndexBytes, indirect)) {
+                    MG_State::pGLContext->RecordError(ErrorCode::InvalidOperation,
+                        MakeUnique<GenericErrorInfo>("MG_Remote/Client", slot,
+                            "the client vertex/index fetch range cannot be represented by its storage"));
+                    return;
+                }
             }
-
-            BeforeDrawVerb();
+            MarkGpuWritesForDraw();
 
             if (g_dropDrawEmission) {
                 // E2's negative control covers EVERY draw record, not only DrawArrays: the
@@ -587,22 +529,7 @@ namespace MobileGL::MG_Remote::Client {
             Wire::WireTail tails[2] = {{ranges, static_cast<Uint64>(numDraws) * sizeof(MG_Pipe::MGPDrawRange)},
                                        {nullptr, 0}};
             Uint32 tailCount = 1;
-            MG_Pipe::MGHostSpan span{};
-            if (clientIndices != nullptr && clientIndexBytes != 0) {
-                // The P8 resolve-on-client rule, applied: the bytes exist on the client only,
-                // so the client stages them whole and the record names the run - Ptr = nullptr,
-                // Seg = SEG_STAGE (rule B). The encoder runs all four honesty arms on the span
-                // before it is published, and the sink resolves it through MGPipeHostBytes.
-                const MG_Pipe::MGPBlobRef staged =
-                    session.Encoder().StageBytes(clientIndices, clientIndexBytes);
-                span.Ptr = nullptr;
-                span.Seg = staged.Seg;
-                span.Offset = staged.Offset;
-                span.Size = staged.Size;
-                info.Flags |= MG_Pipe::kDrawHasUserIndices;
-                tails[1] = {&span, sizeof(span)};
-                tailCount = 2;
-            } else if (indirect != nullptr) {
+            if (indirect != nullptr) {
                 info.Flags |= MG_Pipe::kDrawIsIndirect;
                 tails[1] = {indirect, sizeof(*indirect)};
                 tailCount = 2;
@@ -735,17 +662,31 @@ namespace MobileGL::MG_Remote::Client {
             const RemoteDrawBindings bindings = ReadDrawBindings();
             const Uint8 indexSize = RemoteIndexSizeFor(type);
             if (indexSize == 0) RefuseDrawByName(slot, "INDEX_TYPE");
-            if (!bindings.ElementBufferBound) RefuseDrawByName(slot, "CLIENT_INDICES");
             const auto n = static_cast<Uint32>(drawcount);
             MG_Pipe::MGPDrawInfo info = PlanDrawInfo(mode, indexSize, 1, 0, n, bindings);
             Vector<MG_Pipe::MGPDrawRange>& ranges = MultiDrawScratch(n);
+            Vector<Uint8> ownedIndices;
             for (Uint32 i = 0; i < n; ++i) {
                 if (!PlanDrawRange(bindings, indexSize, indices[i], count[i],
                                    basevertex != nullptr ? basevertex[i] : 0, ranges[i])) {
                     RefuseDrawByName(slot, "INDEX_OFFSET");
                 }
+                if (!bindings.ElementBufferBound) {
+                    const Uint64 byteCount = static_cast<Uint64>(ranges[i].Count) * indexSize;
+                    if (byteCount > std::numeric_limits<Uint32>::max() - ownedIndices.size() ||
+                        (byteCount != 0 && indices[i] == nullptr)) {
+                        MG_State::pGLContext->RecordError(ErrorCode::InvalidOperation,
+                            MakeUnique<GenericErrorInfo>("MG_Remote/Client", slot, "invalid client index span"));
+                        return;
+                    }
+                    ranges[i].Start = static_cast<Uint32>(ownedIndices.size() / indexSize);
+                    const SizeT at = ownedIndices.size();
+                    ownedIndices.resize(at + static_cast<SizeT>(byteCount));
+                    if (byteCount != 0) std::memcpy(ownedIndices.data() + at, indices[i], byteCount);
+                }
             }
-            EmitDrawRecord(slot, info, ranges.data(), n, nullptr, 0, nullptr);
+            EmitDrawRecord(slot, info, ranges.data(), n, ownedIndices.empty() ? nullptr : ownedIndices.data(),
+                           ownedIndices.size(), nullptr);
         }
         void EmitMultiDrawElements(GLenum mode, const GLsizei* count, GLenum type,
                                    const GLvoid* const* indices, GLsizei drawcount) {
