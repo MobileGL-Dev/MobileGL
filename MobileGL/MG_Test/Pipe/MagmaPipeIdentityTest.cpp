@@ -44,6 +44,9 @@
 #include <Config.h>
 #include <MG_Backend/DirectVulkan/Renderer/MagmaPipeArms.h>
 #endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Backend/DirectVulkan/Renderer/MagmaProgramSource.h>
+#endif
 
 using namespace MobileGL;
 
@@ -258,4 +261,99 @@ namespace {
                       "kCapRunAheadApply moved bit; CONTRACT-P5E table 0 names bit 10");
     }
 #endif // MOBILEGL_PIPE_PUSH
+
+    TEST(MagmaProgramSourceTest, ServerBindingTailsReplaceLinkTimeDefaults) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        auto archive = MakeShared<MG_State::GLState::ProgramArchive>();
+        archive->Link.glBlockIndexToTProgram = {0};
+        archive->Link.blockReflection.resize(1);
+        archive->Link.blockReflection[0].name = "Block";
+        archive->Link.blockReflection[0].size = 12;
+        archive->Link.uniformBlockBinding = {9};
+        archive->Link.uniformSamplerOrImageUnitIndex = {12, 13};
+        archive->Spirv.globalUboScratch = {99, 98};
+        MG_Pipe::MGPipeShaderCsoRecord record{};
+        record.Archive = archive;
+        record.BlockBindings = {3};
+        record.SamplerUnits = {{0, 4}};
+        record.GlobalConstants = {5, 6};
+        record.GlobalConstantsVersion = 11;
+        const MagmaProgramSource source({7, 2}, record);
+        EXPECT_TRUE(source.IsWire());
+        EXPECT_EQ(source.Frontend(), nullptr);
+        EXPECT_EQ(source.GetUniformBlockBinding(0), 3u);
+        EXPECT_EQ(source.GetUniformBlockName(0), "Block");
+        EXPECT_EQ(source.GetUBOSizeAt(0), 16u);
+        EXPECT_EQ(source.GetUniformSamplerOrImageUnitIndex(0), 4);
+        EXPECT_EQ(source.GetUniformSamplerOrImageUnitIndex(1), -1)
+            << "an absent tail entry must not resurrect the archive's stale unit";
+        ASSERT_EQ(source.GetUBOSize(), 2u);
+        EXPECT_EQ(static_cast<const Uint8*>(source.GetUBOData())[0], 5u);
+        EXPECT_EQ(source.GetUBOContentVersion(), 11u);
+        record.BlockBindings[0] = 6;
+        record.SamplerUnits[0].Unit = 8;
+        record.GlobalConstants[0] = 42;
+        record.GlobalConstantsVersion = 12;
+        EXPECT_EQ(source.GetUniformBlockBinding(0), 6u);
+        EXPECT_EQ(source.GetUniformSamplerOrImageUnitIndex(0), 8);
+        EXPECT_EQ(static_cast<const Uint8*>(source.GetUBOData())[0], 42u);
+        EXPECT_EQ(source.GetUBOContentVersion(), 12u);
+#else
+        GTEST_SKIP() << "server program sources require the disaggregated build";
+#endif
+    }
+
+    TEST(MagmaProgramSourceTest, ArrayUniformNamesResolveWithinTheArchivedUniform) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        auto archive = MakeShared<MG_State::GLState::ProgramArchive>();
+        auto& link = archive->Link;
+        link.maxUniformLocation = 2;
+        link.uniformLocations["arr[0]"] = 0;
+        link.uniformIndexInTProgram = {0, 0, 0};
+        link.tProgramUniformIndexToGl = {0};
+        link.uniformReflection.resize(1);
+        link.uniformReflection[0].type.isArray = true;
+        link.uniformReflection[0].arraySize = 3;
+        link.uniformReflection[0].glDefineType = GL_SAMPLER_2D;
+        MG_Pipe::MGPipeShaderCsoRecord record{};
+        record.Archive = archive;
+        const MagmaProgramSource source({8, 1}, record);
+        EXPECT_EQ(source.GetUniformLocation("arr"), 0);
+        EXPECT_EQ(source.GetUniformLocation("arr[2]"), 2);
+        EXPECT_EQ(source.GetUniformLocation("arr[3]"), -1);
+        EXPECT_EQ(source.GetUniformLocation("arr[-1]"), -1);
+        EXPECT_EQ(source.GetUniformLocation("arr[999999999999999]"), -1);
+        EXPECT_EQ(source.GetUniformLocation("unknown"), -1);
+        EXPECT_TRUE(source.UniformLocationsAliasSameUniform(0, 2));
+        EXPECT_FALSE(source.UniformLocationsAliasSameUniform(0, 3));
+        EXPECT_EQ(source.GetUniformType(2), GL_SAMPLER_2D);
+#else
+        GTEST_SKIP() << "server program sources require the disaggregated build";
+#endif
+    }
+
+    TEST(MagmaProgramSourceTest, ReusedHandlesAndRecordVersionsHaveDistinctCacheIdentity) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MG_Pipe::MGPipeShaderCsoRecord record{};
+        record.Archive = MakeShared<MG_State::GLState::ProgramArchive>();
+        record.Serial = 17;
+        record.BindingsSerial = 21;
+        record.GlobalConstantsVersion = 25;
+        const MagmaProgramSource first({9, 2}, record);
+        const MagmaProgramSource recycled({9, 3}, record);
+        EXPECT_NE(first.GetLifetimeId(), recycled.GetLifetimeId());
+        EXPECT_EQ(first.Handle(), (MG_Pipe::MGPipeHandle{9, 2}));
+        const auto identity = first.GetLifetimeId();
+        record.Serial = 18;
+        record.BindingsSerial = 22;
+        record.GlobalConstantsVersion = 26;
+        EXPECT_EQ(first.GetLifetimeId(), identity) << "content changes do not mint object identities";
+        EXPECT_EQ(first.GetBackendStateVersion(), 18u);
+        EXPECT_EQ(first.GetBlockBindingVersion(), 22u);
+        EXPECT_EQ(first.GetImageUnitVersion(), 22u);
+        EXPECT_EQ(first.GetUBOContentVersion(), 26u);
+#else
+        GTEST_SKIP() << "server program sources require the disaggregated build";
+#endif
+    }
 } // namespace
