@@ -924,7 +924,19 @@ namespace MobileGL::MG_Pipe {
         // initialBytes is the client's own shadow base - zero copy, and null is a real answer
         // for the orphaning idiom (a NULL-data respecify leaves the store undefined and the
         // backend must not upload the stale bytes).
-        const void* initialBytes = desc.HasDefinedContent != 0 ? buffer.MappedData() : nullptr;
+        //
+        // THE SIZE TEST IS NOT REDUNDANT. A zero-byte store is DEFINED content - glBufferData's
+        // `size == 0` arm sets HasDefinedContent (BufferObject.cpp:242) because the store exists
+        // and is empty - and MappedData() answers a NON-NULL pointer for it, since the shadow
+        // reserves one byte whatever the size (PipeResource.h:140-143). Reading MappedData()
+        // alone therefore answered "bytes to carry" for a store that has none, which sent the
+        // split branch below down the respecify(nullptr)-plus-follow-up shape; the follow-up
+        // walk emits nothing for a zero-length range (ResourceTracker.h:253), so the
+        // InitialBytesNotCarried self-check aborted by name on the first
+        // glBufferData(target, 0, NULL, usage) of the bsl-esc-menu trace. `GetSize() > 0` is
+        // what makes the answer mean "there are bytes here" rather than "the store is defined".
+        const void* initialBytes =
+            (desc.HasDefinedContent != 0 && buffer.GetSize() > 0) ? buffer.MappedData() : nullptr;
         // kNeedsAck rides on the CALL and MGPipeResourceRespecifyNeedsAck(desc) decides per
         // record: only an immutable store (a glBufferStorage*) is a real synchronous
         // allocation and only it is allowed one. In monolith the acknowledgement is
