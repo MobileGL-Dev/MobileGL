@@ -1,5 +1,5 @@
 #!/bin/bash
-# Exercise the production control, including the private-file read (ID-53 / R-16).
+# Exercise E1's per-test boundary evidence and E3(a)'s private-file read (R-16).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/split-private-log.XXXXXX")
@@ -14,25 +14,21 @@ for mode in missing-fatal stdout-fatal stale-fatal evidence e3-unrelated e3-no-p
     bash "${HERE}/split_negative_controls.sh" > "${WORK}/${mode}.out" 2>&1 || rc=$?
   if [ "${mode}" = evidence ]; then
     [ "${rc}" = 0 ] && grep -q "negative control E3(a).*scenario's own diagnostic" "${WORK}/${mode}.out" || {
-      cat "${WORK}/${mode}.out"; echo "NOT OK private-file Fatal must PASS"; exit 1;
+      cat "${WORK}/${mode}.out"; echo "NOT OK own boundary/private-file evidence must PASS"; exit 1;
     }
-    grep -qFx "private-log evidence: DirectGLES.Split.ClearThenReadPixelsScenario.ClearWithNoDrawIsVisibleToDefaultFramebufferReadPixels: ${WORK}/${mode}/entry.log" "${WORK}/${mode}.out" || {
+    grep -qFx "private-log evidence: DirectGLES.Split.PersistentCoherentMapScenario.TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw: ${WORK}/${mode}/pmap.log" "${WORK}/${mode}.out" || {
       cat "${WORK}/${mode}.out"; echo "NOT OK private-file evidence line must name the selected entry and path"; exit 1;
     }
   else
-    message='E1 FAILED: selected private logs lack expected Fatal'
+    message='red lacks its own observed wait-boundary failure'
     [ "${mode}" != e3-unrelated ] || message='FAILED: red lacks its persistent-map push diagnostic'
     case "${mode}" in
       e3-no-private) message='no selected private log carries /MGPipe: persistent-map push disabled' ;;
-      skipped-selection) message='SplitLogPaths FAILED: E1 control: the knob killed the pre-flight, not the entry - 1 selected entries skipped' ;;
+      skipped-selection|notrun-selection) message='selected testcase skipped or did not run' ;;
       e3-skipped-selection) message='SplitLogPaths FAILED: E3(a) control: the knob killed the pre-flight, not the entry - 1 selected entries skipped' ;;
-      notrun-selection|missing-selection) message='SplitLogPaths FAILED: E1 control: 1 selected entries did not run' ;;
+      missing-selection) message='selected testcase names are missing, duplicated or unexpected' ;;
     esac
-    if [[ "${mode}" = *-selection ]]; then
-      match=(-qFx)
-    else
-      match=(-qF)
-    fi
+    match=(-qF)
     [ "${rc}" != 0 ] && grep "${match[@]}" "${message}" "${WORK}/${mode}.out" || {
       cat "${WORK}/${mode}.out"; echo "NOT OK ${mode}: control must report FAILED for its own reason"; exit 1;
     }

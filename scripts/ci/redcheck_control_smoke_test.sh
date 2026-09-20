@@ -13,12 +13,14 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="$(mktemp -d)" || exit 1
 HELPER="${HERE}/../../MobileGL/MG_IntegrationTest/Harness/split_log_paths.py"
-trap 'cp "${WORK}/split.orig" "${HERE}/split_negative_controls.sh"; cp "${WORK}/retrace.orig" "${HERE}/retrace_pull_library_control.sh"; cp "${WORK}/dropdraw.orig" "${HERE}/retrace_drop_draw_control.sh"; cp "${WORK}/helper.orig" "${HELPER}"; rm -rf "${WORK}"' EXIT
+WAIT_HELPER="${HERE}/wait_boundary_negative_control.py"
+trap 'cp "${WORK}/split.orig" "${HERE}/split_negative_controls.sh"; cp "${WORK}/retrace.orig" "${HERE}/retrace_pull_library_control.sh"; cp "${WORK}/dropdraw.orig" "${HERE}/retrace_drop_draw_control.sh"; cp "${WORK}/helper.orig" "${HELPER}"; cp "${WORK}/wait.orig" "${WAIT_HELPER}"; rm -rf "${WORK}"' EXIT
 
 cp "${HERE}/split_negative_controls.sh" "${WORK}/split.orig"
 cp "${HERE}/retrace_pull_library_control.sh" "${WORK}/retrace.orig"
 cp "${HERE}/retrace_drop_draw_control.sh" "${WORK}/dropdraw.orig"
 cp "${HELPER}" "${WORK}/helper.orig"
+cp "${WAIT_HELPER}" "${WORK}/wait.orig"
 
 echo "=== baseline: the smoke test must be GREEN before anything is perturbed"
 if ! bash "${HERE}/control_smoke_test.sh" > "${WORK}/before.log" 2>&1; then
@@ -31,9 +33,9 @@ tail -1 "${WORK}/before.log"
 echo
 echo "=== perturbation: remove the evidence check from both controls"
 python3 - "${HERE}/split_negative_controls.sh" "${HERE}/retrace_pull_library_control.sh" \
-        "${HERE}/retrace_drop_draw_control.sh" <<'PY' || exit 1
+        "${HERE}/retrace_drop_draw_control.sh" "${WAIT_HELPER}" <<'PY' || exit 1
 import sys
-split, retrace, dropdraw = sys.argv[1], sys.argv[2], sys.argv[3]
+split, retrace, dropdraw, wait = sys.argv[1:]
 # (file, [(needle, the prefix the line must start with)]). The draw-drop control has THREE
 # evidence checks rather than one, because "the picture went red" has three different ways of
 # being somebody else's red: the SSIM never fell, the library never said the knob armed, and the
@@ -49,16 +51,17 @@ split, retrace, dropdraw = sys.argv[1], sys.argv[2], sys.argv[3]
 # nothing was ever silently proved - but the one control it was most about was never perturbed.
 # Reproduced on p5/joint@e61d0012 before this line changed.
 #
-# AND THE SPLIT CONTROL HAS THREE EVIDENCE CHECKS, NOT ONE, so all three are reverted. E1's is a
-# read of the entry's own private library log, E3(a)'s ctest-output regex is the `elif` above,
-# and E3(a)'s private-log half is ID-65's addition. Perturbing only one of the three leaves the
+# AND THE SPLIT CONTROL HAS THREE EVIDENCE CHECKS, NOT ONE. E1 checks each boundary
+# probe's own observation and assertion; E3(a) checks its assertion and private log.
+# All three are reverted: perturbing only one leaves the
 # other two catching the smoke test's "unrelated failure" case, and the case never flips - which
 # is what this script measured the first time the perturbation actually applied.
 rules = [
     (split, [('LINE', '"${log_helper}" assertion', ('if ! ', 'elif ! ')),
-             ('SUBST', '"[A-Za-z_][A-Za-z_0-9]*"\\}\' || exit 1', '"[A-Za-z_][A-Za-z_0-9]*"\\}\' || true'),
              ('SUBST', '"${private_evidence}" "${name}" || exit 1',
                        '"${private_evidence}" "${name}" || true')]),
+    (wait, [('SUBST', 'if not own_negative(text, observation, diagnostic):',
+                       'if False:  # E1 evidence check removed by red-check')]),
     (retrace, [('LINE', 'grep -qF "${EVIDENCE}"', ('if ! ',))]),
     (dropdraw, [('LINE', 'awk -v a="${ssim}"', ('if ! ',)),
                 ('LINE', '[ -z "${armed_line}" ]', ('if ',)),
@@ -134,8 +137,9 @@ echo
 cp "${WORK}/split.orig" "${HERE}/split_negative_controls.sh"
 cp "${WORK}/retrace.orig" "${HERE}/retrace_pull_library_control.sh"
 cp "${WORK}/dropdraw.orig" "${HERE}/retrace_drop_draw_control.sh"
+cp "${WORK}/wait.orig" "${WAIT_HELPER}"
 echo "=== ID-62 perturbation: remove only the skip check"
-python3 - "${HELPER}" <<'PY' || exit 1
+python3 - "${HELPER}" "${WAIT_HELPER}" <<'PY' || exit 1
 from pathlib import Path
 import sys
 path = Path(sys.argv[1])
@@ -144,6 +148,12 @@ needle = '        if skipped:\n'
 if text.count(needle) != 1:
     raise SystemExit('expected exactly one skip check')
 path.write_text(text.replace(needle, '        if False:  # skip check removed by red-check\n'))
+path = Path(sys.argv[2])
+text = path.read_text()
+needle = '        if case.find("skipped") is not None or case.get("status") in {"notrun", "disabled"}:\n'
+if text.count(needle) != 1:
+    raise SystemExit('expected exactly one E1 skip check')
+path.write_text(text.replace(needle, '        if False:  # E1 skip check removed by red-check\n'))
 PY
 bash "${HERE}/control_smoke_test.sh" > "${WORK}/skips.log" 2>&1
 rc=$?

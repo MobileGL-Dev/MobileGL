@@ -2710,6 +2710,8 @@ TEST(RemoteRunAhead, OnlyTheTextureHalfOfResourceSubDataWantsItsReply) {
 }
 
 
+#include "RemoteClientE1Controls.inc"
+
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;
     const fs::path path =

@@ -33,8 +33,10 @@
 # CONTROL", "is the E3(a) NEGATIVE CONTROL"), and it is tempting to grep for that. It is not
 # evidence: it is written at config load, by every process in the run, whatever happens next. A
 # setup abort would carry it too. It proves the knob was READ, never that the knob caused the red.
-# Only the failing case's own diagnostic does that. ID-53 gives each Split entry a private
-# library log: E1 reads its Fatal there; E3(a) reads the scenario assertion in ctest output.
+# Only the failing case's own diagnostic does that. E1 now observes deterministic transport
+# waits in dedicated CPU tests; E3(a) retains its scenario assertion and private library log.
+# P5e ID-122: ordinary run-ahead draws need not fail with VERB_BARRIER=0, and the old
+# overlap Fatal cannot fire with the default BATCH_WAITS=1. Pixel failures are not E1 evidence.
 #
 # Usage:  split_negative_controls.sh [--self-test]
 #   CTEST          ctest binary                       (default: ctest)
@@ -139,20 +141,14 @@ run_control() {
   cat "${out}"
 
   # Inspect JUnit before exit status or private Fatal: a skipped pre-flight can carry both.
-  label='E3(a)'
-  [ "${evidence}" != private-barrier-fatal ] || label=E1
-  python3 "${log_helper}" results "${manifest}" "${filter}" "${result}" "${label}" || exit 1
+  python3 "${log_helper}" results "${manifest}" "${filter}" "${result}" 'E3(a)' || exit 1
 
   if [ "${control_rc}" -eq 0 ]; then
     echo "::error::${name} left ${matched} split entries GREEN, so the knob it turns is not load-bearing and the gate it controls proves nothing."
     exit 1
   fi
 
-  # E1's MGLOG_F sink is the private file, never ctest's status or transcript.
-  if [ "${evidence}" = "private-barrier-fatal" ]; then
-    python3 "${log_helper}" evidence "${manifest}" "${filter}" \
-      'Fatal\{BarrierViolation, "[A-Za-z_][A-Za-z_0-9]*"\}' || exit 1
-  elif ! python3 "${log_helper}" assertion "${manifest}" "${filter}" "${result}" "${evidence}"; then
+  if ! python3 "${log_helper}" assertion "${manifest}" "${filter}" "${result}" "${evidence}"; then
     echo "::error::${name} FAILED: red lacks its persistent-map push diagnostic. Required: ${evidence}"
     exit 1
   fi
@@ -168,26 +164,15 @@ run_control() {
   echo "${name} turned ${matched} selected entries red, and the red carries the scenario's own diagnostic, as it must"
 }
 
-# E1: c1 ClientSession::EmitAndWait emits MGLOG_F Fatal{BarrierViolation, "<slot>"}.
-# This asserts an observed overlap with the applier, which is timing-dependent.
-# Without that Fatal in a fresh selected file E1 fails; pixel/status fallbacks do not count.
-# Keep the ID-53-approved SmallRing selection as well as the default lane.
-# ...MINUS TheServerStampedAVerbBoundaryOnThisDrawingFrame, and that exclusion is load-bearing
-# rather than tidying (P5e, ID-122). That case is package gl's ID-115 POSITIVE CONTROL: it reads
-# a PipeStats window out of the lane's own private log, so it runs ONLY in the strict-arming
-# lane and skips everywhere else BY DESIGN, whatever this knob is set to. E1's selection began
-# matching it the moment gl added it, and ID-62 makes a SKIPPED SELECTED entry a hard failure -
-# correctly, because a control that silently loses its subjects proves nothing. E1 then reported
-# "the knob killed the pre-flight, not the entry" while the knob was in fact working: four other
-# selected entries went red with the abort in the same run. So the bug was in WHO E1 selects,
-# not in what it asserts, and the fix excludes a case that can never run here rather than
-# teaching E1 to tolerate skips - which would have thrown ID-62 away.
-run_control "negative control E1 (MOBILEGL_IPC_VERB_BARRIER=0)" \
-  'DirectGLES\.Split\.(SmallRing\.)?(Triangle|ClearThenReadPixels)' \
-  'private-barrier-fatal' \
-  '' \
-  'TheServerStampedAVerbBoundaryOnThisDrawingFrame' \
-  MOBILEGL_IPC_VERB_BARRIER=0
+# E1: the default arm must actually park for a kWaitApplied record and for a
+# kWaitNone record whose server has no run-ahead cap. Removing the verb barrier
+# must fail those exact return-before-apply assertions. A third positive case
+# proves that a cap-authorized kWaitNone record does not wait. The peer releases
+# on an observed Park or on the client's return, not on a sleep or pixel race.
+# The helper demands green baseline, two named reds, and green restoration;
+# skipped/missing cases, timeouts and unrelated failures never count as evidence.
+python3 "$(dirname "$0")/wait_boundary_negative_control.py" \
+  --ctest "${CTEST}" --out "${CONTROL_TMPDIR}/e1" || exit 1
 
 # E3(a): PersistentMapTracker::PushBlocksFor stops at blockBytes == 0 - deliberately, because 0
 # is the negative control and not "unlimited". Two independent halves are now required:

@@ -52,9 +52,79 @@ for a in "$@"; do
   [ "$a" = "--show-only=json-v1" ] && json_requested=1
   [ "$a" = "-N" ] && listing_requested=1
   if [ "$prev" = "--output-junit" ]; then junit="$a"; fi
+  if [ "$prev" = "-R" ]; then selector="$a"; fi
   prev="$a"
 done
 listing_requested="${listing_requested:-0}"
+
+# E1's CPU-only boundary probes use their own testcase results. Keep observations
+# inside each testcase so stdout-only and stale evidence remain rejected.
+if [[ "${selector:-}" == *RemoteWaitBoundaryControl* ]]; then
+  python3 - "${mode}" "${junit}" "${selector}" <<'PY'
+import os, re, sys
+import xml.etree.ElementTree as ET
+mode, path, selector = sys.argv[1:]
+barrier = int(os.environ['MOBILEGL_IPC_VERB_BARRIER'])
+negative = barrier == 0
+prefix = 'RemoteWaitBoundaryControl.'
+specs = [
+ ('AppliedClassWaitsWithRunAheadCap', 'GenerateMipmap', 1, True,
+  'E1 wait boundary: GenerateMipmap returned before apply'),
+ ('MissingServerCapKeepsClearLockstep', 'Clear', 0, True,
+  'E1 wait boundary: Clear without server cap returned before apply'),
+ ('ServerCapAllowsClearToRunAhead', 'Clear', 1, False, ''),
+]
+root = ET.Element('testsuite')
+failures = 0
+for index, (short, op, cap, waits, diagnostic) in enumerate(specs):
+    name = prefix + short
+    if not re.search(selector, name):
+        continue
+    if mode == 'e1-empty' or (negative and mode == 'missing-selection' and index == 1):
+        continue
+    case = ET.SubElement(root, 'testcase', name=name, status='run')
+    waited = int(waits and barrier == 1)
+    observation = (f'E1 observation: op={op} cap={cap} barrier={barrier} parked={waited} '
+                   f'applied_before_return={waited} emitted=1 peer_seen=1')
+    failed = negative and mode != 'green'
+    if mode == 'e1-red-baseline' and 'baseline' in path:
+        failed = True
+    if mode == 'e1-restore-red' and 'restored' in path:
+        failed = True
+    if mode == 'e1-waitall' and not waits:
+        failed = True
+        observation = observation.replace('parked=0', 'parked=1').replace('applied_before_return=0', 'applied_before_return=1')
+    if negative and mode == 'skipped-selection':
+        ET.SubElement(case, 'skipped')
+        failed = False
+    if negative and mode == 'notrun-selection':
+        case.set('status', 'notrun')
+        failed = False
+    if failed:
+        ET.SubElement(case, 'failure', message='control red')
+        failures += 1
+    text = observation + '\n' + (diagnostic if negative else '')
+    if negative:
+        if mode == 'unrelated' or mode == 'wrong-fatal':
+            text = observation + '\nUNRELATED_CONTROL_FAILURE'
+        elif mode == 'missing-fatal' or (mode == 'partial-fatal' and index == 1):
+            text = diagnostic
+        elif mode == 'stdout-fatal':
+            print(text)  # Must not qualify as this testcase's own evidence.
+            text = 'UNRELATED_CONTROL_FAILURE'
+        elif mode == 'stale-fatal':
+            text = text.replace('barrier=0', 'barrier=1')
+        elif mode == 'e1-no-peer':
+            text = text.replace('peer_seen=1', 'peer_seen=0')
+        elif mode == 'e1-no-emit':
+            text = text.replace('emitted=1', 'emitted=0')
+    ET.SubElement(case, 'system-out').text = text
+ET.ElementTree(root).write(path, encoding='utf-8', xml_declaration=True)
+print(f'E1 stub: {len(root)} selected, {failures} failed')
+sys.exit(8 if failures else 0)
+PY
+  exit $?
+fi
 
 emit_listing() {
   echo "Test project /stub"

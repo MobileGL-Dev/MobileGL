@@ -87,6 +87,12 @@ expect FAILED "the knob leaves the selection green"          -- run_split green
 expect FAILED "the baseline is already red"                  -- run_split red-baseline
 # P5 is complete: losing the runtime implementation must no longer disarm the gate.
 expect FAILED "every split entry skipped (implementation lost)" -- run_split all-skipped
+expect FAILED "E1 missing boundary probes"                  -- run_split e1-empty
+expect FAILED "E1 own baseline is already red"               -- run_split e1-red-baseline
+expect FAILED "E1 restored boundary remains red"             -- run_split e1-restore-red
+expect FAILED "E1 record never reaches the peer"             -- run_split e1-no-peer
+expect FAILED "E1 observed no real emission"                 -- run_split e1-no-emit
+expect FAILED "E1 incorrectly waits every record"            -- run_split e1-waitall
 
 echo
 echo "=== the retrace lane's pull-library control (scripts/ci/retrace_pull_library_control.sh)"
