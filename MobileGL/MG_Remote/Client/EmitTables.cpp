@@ -1389,21 +1389,12 @@ namespace MobileGL::MG_Remote::Client {
         // MarkEndTransformFeedbackCaptureTargets). Taking it here as well would mark the same
         // buffers twice and taking it INSTEAD of there would mark nothing.
         //
-        // RULE D (CONTRACT-P5B.md §0): each record carries the GL arguments the frontend handed
-        // the backend slot and nothing that is a READING of them. The capture program, the
-        // capture-buffer bindings, the patch state and the bound XFB object all stay
-        // BARRIER-PULLED - the server's backend reads the client's gPipeInputs fill of the
-        // moment, which MGP_FILL at each call site has just written and the verb barrier holds
-        // still (R-1). That is why these are six two-line emitters and not an XFB protocol.
-        //
-        // WHAT MUST HAVE CROSSED BEFORE begin_stream_output, since it is the ordering question
-        // this package was asked: the capture buffers' own resource records (emitted at their
-        // own call sites through the resource family, long before this point), the program
-        // (the CSO/program family, likewise), and the buffer BINDINGS - which do not cross as a
-        // record at all, because set_stream_output_targets (39) has no producer and no consumer
-        // and CONTRACT-P5B.md §2 rules it NOT required for t2: under the barrier the server's
-        // StartPendingTransformFeedback reads them through the kXfbSpan/kDraw pulls
-        // (GetTransformFeedbackProgram, GetBufferBindingPoint). Producing that row is P9's.
+        // P5f fe extends Begin with the immutable capture snapshot: program CSO handle,
+        // XFB object lifetime id, and four buffer handle/range pairs. Buffer resource records
+        // precede this verb through BeforeReadOnlyVerb; AcquireShaderCso below publishes the
+        // program archive before Begin. Deferred driver Begin and End therefore need no
+        // frontend program or binding-point lookup. set_stream_output_targets stays unused:
+        // this state changes at the capture-span boundary, so it rides Begin itself.
 
         void EmitBeginTransformFeedback(GLenum primitiveMode) {
             ClientSession& session = RequireSession("BeginTransformFeedback");
