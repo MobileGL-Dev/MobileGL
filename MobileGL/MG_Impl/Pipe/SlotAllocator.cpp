@@ -32,18 +32,9 @@ namespace MobileGL::MG_Pipe {
     void MGPipeRefuseAllocatorFromApplyThread(const char* entry) {
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
         if (!MG_Remote::Server::ServerLoop::OnApplyThread()) return;
-        // CONTRACT-P5E §4.4 AMENDS CONTRACT-P5C §3.1 HERE, AND IT IS THE WHOLE OF WHAT id
-        // CHANGES ABOUT THIS FUNCTION: a named exemption is a debt the CLIENT'S WAIT pays for.
-        // Behind a barriered record the client is parked in WaitForApplied and its allocator
-        // is not moving, so a read-only probe is stale-free; behind an unbarriered one it is
-        // running ahead, and the same probe reads a free list and a lifetimeId -> slot map the
-        // client is concurrently mutating. So the two scopes below exempt nothing at all once
-        // the record is unbarriered - regardless of MOBILEGL_IPC_STRICT_ERRORS, because the
-        // value would be wrong by construction and there is no "count it" arm for that
-        // (CONTRACT-P5E, rule F).
-        //
-        // Every record is barriered until ra lands the wait rule, so this reads exactly as it
-        // did at 2fde7034 for the whole of this phase.
+        // P5f: frontend-keyed registry probes are no longer an exemption. The
+        // separate Magma allocator debt remains backend- and barrier-keyed until
+        // its remaining monolith glue is removed; it cannot exempt twin-table APIs.
         if (MGPipeApplierCurrentRecordIsBarriered()) {
             // Ruling 12: Magma's four P7 debts, and ONLY on a DirectVulkan server. The key is
             // on the backend kind rather than on the site because the scope is a class anyone
@@ -53,34 +44,29 @@ namespace MobileGL::MG_Pipe {
                 MG_Config::ActiveBackendType == BackendType::DirectVulkan) {
                 return;
             }
-            // The G6 frontend-keyed registry family: the barriered-row sites the per-family
-            // packages have not carried a handle to yet (CONTRACT-P5E §4.4).
-            if (MGPipeFrontendKeyedRegistryScope::ActiveOnApplyThread()) return;
+
         }
         MGLOG_F("MGPipe: Fatal{RoleViolation, \"MGPipeSlots\"} - the apply thread called "
                 "MGPipeSlots().%s. With an active transport the client slot allocator is "
                 "client-only memory (CONTRACT-P5C §3.1, rule E; CONTRACT-P5E §4.4): a handle "
                 "arrives already minted in a record, and a server that resolves or mints one "
                 "off a frontend object's lifetime id is reading memory that will not exist on "
-                "its side of a real split. A named exemption scope admits it only while the "
+                "its side of a real split. Only Magma's allocator debt scope admits it while the "
                 "record being applied is BARRIERED (barriered=%d) and, for Magma's P7 debt, "
                 "only on a DirectVulkan server",
                 entry, MGPipeApplierCurrentRecordIsBarriered() ? 1 : 0);
         std::abort();
     }
 
-    // P5e (id): the non-allocator half of the same rule. SlotTables.h's state note, its reader
-    // and ForEachLive's weak-reference walk read server memory KEYED BY FRONTEND IDENTITY and
-    // hand a frontend SharedPtr back, which is the same violation one step removed - no
-    // allocator call, so the guard above never sees it.
-    void MGPipeRefuseFrontendKeyedRegistryFromUnbarrieredApply(const char* entry) {
-        if (!MGPipeApplierIsUnbarrieredApply()) return;
+    // P5f (fr): all frontend-identity registry surfaces are monolith glue, including
+    // the ones that do not touch the allocator. Neither a wait nor a named scope can
+    // make a frontend SharedPtr exist in a separate server process.
+    void MGPipeRefuseFrontendKeyedRegistryFromApplyThread(const char* entry) {
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        if (!MG_Remote::Server::ServerLoop::OnApplyThread()) return;
         MGLOG_F("MGPipe: Fatal{RoleViolation, \"MGPipeSlots\"} - the apply thread reached "
-                "BackendSlotTable::%s while applying an UNBARRIERED record. The frontend-keyed "
-                "half of the twin table is monolith glue (CONTRACT-P5E §4.1, §5.8): it answers "
-                "from a frontend object the server has no wait pinning, so the SharedPtr it "
-                "would hand back may already be the client's next object. Resolve the twin "
-                "from the handle the record carried instead",
+                "BackendSlotTable::%s. Frontend-identity registry operations are monolith-only, "
+                "including barriered records; resolve the twin from the record's handle instead",
                 entry);
         std::abort();
     }

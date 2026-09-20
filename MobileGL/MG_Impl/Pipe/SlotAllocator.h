@@ -186,15 +186,11 @@ namespace MobileGL::MG_Pipe {
     // caller is never refused by it.
     Bool MGPipeApplierIsUnbarrieredApply();
 
-    // The refusal for the frontend-keyed surfaces that do NOT touch the allocator and so are
-    // not covered by MGPipeRefuseAllocatorFromApplyThread: the state note, its reader, and
-    // ForEachLive's weak-reference walk (SlotTables.h). They survive P5e as MONOLITH GLUE
-    // (CONTRACT-P5E §5.8) and this is what keeps that claim honest - reaching one of them from
-    // an unbarriered apply is Fatal{RoleViolation, "MGPipeSlots"} naming the member, not a
-    // silently stale SharedPtr. Same name in the refusal as the allocator guard's on purpose:
-    // it is one surface, "server memory keyed by frontend identity", and a reader chasing the
-    // abort should land on the same rule either way.
-    void MGPipeRefuseFrontendKeyedRegistryFromUnbarrieredApply(const char* entry);
+    // P5f (fr): frontend-object twin lookup, minting and weak-state access are refused
+    // on EVERY transport apply, including barriered records and both named scopes.
+    // The handle overloads remain server-local; the frontend overloads remain monolith
+    // glue. This separate guard also prevents borrowing Magma's allocator exemption.
+    void MGPipeRefuseFrontendKeyedRegistryFromApplyThread(const char* entry);
 
     // The NAMED EXEMPTION to the rule above (CONTRACT-P5C §3.1, as amended by CONTRACT-P5E
     // §4.4): the family of sites whose handle-carrying records the client does not EMIT yet.
@@ -247,28 +243,10 @@ namespace MobileGL::MG_Pipe {
         Bool m_counted;
     };
 
-    // The SECOND named exemption family (CONTRACT-P5C §5.4): the frontend-keyed twin
-    // registry (audit row G6). The texture / sampler-view / FBO-legacy HandleOf probes are
-    // how the server answers "which twin is this frontend object" while the registry is
-    // keyed by frontend identity - server-PRIVATE state whose rekey onto handles is
-    // P5e's per-family packages', not P5c's. A probe inside this scope stays a read-only,
-    // BARRIER-HELD debt - and P5e (id) makes the "barrier-held" half literal rather than
-    // documentary: the exemption now holds only while MGPipeApplierCurrentRecordIsBarriered()
-    // (§4.4), i.e. only while the client is actually parked behind the record being applied.
-    // Wrapping a NEW site in it is the greppable act of naming that debt, and an unwrapped
-    // probe from the apply thread is still Fatal{RoleViolation, "MGPipeSlots"}.
-    //
-    // WHAT THE CLASS IS FOR NOW, since P5e deletes most of its sites: vi/sb/pg/tx2/fb delete
-    // their ~20 draw-path constructions with the probes they wrap, and what survives is the
-    // set of BARRIERED-ROW sites (CONTRACT-P5E §4.4: DirectGLES.cpp's CopyTex / GetTexImage /
-    // mipmap-shape / set_storage_block_binding / detach-walk sites, the two verify arms, and -
-    // until vi/sb carry the handle - BufferImpl::HandleOfBuffer). Those keep P5C's semantics
-    // because their records are barriered and their client IS parked.
-    //
-    // Apply-thread-only depth, and m_counted, for MagmaP7AllocatorDebtScope's reasons
-    // above. This is the scope that pays: it is constructed at ~20 sites in DirectGLES.cpp,
-    // several of them inside StateBackendObjectRegistry::HandleOf on the per-draw path, and
-    // its ctor/dtor alone were 18.75% + 13.95% of the monolith GL thread's emutls samples.
+    // P5f (fr): retained as a greppable marker around monolith-only legacy registry
+    // calls. This scope no longer exempts transport apply from either registry or
+    // allocator guards, even behind a barrier. P3b/P4b can remove these markers with
+    // the surrounding monolith glue; adding one cannot make a new wire fallback legal.
     class MGPipeFrontendKeyedRegistryScope {
     public:
         MGPipeFrontendKeyedRegistryScope();

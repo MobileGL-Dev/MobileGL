@@ -1980,6 +1980,88 @@ TEST(RemoteGuards, AnAllocatorProbeInsideAnExemptionScopeFromTheApplyThreadIsFat
     ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
 }
 
+// P5f (fr): barriers and old named scopes no longer admit frontend identity.
+// Construct the object and table on the client so each death comes from the exact
+// probed member, not a constructor's resource_create or a missing record.
+TEST(RemoteGuards, BarrieredFrontendRegistryScopeCannotExemptAllocator) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(+[](void*) -> MobileGLResult {
+            MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(true);
+            const MG_Pipe::MGPipeFrontendKeyedRegistryScope scope;
+            MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("FindByLifetimeId");
+            return MOBILEGL_OK;
+        }, nullptr);
+        ClientSessionInstance().Stop();
+    });
+    ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
+}
+
+TEST(RemoteGuards, BarrieredFrontendRegistryMembersRefuseBothLegacyScopes) {
+    struct Probe {
+        TestTextureTable* table;
+        SharedPtr<MG_State::GLState::TextureObject2D>* texture;
+        MGPipeHandle handle;
+        int operation;
+    };
+    const char* members[] = {"HandleOf", "GetOrCreate(StatePtr)", "NoteStateForHandle", "StateForHandle"};
+    for (int operation = 0; operation != 4; ++operation) {
+        SCOPED_TRACE(members[operation]);
+        const auto child = RunInChild([operation] {
+            StartControlSession();
+            auto texture = MakeShared<MG_State::GLState::TextureObject2D>(47);
+            TestTextureTable table;
+            table.GetOrCreate(texture) = MakeShared<FakeTwin>();
+            Probe probe{&table, &texture, table.HandleOf(texture.get()), operation};
+            Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(+[](void* self) -> MobileGLResult {
+                auto& probe = *static_cast<Probe*>(self);
+                MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(true);
+                MG_Config::ActiveBackendType = BackendType::DirectVulkan;
+                const MG_Pipe::MGPipeFrontendKeyedRegistryScope registryScope;
+                const MG_Pipe::MagmaP7AllocatorDebtScope magmaScope;
+                switch (probe.operation) {
+                case 0: probe.table->HandleOf(probe.texture->get()); break;
+                case 1: probe.table->GetOrCreate(*probe.texture); break;
+                case 2: probe.table->NoteStateForHandle(probe.handle, *probe.texture); break;
+                case 3: probe.table->StateForHandle(probe.handle); break;
+                }
+                return MOBILEGL_OK;
+            }, &probe);
+            ClientSessionInstance().Stop();
+        });
+        ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
+        EXPECT_NE(child.Log.find(std::string{"BackendSlotTable::"} + members[operation]), std::string::npos);
+    }
+}
+
+TEST(RemoteGuards, HandleRegistryMembersWorkOnBarrieredAndUnbarrieredApply) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(+[](void*) -> MobileGLResult {
+            TestTextureTable table;
+            for (const bool barriered : {true, false}) {
+                MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(barriered);
+                const MGPipeHandle handle{71, barriered ? 1u : 2u};
+                auto& twin = table.GetOrCreate(handle);
+                twin = MakeShared<FakeTwin>();
+                twin->marker = 19;
+                auto* found = table.FindByHandle(handle);
+                if (!found || !*found || (*found)->marker != 19) _exit(81);
+                unsigned live = 0;
+                table.ForEachLive([&](MGPipeHandle actual, const auto& backend) {
+                    if (actual.Slot != handle.Slot || actual.Gen != handle.Gen || backend->marker != 19) _exit(82);
+                    ++live;
+                });
+                if (live != 1 || !table.ReleaseByHandle(handle) || table.FindByHandle(handle)) _exit(83);
+            }
+            return MOBILEGL_OK;
+        }, nullptr);
+        ClientSessionInstance().Stop();
+    });
+    ASSERT_TRUE(WIFEXITED(child.Status)) << child.Log;
+    EXPECT_EQ(WEXITSTATUS(child.Status), 0) << child.Log;
+}
+
 // THE ONE THAT PINS THE SINGLE-WRITER ARGUMENT. The scope is open on the GL thread for the
 // whole of the posted request; the apply thread's probe must still abort, because the exemption
 // belongs to the thread that entered the scope and never to another one. With the depth kept in
