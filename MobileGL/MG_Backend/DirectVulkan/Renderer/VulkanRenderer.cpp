@@ -6869,7 +6869,7 @@ void main() {
                                    const IndexBufferView* pIndexBufferView) {
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
-            return SetupWireDraw(frame, mode, aspects, drawParams);
+            return SetupWireDraw(frame, mode, aspects, drawParams, pIndexBufferView);
 #endif
         // Sync each sampled texture at most once across this whole draw: the layout
         // probe loop, the post-transition loop, and ResolveSamplerDescriptor would
@@ -11226,7 +11226,13 @@ void main() {
         }
 
         // Store honoring the client pack state (single slice).
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const SharedPtr<MG_State::GLState::BufferObject> wireReplyHasNoPackBuffer;
+#endif
         const auto& pixelPackBufferObject =
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MG_Config::Transport != MG_Config::TransportMode::Monolith ? wireReplyHasNoPackBuffer :
+#endif
             MGB_CTX->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
         const auto packParams = MGB_CTX->GetPixelStoreParameters(false);
         const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);

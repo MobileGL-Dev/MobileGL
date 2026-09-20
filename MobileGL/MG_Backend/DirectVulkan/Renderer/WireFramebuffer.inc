@@ -283,9 +283,27 @@
                 region.dstOffsets[0].y = static_cast<GLint>(destination.extent.height)-dy0;
                 region.dstOffsets[1].y = static_cast<GLint>(destination.extent.height)-dy1;
             }
-            vkCmdBlitImage(m_frameContext.GetCurrent().commandBuffer,source.image,srcLayout,
-                destination.image,dstLayout,1,&region,
-                filter == GL_LINEAR ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+            auto command = m_frameContext.GetCurrent().commandBuffer;
+            if (source.samples != VK_SAMPLE_COUNT_1_BIT || destination.samples != VK_SAMPLE_COUNT_1_BIT) {
+                const Int32 width = region.srcOffsets[1].x - region.srcOffsets[0].x;
+                const Int32 height = region.srcOffsets[1].y - region.srcOffsets[0].y;
+                if (width <= 0 || height <= 0 || width != region.dstOffsets[1].x - region.dstOffsets[0].x ||
+                    height != region.dstOffsets[1].y - region.dstOffsets[0].y || source.format != destination.format)
+                    MagmaWireFatal("multisample-blit-shape@P7");
+                if (source.samples != VK_SAMPLE_COUNT_1_BIT && destination.samples == VK_SAMPLE_COUNT_1_BIT &&
+                    aspect == VK_IMAGE_ASPECT_COLOR_BIT) {
+                    VkImageResolve resolve{region.srcSubresource, region.srcOffsets[0],
+                        region.dstSubresource, region.dstOffsets[0], {static_cast<Uint32>(width), static_cast<Uint32>(height), 1}};
+                    vkCmdResolveImage(command, source.image, srcLayout, destination.image, dstLayout, 1, &resolve);
+                } else if (source.samples == destination.samples) {
+                    VkImageCopy copy{region.srcSubresource, region.srcOffsets[0], region.dstSubresource,
+                        region.dstOffsets[0], {static_cast<Uint32>(width), static_cast<Uint32>(height), 1}};
+                    vkCmdCopyImage(command, source.image, srcLayout, destination.image, dstLayout, 1, &copy);
+                } else MagmaWireFatal("multisample-blit-aspect@P7");
+            } else {
+                vkCmdBlitImage(command,source.image,srcLayout,destination.image,dstLayout,1,&region,
+                    filter == GL_LINEAR ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+            }
             if (!destination.isDefault && dst.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
                 m_textureManager->MarkWireTextureGpuWritten(destination.storage, destination.level, destination.layer, destination.layers);
             if (destination.isDefault) {
@@ -328,8 +346,12 @@
         WireImage destination = ResolveWireImage(fake,surface,aspect);
         if (!source.image || !destination.image) return;
         m_textureManager->FlushPendingUploads();
-        TransitionWireImage(source,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-        TransitionWireImage(destination,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        const Bool sameImage = source.image == destination.image;
+        const VkImageLayout srcLayout = sameImage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        const VkImageLayout dstLayout = sameImage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        TransitionWireImage(source,srcLayout);
+        if (sameImage) destination.layout = source.layout;
+        else TransitionWireImage(destination,dstLayout);
         VkImageBlit region{};
         region.srcSubresource = {aspect,source.level,source.layer,1};
         region.dstSubresource = {aspect,destination.level,destination.layer,1};
@@ -339,8 +361,8 @@
             region.srcOffsets[0].y = static_cast<Int32>(source.extent.height)-y;
             region.srcOffsets[1].y = static_cast<Int32>(source.extent.height)-y-height;
         }
-        vkCmdBlitImage(m_frameContext.GetCurrent().commandBuffer,source.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            destination.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&region,VK_FILTER_NEAREST);
+        vkCmdBlitImage(m_frameContext.GetCurrent().commandBuffer,source.image,srcLayout,
+            destination.image,dstLayout,1,&region,VK_FILTER_NEAREST);
         m_textureManager->MarkWireTextureGpuWritten(destination.storage,destination.level,destination.layer);
     }
 
