@@ -3,12 +3,14 @@
 > 2026-09-20。交付 worktree：
 > `C:/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg`，分支 `feat/disaggregated`。
 > 完整结果见 [close-report.md](close-report.md)，设备见 [device-report.md](device-report.md)，
-> 阶段终审见 [close-review.md](close-review.md)。最终行为验收头 `cfca93c7`，之后仅文档/复现工具。
+> 阶段终审见 [close-review.md](close-review.md)。原 P5f 行为验收头 `cfca93c7`；
+> 后续 Magma 游戏修复的行为头为 `38919d45`，见下。
 >
-> **FCL 游戏补测（2026-09-20）**：源码 `aa78f102` 已编入并安装 `.mgdebug.debug` FCL，
-> MC `26.3-rc-3` 的 GLES inproc / monolith 与 Magma monolith 各完成至少60秒世界运行；
-> **Magma inproc 真失败于 P7 `buffer-legacy-arm`，尚不能跑该游戏**。
-> 见 [fcl-e2e-report.md](fcl-e2e-report.md)，不要将前面的公开 GL runner 当成 FCL E2E。
+> **Magma inproc 游戏修复（2026-09-20）**：已补 server buffer consumers 与 Android quarter-turn
+> color blit。`38919d45` 的 `.mgdebug.debug` FCL 在 MC `26.3-rc-3` 世界 `test` 上，
+> Magma inproc、GLES inproc 和 Magma monolith 均完成至少60秒运行与人工验图。
+> Magma inproc 仍 lockstep、约20 FPS；不是 P7 全量完成。见 [修复报告](magma-inproc-fix.md)。
+> 旧 [fcl-e2e-report.md](fcl-e2e-report.md) 保留 `aa78f102` 的真实失败，不代表当前结果。
 
 ## 0. 当前结论
 

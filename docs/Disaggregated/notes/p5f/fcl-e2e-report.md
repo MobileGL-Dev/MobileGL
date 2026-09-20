@@ -1,5 +1,8 @@
 # P5f FCL / Minecraft 端到端补测
 
+> 本文是 `aa78f102` 的历史失败记录。后续 `38919d45` 已修复应用 buffer 消费及 Android
+> 90° window blit，Magma inproc 已能正常进入同一世界；见 [magma-inproc-fix.md](magma-inproc-fix.md)。
+
 2026-09-20，Redmi `2f7cbe2e`，FCL `com.tungsten.fcl.mgdebug.debug`，Minecraft
 `26.3-rc-3`，现有单人世界 `test`。此前 [device-report.md](device-report.md) 是公开 GL
 像素 runner，不是 FCL E2E；本文是用户要求后新增的真实游戏测试。

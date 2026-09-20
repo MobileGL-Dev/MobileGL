@@ -17,12 +17,13 @@
 
 ## 2. P5f 最终验收
 
-**FCL 游戏补测**（源码 `aa78f102`，2026-09-20）：已正常编译/安装到 Redmi 的
-`com.tungsten.fcl.mgdebug.debug`。MC `26.3-rc-3` 世界 `test`：GLES inproc / monolith、
-Magma monolith 均完成至少60秒连续运行及人工画面检查；**Magma inproc 未进世界，
-真实触发 P7 `buffer-legacy-arm` 并退出**。另有一次 GLES 渲染初始化前 signal34 启动异常，
-重试通过，未隐去。详细范围与证据见 [fcl-e2e-report.md](notes/p5f/fcl-e2e-report.md)。
-下面的六臂设备数字仍是先前公开 GL runner，不能冒充 FCL 测试结果。
+**Magma inproc 游戏修复**（行为头 `38919d45`，2026-09-20）：已编入 Redmi 的
+`com.tungsten.fcl.mgdebug.debug`。MC `26.3-rc-3` 世界 `test` 的 Magma inproc、GLES inproc
+与 Magma monolith 均完成至少60秒运行及人工验图；应用 buffer 拒绝与 Android 90° blit
+错误已修复。Magma inproc 仍 lockstep，实测约20 FPS，性能没有冒称齐平。最新19项专项门、
+1387项GPU结果和剩余边界见 [修复报告](notes/p5f/magma-inproc-fix.md)。
+旧 [fcl-e2e-report.md](notes/p5f/fcl-e2e-report.md) 保留 `aa78f102` 失败；下面六臂数字
+仍是原 P5f 公开 GL runner 快照，不能冒充 FCL 测试或覆盖最新修复报告。
 
 | 门 | 总条目 | PASS | skip | failed / 结论 |
 |---|---:|---:|---:|---|
@@ -265,7 +266,7 @@ p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提�
 | 项 | 证据 / 去向 |
 |---|---|
 | `SEG_STAGE` 默认 32 MiB 装不下目标负载的单次 128 MiB 上传；**决定 = 默认不改**，普查与 Redmi 显式 `MOBILEGL_IPC_STAGE_MB=256`；分块 / 专用 carrier 留 P8（`ROADMAP.md` 开放问题 11） | `p5b-results/blit-codex-v1.md`；`MEASUREMENTS.md` §7.2 |
-| Magma 应用 buffer、placeholder/native-format 等 P7 功能广度 | P5b 的“89 个错答中82个”是历史普查计数；P5f 已验证无应用 buffer 的 draw/compute、sampler/image record 子集，后续按新语料重新点名，不能继续把旧计数当当前失败数 |
+| Magma P7 剩余功能与性能 | 应用 VBO/EBO/UBO、已对齐 SSBO/atomic/texel、persistent 和 indirect 消费已随 `38919d45` 实际游戏修复落地；XFB buffer capture、部分不对齐 range/UBO byte-tail、placeholder/native-format 及批处理性能仍待做。P5b “82个错答”只属历史计数；见 [修复报告](notes/p5f/magma-inproc-fix.md) |
 | rd12 GLES `InitialBytesNotCarried/resource_respecify`、rd12 VK `BarrierTimeout/Present`、`iris-bsl-esc-menu-854` GLES、三条 `texture-remint-pull` 仿真槽、`create-indirect` VK 内存膨胀 | 79 trace 普查 `counts.json` / `trace-transitions.json` |
 | RGB 三通道 CPU mip 回退仍是具名 Fatal | `p5b-results/mip-codex-v1.md` |
 | ~~P5c 历史跨角色清单与对象类残余~~ | **P5f 已全部收口**：双块空棘轮、零 BARRIER_PULLED、两后端逐帧 rsp=0；旧指针 accessor 以 FATAL 保持边界，未伪标为 record-supplied。见 [`close-report`](notes/p5f/close-report.md) |

@@ -8,9 +8,10 @@
 包含 Windows 收口头 `c42577a4` 的全部修复；之后仅补文档与设备复现工具。
 交付分支为 `feat/disaggregated`。包提交与环境入口见 [HANDOFF-P5F.md](HANDOFF-P5F.md)。
 
-用户随后要求的 [FCL 游戏端到端补测](fcl-e2e-report.md) 已实际执行：GLES inproc / monolith
-与 Magma monolith 可进入 MC `26.3-rc-3` 世界并稳定运行；Magma inproc 真失败于 P7
-`buffer-legacy-arm`。本文的 P5f 完成不表示完整 Magma 游戏 split 工作负载已经可用。
+用户随后要求的 [首次 FCL 游戏端到端补测](fcl-e2e-report.md) 暴露 Magma inproc 的 P7
+`buffer-legacy-arm`。后续 [Magma 游戏修复](magma-inproc-fix.md) 补齐 buffer consumers 与
+Android 旋转 blit，`38919d45` 已在同一 MC `26.3-rc-3` 世界正常运行。本文余下数字保留原
+P5f 收口快照；最新修复没有宣称 P7 全量迁移或 Magma run-ahead 已完成。
 
 ## 1. 完成的行为
 
