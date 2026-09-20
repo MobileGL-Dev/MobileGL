@@ -2250,16 +2250,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         void DeleteTransformFeedback(GLuint name) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            // No delete_stream_output opcode exists yet; the client refuses this class-C
-            // verb before emission. Never reinterpret its GL name as a lifetime id.
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
-                MG_Pipe::MGPipeUnmigratedEmulation("delete-transform-feedback");
             auto& roleState = ActiveXfbState();
             auto& g_currentXfbState = roleState.Cached;
             auto& g_xfbObjects = roleState.Objects;
             auto& g_currentXfbName = roleState.Current;
-#endif
+            const Bool server = MG_Config::Transport != MG_Config::TransportMode::Monolith;
+            const Uint64 key = server ? MG_Pipe::MGPipeApplier().VerbDeleteStreamOutputLifetimeId : name;
+            // A generated but never-bound name has no native object or lifetime.
+            if (server && key == 0) return;
+            const auto it = g_xfbObjects.find(key);
+#else
             const auto it = g_xfbObjects.find(name);
+#endif
             if (it == g_xfbObjects.end()) return;
             if (it->second.esId != 0 && g_GLESFuncs.glDeleteTransformFeedbacks != nullptr) {
                 g_GLESFuncs.glDeleteTransformFeedbacks(1, &it->second.esId);
@@ -2267,7 +2269,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_currentXfbState = nullptr; // erase shifts the probe cluster, moving other entries
             g_xfbObjects.erase(it);
             // The frontend reverts to the default object when the bound one is deleted.
-            if (g_currentXfbName == name) {
+            if (g_currentXfbName ==
+#if MOBILEGL_BUILD_DISAGGREGATED
+                key
+#else
+                name
+#endif
+            ) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                if (server) {
+                    // The following BindStreamOutput names this context's actual
+                    // default lifetime. Never create a native object for key 0.
+                    g_currentXfbName = 0;
+                    roleState.NeedsBind = true;
+                    BufferImpl::InvalidateTransformFeedbackBindingShadows();
+                    return;
+                }
+#endif
                 BindTransformFeedback(0);
             }
         }
@@ -4191,7 +4209,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
                         for (Uint32 unit = 0; unit < end; ++unit) {
                             if (unit >= st.BoundShaderImages.size()) break;
-                            SyncImageTextureBinding(st.BoundShaderImages[unit]);
+                            // The union can include a slot no set_shader_images
+                            // record has described yet. Its zero-initialized Unit
+                            // is not a binding identity: treating it as one unbinds
+                            // real unit 0 after binding the current program's images.
+                            // Array position identifies both retained and empty slots.
+                            auto view = st.BoundShaderImages[unit];
+                            view.Unit = unit;
+                            SyncImageTextureBinding(view);
                         }
                         return;
                     }

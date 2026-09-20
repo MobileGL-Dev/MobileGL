@@ -1297,6 +1297,7 @@ namespace MobileGL::MG_Remote::Client {
             // The backend slot's own first line (DirectGLES.cpp:9201), kept here so a null name
             // never becomes a zero-size blob - which rule A forbids spelling at all.
             if (storageBlockName == nullptr) return;
+            BeforeReadOnlyVerb();
 
             MG_Pipe::MGPStorageBlockBinding record{};
             record.GlName = static_cast<Uint32>(program);
@@ -1305,8 +1306,14 @@ namespace MobileGL::MG_Remote::Client {
             if (MG_State::pGLContext != nullptr) {
                 const auto& programObject = MG_State::pGLContext->GetProgramObject(program);
                 if (programObject) {
-                    record.ShaderCso = MG_Pipe::MGPipeSlots().FindByLifetimeId(
-                        MG_Pipe::MGPipeKind::ShaderCso, programObject->GetLifetimeId());
+                    // The application may rebind a stage program before it is
+                    // current or attached to a pipeline. A minted slot alone does
+                    // not publish its archive; this verb must follow that birth.
+                    programObject->JoinLinkAndSpirv();
+                    Uint64 bytes = 0;
+                    auto& emitter = MG_Pipe::MGPipeProgramEmitterInstance();
+                    record.ShaderCso = emitter.AcquireShaderCso(*programObject, bytes);
+                    emitter.EmitProgramBindings(*programObject, record.ShaderCso);
                 }
             }
             // Size = strlen + 1: THE NUL TRAVELS (contract table 0's block-name row). The

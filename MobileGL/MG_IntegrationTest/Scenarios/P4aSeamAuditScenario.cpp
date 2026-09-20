@@ -61,6 +61,7 @@
 
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/P4aSeamPeek.h"
+#include "../Harness/SplitRuntimePeek.h"
 #include "../Harness/ScenarioFixture.h"
 
 #ifdef GLAPI
@@ -675,6 +676,10 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
             glMemoryBarrier(GL_ALL_BARRIER_BITS);
             EXPECT_EQ(FirstGLError(), 0u) << "the first dispatch leaked a GL error";
             if (whiteBox) {
+                // A memory-barrier command orders GPU work; run-ahead need not
+                // have applied it before this client-side white-box observation.
+                const auto runtime = PeekSplitRuntime();
+                if (runtime.sessionActive) ASSERT_TRUE(WaitForSplitAppliedForTesting(runtime.emitSeq));
                 PipeShaderImageWindowPeek window{};
                 ASSERT_TRUE(PeekPipeShaderImageWindow(&window));
                 EXPECT_EQ(window.Start, 0u);
@@ -688,6 +693,8 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
             glMemoryBarrier(GL_ALL_BARRIER_BITS);
             EXPECT_EQ(FirstGLError(), 0u) << "the second dispatch leaked a GL error";
             if (whiteBox) {
+                const auto runtime = PeekSplitRuntime();
+                if (runtime.sessionActive) ASSERT_TRUE(WaitForSplitAppliedForTesting(runtime.emitSeq));
                 PipeShaderImageWindowPeek window{};
                 ASSERT_TRUE(PeekPipeShaderImageWindow(&window));
                 EXPECT_EQ(window.Start, 0u);
