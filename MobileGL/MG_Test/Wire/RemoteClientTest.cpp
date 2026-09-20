@@ -48,6 +48,7 @@
 #include <MG_Pipe/PipeMutation.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
+#include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Impl/Pipe/PipeFill.h>
 #include <Init.h>
 #include <MG_Impl/EGLImpl/EGLImpl.h>
