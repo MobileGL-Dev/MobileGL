@@ -1100,8 +1100,8 @@ jobs:
           ctest --output-on-failure -L integration-split --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/split-baseline.xml"
           python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/split-baseline.xml" --require-split-ran
 
-      # ID-65 supersedes broad inproc status parity: class-C aborts and named wrong-answer
-      # debts are recorded. Monolith, integration-split and the controls remain hard gates.
+      # Both full transport runs are hard gates. The per-case comparison below
+      # remains diagnostic because explicit mechanism controls retain their own mode.
       #
       # The entries that name MOBILEGL_TRANSPORT in their OWN property (the Split. lanes) keep
       # their value in both passes, which is correct: they are the split family in both arms and
@@ -1123,11 +1123,8 @@ jobs:
           fi
           echo "integration-gpu entries in the split build: ${count}"
           MOBILEGL_TRANSPORT=monolith ctest --output-on-failure -L integration-gpu --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/arm-monolith.xml"
-          # ID-65: broad inproc is a recorded debt census. Reduced split + controls gate below.
-          inproc_rc=0
-          MOBILEGL_TRANSPORT=inproc ctest --output-on-failure -L integration-gpu --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/arm-inproc.xml" || inproc_rc=$?
-          python3 ../scripts/ci/census_junit.py "${RUNNER_TEMP}/arm-inproc.xml" "${inproc_rc}" >> "${GITHUB_STEP_SUMMARY}"
-          # Retain the per-name status delta as evidence, not as the reduced-path gate.
+          MOBILEGL_TRANSPORT=inproc MOBILEGL_IPC_ROLE_SPLIT_STATE=1 MOBILEGL_IPC_STRICT_ERRORS=1 ctest --output-on-failure -L integration-gpu --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/arm-inproc.xml"
+          # Both commands above must succeed; report differences among legitimate skips.
           python3 - "${RUNNER_TEMP}/arm-monolith.xml" "${RUNNER_TEMP}/arm-inproc.xml" <<'PY'
           import sys, xml.etree.ElementTree as ET
           def rows(path):
@@ -1145,7 +1142,7 @@ jobs:
           if diff:
               for name in diff[:40]:
                   print(f"{name}: monolith={a.get(name, '<absent>')} inproc={b.get(name, '<absent>')}")
-              print(f"Recorded ID-65 census: {len(diff)} name/status differences; not a parity gate")
+              print(f"Transport comparison: {len(diff)} name/status differences after both full runs passed")
           else:
               print(f"the two arms agree on all {len(a)} entries, name and status")
           PY
@@ -1666,65 +1663,31 @@ jobs:
           assert 'Fatal{UnmigratedVerb, "Magma:mipmap-native-format@P7"}' in log, "missing named native-format refusal"
           PY
 
-      # ---- P5e (ra2), ID-134 / ID-82: THE CLIENT-ARRAY LANE, EXPECTED RED UNDER RUN-AHEAD ----
-      #
-      # The two DirectGLES.Split.ClientVertexArrayScenario entries draw from a vertex array in
-      # the application's OWN memory. The server uploads those bytes by dereferencing a raw
-      # client pointer per draw, which is exactly the read rule F forbids once the client stops
-      # waiting - so ID-82 makes the draw a NAMED REFUSAL under run-ahead and gives the staging
-      # form to P8. Aborting is therefore the DESIGNED behaviour, and a lane that demanded these
-      # entries green would be demanding that the refusal not fire.
-      #
-      # THE LABEL, AND WHY IT IS NOT `integration-split-clientarrays` (ID-131): `ctest -L` is a
-      # REGEX. That spelling is matched by `-L integration-split` as a substring, so the entries
-      # would still be in the lane they were moved out of while every listing showed them
-      # renamed. Counted, not assumed: `-L integration-split` went 181 -> 179 and
-      # `-L integration-gpu` 1359 -> 1357 when this label landed.
-      #
-      # IT BRANCHES ON WHETHER RUN-AHEAD IS ACTUALLY ARMED, and that is not hedging - it is the
-      # only formulation that is a real assertion on BOTH heads. kMGPipeP5eRunAheadReady is a
-      # BUILD constant (MG_Backend/Init.cpp): on a head where it is false no environment can arm
-      # run-ahead, the refusal is unreachable, and these entries are green - so a step that
-      # simply demanded red would fail for the one reason that is not a defect. The client says
-      # which world it is in, in its own log line, and the step reads that and then demands the
-      # matching outcome. When the flip lands for good, delete the green branch.
-      - name: Integration-clientarrays-split - expected red under run-ahead (ID-82 / ID-134)
+      # Client vertex/index inputs are copied into owned wire buffer resources.
+      # The original dedicated entries now have to execute successfully with run-ahead.
+      - name: Integration-clientarrays-split - owned client inputs under run-ahead
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
           MOBILEGL_TRANSPORT: "inproc"
+          MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
+          MOBILEGL_IPC_STRICT_ERRORS: "1"
+          MOBILEGL_IPC_RUN_AHEAD: "1"
         run: |
-          ulimit -c unlimited
-          logs=MobileGL/MG_IntegrationTest/split-logs
-          rm -f "${logs}"/*ClientVertexArrayScenario*.log 2>/dev/null || true
-          rc=0
-          ctest -L integration-clientarrays-split --no-tests=error -j 1 \
-            > "${RUNNER_TEMP}/clientarrays.txt" 2>&1 || rc=$?
-          tail -5 "${RUNNER_TEMP}/clientarrays.txt"
-          if ! grep -rqF "run-ahead ARMED" "${logs}"/*ClientVertexArrayScenario*.log 2>/dev/null; then
-            # kMGPipeP5eRunAheadReady is false on this head: the client is lockstep, vi's arm is
-            # alive and these entries are the positive control they were registered as.
-            if [ "${rc}" -ne 0 ]; then
-              echo "::error::integration-clientarrays-split is red WITHOUT run-ahead armed. Under lockstep the client-memory array path is legal and vi keeps it working, so this is a real regression in that arm and not ID-82's refusal."
-              exit 1
-            fi
-            echo "integration-clientarrays-split is green: run-ahead is not armed on this build, so ID-82's refusal is unreachable"
-            exit 0
-          fi
-          if [ "${rc}" -eq 0 ]; then
-            echo "::error::integration-clientarrays-split went GREEN with run-ahead ARMED. ID-82 refuses a client-memory vertex array under run-ahead by name, so a green run means the refusal did not fire and the server dereferenced a client pointer from an unbarriered record. If P8 has landed the staged form, delete this step and fold the entries back into integration-split."
-            exit 1
-          fi
-          marker='Fatal{UnmigratedVerb, "'
-          if ! grep -rhoE 'Fatal\{UnmigratedVerb, "(Multi)?DrawArrays\+CLIENT_ARRAYS"\}' \
-                 "${logs}"/*ClientVertexArrayScenario*.log 2>/dev/null | sort -u | grep -q CLIENT_ARRAYS; then
-            echo "::error::integration-clientarrays-split is red but no private log carries ${marker}...+CLIENT_ARRAYS\"} - the lane failed for some OTHER reason, which is a defect rather than the expected-red control"
-            grep -rhoE '(Fatal|Admitted)\{[A-Za-z]*, "[^"]*"\}' "${logs}"/*ClientVertexArrayScenario*.log 2>/dev/null | sort | uniq -c | sort -rn | head
-            exit 1
-          fi
-          echo "integration-clientarrays-split is red by design on:"
-          grep -rhoE 'Fatal\{UnmigratedVerb, "(Multi)?DrawArrays\+CLIENT_ARRAYS"\}' \
-            "${logs}"/*ClientVertexArrayScenario*.log | sort -u
+          ctest -L integration-clientarrays-split --show-only=json-v1 > "${RUNNER_TEMP}/clientarrays-lane.json"
+          ctest -L integration-clientarrays-split --no-tests=error --output-on-failure -j 1 \
+            --output-junit "${RUNNER_TEMP}/clientarrays.xml"
+          python3 - "${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/split_log_paths.py" \
+            "${RUNNER_TEMP}/clientarrays-lane.json" "${RUNNER_TEMP}/clientarrays.xml" <<'PY'
+          import importlib.util, json, sys
+          spec = importlib.util.spec_from_file_location("slp", sys.argv[1])
+          slp = importlib.util.module_from_spec(spec); spec.loader.exec_module(slp)
+          lane = json.load(open(sys.argv[2]))
+          names = [test["name"] for test in lane["tests"]]
+          if not names:
+              raise SystemExit("no client-array cases discovered")
+          slp.require_green(lane, sys.argv[3], names)
+          PY
 
       - name: Upload strict lane logs
         if: always()

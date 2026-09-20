@@ -908,29 +908,14 @@ namespace MobileGL::MG_Remote::Client {
                             GLenum type, void* pixels) {
             ClientSession& session = RequireSession("ReadPixels");
 
-            // ID-57 / M8: A PACK-PBO DESTINATION IS REFUSED BY NAME, BEFORE ANY EMISSION AND
-            // BEFORE `pixels` IS TOUCHED. With GL_PIXEL_PACK_BUFFER bound, the frontend permits
-            // `pixels` to be a byte OFFSET into that buffer, not an address (GL_Framebuffer.cpp:
-            // 3055 aligns it to the type size, one byte for UNSIGNED_BYTE) - and this emitter has
-            // no PBO branch: it sets DstOffset = 0, hands the offset to EmitAndWait as a host
-            // buffer, and the reply is memcpy'd to CPU address <offset>. Under monolith the
-            // backend maps the PBO and writes the reply into the buffer (unchanged). The real
-            // split form - the server writes the reply into the buffer resource and the client
-            // marks it GPU-written (b1's MarkReadPixelsPackBuffer becoming the producer contract
-            // §3 names) - is a P6 ROADMAP item. In P5 it is class C's shape (R-4), refused here.
+            // A bound PACK buffer makes pixels an offset. The owned reply is
+            // packed on this thread and only the requested rows are uploaded.
             const auto pbo = MG_State::pGLContext != nullptr
                 ? MG_State::pGLContext->GetBufferBindingSlot(::MobileGL::BufferTarget::PixelPack).GetBoundObject()
                 : SharedPtr<MG_State::GLState::BufferObject>{};
 
             BeforeReadOnlyVerb();
 
-            // THE PBO HALF IS b1's DESIGN AND b1 ALREADY WIRED ITS MARK, at
-            // GL_Framebuffer.cpp:3109 - immediately after this table call returns, inside
-            // ReadPixels_Backend itself. So this emitter deliberately does NOT call
-            // MarkReadPixelsPackBuffer(): a second call there would be the "wire it twice"
-            // shape, and the per-row counter b1's unit cases assert on would then count one
-            // read as two. (In P5 the refusal above means no PBO read reaches here at all; the
-            // note stays for the P6 form.)
             if (width <= 0 || height <= 0) return;
             const Uint64 bytesPerPixel = ReadbackBytesPerPixel(format, type);
             // ONE tight-size function for production AND the control (M3 / codex 10a). The first
@@ -1268,12 +1253,7 @@ namespace MobileGL::MG_Remote::Client {
                                   GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
             ClientSession& session = RequireSession("CopyImageSubData");
 
-            // ID-57's SHAPE: REFUSED BY NAME, BEFORE ANY EMISSION. GL 4.6 core 18.3.2 accepts
-            // GL_RENDERBUFFER as either endpoint, and an endpoint is a sum type for exactly that
-            // reason - but no sticky forward hands out a renderbuffer object, so the sink has no
-            // way to rebuild one from a name, and none was measured. P7 is where the backend
-            // takes handles and this arm becomes ordinary. The sink refuses the same shape by
-            // the same name if a record ever reaches it (defence on both sides of one wire).
+            // The GL target selects the texture or renderbuffer handle namespace.
             MG_Pipe::MGPCopyRegion record{};
             const auto handle = [](const MG_Backend::CopyImageEndpoint& endpoint) {
                 return endpoint.IsRenderbuffer()
@@ -1283,8 +1263,7 @@ namespace MobileGL::MG_Remote::Client {
             };
             record.Src = handle(src);
             record.Dst = handle(dst);
-            // The GL names beside the handles: the key MGB_CTX->GetTextureObject(name) takes on
-            // the far side (a BARRIER-PULLED sticky forward, counted in `rsp`, retired by P7).
+            // GL names remain diagnostic only; backend identity comes from handles.
             record.SrcGlName =
                 src.IsRenderbuffer() ? src.Renderbuffer->GetExternalIndex() : src.Texture->GetExternalIndex();
             record.DstGlName =

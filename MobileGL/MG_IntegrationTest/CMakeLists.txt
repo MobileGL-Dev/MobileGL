@@ -2260,41 +2260,16 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 
     # ---- P5e package vi (MG_Remote/CONTRACT-P5E.md §5.1, ID-82 / ruling 2) --------------------
     #
-    # THE LANE ENTRY THAT DID NOT EXIST, and its absence was the brief's open item (a). Nothing
-    # else registered here draws from a vertex array in the APPLICATION's own memory: every
-    # other scenario binds GL_ARRAY_BUFFER first, so its glVertexAttribPointer argument is a
-    # byte offset. This is the one draw shape whose bytes have no wire form - the server uploads
-    # them by dereferencing a client pointer per draw - and it is therefore both the positive
-    # control for vi's decision to KEEP that arm alive under lockstep and the only entry that
-    # can reach the run-ahead refusal when ra publishes the caps bit.
-    #
-    # ---- P5e (ra2), ID-134: AND WITH THE CAPS BIT PUBLISHED IT IS A LANE OF ITS OWN ----------
-    #
-    # "When ra publishes the caps bit" is now, and what these two entries reach is
-    # `Fatal{UnmigratedVerb, "DrawArrays+CLIENT_ARRAYS"}` / `"MultiDrawArrays+CLIENT_ARRAYS"` -
-    # ID-82's NAMED REFUSAL, working exactly as ruled. They cannot be green under run-ahead and
-    # they should not be: a lane that demanded them green would be demanding that the refusal
-    # not fire, which is the opposite of what vi registered them for. Staging the bytes is P8's.
-    #
-    # THE LABEL IS `integration-clientarrays-split` AND THE SPELLING IS THE POINT (ID-131, and
-    # gl's `integration-magma-split` above is the worked example): `ctest -L` takes a REGEX, so a
-    # label spelled `integration-split-clientarrays` is still MATCHED by `-L integration-split`
-    # and the entries would never have left the lane they were moved out of - a split that reads
-    # as done in every listing and is not. Counted rather than assumed: `ctest -N -L
-    # integration-split` is 179 after this change and was 181 before, and `-L integration-gpu`
-    # is 1357 against 1359. `integration-gpu` goes with it for the same reason `integration-
-    # magma-split` dropped it - a lane that must be green cannot contain an entry that must not.
-    #
-    # The two entries keep their private, distinct log paths (SplitLogPaths.cmake.in lists
-    # MGL_SPLIT_VI_CLIENT_ARRAY_TESTS by name), which is what lets the expected-red CI step
-    # assert the MARKER rather than merely tolerate a failure.
+    # Client-memory vertices and indices now cross as owned ordinary buffers.
+    # Keep the original names and private logs; all six scenarios join the full
+    # GPU and split acceptance labels as well as their focused regression label.
     gtest_discover_tests(MobileGLIntegrationTest
         TEST_PREFIX "DirectGLES.Split."
         TEST_LIST MGL_SPLIT_VI_CLIENT_ARRAY_TESTS
         TEST_FILTER "ClientVertexArrayScenario.*"
         DISCOVERY_TIMEOUT 30
         PROPERTIES
-            LABELS "integration-clientarrays-split"
+            LABELS "integration-gpu\;integration-split\;integration-clientarrays-split"
             TIMEOUT ${MGL_ITEST_TIMEOUT}
             ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
     )

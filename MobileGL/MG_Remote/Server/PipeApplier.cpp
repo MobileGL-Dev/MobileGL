@@ -888,14 +888,7 @@ namespace MobileGL::MG_Remote::Server {
         if (table == nullptr) return false;
         if (table->GL.CopyImageSubData == nullptr) return false;
 
-        // REFUSED BY NAME ON BOTH SIDES OF ONE WIRE. The client refuses a renderbuffer endpoint
-        // before it emits (ID-57's shape, EmitTables.cpp), and this is the same refusal for a
-        // record that reached here anyway: no sticky forward hands out a RenderbufferObject, so
-        // there is no honest way to build the endpoint, and guessing an empty one would copy
-        // nothing and say it copied.
-
-        // P5f fe: both texture identities already travel in the record. Pass those handles
-        // to the backend's server-owned texture table; GL names are diagnostic data only.
+        // Typed handles resolve both texture and renderbuffer storage on the server.
         MG_Backend::CopyImageEndpoint src{};
         MG_Backend::CopyImageEndpoint dst{};
         if (copy.SrcTarget == GL_RENDERBUFFER) src.RenderbufferHandle = copy.Src;
