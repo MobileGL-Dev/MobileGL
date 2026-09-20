@@ -1355,7 +1355,7 @@ jobs:
       # "green" would mean the knob stopped arming, which is exactly the decay ID-122 assigns
       # to a control rather than to a lane's good mood. At P5f's exit the file is empty and the
       # green arm is the correct one; delete the red expectation in the same commit.
-      - name: Integration-split under the dual-block rehearsal - expected red, census ratcheted (P5f f1)
+      - name: Integration-split under the dual-block rehearsal - empty census, hard green (P5f wave 2)
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"

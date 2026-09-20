@@ -6,6 +6,9 @@
 > 车道标签 `integration-dualblock-split`、棘轮 `Harness/dualblock-expected-fatals.txt`）；
 > `fc` 控制面帧已落（报告 [`notes/p5f/fc-report.md`](notes/p5f/fc-report.md)：§2.3 的函数指针邮箱
 > 退役为 `SurfaceControlFrame` 值帧，schema 缺口补齐，wire 入口具名拒绝就位）。
+> **波次 2 已集成**：fc / fe / fm 完成，双块 210 条零失败、两份 marker 棘轮为空；
+> 仍有 fs / fr / fv、13 个 BARRIER_PULLED 字段的分类收口与设备门。见
+> [`notes/p5f/wave2-report.md`](notes/p5f/wave2-report.md) 与最新 HANDOFF-P5F。
 > **P6 在 P5f 之前不开工**：P6 的前提"只是传输替换"今天不成立，§2 是不成立的清单。
 
 ---
@@ -250,13 +253,14 @@ P5f 的每一条都靠同一个机制证伪，而不是靠审计：
 
 ---
 
-## 5 包（草案，待 §2.4 普查后定）
+## 5 包（波次 2 已完成；ID-137 分工）
 
 ```
 f0  普查（只读）：§2.4 的完整静态清单 + §2.6 的逐站点清单 + 每个 BARRIER_PULLED 字段的载体判定
  └─ f1  双块机制 + 旋钮 + 车道（§4），此时预期大面积红，红就是清单
-     ├─ fm  Magma 的 9 个字段 + T5 + Magma 侧跨角色读写
-     ├─ fc  控制面帧（§2.3）
+     ├─ fe  Espryt 字段读者 + XFB 快照 + 共用记录接线（已集成）
+     ├─ fm  Magma 的 9 个字段 + T5 + Magma 侧跨角色读写（已集成）
+     ├─ fc  控制面帧（§2.3，已集成）
      ├─ fs  静态量分区（§2.4）
      ├─ fr  registry 按句柄重键（§2.5）
      └─ fv  反向通道触碰 client 内存的部分（§2.6）
