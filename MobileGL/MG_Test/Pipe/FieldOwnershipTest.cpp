@@ -283,8 +283,8 @@ TEST_F(FieldOwnershipTest, TheSevenStickyForwardsAgreeWithTheirFieldRows) {
     }
 }
 
-// The stamp map, in both directions: the four P5 class-B boundaries, the eight mapped ahead of
-// the phase that will emit them, and the three verb-shaped calls that are exempt by name.
+// Pin every boundary's representative verb, the complete count, and the three
+// verb-shaped calls that are exempt by name.
 TEST_F(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
     // CONTRACT §7 class B minus Present - the only four that can arrive in P5.
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::Clear), MGPipeVerb::Clear);
@@ -312,7 +312,24 @@ TEST_F(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::SetStorageBlockBinding),
               MGPipeVerb::ShaderStorageBlockBinding);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::CopyFramebufferToTexture), MGPipeVerb::CopyTexImage2D);
-    EXPECT_EQ(kMGPipeVerbBoundaryOpCount, SizeT{23});
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::FenceCreate), MGPipeVerb::FenceSync);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::FenceStatus), MGPipeVerb::GetSyncStatus);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::FenceWait), MGPipeVerb::ClientWaitSync);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::FenceDestroy), MGPipeVerb::DeleteSync);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::FenceWaitServer), MGPipeVerb::WaitSync);
+    // The query target travels in MGPQueryDesc::Kind. Begin/end share the
+    // kQuery class across timer, occlusion and primitive queries, with the
+    // primitive-query verb as the canonical stamp for the shared wire opcode.
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::QueryCreate), MGPipeVerb::BeginXfbPrimitivesQuery);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::QueryBegin), MGPipeVerb::BeginXfbPrimitivesQuery);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::QueryEnd), MGPipeVerb::EndXfbPrimitivesQuery);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::QueryAvailable), MGPipeVerb::IsQueryResultAvailable);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::QueryResult), MGPipeVerb::GetQueryResult64);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::QueryDestroy), MGPipeVerb::DeleteBackendQuery);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::QueryCounter), MGPipeVerb::QueryCounterTimestamp);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::QueryTimestamp), MGPipeVerb::GetGpuTimestampNs);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::DeleteStreamOutput), MGPipeVerb::DeleteTransformFeedback);
+    EXPECT_EQ(kMGPipeVerbBoundaryOpCount, SizeT{32});
     EXPECT_EQ(kMGPipeVerbBoundaryExemptCount, SizeT{3});
 
     // Present is class B (it is emitted in P5) and is STILL not a verb boundary:
