@@ -236,7 +236,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool ResolveWireImageDescriptor(VkCommandBuffer commandBuffer, const MagmaProgramSource& program,
                                        const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
                                        Uint32 element, Bool storage, VkDescriptorImageInfo& out) const;
+        Bool ResolveWireTexelBufferDescriptor(const MagmaProgramSource& program,
+                                             const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
+                                             Uint32 frameIndex, Bool storage, VkBufferView& out);
         Uint32 m_wireFrameIndex = 0;
+        VkDeviceSize m_wireStorageOffsetAlignment = 1;
+        VkDeviceSize m_wireTexelOffsetAlignment = 1;
+        VkDeviceSize m_wireMaxUniformRange = ~VkDeviceSize{0};
+        VkDeviceSize m_wireMaxStorageRange = ~VkDeviceSize{0};
+        Uint32 m_wireMaxTexelElements = ~Uint32{0};
 #endif
         Bool ResolveSamplerDescriptorOverride(const SamplerBindingOverride& samplerBindingOverride,
                                               VkDescriptorImageInfo& outImageInfo) const;
@@ -273,6 +281,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const void* payload = nullptr;  // fallback UploadTransient path
             VkDeviceSize payloadSize = 0;
         };
+#if MOBILEGL_BUILD_DISAGGREGATED
+        Bool ResolveWireUniformBufferPayload(const MagmaProgramSource& program, Uint32 blockIndex,
+                                             Uint32 bindingPoint, UboBindResult& out) const;
+#endif
         Bool ResolveUniformBufferPayload(const MagmaProgramSource& program,
                                          const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
                                          Uint32 arrayElement, UboBindResult& out) const;

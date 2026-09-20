@@ -11,6 +11,13 @@
 #include "VulkanRenderer.h"
 
 #include "MG_Util/Metrics/PipeStats.h"
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include "MG_Pipe/MGPipeCallbacks.h"
+#include "MG_Pipe/PipeApply.h"
+#include "MG_Remote/Server/StagedShadow.h"
+#include <Config.h>
+#include <cstdlib>
+#endif
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
@@ -119,7 +126,271 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .AcquirePersistentMap = Ops_AcquirePersistentMap,
             .ReadbackFromGpu = Ops_ReadbackFromGpu,
         };
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        VkBufferManager& WireManager() {
+            if (g_activeBufferManager == nullptr) {
+                MGLOG_F("Magma: Fatal{ResourceUnavailable, \"wire-buffer-manager\"}");
+                std::abort();
+            }
+            return *g_activeBufferManager;
+        }
+
+        const MG_Pipe::MGPipeResourceOps g_vulkanWireResourceOps = {
+            .Create = [](auto res, const auto& desc) { WireManager().CreateWireBuffer(res, desc); },
+            .Respecify = [](auto res, const auto& desc, const void* bytes) {
+                WireManager().RespecifyWireBuffer(res, desc, bytes);
+            },
+            .SubData = [](auto res, const auto& record, const void* bytes) {
+                WireManager().WriteWireBuffer(res, MG_Pipe::MGPipeSubDataBufferOffset(record),
+                                               MG_Pipe::MGPipeSubDataBufferSize(record), bytes);
+            },
+            .SubDataResident = [](auto res, const auto& record, const void* bytes) {
+                WireManager().WriteWireBuffer(res, MG_Pipe::MGPipeSubDataBufferOffset(record),
+                                               MG_Pipe::MGPipeSubDataBufferSize(record), bytes);
+            },
+            .FlushRange = [](auto res, const auto& record, const void* bytes) {
+                WireManager().FlushWireBuffer(res, record.Offset, record.Size, bytes);
+            },
+            .Readback = [](auto res, const auto& record) {
+                WireManager().ReadbackWireBuffer(res, record.Offset, record.Size);
+            },
+            .Destroy = [](auto res) { WireManager().DestroyWireBuffer(res); },
+            // Split mapping remains T2: the client owns its map and pushes exact
+            // modified ranges. A server pointer is never donated across the wire.
+            .MapPersistent = [](MG_Pipe::MGPipeHandle, Uint64, const void*) -> void* { return nullptr; },
+            .UnmapPersistent = [](MG_Pipe::MGPipeHandle) {},
+        };
+#endif
     } // namespace
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    void VkBufferManager::RegisterWireResourceOps() {
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            MG_Pipe::MGPipeSetResourceOps(&g_vulkanWireResourceOps);
+        }
+    }
+
+    VkBufferManager::WireBufferResource* VkBufferManager::FindWireBuffer(MG_Pipe::MGPipeHandle res) {
+        const auto found = m_wireBuffers.find(WireBufferKey(res));
+        return found == m_wireBuffers.end() ? nullptr : &found->second;
+    }
+
+    void VkBufferManager::CreateWireBuffer(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc) {
+        if (FindWireBuffer(res) != nullptr) {
+            MGLOG_F("Magma: Fatal{ProtocolCorruption, \"duplicate-buffer-create\"} {slot=%u, gen=%u}",
+                    res.Slot, res.Gen);
+            std::abort();
+        }
+        m_wireBuffers.try_emplace(WireBufferKey(res));
+        RespecifyWireBuffer(res, desc, nullptr);
+    }
+
+    void VkBufferManager::RespecifyWireBuffer(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc,
+                                               const void* initialBytes) {
+        auto* resource = FindWireBuffer(res);
+        if (!resource) {
+            MGLOG_F("Magma: Fatal{ProtocolCorruption, \"unknown-buffer-respecify\"} {slot=%u, gen=%u}",
+                    res.Slot, res.Gen);
+            std::abort();
+        }
+        DeferRelease(std::move(resource->buffer));
+        resource->size = desc.Width;
+        resource->lastUseSerial = 0;
+        resource->gpuWritesPending = false;
+        resource->stagedCoverage.clear();
+        ++m_sliceEpochCounter;
+        if (resource->size == 0) return;
+
+        VkBufferUsageFlags usage = kPersistentBackedUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        if (m_initInfo.transformFeedbackUsageEnabled) usage |= VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT;
+        if (!resource->buffer.Create({
+                .allocator = m_initInfo.allocator,
+                .size = resource->size,
+                .usage = usage,
+                .memoryUsage = VMA_MEMORY_USAGE_AUTO,
+                .allocationFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
+                .requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            }) || resource->buffer.Map() == nullptr) {
+            MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-storage\"} {slot=%u, gen=%u, size=%llu}",
+                    res.Slot, res.Gen, static_cast<unsigned long long>(resource->size));
+            std::abort();
+        }
+        // Under transport, defined bytes follow as resource_subdata records. An
+        // undefined store has no shadow to upload and no implicit zero snapshot.
+        if (initialBytes != nullptr && desc.HasDefinedContent) {
+            WriteWireBuffer(res, 0, resource->size, initialBytes);
+        }
+    }
+
+    Bool VkBufferManager::WaitForWireBufferHostAccess(WireBufferResource& resource) {
+        if (resource.lastUseSerial <= GetCompletedSerial() && !resource.gpuWritesPending) return true;
+        if (!m_copyProvider || !pVulkanRenderer) return false;
+        const VkCommandBuffer commands = m_copyProvider->AcquireBufferCopyCommandBuffer();
+        if (commands == VK_NULL_HANDLE) return false;
+        VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT | VK_ACCESS_HOST_WRITE_BIT;
+        vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                             0, 1, &barrier, 0, nullptr, 0, nullptr);
+        if (!pVulkanRenderer->WaitForSubmitIndex(pVulkanRenderer->GetSyncPointSubmitIndex(), UINT64_MAX, true)) {
+            return false;
+        }
+        resource.lastUseSerial = 0;
+        resource.gpuWritesPending = false;
+        return true;
+    }
+
+    void VkBufferManager::WriteWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size,
+                                           const void* bytes) {
+        auto* resource = FindWireBuffer(res);
+        if (!resource || offset > resource->size || size > resource->size - offset || (size && !bytes)) {
+            MGLOG_F("Magma: Fatal{ProtocolCorruption, \"buffer-write-range\"} {slot=%u, gen=%u}",
+                    res.Slot, res.Gen);
+            std::abort();
+        }
+        if (size == 0) return;
+        Bool uploaded = false;
+        if (resource->lastUseSerial > GetCompletedSerial()) {
+            // Vulkan buffer copies require four-byte aligned ranges. An odd GL
+            // byte update waits, then writes only the exact range; rounding it
+            // from a CPU shadow could overwrite neighbouring GPU-written bytes.
+            if (((offset | size) & 3u) == 0) {
+                uploaded = StagedWireRangeCopy(*resource, bytes, static_cast<SizeT>(offset),
+                                                static_cast<SizeT>(size));
+            }
+            if (!uploaded && !WaitForWireBufferHostAccess(*resource)) {
+                MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-write-sync\"}");
+                std::abort();
+            }
+        }
+        if (!uploaded) {
+            uploaded = resource->buffer.Upload(bytes, size, offset);
+            if (uploaded && MG_Util::PipeStats::Enabled()) {
+                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer, size);
+            }
+        }
+        if (!uploaded) {
+            MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-upload\"}");
+            std::abort();
+        }
+        MG_Remote::Server::StagedShadowStore::CoverageAdd(resource->stagedCoverage,
+                                                         static_cast<SizeT>(offset),
+                                                         static_cast<SizeT>(offset + size));
+        ++m_sliceEpochCounter;
+    }
+
+    void VkBufferManager::FlushWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size,
+                                           const void* bytes) {
+        if (bytes != nullptr) {
+            WriteWireBuffer(res, offset, size, bytes);
+            return;
+        }
+        const auto* resource = FindWireBuffer(res);
+        if (!resource || offset > resource->size || size > resource->size - offset ||
+            !MG_Remote::Server::StagedShadowStore::CoverageHas(resource->stagedCoverage,
+                static_cast<SizeT>(offset), static_cast<SizeT>(offset + size))) {
+            MGLOG_F("Magma: Fatal{StageSnapshotTooNarrow, \"buffer-flush\"} {slot=%u, gen=%u}",
+                    res.Slot, res.Gen);
+            std::abort();
+        }
+        // SubData has already copied the owned record bytes into GPU storage,
+        // ordered after earlier uses. There is no stale shadow to replay here.
+    }
+
+    Bool VkBufferManager::AcquireWireSlice(BufferKind kind, MG_Pipe::MGPipeHandle res, BufferSlice& outSlice) {
+        (void)kind; // The store carries every buffer usage, so changing roles never orphans it.
+        outSlice = {};
+        auto* resource = FindWireBuffer(res);
+        if (!resource || !resource->buffer.IsValid() || resource->size == 0) return false;
+        resource->lastUseSerial = m_frameSerial;
+        outSlice = resource->buffer.GetSlice(0, resource->size);
+        outSlice.mapped = nullptr;
+        return true;
+    }
+
+    Bool VkBufferManager::ReadWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, void* dst) {
+        auto* resource = FindWireBuffer(res);
+        if (!resource || offset > resource->size || size > resource->size - offset || (size && !dst)) return false;
+        if (size == 0) return true;
+        // Concurrent GPU reads do not prevent a CPU read. Only staged copies or
+        // shader writes need a host visibility barrier and a submission wait;
+        // ordinary index/vertex inspection must not stall once per draw.
+        if (resource->gpuWritesPending && !WaitForWireBufferHostAccess(*resource)) return false;
+        if (!resource->buffer.Invalidate(size, offset)) return false;
+        Memcpy(dst, static_cast<const Uint8*>(resource->buffer.GetMappedData()) + offset, static_cast<SizeT>(size));
+        return true;
+    }
+
+    Bool VkBufferManager::CopyWireBufferRangeToSlice(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size,
+                                                     const BufferSlice& dst) {
+        auto* resource = FindWireBuffer(res);
+        if (!resource || offset > resource->size || size > resource->size - offset || size > dst.size) return false;
+        if (size == 0) return true;
+        if (!m_copyProvider || dst.buffer == VK_NULL_HANDLE || ((offset | size | dst.offset) & 3u) != 0) return false;
+        const VkCommandBuffer commands = m_copyProvider->AcquireBufferCopyCommandBuffer();
+        if (commands == VK_NULL_HANDLE) return false;
+        VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        before.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
+        before.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before, 0, nullptr, 0, nullptr);
+        const VkBufferCopy copy{offset, dst.offset, size};
+        vkCmdCopyBuffer(commands, resource->buffer.GetHandle(), dst.buffer, 1, &copy);
+        VkMemoryBarrier after{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        after.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        after.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                             0, 1, &after, 0, nullptr, 0, nullptr);
+        resource->lastUseSerial = m_frameSerial;
+        return true;
+    }
+
+    void VkBufferManager::ReadbackWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size) {
+        Vector<Uint8> bytes(static_cast<SizeT>(size));
+        if (!ReadWireBuffer(res, offset, size, bytes.data())) {
+            MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-readback\"} {slot=%u, gen=%u}", res.Slot, res.Gen);
+            std::abort();
+        }
+        if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback == nullptr) {
+            MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-writeback-callback\"}");
+            std::abort();
+        }
+        // The reverse producer synchronously copies into SEG_EVENT before
+        // this owned vector is released; no mapped Vulkan pointer crosses roles.
+        MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(res, offset,
+            {reinterpret_cast<Uint64>(bytes.data()), size, MG_Pipe::kMGHostSpanSegNone, 0});
+        ++m_sliceEpochCounter;
+    }
+
+    void VkBufferManager::MarkWireBufferGpuWritten(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size) {
+        auto* resource = FindWireBuffer(res);
+        if (!resource || offset > resource->size) return;
+        if (size == MG_Pipe::kMGPipeWholeBuffer) size = resource->size - offset;
+        if (size == 0 || size > resource->size - offset) return;
+        resource->lastUseSerial = m_frameSerial;
+        resource->stagedCoverage.clear();
+        resource->gpuWritesPending = true;
+        ++m_sliceEpochCounter;
+        // The existing client dirty-state protocol accepts one whole-store
+        // notification. The store remains on the GPU and exact later SubData
+        // only overwrites its own range, preserving every other GPU-written byte.
+        const MG_Pipe::MGPRange range{0, MG_Pipe::kMGPipeWholeBuffer};
+        if (MG_Pipe::gMGPipeCallbacks.OnGpuWritten == nullptr) {
+            MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-gpu-written-callback\"}");
+            std::abort();
+        }
+        MG_Pipe::gMGPipeCallbacks.OnGpuWritten(res, 1, &range);
+    }
+
+    void VkBufferManager::DestroyWireBuffer(MG_Pipe::MGPipeHandle res) {
+        const auto found = m_wireBuffers.find(WireBufferKey(res));
+        if (found == m_wireBuffers.end()) return;
+        DeferRelease(std::move(found->second.buffer));
+        m_wireBuffers.erase(found);
+        ++m_sliceEpochCounter;
+    }
+#endif
 
     Bool VkBufferManager::Initialize(const VkBufferManagerInitInfo& initInfo) {
         Shutdown();
@@ -138,12 +409,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         g_activeBufferManager = this;
         MG_State::GLState::SetBufferBackendOps(&g_vulkanBufferBackendOps);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RegisterWireResourceOps();
+#endif
         return true;
     }
 
     void VkBufferManager::Shutdown() {
         if (g_activeBufferManager == this) {
             g_activeBufferManager = nullptr;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Pipe::MGPipeGetResourceOps() == &g_vulkanWireResourceOps) {
+                MG_Pipe::MGPipeSetResourceOps(nullptr);
+            }
+#endif
             if (MG_State::GLState::GetBufferBackendOps() == &g_vulkanBufferBackendOps) {
                 MG_State::GLState::SetBufferBackendOps(nullptr);
             }
@@ -153,6 +432,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_unboundTexelBuffer.Destroy();
         DestroyAllDeferredReleases();
         ReleaseAllLiveResources();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        m_wireBuffers.clear();
+#endif
         m_copyProvider = nullptr;
         m_initInfo = {};
         m_currentFrameIndex = 0;
@@ -279,6 +561,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .frameCount = m_initInfo.frameCount,
             .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+#if MOBILEGL_BUILD_DISAGGREGATED
+                     (MG_Config::Transport != MG_Config::TransportMode::Monolith ? VK_BUFFER_USAGE_TRANSFER_DST_BIT : 0) |
+#endif
                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             .memoryUsage = m_initInfo.transientMemoryUsage,
             .allocationFlags = m_initInfo.transientAllocationFlags,
@@ -430,6 +715,55 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         resource.lastUseSerial = m_frameSerial;
         return true;
     }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Bool VkBufferManager::StagedWireRangeCopy(WireBufferResource& resource, const void* data,
+                                          SizeT offset, SizeT size) {
+        if (!m_copyProvider) {
+            return false;
+        }
+        BufferSlice staging{};
+        if (!m_transientUploadArena.Upload(m_currentFrameIndex, data,
+                                           static_cast<VkDeviceSize>(size), 16, staging)) {
+            return false;
+        }
+        if (MG_Util::PipeStats::Enabled()) {
+            // The staging fill is the host copy; the vkCmdCopyBuffer below is the device
+            // half of the same bytes and is not counted twice.
+            MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer, static_cast<Uint64>(size));
+        }
+        VkCommandBuffer commandBuffer = m_copyProvider->AcquireBufferCopyCommandBuffer();
+        if (commandBuffer == VK_NULL_HANDLE) {
+            return false;
+        }
+
+        // Order the copy after every prior read/write of this buffer, both from
+        // in-flight frames (submission order) and from commands already recorded
+        // in this frame's command buffer.
+        VkMemoryBarrier beforeBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        beforeBarrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        beforeBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1,
+                             &beforeBarrier, 0, nullptr, 0, nullptr);
+
+        VkBufferCopy region{};
+        region.srcOffset = staging.offset;
+        region.dstOffset = static_cast<VkDeviceSize>(offset);
+        region.size = static_cast<VkDeviceSize>(size);
+        vkCmdCopyBuffer(commandBuffer, staging.buffer, resource.buffer.GetHandle(), 1, &region);
+
+        VkMemoryBarrier afterBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        afterBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        afterBarrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1,
+                             &afterBarrier, 0, nullptr, 0, nullptr);
+
+        resource.lastUseSerial = m_frameSerial;
+        resource.gpuWritesPending = true;
+        return true;
+    }
+
+#endif
 
     void VkBufferManager::OnRespecify(MG_State::GLState::BufferObject& bufferObject) {
         auto* resource = ResourceOf(bufferObject);

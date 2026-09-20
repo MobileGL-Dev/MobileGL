@@ -13,6 +13,10 @@
 #include "../VkIncludes.h"
 #include <Includes.h>
 #include <vk_mem_alloc.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include "MG_Pipe/MGPipeTypes.h"
+#include <unordered_map>
+#endif
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     enum class BufferKind : Uint8 {
@@ -99,6 +103,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool Initialize(const VkBufferManagerInitInfo& initInfo);
         void Shutdown();
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Registered before caps publication; the initialized renderer owns the storage.
+        static void RegisterWireResourceOps();
+        // Transport resources are owned by their complete wire handle, never by a
+        // frontend BufferObject. Acquires expose the full GPU store, without a CPU
+        // pointer: CPU consumers must use ReadWireBuffer for ordered, current bytes.
+        Bool AcquireWireSlice(BufferKind kind, MG_Pipe::MGPipeHandle res, BufferSlice& outSlice);
+        Bool ReadWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, void* dst);
+        Bool CopyWireBufferRangeToSlice(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size,
+                                        const BufferSlice& dst);
+        void MarkWireBufferGpuWritten(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size);
+
+        // Resource-op entry points. All run on the server apply owner.
+        void CreateWireBuffer(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc);
+        void RespecifyWireBuffer(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc,
+                                 const void* initialBytes);
+        void WriteWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, const void* bytes);
+        void FlushWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, const void* bytes);
+        void ReadbackWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size);
+        void DestroyWireBuffer(MG_Pipe::MGPipeHandle res);
+#endif
+
         // Recreate all per-frame transient arenas
         Bool RecreateTransientArenas(Uint32 frameCount);
         void BeginFrame(Uint32 frameIndex);
@@ -180,6 +206,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool IsResourceBusy(const VkBufferResource& resource) const;
 
     private:
+#if MOBILEGL_BUILD_DISAGGREGATED
+        struct WireBufferResource {
+            VkBufferObject buffer;
+            Uint64 size = 0;
+            Uint64 lastUseSerial = 0;
+            Bool gpuWritesPending = false;
+            // Only ranges actually submitted by resource_subdata are covered. No
+            // shadow is retained: flush cannot replay stale bytes over GPU writes.
+            Vector<Range1D> stagedCoverage;
+        };
+        static Uint64 WireBufferKey(MG_Pipe::MGPipeHandle res) {
+            return (static_cast<Uint64>(res.Gen) << 32) | res.Slot;
+        }
+        WireBufferResource* FindWireBuffer(MG_Pipe::MGPipeHandle res);
+        Bool WaitForWireBufferHostAccess(WireBufferResource& resource);
+#endif
         Bool InitializeTransientArenas();
         static VkBufferUsageFlags GetVkBufferUsage(BufferKind kind);
         VkBufferResource* GetOrCreateResource(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject);
@@ -192,6 +234,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // in-flight and already-recorded GPU work.
         Bool StagedRangeCopy(VkBufferResource& resource, const void* data,
                              SizeT offset, SizeT size);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        Bool StagedWireRangeCopy(WireBufferResource& resource, const void* data, SizeT offset, SizeT size);
+#endif
         void DeferRelease(VkBufferObject&& buffer);
         void CollectDeferredReleases(Uint32 frameIndex);
         void DestroyAllDeferredReleases();
@@ -211,6 +256,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<Vector<VkBufferObject>> m_deferredBufferReleases;
         Vector<Vector<SharedPtr<VkBufferResource>>> m_deferredResourceReleases;
         Vector<WeakPtr<VkBufferResource>> m_liveResources;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        std::unordered_map<Uint64, WireBufferResource> m_wireBuffers;
+#endif
     // Size m_liveResources had just after the last sweep; the next sweep waits for it to double.
     SizeT m_liveResourcesLastPruned = 0;
         Uint32 m_currentFrameIndex = 0;

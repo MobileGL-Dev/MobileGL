@@ -435,6 +435,78 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return entry;
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Bool VertexInputStateFactory::BuildWireVertexInput(const MG_Pipe::MGPipeVertexElementsRecord& elements,
+            const MG_Pipe::MGPipeApplierState& state, Uint32 activeMask, BackendVertexInputState& out) const {
+        out = BackendVertexInputState{};
+        for (Uint32 location = 0; location < elements.AttributeCount; ++location) {
+            const auto& attr = elements.Attributes[location];
+            if (!attr.Enabled || !(activeMask & (1u << location))) continue;
+            // set_vertex_buffers is flattened PER ATTRIBUTE (VertexInputEmit.h), not
+            // indexed by the original ARB binding point in attr.BindingIndex.
+            if (location < state.VertexBufferStart ||
+                location - state.VertexBufferStart >= state.VertexBufferCount) return false;
+            const auto& buffer = state.VertexBuffers[location];
+            const auto type = static_cast<DataType>(attr.Type);
+            if (attr.Stride < 0 || attr.Size < 1 || attr.Size > 4) return false;
+            VkFormat format = ToVkVertexFormat(type, attr.Size, attr.Normalized, attr.IsInteger,
+                                               attr.IsBgra, attr.IsLong);
+            auto conversion = VertexStreamConversion::None;
+            if (format == VK_FORMAT_UNDEFINED && type == DataType::Float64) {
+                const auto* backend = MG_Remote::Server::ServerLoopInstance().Backend();
+                if (backend && backend->GetDynamicParameters().SupportsFloat64VertexAttributes) return false;
+                format = ToFloat32VertexFormat(attr.Size);
+                conversion = VertexStreamConversion::Float64ToFloat32;
+            }
+            if (format == VK_FORMAT_UNDEFINED) return false;
+            if (!SupportsVertexBufferFormat(format)) {
+                if (!IsScaledIntegerVertexFormat(format)) return false;
+                format = ToFloat32VertexFormat(attr.Size);
+                conversion = VertexStreamConversion::ScaledIntegerToFloat32;
+                if (!SupportsVertexBufferFormat(format)) return false;
+            }
+            const SizeT elementSize = GetAttributeByteSize(type, attr.Size, attr.IsBgra);
+            if (!elementSize) return false;
+            const Uint64 offset = attr.Offset + buffer.Offset;
+            if (offset < attr.Offset) return false;
+            const SizeT alignment = (type == DataType::Int2101010Rev || type == DataType::Uint2101010Rev)
+                ? elementSize : GetComponentSize(type);
+            if (conversion == VertexStreamConversion::None && alignment > 1 &&
+                (offset % alignment || static_cast<Uint32>(attr.Stride) % alignment))
+                conversion = VertexStreamConversion::Repack;
+            Uint32 stride = static_cast<Uint32>(attr.Stride);
+            if (stride && conversion != VertexStreamConversion::None)
+                stride = conversion == VertexStreamConversion::Repack ? static_cast<Uint32>(elementSize)
+                    : static_cast<Uint32>(attr.Size) * sizeof(Float);
+            const Uint32 binding = static_cast<Uint32>(out.bindings.size());
+            out.bindings.push_back({binding, stride,
+                buffer.Divisor ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX});
+            out.attributes.push_back({location, binding, format, 0});
+            out.bindingAttributeLocations.push_back(location);
+            out.bindingBaseOffsets.push_back(static_cast<SizeT>(offset));
+            out.bindingConversions.push_back(conversion);
+            if (buffer.Divisor > 1) out.bindingDivisors.push_back({binding, buffer.Divisor});
+            out.attributeLocationMask |= 1u << location;
+        }
+        // Native handles/offsets do not decide the pipeline layout. Include only the
+        // resolved binding/attribute/divisor values, including a legal zero stride.
+        Uint64 hash = XXH64(out.bindings.data(), out.bindings.size() * sizeof(out.bindings[0]), 0);
+        hash = XXH64(out.attributes.data(), out.attributes.size() * sizeof(out.attributes[0]), hash);
+        out.layoutHash = XXH64(out.bindingDivisors.data(),
+            out.bindingDivisors.size() * sizeof(out.bindingDivisors[0]), hash);
+        out.state.vertexBindingDescriptionCount = static_cast<Uint32>(out.bindings.size());
+        out.state.pVertexBindingDescriptions = out.bindings.data();
+        out.state.vertexAttributeDescriptionCount = static_cast<Uint32>(out.attributes.size());
+        out.state.pVertexAttributeDescriptions = out.attributes.data();
+        if (!out.bindingDivisors.empty()) {
+            out.divisorState.vertexBindingDivisorCount = static_cast<Uint32>(out.bindingDivisors.size());
+            out.divisorState.pVertexBindingDivisors = out.bindingDivisors.data();
+            out.state.pNext = &out.divisorState;
+        }
+        return true;
+    }
+#endif
+
     void VertexInputStateFactory::OnFrameBoundary() {
         ++m_frameBoundaryCounter;
 

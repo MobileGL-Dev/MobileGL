@@ -46,9 +46,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         std::abort();
     }
 
-    [[noreturn]] static void WireBufferDescriptorDebt() {
-        MGLOG_F("MGPipe: Fatal{RoleViolation, \"buffer-legacy-arm\"} - Magma buffer descriptors remain P7");
-        std::abort();
+    static Bool ResolveWireRange(Uint64 offset, Uint64 declaredSize, VkDeviceSize bufferSize,
+                                 VkDeviceSize& start, VkDeviceSize& size) {
+        if (offset >= bufferSize) return false;
+        start = static_cast<VkDeviceSize>(offset);
+        const VkDeviceSize remaining = bufferSize - start;
+        size = declaredSize == MG_Pipe::kMGPipeWholeBuffer
+            ? remaining : std::min<VkDeviceSize>(declaredSize, remaining);
+        return size != 0;
     }
 
     static VkImageViewType WireViewType(MG_Pipe::MGPipeResourceTarget target) {
@@ -474,6 +479,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_bufferManager = bufferManager;
         m_programFactory = programFactory;
         m_minDynamicOffsetAlignment = std::max<VkDeviceSize>(1, minUniformBufferOffsetAlignment);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            VkPhysicalDeviceProperties properties{};
+            vkGetPhysicalDeviceProperties(m_physicalDevice, &properties);
+            m_wireStorageOffsetAlignment = std::max<VkDeviceSize>(1, properties.limits.minStorageBufferOffsetAlignment);
+            m_wireTexelOffsetAlignment = std::max<VkDeviceSize>(1, properties.limits.minTexelBufferOffsetAlignment);
+            m_wireMaxUniformRange = properties.limits.maxUniformBufferRange;
+            m_wireMaxStorageRange = properties.limits.maxStorageBufferRange;
+            m_wireMaxTexelElements = properties.limits.maxTexelBufferElements;
+        }
+#endif
         m_frameCount = frameCount;
         m_maxBindings = maxBindings;
         m_samplerResolveMemo.assign(m_maxBindings, SamplerResolveMemo{});
@@ -1052,27 +1068,75 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return texture;
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Bool UniformManager::ResolveWireTexelBufferDescriptor(const MagmaProgramSource& program,
+            const ProgramFactory::VkProgramObject& programObj, Uint32 binding, Uint32 frameIndex,
+            Bool storage, VkBufferView& out) {
+        out = VK_NULL_HANDLE;
+        if (binding >= programObj.samplerUniformLocationByBinding.size() ||
+            binding >= programObj.samplerNumericDomainByBinding.size() || frameIndex >= m_frames.size()) return false;
+        const Int location = programObj.samplerUniformLocationByBinding[binding];
+        if (location < 0) return false;
+        const Int unit = program.GetUniformSamplerOrImageUnitIndex(static_cast<Uint>(location));
+        const auto& state = MG_Pipe::MGPipeApplier();
+        if (unit < 0 || static_cast<Uint32>(unit) >=
+            (storage ? MG_Pipe::kMGPipeMaxImageUnits : MG_Pipe::kMGPipeMaxTextureUnits)) return false;
+        if (storage && binding >= programObj.storageImageFormatByBinding.size()) return false;
+        const VkFormat declaredFormat = storage ? programObj.storageImageFormatByBinding[binding] : VK_FORMAT_UNDEFINED;
+        const auto placeholder = [&] {
+            out = AcquireUnboundTexelBufferView(declaredFormat,
+                programObj.samplerNumericDomainByBinding[binding], storage);
+            return out != VK_NULL_HANDLE;
+        };
+        const auto texture = storage ? state.BoundShaderImages[unit].Res : state.BoundSamplerViews[unit].Texture;
+        if (MG_Pipe::MGPipeHandleIsNull(texture)) return placeholder();
+        if (texture.Slot >= state.TextureResources.size()) WireDescriptorFatal("texel-buffer-record");
+        const auto& record = state.TextureResources[texture.Slot];
+        if (!record.Live || record.Gen != texture.Gen) WireDescriptorFatal("texel-buffer-generation");
+        if (record.Desc.Target != static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::TexBuffer))
+            WireDescriptorFatal("texel-buffer-target");
+        const auto buffer = record.Desc.BufferForTexBuffer;
+        if (MG_Pipe::MGPipeHandleIsNull(buffer)) return placeholder();
+
+        BufferSlice slice{};
+        if (!m_bufferManager->AcquireWireSlice(BufferKind::TextureBuffer, buffer, slice) || !slice.IsValid()) return false;
+        const auto internalFormat = static_cast<TextureInternalFormat>(record.Desc.InternalFormat);
+        VkFormat format = declaredFormat;
+        if (storage && format == VK_FORMAT_UNDEFINED && state.BoundShaderImages[unit].InternalFormat != 0)
+            format = MG_Util::ConvertTextureInternalFormatToVkEnum(MG_Util::ConvertGLEnumToTextureInternalFormat(
+                state.BoundShaderImages[unit].InternalFormat));
+        if (format == VK_FORMAT_UNDEFINED) format = MG_Util::ConvertTextureInternalFormatToVkEnum(internalFormat);
+        const auto feature = storage ? VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_BIT : VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT;
+        if (format == VK_FORMAT_UNDEFINED || !BufferFormatSupportsFeature(m_physicalDevice, format, feature))
+            WireDescriptorFatal("texel-buffer-native-format@P7");
+        const VkDeviceSize texelSize = MG_Util::GetSizedInternalFormatSizeInBytes(internalFormat);
+        VkDeviceSize start = 0, size = 0;
+        if (texelSize == 0 || !ResolveWireRange(record.Desc.BufOffset, record.Desc.BufSize, slice.size, start, size)) return false;
+        size = std::min(size / texelSize, static_cast<VkDeviceSize>(m_wireMaxTexelElements)) * texelSize;
+        if (size == 0) return false;
+        if (start > std::numeric_limits<VkDeviceSize>::max() - slice.offset ||
+            (slice.offset + start) % m_wireTexelOffsetAlignment != 0)
+            WireDescriptorFatal("unaligned-texel-buffer-range@P7");
+        VkBufferViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO};
+        viewInfo.buffer = slice.buffer;
+        viewInfo.format = format;
+        viewInfo.offset = slice.offset + start;
+        viewInfo.range = size;
+        if (vkCreateBufferView(m_device, &viewInfo, nullptr, &out) != VK_SUCCESS || out == VK_NULL_HANDLE) return false;
+        m_frames[frameIndex].texelBufferViews.push_back(out);
+        if (storage && state.BoundShaderImages[unit].Access != kMGPipeImageAccessReadOnly)
+            m_bufferManager->MarkWireBufferGpuWritten(buffer, start, size);
+        return true;
+    }
+#endif
+
     Bool UniformManager::ResolveTexelBufferDescriptor(const MagmaProgramSource& program,
                                                       const ProgramFactory::VkProgramObject& programObj,
                                                       Uint32 binding, Uint32 frameIndex,
                                                       VkBufferView& outBufferView) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (program.IsWire()) {
-            const Int location = programObj.samplerUniformLocationByBinding[binding];
-            const Int unit = location < 0 ? 0 : program.GetUniformSamplerOrImageUnitIndex(static_cast<Uint>(location));
-            const auto& state = MG_Pipe::MGPipeApplier();
-            if (unit < 0 || static_cast<Uint32>(unit) >= MG_Pipe::kMGPipeMaxTextureUnits) return false;
-            const auto handle = state.BoundSamplerViews[unit].Texture;
-            if (!MG_Pipe::MGPipeHandleIsNull(handle)) {
-                if (handle.Slot >= state.TextureResources.size()) WireDescriptorFatal("texel-buffer-record");
-                const auto& record = state.TextureResources[handle.Slot];
-                if (!record.Live || record.Gen != handle.Gen) WireDescriptorFatal("texel-buffer-generation");
-                if (!MG_Pipe::MGPipeHandleIsNull(record.Desc.BufferForTexBuffer)) WireBufferDescriptorDebt();
-            }
-            outBufferView = AcquireUnboundTexelBufferView(VK_FORMAT_UNDEFINED,
-                programObj.samplerNumericDomainByBinding[binding], false);
-            return outBufferView != VK_NULL_HANDLE;
-        }
+        if (program.IsWire())
+            return ResolveWireTexelBufferDescriptor(program, programObj, binding, frameIndex, false, outBufferView);
 #endif
         outBufferView = VK_NULL_HANDLE;
         MOBILEGL_ASSERT(m_bufferManager != nullptr, "ResolveTexelBufferDescriptor: buffer manager is null");
@@ -1199,22 +1263,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                              Uint32 binding, Uint32 frameIndex,
                                                              VkBufferView& outBufferView) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (program.IsWire()) {
-            const Int location = programObj.samplerUniformLocationByBinding[binding];
-            const Int unit = location < 0 ? 0 : program.GetUniformSamplerOrImageUnitIndex(static_cast<Uint>(location));
-            const auto& state = MG_Pipe::MGPipeApplier();
-            if (unit < 0 || static_cast<Uint32>(unit) >= MG_Pipe::kMGPipeMaxImageUnits) return false;
-            const auto handle = state.BoundShaderImages[unit].Res;
-            if (!MG_Pipe::MGPipeHandleIsNull(handle)) {
-                if (handle.Slot >= state.TextureResources.size()) WireDescriptorFatal("texel-buffer-record");
-                const auto& record = state.TextureResources[handle.Slot];
-                if (!record.Live || record.Gen != handle.Gen) WireDescriptorFatal("texel-buffer-generation");
-                if (!MG_Pipe::MGPipeHandleIsNull(record.Desc.BufferForTexBuffer)) WireBufferDescriptorDebt();
-            }
-            outBufferView = AcquireUnboundTexelBufferView(programObj.storageImageFormatByBinding[binding],
-                programObj.samplerNumericDomainByBinding[binding], true);
-            return outBufferView != VK_NULL_HANDLE;
-        }
+        if (program.IsWire())
+            return ResolveWireTexelBufferDescriptor(program, programObj, binding, frameIndex, true, outBufferView);
 #endif
         outBufferView = VK_NULL_HANDLE;
         MOBILEGL_ASSERT(m_bufferManager != nullptr, "ResolveStorageTexelBufferDescriptor: buffer manager is null");
@@ -1387,10 +1437,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(MGB_CTX_LIVE, "ResolveStorageBufferDescriptor: GL context is null");
         MOBILEGL_ASSERT(binding < programObj.storageBlockIndexByBinding.size(),
                         "ResolveStorageBufferDescriptor: binding %u out of range", binding);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (program.IsWire() && (binding >= programObj.storageBlockIndexByBinding.size() ||
+                                binding >= programObj.storageBlockNameByBinding.size()))
+            WireDescriptorFatal("storage-buffer-reflection-binding");
+#endif
 
         const Int blockIndex = programObj.storageBlockIndexByBinding[binding];
         MOBILEGL_ASSERT(blockIndex >= 0, "ResolveStorageBufferDescriptor: no SSBO block mapped to binding %u",
                         binding);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (program.IsWire() && blockIndex < 0) WireDescriptorFatal("storage-buffer-reflection-block");
+#endif
         // An atomic counter is not an SSBO the application ever declared: glslang lowers every
         // atomic_uint onto a synthesized gl_AtomicCounterBlock_<N> storage block, where N is the
         // GL ATOMIC-COUNTER binding. That block arrives here auto-mapped to an arbitrary
@@ -1429,13 +1487,32 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (program.IsWire()) {
             const auto& state = MG_Pipe::MGPipeApplier();
-            const Uint32 cls = isAtomicCounterBlock ? 2u : 1u;
-            if (frontendBinding < state.ShaderBufferCount[cls] &&
-                !MG_Pipe::MGPipeHandleIsNull(state.BoundShaderBuffers[cls][frontendBinding].Res))
-                WireBufferDescriptorDebt();
-            const BufferSlice placeholder = m_bufferManager->AcquireUnboundStorageDescriptor();
-            if (!placeholder.IsValid()) return false;
-            outBufferInfo = {placeholder.buffer, placeholder.offset, placeholder.size};
+            const Uint32 cls = isAtomicCounterBlock ? MG_Pipe::kMGPipeShaderBufferClassAtomicCounter
+                                                   : MG_Pipe::kMGPipeShaderBufferClassShaderStorage;
+            if (frontendBinding >= MG_Pipe::kMGPipeMaxBufferBindingPoints)
+                WireDescriptorFatal("storage-buffer-binding-point");
+            // The applier retains entries outside the last partial update window. Count
+            // describes that update, not the upper bound of the complete binding table.
+            const auto& range = state.BoundShaderBuffers[cls][frontendBinding];
+            if (MG_Pipe::MGPipeHandleIsNull(range.Res)) {
+                const BufferSlice placeholder = m_bufferManager->AcquireUnboundStorageDescriptor();
+                if (!placeholder.IsValid()) return false;
+                outBufferInfo = {placeholder.buffer, placeholder.offset, placeholder.size};
+                return true;
+            }
+            BufferSlice slice{};
+            if (!m_bufferManager->AcquireWireSlice(BufferKind::ShaderStorage, range.Res, slice) || !slice.IsValid()) return false;
+            VkDeviceSize start = 0, size = 0;
+            if (!ResolveWireRange(range.Offset, range.Size, slice.size, start, size)) return false;
+            if (start > std::numeric_limits<VkDeviceSize>::max() - slice.offset ||
+                (slice.offset + start) % m_wireStorageOffsetAlignment != 0)
+                WireDescriptorFatal(isAtomicCounterBlock ? "unaligned-atomic-buffer-range@P7"
+                                                         : "unaligned-storage-buffer-range@P7");
+            if (size > m_wireMaxStorageRange) WireDescriptorFatal("storage-buffer-native-range@P7");
+            outBufferInfo = {slice.buffer, slice.offset + start, size};
+            // Shader writes stay in the canonical server VkBuffer. The event marks the
+            // client's shadow stale; neither this path nor later acquires seed it back.
+            m_bufferManager->MarkWireBufferGpuWritten(range.Res, start, size);
             return true;
         }
 #endif
@@ -2234,6 +2311,59 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Bool UniformManager::ResolveWireUniformBufferPayload(const MagmaProgramSource& program,
+            Uint32 blockIndex, Uint32 bindingPoint, UboBindResult& out) const {
+        if (bindingPoint >= MG_Pipe::kMGPipeMaxBufferBindingPoints)
+            WireDescriptorFatal("uniform-buffer-binding-point");
+        const VkDeviceSize blockSize = program.GetUBOSizeAt(blockIndex);
+        if (blockSize == 0) return false;
+        if (blockSize > m_wireMaxUniformRange) WireDescriptorFatal("uniform-block-native-range@P7");
+        const auto& range = MG_Pipe::MGPipeApplier().BoundShaderBuffers[
+            MG_Pipe::kMGPipeShaderBufferClassUniform][bindingPoint];
+        BufferSlice source{};
+        VkDeviceSize start = 0, available = 0;
+        const Bool bound = !MG_Pipe::MGPipeHandleIsNull(range.Res);
+        if (bound) {
+            if (!m_bufferManager->AcquireWireSlice(BufferKind::Uniform, range.Res, source) || !source.IsValid()) return false;
+            if (!ResolveWireRange(range.Offset, range.Size, source.size, start, available)) return false;
+            if (start > std::numeric_limits<VkDeviceSize>::max() - source.offset)
+                WireDescriptorFatal("uniform-buffer-offset-overflow");
+            const VkDeviceSize absoluteOffset = source.offset + start;
+            if (available >= blockSize && absoluteOffset % m_minDynamicOffsetAlignment == 0 &&
+                absoluteOffset <= std::numeric_limits<Uint32>::max()) {
+                out.directBindable = true;
+                out.buffer = source.buffer;
+                out.range = blockSize;
+                out.dynamicOffset = absoluteOffset;
+                return true;
+            }
+        }
+
+        // Preserve the existing short-range compatibility policy without sampling the
+        // client's shadow: zero the complete reflected block, then GPU-copy only bytes
+        // inside the GL binding range. A readback here could retire the command buffer
+        // whose value BindProgramUniformBuffers is currently holding.
+        const VkDeviceSize copied = std::min(available, blockSize);
+        if (bound && ((start & 3u) != 0 || ((source.offset + start) & 3u) != 0 || (copied & 3u) != 0))
+            WireDescriptorFatal("uniform-buffer-byte-tail@P7");
+        static thread_local Vector<Uint8> zero;
+        zero.assign(static_cast<SizeT>(blockSize), 0);
+        BufferSlice padded{};
+        if (!m_bufferManager->UploadTransient(BufferKind::Uniform, m_wireFrameIndex, zero.data(), blockSize,
+                std::max<VkDeviceSize>(4, m_minDynamicOffsetAlignment), padded) || !padded.IsValid()) return false;
+        if (bound && copied != 0 &&
+            !m_bufferManager->CopyWireBufferRangeToSlice(range.Res, start, copied, padded)) return false;
+        if (padded.offset > std::numeric_limits<Uint32>::max())
+            WireDescriptorFatal("uniform-buffer-dynamic-offset@P7");
+        out.directBindable = true;
+        out.buffer = padded.buffer;
+        out.range = blockSize;
+        out.dynamicOffset = padded.offset;
+        return true;
+    }
+#endif
+
     Bool UniformManager::ResolveUniformBufferPayload(const MagmaProgramSource& program,
                                                      const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
                                                      Uint32 arrayElement, UboBindResult& out) const {
@@ -2260,13 +2390,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return outData != nullptr && outSize > 0;
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
-        // Global uniforms above are record bytes; named UBOs retain P7's buffer boundary.
-        if (program.IsWire()) WireBufferDescriptorDebt();
-#endif
-
         MOBILEGL_ASSERT(binding < programObj.uniformBlockIndexByBinding.size(),
                         "ResolveUniformBufferPayload: UBO mapping binding %u out of range", binding);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (program.IsWire() && binding >= programObj.uniformBlockIndexByBinding.size())
+            WireDescriptorFatal("uniform-buffer-reflection-binding");
+#endif
         Int blockIndex = programObj.uniformBlockIndexByBinding[binding];
         if (arrayElement > 0) {
             const auto arrayIt = programObj.arrayedUniformBlockIndicesByBinding.find(binding);
@@ -2287,8 +2416,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(static_cast<Uint32>(blockIndex) < activeUniformBlockCount,
                         "ResolveUniformBufferPayload: uniform block index %d out of range (count=%u)", blockIndex,
                         activeUniformBlockCount);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (program.IsWire() && (blockIndex < 0 || static_cast<Uint32>(blockIndex) >= activeUniformBlockCount))
+            WireDescriptorFatal("uniform-buffer-reflection-block");
+#endif
 
         const Uint32 frontendBinding = program.GetUniformBlockBinding(static_cast<Uint32>(blockIndex));
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (program.IsWire())
+            return ResolveWireUniformBufferPayload(program, static_cast<Uint32>(blockIndex), frontendBinding, out);
+#endif
         const Uint32 uniformBindingPointCount =
             static_cast<Uint32>(MGB_CTX->GetBufferBindingPointCount(BufferTarget::Uniform));
         MOBILEGL_ASSERT(frontendBinding < uniformBindingPointCount,
@@ -2535,6 +2672,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                      Uint32& outDynamicOffset) {
         UboBindResult ubo{};
         const Bool hasPayload = ResolveUniformBufferPayload(program, programObj, binding, arrayElement, ubo);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (program.IsWire() && !hasPayload) return false;
+#endif
         MOBILEGL_ASSERT(hasPayload && (ubo.directBindable || (ubo.payload != nullptr && ubo.payloadSize > 0)),
                         "UniformDescriptorBinder::ResolveDynamicUboDescriptor failed: missing UBO payload on binding %u element %u",
                         binding, arrayElement);

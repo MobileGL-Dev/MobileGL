@@ -16,6 +16,42 @@
         std::abort();
     }
 
+    static Bool ConvertWireVertexStream(const MGPVertexAttribWire& attr,
+            VertexInputStateFactory::VertexStreamConversion conversion, const Uint8* source,
+            SizeT stride, SizeT count, Vector<Uint8>& output) {
+        using Conversion = VertexInputStateFactory::VertexStreamConversion;
+        const auto type = static_cast<DataType>(attr.Type);
+        const SizeT elementBytes = VertexInputStateFactory::GetAttributeByteSize(type, attr.Size, attr.IsBgra);
+        if (conversion == Conversion::Repack) {
+            output.resize(count * elementBytes);
+            for (SizeT i = 0; i < count; ++i)
+                Memcpy(output.data() + i * elementBytes, source + i * stride, elementBytes);
+            return true;
+        }
+        output.resize(count * attr.Size * sizeof(Float));
+        const auto convert = [&]<typename T>() {
+            for (SizeT i = 0; i < count; ++i) {
+                for (SizeT component = 0; component < attr.Size; ++component) {
+                    T value{};
+                    Memcpy(&value, source + i * stride + component * sizeof(T), sizeof(T));
+                    const Float converted = static_cast<Float>(value);
+                    Memcpy(output.data() + (i * attr.Size + component) * sizeof(Float), &converted, sizeof(Float));
+                }
+            }
+            return true;
+        };
+        switch (type) {
+        case DataType::Float64: return convert.template operator()<Double>();
+        case DataType::Int8: return convert.template operator()<Int8>();
+        case DataType::Uint8: return convert.template operator()<Uint8>();
+        case DataType::Int16: return convert.template operator()<Int16>();
+        case DataType::Uint16: return convert.template operator()<Uint16>();
+        case DataType::Int32: return convert.template operator()<Int32>();
+        case DataType::Uint32: return convert.template operator()<Uint32>();
+        default: return false;
+        }
+    }
+
     void VulkanRenderer::DestroyWireDrawPass() {
         // FlushPendingCommands only submits. These objects may still be referenced by
         // that submission, so retire this temporary pass after the queue completes.
@@ -30,17 +66,17 @@
         auto& state = MG_Pipe::MGPipeApplier();
         const auto program = WireProgramSource(state.BoundShaderCso);
         if (!program.GetLinkStatus() || !program.GetSpirvStatus()) return false;
-        if (((aspects & DrawSetupAspect::IndexBuffer) && (!indices || !indices->forceClientMemory)) ||
-            aspects & DrawSetupAspect::IndirectDrawBuffer ||
-            MGB_CTX->IsTransformFeedbackActive()) WireBufferLegacyFatal();
+        if (aspects & DrawSetupAspect::IndirectDrawBuffer || MGB_CTX->IsTransformFeedbackActive())
+            WireBufferLegacyFatal();
         const auto* fbo = state.DrawFramebuffer();
         if (!fbo) MagmaWireFatal("draw-framebuffer-record");
         if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("draw-flush");
         DestroyWireDrawPass();
 
-        ProgramFactory::CompileOptionFlags flags = GetShaderTransformFlags(m_swapchainObject.GetPreTransform());
+        ProgramFactory::CompileOptionFlags flags =
+            ProgramFactory::CompileOptionFlags(GetBaseTransformFlagsRaw(fbo->IsDefault));
         const auto* programObject = &m_programFactory->GetOrCreateProgram(program, flags);
-        if (programObject->readsBaseVertexBuiltin) {
+        if (!(aspects & DrawSetupAspect::IndexBuffer) && programObject->readsBaseVertexBuiltin) {
             flags |= ProgramFactory::CompileOptionBit::ZeroBaseVertex;
             programObject = &m_programFactory->GetOrCreateProgram(program, flags);
         }
@@ -48,13 +84,99 @@
         const auto& programObj = *programObject;
         const auto vaoHandle = state.BoundVertexElements;
         if (MG_Pipe::MGPipeHandleIsNull(vaoHandle)) MagmaWireFatal("vertex-elements-record");
-        if (!MG_Pipe::MGPipeHandleIsNull(vaoHandle)) {
-            if (vaoHandle.Slot >= state.VertexElementsCsos.size()) MagmaWireFatal("vertex-elements-record");
-            const auto& vao = state.VertexElementsCsos[vaoHandle.Slot];
-            if (!vao.Live || vao.Gen != vaoHandle.Gen) MagmaWireFatal("vertex-elements-generation");
-            for (Uint32 i = 0; i < vao.AttributeCount; ++i)
-                if (vao.Attributes[i].Enabled && (programObj.activeVertexInputLocationMask & (1u << i)))
-                    WireBufferLegacyFatal();
+        if (vaoHandle.Slot >= state.VertexElementsCsos.size()) MagmaWireFatal("vertex-elements-record");
+        const auto& vao = state.VertexElementsCsos[vaoHandle.Slot];
+        if (!vao.Live || vao.Gen != vaoHandle.Gen) MagmaWireFatal("vertex-elements-generation");
+        VertexInputStateFactory::BackendVertexInputState input{};
+        if (!m_vertexInputStateFactory->BuildWireVertexInput(vao, state,
+                programObj.activeVertexInputLocationMask, input)) MagmaWireFatal("vertex-layout@P7");
+        Vector<BufferSlice> vertexSlices(input.bindings.size());
+        for (SizeT binding = 0; binding < input.bindings.size(); ++binding) {
+            const Uint32 location = input.bindingAttributeLocations[binding];
+            const auto& attr = vao.Attributes[location];
+            const auto& resource = state.VertexBuffers[location];
+            if (MG_Pipe::MGPipeHandleIsNull(resource.Res)) MagmaWireFatal("client-vertex-array@P8");
+            BufferSlice slice{};
+            if (!m_bufferManager.AcquireWireSlice(BufferKind::Vertex, resource.Res, slice))
+                MagmaWireFatal("vertex-buffer-resource");
+            const VkDeviceSize offset = input.bindingBaseOffsets[binding];
+            const auto type = static_cast<DataType>(attr.Type);
+            const SizeT elementSize = VertexInputStateFactory::GetAttributeByteSize(type, attr.Size, attr.IsBgra);
+            if (offset > slice.size || elementSize > slice.size - offset) return false;
+            const auto conversion = input.bindingConversions[binding];
+            if (conversion != VertexInputStateFactory::VertexStreamConversion::None) {
+                const SizeT stride = static_cast<SizeT>(attr.Stride);
+                SizeT count = stride ? 1 + (static_cast<SizeT>(slice.size - offset) - elementSize) / stride : 1;
+                // Direct non-indexed draws bound the conversion; indexed/multi-draw may
+                // name arbitrary vertices, so preserve the entire valid source stream.
+                if (stride && !(aspects & DrawSetupAspect::IndexBuffer) && !resource.Divisor)
+                    count = std::min<SizeT>(count, static_cast<SizeT>(drawParams.firstVertex) + drawParams.vertexCount);
+                if (!count) return false;
+                Vector<Uint8> source((count - 1) * stride + elementSize);
+                if (!m_bufferManager.ReadWireBuffer(resource.Res, offset, source.size(), source.data())) return false;
+                Vector<Uint8> converted;
+                if (!ConvertWireVertexStream(attr, conversion, source.data(), stride, count, converted))
+                    MagmaWireFatal("vertex-format-conversion@P7");
+                if (!m_bufferManager.UploadTransient(BufferKind::Vertex, m_frameContext.GetCurrentFrameIndex(),
+                        converted.data(), converted.size(), 16, vertexSlices[binding])) return false;
+            } else {
+                slice.offset += offset;
+                slice.size -= offset;
+                vertexSlices[binding] = slice;
+            }
+        }
+
+        BufferSlice indexSlice{};
+        VkIndexType indexType = VK_INDEX_TYPE_MAX_ENUM;
+        if (aspects & DrawSetupAspect::IndexBuffer) {
+            if (!indices) return false;
+            const SizeT width = MG_Util::GetGLTypeSize(indices->indexType);
+            if (width != 1 && width != 2 && width != 4) return false;
+            indexType = width == 4 ? VK_INDEX_TYPE_UINT32 : width == 2 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT8;
+            const auto& restart = MGB_CTX->GetRenderStateParameters();
+            const Uint32 fixed = MG_Util::FixedRestartIndexForGLType(indices->indexType);
+            const Bool replaceRestart = restart.PrimitiveRestartEnabled && !restart.PrimitiveRestartFixedIndexEnabled &&
+                restart.PrimitiveRestartIndex < fixed;
+            const Bool expandByte = width == 1 && !m_indexTypeUint8ExtensionEnabled;
+            const Bool cpuIndices = indices->forceClientMemory || MG_Pipe::MGPipeHandleIsNull(state.IndexBuffer.Res);
+            Vector<Uint8> copied;
+            const void* bytes = nullptr;
+            if (cpuIndices) bytes = reinterpret_cast<const void*>(indices->indexByteOffset);
+            else {
+                if (!m_bufferManager.AcquireWireSlice(BufferKind::Index, state.IndexBuffer.Res, indexSlice))
+                    MagmaWireFatal("index-buffer-resource");
+                const Uint64 offset = state.IndexBuffer.Offset + indices->indexByteOffset;
+                if (offset < state.IndexBuffer.Offset || offset > indexSlice.size ||
+                    indices->indexByteSize > indexSlice.size - offset) return false;
+                if (replaceRestart || expandByte || offset % width) {
+                    copied.resize(indices->indexByteSize);
+                    if (!m_bufferManager.ReadWireBuffer(state.IndexBuffer.Res, offset, copied.size(), copied.data())) return false;
+                    bytes = copied.data();
+                }
+                indexSlice.offset += offset;
+                indexSlice.size = indices->indexByteSize;
+            }
+            if (bytes) {
+                Vector<Uint8> rewritten;
+                SizeT uploadSize = indices->indexByteSize;
+                if (replaceRestart || expandByte) {
+                    const SizeT outWidth = expandByte ? 2 : width;
+                    rewritten.resize(uploadSize / width * outWidth);
+                    for (SizeT i = 0; i < uploadSize / width; ++i) {
+                        Uint32 value = 0;
+                        Memcpy(&value, static_cast<const Uint8*>(bytes) + i * width, width);
+                        if (replaceRestart && value == restart.PrimitiveRestartIndex) value = fixed;
+                        if (expandByte && ResolvePrimitiveRestartEnable(aspects, indices) && value == fixed) value = 0xffffu;
+                        Memcpy(rewritten.data() + i * outWidth, &value, outWidth);
+                    }
+                    bytes = rewritten.data();
+                    uploadSize = rewritten.size();
+                    if (expandByte) indexType = VK_INDEX_TYPE_UINT16;
+                }
+                if (!m_bufferManager.UploadTransient(BufferKind::Index, m_frameContext.GetCurrentFrameIndex(),
+                        bytes, uploadSize, 16, indexSlice)) return false;
+            }
+            if (!indexSlice.IsValid()) return false;
         }
 
         if (!frame.isCommandRecording) m_frameContext.BeginCommandRecording();
@@ -150,12 +272,15 @@
         pass.extent = {static_cast<Int>(extent.width), static_cast<Int>(extent.height)};
         pass.layers = layers;
         pass.hash = pass.compatibilityHash = XXH64(colors.data(), colors.size() * sizeof(colors[0]), passHash);
-        VertexInputStateFactory::BackendVertexInputState input{};
-        const auto pipeline = GetOrCreatePipelineWithInput(mode, program, programObj, flags, input, pass, false);
+        const auto pipeline = GetOrCreatePipelineWithInput(mode, program, programObj, flags, input, pass,
+            ResolvePrimitiveRestartEnable(aspects, indices));
         if (pipeline == VK_NULL_HANDLE) return false;
-        Uint32 binding = 0;
+        for (Uint32 i = 0; i < vertexSlices.size(); ++i)
+            vkCmdBindVertexBuffers(frame.commandBuffer, i, 1, &vertexSlices[i].buffer, &vertexSlices[i].offset);
+        Uint32 binding = static_cast<Uint32>(vertexSlices.size());
         for (Uint32 location = 0; location < kMaxVertexAttribs; ++location) {
-            if (!(programObj.activeVertexInputLocationMask & (1u << location))) continue;
+            if (!(programObj.activeVertexInputLocationMask & (1u << location)) ||
+                (input.attributeLocationMask & (1u << location))) continue;
             VkFormat format = VK_FORMAT_UNDEFINED;
             const void* data = nullptr;
             VkDeviceSize size = 0;
@@ -166,19 +291,12 @@
                     data, size, 16, slice)) return false;
             vkCmdBindVertexBuffers(frame.commandBuffer, binding++, 1, &slice.buffer, &slice.offset);
         }
-        if (indices) {
-            BufferSlice slice{};
-            if (!m_bufferManager.UploadTransient(BufferKind::Index, m_frameContext.GetCurrentFrameIndex(),
-                    reinterpret_cast<const void*>(indices->indexByteOffset), indices->indexByteSize, 16, slice)) return false;
-            const VkIndexType type = indices->indexType == GL_UNSIGNED_INT ? VK_INDEX_TYPE_UINT32 :
-                indices->indexType == GL_UNSIGNED_SHORT ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT8;
-            vkCmdBindIndexBuffer(frame.commandBuffer, slice.buffer, slice.offset, type);
-        }
+        if (indexSlice.IsValid()) vkCmdBindIndexBuffer(frame.commandBuffer, indexSlice.buffer, indexSlice.offset, indexType);
         if (!VkRenderPassManager::BeginRenderPass(frame.commandBuffer, pass)) return false;
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
         ApplyDynamicDrawStateTail(frame, pass.extent, fbo->IsDefault,
                                  ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin));
-        (void)drawParams;
+        if (MG_Util::PipeStats::Enabled()) MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::Draws, 1);
         return true;
     }
 

@@ -282,6 +282,68 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return cache;
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The verb's handles identify server stores. Readback orders GPU-produced
+        // command/count bytes before CPU tier expansion; never inspect a client binding.
+        void DrawWireIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount,
+                              GLsizei stride, Bool indexed, Bool counted = false, GLintptr countOffset = 0) {
+            if (drawcount <= 0) return;
+            auto& buffers = pVulkanRenderer->GetWireBufferManager();
+            const auto& state = MG_Pipe::MGPipeApplier();
+            if (counted) {
+                Uint32 count = 0;
+                if (countOffset < 0 || !buffers.ReadWireBuffer(state.VerbIndirectParameterBuffer,
+                        static_cast<Uint64>(countOffset), sizeof(count), &count)) return;
+                drawcount = static_cast<GLsizei>(std::min<Uint32>(count, static_cast<Uint32>(drawcount)));
+                if (!drawcount) return;
+            }
+            const SizeT commandSize = indexed ? sizeof(DrawElementsIndirectCommand) : sizeof(DrawArraysIndirectCommand);
+            if (stride == 0) stride = static_cast<GLsizei>(commandSize);
+            if (stride < static_cast<GLsizei>(commandSize)) return;
+            const Uint64 byteCount = static_cast<Uint64>(stride) * (drawcount - 1) + commandSize;
+            if (byteCount > std::numeric_limits<SizeT>::max()) return;
+            Vector<Uint8> bytes(static_cast<SizeT>(byteCount));
+            if (!buffers.ReadWireBuffer(state.VerbIndirectBuffer, reinterpret_cast<Uint64>(indirect),
+                    byteCount, bytes.data())) return;
+            if (indexed) {
+                const SizeT indexSize = MG_Util::GetGLTypeSize(type);
+                if (indexSize != 1 && indexSize != 2 && indexSize != 4) return;
+                Vector<DrawIndexedCmdParam> params(static_cast<SizeT>(drawcount));
+                MultiDrawIndexedCmd payload{};
+                payload.mode = mode;
+                payload.indexBufferView.indexType = type;
+                payload.drawCount = static_cast<Uint32>(drawcount);
+                payload.pParams = params.data();
+                for (GLsizei i = 0; i < drawcount; ++i) {
+                    DrawElementsIndirectCommand command{};
+                    Memcpy(&command, bytes.data() + static_cast<SizeT>(i) * stride, sizeof(command));
+                    params[i] = {command.count, command.instanceCount, command.firstIndex,
+                                 command.baseVertex, command.baseInstance};
+                    const Uint64 end = (static_cast<Uint64>(command.firstIndex) + command.count) * indexSize;
+                    if (end > std::numeric_limits<SizeT>::max()) return;
+                    payload.indexBufferView.indexByteSize = std::max<SizeT>(payload.indexBufferView.indexByteSize,
+                                                                          static_cast<SizeT>(end));
+                }
+                pVulkanRenderer->MultiDrawElements(payload);
+            } else {
+                Vector<DrawCmdParam> params(static_cast<SizeT>(drawcount));
+                for (GLsizei i = 0; i < drawcount; ++i) {
+                    DrawArraysIndirectCommand command{};
+                    Memcpy(&command, bytes.data() + static_cast<SizeT>(i) * stride, sizeof(command));
+                    params[i].vertexCount = command.count;
+                    params[i].instanceCount = command.instanceCount;
+                    params[i].firstVertex = command.first;
+                    params[i].firstInstance = command.baseInstance;
+                }
+                MultiDrawCmd payload{};
+                payload.mode = mode;
+                payload.drawCount = static_cast<Uint32>(drawcount);
+                payload.pParams = params.data();
+                pVulkanRenderer->MultiDrawArrays(payload);
+            }
+        }
+#endif
+
         MG_State::GLState::ProgramObject* TryGetDirectVulkanProgram(GLuint program) {
             if (!MGB_CTX->ValidateProgramName(program)) {
                 return nullptr;
@@ -402,7 +464,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        RejectWireLegacyBuffer();
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            DrawWireIndirect(mode, type, indirect, drawcount, stride, true);
+            return;
+        }
 #endif
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawElementsIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MGB_CTX_LIVE, "DirectVulkan::MultiDrawElementsIndirect called with null GL context");
@@ -410,7 +475,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
     void MultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        RejectWireLegacyBuffer();
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            DrawWireIndirect(mode, 0, indirect, drawcount, stride, false);
+            return;
+        }
 #endif
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawArraysIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MGB_CTX_LIVE, "DirectVulkan::MultiDrawArraysIndirect called with null GL context");
@@ -464,7 +532,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void MultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect, GLintptr drawcount,
                                         GLsizei maxdrawcount, GLsizei stride) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        RejectWireLegacyBuffer();
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            DrawWireIndirect(mode, type, indirect, maxdrawcount, stride, true, true, drawcount);
+            return;
+        }
 #endif
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawElementsIndirectCount called with null VulkanRenderer");
         MOBILEGL_ASSERT(MGB_CTX_LIVE, "DirectVulkan::MultiDrawElementsIndirectCount called with null GL context");
@@ -473,7 +544,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void MultiDrawArraysIndirectCount(GLenum mode, const void* indirect, GLintptr drawcount,
                                       GLsizei maxdrawcount, GLsizei stride) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        RejectWireLegacyBuffer();
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            DrawWireIndirect(mode, 0, indirect, maxdrawcount, stride, false, true, drawcount);
+            return;
+        }
 #endif
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawArraysIndirectCount called with null VulkanRenderer");
         MOBILEGL_ASSERT(MGB_CTX_LIVE, "DirectVulkan::MultiDrawArraysIndirectCount called with null GL context");
@@ -548,7 +622,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
     void DrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        RejectWireLegacyBuffer();
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            DrawWireIndirect(mode, type, indirect, 1, 0, true);
+            return;
+        }
 #endif
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawElementsIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MGB_CTX_LIVE, "DirectVulkan::DrawElementsIndirect called with null GL context");
@@ -610,7 +687,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
     void DrawArraysIndirect(GLenum mode, const void* indirect) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        RejectWireLegacyBuffer();
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            DrawWireIndirect(mode, 0, indirect, 1, 0, false);
+            return;
+        }
 #endif
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawArraysIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MGB_CTX_LIVE, "DirectVulkan::DrawArraysIndirect called with null GL context");
@@ -681,7 +761,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void DispatchComputeIndirect(GLintptr indirect) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        RejectWireLegacyBuffer();
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            Uint32 groups[3]{};
+            if (indirect >= 0 && pVulkanRenderer->GetWireBufferManager().ReadWireBuffer(
+                    MG_Pipe::MGPipeApplier().VerbDispatchIndirectBuffer,
+                    static_cast<Uint64>(indirect), sizeof(groups), groups))
+                pVulkanRenderer->DispatchCompute(groups[0], groups[1], groups[2]);
+            return;
+        }
 #endif
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DispatchComputeIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MGB_CTX_LIVE, "DirectVulkan::DispatchComputeIndirect called with null GL context");
@@ -966,9 +1053,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // vkCmdDrawIndexed all carry natively.
     static void MultiDrawElementsImpl(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
                                       GLsizei drawcount, const GLint* basevertex) {
-#if MOBILEGL_BUILD_DISAGGREGATED
-        RejectWireLegacyBuffer();
-#endif
+
         if (drawcount <= 0) {
             return;
         }
@@ -983,8 +1068,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // MultiDrawIndexedCmd left the client-memory shape addressing a view whose byte
         // offset is a hardcoded 0, so UploadAndBindIndexBuffer saw a null client pointer,
         // declined the whole batch and painted nothing.)
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const Bool noIndexBuffer = MG_Config::Transport != MG_Config::TransportMode::Monolith
+            ? MG_Pipe::MGPipeHandleIsNull(MG_Pipe::MGPipeApplier().IndexBuffer.Res)
+            : MGB_CTX->GetBoundVertexArray()->GetIndexBufferBindingSlot().GetBoundObject() == nullptr;
+        if (noIndexBuffer) {
+#else
         const auto& vao = *MGB_CTX->GetBoundVertexArray();
         if (vao.GetIndexBufferBindingSlot().GetBoundObject() == nullptr) {
+#endif
             for (GLsizei i = 0; i < drawcount; ++i) {
                 if (count[i] <= 0) {
                     continue;

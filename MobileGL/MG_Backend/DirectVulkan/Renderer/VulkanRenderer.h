@@ -141,6 +141,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // IBufferCopyCommandProvider: recording command buffer, outside any
         // render pass, for immediate staged buffer copies.
         VkCommandBuffer AcquireBufferCopyCommandBuffer() override;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        VkBufferManager& GetWireBufferManager() { return m_bufferManager; }
+#endif
 
         // FrameContext::IRecordingObserver: prepares the frame's timer-query
         // pool (harvest + reset) right after the frame command buffer begins

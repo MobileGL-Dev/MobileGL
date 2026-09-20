@@ -365,6 +365,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void BackendObject_DirectVulkan::Initialize() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        VkBufferManager::RegisterWireResourceOps();
+#endif
         m_initialized = true;
     }
 
