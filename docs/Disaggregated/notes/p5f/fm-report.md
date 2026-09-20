@@ -1,7 +1,7 @@
 # P5f fm — Magma 跨角色读写退役
 
 > 分支 `p5f/fm`；Windows worktree `MobileGL-p5f-fm`；WSL gate tree `~/w7/p5f-fm`。
-> 代码 checkpoint：`b394a09f`。实现与范围结论已核对；§5 的最后一轮数字由门禁执行者补齐。
+> 已验证代码头：`552ade5b`；最后一轮运行与棘轮结果见 §5。后续本报告与注释提交不改变执行路径。
 > 本报告只裁定 fm；不宣布 P5f 总出口完成。
 
 ## 1. 真实可达性修正
@@ -118,29 +118,44 @@ R11F_G11F_B10F 的 mip blit 是已实测的原有功能债：f1 基线真实 inp
 
 ## 5. 门与 red-once
 
-验证数字将在最后一轮运行后补齐。已完成的独立证据：
+独立包的验证在 `~/w7/p5f-fm @ 552ade5b` 完成，日志在 `~/w7/p5f-logs/`。两份 red-once 证据均为真实执行：
 
 - 无 buffer ClipDistance：baseline 共享块绿 / fm 双块 strict 绿。
 - Program source 单测 3/3；临时退回 archive 旧 binding 值，`MagmaProgramSourceTest.ServerBindingTailsReplaceLinkTimeDefaults` 真红（旧值 9 分别不等于记录值 3/6）；健康源码 3/3 绿（`fm-program-source-tests.log` / `fm-program-source-red-once.log`）。这份证据为独立临时 object/executable 执行；最终集成 unit 门仍单列核对。
 - `StagedTextureProductionTest.HooklessTextureConsumerOwnsBytesAndScopedStorageLifetime`：旧 metadata-only 条件吞 named null-data mip，level-1 extent 为 0 导致真红；修复后 1/1 绿（集成者 `int-fm-staging-red-once.log` / `int-fm-staging-green.log`）。
-- G1 pull 已测 checkpoint：`.text` 10806051 → 10806051；defined symbols 27815 → 27815；0 added / 0 removed / 0 resized / 0 renamed（`fm-g1-final.log`）。最后新增代码后的确认由下表更新。
-- flavours 已测 checkpoint：pull / push 生效宏与构建通过；独立 unit 首轮 2266/2266、0 failed（10 个宏/平台基线 skip；该次尚不含后来加入的 caps case）。
-- generator check/self-test、include closure 已绿；doc citations 只有与 f1 相同的两处既有 basename 歧义。
 
-最终门记录（门禁执行者填入最终头与对应日志，不从上述 checkpoint 推算）：
+最终门记录：
 
 | 门 | 最终结果 |
 |---|---|
-| 最终代码头 / build | 待最后一轮结果 |
-| unit / integration-split | 待最后一轮结果 |
-| Magma 双块 + strict | 待最后一轮结果；新 sampler/uniform、compute image-store 场景也必须实际执行 |
-| 双块 Fatal 棘轮 | 待集成复测：fm 要退役 `GetFramebufferBindingSlot@Clear`；独立 fm 的其它 Espryt 首阻塞仍归 fe，不追加新预期对 |
-| integration-gpu | 待集成门结果 |
-| pull / push / G1 / G2 / G14 | 待最后一轮确认 |
-| packed-format known-red | 待最后一轮精确 marker 核对；不是 skip，也不是双块字段 Fatal |
+| 代码 / build | `552ade5b`，split build rc=0。|
+| unit | **2267/2267，0 failed**；10 个基线平台/宏 skip（`fm-unit-final.log`）。|
+| integration-split，旋钮关 | **179/179，0 failed**；4 个既有专属车道 skip（`fm-isplit.log`）。|
+| strict，旋钮关 | **179/179，Fatal=0**，6 ordinary + 1 escalated = 7 对；双向棘轮通过（`fm-strict-final.log`）。|
+| Magma 双块 + strict | **31 条，29 PASS + 2 既有 driver-capability skip，0 failed**。无 buffer sampler/uniform、compute imageStore（含 ignored Layer=7）、view-only STORAGE 升级、sRGB/1D、VBO 具名拒绝都实际执行通过（`fm-magma-final.log`）。|
+| 双块 Fatal 棘轮，独立 fm | **210 条：51 PASS + 6 skip + 153 具名红**；四对首阻塞，zero Admitted、零无名崩溃，双向棘轮通过（`fm-dualblock-final.log`）。这是尚未合 fe 的包树，不是集成树全绿结论。|
+| packed-format known-red | 实际 1 条 failure、0 skip，私有日志精确 `Magma:mipmap-native-format@P7`；同 CI 的 JUnit + marker 核对通过（`fm-known-red.xml` / `fm-known-red.log`）。|
+| pull / push / G1 | 最终头两 flavour 生效宏正确且构建成功；G1 带两项 fail-on 硬门 rc=0。`.text` 10806051 → 10806051，defined symbols 27815 → 27815，0 added / removed / resized / renamed（`fm-g1-final.log`）。|
+| generators / include closure | 全部 check/self-test 通过（12/13/27 个生成器阴性控制），include closure 4 probes、0 skipped、0 problems。doc citations 仍只有 f1 已记的两处 basename 歧义（`fm-gens.log`）。|
+| G2 / G14 | 公共入口 catalogue 未改；旧注册名保留。新增 Magma 专属主车道、known-red 和 5 个 unit cases；完整集成名集合核对由集成者执行。|
+| integration-gpu / f1 negative control | 不在独立 fm 重复跑整阶段门；集成者在 fc + fe + fm 树执行并记录。|
+
+双块棘轮只减两对：`GetFramebufferBindingSlot@Clear` 随 Magma framebuffer 路径退役；
+`GetTextureObject@CopyImageSubData` 随 shared fe/fm endpoint-handle seam 退役，那 6 个 Espryt
+case 前进到仍有的 `GetFramebufferBindingSlot@ReadPixels`，该对条目数 132 → 138。
+其余三对是 `GetTransformFeedbackProgram@DrawArrays`（11）、
+`GetTextureUnitObject@CopyTexImage2D`（2）、`ValidateProgramName@ShaderStorageBlockBinding`（2）。
+没有增加预期对。strict 删 shared CopyImage 对，并清理 f1 已独立复现的两条 baseline-stale
+`GetBoundVertexArray@DrawArrays` / `GetBufferBindingSlot@DrawArrays`；实测只剩上述七对。
+
+sampler-view 请求 STORAGE usage 时会在 native root 上保留用途、升级并复制已有 GPU 内容，
+不伪造 client root descriptor 的 BindMask。descriptor 先于 framebuffer view 解析，避免
+同一 draw 的两种用途引用升级前后的不同 image。`ComputeImageStoreThroughViewPreservesOtherRootLayer`
+先建立无 STORAGE 的 root image，再只绑定 layer-1 view，验证新层绿、原 layer-0 红，真实通过。
 
 strict、双块与 gpu 会覆盖同一测试的私有日志，串行运行并保存各自摘要；后跑车道的日志
 不能拿来替前一车道补证。新增 scenario 名集合保留既有测试，known-red 专门车道也必须实际
 执行并验证自己的失败原因，避免通过移标签隐藏回归。
 
-设备门未执行：当前没有 Redmi `2f7cbe2e`；该项由阶段收口记录，不能由 host lavapipe 结果代替。
+设备门未执行：没有已授权的 Redmi `2f7cbe2e`；集成者枚举只见另一台 unauthorized 设备。
+该项由阶段收口记录，不能由 host lavapipe 结果代替。
