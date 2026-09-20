@@ -1509,6 +1509,11 @@ jobs:
           python3 scripts/ci/magma_runahead_checks.py validation --build-dir build-split \
             --out "${RUNNER_TEMP}/magma-runahead-syncval" --execute
 
+      - name: Magma cached views and framebuffers pass Vulkan synchronization validation
+        run: |
+          python3 scripts/ci/magma_cache_checks.py --build-dir build-split \
+            --out "${RUNNER_TEMP}/magma-cache-syncval" --execute
+
       - name: Upload Magma run-ahead control and validation evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -1517,6 +1522,7 @@ jobs:
           path: |
             ${{ runner.temp }}/magma-runahead-negative
             ${{ runner.temp }}/magma-runahead-syncval
+            ${{ runner.temp }}/magma-cache-syncval
           if-no-files-found: ignore
 
       - name: Magma P7 native mip format debt stays a named refusal
