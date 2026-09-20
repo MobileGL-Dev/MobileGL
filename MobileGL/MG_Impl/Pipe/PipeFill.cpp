@@ -2555,50 +2555,12 @@ namespace MobileGL::MG_Pipe {
                           kMGPipeWiredBufferBindingSubsystem == kMGPipeSubsystemBufferBindings,
                       "ShaderBufferEmit.h's wired constant must be 0 or the binding-point bit");
 
-        // A field an emitted call supplies COMPLETELY, so the residual fill may stop pulling
-        // it. Two rows of Coverage.def's emitted list do not qualify and each has its reason
-        // recorded here rather than a silent absence:
-        //
-        //   GetPixelStoreParameters is BOTH halves of the pixel store (m_pixelStore[0] pack
-        //     and [1] unpack) and set_pixel_pack_state deliberately carries only PACK
-        //     (ARCHITECTURE.md 4.6 D5, MGPipeTypes.h). The unpack half has no carrier at all,
-        //     so the field keeps being pulled and the verify comparator keeps proving it.
-        //
-        //   GetBoundVertexArray is P3a's row, and Coverage.def asks for the decision to be
-        //     taken HERE, deliberately, rather than inherited from the row's presence. THE
-        //     ANSWER IS NO, and it is not a matter of degree: the field's storage is a
-        //     SharedPtr<VertexArrayObject> - a frontend heap reference - and the call that
-        //     supplies it, bind_vertex_elements, carries an eight-byte {slot, gen} handle
-        //     and nothing else. The applier stores that handle in
-        //     MGPipeApplierState::BoundVertexElements; it has no way to produce the pointer,
-        //     and P3a deliberately does not give it one (a payload never contains a pointer,
-        //     and the whole point of the conversion is that the server stops holding
-        //     frontend references). Skipping the pull would leave m_boundVertexArray null on
-        //     every draw of every push build - which is not a subtle staleness, it is every
-        //     backend read of the bound VAO reading nothing.
-        //
-        //     So the row is EMITTED-AND-STILL-PULLED, exactly like GetPixelStoreParameters:
-        //     the call goes out because the server needs the format, and the field keeps
-        //     coming through the residual fill because the mirror is a pointer only the
-        //     client can hold. What retires the pull is not a better applier - it is P8,
-        //     where the backend stops reading a frontend VAO at all.
-        //   P4a's SIX ROWS ARE ALL FALSE, and five of them for GetBoundVertexArray's exact
-        //     reason: the field's storage is a frontend heap reference - a
-        //     BindingSlot<FramebufferObject>, an ImageTextureBinding, a TextureUnit, two
-        //     SharedPtr<ProgramObject> - and the calls that supply them carry eight-byte
-        //     {slot, gen} handles and fully resolved descriptors. The applier has no way to
-        //     produce a pointer and P4a deliberately does not give it one: a payload never
-        //     contains a pointer, and the whole point of the conversion is that the server
-        //     stops holding frontend references. Skipping the pull would leave those mirrors
-        //     null on every draw of every push build. What retires them is not a better
-        //     applier, it is the phase where the backend stops reading a frontend object.
-        //
-        //     GetMaxTouchedTextureUnit was the sixth and its argument was different - a plain
-        //     Int whose carrier (set_sampler_views' Count) is hash-suppressed while the
-        //     high-water mark still moves on a redundant re-bind. P5c rv RETIRED it from this
-        //     list (CONTRACT-P5C.md §5.3): set_context_values carries the mark as a VALUE of
-        //     its own, whole-record suppressed, so the lag the suppressor could introduce is
-        //     gone and the derivation's RECORD_SUPPLIED answer is honest.
+        // Does the record supply this exact getter's representation? P5f consumers now
+        // read handle/range records directly, while the old pointer getters are FATAL on
+        // the server. A handle is still not a SharedPtr/client table base, so these false
+        // arms remain: otherwise the ownership generator would misclassify the retired
+        // getters as RECORD_SUPPLIED. Monolith still fills its original pointer mirrors.
+        // PixelStoreParameters has two halves and only PACK is supplied.
         constexpr Bool EmittedCallSuppliesTheWholeField(MGPipeInputField field) {
             switch (field) {
             case MGPipeInputField::GetPixelStoreParameters:
@@ -2608,12 +2570,8 @@ namespace MobileGL::MG_Pipe {
             case MGPipeInputField::GetTextureUnitObject:
             case MGPipeInputField::GetProgramForDraw:
             case MGPipeInputField::GetProgramForDispatch:
-            // P5e (CONTRACT-P5E.md §5.6): the same answer for the same reason. The field is
-            // four raw bases into the frontend's binding-point table and set_shader_buffers
-            // carries resolved {handle, offset, size} ranges; the applier cannot produce a
-            // pointer, so skipping the pull would leave the mirror null on every draw of every
-            // push build. What retires it is the four Espryt consumers reading the applier's
-            // BoundShaderBuffers, not this row.
+            // Indexed binding points also have a different representation: ranges on
+            // the server, raw client table bases in the legacy getter.
             case MGPipeInputField::GetBufferBindingPoint:
                 return false;
             default:

@@ -435,7 +435,11 @@ namespace MobileGL::MG_Pipe {
         // PipeInputs.h's F-class block), so freshness can never reach them and neither can the
         // stamp's withdrawal. This is the only thing that puts them in `rsp`.
         if (!gPipeInputs.ServerStampedVerb()) return;
-        CountBarrierPull(field, gPipeInputs.CurrentVerb());
+        const auto ownership = MGPipeFieldOwnershipOf(field);
+        if (ownership == MGPipeFieldOwnership::kFatal)
+            MGPipeInputPoisonFatalForVerb(field, gPipeInputs.CurrentVerb());
+        if (ownership == MGPipeFieldOwnership::kBarrierPulled)
+            CountBarrierPull(field, gPipeInputs.CurrentVerb());
     }
 #endif // MOBILEGL_BUILD_DISAGGREGATED
 

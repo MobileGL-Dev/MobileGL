@@ -6,201 +6,57 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The hand-maintained half of TABLE 2 (CONTRACT-P5.md section 3, R-7): where every
-// PipeInputs field's value comes from once the backend is a server.
+// P5f exit classification. This table describes SERVER reads, not monolith storage.
+// RECORD_SUPPLIED is still derived from Coverage.def minus the whole-field refusal set.
+// A handle record does not supply a legacy pointer-valued getter: those getters are FATAL,
+// while their migrated consumers read the server record directly. Never relabel a pointer
+// RECORD_SUPPLIED merely to make the debt count zero.
 //
-// scripts/gen_pipe_field_ownership.py joins this file against the DERIVED half and writes
-// generated/PipeFieldOwnership.inc. CI runs `--check` and `--self-test` beside gen_pipe.py's.
+// APPLIER_DERIVED accessors answer server state. FATAL accessors must abort on any server
+// read, including barriered/escalated records and non-strict/shared-block configurations.
+// BARRIER_PULLED remains a schema class so generator controls can test debt admission,
+// but no production row may use it after P5f. Monolith getter/fill behavior is unchanged.
 //
-// THE FOUR CLASSES (CONTRACT-P5.md section 3):
-//
-//   RECORD_SUPPLIED  a pushed record supplies the WHOLE field, so the server never needs
-//                    the client for it. THIS CLASS IS DERIVED, NOT LISTED: it is
-//                    kMGPipeFieldEmittedBy != kNone (Coverage.def's MGP_COVERAGE_EMITTED_LIST)
-//                    minus the fields EmittedCallSuppliesTheWholeField refuses
-//                    (MG_Impl/Pipe/PipeFill.cpp). 41 fields since P5c rv (32 before it). A row
-//                    below that names a
-//                    field the derivation already placed here is a CONTRADICTION and stops
-//                    the generator - which is the only way this file can stay true as the
-//                    emitted list grows.
-//
-//   APPLIER_DERIVED  the applier writes it out of records it already applies, but no row of
-//                    the emitted list claims it, so the derivation above cannot see it.
-//
-//   BARRIER_PULLED   P5's DEBT. The server answers by reading a value the client's residual
-//                    fill (PipeFill.cpp step 4) left in the single shared gPipeInputs while
-//                    the verb barrier holds both threads apart (R-1). Correct only because
-//                    of that barrier, which is why the barrier is load-bearing rather than
-//                    cautious. Every row NAMES THE PHASE THAT RETIRES IT; a row with no
-//                    phase stops the generator. Each such read increments
-//                    PipeStats::CallClass::ResidualPulls (`rsp`) and, under
-//                    MOBILEGL_IPC_STRICT_ERRORS=1, is Fatal.
-//
-//   FATAL            no carrier, and the reduced path never reads it, so a read is a real
-//                    defect: Fatal{UnmigratedPipeInput, "<Field>@<verb>"}.
-//
-// A field in NONE of the four is a generator error and therefore a build failure (R-7.1).
-// A field in TWO is the same. That is the whole mechanism: a hand-maintained table would be
-// wrong within a week, and this one cannot be silently incomplete.
+// EmittedCallSuppliesTheWholeField retains its eight refusals: seven legacy pointer
+// representations plus the two-sided pixel-store field. Deleting those refusals would
+// falsely derive RECORD_SUPPLIED for the retired getters; server consumers bypass them.
 //
 // clang-format off
 
 // X(Field, Class, RetiringPhase, Why)
-//
-// RetiringPhase is `-` for every class but BARRIER_PULLED, where it is the ROADMAP phase
-// whose row stops the pull. It is a string, not an enum, because two of them name two
-// phases for the two backends and flattening that would lose the half that matters.
-//
-// P5f fm: the Magma transport consumers of the nine object rows below have retired.
-// WireDraw/WireFramebuffer and MagmaProgramSource/UniformManager read server records;
-// enabled vertex arrays, EBO/indirect/named UBO/SSBO/texel-buffer uses meet the existing
-// named P7 buffer refusal before any frontend read. Texture sync uses handle-keyed images
-// and staged bytes, never GetTextureObject. The old getters remain reachable only through
-// the monolith implementation (or behind the named P7/class-C boundary). Keep these global
-// classifications until fe + fm are integrated and the residual-fill/generator invariants
-// are retired together; a missing wire branch must still poison, never read a default.
-// RecordError belongs to fv. Details and the no-buffer draw counterexample are in
-// docs/Disaggregated/notes/p5f/fm-report.md.
-#define MGP_FIELD_OWNERSHIP_LIST(X)                                                                  \
-    /* ---- BARRIER_PULLED: the 9 non-sticky rows the reduced path actually reads ----          */  \
-    /* scout-unmigrated-census section 3 intersects each verb class's may-read mask with "no     */  \
-    /* record supplies it" and unions kClear (7 of 18), kDraw (19 of 47) and kReadback (12 of    */  \
-    /* 17). That union was 21 fields at P5; P5c rv (CONTRACT-P5C.md §5.3) retired NINE of them   */  \
-    /* to RECORD_SUPPLIED through set_context_values (the two texture-unit counters, the         */  \
-    /* touched-count array, the five XFB values) plus GetCurrentVertexAttribute (the amended     */  \
-    /* set_vertex_attrib_defaults payload), and moved the three texture SHUTTERS to              */  \
-    /* APPLIER_DERIVED (their own rows said it since P5: "a shutter, not a value: the server     */  \
-    /* answers from its own Serial" - rv made the accessor DO it). GetPixelStoreParameters is    */  \
-    /* the 21st of the census and it is APPLIER_DERIVED below, for the reason written there.     */  \
-    /* WHAT IS LEFT IS EXACTLY THE OBJECT CLASS: nine fields whose storage is a frontend heap    */  \
-    /* reference no record can carry, each with the phase that retires it, and                  */  \
-    /* FieldOwnershipTest pins this list as ALL the remaining non-sticky rows. OpenRA adds no    */  \
-    /* field to this set - it widens the SITE set, not the field set.                            */  \
-    /* DirectGLES.cpp:4486, PrepareForDraw, UNCONDITIONAL ON EVERY DRAW. No #if, no arm guard,   */  \
-    /* no record fallback, and PipeFill.cpp:1902-1905 says outright that what retires the pull   */  \
-    /* is P8, not a better applier: the storage is a SharedPtr<VertexArrayObject> and            */  \
-    /* bind_vertex_elements carries an eight-byte {slot, gen}.                                   */  \
-    X(GetBoundVertexArray,                BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
-      "frontend heap reference; the record carries a handle, the mirror is a pointer")           \
-    /* 18 Espryt sites + 11 Magma. Coverage.def:37-70 splits the 15 BufferTargets across three   */  \
-    /* calls and leaves SEVEN with no carrier at all (CopyRead, CopyWrite, PixelPack,            */  \
-    /* PixelUnpack, Texture, DispatchIndirect, Query), which is why the FIELD is pulled even     */  \
-    /* though eight targets are covered.                                                         */  \
-    X(GetBufferBindingSlot,               BARRIER_PULLED, "P8 (indirect), P9 (readback), P13 (transfer)", \
-      "7 of 15 BufferTargets have no call; the field is one array over all 15")                   \
-    X(GetBufferBindingPoint,              BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
-      "frontend BindingSlotRange1D pointer")                                                      \
-    /* 8 Espryt sites through GetFramebufferBindingSlotChecked + 13 Magma. SyncCurrentFBO        */  \
-    /* (:2995) is SELF-DECLARED monolith glue (DirectGLES.cpp:2961-2965) while BindCurrentFBO    */  \
-    /* (:4303-4353) is already split-clean - the bind is migrated, the sync is not.              */  \
-    X(GetFramebufferBindingSlot,          BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
-      "P5f fe: Espryt reads framebuffer records; Magma retains frontend pointer debt")                                          \
-    X(GetImageTextureBinding,             BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
-      "frontend ImageTextureBinding base pointer")                                                \
-    X(GetTextureUnitObject,               BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
-      "P5f fe: Espryt transport readers retired; Magma retains texture-unit debt")                             \
-    /* DirectGLES.cpp:4497, PrepareForDraw, the second unconditional pointer read of every draw. */  \
-    X(GetProgramForDraw,                  BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
-      "frontend SharedPtr<ProgramObject>; the record carries a handle")                           \
-    /* P5b package i1 (CONTRACT-P5B.md §6.9, the one row the contract grants a package). This    */  \
-    /* was FATAL "reachable only from kDispatch; there is no compute on the reduced path" - and  */  \
-    /* i1 IS what puts compute on the path: launch_grid (60) now crosses and the backend's       */  \
-    /* PrepareForCompute pulls this inside it (DirectGLES.cpp:5779, VulkanRenderer.cpp:7327).    */  \
-    /* It is GetProgramForDraw's twin in every respect, so it takes its class and its retiring   */  \
-    /* phases. Overturned by: nothing in P5b; P7/P8 retire both rows together.                   */  \
-    X(GetProgramForDispatch,              BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
-      "frontend SharedPtr<ProgramObject>; the record carries a handle")                           \
-    /* The XFB family's one OBJECT row. XFB itself is off the reduced path, but kDraw's          */  \
-    /* may-read mask carries it and the draw walk reads it regardless - which is exactly the     */  \
-    /* case a field census taken from "what the scenario does" rather than from the mask would   */  \
-    /* miss. The family's five VALUE rows rode set_context_values out of this list at P5c rv.    */  \
-    X(GetTransformFeedbackProgram,        BARRIER_PULLED, "P3b/P4b (Espryt), P7 (Magma)",            \
-      "P5f fe: Espryt capture uses the Begin snapshot; Magma retains program debt")                                                        \
-                                                                                                     \
-    /* ---- APPLIER_DERIVED ----                                                                 */  \
-    /* THE FIRST ROW, and it is the one the contract asked P5 to split into two field ids. It is */  \
-    /* split HERE INSTEAD, by ARGUMENT, in the argument-exception list below - see that list's   */  \
-    /* header for the evidence and for what would overturn the decision. The field itself is     */  \
-    /* APPLIER_DERIVED because set_pixel_pack_state arrives and MGPipeApplyAccess::PackState     */  \
-    /* writes m_pixelStore[0] out of it (PipeApply.cpp:1373), while no row of the emitted list   */  \
-    /* claims the field (Coverage.def:173 keeps it out deliberately, because the record supplies */  \
-    /* half of it).                                                                              */  \
-    X(GetPixelStoreParameters,            APPLIER_DERIVED, "-",                                      \
-      "set_pixel_pack_state; the applier writes m_pixelStore[0] (PipeApply.cpp:1373)")            \
-    /* THE THREE TEXTURE SHUTTERS (P5c rv, CONTRACT-P5C.md §5.3). No call carries them and none  */  \
-    /* should (Coverage.def's emitted-list header): what replaces them server-side is the        */  \
-    /* applier's own Serial - a different value with a different owner. rv is the edit that      */  \
-    /* makes the accessor DO it: under a server-stamped verb the PipeInputs accessor answers     */  \
-    /* MGPipeApplierTextureShutterSerial() / MGPipeApplierContextSerial() (PipeApply.cpp)        */  \
-    /* instead of the client's residual-fill copy, and the class flips from BARRIER_PULLED to    */  \
-    /* here. Under monolith the storage answer is kept, byte for byte (G1).                      */  \
-    X(GetSamplingResolutionGeneration,    APPLIER_DERIVED, "-",                                      \
-      "a shutter, not a value: the server answers from its own Serial")                           \
-    X(GetTextureBindGeneration,           APPLIER_DERIVED, "-",                                      \
-      "a shutter, not a value: the server answers from its own Serial")                           \
-    X(GetTextureContextId,                APPLIER_DERIVED, "-",                                      \
-      "a shutter, not a value: the server answers from its own Serial")                           \
-                                                                                                     \
-    /* ---- FATAL: two non-sticky fields, each off the reduced path for a checkable reason ----- */  \
-    /* Three until P5b: GetProgramForDispatch moved up to BARRIER_PULLED when package i1 put     */  \
-    /* compute on the path (CONTRACT-P5B.md §6.9).                                               */  \
-    X(GetBoundTransformFeedbackName,      FATAL, "-",                                                \
-      "DEAD: read by no backend since the D21 rekey (PipeInputs.h:232-234)")                      \
-    X(GetTransformFeedbackPausedPrimitiveCounter, FATAL, "-",                                        \
-      "reachable only from class kQuery, which the reduced path never enters")                    \
-                                                                                                     \
-    /* ---- the seven sticky forwards, as FIELD rows ----                                        */  \
-    /* They have no storage, so a read of the FIELD is a call of the FORWARD; the field row and  */  \
-    /* the forward row below carry the same class by construction, and the generator refuses a   */  \
-    /* pair that disagrees. Their poison exemption (generated/PipeFilled.inc:422's sticky arm)   */  \
-    /* is cancelled under split by the server stamp, which zeroes their FilledGen - and 0 loses  */  \
-    /* to nothing, because :419's "never filled" test runs first.                                */  \
-    X(GetBufferBindingPointCount,         APPLIER_DERIVED, "-",                                  \
-      "P5f fe: server constant binding-point capacity, no frontend lookup")                         \
-    X(GetProgramObject,                   BARRIER_PULLED, "P9",                                      \
-      "hands the backend a frontend SharedPtr<ProgramObject> keyed by GL name")                   \
-    X(GetTextureObject,                   BARRIER_PULLED, "P7",                                      \
-      "hands the backend a frontend SharedPtr<ITextureObject> keyed by GL name")                  \
-    X(HasOpenTransformFeedbackSpan,       APPLIER_DERIVED, "-",                                   \
-      "P5f fe: begin/end_stream_output maintain server spans by lifetime id")                               \
-    X(ValidateProgramName,                BARRIER_PULLED, "P9",                                      \
-      "a frontend name-table probe; Coverage.def calls it kClientResolved")                       \
-    /* P5c ev DELETED the forward under an active transport (CONTRACT-P5C section 4.2):    */  \
-    /* R-12's caps re-publication (CapsMirror.cpp:78-80) already invalidates the compile   */  \
-    /* environment on the client, so a read or call under split is a real defect and       */  \
-    /* aborts, never a pull. The class is unconditional because FieldOwnership only ever   */  \
-    /* describes the split server's reads - under monolith there is no server to read.     */  \
-    X(InvalidateCompileEnv,               FATAL, "-",                                                \
-      "DELETED under split by P5c ev; R-12's caps re-publication replaced it")              \
-    X(RecordError,                        BARRIER_PULLED, "P9",                                      \
-      "a WRITE INTO THE FRONTEND; R-12's OnGlError, whose ordering is P9's")
+#define MGP_FIELD_OWNERSHIP_LIST(X) \
+    X(GetBoundVertexArray, FATAL, "-", "server reads vertex-element handles; the legacy SharedPtr is not a wire value") \
+    X(GetBufferBindingSlot, FATAL, "-", "server reads verb buffer handles/reply scratch; legacy binding-slot pointers are forbidden") \
+    X(GetBufferBindingPoint, FATAL, "-", "server reads indexed buffer ranges or XFB Begin targets; never a client table base") \
+    X(GetFramebufferBindingSlot, FATAL, "-", "server reads framebuffer records; never a client BindingSlot") \
+    X(GetImageTextureBinding, FATAL, "-", "server reads shader-image records; never the client image-unit array") \
+    X(GetTextureUnitObject, FATAL, "-", "server reads sampler/view records or verb texture handles; never a client TextureUnit") \
+    X(GetProgramForDraw, FATAL, "-", "server reads draw-program handles and its owned ProgramArchive") \
+    X(GetProgramForDispatch, FATAL, "-", "server reads dispatch-program handles and its owned ProgramArchive") \
+    X(GetTransformFeedbackProgram, FATAL, "-", "server reads the capture-program archive retained by the Begin snapshot") \
+    X(GetBoundTransformFeedbackName, FATAL, "-", "no backend reader; XFB identity crosses as a lifetime value") \
+    X(GetTransformFeedbackPausedPrimitiveCounter, FATAL, "-", "query-only legacy accessor; transport entry is a named class-C refusal") \
+    X(GetProgramObject, FATAL, "-", "program identity is resolved on the client and crosses as a shader-CSO handle") \
+    X(GetTextureObject, FATAL, "-", "texture identity crosses as a handle; no server GL-name lookup into the client") \
+    X(ValidateProgramName, FATAL, "-", "validation belongs to the client; the server validates the carried handle") \
+    X(InvalidateCompileEnv, FATAL, "-", "transport caps republication replaces direct frontend invalidation") \
+    X(RecordError, FATAL, "-", "transport OnGlError posts an event before the legacy frontend-error-queue arm") \
+    X(GetPixelStoreParameters, APPLIER_DERIVED, "-", "set_pixel_pack_state writes the pack half; unpack is forbidden below") \
+    X(GetSamplingResolutionGeneration, APPLIER_DERIVED, "-", "server-owned applier texture shutter serial") \
+    X(GetTextureBindGeneration, APPLIER_DERIVED, "-", "server-owned applier texture shutter serial") \
+    X(GetTextureContextId, APPLIER_DERIVED, "-", "server-owned applier context serial") \
+    X(GetBufferBindingPointCount, APPLIER_DERIVED, "-", "fixed indexed binding-point capacity; no client lookup") \
+    X(HasOpenTransformFeedbackSpan, APPLIER_DERIVED, "-", "server Begin/End snapshot table keyed by XFB lifetime id")
 
-// X(Field, Class, RetiringPhase, Mechanism) - the SEVEN STICKY FORWARDS as their own rows.
-//
-// CONTRACT-P5.md section 3: "The domain is 63 fields plus the 7 sticky forwards, which are
-// among those 63 but are exempted from the poison and so need their own row. 70 rows."
-// The reason they need a second row is that they are the seven that hand the server a raw
-// FRONTEND OBJECT or write INTO the frontend, so "the exit gate is structurally blind on the
-// seven most dangerous fields" - and the row that fixes that is about the FORWARD (a live
-// call with no stored value), not about the field's storage, which does not exist.
-//
-// Mechanism is what replaces the forward, which is NOT the same question as which phase
-// retires the pull.
-#define MGP_FIELD_OWNERSHIP_FORWARD_LIST(X)                                                          \
-    X(GetBufferBindingPointCount,         APPLIER_DERIVED, "-",                                  \
-      "a server-side binding-point table")                                                       \
-    X(GetProgramObject,                   BARRIER_PULLED, "P9",                                      \
-      "a client-resolved program handle table (ARCHITECTURE 3.2 explicitly-not-ported)")         \
-    X(GetTextureObject,                   BARRIER_PULLED, "P7",                                      \
-      "a server-side texture handle table")                                                      \
-    X(HasOpenTransformFeedbackSpan,       APPLIER_DERIVED, "-",                                   \
-      "server-side XFB span state")                                                              \
-    X(ValidateProgramName,                BARRIER_PULLED, "P9",                                      \
-      "a client-resolved program name probe")                                                    \
-    X(InvalidateCompileEnv,               FATAL, "-",                                                \
-      "DELETED under split by P5c ev; the re-arriving caps snapshot IS the invalidation (R-12)") \
-    X(RecordError,                        BARRIER_PULLED, "P9",                                      \
-      "OnGlError, the ordered reverse-channel error post (R-12); its ordering is P9's")
+// The seven sticky forwards carry the same verdict as their field rows.
+#define MGP_FIELD_OWNERSHIP_FORWARD_LIST(X) \
+    X(GetBufferBindingPointCount, APPLIER_DERIVED, "-", "fixed indexed binding-point capacity; no client lookup") \
+    X(GetProgramObject, FATAL, "-", "program identity is resolved on the client and crosses as a shader-CSO handle") \
+    X(GetTextureObject, FATAL, "-", "texture identity crosses as a handle; no server GL-name lookup into the client") \
+    X(HasOpenTransformFeedbackSpan, APPLIER_DERIVED, "-", "server Begin/End snapshot table keyed by XFB lifetime id") \
+    X(ValidateProgramName, FATAL, "-", "validation belongs to the client; the server validates the carried handle") \
+    X(InvalidateCompileEnv, FATAL, "-", "transport caps republication replaces direct frontend invalidation") \
+    X(RecordError, FATAL, "-", "transport OnGlError posts an event before the legacy frontend-error-queue arm")
 
 // X(Field, Arg0, Class, Why) - ARGUMENT-KEYED EXCEPTIONS.
 //

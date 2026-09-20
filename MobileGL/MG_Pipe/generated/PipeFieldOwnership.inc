@@ -39,9 +39,9 @@ inline constexpr MGPipeFieldOwnership kMGPipeFieldOwnership[kMGPipeInputFieldCou
     MGPipeFieldOwnership::kRecordSupplied, // GetBlendEquationIndexed
     MGPipeFieldOwnership::kRecordSupplied, // GetBlendFuncIndexed
     MGPipeFieldOwnership::kFatal, // GetBoundTransformFeedbackName
-    MGPipeFieldOwnership::kBarrierPulled, // GetBoundVertexArray
-    MGPipeFieldOwnership::kBarrierPulled, // GetBufferBindingSlot
-    MGPipeFieldOwnership::kBarrierPulled, // GetBufferBindingPoint
+    MGPipeFieldOwnership::kFatal, // GetBoundVertexArray
+    MGPipeFieldOwnership::kFatal, // GetBufferBindingSlot
+    MGPipeFieldOwnership::kFatal, // GetBufferBindingPoint
     MGPipeFieldOwnership::kApplierDerived, // GetBufferBindingPointCount
     MGPipeFieldOwnership::kRecordSupplied, // GetTouchedBufferBindingPointCount
     MGPipeFieldOwnership::kRecordSupplied, // GetClampReadColor
@@ -54,8 +54,8 @@ inline constexpr MGPipeFieldOwnership kMGPipeFieldOwnership[kMGPipeInputFieldCou
     MGPipeFieldOwnership::kRecordSupplied, // GetDepthFunc
     MGPipeFieldOwnership::kRecordSupplied, // GetDepthMask
     MGPipeFieldOwnership::kRecordSupplied, // GetDepthRangeIndexed
-    MGPipeFieldOwnership::kBarrierPulled, // GetFramebufferBindingSlot
-    MGPipeFieldOwnership::kBarrierPulled, // GetImageTextureBinding
+    MGPipeFieldOwnership::kFatal, // GetFramebufferBindingSlot
+    MGPipeFieldOwnership::kFatal, // GetImageTextureBinding
     MGPipeFieldOwnership::kRecordSupplied, // GetLineWidth
     MGPipeFieldOwnership::kRecordSupplied, // GetLogicOp
     MGPipeFieldOwnership::kRecordSupplied, // GetMaxTouchedTextureUnit
@@ -69,9 +69,9 @@ inline constexpr MGPipeFieldOwnership kMGPipeFieldOwnership[kMGPipeInputFieldCou
     MGPipeFieldOwnership::kRecordSupplied, // GetPolygonOffsetFactor
     MGPipeFieldOwnership::kRecordSupplied, // GetPolygonOffsetUnits
     MGPipeFieldOwnership::kRecordSupplied, // GetPrimitiveRestartIndex
-    MGPipeFieldOwnership::kBarrierPulled, // GetProgramForDispatch
-    MGPipeFieldOwnership::kBarrierPulled, // GetProgramForDraw
-    MGPipeFieldOwnership::kBarrierPulled, // GetProgramObject
+    MGPipeFieldOwnership::kFatal, // GetProgramForDispatch
+    MGPipeFieldOwnership::kFatal, // GetProgramForDraw
+    MGPipeFieldOwnership::kFatal, // GetProgramObject
     MGPipeFieldOwnership::kRecordSupplied, // GetProvokingVertexMode
     MGPipeFieldOwnership::kRecordSupplied, // GetRenderStateParameters
     MGPipeFieldOwnership::kRecordSupplied, // GetRenderStateParametersVersion
@@ -80,12 +80,12 @@ inline constexpr MGPipeFieldOwnership kMGPipeFieldOwnership[kMGPipeInputFieldCou
     MGPipeFieldOwnership::kRecordSupplied, // GetStencilState
     MGPipeFieldOwnership::kApplierDerived, // GetTextureBindGeneration
     MGPipeFieldOwnership::kApplierDerived, // GetTextureContextId
-    MGPipeFieldOwnership::kBarrierPulled, // GetTextureObject
-    MGPipeFieldOwnership::kBarrierPulled, // GetTextureUnitObject
+    MGPipeFieldOwnership::kFatal, // GetTextureObject
+    MGPipeFieldOwnership::kFatal, // GetTextureUnitObject
     MGPipeFieldOwnership::kRecordSupplied, // GetTransformFeedbackCapturedVertices
     MGPipeFieldOwnership::kRecordSupplied, // GetTransformFeedbackGeneration
     MGPipeFieldOwnership::kFatal, // GetTransformFeedbackPausedPrimitiveCounter
-    MGPipeFieldOwnership::kBarrierPulled, // GetTransformFeedbackProgram
+    MGPipeFieldOwnership::kFatal, // GetTransformFeedbackProgram
     MGPipeFieldOwnership::kRecordSupplied, // GetViewport
     MGPipeFieldOwnership::kRecordSupplied, // GetViewportIndexed
     MGPipeFieldOwnership::kRecordSupplied, // IsCapabilityEnabled
@@ -93,8 +93,8 @@ inline constexpr MGPipeFieldOwnership kMGPipeFieldOwnership[kMGPipeInputFieldCou
     MGPipeFieldOwnership::kRecordSupplied, // IsTransformFeedbackActive
     MGPipeFieldOwnership::kRecordSupplied, // IsTransformFeedbackPaused
     MGPipeFieldOwnership::kFatal, // InvalidateCompileEnv
-    MGPipeFieldOwnership::kBarrierPulled, // ValidateProgramName
-    MGPipeFieldOwnership::kBarrierPulled, // RecordError
+    MGPipeFieldOwnership::kFatal, // ValidateProgramName
+    MGPipeFieldOwnership::kFatal, // RecordError
     MGPipeFieldOwnership::kRecordSupplied, // GetBoundTransformFeedbackLifetimeId
     MGPipeFieldOwnership::kApplierDerived, // HasOpenTransformFeedbackSpan
 };
@@ -106,9 +106,9 @@ inline constexpr const char* kMGPipeFieldRetiringPhase[kMGPipeInputFieldCount] =
     "-", // GetBlendEquationIndexed
     "-", // GetBlendFuncIndexed
     "-", // GetBoundTransformFeedbackName
-    "P5e (Espryt unbarriered), P7 (Magma)", // GetBoundVertexArray
-    "P8 (indirect), P9 (readback), P13 (transfer)", // GetBufferBindingSlot
-    "P5e (Espryt unbarriered), P7 (Magma)", // GetBufferBindingPoint
+    "-", // GetBoundVertexArray
+    "-", // GetBufferBindingSlot
+    "-", // GetBufferBindingPoint
     "-", // GetBufferBindingPointCount
     "-", // GetTouchedBufferBindingPointCount
     "-", // GetClampReadColor
@@ -121,8 +121,8 @@ inline constexpr const char* kMGPipeFieldRetiringPhase[kMGPipeInputFieldCount] =
     "-", // GetDepthFunc
     "-", // GetDepthMask
     "-", // GetDepthRangeIndexed
-    "P5e (Espryt unbarriered), P7 (Magma)", // GetFramebufferBindingSlot
-    "P5e (Espryt unbarriered), P7 (Magma)", // GetImageTextureBinding
+    "-", // GetFramebufferBindingSlot
+    "-", // GetImageTextureBinding
     "-", // GetLineWidth
     "-", // GetLogicOp
     "-", // GetMaxTouchedTextureUnit
@@ -136,9 +136,9 @@ inline constexpr const char* kMGPipeFieldRetiringPhase[kMGPipeInputFieldCount] =
     "-", // GetPolygonOffsetFactor
     "-", // GetPolygonOffsetUnits
     "-", // GetPrimitiveRestartIndex
-    "P5e (Espryt unbarriered), P7 (Magma)", // GetProgramForDispatch
-    "P5e (Espryt unbarriered), P7 (Magma)", // GetProgramForDraw
-    "P9", // GetProgramObject
+    "-", // GetProgramForDispatch
+    "-", // GetProgramForDraw
+    "-", // GetProgramObject
     "-", // GetProvokingVertexMode
     "-", // GetRenderStateParameters
     "-", // GetRenderStateParametersVersion
@@ -147,12 +147,12 @@ inline constexpr const char* kMGPipeFieldRetiringPhase[kMGPipeInputFieldCount] =
     "-", // GetStencilState
     "-", // GetTextureBindGeneration
     "-", // GetTextureContextId
-    "P7", // GetTextureObject
-    "P5e (Espryt unbarriered), P7 (Magma)", // GetTextureUnitObject
+    "-", // GetTextureObject
+    "-", // GetTextureUnitObject
     "-", // GetTransformFeedbackCapturedVertices
     "-", // GetTransformFeedbackGeneration
     "-", // GetTransformFeedbackPausedPrimitiveCounter
-    "P3b/P4b (Espryt), P7 (Magma)", // GetTransformFeedbackProgram
+    "-", // GetTransformFeedbackProgram
     "-", // GetViewport
     "-", // GetViewportIndexed
     "-", // IsCapabilityEnabled
@@ -160,8 +160,8 @@ inline constexpr const char* kMGPipeFieldRetiringPhase[kMGPipeInputFieldCount] =
     "-", // IsTransformFeedbackActive
     "-", // IsTransformFeedbackPaused
     "-", // InvalidateCompileEnv
-    "P9", // ValidateProgramName
-    "P9", // RecordError
+    "-", // ValidateProgramName
+    "-", // RecordError
     "-", // GetBoundTransformFeedbackLifetimeId
     "-", // HasOpenTransformFeedbackSpan
 };
@@ -183,21 +183,21 @@ inline constexpr MGPipeInputField kMGPipeFieldOwnershipForwardField[kMGPipeField
 };
 inline constexpr MGPipeFieldOwnership kMGPipeFieldOwnershipForward[kMGPipeFieldOwnershipForwardCount] = {
     MGPipeFieldOwnership::kApplierDerived, // GetBufferBindingPointCount
-    MGPipeFieldOwnership::kBarrierPulled, // GetProgramObject
-    MGPipeFieldOwnership::kBarrierPulled, // GetTextureObject
+    MGPipeFieldOwnership::kFatal, // GetProgramObject
+    MGPipeFieldOwnership::kFatal, // GetTextureObject
     MGPipeFieldOwnership::kApplierDerived, // HasOpenTransformFeedbackSpan
-    MGPipeFieldOwnership::kBarrierPulled, // ValidateProgramName
+    MGPipeFieldOwnership::kFatal, // ValidateProgramName
     MGPipeFieldOwnership::kFatal, // InvalidateCompileEnv
-    MGPipeFieldOwnership::kBarrierPulled, // RecordError
+    MGPipeFieldOwnership::kFatal, // RecordError
 };
 inline constexpr const char* kMGPipeFieldOwnershipForwardMechanism[kMGPipeFieldOwnershipForwardCount] = {
-    "a server-side binding-point table", // GetBufferBindingPointCount, retires in -
-    "a client-resolved program handle table (ARCHITECTURE 3.2 explicitly-not-ported)", // GetProgramObject, retires in P9
-    "a server-side texture handle table", // GetTextureObject, retires in P7
-    "server-side XFB span state", // HasOpenTransformFeedbackSpan, retires in -
-    "a client-resolved program name probe", // ValidateProgramName, retires in P9
-    "DELETED under split by P5c ev; the re-arriving caps snapshot IS the invalidation (R-12)", // InvalidateCompileEnv, retires in -
-    "OnGlError, the ordered reverse-channel error post (R-12); its ordering is P9's", // RecordError, retires in P9
+    "fixed indexed binding-point capacity; no client lookup", // GetBufferBindingPointCount, retires in -
+    "program identity is resolved on the client and crosses as a shader-CSO handle", // GetProgramObject, retires in -
+    "texture identity crosses as a handle; no server GL-name lookup into the client", // GetTextureObject, retires in -
+    "server Begin/End snapshot table keyed by XFB lifetime id", // HasOpenTransformFeedbackSpan, retires in -
+    "validation belongs to the client; the server validates the carried handle", // ValidateProgramName, retires in -
+    "transport caps republication replaces direct frontend invalidation", // InvalidateCompileEnv, retires in -
+    "transport OnGlError posts an event before the legacy frontend-error-queue arm", // RecordError, retires in -
 };
 
 // CONTRACT-P5.md section 3: "70 rows, each in exactly one class".
@@ -323,7 +323,7 @@ inline constexpr SizeT kMGPipeVerbBoundaryExemptCount = 3;
 // wait. A verb with no stamp row admits nothing - the server stamps only MGP_VERB_OP_LIST's
 // ops, so no other verb can be the one a residual pull is reported against.
 inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
-    {{0x1808402000000040ull, 0x0000000000000000ull}}, // DrawArrays
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawArrays
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawElements
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawElementsBaseVertex
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // MultiDrawArrays
@@ -343,7 +343,7 @@ inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawArraysInstanced
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawElementsIndirect
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawArraysIndirect
-    {{0x1800402000000000ull, 0x0000000000000000ull}}, // Clear
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // Clear
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearBufferfi
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearBufferfv
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearBufferuiv
@@ -352,27 +352,27 @@ inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearNamedFramebufferfi
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearNamedFramebufferiv
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearNamedFramebufferuiv
-    {{0x1800402000000000ull, 0x0000000000000000ull}}, // BlitFramebuffer
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // BlitFramebuffer
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // BlitNamedFramebuffer
-    {{0x1800c02000300080ull, 0x0000000000000000ull}}, // CopyTexImage2D
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // CopyTexImage2D
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // CopyTexSubImage2D
-    {{0x1800c02000300080ull, 0x0000000000000000ull}}, // CopyImageSubData
-    {{0x1800c02000300080ull, 0x0000000000000000ull}}, // GenerateMipmap
-    {{0x1800c02000300040ull, 0x0000000000000000ull}}, // ReadPixels
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // CopyImageSubData
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // GenerateMipmap
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // ReadPixels
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // GetTexImage
-    {{0x1800c02000300040ull, 0x0000000000000000ull}}, // GetTextureImage
-    {{0x1800402000000040ull, 0x0000000000000000ull}}, // DispatchCompute
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // GetTextureImage
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // DispatchCompute
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DispatchComputeIndirect
-    {{0x1800402000000000ull, 0x0000000000000000ull}}, // MemoryBarrier
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // MemoryBarrier
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // MemoryBarrierByRegion
-    {{0x1800402000000000ull, 0x0000000000000000ull}}, // BindImageTexture
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // BindImageTexture
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // GetIntegeri_v
-    {{0x1800c02000300000ull, 0x0000000000000000ull}}, // ShaderStorageBlockBinding
-    {{0x1800402000000000ull, 0x0000000000000000ull}}, // FenceSync
-    {{0x1800402000000000ull, 0x0000000000000000ull}}, // ClientWaitSync
-    {{0x1800402000000000ull, 0x0000000000000000ull}}, // WaitSync
-    {{0x1800402000000000ull, 0x0000000000000000ull}}, // DeleteSync
-    {{0x1800402000000000ull, 0x0000000000000000ull}}, // GetSyncStatus
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // ShaderStorageBlockBinding
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // FenceSync
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClientWaitSync
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // WaitSync
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // DeleteSync
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // GetSyncStatus
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // IsTimerQuerySupported
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // BeginTimeElapsedQuery
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // EndTimeElapsedQuery
@@ -384,17 +384,17 @@ inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // EndOcclusionQuery
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // BeginXfbPrimitivesQuery
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // EndXfbPrimitivesQuery
-    {{0x1800402000000000ull, 0x0000000000000000ull}}, // PatchParameteri
-    {{0x1808402000000080ull, 0x0000000000000000ull}}, // BeginTransformFeedback
-    {{0x1808402000000080ull, 0x0000000000000000ull}}, // EndTransformFeedback
-    {{0x1808402000000080ull, 0x0000000000000000ull}}, // PauseTransformFeedback
-    {{0x1808402000000080ull, 0x0000000000000000ull}}, // ResumeTransformFeedback
-    {{0x1808402000000080ull, 0x0000000000000000ull}}, // BindTransformFeedback
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // PatchParameteri
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // BeginTransformFeedback
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // EndTransformFeedback
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // PauseTransformFeedback
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // ResumeTransformFeedback
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // BindTransformFeedback
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DeleteTransformFeedback
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // GetGpuTimestampNs
 };
 
-inline constexpr SizeT kMGPipeAdmittedPullPairCount = 128;
+inline constexpr SizeT kMGPipeAdmittedPullPairCount = 0;
 
 // THE PREDICATE THE STRICT KNOB ASKS (ID-117). A 69 x 128-bit table, so this costs a shift and
 // a test on the apply thread - the same shape MGPipeFieldMaskHas already has.
@@ -429,6 +429,6 @@ static_assert(MGPipeEveryAdmittedPullIsADebtOfItsVerbsClass(),
 // The class sizes, as constants a test can pin without recounting the table.
 inline constexpr SizeT kMGPipeRecordSuppliedFieldCount = 41;
 inline constexpr SizeT kMGPipeApplierDerivedFieldCount = 6;
-inline constexpr SizeT kMGPipeBarrierPulledFieldCount = 13;
-inline constexpr SizeT kMGPipeFatalFieldCount = 3;
+inline constexpr SizeT kMGPipeBarrierPulledFieldCount = 0;
+inline constexpr SizeT kMGPipeFatalFieldCount = 16;
 static_assert(kMGPipeRecordSuppliedFieldCount + kMGPipeApplierDerivedFieldCount + kMGPipeBarrierPulledFieldCount + kMGPipeFatalFieldCount == kMGPipeInputFieldCount, "the four class sizes do not partition the field set");

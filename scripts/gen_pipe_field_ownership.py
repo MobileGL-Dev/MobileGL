@@ -748,11 +748,45 @@ def expect_trip(name, because, fn, quiet=False):
     return 0
 
 
+def require_no_barrier_pulls(ownership):
+    pulled = sorted(field for field, cls in ownership.items() if cls == "BARRIER_PULLED")
+    if pulled:
+        sys.exit("gen_pipe_field_ownership: P5f forbids production BARRIER_PULLED rows: "
+                 + ", ".join(pulled))
+
+
 def self_test():
     """The negative controls (gen_pipe.py --self-test's shape): each gate must go red for its
     own reason, and zero trips is itself an error."""
     coverage = read(COVERAGE_DEF)
-    ownership_text = read(OWNERSHIP_DEF)
+    production_ownership_text = read(OWNERSHIP_DEF)
+    # P5f has no live debt. Exercise admission's historical branches on an explicit
+    # synthetic fixture, rather than requiring real client reads to keep tests alive.
+    ownership_text = production_ownership_text
+    fixture_phases = {
+        "GetBoundVertexArray": "P5e (Espryt unbarriered), P7 (Magma)",
+        "GetBufferBindingSlot": "P8/P9/P13",
+        "GetBufferBindingPoint": "P5e (Espryt unbarriered), P7 (Magma)",
+        "GetFramebufferBindingSlot": "P5e (Espryt unbarriered), P7 (Magma)",
+        "GetImageTextureBinding": "P5e (Espryt unbarriered), P7 (Magma)",
+        "GetTextureUnitObject": "P5e (Espryt unbarriered), P7 (Magma)",
+        "GetProgramForDraw": "P5e (Espryt unbarriered), P7 (Magma)",
+        "GetProgramForDispatch": "P5e (Espryt unbarriered), P7 (Magma)",
+        "GetTransformFeedbackProgram": "P3b/P4b (Espryt), P7 (Magma)",
+        "GetProgramObject": "P9", "GetTextureObject": "P7",
+        "ValidateProgramName": "P9", "RecordError": "P9",
+    }
+    for field, phase in fixture_phases.items():
+        pattern = r'(X\(\s*' + field + r'\s*,)\s*FATAL,\s*"-",'
+        ownership_text, count = re.subn(pattern, lambda m: m[1] + ' BARRIER_PULLED, "' + phase + '",', ownership_text)
+        if count not in (1, 2):
+            sys.exit("gen_pipe_field_ownership: fixture field is not retired: " + field)
+    prefix, forward = ownership_text.split("#define MGP_FIELD_OWNERSHIP_FORWARD_LIST(X)", 1)
+    forward = re.sub(r'(X\(RecordError,\s*BARRIER_PULLED,\s*"P9",\s*)"[^\"]*"',
+                     r'\1"OnGlError, synthetic legacy error forward"', forward, count=1)
+    forward = re.sub(r'(X\(GetTextureObject,\s*BARRIER_PULLED,\s*"P7",\s*)"[^\"]*"',
+                     r'\1"a server-side texture handle table"', forward, count=1)
+    ownership_text = prefix + "#define MGP_FIELD_OWNERSHIP_FORWARD_LIST(X)" + forward
     fill = read(PIPE_FILL)
     accessors, sticky, emitted = parse_coverage(coverage)
     refused = parse_supplies_whole_field(fill)
@@ -951,12 +985,18 @@ def self_test():
                  "to another control - the harness cannot tell one control from another, which is "
                  "exactly the defect that let control #4 be a silent duplicate of control #1")
 
+    controls.append(("a retired field is reintroduced as production debt",
+                     "P5f forbids production BARRIER_PULLED rows",
+                     lambda: require_no_barrier_pulls(run()[0])))
+
     trips = 0
     for name, because, fn in controls:
         trips += expect_trip(name, because, fn)
 
     # The positive control: the real tables pass, and they partition the real field set.
-    _, _, _, _, _, counts = run()
+    production = run(own_text=production_ownership_text)
+    require_no_barrier_pulls(production[0])
+    counts = production[-1]
     total = sum(counts.values())
     if total != len(accessors):
         sys.exit("gen_pipe_field_ownership: self-test: the positive control does not partition "
@@ -1088,7 +1128,7 @@ def self_test():
           "its OWN message; harness control OK; positive control OK "
           "(%d fields partitioned, 7 sticky forwards, 8 refusals)" % (trips, total))
     print("gen_pipe_field_ownership: self-test: %d admission-derivation control(s) held; the "
-          "derived section 7 allowlist is %d <field>@<verb> pair(s)"
+          "synthetic legacy allowlist is %d pair(s); production has zero debt"
           % (len(derivation), len(derived)))
     return 0
 
@@ -1115,6 +1155,7 @@ def main():
     _, exemptMap, required = check_verb_ops(verb_ops, exempt, calls, verbs)
     ownership, phase, why, forward_map, arg_list, counts = build(
         accessors, sticky, emitted, refused, rows, forwards, arg_rows)
+    require_no_barrier_pulls(ownership)
     waits = parse_wait_classes()
     verb_class, class_mask = parse_verb_classes()
     admitted_masks, admitted_pairs = build_admitted(

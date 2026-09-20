@@ -230,111 +230,46 @@ TEST_F(FieldOwnershipTest, EveryBarrierPulledRowNamesTheRetiringPhase) {
         pulled += isPulled ? 1 : 0;
     }
     EXPECT_EQ(pulled, kMGPipeBarrierPulledFieldCount);
+    EXPECT_EQ(pulled, SizeT{0}) << "P5f exit forbids reintroducing a residual pull";
 }
 
-// The 21 the reduced path actually reads (scout-unmigrated-census section 3: the union of
-// kClear's 7, kDraw's 19 and kReadback's 12) - AS P5c rv LEFT THEM (CONTRACT-P5C.md §5.3):
-// NINE moved to RECORD-SUPPLIED through set_context_values (the two texture-unit counters,
-// the touched-count array, the five XFB values) plus GetCurrentVertexAttribute through the
-// amended set_vertex_attrib_defaults payload, and the three texture shutters moved to
-// APPLIER-DERIVED ("a shutter, not a value: the server answers from its own Serial"). What
-// remains BARRIER-PULLED is EXACTLY the object class - nine non-sticky fields whose storage
-// is a frontend heap reference no record can carry - plus GetPixelStoreParameters, whose
-// PACK half the applier writes and whose UNPACK half has no carrier and no backend reader at
-// all.
+// P5f terminal contract; the historical registration name is retained for G14.
 TEST_F(FieldOwnershipTest, TheReducedPathsUnmigratedFieldsAreAllAccountedFor) {
-    const MGPipeInputField pulled[] = {
-        MGPipeInputField::GetBoundVertexArray,
-        MGPipeInputField::GetBufferBindingSlot,
-        MGPipeInputField::GetBufferBindingPoint,
-        MGPipeInputField::GetFramebufferBindingSlot,
-        MGPipeInputField::GetImageTextureBinding,
-        MGPipeInputField::GetTextureUnitObject,
-        MGPipeInputField::GetProgramForDraw,
-        MGPipeInputField::GetProgramForDispatch,
-        MGPipeInputField::GetTransformFeedbackProgram,
-    };
-    for (const auto field : pulled) {
-        EXPECT_EQ(MGPipeFieldOwnershipOf(field), MGPipeFieldOwnership::kBarrierPulled)
-            << kMGPipeInputFieldNames[Index(field)] << " left the reduced path's debt";
-    }
-    // rv's exit line, pinned as a SET and not only as nine rows: the non-sticky
-    // BARRIER-PULLED list above is ALL the non-sticky debt - value-class membership is zero
-    // (CONTRACT-P5C.md §7 table 2) - and the only other BARRIER-PULLED rows are six of the
-    // seven sticky forwards (the seventh, InvalidateCompileEnv, is FATAL since P5c ev).
-    const MGPipeInputField pulledSticky[] = {
-        MGPipeInputField::GetProgramObject,
-        MGPipeInputField::GetTextureObject,
-        MGPipeInputField::ValidateProgramName,
+    // Historical name retained for G14. These are retired legacy getters, not records.
+    const MGPipeInputField retired[] = {
+        MGPipeInputField::GetBoundVertexArray, MGPipeInputField::GetBufferBindingSlot,
+        MGPipeInputField::GetBufferBindingPoint, MGPipeInputField::GetFramebufferBindingSlot,
+        MGPipeInputField::GetImageTextureBinding, MGPipeInputField::GetTextureUnitObject,
+        MGPipeInputField::GetProgramForDraw, MGPipeInputField::GetProgramForDispatch,
+        MGPipeInputField::GetTransformFeedbackProgram, MGPipeInputField::GetProgramObject,
+        MGPipeInputField::GetTextureObject, MGPipeInputField::ValidateProgramName,
         MGPipeInputField::RecordError,
     };
-    SizeT pulledCount = 0;
-    for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
-        const auto field = static_cast<MGPipeInputField>(i);
-        if (kMGPipeFieldOwnership[i] != MGPipeFieldOwnership::kBarrierPulled) continue;
-        ++pulledCount;
-        Bool named = false;
-        for (const auto f : pulled) named = named || field == f;
-        for (const auto f : pulledSticky) named = named || field == f;
-        EXPECT_TRUE(named) << kMGPipeInputFieldNames[i]
-                           << " is BARRIER-PULLED and not in the pinned object-class list";
-    }
-    EXPECT_EQ(pulledCount, 13u) << "9 non-sticky object rows + 4 sticky forwards";
-    EXPECT_EQ(pulledCount, kMGPipeBarrierPulledFieldCount);
-    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetPixelStoreParameters),
+    for (const auto field : retired)
+        EXPECT_EQ(MGPipeFieldOwnershipOf(field), MGPipeFieldOwnership::kFatal)
+            << kMGPipeInputFieldNames[Index(field)] << " revived a client-memory accessor";
+    EXPECT_EQ(kMGPipeBarrierPulledFieldCount, SizeT{0});
+    EXPECT_EQ(kMGPipeAdmittedPullPairCount, SizeT{0});
+    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetPixelStoreParameters, 0),
               MGPipeFieldOwnership::kApplierDerived);
-    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetPixelStoreParameters, 0u),
-              MGPipeFieldOwnership::kApplierDerived);
-    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetPixelStoreParameters, 1u),
+    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetPixelStoreParameters, 1),
               MGPipeFieldOwnership::kFatal);
-
-    // The two off the reduced path, each for its own checkable reason. THREE UNTIL P5b: the
-    // third was GetProgramForDispatch, FATAL because "there is no compute on the reduced path",
-    // and package i1 is what put compute on the path (CONTRACT-P5B.md §6.9). It is asserted
-    // below in its new class rather than deleted from this case, because a field that quietly
-    // left the FATAL list is exactly what this case exists to catch.
-    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetBoundTransformFeedbackName),
-              MGPipeFieldOwnership::kFatal);
-    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetTransformFeedbackPausedPrimitiveCounter),
-              MGPipeFieldOwnership::kFatal);
-    // P5b i1: launch_grid (60) crosses, the backend's PrepareForCompute pulls the compute
-    // program inside it (DirectGLES.cpp:5779), and the field takes GetProgramForDraw's class
-    // and its retiring phases - so it is a measured DEBT now, not a defect.
-    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetProgramForDispatch),
-              MGPipeFieldOwnership::kBarrierPulled);
-    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetProgramForDispatch),
-              MGPipeFieldOwnershipOf(MGPipeInputField::GetProgramForDraw))
-        << "GetProgramForDispatch is GetProgramForDraw's twin and must share its class";
-
-    // AND THE NINE rv RETIRED, asserted in their NEW classes rather than deleted: a row that
-    // quietly fell back to BARRIER-PULLED is exactly what this list is for.
-    const MGPipeInputField suppliedByContextValues[] = {
-        MGPipeInputField::GetActiveTextureUnit,
-        MGPipeInputField::GetMaxTouchedTextureUnit,
-        MGPipeInputField::GetTouchedBufferBindingPointCount,
-        MGPipeInputField::IsTransformFeedbackActive,
-        MGPipeInputField::IsTransformFeedbackPaused,
-        MGPipeInputField::GetTransformFeedbackGeneration,
-        MGPipeInputField::GetBoundTransformFeedbackLifetimeId,
-        MGPipeInputField::GetTransformFeedbackCapturedVertices,
-    };
-    for (const auto field : suppliedByContextValues) {
-        EXPECT_EQ(MGPipeFieldOwnershipOf(field), MGPipeFieldOwnership::kRecordSupplied)
-            << kMGPipeInputFieldNames[Index(field)] << " no longer rides set_context_values";
-    }
-    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetCurrentVertexAttribute),
-              MGPipeFieldOwnership::kRecordSupplied)
-        << "the amended set_vertex_attrib_defaults payload carries all three views";
-    const MGPipeInputField shutters[] = {
-        MGPipeInputField::GetSamplingResolutionGeneration,
-        MGPipeInputField::GetTextureBindGeneration,
-        MGPipeInputField::GetTextureContextId,
-    };
-    for (const auto field : shutters) {
-        EXPECT_EQ(MGPipeFieldOwnershipOf(field), MGPipeFieldOwnership::kApplierDerived)
-            << kMGPipeInputFieldNames[Index(field)]
-            << " is a shutter: the server answers from its own Serial";
-    }
+    for (const auto field : {MGPipeInputField::GetBufferBindingPointCount,
+                            MGPipeInputField::HasOpenTransformFeedbackSpan,
+                            MGPipeInputField::GetTextureBindGeneration,
+                            MGPipeInputField::GetSamplingResolutionGeneration,
+                            MGPipeInputField::GetTextureContextId})
+        EXPECT_EQ(MGPipeFieldOwnershipOf(field), MGPipeFieldOwnership::kApplierDerived);
+    for (const auto field : {MGPipeInputField::GetActiveTextureUnit,
+                            MGPipeInputField::GetMaxTouchedTextureUnit,
+                            MGPipeInputField::GetTouchedBufferBindingPointCount,
+                            MGPipeInputField::IsTransformFeedbackActive,
+                            MGPipeInputField::IsTransformFeedbackPaused,
+                            MGPipeInputField::GetTransformFeedbackGeneration,
+                            MGPipeInputField::GetBoundTransformFeedbackLifetimeId,
+                            MGPipeInputField::GetTransformFeedbackCapturedVertices,
+                            MGPipeInputField::GetCurrentVertexAttribute})
+        EXPECT_EQ(MGPipeFieldOwnershipOf(field), MGPipeFieldOwnership::kRecordSupplied);
 }
 
 TEST_F(FieldOwnershipTest, TheSevenStickyForwardsAgreeWithTheirFieldRows) {
@@ -392,145 +327,19 @@ TEST_F(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::GetCaps), MGPipeVerb::kVerbCount);
 }
 
-// P5e (gl), ID-116 + ID-125: THE §7 ALLOWLIST IS A DERIVATION, RESTATED HERE INDEPENDENTLY.
-//
-// The generator emits kMGPipeAdmittedPullMask by joining four columns; the header's own
-// static_assert can only check two of them, because the wait column and the stamp map live in
-// other generated files. This case walks those and asserts the rule end to end. A derivation
-// that quietly dropped a term would still produce a plausible table - which is precisely how the
-// hand-kept copy in test.yml came to admit GetTextureObject@CopyImageSubData while omitting
-// GetFramebufferBindingSlot@ReadPixels.
-//
-// THE RULE (ID-125). Admitted iff the field is BARRIER-PULLED, the verb has a stamp row, the
-// field is inside the verb class's may-read mask, and EITHER the verb's op is statically
-// barriered OR the field's retiring phase does not name P5e. The second disjunct is the honest
-// statement of ID-84: this table is consulted only on a record the server already stamped
-// BARRIERED - CountBarrierPull's unbarriered arm is [[noreturn]] and fires first - so the pull
-// is legal by construction and the only open question is whether THIS phase still owes the
-// migration. The retiring-phase column is exactly that answer.
+// P5f terminal contract; the historical registration name is retained for G14.
 TEST_F(FieldOwnershipTest, TheAdmittedPullTableIsID84sDerivationAndNotAList) {
-    // "Does this row's retiring phase name P5e", tokenised rather than substring-matched for
-    // the generator's reason: a "P5" or a future "P5e2" must not answer for "P5e".
-    const auto owedByThisPhase = [](const char* retires) {
-        const std::string phase(retires == nullptr ? "" : retires);
-        for (std::size_t at = phase.find("P5e"); at != std::string::npos;
-             at = phase.find("P5e", at + 1)) {
-            const Bool leftOk = at == 0 || !std::isalnum(static_cast<unsigned char>(phase[at - 1]));
-            const std::size_t after = at + 3;
-            const Bool rightOk = after >= phase.size() ||
-                                 !std::isalnum(static_cast<unsigned char>(phase[after]));
-            if (leftOk && rightOk) return true;
-        }
-        return false;
-    };
-
-    // ---- ID-125's survivors, each named with the disjunct that carries it ----------------
-    // Disjunct 1, and the largest survivor in the lane (21 entries) - the row the hand-kept
-    // copy omitted. The field IS this phase's debt; read_pixels is kWaitReply, so the client
-    // is parked behind the record and P5C's semantics hold for it.
-    EXPECT_TRUE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetFramebufferBindingSlot,
-                                          MGPipeVerb::ReadPixels));
-    EXPECT_TRUE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetTextureUnitObject,
-                                          MGPipeVerb::CopyTexImage2D));
-    // Disjunct 2: a debt a LATER phase owes, on a verb this phase does not barrier.
-    // CONTRACT-P5E §5.7 rules transform feedback out of P5e entirely and this row retires in
-    // P3b/P4b, so the static rule alone would have failed the lane on a row no package in this
-    // phase is allowed to touch.
-    EXPECT_TRUE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetTransformFeedbackProgram,
-                                          MGPipeVerb::DrawArrays))
-        << "the lane would be red on a transform-feedback row CONTRACT-P5E §5.7 rules out of "
-           "this phase; ID-125's second disjunct is what admits it";
-    EXPECT_TRUE(MGPipeBarrierPullAdmitted(MGPipeInputField::ValidateProgramName,
-                                          MGPipeVerb::ShaderStorageBlockBinding));
-    // BOTH DISJUNCTS, ASSERTED SEPARATELY (ID-118 and ID-125 on one pair). GetTextureObject
-    // retires in P7, so disjunct 2 admits it whatever the wire says - and ID-118 ALSO moved
-    // resource_copy_region to a barriered class, so disjunct 1 holds independently. Putting
-    // that op back to kWaitNone must therefore leave the pair admitted and still be wrong, so
-    // the wait class is asserted here in its own words rather than through the allowlist.
-    EXPECT_TRUE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetTextureObject,
-                                          MGPipeVerb::CopyImageSubData));
-    EXPECT_NE(MGPipeWaitClassFor(MGPWireOp::ResourceCopyRegion), kWaitNone)
-        << "resource_copy_region is unbarriered again (ID-118): after the flip, a copy record "
-           "reading the client's texture object is an unconditional Fatal - the allowlist still "
-           "admits the pair on the retiring-phase disjunct, so THIS is the assertion that sees it";
-    EXPECT_FALSE(owedByThisPhase(
-        kMGPipeFieldRetiringPhase[static_cast<SizeT>(MGPipeInputField::GetTextureObject)]));
-
-    // ---- and the two rows THIS phase owes stay rejected ---------------------------------
-    EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetProgramForDraw,
-                                           MGPipeVerb::DrawArrays))
-        << "the draw path's pull became admitted - the allowlist is now forgiving the lane "
-           "entries this phase is being run to fix";
-    EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetBoundVertexArray,
-                                           MGPipeVerb::DrawArrays));
-    EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetProgramForDispatch,
-                                           MGPipeVerb::DispatchCompute));
-    // Magma's row: GetFramebufferBindingSlot retires in P5e on Espryt and P7 on Magma, and the
-    // phase column is ONE string for both, so the derivation cannot admit it on the unbarriered
-    // Clear verb. That is deliberate rather than a gap - the DirectVulkan entries carry their
-    // own expected-red lane label instead, so the Espryt allowlist stays a statement about
-    // Espryt (this package's item 7).
+    // P5f retires every production debt row. Generator self-tests retain synthetic
+    // debt fixtures to exercise all historical admission disjuncts independently.
+    EXPECT_EQ(kMGPipeBarrierPulledFieldCount, SizeT{0});
+    EXPECT_EQ(kMGPipeAdmittedPullPairCount, SizeT{0});
+    for (SizeT v = 0; v < kMGPipeVerbCount; ++v)
+        for (SizeT f = 0; f < kMGPipeInputFieldCount; ++f)
+            EXPECT_FALSE(MGPipeBarrierPullAdmitted(static_cast<MGPipeInputField>(f),
+                                                   static_cast<MGPipeVerb>(v)))
+                << kMGPipeInputFieldNames[f] << "@" << kMGPipeVerbNames[v];
     EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetFramebufferBindingSlot,
-                                           MGPipeVerb::Clear));
-    // A field that is not a debt at all is never admitted, on any verb.
-    EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetRenderStateParameters,
-                                           MGPipeVerb::ReadPixels));
-    // An out-of-range verb answers false rather than reading off the end: CountBarrierPull is
-    // reached from a stamp, and a stamp is only as good as the op that produced it.
-    EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetFramebufferBindingSlot,
-                                           MGPipeVerb::kVerbCount));
-
-    // ---- THE RULE, RESTATED OVER THE WHOLE TABLE ----------------------------------------
-    // The stamp map is INVERTED here rather than assumed: only an op MGPipeVerbForWireOp names
-    // can ever be the verb a pull is reported against.
-    Bool stamped[kMGPipeVerbCount] = {};
-    Bool waitedFor[kMGPipeVerbCount] = {};
-    for (SizeT op = 0; op < static_cast<SizeT>(MGPWireOp::kOpCount); ++op) {
-        const MGPipeVerb verb = MGPipeVerbForWireOp(static_cast<MGPWireOp>(op));
-        if (verb == MGPipeVerb::kVerbCount) continue;
-        stamped[static_cast<SizeT>(verb)] = true;
-        if (MGPipeWaitClassFor(static_cast<MGPWireOp>(op)) != kWaitNone) {
-            waitedFor[static_cast<SizeT>(verb)] = true;
-        }
-    }
-    SizeT admitted = 0;
-    SizeT byWaitClass = 0;
-    SizeT byRetiringPhase = 0;
-    for (SizeT v = 0; v < kMGPipeVerbCount; ++v) {
-        const auto verb = static_cast<MGPipeVerb>(v);
-        for (SizeT f = 0; f < kMGPipeInputFieldCount; ++f) {
-            const auto field = static_cast<MGPipeInputField>(f);
-            if (!MGPipeBarrierPullAdmitted(field, verb)) continue;
-            ++admitted;
-            if (waitedFor[v]) ++byWaitClass;
-            if (!owedByThisPhase(kMGPipeFieldRetiringPhase[f])) ++byRetiringPhase;
-            EXPECT_TRUE(stamped[v])
-                << kMGPipeInputFieldNames[f] << "@" << kMGPipeVerbNames[v]
-                << " is admitted on a verb the server never stamps, so it is a row of the "
-                   "allowlist nothing can exercise and nobody can retire";
-            EXPECT_TRUE(waitedFor[v] || !owedByThisPhase(kMGPipeFieldRetiringPhase[f]))
-                << kMGPipeInputFieldNames[f] << "@" << kMGPipeVerbNames[v]
-                << " is admitted although this phase owes the row AND no barriered op stamps the "
-                   "verb: after the flip that record's read is torn by construction, and "
-                   "admitting it turns an unconditional Fatal into a warning line";
-            EXPECT_EQ(kMGPipeFieldOwnership[f], MGPipeFieldOwnership::kBarrierPulled)
-                << kMGPipeInputFieldNames[f] << " is admitted but is not a BARRIER-PULLED row";
-            EXPECT_TRUE(MGPipeFieldMaskHas(
-                kMGPipeClassFieldMask[static_cast<SizeT>(kMGPipeVerbClass[v])], field))
-                << kMGPipeInputFieldNames[f] << "@" << kMGPipeVerbNames[v]
-                << " is admitted but is outside the verb class's may-read mask, so the residual "
-                   "fill never copied it for this verb";
-        }
-    }
-    EXPECT_EQ(admitted, kMGPipeAdmittedPullPairCount)
-        << "the walk and the generator disagree about how many pairs are admitted";
-    EXPECT_GT(admitted, SizeT{0})
-        << "the admitted set is EMPTY, which reads in the lane as rigour and is blindness: "
-           "every barriered readback row would be reported as a fresh defect";
-    // BOTH DISJUNCTS CARRY REAL WEIGHT. If either count were zero the rule would have collapsed
-    // to the other one and a whole class of rows would be silently mis-classified.
-    EXPECT_GT(byWaitClass, SizeT{0}) << "no pair is admitted by its verb's wait class";
-    EXPECT_GT(byRetiringPhase, SizeT{0}) << "no pair is admitted by its retiring phase";
+                                          MGPipeVerb::kVerbCount));
 }
 
 // ---------------------------------------------------------------------------------------
@@ -779,29 +588,38 @@ TEST_F(FieldOwnershipTest, SetContextValuesLandsInPipeInputsAndTheShuttersAnswer
     EXPECT_EQ(MGPipeResidualPullCount(), Uint64{0});
 }
 
+// P5f terminal contract; the historical registration name is retained for G14.
 TEST_F(FieldOwnershipTest, ABarrierPulledReadAfterAServerStampIsCountedNotFatal) {
-    // P5c rv: the exemplars are OBJECT-class now - the value rows this case used to read
-    // (GetActiveTextureUnit / GetTextureContextId / GetMaxTouchedTextureUnit) are
-    // RECORD-SUPPLIED / APPLIER-DERIVED since rv, and reading them here would count nothing.
-    // The three below are all of kDraw's class, all SharedPtr reads, and all safe on
-    // never-filled storage.
-    MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
-    ASSERT_EQ(MGPipeResidualPullCount(), Uint64{0});
-    (void)gPipeInputs.GetBoundVertexArray();
-    EXPECT_EQ(MGPipeResidualPullCount(), Uint64{1});
-    (void)gPipeInputs.GetProgramForDraw();
-    (void)gPipeInputs.GetTransformFeedbackProgram();
-    EXPECT_EQ(MGPipeResidualPullCount(), Uint64{3});
+#if MGTEST_HAVE_FORK
+    // Historical name retained for G14: the formerly admitted read is now forbidden.
+    const ChildResult r = RunInChild([] {
+
+        MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
+        (void)gPipeInputs.GetBoundVertexArray();
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("Admitted{"), std::string::npos) << r.Log;
+#else
+    GTEST_SKIP() << "needs fork";
+#endif
 }
 
-// The seven carry no MGP_INPUT_CHECK, so freshness can never reach them; this is the only
-// thing that puts them in `rsp`.
+// P5f terminal contract; the historical registration name is retained for G14.
 TEST_F(FieldOwnershipTest, AStickyForwardIsCountedAsAResidualPull) {
-    MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
-    ASSERT_EQ(MGPipeResidualPullCount(), Uint64{0});
-    (void)gPipeInputs.ValidateProgramName(1u);
-    (void)gPipeInputs.GetProgramObject(1u);
-    EXPECT_EQ(MGPipeResidualPullCount(), Uint64{2});
+#if MGTEST_HAVE_FORK
+    // Historical name retained for G14: the formerly admitted read is now forbidden.
+    const ChildResult r = RunInChild([] {
+
+        MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
+        (void)gPipeInputs.ValidateProgramName(1u);
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"ValidateProgramName@Clear\"}"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("Admitted{"), std::string::npos) << r.Log;
+#else
+    GTEST_SKIP() << "needs fork";
+#endif
 }
 
 // ... and outside a server-stamped verb they are ordinary monolith calls, which is what keeps
@@ -824,18 +642,17 @@ TEST_F(FieldOwnershipTest, NothingIsCountedOutsideAServerStampedVerb) {
 TEST_F(FieldOwnershipTest, TheAppliersOwnClearDisarmsTheStampWithoutTheClientsFill) {
     MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
     ASSERT_TRUE(gPipeInputs.ServerStampedVerb());
-    (void)gPipeInputs.ValidateProgramName(1u);
-    ASSERT_EQ(MGPipeResidualPullCount(), Uint64{1});
-
-    MGPipeServerClearVerbBoundary(); // what PipeApplier must call on leaving the applier
+    (void)gPipeInputs.GetActiveTextureUnit();
+    ASSERT_EQ(MGPipeResidualPullCount(), Uint64{0});
+    MGPipeServerClearVerbBoundary();
     EXPECT_FALSE(gPipeInputs.ServerStampedVerb());
     (void)gPipeInputs.ValidateProgramName(1u);
     gPipeInputs.InvalidateCompileEnv();
-    EXPECT_EQ(MGPipeResidualPullCount(), Uint64{1}) << "a forward outside a stamped verb was counted";
+    EXPECT_EQ(MGPipeResidualPullCount(), Uint64{0});
 }
 
 // The verb's own may-read table still holds on the server: kClear does not read
-// GetProgramForDraw, so reading it there is a stale answer rather than a residual pull,
+// GetProgramForDraw, so reading it there is a forbidden legacy access,
 // and it stays Fatal. Counting it would trade a loud staleness for a quiet one.
 // (P5c rv: the exemplar moved - GetActiveTextureUnit is RECORD-SUPPLIED since rv and would
 // say nothing about the pulled set here.)
@@ -843,7 +660,7 @@ TEST_F(FieldOwnershipTest, ABarrierPulledFieldOutsideTheVerbsClassIsStillFatal) 
 #if MGTEST_HAVE_FORK
     const ChildResult r = RunInChild([] {
         MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
-        (void)gPipeInputs.GetProgramForDraw(); // BARRIER-PULLED, but not in kClear's class
+        (void)gPipeInputs.GetProgramForDraw(); // retired accessor, outside kClear too
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetProgramForDraw@Clear\"}"), std::string::npos)
@@ -859,9 +676,13 @@ TEST_F(FieldOwnershipTest, ResidualPullsReachThePublishedPerFrameCounter) {
     PS::SetEnabledForTesting(true);
     PS::ResetForTesting();
     MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
-    (void)gPipeInputs.GetBoundVertexArray();
+    (void)gPipeInputs.GetCurrentVertexAttribute(0);
+    EXPECT_EQ(PS::FrameCalls(PS::CallClass::ResidualPulls), Uint64{0});
+    EXPECT_NE(PS::FormatWindowLine().find(" rsp=0"), std::string::npos) << PS::FormatWindowLine();
+    // Prove the reporting channel did not merely become a constant zero after retirement.
+    PS::AddCalls(PS::CallClass::ResidualPulls, 1);
     EXPECT_EQ(PS::FrameCalls(PS::CallClass::ResidualPulls), Uint64{1});
-    EXPECT_NE(PS::FormatWindowLine().find("rsp="), std::string::npos) << PS::FormatWindowLine();
+    EXPECT_NE(PS::FormatWindowLine().find(" rsp=1"), std::string::npos) << PS::FormatWindowLine();
     PS::ResetForTesting();
     PS::SetEnabledForTesting(false);
 }
@@ -1035,178 +856,73 @@ TEST_F(FieldOwnershipTest, TheClientVerbLeaveWritesTheClientBlockAlone) {
 
 #if MGTEST_HAVE_FORK
 
-// R-7.3's proof that the instrumentation can go red. An instrumentation that cannot is
-// decoration, and the set it counts is not empty. (P5c rv: the exemplar is object-class now -
-// the value rows this case was written against ride set_context_values and answer
-// RECORD-SUPPLIED.)
+// P5f terminal contract; the historical registration name is retained for G14.
 TEST_F(FieldOwnershipTest, StrictErrorsTurnsABarrierPulledReadIntoANamedAbort) {
+    // Historical name retained for G14: the formerly admitted read is now forbidden.
     const ChildResult r = RunInChild([] {
         MG_Config::Ipc.StrictErrors = true;
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
         (void)gPipeInputs.GetBoundVertexArray();
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"),
-              std::string::npos)
-        << r.Log;
-    EXPECT_NE(r.Log.find("BARRIER-PULLED"), std::string::npos) << r.Log;
-    EXPECT_NE(r.Log.find("MOBILEGL_IPC_STRICT_ERRORS=1"), std::string::npos) << r.Log;
-    // The strict line names the phase that owes the answer; a strict abort that did not would
-    // leave the reader exactly where the gate found them. P5e re-annotated this row (and the
-    // five object-class rows beside it) from "P8" to the phase that actually retires the pull,
-    // which is why the expected text moved with FieldOwnership.def rather than the case being
-    // re-pointed at another field: the string IS the debt entry, read out of the generated
-    // table, and a case that stopped checking it would let the annotation rot.
-    EXPECT_NE(r.Log.find("retires in P5e (Espryt unbarriered), P7 (Magma)]"), std::string::npos)
-        << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("Admitted{"), std::string::npos) << r.Log;
 }
 
+// P5f terminal contract; the historical registration name is retained for G14.
 TEST_F(FieldOwnershipTest, TheSameReadWithoutStrictErrorsSurvivesAndIsCounted) {
+    // Historical name retained for G14: the formerly admitted read is now forbidden.
     const ChildResult r = RunInChild([] {
+        MG_Config::Ipc.StrictErrors = false;
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
         (void)gPipeInputs.GetBoundVertexArray();
-        if (MGPipeResidualPullCount() != 1) ::_exit(7);
     });
-    ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_EQ(r.Log.find("Fatal{"), std::string::npos) << r.Log;
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("Admitted{"), std::string::npos) << r.Log;
 }
 
-// P5e (gl) RED-ONCE, ID-128: THE THIRD DISJUNCT, AND IT IS A RUNTIME FACT ABOUT THE RECORD.
-//
-// GetBoundVertexArray@DrawArrays is this phase's debt on an unbarriered verb, so the static
-// table rejects it and strict aborts - that is the case two blocks up, and it must keep doing
-// that for the ORDINARY draw path vi and mv retired. But the two
-// DirectGLES.Split.ClientVertexArrayScenario entries pull the same pair on a record the client
-// IS parked behind: MGPipeBarriered escalates a draw carrying client vertex arrays (ID-83), and
-// ID-82 puts client arrays outside P5e entirely - under run-ahead the client refuses them by
-// name and staging is P8's. The read site (SyncClientSideVertexArraysForDrawArrays) aborts with
-// Fatal{RoleViolation, "MGPipeSlots"} if it is ever applied unbarriered, so the pull is legal.
-//
-// ONE PAIR, TWO VERDICTS, DECIDED BY THE RECORD AND NOT BY THE TABLE. That is why the flag is
-// stamped in ApplyOne beside the barriered stamp rather than folded into the generated table:
-// no table indexed by (field, verb) can tell these two entries apart.
-//
-// THE RED: drop `&& !escalated` from CountBarrierPull's strict arm and this case dies of
-// SIGABRT on Fatal{UnmigratedPipeInput, "GetBoundVertexArray@DrawArrays"}.
-//
-// THE CONTROL IS THE CASE TWO BLOCKS UP, NOT A SECOND CHILD HERE.
-// StrictErrorsTurnsABarrierPulledReadIntoANamedAbort drives the IDENTICAL pull - same field,
-// same verb, same knob - with the escalation flag at its `false` default, and asserts the abort.
-// Reading the log delta of two forks in one case is what a shared log file cannot support.
+// P5f terminal contract; the historical registration name is retained for G14.
 TEST_F(FieldOwnershipTest, AnEscalatedRecordsPullIsAdmittedAndSaysWhy) {
-    const ChildResult escalated = RunInChild([] {
+    // Historical name retained for G14: the formerly admitted read is now forbidden.
+    const ChildResult r = RunInChild([] {
         MG_Config::Ipc.StrictErrors = true;
-        // What PipeApplier::ApplyOne stamps for a draw whose payload carries kDrawClientArrays:
-        // MGPipeBarriered says barriered, the static wait class of draw_vbo says kWaitNone.
         MGPipeApplierSetCurrentRecordBarrieredByEscalation(true);
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
         (void)gPipeInputs.GetBoundVertexArray();
-        if (MGPipeResidualPullCount() != 1) ::_exit(7);
     });
-    ASSERT_TRUE(ExitedWith(escalated, 0)) << DescribeStatus(escalated) << "\n" << escalated.Log;
-    EXPECT_EQ(escalated.Log.find("Fatal{UnmigratedPipeInput"), std::string::npos) << escalated.Log;
-    // THE MARKER SAYS WHICH DISJUNCT, and that is what keeps the lane's comparison exact: a pair
-    // admitted by the table is checkable against `--print-admitted`, one admitted by escalation
-    // is not in any static list and must not widen one.
-    EXPECT_NE(escalated.Log.find("Admitted{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"
-                                 " [BARRIER-PULLED, ADMITTED-ESCALATED, retires in "),
-              std::string::npos)
-        << escalated.Log;
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("Admitted{"), std::string::npos) << r.Log;
 }
 
-// THE SEVEN STICKY FORWARDS ARE NOT EXEMPT FROM THE DETECTOR, which is what this case has
-// always been for - it was written as "strict PROMOTES them to a Fatal" because before ID-125
-// every barrier-pulled read under strict aborted.
-//
-// P5e (gl), ID-125 CHANGED THE VERDICT AND NOT THE REACH, and the rename says which. All seven
-// sticky forwards retire in a LATER phase (P7, P7/P9, P7/P13, P9 - FieldOwnership.def's forward
-// list; not one names P5e), so on any stamped verb the second disjunct admits them: the record
-// is barriered, the pull is legal by construction, and the phase that owes the migration is not
-// this one. The thing that would be a defect is a sticky forward the detector never REACHED -
-// a read that answered out of gPipeInputs without being counted or named - and that is what is
-// asserted here, by the counter moving and by the marker naming the field and its phase.
-//
-// The Fatal half of the mechanism keeps its own case beside this one:
-// StrictErrorsTurnsABarrierPulledReadIntoANamedAbort uses GetBoundVertexArray, which IS this
-// phase's debt on an unbarriered verb and therefore still aborts.
+// P5f terminal contract; the historical registration name is retained for G14.
 TEST_F(FieldOwnershipTest, StrictErrorsReachTheStickyForwardsAndNameThemByField) {
+    // Historical name retained for G14: the formerly admitted read is now forbidden.
     const ChildResult r = RunInChild([] {
         MG_Config::Ipc.StrictErrors = true;
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
         (void)gPipeInputs.ValidateProgramName(1u);
-        // NOT EXEMPT: the forward went through CountBarrierPull like any field accessor. Without
-        // this, "it did not abort" would be indistinguishable from "it was never detected", and
-        // the sticky set is exactly where the gate is structurally blind if it is.
-        if (MGPipeResidualPullCount() != 1) ::_exit(7);
     });
-    ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_EQ(r.Log.find("Fatal{UnmigratedPipeInput"), std::string::npos) << r.Log;
-    EXPECT_NE(r.Log.find("Admitted{UnmigratedPipeInput, \"ValidateProgramName@DrawArrays\"} "
-                         "[BARRIER-PULLED, ADMITTED, retires in P9]"),
-              std::string::npos)
-        << "the sticky forward was neither aborted on nor named; a debt nobody prints is a debt "
-           "nobody retires\n"
-        << r.Log;
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"ValidateProgramName@DrawArrays\"}"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("Admitted{"), std::string::npos) << r.Log;
 }
 
-// P5e (gl) RED-ONCE, ID-117: THE THIRD STATE, AND IT IS THE SAME FIELD AS THE CASE ABOVE.
-//
-// ValidateProgramName@DrawArrays aborts (draw_vbo is kWaitNone: the client will not be parked
-// behind that record and the read is torn by construction). ValidateProgramName@ReadPixels is
-// the same sticky forward under a verb whose op IS statically barriered, so the client is
-// parked, the value is real and ordered, and the debt is P9's rather than this phase's - it
-// says so and the entry COMPLETES. One field, two verbs, opposite verdicts: that is the whole
-// of ID-84 in two cases, and before this change the lane could not tell them apart because
-// strict aborted on both, which made CI's allowlist comparison unreachable code.
-//
-// THE RED: delete the `if (!MGPipeBarrierPullAdmitted(...))` guard in CountBarrierPull so the
-// strict arm is unconditional again, and this case dies of SIGABRT instead of exiting 0.
+// P5f terminal contract; the historical registration name is retained for G14.
 TEST_F(FieldOwnershipTest, AnAdmittedBarrierPullIsLoudOnceAndNotFatal) {
+    // Historical name retained for G14: the formerly admitted read is now forbidden.
     const ChildResult r = RunInChild([] {
         MG_Config::Ipc.StrictErrors = true;
         MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
         (void)gPipeInputs.ValidateProgramName(1u);
-        (void)gPipeInputs.ValidateProgramName(1u);
-        (void)gPipeInputs.ValidateProgramName(2u);
-        // rsp counts every barriered pull, and under strict every surviving barriered pull is an
-        // admitted one - ID-119's reworded pin, from the counter's side.
-        if (MGPipeResidualPullCount() != 3) ::_exit(7);
     });
-    ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_EQ(r.Log.find("Fatal{UnmigratedPipeInput"), std::string::npos)
-        << "an admitted pull aborted: the lane can never be green while a debt this phase "
-           "deliberately leaves standing is fatal\n"
-        << r.Log;
-    // THE GRAMMAR, VERBATIM. `<field>@<verb>` and the bracketed tail are the Fatal's, character
-    // for character; only the leading tag differs, so every filter written since P5c that
-    // matches `Fatal{UnmigratedPipeInput` still means exactly "red".
-    EXPECT_NE(r.Log.find("MGPipe: Admitted{UnmigratedPipeInput, \"ValidateProgramName@ReadPixels\"}"
-                         " [BARRIER-PULLED, ADMITTED, retires in P9]"),
-              std::string::npos)
-        << r.Log;
-    // DEDUPED PER (field, verb): three pulls, one line. An 852-draw frame must not write 852.
-    SizeT lines = 0;
-    for (std::size_t at = r.Log.find("Admitted{UnmigratedPipeInput"); at != std::string::npos;
-         at = r.Log.find("Admitted{UnmigratedPipeInput", at + 1)) {
-        ++lines;
-    }
-    EXPECT_EQ(lines, SizeT{1})
-        << "the admitted marker is not deduped per (field, verb); a frame of draws would write "
-           "one line per pull and the marker census could not be read\n"
-        << r.Log;
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"ValidateProgramName@ReadPixels\"}"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("Admitted{"), std::string::npos) << r.Log;
 }
 
-// A FATAL-class read aborts whatever the knob says: no carrier, and the reduced path never
-// reads it, so it is a real defect rather than a debt.
-// P5b i1: the exemplar MOVED. This case used GetProgramForDispatch, which is BARRIER-PULLED
-// from i1 on (a debt the server serves, not an abort), so it would now assert that a served
-// read aborts - green for the wrong reason at best. GetTransformFeedbackPausedPrimitiveCounter
-// is the same statement with a field that is still FATAL: reachable only from class kQuery,
-// which the reduced path never enters.
-// RED ONCE BY DOING X: put GetProgramForDispatch back in the FATAL block of FieldOwnership.def
-// and TheFieldOwnershipTableIsTheContractsTableRow's new kBarrierPulled expectation goes red by
-// name; swap the field below for GetProgramForDispatch and THIS case goes red instead, because
-// a barrier-pulled read under a stamp does not abort.
+// P5f terminal contract; the historical registration name is retained for G14.
 TEST_F(FieldOwnershipTest, AFatalClassReadAbortsEvenWithoutStrictErrors) {
     const ChildResult r = RunInChild([] {
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
@@ -1219,20 +935,17 @@ TEST_F(FieldOwnershipTest, AFatalClassReadAbortsEvenWithoutStrictErrors) {
         << r.Log;
 }
 
-// And the field that LEFT the FATAL class is served rather than fatal, under the verb that made
-// it reachable. This is i1's half of the §6.9 grant made checkable: a dispatch stamp plus a read
-// of the compute program must NOT abort, which is precisely the statement "compute is on the
-// path now". RED ONCE BY DOING X: revert the FieldOwnership.def row to FATAL and this child
-// aborts with Fatal{UnmigratedPipeInput, "GetProgramForDispatch@DispatchCompute"}.
+// P5f terminal contract; the historical registration name is retained for G14.
 TEST_F(FieldOwnershipTest, TheComputeProgramIsServedUnderADispatchStampFromP5bOn) {
+    // Historical name retained for G14: the formerly admitted read is now forbidden.
     const ChildResult r = RunInChild([] {
+
         MGPipeServerStampVerbBoundary(MGPipeVerb::DispatchCompute);
         (void)gPipeInputs.GetProgramForDispatch();
-        MGPipeServerClearVerbBoundary();
     });
-    EXPECT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_EQ(r.Log.find("Fatal{UnmigratedPipeInput, \"GetProgramForDispatch"), std::string::npos)
-        << r.Log;
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetProgramForDispatch@DispatchCompute\"}"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("Admitted{"), std::string::npos) << r.Log;
 }
 
 // The argument-keyed row: the pack half is answerable and the unpack half is not, and the
@@ -1285,37 +998,30 @@ TEST_F(FieldOwnershipTest, AnUnmigratedEmulationIsFatalUnderARealTransportAndIne
         << split.Log;
 }
 
-// P5f (f1): THE REHEARSAL'S FATAL ARM, AND THE PROOF IT NEEDS NO OTHER KNOB. Under
-// MOBILEGL_IPC_ROLE_SPLIT_STATE=1 a BARRIER-PULLED read is Fatal{UnmigratedPipeInput} with
-// StrictErrors FALSE - the server block has no residual fill to answer from, so the read has
-// no legal value whatever the strict knob says, and the marker names the knob that armed it.
-// This is also the red-once for the lane's "no unnamed crashes" gate: the read below is an
-// O-class SharedPtr field, which without this arm would hand the backend an empty pointer to
-// dereference.
+// P5f terminal contract; the historical registration name is retained for G14.
 TEST_F(FieldOwnershipTest, DualBlockMakesABarrierPulledReadANamedAbortWithoutStrict) {
+    // Historical name retained for G14: the formerly admitted read is now forbidden.
     const ChildResult r = RunInChild([] {
         MG_Config::Transport = MG_Config::TransportMode::InProcess;
         MG_Config::Ipc.RoleSplitState = true;
+        MG_Config::Ipc.StrictErrors = false;
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
         (void)gPipeInputs.GetBoundVertexArray();
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"),
-              std::string::npos)
-        << r.Log;
-    EXPECT_NE(r.Log.find("BARRIER-PULLED"), std::string::npos) << r.Log;
-    EXPECT_NE(r.Log.find("MOBILEGL_IPC_ROLE_SPLIT_STATE=1"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("Admitted{"), std::string::npos) << r.Log;
 }
 
-// ... and the same read with the knob set but the transport MONOLITH is the folded arm: one
-// block, the pull counted, no Fatal. The knob is not the mechanism; the knob AND a real
-// transport are.
+// P5f terminal contract; the historical registration name is retained for G14.
 TEST_F(FieldOwnershipTest, DualBlockDoesNotArmUnderMonolithTransport) {
     const ChildResult r = RunInChild([] {
-        MG_Config::Ipc.RoleSplitState = true; // the knob, with no transport behind it
-        MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
+        MG_Config::Transport = MG_Config::TransportMode::Monolith;
+        MG_Config::Ipc.RoleSplitState = true;
+        // A real monolith fill, not a manufactured server stamp on a monolith process.
+        MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
         (void)gPipeInputs.GetBoundVertexArray();
-        if (MGPipeResidualPullCount() != 1) ::_exit(7);
+        if (MGPipeRoleSplitActive() || MGPipeResidualPullCount() != 0) ::_exit(7);
     });
     ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_EQ(r.Log.find("Fatal{"), std::string::npos) << r.Log;
