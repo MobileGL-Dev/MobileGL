@@ -141,11 +141,22 @@ namespace MobileGL::MG_Remote::Server {
         Bool OnFenceWait(const MG_Pipe::MGPFenceWait&, Uint32&) override;
         Bool OnFenceWaitServer(const MG_Pipe::MGPFenceWait&) override;
         void ReleaseFences();
+        Bool OnQueryCreate(const MG_Pipe::MGPQueryDesc&) override;
+        Bool OnQueryBegin(const MG_Pipe::MGPQueryDesc&) override;
+        Bool OnQueryEnd(const MG_Pipe::MGPQueryDesc&) override;
+        Bool OnQueryCounter(const MG_Pipe::MGPQueryDesc&) override;
+        Bool OnQueryAvailable(const MG_Pipe::MGPHandleOnly&, Uint32&) override;
+        Bool OnQueryResult(const MG_Pipe::MGPQueryResultRequest&, Wire::QueryResultReply&) override;
+        Bool OnQueryDestroy(const MG_Pipe::MGPHandleOnly&) override;
+        Bool OnQueryTimestamp(const MG_Pipe::MGPTimestampRequest&, Int64&) override;
+        void ReleaseQueries();
         Bool OnClear(const MG_Pipe::MGPClear& clear) override;
         Bool OnBlit(const MG_Pipe::MGPBlit& blit) override;
         Bool OnPresent(const MG_Pipe::MGPPresent& present) override;
         Bool OnReadPixels(const MG_Pipe::MGPReadbackInfo& info, Uint64 seq,
                           Wire::ReplySink* replies) override;
+        Bool OnGetTextureImage(const MG_Pipe::MGPReadbackInfo& info, Uint64 seq,
+                               Wire::ReplySink* replies) override;
         Bool OnDrawVbo(const MG_Pipe::MGPDrawInfo& info, const MG_Pipe::MGPDrawRange* ranges,
                        const MG_Pipe::MGHostSpan* userIndices,
                        const MG_Pipe::MGPDrawIndirect* indirect) override;
@@ -179,6 +190,7 @@ namespace MobileGL::MG_Remote::Server {
         Bool OnPauseStreamOutput(const MG_Pipe::MGPStreamOutputControl& control) override;
         Bool OnResumeStreamOutput(const MG_Pipe::MGPStreamOutputControl& control) override;
         Bool OnBindStreamOutput(const MG_Pipe::MGPStreamOutputBind& bind) override;
+        Bool OnDeleteStreamOutput(const MG_Pipe::MGPStreamOutputBind& object) override;
         Bool OnPatchParameter(const MG_Pipe::MGPPatchParameter& patch) override;
         Bool OnGenerateMipmap(const MG_Pipe::MGPMipPlan& plan) override;
         Bool OnCopyFramebufferToTexture(const MG_Pipe::MGPCopyFromFramebuffer& copy) override;
@@ -273,6 +285,18 @@ namespace MobileGL::MG_Remote::Server {
         };
         FenceEntry& FindFence(MG_Pipe::MGPipeHandle handle);
         UnorderedMap<Uint32, FenceEntry> m_fences;
+        struct QueryEntry {
+            Uint32 Gen = 0;
+            Uint32 Kind = 0;
+            Bool Live = false;
+            Bool Active = false;
+            MG_Backend::BackendQueryHandle Native = nullptr;
+            MG_Backend::BackendSyncHandle Completion = nullptr;
+        };
+        QueryEntry& FindQuery(MG_Pipe::MGPipeHandle handle);
+        void EndNativeQuery(QueryEntry& entry);
+        Bool QueryGpuComplete(QueryEntry& entry, Bool wait);
+        UnorderedMap<Uint32, QueryEntry> m_queries;
         MG_Backend::BackendObject* m_backend = nullptr;
         Uint64 m_clears = 0;
         Uint64 m_draws = 0;

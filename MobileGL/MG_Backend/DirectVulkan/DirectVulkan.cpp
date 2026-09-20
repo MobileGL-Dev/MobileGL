@@ -1422,7 +1422,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return false;
             }
             if (query->kind == VulkanTimerQuery::Kind::XfbGenerated &&
-                !query->pausedPrimitivesCountedByGpu && MGB_CTX_LIVE) {
+                !query->pausedPrimitivesCountedByGpu &&
+#if MOBILEGL_BUILD_DISAGGREGATED
+                MG_Config::Transport == MG_Config::TransportMode::Monolith &&
+#endif
+                MGB_CTX_LIVE) {
                 primitives += MGB_CTX->GetTransformFeedbackPausedPrimitiveCounter() -
                               query->pausedPrimitiveSnapshot;
             }
@@ -1470,6 +1474,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         query->kind = generated ? VulkanTimerQuery::Kind::XfbGenerated : VulkanTimerQuery::Kind::XfbWritten;
         query->rendererGeneration = GetRendererGeneration();
         query->pausedPrimitiveSnapshot =
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MG_Config::Transport == MG_Config::TransportMode::Monolith &&
+#endif
             MGB_CTX_LIVE ? MGB_CTX->GetTransformFeedbackPausedPrimitiveCounter() : 0;
         // Read AFTER StartXfbQueryCapture, which is where a failed reroute-pool creation
         // disarms: the answer is then what this span will actually do for every draw.

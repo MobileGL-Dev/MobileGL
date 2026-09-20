@@ -3011,6 +3011,131 @@ TEST(FenceWireRoundTrip, NullNativeFenceUsesOnlyTheExistingMonolithFallback) {
     sink.SetBackend(nullptr);
 }
 
+namespace {
+    int nativeQueryToken = 0;
+    Bool queryGpuReady = false;
+    Bool queryGenerated = false;
+    Uint32 queryReads = 0, queryEnds = 0, queryDeletes = 0;
+    constexpr Uint64 queryNativeValue = 0xfedcba9876543210ull;
+
+    void InstallQueryProbe(FenceProbeBackend& backend) {
+        InstallFenceProbe(backend);
+        queryGpuReady = queryGenerated = false;
+        queryReads = queryEnds = queryDeletes = 0;
+        backend.Table.GL.BeginXfbPrimitivesQuery = +[](Bool generated) -> MG_Backend::BackendQueryHandle {
+            queryGenerated = generated;
+            return &nativeQueryToken;
+        };
+        backend.Table.GL.EndXfbPrimitivesQuery = +[](MG_Backend::BackendQueryHandle query) {
+            EXPECT_EQ(query, &nativeQueryToken);
+            ++queryEnds;
+        };
+        backend.Table.GL.IsQueryResultAvailable = +[](MG_Backend::BackendQueryHandle query) -> Bool {
+            EXPECT_EQ(query, &nativeQueryToken);
+            return queryGpuReady;
+        };
+        backend.Table.GL.GetQueryResult64 = +[](MG_Backend::BackendQueryHandle query, Bool, Uint64* value) -> Bool {
+            EXPECT_EQ(query, &nativeQueryToken);
+            ++queryReads;
+            *value = queryNativeValue;
+            return true;
+        };
+        backend.Table.GL.DeleteBackendQuery = +[](MG_Backend::BackendQueryHandle query) {
+            EXPECT_EQ(query, &nativeQueryToken);
+            ++queryDeletes;
+        };
+        backend.Table.GL.ClientWaitSync = +[](MG_Backend::BackendSyncHandle sync, GLbitfield flags,
+                                              GLuint64 timeout) -> GLenum {
+            EXPECT_EQ(sync, &nativeFenceToken);
+            fenceFlags = flags;
+            fenceTimeout = timeout;
+            return queryGpuReady ? GL_CONDITION_SATISFIED : GL_TIMEOUT_EXPIRED;
+        };
+    }
+}
+
+TEST(QueryWireRoundTrip, PrimitiveQueriesPreservePendingStateNativeResultsAndIdentity) {
+    Wire2 wire;
+    FenceProbeBackend backend;
+    InstallQueryProbe(backend);
+    Server::ServerVerbSink sink;
+    sink.SetBackend(&backend);
+    wire.Decoder().SetVerbSink(&sink);
+    auto send = [&](MGPWireOp op, const auto& payload) {
+        const auto seq = wire.Encoder().EncodeRecord(op, &payload, sizeof(payload));
+        EXPECT_NE(seq, kInvalidSeq);
+        bool applied = false;
+        EXPECT_TRUE(wire.PumpOne(&applied));
+        EXPECT_TRUE(applied);
+        return seq;
+    };
+    const MGPQueryDesc desc{{51, 0}, GL_PRIMITIVES_GENERATED, 0};
+    send(MGPWireOp::QueryCreate, desc);
+    send(MGPWireOp::QueryBegin, desc);
+    EXPECT_TRUE(queryGenerated);
+    send(MGPWireOp::QueryEnd, desc);
+    EXPECT_EQ(queryEnds, 1u);
+    MGPQueryResultRequest request{};
+    request.Query = desc.Query;
+    const auto pendingSeq = send(MGPWireOp::QueryResult, request);
+    ASSERT_EQ(wire.Answers().All.back().Bytes.size(), sizeof(QueryResultReply));
+    QueryResultReply reply{};
+    std::memcpy(&reply, wire.Answers().All.back().Bytes.data(), sizeof(reply));
+    EXPECT_EQ(wire.Answers().All.back().Seq, pendingSeq);
+    EXPECT_EQ(wire.Answers().All.back().Status, ReplySink::kStatusOk);
+    EXPECT_EQ(reply.Produced, 0u);
+    EXPECT_EQ(queryReads, 0u) << "NO_WAIT must not call a potentially blocking native result read";
+    EXPECT_EQ(fenceTimeout, 0u);
+    queryGpuReady = true;
+    request.Wait = 1;
+    send(MGPWireOp::QueryResult, request);
+    std::memcpy(&reply, wire.Answers().All.back().Bytes.data(), sizeof(reply));
+    EXPECT_EQ(reply.Produced, 1u);
+    EXPECT_EQ(reply.Value, queryNativeValue);
+    EXPECT_EQ(queryReads, 1u);
+    EXPECT_EQ(fenceTimeout, GL_TIMEOUT_IGNORED);
+    EXPECT_EQ(fenceFlags, GL_SYNC_FLUSH_COMMANDS_BIT);
+    const MGPHandleOnly handle{desc.Query, static_cast<Uint32>(MGPipeKind::Query), 0};
+    send(MGPWireOp::QueryAvailable, handle);
+    Uint32 available = 0;
+    ASSERT_EQ(wire.Answers().All.back().Bytes.size(), sizeof(available));
+    std::memcpy(&available, wire.Answers().All.back().Bytes.data(), sizeof(available));
+    EXPECT_EQ(available, 1u);
+    send(MGPWireOp::QueryDestroy, handle);
+    EXPECT_EQ(queryDeletes, 1u);
+    EXPECT_EQ(fenceDeletes, 1u);
+    const MGPQueryDesc replacement{{51, 1}, GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN, 0};
+    send(MGPWireOp::QueryCreate, replacement);
+    send(MGPWireOp::QueryBegin, replacement);
+    EXPECT_FALSE(queryGenerated);
+    sink.SetBackend(nullptr);
+    EXPECT_EQ(queryEnds, 2u);
+    EXPECT_EQ(queryDeletes, 2u);
+}
+
+TEST(QueryWireRoundTrip, FailedNativeCreationDoesNotBecomeAnAvailableZeroResult) {
+    FenceProbeBackend backend;
+    InstallQueryProbe(backend);
+    backend.Table.GL.BeginXfbPrimitivesQuery = +[](Bool) -> MG_Backend::BackendQueryHandle { return nullptr; };
+    Server::ServerVerbSink sink;
+    sink.SetBackend(&backend);
+    const MGPQueryDesc desc{{7, 0}, GL_PRIMITIVES_GENERATED, 0};
+    ASSERT_TRUE(sink.OnQueryCreate(desc));
+    ASSERT_TRUE(sink.OnQueryBegin(desc));
+    ASSERT_TRUE(sink.OnQueryEnd(desc));
+    Uint32 available = 1;
+    EXPECT_TRUE(sink.OnQueryAvailable({desc.Query, static_cast<Uint32>(MGPipeKind::Query), 0}, available));
+    EXPECT_EQ(available, 0u);
+    MGPQueryResultRequest request{};
+    request.Query = desc.Query;
+    request.Wait = 1;
+    QueryResultReply reply{};
+    EXPECT_TRUE(sink.OnQueryResult(request, reply));
+    EXPECT_EQ(reply.Produced, 0u);
+    EXPECT_EQ(queryReads, 0u);
+    sink.SetBackend(nullptr);
+}
+
 #if MGTEST_HAVE_FORK
 TEST(FenceWireRoundTrip, DestroyedAndRecycledWireHandlesNeverReachTheBackend) {
     const auto r = RunInChild([] {

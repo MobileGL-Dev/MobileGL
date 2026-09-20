@@ -445,6 +445,13 @@ namespace MobileGL::MG_Remote::Wire {
     // exclusion list), so inventing a consumer for them would be building a semantics nobody
     // can test this phase. Their arms validate both tails - which is the part a later phase
     // must not have to re-derive - and return false.
+    struct QueryResultReply {
+        Uint64 Value = 0;
+        Uint32 Produced = 0;
+        Uint32 Reserved = 0;
+    };
+    static_assert(sizeof(QueryResultReply) == 16);
+
     class WireVerbSink {
     public:
         virtual ~WireVerbSink() = default;
@@ -453,6 +460,15 @@ namespace MobileGL::MG_Remote::Wire {
         virtual Bool OnFenceStatus(const MG_Pipe::MGPHandleOnly&, Uint32&) { return false; }
         virtual Bool OnFenceWait(const MG_Pipe::MGPFenceWait&, Uint32&) { return false; }
         virtual Bool OnFenceWaitServer(const MG_Pipe::MGPFenceWait&) { return false; }
+        virtual Bool OnQueryCreate(const MG_Pipe::MGPQueryDesc&) { return false; }
+        virtual Bool OnQueryBegin(const MG_Pipe::MGPQueryDesc&) { return false; }
+        virtual Bool OnQueryEnd(const MG_Pipe::MGPQueryDesc&) { return false; }
+        virtual Bool OnQueryCounter(const MG_Pipe::MGPQueryDesc&) { return false; }
+        virtual Bool OnQueryAvailable(const MG_Pipe::MGPHandleOnly&, Uint32&) { return false; }
+        virtual Bool OnQueryResult(const MG_Pipe::MGPQueryResultRequest&, QueryResultReply&) { return false; }
+        virtual Bool OnQueryDestroy(const MG_Pipe::MGPHandleOnly&) { return false; }
+        virtual Bool OnQueryTimestamp(const MG_Pipe::MGPTimestampRequest&, Int64&) { return false; }
+        virtual Bool OnDeleteStreamOutput(const MG_Pipe::MGPStreamOutputBind&) { return false; }
         virtual Bool OnClear(const MG_Pipe::MGPClear& clear) {
             (void)clear;
             return false;
@@ -472,6 +488,9 @@ namespace MobileGL::MG_Remote::Wire {
             (void)info;
             (void)seq;
             (void)replies;
+            return false;
+        }
+        virtual Bool OnGetTextureImage(const MG_Pipe::MGPReadbackInfo&, Uint64, ReplySink*) {
             return false;
         }
         // `ranges` is info.NumDraws entries. `userIndices` is null unless the record set

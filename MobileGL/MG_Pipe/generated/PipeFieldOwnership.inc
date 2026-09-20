@@ -292,12 +292,21 @@ constexpr MGPipeVerb MGPipeVerbForWireOp(MGPWireOp op) {
     case MGPWireOp::FenceWait: return MGPipeVerb::ClientWaitSync;
     case MGPWireOp::FenceDestroy: return MGPipeVerb::DeleteSync;
     case MGPWireOp::FenceWaitServer: return MGPipeVerb::WaitSync;
+    case MGPWireOp::QueryCreate: return MGPipeVerb::BeginXfbPrimitivesQuery;
+    case MGPWireOp::QueryBegin: return MGPipeVerb::BeginXfbPrimitivesQuery;
+    case MGPWireOp::QueryEnd: return MGPipeVerb::EndXfbPrimitivesQuery;
+    case MGPWireOp::QueryAvailable: return MGPipeVerb::IsQueryResultAvailable;
+    case MGPWireOp::QueryResult: return MGPipeVerb::GetQueryResult64;
+    case MGPWireOp::QueryDestroy: return MGPipeVerb::DeleteBackendQuery;
+    case MGPWireOp::QueryCounter: return MGPipeVerb::QueryCounterTimestamp;
+    case MGPWireOp::QueryTimestamp: return MGPipeVerb::GetGpuTimestampNs;
+    case MGPWireOp::DeleteStreamOutput: return MGPipeVerb::DeleteTransformFeedback;
     default:
         return MGPipeVerb::kVerbCount;
     }
 }
 
-inline constexpr SizeT kMGPipeVerbBoundaryOpCount = 23;
+inline constexpr SizeT kMGPipeVerbBoundaryOpCount = 32;
 inline constexpr SizeT kMGPipeVerbBoundaryExemptCount = 3;
 
 // ---- THE §7 ALLOWLIST, DERIVED RATHER THAN WRITTEN (ID-116) --------------------------

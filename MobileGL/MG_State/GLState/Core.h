@@ -531,6 +531,9 @@ namespace MobileGL {
                 // Never returns 0 - the counter starts at 1 so a zero-initialised memo slot cannot
                 // be mistaken for a live object.
                 Uint64 GetBoundTransformFeedbackLifetimeId() const { return m_boundTransformFeedbackLifetimeId; }
+#if MOBILEGL_BUILD_DISAGGREGATED
+                Uint64 GetTransformFeedbackLifetimeId(Uint index) const;
+#endif
                 // Whether the object carrying this identity still has an OPEN capture span - one
                 // that glBeginTransformFeedback started and glEndTransformFeedback has not closed,
                 // paused or not. A backend that hands out a bounded set of per-object slots must

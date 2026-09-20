@@ -632,7 +632,10 @@ namespace MobileGL::MG_Remote::Server {
 
         // R-8/C-4: bits 32..47 of CallMask are the CONSUMER MASK, and this is the only place
         // they are produced.
-        const Uint64 callMask = CallMask();
+        Uint64 callMask = CallMask();
+        const auto timerSupported = m_backend->GetBackendFunctions().GL.IsTimerQuerySupported;
+        if ((callMask & MG_Pipe::kCapTimerQuery) && (!timerSupported || !timerSupported()))
+            callMask &= ~static_cast<Uint64>(MG_Pipe::kCapTimerQuery);
 
         ::flatbuffers::FlatBufferBuilder builder(4096);
         auto dynamicVector =

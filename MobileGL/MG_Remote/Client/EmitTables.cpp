@@ -34,6 +34,7 @@
 #include "PersistentMapTracker.h"
 
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
+#include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 #include <MG_Util/Debug/Log.h>
 #include <MG_Util/Metrics/PipeStats.h>
 #include <MG_Util/Metrics/TextureMetrics.h>
@@ -915,11 +916,9 @@ namespace MobileGL::MG_Remote::Client {
             // split form - the server writes the reply into the buffer resource and the client
             // marks it GPU-written (b1's MarkReadPixelsPackBuffer becoming the producer contract
             // §3 names) - is a P6 ROADMAP item. In P5 it is class C's shape (R-4), refused here.
-            if (MG_State::pGLContext != nullptr &&
-                MG_State::pGLContext->GetBufferBindingSlot(::MobileGL::BufferTarget::PixelPack)
-                    .GetBoundObject()) {
-                UnmigratedVerbFatal("ReadPixels+PACK_BUFFER");
-            }
+            const auto pbo = MG_State::pGLContext != nullptr
+                ? MG_State::pGLContext->GetBufferBindingSlot(::MobileGL::BufferTarget::PixelPack).GetBoundObject()
+                : SharedPtr<MG_State::GLState::BufferObject>{};
 
             BeforeReadOnlyVerb();
 
@@ -972,7 +971,7 @@ namespace MobileGL::MG_Remote::Client {
 
             Int32 status = 0;
             Uint64 replySize = 0;
-            if (ReadbackPackStateIsTight(width, bytesPerPixel, pack)) {
+            if (!pbo && ReadbackPackStateIsTight(width, bytesPerPixel, pack)) {
                 // THE COMMON CASE, AND IT KEEPS THE ZERO-COPY. A neutral pack state means the
                 // destination layout IS the tight layout, so the reply lands straight in the
                 // application's buffer and there is no bounce at all. It is a fast path for the
@@ -998,9 +997,24 @@ namespace MobileGL::MG_Remote::Client {
             // pointer at all (the bounce is the only thing that held the partial bytes).
             RequireReadbackReplyComplete(status, replySize, tight);
             ApplyReadbackByteSwap(bounce.data(), tight, type, pack);
+            if (pbo) {
+                // pixels is an offset, never a host pointer. Upload only the
+                // requested rows so PACK padding and untouched bytes survive.
+                const Uint64 alignment = std::max<Int>(pack.Alignment, 1);
+                const Uint64 rowPixels = pack.RowLength > 0 ? pack.RowLength : width;
+                const Uint64 stride = (rowPixels * bytesPerPixel + alignment - 1) / alignment * alignment;
+                const Uint64 start = reinterpret_cast<SizeT>(pixels) + pack.SkipRows * stride +
+                                     pack.SkipPixels * bytesPerPixel;
+                const SizeT rowBytes = static_cast<SizeT>(width) * bytesPerPixel;
+                for (Int y = 0; y < height; ++y)
+                    pbo->UploadSubData({bounce.data() + y * rowBytes, rowBytes}, start + y * stride);
+                return;
+            }
             ScatterTightReadbackIntoPackState(bounce.data(), pixels, width, height, bytesPerPixel,
                                               pack);
         }
+
+#include "TextureReadbackEmit.inc"
 
         void EmitPresent() {
             ClientSession& session = RequireSession("Present");
@@ -1565,7 +1579,9 @@ namespace MobileGL::MG_Remote::Client {
             g_fenceProxies.erase(proxy);
         }
 
-        // CLASS C - 16 slots remain after d1/i1/t2/f1; each names its first blocker.
+#include "QueryEmit.inc"
+
+        // CLASS C - each remaining slot names its first blocker.
         // =============================================================================
         //
         // PARTITIONED BY THE P5b PACKAGE THAT OWNS THE FLIP (MG_Remote/CONTRACT-P5B.md,
@@ -1614,35 +1630,19 @@ namespace MobileGL::MG_Remote::Client {
         // not by omission (unmeasured; the driver object leaks on the server until P9's XFB
         // namespace work, and a bind of name 0 is what the backend does on delete of the bound
         // one, DirectGLES.cpp:1422). It therefore still aborts by its own name.
-#define MGR_UNMIGRATED_T2_SLOTS(X)                                                                 \
-    X(DeleteTransformFeedback, void, (GLuint))
+#define MGR_UNMIGRATED_T2_SLOTS(X)
 
 #define MGR_UNMIGRATED_F1_SLOTS(X)
 
         // The wave-3 tail. SetSwapInterval is hand-written below (it is not a GL.* slot).
-#define MGR_UNMIGRATED_TAIL_SLOTS(X)                                                               \
-    X(GetTexImage, void, (GLenum, GLint, GLenum, GLenum, GLvoid*))                                 \
-    X(GetTextureImage, void,                                                                       \
-      (const SharedPtr<MG_State::GLState::ITextureObject>&, TextureUploadTarget, GLint, GLenum,    \
-       GLenum, GLsizei, GLvoid*))                                                                  \
-    X(EndTimeElapsedQuery, void, (MG_Backend::BackendQueryHandle))                                  \
-    X(DeleteBackendQuery, void, (MG_Backend::BackendQueryHandle))                                   \
-    X(EndOcclusionQuery, void, (MG_Backend::BackendQueryHandle))                                    \
-    X(EndXfbPrimitivesQuery, void, (MG_Backend::BackendQueryHandle))
+#define MGR_UNMIGRATED_TAIL_SLOTS(X)
 
         // The non-void ones, kept apart only because the macro body differs: a [[noreturn]]
         // call is a complete body for a void slot and for a value-returning one alike, but a
         // compiler that does not see UnmigratedVerbFatal's attribute through the macro would
         // warn on the second. It does see it; they are split for readability. All ten are the
         // wave-3 tail.
-#define MGR_UNMIGRATED_TAIL_VALUE_SLOTS(X)                                                         \
-    X(BeginTimeElapsedQuery, MG_Backend::BackendQueryHandle, ())                                   \
-    X(QueryCounterTimestamp, MG_Backend::BackendQueryHandle, ())                                   \
-    X(IsQueryResultAvailable, Bool, (MG_Backend::BackendQueryHandle))                               \
-    X(GetQueryResult64, Bool, (MG_Backend::BackendQueryHandle, Bool, Uint64*))                      \
-    X(BeginOcclusionQuery, MG_Backend::BackendQueryHandle, ())                                      \
-    X(BeginXfbPrimitivesQuery, MG_Backend::BackendQueryHandle, (Bool))                              \
-    X(GetGpuTimestampNs, Int64, ())
+#define MGR_UNMIGRATED_TAIL_VALUE_SLOTS(X)
 
         // The union, for the places that want every class-C row at once (the definitions and
         // the assignments). A package never edits THIS; it edits its own list above.
@@ -1686,13 +1686,14 @@ namespace MobileGL::MG_Remote::Client {
         constexpr Uint32 kEmittedSlotsP5 = 5; // Clear, DrawArrays, ReadPixels, Blit, Present
         constexpr Uint32 kEmittedSlotsD1 = 19;
         constexpr Uint32 kEmittedSlotsI1 = 7;
-        constexpr Uint32 kEmittedSlotsT2 = 6;
+        constexpr Uint32 kEmittedSlotsT2 = 7;
         constexpr Uint32 kEmittedSlotsF1 = 11;
-        constexpr Uint32 kEmittedSlotsTail = 1; // BlitNamedFramebuffer
+        constexpr Uint32 kEmittedSlotsTail = 3; // BlitNamedFramebuffer, both texture readbacks
         constexpr Uint32 kEmittedSlotsSync = 5;
+        constexpr Uint32 kEmittedSlotsQueries = 11;
         constexpr Uint32 kEmittedSlots =
             kEmittedSlotsP5 + kEmittedSlotsD1 + kEmittedSlotsI1 + kEmittedSlotsT2 + kEmittedSlotsF1 +
-            kEmittedSlotsTail + kEmittedSlotsSync;
+            kEmittedSlotsTail + kEmittedSlotsSync + kEmittedSlotsQueries;
         constexpr Uint32 kLocallyAnsweredSlots = 2; // GetIntegeri_v, IsTimerQuerySupported
 
         // EACH PACKAGE'S OWNERSHIP, PINNED. A package that flips a slot removes one row and
@@ -1703,7 +1704,7 @@ namespace MobileGL::MG_Remote::Client {
         static_assert(kUnmigratedI1 + kEmittedSlotsI1 == 7, "i1 owns the 7 image/compute/barrier/copy/SSBO slots");
         static_assert(kUnmigratedT2 + kEmittedSlotsT2 == 7, "t2 owns the 7 XFB/tessellation slots");
         static_assert(kUnmigratedF1 + kEmittedSlotsF1 == 11, "f1 owns the 11 clear/copy/mip slots");
-        static_assert(kUnmigratedTail + kEmittedSlotsTail + kEmittedSlotsSync == 20,
+        static_assert(kUnmigratedTail + kEmittedSlotsTail + kEmittedSlotsSync + kEmittedSlotsQueries == 20,
                       "the original wave-3 tail owns 20 slots");
         static_assert(kUnmigratedSlots + kEmittedSlots == 69, "class B and C own 69 slots");
         static_assert(kLocallyAnsweredSlots + kEmittedSlots + kUnmigratedSlots == kRemoteEmitSlotCount,
@@ -1729,6 +1730,18 @@ namespace MobileGL::MG_Remote::Client {
             table.GL.GetSyncStatus = &EmitGetSyncStatus;
             table.GL.WaitSync = &EmitWaitSync;
             table.GL.DeleteSync = &EmitDeleteSync;
+            table.GL.BeginTimeElapsedQuery = &EmitBeginTimeElapsedQuery;
+            table.GL.EndTimeElapsedQuery = &EmitEndQuery;
+            table.GL.QueryCounterTimestamp = &EmitQueryCounterTimestamp;
+            table.GL.BeginOcclusionQuery = &EmitBeginOcclusionQuery;
+            table.GL.EndOcclusionQuery = &EmitEndQuery;
+            table.GL.BeginXfbPrimitivesQuery = &EmitBeginXfbPrimitivesQuery;
+            table.GL.EndXfbPrimitivesQuery = &EmitEndQuery;
+            table.GL.IsQueryResultAvailable = &EmitIsQueryResultAvailable;
+            table.GL.GetQueryResult64 = &EmitGetQueryResult64;
+            table.GL.DeleteBackendQuery = &EmitDeleteBackendQuery;
+            table.GL.GetGpuTimestampNs = &EmitGetGpuTimestampNs;
+            table.GL.DeleteTransformFeedback = &EmitDeleteTransformFeedback;
 
             // ---- class A
             table.GL.GetIntegeri_v = &AnswerGetIntegeri_v;
@@ -1791,6 +1804,8 @@ namespace MobileGL::MG_Remote::Client {
             table.GL.CopyTexImage2D = &EmitCopyTexImage2D;
             table.GL.CopyTexSubImage2D = &EmitCopyTexSubImage2D;
             table.GL.GenerateMipmap = &EmitGenerateMipmap;
+            table.GL.GetTexImage = &EmitGetTexImage;
+            table.GL.GetTextureImage = &EmitGetTextureImage;
 
             // ---- class B, P5b package i1 (kEmittedSlotsI1 = 7)
             table.GL.BindImageTexture = &EmitBindImageTexture;

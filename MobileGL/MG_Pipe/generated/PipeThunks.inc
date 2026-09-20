@@ -336,3 +336,7 @@ inline void MGP_SetContextValues(const MGPContextValues* payload) {
 inline void MGP_SetProgramBindings(const MGPProgramBindings* payload, const void* varTail, Uint32 varTailCount) {
     gMGPipeContext.SetProgramBindings(payload, varTail, varTailCount);
 }
+
+inline void MGP_DeleteStreamOutput(const MGPStreamOutputBind* payload) {
+    gMGPipeContext.DeleteStreamOutput(payload);
+}

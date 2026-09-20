@@ -181,8 +181,8 @@ namespace {
 TEST(RemoteEmitTable, TheThreeClassesPartitionAllSeventyOneSlots) {
     // P5 baseline five + f1 eleven + i1 seven + t2 six emitted slots.
     EXPECT_EQ(LocallyAnsweredSlotCount(), 2u);
-    EXPECT_EQ(ImplementedVerbCount(), 54u);
-    EXPECT_EQ(UnmigratedSlotCount(), 15u);
+    EXPECT_EQ(ImplementedVerbCount(), 68u);
+    EXPECT_EQ(UnmigratedSlotCount(), 1u);
     EXPECT_EQ(LocallyAnsweredSlotCount() + ImplementedVerbCount() + UnmigratedSlotCount(),
               kRemoteEmitSlotCount);
 }
@@ -270,8 +270,9 @@ TEST(RemoteEmitTable, DeleteTransformFeedbackHasNoRowAndStillAbortsByItsOwnName)
     // failed.
     const ChildResult r = RunInChild([] { RemoteEmitTable().GL.DeleteTransformFeedback(7); });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"DeleteTransformFeedback\"}"), std::string::npos)
+    EXPECT_NE(r.Log.find("Fatal{NoClientSession, \"DeleteTransformFeedback\"}"), std::string::npos)
         << r.Log;
+    EXPECT_EQ(r.Log.find("Fatal{UnmigratedVerb"), std::string::npos) << r.Log;
 }
 #endif // MGTEST_HAVE_FORK
 
@@ -326,12 +327,9 @@ TEST(RemoteEmitTable, AnUnmigratedSlotAbortsAndNamesItself) {
     // GetTexImage is the wave-3 tail (CONTRACT-P5B.md §7): no P5b package flips it, so this
     // case keeps its subject across the four P5b landings. (It was DrawElements until d1 made
     // that a class-B emitter.)
-    const ChildResult r = RunInChild([] {
-        RemoteEmitTable().GL.GetTexImage(0x0DE1 /*GL_TEXTURE_2D*/, 0, 0x1908 /*GL_RGBA*/,
-                                         0x1401 /*GL_UNSIGNED_BYTE*/, nullptr);
-    });
+    const ChildResult r = RunInChild([] { RemoteEmitTable().SetSwapInterval(1); });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"GetTexImage\"}"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"SetSwapInterval\"}"), std::string::npos) << r.Log;
 }
 
 TEST(RemoteEmitTable, EachUnmigratedSlotNamesItsOwnSlot) {
@@ -383,7 +381,7 @@ TEST(RemoteEmitTable, TheSevenI1SlotsAreClassBAndAreNotTheFatalThunk) {
     // assignment would look like (class C is assigned FIRST in BuildRemoteEmitTable precisely so
     // that the mistake is loud rather than null).
     const MG_Backend::GlobalBackendFunctionsTable& table = RemoteEmitTable();
-    const void* fatal = reinterpret_cast<const void*>(table.GL.GetTexImage); // wave-3 tail, class C
+    const void* fatal = reinterpret_cast<const void*>(table.SetSwapInterval);
     ASSERT_NE(fatal, nullptr);
     const void* const i1[] = {
         reinterpret_cast<const void*>(table.GL.BindImageTexture),

@@ -150,7 +150,8 @@ enum class MGPWireOp : Uint16 {
     ObjectDeath = 78,
     SetContextValues = 79,
     SetProgramBindings = 80,
-    kOpCount = 81,
+    DeleteStreamOutput = 81,
+    kOpCount = 82,
 };
 
 // THE FLAGS, EXPORTED ONCE, INDEXED BY OPCODE (P5 R-13.4). MGPWireRecHeader::Flags is
@@ -252,6 +253,7 @@ inline constexpr Uint32 kMGPipeCallFlags[static_cast<SizeT>(MGPWireOp::kOpCount)
     /* 78 ObjectDeath             */ static_cast<Uint32>(kNone),
     /* 79 SetContextValues        */ static_cast<Uint32>(kNone),
     /* 80 SetProgramBindings      */ static_cast<Uint32>(kVarTail | kHostSpan),
+    /* 81 DeleteStreamOutput      */ static_cast<Uint32>(kNone),
 };
 static_assert(sizeof(kMGPipeCallFlags) / sizeof(kMGPipeCallFlags[0]) ==
                   static_cast<SizeT>(MGPWireOp::kOpCount),
@@ -352,6 +354,7 @@ inline constexpr Uint8 kMGPipeCallClasses[static_cast<SizeT>(MGPWireOp::kOpCount
     /* 78 ObjectDeath             */ static_cast<Uint8>(kCtxObject),
     /* 79 SetContextValues        */ static_cast<Uint8>(kCtxState),
     /* 80 SetProgramBindings      */ static_cast<Uint8>(kCtxState),
+    /* 81 DeleteStreamOutput      */ static_cast<Uint8>(kCtxVerb),
 };
 static_assert(sizeof(kMGPipeCallClasses) / sizeof(kMGPipeCallClasses[0]) ==
                   static_cast<SizeT>(MGPWireOp::kOpCount),
@@ -456,6 +459,7 @@ inline constexpr Uint8 kMGPipeWaitClasses[static_cast<SizeT>(MGPWireOp::kOpCount
     /* 78 ObjectDeath             */ static_cast<Uint8>(kWaitNone),
     /* 79 SetContextValues        */ static_cast<Uint8>(kWaitNone),
     /* 80 SetProgramBindings      */ static_cast<Uint8>(kWaitNone),
+    /* 81 DeleteStreamOutput      */ static_cast<Uint8>(kWaitNone),
 };
 static_assert(sizeof(kMGPipeWaitClasses) / sizeof(kMGPipeWaitClasses[0]) ==
                   static_cast<SizeT>(MGPWireOp::kOpCount),
@@ -1162,6 +1166,14 @@ static_assert(sizeof(MGPWireRec_SetProgramBindings) ==
                   ((sizeof(MGPWireRecHeader) + sizeof(MGPProgramBindings) + 7u) & ~SizeT(7u)),
               "MGPWireRec_SetProgramBindings gained padding; the wire format moved");
 
+struct alignas(8) MGPWireRec_DeleteStreamOutput {
+    MGPWireRecHeader Header;
+    MGPStreamOutputBind Payload;
+};
+static_assert(sizeof(MGPWireRec_DeleteStreamOutput) ==
+                  ((sizeof(MGPWireRecHeader) + sizeof(MGPStreamOutputBind) + 7u) & ~SizeT(7u)),
+              "MGPWireRec_DeleteStreamOutput gained padding; the wire format moved");
+
 [[noreturn]] inline void MGPipeWireProtocolFatal(const char* call, Uint64 size, Uint64 remaining) {
     MGLOG_F("MGPipe: protocol corruption applying %s: size=%llu remaining=%llu", call,
             static_cast<unsigned long long>(size), static_cast<unsigned long long>(remaining));
@@ -1450,6 +1462,9 @@ inline Bool MGPipeApplyWireRecord(MGPWireOp op, const void* record, Uint64 size,
         break;
     case MGPWireOp::SetProgramBindings:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetProgramBindings, "SetProgramBindings");
+        break;
+    case MGPWireOp::DeleteStreamOutput:
+        MGP_WIRE_CHECK_BOUNDS(MGPWireRec_DeleteStreamOutput, "DeleteStreamOutput");
         break;
     case MGPWireOp::kInvalid:
     case MGPWireOp::kOpCount:

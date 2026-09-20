@@ -1455,6 +1455,13 @@ namespace MobileGL::MG_State {
             return it != m_transformFeedbackObjects.end() && it->second.everBound;
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        Uint64 GLContext::GetTransformFeedbackLifetimeId(Uint index) const {
+            const auto found = m_transformFeedbackObjects.find(index);
+            return found == m_transformFeedbackObjects.end() ? 0 : found->second.lifetimeId;
+        }
+#endif
+
         void GLContext::MarkTransformFeedbackObjectForDeletion(Uint index) {
             if (index == 0 || !m_transformFeedbackNames.IsValid(index)) return;
             // Deleting the bound object reverts to the default one (GL 4.6 core 13.2.1);

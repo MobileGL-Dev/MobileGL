@@ -187,6 +187,22 @@ namespace MobileGL::MG_Backend {
                 serverBackend->GetBackendFunctions().GL.EndTransformFeedback != nullptr) {
                 capBits |= MG_Pipe::kCapBackendOwnsXfbCapture;
             }
+            if (const auto* backend = loop.Backend()) {
+                const auto& gl = backend->GetBackendFunctions().GL;
+                // The query owner publishes only complete native query/reply paths.
+                // Timer hardware support is refreshed when caps are published after
+                // make-current; no CPU primitive-accounting preference is advertised.
+                if (gl.IsQueryResultAvailable && gl.GetQueryResult64 && gl.DeleteBackendQuery &&
+                    gl.FenceSync && gl.ClientWaitSync && gl.DeleteSync) {
+                    if (gl.BeginXfbPrimitivesQuery && gl.EndXfbPrimitivesQuery)
+                        capBits |= MG_Pipe::kCapXfbPrimitivesQuery;
+                    if (gl.BeginOcclusionQuery && gl.EndOcclusionQuery)
+                        capBits |= MG_Pipe::kCapOcclusionQuery;
+                    if (gl.IsTimerQuerySupported && gl.BeginTimeElapsedQuery &&
+                        gl.EndTimeElapsedQuery && gl.QueryCounterTimestamp)
+                        capBits |= MG_Pipe::kCapTimerQuery;
+                }
+            }
             // Each backend has an independent implementation-readiness gate.
             // The runtime RunAhead knob can decline the feature, never create it.
             const Bool runAheadReady = MG_Config::ActiveBackendType == BackendType::DirectVulkan

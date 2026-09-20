@@ -154,7 +154,16 @@
     X(FenceStatus,        GetSyncStatus)                                                              \
     X(FenceWait,          ClientWaitSync)                                                             \
     X(FenceDestroy,       DeleteSync)                                                                 \
-    X(FenceWaitServer,    WaitSync)
+    X(FenceWaitServer,    WaitSync)                                                                   \
+    X(QueryCreate,        BeginXfbPrimitivesQuery)                                                    \
+    X(QueryBegin,         BeginXfbPrimitivesQuery)                                                    \
+    X(QueryEnd,           EndXfbPrimitivesQuery)                                                      \
+    X(QueryAvailable,     IsQueryResultAvailable)                                                     \
+    X(QueryResult,        GetQueryResult64)                                                           \
+    X(QueryDestroy,       DeleteBackendQuery)                                                        \
+    X(QueryCounter,       QueryCounterTimestamp)                                                     \
+    X(QueryTimestamp,     GetGpuTimestampNs)                                                          \
+    X(DeleteStreamOutput, DeleteTransformFeedback)
 
 // X(Op, Why) - verb-shaped calls that are deliberately NOT stamp points.
 //

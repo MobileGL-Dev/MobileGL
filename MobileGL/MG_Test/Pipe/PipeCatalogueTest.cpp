@@ -156,7 +156,7 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
     // 13 + the five P5b-appended verbs (MG_Remote/CONTRACT-P5B.md): bind_shader_image,
     // patch_parameter, bind_stream_output, set_storage_block_binding,
     // copy_framebuffer_to_texture.
-    EXPECT_EQ(ClassCount<kCtxVerb>(), 18u);
+    EXPECT_EQ(ClassCount<kCtxVerb>(), 19u);
 }
 
 // A row nobody has migrated is null - which is exactly what "this subsystem has not been

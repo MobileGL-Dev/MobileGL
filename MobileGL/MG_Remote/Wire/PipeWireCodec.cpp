@@ -243,7 +243,8 @@ namespace MobileGL::MG_Remote::Wire {
     X(ApplierReset, MGPApplierReset)                                                           \
     X(ObjectDeath, MGPHandleOnly)                                                              \
     X(SetContextValues, MGPContextValues)                                                      \
-    X(SetProgramBindings, MGPProgramBindings)
+    X(SetProgramBindings, MGPProgramBindings)                                                  \
+    X(DeleteStreamOutput, MGPStreamOutputBind)
 
     namespace {
 
@@ -1657,16 +1658,37 @@ namespace MobileGL::MG_Remote::Wire {
                       ok ? &result : nullptr, ok ? sizeof(result) : 0);
             return ok;
         }
-        // Query migration follows the measured first blockers.
         case MGPWireOp::QueryCreate:
+            return m_verbs && m_verbs->OnQueryCreate(*static_cast<const MGPQueryDesc*>(payload));
         case MGPWireOp::QueryBegin:
+            return m_verbs && m_verbs->OnQueryBegin(*static_cast<const MGPQueryDesc*>(payload));
         case MGPWireOp::QueryEnd:
-        case MGPWireOp::QueryAvailable:
-        case MGPWireOp::QueryResult:
+            return m_verbs && m_verbs->OnQueryEnd(*static_cast<const MGPQueryDesc*>(payload));
         case MGPWireOp::QueryDestroy:
-        case MGPWireOp::QueryTimestamp:
+            return m_verbs && m_verbs->OnQueryDestroy(*static_cast<const MGPHandleOnly*>(payload));
         case MGPWireOp::QueryCounter:
-            return false;
+            return m_verbs && m_verbs->OnQueryCounter(*static_cast<const MGPQueryDesc*>(payload));
+        case MGPWireOp::QueryAvailable: {
+            Uint32 result = 0;
+            const Bool ok = m_verbs && m_verbs->OnQueryAvailable(*static_cast<const MGPHandleOnly*>(payload), result);
+            PostReply(op, seq, ok ? ReplySink::kStatusOk : ReplySink::kStatusDeclined,
+                      ok ? &result : nullptr, ok ? sizeof(result) : 0);
+            return ok;
+        }
+        case MGPWireOp::QueryResult: {
+            QueryResultReply result{};
+            const Bool ok = m_verbs && m_verbs->OnQueryResult(*static_cast<const MGPQueryResultRequest*>(payload), result);
+            PostReply(op, seq, ok ? ReplySink::kStatusOk : ReplySink::kStatusDeclined,
+                      ok ? &result : nullptr, ok ? sizeof(result) : 0);
+            return ok;
+        }
+        case MGPWireOp::QueryTimestamp: {
+            Int64 result = 0;
+            const Bool ok = m_verbs && m_verbs->OnQueryTimestamp(*static_cast<const MGPTimestampRequest*>(payload), result);
+            PostReply(op, seq, ok ? ReplySink::kStatusOk : ReplySink::kStatusDeclined,
+                      ok ? &result : nullptr, ok ? sizeof(result) : 0);
+            return ok;
+        }
 
         // ---- CSOs ------------------------------------------------------------------------
         case MGPWireOp::CreateRenderState: {
@@ -2103,9 +2125,8 @@ namespace MobileGL::MG_Remote::Wire {
                    m_verbs->OnGenerateMipmap(*static_cast<const MGPMipPlan*>(payload));
 
         case MGPWireOp::GetTextureImage:
-            // Off the reduced path (BRIEF §4) and outside P5b's measured 25: its emit-table slot
-            // is Fatal{UnmigratedVerb} on the client (contract §7 class C, wave 3 / P9).
-            return false;
+            return m_verbs != nullptr &&
+                   m_verbs->OnGetTextureImage(*static_cast<const MGPReadbackInfo*>(payload), seq, m_replies);
 
         // ---- the five class-B verbs: no MGPipeApply* exists, so v1's sink or nothing -------
         case MGPWireOp::Blit:
@@ -2205,6 +2226,8 @@ namespace MobileGL::MG_Remote::Wire {
         case MGPWireOp::BindStreamOutput:
             return m_verbs != nullptr &&
                    m_verbs->OnBindStreamOutput(*static_cast<const MGPStreamOutputBind*>(payload));
+        case MGPWireOp::DeleteStreamOutput:
+            return m_verbs && m_verbs->OnDeleteStreamOutput(*static_cast<const MGPStreamOutputBind*>(payload));
 
         case MGPWireOp::SetStorageBlockBinding: {
             // The block name is the ONE string on the wire (CONTRACT-P5B.md i1): a kHasBlob

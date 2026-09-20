@@ -19,6 +19,8 @@
 // §5.2). The same dependency ServerLoop.cpp already takes for CreateBackend; a server built
 // on Magma simply holds no twins in these tables and every release resolves to nothing.
 #include <MG_Backend/DirectGLES/Managers.h>
+#include <MG_Backend/DirectGLES/DirectGLES.h>
+#include <MG_Backend/DirectVulkan/DirectVulkan.h>
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
@@ -72,7 +74,10 @@ namespace MobileGL::MG_Remote::Server {
     // -----------------------------------------------------------------------------------
 
     void ServerVerbSink::SetBackend(MG_Backend::BackendObject* backend) {
-        if (m_backend != backend) ReleaseFences();
+        if (m_backend != backend) {
+            ReleaseQueries();
+            ReleaseFences();
+        }
         m_backend = backend;
     }
 
@@ -182,20 +187,27 @@ namespace MobileGL::MG_Remote::Server {
         m_fences.clear();
     }
 
+#include "QueryServer.inc"
+
     Bool ServerVerbSink::OnClear(const MG_Pipe::MGPClear& clear) {
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("clear");
         if (table == nullptr) return false;
         const MG_Backend::GLFunctionsTable& gl = table->GL;
 
-        // Named records precede the verb; bound-form backends re-sync the live draw binding.
-        if (!MG_Pipe::MGPipeHandleIsNull(clear.Fbo) &&
-            clear.Fbo != MG_Pipe::MGPipeApplier().BoundFramebuffer[0]) {
-            const char* slot = clear.Kind == kMGPClearKindDepthStencil ? "ClearNamedFramebufferfi+UNBOUND" :
-                clear.ValueClass == kMGPClearValueClassInt ? "ClearNamedFramebufferiv+UNBOUND" :
-                clear.ValueClass == kMGPClearValueClassUint ? "ClearNamedFramebufferuiv+UNBOUND" :
-                "ClearNamedFramebufferfv+UNBOUND";
-            MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"%s\"}", slot);
-            std::abort();
+        // The named framebuffer record already crossed before this verb. Scope
+        // only the server's resolved draw target; the next verb still observes
+        // the application's unchanged binding. Both backends sync from this
+        // handle and never need the frontend FramebufferObject.
+        auto& applier = MG_Pipe::MGPipeApplier();
+        struct ScopedClearTarget {
+            MG_Pipe::MGPipeApplierState& State;
+            MG_Pipe::MGPipeHandle Saved;
+            ~ScopedClearTarget() { State.BoundFramebuffer[0] = Saved; }
+        } clearTarget{applier, applier.BoundFramebuffer[0]};
+        if (!MG_Pipe::MGPipeHandleIsNull(clear.Fbo)) {
+            if (!applier.FramebufferRecordFor(clear.Fbo))
+                Wire::WireProtocolFatal("Clear.Fbo", "missing named framebuffer record");
+            applier.BoundFramebuffer[0] = clear.Fbo;
         }
         switch (clear.Kind) {
         case kMGPClearKindWhole:
@@ -329,6 +341,41 @@ namespace MobileGL::MG_Remote::Server {
         if (ServerSession* session = ServerSession::Active()) {
             session->ReturnPresentCredit(m_lastPresentSerial);
         }
+        return true;
+    }
+
+    Bool ServerVerbSink::OnGetTextureImage(const MG_Pipe::MGPReadbackInfo& info, Uint64 seq,
+                                           Wire::ReplySink* replies) {
+        if (!replies) Wire::WireProtocolFatal("GetTextureImage.reply", "missing reply sink");
+        const SizeT bpp = MG_Util::GetInputBytesPerPixel(
+            MG_Util::ConvertGLEnumToTextureInputFormat(info.Format),
+            MG_Util::ConvertGLEnumToTexturePixelDataType(info.Type));
+        if (!bpp || !info.Box.W || !info.Box.H || !info.Box.D || info.Box.X || info.Box.Y || info.Box.Z) {
+            Wire::WireProtocolFatal("GetTextureImage.extent", "invalid tight image extent");
+        }
+        const Uint64 tight = static_cast<Uint64>(info.Box.W) * info.Box.H * info.Box.D * bpp;
+        if (tight / bpp / info.Box.W / info.Box.H != info.Box.D ||
+            info.DstOffset > tight || !info.DstSize || info.DstSize > tight - info.DstOffset)
+            Wire::WireProtocolFatal("GetTextureImage.range", "invalid reply window");
+        auto image = info;
+        image.DstOffset = 0;
+        image.DstSize = tight;
+        Vector<Uint8> bytes;
+        Bool ok = false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (m_backend && m_backend->GetBackendType() == BackendType::DirectGLES)
+            ok = MG_Backend::DirectGLES::ReadTextureImageWire(image, bytes);
+        else if (m_backend && m_backend->GetBackendType() == BackendType::DirectVulkan &&
+                 MG_Backend::DirectVulkan::pVulkanRenderer)
+            ok = MG_Backend::DirectVulkan::pVulkanRenderer->ReadTextureImageWire(image, bytes);
+#endif
+        if (!ok || bytes.size() != tight) {
+            replies->PostReply(seq, Wire::ReplySink::kStatusError, nullptr, 0);
+            return false;
+        }
+        replies->PostReply(seq, Wire::ReplySink::kStatusOk, bytes.data() + info.DstOffset, info.DstSize);
+        m_readbackBytes += info.DstSize;
+        ++m_readbacks;
         return true;
     }
 
@@ -1008,7 +1055,6 @@ namespace MobileGL::MG_Remote::Server {
     Bool ServerVerbSink::OnBindStreamOutput(const MG_Pipe::MGPStreamOutputBind& bind) {
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("bind_stream_output");
         if (table == nullptr) return false;
-        if (table->GL.BindTransformFeedback == nullptr) return false;
         // THE GL NAME IS THE ARGUMENT, NOT THE LifetimeId BESIDE IT. Espryt keys its driver
         // objects by the GL name (XfbImpl::g_xfbObjects[name], DirectGLES.cpp:1401) and creates
         // the ES object on first bind; passing the lifetime id would index a map that has never
@@ -1016,8 +1062,22 @@ namespace MobileGL::MG_Remote::Server {
         // identifies the P5f capture snapshot on this side. Keeping it separate preserves
         // the backend GL-name argument while Begin/End find the right server-owned span.
         MG_Pipe::MGPipeApplier().BoundStreamOutputLifetimeId = bind.LifetimeId;
-        table->GL.BindTransformFeedback(static_cast<GLuint>(bind.GlName));
+        if (table->GL.BindTransformFeedback) table->GL.BindTransformFeedback(static_cast<GLuint>(bind.GlName));
         ++m_streamOutputBinds;
+        return true;
+    }
+
+    Bool ServerVerbSink::OnDeleteStreamOutput(const MG_Pipe::MGPStreamOutputBind& object) {
+        const auto* table = Table("DeleteTransformFeedback");
+        if (!table) return false;
+        if (!object.GlName || object.Pad0)
+            Wire::WireProtocolFatal("DeleteStreamOutput.name", "default object or reserved field");
+        auto& state = MG_Pipe::MGPipeApplier();
+        if (object.LifetimeId) {
+            state.StreamOutputSpans.erase(object.LifetimeId);
+            if (state.BoundStreamOutputLifetimeId == object.LifetimeId) state.BoundStreamOutputLifetimeId = 0;
+        }
+        if (table->GL.DeleteTransformFeedback) table->GL.DeleteTransformFeedback(object.GlName);
         return true;
     }
 

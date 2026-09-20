@@ -142,7 +142,7 @@
 //     sat catalogued-and-dead since P4a. 80 unique records.
 // ---------------------------------------------------------------------------------------
 
-#define MGP_CALL_LIST_DOCUMENTED_COUNT 80
+#define MGP_CALL_LIST_DOCUMENTED_COUNT 81
 
 // clang-format off
 #define MGP_CALL_LIST(X)                                                                            \
@@ -337,7 +337,9 @@
     /* ---- the same validate point: a rebuild inside the verb must already see the bindings.   ---- */ \
     /* ---- kWaitNone: nothing about it is read back, and under run-ahead a kCtxState row that  ---- */ \
     /* ---- names only handles and values is exactly what rule F admits.                        ---- */ \
-    X(SetProgramBindings,       MGPProgramBindings,         kCtxState,  kVarTail|kHostSpan,         kWaitNone)
+    X(SetProgramBindings,       MGPProgramBindings,         kCtxState,  kVarTail|kHostSpan,         kWaitNone)        \
+    /* Deletion carries the GL argument and its never-reused capture identity. */                          \
+    X(DeleteStreamOutput,       MGPStreamOutputBind,        kCtxVerb,   kNone,                      kWaitNone)
 // clang-format on
 
 // Explicitly NOT migrated (plan 4.4.6 / appendix A "explicit deletions"):
