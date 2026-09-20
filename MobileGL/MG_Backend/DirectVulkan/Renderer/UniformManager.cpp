@@ -95,7 +95,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (handle.Slot >= state.TextureResources.size()) WireDescriptorFatal("image-record");
         const auto& record = state.TextureResources[handle.Slot];
         if (!record.Live || record.Gen != handle.Gen) WireDescriptorFatal("image-record-generation");
-        auto* resource = m_textureManager->SyncTextureResourceByHandle(handle);
+        auto* resource = m_textureManager->SyncTextureResourceByHandle(handle, false, storage);
         if (!resource) WireDescriptorFatal("image-resource");
         m_textureManager->FlushPendingUploads();
 
