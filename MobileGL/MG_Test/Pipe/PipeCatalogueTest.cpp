@@ -638,7 +638,8 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     // host span in the third; it lands with a null route and a sink that refuses it by name,
     // exactly as set_shader_buffers has sat catalogued-and-dead since P4a.
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::SetProgramBindings), 80);
-    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 81);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::DeleteStreamOutput), 81);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 82);
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::SetProgramBindings),
               static_cast<Uint32>(kVarTail | kHostSpan));
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ApplierReset), static_cast<Uint32>(kNone));

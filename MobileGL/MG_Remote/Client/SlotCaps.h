@@ -56,10 +56,9 @@
 //   now calls the emitter and the server preserves the optional/native-null fallback.
 //   GL_Texture.cpp:6537 GetTextureImage      -> the frontend's own CPU readback, which is exact
 //   GL_Texture.cpp:6799 GetTexImage          -> the same
-//   GL_Getter.cpp x2  GetGpuTimestampNs      -> 0, which BackendObject.h:192 already names as
-//                                               the unsupported answer
-//   GL_Query.cpp      the four query probes   -> CPU primitive accounting / target rejection /
-//                                               COUNTER_BITS 0, all of them spec answers
+//   GL_Getter.cpp x2 GetGpuTimestampNs and GL_Query.cpp's query probes now use their
+//   timer/occlusion/primitive capability bits. An advertised path emits real query
+//   records; only an unavailable native capability reports COUNTER_BITS 0.
 //
 // NOT converted, deliberately, because "absent" would be wrong rather than quiet:
 //   GL_Drawing.cpp:1274/:1371/:1420/:1435/:1641/:1673  the transform-feedback span family. The
@@ -86,9 +85,8 @@
 // as it does under monolith. GL_Drawing.cpp:844's PatchParameteri stays a plain guard for the
 // same reason as the six: the slot is class B now, so "absent" never arises.
 //
-// The one XFB slot still class C is DeleteTransformFeedback, which CONTRACT-P5B.md gives no row
-// (unmeasured); :1641's guard therefore still reaches Fatal{UnmigratedVerb} by name, which is
-// the outcome R-4 asks for.
+// DeleteTransformFeedback now emits DeleteStreamOutput with the object's lifetime
+// identity; its ordinary slot guard reaches that emitter under a transport.
 //
 // WHAT THIS HEADER DELIBERATELY DOES NOT DO. It does not touch the 28 unguarded slots: those
 // have no probe to convert, and calling one reaches Fatal{UnmigratedVerb, "<slot>"} by name,

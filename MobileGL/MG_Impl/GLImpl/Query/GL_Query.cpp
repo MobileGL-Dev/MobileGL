@@ -778,6 +778,15 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         case GL_QUERY_COUNTER_BITS: {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                (target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN || target == GL_PRIMITIVES_GENERATED)) {
+                // Both wire query paths now return native GPU counters. GLES'
+                // core counter has 32 bits, so advertise that shared lower bound.
+                *params = MGL_BACKEND_SLOT_CAP(BeginXfbPrimitivesQuery, MG_Pipe::kCapXfbPrimitivesQuery) ? 32 : 0;
+                return;
+            }
+#endif
             // 64 bits are advertised only while the live backend can actually
             // time: IsTimerQuerySupported is the dynamic truth (extension /
             // entry points / timestamp valid bits at call time, not at table

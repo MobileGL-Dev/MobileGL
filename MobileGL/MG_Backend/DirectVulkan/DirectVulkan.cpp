@@ -1327,6 +1327,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     } // namespace
 
     Bool IsTimerQuerySupported() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The first caps snapshot is sent during the transport handshake,
+        // before eglMakeCurrent creates the server's Vulkan renderer.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && !pVulkanRenderer) return false;
+#endif
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::IsTimerQuerySupported called with null VulkanRenderer");
         return pVulkanRenderer->IsTimerQuerySupported();
     }
