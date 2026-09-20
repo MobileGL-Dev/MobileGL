@@ -97,7 +97,9 @@ namespace MobileGL::MG_Pipe {
 #if MOBILEGL_BUILD_DISAGGREGATED
 #define MGP_INPUT_CHECK(Field)                                                                                         \
     do {                                                                                                               \
-        if (!::MobileGL::MG_Pipe::MGPipeInputFieldIsFresh(m_filled, (Field))) {                                        \
+        if ((m_serverStampedVerb && ::MobileGL::MG_Pipe::MGPipeFieldOwnershipOf(Field) ==                            \
+                                      ::MobileGL::MG_Pipe::MGPipeFieldOwnership::kFatal) ||                           \
+            !::MobileGL::MG_Pipe::MGPipeInputFieldIsFresh(m_filled, (Field))) {                                        \
             ::MobileGL::MG_Pipe::MGPipeInputUnfreshRead((Field), m_currentVerb, m_serverStampedVerb);                  \
         }                                                                                                              \
     } while (0)
