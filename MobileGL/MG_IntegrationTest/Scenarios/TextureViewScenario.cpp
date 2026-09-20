@@ -39,6 +39,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -921,20 +922,17 @@ void main() {
         // runs, and what the split-only F1WireScenario never reaches (its fixture skips under any
         // other transport, which is why its copy of this rule runs nowhere).
         //
-        // DirectGLES ONLY, for two facts about the other backend and neither of them this arm's:
-        // Magma reallocates the chain through the bound object in its OWN generate path
-        // (DirectVulkan/Renderer/VulkanRenderer.cpp's EnsureGenerateMipmapStorageAllocated), which
-        // through a view means its owner's levels - the same defect on the far side of the door this
-        // fix closes; and a CPU sub-image into layer 1 or 2 of mip 2 or 3 does not read back through
-        // Magma at all - a run with the generate removed fails identically - so the per-level colours
-        // this case is built on are unobservable there rather than wrong.
+        // BOTH BACKENDS. DirectGLES had the reallocating arm in the frontend it shares with Magma
+        // (MG_Impl/GLImpl/Texture/GL_Texture.cpp), and it clips the generation to the view's LAYER
+        // window itself since 73b37bbe. Magma has its own generate path
+        // (DirectVulkan/Renderer/VulkanRenderer.cpp's GenerateMipmap) - it allocates through the
+        // BOUND object, so through a view it resized the owner's levels to the view's layer count
+        // and regenerated the owner's levels outside the view's window as well. It now takes the
+        // same frontend plan for the window and translates it into the storage image's own level
+        // and layer numbering before it blits anything.
         // ------------------------------------------------------------------------------------
         TEST_F(TextureViewScenario, GenerateMipmapThroughAViewLeavesTheOwnerShapeAlone) {
             if (!Ready() || IsSkipped()) return;
-            if (Gl().BackendName() != "DirectGLES") {
-                GTEST_SKIP() << "the DirectGLES monolith arm is the one that reallocated through the "
-                                "view; Magma does its own reallocation there and reads no such sub-image";
-            }
 
             constexpr int kLevels = 5;
             constexpr int kBase = 16;
@@ -1039,6 +1037,89 @@ void main() {
                 }
             }
             ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+        }
+
+        // ------------------------------------------------------------------------------------
+        // glGetTexImage THROUGH a layer-windowed view returns the VIEW's image.
+        //
+        // THE DEFECT this pins. Magma answers a readback out of the storage OWNER's image, and its
+        // copy was sized by that image's array layer count while being started at the view's layer
+        // origin. A two-layer view of a four-layer array therefore copied four layers: two the view
+        // does not name, and the fourth past the end of the image. Nothing stopped it, because
+        // glGetTexImage carries no destination size - while the size glGetTextureImage validates is
+        // built from the VIEW's own extents. A caller that sized its buffer for the view (the only
+        // size that definition offers) had it overrun by exactly the layers outside the window.
+        //
+        // The canary slices are the assertion that matters: they are past the view's last layer and
+        // inside the caller's allocation, so a copy that covers the storage's layers writes them.
+        // ------------------------------------------------------------------------------------
+        TEST_F(TextureViewScenario, GetTexImageThroughAViewReturnsOnlyItsOwnLayers) {
+            if (!Ready() || IsSkipped()) return;
+
+            constexpr int kLevels = 3;
+            constexpr int kBase = 8;
+            constexpr int kLayers = 4;
+            constexpr int kViewMinLayer = 1;
+            constexpr int kViewNumLayers = 2;
+            constexpr std::uint8_t kCanaryByte = 0xAB;
+            // One colour per storage layer, so a lost layer origin and a read past the window are
+            // both visible as another layer's colour rather than as a plausible one.
+            const auto layerColour = [](int layer) {
+                return Rgba8{static_cast<std::uint8_t>(10 * (layer + 1)), 40, 7, 255};
+            };
+            const Rgba8 canary{kCanaryByte, kCanaryByte, kCanaryByte, kCanaryByte};
+
+            const GLuint storage = MakeTexture();
+            glBindTexture(GL_TEXTURE_2D_ARRAY, storage);
+            glTexStorage3D(GL_TEXTURE_2D_ARRAY, kLevels, GL_RGBA8, kBase, kBase, kLayers);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            for (int level = 0; level < kLevels; ++level) {
+                const int side = kBase >> level;
+                std::vector<std::uint8_t> texels(static_cast<std::size_t>(side) * side * kLayers * 4);
+                for (int layer = 0; layer < kLayers; ++layer) {
+                    for (int t = 0; t < side * side; ++t) {
+                        std::uint8_t* p =
+                            texels.data() + (static_cast<std::size_t>(layer) * side * side + t) * 4;
+                        const Rgba8 colour = layerColour(layer);
+                        p[0] = colour.r;
+                        p[1] = colour.g;
+                        p[2] = colour.b;
+                        p[3] = colour.a;
+                    }
+                }
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, level, 0, 0, 0, side, side, kLayers, GL_RGBA,
+                                GL_UNSIGNED_BYTE, texels.data());
+            }
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR)) << "seeding the owner raised an error";
+
+            const GLuint view = MakeTexture();
+            glTextureView(view, GL_TEXTURE_2D_ARRAY, storage, GL_RGBA8, 0, kLevels, kViewMinLayer,
+                          kViewNumLayers);
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+            glBindTexture(GL_TEXTURE_2D_ARRAY, view);
+
+            const int side = kBase >> 2;
+            // Exactly what a caller sizes for the view, plus two canary slices.
+            std::vector<std::uint8_t> dst(static_cast<std::size_t>(side) * side * 4 *
+                                              (kViewNumLayers + 2),
+                                          kCanaryByte);
+            glGetTexImage(GL_TEXTURE_2D_ARRAY, 2, GL_RGBA, GL_UNSIGNED_BYTE, dst.data());
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR))
+                << "glGetTexImage through the view raised an error";
+
+            for (int slice = 0; slice <= kViewNumLayers + 1; ++slice) {
+                Image image(side, side);
+                std::memcpy(image.Data(), dst.data() + static_cast<std::size_t>(slice) * side * side * 4,
+                            static_cast<std::size_t>(side) * side * 4);
+                const bool inWindow = slice < kViewNumLayers;
+                const Rgba8 expected = inWindow ? layerColour(kViewMinLayer + slice) : canary;
+                const std::string what =
+                    inWindow ? "the view's slice " + std::to_string(slice) + ", the owner's layer " +
+                                   std::to_string(kViewMinLayer + slice)
+                             : "slice " + std::to_string(slice) +
+                                   ", past the view's last layer: the readback must not write it";
+                ExpectRegion(image, 0, side - 1, 0, side - 1, expected, 2, what.c_str());
+            }
         }
     } // namespace
 } // namespace MGITest

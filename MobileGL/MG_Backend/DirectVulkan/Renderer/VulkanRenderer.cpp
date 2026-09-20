@@ -25,6 +25,9 @@
 #include "MG_State/GLState/TextureState/TextureObject.h"
 #include "MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h"
 #include "MG_Impl/GLImpl/Texture/GL_Texture.h"
+// The generation window GenerateMipmap defines its chain in: one definition, shared with the
+// frontend arm and with the wire carrier that publishes it (MGPMipPlan::LevelCount).
+#include "MG_Impl/GLImpl/Texture/MipmapGenerationPlan.h"
 #include "MG_Util/Converters/GLToMG/TextureEnumConverter.h"
 // Only reached from an MGLOG_W, which the shipping INFO log level compiles out - so the
 // missing include never broke a default build and did break every WARN/DEBUG-level one.
@@ -1573,22 +1576,20 @@ void main() {
             return size;
         }
 
-        static Uint32 ComputeFullMipLevelCountWithFixedComponents(const IntVec3& baseTexelSize,
-                                                                  Int shrinkingComponents) {
-            Int maxDimension = 1;
-            for (Int component = 0; component < shrinkingComponents && component < 3; ++component) {
-                maxDimension = std::max<Int>(maxDimension, baseTexelSize[component]);
-            }
-            Uint32 mipLevelCount = 1;
-            while (maxDimension > 1) {
-                maxDimension = std::max<Int>(maxDimension / 2, 1);
-                ++mipLevelCount;
-            }
-            return mipLevelCount;
-        }
-
+        // glGenerateMipmap defines levels BASE_LEVEL+1 up to the level the base image's extent and
+        // MAX_LEVEL admit, and leaves every other level exactly as it was (GL 4.6 core 8.17). That
+        // window is a property of the GL call rather than of the backend, so the caller hands in
+        // the frontend's own plan (MG_Impl/GLImpl/Texture/MipmapGenerationPlan.h) and this defines
+        // exactly those levels - neither a chain derived here nor a truncation of the tail.
+        //
+        // IMMUTABLE storage - glTexStorage*'s chain, and ANY view, which GL 4.6 core 8.18 makes
+        // immutable from birth - already owns every level generation can write, so none may be
+        // redefined here. Allocating through a view is destructive in a way the view's own extents
+        // cannot describe: its base extent is ONE slice of the storage's layers, so AllocateStorage
+        // through a two-layer view of a four-layer array resizes the storage owner's level to two
+        // layers and the storage behind its other two is gone.
         static Bool EnsureGenerateMipmapStorageAllocated(::MobileGL::MG_State::GLState::TextureObjectMipmap& texture,
-                                                         Uint32 baseMipLevel) {
+                                                         Uint32 baseMipLevel, Uint32 endMipLevel) {
             const Uint32 existingMipLevelCount = static_cast<Uint32>(texture.GetMipmapLevelCount());
             if (existingMipLevelCount <= baseMipLevel) {
                 return false;
@@ -1597,6 +1598,10 @@ void main() {
             const auto& uploadTargets = texture.GetUploadTargets();
             if (uploadTargets.empty()) {
                 return false;
+            }
+
+            if (texture.IsImmutable()) {
+                return true;
             }
 
             const Int shrinkingComponents = MipShrinkingComponentCount(texture.GetTarget());
@@ -1617,13 +1622,12 @@ void main() {
                 }
 
                 const SizeT bytesPerTexel = baseByteSize / baseTexelCount;
-                const Uint32 requiredMipLevelCount =
-                    baseMipLevel + ComputeFullMipLevelCountWithFixedComponents(baseTexelSize, shrinkingComponents);
-                if (existingMipLevelCount >= requiredMipLevelCount) {
-                    continue;
-                }
-
-                for (Uint32 level = existingMipLevelCount; level < requiredMipLevelCount; ++level) {
+                // AllocateStorage RESIZES the level it is handed, so only levels the chain does not
+                // have yet are allocated: the ones inside the window that already exist - the
+                // levels a mutable chain defined by hand, or a previous generate built - keep the
+                // shadow bytes their own upload path wrote.
+                const Uint32 firstMissingMipLevel = std::max(baseMipLevel + 1, existingMipLevelCount);
+                for (Uint32 level = firstMissingMipLevel; level < endMipLevel; ++level) {
                     const IntVec3 levelTexelSize = ComputeMipTexelSizeWithFixedComponents(
                         baseTexelSize, level - baseMipLevel, shrinkingComponents);
                     const SizeT levelByteSize = bytesPerTexel * static_cast<SizeT>(levelTexelSize.x()) *
@@ -11478,6 +11482,10 @@ void main() {
         const Int glCubeFaceLayer = isCubeFaceTarget
             ? static_cast<Int>(textureUploadTarget) - static_cast<Int>(TextureUploadTarget::CubeMapPositiveX)
             : 0;
+        // The storage-image layer a copy starts at: the view's layer origin plus, for the one shape
+        // that names a face, the face the target token chose. Every copy below asks here, so the
+        // depth branch and the colour path cannot disagree about which layer was read.
+        const Uint32 baseArrayLayer = ToStorageArrayLayer(textureObject.get(), glCubeFaceLayer);
 
         if ((resource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) == 0) {
             if (format == GL_DEPTH_COMPONENT || format == GL_DEPTH_STENCIL || format == GL_STENCIL_INDEX) {
@@ -11485,7 +11493,7 @@ void main() {
                     textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, static_cast<Uint>(level));
                 // Storage space: `resource` is the storage texture's, so a view's level and
                 // layer have to be shifted into its numbering (see ToStorageMipLevel).
-                const Uint32 arrayLayer = ToStorageArrayLayer(textureObject.get(), glCubeFaceLayer);
+                const Uint32 arrayLayer = baseArrayLayer;
                 const Uint32 storageLevel = ToStorageMipLevel(textureObject.get(), level);
                 // A 1D array's levelSize.y() is its LAYER count, and those layers are the rows
                 // GL wants back - but in Vulkan they are array layers of a one-row image, not
@@ -11520,7 +11528,21 @@ void main() {
                                   imageTextureTarget == TextureTarget::Texture2DArray ||
                                   imageTextureTarget == TextureTarget::TextureCubeMapArray;
         const GLsizei depthSlices = is3dImage ? std::max<GLsizei>(texelSize.z(), 1) : 1;
-        const GLsizei arrayLayers = isArrayImage ? static_cast<GLsizei>(resource->arrayLayers) : 1;
+        // How many layers of the CALLER's texture a copy has to cover. `texelSize` above is already
+        // measured in the caller's space - a view's layer axis is the VIEW's, and the destination
+        // size the frontend validates a by-name readback against is built from the same extents -
+        // so the copy has to cover exactly those layers. resource->arrayLayers is the STORAGE
+        // owner's count: reading that many layers through a layer-windowed view covers layers the
+        // view does not name and, because the copy starts at the view's layer origin, runs past the
+        // last layer the image has.
+        const Uint32 storageArrayLayers = static_cast<Uint32>(resource->arrayLayers);
+        const Uint32 layersFromOrigin =
+            baseArrayLayer < storageArrayLayers ? storageArrayLayers - baseArrayLayer : 0u;
+        const GLsizei arrayLayers = static_cast<GLsizei>(
+            isArrayImage ? (textureObject->IsTextureView()
+                                ? std::min(static_cast<Uint32>(textureObject->GetViewNumLayers()), layersFromOrigin)
+                                : storageArrayLayers)
+                         : 1u);
         // A 1D array level comes back as ONE two-dimensional image whose rows are its layers
         // (GL 4.6 core 8.11.4), so its layers are already counted by `height` above and must not
         // multiply the slice count the way a 2D-array's or a cube-array's do. Vulkan still keeps
@@ -11580,10 +11602,11 @@ void main() {
         // Storage space, as above: a texture view reads its own level 0 out of whichever level
         // and layer of the parent it opened onto.
         copyRegion.imageSubresource.mipLevel = ToStorageMipLevel(textureObject.get(), level);
-        // glCubeFaceLayer, not 0: the cube face the target token named (see above). Non-zero for
-        // exactly one shape - a plain cube map read one face at a time - and layerCount is 1 there,
-        // so the copy stays inside the six layers the image has.
-        copyRegion.imageSubresource.baseArrayLayer = ToStorageArrayLayer(textureObject.get(), glCubeFaceLayer);
+        // baseArrayLayer, not 0: the cube face the target token named, plus the view's layer origin
+        // (see above). The face is non-zero for exactly one shape - a plain cube map read one face
+        // at a time - and layerCount is 1 there, so the copy stays inside the six layers the image
+        // has.
+        copyRegion.imageSubresource.baseArrayLayer = baseArrayLayer;
         copyRegion.imageSubresource.layerCount = static_cast<Uint32>(arrayLayers);
         copyRegion.imageExtent = {static_cast<Uint32>(width),
                                   is1dArrayImage ? 1u : static_cast<Uint32>(height),
@@ -11632,10 +11655,10 @@ void main() {
         //
         // Every ARRAY target - 1D array, 2D array, cube map array - needs no blit code of its own:
         // its layers live in the VkImage's arrayLayers, so resource->extent/depth already describe
-        // one layer's image and the loop below already copies every layer per level via
-        // srcSubresource.layerCount = resource->arrayLayers. The one thing they DO need is that the
-        // GL-space storage allocation not shrink the layer count down the chain, which
-        // MipShrinkingComponentCount handles.
+        // one layer's image and the loop below already copies every layer of the window per level
+        // via srcSubresource.layerCount. The one thing they DO need is that the GL-space storage
+        // allocation not shrink the layer count down the chain, which MipShrinkingComponentCount
+        // handles.
         if (textureTarget != TextureTarget::Texture2D && textureTarget != TextureTarget::Texture2DArray &&
             textureTarget != TextureTarget::Texture3D && textureTarget != TextureTarget::TextureCubeMap &&
             textureTarget != TextureTarget::TextureCubeMapArray &&
@@ -11657,7 +11680,21 @@ void main() {
         const Uint32 currentMipLevelCount = static_cast<Uint32>(mipmapTexture->GetMipmapLevelCount());
         MOBILEGL_ASSERT(currentMipLevelCount > 0, "GenerateMipmap requires level 0 storage.");
 
-        const Uint32 baseMipLevel = std::min(static_cast<Uint32>(texture->GetLevelRange().x()), currentMipLevelCount - 1);
+        const auto& uploadTargets = mipmapTexture->GetUploadTargets();
+        MOBILEGL_ASSERT(!uploadTargets.empty(), "GenerateMipmap requires at least one upload target.");
+
+        // The generation window the call names, in the BOUND object's coordinates: BASE_LEVEL is
+        // where generation starts, and it runs to the smaller of the base image's full chain and
+        // MAX_LEVEL + 1 (GL 4.6 core 8.17). Two things make this the FRONTEND's plan rather than
+        // an arithmetic of this function's own: that window is what the storage allocation below
+        // has to cover, and through a view the numbers are the VIEW's own - BASE_LEVEL 1 of a view
+        // whose MIN_LEVEL is 1 describes the STORAGE's level 2, and MAX_LEVEL 2 ends the chain at
+        // the storage's level 3.
+        const auto mipmapPlan = MG_Impl::GLImpl::ComputeMipmapGenerationRange(*mipmapTexture, uploadTargets.front());
+        const Uint32 baseMipLevel = std::min(mipmapPlan.Base, currentMipLevelCount - 1);
+        // A base level the storage does not reach leaves nothing to generate; the storage window
+        // below collapses to a single level, which every consumer reads as a no-op.
+        const Uint32 endMipLevel = std::max(mipmapPlan.End, baseMipLevel + 1);
 
         // A texture that has only ever defined level 0 carries a single-level backing, so defining
         // the rest of the chain below recreates the image and carries the old contents over with a
@@ -11715,10 +11752,11 @@ void main() {
         // level storage is never written; in monolith the client-object path runs unchanged.
         const Bool allocatedMipmapStorage =
             MG_Config::Transport != MG_Config::TransportMode::Monolith
-                ? EnsureGenerateMipmapShadowAllocated(*resource, baseMipLevel, texture->GetUploadTargets())
-                : EnsureGenerateMipmapStorageAllocated(*mipmapTexture, baseMipLevel);
+                ? EnsureGenerateMipmapShadowAllocated(*resource, baseMipLevel, uploadTargets)
+                : EnsureGenerateMipmapStorageAllocated(*mipmapTexture, baseMipLevel, endMipLevel);
 #else
-        const Bool allocatedMipmapStorage = EnsureGenerateMipmapStorageAllocated(*mipmapTexture, baseMipLevel);
+        const Bool allocatedMipmapStorage =
+            EnsureGenerateMipmapStorageAllocated(*mipmapTexture, baseMipLevel, endMipLevel);
 #endif
         MOBILEGL_ASSERT(allocatedMipmapStorage, "GenerateMipmap could not allocate a full mip chain for this texture.");
 
@@ -11735,18 +11773,42 @@ void main() {
             return;
         }
 
+        // Every blit below runs in the STORAGE image's coordinates. A view owns no image of its
+        // own (VkTextureManager::StorageTextureOf), so the window the application named through
+        // the view - its BASE_LEVEL..MAX_LEVEL and its layer slice - has to land at the levels and
+        // layers the view aliases, and everything outside that window belongs to the storage owner
+        // and must not move (GL 4.6 core 8.18).
+        const Uint32 storageBaseMipLevel = ToStorageMipLevel(texture.get(), baseMipLevel);
+        const Uint32 storageEndMipLevel = ToStorageMipLevel(texture.get(), endMipLevel);
+
+        // The chain may also stop where the base image's extent stops: levels past 1x1 are not
+        // generatable, and a chain the storage does not carry cannot be written.
         const IntVec3 storageBaseTexelSize = {
             static_cast<Int>(resource->extent.width),
             static_cast<Int>(resource->extent.height),
             static_cast<Int>(resource->depth),
         };
-        const IntVec3 baseTexelSize = ComputeMipTexelSize(storageBaseTexelSize, baseMipLevel);
-        const Uint32 requiredMipLevelCount = baseMipLevel + ComputeFullMipLevelCount(baseTexelSize);
-        const Uint32 generateMipLevelCount = std::min(requiredMipLevelCount, resource->mipLevels);
-        if (generateMipLevelCount <= baseMipLevel + 1) {
+        const IntVec3 baseTexelSize = ComputeMipTexelSize(storageBaseTexelSize, storageBaseMipLevel);
+        const Uint32 storageChainEndMipLevel = storageBaseMipLevel + ComputeFullMipLevelCount(baseTexelSize);
+        const Uint32 generateMipLevelCount =
+            std::min({storageEndMipLevel, storageChainEndMipLevel, static_cast<Uint32>(resource->mipLevels)});
+        if (generateMipLevelCount <= storageBaseMipLevel + 1) {
             resource->layout = ResolveGenerateMipmapFinalLayout(resource->aspect);
             return;
         }
+
+        // A view writes ONLY the layers it names; the storage owner keeps every other one. A
+        // texture that is not a view addresses the whole image, which is what layerCount
+        // resource->arrayLayers already means.
+        Uint32 baseArrayLayer = 0;
+        Uint32 arrayLayerCount = static_cast<Uint32>(resource->arrayLayers);
+        if (texture->IsTextureView()) {
+            baseArrayLayer = std::min(ToStorageArrayLayer(texture.get(), 0), arrayLayerCount);
+            arrayLayerCount = std::min(static_cast<Uint32>(texture->GetViewNumLayers()),
+                                       static_cast<Uint32>(resource->arrayLayers) - baseArrayLayer);
+        }
+        MOBILEGL_ASSERT(arrayLayerCount > 0, "GenerateMipmap: empty layer window for textureId=%d",
+                        texture->GetExternalIndex());
 
         const VkImageLayout originalLayout = resource->layout;
         const VkImageLayout finalLayout = ResolveGenerateMipmapFinalLayout(resource->aspect);
@@ -11762,7 +11824,7 @@ void main() {
                             "GenerateMipmap: depth texture format %d lacks sampled/depth-attachment support for shader fallback.",
                             static_cast<Int>(resource->format));
             const Bool depthReady = GenerateDepthMipmapWithShader(frame, *texture, *resource,
-                                                                  baseMipLevel, generateMipLevelCount,
+                                                                  storageBaseMipLevel, generateMipLevelCount,
                                                                   storageBaseTexelSize, originalLayout, finalLayout);
             MOBILEGL_ASSERT(depthReady,
                             "GenerateMipmap: depth fallback failed for textureId=%d target=%d internalFormat=%d vkFormat=%d",
@@ -11786,13 +11848,13 @@ void main() {
         GetImageTransitionDestinationState(finalLayout, finalDstStageMask, finalDstAccessMask);
 
         if (originalLayout != finalLayout) {
-            if (baseMipLevel > 0) {
+            if (storageBaseMipLevel > 0) {
                 VkImageLayout lowerMipLayout = originalLayout;
                 const Bool lowerReady = VkTextureManager::TransitionImageLayout(
                     frame.commandBuffer, resource->image, lowerMipLayout, finalLayout,
                     originalSrcStageMask, finalDstStageMask,
                     originalSrcAccessMask, finalDstAccessMask,
-                    resource->aspect, 0, baseMipLevel);
+                    resource->aspect, 0, storageBaseMipLevel);
                 MOBILEGL_ASSERT(lowerReady, "%s: failed to transition lower untouched mip levels", __func__);
             }
 
@@ -11812,7 +11874,7 @@ void main() {
             frame.commandBuffer, resource->image, srcMipLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             originalSrcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
             originalSrcAccessMask, VK_ACCESS_TRANSFER_READ_BIT,
-            resource->aspect, baseMipLevel, 1);
+            resource->aspect, storageBaseMipLevel, 1);
         MOBILEGL_ASSERT(srcReady, "%s: failed to transition base mip level to transfer source", __func__);
 
         // Every generated level starts from originalLayout and ends up TRANSFER_DST_OPTIMAL, and
@@ -11821,31 +11883,31 @@ void main() {
         // 12-level chain's 3(N-1)+1 barrier commands into 2(N-1)+2. Each level is still
         // individually transitioned to TRANSFER_SRC before it is read, so the write-then-read
         // dependency between consecutive levels is unchanged.
-        if (generateMipLevelCount > baseMipLevel + 1) {
+        if (generateMipLevelCount > storageBaseMipLevel + 1) {
             VkImageLayout dstRangeLayout = originalLayout;
             const Bool dstRangeReady = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, resource->image, dstRangeLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 originalSrcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 originalSrcAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT,
-                resource->aspect, baseMipLevel + 1, generateMipLevelCount - (baseMipLevel + 1));
+                resource->aspect, storageBaseMipLevel + 1, generateMipLevelCount - (storageBaseMipLevel + 1));
             MOBILEGL_ASSERT(dstRangeReady, "%s: failed to transition mip levels to transfer destination", __func__);
         }
 
-        for (Uint32 level = baseMipLevel + 1; level < generateMipLevelCount; ++level) {
+        for (Uint32 level = storageBaseMipLevel + 1; level < generateMipLevelCount; ++level) {
             const IntVec3 srcTexelSize = ComputeMipTexelSize(storageBaseTexelSize, level - 1);
             const IntVec3 dstTexelSize = ComputeMipTexelSize(storageBaseTexelSize, level);
 
             VkImageBlit blitRegion{};
             blitRegion.srcSubresource.aspectMask = resource->aspect;
             blitRegion.srcSubresource.mipLevel = level - 1;
-            blitRegion.srcSubresource.baseArrayLayer = 0;
-            blitRegion.srcSubresource.layerCount = resource->arrayLayers;
+            blitRegion.srcSubresource.baseArrayLayer = baseArrayLayer;
+            blitRegion.srcSubresource.layerCount = arrayLayerCount;
             blitRegion.srcOffsets[0] = {0, 0, 0};
             blitRegion.srcOffsets[1] = {srcTexelSize.x(), srcTexelSize.y(), srcTexelSize.z()};
             blitRegion.dstSubresource.aspectMask = resource->aspect;
             blitRegion.dstSubresource.mipLevel = level;
-            blitRegion.dstSubresource.baseArrayLayer = 0;
-            blitRegion.dstSubresource.layerCount = resource->arrayLayers;
+            blitRegion.dstSubresource.baseArrayLayer = baseArrayLayer;
+            blitRegion.dstSubresource.layerCount = arrayLayerCount;
             blitRegion.dstOffsets[0] = {0, 0, 0};
             blitRegion.dstOffsets[1] = {dstTexelSize.x(), dstTexelSize.y(), dstTexelSize.z()};
 
