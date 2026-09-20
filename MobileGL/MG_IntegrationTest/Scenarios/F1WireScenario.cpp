@@ -2,9 +2,15 @@
 #include "../Harness/ScenarioFixture.h"
 #include "../Harness/SplitRuntimePeek.h"
 #include <array>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <initializer_list>
+#include <sstream>
 #include <utility>
-#include <vector>
+#if !defined(_WIN32) && GTEST_HAS_DEATH_TEST
+#include <unistd.h>
+#endif
 #ifdef GLAPI
 #undef GLAPI
 #endif
@@ -375,7 +381,7 @@ void main() {
 )";
     const GLuint program = BuildWireProgram({{GL_COMPUTE_SHADER, compute}});
     ASSERT_NE(program, 0u);
-    glBindImageTexture(2, texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+    glBindImageTexture(2, texture, 0, GL_FALSE, 7, GL_WRITE_ONLY, GL_RGBA8); // 2D ignores the layer.
     glUseProgram(program);
     glDispatchCompute(8, 8, 1);
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
@@ -395,6 +401,186 @@ void main() {
     glBindImageTexture(2, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
     glUseProgram(0);
     glDeleteProgram(program);
+}
+
+TEST_F(F1WireScenario, ComputeImageStoreThroughViewPreservesOtherRootLayer) {
+    if (!Ready()) return;
+    GLuint root = 0, view = 0;
+    glGenTextures(1, &root);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, root);
+    glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, 8, 8, 2);
+    std::array<GLubyte, 8 * 8 * 2 * 4> red{};
+    for (size_t i = 0; i < red.size(); i += 4) {
+        red[i] = 255;
+        red[i + 3] = 255;
+    }
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, 8, 8, 2,
+                    GL_RGBA, GL_UNSIGNED_BYTE, red.data());
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, root, 0, 0);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    // Materialize the root's Vulkan image before any storage-image binding. The
+    // subsequent view-only bind must upgrade the root and preserve its other layer.
+    std::array<GLubyte, 4> initial{};
+    glReadPixels(2, 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, initial.data());
+    ASSERT_EQ(initial, (std::array<GLubyte, 4>{255, 0, 0, 255}));
+    glGenTextures(1, &view);
+    glTextureView(view, GL_TEXTURE_2D, root, GL_RGBA8, 0, 1, 1, 1);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    const char* compute = R"(#version 430 core
+layout(local_size_x=1, local_size_y=1, local_size_z=1) in;
+layout(rgba8, binding=2) writeonly uniform image2D destination;
+void main() { imageStore(destination, ivec2(gl_GlobalInvocationID.xy), vec4(0.0, 1.0, 0.0, 1.0)); }
+)";
+    const GLuint program = BuildWireProgram({{GL_COMPUTE_SHADER, compute}});
+    ASSERT_NE(program, 0u);
+    glBindImageTexture(2, view, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+    glUseProgram(program);
+    glDispatchCompute(8, 8, 1);
+    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
+    for (const int layer : {0, 1}) {
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, root, 0, layer);
+        std::array<GLubyte, 8 * 8 * 4> pixels{};
+        glReadPixels(0, 0, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+        const std::array<GLubyte, 4> expected = layer == 1
+            ? std::array<GLubyte, 4>{0, 255, 0, 255} : std::array<GLubyte, 4>{255, 0, 0, 255};
+        for (size_t at = 0; at < pixels.size(); at += 4) {
+            const std::array<GLubyte, 4> actual{pixels[at], pixels[at + 1], pixels[at + 2], pixels[at + 3]};
+            EXPECT_EQ(actual, expected) << "root layer " << layer << ", texel " << at / 4;
+        }
+    }
+    glBindImageTexture(2, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+    glUseProgram(0);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 0, 0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    glDeleteProgram(program);
+    glDeleteTextures(1, &view);
+    glDeleteTextures(1, &root);
+}
+
+TEST_F(F1WireScenario, EnabledVertexBufferDrawKeepsNamedP7Fatal) {
+    if (!Ready()) return;
+#if !defined(_WIN32) && GTEST_HAS_DEATH_TEST
+    Attach(GL_RGBA8);
+    const char* vertex = R"(#version 430 core
+layout(location=0) in vec2 position;
+void main() { gl_Position = vec4(position, 0.0, 1.0); }
+)";
+    const char* fragment = R"(#version 430 core
+layout(location=0) out vec4 color;
+void main() { color = vec4(0.0, 1.0, 0.0, 1.0); }
+)";
+    const GLuint program = BuildWireProgram({{GL_VERTEX_SHADER, vertex}, {GL_FRAGMENT_SHADER, fragment}});
+    ASSERT_NE(program, 0u);
+    GLuint vao = 0, vbo = 0;
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+    glGenBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    const GLfloat positions[] = {-1, -1, 3, -1, -1, 3};
+    glBufferData(GL_ARRAY_BUFFER, sizeof(positions), positions, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+    glEnableVertexAttribArray(0);
+    glUseProgram(program);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+
+    // A fresh exec reconstructs the fixture and apply thread; no child executes GL
+    // against a forked mutex/thread state. Capture the named log because shipped
+    // builds may disable console logging, which makes a stderr regex insufficient.
+    const char* oldLogEnv = std::getenv("MOBILEGL_LOG_FILE_PATH");
+    const bool hadLogEnv = oldLogEnv != nullptr;
+    const std::string oldLogPath = hadLogEnv ? oldLogEnv : "";
+    const std::string childLog = oldLogPath.empty()
+        ? "/tmp/mobilegl-vbo-death-" + std::to_string(static_cast<long long>(::getpid())) + ".log"
+        : oldLogPath + ".vbo-death";
+    std::remove(childLog.c_str());
+    ASSERT_EQ(::setenv("MOBILEGL_LOG_FILE_PATH", childLog.c_str(), 1), 0);
+    const std::string oldStyle = ::testing::FLAGS_gtest_death_test_style;
+    ::testing::FLAGS_gtest_death_test_style = "threadsafe";
+    EXPECT_DEATH({
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glFinish();
+    }, "");
+    ::testing::FLAGS_gtest_death_test_style = oldStyle;
+    if (hadLogEnv) ::setenv("MOBILEGL_LOG_FILE_PATH", oldLogPath.c_str(), 1);
+    else ::unsetenv("MOBILEGL_LOG_FILE_PATH");
+    std::ifstream log(childLog, std::ios::binary);
+    std::ostringstream contents;
+    contents << log.rdbuf();
+    log.close();
+    EXPECT_NE(contents.str().find("buffer-legacy-arm"), std::string::npos)
+        << "draw must keep the existing named P7 refusal, not die at a new object/field access\n"
+        << contents.str();
+    std::remove(childLog.c_str());
+    glUseProgram(0);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glDeleteBuffers(1, &vbo);
+    glDeleteVertexArrays(1, &vao);
+    glDeleteProgram(program);
+#else
+    GTEST_SKIP() << "requires gtest thread-safe exec death tests and POSIX environment handling";
+#endif
+}
+
+TEST_F(F1WireScenario, SrgbDrawTracksFramebufferConversion) {
+    if (!Ready()) return;
+    Attach(GL_SRGB8_ALPHA8);
+    const char* fragment = R"(#version 430 core
+layout(location=0) out vec4 color;
+void main() { color = vec4(0.5, 0.5, 0.5, 1.0); }
+)";
+    const GLuint program = BuildWireProgram({{GL_VERTEX_SHADER, kWireVertexIdTriangle},
+                                             {GL_FRAGMENT_SHADER, fragment}});
+    ASSERT_NE(program, 0u);
+    GLuint vao = 0;
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+    glUseProgram(program);
+    glViewport(0, 0, 8, 8);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_RASTERIZER_DISCARD);
+    for (const bool conversion : {false, true}) {
+        if (conversion) glEnable(GL_FRAMEBUFFER_SRGB);
+        else glDisable(GL_FRAMEBUFFER_SRGB);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        std::array<GLubyte, 4> pixel{};
+        glReadPixels(3, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+        for (int channel = 0; channel < 3; ++channel)
+            EXPECT_NEAR(pixel[channel], conversion ? 188 : 128, 1) << "FRAMEBUFFER_SRGB=" << conversion;
+        EXPECT_EQ(pixel[3], 255);
+    }
+    glDisable(GL_FRAMEBUFFER_SRGB);
+    glUseProgram(0);
+    glBindVertexArray(0);
+    glDeleteVertexArrays(1, &vao);
+    glDeleteProgram(program);
+}
+
+TEST_F(F1WireScenario, Texture1DFramebufferClearPixels) {
+    if (!Ready()) return;
+    GLuint line = 0;
+    glGenTextures(1, &line);
+    glBindTexture(GL_TEXTURE_1D, line);
+    glTexStorage1D(GL_TEXTURE_1D, 1, GL_RGBA8, 8);
+    glFramebufferTexture1D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_1D, line, 0);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    std::array<GLubyte, 8 * 4> pixels{};
+    glReadPixels(0, 0, 8, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    const int expected[] = {64, 128, 191, 255};
+    for (int x = 0; x < 8; ++x)
+        for (int channel = 0; channel < 4; ++channel)
+            EXPECT_NEAR(pixels[x * 4 + channel], expected[channel], 1) << "1D texel " << x;
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 0, 0);
+    glBindTexture(GL_TEXTURE_1D, 0);
+    glDeleteTextures(1, &line);
 }
 
 TEST_F(F1WireScenario, PartialTextureUploadPreservesGpuClearPixels) {

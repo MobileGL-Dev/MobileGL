@@ -95,21 +95,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (handle.Slot >= state.TextureResources.size()) WireDescriptorFatal("image-record");
         const auto& record = state.TextureResources[handle.Slot];
         if (!record.Live || record.Gen != handle.Gen) WireDescriptorFatal("image-record-generation");
-        auto* resource = m_textureManager->SyncTextureResourceByHandle(handle);
+        auto* resource = m_textureManager->SyncTextureResourceByHandle(handle, false, storage);
         if (!resource) WireDescriptorFatal("image-resource");
         m_textureManager->FlushPendingUploads();
 
+        const auto target = static_cast<MG_Pipe::MGPipeResourceTarget>(record.Desc.Target);
+        using Target = MG_Pipe::MGPipeResourceTarget;
+        const Bool layerable = target == Target::Tex1DArray || target == Target::Tex2DArray ||
+            target == Target::Tex2DMSArray || target == Target::Tex3D ||
+            target == Target::TexCube || target == Target::TexCubeArray;
         Uint32 level = storage ? state.BoundShaderImages[unit].Level : record.Params.BaseLevel;
-        Uint32 layer = storage && !state.BoundShaderImages[unit].Layered ? state.BoundShaderImages[unit].Layer : 0;
+        // GL ignores Layer/Layered for non-layerable targets. In particular image1D
+        // stays a 1D view, and an ignored nonzero Layer must not address another slice.
+        Uint32 layer = storage && layerable && !state.BoundShaderImages[unit].Layered
+            ? state.BoundShaderImages[unit].Layer : 0;
         const Uint32 localLevel = level;
         const Uint32 localLayer = layer;
         Uint32 layers = 0;
         VkFormat aliasFormat = VK_FORMAT_UNDEFINED;
         const auto root = m_textureManager->ResolveWireTextureStorage(handle, level, layer, &aliasFormat, &layers);
         if (MG_Pipe::MGPipeHandleIsNull(root)) WireDescriptorFatal("image-view-window");
-        const auto target = static_cast<MG_Pipe::MGPipeResourceTarget>(record.Desc.Target);
         VkImageViewType type = WireViewType(target);
-        if (storage && !state.BoundShaderImages[unit].Layered) {
+        if (storage && layerable && !state.BoundShaderImages[unit].Layered) {
             layers = 1;
             type = target == MG_Pipe::MGPipeResourceTarget::Tex1DArray ? VK_IMAGE_VIEW_TYPE_1D : VK_IMAGE_VIEW_TYPE_2D;
         }
@@ -122,9 +129,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const auto viewHandle = state.BoundSamplerViews[unit].View;
             if (!MG_Pipe::MGPipeHandleIsNull(viewHandle) && viewHandle.Slot < state.SamplerViewCsos.size()) {
                 const auto& view = state.SamplerViewCsos[viewHandle.Slot];
-                if (!view.Live || view.Gen != viewHandle.Gen || view.View.NumLevels <= localLevel)
+                if (!view.Live || view.Gen != viewHandle.Gen || view.View.Texture != handle)
                     WireDescriptorFatal("sampler-view-record");
-                levels = std::min<Uint32>(levels, view.View.NumLevels - localLevel);
+                // Ordinary texture views can encode an unrestricted window with zero
+                // counts; only an actual restriction narrows the resource/parameter range.
+                if (view.View.NumLevels != 0) {
+                    if (view.View.NumLevels <= localLevel) WireDescriptorFatal("sampler-view-level");
+                    levels = std::min<Uint32>(levels, view.View.NumLevels - localLevel);
+                }
+            } else if (!MG_Pipe::MGPipeHandleIsNull(viewHandle)) {
+                WireDescriptorFatal("sampler-view-record");
             }
             levels = std::min(levels, resource->mipLevels - level);
         }

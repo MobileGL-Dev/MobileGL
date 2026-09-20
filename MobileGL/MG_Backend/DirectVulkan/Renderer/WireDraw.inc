@@ -57,6 +57,13 @@
                     WireBufferLegacyFatal();
         }
 
+        if (!frame.isCommandRecording) m_frameContext.BeginCommandRecording();
+        // Descriptor resolution can upgrade a view's root image to STORAGE usage.
+        // Resolve it before constructing framebuffer views so both roles of that image
+        // name the same allocation even on its first storage-image use.
+        if (!m_uniformManager->BindProgramUniformBuffers(frame.commandBuffer, program, programObj,
+                m_frameContext.GetCurrentFrameIndex(), VK_PIPELINE_BIND_POINT_GRAPHICS)) return false;
+
         Vector<VkAttachmentDescription> attachments;
         Vector<VkImageView> views;
         Vector<VkAttachmentReference> colors;
@@ -146,9 +153,6 @@
         VertexInputStateFactory::BackendVertexInputState input{};
         const auto pipeline = GetOrCreatePipelineWithInput(mode, program, programObj, flags, input, pass, false);
         if (pipeline == VK_NULL_HANDLE) return false;
-        if (!frame.isCommandRecording) m_frameContext.BeginCommandRecording();
-        if (!m_uniformManager->BindProgramUniformBuffers(frame.commandBuffer, program, programObj,
-                m_frameContext.GetCurrentFrameIndex(), VK_PIPELINE_BIND_POINT_GRAPHICS)) return false;
         Uint32 binding = 0;
         for (Uint32 location = 0; location < kMaxVertexAttribs; ++location) {
             if (!(programObj.activeVertexInputLocationMask & (1u << location))) continue;

@@ -34,10 +34,12 @@
 # a row advances those entries to their next one. See docs/Disaggregated/notes/p5f/f1-report.md.
 # ---------------------------------------------------------------------------------------------
 #
-# P5f fe measured at 881e050e: 181 entries, 175 green, 4 skipped, 2 red.
-# Espryt retired all five previous first-blocker pairs, and their downstream reads:
-# READ FBO surface classification + reply-only PixelPack; copy destination arm ordering;
-# copy-image endpoint handles; capture archive/ranges; storage-block program handle.
-# The complete lane reached no new first-blocker pair (see fe-report.md).
-# Magma's Clear path remains fm's independently owned pair (two NamedBlit entries).
-GetFramebufferBindingSlot@Clear
+# P5f wave 2: the expected set is empty after fc -> fe -> fm integration.
+# fe retired five original first-blockers: ReadPixels framebuffer/pack readers,
+# capture program/ranges, copy-image texture handles, copy destination unit,
+# and storage-block program-name validation. fm retired Clear on Magma through
+# server framebuffer/resource records. The shared copy-image seam also retires
+# GetTextureObject in either package in isolation; it is one removal at integration.
+# The expanded Magma lane includes real bufferless shader/image pixel scenarios.
+# Its named P7 native-format probe has a separate, enforced known-red CI lane.
+# Every new Fatal or Admitted in this census remains a regression.

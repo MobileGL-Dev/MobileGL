@@ -553,7 +553,8 @@ public:
     // a NAMESPACE THE FRONTEND-KEYED m_textureResources NEVER MEETS, so a recycled {slot, gen}
     // can never inherit its predecessor's image. Texture views resolve the storage owner from
     // Desc.ViewOf and the window from ViewCso; buffer-backed textures remain P7's buffer arm.
-    TextureResource* SyncTextureResourceByHandle(MG_Pipe::MGPipeHandle handle, Bool renderbuffer = false);
+    TextureResource* SyncTextureResourceByHandle(MG_Pipe::MGPipeHandle handle, Bool renderbuffer = false,
+                                                 Bool requireStorage = false);
     // Map a texture/view-relative subresource to its live storage owner. layerCount, when
     // supplied, receives the number of accessible layers starting at the input layer.
     // viewFormat is UNDEFINED for an ordinary texture, or the outer view's format.
@@ -733,7 +734,8 @@ private:
     // descriptor (create / recreate / compatibility), then the pending-upload walk against the
     // server's staged store. UploadPendingWireLevels mutates the applier's record (consumed
     // entries are dropped), which is why the record is a non-const reference.
-    Bool SyncWireTextureShape(const MG_Pipe::MGPipeResourceRecord& record, TextureResource& resource);
+    Bool SyncWireTextureShape(const MG_Pipe::MGPipeResourceRecord& record, TextureResource& resource,
+                              Bool requireStorage);
     Bool UploadPendingWireLevels(MG_Pipe::MGPipeHandle handle, MG_Pipe::MGPipeResourceRecord& record,
                                  TextureResource& resource);
     // The handle-keyed twin of m_textureResources, keyed by StagedTextureStore::KeyForHandle.

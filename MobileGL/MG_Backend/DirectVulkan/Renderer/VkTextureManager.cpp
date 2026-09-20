@@ -2008,7 +2008,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool VkTextureManager::SyncWireTextureShape(const MG_Pipe::MGPipeResourceRecord& record,
-                                                TextureResource& resource) {
+                                                TextureResource& resource, Bool requireStorage) {
         const MG_Pipe::MGPResourceDesc& desc = record.Desc;
         if (desc.StorageKind != static_cast<Uint8>(TextureStorageType::Mipmap)) {
             MGLOG_W_ONCE("Magma wire texture {slot=%u, gen=%u}: buffer-backed textures are not migrated; declined",
@@ -2072,7 +2072,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &formatProperties);
         // The descriptor's sticky bind mask carries the image-unit hint, so the image is born
         // with STORAGE usage and no re-mint ever pulls texels back (TextureEmit.h D-A3).
-        const Bool markedAsStorageImage = (desc.BindMask & MG_Pipe::kMGPipeBindShaderImage) != 0;
+        const Bool markedAsStorageImage = requireStorage || resource.storageUsageResolved ||
+            (desc.BindMask & MG_Pipe::kMGPipeBindShaderImage) != 0;
         const Bool storageImageCapable =
             !isMultisample && (aspect & VK_IMAGE_ASPECT_COLOR_BIT) != 0 &&
             (formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
@@ -2570,7 +2571,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     VkTextureManager::TextureResource* VkTextureManager::SyncTextureResourceByHandle(
-        MG_Pipe::MGPipeHandle handle, Bool renderbuffer) {
+        MG_Pipe::MGPipeHandle handle, Bool renderbuffer, Bool requireStorage) {
         MOBILEGL_ASSERT(m_device != VK_NULL_HANDLE, "SyncTextureResourceByHandle: m_device == VK_NULL_HANDLE");
         if (MG_Pipe::MGPipeHandleIsNull(handle)) {
             return nullptr;
@@ -2582,7 +2583,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const auto storage = ResolveWireTextureStorage(handle, level, layer, &viewFormat);
             if (MG_Pipe::MGPipeHandleIsNull(storage)) return nullptr;
             if (storage != handle) {
-                auto* resource = SyncTextureResourceByHandle(storage);
+                auto* resource = SyncTextureResourceByHandle(storage, false, requireStorage);
                 if (!resource) return nullptr;
                 if (viewFormat != resource->format &&
                     ((resource->imageCreateFlags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) == 0 ||
@@ -2615,15 +2616,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         (void)inserted;
         TextureResource& resource = it->second;
         if (resource.image != VK_NULL_HANDLE && resource.syncedWireSerial == record.Serial &&
-            record.PendingUploads.empty()) {
+            record.PendingUploads.empty() && (!requireStorage || (resource.usageFlags & VK_IMAGE_USAGE_STORAGE_BIT) != 0)) {
             return &resource;
         }
-        if (!SyncWireTextureShape(record, resource)) {
+        if (!SyncWireTextureShape(record, resource, requireStorage)) {
             return nullptr;
         }
         if (!renderbuffer && !UploadPendingWireLevels(handle, record, resource)) {
             return nullptr;
         }
+        if (requireStorage && (resource.usageFlags & VK_IMAGE_USAGE_STORAGE_BIT) == 0) return nullptr;
         resource.syncedWireSerial = record.Serial;
         return &resource;
     }
