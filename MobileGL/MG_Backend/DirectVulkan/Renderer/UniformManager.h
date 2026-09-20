@@ -188,6 +188,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         struct WireImageViewKeyHash {
             SizeT operator()(const WireImageViewKey& key) const;
         };
+
+        struct WirePlaceholderImage {
+            VkImage image = VK_NULL_HANDLE;
+            VkDeviceMemory memory = VK_NULL_HANDLE;
+            VkImageView view = VK_NULL_HANDLE;
+            VkSampler sampler = VK_NULL_HANDLE;
+            VkRenderPass clearPass = VK_NULL_HANDLE;
+            VkFramebuffer clearFramebuffer = VK_NULL_HANDLE;
+            VkFormat format = VK_FORMAT_UNDEFINED;
+            VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+            VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            Uint32 layers = 1;
+        };
+        mutable UnorderedMap<Uint64, WirePlaceholderImage> m_wirePlaceholderImages;
+        Bool ResolveWirePlaceholderImage(VkCommandBuffer commandBuffer, const MagmaProgramSource& program,
+            const ProgramFactory::VkProgramObject& programObj, Uint32 binding, Bool storage,
+            VkDescriptorImageInfo& out) const;
+        void DestroyWirePlaceholderImage(WirePlaceholderImage& image) const;
 #endif
 
         struct FrameResources {

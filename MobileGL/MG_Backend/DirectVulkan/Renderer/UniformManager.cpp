@@ -118,9 +118,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (unit < 0 || static_cast<Uint32>(unit) >=
             (storage ? MG_Pipe::kMGPipeMaxImageUnits : MG_Pipe::kMGPipeMaxTextureUnits)) return false;
         const auto handle = storage ? state.BoundShaderImages[unit].Res : state.BoundSamplerViews[unit].Texture;
-        // The old placeholder constructor enters the guarded client allocator. Keep that
-        // P7 boundary explicit instead of constructing a frontend texture on the server.
-        if (MG_Pipe::MGPipeHandleIsNull(handle)) WireDescriptorFatal("unbound-image-placeholder@P7");
+        if (MG_Pipe::MGPipeHandleIsNull(handle))
+            return ResolveWirePlaceholderImage(commandBuffer, program, programObj, binding, storage, out);
         if (handle.Slot >= state.TextureResources.size()) WireDescriptorFatal("image-record");
         const auto& record = state.TextureResources[handle.Slot];
         if (!record.Live || record.Gen != handle.Gen) WireDescriptorFatal("image-record-generation");
@@ -402,6 +401,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
+#include "WirePlaceholderImages.inc"
+
     static Bool FindFramebufferAttachmentForTexture(const MG_State::GLState::FramebufferObject& framebuffer,
                                                     const MG_State::GLState::ITextureObject& texture,
                                                     FramebufferAttachmentType& outAttachment, Int& outLevel) {
@@ -598,6 +599,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             frame.peakAllocatedSetsThisFrame = 0;
         }
         m_frames.clear();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        for (auto& entry : m_wirePlaceholderImages) DestroyWirePlaceholderImage(entry.second);
+        m_wirePlaceholderImages.clear();
+#endif
 
         m_bufferManager = nullptr;
         m_programFactory = nullptr;
@@ -2825,7 +2830,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         (storage ? MG_Pipe::kMGPipeMaxImageUnits : MG_Pipe::kMGPipeMaxTextureUnits)) return false;
                     const auto handle = storage ? state.BoundShaderImages[unit].Res
                                                 : state.BoundSamplerViews[unit].Texture;
-                    if (MG_Pipe::MGPipeHandleIsNull(handle)) WireDescriptorFatal("unbound-image-placeholder@P7");
+                    // Null is the wire's unbound/incomplete binding. Its native
+                    // placeholder needs no resource upload or frontend allocation.
+                    if (MG_Pipe::MGPipeHandleIsNull(handle)) continue;
                     if (!m_textureManager->SyncTextureResourceByHandle(handle, false, storage)) return false;
                 }
             }
