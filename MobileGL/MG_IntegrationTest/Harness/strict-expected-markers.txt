@@ -19,34 +19,10 @@
 #       <(python3 scripts/gen_pipe_field_ownership.py --print-admitted) this-file
 # and put the census it prints here.
 #
-# ---------------------------------------------------------------------------------------------
-# RE-MEASURED ON THE WAVE-3 INTEGRATION TREE (pa + mv + gl merged), 181 lane entries, 181 green,
-# ZERO Fatal pairs. The note this block used to carry - that it was measured at gl's base and the
-# merge would retire three rows - was discharged exactly as written: the ratchet named
-# GetProgramForDraw@DrawArrays as an expected pair that no longer appears, and named
-# GetBufferBindingSlot@DrawArrays as one the lane had not seen before. Both are reconciled below.
-# GetProgramForDispatch@DispatchCompute never reached this file (pa retired it before it was
-# written) and the ordinary GetBoundVertexArray@DrawArrays is gone; the two that remain under that
-# name are the client-vertex-array entries, which are escalation-barriered and P8's.
-# ---------------------------------------------------------------------------------------------
-#
-# Admitted by the generated table (disjuncts 1 and 2 of ID-116 / ID-125):
-GetBufferBindingSlot@ReadPixels
-# NEW IN WAVE 3, and it was named before it could fire: mv's report called
-# BoundDrawIndirectBufferId's GetBufferBindingSlot(DrawIndirect) a latent row that "would surface
-# as GetBufferBindingSlot@DrawArrays if an indirect tier were ever forced under strict", and then
-# gated the five multi-draw tiers, which forced it. Retires in P8 (FieldOwnership.def:78).
-GetBufferBindingSlot@DrawArrays
-GetFramebufferBindingSlot@ReadPixels
-GetProgramObject@ShaderStorageBlockBinding
-GetTextureObject@CopyImageSubData
-GetTextureUnitObject@CopyTexImage2D
-GetTransformFeedbackProgram@DrawArrays
-ValidateProgramName@ShaderStorageBlockBinding
-#
-# Admitted by ESCALATION only (disjunct 3, ID-128): the record was barriered because its payload
-# said so - an open transform-feedback span, or a draw carrying client vertex arrays - which no
-# table indexed by (field, verb) can see. All three are pulls on the draw verb by entries that
-# are NOT the ordinary draw path.
-GetBoundVertexArray@DrawArrays
-GetBufferBindingPoint@DrawArrays
+# P5f fe census: 179 integration-split entries pass, with zero Fatal, ordinary Admitted,
+# or ESCALATED pairs. The expected set is therefore empty; either new marker kind is red.
+# Eight live pairs retired through server framebuffer/texture/program records, reply scratch,
+# and the Begin XFB snapshot. The two already-stale rows GetBoundVertexArray@DrawArrays and
+# GetBufferBindingSlot@DrawArrays were independently identified at the f1 baseline (f1-report
+# section 8.1). fe-report records every removed pair and its source. P8 client-array tests
+# retain their separate lane; an empty census here does not assert that P8 is implemented.

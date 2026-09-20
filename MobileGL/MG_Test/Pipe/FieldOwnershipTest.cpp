@@ -703,8 +703,11 @@ TEST_F(FieldOwnershipTest, TheStickyExemptionIsCancelledByTheServerStamp) {
     MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
     for (SizeT i = 0; i < kMGPipeFieldOwnershipForwardCount; ++i) {
         const MGPipeInputField field = kMGPipeFieldOwnershipForwardField[i];
-        EXPECT_FALSE(MGPipeInputFieldIsFresh(gPipeInputs.FilledState(), field))
-            << kMGPipeInputFieldNames[Index(field)] << " is still exempt under split";
+        // P5f fe retired the scalar forwards to server-owned answers. Their freshness
+        // comes from that ownership; the remaining client forwards lose the exemption.
+        const Bool serverOwned = MGPipeFieldOwnershipOf(field) == MGPipeFieldOwnership::kApplierDerived;
+        EXPECT_EQ(MGPipeInputFieldIsFresh(gPipeInputs.FilledState(), field), serverOwned)
+            << kMGPipeInputFieldNames[Index(field)] << " has the wrong server-stamp freshness";
     }
 }
 
