@@ -9872,8 +9872,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             std::fill(std::begin(m_backendDrawBuffers), std::end(m_backendDrawBuffers), GL_NONE);
             // NOTE: this does NOT empty the backend ES framebuffer - m_backendFBOId keeps every
             // attachment it had, possibly under a non-identity permutation. Declaring the table
-            // identity here is safe only because every attachment version below is invalidated too,
-            // so the next sync re-attaches all non-empty attachments at their identity points AND
+            // identity here is safe only because every gate that decides which points get
+            // re-issued is invalidated too - the attachment versions below, and under
+            // MOBILEGL_PIPE_PUSH the record memos stamped at the end of this function - so the
+            // next sync re-attaches all non-empty attachments at their identity points AND
             // (see SyncToBackend's attachment loop) detaches any colour point whose frontend owner
             // is empty. Without that detach a stale image would survive under a point the table now
             // claims for a different, empty attachment.
@@ -9887,6 +9889,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Every attachment version is invalidated above, so the next walk re-attaches
             // everything regardless; stamp the generation so it does not re-arm twice.
             m_syncedBackendIdGeneration = g_attachmentBackendIdGeneration;
+#if MOBILEGL_PIPE_PUSH
+            // The record memos are the gate the PIPE_PUSH arms' attachment walks actually read -
+            // the handle arm has nothing narrower under its key - so leaving them standing here
+            // would let a re-sync of the same record skip the re-attach this function exists to
+            // force. 0 is never a live hash, so a zeroed memo is a guaranteed miss.
+            m_syncedRecordHashes = {0};
+            m_syncedAttachmentRecordHash = 0;
+#endif
         }
 
         static Bool SyncAttachmentObject(GLenum glFBOTarget,
@@ -11345,13 +11355,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 ApplyReadBufferFromRecord(record, 0);
             }
 
-            // 3. The attachments. Two gates, both server-owned.
+            // 3. The attachments. Three gates, and the key is the object's rather than the
+            //    binding's: idGenerationMoved ("I re-minted a driver id, so a point may hold a
+            //    dead one"), attachmentPointsMoved ("the colour permutation moved, so a point
+            //    whose record did not change still has to be re-issued") and the record hash.
+            //    NOT m_syncedRecordHashes: the per-target array is the object arm's re-arm
+            //    trigger, and the points written below belong to the driver FBO rather than to
+            //    the binding they were walked for - see m_syncedAttachmentRecordHash.
             const Bool idGenerationMoved = m_syncedBackendIdGeneration != g_attachmentBackendIdGeneration;
             if (idGenerationMoved) {
                 m_syncedBackendIdGeneration = g_attachmentBackendIdGeneration;
             }
             if (idGenerationMoved || attachmentPointsMoved ||
-                m_syncedRecordHashes[SizeT(asTarget)] != record.ContentHash) {
+                m_syncedAttachmentRecordHash != record.ContentHash) {
                 const auto applyPoint = [&](FramebufferAttachmentType point,
                                             const MG_Pipe::MGPSurface& surface) {
                     const Bool isColorPoint = point >= FramebufferAttachmentType::Color0 &&
@@ -11388,7 +11404,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 applyPoint(FramebufferAttachmentType::Depth, record.Depth);
                 applyPoint(FramebufferAttachmentType::Stencil, record.Stencil);
-                m_syncedRecordHashes[SizeT(asTarget)] = record.ContentHash;
+                m_syncedAttachmentRecordHash = record.ContentHash;
                 NoteFramebufferTextureAttachments(fbo, record);
             }
 

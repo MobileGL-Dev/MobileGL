@@ -2276,11 +2276,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // reintroduce exactly the class of bug commit d7655247 fixed on the buffer side.
             Uint64 m_syncedBackendIdGeneration = 0;
 #if MOBILEGL_PIPE_PUSH
-            // P4a (D-C4): MGPFramebufferState::ContentHash as of this twin's last sync, PER
-            // TARGET IT WAS SYNCED AS, and it is the second of the hash's two jobs - "the server's
-            // render-pass memo key, and the CLIENT's emission suppressor". It replaces
-            // m_syncedFrontendAttachmentVersions AS A KEY (the array stays: it is what the
-            // legacy arm compares, and it is the mechanism the handle arm re-arms through).
+            // P4a (D-C4): MGPFramebufferState::ContentHash as of this twin's last sync on the
+            // OBJECT arm (SyncToBackend), PER TARGET IT WAS SYNCED AS, and it is the second of
+            // the hash's two jobs - "the server's render-pass memo key, and the CLIENT's emission
+            // suppressor". It replaces m_syncedFrontendAttachmentVersions AS A KEY (the array
+            // stays: it is what the legacy arm compares, and re-arming it is what a miss here
+            // does). The handle arm reads neither slot of this one - it has its own key below.
             //
             // The hash covers every field the record carries - Fbo included, so a recycled
             // framebuffer handle whose successor happens to carry an identical attachment set
@@ -2288,14 +2289,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // a suppressed record provably means the draw-buffer array did not move, which
             // provably means the fragColor broadcast count did not move.
             //
-            // PER TARGET rather than one, and it stays that way under ID-19's per-OBJECT record:
-            // there is now ONE record for this framebuffer, but syncing it as Draw and syncing it
-            // as Read do different work (glDrawBuffers and the four cross-object masks are
-            // Draw-only, glReadBuffer is Read-only), so "I have already applied this record" is a
-            // per-target claim and one memo would let the second target skip work the first never
-            // did. 0 is never a live hash (a computed 0 is remapped to 1 by the client's
-            // suppressor), so a zeroed memo is a guaranteed miss.
+            // PER TARGET rather than one, and it stays that way under ID-19's per-OBJECT record,
+            // but ONLY because the arm that reads it uses this memo as a re-arm TRIGGER and not as
+            // a claim: a miss re-arms every point, and a hit still leaves the per-point versions
+            // underneath to decide what the walk touches. The split there says how narrowly one
+            // target re-arms; it never means "the driver's attachments are this record". 0 is
+            // never a live hash (a computed 0 is remapped to 1 by the client's suppressor), so a
+            // zeroed memo is a guaranteed miss.
             Array<Uint64, SizeT(FramebufferTarget::FramebufferTargetCount)> m_syncedRecordHashes = {0};
+            // P5e (fb): the HANDLE arm's key, and the ContentHash of the record whose attachments
+            // this twin last APPLIED through SyncToBackendByHandle. Unlike the array above, this
+            // one IS a claim: nothing narrower sits under it, because that arm walks the record
+            // and has no frontend attachment array to compare against.
+            //
+            // ONE FOR THE OBJECT, NOT ONE PER TARGET, and that is the difference that matters.
+            // Attachments belong to the driver FBO OBJECT: glFramebufferTexture2D and
+            // glFramebufferRenderbuffer write the object behind whichever binding happens to be
+            // current, so a walk run for Draw and a walk run for Read write the SAME eleven
+            // points. Per-target slots let the two keep separate, individually true and jointly
+            // false accounts of one physical state: a composite framebuffer synced as DRAW in a
+            // depth pre-pass detaches the points its other attachment state attaches, and the
+            // end-of-frame sync of that same record on the READ side then found its own slot
+            // already stamped by an earlier identical sync, walked nothing, left the colour point
+            // detached, and the driver refused the following glBlitFramebuffer with
+            // INVALID_OPERATION. Keying on the object is what makes "this hash is applied" mean
+            // "these points are on the driver now".
+            Uint64 m_syncedAttachmentRecordHash = 0;
             // P5e (fb): the read-buffer decision, taken from the record alone. Both
             // SyncReadBufferToBackend overloads funnel through it, so the rule lives in one
             // place and the object form is visibly the half that only finds the handle.
