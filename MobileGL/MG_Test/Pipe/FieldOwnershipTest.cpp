@@ -263,10 +263,8 @@ TEST_F(FieldOwnershipTest, TheReducedPathsUnmigratedFieldsAreAllAccountedFor) {
     // (CONTRACT-P5C.md §7 table 2) - and the only other BARRIER-PULLED rows are six of the
     // seven sticky forwards (the seventh, InvalidateCompileEnv, is FATAL since P5c ev).
     const MGPipeInputField pulledSticky[] = {
-        MGPipeInputField::GetBufferBindingPointCount,
         MGPipeInputField::GetProgramObject,
         MGPipeInputField::GetTextureObject,
-        MGPipeInputField::HasOpenTransformFeedbackSpan,
         MGPipeInputField::ValidateProgramName,
         MGPipeInputField::RecordError,
     };
@@ -281,7 +279,7 @@ TEST_F(FieldOwnershipTest, TheReducedPathsUnmigratedFieldsAreAllAccountedFor) {
         EXPECT_TRUE(named) << kMGPipeInputFieldNames[i]
                            << " is BARRIER-PULLED and not in the pinned object-class list";
     }
-    EXPECT_EQ(pulledCount, 15u) << "9 non-sticky object rows + 6 sticky forwards";
+    EXPECT_EQ(pulledCount, 13u) << "9 non-sticky object rows + 4 sticky forwards";
     EXPECT_EQ(pulledCount, kMGPipeBarrierPulledFieldCount);
     EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetPixelStoreParameters),
               MGPipeFieldOwnership::kApplierDerived);
@@ -898,6 +896,41 @@ namespace {
         Bool m_previousKnob;
     };
 } // namespace
+
+TEST_F(FieldOwnershipTest, SplitBindingPointCapacityNeverConsultsTheFrontend) {
+    RoleSplitArm guard;
+    guard.Arm(true);
+    MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
+    EXPECT_EQ(gPipeInputs.GetBufferBindingPointCount(BufferTarget::Uniform), 84u);
+    EXPECT_EQ(gPipeInputs.GetBufferBindingPointCount(BufferTarget::TransformFeedback), 84u);
+    EXPECT_EQ(gPipeInputs.GetBufferBindingPointCount(BufferTarget::PixelPack), 0u);
+    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetBufferBindingPointCount),
+              MGPipeFieldOwnership::kApplierDerived);
+    MGPipeServerClearVerbBoundary();
+}
+
+TEST_F(FieldOwnershipTest, SplitOpenSpansAreOwnedByTheApplierAndSurviveOtherBindings) {
+    RoleSplitArm guard;
+    guard.Arm(true);
+    auto& state = MGPipeApplier();
+    state.StreamOutputSpans.clear();
+    MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
+    EXPECT_FALSE(gPipeInputs.HasOpenTransformFeedbackSpan(0));
+    EXPECT_FALSE(gPipeInputs.HasOpenTransformFeedbackSpan(11));
+    state.StreamOutputSpans[11] = {};
+    state.StreamOutputSpans[12] = {};
+    state.BoundStreamOutputLifetimeId = 12;
+    EXPECT_TRUE(gPipeInputs.HasOpenTransformFeedbackSpan(11));
+    EXPECT_TRUE(gPipeInputs.HasOpenTransformFeedbackSpan(12));
+    state.StreamOutputSpans.erase(12);
+    EXPECT_TRUE(gPipeInputs.HasOpenTransformFeedbackSpan(11));
+    EXPECT_FALSE(gPipeInputs.HasOpenTransformFeedbackSpan(12));
+    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::HasOpenTransformFeedbackSpan),
+              MGPipeFieldOwnership::kApplierDerived);
+    state.StreamOutputSpans.clear();
+    state.BoundStreamOutputLifetimeId = 0;
+    MGPipeServerClearVerbBoundary();
+}
 
 TEST_F(FieldOwnershipTest, RoleSplitOffFoldsTheFillSideOntoTheSharedBlock) {
     EXPECT_FALSE(MGPipeRoleSplitActive());

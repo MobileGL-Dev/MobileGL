@@ -946,6 +946,9 @@ namespace MobileGL::MG_Remote::Server {
     // crash or as a silent success. Contract §2 t2 says so for PatchParameteri by name.
 
     Bool ServerVerbSink::OnBeginStreamOutput(const MG_Pipe::MGPStreamOutputBegin& begin) {
+        auto& state = MG_Pipe::MGPipeApplier();
+        state.BoundStreamOutputLifetimeId = begin.LifetimeId;
+        state.StreamOutputSpans[begin.LifetimeId] = begin;
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("begin_stream_output");
         if (table == nullptr) return false;
         if (table->GL.BeginTransformFeedback == nullptr) return false;
@@ -955,9 +958,6 @@ namespace MobileGL::MG_Remote::Server {
         // the buffer bindings are read through the pulls. So this record's effect is not
         // visible until a DRAW crosses - which is why an XFB scenario whose draw is still class
         // C moves its first blocker to that draw rather than rendering.
-        auto& state = MG_Pipe::MGPipeApplier();
-        state.BoundStreamOutputLifetimeId = begin.LifetimeId;
-        state.StreamOutputSpans[begin.LifetimeId] = begin;
         table->GL.BeginTransformFeedback(static_cast<GLenum>(begin.PrimitiveMode));
         ++m_streamOutputSpans;
         return true;
@@ -966,7 +966,11 @@ namespace MobileGL::MG_Remote::Server {
     Bool ServerVerbSink::OnEndStreamOutput(const MG_Pipe::MGPXfbAccounting& accounting) {
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("end_stream_output");
         if (table == nullptr) return false;
-        if (table->GL.EndTransformFeedback == nullptr) return false;
+        if (table->GL.EndTransformFeedback == nullptr) {
+            auto& state = MG_Pipe::MGPipeApplier();
+            state.StreamOutputSpans.erase(state.BoundStreamOutputLifetimeId);
+            return false;
+        }
         // THE THREE ACCOUNTING FIELDS ARE NOT READ, AND THAT IS THE RULING RATHER THAN AN
         // OMISSION. glEndTransformFeedback takes no arguments; the numbers are the CLIENT's own
         // per-span accounting (contract §2 t2's companions row) and the client is where they are

@@ -34,23 +34,10 @@
 # a row advances those entries to their next one. See docs/Disaggregated/notes/p5f/f1-report.md.
 # ---------------------------------------------------------------------------------------------
 #
-# Espryt's readback path reads the framebuffer binding slot out of the block (the field's
-# Espryt half retired at P5e for the UNBARRIERED path only; the barriered readback pull is the
-# residual). The largest block of the census by far.
-#   132 entries
-GetFramebufferBindingSlot@ReadPixels
-# The XFB program check at draw setup (FieldOwnership.def: "P3b/P4b (Espryt), P7 (Magma)").
-#   11 entries (the TessellationXfbCapture / XfbCaptureBufferReuse family)
-GetTransformFeedbackProgram@DrawArrays
-# CopyImageSubData resolves both textures through the sticky forward (def: "P7").
-#    6 entries
-GetTextureObject@CopyImageSubData
-# Magma's Clear path (the two DirectVulkan.Split.NamedBlit entries) - fm's first rows.
-#    2 entries
+# P5f fe measured at 881e050e: 181 entries, 175 green, 4 skipped, 2 red.
+# Espryt retired all five previous first-blocker pairs, and their downstream reads:
+# READ FBO surface classification + reply-only PixelPack; copy destination arm ordering;
+# copy-image endpoint handles; capture archive/ranges; storage-block program handle.
+# The complete lane reached no new first-blocker pair (see fe-report.md).
+# Magma's Clear path remains fm's independently owned pair (two NamedBlit entries).
 GetFramebufferBindingSlot@Clear
-# CopyTexImage2D's texture-unit read (def: "P5e (Espryt unbarriered), P7 (Magma)").
-#    2 entries
-GetTextureUnitObject@CopyTexImage2D
-# The program-name validation sticky forward at ShaderStorageBlockBinding (def: "P9").
-#    2 entries
-ValidateProgramName@ShaderStorageBlockBinding

@@ -1992,6 +1992,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // capture gap-free into scratch storage and place the records at End instead.
             xfb.scattered = false;
             xfb.scatterProgram.reset();
+#if MOBILEGL_BUILD_DISAGGREGATED
+            xfb.scatterArchive.reset();
+#endif
             xfb.scatterCapacityVertices = 0;
             if (program->NeedsScatteredTransformFeedbackCapture()) {
                 SizeT capacityVertices = ~SizeT(0);
@@ -2097,6 +2100,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 ScatterCapturedRecords(xfb);
                 xfb.scattered = false;
                 xfb.scatterProgram.reset();
+#if MOBILEGL_BUILD_DISAGGREGATED
+            xfb.scatterArchive.reset();
+#endif
             } else {
                 ReadbackCapturedRanges(xfb.targets);
             }

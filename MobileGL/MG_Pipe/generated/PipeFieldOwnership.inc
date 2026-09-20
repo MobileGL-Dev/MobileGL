@@ -42,7 +42,7 @@ inline constexpr MGPipeFieldOwnership kMGPipeFieldOwnership[kMGPipeInputFieldCou
     MGPipeFieldOwnership::kBarrierPulled, // GetBoundVertexArray
     MGPipeFieldOwnership::kBarrierPulled, // GetBufferBindingSlot
     MGPipeFieldOwnership::kBarrierPulled, // GetBufferBindingPoint
-    MGPipeFieldOwnership::kBarrierPulled, // GetBufferBindingPointCount
+    MGPipeFieldOwnership::kApplierDerived, // GetBufferBindingPointCount
     MGPipeFieldOwnership::kRecordSupplied, // GetTouchedBufferBindingPointCount
     MGPipeFieldOwnership::kRecordSupplied, // GetClampReadColor
     MGPipeFieldOwnership::kRecordSupplied, // GetClearColor
@@ -96,7 +96,7 @@ inline constexpr MGPipeFieldOwnership kMGPipeFieldOwnership[kMGPipeInputFieldCou
     MGPipeFieldOwnership::kBarrierPulled, // ValidateProgramName
     MGPipeFieldOwnership::kBarrierPulled, // RecordError
     MGPipeFieldOwnership::kRecordSupplied, // GetBoundTransformFeedbackLifetimeId
-    MGPipeFieldOwnership::kBarrierPulled, // HasOpenTransformFeedbackSpan
+    MGPipeFieldOwnership::kApplierDerived, // HasOpenTransformFeedbackSpan
 };
 
 // The ROADMAP phase whose row retires the pull. "-" for every class but BARRIER-PULLED.
@@ -109,7 +109,7 @@ inline constexpr const char* kMGPipeFieldRetiringPhase[kMGPipeInputFieldCount] =
     "P5e (Espryt unbarriered), P7 (Magma)", // GetBoundVertexArray
     "P8 (indirect), P9 (readback), P13 (transfer)", // GetBufferBindingSlot
     "P5e (Espryt unbarriered), P7 (Magma)", // GetBufferBindingPoint
-    "P7/P13", // GetBufferBindingPointCount
+    "-", // GetBufferBindingPointCount
     "-", // GetTouchedBufferBindingPointCount
     "-", // GetClampReadColor
     "-", // GetClearColor
@@ -163,7 +163,7 @@ inline constexpr const char* kMGPipeFieldRetiringPhase[kMGPipeInputFieldCount] =
     "P9", // ValidateProgramName
     "P9", // RecordError
     "-", // GetBoundTransformFeedbackLifetimeId
-    "P7/P9", // HasOpenTransformFeedbackSpan
+    "-", // HasOpenTransformFeedbackSpan
 };
 
 // The seven sticky forwards, which are among the 63 above and need a row of their own:
@@ -182,19 +182,19 @@ inline constexpr MGPipeInputField kMGPipeFieldOwnershipForwardField[kMGPipeField
     MGPipeInputField::RecordError,
 };
 inline constexpr MGPipeFieldOwnership kMGPipeFieldOwnershipForward[kMGPipeFieldOwnershipForwardCount] = {
-    MGPipeFieldOwnership::kBarrierPulled, // GetBufferBindingPointCount
+    MGPipeFieldOwnership::kApplierDerived, // GetBufferBindingPointCount
     MGPipeFieldOwnership::kBarrierPulled, // GetProgramObject
     MGPipeFieldOwnership::kBarrierPulled, // GetTextureObject
-    MGPipeFieldOwnership::kBarrierPulled, // HasOpenTransformFeedbackSpan
+    MGPipeFieldOwnership::kApplierDerived, // HasOpenTransformFeedbackSpan
     MGPipeFieldOwnership::kBarrierPulled, // ValidateProgramName
     MGPipeFieldOwnership::kFatal, // InvalidateCompileEnv
     MGPipeFieldOwnership::kBarrierPulled, // RecordError
 };
 inline constexpr const char* kMGPipeFieldOwnershipForwardMechanism[kMGPipeFieldOwnershipForwardCount] = {
-    "a server-side binding-point table", // GetBufferBindingPointCount, retires in P7/P13
+    "a server-side binding-point table", // GetBufferBindingPointCount, retires in -
     "a client-resolved program handle table (ARCHITECTURE 3.2 explicitly-not-ported)", // GetProgramObject, retires in P9
     "a server-side texture handle table", // GetTextureObject, retires in P7
-    "server-side XFB span state", // HasOpenTransformFeedbackSpan, retires in P7/P9
+    "server-side XFB span state", // HasOpenTransformFeedbackSpan, retires in -
     "a client-resolved program name probe", // ValidateProgramName, retires in P9
     "DELETED under split by P5c ev; the re-arriving caps snapshot IS the invalidation (R-12)", // InvalidateCompileEnv, retires in -
     "OnGlError, the ordered reverse-channel error post (R-12); its ordering is P9's", // RecordError, retires in P9
@@ -323,7 +323,7 @@ inline constexpr SizeT kMGPipeVerbBoundaryExemptCount = 3;
 // wait. A verb with no stamp row admits nothing - the server stamps only MGP_VERB_OP_LIST's
 // ops, so no other verb can be the one a residual pull is reported against.
 inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
-    {{0x5808402000000140ull, 0x0000000000000000ull}}, // DrawArrays
+    {{0x1808402000000040ull, 0x0000000000000000ull}}, // DrawArrays
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawElements
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawElementsBaseVertex
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // MultiDrawArrays
@@ -343,7 +343,7 @@ inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawArraysInstanced
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawElementsIndirect
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DrawArraysIndirect
-    {{0x5800402000000100ull, 0x0000000000000000ull}}, // Clear
+    {{0x1800402000000000ull, 0x0000000000000000ull}}, // Clear
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearBufferfi
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearBufferfv
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearBufferuiv
@@ -352,27 +352,27 @@ inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearNamedFramebufferfi
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearNamedFramebufferiv
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ClearNamedFramebufferuiv
-    {{0x5800402000000100ull, 0x0000000000000000ull}}, // BlitFramebuffer
+    {{0x1800402000000000ull, 0x0000000000000000ull}}, // BlitFramebuffer
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // BlitNamedFramebuffer
-    {{0x5800c02000300180ull, 0x0000000000000000ull}}, // CopyTexImage2D
+    {{0x1800c02000300080ull, 0x0000000000000000ull}}, // CopyTexImage2D
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // CopyTexSubImage2D
-    {{0x5800c02000300180ull, 0x0000000000000000ull}}, // CopyImageSubData
-    {{0x5800c02000300180ull, 0x0000000000000000ull}}, // GenerateMipmap
-    {{0x5800c02000300140ull, 0x0000000000000000ull}}, // ReadPixels
+    {{0x1800c02000300080ull, 0x0000000000000000ull}}, // CopyImageSubData
+    {{0x1800c02000300080ull, 0x0000000000000000ull}}, // GenerateMipmap
+    {{0x1800c02000300040ull, 0x0000000000000000ull}}, // ReadPixels
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // GetTexImage
-    {{0x5800c02000300140ull, 0x0000000000000000ull}}, // GetTextureImage
-    {{0x5800402000000140ull, 0x0000000000000000ull}}, // DispatchCompute
+    {{0x1800c02000300040ull, 0x0000000000000000ull}}, // GetTextureImage
+    {{0x1800402000000040ull, 0x0000000000000000ull}}, // DispatchCompute
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DispatchComputeIndirect
-    {{0x5800402000000100ull, 0x0000000000000000ull}}, // MemoryBarrier
+    {{0x1800402000000000ull, 0x0000000000000000ull}}, // MemoryBarrier
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // MemoryBarrierByRegion
-    {{0x5800402000000100ull, 0x0000000000000000ull}}, // BindImageTexture
+    {{0x1800402000000000ull, 0x0000000000000000ull}}, // BindImageTexture
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // GetIntegeri_v
-    {{0x5800c02000300100ull, 0x0000000000000000ull}}, // ShaderStorageBlockBinding
-    {{0x5800402000000100ull, 0x0000000000000000ull}}, // FenceSync
-    {{0x5800402000000100ull, 0x0000000000000000ull}}, // ClientWaitSync
-    {{0x5800402000000100ull, 0x0000000000000000ull}}, // WaitSync
-    {{0x5800402000000100ull, 0x0000000000000000ull}}, // DeleteSync
-    {{0x5800402000000100ull, 0x0000000000000000ull}}, // GetSyncStatus
+    {{0x1800c02000300000ull, 0x0000000000000000ull}}, // ShaderStorageBlockBinding
+    {{0x1800402000000000ull, 0x0000000000000000ull}}, // FenceSync
+    {{0x1800402000000000ull, 0x0000000000000000ull}}, // ClientWaitSync
+    {{0x1800402000000000ull, 0x0000000000000000ull}}, // WaitSync
+    {{0x1800402000000000ull, 0x0000000000000000ull}}, // DeleteSync
+    {{0x1800402000000000ull, 0x0000000000000000ull}}, // GetSyncStatus
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // IsTimerQuerySupported
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // BeginTimeElapsedQuery
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // EndTimeElapsedQuery
@@ -384,17 +384,17 @@ inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // EndOcclusionQuery
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // BeginXfbPrimitivesQuery
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // EndXfbPrimitivesQuery
-    {{0x5800402000000100ull, 0x0000000000000000ull}}, // PatchParameteri
-    {{0x5808402000000180ull, 0x0000000000000000ull}}, // BeginTransformFeedback
-    {{0x5808402000000180ull, 0x0000000000000000ull}}, // EndTransformFeedback
-    {{0x5808402000000180ull, 0x0000000000000000ull}}, // PauseTransformFeedback
-    {{0x5808402000000180ull, 0x0000000000000000ull}}, // ResumeTransformFeedback
-    {{0x5808402000000180ull, 0x0000000000000000ull}}, // BindTransformFeedback
+    {{0x1800402000000000ull, 0x0000000000000000ull}}, // PatchParameteri
+    {{0x1808402000000080ull, 0x0000000000000000ull}}, // BeginTransformFeedback
+    {{0x1808402000000080ull, 0x0000000000000000ull}}, // EndTransformFeedback
+    {{0x1808402000000080ull, 0x0000000000000000ull}}, // PauseTransformFeedback
+    {{0x1808402000000080ull, 0x0000000000000000ull}}, // ResumeTransformFeedback
+    {{0x1808402000000080ull, 0x0000000000000000ull}}, // BindTransformFeedback
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // DeleteTransformFeedback
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // GetGpuTimestampNs
 };
 
-inline constexpr SizeT kMGPipeAdmittedPullPairCount = 174;
+inline constexpr SizeT kMGPipeAdmittedPullPairCount = 128;
 
 // THE PREDICATE THE STRICT KNOB ASKS (ID-117). A 69 x 128-bit table, so this costs a shift and
 // a test on the apply thread - the same shape MGPipeFieldMaskHas already has.
@@ -428,7 +428,7 @@ static_assert(MGPipeEveryAdmittedPullIsADebtOfItsVerbsClass(),
 
 // The class sizes, as constants a test can pin without recounting the table.
 inline constexpr SizeT kMGPipeRecordSuppliedFieldCount = 41;
-inline constexpr SizeT kMGPipeApplierDerivedFieldCount = 4;
-inline constexpr SizeT kMGPipeBarrierPulledFieldCount = 15;
+inline constexpr SizeT kMGPipeApplierDerivedFieldCount = 6;
+inline constexpr SizeT kMGPipeBarrierPulledFieldCount = 13;
 inline constexpr SizeT kMGPipeFatalFieldCount = 3;
 static_assert(kMGPipeRecordSuppliedFieldCount + kMGPipeApplierDerivedFieldCount + kMGPipeBarrierPulledFieldCount + kMGPipeFatalFieldCount == kMGPipeInputFieldCount, "the four class sizes do not partition the field set");
