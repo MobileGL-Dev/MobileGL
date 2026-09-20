@@ -1571,64 +1571,106 @@ TEST(RemoteF1, GenerateMipmapFieldsCross) {
 
 #if MGTEST_HAVE_FORK
 
-TEST(RemoteF1, UnboundNamedfvRefusesByName) {
-    // Red once (executed, reverted): disable the named-FBO refusal; its exact Fatal disappears.
-    const auto child = RunInChild([] {
+namespace {
+    MGPipeHandle observedNamedClear{}, observedNamedClearRead{};
+    Uint32 observedNamedClearValues[4]{};
+    Uint32 observedNamedClearCalls = 0;
+    GLenum observedNamedClearTarget = 0;
+    GLint observedNamedClearIndex = 0;
+    GLfloat observedNamedClearDepth = 0;
+    GLint observedNamedClearStencil = 0;
+    Bool observedNamedClearRecord = false;
+
+    void ObserveNamedClear(GLenum target, GLint index) {
+        const auto& state = MGPipeApplier();
+        observedNamedClear = state.BoundFramebuffer[0];
+        observedNamedClearRead = state.BoundFramebuffer[1];
+        observedNamedClearRecord = state.FramebufferRecordFor(observedNamedClear) != nullptr;
+        observedNamedClearTarget = target;
+        observedNamedClearIndex = index;
+        ++observedNamedClearCalls;
+    }
+
+    void CheckNamedClearScopedTarget(Uint8 kind, Uint8 valueClass) {
+        MGPipeApplierReset();
+        MGPipeResourceOps resources{};
+        MGPipeSetResourceOps(&resources);
+        MGPFramebufferState state{};
+        state.Fbo = {31, 1};
+        state.Target = static_cast<Uint8>(MGPipeFramebufferTarget::Draw);
+        MGPipeApplySetFramebufferState(state);
+        const auto originalDraw = state.Fbo;
+        state.Fbo = {32, 2};
+        state.Target = static_cast<Uint8>(MGPipeFramebufferTarget::Read);
+        MGPipeApplySetFramebufferState(state);
+        const auto originalRead = state.Fbo;
+        state.Fbo = {33, 3};
+        state.Target = static_cast<Uint8>(MGPipeFramebufferTarget::Named);
+        MGPipeApplySetFramebufferState(state);
         CapsPeer backend;
+        backend.table.GL.ClearBufferfv = +[](GLenum target, GLint index, const GLfloat* values) {
+            ObserveNamedClear(target, index);
+            std::memcpy(observedNamedClearValues, values, sizeof(observedNamedClearValues));
+        };
+        backend.table.GL.ClearBufferiv = +[](GLenum target, GLint index, const GLint* values) {
+            ObserveNamedClear(target, index);
+            std::memcpy(observedNamedClearValues, values, sizeof(observedNamedClearValues));
+        };
+        backend.table.GL.ClearBufferuiv = +[](GLenum target, GLint index, const GLuint* values) {
+            ObserveNamedClear(target, index);
+            std::memcpy(observedNamedClearValues, values, sizeof(observedNamedClearValues));
+        };
+        backend.table.GL.ClearBufferfi = +[](GLenum target, GLint index, GLfloat depth, GLint stencil) {
+            ObserveNamedClear(target, index);
+            observedNamedClearDepth = depth;
+            observedNamedClearStencil = stencil;
+        };
         Srv::ServerVerbSink sink;
         sink.SetBackend(&backend);
-        MGPClear r{};
-        r.Fbo = {701, 1};
-        r.Kind = kMGPipeClearKindColor;
-        r.ValueClass = kMGPipeClearValueClassFloat;
-        sink.OnClear(r);
-    });
-    ExpectNamedAbort(child, "Fatal{UnmigratedVerb, \"ClearNamedFramebufferfv+UNBOUND\"}");
+        MGPClear clear{};
+        clear.Fbo = state.Fbo;
+        clear.Kind = kind;
+        clear.ValueClass = valueClass;
+        clear.DrawBufferIndex = kind == kMGPipeClearKindDepthStencil ? 0 : 3;
+        const Uint32 bits[4]{0x3e800000u, 0x3f000000u, 0xff000011u, 0x3f800000u};
+        std::memcpy(clear.ColorValue, bits, sizeof(bits));
+        clear.DepthValue = 0.375f;
+        clear.StencilValue = 91;
+        if (!sink.OnClear(clear) || observedNamedClearCalls != 1) ::_exit(101);
+        if (observedNamedClear != clear.Fbo || !observedNamedClearRecord ||
+            observedNamedClearRead != originalRead) ::_exit(102);
+        if (MGPipeApplier().BoundFramebuffer[0] != originalDraw ||
+            MGPipeApplier().BoundFramebuffer[1] != originalRead) ::_exit(103);
+        if (observedNamedClearIndex != clear.DrawBufferIndex) ::_exit(104);
+        if (kind == kMGPipeClearKindDepthStencil) {
+            if (observedNamedClearTarget != GL_DEPTH_STENCIL || observedNamedClearDepth != clear.DepthValue ||
+                observedNamedClearStencil != clear.StencilValue) ::_exit(105);
+        } else if (observedNamedClearTarget != GL_COLOR ||
+                   std::memcmp(observedNamedClearValues, clear.ColorValue, sizeof(bits))) ::_exit(106);
+        MGPipeSetResourceOps(nullptr);
+        sink.SetBackend(nullptr);
+    }
+}
+
+TEST(RemoteF1, UnboundNamedfvRefusesByName) {
+    // Historical name retained; a named target now reaches the native clear hook.
+    const auto child = RunInChild([] { CheckNamedClearScopedTarget(kMGPipeClearKindColor, kMGPipeClearValueClassFloat); });
+    ExpectChildSuccess(child);
 }
 
 TEST(RemoteF1, UnboundNamedivRefusesByName) {
-    // Red once (executed, reverted): disable the named-FBO refusal; its exact Fatal disappears.
-    const auto child = RunInChild([] {
-        CapsPeer backend;
-        Srv::ServerVerbSink sink;
-        sink.SetBackend(&backend);
-        MGPClear r{};
-        r.Fbo = {701, 1};
-        r.Kind = kMGPipeClearKindColor;
-        r.ValueClass = kMGPipeClearValueClassInt;
-        sink.OnClear(r);
-    });
-    ExpectNamedAbort(child, "Fatal{UnmigratedVerb, \"ClearNamedFramebufferiv+UNBOUND\"}");
+    const auto child = RunInChild([] { CheckNamedClearScopedTarget(kMGPipeClearKindColor, kMGPipeClearValueClassInt); });
+    ExpectChildSuccess(child);
 }
 
 TEST(RemoteF1, UnboundNameduivRefusesByName) {
-    // Red once (executed, reverted): disable the named-FBO refusal; its exact Fatal disappears.
-    const auto child = RunInChild([] {
-        CapsPeer backend;
-        Srv::ServerVerbSink sink;
-        sink.SetBackend(&backend);
-        MGPClear r{};
-        r.Fbo = {701, 1};
-        r.Kind = kMGPipeClearKindColor;
-        r.ValueClass = kMGPipeClearValueClassUint;
-        sink.OnClear(r);
-    });
-    ExpectNamedAbort(child, "Fatal{UnmigratedVerb, \"ClearNamedFramebufferuiv+UNBOUND\"}");
+    const auto child = RunInChild([] { CheckNamedClearScopedTarget(kMGPipeClearKindColor, kMGPipeClearValueClassUint); });
+    ExpectChildSuccess(child);
 }
 
 TEST(RemoteF1, UnboundNamedfiRefusesByName) {
-    // Red once (executed, reverted): disable the named-FBO refusal; its exact Fatal disappears.
-    const auto child = RunInChild([] {
-        CapsPeer backend;
-        Srv::ServerVerbSink sink;
-        sink.SetBackend(&backend);
-        MGPClear r{};
-        r.Fbo = {701, 1};
-        r.Kind = kMGPipeClearKindDepthStencil;
-        r.ValueClass = kMGPipeClearValueClassFloat;
-        sink.OnClear(r);
-    });
-    ExpectNamedAbort(child, "Fatal{UnmigratedVerb, \"ClearNamedFramebufferfi+UNBOUND\"}");
+    const auto child = RunInChild([] { CheckNamedClearScopedTarget(kMGPipeClearKindDepthStencil, kMGPipeClearValueClassFloat); });
+    ExpectChildSuccess(child);
 }
 #endif
 

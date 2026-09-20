@@ -406,16 +406,28 @@ TEST(RemoteClientControls, DeleteTexturesAdvancesTheWireOrdinal) {
 }
 
 TEST(RemoteClientControls, BoundPackBufferOffsetReadRefusesByName) {
+    // Historical name retained: the live path now copies the reply into the PBO.
     const auto child = RunInChild([] {
         StartControlSession();
+        ReadPeer peer;
+        peer.size = 4;
+        peer.Install();
         MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
         GLuint buffer = 0;
         MG_Impl::GLImpl::GenBuffers(1, &buffer);
         MG_Impl::GLImpl::BindBuffer(0x88EB, buffer);
-        MG_Impl::GLImpl::BufferData(0x88EB, 64, nullptr, 0x88E1);
+        Uint8 seed[64];
+        std::memset(seed, 0x5a, sizeof(seed));
+        MG_Impl::GLImpl::BufferData(0x88EB, sizeof(seed), seed, 0x88E1);
         RemoteEmitTable().GL.ReadPixels(0, 0, 1, 1, 0x1908, 0x1401, reinterpret_cast<void*>(16));
+        Uint8 actual[64]{};
+        MG_Impl::GLImpl::GetBufferSubData(0x88EB, 0, sizeof(actual), actual);
+        for (SizeT i = 0; i < sizeof(actual); ++i)
+            if (actual[i] != (i >= 16 && i < 20 ? 0x37 : 0x5a)) ::_exit(104);
+        if (peer.observed != 4) ::_exit(105);
+        ClientSessionInstance().Stop();
     });
-    ExpectNamedAbort(child, "Fatal{UnmigratedVerb, \"ReadPixels+PACK_BUFFER\"}");
+    ExpectChildSuccess(child);
 }
 
 TEST(RemoteClientControls, ServerRoleRespecifyDoesNotEmitClientInitialBytes) {
@@ -513,16 +525,14 @@ int RunPackGpuControl(bool split) {
         G::BindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
         G::BufferData(GL_PIXEL_PACK_BUFFER, 64, nullptr, GL_STREAM_READ);
         G::ReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, reinterpret_cast<void*>(16));
-        if (split) ::_exit(104); // Must have refused by name, never returned or dereferenced 16.
         Uint8 pixels[4]{};
         G::GetBufferSubData(GL_PIXEL_PACK_BUFFER, 16, 4, pixels);
         if (pixels[0] != 0 || pixels[1] != 255 || pixels[2] != 0 || pixels[3] != 255) ::_exit(105);
-        std::printf("C1F_PACK_MONOLITH bytes at offset 16: %u %u %u %u\n", pixels[0], pixels[1], pixels[2], pixels[3]);
+        std::printf("C1F_PACK_%s bytes at offset 16: %u %u %u %u\n", split ? "INPROC" : "MONOLITH",
+                    pixels[0], pixels[1], pixels[2], pixels[3]);
         std::fflush(stdout);
     });
-    const bool ok = split
-        ? DiedOfAbort(child) && child.Log.find("Fatal{UnmigratedVerb, \"ReadPixels+PACK_BUFFER\"}") != std::string::npos
-        : WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0;
+    const bool ok = WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0;
     std::printf("C1F_PACK_%s: %s (%s)\n%s", split ? "INPROC" : "MONOLITH",
                 ok ? "PASS" : "FAIL", DescribeStatus(child).c_str(), child.Log.c_str());
     return ok ? 0 : 1;
