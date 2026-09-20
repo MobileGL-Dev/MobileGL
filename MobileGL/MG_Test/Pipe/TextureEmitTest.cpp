@@ -666,12 +666,14 @@ TEST(TextureEmit, ALevelTooLargeForTheStageChunkIsCutIntoSlabs) {
     const Uint64 volumeBytes = 512ull * 128ull * 33ull * 16ull;
     const std::vector<MGPipeTextureSlab> volumeSlabs = cut(volume, volumeBytes, cap);
     ASSERT_EQ(volumeSlabs.size(), 5u);
-    for (const MGPipeTextureSlab& slab : volumeSlabs) {
+    for (SizeT i = 0; i < volumeSlabs.size(); ++i) {
+        const MGPipeTextureSlab& slab = volumeSlabs[i];
         EXPECT_EQ(slab.Box.X, 0);
         EXPECT_EQ(slab.Box.Y, 0);
         EXPECT_EQ(slab.Box.W, 512u) << "a slab is not the level's full width";
         EXPECT_EQ(slab.Box.H, 128u);
-        EXPECT_EQ(slab.Box.D, 8u);
+        EXPECT_EQ(slab.Box.Z, static_cast<Int32>(8 * i)) << "the slabs are not in slice order";
+        EXPECT_EQ(slab.Box.D, i + 1 == volumeSlabs.size() ? 1u : 8u);
     }
     EXPECT_EQ(volumeSlabs.back().Box.D, 1u) << "the remainder slice is its own piece";
 

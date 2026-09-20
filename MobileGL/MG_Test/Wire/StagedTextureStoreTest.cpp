@@ -281,6 +281,17 @@ TEST(StagedTextureStoreTest, StageChunkRunsAssembleTheLevelImageAndAGapIsNotCove
     EXPECT_EQ(store.LevelCoveredRunCount(holed, kTex2DTarget, 0), 2u)
         << "two runs with a 16-byte gap merged into one";
     EXPECT_FALSE(store.IsCovered(holed, kTex2DTarget, 0)) << "a span across the gap reads covered";
+    // AND WHAT THE CHECK CANNOT SEE, written down rather than left to be discovered: the store
+    // knows no format, so it cannot know how many bytes a level SHOULD have. A leading run that
+    // already reaches the image's high-water mark therefore reads as covered - the check is "the
+    // range the reader asks for is covered", not "the level is the size the client meant", and no
+    // reader runs between the pieces of one level anyway (they are records of ONE verb, and the
+    // texture sync runs at the barrier that closes it).
+    const Uint64 leading = Server::StagedTextureStore::KeyForHandle(TestHandle(14, 1));
+    store.AdoptRun(leading, kTex2DTarget, 0, IntVec3{4, 4, 1}, 0, part.data(), part.size());
+    EXPECT_TRUE(store.IsCovered(leading, kTex2DTarget, 0))
+        << "a leading run is the whole image as far as this store can tell";
+    EXPECT_EQ(store.LevelByteSize(leading, kTex2DTarget, 0), 16u);
     // Filling the gap merges all three into one run: adjacency, not proximity, is the rule.
     store.AdoptRun(holed, kTex2DTarget, 0, extent, 16, part.data(), part.size());
     EXPECT_EQ(store.LevelCoveredRunCount(holed, kTex2DTarget, 0), 1u);
@@ -398,11 +409,15 @@ TEST(StagedTextureStoreTest, AGpuGeneratedLevelHasNoBytesAndItsTexelReadIsFatalB
 TEST(StagedTextureStoreTest, ALevelWithAPieceMissingIsRefusedAsAWholeLevelReadByName) {
     Server::StagedTextureStore store(/*copies=*/true);
     const Uint64 key = Server::StagedTextureStore::KeyForHandle(TestHandle(13, 1));
-    Vector<Uint8> half(32, 0x55);
+    Vector<Uint8> part(16, 0x55);
     Vector<Uint8> whole(64, 0x22);
-    store.AdoptRun(key, kTex2DTarget, 0, IntVec3{4, 4, 1}, 0, half.data(), half.size());
+    // TWO RUNS WITH A HOLE BETWEEN THEM, which is what a missing piece looks like from here: the
+    // image's high-water mark is the level's size and the covered set does not reach across it.
+    store.AdoptRun(key, kTex2DTarget, 0, IntVec3{4, 4, 1}, 0, part.data(), part.size());
+    store.AdoptRun(key, kTex2DTarget, 0, IntVec3{4, 4, 1}, 32, part.data(), part.size());
     ASSERT_FALSE(store.IsCovered(key, kTex2DTarget, 0));
-    ASSERT_EQ(store.LevelCoveredRunCount(key, kTex2DTarget, 0), 1u);
+    ASSERT_EQ(store.LevelCoveredRunCount(key, kTex2DTarget, 0), 2u);
+    ASSERT_EQ(store.LevelByteSize(key, kTex2DTarget, 0), 48u);
 
     // A DIFFERENT level of the same store, adopted whole, reads fine - asserted first so that the
     // death below cannot be a function that aborts on everything.

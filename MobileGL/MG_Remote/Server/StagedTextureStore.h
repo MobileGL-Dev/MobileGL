@@ -61,7 +61,11 @@
 // that lets the sync read - the set is complete exactly when every piece has landed, and a level
 // with a hole in it is Fatal{StageSnapshotTooNarrow}: the same words as the buffer half, for the
 // same reason, because those bytes have never existed on this side and inventing them is silent
-// data loss rather than a missing optimisation.
+// data loss rather than a missing optimisation. THE QUESTION IS "IS THE RANGE THE READER ASKS
+// FOR COVERED", not "is the level the size the client meant": no format crosses the wire, so a
+// leading run that already reaches the image's high-water mark reads as complete when later
+// pieces are still missing - unreachable, because nothing reads between the pieces of one verb,
+// and written down here because it is the one place this check is looser than it looks.
 //
 // DEFINED-NESS IS TRACKED, NOT DERIVED ALONE. §1's per-level extent derivation (max(1,
 // base >> level), layer axes fixed) computes the extent of a level that EXISTS; it cannot
