@@ -3,7 +3,9 @@
 > 基线 `feat/disaggregated @ 7f1d2134`。路径在 `MobileGL/` 下。
 > **进度**：`f0` 普查已落（`notes/p5f/` 八篇）；`f1` 双块机制已落（报告
 > [`notes/p5f/f1-report.md`](notes/p5f/f1-report.md)：旋钮 `MOBILEGL_IPC_ROLE_SPLIT_STATE`、
-> 车道标签 `integration-dualblock-split`、棘轮 `Harness/dualblock-expected-fatals.txt`）。
+> 车道标签 `integration-dualblock-split`、棘轮 `Harness/dualblock-expected-fatals.txt`）；
+> `fc` 控制面帧已落（报告 [`notes/p5f/fc-report.md`](notes/p5f/fc-report.md)：§2.3 的函数指针邮箱
+> 退役为 `SurfaceControlFrame` 值帧，schema 缺口补齐，wire 入口具名拒绝就位）。
 > **P6 在 P5f 之前不开工**：P6 的前提"只是传输替换"今天不成立，§2 是不成立的清单。
 
 ---
@@ -187,6 +189,10 @@ Magma 今天不发布 `kCapRunAheadApply`，所以它跑 lockstep——**lockste
 **函数指针 + 栈上 `void*`**（`ServerLoop.cpp:533-568`、`:645`）。`protocol.fbs:166-205` 的
 `SurfaceOp` / `SurfaceReply` / `WindowKind` schema 已定但**无人使用**。
 跨进程后函数指针与栈地址都无意义。
+
+> **fc 已落地**：行号以基线 `7f1d2134` 为准（本节是"在基线头上实测"的清单）；落地后的形态、
+> 逐 op 映射与契约草稿见 [`notes/p5f/fc-report.md`](notes/p5f/fc-report.md) 与
+> [`notes/p5f/fc-contract-draft.md`](notes/p5f/fc-contract-draft.md)。
 
 ### 2.4 进程级静态，语义却是 per-context
 

@@ -172,6 +172,10 @@ enum SurfaceOpKind : ubyte {
   ReleaseSurface = 5,
   MakeCurrent = 6,
   ReleaseCurrent = 7,
+  // P5f (package fc) appended these three. Append-only, always: the enum's values ARE the wire.
+  SetSwapInterval = 8,
+  ReleaseResources = 9,
+  SetWindowHandle = 10,
 }
 
 enum WindowKind : ubyte {
@@ -181,6 +185,10 @@ enum WindowKind : ubyte {
   Win32Hwnd = 3,
   Surfaceless = 4,
   Pbuffer = 5,
+  // P5f (package fc): WindowBackend (MG_Backend/BackendObject.h) has a fourth window backend and
+  // the two enums may only meet through the explicit mapping table in Protocol/SurfaceOpCodec.cpp
+  // - Surfaceless/Pbuffer are surface SHAPES, not window backends, and answer "no backend" there.
+  MetalLayer = 6,
 }
 
 table SurfaceOp {
@@ -193,6 +201,12 @@ table SurfaceOp {
   width: int;
   height: int;
   swapInterval: int;
+  // P5f (package fc), appended (a FlatBuffers table field's id IS its vtable slot - append only):
+  // MakeCurrent's semantic unit is the (display, draw, read, context) four-tuple, and `surface`
+  // alone cannot carry it. `surface` stays the DRAW surface; `readSurface` and `context` are 0
+  // ("no surface" / "no context") for every other op and for a ReleaseCurrent.
+  readSurface: ulong;
+  context: ulong;
 }
 
 table SurfaceReply {

@@ -1252,7 +1252,7 @@ struct F1Peer : Codec::WireVerbSink {
     Bool OnGenerateMipmap(const MGPMipPlan& v) override { mip = v; ++calls; return true; }
     Bool OnBlit(const MGPBlit& v) override { blit = v; ++calls; return true; }
     void Install() {
-        if (Srv::ServerLoopInstance().RunOnApplyThread([](void* self) {
+        if (Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void* self) {
             auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
             decoder.SetVerbSink(static_cast<F1Peer*>(self));
             return MOBILEGL_OK;
@@ -1771,7 +1771,7 @@ TEST(RemoteF1, DispatchIndirectStashesTheCommandBuffer) {
 TEST(RemoteGuards, AllocatorAcquireFromTheApplyThreadIsFatalByName) {
     const auto child = RunInChild([] {
         StartControlSession();
-        Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
             MGPipeSlots().Acquire(MGPipeKind::Texture, 424242);
             return MOBILEGL_OK;
         }, nullptr);
@@ -1783,7 +1783,7 @@ TEST(RemoteGuards, AllocatorAcquireFromTheApplyThreadIsFatalByName) {
 TEST(RemoteGuards, AllocatorFindByLifetimeIdFromTheApplyThreadIsFatalByName) {
     const auto child = RunInChild([] {
         StartControlSession();
-        Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
             MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, 424242);
             return MOBILEGL_OK;
         }, nullptr);
@@ -1795,7 +1795,7 @@ TEST(RemoteGuards, AllocatorFindByLifetimeIdFromTheApplyThreadIsFatalByName) {
 TEST(RemoteGuards, AllocatorFreeFromTheApplyThreadIsFatalByName) {
     const auto child = RunInChild([] {
         StartControlSession();
-        Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
             MGPipeSlots().Free(MGPipeKind::Texture, {7, 1});
             return MOBILEGL_OK;
         }, nullptr);
@@ -1816,7 +1816,7 @@ namespace {
 TEST(RemoteGuards, SlotTableHandleOfFromTheApplyThreadIsFatalByName) {
     const auto child = RunInChild([] {
         StartControlSession();
-        Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
             MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
             TestTextureTable table;
             MG_State::GLState::TextureObject2D tex(44);
@@ -1831,7 +1831,7 @@ TEST(RemoteGuards, SlotTableHandleOfFromTheApplyThreadIsFatalByName) {
 TEST(RemoteGuards, SlotTableMintingGetOrCreateFromTheApplyThreadIsFatalByName) {
     const auto child = RunInChild([] {
         StartControlSession();
-        Srv::ServerLoopInstance().RunOnApplyThread([](void*) {
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
             MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
             TestTextureTable table;
             auto tex = MakeShared<MG_State::GLState::TextureObject2D>(45);
@@ -1846,7 +1846,7 @@ TEST(RemoteGuards, SlotTableMintingGetOrCreateFromTheApplyThreadIsFatalByName) {
 // The four accessor drives share one shape: the BufferObject is constructed on the CLIENT
 // thread (its own resource_create publication is a legal client-side emit), and only the
 // accessor runs on the apply thread, where it must die at the accessor's own guard.
-#define MGL_BUFFER_GUARD_TEST(Name, Id, Call)                                                          TEST(RemoteGuards, Name) {                                                                                 const auto child = RunInChild([] {                                                                         StartControlSession();                                                                                 MG_State::GLState::BufferObject buffer(Id);                                                            Srv::ServerLoopInstance().RunOnApplyThread([](void* self) {                                                auto& buffer = *static_cast<MG_State::GLState::BufferObject*>(self);                                   Call;                                                                                                  return MOBILEGL_OK;                                                                                }, &buffer);                                                                                           ClientSessionInstance().Stop();                                                                    });                                                                                                    ExpectNamedAbort(child, "Fatal{RoleViolation, \"buffer-legacy-arm\"}");                           }
+#define MGL_BUFFER_GUARD_TEST(Name, Id, Call)                                                          TEST(RemoteGuards, Name) {                                                                                 const auto child = RunInChild([] {                                                                         StartControlSession();                                                                                 MG_State::GLState::BufferObject buffer(Id);                                                            Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void* self) {                                                auto& buffer = *static_cast<MG_State::GLState::BufferObject*>(self);                                   Call;                                                                                                  return MOBILEGL_OK;                                                                                }, &buffer);                                                                                           ClientSessionInstance().Stop();                                                                    });                                                                                                    ExpectNamedAbort(child, "Fatal{RoleViolation, \"buffer-legacy-arm\"}");                           }
 MGL_BUFFER_GUARD_TEST(BufferMappedDataFromTheApplyThreadIsFatalByName, 703, (void)buffer.MappedData())
 MGL_BUFFER_GUARD_TEST(BufferIsMappedFromTheApplyThreadIsFatalByName, 704, (void)buffer.IsMapped())
 MGL_BUFFER_GUARD_TEST(BufferChangeSerialFromTheApplyThreadIsFatalByName, 705, (void)buffer.GetChangeSerial())
@@ -1881,7 +1881,7 @@ MGL_BUFFER_GUARD_TEST(BufferHasDefinedContentFromTheApplyThreadIsFatalByName, 70
 TEST(RemoteGuards, AnAllocatorProbeFromTheApplyThreadOutsideEveryScopeIsFatalByName) {
     const auto child = RunInChild([] {
         StartControlSession();
-        Srv::ServerLoopInstance().RunOnApplyThread(
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
             +[](void*) -> MobileGLResult {
                 MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("FindByLifetimeId");
                 return MOBILEGL_OK;
@@ -1920,7 +1920,7 @@ TEST(RemoteGuards, AnAllocatorProbeInsideAnExemptionScopeFromTheApplyThreadIsFat
         MG_State::GLState::TextureObject2D texture(46);
         TestTextureTable table;
         Probe probe{&table, &texture};
-        Srv::ServerLoopInstance().RunOnApplyThread(
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
             +[](void* self) -> MobileGLResult {
                 auto& probe = *static_cast<Probe*>(self);
                 // The record being applied is one the client did NOT park behind. The stamp is
@@ -1946,7 +1946,7 @@ TEST(RemoteGuards, AnExemptionScopeHeldOnTheGLThreadDoesNotExemptTheApplyThread)
     const auto child = RunInChild([] {
         StartControlSession();
         const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
-        Srv::ServerLoopInstance().RunOnApplyThread(
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
             +[](void*) -> MobileGLResult {
                 MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("FindByLifetimeId");
                 return MOBILEGL_OK;
@@ -2001,7 +2001,7 @@ TEST(RemoteGuards, CapsMirrorFallbackWithNoServerBackendIsFatalByName) {
         const auto child = RunInChild([] {                                                             \
             StartControlSession();                                                                     \
             MG_State::GLState::TextureObject2D texture(Id);                                            \
-            Srv::ServerLoopInstance().RunOnApplyThread(                                                \
+            Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(                                                \
                 [](void* self) {                                                                       \
                     auto& texture = *static_cast<MG_State::GLState::TextureObject2D*>(self);           \
                     Call;                                                                              \
@@ -2155,7 +2155,7 @@ struct PresentCreditPeer : Codec::WireVerbSink {
         return true;
     }
     void Install() {
-        if (Srv::ServerLoopInstance().RunOnApplyThread(
+        if (Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
                 [](void* self) {
                     auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
                     decoder.SetVerbSink(static_cast<PresentCreditPeer*>(self));
@@ -2388,7 +2388,7 @@ TEST(RemoteGuards, AResidualPullUnderAnUnbarrieredRecordIsFatalWithoutTheStrictK
     const auto child = RunInChild([] {
         MG_Config::Ipc.StrictErrors = false;
         StartRunAheadSession();
-        Srv::ServerLoopInstance().RunOnApplyThread(
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
             +[](void*) -> MobileGLResult {
                 MG_Pipe::MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
                 MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(false);
@@ -2408,7 +2408,7 @@ TEST(RemoteGuards, AResidualPullUnderABarrieredRecordStillOnlyCounts) {
     const auto child = RunInChild([] {
         MG_Config::Ipc.StrictErrors = false;
         StartRunAheadSession();
-        Srv::ServerLoopInstance().RunOnApplyThread(
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
             +[](void*) -> MobileGLResult {
                 MG_Pipe::MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
                 MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(true);
@@ -2430,7 +2430,7 @@ TEST(RemoteGuards, AResidualPullUnderABarrieredRecordStillOnlyCounts) {
 // the latch and retries, and the burst completes.
 //
 // THE DRAIN RUNS ON A THREAD OF ITS OWN, and that is forced by the fixture rather than chosen:
-// RunOnApplyThread is synchronous, so the thread that posted the burst cannot also be the
+// RunSurfaceControlFrame is synchronous, so the thread that posted the burst cannot also be the
 // thread that empties the ring. In production it is the GL thread draining at its own waits
 // (§2.6's deadlock argument); here it is a drainer beside the poster, which puts the producer
 // in exactly the state that argument describes.
@@ -2456,7 +2456,7 @@ TEST(RemoteRunAhead, AnEventBurstBehindAnUnwaitedSequenceFlowControlsInsteadOfAb
         // with a drainer racing it - so the full latch is hit many times over rather than
         // maybe once. That margin is what makes the red-once (restore the Fatal) reliable:
         // a burst that merely might fill the ring would be a red-once that merely might be red.
-        Srv::ServerLoopInstance().RunOnApplyThread(
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
             +[](void*) -> MobileGLResult {
                 MG_Pipe::MGPRange ranges[64];
                 for (Uint32 r = 0; r < 64; ++r) ranges[r] = MG_Pipe::MGPRange{r * 64ull, 64ull};
@@ -2484,7 +2484,7 @@ TEST(RemoteGuards, ADeferredDestroyFromAnUnbarrieredApplyIsFatalUnderStrict) {
     const auto child = RunInChild([] {
         MG_Config::Ipc.StrictErrors = true;
         StartRunAheadSession();
-        Srv::ServerLoopInstance().RunOnApplyThread(
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
             +[](void*) -> MobileGLResult {
                 MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(false);
                 (void)MG_Pipe::MGPipeDeferDestroyAndFreeIfOnApplyThread(MG_Pipe::MGPipeKind::Texture,
@@ -2504,7 +2504,7 @@ TEST(RemoteGuards, ADeferredDestroyFromABarrieredApplyIsStillServed) {
     const auto child = RunInChild([] {
         MG_Config::Ipc.StrictErrors = true;
         StartRunAheadSession();
-        Srv::ServerLoopInstance().RunOnApplyThread(
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
             +[](void*) -> MobileGLResult {
                 MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(true);
                 if (!MG_Pipe::MGPipeDeferDestroyAndFreeIfOnApplyThread(MG_Pipe::MGPipeKind::Texture,

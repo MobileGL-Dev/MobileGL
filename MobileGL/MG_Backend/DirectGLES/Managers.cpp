@@ -221,7 +221,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // EmitObjectDeathRecord: no handle means the server never saw the object and
             // NOTHING crosses (which replaces the mailbox's unconditional delivery), and a
             // handle means the record's EmitAndWait orders the death against in-flight verbs
-            // that name it - the one property the blocking RunOnApplyThread hop provided and
+            // that name it - the one property the blocking control-channel hop provided and
             // the only one P5c keeps. The sink (ServerVerbSink::OnObjectDeath) releases the
             // kind's twin table by handle on the apply thread, so neither a lifetime-id probe
             // nor the client's allocator is touched from there any more.

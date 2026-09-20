@@ -288,7 +288,7 @@ TEST(ServerLoopTest, AControlRequestRunsOnTheApplyThreadAndUnparksIt) {
     std::thread::id posterId{};
     std::thread poster([&] {
         posterId = std::this_thread::get_id();
-        rc = loop.RunOnApplyThread(
+        rc = loop.RunProbeOnApplyThreadForTesting(
             +[](void* user) -> MobileGLResult {
                 auto* p = static_cast<Probe*>(user);
                 p->ranOn = std::this_thread::get_id();
@@ -375,7 +375,7 @@ TEST(ServerLoopTest, TheControlShadowIsClearedWhenThePumpTakesTheRequest) {
     std::atomic<Bool> answered{false};
     MobileGLResult rc = MOBILEGL_ERR_INVALID_ARGUMENT;
     std::thread poster([&] {
-        rc = loop.RunOnApplyThread(
+        rc = loop.RunProbeOnApplyThreadForTesting(
             +[](void* user) -> MobileGLResult {
                 Gate* g = static_cast<Gate*>(user);
                 g->running.store(true, std::memory_order_release);
@@ -446,10 +446,10 @@ TEST(ServerLoopTest, APostFromTheApplyThreadItselfRunsInlineRatherThanDeadlockin
         Bool innerRan = false;
         MobileGLResult innerRc = MOBILEGL_ERR_INVALID_ARGUMENT;
     } outer;
-    const MobileGLResult rc = Server::ServerLoopInstance().RunOnApplyThread(
+    const MobileGLResult rc = Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
         +[](void* user) -> MobileGLResult {
             auto* o = static_cast<Outer*>(user);
-            o->innerRc = Server::ServerLoopInstance().RunOnApplyThread(
+            o->innerRc = Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
                 +[](void* inner) -> MobileGLResult {
                     *static_cast<Bool*>(inner) = true;
                     return MOBILEGL_OK;
@@ -905,7 +905,7 @@ TEST(ServerLoopTest, AForwarderCallAfterTheLoopStoppedReturnsNotInitializedAndDo
     struct Probe {
         Bool ran = false;
     } probe;
-    const MobileGLResult rc = Server::ServerLoopInstance().RunOnApplyThread(
+    const MobileGLResult rc = Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
         +[](void* user) -> MobileGLResult {
             static_cast<Probe*>(user)->ran = true;
             return MOBILEGL_OK;
@@ -915,6 +915,31 @@ TEST(ServerLoopTest, AForwarderCallAfterTheLoopStoppedReturnsNotInitializedAndDo
     EXPECT_EQ(rc, MOBILEGL_ERR_NOT_INITIALIZED)
         << "a forwarder call after Stop() did not return NOT_INITIALIZED (old code ran it inline)";
     EXPECT_FALSE(probe.ran) << "the work ran on the caller after the loop stopped";
+}
+
+// P5f (fc): the frame channel's own red-once handle. A forwarder no longer posts a function
+// pointer and a stack address; it packs a SurfaceControlFrame and the loop's dispatch counter is
+// the proof the frame crossed. The revert this guards: turn ServerSetEGLSwapInterval back into a
+// direct `Backend()->SetEGLSwapInterval(...)` (or any shape that skips the frame) and the counter
+// below does not move - the test goes red even though the swap interval itself would still reach a
+// backend in an inproc build, which is exactly why "the EGL call happened" cannot be the check.
+TEST(ServerLoopTest, AVoidForwarderCrossesAsOneDispatchedFrame) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked());
+    ASSERT_EQ(loop.ControlFramesDispatched(), 0u);
+
+    // No backend lives in this process, so the dispatch declines with NOT_INITIALIZED - but the
+    // frame must still have CROSSED the channel, which is the property under test.
+    Server::ServerSetEGLSwapInterval(1);
+
+    EXPECT_EQ(loop.ControlFramesDispatched(), 1u)
+        << "ServerSetEGLSwapInterval did not dispatch exactly one control frame; the forwarder "
+           "reached the backend (or did nothing) without crossing the frame channel";
+
+    fixture.Stop();
 }
 
 // P5d round 3, package D: THE IDENTITY MUST DIE WITH THE THREAD, and this is the case that says
@@ -928,7 +953,7 @@ TEST(ServerLoopTest, AForwarderCallAfterTheLoopStoppedReturnsNotInitializedAndDo
 // after a context-loss restart. That thread then answers OnApplyThread() TRUE, which inverts
 // RunsAsTheServerRole() and PersistentMapTracker::OnServerRole() on the client, aborts
 // BufferObject's accessors with Fatal{RoleViolation, "buffer-legacy-arm"}, and makes
-// RunOnApplyThread run EGL work inline on it - the "EGL on the app thread" outcome R-1 exists to
+// RunSurfaceControlFrame run EGL work inline on it - the "EGL on the app thread" outcome R-1 exists to
 // make impossible.
 //
 // Two halves, because the mechanism and the consequence fail differently. (a) is deterministic
@@ -1293,10 +1318,10 @@ namespace {
     }
 
     // A control request that runs an arbitrary callable on the apply thread. A std::function is
-    // fine in a test; production's ControlWork is a raw pointer for the teardown path's sake.
+    // fine in a test; production's probe hook is a raw pointer for the teardown path's sake.
     MobileGLResult OnApply(const std::function<void()>& body) {
         std::function<void()> copy = body;
-        return Server::ServerLoopInstance().RunOnApplyThread(
+        return Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
             +[](void* user) -> MobileGLResult {
                 (*static_cast<std::function<void()>*>(user))();
                 return MOBILEGL_OK;
@@ -1569,6 +1594,23 @@ TEST(ServerLoopEglTest, ADestroyedContextForgetsTheTupleSoTheSameHandleValuesBin
         << "the swap after the re-create failed: BackendObject::SwapEGLBuffers found no current-thread "
            "record, because the make-current that should have made one was treated as a repeat";
     EXPECT_EQ(g_nativeEglBinds.load(), 2) << "one native bind per context lifetime, not more";
+
+    fixture.TearDown();
+}
+
+// P5f (fc): InitializeEGLDisplay's out-pointers are the frame's reply fields now (the one place
+// the old mailbox carried pointers INTO the poster's stack). The answer is the driver's real
+// version through the frame - the BringUp already consumed one init; a second call is an
+// idempotent eglInitialize and its version answer must still cross back.
+TEST(ServerLoopEglTest, TheInitializeDisplayReplyArrivesThroughTheFrame) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+
+    EGLint major = 0;
+    EGLint minor = 0;
+    ASSERT_TRUE(Server::ServerInitializeEGLDisplay(EglServerFixture::Dpy(), &major, &minor));
+    EXPECT_GE(major, 1) << "eglInitialize's major version did not cross back through the frame's "
+                           "reply fields";
 
     fixture.TearDown();
 }

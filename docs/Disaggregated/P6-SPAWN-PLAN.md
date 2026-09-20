@@ -29,7 +29,7 @@
 1. `SocketTransport`。`ClientSession.cpp:468` 目前硬拒非 `InProcess`。
 2. `ServerMain`。今天的 `MobileGLServer`（`CMakeLists.txt:923`）是 P0 spike 桩（`tools/spikes/server_stub/main.cpp`），Android-only、默认 OFF。
 3. 进程机制：fork/execve；envp 剔除 + 子进程强制 monolith（双保险）；`dladdr` 兜底；有界重试握手；EOF 即退；不留孤儿。
-4. 控制面帧。十二个 `Server*` forwarder（`ServerLoop.cpp:802-1022`）经单槽邮箱传**函数指针 + 栈上 `void*`**（`ServerLoop.cpp:533-568`、`:645`），跨进程无意义。P5c 审计 G4 行，记给 P6。
+4. 控制面帧。**P5f 包 fc 已把帧化本身落地**：forwarder 改发 `SurfaceControlFrame` 值帧（`MG_Remote/Server/SurfaceControlFrame.h`），schema 缺口（3 枚枚举 + `readSurface`/`context` 字段 + `WindowKind::MetalLayer`）已按 append-only 补齐，wire 编解码与具名拒绝在 `MG_Remote/Protocol/SurfaceOpCodec.cpp`（`ServerApplyWireSurfaceOp`）。P6 的 `cp` 只剩传输：client 侧 `EncodeSurfaceOpFrame` 上 socket、server 泵进 `ServerApplyWireSurfaceOp`、`SurfaceReply` 回程与 §4 的死亡接线。P5c 审计 G4 行，原记 P6。
 5. `g_syncedRenderStateParameters`（`MG_Backend/DirectGLES/DirectGLES.cpp:4586`）与 `ScopedDefaultUnpackState::s_synced` 按 context 世代重置（`CONTRACT-P5C.md:538-539`）。
 6. 死亡语义，见 §4。
 
@@ -80,7 +80,7 @@ a6  (只读审计，不写代码)
 
 **so**：`SocketTransport`。**必须在第二个进程出现之前就绿**——一次 `socketpair()` + 两个线程跑 `InProcessTransportTest` 全套，含 `BUFFER_TOO_SMALL` 留帧语义。理由同 `SessionRings.h:22-28`。
 
-**sm / cp / st / t6**：见 §2 与 §3。`cp` 最大；`ForgetCurrentTuple` 的 N-3 语义（`ServerLoop.cpp:318-330`）须在帧路径上原样成立。
+**sm / cp / st / t6**：见 §2 与 §3。`cp` 在 fc 之后只剩传输；`ForgetCurrentTuple` 的 N-3 语义已在帧路径的分发里原样成立（`ApplySurfaceControlFrame`，ServerLoopTest 的 C7/N-3 对照驱动）。
 
 ## 6 出口门
 
