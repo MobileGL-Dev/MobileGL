@@ -198,7 +198,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.programHash, sizeof(payload.programHash)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.vertexInputHash, sizeof(payload.vertexInputHash)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.pipelineLayout, sizeof(payload.pipelineLayout)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.renderPass, sizeof(payload.renderPass)));
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (payload.wireRenderPassCompatibilityId != 0) {
+            constexpr Uint64 wireDomain = 0x5749524552504b59ull;
+            XXHASH_VERIFY(XXH64_update(m_hashState, &wireDomain, sizeof(wireDomain)));
+            XXHASH_VERIFY(XXH64_update(m_hashState, &payload.wireRenderPassCompatibilityId,
+                                      sizeof(payload.wireRenderPassCompatibilityId)));
+        } else
+#endif
+        {
+            XXHASH_VERIFY(XXH64_update(m_hashState, &payload.renderPass, sizeof(payload.renderPass)));
+        }
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.colorAttachmentCount, sizeof(payload.colorAttachmentCount)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.rasterizationSamples, sizeof(payload.rasterizationSamples)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.sampleShadingEnable, sizeof(payload.sampleShadingEnable)));
@@ -275,7 +285,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     static_cast<unsigned long long>(payload.programHash));
             return VK_NULL_HANDLE;
         }
-        m_cache.emplace(hash, PipelineCacheEntry{pipeline, payload.programHash, payload.renderPass,
+        m_cache.emplace(hash, PipelineCacheEntry{pipeline, payload.programHash,
+#if MOBILEGL_BUILD_DISAGGREGATED
+                                                 // Wire pipelines outlive their creator pass and
+                                                 // may serve another compatible pass in flight.
+                                                 // Never evict them by a recycled native handle.
+                                                 payload.wireRenderPassCompatibilityId != 0 ? VK_NULL_HANDLE :
+#endif
+                                                 payload.renderPass,
                                                  m_frameCounter});
         return pipeline;
     }

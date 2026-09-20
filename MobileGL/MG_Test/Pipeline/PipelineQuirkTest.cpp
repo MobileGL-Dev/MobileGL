@@ -11,6 +11,9 @@
 #include <Config.h>
 #include <MG_Backend/DirectVulkan/Renderer/PipelineFactory.h>
 #include <MG_Backend/DirectVulkan/Renderer/ProgramFactory.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Backend/DirectVulkan/Renderer/WireRenderPassCompatibility.h>
+#endif
 
 using namespace MobileGL;
 using MobileGL::MG_Backend::DirectVulkan::PipelineFactory;
@@ -456,4 +459,59 @@ TEST(ReflectedReadsInstanceIndexBuiltin, FalseForAShaderWithNoInputBuiltins) {
 TEST(ReflectedReadsInstanceIndexBuiltin, FalseForAnEmptyModule) {
     SpvReflectShaderModule emptyModule{};
     EXPECT_FALSE(ProgramFactory::ReflectedReadsInstanceIndexBuiltin(emptyModule));
+}
+
+
+TEST(WirePipelineCompatibility, ExactCompatibilitySurvivesNativeObjectTurnover) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    using namespace MobileGL::MG_Backend::DirectVulkan;
+    WireRenderPassCompatibilityTable table;
+    WireRenderPassCompatibilityKey a{{(Uint64(VK_FORMAT_R8G8B8A8_UNORM) << 32) | VK_SAMPLE_COUNT_1_BIT}, {0},
+                                      VK_ATTACHMENT_UNUSED};
+    const Uint64 first = table.Intern(a);
+    ASSERT_NE(first, 0u);
+    auto b = a;
+    b.attachmentFormatsAndSamples[0] = (Uint64(VK_FORMAT_R8G8B8A8_SRGB) << 32) | VK_SAMPLE_COUNT_1_BIT;
+    EXPECT_NE(table.Intern(b), first);
+    b = a;
+    b.attachmentFormatsAndSamples[0] = (Uint64(VK_FORMAT_R8G8B8A8_UNORM) << 32) | VK_SAMPLE_COUNT_4_BIT;
+    EXPECT_NE(table.Intern(b), first);
+    b = a;
+    b.colorReferences = {VK_ATTACHMENT_UNUSED, 0};
+    EXPECT_NE(table.Intern(b), first);
+    b = a;
+    b.depthReference = 0;
+    EXPECT_NE(table.Intern(b), first);
+    // Native pass/image turnover and swapchain changes never reset this table.
+    EXPECT_EQ(table.Intern(a), first);
+#else
+    GTEST_SKIP() << "wire pipeline compatibility requires disaggregated build";
+#endif
+}
+
+TEST(WirePipelineCompatibility, HashUsesCompatibilityIdentityAndSeparatesNativeDomain) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    using namespace MobileGL::MG_Backend::DirectVulkan;
+    VulkanRendererConfig config{};
+    config.DisablePipelineCache = true;
+    // Hash-only unit: DisablePipelineCache prevents all device calls, and no
+    // pipeline is created. These tokens are never passed to a Vulkan driver.
+    PipelineFactory factory(reinterpret_cast<VkDevice>(uintptr_t{1}), config);
+    PipelineFactory::PipelineCreatePayload payload{};
+    payload.renderPass = (VkRenderPass)(uintptr_t{1});
+    payload.wireRenderPassCompatibilityId = 1;
+    const auto a = factory.ComputeHash(payload);
+    payload.renderPass = (VkRenderPass)(uintptr_t{2});
+    EXPECT_EQ(factory.ComputeHash(payload), a) << "compatible passes must reuse the pipeline across native handles";
+    payload.wireRenderPassCompatibilityId = 2;
+    EXPECT_NE(factory.ComputeHash(payload), a) << "a recycled native handle must not alias incompatible passes";
+    payload.renderPass = (VkRenderPass)(uintptr_t{1});
+    payload.wireRenderPassCompatibilityId = 0;
+    EXPECT_NE(factory.ComputeHash(payload), a) << "native handles and wire identities are different domains";
+    const auto native = factory.ComputeHash(payload);
+    payload.renderPass = (VkRenderPass)(uintptr_t{2});
+    EXPECT_NE(factory.ComputeHash(payload), native);
+#else
+    GTEST_SKIP() << "wire pipeline compatibility requires disaggregated build";
+#endif
 }

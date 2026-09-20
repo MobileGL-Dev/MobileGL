@@ -5290,7 +5290,7 @@ void main() {
     VkPipeline VulkanRenderer::GetOrCreatePipelineWithInput(GLenum mode, const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj, ProgramFactory::CompileOptionFlags transformFlags,
             const VertexInputStateFactory::BackendVertexInputState& vis, const RenderPassEntry& renderPassEntry,
-            Bool primitiveRestartEnable) {
+            Bool primitiveRestartEnable, Uint64 wireRenderPassCompatibilityId) {
 #endif
         Bool invertClockwise = transformFlags & ProgramFactory::CompileOptionBit::PositionYFlip;
         if (programObj.stages.empty()) {
@@ -5313,7 +5313,11 @@ void main() {
         auto& vis = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
 #endif
         const Uint64 vertexLayoutHash = vis.layoutHash;
-        const Uint64 renderPassHash = renderPassEntry.hash;
+        const Uint64 renderPassHash =
+#if MOBILEGL_BUILD_DISAGGREGATED
+            wireRenderPassCompatibilityId != 0 ? 0 :
+#endif
+            renderPassEntry.hash;
         // The pipeline-relevant subset only: glViewport / glScissor / glBlendColor / glStencilMask
         // and friends are dynamic state or not pipeline state at all, and keying the memo on the
         // all-state counter made any of them evict a perfectly good VkPipeline. The memo compares
@@ -5357,6 +5361,9 @@ void main() {
             if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode &&
                 entry.programHash == programObj.hash && entry.vertexInputHash == vertexLayoutHash &&
                 entry.renderPassHash == renderPassHash &&
+#if MOBILEGL_BUILD_DISAGGREGATED
+                entry.wireRenderPassCompatibilityId == wireRenderPassCompatibilityId &&
+#endif
                 entry.pipelineStateHash == pipelineStateHash &&
 #if MOBILEGL_PIPE_PUSH
                 entry.renderStateCso == renderStateCso &&
@@ -5650,6 +5657,9 @@ void main() {
             .vertexInputHash = vertexLayoutHash,
             .pipelineLayout = programObj.pipelineLayout,
             .renderPass = renderPassEntry.renderPass,
+#if MOBILEGL_BUILD_DISAGGREGATED
+            .wireRenderPassCompatibilityId = wireRenderPassCompatibilityId,
+#endif
             .colorAttachmentCount = renderPassEntry.colorAttachmentCount,
             .rasterizationSamples = renderPassEntry.sampleCount,
             // ARB_sample_shading. Dropped on a device without sampleRateShading rather than
@@ -5785,7 +5795,11 @@ void main() {
         const auto& drawFboBinding =
             MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
 #endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MOBILEGL_ASSERT(wireFbo != nullptr || drawFboBinding != nullptr, "GetOrCreatePipeline: draw framebuffer is null");
+#else
         MOBILEGL_ASSERT(drawFboBinding != nullptr, "GetOrCreatePipeline: draw framebuffer is null");
+#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
         const Bool isDefaultDrawFbo = wireFbo ? wireFbo->IsDefault : drawFboBinding->IsDefaultFramebuffer();
         Array<FramebufferAttachmentType, MG_Pipe::kMGPipeMaxColorAttachments> wireDrawBuffers{};
@@ -6073,6 +6087,9 @@ void main() {
             entry.programHash = programObj.hash;
             entry.vertexInputHash = vertexLayoutHash;
             entry.renderPassHash = renderPassHash;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            entry.wireRenderPassCompatibilityId = wireRenderPassCompatibilityId;
+#endif
             entry.pipelineStateHash = pipelineStateHash;
 #if MOBILEGL_PIPE_PUSH
             entry.renderStateCso = renderStateCso;
@@ -6807,6 +6824,9 @@ void main() {
                 if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode &&
                     entry.programHash == programObj.hash && entry.vertexInputHash == vaoLayoutHash &&
                     entry.renderPassHash == snap.renderPassHash &&
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    entry.wireRenderPassCompatibilityId == 0 &&
+#endif
                     entry.pipelineStateHash == pipelineStateHash &&
 #if MOBILEGL_PIPE_PUSH
                     entry.renderStateCso == renderStateCso &&

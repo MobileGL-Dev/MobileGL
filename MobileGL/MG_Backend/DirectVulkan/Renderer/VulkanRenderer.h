@@ -22,6 +22,9 @@
 #include "VkSamplerManager.h"
 #include "VkTextureManager.h"
 #include "VkTimerQueryManager.h"
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include "WireRenderPassCompatibility.h"
+#endif
 #include "MG_Util/Math/VectorTypes.h"
 #include <Includes.h>
 #include <MG_Backend/BackendObject.h>
@@ -509,6 +512,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void ClearAllWireDrawPassCaches();
         Vector<Vector<WireDrawPassCacheEntry>> m_wireDrawPassCaches;
         WireDrawPassKey m_wireDrawPassKey;
+        WireRenderPassCompatibilityTable m_wireRenderPassCompatibility;
         struct WireRetiredObjects {
             Uint64 submitIndex = 0;
             UniquePtr<RenderPassEntry> drawPass;
@@ -527,7 +531,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkPipeline GetOrCreatePipelineWithInput(GLenum mode, const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj, ProgramFactory::CompileOptionFlags transformFlags,
             const VertexInputStateFactory::BackendVertexInputState& vis, const RenderPassEntry& renderPassEntry,
-            Bool primitiveRestartEnable);
+            Bool primitiveRestartEnable, Uint64 wireRenderPassCompatibilityId = 0);
 
         void CopyWireFramebufferToTexture(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                                            GLint x, GLint y, GLsizei width, GLsizei height);
@@ -926,6 +930,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 programHash = 0;
             Uint64 vertexInputHash = 0;
             Uint64 renderPassHash = 0;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            Uint64 wireRenderPassCompatibilityId = 0;
+#endif
             // The PRE-HANDLE arm's key component (P2 brief D12.1), and 0 in every entry the
             // handle arm mints. VALUE hash of the pipeline-relevant fixed-function state (see
             // ComputePipelineStateHash), not the monotonic pipeline-state version: the version

@@ -408,8 +408,15 @@
             created.hash = created.compatibilityHash = XXH64(colors.data(), colors.size() * sizeof(colors[0]), passHash);
         }
         auto& pass = *m_wireDrawPass;
+        WireRenderPassCompatibilityKey pipelinePassKey{};
+        for (const auto& attachment : attachments)
+            pipelinePassKey.attachmentFormatsAndSamples.push_back(
+                (static_cast<Uint64>(attachment.format) << 32) | static_cast<Uint32>(attachment.samples));
+        for (const auto& color : colors) pipelinePassKey.colorReferences.push_back(color.attachment);
+        pipelinePassKey.depthReference = depth.attachment;
+        const Uint64 compatibilityId = m_wireRenderPassCompatibility.Intern(pipelinePassKey);
         const auto pipeline = GetOrCreatePipelineWithInput(mode, program, programObj, flags, input, pass,
-            ResolvePrimitiveRestartEnable(aspects, indices));
+            ResolvePrimitiveRestartEnable(aspects, indices), compatibilityId);
         if (pipeline == VK_NULL_HANDLE) return false;
         for (Uint32 i = 0; i < vertexSlices.size(); ++i)
             vkCmdBindVertexBuffers(frame.commandBuffer, i, 1, &vertexSlices[i].buffer, &vertexSlices[i].offset);

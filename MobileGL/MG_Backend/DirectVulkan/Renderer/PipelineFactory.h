@@ -35,6 +35,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             HashType vertexInputHash = 0;
             VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
             VkRenderPass renderPass = VK_NULL_HANDLE;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // Nonzero is an exact, renderer-lifetime compatibility identity.
+            // renderPass remains the valid creation handle, not the cache key.
+            Uint64 wireRenderPassCompatibilityId = 0;
+#endif
             Uint32 colorAttachmentCount = 1;
             VkSampleCountFlagBits rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
             // glEnable(GL_SAMPLE_SHADING) + glMinSampleShading, which Vulkan bakes into the
