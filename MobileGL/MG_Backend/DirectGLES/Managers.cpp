@@ -2723,12 +2723,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (bytes == nullptr || record.Blob.Size == 0) return;
                 const auto* stored = PipeTextureRecordForHandle(res);
                 if (stored == nullptr) return;
-                const IntVec3 extent = record.LevelWidth && record.LevelHeight && record.LevelDepth
-                    ? IntVec3{static_cast<Int>(record.LevelWidth), static_cast<Int>(record.LevelHeight),
-                              static_cast<Int>(record.LevelDepth)}
-                    : MG_Remote::Server::StagedTextureMipExtent(
-                        stored->Desc.Target, stored->Desc.Width, stored->Desc.Height, stored->Desc.Depth,
-                        static_cast<Uint32>(record.Level));
+                const IntVec3 extent = MG_Remote::Server::StagedTextureUploadExtent(stored->Desc, record);
                 store.Adopt(MG_Remote::Server::StagedTextureStore::KeyForHandle(res),
                             MG_Pipe::MGPipeSubDataUploadTargetOf(record.Target), record.Level, extent,
                             bytes, static_cast<SizeT>(record.Blob.Size));

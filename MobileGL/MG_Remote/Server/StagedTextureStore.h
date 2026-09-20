@@ -131,6 +131,14 @@ namespace MobileGL::MG_Remote::Server {
         return extent;
     }
 
+    inline IntVec3 StagedTextureUploadExtent(const MG_Pipe::MGPResourceDesc& desc,
+                                             const MG_Pipe::MGPSubData& upload) {
+        if (upload.LevelWidth && upload.LevelHeight && upload.LevelDepth)
+            return {static_cast<Int>(upload.LevelWidth), static_cast<Int>(upload.LevelHeight),
+                    static_cast<Int>(upload.LevelDepth)};
+        return StagedTextureMipExtent(desc.Target, desc.Width, desc.Height, desc.Depth, upload.Level);
+    }
+
     class StagedTextureStore {
     public:
         // `copies` is "this process is really split". False reproduces the monolith expression

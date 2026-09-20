@@ -1024,7 +1024,7 @@ namespace MobileGL::MG_Pipe {
             const auto& desc = stored.Desc;
             store.Adopt(MG_Remote::Server::StagedTextureStore::KeyForHandle(upload.Res),
                 MGPipeSubDataUploadTargetOf(upload.Target), upload.Level,
-                MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height, desc.Depth, upload.Level),
+                MG_Remote::Server::StagedTextureUploadExtent(desc, upload),
                 bytes, static_cast<SizeT>(upload.Blob.Size));
         }
 
