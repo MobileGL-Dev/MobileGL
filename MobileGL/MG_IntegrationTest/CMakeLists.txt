@@ -754,7 +754,7 @@ include(GoogleTest)
 set(MGL_ITEST_MONOLITH_MECHANISM_FILTER
     "HandleRecycleScenario.*:CsoContentAddressingScenario.*:ResourceSubsystemControlScenario.*:ObjectSubsystemControlScenario.*:PipeVerifyArmingScenario.*:PoisonOmissionScenario.*:StorageBufferRegrowScenario.NStorageDefinitionsCostNMapPersistentRoundtripsNotOnePerDraw:LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip")
 set(MGL_ITEST_GLES_VIEW_FILTER
-    "TextureViewScenario.*:F1WireScenario.ComputeImageStoreThroughViewPreservesOtherRootLayer:F1WireScenario.TextureViewClearTargetsItsRootMipAndLayer")
+    "TextureViewScenario.*:F1WireScenario.ComputeImageStoreThroughViewPreservesOtherRootLayer:F1WireScenario.TextureViewClearTargetsItsRootMipAndLayer:F1WireScenario.GenerateMipmapThroughViewKeepsOwnerLevelsAndLayersOutsideItsWindow")
 
 gtest_discover_tests(MobileGLIntegrationTest
     TEST_PREFIX "DirectGLES."

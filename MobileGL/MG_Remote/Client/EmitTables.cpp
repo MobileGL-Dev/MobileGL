@@ -54,6 +54,7 @@
 // set_index_buffer / the buffer's own constructor did that), for MGPDrawInfo::IndexResource and
 // the two indirect-buffer handles.
 #include <MG_Impl/Pipe/ResourceTracker.h>
+#include <MG_Impl/GLImpl/Texture/MipmapGenerationPlan.h>
 #include <MG_Impl/Pipe/OwnedDrawInputs.h>
 
 #include <cstdio>
@@ -369,7 +370,12 @@ namespace MobileGL::MG_Remote::Client {
             record.Target = static_cast<Uint16>(target);
             record.BaseLevel = texture->GetLevelRange().x();
             const auto* mipmap = dynamic_cast<const MG_State::GLState::TextureObjectMipmap*>(texture.get());
-            record.LevelCount = mipmap ? mipmap->GetMipmapLevelCount() : 0;
+            if (mipmap && !texture->GetUploadTargets().empty()) {
+                const auto plan = MG_Impl::GLImpl::ComputeMipmapGenerationRange(*mipmap, texture->GetUploadTargets()[0]);
+                // LevelCount is the logical end-exclusive, not the number of
+                // levels following BaseLevel. Preserve that existing carrier.
+                record.LevelCount = static_cast<Uint16>(std::min<Uint>(plan.End, mipmap->GetMipmapLevelCount()));
+            }
             session.EmitAndWait(MG_Pipe::MGPWireOp::GenerateMipmap, &record, sizeof(record),
                                 nullptr, 0, nullptr, 0, nullptr);
         }

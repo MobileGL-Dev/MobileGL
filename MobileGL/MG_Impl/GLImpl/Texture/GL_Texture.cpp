@@ -12,6 +12,7 @@
 #include "MG_Util/Types.h"
 #include "Validators.h"
 #include "ProxyTexture.h"
+#include "MipmapGenerationPlan.h"
 
 #include <MG_State/GLState/Core.h>
 #include <MG_Backend/BackendObjects.h>
@@ -510,6 +511,32 @@ namespace MobileGL::MG_Impl::GLImpl {
         Bool EnsureGeneratedMipmapStorageAllocated(
             MG_State::GLState::TextureObjectMipmap& texture,
             TextureUploadTarget uploadTarget) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                const auto plan = ComputeMipmapGenerationRange(texture, uploadTarget);
+                if (plan.End <= plan.Base) return false;
+                // Immutable textures and views already own every generated level.
+                // Allocating through a view would redefine its owner's complete
+                // level, destroying layers and levels outside the view window.
+                if (texture.IsImmutable()) return true;
+                const IntVec3 baseSize = texture.GetMipmapTexelSize(uploadTarget, plan.Base);
+                const SizeT baseBytes = texture.GetMipmapByteSize(uploadTarget, plan.Base);
+                const SizeT texels = static_cast<SizeT>(baseSize.x()) * baseSize.y() * baseSize.z();
+                if (!baseBytes || !texels || baseBytes % texels) return false;
+                const SizeT pixelBytes = baseBytes / texels;
+                const Int axes = MipShrinkingAxisCount(texture.GetTarget());
+                for (Uint level = plan.Base + 1; level < plan.End; ++level) {
+                    const auto size = ComputeMipmapTexelSize(baseSize, level - plan.Base, axes);
+                    const SizeT bytes = pixelBytes * static_cast<SizeT>(size.x()) * size.y() * size.z();
+                    texture.AllocateStorage(uploadTarget, level, {size, bytes});
+                    texture.MarkStorageDirty(uploadTarget, level, false);
+                }
+                // Levels before BASE_LEVEL and after the generated end remain
+                // valid images. In particular, MAX_LEVEL is not a truncate call.
+                texture.BumpContentVersion();
+                return true;
+            }
+#endif
             const Uint existingLevelCount = texture.GetMipmapLevelCount();
             if (existingLevelCount == 0) {
                 return false;

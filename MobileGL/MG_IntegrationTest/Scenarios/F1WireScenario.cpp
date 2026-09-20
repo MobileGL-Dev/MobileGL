@@ -500,6 +500,109 @@ TEST_F(F1WireScenario, GenerateMipmapDepthPixels) {
     EXPECT_NEAR(pixel, 0.375f, 0.00001f);
 }
 
+TEST_F(F1WireScenario, GenerateMipmapHonorsMutableBaseAndMaxWithoutChangingOtherLevels) {
+    if (!Ready()) return;
+    const std::array<GLubyte, 4> colors[5] = {
+        {255, 0, 0, 255}, {0, 255, 255, 255}, {0, 0, 255, 255},
+        {255, 255, 0, 255}, {255, 0, 255, 255}};
+    for (int level = 0; level < 5; ++level) {
+        const int side = 16 >> level;
+        std::vector<GLubyte> pixels(static_cast<size_t>(side * side * 4));
+        for (size_t at = 0; at < pixels.size(); at += 4)
+            std::copy(colors[level].begin(), colors[level].end(), pixels.begin() + at);
+        glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA8, side, side, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    }
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 1);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 2);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 1);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    // The actual base differs from its uploaded shadow. No readback separates
+    // this GPU write from generation, and level zero contains a different color.
+    glClearColor(0, 1, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    for (int level = 0; level < 5; ++level) {
+        const int side = 16 >> level;
+        GLint width = 0, height = 0;
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_WIDTH, &width);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_HEIGHT, &height);
+        EXPECT_EQ(width, side) << "level " << level;
+        EXPECT_EQ(height, side) << "level " << level;
+        std::vector<GLubyte> pixels(static_cast<size_t>(side * side * 4), 17);
+        glGetTexImage(GL_TEXTURE_2D, level, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        const std::array<GLubyte, 4> expected = level == 1 || level == 2
+            ? std::array<GLubyte, 4>{0, 255, 0, 255} : colors[level];
+        size_t wrong = 0;
+        for (size_t at = 0; at < pixels.size(); at += 4)
+            if (!std::equal(expected.begin(), expected.end(), pixels.begin() + at)) ++wrong;
+        EXPECT_EQ(wrong, 0u) << "level " << level << " must retain or generate its own pixels";
+    }
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+}
+
+TEST_F(F1WireScenario, GenerateMipmapThroughViewKeepsOwnerLevelsAndLayersOutsideItsWindow) {
+    if (!Ready()) return;
+    GLuint root = 0, view = 0;
+    glGenTextures(1, &root);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, root);
+    glTexStorage3D(GL_TEXTURE_2D_ARRAY, 5, GL_RGBA8, 16, 16, 4);
+    const std::array<GLubyte, 4> colors[5] = {
+        {255, 0, 0, 255}, {0, 0, 255, 255}, {255, 255, 0, 255},
+        {255, 0, 255, 255}, {0, 255, 255, 255}};
+    for (int level = 0; level < 5; ++level) {
+        const int side = 16 >> level;
+        std::vector<GLubyte> pixels(static_cast<size_t>(side * side * 4 * 4));
+        for (size_t at = 0; at < pixels.size(); at += 4)
+            std::copy(colors[level].begin(), colors[level].end(), pixels.begin() + at);
+        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, level, 0, 0, 0, side, side, 4,
+                       GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    }
+    glGenTextures(1, &view);
+    // Logical levels 0..2 alias owner levels 1..3; only owner layers 1..2 belong
+    // to this view. Its nonzero BASE_LEVEL makes owner level 2 the source.
+    glTextureView(view, GL_TEXTURE_2D_ARRAY, root, GL_RGBA8, 1, 3, 1, 2);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    glTextureParameteri(view, GL_TEXTURE_BASE_LEVEL, 1);
+    glTextureParameteri(view, GL_TEXTURE_MAX_LEVEL, 2);
+    for (const int layer : {1, 2}) {
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, root, 2, layer);
+        ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+        glClearColor(0, 1, 0, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
+    glGenerateTextureMipmap(view);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    glBindTexture(GL_TEXTURE_2D_ARRAY, root);
+    for (int level = 0; level < 5; ++level) {
+        const int side = 16 >> level;
+        GLint width = 0, height = 0, layers = 0;
+        glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, level, GL_TEXTURE_WIDTH, &width);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, level, GL_TEXTURE_HEIGHT, &height);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, level, GL_TEXTURE_DEPTH, &layers);
+        EXPECT_EQ(width, side) << "owner mip " << level;
+        EXPECT_EQ(height, side) << "owner mip " << level;
+        ASSERT_EQ(layers, 4) << "generation through a two-layer view must not resize its owner's level";
+        const size_t layerBytes = static_cast<size_t>(side * side * 4);
+        std::vector<GLubyte> pixels(layerBytes * 4, 17);
+        glGetTexImage(GL_TEXTURE_2D_ARRAY, level, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        for (int layer = 0; layer < 4; ++layer) {
+            const bool generated = (level == 2 || level == 3) && (layer == 1 || layer == 2);
+            const std::array<GLubyte, 4> expected = generated
+                ? std::array<GLubyte, 4>{0, 255, 0, 255} : colors[level];
+            size_t wrong = 0;
+            for (size_t at = 0; at < layerBytes; at += 4)
+                if (!std::equal(expected.begin(), expected.end(), pixels.begin() + layerBytes * layer + at)) ++wrong;
+            EXPECT_EQ(wrong, 0u) << "owner mip " << level << ", layer " << layer;
+        }
+    }
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 0, 0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    glDeleteTextures(1, &view);
+    glDeleteTextures(1, &root);
+}
+
 TEST_F(F1WireScenario, VertexIdSamplerAndScalarUniformPixels) {
     if (!Ready()) return;
     Attach(GL_RGBA8);
