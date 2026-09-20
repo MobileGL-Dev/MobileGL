@@ -10,6 +10,7 @@ on:
       # branch runs the full lane on every push so a phase's landing is not gated on
       # someone remembering to dispatch the workflow by hand.
       - feat/disaggregated
+      - codex/fix-github-ci
   workflow_dispatch:
     inputs:
       baseline_sha:
@@ -28,6 +29,7 @@ jobs:
       contents: read
     env:
       BUILD_DIR: build-linux
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci') && 'ON' || 'OFF' }}
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPRESS: "true"
       CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -100,12 +102,25 @@ jobs:
             -DMOBILEGL_BUILD_INTEGRATION_TEST=ON \
             -DMOBILEGL_ITEST_VK_ICD=/usr/share/vulkan/icd.d/lvp_icd.json \
             -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
+            -DMOBILEGL_BUILD_DISAGGREGATED="${MOBILEGL_CI_DISAGGREGATED}" \
+            -DMOBILEGL_BUILD_DISAGGREGATED_INPROC="${MOBILEGL_CI_DISAGGREGATED}" \
+            -DMOBILEGL_PIPE_PUSH="${MOBILEGL_CI_DISAGGREGATED}" \
+            -DMOBILEGL_PIPE_VERIFY=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DBENCHMARK_DOWNLOAD_DEPENDENCIES=ON \
             -DBENCHMARK_ENABLE_TESTING=OFF \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
       - name: Build
         run: cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
+
+      - name: Prove primary runtime compilation and identity
+        run: |
+          python3 scripts/ci/runtime_mode_proof.py self-test
+          mode=monolith
+          if [ "${MOBILEGL_CI_DISAGGREGATED}" = "ON" ]; then mode=disaggregated; fi
+          python3 scripts/ci/runtime_mode_proof.py build --build-dir "${BUILD_DIR}" \
+            --mode "${mode}" --output "${BUILD_DIR}/runtime-mode.json"
 
       - name: Show ccache stats
         if: always()
@@ -145,6 +160,7 @@ jobs:
             --exclude='build.ninja' \
             --exclude='cmake_install.cmake' \
             -czf ci-artifacts/mobilegl-linux-runtime.tgz \
+            "${BUILD_DIR}/runtime-mode.json" \
             "${BUILD_DIR}/CTestTestfile.cmake" \
             "${BUILD_DIR}/MobileGL/MG_Test" \
             "${BUILD_DIR}/MobileGL/MG_Benchmark" \
@@ -156,6 +172,73 @@ jobs:
         with:
           name: mobilegl-linux-runtime
           path: ci-artifacts/mobilegl-linux-runtime.tgz
+          if-no-files-found: error
+
+  # The pull-library negative control must not consume the primary artifact:
+  # on disaggregation branches that artifact now contains the real transport.
+  build-linux-monolith-control:
+    name: build explicit pull runtime control
+    runs-on: ubuntu-latest
+    env:
+      BUILD_DIR: build-monolith-control
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPRESS: "true"
+      CCACHE_NOHASHDIR: "true"
+    steps:
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 32
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Get CMake
+        uses: lukka/get-cmake@v4.3.3
+      - name: Restore pull compiler cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-test-build-linux-ccache-v1
+      - name: Prepare Vulkan SDK
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.4.304.1
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+      - name: Update glslang external sources
+        working-directory: 3rdparty/glslang
+        run: python update_glslang_sources.py
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
+      - name: Configure explicit pull control
+        run: |
+          cmake -S . -B "${BUILD_DIR}" -G Ninja \
+            -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_BUILD_TYPE=Release -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
+            -DMOBILEGL_BUILD_TEST=OFF -DMOBILEGL_BUILD_BENCHMARK=OFF \
+            -DMOBILEGL_BUILD_INTEGRATION_TEST=OFF -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
+            -DMOBILEGL_BUILD_DISAGGREGATED=OFF -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=OFF \
+            -DMOBILEGL_PIPE_PUSH=OFF -DMOBILEGL_PIPE_VERIFY=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+      - name: Build and identify pull control
+        run: |
+          cmake --build "${BUILD_DIR}" --target MobileGL --parallel "$(nproc)"
+          python3 scripts/ci/runtime_mode_proof.py build --build-dir "${BUILD_DIR}" \
+            --mode monolith --output "${BUILD_DIR}/runtime-mode.json"
+      - name: Package pull control
+        run: |
+          tar -czf mobilegl-linux-monolith-control.tgz \
+            "${BUILD_DIR}/libMobileGL.so" "${BUILD_DIR}/runtime-mode.json"
+      - name: Upload pull control
+        uses: actions/upload-artifact@v7
+        with:
+          name: mobilegl-linux-monolith-control
+          path: mobilegl-linux-monolith-control.tgz
           if-no-files-found: error
 
   test:
@@ -215,8 +298,18 @@ jobs:
           if-no-files-found: ignore
 
   integration:
+    name: integration (${{ matrix.lane }}, ${{ matrix.transport }})
     runs-on: ubuntu-latest
     needs: build-linux
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON((github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci') && '[{"lane":"monolith-control","transport":"monolith"},{"lane":"inproc-acceptance","transport":"inproc"}]' || '[{"lane":"monolith-control","transport":"monolith"}]') }}
+    env:
+      MOBILEGL_TRANSPORT: ${{ matrix.transport }}
+      MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
+      MOBILEGL_IPC_STRICT_ERRORS: "1"
+      MOBILEGL_IPC_RUN_AHEAD: "1"
 
     steps:
       - name: Checkout repo
@@ -290,20 +383,43 @@ jobs:
           # coverage. The flag is NOT baked into the ctest ENVIRONMENT properties,
           # so an inline env reaches the test processes (unlike the ICD pin above).
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
-            ctest -V -L integration-gpu --no-tests=error
+            ctest -V -L integration-gpu --no-tests=error --output-junit "${RUNNER_TEMP}/integration.xml"
             MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH=1 ctest -V -L integration-gpu \
-              -R 'Buffer|Readback|Atomic|Ssbo|Arena' --no-tests=error
+              -R 'Buffer|Readback|Atomic|Ssbo|Arena' --no-tests=error --output-junit "${RUNNER_TEMP}/integration-staged-copy.xml"
           else
-            ctest --output-on-failure -L integration-gpu --no-tests=error
+            ctest --output-on-failure -L integration-gpu --no-tests=error --output-junit "${RUNNER_TEMP}/integration.xml"
             MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH=1 ctest --output-on-failure -L integration-gpu \
-              -R 'Buffer|Readback|Atomic|Ssbo|Arena' --no-tests=error
+              -R 'Buffer|Readback|Atomic|Ssbo|Arena' --no-tests=error --output-junit "${RUNNER_TEMP}/integration-staged-copy.xml"
           fi
+
+      - name: Prove both backend roles execute inproc in the primary artifact
+        if: matrix.transport == 'inproc'
+        working-directory: build-linux
+        run: |
+          ctest -L integration-p5f-rsp --show-only=json-v1 > "${RUNNER_TEMP}/primary-inproc-lane.json"
+          ctest -L integration-p5f-rsp --no-tests=error --output-on-failure \
+            --output-junit "${RUNNER_TEMP}/primary-inproc.xml"
+          python3 ../scripts/ci/runtime_mode_proof.py logs \
+            --discovery "${RUNNER_TEMP}/primary-inproc-lane.json" \
+            --junit "${RUNNER_TEMP}/primary-inproc.xml" --output "${RUNNER_TEMP}/primary-inproc-proof.json"
+
+      - name: Upload integration lane evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-evidence-${{ matrix.lane }}-${{ matrix.transport }}
+          path: |
+            ${{ runner.temp }}/integration*.xml
+            ${{ runner.temp }}/primary-inproc*
+            build-linux/runtime-mode.json
+            build-linux/MobileGL/MG_IntegrationTest/p5f-rsp-*.log
+          if-no-files-found: warn
 
       - name: Upload core dumps
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: integration-core-dumps
+          name: integration-core-dumps-${{ matrix.lane }}-${{ matrix.transport }}
           path: /tmp/core.*
           if-no-files-found: ignore
 
@@ -739,8 +855,8 @@ jobs:
   # P5's split build. The verify pair cloned, because the problem is the same one: a third
   # configuration of the same sources whose whole value depends on the option having taken.
   #
-  # IT CANNOT RIDE ON build-linux'S ARTIFACT. build-linux passes no -DMOBILEGL_PIPE_PUSH, so it is
-  # a PULL build; MOBILEGL_BUILD_DISAGGREGATED implies MOBILEGL_PIPE_PUSH (the split path decodes
+  # This dedicated build keeps the protocol/strict controls independent of the branch's
+  # primary runtime mode. MOBILEGL_BUILD_DISAGGREGATED implies MOBILEGL_PIPE_PUSH (the split path decodes
   # into the MGPipe applier and PIPE_PUSH is what compiles the applier), so the split arm needs a
   # build of its own exactly as the verify arm does.
   #
@@ -1889,6 +2005,8 @@ jobs:
   trace-cases:
     name: trace case matrix
     runs-on: ubuntu-latest
+    env:
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci') && 'ON' || 'OFF' }}
     needs:
       - test
       - benchmark
@@ -1905,7 +2023,10 @@ jobs:
       - name: Load trace cases
         id: trace-cases
         run: |
-          echo "matrix=$(python3 tools/trace_replay/trace_cases.py --ci --format github-test-matrix)" >> "$GITHUB_OUTPUT"
+          python3 tools/trace_replay/trace_cases.py --self-test-transport-matrices
+          matrix_format=github-test-matrix
+          if [ "${MOBILEGL_CI_DISAGGREGATED}" = "ON" ]; then matrix_format=github-test-transport-matrix; fi
+          echo "matrix=$(python3 tools/trace_replay/trace_cases.py --ci --format "${matrix_format}")" >> "$GITHUB_OUTPUT"
           echo "names=$(python3 tools/trace_replay/trace_cases.py --ci --format names)" >> "$GITHUB_OUTPUT"
           # The subset the verify build retraces ("verify": true in trace_cases.json). It is a
           # SUBSET of the matrix above, so retrace-verify needs no fixtures of its own.
@@ -1991,8 +2112,13 @@ jobs:
           if-no-files-found: error
 
   retrace:
-    name: retrace (${{ matrix.backend }}, ${{ matrix.case }})
+    name: retrace (${{ matrix.backend }} / ${{ matrix.lane || 'monolith-control' }} / ${{ matrix.transport || 'monolith' }}, ${{ matrix.case }})
     runs-on: ubuntu-latest
+    env:
+      MOBILEGL_TRANSPORT: ${{ matrix.transport || 'monolith' }}
+      MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
+      MOBILEGL_IPC_STRICT_ERRORS: "1"
+      MOBILEGL_IPC_RUN_AHEAD: "1"
     needs:
       - build-linux
       - build-retrace
@@ -2082,7 +2208,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: retrace-core-dumps-${{ matrix.backend }}-${{ matrix.case }}
+          name: retrace-core-dumps-${{ matrix.lane || 'monolith-control' }}-${{ matrix.transport || 'monolith' }}-${{ matrix.backend }}-${{ matrix.case }}
           path: /tmp/core.*
           if-no-files-found: ignore
 
@@ -2090,7 +2216,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: retrace-result-${{ matrix.backend }}-${{ matrix.case }}
+          name: retrace-result-${{ matrix.lane || 'monolith-control' }}-${{ matrix.transport || 'monolith' }}-${{ matrix.backend }}-${{ matrix.case }}
           path: |
             build-retrace/tools/trace_replay/${{ matrix.case }}/actual-images/**
             build-retrace/tools/trace_replay/${{ matrix.case }}/${{ matrix.backend }}/output/**
@@ -2101,6 +2227,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: retrace
     if: ${{ always() && needs.retrace.result != 'skipped' }}
+    env:
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci') && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
@@ -2115,25 +2243,52 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Download retrace results
+      - name: Download monolith control results
         uses: actions/download-artifact@v8
         with:
-          pattern: retrace-result-*
-          path: retrace-artifacts
+          pattern: retrace-result-monolith-control-monolith-*
+          path: retrace-artifacts/monolith-control
 
-      - name: Render retrace summary
+      - name: Download inproc acceptance results
+        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: retrace-result-inproc-acceptance-inproc-*
+          path: retrace-artifacts/inproc-acceptance
+
+      - name: Render monolith control summary
         run: |
           node tools/trace_replay/render_retrace_summary.mjs \
-            --input retrace-artifacts \
-            --output-dir retrace-summary \
-            --title "MobileGL Linux retrace overview" \
-            --group-label "Linux" \
-            --html mobilegl-linux-retrace-overview.html
+            --input retrace-artifacts/monolith-control \
+            --output-dir retrace-summary/monolith-control \
+            --title "MobileGL Linux monolith control" \
+            --group-label "Linux / monolith control" \
+            --html mobilegl-linux-monolith-control.html
 
-      - name: Upload retrace summary
+      - name: Render inproc acceptance summary
+        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
+        run: |
+          node tools/trace_replay/render_retrace_summary.mjs \
+            --input retrace-artifacts/inproc-acceptance \
+            --output-dir retrace-summary/inproc-acceptance \
+            --title "MobileGL Linux inproc acceptance" \
+            --group-label "Linux / inproc acceptance" \
+            --html mobilegl-linux-inproc-acceptance.html
+
+      - name: Upload monolith control summary
         uses: actions/upload-artifact@v7
         with:
-          path: retrace-summary/mobilegl-linux-retrace-overview.html
+          name: mobilegl-linux-monolith-control-summary-${{ github.sha }}
+          path: retrace-summary/monolith-control/mobilegl-linux-monolith-control.html
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload inproc acceptance summary
+        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
+        uses: actions/upload-artifact@v7
+        with:
+          name: mobilegl-linux-inproc-acceptance-summary-${{ github.sha }}
+          path: retrace-summary/inproc-acceptance/mobilegl-linux-inproc-acceptance.html
           archive: false
           if-no-files-found: error
 
@@ -2319,14 +2474,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     needs:
-      - build-linux
+      - build-linux-monolith-control
       - build-linux-split
       - build-retrace
       - trace-cases
       - trace-fixtures
-    # build-linux is needed for the negative control ONLY: its pull library is what the control
+    # The separate OFF/pull artifact is for the negative control ONLY: its library is what the control
     # swaps in to prove the transport-resolution assertion is load-bearing.
-    if: ${{ always() && needs.build-linux.result == 'success' && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    if: ${{ always() && needs.build-linux-monolith-control.result == 'success' && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -2378,13 +2533,13 @@ jobs:
       - name: Download Linux pull runtime (negative control)
         uses: actions/download-artifact@v8
         with:
-          name: mobilegl-linux-runtime
+          name: mobilegl-linux-monolith-control
           path: pull-runtime
 
       - name: Unpack the pull runtime (negative control)
         run: |
-          tar -xzf pull-runtime/mobilegl-linux-runtime.tgz -C pull-runtime
-          test -f pull-runtime/build-linux/libMobileGL.so
+          tar -xzf pull-runtime/mobilegl-linux-monolith-control.tgz -C pull-runtime
+          test -f pull-runtime/build-monolith-control/libMobileGL.so
 
       - name: Unpack the SPLIT runtime as the library under test
         # build-retrace's CTestTestfile.cmake has the absolute path
@@ -2451,7 +2606,7 @@ jobs:
         working-directory: build-retrace/tools/trace_replay
         env:
           CONTROL_TMPDIR: ${{ runner.temp }}
-          PULL_LIBRARY: ${{ github.workspace }}/pull-runtime/build-linux/libMobileGL.so
+          PULL_LIBRARY: ${{ github.workspace }}/pull-runtime/build-monolith-control/libMobileGL.so
           FROZEN_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
         run: >-
           bash "${GITHUB_WORKSPACE}/scripts/ci/retrace_pull_library_control.sh"
