@@ -159,12 +159,46 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 cursor = 0;
         };
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // ResolveWireImageDescriptor emits no pNext chain. Key every view-create
+        // value explicitly: hash collisions must never alias different windows,
+        // formats or swizzles. The root handle and allocation epoch also prevent
+        // a recycled native image handle from reviving an older view.
+        struct WireImageViewKey {
+            MG_Pipe::MGPipeHandle root{};
+            VkImage image = VK_NULL_HANDLE;
+            Uint64 imageEpoch = 0;
+            VkImageViewCreateFlags flags = 0;
+            VkImageViewType type = VK_IMAGE_VIEW_TYPE_2D;
+            VkFormat format = VK_FORMAT_UNDEFINED;
+            VkComponentMapping components{};
+            VkImageSubresourceRange range{};
+
+            Bool operator==(const WireImageViewKey& other) const {
+                return root == other.root && image == other.image && imageEpoch == other.imageEpoch &&
+                       flags == other.flags && type == other.type && format == other.format &&
+                       components.r == other.components.r && components.g == other.components.g &&
+                       components.b == other.components.b && components.a == other.components.a &&
+                       range.aspectMask == other.range.aspectMask && range.baseMipLevel == other.range.baseMipLevel &&
+                       range.levelCount == other.range.levelCount && range.baseArrayLayer == other.range.baseArrayLayer &&
+                       range.layerCount == other.range.layerCount;
+            }
+        };
+
+        struct WireImageViewKeyHash {
+            SizeT operator()(const WireImageViewKey& key) const;
+        };
+#endif
+
         struct FrameResources {
             Vector<DescriptorPoolBucket> descriptorPools;
             UnorderedMap<VkDescriptorSetLayout, DescriptorSetCacheEntry> descriptorSetCacheByLayout;
             Vector<VkBufferView> texelBufferViews;
 #if MOBILEGL_BUILD_DISAGGREGATED
             mutable Vector<VkImageView> wireImageViews;
+            // Own views in the vector above until this slot's fence/idle proof.
+            // Cache hits preserve the handle, enabling descriptor-content reuse.
+            mutable UnorderedMap<WireImageViewKey, VkImageView, WireImageViewKeyHash> wireImageViewCache;
 #endif
             Uint32 activeDescriptorPoolIndex = 0;
             Uint32 allocatedSetsThisFrame = 0;

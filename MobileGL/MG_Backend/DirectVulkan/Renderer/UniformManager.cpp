@@ -41,6 +41,30 @@
 
 namespace MobileGL::MG_Backend::DirectVulkan {
 #if MOBILEGL_BUILD_DISAGGREGATED
+    SizeT UniformManager::WireImageViewKeyHash::operator()(const WireImageViewKey& key) const {
+        SizeT hash = std::hash<VkImage>{}(key.image);
+        const auto mix = [&hash](Uint64 value) {
+            hash ^= std::hash<Uint64>{}(value) + static_cast<SizeT>(0x9e3779b97f4a7c15ULL) +
+                    (hash << 6) + (hash >> 2);
+        };
+        mix(key.root.Slot);
+        mix(key.root.Gen);
+        mix(key.imageEpoch);
+        mix(key.flags);
+        mix(key.type);
+        mix(key.format);
+        mix(key.components.r);
+        mix(key.components.g);
+        mix(key.components.b);
+        mix(key.components.a);
+        mix(key.range.aspectMask);
+        mix(key.range.baseMipLevel);
+        mix(key.range.levelCount);
+        mix(key.range.baseArrayLayer);
+        mix(key.range.layerCount);
+        return hash;
+    }
+
     [[noreturn]] static void WireDescriptorFatal(const char* detail) {
         MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"Magma:%s\"}", detail);
         std::abort();
@@ -192,8 +216,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             info.components = {swizzle(0), swizzle(1), swizzle(2), swizzle(3)};
         }
         VkImageView view = VK_NULL_HANDLE;
-        if (vkCreateImageView(m_device, &info, nullptr, &view) != VK_SUCCESS) return false;
-        m_frames[m_wireFrameIndex].wireImageViews.push_back(view);
+        const WireImageViewKey key{root, info.image, m_textureManager->GetTextureImageEpoch(),
+            info.flags, info.viewType, info.format, info.components, info.subresourceRange};
+        const auto& frame = m_frames[m_wireFrameIndex];
+        const auto cached = frame.wireImageViewCache.find(key);
+        if (cached != frame.wireImageViewCache.end()) {
+            view = cached->second;
+        } else {
+            if (vkCreateImageView(m_device, &info, nullptr, &view) != VK_SUCCESS) return false;
+            frame.wireImageViews.push_back(view);
+            frame.wireImageViewCache.emplace(key, view);
+        }
+        // Only view creation is memoized. Layout/memory dependencies above and
+        // write tracking below still run for every descriptor, including hits.
         out.imageView = view;
         out.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         if (storage) {
@@ -539,6 +574,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (auto& frame : m_frames) {
             if (m_device != VK_NULL_HANDLE) {
 #if MOBILEGL_BUILD_DISAGGREGATED
+                frame.wireImageViewCache.clear();
                 for (const auto view : frame.wireImageViews) vkDestroyImageView(m_device, view, nullptr);
                 frame.wireImageViews.clear();
 #endif
@@ -585,6 +621,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto& frame = m_frames[frameIndex];
 #if MOBILEGL_BUILD_DISAGGREGATED
         m_wireFrameIndex = frameIndex;
+        frame.wireImageViewCache.clear();
         for (const auto view : frame.wireImageViews) vkDestroyImageView(m_device, view, nullptr);
         frame.wireImageViews.clear();
 #endif
