@@ -55,6 +55,7 @@
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/P4aFinalFixPeek.h"
 #include "../Harness/ScenarioFixture.h"
+#include "../Harness/SplitRuntimePeek.h"
 
 #ifdef GLAPI
 #undef GLAPI
@@ -577,9 +578,17 @@ void main() { oColor = texture(uTex, vUv); }
             glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
             unsigned long long pullsAfter = 0;
             if (pullsReadable && readable && PeekPipeStatsTextureRemintPulls(&pullsAfter)) {
-                EXPECT_EQ(pullsAfter, pullsBefore + 1)
-                    << "the re-mint of a texture allocated before its hint was not counted as a remint pull "
-                       "(trp= on the stats line is ROADMAP open question 2's number)";
+                const auto runtime = PeekSplitRuntime();
+                if (runtime.transportResolved && runtime.transportName == "inproc") {
+                    ASSERT_TRUE(runtime.sessionActive);
+                    EXPECT_EQ(pullsAfter, pullsBefore)
+                        << "the server must preserve this already immutable RGBA8 allocation; "
+                           "image binding needs no remint pull";
+                } else {
+                    EXPECT_EQ(pullsAfter, pullsBefore + 1)
+                        << "the monolith re-mint of a texture allocated before its hint was not counted "
+                           "as a remint pull (trp= on the stats line is ROADMAP open question 2's number)";
+                }
             }
 
             // THE PREVENTION HALF, measured the other way round: a texture whose hint arrives at
