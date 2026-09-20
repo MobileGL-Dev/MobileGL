@@ -69,12 +69,15 @@
             WireImage image = ResolveWireImage(*fbo, surface, aspect);
             if (!image.image) return VK_ATTACHMENT_UNUSED;
             m_textureManager->FlushPendingUploads();
+            if (aspect == VK_IMAGE_ASPECT_COLOR_BIT)
+                image.format = ResolveSrgbAttachmentWriteFormat(image.format,
+                    MGB_CTX->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
             const VkImageLayout layout = aspect == VK_IMAGE_ASPECT_COLOR_BIT ?
                 VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_GENERAL;
             TransitionWireImage(image, layout);
             VkImageViewCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             info.image = image.image;
-            info.viewType = image.layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+            info.viewType = image.viewType;
             info.format = image.format;
             info.subresourceRange = {aspect, image.level, 1, image.layer, image.layers};
             if (image.format == VK_FORMAT_D24_UNORM_S8_UINT || image.format == VK_FORMAT_D32_SFLOAT_S8_UINT)

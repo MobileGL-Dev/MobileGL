@@ -46,6 +46,10 @@
         out.layer = layer;
         out.is3D = resource->depth > 1;
         out.layers = surface.Layered ? (out.is3D ? std::max(resource->depth >> level, 1u) : availableLayers) : 1;
+        const Bool oneDimensional = resource->viewType == VK_IMAGE_VIEW_TYPE_1D ||
+                                    resource->viewType == VK_IMAGE_VIEW_TYPE_1D_ARRAY;
+        out.viewType = oneDimensional ? (out.layers > 1 ? VK_IMAGE_VIEW_TYPE_1D_ARRAY : VK_IMAGE_VIEW_TYPE_1D) :
+                                      (out.layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D);
         if (out.level >= resource->mipLevels || out.layer + out.layers >
             (out.is3D ? std::max(resource->depth >> level, 1u) : resource->arrayLayers))
             MagmaWireFatal("framebuffer-subresource");
@@ -123,7 +127,7 @@
             TransitionWireImage(image, layout);
             VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             viewInfo.image = image.image;
-            viewInfo.viewType = image.layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+            viewInfo.viewType = image.viewType;
             viewInfo.format = image.format;
             viewInfo.subresourceRange = {color ? VK_IMAGE_ASPECT_COLOR_BIT :
                 (image.format == VK_FORMAT_D24_UNORM_S8_UINT || image.format == VK_FORMAT_D32_SFLOAT_S8_UINT ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : image.aspect), image.level, 1, image.layer, image.layers};
