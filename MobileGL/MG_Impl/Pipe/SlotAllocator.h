@@ -166,7 +166,7 @@ namespace MobileGL::MG_Pipe {
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     // P5c (hd, CONTRACT-P5C §3.1 / §6 layer 1): with an active transport this allocator is a
-    // CLIENT-only surface. Acquire, FindByLifetimeId and Free called from the apply thread -
+    // CLIENT-only surface. Its singleton accessor and original three method guards reject apply -
     // i.e. a server that resolves or mints handles off a frontend object's lifetime id (T2),
     // which is memory that will not exist on its side of a real split - are
     // Fatal{RoleViolation, "MGPipeSlots"}. Compiled out entirely outside split builds, so the
@@ -180,7 +180,7 @@ namespace MobileGL::MG_Pipe {
     // P5f (fr): frontend-object twin lookup, minting and weak-state access are refused
     // on EVERY transport apply, including barriered records and both named scopes.
     // The handle overloads remain server-local; the frontend overloads remain monolith
-    // glue. This separate guard also prevents borrowing Magma's allocator exemption.
+    // glue. The registry guard is independent of the allocator guard.
     void MGPipeRefuseFrontendKeyedRegistryFromApplyThread(const char* entry);
 
     // P5f (fr): these historical scope names remain greppable markers around

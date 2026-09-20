@@ -1957,7 +1957,8 @@ TEST(RemoteGuards, BarrieredLegacyScopesCannotExemptAllocator) {
                 MG_Config::ActiveBackendType = *static_cast<BackendType*>(self);
                 const MG_Pipe::MGPipeFrontendKeyedRegistryScope registryScope;
                 const MG_Pipe::MagmaP7AllocatorDebtScope magmaScope;
-                MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, 99);
+                // HighWater had no per-method guard in the old implementation.
+                (void)MGPipeSlots().HighWater(MGPipeKind::Texture);
                 return MOBILEGL_OK;
             }, &selectedBackend);
             ClientSessionInstance().Stop();

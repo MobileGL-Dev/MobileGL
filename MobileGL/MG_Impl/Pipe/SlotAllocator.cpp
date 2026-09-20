@@ -322,6 +322,12 @@ namespace MobileGL::MG_Pipe {
     }
 
     MGPipeSlotAllocator& MGPipeSlots() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Guard the client singleton itself too: Allocate/IsLive/HighWater and the
+        // bookkeeping accessors must not bypass the original three method guards.
+        // Backend-private allocator instances do not use this accessor.
+        MGPipeRefuseAllocatorFromApplyThread("client-singleton");
+#endif
         // NEVER DESTROYED, deliberately (one allocation for the life of the process). A
         // frontend object's destructor reaches this allocator - ~BufferObject through
         // MGPipeEmitResourceDestroyAndFree, ~VertexArrayObject through the death notice - and
