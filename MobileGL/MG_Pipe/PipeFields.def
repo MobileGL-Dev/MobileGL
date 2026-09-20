@@ -236,7 +236,7 @@
     F(Bits) F(ByRegion)
 
 #define MGP_FIELDS_MGPStreamOutputBegin(F) \
-    F(PrimitiveMode)
+    F(PrimitiveMode) F(CaptureProgram) F(LifetimeId) F(Targets)
 
 #define MGP_FIELDS_MGPXfbAccounting(F) \
     F(CapturedVertices) F(PrimitivesWritten) F(PrimitiveMode)

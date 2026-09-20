@@ -9,6 +9,9 @@
 #pragma once
 #include <Includes.h>
 #include "MG_State/GLState/TextureState/TextureEnum.h"
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Pipe/MGPipeHandles.h>
+#endif
 
 namespace MobileGL {
     namespace MG_State::GLState {
@@ -33,6 +36,9 @@ namespace MobileGL {
         struct CopyImageEndpoint {
             SharedPtr<MG_State::GLState::ITextureObject> Texture;
             SharedPtr<MG_State::GLState::RenderbufferObject> Renderbuffer;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MG_Pipe::MGPipeHandle TextureHandle = MG_Pipe::kMGPipeNullHandle;
+#endif
 
             Bool IsRenderbuffer() const { return Renderbuffer != nullptr; }
             Bool Exists() const { return Texture != nullptr || Renderbuffer != nullptr; }

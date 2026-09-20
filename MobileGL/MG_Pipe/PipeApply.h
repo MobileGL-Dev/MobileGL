@@ -846,6 +846,9 @@ namespace MobileGL::MG_Pipe {
         Bool VerbBlitNamedConsumed = false;
         // copy_framebuffer_to_texture's destination texture (MGPCopyFromFramebuffer::Dst).
         MGPipeHandle VerbCopyTexDst = kMGPipeNullHandle;
+        MGPipeHandle VerbStorageBlockProgram = kMGPipeNullHandle;
+        Uint64 BoundStreamOutputLifetimeId = 0;
+        UnorderedMap<Uint64, MGPStreamOutputBegin> StreamOutputSpans;
         // generate_mipmap's texture (MGPMipPlan::Res).
         MGPipeHandle VerbMipRes = kMGPipeNullHandle;
         // The current indirect draw's command buffer and (for the *Count forms) parameter
@@ -870,6 +873,7 @@ namespace MobileGL::MG_Pipe {
             VerbBlitDrawFbo = kMGPipeNullHandle;
             VerbBlitNamedConsumed = false;
             VerbCopyTexDst = kMGPipeNullHandle;
+            VerbStorageBlockProgram = kMGPipeNullHandle;
             VerbMipRes = kMGPipeNullHandle;
             VerbIndirectBuffer = kMGPipeNullHandle;
             VerbIndirectParameterBuffer = kMGPipeNullHandle;

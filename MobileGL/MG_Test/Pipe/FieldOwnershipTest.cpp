@@ -263,10 +263,8 @@ TEST_F(FieldOwnershipTest, TheReducedPathsUnmigratedFieldsAreAllAccountedFor) {
     // (CONTRACT-P5C.md §7 table 2) - and the only other BARRIER-PULLED rows are six of the
     // seven sticky forwards (the seventh, InvalidateCompileEnv, is FATAL since P5c ev).
     const MGPipeInputField pulledSticky[] = {
-        MGPipeInputField::GetBufferBindingPointCount,
         MGPipeInputField::GetProgramObject,
         MGPipeInputField::GetTextureObject,
-        MGPipeInputField::HasOpenTransformFeedbackSpan,
         MGPipeInputField::ValidateProgramName,
         MGPipeInputField::RecordError,
     };
@@ -281,7 +279,7 @@ TEST_F(FieldOwnershipTest, TheReducedPathsUnmigratedFieldsAreAllAccountedFor) {
         EXPECT_TRUE(named) << kMGPipeInputFieldNames[i]
                            << " is BARRIER-PULLED and not in the pinned object-class list";
     }
-    EXPECT_EQ(pulledCount, 15u) << "9 non-sticky object rows + 6 sticky forwards";
+    EXPECT_EQ(pulledCount, 13u) << "9 non-sticky object rows + 4 sticky forwards";
     EXPECT_EQ(pulledCount, kMGPipeBarrierPulledFieldCount);
     EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetPixelStoreParameters),
               MGPipeFieldOwnership::kApplierDerived);
@@ -705,8 +703,11 @@ TEST_F(FieldOwnershipTest, TheStickyExemptionIsCancelledByTheServerStamp) {
     MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
     for (SizeT i = 0; i < kMGPipeFieldOwnershipForwardCount; ++i) {
         const MGPipeInputField field = kMGPipeFieldOwnershipForwardField[i];
-        EXPECT_FALSE(MGPipeInputFieldIsFresh(gPipeInputs.FilledState(), field))
-            << kMGPipeInputFieldNames[Index(field)] << " is still exempt under split";
+        // P5f fe retired the scalar forwards to server-owned answers. Their freshness
+        // comes from that ownership; the remaining client forwards lose the exemption.
+        const Bool serverOwned = MGPipeFieldOwnershipOf(field) == MGPipeFieldOwnership::kApplierDerived;
+        EXPECT_EQ(MGPipeInputFieldIsFresh(gPipeInputs.FilledState(), field), serverOwned)
+            << kMGPipeInputFieldNames[Index(field)] << " has the wrong server-stamp freshness";
     }
 }
 
@@ -898,6 +899,75 @@ namespace {
         Bool m_previousKnob;
     };
 } // namespace
+
+TEST_F(FieldOwnershipTest, SplitBindingPointCapacityNeverConsultsTheFrontend) {
+    RoleSplitArm guard;
+    guard.Arm(true);
+    MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
+    EXPECT_EQ(gPipeInputs.GetBufferBindingPointCount(BufferTarget::Uniform), 84u);
+    EXPECT_EQ(gPipeInputs.GetBufferBindingPointCount(BufferTarget::TransformFeedback), 84u);
+    EXPECT_EQ(gPipeInputs.GetBufferBindingPointCount(BufferTarget::PixelPack), 0u);
+    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetBufferBindingPointCount),
+              MGPipeFieldOwnership::kApplierDerived);
+    MGPipeServerClearVerbBoundary();
+}
+
+TEST_F(FieldOwnershipTest, SplitOpenSpansAreOwnedByTheApplierAndSurviveOtherBindings) {
+    RoleSplitArm guard;
+    guard.Arm(true);
+    auto& state = MGPipeApplier();
+    state.StreamOutputSpans.clear();
+    MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
+    EXPECT_FALSE(gPipeInputs.HasOpenTransformFeedbackSpan(0));
+    EXPECT_FALSE(gPipeInputs.HasOpenTransformFeedbackSpan(11));
+    state.StreamOutputSpans[11] = {};
+    state.StreamOutputSpans[12] = {};
+    state.BoundStreamOutputLifetimeId = 12;
+    EXPECT_TRUE(gPipeInputs.HasOpenTransformFeedbackSpan(11));
+    EXPECT_TRUE(gPipeInputs.HasOpenTransformFeedbackSpan(12));
+    state.StreamOutputSpans.erase(12);
+    EXPECT_TRUE(gPipeInputs.HasOpenTransformFeedbackSpan(11));
+    EXPECT_FALSE(gPipeInputs.HasOpenTransformFeedbackSpan(12));
+    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::HasOpenTransformFeedbackSpan),
+              MGPipeFieldOwnership::kApplierDerived);
+    state.StreamOutputSpans.clear();
+    state.BoundStreamOutputLifetimeId = 0;
+    MGPipeServerClearVerbBoundary();
+}
+
+TEST_F(FieldOwnershipTest, SplitCaptureSnapshotSurvivesMakeCurrentUntilObjectRelease) {
+    RoleSplitArm guard;
+    guard.Arm(true);
+    auto& state = MGPipeApplier();
+    state.StreamOutputSpans.clear();
+    MGPStreamOutputBegin begin{};
+    begin.LifetimeId = 0x100000002ull;
+    begin.CaptureProgram = {7, 2};
+    begin.Targets[3] = {{9, 3}, 16, 64};
+    state.StreamOutputSpans[begin.LifetimeId] = begin;
+    state.BoundStreamOutputLifetimeId = begin.LifetimeId;
+
+    // Make-current resets binding state, not a live object's open capture. The
+    // returning context emits context values again, but never repeats Begin.
+    MGPipeApplierReset();
+    MGPContextValues returning{};
+    returning.BoundTransformFeedbackLifetimeId = begin.LifetimeId;
+    returning.IsTransformFeedbackActive = 1;
+    MGPipeApplySetContextValues(returning);
+    EXPECT_EQ(state.BoundStreamOutputLifetimeId, begin.LifetimeId);
+    EXPECT_TRUE(gPipeInputs.HasOpenTransformFeedbackSpan(begin.LifetimeId));
+    const auto found = state.StreamOutputSpans.find(begin.LifetimeId);
+    EXPECT_NE(found, state.StreamOutputSpans.end());
+    if (found != state.StreamOutputSpans.end()) {
+        EXPECT_EQ(found->second.CaptureProgram, begin.CaptureProgram);
+        EXPECT_EQ(found->second.Targets[3].Res, begin.Targets[3].Res);
+        EXPECT_EQ(found->second.Targets[3].Offset, 16u);
+        EXPECT_EQ(found->second.Targets[3].Size, 64u);
+    }
+    MGPipeApplierReleaseObjectRecords();
+    EXPECT_FALSE(gPipeInputs.HasOpenTransformFeedbackSpan(begin.LifetimeId));
+    EXPECT_EQ(state.BoundStreamOutputLifetimeId, 0u);
+}
 
 TEST_F(FieldOwnershipTest, RoleSplitOffFoldsTheFillSideOntoTheSharedBlock) {
     EXPECT_FALSE(MGPipeRoleSplitActive());

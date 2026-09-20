@@ -855,9 +855,9 @@ namespace MobileGL::MG_Remote::Server {
         // retires them by making the backend take the handles that travel beside the names.
         MG_Backend::CopyImageEndpoint src{};
         MG_Backend::CopyImageEndpoint dst{};
-        src.Texture = MG_Pipe::gPipeInputs.GetTextureObject(static_cast<Uint>(copy.SrcGlName));
-        dst.Texture = MG_Pipe::gPipeInputs.GetTextureObject(static_cast<Uint>(copy.DstGlName));
-        if (!src.Exists() || !dst.Exists()) {
+        src.TextureHandle = copy.Src;
+        dst.TextureHandle = copy.Dst;
+        if (MG_Pipe::MGPipeHandleIsNull(copy.Src) || MG_Pipe::MGPipeHandleIsNull(copy.Dst)) {
             // The monolith's own answer to this, in its own words (DirectGLES.cpp:9067
             // "source or destination image failed to sync; declining the copy"): the frontend
             // validator is what keeps it unreachable and what reports the INVALID_VALUE the
@@ -921,6 +921,8 @@ namespace MobileGL::MG_Remote::Server {
         // Both backends resolve the PROGRAM through the barrier-pulled GetProgramObject(GlName)
         // / TryGetDirectVulkanProgram - `rsp` again, retired by P9. ShaderCso travels beside the
         // name for the phase that dispatches on it.
+        MG_Pipe::MGPipeApplier().ClearVerbHandles();
+        MG_Pipe::MGPipeApplier().VerbStorageBlockProgram = binding.ShaderCso;
         table->GL.ShaderStorageBlockBinding(static_cast<GLuint>(binding.GlName), name,
                                             static_cast<GLuint>(binding.Binding));
         ++m_storageBlockBindings;
@@ -944,6 +946,9 @@ namespace MobileGL::MG_Remote::Server {
     // crash or as a silent success. Contract §2 t2 says so for PatchParameteri by name.
 
     Bool ServerVerbSink::OnBeginStreamOutput(const MG_Pipe::MGPStreamOutputBegin& begin) {
+        auto& state = MG_Pipe::MGPipeApplier();
+        state.BoundStreamOutputLifetimeId = begin.LifetimeId;
+        state.StreamOutputSpans[begin.LifetimeId] = begin;
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("begin_stream_output");
         if (table == nullptr) return false;
         if (table->GL.BeginTransformFeedback == nullptr) return false;
@@ -961,7 +966,11 @@ namespace MobileGL::MG_Remote::Server {
     Bool ServerVerbSink::OnEndStreamOutput(const MG_Pipe::MGPXfbAccounting& accounting) {
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("end_stream_output");
         if (table == nullptr) return false;
-        if (table->GL.EndTransformFeedback == nullptr) return false;
+        if (table->GL.EndTransformFeedback == nullptr) {
+            auto& state = MG_Pipe::MGPipeApplier();
+            state.StreamOutputSpans.erase(state.BoundStreamOutputLifetimeId);
+            return false;
+        }
         // THE THREE ACCOUNTING FIELDS ARE NOT READ, AND THAT IS THE RULING RATHER THAN AN
         // OMISSION. glEndTransformFeedback takes no arguments; the numbers are the CLIENT's own
         // per-span accounting (contract §2 t2's companions row) and the client is where they are
@@ -972,6 +981,8 @@ namespace MobileGL::MG_Remote::Server {
         // server-side scatter is what will need them.
         (void)accounting;
         table->GL.EndTransformFeedback();
+        auto& state = MG_Pipe::MGPipeApplier();
+        state.StreamOutputSpans.erase(state.BoundStreamOutputLifetimeId);
         ++m_streamOutputSpans;
         return true;
     }
@@ -1008,6 +1019,7 @@ namespace MobileGL::MG_Remote::Server {
         // lifetime of its own - it has no reader on this side today, and pretending otherwise
         // by folding it into the key is exactly the "a GL name is never an identity" confusion
         // the contract's GlName row is written against.
+        MG_Pipe::MGPipeApplier().BoundStreamOutputLifetimeId = bind.LifetimeId;
         table->GL.BindTransformFeedback(static_cast<GLuint>(bind.GlName));
         ++m_streamOutputBinds;
         return true;

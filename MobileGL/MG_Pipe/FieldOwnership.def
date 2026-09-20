@@ -83,11 +83,11 @@
     /* (:2995) is SELF-DECLARED monolith glue (DirectGLES.cpp:2961-2965) while BindCurrentFBO    */  \
     /* (:4303-4353) is already split-clean - the bind is migrated, the sync is not.              */  \
     X(GetFramebufferBindingSlot,          BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
-      "frontend BindingSlot<FramebufferObject> pointer")                                          \
+      "P5f fe: Espryt reads framebuffer records; Magma retains frontend pointer debt")                                          \
     X(GetImageTextureBinding,             BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
       "frontend ImageTextureBinding base pointer")                                                \
     X(GetTextureUnitObject,               BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
-      "frontend TextureUnit base pointer; 13 Espryt + 8 Magma sites")                             \
+      "P5f fe: Espryt transport readers retired; Magma retains texture-unit debt")                             \
     /* DirectGLES.cpp:4497, PrepareForDraw, the second unconditional pointer read of every draw. */  \
     X(GetProgramForDraw,                  BARRIER_PULLED, "P5e (Espryt unbarriered), P7 (Magma)",    \
       "frontend SharedPtr<ProgramObject>; the record carries a handle")                           \
@@ -104,7 +104,7 @@
     /* case a field census taken from "what the scenario does" rather than from the mask would   */  \
     /* miss. The family's five VALUE rows rode set_context_values out of this list at P5c rv.    */  \
     X(GetTransformFeedbackProgram,        BARRIER_PULLED, "P3b/P4b (Espryt), P7 (Magma)",            \
-      "frontend SharedPtr<ProgramObject>")                                                        \
+      "P5f fe: Espryt capture uses the Begin snapshot; Magma retains program debt")                                                        \
                                                                                                      \
     /* ---- APPLIER_DERIVED ----                                                                 */  \
     /* THE FIRST ROW, and it is the one the contract asked P5 to split into two field ids. It is */  \
@@ -144,14 +144,14 @@
     /* pair that disagrees. Their poison exemption (generated/PipeFilled.inc:422's sticky arm)   */  \
     /* is cancelled under split by the server stamp, which zeroes their FilledGen - and 0 loses  */  \
     /* to nothing, because :419's "never filled" test runs first.                                */  \
-    X(GetBufferBindingPointCount,         BARRIER_PULLED, "P7/P13",                                  \
-      "an argument-keyed lookup into the frontend's binding-point table")                         \
+    X(GetBufferBindingPointCount,         APPLIER_DERIVED, "-",                                  \
+      "P5f fe: server constant binding-point capacity, no frontend lookup")                         \
     X(GetProgramObject,                   BARRIER_PULLED, "P9",                                      \
       "hands the backend a frontend SharedPtr<ProgramObject> keyed by GL name")                   \
     X(GetTextureObject,                   BARRIER_PULLED, "P7",                                      \
       "hands the backend a frontend SharedPtr<ITextureObject> keyed by GL name")                  \
-    X(HasOpenTransformFeedbackSpan,       BARRIER_PULLED, "P7/P9",                                   \
-      "a lookup into frontend XFB span state keyed by lifetime id")                               \
+    X(HasOpenTransformFeedbackSpan,       APPLIER_DERIVED, "-",                                   \
+      "P5f fe: begin/end_stream_output maintain server spans by lifetime id")                               \
     X(ValidateProgramName,                BARRIER_PULLED, "P9",                                      \
       "a frontend name-table probe; Coverage.def calls it kClientResolved")                       \
     /* P5c ev DELETED the forward under an active transport (CONTRACT-P5C section 4.2):    */  \
@@ -176,13 +176,13 @@
 // Mechanism is what replaces the forward, which is NOT the same question as which phase
 // retires the pull.
 #define MGP_FIELD_OWNERSHIP_FORWARD_LIST(X)                                                          \
-    X(GetBufferBindingPointCount,         BARRIER_PULLED, "P7/P13",                                  \
+    X(GetBufferBindingPointCount,         APPLIER_DERIVED, "-",                                  \
       "a server-side binding-point table")                                                       \
     X(GetProgramObject,                   BARRIER_PULLED, "P9",                                      \
       "a client-resolved program handle table (ARCHITECTURE 3.2 explicitly-not-ported)")         \
     X(GetTextureObject,                   BARRIER_PULLED, "P7",                                      \
       "a server-side texture handle table")                                                      \
-    X(HasOpenTransformFeedbackSpan,       BARRIER_PULLED, "P7/P9",                                   \
+    X(HasOpenTransformFeedbackSpan,       APPLIER_DERIVED, "-",                                   \
       "server-side XFB span state")                                                              \
     X(ValidateProgramName,                BARRIER_PULLED, "P9",                                      \
       "a client-resolved program name probe")                                                    \

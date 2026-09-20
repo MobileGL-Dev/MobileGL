@@ -1379,6 +1379,12 @@ namespace MobileGL::MG_Pipe {
         g_applier.DrawProgram = kMGPipeNullHandle;
         g_applier.DispatchProgram = kMGPipeNullHandle;
         g_applier.BoundShaderCso = kMGPipeNullHandle;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        g_applier.BoundStreamOutputLifetimeId = 0;
+        // Begin is emitted once per span, not on make-current. Its immutable object
+        // snapshot survives with the resource/program records until End or release;
+        // set_context_values restores the returning context's bound lifetime id.
+#endif
         // P5e (sb, CONTRACT-P5E.md §5.6): the three binding-point windows are per-context
         // WORKING state and go with the rest of it - a returning context has its own
         // glBindBufferBase history and may not inherit the one this applier was left holding.
@@ -1431,6 +1437,10 @@ namespace MobileGL::MG_Pipe {
         g_applier.DrawProgram = kMGPipeNullHandle;
         g_applier.DispatchProgram = kMGPipeNullHandle;
         g_applier.BoundShaderCso = kMGPipeNullHandle;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        g_applier.BoundStreamOutputLifetimeId = 0;
+        g_applier.StreamOutputSpans.clear();
+#endif
         // AND "THE WORKING HANDLES THEY COULD NAME" IS ALL OF THEM, NOT JUST THE THREE ABOVE.
         // Every framebuffer record holds eleven MGPSurface::Res naming texture and renderbuffer
         // records this function has just dropped - which is why the table itself goes above -
@@ -1578,6 +1588,9 @@ namespace MobileGL::MG_Pipe {
         // memory the rule exists to stop it reading. One store, inert until the caps bit is
         // published, and it is what makes the two roles' third clause the same clause.
         g_applier.IsTransformFeedbackActive = values.IsTransformFeedbackActive != 0;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        g_applier.BoundStreamOutputLifetimeId = values.BoundTransformFeedbackLifetimeId;
+#endif
     }
 
     void MGPipeApplySetPatchState(const MGPPatchState& patch) {

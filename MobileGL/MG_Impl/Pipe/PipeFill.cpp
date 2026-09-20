@@ -2117,6 +2117,18 @@ namespace MobileGL::MG_Pipe {
 #endif
 
     SizeT PipeInputs::GetBufferBindingPointCount(BufferTarget target) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            switch (target) {
+            case BufferTarget::Uniform:
+            case BufferTarget::ShaderStorage:
+            case BufferTarget::AtomicCounter:
+            case BufferTarget::TransformFeedback:
+                return kMGPipeMaxBufferBindingPoints;
+            default: return 0;
+            }
+        }
+#endif
         MGP_STICKY_FORWARD_PULL(GetBufferBindingPointCount);
         const auto* ctx = LiveContext();
         return ctx != nullptr ? ctx->GetBufferBindingPointCount(target) : 0;
@@ -2135,6 +2147,12 @@ namespace MobileGL::MG_Pipe {
     }
 
     Bool PipeInputs::HasOpenTransformFeedbackSpan(Uint64 lifetimeId) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            return lifetimeId != 0 && MGPipeApplier().StreamOutputSpans.count(lifetimeId) != 0;
+        }
+#endif
+
         MGP_STICKY_FORWARD_PULL(HasOpenTransformFeedbackSpan);
         const auto* ctx = LiveContext();
         return ctx != nullptr && ctx->HasOpenTransformFeedbackSpan(lifetimeId);
