@@ -2305,8 +2305,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // ONE FOR THE OBJECT, NOT ONE PER TARGET, and that is the difference that matters.
             // Attachments belong to the driver FBO OBJECT: glFramebufferTexture2D and
             // glFramebufferRenderbuffer write the object behind whichever binding happens to be
-            // current, so a walk run for Draw and a walk run for Read write the SAME eleven
-            // points. Per-target slots let the two keep separate, individually true and jointly
+            // current, so a walk run for Draw and a walk run for Read write the SAME attachment
+            // points on it. Per-target slots let the two keep separate, individually true and jointly
             // false accounts of one physical state: a composite framebuffer synced as DRAW in a
             // depth pre-pass detaches the points its other attachment state attaches, and the
             // end-of-frame sync of that same record on the READ side then found its own slot
