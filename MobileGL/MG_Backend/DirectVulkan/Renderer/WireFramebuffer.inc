@@ -696,7 +696,29 @@
     void VulkanRenderer::GenerateWireMipmap() {
         RetireWireDrawPass();
         auto& state = MG_Pipe::MGPipeApplier();
-        Uint32 base = state.VerbMipBaseLevel, baseLayer = 0, layerCount = 1;
+        const auto object = state.VerbMipRes;
+        if (MG_Pipe::MGPipeHandleIsNull(object) || object.Slot >= state.TextureResources.size())
+            MagmaWireFatal("mipmap-record");
+        const auto& objectRecord = state.TextureResources[object.Slot];
+        if (!objectRecord.Live || objectRecord.Gen != object.Gen) MagmaWireFatal("mipmap-record-generation");
+        // LevelCount is the logical end-exclusive level, not the number of
+        // levels after BaseLevel. Clip in the view's coordinates before the
+        // resolver adds its root-storage offset.
+        const Uint32 logicalBase = state.VerbMipBaseLevel;
+        Uint32 logicalEnd = std::min<Uint32>(state.VerbMipLevelCount, objectRecord.Desc.Levels);
+        if (objectRecord.ParamsSerial)
+            logicalEnd = std::min(logicalEnd, static_cast<Uint32>(objectRecord.Params.MaxLevel) + 1);
+        if (!MG_Pipe::MGPipeHandleIsNull(objectRecord.Desc.ViewOf)) {
+            const auto viewHandle = objectRecord.ViewCso;
+            if (MG_Pipe::MGPipeHandleIsNull(viewHandle) || viewHandle.Slot >= state.SamplerViewCsos.size())
+                MagmaWireFatal("mipmap-view-record");
+            const auto& view = state.SamplerViewCsos[viewHandle.Slot];
+            if (!view.Live || view.Gen != viewHandle.Gen || view.View.Texture != object)
+                MagmaWireFatal("mipmap-view-generation");
+            logicalEnd = std::min<Uint32>(logicalEnd, view.View.NumLevels);
+        }
+        if (logicalEnd <= logicalBase + 1) return;
+        Uint32 base = logicalBase, baseLayer = 0, layerCount = 1;
         VkFormat viewFormat = VK_FORMAT_UNDEFINED;
         const auto handle = m_textureManager->ResolveWireTextureStorage(state.VerbMipRes, base, baseLayer,
                                                                        &viewFormat, &layerCount);
@@ -706,7 +728,11 @@
         RetireWireDrawPass();
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording) m_frameContext.BeginCommandRecording();
-        const Uint32 count = state.VerbMipLevelCount;
+        Uint32 fullLevelCount = 1;
+        for (Uint32 size = std::max({resource->extent.width, resource->extent.height, resource->depth});
+             size > 1; size >>= 1) ++fullLevelCount;
+        if (base >= fullLevelCount) MagmaWireFatal("mipmap-base-extent");
+        const Uint32 count = std::min(logicalEnd - logicalBase, fullLevelCount - base);
         if (count <= 1) return;
         if (!m_textureManager->GrowWireTextureMipChain(handle,base+count,frame.commandBuffer))
             MagmaWireFatal("mipmap-growth");
