@@ -17,9 +17,21 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include <Config.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+// The handle-keyed arm's key type. Header-only POD, disagg-only, exactly the shape
+// MagmaPipeArms.h already gives this directory.
+#include <MG_Pipe/MGPipeHandles.h>
+#endif
+
 namespace MobileGL::MG_State::GLState {
 class ITextureObject;
 }
+#if MOBILEGL_BUILD_DISAGGREGATED
+namespace MobileGL::MG_Pipe {
+struct MGPipeResourceRecord;
+}
+#endif
 
 namespace MobileGL::MG_Backend::DirectVulkan {
 enum class SamplerNumericDomain : Uint8;
@@ -333,6 +345,13 @@ public:
         // shape version and nothing else. Without this in the early-out key the image, its views
         // and therefore imageSize() all keep answering with the texture's PREVIOUS shape.
         Uint64 syncedShapeVersion = 0;
+        // The handle-keyed arm's (P5f fm) early-out key: the applier record's server-owned
+        // Serial at the last successful sync. 0 also means "this resource has only ever been
+        // synced by the frontend arm" - a wire record's Serial starts at 0 on a create and moves
+        // on every mutation, so the first handle sync of a fresh image always re-checks.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        Uint64 syncedWireSerial = 0;
+#endif
 
         TextureResource() = default;
         TextureResource(const TextureResource&) = delete;
@@ -365,6 +384,9 @@ public:
             std::swap(this->syncedContentVersion, that.syncedContentVersion);
             std::swap(this->syncedMipLevelCount, that.syncedMipLevelCount);
             std::swap(this->syncedShapeVersion, that.syncedShapeVersion);
+#if MOBILEGL_BUILD_DISAGGREGATED
+            std::swap(this->syncedWireSerial, that.syncedWireSerial);
+#endif
         }
 
         void Reset() {
@@ -429,6 +451,9 @@ public:
             syncedContentVersion = 0;
             syncedMipLevelCount = 0;
             syncedShapeVersion = 0;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            syncedWireSerial = 0;
+#endif
         }
 
         ~TextureResource() {
@@ -514,6 +539,39 @@ public:
 
     TextureResource* SyncTextureAndGetDescriptor(
         MG_State::GLState::ITextureObject& texture);
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P5f (fm): THE HANDLE-KEYED ARM of SyncTextureAndGetDescriptor. Under an active transport
+    // the apply thread may not name the client's ITextureObject (rule E), so the clear / blit /
+    // readback / mipmap verbs resolve their attachment textures from the wire handle the
+    // framebuffer or mip record carried: shape from the applier's resource record
+    // (MGPipeApplier().TextureResources), texels from the server's staged-texture store
+    // (P5c tx), pending-upload bookkeeping consumed from the same record. Returns null - never
+    // a frontend fallback - when the record or the shape does not resolve; the caller declines
+    // loudly, which is the honest answer a missing record deserves.
+    //
+    // The resource lives in m_wireTextureResources keyed by StagedTextureStore::KeyForHandle -
+    // a NAMESPACE THE FRONTEND-KEYED m_textureResources NEVER MEETS, so a recycled {slot, gen}
+    // can never inherit its predecessor's image. Texture views resolve the storage owner from
+    // Desc.ViewOf and the window from ViewCso; buffer-backed textures remain P7's buffer arm.
+    TextureResource* SyncTextureResourceByHandle(MG_Pipe::MGPipeHandle handle, Bool renderbuffer = false);
+    // Map a texture/view-relative subresource to its live storage owner. layerCount, when
+    // supplied, receives the number of accessible layers starting at the input layer.
+    // viewFormat is UNDEFINED for an ordinary texture, or the outer view's format.
+    MG_Pipe::MGPipeHandle ResolveWireTextureStorage(MG_Pipe::MGPipeHandle handle, Uint32& level,
+        Uint32& layer, VkFormat* viewFormat = nullptr, Uint32* layerCount = nullptr);
+    // Grows the live image of a handle-keyed resource to `requiredMipLevels`, carrying the
+    // existing levels' content across with an in-command-buffer copy. The caller
+    // (GenerateMipmap's record arm) has flushed every pending submission first, so the old
+    // image is GPU-idle and the copy may be recorded into `commandBuffer` directly; the old
+    // image goes to the deferred-release ring. False when the chain cannot grow (the resource
+    // stays as it was).
+    Bool GrowWireTextureMipChain(MG_Pipe::MGPipeHandle handle, Uint32 requiredMipLevels,
+                                 VkCommandBuffer commandBuffer);
+    // Records that GPU writes superseded the staged CPU snapshot of this level. Layer
+    // ranges select cube faces; array and 3D levels share one staged level shadow.
+    void MarkWireTextureGpuWritten(MG_Pipe::MGPipeHandle handle, Uint32 mipLevel,
+                                    Uint32 baseArrayLayer = 0, Uint32 layerCount = 1);
+#endif
     VkImageView GetOrCreateViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel);
     VkImageView GetOrCreateAttachmentViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel,
                                                     Uint32 baseArrayLayer, Uint32 layerCount,
@@ -670,6 +728,21 @@ private:
     void EraseTrackedTexture(const TextureIdentity& identity);
     void PruneStaleTextureAliases(MG_State::GLState::ITextureObject* texture);
     SizeT PruneDeadTextures();
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // The two halves of SyncTextureResourceByHandle: shape from the resource record's
+    // descriptor (create / recreate / compatibility), then the pending-upload walk against the
+    // server's staged store. UploadPendingWireLevels mutates the applier's record (consumed
+    // entries are dropped), which is why the record is a non-const reference.
+    Bool SyncWireTextureShape(const MG_Pipe::MGPipeResourceRecord& record, TextureResource& resource);
+    Bool UploadPendingWireLevels(MG_Pipe::MGPipeHandle handle, MG_Pipe::MGPipeResourceRecord& record,
+                                 TextureResource& resource);
+    // The handle-keyed twin of m_textureResources, keyed by StagedTextureStore::KeyForHandle.
+    // Node-based for the same reason m_renderbufferResources is: callers hold TextureResource*
+    // across map-touching calls.
+    std::unordered_map<Uint64, TextureResource> m_wireTextureResources;
+    // Handles are per-kind; a renderbuffer and texture may have identical slot/gen.
+    std::unordered_map<Uint64, TextureResource> m_wireRenderbufferResources;
+#endif
 
     VkDevice m_device = VK_NULL_HANDLE;
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;

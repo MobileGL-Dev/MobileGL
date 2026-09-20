@@ -851,6 +851,8 @@ namespace MobileGL::MG_Pipe {
         UnorderedMap<Uint64, MGPStreamOutputBegin> StreamOutputSpans;
         // generate_mipmap's texture (MGPMipPlan::Res).
         MGPipeHandle VerbMipRes = kMGPipeNullHandle;
+        Uint16 VerbMipBaseLevel = 0;
+        Uint16 VerbMipLevelCount = 0;
         // The current indirect draw's command buffer and (for the *Count forms) parameter
         // buffer (MGPDrawIndirect::Buffer / ParameterBuffer).
         MGPipeHandle VerbIndirectBuffer = kMGPipeNullHandle;
@@ -875,6 +877,7 @@ namespace MobileGL::MG_Pipe {
             VerbCopyTexDst = kMGPipeNullHandle;
             VerbStorageBlockProgram = kMGPipeNullHandle;
             VerbMipRes = kMGPipeNullHandle;
+            VerbMipBaseLevel = VerbMipLevelCount = 0;
             VerbIndirectBuffer = kMGPipeNullHandle;
             VerbIndirectParameterBuffer = kMGPipeNullHandle;
             VerbDispatchIndirectBuffer = kMGPipeNullHandle;

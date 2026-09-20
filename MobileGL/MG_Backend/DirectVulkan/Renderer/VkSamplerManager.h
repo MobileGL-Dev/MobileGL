@@ -46,6 +46,12 @@ public:
                                  const MG_State::GLState::ITextureObject& texture,
                                  Bool forceNearestFiltering = false,
                                  Uint32 viewLevelCount = 0);
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // The applier owns these values: effective bound/builtin sampler parameters and
+    // the sampled texture view's format/range. No frontend object is constructed.
+    VkSampler GetOrCreateSamplerFromParameters(const SamplerParameters& parameters,
+        TextureInternalFormat format, Bool forceNearestFiltering = false, Uint32 viewLevelCount = 0);
+#endif
     // Frame boundary hook: ages the sampler cache and destroys samplers not used
     // for many frames. The key hashes continuous float state (lodBias, LOD clamps,
     // anisotropy), so an app animating those would otherwise mint an unbounded
@@ -86,19 +92,37 @@ private:
         Bool usesCustomBorderColor = false;
     };
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    template <class SamplerSource>
+    VkSampler GetOrCreateSamplerImpl(const SamplerSource& sampler, TextureInternalFormat format,
+                                     Bool forceNearestFiltering, Uint32 viewLevelCount);
+    template <class SamplerSource>
+    Uint64 BuildSamplerKey(const SamplerSource& sampler, Bool forceNearestFiltering,
+#else
     Uint64 BuildSamplerKey(const MG_State::GLState::SamplerObject& sampler, Bool forceNearestFiltering,
+#endif
                            Bool singleLevelView, const ResolvedBorderColor& borderColor) const;
     static VkFilter ToVkFilter(SamplerFilterMode mode);
     static VkSamplerMipmapMode ToVkMipmapMode(SamplerMipmapMode mode);
     static VkSamplerAddressMode ToVkAddressMode(SamplerWrapMode mode);
     static VkCompareOp ToVkCompareOp(SamplerCompareFunc func);
+#if MOBILEGL_BUILD_DISAGGREGATED
+    template <class SamplerSource>
+    ResolvedBorderColor ResolveBorderColor(const SamplerSource& sampler, TextureInternalFormat format) const;
+#else
     ResolvedBorderColor ResolveBorderColor(const MG_State::GLState::SamplerObject& sampler,
                                            const MG_State::GLState::ITextureObject& texture) const;
+#endif
     // The anisotropy Vulkan will actually apply: 1.0 (i.e. disabled) unless the feature is on and
     // the sampler filters linearly both ways, otherwise the GL request clamped to the device limit.
     // GL happily carries GL_TEXTURE_MAX_ANISOTROPY on a NEAREST sampler (Blaze3D's blocks do exactly
     // that) while Vulkan forbids anisotropyEnable there, so the GL value must never be forwarded raw.
+#if MOBILEGL_BUILD_DISAGGREGATED
+    template <class SamplerSource>
+    Float ResolveEffectiveMaxAnisotropy(const SamplerSource& sampler,
+#else
     Float ResolveEffectiveMaxAnisotropy(const MG_State::GLState::SamplerObject& sampler,
+#endif
                                         Bool forceNearestFiltering) const;
 
     VkDevice m_device = VK_NULL_HANDLE;

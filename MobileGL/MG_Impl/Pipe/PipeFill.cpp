@@ -1392,8 +1392,10 @@ namespace MobileGL::MG_Pipe {
             // family here would be a NEW rule, and a client that withheld more than the server
             // refuses leaves the server's handle arm live with no records to read.
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                // P5f fm: texture/framebuffer records have their own server consumers;
+                // Magma consumes them without claiming the still-unmigrated buffer family.
                 return MG_Remote::Client::CapsMirrorInstance().ServerConsumes(
-                    kMGPipeSubsystemResources);
+                    subsystem & kMGPipeP4aFamilySubsystems);
             }
 #endif
             return MGPipeGetResourceOps() != nullptr;
@@ -2832,6 +2834,9 @@ namespace MobileGL::MG_Pipe {
             Bool ApplierDerives = false;
             Bool ContextValuesWireLive = false;
             Bool P4aConsumer = false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            Uint64 CapsGeneration = 0;
+#endif
             // One bit per FIELD - not per verb class. The class mask is applied at the walk
             // exactly as it always was, so "does this verb read this field" stays the walk's
             // business and this stays a statement about EMISSION alone.
@@ -2857,7 +2862,12 @@ namespace MobileGL::MG_Pipe {
             if (g_fillPlan.Valid && g_fillPlan.PushMask == pushMask &&
                 g_fillPlan.ApplierDerives == applierDerives &&
                 g_fillPlan.ContextValuesWireLive == contextValuesWireLive &&
-                g_fillPlan.P4aConsumer == p4aConsumer) {
+                g_fillPlan.P4aConsumer == p4aConsumer
+#if MOBILEGL_BUILD_DISAGGREGATED
+                && g_fillPlan.CapsGeneration == (MG_Config::Transport != MG_Config::TransportMode::Monolith ?
+                    MG_Remote::Client::CapsMirrorInstance().Generation() : 0)
+#endif
+                ) {
                 return g_fillPlan.Supplied;
             }
             MGPipeFieldMask built{};
@@ -2898,6 +2908,10 @@ namespace MobileGL::MG_Pipe {
             g_fillPlan.ApplierDerives = applierDerives;
             g_fillPlan.ContextValuesWireLive = contextValuesWireLive;
             g_fillPlan.P4aConsumer = p4aConsumer;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            g_fillPlan.CapsGeneration = MG_Config::Transport != MG_Config::TransportMode::Monolith ?
+                MG_Remote::Client::CapsMirrorInstance().Generation() : 0;
+#endif
             g_fillPlan.Supplied = built;
             return built;
         }

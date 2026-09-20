@@ -113,7 +113,8 @@ namespace MobileGL::MG_Backend {
             switch (type) {
             case BackendType::DirectGLES: return MG_Pipe::kMGPipeSubsystemsMigratedAtP5e;
             case BackendType::DirectVulkan:
-                return MG_Pipe::kMGPipeSubsystemsMigratedAtP4a & ~MG_Pipe::kMGPipeSubsystemResources;
+                return (MG_Pipe::kMGPipeSubsystemsMigratedAtP4a | MG_Pipe::kMGPipeSubsystemBufferBindings) &
+                    ~MG_Pipe::kMGPipeSubsystemResources;
             default: return 0;
             }
         }

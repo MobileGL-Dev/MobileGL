@@ -44,6 +44,8 @@
 // server-role-only fixture: there the direct call is the only reset that exists).
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/Server/ServerLoop.h>
+#include <MG_Remote/Server/ServerSession.h>
+#include <MG_Remote/CapsCodec.h>
 #endif
 
 #include <algorithm>
@@ -1235,6 +1237,13 @@ namespace MobileGL::MG_Pipe {
         // site: ApplyUnitWindow validates and writes in one step, so the question has to be
         // asked in front of it.
         Bool NoP4aConsumer() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                const auto* session = MG_Remote::Server::ServerSession::Active();
+                if (session && session->CallMaskIsSet() && MG_Remote::MGCapsServerConsumes(
+                        session->CallMask(), kMGPipeSubsystemTextureResources)) return false;
+            }
+#endif
             if (g_resourceOps != nullptr) return false;
             ++g_applier.RefusedNoConsumer;
             return true;

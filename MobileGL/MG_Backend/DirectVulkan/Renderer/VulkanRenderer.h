@@ -433,6 +433,44 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
 
         void QueueClearBufferPayload(GLenum buffer, GLint drawbuffer, const ClearAttachmentPayload& clearPayload);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        struct WireImage {
+            VkImage image = VK_NULL_HANDLE;
+            VkFormat format = VK_FORMAT_UNDEFINED;
+            VkExtent2D extent{};
+            VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            VkImageLayout* trackedLayout = nullptr;
+            VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+            VkImageAspectFlags aspect = 0;
+            Uint32 level = 0, layer = 0, layers = 1, levels = 1;
+            Bool isDefault = false;
+            Bool is3D = false;
+            MG_Pipe::MGPipeHandle storage = MG_Pipe::kMGPipeNullHandle;
+        };
+        WireImage ResolveWireImage(const MG_Pipe::MGPFramebufferState& fbo,
+                                   const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect);
+        void TransitionWireImage(WireImage& image, VkImageLayout layout);
+        void ClearWireFramebuffer(const MG_Pipe::MGPFramebufferState& fbo,
+                                  const ClearAttachmentPayload& payload, GLint drawbuffer = -1);
+        void BlitWireFramebuffers(GLint sx0, GLint sy0, GLint sx1, GLint sy1,
+                                 GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter);
+        void ReadWirePixels(GLint x, GLint y, GLsizei width, GLsizei height,
+                            GLenum format, GLenum type, void* pixels);
+        void GenerateWireMipmap();
+        Bool SetupWireDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
+                           const DrawCmdParam& drawParams);
+        void DestroyWireDrawPass();
+        void DispatchWireCompute(GLuint x, GLuint y, GLuint z);
+        UniquePtr<RenderPassEntry> m_wireDrawPass;
+        Vector<VkImageView> m_wireDrawViews;
+        VkPipeline GetOrCreatePipelineWithInput(GLenum mode, const MagmaProgramSource& program,
+            const ProgramFactory::VkProgramObject& programObj, ProgramFactory::CompileOptionFlags transformFlags,
+            const VertexInputStateFactory::BackendVertexInputState& vis, const RenderPassEntry& renderPassEntry,
+            Bool primitiveRestartEnable);
+
+        void CopyWireFramebufferToTexture(GLenum target, GLint level, GLint xoffset, GLint yoffset,
+                                           GLint x, GLint y, GLsizei width, GLsizei height);
+#endif
         void QueueClearBufferPayloadForFramebuffer(const MG_State::GLState::FramebufferObject& framebuffer,
                                                   GLenum buffer, GLint drawbuffer,
                                                   const ClearAttachmentPayload& clearPayload);
@@ -1508,7 +1546,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         VkPipeline GetOrCreatePipeline(
             GLenum mode,
-            const MG_State::GLState::ProgramObject& program,
+            const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj,
             ProgramFactory::CompileOptionFlags transformFlags,
             const MG_State::GLState::VertexArrayObject& vao,
@@ -1520,14 +1558,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // flush the pending recording (see the body), which retires the current command buffer.
         Bool PrepareStorageImageTextures(
             FrameContext::FrameData& frame,
-            const MG_State::GLState::ProgramObject& program,
+            const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj);
         // Vulkan forbids a sampled descriptor and writable storage descriptor from naming the
         // same image subresource in one shader operation. Snapshot only the sampler side; the
         // storage descriptor continues to name the application texture.
         Bool PrepareSamplerImageFeedbackSnapshots(
             FrameContext::FrameData& frame,
-            const MG_State::GLState::ProgramObject& program,
+            const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj,
             VkPipelineStageFlags consumerShaderStageMask);
 

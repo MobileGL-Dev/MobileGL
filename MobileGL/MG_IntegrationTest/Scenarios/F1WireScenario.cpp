@@ -259,6 +259,84 @@ TEST_F(F1WireScenario, GenerateMipmapDepthPixels) {
     EXPECT_NEAR(pixel, 0.375f, 0.00001f);
 }
 
+TEST_F(F1WireScenario, PartialTextureUploadPreservesGpuClearPixels) {
+    if (!Ready()) return;
+    Attach(GL_RGBA8);
+    // The client shadow is red. The GPU then changes every texel to green, so
+    // applying a later one-pixel upload as a whole shadow loses observable data.
+    std::array<GLubyte, 8 * 8 * 4> red{};
+    for (size_t i = 0; i < red.size(); i += 4) {
+        red[i] = 255;
+        red[i + 3] = 255;
+    }
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, red.data());
+    glClearColor(0, 1, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    const std::array<GLubyte, 4> blue{0, 0, 255, 255};
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 1, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, blue.data());
+
+    std::array<GLubyte, 8 * 8 * 4> pixels{};
+    glReadPixels(0, 0, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    for (int y = 0; y < 8; ++y) {
+        for (int x = 0; x < 8; ++x) {
+            const std::array<GLubyte, 4> expected = x == 1 && y == 2
+                ? blue : std::array<GLubyte, 4>{0, 255, 0, 255};
+            const size_t at = static_cast<size_t>(y * 8 + x) * 4;
+            const std::array<GLubyte, 4> actual{pixels[at], pixels[at + 1], pixels[at + 2], pixels[at + 3]};
+            EXPECT_EQ(actual, expected) << "GPU clear survived outside upload at " << x << ", " << y;
+        }
+    }
+}
+
+TEST_F(F1WireScenario, TextureViewClearTargetsItsRootMipAndLayer) {
+    if (!Ready()) return;
+    GLuint root = 0, view = 0;
+    glGenTextures(1, &root);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, root);
+    glTexStorage3D(GL_TEXTURE_2D_ARRAY, 2, GL_RGBA8, 8, 8, 2);
+    std::array<GLubyte, 8 * 8 * 2 * 4> red{};
+    for (size_t i = 0; i < red.size(); i += 4) {
+        red[i] = 255;
+        red[i + 3] = 255;
+    }
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, 8, 8, 2,
+                    GL_RGBA, GL_UNSIGNED_BYTE, red.data());
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 1, 0, 0, 0, 4, 4, 2,
+                    GL_RGBA, GL_UNSIGNED_BYTE, red.data());
+    std::array<GLubyte, 4 * 4 * 4> blue{};
+    for (size_t i = 0; i < blue.size(); i += 4) {
+        blue[i + 2] = 255;
+        blue[i + 3] = 255;
+    }
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 1, 0, 0, 0, 4, 4, 1,
+                    GL_RGBA, GL_UNSIGNED_BYTE, blue.data());
+    glGenTextures(1, &view);
+    glTextureView(view, GL_TEXTURE_2D, root, GL_RGBA8, 1, 1, 1, 1);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "view construction";
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, view, 0);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    glClearColor(0, 1, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    std::array<GLubyte, 4> pixel{};
+    glReadPixels(1, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    EXPECT_EQ(pixel, (std::array<GLubyte, 4>{0, 255, 0, 255})) << "view reads its cleared window";
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, root, 1, 1);
+    glReadPixels(1, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    EXPECT_EQ(pixel, (std::array<GLubyte, 4>{0, 255, 0, 255})) << "view clear reaches root mip 1, layer 1";
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, root, 1, 0);
+    glReadPixels(1, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    EXPECT_EQ(pixel, (std::array<GLubyte, 4>{0, 0, 255, 255})) << "the neighboring root layer is preserved";
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, root, 0, 1);
+    glReadPixels(1, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    EXPECT_EQ(pixel, (std::array<GLubyte, 4>{255, 0, 0, 255})) << "the neighboring root mip is preserved";
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 0, 0);
+    glDeleteTextures(1, &view);
+    glDeleteTextures(1, &root);
+}
+
 TEST_F(F1WireScenario, NamedBlitPreservesBindingsAndRestoresNextVerbsPixels) {
     if (!Ready()) return;
     Attach(GL_RGBA8);

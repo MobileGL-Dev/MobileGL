@@ -3154,9 +3154,15 @@ void main() {
 
     inline ProgramFactory::CompileOptionFlags GetShaderTransformFlags(VkSurfaceTransformFlagBitsKHR preTransform) {
         ProgramFactory::CompileOptionFlags flags = ProgramFactory::CompileOptionBit::PositionZRemap;
-        const auto& currentDrawFBO =
-            MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-        if (currentDrawFBO != nullptr && currentDrawFBO->IsDefaultFramebuffer()) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const auto* wireFbo = MG_Config::Transport != MG_Config::TransportMode::Monolith ? MG_Pipe::MGPipeApplier().DrawFramebuffer() : nullptr;
+        const Bool isDefault = wireFbo ? wireFbo->IsDefault :
+            MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject()->IsDefaultFramebuffer();
+#else
+        const auto& currentDrawFBO = MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+        const Bool isDefault = currentDrawFBO != nullptr && currentDrawFBO->IsDefaultFramebuffer();
+#endif
+        if (isDefault) {
             flags |= ProgramFactory::CompileOptionBit::PositionYFlip;
             // gl_FragCoord follows the same rule the default-framebuffer RECTANGLES follow
             // (GetDefaultFramebufferRectMapping): flipped for identity/180, left alone under a
@@ -3420,6 +3426,9 @@ void main() {
         if (m_device != VK_NULL_HANDLE) {
             VK_VERIFY(vkDeviceWaitIdle(m_device));
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        DestroyWireDrawPass();
+#endif
         OnSubmitsCompletedUpTo(m_submitCounter);
         DestroySubmitFencePool();
 
@@ -5210,7 +5219,7 @@ void main() {
 
     // A program that runs a geometry shader AND captures transform feedback. Both halves are
     // link-time properties, so this is safe to fold into a pipeline keyed on the program hash.
-    static Bool ProgramCapturesXfbFromGeometryStage(const MG_State::GLState::ProgramObject& program) {
+    static Bool ProgramCapturesXfbFromGeometryStage(const MagmaProgramSource& program) {
         if (program.GetTransformFeedbackVaryingCount() == 0) return false;
         // Both halves are link-time properties, so both are asked of the LAST LINK. Reading the
         // live attach list would let a glAttachShader that has not been linked in yet - which GL
@@ -5249,12 +5258,22 @@ void main() {
 
     VkPipeline VulkanRenderer::GetOrCreatePipeline(
             GLenum mode,
-            const MG_State::GLState::ProgramObject& program,
+            const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj,
             ProgramFactory::CompileOptionFlags transformFlags,
             const MG_State::GLState::VertexArrayObject& vao,
             const RenderPassEntry& renderPassEntry,
             Bool primitiveRestartEnable) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return GetOrCreatePipelineWithInput(mode, program, programObj, transformFlags,
+            m_vertexInputStateFactory->GetOrCreateVertexInputState(vao), renderPassEntry, primitiveRestartEnable);
+    }
+
+    VkPipeline VulkanRenderer::GetOrCreatePipelineWithInput(GLenum mode, const MagmaProgramSource& program,
+            const ProgramFactory::VkProgramObject& programObj, ProgramFactory::CompileOptionFlags transformFlags,
+            const VertexInputStateFactory::BackendVertexInputState& vis, const RenderPassEntry& renderPassEntry,
+            Bool primitiveRestartEnable) {
+#endif
         Bool invertClockwise = transformFlags & ProgramFactory::CompileOptionBit::PositionYFlip;
         if (programObj.stages.empty()) {
             MGLOG_D("GetOrCreatePipeline skipped: program has no shader stages");
@@ -5272,7 +5291,9 @@ void main() {
         // payload key on the resolved LAYOUT hash instead, so draws over identical
         // layouts share one pipeline.
         // The one-arg fetch rides the VAO's state-pointer memo (no hash, no map).
+#if !MOBILEGL_BUILD_DISAGGREGATED
         auto& vis = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
+#endif
         const Uint64 vertexLayoutHash = vis.layoutHash;
         const Uint64 renderPassHash = renderPassEntry.hash;
         // The pipeline-relevant subset only: glViewport / glScissor / glBlendColor / glStencilMask
@@ -5506,6 +5527,16 @@ void main() {
         // (stencil) test always passes and nothing is written - even when the bound
         // image is a packed depth-stencil texture attached through only one half.
         {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
+                if (fbo && !fbo->IsDefault) {
+                    if (fbo->Depth.Kind == MG_Pipe::kMGPipeSurfaceKindNone) depthTestEnabled = false;
+                    if (fbo->Stencil.Kind == MG_Pipe::kMGPipeSurfaceKindNone) stencilTestEnabled = false;
+                }
+            } else
+#endif
+            {
             const auto& gatingFbo =
                 MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
             if (gatingFbo != nullptr && !gatingFbo->IsDefaultFramebuffer()) {
@@ -5518,6 +5549,7 @@ void main() {
                     stencilTestEnabled = false;
                 }
             }
+        }
         }
         const StencilFaceState& frontStencil = MGB_CTX->GetStencilState(StencilFace::Front);
         const StencilFaceState& backStencil = MGB_CTX->GetStencilState(StencilFace::Back);
@@ -5726,12 +5758,31 @@ void main() {
         MOBILEGL_ASSERT(payload.colorAttachmentCount <= PipelineFactory::PipelineCreatePayload::kMaxColorAttachments,
                         "GetOrCreatePipeline: colorAttachmentCount=%u exceeds payload capacity",
                         payload.colorAttachmentCount);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const auto* wireFbo = MG_Config::Transport != MG_Config::TransportMode::Monolith ?
+            MG_Pipe::MGPipeApplier().DrawFramebuffer() : nullptr;
+        const auto drawFboBinding = wireFbo ? SharedPtr<MG_State::GLState::FramebufferObject>{} :
+            MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+#else
         const auto& drawFboBinding =
             MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+#endif
         MOBILEGL_ASSERT(drawFboBinding != nullptr, "GetOrCreatePipeline: draw framebuffer is null");
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const Bool isDefaultDrawFbo = wireFbo ? wireFbo->IsDefault : drawFboBinding->IsDefaultFramebuffer();
+        Array<FramebufferAttachmentType, MG_Pipe::kMGPipeMaxColorAttachments> wireDrawBuffers{};
+        if (wireFbo) for (SizeT i = 0; i < wireDrawBuffers.size(); ++i)
+            wireDrawBuffers[i] = wireFbo->DrawBuffers[i] < 0 ? FramebufferAttachmentType::None :
+                static_cast<FramebufferAttachmentType>(static_cast<Int>(FramebufferAttachmentType::Color0) + wireFbo->DrawBuffers[i]);
+        const auto& drawBuffers = wireFbo ? wireDrawBuffers : drawFboBinding->GetDrawBuffers();
+#else
         const Bool isDefaultDrawFbo = drawFboBinding->IsDefaultFramebuffer();
         const auto& drawBuffers = drawFboBinding->GetDrawBuffers();
+#endif
         auto resolveCompleteColorAttachmentTexture = [&](Uint32 drawBufferIndex) -> MG_State::GLState::ITextureObject* {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (wireFbo) return nullptr;
+#endif
             if (isDefaultDrawFbo || drawBufferIndex >= drawBuffers.size()) {
                 return nullptr;
             }
@@ -5782,6 +5833,15 @@ void main() {
                 attachmentColorWriteMask = 0;
                 effectiveBlendEnabled = false;
             }
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (wireFbo && !isDefaultDrawFbo) {
+                const Int32 slot = wireFbo->DrawBuffers[i];
+                if (slot < 0 || wireFbo->Color[slot].Kind == MG_Pipe::kMGPipeSurfaceKindNone) {
+                    attachmentColorWriteMask = 0;
+                    effectiveBlendEnabled = false;
+                }
+            } else
+#endif
             if (!isDefaultDrawFbo && i < drawBuffers.size()) {
                 const auto drawBuffer = drawBuffers[i];
                 colorAttachmentTexture = resolveCompleteColorAttachmentTexture(i);
@@ -5877,6 +5937,12 @@ void main() {
 
                 VkFormat colorAttachmentFormat = VK_FORMAT_UNDEFINED;
                 Int textureExternalIndex = -1;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                if (wireFbo && !isDefaultDrawFbo) {
+                    const Int32 slot = wireFbo->DrawBuffers[i];
+                    colorAttachmentFormat = ResolveWireImage(*wireFbo, wireFbo->Color[slot], VK_IMAGE_ASPECT_COLOR_BIT).format;
+                } else
+#endif
                 if (isDefaultDrawFbo) {
                     colorAttachmentFormat = m_swapchainObject.GetSurfaceFormat().format;
                 } else if (colorAttachmentRenderbuffer != nullptr) {
@@ -6004,7 +6070,7 @@ void main() {
 
     Bool VulkanRenderer::PrepareStorageImageTextures(
         FrameContext::FrameData& frame,
-        const MG_State::GLState::ProgramObject& program,
+        const MagmaProgramSource& program,
         const ProgramFactory::VkProgramObject& programObj) {
         if (!programObj.hasStorageImages) {
             return true;
@@ -6100,7 +6166,7 @@ void main() {
     }
     Bool VulkanRenderer::PrepareSamplerImageFeedbackSnapshots(
         FrameContext::FrameData& frame,
-        const MG_State::GLState::ProgramObject& program,
+        const MagmaProgramSource& program,
         const ProgramFactory::VkProgramObject& programObj,
         VkPipelineStageFlags consumerShaderStageMask) {
         auto& feedbackBindings = m_samplerImageFeedbackScratch;
@@ -6801,6 +6867,10 @@ void main() {
     Bool VulkanRenderer::SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
                                    const DrawCmdParam& drawParams,
                                    const IndexBufferView* pIndexBufferView) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
+            return SetupWireDraw(frame, mode, aspects, drawParams);
+#endif
         // Sync each sampled texture at most once across this whole draw: the layout
         // probe loop, the post-transition loop, and ResolveSamplerDescriptor would
         // otherwise each re-run the full SyncTexture path on the same textures.
@@ -7417,6 +7487,12 @@ void main() {
     }
 
     void VulkanRenderer::DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            DispatchWireCompute(numGroupsX, numGroupsY, numGroupsZ);
+            return;
+        }
+#endif
         m_textureManager->CollectGarbage();
         auto& frame = m_frameContext.GetCurrent();
         // The DISPATCH accessor: with a pipeline bound this is its compute stage program
@@ -7636,7 +7712,23 @@ void main() {
         return ScissoredClearPrep::Ready;
     }
 
+    #include "WireFramebuffer.inc"
+    #include "WireDraw.inc"
+
     void VulkanRenderer::Clear(GLbitfield mask) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
+            if (!fbo) MagmaWireFatal("clear-framebuffer-record");
+            ClearAttachmentPayload payload{};
+            payload.mask = mask;
+            payload.color = MGB_CTX->GetClearColor();
+            payload.depth = MGB_CTX->GetClearDepth();
+            payload.stencil = MGB_CTX->GetClearStencil();
+            ClearWireFramebuffer(*fbo, payload);
+            return;
+        }
+#endif
         m_clearManager->CollectGarbage();
         if ((mask & (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)) == 0) {
             return;
@@ -8013,6 +8105,14 @@ void main() {
 
     void VulkanRenderer::QueueClearBufferPayload(GLenum buffer, GLint drawbuffer,
                                                  const ClearAttachmentPayload& clearPayload) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
+            if (!fbo) MagmaWireFatal("clear-buffer-framebuffer-record");
+            ClearWireFramebuffer(*fbo,clearPayload,buffer == GL_COLOR ? drawbuffer : -1);
+            return;
+        }
+#endif
         auto* fbo = MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject().get();
         if (!fbo) {
             return;
@@ -8971,54 +9071,41 @@ void main() {
     void VulkanRenderer::BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                          GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                                          GLbitfield mask, GLenum filter) {
-#if MOBILEGL_BUILD_DISAGGREGATED
-        // P5c (G6, CONTRACT-P5C §3.3/§5.4): MAGMA'S NAMED ARM. A blit record whose
-        // ReadFbo/DrawFbo are non-null is a glBlitNamedFramebuffer: both framebuffers resolve
-        // from the record's handles, and the sink is told the pair was consumed - a backend
-        // that leaves the flag clear has no named arm and the verb declines there, loudly.
-        // Magma has no FBO twin registry (it reads the frontend object wherever it syncs), so
-        // the resolution here is frontend-keyed - the handle was minted over the frontend
-        // object's lifetime id, and the two probes below (the client allocator's slot entry
-        // and the frontend context's framebuffer pool) are named debt inside the scope, the
-        // same shape as Espryt's StateForHandle arm: P7 retires it by carrying the object
-        // identity in the record. P5e (id), ruling 12: the third of Magma's four debts, so the
-        // scope it rides in is MagmaP7AllocatorDebtScope. Magma stays lockstep for the whole of
-        // P5e (CONTRACT-P5E §6.1), so the record being applied here is always barriered and the
-        // exemption still holds.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
-            auto& applierState = MG_Pipe::MGPipeApplier();
-            const MG_Pipe::MGPipeHandle readHandle = applierState.VerbBlitReadFbo;
-            const MG_Pipe::MGPipeHandle drawHandle = applierState.VerbBlitDrawFbo;
-            if (!MG_Pipe::MGPipeHandleIsNull(readHandle) || !MG_Pipe::MGPipeHandleIsNull(drawHandle)) {
-                const auto resolveEndpoint = [](MG_Pipe::MGPipeHandle handle)
-                        -> SharedPtr<MG_State::GLState::FramebufferObject> {
-                    const MG_Pipe::MagmaP7AllocatorDebtScope magmaP7AllocatorDebt;
-                    if (handle == MG_Pipe::kMGPipeDefaultFramebuffer) {
-                        return MG_State::pGLContext ? MG_State::pGLContext->GetFramebufferObject(0) : nullptr;
-                    }
-                    if (!MG_Pipe::MGPipeSlots().IsLive(MG_Pipe::MGPipeKind::Framebuffer, handle)) {
-                        return nullptr;
-                    }
-                    const Uint64 lifetimeId =
-                        MG_Pipe::MGPipeSlots().LifetimeIdOfSlot(MG_Pipe::MGPipeKind::Framebuffer, handle.Slot);
-                    if (lifetimeId == 0 || MG_State::pGLContext == nullptr) return nullptr;
-                    return MG_State::pGLContext->FindFramebufferObjectByLifetimeId(lifetimeId);
-                };
-                auto readFbo = resolveEndpoint(readHandle);
-                auto drawFbo = resolveEndpoint(drawHandle);
-                if (!readFbo || !drawFbo) {
-                    // Leave the pair UNCONSUMED: the sink's decline is the loud answer a
-                    // missing endpoint deserves, not a silent blit of whatever is bound.
-                    MGLOG_E_ONCE("MGPipe: Magma's named blit could not resolve an endpoint (read {%u, %u}, draw "
-                                 "{%u, %u}) to a frontend framebuffer; the verb declines at the sink",
-                                 readHandle.Slot, readHandle.Gen, drawHandle.Slot, drawHandle.Gen);
-                    return;
+        // The scissor test clips blit writes: intersect the destination rectangle with
+        // the scissor box and shrink the source proportionally.
+        if (MGB_CTX->IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+            const IntVec4& scissor = MGB_CTX->GetScissorBox();
+            const auto clipAxis = [](GLint& d0, GLint& d1, GLint& s0, GLint& s1, GLint clipLo, GLint clipHi) -> Bool {
+                const Bool dstFlipped = d1 < d0;
+                GLint lo = dstFlipped ? d1 : d0;
+                GLint hi = dstFlipped ? d0 : d1;
+                const GLint newLo = std::max(lo, clipLo);
+                const GLint newHi = std::min(hi, clipHi);
+                if (newLo >= newHi) {
+                    return false;
                 }
-                applierState.VerbBlitNamedConsumed = true;
-                BlitNamedFramebuffer(readFbo, drawFbo, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0,
-                                     dstX1, dstY1, mask, filter);
-                return;
+                const double srcSpan = static_cast<double>(s1 - s0);
+                const double dstSpan = static_cast<double>(d1 - d0);
+                const double scale = dstSpan != 0.0 ? srcSpan / dstSpan : 0.0;
+                const GLint origD0 = d0;
+                const GLint clippedD0 = dstFlipped ? newHi : newLo;
+                const GLint clippedD1 = dstFlipped ? newLo : newHi;
+                s0 = s0 + static_cast<GLint>(std::lround((clippedD0 - origD0) * scale));
+                s1 = s0 + static_cast<GLint>(std::lround((clippedD1 - clippedD0) * scale));
+                d0 = clippedD0;
+                d1 = clippedD1;
+                return true;
+            };
+            if (!clipAxis(dstX0, dstX1, srcX0, srcX1, scissor.x(), scissor.x() + scissor.z()) ||
+                !clipAxis(dstY0, dstY1, srcY0, srcY1, scissor.y(), scissor.y() + scissor.w())) {
+                return; // fully scissored out
             }
+        }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            BlitWireFramebuffers(srcX0,srcY0,srcX1,srcY1,dstX0,dstY0,dstX1,dstY1,mask,filter);
+            return;
         }
 #endif
         auto readFbo = MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
@@ -9050,37 +9137,6 @@ void main() {
         if ((isDepthBlit || isStencilBlit) && filter != GL_NEAREST) {
             MGLOG_E_ONCE("BlitFramebuffer skipped: depth/stencil blits require GL_NEAREST");
             return;
-        }
-
-        // The scissor test clips blit writes: intersect the destination rectangle with
-        // the scissor box and shrink the source proportionally.
-        if (MGB_CTX->IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
-            const IntVec4& scissor = MGB_CTX->GetScissorBox();
-            const auto clipAxis = [](GLint& d0, GLint& d1, GLint& s0, GLint& s1, GLint clipLo, GLint clipHi) -> Bool {
-                const Bool dstFlipped = d1 < d0;
-                GLint lo = dstFlipped ? d1 : d0;
-                GLint hi = dstFlipped ? d0 : d1;
-                const GLint newLo = std::max(lo, clipLo);
-                const GLint newHi = std::min(hi, clipHi);
-                if (newLo >= newHi) {
-                    return false;
-                }
-                const double srcSpan = static_cast<double>(s1 - s0);
-                const double dstSpan = static_cast<double>(d1 - d0);
-                const double scale = dstSpan != 0.0 ? srcSpan / dstSpan : 0.0;
-                const GLint origD0 = d0;
-                const GLint clippedD0 = dstFlipped ? newHi : newLo;
-                const GLint clippedD1 = dstFlipped ? newLo : newHi;
-                s0 = s0 + static_cast<GLint>(std::lround((clippedD0 - origD0) * scale));
-                s1 = s0 + static_cast<GLint>(std::lround((clippedD1 - clippedD0) * scale));
-                d0 = clippedD0;
-                d1 = clippedD1;
-                return true;
-            };
-            if (!clipAxis(dstX0, dstX1, srcX0, srcX1, scissor.x(), scissor.x() + scissor.z()) ||
-                !clipAxis(dstY0, dstY1, srcY0, srcY1, scissor.y(), scissor.y() + scissor.w())) {
-                return; // fully scissored out
-            }
         }
 
         MOBILEGL_ASSERT(readFbo != nullptr, "VulkanRenderer::BlitFramebuffer: read framebuffer is null");
@@ -9633,6 +9689,12 @@ void main() {
 
     void VulkanRenderer::CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                                            GLint x, GLint y, GLsizei width, GLsizei height) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            CopyWireFramebufferToTexture(target,level,xoffset,yoffset,x,y,width,height);
+            return;
+        }
+#endif
         if (width <= 0 || height <= 0) {
             return;
         }
@@ -9952,6 +10014,10 @@ void main() {
                                           const CopyImageEndpoint& dstEndpoint,
                                           GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                                           GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const Bool wire = MG_Config::Transport != MG_Config::TransportMode::Monolith;
+        if (wire && HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("copy-image-flush");
+#endif
         MOBILEGL_ASSERT(srcEndpoint.Exists() && dstEndpoint.Exists(),
                         "CopyImageSubData requires valid source and destination images.");
         // The frontend already declines a zero or negative extent, so anything else here is a
@@ -9978,7 +10044,11 @@ void main() {
             srcEndpoint.Texture ? &VkTextureManager::StorageTextureOf(*srcEndpoint.Texture) : nullptr;
         const auto* dstStorageTexture =
             dstEndpoint.Texture ? &VkTextureManager::StorageTextureOf(*dstEndpoint.Texture) : nullptr;
-        if (srcStorageTexture == dstStorageTexture && srcEndpoint.Renderbuffer == dstEndpoint.Renderbuffer) {
+        if (
+#if MOBILEGL_BUILD_DISAGGREGATED
+            !wire &&
+#endif
+            srcStorageTexture == dstStorageTexture && srcEndpoint.Renderbuffer == dstEndpoint.Renderbuffer) {
             MGLOG_E_ONCE("%s: in-place copy on objectId=%u is not supported; declining the copy", __func__,
                          CopyImageEndpointName(srcEndpoint));
             return;
@@ -9997,6 +10067,21 @@ void main() {
         // SyncTextureAndGetDescriptor the copy always used; the renderbuffer arm goes through the
         // render-pass manager, which is where a renderbuffer's VkImage lives.
         const auto resolveImage = [this](const CopyImageEndpoint& endpoint, CopyImageVkImage& out) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                auto* resource = m_textureManager->SyncTextureResourceByHandle(endpoint.TextureHandle);
+                if (!resource) MagmaWireFatal("copy-image-resource");
+                out.image = resource->image;
+                out.trackedLayout = &resource->layout;
+                out.aspect = resource->aspect;
+                out.mipLevels = resource->mipLevels;
+                out.extent = resource->extent;
+                out.depth = resource->depth;
+                out.arrayLayers = resource->arrayLayers;
+                out.format = resource->format;
+                return out.image != VK_NULL_HANDLE;
+            }
+#endif
             if (endpoint.IsRenderbuffer()) {
                 auto* resource = m_renderPassManager->GetOrCreateRenderbufferResource(endpoint.Renderbuffer);
                 if (resource == nullptr) return false;
@@ -10031,6 +10116,12 @@ void main() {
         CopyImageVkImage dstImage{};
         const Bool srcResolved = resolveImage(srcEndpoint, srcImage);
         const Bool dstResolved = resolveImage(dstEndpoint, dstImage);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (wire) {
+            if (srcImage.image == dstImage.image) MagmaWireFatal("copy-image-in-place@P7");
+            m_textureManager->FlushPendingUploads();
+        }
+#endif
         // Real checks, not MOBILEGL_ASSERT: the assertions this replaces compile to nothing in
         // a release build, which is where both observed failures happened - a null resource
         // dereferenced right below (lavapipe) and a mip level the VkImage does not have handed
@@ -10159,6 +10250,9 @@ void main() {
         }
 
         const auto materializeClear = [this, &frame](const CopyImageEndpoint& endpoint) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return true;
+#endif
             if (endpoint.IsRenderbuffer()) {
                 return MaterializePendingClearForRenderbuffer(frame.commandBuffer, endpoint.Renderbuffer);
             }
@@ -10270,6 +10364,10 @@ void main() {
                        srcImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        dstImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                        1, &copyRegion);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (wire) m_textureManager->MarkWireTextureGpuWritten(dstEndpoint.TextureHandle,
+            dstMipLevel, dstSlices.BaseArrayLayer(), dstSlices.slicesAreDepth ? 1u : copySliceCount);
+#endif
 
         VkPipelineStageFlags srcRestoreStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcRestoreAccessMask = 0;
@@ -10364,6 +10462,12 @@ void main() {
 
     void VulkanRenderer::ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
                                     void* pixels) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            ReadWirePixels(x,y,width,height,format,type,pixels);
+            return;
+        }
+#endif
         if (width <= 0 || height <= 0) {
             return;
         }
@@ -11376,6 +11480,12 @@ void main() {
     }
 
     void VulkanRenderer::GenerateMipmap(GLenum target) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            GenerateWireMipmap();
+            return;
+        }
+#endif
         const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
         // Whatever is left here is a coverage gap in this backend, not a broken invariant, so it
         // declines (leaving the mip chain unwritten) rather than asserting the process down. What
