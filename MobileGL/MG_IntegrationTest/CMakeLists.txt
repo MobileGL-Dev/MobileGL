@@ -2457,6 +2457,39 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endforeach()
 endif()
 
+# Real Magma run-ahead, including client lead and present-credit backpressure.
+# The test fixture requires an actually armed production session; a missing cap
+# fails rather than turning this dedicated lane into a skip or a lockstep pass.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    target_sources(MobileGLIntegrationTest PRIVATE Scenarios/MagmaRunAheadScenario.cpp)
+    foreach(credit 1 3)
+        mgl_itest_join_environment(MGL_ITEST_MAGMA_RUNAHEAD_ENVIRONMENT
+            "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_TRANSPORT=inproc"
+            "MOBILEGL_IPC_ROLE_SPLIT_STATE=1" "MOBILEGL_IPC_STRICT_ERRORS=1"
+            "MOBILEGL_IPC_RUN_AHEAD=1" "MOBILEGL_IPC_PRESENT_CREDIT=${credit}"
+            "MOBILEGL_IPC_SPIN_US=0" "MOBILEGL_IPC_ADOPT_TIER=2"
+            "MGITEST_MAGMA_RUNAHEAD_LANE=1" "MGITEST_SPLIT_LANE=1"
+            "MOBILEGL_ITEST_REQUIRE_GPU=1"
+            ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+        foreach(runAheadCase
+                QueuedBufferVersionsAndDeletedNameReuseKeepTheirPixels
+                QueuedProgramRebindsKeepEachUniformSnapshot
+                QueuedGpuWritesReadBackTheLastDispatchBytes
+                MixedNativeAndConvertedGpuVertexStreamsKeepTheirReservation
+                TextureUploadCannotOvertakeThePreviouslyQueuedDraw
+                GpuClearSurvivesTheFirstStorageImageUpgrade
+                PresentCreditActuallyParksTheClientAtItsConfiguredLimit)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.Split.RunAhead.Credit${credit}."
+                TEST_FILTER "MagmaRunAheadScenario.${runAheadCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "integration-magma-split\;integration-magma-runahead"
+                    TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ENVIRONMENT "${MGL_ITEST_MAGMA_RUNAHEAD_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-runahead-credit${credit}-${runAheadCase}.log")
+        endforeach()
+    endforeach()
+endif()
+
 # P5c ct (MG_Remote/CONTRACT-P5C.md §5): the two control records, split-only source for the
 # same reason as f1's - the scenario reads the SERVER sink's tallies, which a monolith build
 # has no symbol for. One block per case with a LOG PATH OF ITS OWN, the F1 pattern:

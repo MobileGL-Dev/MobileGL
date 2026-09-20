@@ -1474,6 +1474,31 @@ jobs:
                             ["DirectVulkan.Split.Buffers." + name for name in cases])
           PY
 
+      - name: Magma run-ahead must queue real GPU work and enforce credits 1 and 3
+        working-directory: build-split
+        run: |
+          ctest -L integration-magma-runahead --show-only=json-v1 > "${RUNNER_TEMP}/magma-runahead-lane.json"
+          ctest -L integration-magma-runahead --no-tests=error -j 2 --output-on-failure \
+            --output-junit "${RUNNER_TEMP}/magma-runahead.xml"
+          python3 - "${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/split_log_paths.py" \
+            "${RUNNER_TEMP}/magma-runahead-lane.json" "${RUNNER_TEMP}/magma-runahead.xml" <<'PY'
+          import importlib.util, json, sys
+          spec = importlib.util.spec_from_file_location("slp", sys.argv[1])
+          slp = importlib.util.module_from_spec(spec); spec.loader.exec_module(slp)
+          cases = [
+              "QueuedBufferVersionsAndDeletedNameReuseKeepTheirPixels",
+              "QueuedProgramRebindsKeepEachUniformSnapshot",
+              "QueuedGpuWritesReadBackTheLastDispatchBytes",
+              "MixedNativeAndConvertedGpuVertexStreamsKeepTheirReservation",
+              "TextureUploadCannotOvertakeThePreviouslyQueuedDraw",
+              "GpuClearSurvivesTheFirstStorageImageUpgrade",
+              "PresentCreditActuallyParksTheClientAtItsConfiguredLimit",
+          ]
+          required = [f"DirectVulkan.Split.RunAhead.Credit{credit}.MagmaRunAheadScenario.{name}"
+                      for credit in (1, 3) for name in cases]
+          slp.require_green(json.load(open(sys.argv[2])), sys.argv[3], required)
+          PY
+
       - name: Magma P7 native mip format debt stays a named refusal
         working-directory: build-split
         env:

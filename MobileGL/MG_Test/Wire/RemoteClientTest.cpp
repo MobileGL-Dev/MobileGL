@@ -634,6 +634,7 @@ TEST(CapsMirrorTest, ObjectFamilyEmissionTracksIndependentConsumerCapsWithoutBuf
 #endif
 }
 
+// Historical name retained; the real bootstrap must now publish and arm Magma readiness.
 TEST(CapsMirrorTest, MagmaTransportPublishesRealBufferConsumersWithoutRunAhead) {
 #if MGTEST_HAVE_FORK
     const ChildResult result = RunInChild([] {
@@ -654,7 +655,7 @@ TEST(CapsMirrorTest, MagmaTransportPublishesRealBufferConsumersWithoutRunAhead) 
             const Uint64 mask = server.CallMask();
             EXPECT_TRUE(MGCapsServerConsumes(mask, kMGPipeSubsystemResources));
             EXPECT_TRUE(MGCapsServerConsumes(mask, kMGPipeSubsystemBufferBindings));
-            EXPECT_EQ(mask & static_cast<Uint64>(kCapRunAheadApply), 0u);
+            EXPECT_EQ(mask & static_cast<Uint64>(kCapRunAheadApply), static_cast<Uint64>(kCapRunAheadApply));
         }
         const auto* ops = MG_Pipe::MGPipeGetResourceOps();
         EXPECT_NE(ops, nullptr);
@@ -669,7 +670,7 @@ TEST(CapsMirrorTest, MagmaTransportPublishesRealBufferConsumersWithoutRunAhead) 
             if (ops->MapPersistent) EXPECT_EQ(ops->MapPersistent({7, 1}, 64, nullptr), nullptr)
                 << "Magma must not donate a server address as a client persistent map";
         }
-        EXPECT_FALSE(ClientSessionInstance().RunAheadArmed());
+        EXPECT_TRUE(ClientSessionInstance().RunAheadArmed());
         ClientSessionInstance().Stop();
         MG_Remote::Server::ServerLoopInstance().Stop();
         std::fflush(nullptr);

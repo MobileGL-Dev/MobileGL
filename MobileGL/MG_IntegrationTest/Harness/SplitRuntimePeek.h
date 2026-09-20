@@ -70,6 +70,15 @@ namespace MGITest {
         unsigned int totalVerbSlots = 0;
         // The encoder's highest produced record ordinal, or 0 when there is no session.
         unsigned long long emitSeq = 0;
+        // Real session state/watermarks. Only the client thread reads this snapshot;
+        // the scheduling observer below reads producerParked separately.
+        bool runAheadArmed = false;
+        unsigned int presentCredit = 0;
+        unsigned long long appliedSeq = 0;
+        unsigned long long retiredSeq = 0;
+        unsigned long long presentAckSerial = 0;
+        unsigned long long presentCreditWaits = 0;
+
 
         // ---- the wire producer's ledger, for exit gates E3(e) and R-10's proof obligation ---
         //
@@ -104,6 +113,15 @@ namespace MGITest {
     SplitRuntimeState PeekSplitRuntime();
     // Scheduling-only perturbation; never changes a watermark or counter.
     void DelaySplitRetirementForTesting(bool enabled);
+    // Holds the existing before-retire scheduling hook once, after a real drain
+    // batch. Never writes sequence numbers, caps, pixel state or production data.
+    // A two-second fail-safe releases a lockstep negative control without hanging.
+    bool ArmSplitApplyHoldForTesting();
+    bool WaitForSplitApplyHoldForTesting(unsigned int timeoutMs = 1000);
+    bool SplitApplyHoldIsActiveForTesting();
+    void ReleaseSplitApplyHoldForTesting();
+    bool SplitProducerIsParkedForTesting();
+
 
     // Empty when this process is a real split run that can be asserted about; otherwise the
     // reason to GTEST_SKIP() with, naming the first fact that is not true and the package that

@@ -21,11 +21,74 @@
 #include <MG_Remote/Client/EmitTables.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <chrono>
+#include <atomic>
 #include <thread>
 #define MGITEST_SPLIT_RUNTIME_PEEK_LIVE 1
 #endif
 
 namespace MGITest {
+
+#if defined(MGITEST_SPLIT_RUNTIME_PEEK_LIVE)
+    namespace {
+        std::atomic<bool> g_holdArmed{false}, g_holdActive{false}, g_holdRelease{true};
+        void HoldOneAppliedBatch() {
+            if (!g_holdArmed.exchange(false, std::memory_order_acq_rel)) return;
+            g_holdActive.store(true, std::memory_order_release);
+            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (!g_holdRelease.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < until)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            g_holdActive.store(false, std::memory_order_release);
+        }
+    }
+#endif
+    bool ArmSplitApplyHoldForTesting() {
+#if defined(MGITEST_SPLIT_RUNTIME_PEEK_LIVE)
+        g_holdRelease.store(false, std::memory_order_release);
+        g_holdArmed.store(true, std::memory_order_release);
+        MobileGL::MG_Remote::Server::ServerLoopInstance().SetBeforeRetireHookForTesting(&HoldOneAppliedBatch);
+        return true;
+#else
+        return false;
+#endif
+    }
+    bool WaitForSplitApplyHoldForTesting(unsigned int timeoutMs) {
+#if defined(MGITEST_SPLIT_RUNTIME_PEEK_LIVE)
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        while (std::chrono::steady_clock::now() < until) {
+            if (g_holdActive.load(std::memory_order_acquire)) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+#else
+        (void)timeoutMs;
+#endif
+        return false;
+    }
+    bool SplitApplyHoldIsActiveForTesting() {
+#if defined(MGITEST_SPLIT_RUNTIME_PEEK_LIVE)
+        return g_holdActive.load(std::memory_order_acquire);
+#else
+        return false;
+#endif
+    }
+    void ReleaseSplitApplyHoldForTesting() {
+#if defined(MGITEST_SPLIT_RUNTIME_PEEK_LIVE)
+        g_holdRelease.store(true, std::memory_order_release);
+        g_holdArmed.store(false, std::memory_order_release);
+        MobileGL::MG_Remote::Server::ServerLoopInstance().SetBeforeRetireHookForTesting(nullptr);
+        while (g_holdActive.load(std::memory_order_acquire))
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+#endif
+    }
+    bool SplitProducerIsParkedForTesting() {
+#if defined(MGITEST_SPLIT_RUNTIME_PEEK_LIVE)
+        // This is the only reader intended for the observer thread. Do not call
+        // PeekSplitRuntime there: its encoder and client-ledger fields are not atomic.
+        auto* session = MobileGL::MG_Remote::Client::ClientSession::Active();
+        return session && session->Control() && session->Control()->producerParked.load(std::memory_order_acquire);
+#else
+        return false;
+#endif
+    }
     void DelaySplitRetirementForTesting(bool enabled) {
 #if defined(MGITEST_SPLIT_RUNTIME_PEEK_LIVE)
         MobileGL::MG_Remote::Server::ServerLoopInstance().SetBeforeRetireHookForTesting(
@@ -60,6 +123,15 @@ namespace MGITest {
             // neither emits anything - this is a read.
             const MobileGL::MG_Remote::Wire::PipeWireEncoder& encoder = session->Encoder();
             state.emitSeq = encoder.EmitSeq();
+            state.runAheadArmed = session->RunAheadArmed();
+            state.presentCredit = MobileGL::MG_Config::Ipc.PresentCredit;
+            state.presentCreditWaits = session->PresentCreditWaits();
+            if (const auto* control = session->Control()) {
+                state.appliedSeq = control->appliedSeq.load(std::memory_order_acquire);
+                state.retiredSeq = control->retiredSeq.load(std::memory_order_acquire);
+                state.presentAckSerial = control->presentAckSerial.load(std::memory_order_acquire);
+            }
+
             // The producer's ledger. Every one of these is a plain member read on the encoder
             // or on the RingProducer it holds; none of them emits, publishes or waits, so a
             // case may read them between two GL calls without changing what the next record is.

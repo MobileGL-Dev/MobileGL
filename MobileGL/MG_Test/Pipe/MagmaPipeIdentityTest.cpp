@@ -218,19 +218,14 @@ namespace {
         EXPECT_EQ(mint.Count(), 1u);
     }
 
-    // Application buffer record consumers do not imply run-ahead readiness.
-    // Magma retains its lockstep lifetime/submission contract; the capability
-    // must remain absent even when the Espryt readiness constant is true.
+    // Historical test name retained. Each backend's readiness is now a real gate:
+    // false forbids the capability, true permits it. Production keeps its own
+    // Magma readiness constant, which the bootstrap and GPU queue tests also check.
     TEST_F(MagmaPipeIdentityTest, AMagmaServerNeverPublishesTheRunAheadCapBit) {
-        // Whatever the integration constant says. `true` is what the P5e integration commit
-        // will pass, so the Magma answer is pinned on BOTH sides of that flip and the case
-        // does not quietly stop asserting anything the day the constant moves.
-        EXPECT_EQ(MG_Pipe::MGPipeRunAheadCapBitsFor(BackendType::DirectVulkan, /*ready=*/false) &
-                      static_cast<Uint64>(MG_Pipe::kCapRunAheadApply),
-                  0u);
-        EXPECT_EQ(MG_Pipe::MGPipeRunAheadCapBitsFor(BackendType::DirectVulkan, /*ready=*/true) &
-                      static_cast<Uint64>(MG_Pipe::kCapRunAheadApply),
-                  0u);
+        EXPECT_EQ(MG_Pipe::MGPipeRunAheadCapBitsFor(BackendType::DirectVulkan, /*ready=*/false), 0u);
+        EXPECT_EQ(MG_Pipe::MGPipeRunAheadCapBitsFor(BackendType::DirectVulkan, /*ready=*/true),
+                  static_cast<Uint64>(MG_Pipe::kCapRunAheadApply));
+        EXPECT_EQ(MG_Pipe::MGPipeRunAheadCapBitsFor(BackendType::Unknown, /*ready=*/true), 0u);
 
         // And the Espryt half, so the case says what the arm IS and not only what it is not:
         // the bit is published for DirectGLES and ONLY once the integration commit flips
