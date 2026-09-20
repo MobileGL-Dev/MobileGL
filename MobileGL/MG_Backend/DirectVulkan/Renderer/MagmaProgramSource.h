@@ -46,6 +46,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             for (const auto stage : m_record->Archive->LinkedStages) result.push_back(static_cast<ShaderStage>(stage));
             return result;
         }
+        Bool HasLinkedShaderStage(ShaderStage stage) const {
+            if (!IsWire()) return m_frontend->HasLinkedShaderStage(stage);
+            const auto& stages = m_record->Archive->LinkedStages;
+            return std::find(stages.begin(), stages.end(), static_cast<Uint32>(stage)) != stages.end();
+        }
         Bool GetBackendHashMemo(Uint flags, Uint64& hash) const {
             // A view has no lifetime in which a memo can safely persist. The server
             // factory's content cache still owns compiled programs; hash from current
@@ -144,6 +149,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 GetTransformFeedbackStride(Uint index) const {
             if (!IsWire()) return m_frontend->GetTransformFeedbackStride(index);
             return index < Link().xfbStrides.size() ? Link().xfbStrides[index] : 0;
+        }
+        GLenum GetTransformFeedbackBufferMode() const {
+            return IsWire() ? Link().xfbBufferMode : m_frontend->GetTransformFeedbackBufferMode();
         }
         Uint GetShaderStorageBlockIndex(const String& name) const {
             if (!IsWire()) return DirectVulkan::GetShaderStorageBlockIndex(*m_frontend, name);
