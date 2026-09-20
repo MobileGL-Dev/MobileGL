@@ -12508,6 +12508,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static Bool MakeGLESCopyImageEndpoint(const CopyImageEndpoint& endpoint, GLenum appTarget, GLint x, GLint y,
                                           GLint z, GLESCopyImageEndpoint& out) {
         if (endpoint.IsRenderbuffer()) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                if (!PipeRenderbufferRecordForHandle(endpoint.RenderbufferHandle)) return false;
+                auto* slot = RenderbufferImpl::g_backendRenderbufferObjects.GetOrCreateByHandle(endpoint.RenderbufferHandle);
+                if (!slot) return false;
+                if (!*slot) *slot = MakeShared<RenderbufferImpl::BackendRenderbufferObject>();
+                out.renderbuffer = *slot;
+                out.renderbuffer->SyncToBackendByHandle(endpoint.RenderbufferHandle);
+            } else
+#endif
             out.renderbuffer = SyncRenderbufferObjectToBackend(endpoint.Renderbuffer);
             if (!out.renderbuffer) return false;
             out.target = GL_RENDERBUFFER;
@@ -12556,7 +12566,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static TextureInternalFormat GetCopyImageEndpointFormat(const CopyImageEndpoint& endpoint) {
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
-            const auto* record = PipeTextureRecordForHandle(endpoint.TextureHandle);
+            const auto* record = endpoint.IsRenderbuffer()
+                ? PipeRenderbufferRecordForHandle(endpoint.RenderbufferHandle)
+                : PipeTextureRecordForHandle(endpoint.TextureHandle);
             return record ? static_cast<TextureInternalFormat>(record->Desc.InternalFormat)
                           : TextureInternalFormat::Unknown;
         }

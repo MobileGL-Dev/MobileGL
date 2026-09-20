@@ -1274,19 +1274,21 @@ namespace MobileGL::MG_Remote::Client {
             // way to rebuild one from a name, and none was measured. P7 is where the backend
             // takes handles and this arm becomes ordinary. The sink refuses the same shape by
             // the same name if a record ever reaches it (defence on both sides of one wire).
-            if (src.IsRenderbuffer() || dst.IsRenderbuffer()) {
-                UnmigratedVerbFatal("CopyImageSubData+RENDERBUFFER");
-            }
-
             MG_Pipe::MGPCopyRegion record{};
-            record.Src = PublishedTextureHandle(src.Texture);
-            record.Dst = PublishedTextureHandle(dst.Texture);
+            const auto handle = [](const MG_Backend::CopyImageEndpoint& endpoint) {
+                return endpoint.IsRenderbuffer()
+                    ? MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::Renderbuffer,
+                                                              endpoint.Renderbuffer->GetLifetimeId())
+                    : PublishedTextureHandle(endpoint.Texture);
+            };
+            record.Src = handle(src);
+            record.Dst = handle(dst);
             // The GL names beside the handles: the key MGB_CTX->GetTextureObject(name) takes on
             // the far side (a BARRIER-PULLED sticky forward, counted in `rsp`, retired by P7).
             record.SrcGlName =
-                src.Texture ? static_cast<Uint32>(src.Texture->GetExternalIndex()) : 0u;
+                src.IsRenderbuffer() ? src.Renderbuffer->GetExternalIndex() : src.Texture->GetExternalIndex();
             record.DstGlName =
-                dst.Texture ? static_cast<Uint32>(dst.Texture->GetExternalIndex()) : 0u;
+                dst.IsRenderbuffer() ? dst.Renderbuffer->GetExternalIndex() : dst.Texture->GetExternalIndex();
             // The GL targets verbatim, in a Uint16 - every GL texture target fits one. NOT
             // MGPipeResourceTarget: the sink only ever forwards these to a slot that takes GL
             // enums, and the tree has no resource-target -> GL-enum inverse to spend on them.

@@ -38,12 +38,19 @@ namespace MobileGL {
             SharedPtr<MG_State::GLState::RenderbufferObject> Renderbuffer;
 #if MOBILEGL_BUILD_DISAGGREGATED
             MG_Pipe::MGPipeHandle TextureHandle = MG_Pipe::kMGPipeNullHandle;
+            MG_Pipe::MGPipeHandle RenderbufferHandle = MG_Pipe::kMGPipeNullHandle;
 #endif
 
-            Bool IsRenderbuffer() const { return Renderbuffer != nullptr; }
+            Bool IsRenderbuffer() const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                if (!MG_Pipe::MGPipeHandleIsNull(RenderbufferHandle)) return true;
+#endif
+                return Renderbuffer != nullptr;
+            }
             Bool Exists() const {
 #if MOBILEGL_BUILD_DISAGGREGATED
                 if (!MG_Pipe::MGPipeHandleIsNull(TextureHandle)) return true;
+                if (!MG_Pipe::MGPipeHandleIsNull(RenderbufferHandle)) return true;
 #endif
                 return Texture != nullptr || Renderbuffer != nullptr;
             }

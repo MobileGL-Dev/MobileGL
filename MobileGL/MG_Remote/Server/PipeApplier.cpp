@@ -893,16 +893,15 @@ namespace MobileGL::MG_Remote::Server {
         // record that reached here anyway: no sticky forward hands out a RenderbufferObject, so
         // there is no honest way to build the endpoint, and guessing an empty one would copy
         // nothing and say it copied.
-        if (copy.SrcTarget == GL_RENDERBUFFER || copy.DstTarget == GL_RENDERBUFFER) {
-            ServerUnmigratedVerbFatal("CopyImageSubData+RENDERBUFFER");
-        }
 
         // P5f fe: both texture identities already travel in the record. Pass those handles
         // to the backend's server-owned texture table; GL names are diagnostic data only.
         MG_Backend::CopyImageEndpoint src{};
         MG_Backend::CopyImageEndpoint dst{};
-        src.TextureHandle = copy.Src;
-        dst.TextureHandle = copy.Dst;
+        if (copy.SrcTarget == GL_RENDERBUFFER) src.RenderbufferHandle = copy.Src;
+        else src.TextureHandle = copy.Src;
+        if (copy.DstTarget == GL_RENDERBUFFER) dst.RenderbufferHandle = copy.Dst;
+        else dst.TextureHandle = copy.Dst;
         if (MG_Pipe::MGPipeHandleIsNull(copy.Src) || MG_Pipe::MGPipeHandleIsNull(copy.Dst)) {
             // The monolith's own answer to this, in its own words (DirectGLES.cpp:9067
             // "source or destination image failed to sync; declining the copy"): the frontend
