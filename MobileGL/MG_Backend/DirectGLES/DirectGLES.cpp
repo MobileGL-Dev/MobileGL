@@ -292,7 +292,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     // P4a (D-F3, [correction]). THE RAW-DEPTH-FETCH SUBSTITUTION STAYS ON THE SERVER, and it
-    // keeps constructing a frontend SamplerObject inside MG_Backend to do it. That is
+    // keeps constructing a frontend SamplerObject inside MG_Backend on MONOLITH to do it. That is
     // deliberate and it is not this phase's to change: ARCHITECTURE.md assigns the two
     // backend-specific post-processings of the resolved sampler set - this one and Magma's
     // feedback-loop detection - to the server, acting ON the already-resolved set, and the
@@ -305,6 +305,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // MG_State-type usage anywhere under MG_Backend/DirectGLES, and its owner is P3b/P4b - so
     // the include-graph gate at P13 meets a known item rather than a surprise. The purity
     // gates are unaffected either way: they grep MG_Backend for the pull arm's live-GLContext
+    // P5f fs's transport arm below uses only a native sampler with fixed values. The legacy
+    // pair is not constructed or consulted by the server. The purity gate's live-context
     // pointer token (G13 - deliberately not spelled here, because that grep is a BARE TOKEN
     // grep and a comment naming it is a hit) and for an MG_State type inside
     // MGPipeResourceOps, and this is neither.

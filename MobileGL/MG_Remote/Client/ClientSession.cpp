@@ -19,6 +19,7 @@
 #include "WireTables.h"
 
 #include <MGGitHash.h>
+#include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Pipe/MGPipeCallbacks.h>
@@ -116,6 +117,10 @@ namespace MobileGL::MG_Remote::Client {
         // thread inside the applier" - see ClientSession::InBarrierWait's note.
         thread_local Bool g_inBarrierWait = false;
         std::atomic<Bool> g_applyThreadInsideApplier{false};
+        // A split client cannot observe a server's process-local diagnostic. The
+        // role-local value remains useful to the applier itself; ordering between
+        // roles is carried by the ring watermarks, not by this instrumentation.
+        thread_local Bool g_roleInsideApplier = false;
 
         struct BarrierWaitScope {
             BarrierWaitScope() { g_inBarrierWait = true; }
@@ -1280,10 +1285,11 @@ namespace MobileGL::MG_Remote::Client {
     // THE CLIENT'S FLAG IS THREAD-LOCAL AND THE SERVER'S IS NOT, and the asymmetry is the
     // point: "am I inside a barrier wait" is a question about the calling thread, while "is the
     // apply thread inside the applier" is a question the GL thread asks about a DIFFERENT
-    // thread - so the second has to be a shared atomic and the first must not be, or a second
-    // GL thread would see the first one's wait as its own.
+    // thread in the shared-block control. Under role split each thread instead observes only
+    // its own diagnostic; the client writes a different block and waits through appliedSeq.
     Bool ClientSession::InBarrierWait() { return g_inBarrierWait; }
     Bool ClientSession::ApplyThreadIsInsideApplier() {
+        if (MG_Pipe::MGPipeRoleSplitActive()) return g_roleInsideApplier;
         return g_applyThreadInsideApplier.load(std::memory_order_acquire);
     }
 
@@ -1379,10 +1385,14 @@ namespace MobileGL::MG_Remote::Client {
         std::abort();
     }
     void ClientSession::NoteApplyThreadEnteredApplier() {
-        g_applyThreadInsideApplier.store(true, std::memory_order_release);
+        g_roleInsideApplier = true;
+        if (!MG_Pipe::MGPipeRoleSplitActive())
+            g_applyThreadInsideApplier.store(true, std::memory_order_release);
     }
     void ClientSession::NoteApplyThreadLeftApplier() {
-        g_applyThreadInsideApplier.store(false, std::memory_order_release);
+        g_roleInsideApplier = false;
+        if (!MG_Pipe::MGPipeRoleSplitActive())
+            g_applyThreadInsideApplier.store(false, std::memory_order_release);
     }
 
     Uint32 ClientSession::PumpControlPlane() {

@@ -7,6 +7,9 @@
 #include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_Remote/Client/ClientSession.h>
+#include <thread>
+#include <atomic>
 
 namespace MobileGL::MG_Backend::DirectGLES {
     SamplerImpl::BackendSamplerObject* GetRawDepthFetchSampler();
@@ -147,5 +150,37 @@ TEST(ContextEpochTest, ServerLivenessDoesNotFollowTheClientContextOrAVerbStamp) 
     MG_Pipe::MGPipeServerSetContextLive(previous);
 #else
     GTEST_SKIP() << "server liveness exists only in the disaggregated build";
+#endif
+}
+
+TEST(ContextEpochTest, DualBlockApplierDiagnosticIsRoleLocalWhileSharedControlRemainsArmed) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    DriverScope scope;
+    const Bool previous = MG_Config::Ipc.RoleSplitState;
+    using Session = MG_Remote::Client::ClientSession;
+    const auto observe = [&](Bool split) {
+        MG_Config::Ipc.RoleSplitState = split;
+        std::atomic<Bool> entered{false}, leave{false};
+        Bool serverSawItself = false;
+        std::thread server([&] {
+            Session::NoteApplyThreadEnteredApplier();
+            serverSawItself = Session::ApplyThreadIsInsideApplier();
+            entered.store(true, std::memory_order_release);
+            while (!leave.load(std::memory_order_acquire)) std::this_thread::yield();
+            Session::NoteApplyThreadLeftApplier();
+        });
+        while (!entered.load(std::memory_order_acquire)) std::this_thread::yield();
+        const Bool clientSawServer = Session::ApplyThreadIsInsideApplier();
+        leave.store(true, std::memory_order_release);
+        server.join();
+        EXPECT_TRUE(serverSawItself);
+        EXPECT_EQ(clientSawServer, !split);
+        EXPECT_FALSE(Session::ApplyThreadIsInsideApplier());
+    };
+    observe(false);
+    observe(true);
+    MG_Config::Ipc.RoleSplitState = previous;
+#else
+    GTEST_SKIP() << "role-local observer requires the disaggregated build";
 #endif
 }
