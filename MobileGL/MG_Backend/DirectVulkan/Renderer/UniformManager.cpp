@@ -122,9 +122,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const auto viewHandle = state.BoundSamplerViews[unit].View;
             if (!MG_Pipe::MGPipeHandleIsNull(viewHandle) && viewHandle.Slot < state.SamplerViewCsos.size()) {
                 const auto& view = state.SamplerViewCsos[viewHandle.Slot];
-                if (!view.Live || view.Gen != viewHandle.Gen || view.View.NumLevels <= localLevel)
+                if (!view.Live || view.Gen != viewHandle.Gen || view.View.Texture != handle)
                     WireDescriptorFatal("sampler-view-record");
-                levels = std::min<Uint32>(levels, view.View.NumLevels - localLevel);
+                // Ordinary texture views can encode an unrestricted window with zero
+                // counts; only an actual restriction narrows the resource/parameter range.
+                if (view.View.NumLevels != 0) {
+                    if (view.View.NumLevels <= localLevel) WireDescriptorFatal("sampler-view-level");
+                    levels = std::min<Uint32>(levels, view.View.NumLevels - localLevel);
+                }
+            } else if (!MG_Pipe::MGPipeHandleIsNull(viewHandle)) {
+                WireDescriptorFatal("sampler-view-record");
             }
             levels = std::min(levels, resource->mipLevels - level);
         }
