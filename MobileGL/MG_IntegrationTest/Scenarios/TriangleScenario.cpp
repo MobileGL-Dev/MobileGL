@@ -381,12 +381,8 @@ void main() { oColor = vec4(vColor, 1.0); }
                "a green strict lane containing only entries like this one would mean the knob "
                "was never armed rather than that the debt was paid (ID-115): "
             << window.line;
-        EXPECT_TRUE(residual == 0 || residual >= draws)
-            << "rsp neither scales with draws nor is zero (" << residual << " vs " << draws
-            << "). ID-119: while this phase's draw-path debt is unretired every draw pulls at "
-               "least one BARRIER-PULLED row, and the retirement is visible as rsp ceasing to "
-               "scale with draws - a value strictly between is neither state: "
-            << window.line;
+        EXPECT_EQ(residual, 0)
+            << "P5f exit: a drawing frame still reads client residual state: " << window.line;
     }
 
 } // namespace MGITest

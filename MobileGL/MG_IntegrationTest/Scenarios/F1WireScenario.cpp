@@ -1,6 +1,8 @@
 // f1 split-only pixel controls: every result depends on the migrated verb.
 #include "../Harness/ScenarioFixture.h"
 #include "../Harness/SplitRuntimePeek.h"
+#include "../Harness/PipeStatsWindow.h"
+#include "../Harness/SplitLane.h"
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -91,6 +93,61 @@ protected:
         ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE)) << "F1.setup.framebuffer";
     }
 };
+}
+
+// P5f exit: each published frame must have a real draw and server stamp, and
+// zero residual reads. Missing instrumentation is a failure rather than a false zero.
+TEST_F(F1WireScenario, EachWireFrameHasZeroResidualPulls) {
+    if (!Ready()) return;
+    if (!SplitLane::MarkerIsOne("MGITEST_P5F_RSP_LANE"))
+        GTEST_SKIP() << "requires the dedicated per-frame stats lane";
+    ASSERT_FALSE(PipeStatsWindow::LibraryLogPath().empty());
+    Attach(GL_RGBA8);
+    const char* fragment = R"(#version 430 core
+uniform float value;
+layout(location=0) out vec4 color;
+void main() { color = vec4(value, 0.25, 0.75, 1.0); }
+)";
+    const GLuint program = BuildWireProgram({{GL_VERTEX_SHADER, kWireVertexIdTriangle},
+                                             {GL_FRAGMENT_SHADER, fragment}});
+    ASSERT_NE(program, 0u);
+    GLuint vao = 0;
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+    glUseProgram(program);
+    const GLint location = glGetUniformLocation(program, "value");
+    ASSERT_GE(location, 0);
+    glViewport(0, 0, 8, 8);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_RASTERIZER_DISCARD);
+    Gl().EndFrame(); // close setup's counter window
+    for (int frame = 0; frame < 3; ++frame) {
+        const float value = float(frame + 1) / 4.0f;
+        glUniform1f(location, value);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        std::array<GLubyte, 4> pixel{};
+        glReadPixels(3, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+        EXPECT_NEAR(pixel[0], value * 255.0f, 1) << "frame " << frame;
+        EXPECT_NEAR(pixel[1], 64, 1);
+        EXPECT_NEAR(pixel[2], 191, 1);
+        EXPECT_EQ(pixel[3], 255);
+        Gl().EndFrame();
+        const auto window = PipeStatsWindow::LastFromLaneLog();
+        ASSERT_TRUE(window.found) << "P5f rsp window missing on frame " << frame;
+        EXPECT_GT(PipeStatsWindow::CounterOrAbsent(window, "draws"), 0) << window.line;
+        EXPECT_GT(PipeStatsWindow::CounterOrAbsent(window, "vbs"), 0) << window.line;
+        EXPECT_EQ(PipeStatsWindow::CounterOrAbsent(window, "rsp"), 0)
+            << "P5f residual pull on frame " << frame << ": " << window.line;
+        RecordProperty("p5f_frame_" + std::to_string(frame), window.line);
+    }
+    glUseProgram(0);
+    glBindVertexArray(0);
+    glDeleteVertexArrays(1, &vao);
+    glDeleteProgram(program);
 }
 
 TEST_F(F1WireScenario, ClearBufferfvPixels) {

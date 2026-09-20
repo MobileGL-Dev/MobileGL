@@ -2576,3 +2576,28 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             ENVIRONMENT "${MGL_ITEST_GLES_DUALBLOCK_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/split-logs/DirectGLES.Split.DualBlock.TheTwoRolesHaveDistinctBlocks.log"
     )
 endif()
+
+# P5f exit: observe every one of three real drawing frames on both backend roles.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    foreach(backend DirectGLES DirectVulkan)
+        if (backend STREQUAL "DirectGLES")
+            set(p5f_rsp_label "integration-split")
+        else()
+            set(p5f_rsp_label "integration-magma-split")
+        endif()
+        mgl_itest_join_environment(p5f_rsp_environment
+            "MOBILEGL_BACKEND_TYPE=${backend}" "MOBILEGL_TRANSPORT=inproc"
+            "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
+            "MGITEST_P5F_RSP_LANE=1" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+            "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-rsp-${backend}.log"
+            ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "${backend}.Split.P5fRsp."
+            TEST_FILTER "F1WireScenario.EachWireFrameHasZeroResidualPulls"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "${p5f_rsp_label}\;integration-p5f-rsp"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                RESOURCE_LOCK "p5f-rsp-${backend}.log"
+                ENVIRONMENT "${p5f_rsp_environment}")
+    endforeach()
+endif()
