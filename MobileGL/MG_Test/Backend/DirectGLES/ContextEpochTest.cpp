@@ -27,6 +27,7 @@ namespace {
     void GL_APIENTRY BindXfb(GLenum, GLuint id) { boundXfb = id; }
     void GL_APIENTRY NoArgs() {}
     void GL_APIENTRY BeginXfb(GLenum) {}
+    void GL_APIENTRY XfbVaryings(GLuint, GLsizei, const GLchar* const*, GLenum) {}
     struct DriverScope {
         MG_External::GLESFunctionsTable Functions = g_GLESFuncs;
         MG_Config::TransportMode Transport = MG_Config::Transport;
@@ -44,6 +45,7 @@ namespace {
             g_GLESFuncs.glResumeTransformFeedback = &NoArgs;
             g_GLESFuncs.glBeginTransformFeedback = &BeginXfb;
             g_GLESFuncs.glEndTransformFeedback = &NoArgs;
+            g_GLESFuncs.glTransformFeedbackVaryings = &XfbVaryings;
         }
         ~DriverScope() {
             XfbImpl::OnBackendContextDestroyed();
