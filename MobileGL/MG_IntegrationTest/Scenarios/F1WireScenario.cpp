@@ -146,6 +146,33 @@ TEST_F(F1WireScenario, TextureReadbackLargerThanAReplySlotContainsGpuWrites) {
     }
 }
 
+TEST_F(F1WireScenario, TextureReadbackRejectsPackedDestinationOverflowBeforeWriting) {
+    if (!Ready()) return;
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 1, 1);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    glClearColor(1, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 1);
+    std::array<GLubyte, 8> actual{1, 2, 3, 4, 5, 6, 7, 8};
+    const auto sentinel = actual;
+    glGetTextureImage(texture, 0, GL_RGBA, GL_UNSIGNED_BYTE, 4, actual.data());
+    EXPECT_EQ(glGetError(), GLenum(GL_INVALID_OPERATION));
+    EXPECT_EQ(actual, sentinel);
+    GLuint pbo = 0;
+    glGenBuffers(1, &pbo);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
+    glBufferData(GL_PIXEL_PACK_BUFFER, 4, actual.data(), GL_DYNAMIC_READ);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(glGetError(), GLenum(GL_INVALID_OPERATION));
+    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(glGetError(), GLenum(GL_INVALID_OPERATION));
+    glGetBufferSubData(GL_PIXEL_PACK_BUFFER, 0, 4, actual.data());
+    EXPECT_EQ(actual, sentinel);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    glDeleteBuffers(1, &pbo);
+}
+
 TEST_F(F1WireScenario, TextureAndFramebufferReadsPreservePackBufferPadding) {
     if (!Ready()) return;
     Attach(GL_RGBA8);
