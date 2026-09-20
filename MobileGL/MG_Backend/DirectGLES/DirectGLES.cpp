@@ -1657,10 +1657,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
                         if (MG_Config::Transport == MG_Config::TransportMode::Monolith)
 #endif
-    #if MOBILEGL_BUILD_DISAGGREGATED
-                    if (MG_Config::Transport == MG_Config::TransportMode::Monolith)
-#endif
-                    if (!target.buffer) continue;
+                        if (!target.buffer) continue;
 #if MOBILEGL_BUILD_DISAGGREGATED
                         // P5c: under an active transport the frontend object is client
                         // memory (rule E), so the persistence question is the server

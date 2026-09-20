@@ -1194,6 +1194,9 @@ TEST_F(PipeWireCodecTest, TheFourStreamOutputSpanRowsReachTheSink) {
     Wire2 wire;
     MGPStreamOutputBegin begin{};
     begin.PrimitiveMode = 4;
+    begin.CaptureProgram = MakeHandle(95);
+    begin.LifetimeId = 0x100000002ull;
+    begin.Targets[3] = {MakeHandle(96), 0x100000010ull, 64};
     MGPStreamOutputControl control{};
     MGPXfbAccounting end{};
     end.CapturedVertices = 300;
@@ -1210,6 +1213,11 @@ TEST_F(PipeWireCodecTest, TheFourStreamOutputSpanRowsReachTheSink) {
     }
     ASSERT_EQ(wire.Sink().Begins.size(), 1u);
     EXPECT_EQ(wire.Sink().Begins[0].PrimitiveMode, 4u);
+    EXPECT_EQ(wire.Sink().Begins[0].CaptureProgram, MakeHandle(95));
+    EXPECT_EQ(wire.Sink().Begins[0].LifetimeId, 0x100000002ull);
+    EXPECT_EQ(wire.Sink().Begins[0].Targets[3].Res, MakeHandle(96));
+    EXPECT_EQ(wire.Sink().Begins[0].Targets[3].Offset, 0x100000010ull);
+    EXPECT_EQ(wire.Sink().Begins[0].Targets[3].Size, 64u);
     EXPECT_EQ(wire.Sink().Pauses, 1u);
     EXPECT_EQ(wire.Sink().Resumes, 1u);
     ASSERT_EQ(wire.Sink().Ends.size(), 1u);

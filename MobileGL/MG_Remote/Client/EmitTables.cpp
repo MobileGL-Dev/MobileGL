@@ -1428,7 +1428,7 @@ namespace MobileGL::MG_Remote::Client {
                 const auto range = point.GetRange();
                 const SizeT start = std::min(range.start, buffer->GetSize());
                 const SizeT end = std::min(range.end, buffer->GetSize());
-                record.Targets[i] = {MG_Pipe::MGPipeBufferResources().Find(*buffer), start,
+                record.Targets[i] = {MG_Pipe::MGPipeResourceTrackerInstance().Find(*buffer), start,
                                      end > start ? end - start : 0};
             }
             session.EmitAndWait(MG_Pipe::MGPWireOp::BeginStreamOutput, &record, sizeof(record),

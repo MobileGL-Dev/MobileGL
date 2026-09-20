@@ -3214,10 +3214,6 @@ namespace MobileGL::MG_Pipe {
         // bind_render_state's precedent for the same question.
         if (MGPipeHandleIsNull(handle.Handle)) {
             g_applier.BoundShaderCso = kMGPipeNullHandle;
-#if MOBILEGL_BUILD_DISAGGREGATED
-        g_applier.BoundStreamOutputLifetimeId = 0;
-        g_applier.StreamOutputSpans.clear();
-#endif
             ++g_applier.ProgramBindingSerial;
             return;
         }
@@ -3250,10 +3246,6 @@ namespace MobileGL::MG_Pipe {
         Bool cleared = false;
         if (g_applier.BoundShaderCso == handle.Handle) {
             g_applier.BoundShaderCso = kMGPipeNullHandle;
-#if MOBILEGL_BUILD_DISAGGREGATED
-        g_applier.BoundStreamOutputLifetimeId = 0;
-        g_applier.StreamOutputSpans.clear();
-#endif
             cleared = true;
         }
         if (g_applier.DrawProgram == handle.Handle) {
