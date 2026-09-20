@@ -1249,6 +1249,9 @@ namespace MobileGL::MG_Pipe {
                 static_cast<Uint32>(MGPipeResourceTargetForTextureTarget(texture->GetTarget())),
                 static_cast<Uint32>(uploadTarget));
             m_lastSubData.Level = static_cast<Uint16>(level);
+            m_lastSubData.LevelWidth = static_cast<Uint32>(levelSize.x());
+            m_lastSubData.LevelHeight = static_cast<Uint32>(levelSize.y());
+            m_lastSubData.LevelDepth = static_cast<Uint32>(levelSize.z());
             // ALWAYS 1 ON THE CLIENT SIDE. The conversion fallbacks (the packed-norm, widened
             // and fallback upload preparers) are the server's and run there, so the bytes this
             // record declares ARE the level shadow. The server clears the flag internally when

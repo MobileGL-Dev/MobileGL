@@ -2040,6 +2040,15 @@ namespace MobileGL::MG_Remote::Wire {
         // ---- transfer ---------------------------------------------------------------------
         case MGPWireOp::ResourceSubData: {
             const auto& rec = *static_cast<const MGPSubData*>(payload);
+            const Bool hasExtent = rec.LevelWidth || rec.LevelHeight || rec.LevelDepth;
+            if (hasExtent && (rec.Target == kMGPipeResourceTargetBuffer || !rec.LevelWidth ||
+                    !rec.LevelHeight || !rec.LevelDepth || rec.LevelWidth > 0x7fffffffu ||
+                    rec.LevelHeight > 0x7fffffffu || rec.LevelDepth > 0x7fffffffu ||
+                    rec.UnionBox.X < 0 || rec.UnionBox.Y < 0 || rec.UnionBox.Z < 0 ||
+                    Uint64(rec.UnionBox.X) + rec.UnionBox.W > rec.LevelWidth ||
+                    Uint64(rec.UnionBox.Y) + rec.UnionBox.H > rec.LevelHeight ||
+                    Uint64(rec.UnionBox.Z) + rec.UnionBox.D > rec.LevelDepth))
+                WireProtocolFatal("ResourceSubData.LevelExtent", "invalid full image extent or dirty box");
             // Rule A arms both halves. The buffer half already declared a real size in
             // monolith and is cross-checked at PipeApply.cpp:702; THE TEXTURE HALF DECLARED 0
             // (TextureEmit.h:1265-1267, on the grounds that the byte count was "the server's

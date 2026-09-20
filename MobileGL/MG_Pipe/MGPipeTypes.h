@@ -1290,8 +1290,11 @@ namespace MobileGL::MG_Pipe {
         Uint32 RegionCount; // MGPSubRegion[] in the variable tail
         Uint32 Pad1;
         MGPBlobRef Blob;
+        // Mutable GL images may define a lone mip or a noncanonical mip size.
+        // The dirty box describes changed texels, not the full staged image.
+        Uint32 LevelWidth, LevelHeight, LevelDepth, LevelPad;
     };
-    MGP_ASSERT_POD(MGPSubData, 72);
+    MGP_ASSERT_POD(MGPSubData, 88);
 
     // The one spelling of MGPSubData::Target's encoding, stated above the struct.
     //
