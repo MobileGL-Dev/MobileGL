@@ -525,6 +525,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<VkRenderPass> renderPasses;
             Vector<VkImageView> imageViews;
             Vector<VkDescriptorPool> descriptorPools;
+            // Transfer/resolve scratch storage belongs to the submission that
+            // consumes it, just like the views and framebuffer above.
+            Vector<UniquePtr<VkTextureManager::TextureResource>> textures;
         };
         void RetireWireObjects(WireRetiredObjects objects);
         void CollectWireObjects(Uint64 completedSubmit, Bool all = false);

@@ -314,6 +314,87 @@
             WireImage destination = ResolveWireImage(*draw,dst,aspect);
             if (!source.image || !destination.image) return;
             m_textureManager->FlushPendingUploads();
+            if (aspect == VK_IMAGE_ASPECT_COLOR_BIT && source.samples != VK_SAMPLE_COUNT_1_BIT &&
+                destination.samples == VK_SAMPLE_COUNT_1_BIT) {
+                // A resolve cannot flip axes or convert RGBA to a BGRA/default
+                // attachment. Resolve into the source format first, then use
+                // the existing single-sample blit for those GL semantics.
+                const Int64 width = std::abs(static_cast<Int64>(sx1) - sx0);
+                const Int64 height = std::abs(static_cast<Int64>(sy1) - sy0);
+                if (!width || !height) return;
+                if (source.isDefault || source.is3D || width != std::abs(static_cast<Int64>(dx1) - dx0) ||
+                    height != std::abs(static_cast<Int64>(dy1) - dy0) ||
+                    std::min(sx0, sx1) < 0 || std::min(sy0, sy1) < 0 ||
+                    static_cast<Uint64>(std::max(sx0, sx1)) > source.extent.width ||
+                    static_cast<Uint64>(std::max(sy0, sy1)) > source.extent.height)
+                    MagmaWireFatal("multisample-resolve-region");
+                auto scratch = MakeUnique<VkTextureManager::TextureResource>();
+                VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+                info.imageType = VK_IMAGE_TYPE_2D;
+                info.format = source.format;
+                info.extent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
+                info.mipLevels = info.arrayLayers = 1;
+                info.samples = VK_SAMPLE_COUNT_1_BIT;
+                info.tiling = VK_IMAGE_TILING_OPTIMAL;
+                info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+                info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+                VmaAllocationCreateInfo allocation{};
+                allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+                allocation.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+                if (vmaCreateImage(m_allocator, &info, &allocation, &scratch->image, &scratch->allocation, nullptr) != VK_SUCCESS)
+                    MagmaWireFatal("multisample-resolve-allocation");
+                scratch->format = source.format;
+                scratch->extent = {info.extent.width, info.extent.height};
+                scratch->mipLevels = scratch->arrayLayers = scratch->depth = 1;
+                scratch->aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+                WireImage resolved{};
+                resolved.image = scratch->image;
+                resolved.format = scratch->format;
+                resolved.extent = scratch->extent;
+                resolved.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+                resolved.trackedLayout = &scratch->layout;
+                TransitionWireImage(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                TransitionWireImage(resolved, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                VkImageResolve resolve{};
+                resolve.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, source.level, source.layer, 1};
+                resolve.srcOffset = {std::min(sx0, sx1), std::min(sy0, sy1), 0};
+                resolve.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                resolve.extent = info.extent;
+                vkCmdResolveImage(m_frameContext.GetCurrent().commandBuffer, source.image,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, resolved.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &resolve);
+                const GLint rx0 = sx1 > sx0 ? 0 : static_cast<GLint>(width);
+                const GLint rx1 = sx1 > sx0 ? static_cast<GLint>(width) : 0;
+                const GLint ry0 = sy1 > sy0 ? 0 : static_cast<GLint>(height);
+                const GLint ry1 = sy1 > sy0 ? static_cast<GLint>(height) : 0;
+                if (destination.isDefault) {
+                    if (!BlitWireColorToDefault(resolved, destination, rx0, ry0, rx1, ry1,
+                                                dx0, dy0, dx1, dy1, filter))
+                        MagmaWireFatal("multisample-default-blit");
+                    m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired, true);
+                } else {
+                    TransitionWireImage(resolved, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                    TransitionWireImage(destination, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                    VkImageBlit copy{};
+                    copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    copy.srcOffsets[0] = {rx0, ry0, 0}; copy.srcOffsets[1] = {rx1, ry1, 1};
+                    copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, destination.level,
+                        destination.is3D ? 0u : destination.layer, 1};
+                    const Int32 z = destination.is3D ? static_cast<Int32>(destination.layer) : 0;
+                    copy.dstOffsets[0] = {dx0, dy0, z}; copy.dstOffsets[1] = {dx1, dy1, z + 1};
+                    vkCmdBlitImage(m_frameContext.GetCurrent().commandBuffer, resolved.image,
+                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        1, &copy, filter == GL_LINEAR ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+                    if (dst.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
+                        m_textureManager->MarkWireTextureGpuWritten(destination.storage, destination.level, destination.layer, 1);
+                }
+                // The shader blit's views were retired first. Keep their backing
+                // image until the same submit completes; resizing a shared
+                // scratch image here would destroy an older queued resolve.
+                WireRetiredObjects retired{};
+                retired.textures.push_back(Move(scratch));
+                RetireWireObjects(Move(retired));
+                return;
+            }
             // GL names logical window coordinates. Android's native swapchain may
             // be quarter-turned (e.g. logical 2620x1280 over an image 1280x2620).
             // An axis-aligned vkCmdBlitImage cannot express that rotation; issuing
