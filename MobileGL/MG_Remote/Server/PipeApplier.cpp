@@ -850,9 +850,8 @@ namespace MobileGL::MG_Remote::Server {
             ServerUnmigratedVerbFatal("CopyImageSubData+RENDERBUFFER");
         }
 
-        // THE TWO ENDPOINTS ARE REBUILT FROM THE GL NAMES, through the BARRIER-PULLED sticky
-        // forward GetTextureObject(name) - `rsp` counts every one of these and P7 is what
-        // retires them by making the backend take the handles that travel beside the names.
+        // P5f fe: both texture identities already travel in the record. Pass those handles
+        // to the backend's server-owned texture table; GL names are diagnostic data only.
         MG_Backend::CopyImageEndpoint src{};
         MG_Backend::CopyImageEndpoint dst{};
         src.TextureHandle = copy.Src;
@@ -918,9 +917,8 @@ namespace MobileGL::MG_Remote::Server {
         // application's block INDEX. `name` points into the decoder's bounded local and is
         // valid for this call only (rule C); the backend slot copies what it needs.
         //
-        // Both backends resolve the PROGRAM through the barrier-pulled GetProgramObject(GlName)
-        // / TryGetDirectVulkanProgram - `rsp` again, retired by P9. ShaderCso travels beside the
-        // name for the phase that dispatches on it.
+        // P5f fe: publish the record's program handle for the backend consumer. Espryt
+        // resolves its server twin directly; Magma's consumer is the fm package's seam.
         MG_Pipe::MGPipeApplier().ClearVerbHandles();
         MG_Pipe::MGPipeApplier().VerbStorageBlockProgram = binding.ShaderCso;
         table->GL.ShaderStorageBlockBinding(static_cast<GLuint>(binding.GlName), name,
@@ -1015,10 +1013,8 @@ namespace MobileGL::MG_Remote::Server {
         // objects by the GL name (XfbImpl::g_xfbObjects[name], DirectGLES.cpp:1401) and creates
         // the ES object on first bind; passing the lifetime id would index a map that has never
         // heard of it and silently create a second driver object per bind. The lifetime id
-        // travels as the identity P7/P9 will dispatch on once the XFB namespace has a wire
-        // lifetime of its own - it has no reader on this side today, and pretending otherwise
-        // by folding it into the key is exactly the "a GL name is never an identity" confusion
-        // the contract's GlName row is written against.
+        // identifies the P5f capture snapshot on this side. Keeping it separate preserves
+        // the backend GL-name argument while Begin/End find the right server-owned span.
         MG_Pipe::MGPipeApplier().BoundStreamOutputLifetimeId = bind.LifetimeId;
         table->GL.BindTransformFeedback(static_cast<GLuint>(bind.GlName));
         ++m_streamOutputBinds;
