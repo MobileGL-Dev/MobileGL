@@ -38,7 +38,8 @@
 
 namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
-    // read_pixels writes the server reply scratch; client-side scatter owns any PBO.
+    // read_pixels writes server reply scratch. The client refuses PACK_BUFFER before
+    // emission, so no frontend pack binding can affect this destination.
     static const SharedPtr<MG_State::GLState::BufferObject>& SplitReadbackPackBuffer() {
         static const SharedPtr<MG_State::GLState::BufferObject> none;
         return none;
