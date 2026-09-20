@@ -3411,6 +3411,10 @@ void main() {
                 acquireResult = VK_SUCCESS;
             }
             VK_VERIFY(acquireResult, "Initialize, WaitAndAcquireNextImage");
+            // The first acquired image is the one the opening frame renders into, so the
+            // default framebuffer addresses it from the start (see
+            // m_defaultFramebufferImageIndex).
+            m_defaultFramebufferImageIndex = m_imageIndexAcquired;
         } else {
             MGLOG_W("DirectVulkan: no swapchain at initialization (zero-area window); deferring first acquire");
         }
@@ -7324,8 +7328,8 @@ void main() {
         const Bool drawUsesDepthStencil =
             MGB_CTX->IsCapabilityEnabled(CapabilityInput::DepthTest) ||
             MGB_CTX->IsCapabilityEnabled(CapabilityInput::StencilTest);
-        auto* renderPassEntry =
-            m_renderPassManager->GetOrCreateRenderPass(*drawFbo, m_imageIndexAcquired, drawUsesDepthStencil);
+        auto* renderPassEntry = m_renderPassManager->GetOrCreateRenderPass(
+            *drawFbo, DefaultFramebufferWriteIndex(drawFbo->IsDefaultFramebuffer()), drawUsesDepthStencil);
         // nullptr: the framebuffer has an attachment DirectVulkan cannot represent (a texture the
         // texture manager declined to back, or a view it could not build). The builder logged which
         // one; drop the draw here, exactly as an unresolvable sampler descriptor drops one in
@@ -7337,8 +7341,8 @@ void main() {
         if (activeRenderPass && !activeRenderPass->CompatibleWith(*renderPassEntry)) {
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
             activeRenderPass = nullptr;
-            renderPassEntry =
-                m_renderPassManager->GetOrCreateRenderPass(*drawFbo, m_imageIndexAcquired, drawUsesDepthStencil);
+            renderPassEntry = m_renderPassManager->GetOrCreateRenderPass(
+                *drawFbo, DefaultFramebufferWriteIndex(drawFbo->IsDefaultFramebuffer()), drawUsesDepthStencil);
             if (renderPassEntry == nullptr) {
                 return false;
             }
@@ -7710,7 +7714,8 @@ void main() {
         }
 
         auto* activeRenderPass = VkRenderPassManager::GetActiveRenderPass();
-        auto* renderPassEntry = m_renderPassManager->GetOrCreateRenderPass(framebuffer, m_imageIndexAcquired);
+        auto* renderPassEntry = m_renderPassManager->GetOrCreateRenderPass(
+            framebuffer, DefaultFramebufferWriteIndex(framebuffer.IsDefaultFramebuffer()));
         // A declined render pass is the same answer as an empty one for a clear: there is nothing
         // attached that can be cleared inside a pass. The builder has already logged the reason.
         if (renderPassEntry == nullptr || renderPassEntry->attachmentCount == 0 ||
@@ -7743,7 +7748,8 @@ void main() {
             activeRenderPass = nullptr;
             // Re-resolve: ending the pass updates tracked attachment layouts, which feed the
             // entry's load ops and initial layouts.
-            renderPassEntry = m_renderPassManager->GetOrCreateRenderPass(framebuffer, m_imageIndexAcquired);
+            renderPassEntry = m_renderPassManager->GetOrCreateRenderPass(
+                framebuffer, DefaultFramebufferWriteIndex(framebuffer.IsDefaultFramebuffer()));
             if (renderPassEntry == nullptr) {
                 return ScissoredClearPrep::NoOp;
             }
@@ -8825,7 +8831,10 @@ void main() {
     Bool VulkanRenderer::MaterializePendingDepthStencilClearForDefaultFramebuffer(
         VkCommandBuffer commandBuffer, const MG_State::GLState::FramebufferAttachmentObject& attachment,
         const ClearAttachmentPayload& payload) {
-        const VkImage depthStencilImage = m_swapchainObject.GetDepthStencilImage(m_imageIndexAcquired);
+        // The image the readback that triggered this materialization resolves; a parked clear
+        // must land where the read looks (see m_defaultFramebufferImageIndex).
+        const Uint32 swapchainImageIndex = DefaultFramebufferReadIndex(true);
+        const VkImage depthStencilImage = m_swapchainObject.GetDepthStencilImage(swapchainImageIndex);
         if (depthStencilImage == VK_NULL_HANDLE) {
             return false;
         }
@@ -8841,7 +8850,7 @@ void main() {
             return true;
         }
 
-        VkImageLayout currentLayout = m_swapchainObject.GetDepthStencilImageLayout(m_imageIndexAcquired);
+        VkImageLayout currentLayout = m_swapchainObject.GetDepthStencilImageLayout(swapchainImageIndex);
         VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcAccessMask = 0;
         GetImageTransitionSourceState(currentLayout, srcStageMask, srcAccessMask);
@@ -8876,16 +8885,16 @@ void main() {
                                                      VK_ACCESS_TRANSFER_WRITE_BIT, dstAccessMask, imageAspects)) {
             return false;
         }
-        m_swapchainObject.SetDepthStencilImageLayout(m_imageIndexAcquired,
+        m_swapchainObject.SetDepthStencilImageLayout(swapchainImageIndex,
                                                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
         // The image now holds real values, so the next render pass must LOAD them rather than
         // treat the attachment as undefined and discard the clear that just executed.
-        m_swapchainObject.SetDepthStencilContentDefined(m_imageIndexAcquired, true);
+        m_swapchainObject.SetDepthStencilContentDefined(swapchainImageIndex, true);
 
         m_clearManager->PopPendingClear(attachment);
         MGLOG_D("MaterializePendingClearForDefaultFramebuffer: swapchain depth/stencil image %u pending clear "
                 "materialized (aspects=0x%x)",
-                m_imageIndexAcquired, static_cast<Uint32>(clearAspects));
+                swapchainImageIndex, static_cast<Uint32>(clearAspects));
         return true;
     }
 
@@ -8920,11 +8929,14 @@ void main() {
             return MaterializePendingDepthStencilClearForDefaultFramebuffer(commandBuffer, attachment, payload);
         }
 
-        const VkImage swapchainImage = m_swapchainObject.GetImage(m_imageIndexAcquired);
+        // Same rule as the depth/stencil twin below: the parked clear has to land on the image
+        // the readback that reaches this resolves.
+        const Uint32 swapchainImageIndex = DefaultFramebufferReadIndex(true);
+        const VkImage swapchainImage = m_swapchainObject.GetImage(swapchainImageIndex);
         if (swapchainImage == VK_NULL_HANDLE) {
             return false;
         }
-        VkImageLayout currentLayout = m_swapchainObject.GetImageLayout(m_imageIndexAcquired);
+        VkImageLayout currentLayout = m_swapchainObject.GetImageLayout(swapchainImageIndex);
         VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcAccessMask = 0;
         GetImageTransitionSourceState(currentLayout, srcStageMask, srcAccessMask);
@@ -8965,13 +8977,13 @@ void main() {
                                                      VK_IMAGE_ASPECT_COLOR_BIT)) {
             return false;
         }
-        m_swapchainObject.SetImageLayout(m_imageIndexAcquired, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        m_swapchainObject.SetImageLayout(swapchainImageIndex, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
         // Popped, not left behind: the clear has executed, so letting the next render pass load
         // it again as a loadOp would erase whatever is drawn between here and there.
         m_clearManager->PopPendingClear(attachment);
         MGLOG_D("MaterializePendingClearForDefaultFramebuffer: swapchain image %u pending clear materialized",
-                m_imageIndexAcquired);
+                swapchainImageIndex);
         return true;
     }
 
@@ -8988,9 +9000,14 @@ void main() {
 
         BlitImageBinding srcBinding{};
         BlitImageBinding dstBinding{};
-        if (!ResolveColorBlitBinding(readFbo, true, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
+        // The source reads the image the app last rendered into, the destination re-points the
+        // default framebuffer at the acquired one - see m_defaultFramebufferImageIndex. The
+        // source resolves first, so a default-FBO source still names the pre-present image.
+        const Uint32 readDefaultImageIndex = DefaultFramebufferReadIndex(readFbo.IsDefaultFramebuffer());
+        const Uint32 drawDefaultImageIndex = DefaultFramebufferWriteIndex(drawIsDefaultFbo);
+        if (!ResolveColorBlitBinding(readFbo, true, readDefaultImageIndex, m_swapchainObject, *m_textureManager,
                                      *m_renderPassManager, srcBinding) ||
-            !ResolveColorBlitBinding(drawFbo, false, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
+            !ResolveColorBlitBinding(drawFbo, false, drawDefaultImageIndex, m_swapchainObject, *m_textureManager,
                                      *m_renderPassManager, dstBinding)) {
             return false;
         }
@@ -9031,7 +9048,7 @@ void main() {
         // A color-only blit never touches depth/stencil: let the default-FBO pass
         // it opens skip the depth attachment (depth-less flavor).
         auto* renderPassEntryPtr =
-            m_renderPassManager->GetOrCreateRenderPass(drawFbo, m_imageIndexAcquired, /*drawUsesDepthStencil=*/false);
+            m_renderPassManager->GetOrCreateRenderPass(drawFbo, drawDefaultImageIndex, /*drawUsesDepthStencil=*/false);
         if (renderPassEntryPtr == nullptr) {
             // Declined (the builder logged which attachment). The caller's contract for `false` is
             // "this blit was not serviced here", which is the honest answer.
@@ -9231,10 +9248,16 @@ void main() {
         for (const VkImageAspectFlagBits depthStencilAspect : depthStencilAspects) {
             BlitImageBinding srcBinding{};
             BlitImageBinding dstBinding{};
-            if (!ResolveFramebufferBlitBinding(*readFbo, true, m_imageIndexAcquired, m_swapchainObject,
+            // A default-FBO source resolves the image the app last rendered into; a default-FBO
+            // destination re-points it at the image Present() acquired (see
+            // m_defaultFramebufferImageIndex). The source's index is taken first, so a blit
+            // whose two sides are both the default framebuffer still names one image.
+            const Uint32 srcImageIndex = DefaultFramebufferReadIndex(readIsDefaultFbo);
+            const Uint32 dstImageIndex = DefaultFramebufferWriteIndex(drawIsDefaultFbo);
+            if (!ResolveFramebufferBlitBinding(*readFbo, true, srcImageIndex, m_swapchainObject,
                                                *m_textureManager, *m_renderPassManager,
                                                depthStencilAspect, srcBinding) ||
-                !ResolveFramebufferBlitBinding(*drawFbo, false, m_imageIndexAcquired, m_swapchainObject,
+                !ResolveFramebufferBlitBinding(*drawFbo, false, dstImageIndex, m_swapchainObject,
                                                *m_textureManager, *m_renderPassManager,
                                                depthStencilAspect, dstBinding)) {
                 // A buffer named in the mask but absent from either framebuffer copies
@@ -9307,7 +9330,7 @@ void main() {
             }
 
             const VkImageLayout srcOriginalLayout = readIsDefaultFbo
-                ? m_swapchainObject.GetDepthStencilImageLayout(m_imageIndexAcquired)
+                ? m_swapchainObject.GetDepthStencilImageLayout(srcImageIndex)
                 : *srcBinding.trackedLayout;
             if (srcOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
                 MGLOG_E_ONCE("BlitFramebuffer skipped: depth source image layout is undefined");
@@ -9315,7 +9338,7 @@ void main() {
             }
 
             const VkImageLayout dstOriginalLayout = drawIsDefaultFbo
-                ? m_swapchainObject.GetDepthStencilImageLayout(m_imageIndexAcquired)
+                ? m_swapchainObject.GetDepthStencilImageLayout(dstImageIndex)
                 : *dstBinding.trackedLayout;
             const VkImageLayout dstRestoreLayout = dstOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED
                 ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
@@ -9355,7 +9378,7 @@ void main() {
                     srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, srcBinding.aspectMask,
                     srcBinding.mipLevel, srcBinding.mipLevelCount);
                 MOBILEGL_ASSERT(ok, "%s: failed to transition swapchain depth source image", __func__);
-                m_swapchainObject.SetDepthStencilImageLayout(m_imageIndexAcquired, srcTrackedLayout);
+                m_swapchainObject.SetDepthStencilImageLayout(srcImageIndex, srcTrackedLayout);
             } else {
                 Bool ok = VkTextureManager::TransitionImageLayout(
                     frame.commandBuffer, srcBinding.image, *srcBinding.trackedLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -9376,7 +9399,7 @@ void main() {
                     dstAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT, dstBinding.aspectMask,
                     dstBinding.mipLevel, dstBinding.mipLevelCount);
                 MOBILEGL_ASSERT(ok, "%s: failed to transition swapchain depth destination image", __func__);
-                m_swapchainObject.SetDepthStencilImageLayout(m_imageIndexAcquired, dstTrackedLayout);
+                m_swapchainObject.SetDepthStencilImageLayout(dstImageIndex, dstTrackedLayout);
             } else {
                 Bool ok = VkTextureManager::TransitionImageLayout(
                     frame.commandBuffer, dstBinding.image, *dstBinding.trackedLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -9446,14 +9469,14 @@ void main() {
             VkAccessFlags srcRestoreAccessMask = 0;
             GetImageTransitionDestinationState(srcOriginalLayout, srcRestoreStageMask, srcRestoreAccessMask);
             if (readIsDefaultFbo) {
-                VkImageLayout srcTrackedLayout = m_swapchainObject.GetDepthStencilImageLayout(m_imageIndexAcquired);
+                VkImageLayout srcTrackedLayout = m_swapchainObject.GetDepthStencilImageLayout(srcImageIndex);
                 Bool ok = VkTextureManager::TransitionImageLayout(
                     frame.commandBuffer, srcBinding.image, srcTrackedLayout, srcOriginalLayout,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, srcRestoreStageMask,
                     VK_ACCESS_TRANSFER_READ_BIT, srcRestoreAccessMask, srcBinding.aspectMask,
                     srcBinding.mipLevel, srcBinding.mipLevelCount);
                 MOBILEGL_ASSERT(ok, "%s: failed to restore swapchain depth source image layout", __func__);
-                m_swapchainObject.SetDepthStencilImageLayout(m_imageIndexAcquired, srcTrackedLayout);
+                m_swapchainObject.SetDepthStencilImageLayout(srcImageIndex, srcTrackedLayout);
             } else {
                 Bool ok = VkTextureManager::TransitionImageLayout(
                     frame.commandBuffer, srcBinding.image, *srcBinding.trackedLayout, srcOriginalLayout,
@@ -9467,14 +9490,14 @@ void main() {
             VkAccessFlags dstRestoreAccessMask = 0;
             GetImageTransitionDestinationState(dstRestoreLayout, dstRestoreStageMask, dstRestoreAccessMask);
             if (drawIsDefaultFbo) {
-                VkImageLayout dstTrackedLayout = m_swapchainObject.GetDepthStencilImageLayout(m_imageIndexAcquired);
+                VkImageLayout dstTrackedLayout = m_swapchainObject.GetDepthStencilImageLayout(dstImageIndex);
                 Bool ok = VkTextureManager::TransitionImageLayout(
                     frame.commandBuffer, dstBinding.image, dstTrackedLayout, dstRestoreLayout,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, dstRestoreStageMask,
                     VK_ACCESS_TRANSFER_WRITE_BIT, dstRestoreAccessMask, dstBinding.aspectMask,
                     dstBinding.mipLevel, dstBinding.mipLevelCount);
                 MOBILEGL_ASSERT(ok, "%s: failed to restore swapchain depth destination image layout", __func__);
-                m_swapchainObject.SetDepthStencilImageLayout(m_imageIndexAcquired, dstTrackedLayout);
+                m_swapchainObject.SetDepthStencilImageLayout(dstImageIndex, dstTrackedLayout);
             } else {
                 Bool ok = VkTextureManager::TransitionImageLayout(
                     frame.commandBuffer, dstBinding.image, *dstBinding.trackedLayout, dstRestoreLayout,
@@ -9490,9 +9513,13 @@ void main() {
 
         BlitImageBinding srcBinding{};
         BlitImageBinding dstBinding{};
-        if (!ResolveColorBlitBinding(*readFbo, true, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
+        // Same split as the depth/stencil loop above, and the same ordering rule: the source's
+        // index is read before the destination's write re-points it.
+        const Uint32 srcImageIndex = DefaultFramebufferReadIndex(readIsDefaultFbo);
+        const Uint32 dstImageIndex = DefaultFramebufferWriteIndex(drawIsDefaultFbo);
+        if (!ResolveColorBlitBinding(*readFbo, true, srcImageIndex, m_swapchainObject, *m_textureManager,
                                      *m_renderPassManager, srcBinding) ||
-            !ResolveColorBlitBinding(*drawFbo, false, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
+            !ResolveColorBlitBinding(*drawFbo, false, dstImageIndex, m_swapchainObject, *m_textureManager,
                                      *m_renderPassManager, dstBinding)) {
             return;
         }
@@ -9546,10 +9573,10 @@ void main() {
         }
 
         VkImageLayout srcLayout = readIsDefaultFbo
-            ? m_swapchainObject.GetImageLayout(m_imageIndexAcquired)
+            ? m_swapchainObject.GetImageLayout(srcImageIndex)
             : *srcBinding.trackedLayout;
         VkImageLayout dstLayout = drawIsDefaultFbo
-            ? m_swapchainObject.GetImageLayout(m_imageIndexAcquired)
+            ? m_swapchainObject.GetImageLayout(dstImageIndex)
             : *dstBinding.trackedLayout;
         const VkImageLayout srcOriginalLayout = srcLayout;
         const VkImageLayout dstOriginalLayout = dstLayout;
@@ -9575,7 +9602,7 @@ void main() {
                 srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, srcBinding.aspectMask);
             MOBILEGL_ASSERT(ok, "%s: failed to transition swapchain source image", __func__);
-            m_swapchainObject.SetImageLayout(m_imageIndexAcquired, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            m_swapchainObject.SetImageLayout(srcImageIndex, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         } else {
             Bool ok = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, srcBinding.image, *srcBinding.trackedLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -9593,7 +9620,7 @@ void main() {
                 dstStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 dstAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT, dstBinding.aspectMask);
             MOBILEGL_ASSERT(ok, "%s: failed to transition swapchain destination image", __func__);
-            m_swapchainObject.SetImageLayout(m_imageIndexAcquired, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            m_swapchainObject.SetImageLayout(dstImageIndex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         } else {
             Bool ok = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, dstBinding.image, *dstBinding.trackedLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -9707,13 +9734,13 @@ void main() {
         VkAccessFlags srcRestoreAccessMask = 0;
         GetImageTransitionDestinationState(srcOriginalLayout, srcRestoreStageMask, srcRestoreAccessMask);
         if (readIsDefaultFbo) {
-            VkImageLayout srcTrackedLayout = m_swapchainObject.GetImageLayout(m_imageIndexAcquired);
+            VkImageLayout srcTrackedLayout = m_swapchainObject.GetImageLayout(srcImageIndex);
             Bool ok = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, srcBinding.image, srcTrackedLayout, srcOriginalLayout,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, srcRestoreStageMask,
                 VK_ACCESS_TRANSFER_READ_BIT, srcRestoreAccessMask, srcBinding.aspectMask);
             MOBILEGL_ASSERT(ok, "%s: failed to restore swapchain source image layout", __func__);
-            m_swapchainObject.SetImageLayout(m_imageIndexAcquired, srcTrackedLayout);
+            m_swapchainObject.SetImageLayout(srcImageIndex, srcTrackedLayout);
         } else {
             Bool ok = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, srcBinding.image, *srcBinding.trackedLayout, srcOriginalLayout,
@@ -9726,13 +9753,13 @@ void main() {
         VkAccessFlags dstRestoreAccessMask = 0;
         GetImageTransitionDestinationState(dstRestoreLayout, dstRestoreStageMask, dstRestoreAccessMask);
         if (drawIsDefaultFbo) {
-            VkImageLayout dstTrackedLayout = m_swapchainObject.GetImageLayout(m_imageIndexAcquired);
+            VkImageLayout dstTrackedLayout = m_swapchainObject.GetImageLayout(dstImageIndex);
             Bool ok = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, dstBinding.image, dstTrackedLayout, dstRestoreLayout,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, dstRestoreStageMask,
                 VK_ACCESS_TRANSFER_WRITE_BIT, dstRestoreAccessMask, dstBinding.aspectMask);
             MOBILEGL_ASSERT(ok, "%s: failed to restore swapchain destination image layout", __func__);
-            m_swapchainObject.SetImageLayout(m_imageIndexAcquired, dstTrackedLayout);
+            m_swapchainObject.SetImageLayout(dstImageIndex, dstTrackedLayout);
         } else {
             Bool ok = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, dstBinding.image, *dstBinding.trackedLayout, dstRestoreLayout,
@@ -9796,6 +9823,10 @@ void main() {
         }
 
         const Bool readIsDefaultFbo = readFbo->IsDefaultFramebuffer();
+        // CopyTexSubImage2D only ever READS the default framebuffer, so it resolves the image
+        // the app last rendered into (see m_defaultFramebufferImageIndex) - never the one
+        // Present() has already acquired for the next frame.
+        const Uint32 srcImageIndex = DefaultFramebufferReadIndex(readIsDefaultFbo);
 
         BlitImageBinding dstBinding{};
         if (!ResolveTextureCopyDestinationBinding(*destinationTexture, static_cast<Uint32>(level), *m_textureManager,
@@ -9806,7 +9837,7 @@ void main() {
         }
 
         BlitImageBinding srcBinding{};
-        if (!ResolveTextureCopySourceBinding(*readFbo, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
+        if (!ResolveTextureCopySourceBinding(*readFbo, srcImageIndex, m_swapchainObject, *m_textureManager,
                                              *m_renderPassManager, dstBinding.aspectMask, srcBinding)) {
             RecordTextureCopyError(__func__, ErrorCode::InvalidOperation,
                                    "CopyTexSubImage2D requires a complete read attachment compatible with the destination texture.");
@@ -9836,8 +9867,8 @@ void main() {
         const Bool srcUsesSwapchainDepth = readIsDefaultFbo && (srcBinding.aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) == 0;
         const VkImageLayout srcOriginalLayout = readIsDefaultFbo
             ? (srcUsesSwapchainDepth
-                ? m_swapchainObject.GetDepthStencilImageLayout(m_imageIndexAcquired)
-                : m_swapchainObject.GetImageLayout(m_imageIndexAcquired))
+                ? m_swapchainObject.GetDepthStencilImageLayout(srcImageIndex)
+                : m_swapchainObject.GetImageLayout(srcImageIndex))
             : *srcBinding.trackedLayout;
         if (srcOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             RecordTextureCopyError(__func__, ErrorCode::InvalidOperation,
@@ -9864,9 +9895,9 @@ void main() {
                 srcBinding.mipLevel, srcBinding.mipLevelCount);
             MOBILEGL_ASSERT(ok, "%s: failed to transition swapchain source image", __func__);
             if (srcUsesSwapchainDepth) {
-                m_swapchainObject.SetDepthStencilImageLayout(m_imageIndexAcquired, srcTrackedLayout);
+                m_swapchainObject.SetDepthStencilImageLayout(srcImageIndex, srcTrackedLayout);
             } else {
-                m_swapchainObject.SetImageLayout(m_imageIndexAcquired, srcTrackedLayout);
+                m_swapchainObject.SetImageLayout(srcImageIndex, srcTrackedLayout);
             }
         } else {
             Bool ok = VkTextureManager::TransitionImageLayout(
@@ -9922,8 +9953,8 @@ void main() {
         GetImageTransitionDestinationState(srcOriginalLayout, srcRestoreStageMask, srcRestoreAccessMask);
         if (readIsDefaultFbo) {
             VkImageLayout srcTrackedLayout = srcUsesSwapchainDepth
-                ? m_swapchainObject.GetDepthStencilImageLayout(m_imageIndexAcquired)
-                : m_swapchainObject.GetImageLayout(m_imageIndexAcquired);
+                ? m_swapchainObject.GetDepthStencilImageLayout(srcImageIndex)
+                : m_swapchainObject.GetImageLayout(srcImageIndex);
             Bool ok = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, srcBinding.image, srcTrackedLayout, srcOriginalLayout,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, srcRestoreStageMask,
@@ -9931,9 +9962,9 @@ void main() {
                 srcBinding.mipLevel, srcBinding.mipLevelCount);
             MOBILEGL_ASSERT(ok, "%s: failed to restore swapchain source image layout", __func__);
             if (srcUsesSwapchainDepth) {
-                m_swapchainObject.SetDepthStencilImageLayout(m_imageIndexAcquired, srcTrackedLayout);
+                m_swapchainObject.SetDepthStencilImageLayout(srcImageIndex, srcTrackedLayout);
             } else {
-                m_swapchainObject.SetImageLayout(m_imageIndexAcquired, srcTrackedLayout);
+                m_swapchainObject.SetImageLayout(srcImageIndex, srcTrackedLayout);
             }
         } else {
             Bool ok = VkTextureManager::TransitionImageLayout(
@@ -10614,13 +10645,26 @@ void main() {
         }
 
         BlitImageBinding srcBinding{};
-        if (!ResolveColorBlitBinding(*readFbo, true, m_imageIndexAcquired, m_swapchainObject, *m_textureManager,
+        // A read resolves the image the app last rendered into, not the one Present() has
+        // already acquired for the frame that is starting (see m_defaultFramebufferImageIndex).
+        // A retrace snapshot taken just before a swap is applied after it, and must still find
+        // the colour the app drew.
+        const Uint32 srcImageIndex = DefaultFramebufferReadIndex(readIsDefaultFbo);
+        if (readIsDefaultFbo && !m_swapchainObject.IsImageContentDefined(srcImageIndex)) {
+            // Named rather than silent: the readback hands back whatever the image holds. The
+            // ordinary cause is a read of the default framebuffer applied after the Present that
+            // consumed it, where the app's own colour is still what is expected.
+            MGLOG_W_ONCE("DirectVulkan::ReadPixels: no write is recorded for swapchain image %u of the "
+                         "default framebuffer; the readback returns its raw pixels",
+                         srcImageIndex);
+        }
+        if (!ResolveColorBlitBinding(*readFbo, true, srcImageIndex, m_swapchainObject, *m_textureManager,
                                      *m_renderPassManager, srcBinding)) {
             return;
         }
 
         const VkImageLayout srcOriginalLayout = readIsDefaultFbo
-            ? m_swapchainObject.GetImageLayout(m_imageIndexAcquired)
+            ? m_swapchainObject.GetImageLayout(srcImageIndex)
             : *srcBinding.trackedLayout;
         if (srcOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             MGLOG_E_ONCE("DirectVulkan::ReadPixels skipped: source image layout is undefined");
@@ -10661,7 +10705,7 @@ void main() {
                 srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, srcBinding.aspectMask);
             MOBILEGL_ASSERT(ok, "%s: failed to transition swapchain source image", __func__);
-            m_swapchainObject.SetImageLayout(m_imageIndexAcquired, trackedLayout);
+            m_swapchainObject.SetImageLayout(srcImageIndex, trackedLayout);
         } else {
             Bool ok = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, srcBinding.image, *srcBinding.trackedLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -10698,13 +10742,13 @@ void main() {
         VkAccessFlags restoreAccessMask = 0;
         GetImageTransitionDestinationState(srcOriginalLayout, restoreStageMask, restoreAccessMask);
         if (readIsDefaultFbo) {
-            VkImageLayout trackedLayout = m_swapchainObject.GetImageLayout(m_imageIndexAcquired);
+            VkImageLayout trackedLayout = m_swapchainObject.GetImageLayout(srcImageIndex);
             Bool ok = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, srcBinding.image, trackedLayout, srcOriginalLayout,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, restoreStageMask,
                 VK_ACCESS_TRANSFER_READ_BIT, restoreAccessMask, srcBinding.aspectMask);
             MOBILEGL_ASSERT(ok, "%s: failed to restore swapchain source image layout", __func__);
-            m_swapchainObject.SetImageLayout(m_imageIndexAcquired, trackedLayout);
+            m_swapchainObject.SetImageLayout(srcImageIndex, trackedLayout);
         } else {
             Bool ok = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, srcBinding.image, *srcBinding.trackedLayout, srcOriginalLayout,
@@ -10967,7 +11011,10 @@ void main() {
         // GL_STENCIL_INDEX) of the default framebuffer leave the caller's buffer untouched -
         // the whole KHR-GL*.framebuffer_blit family checks exactly that before it blits.
         if (readIsDefaultFbo) {
-            const VkImage swapchainDepthImage = m_swapchainObject.GetDepthStencilImage(m_imageIndexAcquired);
+            // A read names the image the app last rendered into, not the one Present() has
+            // already acquired (see m_defaultFramebufferImageIndex).
+            const Uint32 srcImageIndex = DefaultFramebufferReadIndex(true);
+            const VkImage swapchainDepthImage = m_swapchainObject.GetDepthStencilImage(srcImageIndex);
             if (swapchainDepthImage == VK_NULL_HANDLE) {
                 MGLOG_E_ONCE("DirectVulkan::ReadDepthStencilPixels skipped: the default framebuffer has no "
                         "depth/stencil image");
@@ -10991,12 +11038,12 @@ void main() {
                                 "stencil clear");
             }
             const VkFormat swapchainDepthFormat = m_swapchainObject.GetDepthStencilFormat();
-            VkImageLayout trackedLayout = m_swapchainObject.GetDepthStencilImageLayout(m_imageIndexAcquired);
+            VkImageLayout trackedLayout = m_swapchainObject.GetDepthStencilImageLayout(srcImageIndex);
             ReadDepthStencilImageToClient(swapchainDepthImage, swapchainDepthFormat, &trackedLayout,
                                           GetDepthStencilAspectMaskForFormat(swapchainDepthFormat), 0, 0, x, y,
                                           width, height, format, type, pixels,
                                           /*defaultFramebufferOrientation=*/true);
-            m_swapchainObject.SetDepthStencilImageLayout(m_imageIndexAcquired, trackedLayout);
+            m_swapchainObject.SetDepthStencilImageLayout(srcImageIndex, trackedLayout);
             return;
         }
 
@@ -15588,6 +15635,11 @@ void main() {
         ShutdownSwapchain();
 
         CreateSwapchain();
+        // Every image of the fresh swapchain holds garbage, so the default framebuffer restarts
+        // at index 0: the next write into it re-points the GL-visible index at whatever the next
+        // acquire returns (see m_defaultFramebufferImageIndex). Without this the index could name
+        // an image of the swapchain just destroyed.
+        m_defaultFramebufferImageIndex = 0;
         VK_VERIFY(m_frameContext.InitializeSwapchainSemaphores(m_device,
                                                                static_cast<Uint32>(m_swapchainObject.GetImageCount())),
                   "RecreateSwapchain, InitializeSwapchainSemaphores");

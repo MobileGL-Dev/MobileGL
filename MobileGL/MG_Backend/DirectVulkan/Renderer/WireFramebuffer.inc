@@ -8,20 +8,22 @@
 
     VulkanRenderer::WireImage VulkanRenderer::ResolveWireImage(
         const MG_Pipe::MGPFramebufferState& fbo, const MG_Pipe::MGPSurface& surface,
-        VkImageAspectFlags aspect) {
+        VkImageAspectFlags aspect, Bool isWriteTarget) {
         WireImage out{};
         out.aspect = aspect;
         if (fbo.IsDefault) {
             out.isDefault = true;
             out.extent = m_swapchainObject.GetExtent();
+            out.swapchainImageIndex = isWriteTarget ? DefaultFramebufferWriteIndex(true)
+                                                    : DefaultFramebufferReadIndex(true);
             if (aspect == VK_IMAGE_ASPECT_COLOR_BIT) {
-                out.image = m_swapchainObject.GetImage(m_imageIndexAcquired);
+                out.image = m_swapchainObject.GetImage(out.swapchainImageIndex);
                 out.format = m_swapchainObject.GetSurfaceFormat().format;
-                out.layout = m_swapchainObject.GetImageLayout(m_imageIndexAcquired);
+                out.layout = m_swapchainObject.GetImageLayout(out.swapchainImageIndex);
             } else {
-                out.image = m_swapchainObject.GetDepthStencilImage(m_imageIndexAcquired);
+                out.image = m_swapchainObject.GetDepthStencilImage(out.swapchainImageIndex);
                 out.format = m_swapchainObject.GetDepthStencilFormat();
-                out.layout = m_swapchainObject.GetDepthStencilImageLayout(m_imageIndexAcquired);
+                out.layout = m_swapchainObject.GetDepthStencilImageLayout(out.swapchainImageIndex);
             }
             return out;
         }
@@ -91,8 +93,8 @@
         if (image.trackedLayout) *image.trackedLayout = image.layout;
         if (image.isDefault) {
             if (image.aspect == VK_IMAGE_ASPECT_COLOR_BIT)
-                m_swapchainObject.SetImageLayout(m_imageIndexAcquired, image.layout);
-            else m_swapchainObject.SetDepthStencilImageLayout(m_imageIndexAcquired, image.layout);
+                m_swapchainObject.SetImageLayout(image.swapchainImageIndex, image.layout);
+            else m_swapchainObject.SetDepthStencilImageLayout(image.swapchainImageIndex, image.layout);
         }
     }
 
@@ -123,7 +125,7 @@
                 }
             }
             if (!aspect) return;
-            WireImage image = ResolveWireImage(fbo, surface, aspect);
+            WireImage image = ResolveWireImage(fbo, surface, aspect, /*isWriteTarget=*/true);
             if (!image.image) return;
             m_textureManager->FlushPendingUploads();
             VkRect2D area{{0, 0}, image.extent};
@@ -196,8 +198,8 @@
             if (!image.isDefault && surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
                 m_textureManager->MarkWireTextureGpuWritten(image.storage, image.level, image.layer, image.layers);
             if (image.isDefault) {
-                if (color) m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired, true);
-                else m_swapchainObject.SetDepthStencilContentDefined(m_imageIndexAcquired, true);
+                if (color) m_swapchainObject.SetImageContentDefined(image.swapchainImageIndex, true);
+                else m_swapchainObject.SetDepthStencilContentDefined(image.swapchainImageIndex, true);
             }
         };
         if (payload.mask & GL_COLOR_BUFFER_BIT) {
@@ -224,15 +226,25 @@
         if (format == GL_DEPTH_STENCIL) aspect = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
         const auto& surface = (aspect & VK_IMAGE_ASPECT_DEPTH_BIT) ? fbo->Depth :
                               aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? fbo->Stencil : fbo->ReadSurface;
-        WireImage source = ResolveWireImage(*fbo, surface, aspect);
+        WireImage source = ResolveWireImage(*fbo, surface, aspect, /*isWriteTarget=*/false);
         if (!source.image) return;
+        if (source.isDefault && aspect == VK_IMAGE_ASPECT_COLOR_BIT &&
+            !m_swapchainObject.IsImageContentDefined(source.swapchainImageIndex)) {
+            // Named rather than silent: the readback hands back whatever the image holds. The
+            // ordinary cause is a readback of the default framebuffer applied after the Present
+            // that consumed it, where the app's own colour is still what is expected (see
+            // m_defaultFramebufferImageIndex).
+            MGLOG_W_ONCE("DirectVulkan::ReadPixels: no write is recorded for swapchain image %u of the "
+                         "default framebuffer; the readback returns its raw pixels",
+                         source.swapchainImageIndex);
+        }
         m_textureManager->FlushPendingUploads();
         TransitionWireImage(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         if (aspect != VK_IMAGE_ASPECT_COLOR_BIT) {
             ReadDepthStencilImageToClient(source.image,source.format,
                 source.trackedLayout ? source.trackedLayout : &source.layout,aspect,
                 source.level,source.layer,x,y,width,height,format,type,pixels,source.isDefault);
-            if (source.isDefault) m_swapchainObject.SetDepthStencilImageLayout(m_imageIndexAcquired,source.layout);
+            if (source.isDefault) m_swapchainObject.SetDepthStencilImageLayout(source.swapchainImageIndex,source.layout);
             return;
         }
         const SizeT texelSize = aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? 1 : GetReadbackTexelSize(source.format);
@@ -485,8 +497,8 @@
         state.VerbBlitNamedConsumed = named;
         const auto blit = [&](const MG_Pipe::MGPSurface& src, const MG_Pipe::MGPSurface& dst,
                               VkImageAspectFlags aspect) {
-            WireImage source = ResolveWireImage(*read,src,aspect);
-            WireImage destination = ResolveWireImage(*draw,dst,aspect);
+            WireImage source = ResolveWireImage(*read,src,aspect, /*isWriteTarget=*/false);
+            WireImage destination = ResolveWireImage(*draw,dst,aspect, /*isWriteTarget=*/true);
             if (!source.image || !destination.image) return;
             m_textureManager->FlushPendingUploads();
             if (aspect != VK_IMAGE_ASPECT_COLOR_BIT && source.samples != VK_SAMPLE_COUNT_1_BIT &&
@@ -552,7 +564,7 @@
                     if (!BlitWireColorToDefault(resolved, destination, rx0, ry0, rx1, ry1,
                                                 dx0, dy0, dx1, dy1, filter))
                         MagmaWireFatal("multisample-default-blit");
-                    m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired, true);
+                    m_swapchainObject.SetImageContentDefined(destination.swapchainImageIndex, true);
                 } else {
                     TransitionWireImage(resolved, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
                     TransitionWireImage(destination, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -587,7 +599,7 @@
                 if (!BlitWireColorToDefault(source, destination, sx0, sy0, sx1, sy1,
                                             dx0, dy0, dx1, dy1, filter))
                     MagmaWireFatal("default-color-blit-shape@P7");
-                m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired, true);
+                m_swapchainObject.SetImageContentDefined(destination.swapchainImageIndex, true);
                 return;
             }
             const Bool sameImage = source.image == destination.image;
@@ -634,8 +646,8 @@
             if (!destination.isDefault && dst.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
                 m_textureManager->MarkWireTextureGpuWritten(destination.storage, destination.level, destination.layer, destination.layers);
             if (destination.isDefault) {
-                if (aspect == VK_IMAGE_ASPECT_COLOR_BIT) m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired,true);
-                else m_swapchainObject.SetDepthStencilContentDefined(m_imageIndexAcquired,true);
+                if (aspect == VK_IMAGE_ASPECT_COLOR_BIT) m_swapchainObject.SetImageContentDefined(destination.swapchainImageIndex,true);
+                else m_swapchainObject.SetDepthStencilContentDefined(destination.swapchainImageIndex,true);
             }
         };
         if (mask & GL_COLOR_BUFFER_BIT) {
@@ -669,8 +681,9 @@
         surface.Res = state.VerbCopyTexDst;
         surface.Level = static_cast<Uint16>(level);
         WireImage source = ResolveWireImage(*read,aspect & VK_IMAGE_ASPECT_DEPTH_BIT ? read->Depth :
-            aspect & VK_IMAGE_ASPECT_STENCIL_BIT ? read->Stencil : read->ReadSurface,aspect);
-        WireImage destination = ResolveWireImage(fake,surface,aspect);
+            aspect & VK_IMAGE_ASPECT_STENCIL_BIT ? read->Stencil : read->ReadSurface,aspect,
+            /*isWriteTarget=*/false);
+        WireImage destination = ResolveWireImage(fake,surface,aspect, /*isWriteTarget=*/false);
         if (!source.image || !destination.image) return;
         m_textureManager->FlushPendingUploads();
         const Bool sameImage = source.image == destination.image;

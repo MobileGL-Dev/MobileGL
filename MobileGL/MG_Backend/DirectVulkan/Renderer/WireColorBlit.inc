@@ -288,7 +288,7 @@
         retired.imageViews = {sourceView, destinationView};
         retired.descriptorPools.push_back(descriptorPool);
         RetireWireObjects(Move(retired));
-        if (destination.isDefault) m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired, true);
+        if (destination.isDefault) m_swapchainObject.SetImageContentDefined(destination.swapchainImageIndex, true);
         return true;
     }
 #endif

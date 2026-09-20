@@ -152,6 +152,7 @@ add_executable(MobileGLIntegrationTest
     # run the same cases with MOBILEGL_TRANSPORT=inproc.
     Scenarios/TriangleScenario.cpp
     Scenarios/PersistentCoherentMapScenario.cpp
+    Scenarios/DefaultFramebufferAcrossSwapScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE

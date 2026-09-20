@@ -459,11 +459,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkImageAspectFlags aspect = 0;
             Uint32 level = 0, layer = 0, layers = 1, levels = 1;
             Bool isDefault = false;
+            // Set when isDefault: the swapchain image index this role resolved to.
+            Uint32 swapchainImageIndex = 0;
             Bool is3D = false;
             MG_Pipe::MGPipeHandle storage = MG_Pipe::kMGPipeNullHandle;
         };
+        // `isWriteTarget` selects which side of the default framebuffer this resolves: a write
+        // re-points it at the image Present() acquired, a read keeps the current one (see
+        // m_defaultFramebufferImageIndex). Reads must pass false.
         WireImage ResolveWireImage(const MG_Pipe::MGPFramebufferState& fbo,
-                                   const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect);
+                                   const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect,
+                                   Bool isWriteTarget = false);
         void TransitionWireImage(WireImage& image, VkImageLayout layout);
         void ClearWireFramebuffer(const MG_Pipe::MGPFramebufferState& fbo,
                                   const ClearAttachmentPayload& payload, GLint drawbuffer = -1);
@@ -939,7 +945,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkBufferManager m_bufferManager;
 
         Uint m_imageIndexAcquired = 0;
+        // The swapchain image GL addresses as the default framebuffer: the one a readback, a
+        // blit source or a copy out of it resolves, and the one the app last rendered into.
+        // Present() runs ahead - it presents the frame and acquires the next image without
+        // waiting for the apply that would render into it (kWaitPresent) - so this must NOT
+        // follow m_imageIndexAcquired. Before it existed a readback resolved the freshly
+        // acquired image, which nothing had written yet: the pure-black sundial-lite frame.
+        Uint m_defaultFramebufferImageIndex = 0;
         FrameContext m_frameContext;
+
+        // Resolves the swapchain image index a READ of the default framebuffer must use. A
+        // non-default framebuffer ignores the index; it keeps the acquired one, which still
+        // keys its render-pass cache.
+        Uint32 DefaultFramebufferReadIndex(Bool isDefaultFramebuffer) const {
+            return isDefaultFramebuffer ? m_defaultFramebufferImageIndex : m_imageIndexAcquired;
+        }
+
+        // Same for a WRITE: the default framebuffer starts addressing the image Present()
+        // acquired only once something renders into it again.
+        Uint32 DefaultFramebufferWriteIndex(Bool isDefaultFramebuffer) {
+            if (isDefaultFramebuffer) m_defaultFramebufferImageIndex = m_imageIndexAcquired;
+            return DefaultFramebufferReadIndex(isDefaultFramebuffer);
+        }
 
         UniquePtr<PipelineFactory> m_pipelineFactory;
         // Single-slot "last pipeline" memo: skip the per-draw GetOrCreatePipeline work (state

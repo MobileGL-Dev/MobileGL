@@ -352,10 +352,13 @@
         passKey.framebufferSrgb = MGB_CTX->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
         if (fbo->IsDefault) {
             passKey.swapchain = m_swapchainObject.GetHandle();
-            passKey.swapchainImageIndex = m_imageIndexAcquired;
+            // A drawing pass on the default framebuffer is what makes the freshly acquired
+            // swapchain image the one GL addresses (see m_defaultFramebufferImageIndex); the
+            // attachments below resolve the same index, so this key has to be taken after it.
+            passKey.swapchainImageIndex = DefaultFramebufferWriteIndex(true);
         }
         const auto add = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect) -> Uint32 {
-            WireImage image = ResolveWireImage(*fbo, surface, aspect);
+            WireImage image = ResolveWireImage(*fbo, surface, aspect, /*isWriteTarget=*/true);
             if (!image.image) return VK_ATTACHMENT_UNUSED;
             m_textureManager->FlushPendingUploads();
             if (aspect == VK_IMAGE_ASPECT_COLOR_BIT)
@@ -391,8 +394,8 @@
             if (!image.isDefault && surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
                 m_textureManager->MarkWireTextureGpuWritten(image.storage, image.level, image.layer, image.layers);
             if (image.isDefault) {
-                if (aspect == VK_IMAGE_ASPECT_COLOR_BIT) m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired, true);
-                else m_swapchainObject.SetDepthStencilContentDefined(m_imageIndexAcquired, true);
+                if (aspect == VK_IMAGE_ASPECT_COLOR_BIT) m_swapchainObject.SetImageContentDefined(image.swapchainImageIndex, true);
+                else m_swapchainObject.SetDepthStencilContentDefined(image.swapchainImageIndex, true);
             }
             return static_cast<Uint32>(attachments.size() - 1);
         };
