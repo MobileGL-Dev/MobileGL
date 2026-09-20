@@ -2099,7 +2099,13 @@ namespace MobileGL::MG_Pipe {
     }
 
     // ---- liveness ----
-    Bool PipeInputs::IsLive() const { return LiveContext() != nullptr; }
+    Bool PipeInputs::IsLive() const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
+            return MGPipeServerContextIsLive();
+#endif
+        return LiveContext() != nullptr;
+    }
 
     // ---- the seven F-class forwarders ----
     //

@@ -883,6 +883,10 @@ namespace MobileGL::MG_Pipe {
     // unnamed crash where the rehearsal exists to produce a named one. A no-op with the
     // rehearsal off, so the client's per-verb SetIdentity keeps owning the shared block there.
     void MGPipeServerBlockNoteIdentity();
+    // P5f fs: owned by the server's control lifecycle, never inferred from a client
+    // GLContext or resurrected by stamping a verb after teardown.
+    void MGPipeServerSetContextLive(Bool live);
+    Bool MGPipeServerContextIsLive();
 #else
     // The push-without-transport build has one role and one block, so the fill side's spelling
     // folds onto gPipeInputs and PipeFill.cpp reads identically in both build flavours. An

@@ -1659,6 +1659,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace VertexArrayImpl
 
     namespace TextureImpl {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Drives the actual unpack save/restore helper without needing a texture upload.
+        void ExerciseDefaultUnpackScopeForTesting();
+#endif
         inline Bool IsSupportedTextureTarget(TextureTarget target) {
             // Every desktop-only target is stored on an ES one; see MapToBackendTextureTarget.
             (void)target;

@@ -63,6 +63,7 @@
 #include <mutex>
 #include <cstring>
 #include <regex>
+#include "ContextEpoch.h"
 
 namespace MobileGL::MG_Backend::DirectGLES {
     Uint g_backendContextGeneration = 1;
@@ -6279,6 +6280,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         private:
             static void EnsureShadowSynced() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                const auto epoch = CurrentContextEpoch();
+                if (s_epoch != epoch) {
+                    s_synced = false;
+                    s_epoch = epoch;
+                }
+#endif
                 if (s_synced) {
                     return;
                 }
@@ -6316,6 +6324,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // Shadow of the backend GL unpack state (GL defaults). See class comment.
             static inline Bool s_synced = false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            static inline ContextEpoch s_epoch{};
+#endif
             static inline GLint s_alignment = 4;
             static inline GLint s_rowLength = 0;
             static inline GLint s_skipRows = 0;
@@ -6323,6 +6334,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             static inline GLint s_imageHeight = 0;
             static inline GLint s_skipImages = 0;
         };
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        void ExerciseDefaultUnpackScopeForTesting() {
+            const ScopedDefaultUnpackState scope;
+        }
+#endif
 
         // --- Unpack-ring staging (see BufferImpl::UnpackRingAvailable) ---------------
         // One rectangular (or whole-level) region of a level shadow, repacked TIGHTLY
