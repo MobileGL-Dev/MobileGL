@@ -11827,6 +11827,124 @@ namespace MobileGL::MG_Backend::DirectGLES {
         AssertNoGLError("color texture blit");
     }
 
+    // The layer-point siblings of the two blits above, for a texture VIEW's mip chain: those
+    // texels live in the storage owner's layers [MinLayer, MinLayer + NumLayers) and a 2D
+    // attach would address layer 0 of every one of them. One layer's extents are the whole
+    // rectangle, exactly as in the 2D helpers.
+    static void BlitDepthTextureLayer(GLuint srcTexture, GLint srcLevel, GLint srcLayer, GLsizei srcWidth,
+                                      GLsizei srcHeight, GLuint dstTexture, GLint dstLevel, GLint dstLayer,
+                                      GLsizei dstWidth, GLsizei dstHeight) {
+        MOBILEGL_ASSERT(srcTexture != 0 && dstTexture != 0, "Depth blit requires valid backend textures.");
+        MOBILEGL_ASSERT(srcLevel >= 0 && dstLevel >= 0, "Depth blit mip levels must be non-negative.");
+        MOBILEGL_ASSERT(srcLayer >= 0 && dstLayer >= 0, "Depth blit layers must be non-negative.");
+        MOBILEGL_ASSERT(srcWidth > 0 && srcHeight > 0 && dstWidth > 0 && dstHeight > 0,
+                        "Depth blit dimensions must be positive.");
+
+        ClearGLErrors();
+        ScopedDepthBlitState state;
+        auto& readFB = ScratchFBOImpl::BlitReadFramebuffer();
+        auto& drawFB = ScratchFBOImpl::BlitDrawFramebuffer();
+        ScratchFBOImpl::EnsureDepthAttachmentLayer(readFB, GL_READ_FRAMEBUFFER, srcTexture, srcLevel, srcLayer);
+        AssertNoGLError("attach depth blit source layer");
+        ScratchFBOImpl::EnsureDepthAttachmentLayer(drawFB, GL_DRAW_FRAMEBUFFER, dstTexture, dstLevel, dstLayer);
+        AssertNoGLError("attach depth blit destination layer");
+        ScratchFBOImpl::EnsureReadBuffer(readFB, GL_NONE);
+        AssertNoGLError("set depth blit read buffer");
+        ScratchFBOImpl::EnsureDrawBuffer(drawFB, GL_NONE);
+        AssertNoGLError("set depth blit draw buffer");
+        MOBILEGL_ASSERT(g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
+                        "Depth blit read framebuffer is incomplete.");
+        AssertNoGLError("check depth blit read framebuffer");
+        MOBILEGL_ASSERT(g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
+                        "Depth blit draw framebuffer is incomplete.");
+        AssertNoGLError("check depth blit draw framebuffer");
+
+        g_GLESFuncs.glBlitFramebuffer(0, 0, srcWidth, srcHeight, 0, 0, dstWidth, dstHeight, GL_DEPTH_BUFFER_BIT,
+                                      GL_NEAREST);
+        AssertNoGLError("depth texture layer blit");
+    }
+
+    static void BlitColorTextureLayer(GLuint srcTexture, GLint srcLevel, GLint srcLayer, GLsizei srcWidth,
+                                      GLsizei srcHeight, GLuint dstTexture, GLint dstLevel, GLint dstLayer,
+                                      GLsizei dstWidth, GLsizei dstHeight, GLenum filter) {
+        MOBILEGL_ASSERT(srcTexture != 0 && dstTexture != 0, "Color blit requires valid backend textures.");
+        MOBILEGL_ASSERT(srcLevel >= 0 && dstLevel >= 0, "Color blit mip levels must be non-negative.");
+        MOBILEGL_ASSERT(srcLayer >= 0 && dstLayer >= 0, "Color blit layers must be non-negative.");
+        MOBILEGL_ASSERT(srcWidth > 0 && srcHeight > 0 && dstWidth > 0 && dstHeight > 0,
+                        "Color blit dimensions must be positive.");
+        MOBILEGL_ASSERT(filter == GL_NEAREST || filter == GL_LINEAR, "Color blit filter must be nearest or linear.");
+
+        ClearGLErrors();
+        ScopedDepthBlitState state;
+        auto& readFB = ScratchFBOImpl::BlitReadFramebuffer();
+        auto& drawFB = ScratchFBOImpl::BlitDrawFramebuffer();
+        ScratchFBOImpl::EnsureColorAttachmentLayer(readFB, GL_READ_FRAMEBUFFER, srcTexture, srcLevel, srcLayer);
+        AssertNoGLError("attach color blit source layer");
+        ScratchFBOImpl::EnsureColorAttachmentLayer(drawFB, GL_DRAW_FRAMEBUFFER, dstTexture, dstLevel, dstLayer);
+        AssertNoGLError("attach color blit destination layer");
+        ScratchFBOImpl::EnsureReadBuffer(readFB, GL_COLOR_ATTACHMENT0);
+        AssertNoGLError("set color blit read buffer");
+        ScratchFBOImpl::EnsureDrawBuffer(drawFB, GL_COLOR_ATTACHMENT0);
+        AssertNoGLError("set color blit draw buffer");
+        MOBILEGL_ASSERT(g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
+                        "Color blit read framebuffer is incomplete.");
+        AssertNoGLError("check color blit read framebuffer");
+        MOBILEGL_ASSERT(g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
+                        "Color blit draw framebuffer is incomplete.");
+        AssertNoGLError("check color blit draw framebuffer");
+
+        g_GLESFuncs.glBlitFramebuffer(0, 0, srcWidth, srcHeight, 0, 0, dstWidth, dstHeight, GL_COLOR_BUFFER_BIT,
+                                      filter);
+        AssertNoGLError("color texture layer blit");
+    }
+
+    // A mip chain generated inside a texture VIEW's window. Only the LAYER axis needs the
+    // manual path: BASE_LEVEL/MAX_LEVEL are the view's own parameters, so the native
+    // glGenerateMipmap already clips the LEVEL axis the way the view describes - but it writes
+    // every layer of the storage the view aliases, and a view's layer window is a subset of
+    // those.
+    //
+    // The levels here are the VIEW's own (level 0 aliases the storage's MinLevel), because that
+    // is the space a view's descriptor extents and the frontend's own level sizes are measured
+    // in. The blits are the one place the two systems meet, so the storage level a blit names is
+    // MinLevel + the view's level.
+    struct MipmapViewWindow {
+        GLuint StorageTextureId = 0;
+        Uint32 MinLevel = 0;
+        Uint32 MinLayer = 0;
+        Uint32 NumLayers = 1;
+        Uint32 LogicalBase = 0;
+        Uint32 LogicalEnd = 0; // view-relative, end-exclusive
+        Bool Depth = false;
+        GLenum Filter = GL_LINEAR;
+    };
+
+    template <typename ExtentAtLevel>
+    static void GenerateMipmapThroughViewWindow(const MipmapViewWindow& window, ExtentAtLevel&& extentAtLevel) {
+        if (window.StorageTextureId == 0 || window.NumLayers == 0) return;
+        for (Uint32 level = window.LogicalBase + 1; level < window.LogicalEnd; ++level) {
+            const IntVec3 srcSize = extentAtLevel(level - 1);
+            const IntVec3 dstSize = extentAtLevel(level);
+            MOBILEGL_ASSERT(srcSize.x() > 0 && srcSize.y() > 0 && dstSize.x() > 0 && dstSize.y() > 0,
+                            "View mipmap generation needs non-empty source and destination extents.");
+            const GLint srcLevel = static_cast<GLint>(window.MinLevel + level - 1);
+            const GLint dstLevel = static_cast<GLint>(window.MinLevel + level);
+            for (Uint32 i = 0; i < window.NumLayers; ++i) {
+                const GLint layer = static_cast<GLint>(window.MinLayer + i);
+                if (window.Depth) {
+                    BlitDepthTextureLayer(window.StorageTextureId, srcLevel, layer, static_cast<GLsizei>(srcSize.x()),
+                                          static_cast<GLsizei>(srcSize.y()), window.StorageTextureId, dstLevel,
+                                          layer, static_cast<GLsizei>(dstSize.x()), static_cast<GLsizei>(dstSize.y()));
+                } else {
+                    BlitColorTextureLayer(window.StorageTextureId, srcLevel, layer, static_cast<GLsizei>(srcSize.x()),
+                                          static_cast<GLsizei>(srcSize.y()), window.StorageTextureId, dstLevel,
+                                          layer, static_cast<GLsizei>(dstSize.x()),
+                                          static_cast<GLsizei>(dstSize.y()), window.Filter);
+                }
+            }
+        }
+    }
+
     static void CopyR32FTexture2D(GLuint srcTexture, GLint srcLevel, GLint srcX, GLint srcY, GLsizei width,
                                   GLsizei height, GLuint dstTexture, GLenum dstTarget, GLint dstLevel, GLint dstX,
                                   GLint dstY) {
@@ -11872,6 +11990,79 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
+    // WHICH LAYERS A VIEW'S MIP CHAIN MAY WRITE. A generation through a view has two coordinate
+    // systems in it - the view's own level/layer window (the sampler view CSO) and its storage
+    // owner's - and the native arm below carries only part of the first one: BASE_LEVEL and
+    // MAX_LEVEL are the view's own parameters, so glGenerateMipmap clips the LEVEL axis the way
+    // the view describes, but the layer set it writes is every layer of the storage the view
+    // aliases. A windowed view's generation therefore rewrites owner layers outside its window,
+    // which the view window itself says it must not.
+    //
+    // True means this record's generation was handled here (or refuted) and the native arm must
+    // NOT run; false means "not this shape": no view, a view whose window covers the whole
+    // storage - where the native call already agrees with GL - a multisample view, which has no
+    // mip chain to generate, or an aspect the layer blits do not carry.
+    static Bool GenerateMipmapThroughViewWindowByRecord(MG_Pipe::MGPipeHandle mipRes,
+                                                        const MG_Pipe::MGPipeResourceRecord& record,
+                                                        TextureInternalFormat format) {
+        if (MG_Pipe::MGPipeHandleIsNull(record.Desc.ViewOf)) return false;
+        if (record.Desc.Samples != 0) return false;
+        const Bool depth = IsDepthOnlyFormat(format);
+        if (!depth && !IsColorOnlyFormat(format)) return false;
+
+        // The view record, validated as SyncTextureViewToBackendByRecord validates it: this
+        // window is the only place the four numbers come from, and a stale or foreign one would
+        // generate into another texture's levels.
+        const auto* viewRecord = PipeSamplerViewRecordForHandle(record.ViewCso);
+        if (viewRecord == nullptr || !viewRecord->Live || viewRecord->Gen != record.ViewCso.Gen) {
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"mipmap-view-record\"} {%u,%u}", mipRes.Slot, mipRes.Gen);
+            std::abort();
+        }
+        const auto& view = viewRecord->View;
+        if (view.Texture != mipRes || view.NumLevels == 0 || view.NumLayers == 0) {
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"mipmap-view-window\"} {%u,%u}", mipRes.Slot, mipRes.Gen);
+            std::abort();
+        }
+        const auto* storageRecord = PipeTextureRecordForHandle(record.Desc.ViewOf);
+        if (storageRecord == nullptr) {
+            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"mipmap-view-storage\"} {%u,%u}", mipRes.Slot, mipRes.Gen);
+            std::abort();
+        }
+        if (view.MinLayer == 0 && view.NumLayers >= std::max<Uint32>(storageRecord->Desc.ArrayLayers, 1u))
+            return false;
+
+        const auto& applier = MG_Pipe::MGPipeApplier();
+        MipmapViewWindow window;
+        window.MinLevel = view.MinLevel;
+        window.MinLayer = view.MinLayer;
+        window.NumLayers = view.NumLayers;
+        window.LogicalBase = applier.VerbMipBaseLevel;
+        // LevelCount is the logical END-EXCLUSIVE level, not a count after BaseLevel, and the
+        // frontend already clipped it to the object's own range; the view's window is the bound
+        // only this side can apply.
+        window.LogicalEnd = std::min({static_cast<Uint32>(applier.VerbMipLevelCount),
+                                      static_cast<Uint32>(record.Desc.Levels),
+                                      static_cast<Uint32>(view.NumLevels)});
+        window.Depth = depth;
+        window.Filter = IsIntegerColorFormat(format) ? GL_NEAREST : GL_LINEAR;
+        if (window.LogicalEnd <= window.LogicalBase + 1) return true;
+
+        // The STORAGE's ES name is what the blits write: the view's own name aliases the same
+        // texels, but only the owner's name carries every level and layer this window reaches.
+        auto& storage = TextureImpl::SyncTextureToBackendByHandle(record.Desc.ViewOf);
+        if (!storage || storage->GetBackendTextureId() == 0) {
+            MGLOG_E_ONCE("MGPipe: generate_mipmap through view {%u, %u} has no storage texture to write; "
+                         "the call is dropped", mipRes.Slot, mipRes.Gen);
+            return true;
+        }
+        window.StorageTextureId = storage->GetBackendTextureId();
+        GenerateMipmapThroughViewWindow(window, [&record](Uint32 level) {
+            return MG_Remote::Server::StagedTextureMipExtent(record.Desc.Target, record.Desc.Width,
+                                                             record.Desc.Height, record.Desc.Depth, level);
+        });
+        return true;
+    }
+
     // P5e (tx2): the two CPU-blit mip chains, driven by the RECORD the verb named. What changes
     // against the P5c arms below is only the resolution: those took the frontend texture and
     // re-derived its handle with a scoped `HandleOf` probe (the two sites §4.4 listed as
@@ -11970,6 +12161,76 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                textureId, static_cast<GLint>(level), 0, 0,
                                static_cast<GLsizei>(dstSize.x()), static_cast<GLsizei>(dstSize.y()), filter);
         }
+    }
+
+    // Where a target keeps its LAYER count, the state-side twin of the wire descriptor's
+    // ArrayLayers: a 1D array's layers live in the state-side height, every other layered target
+    // keeps them in z, a cube map has six faces, and everything else has one.
+    static Uint TextureLayerCount(const SharedPtr<MG_State::GLState::ITextureObject>& texture) {
+        const IntVec3 base = texture->GetBaseSize();
+        switch (texture->GetTarget()) {
+        case TextureTarget::Texture1DArray:
+            return static_cast<Uint>(std::max<Int>(base.y(), 1));
+        case TextureTarget::Texture2DArray:
+        case TextureTarget::TextureCubeMapArray:
+        case TextureTarget::Texture2DMultisampleArray:
+            return static_cast<Uint>(std::max<Int>(base.z(), 1));
+        case TextureTarget::TextureCubeMap:
+            return 6;
+        default:
+            return 1;
+        }
+    }
+
+    // The monolith twin of the record arm's view-window rule. Same window, read off the frontend
+    // objects this arm still has: the storage owner is what the view's texels belong to, and the
+    // view's own level range and layer window are stated relative to it.
+    static Bool GenerateMipmapThroughViewWindowForTexture(const SharedPtr<MG_State::GLState::ITextureObject>& texture) {
+        MOBILEGL_ASSERT(texture != nullptr, "GenerateMipmapThroughViewWindowForTexture needs a texture.");
+        if (!texture->IsTextureView()) return false;
+        const auto& owner = texture->GetViewStorageOwner();
+        if (owner == nullptr) return false;
+        if (texture->GetSamples() != 0) return false;
+        const Bool depth = IsDepthOnlyFormat(texture->GetFormat());
+        if (!depth && !IsColorOnlyFormat(texture->GetFormat())) return false;
+        auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(texture.get());
+        if (mipmapTexture == nullptr || texture->GetUploadTargets().empty()) return false;
+
+        const Uint minLayer = texture->GetViewMinLayer();
+        const Uint numLayers = texture->GetViewNumLayers();
+        if (numLayers == 0) return false;
+        // A window that covers the whole storage is what the native call already does.
+        if (minLayer == 0 && numLayers >= TextureLayerCount(owner)) return false;
+
+        MipmapViewWindow window;
+        window.MinLevel = texture->GetViewMinLevel();
+        window.MinLayer = minLayer;
+        window.NumLayers = numLayers;
+        const auto levelRange = texture->GetLevelRange();
+        // The view's chain ends at the first of: its MAX_LEVEL, its window's level count, and
+        // the levels its storage actually has.
+        window.LogicalBase = levelRange.x();
+        window.LogicalEnd = std::min({static_cast<Uint32>(levelRange.y()) + 1,
+                                      static_cast<Uint32>(texture->GetViewNumLevels()),
+                                      static_cast<Uint32>(mipmapTexture->GetMipmapLevelCount())});
+        window.Depth = depth;
+        window.Filter = IsIntegerColorFormat(texture->GetFormat()) ? GL_NEAREST : GL_LINEAR;
+        if (window.LogicalEnd <= window.LogicalBase + 1) return true;
+
+        // The STORAGE's ES name is what the blits write: the view's own name aliases the same
+        // texels, but only the owner's name carries every level and layer this window reaches.
+        auto& storage = TextureImpl::SyncTextureObjectToBackend(owner);
+        if (!storage || storage->GetBackendTextureId() == 0) {
+            MGLOG_E_ONCE("DirectGLES: generate_mipmap through texture view %u has no storage texture to write; "
+                         "the call is dropped", texture->GetExternalIndex());
+            return true;
+        }
+        window.StorageTextureId = storage->GetBackendTextureId();
+        const TextureUploadTarget uploadTarget = texture->GetUploadTargets()[0];
+        GenerateMipmapThroughViewWindow(window, [mipmapTexture, uploadTarget](Uint32 level) {
+            return mipmapTexture->GetMipmapTexelSize(uploadTarget, level);
+        });
+        return true;
     }
 
     void CopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width,
@@ -12310,6 +12571,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // says which emulation, which is what the guard cannot.
             MG_Pipe::MGPipeUnmigratedEmulation("generate-mipmap-cpu-filter");
         }
+        // A view's layer window is the one bound the native arm cannot express, so it is asked
+        // for before the format arms - those two are 2D-only emulations of the same generation
+        // and a view reaches them too.
+        if (GenerateMipmapThroughViewWindowByRecord(mipRes, record, format)) return;
         if (IsDepthOnlyFormat(format)) {
             GenerateDepthTexture2DMipmapByRecord(record, backendTexture);
             return;
@@ -12389,6 +12654,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         auto& backendTexture = TextureImpl::SyncTextureObjectToBackend(texture);
 
+        // Asked for before the format arms below, which are 2D-only emulations of the same
+        // generation and reach a view just as well.
+        if (GenerateMipmapThroughViewWindowForTexture(texture)) return;
         if (IsDepthOnlyFormat(texture->GetFormat())) {
             GenerateDepthTexture2DMipmap(texture, backendTexture);
             return;

@@ -2525,6 +2525,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint depthTex = 0;
             GLenum depthTarget = 0;
             GLint depthLevel = 0;
+            // >= 0 => attached via glFramebufferTextureLayer.
+            GLint depthLayer = -1;
             Bool depthHasStencil = false;
             // Per-FBO read/draw buffer state (0 = unknown, set on first use).
             GLenum readBuffer = 0;
@@ -2544,6 +2546,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void EnsureColorAttachmentLayer(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLint level, GLint layer);
         void EnsureDepthAttachment2D(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLenum texTarget, GLint level,
                                      Bool withStencil);
+        void EnsureDepthAttachmentLayer(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLint level, GLint layer);
         void EnsureNoColorAttachment(ScratchFramebuffer& fb, GLenum fbTarget);
         void EnsureNoDepthAttachment(ScratchFramebuffer& fb, GLenum fbTarget);
         void EnsureReadBuffer(ScratchFramebuffer& fb, GLenum readBuffer);

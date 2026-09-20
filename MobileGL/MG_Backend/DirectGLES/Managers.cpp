@@ -11427,6 +11427,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 fb.depthTex = 0;
                 fb.depthTarget = 0;
                 fb.depthLevel = 0;
+                fb.depthLayer = -1;
                 fb.depthHasStencil = false;
                 fb.attachmentsKnown = true;
             }
@@ -11459,6 +11460,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 fb.depthTex = 0;
                 fb.depthTarget = 0;
                 fb.depthLevel = 0;
+                fb.depthLayer = -1;
                 fb.depthHasStencil = false;
             }
         } // namespace
@@ -11546,7 +11548,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 RecordNoColor(fb);
             }
             if (fb.depthTex == tex && fb.depthTarget == texTarget && fb.depthLevel == level &&
-                fb.depthHasStencil == withStencil) {
+                fb.depthLayer < 0 && fb.depthHasStencil == withStencil) {
                 return;
             }
             if (fb.depthTex != 0) {
@@ -11564,8 +11566,39 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             fb.depthTex = tex;
             fb.depthTarget = texTarget;
+            fb.depthLayer = -1;
             fb.depthLevel = level;
             fb.depthHasStencil = withStencil;
+        }
+
+        // The layer-point sibling of EnsureColorAttachmentLayer above, for a view's mip chain in
+        // a depth-only storage owner. depthTarget == 0 is the marker that this point was made
+        // with glFramebufferTextureLayer, exactly as colorTarget == 0 is on the color side, so a
+        // later 2D attach to the same level is never deduped against it.
+        void EnsureDepthAttachmentLayer(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLint level, GLint layer) {
+            PrepareForUse(fb, fbTarget);
+            if (fb.colorTex != 0) {
+                g_GLESFuncs.glFramebufferTexture2D(fbTarget, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+                RecordNoColor(fb);
+            }
+            if (fb.depthTex == tex && fb.depthTarget == 0 && fb.depthLevel == level && fb.depthLayer == layer &&
+                !fb.depthHasStencil) {
+                return;
+            }
+            if (fb.depthTex != 0) {
+                g_GLESFuncs.glFramebufferTexture2D(fbTarget, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+            }
+            DrainPendingGLErrors();
+            g_GLESFuncs.glFramebufferTextureLayer(fbTarget, GL_DEPTH_ATTACHMENT, tex, level, layer);
+            if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                RecordNoDepth(fb);
+                return;
+            }
+            fb.depthTex = tex;
+            fb.depthTarget = 0;
+            fb.depthLevel = level;
+            fb.depthLayer = layer;
+            fb.depthHasStencil = false;
         }
 
         void EnsureNoColorAttachment(ScratchFramebuffer& fb, GLenum fbTarget) {
