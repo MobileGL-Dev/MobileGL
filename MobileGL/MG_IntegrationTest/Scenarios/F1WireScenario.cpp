@@ -2,6 +2,9 @@
 #include "../Harness/ScenarioFixture.h"
 #include "../Harness/SplitRuntimePeek.h"
 #include <array>
+#include <initializer_list>
+#include <utility>
+#include <vector>
 #ifdef GLAPI
 #undef GLAPI
 #endif
@@ -12,6 +15,45 @@
 
 namespace MGITest {
 namespace {
+constexpr const char* kWireVertexIdTriangle = R"(#version 430 core
+void main() {
+    vec2 positions[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+    gl_Position = vec4(positions[gl_VertexID], 0.0, 1.0);
+}
+)";
+
+GLuint BuildWireProgram(std::initializer_list<std::pair<GLenum, const char*>> sources) {
+    const GLuint program = glCreateProgram();
+    for (const auto& stage : sources) {
+        const GLuint shader = glCreateShader(stage.first);
+        glShaderSource(shader, 1, &stage.second, nullptr);
+        glCompileShader(shader);
+        GLint compiled = GL_FALSE;
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+        if (!compiled) {
+            char log[4096]{};
+            glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
+            ADD_FAILURE() << "wire pixel shader compilation: " << log;
+            glDeleteShader(shader);
+            glDeleteProgram(program);
+            return 0;
+        }
+        glAttachShader(program, shader);
+        glDeleteShader(shader);
+    }
+    glLinkProgram(program);
+    GLint linked = GL_FALSE;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        char log[4096]{};
+        glGetProgramInfoLog(program, sizeof(log), nullptr, log);
+        ADD_FAILURE() << "wire pixel program link: " << log;
+        glDeleteProgram(program);
+        return 0;
+    }
+    return program;
+}
+
 class F1WireScenario : public ScenarioTest {
 protected:
     GLuint fbo = 0, texture = 0;
@@ -257,6 +299,102 @@ TEST_F(F1WireScenario, GenerateMipmapDepthPixels) {
     glReadPixels(1, 1, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &pixel);
     ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
     EXPECT_NEAR(pixel, 0.375f, 0.00001f);
+}
+
+TEST_F(F1WireScenario, VertexIdSamplerAndScalarUniformPixels) {
+    if (!Ready()) return;
+    Attach(GL_RGBA8);
+    const char* fragment = R"(#version 430 core
+uniform sampler2D sourceTexture;
+uniform float scale;
+layout(location=0) out vec4 color;
+void main() { color = vec4(texture(sourceTexture, vec2(0.5)).rgb * scale, 1.0); }
+)";
+    const GLuint program = BuildWireProgram({{GL_VERTEX_SHADER, kWireVertexIdTriangle},
+                                             {GL_FRAGMENT_SHADER, fragment}});
+    ASSERT_NE(program, 0u);
+    GLuint vao = 0, source = 0, sampler = 0;
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao); // No attributes, VBO, UBO or SSBO participates in either draw.
+    glGenTextures(1, &source);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, source);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 1, 1);
+    const std::array<GLubyte, 4> texel{64, 128, 192, 255};
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, texel.data());
+    glGenSamplers(1, &sampler);
+    glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindSampler(3, sampler);
+    glUseProgram(program);
+    const GLint sourceLocation = glGetUniformLocation(program, "sourceTexture");
+    const GLint scaleLocation = glGetUniformLocation(program, "scale");
+    ASSERT_GE(sourceLocation, 0);
+    ASSERT_GE(scaleLocation, 0);
+    glUniform1i(sourceLocation, 3);
+    glViewport(0, 0, 8, 8);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_RASTERIZER_DISCARD);
+    glDisable(GL_FRAMEBUFFER_SRGB);
+    for (const GLfloat scale : {0.5f, 0.25f}) {
+        glUniform1f(scaleLocation, scale); // Post-link changes must come from GlobalConstants.
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        std::array<GLubyte, 4> pixel{};
+        glReadPixels(2, 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+        for (int channel = 0; channel < 3; ++channel)
+            EXPECT_NEAR(pixel[channel], texel[channel] * scale, 1) << "scalar uniform " << scale;
+        EXPECT_EQ(pixel[3], 255);
+    }
+    glUseProgram(0);
+    glBindVertexArray(0);
+    glBindSampler(3, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glDeleteSamplers(1, &sampler);
+    glDeleteTextures(1, &source);
+    glDeleteVertexArrays(1, &vao);
+    glDeleteProgram(program);
+}
+
+TEST_F(F1WireScenario, ComputeImageStoreFramebufferPixels) {
+    if (!Ready()) return;
+    Attach(GL_RGBA8);
+    glClearColor(1, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    const char* compute = R"(#version 430 core
+layout(local_size_x=1, local_size_y=1, local_size_z=1) in;
+layout(rgba8, binding=2) writeonly uniform image2D destination;
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    imageStore(destination, p, vec4(vec2(p + ivec2(1)) / 8.0, 0.5, 1.0));
+}
+)";
+    const GLuint program = BuildWireProgram({{GL_COMPUTE_SHADER, compute}});
+    ASSERT_NE(program, 0u);
+    glBindImageTexture(2, texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+    glUseProgram(program);
+    glDispatchCompute(8, 8, 1);
+    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
+    // Read through an FBO so the assertion does not depend on the class-C GetTexImage path.
+    std::array<GLubyte, 8 * 8 * 4> pixels{};
+    glReadPixels(0, 0, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    for (int y = 0; y < 8; ++y) {
+        for (int x = 0; x < 8; ++x) {
+            const size_t at = static_cast<size_t>(y * 8 + x) * 4;
+            EXPECT_NEAR(pixels[at], (x + 1) * 255.0 / 8.0, 1) << x << ", " << y;
+            EXPECT_NEAR(pixels[at + 1], (y + 1) * 255.0 / 8.0, 1) << x << ", " << y;
+            EXPECT_NEAR(pixels[at + 2], 128, 1);
+            EXPECT_EQ(pixels[at + 3], 255);
+        }
+    }
+    glBindImageTexture(2, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+    glUseProgram(0);
+    glDeleteProgram(program);
 }
 
 TEST_F(F1WireScenario, PartialTextureUploadPreservesGpuClearPixels) {
