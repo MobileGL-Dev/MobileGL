@@ -95,6 +95,7 @@ namespace {
     X(TrackerAttribPayload, AUintWriteCarriesTheUintWordsAndNamesItsClass) \
     X(TrackerAttribPayload, TheSameNumbersWrittenThroughADifferentClassAreADifferentValue) \
     X(TrackerShippedEmitter, ABlendToggleThroughTheValidatePointMintsTwoCsos) \
+    X(TrackerShippedEmitter, CollidingVaoShuttersStillPublishTheCurrentElementsAndBufferWindow) \
     X(TrackerShippedEmitter, TheSteadyStateThroughTheValidatePointEmitsNothing) \
     X(TrackerShippedEmitter, APushedAttributeDefaultTheApplierCannotReproduceIsRepaired) \
     X(TrackerShippedEmitter, AViewportThroughTheValidatePointMintsNoCso) \
@@ -1063,6 +1064,86 @@ namespace {
         Uint64 m_savedPush = 0;
         UniquePtr<GLContext> m_previous;
     };
+
+    TEST_F(TrackerShippedEmitter, CollidingVaoShuttersStillPublishTheCurrentElementsAndBufferWindow) {
+        MG_Config::Features.PipePush = kMGPipeSubsystemsMigratedAtP2 | kMGPipeSubsystemResources |
+                                       kMGPipeSubsystemVertexInput;
+        using MG_State::GLState::VertexArrayObject;
+        const SharedPtr<VertexArrayObject> a = Ctx().CreateVertexArrayObject(1);
+        const SharedPtr<VertexArrayObject> b = Ctx().CreateVertexArrayObject(2);
+        const auto buffer = Ctx().CreateBufferObject(1);
+        buffer->Respecify(256, nullptr);
+        for (Uint location : {0u, 1u}) {
+            a->SetAttributeFormat(location, location == 0 ? 3 : 2, DataType::Float32, false, 20,
+                                  location == 0 ? 0 : 12, false);
+            a->BindAttributeBuffer(location, buffer);
+            a->EnableAttribute(location);
+        }
+        b->SetAttributeFormat(0, 3, DataType::Float32, false, 12, 0, false);
+        b->BindAttributeBuffer(0, buffer);
+        b->EnableAttribute(0);
+
+        // Preserve the old collision independently of how production later mixes
+        // shutters. These ordinary small counter pairs really collide, rather
+        // than requiring a probabilistic 64-bit hash collision search.
+        constexpr Uint64 kCombine = 0x9e3779b97f4a7c15ull;
+        const auto oldMix = [](Uint64 identity, Uint64 version) {
+            return identity ^ (version + kCombine + (identity << 6) + (identity >> 2));
+        };
+        ASSERT_EQ(oldMix(1, 64), oldMix(2, 1));
+        ASSERT_EQ(oldMix(174, 37), oldMix(48, 8026)); // observed on Redmi while switching world draws
+        Uint32 versionA = 0, versionB = 0;
+        const Uint32 firstA = a->GetConfigVersion() + 64;
+        const Uint32 firstB = b->GetConfigVersion() + 1;
+        for (Uint32 candidate = firstA; candidate < firstA + 4096; ++candidate) {
+            const Uint64 hash = oldMix(a->GetLifetimeId(), candidate);
+            const Uint64 other = (hash ^ b->GetLifetimeId()) - kCombine -
+                                  (b->GetLifetimeId() << 6) - (b->GetLifetimeId() >> 2);
+            if (other < firstB || other >= firstB + 4096) continue;
+            versionA = candidate;
+            versionB = static_cast<Uint32>(other);
+            break;
+        }
+        ASSERT_NE(versionA, 0u) << "could not construct a bounded collision for these real VAO identities";
+        const auto advanceConfig = [](VertexArrayObject& vao, Uint32 version) {
+            // Change a disabled attribute, leaving the enabled 0/1 versus 0
+            // windows intact. No private lifetime/version field is overwritten.
+            while (vao.GetConfigVersion() < version) {
+                vao.SetAttributeFormat(31, 4, DataType::Float32, !vao.GetAttribute(31).Normalized,
+                                       16, 0, false);
+            }
+        };
+        advanceConfig(*a, versionA);
+        Ctx().BindVertexArray(1);
+        Draw();
+        const MGPipeHandle handleA = MGPipeApplier().BoundVertexElements;
+        ASSERT_FALSE(MGPipeHandleIsNull(handleA));
+        ASSERT_EQ(MGPipeApplier().VertexBufferCount, 2u);
+        ASSERT_TRUE(MGPipeApplier().VertexElementsCsos[handleA.Slot].Attributes[1].Enabled);
+
+        // Mutating B after A's draw moves the attribute aggregate. Before the
+        // repair this publishes B's Count=1 buffer set, but the colliding CSO
+        // shutter leaves A bound with attribute 1 still enabled: the phone's
+        // exact "buffer-window location=1 window=0+1" mismatch.
+        advanceConfig(*b, versionB);
+        ASSERT_EQ(oldMix(a->GetLifetimeId(), a->GetConfigVersion()),
+                  oldMix(b->GetLifetimeId(), b->GetConfigVersion()));
+        Ctx().BindVertexArray(2);
+        Draw();
+        const MGPipeHandle handleB = MGPipeApplier().BoundVertexElements;
+        ASSERT_FALSE(MGPipeHandleIsNull(handleB));
+        EXPECT_NE(handleB, handleA) << "a VAO identity change must publish its vertex-elements binding";
+        EXPECT_EQ(MGPipeApplier().VertexBufferCount, 1u);
+        EXPECT_FALSE(MGPipeApplier().VertexElementsCsos[handleB.Slot].Attributes[1].Enabled);
+
+        // Switching back moves no attribute aggregate: the exact identity pair
+        // must also re-open the buffer-family shutter, restoring Count=2.
+        Ctx().BindVertexArray(1);
+        Draw();
+        EXPECT_EQ(MGPipeApplier().BoundVertexElements, handleA);
+        EXPECT_EQ(MGPipeApplier().VertexBufferCount, 2u);
+        EXPECT_TRUE(MGPipeApplier().VertexElementsCsos[handleA.Slot].Attributes[1].Enabled);
+    }
 
     TEST_F(TrackerShippedEmitter, ABlendToggleThroughTheValidatePointMintsTwoCsos) {
         constexpr int kToggles = 16;
