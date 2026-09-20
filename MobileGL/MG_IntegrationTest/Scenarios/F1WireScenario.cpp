@@ -381,7 +381,7 @@ void main() {
 )";
     const GLuint program = BuildWireProgram({{GL_COMPUTE_SHADER, compute}});
     ASSERT_NE(program, 0u);
-    glBindImageTexture(2, texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+    glBindImageTexture(2, texture, 0, GL_FALSE, 7, GL_WRITE_ONLY, GL_RGBA8); // 2D ignores the layer.
     glUseProgram(program);
     glDispatchCompute(8, 8, 1);
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
