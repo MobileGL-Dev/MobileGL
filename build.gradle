@@ -5,6 +5,14 @@ def mobileGlLogActiveLevel = {
 }
 def standalonePluginBuild = rootProject.name == 'MobileGLPlugin'
 
+// Match the standalone app's declared ABI set. The library module otherwise
+// configures unrelated NDK ABIs even when the app only packages these two.
+// Embedded FCL builds retain their own ABI policy.
+def mobileGlAbiFilters = {
+    def value = (rootProject.findProperty('mobilegl.abis') ?: System.getenv('MOBILEGL_ABIS') ?: 'arm64-v8a') as String
+    value.equalsIgnoreCase('all') ? ['arm64-v8a', 'x86_64'] : value.split(',').collect { it.trim() }.findAll { it }
+}
+
 // P0 spike A opt-in. OFF by default: the spike binary is dead weight in every trace APK
 // that is not running the spike, and a flavour that silently carries an extra executable
 // is exactly the kind of thing nobody notices until it ships. Turn it on for the spike
@@ -33,6 +41,12 @@ android {
 
     defaultConfig {
         minSdk 26
+
+        if (standalonePluginBuild) {
+            ndk {
+                abiFilters.addAll(mobileGlAbiFilters())
+            }
+        }
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 

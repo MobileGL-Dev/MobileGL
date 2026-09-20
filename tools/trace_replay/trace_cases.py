@@ -217,6 +217,58 @@ def github_apk_matrix(cases):
     }
 
 
+def github_transport_matrix(cases, *, apk=False):
+    """Run the entire original matrix as both control and inproc acceptance.
+
+    The two transports use the same D/P artifact and each case's existing backend
+    list. The legacy split:true subset does not limit this main acceptance matrix.
+    Nested APK case/backend metadata is deliberately left untouched.
+    """
+    build = github_apk_matrix if apk else github_test_matrix
+    if not cases:
+        raise ValueError("transport matrix needs at least one trace case")
+    return {"include": [
+        {**row, "lane": lane, "transport": transport}
+        for selected, lane, transport in (
+            (cases, "monolith-control", "monolith"),
+            (cases, "inproc-acceptance", "inproc"),
+        )
+        for row in build(selected)["include"]
+    ]}
+
+
+def self_test_transport_matrices():
+    cases = ci_trace_cases(load_trace_cases())
+    for apk in (False, True):
+        build = github_apk_matrix if apk else github_test_matrix
+        original = build(cases)["include"]
+        mixed = github_transport_matrix(cases, apk=apk)["include"]
+        controls = [row for row in mixed if row["transport"] == "monolith"]
+        acceptance = [row for row in mixed if row["transport"] == "inproc"]
+        strip_lane = lambda rows: [{key: value for key, value in row.items()
+                                   if key not in ("lane", "transport")} for row in rows]
+        assert strip_lane(controls) == original, "control lost original case/backend/parameters"
+        assert strip_lane(acceptance) == original, "acceptance lost original case/backend/parameters"
+        assert all(row["lane"] == "monolith-control" for row in controls)
+        assert all(row["lane"] == "inproc-acceptance" for row in acceptance)
+        identities = [(row["case"]["name"] if apk else row["case"],
+                       row["backend"]["name"] if apk else row["backend"], row["transport"])
+                      for row in mixed]
+        assert len(identities) == len(set(identities)), "duplicate lane identity"
+        # A restricted case keeps exactly its original backend and golden data.
+        restricted = [{**cases[0], "split": False, "ci_backends": ["DirectGLES"]}]
+        rows = github_transport_matrix(restricted, apk=apk)["include"]
+        assert len(rows) == 2 and strip_lane(rows[:1]) == strip_lane(rows[1:])
+        try:
+            github_transport_matrix([], apk=apk)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("an empty acceptance lane silently passed")
+        print(f"transport matrix {'APK' if apk else 'Linux'}: {len(controls)} unchanged controls, "
+              f"{len(acceptance)} full acceptance entries; exact metadata and negative controls OK")
+
+
 def cmake_quote(value):
     return '"' + str(value).replace("\\", "/").replace('"', '\\"') + '"'
 
@@ -265,16 +317,19 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--case", dest="case_name", help="Trace case name.")
     parser.add_argument("--ci", action="store_true", help="Only include cases enabled for CI.")
+    parser.add_argument("--self-test-transport-matrices", action="store_true")
     parser.add_argument("--fixture-root", default="tools/trace_replay/fixtures")
     parser.add_argument(
         "--format",
         choices=(
             "names",
             "github-test-matrix",
+            "github-test-transport-matrix",
             "github-verify-matrix",
             "github-split-matrix",
             "github-apk",
             "github-apk-matrix",
+            "github-apk-transport-matrix",
             "fixture-files",
             "cmake",
         ),
@@ -285,6 +340,9 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.self_test_transport_matrices:
+        self_test_transport_matrices()
+        return 0
     cases = load_trace_cases()
     if args.ci:
         cases = ci_trace_cases(cases)
@@ -292,6 +350,8 @@ def main():
         print(json.dumps([case["name"] for case in cases], separators=(",", ":")))
     elif args.format == "github-test-matrix":
         print(json.dumps(github_test_matrix(cases), separators=(",", ":")))
+    elif args.format == "github-test-transport-matrix":
+        print(json.dumps(github_transport_matrix(cases), separators=(",", ":")))
     elif args.format == "github-verify-matrix":
         print(json.dumps(github_verify_matrix(cases), separators=(",", ":")))
     elif args.format == "github-split-matrix":
@@ -300,6 +360,8 @@ def main():
         print(json.dumps([github_apk_case(case) for case in cases], separators=(",", ":")))
     elif args.format == "github-apk-matrix":
         print(json.dumps(github_apk_matrix(cases), separators=(",", ":")))
+    elif args.format == "github-apk-transport-matrix":
+        print(json.dumps(github_transport_matrix(cases, apk=True), separators=(",", ":")))
     elif args.format == "fixture-files":
         if not args.case_name:
             print("--case is required for --format fixture-files", file=sys.stderr)
