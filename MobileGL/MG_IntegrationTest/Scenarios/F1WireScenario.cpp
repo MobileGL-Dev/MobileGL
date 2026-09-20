@@ -120,6 +120,66 @@ protected:
 };
 }
 
+TEST_F(F1WireScenario, TextureReadbackLargerThanAReplySlotContainsGpuWrites) {
+    if (!Ready()) return;
+    constexpr int width = 1024, height = 600;
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, width, height);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    glClearColor(1, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(0, height / 2, width, height / 2);
+    glClearColor(0, 0, 1, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
+    std::vector<GLubyte> pixels(width * height * 4, 0x5a);
+    glGetTextureImage(texture, 0, GL_RGBA, GL_UNSIGNED_BYTE, static_cast<GLsizei>(pixels.size()), pixels.data());
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    for (int y = 0; y < height; ++y) {
+        for (int x : {0, width / 2, width - 1}) {
+            const size_t offset = (size_t(y) * width + x) * 4;
+            const std::array<GLubyte, 4> expected = y < height / 2
+                ? std::array<GLubyte, 4>{255, 0, 0, 255} : std::array<GLubyte, 4>{0, 0, 255, 255};
+            EXPECT_TRUE(std::equal(expected.begin(), expected.end(), pixels.begin() + offset)) << x << "," << y;
+        }
+    }
+}
+
+TEST_F(F1WireScenario, TextureAndFramebufferReadsPreservePackBufferPadding) {
+    if (!Ready()) return;
+    Attach(GL_RGBA8);
+    glClearColor(0, 1, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    constexpr size_t size = 512, offset = 12, stride = 40;
+    std::vector<GLubyte> expected(size, 0x5a), actual(size);
+    GLuint pbo = 0;
+    glGenBuffers(1, &pbo);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
+    glBufferData(GL_PIXEL_PACK_BUFFER, size, expected.data(), GL_DYNAMIC_READ);
+    glPixelStorei(GL_PACK_ROW_LENGTH, 10);
+    glPixelStorei(GL_PACK_SKIP_ROWS, 1);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 1);
+    for (int mode = 0; mode < 2; ++mode) {
+        glBufferSubData(GL_PIXEL_PACK_BUFFER, 0, size, expected.data());
+        if (mode == 0) glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, reinterpret_cast<void*>(offset));
+        else glReadPixels(0, 0, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, reinterpret_cast<void*>(offset));
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+        glGetBufferSubData(GL_PIXEL_PACK_BUFFER, 0, size, actual.data());
+        auto wanted = expected;
+        for (size_t y = 0; y < 8; ++y) for (size_t x = 0; x < 8; ++x) {
+            const size_t at = offset + stride + 4 + y * stride + x * 4;
+            wanted[at] = 0; wanted[at + 1] = 255; wanted[at + 2] = 0; wanted[at + 3] = 255;
+        }
+        EXPECT_EQ(actual, wanted) << "read API " << mode;
+    }
+    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    glDeleteBuffers(1, &pbo);
+}
+
 // P5f exit: each published frame must have a real draw and server stamp, and
 // zero residual reads. Missing instrumentation is a failure rather than a false zero.
 TEST_F(F1WireScenario, EachWireFrameHasZeroResidualPulls) {

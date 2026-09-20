@@ -27,14 +27,19 @@
             info.Type = type;
             info.Target = wholeCube ? GL_TEXTURE_CUBE_MAP : MG_Util::ConvertTextureUploadTargetToGLEnum(uploadTarget);
             info.Level = static_cast<Uint16>(level);
-            info.DstSize = tight;
-            session.RequireReadPixelsReplyFits(info.Box.W, info.Box.H, format, type, tight);
             Vector<Uint8> bytes(static_cast<SizeT>(tight));
-            Int32 status = Wire::ReplySink::kStatusError;
-            Uint64 received = 0;
-            session.EmitAndWait(MG_Pipe::MGPWireOp::GetTextureImage, &info, sizeof(info), nullptr, 0,
-                                bytes.data(), tight, &status, &received);
-            RequireReadbackReplyComplete(status, received, tight);
+            const Uint64 capacity = session.MaxReplyBytes();
+            if (!capacity) Wire::WireProtocolFatal("GetTextureImage.reply", "zero reply capacity");
+            for (Uint64 offset = 0; offset < tight; ) {
+                info.DstOffset = offset;
+                info.DstSize = std::min(tight - offset, capacity);
+                Int32 status = Wire::ReplySink::kStatusError;
+                Uint64 received = 0;
+                session.EmitAndWait(MG_Pipe::MGPWireOp::GetTextureImage, &info, sizeof(info), nullptr, 0,
+                                    bytes.data() + offset, info.DstSize, &status, &received);
+                RequireReadbackReplyComplete(status, received, info.DstSize);
+                offset += info.DstSize;
+            }
             const auto pack = MG_State::pGLContext->GetPixelStoreParameters(false);
             ApplyReadbackByteSwap(bytes.data(), tight, type, pack);
             const Uint64 rowBytes = static_cast<Uint64>(size.x()) * bpp;
