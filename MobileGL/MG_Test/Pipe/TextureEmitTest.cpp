@@ -515,6 +515,10 @@ TEST(TextureEmit, AScatteredUploadCarriesTheLevelShadowsStridesAndNotZero) {
                                     IntVec3{2, 2, 1});
     Textures().DrainTextureSubData(Ctx());
     const Vector<MGPSubRegion> regions = Textures().LastRegions();
+    const auto& record = Textures().LastSubData();
+    EXPECT_EQ(record.LevelWidth, 256u);
+    EXPECT_EQ(record.LevelHeight, 256u);
+    EXPECT_EQ(record.LevelDepth, 1u);
     ASSERT_GE(regions.size(), 2u);
     // A SUB-RECT'S ROWS ARE NOT CONTIGUOUS IN THE SHADOW, so it must carry the LEVEL's pitches -
     // not its own width - or the staging planner on the far side repacks the wrong bytes.

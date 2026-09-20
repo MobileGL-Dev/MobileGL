@@ -1266,7 +1266,7 @@ namespace MobileGL::MG_Pipe {
         // bytes an untransformed level shadow?
         Uint8 SourceIsVerbatimLevelShadow;
         // P5 (b1): DOES THIS RESOURCE HAVE A LIVE HOST WRITER RIGHT NOW? One byte out of the
-        // pad, so MGP_ASSERT_POD(MGPSubData, 72) below does not move.
+        // original pad; the complete mip extent below is a separate payload extension.
         //
         // It is here rather than on MGPResourceDesc, and that is a ruling with a reason. The
         // fact is CONTENT-shaped - "someone may be writing these bytes without telling you" -

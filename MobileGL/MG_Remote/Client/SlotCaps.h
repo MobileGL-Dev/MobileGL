@@ -54,8 +54,8 @@
 // Converted, because the fallback is right:
 //   FenceSync used this fallback through P5. P5b §9 moved it to class B: the frontend
 //   now calls the emitter and the server preserves the optional/native-null fallback.
-//   GL_Texture.cpp:6537 GetTextureImage      -> the frontend's own CPU readback, which is exact
-//   GL_Texture.cpp:6799 GetTexImage          -> the same
+//   GetTexImage/GetTextureImage now emit owned texture readback replies. Their
+//   split path must never use the frontend shadow after GPU writes.
 //   GL_Getter.cpp x2 GetGpuTimestampNs and GL_Query.cpp's query probes now use their
 //   timer/occlusion/primitive capability bits. An advertised path emits real query
 //   records; only an unavailable native capability reports COUNTER_BITS 0.
