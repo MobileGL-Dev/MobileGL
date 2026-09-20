@@ -16,6 +16,47 @@
         std::abort();
     }
 
+    static const MG_Pipe::MGPStreamOutputBegin& WireXfbSpan() {
+        const auto& state = MG_Pipe::MGPipeApplier();
+        const auto found = state.StreamOutputSpans.find(state.BoundStreamOutputLifetimeId);
+        if (found == state.StreamOutputSpans.end()) MagmaWireFatal("xfb-span-record");
+        return found->second;
+    }
+
+    Bool VulkanRenderer::BeginWireXfbCaptureForDraw(FrameContext::FrameData& frame) {
+        const auto& span = WireXfbSpan();
+        const auto program = WireProgramSource(span.CaptureProgram);
+        const Uint32 count = static_cast<Uint32>(std::min<SizeT>(program.GetTransformFeedbackBufferCount(), 4));
+        if (!count || !program.GetTransformFeedbackVaryingCount()) return false;
+        VkBuffer buffers[4]{};
+        VkDeviceSize offsets[4]{};
+        VkDeviceSize sizes[4]{};
+        Bool hasTarget = false;
+        for (Uint32 i = 0; i < count; ++i) {
+            // A leading gl_NextBuffer leaves a hole in the binding indices. No
+            // output names that zero-stride target, and GL need not bind a buffer.
+            if (!program.GetTransformFeedbackStride(i)) continue;
+            const auto& target = span.Targets[i];
+            BufferSlice slice{};
+            if (MG_Pipe::MGPipeHandleIsNull(target.Res) ||
+                !m_bufferManager.AcquireWireSlice(BufferKind::Vertex, target.Res, slice))
+                MagmaWireFatal("xfb-buffer-resource");
+            if (target.Offset >= slice.size) return false;
+            const Uint64 size = target.Size == 0 || target.Size == MG_Pipe::kMGPipeWholeBuffer
+                ? slice.size - target.Offset : target.Size;
+            if (!size || size > slice.size - target.Offset) return false;
+            buffers[i] = slice.buffer;
+            offsets[i] = slice.offset + target.Offset;
+            sizes[i] = size;
+            hasTarget = true;
+            // The server owns the storage. Publish dirtiness through the existing
+            // reverse channel so CPU readback does not reuse the client's old shadow.
+            m_bufferManager.MarkWireBufferGpuWritten(target.Res, target.Offset, size);
+        }
+        if (!hasTarget) return false;
+        return BeginXfbCaptureWithBuffers(frame, count, buffers, offsets, sizes);
+    }
+
     static Bool ConvertWireVertexStream(const MGPVertexAttribWire& attr,
             VertexInputStateFactory::VertexStreamConversion conversion, const Uint8* source,
             SizeT stride, SizeT count, Vector<Uint8>& output) {
@@ -159,8 +200,9 @@
         auto& state = MG_Pipe::MGPipeApplier();
         const auto program = WireProgramSource(state.BoundShaderCso);
         if (!program.GetLinkStatus() || !program.GetSpirvStatus()) return false;
-        if (aspects & DrawSetupAspect::IndirectDrawBuffer || MGB_CTX->IsTransformFeedbackActive())
+        if (aspects & DrawSetupAspect::IndirectDrawBuffer)
             WireBufferLegacyFatal();
+        MakeXfbWritesVisible();
         const auto* fbo = state.DrawFramebuffer();
         if (!fbo) MagmaWireFatal("draw-framebuffer-record");
         RetireWireDrawPass();
@@ -170,6 +212,9 @@
 
         ProgramFactory::CompileOptionFlags flags =
             ProgramFactory::CompileOptionFlags(GetBaseTransformFlagsRaw(fbo->IsDefault));
+        if (m_transformFeedbackFeatureEnabled && MGB_CTX->IsTransformFeedbackActive() &&
+            program.GetTransformFeedbackVaryingCount() > 0)
+            flags |= ProgramFactory::CompileOptionBit::XfbCapture;
         const auto* programObject = &m_programFactory->GetOrCreateProgram(program, flags);
         if (!(aspects & DrawSetupAspect::IndexBuffer) && programObject->readsBaseVertexBuiltin) {
             flags |= ProgramFactory::CompileOptionBit::ZeroBaseVertex;
@@ -177,6 +222,7 @@
         }
         if (programObject->pointSizeCapabilityUnsupported) return false;
         const auto& programObj = *programObject;
+        m_currentDrawXfbCaptureDeclined = programObj.xfbCaptureDeclined;
         if (!m_uniformManager->PrepareWireTextureResources(program, programObj)) return false;
         // Lazy image uploads/promotions can submit the old recording. Resolve
         // ALL attachments before descriptor binding captures the current cmd.

@@ -806,6 +806,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Wraps a recorded draw with BeginTransformFeedbackEXT/EndTransformFeedbackEXT
         // when GL transform feedback is active; binds capture buffers on demand.
         Bool BeginXfbCaptureForDraw(FrameContext::FrameData& frame);
+        Bool BeginXfbCaptureWithBuffers(FrameContext::FrameData& frame, Uint32 count,
+                                       const VkBuffer* buffers, const VkDeviceSize* offsets,
+                                       const VkDeviceSize* sizes);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        Bool BeginWireXfbCaptureForDraw(FrameContext::FrameData& frame);
+#endif
+        Uint32 m_currentDrawXfbBufferCount = 0;
+        Uint32 m_currentDrawXfbBufferMask = 0;
         void EndXfbCaptureForDraw(FrameContext::FrameData& frame, Bool began);
         // Makes the captured bytes visible to whatever reads them next. Deferred rather than
         // recorded next to the capture, because the capturing draw runs inside a render pass

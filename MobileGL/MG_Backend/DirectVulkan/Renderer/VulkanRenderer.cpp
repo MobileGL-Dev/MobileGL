@@ -11904,10 +11904,6 @@ void main() {
         if (MGB_CTX->IsTransformFeedbackPaused()) {
             return false;
         }
-        const auto& program = MGB_CTX->GetTransformFeedbackProgram();
-        if (!program || program->GetTransformFeedbackVaryingCount() == 0) {
-            return false;
-        }
         // The bound pipeline's last pre-rasterization stage has to have been declared with Xfb
         // (VUID-vkCmdBeginTransformFeedbackEXT-None-04128). Everything above this line reads GL
         // state, which cannot answer that: a program can be built as a capture variant and still
@@ -11921,22 +11917,17 @@ void main() {
                          "undefined behaviour rather than a capture");
             return false;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
+            return BeginWireXfbCaptureForDraw(frame);
+#endif
+        const auto& program = MGB_CTX->GetTransformFeedbackProgram();
+        if (!program || program->GetTransformFeedbackVaryingCount() == 0) {
+            return false;
+        }
         const SizeT bufferCount = std::min<SizeT>(program->GetTransformFeedbackBufferCount(), 4);
         if (bufferCount == 0) {
             return false;
-        }
-
-        if (!m_xfbCounterBuffer.IsValid()) {
-            if (!m_xfbCounterBuffer.Create({
-                    .allocator = m_allocator,
-                    .size = 16 * kXfbCounterObjectSlots,
-                    .usage = VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT |
-                             VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    .memoryUsage = VMA_MEMORY_USAGE_AUTO,
-                })) {
-                MGLOG_E_ONCE("BeginXfbCaptureForDraw: failed to create the counter buffer");
-                return false;
-            }
         }
 
         VkBuffer buffers[4] = {};
@@ -11976,8 +11967,31 @@ void main() {
             sizes[i] = rangeSize;
         }
 
-        s_vkCmdBindTransformFeedbackBuffersEXT(frame.commandBuffer, 0, static_cast<Uint32>(bufferCount), buffers,
-                                               offsets, sizes);
+        return BeginXfbCaptureWithBuffers(frame, static_cast<Uint32>(bufferCount), buffers, offsets, sizes);
+    }
+
+    Bool VulkanRenderer::BeginXfbCaptureWithBuffers(FrameContext::FrameData& frame, Uint32 bufferCount,
+            const VkBuffer* buffers, const VkDeviceSize* offsets, const VkDeviceSize* sizes) {
+        if (!m_xfbCounterBuffer.IsValid()) {
+            if (!m_xfbCounterBuffer.Create({
+                    .allocator = m_allocator,
+                    .size = 16 * kXfbCounterObjectSlots,
+                    .usage = VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT |
+                             VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    .memoryUsage = VMA_MEMORY_USAGE_AUTO,
+                })) {
+                MGLOG_E_ONCE("BeginXfbCaptureForDraw: failed to create the counter buffer");
+                return false;
+            }
+        }
+        m_currentDrawXfbBufferCount = bufferCount;
+        m_currentDrawXfbBufferMask = 0;
+        for (Uint32 i = 0; i < bufferCount; ++i) {
+            if (buffers[i] == VK_NULL_HANDLE) continue;
+            m_currentDrawXfbBufferMask |= 1u << i;
+            s_vkCmdBindTransformFeedbackBuffersEXT(frame.commandBuffer, i, 1, buffers + i,
+                                                   offsets + i, sizes + i);
+        }
 
         const Uint32 counterSlot = CurrentXfbCounterSlot();
         const Uint64 generation = MGB_CTX->GetTransformFeedbackGeneration();
@@ -11987,6 +12001,7 @@ void main() {
         VkBuffer counterBuffers[4] = {};
         VkDeviceSize counterOffsets[4] = {};
         for (SizeT i = 0; i < bufferCount; ++i) {
+            if (!(m_currentDrawXfbBufferMask & (1u << i))) continue;
             counterBuffers[i] = m_xfbCounterBuffer.GetHandle();
             counterOffsets[i] = static_cast<VkDeviceSize>(counterSlot) * 16 + static_cast<VkDeviceSize>(i) * 4;
         }
@@ -12003,12 +12018,14 @@ void main() {
         if (!began) {
             return;
         }
-        const auto& program = MGB_CTX->GetTransformFeedbackProgram();
-        const SizeT bufferCount = program ? std::min<SizeT>(program->GetTransformFeedbackBufferCount(), 4) : 0;
+        // Exactly the targets used by this draw's Begin, independent of frontend
+        // objects and of whether the span came from the wire or monolith state.
+        const Uint32 bufferCount = m_currentDrawXfbBufferCount;
         const Uint32 counterSlot = CurrentXfbCounterSlot();
         VkBuffer counterBuffers[4] = {};
         VkDeviceSize counterOffsets[4] = {};
         for (SizeT i = 0; i < bufferCount; ++i) {
+            if (!(m_currentDrawXfbBufferMask & (1u << i))) continue;
             counterBuffers[i] = m_xfbCounterBuffer.GetHandle();
             counterOffsets[i] = static_cast<VkDeviceSize>(counterSlot) * 16 + static_cast<VkDeviceSize>(i) * 4;
         }
