@@ -250,6 +250,37 @@
     void VulkanRenderer::BlitWireFramebuffers(GLint sx0, GLint sy0, GLint sx1, GLint sy1,
         GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter) {
         if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("wire-verb-flush");
+        // The scissor test clips blit writes: intersect the destination rectangle with
+        // the scissor box and shrink the source proportionally.
+        if (MGB_CTX->IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+            const IntVec4& scissor = MGB_CTX->GetScissorBox();
+            const auto clipAxis = [](GLint& d0, GLint& d1, GLint& s0, GLint& s1, GLint clipLo, GLint clipHi) -> Bool {
+                const Bool dstFlipped = d1 < d0;
+                GLint lo = dstFlipped ? d1 : d0;
+                GLint hi = dstFlipped ? d0 : d1;
+                const GLint newLo = std::max(lo, clipLo);
+                const GLint newHi = std::min(hi, clipHi);
+                if (newLo >= newHi) {
+                    return false;
+                }
+                const double srcSpan = static_cast<double>(s1 - s0);
+                const double dstSpan = static_cast<double>(d1 - d0);
+                const double scale = dstSpan != 0.0 ? srcSpan / dstSpan : 0.0;
+                const GLint origD0 = d0;
+                const GLint clippedD0 = dstFlipped ? newHi : newLo;
+                const GLint clippedD1 = dstFlipped ? newLo : newHi;
+                s0 = s0 + static_cast<GLint>(std::lround((clippedD0 - origD0) * scale));
+                s1 = s0 + static_cast<GLint>(std::lround((clippedD1 - clippedD0) * scale));
+                d0 = clippedD0;
+                d1 = clippedD1;
+                return true;
+            };
+            if (!clipAxis(dx0, dx1, sx0, sx1, scissor.x(), scissor.x() + scissor.z()) ||
+                !clipAxis(dy0, dy1, sy0, sy1, scissor.y(), scissor.y() + scissor.w())) {
+                return; // fully scissored out
+            }
+        }
+
         auto& state = MG_Pipe::MGPipeApplier();
         const Bool named = !MG_Pipe::MGPipeHandleIsNull(state.VerbBlitReadFbo) ||
                            !MG_Pipe::MGPipeHandleIsNull(state.VerbBlitDrawFbo);
