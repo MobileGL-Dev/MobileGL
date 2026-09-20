@@ -1809,7 +1809,19 @@ TEST(ServerLoopEglTest, AReadPixelsReplyIsTheTightExtentWhateverDstSizeTheClient
     pack.Pack.Alignment = 4;
     pack.Pack.RowLength = 8; // the application's padded layout must not size server scratch
     ASSERT_TRUE(fixture.EmitAndWait(MG_Pipe::MGPWireOp::SetPixelPackState, &pack, sizeof(pack)));
-    MG_Pipe::MGPContextValues context{}; // no textures touched and no open XFB capture
+    // Unit zero is part of the initial touched-unit window even when unbound.
+    // Explicit empty bindings distinguish that state from records that never arrived.
+    MG_Pipe::MGPSamplerViews views{};
+    views.Count = 1;
+    MG_Pipe::MGPBoundView unboundView{};
+    ASSERT_TRUE(fixture.EmitAndWaitWithTail(MG_Pipe::MGPWireOp::SetSamplerViews,
+                                          &views, sizeof(views), &unboundView, sizeof(unboundView)));
+    MG_Pipe::MGPSamplerStates samplers{};
+    samplers.Count = 1;
+    const MG_Pipe::MGPipeHandle unboundSampler = MG_Pipe::kMGPipeNullHandle;
+    ASSERT_TRUE(fixture.EmitAndWaitWithTail(MG_Pipe::MGPWireOp::BindSamplerStates,
+                                          &samplers, sizeof(samplers), &unboundSampler, sizeof(unboundSampler)));
+    MG_Pipe::MGPContextValues context{}; // unit zero is unbound; no open XFB capture
     ASSERT_TRUE(fixture.EmitAndWait(MG_Pipe::MGPWireOp::SetContextValues, &context, sizeof(context)));
 
     MG_Pipe::MGPReadbackInfo info{};
