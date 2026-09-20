@@ -2490,6 +2490,37 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endforeach()
 endif()
 
+# Magma wire caches: exact view/attachment identity across public GL mutations.
+# Split-only source preserves pull discovery; generic split-build registrations
+# retain these names but skip outside this dedicated, strict inproc environment.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    target_sources(MobileGLIntegrationTest PRIVATE Scenarios/MagmaWireCacheScenario.cpp)
+    mgl_itest_join_environment(MGL_ITEST_MAGMA_CACHES_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_TRANSPORT=inproc"
+        "MOBILEGL_IPC_ROLE_SPLIT_STATE=1" "MOBILEGL_IPC_STRICT_ERRORS=1"
+        "MOBILEGL_IPC_RUN_AHEAD=1" "MOBILEGL_IPC_PRESENT_CREDIT=3"
+        "MOBILEGL_IPC_SPIN_US=0" "MOBILEGL_IPC_ADOPT_TIER=2"
+        "MGITEST_MAGMA_CACHES_LANE=1" "MGITEST_SPLIT_LANE=1"
+        "MOBILEGL_ITEST_REQUIRE_GPU=1"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+    foreach(cacheCase
+            SamplerSwizzleAtoBtoAKeepsEachQueuedPixel
+            SamplerRespecifyKeepsOldAndNewNativeImages
+            SamplerViewsDistinguishMipLayerAndViewType
+            FramebuffersAtoBtoAKeepDistinctAttachments
+            FramebufferReattachmentDistinguishesMipAndLayer
+            FramebufferSrgbPolicyAtoBtoAUsesDistinctFormats
+            FramebufferRespecifyRebindsTheNewNativeImage)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.Split.Caches."
+            TEST_FILTER "MagmaWireCacheScenario.${cacheCase}"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "integration-magma-split\;integration-magma-caches"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${MGL_ITEST_MAGMA_CACHES_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-caches-${cacheCase}.log")
+    endforeach()
+endif()
+
 # P5c ct (MG_Remote/CONTRACT-P5C.md §5): the two control records, split-only source for the
 # same reason as f1's - the scenario reads the SERVER sink's tallies, which a monolith build
 # has no symbol for. One block per case with a LOG PATH OF ITS OWN, the F1 pattern:
