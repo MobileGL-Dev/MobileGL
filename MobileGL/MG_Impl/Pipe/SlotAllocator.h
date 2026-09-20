@@ -173,17 +173,8 @@ namespace MobileGL::MG_Pipe {
     // pull build's bytes do not move (G1).
     void MGPipeRefuseAllocatorFromApplyThread(const char* entry);
 
-    // ---- P5e (id, CONTRACT-P5E §4.4): THE CONDITION UNDER WHICH A NAMED SCOPE EXEMPTS -----
-    //
-    // "This thread is applying a record the client is NOT parked behind." Both scopes below
-    // exempt a probe only while it is FALSE, because the client's wait is the whole of what
-    // makes a frontend read from the apply thread safe: behind a barriered record the client
-    // is blocked in WaitForApplied and its memory is stable; behind an unbarriered one it is
-    // running ahead and the same read is torn or stale BY CONSTRUCTION, which is why rule F
-    // has no "count it" arm and this answer does not consult MOBILEGL_IPC_STRICT_ERRORS.
-    //
-    // False in a monolith process and on any thread but the apply thread, so a GL-thread
-    // caller is never refused by it.
+    // Shared predicate for remaining field/verb guards. Registry and allocator
+    // guards below refuse both barriered and unbarriered transport apply.
     Bool MGPipeApplierIsUnbarrieredApply();
 
     // P5f (fr): frontend-object twin lookup, minting and weak-state access are refused
@@ -192,71 +183,24 @@ namespace MobileGL::MG_Pipe {
     // glue. This separate guard also prevents borrowing Magma's allocator exemption.
     void MGPipeRefuseFrontendKeyedRegistryFromApplyThread(const char* entry);
 
-    // The NAMED EXEMPTION to the rule above (CONTRACT-P5C §3.1, as amended by CONTRACT-P5E
-    // §4.4): the family of sites whose handle-carrying records the client does not EMIT yet.
-    // set_shader_buffers and set_stream_output_targets exist in the catalogue but are P4b/sb's
-    // to emit (SetHashSuppressor.h says so), so the buffer binding-point ensures and the
-    // GPU-written announcement they feed have no record handle to resolve from today. Inside
-    // this scope ONE read-only lifetime-id probe stays legal WHILE THE CURRENT RECORD IS
-    // BARRIERED; the scope is the debt's measurable, greppable form, and it retires with P7's
-    // server-side binding table. Every other apply-thread allocator access stays Fatal.
-    //
-    // THE DEPTH IS COUNTED ONLY ON THE APPLY THREAD (P5d round 3, package D). The counter's
-    // only reader is MGPipeRefuseAllocatorFromApplyThread, which returns before it looks unless
-    // ServerLoop::OnApplyThread() is true, so a depth kept on any OTHER thread could never
-    // change an answer - it was pure cost. The query is called ActiveOnApplyThread() and not
-    // Active() BECAUSE OF THAT (review round 3): a name that promised "is a scope open" would
-    // now be quietly answering "is a scope open ON THE APPLY THREAD", and the next reader to
-    // come along - a P4b/P7 probe deciding on the GL thread whether to emit a record - would
-    // read a truthful-looking false and take the wrong branch with nothing to warn it. The name
-    // carries the precondition so a second reader has to notice it. m_counted remembers what the constructor decided so
-    // the destructor undoes exactly what the constructor did; asking the predicate twice would
-    // leak a count for a scope that outlived the apply thread. On the GL thread (and in every
-    // monolith process) both ends are now one inlined predicate and a branch instead of an
-    // emutls call, which is where 32.7% of the monolith GL thread's __emutls_get_address - its
-    // top symbol at 7.7% - was going.
-    //
-    // P5e (id), ruling 12: RENAMED FROM MGPipeReverseAnnouncementScope AND KEYED ON THE
-    // BACKEND KIND. The rename is the finding: what is left inside it after P5e is not "the
-    // reverse announcement" - Espryt's half of that moved to the frontend-keyed scope with the
-    // rest of the registry debt - it is MAGMA'S FOUR APPLY-THREAD ALLOCATOR TOUCHES, which P7
-    // retires (VulkanRenderer.cpp's two hidden-resource shutdowns and its named-blit endpoint
-    // resolve, plus MGPipeAnnounceBufferGpuWritten in ResourceTracker.h). Naming the scope
-    // after the debt rather than after one of its sites is what makes "has P7 landed yet" a
-    // grep; naming it after Magma is what stops a new Espryt site being wrapped in it.
-    //
-    // THE EXEMPTION IS REFUSED WHEN THE SERVER BACKEND IS NOT DirectVulkan, and that is the
-    // point of the key rather than a safety belt. Magma stays lockstep for the whole of P5e
-    // (§6.1: the DirectVulkan arm never publishes kCapRunAheadApply, so every record there is
-    // barriered and every probe inside this scope keeps P5C's semantics). Espryt is what P5e
-    // is retiring the lockstep for, so an Espryt probe must not be able to borrow Magma's
-    // exemption - even by wrapping itself in Magma's scope.
+    // P5f (fr): these historical scope names remain greppable markers around
+    // monolith glue until P3b/P4b remove those bodies. They hold no state and grant
+    // no exemption: allocator and frontend-registry access always refuse apply.
     class MagmaP7AllocatorDebtScope {
     public:
-        MagmaP7AllocatorDebtScope();
-        ~MagmaP7AllocatorDebtScope();
+        MagmaP7AllocatorDebtScope() = default;
+        ~MagmaP7AllocatorDebtScope() = default;
         MagmaP7AllocatorDebtScope(const MagmaP7AllocatorDebtScope&) = delete;
         MagmaP7AllocatorDebtScope& operator=(const MagmaP7AllocatorDebtScope&) = delete;
-        static Bool ActiveOnApplyThread();
-
-    private:
-        Bool m_counted;
     };
 
-    // P5f (fr): retained as a greppable marker around monolith-only legacy registry
-    // calls. This scope no longer exempts transport apply from either registry or
-    // allocator guards, even behind a barrier. P3b/P4b can remove these markers with
-    // the surrounding monolith glue; adding one cannot make a new wire fallback legal.
     class MGPipeFrontendKeyedRegistryScope {
     public:
-        MGPipeFrontendKeyedRegistryScope();
-        ~MGPipeFrontendKeyedRegistryScope();
+        MGPipeFrontendKeyedRegistryScope() = default;
+        ~MGPipeFrontendKeyedRegistryScope() = default;
         MGPipeFrontendKeyedRegistryScope(const MGPipeFrontendKeyedRegistryScope&) = delete;
         MGPipeFrontendKeyedRegistryScope& operator=(const MGPipeFrontendKeyedRegistryScope&) = delete;
-        static Bool ActiveOnApplyThread();
-
-    private:
-        Bool m_counted;
     };
+
 #endif
 } // namespace MobileGL::MG_Pipe

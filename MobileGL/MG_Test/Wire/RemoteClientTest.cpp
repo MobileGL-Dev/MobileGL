@@ -1898,29 +1898,9 @@ MGL_BUFFER_GUARD_TEST(BufferSyncPersistentMappedRangeFromTheApplyThreadIsFatalBy
 MGL_BUFFER_GUARD_TEST(BufferHasDefinedContentFromTheApplyThreadIsFatalByName, 707, (void)buffer.HasDefinedContent())
 #undef MGL_BUFFER_GUARD_TEST
 
-// P5d round 3 (package D): the two NAMED EXEMPTION scopes of CONTRACT-P5C §3.1 / §5.4 stopped
-// keeping their depth in a thread_local and now count ONLY while ServerLoop::OnApplyThread() is
-// true (SlotAllocator.cpp). The claim that makes that legal is "the apply-thread guard is the
-// counter's only reader, so a depth kept on any other thread cannot change an answer" - and
-// these three cases are that claim in executable form. They are the red-once for the change:
-//
-//   (a) drop the `if (m_counted)` from the constructor (or make it unconditional again on a
-//       thread that is not the apply thread) and (c) goes red - a GL-thread scope would start
-//       exempting the apply thread, which is exactly the leak the thread_local used to prevent;
-//   (b) drop the increment altogether and (a) goes red - the exemption stops exempting and
-//       the debt's own sites (DirectGLES' HandleOf probes) abort the server;
-//   (c) drop the guard's `MagmaP7AllocatorDebtScope::ActiveOnApplyThread()` /
-//       `FrontendKeyedRegistryScope::ActiveOnApplyThread()` rows and (b) - the control - stops
-//       being the only aborting arm.
-//
-// P5e (id), CONTRACT-P5E §4.4 REPLACED (b). The case that used to sit there -
-// `AnAllocatorProbeInsideAnExemptionScopeOnTheApplyThreadIsAllowed` - asserted that a scope
-// exempts UNCONDITIONALLY, which is exactly the rule §4.4 retires: an exemption is a debt the
-// CLIENT'S WAIT pays for, so it holds only while the record being applied is barriered. Its
-// replacement below drives the same scope with the barriered flag forced false and expects the
-// abort. The green half of the old case did not need a test of its own: every Espryt
-// `integration-split` entry runs the frontend-keyed scope's surviving sites on the apply thread
-// behind barriered records, so a guard that stopped exempting would take the whole lane down.
+// Historical P5d/P5e probes remain named for compatibility. P5f retires both
+// scope exemptions, including barriered records; all allocator access on apply is
+// client-memory access regardless of whether that memory happens to be stable.
 TEST(RemoteGuards, AnAllocatorProbeFromTheApplyThreadOutsideEveryScopeIsFatalByName) {
     const auto child = RunInChild([] {
         StartControlSession();
@@ -1935,24 +1915,8 @@ TEST(RemoteGuards, AnAllocatorProbeFromTheApplyThreadOutsideEveryScopeIsFatalByN
     ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
 }
 
-// P5e (id) RED-ONCE, CONTRACT-P5E §4.4. The exemption scope is OPEN and the probe is the one
-// the debt is named for - `HandleOf`, the frontend-keyed registry's own entry - and it still
-// aborts, because the record being applied is unbarriered: the client is running ahead and the
-// allocator's free list and lifetimeId -> slot map are moving under the read.
-//
-// THE HOOK IS THE APPLIER FIELD ITSELF and that is deliberate: `CurrentRecordBarriered` is what
-// PipeApplier::ApplyOne stamps from MGPipeBarriered() on every record, so forcing it here drives
-// the production path rather than a test-only branch beside it. Until ra lands the wait rule
-// MGPipeBarriered answers true for every record, so this is the ONLY way to reach the arm - and
-// the arm has to exist before ra, because ra is what makes it reachable in production.
-//
-// The red: put §4.4's `if (MGPipeApplierCurrentRecordIsBarriered())` back to an unconditional
-// exemption in MGPipeRefuseAllocatorFromApplyThread and this case stops aborting - red by
-// expectation, which is the shape a guard case fails in.
-// EVERYTHING BUT THE PROBE RUNS ON THE CLIENT THREAD, which is the buffer/texture guard cases'
-// shape one block down and is load-bearing here rather than tidy: a TextureObject2D's
-// constructor MINTS a resource handle, and building it on the apply thread would abort at the
-// mint with the same diagnostic - a case that passes for a reason other than the one it names.
+// Construct on the client and run only HandleOf on apply. The false barrier stamp
+// keeps the original P5e scenario; the tests below add the old barriered loophole.
 TEST(RemoteGuards, AnAllocatorProbeInsideAnExemptionScopeFromTheApplyThreadIsFatalEvenAtTheOldDebtSites) {
     struct Probe {
         TestTextureTable* table;
@@ -1983,18 +1947,23 @@ TEST(RemoteGuards, AnAllocatorProbeInsideAnExemptionScopeFromTheApplyThreadIsFat
 // P5f (fr): barriers and old named scopes no longer admit frontend identity.
 // Construct the object and table on the client so each death comes from the exact
 // probed member, not a constructor's resource_create or a missing record.
-TEST(RemoteGuards, BarrieredFrontendRegistryScopeCannotExemptAllocator) {
-    const auto child = RunInChild([] {
-        StartControlSession();
-        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(+[](void*) -> MobileGLResult {
-            MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(true);
-            const MG_Pipe::MGPipeFrontendKeyedRegistryScope scope;
-            MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("FindByLifetimeId");
-            return MOBILEGL_OK;
-        }, nullptr);
-        ClientSessionInstance().Stop();
-    });
-    ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
+TEST(RemoteGuards, BarrieredLegacyScopesCannotExemptAllocator) {
+    for (const auto backend : {BackendType::DirectGLES, BackendType::DirectVulkan}) {
+        const auto child = RunInChild([backend] {
+            StartControlSession();
+            auto selectedBackend = backend;
+            Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(+[](void* self) -> MobileGLResult {
+                MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(true);
+                MG_Config::ActiveBackendType = *static_cast<BackendType*>(self);
+                const MG_Pipe::MGPipeFrontendKeyedRegistryScope registryScope;
+                const MG_Pipe::MagmaP7AllocatorDebtScope magmaScope;
+                MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, 99);
+                return MOBILEGL_OK;
+            }, &selectedBackend);
+            ClientSessionInstance().Stop();
+        });
+        ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
+    }
 }
 
 TEST(RemoteGuards, BarrieredFrontendRegistryMembersRefuseBothLegacyScopes) {
@@ -2062,11 +2031,7 @@ TEST(RemoteGuards, HandleRegistryMembersWorkOnBarrieredAndUnbarrieredApply) {
     EXPECT_EQ(WEXITSTATUS(child.Status), 0) << child.Log;
 }
 
-// THE ONE THAT PINS THE SINGLE-WRITER ARGUMENT. The scope is open on the GL thread for the
-// whole of the posted request; the apply thread's probe must still abort, because the exemption
-// belongs to the thread that entered the scope and never to another one. With the depth kept in
-// a plain counter that every thread incremented, this case would go green - and a real
-// apply-thread violation would be silently exempted for as long as any GL thread held a scope.
+// A marker held by the GL thread never affects the apply guard either.
 TEST(RemoteGuards, AnExemptionScopeHeldOnTheGLThreadDoesNotExemptTheApplyThread) {
     const auto child = RunInChild([] {
         StartControlSession();
