@@ -1069,7 +1069,9 @@ namespace MobileGL::MG_Remote::Server {
             state.StreamOutputSpans.erase(object.LifetimeId);
             if (state.BoundStreamOutputLifetimeId == object.LifetimeId) state.BoundStreamOutputLifetimeId = 0;
         }
+        state.VerbDeleteStreamOutputLifetimeId = object.LifetimeId;
         if (table->GL.DeleteTransformFeedback) table->GL.DeleteTransformFeedback(object.GlName);
+        state.VerbDeleteStreamOutputLifetimeId = 0;
         return true;
     }
 

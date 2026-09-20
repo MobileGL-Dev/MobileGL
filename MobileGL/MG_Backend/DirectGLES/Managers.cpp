@@ -2394,7 +2394,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             void Ops_H_Readback(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPReadback& record) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // An empty capture may conservatively request a writeback before
+                // any draw materialized this buffer. Resolve its staged resource
+                // exactly as a GPU consumer would, then return the real bytes.
+                auto* resource = MG_Config::Transport != MG_Config::TransportMode::Monolith
+                    ? EnsureBufferResourceForHandle(nullptr, res) : FindBufferResourceForHandle(res);
+#else
                 auto* resource = FindBufferResourceForHandle(res);
+#endif
                 if (!resource || resource->id == 0 || !resource->storageInitialized) return;
                 if (!CanTouchGLNow() || resource->contextGeneration != g_bufferContextGeneration) return;
                 if (resource->persistentMapped) {
@@ -2715,9 +2723,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (bytes == nullptr || record.Blob.Size == 0) return;
                 const auto* stored = PipeTextureRecordForHandle(res);
                 if (stored == nullptr) return;
-                const IntVec3 extent = MG_Remote::Server::StagedTextureMipExtent(
-                    stored->Desc.Target, stored->Desc.Width, stored->Desc.Height, stored->Desc.Depth,
-                    static_cast<Uint32>(record.Level));
+                const IntVec3 extent = record.LevelWidth && record.LevelHeight && record.LevelDepth
+                    ? IntVec3{static_cast<Int>(record.LevelWidth), static_cast<Int>(record.LevelHeight),
+                              static_cast<Int>(record.LevelDepth)}
+                    : MG_Remote::Server::StagedTextureMipExtent(
+                        stored->Desc.Target, stored->Desc.Width, stored->Desc.Height, stored->Desc.Depth,
+                        static_cast<Uint32>(record.Level));
                 store.Adopt(MG_Remote::Server::StagedTextureStore::KeyForHandle(res),
                             MG_Pipe::MGPipeSubDataUploadTargetOf(record.Target), record.Level, extent,
                             bytes, static_cast<SizeT>(record.Blob.Size));

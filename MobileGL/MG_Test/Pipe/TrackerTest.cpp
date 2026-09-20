@@ -80,6 +80,7 @@ namespace {
     X(TrackerWalk, TheIndexBufferBitFiresWhenTheSlotVersionWrapsOntoADifferentBuffer) \
     X(TrackerWalk, ABaseInstanceSurvivesTheFirstWalkOnAFreshContext) \
     X(TrackerWalk, ASamplerBindAloneFiresTheSamplerStateBit) \
+    X(TrackerWalk, ARedundantDefaultBindStillPublishesAGrowingSamplerWindow) \
     X(TrackerWalk, ARestagedProgramPipelineFiresTheProgramBits) \
     X(TrackerWalk, ARelinkOfAStageProgramFiresTheProgramBits) \
     X(TrackerWalk, UseProgramZeroLeavesTheBoundPipelineDrivingTheProgramBits) \
@@ -782,6 +783,18 @@ namespace {
             << "the view set is re-resolved on a sampler bind too - completeness depends on the "
                "effective sampler - and that half was already right";
         EXPECT_EQ(Walk(), 0u) << "the widened shutter fires forever";
+    }
+
+    TEST_F(TrackerWalk, ARedundantDefaultBindStillPublishesAGrowingSamplerWindow) {
+        Walk();
+        ASSERT_EQ(Walk(), 0u);
+        const Uint64 generation = Ctx().GetTextureBindGeneration();
+        Ctx().NoteTextureUnitTouched(7, false);
+        ASSERT_EQ(Ctx().GetTextureBindGeneration(), generation);
+        const Uint32 dirty = Walk();
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewSamplerViews), 0u);
+        EXPECT_NE(dirty & MGPipeDirtyBit(MGPipeDirty::NewSamplers), 0u);
+        EXPECT_EQ(Walk(), 0u);
     }
 
     // BITS 6/7/8 UNDER A SEPARABLE PROGRAM PIPELINE. GetCurrentProgram() is null for the whole

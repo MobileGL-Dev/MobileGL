@@ -17,6 +17,12 @@
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectGLES/DirectGLES.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <Config.h>
+#include <MG_Impl/Pipe/SlotAllocator.h>
+#include <MG_Remote/Client/ClientSession.h>
+#include <MG_Remote/Server/ServerLoop.h>
+#endif
 #define MGITEST_PIPE_APPLY_PEEK_LIVE 1
 #endif
 #endif
@@ -74,8 +80,70 @@ namespace MGITest {
         }
     } // namespace
 
+    static bool ReadAppliedTextureParams(MGB::TextureImpl::BackendTextureObject* twin,
+                                         unsigned glTarget, EsprytAppliedTextureParamsPeek* out);
+
+    static void CopyTextureParamsRecord(const MGP::MGPipeResourceRecord& record, unsigned slot,
+                                        PipeTextureParamsRecordPeek& out) {
+        out.Slot = slot;
+        out.Gen = static_cast<unsigned>(record.Gen);
+        out.ParamsSerial = static_cast<unsigned long long>(record.ParamsSerial);
+        for (int channel = 0; channel < 4; ++channel) out.Swizzle[channel] = SwizzleToGLEnum(record.Params.Swizzle[channel]);
+        out.DepthStencilMode = DepthStencilModeToGLEnum(record.Params.DepthStencilMode);
+    }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    enum class ServerPeekKind { Record, Applied, View };
+    static bool PeekOnApplyThread(unsigned glTextureName, unsigned target, ServerPeekKind kind, void* output) {
+        auto* object = FrontendTexture(glTextureName);
+        auto* session = MobileGL::MG_Remote::Client::ClientSession::Active();
+        if (!object || !session || !output) return false;
+        struct Request {
+            MGP::MGPipeHandle Texture, View;
+            unsigned Target;
+            ServerPeekKind Kind;
+            void* Output;
+            bool Result = false;
+        } request{MGP::MGPipeSlots().FindByLifetimeId(MGP::MGPipeKind::Texture, object->GetLifetimeId()),
+                  MGP::MGPipeSlots().FindByLifetimeId(MGP::MGPipeKind::SamplerViewCso, object->GetLifetimeId()),
+                  target, kind, output};
+        if (MGP::MGPipeHandleIsNull(request.Texture)) return false;
+        if (session->WaitForApplied(session->LastPublishedSeq(), 30000) !=
+            MobileGL::MG_Remote::Transport::SessionWait::Reached) return false;
+        const auto result = MobileGL::MG_Remote::Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+            +[](void* opaque) -> MobileGLResult {
+                auto& r = *static_cast<Request*>(opaque);
+                const auto& records = MGP::MGPipeApplier().TextureResources;
+                if (r.Texture.Slot >= records.size()) return MOBILEGL_OK;
+                const auto& record = records[r.Texture.Slot];
+                if (!record.Live || record.Gen != r.Texture.Gen) return MOBILEGL_OK;
+                if (r.Kind == ServerPeekKind::Record) {
+                    CopyTextureParamsRecord(record, r.Texture.Slot, *static_cast<PipeTextureParamsRecordPeek*>(r.Output));
+                    r.Result = true;
+                    return MOBILEGL_OK;
+                }
+                auto* found = MGB::TextureImpl::g_backendTextureObjects.FindByHandle(r.Texture);
+                if (!found || !*found) return MOBILEGL_OK;
+                if (r.Kind == ServerPeekKind::Applied)
+                    r.Result = ReadAppliedTextureParams(found->get(), r.Target,
+                        static_cast<EsprytAppliedTextureParamsPeek*>(r.Output));
+                else {
+                    *static_cast<bool*>(r.Output) = !MGP::MGPipeHandleIsNull(r.View) &&
+                        MGB::SamplerViewImpl::FindSamplerViewForHandle(r.View) != nullptr;
+                    r.Result = true;
+                }
+                return MOBILEGL_OK;
+            }, &request);
+        return result == MOBILEGL_OK && request.Result;
+    }
+#endif
+
     bool PeekPipeTextureParamsRecord(unsigned glTextureName, PipeTextureParamsRecordPeek* out) {
         if (out == nullptr) return false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MobileGL::MG_Config::Transport != MobileGL::MG_Config::TransportMode::Monolith)
+            return PeekOnApplyThread(glTextureName, 0, ServerPeekKind::Record, out);
+#endif
         const MGP::MGPipeApplierState& applier = MGP::MGPipeApplier();
         // Slot 0 is the reserved null handle and is never live (MGPipeHandles.h), so the scan
         // starts at 1 and a match at 0 is impossible rather than merely unlikely.
@@ -83,13 +151,7 @@ namespace MGITest {
             const MGP::MGPipeResourceRecord& record = applier.TextureResources[slot];
             if (!record.Live) continue;
             if (record.Desc.GlNameForDiag != static_cast<MobileGL::Uint32>(glTextureName)) continue;
-            out->Slot = static_cast<unsigned>(slot);
-            out->Gen = static_cast<unsigned>(record.Gen);
-            out->ParamsSerial = static_cast<unsigned long long>(record.ParamsSerial);
-            for (int channel = 0; channel < 4; ++channel) {
-                out->Swizzle[channel] = SwizzleToGLEnum(record.Params.Swizzle[channel]);
-            }
-            out->DepthStencilMode = DepthStencilModeToGLEnum(record.Params.DepthStencilMode);
+            CopyTextureParamsRecord(record, static_cast<unsigned>(slot), *out);
             return true;
         }
         return false;
@@ -97,10 +159,18 @@ namespace MGITest {
 
     bool PeekEsprytAppliedTextureParams(unsigned glTextureName, unsigned glTarget,
                                         EsprytAppliedTextureParamsPeek* out) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MobileGL::MG_Config::Transport != MobileGL::MG_Config::TransportMode::Monolith)
+            return PeekOnApplyThread(glTextureName, glTarget, ServerPeekKind::Applied, out);
+#endif
+        return ReadAppliedTextureParams(EsprytTwin(glTextureName), glTarget, out);
+    }
+
+    static bool ReadAppliedTextureParams(MGB::TextureImpl::BackendTextureObject* twin,
+                                         unsigned glTarget, EsprytAppliedTextureParamsPeek* out) {
         if (out == nullptr) return false;
         const int bindingQuery = BindingQueryFor(glTarget);
         if (bindingQuery == 0) return false;
-        MGB::TextureImpl::BackendTextureObject* const twin = EsprytTwin(glTextureName);
         if (twin == nullptr) return false;
         const MobileGL::Uint backendId = twin->GetBackendTextureId();
         if (backendId == 0) return false;
@@ -151,6 +221,10 @@ namespace MGITest {
     }
 
     bool PeekEsprytHasSamplerViewForTexture(unsigned glTextureName, bool* outExists) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MobileGL::MG_Config::Transport != MobileGL::MG_Config::TransportMode::Monolith)
+            return PeekOnApplyThread(glTextureName, 0, ServerPeekKind::View, outExists);
+#endif
         if (outExists == nullptr) return false;
         MobileGL::MG_State::GLState::ITextureObject* const object = FrontendTexture(glTextureName);
         if (object == nullptr) return false;

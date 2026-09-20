@@ -848,6 +848,7 @@ namespace MobileGL::MG_Pipe {
         MGPipeHandle VerbCopyTexDst = kMGPipeNullHandle;
         MGPipeHandle VerbStorageBlockProgram = kMGPipeNullHandle;
         Uint64 BoundStreamOutputLifetimeId = 0;
+        Uint64 VerbDeleteStreamOutputLifetimeId = 0;
         UnorderedMap<Uint64, MGPStreamOutputBegin> StreamOutputSpans;
         // generate_mipmap's texture (MGPMipPlan::Res).
         MGPipeHandle VerbMipRes = kMGPipeNullHandle;
@@ -876,6 +877,7 @@ namespace MobileGL::MG_Pipe {
             VerbBlitNamedConsumed = false;
             VerbCopyTexDst = kMGPipeNullHandle;
             VerbStorageBlockProgram = kMGPipeNullHandle;
+            VerbDeleteStreamOutputLifetimeId = 0;
             VerbMipRes = kMGPipeNullHandle;
             VerbMipBaseLevel = VerbMipLevelCount = 0;
             VerbIndirectBuffer = kMGPipeNullHandle;

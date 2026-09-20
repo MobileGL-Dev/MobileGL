@@ -737,6 +737,15 @@ namespace MobileGL::MG_Pipe {
             }
             m_lastVaoLifetime = vaoLifetime;
             m_lastVaoConfig = vaoConfig;
+            // A redundant bind of the default texture can grow the unit window
+            // without changing either binding or sampling generations. Both sets
+            // must still publish that new prefix, including its null samplers.
+            const Int maxTextureUnit = ctx.GetMaxTouchedTextureUnit();
+            if (!m_primed || maxTextureUnit != m_lastMaxTextureUnit) {
+                dirty |= MGPipeDirtyBit(MGPipeDirty::NewSamplerViews) |
+                         MGPipeDirtyBit(MGPipeDirty::NewSamplers);
+            }
+            m_lastMaxTextureUnit = maxTextureUnit;
 
             // ---- bit 2: the PACK half of the pixel store, BitwiseEqual ----
             const PixelStoreParameters pack = ctx.GetPixelStoreParameters(false);
@@ -791,6 +800,7 @@ namespace MobileGL::MG_Pipe {
             std::memset(m_lastPushed, 0, sizeof(m_lastPushed));
             m_lastVaoLifetime = 0;
             m_lastVaoConfig = 0;
+            m_lastMaxTextureUnit = -1;
             m_renderStateVersion.Reset();
             m_pipelineStateVersion.Reset();
             m_framebufferBind.Reset();
@@ -881,6 +891,7 @@ namespace MobileGL::MG_Pipe {
         Uint64 m_lastPushed[kMGPipeDirtyCount]{};
         Uint64 m_lastVaoLifetime = 0;
         Uint32 m_lastVaoConfig = 0;
+        Int m_lastMaxTextureUnit = -1;
         MGPipeWidenedCounter m_renderStateVersion;
         MGPipeWidenedCounter m_pipelineStateVersion;
         // The draw framebuffer BINDING slot version, widened for the same reason: a Uint16
