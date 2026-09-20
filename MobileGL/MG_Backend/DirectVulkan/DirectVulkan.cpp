@@ -318,7 +318,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     DrawElementsIndirectCommand command{};
                     Memcpy(&command, bytes.data() + static_cast<SizeT>(i) * stride, sizeof(command));
                     params[i] = {command.count, command.instanceCount, command.firstIndex,
-                                 command.baseVertex, command.baseInstance};
+                                 command.baseVertex, std::bit_cast<Int32>(command.baseInstance)};
                     const Uint64 end = (static_cast<Uint64>(command.firstIndex) + command.count) * indexSize;
                     if (end > std::numeric_limits<SizeT>::max()) return;
                     payload.indexBufferView.indexByteSize = std::max<SizeT>(payload.indexBufferView.indexByteSize,
