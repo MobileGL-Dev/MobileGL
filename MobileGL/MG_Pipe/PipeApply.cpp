@@ -45,6 +45,7 @@
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Remote/Server/ServerSession.h>
+#include <MG_Remote/Server/StagedTextureStore.h>
 #include <MG_Remote/CapsCodec.h>
 #endif
 
@@ -1012,6 +1013,59 @@ namespace MobileGL::MG_Pipe {
             return true;
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Texture records can have a server consumer without the buffer ops table (Magma).
+        // Their staged bytes still belong to the server before SEG_STAGE retires. Keep the
+        // existing backend hooks authoritative when present, and use this fallback otherwise.
+        void AdoptTextureWithoutBackendHook(const MGPResourceRecord& stored, const MGPSubData& upload,
+                                           const void* bytes) {
+            if (MG_Config::Transport == MG_Config::TransportMode::Monolith || !bytes || upload.Blob.Size == 0) return;
+            auto& store = MG_Remote::Server::ServerStagedTexture();
+            const auto& desc = stored.Desc;
+            store.Adopt(MG_Remote::Server::StagedTextureStore::KeyForHandle(upload.Res),
+                MGPipeSubDataUploadTargetOf(upload.Target), upload.Level,
+                MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height, desc.Depth, upload.Level),
+                bytes, static_cast<SizeT>(upload.Blob.Size));
+        }
+
+        void DefineTextureWithoutBackendHook(const MGPResourceDesc& desc, const MGPRespecifiedLevel* level) {
+            if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+            auto& store = MG_Remote::Server::ServerStagedTexture();
+            const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(desc.Resource);
+            const auto define = [&](Uint16 target, Uint16 mip) {
+                store.NoteLevelDefined(key, target, mip, MG_Remote::Server::StagedTextureMipExtent(
+                    desc.Target, desc.Width, desc.Height, desc.Depth, mip));
+            };
+            if (level) {
+                define(MGPipeSubDataUploadTargetOf(level->UploadTarget), level->Level);
+                return;
+            }
+            store.ResetLevels(key);
+            if (!desc.Immutable || !desc.Levels) return;
+            const auto defineChain = [&](TextureUploadTarget target) {
+                for (Uint32 mip = 0; mip < desc.Levels; ++mip) define(static_cast<Uint16>(target), static_cast<Uint16>(mip));
+            };
+            switch (static_cast<MGPipeResourceTarget>(desc.Target)) {
+            case MGPipeResourceTarget::Tex1D: defineChain(TextureUploadTarget::Texture1D); break;
+            case MGPipeResourceTarget::Tex2D: defineChain(TextureUploadTarget::Texture2D); break;
+            case MGPipeResourceTarget::Tex3D: defineChain(TextureUploadTarget::Texture3D); break;
+            case MGPipeResourceTarget::Tex1DArray: defineChain(TextureUploadTarget::Texture1DArray); break;
+            case MGPipeResourceTarget::Tex2DArray: defineChain(TextureUploadTarget::Texture2DArray); break;
+            case MGPipeResourceTarget::TexCube:
+                for (Uint32 face = static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX);
+                     face <= static_cast<Uint32>(TextureUploadTarget::CubeMapNegativeZ); ++face)
+                    defineChain(static_cast<TextureUploadTarget>(face));
+                break;
+            case MGPipeResourceTarget::TexCubeArray: defineChain(TextureUploadTarget::CubeMapArray); break;
+            case MGPipeResourceTarget::Tex2DMS: defineChain(TextureUploadTarget::Texture2DMultisample); break;
+            case MGPipeResourceTarget::Tex2DMSArray: defineChain(TextureUploadTarget::Texture2DMultisampleArray); break;
+            case MGPipeResourceTarget::TexRect: defineChain(TextureUploadTarget::TextureRectangle); break;
+            case MGPipeResourceTarget::TexBuffer: defineChain(TextureUploadTarget::TextureBuffer); break;
+            default: break;
+            }
+        }
+#endif
+
         // The texture half of resource_subdata, and it DISPATCHES TO NOBODY at GL-call time:
         // a texture write marks a level dirty and Espryt uploads it at its own sync point, out
         // of the accumulated set below. So the whole of this function is the gate, the
@@ -1068,6 +1122,8 @@ namespace MobileGL::MG_Pipe {
             // monolith, so the monolith shape keeps P5's pointer-dropping expression exactly.
             if (g_resourceOps != nullptr && g_resourceOps->TextureSubData != nullptr) {
                 g_resourceOps->TextureSubData(record.Res, record, bytes, regions);
+            } else {
+                AdoptTextureWithoutBackendHook(*stored, record, bytes);
             }
 #endif
             return true;
@@ -1407,6 +1463,12 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplierReleaseObjectRecords() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            (g_resourceOps == nullptr || g_resourceOps->TextureDestroy == nullptr)) {
+            MG_Remote::Server::ServerStagedTexture().DropAll();
+        }
+#endif
         // The served context is going away and this applier with it. Under split that is one
         // applier per served context; in the monolith there is one applier behind every
         // context, so nothing wires this - see PipeApply.h. The two serials advance here for
@@ -1937,9 +1999,11 @@ namespace MobileGL::MG_Pipe {
         // system. Textures only: a buffer's storage is the ops table's own Respecify hook, and
         // a renderbuffer has no levels.
         if (desc.Target != kMGPipeResourceTargetBuffer &&
-            desc.Target != static_cast<Uint8>(MGPipeResourceTarget::Renderbuffer) && !metadataOnly &&
-            g_resourceOps != nullptr && g_resourceOps->TextureRespecify != nullptr) {
-            g_resourceOps->TextureRespecify(desc.Resource, desc, level);
+            desc.Target != static_cast<Uint8>(MGPipeResourceTarget::Renderbuffer) && !metadataOnly) {
+            if (g_resourceOps != nullptr && g_resourceOps->TextureRespecify != nullptr)
+                g_resourceOps->TextureRespecify(desc.Resource, desc, level);
+            else
+                DefineTextureWithoutBackendHook(desc, level);
         }
 #endif
 
@@ -2147,9 +2211,12 @@ namespace MobileGL::MG_Pipe {
         // P5c (tx): with ONE exception - the staged-texture store is keyed by the handle, so
         // the death must reach it or a recycled slot's stale levels would answer for the
         // successor. This does not hand the texture to the buffer family's Destroy.
-        if (static_cast<MGPipeKind>(handle.Kind) == MGPipeKind::Texture &&
-            g_resourceOps != nullptr && g_resourceOps->TextureDestroy != nullptr) {
-            g_resourceOps->TextureDestroy(handle.Handle);
+        if (static_cast<MGPipeKind>(handle.Kind) == MGPipeKind::Texture) {
+            if (g_resourceOps != nullptr && g_resourceOps->TextureDestroy != nullptr)
+                g_resourceOps->TextureDestroy(handle.Handle);
+            else if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
+                MG_Remote::Server::ServerStagedTexture().Drop(
+                    MG_Remote::Server::StagedTextureStore::KeyForHandle(handle.Handle));
         }
 #endif
         if (static_cast<MGPipeKind>(handle.Kind) != MGPipeKind::Buffer) return;
