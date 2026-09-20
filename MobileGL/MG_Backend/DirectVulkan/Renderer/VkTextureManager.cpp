@@ -2616,7 +2616,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         (void)inserted;
         TextureResource& resource = it->second;
         if (resource.image != VK_NULL_HANDLE && resource.syncedWireSerial == record.Serial &&
-            record.PendingUploads.empty() && (!requireStorage || resource.storageUsageResolved)) {
+            record.PendingUploads.empty() && (!requireStorage || (resource.usageFlags & VK_IMAGE_USAGE_STORAGE_BIT) != 0)) {
             return &resource;
         }
         if (!SyncWireTextureShape(record, resource, requireStorage)) {
