@@ -433,6 +433,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
 
         void QueueClearBufferPayload(GLenum buffer, GLint drawbuffer, const ClearAttachmentPayload& clearPayload);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        struct WireImage {
+            VkImage image = VK_NULL_HANDLE;
+            VkFormat format = VK_FORMAT_UNDEFINED;
+            VkExtent2D extent{};
+            VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            VkImageLayout* trackedLayout = nullptr;
+            VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+            VkImageAspectFlags aspect = 0;
+            Uint32 level = 0, layer = 0, layers = 1, levels = 1;
+            Bool isDefault = false;
+        };
+        WireImage ResolveWireImage(const MG_Pipe::MGPFramebufferState& fbo,
+                                   const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect);
+        void TransitionWireImage(WireImage& image, VkImageLayout layout);
+        void ClearWireFramebuffer(const MG_Pipe::MGPFramebufferState& fbo,
+                                  const ClearAttachmentPayload& payload, GLint drawbuffer = -1);
+        void BlitWireFramebuffers(GLint sx0, GLint sy0, GLint sx1, GLint sy1,
+                                 GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter);
+        void ReadWirePixels(GLint x, GLint y, GLsizei width, GLsizei height,
+                            GLenum format, GLenum type, void* pixels);
+        void GenerateWireMipmap();
+#endif
         void QueueClearBufferPayloadForFramebuffer(const MG_State::GLState::FramebufferObject& framebuffer,
                                                   GLenum buffer, GLint drawbuffer,
                                                   const ClearAttachmentPayload& clearPayload);

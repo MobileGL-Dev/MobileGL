@@ -1039,6 +1039,8 @@ namespace MobileGL::MG_Remote::Server {
         auto& applierState = MG_Pipe::MGPipeApplier();
         applierState.ClearVerbHandles();
         applierState.VerbMipRes = plan.Res;
+        applierState.VerbMipBaseLevel = plan.BaseLevel;
+        applierState.VerbMipLevelCount = plan.LevelCount;
 #endif
         table->GL.GenerateMipmap(plan.Target);
         return true;

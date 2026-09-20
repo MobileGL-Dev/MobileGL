@@ -7636,7 +7636,22 @@ void main() {
         return ScissoredClearPrep::Ready;
     }
 
+    #include "WireFramebuffer.inc"
+
     void VulkanRenderer::Clear(GLbitfield mask) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
+            if (!fbo) MagmaWireFatal("clear-framebuffer-record");
+            ClearAttachmentPayload payload{};
+            payload.mask = mask;
+            payload.color = MGB_CTX->GetClearColor();
+            payload.depth = MGB_CTX->GetClearDepth();
+            payload.stencil = MGB_CTX->GetClearStencil();
+            ClearWireFramebuffer(*fbo, payload);
+            return;
+        }
+#endif
         m_clearManager->CollectGarbage();
         if ((mask & (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)) == 0) {
             return;
@@ -8013,6 +8028,14 @@ void main() {
 
     void VulkanRenderer::QueueClearBufferPayload(GLenum buffer, GLint drawbuffer,
                                                  const ClearAttachmentPayload& clearPayload) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
+            if (!fbo) MagmaWireFatal("clear-buffer-framebuffer-record");
+            ClearWireFramebuffer(*fbo,clearPayload,buffer == GL_COLOR ? drawbuffer : -1);
+            return;
+        }
+#endif
         auto* fbo = MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject().get();
         if (!fbo) {
             return;
@@ -8972,53 +8995,9 @@ void main() {
                                          GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                                          GLbitfield mask, GLenum filter) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // P5c (G6, CONTRACT-P5C §3.3/§5.4): MAGMA'S NAMED ARM. A blit record whose
-        // ReadFbo/DrawFbo are non-null is a glBlitNamedFramebuffer: both framebuffers resolve
-        // from the record's handles, and the sink is told the pair was consumed - a backend
-        // that leaves the flag clear has no named arm and the verb declines there, loudly.
-        // Magma has no FBO twin registry (it reads the frontend object wherever it syncs), so
-        // the resolution here is frontend-keyed - the handle was minted over the frontend
-        // object's lifetime id, and the two probes below (the client allocator's slot entry
-        // and the frontend context's framebuffer pool) are named debt inside the scope, the
-        // same shape as Espryt's StateForHandle arm: P7 retires it by carrying the object
-        // identity in the record. P5e (id), ruling 12: the third of Magma's four debts, so the
-        // scope it rides in is MagmaP7AllocatorDebtScope. Magma stays lockstep for the whole of
-        // P5e (CONTRACT-P5E §6.1), so the record being applied here is always barriered and the
-        // exemption still holds.
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
-            auto& applierState = MG_Pipe::MGPipeApplier();
-            const MG_Pipe::MGPipeHandle readHandle = applierState.VerbBlitReadFbo;
-            const MG_Pipe::MGPipeHandle drawHandle = applierState.VerbBlitDrawFbo;
-            if (!MG_Pipe::MGPipeHandleIsNull(readHandle) || !MG_Pipe::MGPipeHandleIsNull(drawHandle)) {
-                const auto resolveEndpoint = [](MG_Pipe::MGPipeHandle handle)
-                        -> SharedPtr<MG_State::GLState::FramebufferObject> {
-                    const MG_Pipe::MagmaP7AllocatorDebtScope magmaP7AllocatorDebt;
-                    if (handle == MG_Pipe::kMGPipeDefaultFramebuffer) {
-                        return MG_State::pGLContext ? MG_State::pGLContext->GetFramebufferObject(0) : nullptr;
-                    }
-                    if (!MG_Pipe::MGPipeSlots().IsLive(MG_Pipe::MGPipeKind::Framebuffer, handle)) {
-                        return nullptr;
-                    }
-                    const Uint64 lifetimeId =
-                        MG_Pipe::MGPipeSlots().LifetimeIdOfSlot(MG_Pipe::MGPipeKind::Framebuffer, handle.Slot);
-                    if (lifetimeId == 0 || MG_State::pGLContext == nullptr) return nullptr;
-                    return MG_State::pGLContext->FindFramebufferObjectByLifetimeId(lifetimeId);
-                };
-                auto readFbo = resolveEndpoint(readHandle);
-                auto drawFbo = resolveEndpoint(drawHandle);
-                if (!readFbo || !drawFbo) {
-                    // Leave the pair UNCONSUMED: the sink's decline is the loud answer a
-                    // missing endpoint deserves, not a silent blit of whatever is bound.
-                    MGLOG_E_ONCE("MGPipe: Magma's named blit could not resolve an endpoint (read {%u, %u}, draw "
-                                 "{%u, %u}) to a frontend framebuffer; the verb declines at the sink",
-                                 readHandle.Slot, readHandle.Gen, drawHandle.Slot, drawHandle.Gen);
-                    return;
-                }
-                applierState.VerbBlitNamedConsumed = true;
-                BlitNamedFramebuffer(readFbo, drawFbo, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0,
-                                     dstX1, dstY1, mask, filter);
-                return;
-            }
+            BlitWireFramebuffers(srcX0,srcY0,srcX1,srcY1,dstX0,dstY0,dstX1,dstY1,mask,filter);
+            return;
         }
 #endif
         auto readFbo = MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
@@ -10364,6 +10343,12 @@ void main() {
 
     void VulkanRenderer::ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
                                     void* pixels) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            ReadWirePixels(x,y,width,height,format,type,pixels);
+            return;
+        }
+#endif
         if (width <= 0 || height <= 0) {
             return;
         }
@@ -11376,6 +11361,12 @@ void main() {
     }
 
     void VulkanRenderer::GenerateMipmap(GLenum target) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            GenerateWireMipmap();
+            return;
+        }
+#endif
         const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
         // Whatever is left here is a coverage gap in this backend, not a broken invariant, so it
         // declines (leaving the mip chain unwritten) rather than asserting the process down. What
