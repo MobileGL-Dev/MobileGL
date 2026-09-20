@@ -6439,6 +6439,12 @@ void main() {
         // the SAME draw-framebuffer binding the draw uses - see the assert below.
         MOBILEGL_ASSERT(
             [&] {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                    const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
+                    return isDefaultFbo == (fbo != nullptr && fbo->IsDefault);
+                }
+#endif
                 const auto& fbo =
                     MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
                 return isDefaultFbo == (fbo != nullptr && fbo->IsDefaultFramebuffer());
