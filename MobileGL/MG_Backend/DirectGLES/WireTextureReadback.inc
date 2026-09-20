@@ -88,14 +88,80 @@
         return true;
     }
 
+    static Bool ReadWireDepthStencilLevelTight(GLuint texture, TextureTarget target,
+                                               TextureUploadTarget uploadTarget, GLint level,
+                                               const IntVec3& extent, GLenum format, GLenum type,
+                                               Vector<Uint8>& bytes) {
+        const SizeT pixelBytes = MG_Util::GetInputBytesPerPixel(
+            MG_Util::ConvertGLEnumToTextureInputFormat(format), MG_Util::ConvertGLEnumToTexturePixelDataType(type));
+        if (!pixelBytes) return false;
+        const Bool needDepth = format == GL_DEPTH_COMPONENT || format == GL_DEPTH_STENCIL;
+        const Bool needStencil = format == GL_STENCIL_INDEX || format == GL_DEPTH_STENCIL;
+        ScopedFramebufferBinding bindings(true, false);
+        GLuint fbo = 0;
+        g_GLESFuncs.glGenFramebuffers(1, &fbo);
+        struct DeleteFbo { GLuint id; ~DeleteFbo() { g_GLESFuncs.glDeleteFramebuffers(1, &id); } } cleanup{fbo};
+        FramebufferImpl::BindFramebufferId(GL_READ_FRAMEBUFFER, fbo);
+        ScopedPixelPackBuffer packBuffer(0);
+        ScopedPackState packState(PixelStoreImpl::PackState{1, 0, 0, 0});
+        const GLenum nativeTarget = TextureImpl::ConvertTextureTargetToBackendGLEnum(target);
+        const GLenum point = needDepth ? (needStencil ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT)
+                                      : GL_STENCIL_ATTACHMENT;
+        const SizeT count = static_cast<SizeT>(extent.x()) * extent.y();
+        Vector<Uint8> result(count * extent.z() * pixelBytes);
+        if (g_GLESFuncs.glMemoryBarrier) g_GLESFuncs.glMemoryBarrier(GL_ALL_BARRIER_BITS);
+        g_GLESFuncs.glFinish();
+        for (GLint z = 0; z < extent.z(); ++z) {
+            if (nativeTarget == GL_TEXTURE_3D || nativeTarget == GL_TEXTURE_2D_ARRAY ||
+                nativeTarget == GL_TEXTURE_CUBE_MAP_ARRAY)
+                g_GLESFuncs.glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, point, texture, level, z);
+            else
+                g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, point,
+                    TextureImpl::ConvertTextureUploadTargetToBackendGLEnum(uploadTarget), texture, level);
+            g_GLESFuncs.glReadBuffer(GL_NONE);
+            if (g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) return false;
+            Vector<Float> depth;
+            Vector<Uint8> stencil;
+            if (needDepth && !ReadDepthValuesNative(0, 0, extent.x(), extent.y(), depth)) return false;
+            if (needStencil && !ReadStencilBytesNative(0, 0, extent.x(), extent.y(), stencil)) return false;
+            auto* dst = result.data() + count * z * pixelBytes;
+            for (SizeT i = 0; i < count; ++i) {
+                if (format == GL_DEPTH_STENCIL) {
+                    const Uint32 s = stencil[i];
+                    if (type == GL_UNSIGNED_INT_24_8) {
+                        const Uint32 packed = (NormalizedDepthToUnsigned(depth[i], 16777215.0) << 8) | s;
+                        Memcpy(dst + i * pixelBytes, &packed, sizeof(packed));
+                    } else if (type == GL_FLOAT_32_UNSIGNED_INT_24_8_REV) {
+                        Memcpy(dst + i * pixelBytes, &depth[i], sizeof(Float));
+                        Memcpy(dst + i * pixelBytes + sizeof(Float), &s, sizeof(s));
+                    } else return false;
+                } else if (type == GL_FLOAT) {
+                    const Float value = needDepth ? depth[i] : static_cast<Float>(stencil[i]);
+                    Memcpy(dst + i * pixelBytes, &value, sizeof(value));
+                } else {
+                    const Uint32 value = needDepth ? NormalizedDepthToUnsigned(depth[i],
+                        pixelBytes == 1 ? 255.0 : pixelBytes == 2 ? 65535.0 : 4294967295.0) : stencil[i];
+                    if (pixelBytes == 1) dst[i] = static_cast<Uint8>(value);
+                    else if (pixelBytes == 2) { const Uint16 v = static_cast<Uint16>(value); Memcpy(dst + i * 2, &v, 2); }
+                    else if (pixelBytes == 4) Memcpy(dst + i * 4, &value, 4);
+                    else return false;
+                }
+            }
+        }
+        bytes = Move(result);
+        return true;
+    }
+
     Bool ReadTextureLevelTight(GLuint texture, TextureTarget target, TextureUploadTarget uploadTarget,
                                TextureInternalFormat logicalFormat, GLint level, const IntVec3& logicalExtent,
                                Bool sourceUsesImageCarrier, GLenum format, GLenum type, Vector<Uint8>& bytes) {
         if (!texture || level < 0 || TextureImpl::IsMultisampleTextureTarget(target)) return false;
+        const IntVec3 extent = TextureImpl::GetBackendUploadSize(target, logicalExtent);
+        if (format == GL_DEPTH_COMPONENT || format == GL_DEPTH_STENCIL || format == GL_STENCIL_INDEX)
+            return ReadWireDepthStencilLevelTight(texture, target, uploadTarget, level, extent, format, type, bytes);
         ReadbackChannelMapping mapping{};
         if (!GetReadbackChannelMapping(format, mapping)) return false;
         const SizeT pixelBytes = GetReadbackDstPixelSize(mapping, type);
-        const IntVec3 extent = TextureImpl::GetBackendUploadSize(target, logicalExtent);
         if (!pixelBytes || extent.x() <= 0 || extent.y() <= 0 || extent.z() <= 0) return false;
         const GLenum nativeTarget = TextureImpl::ConvertTextureTargetToBackendGLEnum(target);
         const GLenum faceTarget = TextureImpl::ConvertTextureUploadTargetToBackendGLEnum(uploadTarget);
@@ -141,6 +207,34 @@
                     TextureImpl::BackendTextureFormatAddsAlpha(logicalFormat, target), carrier, slice) ||
                 slice.size() != sliceBytes) return false;
             Memcpy(result.data() + static_cast<SizeT>(layer) * sliceBytes, slice.data(), sliceBytes);
+        }
+        bytes = Move(result);
+        return true;
+    }
+
+    Bool ReadTextureImageWire(const MG_Pipe::MGPReadbackInfo& info, Vector<Uint8>& bytes) {
+        const auto* record = PipeTextureRecordForHandle(info.Res);
+        if (!record) return false;
+        TextureTarget target = TextureTarget::Unknown;
+        for (Int i = 0; i < static_cast<Int>(TextureTarget::TextureTargetCount); ++i)
+            if (MG_Pipe::MGPipeResourceTargetForTextureTarget(static_cast<TextureTarget>(i)) == record->Desc.Target)
+                target = static_cast<TextureTarget>(i);
+        if (target == TextureTarget::Unknown) return false;
+        const auto twin = TextureImpl::SyncTextureToBackendByHandle(info.Res);
+        if (!twin) return false;
+        const Bool wholeCube = info.Target == GL_TEXTURE_CUBE_MAP;
+        const IntVec3 extent{static_cast<Int>(info.Box.W), static_cast<Int>(info.Box.H),
+                            wholeCube ? 1 : static_cast<Int>(info.Box.D)};
+        Vector<Uint8> result;
+        for (Int face = 0; face < (wholeCube ? 6 : 1); ++face) {
+            const auto uploadTarget = wholeCube
+                ? static_cast<TextureUploadTarget>(static_cast<Int>(TextureUploadTarget::CubeMapPositiveX) + face)
+                : MG_Util::ConvertGLEnumToTextureUploadTarget(info.Target);
+            Vector<Uint8> slice;
+            if (!ReadTextureLevelTight(twin->GetBackendTextureId(), target, uploadTarget,
+                    static_cast<TextureInternalFormat>(record->Desc.InternalFormat), info.Level, extent,
+                    twin->RequiresImageBindableStorage(), info.Format, info.Type, slice)) return false;
+            result.insert(result.end(), slice.begin(), slice.end());
         }
         bytes = Move(result);
         return true;

@@ -24,6 +24,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // texture synchronization.
     void BindCurrentTextures();
 #if MOBILEGL_BUILD_DISAGGREGATED
+    Bool ReadTextureImageWire(const MG_Pipe::MGPReadbackInfo& info, Vector<Uint8>& bytes);
     // Native/server-only color level readback. Returns tightly packed, owned
     // bytes in the requested pair; never consults a frontend texture or PACK/PBO.
     // The caller resolves identity/extent from its resource record and supplies
