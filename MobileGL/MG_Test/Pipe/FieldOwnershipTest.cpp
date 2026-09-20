@@ -15,8 +15,8 @@
 //
 //   the BEHAVIOUR cases run only in a split build and say the table is LOAD-BEARING - that a
 //   server verb stamp makes the record-supplied fields readable and withdraws the rest, that a
-//   BARRIER-PULLED read is counted rather than fatal, that MOBILEGL_IPC_STRICT_ERRORS=1 turns
-//   it into a named abort, and that the seven sticky forwards' poison exemption is cancelled.
+//   retired pointer/forward reads are unconditionally named Fatal on the server, and that
+//   monolith storage remains readable without ever borrowing a server stamp.
 //
 // E4's negative control is ARecordSuppliedFieldIsReadableAfterAServerStamp: move one field
 // from RECORD-SUPPLIED to FATAL in MG_Pipe/FieldOwnership.def and that case goes red by name.
@@ -857,6 +857,20 @@ TEST_F(FieldOwnershipTest, TheClientVerbLeaveWritesTheClientBlockAlone) {
 #if MGTEST_HAVE_FORK
 
 // P5f terminal contract; the historical registration name is retained for G14.
+TEST_F(FieldOwnershipTest, AClientFreshStampCannotReviveARetiredServerGetter) {
+    const ChildResult r = RunInChild([] {
+        MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
+        // Simulate a regressed writer stamping the old mirror as fresh. FATAL is a
+        // representation verdict, not a freshness verdict, and must still reject it.
+        auto& filled = const_cast<MGPipeFilledState&>(gPipeInputs.FilledState());
+        filled.FilledGen[Index(MGPipeInputField::GetBoundVertexArray)] = filled.VerbSerial;
+        (void)gPipeInputs.GetBoundVertexArray();
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"),
+              std::string::npos) << r.Log;
+}
+
 TEST_F(FieldOwnershipTest, StrictErrorsTurnsABarrierPulledReadIntoANamedAbort) {
     // Historical name retained for G14: the formerly admitted read is now forbidden.
     const ChildResult r = RunInChild([] {
