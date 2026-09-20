@@ -346,7 +346,7 @@ make-current and teardown do to it — the column `ARCHITECTURE.md` does not hav
 | the ten `MG_Impl/Pipe` `*Instance()` singletons | `fable-seam-audit.md:120-135` | client | **Client-exclusive.** One correction carried forward: the texture **drain list `m_drain` is process-wide**, not per-context as D-D4 claims; the audit already booked "one drain per client context" as a P5 item. | `FreshlyPrimed` (`PipeFill.cpp:2414-2440`) resets them on make-current; leak at exit (ID-8). |
 | `ScopedDefaultUnpackState::s_synced` + **six** value shadows | `Managers.cpp:5490-5496` | backend | **Server-exclusive — the sixth global the four→two census missed.** Latent rather than live in P5 only because the client role never touches GL on the reduced path. (`Managers.cpp:5491-5496` is six `GLint`s, not five: `s_skipImages` at `:5496` is the one usually dropped.) | **Never reset on context death** — `OnBackendContextDestroyed` resets the rings and the binding caches and not this. Benign while a lost context returns the driver to GL defaults; not benign the day a server re-attaches to a context something else moved. Register it now. |
 | `pActiveBackendObject` | `GlobalObjects.cpp:23` | `MG_Backend::Init()` | **Client installs `BackendObject_Remote`; the server's `BackendObject_DirectGLES` is held privately by `ServerLoop`.** No thread-keyed shim, and therefore `MOBILEGL_BUILD_DISAGGREGATED_INPROC` needs none — but the cost is **seven** backend-internal reads across **six** functions, not the one the scout reported: `BackendObject_DirectGLES.cpp:815`, `:819` (`ClampSamplesToBackendSupport`) and `Utils.cpp:74`, `:82`, `:126`, `:220`, `:260`. All seven are format-capability lookups, so "pass the format cache down" still works. **`DirectGLES.cpp:12446` is NOT `ClampSamplesToBackendSupport`** — it is `Present()`'s fence poll, and `DirectGLES.cpp` contains no `pActiveBackendObject` reference at all. | `GetFormatCapabilities()` is **non-virtual** (`BackendObject.h:594`), so the remote object must **fill** `m_formatCapabilities` rather than override the accessor. Teardown: `pActiveBackendObject.reset()` (`MobileGL/Init.cpp:68`) runs `~BackendObject_DirectGLES` → `DestroyEGLContext()`, so under split it must be a **blocking** request onto the apply thread. |
-| `gBackendFunctionsTable` | `GlobalObjects.cpp:24`, assigned `Init.cpp:44` | `MG_Backend::Init()` | **Client = the emit table (R-4); the server holds its real table directly and never goes through this global.** | cleared at `MobileGL/Init.cpp:91`. |
+| `gBackendFunctionsTable` | `GlobalObjects.cpp:24`, assigned `MG_Backend/Init.cpp:63` | `MG_Backend::Init()` | **Client = the emit table (R-4); the server holds its real table directly and never goes through this global.** | cleared at `MobileGL/Init.cpp:91`. |
 
 **Teardown order**, `ARCHITECTURE.md:537` plus the sentence it omits:
 
@@ -521,7 +521,7 @@ every lane: `AdvertisedLimitsScenario.ComputeWorkGroupLimitsAreTheCapsBlocksAnsw
 `glGetIntegeri_v` give one number.
 
 This settles the census's sharpest finding: `GetIntegeri_v` is reached by the **first
-`glCompileShader` of every context** (`CompileEnv.cpp:134-138` ← `Core.cpp:39`), not by any verb,
+`glCompileShader` of every context** (`CompileEnv.cpp:134-138` ← `MG_State/GLState/Core.cpp:39`), not by any verb,
 so an all-`Fatal` table would abort every scenario before it drew anything — and an emitter for
 it would be a round trip for six constants the snapshot already carries.
 

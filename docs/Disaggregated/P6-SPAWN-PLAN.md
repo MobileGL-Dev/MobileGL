@@ -1,10 +1,10 @@
 # P6 spawn transport — 包计划
 
-> 基线 `feat/disaggregated @ f23fbc1b`。路径在 `MobileGL/` 下，行号以该头为准。
+> 历史规划基线 `feat/disaggregated @ f23fbc1b`。路径在 `MobileGL/` 下，旧行号在 `c6` 落地时重核。
 > 契约草稿 [`P6-CONTRACT-DRAFT.md`](P6-CONTRACT-DRAFT.md)，`c6` 落地时移为 `MobileGL/MG_Remote/CONTRACT-P6.md`。
-> **⏸ 阻塞于 P5f**（2026-09-19）：本计划假定“P6 只是传输替换”，而那句话今天不成立——`BARRIER_PULLED` 还有 15 个字段靠 client 填共享的 `gPipeInputs`，Magma 一条未动。先跑 [`P5F-WIRE-COMPLETENESS.md`](P5F-WIRE-COMPLETENESS.md)。
+> **P5f 前提全部完成**（2026-09-20）：零 `BARRIER_PULLED` 分类、双块 / strict 门、静态状态世代与生命周期、registry / 反向通道边界均已收口；阶段审查修复及最终 Redmi 六个 clean-boot 臂也已通过。见 [`P5F-WIRE-COMPLETENESS.md`](P5F-WIRE-COMPLETENESS.md)、[收口审查](notes/p5f/close-review.md)和[设备报告](notes/p5f/device-report.md)。
 >
-> **未开工。** 标 `待 a6` 的条目由审计确认，现在不下结论。
+> **P6 尚未开工：`a6`、`c6` 与 spawn 实现均未启动。** 下文保留历史包规划；标 `待 a6` 的 P6 进程边界事项仍需审计确认，P5f 完成不等于 P6 已实现。
 
 ---
 
@@ -28,9 +28,9 @@
 
 1. `SocketTransport`。`ClientSession.cpp:468` 目前硬拒非 `InProcess`。
 2. `ServerMain`。今天的 `MobileGLServer`（`CMakeLists.txt:923`）是 P0 spike 桩（`tools/spikes/server_stub/main.cpp`），Android-only、默认 OFF。
-3. 进程机制：fork/execve；envp 剔除 + 子进程强制 monolith（双保险）；`dladdr` 兜底；有界重试握手；EOF 即退；不留孤儿。
+3. 进程机制：fork/execve；envp 剔除 + 子进程禁止递归选择 client transport（双保险）；`dladdr` 兜底；有界重试握手；EOF 即退；不留孤儿。原“子进程强制 monolith”的具体实现**待 a6**：P5f 的 server record 臂依赖 active transport 选路，必须区分反递归与 backend server 角色选择，不能因此回到 frontend glue。
 4. 控制面帧。**P5f 包 fc 已把帧化本身落地**：forwarder 改发 `SurfaceControlFrame` 值帧（`MG_Remote/Server/SurfaceControlFrame.h`），schema 缺口（3 枚枚举 + `readSurface`/`context` 字段 + `WindowKind::MetalLayer`）已按 append-only 补齐，wire 编解码与具名拒绝在 `MG_Remote/Protocol/SurfaceOpCodec.cpp`（`ServerApplyWireSurfaceOp`）。P6 的 `cp` 只剩传输：client 侧 `EncodeSurfaceOpFrame` 上 socket、server 泵进 `ServerApplyWireSurfaceOp`、`SurfaceReply` 回程与 §4 的死亡接线。P5c 审计 G4 行，原记 P6。
-5. `g_syncedRenderStateParameters`（`MG_Backend/DirectGLES/DirectGLES.cpp:4586`）与 `ScopedDefaultUnpackState::s_synced` 按 context 世代重置（`CONTRACT-P5C.md:538-539`）。
+5. 静态状态 / 生命周期的 spawn 验证，**不是重做 P5f fs**。unpack / render shadow 已按 native generation、served-context serial、执行臂组成的 `ContextEpoch` 失效；raw-depth sampler 按 native generation 重建。XFB 按 server lifetime id 隔离，served-context reset 保留仍活着的 paused/pending span，native context 销毁才清对象；server liveness 由控制生命周期持有。`st` / `a6` 核这些语义在第二进程与 socket 接线下仍成立，见草稿 §6 与 [fs 报告](notes/p5f/fs-report.md)。
 6. 死亡语义，见 §4。
 
 ## 3 边界：P6 不做真窗口
@@ -39,7 +39,7 @@
 
 - P6 落 pbuffer / surfaceless / 离屏：够 `HeadlessGL`、等价 split 车道、trace replay，也正是 P6 出口门量的东西。
 - 真窗口的管道（令牌、`SurfaceOp`、`SurfaceReply`）落，但到达 server 时具名拒绝。
-- **P6 之后手机上能跑的是 trace 和离屏，不是游戏。**
+- **P6 新增的手机 spawn 臂只承诺 trace 和离屏；真窗口游戏接入归 P12。** 现有 monolith / inproc 运行能力不因此改变。
 
 ## 4 P5e 留下的：不等待的客户端 + 会死的服务端
 
@@ -62,21 +62,21 @@ a6  (只读审计，不写代码)
  └─ c6  (契约 + 惰性线上行，行为零变化)
      ├─ so  (SocketTransport)
      ├─ sm  (ServerMain + fork/exec + 进程纪律)
-     ├─ cp  (控制面：12 个 forwarder → 帧)
-     ├─ st  (静态量按 context 世代重置 + G5)
+     ├─ cp  (已有控制帧的 socket 传输 + 回程)
+     ├─ st  (验证 P5f epoch / lifetime 的 spawn 接线 + G5)
      └─ t6  (spawn 车道 + 阴性对照 + CI)
  └─ 集成 commit：ConfigLoader 不再拒绝 spawn
 ```
 
-**a6**（先跑）。"P6 只是传输替换"的证据是 P5c 时代的；P5e 之后树变了（by-handle resolver、server 角色内存、不等待的路径）。产出：逐行清单，形状照 `~/w7/notes/p5c/p5c-audit-v1.md`（现 `notes/p5c/`）。点名查：
+**a6**（先跑，尚未启动）。以 P5f 已完成的双块、身份守卫、生命周期、反向通道及设备证据为输入，核验从同进程双角色变为真实进程后的新增边界，不重复领取已完成的迁移。产出：逐行清单，形状照 `notes/p5c/p5c-audit-v1.md`。点名查：
 
 1. 仍过线的裸指针 / 进程局部句柄。
-2. **进程级静态中语义属于 context 或 session 的**——§2.5 是已知的两个，问题是还有几个。这类缺陷 `inproc` 结构性看不见。
-3. `gPipeInputs` 在 spawn 下的归属（P5e 的 ID-135 结论要重验）。
-4. 十二个 forwarder 对 `SurfaceOpKind` 七个枚举，缺几个。预期缺 `SetSwapInterval` / `ReleaseResources` / `SetWindowHandle`（`SwapEGLBuffers` 走记录、`InitCapabilities` 走 `CapsSnapshot`、`InitWindowSurface` 是客户端 no-op）——待 a6 确认。
+2. **进程级静态中语义属于 context 或 session 的**——以 `notes/p5f/f0-statics.md` 与 fs 全清单处置为基线，验证 §2.5 的 epoch / lifetime 规则与新 process/session 退出边界；不可把每次 `applier_reset` 解释为清空所有对象。
+3. `gPipeInputs` 在 spawn 下的角色归属，以及禁止子进程递归当 client 时仍选中 server record 臂的机制。
+4. 复用 fc 已补齐的 `SetSwapInterval` / `ReleaseResources` / `SetWindowHandle` 等 schema 与 wire codec，核 socket 对接与 inproc-only op 的边界（`SwapEGLBuffers` 走记录、`InitCapabilities` 走 `CapsSnapshot`、`InitWindowSurface` 是客户端 no-op），不重复追加已落地枚举。
 5. server 能否不链 `MG_Impl`（`MG_Backend/MGPipe/PipeInputs.h` 如此声称）。做不到就记账。
 
-**c6**：契约；`protocol.fbs` 追加枚举（只追加）；令牌类型；新旋钮（`ARCHITECTURE.md:639` 已登记的 P6+ 项，`POLL_ESCALATE` 归 P10）；跨包接缝的声明 + 未落地断言体；`MobileGLServer` 真目标。
+**c6**：契约；复用 fc schema，只有 a6 确认的新缺口才 append-only 扩展；令牌类型；新旋钮（`ARCHITECTURE.md:639` 已登记的 P6+ 项，`POLL_ESCALATE` 归 P10）；跨包接缝的声明 + 未落地断言体；`MobileGLServer` 真目标。
 
 **so**：`SocketTransport`。**必须在第二个进程出现之前就绿**——一次 `socketpair()` + 两个线程跑 `InProcessTransportTest` 全套，含 `BUFFER_TOO_SMALL` 留帧语义。理由同 `SessionRings.h:22-28`。
 
@@ -88,7 +88,7 @@ a6  (只读审计，不写代码)
 
 1. G1 pull 构建 0/0/0/0，`.text` 不变。
 2. **G2/G14**：`integration-spawn` 用例名集合与 `integration-split` 逐名相同。
-3. `integration-spawn` 全绿，数字与 `integration-split` 一致（今天 179/179）。
+3. `integration-spawn` 全绿，数字与 `integration-split` 一致（历史草稿基线 179/179；`c6` 重核实际发现 / 执行集合）。
 4. **进程树门（机检）**：每条用例前后数子进程，运行中恰好多一个，运行后为零；`HeadlessGL` fork 预检无孤儿。
 5. **臂证明门**：每条用例在自己的私有日志里留下子进程 pid 与 `transport=spawn`。ID-124 已证明假绿会发生，而一条实际跑了 monolith 的 spawn 车道能通过 1–4。
 6. 逐包 red-once（R-16），各一条具名对。
@@ -102,7 +102,7 @@ a6  (只读审计，不写代码)
 | S1 | `MOBILEGL_IPC_SERVER_PATH=/nonexistent` | 具名拒绝，非静默回落 monolith |
 | S2 | 运行中 `kill -9` server | 客户端能区分慢与死；不挂起、不继续提交 |
 | S3 | 子进程 envp 未剔除 | 第二道保险挡住递归 spawn 并具名 |
-| S4 | 关掉 `st` 的世代重置 | 第二个 context 拿到上一个的同步状态 |
+| S4 | 临时关闭 spawn 接线中继承的 P5f epoch 失效 | 替换 context 错用旧同步状态；返回仍活着的 XFB lifetime 必须保留 paused span |
 | S5 | `WindowKind::AndroidNativeWindow` 到达 server | 具名 Fatal |
 
 S2 的形状先想清楚再写：E1 索要的 Fatal 在整次运行里出现 0 次（ID-122）。
@@ -119,7 +119,7 @@ S2 的形状先想清楚再写：E1 索要的 Fatal 在整次运行里出现 0 �
 
 ## 9 不属于 P6
 
-真窗口与 `android:process=":mgl"` Service（P12）；多 context（P12，`CONTRACT-P5C.md:56` 原写 P6，本计划改判）；chunked readback 与 reply-slot 池（P9）；`DynamicBackendParameters` 定宽重写（P7）；`POLL_ESCALATE`（P10）；对象类 BARRIER-PULLED 行与 frontend-keyed twin registry（P3b/P4b、P7）。
+真窗口与 `android:process=":mgl"` Service（P12）；多 context（P12，`CONTRACT-P5C.md:56` 原写 P6，本计划改判）；chunked readback 与 reply-slot 池（P9）；`DynamicBackendParameters` 定宽重写及已具名拒绝的功能债（P7）；`POLL_ESCALATE`（P10）；剩余 monolith-only frontend-object / twin-registry glue 清理（P3b/P4b）。`BARRIER_PULLED` 分类与 transport 前端身份访问已由 P5f 归零，不能继续列成未偿的 P6 前提债。
 
 ## 10 开工顺序
 
