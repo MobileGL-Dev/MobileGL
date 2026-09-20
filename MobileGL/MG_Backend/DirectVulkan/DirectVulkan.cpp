@@ -32,6 +32,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     UniquePtr<VulkanRenderer>& pVulkanRenderer = *new UniquePtr<VulkanRenderer>();
 
     namespace {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        void RejectWireLegacyBuffer() {
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                MGLOG_F("MGPipe: Fatal{RoleViolation, \"buffer-legacy-arm\"} (Magma P7 buffer consumer)");
+                std::abort();
+            }
+        }
+#else
+        inline void RejectWireLegacyBuffer() {}
+#endif
         // Generation of the live VulkanRenderer instance, mirroring
         // DirectGLES's g_syncContextGeneration. BackendObject_DirectVulkan
         // bumps it (BumpRendererGeneration) wherever pVulkanRenderer is reset
@@ -391,11 +401,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RejectWireLegacyBuffer();
+#endif
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawElementsIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MGB_CTX_LIVE, "DirectVulkan::MultiDrawElementsIndirect called with null GL context");
         pVulkanRenderer->MultiDrawElementsIndirect(mode, type, indirect, drawcount, stride);
     }
     void MultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RejectWireLegacyBuffer();
+#endif
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawArraysIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MGB_CTX_LIVE, "DirectVulkan::MultiDrawArraysIndirect called with null GL context");
 
@@ -447,12 +463,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
     void MultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect, GLintptr drawcount,
                                         GLsizei maxdrawcount, GLsizei stride) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RejectWireLegacyBuffer();
+#endif
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawElementsIndirectCount called with null VulkanRenderer");
         MOBILEGL_ASSERT(MGB_CTX_LIVE, "DirectVulkan::MultiDrawElementsIndirectCount called with null GL context");
         pVulkanRenderer->MultiDrawElementsIndirectCount(mode, type, indirect, drawcount, maxdrawcount, stride);
     }
     void MultiDrawArraysIndirectCount(GLenum mode, const void* indirect, GLintptr drawcount,
                                       GLsizei maxdrawcount, GLsizei stride) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RejectWireLegacyBuffer();
+#endif
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawArraysIndirectCount called with null VulkanRenderer");
         MOBILEGL_ASSERT(MGB_CTX_LIVE, "DirectVulkan::MultiDrawArraysIndirectCount called with null GL context");
 
@@ -525,6 +547,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DrawElementsInstancedBaseVertexBaseInstance(mode, count, type, indices, instancecount, 0, 0);
     }
     void DrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RejectWireLegacyBuffer();
+#endif
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawElementsIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MGB_CTX_LIVE, "DirectVulkan::DrawElementsIndirect called with null GL context");
 
@@ -584,6 +609,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DrawArraysInstancedBaseInstance(mode, first, count, instancecount, 0);
     }
     void DrawArraysIndirect(GLenum mode, const void* indirect) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RejectWireLegacyBuffer();
+#endif
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawArraysIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MGB_CTX_LIVE, "DirectVulkan::DrawArraysIndirect called with null GL context");
 
@@ -652,6 +680,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void DispatchComputeIndirect(GLintptr indirect) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RejectWireLegacyBuffer();
+#endif
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DispatchComputeIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MGB_CTX_LIVE, "DirectVulkan::DispatchComputeIndirect called with null GL context");
         pVulkanRenderer->DispatchComputeIndirect(indirect);
@@ -817,6 +848,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // memory) into uint32 values with the loop-closing first index appended.
     static Bool BuildClosedLineLoopIndices(GLsizei count, GLenum type, const void* indices,
                                            Vector<Uint32>& outIndices) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RejectWireLegacyBuffer();
+#endif
         const SizeT indexSize = MG_Util::GetGLTypeSize(type);
         if (indexSize == 0 || count < 2) {
             return false;
@@ -932,6 +966,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // vkCmdDrawIndexed all carry natively.
     static void MultiDrawElementsImpl(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
                                       GLsizei drawcount, const GLint* basevertex) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RejectWireLegacyBuffer();
+#endif
         if (drawcount <= 0) {
             return;
         }

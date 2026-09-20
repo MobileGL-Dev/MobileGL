@@ -458,7 +458,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                             GLenum format, GLenum type, void* pixels);
         void GenerateWireMipmap();
         Bool SetupWireDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
-                           const DrawCmdParam& drawParams);
+                           const DrawCmdParam& drawParams, const IndexBufferView* indices);
         void DestroyWireDrawPass();
         void DispatchWireCompute(GLuint x, GLuint y, GLuint z);
         UniquePtr<RenderPassEntry> m_wireDrawPass;

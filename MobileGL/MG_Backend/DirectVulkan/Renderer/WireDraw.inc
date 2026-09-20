@@ -23,11 +23,12 @@
     }
 
     Bool VulkanRenderer::SetupWireDraw(FrameContext::FrameData& frame, GLenum mode,
-            Flags<DrawSetupAspect> aspects, const DrawCmdParam& drawParams) {
+            Flags<DrawSetupAspect> aspects, const DrawCmdParam& drawParams, const IndexBufferView* indices) {
         auto& state = MG_Pipe::MGPipeApplier();
         const auto program = WireProgramSource(state.BoundShaderCso);
         if (!program.GetLinkStatus() || !program.GetSpirvStatus()) return false;
-        if (aspects & DrawSetupAspect::IndexBuffer || aspects & DrawSetupAspect::IndirectDrawBuffer ||
+        if (((aspects & DrawSetupAspect::IndexBuffer) && (!indices || !indices->forceClientMemory)) ||
+            aspects & DrawSetupAspect::IndirectDrawBuffer ||
             MGB_CTX->IsTransformFeedbackActive()) WireBufferLegacyFatal();
         const auto* fbo = state.DrawFramebuffer();
         if (!fbo) MagmaWireFatal("draw-framebuffer-record");
@@ -43,6 +44,7 @@
         if (programObject->pointSizeCapabilityUnsupported) return false;
         const auto& programObj = *programObject;
         const auto vaoHandle = state.BoundVertexElements;
+        if (MG_Pipe::MGPipeHandleIsNull(vaoHandle)) MagmaWireFatal("vertex-elements-record");
         if (!MG_Pipe::MGPipeHandleIsNull(vaoHandle)) {
             if (vaoHandle.Slot >= state.VertexElementsCsos.size()) MagmaWireFatal("vertex-elements-record");
             const auto& vao = state.VertexElementsCsos[vaoHandle.Slot];
@@ -55,7 +57,7 @@
         Vector<VkAttachmentDescription> attachments;
         Vector<VkImageView> views;
         Vector<VkAttachmentReference> colors;
-        VkAttachmentReference depth{VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+        VkAttachmentReference depth{VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_GENERAL};
         VkExtent2D extent{~0u, ~0u};
         Uint32 layers = ~0u;
         VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
@@ -65,7 +67,7 @@
             if (!image.image) return VK_ATTACHMENT_UNUSED;
             m_textureManager->FlushPendingUploads();
             const VkImageLayout layout = aspect == VK_IMAGE_ASPECT_COLOR_BIT ?
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_GENERAL;
             TransitionWireImage(image, layout);
             VkImageViewCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             info.image = image.image;
@@ -101,7 +103,7 @@
         for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
             const Int32 slot = fbo->DrawBuffers[i];
             const Uint32 index = slot < 0 ? VK_ATTACHMENT_UNUSED : add(fbo->Color[slot], VK_IMAGE_ASPECT_COLOR_BIT);
-            colors.push_back({index, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
+            colors.push_back({index, VK_IMAGE_LAYOUT_GENERAL});
         }
         while (!colors.empty() && colors.back().attachment == VK_ATTACHMENT_UNUSED) colors.pop_back();
         if (fbo->IsDefault || fbo->Depth.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
@@ -153,6 +155,14 @@
             if (!m_bufferManager.UploadTransient(BufferKind::Vertex, m_frameContext.GetCurrentFrameIndex(),
                     data, size, 16, slice)) return false;
             vkCmdBindVertexBuffers(frame.commandBuffer, binding++, 1, &slice.buffer, &slice.offset);
+        }
+        if (indices) {
+            BufferSlice slice{};
+            if (!m_bufferManager.UploadTransient(BufferKind::Index, m_frameContext.GetCurrentFrameIndex(),
+                    reinterpret_cast<const void*>(indices->indexByteOffset), indices->indexByteSize, 16, slice)) return false;
+            const VkIndexType type = indices->indexType == GL_UNSIGNED_INT ? VK_INDEX_TYPE_UINT32 :
+                indices->indexType == GL_UNSIGNED_SHORT ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT8;
+            vkCmdBindIndexBuffer(frame.commandBuffer, slice.buffer, slice.offset, type);
         }
         if (!VkRenderPassManager::BeginRenderPass(frame.commandBuffer, pass)) return false;
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);

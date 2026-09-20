@@ -2386,7 +2386,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     foreach(fmSlot PartialTextureUploadPreservesGpuClear TextureViewClearTargetsItsRootMipAndLayer ClearBufferfi ClearBufferfv ClearBufferiv ClearBufferuiv ClearNamedFramebufferfi ClearNamedFramebufferfv ClearNamedFramebufferiv ClearNamedFramebufferuiv CopyTexImage2D CopyTexSubImage2D GenerateMipmap GenerateMipmapPackedFloat GenerateMipmapDepth)
         gtest_discover_tests(MobileGLIntegrationTest
             TEST_PREFIX "DirectVulkan.Split.Fm."
-            TEST_FILTER "F1WireScenario.${fmSlot}Pixels"
+            TEST_FILTER "F1WireScenario.${fmSlot}*"
             DISCOVERY_TIMEOUT 30
             PROPERTIES
                 LABELS "integration-magma-split"
