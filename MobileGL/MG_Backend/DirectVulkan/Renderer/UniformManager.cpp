@@ -150,14 +150,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             resource->layout == VK_IMAGE_LAYOUT_UNDEFINED ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
             VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, resource->aspect, 0, resource->mipLevels))
             WireDescriptorFatal("image-descriptor-transition");
+        // A second descriptor/draw can keep GENERAL after a shader write. A layout
+        // equality fast return is not a memory dependency for that prior write.
+        VkMemoryBarrier memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        memory.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        memory.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                             0, 1, &memory, 0, nullptr, 0, nullptr);
         VkImageViewCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         info.image = resource->image;
         info.viewType = type;
         info.format = format;
         info.subresourceRange = {aspect, level, levels, layer, layers};
         if (!storage) {
-            info.components = {WireSwizzle(record.Params.Swizzle[0]), WireSwizzle(record.Params.Swizzle[1]),
-                               WireSwizzle(record.Params.Swizzle[2]), WireSwizzle(record.Params.Swizzle[3])};
+            const Bool alphaIsOne = ResolveTextureFormatInfo(
+                static_cast<TextureInternalFormat>(record.Desc.InternalFormat)).expandRgbToRgba;
+            const auto swizzle = [&](Uint32 channel) {
+                const auto value = record.Params.Swizzle[channel];
+                return alphaIsOne && static_cast<TextureSwizzleParam>(value) == TextureSwizzleParam::Alpha
+                    ? VK_COMPONENT_SWIZZLE_ONE : WireSwizzle(value);
+            };
+            info.components = {swizzle(0), swizzle(1), swizzle(2), swizzle(3)};
         }
         VkImageView view = VK_NULL_HANDLE;
         if (vkCreateImageView(m_device, &info, nullptr, &view) != VK_SUCCESS) return false;
