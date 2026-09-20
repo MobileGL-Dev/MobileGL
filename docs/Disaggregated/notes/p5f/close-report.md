@@ -8,6 +8,10 @@
 包含 Windows 收口头 `c42577a4` 的全部修复；之后仅补文档与设备复现工具。
 交付分支为 `feat/disaggregated`。包提交与环境入口见 [HANDOFF-P5F.md](HANDOFF-P5F.md)。
 
+用户随后要求的 [FCL 游戏端到端补测](fcl-e2e-report.md) 已实际执行：GLES inproc / monolith
+与 Magma monolith 可进入 MC `26.3-rc-3` 世界并稳定运行；Magma inproc 真失败于 P7
+`buffer-legacy-arm`。本文的 P5f 完成不表示完整 Magma 游戏 split 工作负载已经可用。
+
 ## 1. 完成的行为
 
 波次 2 的 fc / fe / fm 已把 EGL 控制面、Espryt 对象读点、XFB Begin 快照与 Magma 可达

@@ -17,6 +17,13 @@
 
 ## 2. P5f 最终验收
 
+**FCL 游戏补测**（源码 `aa78f102`，2026-09-20）：已正常编译/安装到 Redmi 的
+`com.tungsten.fcl.mgdebug.debug`。MC `26.3-rc-3` 世界 `test`：GLES inproc / monolith、
+Magma monolith 均完成至少60秒连续运行及人工画面检查；**Magma inproc 未进世界，
+真实触发 P7 `buffer-legacy-arm` 并退出**。另有一次 GLES 渲染初始化前 signal34 启动异常，
+重试通过，未隐去。详细范围与证据见 [fcl-e2e-report.md](notes/p5f/fcl-e2e-report.md)。
+下面的六臂设备数字仍是先前公开 GL runner，不能冒充 FCL 测试结果。
+
 | 门 | 总条目 | PASS | skip | failed / 结论 |
 |---|---:|---:|---:|---|
 | unit | 2310 | 2300 | 10 | 0 |

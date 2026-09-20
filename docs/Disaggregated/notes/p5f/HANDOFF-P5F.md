@@ -4,6 +4,11 @@
 > `C:/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg`，分支 `feat/disaggregated`。
 > 完整结果见 [close-report.md](close-report.md)，设备见 [device-report.md](device-report.md)，
 > 阶段终审见 [close-review.md](close-review.md)。最终行为验收头 `cfca93c7`，之后仅文档/复现工具。
+>
+> **FCL 游戏补测（2026-09-20）**：源码 `aa78f102` 已编入并安装 `.mgdebug.debug` FCL，
+> MC `26.3-rc-3` 的 GLES inproc / monolith 与 Magma monolith 各完成至少60秒世界运行；
+> **Magma inproc 真失败于 P7 `buffer-legacy-arm`，尚不能跑该游戏**。
+> 见 [fcl-e2e-report.md](fcl-e2e-report.md)，不要将前面的公开 GL runner 当成 FCL E2E。
 
 ## 0. 当前结论
 
