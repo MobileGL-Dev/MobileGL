@@ -1,6 +1,6 @@
 # 当前阶段进度
 
-分支 `feat/disaggregated`；代码头 `25fba0d5`（2026-09-18，P5e wave 3：strict 硬绿 + run-ahead 武装；P5d 收官头 `1f8de61b`，P5c 收官头 `b88e8487`）。本文随每次落地更新。ID-1..75 的逐条裁定长文在 git 历史（`ef35ea0c` 之前版本的本文件）。
+**P5f 已收官（2026-09-20）**。最终行为验收头：WSL `cfca93c7885fd8db1e881f91189ba59090ae9c52`，Windows `c42577a4` 等价；本次整合来自 `codex/p5f-close`，主分支合入记录见 [`notes/p5f/close-report.md`](notes/p5f/close-report.md)。P6 的 P5f 前提已解除，a6 / c6 / spawn 尚未实施。以下 §2 为当前验收；其后的 P5c/P5d/P5e 数字与性能章节保留为历史，不替代当前结果。
 
 ## 1. 阶段状态
 
@@ -12,10 +12,50 @@
 | **P5c** `inproc` 共享内存读点归零 | **已收官（2026-09-17）** | `11ac3de6..b88e8487` + triage 修复；契约 `MobileGL/MG_Remote/CONTRACT-P5C.md`；审计 `~/w7/notes/p5c/p5c-audit-v1.md` |
 | **P5d** `inproc` 性能专项 | **已收官（2026-09-18，三轮）** | `cb06538c`、`56a77348`、`1f8de61b`；报告 [`P5D-INPROC-PERFORMANCE.md`](P5D-INPROC-PERFORMANCE.md)；`MEASUREMENTS.md` §9 |
 | **P5e** 退役 Espryt draw path 的 lockstep | **已收官（2026-09-19）**，附一条具名未决（E1 对照，ID-122） | 契约 `MobileGL/MG_Remote/CONTRACT-P5E.md`；计划 `~/w7/notes/p5e/BRIEF-P5E.md`、裁定 `~/w7/notes/p5e/INTEGRATOR-DECISIONS-P5E.md`（**ID-80..136**）；**十二个包已全部落地合并**（§2.7），`kMGPipeP5eRunAheadReady` 与 `kMGPipeP5eClientWaitRuleLanded` 均已翻。strict 车道硬绿 179/179、`integration-gpu` 1357/1357、三个构建 flavour 全绿；设备上 VD32 已与 monolith 齐平。报告 [`P5E-RUNAHEAD.md`](P5E-RUNAHEAD.md)，未完成项见 §5 |
-| **P5f** 一切状态上 wire | **计划已起草（2026-09-19）**，未开工 | 计划 [`P5F-WIRE-COMPLETENESS.md`](P5F-WIRE-COMPLETENESS.md)。插在 P6 之前：跨角色的直接共享尚未归零（`BARRIER_PULLED` 21 行 / 15 字段，其中八个 Magma 未动；EGL 控制面仍走函数指针邮箱；per-context 语义的进程级静态量） |
-| **P6** spawn transport | **阻塞于 P5f**；计划与契约草稿已起草 | 计划 [`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md)（a6 只读审计 → c6 契约 → so / sm / cp / st / t6 并行）；契约草稿 [`P6-CONTRACT-DRAFT.md`](P6-CONTRACT-DRAFT.md)。传输原语（`SocketDoorbell`、SCM_RIGHTS fd 传递、`ShmSegment::Adopt`、`SurfaceOp` schema）**已在树上且有测试**；缺的是进程、控制面，以及 P5e 留下的“不等待的客户端 + 会死的服务端” |
+| **P5f** 一切状态上 wire | **已收官（2026-09-20）** | f0 / f1 / fc / fe / fm / fs / fr / fv 及分类收口均已完成；零 BARRIER_PULLED、两份 marker 空表、逐帧 rsp=0。主机全门、Claude 异族终审两项修复及 red-once、Redmi 六 clean-boot 臂通过。见 [`close-report`](notes/p5f/close-report.md)、[`close-review`](notes/p5f/close-review.md)、[`device-report`](notes/p5f/device-report.md) |
+| **P6** spawn transport | **前提已解除，尚未实施** | 计划 [`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md)、草稿 [`P6-CONTRACT-DRAFT.md`](P6-CONTRACT-DRAFT.md)；下一步 a6 核验进程/链接边界，再 c6 和 spawn 包。传输原语与 P5f 值控制帧、静态世代/角色隔离已在树上；待做的是进程装配、socket 传输、握手/EOF/device-lost 等，不再重做已落地的控制帧与静态量 |
 
-## 2. 当前头实测
+## 2. P5f 最终验收
+
+| 门 | 总条目 | PASS | skip | failed / 结论 |
+|---|---:|---:|---:|---|
+| unit | 2310 | 2300 | 10 | 0 |
+| integration-gpu | 1377 | 1118 | 259 | 0；既有功能/驱动/专属车道 skip 不计 PASS |
+| ordinary / strict integration-split（各自） | 180 | 176 | 4 | 0；strict 三类 marker 均为零 |
+| 双块 split + magma | 212 | 206 | 6 | 0；发现集合与 JUnit 完整核对，skip 名称和原因精确匹配 |
+| integration-p5f-rsp | 2 | 2 | 0 | GLES、Magma 各一条真实执行，每帧 rsp=0 |
+| Redmi 六个 clean-boot 臂 | 66 | 60 | 6 | 0；六个不同 boot-id，36 个统计窗口 rsp=0 |
+
+字段表为 **41 RECORD_SUPPLIED / 6 APPLIER_DERIVED / 0 BARRIER_PULLED / 16 FATAL**。
+`strict-expected-markers.txt` 与 `dualblock-expected-fatals.txt` 均为空集合，两侧棘轮仍有效；
+空结果、漏跑、重复/notrun/disabled 或额外 skip 不得判绿。双块精确保留以下六个 skip：
+
+- `DirectGLES.Split.TriangleScenario.TheServerStampedAVerbBoundaryOnThisDrawingFrame`
+- `DirectGLES.Split.SmallRing.TriangleScenario.TheServerStampedAVerbBoundaryOnThisDrawingFrame`
+- `DirectGLES.Split.PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares`
+- `DirectGLES.Split.SmallRing.PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares`
+- `DirectVulkan.Split.Fm.ClipDistanceScenario.ADisabledClipDistanceRemovesNothing`
+- `DirectVulkan.Split.Fm.ClipDistanceScenario.TheEnablesAreIndependentPerDistance`
+
+前四项是 strict-arming / counting 专属车道的 sibling；后两项是已知 Magma clip-distance
+逐项开关限制，原因同样参与校验。独立 RSP 门不允许任何 skip。
+
+pull / push 实际构建及生效宏通过；**G1** `.text` **10806051 → 10806051**、defined symbols
+**27815 → 27815**、**0 added / removed / resized / renamed**；**G2** 两者各 **3016** 个测试名，
+集合相同；**G14** f1 **3646 → 3744**，没有删除。生成器/闭包门与逐包 red-once 均已执行。
+Claude 异模型族终审的 P1（结果集可伪绿）与 P2（callback owner 错投）均修复并实际红转绿，
+见 [`close-review.md`](notes/p5f/close-review.md)。
+
+设备门使用最终库在指定 Redmi `2f7cbe2e` 上重跑 GLES/Magma 的 monolith、role0、role1
+六臂；仅为本阶段可执行子集的正确性与 rsp 验证，性能只记录，不代替 P5e 的 MC/FPS 实测。
+原始身份、skip 原因与运行边界见 [`device-report.md`](notes/p5f/device-report.md)。
+Magma 仍不发布 `kCapRunAheadApply`，已由同一双块/strict 判据证明可达子集；P7 应用 buffer /
+native-format、P8 client arrays、P12 真窗口到达等具名边界继续保留。
+
+## 2.1 历史实测：P5c / P5d 收官头
+
+以下表格是当时的验收记录；包括当时未做的设备项与非零 rsp，不表示 P5f 当前状态。
+
 
 | 门 | 结果 |
 |---|---|
@@ -70,7 +110,7 @@
 
 两臂截图为同一视角同一世界，画面正确。monolith 这一次未被 120 Hz vsync 封顶（与 P5d 的 205.8 那次同类），故**不与 inproc 直接比大小**——本轮问的是"改完还能不能正常跑"，不是配对性能。inproc 的 136-140 与 ID-107 记的 140.0 / 144.9 同档，说明 fix1 触到的那行（臂选择本身，两臂都读）没有拖慢 split 臂。库版本以符号探针确认（`texture-handle-arm` 等四个字符串在 APK 的 `lib/arm64-v8a/libMobileGL.so` 内），不看游戏内的 `GIT@` 戳记——增量构建下它是旧的。
 
-## 2.6 P5e wave 3：strict 硬绿、run-ahead 武装（头 `25fba0d5`）
+## 2.6 历史：P5e wave 3，strict 硬绿、run-ahead 武装（头 `25fba0d5`）
 
 四个包：**pa**（program 家族，逐 draw 的那次拉取）、**mv**（multi-draw 的 VAO 读点 + 五个档位的门禁条目）、
 **gl**（门禁机制本身 + 两处潜伏崩溃）、**ra2**（翻开开关后暴露的竞态）。裁定 ID-111..136。
@@ -160,7 +200,7 @@ flaky 是竞态**。根因（ra2 实测，推翻了我 ID-132 的机制猜测）
 **尚未回答的**：VD12 下面板上限之上谁更快。本机定不住更高的频率，而未定频的一次高频窗口里 monolith p50 201 / run-ahead
 p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提示。要回答它需要关掉 vsync 或换一台上限更高的设备。
 
-## 2.7 P5e 落地内容
+## 2.7 历史：P5e 落地内容
 
 | 波 | 包 | 内容 | 效果 |
 |---|---|---|---|
@@ -178,7 +218,7 @@ p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提�
 | 3 | gl | 生成式采纳谓词、strict 旋钮的第三态、车道两侧棘轮、`ResourceCopyRegion` 等待类、Magma 车道切分；以及两处潜伏崩溃（ID-111 的盖章、ID-112 的编译期绊线） | 车道成为可被脚本判定的硬绿 |
 | 3 | ra2 | 翻开开关后暴露的竞态（守卫把"关于未来的断言"当豁免依据）；`BoundDrawIndirectBufferId` 退役并撤回升级 (iii)（ID-136） | 翻开开关后 `isplit` 112→179 |
 
-## 3. P5c 落地内容
+## 3. 历史：P5c 落地内容
 
 | 包 | 内容 | 效果 |
 |---|---|---|
@@ -192,7 +232,7 @@ p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提�
 | gt | 纹理九表面 layer-1 守卫（挂 MipmapStorage 汇聚点）；`InBarrierWait` 接线成 gPipeInputs 单写者规则的 client 半边；strict CI 车道（unit 绿门 + 场景预期红）；rsp 按帧实测 | 每层守卫 red-once 按名验证 |
 | triage 修复 | 默认 FBO 格式事件的第二类排空点（EGL RPC 返回）；大 writeback 的客户端切片（环 1/4）；XFB scatter 改读 server staged shadow | 普查三个真回归修复 |
 
-## 4. P5b 落地内容
+## 4. 历史：P5b 落地内容
 
 | 包 | 迁移的槽 / 内容 | 效果 |
 |---|---|---|
@@ -206,7 +246,7 @@ p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提�
 | r1 / r2 | P5 收官审查 13 项（coherent-map 服务器侧绕过、FBO 死亡在 client 线程、`PACK_SWAP_BYTES`、`RingOverrun` 等待、CI 对照九项） | — |
 | 收官审查修复 | 索引 span 上界（`Count × IndexSize` 必须装进声明的 run）、fence wait 预算、`Fatal{ReplyStatusInvalid, "ReadPixels"}` | P5b 审查 0 blocker |
 
-## 4.1 真实负载（inproc，独立 apply 线程）
+## 4.1 历史：P5b 真实负载（inproc，独立 apply 线程）
 
 - `DrawElements` 不再是阻塞：d1 普查时 77 个 Minecraft 后端用例中 28 个渲染通过（SSIM ≥ 0.99995）。
 - blit + mip 之后：`improved-transparency-minecraft-26.3` DirectGLES SSIM 1.0 / DirectVulkan 0.999914；`minecraft-1.21.4-fabric-iris-bsl-in-world` DirectVulkan 0.997324、DirectGLES 0.997496；OpenRA 双后端 1.0。
@@ -218,35 +258,33 @@ p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提�
 | 项 | 证据 / 去向 |
 |---|---|
 | `SEG_STAGE` 默认 32 MiB 装不下目标负载的单次 128 MiB 上传；**决定 = 默认不改**，普查与 Redmi 显式 `MOBILEGL_IPC_STAGE_MB=256`；分块 / 专用 carrier 留 P8（`ROADMAP.md` 开放问题 11） | `p5b-results/blit-codex-v1.md`；`MEASUREMENTS.md` §7.2 |
-| Magma（DirectVulkan）split compute/image 路径：89 个错答中 82 个 | `p5b-results/i1-v1.md` |
+| Magma 应用 buffer、placeholder/native-format 等 P7 功能广度 | P5b 的“89 个错答中82个”是历史普查计数；P5f 已验证无应用 buffer 的 draw/compute、sampler/image record 子集，后续按新语料重新点名，不能继续把旧计数当当前失败数 |
 | rd12 GLES `InitialBytesNotCarried/resource_respecify`、rd12 VK `BarrierTimeout/Present`、`iris-bsl-esc-menu-854` GLES、三条 `texture-remint-pull` 仿真槽、`create-indirect` VK 内存膨胀 | 79 trace 普查 `counts.json` / `trace-transitions.json` |
 | RGB 三通道 CPU mip 回退仍是具名 Fatal | `p5b-results/mip-codex-v1.md` |
-| ~~`inproc` 仍有 59 处不经 wire 的直接内存访问~~（2026-09-17 审计） | **P5c 已收官归零**：四族修复（tx/ev/hd/ct/rv/gt）+ 普查 triage 三真回归修复；剩余为具名债——两个豁免 scope（通告家族 P4b/P7、G6 registry 家族 P3b/P4b）内的只读探测与对象类 15 行 BARRIER-PULLED，全部可 grep、有退役阶段 | `MobileGL/MG_Remote/CONTRACT-P5C.md`；`MEASUREMENTS.md` §8 |
+| ~~P5c 历史跨角色清单与对象类残余~~ | **P5f 已全部收口**：双块空棘轮、零 BARRIER_PULLED、两后端逐帧 rsp=0；旧指针 accessor 以 FATAL 保持边界，未伪标为 record-supplied。见 [`close-report`](notes/p5f/close-report.md) |
 | 27 个 P5 inproc 错答：22 纹理读回走 client-shadow 回退、3 query、1 inspection、1 FBO/RBO 删除后生命期 | P4b / P7 / P6 债 |
-| `rsp` 残余输入；`SEG_REPLY` 2 MiB 单槽上限；GetCaps 两个 blobref 的载体；PACK-PBO 读回真实形式 | P3b/P4b、P6+ |
+| `SEG_REPLY` 2 MiB 单槽上限；GetCaps 两个 blobref 的载体；PACK-PBO 读回真实形式 | P6+ / P9 的协议广度；`rsp` 残余读取已由 P5f 关闭，不再与这些功能债并列 |
 | 15 个 class-C 槽（query / sync 尾 / `GetTexImage` / `SetSwapInterval` 等）无负载命中，仍具名拒绝 | P9 / P10 |
 | Redmi 定频行只在树外 `~/w7/notes/p2/devices/pin_device.sh`；钉频口径 2026-09-16 起 1100 MHz（原 1050） | `devices/pin-verification-2026-09-07.md` |
 | `test.yml` / `apk.yml` 的 `feat/disaggregated` 触发器是临时的，合入 dev 前必须移除 | — |
-| **P5e：BRIEF §3 的三条阴性对照与逐包 red-once 重跑未执行**（ID-121 已把后者重排到车道变绿之后，现在可跑） | `~/w7/notes/p5e/FLIP-CHECKLIST.md` phase C |
-| **P5e：`split_negative_controls.sh` 的 E1 对照自检失败**，且索要的 `Fatal{BarrierViolation}` 在 `BATCH_WAITS=1` 下不可能触发——一个永远打不响的对照比没有对照更坏 | ID-122 |
-| ~~P5e：契约 §3.2 的 per-role stamp 存储未落地~~ **P5f f1 已落地**（双块臂：server 块即 applier 私有存储，client 的 clear 重指到自己块，SetIdentity 由 `MGPipeServerBlockNoteIdentity` 落 server 侧）；§8 修正 8 仍 UNLANDED | ID-135 已由 f1 关闭 / ID-120 仍开着；`CONTRACT-P5E.md` |
+| ~~P5e：BRIEF §3 的三条阴性对照与逐包 red-once 尚未重跑~~ | 当期后续已执行，结果保留在历史 §2.6 与 P5e 报告；E1 自检债单列保留，不与执行完成混同 |
+| **P5e 历史债：`split_negative_controls.sh` 的 E1 对照定义/自检**，原 `BATCH_WAITS=1` 组合下索要的 `Fatal{BarrierViolation}` 无法触发 | ID-122；仍需重新定义其证伪对象。P5f 的双块开绿/关红、RSP 硬门与逐包 red-once 不代替修复这条旧脚本 |
+| ~~P5e：per-role stamp 存储未落地~~ | **P5f f1 / fs 已完成**：server 私有 stamp/identity/liveness、client 独立块与角色本地诊断。旧契约的历史 UNLANDED 注记不再作为当前施工状态 |
 | **P5e：VD12 面板上限之上谁更快未答**（本机定不住更高频）；VD32 那一轮回答了一般性问题 | `MEASUREMENTS.md` §11 / §11.1 |
 | **新机会（非缺陷）**：VD32 下 apply 11-12 ms 对 client 15.7 ms，两侧不平衡；把工作从 client 挪到 apply 会直接降瓶颈——lockstep 下无意义，run-ahead 才解锁 | `P5E-RUNAHEAD.md` 末节 |
 
 ## 6. 下一步
 
-0. P5d 的遗留（`P5D-INPROC-PERFORMANCE.md` "什么没完成"）：R-1 序列化留给 P3b/P4b → P11（`gPipeInputs` 版本化已写进 P11 行）；线程放置记录；小项随 P3b/P4b 顺手。
-1. **P5e 已收官**（2026-09-19，报告 [`P5E-RUNAHEAD.md`](P5E-RUNAHEAD.md)）：出口门已逐条跑过（逐项结果记在 `ROADMAP.md` 的 P5e 出口门格）：unit 两臂 2256/2256、`integration-split` 179/179 零 `Fatal{`、三条阴性对照按预期、逐包 red-once 各得恰好一个具名对。**剩下的只有 E1 对照**（ID-122）：修掉它两个遮蔽性缺陷后仍红，而它索要的 `Fatal{BarrierViolation}` 在整次运行里出现 0 次，需要重新定义它证伪什么而不是调阈值。契约 §3.2（per-role stamp 存储）与 §8 修正 8 仍标为 UNLANDED，随后续阶段；G1 仍由 CI 断言（ID-123）。
-2. **P5f 一切状态上 wire**（[`P5F-WIRE-COMPLETENESS.md`](P5F-WIRE-COMPLETENESS.md)）：插在 P6 之前。`f0` 普查已落（`notes/p5f/` 八篇），`f1` 双块机制已落（报告 [`notes/p5f/f1-report.md`](notes/p5f/f1-report.md)）：`MOBILEGL_IPC_ROLE_SPLIT_STATE=1` 给两个角色各一份 PipeInputs，`integration-dualblock-split` 车道与 `dualblock-expected-fatals.txt` 棘轮已立，红清单即 fm/fs/fr/fv 的工作量。下一步是 `fm`（Magma 的 9 个字段）等逐包消红。
-3. **P6 spawn transport**（阻塞于 P5f）：计划与契约草稿已起草（[`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md)、[`P6-CONTRACT-DRAFT.md`](P6-CONTRACT-DRAFT.md)），**下一步是跑 `a6` 那次只读审计，不写代码**：“P6 只是传输替换”这句话的证据是 P5c 时代的，P5e 之后已经过期。审计要点名去查：进程级静态里语义属于 context 的那一类（`s_synced` / `g_syncedRenderStateParameters` 是已知的两个，问题是还有几个——这类缺陷`inproc` 永远看不见）；十二个 EGL forwarder 对 `SurfaceOpKind` 缺几个枚举；server 是否真能不链 `MG_Impl`。
-3. 剩余首阻塞一轮（Magma compute/image、rd12、RGB mip、`texture-remint-pull` 仿真槽）。
-4. P5e 出口门（`~/w7/notes/p5e/BRIEF-P5E.md` §3 / §4）：`integration-split-strict` 转硬绿车道、三条阴性对照、Redmi 四臂（monolith / lockstep / credit 1 / credit 2）。P6 出口门：P5b 的完整渲染路径在 `spawn` 下绿；OpenRA 在 Adreno 830 上 split SSIM ≥ 0.99。
-5. Redmi 四臂复测（P5c 的记录项，需设备窗口）；79 trace 普查重跑（需全集语料）。
+1. **P6 a6 尚未执行**：按 [`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md) 核验 P5f 的 wire-only 结论在独立进程装配中成立，重点是角色链接闭包、段映射/句柄传递与生命周期边界；控制帧、静态世代与对象字段不重新施工。
+2. a6 后推进 **c6 契约与 spawn 实现**：SocketTransport、ServerMain、握手、EOF / device-lost 及子进程身份门。`integration-spawn` 应与现有 split 同名，且日志证明真正在子进程执行；这些代码和验收尚未实施。
+3. P7/P8/P9 的 buffer、格式/placeholder、client arrays、大 blob、异步回读等功能债继续按阶段推进；79 trace 全集重新普查后再引用首阻塞，P5b 历史清单不当作当前结果。
+4. **保留 P5e E1 历史债（ID-122）**与 VD12 面板上限、线程放置/负载平衡等测量问题。P5f 设备正确性通过不改写 P5e 的性能结论，也不声称解决上述性能问题。
 
 ## 7. 记录位置
 
 | 内容 | 位置 |
 |---|---|
+| P5f 收官、异模型族终审、最终设备门 | [`close-report`](notes/p5f/close-report.md)、[`close-review`](notes/p5f/close-review.md)、[`device-report`](notes/p5f/device-report.md)；分包报告位于 `notes/p5f/` |
 | P5 brief / 契约 / 前言 | `~/w7/notes/p5/BRIEF-P5.md`、`MobileGL/MG_Remote/CONTRACT-P5.md`、`~/w7/notes/p5/PACKAGE-PREAMBLE.md` |
 | P5 包报告与审查 | `~/w7/notes/p5/p5-results/`（`joint-v1.md` 全门记录、`ab-v1.md` 设备 A/B、`p5-close-codex-review.md`） |
 | P5b brief / 契约 / 报告 | `~/w7/notes/p5b/BRIEF-P5B.md`、`MobileGL/MG_Remote/CONTRACT-P5B.md`、`~/w7/notes/p5b/p5b-results/` |

@@ -1,11 +1,13 @@
 # CONTRACT-P6 (DRAFT) — the backend runs in a second process
 
-> **⏸ Blocked on P5f** (2026-09-19): this draft assumes P6 is only a transport
-> swap, which is not true today - 15 `BARRIER_PULLED` fields are still filled by the
-> client into a shared `gPipeInputs`, and Magma has not moved at all. See
-> [`P5F-WIRE-COMPLETENESS.md`](P5F-WIRE-COMPLETENESS.md).
+> **P5f prerequisites completed** (2026-09-20): field ownership has zero
+> `BARRIER_PULLED` rows; the dual-block and strict gates, context/lifetime work,
+> registry and reverse-channel guards, closing review fixes, and final Redmi
+> paired runs have passed. See [`P5F-WIRE-COMPLETENESS.md`](P5F-WIRE-COMPLETENESS.md),
+> the [closing review](notes/p5f/close-review.md) and [device report](notes/p5f/device-report.md).
 >
-> **Draft, written before its own audit.** Package `a6` ([`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md) §5)
+> **P6 has not started:** `a6`, `c6`, and spawn implementation remain unstarted.
+> This remains a draft written before its own audit. Package `a6` ([`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md) §5)
 > is a read-only audit whose output is this file's input. Rows that depend on it are marked
 > **`PENDING a6`**. `c6` moves this file to `MobileGL/MG_Remote/CONTRACT-P6.md`, where it becomes
 > normative.
@@ -13,7 +15,7 @@
 Authority once landed: this file, beside `CONTRACT-P5.md` (table 0, byte carriers, R-1…R-17),
 `CONTRACT-P5B.md` (class-C slots), `CONTRACT-P5C.md` (rule E, SEG_EVENT, the guards) and
 `CONTRACT-P5E.md` (rule F, the barriered predicate, the wait rule). Disagreements: this file is
-newer and wins; §9 lists them. Base `feat/disaggregated @ f23fbc1b`; every `file:line` re-resolves
+newer and wins; §9 lists them. Historical planning base `feat/disaggregated @ f23fbc1b`; every `file:line` re-resolves
 at `c6`'s head. Paths under `MobileGL/` unless they start with `docs/`.
 
 Changes go through the integrator, in `c6`'s copy. Packages compile against these rows from day one.
@@ -66,7 +68,11 @@ other gate here.
 
 1. **The child must not be able to become a client.** Both required: (a) `MOBILEGL_TRANSPORT` and
    every role-selecting `MOBILEGL_IPC_*` removed from the child's envp; (b) the child's config
-   forced to `Monolith` regardless. Either alone fails as a fork bomb.
+   cannot recursively select a client transport. The original plan expressed (b) as forcing
+   `Monolith`. **`PENDING a6`**: separate that anti-recursion decision from backend server-role
+   selection. P5f's record consumers currently select their server arm with an active transport;
+   blindly forcing `Monolith` would select frontend glue. Preserve both anti-recursion controls
+   while retaining the server-owned record path; `c6` must settle the concrete selector.
 2. Image lookup: `MOBILEGL_IPC_SERVER_PATH` (already parsed, `Config.h` `IpcTable::ServerPath`),
    then `dladdr` to find `libMobileGLServer.so` beside the loaded library. **An unresolvable path
    is a named refusal, never a monolith fallback** — `ConfigLoader.cpp:315-317` names that accident.
@@ -127,14 +133,30 @@ other gate here.
 
 ## §6 Process-lifetime statics (`st`)
 
-`g_syncedRenderStateParameters` (`MG_Backend/DirectGLES/DirectGLES.cpp:4586`) and
-`ScopedDefaultUnpackState::s_synced` are process-level statics with per-context semantics, recorded
-as P6's by `CONTRACT-P5C.md:538-539`. In a server process reused across client contexts they hand
-the next context the previous one's synced state.
+**Implemented by P5f `fs`; P6 inherits and verifies it.** The statics recorded as P6 debt in
+`CONTRACT-P5C.md:538-539` no longer carry unqualified synced state between contexts. The
+[fs report](notes/p5f/fs-report.md) records the full census, lifecycle rules and red-once evidence.
 
-**Rule: any static whose meaning is per-context or per-session is keyed by the context generation
-and reset at `applier_reset`.** **`PENDING a6`** for the complete list (audit item 2); the two above
-are the known members. This class is structurally invisible to `inproc`.
+- `ContextEpoch` combines native ES context generation, served-context serial and backend
+  execution arm (monolith / transport server). `ScopedDefaultUnpackState` republishes defaults
+  when that key changes; render-state invalidates its shadow before the version fast path.
+  Identical parameter bytes or versions cannot make a new epoch inherit an old sync result.
+  The transport raw-depth sampler owns a native sampler and rebuilds it on native generation change.
+- XFB state is role-local; the server map is keyed by the record's non-reused
+  `BoundStreamOutputLifetimeId`, including virtual name 0, with capture-local scatter scratch.
+  **A served-context serial change / `applier_reset` is not object destruction.** Current binding
+  state is reset, but still-live paused/pending spans survive and `set_context_values` selects
+  their lifetime identity again; returning to a context does not emit another Begin. Native
+  context generation change discards the old native ids/spans, and context destruction clears them.
+- Server liveness follows successful make-current and the control lifecycle. Release-current,
+  release-resources, context/backend destruction and loop stop clear it. Surface creation alone
+  is not a current context, and a verb stamp cannot revive a released server context.
+
+`a6` checks these established ownership/lifetime rules against the new process/session boundary;
+`st` verifies their socket/spawn lifecycle wiring and G5 controls. It does not introduce a new
+“clear every object at every reset” policy or reopen the P5f implementation work. Additional
+process/session lifetime findings, if any, remain **`PENDING a6`**; P6 still does not add multi-context
+support (§9.2).
 
 ## §7 Unchanged by P6
 
@@ -149,7 +171,8 @@ Beyond the five-part gate (`docs/Disaggregated/ARCHITECTURE.md` §13.2):
 
 1. G1 — pull build 0/0/0/0, `.text` unchanged.
 2. G2/G14 — `integration-spawn`'s name set identical to `integration-split`'s.
-3. `integration-spawn` green at the same count as `integration-split` (today 179/179).
+3. `integration-spawn` green at the same count as `integration-split` (179/179 on the historical
+   draft baseline; `c6` refreshes the actual discovery and result sets).
 4. Process tree, mechanical — child count before and after every entry: exactly one while
    running, zero after. `HeadlessGL`'s fork pre-check leaves no orphan.
 5. **Arm proof (ID-124)** — every spawn entry records the child pid and `transport=spawn` in its own
@@ -168,7 +191,7 @@ Negative controls, each run red once:
 | S1 | `MOBILEGL_IPC_SERVER_PATH=/nonexistent` | named refusal, not a silent monolith fallback (§3.2) |
 | S2 | `kill -9` the server mid-frame | §5.1's latch; the client never hangs and never keeps submitting |
 | S3 | child envp not scrubbed | §3.1's second safety catches it, by name |
-| S4 | `st`'s generation reset disabled | a second context inherits the first's synced state (§6) |
+| S4 | inherited P5f epoch invalidation disabled in spawn lifecycle wiring | a replaced context inherits stale synced state; returning to a still-live XFB lifetime must retain its paused span (§6) |
 | S5 | `WindowKind::AndroidNativeWindow` reaches the server | named `Fatal`, not a black screen (§4.3) |
 
 S2's shape is settled before it is written. E1 demanded a `Fatal` that occurs zero times in the
@@ -176,8 +199,9 @@ entire run (ID-122); S2 must falsify *"the client can tell slow from dead"*.
 
 ## §9 Amendments to the earlier contracts
 
-1. `CONTRACT-P5C.md:537-539` — the EGL forwarders' control plane and the `s_synced` /
-   `g_syncedRenderStateParameters` resets are discharged here, §4 and §6.
+1. `CONTRACT-P5C.md:537-539` — EGL value framing was discharged by P5f `fc`, and the unpack /
+   render-state epoch work by P5f `fs`. P6 carries the existing frames over the socket (§4) and
+   verifies the inherited lifecycle rules in the second process (§6).
 2. `CONTRACT-P5C.md:56` says P6's multi-context shape reads `MGPApplierReset::ContextSerial` for
    real. **Declined**: P6 stays single-context, multi-context moves to P12 where the Service
    lifecycle makes it concrete, and the assertion stands unchanged.
@@ -189,8 +213,10 @@ entire run (ID-122); S2 must falsify *"the client can tell slow from dead"*.
 
 Real window arrival and the `android:process=":mgl"` Service (P12); multi-context (P12, §9.2);
 chunked readback and the reply-slot pool (P9, §9.3); `DynamicBackendParameters` fixed-width rewrite
-(P7); `MOBILEGL_IPC_POLL_ESCALATE` (P10); object-class BARRIER-PULLED rows and the frontend-keyed
-twin registry (P3b/P4b, P7); Windows `pipe:` / `unix:` (§2.6); the 511 class-C entries (§7).
+(P7); `MOBILEGL_IPC_POLL_ESCALATE` (P10); remaining monolith-only frontend-object / twin-registry
+glue cleanup (P3b/P4b) and named P7 functionality debts; Windows `pipe:` / `unix:` (§2.6); the 511
+class-C entries (§7). P5f already eliminated `BARRIER_PULLED` ownership and transport frontend-keyed
+registry access; those are completed prerequisites, not debts to carry forward.
 
 E1's re-specification (ID-122) is **not** discharged by P6 and does not become P6's because P6
 starts. It appears here only because §5.3 argues it shares a predicate.

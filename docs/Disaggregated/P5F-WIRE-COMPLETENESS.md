@@ -1,15 +1,15 @@
 # P5f — 一切状态上 wire：跨进程前的最后一次归零
 
-> 基线 `feat/disaggregated @ 7f1d2134`。路径在 `MobileGL/` 下。
-> **进度**：`f0` 普查已落（`notes/p5f/` 八篇）；`f1` 双块机制已落（报告
-> [`notes/p5f/f1-report.md`](notes/p5f/f1-report.md)：旋钮 `MOBILEGL_IPC_ROLE_SPLIT_STATE`、
-> 车道标签 `integration-dualblock-split`、棘轮 `Harness/dualblock-expected-fatals.txt`）；
-> `fc` 控制面帧已落（报告 [`notes/p5f/fc-report.md`](notes/p5f/fc-report.md)：§2.3 的函数指针邮箱
-> 退役为 `SurfaceControlFrame` 值帧，schema 缺口补齐，wire 入口具名拒绝就位）。
-> **波次 2 已集成**：fc / fe / fm 完成，双块 210 条零失败、两份 marker 棘轮为空；
-> 仍有 fs / fr / fv、13 个 BARRIER_PULLED 字段的分类收口与设备门。见
-> [`notes/p5f/wave2-report.md`](notes/p5f/wave2-report.md) 与最新 HANDOFF-P5F。
-> **P6 在 P5f 之前不开工**：P6 的前提"只是传输替换"今天不成立，§2 是不成立的清单。
+> **已收官（2026-09-20）**：f0 / f1 / fc / fe / fm / fs / fr / fv、字段归属收口、
+> 主机出口门、Redmi 双后端六个 clean-boot 臂与跨模型族终审均完成。
+> 最终行为验收头 `cfca93c7`；[`收口报告`](notes/p5f/close-report.md) 为当前结论，
+> [`交接`](notes/p5f/HANDOFF-P5F.md) 为下一阶段入口。P6 的 a6 / c6 / spawn 尚未实施。
+> 当前字段：41 RECORD_SUPPLIED / 6 APPLIER_DERIVED / **0 BARRIER_PULLED** / 16 FATAL；
+> 两份 marker 棘轮为空，双后端逐帧 `rsp=0`。旧指针 getter 保持 FATAL，不以改名消债。
+>
+> 以下 §0–4 保留立项背景与设计，§1–2 的读点、行号及 15 字段数字均是
+> **历史基线 `feat/disaggregated @ 7f1d2134`**，其中“今天”“尚未”等不代表当前状态。
+> 路径在 `MobileGL/` 下；各包报告保留其提交时快照，后续闭环见收口报告。
 
 ---
 
@@ -253,18 +253,18 @@ P5f 的每一条都靠同一个机制证伪，而不是靠审计：
 
 ---
 
-## 5 包（波次 2 已完成；ID-137 分工）
+## 5 包（全部完成；ID-137 分工）
 
 ```
-f0  普查（只读）：§2.4 的完整静态清单 + §2.6 的逐站点清单 + 每个 BARRIER_PULLED 字段的载体判定
- └─ f1  双块机制 + 旋钮 + 车道（§4），此时预期大面积红，红就是清单
+f0  普查（已集成）：§2.4 的完整静态清单 + §2.6 的逐站点清单 + 字段载体判定
+ └─ f1  双块机制 + 旋钮 + 车道（已集成；初始红清单已全部退役）
      ├─ fe  Espryt 字段读者 + XFB 快照 + 共用记录接线（已集成）
      ├─ fm  Magma 的 9 个字段 + T5 + Magma 侧跨角色读写（已集成）
      ├─ fc  控制面帧（§2.3，已集成）
-     ├─ fs  静态量分区（§2.4）
-     ├─ fr  registry 按句柄重键（§2.5）
-     └─ fv  反向通道触碰 client 内存的部分（§2.6）
- └─ 收口：strict 允许表清空，双块车道转硬绿
+     ├─ fs  静态量按角色/世代分区、XFB lifetime、server liveness（已集成）
+     ├─ fr  frontend registry / allocator 无 apply-side 豁免（已集成）
+     └─ fv  反向事件 callback 所有权与 frontend fallback 退役（已集成）
+ └─ 收口（完成）：字段归属零残余、两份空棘轮、逐帧 rsp 门、设备及异族审查
 ```
 
 `f1` 先落是故意的：**让红先出现，再逐包消红**，而不是各包自称做完之后再找一个判据。
@@ -272,6 +272,10 @@ f0  普查（只读）：§2.4 的完整静态清单 + §2.6 的逐站点清单 
 ---
 
 ## 6 出口门
+
+**七项均已完成**，数字与原始证据路径见 [close-report.md](notes/p5f/close-report.md)。
+双块 212 项为 206 PASS + 6 个按名称和原因锁定的既有 skip；RSP 独立门必须为
+双后端 2 PASS / 0 skip。缺失、重复、未运行的 JUnit 条目或额外 skip 均不能过门。
 
 1. 双块车道（§4）`integration-split` 全绿。
 2. `MOBILEGL_IPC_STRICT_ERRORS=1` 下 `strict-expected-markers.txt` **为空**，且两侧棘轮仍在
@@ -290,8 +294,9 @@ f0  普查（只读）：§2.4 的完整静态清单 + §2.6 的逐站点清单 
 
 ## 7 与 P6 的关系
 
-P5f 收官后，P6 的"只是传输替换"才第一次成立，而且是**被机器证明过的**，不是被引用的。
-P6 的 `a6` 只读审计随之缩小为一次核验，而不是一次发现。
+P5f 已完成跨角色内存依赖归零的机器门，P6 的前置条件解除。
+P6 的 `a6` 仍须核对独立进程的启动、句柄/映射和配置边界；本阶段的 inproc 演练不代替
+spawn 实现与跨进程设备验证。P6 尚未开工。
 
 `P6-SPAWN-PLAN.md` 与 `P6-CONTRACT-DRAFT.md` 里凡写"`PENDING a6`"的行，
 其中属于 §2 的部分改由 P5f 回答。
