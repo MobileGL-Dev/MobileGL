@@ -1419,6 +1419,31 @@ jobs:
         run: |
           ctest -L integration-magma-split --no-tests=error -j 2 --output-on-failure
 
+      - name: Magma P7 native mip format debt stays a named refusal
+        working-directory: build-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_IPC_STRICT_ERRORS: "1"
+          MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
+          MOBILEGL_TRANSPORT: "inproc"
+        run: |
+          private_log=MobileGL/MG_IntegrationTest/p5f-fm-GenerateMipmapPackedFloatPixels.log
+          rm -f "${private_log}"
+          rc=0
+          ctest -L integration-magma-p7-known-red --no-tests=error --output-on-failure \
+            --output-junit "${RUNNER_TEMP}/magma-p7.xml" || rc=$?
+          test "${rc}" -ne 0
+          python3 - "${RUNNER_TEMP}/magma-p7.xml" "${private_log}" <<'PY'
+          import pathlib, sys, xml.etree.ElementTree as ET
+          cases = list(ET.parse(sys.argv[1]).getroot().iter("testcase"))
+          assert len(cases) == 1, "the P7 probe must execute exactly one named case"
+          case = cases[0]
+          assert case.get("name", "").endswith("GenerateMipmapPackedFloatPixels"), case.attrib
+          assert case.find("skipped") is None and case.find("failure") is not None, "the P7 probe must fail, never skip"
+          log = pathlib.Path(sys.argv[2]).read_text()
+          assert 'Fatal{UnmigratedVerb, "Magma:mipmap-native-format@P7"}' in log, "missing named native-format refusal"
+          PY
+
       # ---- P5e (ra2), ID-134 / ID-82: THE CLIENT-ARRAY LANE, EXPECTED RED UNDER RUN-AHEAD ----
       #
       # The two DirectGLES.Split.ClientVertexArrayScenario entries draw from a vertex array in
