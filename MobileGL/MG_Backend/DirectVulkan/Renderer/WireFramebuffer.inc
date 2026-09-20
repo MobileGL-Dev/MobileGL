@@ -376,17 +376,52 @@
         auto& frame = m_frameContext.GetCurrent();
         vkCmdBeginRenderPass(frame.commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdEndRenderPass(frame.commandBuffer);
-        TransitionWireImage(resolved, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        // Depth/stencil resolve writes execute in COLOR_ATTACHMENT_OUTPUT,
+        // unlike ordinary depth attachment writes. Include both when exposing
+        // the resolved image to a transfer; layout-based inference only covers
+        // EARLY/LATE_FRAGMENT_TESTS and misses the resolve's store operation.
+        if (!VkTextureManager::TransitionImageLayout(frame.commandBuffer, resolved.image, scratch->layout,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            VK_ACCESS_TRANSFER_READ_BIT, formatAspects))
+            MagmaWireFatal("multisample-depth-resolve-transition");
+        resolved.layout = scratch->layout;
         TransitionWireImage(destination, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        UniquePtr<VkBufferObject> aspectBuffer;
         if (source.format == destination.format) {
-            VkImageCopy copy{};
-            copy.srcSubresource = {source.aspect, 0, 0, 1};
-            copy.srcOffset = {sx0, sy0, 0};
-            copy.dstSubresource = {source.aspect, destination.level, destination.layer, 1};
-            copy.dstOffset = {dx0, dy0, 0};
-            copy.extent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
-            vkCmdCopyImage(frame.commandBuffer, resolved.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                          destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            // Copy one aspect through its buffer representation. Some packed
+            // depth/stencil image-copy paths copy the complete native word even
+            // for a single-aspect region. A stencil byte or depth-only word in
+            // this GPU buffer cannot replace the destination's other aspect.
+            const VkDeviceSize texelSize = source.aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? 1 :
+                (source.format == VK_FORMAT_D16_UNORM || source.format == VK_FORMAT_D16_UNORM_S8_UINT ? 2 : 4);
+            const VkDeviceSize bytes = static_cast<VkDeviceSize>(width) * height * texelSize;
+            aspectBuffer = MakeUnique<VkBufferObject>();
+            if (!aspectBuffer->Create({.allocator = m_allocator, .size = bytes,
+                    .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE}))
+                MagmaWireFatal("multisample-depth-resolve-buffer");
+            VkBufferImageCopy copy{};
+            copy.imageSubresource = {source.aspect, 0, 0, 1};
+            copy.imageOffset = {sx0, sy0, 0};
+            copy.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
+            vkCmdCopyImageToBuffer(frame.commandBuffer, resolved.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   aspectBuffer->GetHandle(), 1, &copy);
+            VkBufferMemoryBarrier barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.buffer = aspectBuffer->GetHandle();
+            barrier.size = bytes;
+            vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 1, &barrier, 0, nullptr);
+            copy.imageSubresource = {source.aspect, destination.level, destination.layer, 1};
+            copy.imageOffset = {dx0, dy0, 0};
+            vkCmdCopyBufferToImage(frame.commandBuffer, aspectBuffer->GetHandle(), destination.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
         } else {
             // A logical GL depth format may use different native renderbuffer
             // and texture formats. Re-encode only after producing real resolved
@@ -403,6 +438,7 @@
         retired.renderPasses.push_back(pass);
         retired.imageViews = {views[0], views[1]};
         retired.textures.push_back(Move(scratch));
+        if (aspectBuffer) retired.buffers.push_back(Move(aspectBuffer));
         RetireWireObjects(Move(retired));
     }
 
