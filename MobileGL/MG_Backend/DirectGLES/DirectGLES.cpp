@@ -1993,7 +1993,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             xfb.scattered = false;
             xfb.scatterProgram.reset();
 #if MOBILEGL_BUILD_DISAGGREGATED
-            xfb.scatterArchive.reset();
+                xfb.scatterArchive.reset();
 #endif
             xfb.scatterCapacityVertices = 0;
             if (program->NeedsScatteredTransformFeedbackCapture()) {
