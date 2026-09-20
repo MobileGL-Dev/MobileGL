@@ -35,6 +35,7 @@
 // only checked "no GL error" would pass against a readback that never touched the buffer,
 // which is precisely how this whole cluster hid for so long.
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -531,6 +532,63 @@ namespace MGITest {
                            << " words from glGetTexImage(GL_DEPTH_STENCIL) are wrong (first word 0x" << std::hex
                            << packed[0] << std::dec << ")";
 
+        glBindTexture(GL_TEXTURE_2D, 0);
+        DestroySource(source);
+        Gl().EndFrame();
+    }
+
+    TEST_F(DepthStencilReadbackMatrixScenario, TextureDepthReadbackUsesSignedRangesAndHalfFloatEncoding) {
+        if (!Ready()) return;
+        DepthSource source = MakeTextureSource(GL_DEPTH_COMPONENT32F);
+        ASSERT_TRUE(SourceIsUsable());
+        struct Sample { float depth; GLbyte byte; GLshort shortValue; GLint intValue; GLushort halfBits; };
+        const Sample samples[] = {
+            {0.0f, 0, 0, 0, 0x0000},
+            {0.5f, 64, 16384, 1073741824, 0x3800},
+            {1.0f, 127, 32767, 2147483647, 0x3c00},
+        };
+        for (const auto& sample : samples) {
+            glBindFramebuffer(GL_FRAMEBUFFER, source.fbo);
+            ClearDepthStencil(GL_DEPTH_COMPONENT32F, sample.depth, 0);
+            ASSERT_EQ(FirstGLError(), 0u);
+            // GPU clear, then a texture read with the source FBO unbound: neither
+            // the upload shadow nor the currently bound FBO can supply the result.
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glBindTexture(GL_TEXTURE_2D, source.depthTexture);
+            const auto read = [&](GLenum type, auto expected) {
+                using Value = decltype(expected);
+                std::vector<Value> values(static_cast<size_t>(kWidth) * kHeight, static_cast<Value>(-37));
+                glGetTexImage(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, type, values.data());
+                EXPECT_EQ(FirstGLError(), 0u) << "depth=" << sample.depth << " type=" << type;
+                const auto bad = std::count_if(values.begin(), values.end(), [&](Value value) { return value != expected; });
+                EXPECT_EQ(bad, 0) << "depth=" << sample.depth << " type=" << type
+                                 << " first=" << static_cast<long long>(values[0])
+                                 << " expected=" << static_cast<long long>(expected);
+            };
+            read(GL_BYTE, sample.byte);
+            read(GL_SHORT, sample.shortValue);
+            read(GL_INT, sample.intValue);
+            read(GL_HALF_FLOAT, sample.halfBits);
+        }
+        glBindTexture(GL_TEXTURE_2D, 0);
+        DestroySource(source);
+        Gl().EndFrame();
+    }
+
+    TEST_F(DepthStencilReadbackMatrixScenario, TextureStencilHalfFloatReadbackEncodesTheIndex) {
+        if (!Ready()) return;
+        DepthSource source = MakeTextureSource(GL_STENCIL_INDEX8);
+        ASSERT_TRUE(SourceIsUsable());
+        ClearDepthStencil(GL_STENCIL_INDEX8, 0.0f, 5);
+        ASSERT_EQ(FirstGLError(), 0u);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindTexture(GL_TEXTURE_2D, source.depthTexture);
+        std::vector<GLushort> values(static_cast<size_t>(kWidth) * kHeight, 0xdead);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_STENCIL_INDEX, GL_HALF_FLOAT, values.data());
+        EXPECT_EQ(FirstGLError(), 0u);
+        // Half-float 5.0 is 0x4500. Writing the raw index 0x0005 is a different value.
+        EXPECT_EQ(std::count_if(values.begin(), values.end(), [](GLushort value) { return value != 0x4500; }), 0)
+            << "first half word=" << std::hex << values[0];
         glBindTexture(GL_TEXTURE_2D, 0);
         DestroySource(source);
         Gl().EndFrame();

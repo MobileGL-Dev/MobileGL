@@ -19,7 +19,7 @@
         SizeT size = 0;
         switch (type) {
         case GL_BYTE: case GL_UNSIGNED_BYTE: size = 1; break;
-        case GL_SHORT: case GL_UNSIGNED_SHORT: size = 2; break;
+        case GL_SHORT: case GL_UNSIGNED_SHORT: case GL_HALF_FLOAT: size = 2; break;
         case GL_INT: case GL_UNSIGNED_INT: case GL_FLOAT: size = 4; break;
         case GL_UNSIGNED_INT_24_8: size = 4; break;
         case GL_FLOAT_32_UNSIGNED_INT_24_8_REV: size = 8; break;
@@ -35,6 +35,10 @@
             switch (type) {
             case GL_FLOAT: {
                 const Float value = stencilOnly ? static_cast<Float>(s) : d;
+                Memcpy(dst, &value, sizeof(value)); break;
+            }
+            case GL_HALF_FLOAT: {
+                const Uint16 value = MG_Util::EncodeFloatToHalfBits(stencilOnly ? static_cast<Float>(s) : d);
                 Memcpy(dst, &value, sizeof(value)); break;
             }
             case GL_UNSIGNED_INT_24_8: {

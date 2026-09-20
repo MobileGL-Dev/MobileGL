@@ -138,9 +138,16 @@
                 } else if (type == GL_FLOAT) {
                     const Float value = needDepth ? depth[i] : static_cast<Float>(stencil[i]);
                     Memcpy(dst + i * pixelBytes, &value, sizeof(value));
+                } else if (type == GL_HALF_FLOAT) {
+                    const Uint16 value = MG_Util::EncodeFloatToHalfBits(
+                        needDepth ? depth[i] : static_cast<Float>(stencil[i]));
+                    Memcpy(dst + i * pixelBytes, &value, sizeof(value));
                 } else {
-                    const Uint32 value = needDepth ? NormalizedDepthToUnsigned(depth[i],
-                        pixelBytes == 1 ? 255.0 : pixelBytes == 2 ? 65535.0 : 4294967295.0) : stencil[i];
+                    const Bool signedType = type == GL_BYTE || type == GL_SHORT || type == GL_INT;
+                    const Double maximum = signedType
+                        ? (pixelBytes == 1 ? 127.0 : pixelBytes == 2 ? 32767.0 : 2147483647.0)
+                        : (pixelBytes == 1 ? 255.0 : pixelBytes == 2 ? 65535.0 : 4294967295.0);
+                    const Uint32 value = needDepth ? NormalizedDepthToUnsigned(depth[i], maximum) : stencil[i];
                     if (pixelBytes == 1) dst[i] = static_cast<Uint8>(value);
                     else if (pixelBytes == 2) { const Uint16 v = static_cast<Uint16>(value); Memcpy(dst + i * 2, &v, 2); }
                     else if (pixelBytes == 4) Memcpy(dst + i * 4, &value, 4);
