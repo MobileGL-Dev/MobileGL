@@ -2023,7 +2023,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return false; // a failed sync cannot substitute CPU bytes for this native image
         }
         if (!store.IsCovered(key, upload, level) || store.IsLevelGpuDirty(key, upload, level) ||
-            store.LevelExtentOrUndefined(key, upload, level) != extent) return false;
+            store.LevelExtentOrUndefined(key, upload, level) != extent) {
+            const auto actual = store.LevelExtentOrUndefined(key, upload, level);
+            MGLOG_E("Magma unbacked read: {%u,%u} target=%u level=%u covered=%d gpuDirty=%d extent=%dx%dx%d requested=%dx%dx%d bytes=%zu",
+                    handle.Slot, handle.Gen, upload, level, store.IsCovered(key, upload, level),
+                    store.IsLevelGpuDirty(key, upload, level), actual.x(), actual.y(), actual.z(),
+                    extent.x(), extent.y(), extent.z(), store.LevelByteSize(key, upload, level));
+            return false;
+        }
         const auto logical = static_cast<TextureInternalFormat>(record.Desc.InternalFormat);
         const auto formatInfo = ResolveTextureFormatInfo(logical);
         format = formatInfo.format;
