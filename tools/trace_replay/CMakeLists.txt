@@ -298,6 +298,17 @@ if(NOT CMAKE_CROSSCOMPILING)
             COMMAND mobilegl_trace_env_overrides_test
             COMMENT "Checking the retrace env passthrough parser")
     add_dependencies(mobilegl_trace_replay mobilegl_trace_env_overrides_test)
+
+    add_executable(mobilegl_trace_replay_lease_test
+            "${MOBILEGL_TRACE_ROOT}/trace_replay_lease_test.cpp")
+    target_compile_features(mobilegl_trace_replay_lease_test PRIVATE cxx_std_17)
+    target_include_directories(mobilegl_trace_replay_lease_test PRIVATE
+            "${MOBILEGL_TRACE_SHARED_CPP_DIR}")
+    target_link_libraries(mobilegl_trace_replay_lease_test PRIVATE Threads::Threads)
+    add_custom_command(TARGET mobilegl_trace_replay_lease_test POST_BUILD
+            COMMAND mobilegl_trace_replay_lease_test
+            COMMENT "Checking process ownership of native trace replay")
+    add_dependencies(mobilegl_trace_replay mobilegl_trace_replay_lease_test)
 endif()
 
 if(MOBILEGL_TRACE_REPLAY_MOBILEGL_LIBRARY)

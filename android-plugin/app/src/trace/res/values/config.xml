@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- CONFIG_ASSETS_PATHS (0x80000000) exists in Android 34, but that SDK has no
+         public configChanges flag name for it. Package parsing resolves this integer
+         through TypedArray.getInt. Keep it unqualified: overlay installation must not
+         recreate the Activity and destroy the live native render Surface.
+         0x0f80 = orientation | screenLayout | uiMode | screenSize | smallestScreenSize,
+         matching PluginActivity. Trace framebuffer dimensions are request parameters,
+         and these configuration changes need no new view or native replay. -->
+    <integer name="trace_replay_config_changes">0x80000f80</integer>
+</resources>

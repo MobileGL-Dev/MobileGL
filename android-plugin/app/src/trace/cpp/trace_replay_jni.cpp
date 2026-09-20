@@ -2,6 +2,7 @@
 
 #include "spawn_spike.hpp"
 #include "trace_env_overrides.hpp"
+#include "trace_replay_lease.hpp"
 
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
@@ -119,6 +120,18 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
                                                                         jboolean benchmarkFinish,
                                                                         jstring benchmarkResultPath,
                                                                         jstring envOverrides) {
+    // Claim before changing GLWS globals, environment, logs or output files. The lease
+    // outlives replayState, so another invocation cannot race native-window cleanup.
+    mobilegl_trace::TraceReplayLease lease;
+    if (!lease) {
+        mobilegl_trace::Result rejected;
+        rejected.statusCode = mobilegl_trace::STATUS_RETRACE_FAILED;
+        rejected.message = "another trace replay is already running in this process";
+        // No paths: a duplicate Activity can share outputDir with the live invocation.
+        // Publishing this failure there would overwrite that invocation's real result.
+        return MakeResult(env, rejected);
+    }
+
     mobilegl_trace::Request request;
     request.tracePath = ToString(env, tracePath);
     request.goldenPath = ToString(env, goldenPath);
@@ -157,12 +170,20 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
     request.benchmarkResultPath = ToString(env, benchmarkResultPath);
     request.envOverrides = SplitSemicolonList(ToString(env, envOverrides));
 
-    ScopedTraceReplayState replayState;
-    mobilegl_trace_set_requested_size(request.width, request.height);
     const bool needsNativeWindow =
         request.backend == "DirectVulkan" ||
         (request.backend == "DirectGLES" && !request.usePbuffer);
     ANativeWindow *window = needsNativeWindow && surface != nullptr ? ANativeWindow_fromSurface(env, surface) : nullptr;
+    if (needsNativeWindow && window == nullptr) {
+        auto result = MakeFailureResult(request, mobilegl_trace::STATUS_RETRACE_FAILED,
+                                       "render surface was destroyed before native replay started");
+        if (!result.resultPath.empty()) {
+            mobilegl_trace::WriteResultJson(request, result);
+        }
+        return MakeResult(env, result);
+    }
+    ScopedTraceReplayState replayState;
+    mobilegl_trace_set_requested_size(request.width, request.height);
     mobilegl_trace_set_native_window(window);
     if (window != nullptr) {
         ANativeWindow_release(window);

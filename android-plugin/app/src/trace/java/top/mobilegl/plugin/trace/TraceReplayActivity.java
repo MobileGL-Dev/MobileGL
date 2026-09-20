@@ -25,7 +25,8 @@ public final class TraceReplayActivity extends Activity {
 
     private TextView statusView;
     private TraceReplayRequest request;
-    private boolean started;
+    private TraceReplaySession<TraceReplayResult> replaySession;
+    private final TraceReplaySession.Listener<TraceReplayResult> replayListener = this::onReplayComplete;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     @Override
@@ -62,6 +63,18 @@ public final class TraceReplayActivity extends Activity {
             return;
         }
 
+        @SuppressWarnings("unchecked")
+        TraceReplaySession<TraceReplayResult> retained =
+                (TraceReplaySession<TraceReplayResult>) getLastNonConfigurationInstance();
+        replaySession = retained != null ? retained : new TraceReplaySession<>(
+                command -> new Thread(command, "MobileGLTraceReplay").start(),
+                command -> new Handler(Looper.getMainLooper()).post(command));
+        if (replaySession.hasStarted()) {
+            Log.i(TAG, "Reattaching to retained trace replay: " + request.outputDir);
+            statusView.setText("Running trace replay\n" + request.outputDir);
+        }
+        replaySession.attach(replayListener);
+
         SurfaceHolder holder = surfaceView.getHolder();
         if (request.width > 0 && request.height > 0) {
             holder.setFixedSize(request.width, request.height);
@@ -87,20 +100,43 @@ public final class TraceReplayActivity extends Activity {
         mainHandler.postDelayed(() -> startReplay(holder), 250);
     }
 
+    @Override
+    public Object onRetainNonConfigurationInstance() {
+        return replaySession;
+    }
+
+    @Override
+    protected void onDestroy() {
+        // A callback queued by an old Surface must not start after that Activity is gone.
+        mainHandler.removeCallbacksAndMessages(null);
+        if (replaySession != null) {
+            replaySession.detach(replayListener);
+        }
+        super.onDestroy();
+    }
+
     private void startReplay(SurfaceHolder holder) {
-        if (started) {
+        if (isFinishing() || isDestroyed() || replaySession.hasStarted()) {
             return;
         }
         Surface surface = holder.getSurface();
         if (surface == null || !surface.isValid()) {
             return;
         }
-        started = true;
         statusView.setText("Running trace replay\n" + request.outputDir);
-        new Thread(() -> runRequest(request, surface), "MobileGLTraceReplay").start();
+        TraceReplayRequest replayRequest = request;
+        // The worker retains the request and Surface, not the Activity. JNI also acquires
+        // its own ANativeWindow reference until the replay and native cleanup finish.
+        replaySession.start(() -> runRequest(replayRequest, surface));
     }
 
-    private void runRequest(TraceReplayRequest request, Surface surface) {
+    private void onReplayComplete(TraceReplayResult result) {
+        statusView.setText(result.toString());
+        finish();
+    }
+
+    private static TraceReplayResult runRequest(TraceReplayRequest request, Surface surface) {
+        Log.i(TAG, "Starting native trace replay: " + request.outputDir);
         TraceReplayResult result = nativeRunTraceReplay(
                 surface,
                 request.tracePath,
@@ -135,11 +171,7 @@ public final class TraceReplayActivity extends Activity {
                 request.envOverrides
         );
         Log.i(TAG, result.toString());
-        TraceReplayResult finalResult = result;
-        runOnUiThread(() -> {
-            statusView.setText(finalResult.toString());
-            finish();
-        });
+        return result;
     }
 
     private static native TraceReplayResult nativeRunTraceReplay(
@@ -202,9 +234,7 @@ public final class TraceReplayActivity extends Activity {
     }
 
     private void runSpawnSpike(String libraryName) {
-        // The surface callbacks fire regardless; this keeps them from starting a replay
-        // underneath the spike.
-        started = true;
+        // onCreate returns before installing replay surface callbacks in this mode.
         File outputDir = new File(request.outputDir);
         String serverPath = new File(getApplicationInfo().nativeLibraryDir, libraryName)
                 .getAbsolutePath();

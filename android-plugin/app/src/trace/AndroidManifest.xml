@@ -52,8 +52,11 @@
             android:name="pojavEnv"
             tools:node="remove" />
 
+        <!-- Keep the native render Surface through runtime overlay/display changes.
+             See the integer resource for the API 34-compatible configuration mask. -->
         <activity
             android:name=".trace.TraceReplayActivity"
+            android:configChanges="@integer/trace_replay_config_changes"
             android:exported="true"
             android:theme="@style/Theme.MobileGLPlugin">
             <intent-filter>
