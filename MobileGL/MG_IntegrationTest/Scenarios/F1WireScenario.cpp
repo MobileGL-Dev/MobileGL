@@ -460,6 +460,25 @@ TEST_F(F1WireScenario, GenerateMipmapPackedFloatPixels) {
     ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
     const GLfloat expected[4] = {0.25f, 0.5f, 0.75f, 1.0f};
     for (int i = 0; i < 4; ++i) EXPECT_NEAR(pixel[i], expected[i], 0.01f);
+
+    // Change the base on the GPU after its client upload. The regenerated mip
+    // must read those new pixels, and offscreen shader blits must keep row order.
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0.875f, 0.375f, 0.125f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(0, 4, 8, 4);
+    glClearColor(0.125f, 0.75f, 0.5f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 2);
+    GLfloat rows[8]{};
+    glReadPixels(1, 0, 1, 2, GL_RGBA, GL_FLOAT, rows);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    const GLfloat generated[8] = {0.875f, 0.375f, 0.125f, 1.0f, 0.125f, 0.75f, 0.5f, 1.0f};
+    for (int i = 0; i < 8; ++i) EXPECT_NEAR(rows[i], generated[i], 0.01f);
 }
 
 TEST_F(F1WireScenario, GenerateMipmapDepthPixels) {

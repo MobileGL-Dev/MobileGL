@@ -661,8 +661,9 @@
         RetireWireDrawPass();
         auto& state = MG_Pipe::MGPipeApplier();
         Uint32 base = state.VerbMipBaseLevel, baseLayer = 0, layerCount = 1;
+        VkFormat viewFormat = VK_FORMAT_UNDEFINED;
         const auto handle = m_textureManager->ResolveWireTextureStorage(state.VerbMipRes, base, baseLayer,
-                                                                       nullptr, &layerCount);
+                                                                       &viewFormat, &layerCount);
         auto* resource = m_textureManager->SyncTextureResourceByHandle(handle);
         if (!resource) MagmaWireFatal("mipmap-resource");
         m_textureManager->FlushPendingUploads();
@@ -676,38 +677,74 @@
         if (resource->aspect != VK_IMAGE_ASPECT_COLOR_BIT && resource->aspect != VK_IMAGE_ASPECT_DEPTH_BIT)
             MagmaWireFatal("depth-stencil-mipmap@P7");
         VkFormatProperties props{};
-        vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle,resource->format,&props);
+        const VkFormat format = viewFormat == VK_FORMAT_UNDEFINED ? resource->format : viewFormat;
+        vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle,format,&props);
         const auto required = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
-        if ((props.optimalTilingFeatures & required) != required) MagmaWireFatal("mipmap-native-format@P7");
+        const Bool nativeBlit = format == resource->format && (props.optimalTilingFeatures & required) == required;
         const VkFilter filter = props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT ?
                                 VK_FILTER_LINEAR : VK_FILTER_NEAREST;
-        VkPipelineStageFlags stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        VkAccessFlags access = 0;
-        GetImageTransitionSourceState(resource->layout,stage,access);
-        if (!VkTextureManager::TransitionImageLayout(frame.commandBuffer,resource->image,resource->layout,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,stage,VK_PIPELINE_STAGE_TRANSFER_BIT,access,
-            VK_ACCESS_TRANSFER_WRITE_BIT,resource->aspect,0,resource->mipLevels)) MagmaWireFatal("mipmap-transition");
-        for (Uint32 level=base+1;level<base+count;++level) {
-            VkImageLayout previous = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            VkTextureManager::TransitionImageLayout(frame.commandBuffer,resource->image,previous,
-                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
-                VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT,resource->aspect,level-1,1);
-            VkImageBlit blit{};
-            blit.srcSubresource = {resource->aspect,level-1,baseLayer,layerCount};
-            blit.dstSubresource = {resource->aspect,level,baseLayer,layerCount};
-            blit.srcOffsets[1] = {static_cast<Int32>(std::max(resource->extent.width>>(level-1),1u)),
-                static_cast<Int32>(std::max(resource->extent.height>>(level-1),1u)),
-                static_cast<Int32>(std::max(resource->depth>>(level-1),1u))};
-            blit.dstOffsets[1] = {static_cast<Int32>(std::max(resource->extent.width>>level,1u)),
-                static_cast<Int32>(std::max(resource->extent.height>>level,1u)),
-                static_cast<Int32>(std::max(resource->depth>>level,1u))};
-            vkCmdBlitImage(frame.commandBuffer,resource->image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                          resource->image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&blit,filter);
-            VkTextureManager::TransitionImageLayout(frame.commandBuffer,resource->image,previous,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
-                VK_ACCESS_TRANSFER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,resource->aspect,level-1,1);
+        if (!nativeBlit) {
+            // Packed floating-point color formats may support sampling and
+            // rendering without BLIT_DST. Generate from actual GPU mip contents
+            // through the native shader pass; no client or staged texels enter.
+            if (resource->aspect != VK_IMAGE_ASPECT_COLOR_BIT ||
+                resource->viewType == VK_IMAGE_VIEW_TYPE_1D || resource->viewType == VK_IMAGE_VIEW_TYPE_1D_ARRAY ||
+                resource->viewType == VK_IMAGE_VIEW_TYPE_3D ||
+                !(resource->usageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) ||
+                baseLayer >= resource->arrayLayers || layerCount > resource->arrayLayers - baseLayer)
+                MagmaWireFatal("mipmap-shader-format-or-shape");
+            for (Uint32 level = base + 1; level < base + count; ++level) {
+                for (Uint32 layer = baseLayer; layer < baseLayer + layerCount; ++layer) {
+                    WireImage source{};
+                    source.image = resource->image;
+                    source.format = format;
+                    source.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+                    source.layout = resource->layout;
+                    source.trackedLayout = &resource->layout;
+                    source.levels = resource->mipLevels;
+                    source.level = level - 1;
+                    source.layer = layer;
+                    source.extent = {std::max(resource->extent.width >> (level - 1), 1u),
+                                     std::max(resource->extent.height >> (level - 1), 1u)};
+                    WireImage destination = source;
+                    destination.level = level;
+                    destination.extent = {std::max(resource->extent.width >> level, 1u),
+                                          std::max(resource->extent.height >> level, 1u)};
+                    if (!BlitWireColorImage(source, destination, 0, 0, source.extent.width, source.extent.height,
+                        0, 0, destination.extent.width, destination.extent.height,
+                        filter == VK_FILTER_LINEAR ? GL_LINEAR : GL_NEAREST, true))
+                        MagmaWireFatal("mipmap-shader-blit");
+                }
+            }
+        } else {
+            VkPipelineStageFlags stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            VkAccessFlags access = 0;
+            GetImageTransitionSourceState(resource->layout,stage,access);
+            if (!VkTextureManager::TransitionImageLayout(frame.commandBuffer,resource->image,resource->layout,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,stage,VK_PIPELINE_STAGE_TRANSFER_BIT,access,
+                VK_ACCESS_TRANSFER_WRITE_BIT,resource->aspect,0,resource->mipLevels)) MagmaWireFatal("mipmap-transition");
+            for (Uint32 level=base+1;level<base+count;++level) {
+                VkImageLayout previous = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                VkTextureManager::TransitionImageLayout(frame.commandBuffer,resource->image,previous,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT,resource->aspect,level-1,1);
+                VkImageBlit blit{};
+                blit.srcSubresource = {resource->aspect,level-1,baseLayer,layerCount};
+                blit.dstSubresource = {resource->aspect,level,baseLayer,layerCount};
+                blit.srcOffsets[1] = {static_cast<Int32>(std::max(resource->extent.width>>(level-1),1u)),
+                    static_cast<Int32>(std::max(resource->extent.height>>(level-1),1u)),
+                    static_cast<Int32>(std::max(resource->depth>>(level-1),1u))};
+                blit.dstOffsets[1] = {static_cast<Int32>(std::max(resource->extent.width>>level,1u)),
+                    static_cast<Int32>(std::max(resource->extent.height>>level,1u)),
+                    static_cast<Int32>(std::max(resource->depth>>level,1u))};
+                vkCmdBlitImage(frame.commandBuffer,resource->image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                              resource->image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&blit,filter);
+                VkTextureManager::TransitionImageLayout(frame.commandBuffer,resource->image,previous,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_ACCESS_TRANSFER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,resource->aspect,level-1,1);
+            }
+            resource->layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         }
-        resource->layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         auto& record = state.TextureResources[handle.Slot];
         record.Desc.Levels = std::max<Uint16>(record.Desc.Levels,static_cast<Uint16>(base+count));
         resource->syncedWireSerial = ++record.Serial;

@@ -6,6 +6,7 @@
     struct VulkanRenderer::WireColorBlitResources {
         struct Target {
             VkFormat format = VK_FORMAT_UNDEFINED;
+            VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
             VkRenderPass renderPass = VK_NULL_HANDLE;
             VkPipeline pipeline = VK_NULL_HANDLE;
         };
@@ -38,15 +39,25 @@
     Bool VulkanRenderer::BlitWireColorToDefault(WireImage source, WireImage destination,
         GLint sx0, GLint sy0, GLint sx1, GLint sy1,
         GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter) {
-        if (!destination.isDefault || source.isDefault || source.image == destination.image ||
+        if (!destination.isDefault) return false;
+        return BlitWireColorImage(source, destination, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, filter, false);
+    }
+
+    Bool VulkanRenderer::BlitWireColorImage(WireImage source, WireImage destination,
+        GLint sx0, GLint sy0, GLint sx1, GLint sy1,
+        GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter, Bool mipmap) {
+        const Bool sameImage = source.image == destination.image;
+        if (source.isDefault || (sameImage && source.level == destination.level && source.layer == destination.layer) ||
             source.samples != VK_SAMPLE_COUNT_1_BIT || destination.samples != VK_SAMPLE_COUNT_1_BIT ||
-            source.is3D || (source.viewType != VK_IMAGE_VIEW_TYPE_2D &&
+            source.is3D || destination.is3D || (source.viewType != VK_IMAGE_VIEW_TYPE_2D &&
                             source.viewType != VK_IMAGE_VIEW_TYPE_2D_ARRAY) ||
+            (destination.viewType != VK_IMAGE_VIEW_TYPE_2D && destination.viewType != VK_IMAGE_VIEW_TYPE_2D_ARRAY) ||
             !vkuFormatIsSampledFloat(source.format)) return false;
         if (sx0 == sx1 || sy0 == sy1 || dx0 == dx1 || dy0 == dy1) return true;
         if (!source.extent.width || !source.extent.height ||
             !destination.extent.width || !destination.extent.height) return false;
-        const auto transform = m_swapchainObject.GetPreTransform();
+        const auto transform = destination.isDefault ? m_swapchainObject.GetPreTransform() :
+                                                       VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
         if (transform != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR &&
             transform != VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR &&
             transform != VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR &&
@@ -56,6 +67,15 @@
         const VkFormatFeatureFlags required = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
             (filter == GL_LINEAR ? VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT : 0);
         if ((sourceProperties.optimalTilingFeatures & required) != required) return false;
+        // Mip generation samples and writes the texture's own color space;
+        // GL_FRAMEBUFFER_SRGB only controls framebuffer operations.
+        if (!mipmap) destination.format = ResolveSrgbAttachmentWriteFormat(destination.format,
+            MGB_CTX->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
+        VkFormatProperties destinationProperties{};
+        vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle, destination.format, &destinationProperties);
+        if (!(destinationProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)) return false;
+        const VkImageLayout sourceLayout = sameImage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        const VkImageLayout destinationLayout = sameImage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
         struct Constants {
             float srcRect[4];
@@ -97,17 +117,15 @@
             VK_VERIFY(vkCreateSampler(m_device, &sampler, nullptr, &cache.linear));
         }
         auto& cache = *m_wireColorBlitResources;
-        // Honor the same sRGB write policy as wire draw attachments.
-        destination.format = ResolveSrgbAttachmentWriteFormat(destination.format,
-            MGB_CTX->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
         WireColorBlitResources::Target* target = nullptr;
         for (auto& entry : cache.targets) {
-            if (entry.format == destination.format) { target = &entry; break; }
+            if (entry.format == destination.format && entry.layout == destinationLayout) { target = &entry; break; }
         }
         if (!target) {
             cache.targets.emplace_back();
             target = &cache.targets.back();
             target->format = destination.format;
+            target->layout = destinationLayout;
             VkAttachmentDescription attachment{};
             attachment.format = destination.format;
             attachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -115,8 +133,8 @@
             attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
             attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-            attachment.initialLayout = attachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            const VkAttachmentReference color{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+            attachment.initialLayout = attachment.finalLayout = destinationLayout;
+            const VkAttachmentReference color{0, destinationLayout};
             VkSubpassDescription subpass{};
             subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
             subpass.colorAttachmentCount = 1;
@@ -174,8 +192,12 @@
         }
 
         m_textureManager->FlushPendingUploads();
-        TransitionWireImage(source, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        TransitionWireImage(destination, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        // Distinct mip/layer views of the same image are legal shader input and
+        // output. GENERAL keeps the whole-image layout tracker truthful; the
+        // transition also orders the previous mip's attachment write.
+        TransitionWireImage(source, sourceLayout);
+        if (sameImage) destination.layout = source.layout;
+        else TransitionWireImage(destination, destinationLayout);
         const auto makeView = [&](const WireImage& image) {
             VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             view.image = image.image;
@@ -213,7 +235,7 @@
         alloc.pSetLayouts = &cache.descriptorLayout;
         VK_VERIFY(vkAllocateDescriptorSets(m_device, &alloc, &descriptorSet));
         const VkDescriptorImageInfo sampled{filter == GL_LINEAR ? cache.linear : cache.nearest,
-                                           sourceView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                                           sourceView, sourceLayout};
         VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         write.dstSet = descriptorSet;
         write.dstBinding = 0;
@@ -227,6 +249,12 @@
                                  transform == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR;
         const float dw = static_cast<float>(quarterTurn ? destination.extent.height : destination.extent.width);
         const float dh = static_cast<float>(quarterTurn ? destination.extent.width : destination.extent.height);
+        // The shared vertex shader flips window Y. Offscreen images keep the
+        // source row order, so undo that flip in the destination rectangle.
+        if (!destination.isDefault) {
+            dy0 = static_cast<GLint>(destination.extent.height) - dy0;
+            dy1 = static_cast<GLint>(destination.extent.height) - dy1;
+        }
         const Constants constants{{sx0 / sw, sy0 / sh, (static_cast<float>(sx1) - sx0) / sw,
                                     (static_cast<float>(sy1) - sy0) / sh},
                                   {dx0 / dw, dy0 / dh, (static_cast<float>(dx1) - dx0) / dw,
@@ -260,7 +288,7 @@
         retired.imageViews = {sourceView, destinationView};
         retired.descriptorPools.push_back(descriptorPool);
         RetireWireObjects(Move(retired));
-        m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired, true);
+        if (destination.isDefault) m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired, true);
         return true;
     }
 #endif

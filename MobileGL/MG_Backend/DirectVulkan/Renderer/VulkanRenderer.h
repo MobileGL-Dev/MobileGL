@@ -478,6 +478,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool BlitWireColorToDefault(WireImage source, WireImage destination,
                                    GLint sx0, GLint sy0, GLint sx1, GLint sy1,
                                    GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter);
+        Bool BlitWireColorImage(WireImage source, WireImage destination,
+                               GLint sx0, GLint sy0, GLint sx1, GLint sy1,
+                               GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter, Bool mipmap);
         struct WireColorBlitResources;
         WireColorBlitResources* m_wireColorBlitResources = nullptr;
         void DestroyWireColorBlitResources();
