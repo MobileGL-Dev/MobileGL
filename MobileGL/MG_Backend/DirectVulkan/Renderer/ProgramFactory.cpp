@@ -3365,6 +3365,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                 updateAfterBindSampledImages + updateAfterBindStorageImages;
         const auto& uab = m_updateAfterBindLimits;
         entry.usesUpdateAfterBind =
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // Vulkan forbids ANY update-after-bind binding in a set layout that
+            // contains a dynamic buffer descriptor (VUID 03001/03011). Wire draws
+            // retain UniformManager's per-frame, content-versioned descriptor sets;
+            // this selects the legal ordinary pool, not in-place mutation of a live set.
+            (!program.IsWire() || entry.dynamicBindings.empty()) &&
+#endif
             uab.enabled && updateAfterBindSamplers <= uab.maxPerStageSamplers &&
             updateAfterBindUniformBuffers <= uab.maxPerStageUniformBuffers &&
             updateAfterBindStorageBuffers <= uab.maxPerStageStorageBuffers &&

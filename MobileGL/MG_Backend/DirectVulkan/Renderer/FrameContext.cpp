@@ -7,6 +7,9 @@
 // End of Source File Header
 
 #include "FrameContext.h"
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <Config.h>
+#endif
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     VkResult FrameContext::Initialize(VkDevice device, VkCommandPool commandPool, Uint32 frameCount) {
@@ -217,6 +220,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkImageMemoryBarrier presentBarrier{};
         presentBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         presentBarrier.srcAccessMask = 0;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // A layout transition writes the image too. Order it after the wire
+        // render pass's storeOp, clears and copies instead of relying on the old
+        // per-draw queue-idle path. This applies even when contents are discarded.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
+            presentBarrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+#endif
         presentBarrier.dstAccessMask = 0;
         presentBarrier.oldLayout = oldLayout;
         presentBarrier.newLayout = presentLayout;
@@ -228,7 +238,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         presentBarrier.subresourceRange.levelCount = 1;
         presentBarrier.subresourceRange.baseArrayLayer = 0;
         presentBarrier.subresourceRange.layerCount = 1;
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0,
+        vkCmdPipelineBarrier(commandBuffer,
+#if MOBILEGL_BUILD_DISAGGREGATED
+                             MG_Config::Transport != MG_Config::TransportMode::Monolith
+                                 ? VK_PIPELINE_STAGE_ALL_COMMANDS_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+#else
+                             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+#endif
+                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0,
                              nullptr, 0, nullptr, 1, &presentBarrier);
 
         if (openedRecording) {

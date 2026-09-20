@@ -7667,7 +7667,16 @@ void main() {
         VkMemoryBarrier memoryBarrier = BuildMemoryBarrierForGlBarriers(barriers);
 
         MGLOG_D("DirectVulkan: glMemoryBarrier(0x%x)", static_cast<Uint32>(barriers));
-        vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        vkCmdPipelineBarrier(frame.commandBuffer,
+#if MOBILEGL_BUILD_DISAGGREGATED
+                             // ALL_COMMANDS does not include HOST. The barrier's
+                             // HOST_WRITE access must have a matching source stage.
+                             MG_Config::Transport != MG_Config::TransportMode::Monolith
+                                 ? VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT
+                                 : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+#else
+                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+#endif
                              VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
                              1, &memoryBarrier, 0, nullptr, 0, nullptr);
     }
@@ -14277,7 +14286,14 @@ void main() {
         descriptorIndexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
         VkPhysicalDeviceDescriptorIndexingProperties descriptorIndexingProperties{};
         descriptorIndexingProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
-        const Bool descriptorIndexingCore = m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_2;
+        const Bool descriptorIndexingCore =
+#if MOBILEGL_BUILD_DISAGGREGATED && !defined(VK_USE_PLATFORM_WIN32_KHR)
+            // CreateInstance requests Vulkan 1.1 on these platforms. A 1.2+ GPU
+            // does not promote descriptor indexing into that application's core
+            // API; the wire path must enable VK_EXT_descriptor_indexing instead.
+            (MG_Config::Transport == MG_Config::TransportMode::Monolith) &&
+#endif
+            m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_2;
         const Bool descriptorIndexingExtension =
             IsExtensionSupported(availableExtensions, VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
         auto getPhysicalDeviceProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
