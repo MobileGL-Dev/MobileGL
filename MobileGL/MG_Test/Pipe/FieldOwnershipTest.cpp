@@ -935,6 +935,40 @@ TEST_F(FieldOwnershipTest, SplitOpenSpansAreOwnedByTheApplierAndSurviveOtherBind
     MGPipeServerClearVerbBoundary();
 }
 
+TEST_F(FieldOwnershipTest, SplitCaptureSnapshotSurvivesMakeCurrentUntilObjectRelease) {
+    RoleSplitArm guard;
+    guard.Arm(true);
+    auto& state = MGPipeApplier();
+    state.StreamOutputSpans.clear();
+    MGPStreamOutputBegin begin{};
+    begin.LifetimeId = 0x100000002ull;
+    begin.CaptureProgram = {7, 2};
+    begin.Targets[3] = {{9, 3}, 16, 64};
+    state.StreamOutputSpans[begin.LifetimeId] = begin;
+    state.BoundStreamOutputLifetimeId = begin.LifetimeId;
+
+    // Make-current resets binding state, not a live object's open capture. The
+    // returning context emits context values again, but never repeats Begin.
+    MGPipeApplierReset();
+    MGPContextValues returning{};
+    returning.BoundTransformFeedbackLifetimeId = begin.LifetimeId;
+    returning.IsTransformFeedbackActive = 1;
+    MGPipeApplySetContextValues(returning);
+    EXPECT_EQ(state.BoundStreamOutputLifetimeId, begin.LifetimeId);
+    EXPECT_TRUE(gPipeInputs.HasOpenTransformFeedbackSpan(begin.LifetimeId));
+    const auto found = state.StreamOutputSpans.find(begin.LifetimeId);
+    EXPECT_NE(found, state.StreamOutputSpans.end());
+    if (found != state.StreamOutputSpans.end()) {
+        EXPECT_EQ(found->second.CaptureProgram, begin.CaptureProgram);
+        EXPECT_EQ(found->second.Targets[3].Res, begin.Targets[3].Res);
+        EXPECT_EQ(found->second.Targets[3].Offset, 16u);
+        EXPECT_EQ(found->second.Targets[3].Size, 64u);
+    }
+    MGPipeApplierReleaseObjectRecords();
+    EXPECT_FALSE(gPipeInputs.HasOpenTransformFeedbackSpan(begin.LifetimeId));
+    EXPECT_EQ(state.BoundStreamOutputLifetimeId, 0u);
+}
+
 TEST_F(FieldOwnershipTest, RoleSplitOffFoldsTheFillSideOntoTheSharedBlock) {
     EXPECT_FALSE(MGPipeRoleSplitActive());
     EXPECT_EQ(&MGPipeClientInputs(), &gPipeInputs);
