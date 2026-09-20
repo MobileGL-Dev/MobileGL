@@ -4482,6 +4482,12 @@ void main() {
     }
 
     Bool VulkanRenderer::InitializeBlitResources() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5f fv: both window and headless transports use WireFramebuffer's native
+        // operations. These hidden programs are frontend objects, so even creating
+        // them on the server would retain a client compiler/allocator dependency.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return true;
+#endif
         ShutdownBlitResources();
 
         auto vertexShader = MakeShared<MG_State::GLState::ShaderObject>(ShaderStage::Vertex, kHiddenBlitVertexShaderId);
@@ -4574,6 +4580,12 @@ void main() {
     }
 
     Bool VulkanRenderer::InitializeDepthMipmapResources() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P5f fv: both window and headless transports use WireFramebuffer's native
+        // operations. These hidden programs are frontend objects, so even creating
+        // them on the server would retain a client compiler/allocator dependency.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return true;
+#endif
         ShutdownDepthMipmapResources();
 
         auto vertexShader = MakeShared<MG_State::GLState::ShaderObject>(ShaderStage::Vertex,

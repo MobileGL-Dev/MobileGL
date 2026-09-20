@@ -36,6 +36,7 @@
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectGLES/Utils.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
+#include <MG_Backend/DirectVulkan/Renderer/VulkanRenderer.h>
 #include <MG_Impl/Pipe/PipeFill.h>
 #include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Pipe/MGPipe.h>
@@ -2291,6 +2292,33 @@ namespace {
     struct FvSession : ServerFixture {
         ~FvSession() { Stop(); }
     };
+}
+
+namespace {
+    // Exercise the real hidden-resource constructors without adding a production test API.
+    // Explicit template instantiation permits naming a private member ([temp.explicit]).
+    using FvRenderer = MG_Backend::DirectVulkan::VulkanRenderer;
+    struct FvBlitInitTag {
+        using type = Bool (FvRenderer::*)();
+        friend type FvPrivateMember(FvBlitInitTag);
+    };
+    struct FvMipmapInitTag {
+        using type = Bool (FvRenderer::*)();
+        friend type FvPrivateMember(FvMipmapInitTag);
+    };
+    template <class Tag, typename Tag::type Member> struct FvMemberAccess {
+        friend typename Tag::type FvPrivateMember(Tag) { return Member; }
+    };
+    template struct FvMemberAccess<FvBlitInitTag, &FvRenderer::InitializeBlitResources>;
+    template struct FvMemberAccess<FvMipmapInitTag, &FvRenderer::InitializeDepthMipmapResources>;
+}
+
+TEST(P5fReverseChannel, TransportDoesNotConstructHiddenFrontendPrograms) {
+    // No Vulkan device, program factory or client GLContext is supplied. A transport
+    // initialization must not need any of them merely to skip these monolith resources.
+    FvRenderer renderer({});
+    EXPECT_TRUE((renderer.*FvPrivateMember(FvBlitInitTag{}))());
+    EXPECT_TRUE((renderer.*FvPrivateMember(FvMipmapInitTag{}))());
 }
 
 TEST(P5fReverseChannel, GlErrorsUseTheOwnedCallbackWithoutAResidualPull) {
