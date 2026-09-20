@@ -736,15 +736,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Fail before deletion if either paginated inventory cannot be read.
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
+            --jq '.jobs[] | select(.name | startswith("retrace (")) | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required") | .name' \
+            > "${RUNNER_TEMP}/cleanup-jobs.txt"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name | startswith("MobileGL-trace-fixture-") or startswith("MobileGL-android-retrace-result-") or startswith("trace-fixture-") or startswith("retrace-result-")) | [.id, .name] | @tsv' \
+            > "${RUNNER_TEMP}/cleanup-artifacts.txt"
           declare -A failed_cases=()
           while IFS= read -r job_name; do
             case_name="${job_name#retrace (*, }"
             case_name="${case_name%)}"
             failed_cases["${case_name}"]=1
-          done < <(
-            gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
-              --jq '.jobs[] | select(.name | startswith("retrace (")) | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required") | .name'
-          )
+          done < "${RUNNER_TEMP}/cleanup-jobs.txt"
 
           if ((${#failed_cases[@]})); then
             echo "Retaining fixtures and results for failed retrace case(s):"
@@ -787,9 +791,6 @@ jobs:
             echo "Deleting ${artifact_name} (${artifact_id})"
             gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
             ((deleted += 1))
-          done < <(
-            gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
-              --jq '.artifacts[] | select(.name | startswith("MobileGL-trace-fixture-") or startswith("MobileGL-android-retrace-result-") or startswith("trace-fixture-") or startswith("retrace-result-")) | [.id, .name] | @tsv'
-          )
+          done < "${RUNNER_TEMP}/cleanup-artifacts.txt"
 
           echo "Deleted ${deleted} intermediate Android artifact(s); retained ${retained} failed-retrace fixture(s)."

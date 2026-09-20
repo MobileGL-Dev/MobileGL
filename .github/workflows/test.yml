@@ -2762,11 +2762,11 @@ jobs:
   remove-artifact-clutter:
     name: remove artifact clutter
     runs-on: ubuntu-latest
-    # (d) retrace-verify too: this job deletes the trace-fixture-* artifacts, and the verify
-    # retraces download the same ones.
+    # Every retrace arm downloads the shared fixtures, including split controls.
     needs:
       - retrace-summary
       - retrace-verify
+      - retrace-split
     if: always()
     permissions:
       actions: write
@@ -2775,23 +2775,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Both retrace lanes, not just the pull one: `retrace verify (backend, case)` downloads
-          # the same trace-fixture-<case> artifact, and a failed verify retrace is exactly when
-          # someone needs that fixture to reproduce locally. The two prefixes are stripped in
-          # order, longest first, because "retrace (" is not a prefix of "retrace verify (".
+          # Read the complete inventories before deleting anything. A failed API
+          # request must fail this step, not look like "no failed cases" through
+          # an unchecked process substitution.
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
+            --jq '.jobs[] | select((.name | startswith("retrace (")) or (.name | startswith("retrace verify (")) or (.name | startswith("retrace split ("))) | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required") | .name' \
+            > "${RUNNER_TEMP}/cleanup-jobs.txt"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name | startswith("trace-fixture-") or startswith("retrace-result-") or startswith("retrace-split-result-")) | [.id, .name] | @tsv' \
+            > "${RUNNER_TEMP}/cleanup-artifacts.txt"
           declare -A failed_cases=()
           while IFS= read -r job_name; do
-            case_name="${job_name#retrace verify (*, }"
+            case_name="${job_name#retrace split (*, }"
+            case_name="${case_name#retrace verify (*, }"
             case_name="${case_name#retrace (*, }"
             case_name="${case_name%)}"
             failed_cases["${case_name}"]=1
-          done < <(
-            gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
-              --jq '.jobs[] | select((.name | startswith("retrace (")) or (.name | startswith("retrace verify ("))) | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required") | .name'
-          )
+          done < "${RUNNER_TEMP}/cleanup-jobs.txt"
 
           if ((${#failed_cases[@]})); then
-            echo "Retaining fixtures for failed retrace case(s):"
+            echo "Retaining fixtures and results for failed retrace case(s):"
             printf '  %s\n' "${!failed_cases[@]}"
           else
             echo "All retrace jobs succeeded; no fixtures need to be retained."
@@ -2800,24 +2803,29 @@ jobs:
           deleted=0
           retained=0
           while IFS=$'\t' read -r artifact_id artifact_name; do
+            keep=0
             if [[ "${artifact_name}" == trace-fixture-* ]]; then
               case_name="${artifact_name#trace-fixture-}"
               if [[ -v "failed_cases[${case_name}]" ]]; then
-                echo "Retaining ${artifact_name} (${artifact_id}) for failed retrace."
-                ((retained += 1))
-                continue
+                keep=1
               fi
+            else
+              for case_name in "${!failed_cases[@]}"; do
+                if [[ "${artifact_name}" == *-"${case_name}" ]]; then keep=1; break; fi
+              done
+            fi
+            if ((keep)); then
+              echo "Retaining ${artifact_name} (${artifact_id}) for failed retrace."
+              ((retained += 1))
+              continue
             fi
 
             echo "Deleting ${artifact_name} (${artifact_id})"
             gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
             ((deleted += 1))
-          done < <(
-            gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
-              --jq '.artifacts[] | select(.name | startswith("trace-fixture-") or startswith("retrace-result-")) | [.id, .name] | @tsv'
-          )
+          done < "${RUNNER_TEMP}/cleanup-artifacts.txt"
 
-          echo "Deleted ${deleted} intermediate Linux artifact(s); retained ${retained} failed-retrace fixture(s)."
+          echo "Deleted ${deleted} intermediate Linux artifact(s); retained ${retained} failed-retrace artifact(s)."
 
   pipe-gates:
     name: MGPipe generators and hygiene gates
