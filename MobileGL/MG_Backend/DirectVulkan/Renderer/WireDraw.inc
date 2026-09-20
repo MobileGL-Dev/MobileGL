@@ -17,6 +17,9 @@
     }
 
     void VulkanRenderer::DestroyWireDrawPass() {
+        // FlushPendingCommands only submits. These objects may still be referenced by
+        // that submission, so retire this temporary pass after the queue completes.
+        if (m_wireDrawPass || !m_wireDrawViews.empty()) VK_VERIFY(vkQueueWaitIdle(m_graphicsQueue));
         m_wireDrawPass.reset();
         for (const auto view : m_wireDrawViews) vkDestroyImageView(m_device, view, nullptr);
         m_wireDrawViews.clear();
