@@ -33,6 +33,7 @@ Usage:
     [--coherent-as-flush] \
     [--dump-texture-2d CALL,TEXTURE,LEVEL,DIR] \
     [--env "K=V;K=V"] \
+    [--require-inproc] \
     [--benchmark] \
     [--benchmark-tail-frames N] \
     [--benchmark-finish 0|1] \
@@ -66,6 +67,9 @@ variables to the replay process. They are applied last, immediately before
 libMobileGL.so is loaded, so they override every flag above; an entry with no "="
 unsets the variable instead. This is the generic passthrough: a MOBILEGL_* knob
 that has no flag of its own needs no plumbing to be forwarded.
+Pass --require-inproc to require the library's real transport-resolution log,
+strict errors and separate role state, plus zero Fatal records. This checks the
+APK process after replay; a host environment echo or an SSIM-only pass is not proof.
 EOF
 }
 
@@ -126,6 +130,7 @@ avoid_angle_llvmpipe_explicit_lod_bias=0
 coherent_as_flush=0
 texture_2d_dumps=""
 env_overrides="${MOBILEGL_TRACE_ENV:-}"
+require_inproc=0
 benchmark=0
 benchmark_tail_frames=200
 benchmark_finish=1
@@ -172,6 +177,7 @@ while [ "$#" -gt 0 ]; do
     --coherent-as-flush) coherent_as_flush=1; shift 1 ;;
     --dump-texture-2d) texture_2d_dumps="$(next_arg "$@")"; shift 2 ;;
     --env) env_overrides="$(next_arg "$@")"; shift 2 ;;
+    --require-inproc) require_inproc=1; shift 1 ;;
     --benchmark) benchmark=1; shift 1 ;;
     --benchmark-tail-frames) benchmark_tail_frames="$(next_arg "$@")"; shift 2 ;;
     --benchmark-finish) benchmark_finish="$(next_arg "$@")"; shift 2 ;;
@@ -518,7 +524,37 @@ run_retrace() {
     fi
   fi
 
-  "${PYTHON}" -c 'import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")' "${result_dir}/result.json"
+  "${PYTHON}" -c 'import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")' "${result_dir}/result.json" || return "$?"
+  if [ "${require_inproc}" -eq 1 ]; then
+    "${PYTHON}" - "${result_dir}/mobilegl.log" "${result_dir}/transport-proof.json" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+log_path, proof_path = map(Path, sys.argv[1:])
+text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+# ConfigLoader's InProcess arm emits this sentence only after selecting the
+# compiled transport. "Accepted env variable: MOBILEGL_TRANSPORT=inproc" is not it.
+marker = "Config: MOBILEGL_TRANSPORT=inproc - the MGPipe record stream"
+configs = re.findall(r"Config: IPC[^\r\n]*", text)
+fatals = re.findall(r"^.*Fatal\{.*$", text, re.MULTILINE)
+required = {"strict": "1", "role-split-state": "1", "run-ahead": "1"}
+config_ok = bool(configs) and all(
+    all(re.search(r"\b" + re.escape(key) + "=" + value + r"\b", line) for key, value in required.items())
+    for line in configs
+)
+passed = marker in text and config_ok and not fatals
+proof = {"required_transport": "inproc", "library_log": str(log_path),
+         "transport_resolution_marker": marker in text, "ipc_config_lines": configs,
+         "required_ipc_settings": required, "ipc_settings_match": config_ok,
+         "fatal_count": len(fatals), "fatal_lines": fatals, "passed": passed}
+proof_path.write_text(json.dumps(proof, indent=2), encoding="utf-8")
+if not passed:
+    sys.exit("trace replay failed actual inproc/strict/role/zero-Fatal proof: " + json.dumps(proof))
+print("Android retrace: real inproc transport, strict role state and zero Fatal records confirmed")
+PY
+  fi
 }
 
 mkdir -p "${fixture_root}" "${result_root}"

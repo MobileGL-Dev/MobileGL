@@ -10,6 +10,7 @@ on:
       # branch runs the full lane on every push so a phase's landing is not gated on
       # someone remembering to dispatch the workflow by hand.
       - feat/disaggregated
+      - codex/fix-github-ci
   workflow_dispatch:
 
 jobs:
@@ -25,6 +26,7 @@ jobs:
       CCACHE_MAXSIZE: 4G
       CCACHE_NOHASHDIR: "true"
       MOBILEGL_CMAKE_COMPILER_LAUNCHER: ccache
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci') && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
@@ -81,7 +83,13 @@ jobs:
         run: python update_glslang_sources.py
 
       - name: Build plugin APK
-        run: gradle --no-daemon -p android-plugin :app:assemblePluginRelease -Pmobilegl.apkSuffix="${GITHUB_SHA}" -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
+        run: >-
+          gradle --no-daemon -p android-plugin :app:assemblePluginRelease
+          -Pmobilegl.apkSuffix="${GITHUB_SHA}" -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO
+          -Pmobilegl.buildDisaggregated="${MOBILEGL_CI_DISAGGREGATED}"
+          -Pmobilegl.buildDisaggregatedInproc="${MOBILEGL_CI_DISAGGREGATED}"
+          -Pmobilegl.pipePush="${MOBILEGL_CI_DISAGGREGATED}"
+          --parallel --max-workers "$(nproc)"
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
@@ -123,11 +131,73 @@ jobs:
             66fdc867e552192d553d59095ea2e3cef4829de65c356f1fd826027b1905972e
 
       - name: Build retrace APK
-        run: gradle --no-daemon -p android-plugin :app:assembleTraceRelease -Pmobilegl.apkSuffix="${GITHUB_SHA}" -Pmobilegl.abis=all -Pmobilegl.debuggableRelease=true -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO --parallel --max-workers "$(nproc)"
+        run: >-
+          gradle --no-daemon -p android-plugin :app:assembleTraceRelease
+          -Pmobilegl.apkSuffix="${GITHUB_SHA}" -Pmobilegl.abis=all
+          -Pmobilegl.debuggableRelease=true -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO
+          -Pmobilegl.buildDisaggregated="${MOBILEGL_CI_DISAGGREGATED}"
+          -Pmobilegl.buildDisaggregatedInproc="${MOBILEGL_CI_DISAGGREGATED}"
+          -Pmobilegl.pipePush="${MOBILEGL_CI_DISAGGREGATED}"
+          --parallel --max-workers "$(nproc)"
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+
+      - name: Prove disaggregated native code in both APKs
+        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, re, zipfile
+          from pathlib import Path
+          proofs = {}
+          for path in Path('.').rglob('compile_commands.json'):
+              rows = json.loads(path.read_text())
+              production = [row for row in rows if row['file'].replace('\\', '/').endswith('/MobileGL/ConfigLoader.cpp')]
+              if not production:
+                  continue
+              cache = path.with_name('CMakeCache.txt').read_text()
+              abi = re.search(r'^ANDROID_ABI:[^=]+=(.+)$', cache, re.MULTILINE)
+              if not abi:
+                  raise SystemExit(f'no Android ABI identity beside {path}')
+              for row in production:
+                  command = row.get('command') or ' '.join(row['arguments'])
+                  for macro in ('MOBILEGL_BUILD_DISAGGREGATED', 'MOBILEGL_PIPE_PUSH'):
+                      if not re.search(r'-D' + macro + r'=1(?:\s|$)', command):
+                          raise SystemExit(f'{path}: production command lacks {macro}=1')
+              proofs.setdefault(abi[1].strip(), []).append(str(path))
+          if not proofs:
+              raise SystemExit('no production compile commands prove a disaggregated APK build')
+          artifacts = []
+          marker = b'Config: MOBILEGL_TRANSPORT=inproc - the MGPipe record stream'
+          for flavor in ('plugin', 'trace'):
+              stem = 'MobileGL-plugin-' + ('trace-' if flavor == 'trace' else '')
+              apk = Path(f'android-plugin/app/build/outputs/apk/{flavor}/release/{stem}release-{os.environ["GITHUB_SHA"]}.apk')
+              libraries = []
+              with zipfile.ZipFile(apk) as archive:
+                  for name in archive.namelist():
+                      if not re.fullmatch(r'lib/[^/]+/libMobileGL\.so', name):
+                          continue
+                      abi = name.split('/')[1]
+                      library = archive.read(name)
+                      if abi not in proofs or marker not in library:
+                          raise SystemExit(f'{apk}:{name}: missing compile or compiled transport evidence')
+                      libraries.append({'abi': abi, 'path': name, 'sha256': hashlib.sha256(library).hexdigest()})
+              required = {'arm64-v8a', 'x86_64'} if flavor == 'trace' else {'arm64-v8a'}
+              if not required.issubset({library['abi'] for library in libraries}):
+                  raise SystemExit(f'{apk}: requested ABI coverage is missing: {required}')
+              artifacts.append({'apk': str(apk), 'sha256': hashlib.sha256(apk.read_bytes()).hexdigest(), 'libraries': libraries})
+          Path('apk-build-mode.json').write_text(json.dumps({'mode': 'disaggregated-inproc', 'source_sha': os.environ['GITHUB_SHA'],
+              'production_compile_commands_by_abi': proofs, 'artifacts': artifacts}, indent=2))
+          PY
+
+      - name: Upload APK build-mode evidence
+        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
+        uses: actions/upload-artifact@v7
+        with:
+          name: MobileGL-apk-build-mode-${{ github.sha }}
+          path: apk-build-mode.json
+          if-no-files-found: error
 
       - name: Show ccache stats
         if: always()
@@ -338,6 +408,7 @@ jobs:
     if: ${{ always() && needs.build.result == 'success' && needs.android-avd.result == 'success' && needs.trace-cases.result == 'success' }}
     timeout-minutes: 75
     env:
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci') && 'ON' || 'OFF' }}
       AVD_NAME: mobilegl-ci
       ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
       ANDROID_HOME: ${{ github.workspace }}/.android/sdk
@@ -437,6 +508,12 @@ jobs:
           apk_file="android-retrace-apks/MobileGL-plugin-trace-release-${GITHUB_SHA}.apk"
           test -f "${apk_file}"
           extra_retrace_args=()
+          if [ "${MOBILEGL_CI_DISAGGREGATED}" = "ON" ]; then
+            extra_retrace_args+=(
+              --env "MOBILEGL_TRANSPORT=inproc;MOBILEGL_IPC_ROLE_SPLIT_STATE=1;MOBILEGL_IPC_STRICT_ERRORS=1;MOBILEGL_IPC_RUN_AHEAD=1"
+              --require-inproc
+            )
+          fi
           # Bliss needs the newer signed ANGLE variant plus sampler mipmap
           # min-filter downgrading on ANGLE llvmpipe.
           if [ "${{ matrix.backend.name }}" = "DirectGLES" ] && [ "${{ matrix.case.name }}" = "minecraft-1.21.4-fabric-iris-bliss-in-world" ]; then

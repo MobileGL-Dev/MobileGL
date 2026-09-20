@@ -33,6 +33,15 @@ fun Project.mobileGlAbiFilters(): List<String> {
 fun Project.mobileGlCmakeCompilerLauncher(): String =
     (findProperty("mobilegl.cmakeCompilerLauncher") ?: System.getenv("MOBILEGL_CMAKE_COMPILER_LAUNCHER") ?: "").toString().trim()
 
+// Match the native module's two switches, including INPROC implying the parent
+// option. A D/P plugin must ask its launcher to select the transport at runtime;
+// compiling MG_Remote alone leaves ConfigLoader's default on monolith.
+fun Project.mobileGlDisaggregatedEnabled(): Boolean {
+    fun enabled(value: Any?): Boolean = value?.toString()?.trim()?.uppercase().orEmpty() in setOf("1", "ON", "YES", "TRUE", "Y")
+    return enabled(findProperty("mobilegl.buildDisaggregated") ?: System.getenv("MOBILEGL_BUILD_DISAGGREGATED")) ||
+        enabled(findProperty("mobilegl.buildDisaggregatedInproc") ?: System.getenv("MOBILEGL_BUILD_DISAGGREGATED_INPROC"))
+}
+
 // Optional application-id suffix, so a development build can sit next to an
 // already-installed plugin instead of having to replace it - a differently
 // signed APK cannot upgrade one in place, and uninstalling costs the user their
@@ -73,6 +82,7 @@ val mobileGlMonthlyRevision = runGit(
 val mobileGlApkSuffix = (findProperty("mobilegl.apkSuffix") ?: System.getenv("MOBILEGL_APK_SUFFIX") ?: mobileGlGitShortHash)
     .toString()
     .ifBlank { "nogit" }
+val mobileGlDisaggregated = mobileGlDisaggregatedEnabled()
 
 val pluginRendererConfig = buildJsonValue {
     renderer(
@@ -83,6 +93,7 @@ val pluginRendererConfig = buildJsonValue {
         dlopenLibPaths = emptyList(),
         env = buildEnvs {
             normal("LIBGL_ES", "3")
+            if (mobileGlDisaggregated) normal("MOBILEGL_TRANSPORT", "inproc")
             selectable(
                 key = "MOBILEGL_BACKEND_TYPE",
                 title = RendererConfig.MetaString("mobilegl_backend_type_title"),
@@ -127,11 +138,13 @@ android {
                 put("LIBGL_ES", "3")
                 put("POJAV_RENDERER", "opengles3")
                 put("MOBILEGL_BACKEND_TYPE", "DirectGLES")
+                if (mobileGlDisaggregated) put("MOBILEGL_TRANSPORT", "inproc")
             }
             pojavEnv {
                 put("LIBGL_ES", "3")
                 put("POJAV_RENDERER", "opengles3")
                 put("MOBILEGL_BACKEND_TYPE", "DirectGLES")
+                if (mobileGlDisaggregated) put("MOBILEGL_TRANSPORT", "inproc")
             }
         })
         manifestPlaceholders["appLabel"] = "MobileGL"
