@@ -36,8 +36,11 @@
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectGLES/Utils.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
+#include <MG_Backend/DirectVulkan/Renderer/VulkanRenderer.h>
 #include <MG_Impl/Pipe/PipeFill.h>
+#include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Pipe/MGPipe.h>
+#include <MG_Pipe/MGPipeCallbacks.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Remote/CapsCodec.h>
 #include <MG_Remote/Client/ClientSession.h>
@@ -54,6 +57,7 @@
 #include <MG_Remote/Wire/PipeWireCodec.h>
 #include <MG_State/GLState/BufferState/BufferObject.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/ErrorState/ErrorInfo.h>
 #include <MG_State/GLState/TextureState/TextureEnum.h>
 #include <MGGitHash.h>
 
@@ -2317,6 +2321,237 @@ TEST(ServerLoopTest, AnIndirectDrawRecordReachesTheSinkWithItsBlockIntact) {
     EXPECT_EQ(seen.Info.NumDraws, 0u);
 
     fixture.Stop();
+}
+
+namespace {
+    Uint32 g_fvErrorCode = 0;
+    String g_fvErrorMessage;
+    Uint32 g_fvErrorCalls = 0;
+
+    void CaptureFvError(Uint32 code, const char* message) {
+        g_fvErrorCode = code;
+        g_fvErrorMessage = message ? message : "";
+        ++g_fvErrorCalls;
+    }
+
+    struct FvGlobals {
+        MG_Pipe::MGPipeCallbacks callbacks = MG_Pipe::gMGPipeCallbacks;
+        Bool strict = MG_Config::Ipc.StrictErrors;
+        Bool split = MG_Config::Ipc.RoleSplitState;
+        ~FvGlobals() {
+            MG_Pipe::MGPipeServerClearVerbBoundary();
+            MG_Pipe::gMGPipeCallbacks = callbacks;
+            MG_Config::Ipc.StrictErrors = strict;
+            MG_Config::Ipc.RoleSplitState = split;
+        }
+    };
+
+    struct FvSession : ServerFixture {
+        ~FvSession() { Stop(); }
+    };
+}
+
+namespace {
+    // Exercise the real hidden-resource constructors without adding a production test API.
+    // Explicit template instantiation permits naming a private member ([temp.explicit]).
+    using FvRenderer = MG_Backend::DirectVulkan::VulkanRenderer;
+    struct FvBlitInitTag {
+        using type = Bool (FvRenderer::*)();
+        friend type FvPrivateMember(FvBlitInitTag);
+    };
+    struct FvMipmapInitTag {
+        using type = Bool (FvRenderer::*)();
+        friend type FvPrivateMember(FvMipmapInitTag);
+    };
+    template <class Tag, typename Tag::type Member> struct FvMemberAccess {
+        friend typename Tag::type FvPrivateMember(Tag) { return Member; }
+    };
+    template struct FvMemberAccess<FvBlitInitTag, &FvRenderer::InitializeBlitResources>;
+    template struct FvMemberAccess<FvMipmapInitTag, &FvRenderer::InitializeDepthMipmapResources>;
+}
+
+TEST(P5fReverseChannel, TransportDoesNotConstructHiddenFrontendPrograms) {
+    // No Vulkan device, program factory or client GLContext is supplied. A transport
+    // initialization must not need any of them merely to skip these monolith resources.
+    FvRenderer renderer({});
+    EXPECT_TRUE((renderer.*FvPrivateMember(FvBlitInitTag{}))());
+    EXPECT_TRUE((renderer.*FvPrivateMember(FvMipmapInitTag{}))());
+}
+
+TEST(P5fReverseChannel, GlErrorsUseTheOwnedCallbackWithoutAResidualPull) {
+    FvGlobals restore;
+    MG_Config::Ipc.StrictErrors = true;
+    MG_Config::Ipc.RoleSplitState = true;
+    MG_Pipe::gMGPipeCallbacks.OnGlError = &CaptureFvError;
+    g_fvErrorCalls = 0;
+    MG_Pipe::MGPipeResetResidualPullCountForTesting();
+    MG_Pipe::MGPipeServerStampVerbBoundary(MG_Pipe::MGPipeVerb::Clear);
+    MG_Pipe::gPipeInputs.RecordError(ErrorCode::InvalidOperation,
+        MakeUnique<GenericErrorInfo>("fv", "draw", "driver message"));
+    EXPECT_EQ(g_fvErrorCalls, 1u);
+    EXPECT_EQ(g_fvErrorCode, static_cast<Uint32>(ErrorCode::InvalidOperation));
+    EXPECT_EQ(g_fvErrorMessage, "[fv] [draw] driver message");
+    EXPECT_EQ(MG_Pipe::MGPipeResidualPullCount(), 0u);
+}
+
+TEST(P5fReverseChannel, AcceptCloseAndReacceptOwnTheGlErrorCallback) {
+    FvGlobals restore;
+    MG_Pipe::gMGPipeCallbacks.OnGlError = nullptr;
+    FvSession fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    const auto producer = MG_Pipe::gMGPipeCallbacks.OnGlError;
+    ASSERT_NE(producer, nullptr);
+    EXPECT_EQ(fixture.session->Accept(*fixture.serverTransport), MOBILEGL_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(MG_Pipe::gMGPipeCallbacks.OnGlError, producer);
+    fixture.Stop();
+    EXPECT_EQ(MG_Pipe::gMGPipeCallbacks.OnGlError, nullptr);
+    ASSERT_TRUE(fixture.Handshake());
+    EXPECT_EQ(MG_Pipe::gMGPipeCallbacks.OnGlError, producer);
+    fixture.Stop();
+    EXPECT_EQ(MG_Pipe::gMGPipeCallbacks.OnGlError, nullptr);
+}
+
+TEST(P5fReverseChannel, CloseDoesNotEraseAnotherGlErrorOwner) {
+    FvGlobals restore;
+    MG_Pipe::gMGPipeCallbacks.OnGlError = nullptr;
+    FvSession fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    MG_Pipe::gMGPipeCallbacks.OnGlError = &CaptureFvError;
+    fixture.Stop();
+    EXPECT_EQ(MG_Pipe::gMGPipeCallbacks.OnGlError, &CaptureFvError);
+}
+
+#if !defined(_WIN32)
+TEST(P5fReverseChannel, GlErrorCallbackRejectsDoubleInstallation) {
+    EXPECT_EXIT({
+        MG_Pipe::gMGPipeCallbacks.OnGlError = &CaptureFvError;
+        FvSession fixture;
+        (void)fixture.Handshake();
+        std::_Exit(9);
+    }, ::testing::KilledBySignal(SIGABRT), "");
+    EXPECT_NE(ReadLog().find("callback-double-install"), std::string::npos);
+}
+
+TEST(P5fReverseChannel, ASecondSessionCannotClaimTheSameReverseChannel) {
+    EXPECT_EXIT({
+        FvSession owner;
+        if (!owner.Handshake()) std::_Exit(7);
+        std::unique_ptr<Transport::InProcessTransport> client;
+        std::unique_ptr<Transport::InProcessTransport> server;
+        Transport::InProcessTransport::CreatePair(client, server);
+        Server::ServerSession other;
+        // The owner refusal precedes receiving a Hello or replacing the segment resolver.
+        (void)other.Accept(*server);
+        std::_Exit(9);
+    }, ::testing::KilledBySignal(SIGABRT), "");
+    EXPECT_NE(ReadLog().find("another ServerSession already owns"), std::string::npos);
+}
+
+TEST(P5fReverseChannel, RecordErrorWithoutCallbackIsNamedFatal) {
+    EXPECT_EXIT({
+        MG_Config::Ipc.StrictErrors = true;
+        MG_Config::Ipc.RoleSplitState = true;
+        MG_Pipe::gMGPipeCallbacks.OnGlError = nullptr;
+        MG_Pipe::gPipeInputs.RecordError(ErrorCode::InvalidOperation, nullptr);
+        std::_Exit(9);
+    }, ::testing::KilledBySignal(SIGABRT), "");
+    EXPECT_NE(ReadLog().find("OnGlError.callback-missing"), std::string::npos);
+}
+
+TEST(P5fReverseChannel, LegacyGpuWrittenNeverReadsAFrontendObjectInTransport) {
+    for (Bool installed : {false, true}) {
+        EXPECT_EXIT({
+            MG_Pipe::gMGPipeCallbacks.OnGpuWritten = installed ?
+                +[](MG_Pipe::MGPipeHandle, Uint, const MG_Pipe::MGPRange*) {} : nullptr;
+            // Deliberately unreadable object: a guard after a lifetime-id probe or
+            // either MarkGpuWritten fallback would SIGSEGV instead of the named abort.
+            SharedPtr<MG_State::GLState::BufferObject> foreign(
+                reinterpret_cast<MG_State::GLState::BufferObject*>(std::uintptr_t{1}),
+                [](MG_State::GLState::BufferObject*) {});
+            MG_Pipe::MGPipeAnnounceBufferGpuWritten(foreign);
+            std::_Exit(9);
+        }, ::testing::KilledBySignal(SIGABRT), "");
+    }
+    EXPECT_NE(ReadLog().find("gpu-written-legacy-object"), std::string::npos);
+}
+#endif
+
+TEST(P5fReverseChannel, GlErrorMessagesShareFifoWithOtherReverseEvents) {
+    FvGlobals restore;
+    MG_Config::Ipc.StrictErrors = true;
+    MG_Config::Ipc.RoleSplitState = true;
+    MG_Pipe::gMGPipeCallbacks.OnGlError = nullptr;
+    FvSession fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    ASSERT_EQ(Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+        +[](void*) -> MobileGLResult {
+            MG_Pipe::MGPipeServerStampVerbBoundary(MG_Pipe::MGPipeVerb::Clear);
+            MG_Pipe::gPipeInputs.RecordError(ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("fv", "driver error"));
+            const MG_Pipe::MGPRange whole{0, MG_Pipe::kMGPipeWholeBuffer};
+            MG_Pipe::gMGPipeCallbacks.OnGpuWritten({17, 3}, 1, &whole);
+            Uint8 bytes[] = {11, 22, 33, 44};
+            MG_Pipe::gMGPipeCallbacks.OnBufferWriteback({17, 3}, 24,
+                MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(bytes), sizeof(bytes),
+                                   MG_Pipe::kMGHostSpanSegNone, 0});
+            std::memset(bytes, 0xDD, sizeof(bytes));
+            String longMessage(Transport::kEventGlErrorMaxMessageBytes * 2, 'Q');
+            MG_Pipe::gMGPipeCallbacks.OnGlError(static_cast<Uint32>(ErrorCode::InvalidValue),
+                                               longMessage.c_str());
+            std::fill(longMessage.begin(), longMessage.end(), '?');
+            MG_Pipe::gMGPipeCallbacks.OnGlError(static_cast<Uint32>(ErrorCode::InvalidEnum), nullptr);
+            MG_Pipe::MGPipeServerClearVerbBoundary();
+            return MOBILEGL_OK;
+        }, nullptr), MOBILEGL_OK);
+
+    Transport::EventRingConsumer events(fixture.clientSegments.EventControl(),
+        fixture.clientSegments.CmdControl(), fixture.clientSegments.EventRingBase(),
+        fixture.clientSegments.EventRingCapacity(), fixture.clientSegments.EventSegmentBase());
+    ASSERT_TRUE(events.Valid());
+    const Uint16 kinds[] = {Transport::kEventGlError, Transport::kEventGpuWritten,
+        Transport::kEventBufferWriteback, Transport::kEventGlError, Transport::kEventGlError};
+    for (SizeT i = 0; i < 5; ++i) {
+        Transport::RingRecordView event;
+        ASSERT_TRUE(events.Pop(event)) << i;
+        EXPECT_EQ(event.kind, kinds[i]) << i;
+        if (event.kind == Transport::kEventGlError) {
+            const auto* head = static_cast<const Transport::EventGlErrorHead*>(event.payload);
+            ASSERT_GE(event.payloadSize, sizeof(*head) + head->MessageBytes);
+            ASSERT_GT(head->MessageBytes, 0u);
+            const auto* text = reinterpret_cast<const char*>(head + 1);
+            EXPECT_EQ(text[head->MessageBytes - 1], '\0');
+            const String message(text, head->MessageBytes - 1);
+            if (i == 0) {
+                EXPECT_EQ(head->Code, static_cast<Uint32>(ErrorCode::InvalidOperation));
+                EXPECT_EQ(message, "[fv] driver error");
+            } else if (i == 3) {
+                EXPECT_EQ(head->Code, static_cast<Uint32>(ErrorCode::InvalidValue));
+                EXPECT_EQ(head->MessageBytes, Transport::kEventGlErrorMaxMessageBytes);
+                EXPECT_EQ(message, String(Transport::kEventGlErrorMaxMessageBytes - 1, 'Q'));
+            } else {
+                EXPECT_EQ(head->Code, static_cast<Uint32>(ErrorCode::InvalidEnum));
+                EXPECT_EQ(head->MessageBytes, 1u);
+                EXPECT_TRUE(message.empty());
+            }
+        } else if (event.kind == Transport::kEventGpuWritten) {
+            const auto* head = static_cast<const Transport::EventGpuWrittenHead*>(event.payload);
+            EXPECT_EQ(head->Resource.Slot, 17u);
+            EXPECT_EQ(head->Resource.Gen, 3u);
+            EXPECT_EQ(head->RangeCount, 1u);
+            const auto* range = reinterpret_cast<const Transport::EventRange*>(head + 1);
+            EXPECT_EQ(range->Size, MG_Pipe::kMGPipeWholeBuffer);
+        } else {
+            const auto* head = static_cast<const Transport::EventBufferWritebackHead*>(event.payload);
+            EXPECT_EQ(head->Offset, 24u);
+            EXPECT_EQ(head->Size, 4u);
+            const Uint8 expected[] = {11, 22, 33, 44};
+            EXPECT_EQ(std::memcmp(head + 1, expected, sizeof(expected)), 0);
+        }
+    }
+    Transport::RingRecordView extra;
+    EXPECT_FALSE(events.Pop(extra));
+    events.Drained();
 }
 
 int main(int argc, char** argv) {

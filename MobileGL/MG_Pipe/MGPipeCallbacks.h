@@ -25,8 +25,9 @@
 // an optimization (section 7.4).
 namespace MobileGL::MG_Pipe {
     struct MGPipeCallbacks {
-        // A driver-detected GL error that only the server could have seen.
-        void (*OnGlError)(Uint32 code);
+        // A driver-detected GL error that only the server could have seen. The text is
+        // borrowed for this synchronous call; a transport producer copies it before return.
+        void (*OnGlError)(Uint32 code, const char* message);
         // Ranges of a resource the GPU wrote; retires MarkGpuWritten.
         void (*OnGpuWritten)(MGPipeHandle res, Uint rangeCount, const MGPRange* ranges);
         void (*OnBufferWriteback)(MGPipeHandle res, Uint64 offset, MGPBlobRef bytes);

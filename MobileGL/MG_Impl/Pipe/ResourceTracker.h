@@ -693,42 +693,26 @@ namespace MobileGL::MG_Pipe {
         install(gMGPipeCallbacks.OnGpuWritten, &MGPipeClientOnGpuWritten, "OnGpuWritten");
     }
 
-    // The GPU-write announcement for a buffer the backend holds only a FRONTEND POINTER to -
-    // Magma's barrier-pulled binding-point reads (UniformManager / VulkanRenderer), whose
-    // direct bufferObject->MarkGpuWritten() was the apply thread poking client memory (R2).
-    // Routed through the reverse channel exactly as DirectGLES' MarkBufferGpuWritten routes
-    // its own sites: ONE whole-buffer range, stated rather than implied (zero ranges is the
-    // shape a fully narrowed announcement will legitimately have at P8/P9, and the two must
-    // not be the same record). The handle comes from the client allocator's lifetime-id
-    // probe - the mint is unconditional at the BufferObject constructor
-    // (MGPipeMintResourceHandle), so a live buffer always has one.
-    //
-    // The fallback is the monolith shape, preserved byte for byte: no reverse channel
-    // installed (a pull-arm build, or a process with no session) pokes the object directly,
-    // which is exactly what these sites did before. A MISSING HANDLE with a live channel is
-    // loud rather than a silent drop, the same choice MarkBufferGpuWritten makes.
+    // Legacy-object entry for the monolith backend. Transport consumers carry handles
+    // and call OnGpuWritten directly; P5f fm rejects Magma's P7 buffer consumers before
+    // reaching here. Keep a named guard at this boundary so a future caller cannot turn
+    // a missing callback/handle into a write through a client object.
     inline void MGPipeAnnounceBufferGpuWritten(
         const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
         if (bufferObject == nullptr) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"gpu-written-legacy-object\"} - "
+                    "a transport producer must announce a record handle, never a client BufferObject");
+            std::abort();
+        }
+#endif
         if (gMGPipeCallbacks.OnGpuWritten == nullptr) {
             bufferObject->MarkGpuWritten();
             return;
         }
-        const MGPipeHandle res = [&]() {
-#if MOBILEGL_BUILD_DISAGGREGATED
-            // CONTRACT-P5C §3.1's named exemption, Magma's half: the binding records that
-            // would carry this buffer's handle are sb's to emit and Magma's server-side
-            // binding table is P7's, so until then the probe runs inside the scope - the
-            // debt's named, greppable form rather than a silent guard removal.
-            //
-            // P5e (id), ruling 12: the FOURTH of Magma's apply-thread allocator debts and the
-            // last user of the scope P5e renamed. Espryt never reaches this arm under a
-            // transport - MarkBufferGpuWrittenByHandle carries the handle from the record side
-            // (sb/fb) - so the DirectVulkan key on the exemption costs it nothing.
-            const MagmaP7AllocatorDebtScope magmaP7AllocatorDebt;
-#endif
-            return MGPipeSlots().FindByLifetimeId(MGPipeKind::Buffer, bufferObject->GetLifetimeId());
-        }();
+        const MGPipeHandle res =
+            MGPipeSlots().FindByLifetimeId(MGPipeKind::Buffer, bufferObject->GetLifetimeId());
         if (MGPipeHandleIsNull(res)) {
             MGLOG_E_ONCE("MGPipe: no handle for the GPU-write announcement of buffer %u - the "
                          "reverse channel is installed but the mint is missing, so the mark "

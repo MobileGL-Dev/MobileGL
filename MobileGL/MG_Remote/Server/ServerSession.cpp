@@ -19,6 +19,7 @@
 #include <MG_Pipe/MGPipeCallbacks.h>
 #include <MG_Util/Debug/Log.h>
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -159,7 +160,7 @@ namespace MobileGL::MG_Remote::Server {
 
         // ---- P5c ev: the reverse channel's PRODUCER callbacks (CONTRACT-P5C §4.1) --------
         //
-        // With an active transport the three reverse entries of gMGPipeCallbacks belong to
+        // With an active transport the four reverse entries of gMGPipeCallbacks belong to
         // the SERVER session, never to the client: the backend calls them with exactly the
         // arguments it always passed (a writeback blobref whose Offset IS the backend's own
         // mapped pointer, a range array, a surface info), and what the callback does with
@@ -329,6 +330,17 @@ namespace MobileGL::MG_Remote::Server {
             session.PublishEvents();
         }
 
+        // P5f fv: OnGlError now has the same owner and lifetime as the other producers.
+        // PostGlError copies message bytes synchronously into the existing FIFO event ring.
+        void ServerOnGlError(Uint32 code, const char* message) {
+            auto* session = ServerSession::Active();
+            if (session == nullptr) {
+                MGLOG_F("MGPipe: Fatal{RoleViolation, \"OnGlError.session-missing\"}");
+                std::abort();
+            }
+            session->PostGlError(code, message);
+        }
+
         // One installer for both roles' tables, so the check exists in exactly one spelling:
         // writing over an entry somebody else claimed is Fatal{RoleViolation,
         // "callback-double-install"} - MGPipeCallbacks' "never over an entry a backend
@@ -339,14 +351,18 @@ namespace MobileGL::MG_Remote::Server {
             if (entry != nullptr && entry != producer) {
                 MGLOG_F("MGPipe: Fatal{RoleViolation, \"callback-double-install\"} - a reverse "
                         "MGPipeCallbacks entry is already claimed by a different function. With "
-                        "an active transport the three reverse entries are the server "
+                        "an active transport the four reverse entries are the server "
                         "session's producers; the client installs them under monolith only");
                 std::abort();
             }
             entry = producer;
         }
 
-        ServerSession* g_active = nullptr;
+        std::atomic<ServerSession*> g_active{nullptr};
+        // One callback table and one process segment resolver: an in-progress Accept
+        // reserves their owner too. CAS closes the race between distinct session objects
+        // without making concurrent sessions a supported mode.
+        std::atomic<ServerSession*> g_sessionOwner{nullptr};
 
     } // namespace
 
@@ -358,7 +374,7 @@ namespace MobileGL::MG_Remote::Server {
         return *instance;
     }
 
-    ServerSession* ServerSession::Active() { return g_active; }
+    ServerSession* ServerSession::Active() { return g_active.load(std::memory_order_acquire); }
 
     ServerSession::~ServerSession() { Close(); }
 
@@ -396,9 +412,24 @@ namespace MobileGL::MG_Remote::Server {
     Bool ServerSession::Accepted() const { return m_accepted; }
 
     MobileGLResult ServerSession::Accept(Transport::ITransport& transport) {
-        if (m_accepted) {
-            return MOBILEGL_ERR_INVALID_ARGUMENT;
+        ServerSession* expectedOwner = nullptr;
+        if (!g_sessionOwner.compare_exchange_strong(expectedOwner, this,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            if (expectedOwner == this) return MOBILEGL_ERR_INVALID_ARGUMENT;
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"callback-double-install\"} - another "
+                    "ServerSession already owns or is accepting the process reverse channel");
+            std::abort();
         }
+        struct ReleaseFailedClaim {
+            ServerSession* self;
+            ~ReleaseFailedClaim() {
+                if (!self->Accepted()) {
+                    ServerSession* expected = self;
+                    g_sessionOwner.compare_exchange_strong(expected, nullptr,
+                        std::memory_order_release, std::memory_order_relaxed);
+                }
+            }
+        } releaseOnFailure{this};
         m_transport = &transport;
         // MOBILEGL_IPC_RING_MB / _STAGE_MB unless SetSegmentSizes overrode them. Unconditional
         // on purpose - see SizesFromConfig.
@@ -527,19 +558,20 @@ namespace MobileGL::MG_Remote::Server {
         m_segments.InstallProcessResolver();
 
         m_accepted = true;
-        g_active = this;
 
-        // ---- P5c ev: the three reverse-channel producers are THIS session's (CONTRACT-P5C
+        // ---- P5c ev: the four reverse-channel producers are THIS session's (CONTRACT-P5C
         // §4.1), installed before the apply thread can apply a record that produces one and
         // uninstalled at Close after the join. Under monolith these entries are the
         // client's (MGPipeInstallClientResourceCallbacks, monolith-only now); a session is
         // by definition not monolith, so finding one of them claimed here is the double
         // installation the check exists to name.
+        InstallReverseCallback(MG_Pipe::gMGPipeCallbacks.OnGlError, &ServerOnGlError);
         InstallReverseCallback(MG_Pipe::gMGPipeCallbacks.OnBufferWriteback,
                                &ServerOnBufferWriteback);
         InstallReverseCallback(MG_Pipe::gMGPipeCallbacks.OnGpuWritten, &ServerOnGpuWritten);
         InstallReverseCallback(MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged,
                                &ServerOnSurfaceChanged);
+        g_active.store(this, std::memory_order_release);
 
         LogMemory("accept");
 
@@ -612,15 +644,18 @@ namespace MobileGL::MG_Remote::Server {
     }
 
     void ServerSession::Close() {
-        if (g_active == this) {
-            g_active = nullptr;
-        }
+        ServerSession* expectedActive = this;
+        g_active.compare_exchange_strong(expectedActive, nullptr,
+            std::memory_order_acq_rel, std::memory_order_acquire);
         if (m_accepted) {
             // Uninstall AFTER the apply thread has joined, never before: a record still in
             // flight can still resolve a segment offset (table 3's fourth column).
             Wire::SegmentTable::UninstallProcessResolver();
             // The reverse-channel producers go with the session that owns them - release
             // only the entries that are still OURS, never one a later owner installed.
+            if (MG_Pipe::gMGPipeCallbacks.OnGlError == &ServerOnGlError) {
+                MG_Pipe::gMGPipeCallbacks.OnGlError = nullptr;
+            }
             if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback == &ServerOnBufferWriteback) {
                 MG_Pipe::gMGPipeCallbacks.OnBufferWriteback = nullptr;
             }
@@ -638,6 +673,9 @@ namespace MobileGL::MG_Remote::Server {
         m_shm.Close();
         m_transport = nullptr;
         m_accepted = false;
+        ServerSession* expectedOwner = this;
+        g_sessionOwner.compare_exchange_strong(expectedOwner, nullptr,
+            std::memory_order_release, std::memory_order_relaxed);
     }
 
     Transport::RingConsumer& ServerSession::CommandRing() { return m_commands; }
