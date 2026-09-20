@@ -1,6 +1,6 @@
 # P5f fs — 静态状态世代与 server liveness
 
-> 基线 `4667e13b`，分支 `codex/p5f-fs`；行为代码 `35ad51d8`。
+> 基线 `4667e13b`，分支 `codex/p5f-fs`；行为代码 `35ad51d8`；默认 XFB 身份测试补强 `1b701020`。
 > Windows 树 `MobileGL-p5f-fs`；独立 WSL 树 `/home/swung/w7/p5f-fs`。
 > 不改 FieldOwnership 分类，不重复 fe 的 XFB archive/handle 迁移，RecordError 由 fv 完成。
 
@@ -95,6 +95,13 @@ context 的 apply thread 上验证 driver blend 状态与控制帧生命周期�
 日志：`fs-red-once-build.log`、`fs-red-once.log/xml`、`fs-restored-build.log`、
 `fs-restored-green.log/xml`。回退完成后的 WSL `git diff` 为空。另重跑 f1 机关阴性对照：
 旋钮开真绿、关真红，失败是 distinct-block 用例自身断言。
+
+默认对象另做了更窄的对照：上述 XFB case 使用两个真实 GLContext 构造得到各自 name-0
+lifetime id，断言非零且不同，再在 server 侧都调用 `BindTransformFeedback(0)`，要求 native
+ids 非零且不同。临时把 native 创建条件从 `(server || name != 0)` 回退成 `name != 0`，
+该 case 真红 rc=8，明确报出 0 对 0 的错误别名；恢复后 1/1 PASS。
+证据 `fs-default-xfb-{green,red-once,restored-green}.log`。因此分开的不只是 CPU map key，
+还有 driver 对象。该补强不新增测试名，也不改变前述生产代码或门禁数量。
 
 ## 4. 门禁
 
