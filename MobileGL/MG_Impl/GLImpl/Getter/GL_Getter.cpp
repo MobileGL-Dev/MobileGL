@@ -1179,7 +1179,16 @@ namespace MobileGL::MG_Impl::GLImpl {
                 : GetMinComputeWorkGroupSize(index);
             GLint backendValue = 0;
             if (getIntegeri) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // Transport's Class A caps mirror answers these two pnames
+                // locally and emits no record. A fill would wrongly quiesce
+                // the apply thread before every compute dispatch validation.
+                if (MG_Config::Transport == MG_Config::TransportMode::Monolith) {
+#endif
                 MGP_FILL(GetIntegeri_v);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                }
+#endif
                 getIntegeri(target, index, &backendValue);
             }
             *data = std::max(backendValue, minimum);

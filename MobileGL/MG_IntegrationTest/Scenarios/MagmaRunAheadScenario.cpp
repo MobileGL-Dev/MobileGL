@@ -234,7 +234,7 @@ void main(){vec2 p[3]=vec2[3](vec2(-1,-1),vec2(0,-1),vec2(-1,1));
 for(uint i=0u;i<3u;++i){words[4u*i]=floatBitsToUint(p[i].x);words[4u*i+1u]=floatBitsToUint(p[i].y);
 words[4u*i+2u]=0u;words[4u*i+3u]=0x3ff00000u;}})";
     const char* vs=R"(#version 430 core
-layout(location=0) in vec2 position;layout(location=1) in double code;out vec4 v;
+layout(location=0) in vec2 position;layout(location=1) in float code;out vec4 v;
 void main(){gl_Position=vec4(position,0,1);v=vec4(1.0-float(code),float(code),0,1);})";
     const char* fs="#version 430 core\nin vec4 v;layout(location=0) out vec4 c;void main(){c=v;}";
     const GLuint compute=Link({{GL_COMPUTE_SHADER,cs}}), graphics=Link({{GL_VERTEX_SHADER,vs},{GL_FRAGMENT_SHADER,fs}});
@@ -243,7 +243,7 @@ void main(){gl_Position=vec4(position,0,1);v=vec4(1.0-float(code),float(code),0,
     std::array<Vertex,3> vertices{};
     const GLuint buffer=NewBuffer(GL_ARRAY_BUFFER,sizeof(vertices),vertices.data());
     glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,16,nullptr); glEnableVertexAttribArray(0);
-    glVertexAttribLPointer(1,1,GL_DOUBLE,16,reinterpret_cast<const void*>(8)); glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1,1,GL_DOUBLE,GL_FALSE,16,reinterpret_cast<const void*>(8)); glEnableVertexAttribArray(1);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER,0,buffer);
     HeldApply hold; ASSERT_NO_FATAL_FAILURE(HoldNextBatch());
     glUseProgram(compute); glDispatchCompute(1,1,1);
