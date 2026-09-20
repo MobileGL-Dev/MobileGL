@@ -2375,6 +2375,20 @@ TEST(P5fReverseChannel, GlErrorCallbackRejectsDoubleInstallation) {
     EXPECT_NE(ReadLog().find("callback-double-install"), std::string::npos);
 }
 
+TEST(P5fReverseChannel, ASecondSessionCannotClaimTheSameReverseChannel) {
+    EXPECT_EXIT({
+        FvSession owner;
+        if (!owner.Handshake()) std::_Exit(7);
+        std::unique_ptr<Transport::InProcessTransport> client, server;
+        Transport::InProcessTransport::CreatePair(client, server);
+        Server::ServerSession other;
+        // The owner refusal precedes receiving a Hello or replacing the segment resolver.
+        (void)other.Accept(*server);
+        std::_Exit(9);
+    }, ::testing::KilledBySignal(SIGABRT), "");
+    EXPECT_NE(ReadLog().find("another ServerSession already owns"), std::string::npos);
+}
+
 TEST(P5fReverseChannel, RecordErrorWithoutCallbackIsNamedFatal) {
     EXPECT_EXIT({
         MG_Config::Ipc.StrictErrors = true;
