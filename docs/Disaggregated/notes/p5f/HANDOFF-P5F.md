@@ -4,12 +4,18 @@
 > `C:/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg`，分支 `feat/disaggregated`。
 > 完整结果见 [close-report.md](close-report.md)，设备见 [device-report.md](device-report.md)，
 > 阶段终审见 [close-review.md](close-review.md)。原 P5f 行为验收头 `cfca93c7`；
-> 后续 Magma 游戏修复的行为头为 `38919d45`，见下。
+> 后续 Magma run-ahead 的最终行为头为 `194382c9`，见下。
+>
+> **Magma run-ahead 已完成（2026-09-20）**：独立 readiness 已开启，GPU 提交/资源
+> 退休时序、真实排队/credit 1/3、负控、Vulkan 同步验证均通过。Redmi 同一
+> `.mgdebug.debug` APK 的 Magma RA=1 / RA=0 与 GLES RA=1 三臂均完成至少60秒
+> 世界运行与验图；修复了实机发现的 VAO 身份哈希碰撞。见 [最终报告](magma-runahead.md)。
 >
 > **Magma inproc 游戏修复（2026-09-20）**：已补 server buffer consumers 与 Android quarter-turn
 > color blit。`38919d45` 的 `.mgdebug.debug` FCL 在 MC `26.3-rc-3` 世界 `test` 上，
 > Magma inproc、GLES inproc 和 Magma monolith 均完成至少60秒运行与人工验图。
-> Magma inproc 仍 lockstep、约20 FPS；不是 P7 全量完成。见 [修复报告](magma-inproc-fix.md)。
+> 该历史包仍 lockstep、约20 FPS；当前版本以上面的 run-ahead 报告为准。
+> 不是 P7 全量完成。见 [修复报告](magma-inproc-fix.md)。
 > 旧 [fcl-e2e-report.md](fcl-e2e-report.md) 保留 `aa78f102` 的真实失败，不代表当前结果。
 
 ## 0. 当前结论
@@ -41,8 +47,9 @@ P6 的 P5f 前提解除；P6 的 a6 审计、c6 契约冻结和 spawn 实现均�
 
 ## 1. 下一阶段需要知道的边界
 
-- Magma 仍不发布 `kCapRunAheadApply`；可达路径已经在 role-split + strict 下验证，
-  lockstep 没有 frontend registry/allocator 豁免。P7 buffer/native-format 等功能仍具名拒绝。
+- Magma 已发布 `kCapRunAheadApply`；`RUN_AHEAD=0` 保留配对对照。
+  可达路径已经在 role-split + strict 下验证，没有 frontend registry/allocator 豁免。
+  其余 P7/P8 shape 限制仍具名拒绝；run-ahead 不代表 P7 全量完成。
 - P8 client arrays、P12 window/present 到达语义等路线图债保留；不是未完成的 P5f 包。
 - server context 的 unpack/render shadow 按 native generation / served serial / role 核键。
   XFB 以 lifetime id 分区；served context 切换保留暂停 span，native context 销毁才废弃旧

@@ -1,6 +1,7 @@
 # Magma inproc 实际游戏修复
 
-> 当前行为头 `38919d45`，分支 `codex/magma-inproc`；本报告记录 P5f 后的实际游戏补修。
+> 历史行为头 `38919d45`，分支 `codex/magma-inproc`；本报告记录 P5f 后的实际游戏补修。
+> 后续 `194382c9` 已完成 [Magma run-ahead](magma-runahead.md)，本报告保留当时 lockstep 数据。
 > Redmi Magma inproc 已通过运行与人工图像检查；同 APK 的 GLES inproc 与 Magma monolith 复跑、最终 G1/G2/G14 均已通过。
 > 功能修复、主机门与真机验证完成；保留以下性能和功能边界，未宣称 P7 全阶段收官。
 

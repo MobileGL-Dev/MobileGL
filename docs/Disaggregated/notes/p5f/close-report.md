@@ -11,7 +11,8 @@
 用户随后要求的 [首次 FCL 游戏端到端补测](fcl-e2e-report.md) 暴露 Magma inproc 的 P7
 `buffer-legacy-arm`。后续 [Magma 游戏修复](magma-inproc-fix.md) 补齐 buffer consumers 与
 Android 旋转 blit，`38919d45` 已在同一 MC `26.3-rc-3` 世界正常运行。本文余下数字保留原
-P5f 收口快照；最新修复没有宣称 P7 全量迁移或 Magma run-ahead 已完成。
+P5f 收口快照。随后 `194382c9` 已完成 [Magma run-ahead](magma-runahead.md)，
+有独立主机门和 FCL 实测证据；P7 全量迁移仍未收官。
 
 ## 1. 完成的行为
 

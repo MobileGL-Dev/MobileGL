@@ -17,10 +17,16 @@
 
 ## 2. P5f 最终验收
 
+**Magma run-ahead 已完成**（最终行为头 `194382c9`，2026-09-20）：异步 GPU 生命周期、
+真实 client lead、present credit 1/3、负控与 Vulkan 同步验证已通过；实机 VAO 哈希碰撞
+已修复。Redmi 同一 `.mgdebug.debug` APK 的 Magma RA=1 / RA=0、GLES RA=1 均完成
+至少60秒 MC `26.3-rc-3` 世界运行并验图。最终 unit 2312、GPU 1401、双块245 均零失败，
+完整结果与边界见 [run-ahead 报告](notes/p5f/magma-runahead.md)。下面为此前修复与原 P5f 快照。
+
 **Magma inproc 游戏修复**（行为头 `38919d45`，2026-09-20）：已编入 Redmi 的
 `com.tungsten.fcl.mgdebug.debug`。MC `26.3-rc-3` 世界 `test` 的 Magma inproc、GLES inproc
 与 Magma monolith 均完成至少60秒运行及人工验图；应用 buffer 拒绝与 Android 90° blit
-错误已修复。Magma inproc 仍 lockstep，实测约20 FPS，性能没有冒称齐平。最新19项专项门、
+错误已修复。该历史包为 lockstep，实测约20 FPS。该包的19项专项门、
 1387项GPU结果和剩余边界见 [修复报告](notes/p5f/magma-inproc-fix.md)。
 旧 [fcl-e2e-report.md](notes/p5f/fcl-e2e-report.md) 保留 `aa78f102` 失败；下面六臂数字
 仍是原 P5f 公开 GL runner 快照，不能冒充 FCL 测试或覆盖最新修复报告。
