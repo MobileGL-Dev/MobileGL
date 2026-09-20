@@ -52,9 +52,9 @@
 // P5c gt (CONTRACT-P5C §6 layer 2, audit A1): the client-side gPipeInputs check consults
 // InBarrierWait() and ApplyThreadIsInsideApplier() - both live here.
 #include <MG_Remote/Client/ClientSession.h>
-// P5c ev (CONTRACT-P5C §4.2): RecordError's transport arm posts kEventGlError through the
-// server session, and InvalidateCompileEnv's forward is deleted with an active transport.
-#include <MG_Remote/Server/ServerSession.h>
+// P5f fv: backend errors use the same owned reverse callback table as other events.
+// The producer, rather than this client-side translation unit, knows the server session.
+#include <MG_Pipe/MGPipeCallbacks.h>
 #endif
 
 #include <atomic>
@@ -2182,7 +2182,6 @@ namespace MobileGL::MG_Pipe {
     }
 
     void PipeInputs::RecordError(ErrorCode code, UniquePtr<ErrorInfo> info) {
-        MGP_STICKY_FORWARD_PULL(RecordError);
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             // The error queue is CLIENT state and the apply thread may not write it (R4).
@@ -2192,11 +2191,16 @@ namespace MobileGL::MG_Pipe {
             // program order of error-then-read but not cross-verb interleaving - the
             // accepted P5c shape, stated in the contract rather than discovered in P6.
             const String message = info != nullptr ? info->toString() : String{};
-            MG_Remote::Server::ServerSessionInstance().PostGlError(static_cast<Uint32>(code),
-                                                                   message.c_str());
+            if (gMGPipeCallbacks.OnGlError == nullptr) {
+                MGLOG_F("MGPipe: Fatal{RoleViolation, \"OnGlError.callback-missing\"} - "
+                        "a transport backend error has no reverse-channel owner");
+                std::abort();
+            }
+            gMGPipeCallbacks.OnGlError(static_cast<Uint32>(code), message.c_str());
             return;
         }
 #endif
+        MGP_STICKY_FORWARD_PULL(RecordError);
         auto* ctx = LiveContext();
         if (ctx == nullptr) {
             MGLOG_E_ONCE("PipeInputs::RecordError: no live context, dropping error %d", static_cast<int>(code));
