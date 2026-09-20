@@ -218,20 +218,9 @@ namespace {
         EXPECT_EQ(mint.Count(), 1u);
     }
 
-    // ---- P5e (MG_Remote/CONTRACT-P5E.md §1, §6, ruling 12) -------------------------------
-    //
-    // MAGMA DOES NOT RUN AHEAD, AND THIS IS WHERE THAT IS A TEST RATHER THAN A COMMENT.
-    // kCapRunAheadApply is the client's whole permission to publish a record and move on: the
-    // moment a server sets it, the apply thread promises it reads nothing of the client's. That
-    // promise is FALSE for Magma for the whole of P5e - the four apply-thread allocator sites
-    // inside MagmaP7AllocatorDebtScope are real debt P7 retires, and
-    // MGPipeApplierCurrentRecordIsBarriered() answering true for every record on a server
-    // without the bit is exactly what keeps them inside P5C's semantics and keeps rsp honest.
-    //
-    // The arm is a pure function precisely so this case can reach it: InitSplitRoles needs a
-    // live session, a backend and a handshake, and none of those belong in a unit lane. RED
-    // ONCE by making MGPipeRunAheadCapBitsFor answer for DirectVulkan too (the exact
-    // perturbation the phase's red-once list names) - both EXPECTs below fail, by name.
+    // Application buffer record consumers do not imply run-ahead readiness.
+    // Magma retains its lockstep lifetime/submission contract; the capability
+    // must remain absent even when the Espryt readiness constant is true.
     TEST_F(MagmaPipeIdentityTest, AMagmaServerNeverPublishesTheRunAheadCapBit) {
         // Whatever the integration constant says. `true` is what the P5e integration commit
         // will pass, so the Magma answer is pinned on BOTH sides of that flip and the case

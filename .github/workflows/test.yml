@@ -1424,7 +1424,7 @@ jobs:
         working-directory: build-split
         run: bash "${GITHUB_WORKSPACE}/scripts/ci/dualblock_negative_control.sh"
 
-      # ---- P5e (gl), CONTRACT-P5E §7: MAGMA'S OWN LANE, EXPECTED RED -----------------------
+      # ---- MAGMA'S OWN WIRE LANE: FRAMEBUFFER, TEXTURE AND APPLICATION BUFFERS ------------
       #
       # P5f fm: Magma's framebuffer, copy and mipmap verbs consume server records.
       # The label remains separate so both backends' coverage stays explicit.
@@ -1437,6 +1437,40 @@ jobs:
           MOBILEGL_TRANSPORT: "inproc"
         run: |
           ctest -L integration-magma-split --no-tests=error -j 2 --output-on-failure
+
+      - name: Magma application-buffer wire cases must all execute
+        working-directory: build-split
+        run: |
+          ctest -L integration-magma-buffers --show-only=json-v1 > "${RUNNER_TEMP}/magma-buffer-lane.json"
+          ctest -L integration-magma-buffers --no-tests=error -j 2 --output-on-failure \
+            --output-junit "${RUNNER_TEMP}/magma-buffers.xml"
+          python3 - "${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/split_log_paths.py" \
+            "${RUNNER_TEMP}/magma-buffer-lane.json" "${RUNNER_TEMP}/magma-buffers.xml" <<'PY'
+          import importlib.util, json, sys
+          spec = importlib.util.spec_from_file_location("slp", sys.argv[1])
+          slp = importlib.util.module_from_spec(spec); spec.loader.exec_module(slp)
+          cases = [
+              "F1WireScenario.EnabledVertexBufferDrawKeepsNamedP7Fatal",
+              "F1WireScenario.UniformBufferRangeAndRebindPixels",
+              "F1WireScenario.ShortUniformBufferRangePadsMissingBytes",
+              "F1WireScenario.ComputeWrittenVertexAndIndexBuffersDrawAndReadBack",
+              "IndexedDrawFamilyScenario.AnElementBufferDrawElementsOffsetSelectsTheRightQuad",
+              "IndexedDrawFamilyScenario.DrawElementsBaseVertexMovesTheSameIndicesToTheOtherQuad",
+              "IndexedDrawFamilyScenario.DrawRangeElementsDrawsTheRangedRun",
+              "IndexedDrawFamilyScenario.DrawElementsInstancedBaseVertexPaintsOneQuadPerInstance",
+              "IndexedDrawFamilyScenario.MultiDrawElementsBaseVertexPaintsEverySubDraw",
+              "IndexedDrawFamilyScenario.MultiDrawElementsIndirectDrawsFromTheIndirectBuffer",
+              "CrossFrameBufferScenario.VertexBufferSubData",
+              "CrossFrameBufferScenario.IndexBufferSubData",
+              "CrossFrameBufferScenario.VertexOrphanAndReupload",
+              "CrossFrameBufferScenario.IndexOrphanAndReupload",
+              "PersistentCoherentMapScenario.TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw",
+              "PersistentCoherentMapScenario.AWriteAfterAFrameBoundaryReachesTheNextFramesDraw",
+              "StorageBufferRegrowScenario.AGrownStoreIsVisibleThroughItsExistingIndexedBinding",
+          ]
+          slp.require_green(json.load(open(sys.argv[2])), sys.argv[3],
+                            ["DirectVulkan.Split.Buffers." + name for name in cases])
+          PY
 
       - name: Magma P7 native mip format debt stays a named refusal
         working-directory: build-split

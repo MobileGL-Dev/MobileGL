@@ -42,6 +42,7 @@
 #include <MG_Remote/Client/PersistentMapTracker.h>
 #include <MG_Remote/Client/BackendObject_Remote.h>
 #include <MG_Remote/Server/ServerLoop.h>
+#include <MG_Remote/Server/ServerSession.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
@@ -592,8 +593,9 @@ TEST(CapsMirrorTest, APlaceholderMirrorConsumesNothing) {
 
 TEST(CapsMirrorTest, ObjectFamilyEmissionTracksIndependentConsumerCapsWithoutBufferOps) {
 #if MGTEST_HAVE_FORK
-    // Isolate every process global: transport, push mask, caps generation, refusal
-    // counters and the cached supply environment must not escape into another case.
+    // Deliberately synthetic masks with no buffer consumer: production Magma now
+    // publishes one, but object-family independence must survive a restricted peer.
+    // Isolate transport, push mask, caps generation and cached supply environment.
     const ChildResult result = RunInChild([] {
         MG_Config::Transport = MG_Config::TransportMode::InProcess;
         MG_Config::Features.PipePush = kMGPipeSubsystemsMigratedAtP5e;
@@ -619,9 +621,8 @@ TEST(CapsMirrorTest, ObjectFamilyEmissionTracksIndependentConsumerCapsWithoutBuf
         AdoptSnapshot(snapshot);
         EXPECT_TRUE(emits(kMGPipeSubsystemTextureResources));
         EXPECT_FALSE(emits(kMGPipeSubsystemFramebuffer));
-        // SuppliedFieldMask's object rows remain BARRIER_PULLED until the final
-        // ownership retirement. They cannot honestly expose a mask change yet;
-        // this checks the actual emitter gate, not a synthetic memo-only answer.
+        // Object accessors were retired by P5f rather than made record-supplied;
+        // this checks the actual per-family emitter gate, not a synthetic field mask.
         std::fflush(nullptr);
         ::_exit(::testing::Test::HasFailure() ? 1 : 0);
     });
@@ -630,6 +631,55 @@ TEST(CapsMirrorTest, ObjectFamilyEmissionTracksIndependentConsumerCapsWithoutBuf
     EXPECT_EQ(WEXITSTATUS(result.Status), 0) << result.Log;
 #else
     GTEST_SKIP() << "process-global consumer isolation requires fork";
+#endif
+}
+
+TEST(CapsMirrorTest, MagmaTransportPublishesRealBufferConsumersWithoutRunAhead) {
+#if MGTEST_HAVE_FORK
+    const ChildResult result = RunInChild([] {
+        ::alarm(15);
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        MG_Config::ActiveBackendType = BackendType::DirectVulkan;
+        MG_Config::Features.PipePush = kMGPipeSubsystemsMigratedAtP5e;
+        MG_Config::Ipc.RunAhead = 1;
+        MG_Pipe::MGPipeSetResourceOps(nullptr);
+        // The production bootstrap creates the server backend and publishes its
+        // real mask before any native EGL/Vulkan context exists. No invented caps
+        // snapshot or fake resource table can make this test pass.
+        MG_Backend::Init();
+        auto& server = MG_Remote::Server::ServerSessionInstance();
+        EXPECT_TRUE(server.Accepted());
+        EXPECT_TRUE(server.CallMaskIsSet());
+        if (server.CallMaskIsSet()) {
+            const Uint64 mask = server.CallMask();
+            EXPECT_TRUE(MGCapsServerConsumes(mask, kMGPipeSubsystemResources));
+            EXPECT_TRUE(MGCapsServerConsumes(mask, kMGPipeSubsystemBufferBindings));
+            EXPECT_EQ(mask & static_cast<Uint64>(kCapRunAheadApply), 0u);
+        }
+        const auto* ops = MG_Pipe::MGPipeGetResourceOps();
+        EXPECT_NE(ops, nullptr);
+        if (ops) {
+            EXPECT_NE(ops->Create, nullptr);
+            EXPECT_NE(ops->Respecify, nullptr);
+            EXPECT_NE(ops->SubData, nullptr);
+            EXPECT_NE(ops->FlushRange, nullptr);
+            EXPECT_NE(ops->Readback, nullptr);
+            EXPECT_NE(ops->Destroy, nullptr);
+            EXPECT_NE(ops->MapPersistent, nullptr);
+            if (ops->MapPersistent) EXPECT_EQ(ops->MapPersistent({7, 1}, 64, nullptr), nullptr)
+                << "Magma must not donate a server address as a client persistent map";
+        }
+        EXPECT_FALSE(ClientSessionInstance().RunAheadArmed());
+        ClientSessionInstance().Stop();
+        MG_Remote::Server::ServerLoopInstance().Stop();
+        std::fflush(nullptr);
+        ::_exit(::testing::Test::HasFailure() ? 1 : 0);
+    });
+    ASSERT_GE(result.Status, 0) << "fork/waitpid failed";
+    ASSERT_TRUE(WIFEXITED(result.Status)) << DescribeStatus(result) << result.Log;
+    EXPECT_EQ(WEXITSTATUS(result.Status), 0) << result.Log;
+#else
+    GTEST_SKIP() << "process-global backend bootstrap isolation requires fork";
 #endif
 }
 

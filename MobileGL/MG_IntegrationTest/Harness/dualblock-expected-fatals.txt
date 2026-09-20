@@ -40,6 +40,8 @@
 # and storage-block program-name validation. fm retired Clear on Magma through
 # server framebuffer/resource records. The shared copy-image seam also retires
 # GetTextureObject in either package in isolation; it is one removal at integration.
-# The expanded Magma lane includes real bufferless shader/image pixel scenarios.
+# The expanded Magma lane also covers application VBO/EBO/UBO/SSBO and persistent
+# map consumers. The former VBO fatal case now asserts rendered pixels; no new
+# field-Fatal expectations or skip exemptions accompany that retirement.
 # Its named P7 native-format probe has a separate, enforced known-red CI lane.
 # Every new Fatal or Admitted in this census remains a regression.
