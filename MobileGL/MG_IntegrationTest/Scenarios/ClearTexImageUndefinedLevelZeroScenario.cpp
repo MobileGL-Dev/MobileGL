@@ -38,6 +38,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "../Harness/HeadlessGL.h"
@@ -245,6 +246,62 @@ namespace MGITest {
         // about the level and not about the texture.
         ExpectAllTexels("level 0 after clearing level 3", ReadLevel(0), kInitialValue);
         Gl().EndFrame();
+    }
+
+    // A native readback may temporarily isolate a mip for ES completeness. The
+    // following draws observe the actual sampling state, not a frontend getter
+    // that would hide a leaked native BASE_LEVEL/MAX_LEVEL change.
+    TEST_F(ClearTexImageUndefinedLevelZeroScenario, ReadingMipLevelsPreservesSubsequentSamplingLodRange) {
+        if (!Ready()) GTEST_SKIP();
+        const char* vertex = R"(#version 330 core
+void main() { vec2 p[3]=vec2[3](vec2(-1,-1),vec2(3,-1),vec2(-1,3));
+gl_Position=vec4(p[gl_VertexID],0,1); })";
+        const char* fragment = R"(#version 330 core
+uniform sampler2D source; uniform float lod; out vec4 color;
+void main() { color=textureLod(source,vec2(0.5),lod); })";
+        std::string error;
+        const GLuint program = CompileProgram(vertex, fragment, &error);
+        ASSERT_NE(program, 0u) << error;
+        struct Objects {
+            GLuint program, vao = 0, fbo = 0, output = 0;
+            ~Objects() {
+                glUseProgram(0); glBindVertexArray(0); glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                glDeleteFramebuffers(1, &fbo); glDeleteTextures(1, &output);
+                glDeleteVertexArrays(1, &vao); glDeleteProgram(program);
+            }
+        } objects{program};
+        glGenVertexArrays(1, &objects.vao); glBindVertexArray(objects.vao);
+        glActiveTexture(GL_TEXTURE0);
+        glGenTextures(1, &objects.output); glBindTexture(GL_TEXTURE_2D, objects.output);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 8, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glGenFramebuffers(1, &objects.fbo); glBindFramebuffer(GL_FRAMEBUFFER, objects.fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, objects.output, 0);
+        ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+        MakeTextureWithOnlyLevel(0);
+        const std::vector<Texel8> upper(4 * 4, kClearValue);
+        glTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, upper.data());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 1);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+        glDisable(GL_DEPTH_TEST); glDisable(GL_BLEND); glDisable(GL_SCISSOR_TEST); glDisable(GL_CULL_FACE);
+        glDisable(GL_STENCIL_TEST); glDisable(GL_RASTERIZER_DISCARD); glDisable(GL_FRAMEBUFFER_SRGB);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glUseProgram(program);
+        const GLint lod = glGetUniformLocation(program, "lod");
+        ASSERT_GE(lod, 0);
+        std::vector<Texel8> readUpper(4 * 4);
+        glGetTexImage(GL_TEXTURE_2D, 1, GL_RGBA, GL_UNSIGNED_BYTE, readUpper.data());
+        ExpectAllTexels("upper level readback", readUpper, kClearValue);
+        glViewport(0, 0, 4, 4); glUniform1f(lod, 0); glDrawArrays(GL_TRIANGLES, 0, 3);
+        ExpectAllTexels("base level readback", ReadLevel(0), kInitialValue);
+        glViewport(4, 0, 4, 4); glUniform1f(lod, 1); glDrawArrays(GL_TRIANGLES, 0, 3);
+        Texel8 baseSample{}, upperSample{};
+        glReadPixels(2, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &baseSample);
+        glReadPixels(6, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &upperSample);
+        EXPECT_EQ(baseSample, kInitialValue) << "readback must restore native BASE_LEVEL";
+        EXPECT_EQ(upperSample, kClearValue) << "readback must restore native MAX_LEVEL";
+        EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
     }
 
 } // namespace MGITest

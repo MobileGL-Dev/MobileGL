@@ -1,6 +1,60 @@
 // Included in DirectGLES.cpp after the native packed-word readback helper.
 // The server needs owned tight rows for a storage promotion, not client PACK
 // layout or a fallback into a frontend texture's potentially stale shadow.
+    class ScopedWireTextureReadLevel {
+    public:
+        ScopedWireTextureReadLevel(GLuint texture, GLenum target, GLint level)
+            : m_texture(texture), m_target(target) {
+            switch (target) {
+            case GL_TEXTURE_2D: m_binding = GL_TEXTURE_BINDING_2D; break;
+            case GL_TEXTURE_3D: m_binding = GL_TEXTURE_BINDING_3D; break;
+            case GL_TEXTURE_2D_ARRAY: m_binding = GL_TEXTURE_BINDING_2D_ARRAY; break;
+            case GL_TEXTURE_CUBE_MAP: m_binding = GL_TEXTURE_BINDING_CUBE_MAP; break;
+            case GL_TEXTURE_CUBE_MAP_ARRAY: m_binding = GL_TEXTURE_BINDING_CUBE_MAP_ARRAY; break;
+            default: return;
+            }
+            GLint previous = 0;
+            DrainESErrors();
+            g_GLESFuncs.glGetIntegerv(m_binding, &previous);
+            g_GLESFuncs.glBindTexture(m_target, m_texture);
+            g_GLESFuncs.glGetTexParameteriv(m_target, GL_TEXTURE_BASE_LEVEL, &m_baseLevel);
+            g_GLESFuncs.glGetTexParameteriv(m_target, GL_TEXTURE_MAX_LEVEL, &m_maxLevel);
+            m_saved = g_GLESFuncs.glGetError() == GL_NO_ERROR;
+            if (m_saved) {
+                // ES framebuffer completeness can reject a defined level whose
+                // base level or intervening mip chain is missing/inconsistent.
+                // Read this existing native image as the sole base level. The
+                // logical GL parameters and every cached copy remain unchanged.
+                g_GLESFuncs.glTexParameteri(m_target, GL_TEXTURE_BASE_LEVEL, level);
+                g_GLESFuncs.glTexParameteri(m_target, GL_TEXTURE_MAX_LEVEL, level);
+                m_valid = g_GLESFuncs.glGetError() == GL_NO_ERROR;
+            }
+            g_GLESFuncs.glBindTexture(m_target, static_cast<GLuint>(previous));
+        }
+
+        ~ScopedWireTextureReadLevel() {
+            if (!m_saved) return;
+            // The packed-word path can use its own texture scratch binding.
+            // Save the binding at restoration time too; do not assume an active
+            // texture unit or make the backend's binding cache forget a bind.
+            GLint previous = 0;
+            g_GLESFuncs.glGetIntegerv(m_binding, &previous);
+            g_GLESFuncs.glBindTexture(m_target, m_texture);
+            g_GLESFuncs.glTexParameteri(m_target, GL_TEXTURE_BASE_LEVEL, m_baseLevel);
+            g_GLESFuncs.glTexParameteri(m_target, GL_TEXTURE_MAX_LEVEL, m_maxLevel);
+            g_GLESFuncs.glBindTexture(m_target, static_cast<GLuint>(previous));
+        }
+
+        Bool Valid() const { return m_valid; }
+
+    private:
+        GLuint m_texture;
+        GLenum m_target;
+        GLenum m_binding = GL_NONE;
+        GLint m_baseLevel = 0, m_maxLevel = 0;
+        Bool m_saved = false, m_valid = false;
+    };
+
     static Bool ReadWireColorRowsTight(GLsizei width, GLsizei height, GLenum format, GLenum type,
                                       Bool forceOpaqueAlpha, const NormalizedImageCarrierRead& carrier,
                                       Vector<Uint8>& bytes) {
@@ -164,13 +218,15 @@
                                Bool sourceUsesImageCarrier, GLenum format, GLenum type, Vector<Uint8>& bytes) {
         if (!texture || level < 0 || TextureImpl::IsMultisampleTextureTarget(target)) return false;
         const IntVec3 extent = TextureImpl::GetBackendUploadSize(target, logicalExtent);
+        const GLenum nativeTarget = TextureImpl::ConvertTextureTargetToBackendGLEnum(target);
+        ScopedWireTextureReadLevel readLevel(texture, nativeTarget, level);
+        if (!readLevel.Valid()) return false;
         if (format == GL_DEPTH_COMPONENT || format == GL_DEPTH_STENCIL || format == GL_STENCIL_INDEX)
             return ReadWireDepthStencilLevelTight(texture, target, uploadTarget, level, extent, format, type, bytes);
         ReadbackChannelMapping mapping{};
         if (!GetReadbackChannelMapping(format, mapping)) return false;
         const SizeT pixelBytes = GetReadbackDstPixelSize(mapping, type);
         if (!pixelBytes || extent.x() <= 0 || extent.y() <= 0 || extent.z() <= 0) return false;
-        const GLenum nativeTarget = TextureImpl::ConvertTextureTargetToBackendGLEnum(target);
         const GLenum faceTarget = TextureImpl::ConvertTextureUploadTargetToBackendGLEnum(uploadTarget);
         const auto widening = sourceUsesImageCarrier
             ? TextureImpl::GetImageBindableStorageWidening(logicalFormat) : TextureImpl::ImageBindableStorageWidening{};
@@ -208,7 +264,12 @@
             else
                 ScratchFBOImpl::EnsureColorAttachment2D(framebuffer, GL_READ_FRAMEBUFFER, texture, faceTarget, level);
             ScratchFBOImpl::EnsureReadBuffer(framebuffer, GL_COLOR_ATTACHMENT0);
-            if (g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) return false;
+            const GLenum status = g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
+            if (status != GL_FRAMEBUFFER_COMPLETE) {
+                MGLOG_E_ONCE("Espryt wire texture readback: framebuffer status=0x%x texture=%u level=%d target=0x%x",
+                            status, texture, level, nativeTarget);
+                return false;
+            }
             Vector<Uint8> slice;
             if (!ReadWireColorRowsTight(extent.x(), extent.y(), format, type,
                     TextureImpl::BackendTextureFormatAddsAlpha(logicalFormat, target), carrier, slice) ||
