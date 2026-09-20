@@ -9612,6 +9612,12 @@ void main() {
 
     void VulkanRenderer::CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                                            GLint x, GLint y, GLsizei width, GLsizei height) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            CopyWireFramebufferToTexture(target,level,xoffset,yoffset,x,y,width,height);
+            return;
+        }
+#endif
         if (width <= 0 || height <= 0) {
             return;
         }

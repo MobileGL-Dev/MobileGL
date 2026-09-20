@@ -455,6 +455,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void ReadWirePixels(GLint x, GLint y, GLsizei width, GLsizei height,
                             GLenum format, GLenum type, void* pixels);
         void GenerateWireMipmap();
+        void CopyWireFramebufferToTexture(GLenum target, GLint level, GLint xoffset, GLint yoffset,
+                                           GLint x, GLint y, GLsizei width, GLsizei height);
 #endif
         void QueueClearBufferPayloadForFramebuffer(const MG_State::GLState::FramebufferObject& framebuffer,
                                                   GLenum buffer, GLint drawbuffer,

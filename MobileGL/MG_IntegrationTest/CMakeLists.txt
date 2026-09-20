@@ -2378,6 +2378,21 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5b-f1-${f1Slot}.log"
         )
     endforeach()
+    # P5f fm: the framebuffer/copy/mipmap verbs now consume server records on Magma too.
+    mgl_itest_join_environment(MGL_ITEST_MAGMA_WIRE_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_TRANSPORT=inproc"
+        "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+    foreach(fmSlot ClearBufferfi ClearBufferfv ClearBufferiv ClearBufferuiv ClearNamedFramebufferfi ClearNamedFramebufferfv ClearNamedFramebufferiv ClearNamedFramebufferuiv CopyTexImage2D CopyTexSubImage2D GenerateMipmap GenerateMipmapPackedFloat GenerateMipmapDepth)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.Split.Fm."
+            TEST_FILTER "F1WireScenario.${fmSlot}Pixels"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-magma-split"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${MGL_ITEST_MAGMA_WIRE_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-fm-${fmSlot}.log")
+    endforeach()
 endif()
 
 # P5c ct (MG_Remote/CONTRACT-P5C.md §5): the two control records, split-only source for the

@@ -282,6 +282,45 @@
         if (mask & GL_DEPTH_BUFFER_BIT) blit(read->Depth,draw->Depth,VK_IMAGE_ASPECT_DEPTH_BIT);
         if (mask & GL_STENCIL_BUFFER_BIT) blit(read->Stencil,draw->Stencil,VK_IMAGE_ASPECT_STENCIL_BIT);
     }
+    void VulkanRenderer::CopyWireFramebufferToTexture(GLenum target, GLint level, GLint xoffset, GLint yoffset,
+                                                      GLint x, GLint y, GLsizei width, GLsizei height) {
+        if (width <= 0 || height <= 0) return;
+        if (target != GL_TEXTURE_2D) {
+            RecordTextureCopyError(__func__,ErrorCode::InvalidOperation,
+                                   "CopyTexSubImage2D currently only supports GL_TEXTURE_2D destinations.");
+            return;
+        }
+        auto& state = MG_Pipe::MGPipeApplier();
+        const auto* read = state.ReadFramebuffer();
+        if (!read) MagmaWireFatal("copy-framebuffer-record");
+        const auto* texture = m_textureManager->SyncTextureResourceByHandle(state.VerbCopyTexDst);
+        if (!texture) MagmaWireFatal("copy-destination-record");
+        const VkImageAspectFlags aspect = texture->aspect;
+        MG_Pipe::MGPFramebufferState fake{};
+        MG_Pipe::MGPSurface surface{};
+        surface.Kind = MG_Pipe::kMGPipeSurfaceKindTexture;
+        surface.Res = state.VerbCopyTexDst;
+        surface.Level = static_cast<Uint16>(level);
+        WireImage source = ResolveWireImage(*read,aspect & VK_IMAGE_ASPECT_DEPTH_BIT ? read->Depth :
+            aspect & VK_IMAGE_ASPECT_STENCIL_BIT ? read->Stencil : read->ReadSurface,aspect);
+        WireImage destination = ResolveWireImage(fake,surface,aspect);
+        if (!source.image || !destination.image) return;
+        m_textureManager->FlushPendingUploads();
+        TransitionWireImage(source,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        TransitionWireImage(destination,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkImageBlit region{};
+        region.srcSubresource = {aspect,source.level,source.layer,1};
+        region.dstSubresource = {aspect,destination.level,destination.layer,1};
+        region.srcOffsets[0] = {x,y,0}; region.srcOffsets[1] = {x+width,y+height,1};
+        region.dstOffsets[0] = {xoffset,yoffset,0}; region.dstOffsets[1] = {xoffset+width,yoffset+height,1};
+        if (source.isDefault) {
+            region.srcOffsets[0].y = static_cast<Int32>(source.extent.height)-y;
+            region.srcOffsets[1].y = static_cast<Int32>(source.extent.height)-y-height;
+        }
+        vkCmdBlitImage(m_frameContext.GetCurrent().commandBuffer,source.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            destination.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&region,VK_FILTER_NEAREST);
+    }
+
     void VulkanRenderer::GenerateWireMipmap() {
         auto& state = MG_Pipe::MGPipeApplier();
         const auto handle = state.VerbMipRes;
