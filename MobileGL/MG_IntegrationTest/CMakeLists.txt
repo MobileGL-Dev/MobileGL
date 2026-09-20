@@ -2601,3 +2601,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 ENVIRONMENT "${p5f_rsp_environment}")
     endforeach()
 endif()
+
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    add_test(NAME SplitLogPaths.ResultAccountingControls
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Harness/test_split_log_paths.py)
+    set_tests_properties(SplitLogPaths.ResultAccountingControls PROPERTIES LABELS "unit")
+endif()

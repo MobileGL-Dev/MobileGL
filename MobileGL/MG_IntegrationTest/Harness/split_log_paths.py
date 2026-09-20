@@ -16,7 +16,7 @@ def paths(document):
         props = {p["name"]: p["value"] for p in test.get("properties", [])}
         values = [v.split("=", 1)[1] for v in props.get("ENVIRONMENT", [])
                   if v.startswith("MOBILEGL_LOG_FILE_PATH=")]
-        is_split = test["name"].startswith("DirectGLES.Split.")
+        is_split = test["name"].startswith(("DirectGLES.Split.", "DirectVulkan.Split."))
         if is_split and (len(values) != 1 or not values[0]):
             raise ValueError(f"{test['name']}: requires exactly one nonempty MOBILEGL_LOG_FILE_PATH")
         for value in values:
@@ -113,6 +113,55 @@ def print_marker_table(title, table):
         print(f"    {len(table[pair]):4d}  {pair}")
 
 
+# These six skips predate P5f closure. Match both the exact entry and its reason;
+# losing a GPU/preflight, a required lane marker, or either RSP probe is never allowed.
+DUALBLOCK_ALLOWED_SKIPS = {
+    "DirectGLES.Split.TriangleScenario.TheServerStampedAVerbBoundaryOnThisDrawingFrame": "not the strict-arming lane:",
+    "DirectGLES.Split.SmallRing.TriangleScenario.TheServerStampedAVerbBoundaryOnThisDrawingFrame": "not the strict-arming lane:",
+    "DirectGLES.Split.PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares": "not the counting lane: MGITEST_PMAP_LANE",
+    "DirectGLES.Split.SmallRing.PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares": "not the counting lane: MGITEST_PMAP_LANE",
+    "DirectVulkan.Split.Fm.ClipDistanceScenario.ADisabledClipDistanceRemovesNothing": "clips by a DISABLED gl_ClipDistance",
+    "DirectVulkan.Split.Fm.ClipDistanceScenario.TheEnablesAreIndependentPerDistance": "clips by every declared gl_ClipDistance regardless of the enables",
+}
+
+
+def complete_results(document, junit_path, allowed_skips=None):
+    expected = [test["name"] for test in document.get("tests", [])]
+    if not expected or len(expected) != len(set(expected)):
+        raise ValueError("result accounting: discovery is empty or has duplicate names")
+    cases = ET.parse(junit_path).getroot().findall(".//testcase")
+    by_name = {}
+    for case in cases:
+        name = case.get("name")
+        if name in by_name:
+            raise ValueError(f"result accounting: duplicate JUnit entry {name}")
+        by_name[name] = case
+    missing, extra = set(expected) - set(by_name), set(by_name) - set(expected)
+    if missing or extra:
+        raise ValueError(f"result accounting: missing {sorted(missing)}, unexpected {sorted(extra)}")
+    allowed_skips = allowed_skips or {}
+    for name, case in by_name.items():
+        if case.find("skipped") is not None:
+            reason = allowed_skips.get(name)
+            text = " ".join(" ".join(case.itertext()).split())
+            if reason is None or reason not in text:
+                raise ValueError(f"result accounting: unexpected skip/reason for {name}")
+        elif case.get("status") in ("notrun", "disabled"):
+            raise ValueError(f"result accounting: {name} did not execute ({case.get('status')})")
+    return by_name
+
+
+def require_green(document, junit_path, required):
+    names = {test["name"] for test in document.get("tests", [])}
+    if not required or names != set(required):
+        raise ValueError(f"required green entries differ: expected {sorted(required)}, discovered {sorted(names)}")
+    by_name = complete_results(document, junit_path)
+    for name, case in by_name.items():
+        if case.find("failure") is not None or case.find("error") is not None or case.get("status") == "fail":
+            raise ValueError(f"required green entry failed: {name}")
+    print(f"SplitLogPaths require-green: {len(by_name)} PASS, 0 skip, 0 failed, complete discovery")
+
+
 def expect_fatal(document, junit_path, expected_path):
     """THE DUAL-BLOCK LANE'S CENSUS AND TWO-SIDED RATCHET (P5f f1, P5F §4/§6).
 
@@ -137,41 +186,30 @@ def expect_fatal(document, junit_path, expected_path):
     empty expected file IS the P5f exit state, which this mode then verifies rather than
     obstructs."""
     logs = marker_log_paths(document)
-    cases = ET.parse(junit_path).getroot().findall(".//testcase")
-    by_name = {}
-    for case in cases:
-        by_name.setdefault(case.get("name"), []).append(case)
-
+    by_name = complete_results(document, junit_path, DUALBLOCK_ALLOWED_SKIPS)
     problems = []
     fatal, admitted, escalated = {}, {}, {}
-    scanned = 0
-    skipped = 0
-    green = 0
-    red = 0
-    for name, entries in sorted(by_name.items()):
-        if any(c.find("skipped") is not None for c in entries):
+    scanned = skipped = green = red = 0
+    for name, case in sorted(by_name.items()):
+        is_skipped = case.find("skipped") is not None
+        failed = case.find("failure") is not None or case.find("error") is not None or case.get("status") == "fail"
+        if is_skipped:
             skipped += 1
-            continue
-        failed = any(c.find("failure") is not None or c.get("status") == "fail"
-                     for c in entries)
-        if not failed:
+        elif failed:
+            red += 1
+        else:
             green += 1
-            continue
-        red += 1
         path = logs.get(name)
         if path is None:
-            problems.append(f"{name} is RED and declares no MOBILEGL_LOG_FILE_PATH, so the "
-                            "red cannot be shown to be a named Fatal - an unnamed crash is "
-                            "exactly what this lane exists to forbid")
-            continue
+            if failed:
+                problems.append(f"{name} is RED and declares no private log")
+            continue  # metadata/monolith-arm entries have no marker channel
         if not Path(path).is_file():
-            problems.append(f"{name} is RED and its private log {path} does not exist - the "
-                            "process died before it could write one, which is an unnamed crash")
+            problems.append(f"{name}: declared private log {path} does not exist")
             continue
         scanned += 1
-        text = Path(path).read_text(errors="replace")
         entry_fatal = set()
-        for tag, field, verb, why in MARKER_RE.findall(text):
+        for tag, field, verb, why in MARKER_RE.findall(Path(path).read_text(errors="replace")):
             pair = f"{field}@{verb}"
             if tag == "Fatal":
                 entry_fatal.add(pair)
@@ -180,13 +218,13 @@ def expect_fatal(document, junit_path, expected_path):
                 escalated.setdefault(pair, set()).add(name)
             else:
                 admitted.setdefault(pair, set()).add(name)
-        if not entry_fatal:
-            problems.append(f"{name} is RED but its private log carries no "
-                            "Fatal{UnmigratedPipeInput} marker - an unnamed failure, not a "
-                            "census entry")
+        if failed and not entry_fatal:
+            problems.append(f"{name} is RED but its private log carries no Fatal{{UnmigratedPipeInput}} marker")
+        if entry_fatal and not failed:
+            problems.append(f"{name} did not fail but its private log carries Fatal markers")
 
     print(f"SplitLogPaths expect-fatal: {len(by_name)} entrie(s) in the run - "
-          f"{green} green, {skipped} skipped, {red} red ({scanned} with a private log scanned)")
+          f"{green} green, {skipped} skipped, {red} red ({scanned} private logs scanned)")
     print_marker_table("Fatal{UnmigratedPipeInput", fatal)
     if admitted or escalated:
         problems.append("%d Admitted marker(s) under the dual-block knob - the unconditional "
@@ -293,6 +331,9 @@ def main():
         return
     if mode == "expect-fatal":
         expect_fatal(json.loads(Path(sys.argv[2]).read_text()), sys.argv[3], sys.argv[4])
+        return
+    if mode == "require-green":
+        require_green(json.loads(Path(sys.argv[2]).read_text()), sys.argv[3], sys.argv[4:])
         return
     selected = paths(json.loads(Path(sys.argv[2]).read_text()))
     selected = {name: path for name, path in selected.items() if re.search(sys.argv[3], name)}
