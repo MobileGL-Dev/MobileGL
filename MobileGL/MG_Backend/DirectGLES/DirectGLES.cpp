@@ -65,7 +65,8 @@
 
 namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
-    // read_pixels writes the server reply scratch; client-side scatter owns any PBO.
+    // read_pixels writes server reply scratch. The client refuses PACK_BUFFER before
+    // emission, so no frontend pack binding can affect this destination.
     static const SharedPtr<MG_State::GLState::BufferObject>& SplitReadbackPackBuffer() {
         static const SharedPtr<MG_State::GLState::BufferObject> none;
         return none;
@@ -12932,7 +12933,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const SizeT rowBytes = static_cast<SizeT>(width) * dstPixelBytes;
         const SizeT packedSize = dstOffset + static_cast<SizeT>(height - 1) * dstRowStride + rowBytes;
         const auto& pixelPackBufferObject =
-            
 #if MOBILEGL_BUILD_DISAGGREGATED
             MG_Config::Transport != MG_Config::TransportMode::Monolith
                 ? SplitReadbackPackBuffer() :
@@ -13919,7 +13919,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
         const auto& pixelPackBufferObject =
-            
 #if MOBILEGL_BUILD_DISAGGREGATED
             MG_Config::Transport != MG_Config::TransportMode::Monolith
                 ? SplitReadbackPackBuffer() :
@@ -14161,7 +14160,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MG_Pipe::MGPipeUnmigratedEmulation("get-tex-image-shadow");
 #endif
         const auto& pixelPackBufferObject =
-            
 #if MOBILEGL_BUILD_DISAGGREGATED
             MG_Config::Transport != MG_Config::TransportMode::Monolith
                 ? SplitReadbackPackBuffer() :
@@ -14476,7 +14474,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // (the driver-level binding used to stay on the user PBO after this call,
         // capturing subsequent client-memory readbacks into it).
         auto& pixelPackBufferObject =
-            
 #if MOBILEGL_BUILD_DISAGGREGATED
             MG_Config::Transport != MG_Config::TransportMode::Monolith
                 ? SplitReadbackPackBuffer() :
@@ -14912,7 +14909,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Handle PBO. The pack binding is scoped: it returns to the resting 0 state
         // on every exit path, so a later readback can never land in a stale PBO.
         auto& pixelPackBufferObject =
-            
 #if MOBILEGL_BUILD_DISAGGREGATED
             MG_Config::Transport != MG_Config::TransportMode::Monolith
                 ? SplitReadbackPackBuffer() :
