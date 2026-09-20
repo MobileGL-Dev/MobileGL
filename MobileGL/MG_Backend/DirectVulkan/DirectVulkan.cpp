@@ -936,7 +936,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     static Bool BuildClosedLineLoopIndices(GLsizei count, GLenum type, const void* indices,
                                            Vector<Uint32>& outIndices) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        RejectWireLegacyBuffer();
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            const SizeT width = MG_Util::GetGLTypeSize(type);
+            if ((width != 1 && width != 2 && width != 4) || count < 2) return false;
+            const auto& bound = MG_Pipe::MGPipeApplier().IndexBuffer;
+            Vector<Uint8> owned;
+            const Uint8* bytes = static_cast<const Uint8*>(indices);
+            if (!MG_Pipe::MGPipeHandleIsNull(bound.Res)) {
+                owned.resize(static_cast<SizeT>(count) * width);
+                const Uint64 offset = bound.Offset + reinterpret_cast<Uint64>(indices);
+                if (offset < bound.Offset || !pVulkanRenderer->GetWireBufferManager().ReadWireBuffer(
+                        bound.Res, offset, owned.size(), owned.data())) return false;
+                bytes = owned.data();
+            }
+            if (!bytes) return false;
+            outIndices.resize(static_cast<SizeT>(count) + 1);
+            for (GLsizei i = 0; i < count; ++i) {
+                outIndices[i] = 0;
+                Memcpy(&outIndices[i], bytes + static_cast<SizeT>(i) * width, width);
+            }
+            outIndices[count] = outIndices[0];
+            return true;
+        }
 #endif
         const SizeT indexSize = MG_Util::GetGLTypeSize(type);
         if (indexSize == 0 || count < 2) {

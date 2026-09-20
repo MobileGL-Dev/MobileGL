@@ -562,7 +562,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
 #if MOBILEGL_BUILD_DISAGGREGATED
-                     (MG_Config::Transport != MG_Config::TransportMode::Monolith ? VK_BUFFER_USAGE_TRANSFER_DST_BIT : 0) |
+                     (MG_Config::Transport != MG_Config::TransportMode::Monolith ? VkBufferUsageFlags{VK_BUFFER_USAGE_TRANSFER_DST_BIT} : 0u) |
 #endif
                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             .memoryUsage = m_initInfo.transientMemoryUsage,
