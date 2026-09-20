@@ -1598,6 +1598,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 SharedPtr<MG_State::GLState::ProgramObject> scatterProgram;
 #if MOBILEGL_BUILD_DISAGGREGATED
                 SharedPtr<const MG_State::GLState::ProgramArchive> scatterArchive;
+                // Paused spans in different served contexts may coexist. Their captured
+                // bytes must not share the monolith's one reusable scratch buffer.
+                GLuint serverScatterBuffer = 0;
+                SizeT serverScatterSize = 0;
 #endif
                 SizeT scatterCapacityVertices = 0;
             };
@@ -1798,8 +1802,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // direct binding (which produces a wrong layout, but is what happened before).
             Bool BindScatterCaptureBuffer(SizeT packedStride, SizeT capacityVertices) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-                auto& g_scatterBufferId = ActiveXfbState().ScatterBuffer;
-                auto& g_scatterBufferSize = ActiveXfbState().ScatterSize;
+                const Bool server = MG_Config::Transport != MG_Config::TransportMode::Monolith;
+                auto& g_scatterBufferId = server ? CurrentXfb().serverScatterBuffer : ActiveXfbState().ScatterBuffer;
+                auto& g_scatterBufferSize = server ? CurrentXfb().serverScatterSize : ActiveXfbState().ScatterSize;
 #endif
                 if (packedStride == 0 || capacityVertices == 0) return false;
                 if (g_GLESFuncs.glGenBuffers == nullptr || g_GLESFuncs.glBufferData == nullptr) return false;
@@ -1838,7 +1843,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // application had put there - which is the whole point of the feature.
             void ScatterCapturedRecords(XfbObjectState& xfb) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-                auto& g_scatterBufferId = ActiveXfbState().ScatterBuffer;
+                auto& g_scatterBufferId = MG_Config::Transport != MG_Config::TransportMode::Monolith
+                    ? xfb.serverScatterBuffer : ActiveXfbState().ScatterBuffer;
 #endif
 #if MOBILEGL_BUILD_DISAGGREGATED
                 const XfbProgramSource program{xfb.scatterProgram, xfb.scatterArchive};
