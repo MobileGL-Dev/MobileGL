@@ -4,6 +4,9 @@
 #include "../Harness/PipeStatsWindow.h"
 #include "../Harness/SplitLane.h"
 #include <array>
+#include <algorithm>
+#include <cstring>
+#include <vector>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -517,9 +520,10 @@ void main() { imageStore(destination, ivec2(gl_GlobalInvocationID.xy), vec4(0.0,
     glDeleteTextures(1, &root);
 }
 
+// Historical case name retained for the registered test catalogue. The old P7
+// refusal is retired: this case now requires the VBO draw's actual green pixels.
 TEST_F(F1WireScenario, EnabledVertexBufferDrawKeepsNamedP7Fatal) {
     if (!Ready()) return;
-#if !defined(_WIN32) && GTEST_HAS_DEATH_TEST
     Attach(GL_RGBA8);
     const char* vertex = R"(#version 430 core
 layout(location=0) in vec2 position;
@@ -541,45 +545,217 @@ void main() { color = vec4(0.0, 1.0, 0.0, 1.0); }
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
     glEnableVertexAttribArray(0);
     glUseProgram(program);
+    glViewport(0, 0, 8, 8);
+    glDisable(GL_DEPTH_TEST);
+    glClearColor(1, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    std::array<GLubyte, 8 * 8 * 4> pixels{};
+    glReadPixels(0, 0, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
     ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
-
-    // A fresh exec reconstructs the fixture and apply thread; no child executes GL
-    // against a forked mutex/thread state. Capture the named log because shipped
-    // builds may disable console logging, which makes a stderr regex insufficient.
-    const char* oldLogEnv = std::getenv("MOBILEGL_LOG_FILE_PATH");
-    const bool hadLogEnv = oldLogEnv != nullptr;
-    const std::string oldLogPath = hadLogEnv ? oldLogEnv : "";
-    const std::string childLog = oldLogPath.empty()
-        ? "/tmp/mobilegl-vbo-death-" + std::to_string(static_cast<long long>(::getpid())) + ".log"
-        : oldLogPath + ".vbo-death";
-    std::remove(childLog.c_str());
-    ASSERT_EQ(::setenv("MOBILEGL_LOG_FILE_PATH", childLog.c_str(), 1), 0);
-    const std::string oldStyle = ::testing::FLAGS_gtest_death_test_style;
-    ::testing::FLAGS_gtest_death_test_style = "threadsafe";
-    EXPECT_DEATH({
-        glDrawArrays(GL_TRIANGLES, 0, 3);
-        glFinish();
-    }, "");
-    ::testing::FLAGS_gtest_death_test_style = oldStyle;
-    if (hadLogEnv) ::setenv("MOBILEGL_LOG_FILE_PATH", oldLogPath.c_str(), 1);
-    else ::unsetenv("MOBILEGL_LOG_FILE_PATH");
-    std::ifstream log(childLog, std::ios::binary);
-    std::ostringstream contents;
-    contents << log.rdbuf();
-    log.close();
-    EXPECT_NE(contents.str().find("buffer-legacy-arm"), std::string::npos)
-        << "draw must keep the existing named P7 refusal, not die at a new object/field access\n"
-        << contents.str();
-    std::remove(childLog.c_str());
+    for (size_t i = 0; i < pixels.size(); i += 4) {
+        EXPECT_EQ(pixels[i], 0) << "VBO draw red component at pixel " << i / 4;
+        EXPECT_EQ(pixels[i + 1], 255) << "VBO draw green component at pixel " << i / 4;
+        EXPECT_EQ(pixels[i + 2], 0);
+        EXPECT_EQ(pixels[i + 3], 255);
+    }
     glUseProgram(0);
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glDeleteBuffers(1, &vbo);
     glDeleteVertexArrays(1, &vao);
     glDeleteProgram(program);
-#else
-    GTEST_SKIP() << "requires gtest thread-safe exec death tests and POSIX environment handling";
-#endif
+}
+
+TEST_F(F1WireScenario, UniformBufferRangeAndRebindPixels) {
+    if (!Ready()) return;
+    Attach(GL_RGBA8);
+    const char* fragment = R"(#version 430 core
+layout(std140, binding=3) uniform Colour { vec4 value; };
+layout(location=0) out vec4 color;
+void main() { color = value; }
+)";
+    const GLuint program = BuildWireProgram({{GL_VERTEX_SHADER, kWireVertexIdTriangle},
+                                             {GL_FRAGMENT_SHADER, fragment}});
+    ASSERT_NE(program, 0u);
+    const GLuint block = glGetUniformBlockIndex(program, "Colour");
+    ASSERT_NE(block, GLuint(GL_INVALID_INDEX));
+    glUniformBlockBinding(program, block, 3);
+    GLint alignment = 0;
+    glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &alignment);
+    ASSERT_GT(alignment, 0);
+    const size_t stride = ((sizeof(GLfloat) * 4 + alignment - 1) / alignment) * alignment;
+    const std::array<GLfloat, 4> red{1, 0, 0, 1}, green{0, 1, 0, 1}, blue{0, 0, 1, 1}, yellow{1, 1, 0, 1};
+    std::vector<GLubyte> bytes(stride * 3);
+    std::memcpy(bytes.data(), red.data(), sizeof(red));
+    std::memcpy(bytes.data() + stride, green.data(), sizeof(green));
+    std::memcpy(bytes.data() + 2 * stride, blue.data(), sizeof(blue));
+    GLuint buffers[2]{}, vao = 0;
+    glGenBuffers(2, buffers);
+    glBindBuffer(GL_UNIFORM_BUFFER, buffers[0]);
+    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(bytes.size()), bytes.data(), GL_DYNAMIC_DRAW);
+    std::memcpy(bytes.data() + stride, red.data(), sizeof(red));
+    glBindBuffer(GL_UNIFORM_BUFFER, buffers[1]);
+    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(bytes.size()), bytes.data(), GL_DYNAMIC_DRAW);
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+    glUseProgram(program);
+    glViewport(0, 0, 8, 8);
+    glDisable(GL_DEPTH_TEST);
+    const auto drawAndExpect = [&](const std::array<GLfloat, 4>& expected, const char* when) {
+        glClearColor(0, 0, 0, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        std::array<GLubyte, 4> pixel{};
+        glReadPixels(4, 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << when;
+        for (size_t i = 0; i < pixel.size(); ++i) EXPECT_EQ(pixel[i], GLubyte(expected[i] * 255)) << when << " channel " << i;
+    };
+    glBindBufferRange(GL_UNIFORM_BUFFER, 3, buffers[0], GLintptr(stride), sizeof(green));
+    drawAndExpect(green, "nonzero UBO range offset");
+    glBindBufferRange(GL_UNIFORM_BUFFER, 3, buffers[0], GLintptr(2 * stride), sizeof(blue));
+    drawAndExpect(blue, "same UBO, changed range");
+    glBindBufferRange(GL_UNIFORM_BUFFER, 3, buffers[1], GLintptr(stride), sizeof(red));
+    drawAndExpect(red, "changed UBO handle at the same binding and offset");
+    glBindBuffer(GL_UNIFORM_BUFFER, buffers[1]);
+    glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(stride), sizeof(yellow), yellow.data());
+    drawAndExpect(yellow, "subdata changes an already bound UBO");
+    glBindBufferRange(GL_UNIFORM_BUFFER, 5, buffers[0], 0, sizeof(red));
+    glUniformBlockBinding(program, block, 5);
+    drawAndExpect(red, "program block binding changes without relinking");
+    glBindBufferBase(GL_UNIFORM_BUFFER, 3, 0);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 5, 0);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+    glUseProgram(0);
+    glBindVertexArray(0);
+    glDeleteBuffers(2, buffers);
+    glDeleteVertexArrays(1, &vao);
+    glDeleteProgram(program);
+}
+
+TEST_F(F1WireScenario, ShortUniformBufferRangePadsMissingBytes) {
+    if (!Ready()) return;
+    // Magma's compatibility policy for short application UBOs, not a claim about
+    // undefined short-range reads on arbitrary native GL drivers. Bytes outside
+    // the bound range are deliberately nonzero, so widening a descriptor fails.
+    if (Gl().BackendName() != "DirectVulkan") GTEST_SKIP() << "Magma short-UBO compatibility policy";
+    Attach(GL_RGBA8);
+    const char* fragment = R"(#version 430 core
+layout(std140, binding=3) uniform ShortColour { vec4 value; vec4 tail; };
+layout(location=0) out vec4 color;
+void main() { color = value + tail; }
+)";
+    const GLuint program = BuildWireProgram({{GL_VERTEX_SHADER, kWireVertexIdTriangle},
+                                             {GL_FRAGMENT_SHADER, fragment}});
+    ASSERT_NE(program, 0u);
+    GLint alignment = 0;
+    glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &alignment);
+    ASSERT_GT(alignment, 0);
+    const size_t offset = size_t(alignment);
+    std::vector<GLubyte> bytes(offset + 8 * sizeof(GLfloat), 0);
+    const GLfloat values[] = {0, 1, 0, 1, 0, 1, 1, 1};
+    std::memcpy(bytes.data() + offset, values, sizeof(values));
+    GLuint ubo = 0, vao = 0;
+    glGenBuffers(1, &ubo);
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(bytes.size()), bytes.data(), GL_STATIC_DRAW);
+    glBindBufferRange(GL_UNIFORM_BUFFER, 3, ubo, GLintptr(offset), 5 * sizeof(GLfloat));
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+    glUseProgram(program);
+    glViewport(0, 0, 8, 8);
+    glDisable(GL_DEPTH_TEST);
+    glClearColor(1, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    std::array<GLubyte, 4> pixel{};
+    glReadPixels(4, 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    EXPECT_EQ(pixel, (std::array<GLubyte, 4>{0, 255, 0, 255})) << "range-external poison leaked into short UBO tail";
+    glBindBufferBase(GL_UNIFORM_BUFFER, 3, 0);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+    glUseProgram(0);
+    glBindVertexArray(0);
+    glDeleteBuffers(1, &ubo);
+    glDeleteVertexArrays(1, &vao);
+    glDeleteProgram(program);
+}
+
+TEST_F(F1WireScenario, ComputeWrittenVertexAndIndexBuffersDrawAndReadBack) {
+    if (!Ready()) return;
+    Attach(GL_RGBA8);
+    const char* compute = R"(#version 430 core
+layout(local_size_x=1) in;
+layout(std430, binding=0) buffer Vertices { vec4 positions[]; };
+layout(std430, binding=1) buffer Indices { uint indices[]; };
+void main() {
+    positions[0] = vec4(-1, -1, 0, 1);
+    positions[1] = vec4(3, -1, 0, 1);
+    positions[2] = vec4(-1, 3, 0, 1);
+    indices[0] = 0u; indices[1] = 1u; indices[2] = 2u;
+}
+)";
+    const char* vertex = R"(#version 430 core
+layout(location=0) in vec4 position;
+void main() { gl_Position = position; }
+)";
+    const char* fragment = R"(#version 430 core
+layout(location=0) out vec4 color;
+void main() { color = vec4(0, 1, 0, 1); }
+)";
+    const GLuint cs = BuildWireProgram({{GL_COMPUTE_SHADER, compute}});
+    const GLuint graphics = BuildWireProgram({{GL_VERTEX_SHADER, vertex}, {GL_FRAGMENT_SHADER, fragment}});
+    ASSERT_NE(cs, 0u);
+    ASSERT_NE(graphics, 0u);
+    GLuint buffers[2]{}, vao = 0;
+    glGenBuffers(2, buffers);
+    const GLfloat poisonPositions[12]{}; // A degenerate triangle if stale CPU bytes reach the draw.
+    const GLuint poisonIndices[3]{};
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[0]);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(poisonPositions), poisonPositions, GL_DYNAMIC_COPY);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, buffers[0]);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[1]);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(poisonIndices), poisonIndices, GL_DYNAMIC_COPY);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, buffers[1]);
+    glUseProgram(cs);
+    glDispatchCompute(1, 1, 1);
+    glMemoryBarrier(GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT | GL_ELEMENT_ARRAY_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, buffers[0]);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), nullptr);
+    glEnableVertexAttribArray(0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffers[1]);
+    glUseProgram(graphics);
+    glViewport(0, 0, 8, 8);
+    glDisable(GL_DEPTH_TEST);
+    const auto drawAndExpect = [&](const char* when) {
+        glClearColor(1, 0, 0, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
+        std::array<GLubyte, 4> pixel{};
+        glReadPixels(4, 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << when;
+        EXPECT_EQ(pixel, (std::array<GLubyte, 4>{0, 255, 0, 255})) << when;
+    };
+    drawAndExpect("GPU-written vertex/index bytes before any CPU readback");
+    std::array<GLfloat, 12> actualPositions{};
+    std::array<GLuint, 3> actualIndices{};
+    glGetBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(actualPositions), actualPositions.data());
+    glGetBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, sizeof(actualIndices), actualIndices.data());
+    EXPECT_EQ(actualPositions, (std::array<GLfloat, 12>{-1, -1, 0, 1, 3, -1, 0, 1, -1, 3, 0, 1}));
+    EXPECT_EQ(actualIndices, (std::array<GLuint, 3>{0, 1, 2}));
+    drawAndExpect("readback must not replace the canonical GPU-written buffers with old CPU shadows");
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, 0);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, 0);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    glUseProgram(0);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glDeleteBuffers(2, buffers);
+    glDeleteVertexArrays(1, &vao);
+    glDeleteProgram(cs);
+    glDeleteProgram(graphics);
 }
 
 TEST_F(F1WireScenario, SrgbDrawTracksFramebufferConversion) {

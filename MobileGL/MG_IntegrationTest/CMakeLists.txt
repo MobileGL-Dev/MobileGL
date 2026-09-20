@@ -2417,6 +2417,44 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endforeach()
 endif()
 
+# Magma application buffers: public GL pixels/bytes, with the two role blocks and
+# strict field checks forced on. Existing public scenarios supply offset, mutation,
+# persistent-map, growth and indirect coverage; no copied backend implementation.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    mgl_itest_join_environment(MGL_ITEST_MAGMA_BUFFER_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_TRANSPORT=inproc"
+        "MOBILEGL_IPC_ROLE_SPLIT_STATE=1" "MOBILEGL_IPC_STRICT_ERRORS=1"
+        "MOBILEGL_IPC_ADOPT_TIER=2" "MGITEST_PERSISTENT_MAP_ARM=emulated"
+        "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+    foreach(bufferCase
+            F1WireScenario.EnabledVertexBufferDrawKeepsNamedP7Fatal
+            F1WireScenario.UniformBufferRangeAndRebindPixels
+            F1WireScenario.ShortUniformBufferRangePadsMissingBytes
+            F1WireScenario.ComputeWrittenVertexAndIndexBuffersDrawAndReadBack
+            IndexedDrawFamilyScenario.AnElementBufferDrawElementsOffsetSelectsTheRightQuad
+            IndexedDrawFamilyScenario.DrawElementsBaseVertexMovesTheSameIndicesToTheOtherQuad
+            IndexedDrawFamilyScenario.DrawRangeElementsDrawsTheRangedRun
+            IndexedDrawFamilyScenario.DrawElementsInstancedBaseVertexPaintsOneQuadPerInstance
+            IndexedDrawFamilyScenario.MultiDrawElementsBaseVertexPaintsEverySubDraw
+            IndexedDrawFamilyScenario.MultiDrawElementsIndirectDrawsFromTheIndirectBuffer
+            CrossFrameBufferScenario.VertexBufferSubData
+            CrossFrameBufferScenario.IndexBufferSubData
+            CrossFrameBufferScenario.VertexOrphanAndReupload
+            CrossFrameBufferScenario.IndexOrphanAndReupload
+            PersistentCoherentMapScenario.TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw
+            PersistentCoherentMapScenario.AWriteAfterAFrameBoundaryReachesTheNextFramesDraw
+            StorageBufferRegrowScenario.AGrownStoreIsVisibleThroughItsExistingIndexedBinding)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.Split.Buffers."
+            TEST_FILTER "${bufferCase}"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "integration-magma-split\;integration-magma-buffers"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${MGL_ITEST_MAGMA_BUFFER_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-buffers-${bufferCase}.log")
+    endforeach()
+endif()
+
 # P5c ct (MG_Remote/CONTRACT-P5C.md §5): the two control records, split-only source for the
 # same reason as f1's - the scenario reads the SERVER sink's tallies, which a monolith build
 # has no symbol for. One block per case with a LOG PATH OF ITS OWN, the F1 pattern:
