@@ -2763,6 +2763,41 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Bool UniformManager::PrepareWireTextureResources(const MagmaProgramSource& program,
+                                                      const ProgramFactory::VkProgramObject& programObj) {
+        if (!program.IsWire()) return true;
+        if (programObj.declinedDescriptors || m_textureManager == nullptr) return false;
+        const auto& state = MG_Pipe::MGPipeApplier();
+        // Resolve writable images first: aliases sampled by the same draw must
+        // see the final STORAGE-capable allocation before any view is built.
+        for (const Bool storage : {true, false}) {
+            const auto wanted = storage ? ProgramFactory::DescriptorBindingKind::StorageImage
+                                        : ProgramFactory::DescriptorBindingKind::CombinedImageSampler;
+            for (const Uint32 binding : programObj.activeBindings) {
+                if (binding >= m_maxBindings) break;
+                if (programObj.bindingKinds[binding] != wanted) continue;
+                const Int baseLocation = programObj.samplerUniformLocationByBinding[binding];
+                const Uint32 count = BindingDescriptorCount(programObj, binding);
+                for (Uint32 element = 0; element < count; ++element) {
+                    const Int location = baseLocation + static_cast<Int>(element);
+                    if (baseLocation < 0 || !program.UniformLocationsAliasSameUniform(baseLocation, location))
+                        return false;
+                    const Int unit = program.GetUniformSamplerOrImageUnitIndex(static_cast<Uint>(location));
+                    if (unit < 0 || static_cast<Uint32>(unit) >=
+                        (storage ? MG_Pipe::kMGPipeMaxImageUnits : MG_Pipe::kMGPipeMaxTextureUnits)) return false;
+                    const auto handle = storage ? state.BoundShaderImages[unit].Res
+                                                : state.BoundSamplerViews[unit].Texture;
+                    if (MG_Pipe::MGPipeHandleIsNull(handle)) WireDescriptorFatal("unbound-image-placeholder@P7");
+                    if (!m_textureManager->SyncTextureResourceByHandle(handle, false, storage)) return false;
+                }
+            }
+        }
+        m_textureManager->FlushPendingUploads();
+        return true;
+    }
+#endif
+
     Bool UniformManager::BindProgramUniformBuffers(VkCommandBuffer commandBuffer,
                                                              const MagmaProgramSource& program,
                                                              const ProgramFactory::VkProgramObject& programObj,

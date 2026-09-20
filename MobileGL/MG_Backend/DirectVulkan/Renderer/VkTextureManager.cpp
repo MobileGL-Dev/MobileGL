@@ -22,6 +22,7 @@
 // (shape) and the server's staged-texture store (texels).
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Remote/Server/StagedTextureStore.h>
+#include "../DirectVulkan.h"
 #endif
 #include <algorithm>
 #include <cstdio>
@@ -2187,6 +2188,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                               resource.sampleCount == VK_SAMPLE_COUNT_1_BIT &&
                               resolvedSampleCount == VK_SAMPLE_COUNT_1_BIT &&
                               resource.layout != VK_IMAGE_LAYOUT_UNDEFINED;
+        // Preservation submits its copy separately. Earlier draws/clears of the
+        // old image must reach the queue first; waiting only for the preservation
+        // fence cannot order work that is still in the renderer's open recording.
+        // The descriptor caller preflights this before capturing its command buffer.
+        if (preserve && pVulkanRenderer && !pVulkanRenderer->FlushWirePendingCommandsForTextureUpdate()) return false;
         TextureResource replacement;
 
         VkImageCreateInfo imageInfo{};
@@ -2428,6 +2434,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (items.empty()) {
             return true;
         }
+
+        // This upload will be independently submitted by FlushPendingUploads.
+        // Submit older renderer work before adding the new bytes to the batch,
+        // otherwise Draw(old T), TexSubImage(T), Draw(new T) can upload before
+        // the first draw. A clean texture never reaches this submission boundary.
+        if (pVulkanRenderer && !pVulkanRenderer->FlushWirePendingCommandsForTextureUpdate()) return false;
 
         // UploadDirtyMipLevels' batching rules, verbatim: flush an open batch that already
         // writes this image and was touched by the open recording, and bound the staging bytes

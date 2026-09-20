@@ -11,8 +11,6 @@
         };
         VkShaderModule vertex = VK_NULL_HANDLE, fragment = VK_NULL_HANDLE;
         VkDescriptorSetLayout descriptorLayout = VK_NULL_HANDLE;
-        VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
-        VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
         VkSampler nearest = VK_NULL_HANDLE, linear = VK_NULL_HANDLE;
         Vector<Target> targets;
@@ -20,8 +18,8 @@
 
     void VulkanRenderer::DestroyWireColorBlitResources() {
         if (!m_wireColorBlitResources) return;
-        // Shutdown calls this after vkDeviceWaitIdle; every individual blit also
-        // waits before recycling its descriptor set or destroying temporary views.
+        // Shutdown calls this after vkDeviceWaitIdle and after all per-submit
+        // descriptor pools/framebuffers/views have been collected.
         auto& cache = *m_wireColorBlitResources;
         for (const auto& target : cache.targets) {
             vkDestroyPipeline(m_device, target.pipeline, nullptr);
@@ -29,7 +27,6 @@
         }
         vkDestroySampler(m_device, cache.nearest, nullptr);
         vkDestroySampler(m_device, cache.linear, nullptr);
-        vkDestroyDescriptorPool(m_device, cache.descriptorPool, nullptr);
         vkDestroyPipelineLayout(m_device, cache.pipelineLayout, nullptr);
         vkDestroyDescriptorSetLayout(m_device, cache.descriptorLayout, nullptr);
         vkDestroyShaderModule(m_device, cache.vertex, nullptr);
@@ -90,17 +87,6 @@
             pipelineLayout.pushConstantRangeCount = 1;
             pipelineLayout.pPushConstantRanges = &push;
             VK_VERIFY(vkCreatePipelineLayout(m_device, &pipelineLayout, nullptr, &cache.pipelineLayout));
-            const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-            VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-            pool.maxSets = 1;
-            pool.poolSizeCount = 1;
-            pool.pPoolSizes = &poolSize;
-            VK_VERIFY(vkCreateDescriptorPool(m_device, &pool, nullptr, &cache.descriptorPool));
-            VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-            alloc.descriptorPool = cache.descriptorPool;
-            alloc.descriptorSetCount = 1;
-            alloc.pSetLayouts = &cache.descriptorLayout;
-            VK_VERIFY(vkAllocateDescriptorSets(m_device, &alloc, &cache.descriptorSet));
             VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
             sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
             sampler.addressModeU = sampler.addressModeV = sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -211,10 +197,25 @@
         framebufferInfo.layers = 1;
         VkFramebuffer framebuffer = VK_NULL_HANDLE;
         VK_VERIFY(vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &framebuffer));
+        // Each in-flight blit owns its descriptor set. Updating a cached set
+        // would rewrite the source view of an older queued blit.
+        VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
+        VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+        const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+        VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        pool.maxSets = 1;
+        pool.poolSizeCount = 1;
+        pool.pPoolSizes = &poolSize;
+        VK_VERIFY(vkCreateDescriptorPool(m_device, &pool, nullptr, &descriptorPool));
+        VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        alloc.descriptorPool = descriptorPool;
+        alloc.descriptorSetCount = 1;
+        alloc.pSetLayouts = &cache.descriptorLayout;
+        VK_VERIFY(vkAllocateDescriptorSets(m_device, &alloc, &descriptorSet));
         const VkDescriptorImageInfo sampled{filter == GL_LINEAR ? cache.linear : cache.nearest,
                                            sourceView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        write.dstSet = cache.descriptorSet;
+        write.dstSet = descriptorSet;
         write.dstBinding = 0;
         write.descriptorCount = 1;
         write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -244,17 +245,21 @@
         vkCmdSetViewport(frame.commandBuffer, 0, 1, &viewport);
         vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
         vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                cache.pipelineLayout, 0, 1, &cache.descriptorSet, 0, nullptr);
+                                cache.pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
         vkCmdPushConstants(frame.commandBuffer, cache.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
                            0, sizeof(constants), &constants);
         vkCmdDraw(frame.commandBuffer, 6, 1, 0, 0);
         vkCmdEndRenderPass(frame.commandBuffer);
         ResetDynamicStateShadow();
         InvalidatePipelineMemo();
-        if (!SubmitReadbackCommandsAndWait(frame)) MagmaWireFatal("color-blit-submit");
-        vkDestroyFramebuffer(m_device, framebuffer, nullptr);
-        vkDestroyImageView(m_device, sourceView, nullptr);
-        vkDestroyImageView(m_device, destinationView, nullptr);
+        // This native pass binds its own set/layout without going through the
+        // application's descriptor binder. Its next fast path must rebind.
+        if (m_uniformManager) m_uniformManager->OnCommandBufferBoundary();
+        WireRetiredObjects retired{};
+        retired.framebuffers.push_back(framebuffer);
+        retired.imageViews = {sourceView, destinationView};
+        retired.descriptorPools.push_back(descriptorPool);
+        RetireWireObjects(Move(retired));
         m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired, true);
         return true;
     }

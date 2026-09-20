@@ -1,5 +1,9 @@
 # CONTRACT-P5E — the client runs ahead of apply on the Espryt draw path
 
+> Historical P5e backend scope: the later [Magma run-ahead contract](CONTRACT-MAGMA-RUNAHEAD.md)
+> supersedes this document's "Magma never publishes bit 10" restriction after P5f and the
+> server-buffer migration. The wire wait classes, events and present-credit protocol remain.
+
 Authority: this file, beside `CONTRACT-P5.md` (table 0, byte carriers, field ownership, R-1…R-17),
 `CONTRACT-P5B.md` (the class-C slots) and `CONTRACT-P5C.md` (rule E, the two named exemptions,
 SEG_EVENT, the guards). Where it disagrees with any of them this file is newer and wins; §8 lists

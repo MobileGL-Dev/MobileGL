@@ -316,7 +316,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Concurrent GPU reads do not prevent a CPU read. Only staged copies or
         // shader writes need a host visibility barrier and a submission wait;
         // ordinary index/vertex inspection must not stall once per draw.
-        if (resource->gpuWritesPending && !WaitForWireBufferHostAccess(*resource)) return false;
+        if (resource->gpuWritesPending) {
+            if (!WaitForWireBufferHostAccess(*resource)) return false;
+            // A draw may already hold a native slice of this store while another
+            // attribute needs a CPU conversion. The wait completes previous GPU
+            // work, not the draw that will bind that previously acquired slice.
+            // Preserve its reservation even if the idle drain advanced the frame.
+            resource->lastUseSerial = m_frameSerial;
+        }
         if (!resource->buffer.Invalidate(size, offset)) return false;
         Memcpy(dst, static_cast<const Uint8*>(resource->buffer.GetMappedData()) + offset, static_cast<SizeT>(size));
         return true;

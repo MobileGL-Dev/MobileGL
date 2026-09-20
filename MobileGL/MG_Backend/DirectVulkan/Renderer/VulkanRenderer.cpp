@@ -3431,6 +3431,7 @@ void main() {
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
         DestroyWireDrawPass();
+        CollectWireObjects(m_submitCounter, true);
         DestroyWireColorBlitResources();
 #endif
         OnSubmitsCompletedUpTo(m_submitCounter);
@@ -13051,9 +13052,15 @@ void main() {
         // Mid-frame-flushed command buffers whose submission just completed can
         // be freed now; present-less flush loops have no other reclaim point.
         m_frameContext.FreeRetiredCommandBuffersCompletedUpTo(m_completedSubmitCounter);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        CollectWireObjects(m_completedSubmitCounter);
+#endif
     }
 
     Bool VulkanRenderer::TryDrainFrameTransients() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (m_wirePreparationDepth != 0) return false;
+#endif
         if (m_device == VK_NULL_HANDLE || m_frameContext.GetFrameCount() == 0) {
             return false;
         }
@@ -13170,6 +13177,9 @@ void main() {
     }
 
     Bool VulkanRenderer::SubmitPendingCommandBuffer(FrameContext::FrameData& frame, VkFence fence, Bool pooledFence) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        RetireWireDrawPass();
+#endif
         // Batched texture uploads must reach the queue before the frame's
         // commands: the recording being submitted may sample images whose
         // texels only exist in the texture manager's open upload batch.
@@ -15414,6 +15424,12 @@ void main() {
 
         vkDeviceWaitIdle(m_device);
         OnSubmitsCompletedUpTo(m_submitCounter);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The old swapchain will be destroyed below, including recordings that
+        // are being abandoned instead of submitted. Release all their views now.
+        DestroyWireDrawPass();
+        CollectWireObjects(m_submitCounter, true);
+#endif
 
         if (m_timerQueryManager) {
             // The in-progress command buffer is abandoned below (its recording

@@ -143,6 +143,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkCommandBuffer AcquireBufferCopyCommandBuffer() override;
 #if MOBILEGL_BUILD_DISAGGREGATED
         VkBufferManager& GetWireBufferManager() { return m_bufferManager; }
+        Bool FlushWirePendingCommandsForTextureUpdate() {
+            return !HasPendingRecordedWork() || FlushPendingCommands();
+        }
 #endif
 
         // FrameContext::IRecordingObserver: prepares the frame's timer-query
@@ -470,6 +473,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool SetupWireDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
                            const DrawCmdParam& drawParams, const IndexBufferView* indices);
         void DestroyWireDrawPass();
+        void RetireWireDrawPass();
+        struct WireRetiredObjects {
+            Uint64 submitIndex = 0;
+            UniquePtr<RenderPassEntry> drawPass;
+            Vector<VkFramebuffer> framebuffers;
+            Vector<VkRenderPass> renderPasses;
+            Vector<VkImageView> imageViews;
+            Vector<VkDescriptorPool> descriptorPools;
+        };
+        void RetireWireObjects(WireRetiredObjects objects);
+        void CollectWireObjects(Uint64 completedSubmit, Bool all = false);
+        Vector<WireRetiredObjects> m_wireRetiredObjects;
+        Uint32 m_wirePreparationDepth = 0;
         void DispatchWireCompute(GLuint x, GLuint y, GLuint z);
         UniquePtr<RenderPassEntry> m_wireDrawPass;
         Vector<VkImageView> m_wireDrawViews;

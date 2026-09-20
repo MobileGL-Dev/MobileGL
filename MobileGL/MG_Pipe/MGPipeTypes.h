@@ -152,17 +152,12 @@ namespace MobileGL::MG_Pipe {
         kCapRunAheadApply = 1ull << 10,
     };
 
-    // THE RUN-AHEAD ARM, AS A PURE FUNCTION, so that "Magma never" is something a unit case can
-    // hold rather than a line inside MG_Backend/Init.cpp's InitSplitRoles that only a live
-    // split session reaches. `ready` is Init.cpp's kMGPipeP5eRunAheadReady - false until the
-    // P5e integration commit - and the BACKEND TYPE is the half that must not depend on it:
-    // whatever `ready` says, a DirectVulkan server publishes no bit 10, because Magma keeps the
-    // lockstep for the whole of P5e (CONTRACT-P5E.md §6) and its apply thread really does read
-    // client memory inside MagmaP7AllocatorDebtScope. MG_Test/Pipe/MagmaPipeIdentityTest.cpp
-    // pins both halves; reverting the type test there is the phase's named red.
+    // Readiness is supplied independently by each backend's integration gate.
+    // The capability names client-memory independence, not merely a config knob.
+    // See CONTRACT-MAGMA-RUNAHEAD.md for the Vulkan resource/submission contract.
     inline constexpr Uint64 MGPipeRunAheadCapBitsFor(BackendType type, Bool ready) {
-        return (ready && type == BackendType::DirectGLES) ? static_cast<Uint64>(kCapRunAheadApply)
-                                                          : static_cast<Uint64>(kCapNone);
+        return (ready && (type == BackendType::DirectGLES || type == BackendType::DirectVulkan))
+            ? static_cast<Uint64>(kCapRunAheadApply) : static_cast<Uint64>(kCapNone);
     }
 
     struct MGPCaps {

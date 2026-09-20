@@ -1150,9 +1150,8 @@ namespace MobileGL::MG_Remote::Client {
                 // told that, or an A/B arm that measured nothing looks like an A/B arm that
                 // measured no difference (Config.h's own argument for parsing it everywhere).
                 MGLOG_W_ONCE("MG_Remote client: run-ahead requested, server does not publish "
-                             "kCapRunAheadApply - running lockstep. This is Magma always, and "
-                             "Espryt until the P5e integration commit flips "
-                             "kMGPipeP5eRunAheadReady");
+                             "kCapRunAheadApply - running lockstep. The selected backend has "
+                             "not enabled its implementation-readiness gate");
             }
             return;
         }

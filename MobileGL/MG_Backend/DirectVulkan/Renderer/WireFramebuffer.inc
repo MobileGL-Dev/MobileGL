@@ -67,6 +67,16 @@
         VkImageAspectFlags barrierAspect = image.aspect;
         if (image.format == VK_FORMAT_D24_UNORM_S8_UINT || image.format == VK_FORMAT_D32_SFLOAT_S8_UINT)
             barrierAspect = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+        if (image.layout == layout) {
+            // GENERAL->GENERAL is not a layout transition, but the next load,
+            // sample or blit still depends on earlier attachment/shader writes.
+            // The old per-verb queue idle must not be its only ordering edge.
+            VkMemoryBarrier memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            memory.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+            memory.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+            vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &memory, 0, nullptr, 0, nullptr);
+        }
         if (!VkTextureManager::TransitionImageLayout(frame.commandBuffer, image.image, image.layout, layout,
             stage, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, access,
             VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, barrierAspect, 0, image.levels))
@@ -81,7 +91,7 @@
 
     void VulkanRenderer::ClearWireFramebuffer(const MG_Pipe::MGPFramebufferState& fbo,
                                               const ClearAttachmentPayload& payload, GLint drawbuffer) {
-        if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("wire-verb-flush");
+        RetireWireDrawPass();
         if (MGB_CTX->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) return;
         const auto clearSurface = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect,
                                       Uint32 colorIndex) {
@@ -171,12 +181,11 @@
             vkCmdBeginRenderPass(frame.commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
             vkCmdClearAttachments(frame.commandBuffer, 1, &clear, 1, &rect);
             vkCmdEndRenderPass(frame.commandBuffer);
-            // P5f changes ownership, not Magma's wait contract. Synchronous retirement keeps
-            // these temporary server resources bounded and makes their lifetime explicit.
-            if (!SubmitReadbackCommandsAndWait(frame)) MagmaWireFatal("clear-submit");
-            vkDestroyFramebuffer(m_device, fb, nullptr);
-            vkDestroyRenderPass(m_device, pass, nullptr);
-            vkDestroyImageView(m_device, view, nullptr);
+            WireRetiredObjects retired{};
+            retired.framebuffers.push_back(fb);
+            retired.renderPasses.push_back(pass);
+            retired.imageViews.push_back(view);
+            RetireWireObjects(Move(retired));
             if (!image.isDefault && surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
                 m_textureManager->MarkWireTextureGpuWritten(image.storage, image.level, image.layer, image.layers);
             if (image.isDefault) {
@@ -253,7 +262,7 @@
 
     void VulkanRenderer::BlitWireFramebuffers(GLint sx0, GLint sy0, GLint sx1, GLint sy1,
         GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter) {
-        if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("wire-verb-flush");
+        RetireWireDrawPass();
         // The scissor test clips blit writes: intersect the destination rectangle with
         // the scissor box and shrink the source proportionally.
         if (MGB_CTX->IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
@@ -377,7 +386,7 @@
                                    "CopyTexSubImage2D currently only supports GL_TEXTURE_2D destinations.");
             return;
         }
-        if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("wire-verb-flush");
+        RetireWireDrawPass();
         auto& state = MG_Pipe::MGPipeApplier();
         const auto* read = state.ReadFramebuffer();
         if (!read) MagmaWireFatal("copy-framebuffer-record");
@@ -415,7 +424,7 @@
     }
 
     void VulkanRenderer::GenerateWireMipmap() {
-        if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("wire-verb-flush");
+        RetireWireDrawPass();
         auto& state = MG_Pipe::MGPipeApplier();
         Uint32 base = state.VerbMipBaseLevel, baseLayer = 0, layerCount = 1;
         const auto handle = m_textureManager->ResolveWireTextureStorage(state.VerbMipRes, base, baseLayer,
@@ -423,7 +432,7 @@
         auto* resource = m_textureManager->SyncTextureResourceByHandle(handle);
         if (!resource) MagmaWireFatal("mipmap-resource");
         m_textureManager->FlushPendingUploads();
-        if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("mipmap-flush");
+        RetireWireDrawPass();
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording) m_frameContext.BeginCommandRecording();
         const Uint32 count = state.VerbMipLevelCount;

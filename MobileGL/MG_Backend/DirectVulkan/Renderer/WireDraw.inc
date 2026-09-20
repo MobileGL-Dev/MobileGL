@@ -53,13 +53,54 @@
     }
 
     void VulkanRenderer::DestroyWireDrawPass() {
-        // FlushPendingCommands only submits. These objects may still be referenced by
-        // that submission, so retire this temporary pass after the queue completes.
-        if (m_wireDrawPass || !m_wireDrawViews.empty()) VK_VERIFY(vkQueueWaitIdle(m_graphicsQueue));
+        // Only shutdown/swapchain replacement calls this, after device idle.
+        if (m_wireDrawPass && m_frameContext.GetFrameCount() != 0) {
+            auto& frame = m_frameContext.GetCurrent();
+            if (frame.isCommandRecording && VkRenderPassManager::GetActiveRenderPass() == m_wireDrawPass.get())
+                VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+        }
         m_wireDrawPass.reset();
         for (const auto view : m_wireDrawViews) vkDestroyImageView(m_device, view, nullptr);
         m_wireDrawViews.clear();
     }
+
+    void VulkanRenderer::RetireWireObjects(WireRetiredObjects objects) {
+        // The current recording is the next graphics submission. Do not use a
+        // frame number: mid-frame flushes and readbacks can split one frame.
+        objects.submitIndex = m_submitCounter + 1;
+        m_wireRetiredObjects.push_back(Move(objects));
+    }
+
+    void VulkanRenderer::RetireWireDrawPass() {
+        if (!m_wireDrawPass) return;
+        auto& frame = m_frameContext.GetCurrent();
+        if (frame.isCommandRecording && VkRenderPassManager::GetActiveRenderPass())
+            VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+        WireRetiredObjects retired{};
+        retired.drawPass = Move(m_wireDrawPass);
+        retired.imageViews = Move(m_wireDrawViews);
+        RetireWireObjects(Move(retired));
+    }
+
+    void VulkanRenderer::CollectWireObjects(Uint64 completedSubmit, Bool all) {
+        auto it = m_wireRetiredObjects.begin();
+        while (it != m_wireRetiredObjects.end()) {
+            if (!all && it->submitIndex > completedSubmit) { ++it; continue; }
+            // Framebuffers/descriptor sets stop naming their views first.
+            it->drawPass.reset();
+            for (const auto pool : it->descriptorPools) vkDestroyDescriptorPool(m_device, pool, nullptr);
+            for (const auto framebuffer : it->framebuffers) vkDestroyFramebuffer(m_device, framebuffer, nullptr);
+            for (const auto pass : it->renderPasses) vkDestroyRenderPass(m_device, pass, nullptr);
+            for (const auto view : it->imageViews) vkDestroyImageView(m_device, view, nullptr);
+            it = m_wireRetiredObjects.erase(it);
+        }
+    }
+
+    struct WirePreparationScope {
+        Uint32& depth;
+        explicit WirePreparationScope(Uint32& value) : depth(value) { ++depth; }
+        ~WirePreparationScope() { --depth; }
+    };
 
     Bool VulkanRenderer::SetupWireDraw(FrameContext::FrameData& frame, GLenum mode,
             Flags<DrawSetupAspect> aspects, const DrawCmdParam& drawParams, const IndexBufferView* indices) {
@@ -70,8 +111,10 @@
             WireBufferLegacyFatal();
         const auto* fbo = state.DrawFramebuffer();
         if (!fbo) MagmaWireFatal("draw-framebuffer-record");
-        if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("draw-flush");
-        DestroyWireDrawPass();
+        RetireWireDrawPass();
+        // CPU preparation may synchronize GPU-produced vertex/index bytes. Do
+        // not rewind an arena while this draw owns as-yet-unrecorded slices.
+        WirePreparationScope preparing(m_wirePreparationDepth);
 
         ProgramFactory::CompileOptionFlags flags =
             ProgramFactory::CompileOptionFlags(GetBaseTransformFlagsRaw(fbo->IsDefault));
@@ -82,6 +125,18 @@
         }
         if (programObject->pointSizeCapabilityUnsupported) return false;
         const auto& programObj = *programObject;
+        if (!m_uniformManager->PrepareWireTextureResources(program, programObj)) return false;
+        // Lazy image uploads/promotions can submit the old recording. Resolve
+        // ALL attachments before descriptor binding captures the current cmd.
+        for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
+            const Int32 slot = fbo->DrawBuffers[i];
+            if (slot >= 0) (void)ResolveWireImage(*fbo, fbo->Color[slot], VK_IMAGE_ASPECT_COLOR_BIT);
+        }
+        if (fbo->IsDefault || fbo->Depth.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
+            (void)ResolveWireImage(*fbo, fbo->Depth, VK_IMAGE_ASPECT_DEPTH_BIT);
+        else if (fbo->Stencil.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
+            (void)ResolveWireImage(*fbo, fbo->Stencil, VK_IMAGE_ASPECT_STENCIL_BIT);
+        m_textureManager->FlushPendingUploads();
         const auto vaoHandle = state.BoundVertexElements;
         if (MG_Pipe::MGPipeHandleIsNull(vaoHandle)) MagmaWireFatal("vertex-elements-record");
         if (vaoHandle.Slot >= state.VertexElementsCsos.size()) MagmaWireFatal("vertex-elements-record");
@@ -301,11 +356,12 @@
     }
 
     void VulkanRenderer::DispatchWireCompute(GLuint x, GLuint y, GLuint z) {
-        if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("dispatch-flush");
+        RetireWireDrawPass();
         auto& frame = m_frameContext.GetCurrent();
         const auto program = WireProgramSource(MG_Pipe::MGPipeApplier().DispatchProgram);
         if (!program.GetLinkStatus() || !program.GetSpirvStatus()) return;
         const auto& programObj = m_programFactory->GetOrCreateProgram(program, {});
+        if (!m_uniformManager->PrepareWireTextureResources(program, programObj)) return;
         const auto pipeline = GetOrCreateComputePipeline(programObj);
         if (!pipeline) return;
         if (!frame.isCommandRecording) m_frameContext.BeginCommandRecording();

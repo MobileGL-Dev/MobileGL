@@ -100,6 +100,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<SamplerImageFeedbackBinding>& outBindings) const;
         static Bool SamplerOverlapsWritableImageSubresource(Int samplerBaseLevel, Int samplerMaxLevel,
                                                              GLint imageLevel, GLenum imageAccess);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Resolve lazy texture uploads/promotions before the caller captures the
+        // command buffer passed to BindProgramUniformBuffers. Preparation may
+        // submit older work, but descriptor recording must never rotate it.
+        Bool PrepareWireTextureResources(const MagmaProgramSource& program,
+                                          const ProgramFactory::VkProgramObject& programObj);
+#endif
         // samplerDescriptorsUnchangedHint: the caller (SetupDraw fast path) proved that
         // every input of every combined-image-sampler resolution is unchanged since the
         // previous draw's resolve - same (texture, sampler) per binding, texture params

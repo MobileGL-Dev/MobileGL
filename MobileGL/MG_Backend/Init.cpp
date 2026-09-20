@@ -96,11 +96,12 @@ namespace MobileGL::MG_Backend {
         // the apply thread reading client memory that has already moved, which renders wrong
         // rather than aborting.
         constexpr Bool kMGPipeP5eRunAheadReady = true;
+        constexpr Bool kMGPipeMagmaRunAheadReady = false;
 
         // The Magma transport now owns buffer stores and consumes their vertex,
         // index and shader binding records. Both backends publish the resource
         // family only alongside a real op table (checked below). This does not
-        // publish kCapRunAheadApply: Magma keeps its existing lockstep contract.
+        // itself establish run-ahead readiness: that has its separate gate below.
         Uint64 ConsumedSubsystemsFor(BackendType type) {
             switch (type) {
             case BackendType::DirectGLES: return MG_Pipe::kMGPipeSubsystemsMigratedAtP5e;
@@ -186,21 +187,11 @@ namespace MobileGL::MG_Backend {
                 serverBackend->GetBackendFunctions().GL.EndTransformFeedback != nullptr) {
                 capBits |= MG_Pipe::kCapBackendOwnsXfbCapture;
             }
-            // P5e (CONTRACT-P5E.md §1, §6): kCapRunAheadApply, THE DIRECTGLES ARM AND ONLY IT.
-            //
-            // Magma is deliberately absent and is not an omission: it keeps the lockstep for
-            // the whole of P5e, its four apply-thread allocator sites are real debt P7 retires,
-            // and MGPipeApplierCurrentRecordIsBarriered() answers true for every record on a
-            // server that does not publish this bit - which is exactly what keeps those probes
-            // and its BARRIER_PULLED reads inside P5C's semantics and its rsp accounting
-            // honest. Publishing the bit here for DirectVulkan would turn accounted pulls into
-            // torn ones, so MagmaPipeIdentityTest pins its absence.
-            //
-            // The Espryt arm is gated on kMGPipeP5eRunAheadReady, which is false until the
-            // integration commit: the bit is what ARMS the client, so every package before it
-            // lands inert.
-            capBits |= MG_Pipe::MGPipeRunAheadCapBitsFor(MG_Config::ActiveBackendType,
-                                                         kMGPipeP5eRunAheadReady);
+            // Each backend has an independent implementation-readiness gate.
+            // The runtime RunAhead knob can decline the feature, never create it.
+            const Bool runAheadReady = MG_Config::ActiveBackendType == BackendType::DirectVulkan
+                ? kMGPipeMagmaRunAheadReady : kMGPipeP5eRunAheadReady;
+            capBits |= MG_Pipe::MGPipeRunAheadCapBitsFor(MG_Config::ActiveBackendType, runAheadReady);
             session.SetCapabilityBits(capBits);
             session.SetBackend(loop.Backend());
 
