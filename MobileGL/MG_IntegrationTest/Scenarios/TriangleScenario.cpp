@@ -50,6 +50,7 @@
 #include "../Harness/PipeStatsWindow.h"
 #include "../Harness/ScenarioFixture.h"
 #include "../Harness/SplitLane.h"
+#include "../Harness/SplitRuntimePeek.h"
 #include "../Harness/WireLedgerChecks.h"
 
 #ifdef GLAPI
@@ -358,6 +359,10 @@ void main() { oColor = vec4(vColor, 1.0); }
         EXPECT_EQ(FirstGLError(), 0u);
         ExpectTriangleInterior(image, "green", "the drawing frame the counters are taken over");
         Gl().EndFrame();
+        // Run-ahead returns from Present before its stats window is published.
+        // Wait for this emitted Present, so a fast client cannot sample the
+        // preceding empty setup frame and falsely report an unarmed server.
+        ASSERT_TRUE(WaitForSplitAppliedForTesting(PeekSplitRuntime().emitSeq));
 
         const PipeStatsWindow::Window window = PipeStatsWindow::LastFromLaneLog();
         ASSERT_TRUE(window.found)
