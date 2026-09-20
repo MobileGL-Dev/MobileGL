@@ -460,8 +460,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(formatInfo.componentByteCount > 0,
                         "ExpandRgbSourceToRgba: invalid component size for expanded RGB format");
 
+        if (!source || texelSize.x() <= 0 || texelSize.y() <= 0 || !formatInfo.componentByteCount ||
+            formatInfo.componentByteCount > formatInfo.alphaBytes.size()) return false;
         const SizeT depth = static_cast<SizeT>(std::max(texelSize.z(), 1));
-        const SizeT pixelCount = static_cast<SizeT>(texelSize.x()) * static_cast<SizeT>(texelSize.y()) * depth;
+        const SizeT width = static_cast<SizeT>(texelSize.x());
+        const SizeT height = static_cast<SizeT>(texelSize.y());
+        if (height > std::numeric_limits<SizeT>::max() / width ||
+            depth > std::numeric_limits<SizeT>::max() / width / height) return false;
+        const SizeT pixelCount = width * height * depth;
+        if (pixelCount > std::numeric_limits<SizeT>::max() / (formatInfo.componentByteCount * 4) ||
+            sourceByteSize != pixelCount * formatInfo.componentByteCount * 3) return false;
         MOBILEGL_ASSERT(pixelCount > 0, "ExpandRgbSourceToRgba: invalid texel size (%d, %d, %d)",
                         texelSize.x(), texelSize.y(), texelSize.z());
         MOBILEGL_ASSERT(sourceByteSize == pixelCount * formatInfo.componentByteCount * 3,
