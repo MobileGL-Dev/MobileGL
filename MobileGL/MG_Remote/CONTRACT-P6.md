@@ -435,10 +435,21 @@ presentAckSerial}`; `eventRingFull`/`eventDropped` sit in a **separate** `aligna
 (`Ring.h:50`) while the other four are consumer-written — so the group has **mixed writers**, and any
 "single-writer progress block aliased over the watermark line" is unsound.
 
-`lk` therefore **regroups**: `submittedSeq` moves to the producer's own line (`Ring.h:45-50` states
-it is diagnostic and nobody waits on it), `eventRingFull`/`eventDropped` are promoted into the
-watermark group, and the group becomes a named `LinkProgress` member with per-field `offsetof`
-static_asserts.
+`lk` therefore **regroups**: `submittedSeq` moves to the producer's own line, beside `cmdHead`,
+which is the other thing the producer writes; what is left — the four consumer-written watermarks —
+becomes a named `LinkProgress` member with per-field `offsetof` static_asserts.
+
+> **Correction, found while `lk` was measuring its own blast radius.** An earlier revision of this
+> section, and of `ILink.h`, also promoted `eventRingFull`/`eventDropped` into the watermark group
+> and called the result single-writer. **Both were wrong.** `eventRingFull` has two writers: the
+> server latches it with `store(1)` when `SEG_EVENT` fills (`Transport/EventRing.h:140`) and the
+> **client clears it with an `exchange(0)` on every drain** (`:200`). Promoting it would put a
+> per-drain RMW by the client on the same cache line as `appliedSeq` — which the server
+> release-stores every 64 records and the client's spin predicate reads 10⁵–10⁶ times per frame.
+> That is new false sharing on the hottest line in the system, and it would land in exactly the
+> numbers this package's gate has to hold constant. The two flags stay in the doorbell/generation
+> group, where mixed writers already live beside `consumerParked`/`producerParked`, and cross the
+> seam through a separate `EventFlags()` accessor on its own line.
 
 It is free **today** — both peers are the same binary, enforced by the fingerprint — and a wire break
 the day a second build exists. It is **`lk`'s and not `c6`'s** because the rename blast radius is

@@ -99,26 +99,46 @@ namespace MobileGL::MG_Remote::Transport {
     // backwards move Fatal (Ring.cpp's AdvanceMonotonic). A stream link changes
     // only HOW a value arrives, never what it means.
     //
-    // WHY THESE SIX AND NOT THE WHOLE PAGE. RingControl's watermark cache line
-    // today holds {appliedSeq, submittedSeq, retiredSeq, completedFrameSerial,
-    // presentAckSerial}, and submittedSeq is PRODUCER-written (Ring.h:50,
-    // "Advanced by the PRODUCER after it publishes") while the other four are
-    // consumer-written - so the line has MIXED WRITERS and no single-writer
-    // block can be aliased over it as it stands. eventRingFull and
-    // eventDropped, which every park predicate on both sides must also see,
-    // sit a full cache line away in the doorbell/generation group. lk's regroup
-    // moves submittedSeq out to the producer's own line and promotes the two
-    // event flags in, so THIS struct becomes a named member of RingControl with
-    // per-field offsetof static_asserts. Free today, because both peers are the
-    // same binary and the fingerprint enforces it; a wire break the day a
-    // second build exists, which is why it is booked now rather than later.
+    // WHY THESE FOUR AND NOT THE WHOLE PAGE, AND WHY THE EVENT FLAGS ARE NOT
+    // HERE. RingControl's watermark cache line today holds {appliedSeq,
+    // submittedSeq, retiredSeq, completedFrameSerial, presentAckSerial}, and
+    // submittedSeq is PRODUCER-written (Ring.h:50, "Advanced by the PRODUCER
+    // after it publishes") while the other four are consumer-written - so the
+    // line has MIXED WRITERS as it stands and no single-writer block can be
+    // aliased over it. lk's regroup moves submittedSeq out to the producer's
+    // own line, beside cmdHead, which is the other thing the producer writes;
+    // what is left IS this struct, and it becomes a named member of
+    // RingControl with per-field offsetof static_asserts.
+    //
+    // THE TWO EVENT FLAGS ARE DELIBERATELY EXCLUDED, and an earlier draft of
+    // this header had them in and was wrong. eventRingFull has TWO writers:
+    // the server latches it with store(1) when SEG_EVENT fills
+    // (EventRing.h:140) and the CLIENT clears it with an exchange(0) on EVERY
+    // DRAIN (EventRing.h:200). Promoting it here would put a per-drain RMW by
+    // the client on the same cache line as appliedSeq - which the server
+    // release-stores every 64 records and the client's spin predicate reads
+    // 1e5-1e6 times per frame. That is new false sharing on the hottest line
+    // in the system, and it would land in exactly the numbers lk's gate has to
+    // hold constant. They stay in the doorbell/generation group, where mixed
+    // writers already live beside consumerParked/producerParked, and cross the
+    // seam through EventFlags() instead.
+    //
+    // Free to regroup TODAY, because both peers are the same binary and the
+    // fingerprint enforces it; a wire break the day a second build exists,
+    // which is why it is booked now rather than later.
     struct LinkProgress {
         std::atomic<std::uint64_t> appliedSeq;            // records applied
         std::atomic<std::uint64_t> retiredSeq;            // GPU finished
         std::atomic<std::uint64_t> completedFrameSerial;  // releases *RetiredTail / SEG_ADOPT
         std::atomic<std::uint64_t> presentAckSerial;      // returns present credit
-        std::atomic<std::uint32_t> eventRingFull;         // SEG_EVENT full, apply stopped
-        std::atomic<std::uint32_t> eventDropped;          // dropped lossy events
+    };
+
+    // The reverse channel's two flags. Separated from LinkProgress for the
+    // false-sharing reason above, not for a taxonomic one: both roles read
+    // eventRingFull in a park predicate, and both roles write it.
+    struct LinkEventFlags {
+        std::atomic<std::uint32_t> eventRingFull;  // server latches, client clears
+        std::atomic<std::uint32_t> eventDropped;   // server-only counter
     };
 
     // ---- the producer's handle ----------------------------------------------
@@ -196,6 +216,10 @@ namespace MobileGL::MG_Remote::Transport {
         // the returned pointer with no further virtual dispatch. Never null on
         // an attached link.
         virtual LinkProgress* Progress() = 0;
+
+        // The reverse channel's flags. A separate accessor, and a separate
+        // cache line, for the reason LinkEventFlags documents.
+        virtual LinkEventFlags* EventFlags() = 0;
 
         // The command-record arena (producer side) and cursor (consumer side).
         // Exactly one of the two is valid on a given peer.

@@ -72,6 +72,7 @@ namespace MobileGL::MG_Remote::Transport {
         LinkCapabilities Capabilities() const override;
 
         LinkProgress* Progress() override;
+        LinkEventFlags* EventFlags() override;
         LinkArena* RecordArena() override;
         LinkCursor* RecordCursor() override;
 
