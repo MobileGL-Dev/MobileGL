@@ -35,6 +35,8 @@
 #pragma once
 #include <Includes.h>
 
+#include <atomic>  // the device-lost latch is read off the GL thread
+
 #include <Config.h>
 #include <MG_Pipe/MGPipe.h>
 
@@ -63,6 +65,30 @@ namespace MobileGL::MG_Remote::Client {
     public:
         // Null until Start() succeeds; MG_Backend::Init() is the only caller of Start().
         static ClientSession* Active();
+
+        // P6 `dl` (CONTRACT-P6 5.3). THE DEVICE-LOST LATCH, and the two words that matter are
+        // SESSION-SCOPED and LATCH: it is set at most once per session and never cleared, because
+        // a session whose server died has nothing left to recover into. MOBILEGL_IPC_RESPAWN is
+        // where the recovery would go and it is a named refusal until some stage writes it.
+        //
+        // SET FROM Doorbell::PeerHungUp(), NEVER FROM A TIMEOUT. 5.4's whole point is that slow
+        // and dead are different states and must be told apart without a threshold: under P5e
+        // run-ahead a server one frame behind is the INTENDED steady state, so a latch armed by a
+        // deadline would fire on a healthy session under load. The descriptor answers instead.
+        //
+        // The static form answers false whenever no session is active, so monolith and the pull
+        // build get the honest answer with no branch of their own.
+        static Bool DeviceLost();
+
+        // Arms the latch and says why, once. Safe to call repeatedly and from any thread; only
+        // the first call logs.
+        void LatchDeviceLost(const char* why);
+
+        // The bell this session parks on, for the `dl` red-once ONLY. A test cannot otherwise
+        // ask the question the latch turns on - "did the peer hang up" is a fact about a
+        // descriptor, and the pair of tests that pin D5c has to be able to kill a server and
+        // then watch this object, not a side effect three layers up.
+        Transport::Doorbell* SelfDoorbellForTest() { return m_producer.SelfDoorbell(); }
 
         ~ClientSession();
 
@@ -414,6 +440,9 @@ namespace MobileGL::MG_Remote::Client {
         Transport::ReplySlotPool m_replies;
         Transport::ITransport* m_transport = nullptr;
         Bool m_started = false;
+        // Written by whichever thread first notices the hangup - the GL thread in the barrier,
+        // or the event pump - and read by glGetGraphicsResetStatus on the GL thread.
+        std::atomic<bool> m_deviceLost{false};
     };
 
     // One per process in P5, because P5 serves one context, and LEAKED AT EXIT like every other

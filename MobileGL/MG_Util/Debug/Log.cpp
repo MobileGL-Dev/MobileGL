@@ -92,12 +92,23 @@ namespace MobileGL {
                     // it is always started by a client that has already opened
                     // this path, and a truncate from the far side would delete
                     // the very startup lines a failed session needs.
+                    //
+                    // GUARDED, BECAUSE G1 MEASURES BYTES AND NOT INTENT. Only a disaggregated
+                    // build can ever have a second process on this path, so a pull build gains
+                    // nothing from the append - and it would pay for it in .text, which G1
+                    // requires to be unchanged. Measured: unguarded, the pull library's .text
+                    // moved 16 bytes with its symbol set identical, which is exactly the kind of
+                    // drift that is invisible unless somebody looks.
+#if MOBILEGL_BUILD_DISAGGREGATED
                     const char* role = std::getenv("MOBILEGL_IPC_ROLE");
                     const bool isSpawnedServer = role != nullptr && std::strcmp(role, "server") == 0;
                     if (!isSpawnedServer) {
                         if (FILE* truncate = std::fopen(logPath, "w")) std::fclose(truncate);
                     }
                     s_logFile = std::fopen(logPath, "a");
+#else
+                    s_logFile = std::fopen(logPath, "w");
+#endif
                 }
             }
 #endif

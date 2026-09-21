@@ -427,6 +427,30 @@ namespace MobileGL::MG_ConfigLoader {
             ipc.RoleSplitState = false;
         }
 
+        // P6 `dl` (CONTRACT-P6 5.3): MOBILEGL_IPC_RESPAWN IS A NAMED REFUSAL, NOT A NO-OP.
+        //
+        // The device-lost latch is deliberately one-way - a session whose server died has
+        // nothing to recover into, because every handle the client minted names an object in a
+        // process that no longer exists. Re-pushing the world onto a fresh server is the work
+        // this knob would turn on, and no stage has written it.
+        //
+        // Refused BY NAME rather than parsed and ignored, for the reason Config.h gives about
+        // the whole IPC family: an environment variable nothing consumes is indistinguishable
+        // from one that is consumed and does nothing, and an operator who set this one would
+        // otherwise conclude that recovery had been tried and had not helped.
+        {
+            String respawn;
+            QueryEnvVariable("MOBILEGL_IPC_RESPAWN", respawn, "");
+            if (!respawn.empty() && respawn != "0") {
+                MGLOG_E("Config: MOBILEGL_IPC_RESPAWN='%s' names a recovery NO STAGE HAS "
+                        "IMPLEMENTED. The device-lost latch is one-way on purpose: every handle "
+                        "this client minted names an object inside the server process, so a new "
+                        "server would have to be re-pushed the entire world before a single verb "
+                        "could land. This run will latch device-lost and stay there.",
+                        respawn.c_str());
+            }
+        }
+
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
         // One line, on the arm where these numbers decide behaviour, because every one of
         // them is a number a bug report has to quote.

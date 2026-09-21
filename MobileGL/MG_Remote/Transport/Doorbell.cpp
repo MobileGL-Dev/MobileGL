@@ -22,6 +22,22 @@
 
 // Same fallback as FdPassing.cpp: on macOS / BSD the protection is SO_NOSIGPIPE on the
 // socket, set in SocketDoorbell's constructor, not a per-send flag.
+// THE WITNESS'S `events`, and the whole reason it can watch a socket it must not read.
+//
+// POLLRDHUP is what Linux and bionic report when the PEER shuts down its writing end - the exact
+// fact the death witness wants - and asking for it alone means poll never reports POLLIN for that
+// descriptor, so unread control replies queued on it can neither wake this bell nor be consumed
+// from under SocketTransport's reassembler. POLLHUP / POLLERR / POLLNVAL arrive in revents whether
+// requested or not, so an 0 here would still catch a full close; POLLRDHUP only makes the
+// half-close case - the one a dying peer actually produces first - visible too.
+#if !defined(_WIN32)
+#if defined(POLLRDHUP)
+#define MOBILEGL_POLL_PEER_HANGUP POLLRDHUP
+#else
+#define MOBILEGL_POLL_PEER_HANGUP 0
+#endif
+#endif
+
 #if !defined(_WIN32) && !defined(MSG_NOSIGNAL)
 #define MSG_NOSIGNAL 0
 #endif
@@ -275,7 +291,7 @@ namespace MobileGL::MG_Remote::Transport {
             if (written < 0 && (errno == EPIPE || errno == ECONNRESET)) {
                 // The peer is gone: it can never ring back either, so latch it
                 // here too rather than waiting for a Park to discover it.
-                m_dead = true;
+                m_dead.store(true, std::memory_order_release);
                 return;
             }
             MGLOG_D("MG_Remote doorbell: send failed (errno=%d)", errno);
@@ -289,7 +305,7 @@ namespace MobileGL::MG_Remote::Transport {
         if (m_fd < 0) {
             return false;
         }
-        if (m_fd < 0 || m_dead) {
+        if (m_fd < 0 || m_dead.load(std::memory_order_acquire)) {
             return false;
         }
         const auto start = std::chrono::steady_clock::now();
@@ -302,10 +318,22 @@ namespace MobileGL::MG_Remote::Transport {
                 const long long remaining = static_cast<long long>(timeoutMs) - elapsed;
                 pollTimeout = remaining <= 0 ? 0 : static_cast<int>(remaining);
             }
-            struct pollfd pfd{};
-            pfd.fd = m_fd;
-            pfd.events = POLLIN;
-            const int ready = ::poll(&pfd, 1, pollTimeout);
+            // THE WITNESS ASKS FOR HANGUP AND NOTHING ELSE. POLLHUP/POLLERR/POLLNVAL are
+            // reported in revents whether or not they were requested, so an `events` of
+            // POLLRDHUP alone gets the peer's shutdown and never POLLIN - which is the whole
+            // point: the control socket legitimately carries unread REPLY bytes, and asking for
+            // readability there would make every queued reply a wakeup, spin this loop, and race
+            // SocketTransport's reassembler for the same bytes. Nothing is ever recv'd from it.
+            struct pollfd pfds[2]{};
+            pfds[0].fd = m_fd;
+            pfds[0].events = POLLIN;
+            const bool watching = m_witnessFd >= 0;
+            if (watching) {
+                pfds[1].fd = m_witnessFd;
+                pfds[1].events = MOBILEGL_POLL_PEER_HANGUP;
+            }
+            const int ready = ::poll(pfds, watching ? 2 : 1, pollTimeout);
+            struct pollfd& pfd = pfds[0];
             if (ready < 0) {
                 if (errno == EINTR) {
                     continue; // a signal is not a wakeup; keep the deadline
@@ -315,6 +343,20 @@ namespace MobileGL::MG_Remote::Transport {
             }
             if (ready == 0) {
                 return false; // timed out
+            }
+            // THE WITNESS FIRST, because a peer that is gone makes every other answer stale. It
+            // reports only hangup shapes by construction, so any revent on it IS the death.
+            if (watching && pfds[1].revents != 0) {
+                MGLOG_I("MG_Remote doorbell: the peer hung up (witness fd %d, revents=0x%X) - "
+                        "this is the DEATH FACT, taken from a descriptor and not from a "
+                        "deadline: a server one frame behind is the intended steady state and "
+                        "must never be mistaken for one that is gone (CONTRACT-P6 5.4)",
+                        m_witnessFd, static_cast<unsigned>(pfds[1].revents));
+                // THE CAUSE BEFORE THE FACT, so a reader that sees Dead() can never find
+                // PeerHungUp() still false and conclude "orderly teardown".
+                m_peerHungUp.store(true, std::memory_order_release);
+                m_dead.store(true, std::memory_order_release);
+                return false;
             }
             // revents has to be inspected, not just `ready > 0`. Once the peer
             // closes its end the descriptor is permanently poll-ready with
@@ -326,14 +368,14 @@ namespace MobileGL::MG_Remote::Transport {
             if ((pfd.revents & (POLLERR | POLLNVAL)) != 0) {
                 MGLOG_D("MG_Remote doorbell: fd %d unusable (revents=0x%X)", m_fd,
                         static_cast<unsigned>(pfd.revents));
-                m_dead = true;
+                m_dead.store(true, std::memory_order_release);
                 return false;
             }
             if ((pfd.revents & POLLIN) != 0) {
                 if (Drain() != 0) {
                     return true; // a real wakeup byte
                 }
-                if (m_dead) {
+                if (m_dead.load(std::memory_order_acquire)) {
                     return false; // EOF, not an event
                 }
                 // Ready but empty and still alive: someone else drained it.
@@ -341,7 +383,7 @@ namespace MobileGL::MG_Remote::Transport {
                 return true;
             }
             if ((pfd.revents & POLLHUP) != 0) {
-                m_dead = true;
+                m_dead.store(true, std::memory_order_release);
                 return false;
             }
             // Readiness with no bit we requested or recognise: there is
@@ -349,7 +391,7 @@ namespace MobileGL::MG_Remote::Transport {
             // poll this descriptor again.
             MGLOG_D("MG_Remote doorbell: fd %d ready with revents=0x%X", m_fd,
                     static_cast<unsigned>(pfd.revents));
-            m_dead = true;
+            m_dead.store(true, std::memory_order_release);
             return false;
         }
     }
@@ -368,7 +410,7 @@ namespace MobileGL::MG_Remote::Transport {
             if (got == 0) {
                 // Orderly shutdown on a stream socket: the peer is gone and
                 // will never ring again.
-                m_dead = true;
+                m_dead.store(true, std::memory_order_release);
                 return consumed;
             }
             if (errno == EINTR) {
@@ -378,13 +420,13 @@ namespace MobileGL::MG_Remote::Transport {
                 return consumed; // drained
             }
             MGLOG_D("MG_Remote doorbell: recv failed (errno=%d)", errno);
-            m_dead = true;
+            m_dead.store(true, std::memory_order_release);
             return consumed;
         }
     }
 
     void SocketDoorbell::Reset() {
-        if (m_fd < 0 || m_dead) {
+        if (m_fd < 0 || m_dead.load(std::memory_order_acquire)) {
             return;
         }
         (void)Drain();

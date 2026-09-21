@@ -18,6 +18,13 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ErrorState/ErrorInfo.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
+
+// GUARDED AT THE INCLUDE, not just around the call. This file compiles in the PULL build too,
+// and G1 requires that build's symbol set and .text to be byte-identical - a header that drags
+// in MG_Remote would change it whether or not any code path reaches the session.
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Remote/Client/ClientSession.h>
+#endif
 #include <MG_Util/Converters/GLToMG/BufferEnumConverter.h>
 #include <MG_Util/Converters/GLToMG/RenderStateEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/FramebufferEnumConverter.h>
@@ -2853,6 +2860,27 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     GLenum GetGraphicsResetStatus() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P6 `dl` (CONTRACT-P6 5.3): THE ONE GL-VISIBLE CONSEQUENCE OF A DEAD SERVER.
+        //
+        // Before this, "a dead server leaves the client silently DECLINE-ing every verb forever
+        // with glGetError clean" - the contract's own words, and the reason the latch is a
+        // package rather than carriage. An application that asks the robustness question has no
+        // other way to find out, because a DECLINE is indistinguishable from a verb that
+        // happened.
+        //
+        // GL_UNKNOWN_CONTEXT_RESET, not GUILTY or INNOCENT. Those two assign BLAME - guilty
+        // means this context's commands caused the reset, innocent means another context's did -
+        // and neither is knowable here: the server died for a reason that never crossed the
+        // wire, and it could as easily have been a driver fault as this client's draw. UNKNOWN is
+        // the spec's answer for exactly that, and it is the one that does not lie.
+        //
+        // WHOLLY INSIDE THE GUARD, including the include above. In a pull build this function is
+        // byte-for-byte what it was, which is what G1 measures.
+        if (MG_Remote::Client::ClientSession::DeviceLost()) {
+            return GL_UNKNOWN_CONTEXT_RESET;
+        }
+#endif
         // MobileGL does not implement robustness reset notification, so report GL_NO_ERROR
         // ("no reset detected"). Returning the generic stub's (GLenum)1 makes dEQP read a lost
         // device after every case (gl3cTestPackages.cpp:121) and, under the default

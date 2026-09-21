@@ -171,6 +171,17 @@ namespace MobileGL::MG_Remote::Transport {
         // bell that cannot die.
         virtual bool Dead() const { return false; }
 
+        // P6 `dl`: DEAD AND DEAD-BECAUSE-THE-PEER-DIED ARE NOT THE SAME FACT, and only the
+        // second one is a device loss. Dead() is also true after an ORDERLY teardown -
+        // CondVarDoorbell::Kill() is how Stop() wakes a parked applier, and the barrier reports
+        // SessionWait::ShutDown for that too. Latching device-lost from Dead() would therefore
+        // arm it on every clean exit.
+        //
+        // This says the peer HUNG UP: a descriptor whose far end only the peer held reported
+        // hangup. Nothing this side did can produce it. False for every doorbell that has no
+        // peer process, which is what makes the whole latch a no-op under inproc and monolith.
+        virtual bool PeerHungUp() const { return false; }
+
         // How many Wait() calls on this bell exhausted their spin budget and
         // really blocked. THE WAIT LEDGER'S RAW READING: the pair (waits, parks)
         // is what says whether the spin budget is sized for the workload, and it
@@ -419,9 +430,29 @@ namespace MobileGL::MG_Remote::Transport {
         void Notify() override;
         bool Park(std::uint32_t timeoutMs) override;
         void Reset() override;
-        bool Dead() const override { return m_dead; }
+        bool Dead() const override { return m_dead.load(std::memory_order_acquire); }
+        bool PeerHungUp() const override { return m_peerHungUp.load(std::memory_order_acquire); }
 
         int Fd() const { return m_fd; }
+
+        // P6 `dl` (CONTRACT-P6 D5c). THE DESCRIPTOR THAT ANSWERS "IS THE PEER STILL THERE",
+        // which for this object can never be the one it parks on.
+        //
+        // The client parks on clientBell[0] and rings ITSELF through clientBell[1], so it holds
+        // BOTH ends of that socketpair. EOF arrives only when every writer closes and the client
+        // is one of them, so that descriptor cannot hang up no matter what happens to the server.
+        // A bell that can wake itself is a bell that cannot hear a death. Measured: a server that
+        // died on its first Clear left the client waiting out the full 120 s barrier and
+        // reporting Fatal{BarrierTimeout} - the wrong diagnosis, two minutes late.
+        //
+        // The witness is a descriptor whose FAR END ONLY THE PEER HOLDS - in practice the control
+        // socket. It is NOT OWNED here and is NEVER READ FROM: Park adds it to the poll set with
+        // `events` asking for hangup ALONE, so a control reply sitting unread in its queue cannot
+        // wake the bell and cannot be consumed from under SocketTransport's reassembler. What it
+        // contributes is exactly one fact, and only once: the peer is gone.
+        //
+        // -1 disables it, which is what every bell that has no peer socket uses.
+        void SetDeathWitness(int fd) { m_witnessFd = fd; }
 
     private:
         // Consumes every queued wakeup byte and returns how many. Latches
@@ -432,9 +463,16 @@ namespace MobileGL::MG_Remote::Transport {
 
         int m_fd;       // polled
         int m_notifyFd; // written; equals m_fd in the single-fd (cross-process) form
+        int m_witnessFd = -1; // polled for hangup only; NOT owned, NEVER read
+        // Set ONLY by the witness branch of Park, never by Kill or by our own EOF. See
+        // Doorbell::PeerHungUp for why the distinction is the whole design.
+        std::atomic<bool> m_peerHungUp{false};
         std::uint8_t m_code;
         bool m_ownsFd;
-        bool m_dead = false;
+        // ATOMIC BECAUSE THE LATCH READS IT ACROSS THREADS. Park() runs on whichever thread is
+        // waiting; the device-lost latch is consulted from the GL thread and from
+        // glGetGraphicsResetStatus. It was a plain bool while Dead() had no cross-thread reader.
+        std::atomic<bool> m_dead{false};
     };
 #endif
 

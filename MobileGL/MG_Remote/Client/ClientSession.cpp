@@ -466,6 +466,27 @@ namespace MobileGL::MG_Remote::Client {
     // monolith answer. Every call that PRESUMES a session aborts instead.
     ClientSession* ClientSession::Active() { return g_active; }
 
+    Bool ClientSession::DeviceLost() {
+        const ClientSession* session = Active();
+        return session != nullptr && session->m_deviceLost.load(std::memory_order_acquire);
+    }
+
+    void ClientSession::LatchDeviceLost(const char* why) {
+        // exchange, so the log line is written EXACTLY once however many waits notice the same
+        // hangup at the same moment - and there will be several: the barrier, the control wait
+        // and the event pump can all be in flight when the server goes.
+        if (m_deviceLost.exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+        MGLOG_E("MGPipe: DEVICE LOST - %s. The server process is gone; every verb from here is "
+                "DECLINED and glGetGraphicsResetStatus reports GL_UNKNOWN_CONTEXT_RESET. This is "
+                "latched from the peer's HANGUP and not from any deadline (CONTRACT-P6 5.4): a "
+                "server one frame behind is P5e's intended steady state and must never read as a "
+                "dead one. There is no recovery - MOBILEGL_IPC_RESPAWN is the stage that would "
+                "add one and it is refused by name until then.",
+                why == nullptr ? "the peer hung up" : why);
+    }
+
     ClientSession& ClientSessionInstance() {
         // Leak at exit, deliberately and per ID-8, exactly as ServerSessionInstance does.
         static ClientSession* instance = new ClientSession{};
@@ -835,7 +856,20 @@ namespace MobileGL::MG_Remote::Client {
             //   fds[5] our park end
             //   fds[6] ring OURSELVES
             m_socketPeerBell = MakeUnique<Transport::SocketDoorbell>(-1, fds[4], 1, true);
-            m_socketSelfBell = MakeUnique<Transport::SocketDoorbell>(fds[5], fds[6], 1, true);
+            // Built into a TYPED pointer first: the witness is SocketDoorbell's, and the member
+            // is a Doorbell so that the inproc path can put a CondVarDoorbell in it.
+            auto selfBell = MakeUnique<Transport::SocketDoorbell>(fds[5], fds[6], 1, true);
+
+            // `dl`: THE DEATH WITNESS, and it has to be a descriptor this side does not also
+            // write to. Our own bell is a socketpair we hold BOTH ends of - slot 5 to park on,
+            // slot 6 to ring ourselves - so it can never hang up however dead the server is. The
+            // control socket's far end is held only by the server, so its hangup IS the death.
+            //
+            // Passing the fd rather than the transport keeps the ownership honest: the bell polls
+            // it for hangup alone and never reads it, and SocketTransport goes on owning and
+            // closing it. CONTRACT-P6 D5c.
+            selfBell->SetDeathWitness(m_socketTransport->StreamFd());
+            m_socketSelfBell = Move(selfBell);
         }
 
         // `cp`: from here the twelve EGL forwarders cross the socket instead of
@@ -896,6 +930,32 @@ namespace MobileGL::MG_Remote::Client {
             const MobileGLResult received =
                 ReceiveEnvelope(*m_transport, reply, kRemoteControlTimeoutMs);
             if (received != MOBILEGL_OK) {
+                // `dl` (D5b): THE EXPIRY IS NOT FATAL AND IT IS NOT ONE ANSWER. The transport
+                // already distinguishes the two states this wait can end in, and the contract
+                // says they must stay distinguished without a threshold:
+                //
+                //   TRANSPORT_CLOSED - the control socket returned EOF. Only the server held the
+                //     far end, so it is gone. That is the device-loss fact, taken from a
+                //     descriptor.
+                //   TIMEOUT - nothing arrived in the budget, and the socket is still open. The
+                //     peer is ALIVE AND SILENT: wedged, frozen, SIGSTOP'd, or merely slower than
+                //     the budget. 5.4 forbids calling that a death, so it gets a NAME instead.
+                //     The bell is asked anyway, because a hangup noticed by the ring side counts
+                //     here too.
+                if (received == MOBILEGL_ERR_TRANSPORT_CLOSED) {
+                    LatchDeviceLost("the control stream reached EOF while a reply was owed");
+                } else if (const Transport::Doorbell* bell = m_producer.SelfDoorbell();
+                           bell != nullptr && bell->PeerHungUp()) {
+                    LatchDeviceLost("a control reply timed out and the peer had hung up");
+                } else {
+                    MGLOG_E("MG_Remote client: the server is ALIVE BUT SILENT - no SurfaceReply "
+                            "for %s seq %llu within %u ms and the control stream is still open. "
+                            "This is NOT device loss (CONTRACT-P6 5.4): a frozen or merely slow "
+                            "peer produces no hangup, and only a hangup may arm the latch. If "
+                            "this repeats, the server is wedged rather than gone.",
+                            Server::SurfaceControlOpName(frame.kind),
+                            static_cast<unsigned long long>(frame.seq), kRemoteControlTimeoutMs);
+                }
                 MGLOG_E("MG_Remote client: no SurfaceReply for seq %llu within %u ms (rc=%d)",
                         static_cast<unsigned long long>(frame.seq), kRemoteControlTimeoutMs,
                         static_cast<int>(received));
@@ -1418,6 +1478,15 @@ namespace MobileGL::MG_Remote::Client {
         const Transport::SessionWait wait =
             WaitForAppliedBudget(m_producer, m_events, seq, waitBudgetMs);
         if (wait == Transport::SessionWait::ShutDown) {
+            // `dl`: SHUTDOWN IS TWO DIFFERENT EVENTS AND ONLY ONE IS A DEVICE LOSS. Stop() kills
+            // this same bell to wake a parked applier, so an orderly exit arrives here too - and
+            // latching on Dead() alone would arm the device-lost flag on every clean teardown.
+            // PeerHungUp() is true only when a descriptor whose far end ONLY THE SERVER held
+            // reported hangup, which nothing this side can cause.
+            if (const Transport::Doorbell* bell = m_producer.SelfDoorbell();
+                bell != nullptr && bell->PeerHungUp()) {
+                LatchDeviceLost("the barrier woke on a peer that had hung up");
+            }
             // The doorbell died: the server went away. The only thing that returns from a
             // kWaitForever park, and therefore the only way a client blocked in the barrier
             // survives a server that is gone. It is teardown, not a server fault - so the answer
@@ -1564,6 +1633,12 @@ namespace MobileGL::MG_Remote::Client {
         const Transport::SessionWait wait =
             WaitForAppliedBudget(m_producer, m_events, target, kBarrierTimeoutMs);
         if (wait == Transport::SessionWait::ShutDown) {
+            // `dl`: the same two-events distinction the verb barrier makes. Only a peer that
+            // HUNG UP is a device loss; Stop() reaches this path too.
+            if (const Transport::Doorbell* bell = m_producer.SelfDoorbell();
+                bell != nullptr && bell->PeerHungUp()) {
+                LatchDeviceLost("a forced run-ahead wait woke on a peer that had hung up");
+            }
             // The doorbell died: teardown, not a fault - the same answer EmitAndWaitTails
             // gives, and for the same reason.
             MGLOG_E("MG_Remote client: the forced wait for %s woke on a dead doorbell; the "

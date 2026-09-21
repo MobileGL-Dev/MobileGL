@@ -293,8 +293,17 @@ parsed **nowhere** (only a comment at `Config.h:466`). Today a dead server leave
 silently `DECLINE`-ing every verb forever with `glGetError` clean.
 
 **It is a package (`dl`), not carriage.** The latch is session-scoped and set from
-`Doorbell::Dead()`, **never from a timeout**. `MOBILEGL_IPC_RESPAWN=1` is a named refusal until some
-stage implements the re-push.
+`Doorbell::PeerHungUp()` — D5c amends "`Dead()`" here, and §5.4's block says why — **never from a
+timeout**. `MOBILEGL_IPC_RESPAWN=1` is a named refusal until some stage implements the re-push.
+
+**LANDED.** `ClientSession::DeviceLost()` / `LatchDeviceLost()`, armed at the verb barrier, at the
+forced run-ahead wait and at the control-reply wait, and read by `GetGraphicsResetStatus`, which
+now answers **`GL_UNKNOWN_CONTEXT_RESET`**. Not `GUILTY` or `INNOCENT`: those assign blame, and the
+server died for a reason that never crossed the wire — it could as easily have been a driver fault
+as this client's draw. The consult and its include sit wholly inside `MOBILEGL_BUILD_DISAGGREGATED`;
+G1 re-measured after it, **0 symbol diff and `.text` unchanged at `0xa52203`**. That measurement
+also caught an unrelated 16-byte drift the guards did not: P6's O_APPEND log-sink fix was compiled
+into the pull build too, and is now guarded for the same reason.
 
 ### 5.4 Slow, dead, and frozen are three states
 
@@ -332,6 +341,24 @@ diagnostic. Packages: `cp` (a), `dl` (b).
 > already exactly that and needs no new descriptor. The fix does not belong to `sm`: holding both
 > ends is required for self-notification and is not the defect — assuming one descriptor could
 > answer both questions is.
+>
+> **LANDED.** `SocketDoorbell::SetDeathWitness(fd)`; the client hands it
+> `SocketTransport::StreamFd()`. The witness enters the poll set with `events = POLLRDHUP` **and
+> nothing else**, which is what lets it watch a socket it must never read: `POLLHUP`/`POLLERR`/
+> `POLLNVAL` arrive in `revents` unrequested, so the hangup is seen while `POLLIN` never is — a
+> control reply queued on that descriptor can neither wake the bell nor be consumed from under
+> `SocketTransport`'s reassembler. Measured: `kill -9` on the server is noticed in **0.01 s**
+> against a 120 000 ms barrier, and with the witness removed the same test takes the full 2 s
+> retry budget and fails naming this paragraph.
+>
+> **`Dead()` AND `PeerHungUp()` ARE TWO FACTS, and only the second may arm the latch.** `Park`
+> sets `m_dead` for `POLLERR`, `POLLNVAL` and unrecognised `revents` as well — each a fault in
+> *this* process's descriptor — and `CondVarDoorbell::Kill()` sets it on every orderly `Stop()`.
+> A latch taken from `Dead()` would report a lost GPU for a local fd bug and a context reset for
+> every clean exit. `ADeadBellIsNotAlwaysAHungUpPeer` is the red-once for the distinction;
+> `AnOrderlyStopIsNotADeviceLoss` is **not** — it stays green under the collapse, because under
+> spawn the self bell is a `SocketDoorbell` and `Stop()` never kills one. That was found by
+> running the falsification rather than by reading the code.
 
 ---
 

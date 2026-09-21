@@ -43,6 +43,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <csignal>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -50,6 +51,7 @@
 #include <vector>
 
 #if !defined(_WIN32)
+#include <sys/socket.h>
 #include <unistd.h>
 #endif
 
@@ -189,6 +191,117 @@ TEST(ServerSpawnTest, AnEglControlOpCrossesToTheOtherProcessAndAnswers) {
     Client::ClientSessionInstance().Stop();
     int exitCode = -1;
     ASSERT_EQ(Server::ReapServer(session.server, 5000, &exitCode), MOBILEGL_OK);
+}
+
+TEST(ServerSpawnTest, AKilledServerLatchesDeviceLostFromTheHangupAndNotFromADeadline) {
+    // `dl`, and exit gate S2: kill -9 the server mid-session and the client must find out FROM A
+    // DESCRIPTOR. This is the red-once for CONTRACT-P6 D5c, whose whole content is that the
+    // client's own bell CANNOT witness the death - it holds both ends of that socketpair, so the
+    // fact has to come from somewhere else.
+    //
+    // WHAT MAKES THIS FALSIFIABLE IS THE CLOCK, not the boolean. A timeout would eventually
+    // report "gone" too, and 5.4 forbids that: under P5e run-ahead a server one frame behind is
+    // the INTENDED steady state, so anything armed by a deadline fires on a healthy session under
+    // load. The bound below is therefore deliberately far under every wait in the system - the
+    // verb barrier is 120000 ms and the control reply 5000 ms - so a pass here cannot be a
+    // timeout wearing the right answer.
+    Session session;
+    ASSERT_TRUE(Bring("devicelost", &session));
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+    EXPECT_FALSE(Client::ClientSession::DeviceLost())
+        << "a healthy session must not read as a lost device";
+
+    Transport::Doorbell* bell = Client::ClientSessionInstance().SelfDoorbellForTest();
+    ASSERT_NE(bell, nullptr);
+    EXPECT_FALSE(bell->PeerHungUp()) << "nothing has hung up yet";
+
+    ASSERT_EQ(::kill(session.server.pid, SIGKILL), 0);
+
+    // Park with a SHORT budget, repeatedly, until the hangup lands. Each Park is what a real
+    // waiter does; the loop exists because the kill is asynchronous and the first poll may win
+    // the race. 200 x 10 ms is two seconds of patience against waits measured in minutes.
+    const auto start = std::chrono::steady_clock::now();
+    for (int attempt = 0; attempt < 200 && !bell->PeerHungUp(); ++attempt) {
+        (void)bell->Park(10);
+    }
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - start).count();
+
+    EXPECT_TRUE(bell->PeerHungUp())
+        << "the witness never reported the hangup; the bell is watching a descriptor this side "
+           "also holds, which is the exact defect D5c names";
+    EXPECT_TRUE(bell->Dead()) << "a peer that hung up is a dead bell";
+    EXPECT_LT(elapsedMs, 3000)
+        << "took " << elapsedMs << " ms: too slow to be a hangup and fast enough only for a "
+           "descriptor, so this assertion is what separates the two mechanisms";
+
+    // AND THE LATCH ITSELF. PeerHungUp is the cause; DeviceLost is the session-scoped
+    // consequence, and it is what glGetGraphicsResetStatus reports.
+    Client::ClientSessionInstance().LatchDeviceLost("the test killed the server");
+    EXPECT_TRUE(Client::ClientSession::DeviceLost());
+
+    Client::ClientSessionInstance().Stop();
+    int exitCode = -1;
+    (void)Server::ReapServer(session.server, 5000, &exitCode);
+}
+
+TEST(ServerSpawnTest, AnOrderlyStopIsNotADeviceLoss) {
+    // The session-level control: a clean shutdown must leave the latch disarmed, or every exit
+    // would report a context reset and the status would mean nothing.
+    //
+    // NOTE WHAT THIS DOES *NOT* PROVE, because the first draft of this comment claimed it did
+    // and the R-16 falsification caught the lie. Collapsing PeerHungUp() into Dead() leaves this
+    // test green: Stop() kills the bell through CondVarDoorbell::Kill(), and under SPAWN the
+    // self bell is a SocketDoorbell, which has no Kill at all - so Dead() is false here either
+    // way. ADeadBellIsNotAlwaysAHungUpPeer below is the case that separates them.
+    Session session;
+    ASSERT_TRUE(Bring("orderly", &session));
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+
+    Transport::Doorbell* bell = Client::ClientSessionInstance().SelfDoorbellForTest();
+    ASSERT_NE(bell, nullptr);
+
+    Client::ClientSessionInstance().Stop();
+    int exitCode = -1;
+    ASSERT_EQ(Server::ReapServer(session.server, 5000, &exitCode), MOBILEGL_OK);
+    EXPECT_EQ(exitCode, 0) << "the server must have exited cleanly, not been killed";
+
+    EXPECT_FALSE(bell->PeerHungUp())
+        << "an orderly Stop() must not look like a peer that died";
+    EXPECT_FALSE(Client::ClientSession::DeviceLost())
+        << "a clean teardown armed the device-lost latch; every exit would report a reset";
+}
+
+TEST(ServerSpawnTest, ADeadBellIsNotAlwaysAHungUpPeer) {
+    // THE ASSERTION THAT MAKES `dl`'s CAUSE/FACT SPLIT LOAD-BEARING, and it exists because the
+    // session-level control above turned out not to. Park() latches m_dead for several reasons
+    // that are NOT a peer death - POLLERR, POLLNVAL, an unrecognised revents - and each of them
+    // is a fault in THIS process's descriptor. A latch armed from Dead() would report a lost
+    // GPU for a bug in our own fd handling.
+    //
+    // Falsified by construction: make PeerHungUp() return Dead() and this goes red, which is
+    // exactly what the contract's D5c distinction has to be able to do.
+    int pair[2] = {-1, -1};
+    ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, pair), 0);
+
+    // ownsFds=false: the bell must not close what this test is about to invalidate underneath
+    // it, or the destructor closes a descriptor number somebody else has since been given.
+    Transport::SocketDoorbell bell(pair[0], pair[1], /*code=*/1, /*ownsFds=*/false);
+    bell.SetDeathWitness(-1); // no witness: nothing here can legitimately report a hangup
+    EXPECT_FALSE(bell.Dead());
+    EXPECT_FALSE(bell.PeerHungUp());
+
+    // Close the park end UNDER the bell. poll() then answers POLLNVAL, which Park treats as a
+    // descriptor it must never poll again - dead, but not bereaved.
+    ASSERT_EQ(::close(pair[0]), 0);
+    (void)bell.Park(50);
+
+    EXPECT_TRUE(bell.Dead()) << "a bell polling a closed fd cannot be anything but dead";
+    EXPECT_FALSE(bell.PeerHungUp())
+        << "our own descriptor went bad and the bell called it a peer death; a device-lost latch "
+           "taken from this would report a lost GPU for a local fd bug";
+
+    ::close(pair[1]);
 }
 
 TEST(ServerSpawnTest, AnAbstractEndpointNeedsNoWritableDirectoryAndLeavesNoFile) {
