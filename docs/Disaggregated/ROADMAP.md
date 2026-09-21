@@ -1,6 +1,6 @@
 # MGPipe 路线图
 
-> 状态：**P0、P0.5、P1、P2、P3a、P4a、P5、P5b、P5c、P5d、P5e、P5f 已收官**。P5f 于 2026-09-20 完成主机门、Redmi 六个 clean-boot 臂、跨模型族审查及修复验证；最终验收代码为 WSL `cfca93c7885fd8db1e881f91189ba59090ae9c52`（Windows `c42577a4` 等价）。证据见 [`notes/p5f/close-report.md`](notes/p5f/close-report.md)、[`close-review.md`](notes/p5f/close-review.md)、[`device-report.md`](notes/p5f/device-report.md)。**P6 的 P5f 前提已解除，a6 / c6 / spawn 实施尚未开始**。逐门数字、主分支合入记录和下一步见 [`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md) 与收官报告；设计见 `ARCHITECTURE.md`。P5e 的历史性能与 E1 对照债保留在阶段行、[`P5E-RUNAHEAD.md`](P5E-RUNAHEAD.md) 和 `MEASUREMENTS.md`，不由 P5f 的新对照代为关闭。
+> 状态：**P0、P0.5、P1、P2、P3a、P4a、P5、P5b、P5c、P5d、P5e、P5f 已收官**。P5f 于 2026-09-20 完成主机门、Redmi 六个 clean-boot 臂、跨模型族审查及修复验证；最终验收代码为 WSL `cfca93c7885fd8db1e881f91189ba59090ae9c52`（Windows `c42577a4` 等价）。证据见 [`notes/p5f/close-report.md`](notes/p5f/close-report.md)、[`close-review.md`](notes/p5f/close-review.md)、[`device-report.md`](notes/p5f/device-report.md)。**P6 的 P5f 前提已解除，a6 / c6 / spawn 实施尚未开始**。逐门数字、主分支合入记录和下一步见 [`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md) 与收官报告；设计见 `ARCHITECTURE.md`。P5e 的历史性能与 E1 对照债保留在阶段行、[`P5E-RUNAHEAD.md`](P5E-RUNAHEAD.md) 和 `MEASUREMENTS.md`，不由 P5f 的新对照代为关闭。**CI / inproc 功能补齐已收官（2026-09-21）**：拆分主产物 + inproc 主验收、完整 retrace 双 transport、18 项 CI 门、双 ABI APK / AVD 全绿并合入 `feat/disaggregated`（`e1bf3677`），见 `CURRENT_STAGE_PROGRESS.md` §2.8。
 
 > **P5f 后续 Magma run-ahead 已完成**（`194382c9`，2026-09-20）：主机真实排队、credit、负控及 Vulkan 同步验证通过，Redmi 同包 Magma 开/关与 GLES 三臂 FCL 世界实测通过。见 [报告](notes/p5f/magma-runahead.md)。P6 / P7 全阶段状态不因此改变。
 
@@ -111,6 +111,7 @@ P5c 当时移交的对象类 BARRIER-PULLED、transport registry 前端键、EGL
 - **P5 出口（2026-09-16）**：缩减路径首个 IPC 帧；最终全门在 E3(a) 停止；红米四臂的 split 均停在索引 draw，barrier tax 未测（归 P5b）。
 - **P5b 出口（2026-09-16，已达成）**：主机全门 `348d22a4` complete；79 trace 72/6/1；设备源头 `82683d4a`（APK `p5bcodex2`）Redmi 正确性 8/8——四条 A/B trace 双后端首次在设备上 inproc 渲染；barrier tax 首测 split−push 逐线程 CPU p50 +5.9% – +18.2%。
 - **P5f 出口（2026-09-20）**：双块和 strict 空棘轮、逐帧 rsp=0、零 BARRIER_PULLED、主机全门、异模型族审查修复和 Redmi 六 clean-boot 臂全部完成；P6 前提解除，实施未开始。
+- **CI / inproc 收尾出口（2026-09-21）**：`feat/disaggregated` 主产物拆分编译 + inproc 主验收全绿——unit 2328 零失败、`integration-gpu` 双 transport 各 1455 零失败、retrace 77 例 monolith 77/77 且 inproc 的唯一间歇项（`bsl-esc-menu-854` DirectVulkan，lavapipe 固有 texture-handle 注册停顿越过旧 30 s barrier 预算）在预算修正为 120 s 后隔离 10/10 绿、18 项 CI 门全绿、双 ABI APK 与 AVD 生命周期验证通过；合入头 `e1bf3677`，最终矩阵以远端 CI 为准。
 - 仍是方向、不据此伪造新日历：全功能 split（P8 之后）、纯度门在非 verify 构建上转绿（P13）。
 
 再基线检查点仅剩一条：**P7 中点完成子系统 < 40% 立即重定基线**（P3a 的检查点发现不了 Magma 特有的超期）。
@@ -127,7 +128,7 @@ P5c 当时移交的对象类 BARRIER-PULLED、transport registry 前端键、EGL
 | ABI fingerprint | 不混 segment sizes；改变 8/32/16 MiB + 256 KiB ledger 时仍欠这项 |
 | 默认 32 MiB staging | 目标负载单次 128 MiB 上传装不进默认 stage；**内容侧分块已落地**（buffer 范围走查 `1e7c372e`、纹理整宽 slab `9469d48e`，预算 `MGPipeStageChunkBytes()` = 默认 segment/4 = 8 MiB），故普查 / Redmi 的显式 256 MiB profile 不再是这两条路径的必需；未接入分片的 record 类型与专用 carrier 仍归 P8（开放问题 11） |
 | P5b 的 inproc 依赖 | 历史的 scoped client binding、mip registry 查询与 FBO death mailbox 已经 P5c/P5f 改为记录、句柄和控制/事件路径；P6 核验并装配已有载体，不再重做这些迁移 |
-| 未迁移与仿真路径 | 15 个 class-C 槽（query / sync 尾 / `GetTexImage` / `SetSwapInterval`）→ P9 / P10；client vertex arrays、multi-draw client indices、RGB 三通道 CPU mip、renderbuffer copy endpoint、未绑定 named clear、`texture-remint-pull` 仿真保留具名拒绝 → P8 / P9；Magma split compute / image 的“82 个错答”是 P5b 历史普查计数，不是当前失败清单；P5f 后续已补应用 buffer consumers 与 Android 旋转 blit，Magma inproc 已能运行所测 MC 世界；后续 run-ahead 已完成（[报告](notes/p5f/magma-runahead.md)）；XFB、部分不对齐范围、placeholder/native-format 及进一步性能工作仍归 P7（[报告](notes/p5f/magma-inproc-fix.md)） | **P5e 补**：client vertex arrays 在 run-ahead 下是**具名拒绝**（ID-82，`Fatal{UnmigratedVerb, "DrawArrays+CLIENT_ARRAYS"}`），并有自己的预期红车道 `integration-clientarrays-split`（ID-134）；staging 仍归 P8
+| 未迁移与仿真路径 | 15 个 class-C 槽（query / sync 尾 / `GetTexImage` / `SetSwapInterval`）→ P9 / P10；~~client vertex arrays~~（已实现：`beba0256` 起 wire 复制到 owned buffer 并保留 baseVertex/baseInstance/drawID，本轮补齐 monolith 臂 `62bfe461..e258a822`）、multi-draw client indices、RGB 三通道 CPU mip、renderbuffer copy endpoint、未绑定 named clear、`texture-remint-pull` 仿真保留具名拒绝 → P8 / P9；Magma split compute / image 的“82 个错答”是 P5b 历史普查计数，不是当前失败清单；P5f 后续已补应用 buffer consumers 与 Android 旋转 blit，Magma inproc 已能运行所测 MC 世界；后续 run-ahead 已完成（[报告](notes/p5f/magma-runahead.md)）；XFB、部分不对齐范围、placeholder/native-format 及进一步性能工作仍归 P7（[报告](notes/p5f/magma-inproc-fix.md)） | **P5e 补 → CI 收尾更正**：client vertex arrays 曾是 run-ahead 下的具名拒绝（ID-82）与预期红车道 `integration-clientarrays-split`（ID-134）；`beba0256` 起已实现，`347bb90c` 已把该车道翻转为**硬绿门**并纳入主 GPU/split 标签，本轮补齐 monolith 臂（`62bfe461..e258a822`）；staging 仍归 P8
 | E2 wire 内容控制 | draw-drop 是 OpenRA 的有效控制（758 draws，SSIM 0.000036）；clear-drop 被全屏 overdraw 掩盖，不能作控制 |
 | max record bytes | 实测 reduced / OpenRA `maxrec=784 B`，默认 cap 4 MiB；只代表所测负载，后续索引 / indirect 尾仍须记录 |
 | 树外脚本 | 普查跑器、`wsl_p5_gate.sh`、Redmi 定频行都在 `~/w7/notes/`，git merge 不会传播 |
