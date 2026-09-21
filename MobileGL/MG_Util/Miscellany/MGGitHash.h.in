@@ -2,3 +2,12 @@
 
 #define GIT_COMMIT_HASH_SHORT "@GIT_COMMIT_HASH_SHORT@"
 #define GIT_COMMIT_HASH_FULL  "@GIT_COMMIT_HASH_FULL@"
+
+// CONTRACT-P6 4.2. A SECOND PAIR, because the two above are application-visible through
+// glGetString(GL_VERSION) and may not move. These are consumed by the ABI fingerprint alone.
+//
+// PRESENT is not "VALUE is non-empty": it is the build system's own answer to whether it could
+// determine a commit at all. A build that cannot say so reports 0 and the handshake treats that
+// as a distinct input rather than agreeing with every other stampless build in the world.
+#define MOBILEGL_BUILD_STAMP_VALUE   "@MOBILEGL_BUILD_STAMP_VALUE@"
+#define MOBILEGL_BUILD_STAMP_PRESENT @MOBILEGL_BUILD_STAMP_PRESENT@

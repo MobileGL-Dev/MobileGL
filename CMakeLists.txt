@@ -185,14 +185,60 @@ if (MSVC)
 endif()
 
 # Generate MGGitHash.h
+#
+# RESULT_VARIABLE, WHICH THIS CALL DID NOT HAVE (CONTRACT-P6 4.2). Without it a failed
+# `git rev-parse` yields "" and nothing says so. Verified live: building this worktree from WSL
+# produces an EMPTY hash, because the worktree's `.git` is a file holding a WINDOWS path that
+# WSL's git cannot resolve - so two builds from different commits got IDENTICAL ABI
+# fingerprints and the stamp silently stopped doing its documented job.
 execute_process(
     COMMAND git rev-parse HEAD
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     OUTPUT_VARIABLE GIT_COMMIT_HASH_FULL
     OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE MOBILEGL_GIT_STAMP_RESULT
+    ERROR_QUIET
 )
 
 string(SUBSTRING "${GIT_COMMIT_HASH_FULL}" 0 7 GIT_COMMIT_HASH_SHORT)
+
+# --- the BUILD STAMP, and why it is a second pair rather than a fix to the first -------------
+#
+# GIT_COMMIT_HASH_SHORT MAY NOT MOVE. It is baked into glGetString(GL_VERSION)
+# (MG_Impl/GLImpl/Getter/GL_Getter.cpp), so redefining it changes an APPLICATION-VISIBLE GL
+# string and the pull build's .rodata - a behaviour leak and a G1 break at once. The handshake
+# gets its own pair instead, consumed only by the ABI fingerprint, which no pull build compiles.
+#
+# PRESENT IS A FIRST-CLASS INPUT, not the emptiness of VALUE. "this build has no stamp" and
+# "this build's stamp is the empty string" are different claims, and a fingerprint that could
+# not tell them apart is how two unrelated builds agreed in the first place.
+#
+# -DMOBILEGL_BUILD_STAMP=<anything> (or the environment variable) overrides, because a tree git
+# cannot read is not always a tree whose commit is unknown - CI has ${GITHUB_SHA} in hand.
+set(MOBILEGL_BUILD_STAMP "" CACHE STRING "Explicit ABI-fingerprint build stamp when git cannot be read")
+set(MOBILEGL_BUILD_STAMP_VALUE "")
+if(NOT "${MOBILEGL_BUILD_STAMP}" STREQUAL "")
+    set(MOBILEGL_BUILD_STAMP_VALUE "${MOBILEGL_BUILD_STAMP}")
+elseif(NOT "$ENV{MOBILEGL_BUILD_STAMP}" STREQUAL "")
+    set(MOBILEGL_BUILD_STAMP_VALUE "$ENV{MOBILEGL_BUILD_STAMP}")
+elseif(MOBILEGL_GIT_STAMP_RESULT EQUAL 0 AND NOT "${GIT_COMMIT_HASH_FULL}" STREQUAL "")
+    set(MOBILEGL_BUILD_STAMP_VALUE "${GIT_COMMIT_HASH_FULL}")
+endif()
+
+if("${MOBILEGL_BUILD_STAMP_VALUE}" STREQUAL "")
+    set(MOBILEGL_BUILD_STAMP_PRESENT 0)
+    # A WARNING AND NOT A FATAL: a build with no stamp is still a usable build, it just cannot
+    # prove that a peer was built from the same tree. Saying so once at configure time is the
+    # difference between a known limitation and the silent one 4.2 found.
+    message(WARNING
+        "MobileGL: no build stamp. `git rev-parse HEAD` failed (result "
+        "'${MOBILEGL_GIT_STAMP_RESULT}') and MOBILEGL_BUILD_STAMP was not set, so the ABI "
+        "fingerprint cannot distinguish two builds of the same sizes from different commits - "
+        "which is exactly what a stale MOBILEGL_IPC_SERVER_PATH looks like. Pass "
+        "-DMOBILEGL_BUILD_STAMP=<commit> to restore it.")
+else()
+    set(MOBILEGL_BUILD_STAMP_PRESENT 1)
+endif()
 
 configure_file(
     ${CMAKE_SOURCE_DIR}/MobileGL/MG_Util/Miscellany/MGGitHash.h.in

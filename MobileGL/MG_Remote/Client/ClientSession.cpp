@@ -36,7 +36,28 @@
 #include <utility>
 #include <vector>
 
+// CONTRACT-P6 4.3: the handshake now carries real process ids.
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace MobileGL::MG_Remote::Client {
+
+    namespace {
+        // CONTRACT-P6 4.3. Hello::pid was hard-coded 0 and Welcome::serverPid ECHOED it, so both
+        // were always 0 and neither named anything. Under spawn the pair is the cheapest arm
+        // proof there is: two different values mean two processes, and a same-process session
+        // cannot produce them.
+        std::uint32_t SelfProcessId() {
+#if defined(_WIN32)
+            return static_cast<std::uint32_t>(::_getpid());
+#else
+            return static_cast<std::uint32_t>(::getpid());
+#endif
+        }
+    } // namespace
 
 #define MGP5_C0_STUB(what)                                                                                             \
     do {                                                                                                               \
@@ -87,6 +108,30 @@ namespace MobileGL::MG_Remote::Client {
                 return nullptr;
             }
             return ::MobileGL::Wire::GetCtrlEnvelope(bytes.data());
+        }
+
+        // CONTRACT-P6 4.3: THE DECLARED PROTOCOL VERSION, WHICH THIS SIDE NEVER READ.
+        //
+        // Hello has carried abiMajor/abiMinor since P5 and the SERVER checks them, but the
+        // client only ever compared the fingerprint - so the asymmetry was silent in the one
+        // direction that matters for spawn, where the peer is a SEPARATE IMAGE the operator
+        // chose with MOBILEGL_IPC_SERVER_PATH.
+        //
+        // The fingerprint mixes AbiVersion and would catch a mismatch anyway, but it catches it
+        // as "struct shapes" - which sends the reader looking for a layout change that is not
+        // there. Checking the version FIRST turns the same failure into the sentence that
+        // explains it. Both handshake sites call this; there are two, and only one of them used
+        // to be reachable, which is how the gap survived review.
+        [[noreturn]] void FatalProtocolVersionMismatch(unsigned theirMajor, unsigned theirMinor,
+                                                       const char* theirStamp) {
+            MGLOG_F("MGPipe: Fatal{AbiMismatch, \"protocol version\"} ours=%u.%u theirs=%u.%u "
+                    "ourBuild=%s theirBuild=%s - the peer speaks a different MGPipe protocol. "
+                    "Under spawn this is most often a stale MOBILEGL_IPC_SERVER_PATH pointing at "
+                    "a libMobileGLServer.so built from another tree.",
+                    static_cast<unsigned>(MOBILEGL_PROTOCOL_ABI_MAJOR),
+                    static_cast<unsigned>(MOBILEGL_PROTOCOL_ABI_MINOR), theirMajor, theirMinor,
+                    GIT_COMMIT_HASH_SHORT, theirStamp == nullptr ? "?" : theirStamp);
+            std::abort();
         }
 
         [[noreturn]] void FatalAbiMismatch(const char* what, Uint64 ours, Uint64 theirs,
@@ -548,7 +593,7 @@ namespace MobileGL::MG_Remote::Client {
             auto stamp = builder.CreateString(GIT_COMMIT_HASH_SHORT);
             auto hello = ::MobileGL::Wire::CreateHello(
                 builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR, stamp,
-                /*backendType=*/0u, /*pid=*/0u, /*configBlob=*/0, fingerprint);
+                /*backendType=*/0u, /*pid=*/SelfProcessId(), /*configBlob=*/0, fingerprint);
             auto root = ::MobileGL::Wire::CreateCtrlEnvelope(
                 builder, ::MobileGL::Wire::CtrlMsg::Hello, hello.Union());
             ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);
@@ -593,6 +638,16 @@ namespace MobileGL::MG_Remote::Client {
             const char* theirStamp = welcome->buildFingerprint() == nullptr
                                          ? nullptr
                                          : welcome->buildFingerprint()->c_str();
+            // 4.3: the pid the SERVER stated, taken before any check can abort, so a Fatal line
+            // can name it too.
+            m_peerServerPid = static_cast<std::uint32_t>(welcome->serverPid());
+            // The VERSION before the fingerprint: both would fire, and only one names the cause.
+            if (welcome->abiMajor() != MOBILEGL_PROTOCOL_ABI_MAJOR ||
+                welcome->abiMinor() != MOBILEGL_PROTOCOL_ABI_MINOR) {
+                FatalProtocolVersionMismatch(static_cast<unsigned>(welcome->abiMajor()),
+                                             static_cast<unsigned>(welcome->abiMinor()),
+                                             theirStamp);
+            }
             if (welcome->abiFingerprint() != fingerprint) {
                 FatalAbiMismatch("struct shapes", fingerprint, welcome->abiFingerprint(),
                                  theirStamp);
@@ -713,7 +768,7 @@ namespace MobileGL::MG_Remote::Client {
             auto stamp = builder.CreateString(GIT_COMMIT_HASH_SHORT);
             auto hello = ::MobileGL::Wire::CreateHello(
                 builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR, stamp,
-                0u, 0u, 0, fingerprint);
+                /*backendType=*/0u, /*pid=*/SelfProcessId(), /*configBlob=*/0, fingerprint);
             auto root = ::MobileGL::Wire::CreateCtrlEnvelope(
                 builder, ::MobileGL::Wire::CtrlMsg::Hello, hello.Union());
             ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);
@@ -754,6 +809,16 @@ namespace MobileGL::MG_Remote::Client {
             const char* theirStamp = welcome->buildFingerprint() == nullptr
                                          ? nullptr
                                          : welcome->buildFingerprint()->c_str();
+            // 4.3: the pid the SERVER stated, taken before any check can abort, so a Fatal line
+            // can name it too.
+            m_peerServerPid = static_cast<std::uint32_t>(welcome->serverPid());
+            // The VERSION before the fingerprint: both would fire, and only one names the cause.
+            if (welcome->abiMajor() != MOBILEGL_PROTOCOL_ABI_MAJOR ||
+                welcome->abiMinor() != MOBILEGL_PROTOCOL_ABI_MINOR) {
+                FatalProtocolVersionMismatch(static_cast<unsigned>(welcome->abiMajor()),
+                                             static_cast<unsigned>(welcome->abiMinor()),
+                                             theirStamp);
+            }
             if (welcome->abiFingerprint() != fingerprint) {
                 FatalAbiMismatch("struct shapes", fingerprint, welcome->abiFingerprint(),
                                  theirStamp);

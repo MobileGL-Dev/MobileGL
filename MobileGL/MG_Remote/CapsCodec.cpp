@@ -485,7 +485,13 @@ namespace MobileGL::MG_Remote {
         // which is the one break the rest of the mix is blind to.
         inputs.AbiVersion =
             static_cast<Uint32>(MOBILEGL_ABI_VERSION(MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR));
-        inputs.BuildStamp = GIT_COMMIT_HASH_SHORT;
+        // MOBILEGL_BUILD_STAMP_VALUE, NOT GIT_COMMIT_HASH_SHORT (CONTRACT-P6 4.2). The old
+        // macro is application-visible through glGetString(GL_VERSION) and may not move, and it
+        // came from an execute_process with no RESULT_VARIABLE - so a tree git could not read
+        // produced "" and every such build agreed with every other. The new pair separates the
+        // VALUE from whether the build could name a commit at all.
+        inputs.BuildStamp = MOBILEGL_BUILD_STAMP_VALUE;
+        inputs.BuildStampPresent = MOBILEGL_BUILD_STAMP_PRESENT;
         return inputs;
     }
 

@@ -24,7 +24,26 @@
 #include <cstring>
 #include <vector>
 
+// CONTRACT-P6 4.3: the one value in the handshake that a same-process session cannot fake.
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace MobileGL::MG_Remote::Server {
+
+    namespace {
+        // File-local on purpose: two callers, both handshake facts. A process-id helper on a
+        // public header invites uses that are not.
+        std::uint32_t SelfProcessId() {
+#if defined(_WIN32)
+            return static_cast<std::uint32_t>(::_getpid());
+#else
+            return static_cast<std::uint32_t>(::getpid());
+#endif
+        }
+    } // namespace
 
     // THE THREE FLAG-SPACE COLLISIONS, AS TRIPWIRES RATHER THAN AS A COMMENT.
     //
@@ -531,7 +550,15 @@ namespace MobileGL::MG_Remote::Server {
             auto stamp = builder.CreateString(GIT_COMMIT_HASH_SHORT);
             auto welcome = ::MobileGL::Wire::CreateWelcome(
                 builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR,
-                static_cast<Uint32>(hello->pid()), cmd, stage, reply, event, stamp, ourFingerprint);
+                // CONTRACT-P6 4.3: THE SERVER'S OWN PID, not an echo of the client's.
+                //
+                // This field echoed hello->pid() - which is itself hard-coded 0 - so serverPid
+                // was ALWAYS 0 and named nothing. §9.5's arm-proof gate wants the child pid and
+                // this is its natural carrier: under spawn it is the one value in the handshake
+                // that a same-process session cannot produce, because there the two pids are
+                // equal by construction.
+                static_cast<Uint32>(SelfProcessId()),
+                cmd, stage, reply, event, stamp, ourFingerprint);
             auto root = ::MobileGL::Wire::CreateCtrlEnvelope(
                 builder, ::MobileGL::Wire::CtrlMsg::Welcome, welcome.Union());
             ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);

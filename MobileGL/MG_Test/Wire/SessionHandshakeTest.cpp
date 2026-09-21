@@ -136,10 +136,25 @@ TEST(SessionHandshakeTest, TheAbiFingerprintChangesWhenAnyOfItsInputsDoes) {
     EXPECT_EQ(inputs.OpCount, static_cast<Uint64>(MG_Pipe::MGPWireOp::kOpCount));
     EXPECT_EQ(inputs.AbiVersion, static_cast<Uint32>(MOBILEGL_ABI_VERSION(
                                      MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR)));
+    // CONTRACT-P6 4.2. THE ASSERTION SPLITS WITH THE MACRO PAIR, and it has to: this used to
+    // demand a non-empty stamp unconditionally and was RED in every build whose git could not be
+    // read - a real signal, but one that told the reader nothing about WHICH of the two states
+    // the build was in. Now the build system states it, and both states are asserted.
     ASSERT_NE(inputs.BuildStamp, nullptr);
-    EXPECT_NE(inputs.BuildStamp[0], '\0');
+    EXPECT_EQ(inputs.BuildStampPresent, static_cast<Uint32>(MOBILEGL_BUILD_STAMP_PRESENT))
+        << "the fingerprint disagrees with the build system about whether this build has a stamp";
 #if MGL_HANDSHAKE_TEST_HAS_GIT_HASH
-    EXPECT_STREQ(inputs.BuildStamp, GIT_COMMIT_HASH_SHORT);
+    EXPECT_STREQ(inputs.BuildStamp, MOBILEGL_BUILD_STAMP_VALUE);
+#endif
+#if MOBILEGL_BUILD_STAMP_PRESENT
+    EXPECT_NE(inputs.BuildStamp[0], '\0')
+        << "the build claims a stamp and the fingerprint mixed an empty one";
+#else
+    // A stampless build is a KNOWN, DECLARED state - CMake warns at configure time - but it must
+    // not be a silent one here either. What still has to hold is that the ABSENCE is mixed, which
+    // the BuildStampPresent perturbation below proves.
+    EXPECT_STREQ(inputs.BuildStamp, "")
+        << "PRESENT is 0 but a value came through; the two halves of the pair disagree";
 #endif
 
     // Every input moves the answer. Each lambda changes exactly one field of a copy of the
@@ -176,8 +191,19 @@ TEST(SessionHandshakeTest, TheAbiFingerprintChangesWhenAnyOfItsInputsDoes) {
               perturbed([](Transport::AbiFingerprintInputs& i) { i.BuildStamp = "not-this-build"; }))
         << "the git stamp is not mixed";
     // A missing stamp is not the same as an empty one, and neither is the same as a real build.
+    // THE PRESENCE FLAG IS ITSELF AN INPUT (4.2), and this is the assertion that makes a
+    // stampless build safe to reason about: a peer that says "I could not name my commit" must
+    // not produce the same fingerprint as one whose commit genuinely is "". It has to move the
+    // answer in EITHER build state, which is why it sits outside the #if below.
+    EXPECT_NE(production, perturbed([](Transport::AbiFingerprintInputs& i) { ++i.BuildStampPresent; }))
+        << "BuildStampPresent is not mixed; 'no stamp' and 'empty stamp' are one input again";
+
     EXPECT_NE(production, perturbed([](Transport::AbiFingerprintInputs& i) { i.BuildStamp = nullptr; }));
+#if MOBILEGL_BUILD_STAMP_PRESENT
+    // Vacuous without a stamp: production's value already IS "", so this perturbation would be
+    // the identity and the assertion would pass while proving nothing.
     EXPECT_NE(production, perturbed([](Transport::AbiFingerprintInputs& i) { i.BuildStamp = ""; }));
+#endif
     EXPECT_NE(perturbed([](Transport::AbiFingerprintInputs& i) { i.BuildStamp = nullptr; }),
               perturbed([](Transport::AbiFingerprintInputs& i) { i.BuildStamp = ""; }))
         << "\"no stamp\" and \"an empty stamp\" collapsed into one input";

@@ -193,6 +193,37 @@ TEST(ServerSpawnTest, AnEglControlOpCrossesToTheOtherProcessAndAnswers) {
     ASSERT_EQ(Server::ReapServer(session.server, 5000, &exitCode), MOBILEGL_OK);
 }
 
+TEST(ServerSpawnTest, TheHandshakeCarriesTwoDifferentProcessIdsAndNotTwoZeroes) {
+    // CONTRACT-P6 4.3. Hello::pid was hard-coded 0 and Welcome::serverPid ECHOED it back, so the
+    // handshake carried 0 and 0 and named nothing at all. Both now carry real ids, which makes
+    // the pair the cheapest arm proof in the protocol: under spawn they MUST differ, and a
+    // same-process session cannot produce two different values.
+    //
+    // ServerSession records the pid it welcomed; ClientSession knows the child it launched. The
+    // assertion is that those two agree AND that neither is this process.
+    Session session;
+    ASSERT_TRUE(Bring("pids", &session));
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+
+    const std::uint32_t self = static_cast<std::uint32_t>(::getpid());
+    const std::uint32_t server = static_cast<std::uint32_t>(session.server.pid);
+    EXPECT_NE(server, 0u) << "the launcher did not record a child pid";
+    EXPECT_NE(server, self) << "that is this process, so there is nothing to prove";
+
+    // THE VALUE THAT CROSSED THE WIRE, not the one the launcher happens to remember. Welcome
+    // carries the server's own getpid(), so this equality says the handshake reached the process
+    // we started - rather than some other listener that answered on the name - and it says it
+    // from the server's own mouth.
+    EXPECT_EQ(Client::ClientSessionInstance().PeerServerPid(), server)
+        << "Welcome::serverPid does not name the process we launched";
+    EXPECT_NE(Client::ClientSessionInstance().PeerServerPid(), self)
+        << "the peer stated OUR pid; serverPid is echoing the client again (4.3)";
+
+    Client::ClientSessionInstance().Stop();
+    int exitCode = -1;
+    ASSERT_EQ(Server::ReapServer(session.server, 5000, &exitCode), MOBILEGL_OK);
+}
+
 TEST(ServerSpawnTest, AKilledServerLatchesDeviceLostFromTheHangupAndNotFromADeadline) {
     // `dl`, and exit gate S2: kill -9 the server mid-session and the client must find out FROM A
     // DESCRIPTOR. This is the red-once for CONTRACT-P6 D5c, whose whole content is that the

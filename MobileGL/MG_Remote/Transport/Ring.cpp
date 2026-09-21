@@ -678,6 +678,12 @@ namespace MobileGL::MG_Remote::Transport {
         mix(inputs.RendererInfoCodecVersion);
         mix(inputs.OpCount);
         mix(inputs.AbiVersion);
+        // CONTRACT-P6 4.2: THE BUILD SYSTEM'S OWN ANSWER, mixed before the bytes and separately
+        // from them. `BuildStampPresent == 0` means the build could not determine a commit at
+        // all; that is a different claim from "the commit is the empty string", and before this
+        // field existed the two collapsed - so every stampless build agreed with every other,
+        // which is the exact agreement the stamp is there to refuse.
+        mix(inputs.BuildStampPresent);
         // A presence marker before the bytes, so that "no stamp" (nullptr) and
         // "an empty stamp" ("") are different inputs rather than the same
         // absence of bytes.

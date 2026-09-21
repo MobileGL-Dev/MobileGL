@@ -576,10 +576,25 @@ namespace MobileGL::MG_Remote::Transport {
         // MOBILEGL_ABI_VERSION(major, minor): a protocol change that left every
         // struct the same size, which nothing above can see.
         std::uint32_t AbiVersion = 0;
-        // GIT_COMMIT_HASH_SHORT: two builds of the same sizes can still disagree
-        // about a FIELD ORDER, which no sizeof can see. nullptr and "" are
-        // distinct inputs and neither equals a real stamp.
+        // MOBILEGL_BUILD_STAMP_VALUE: two builds of the same sizes can still
+        // disagree about a FIELD ORDER, which no sizeof can see. nullptr and ""
+        // are distinct inputs and neither equals a real stamp.
         const char* BuildStamp = nullptr;
+        // CONTRACT-P6 4.2. WHETHER THE BUILD COULD NAME ITS COMMIT AT ALL, which
+        // is not the same question as whether BuildStamp is empty - and telling
+        // them apart is the entire fix.
+        //
+        // The old mix took GIT_COMMIT_HASH_SHORT, and a `git rev-parse` that
+        // FAILED yielded "" with nothing reporting it (no RESULT_VARIABLE).
+        // Every stampless build in the world then mixed the same "" and agreed
+        // with every other, which is precisely the agreement the stamp exists to
+        // refuse. Measured in this worktree: WSL cannot resolve the Windows path
+        // in its `.git` file, so every WSL build was stampless and silent.
+        //
+        // Mixed as its own field so that 0-with-"" and 1-with-"" are different
+        // fingerprints: a build that says "I have no stamp" must not collide
+        // with one whose stamp genuinely is the empty string.
+        std::uint32_t BuildStampPresent = 0;
     };
 
     // FNV-1a over every field above, in declaration order. Never 0: that value is

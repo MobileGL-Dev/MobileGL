@@ -90,6 +90,12 @@ namespace MobileGL::MG_Remote::Client {
         // then watch this object, not a side effect three layers up.
         Transport::Doorbell* SelfDoorbellForTest() { return m_producer.SelfDoorbell(); }
 
+        // CONTRACT-P6 4.3: THE PID THE SERVER STATED IN ITS Welcome, which is not the same fact
+        // as the pid this session's launcher recorded - that one is local knowledge, this one
+        // CROSSED THE WIRE. Under spawn they must agree and neither may be ours; under inproc
+        // the server states its own pid, which IS ours, and that is the honest answer there.
+        std::uint32_t PeerServerPid() const { return m_peerServerPid; }
+
         ~ClientSession();
 
         // Builds the four segments, performs Hello/Welcome, takes the first CapsSnapshot, and
@@ -443,6 +449,9 @@ namespace MobileGL::MG_Remote::Client {
         // Written by whichever thread first notices the hangup - the GL thread in the barrier,
         // or the event pump - and read by glGetGraphicsResetStatus on the GL thread.
         std::atomic<bool> m_deviceLost{false};
+        // Welcome::serverPid, kept because §9.5's arm proof wants it and because a value that is
+        // only ever logged cannot be asserted on.
+        std::uint32_t m_peerServerPid = 0;
     };
 
     // One per process in P5, because P5 serves one context, and LEAKED AT EXIT like every other
