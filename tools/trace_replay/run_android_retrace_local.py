@@ -449,6 +449,28 @@ def parse_args():
     return parser.parse_args()
 
 
+def transport_proof_args(args):
+    """The same arm-proof flag CI passes, so a local run cannot be greener than the lane.
+
+    trace-replay-ci.sh's --require-inproc / --require-spawn read the LIBRARY's own log and
+    refuse a run whose transport did not actually resolve - and for spawn, one whose server
+    role never left the process. Passing them here too is what stops "it works locally" from
+    meaning "it ran monolith locally".
+    """
+    return {"inproc": ["--require-inproc"], "spawn": ["--require-spawn"]}.get(args.transport, [])
+
+
+# The knobs .github/workflows/apk.yml hands BOTH acceptance lanes. They are kept here verbatim so
+# a local run is the same run: the arm proof below reads the library's own `Config: IPC` line and
+# requires strict/role-split-state/run-ahead to be 1, so a local invocation that quietly omitted
+# them would fail a gate CI passes - or worse, pass a weaker one.
+SPLIT_ACCEPTANCE_KNOBS = (
+    "MOBILEGL_IPC_ROLE_SPLIT_STATE=1",
+    "MOBILEGL_IPC_STRICT_ERRORS=1",
+    "MOBILEGL_IPC_RUN_AHEAD=1",
+)
+
+
 def transport_env(args):
     """The transport knob as env overrides, or nothing at all for monolith.
 
@@ -456,7 +478,9 @@ def transport_env(args):
     environment is byte-identical to what it was before this option existed - the control arm has
     to stay a control.
     """
-    return [] if args.transport == "monolith" else [f"MOBILEGL_TRANSPORT={args.transport}"]
+    if args.transport == "monolith":
+        return []
+    return [f"MOBILEGL_TRANSPORT={args.transport}", *SPLIT_ACCEPTANCE_KNOBS]
 
 
 def main():
@@ -482,7 +506,8 @@ def main():
                 failures += run_benchmark_case(case, backend, args)
                 continue
             print(f"=== Android retrace: {case['name']} / {backend} ===", flush=True)
-            rc = run_case(case, backend, env_overrides=transport_env(args) + list(args.env),
+            rc = run_case(case, backend, extra_args=transport_proof_args(args),
+                          env_overrides=transport_env(args) + list(args.env),
                           use_pbuffer=args.use_pbuffer)
             try:
                 render_summary()

@@ -34,6 +34,7 @@ Usage:
     [--dump-texture-2d CALL,TEXTURE,LEVEL,DIR] \
     [--env "K=V;K=V"] \
     [--require-inproc] \
+    [--require-spawn] \
     [--benchmark] \
     [--benchmark-tail-frames N] \
     [--benchmark-finish 0|1] \
@@ -67,6 +68,8 @@ variables to the replay process. They are applied last, immediately before
 libMobileGL.so is loaded, so they override every flag above; an entry with no "="
 unsets the variable instead. This is the generic passthrough: a MOBILEGL_* knob
 that has no flag of its own needs no plumbing to be forwarded.
+Pass --require-spawn to require the same proof for transport=spawn, plus the one
+sentence a monolith fallback can never write: the pid of the server process.
 Pass --require-inproc to require the library's real transport-resolution log,
 strict errors and separate role state, plus zero Fatal records. This checks the
 APK process after replay; a host environment echo or an SSIM-only pass is not proof.
@@ -131,6 +134,7 @@ coherent_as_flush=0
 texture_2d_dumps=""
 env_overrides="${MOBILEGL_TRACE_ENV:-}"
 require_inproc=0
+require_spawn=0
 benchmark=0
 benchmark_tail_frames=200
 benchmark_finish=1
@@ -178,6 +182,7 @@ while [ "$#" -gt 0 ]; do
     --dump-texture-2d) texture_2d_dumps="$(next_arg "$@")"; shift 2 ;;
     --env) env_overrides="$(next_arg "$@")"; shift 2 ;;
     --require-inproc) require_inproc=1; shift 1 ;;
+    --require-spawn) require_spawn=1; shift 1 ;;
     --benchmark) benchmark=1; shift 1 ;;
     --benchmark-tail-frames) benchmark_tail_frames="$(next_arg "$@")"; shift 2 ;;
     --benchmark-finish) benchmark_finish="$(next_arg "$@")"; shift 2 ;;
@@ -559,6 +564,59 @@ proof_path.write_text(json.dumps(proof, indent=2), encoding="utf-8")
 if not passed:
     sys.exit("trace replay failed actual inproc/strict/role/zero-Fatal proof: " + json.dumps(proof))
 print("Android retrace: real inproc transport, strict role state and zero Fatal records confirmed")
+PY
+  fi
+  if [ "${require_spawn}" -eq 1 ]; then
+    "${PYTHON}" - "${result_dir}/mobilegl.log" "${result_dir}/transport-proof.json" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+log_path, proof_path = map(Path, sys.argv[1:])
+text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+
+# TWO SENTENCES, AND THE SECOND IS THE ONE THAT MATTERS.
+#
+# ConfigLoader's marker proves the VALUE RESOLVED - it exists only in ConfigLoader's Spawn arm,
+# which exists only under MOBILEGL_BUILD_DISAGGREGATED, so a pull library cannot write it. That
+# is a statement about a parser.
+#
+# `spawn ARMED - the server role runs in pid N` is written by ClientSession::StartSpawned only
+# after the launch, the connect and the handshake have ALL succeeded, and the pid in it is the
+# SERVER's. It is the only line in this log a same-process run cannot produce: inproc resolves
+# its own marker while running the server role on a thread HERE. Requiring only the first would
+# accept a session that resolved spawn and then never reached another process.
+marker = "Config: MOBILEGL_TRANSPORT=spawn - the MGPipe record stream"
+armed = re.search(r"spawn ARMED - the server role runs in pid (\d+)", text)
+
+# `any`, NOT the `all` the inproc gate uses, and the difference is load-bearing.
+#
+# Under spawn TWO PROCESSES append to one MOBILEGL_LOG_FILE_PATH, and the launcher deliberately
+# scrubs every MOBILEGL_IPC_* out of the child's environment (anti-recursion catch (b)) - so the
+# server's own `Config: IPC` line reads strict=0 role-split-state=0 BY CONSTRUCTION. Demanding
+# that every line match would red every spawn run for the one thing the design requires.
+configs = re.findall(r"Config: IPC[^\r\n]*", text)
+fatals = re.findall(r"^.*Fatal\{.*$", text, re.MULTILINE)
+required = {"strict": "1", "role-split-state": "1", "run-ahead": "1"}
+def matches(line):
+    return all(re.search(r"\b" + re.escape(key) + "=" + value + r"\b", line)
+               for key, value in required.items())
+client_configs = [line for line in configs if matches(line)]
+config_ok = bool(client_configs)
+
+passed = marker in text and armed is not None and config_ok and not fatals
+proof = {"required_transport": "spawn", "library_log": str(log_path),
+         "transport_resolution_marker": marker in text,
+         "server_pid": int(armed.group(1)) if armed else None,
+         "ipc_config_lines": configs, "required_ipc_settings": required,
+         "client_ipc_line_present": config_ok,
+         "fatal_count": len(fatals), "fatal_lines": fatals, "passed": passed}
+proof_path.write_text(json.dumps(proof, indent=2), encoding="utf-8")
+if not passed:
+    sys.exit("trace replay failed actual spawn/second-process/zero-Fatal proof: " + json.dumps(proof))
+print("Android retrace: real spawn transport, server role in pid "
+      f"{proof['server_pid']}, and zero Fatal records confirmed")
 PY
   fi
 }

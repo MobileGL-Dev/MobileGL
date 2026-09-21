@@ -469,6 +469,23 @@ jobs:
               --env "MOBILEGL_TRANSPORT=inproc;MOBILEGL_IPC_ROLE_SPLIT_STATE=1;MOBILEGL_IPC_STRICT_ERRORS=1;MOBILEGL_IPC_RUN_AHEAD=1"
               --require-inproc
             )
+          elif [ "${MOBILEGL_CI_TRANSPORT}" = "spawn" ]; then
+            # THE SAME CLIENT KNOBS AS inproc, so the two acceptance lanes differ in exactly one
+            # thing: which PROCESS the server role runs in. They are scrubbed out of the CHILD's
+            # environment by the launcher and read by the client, which is where they belong.
+            #
+            # MOBILEGL_IPC_SERVER_PATH IS DELIBERATELY ABSENT. nativeLibraryDir carries an
+            # install-time hash, so nothing off the device can spell it; TraceReplayActivity
+            # resolves it from getApplicationInfo() when the env asks for spawn, and an explicit
+            # value would override that. --use-pbuffer is NOT optional here: until P12 a spawned
+            # server cannot be handed a window at all, because an ANativeWindow* is a pointer
+            # into the CLIENT's process and SetWindowHandle is refused on the way across with
+            # Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"} (Rule H).
+            extra_retrace_args+=(
+              --env "MOBILEGL_TRANSPORT=spawn;MOBILEGL_IPC_ROLE_SPLIT_STATE=1;MOBILEGL_IPC_STRICT_ERRORS=1;MOBILEGL_IPC_RUN_AHEAD=1"
+              --use-pbuffer
+              --require-spawn
+            )
           else
             extra_retrace_args+=(--env "MOBILEGL_TRANSPORT=monolith")
           fi
@@ -633,6 +650,13 @@ jobs:
           pattern: MobileGL-android-retrace-result-inproc-acceptance-inproc-*
           path: retrace-artifacts/inproc-acceptance
 
+      - name: Download Android spawn acceptance results
+        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: MobileGL-android-retrace-result-spawn-acceptance-spawn-*
+          path: retrace-artifacts/spawn-acceptance
+
       - name: Render monolith control summary
         run: |
           node tools/trace_replay/render_retrace_summary.mjs \
@@ -652,6 +676,11 @@ jobs:
             --group-label "Android Emulator / inproc acceptance" \
             --html mobilegl-android-inproc-acceptance.html
 
+      - name: Render spawn acceptance summary
+        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
+        run: |
+          node tools/trace_replay/render_retrace_summary.mjs             --input retrace-artifacts/spawn-acceptance             --output-dir android-retrace-summary/spawn-acceptance             --title "MobileGL Android spawn acceptance"             --group-label "Android Emulator / spawn acceptance"             --html mobilegl-android-spawn-acceptance.html
+
       - name: Upload Android monolith control summary
         uses: actions/upload-artifact@v7
         with:
@@ -666,6 +695,15 @@ jobs:
         with:
           name: MobileGL-android-inproc-acceptance-summary-${{ github.sha }}
           path: android-retrace-summary/inproc-acceptance/mobilegl-android-inproc-acceptance.html
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload Android spawn acceptance summary
+        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
+        uses: actions/upload-artifact@v7
+        with:
+          name: MobileGL-android-spawn-acceptance-summary-${{ github.sha }}
+          path: android-retrace-summary/spawn-acceptance/mobilegl-android-spawn-acceptance.html
           archive: false
           if-no-files-found: error
 

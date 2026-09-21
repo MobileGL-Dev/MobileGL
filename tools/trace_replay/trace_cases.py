@@ -246,21 +246,36 @@ def github_apk_matrix(cases):
 
 
 def github_transport_matrix(cases, *, apk=False):
-    """Run the entire original matrix as both control and inproc acceptance.
+    """Run the entire original matrix as control and as acceptance, once per transport.
 
-    The two transports use the same D/P artifact and each case's existing backend
+    The transports use the same D/P artifact and each case's existing backend
     list. The legacy split:true subset does not limit this main acceptance matrix.
     Nested APK case/backend metadata is deliberately left untouched.
+
+    THE SPAWN LANE IS APK-ONLY, and that is a statement about where the evidence is missing
+    rather than about what spawn can do. On Linux the spawn arm already has a job of its own -
+    test.yml's `retrace-split`, which is {backend, case, transport} over inproc AND spawn and
+    carries the two negative controls that make it mean anything (the pull library must red it,
+    dropping the draws must red it). Adding spawn to THIS matrix as well would pay for a second
+    full Linux sweep that proves nothing the first one does not, and test.yml's `retrace` job
+    has neither the server image staged nor MOBILEGL_IPC_SERVER_PATH set - so the lane would
+    not merely be redundant, it would be red.
+
+    On Android there is no such job. Until this lane existed, nothing in CI ever started a
+    second MobileGL process on a device.
     """
     build = github_apk_matrix if apk else github_test_matrix
     if not cases:
         raise ValueError("transport matrix needs at least one trace case")
+    lanes = [
+        (cases, "monolith-control", "monolith"),
+        (cases, "inproc-acceptance", "inproc"),
+    ]
+    if apk:
+        lanes.append((cases, "spawn-acceptance", "spawn"))
     return {"include": [
         {**row, "lane": lane, "transport": transport}
-        for selected, lane, transport in (
-            (cases, "monolith-control", "monolith"),
-            (cases, "inproc-acceptance", "inproc"),
-        )
+        for selected, lane, transport in lanes
         for row in build(selected)["include"]
     ]}
 
@@ -275,10 +290,21 @@ def self_test_transport_matrices():
         acceptance = [row for row in mixed if row["transport"] == "inproc"]
         strip_lane = lambda rows: [{key: value for key, value in row.items()
                                    if key not in ("lane", "transport")} for row in rows]
+        spawned = [row for row in mixed if row["transport"] == "spawn"]
         assert strip_lane(controls) == original, "control lost original case/backend/parameters"
         assert strip_lane(acceptance) == original, "acceptance lost original case/backend/parameters"
         assert all(row["lane"] == "monolith-control" for row in controls)
         assert all(row["lane"] == "inproc-acceptance" for row in acceptance)
+        # THE SPAWN LANE IS APK-ONLY AND MUST NOT DRIFT INTO THE LINUX MATRIX. test.yml's
+        # `retrace` job exports matrix.transport straight into MOBILEGL_TRANSPORT and stages no
+        # server image, so a spawn row reaching it would be red for a packaging reason and say
+        # nothing about the transport. Asserted in both directions: present for apk, absent
+        # otherwise - an accidental `if apk` removal has to be caught here rather than in CI.
+        if apk:
+            assert strip_lane(spawned) == original, "spawn lane lost original case/backend/parameters"
+            assert all(row["lane"] == "spawn-acceptance" for row in spawned)
+        else:
+            assert not spawned, "the Linux transport matrix must carry no spawn lane"
         identities = [(row["case"]["name"] if apk else row["case"],
                        row["backend"]["name"] if apk else row["backend"], row["transport"])
                       for row in mixed]
@@ -286,7 +312,10 @@ def self_test_transport_matrices():
         # A restricted case keeps exactly its original backend and golden data.
         restricted = [{**cases[0], "split": False, "ci_backends": ["DirectGLES"]}]
         rows = github_transport_matrix(restricted, apk=apk)["include"]
-        assert len(rows) == 2 and strip_lane(rows[:1]) == strip_lane(rows[1:])
+        expected_lanes = 3 if apk else 2
+        assert len(rows) == expected_lanes
+        assert all(strip_lane(rows[:1]) == strip_lane(rows[index:index + 1])
+                   for index in range(1, expected_lanes))
         try:
             github_transport_matrix([], apk=apk)
         except ValueError:
@@ -294,7 +323,8 @@ def self_test_transport_matrices():
         else:
             raise AssertionError("an empty acceptance lane silently passed")
         print(f"transport matrix {'APK' if apk else 'Linux'}: {len(controls)} unchanged controls, "
-              f"{len(acceptance)} full acceptance entries; exact metadata and negative controls OK")
+              f"{len(acceptance)} inproc acceptance entries, {len(spawned)} spawn acceptance "
+              f"entries; exact metadata and negative controls OK")
 
 
 def cmake_quote(value):
