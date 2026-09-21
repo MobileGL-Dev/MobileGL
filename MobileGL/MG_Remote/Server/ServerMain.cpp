@@ -38,8 +38,10 @@
 #include "../Transport/FdPassing.h"
 #include "../Transport/SocketTransport.h"
 #include "../Transport/WireLog.h"
+#include "../Protocol/SurfaceOpCodec.h"
 #include "ServerLoop.h"
 #include "ServerSession.h"
+#include "SurfaceControlFrame.h"
 
 #include <MG_Backend/ServerRole.h>
 
@@ -287,13 +289,36 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
                          static_cast<int>(result));
             break;
         }
-        // `cp` owns what a control frame MEANS. Until then the pump exists so the
-        // stream is drained and EOF is noticed; the echo carries this process's
-        // own pid so a test that talked to itself cannot pass.
-        std::string reply(reinterpret_cast<const char*>(buffer.data()),
-                          static_cast<std::size_t>(size));
-        reply += "|server-pid=" + std::to_string(selfPid);
-        if (control->SendFrame(MobileGLByteSpan{reply.data(), reply.size()}) != MOBILEGL_OK) {
+        // `cp`: decode, apply, reply. THIS THREAD IS NOT THE APPLY THREAD, which
+        // is what CONTRACT-P6 §6.2 requires - a control arrival must not wake the
+        // applier, and frame decode must not happen on the thread holding the
+        // native context. ServerApplyWireSurfaceOp posts through ServerLoop's
+        // existing one-slot mailbox, unchanged.
+        const ::MobileGL::Wire::CtrlEnvelope* envelope = nullptr;
+        {
+            ::flatbuffers::Verifier verifier(buffer.data(), static_cast<std::size_t>(size));
+            if (::MobileGL::Wire::VerifyCtrlEnvelopeBuffer(verifier)) {
+                envelope = ::MobileGL::Wire::GetCtrlEnvelope(buffer.data());
+            }
+        }
+        if (envelope == nullptr || envelope->msg_type() != ::MobileGL::Wire::CtrlMsg::SurfaceOp ||
+            envelope->msg_as_SurfaceOp() == nullptr) {
+            WireLogError("MG_Remote server: pid=%d a control frame that is not a verifiable "
+                         "SurfaceOp arrived; ignoring it would be the silent drop this project "
+                         "refuses, so the session ends here",
+                         selfPid);
+            break;
+        }
+
+        Server::SurfaceControlFrame reply{};
+        const MobileGLResult applied =
+            ServerApplyWireSurfaceOp(*envelope->msg_as_SurfaceOp(), &reply);
+        (void)applied; // carried in the reply's ok/result, not thrown away here
+
+        ::flatbuffers::FlatBufferBuilder builder(256);
+        EncodeSurfaceReplyFrame(reply, &builder);
+        if (control->SendFrame(
+                MobileGLByteSpan{builder.GetBufferPointer(), builder.GetSize()}) != MOBILEGL_OK) {
             break;
         }
     }

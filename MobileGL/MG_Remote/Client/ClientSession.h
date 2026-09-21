@@ -38,6 +38,7 @@
 #include <Config.h>
 #include <MG_Pipe/MGPipe.h>
 
+#include "../Server/SurfaceControlFrame.h"
 #include "../Transport/Doorbell.h"
 #include "../Transport/EventRing.h"
 #include "../Transport/ITransport.h"
@@ -93,6 +94,12 @@ namespace MobileGL::MG_Remote::Client {
         // encoder - is byte for byte the inproc path, which is the property
         // that makes "P6 is a transport swap" true of THIS function even though
         // it is not true of the phase.
+        // `cp`: the remote control sink ServerLoop calls when the server is
+        // another process. Encode, send, wait for the SurfaceReply that carries
+        // OUR seq back.
+        static MobileGLResult RemoteControlSinkThunk(void* user, Server::SurfaceControlFrame& frame);
+        MobileGLResult RunRemoteSurfaceControlFrame(Server::SurfaceControlFrame& frame);
+
         MobileGLResult FinishStartup(Transport::Doorbell* peerBell,
                                      Transport::Doorbell* selfBell,
                                      bool startApplyThreadHere);
@@ -380,6 +387,10 @@ namespace MobileGL::MG_Remote::Client {
         // than in the transport because which bell is "mine" is the session's
         // knowledge, not the transport's - the same ruling as inproc's
         // PeerDoorbell/SelfDoorbell split.
+        // cp: one control op at a time, and the client's own seq space.
+        std::mutex m_remoteControlMutex;
+        Uint64 m_remoteControlSeq = 0;
+
         std::unique_ptr<Transport::SocketTransport> m_socketTransport;
         std::unique_ptr<Transport::Doorbell> m_socketSelfBell;
         std::unique_ptr<Transport::Doorbell> m_socketPeerBell;

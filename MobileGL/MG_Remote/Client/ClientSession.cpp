@@ -15,6 +15,7 @@
 #include "../Protocol/generated/protocol_generated.h"
 #include "../Server/ServerLoop.h"
 #include "../Server/ServerSession.h"
+#include "../Protocol/SurfaceOpCodec.h"
 #include "../Transport/FdPassing.h"
 #include "../Transport/InProcessTransport.h"
 #include "WireTables.h"
@@ -52,6 +53,10 @@ namespace MobileGL::MG_Remote::Client {
         // The same bounded handshake deadline the server uses. Bounded, not kWaitForever: a
         // bring-up that never answers has to be a red lane rather than a wedged CI job.
         constexpr Uint32 kHandshakeTimeoutMs = 5000;
+        // cp (CONTRACT-P6 D5b): bounded, and its expiry is NOT fatal. A peer that
+        // is gone is a different fact from a peer that is slow, and only the
+        // doorbell death latch may say which.
+        constexpr Uint32 kRemoteControlTimeoutMs = 5000;
         // Teardown's drain. Also bounded, and for the same reason - table 3's order is
         // "publish and wait for the server to drain and acknowledge", and a wait with no
         // deadline there turns a lost record into a hung process exit.
@@ -769,10 +774,100 @@ namespace MobileGL::MG_Remote::Client {
             m_socketSelfBell = MakeUnique<Transport::SocketDoorbell>(fds[5], 1, true);
         }
 
+        // `cp`: from here the twelve EGL forwarders cross the socket instead of
+        // being posted into a mailbox this process does not own. Installed BEFORE
+        // FinishStartup, because FinishStartup's caps pump can already trigger
+        // one.
+        Server::ServerLoopInstance().SetRemoteControlSink(&RemoteControlSinkThunk, this);
+
         // The apply thread IS ALREADY RUNNING, in the other process: ServerMain
         // started it before it sent the first descriptor. Starting one here would
         // put a second applier on a ring that already has one.
         return FinishStartup(m_socketPeerBell.get(), m_socketSelfBell.get(), false);
+    }
+
+    MobileGLResult ClientSession::RemoteControlSinkThunk(void* user,
+                                                        Server::SurfaceControlFrame& frame) {
+        return static_cast<ClientSession*>(user)->RunRemoteSurfaceControlFrame(frame);
+    }
+
+    MobileGLResult ClientSession::RunRemoteSurfaceControlFrame(Server::SurfaceControlFrame& frame) {
+        if (m_transport == nullptr) {
+            return MOBILEGL_ERR_NOT_INITIALIZED;
+        }
+        // THE CLIENT MINTS, always, dense from 1 (CONTRACT-P6 §6.3). The server's
+        // local mint exists for unnumbered LOCAL posts; a wire request that let
+        // the server renumber it would get back a reply it cannot correlate.
+        if (frame.seq == 0) {
+            frame.seq = ++m_remoteControlSeq;
+        }
+
+        ::flatbuffers::FlatBufferBuilder builder(512);
+        const MG_Remote::SurfaceWireError encoded = MG_Remote::EncodeSurfaceOpFrame(frame, &builder);
+        if (encoded != MG_Remote::SurfaceWireError::None) {
+            // A NAMED refusal, not a dropped op. InprocOnlyOpOnTheWire is the
+            // live one: three of the twelve forwarders ride the frame channel
+            // without a wire kind (CONTRACT-P6 §2), and a spawn client that
+            // reaches one has found a gap rather than a transport error.
+            MGLOG_E("MG_Remote client: surface op kind %d cannot cross the wire (%s)",
+                    static_cast<int>(frame.kind), MG_Remote::SurfaceWireErrorName(encoded));
+            return MOBILEGL_ERR_UNSUPPORTED;
+        }
+
+        // ONE CONTROL OP AT A TIME. The twelve forwarders are already
+        // caller-serialised on the server's m_callerMutex under inproc; the same
+        // discipline has to hold here or two replies race for one correlation.
+        const std::lock_guard<std::mutex> lock(m_remoteControlMutex);
+        const MobileGLResult sent = m_transport->SendFrame(
+            MobileGLByteSpan{builder.GetBufferPointer(), builder.GetSize()});
+        if (sent != MOBILEGL_OK) {
+            return sent;
+        }
+
+        // The reply. A BOUNDED wait whose expiry is NOT fatal (CONTRACT-P6 §5.4
+        // D5b): a peer that is gone is a different fact from a peer that is slow,
+        // and only the doorbell's death latch may say which.
+        for (;;) {
+            std::vector<Uint8> reply;
+            const MobileGLResult received =
+                ReceiveEnvelope(*m_transport, reply, kRemoteControlTimeoutMs);
+            if (received != MOBILEGL_OK) {
+                MGLOG_E("MG_Remote client: no SurfaceReply for seq %llu within %u ms (rc=%d)",
+                        static_cast<unsigned long long>(frame.seq), kRemoteControlTimeoutMs,
+                        static_cast<int>(received));
+                return received;
+            }
+            const ::MobileGL::Wire::CtrlEnvelope* envelope = ParseEnvelope(reply);
+            if (envelope == nullptr) {
+                return MOBILEGL_ERR_PROTOCOL_MISMATCH;
+            }
+            if (envelope->msg_type() == ::MobileGL::Wire::CtrlMsg::CapsSnapshot) {
+                // The server republishes caps from inside its MakeCurrent
+                // dispatch (a6 row A4-30), so a snapshot can arrive BEFORE the
+                // reply to the very op that produced it. Adopting it here rather
+                // than dropping it is what keeps R-12's "a second arrival IS the
+                // invalidation" true on this path too.
+                if (const auto* snapshot = envelope->msg_as_CapsSnapshot()) {
+                    AdoptCapsSnapshot(snapshot);
+                }
+                continue;
+            }
+            if (envelope->msg_type() != ::MobileGL::Wire::CtrlMsg::SurfaceReply ||
+                envelope->msg_as_SurfaceReply() == nullptr) {
+                MGLOG_E("MG_Remote client: expected a SurfaceReply, got message type %d",
+                        static_cast<int>(envelope->msg_type()));
+                return MOBILEGL_ERR_PROTOCOL_MISMATCH;
+            }
+            const ::MobileGL::Wire::SurfaceReply* wire = envelope->msg_as_SurfaceReply();
+            if (wire->seq() != frame.seq) {
+                MGLOG_E("MG_Remote client: SurfaceReply names seq %llu, we asked for %llu",
+                        static_cast<unsigned long long>(wire->seq()),
+                        static_cast<unsigned long long>(frame.seq));
+                return MOBILEGL_ERR_PROTOCOL_MISMATCH;
+            }
+            MG_Remote::DecodeWireSurfaceReply(*wire, &frame);
+            return MOBILEGL_OK;
+        }
     }
 
     // The half of startup that is IDENTICAL for inproc and spawn: the ring

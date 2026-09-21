@@ -655,8 +655,22 @@ namespace MobileGL::MG_Remote::Server {
         return applied;
     }
 
+    void ServerLoop::SetRemoteControlSink(RemoteControlSink sink, void* user) {
+        m_remoteSink = sink;
+        m_remoteSinkUser = user;
+    }
+
     MobileGLResult ServerLoop::RunSurfaceControlFrame(SurfaceControlFrame& frame) {
         if (frame.kind == SurfaceControlOp::None) return MOBILEGL_ERR_INVALID_ARGUMENT;
+
+        // `cp`: the server is another process, so the frame CROSSES instead of
+        // being posted. Checked before the seq mint below, because a wire request
+        // must carry the CLIENT's number all the way through dispatch and the
+        // reply - the local mint at :662 is for unnumbered LOCAL requests and
+        // renumbering a wire one would make its reply uncorrelatable.
+        if (m_remoteSink != nullptr) {
+            return m_remoteSink(m_remoteSinkUser, frame);
+        }
         // Zero marks an unnumbered local request. A wire request is already numbered by its
         // client and MUST retain that number all the way through dispatch and the reply.
         if (frame.seq == 0) frame.seq = m_controlSeq.fetch_add(1, std::memory_order_acq_rel) + 1;

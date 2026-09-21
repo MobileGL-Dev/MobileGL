@@ -223,6 +223,21 @@ namespace MobileGL::MG_Remote::Server {
         // What did NOT move: the blocking handshake, the one slot, and the apply-thread
         // ownership. Under spawn the same frame is what SurfaceOpCodec encodes into a
         // Wire::SurfaceOp - this signature is the seam both transports share.
+        // P6 `cp`: where a control frame goes when the server is ANOTHER PROCESS.
+        //
+        // All twelve Server* forwarders funnel through RunSurfaceControlFrame, so
+        // this is ONE seam rather than twelve (a6 row A4-13 counted them). The
+        // client installs a sink at handshake; with none installed the behaviour
+        // is exactly what it was - post into the one-slot mailbox, or run inline
+        // when we are already on the apply thread.
+        //
+        // A HOOK RATHER THAN A CALL INTO ClientSession, deliberately: the server
+        // half calling the client half is four of the six symbols a6 found
+        // MG_Remote owes itself (a6-link-experiment §5), and this is the one
+        // place that would have added a fifth.
+        using RemoteControlSink = MobileGLResult (*)(void* user, SurfaceControlFrame& frame);
+        void SetRemoteControlSink(RemoteControlSink sink, void* user);
+
         MobileGLResult RunSurfaceControlFrame(SurfaceControlFrame& frame);
 
         // The TEST seam through the same channel: posts a ProbeForTesting frame whose dispatch
@@ -364,6 +379,9 @@ namespace MobileGL::MG_Remote::Server {
         Bool ControlIsPending() const;
 
     private:
+        RemoteControlSink m_remoteSink = nullptr;
+        void* m_remoteSinkUser = nullptr;
+
         void ApplyThreadMain();
         // Runs a posted control frame, if there is one. Returns true if it ran one.
         Bool PumpControlRequest();

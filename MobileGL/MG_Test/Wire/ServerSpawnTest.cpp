@@ -34,6 +34,7 @@
 //   the boundary               before the data plane needs it.
 
 #include <MG_Remote/Client/ClientSession.h>
+#include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Remote/Server/ServerSpawn.h>
 #include <MG_Remote/Transport/Doorbell.h>
 #include <MG_Remote/Transport/FdPassing.h>
@@ -149,6 +150,45 @@ TEST(ServerSpawnTest, StartsAServerProcessAndHandshakesAcrossIt) {
     ASSERT_EQ(Server::ReapServer(session.server, 5000, &exitCode), MOBILEGL_OK);
     EXPECT_EQ(exitCode, 0) << "the server must exit cleanly on EOF, not be killed";
     EXPECT_EQ(Server::CountOwnChildren(), before) << "a zombie would still be counted here";
+}
+
+TEST(ServerSpawnTest, AnEglControlOpCrossesToTheOtherProcessAndAnswers) {
+    // `cp`. All twelve Server* EGL forwarders funnel through
+    // ServerLoop::RunSurfaceControlFrame, so this exercises the ONE seam that
+    // sends them: encode -> control socket -> the server's pump ->
+    // ServerApplyWireSurfaceOp -> its one-slot mailbox -> the apply thread ->
+    // SurfaceReply -> back here.
+    //
+    // Under inproc this same call posts into a mailbox in THIS process. The
+    // assertion that it is not doing that here is the server's pid in the
+    // handshake plus the fact that ServerLoopInstance() in this process was
+    // never started - a local post would find no apply thread and time out.
+    Session session;
+    ASSERT_TRUE(Bring("eglop", &session));
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+
+    // eglInitialize's forwarder: the simplest op that has a real answer.
+    EGLint major = -1;
+    EGLint minor = -1;
+    const bool ok = Server::ServerInitializeEGLDisplay(EGL_NO_DISPLAY, &major, &minor);
+
+    // WHAT IS ASSERTED IS THE ROUND TRIP, not the EGL result. A headless CI
+    // machine has no display to initialise, so `ok` is expected to be false -
+    // and that is fine, because `cp` is done when the op reaches the other
+    // process and an answer comes back.
+    //
+    // THE OUT-PARAMETERS ARE THE PROOF. ServerInitializeEGLDisplay writes them
+    // "whenever the dispatch ran, success or not" (ServerLoop.cpp's own comment
+    // at the forwarder), so they move off -1 if and only if a SurfaceReply came
+    // back from the other process. A transport failure returns before the
+    // write-back and leaves both at -1; that is the difference this asserts.
+    EXPECT_NE(major, -1) << "no SurfaceReply came back: the op never reached the other process";
+    EXPECT_NE(minor, -1) << "no SurfaceReply came back: the op never reached the other process";
+    (void)ok;
+
+    Client::ClientSessionInstance().Stop();
+    int exitCode = -1;
+    ASSERT_EQ(Server::ReapServer(session.server, 5000, &exitCode), MOBILEGL_OK);
 }
 
 TEST(ServerSpawnTest, AnUnresolvableImageIsANamedRefusalAndStartsNothing) {
