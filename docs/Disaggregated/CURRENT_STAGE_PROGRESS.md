@@ -13,7 +13,7 @@
 | **P5d** `inproc` 性能专项 | **已收官（2026-09-18，三轮）** | `cb06538c`、`56a77348`、`1f8de61b`；报告 [`P5D-INPROC-PERFORMANCE.md`](P5D-INPROC-PERFORMANCE.md)；`MEASUREMENTS.md` §9 |
 | **P5e** 退役 Espryt draw path 的 lockstep | **已收官（2026-09-19）**，附一条具名未决（E1 对照，ID-122） | 契约 `MobileGL/MG_Remote/CONTRACT-P5E.md`；计划 `~/w7/notes/p5e/BRIEF-P5E.md`、裁定 `~/w7/notes/p5e/INTEGRATOR-DECISIONS-P5E.md`（**ID-80..136**）；**十二个包已全部落地合并**（§2.7），`kMGPipeP5eRunAheadReady` 与 `kMGPipeP5eClientWaitRuleLanded` 均已翻。strict 车道硬绿 179/179、`integration-gpu` 1357/1357、三个构建 flavour 全绿；设备上 VD32 已与 monolith 齐平。报告 [`P5E-RUNAHEAD.md`](P5E-RUNAHEAD.md)，未完成项见 §5 |
 | **P5f** 一切状态上 wire | **已收官（2026-09-20）** | f0 / f1 / fc / fe / fm / fs / fr / fv 及分类收口均已完成；零 BARRIER_PULLED、两份 marker 空表、逐帧 rsp=0。主机全门、Claude 异族终审两项修复及 red-once、Redmi 六 clean-boot 臂通过。见 [`close-report`](notes/p5f/close-report.md)、[`close-review`](notes/p5f/close-review.md)、[`device-report`](notes/p5f/device-report.md) |
-| **P6** spawn transport | **a6 已收官（2026-09-21）**，c6 开工中 | 计划 [`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md)、草稿 [`P6-CONTRACT-DRAFT.md`](P6-CONTRACT-DRAFT.md)；a6 见 [`a6-audit-v1.md`](notes/p6/a6-audit-v1.md) 与 [`a6-link-experiment.md`](notes/p6/a6-link-experiment.md)。传输原语与 P5f 值控制帧、静态世代/角色隔离已在树上；待做的是进程装配、socket 传输、握手/EOF/device-lost 等，不再重做已落地的控制帧与静态量 |
+| **P6** spawn transport | **a6、c6 已收官（2026-09-21）**；下一个包 `lk`（数据面缝的实现） | 计划 [`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md)、草稿 [`P6-CONTRACT-DRAFT.md`](P6-CONTRACT-DRAFT.md)；a6 见 [`a6-audit-v1.md`](notes/p6/a6-audit-v1.md) 与 [`a6-link-experiment.md`](notes/p6/a6-link-experiment.md)。传输原语与 P5f 值控制帧、静态世代/角色隔离已在树上；待做的是进程装配、socket 传输、握手/EOF/device-lost 等，不再重做已落地的控制帧与静态量 |
 
 ## 2. P5f 最终验收
 
