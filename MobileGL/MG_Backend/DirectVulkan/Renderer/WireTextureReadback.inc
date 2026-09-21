@@ -175,7 +175,7 @@
         Vector<Uint8> result;
         if (depthStencil) {
             if (!PackDepthStencilTight(depth ? mapped : nullptr, stencil ? mapped + stencilOffset : nullptr,
-                                          resource->format, pixels, info.Format, info.Type, result)) return false;
+                                       resource->format, pixels, info.Format, info.Type, result)) return false;
         } else {
             using namespace DirectGLES::ReadbackImpl;
             ReadbackChannelMapping mapping{};
