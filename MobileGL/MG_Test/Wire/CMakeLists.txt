@@ -17,6 +17,10 @@ set(MOBILEGL_WIRE_TESTS
 if (NOT WIN32)
     # SCM_RIGHTS and fork(): POSIX only.
     list(APPEND MOBILEGL_WIRE_TESTS FdPassingTest)
+    # P6 so: the SAME nine ITransport-contract cases InProcessTransportTest runs, over a real
+    # socketpair with real threads, plus the three a stream has and a message queue does not.
+    # POSIX for the same reason as FdPassingTest - and because CONTRACT-P6 §2.6 lands POSIX only.
+    list(APPEND MOBILEGL_WIRE_TESTS SocketTransportTest)
 endif()
 
 include(GoogleTest)
