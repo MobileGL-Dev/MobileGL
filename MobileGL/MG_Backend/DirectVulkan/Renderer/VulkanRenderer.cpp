@@ -13085,10 +13085,49 @@ void main() {
         }
 
         // The command parameters live on the GPU, so the vertex range is unknown here;
-        // resident vertex buffers are uploaded in full regardless.
+        // resident vertex buffers are uploaded in full regardless. A CLIENT-MEMORY ARRAY is the
+        // one exception: its bytes have to be staged BEFORE the GPU reads the command, so for
+        // exactly that case the words are resolved on the CPU and this range is what bounds the
+        // staging. The draw itself stays native - the GPU reads the same commands.
         DrawCmdParam vertexRange{};
         vertexRange.vertexCount = 0;
         vertexRange.instanceCount = 1;
+        {
+            const auto& currentVAO = MGB_CTX->GetBoundVertexArray();
+            Bool clientArray = false;
+            if (currentVAO) {
+                for (const auto& attribute : currentVAO->GetAllAttributes()) {
+                    if (attribute.Enabled && !attribute.Buffer) {
+                        clientArray = true;
+                        break;
+                    }
+                }
+            }
+            if (clientArray) {
+                // The commands may be shader-written, and a stale shadow would size the upload
+                // off words no shader ever wrote.
+                drawBuffer->SyncGpuWrites();
+                const Uint8* commandHostBytes = drawBuffer->MappedData();
+                if (commandHostBytes == nullptr) {
+                    MGLOG_E_ONCE("MultiDrawArraysIndirect skipped: a client-memory vertex array needs "
+                                 "the commands on the CPU and the indirect buffer has no readable shadow");
+                    return;
+                }
+                Uint64 lastElement = 0;
+                for (GLsizei idraw = 0; idraw < drawcount; ++idraw) {
+                    VkDrawIndirectCommand command{};
+                    Memcpy(&command,
+                           commandHostBytes + commandOffset + static_cast<SizeT>(idraw) * static_cast<SizeT>(stride),
+                           sizeof(command));
+                    lastElement = std::max<Uint64>(lastElement,
+                                                   static_cast<Uint64>(command.firstVertex) + command.vertexCount);
+                    vertexRange.firstInstance = std::max(vertexRange.firstInstance, command.firstInstance);
+                    vertexRange.instanceCount = std::max(vertexRange.instanceCount, command.instanceCount);
+                }
+                vertexRange.firstVertex = 0;
+                vertexRange.vertexCount = static_cast<Uint32>(lastElement);
+            }
+        }
 
         if (!SetupDraw(frame, mode, DrawSetupAspect::IndirectDrawBuffer, vertexRange)) {
             return;
