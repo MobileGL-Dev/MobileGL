@@ -596,6 +596,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         MobileGL/MG_Remote/Server/ServerSession.cpp
         MobileGL/MG_Remote/Server/PipeApplier.cpp
         MobileGL/MG_Remote/Server/ServerLoop.cpp
+        MobileGL/MG_Remote/Server/ServerMain.cpp
+        MobileGL/MG_Remote/Server/ServerSpawn.cpp
         # P5f fc: the value frame that replaced the control mailbox's function-pointer payload,
         # and its codec against protocol.fbs's SurfaceOp/SurfaceReply (the spawn arm's seam).
         MobileGL/MG_Remote/Server/SurfaceControlFrame.cpp
@@ -924,20 +926,66 @@ endif()
 # Off by default and ANDROID-only, so no shipping configuration builds it. The
 # trace flavour of the plugin APK turns it on (android-plugin/build.gradle).
 # ---------------------------------------------------------------------------
-if (ANDROID AND MOBILEGL_BUILD_SERVER_SPIKE)
+# ---------------------------------------------------------------------------
+# P6 `sm`: the REAL server image. Unlike MOBILEGL_BUILD_SERVER_SPIKE below - the
+# P0 spike, which links no MobileGL library and exists only to prove the Android
+# delivery chain - this one links the library and runs mobilegl_server_main.
+#
+# ARCHITECTURE.md:496 called for a ~30-line stub that dlopen's libMobileGL.so and
+# dlsym's the entry point, so one shared library serves both roles. On a desktop
+# configure we link it directly instead: there is no APK packaging rule to satisfy
+# and a direct link is what makes an undefined symbol a BUILD error rather than a
+# runtime dlsym failure in a child whose stderr is /dev/null.
+#
+# Android keeps the lib*.so naming and the nativeLibraryDir output the spike
+# proved is the only exec-able location in an APK.
+if (MOBILEGL_BUILD_DISAGGREGATED AND NOT WIN32)
     add_executable(MobileGLServer
+        ${CMAKE_CURRENT_SOURCE_DIR}/MobileGL/MG_Remote/Server/ServerEntry.cpp)
+
+    target_include_directories(MobileGLServer PRIVATE
+        ${MOBILEGL_INCLUDE_DIR})
+
+    target_link_libraries(MobileGLServer PRIVATE ${CMAKE_PROJECT_NAME})
+
+    set_target_properties(MobileGLServer PROPERTIES
+        POSITION_INDEPENDENT_CODE ON)
+    target_compile_options(MobileGLServer PRIVATE -fPIE)
+    target_link_options(MobileGLServer PRIVATE -pie)
+
+    if (ANDROID)
+        # An APK's only exec-able install location is lib/<abi>/, and the packager
+        # only puts a file there if it is named lib*.so. P0 spike A proved this
+        # works from the app's own untrusted_app domain on two devices.
+        set_target_properties(MobileGLServer PROPERTIES
+            PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "MobileGLServer")
+        if (CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+            set_target_properties(MobileGLServer PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+        endif()
+    else()
+        # Desktop: the name the dladdr fallback looks for beside libMobileGL.so.
+        set_target_properties(MobileGLServer PROPERTIES
+            PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "MobileGLServer"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    endif()
+endif()
+
+if (ANDROID AND MOBILEGL_BUILD_SERVER_SPIKE)
+    # Renamed by P6 sm: the real server took the name it had been holding.
+    add_executable(MobileGLServerSpike
         ${CMAKE_CURRENT_SOURCE_DIR}/tools/spikes/server_stub/main.cpp)
 
     # An executable that is named like a shared library still has to be a real
     # PIE executable: Android has refused non-PIE executables since API 21, and
     # the name alone does not change what the loader demands of the file.
-    set_target_properties(MobileGLServer PROPERTIES
+    set_target_properties(MobileGLServerSpike PROPERTIES
         PREFIX "lib"
         SUFFIX ".so"
-        OUTPUT_NAME "MobileGLServer"
+        OUTPUT_NAME "MobileGLServerSpike"
         POSITION_INDEPENDENT_CODE ON)
-    target_compile_options(MobileGLServer PRIVATE -fPIE)
-    target_link_options(MobileGLServer PRIVATE -pie)
+    target_compile_options(MobileGLServerSpike PRIVATE -fPIE)
+    target_link_options(MobileGLServerSpike PRIVATE -pie)
 
     # AGP packages what the external native build drops into the per-ABI output
     # directory, and it selects by the .so extension. CMake puts executables in
@@ -945,7 +993,7 @@ if (ANDROID AND MOBILEGL_BUILD_SERVER_SPIKE)
     # CMAKE_LIBRARY_OUTPUT_DIRECTORY, so point this target's runtime output at
     # the library directory when the generator gave us one.
     if (CMAKE_LIBRARY_OUTPUT_DIRECTORY)
-        set_target_properties(MobileGLServer PROPERTIES
+        set_target_properties(MobileGLServerSpike PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
     endif()
 endif()

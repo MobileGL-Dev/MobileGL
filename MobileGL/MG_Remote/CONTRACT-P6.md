@@ -73,6 +73,17 @@ Two consequences, and the second is why this file can exist without changing beh
 | `SurfaceOpKind::InitCapabilities = 11` | **Appended.** The draft claimed `ServerInitCapabilities` needs no wire form because "`CapsSnapshot` answers it". The *answer* is a `CapsSnapshot`; the **request** has a live client caller (`Client/BackendObject_Remote.cpp:126`) and the codec **refuses to encode it** (`Protocol/SurfaceOpCodec.cpp:119-122`, `InprocOnlyOpOnTheWire`). A spawn client cannot ask. | unknown tag → `Fatal{ProtocolCorruption}`, never ignored | the server's control pump | `cp` |
 | `SurfaceReply.result: int` | **Appended, id 5.** Carries the `MobileGLResult` that `ServerApplyWireSurfaceOp` already computes and drops. Without it a client cannot tell a server that died mid-op from a legitimate refusal, and therefore cannot choose between arming the device-lost latch and returning `EGL_FALSE`. | — | the client's control demultiplexer | `hs` |
 | `SurfaceReply.defaultFb` | **`(deprecated)`.** The encoder passes a literal `0` offset (`SurfaceOpCodec.cpp:184`) and the decoder never reads it; `kEventSurfaceChanged` is the landed carrier (P5f `fc`). The slot is **burned, never deleted** — a deleted field frees its vtable slot for the next append. | — | nobody, by construction | `hs` |
+> **asio was considered for the byte stream and declined (2026-09-21).** It is already vendored
+> and on the include path, so the question is a fair one. But spawn needs five platform
+> mechanisms and asio covers one: its own `socketpair` returns `operation_not_supported` on
+> Windows (`3rdparty/asio/include/asio/detail/impl/socket_ops.ipp:683`), it has no descriptor
+> passing at all, segment delivery is POSIX-only by design, and there is no `fork`. So adopting
+> it would not make Windows work; it would only put asio headers inside `Transport/`, which
+> `ITransport.h` keeps dependency-light on purpose. **Revisit at P6.5**, where
+> `asio::generic::stream_protocol` carries a raw (family, type, protocol) triple and therefore
+> gives AF_VSOCK from the same implementation - and where `ITransport` lets an `AsioTransport`
+> land beside `SocketTransport` without touching a caller.
+
 | `LinkTerms{dataPlane, wireForm, maxReplyBytes, cmdWindowBytes, stageWindowBytes}` | Appended to `Hello`/`Welcome`. `dataPlane` has exactly **one** legal value in P6, `SharedSegments`; `wireForm` exactly one, `StructImage`. Anything else is refused **by name**. The four sizes are **stated by the SERVER**. | any other value → `Refuse{ProtocolMismatch}` | the handshake | `hs` |
 | `Refuse{code, detail, peer values}` | Appended `CtrlMsg` union tag. A handshake disagreement is an **answer**, not an abort (§5.1). | — | both sides | `hs` |
 | `wireFingerprint` / `buildFingerprint` | The single `abiFingerprint` splits. §4. | mismatch → `Refuse`, never `Fatal` | the handshake | `hs` |

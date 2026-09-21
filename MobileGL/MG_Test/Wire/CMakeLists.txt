@@ -21,9 +21,17 @@ if (NOT WIN32)
     # socketpair with real threads, plus the three a stream has and a message queue does not.
     # POSIX for the same reason as FdPassingTest - and because CONTRACT-P6 §2.6 lands POSIX only.
     list(APPEND MOBILEGL_WIRE_TESTS SocketTransportTest)
+    # P6 sm: two MobileGL processes. Needs the real server image beside it, so
+    # the dependency is declared after the loop rather than assumed.
+    list(APPEND MOBILEGL_WIRE_TESTS ServerSpawnTest)
 endif()
 
 include(GoogleTest)
+
+# ServerSpawnTest execs a real second process, so the image has to exist before
+# the test runs and the test has to be told where it landed. Both stated here
+# rather than left to a working-directory coincidence.
+set(MOBILEGL_SERVER_IMAGE_PATH "${CMAKE_BINARY_DIR}/libMobileGLServer.so")
 
 foreach (test IN LISTS MOBILEGL_WIRE_TESTS)
     add_executable(${test} ${test}.cpp)
@@ -39,7 +47,20 @@ foreach (test IN LISTS MOBILEGL_WIRE_TESTS)
             ${LINK_LIBRARIES}
     )
 
-    gtest_discover_tests(${test} DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+    if (test STREQUAL "ServerSpawnTest")
+        # It execs the real image, so it must be built first and must be told
+        # where it is. MOBILEGL_TEST_SERVER_PATH is read by the test's
+        # ServerImage() helper; without it the test would depend on the working
+        # directory, which ctest does not promise.
+        if (TARGET MobileGLServer)
+            add_dependencies(${test} MobileGLServer)
+        endif()
+        gtest_discover_tests(${test} DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS unit
+                ENVIRONMENT "MOBILEGL_TEST_SERVER_PATH=${MOBILEGL_SERVER_IMAGE_PATH}")
+    else ()
+        gtest_discover_tests(${test} DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+    endif ()
 endforeach ()
 
 # P5 w1's G3 codec suite. It is registered on its own rather than in the list above because it
