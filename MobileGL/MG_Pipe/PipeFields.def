@@ -185,9 +185,21 @@
 #define MGP_FIELDS_MGPSubRegion(F) \
     F(X) F(Y) F(Z) F(W) F(H) F(D) F(SrcOffset) F(SrcRowStride) F(SrcSliceStride)
 
+// 40c5443f's four appended words, in declaration order. LevelWidth/Height/Depth carry the FULL
+// staged mip extent - "mutable GL images may define a lone mip or a noncanonical mip size", so
+// the dirty box below is what CHANGED, not what exists - which is what
+// MGPWireOp::ResourceSubData's "ResourceSubData.LevelExtent" arm holds the box inside
+// (PipeWireCodec.cpp) and what StagedTextureStore derives the server row/slice strides from.
+//
+// LevelPad IS PADDING BY ROLE AND NOT BY NAME, and that is the whole reason it has a row here:
+// the cover check excuses only the members NAMED Pad<n>, so this one left out is a pipe-gates
+// failure. The row costs no false positive, because every producer builds the record as
+// `MGPSubData{}` (so the word is a deterministic zero, not an uninitialised byte) and the
+// payload rides the wire as one POD memcpy - MGP_ASSERT_POD(MGPSubData, 88) is the whole
+// record, with no untransferred tail - so both sides of a comparison read the same zero.
 #define MGP_FIELDS_MGPSubData(F) \
     F(Res) F(Target) F(Level) F(SourceIsVerbatimLevelShadow) F(HasLiveHostWrites) F(UnionBox) \
-    F(RegionCount) F(Blob)
+    F(RegionCount) F(Blob) F(LevelWidth) F(LevelHeight) F(LevelDepth) F(LevelPad)
 
 #define MGP_FIELDS_MGPSubDataComplete(F) \
     F(Res) F(Target) F(FirstLevel) F(LevelCount) F(PullSerial)
