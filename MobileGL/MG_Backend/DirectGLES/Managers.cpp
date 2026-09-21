@@ -5545,8 +5545,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 #endif // MOBILEGL_PIPE_PUSH
 
-
-
 #if MOBILEGL_BUILD_DISAGGREGATED
         // THE CLIENT-ARRAY UPLOAD FOR A DRAW WHOSE FETCHED ELEMENTS (first, count) DOES NOT
         // DESCRIBE. SyncClientSideAttributesForDrawArrays below answers the non-indexed family
