@@ -2462,6 +2462,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                 GLsizei instanceCount, GLint baseVertex, Uint32 baseInstance,
                                                 const void* clientIndices, Uint64 clientIndexBytes) {
             if (count <= 0 || instanceCount <= 0) return true;
+            // MONOLITH ONLY, and the gate is what keeps a live transport's apply thread out of
+            // the frontend VAO: with a transport the CLIENT owns those bytes and snapshots them
+            // from the GL thread (MG_Impl/Pipe/OwnedDrawInputs.h), so there is nothing for the
+            // server to stage - and reading MGB_CTX there is the role violation this family's
+            // other monolith glue is guarded against.
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return true;
             const auto& currentVAO = MGB_CTX->GetBoundVertexArray();
             if (!currentVAO) return true;
 
