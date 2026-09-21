@@ -2423,7 +2423,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // function that only re-homes two identical inline blocks the two DrawArrays entry
         // points used to carry. The same spelling governs the three below, and for a second
         // reason on top of the symbol count: a Debug build drops CXX_VISIBILITY_PRESET to
-        // `default` (CMakeLists.txt:629-641), so an external-linkage helper here would be a
+        // `default` (CMakeLists.txt:707-719), so an external-linkage helper here would be a
         // DYNAMIC export in exactly the configuration a symbol gate cannot see it in.
         //
         // ALL FLAVORS, NOT JUST THE SPLIT ARM. These three were inside

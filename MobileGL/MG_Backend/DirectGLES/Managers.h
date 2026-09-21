@@ -1358,11 +1358,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // SKIP the draw: issuing it would have the shader read whatever the ES context last
             // held for that attribute, which is a wrong picture rather than an error.
             //
-            // UNGUARDED WITH ITS CALLERS: the three VertexArrayImpl wrappers above it in
-            // DirectGLES.cpp early-return unless the transport is Monolith, so this overload is
-            // reached by the pull, verify and push build too - and those builds compile the
-            // indexed and indirect entry points that call it. The declaration follows its
-            // definition (Managers.cpp).
+            // UNGUARDED WITH ITS CALLERS. Its only call site is
+            // VertexArrayImpl::SyncClientSideVertexArraysForFetch in DirectGLES.cpp, whose
+            // body returns early unless the transport is Monolith - and the monolith arm is
+            // what the pull, verify and push builds run, not a split-arm fallback. Those
+            // flavors therefore compile it, so its declaration and definition (Managers.cpp)
+            // have to be visible there too.
             Bool SyncClientSideAttributesForDraw(
                 const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject,
                 const MG_Pipe::MGPipeClientFetchPlan& plan, Uint32 fetchBaseInstance);
