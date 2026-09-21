@@ -20,6 +20,10 @@
 #if MOBILEGL_PIPE_PUSH
 // P3a: the vertex-input payload views the handle arm of the VAO twin consumes.
 #include <MG_Pipe/MGPipeTypes.h>
+// The client-memory fetch plan: which elements of an application-owned array a draw reads.
+// The monolith arm answers it here (SyncClientSideAttributesForDraw) and the wire arm asks
+// the same question of the same header (MG_Impl/Pipe/OwnedDrawInputs.h).
+#include <MG_Impl/Pipe/ClientFetchPlan.h>
 // P4a: the RECORDS the five re-keyed twins read instead of the frontend object. The readers
 // below hand back pointers to them, and MGPipeResourceRecord::PendingUpload is a nested type,
 // so a forward declaration would not do. Push-only, like everything else P4a adds to this
@@ -1339,7 +1343,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void SyncToBackendFromApplier();
 #endif
             void SyncClientSideAttributesForDrawArrays(
-                const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject, GLint first, GLsizei count);
+                const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject, GLint first, GLsizei count,
+                Uint32 fetchBaseInstance = 0);
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // THE SAME UPLOAD FOR A DRAW WHOSE FETCHED ELEMENTS THE (first, count) RANGE DOES NOT
+            // DESCRIBE: an indexed draw reads the elements its indices name, an instanced one one
+            // element per instance, and the indirect forms a range that lives in GPU memory.
+            // `plan` is MGPipeClientFetchPlan's answer for this very draw, so this arm and the
+            // wire arm's owned snapshot fetch the same elements by construction.
+            //
+            // False when a client array could not be snapshotted (an index or command block this
+            // side cannot read, a fetch range that cannot be represented). The caller must then
+            // SKIP the draw: issuing it would have the shader read whatever the ES context last
+            // held for that attribute, which is a wrong picture rather than an error.
+            Bool SyncClientSideAttributesForDraw(
+                const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject,
+                const MG_Pipe::MGPipeClientFetchPlan& plan, Uint32 fetchBaseInstance);
+#endif
             Uint GetBackendVertexArrayId() const { return m_backendVAOId; }
             void Bind() const;
 

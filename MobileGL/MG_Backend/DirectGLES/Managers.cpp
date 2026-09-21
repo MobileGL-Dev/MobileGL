@@ -5545,8 +5545,119 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 #endif // MOBILEGL_PIPE_PUSH
 
+
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // THE CLIENT-ARRAY UPLOAD FOR A DRAW WHOSE FETCHED ELEMENTS (first, count) DOES NOT
+        // DESCRIBE. SyncClientSideAttributesForDrawArrays below answers the non-indexed family
+        // exactly and nothing else: an indexed draw reads the elements its INDICES name, an
+        // instanced draw reads one element per instance (shifted by baseInstance and divided by
+        // divisor), and the indirect forms read a count and a first element that live in GPU
+        // memory. Until this function existed those draws took NO upload at all - the enabled
+        // client attribute kept whatever the ES context last held for it (normally: disabled, so
+        // every vertex read the generic current value), and an indexed draw over a client array
+        // painted nothing.
+        //
+        // `plan` is MGPipeClientFetchPlan's answer for this very draw, which is the same
+        // arithmetic the wire arm snapshots from (MG_Impl/Pipe/OwnedDrawInputs.h) - the two arms
+        // fetch the same elements by construction rather than by inspection.
+        //
+        // THE UPLOAD IS SPARSE: only the fetched elements are dereferenced, and the gaps between
+        // them are zero-filled. Reading the intervening application memory would be legal here -
+        // one thread, one address space - but it is not needed, and a draw naming element 0 and
+        // element 2^20 must not turn into an 8 MiB read of somebody else's heap.
+        //
+        // False means the draw must be SKIPPED: the elements it would fetch are not in the store
+        // the driver is about to read, and issuing it anyway is a wrong picture, not an error.
+        Bool BackendVertexArrayObject::SyncClientSideAttributesForDraw(
+            const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject,
+            const MG_Pipe::MGPipeClientFetchPlan& plan, Uint32 fetchBaseInstance) {
+            if (!stateVAOObject) return true;
+
+            Bind();
+
+            const auto& allAttributes = stateVAOObject->GetAllAttributes();
+            Vector<Uint64> elements;
+            for (Uint attribIndex = 0; attribIndex < allAttributes.size(); ++attribIndex) {
+                const auto& attrib = allAttributes[attribIndex];
+                if (!attrib.Enabled || attrib.Buffer) continue;
+
+                // The same outcome SyncToBackend reaches for a 64-bit client array it cannot
+                // narrow: the enabled array is DROPPED (the attribute reads its generic current
+                // value) rather than left enabled with no pointer behind it, which is the Adreno
+                // null-deref. The narrowing stream itself stays the arrays path's answer.
+                if (attrib.IsLong || attrib.Type == DataType::Float64) {
+                    g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
+                    continue;
+                }
+
+                if (!plan.Elements(static_cast<Uint32>(attrib.Divisor), elements)) return false;
+                if (elements.empty()) continue;
+
+                const auto* source = reinterpret_cast<const Uint8*>(attrib.Offset);
+                const SizeT elementSize = GetAttributeByteSize(attrib.Type, attrib.Size, attrib.IsBgra);
+                if (source == nullptr || elementSize == 0 || attrib.Size <= 0) {
+                    MGLOG_E_ONCE("Client attribute %u has no readable element size (%zu); the draw is skipped",
+                                 attribIndex, elementSize);
+                    return false;
+                }
+                const SizeT stride = attrib.Stride > 0 ? static_cast<SizeT>(attrib.Stride) : elementSize;
+                const Uint64 last = elements.back();
+                if (stride != 0 && last > (std::numeric_limits<SizeT>::max() - elementSize) / stride) return false;
+                const SizeT byteCount = static_cast<SizeT>(last * stride + elementSize);
+
+                auto& bufferId = m_clientAttributeBufferIds[attribIndex];
+                if (bufferId == 0) {
+                    g_GLESFuncs.glGenBuffers(1, &bufferId);
+                    if (bufferId == 0) {
+                        MGLOG_E_ONCE("Failed to create client-side vertex attribute upload buffer.");
+                        return false;
+                    }
+                }
+
+                Vector<Uint8> snapshot(byteCount, 0);
+                for (const Uint64 element : elements) {
+                    const SizeT offset = static_cast<SizeT>(element * stride);
+                    std::memcpy(snapshot.data() + offset, source + offset, elementSize);
+                }
+
+                BufferImpl::BindBufferId(GL_ARRAY_BUFFER, bufferId);
+                g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(snapshot.size()),
+                                         snapshot.data(), GL_STREAM_DRAW);
+                if (MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageVertexClient,
+                                                 static_cast<Uint64>(snapshot.size()));
+                }
+
+                // Element 0 of a client array sits at its buffer's byte 0, so a divisor'd array's
+                // baseInstance shift is BaseInstanceByteShift - the same arithmetic SyncToBackend
+                // applies to a VBO-backed array - and it rides in the pointer argument.
+                const void* const shift =
+                    reinterpret_cast<const void*>(BaseInstanceByteShift(attrib, fetchBaseInstance));
+                if (!attrib.IsInteger) {
+                    const GLint glSize = attrib.IsBgra ? static_cast<GLint>(GL_BGRA) : attrib.Size;
+                    g_GLESFuncs.glVertexAttribPointer(attribIndex, glSize,
+                                                      MG_Util::ConvertDataTypeToGLEnum(attrib.Type),
+                                                      attrib.Normalized ? GL_TRUE : GL_FALSE,
+                                                      static_cast<GLsizei>(stride), shift);
+                } else {
+                    g_GLESFuncs.glVertexAttribIPointer(attribIndex, attrib.Size,
+                                                       MG_Util::ConvertDataTypeToGLEnum(attrib.Type),
+                                                       static_cast<GLsizei>(stride), shift);
+                }
+                // The divisor is NOT optional here. SyncToBackend's own glVertexAttribDivisor sits
+                // behind BindAttributeBuffer, which a client-memory attribute never passes, so
+                // until this line the ES context's divisor for this index is whatever the last
+                // VBO-backed attribute left there.
+                g_GLESFuncs.glVertexAttribDivisor(attribIndex, attrib.Divisor);
+                g_GLESFuncs.glEnableVertexAttribArray(attribIndex);
+            }
+            return true;
+        }
+#endif
         void BackendVertexArrayObject::SyncClientSideAttributesForDrawArrays(
-            const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject, GLint first, GLsizei count) {
+            const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject, GLint first, GLsizei count,
+            Uint32 fetchBaseInstance) {
             if (!stateVAOObject || count <= 0 || first < 0) {
                 return;
             }
@@ -5606,7 +5717,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // forwarded here either.
                     g_GLESFuncs.glVertexAttribPointer(attribIndex, attrib.Size, GL_FLOAT, GL_FALSE,
                                                       static_cast<GLsizei>(componentCount * sizeof(Float)),
-                                                      nullptr);
+                                                      // The converted stream is tightly packed, so a divisor'd array's
+                                                      // baseInstance shift is a whole number of CONVERTED elements -
+                                                      // not BaseInstanceByteShift's source-stride arithmetic.
+                                                      reinterpret_cast<const void*>(
+                                                          attrib.Divisor == 0 ? 0u : static_cast<SizeT>(fetchBaseInstance) *
+                                                                                         componentCount *
+                                                                                         sizeof(Float)));
+                    // glVertexAttribPointer's final argument IS that shift. A client array
+                    // declared through the pointer API keeps element 0 at the buffer's byte 0, so
+                    // the shift rides in the pointer argument the call above passes.
+                    // The float64 narrowing itself is shared with SyncToBackend's conversion
+                    // branch; only the fetch RANGE differs, and the draw's is the accurate one.
                     g_GLESFuncs.glEnableVertexAttribArray(attribIndex);
                     continue;
                 }
@@ -5641,11 +5763,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     const GLint glSize = attrib.IsBgra ? static_cast<GLint>(GL_BGRA) : attrib.Size;
                     g_GLESFuncs.glVertexAttribPointer(
                         attribIndex, glSize, MG_Util::ConvertDataTypeToGLEnum(attrib.Type),
-                        attrib.Normalized ? GL_TRUE : GL_FALSE, static_cast<GLsizei>(stride), nullptr);
+                        attrib.Normalized ? GL_TRUE : GL_FALSE, static_cast<GLsizei>(stride),
+                        // A client array's element 0 sits at its buffer's byte 0, so the
+                        // divisor'd arrays' baseInstance shift is exactly BaseInstanceByteShift -
+                        // the same arithmetic SyncToBackend applies to a VBO-backed array.
+                        reinterpret_cast<const void*>(BaseInstanceByteShift(attrib, fetchBaseInstance)));
                 } else {
                     g_GLESFuncs.glVertexAttribIPointer(attribIndex, attrib.Size,
                                                        MG_Util::ConvertDataTypeToGLEnum(attrib.Type),
-                                                       static_cast<GLsizei>(stride), nullptr);
+                                                       static_cast<GLsizei>(stride),
+                                                       // See the pointer call above: the divisor'd
+                                                       // arrays' baseInstance shift is the pointer.
+                                                       reinterpret_cast<const void*>(
+                                                           BaseInstanceByteShift(attrib, fetchBaseInstance)));
                 }
             }
 

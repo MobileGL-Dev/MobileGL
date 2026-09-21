@@ -10,6 +10,7 @@
 #pragma once
 
 #if MOBILEGL_BUILD_DISAGGREGATED && MOBILEGL_PIPE_PUSH
+#include <MG_Impl/Pipe/ClientFetchPlan.h>
 #include <MG_Impl/Pipe/VertexInputEmit.h>
 #include <MG_State/GLState/BufferState/BufferObject.h>
 #include <algorithm>
@@ -61,43 +62,56 @@ namespace MobileGL::MG_Pipe {
             for (const auto& attribute : attributes)
                 needsVertexIndices |= attribute.Enabled && !attribute.Buffer && attribute.Divisor == 0;
 
-            Vector<Fetch> fetches;
-            if (indirect != nullptr) {
-                if (!ReadIndirectFetches(info.IndexSize, *indirect, fetches)) return false;
-            } else {
-                fetches.reserve(rangeCount);
-                for (Uint32 i = 0; i < rangeCount; ++i)
-                    fetches.push_back({ranges[i], info.InstanceCount, info.StartInstance});
-            }
+            // The element, command and parameter buffers are read through one reader for
+            // WHICH elements this draw fetches, and that question lives in
+            // ClientFetchPlan.h - the monolith arm asks the same one of the same bytes.
+            const SharedPtr<Buffer> elementBuffer = vao->GetIndexBufferBindingSlot().GetBoundObject();
+            const SharedPtr<Buffer> commandBuffer =
+                m_context.GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+            const SharedPtr<Buffer> parameterBuffer =
+                m_context.GetBufferBindingSlot(BufferTarget::Parameter).GetBoundObject();
+            ByteSources sources{&elementBuffer, &commandBuffer, &parameterBuffer};
 
-            Vector<Uint64> vertices;
-            if (needsVertexIndices && !ReadVertexIndices(info, fetches, clientIndices, clientIndexBytes, vertices))
-                return false;
+            MGPipeClientDrawInputs inputs{};
+            inputs.IndexSize = info.IndexSize;
+            inputs.Ranges = ranges;
+            inputs.RangeCount = rangeCount;
+            inputs.InstanceCount = info.InstanceCount;
+            inputs.BaseInstance = info.StartInstance;
+            inputs.PrimitiveRestart = (info.Flags & kDrawPrimitiveRestart) != 0;
+            const Bool fixedRestart = m_context.IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
+            inputs.RestartIndex = fixedRestart
+                ? (info.IndexSize == 1 ? 0xffu : info.IndexSize == 2 ? 0xffffu : 0xffffffffu)
+                : info.RestartIndex;
+            inputs.ClientIndices = clientIndices;
+            inputs.ClientIndexBytes = clientIndexBytes;
+            inputs.WantVertices = needsVertexIndices;
+            MGPipeClientIndirect indirectInputs{};
+            if (indirect != nullptr) {
+                indirectInputs.Offset = indirect->Offset;
+                indirectInputs.ParameterOffset = indirect->ParameterOffset;
+                indirectInputs.Stride = indirect->Stride;
+                indirectInputs.DrawCount = indirect->DrawCount;
+                indirectInputs.HasParameterBuffer = !MGPipeHandleIsNull(indirect->ParameterBuffer);
+                inputs.Indirect = &indirectInputs;
+            }
+            if (!m_plan.Build(inputs, &ReadBytes, &sources)) return false;
+
             Array<MGPipeHandle, kMGPipeMaxVertexAttribs> handles{};
+            Vector<Uint64> referenced;
             for (SizeT location = 0; location < attributes.size(); ++location) {
                 const auto& attribute = attributes[location];
                 if (!attribute.Enabled || attribute.Buffer) continue;
                 const SizeT elementBytes = AttributeBytes(attribute);
                 if (!elementBytes || attribute.Stride < 0) return false;
-                Vector<Uint64> instances;
-                const Vector<Uint64>* referenced = &vertices;
-                if (attribute.Divisor != 0) {
-                    for (const auto& fetch : fetches) {
-                        if (!fetch.Range.Count || !fetch.Instances) continue;
-                        const Uint64 first = fetch.BaseInstance;
-                        const Uint64 last = first + (fetch.Instances - 1u) / attribute.Divisor;
-                        for (Uint64 at = first; at <= last; ++at) instances.push_back(at);
-                    }
-                    SortUnique(instances);
-                    referenced = &instances;
-                }
+                if (!m_plan.Elements(static_cast<Uint32>(attribute.Divisor), referenced)) return false;
                 const Uint64 stride = static_cast<Uint32>(attribute.Stride);
-                const Uint64 last = referenced->empty() ? 0 : referenced->back();
+                const Uint64 last = referenced.empty() ? 0 : referenced.back();
                 if (stride != 0 && last > (std::numeric_limits<Uint32>::max() - elementBytes) / stride)
                     return false;
                 const SizeT byteCount = static_cast<SizeT>(last * stride + elementBytes);
                 Vector<Uint8> bytes(byteCount, 0);
-                if (!referenced->empty()) {
+                if (!referenced.empty()) {
                     if (attribute.Offset == 0 || byteCount > std::numeric_limits<SizeT>::max() - attribute.Offset)
                         return false;
                     const auto* source = reinterpret_cast<const Uint8*>(attribute.Offset);
@@ -106,7 +120,7 @@ namespace MobileGL::MG_Pipe {
                     } else {
                         // Only dereference fetched elements: sparse indices and first>0
                         // do not grant permission to read intervening application memory.
-                        for (const Uint64 vertex : *referenced) {
+                        for (const Uint64 vertex : referenced) {
                             const SizeT offset = static_cast<SizeT>(vertex * stride);
                             std::memcpy(bytes.data() + offset, source + offset, elementBytes);
                         }
@@ -122,11 +136,27 @@ namespace MobileGL::MG_Pipe {
         }
 
     private:
-        struct Fetch {
-            MGPDrawRange Range;
-            Uint32 Instances;
-            Uint32 BaseInstance;
+        // The three buffers one draw can fetch bytes out of, and the reader that resolves
+        // them. `user` is a ByteSources owned by the caller's scope, so nothing here outlives
+        // the Prepare that built it.
+        struct ByteSources {
+            const SharedPtr<Buffer>* Elements = nullptr;
+            const SharedPtr<Buffer>* Commands = nullptr;
+            const SharedPtr<Buffer>* Parameters = nullptr;
         };
+
+        static Bool ReadBytes(void* user, MGPipeClientBufferKind kind, Uint64 offset, SizeT size, void* destination) {
+            const auto& sources = *static_cast<const ByteSources*>(user);
+            switch (kind) {
+            case MGPipeClientBufferKind::Element:
+                return MGPipeReadBufferShadow(*sources.Elements, offset, size, destination);
+            case MGPipeClientBufferKind::IndirectCommand:
+                return MGPipeReadBufferShadow(*sources.Commands, offset, size, destination);
+            case MGPipeClientBufferKind::IndirectCount:
+                return MGPipeReadBufferShadow(*sources.Parameters, offset, size, destination);
+            }
+            return false;
+        }
 
         static SizeT AttributeBytes(const MG_State::GLState::VertexAttribute& attribute) {
             if (attribute.IsBgra || attribute.Type == DataType::Int2101010Rev ||
@@ -143,11 +173,6 @@ namespace MobileGL::MG_Pipe {
             return attribute.Size > 0 && attribute.Size <= 4 ? component * attribute.Size : 0;
         }
 
-        static void SortUnique(Vector<Uint64>& values) {
-            std::sort(values.begin(), values.end());
-            values.erase(std::unique(values.begin(), values.end()), values.end());
-        }
-
         static UniquePtr<Buffer> MakeOwnedBuffer(const void* bytes, SizeT size, BufferTarget target) {
             auto buffer = MakeUnique<Buffer>(0);
             const auto handle = MGPipeResourceTrackerInstance().Find(*buffer);
@@ -157,82 +182,8 @@ namespace MobileGL::MG_Pipe {
             return buffer;
         }
 
-        static Bool ReadBuffer(const SharedPtr<Buffer>& buffer, Uint64 offset, SizeT size, void* destination) {
-            if (!buffer || offset > buffer->GetSize() || size > buffer->GetSize() - offset) return false;
-            // This waits for the actual server writeback when an earlier GPU draw,
-            // dispatch, or capture produced the index/command bytes.
-            buffer->SyncGpuWrites();
-            buffer->DownloadSubData(destination, static_cast<SizeT>(offset), size);
-            return true;
-        }
-
-        Bool ReadIndirectFetches(Uint8 indexSize, const MGPDrawIndirect& indirect, Vector<Fetch>& fetches) {
-            const auto& commands = m_context.GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
-            Uint32 count = indirect.DrawCount;
-            if (!MGPipeHandleIsNull(indirect.ParameterBuffer)) {
-                const auto& parameter = m_context.GetBufferBindingSlot(BufferTarget::Parameter).GetBoundObject();
-                Uint32 actual = 0;
-                if (!ReadBuffer(parameter, indirect.ParameterOffset, sizeof(actual), &actual)) return false;
-                count = std::min(count, actual);
-            }
-            const Uint64 commandBytes = indexSize ? 5 * sizeof(Uint32) : 4 * sizeof(Uint32);
-            const Uint64 stride = indirect.Stride ? indirect.Stride : commandBytes;
-            fetches.reserve(count);
-            for (Uint32 i = 0; i < count; ++i) {
-                const Uint64 displacement = static_cast<Uint64>(i) * stride;
-                if (displacement > std::numeric_limits<Uint64>::max() - indirect.Offset) return false;
-                Uint32 words[5]{};
-                if (!ReadBuffer(commands, indirect.Offset + displacement, commandBytes, words)) return false;
-                Int32 bias = 0;
-                if (indexSize) std::memcpy(&bias, &words[3], sizeof(bias));
-                fetches.push_back({{words[2], words[0], bias}, words[1], words[indexSize ? 4 : 3]});
-            }
-            return true;
-        }
-
-        Bool ReadVertexIndices(const MGPDrawInfo& info, const Vector<Fetch>& fetches,
-                               const void* clientIndices, Uint64 clientIndexBytes, Vector<Uint64>& vertices) {
-            const auto& vao = m_context.GetBoundVertexArray();
-            const auto& elementBuffer = vao->GetIndexBufferBindingSlot().GetBoundObject();
-            const Bool restart = (info.Flags & kDrawPrimitiveRestart) != 0;
-            const Bool fixedRestart = m_context.IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
-            const Uint32 restartIndex = fixedRestart
-                ? (info.IndexSize == 1 ? 0xffu : info.IndexSize == 2 ? 0xffffu : 0xffffffffu)
-                : info.RestartIndex;
-            for (const auto& fetch : fetches) {
-                if (!fetch.Range.Count || !fetch.Instances) continue;
-                if (!info.IndexSize) {
-                    for (Uint64 n = 0; n < fetch.Range.Count; ++n)
-                        vertices.push_back(static_cast<Uint64>(fetch.Range.Start) + n);
-                    continue;
-                }
-                const Uint64 offset = static_cast<Uint64>(fetch.Range.Start) * info.IndexSize;
-                const Uint64 size = static_cast<Uint64>(fetch.Range.Count) * info.IndexSize;
-                if (size > std::numeric_limits<SizeT>::max()) return false;
-                Vector<Uint8> indexBytes;
-                const Uint8* data = nullptr;
-                if (clientIndices != nullptr) {
-                    if (offset > clientIndexBytes || size > clientIndexBytes - offset) return false;
-                    data = static_cast<const Uint8*>(clientIndices) + static_cast<SizeT>(offset);
-                } else {
-                    indexBytes.resize(static_cast<SizeT>(size));
-                    if (!ReadBuffer(elementBuffer, offset, indexBytes.size(), indexBytes.data())) return false;
-                    data = indexBytes.data();
-                }
-                for (Uint32 n = 0; n < fetch.Range.Count; ++n) {
-                    Uint32 index = 0;
-                    std::memcpy(&index, data + static_cast<SizeT>(n) * info.IndexSize, info.IndexSize);
-                    if (restart && index == restartIndex) continue;
-                    const Int64 vertex = static_cast<Int64>(index) + fetch.Range.IndexBias;
-                    if (vertex < 0) return false;
-                    vertices.push_back(static_cast<Uint64>(vertex));
-                }
-            }
-            SortUnique(vertices);
-            return true;
-        }
-
         Context& m_context;
+        MGPipeClientFetchPlan m_plan;
         Array<UniquePtr<Buffer>, kMGPipeMaxVertexAttribs> m_vertexBuffers{};
         UniquePtr<Buffer> m_indexBuffer;
         Uint32 m_baseInstance = 0;

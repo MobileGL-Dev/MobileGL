@@ -2422,6 +2422,153 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // `static` on purpose (G1): the pull build must not gain an exported name for a
         // function that only re-homes two identical inline blocks the two DrawArrays entry
         // points used to carry.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // ---- W3: THE MONOLITH ARM'S CLIENT-MEMORY SNAPSHOT, PER DRAW -------------------------
+        //
+        // A client-memory attribute is uploaded HERE because its bytes have no store on this side
+        // to bind. SyncClientSideVertexArraysForDrawArrays below does that for the non-indexed
+        // family, whose fetched elements are exactly the contiguous (first, count) run. Every
+        // OTHER draw shape fetches by index and by instance, so its elements have to come from
+        // MGPipeClientFetchPlan - the same answer the wire arm's owned snapshot is built from
+        // (MG_Impl/Pipe/OwnedDrawInputs.h, which is why the two arms agree by construction).
+        //
+        // WHAT WAS MISSING BEFORE THIS: an indexed draw over a client array uploaded nothing at
+        // all. The ES context kept whatever the last VBO-backed attribute had left for that
+        // index - normally the array DISABLED, i.e. every vertex reading the generic current
+        // value - so the draw painted nothing, with no GL error anywhere to say why.
+        struct ClientSnapshotSources {
+            const SharedPtr<MG_State::GLState::BufferObject>* ElementBuffer = nullptr;
+        };
+
+        Bool ReadClientSnapshotBytes(void* user, MG_Pipe::MGPipeClientBufferKind kind, Uint64 offset, SizeT size,
+                                     void* destination) {
+            if (kind != MG_Pipe::MGPipeClientBufferKind::Element) return false;
+            const auto& buffer = *static_cast<const ClientSnapshotSources*>(user)->ElementBuffer;
+            if (!buffer || offset > buffer->GetSize() || size > buffer->GetSize() - offset) return false;
+            // A shader-written index stream is exactly the case this snapshot exists for, so the
+            // object's shadow is reconciled before it is read (SyncGpuWrites is a no-op otherwise).
+            buffer->SyncGpuWrites();
+            buffer->DownloadSubData(destination, static_cast<SizeT>(offset), size);
+            return true;
+        }
+
+        // The draw's own fetch, spelled as the range record spells it: `indexSize` 0 is arrays,
+        // `elementStart` is the first element (an element offset into the bound element buffer, or
+        // 0 for the application's own index array), and `clientIndices` names that array when
+        // there is one. FALSE means the caller must SKIP the draw: the elements it would fetch are
+        // not in the store the driver is about to read, and issuing it anyway is a wrong picture
+        // rather than an error.
+        Bool SyncClientSideVertexArraysForFetch(Uint8 indexSize, Uint32 elementStart, GLsizei count,
+                                                GLsizei instanceCount, GLint baseVertex, Uint32 baseInstance,
+                                                const void* clientIndices, Uint64 clientIndexBytes) {
+            if (count <= 0 || instanceCount <= 0) return true;
+            const auto& currentVAO = MGB_CTX->GetBoundVertexArray();
+            if (!currentVAO) return true;
+
+            // A draw whose attributes all come from buffers has nothing to snapshot, and asking
+            // the plan would read the index stream to answer a question nobody asked.
+            Bool clientArrays = false;
+            Bool clientVertexRate = false;
+            const auto& attributes = currentVAO->GetAllAttributes();
+            for (SizeT i = 0; i < attributes.size(); ++i) {
+                if (!attributes[i].Enabled || attributes[i].Buffer) continue;
+                clientArrays = true;
+                clientVertexRate |= attributes[i].Divisor == 0;
+            }
+            if (!clientArrays) return true;
+
+            auto* twin = ResolveVaoTwin(currentVAO);
+            if (twin == nullptr) return false;
+
+            const SharedPtr<MG_State::GLState::BufferObject> elementBuffer =
+                currentVAO->GetIndexBufferBindingSlot().GetBoundObject();
+            ClientSnapshotSources sources{&elementBuffer};
+
+            MG_Pipe::MGPDrawRange range{elementStart, static_cast<Uint32>(count), baseVertex};
+            MG_Pipe::MGPipeClientDrawInputs inputs{};
+            inputs.IndexSize = indexSize;
+            inputs.Ranges = &range;
+            inputs.RangeCount = 1;
+            inputs.InstanceCount = static_cast<Uint32>(instanceCount);
+            inputs.BaseInstance = baseInstance;
+            inputs.ClientIndices = clientIndices;
+            inputs.ClientIndexBytes = clientIndexBytes;
+            inputs.WantVertices = clientVertexRate;
+            // The driver does its own restart handling; the plan has to know only that the restart
+            // value is not a vertex, or the snapshot would stage an element no primitive fetches.
+            inputs.PrimitiveRestart = MGB_CTX->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
+                                      MGB_CTX->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
+            inputs.RestartIndex = MGB_CTX->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex)
+                ? (indexSize == 1 ? 0xffu : indexSize == 2 ? 0xffffu : 0xffffffffu)
+                : MGB_CTX->GetPrimitiveRestartIndex();
+
+            MG_Pipe::MGPipeClientFetchPlan plan;
+            if (!plan.Build(inputs, &ReadClientSnapshotBytes, &sources)) return false;
+            return twin->SyncClientSideAttributesForDraw(currentVAO, plan, baseInstance);
+        }
+
+        // The indirect executors' form: the command's own words ARE the draw's fetch, and a
+        // command block a shader wrote this frame is exactly what these shapes exist for - so the
+        // command buffer's shadow is reconciled before it is read, and `commandBytes` (the
+        // caller's possibly stale copy) is only the fallback for a client-authored block.
+        Bool SyncClientSideVertexArraysForIndirectFetch(const Uint8* commandBytes, SizeT commandOffset,
+                                                       GLsizei stride, GLsizei index, Uint8 indexSize,
+                                                       const SharedPtr<MG_State::GLState::BufferObject>& commandBuffer) {
+            const Uint8* source = commandBytes;
+            if (commandBuffer) {
+                commandBuffer->SyncGpuWrites();
+                const Uint8* mapped = commandBuffer->MappedData();
+                if (mapped == nullptr) return false;
+                source = mapped + commandOffset;
+            }
+            const SizeT at = static_cast<SizeT>(index) * static_cast<SizeT>(stride);
+            if (indexSize == 0) {
+                DrawArraysIndirectCommand cmd{};
+                std::memcpy(&cmd, source + at, sizeof(cmd));
+                return SyncClientSideVertexArraysForFetch(0, cmd.first, static_cast<GLsizei>(cmd.count),
+                                                          static_cast<GLsizei>(cmd.instanceCount), 0, cmd.baseInstance,
+                                                          nullptr, 0);
+            }
+            DrawElementsIndirectCommand cmd{};
+            std::memcpy(&cmd, source + at, sizeof(cmd));
+            return SyncClientSideVertexArraysForFetch(indexSize, cmd.firstIndex, static_cast<GLsizei>(cmd.count),
+                                                      static_cast<GLsizei>(cmd.instanceCount), cmd.baseVertex,
+                                                      static_cast<Uint32>(cmd.baseInstance), nullptr, 0);
+        }
+
+        // The indexed entry points' form. `indices` is a byte offset into the bound element buffer
+        // when one is bound and the application's own array otherwise, which is the same
+        // distinction every one of them already makes when it issues the draw.
+        Bool SyncClientSideVertexArraysForIndexedFetch(GLenum type, GLsizei count, const void* indices,
+                                                       GLsizei instanceCount, GLint baseVertex, GLuint baseInstance) {
+            if (count <= 0 || instanceCount <= 0) return true;
+            const auto& currentVAO = MGB_CTX->GetBoundVertexArray();
+            if (!currentVAO) return true;
+            const Uint8 indexSize = static_cast<Uint8>(MG_Util::GetGLTypeSize(type));
+            if (indexSize == 0) return true;
+
+            const Bool clientIndices = !currentVAO->GetIndexBufferBindingSlot().GetBoundObject();
+            Uint32 elementStart = 0;
+            Uint64 clientIndexBytes = 0;
+            if (clientIndices) {
+                if (indices == nullptr) return false;
+                clientIndexBytes = static_cast<Uint64>(count) * indexSize;
+            } else {
+                const Uint64 byteOffset = reinterpret_cast<Uint64>(indices);
+                if (byteOffset % indexSize != 0 ||
+                    byteOffset / indexSize > std::numeric_limits<Uint32>::max()) {
+                    MGLOG_E_ONCE("An indexed draw over a client-memory vertex array names byte offset %llu, "
+                                 "which is not a whole number of %u-byte indices; the draw is skipped",
+                                 static_cast<unsigned long long>(byteOffset), static_cast<Uint>(indexSize));
+                    return false;
+                }
+                elementStart = static_cast<Uint32>(byteOffset / indexSize);
+            }
+            return SyncClientSideVertexArraysForFetch(indexSize, elementStart, count, instanceCount, baseVertex,
+                                                      baseInstance, clientIndices ? indices : nullptr,
+                                                      clientIndexBytes);
+        }
+#endif
         static void SyncClientSideVertexArraysForDrawArrays(GLint first, GLsizei count) {
 #if MOBILEGL_BUILD_DISAGGREGATED
             if (BufferImpl::VertexInputReadsRecords()) {
@@ -8269,6 +8416,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     SetCurrentBaseVertex(cmd.baseVertex);
                 }
                 ForEachViewportRoutingPass([&] {
+                    if (!VertexArrayImpl::SyncClientSideVertexArraysForIndirectFetch(
+                            commandBytes, commandOffset, stride, i, static_cast<Uint8>(indexSize), drawIndirectBuffer))
+                        return;
                     g_GLESFuncs.glDrawElementsIndirect(mode, type, reinterpret_cast<const void*>(cmdByteOffset));
                 });
             }
@@ -8284,6 +8434,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 SetCurrentBaseVertex(cmd.baseVertex);
                 const auto indexByteOffset = static_cast<SizeT>(cmd.firstIndex) * indexSize;
                 ForEachViewportRoutingPass([&] {
+                    if (!VertexArrayImpl::SyncClientSideVertexArraysForIndirectFetch(
+                            commandBytes, commandOffset, stride, i, static_cast<Uint8>(indexSize), drawIndirectBuffer))
+                        continue;
                     g_GLESFuncs.glDrawElementsInstancedBaseVertex(
                         mode, static_cast<GLsizei>(cmd.count), type, reinterpret_cast<const GLvoid*>(indexByteOffset),
                         static_cast<GLsizei>(cmd.instanceCount), cmd.baseVertex);
@@ -8347,6 +8500,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     SetCurrentBaseInstance(cmd.baseInstance);
                 }
                 ForEachViewportRoutingPass([&] {
+                    if (!VertexArrayImpl::SyncClientSideVertexArraysForIndirectFetch(
+                            commandBytes, commandOffset, stride, i, 0, drawIndirectBuffer))
+                        return;
                     g_GLESFuncs.glDrawArraysIndirect(mode, reinterpret_cast<const void*>(cmdByteOffset));
                 });
             }
@@ -8360,6 +8516,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 SetCurrentDrawID(static_cast<Uint32>(i));
                 SetCurrentBaseInstance(cmd.baseInstance);
                 ForEachViewportRoutingPass([&] {
+                    if (!VertexArrayImpl::SyncClientSideVertexArraysForIndirectFetch(
+                            commandBytes, commandOffset, stride, i, 0, drawIndirectBuffer))
+                        continue;
                     g_GLESFuncs.glDrawArraysInstanced(mode, static_cast<GLint>(cmd.first),
                                                       static_cast<GLsizei>(cmd.count),
                                                       static_cast<GLsizei>(cmd.instanceCount));
@@ -9045,6 +9204,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void DrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices) {
+        if (!VertexArrayImpl::SyncClientSideVertexArraysForIndexedFetch(type, count, indices, 1, 0, 0)) return;
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
@@ -9070,6 +9230,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLint basevertex) {
+        if (!VertexArrayImpl::SyncClientSideVertexArraysForIndexedFetch(type, count, indices, 1, basevertex, 0)) return;
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
@@ -9441,6 +9602,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void DrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
                                      const void* indices, GLint basevertex) {
+        if (!VertexArrayImpl::SyncClientSideVertexArraysForIndexedFetch(type, count, indices, 1, basevertex, 0)) return;
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer;
         PrepareForDraw(syncBit);
         const ScopedRestartIndexSubstitution restart(type, count, indices);
@@ -9454,6 +9616,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void DrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void* indices) {
+        if (!VertexArrayImpl::SyncClientSideVertexArraysForIndexedFetch(type, count, indices, 1, 0, 0)) return;
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer;
         PrepareForDraw(syncBit);
         const ScopedRestartIndexSubstitution restart(type, count, indices);
@@ -9491,6 +9654,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void DrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                                      GLsizei instancecount, GLint basevertex, GLuint baseinstance) {
+        if (!VertexArrayImpl::SyncClientSideVertexArraysForIndexedFetch(type, count, indices, instancecount, basevertex,
+                                                                       baseinstance)) return;
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
         MGL_SCOPED_FETCH_BASE_INSTANCE(fetchScope, EmulatedFetchBaseInstance(baseinstance));
         PrepareForDraw(syncBit);
@@ -9514,6 +9679,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void DrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                          GLsizei instancecount, GLint basevertex) {
+        if (!VertexArrayImpl::SyncClientSideVertexArraysForIndexedFetch(type, count, indices, instancecount, basevertex,
+                                                                       0)) return;
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
         const ScopedRestartIndexSubstitution restart(type, count, indices);
@@ -9528,6 +9695,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void DrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                            GLsizei instancecount, GLuint baseinstance) {
+        if (!VertexArrayImpl::SyncClientSideVertexArraysForIndexedFetch(type, count, indices, instancecount, 0,
+                                                                       baseinstance)) return;
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
         MGL_SCOPED_FETCH_BASE_INSTANCE(fetchScope, EmulatedFetchBaseInstance(baseinstance));
         PrepareForDraw(syncBit);
@@ -9546,6 +9715,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const void* indices, GLsizei instancecount) {
+        if (!VertexArrayImpl::SyncClientSideVertexArraysForIndexedFetch(type, count, indices, instancecount, 0, 0))
+            return;
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
         const ScopedRestartIndexSubstitution restart(type, count, indices);
