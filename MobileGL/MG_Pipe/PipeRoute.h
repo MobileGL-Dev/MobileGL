@@ -195,7 +195,7 @@ namespace MobileGL::MG_Pipe {
     // reaches the very same `MG_Impl/Pipe` emitters the client does, and a wire emitter there
     // publishes a record and then waits for the apply thread to apply it. That thread IS the
     // apply thread, so it waits for itself: `Fatal{BarrierTimeout, "ResourceRespecify"}`,
-    // logged by `mgl-srv-apply`, thirty seconds after bring-up starts.
+    // logged by `mgl-srv-apply` one barrier budget after bring-up starts.
     //
     // So the client emitters ask "am I the server role right now?" and, if so, run the
     // monolith adapter - which is exactly what `PipeWireCodec` already does on the decode side

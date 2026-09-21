@@ -129,11 +129,20 @@ namespace MobileGL::MG_Remote::Client {
             BarrierWaitScope& operator=(const BarrierWaitScope&) = delete;
         };
 
-        // BOUNDED, AND THE BOUND IS GENEROUS RATHER THAN TIGHT. The barrier is a correctness
-        // device, not a watchdog: a slow readback on a software rasterizer is a legitimate
-        // second-scale wait, while a lost record never completes at all. 30 s separates the two
-        // without turning a loaded CI machine into a red lane, and the Fatal names the seq.
-        constexpr Uint32 kBarrierTimeoutMs = 30000;
+        // A DEADLOCK DETECTOR, NOT A PERFORMANCE GATE. The barrier exists so that a record the
+        // applier never retires is reported instead of hanging: a lost record never completes at
+        // all, while a slow apply completes late. The bound only has to sit far above the slowest
+        // legitimate apply.
+        //
+        // lavapipe/llvmpipe have legitimate apply-thread stalls that reach the tens of seconds:
+        // texture-handle registration (vkCreateImageView -> lvp_CreateImageView ->
+        // llvmpipe_register_texture) blocks the apply thread on a JIT/futex path, measured at
+        // 29.3-39.7 s in a single stall, ~44.6 s cumulatively over one inproc retrace run. A 30 s
+        // bound therefore red-lanes those runs intermittently while the same stall on a monolith
+        // run is simply slow - the monolith has no equivalent cap on this path. 120 s is >3x the
+        // largest observed stall and keeps the watchdog's job: a record that is truly lost still
+        // terminates the run, and the Fatal names the seq.
+        constexpr Uint32 kBarrierTimeoutMs = 120000;
 
         Uint64 AppliedWaitBudgetMs(MG_Pipe::MGPWireOp op, const void* payload) {
             if (op != MG_Pipe::MGPWireOp::FenceWait) return kBarrierTimeoutMs;
@@ -711,7 +720,7 @@ namespace MobileGL::MG_Remote::Client {
         //     would go to a server this client has not been told consumes that family;
         //   - after ServerLoop::Start (step 8), because EmitAndWait BLOCKS on appliedSeq and
         //     with no apply thread nothing advances it: the first resource_create would spend
-        //     30 seconds in the barrier and then Fatal{BarrierTimeout};
+        //     the whole kBarrierTimeoutMs in the barrier and then Fatal{BarrierTimeout};
         //   - on THIS thread, the one that called MG_Backend::Init(), because it is the GL
         //     thread and table 3 makes gPipeInputs its to touch while the barrier holds.
         // The publication is safe without a fence because the apply thread never reads these

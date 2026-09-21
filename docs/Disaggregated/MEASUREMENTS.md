@@ -403,10 +403,12 @@ G1 27,814 符号 0/0/0/0、`.text` 10,806,611 → 10,806,611；G5 两族 + pin �
 | 项 | 问题 | 处置 |
 |---|---|---|
 | Major 1 | user-index span 在段内但 Size 可能短于 Count × IndexSize | `a021e3cc`：encoder / decoder / sink 共用 shape/extent gate（单 range、宽度 1/2/4、`Uint64(Count) × IndexSize ≤ Size`），三端短 span 均拒绝、段末 exact-fit 通过；定向 9/9 |
-| Major 2 | `ClientWaitSync` 保留 64-bit timeout 但 applied/reply 等待一律 30 s | `82683d4a`：预算 = ceil(timeout ns / 1e6) + 30,000 ms，有限 chunk；普通容量等待 / `FenceWaitServer` 仍 30 s，shutdown 可唤醒 |
+| Major 2 | `ClientWaitSync` 保留 64-bit timeout 但 applied/reply 等待一律 30 s | `82683d4a`：预算 = ceil(timeout ns / 1e6) + 30,000 ms，有限 chunk；普通容量等待 / `FenceWaitServer` 仍 30 s，shutdown 可唤醒。**该 30 s 常量后来在 CI 修复轮改成 120 s（`68b55ea3`），原因见本表下注** |
 | Minor 3 | ReadPixels exact-size reply 的未知 status 穿过 production helper | `82683d4a`：tight 与 bounce 路径拒绝 status=3，`Fatal{ReplyStatusInvalid}` |
 
 定向 `RemoteClientTest` 7/7（0 ns、1 ns、60 s、UINT64_MAX 预算，`FenceWaitServer`、shutdown、未知状态）。合并后 quickgate 里 split 单元车道仅有的 2 个失败（`PipeWireCodecTest.UserIndexSpan*`）是测试日志捕获缺陷（库按进程截断日志，fork 子进程增量读读空），`7cb29d46` 修复后 3/3。本阶段不再做第二轮全门或审查；原始全门源头仍为 `348d22a4`，三项修复只以定向证据补齐。
+
+> 上表 Major 2 的 30 s 是 `82683d4a` 当时的值，保留为历史记录。**当前值是 120 s**（`68b55ea3`，`ClientSession.cpp` 的 `kBarrierTimeoutMs`），因为 lavapipe 在 texture-handle 注册（`vkCreateImageView` → `llvmpipe_register_texture`）上可合法阻塞 apply 线程 29.3–39.7 s，30 s 的看门狗会把合法慢路径间歇判红；详因见 `ARCHITECTURE.md` §17.1。`RemoteClientControls.FenceWaitBudgetHonorsGlTimeoutAndFiniteTransportChunks` 的期望值（30000/30001/90000）已同步改为 120000/120001/180000。
 
 ### 7.4 Redmi 出口与四臂 A/B（`82683d4a`，APK `p5bcodex2`）
 

@@ -218,13 +218,16 @@ TEST(RemoteClientControls, UnknownReadPixelsReplyStatusRefusesTightAndBounce) {
 }
 
 TEST(RemoteClientControls, FenceWaitBudgetHonorsGlTimeoutAndFiniteTransportChunks) {
+    // 120000 below is ClientSession.cpp's kBarrierTimeoutMs, the transport grace every CPU bound
+    // wait adds on top of the GL timeout. It was 30 s; lavapipe's texture-handle registration
+    // (vkCreateImageView -> llvmpipe_register_texture) exceeds that in a single apply stall.
     struct WaitCase { Uint64 timeoutNs; MGPWireOp op; Uint32 expectedParkMs; };
     const WaitCase cases[] = {
-        {0, MGPWireOp::FenceWait, 30000},
-        {1, MGPWireOp::FenceWait, 30001},
-        {60000000000ull, MGPWireOp::FenceWait, 90000},
+        {0, MGPWireOp::FenceWait, 120000},
+        {1, MGPWireOp::FenceWait, 120001},
+        {60000000000ull, MGPWireOp::FenceWait, 180000},
         {~Uint64(0), MGPWireOp::FenceWait, Transport::kWaitForever - 1},
-        {~Uint64(0), MGPWireOp::FenceWaitServer, 30000},
+        {~Uint64(0), MGPWireOp::FenceWaitServer, 120000},
     };
     for (const auto test : cases) {
         const auto child = RunInChild([test] {
@@ -245,7 +248,7 @@ TEST(RemoteClientControls, FenceWaitBudgetHonorsGlTimeoutAndFiniteTransportChunk
             producer.*PeerMember(ProducerBellTag{}) = bell.original;
             const auto observed = bell.firstMs.load();
             // Doorbell converts the remaining deadline to whole milliseconds. Allow
-            // scheduler delay, but neither a 30s clamp nor an unbounded sentinel.
+            // scheduler delay, but neither the barrier clamp nor an unbounded sentinel.
             if (!bell.entered.load() || observed > test.expectedParkMs ||
                 observed < test.expectedParkMs - 100 || observed == Transport::kWaitForever) ::_exit(93);
             if (test.op == MGPWireOp::FenceWait &&

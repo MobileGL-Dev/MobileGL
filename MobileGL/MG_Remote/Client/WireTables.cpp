@@ -61,7 +61,7 @@ namespace MobileGL::MG_Remote::Client {
     // apply thread running the server's own backend - the EGL bring-up, InitCapabilities,
     // the applier - reaches these very emitters. A record published there would be waited
     // for by the thread that is supposed to apply it: `Fatal{BarrierTimeout,
-    // "ResourceRespecify"}` from `mgl-srv-apply`, thirty seconds into bring-up, which is
+    // "ResourceRespecify"}` from `mgl-srv-apply` one barrier budget into bring-up, which is
     // exactly how this was found.
     //
     // THE ANSWER IS NOT "SUPPRESS THE RECORD" - it is "run the server's own code", because
