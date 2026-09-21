@@ -6,67 +6,78 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// fork + execve of the server image, and the process discipline around it.
+// LAUNCHING a server process, and the process discipline around it.
 // Package `sm` (CONTRACT-P6.md §3).
 //
-// THE TWO FDS THE CHILD INHERITS, at fixed numbers:
-//     fd 3  the control stream   (AF_UNIX SOCK_STREAM)
-//     fd 4  the aux socket       (AF_UNIX SOCK_DGRAM, SCM_RIGHTS)
-// Fixed because the child has no other way to learn them: argv would work but
-// puts a file-descriptor number in a string that anything can read out of
-// /proc/<pid>/cmdline, and an env var would have to survive the scrub below.
+// IT LAUNCHES; IT DOES NOT COUPLE. The two processes are independent: this
+// hands the child an endpoint NAME and nothing else - no inherited descriptors,
+// no shared memory, no handshake. The child listens on that name and the client
+// connects to it, exactly as it would to a server someone started by hand or
+// that an Android Service started minutes earlier.
 //
-// dup2 IS WHAT MAKES THEM INHERITABLE. FdPassing::CreateSocketPair sets
-// SOCK_CLOEXEC (FdPassing.cpp:89-90), so the aux socket would vanish at execve.
-// dup2 does NOT copy the close-on-exec flag - the new descriptor always has it
-// clear - so duplicating onto 3 and 4 both fixes the number and clears the
-// flag, in one call each.
+// An earlier shape of this file forked the server and handed it fds 3..6.
+// Inheritance works and is less code, but it can only ever produce a server
+// that is a CHILD OF ITS CLIENT - which the end state cannot use, because there
+// the server is a standing application and the client is elsewhere, possibly on
+// another kernel. So fork/execve survives here only as A WAY TO START A
+// PROCESS, which is all it ever needed to be, and every fd it used to carry is
+// gone.
 //
-// ANTI-RECURSION IS TWO INDEPENDENT CATCHES, and CONTRACT-P6 §3.1 is why it is
-// not the one ARCHITECTURE.md:488 describes. That rule says the child hard-sets
-// Transport to Monolith; a6 measured what that does - 226 live lines test
+// ANTI-RECURSION IS STILL TWO INDEPENDENT CATCHES, and CONTRACT-P6 §3.1 is why
+// neither is ARCHITECTURE.md:488's. That rule says the child hard-sets
+// Transport to Monolith; a6 measured that 226 live lines test
 // `Transport != Monolith` to select the SERVER arm, 148 of them in MG_Backend,
-// so forcing Monolith flips the whole backend to frontend glue in the one
-// process that has no frontend. So:
-//    (a) STRUCTURAL: the child is told it must not dial, which is a separate
-//        axis from which role it plays;
-//    (b) ENVIRONMENTAL: MOBILEGL_TRANSPORT and every MOBILEGL_IPC_* are removed
-//        from the child's envp, so even a child that ignored (a) has nothing to
-//        dial with.
-// S3 falsifies (b) by leaving the scrub out, and the diagnostic must name WHICH
-// of the two fired or the double safety is untestable as two things.
+// so obeying it flips the whole backend to frontend glue in the one process
+// with no frontend. Instead:
+//    (a) STRUCTURAL: MOBILEGL_IPC_DIAL=no, a separate axis from which role the
+//        process plays;
+//    (b) ENVIRONMENTAL: MOBILEGL_TRANSPORT and every MOBILEGL_IPC_* removed
+//        from the child's envp.
+// The child refuses with exit 64 for (a) and 65 for (b), so the two safeties
+// are distinguishable - two that cannot be told apart are one.
 
 #pragma once
 
-#include "../Transport/SocketTransport.h"
+#include <Includes.h>
+
+#include "../Protocol/mg_protocol_base.h"
 
 #include <memory>
 #include <string>
 
 namespace MobileGL::MG_Remote::Server {
 
-    struct SpawnedServer {
+    struct LaunchedServer {
         // -1 when nothing was spawned. Non-negative means this process owes the
         // child a wait(): a SpawnedServer that goes out of scope without being
         // reaped leaves a zombie, which is exactly what the process-tree gate
         // (CONTRACT-P6 §9.4) counts.
+        // -1 when nothing was launched. Non-negative means this process owes the
+        // child a wait(): a LaunchedServer that goes out of scope unreaped leaves
+        // a zombie, which is what the process-tree gate (§9.4) counts.
         int pid = -1;
-        std::unique_ptr<Transport::SocketTransport> transport; // the PARENT's end
+        // The endpoint the child was told to listen on. The launcher's only
+        // output besides the pid: everything else the client needs, it gets by
+        // connecting.
+        std::string endpoint;
     };
 
-    // Locates the server image, forks, and execs it.
+    // Locates the server image and starts it on `endpoint`. Returns as soon as
+    // the process exists; the client's bounded connect retry is what waits for
+    // it to finish binding (SocketTransport::ConnectTo).
     //
     // `imagePath` empty means "resolve it": MOBILEGL_IPC_SERVER_PATH first, then
     // dladdr on our own library to find libMobileGLServer.so beside it. An
     // unresolvable path is a NAMED REFUSAL and never a monolith fallback -
     // ConfigLoader.cpp names that accident and this is the code that must not
     // repeat it.
-    MobileGLResult SpawnServer(const std::string& imagePath, SpawnedServer* out);
+    MobileGLResult LaunchServer(const std::string& imagePath, const std::string& endpoint,
+                                LaunchedServer* out);
 
     // Waits for the child, up to `timeoutMs`. Returns MOBILEGL_ERR_TIMEOUT if it
     // is still running, in which case the caller decides whether to escalate -
     // this function never signals a child it did not have to.
-    MobileGLResult ReapServer(SpawnedServer& server, std::uint32_t timeoutMs, int* outExitCode);
+    MobileGLResult ReapServer(LaunchedServer& server, std::uint32_t timeoutMs, int* outExitCode);
 
     // How many children this process currently has, by scanning for our own
     // pid as a parent. The process-tree gate needs a number, not a promise:

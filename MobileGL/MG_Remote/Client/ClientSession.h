@@ -45,6 +45,7 @@
 #include "../Transport/Ring.h"
 #include "../Transport/RoleMemory.h"
 #include "../Transport/SessionRings.h"
+#include "../Transport/SocketTransport.h"
 #include "../Wire/PipeWireCodec.h"
 #include "CapsMirror.h"
 
@@ -79,6 +80,29 @@ namespace MobileGL::MG_Remote::Client {
         // come back as MOBILEGL_ERR_PROTOCOL_MISMATCH with the guard's own line. Not a second
         // way to start a session: MG_Backend::Init() calls Start(), and nothing else may call
         // this with a pair it did not just create.
+        // P6 `sm`: the spawn client's half. `transport` is this process's end of
+        // the control socket to an already-running server process; the two bell
+        // fds are this side's ends of the two bell pairs (ServerSpawn.h).
+        //
+        // It is the SAME handshake StartOverTransportPair runs, with three
+        // differences and no others: the server half happens in another process
+        // so there is no local Accept to call, the four segments arrive as
+        // descriptors over SCM_RIGHTS instead of being dup'ed from a local
+        // owner, and the bells are sockets rather than condvars. Everything
+        // below the attach - producer, reply pool, event ring, segment table,
+        // encoder - is byte for byte the inproc path, which is the property
+        // that makes "P6 is a transport swap" true of THIS function even though
+        // it is not true of the phase.
+        MobileGLResult FinishStartup(Transport::Doorbell* peerBell,
+                                     Transport::Doorbell* selfBell,
+                                     bool startApplyThreadHere);
+
+        // `transport` is this process's end of a connection to an ALREADY
+        // RUNNING server process. The two bells arrive over it, with the four
+        // segments, as SCM_RIGHTS offers - nothing here is inherited, because
+        // the two processes were started independently.
+        MobileGLResult StartOverSocket(std::unique_ptr<Transport::SocketTransport> transport);
+
         MobileGLResult StartOverTransportPair(std::unique_ptr<Transport::InProcessTransport> clientEnd,
                                               std::unique_ptr<Transport::InProcessTransport> serverEnd);
 
@@ -351,6 +375,14 @@ namespace MobileGL::MG_Remote::Client {
         // wait really blocked.
         Uint64 m_presentsSent = 0;
         Uint64 m_presentCreditWaits = 0;
+
+        // sm: the spawn client owns ONE end and two bells. Held here rather
+        // than in the transport because which bell is "mine" is the session's
+        // knowledge, not the transport's - the same ruling as inproc's
+        // PeerDoorbell/SelfDoorbell split.
+        std::unique_ptr<Transport::SocketTransport> m_socketTransport;
+        std::unique_ptr<Transport::Doorbell> m_socketSelfBell;
+        std::unique_ptr<Transport::Doorbell> m_socketPeerBell;
 
         std::unique_ptr<Transport::InProcessTransport> m_clientTransport;
         std::unique_ptr<Transport::InProcessTransport> m_serverTransport;

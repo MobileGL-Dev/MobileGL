@@ -373,6 +373,65 @@ namespace MobileGL::MG_Remote::Transport {
         return MOBILEGL_OK;
     }
 
+    MobileGLResult SessionSegments::AdoptFromDescriptors(const int fds[4],
+                                                         const std::uint64_t sizes[4],
+                                                         std::uint32_t replySlotCount,
+                                                         MemoryRole role) {
+        Close();
+#if defined(_WIN32)
+        (void)fds; (void)sizes; (void)replySlotCount; (void)role;
+        // ShmSegment::Adopt is POSIX-only and a Windows peer resolves the section
+        // by the name in SegmentRef instead. Refused BY NAME rather than silently
+        // producing an unmapped session (CONTRACT-P6 §2.6).
+        MGLOG_E("MG_Remote session: AdoptFromDescriptors is POSIX-only - P6 lands POSIX only");
+        return MOBILEGL_ERR_UNSUPPORTED;
+#else
+        for (std::size_t index = 0; index < kSlotCount; ++index) {
+            if (fds[index] < 0 || sizes[index] == 0) {
+                MGLOG_E("MG_Remote session: slot %zu arrived with fd=%d size=%llu - the server's "
+                        "SCM_RIGHTS hand-off is incomplete",
+                        index, fds[index], static_cast<unsigned long long>(sizes[index]));
+                Close();
+                return MOBILEGL_ERR_INVALID_ARGUMENT;
+            }
+        }
+        m_owns = true;
+        for (std::size_t index = 0; index < kSlotCount; ++index) {
+            // Adopt takes ownership only on success, and it fstats the descriptor
+            // against the announced size - which is the only bound there is on a
+            // peer's claim about how big a segment is (CONTRACT-P6 §4.4 notes it
+            // has no analogue on a link with no fd).
+            const MobileGLResult adopted = ShmSegment::Adopt(fds[index], sizes[index],
+                                                             m_owned[index]);
+            if (adopted != MOBILEGL_OK) {
+                MGLOG_E("MG_Remote session: adopting slot %zu (fd=%d, %llu bytes) failed",
+                        index, fds[index], static_cast<unsigned long long>(sizes[index]));
+                Close();
+                return adopted;
+            }
+            const MobileGLResult mapped = m_owned[index].Map(false);
+            if (mapped != MOBILEGL_OK) {
+                Close();
+                return mapped;
+            }
+        }
+        m_replySlotCount = replySlotCount;
+        // NOT DeriveViews' control-page initialisation: the SERVER created these
+        // and already initialised both RingControls. Re-initialising here would
+        // zero the owner's cursors out from under a session that is already
+        // running - the same reason AttachInProcess does not do it either.
+        DeriveViews();
+        if (!m_valid) {
+            Close();
+            return MOBILEGL_ERR_INVALID_ARGUMENT;
+        }
+        m_role = role;
+        LedgerAddSegment(role, m_mappedBytes);
+        m_booked = true;
+        return MOBILEGL_OK;
+#endif
+    }
+
     void SessionSegments::DeriveViews() {
         m_valid = false;
         if (m_owns) {

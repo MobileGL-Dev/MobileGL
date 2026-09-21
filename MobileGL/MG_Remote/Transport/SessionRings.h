@@ -159,6 +159,24 @@ namespace MobileGL::MG_Remote::Transport {
         // travels in SegmentRef instead), so there it still aliases and says so.
         MobileGLResult AttachInProcess(SessionSegments& owner, MemoryRole role);
 
+        // P6 `sm`: the spawn client's half. The four descriptors arrived over
+        // SCM_RIGHTS and this side adopts and maps them.
+        //
+        // IT IS THE SAME THREE CALLS AttachInProcess ALREADY MAKES - Adopt, then
+        // Map, per slot - because that was the point of writing the inproc attach
+        // as dup+Adopt+Map rather than as an alias (see the comment above it).
+        // The fstat size check inside Adopt, the alignment, the peer lifetime and
+        // the ledger booking have all been exercised on every inproc run since
+        // P5; what is new here is only where the fd came from.
+        //
+        // OWNERSHIP: on success this object owns all four descriptors and closes
+        // them in Close(). On failure it closes none of them - the caller still
+        // owns what it received and is the only one that can report which slot
+        // failed, so a half-consuming failure path would lose descriptors in the
+        // one situation where the diagnostic matters.
+        MobileGLResult AdoptFromDescriptors(const int fds[4], const std::uint64_t sizes[4],
+                                            std::uint32_t replySlotCount, MemoryRole role);
+
         void Close();
         bool Valid() const { return m_valid; }
 

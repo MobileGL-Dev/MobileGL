@@ -706,7 +706,18 @@ namespace MobileGL::MG_Remote::Server {
 
     // The bell the apply thread parks on. On the server endpoint of an InProcessTransport that
     // is SelfDoorbell(); the client reaches the same bell through its own PeerDoorbell().
+    void ServerSession::SetExternalDoorbells(Transport::Doorbell* consumer,
+                                             Transport::Doorbell* producer) {
+        m_externalConsumerBell = consumer;
+        m_externalProducerBell = producer;
+    }
+
     Transport::Doorbell& ServerSession::ConsumerDoorbell() {
+        // sm: injected first, because a spawn session's bells are sockets the
+        // entry point made and the transport has never heard of.
+        if (m_externalConsumerBell != nullptr) {
+            return *m_externalConsumerBell;
+        }
         if (m_transport == nullptr) {
             MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"ServerSession::ConsumerDoorbell\"} - no "
                     "transport; Accept() has not run");
@@ -725,6 +736,9 @@ namespace MobileGL::MG_Remote::Server {
     }
 
     Transport::Doorbell& ServerSession::ProducerDoorbell() {
+        if (m_externalProducerBell != nullptr) {
+            return *m_externalProducerBell;
+        }
         if (m_transport == nullptr) {
             MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"ServerSession::ProducerDoorbell\"} - no "
                     "transport; Accept() has not run");

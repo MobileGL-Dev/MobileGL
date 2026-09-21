@@ -15,6 +15,7 @@
 #include "../Protocol/generated/protocol_generated.h"
 #include "../Server/ServerLoop.h"
 #include "../Server/ServerSession.h"
+#include "../Transport/FdPassing.h"
 #include "../Transport/InProcessTransport.h"
 #include "WireTables.h"
 
@@ -603,6 +604,191 @@ namespace MobileGL::MG_Remote::Client {
             return attached;
         }
 
+        return FinishStartup(&m_clientTransport->PeerDoorbell(),
+                             &m_clientTransport->SelfDoorbell(),
+                             /*startApplyThreadHere=*/true);
+    }
+
+    MobileGLResult ClientSession::StartOverSocket(
+        std::unique_ptr<Transport::SocketTransport> transport) {
+        if (m_started) {
+            return MOBILEGL_ERR_INVALID_ARGUMENT;
+        }
+        if (transport == nullptr) {
+            MGLOG_E("MG_Remote client: StartOverSocket needs a connected transport");
+            return MOBILEGL_ERR_INVALID_ARGUMENT;
+        }
+        m_socketTransport = Move(transport);
+        m_transport = m_socketTransport.get();
+
+        // ---- Hello. The same bytes as inproc; the fingerprint is still compared
+        // for equality, because under Dial == Fork the child IS the same binary and
+        // comparing it catches a stale MOBILEGL_IPC_SERVER_PATH (CONTRACT-P6 4.1).
+        const Uint64 fingerprint = CapsAbiFingerprint();
+        {
+            ::flatbuffers::FlatBufferBuilder builder(512);
+            auto stamp = builder.CreateString(GIT_COMMIT_HASH_SHORT);
+            auto hello = ::MobileGL::Wire::CreateHello(
+                builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR, stamp,
+                0u, 0u, 0, fingerprint);
+            auto root = ::MobileGL::Wire::CreateCtrlEnvelope(
+                builder, ::MobileGL::Wire::CtrlMsg::Hello, hello.Union());
+            ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);
+            const MobileGLResult sent = m_transport->SendFrame(
+                MobileGLByteSpan{builder.GetBufferPointer(), builder.GetSize()});
+            if (sent != MOBILEGL_OK) {
+                Stop();
+                return sent;
+            }
+        }
+
+        // ---- Welcome, and the four announced sizes. THERE IS NO LOCAL SERVER TO
+        // ASK: the inproc path cross-checks Welcome against ServerSessionInstance()'s
+        // own mapping, which a6 showed is vacuous against a real peer. Here the wire
+        // values are the only values, which is what that check has to become on
+        // every lane (CONTRACT-P6 4.4).
+        Uint64 announced[4] = {0, 0, 0, 0};
+        const Uint32 replySlotCount = Transport::kDefaultReplySlotCount;
+        {
+            std::vector<Uint8> frame;
+            const MobileGLResult received =
+                ReceiveEnvelope(*m_transport, frame, kHandshakeTimeoutMs);
+            if (received != MOBILEGL_OK) {
+                MGLOG_E("MG_Remote client: no Welcome from the spawned server within %u ms (rc=%d)",
+                        kHandshakeTimeoutMs, static_cast<int>(received));
+                Stop();
+                return received;
+            }
+            const ::MobileGL::Wire::CtrlEnvelope* envelope = ParseEnvelope(frame);
+            if (envelope == nullptr || envelope->msg_type() != ::MobileGL::Wire::CtrlMsg::Welcome ||
+                envelope->msg_as_Welcome() == nullptr) {
+                MGLOG_E("MG_Remote client: the spawned server first frame is not a verifiable "
+                        "Welcome");
+                Stop();
+                return MOBILEGL_ERR_PROTOCOL_MISMATCH;
+            }
+            const ::MobileGL::Wire::Welcome* welcome = envelope->msg_as_Welcome();
+            const char* theirStamp = welcome->buildFingerprint() == nullptr
+                                         ? nullptr
+                                         : welcome->buildFingerprint()->c_str();
+            if (welcome->abiFingerprint() != fingerprint) {
+                FatalAbiMismatch("struct shapes", fingerprint, welcome->abiFingerprint(),
+                                 theirStamp);
+            }
+            const ::MobileGL::Wire::SegmentRef* refs[4] = {welcome->cmdRing(), welcome->stageRing(),
+                                                           welcome->replyPool(),
+                                                           welcome->eventRing()};
+            for (int index = 0; index < 4; ++index) {
+                if (refs[index] == nullptr || refs[index]->sizeBytes() == 0) {
+                    MGLOG_E("MG_Remote client: Welcome SegmentRef %d is missing or zero-sized",
+                            index);
+                    Stop();
+                    return MOBILEGL_ERR_PROTOCOL_MISMATCH;
+                }
+                announced[index] = refs[index]->sizeBytes();
+            }
+        }
+
+        // ---- the four descriptors. THIS is the step inproc does not have, and the
+        // reason SCM_RIGHTS is in this design at all: the segments are anonymous -
+        // ASharedMemory_create has no filesystem name and memfd / shm_open+unlink
+        // are not openable either - so the descriptor IS the only key.
+        //
+        // The slot travels in the sideband rather than being inferred from arrival
+        // order, so a reordered or dropped offer is a NAMED mismatch instead of two
+        // segments quietly swapped.
+        // Six offers: four segments, then the two bells (slots 4 and 5).
+        int fds[6] = {-1, -1, -1, -1, -1, -1};
+        {
+            struct Sideband {
+                Uint32 slot;
+                Uint64 bytes;
+            };
+            const auto closeAll = [&fds]() {
+                for (int& open : fds) {
+                    if (open >= 0) {
+                        ::close(open);
+                        open = -1;
+                    }
+                }
+            };
+            for (int received = 0; received < 6; ++received) {
+                Sideband sideband{};
+                Uint64 sidebandSize = 0;
+                int fd = -1;
+                std::vector<Uint8> scratch(Transport::FdPassing::kMaxSidebandBytes);
+                MobileGLMutableByteSpan span{scratch.data(), scratch.size()};
+                const MobileGLResult got =
+                    m_transport->ReceiveFd(&fd, span, &sidebandSize, kHandshakeTimeoutMs);
+                if (got != MOBILEGL_OK || fd < 0) {
+                    MGLOG_E("MG_Remote client: segment descriptor %d did not arrive (rc=%d)",
+                            received, static_cast<int>(got));
+                    closeAll();
+                    Stop();
+                    return got == MOBILEGL_OK ? MOBILEGL_ERR_PROTOCOL_MISMATCH : got;
+                }
+                if (sidebandSize != sizeof(Sideband)) {
+                    MGLOG_E("MG_Remote client: segment offer %d carried %llu sideband bytes",
+                            received, static_cast<unsigned long long>(sidebandSize));
+                    ::close(fd);
+                    closeAll();
+                    Stop();
+                    return MOBILEGL_ERR_PROTOCOL_MISMATCH;
+                }
+                std::memcpy(&sideband, scratch.data(), sizeof(Sideband));
+                const bool isSegment = sideband.slot < 4;
+                if (sideband.slot >= 6 || fds[sideband.slot] >= 0 ||
+                    (isSegment && sideband.bytes != announced[sideband.slot])) {
+                    MGLOG_E("MG_Remote client: segment offer names slot %u with %llu bytes; "
+                            "Welcome announced a different size or the slot is already filled",
+                            sideband.slot, static_cast<unsigned long long>(sideband.bytes));
+                    ::close(fd);
+                    closeAll();
+                    Stop();
+                    return MOBILEGL_ERR_PROTOCOL_MISMATCH;
+                }
+                fds[sideband.slot] = fd;
+            }
+
+            // ---- adopt and map. The same Adopt + Map every inproc run has
+            // exercised since P5; only the origin of the descriptor is new.
+            const MobileGLResult adopted = m_shm.AdoptFromDescriptors(
+                fds, announced, replySlotCount, Transport::MemoryRole::Client);
+            if (adopted != MOBILEGL_OK) {
+                closeAll();
+                Stop();
+                return adopted;
+            }
+            // The four segment descriptors now belong to m_shm. The two bells
+            // belong to the doorbells, which own and close them.
+            //
+            // WHICH BELL IS WHICH IS THE SESSION'S KNOWLEDGE, exactly as under
+            // inproc: slot 4 is the pair end whose WRITE wakes the server, slot 5
+            // is the one this side POLLS.
+            m_socketPeerBell = MakeUnique<Transport::SocketDoorbell>(fds[4], 1, true);
+            m_socketSelfBell = MakeUnique<Transport::SocketDoorbell>(fds[5], 1, true);
+        }
+
+        // The apply thread IS ALREADY RUNNING, in the other process: ServerMain
+        // started it before it sent the first descriptor. Starting one here would
+        // put a second applier on a ring that already has one.
+        return FinishStartup(m_socketPeerBell.get(), m_socketSelfBell.get(), false);
+    }
+
+    // The half of startup that is IDENTICAL for inproc and spawn: the ring
+    // producer, the reply pool, the event ring, the segment table, the encoder,
+    // the first CapsSnapshot and the emitter tables. Extracted by `sm` so the
+    // spawn path cannot drift from the shape P5 spent five packages settling -
+    // everything here is below the line where "which transport" stopped
+    // mattering.
+    //
+    // `startApplyThreadHere` is the one policy difference, and it is not a
+    // transport question: under inproc the client is what starts the server
+    // role, because there is no server-side main to do it. Under spawn there
+    // IS one, and it started the apply thread before it ever sent Welcome.
+    MobileGLResult ClientSession::FinishStartup(Transport::Doorbell* peerBell,
+                                                Transport::Doorbell* selfBell,
+                                                bool startApplyThreadHere) {
         Transport::RingControl* control = m_shm.CmdControl();
         m_cmd = Transport::RingProducer(control, m_shm.CmdRingBase(), m_shm.CmdRingCapacity(),
                                         Transport::RingCursorSet::Cmd);
@@ -619,8 +805,7 @@ namespace MobileGL::MG_Remote::Client {
         }
         // PeerDoorbell() is the bell the SERVER parks on and this side rings; SelfDoorbell() is
         // this side's own. Which is which is the session's knowledge, not the transport's.
-        m_producer.Attach(control, &m_cmd, &m_clientTransport->PeerDoorbell(),
-                          &m_clientTransport->SelfDoorbell(), SpinUsFromConfig());
+        m_producer.Attach(control, &m_cmd, peerBell, selfBell, SpinUsFromConfig());
 
         m_replies = Transport::ReplySlotPool(m_shm.ReplyBase(), m_shm.ReplyBytes(),
                                              m_shm.ReplySlotCount());
@@ -629,7 +814,7 @@ namespace MobileGL::MG_Remote::Client {
                                                 m_shm.EventSegmentBase());
         // P5e (ra, §2.6): the drain's other half. A server parked on a full SEG_EVENT is woken
         // by the drain that emptied it, not by the next thing this client happens to publish.
-        m_events.SetServerDoorbell(&m_clientTransport->PeerDoorbell());
+        m_events.SetServerDoorbell(peerBell);
         if (!m_replies.Valid() || !m_events.Valid()) {
             Stop();
             return MOBILEGL_ERR_INVALID_ARGUMENT;
@@ -701,10 +886,13 @@ namespace MobileGL::MG_Remote::Client {
         // thread mgl-srv-apply, applies MOBILEGL_IPC_SERVER_AFFINITY and logs the RESOLVED
         // mask. Under `inproc` the client is what starts the server role, which is why this
         // call is here rather than in some server-side main.
-        const MobileGLResult running = Server::ServerLoopInstance().Start(server);
-        if (running != MOBILEGL_OK) {
-            Stop();
-            return running;
+        if (startApplyThreadHere) {
+            Server::ServerSession& server = Server::ServerSessionInstance();
+            const MobileGLResult running = Server::ServerLoopInstance().Start(server);
+            if (running != MOBILEGL_OK) {
+                Stop();
+                return running;
+            }
         }
 
         // ---- 9. AND ONLY NOW THE THIRTY-SEVEN WIRE EMITTERS (R-17). This is the line that

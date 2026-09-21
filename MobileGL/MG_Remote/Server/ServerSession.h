@@ -82,10 +82,26 @@ namespace MobileGL::MG_Remote::Server {
         ReplyPool& Replies();
 
         // The client rings this one; the apply thread parks on it.
+        // P6 `sm`: the bells a spawn session parks on, injected because they do
+        // not come from the transport. CONTRACT-P5 §3.9 kept these accessors on
+        // the session precisely so this would be ONE switch in ONE file rather
+        // than two virtuals on every transport - and the switch it produced
+        // aborts for every role but InProcess, which is where a spawn apply
+        // thread died before popping its first record (a6 row A7-1).
+        //
+        // This is the narrow fix, not the general one: `lk` moves both bells
+        // behind ILink and DELETES these accessors, which is what CONTRACT-P6
+        // §8.1 means by retiring the ruling rather than amending it. Until then
+        // an injected pair is honest about where they come from, and the
+        // InProcess arm below is untouched.
+        void SetExternalDoorbells(Transport::Doorbell* consumer, Transport::Doorbell* producer);
+
         Transport::Doorbell& ConsumerDoorbell();
         // The server rings this one, but only when producerParked is set (a store to a shared
         // cache line otherwise burns a big core for a whole frame on a phone).
         Transport::Doorbell& ProducerDoorbell();
+
+        bool HasExternalDoorbells() const { return m_externalConsumerBell != nullptr; }
 
         // ---- s1's additions beyond c0's signature block ---------------------------------
 
@@ -183,6 +199,9 @@ namespace MobileGL::MG_Remote::Server {
         void LogMemory(const char* phase) const;
 
     private:
+        // sm: non-owning; the spawn entry point owns the SocketDoorbells.
+        Transport::Doorbell* m_externalConsumerBell = nullptr;
+        Transport::Doorbell* m_externalProducerBell = nullptr;
         Transport::RingConsumer m_commands;
         Wire::SegmentTable m_segments;
         PipeApplier m_applier;

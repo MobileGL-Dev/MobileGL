@@ -30,6 +30,8 @@
 #include <MG_Remote/Client/BackendObject_Remote.h>
 #endif
 
+#include "ServerRole.h"
+
 namespace MobileGL::MG_Backend {
     void LogBackendInfo() {
         if (!pActiveBackendObject) {
@@ -148,7 +150,13 @@ namespace MobileGL::MG_Backend {
         // The single hook (ARCHITECTURE.md:29). Returns false when the split could not be
         // brought up, and the caller then REFUSES TO CONTINUE rather than falling back to the
         // switch below - a fallback here is "the split lane ran monolith and went green".
-        Bool InitSplitRoles() {
+        // Steps 1 and 2 of the split bring-up: the server role's private backend
+        // object and the two CallMask halves. EXTRACTED so the spawn server
+        // process runs the SAME code the inproc server role runs - a second copy
+        // is how the two roles end up disagreeing about a capability bit that
+        // only one of them ever computes. ServerMain calls this and then does
+        // its own Accept; InitSplitRoles calls it and then starts the client.
+        Bool InitServerRoleCommon() {
             using namespace MobileGL::MG_Remote;
 
             // 1. the SERVER role's private backend object, on the app thread, with no GL and no
@@ -210,6 +218,17 @@ namespace MobileGL::MG_Backend {
             capBits |= MG_Pipe::MGPipeRunAheadCapBitsFor(MG_Config::ActiveBackendType, runAheadReady);
             session.SetCapabilityBits(capBits);
             session.SetBackend(loop.Backend());
+            return true;
+        }
+
+        // The single hook (ARCHITECTURE.md:29) for the INPROC shape: both roles in
+        // this process. The spawn shape runs InitServerRoleCommon in the child and
+        // the client half here.
+        Bool InitSplitRoles() {
+            using namespace MobileGL::MG_Remote;
+            if (!InitServerRoleCommon()) {
+                return false;
+            }
 
             // 3. the handshake, the four segments, and - at its end - the apply thread.
             const MobileGLResult started =
@@ -254,6 +273,19 @@ namespace MobileGL::MG_Backend {
         // guard.
         MG_Remote::Server::ServerLoopInstance().Stop();
     }
+#endif
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // The spawn server's entry into the SAME bring-up the inproc server role
+    // runs (ServerRole.h). A thin forwarder on purpose: the body stays in the
+    // anonymous namespace beside InitSplitRoles so the two cannot drift.
+    //
+    // THE WHOLE FUNCTION IS INSIDE THE GUARD, not just its body. A version with
+    // the guard inside still DEFINES the symbol in a pull build, and G1 caught
+    // it: 2 symbols added, 1 removed, .text +16 bytes. The pull build's identity
+    // is byte-for-byte, and "it returns false there" is not the same as "it is
+    // not there".
+    Bool InitServerRoleForSpawn() { return InitServerRoleCommon(); }
 #endif
 
     void Init() {

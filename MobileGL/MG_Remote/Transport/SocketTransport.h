@@ -48,6 +48,7 @@
 #include "ITransport.h"
 
 #include <cstdint>
+#include <string>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -62,6 +63,41 @@ namespace MobileGL::MG_Remote::Transport {
         // back a transport whose ShareFd would surprise its caller later.
         static MobileGLResult CreatePair(std::unique_ptr<SocketTransport>& outClient,
                                          std::unique_ptr<SocketTransport>& outServer);
+
+        // ---- independent processes: listen / connect -----------------------
+        //
+        // THE TWO PROCESSES ARE NOT COUPLED BY INHERITANCE. An earlier shape of
+        // this package forked the server and handed it fds 3..6; that can never
+        // be the end state, where the server is a standing application and the
+        // client connects to it from somewhere else entirely - possibly from
+        // another kernel. So the rendezvous is a NAME, and both sides are
+        // started by whoever starts them.
+        //
+        // TWO CONNECTIONS, not one. SCM_RIGHTS needs a socket of its own: an fd
+        // offer is a sendmsg whose ancillary data rides with specific BYTES, and
+        // interleaving those bytes with the framed control stream would make the
+        // frame reassembler and the descriptor receiver race for the same bytes.
+        // So the client connects twice to the same listening path - first
+        // connection is control, second is aux - and the server accepts them in
+        // that order. One name, no extra configuration, and FdPassing keeps the
+        // dedicated socket it was written for.
+        //
+        // `path` is a filesystem AF_UNIX path. ARCHITECTURE.md §15.1 ruled
+        // against one for the FORK shape, where the fds were inherited and a
+        // path would have been a strictly larger attack surface for no gain.
+        // Independent processes have to name a rendezvous somehow, and a path
+        // with 0600 permissions in a private directory is the portable answer;
+        // the abstract namespace is Linux-only and TCP would be reachable off
+        // the machine.
+        static MobileGLResult Listen(const std::string& path, int* outListenFd);
+
+        // Accepts one client's TWO connections, in order.
+        static MobileGLResult AcceptPair(int listenFd, std::uint32_t timeoutMs,
+                                         std::unique_ptr<SocketTransport>& outServer);
+
+        // The client's half: connects twice to `path`.
+        static MobileGLResult ConnectTo(const std::string& path, std::uint32_t timeoutMs,
+                                        std::unique_ptr<SocketTransport>& outClient);
 
         // Adopts an already-connected stream fd - what `sm` uses on each side of
         // the fork, where fd 3 is the stream and fd 4 is the aux socket.

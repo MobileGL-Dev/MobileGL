@@ -39,6 +39,8 @@ namespace MobileGL::MG_Remote::Server {
 
         constexpr int kChildStreamFd = 3;
         constexpr int kChildAuxFd = 4;
+        constexpr int kChildServerBellFd = 5;
+        constexpr int kChildClientBellFd = 6;
 
         bool IsExecutableFile(const std::string& path) {
             if (path.empty()) {
@@ -161,48 +163,37 @@ namespace MobileGL::MG_Remote::Server {
         return children;
     }
 
-    MobileGLResult SpawnServer(const std::string& imagePath, SpawnedServer* out) {
-        if (out == nullptr) {
+    MobileGLResult LaunchServer(const std::string& imagePath, const std::string& endpoint,
+                                LaunchedServer* out) {
+        if (out == nullptr || endpoint.empty()) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
-        *out = SpawnedServer{};
+        *out = LaunchedServer{};
 
         const std::string image = ResolveImage(imagePath);
         if (!IsExecutableFile(image)) {
             // NAMED, never a fallback. ConfigLoader.cpp's own comment names the
             // accident this prevents: a lane that asked for spawn, silently got
             // monolith, and went green on the wrong arm.
-            Transport::WireLogError("MG_Remote spawn: the server image is not executable: \"%s\" - refusing. "
-                         "Set MOBILEGL_IPC_SERVER_PATH, or place libMobileGLServer.so beside "
-                         "libMobileGL.so. There is NO monolith fallback from here.",
-                         image.empty() ? "<unresolved>" : image.c_str());
+            Transport::WireLogError(
+                "MG_Remote spawn: the server image is not executable: \"%s\" - refusing. Set "
+                "MOBILEGL_IPC_SERVER_PATH, or place libMobileGLServer.so beside libMobileGL.so. "
+                "There is NO monolith fallback from here.",
+                image.empty() ? "<unresolved>" : image.c_str());
             return MOBILEGL_ERR_INVALID_ARGUMENT;
-        }
-
-        int stream[2] = {-1, -1};
-        if (::socketpair(AF_UNIX, SOCK_STREAM, 0, stream) != 0) {
-            Transport::WireLogError("MG_Remote spawn: socketpair failed: %s", std::strerror(errno));
-            return MOBILEGL_ERR_UNSUPPORTED;
-        }
-        int aux[2] = {-1, -1};
-        if (Transport::FdPassing::CreateSocketPair(aux) != MOBILEGL_OK) {
-            ::close(stream[0]);
-            ::close(stream[1]);
-            return MOBILEGL_ERR_UNSUPPORTED;
         }
 
         ScrubbedEnv env = BuildChildEnv();
         std::string argv0 = image;
-        char* argv[] = {argv0.data(), nullptr};
+        std::string argv1 = endpoint;
+        char* argv[] = {argv0.data(), argv1.data(), nullptr};
 
         // A close-on-exec pipe so an execve that fails reports its errno back
-        // instead of vanishing: the app process's stderr is /dev/null on
-        // Android (ARCHITECTURE.md §15.2), so a silent exec failure would look
-        // exactly like a server that started and then died.
+        // instead of vanishing: the app process's stderr is /dev/null on Android
+        // (ARCHITECTURE.md §15.2), so a silent exec failure would look exactly
+        // like a server that started and then died.
         int report[2] = {-1, -1};
         if (::pipe(report) != 0) {
-            ::close(stream[0]); ::close(stream[1]);
-            ::close(aux[0]); ::close(aux[1]);
             return MOBILEGL_ERR_UNSUPPORTED;
         }
         ::fcntl(report[1], F_SETFD, FD_CLOEXEC);
@@ -210,87 +201,57 @@ namespace MobileGL::MG_Remote::Server {
         const pid_t pid = ::fork();
         if (pid < 0) {
             Transport::WireLogError("MG_Remote spawn: fork failed: %s", std::strerror(errno));
-            ::close(stream[0]); ::close(stream[1]);
-            ::close(aux[0]); ::close(aux[1]);
-            ::close(report[0]); ::close(report[1]);
+            ::close(report[0]);
+            ::close(report[1]);
             return MOBILEGL_ERR_UNSUPPORTED;
         }
 
         if (pid == 0) {
-            // ---- child: async-signal-safe calls ONLY until execve -----------
-            //
-            // dup2 both fixes the number and clears close-on-exec, which the aux
-            // socket has set (FdPassing.cpp:89-90). But a source fd may ALREADY
-            // BE the target number - in a gtest process fds 3..8 are exactly
-            // where a fresh socketpair lands - and dup2(n, n) is specified to do
-            // nothing at all, INCLUDING not clearing close-on-exec. Closing the
-            // source afterwards then closes the descriptor we just "installed".
-            // That is this function's one genuinely subtle line, so it is spelled
-            // out rather than written cleverly.
-            const int sources[2] = {stream[1], aux[1]};
-            const int targets[2] = {kChildStreamFd, kChildAuxFd};
-            for (int i = 0; i < 2; ++i) {
-                if (sources[i] == targets[i]) {
-                    ::fcntl(targets[i], F_SETFD, 0); // already in place: just un-CLOEXEC it
-                } else {
-                    ::dup2(sources[i], targets[i]);
-                }
-            }
-            // Close the originals, but never a descriptor that IS one of the two
-            // we just installed.
-            const int spare[5] = {stream[0], stream[1], aux[0], aux[1], report[0]};
-            for (int fd : spare) {
-                if (fd != kChildStreamFd && fd != kChildAuxFd) {
-                    ::close(fd);
-                }
-            }
+            // ---- child: async-signal-safe calls ONLY until execve -------------
+            // NOTHING IS HANDED OVER. No dup2, no fixed fd numbers, no
+            // close-on-exec dance - the child gets an endpoint name in argv and
+            // finds everything else by listening. That is the whole difference
+            // between a launcher and a fork-coupled pair, and it is why this
+            // function is now twenty lines shorter than the version that tried
+            // to be both.
+            ::close(report[0]);
             ::execve(image.c_str(), argv, env.pointers.data());
-            // Only reachable when execve failed.
             const int failure = errno;
             const ssize_t ignored = ::write(report[1], &failure, sizeof(failure));
             (void)ignored;
             ::_exit(127);
         }
 
-        // ---- parent ----------------------------------------------------------
-        ::close(stream[1]);
-        ::close(aux[1]);
+        // ---- parent ---------------------------------------------------------
         ::close(report[1]);
-
         int childErrno = 0;
         const ssize_t got = ::read(report[0], &childErrno, sizeof(childErrno));
         ::close(report[0]);
         if (got == static_cast<ssize_t>(sizeof(childErrno))) {
-            // The pipe only carries bytes when execve failed.
             Transport::WireLogError("MG_Remote spawn: execve(\"%s\") failed in the child: %s",
-                         image.c_str(), std::strerror(childErrno));
-            ::close(stream[0]);
-            ::close(aux[0]);
+                                    image.c_str(), std::strerror(childErrno));
             int status = 0;
             ::waitpid(pid, &status, 0);
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
 
         out->pid = static_cast<int>(pid);
-        out->transport = std::make_unique<Transport::SocketTransport>(
-            stream[0], aux[0], Transport::TransportRole::Client);
-        Transport::WireLogError("MG_Remote spawn: server pid=%d image=\"%s\" transport=spawn "
-                     "(env scrubbed: %d entries removed)",
-                     out->pid, image.c_str(), env.removed);
+        out->endpoint = endpoint;
+        Transport::WireLogError("MG_Remote spawn: server pid=%d image=\"%s\" endpoint=\"%s\" "
+                                "transport=spawn (env scrubbed: %d entries removed)",
+                                out->pid, image.c_str(), endpoint.c_str(), env.removed);
         return MOBILEGL_OK;
     }
 
-    MobileGLResult ReapServer(SpawnedServer& server, std::uint32_t timeoutMs, int* outExitCode) {
+    MobileGLResult ReapServer(LaunchedServer& server, std::uint32_t timeoutMs,
+                              int* outExitCode) {
         if (server.pid < 0) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
-        // Closing our end is what the child sees as EOF, and EOF is what it
-        // exits on. Doing it here rather than making the caller remember is the
-        // difference between "reap" and "reap, eventually, if you also did the
-        // other thing".
-        if (server.transport) {
-            server.transport->Shutdown();
-        }
+        // NOTHING TO CLOSE HERE ANY MORE. The launcher holds no descriptor
+        // into the child: whoever owns the CONNECTION closes it, and that EOF is
+        // what the child exits on. A launcher that also owned the connection is
+        // what made the two processes one unit.
 
         const auto deadline = timeoutMs;
         std::uint32_t waited = 0;
@@ -317,12 +278,12 @@ namespace MobileGL::MG_Remote::Server {
 
 #else // !MOBILEGL_SERVER_SPAWN_POSIX
 
-    MobileGLResult SpawnServer(const std::string&, SpawnedServer*) {
+    MobileGLResult LaunchServer(const std::string&, const std::string&, LaunchedServer*) {
         Transport::WireLogError("MG_Remote spawn: unsupported on this platform - P6 lands POSIX only "
                      "(CONTRACT-P6 §2.6); there is no fork() to build a second process from");
         return MOBILEGL_ERR_UNSUPPORTED;
     }
-    MobileGLResult ReapServer(SpawnedServer&, std::uint32_t, int*) {
+    MobileGLResult ReapServer(LaunchedServer&, std::uint32_t, int*) {
         return MOBILEGL_ERR_UNSUPPORTED;
     }
     int CountOwnChildren() { return -1; }

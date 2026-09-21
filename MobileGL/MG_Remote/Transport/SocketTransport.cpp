@@ -13,12 +13,15 @@
 #include "WireLog.h"
 
 #include <cerrno>
+#include <cstddef>
 #include <cstring>
 #include <memory>
 
 #if defined(__unix__) || defined(__APPLE__) || defined(__ANDROID__)
 #    define MOBILEGL_SOCKET_TRANSPORT_POSIX 1
 #    include <poll.h>
+#    include <sys/stat.h>
+#    include <sys/un.h>
 #    include <sys/socket.h>
 #    include <sys/types.h>
 #    include <unistd.h>
@@ -61,6 +64,158 @@ namespace MobileGL::MG_Remote::Transport {
             }
         }
     } // namespace
+
+    namespace {
+        // A filesystem AF_UNIX path, bounded by sun_path. Refused BY NAME when it
+        // does not fit rather than silently truncated - a truncated path is a
+        // different socket, and both sides would then "succeed" onto two
+        // different names.
+        bool FillAddress(const std::string& path, sockaddr_un* out, socklen_t* outLen) {
+            std::memset(out, 0, sizeof(*out));
+            out->sun_family = AF_UNIX;
+            if (path.empty() || path.size() >= sizeof(out->sun_path)) {
+                WireLogError("MG_Remote SocketTransport: endpoint path is empty or longer than "
+                             "sun_path allows (%zu >= %zu): \"%s\"",
+                             path.size(), sizeof(out->sun_path), path.c_str());
+                return false;
+            }
+            std::memcpy(out->sun_path, path.c_str(), path.size());
+            *outLen = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + path.size() + 1);
+            return true;
+        }
+
+        MobileGLResult ConnectOne(const std::string& path, std::uint32_t timeoutMs, int* outFd) {
+            sockaddr_un address{};
+            socklen_t length = 0;
+            if (!FillAddress(path, &address, &length)) {
+                return MOBILEGL_ERR_INVALID_ARGUMENT;
+            }
+            // Retry with a bound budget: the server may not have reached bind()
+            // yet. An exhausted budget is a NAMED refusal, never a fallback -
+            // CONTRACT-P6 §3.4 calls for a bounded retry and says so.
+            const std::uint32_t deadline = timeoutMs == 0 ? 1 : timeoutMs;
+            for (std::uint32_t waited = 0;; waited += 5) {
+                const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+                if (fd < 0) {
+                    WireLogError("MG_Remote SocketTransport: socket() failed: %s",
+                                 std::strerror(errno));
+                    return MOBILEGL_ERR_UNSUPPORTED;
+                }
+                if (::connect(fd, reinterpret_cast<sockaddr*>(&address), length) == 0) {
+                    *outFd = fd;
+                    return MOBILEGL_OK;
+                }
+                const int failure = errno;
+                ::close(fd);
+                if (waited >= deadline) {
+                    WireLogError("MG_Remote SocketTransport: could not connect to \"%s\" within "
+                                 "%u ms: %s - REFUSING BY NAME, there is no monolith fallback "
+                                 "from here",
+                                 path.c_str(), deadline, std::strerror(failure));
+                    return MOBILEGL_ERR_TRANSPORT_CLOSED;
+                }
+                ::usleep(5000);
+            }
+        }
+    } // namespace
+
+    MobileGLResult SocketTransport::Listen(const std::string& path, int* outListenFd) {
+        if (outListenFd == nullptr) {
+            return MOBILEGL_ERR_INVALID_ARGUMENT;
+        }
+        *outListenFd = -1;
+        sockaddr_un address{};
+        socklen_t length = 0;
+        if (!FillAddress(path, &address, &length)) {
+            return MOBILEGL_ERR_INVALID_ARGUMENT;
+        }
+        // A stale socket file from a server that died is the normal case, not the
+        // exceptional one, and bind() fails on it with EADDRINUSE. Unlinking first
+        // is what every AF_UNIX server does; the alternative is a server that
+        // cannot restart until someone cleans up by hand.
+        ::unlink(path.c_str());
+
+        const int listenFd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+        if (listenFd < 0) {
+            WireLogError("MG_Remote SocketTransport: socket() failed: %s", std::strerror(errno));
+            return MOBILEGL_ERR_UNSUPPORTED;
+        }
+        if (::bind(listenFd, reinterpret_cast<sockaddr*>(&address), length) != 0) {
+            WireLogError("MG_Remote SocketTransport: bind(\"%s\") failed: %s", path.c_str(),
+                         std::strerror(errno));
+            ::close(listenFd);
+            return MOBILEGL_ERR_UNSUPPORTED;
+        }
+        // 0600: the rendezvous is between one user's processes. An AF_UNIX path
+        // is a filesystem object and its mode is the only access control there is.
+        ::chmod(path.c_str(), 0600);
+        if (::listen(listenFd, 4) != 0) {
+            WireLogError("MG_Remote SocketTransport: listen(\"%s\") failed: %s", path.c_str(),
+                         std::strerror(errno));
+            ::close(listenFd);
+            ::unlink(path.c_str());
+            return MOBILEGL_ERR_UNSUPPORTED;
+        }
+        *outListenFd = listenFd;
+        return MOBILEGL_OK;
+    }
+
+    MobileGLResult SocketTransport::AcceptPair(int listenFd, std::uint32_t timeoutMs,
+                                               std::unique_ptr<SocketTransport>& outServer) {
+        outServer.reset();
+        if (listenFd < 0) {
+            return MOBILEGL_ERR_INVALID_ARGUMENT;
+        }
+        int accepted[2] = {-1, -1};
+        for (int index = 0; index < 2; ++index) {
+            const int ready = WaitReadable(listenFd, timeoutMs);
+            if (ready <= 0) {
+                for (int fd : accepted) {
+                    if (fd >= 0) ::close(fd);
+                }
+                // Half a client is not a client. Both connections or neither, so
+                // a peer that died between the two cannot leave a session that
+                // looks up but has no way to receive a descriptor.
+                WireLogError("MG_Remote SocketTransport: only %d of 2 connections arrived within "
+                             "%u ms", index, timeoutMs);
+                return ready == 0 ? MOBILEGL_ERR_TIMEOUT : MOBILEGL_ERR_TRANSPORT_CLOSED;
+            }
+            accepted[index] = ::accept(listenFd, nullptr, nullptr);
+            if (accepted[index] < 0) {
+                for (int fd : accepted) {
+                    if (fd >= 0) ::close(fd);
+                }
+                WireLogError("MG_Remote SocketTransport: accept failed: %s", std::strerror(errno));
+                return MOBILEGL_ERR_TRANSPORT_CLOSED;
+            }
+        }
+        // First connection is control, second is aux. The order IS the protocol;
+        // it is stated here and in ConnectTo and nowhere else.
+        outServer = std::make_unique<SocketTransport>(accepted[0], accepted[1],
+                                                      TransportRole::Server);
+        return MOBILEGL_OK;
+    }
+
+    MobileGLResult SocketTransport::ConnectTo(const std::string& path, std::uint32_t timeoutMs,
+                                              std::unique_ptr<SocketTransport>& outClient) {
+        outClient.reset();
+        int control = -1;
+        const MobileGLResult first = ConnectOne(path, timeoutMs, &control);
+        if (first != MOBILEGL_OK) {
+            return first;
+        }
+        int aux = -1;
+        // The second connect has a SHORT budget: the server is provably up - we
+        // just connected to it - so a slow second connection means something is
+        // wrong rather than something is starting.
+        const MobileGLResult second = ConnectOne(path, 2000, &aux);
+        if (second != MOBILEGL_OK) {
+            ::close(control);
+            return second;
+        }
+        outClient = std::make_unique<SocketTransport>(control, aux, TransportRole::Client);
+        return MOBILEGL_OK;
+    }
 
     MobileGLResult SocketTransport::CreatePair(std::unique_ptr<SocketTransport>& outClient,
                                                std::unique_ptr<SocketTransport>& outServer) {
