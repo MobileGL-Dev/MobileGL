@@ -13,7 +13,7 @@
 | **P5d** `inproc` 性能专项 | **已收官（2026-09-18，三轮）** | `cb06538c`、`56a77348`、`1f8de61b`；报告 [`P5D-INPROC-PERFORMANCE.md`](P5D-INPROC-PERFORMANCE.md)；`MEASUREMENTS.md` §9 |
 | **P5e** 退役 Espryt draw path 的 lockstep | **已收官（2026-09-19）**，附一条具名未决（E1 对照，ID-122） | 契约 `MobileGL/MG_Remote/CONTRACT-P5E.md`；计划 `~/w7/notes/p5e/BRIEF-P5E.md`、裁定 `~/w7/notes/p5e/INTEGRATOR-DECISIONS-P5E.md`（**ID-80..136**）；**十二个包已全部落地合并**（§2.7），`kMGPipeP5eRunAheadReady` 与 `kMGPipeP5eClientWaitRuleLanded` 均已翻。strict 车道硬绿 179/179、`integration-gpu` 1357/1357、三个构建 flavour 全绿；设备上 VD32 已与 monolith 齐平。报告 [`P5E-RUNAHEAD.md`](P5E-RUNAHEAD.md)，未完成项见 §5 |
 | **P5f** 一切状态上 wire | **已收官（2026-09-20）** | f0 / f1 / fc / fe / fm / fs / fr / fv 及分类收口均已完成；零 BARRIER_PULLED、两份 marker 空表、逐帧 rsp=0。主机全门、Claude 异族终审两项修复及 red-once、Redmi 六 clean-boot 臂通过。见 [`close-report`](notes/p5f/close-report.md)、[`close-review`](notes/p5f/close-review.md)、[`device-report`](notes/p5f/device-report.md) |
-| **P6** spawn transport | **前提已解除，尚未实施** | 计划 [`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md)、草稿 [`P6-CONTRACT-DRAFT.md`](P6-CONTRACT-DRAFT.md)；下一步 a6 核验进程/链接边界，再 c6 和 spawn 包。传输原语与 P5f 值控制帧、静态世代/角色隔离已在树上；待做的是进程装配、socket 传输、握手/EOF/device-lost 等，不再重做已落地的控制帧与静态量 |
+| **P6** spawn transport | **a6 已收官（2026-09-21）**，c6 开工中 | 计划 [`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md)、草稿 [`P6-CONTRACT-DRAFT.md`](P6-CONTRACT-DRAFT.md)；a6 见 [`a6-audit-v1.md`](notes/p6/a6-audit-v1.md) 与 [`a6-link-experiment.md`](notes/p6/a6-link-experiment.md)。传输原语与 P5f 值控制帧、静态世代/角色隔离已在树上；待做的是进程装配、socket 传输、握手/EOF/device-lost 等，不再重做已落地的控制帧与静态量 |
 
 ## 2. P5f 最终验收
 
@@ -326,7 +326,7 @@ p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提�
 
 ## 6. 下一步
 
-1. **P6 a6 尚未执行**：按 [`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md) 核验 P5f 的 wire-only 结论在独立进程装配中成立，重点是角色链接闭包、段映射/句柄传递与生命周期边界；控制帧、静态世代与对象字段不重新施工。
+1. ~~**P6 a6 尚未执行**~~ **a6 已收官（2026-09-21）**，产出与十四项 c6 决定清单见 [`a6-audit-v1.md`](notes/p6/a6-audit-v1.md) §7。原计划文字：：按 [`P6-SPAWN-PLAN.md`](P6-SPAWN-PLAN.md) 核验 P5f 的 wire-only 结论在独立进程装配中成立，重点是角色链接闭包、段映射/句柄传递与生命周期边界；控制帧、静态世代与对象字段不重新施工。
 2. a6 后推进 **c6 契约与 spawn 实现**：SocketTransport、ServerMain、握手、EOF / device-lost 及子进程身份门。`integration-spawn` 应与现有 split 同名，且日志证明真正在子进程执行；这些代码和验收尚未实施。
 3. P7/P8/P9 的 buffer、格式/placeholder、client arrays、大 blob、异步回读等功能债继续按阶段推进；79 trace 全集重新普查后再引用首阻塞，P5b 历史清单不当作当前结果。
 4. **保留 P5e E1 历史债（ID-122）**与 VD12 面板上限、线程放置/负载平衡等测量问题。P5f 设备正确性通过不改写 P5e 的性能结论，也不声称解决上述性能问题。
