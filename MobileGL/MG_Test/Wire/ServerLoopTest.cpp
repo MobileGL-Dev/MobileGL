@@ -693,11 +693,11 @@ TEST(ServerLoopTest, TheSessionWatermarkAndTheDecoderTallyAgreeAfterEveryRecord)
     // instantly would be asserting a promise R-9 deliberately does not make. The BOUND is what
     // keeps this a check: a loop that never retires times out here instead of passing.
     const auto retireDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    while (fixture.clientSegments.CmdControl()->retiredSeq.load() < 8u &&
+    while (fixture.clientSegments.CmdControl()->Progress.retiredSeq.load() < 8u &&
            std::chrono::steady_clock::now() < retireDeadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    EXPECT_GE(fixture.clientSegments.CmdControl()->retiredSeq.load(), 8u)
+    EXPECT_GE(fixture.clientSegments.CmdControl()->Progress.retiredSeq.load(), 8u)
         << "the apply loop advanced appliedSeq but never retired within 2 s, so SEG_STAGE would "
            "never be reclaimed and the first MOBILEGL_IPC_STAGE_MB would end in "
            "Fatal{RingOverrun}";

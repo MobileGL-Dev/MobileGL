@@ -432,7 +432,7 @@ path must have no more out-of-line calls than today. That is falsifiable; "withi
 The watermark cache line is `{appliedSeq, submittedSeq, retiredSeq, completedFrameSerial,
 presentAckSerial}`; `eventRingFull`/`eventDropped` sit in a **separate** `alignas(64)` group with
 `serverEpoch`/`ringGeneration`/the two park flags. And `submittedSeq` is **producer-written**
-(`Ring.h:50`) while the other four are consumer-written — so the group has **mixed writers**, and any
+(`Ring.h`'s "THE FIVE WATERMARKS" block) while the other four are consumer-written — so the group has **mixed writers**, and any
 "single-writer progress block aliased over the watermark line" is unsound.
 
 `lk` therefore **regroups**: `submittedSeq` moves to the producer's own line, beside `cmdHead`,
@@ -449,7 +449,8 @@ becomes a named `LinkProgress` member with per-field `offsetof` static_asserts.
 > That is new false sharing on the hottest line in the system, and it would land in exactly the
 > numbers this package's gate has to hold constant. The two flags stay in the doorbell/generation
 > group, where mixed writers already live beside `consumerParked`/`producerParked`, and cross the
-> seam through a separate `EventFlags()` accessor on its own line.
+> seam through a separate `EventFlags()` accessor. *Accessor*, not line: they share
+> `serverEpoch`'s line, which is where mixed writers already live.
 
 It is free **today** — both peers are the same binary, enforced by the fingerprint — and a wire break
 the day a second build exists. It is **`lk`'s and not `c6`'s** because the rename blast radius is
@@ -479,7 +480,7 @@ have nothing to do with a leak.
 
 ### 8.6 `SEG_STAGE`'s cursors are deliberately dead
 
-`Ring.h:105-129` states it and a test pins it: `SEG_STAGE` is **not a ring**; staging is an
+`Ring.h`'s "DEAD IN P5, DELIBERATELY" states it and a test pins it: `SEG_STAGE` is **not a ring**; staging is an
 encoder-local linear allocator reclaiming on `retiredSeq`, and all three stage cursors stay zero for
 the whole of P5. A stream link's send window either revives them **completely** or does not use them;
 the header names the middle state as *a guaranteed hang rather than a slow path*. P6.5's, recorded
@@ -544,7 +545,7 @@ Negative controls, each run red once:
 3. `Transport/ReplySlot.h`'s "P6 debt" for the 2 MiB reply cap and chunked readback. **Declined**:
    P9's. Note `P6-SPAWN-PLAN §8.5` already reassigned it and the header was never updated — two
    documents in the tree disagreed; this file settles it.
-4. `Ring.h:71-77` — `appliedSeq` is excluded from lazy publication **by name**. P6 does not change
+4. `Ring.h`'s "BATCHING MAY ONLY MAKE A WATERMARK LATE" — `appliedSeq` is excluded from lazy publication **by name**. P6 does not change
    the behaviour; it records that any future stream link **amends** this rule rather than inferring
    around it. Several designs have argued the late-never-early invariant licenses lazy `appliedSeq`;
    it explicitly carves `appliedSeq` out.

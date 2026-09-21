@@ -109,11 +109,27 @@ TEST(RingTest, ControlPageLayoutIsTheSharedContract) {
     EXPECT_EQ(offset(&control.cmdAppliedTail) % 64, 0);
     EXPECT_EQ(offset(&control.stageHead) % 64, 0);
     EXPECT_EQ(offset(&control.stageAppliedTail) % 64, 0);
-    EXPECT_EQ(offset(&control.appliedSeq) % 64, 0);
+    EXPECT_EQ(offset(&control.Progress.appliedSeq) % 64, 0);
     EXPECT_EQ(offset(&control.serverEpoch) % 64, 0);
     // cmdHead and cmdAppliedTail are written by different processes: they must
     // not share a line.
     EXPECT_NE(offset(&control.cmdHead) / 64, offset(&control.cmdAppliedTail) / 64);
+
+    // lk (CONTRACT-P6 §8.3) regrouped this page BY WRITER, and submittedSeq is the field
+    // it moved. Assert that here rather than borrowing the claim from Ring.h's
+    // static_asserts: this test is named for the layout being a shared contract, and it
+    // said nothing about the one field the regroup touched.
+    EXPECT_EQ(offset(&control.submittedSeq) / 64, offset(&control.cmdHead) / 64)
+        << "submittedSeq is producer-written and belongs on the producer's line";
+    EXPECT_NE(offset(&control.submittedSeq) / 64, offset(&control.Progress.appliedSeq) / 64)
+        << "a producer-written field on the consumer's watermark line is what lk removed";
+
+    // The two event flags stay OUT of Progress on purpose: the client clears eventRingFull
+    // with an RMW on every drain, and Progress's line is the one the client spins on.
+    EXPECT_NE(offset(&control.eventRingFull) / 64, offset(&control.Progress.appliedSeq) / 64)
+        << "eventRingFull's per-drain RMW may not land on the spin line";
+    EXPECT_EQ(offset(&control.eventRingFull) / 64, offset(&control.serverEpoch) / 64)
+        << "the event flags live in the doorbell group, where mixed writers already are";
 }
 
 TEST(RingTest, RejectsANonPowerOfTwoCapacity) {
@@ -538,10 +554,10 @@ TEST(RingTest, WatermarksAreAllZeroUntilSomeoneAdvancesThem) {
     alignas(4096) RingControl control{};
     InitRingControl(control);
     EXPECT_EQ(control.submittedSeq.load(), 0u);
-    EXPECT_EQ(control.appliedSeq.load(), 0u);
-    EXPECT_EQ(control.retiredSeq.load(), 0u);
-    EXPECT_EQ(control.completedFrameSerial.load(), 0u);
-    EXPECT_EQ(control.presentAckSerial.load(), 0u);
+    EXPECT_EQ(control.Progress.appliedSeq.load(), 0u);
+    EXPECT_EQ(control.Progress.retiredSeq.load(), 0u);
+    EXPECT_EQ(control.Progress.completedFrameSerial.load(), 0u);
+    EXPECT_EQ(control.Progress.presentAckSerial.load(), 0u);
     // ... while the two GENERATIONS start at one, because for them zero means
     // "uninitialized" and must never be a legal value. The two conventions are
     // opposite on purpose and are next to each other in the same struct.
@@ -559,9 +575,9 @@ TEST(RingTest, AWatermarkWaiterMustTestGreaterOrEqualRatherThanEqual) {
 
     const std::uint64_t mySeq = 7;
     // The peer jumps straight past the value this waiter cares about.
-    control.appliedSeq.store(mySeq + 1, std::memory_order_release);
+    control.Progress.appliedSeq.store(mySeq + 1, std::memory_order_release);
 
-    const std::uint64_t seen = control.appliedSeq.load(std::memory_order_acquire);
+    const std::uint64_t seen = control.Progress.appliedSeq.load(std::memory_order_acquire);
     EXPECT_FALSE(seen == mySeq) << "an equality waiter is still asleep at this point";
     EXPECT_TRUE(seen >= mySeq) << "the >= waiter this contract mandates has been released";
 }
@@ -582,11 +598,11 @@ TEST(RingTest, AppliedSeqAdvancesOncePerRecordAndIsNeverBatchedInP5) {
     RingRecordView view{};
     while (ring.Consumer().Pop(view)) {
         ++applied;
-        ring.Control().appliedSeq.store(applied, std::memory_order_release);
+        ring.Control().Progress.appliedSeq.store(applied, std::memory_order_release);
         // The reader's guarantee, checked at EVERY record rather than at the end:
         // a batched watermark would sit at 0 here for 63 of every 64 iterations,
         // and a client barrier reading it would block on work that already ran.
-        EXPECT_EQ(ring.Control().appliedSeq.load(std::memory_order_acquire), applied);
+        EXPECT_EQ(ring.Control().Progress.appliedSeq.load(std::memory_order_acquire), applied);
     }
     EXPECT_EQ(applied, static_cast<std::uint64_t>(kRecords));
     EXPECT_TRUE(ring.Invariants());
@@ -610,13 +626,13 @@ TEST(RingTest, ALazyWatermarkMayTrailTheWorkButMustNeverLeadIt) {
         ++drained;
         // A deliberately lazy publisher: only every third record. This is legal.
         if (drained % 3 == 0) {
-            ring.Control().retiredSeq.store(drained, std::memory_order_release);
+            ring.Control().Progress.retiredSeq.store(drained, std::memory_order_release);
         }
-        EXPECT_LE(ring.Control().retiredSeq.load(std::memory_order_acquire), drained)
+        EXPECT_LE(ring.Control().Progress.retiredSeq.load(std::memory_order_acquire), drained)
             << "retiredSeq ran ahead of the drain; those staged bytes are still live";
     }
     // Trailing at the end is fine and is what "late" means.
-    EXPECT_LE(ring.Control().retiredSeq.load(), static_cast<std::uint64_t>(kRecords));
+    EXPECT_LE(ring.Control().Progress.retiredSeq.load(), static_cast<std::uint64_t>(kRecords));
     EXPECT_TRUE(ring.Invariants());
 }
 

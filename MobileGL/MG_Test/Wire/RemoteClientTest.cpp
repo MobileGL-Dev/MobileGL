@@ -2444,7 +2444,7 @@ TEST(RemoteRunAhead, ACreditOneClientPaysTheCreditAtEveryPresentAfterTheFirst) {
         // ONE CREDIT PER SWAP, in the client's own 1-based space: the server returned the
         // second present's credit, so the watermark is at least 2.
         if (session.Control() == nullptr ||
-            session.Control()->presentAckSerial.load() < 2u) {
+            session.Control()->Progress.presentAckSerial.load() < 2u) {
             ::_exit(104);
         }
         session.Stop();

@@ -893,7 +893,7 @@ namespace MobileGL::MG_Remote::Wire {
             if (m_stageRetirementBell == nullptr || m_stageMarkFront == m_stageMarks.size()) break;
             const Uint64 pending = m_stageMarks[m_stageMarkFront].Seq;
             const auto ready = [&] {
-                return m_control->retiredSeq.load(std::memory_order_acquire) >= pending;
+                return m_control->Progress.retiredSeq.load(std::memory_order_acquire) >= pending;
             };
             if (!ready()) {
                 // The allocation still cannot progress after reclamation. Count this
@@ -923,7 +923,7 @@ namespace MobileGL::MG_Remote::Wire {
                 static_cast<unsigned long long>(m_stageCapacity),
                 static_cast<unsigned long long>(m_stageHead - m_stageTail),
                 static_cast<unsigned long long>(
-                    m_control != nullptr ? m_control->retiredSeq.load(std::memory_order_acquire) : 0));
+                    m_control != nullptr ? m_control->Progress.retiredSeq.load(std::memory_order_acquire) : 0));
         std::abort();
     }
 
@@ -1201,7 +1201,7 @@ namespace MobileGL::MG_Remote::Wire {
         if (m_control == nullptr) {
             return;
         }
-        const Uint64 retired = m_control->retiredSeq.load(std::memory_order_acquire);
+        const Uint64 retired = m_control->Progress.retiredSeq.load(std::memory_order_acquire);
         Uint64 upTo = m_stageTail;
         while (m_stageMarkFront < m_stageMarks.size() &&
                m_stageMarks[m_stageMarkFront].Seq <= retired) {

@@ -96,10 +96,10 @@ namespace MGITest {
         if (!control) return false;
         const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
         do {
-            if (control->appliedSeq.load(std::memory_order_acquire) >= seq) return true;
+            if (control->Progress.appliedSeq.load(std::memory_order_acquire) >= seq) return true;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         } while (std::chrono::steady_clock::now() < until);
-        return control->appliedSeq.load(std::memory_order_acquire) >= seq;
+        return control->Progress.appliedSeq.load(std::memory_order_acquire) >= seq;
 #else
         (void)seq; (void)timeoutMs;
         return false;
@@ -143,9 +143,9 @@ namespace MGITest {
             state.presentCredit = MobileGL::MG_Config::Ipc.PresentCredit;
             state.presentCreditWaits = session->PresentCreditWaits();
             if (const auto* control = session->Control()) {
-                state.appliedSeq = control->appliedSeq.load(std::memory_order_acquire);
-                state.retiredSeq = control->retiredSeq.load(std::memory_order_acquire);
-                state.presentAckSerial = control->presentAckSerial.load(std::memory_order_acquire);
+                state.appliedSeq = control->Progress.appliedSeq.load(std::memory_order_acquire);
+                state.retiredSeq = control->Progress.retiredSeq.load(std::memory_order_acquire);
+                state.presentAckSerial = control->Progress.presentAckSerial.load(std::memory_order_acquire);
             }
 
             // The producer's ledger. Every one of these is a plain member read on the encoder

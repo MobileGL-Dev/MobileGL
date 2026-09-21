@@ -178,7 +178,7 @@ namespace MobileGL::MG_Remote::Client {
                 if (wait == Transport::SessionWait::Reached) {
                     Transport::RingControl* control = producer.Control();
                     if (control == nullptr ||
-                        Transport::Watermark::Reached(control->appliedSeq, seq)) {
+                        Transport::Watermark::Reached(control->Progress.appliedSeq, seq)) {
                         return wait;
                     }
                     DrainEventRing(events);
@@ -1263,7 +1263,7 @@ namespace MobileGL::MG_Remote::Client {
                 if (wait != Transport::SessionWait::Reached) break;
                 Transport::RingControl* control = m_producer.Control();
                 if (control == nullptr ||
-                    Transport::Watermark::Reached(control->presentAckSerial, awaited)) {
+                    Transport::Watermark::Reached(control->Progress.presentAckSerial, awaited)) {
                     break;
                 }
                 DrainEventRing(m_events);

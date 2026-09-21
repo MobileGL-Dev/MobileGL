@@ -56,11 +56,11 @@ void CheckE1Boundary(Bool serverCap, MGPWireOp op, Bool expectWait, const char* 
             : session.EmitAndWait(op, &clear, sizeof(clear), nullptr, 0, nullptr, 0, nullptr);
         // Observe BEFORE allowing the peer to complete a non-waiting emission.
         const Bool parked = bell.entered.load();
-        const Bool appliedBeforeReturn = session.Control()->appliedSeq.load() >= seq;
+        const Bool appliedBeforeReturn = session.Control()->Progress.appliedSeq.load() >= seq;
         peer.clientReturned.store(true);
         producer.*PeerMember(ProducerBellTag{}) = bell.original;
         if (session.WaitForApplied(seq, 2000) != Transport::SessionWait::Reached) ::_exit(85);
-        if (seq <= before || peer.seen.load() != 1 || session.Control()->appliedSeq.load() < seq) ::_exit(86);
+        if (seq <= before || peer.seen.load() != 1 || session.Control()->Progress.appliedSeq.load() < seq) ::_exit(86);
         const Bool correct = expectWait ? parked && appliedBeforeReturn : !parked && !appliedBeforeReturn;
         std::printf("E1 observation: op=%s cap=%u barrier=%u parked=%u applied_before_return=%u emitted=1 peer_seen=1\n",
                     op == MGPWireOp::GenerateMipmap ? "GenerateMipmap" : "Clear",

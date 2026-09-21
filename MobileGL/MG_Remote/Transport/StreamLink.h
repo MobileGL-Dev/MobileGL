@@ -39,12 +39,12 @@
 //                    than hand out the pool.
 //
 // WHAT P6.5 STILL HAS TO SETTLE, recorded here so it is not rediscovered:
-//   - SEG_STAGE's three ring cursors are DELIBERATELY DEAD (Ring.h:105-129,
+//   - SEG_STAGE's three ring cursors are DELIBERATELY DEAD (Ring.h's "DEAD IN P5, DELIBERATELY",
 //     pinned by a test). Staging is an encoder-local linear allocator that
 //     reclaims on retiredSeq. A send window either revives them COMPLETELY or
 //     does not use them; the header names the middle state as a guaranteed
 //     hang rather than a slow path.
-//   - appliedSeq is excluded BY NAME from lazy publication (Ring.h:71-77).
+//   - appliedSeq is excluded BY NAME from lazy publication (Ring.h's "BATCHING MAY ONLY MAKE A WATERMARK LATE").
 //     P6.5 AMENDS that rule with a flush-on-idle discipline; it does not infer
 //     around it.
 //   - one dedicated reader thread per direction per process, or the event-ring

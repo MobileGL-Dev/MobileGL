@@ -375,7 +375,7 @@ P13：删 `SnapshotFromGLContext()` 的非 verify 分支、`MGB_CTX`、`MOBILEGL
 
 ### 11.2 `RingControl`（`Ring.h`）
 
-一页 4 KiB，每个争用组各占一条 cache line：`SEG_CMD` 游标三元组 `cmdHead / cmdAppliedTail / cmdRetiredTail`；`SEG_STAGE` 独立三元组；三个水位 `appliedSeq`（释放 `*AppliedTail`）/ `submittedSeq`（释放 staging）/ `retiredSeq` + `completedFrameSerial`（释放 `*RetiredTail` 与 `SEG_ADOPT`）+ `presentAckSerial`；`serverEpoch`、`ringGeneration`、`consumerParked`/`producerParked`、`eventRingFull`、`eventDropped`。两个 tail 是必须的：P11 之后 server 会**借用** ring slot 而不是再拷一次。游标是单调字节计数、2 的幂掩码、永不重置。
+一页 4 KiB，每个争用组各占一条 cache line。**P6 包 `lk` 按写者重组过这一页**（`CONTRACT-P6.md` §8.3）：producer 线 `cmdHead` + `submittedSeq`（producer 写、诊断量，`Ring.h` 的 "THE FIVE WATERMARKS" 段写明无人等待它）；consumer 线 `cmdAppliedTail / cmdRetiredTail`；`SEG_STAGE` 独立三元组（P5 起故意全零，见 `Ring.h`）；**四个 consumer 写的水位收成具名成员 `Progress`**（`Transport::LinkProgress`，`ILink.h`）——`appliedSeq`（释放 `*AppliedTail`）/ `retiredSeq`（释放 staging）/ `completedFrameSerial`（释放 `*RetiredTail` 与 `SEG_ADOPT`）/ `presentAckSerial`，访问写作 `control.Progress.appliedSeq`；最后是 `serverEpoch`、`ringGeneration`、`consumerParked`/`producerParked`、`eventRingFull`、`eventDropped`。**两个 event 标志刻意留在最后这一组**：`eventRingFull` 有两个写者（server `store(1)`、client 每次 drain 一次 `exchange(0)`），放进 `Progress` 会把 client 的 RMW 落到 client 自己自旋读的那条线上。两个 tail 是必须的：P11 之后 server 会**借用** ring slot 而不是再拷一次。游标是单调字节计数、2 的幂掩码、永不重置。
 
 记录头 `RingRecordHeader{kind, flags, size}`，kind 0 保留给 wrap 填充；`RingProducer::Reserve` 在记录会跨 wrap 边界时自动发 pad 记录；`RingConsumer::Pop` 拒绝不可能的头并置 corrupt → `Fatal{ProtocolCorruption}`；`HardDrainRing` 只在两侧静默且 ring 全空时 bump generation。
 

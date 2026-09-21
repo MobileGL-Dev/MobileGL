@@ -43,13 +43,19 @@
 // land without changing shape.
 //
 // ---------------------------------------------------------------------------
-// THE FIVE WATERMARKS (P5 R-9). One sentence each, and they are a contract:
+// THE FIVE WATERMARKS (P5 R-9). Four of them are Transport::LinkProgress and
+// are reached as `control.Progress.<name>`; submittedSeq is the fifth and stays
+// at RingControl scope, on the producer's line (lk, CONTRACT-P6 §8.3).
+// One sentence each, and they are a contract:
 // every one of the five was declared here at P0 and written by nobody but
 // InitRingControl, so until P5 there was nothing to disagree with.
 //
 //   submittedSeq        Advanced by the PRODUCER after it publishes. NOBODY
 //                       WAITS ON IT - it is diagnostic, the answer to "how far
-//                       ahead of the server is the client right now".
+//                       ahead of the server is the client right now". It lives
+//                       on the producer's own cache line beside cmdHead; it is
+//                       the ONE of the five that is not in LinkProgress, and
+//                       that is why LinkProgress can be single-writer.
 //   appliedSeq          Advanced by the CONSUMER for EVERY SINGLE RECORD it
 //                       applies. The client's verb barrier and every reply wait
 //                       read it, so it is the one watermark P5 FORBIDS BATCHING:
@@ -88,9 +94,11 @@
 #pragma once
 
 #include "../Protocol/mg_protocol_base.h"
+#include "ILink.h" // LinkProgress: the four consumer-written watermarks, lk
 
 #include <atomic>
 #include <cstddef>
+#include <type_traits>
 #include <cstdint>
 
 namespace MobileGL::MG_Remote::Transport {
@@ -99,7 +107,13 @@ namespace MobileGL::MG_Remote::Transport {
     // each contended group on its own cache line.
     struct alignas(4096) RingControl {
         // ---- SEG_CMD cursors ------------------------------------------------
+        //
+        // cmdHead and submittedSeq share a line because they share a WRITER:
+        // the producer publishes the head and then stamps how far it has got.
+        // submittedSeq used to sit with the four consumer-written watermarks,
+        // which made that group mixed-writer and unaliasable (lk, §8.3).
         alignas(64) std::atomic<std::uint64_t> cmdHead;        // producer: bytes written
+        std::atomic<std::uint64_t> submittedSeq;               // producer: records published
         alignas(64) std::atomic<std::uint64_t> cmdAppliedTail; // consumer: bytes decoded/copied out
         std::atomic<std::uint64_t> cmdRetiredTail;             // consumer: borrowed slots released
 
@@ -132,11 +146,16 @@ namespace MobileGL::MG_Remote::Transport {
         std::atomic<std::uint64_t> stageRetiredTail;
 
         // ---- sequence / frame watermarks -------------------------------------
-        alignas(64) std::atomic<std::uint64_t> appliedSeq; // records applied
-        std::atomic<std::uint64_t> submittedSeq;           // handed to the driver
-        std::atomic<std::uint64_t> retiredSeq;             // GPU finished
-        std::atomic<std::uint64_t> completedFrameSerial;
-        std::atomic<std::uint64_t> presentAckSerial;
+        //
+        // THE CONSUMER-WRITTEN FOUR, AND ONLY THOSE. This is Transport::LinkProgress
+        // (ILink.h), named so that a data plane with no shared page can own the
+        // same four values and every wait predicate in SessionRings.h keeps ONE
+        // implementation at source level. Single-writer by construction now that
+        // submittedSeq has moved up to the producer's line; the two event flags
+        // stay in the doorbell group below, because the client clears
+        // eventRingFull with an RMW on every drain and that traffic may not land
+        // on the line the client also spins on.
+        alignas(64) LinkProgress Progress;
 
         // ---- doorbell / generation -------------------------------------------
         alignas(64) std::atomic<std::uint32_t> serverEpoch;    // ++ on context loss / server restart
@@ -148,6 +167,73 @@ namespace MobileGL::MG_Remote::Transport {
     };
 
     static_assert(sizeof(RingControl) == 4096, "RingControl must be exactly one page");
+    // lk (CONTRACT-P6 §8.3). The regroup is free while both peers are the same binary
+    // and a LAYOUT BREAK the day they are not, so the shape is pinned here - by asserts
+    // that can each go red for the reason they exist, which the first revision of this
+    // block did not manage.
+    //
+    // NOTHING ELSE IN THE TREE PINS ANY OF THIS. The ABI fingerprint
+    // (SessionRings.h's AbiFingerprintInputs) takes three sizeofs, the caps geometry, two
+    // codec versions, kOpCount, the protocol version and the build stamp - and NO input
+    // from this page at all. sizeof(RingControl) is 4096 whatever the members do, because
+    // alignas(4096) makes it so. So a silent field reorder here would leave every gate in
+    // the tree green and both peers hashing identically.
+    static_assert(std::is_standard_layout_v<RingControl> && std::is_standard_layout_v<LinkProgress>,
+                  "the offsetof gates below are defined only for standard-layout types");
+
+    // The producer's line: cmdHead and submittedSeq, together and nothing else waiting on them.
+    static_assert(offsetof(RingControl, submittedSeq) == offsetof(RingControl, cmdHead) + 8,
+                  "submittedSeq sits immediately after cmdHead");
+    static_assert(offsetof(RingControl, submittedSeq) / 64 == offsetof(RingControl, cmdHead) / 64,
+                  "submittedSeq shares the producer's cache line with cmdHead");
+
+    // The Progress line, and it owns that line ALONE.
+    //
+    // Written as `serverEpoch == Progress + 64` rather than the obvious
+    // `Progress + sizeof(LinkProgress) <= offsetof(serverEpoch)`, because the obvious one
+    // CANNOT GO RED: serverEpoch is alignas(64) and is declared next, so the compiler puts
+    // it at the following 64-multiple no matter what precedes it, and the `<=` holds for
+    // every layout including a wrong one.
+    //
+    // WHAT THIS PAIR DOES NOT CATCH, stated because a gate nobody can falsify is worse
+    // than no gate: a SMALL member inserted between Progress and serverEpoch lands at
+    // offset 288, inside Progress's own line - and serverEpoch's alignas(64) absorbs it,
+    // so both asserts still pass. Verified by trying it. Up to 32 bytes can be hidden
+    // there. Growth INSIDE LinkProgress is caught, by sizeof below; growth BESIDE it is
+    // not, and the only thing standing between that and a false-sharing regression is
+    // this comment and the group's own.
+    static_assert(offsetof(RingControl, Progress) % 64 == 0,
+                  "LinkProgress starts a cache line of its own");
+    static_assert(offsetof(RingControl, serverEpoch) == offsetof(RingControl, Progress) + 64,
+                  "the Progress line holds Progress and nothing else");
+
+    // PER FIELD, which is what §8.3 asks for and what the aggregate asserts above cannot
+    // do: the field ORDER inside LinkProgress is a wire-visible fact about a page both
+    // roles map, and swapping two of them passes every other check in this file.
+    static_assert(offsetof(LinkProgress, appliedSeq) == 0, "LinkProgress field order: appliedSeq");
+    static_assert(offsetof(LinkProgress, retiredSeq) == 8, "LinkProgress field order: retiredSeq");
+    static_assert(offsetof(LinkProgress, completedFrameSerial) == 16,
+                  "LinkProgress field order: completedFrameSerial");
+    static_assert(offsetof(LinkProgress, presentAckSerial) == 24,
+                  "LinkProgress field order: presentAckSerial");
+    static_assert(sizeof(LinkProgress) == 32,
+                  "four consumer-written watermarks; the event flags are NOT in here");
+
+    // The two event flags stay in the doorbell group on purpose (see the group's comment).
+    // LinkEventFlags mirrors them, so the mirror's shape is pinned too.
+    static_assert(offsetof(RingControl, eventDropped) == offsetof(RingControl, eventRingFull) + 4,
+                  "the two event flags are adjacent, in that order");
+    static_assert(offsetof(RingControl, eventRingFull) / 64 == offsetof(RingControl, serverEpoch) / 64,
+                  "the event flags share the doorbell group's line, NOT the Progress line");
+    static_assert(offsetof(LinkEventFlags, eventRingFull) == 0 &&
+                      offsetof(LinkEventFlags, eventDropped) == 4 && sizeof(LinkEventFlags) == 8,
+                  "LinkEventFlags mirrors the pair in RingControl");
+
+    // The page's real content must fit the page it claims. sizeof(RingControl) == 4096
+    // above cannot catch a member that grew, because alignas(4096) forces that number;
+    // the struct's content ends far short of it and the tail is padding.
+    static_assert(offsetof(RingControl, eventDropped) + sizeof(std::uint32_t) <= 4096,
+                  "RingControl's members must fit the page it claims to be");
     static_assert(alignof(RingControl) == 4096, "RingControl must be page aligned");
     static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
                   "the ring cursors are shared across processes: they must be lock-free");

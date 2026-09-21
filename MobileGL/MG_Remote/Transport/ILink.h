@@ -94,21 +94,21 @@ namespace MobileGL::MG_Remote::Transport {
     // decoded progress messages.
     //
     // THE RULES SURVIVE THE MECHANISM VERBATIM, and that is the point of naming
-    // the block rather than the page: late-never-early (Ring.h:71-77), `>=`
+    // the block rather than the page: late-never-early (Ring.h's "BATCHING MAY ONLY MAKE A WATERMARK LATE"), `>=`
     // never `==` (SessionRings.h's Watermark::Reached), monotone with a
     // backwards move Fatal (Ring.cpp's AdvanceMonotonic). A stream link changes
     // only HOW a value arrives, never what it means.
     //
     // WHY THESE FOUR AND NOT THE WHOLE PAGE, AND WHY THE EVENT FLAGS ARE NOT
-    // HERE. RingControl's watermark cache line today holds {appliedSeq,
+    // HERE. RingControl's watermark cache line HELD, until lk regrouped it, {appliedSeq,
     // submittedSeq, retiredSeq, completedFrameSerial, presentAckSerial}, and
-    // submittedSeq is PRODUCER-written (Ring.h:50, "Advanced by the PRODUCER
-    // after it publishes") while the other four are consumer-written - so the
+    // submittedSeq is PRODUCER-written (Ring.h's "THE FIVE WATERMARKS" block,
+    // "Advanced by the PRODUCER after it publishes") while the other four are consumer-written - so the
     // line has MIXED WRITERS as it stands and no single-writer block can be
     // aliased over it. lk's regroup moves submittedSeq out to the producer's
     // own line, beside cmdHead, which is the other thing the producer writes;
-    // what is left IS this struct, and it becomes a named member of
-    // RingControl with per-field offsetof static_asserts.
+    // what is left IS this struct, and it IS a named member of RingControl,
+    // pinned there by per-field offsetof static_asserts (Ring.h).
     //
     // THE TWO EVENT FLAGS ARE DELIBERATELY EXCLUDED, and an earlier draft of
     // this header had them in and was wrong. eventRingFull has TWO writers:
@@ -123,8 +123,7 @@ namespace MobileGL::MG_Remote::Transport {
     // writers already live beside consumerParked/producerParked, and cross the
     // seam through EventFlags() instead.
     //
-    // Free to regroup TODAY, because both peers are the same binary and the
-    // fingerprint enforces it; a wire break the day a second build exists,
+    // It was free to regroup while both peers are the same binary; a wire break the day a second build exists,
     // which is why it is booked now rather than later.
     struct LinkProgress {
         std::atomic<std::uint64_t> appliedSeq;            // records applied
@@ -217,8 +216,10 @@ namespace MobileGL::MG_Remote::Transport {
         // an attached link.
         virtual LinkProgress* Progress() = 0;
 
-        // The reverse channel's flags. A separate accessor, and a separate
-        // cache line, for the reason LinkEventFlags documents.
+        // The reverse channel's flags. A separate ACCESSOR, for the reason
+        // LinkEventFlags documents. NOT a separate cache line: they sit in the
+        // doorbell/generation group beside serverEpoch, which is where mixed
+        // writers already live.
         virtual LinkEventFlags* EventFlags() = 0;
 
         // The command-record arena (producer side) and cursor (consumer side).

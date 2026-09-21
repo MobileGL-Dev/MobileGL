@@ -143,10 +143,10 @@ namespace {
             }
             const bool result = m_decoder.DecodeAndApply(view);
             ++m_sessionApplied;
-            m_control.appliedSeq.store(m_sessionApplied, std::memory_order_release);
+            m_control.Progress.appliedSeq.store(m_sessionApplied, std::memory_order_release);
             // Nothing in P5 borrows a ring slot into the GPU timeline, so a record's SEG_STAGE
             // runs retire as soon as it is applied (table 1's "retires: apply").
-            m_control.retiredSeq.store(m_sessionApplied, std::memory_order_release);
+            m_control.Progress.retiredSeq.store(m_sessionApplied, std::memory_order_release);
             m_consumer.PublishRetired();
             if (applied != nullptr) {
                 *applied = result;
@@ -561,8 +561,8 @@ TEST_F(PipeWireCodecTest, KNoneRoundTripsAndReachesItsApplier) {
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
     EXPECT_EQ(wire.Decoder().AppliedSeq(), 1u);
-    EXPECT_EQ(wire.Control().appliedSeq.load(), 1u);
-    EXPECT_EQ(wire.Control().retiredSeq.load(), 1u);
+    EXPECT_EQ(wire.Control().Progress.appliedSeq.load(), 1u);
+    EXPECT_EQ(wire.Control().Progress.retiredSeq.load(), 1u);
 }
 
 TEST_F(PipeWireCodecTest, KHasBlobRoundTripsWithARealChunkBlob) {
@@ -1742,7 +1742,7 @@ TEST_F(PipeWireCodecTest, AppliedSeqAdvancesByExactlyOnePerRecordAndIsNeverBatch
         bool applied = false;
         ASSERT_TRUE(wire.PumpOne(&applied));
         EXPECT_EQ(wire.Decoder().AppliedSeq(), i);
-        EXPECT_EQ(wire.Control().appliedSeq.load(), i);
+        EXPECT_EQ(wire.Control().Progress.appliedSeq.load(), i);
         EXPECT_EQ(wire.SessionAppliedSeq(), wire.Decoder().AppliedSeq());
     }
     EXPECT_EQ(wire.Encoder().EmitSeq(), 5u);
@@ -1763,13 +1763,13 @@ TEST_F(PipeWireCodecTest, TheDecoderWritesNoRingControlFieldOfItsOwn) {
     bool corrupt = false;
     ASSERT_TRUE(wire.Consumer().Pop(view, &corrupt));
     ASSERT_FALSE(corrupt);
-    const std::uint64_t appliedBefore = wire.Control().appliedSeq.load();
-    const std::uint64_t retiredBefore = wire.Control().retiredSeq.load();
+    const std::uint64_t appliedBefore = wire.Control().Progress.appliedSeq.load();
+    const std::uint64_t retiredBefore = wire.Control().Progress.retiredSeq.load();
 
     (void)wire.Decoder().DecodeAndApply(view);
 
-    EXPECT_EQ(wire.Control().appliedSeq.load(), appliedBefore);
-    EXPECT_EQ(wire.Control().retiredSeq.load(), retiredBefore);
+    EXPECT_EQ(wire.Control().Progress.appliedSeq.load(), appliedBefore);
+    EXPECT_EQ(wire.Control().Progress.retiredSeq.load(), retiredBefore);
     EXPECT_EQ(wire.Decoder().AppliedSeq(), 1u); // the decoder's own tally did move
 }
 

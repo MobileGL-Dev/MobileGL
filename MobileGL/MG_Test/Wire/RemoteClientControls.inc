@@ -644,7 +644,7 @@ TEST(RemoteClientControls, CommandWrapWaitsForRetirementAfterThePriorRecordAppli
         peer.Install(); // A mailbox round trip also lets the previous drain retire.
         Srv::ServerLoopInstance().SetBeforeRetireHookForTesting(&HoldRetirementUntilProducerWaits);
         const auto prior = emit(32768);
-        if (ClientSessionInstance().Control()->retiredSeq.load() >= prior) ::_exit(111);
+        if (ClientSessionInstance().Control()->Progress.retiredSeq.load() >= prior) ::_exit(111);
         retirementRetryStarted.store(true);
         const auto next = emit(32768);
         if (next != prior + 1 || !retirementWaitObserved.load()) ::_exit(112);
@@ -664,7 +664,7 @@ TEST(RemoteClientControls, StagingWaitsForRetirementAfterThePriorRecordApplied) 
         MGPBindRenderState bind{};
         const auto prior = session.EmitAndWait(MGPWireOp::BindRenderState, &bind, sizeof(bind),
                                                nullptr, 0, nullptr, 0, nullptr);
-        if (session.Control()->retiredSeq.load() >= prior) ::_exit(113);
+        if (session.Control()->Progress.retiredSeq.load() >= prior) ::_exit(113);
         retirementRetryStarted.store(true);
         session.Encoder().StageBytes(bytes.data(), bytes.size());
         if (!retirementWaitObserved.load() || session.Encoder().StageReclaimWaits() != 1) ::_exit(114);

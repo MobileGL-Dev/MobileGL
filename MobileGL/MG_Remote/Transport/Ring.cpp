@@ -391,7 +391,7 @@ namespace MobileGL::MG_Remote::Transport {
         }
 
         void AdvanceApplied(RingControl& control, std::uint64_t seq) {
-            AdvanceMonotonic(control.appliedSeq, seq, "appliedSeq");
+            AdvanceMonotonic(control.Progress.appliedSeq, seq, "appliedSeq");
         }
 
         void AdvanceRetired(RingControl& control, std::uint64_t seq) {
@@ -399,16 +399,16 @@ namespace MobileGL::MG_Remote::Transport {
             // reclaims behind it, so a retire ahead of the apply hands live bytes
             // back to the producer. Clamped rather than refused, because a
             // caller that retires "everything applied" is the normal shape.
-            const std::uint64_t applied = control.appliedSeq.load(std::memory_order_acquire);
-            AdvanceMonotonic(control.retiredSeq, seq > applied ? applied : seq, "retiredSeq");
+            const std::uint64_t applied = control.Progress.appliedSeq.load(std::memory_order_acquire);
+            AdvanceMonotonic(control.Progress.retiredSeq, seq > applied ? applied : seq, "retiredSeq");
         }
 
         void AdvanceCompletedFrame(RingControl& control, std::uint64_t serial) {
-            AdvanceMonotonic(control.completedFrameSerial, serial, "completedFrameSerial");
+            AdvanceMonotonic(control.Progress.completedFrameSerial, serial, "completedFrameSerial");
         }
 
         void AdvancePresentAck(RingControl& control, std::uint64_t serial) {
-            AdvanceMonotonic(control.presentAckSerial, serial, "presentAckSerial");
+            AdvanceMonotonic(control.Progress.presentAckSerial, serial, "presentAckSerial");
         }
 
     } // namespace Watermark
@@ -488,7 +488,7 @@ namespace MobileGL::MG_Remote::Transport {
             return SessionWait::TimedOut;
         }
         RingControl* control = m_control;
-        return Park([control, seq] { return Watermark::Reached(control->appliedSeq, seq); },
+        return Park([control, seq] { return Watermark::Reached(control->Progress.appliedSeq, seq); },
                     timeoutMs);
     }
 
@@ -497,7 +497,7 @@ namespace MobileGL::MG_Remote::Transport {
             return SessionWait::TimedOut;
         }
         RingControl* control = m_control;
-        return Park([control, serial] { return Watermark::Reached(control->presentAckSerial, serial); },
+        return Park([control, serial] { return Watermark::Reached(control->Progress.presentAckSerial, serial); },
                     timeoutMs);
     }
 
@@ -515,7 +515,7 @@ namespace MobileGL::MG_Remote::Transport {
         RingControl* control = m_control;
         return Park(
             [control, seq] {
-                return Watermark::Reached(control->appliedSeq, seq) ||
+                return Watermark::Reached(control->Progress.appliedSeq, seq) ||
                        control->eventRingFull.load(std::memory_order_acquire) != 0;
             },
             timeoutMs);
@@ -529,7 +529,7 @@ namespace MobileGL::MG_Remote::Transport {
         RingControl* control = m_control;
         return Park(
             [control, serial] {
-                return Watermark::Reached(control->presentAckSerial, serial) ||
+                return Watermark::Reached(control->Progress.presentAckSerial, serial) ||
                        control->eventRingFull.load(std::memory_order_acquire) != 0;
             },
             timeoutMs);
@@ -554,7 +554,7 @@ namespace MobileGL::MG_Remote::Transport {
         m_peerBell = peerBell;
         m_selfBell = selfBell;
         m_spinUs = spinUs;
-        m_appliedSeq = control == nullptr ? 0 : control->appliedSeq.load(std::memory_order_acquire);
+        m_appliedSeq = control == nullptr ? 0 : control->Progress.appliedSeq.load(std::memory_order_acquire);
         m_retirableCursor = cmd == nullptr ? 0 : cmd->LocalTail();
         m_borrowHeld = false;
     }
