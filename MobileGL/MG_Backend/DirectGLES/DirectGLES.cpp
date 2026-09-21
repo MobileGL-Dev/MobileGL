@@ -2528,6 +2528,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool SyncClientSideVertexArraysForIndirectFetch(const Uint8* commandBytes, SizeT commandOffset,
                                                        GLsizei stride, GLsizei index, Uint8 indexSize,
                                                        const SharedPtr<MG_State::GLState::BufferObject>& commandBuffer) {
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return true;
             const Uint8* source = commandBytes;
             if (commandBuffer) {
                 commandBuffer->SyncGpuWrites();
@@ -2556,6 +2557,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool SyncClientSideVertexArraysForIndexedFetch(GLenum type, GLsizei count, const void* indices,
                                                        GLsizei instanceCount, GLint baseVertex, GLuint baseInstance) {
             if (count <= 0 || instanceCount <= 0) return true;
+            // MONOLITH ONLY - see SyncClientSideVertexArraysForFetch; this wrapper's own read of
+            // the bound VAO is the frontend read that must not happen on an apply thread.
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return true;
             const auto& currentVAO = MGB_CTX->GetBoundVertexArray();
             if (!currentVAO) return true;
             const Uint8 indexSize = static_cast<Uint8>(MG_Util::GetGLTypeSize(type));
