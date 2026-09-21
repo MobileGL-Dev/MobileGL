@@ -1,6 +1,6 @@
 # 当前阶段进度
 
-**P5f 已收官（2026-09-20）**。最终行为验收头：WSL `cfca93c7885fd8db1e881f91189ba59090ae9c52`，Windows `c42577a4` 等价；本次整合来自 `codex/p5f-close`，主分支合入记录见 [`notes/p5f/close-report.md`](notes/p5f/close-report.md)。P6 的 P5f 前提已解除，a6 / c6 / spawn 尚未实施。以下 §2 为当前验收；其后的 P5c/P5d/P5e 数字与性能章节保留为历史，不替代当前结果。
+**P5f 已收官（2026-09-20）**。最终行为验收头：WSL `cfca93c7885fd8db1e881f91189ba59090ae9c52`，Windows `c42577a4` 等价；本次整合来自 `codex/p5f-close`，主分支合入记录见 [`notes/p5f/close-report.md`](notes/p5f/close-report.md)。P6 的 P5f 前提已解除，a6 / c6 / spawn 尚未实施。**CI / inproc 功能补齐已收官（2026-09-21）**并合入 `feat/disaggregated`（合并头 `e1bf3677`）：拆分主产物 + inproc 主验收、完整 retrace 双 transport、18 项 CI 门、双 ABI APK / AVD 全绿，见 §2.8。以下 §2 为 P5f 验收、§2.8 为当前验收；其后的 P5c/P5d/P5e 数字与性能章节保留为历史，不替代当前结果。
 
 ## 1. 阶段状态
 
@@ -236,6 +236,39 @@ p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提�
 | 3 | gl | 生成式采纳谓词、strict 旋钮的第三态、车道两侧棘轮、`ResourceCopyRegion` 等待类、Magma 车道切分；以及两处潜伏崩溃（ID-111 的盖章、ID-112 的编译期绊线） | 车道成为可被脚本判定的硬绿 |
 | 3 | ra2 | 翻开开关后暴露的竞态（守卫把"关于未来的断言"当豁免依据）；`BoundDrawIndirectBufferId` 退役并撤回升级 (iii)（ID-136） | 翻开开关后 `isplit` 112→179 |
 
+## 2.8 CI / inproc 功能补齐（2026-09-21，当前验收）
+
+范围：`feat/disaggregated` 主产物按拆分实现编译（`MOBILEGL_BUILD_DISAGGREGATED` / `MOBILEGL_PIPE_PUSH`）并以 `MOBILEGL_TRANSPORT=inproc` 执行主验收；普通 GL 功能场景与完整 retrace 矩阵（77 case/backend × 2 transport）全跑，不以 skip / 降阈值 / 缩矩阵替代实现；验证 monolith 内部机制的对照保留 monolith。工作分支 `codex/fix-github-ci`，已合入 `feat/disaggregated`（`30b1bf25` FF 至 `d56c0e83` + Gradle plumbing `17bbb448` + 合并 `e1bf3677`）。
+
+修复（均有红→绿证据；起点与过程见 [`notes/p5f/HANDOFF-CI-INPROC-20260920.md`](notes/p5f/HANDOFF-CI-INPROC-20260920.md)）：
+
+| 主题 | 提交 |
+|---|---|
+| SEG_STAGE 内容分块（清偿 R-10 的"提前分块"一半） | buffer 范围走查 `1e7c372e`；纹理整宽 slab + `StagedTextureStore::AdoptRun` `9469d48e`；预算 `MGPipeStageChunkBytes()`（segment/4） |
+| 零字节 `glBufferData` 的 respecify 误报 `Fatal{InitialBytesNotCarried}` | `07f91f35`（谓词改按字节数，契约 R-13.3 形状不变） |
+| DirectVulkan 默认帧缓冲图像身份跨 swap（inproc 读回黑屏） | `f1d3fa8f`（GL 可见后缓冲索引与 acquire 轮转解耦 + 读未定义图像告警） |
+| texture view 的 mip 生成窗口裁剪（GLES / Magma 后端 + 前端 monolith 臂守卫） | `73b37bbe`、`fd30b5c3`、`ed919f0d` |
+| DirectGLES FBO 附件同步 memo 改为对象级（improved-transparency 冻结帧） | `e004269d` |
+| monolith 客户端数组（baseInstance / GPU 写 EBO / indirect 形状，含一处 Vulkan SEGV） | `62bfe461..e258a822` |
+| monolith 深度/模板读回编码（signed/half、单 aspect 经 buffer 中转） | `5264f9a9..d56c0e83` |
+| pipe-gates 字段表覆盖 `MGPSubData` 新成员、P7 packed-float mip 探针由 known-red 翻绿 | `3542f64f`、`e4ae1964` |
+| barrier 看门狗 30 s → 120 s：它是死锁检测而非性能门；lavapipe 的 texture-handle 注册（`vkCreateImageView → llvmpipe_register_texture`）单次停顿实测 29.3–39.7 s、整轮累计 ~44.6 s，monolith 同路径同样停顿但无上限（用户裁定：两臂同现即属可接受环境开销） | `68b55ea3` |
+| CI artifact cleanup 先读完整分页 inventory 再删除、等 retrace-split 车道、保留失败 case 产物 | `5cbf29b0` |
+
+验收数字（WSL `p5f-int`：`d56c0e83` 全量实测 + `0689fc96` 定向复测）：
+
+| 门 | 结果 |
+|---|---|
+| unit | 2328，**零失败**（10 个既有 skip） |
+| `integration-gpu` × inproc | 1455，**零失败**（221 skip 经逐条审计全部为既有类别：机制对照车道、驱动/能力门、单后端专属等） |
+| `integration-gpu` × monolith | 1455，**零失败**（两臂逐名比对仅 76 条合法的 split-runtime 自声明 skip 差异） |
+| retrace 77 例 × monolith | **77/77** |
+| retrace 77 例 × inproc | 76/77；唯一失败 `bsl-esc-menu-854` DirectVulkan 是上述 lavapipe 停顿间歇越过旧 30 s 预算，预算修正后隔离 **10/10 绿**（ssim 恒 0.998402） |
+| CI 门 18 项（split strict / dual-block / clientarray / E1 / E3 / run-ahead 负控与同步验证 / flatc / include 闭包 / gen_pipe / pipe-gates 等） | **18/18 绿**，strict 与双块棘轮均为空 |
+| Android | 两 ABI（arm64-v8a + x86_64）trace/plugin Release APK 在最终头重建并验明正身；AVD（api35 x86_64）上 OpenRA monolith / inproc 冒烟均 ssim=1.0，Activity 重建 reattach 与重复 JNI 回放拒绝（`7fd83133`）探针通过 |
+
+最终合并头的完整矩阵以远端 GitHub CI（test.yml / apk.yml）为准。已知边界：lavapipe 的 texture-handle 注册停顿本身（性能现象，两臂同有）未消除；`iterationrp` 的 DirectGLES 不在 CI 矩阵内（本机 llvmpipe 无法 lower 其 256-bit half 转换，`LLVM ERROR: Cannot select: intrinsic %llvm.x86.vcvtps2ph.256`）；`rd12-odinlite-in-world` 不在 77 矩阵内、本轮未单独复跑；wire view 缓存键含全局 image epoch 导致的冗余重建（实测 173 次 vs 按需 ~39 次）是已证伪与本次卡死无关的纯性能机会，未动。
+
 ## 3. 历史：P5c 落地内容
 
 | 包 | 内容 | 效果 |
@@ -277,7 +310,7 @@ p50 181（约 1.10 倍）——那一次不可配对，只能作为方向性提�
 |---|---|
 | ~~`SEG_STAGE` 默认 32 MiB 装不下目标负载的单次 128 MiB 上传~~ | **内容侧分块已落地（2026-09-20）**：buffer 范围走查 `1e7c372e`、纹理整宽 slab `9469d48e`，预算 `MGPipeStageChunkBytes()`（默认 segment/4 = 8 MiB），默认 32 MiB 即可容纳；未接入分片的 record 类型与专用 carrier 仍归 P8（`ROADMAP.md` 开放问题 11）。历史证据 `p5b-results/blit-codex-v1.md`；`MEASUREMENTS.md` §7.2 |
 | Magma P7 剩余功能与性能 | 应用 VBO/EBO/UBO、已对齐 SSBO/atomic/texel、persistent 和 indirect 消费已随 `38919d45` 实际游戏修复落地；XFB buffer capture、部分不对齐 range/UBO byte-tail、placeholder/native-format 及批处理性能仍待做。P5b “82个错答”只属历史计数；见 [修复报告](notes/p5f/magma-inproc-fix.md) |
-| rd12 GLES `InitialBytesNotCarried/resource_respecify`、rd12 VK `BarrierTimeout/Present`、`iris-bsl-esc-menu-854` GLES、三条 `texture-remint-pull` 仿真槽、`create-indirect` VK 内存膨胀 | 79 trace 普查 `counts.json` / `trace-transitions.json` |
+| ~~`iris-bsl-esc-menu-854` 的 `InitialBytesNotCarried/resource_respecify`~~（两后端，`07f91f35` 已修，CI 矩阵内实测通过；rd12 GLES 的同型 Fatal 同根因已修，但该 case 不在 CI 77 矩阵内、未单独复跑）、rd12 VK `BarrierTimeout/Present`、三条 `texture-remint-pull` 仿真槽、`create-indirect` VK 内存膨胀 | 79 trace 普查 `counts.json` / `trace-transitions.json` |
 | RGB 三通道 CPU mip 回退仍是具名 Fatal | `p5b-results/mip-codex-v1.md` |
 | ~~P5c 历史跨角色清单与对象类残余~~ | **P5f 已全部收口**：双块空棘轮、零 BARRIER_PULLED、两后端逐帧 rsp=0；旧指针 accessor 以 FATAL 保持边界，未伪标为 record-supplied。见 [`close-report`](notes/p5f/close-report.md) |
 | 27 个 P5 inproc 错答：22 纹理读回走 client-shadow 回退、3 query、1 inspection、1 FBO/RBO 删除后生命期 | P4b / P7 / P6 债 |
