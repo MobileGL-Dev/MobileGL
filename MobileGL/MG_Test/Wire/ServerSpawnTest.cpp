@@ -191,6 +191,37 @@ TEST(ServerSpawnTest, AnEglControlOpCrossesToTheOtherProcessAndAnswers) {
     ASSERT_EQ(Server::ReapServer(session.server, 5000, &exitCode), MOBILEGL_OK);
 }
 
+TEST(ServerSpawnTest, AnAbstractEndpointNeedsNoWritableDirectoryAndLeavesNoFile) {
+    // THE ONLY RENDEZVOUS THAT WORKS ON ANDROID, and the reason is not a preference.
+    // An app has no writable /tmp; the first device run of the spawn retrace launched
+    // its server, bind() had nowhere to put the node, and the client refused by name
+    // 20 s later. ClientSession::StartSpawned mints '@' names now, so this pins the
+    // shape that path depends on.
+    //
+    // TWO FACTS, and the second is what a filesystem endpoint cannot give: the
+    // handshake works over it, and NOTHING IS LEFT BEHIND - no node to go stale, no
+    // directory to be writable, no unlink to forget after a crash.
+    const std::string endpoint = std::string("@mgl-abstract-") + std::to_string(::getpid());
+
+    Session session;
+    ASSERT_EQ(Server::LaunchServer(ServerImage(), endpoint, &session.server), MOBILEGL_OK);
+    ASSERT_EQ(Transport::SocketTransport::ConnectTo(endpoint, 10000, session.client), MOBILEGL_OK);
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK)
+        << "an abstract endpoint carried the connection but not the session";
+
+    // A leading '@' is a NAME, not a path. If FillAddress had treated it as one, the
+    // bind would have created a file literally called "@mgl-..." in the working
+    // directory - which would still have worked here, and would have failed on the
+    // one platform this exists for.
+    EXPECT_NE(::access(endpoint.c_str(), F_OK), 0)
+        << "an abstract name must leave no filesystem node: " << endpoint;
+
+    Client::ClientSessionInstance().Stop();
+    int exitCode = -1;
+    ASSERT_EQ(Server::ReapServer(session.server, 5000, &exitCode), MOBILEGL_OK);
+    EXPECT_EQ(exitCode, 0);
+}
+
 TEST(ServerSpawnTest, AnUnresolvableImageIsANamedRefusalAndStartsNothing) {
     const int before = Server::CountOwnChildren();
 

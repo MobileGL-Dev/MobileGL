@@ -96,7 +96,7 @@ namespace MobileGL::MG_Remote::Server {
             int removed = 0;
         };
 
-        ScrubbedEnv BuildChildEnv() {
+        ScrubbedEnv BuildChildEnv(const std::string& imageDir) {
             // `environ` is glibc/bionic's, declared by <unistd.h> at global
             // scope. Re-declaring it inside this anonymous namespace made it a
             // NEW symbol that nothing defines - which the linker caught, and
@@ -115,6 +115,29 @@ namespace MobileGL::MG_Remote::Server {
             // §3.1 is the whole argument for why those are two axes.
             env.storage.emplace_back("MOBILEGL_IPC_ROLE=server");
             env.storage.emplace_back("MOBILEGL_IPC_DIAL=no");
+            // LD_LIBRARY_PATH, BECAUSE THE SERVER IS EXEC'd AND NOT dlopen'd.
+            //
+            // It links libMobileGL.so, and an exec'd process gets a FRESH linker
+            // namespace with the default search path - not the one the app built
+            // for its own libraries. An APK's lib/<abi>/ is not on that path, and
+            // the failure is total and immediate:
+            //
+            //   CANNOT LINK EXECUTABLE ".../libMobileGLServer.so":
+            //   library "libMobileGL.so" not found: needed by main executable
+            //
+            // It is invisible on desktop, where CMake gives build-tree targets an
+            // absolute RPATH of their own - so the WSL server had been resolving
+            // its dependency through a path no phone has.
+            //
+            // $ORIGIN WOULD BE THE TIDIER ANSWER and the target asks for it, but
+            // the NDK toolchain drops RPATH from the link: measured with readelf
+            // on the APK's own copy, which carries NEEDED libMobileGL.so and no
+            // RUNPATH at all. So the launcher states it instead - it is the one
+            // component that has already resolved where the image lives, and a
+            // pair that is not co-located is not a pair.
+            if (!imageDir.empty()) {
+                env.storage.emplace_back("LD_LIBRARY_PATH=" + imageDir);
+            }
             env.pointers.reserve(env.storage.size() + 1);
             for (auto& entry : env.storage) {
                 env.pointers.push_back(entry.data());
@@ -183,7 +206,10 @@ namespace MobileGL::MG_Remote::Server {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
 
-        ScrubbedEnv env = BuildChildEnv();
+        // The image's directory, which is where its libMobileGL.so is.
+        const std::string::size_type slash = image.find_last_of('/');
+        ScrubbedEnv env =
+            BuildChildEnv(slash == std::string::npos ? std::string() : image.substr(0, slash));
         std::string argv0 = image;
         std::string argv1 = endpoint;
         char* argv[] = {argv0.data(), argv1.data(), nullptr};

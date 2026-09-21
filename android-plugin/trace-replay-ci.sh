@@ -44,7 +44,7 @@ Set MOBILEGL_ESPRYT_USE_ANGLE=1 to run DirectGLES replay with packaged ANGLE
 instead of the device system GLES driver.
 Set MOBILEGL_TRACE_ANGLE_VARIANT to the packaged ANGLE short hash used by
 DirectGLES replay.
-Set MOBILEGL_RETRACE_USE_PBUFFER=1 or pass --use-pbuffer to run DirectGLES
+Set MOBILEGL_RETRACE_USE_PBUFFER=1 or pass --use-pbuffer to run
 against an offscreen EGL pbuffer instead of the Activity surface.
 Set MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH=1,
 MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS=1, and MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER=1 to
@@ -366,7 +366,7 @@ run_retrace() {
     use_angle=1
     test -n "${MOBILEGL_TRACE_ANGLE_VARIANT:-}" || die "MOBILEGL_TRACE_ANGLE_VARIANT is required for DirectGLES ANGLE replay"
   fi
-  if [ "${MOBILEGL_RETRACE_USE_PBUFFER:-}" = "1" ] && [ "${backend}" = "DirectGLES" ]; then
+  if [ "${MOBILEGL_RETRACE_USE_PBUFFER:-}" = "1" ]; then
     use_pbuffer=1
   fi
 
@@ -392,7 +392,13 @@ run_retrace() {
     set -- "$@" --ez use_angle true
     set -- "$@" --es angle_variant "${MOBILEGL_TRACE_ANGLE_VARIANT}"
   fi
-  if [ "${use_pbuffer}" -eq 1 ] && [ "${backend}" = "DirectGLES" ]; then
+  # PBUFFER IS A SURFACE SHAPE, NOT A BACKEND PROPERTY, and the DirectGLES condition that used to
+  # guard this line made it one. It was harmless while the only caller was the ANGLE lane; P6 needs
+  # it on BOTH backends, because until P12 the spawn arm can only use pbuffer/surfaceless - an
+  # ANativeWindow* is a pointer into the CLIENT's process and SetWindowHandle is refused by name
+  # with Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"} on the way across. Magma creates an
+  # EGL pbuffer exactly as Espryt does.
+  if [ "${use_pbuffer}" -eq 1 ]; then
     set -- "$@" --ez use_pbuffer true
   fi
   if [ "${avoid_angle_llvmpipe_sampler_mipmap_min_filter}" -eq 1 ] && [ "${backend}" = "DirectGLES" ]; then

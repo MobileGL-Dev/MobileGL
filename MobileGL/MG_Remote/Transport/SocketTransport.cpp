@@ -70,6 +70,27 @@ namespace MobileGL::MG_Remote::Transport {
         // does not fit rather than silently truncated - a truncated path is a
         // different socket, and both sides would then "succeed" onto two
         // different names.
+        // A LEADING '@' MEANS THE ABSTRACT NAMESPACE, which is the convention systemd and D-Bus
+        // use and the only rendezvous that works on Android.
+        //
+        // A filesystem AF_UNIX endpoint needs a writable directory, and an Android app has no
+        // /tmp - measured, not assumed: the first device run of the spawn arm launched its server
+        // fine and then died on `could not connect to "/tmp/mgl-15731-...sock" ... No such file or
+        // directory`, because bind() in the child had nowhere to put the node. The app's own cache
+        // dir would work, but only if every integrator remembered to say where it is, and the
+        // library has no way to ask.
+        //
+        // An abstract name has no filesystem presence at all: no directory, no mode bits, no stale
+        // node to unlink after a crash - which is the bind() failure `Listen` currently works
+        // around. It is scoped to the network namespace, so the two processes of ONE app find each
+        // other and nothing else can, which is exactly the reach this needs.
+        //
+        // Linux-only by construction. A path without '@' still works everywhere, and that is what
+        // an explicit endpoint (P12's "connect to something somebody else is listening on") uses.
+        bool IsAbstractEndpoint(const std::string& path) {
+            return !path.empty() && path[0] == '@';
+        }
+
         bool FillAddress(const std::string& path, sockaddr_un* out, socklen_t* outLen) {
             std::memset(out, 0, sizeof(*out));
             out->sun_family = AF_UNIX;
@@ -78,6 +99,16 @@ namespace MobileGL::MG_Remote::Transport {
                              "sun_path allows (%zu >= %zu): \"%s\"",
                              path.size(), sizeof(out->sun_path), path.c_str());
                 return false;
+            }
+            if (IsAbstractEndpoint(path)) {
+                // sun_path[0] STAYS NUL and the rest is the name. The length carries the name's
+                // end - there is no terminator - so it is offsetof + 1 + (size - 1), which is
+                // offsetof + size. Getting this wrong does not fail: it binds a DIFFERENT name
+                // (one padded with NULs), and the peer then connects to something that is not
+                // there.
+                std::memcpy(out->sun_path + 1, path.c_str() + 1, path.size() - 1);
+                *outLen = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + path.size());
+                return true;
             }
             std::memcpy(out->sun_path, path.c_str(), path.size());
             *outLen = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + path.size() + 1);
@@ -132,8 +163,13 @@ namespace MobileGL::MG_Remote::Transport {
         // A stale socket file from a server that died is the normal case, not the
         // exceptional one, and bind() fails on it with EADDRINUSE. Unlinking first
         // is what every AF_UNIX server does; the alternative is a server that
-        // cannot restart until someone cleans up by hand.
-        ::unlink(path.c_str());
+        // cannot restart until someone cleans up by hand. An ABSTRACT name has no
+        // node to go stale and unlink("@...") would delete a file of that literal
+        // name if one happened to exist.
+        const bool abstractEndpoint = IsAbstractEndpoint(path);
+        if (!abstractEndpoint) {
+            ::unlink(path.c_str());
+        }
 
         const int listenFd = ::socket(AF_UNIX, SOCK_STREAM, 0);
         if (listenFd < 0) {
@@ -148,12 +184,18 @@ namespace MobileGL::MG_Remote::Transport {
         }
         // 0600: the rendezvous is between one user's processes. An AF_UNIX path
         // is a filesystem object and its mode is the only access control there is.
-        ::chmod(path.c_str(), 0600);
+        // An abstract name is not a filesystem object and has none; its reach is
+        // the network namespace, which for an Android app is the app.
+        if (!abstractEndpoint) {
+            ::chmod(path.c_str(), 0600);
+        }
         if (::listen(listenFd, 4) != 0) {
             WireLogError("MG_Remote SocketTransport: listen(\"%s\") failed: %s", path.c_str(),
                          std::strerror(errno));
             ::close(listenFd);
-            ::unlink(path.c_str());
+            if (!abstractEndpoint) {
+                ::unlink(path.c_str());
+            }
             return MOBILEGL_ERR_UNSUPPORTED;
         }
         *outListenFd = listenFd;

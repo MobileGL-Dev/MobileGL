@@ -19,7 +19,17 @@ SUMMARY_HTML = "mobilegl-android-retrace-overview.html"
 DEFAULT_ANGLE_VARIANT = "ec889e6ea831"
 BLISS_ANGLE_VARIANT = "90a62123d794"
 BLISS_CASE = "minecraft-1.21.4-fabric-iris-bliss-in-world"
-TRACE_APK_DIR = ROOT / "android-plugin" / "app" / "build" / "outputs" / "apk" / "trace" / "debug"
+# BOTH OUTPUT DIRECTORIES, newest wins. The trace variant is assembled as a RELEASE build
+# (`:app:assembleTraceRelease`) and Gradle puts it under apk/trace/release, but CI has historically
+# staged the same artifact under apk/trace/debug - so a tree that has built locally has two, and
+# looking in one of them silently retraces the other one's APK. That is the "ran the wrong binary
+# and went green" shape, on the platform where it is hardest to notice: nothing about the result
+# says which APK produced it.
+TRACE_APK_DIRS = (
+    ROOT / "android-plugin" / "app" / "build" / "outputs" / "apk" / "trace" / "release",
+    ROOT / "android-plugin" / "app" / "build" / "outputs" / "apk" / "trace" / "debug",
+)
+TRACE_APK_DIR = TRACE_APK_DIRS[1]
 
 BACKENDS = {
     "DirectGLES": {
@@ -46,7 +56,11 @@ def is_lfs_pointer(path):
 
 
 def find_trace_apk():
-    candidates = list(TRACE_APK_DIR.glob("MobileGL-plugin-trace-release-*.apk"))
+    candidates = [
+        path
+        for directory in TRACE_APK_DIRS
+        for path in directory.glob("MobileGL-plugin-trace-release-*.apk")
+    ]
     return max(candidates, key=lambda path: path.stat().st_mtime) if candidates else None
 
 
@@ -120,14 +134,16 @@ def render_summary():
     shutil.copyfile(SUMMARY_DIR / SUMMARY_HTML, SUMMARY_DIR / "index.html")
 
 
-def run_case(case, backend, extra_args=None, timeout_seconds=None, env_overrides=None):
+def run_case(case, backend, extra_args=None, timeout_seconds=None, env_overrides=None,
+             use_pbuffer=False):
     backend_info = BACKENDS[backend]
     apk = find_trace_apk()
     trace_archive = FIXTURES / case["trace_archive"]
     golden = FIXTURES / case["golden"]
     alternate = FIXTURES / case["alternate_golden"] if case.get("alternate_golden") else None
     if apk is None:
-        mark_skipped(case, backend, f"SKIPPED_MISSING_APK: no trace APK found under {TRACE_APK_DIR}")
+        mark_skipped(case, backend, "SKIPPED_MISSING_APK: no trace APK found under "
+                     + " or ".join(str(directory) for directory in TRACE_APK_DIRS))
         return 2
     if not trace_archive.exists() or is_lfs_pointer(trace_archive):
         mark_skipped(case, backend, "SKIPPED_LFS_POINTER: trace archive is missing or still an LFS pointer")
@@ -182,7 +198,7 @@ def run_case(case, backend, extra_args=None, timeout_seconds=None, env_overrides
     command.extend(extra_args or [])
     if alternate is not None:
         command[command.index("--target-call"):command.index("--target-call")] = ["--alternate-golden", bash_path(alternate)]
-    if backend_info["use_pbuffer"]:
+    if backend_info["use_pbuffer"] or use_pbuffer:
         command.append("--use-pbuffer")
     if backend_info["use_angle"] and case["name"] == BLISS_CASE:
         command.append("--avoid-angle-llvmpipe-sampler-mipmap-min-filter")
@@ -404,6 +420,15 @@ def parse_args():
              "only instead of GPU completion.",
     )
     parser.add_argument(
+        "--use-pbuffer",
+        action="store_true",
+        help="Render into a pbuffer instead of the Activity's window surface. REQUIRED with "
+             "--transport spawn until P12: an ANativeWindow* is a pointer into the CLIENT's "
+             "process and means nothing in the server's, so SetWindowHandle is refused by name "
+             "with Fatal{UnmigratedSurface, \"AndroidNativeWindow@P12\"} (Rule H). The desktop "
+             "retrace has always run pbuffer and matches the same goldens.",
+    )
+    parser.add_argument(
         "--transport",
         choices=("monolith", "inproc", "spawn"),
         default="monolith",
@@ -457,7 +482,8 @@ def main():
                 failures += run_benchmark_case(case, backend, args)
                 continue
             print(f"=== Android retrace: {case['name']} / {backend} ===", flush=True)
-            rc = run_case(case, backend, env_overrides=transport_env(args) + list(args.env))
+            rc = run_case(case, backend, env_overrides=transport_env(args) + list(args.env),
+                          use_pbuffer=args.use_pbuffer)
             try:
                 render_summary()
             except Exception as error:

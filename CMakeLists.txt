@@ -953,6 +953,29 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND NOT WIN32)
     target_compile_options(MobileGLServer PRIVATE -fPIE)
     target_link_options(MobileGLServer PRIVATE -pie)
 
+    # $ORIGIN, OR THE SERVER CANNOT START AT ALL ON ANDROID.
+    #
+    # This executable links libMobileGL.so, and it is EXEC'd rather than dlopen'd - so it gets a
+    # fresh linker namespace with the default search path, not the app's. An APK's lib/<abi>/ is
+    # not on that path, and the failure is the bluntest one there is:
+    #
+    #   F linker: CANNOT LINK EXECUTABLE ".../lib/arm64/libMobileGLServer.so":
+    #             library "libMobileGL.so" not found: needed by main executable
+    #
+    # It cost a device run to find because it is invisible on desktop: CMake gives build-tree
+    # targets an absolute RPATH automatically, so the WSL server resolved its dependency through a
+    # path that does not exist on a phone. $ORIGIN says "beside me", which is true in the APK, true
+    # in the build tree, and true wherever somebody copies the pair - and it is what makes a
+    # deployment that is NOT a build tree work at all, which the end state is.
+    # THE PROPERTIES, NOT target_link_options. A raw `-Wl,-rpath,$ORIGIN` reaches the generator
+    # unquoted and the SHELL expands $ORIGIN to nothing - measured on device, where the linker
+    # said `normalize_path - invalid input: "$"` and then failed to find libMobileGL.so anyway.
+    # BUILD_RPATH / INSTALL_RPATH are the supported spelling and CMake escapes them correctly.
+    set_target_properties(MobileGLServer PROPERTIES
+        BUILD_RPATH "$ORIGIN"
+        INSTALL_RPATH "$ORIGIN"
+        BUILD_WITH_INSTALL_RPATH TRUE)
+
     if (ANDROID)
         # An APK's only exec-able install location is lib/<abi>/, and the packager
         # only puts a file there if it is named lib*.so. P0 spike A proved this

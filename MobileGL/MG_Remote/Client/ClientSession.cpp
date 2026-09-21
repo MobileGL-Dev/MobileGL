@@ -625,10 +625,15 @@ namespace MobileGL::MG_Remote::Client {
         // a NAME; making it per-process-per-instant is what stops two runs on
         // one machine - which `ctest -j` produces by construction - finding each
         // other's server.
-        const std::string endpoint = std::string("/tmp/mgl-") +
+        // AN ABSTRACT NAME ('@'), not a path under /tmp. An Android app has no
+        // writable /tmp and the first device run proved it the blunt way: the
+        // server launched, bind() had nowhere to put the node, and the client
+        // refused by name 20 s later. The abstract namespace needs no directory,
+        // no mode bits and no cleanup after a crash, and its reach - the network
+        // namespace - is exactly one app's processes.
+        const std::string endpoint = std::string("@mgl-") +
                                      std::to_string(static_cast<long long>(::getpid())) + "-" +
-                                     std::to_string(reinterpret_cast<std::uintptr_t>(this)) +
-                                     ".sock";
+                                     std::to_string(reinterpret_cast<std::uintptr_t>(this));
 
         const MobileGLResult launched =
             Server::LaunchServer(std::string(MG_Config::Ipc.ServerPath.c_str()), endpoint,

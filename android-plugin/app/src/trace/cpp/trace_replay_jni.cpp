@@ -170,9 +170,21 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
     request.benchmarkResultPath = ToString(env, benchmarkResultPath);
     request.envOverrides = SplitSemicolonList(ToString(env, envOverrides));
 
-    const bool needsNativeWindow =
-        request.backend == "DirectVulkan" ||
-        (request.backend == "DirectGLES" && !request.usePbuffer);
+    // THE SURFACE SHAPE DECIDES THIS, NOT THE BACKEND. DirectVulkan used to demand a native
+    // window unconditionally, which made `use_pbuffer` a DirectGLES-only knob in practice: the
+    // Android GLWS creates a window surface whenever gNativeWindow is non-null
+    // (apitrace_glws_android.cpp's createSurface), so handing Magma a window was the same as
+    // asking for one.
+    //
+    // P6 needs the pbuffer path on BOTH backends. Until P12 a spawned server cannot be given a
+    // window at all - an ANativeWindow* is a pointer into the CLIENT's process, and
+    // SetWindowHandle is refused on the way across with Fatal{UnmigratedSurface,
+    // "AndroidNativeWindow@P12"} (Rule H). Measured: the DirectVulkan spawn arm died on exactly
+    // that, one op after the server had come up green, while DirectGLES with the same flag passed.
+    //
+    // Every existing caller is unaffected: nobody asks for a Vulkan pbuffer today, and
+    // !usePbuffer reproduces the old answer for both backends in every other combination.
+    const bool needsNativeWindow = !request.usePbuffer;
     ANativeWindow *window = needsNativeWindow && surface != nullptr ? ANativeWindow_fromSurface(env, surface) : nullptr;
     if (needsNativeWindow && window == nullptr) {
         auto result = MakeFailureResult(request, mobilegl_trace::STATUS_RETRACE_FAILED,
