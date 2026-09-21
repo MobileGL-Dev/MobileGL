@@ -14136,16 +14136,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     // GL_DEPTH_COMPONENT readback into the client's layout, honouring the PACK pixel-store
-    // parameters. GL 4.6 core 18.2.8: the normalized depth is written as-is for GL_FLOAT and
-    // scaled into the full range of whichever integer width the client asked for otherwise.
+    // parameters. GL 4.6 core 18.2.8 table 8.6: the normalized depth is written as-is for the
+    // floating-point client types and scaled into the full range of whichever integer width the
+    // client asked for otherwise - 2^n - 1 for an unsigned width, 2^(n-1) - 1 for a signed one.
+    // Sharing one denominator across the two signednesses would put a 0.5 depth at 32768, which
+    // as a GLshort is -32768, so GL_BYTE/GL_SHORT/GL_INT each keep their own.
     static Bool ReadPixelsDepthComponent(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type,
                                          void* pixels) {
         SizeT dstPixelBytes = 0;
         switch (type) {
+        case GL_BYTE:
         case GL_UNSIGNED_BYTE: dstPixelBytes = sizeof(Uint8); break;
-        case GL_UNSIGNED_SHORT: dstPixelBytes = sizeof(Uint16); break;
-        case GL_UNSIGNED_INT: dstPixelBytes = sizeof(Uint32); break;
-        case GL_FLOAT: dstPixelBytes = sizeof(GLfloat); break;
+        case GL_SHORT:
+        case GL_UNSIGNED_SHORT:
+        case GL_HALF_FLOAT: dstPixelBytes = sizeof(Uint16); break;
+        case GL_INT:
+        case GL_UNSIGNED_INT:
+        case GL_FLOAT: dstPixelBytes = sizeof(Uint32); break;
         default: return false;
         }
         if (width <= 0 || height <= 0) {
@@ -14162,21 +14169,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                       const Float* srcRow =
                                           depth.data() + static_cast<SizeT>(row) * static_cast<SizeT>(width);
                                       for (GLsizei col = 0; col < width; ++col) {
+                                          const Float depthValue = srcRow[col];
                                           switch (type) {
+                                          case GL_BYTE:
+                                              reinterpret_cast<Int8*>(dst)[col] = static_cast<Int8>(
+                                                  NormalizedDepthToUnsigned(depthValue, 127.0));
+                                              break;
                                           case GL_UNSIGNED_BYTE:
                                               dst[col] = static_cast<Uint8>(
-                                                  NormalizedDepthToUnsigned(srcRow[col], 255.0));
+                                                  NormalizedDepthToUnsigned(depthValue, 255.0));
+                                              break;
+                                          case GL_SHORT:
+                                              reinterpret_cast<Int16*>(dst)[col] = static_cast<Int16>(
+                                                  NormalizedDepthToUnsigned(depthValue, 32767.0));
                                               break;
                                           case GL_UNSIGNED_SHORT:
                                               reinterpret_cast<Uint16*>(dst)[col] = static_cast<Uint16>(
-                                                  NormalizedDepthToUnsigned(srcRow[col], 65535.0));
+                                                  NormalizedDepthToUnsigned(depthValue, 65535.0));
+                                              break;
+                                          case GL_INT:
+                                              reinterpret_cast<Int32*>(dst)[col] = static_cast<Int32>(
+                                                  NormalizedDepthToUnsigned(depthValue, 2147483647.0));
                                               break;
                                           case GL_UNSIGNED_INT:
                                               reinterpret_cast<Uint32*>(dst)[col] =
-                                                  NormalizedDepthToUnsigned(srcRow[col], 4294967295.0);
+                                                  NormalizedDepthToUnsigned(depthValue, 4294967295.0);
+                                              break;
+                                          case GL_HALF_FLOAT:
+                                              reinterpret_cast<Uint16*>(dst)[col] =
+                                                  MG_Util::EncodeFloatToHalfBits(depthValue);
                                               break;
                                           default:
-                                              reinterpret_cast<GLfloat*>(dst)[col] = srcRow[col];
+                                              reinterpret_cast<GLfloat*>(dst)[col] = depthValue;
                                               break;
                                           }
                                       }
@@ -14245,16 +14269,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static Bool ReadPixelsStencilViaNative(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type,
                                            void* pixels) {
         // GL 4.6 core 18.2.8: a stencil index is written unconverted into whichever integer width
-        // the client asked for, and converted to a float value for GL_FLOAT. The signed widths are
-        // as legal as the unsigned ones - the CTS reads stencil with GL_INT - and rejecting them
-        // here used to let the call fall through to a native ES read the driver refuses, after
-        // which nothing was written at all and the caller kept its zeros.
+        // the client asked for, and converted to a float value for the floating-point widths - both
+        // GL_FLOAT and GL_HALF_FLOAT. The signed widths are as legal as the unsigned ones - the CTS
+        // reads stencil with GL_INT - and rejecting them here used to let the call fall through to a
+        // native ES read the driver refuses, after which nothing was written at all and the caller
+        // kept its zeros.
         SizeT dstPixelBytes = 0;
         switch (type) {
         case GL_UNSIGNED_BYTE:
         case GL_BYTE: dstPixelBytes = sizeof(Uint8); break;
         case GL_UNSIGNED_SHORT:
-        case GL_SHORT: dstPixelBytes = sizeof(Uint16); break;
+        case GL_SHORT:
+        case GL_HALF_FLOAT: dstPixelBytes = sizeof(Uint16); break;
         case GL_UNSIGNED_INT:
         case GL_INT: dstPixelBytes = sizeof(Uint32); break;
         case GL_FLOAT: dstPixelBytes = sizeof(GLfloat); break;
@@ -14285,6 +14311,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                               break;
                                           case GL_FLOAT:
                                               reinterpret_cast<GLfloat*>(dst)[col] = static_cast<GLfloat>(srcRow[col]);
+                                              break;
+                                          case GL_HALF_FLOAT:
+                                              reinterpret_cast<Uint16*>(dst)[col] =
+                                                  MG_Util::EncodeFloatToHalfBits(static_cast<Float>(srcRow[col]));
                                               break;
                                           default:
                                               reinterpret_cast<Uint32*>(dst)[col] = srcRow[col];
@@ -15001,14 +15031,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // covered by the colour tables above - GetReadbackChannelMapping has no entry for any
     // depth or stencil format, so without this gate a read the helpers CAN serve (a
     // GL_UNSIGNED_SHORT depth, a GL_SHORT stencil) is turned away before it reaches them.
+    // The signed widths and GL_HALF_FLOAT belong in it for the same reason: the helpers scale a
+    // depth into 127 / 32767 / 2147483647 for the signed ones and hand GL_HALF_FLOAT the value
+    // as a half word, so a pair listed here is one they answer in full.
     static Bool IsSupportedDepthStencilReadPixelsPair(GLenum format, GLenum type) {
         switch (format) {
         case GL_DEPTH_COMPONENT:
-            return type == GL_UNSIGNED_BYTE || type == GL_UNSIGNED_SHORT || type == GL_UNSIGNED_INT ||
-                   type == GL_FLOAT;
+            return type == GL_BYTE || type == GL_UNSIGNED_BYTE || type == GL_SHORT ||
+                   type == GL_UNSIGNED_SHORT || type == GL_INT || type == GL_UNSIGNED_INT ||
+                   type == GL_FLOAT || type == GL_HALF_FLOAT;
         case GL_STENCIL_INDEX:
             return type == GL_UNSIGNED_BYTE || type == GL_BYTE || type == GL_UNSIGNED_SHORT || type == GL_SHORT ||
-                   type == GL_UNSIGNED_INT || type == GL_INT || type == GL_FLOAT;
+                   type == GL_UNSIGNED_INT || type == GL_INT || type == GL_FLOAT || type == GL_HALF_FLOAT;
         case GL_DEPTH_STENCIL:
             return type == GL_UNSIGNED_INT_24_8 || type == GL_FLOAT_32_UNSIGNED_INT_24_8_REV;
         default:
@@ -15181,7 +15215,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (format == GL_RGBA_INTEGER) {
             return type == GL_INT || type == GL_UNSIGNED_INT || type == GL_UNSIGNED_INT_2_10_10_10_REV;
         }
-        if (format == GL_DEPTH_STENCIL || format == GL_DEPTH_COMPONENT) {
+        if (format == GL_DEPTH_STENCIL || format == GL_DEPTH_COMPONENT || format == GL_STENCIL_INDEX) {
             return IsSupportedDepthStencilReadPixelsPair(format, type);
         }
         return false;
@@ -15524,8 +15558,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // where the driver has it, shader sampling where it does not. ES accepts neither
         // spelling natively, which is why glGetTexImage(GL_DEPTH_STENCIL) used to leave
         // packed_depth_stencil.verify_get_tex_image reading its own zero-filled buffer.
+        // GL_STENCIL_INDEX is the third spelling of the same read and needs the same hand:
+        // it is not a colour format, so it has no conversion table entry either, and used to
+        // fall through to the native glReadPixels below, which ES refuses.
         if (format == GL_DEPTH_COMPONENT && ReadPixelsDepthComponent(0, 0, size.x(), size.y(), type, pixels)) {
             MGLOG_D("GetTexImage: finished via depth readback helper");
+            return;
+        }
+        if (format == GL_STENCIL_INDEX && ReadPixelsStencilViaNative(0, 0, size.x(), size.y(), type, pixels)) {
+            MGLOG_D("GetTexImage: finished via stencil readback helper");
             return;
         }
         if (format == GL_DEPTH_STENCIL && ReadPixelsDepthStencilPacked(0, 0, size.x(), size.y(), type, pixels)) {

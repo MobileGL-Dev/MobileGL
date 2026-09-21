@@ -1,72 +1,6 @@
 // Server-owned texture readback. Included after WireFramebuffer.inc so image
 // layout tracking and frame retirement are the same as every other wire verb.
 #if MOBILEGL_BUILD_DISAGGREGATED
-    static Bool PackWireDepthStencilTight(const Uint8* depth, const Uint8* stencil,
-            VkFormat sourceFormat, SizeT count, GLenum format, GLenum type, Vector<Uint8>& result) {
-        const Bool stencilOnly = format == GL_STENCIL_INDEX;
-        const auto readDepth = [&](SizeT i) -> Float {
-            if (sourceFormat == VK_FORMAT_D16_UNORM) {
-                Uint16 word{}; Memcpy(&word, depth + i * 2, sizeof(word));
-                return static_cast<Float>(word) / 65535.0f;
-            }
-            if (sourceFormat == VK_FORMAT_X8_D24_UNORM_PACK32 || sourceFormat == VK_FORMAT_D24_UNORM_S8_UINT) {
-                Uint32 word{}; Memcpy(&word, depth + i * 4, sizeof(word));
-                return static_cast<Float>(word & 0xffffffu) / 16777215.0f;
-            }
-            Float value{}; Memcpy(&value, depth + i * sizeof(value), sizeof(value));
-            return value;
-        };
-        SizeT size = 0;
-        switch (type) {
-        case GL_BYTE: case GL_UNSIGNED_BYTE: size = 1; break;
-        case GL_SHORT: case GL_UNSIGNED_SHORT: case GL_HALF_FLOAT: size = 2; break;
-        case GL_INT: case GL_UNSIGNED_INT: case GL_FLOAT: size = 4; break;
-        case GL_UNSIGNED_INT_24_8: size = 4; break;
-        case GL_FLOAT_32_UNSIGNED_INT_24_8_REV: size = 8; break;
-        default: return false;
-        }
-        const Bool packed = type == GL_UNSIGNED_INT_24_8 || type == GL_FLOAT_32_UNSIGNED_INT_24_8_REV;
-        if ((format == GL_DEPTH_STENCIL) != packed) return false;
-        result.resize(count * size);
-        for (SizeT i = 0; i < count; ++i) {
-            Uint8* dst = result.data() + i * size;
-            const Uint32 s = stencil ? stencil[i] : 0;
-            const Float d = stencilOnly ? 0.0f : readDepth(i);
-            switch (type) {
-            case GL_FLOAT: {
-                const Float value = stencilOnly ? static_cast<Float>(s) : d;
-                Memcpy(dst, &value, sizeof(value)); break;
-            }
-            case GL_HALF_FLOAT: {
-                const Uint16 value = MG_Util::EncodeFloatToHalfBits(stencilOnly ? static_cast<Float>(s) : d);
-                Memcpy(dst, &value, sizeof(value)); break;
-            }
-            case GL_UNSIGNED_INT_24_8: {
-                Uint32 depth24 = 0;
-                if (sourceFormat == VK_FORMAT_D24_UNORM_S8_UINT) {
-                    Memcpy(&depth24, depth + i * 4, sizeof(depth24));
-                    depth24 &= 0xffffffu;
-                } else {
-                    depth24 = static_cast<Uint32>(std::llround(std::clamp<double>(d, 0.0, 1.0) * 16777215.0));
-                }
-                const Uint32 value = (depth24 << 8) | s;
-                Memcpy(dst, &value, sizeof(value)); break;
-            }
-            case GL_FLOAT_32_UNSIGNED_INT_24_8_REV:
-                Memcpy(dst, &d, sizeof(d)); Memcpy(dst + 4, &s, sizeof(s)); break;
-            default: {
-                const Bool signedType = type == GL_BYTE || type == GL_SHORT || type == GL_INT;
-                const Uint64 maximum = signedType ? ((Uint64{1} << (size * 8 - 1)) - 1)
-                                                 : ((Uint64{1} << (size * 8)) - 1);
-                const Uint32 value = stencilOnly ? s : static_cast<Uint32>(
-                    std::llround(std::clamp<double>(d, 0.0, 1.0) * static_cast<double>(maximum)));
-                Memcpy(dst, &value, size); break;
-            }
-            }
-        }
-        return true;
-    }
-
     static Bool PackWireColorTight(const Uint8* source, SizeT sourceBytes, VkFormat format,
                                    TextureInternalFormat logicalFormat, const MG_Pipe::MGPReadbackInfo& info,
                                    Vector<Uint8>& result) {
@@ -240,7 +174,7 @@
         if (!mapped || !readback.Invalidate(copyBytes)) return false;
         Vector<Uint8> result;
         if (depthStencil) {
-            if (!PackWireDepthStencilTight(depth ? mapped : nullptr, stencil ? mapped + stencilOffset : nullptr,
+            if (!PackDepthStencilTight(depth ? mapped : nullptr, stencil ? mapped + stencilOffset : nullptr,
                                           resource->format, pixels, info.Format, info.Type, result)) return false;
         } else {
             using namespace DirectGLES::ReadbackImpl;

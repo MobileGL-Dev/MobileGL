@@ -256,6 +256,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                     Uint32 dstMipLevel, Uint32 dstBaseArrayLayer, GLint srcX, GLint srcY, GLint dstX,
                                     GLint dstY, GLint width, GLint height, VkImageLayout srcRestoreLayout,
                                     VkImageLayout dstRestoreLayout, Bool stencilAspect);
+        // One depth/stencil copy whose source and destination are the same format and whose region
+        // is a same-size, same-layer rectangle: the aspect named by `aspect` is staged through a
+        // device-local buffer so the destination's other aspect cannot be overwritten by the
+        // packed native word a whole-image copy moves.
+        Bool CopyDepthStencilAspectThroughBuffer(FrameContext::FrameData& frame, VkImage srcImage,
+                                                 VkImage dstImage, VkFormat format, Uint32 srcMipLevel,
+                                                 Uint32 srcBaseArrayLayer, Uint32 dstMipLevel,
+                                                 Uint32 dstBaseArrayLayer, GLint srcX, GLint srcY, GLint dstX,
+                                                 GLint dstY, GLsizei width, GLsizei height,
+                                                 VkImageAspectFlagBits aspect);
         static SizeT GetReadbackTexelSize(VkFormat sourceFormat);
         // Map a GL bottom-left-origin rectangle into the display-oriented swapchain image.
         // Quarter-turn surface transforms swap the copy extent's axes.

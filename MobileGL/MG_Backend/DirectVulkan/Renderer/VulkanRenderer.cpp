@@ -7797,6 +7797,80 @@ void main() {
         return ScissoredClearPrep::Ready;
     }
 
+    // A tightly packed depth/stencil readback, one aspect or both, in the client's own width.
+    // The two arms that read depth or stencil off a Vulkan image - the monolith
+    // ReadDepthStencilImageToClient and the wire ReadTextureImageWire - copy their aspect into a
+    // host-visible buffer and both owe the application the same bytes, so they share this one
+    // encoding rather than each carrying a copy of it. A copy is exactly the kind of pair where
+    // a fix landed on one side only: the signed ranges and GL_HALF_FLOAT were added to the wire
+    // caller and the monolith caller kept scaling a GL_SHORT depth into 65535, which put a 0.5
+    // depth at 0x8000 - a negative index.
+    static Bool PackDepthStencilTight(const Uint8* depth, const Uint8* stencil, VkFormat sourceFormat, SizeT count,
+                                      GLenum format, GLenum type, Vector<Uint8>& result) {
+        const Bool stencilOnly = format == GL_STENCIL_INDEX;
+        const auto readDepth = [&](SizeT i) -> Float {
+            if (sourceFormat == VK_FORMAT_D16_UNORM) {
+                Uint16 word{}; Memcpy(&word, depth + i * 2, sizeof(word));
+                return static_cast<Float>(word) / 65535.0f;
+            }
+            if (sourceFormat == VK_FORMAT_X8_D24_UNORM_PACK32 || sourceFormat == VK_FORMAT_D24_UNORM_S8_UINT) {
+                Uint32 word{}; Memcpy(&word, depth + i * 4, sizeof(word));
+                return static_cast<Float>(word & 0xffffffu) / 16777215.0f;
+            }
+            Float value{}; Memcpy(&value, depth + i * sizeof(value), sizeof(value));
+            return value;
+        };
+        SizeT size = 0;
+        switch (type) {
+        case GL_BYTE: case GL_UNSIGNED_BYTE: size = 1; break;
+        case GL_SHORT: case GL_UNSIGNED_SHORT: case GL_HALF_FLOAT: size = 2; break;
+        case GL_INT: case GL_UNSIGNED_INT: case GL_FLOAT: size = 4; break;
+        case GL_UNSIGNED_INT_24_8: size = 4; break;
+        case GL_FLOAT_32_UNSIGNED_INT_24_8_REV: size = 8; break;
+        default: return false;
+        }
+        const Bool packed = type == GL_UNSIGNED_INT_24_8 || type == GL_FLOAT_32_UNSIGNED_INT_24_8_REV;
+        if ((format == GL_DEPTH_STENCIL) != packed) return false;
+        result.resize(count * size);
+        for (SizeT i = 0; i < count; ++i) {
+            Uint8* dst = result.data() + i * size;
+            const Uint32 s = stencil ? stencil[i] : 0;
+            const Float d = stencilOnly ? 0.0f : readDepth(i);
+            switch (type) {
+            case GL_FLOAT: {
+                const Float value = stencilOnly ? static_cast<Float>(s) : d;
+                Memcpy(dst, &value, sizeof(value)); break;
+            }
+            case GL_HALF_FLOAT: {
+                const Uint16 value = MG_Util::EncodeFloatToHalfBits(stencilOnly ? static_cast<Float>(s) : d);
+                Memcpy(dst, &value, sizeof(value)); break;
+            }
+            case GL_UNSIGNED_INT_24_8: {
+                Uint32 depth24 = 0;
+                if (sourceFormat == VK_FORMAT_D24_UNORM_S8_UINT) {
+                    Memcpy(&depth24, depth + i * 4, sizeof(depth24));
+                    depth24 &= 0xffffffu;
+                } else {
+                    depth24 = static_cast<Uint32>(std::llround(std::clamp<double>(d, 0.0, 1.0) * 16777215.0));
+                }
+                const Uint32 value = (depth24 << 8) | s;
+                Memcpy(dst, &value, sizeof(value)); break;
+            }
+            case GL_FLOAT_32_UNSIGNED_INT_24_8_REV:
+                Memcpy(dst, &d, sizeof(d)); Memcpy(dst + 4, &s, sizeof(s)); break;
+            default: {
+                const Bool signedType = type == GL_BYTE || type == GL_SHORT || type == GL_INT;
+                const Uint64 maximum = signedType ? ((Uint64{1} << (size * 8 - 1)) - 1)
+                                                 : ((Uint64{1} << (size * 8)) - 1);
+                const Uint32 value = stencilOnly ? s : static_cast<Uint32>(
+                    std::llround(std::clamp<double>(d, 0.0, 1.0) * static_cast<double>(maximum)));
+                Memcpy(dst, &value, size); break;
+            }
+            }
+        }
+        return true;
+    }
+
     #include "WireFramebuffer.inc"
     #include "WireTextureReadback.inc"
     #include "WireColorBlit.inc"
@@ -9166,6 +9240,58 @@ void main() {
         return true;
     }
 
+    // A single-aspect depth/stencil copy between two images of the same format. An image copy
+    // moves the format's own native representation, and for a packed depth-stencil format that
+    // representation is one word holding both aspects: a region that names only the depth aspect
+    // still carries the source's stencil byte into the destination, and the other way round, so a
+    // depth-only resolve silently replaces the destination's stencil (and a stencil-only resolve
+    // its depth). Staging the requested aspect through a buffer makes the region's aspectMask
+    // authoritative - a buffer copy names one aspect and moves exactly its texels - which is the
+    // same reason the wire resolve (WireFramebuffer.inc, ResolveWireDepthStencil) copies its
+    // resolved aspect through a buffer instead of patching the image copy.
+    //
+    // Both images are in a TRANSFER layout when this is called, so no transition is needed here.
+    Bool VulkanRenderer::CopyDepthStencilAspectThroughBuffer(
+        FrameContext::FrameData& frame, VkImage srcImage, VkImage dstImage, VkFormat format, Uint32 srcMipLevel,
+        Uint32 srcBaseArrayLayer, Uint32 dstMipLevel, Uint32 dstBaseArrayLayer, GLint srcX, GLint srcY, GLint dstX,
+        GLint dstY, GLsizei width, GLsizei height, VkImageAspectFlagBits aspect) {
+        // The aspect's own tightly defined copy layout: a stencil texel is one byte whatever the
+        // format, and the depth half of a packed format copies on its own at 2 or 4 bytes.
+        const VkDeviceSize texelSize = aspect == VK_IMAGE_ASPECT_STENCIL_BIT
+            ? 1
+            : (format == VK_FORMAT_D16_UNORM || format == VK_FORMAT_D16_UNORM_S8_UINT ? 2 : 4);
+        const VkDeviceSize bytes = static_cast<VkDeviceSize>(width) * static_cast<VkDeviceSize>(height) * texelSize;
+        VkBufferObject staging;
+        if (!staging.Create({.allocator = m_allocator, .size = bytes,
+                .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE})) {
+            MGLOG_E_ONCE("CopyDepthStencilAspectThroughBuffer: failed to create the aspect staging buffer");
+            return false;
+        }
+        VkBufferImageCopy region{};
+        region.imageSubresource = {aspect, srcMipLevel, srcBaseArrayLayer, 1};
+        region.imageOffset = {srcX, srcY, 0};
+        region.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
+        vkCmdCopyImageToBuffer(frame.commandBuffer, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               staging.GetHandle(), 1, &region);
+        VkBufferMemoryBarrier barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.buffer = staging.GetHandle();
+        barrier.size = bytes;
+        vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 0, nullptr, 1, &barrier, 0, nullptr);
+        region.imageSubresource = {aspect, dstMipLevel, dstBaseArrayLayer, 1};
+        region.imageOffset = {dstX, dstY, 0};
+        vkCmdCopyBufferToImage(frame.commandBuffer, staging.GetHandle(), dstImage,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        // The commands above still name this buffer and this frame's submission has not happened
+        // yet, so the buffer retires with the frame rather than with this scope.
+        m_bufferManager.DeferRelease(Move(staging));
+        return true;
+    }
+
     void VulkanRenderer::BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                          GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                                          GLbitfield mask, GLenum filter) {
@@ -9471,6 +9597,20 @@ void main() {
                                srcBinding.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                dstBinding.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                1, &blitRegion, VK_FILTER_NEAREST);
+            } else if (isDepthBlit != isStencilBlit && srcBinding.layerCount == 1 && dstBinding.layerCount == 1 &&
+                       (GetDepthStencilAspectMaskForFormat(srcBinding.format) &
+                        ~static_cast<VkImageAspectFlags>(depthStencilAspect)) != 0) {
+                // Exactly one aspect of a packed depth-stencil format is being copied into a
+                // destination that carries the other one as well. A whole-image copy moves the
+                // packed native word and would replace that other aspect with the source's; see
+                // CopyDepthStencilAspectThroughBuffer. Same format, same size, one layer - the
+                // shapes the buffer round trip can express. A scaled or display-oriented copy
+                // takes the blit above, and a multi-layer one keeps the image copy.
+                (void)CopyDepthStencilAspectThroughBuffer(frame, srcBinding.image, dstBinding.image,
+                                                          srcBinding.format, srcBinding.mipLevel,
+                                                          srcBinding.baseArrayLayer, dstBinding.mipLevel,
+                                                          dstBinding.baseArrayLayer, srcX0, srcY0, dstX0, dstY0,
+                                                          srcWidth, srcHeight, depthStencilAspect);
             } else {
                 VkImageCopy copyRegion{};
                 copyRegion.srcSubresource.aspectMask = srcBinding.aspectMask;
@@ -11282,106 +11422,17 @@ void main() {
             }
         }
 
-        const auto depthValueAt = [&](SizeT i) -> Float {
-            switch (vkFormat) {
-            case VK_FORMAT_D16_UNORM: {
-                Uint16 raw = 0;
-                Memcpy(&raw, depthSrc + i * 2, sizeof(raw));
-                return static_cast<Float>(raw) / 65535.0f;
-            }
-            case VK_FORMAT_X8_D24_UNORM_PACK32:
-            case VK_FORMAT_D24_UNORM_S8_UINT: {
-                Uint32 raw = 0;
-                Memcpy(&raw, depthSrc + i * 4, sizeof(raw));
-                return static_cast<Float>(raw & 0xFFFFFFu) / static_cast<Float>(0xFFFFFFu);
-            }
-            default: { // D32_SFLOAT / D32_SFLOAT_S8_UINT
-                Float raw = 0.0f;
-                Memcpy(&raw, depthSrc + i * 4, sizeof(raw));
-                return raw;
-            }
-            }
-        };
-
-        SizeT dstPixelBytes = 0;
-        switch (type) {
-        case GL_FLOAT:
-        case GL_UNSIGNED_INT:
-        case GL_INT:
-        case GL_UNSIGNED_INT_24_8:
-            dstPixelBytes = 4;
-            break;
-        case GL_UNSIGNED_SHORT:
-        case GL_SHORT:
-            dstPixelBytes = 2;
-            break;
-        case GL_UNSIGNED_BYTE:
-        case GL_BYTE:
-            dstPixelBytes = 1;
-            break;
-        case GL_FLOAT_32_UNSIGNED_INT_24_8_REV:
-            dstPixelBytes = 8;
-            break;
-        default:
+        // The packing is the SHARED PackDepthStencilTight, so this arm and the wire arm cannot
+        // disagree about the encoding again: one aspect or both, in the client's own width, with
+        // the signed integer widths scaled into their own signed range and GL_HALF_FLOAT written
+        // as the half word the caller asked for.
+        Vector<Uint8> packed;
+        if (!PackDepthStencilTight(wantDepth ? depthSrc : nullptr, wantStencil ? stencilSrc : nullptr, vkFormat,
+                                   pixelCount, format, type, packed)) {
             MGLOG_E_ONCE("DirectVulkan::ReadDepthStencilPixels skipped: unsupported type=0x%x", type);
             return;
         }
-
-        // GL 4.6 core 18.2.8: a GL_STENCIL_INDEX read reports the index itself, unconverted, in
-        // whatever width the client asked for. Only the packed types mix depth in. Deciding this
-        // once - rather than per type, where GL_FLOAT and GL_UNSIGNED_SHORT used to emit a depth
-        // value that is meaningless for a stencil-only image - is what makes the CTS's
-        // (GL_STENCIL_INDEX, GL_INT) read return 7 instead of nothing.
-        const Bool stencilOnly = format == GL_STENCIL_INDEX;
-
-        Vector<Uint8> packed(pixelCount * dstPixelBytes);
-        for (SizeT i = 0; i < pixelCount; ++i) {
-            Uint8* dst = packed.data() + i * dstPixelBytes;
-            switch (type) {
-            case GL_FLOAT: {
-                const Float value = stencilOnly ? static_cast<Float>(stencilSrc[i]) : depthValueAt(i);
-                Memcpy(dst, &value, sizeof(value));
-                break;
-            }
-            case GL_UNSIGNED_SHORT:
-            case GL_SHORT: {
-                const Uint16 value = stencilOnly
-                    ? static_cast<Uint16>(stencilSrc[i])
-                    : static_cast<Uint16>(std::lround(static_cast<double>(depthValueAt(i)) * 65535.0));
-                Memcpy(dst, &value, sizeof(value));
-                break;
-            }
-            case GL_UNSIGNED_INT:
-            case GL_INT: {
-                const Uint32 value = stencilOnly
-                    ? stencilSrc[i]
-                    : static_cast<Uint32>(static_cast<double>(depthValueAt(i)) * 4294967295.0);
-                Memcpy(dst, &value, sizeof(value));
-                break;
-            }
-            case GL_UNSIGNED_BYTE:
-            case GL_BYTE: {
-                dst[0] = stencilSrc[i];
-                break;
-            }
-            case GL_UNSIGNED_INT_24_8: {
-                const Uint32 depth24 =
-                    static_cast<Uint32>(std::lround(static_cast<double>(depthValueAt(i)) * 16777215.0)) & 0xFFFFFFu;
-                const Uint32 value = (depth24 << 8) | stencilSrc[i];
-                Memcpy(dst, &value, sizeof(value));
-                break;
-            }
-            case GL_FLOAT_32_UNSIGNED_INT_24_8_REV: {
-                const Float depthValue = depthValueAt(i);
-                const Uint32 stencilValue = stencilSrc[i];
-                Memcpy(dst, &depthValue, sizeof(depthValue));
-                Memcpy(dst + 4, &stencilValue, sizeof(stencilValue));
-                break;
-            }
-            default:
-                break;
-            }
-        }
+        const SizeT dstPixelBytes = packed.size() / pixelCount;
 
         // Store honoring the client pack state (single slice).
 #if MOBILEGL_BUILD_DISAGGREGATED
