@@ -1045,6 +1045,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         payload.params.indexCount = count;
         payload.params.instanceCount = 1;
 
+        // A CLIENT-MEMORY VERTEX ARRAY'S upload is bounded by a scan of this draw's index bytes,
+        // and those bytes may be shader-written: the scan reconciles the element buffer's shadow,
+        // which WAITS for the GPU. A wait in the middle of the draw's own recording flushes the
+        // batch that command buffer belongs to - the handle SetupDraw is holding goes stale, and
+        // the next vkCmd* records into a command buffer that is no longer the frame's. Reconciling
+        // HERE, before SetupDraw starts recording, keeps the wait out of the recording.
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) {
+            const auto& currentVAO = MGB_CTX->GetBoundVertexArray();
+            Bool clientArray = false;
+            if (currentVAO) {
+                for (const auto& attribute : currentVAO->GetAllAttributes()) {
+                    if (attribute.Enabled && !attribute.Buffer) {
+                        clientArray = true;
+                        break;
+                    }
+                }
+            }
+            if (clientArray) {
+                if (const auto& elementBuffer = currentVAO->GetIndexBufferBindingSlot().GetBoundObject()) {
+                    elementBuffer->SyncGpuWrites();
+                }
+            }
+        }
+
         pVulkanRenderer->DrawElements(payload);
     }
 
