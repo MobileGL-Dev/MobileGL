@@ -313,6 +313,26 @@ is bounded by `MOBILEGL_IPC_CONTROL_TIMEOUT_MS` (default 5000) and its expiry is
 client consults the doorbell's death latch — dead latches device-lost, alive-but-silent is a named
 diagnostic. Packages: `cp` (a), `dl` (b).
 
+> **D5c — the client's self-bell CANNOT witness the server's death, and `sm` is why.** Measured, not
+> predicted: `minecraft-1.21.4-fabric-iris-iterationrp-in-world` kills the *server* process outright
+> on this machine (llvmpipe: `LLVM ERROR: Cannot select: intrinsic %llvm.x86.vcvtps2ph.256`, SIGABRT
+> at call 159429), and the client did **not** take the `SessionWait::ShutDown` path that already
+> exists and is already correct. It sat out the full 120 s and reported
+> `Fatal{BarrierTimeout, "ResourceRespecify"}` — the wrong diagnosis, at 120 s a case, for a server
+> that had been gone since the first second. Under monolith the same trace fails in 3 s.
+>
+> The cause is structural and is the price of the two-fd bell: the client parks on `clientBell[0]`
+> (slot 5) and rings *itself* through `clientBell[1]` (slot 6), so it holds **both ends** of that
+> socketpair. EOF arrives only when every writer closes, and the client is one of them — so that
+> descriptor can never hang up, no matter what happens to the peer. A bell that can wake itself is
+> a bell that cannot hear a death.
+>
+> **`dl` therefore needs a witness descriptor whose far end only the SERVER holds**, polled beside
+> the park fd and never read from, whose `POLLHUP`/EOF latches `Dead()`. The control socket is
+> already exactly that and needs no new descriptor. The fix does not belong to `sm`: holding both
+> ends is required for self-notification and is not the defect — assuming one descriptor could
+> answer both questions is.
+
 ---
 
 ## §6 The control plane (`cp`)
