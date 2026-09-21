@@ -404,12 +404,34 @@ def parse_args():
              "only instead of GPU completion.",
     )
     parser.add_argument(
+        "--transport",
+        choices=("monolith", "inproc", "spawn"),
+        default="monolith",
+        help="MOBILEGL_TRANSPORT for the replay. `spawn` runs the server role in a SECOND PROCESS "
+             "on the device, launched out of the APK's lib/<abi>/ - which requires an APK built "
+             "with -Pmobilegl.buildDisaggregated=ON, or ConfigLoader has no parser, accepts the "
+             "value and ignores it (CONTRACT-P5 rule 5) and the run is monolith under a name that "
+             "says otherwise. MOBILEGL_IPC_SERVER_PATH is NOT passed from here: nativeLibraryDir "
+             "carries an install-time hash, so only the app can spell it, and "
+             "TraceReplayActivity.resolveSpawnServerPath does.",
+    )
+    parser.add_argument(
         "--benchmark-timeout-seconds",
         type=int,
         default=900,
         help="Per-run timeout; a benchmark replays the whole trace, not just up to target_call.",
     )
     return parser.parse_args()
+
+
+def transport_env(args):
+    """The transport knob as env overrides, or nothing at all for monolith.
+
+    An EMPTY list on monolith rather than MOBILEGL_TRANSPORT=monolith, so the default arm's
+    environment is byte-identical to what it was before this option existed - the control arm has
+    to stay a control.
+    """
+    return [] if args.transport == "monolith" else [f"MOBILEGL_TRANSPORT={args.transport}"]
 
 
 def main():
@@ -435,7 +457,7 @@ def main():
                 failures += run_benchmark_case(case, backend, args)
                 continue
             print(f"=== Android retrace: {case['name']} / {backend} ===", flush=True)
-            rc = run_case(case, backend, env_overrides=args.env)
+            rc = run_case(case, backend, env_overrides=transport_env(args) + list(args.env))
             try:
                 render_summary()
             except Exception as error:

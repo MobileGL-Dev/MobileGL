@@ -45,7 +45,10 @@ public final class TraceReplayActivity extends Activity {
         request = TraceReplayRequest.from(
                 intent,
                 getFilesDir(),
-                getString(top.mobilegl.plugin.R.string.mobilegl_default_backend)
+                getString(top.mobilegl.plugin.R.string.mobilegl_default_backend),
+                // P6: the ONE place that knows where an exec-able file lives. See
+                // resolveSpawnServerPath.
+                getApplicationInfo().nativeLibraryDir
         );
         statusView = new TextView(this);
         statusView.setText("Waiting for render surface\n" + request.outputDir);
@@ -354,7 +357,37 @@ public final class TraceReplayActivity extends Activity {
             this.envOverrides = envOverrides;
         }
 
-        static TraceReplayRequest from(Intent intent, File filesDir, String defaultBackend) {
+        // P6: MOBILEGL_TRANSPORT=spawn NEEDS AN ABSOLUTE PATH TO AN EXEC-ABLE FILE, and on
+        // Android there is exactly one such place. An APK's lib/<abi>/ is the only directory an
+        // untrusted_app may exec from - W^X has forbidden the app's own data dirs since API 29 -
+        // and the packager only puts a file there if it is named lib*.so, which is why the server
+        // executable wears that name (P0 spike A proved the arrangement on two devices).
+        //
+        // NOTHING OFF THE DEVICE CAN SPELL THAT PATH. nativeLibraryDir contains an
+        // install-time hash, so the host-side runner cannot pass MOBILEGL_IPC_SERVER_PATH the way
+        // it passes every other knob; the path has to be resolved HERE, by the process that is
+        // about to launch the server. Left unresolved, LaunchServer refuses BY NAME and the arm
+        // reds on "unresolvable image" - honest, but about the wrong thing.
+        //
+        // AN EXPLICIT VALUE WINS. A caller that set MOBILEGL_IPC_SERVER_PATH itself is pointing
+        // somewhere deliberately, and silently replacing it would make that knob untestable.
+        static String resolveSpawnServerPath(String envOverrides, String nativeLibraryDir) {
+            if (nativeLibraryDir == null || nativeLibraryDir.isEmpty()) {
+                return envOverrides;
+            }
+            if (!envOverrides.contains("MOBILEGL_TRANSPORT=spawn")) {
+                return envOverrides;
+            }
+            if (envOverrides.contains("MOBILEGL_IPC_SERVER_PATH=")) {
+                return envOverrides;
+            }
+            String serverPath = new File(nativeLibraryDir, "libMobileGLServer.so").getAbsolutePath();
+            String entry = "MOBILEGL_IPC_SERVER_PATH=" + serverPath;
+            return envOverrides.isEmpty() ? entry : envOverrides + ";" + entry;
+        }
+
+        static TraceReplayRequest from(Intent intent, File filesDir, String defaultBackend,
+                                       String nativeLibraryDir) {
             String outputDir = readString(intent, "output_dir", new File(filesDir, "trace-replay").getAbsolutePath());
             String diffPath = readString(intent, "diff_path", "");
             String benchmarkResultPath =
@@ -389,7 +422,7 @@ public final class TraceReplayActivity extends Activity {
                     intent.getIntExtra("benchmark_tail_frames", 200),
                     intent.getBooleanExtra("benchmark_finish", true),
                     benchmarkResultPath,
-                    readString(intent, "mobilegl_env", "")
+                    resolveSpawnServerPath(readString(intent, "mobilegl_env", ""), nativeLibraryDir)
             );
         }
 
