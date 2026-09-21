@@ -1,5 +1,8 @@
 # P5f 交接：已全部收官
 
+> **后续 CI / 全量 inproc 工作尚未完成，已按用户要求停止（2026-09-20）。**
+> 最新接续点见 [CI / inproc 交接](HANDOFF-CI-INPROC-20260920.md)：实现树停在 `70c8230b`，尚未合并或 push；完整 inproc retrace 为 67/77，另有一个新增 GLES view mip 回归未解决。下文“已收官”仅指此前 P5f 范围，不能作为本轮 CI 全绿证明。
+
 > 2026-09-20。交付 worktree：
 > `C:/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg`，分支 `feat/disaggregated`。
 > 完整结果见 [close-report.md](close-report.md)，设备见 [device-report.md](device-report.md)，

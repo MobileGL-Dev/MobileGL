@@ -42,13 +42,18 @@ android {
     defaultConfig {
         minSdk 26
 
-        if (standalonePluginBuild) {
-            ndk {
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        // One ndk block for both shapes: a standalone plugin build follows the caller's
+        // ABI set, while the FCL-embedded library pins arm64-v8a - FCL packages that ABI
+        // alone, so the wider default set would only build libraries nothing loads.
+        ndk {
+            if (standalonePluginBuild) {
                 abiFilters.addAll(mobileGlAbiFilters())
+            } else {
+                abiFilters.add('arm64-v8a')
             }
         }
-
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         externalNativeBuild {
             cmake {
