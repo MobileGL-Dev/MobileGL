@@ -1995,17 +1995,19 @@ jobs:
           # The subset the verify build retraces ("verify": true in trace_cases.json). It is a
           # SUBSET of the matrix above, so retrace-verify needs no fixtures of its own.
           echo "verify-matrix=$(python3 tools/trace_replay/trace_cases.py --ci --format github-verify-matrix)" >> "$GITHUB_OUTPUT"
-          # P5's split subset ("split": true, DirectGLES only). Also a SUBSET of the matrix above,
-          # so retrace-split needs no fixtures of its own either. It is one case today - OpenRA,
-          # which is what the phase gate names - and trace_cases.py refuses a `split` case that is
-          # not in CI or does not run DirectGLES, so the subset cannot silently become empty.
+          # The split subset: {backend, case, transport} over inproc AND spawn, both backends, for
+          # every CI case that has not said `"split": false`. Still a SUBSET of the matrix above,
+          # so retrace-split needs no fixtures of its own. P5 shipped it as one case (OpenRA, which
+          # the phase gate names); P6 widened it to the whole CI matrix, because every bug the
+          # spawn work found was a question about the SERVER's process rather than about one trace.
+          # trace_cases.py refuses a `split` case that is not in CI, so the subset stays a subset.
           SPLIT_MATRIX=$(python3 tools/trace_replay/trace_cases.py --ci --format github-split-matrix)
           # AND IT MUST NOT BE EMPTY. An empty `include` is not an error to GitHub - it skips the
           # whole retrace-split job with no red anywhere - so the one way this subset can vanish
           # silently is guarded here. trace_cases.py now also rejects an unknown manifest key, which
           # was the hole: `"splitt": true` loaded clean and emptied the subset (review N-4).
           if [ "$(printf '%s' "${SPLIT_MATRIX}" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["include"]))')" -lt 1 ]; then
-            echo "::error::the split retrace subset is EMPTY. No case in trace_cases.json carries \"split\": true, so retrace-split would be skipped with no red. Exit gate E2 names OpenRA."
+            echo "::error::the split retrace subset is EMPTY. `split` is an OPT-OUT as of P6 - a CI case is in this subset unless it carries \"split\": false - so an empty subset means either every case opted out or the CI matrix itself is empty. Either way retrace-split would be skipped with no red, and exit gate E2 names OpenRA."
             exit 1
           fi
           echo "split-matrix=${SPLIT_MATRIX}" >> "$GITHUB_OUTPUT"
@@ -2415,10 +2417,15 @@ jobs:
             build-retrace/tools/trace_replay/${{ matrix.case }}/${{ matrix.backend }}/output/**
           if-no-files-found: warn
 
-  # P5's retrace arm: retrace-verify with MOBILEGL_PIPE_VERIFY=1 swapped for
-  # MOBILEGL_TRANSPORT=inproc and the comparator's symbol swapped for an MG_Remote one. Exit gate
-  # E2 is one row - OpenRA at SSIM >= 0.99 - and trace_cases.json's `split: true` is where that
-  # subset lives.
+  # The retrace arm of the split shape: retrace-verify with MOBILEGL_PIPE_VERIFY=1 swapped for
+  # MOBILEGL_TRANSPORT and the comparator's symbol swapped for an MG_Remote one. Exit gate E2 is
+  # one row - OpenRA at SSIM >= 0.99 - but the lane is no longer one row: as of P6 it is
+  # {backend, case, transport} over the whole CI matrix, both backends, inproc AND spawn.
+  #
+  # inproc IS THE CONTROL AND SPAWN IS THE CLAIM. Same library, same codec, same applier, same
+  # picture; the only difference is which PROCESS the server role runs in. Running only spawn
+  # would leave "did the transport break it?" and "did the phase break it?" answerable only
+  # together, which is the question every failure in this phase turned out to hinge on.
   #
   # IT RUNS THE UNCHANGED CTEST NAMES with the transport exported in the JOB environment, rather
   # than the SPLIT-suffixed variant entries. build-retrace configures without
@@ -2434,7 +2441,7 @@ jobs:
   # SSIM is neither of them: the nm check below (this library carries MG_Remote) and the
   # transport-resolution line in the library's own log (this PROCESS resolved inproc).
   retrace-split:
-    name: retrace split (${{ matrix.backend }}, ${{ matrix.case }})
+    name: retrace split (${{ matrix.backend }} / ${{ matrix.transport }}, ${{ matrix.case }})
     runs-on: ubuntu-latest
     timeout-minutes: 240
     needs:
@@ -2522,7 +2529,24 @@ jobs:
           fi
           echo "the library at build-linux/libMobileGL.so is the split build"
 
-      - name: Retrace and validate under MOBILEGL_TRANSPORT=inproc
+      # THE SPAWN ARM NEEDS A SECOND BINARY and the inproc arm needs none, which is the whole
+      # difference between the two at this level: inproc's server role is a thread in the replay
+      # process, spawn's is a PROCESS the client launches from this image. It is packaged by
+      # build-linux-split's `find -name '*.so'` sweep - libMobileGLServer.so is an executable that
+      # wears a .so name so an APK will install it somewhere exec-able - and a missing one must be
+      # a NAMED failure here rather than a LaunchServer refusal 78 jobs deep.
+      - name: Place the server image (spawn arm only)
+        if: ${{ matrix.transport == 'spawn' }}
+        run: |
+          if [ ! -f build-split/libMobileGLServer.so ]; then
+            echo "::error::the split runtime carries no libMobileGLServer.so, so transport=spawn has no server to launch. ConfigLoader would resolve Spawn, LaunchServer would refuse BY NAME, and this job would red on a message about an unresolvable image rather than about a packaging gap."
+            exit 1
+          fi
+          cp build-split/libMobileGLServer.so build-linux/libMobileGLServer.so
+          chmod +x build-linux/libMobileGLServer.so
+          echo "server image: $(readlink -f build-linux/libMobileGLServer.so)"
+
+      - name: Retrace and validate under MOBILEGL_TRANSPORT=${{ matrix.transport }}
         working-directory: build-retrace/tools/trace_replay
         # run_trace_case.cmake turns MOBILEGL_TRANSPORT into assertions of its own - the library
         # must have RESOLVED the transport in this process, and its log must carry no Fatal{ - so a
@@ -2532,7 +2556,11 @@ jobs:
         run: |
           ulimit -c unlimited
           sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
-          export MOBILEGL_TRANSPORT=inproc
+          export MOBILEGL_TRANSPORT='${{ matrix.transport }}'
+          # Absolute, because the replay's working directory is not this one and LaunchServer
+          # resolves the image relative to nothing. Harmless on the inproc arm, which reads it
+          # only to decide it does not need it.
+          export MOBILEGL_IPC_SERVER_PATH="${GITHUB_WORKSPACE}/build-linux/libMobileGLServer.so"
           ctest -V --no-tests=error --timeout 10800 \
             -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'
 
@@ -2572,6 +2600,10 @@ jobs:
           CONTROL_TMPDIR: ${{ runner.temp }}
           PULL_LIBRARY: ${{ github.workspace }}/pull-runtime/build-monolith-control/libMobileGL.so
           FROZEN_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
+          # The control has to run the arm it is a control FOR. Hard-coded inproc, it would go on
+          # proving something about the other arm while spawn ran unguarded.
+          SPLIT_TRANSPORT: ${{ matrix.transport }}
+          MOBILEGL_IPC_SERVER_PATH: ${{ github.workspace }}/build-linux/libMobileGLServer.so
         run: >-
           bash "${GITHUB_WORKSPACE}/scripts/ci/retrace_pull_library_control.sh"
           '${{ matrix.case }}' '${{ matrix.backend }}'
@@ -2599,6 +2631,10 @@ jobs:
           CONTROL_TMPDIR: ${{ runner.temp }}
           LIBRARY_LOG: ${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.log
           FROZEN_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
+          # The control has to run the arm it is a control FOR. Hard-coded inproc, it would go on
+          # proving something about the other arm while spawn ran unguarded.
+          SPLIT_TRANSPORT: ${{ matrix.transport }}
+          MOBILEGL_IPC_SERVER_PATH: ${{ github.workspace }}/build-linux/libMobileGLServer.so
         run: >-
           bash "${GITHUB_WORKSPACE}/scripts/ci/retrace_drop_draw_control.sh"
           '${{ matrix.case }}' '${{ matrix.backend }}'
@@ -2624,7 +2660,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: retrace-split-core-dumps-${{ matrix.backend }}-${{ matrix.case }}
+          name: retrace-split-core-dumps-${{ matrix.transport }}-${{ matrix.backend }}-${{ matrix.case }}
           path: /tmp/core.*
           if-no-files-found: ignore
 
@@ -2632,7 +2668,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: retrace-split-result-${{ matrix.backend }}-${{ matrix.case }}
+          name: retrace-split-result-${{ matrix.transport }}-${{ matrix.backend }}-${{ matrix.case }}
           path: |
             build-retrace/tools/trace_replay/${{ matrix.case }}/actual-images/**
             build-retrace/tools/trace_replay/${{ matrix.case }}/${{ matrix.backend }}/output/**

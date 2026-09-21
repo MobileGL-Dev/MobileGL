@@ -449,10 +449,14 @@ endfunction()
 
 # --- P5: the SPLIT arm of the retrace matrix -------------------------------------------------
 #
-# One variant entry per case that trace_cases.json marks `split: true` - today that is OpenRA
-# alone, which is the only target the phase gate names and (measurably) the only fixture hydrated
-# locally. DirectGLES only: the split shape's first backend is Espryt, and a DirectVulkan arm
-# would be measuring a server nobody has written yet.
+# One variant entry per case that trace_cases.json marks `split: true`.
+#
+# BOTH BACKENDS, as of P6. The DirectGLES-only note this comment used to carry -
+# "a DirectVulkan arm would be measuring a server nobody has written yet" - was
+# true when P5 wrote it and stopped being true at P5f/P7, which landed Magma's
+# server consumers and its run-ahead readiness gate. Leaving it would have meant
+# shipping a split shape whose second backend nothing ever ran, which is the
+# same class of hole as a lane that runs monolith under a name that says split.
 #
 # REGISTERED ONLY UNDER MOBILEGL_BUILD_DISAGGREGATED, because the arm is a statement about a
 # library that compiled MG_Remote. A build without the option accepts MOBILEGL_TRANSPORT=inproc
@@ -463,24 +467,31 @@ function(add_trace_replay_split_test CASE_NAME)
     if(NOT MOBILEGL_BUILD_DISAGGREGATED)
         return()
     endif()
-    add_trace_replay_test(${CASE_NAME} DirectGLES VARIANT SPLIT TRANSPORT inproc
-            IPC_SERVER_PATH "${CMAKE_BINARY_DIR}/libMobileGLServer.so" ${ARGN})
-
-    # --- P6: the SPAWN arm, beside the inproc one rather than instead of it ------------------
+    # --- P6: TWO TRANSPORTS x TWO BACKENDS, four entries per case ---------------------------
     #
-    # TWO ARMS, NOT ONE RENAMED. The inproc arm is the CONTROL: it is the same
-    # library, the same codec, the same applier and the same picture, with the
-    # only difference being which process the server role runs in. A spawn arm
-    # that had replaced it would have left "did the transport break it?" and
-    # "did the phase break it?" answerable only together.
+    # TWO TRANSPORTS, NOT ONE RENAMED. The inproc arm is the CONTROL: same
+    # library, same codec, same applier, same picture, with the only difference
+    # being which PROCESS the server role runs in. A spawn arm that had replaced
+    # it would leave "did the transport break it?" and "did the phase break it?"
+    # answerable only together.
     #
-    # G14 is satisfied by construction - a name is added, none is removed - and
-    # the VARIANT gives it its own output and artifact directories, which is the
-    # half the comment above says is easy to forget: both arms write
-    # output/mobilegl.log, and that log is the ONLY valid refusal census because
-    # the console sink is compiled out of these configurations.
-    add_trace_replay_test(${CASE_NAME} DirectGLES VARIANT SPAWN TRANSPORT spawn
-            IPC_SERVER_PATH "${CMAKE_BINARY_DIR}/libMobileGLServer.so" ${ARGN})
+    # TWO BACKENDS, because every bug this phase found so far was a question
+    # about the SERVER's process rather than about Espryt - the child loading no
+    # config, Transport reading as Monolith there, a doorbell that could not wake
+    # its own thread. None of those is backend-shaped, and all of them would have
+    # been just as invisible on a Magma server nobody ran.
+    #
+    # G14 is satisfied by construction - names are added, none removed - and the
+    # VARIANT gives each entry its own output and artifact directories, which is
+    # the half that is easy to forget: all four write output/mobilegl.log, and
+    # that log is the ONLY valid refusal census because the console sink is
+    # compiled out of these configurations.
+    foreach(backend DirectGLES DirectVulkan)
+        add_trace_replay_test(${CASE_NAME} ${backend} VARIANT SPLIT TRANSPORT inproc
+                IPC_SERVER_PATH "${CMAKE_BINARY_DIR}/libMobileGLServer.so" ${ARGN})
+        add_trace_replay_test(${CASE_NAME} ${backend} VARIANT SPAWN TRANSPORT spawn
+                IPC_SERVER_PATH "${CMAKE_BINARY_DIR}/libMobileGLServer.so" ${ARGN})
+    endforeach()
 endfunction()
 
 set(MOBILEGL_TRACE_CASES_CMAKE "${CMAKE_CURRENT_BINARY_DIR}/trace_cases.cmake")

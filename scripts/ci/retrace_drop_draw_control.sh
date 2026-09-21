@@ -84,14 +84,21 @@ if [ "${matched}" -lt 1 ]; then
   exit 1
 fi
 
-# A PREVIOUS RUN'S LINE MUST NEVER ARM THIS ONE. The library opens its log fopen(path, "w"), so
-# the replay truncates it - but only if the replay gets that far, and a run that died in the
-# loader would leave the baseline's log in place with a perfectly good "control armed" line in
-# it. Removing it first is the same rule split_negative_controls.sh's `reset` step follows.
+# A PREVIOUS RUN'S LINE MUST NEVER ARM THIS ONE. The CLIENT truncates this log once at open and
+# then appends (P6 made the sink O_APPEND, because under spawn a second process writes the same
+# file and two truncating handles overwrite each other's bytes) - but it only truncates if the
+# replay gets that far, and a run that died in the loader would leave the baseline's log in place
+# with a perfectly good "control armed" line in it. Removing it first is the same rule
+# split_negative_controls.sh's `reset` step follows.
 rm -f "${LIBRARY_LOG}"
 
 out="${CONTROL_TMPDIR}/retrace-drop-draw-output.txt"
-export MOBILEGL_TRANSPORT=inproc
+# THE TRANSPORT COMES FROM THE JOB, not from this file. retrace-split is a matrix over
+# {backend, case, transport} as of P6, and a control that hard-coded `inproc` would have gone on
+# proving something about the OTHER arm while the spawn arm ran unguarded. Default inproc so a
+# caller that sets nothing behaves exactly as before.
+transport="${SPLIT_TRANSPORT:-inproc}"
+export MOBILEGL_TRANSPORT="${transport}"
 export MOBILEGL_IPC_E2_DROP_DRAW=1
 "${CTEST}" -V --no-tests=error --timeout 10800 -R "${selector}" > "${out}" 2>&1
 control_rc=$?

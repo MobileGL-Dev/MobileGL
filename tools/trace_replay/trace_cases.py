@@ -12,8 +12,10 @@ CI_BACKENDS = ("DirectGLES", "DirectVulkan")
 # silent no-op, which is review finding N-4: `"split": true` mistyped as `"splitt": true` loaded
 # clean, the split subset became [], the GitHub matrix became {"include":[]}, and `retrace-split`
 # was skipped with no red anywhere. Every other way of getting `split` wrong already raised
-# (`"ci": false`, a backend list without DirectGLES, a non-bool value) - the typo was the one hole,
-# and it is the shape that makes a whole CI job quietly stop existing.
+# (`"ci": false`, a non-bool value) - the typo was the one hole, and it is the shape that makes a
+# whole CI job quietly stop existing. P6 inverted the key's default (see load_trace_case_manifest),
+# which closes the mirror-image hole: a case added later is IN the split subset unless it says
+# otherwise, so forgetting the key can no longer drop a case out of the lane.
 #
 # Adding a key means adding it here, deliberately, in the same commit. That is the point.
 KNOWN_CASE_KEYS = frozenset({
@@ -80,23 +82,32 @@ def load_trace_case_manifest(path=TRACE_CASES_JSON):
             raise ValueError(
                 f"{name} is marked verify but excluded from CI, so the verify matrix would drop it"
             )
-        # "split" opts a case into the MOBILEGL_TRANSPORT=inproc retrace subset, the same shape
-        # and the same reason as "verify" above: a typo has to be a loud manifest error in every
-        # consumer, not a subset that is quietly one case short. The split arm additionally runs
-        # DirectGLES ONLY - the server the arm exercises is Espryt's - so a case that excluded
-        # DirectGLES from CI would leave the split matrix with nothing to run.
-        split = merged.get("split", False)
+        # "split" IS AN OPT-OUT, NOT AN OPT-IN, and P6 inverted it deliberately.
+        #
+        # It began as an opt-in listing one case, because the split arm was one
+        # case's worth of work. Now that the whole CI matrix runs split, 40
+        # identical `"split": true` lines would carry no information AND would
+        # reinstate the exact hole the key was written to close: a case added
+        # later gets the monolith arms by default and is silently absent from
+        # the split ones. Absent is the one state nothing reds on.
+        #
+        # So: a CI case is in the split subset unless it says `"split": false`,
+        # and saying so is a reviewable claim that this trace cannot cross a
+        # role boundary. `ci: false` removes a case from CI entirely and takes
+        # its split arms with it - the subset is a SUBSET of the CI matrix, and
+        # a case CI never runs cannot be one CI runs split.
+        #
+        # The arm runs the case's OWN ci_backends, both of them by default. The
+        # DirectGLES-only requirement that used to live here is gone with the
+        # DirectGLES-only arm (tools/trace_replay/CMakeLists.txt says why).
+        split = merged.get("split", merged.get("ci", True))
         if not isinstance(split, bool):
             raise ValueError(f"split must be true or false for {name}")
         if split and not merged.get("ci", True):
             raise ValueError(
                 f"{name} is marked split but excluded from CI, so the split matrix would drop it"
             )
-        if split and "DirectGLES" not in ci_backends(merged):
-            raise ValueError(
-                f"{name} is marked split but does not run DirectGLES in CI; the split arm is "
-                f"DirectGLES-only, so the entry would be registered with no backend"
-            )
+        merged["split"] = split
         cases.append(merged)
     return {"defaults": defaults, "cases": cases}
 
@@ -154,11 +165,12 @@ def verify_trace_cases(cases):
 
 
 def split_trace_cases(cases):
-    """The subset the split (MOBILEGL_TRANSPORT=inproc) CI mode retraces.
+    """The subset the split CI modes retrace - inproc AND spawn, both backends.
 
-    P5's phase gate names exactly one: OpenRA, at SSIM >= 0.99. It is also the only fixture that
-    is hydrated locally, so keeping the subset explicit in the manifest is what stops a later
-    phase from widening the arm into an LFS fetch by accident.
+    P5's phase gate named exactly one case, OpenRA at SSIM >= 0.99, because one case was the
+    work. P6 runs the whole CI matrix across a process boundary, so the subset is now every CI
+    case that has not explicitly opted out. load_cases() has already resolved the default, so
+    "split" is present and boolean on every case by the time this reads it.
     """
     return [case for case in cases if case.get("split", False)]
 
@@ -193,12 +205,28 @@ def github_verify_matrix(cases):
     return github_test_matrix(verify_trace_cases(cases))
 
 
+# The two transports the split retrace lane runs. inproc is the CONTROL - same library, same
+# codec, same picture, server role on a thread HERE - and spawn is the claim. Both, always: a
+# spawn failure that inproc also shows is a phase bug, and one inproc does not show is a
+# transport bug, and collapsing the two makes that distinction unaskable.
+SPLIT_TRANSPORTS = ("inproc", "spawn")
+
+
 def github_split_matrix(cases):
-    """{backend, case} for the split arm. DirectGLES only - see split_trace_cases."""
+    """{backend, case, transport} for the split arm.
+
+    THREE DIMENSIONS, NOT TWO. The job used to take {backend, case} and hard-code
+    MOBILEGL_TRANSPORT=inproc in its own run block, so `spawn` had no way into CI at all. The
+    backend list is the case's own ci_backends - the same list the monolith matrix uses - so a
+    case restricted to one backend stays restricted here instead of being registered with a
+    backend it does not run.
+    """
     return {
         "include": [
-            {"backend": "DirectGLES", "case": case["name"]}
+            {"backend": backend, "case": case["name"], "transport": transport}
             for case in split_trace_cases(cases)
+            for backend in ci_backends(case)
+            for transport in SPLIT_TRANSPORTS
         ]
     }
 
