@@ -336,10 +336,32 @@ namespace MobileGL::MG_ConfigLoader {
         }
         // The three P6 forms. Recognised precisely, so the diagnostic can say "not yet"
         // rather than "unknown", which are different bugs on the operator's side.
-        if (lowered == "spawn" || lowered.compare(0, 5, "unix:") == 0 ||
-            lowered.compare(0, 5, "pipe:") == 0) {
-            MGLOG_E("Config: MOBILEGL_TRANSPORT='%s' names a transport P6 implements and P5 does "
-                    "not; staying on monolith. This run is NOT a split run.",
+        // P6 `sm`/`cp`: spawn is IMPLEMENTED. It launches a server process on a
+        // rendezvous of its own and connects to it - the two processes are
+        // independent, so this is `Dial = Connect` with a launcher attached
+        // rather than the fork-coupled shape ARCHITECTURE.md:488 described.
+        if (lowered == "spawn") {
+            MG_Config::Transport = MG_Config::TransportMode::Spawn;
+            // THE SAME SHAPE AS THE inproc LINE ABOVE, AND FOR THE SAME REASON.
+            // run_trace_case.cmake asserts on a distinctive sentence from this
+            // function rather than on `MOBILEGL_TRANSPORT=spawn` alone, because
+            // ConfigLoader logs an `Accepted env variable: KEY=VALUE` line for
+            // every MOBILEGL_* in EVERY build including the pull one - so the
+            // bare KEY=VALUE is satisfied by a monolith library that parsed
+            // nothing (review M-5). A spawn arm with no line of its own could
+            // only have been asserted with the inproc marker, which spawn never
+            // emits: the arm would have been red for a missing sentence rather
+            // than green for a working transport.
+            MGLOG_I("Config: MOBILEGL_TRANSPORT=spawn - the MGPipe record stream crosses a real "
+                    "ring to an apply thread in ANOTHER PROCESS");
+            return;
+        }
+        if (lowered.compare(0, 5, "unix:") == 0 || lowered.compare(0, 5, "pipe:") == 0) {
+            // unix: and pipe: remain P6+ - connecting to an endpoint SOMEBODY
+            // ELSE is listening on needs the server lifecycle to be somebody
+            // else's too, which is P12's. Named, never a silent degrade.
+            MGLOG_E("Config: MOBILEGL_TRANSPORT='%s' names a transport P6 does not implement yet; "
+                    "staying on monolith. This run is NOT a split run.",
                     value.c_str());
             MG_Config::Transport = MG_Config::TransportMode::Monolith;
             return;

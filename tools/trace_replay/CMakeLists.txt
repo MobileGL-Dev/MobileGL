@@ -465,6 +465,22 @@ function(add_trace_replay_split_test CASE_NAME)
     endif()
     add_trace_replay_test(${CASE_NAME} DirectGLES VARIANT SPLIT TRANSPORT inproc
             IPC_SERVER_PATH "${CMAKE_BINARY_DIR}/libMobileGLServer.so" ${ARGN})
+
+    # --- P6: the SPAWN arm, beside the inproc one rather than instead of it ------------------
+    #
+    # TWO ARMS, NOT ONE RENAMED. The inproc arm is the CONTROL: it is the same
+    # library, the same codec, the same applier and the same picture, with the
+    # only difference being which process the server role runs in. A spawn arm
+    # that had replaced it would have left "did the transport break it?" and
+    # "did the phase break it?" answerable only together.
+    #
+    # G14 is satisfied by construction - a name is added, none is removed - and
+    # the VARIANT gives it its own output and artifact directories, which is the
+    # half the comment above says is easy to forget: both arms write
+    # output/mobilegl.log, and that log is the ONLY valid refusal census because
+    # the console sink is compiled out of these configurations.
+    add_trace_replay_test(${CASE_NAME} DirectGLES VARIANT SPAWN TRANSPORT spawn
+            IPC_SERVER_PATH "${CMAKE_BINARY_DIR}/libMobileGLServer.so" ${ARGN})
 endfunction()
 
 set(MOBILEGL_TRACE_CASES_CMAKE "${CMAKE_CURRENT_BINARY_DIR}/trace_cases.cmake")

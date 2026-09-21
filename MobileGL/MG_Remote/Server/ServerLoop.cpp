@@ -1030,7 +1030,7 @@ namespace MobileGL::MG_Remote::Server {
             backend->SetWindowHandle(UnpackWindowHandle(frame));
             frame.ok = true;
             return MOBILEGL_OK;
-        case SurfaceControlOp::InitCapabilitiesInprocOnly:
+        case SurfaceControlOp::InitCapabilities:
             // Inproc-only (f0-egl §4.2): on the wire the ANSWER to this op is the CapsSnapshot
             // frame itself, so there is no SurfaceOp kind for it. The frame channel still has to
             // carry it inproc because InitCapabilities runs GL queries and therefore belongs to
@@ -1172,7 +1172,7 @@ namespace MobileGL::MG_Remote::Server {
 
     Bool ServerInitCapabilities() {
         SurfaceControlFrame frame;
-        frame.kind = SurfaceControlOp::InitCapabilitiesInprocOnly;
+        frame.kind = SurfaceControlOp::InitCapabilities;
         const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
         return rc == MOBILEGL_OK && frame.ok;
     }

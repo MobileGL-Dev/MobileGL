@@ -23,7 +23,7 @@ namespace MobileGL::MG_Remote::Server {
         case SurfaceControlOp::SetSwapInterval: return "SetSwapInterval";
         case SurfaceControlOp::ReleaseResources: return "ReleaseResources";
         case SurfaceControlOp::SetWindowHandle: return "SetWindowHandle";
-        case SurfaceControlOp::InitCapabilitiesInprocOnly: return "InitCapabilitiesInprocOnly";
+        case SurfaceControlOp::InitCapabilities: return "InitCapabilities";
         case SurfaceControlOp::SwapBuffersInprocOnly: return "SwapBuffersInprocOnly";
         case SurfaceControlOp::InitWindowSurfaceInprocOnly: return "InitWindowSurfaceInprocOnly";
         case SurfaceControlOp::ProbeForTesting: return "ProbeForTesting";
@@ -43,6 +43,10 @@ namespace MobileGL::MG_Remote::Server {
         case SurfaceControlOp::SetSwapInterval:
         case SurfaceControlOp::ReleaseResources:
         case SurfaceControlOp::SetWindowHandle:
+        // cp: the request half of InitCapabilities. Its ANSWER is a CapsSnapshot
+        // frame, which is why this row was missing; the request still has to
+        // cross, because under spawn the apply thread is in another process.
+        case SurfaceControlOp::InitCapabilities:
             return true;
         default:
             return false;

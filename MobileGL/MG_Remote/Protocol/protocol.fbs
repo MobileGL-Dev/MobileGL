@@ -176,6 +176,12 @@ enum SurfaceOpKind : ubyte {
   SetSwapInterval = 8,
   ReleaseResources = 9,
   SetWindowHandle = 10,
+  // P6 (package cp) appended this one. The draft held that InitCapabilities needs
+  // no wire form because "the CapsSnapshot answers it" - but a CapsSnapshot is the
+  // ANSWER and this is the REQUEST, and a spawn client has a live caller for it
+  // (Client/BackendObject_Remote.cpp). Without the tag the codec refused it by
+  // name and every spawned eglMakeCurrent failed with InprocOnlyOpOnTheWire.
+  InitCapabilities = 11,
 }
 
 enum WindowKind : ubyte {

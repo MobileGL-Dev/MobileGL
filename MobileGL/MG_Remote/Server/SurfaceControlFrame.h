@@ -55,12 +55,18 @@ namespace MobileGL::MG_Remote::Server {
         SetSwapInterval = 8,
         ReleaseResources = 9,
         SetWindowHandle = 10,
+        // P6 (cp) MOVED THIS ONE ONTO THE WIRE, and the old name was a lie the
+        // moment spawn existed. f0-egl reasoned that the wire's ANSWER to
+        // InitCapabilities is the CapsSnapshot frame, which is true and beside
+        // the point: the REQUEST still has to reach the apply thread, and under
+        // spawn that thread is in another process. Measured before the fix -
+        // every spawned eglMakeCurrent died at "surface op kind 11 cannot cross
+        // the wire (InprocOnlyOpOnTheWire)", one call after the backend came up.
+        InitCapabilities = 11,
         // INPROC-ONLY kinds: legal inside this process's frame channel, NEVER encodable onto the
         // wire (SurfaceOpCodec refuses them by name). f0-egl's census found no production caller
-        // for the two dead forwarders and a CapsSnapshot answer for the third; they ride the same
-        // frame channel because the function-pointer mailbox is GONE, not because they are wire
-        // ops.
-        InitCapabilitiesInprocOnly = 11, // the wire's answer is the CapsSnapshot frame itself
+        // for the two dead forwarders; they ride the same frame channel because the
+        // function-pointer mailbox is GONE, not because they are wire ops.
         SwapBuffersInprocOnly = 12,      // present travels as a record (the class-B Present emitter)
         InitWindowSurfaceInprocOnly = 13,// a client-side no-op; kept for the inproc test lane
         ProbeForTesting = 14,            // MG_Test's arbitrary-work seam through the same channel

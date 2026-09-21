@@ -57,6 +57,9 @@ namespace MobileGL::MG_Remote::Client {
         // is gone is a different fact from a peer that is slow, and only the
         // doorbell death latch may say which.
         constexpr Uint32 kRemoteControlTimeoutMs = 5000;
+        // The server has to create a backend before it binds, and a cold
+        // software rasteriser is not fast. Bounded, and a NAMED refusal at the end.
+        constexpr Uint32 kSpawnConnectTimeoutMs = 20000;
         // Teardown's drain. Also bounded, and for the same reason - table 3's order is
         // "publish and wait for the server to drain and acknowledge", and a wait with no
         // deadline there turns a lost record into a hung process exit.
@@ -614,6 +617,55 @@ namespace MobileGL::MG_Remote::Client {
                              /*startApplyThreadHere=*/true);
     }
 
+    MobileGLResult ClientSession::StartSpawned() {
+        if (m_started) {
+            return MOBILEGL_ERR_INVALID_ARGUMENT;
+        }
+        // A rendezvous nobody else can collide with. Independent processes need
+        // a NAME; making it per-process-per-instant is what stops two runs on
+        // one machine - which `ctest -j` produces by construction - finding each
+        // other's server.
+        const std::string endpoint = std::string("/tmp/mgl-") +
+                                     std::to_string(static_cast<long long>(::getpid())) + "-" +
+                                     std::to_string(reinterpret_cast<std::uintptr_t>(this)) +
+                                     ".sock";
+
+        const MobileGLResult launched =
+            Server::LaunchServer(std::string(MG_Config::Ipc.ServerPath.c_str()), endpoint,
+                                 &m_spawned);
+        if (launched != MOBILEGL_OK) {
+            return launched;
+        }
+
+        std::unique_ptr<Transport::SocketTransport> socket;
+        // The bounded connect retry is what tolerates the server still binding -
+        // and it is the CLIENT's, not the launcher's. An exhausted budget is a
+        // NAMED refusal; there is no monolith fallback from here.
+        const MobileGLResult connected =
+            Transport::SocketTransport::ConnectTo(endpoint, kSpawnConnectTimeoutMs, socket);
+        if (connected != MOBILEGL_OK) {
+            int exitCode = 0;
+            Server::ReapServer(m_spawned, 2000, &exitCode);
+            MGLOG_E("MG_Remote client: could not reach the server we launched at \"%s\" "
+                    "(rc=%d, server exit=%d)",
+                    endpoint.c_str(), static_cast<int>(connected), exitCode);
+            return connected;
+        }
+        // THE ONE FACT A MONOLITH OR inproc RUN CANNOT PRODUCE: a pid that is
+        // not ours. The ConfigLoader marker proves the VALUE resolved; this
+        // proves the SERVER ROLE LEFT THIS PROCESS, which is the whole claim the
+        // SPAWN arm of the retrace matrix makes. run_trace_case.cmake requires
+        // BOTH, so a spawn arm cannot go green on a transport that resolved and
+        // then quietly ran the server role locally.
+        const MobileGLResult started = StartOverSocket(std::move(socket));
+        if (started == MOBILEGL_OK) {
+            MGLOG_I("MG_Remote client: spawn ARMED - the server role runs in pid %d, reached at "
+                    "\"%s\"",
+                    m_spawned.pid, endpoint.c_str());
+        }
+        return started;
+    }
+
     MobileGLResult ClientSession::StartOverSocket(
         std::unique_ptr<Transport::SocketTransport> transport) {
         if (m_started) {
@@ -702,8 +754,9 @@ namespace MobileGL::MG_Remote::Client {
         // The slot travels in the sideband rather than being inferred from arrival
         // order, so a reordered or dropped offer is a NAMED mismatch instead of two
         // segments quietly swapped.
-        // Six offers: four segments, then the two bells (slots 4 and 5).
-        int fds[6] = {-1, -1, -1, -1, -1, -1};
+        // Seven offers: four segments, then THREE bell descriptors (slots 4..6).
+        // Three because each side parks on one and rings another; see ServerMain.
+        int fds[7] = {-1, -1, -1, -1, -1, -1, -1};
         {
             struct Sideband {
                 Uint32 slot;
@@ -717,7 +770,7 @@ namespace MobileGL::MG_Remote::Client {
                     }
                 }
             };
-            for (int received = 0; received < 6; ++received) {
+            for (int received = 0; received < 7; ++received) {
                 Sideband sideband{};
                 Uint64 sidebandSize = 0;
                 int fd = -1;
@@ -742,7 +795,7 @@ namespace MobileGL::MG_Remote::Client {
                 }
                 std::memcpy(&sideband, scratch.data(), sizeof(Sideband));
                 const bool isSegment = sideband.slot < 4;
-                if (sideband.slot >= 6 || fds[sideband.slot] >= 0 ||
+                if (sideband.slot >= 7 || fds[sideband.slot] >= 0 ||
                     (isSegment && sideband.bytes != announced[sideband.slot])) {
                     MGLOG_E("MG_Remote client: segment offer names slot %u with %llu bytes; "
                             "Welcome announced a different size or the slot is already filled",
@@ -770,8 +823,14 @@ namespace MobileGL::MG_Remote::Client {
             // WHICH BELL IS WHICH IS THE SESSION'S KNOWLEDGE, exactly as under
             // inproc: slot 4 is the pair end whose WRITE wakes the server, slot 5
             // is the one this side POLLS.
-            m_socketPeerBell = MakeUnique<Transport::SocketDoorbell>(fds[4], 1, true);
-            m_socketSelfBell = MakeUnique<Transport::SocketDoorbell>(fds[5], 1, true);
+            // PARK ON ONE END, RING THE OTHER - the same split the server makes,
+            // and for the same reason: a single-fd bell rings the PEER, so it
+            // cannot wake its own waiter.
+            //   fds[4] ring the SERVER      (ring-only, we never park on it)
+            //   fds[5] our park end
+            //   fds[6] ring OURSELVES
+            m_socketPeerBell = MakeUnique<Transport::SocketDoorbell>(-1, fds[4], 1, true);
+            m_socketSelfBell = MakeUnique<Transport::SocketDoorbell>(fds[5], fds[6], 1, true);
         }
 
         // `cp`: from here the twelve EGL forwarders cross the socket instead of
@@ -1116,6 +1175,25 @@ namespace MobileGL::MG_Remote::Client {
         // process that no longer has a session. During the whole span above, the raised flag made
         // any routed call abort by name instead.
         ReinstallMonolithAfterTeardown();
+        // P6: the server we launched. Closing the transport is what it sees as
+        // EOF and EOF is its whole exit condition, so the order is transport
+        // first, reap second - and the reap is BOUNDED, because a server that
+        // will not go is a different fact from one that is slow and only the
+        // exit code can say which.
+        if (m_spawned.pid >= 0) {
+            if (m_socketTransport) {
+                m_socketTransport->Shutdown();
+            }
+            int exitCode = 0;
+            if (Server::ReapServer(m_spawned, 3000, &exitCode) != MOBILEGL_OK) {
+                MGLOG_W("MG_Remote client: the spawned server (pid %d) did not exit within 3 s",
+                        m_spawned.pid);
+            } else if (exitCode != 0) {
+                MGLOG_W("MG_Remote client: the spawned server exited %d", exitCode);
+            }
+        }
+        Server::ServerLoopInstance().SetRemoteControlSink(nullptr, nullptr);
+
     }
 
     Wire::PipeWireEncoder& ClientSession::Encoder() { return m_encoder; }

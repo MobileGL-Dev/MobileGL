@@ -43,7 +43,9 @@
 #include "ServerSession.h"
 #include "SurfaceControlFrame.h"
 
+#include <Config.h>  // MG_Config::Transport - D1 pins it to Spawn in this process
 #include <MG_Backend/ServerRole.h>
+#include <Init.h>   // MG_ConfigLoader::Init - the child loads its own config (step 1.5)
 
 #include <cstdio>
 #include <cstdlib>
@@ -147,6 +149,40 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
     }
     WireLogError("MG_Remote server: pid=%d listening on \"%s\"", selfPid, endpoint.c_str());
 
+    // ---- 1.5. CONFIG, AND THEN D1.
+    //
+    // TWO SEPARATE DEFECTS LIVED HERE, and both were silent.
+    //
+    // (a) NOTHING LOADED THE CONFIG AT ALL. mobilegl_server_main calls
+    //     InitServerRoleForSpawn directly rather than MobileGL::Initialize, and
+    //     MG_ConfigLoader::Init is a step of the latter - so every MG_Config
+    //     value in this process was its STATIC DEFAULT. MOBILEGL_BACKEND_TYPE
+    //     survives the launcher's scrub on purpose, and it was being read by
+    //     nobody: a DirectVulkan session would have brought up a DirectGLES
+    //     server and then disagreed with its client about which backend the
+    //     capability mask describes.
+    //
+    // (b) THE CHILD RESOLVED Transport == Monolith. CONTRACT-P6 §3.1 (D1) says
+    //     it must read as Spawn, and a6 measured the cost of getting it wrong:
+    //     226 live lines test `Transport != Monolith` to select the SERVER arm,
+    //     148 of them in MG_Backend. Monolith flips all of them to frontend glue
+    //     in the one process that has no frontend. Observed, exactly as
+    //     predicted: TextureImpl::UnitTexturesByHandle() answered false, Clear
+    //     took the legacy arm that dereferences borrowed FRONTEND slot pointers,
+    //     and the apply thread took a SIGSEGV inside SyncNeccessaryTextures on
+    //     the first Clear record of the OpenRA retrace.
+    //
+    // IT IS SET HERE AND NOT THROUGH THE ENVIRONMENT because the environment is
+    // where it must NOT appear: LooksLikeAClientEnvironment above exits 65 if
+    // MOBILEGL_TRANSPORT survived into this process, and that check is
+    // anti-recursion catch (b). D1's own answer is that Dial - not Transport -
+    // is the anti-recursion axis, so Transport is free to say what is true.
+    MobileGL::MG_ConfigLoader::Init();
+    MobileGL::MG_Config::Transport = MobileGL::MG_Config::TransportMode::Spawn;
+    WireLogError("MG_Remote server: pid=%d config loaded, backend=%d, Transport pinned to Spawn "
+                 "(D1: this process IS the server arm)",
+                 selfPid, static_cast<int>(MobileGL::MG_Config::ActiveBackendType));
+
     // ---- 2. the backend, through the SAME entry point the inproc server role
     // uses (MG_Backend/ServerRole.h). No EGL yet: the context is created on the
     // apply thread when the client's first eglMakeCurrent crosses.
@@ -188,8 +224,21 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
         std::fflush(nullptr);
         ::_exit(74);
     }
-    SocketDoorbell selfBell(serverBell[0], /*code=*/1, /*ownsFd=*/true);
-    SocketDoorbell peerBell(clientBell[0], /*code=*/1, /*ownsFd=*/true);
+    // PARK AND NOTIFY ON DIFFERENT DESCRIPTORS, and this is not a refinement -
+    // the single-fd form CANNOT WAKE ITSELF. send() on one end of a socketpair
+    // is delivered to the OTHER end, so a one-fd bell built on serverBell[0]
+    // writes to serverBell[1] and polls serverBell[0]: correct for waking a
+    // PEER, useless for waking a thread in this process. The server needs
+    // exactly that, because the control pump posts into the apply thread's
+    // mailbox and then has to ring the bell that thread is parked on. Measured
+    // symptom when it was wrong: every eglInitialize crossed, landed in the
+    // mailbox, and timed out at 5 s because nothing ever woke mgl-srv-apply.
+    SocketDoorbell selfBell(/*parkFd=*/serverBell[0], /*notifyFd=*/serverBell[1], /*code=*/1,
+                            /*ownsFds=*/true);
+    // RINGS ONLY. The client parks on clientBell[0]; writing clientBell[1] is
+    // what reaches it. parkFd = -1 says in the type that this side never waits.
+    SocketDoorbell peerBell(/*parkFd=*/-1, /*notifyFd=*/clientBell[1], /*code=*/1,
+                            /*ownsFds=*/true);
 
     Server::ServerSession& session = Server::ServerSessionInstance();
     session.SetExternalDoorbells(&selfBell, &peerBell);
@@ -237,10 +286,15 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
                 ::_exit(69);
             }
         }
-        // Slots 4 and 5 are the bells. The client gets the OTHER end of each pair:
-        // it writes to the server's bell and polls its own.
-        const int bellFds[2] = {serverBell[1], clientBell[1]};
-        for (std::uint32_t index = 0; index < 2; ++index) {
+        // SLOTS 4, 5 AND 6 ARE THE BELLS - three, not two, and the third is the
+        // one the two-fd form above forces:
+        //   4  serverBell[1]  the client's handle to RING THE SERVER
+        //   5  clientBell[0]  the client's PARK end
+        //   6  clientBell[1]  the client's handle to ring ITSELF, for the same
+        //                     reason the server needs serverBell[1]
+        // Sharing DUPs, so the descriptors these bells own stay valid here.
+        const int bellFds[3] = {serverBell[1], clientBell[0], clientBell[1]};
+        for (std::uint32_t index = 0; index < 3; ++index) {
             Sideband sideband{4 + index, 0};
             if (control->ShareFd(bellFds[index], MobileGLByteSpan{&sideband, sizeof(sideband)}) !=
                 MOBILEGL_OK) {
@@ -250,8 +304,9 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
                 ::_exit(69);
             }
         }
-        ::close(serverBell[1]);
-        ::close(clientBell[1]);
+        // clientBell[0] is the CLIENT's park end and no bell here owns it; the
+        // other three belong to selfBell and peerBell and are closed with them.
+        ::close(clientBell[0]);
     }
 
     // ---- 7. the apply thread. It holds the native context for its whole life,
@@ -264,7 +319,7 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
     }
 
     WireLogError("MG_Remote server: pid=%d transport=spawn role=server ready "
-                 "(backend up, six descriptors handed over, apply thread running)",
+                 "(backend up, seven descriptors handed over, apply thread running)",
                  selfPid);
 
     // ---- 8. the control pump. EOF is the whole exit condition: no timeout may

@@ -226,6 +226,26 @@ namespace MobileGL::MG_Backend {
         // the client half here.
         Bool InitSplitRoles() {
             using namespace MobileGL::MG_Remote;
+
+            // SPAWN: THE SERVER ROLE IS NOT IN THIS PROCESS. Steps 1 and 2 -
+            // the backend and the two CallMask halves - happen in the server,
+            // which ran InitServerRoleForSpawn before it accepted us. Running
+            // them here as well would build a second BackendObject in the one
+            // process that must not have one, and would publish a capability
+            // mask computed from the WRONG backend's function table.
+            if (MG_Config::Transport == MG_Config::TransportMode::Spawn) {
+                const MobileGLResult started = Client::ClientSessionInstance().StartSpawned();
+                if (started != MOBILEGL_OK) {
+                    MGLOG_E("MG_Remote: the spawn session failed to start (rc=%d); MobileGL will "
+                            "NOT fall back to monolith - a lane named split that ran monolith is "
+                            "the one failure this phase is built to make impossible",
+                            static_cast<int>(started));
+                    return false;
+                }
+                pActiveBackendObject = MakeUnique<MG_Remote::Client::BackendObject_Remote>();
+                return true;
+            }
+
             if (!InitServerRoleCommon()) {
                 return false;
             }
@@ -308,6 +328,19 @@ namespace MobileGL::MG_Backend {
                 MGLOG_W("Failed to initialize MobileGL backend libraries for the remote object");
                 return;
             }
+            // P6: BOTH CHECKS BELOW ARE STATEMENTS ABOUT THE SERVER'S PROCESS, and under
+            // spawn that is not this one. Their own wording says so - "a mask is a
+            // statement about THIS BACKEND", "the table the SERVER'S BACKEND registered at
+            // step 1" - and in a spawn client there is no backend and never was a table, so
+            // MGPipeGetResourceOps() is null by construction and the first check fires on a
+            // correct session. It did, on the first spawn retrace ever run.
+            //
+            // The checks are NOT weakened: the server runs the step-2 one itself, inside
+            // InitServerRoleForSpawn, against its own freshly registered table - which is the
+            // process where the question has an answer. What is lost under spawn is the
+            // step-5 re-run's ability to catch a table REPLACED between accept and here, and
+            // that is a question about one address space; it cannot be asked across two.
+            if (MG_Config::Transport != MG_Config::TransportMode::Spawn) {
             // m-6, re-worded per review v2 N-8. The honesty cross-check runs a SECOND time, now
             // that step 4's pActiveBackendObject (the client's BackendObject_Remote) exists and
             // its Initialize() has run inside InitSpecificBackendLibs. What the re-run CAN catch
@@ -328,6 +361,7 @@ namespace MobileGL::MG_Backend {
                         static_cast<const void*>(MG_Pipe::MGPipeGetResourceOps()),
                         static_cast<const void*>(g_resourceOpsAtStep2));
                 std::abort();
+            }
             }
             LogBackendInfo();
             return;

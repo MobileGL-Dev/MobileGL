@@ -212,7 +212,7 @@ namespace MobileGL::MG_Remote::Transport {
     // -----------------------------------------------------------------------
 
     SocketDoorbell::SocketDoorbell(int fd, std::uint8_t code, bool ownsFd)
-        : m_fd(fd), m_code(code), m_ownsFd(ownsFd) {
+        : m_fd(fd), m_notifyFd(fd), m_code(code), m_ownsFd(ownsFd) {
 #if defined(SO_NOSIGPIPE)
         // The per-socket form of MSG_NOSIGNAL, on the platforms that lack the per-call one:
         // a Notify to a hung-up peer must come back as EPIPE, not as a fatal signal.
@@ -223,19 +223,44 @@ namespace MobileGL::MG_Remote::Transport {
 #endif
     }
 
+    // The two-fd form: park on one descriptor, ring another. See the header for
+    // why the server needs it and the cross-process form cannot provide it.
+    SocketDoorbell::SocketDoorbell(int parkFd, int notifyFd, std::uint8_t code, bool ownsFds)
+        : m_fd(parkFd), m_notifyFd(notifyFd), m_code(code), m_ownsFd(ownsFds) {
+#if defined(SO_NOSIGPIPE)
+        for (int fd : {m_fd, m_notifyFd}) {
+            if (fd >= 0) {
+                const int one = 1;
+                (void)::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+            }
+        }
+#endif
+    }
+
     SocketDoorbell::~SocketDoorbell() {
-        if (m_ownsFd && m_fd >= 0) {
+        if (!m_ownsFd) {
+            return;
+        }
+        if (m_fd >= 0) {
             ::close(m_fd);
+        }
+        // Only when they are different: the single-fd form has m_notifyFd == m_fd
+        // and closing it twice is a double close, which on a busy process closes
+        // somebody else's descriptor rather than failing.
+        if (m_notifyFd >= 0 && m_notifyFd != m_fd) {
+            ::close(m_notifyFd);
         }
     }
 
     void SocketDoorbell::Notify() {
-        if (m_fd < 0) {
+        // The NOTIFY descriptor, not the park one: a ring-only bell has no park
+        // fd at all and must still be able to ring.
+        if (m_notifyFd < 0) {
             return;
         }
         const std::uint8_t byte = m_code;
         for (;;) {
-            const ssize_t written = ::send(m_fd, &byte, 1, MSG_DONTWAIT | MSG_NOSIGNAL);
+            const ssize_t written = ::send(m_notifyFd, &byte, 1, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (written == 1) {
                 return;
             }
@@ -259,6 +284,11 @@ namespace MobileGL::MG_Remote::Transport {
     }
 
     bool SocketDoorbell::Park(std::uint32_t timeoutMs) {
+        // A ring-only bell was never a waiter. Saying so immediately is the
+        // honest answer; blocking forever on -1 would be a hang with no cause.
+        if (m_fd < 0) {
+            return false;
+        }
         if (m_fd < 0 || m_dead) {
             return false;
         }

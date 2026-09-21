@@ -262,7 +262,34 @@ if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "
         # DEBUG to debug a split failure. The sentence below exists only in
         # ConfigLoader::InitTransport's InProcess arm, which exists only under
         # MOBILEGL_BUILD_DISAGGREGATED.
-        set(split_expected_marker "MOBILEGL_TRANSPORT=inproc - the MGPipe record stream")
+        #
+        # ONE ROW PER TRANSPORT THIS RUNNER ADMITS. A transport with no row is a
+        # FATAL below rather than a fall-through, because the fall-through is the
+        # exact accident this whole block exists to prevent: an arm that named a
+        # transport nobody asserted on and went green having proved nothing.
+        #
+        # THE SPAWN ROW CARRIES A SECOND SENTENCE, and it is the stronger half.
+        # The ConfigLoader marker proves the VALUE RESOLVED - it is a statement
+        # about a parser. `spawn ARMED - the server role runs in pid N` is
+        # written by ClientSession::StartSpawned only after the connect and the
+        # handshake succeeded, and it carries a pid that is not this process's.
+        # inproc resolves its own marker while running the server role on a
+        # thread HERE; nothing on that path can write this one.
+        set(split_expected_second "")
+        if("$ENV{MOBILEGL_TRANSPORT}" STREQUAL "inproc")
+            set(split_expected_marker "MOBILEGL_TRANSPORT=inproc - the MGPipe record stream")
+        elseif("$ENV{MOBILEGL_TRANSPORT}" STREQUAL "spawn")
+            set(split_expected_marker "MOBILEGL_TRANSPORT=spawn - the MGPipe record stream")
+            set(split_expected_second "spawn ARMED - the server role runs in pid ")
+        else()
+            message(FATAL_ERROR
+                    "MOBILEGL_TRANSPORT=$ENV{MOBILEGL_TRANSPORT} is set for ${split_case} and this "
+                    "runner has no marker for it, so the run could not be checked. ConfigLoader "
+                    "recognises monolith|inproc|spawn|unix:<path>|pipe:<name> and REFUSES the last "
+                    "two BY NAME, staying on monolith - a run that asked for one of those would "
+                    "have replayed monolith. Add a row above when the transport lands; do not let "
+                    "an unasserted transport reach a green.")
+        endif()
         string(FIND "${split_log}" "${split_expected_marker}" split_armed_at)
         if(split_armed_at EQUAL -1)
             # Say which transport was actually asked for. ConfigLoader REFUSES spawn / unix: /
@@ -270,11 +297,14 @@ if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "
             # has a different diagnosis from one that set inproc against a monolith library, and
             # the old message named `inproc` either way.
             set(split_refusal "")
-            if(NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "inproc")
+            if("$ENV{MOBILEGL_TRANSPORT}" STREQUAL "spawn")
                 set(split_refusal
-                        " NOTE: this run asked for '$ENV{MOBILEGL_TRANSPORT}', which P5 does not "
-                        "implement - ConfigLoader recognises spawn / unix: / pipe: and REFUSES them by "
-                        "name, staying on monolith. Only 'inproc' can resolve in P5.")
+                        " NOTE: this run asked for 'spawn'. The server is a SEPARATE PROCESS here, so "
+                        "the two ways to get this far with no marker are a library that has no spawn "
+                        "arm (pre-P6) and a launcher that never resolved the transport at all. "
+                        "MOBILEGL_IPC_SERVER_PATH must point at a libMobileGLServer.so built from this "
+                        "same tree; LaunchServer REFUSES an unresolvable image BY NAME and never falls "
+                        "back to running the server role locally.")
             endif()
             message(FATAL_ERROR
                     "MOBILEGL_TRANSPORT=$ENV{MOBILEGL_TRANSPORT} is set for ${split_case} and the library "
@@ -287,6 +317,23 @@ if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "
                     "artifact is the one at ${MOBILEGL_LIBRARY}, and that MOBILEGL_LOG_ACTIVE_LEVEL "
                     "admits INFO (at WARN or above the line is compiled out and this reds for no "
                     "defect).${split_refusal}")
+        endif()
+        # ... and the half that a same-process run cannot satisfy. Checked
+        # SEPARATELY from the marker above so the two failures read differently:
+        # no marker means the transport never resolved, while marker-but-no-pid
+        # means it resolved and the session never came up across the boundary.
+        if(NOT "${split_expected_second}" STREQUAL "")
+            string(FIND "${split_log}" "${split_expected_second}" split_second_at)
+            if(split_second_at EQUAL -1)
+                message(FATAL_ERROR
+                        "${split_case}: ${mobilegl_log} reports MOBILEGL_TRANSPORT="
+                        "$ENV{MOBILEGL_TRANSPORT} resolved, but carries no "
+                        "\"${split_expected_second}\". That sentence is written by "
+                        "ClientSession::StartSpawned AFTER the launch, the connect and the handshake "
+                        "all succeeded, and the pid in it is the SERVER's - it is the only evidence "
+                        "in this log that the server role left this process. Without it the run "
+                        "resolved a transport and then replayed something else.")
+            endif()
         endif()
         # The refusal census. Recorded on every split run, pass or fail.
         file(STRINGS "${mobilegl_log}" split_fatals REGEX "Fatal\\{")

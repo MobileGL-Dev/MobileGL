@@ -397,6 +397,23 @@ namespace MobileGL::MG_Remote::Transport {
         // When `ownsFd` the descriptor is closed with this object. `code` is
         // the byte written by Notify.
         SocketDoorbell(int fd, std::uint8_t code, bool ownsFd);
+
+        // P6: PARK AND NOTIFY ON DIFFERENT DESCRIPTORS.
+        //
+        // The single-fd form above is the cross-process one: send() on this end
+        // is delivered to the PEER's end, so the peer's own SocketDoorbell is
+        // what receives it. That is correct, and it is also why the single-fd
+        // form cannot wake ITSELF - and the server needs exactly that, because
+        // its control pump posts into the apply thread's mailbox and must ring
+        // the bell that thread is parked on. Under inproc CondVarDoorbell has no
+        // such split: notify and wait are the same object.
+        //
+        // So: `parkFd` is polled, `notifyFd` is written. For a socketpair where
+        // this side holds both ends they are [0] and [1], and a peer that must
+        // also be able to ring it gets a DUP of [1]. `parkFd` may be -1 for a
+        // bell this side only ever RINGS - Park then returns immediately, which
+        // is the honest answer for an object that was never a waiter.
+        SocketDoorbell(int parkFd, int notifyFd, std::uint8_t code, bool ownsFds);
         ~SocketDoorbell() override;
 
         void Notify() override;
@@ -413,7 +430,8 @@ namespace MobileGL::MG_Remote::Transport {
         // afterwards.
         std::uint64_t Drain();
 
-        int m_fd;
+        int m_fd;       // polled
+        int m_notifyFd; // written; equals m_fd in the single-fd (cross-process) form
         std::uint8_t m_code;
         bool m_ownsFd;
         bool m_dead = false;

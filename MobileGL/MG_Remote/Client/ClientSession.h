@@ -38,6 +38,7 @@
 #include <Config.h>
 #include <MG_Pipe/MGPipe.h>
 
+#include "../Server/ServerSpawn.h"
 #include "../Server/SurfaceControlFrame.h"
 #include "../Transport/Doorbell.h"
 #include "../Transport/EventRing.h"
@@ -108,6 +109,12 @@ namespace MobileGL::MG_Remote::Client {
         // RUNNING server process. The two bells arrive over it, with the four
         // segments, as SCM_RIGHTS offers - nothing here is inherited, because
         // the two processes were started independently.
+        // P6: launch a server process and connect to it. The two are
+        // INDEPENDENT - the launcher hands over a rendezvous name and nothing
+        // else - so this is the same code path a client would use against a
+        // server that was already running when it started.
+        MobileGLResult StartSpawned();
+
         MobileGLResult StartOverSocket(std::unique_ptr<Transport::SocketTransport> transport);
 
         MobileGLResult StartOverTransportPair(std::unique_ptr<Transport::InProcessTransport> clientEnd,
@@ -390,6 +397,9 @@ namespace MobileGL::MG_Remote::Client {
         // cp: one control op at a time, and the client's own seq space.
         std::mutex m_remoteControlMutex;
         Uint64 m_remoteControlSeq = 0;
+
+        // The server we launched, if we launched one. Reaped in Stop().
+        Server::LaunchedServer m_spawned;
 
         std::unique_ptr<Transport::SocketTransport> m_socketTransport;
         std::unique_ptr<Transport::Doorbell> m_socketSelfBell;

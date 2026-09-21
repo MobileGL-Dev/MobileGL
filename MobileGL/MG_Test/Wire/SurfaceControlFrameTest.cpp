@@ -137,8 +137,11 @@ TEST(SurfaceControlFrameTest, ExactlyTheTenFramedOpsHaveWireKindsAndTheValuesAre
     EXPECT_EQ(static_cast<unsigned>(::MobileGL::Wire::SurfaceOpKind::SetWindowHandle), 10u);
 
     // The inproc-only kinds refuse the wire by name, both directions.
+    // InitCapabilities WAS in this list and cp took it out; the eleventh op has a
+    // test of its own below rather than a line here, because this test's name is
+    // a statement about ten and G14 does not let a name be traded for another.
     const SurfaceControlOp inprocOnly[] = {
-        SurfaceControlOp::None, SurfaceControlOp::InitCapabilitiesInprocOnly,
+        SurfaceControlOp::None,
         SurfaceControlOp::SwapBuffersInprocOnly, SurfaceControlOp::InitWindowSurfaceInprocOnly,
         SurfaceControlOp::ProbeForTesting,
     };
@@ -151,6 +154,37 @@ TEST(SurfaceControlFrameTest, ExactlyTheTenFramedOpsHaveWireKindsAndTheValuesAre
     EXPECT_FALSE(SurfaceControlOpForWireKind(::MobileGL::Wire::SurfaceOpKind::None, &op));
     EXPECT_FALSE(SurfaceControlOpForWireKind(static_cast<::MobileGL::Wire::SurfaceOpKind>(200), &op))
         << "a wire kind the schema does not define must not decode into an op";
+}
+
+TEST(SurfaceControlFrameTest, TheEleventhFramedOpIsInitCapabilitiesAndItCrossesTheWire) {
+    // cp. The op above this one in the enum, SetWindowHandle, was fc's last
+    // append; this is P6's. It gets a test rather than a row in the ten-op table
+    // because the failure it guards is specific and was REAL: with no wire kind
+    // the codec answered InprocOnlyOpOnTheWire, BackendObject_Remote's
+    // InitCapabilities call failed, MakeEGLCurrent reported "InitCapabilities
+    // failed", and the OpenRA spawn retrace died one call after the server's
+    // backend had come up green. Nothing about that read as a missing enum row.
+    ::MobileGL::Wire::SurfaceOpKind kind;
+    ASSERT_TRUE(WireKindForSurfaceControlOp(SurfaceControlOp::InitCapabilities, &kind))
+        << "InitCapabilities lost its wire kind; a spawn client cannot ask for caps";
+    EXPECT_EQ(static_cast<unsigned>(kind), 11u) << "wire ABI: append-only, and 11 is taken";
+    EXPECT_EQ(static_cast<unsigned>(SurfaceControlOp::InitCapabilities), 11u);
+
+    SurfaceControlOp back;
+    ASSERT_TRUE(SurfaceControlOpForWireKind(kind, &back))
+        << "the decode range's upper bound did not move with the append, so the new tag "
+           "reads as out-of-range - which surfaces as Fatal{ProtocolCorruption}, not as the "
+           "missing row it is";
+    EXPECT_EQ(back, SurfaceControlOp::InitCapabilities);
+
+    // And it really encodes. WireKindForSurfaceControlOp answering yes is not the
+    // same fact as the encoder accepting the frame: the refusal the client hit
+    // came out of EncodeSurfaceOpFrame.
+    flatbuffers::FlatBufferBuilder builder(256);
+    SurfaceControlFrame frame;
+    frame.kind = SurfaceControlOp::InitCapabilities;
+    frame.seq = 7;
+    EXPECT_EQ(EncodeSurfaceOpFrame(frame, &builder), SurfaceWireError::None);
 }
 
 TEST(SurfaceControlFrameTest, WindowBackendAndWireWindowKindMapExplicitlyBothWays) {
@@ -268,8 +302,6 @@ TEST(SurfaceControlFrameTest, MalformedAndInprocOnlyFramesRefuseToEncode) {
     frame.kind = SurfaceControlOp::ProbeForTesting;
     EXPECT_EQ(EncodeSurfaceOpFrame(frame, &builder), SurfaceWireError::InprocOnlyOpOnTheWire);
     frame.kind = SurfaceControlOp::SwapBuffersInprocOnly;
-    EXPECT_EQ(EncodeSurfaceOpFrame(frame, &builder), SurfaceWireError::InprocOnlyOpOnTheWire);
-    frame.kind = SurfaceControlOp::InitCapabilitiesInprocOnly;
     EXPECT_EQ(EncodeSurfaceOpFrame(frame, &builder), SurfaceWireError::InprocOnlyOpOnTheWire);
     frame.kind = SurfaceControlOp::InitWindowSurfaceInprocOnly;
     EXPECT_EQ(EncodeSurfaceOpFrame(frame, &builder), SurfaceWireError::InprocOnlyOpOnTheWire);

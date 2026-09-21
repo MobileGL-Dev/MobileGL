@@ -8,6 +8,8 @@
 
 #include "../../Includes.h"
 
+#include <cstring> // std::strcmp, for the spawned-server role check in InitFile
+
 namespace MobileGL {
     namespace MG_Util::Debug {
         static FILE* s_logFile = nullptr;
@@ -70,7 +72,32 @@ namespace MobileGL {
                     logPath = MOBILEGL_LOG_FILE_PATH;
                 }
                 if (logPath && *logPath) {
-                    s_logFile = std::fopen(logPath, "w");
+                    // "a", NOT "w", WHENEVER A SECOND PROCESS SHARES THIS PATH.
+                    //
+                    // Under transport=spawn the server is a separate process
+                    // writing the same MOBILEGL_LOG_FILE_PATH, and two "w"
+                    // handles each carry their OWN file offset: both start at 0
+                    // and overwrite each other's bytes. The result is not
+                    // interleaved, it is CORRUPT - observed as half-lines like
+                    // `ote client: CapsMirror generation 1 adopted` while
+                    // diagnosing the spawn retrace, and as the server's whole
+                    // startup block vanishing under the client's later writes.
+                    // O_APPEND makes each write atomic at the end of the file,
+                    // which is what makes the log a usable census across both
+                    // processes - and run_trace_case.cmake's Fatal{ count reads
+                    // exactly this file.
+                    //
+                    // THE CLIENT STILL TRUNCATES ONCE, so a fresh run does not
+                    // read as a growing pile of old ones. The server never does:
+                    // it is always started by a client that has already opened
+                    // this path, and a truncate from the far side would delete
+                    // the very startup lines a failed session needs.
+                    const char* role = std::getenv("MOBILEGL_IPC_ROLE");
+                    const bool isSpawnedServer = role != nullptr && std::strcmp(role, "server") == 0;
+                    if (!isSpawnedServer) {
+                        if (FILE* truncate = std::fopen(logPath, "w")) std::fclose(truncate);
+                    }
+                    s_logFile = std::fopen(logPath, "a");
                 }
             }
 #endif

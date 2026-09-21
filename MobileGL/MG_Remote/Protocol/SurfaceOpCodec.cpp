@@ -47,9 +47,13 @@ namespace MobileGL::MG_Remote {
                           static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::ReleaseResources));
         static_assert(static_cast<Uint8>(SurfaceControlOp::SetWindowHandle) ==
                           static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::SetWindowHandle));
+        // cp's one schema addition, on the same append-only terms.
+        static_assert(static_cast<Uint8>(SurfaceControlOp::InitCapabilities) ==
+                          static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::InitCapabilities));
         static_assert(static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::SetSwapInterval) == 8 &&
                       static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::ReleaseResources) == 9 &&
-                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::SetWindowHandle) == 10);
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::SetWindowHandle) == 10 &&
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::InitCapabilities) == 11);
         static_assert(static_cast<Uint8>(::MobileGL::Wire::WindowKind::MetalLayer) == 6);
 
         bool OpNeedsAWindowBackend(SurfaceControlOp op) {
@@ -80,8 +84,12 @@ namespace MobileGL::MG_Remote {
     }
 
     bool SurfaceControlOpForWireKind(::MobileGL::Wire::SurfaceOpKind kind, SurfaceControlOp* out) {
+        // THE UPPER BOUND IS THE LAST APPENDED KIND, and it moves with every
+        // append or the new tag decodes as out-of-range - which reads as
+        // Fatal{ProtocolCorruption} at ServerApplyWireSurfaceOp rather than as
+        // the missing row it is.
         if (::flatbuffers::IsOutRange(kind, ::MobileGL::Wire::SurfaceOpKind::InitializeDisplay,
-                                      ::MobileGL::Wire::SurfaceOpKind::SetWindowHandle)) {
+                                      ::MobileGL::Wire::SurfaceOpKind::InitCapabilities)) {
             return false;
         }
         const SurfaceControlOp op = static_cast<SurfaceControlOp>(static_cast<Uint8>(kind));

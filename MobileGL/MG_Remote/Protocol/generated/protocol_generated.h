@@ -125,11 +125,12 @@ enum class SurfaceOpKind : uint8_t {
   SetSwapInterval = 8,
   ReleaseResources = 9,
   SetWindowHandle = 10,
+  InitCapabilities = 11,
   MIN = None,
-  MAX = SetWindowHandle
+  MAX = InitCapabilities
 };
 
-inline const SurfaceOpKind (&EnumValuesSurfaceOpKind())[11] {
+inline const SurfaceOpKind (&EnumValuesSurfaceOpKind())[12] {
   static const SurfaceOpKind values[] = {
     SurfaceOpKind::None,
     SurfaceOpKind::InitializeDisplay,
@@ -141,13 +142,14 @@ inline const SurfaceOpKind (&EnumValuesSurfaceOpKind())[11] {
     SurfaceOpKind::ReleaseCurrent,
     SurfaceOpKind::SetSwapInterval,
     SurfaceOpKind::ReleaseResources,
-    SurfaceOpKind::SetWindowHandle
+    SurfaceOpKind::SetWindowHandle,
+    SurfaceOpKind::InitCapabilities
   };
   return values;
 }
 
 inline const char * const *EnumNamesSurfaceOpKind() {
-  static const char * const names[12] = {
+  static const char * const names[13] = {
     "None",
     "InitializeDisplay",
     "CreateWindowSurface",
@@ -159,13 +161,14 @@ inline const char * const *EnumNamesSurfaceOpKind() {
     "SetSwapInterval",
     "ReleaseResources",
     "SetWindowHandle",
+    "InitCapabilities",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameSurfaceOpKind(SurfaceOpKind e) {
-  if (::flatbuffers::IsOutRange(e, SurfaceOpKind::None, SurfaceOpKind::SetWindowHandle)) return "";
+  if (::flatbuffers::IsOutRange(e, SurfaceOpKind::None, SurfaceOpKind::InitCapabilities)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesSurfaceOpKind()[index];
 }
