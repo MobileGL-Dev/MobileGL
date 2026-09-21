@@ -2433,19 +2433,16 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_TRANSPORT=inproc"
         "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+    # Every entry here is green, R11F_G11F_B10F packed-float mip generation included: the GPU
+    # shader blit retires the named native-format refusal, so GenerateMipmapPackedFloatPixels
+    # carries its siblings' label and their pixels assertion.
     foreach(fmSlot ComputeImageStoreThroughViewPreservesOtherRootLayer EnabledVertexBufferDrawKeepsNamedP7Fatal SrgbDrawTracksFramebufferConversion Texture1DFramebufferClearPixels VertexIdSamplerAndScalarUniformPixels ComputeImageStoreFramebufferPixels PartialTextureUploadPreservesGpuClearPixels TextureViewClearTargetsItsRootMipAndLayer ClearBufferfiPixels ClearBufferfvPixels ClearBufferivPixels ClearBufferuivPixels ClearNamedFramebufferfiPixels ClearNamedFramebufferfvPixels ClearNamedFramebufferivPixels ClearNamedFramebufferuivPixels CopyTexImage2DPixels CopyTexSubImage2DPixels GenerateMipmapPixels GenerateMipmapPackedFloatPixels GenerateMipmapDepthPixels)
-        set(MGL_ITEST_FM_LABEL "integration-magma-split")
-        if (fmSlot STREQUAL "GenerateMipmapPackedFloatPixels")
-            # R11F_G11F_B10F mip blits already fail on the baseline Magma lane.
-            # Preserve a separately named negative probe for this P7 native-format debt.
-            set(MGL_ITEST_FM_LABEL "integration-magma-p7-known-red")
-        endif()
         gtest_discover_tests(MobileGLIntegrationTest
             TEST_PREFIX "DirectVulkan.Split.Fm."
             TEST_FILTER "F1WireScenario.${fmSlot}"
             DISCOVERY_TIMEOUT 30
             PROPERTIES
-                LABELS "${MGL_ITEST_FM_LABEL}"
+                LABELS "integration-magma-split"
                 TIMEOUT ${MGL_ITEST_TIMEOUT}
                 ENVIRONMENT "${MGL_ITEST_MAGMA_WIRE_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-fm-${fmSlot}.log")
     endforeach()

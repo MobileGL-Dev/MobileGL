@@ -43,5 +43,7 @@
 # The expanded Magma lane also covers application VBO/EBO/UBO/SSBO and persistent
 # map consumers. The former VBO fatal case now asserts rendered pixels; no new
 # field-Fatal expectations or skip exemptions accompany that retirement.
-# Its named P7 native-format probe has a separate, enforced known-red CI lane.
+# The former P7 native-format probe now asserts generated pixels too: R11F_G11F_B10F mip
+# generation goes through the GPU shader blit, so that entry carries the ordinary Magma
+# lane label and the lane's named green step, not a known-red arm.
 # Every new Fatal or Admitted in this census remains a regression.
