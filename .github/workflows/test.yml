@@ -1984,6 +1984,14 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v6
 
+      # `dl` / exit gate S7. CHEAP AND EARLY, on a job that only reads the tree: it needs no
+      # build, so a death that names no family is reported in seconds rather than after the
+      # matrix. What it refuses is a std::abort() under MG_Remote/ with no Fatal{Family} marker,
+      # and a family word that appeared without being recorded - the vocabulary drifts on
+      # purpose or not at all (CONTRACT-P6 5.2's D2 ruling).
+      - name: Fatal census (S7)
+        run: python3 scripts/ci/fatal_census.py
+
       - name: Load trace cases
         id: trace-cases
         run: |

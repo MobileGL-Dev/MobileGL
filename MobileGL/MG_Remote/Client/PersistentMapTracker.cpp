@@ -1047,14 +1047,20 @@ namespace MobileGL::MG_Remote::Client {
         // map_persistent, so a mis-set run gets through EGL bring-up and a frame of setup
         // first. Moving it to the parse means a knob-validity rule in ConfigLoader, which is
         // c0's file; filed for the integrator rather than taken here.
+        // `dl` (CONTRACT-P6 5.2): THE FAMILY WORD THIS SITE NEVER CARRIED. a6 found two aborts
+        // under MG_Remote/ with no Fatal{ marker at all, so "the log stays verbatim" was not true
+        // of them and no family grep could see them - this is one. (The other, WireLog.cpp's, is
+        // the sanctioned funnel: every one of its callers passes a Fatal{ string of its own.)
         if (tier <= 1) {
-            MGLOG_F("MGPipe: MOBILEGL_IPC_ADOPT_TIER=%u names adoption tier T%u, which P11 implements "
-                    "and P5 does not; P5 runs at T2 (emulate) only.",
+            MGLOG_F("MGPipe: Fatal{UnimplementedAdoptTier, \"T%u\"} - MOBILEGL_IPC_ADOPT_TIER=%u "
+                    "names an adoption tier P11 implements and P5 does not; P5 runs at T2 "
+                    "(emulate) only.",
                     static_cast<unsigned>(tier), static_cast<unsigned>(tier));
         } else {
-            MGLOG_F("MGPipe: MOBILEGL_IPC_ADOPT_TIER=%u is not an adoption tier; the only values are 0 "
-                    "and 1 (P11) and 2 (emulate, the P5 default).",
-                    static_cast<unsigned>(tier));
+            MGLOG_F("MGPipe: Fatal{UnimplementedAdoptTier, \"%u\"} - MOBILEGL_IPC_ADOPT_TIER=%u is "
+                    "not an adoption tier; the only values are 0 and 1 (P11) and 2 (emulate, the "
+                    "P5 default).",
+                    static_cast<unsigned>(tier), static_cast<unsigned>(tier));
         }
         std::abort();
     }
