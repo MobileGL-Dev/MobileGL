@@ -23,9 +23,16 @@
 // INDICES; reading the bytes behind them is the caller's, because only the caller knows
 // whether the elements are read from the client's own array or out of a store the server
 // owns.
+//
+// COMPILED IN EVERY FLAVOR, and the guard it used to carry (`MOBILEGL_BUILD_DISAGGREGATED &&
+// MOBILEGL_PIPE_PUSH`) was the same mistake the monolith arm's callers carried: the
+// MONOLITH arm is not a split-arm fallback, it is the arm the pull build runs. An indexed or
+// indirect draw over a client-memory array staged nothing there either, so the question has
+// to be answerable - and answered - in the transport-free library too. The plan itself is
+// pure arithmetic over the draw's own words; what changes per flavor is only who reads the
+// bytes (the caller's reader), never the answer.
 #pragma once
 
-#if MOBILEGL_BUILD_DISAGGREGATED && MOBILEGL_PIPE_PUSH
 #include <MG_Pipe/MGPipeTypes.h>
 #include <MG_State/GLState/BufferState/BufferObject.h>
 #include <algorithm>
@@ -237,4 +244,3 @@ namespace MobileGL::MG_Pipe {
         Vector<Uint64> m_vertices;
     };
 } // namespace MobileGL::MG_Pipe
-#endif // MOBILEGL_BUILD_DISAGGREGATED && MOBILEGL_PIPE_PUSH

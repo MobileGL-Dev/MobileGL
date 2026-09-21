@@ -5545,7 +5545,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 #endif // MOBILEGL_PIPE_PUSH
 
-#if MOBILEGL_BUILD_DISAGGREGATED
         // THE CLIENT-ARRAY UPLOAD FOR A DRAW WHOSE FETCHED ELEMENTS (first, count) DOES NOT
         // DESCRIBE. SyncClientSideAttributesForDrawArrays below answers the non-indexed family
         // exactly and nothing else: an indexed draw reads the elements its INDICES name, an
@@ -5652,7 +5651,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             return true;
         }
-#endif
+
         void BackendVertexArrayObject::SyncClientSideAttributesForDrawArrays(
             const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject, GLint first, GLsizei count,
             Uint32 fetchBaseInstance) {

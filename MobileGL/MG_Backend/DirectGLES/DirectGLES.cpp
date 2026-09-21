@@ -2421,9 +2421,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // `GetBoundVertexArray@DrawArrays` marker - without touching this path's behaviour.
         // `static` on purpose (G1): the pull build must not gain an exported name for a
         // function that only re-homes two identical inline blocks the two DrawArrays entry
-        // points used to carry.
-#if MOBILEGL_BUILD_DISAGGREGATED
-        // ---- W3: THE MONOLITH ARM'S CLIENT-MEMORY SNAPSHOT, PER DRAW -------------------------
+        // points used to carry. The same spelling governs the three below, and for a second
+        // reason on top of the symbol count: a Debug build drops CXX_VISIBILITY_PRESET to
+        // `default` (CMakeLists.txt:629-641), so an external-linkage helper here would be a
+        // DYNAMIC export in exactly the configuration a symbol gate cannot see it in.
+        //
+        // ALL FLAVORS, NOT JUST THE SPLIT ARM. These three were inside
+        // `#if MOBILEGL_BUILD_DISAGGREGATED` for one round and that was a misreading of their
+        // own gate: the body's first statement returns early when `MG_Config::Transport !=
+        // Monolith`, i.e. they exist FOR the monolith arm - and the monolith arm is what the
+        // pull/verify/push builds run. Their callers sit in entry points that compile in every
+        // flavor (the indexed family, both indirect executors), so a guard here breaks the
+        // pull build outright rather than merely omitting a split-arm path. In those flavors
+        // the guard's own test folds to a compile-time false (Config.h:566) and the body is
+        // the transport-free upload it always was.
+        //
+        // ---- THE MONOLITH ARM'S CLIENT-MEMORY SNAPSHOT, PER DRAW -----------------------------
         //
         // A client-memory attribute is uploaded HERE because its bytes have no store on this side
         // to bind. SyncClientSideVertexArraysForDrawArrays below does that for the non-indexed
@@ -2440,8 +2453,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const SharedPtr<MG_State::GLState::BufferObject>* ElementBuffer = nullptr;
         };
 
-        Bool ReadClientSnapshotBytes(void* user, MG_Pipe::MGPipeClientBufferKind kind, Uint64 offset, SizeT size,
-                                     void* destination) {
+        static Bool ReadClientSnapshotBytes(void* user, MG_Pipe::MGPipeClientBufferKind kind, Uint64 offset, SizeT size,
+                                            void* destination) {
             if (kind != MG_Pipe::MGPipeClientBufferKind::Element) return false;
             const auto& buffer = *static_cast<const ClientSnapshotSources*>(user)->ElementBuffer;
             if (!buffer || offset > buffer->GetSize() || size > buffer->GetSize() - offset) return false;
@@ -2458,9 +2471,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // there is one. FALSE means the caller must SKIP the draw: the elements it would fetch are
         // not in the store the driver is about to read, and issuing it anyway is a wrong picture
         // rather than an error.
-        Bool SyncClientSideVertexArraysForFetch(Uint8 indexSize, Uint32 elementStart, GLsizei count,
-                                                GLsizei instanceCount, GLint baseVertex, Uint32 baseInstance,
-                                                const void* clientIndices, Uint64 clientIndexBytes) {
+        static Bool SyncClientSideVertexArraysForFetch(Uint8 indexSize, Uint32 elementStart, GLsizei count,
+                                                       GLsizei instanceCount, GLint baseVertex, Uint32 baseInstance,
+                                                       const void* clientIndices, Uint64 clientIndexBytes) {
             if (count <= 0 || instanceCount <= 0) return true;
             // MONOLITH ONLY, and the gate is what keeps a live transport's apply thread out of
             // the frontend VAO: with a transport the CLIENT owns those bytes and snapshots them
@@ -2525,9 +2538,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // command block a shader wrote this frame is exactly what these shapes exist for - so the
         // command buffer's shadow is reconciled before it is read, and `commandBytes` (the
         // caller's possibly stale copy) is only the fallback for a client-authored block.
-        Bool SyncClientSideVertexArraysForIndirectFetch(const Uint8* commandBytes, SizeT commandOffset,
-                                                       GLsizei stride, GLsizei index, Uint8 indexSize,
-                                                       const SharedPtr<MG_State::GLState::BufferObject>& commandBuffer) {
+        static Bool SyncClientSideVertexArraysForIndirectFetch(
+            const Uint8* commandBytes, SizeT commandOffset, GLsizei stride, GLsizei index, Uint8 indexSize,
+            const SharedPtr<MG_State::GLState::BufferObject>& commandBuffer) {
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return true;
             const Uint8* source = commandBytes;
             if (commandBuffer) {
@@ -2554,8 +2567,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The indexed entry points' form. `indices` is a byte offset into the bound element buffer
         // when one is bound and the application's own array otherwise, which is the same
         // distinction every one of them already makes when it issues the draw.
-        Bool SyncClientSideVertexArraysForIndexedFetch(GLenum type, GLsizei count, const void* indices,
-                                                       GLsizei instanceCount, GLint baseVertex, GLuint baseInstance) {
+        static Bool SyncClientSideVertexArraysForIndexedFetch(GLenum type, GLsizei count, const void* indices,
+                                                              GLsizei instanceCount, GLint baseVertex,
+                                                              GLuint baseInstance) {
             if (count <= 0 || instanceCount <= 0) return true;
             // MONOLITH ONLY - see SyncClientSideVertexArraysForFetch; this wrapper's own read of
             // the bound VAO is the frontend read that must not happen on an apply thread.
@@ -2586,7 +2600,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                       baseInstance, clientIndices ? indices : nullptr,
                                                       clientIndexBytes);
         }
-#endif
+
         static void SyncClientSideVertexArraysForDrawArrays(GLint first, GLsizei count) {
 #if MOBILEGL_BUILD_DISAGGREGATED
             if (BufferImpl::VertexInputReadsRecords()) {
