@@ -204,6 +204,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Busy = potentially referenced by GPU work that has not been fenced yet
         // (including commands recorded for the current, unsubmitted frame).
         Bool IsResourceBusy(const VkBufferResource& resource) const;
+        // Hand the manager a buffer to destroy once the frame that recorded commands
+        // naming it has completed. The renderer's blit path needs a device-local
+        // scratch store for one recorded operation, which cannot be a stack local:
+        // the glBlitFramebuffer that records the commands returns long before the
+        // command buffer is submitted.
+        void DeferRelease(VkBufferObject&& buffer);
 
     private:
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -237,7 +243,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #if MOBILEGL_BUILD_DISAGGREGATED
         Bool StagedWireRangeCopy(WireBufferResource& resource, const void* data, SizeT offset, SizeT size);
 #endif
-        void DeferRelease(VkBufferObject&& buffer);
         void CollectDeferredReleases(Uint32 frameIndex);
         void DestroyAllDeferredReleases();
         void TrackLiveResource(const SharedPtr<VkBufferResource>& resource);

@@ -2567,6 +2567,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // >= 0 => attached via glFramebufferTextureLayer.
             GLint depthLayer = -1;
             Bool depthHasStencil = false;
+            // The point holds a STENCIL_INDEX texture, so it was made at
+            // GL_STENCIL_ATTACHMENT - a third attach point that neither depth form
+            // may be deduped against.
+            Bool depthIsStencilOnly = false;
             // Per-FBO read/draw buffer state (0 = unknown, set on first use).
             GLenum readBuffer = 0;
             GLenum drawBuffer = 0;
@@ -2584,7 +2588,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void EnsureColorAttachment2D(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLenum texTarget, GLint level);
         void EnsureColorAttachmentLayer(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLint level, GLint layer);
         void EnsureDepthAttachment2D(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLenum texTarget, GLint level,
-                                     Bool withStencil);
+                                     Bool withStencil, Bool stencilOnly = false);
         void EnsureDepthAttachmentLayer(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLint level, GLint layer);
         void EnsureNoColorAttachment(ScratchFramebuffer& fb, GLenum fbTarget);
         void EnsureNoDepthAttachment(ScratchFramebuffer& fb, GLenum fbTarget);

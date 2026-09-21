@@ -15293,12 +15293,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MG_Util::ConvertGLEnumToTextureUploadTarget(target));
         // GL_DEPTH_STENCIL can't be attached as a color attachment (glCheckFramebufferStatus
         // would report it incomplete); it has its own combined depth+stencil attachment point.
-        // glReadBuffer only selects among color attachments, so it does not apply here.
-        if (format == GL_DEPTH_STENCIL || format == GL_DEPTH_COMPONENT) {
+        // A STENCIL_INDEX texture has a third one, GL_STENCIL_ATTACHMENT: attaching it as a
+        // depth attachment (or as a color one) leaves the scratch FBO incomplete, and the read
+        // that follows writes nothing at all. glReadBuffer only selects among color attachments,
+        // so it does not apply to any of the three.
+        const Bool depthStencilAttachment =
+            format == GL_DEPTH_STENCIL || format == GL_DEPTH_COMPONENT || format == GL_STENCIL_INDEX;
+        if (depthStencilAttachment) {
             ScratchFBOImpl::EnsureDepthAttachment2D(
                 tempFB, GL_READ_FRAMEBUFFER, backendTexId,
                 backendAttachTarget == GL_UNKNOWN_MGL ? target : backendAttachTarget, level,
-                /*withStencil=*/format == GL_DEPTH_STENCIL);
+                /*withStencil=*/format == GL_DEPTH_STENCIL, /*stencilOnly=*/format == GL_STENCIL_INDEX);
         } else if (backendAttachTarget == GL_TEXTURE_3D || backendAttachTarget == GL_TEXTURE_2D_ARRAY ||
                    backendAttachTarget == GL_TEXTURE_CUBE_MAP_ARRAY) {
             // ES cannot attach 3D/array textures through glFramebufferTexture2D; layer 0 here, and
@@ -15313,7 +15318,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 tempFB, GL_READ_FRAMEBUFFER, backendTexId,
                 backendAttachTarget == GL_UNKNOWN_MGL ? target : backendAttachTarget, level);
         }
-        if (format != GL_DEPTH_STENCIL && format != GL_DEPTH_COMPONENT) {
+        if (!depthStencilAttachment) {
             MGLOG_D("GetTexImage: glReadBuffer(GL_COLOR_ATTACHMENT0)");
             ScratchFBOImpl::EnsureReadBuffer(tempFB, GL_COLOR_ATTACHMENT0);
         }
