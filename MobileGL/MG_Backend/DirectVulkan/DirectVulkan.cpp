@@ -356,6 +356,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             auto drawBuffer = MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
             if (drawBuffer) {
                 drawBuffer->SyncPersistentMappedRange();
+                // A command block a compute shader wrote is the case this whole shape exists
+                // for, and every caller here reads the words on the CPU - the per-command
+                // expansion, the baseInstance the shader emulation is fed, and the fetch
+                // range a client-memory vertex array's upload is bounded by. Reconciling the
+                // shadow first is what keeps those readings the real ones (a no-op unless a
+                // GPU write is pending).
+                drawBuffer->SyncGpuWrites();
                 const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
                 if (drawBuffer->MappedData() == nullptr || commandOffset + requiredBytes > drawBuffer->GetSize()) {
                     MGLOG_E_ONCE("%s skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range", label);

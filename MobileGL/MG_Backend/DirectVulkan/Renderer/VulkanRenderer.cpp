@@ -4028,7 +4028,29 @@ void main() {
                 // real fetch range. For indexed draws that means scanning the index bytes:
                 // the guessed vertexCount (indexCount + baseVertex) can both truncate draws
                 // whose max index exceeds their index count and over-read below it.
-                const SizeT clientElementBound = resolveDrawElementBound();
+                // AN INSTANCE-RATE BINDING IS BOUNDED BY ITS INSTANCES, not by the vertex range:
+                // it fetches one element per instance, shifted by the draw's baseInstance, so
+                // its last element is baseInstance + (instanceCount - 1) / divisor. The two
+                // bounds are independent and either can exceed the other (an indexed draw
+                // naming element 2^16, or baseInstance 1000 over a three-element array), so
+                // the upload covers their union.
+                SizeT clientElementBound = resolveDrawElementBound();
+                if (vertexInputState.bindings[binding].inputRate == VK_VERTEX_INPUT_RATE_INSTANCE &&
+                    drawParams.instanceCount > 0) {
+                    Uint32 divisor = 1;
+                    for (const auto& divisorEntry : vertexInputState.bindingDivisors) {
+                        if (divisorEntry.binding == vertexInputState.bindings[binding].binding) {
+                            divisor = divisorEntry.divisor;
+                            break;
+                        }
+                    }
+                    if (divisor > 0) {
+                        const Uint64 first = drawParams.firstInstance;
+                        const Uint64 last = first + (drawParams.instanceCount - 1) / divisor;
+                        clientElementBound =
+                            std::max<SizeT>(clientElementBound, static_cast<SizeT>(last + 1));
+                    }
+                }
                 BufferSlice slice{};
                 Bool uploaded = false;
                 if (conversion == VertexInputStateFactory::VertexStreamConversion::None) {

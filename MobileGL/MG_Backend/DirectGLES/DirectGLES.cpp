@@ -2508,7 +2508,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // baseInstance. The POINTER shift is not - it is this backend's emulation of what the
             // driver does natively when it can (EmulatedFetchBaseInstance is the same answer the
             // attribute walk uses), and applying both would shift the fetch twice.
-            return twin->SyncClientSideAttributesForDraw(currentVAO, plan, EmulatedFetchBaseInstance(baseInstance));
+            // EmulatedFetchBaseInstance, which is declared with the draw entry points far below:
+            // a native-baseInstance driver applies the shift itself, so the pointer carries none.
+            const Uint32 fetchBaseInstance =
+                g_GLESCapabilities.SupportsBaseInstance ? 0u : static_cast<Uint32>(baseInstance);
+            return twin->SyncClientSideAttributesForDraw(currentVAO, plan, fetchBaseInstance);
         }
 
         // The indirect executors' form: the command's own words ARE the draw's fetch, and a
