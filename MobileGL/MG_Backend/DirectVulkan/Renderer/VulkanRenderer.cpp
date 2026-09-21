@@ -13092,7 +13092,9 @@ void main() {
         DrawCmdParam vertexRange{};
         vertexRange.vertexCount = 0;
         vertexRange.instanceCount = 1;
-        {
+        // MONOLITH ONLY: with a transport the frontend VAO is not this side's to read at all
+        // (the client owns those bytes and stages them itself), and this runs on the apply thread.
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) {
             const auto& currentVAO = MGB_CTX->GetBoundVertexArray();
             Bool clientArray = false;
             if (currentVAO) {
