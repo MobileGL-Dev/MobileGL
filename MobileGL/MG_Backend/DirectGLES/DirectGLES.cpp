@@ -2504,7 +2504,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             MG_Pipe::MGPipeClientFetchPlan plan;
             if (!plan.Build(inputs, &ReadClientSnapshotBytes, &sources)) return false;
-            return twin->SyncClientSideAttributesForDraw(currentVAO, plan, baseInstance);
+            // The element SET is GL's: a divisor'd array's instance elements start at the raw
+            // baseInstance. The POINTER shift is not - it is this backend's emulation of what the
+            // driver does natively when it can (EmulatedFetchBaseInstance is the same answer the
+            // attribute walk uses), and applying both would shift the fetch twice.
+            return twin->SyncClientSideAttributesForDraw(currentVAO, plan, EmulatedFetchBaseInstance(baseInstance));
         }
 
         // The indirect executors' form: the command's own words ARE the draw's fetch, and a
@@ -8436,7 +8440,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 ForEachViewportRoutingPass([&] {
                     if (!VertexArrayImpl::SyncClientSideVertexArraysForIndirectFetch(
                             commandBytes, commandOffset, stride, i, static_cast<Uint8>(indexSize), drawIndirectBuffer))
-                        continue;
+                        return;
                     g_GLESFuncs.glDrawElementsInstancedBaseVertex(
                         mode, static_cast<GLsizei>(cmd.count), type, reinterpret_cast<const GLvoid*>(indexByteOffset),
                         static_cast<GLsizei>(cmd.instanceCount), cmd.baseVertex);
@@ -8518,7 +8522,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 ForEachViewportRoutingPass([&] {
                     if (!VertexArrayImpl::SyncClientSideVertexArraysForIndirectFetch(
                             commandBytes, commandOffset, stride, i, 0, drawIndirectBuffer))
-                        continue;
+                        return;
                     g_GLESFuncs.glDrawArraysInstanced(mode, static_cast<GLint>(cmd.first),
                                                       static_cast<GLsizei>(cmd.count),
                                                       static_cast<GLsizei>(cmd.instanceCount));
