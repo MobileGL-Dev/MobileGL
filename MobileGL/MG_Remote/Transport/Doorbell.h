@@ -249,7 +249,7 @@ namespace MobileGL::MG_Remote::Transport {
             // caller asked for is no longer charged against its timeout, so the
             // total is bounded by `timeoutMs + the spin budget` rather than by
             // `timeoutMs`. spinUs is 50 by default and the timeouts that reach
-            // here are milliseconds (the verb barrier's 30 s, the drain's bound),
+            // here are milliseconds (the verb barrier's budget, the drain's bound),
             // so the drift is under a part in a thousand - and erring LONG is the
             // safe direction for a deadline whose expiry is reported as a timeout.
             const auto deadline = timeoutMs == kWaitForever

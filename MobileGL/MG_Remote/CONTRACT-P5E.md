@@ -164,7 +164,7 @@ keeps its lockstep meaning (nothing but reply rows waits); under run-ahead it re
 ### 2.4 Present pacing
 
 `EmitPresent` (`EmitTables.cpp:977-1053`): `BeforeReadOnlyVerb(); if (m_presentsSent >= PresentCredit)
-WaitForPresentAck(m_presentsSent + 1 - PresentCredit, 30 s)` — `ShutDown` returns, `TimedOut` is
+WaitForPresentAck(m_presentsSent + 1 - PresentCredit, kBarrierTimeoutMs)` — `ShutDown` returns, `TimedOut` is
 `Fatal{PresentCreditTimeout}`; then `DrainEventRing`, encode, publish, `PumpControlPlane`. Credit 1
 = the client publishes frame N+1 while the server applies and swaps frame N: one frame of overlap,
 at most one frame of added latency. Budget at ~850 draws + ~0.36 MB pmap/frame: SEG_CMD ~70 KB +

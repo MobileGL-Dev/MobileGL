@@ -539,7 +539,7 @@ P5 的 `inproc` 是真第二线程，但还是 **lockstep**：每条 class-B ver
 
 同一地址空间不得成为旁路（R-2）：encoder 把 `MGHostSpan::Ptr` 恒写成 `nullptr`，内容 blob 必须带真实 `SEG_STAGE` offset / 非零 size；decoder 对四种形状分别 `Fatal{ProtocolCorruption}`。`MapPersistent` 在 split 恒 decline；`MOBILEGL_IPC_AUDIT=1` 在 retire 后把 staging 填 `0xDD`，让跨 applier 返回持针的实现下一次读取时可见地失败（R-11：任何 widened read 先过 `RequireStagedCoverageForPendingRanges`，否则 `Fatal{StageSnapshotTooNarrow}`）。apply 角色不得进入 client 的 persistent-map producer（r1）。
 
-reply mailbox 以**记录序号作为 slot id**（R-3）：slot header 是 `{Seq, Status, Size}`，acceptance 的 Bool 答案与 `MapPersistent` decline 都在既有 verb wait 内读取；`Status=ERROR` 一律 `Fatal{ReplyError}`，未知 status 是 `Fatal{ReplyStatusInvalid}`；读到 reply 之前先由 `appliedSeq` 证明该记录已离开 applier（R-5）。P9 才把这套同步 mailbox 推广成异步池。等待预算：普通 verb / 容量等待 30 s（`Fatal{BarrierTimeout}`）；`ClientWaitSync` 的 applied/reply 预算 = ceil(timeout ns / 1e6) + 30 000 ms，有限 chunk 避开溢出。
+reply mailbox 以**记录序号作为 slot id**（R-3）：slot header 是 `{Seq, Status, Size}`，acceptance 的 Bool 答案与 `MapPersistent` decline 都在既有 verb wait 内读取；`Status=ERROR` 一律 `Fatal{ReplyError}`，未知 status 是 `Fatal{ReplyStatusInvalid}`；读到 reply 之前先由 `appliedSeq` 证明该记录已离开 applier（R-5）。P9 才把这套同步 mailbox 推广成异步池。等待预算：普通 verb / 容量等待 120 s（`Fatal{BarrierTimeout}`，`ClientSession.cpp` 的 `kBarrierTimeoutMs`）；`ClientWaitSync` 的 applied/reply 预算 = ceil(timeout ns / 1e6) + 120 000 ms，有限 chunk 避开溢出。这条看门狗只判**死锁**（记录永不退役），不是性能门：lavapipe/llvmpipe 在 texture-handle 注册（`vkCreateImageView` → `llvmpipe_register_texture`）上可合法阻塞 apply 线程 29.3–39.7 s，故预算从原 30 s 提到 120 s——monolith 走同一路径本就没有这个上限。
 
 ### 17.2 71 槽的三类、caps 与 tight readback
 
