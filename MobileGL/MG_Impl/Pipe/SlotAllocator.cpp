@@ -11,6 +11,7 @@
 
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <Config.h>
+#include <MG_Backend/MGPipe/PipeInputs.h>  // D1c: MGPipeServerArm()
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Util/Debug/Log.h>
@@ -28,7 +29,13 @@ namespace MobileGL::MG_Pipe {
 
     void MGPipeRefuseAllocatorFromApplyThread(const char* entry) {
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
-        if (!MG_Remote::Server::ServerLoop::OnApplyThread()) return;
+        // D10: OR'd with the PROCESS-ROLE fact, not replaced by it. OnApplyThread() answers
+        // about the INPROC applier thread and is the only fact a ServerLoop fixture with no
+        // client session has; MGPipeServerArm() adds the spawn case, where EVERY thread is a
+        // server thread. Replacing the first with the second disarmed the refusal in every unit
+        // test that drives the apply thread directly - measured, 14 RemoteGuards cases went
+        // green-by-omission before this was put back as a disjunction.
+        if (!MG_Remote::Server::ServerLoop::OnApplyThread() && !MG_Pipe::MGPipeServerArm()) return;
         // P5f (fr): all named allocator exemptions are retired. A barrier can
         // stabilize a client allocator but cannot make it server-owned memory.
         MGLOG_F("MGPipe: Fatal{RoleViolation, \"MGPipeSlots\"} - the apply thread called "
@@ -47,7 +54,13 @@ namespace MobileGL::MG_Pipe {
     // make a frontend SharedPtr exist in a separate server process.
     void MGPipeRefuseFrontendKeyedRegistryFromApplyThread(const char* entry) {
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
-        if (!MG_Remote::Server::ServerLoop::OnApplyThread()) return;
+        // D10: OR'd with the PROCESS-ROLE fact, not replaced by it. OnApplyThread() answers
+        // about the INPROC applier thread and is the only fact a ServerLoop fixture with no
+        // client session has; MGPipeServerArm() adds the spawn case, where EVERY thread is a
+        // server thread. Replacing the first with the second disarmed the refusal in every unit
+        // test that drives the apply thread directly - measured, 14 RemoteGuards cases went
+        // green-by-omission before this was put back as a disjunction.
+        if (!MG_Remote::Server::ServerLoop::OnApplyThread() && !MG_Pipe::MGPipeServerArm()) return;
         MGLOG_F("MGPipe: Fatal{RoleViolation, \"MGPipeSlots\"} - the apply thread reached "
                 "BackendSlotTable::%s. Frontend-identity registry operations are monolith-only, "
                 "including barriered records; resolve the twin from the record's handle instead",

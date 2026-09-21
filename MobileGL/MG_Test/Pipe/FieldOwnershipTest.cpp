@@ -808,7 +808,7 @@ TEST_F(FieldOwnershipTest, SplitCaptureSnapshotSurvivesMakeCurrentUntilObjectRel
 }
 
 TEST_F(FieldOwnershipTest, RoleSplitOffFoldsTheFillSideOntoTheSharedBlock) {
-    EXPECT_FALSE(MGPipeRoleSplitActive());
+    EXPECT_FALSE(MGPipeRoleSplitRehearsalActive());
     EXPECT_EQ(&MGPipeClientInputs(), &gPipeInputs);
 }
 
@@ -819,14 +819,44 @@ TEST_F(FieldOwnershipTest, RoleSplitUnderMonolithTransportIsStillOneBlock) {
     RoleSplitArm guard;
     MG_Config::Ipc.RoleSplitState = true;
     MG_Config::Transport = MG_Config::TransportMode::Monolith;
-    EXPECT_FALSE(MGPipeRoleSplitActive());
+    EXPECT_FALSE(MGPipeRoleSplitRehearsalActive());
+    EXPECT_EQ(&MGPipeClientInputs(), &gPipeInputs);
+}
+
+// D1c/D10 (CONTRACT-P6 3.2, 3.4). THE PREDICATE THAT IS TRUE WITHOUT THE KNOB, and the reason
+// four guards were compiled in and permanently disarmed in a spawn server.
+//
+// MGPipeRoleSplitRehearsalActive() answers "is the REHEARSAL armed", which needs
+// MOBILEGL_IPC_ROLE_SPLIT_STATE. Under spawn the two roles are in DIFFERENT ADDRESS SPACES, so
+// their PipeInputs blocks are distinct whatever that knob says - and every guard that asked the
+// rehearsal question was therefore off in the one shape where it matters most. Measured on the
+// real lane: the spawn retrace runs with role-split-state=0.
+TEST_F(FieldOwnershipTest, SpawnMakesTheBlocksDistinctWithNoRehearsalKnobAtAll) {
+    RoleSplitArm guard;
+    MG_Config::Ipc.RoleSplitState = false;
+    MG_Config::Transport = MG_Config::TransportMode::Spawn;
+
+    EXPECT_FALSE(MGPipeRoleSplitRehearsalActive())
+        << "the rehearsal must stay OFF; this case is about the shape, not the knob";
+    EXPECT_TRUE(MGPipeBlocksAreDistinct())
+        << "a spawn server shares no storage object with its client, so any guard that asked "
+           "only the rehearsal question is disarmed exactly where it is needed";
+}
+
+// The other direction, so the predicate cannot be a constant: monolith shares one block, and
+// neither the knob nor the transport alone makes it two.
+TEST_F(FieldOwnershipTest, MonolithKeepsOneBlockAndTheWiderPredicateSaysSo) {
+    RoleSplitArm guard;
+    MG_Config::Ipc.RoleSplitState = false;
+    MG_Config::Transport = MG_Config::TransportMode::Monolith;
+    EXPECT_FALSE(MGPipeBlocksAreDistinct());
     EXPECT_EQ(&MGPipeClientInputs(), &gPipeInputs);
 }
 
 TEST_F(FieldOwnershipTest, RoleSplitGivesTheFillSideADistinctBlockTheStampNeverTouches) {
     RoleSplitArm guard;
     guard.Arm(true);
-    ASSERT_TRUE(MGPipeRoleSplitActive());
+    ASSERT_TRUE(MGPipeRoleSplitRehearsalActive());
     ASSERT_NE(&MGPipeClientInputs(), &gPipeInputs);
 
     const Uint64 serverSerialBefore = gPipeInputs.FilledState().CurrentVerbSerial;
@@ -1052,7 +1082,7 @@ TEST_F(FieldOwnershipTest, DualBlockDoesNotArmUnderMonolithTransport) {
         // A real monolith fill, not a manufactured server stamp on a monolith process.
         MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
         (void)gPipeInputs.GetBoundVertexArray();
-        if (MGPipeRoleSplitActive() || MGPipeResidualPullCount() != 0) ::_exit(7);
+        if (MGPipeRoleSplitRehearsalActive() || MGPipeResidualPullCount() != 0) ::_exit(7);
     });
     ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_EQ(r.Log.find("Fatal{"), std::string::npos) << r.Log;

@@ -1164,6 +1164,21 @@ namespace MobileGL::MG_Remote::Client {
         // them down in the mirror order (m_started = false, then g_active = nullptr).
         m_started = true;
         g_active = this;
+        // D1c: THE SESSION-LIVE AND APPLY-THREAD FACTS, stated where they become true.
+        //
+        // MGPipeApplierReset's layer-2 guard used to ask ClientSession::Active() != nullptr,
+        // which no SERVER process can ever answer yes to - so the guard was compiled in and
+        // permanently disarmed there. MGPipeSessionLive() is the same question asked in a way
+        // both roles can answer, and the probe hands MG_Backend the one thread fact it cannot
+        // derive: whether the CALLING thread is inside the applier.
+        MG_Pipe::MGPipeSetSessionLive(true);
+        // ServerLoop::OnApplyThread, NOT ApplyThreadIsInsideApplier - two different questions,
+        // and installing the wrong one turned every GL-thread call into a role violation while
+        // the applier happened to be busy. Measured: the inproc retrace died on
+        // Fatal{RoleViolation, "MGPipeSlots"} raised from the GL thread. "Am I the apply
+        // thread" is what the guards ask; "is the apply thread inside the applier" is R-1's
+        // mutual-exclusion probe and is about a DIFFERENT thread.
+        MG_Pipe::MGPipeSetApplyThreadProbe(&Server::ServerLoop::OnApplyThread);
         LogMemory("handshake");
 
         // ---- 8. and only now the apply thread. It is package v1's ServerLoop: it names the
@@ -1298,6 +1313,10 @@ namespace MobileGL::MG_Remote::Client {
         m_presentsSent = 0;
         if (g_active == this) {
             g_active = nullptr;
+            // Mirror order, and the probe goes with it: a dangling function pointer into a
+            // torn-down session is a worse answer than "there is no applier".
+            MG_Pipe::MGPipeSetSessionLive(false);
+            MG_Pipe::MGPipeSetApplyThreadProbe(nullptr);
         }
         // AND ONLY NOW the monolith adapters go back (codex 4): every ring an emitter would have
         // used is freed above, so from here a routed call - an at-exit ~BufferObject delete - runs
@@ -1803,7 +1822,7 @@ namespace MobileGL::MG_Remote::Client {
     // its own diagnostic; the client writes a different block and waits through appliedSeq.
     Bool ClientSession::InBarrierWait() { return g_inBarrierWait; }
     Bool ClientSession::ApplyThreadIsInsideApplier() {
-        if (MG_Pipe::MGPipeRoleSplitActive()) return g_roleInsideApplier;
+        if (MG_Pipe::MGPipeRoleSplitRehearsalActive()) return g_roleInsideApplier;
         return g_applyThreadInsideApplier.load(std::memory_order_acquire);
     }
 
@@ -1900,12 +1919,12 @@ namespace MobileGL::MG_Remote::Client {
     }
     void ClientSession::NoteApplyThreadEnteredApplier() {
         g_roleInsideApplier = true;
-        if (!MG_Pipe::MGPipeRoleSplitActive())
+        if (!MG_Pipe::MGPipeRoleSplitRehearsalActive())
             g_applyThreadInsideApplier.store(true, std::memory_order_release);
     }
     void ClientSession::NoteApplyThreadLeftApplier() {
         g_roleInsideApplier = false;
-        if (!MG_Pipe::MGPipeRoleSplitActive())
+        if (!MG_Pipe::MGPipeRoleSplitRehearsalActive())
             g_applyThreadInsideApplier.store(false, std::memory_order_release);
     }
 

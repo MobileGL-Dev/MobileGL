@@ -44,6 +44,7 @@
 #include "SurfaceControlFrame.h"
 
 #include <Config.h>  // MG_Config::Transport - D1 pins it to Spawn in this process
+#include <MG_Backend/MGPipe/PipeInputs.h>  // D1c: MGPipeSetServerProcessRole
 #include <MG_Backend/ServerRole.h>
 #include <Init.h>   // MG_ConfigLoader::Init - the child loads its own config (step 1.5)
 
@@ -179,6 +180,14 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
     // is the anti-recursion axis, so Transport is free to say what is true.
     MobileGL::MG_ConfigLoader::Init();
     MobileGL::MG_Config::Transport = MobileGL::MG_Config::TransportMode::Spawn;
+    // D1c/D10: THIS PROCESS IS THE SERVER, stated once and before any GL work.
+    //
+    // Four guards used to ask "am I on the apply thread" or "is a ClientSession active" - both
+    // questions a server PROCESS answers wrongly: it has no ClientSession at all, and every one
+    // of its threads is a server thread, not just the applier's. Saying it here is what arms
+    // them; without it they are compiled in and permanently false, which is worse than absent
+    // because it reads as coverage.
+    MobileGL::MG_Pipe::MGPipeSetServerProcessRole(true);
     WireLogError("MG_Remote server: pid=%d config loaded, backend=%d, Transport pinned to Spawn "
                  "(D1: this process IS the server arm)",
                  selfPid, static_cast<int>(MobileGL::MG_Config::ActiveBackendType));

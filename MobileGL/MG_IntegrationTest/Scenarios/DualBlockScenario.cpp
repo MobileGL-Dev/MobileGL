@@ -11,7 +11,7 @@
 // proves nothing if no case can tell one block from two, so this scenario asserts exactly that,
 // from inside the process:
 //
-//   1. MGPipeRoleSplitActive() - the knob is armed AND the transport is real;
+//   1. MGPipeRoleSplitRehearsalActive() - the knob is armed AND the transport is real;
 //   2. &MGPipeClientInputs() != &gPipeInputs - two distinct objects;
 //   3. a client verb boundary moves the CLIENT block's serial and leaves the SERVER block's
 //      serial alone - the fill side's writes no longer reach the read side.
@@ -61,7 +61,7 @@ TEST_F(DualBlockScenario, TheTwoRolesHaveDistinctBlocks) {
         << "the dual-block peek is compiled out: this entry is only ever registered in a "
            "disaggregated build, so a false here means the registration and the build disagree";
     ASSERT_TRUE(before.roleSplitActive)
-        << "dual-block control: MGPipeRoleSplitActive() is false - MOBILEGL_IPC_ROLE_SPLIT_STATE "
+        << "dual-block control: MGPipeRoleSplitRehearsalActive() is false - MOBILEGL_IPC_ROLE_SPLIT_STATE "
            "is not armed in this process (or the transport is monolith), so the two roles share "
            "one PipeInputs block and this case is the knob's negative control";
     EXPECT_TRUE(before.blocksDistinct)

@@ -171,7 +171,10 @@ namespace MobileGL::MG_Pipe {
             // crash exactly where the rehearsal exists to produce a named one. The red is the
             // census (Harness/dualblock-expected-fatals.txt), so the marker keeps the strict
             // grammar with the knob's own name as the reason.
-            if (MGPipeRoleSplitActive()) {
+            // D10: rides MGPipeBlocksAreDistinct() - under spawn the two blocks are distinct
+            // whatever the rehearsal knob says, and a barrier pull across a real process
+            // boundary is exactly the thing this Fatal exists to name.
+            if (MGPipeBlocksAreDistinct()) {
                 StrictBarrierPullFatal(field, verb, "MOBILEGL_IPC_ROLE_SPLIT_STATE=1");
             }
             if (!MGPipeApplierCurrentRecordIsBarriered()) {
@@ -286,16 +289,54 @@ namespace MobileGL::MG_Pipe {
 
     // ---- P5f (f1): the dual-block rehearsal's selection functions (PipeInputs.h) -----------
     //
-    // MGPipeRoleSplitActive is deliberately NOT latched: it is two global loads, asked once per
+    // MGPipeRoleSplitRehearsalActive is deliberately NOT latched: it is two global loads, asked once per
     // verb on the fill side and once per verb boundary on the stamp side, and a latch is a
     // second thing a test that flips the knob mid-process would have to know about.
-    Bool MGPipeRoleSplitActive() {
+    Bool MGPipeRoleSplitRehearsalActive() {
         return MG_Config::Ipc.RoleSplitState &&
                MG_Config::Transport != MG_Config::TransportMode::Monolith;
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // ---- D1c's predicates (CONTRACT-P6 3.2) -------------------------------------------------
+    namespace {
+        // Set once by ServerMain, before any GL work. A spawn server is the server for the whole
+        // life of the process; there is no thread in it that is not.
+        Bool g_serverProcessRole = false;
+        // MG_Remote's "is the calling thread inside the applier". Null until a session installs
+        // it, which is the honest answer for a process that has no applier.
+        Bool (*g_applyThreadProbe)() = nullptr;
+        Bool g_sessionLive = false;
+    } // namespace
+
+    void MGPipeSetServerProcessRole(Bool isServerProcess) { g_serverProcessRole = isServerProcess; }
+    void MGPipeSetApplyThreadProbe(Bool (*probe)()) { g_applyThreadProbe = probe; }
+    void MGPipeSetSessionLive(Bool live) { g_sessionLive = live; }
+
+    Bool MGPipeServerArm() {
+        // THE PROCESS FACT FIRST, and it short-circuits: in a spawn server every thread is a
+        // server thread, and asking the probe would be asking MG_Remote a question it answers
+        // only about the applier.
+        if (g_serverProcessRole) return true;
+        return g_applyThreadProbe != nullptr && g_applyThreadProbe();
+    }
+
+    Bool MGPipeSessionLive() { return g_sessionLive; }
+
+    Bool MGPipeBlocksAreDistinct() {
+        // TWO DIFFERENT REASONS, ONE ANSWER. The rehearsal makes two blocks in one process;
+        // spawn makes them two blocks in two ADDRESS SPACES, where no knob is involved and the
+        // distinctness is a fact about the machine. The guards that used to ask only the first
+        // question were therefore disarmed in the one shape where the answer matters most - a
+        // spawn server's block is never the client's, whatever MOBILEGL_IPC_ROLE_SPLIT_STATE
+        // says.
+        return MGPipeRoleSplitRehearsalActive() ||
+               MG_Config::Transport == MG_Config::TransportMode::Spawn;
+    }
+#endif // MOBILEGL_BUILD_DISAGGREGATED
+
     PipeInputs& MGPipeClientInputs() {
-        return MGPipeRoleSplitActive() ? gPipeInputsClientBlock : gPipeInputs;
+        return MGPipeRoleSplitRehearsalActive() ? gPipeInputsClientBlock : gPipeInputs;
     }
 
     void MGPipeClientClearVerbBoundary() {
@@ -312,7 +353,15 @@ namespace MobileGL::MG_Pipe {
     Bool MGPipeServerContextIsLive() { return g_serverContextLive; }
 
     void MGPipeServerBlockNoteIdentity() {
-        if (!MGPipeRoleSplitActive()) return;
+        // D10: THE WIDER PREDICATE, and the narrow one was a latent crash rather than a missing
+        // optimisation. Gated on the REHEARSAL, this early-returned for the whole life of a
+        // spawn server - because that knob is off by default and nothing in the spawn shape
+        // turns it on - so the server's gPipeInputs.ContextIdentity() stayed nullptr forever.
+        // DirectGLES' fb-slot memo compares that identity FIRST and with no generation, so a
+        // nullptr against its own nullptr initialiser reads as a CACHE HIT and hands out a slot
+        // that was never filled. `st` lands the named Fatal at that site; this is the gate that
+        // stops it being reachable in the first place.
+        if (!MGPipeBlocksAreDistinct()) return;
         // The server cannot name the client's GLContext - under a real transport it is in
         // another process - so the identity the server block carries is the server's OWN
         // served-context clock: MGPipeApplierContextSerial moves exactly when the served

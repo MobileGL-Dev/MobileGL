@@ -32,7 +32,7 @@ namespace MGITest {
         if (out == nullptr) return false;
         namespace MGP = MobileGL::MG_Pipe;
         out->peekAvailable = true;
-        out->roleSplitActive = MGP::MGPipeRoleSplitActive();
+        out->roleSplitActive = MGP::MGPipeRoleSplitRehearsalActive();
         MGP::PipeInputs& client = MGP::MGPipeClientInputs();
         out->blocksDistinct = &client != &MGP::gPipeInputs;
         out->clientSerial = client.FilledState().CurrentVerbSerial;

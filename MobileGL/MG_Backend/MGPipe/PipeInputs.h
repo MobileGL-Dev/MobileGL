@@ -860,9 +860,60 @@ namespace MobileGL::MG_Pipe {
     // Same leak-at-exit storage as gPipeInputs above, for the same reason.
     inline PipeInputs& gPipeInputsClientBlock = *new PipeInputs();
 
-    // PipeInputs.cpp. Whether the rehearsal is armed: the knob AND a real transport (and not
+    // PipeInputs.cpp. Whether the REHEARSAL is armed: the knob AND a real transport (and not
     // the verify build, which ConfigLoader forces off). Constant for the life of the process.
-    Bool MGPipeRoleSplitActive();
+    //
+    // D13 RENAMED THIS FROM MGPipeRoleSplitActive, which is what it has always meant. The old
+    // name read like "the roles are split", and the widening D1c needed would have made a
+    // narrow name lie - so the rename came FIRST and the wider predicate was introduced beside
+    // it rather than by quietly changing what this one answers.
+    Bool MGPipeRoleSplitRehearsalActive();
+
+    // ---- D1c: the role predicates (CONTRACT-P6 3.2) ---------------------------------------
+    //
+    // ONE QUESTION EACH, and the reason they are separate functions rather than one `split`
+    // flag is that the tree asks genuinely different things. a6 proposed three; three do not
+    // cover it.
+    //
+    // D14: IN A NON-DISAGGREGATED BUILD THESE GET A DIFFERENT DEFINITION, not a runtime-false
+    // one. The `#else` arm is `constexpr`, so every consult folds at compile time and the pull
+    // build gains no symbol, no branch and no byte - which G1 measures rather than assumes.
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // Am I executing as the SERVER right now? A thread-scoped question in the inproc shape,
+    // where both roles live in one process, and a process-scoped one under spawn.
+    Bool MGPipeServerArm();
+
+    // Is a peer session live? Distinct from "is the transport split": a spawn SERVER has no
+    // ClientSession at all, so a guard that asked for one was permanently disarmed there.
+    Bool MGPipeSessionLive();
+
+    // Do the two roles use DIFFERENT PipeInputs storage objects?
+    //
+    // TRUE FOR TWO DIFFERENT REASONS, which is the whole point of the predicate. Under the
+    // rehearsal the two blocks are distinct objects in one process; under SPAWN they are
+    // distinct because they are in different address spaces, and no knob is involved. The
+    // guards below used to ask the rehearsal question and were therefore silently off in the
+    // one shape where the answer matters most.
+    Bool MGPipeBlocksAreDistinct();
+
+    // The two facts the predicates above are built from, stated ONCE by the code that knows
+    // them. Neither is discoverable from MG_Backend: "this process is the server" is something
+    // only ServerMain can say, and "am I on the apply thread" is MG_Remote's thread-local.
+    //
+    // A PROBE RATHER THAN A FLAG for the thread half, because it is a question about the
+    // CALLING thread and a flag would answer for whichever thread wrote it last.
+    void MGPipeSetServerProcessRole(Bool isServerProcess);
+    void MGPipeSetApplyThreadProbe(Bool (*probe)());
+    void MGPipeSetSessionLive(Bool live);
+#else
+    inline constexpr Bool MGPipeServerArm() { return false; }
+    inline constexpr Bool MGPipeSessionLive() { return false; }
+    inline constexpr Bool MGPipeBlocksAreDistinct() { return false; }
+    // Setters too: a caller guarded only at its own site would still need these to LINK.
+    inline void MGPipeSetServerProcessRole(Bool) {}
+    inline void MGPipeSetApplyThreadProbe(Bool (*)()) {}
+    inline void MGPipeSetSessionLive(Bool) {}
+#endif
     // PipeInputs.cpp. THE FILL SIDE'S ONE NEW SPELLING: the client block when the rehearsal is
     // armed, gPipeInputs otherwise. Everything in MG_Impl/Pipe/PipeFill.cpp that used to spell
     // gPipeInputs spells this instead.

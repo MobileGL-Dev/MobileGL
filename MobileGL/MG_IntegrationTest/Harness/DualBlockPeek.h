@@ -29,7 +29,7 @@ namespace MGITest {
         // False wherever the peek cannot look (see the header above). Everything else is
         // meaningful only when this is true.
         bool peekAvailable = false;
-        // MGPipeRoleSplitActive(): the knob AND a real transport. The control's red half turns
+        // MGPipeRoleSplitRehearsalActive(): the knob AND a real transport. The control's red half turns
         // on this answer alone.
         bool roleSplitActive = false;
         // &MGPipeClientInputs() != &gPipeInputs - the fill side and the read side are two

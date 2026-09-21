@@ -199,6 +199,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
 #if !MOBILEGL_PIPE_PUSH || MOBILEGL_PIPE_LEGACY_MEMOS
         const void* ctx = MGB_CTX_IDENTITY;
+#if MOBILEGL_PIPE_PUSH
+        // `st` (CONTRACT-P6 3.4): THE NAMED FATAL PipeInputs.h ALREADY ASKED FOR.
+        //
+        // This memo compares the identity FIRST and with NO GENERATION, and its cache variable
+        // starts at nullptr - so an identity that is ALSO nullptr reads as a CACHE HIT and the
+        // function returns `*g_fbSlotCache[target]`, a pointer nothing ever filled. The crash
+        // that follows names neither the memo nor the identity.
+        //
+        // It is reachable exactly when a process runs this legacy arm with an unset identity,
+        // which is what a spawn server used to be: MGPipeServerBlockNoteIdentity early-returned
+        // on the REHEARSAL knob, so the server's block carried nullptr for the life of the
+        // process. `sm` widened that gate to MGPipeBlocksAreDistinct() and closed the hole; this
+        // says so out loud if it ever reopens, because a silent wrong answer here is
+        // indistinguishable from memory corruption three frames later.
+        //
+        // Under MOBILEGL_PIPE_PUSH only: in a pull build MGB_CTX_IDENTITY is the live
+        // GLContext's address, which is non-null on every path that reaches here, so the test
+        // would be dead code and G1 measures dead code.
+        if (ctx == nullptr) {
+            MGLOG_F("MGPipe: Fatal{UnnamedIdentity, \"FbSlotMemo\"} - the framebuffer binding-slot "
+                    "memo was consulted with a NULL context identity. Its cache starts null too, "
+                    "so this would have read as a hit and returned a slot pointer that was never "
+                    "filled. The identity is set by MGPipeServerBlockNoteIdentity, which arms on "
+                    "MGPipeBlocksAreDistinct(); a null here means this process runs the legacy "
+                    "memo arm with a block nobody claimed (CONTRACT-P6 3.4).");
+            std::abort();
+        }
+#endif
         if (ctx != g_fbSlotCacheContext) {
             auto& live = *MGB_CTX;
             for (SizeT i = 0; i < g_fbSlotCache.size(); ++i) {

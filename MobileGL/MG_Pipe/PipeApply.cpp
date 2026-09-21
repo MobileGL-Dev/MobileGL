@@ -1350,9 +1350,18 @@ namespace MobileGL::MG_Pipe {
         // documented bring-up exception), and a ServerLoop fixture with no client at all has
         // none either - there this call is the only reset that exists. Monolith keeps the
         // direct call, byte for byte (G1); in a pull build none of this is compiled at all.
+        // D10: THE MIDDLE CONJUNCT WAS ClientSession::Active() != nullptr ALONE, WHICH IS
+        // PERMANENTLY NULL IN A SERVER PROCESS - so this guard could not arm at all under
+        // spawn, in the shape where calling the reset off the apply thread is most likely and
+        // least recoverable. MGPipeSessionLive() is the same question asked in a way both roles
+        // can answer, and MGPipeServerArm() is the process-scoped half of "am I the server".
+        //
+        // BOTH ARE ADDED AS DISJUNCTS, not substituted. The originals are the only facts a
+        // fixture without a full session has, and swapping them out silently disarms every such
+        // test - measured.
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
-            MG_Remote::Client::ClientSession::Active() != nullptr &&
-            !MG_Remote::Server::ServerLoop::OnApplyThread()) {
+            (MG_Remote::Client::ClientSession::Active() != nullptr || MG_Pipe::MGPipeSessionLive()) &&
+            !MG_Remote::Server::ServerLoop::OnApplyThread() && !MG_Pipe::MGPipeServerArm()) {
             MGLOG_F("MGPipe: Fatal{RoleViolation, \"g_applier\"} - MGPipeApplierReset() called "
                     "off the apply thread with an active transport; under split the reset "
                     "crosses as the applier_reset record (CONTRACT-P5C.md §5.1)");
