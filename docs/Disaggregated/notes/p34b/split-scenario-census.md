@@ -15,12 +15,16 @@ Package D1 owns `PixelStoreSweep`, `DepthStencilReadbackMatrix`, `PackedWordRead
 
 | | registered | excluded by name | blocked, not registered |
 |---|---|---|---|
-| texture family | 7 scenarios | 1 case | 0 |
+| texture family | 7 scenarios | ~~1 case~~ **0** (package D3 fixed the defect) | 0 |
 | program family | 5 scenarios | 9 cases (one scenario's remainder) | 0 |
 
 **12 scenarios newly carry `integration-split` / `-spawn` / `-tcp` entries**, 71 cases per arm.
-Plus `TextureViewAliasScenario` (this package's own, 3 of 4 cases). The split-arm registration
-count recorded for the tier-2 Magma replay went from 33 to 46.
+Plus `TextureViewAliasScenario` (this package's own, ~~3 of 4 cases~~ **all 4 since D3**). The
+split-arm registration count recorded for the tier-2 Magma replay went from 33 to 46.
+
+**Updated by package D3** (`notes/p34b/espryt-d3.md`): the one excluded case is the only row of
+this census that has moved, and it moved because the defect behind it was fixed rather than
+because the exclusion was widened or narrowed. Everything else below is as D2 measured it.
 
 ## Texture family
 
@@ -33,7 +37,7 @@ count recorded for the tier-2 Magma replay went from 33 to 46.
 | `ImageTargetKindScenario` | 29 | pass (24 run, 5 skip) | pass | pass | — the 5 skips are `*Texture2DMultisample*` capability skips that also skip under monolith |
 | `IntegerBorderColorScenario` | 6 | pass | pass | pass | — |
 | `SwizzleAccessRoutineScenario` | 4 | pass | pass | pass | — |
-| `TextureViewAliasScenario` (this package) | 4 | 3 pass, 1 red | 3 pass, 1 red | 3 pass, 1 red | **`TheOwnerUploadDrainRunsAgainAfterADrawBoundary`**, excluded by name — see below |
+| `TextureViewAliasScenario` (this package) | 4 | 4 pass | 4 pass | 4 pass | ~~`TheOwnerUploadDrainRunsAgainAfterADrawBoundary`, excluded by name~~ — **fixed by package D3**, see below |
 
 ### The debt-table 待核 row: is the P6 inspection forwarder debt closed?
 
@@ -45,7 +49,18 @@ white-box half (`PipeApplyPeek`) agrees with Espryt's applied value in every arm
 now registered in the three arms, so the answer is re-taken on every CI run rather than by
 inspection.
 
-### `TextureViewAliasScenario.TheOwnerUploadDrainRunsAgainAfterADrawBoundary` — excluded by name
+### `TextureViewAliasScenario.TheOwnerUploadDrainRunsAgainAfterADrawBoundary` — ~~excluded by name~~ FIXED (package D3)
+
+> **D3's resolution, at the head of D2's own diagnosis because the diagnosis was right.** The
+> fix is at the GATE: `IsDrawSyncCleanByRecord`'s two STORAGE clauses resolve through
+> `Desc.ViewOf` to the storage record (`PipeTextureStorageRecordForRecord`), and
+> `SyncTextureViewToBackendByRecord` stamps the same storage serial, so the stamp and the gate
+> name one quantity. The three PARAMETER clauses stay the view's own record's. The publisher-side
+> reverse index was rejected: it needs pruning on VIEW death or an owner upload bumps a recycled
+> slot's `Serial`, and `VkTextureManager::ResolveWireTextureStorage` already resolves the same way
+> on the Magma side, so the index would have given the two backends two answers to one question.
+> The case is un-excluded and green on all three arms; `CONTRACT-P5E.md` §5.2 now states the rule
+> the code implements. Everything from here to the end of this section is D2's finding as written.
 
 Red on inproc, spawn AND tcp; green under monolith. **Not a lane problem — a product defect this
 package found.** After a view has been SAMPLED once, a later `glTexSubImage` through the OWNER's
@@ -68,6 +83,11 @@ file) or at the publisher (`MG_Pipe/PipeApply.cpp`'s `ApplyTextureUpload`, outsi
 footprint), and the publisher form needs an O(#texture records) scan or a reverse index on
 `MGPipeResourceRecord`, plus a `CONTRACT-P5E` amendment. `KHR-GL43.texture_view.coherency` is
 exactly this test and reads Pass in the CTS baseline, which is a **monolith** reading.
+
+> **D3**: taken at the gate. `KHR-GL43.texture_view.coherency` still has no SPLIT reading on this
+> tree — the CTS baselines are monolith and the split comparison is the device window's (門 5) —
+> so the integration case is the only thing standing behind the fix on host hardware. Listed in
+> `espryt-d3.md`'s "what remains".
 
 ### `SampledSetStalenessScenario` on tcp
 
