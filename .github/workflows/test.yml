@@ -3113,11 +3113,19 @@ jobs:
       # The same shape for Espryt's re-keyed memos (P3b/P4b, PLAN-PH-P34B-P7.md 1.2). P4a/P5f
       # moved the resolved-binding, sampler-pass, image-sweep, twin-registry, unit-sampler and
       # twin-lookup memos onto {slot, gen} handles and applier serials; the legacy pointer-keyed
-      # arms stayed behind MOBILEGL_PIPE_LEGACY_MEMOS / !MOBILEGL_BUILD_DISAGGREGATED because
-      # they are the PULL build's only arms and G1 pins that build's .text. Nothing checked that
-      # a NEW frontend-pointer key could not appear outside those arms. --self-test runs the
-      # negative controls and then the real scan in the same invocation, as its sibling does.
-      - name: Espryt memo keys carry no frontend pointer outside the legacy arms
+      # arms stayed because they are the PULL build's only arms and G1 pins that build's .text.
+      # Nothing checked that a NEW frontend-pointer key could not appear outside them.
+      #
+      # MOBILEGL_PIPE_LEGACY_MEMOS IS A POLICY EXEMPTION, NOT AN ABSENCE. It defaults ON
+      # (CMakeLists.txt:43) and no job here clears it, so the split builds in this workflow DO
+      # compile those arms - TwinLookupMemo among them. The gate's rule is "the legacy arm may
+      # keep pointer keys", which is a decision; only !MOBILEGL_BUILD_DISAGGREGATED is code a
+      # split build genuinely never sees.
+      #
+      # --self-test runs the negative controls and then the real scan in one invocation, as its
+      # sibling does; the scan also asserts that every memo family's anchor still matches and
+      # that every allow-list entry still suppresses something.
+      - name: Espryt memo keys carry no frontend pointer outside the exempted legacy arm
         run: python3 scripts/ci/espryt_memo_purity.py --self-test
 
       # The same question for the symbol tool the P1 gate is written in terms of.
