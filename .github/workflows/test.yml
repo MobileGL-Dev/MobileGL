@@ -2681,7 +2681,21 @@ jobs:
           # resolves the image relative to nothing. Harmless on the inproc arm, which reads it
           # only to decide it does not need it.
           export MOBILEGL_IPC_SERVER_PATH="${GITHUB_WORKSPACE}/build-linux/libMobileGLServer.so"
-          # P7 package L: THE SAME THREE KNOBS THE MONOLITH RETRACE JOB EXPORTS FOR THIS ONE CASE.
+          # P7 package L: THE SAME MAGMA KNOBS THE MONOLITH RETRACE JOB EXPORTS, ALL OF THEM.
+          # This job exported none at all, so every DirectVulkan row of the split matrix was
+          # compared against a monolith row running a different repair set - and a split retrace
+          # whose control is not comparable cannot say whether a divergence is a transport fact.
+          # R11F_G11F_B10F fallback is whole-backend; the blended depth-write quirk auto-enables
+          # only on Qualcomm, which no runner has, so the OIT case forces it exactly as the
+          # monolith job does (ForceOn bypasses only the vendor gate).
+          if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
+            export MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1
+          fi
+          if [ '${{ matrix.backend }}' = 'DirectVulkan' ] \
+             && [ '${{ matrix.case }}' = 'improved-transparency-minecraft-26.3' ]; then
+            export MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE=1
+          fi
+          # THE THREE ITERATIONRP KNOBS, FOR THE ONE CASE THE MONOLITH JOB NAMES.
           # The iterationRP repairs are tri-state quirks that default to device auto-detection and
           # lavapipe is on no auto list, so without them Program 203 runs unrepaired and misses its
           # golden output. The monolith job has exported them since they landed; this job never
