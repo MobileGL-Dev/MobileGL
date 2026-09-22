@@ -82,6 +82,9 @@ TEST(ContextEpochTest, UnpackDefaultIsRepublishedForANewNativeContextOrRole) {
 #endif
 }
 
+// THE TRANSPORT-NATIVE ARM, which is the one a served context takes. DriverScope pins
+// TransportMode::InProcess, so GetRawDepthFetchSampler() returns early at DirectGLES.cpp:343 and
+// never reaches the monolith pair below it.
 TEST(ContextEpochTest, RawDepthSamplerOwnsANativeIdForEachContextGeneration) {
 #if MOBILEGL_BUILD_DISAGGREGATED
     DriverScope scope;
@@ -96,6 +99,60 @@ TEST(ContextEpochTest, RawDepthSamplerOwnsANativeIdForEachContextGeneration) {
     EXPECT_EQ(samplerParameters, 8u);
 #else
     GTEST_SKIP() << "native server sampler exists only in the disaggregated build";
+#endif
+}
+
+// P3b/P4b wave 2-D package D2, STEP 1 of the raw-depth-fetch sampler monolith cleanup: the case
+// above is parameterised over the OTHER arm, so that the claim DirectGLES.cpp:334-336 makes in
+// prose - "P5f fs's transport arm below uses only a native sampler with fixed values. The legacy
+// pair is not constructed or consulted by the server." - is a test rather than a comment.
+//
+// STEP 2 OF THAT CLEANUP - deleting what the transport arm makes unreachable - IS NOT DONE HERE
+// AND IS RECORDED AS P13. Every candidate (the two file-static SharedPtrs at DirectGLES.cpp:82-83,
+// the monolith arm at :361-371, NeedsRawDepthFetchSampler at :393-399 and the pre-handle sampler
+// pass at :8015-8024) is UNCONDITIONAL code: none of it sits behind
+// `#if !MOBILEGL_BUILD_DISAGGREGATED`, the pull build (DISAGGREGATED=OFF, PIPE_PUSH=OFF) compiles
+// and links all of it, and the monolith arm is the ENTIRE body GetRawDepthFetchSampler has there.
+// Deleting any of it moves pull `.text` and fails G1's 0/0/0/0 - which is the rule
+// ARCHITECTURE.md:340 states for exactly this class of retired-but-compiled code. The package's
+// instruction was "only if it keeps the pull build's .text identical"; it does not, so the
+// deletion stops here and is filed rather than attempted.
+//
+// What this case CAN assert without touching a line of library code is that the two arms are
+// genuinely two objects, which is the observable form of "not consulted by the server": a server
+// that had fallen through to the legacy pair would hand back the same pointer under both
+// transports.
+TEST(ContextEpochTest, RawDepthSamplerTakesADifferentObjectOnEachArmAndTheServerNeverTakesTheLegacyOne) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    DriverScope scope; // pins InProcess and bumps the generation, so both arms start cold
+    samplerParameters = 0;
+
+    // --- the transport-native arm ---
+    SamplerImpl::BackendSamplerObject* const native = GetRawDepthFetchSampler();
+    ASSERT_NE(native, nullptr);
+    const Uint nativeId = native->GetBackendSamplerId();
+    EXPECT_NE(nativeId, 0u);
+    EXPECT_EQ(samplerParameters, 4u) << "the native arm programs its four fixed values directly";
+
+    // --- the monolith arm, same entry point, same process ---
+    MG_Config::Transport = MG_Config::TransportMode::Monolith;
+    SamplerImpl::BackendSamplerObject* const legacy = GetRawDepthFetchSampler();
+    ASSERT_NE(legacy, nullptr);
+    EXPECT_NE(legacy, native)
+        << "both transports handed back the SAME BackendSamplerObject, so the server did not take "
+           "the transport-native arm at all - it fell through to g_rawDepthFetchSamplerBackend, "
+           "which DirectGLES.cpp:334-336 says it must not touch";
+    EXPECT_NE(legacy->GetBackendSamplerId(), nativeId)
+        << "the two arms share a native sampler id";
+
+    // --- and back, to prove the selection is live rather than a first-call latch ---
+    MG_Config::Transport = MG_Config::TransportMode::InProcess;
+    EXPECT_EQ(GetRawDepthFetchSampler(), native)
+        << "the transport arm's cached native sampler did not survive a round trip through the "
+           "monolith arm, so one of the two arms is rebuilding state the other owns";
+#else
+    GTEST_SKIP() << "both arms exist only in the disaggregated build; the pull build compiles the "
+                    "monolith arm alone and it is the whole function there";
 #endif
 }
 
