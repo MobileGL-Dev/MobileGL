@@ -2636,9 +2636,19 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # the lane P6.5 left green (same names, same labels, same log paths) and the two new arms
     # differ from it in exactly one dimension. That is what makes a red here readable: it is a
     # TRANSPORT fact, because nothing else changed.
+    #
+    # ${MGL_ITEST_VULKAN_ENV} AND NOT ${MGL_ITEST_COMMON_ENV} (P7 package L, integrator ruling).
+    # Until this ruling the six Magma lanes appended the COMMON list, so the monolith
+    # `DirectVulkan.` arm ran with VK_ICD_FILENAMES pinned and the three lavapipe iterationRP
+    # repairs forced on while these 73 entries ran against whatever ICD the loader happened to
+    # find first, with the repairs at their device auto-detection default. That is not a
+    # semantic difference between two lanes, it is a latent flake: the day a runner or a
+    # workstation grows a second ICD, this lane measures a different driver from the gate it
+    # mirrors and nothing in its output says so. Consistency over "meaning unchanged" - and the
+    # re-run after the change is part of the ruling: integration-magma-split stayed 71/0/2.
     set(MGL_ITEST_MAGMA_WIRE_FLAVOUR_ENV
         "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
-        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
     # Every entry here is green on the inproc arm, R11F_G11F_B10F packed-float mip generation
     # included: the GPU shader blit retires the named native-format refusal, so
     # GenerateMipmapPackedFloatPixels carries its siblings' label and their pixels assertion.
@@ -2686,7 +2696,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         "MOBILEGL_IPC_ROLE_SPLIT_STATE=1" "MOBILEGL_IPC_STRICT_ERRORS=1"
         "MOBILEGL_IPC_ADOPT_TIER=2" "MGITEST_PERSISTENT_MAP_ARM=emulated"
         "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
-        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})  # the ICD pin, see the Fm lane above
     foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
     mgl_itest_magma_arm_shape(${mglItestArm} buffers)
     mgl_itest_join_environment(MGL_ITEST_MAGMA_BUFFER_ENVIRONMENT
@@ -2751,7 +2761,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             "MOBILEGL_IPC_SPIN_US=0" "MOBILEGL_IPC_ADOPT_TIER=2"
             "MGITEST_MAGMA_RUNAHEAD_LANE=1" "MGITEST_SPLIT_LANE=1"
             "MOBILEGL_ITEST_REQUIRE_GPU=1"
-            ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV} ${mglItestArmTransportEnv})
+            ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV}  # the ICD pin, see the Fm lane
+            ${mglItestArmTransportEnv})
         foreach(runAheadCase
                 QueuedBufferVersionsAndDeletedNameReuseKeepTheirPixels
                 QueuedProgramRebindsKeepEachUniformSnapshot
@@ -2785,7 +2796,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         "MOBILEGL_IPC_SPIN_US=0" "MOBILEGL_IPC_ADOPT_TIER=2"
         "MGITEST_MAGMA_CACHES_LANE=1" "MGITEST_SPLIT_LANE=1"
         "MOBILEGL_ITEST_REQUIRE_GPU=1"
-        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})  # the ICD pin, see the Fm lane above
     # P7 package L: THE INPROC ARM ALONE, for the run-ahead lane's reason one step more
     # explicit - MagmaWireCacheScenario::SetUp asserts `runtime.transportName == "inproc"`
     # outright (MagmaWireCacheScenario.cpp:53), because the whole lane reads the SERVER's own
@@ -2843,12 +2854,20 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         if (namedBlitBackend STREQUAL "DirectVulkan")
             set(namedBlitArms ${MGL_ITEST_MAGMA_ARMS})
         endif()
+        # The ICD pin follows the BACKEND here, not the lane: this block registers both, and
+        # handing VK_ICD_FILENAMES to the DirectGLES half would pin an ICD for a lane that
+        # never opens Vulkan (see the Fm lane above for the ruling).
+        if (namedBlitBackend STREQUAL "DirectVulkan")
+            set(namedBlitBaseEnv ${MGL_ITEST_VULKAN_ENV})
+        else()
+            set(namedBlitBaseEnv ${MGL_ITEST_COMMON_ENV})
+        endif()
         foreach(mglItestArm IN LISTS namedBlitArms)
         mgl_itest_magma_arm_shape(${mglItestArm})
         mgl_itest_join_environment(MGL_ITEST_NAMED_BLIT_ENVIRONMENT
             "MOBILEGL_BACKEND_TYPE=${namedBlitBackend}"
             "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
-            ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV} ${mglItestArmTransportEnv})
+            ${MGL_ITEST_CAPABILITY_ENV} ${namedBlitBaseEnv} ${mglItestArmTransportEnv})
         # THE LABEL IS `integration-magma-split` AND NOT `integration-split-magma`, and that is not
         # a preference: `ctest -L` takes a REGEX, not an exact name, so `-L integration-split`
         # MATCHES a label spelled `integration-split-magma` as a substring. The obvious name would
@@ -2985,8 +3004,11 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # stays on the INPROC entries alone - the CI step that reads it require_greens exactly
         # the two names it has always had, and `ctest -L` would have matched a suffixed spelling.
         set(p5f_rsp_arms Split)
+        set(p5f_rsp_base_env ${MGL_ITEST_COMMON_ENV})
         if (NOT backend STREQUAL "DirectGLES")
             set(p5f_rsp_arms ${MGL_ITEST_MAGMA_ARMS})
+            # The ICD pin follows the backend, as in the NamedBlit block (see the Fm lane).
+            set(p5f_rsp_base_env ${MGL_ITEST_VULKAN_ENV})
         endif()
         foreach(mglItestArm IN LISTS p5f_rsp_arms)
         mgl_itest_magma_arm_shape(${mglItestArm} p5f-rsp)
@@ -3001,7 +3023,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             "MOBILEGL_BACKEND_TYPE=${backend}" "MGITEST_SPLIT_LANE=1"
             "MGITEST_P5F_RSP_LANE=1" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
             "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-rsp-${backend}${mglItestArmLogTag}.log"
-            ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV} ${mglItestArmTransportEnv})
+            ${MGL_ITEST_CAPABILITY_ENV} ${p5f_rsp_base_env} ${mglItestArmTransportEnv})
         gtest_discover_tests(MobileGLIntegrationTest
             TEST_PREFIX "${backend}.${mglItestArm}.P5fRsp."
             TEST_FILTER "F1WireScenario.EachWireFrameHasZeroResidualPulls"
