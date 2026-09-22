@@ -156,3 +156,5 @@ verify 今天只在 monolith 注册（`MG_IntegrationTest/CMakeLists.txt:1684-17
 - 门 3 的「不确定」在 wave 1 E0 之前无法区分「同 case 多次结果不同」与「不同 case 各自低于阈值」；两个历史点值（0.988998 / 0.976494）无 per-case 归属。
 - `MEASUREMENTS.md` §7.2 的同名比对自 P5b 起未重跑；「22 → texture readback」「3 → query」两行债务的关闭以 wave 3 的重跑为准。
 - Android 模拟器 retrace 车道每轮 2–6 例 flaky（含 monolith 对照）：门 1 的任何模拟器证据都先过「连续 N 轮绿」再算数。
+- **X1 之后的两条残余**（`notes/p7/x1-persistent-map-segv.md`）：(a) 首次 push 后页面在映射存活期间重新武装，一个**屏蔽了 SIGSEGV 的非 GL 线程写者**仍会被杀——彻底关闭要把武装改成逐 buffer 可选，是设计改动；(b) `RefaultOfANonWriteAccess` 仍可能拒掉同 `(tid, pc, address)` 的一次合法重复写——延后武装后不再常见，未观察到，记录。
+- **P5d 的 Adreno 数字存疑**：X1 证明在 arm64 上注册总是加保护、handler 总是不认领（bionic 指针标记 0xb4 与内核的 `si_addr` 比较），即 mprotect 臂在 Android 上**从未**回答过一次 fault；P5d 报告里把收益记在 mprotect 臂上的设备测量需要重取（`P5D-INPROC-PERFORMANCE.md`）。归优化阶段，不阻塞 P7。
