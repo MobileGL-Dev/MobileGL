@@ -5308,6 +5308,22 @@ void main() {
         return rsp.PrimitiveRestartIndex <= MG_Util::FixedRestartIndexForGLType(pIndexBufferView->indexType);
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // MOBILEGL_TEST_PIPELINE_CREATE_DELAY_MS - milliseconds to spend in a pipeline-creation MISS
+    // on the wire arm. See the call site below for why it exists: the device's divergence needs a
+    // COLD driver pipeline cache, and this host's is always warm, so the only way to reproduce
+    // what a cold cache costs is to buy the time. Read once; inert unless set; compiled only into
+    // the disaggregated build, so the monolith image G1 pins never carries it.
+    static Uint32 MagmaTestPipelineCreateDelayMs() {
+        static const Uint32 milliseconds = [] {
+            const char* value = std::getenv("MOBILEGL_TEST_PIPELINE_CREATE_DELAY_MS");
+            if (!value || !*value) return 0u;
+            return static_cast<Uint32>(std::strtoul(value, nullptr, 10));
+        }();
+        return milliseconds;
+    }
+#endif
+
     VkPipeline VulkanRenderer::GetOrCreatePipeline(
             GLenum mode,
             const MagmaProgramSource& program,
@@ -6114,6 +6130,22 @@ void main() {
                 MG_Util::ConvertBlendEquationToVkEnum(alphaEquation),
                 attachmentColorWriteMask);
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P7 wave 2-B: MOBILEGL_TEST_PIPELINE_CREATE_DELAY_MS.
+        //
+        // The Redmi's OpenRA divergence (exit gate 3) is timing-shaped and reproduces ONLY with a
+        // cold driver pipeline cache: three cleared-cache runs give a bit-identical 0.976494 /
+        // 14658 mismatched pixels, while a warm cache gives 1.000000 from the second run on. What
+        // a cold cache changes is how long vkCreateGraphicsPipelines takes on the apply thread,
+        // so this knob buys that time on a host whose cache is always warm. INERT unless set, and
+        // compiled only into the disaggregated build - the monolith image, which G1 pins, never
+        // sees these lines. The delay goes on the MISS path only: a memo or cache hit is not
+        // what is slow on the device either.
+        if (const Uint32 delayMs = MagmaTestPipelineCreateDelayMs();
+            delayMs != 0 && MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+        }
+#endif
         VkPipeline pipeline = m_pipelineFactory->GetOrCreatePipeline(payload);
         if (pipeline != VK_NULL_HANDLE) {
             PipelineMemoEntry& entry = m_pipelineMemo[m_pipelineMemoNext];
@@ -10792,7 +10824,47 @@ void main() {
             return false;
         }
 
+        // EVERY OUTSTANDING SUBMISSION, NOT ONLY THE ONE JUST MADE (P7 wave 2-B, exit gate 3).
+        //
+        // This used to wait one fence and then call OnSubmitsCompletedUpTo(frame.lastSubmitIndex),
+        // and the comment below said the wait "proved every submission complete". On the monolith
+        // arm that is true - nothing flushes before a readback, so the frame's draws and the copy
+        // are one submission under one fence. On the WIRE arm it is not: ReadWirePixels calls
+        // FlushPendingCommands first, which submits the draws under a POOLED FENCE OF ITS OWN and
+        // returns without waiting, so the copy is a later, separately fenced submission. Two
+        // submissions on one queue start in order; they do not finish in order unless something
+        // makes them, and a fence says nothing about a submission it does not belong to.
+        //
+        // Measured, on this host, at the copy: submit=72 completed=71. The old code then called
+        // OnSubmitsCompletedUpTo(73), which RECORDED 72 as complete and retired its fence - so
+        // after the fact nothing could even observe that it had not been waited for.
+        //
+        // The cost is nothing a readback does not already pay: it is a full CPU stall by
+        // construction, and the fences gathered here are exactly the ones already in flight.
+        //
+        // UNDER #if, although this function serves both arms of the disaggregated build: the PULL
+        // build has no wire arm, cannot flush before a readback, and is the image G1 pins to
+        // 0xa52203. Its single-fence wait stays the statement it always was.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        Vector<VkFence> readbackFences;
+        readbackFences.reserve(m_inFlightSubmits.size() + 1);
+        for (const auto& record : m_inFlightSubmits) {
+            if (record.fence != VK_NULL_HANDLE && record.submitIndex <= frame.lastSubmitIndex) {
+                readbackFences.push_back(record.fence);
+            }
+        }
+        if (readbackFences.empty()) {
+            readbackFences.push_back(frame.imageInFlightFence);
+        }
+        // Measured here on the host (OpenRA, DirectVulkan, inproc, at the frame readback):
+        // fences=2 upTo=73 submitCounter=73 completed=71. Two fences, because submission 72 -
+        // the frame's draws, flushed by ReadWirePixels under a pooled fence - was still
+        // outstanding; the code this replaces waited on one.
+        VkResult result = vkWaitForFences(m_device, static_cast<Uint32>(readbackFences.size()),
+                                          readbackFences.data(), VK_TRUE, UINT64_MAX);
+#else
         VkResult result = vkWaitForFences(m_device, 1, &frame.imageInFlightFence, VK_TRUE, UINT64_MAX);
+#endif
         if (result != VK_SUCCESS) {
             MGLOG_E_ONCE("DirectVulkan readback: vkWaitForFences returned %d", result);
             return false;
@@ -10806,8 +10878,8 @@ void main() {
 
         frame.hasCommandBufferRecorded = false;
         frame.isCommandRecording = false;
-        // The wait proved every submission complete, so the full frame-boundary
-        // drain applies: descriptor cursors, transient arenas, deferred
+        // The wait above covered every submission at or below this one, so the full
+        // frame-boundary drain applies: descriptor cursors, transient arenas, deferred
         // texture/buffer releases, retired command buffers and the converted
         // vertex-stream cache all rewind here, keeping present-less readback
         // loops bounded (Present is the only other drain point).

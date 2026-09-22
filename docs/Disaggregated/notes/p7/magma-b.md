@@ -21,6 +21,7 @@
 | 2 | `depth-stencil-mipmap@P7` + 烘焙 (A)(D) | DEPTH-only **退役**（烘焙深度 mip 程序）；D\|S **decline** | 见 §2 |
 | 3 | `copy-image-in-place@P7` | **退役**（单次 GENERAL 转换）；同级同层矩形重叠 **decline** | 见 §3 |
 | 4 | `default-color-blit-shape@P7` | **退役**（恒等回落 + 旋转 scratch）；四旋转之外 **decline** | 见 §4 |
+| 5 | 出口门 3：OpenRA 回读竞态 | **修复**（回读自带写可见性 barrier + 等齐所有在飞提交） | 见 §5 |
 
 ---
 
@@ -319,3 +320,91 @@ scratch 臂全对，bug 就是这么掉出来的。两条臂现在都对。
 **欠设备核对**：非恒等旋转下的 scratch 臂只在恒等表面上被旋钮验证过（像素与回落臂相同）；真正的
 ROTATE_90/180/270 几何要在手机上看一眼。四旋转之外的 decline 无设备可核（没有会报镜像 transform 的
 设备），按 decline 收口。
+
+---
+
+## 5. 片 5（集成者追加，最高优先）：出口门 3 的 OpenRA 回读竞态
+
+### 5.1 机制（`file:line`，按本片落地前的树）
+
+两句话：
+
+1. **`WireFramebuffer.inc` 的 `ReadWirePixels` 先 `FlushPendingCommands()`，那一步把整帧的 draw 以
+   自己的 pooled fence 提交上队列后就返回、不等**（`VulkanRenderer.cpp:13534-13598`，成功路径上没有
+   `vkWaitForFences`）。随后回读的 `vkCmdCopyImageToBuffer` 被录进**另一个**命令缓冲、成为**后一次
+   提交**。
+2. **`SubmitReadbackCommandsAndWait`（`VulkanRenderer.cpp:10707-10748`）只等自己那一次提交的 fence**，
+   然后 `OnSubmitsCompletedUpTo(frame.lastSubmitIndex)` **把更早那次也记成完成并退休它的 fence**。
+   原注释写着「the wait proved every submission complete」——那句话对 monolith 臂成立（它不先 flush，
+   draw 与 copy 同一次提交、同一个 fence），对 wire 臂不成立。
+
+把两次提交绑在一起的**唯一**东西，是回读前那道 `TransitionWireImage` 的 barrier；而它的**源作用域来自
+图像被跟踪的布局**（`GetImageTransitionSourceState`，`VulkanRenderer.cpp:1784-1825`）。其中两条臂——
+`VK_IMAGE_LAYOUT_UNDEFINED` 与 **`VK_IMAGE_LAYOUT_PRESENT_SRC_KHR`**（`:1787-1791`）——返回
+`VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT` 且 access 为 0，**这是 Vulkan 里「什么都不等」的写法**。
+刚 present 过的默认帧缓冲正处在后一种布局。
+
+于是：pipeline 创建越慢、draw 那次提交拖得越久，copy 越可能在它还没画完时就读走——**帧里最后画的那些
+对象缺失**，正是设备上看到的样子。
+
+### 5.2 主机实测（决定性，且不依赖竞态碰运气）
+
+在 `ReadWirePixels` 记录 copy 的那一刻打点（OpenRA / DirectVulkan / inproc）：
+
+```
+MBPROBE ReadWirePixels/pre: isDefault=1 layout=1 aspect=0x1 submit=72 completed=71
+```
+
+`submit=72 completed=71`——**承载整帧 draw 的第 72 次提交此刻在飞、且无人等它**。这不是概率事件，是
+代码结构，主机上确定性可复现。
+
+主机**不**发散的原因也在这一行里：`layout=1` 是 `VK_IMAGE_LAYOUT_GENERAL`，走
+`GetImageTransitionSourceState` 的 `default:` 臂（`ALL_COMMANDS` / `MEMORY_WRITE`），**碰巧**把 copy 排
+在了 draw 之后。设备上的默认帧缓冲不是 GENERAL。
+
+**集成者给的复现路径（pipeline 延迟旋钮）在主机上不成立，这里如实记录**：新增
+`MOBILEGL_TEST_PIPELINE_CREATE_DELAY_MS`（split-only、未设即惰性，
+`VulkanRenderer.cpp` `GetOrCreatePipelineWithInput` 的 miss 路径）确实生效——OpenRA DirectVulkan SPLIT
+从 1.88 s 变 4.53 s——但 **ssim 一直是 1.000000**。原因就是上一段：主机那条臂的 barrier 是满的。所以
+red-once 用的是 §5.4 的计数，而不是一张发散的图。
+
+### 5.3 修复（两半，都只在 wire 臂）
+
+1. **`RecordWireReadbackWriteBarrier()`**（`WireFramebuffer.inc`，新）：回读在 copy 之前**自己记一道**
+   `ALL_COMMANDS → TRANSFER`、`MEMORY_WRITE → TRANSFER_READ|MEMORY_READ` 的内存 barrier，不再从布局
+   **推断**该等谁。barrier 的第一作用域是本队列**提交序**里更早的每一条命令，所以它跨得过提交边界。
+2. **`SubmitReadbackCommandsAndWait` 等齐所有在飞提交**（`VulkanRenderer.cpp`，`#if
+   MOBILEGL_BUILD_DISAGGREGATED`）：收集 `m_inFlightSubmits` 里 `submitIndex <= frame.lastSubmitIndex`
+   的每一个 fence 一起等。代价是零——回读本来就是一次完整的 CPU 停顿。
+   **pull 构建保持单 fence 原样**：它没有 wire 臂、回读前不会 flush，而且是 G1 钉住的那个镜像。
+
+### 5.4 red-once（R-16，已执行并还原）
+
+打点回读实际等了几个 fence：
+
+| | `fences` | `upTo` | `completed` |
+|---|---|---|---|
+| 修复后 | **2** | 73 | 71 |
+| 修复前 | **1**（只有自己那一个） | 73 | 71 |
+
+`completed=71` 两边都一样——即第 72 次提交确实在飞。修复前只等 1 个 fence 然后把 72 记成完成；修复后
+两个都等。把 §5.3 的第 2 半还原即回到 `fences=1`，**这是确定性的、主机上的红**，不靠时序。
+
+### 5.5 车道
+
+`MOBILEGL_TEST_PIPELINE_CREATE_DELAY_MS=25` 下的三条回读用例（`VertexIdSamplerAndScalarUniformPixels`
+draw→回读、`ComputeImageStoreFramebufferPixels` compute→回读、`GenerateMipmapPixels`）注册到三臂，
+前缀 `.PipelineDelay.`。它们是**回归门而不是复现**：钉住「路径上每次 pipeline 创建都多花 25 ms 时，回读
+仍然返回那次 draw 的像素」——即答案不随时序移动。
+
+`integration-magma-split` **84**（+3）、`-spawn` **63**（+3）、`-tcp` **65**（+3），三臂 0 红；
+OpenRA DirectVulkan SPLIT retrace ssim 1.000000（带与不带 25 ms 延迟各两遍）。
+
+### 5.6 欠设备核对
+
+集成者要在 Redmi 上重跑三遍冷 cache（`pm clear` 后）。预期：0.976494 → 1.000000。若仍发散，下一个嫌疑
+按序是 `WireDraw.inc` 里十一处**静默丢弃 draw** 的 `return false`（尤其 `pipeline == VK_NULL_HANDLE`
+那处，它与设备日志里那三行 `handing vkCreateShaderModule an INVALID module for program 2 stage 4`
+在同一条路径上），以及 `SetImageContentDefined` 在 wire 臂是**画之前**就置位（monolith 是
+`EndRenderPass` 之后），这会让「没有写入记录」那条警告恰好在它该响的时候不响。两条都不在本片修的范围
+内，按名记在这里。

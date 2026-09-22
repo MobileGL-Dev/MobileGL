@@ -309,6 +309,43 @@
         if (payload.mask & GL_STENCIL_BUFFER_BIT) clearSurface(fbo.Stencil, VK_IMAGE_ASPECT_STENCIL_BIT, 0);
     }
 
+    // P7 wave 2-B (exit gate 3). THE READBACK SAYS WHAT IT IS WAITING FOR INSTEAD OF INFERRING IT.
+    //
+    // Every other transition in this file derives its barrier's SOURCE scope from the image's
+    // tracked layout, through GetImageTransitionSourceState (VulkanRenderer.cpp). That is right
+    // for a transition - but two of its arms, VK_IMAGE_LAYOUT_UNDEFINED and
+    // VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, return VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT with no access
+    // bits, which is Vulkan's spelling of AN EMPTY FIRST SCOPE: wait for nothing. For a
+    // transition out of UNDEFINED that is correct (the contents are being discarded); for a
+    // READBACK it is not, because the pixels being copied were written by the very commands the
+    // barrier declines to wait for. A just-presented default framebuffer sits in exactly the
+    // second of those layouts.
+    //
+    // It matters on the wire arm and not on the monolith one because of where the draws are.
+    // ReadWirePixels' FlushPendingCommands has already put the frame's draws on the queue under a
+    // pooled fence and returned WITHOUT waiting, so the copy recorded below lands in a LATER
+    // submission and this barrier is the only thing that could order the two. The monolith
+    // readback never flushes first: its draws and its copy are one submission under one fence.
+    //
+    // Measured on the host (OpenRA, DirectVulkan, inproc): at this point the counters read
+    // submit=72 completed=71 - the draws' submission is in flight and unwaited. The host does not
+    // diverge because its default framebuffer's tracked layout here is GENERAL, which takes
+    // GetImageTransitionSourceState's `default:` arm (ALL_COMMANDS / MEMORY_WRITE) and orders the
+    // copy by accident. The device's is not.
+    void VulkanRenderer::RecordWireReadbackWriteBarrier() {
+        auto& frame = m_frameContext.GetCurrent();
+        if (!frame.isCommandRecording) m_frameContext.BeginCommandRecording();
+        if (VkRenderPassManager::GetActiveRenderPass()) VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+        // ALL_COMMANDS as the source scope reaches back across the submission boundary: a
+        // barrier's first scope is every command earlier in SUBMISSION order on this queue, not
+        // merely earlier in this command buffer.
+        VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_MEMORY_READ_BIT;
+        vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+    }
+
     void VulkanRenderer::ReadWirePixels(GLint x, GLint y, GLsizei width, GLsizei height,
                                         GLenum format, GLenum type, void* pixels) {
         if (width <= 0 || height <= 0) return;
@@ -334,6 +371,7 @@
                          source.swapchainImageIndex);
         }
         m_textureManager->FlushPendingUploads();
+        RecordWireReadbackWriteBarrier();
         TransitionWireImage(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         if (aspect != VK_IMAGE_ASPECT_COLOR_BIT) {
             ReadDepthStencilImageToClient(source.image,source.format,

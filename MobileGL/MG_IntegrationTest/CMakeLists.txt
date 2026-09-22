@@ -2734,6 +2734,34 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # strongest sense: the monolith arm declines every in-place copy, so there is no
         # DirectVulkan. entry to register these beside - the wire arm is the one that performs
         # them, which is what §3.2 asks for.
+        # ---- P7 wave 2-B, EXIT GATE 3: the readback must not depend on how long a pipeline
+        # takes to create. --------------------------------------------------------------------
+        #
+        # The Redmi's OpenRA divergence reproduces only with a COLD driver pipeline cache (three
+        # cleared-cache runs: a bit-identical ssim 0.976494 / 14658 mismatched pixels; warm:
+        # 1.000000 from the second run on). What a cold cache changes is how long
+        # vkCreateGraphicsPipelines takes on the apply thread, and
+        # MOBILEGL_TEST_PIPELINE_CREATE_DELAY_MS buys that time on a host whose cache is warm.
+        #
+        # THESE ENTRIES ARE A REGRESSION GATE, NOT THE REPRODUCTION. The delay alone does NOT
+        # make lavapipe diverge, and the reason is in WireFramebuffer.inc's
+        # RecordWireReadbackWriteBarrier: the host's default framebuffer is tracked as
+        # VK_IMAGE_LAYOUT_GENERAL at the readback, which takes GetImageTransitionSourceState's
+        # `default:` arm (ALL_COMMANDS / MEMORY_WRITE) and orders the copy by accident. What these
+        # entries do pin is that a readback which follows a draw still returns that draw's pixels
+        # when every pipeline creation on the path costs 25 ms - i.e. that the answer does not
+        # move with timing.
+        foreach(pipelineDelayCase VertexIdSamplerAndScalarUniformPixels
+                                  ComputeImageStoreFramebufferPixels
+                                  GenerateMipmapPixels)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.PipelineDelay."
+                TEST_FILTER "F1WireScenario.${pipelineDelayCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_TEST_PIPELINE_CREATE_DELAY_MS=25\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-pipelinedelay${mglItestArmLogTag}-${pipelineDelayCase}.log")
+        endforeach()
         # `default-color-blit-shape@P7`'s retirement. TWO ENTRIES OVER ONE CASE, and the second
         # is the only way its arm is reachable here: every surface this lane creates reports
         # VK_SURFACE_TRANSFORM_IDENTITY, so the scratch path that exists FOR rotation would

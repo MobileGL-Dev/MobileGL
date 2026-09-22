@@ -517,6 +517,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         struct WireDepthMipmapResources;
         WireDepthMipmapResources* m_wireDepthMipmapResources = nullptr;
         void DestroyWireDepthMipmapResources();
+        // P7 wave 2-B (exit gate 3): the readback's own write-visibility barrier, recorded before
+        // the copy instead of inferred from the image's tracked layout. See WireFramebuffer.inc.
+        void RecordWireReadbackWriteBarrier();
         void ReadWirePixels(GLint x, GLint y, GLsizei width, GLsizei height,
                             GLenum format, GLenum type, void* pixels);
         void GenerateWireMipmap();
