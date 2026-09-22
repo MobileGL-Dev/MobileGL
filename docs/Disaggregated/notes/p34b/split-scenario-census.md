@@ -18,9 +18,26 @@ Package D1 owns `PixelStoreSweep`, `DepthStencilReadbackMatrix`, `PackedWordRead
 | texture family | 7 scenarios | ~~1 case~~ **0** (package D3 fixed the defect) | 0 |
 | program family | 5 scenarios | 9 cases (one scenario's remainder) | 0 |
 
-**12 scenarios newly carry `integration-split` / `-spawn` / `-tcp` entries**, 71 cases per arm.
-Plus `TextureViewAliasScenario` (this package's own, ~~3 of 4 cases~~ **all 4 since D3**). The
-split-arm registration count recorded for the tier-2 Magma replay went from 33 to 46.
+**12 scenarios newly carry `integration-split` / `-spawn` / `-tcp` entries**, **72 cases per
+arm** (the table below sums to 72; an earlier draft said 71 and was simply wrong). With
+`TextureViewAliasScenario` (this package's own; 3 of its 4 cases registered by D2, **all 4 since
+D3**) and the `TextureUploadShape` gate's one case, this package adds **76 new
+`DirectGLES.{Split,Spawn,Tcp}.` entries per arm** — 72 + 3 + 1 — counted from the generated
+ctest include files against the pinned `~/w7/p7-before/ctest-names-split.txt` baseline (D3's
+un-exclusion makes it 77 on the integration tree, one per arm).
+
+The raw diff against that baseline reports **77** per arm at D2's head, not 76. The extra one is
+`DirectGLES.<arm>.Ct.CtWireScenario.TheServerPublishesTheResidentSubDataCapabilityFromItsOwnTable`,
+registered by the pre-existing `foreach(ctCase ...)` loop and added by `b56d70177` ("the server
+publishes kCapResidentSubData off its own wire resource table") — one of the five P7 commits
+between the `p7-before` baseline and this package's base. No file under `CtWireScenario` is
+touched here.
+
+An earlier draft of this note said "+37 entries per split arm". That number came from
+differencing against `~/w7/pipe/build-split`, which is the integrator's LIVE build directory and
+had already moved past this package's base (`7ed5da52` -> `8c5dd6fc`); it matched nothing and is
+withdrawn. The split-arm registration count recorded for the tier-2 Magma replay went from 33 to
+46.
 
 **Updated by package D3** (`notes/p34b/espryt-d3.md`): the one excluded case is the only row of
 this census that has moved, and it moved because the defect behind it was fixed rather than
@@ -126,10 +143,32 @@ all in flight. A red there would be wave 2's to fix and would block this package
 reasons it cannot act on. The tier-2 replay is exactly the right instrument for that: it produces
 the red list without making it a gate.
 
-## What was re-run after
+## Gates
 
-* `scripts/ci/spawn_lane_parity.py build-split`
-* the G14 name-only-grows check
-* `ctest -L unit`
+Taken on `~/w7/p7-espryt-d2/build-split` (Release, clang, lavapipe ICD) and
+`~/w7/p7-espryt-d2/build-linux` (the pull configuration) at the head of this package, after the
+review rework. Lane totals are whole-label runs, not filtered subsets.
 
-See `espryt-d2.md` for the readings.
+| gate | reading |
+|---|---|
+| `ctest -L unit` | 2418 / 2418 |
+| `ctest -L integration-split` | 263 / 263 |
+| `ctest -L integration-spawn` | 179 / 179 |
+| `ctest -L integration-tcp` | 182 / 182 |
+| `integration-gpu`, DirectGLES monolith, the touched families | 89 / 89 |
+| G1 pull `.text` | 10822147 = `0xa52203` |
+| G1 `nm --defined-only` | identical to `~/w7/p7-before/pull-syms.txt`, 30570 symbols |
+| G14 ctest name set | 4155 -> 6615; 0 names removed by this package |
+| `scripts/ci/spawn_lane_parity.py build-split` | rc 0 |
+| `scripts/ci/fatal_census.py` | rc 0, 0 unmarked |
+| `scripts/ci/espryt_memo_purity.py --self-test` | PASS, 5 families anchored, 1 allow entry, all consulted |
+| `scripts/ci/link_seam_purity.py --self-test` | PASS |
+| `scripts/link_ratchet.py --self-test` | OK |
+
+The one name the G14 diff reports as removed,
+`CapsMirrorTest.APlaceholderMirrorConsumesNothing`, is absent from the base build too and is
+referenced only by a comment in `RemoteClientTest.cpp:590` explaining that it was retired; it
+predates this package's base.
+
+Per-slice readings, red-once transcripts and the two findings this package made are in
+`espryt-d2.md`.

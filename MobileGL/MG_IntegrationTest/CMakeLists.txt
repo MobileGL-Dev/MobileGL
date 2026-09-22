@@ -2101,6 +2101,17 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         RESOURCE_LOCK mobilegl-tcp)
     # D2: the texture-view opt-in on both TCP lists too, so the three shared GLES split arms
     # carry one configuration. See the note over MGL_ITEST_GLES_SPLIT_ENVIRONMENT.
+    #
+    # THE TWO TCP LISTS ARE THE CLIENT'S HALF ONLY, and the two arms differ in whether that is
+    # enough. The loopback Tcp arm's server is started by the TcpServer.Start fixture below,
+    # which this package also gives the knob - so both halves have it. The TcpDevice arm's
+    # server is a supervisor already running ON A DEVICE, started outside this build by whoever
+    # set MOBILEGL_ITEST_TCP_DEVICE_ENDPOINT; nothing here can reach its environment. If that
+    # supervisor was started without MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1 it will withhold
+    # GL_ARB_texture_view and every texture-view case in the TcpDevice arm will GREEN-SKIP,
+    # exactly as the loopback arm did before the fixture entry got the knob. The arm is
+    # unconfigured in this repo (the endpoint defaults empty, so the arm is not created at all),
+    # so this is a note for whoever configures it rather than a defect today.
     mgl_itest_join_environment(MGL_ITEST_GLES_TCP_ENVIRONMENT
         "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=spawn"
         "MOBILEGL_IPC_CONTROL=${MOBILEGL_ITEST_TCP_ENDPOINT}" "MOBILEGL_IPC_DATA=stream"
@@ -2759,12 +2770,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         UniformInitializerScenario                # 3 cases
         Glsl420DeclarationScenario                # 6 cases
         IoBlockNameCollisionScenario)             # 2 cases
+    # NO PER-SCENARIO FILTER INDIRECTION, unlike the d1 and i1 blocks above: every scenario here
+    # is registered whole, because the census found no case in any of them that needs excluding.
+    # The d1/i1 shape (a MGL_SPLIT_<pkg>_FILTER_<Scenario> variable consulted per entry) is what
+    # to reach for the day one does; carrying an `if(DEFINED ...)` that is never true today would
+    # be a branch no run takes.
     foreach(mglItestD2Scenario IN LISTS MGL_SPLIT_D2_SCENARIOS)
-        if(DEFINED MGL_SPLIT_D2_FILTER_${mglItestD2Scenario})
-            mgl_itest_register_split_arms("${MGL_SPLIT_D2_FILTER_${mglItestD2Scenario}}" "")
-        else()
-            mgl_itest_register_split_arms("${mglItestD2Scenario}.*" "")
-        endif()
+        mgl_itest_register_split_arms("${mglItestD2Scenario}.*" "")
     endforeach()
 
     # ProgramPipelineScenario BEYOND *StorageBlock*: the i1 block above already registers the two
