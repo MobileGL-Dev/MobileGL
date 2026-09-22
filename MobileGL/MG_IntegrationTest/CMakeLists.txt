@@ -2738,6 +2738,50 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         )
     endforeach()
 
+    # ---- D2: THE TEXTURE / PROGRAM SPLIT-SCENARIO CENSUS ------------------------------------
+    #
+    # PLAN-PH-P34B-P7.md 1.2, "门：纹理 / program 场景 split 覆盖". Each candidate was run once
+    # under MOBILEGL_TRANSPORT=inproc on build-split and its FIRST BLOCKER recorded; the row per
+    # scenario x backend x blocker is in notes/p34b/split-scenario-census.md. What follows is the
+    # result of that census, not a guess: every scenario listed here passed, and every case that
+    # did not is excluded BY NAME below with its blocker.
+    #
+    # D1 owns PixelStoreSweep, DepthStencilReadbackMatrix, PackedWordReadback and
+    # LayeredTextureReadback - they are not here.
+    #
+    # DIRECTVULKAN ARMS DEFAULT TO NONE, and that is not an omission. The macro records every
+    # call and the informational tier-2 block at the end of this file replays all of them on
+    # DirectVulkan under integration-magma-all-{split,spawn,tcp} - so these scenarios DO get a
+    # Magma reading, just not a gating one. Gating them there would be asserting P7 wave 2's
+    # exit gate 1 from inside a P3b/P4b package, on a backend whose own @P7 named refusals are
+    # still being retired in waves A/B/C.
+    set(MGL_SPLIT_D2_SCENARIOS
+        TextureViewScenario                       # glTextureView end to end, 10 cases
+        TextureParamsWithoutASamplerViewScenario  # G9's four cases; also settles the debt-table row
+        SampledSetStalenessScenario               # 2 cases
+        ImageSizeAfterRespecScenario              # 1 case
+        ImageTargetKindScenario                   # 29 cases
+        IntegerBorderColorScenario                # 6 cases
+        SwizzleAccessRoutineScenario              # 4 cases
+        PostLinkAttachScenario                    # 2 cases
+        RelinkStageSetScenario                    # 3 cases
+        UniformInitializerScenario                # 3 cases
+        Glsl420DeclarationScenario                # 6 cases
+        IoBlockNameCollisionScenario)             # 2 cases
+    foreach(mglItestD2Scenario IN LISTS MGL_SPLIT_D2_SCENARIOS)
+        if(DEFINED MGL_SPLIT_D2_FILTER_${mglItestD2Scenario})
+            mgl_itest_register_split_arms("${MGL_SPLIT_D2_FILTER_${mglItestD2Scenario}}" "")
+        else()
+            mgl_itest_register_split_arms("${mglItestD2Scenario}.*" "")
+        endif()
+    endforeach()
+
+    # ProgramPipelineScenario BEYOND *StorageBlock*: the i1 block above already registers the two
+    # storage-block cases. The other nine are pure name/state cases that draw nothing, and
+    # ScenarioFixture's armed-lane rule (the client encoder's record ordinal must move) makes a
+    # case that produced no record RED for having nothing to say - which is the rule working, not
+    # a defect. They stay unregistered for that reason and are listed in the census note.
+
     # The split half of the counting pair. MGITEST_PERSISTENT_MAP_ARM=emulated is R-6: under split
     # the adopt tier is pinned at T2, the resource owner declines every acquisition and the client
     # pushes the mapping's dirty blocks - so pmap must be non-zero and mpr must be the monolith
