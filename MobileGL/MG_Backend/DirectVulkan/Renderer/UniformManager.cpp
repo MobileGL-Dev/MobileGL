@@ -31,6 +31,8 @@
 #include <Config.h>
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Pipe/PipeApply.h>
+// P7 wave 0: the seam WireDescriptorFatal dies through. See MG_Pipe/PipeSessionFail.h.
+#include <MG_Pipe/PipeSessionFail.h>
 #endif
 #include <vulkan/utility/vk_format_utils.h>
 #include <algorithm>
@@ -65,9 +67,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return hash;
     }
 
+    // P7 wave 0, the descriptor half of WireFramebuffer.inc's MagmaWireFatal - same message,
+    // same seam, same reason. Four of the fifteen `@P7` refusals die here.
     [[noreturn]] static void WireDescriptorFatal(const char* detail) {
-        MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"Magma:%s\"}", detail);
-        std::abort();
+        MG_Pipe::MGPipeSessionFail(MG_Pipe::MGPipeFatalFamily::UnmigratedVerb,
+                                   "MGPipe: Fatal{UnmigratedVerb, \"Magma:%s\"}", detail);
     }
 
     static Bool ResolveWireRange(Uint64 offset, Uint64 declaredSize, VkDeviceSize bufferSize,

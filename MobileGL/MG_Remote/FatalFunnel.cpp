@@ -9,6 +9,7 @@
 #include <MG_Remote/FatalFunnel.h>
 
 #include "../Includes.h" // MGLOG_F and the umbrella; a .cpp may pull it, a Transport/ header may not
+#include <MG_Pipe/PipeSessionFail.h> // the seam MG_Backend's renderer dies through
 #include "Client/ClientSession.h"
 #include "Protocol/generated/protocol_generated.h"
 #include "Server/ServerSession.h"
@@ -31,6 +32,34 @@ namespace MobileGL::MG_Remote {
 
     std::uint64_t SessionFaultCount() {
         return g_sessionFaultCount.load(std::memory_order_relaxed);
+    }
+
+    namespace {
+        // THE PROJECTION FROM MG_Pipe's TWO-WORD BOUNDARY ENUM ONTO THE .def's VOCABULARY, as a
+        // switch with a named default rather than a cast. MGPipeFatalFamily is deliberately not
+        // MGFatalFamily's ordinals (PipeSessionFail.h says why), so this arm is the only place
+        // the two vocabularies meet - and adding a third word there means arguing for a row here.
+        //
+        // The line is forwarded through "%s" rather than re-used as a format: it has already been
+        // vsnprintf'd once, and a detail string that happened to contain a `%` would otherwise be
+        // read as a conversion the second time round.
+        [[noreturn]] void PipeSessionFailAdapter(MG_Pipe::MGPipeFatalFamily family,
+                                                 const char* line) {
+            MGFatalFamily mapped = MGFatalFamily::ProtocolCorruption;
+            switch (family) {
+            case MG_Pipe::MGPipeFatalFamily::UnmigratedVerb:
+                mapped = MGFatalFamily::UnmigratedVerb;
+                break;
+            case MG_Pipe::MGPipeFatalFamily::RoleViolation:
+                mapped = MGFatalFamily::RoleViolation;
+                break;
+            }
+            SessionFail(mapped, "%s", line);
+        }
+    } // namespace
+
+    void InstallPipeSessionFailHook() {
+        MG_Pipe::MGPipeInstallSessionFailHook(&PipeSessionFailAdapter);
     }
 
     void SessionFail(MGFatalFamily family, const char* fmt, ...) {

@@ -101,6 +101,9 @@
 // StagedShadowStore::CoverageAdd / CoverageHas: ONE spelling of the covered set, so the texture
 // half's runs and the buffer half's ranges cannot drift apart on what "covered" means.
 #include <MG_Remote/Server/StagedShadow.h>
+// P7 wave 0 / Ph slice (2): RequireLevelBytes' death goes through Session::Fail. Named here
+// rather than left to StagedShadow.h's copy of the same include.
+#include <MG_Remote/FatalFunnel.h>
 #include <MG_Util/Debug/Log.h>
 #include <MG_Util/Math/VectorTypes.h>
 
@@ -331,7 +334,9 @@ namespace MobileGL::MG_Remote::Server {
                 StagedShadowStore::CoverageHas(shadow->Covered, 0, shadow->Bytes.size())) {
                 return shadow->Bytes.data();
             }
-            MGLOG_F("MGPipe: Fatal{StageSnapshotTooNarrow, \"%s\"} - the texture sync wants the "
+            // Verbatim what the MGLOG_F said, through the funnel that publishes it (P7 wave 0).
+            SessionFail(MGFatalFamily::StageSnapshotTooNarrow,
+                    "MGPipe: Fatal{StageSnapshotTooNarrow, \"%s\"} - the texture sync wants the "
                     "bytes of (uploadTarget=%u, level=%u) and the server's staged shadow has no "
                     "COMPLETE covered run for it. Under split the authoritative shadow is "
                     "SERVER-OWNED (rule C) and resource_subdata is the only way bytes reach it, "
@@ -341,7 +346,6 @@ namespace MobileGL::MG_Remote::Server {
                     "byte answer exists at all. Re-reading the client's shadow would be the "
                     "cross-role access this store exists to end",
                     site, static_cast<Uint32>(uploadTarget), static_cast<Uint32>(level));
-            std::abort();
         }
 
         // Diagnostics the sync path and the unit cases read, so that a check can assert WHAT

@@ -124,6 +124,10 @@ FUNNEL_SITES = {
         ("#define MGP_TRIP_WIRE_REPORT",
          "the poison/verify trip-wire funnel: its 30-odd callers each pass MGP_TRIP_WIRE_TAG(name), "
          "which IS the `Fatal{name}` marker, so the death is named by the caller"),
+        ("void MGPipeSessionFail(",
+         "the no-hook default of the backend session-fail seam (MG_Pipe/PipeSessionFail.h): the "
+         "line it logs is the CALLER's, family word and all, and with MG_Remote's hook installed "
+         "this abort is never reached at all"),
     ),
     "MobileGL/MG_Pipe/generated/PipeWire.inc": (
         ("MGPipeWireProtocolFatal",
@@ -138,6 +142,13 @@ FUNNEL_SITES = {
 # abort it has nothing to do with.
 kMarkerWindow = 12
 
+# A FUNNEL'S ANCHOR GETS A WIDER WINDOW THAN A MARKER DOES, and for the opposite reason. A marker
+# window has to be tight because any `Fatal{` in it silences the abort below; an anchor window can
+# be loose because the anchor is a specific line of code, argued for by name in the table above,
+# and the only thing a wider window can reach is the same funnel's own body. Forty covers a funnel
+# whose signature and abort are separated by its formatting and its explanation.
+kFunnelAnchorWindow = 40
+
 MARKER = re.compile(r"Fatal\{([A-Za-z][A-Za-z0-9]*)")
 REFUSAL = re.compile(r"Refuse\{([A-Za-z][A-Za-z0-9]*)")
 ABORT = re.compile(r"\bstd::abort\(\)")
@@ -145,7 +156,11 @@ WIRE_LOG_FATAL_CALL = re.compile(r"WireLogFatal\s*\(")
 # P6 dl: a SessionFail call must carry a Fatal{ word in its string, the same rule
 # WireLogFatal has - the enum and the string both name the family, and a call whose string
 # forgot it would let the two disagree. Checked everywhere SessionFail is called.
-SESSION_FAIL_CALL = re.compile(r"SessionFail\s*\(")
+#
+# The lookbehind is not decoration: without it this pattern also matches `MGPipeSessionFail(`,
+# and it reported MG_Pipe's own seam - whose callers carry the word exactly as SessionFail's do -
+# for being a SessionFail call with no word in its DECLARATION.
+SESSION_FAIL_CALL = re.compile(r"(?<![A-Za-z0-9_])SessionFail\s*\(")
 FAMILY_ROW = re.compile(r"^\s*X\(([A-Za-z][A-Za-z0-9]*)\s*,", re.MULTILINE)
 REFUSE_ENUM = re.compile(r"enum\s+RefuseCode\s*:[^{]*\{(.*?)\}", re.DOTALL)
 ENUM_VALUE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9]*)\s*=", re.MULTILINE)
@@ -245,11 +260,11 @@ def declared_refusals():
     return set(ENUM_VALUE.findall(block.group(1)))
 
 
-def sanctioned(rel, window):
+def sanctioned(rel, anchor_window):
     """Is this unmarked abort inside a funnel the tables above sanction?"""
     if rel in FUNNEL_FILES:
         return True
-    return any(anchor in window for anchor, _reason in FUNNEL_SITES.get(rel, ()))
+    return any(anchor in anchor_window for anchor, _reason in FUNNEL_SITES.get(rel, ()))
 
 
 def census():
@@ -287,7 +302,8 @@ def census():
                 continue
             sites.append({"file": rel, "line": index + 1})
             window = "\n".join(lines[max(0, index - kMarkerWindow):index + 1])
-            if sanctioned(rel, window):
+            anchors = "\n".join(lines[max(0, index - kFunnelAnchorWindow):index + 1])
+            if sanctioned(rel, anchors):
                 continue  # rule 2, or an argued funnel entry, covers it
             if not MARKER.search(window):
                 unmarked.append({"file": rel, "line": index + 1, "text": line.strip()})

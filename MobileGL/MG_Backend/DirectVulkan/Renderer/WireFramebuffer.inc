@@ -1,9 +1,16 @@
 // P5f fm: included by VulkanRenderer.cpp inside the backend namespace. All inputs here
 // belong to the applier; no frontend object, lifetime-id lookup or allocator is used.
 #if MOBILEGL_BUILD_DISAGGREGATED
+    // P7 wave 0. THE MESSAGE IS UNCHANGED; where it goes is not. This funnel is how eleven of
+    // the fifteen `@P7` refusals die (the other four are WireDescriptorFatal's), and until now
+    // every one of them raised its own abort: no SessionFault frame for the peer, no
+    // SessionFaultCount() for exit gate S8, and nothing tying the hand-typed word to
+    // FatalFamilies.def. MGPipeSessionFail hands the line to the hook MG_Remote installs at
+    // server-role init, whose arm for UnmigratedVerb is SessionFail(MGFatalFamily::
+    // UnmigratedVerb, ...) - and with no hook installed it logs and aborts exactly as this did.
     [[noreturn]] static void MagmaWireFatal(const char* detail) {
-        MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"Magma:%s\"}", detail);
-        std::abort();
+        MG_Pipe::MGPipeSessionFail(MG_Pipe::MGPipeFatalFamily::UnmigratedVerb,
+                                   "MGPipe: Fatal{UnmigratedVerb, \"Magma:%s\"}", detail);
     }
 
     VulkanRenderer::WireImage VulkanRenderer::ResolveWireImage(

@@ -15,6 +15,7 @@
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Remote/Client/ClientSession.h>
+#include <MG_Remote/FatalFunnel.h> // InstallPipeSessionFailHook, installed at step 0 below
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Remote/Server/ServerSession.h>
 #endif
@@ -158,6 +159,14 @@ namespace MobileGL::MG_Backend {
         // its own Accept; InitSplitRoles calls it and then starts the client.
         Bool InitServerRoleCommon() {
             using namespace MobileGL::MG_Remote;
+
+            // 0. the Magma wire funnels' route to Session::Fail (P7 wave 0). FIRST, before
+            //    CreateBackend can reach a wire arm: a hook installed after the first death it
+            //    was meant to catch is a hook that does nothing on the only run that mattered.
+            //    Here rather than in ServerMain because BOTH server roles pass through this
+            //    function - the inproc role and the spawn/TCP session child - and a per-transport
+            //    install is how one of the two ends up without it.
+            InstallPipeSessionFailHook();
 
             // 1. the SERVER role's private backend object, on the app thread, with no GL and no
             //    EGL. The context is created and made current later, on mgl-srv-apply, when the

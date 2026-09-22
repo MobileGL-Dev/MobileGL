@@ -33,6 +33,9 @@
 #endif
 
 #if MOBILEGL_BUILD_DISAGGREGATED
+// P7 wave 0: the seam the Magma wire funnels in MG_Backend die through. Declared in MG_Pipe and
+// DEFINED below, so MG_Backend names no MG_Remote symbol of its own to reach Session::Fail.
+#include <MG_Pipe/PipeSessionFail.h>
 // R-6's tier gate. One spelling, asked at the one place the decline is decided. Outside the
 // MOBILEGL_PIPE_VERIFY block above on purpose: the tier is a property of the BUILD, not of the
 // comparator, and a split build without the comparator still declines every acquisition.
@@ -51,6 +54,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <utility>
@@ -108,6 +113,49 @@
     X(ProgramPointSize)
 
 namespace MobileGL::MG_Pipe {
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // ----------------------------------------------------------------------------
+    // THE BACKEND-SIDE SESSION-FAIL SEAM (P7 wave 0). PipeSessionFail.h holds the argument;
+    // this is the whole implementation.
+    //
+    // It lives in this file for the reason MGP_TRIP_WIRE_REPORT does, forty lines up: this is
+    // where MG_Pipe already states "the verdict of every trip wire, in one place", and a seam
+    // whose default is an abort belongs next to the other one rather than in a file of its own
+    // that a reader has to be told about. Split-only, so a pull build gains nothing (G1) and a
+    // push-monolith build - where the three Magma wire funnels are not compiled either - gains
+    // nothing to call.
+    namespace {
+        MGPipeSessionFailHook g_sessionFailHook = nullptr;
+    } // namespace
+
+    void MGPipeInstallSessionFailHook(MGPipeSessionFailHook hook) { g_sessionFailHook = hook; }
+
+    MGPipeSessionFailHook MGPipeSessionFailHookInstalled() { return g_sessionFailHook; }
+
+    void MGPipeSessionFail(MGPipeFatalFamily family, const char* fmt, ...) {
+        // The same 512-byte buffer and the same fallback SessionFail and WireLogFatal use, so a
+        // death that travels this seam reads identically to one that did not.
+        char line[512];
+        va_list args;
+        va_start(args, fmt);
+        const int written = std::vsnprintf(line, sizeof(line), fmt, args);
+        va_end(args);
+        if (written < 0) {
+            std::snprintf(line, sizeof(line),
+                          "MGPipe: unformattable Fatal diagnostic (format=%s)", fmt);
+        }
+        if (g_sessionFailHook != nullptr) g_sessionFailHook(family, line);
+        // NO HOOK: exactly what the three funnels did before this seam existed - the line, then
+        // the abort. Reached in a server image whose role init has not run (a unit case that
+        // drives the applier headless) and in the client process, where there is no session to
+        // fail. The abort carries no `Fatal{` of its own because `line` already does;
+        // fatal_census.py's FUNNEL_SITES names this function for that reason.
+        MGLOG_F("%s", line);
+        std::abort();
+    }
+#endif
+
     namespace {
         // ----------------------------------------------------------------------------
         // WHICH CHUNKS EACH DERIVATION READS.

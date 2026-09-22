@@ -11,9 +11,13 @@
         return MagmaProgramSource(handle, records[index]);
     }
 
+    // Through the same seam as MagmaWireFatal, and for the same reason (P7 wave 0). The family
+    // stays RoleViolation: reaching the legacy buffer arm inside a Magma server is a role
+    // invariant the two halves must hold, not a verb the wire failed to migrate.
     [[noreturn]] static void WireBufferLegacyFatal() {
-        MGLOG_F("MGPipe: Fatal{RoleViolation, \"buffer-legacy-arm\"} (Magma P7 buffer consumer)");
-        std::abort();
+        MG_Pipe::MGPipeSessionFail(
+            MG_Pipe::MGPipeFatalFamily::RoleViolation,
+            "MGPipe: Fatal{RoleViolation, \"buffer-legacy-arm\"} (Magma P7 buffer consumer)");
     }
 
     static const MG_Pipe::MGPStreamOutputBegin& WireXfbSpan() {

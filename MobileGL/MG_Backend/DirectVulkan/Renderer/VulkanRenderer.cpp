@@ -41,6 +41,9 @@
 #include "MG_Util/Texture/PixelStoreProcessor.h"
 #include <Config.h>
 #if MOBILEGL_BUILD_DISAGGREGATED
+// P7 wave 0: the seam WireFramebuffer.inc's MagmaWireFatal and WireDraw.inc's
+// WireBufferLegacyFatal die through. Declared by MG_Pipe on purpose - see PipeSessionFail.h.
+#include <MG_Pipe/PipeSessionFail.h>
 // P5c (T5 / tx): the server's staged-texture shadow GenerateMipmap defines its chain on.
 #include <MG_Remote/Server/StagedTextureStore.h>
 #include <MG_Remote/Server/ServerLoop.h>

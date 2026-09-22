@@ -47,4 +47,16 @@ namespace MobileGL::MG_Remote {
     // this is zero over a whole good run; a test reads it to prove the funnel was reached.
     ::std::uint64_t SessionFaultCount();
 
+    // P7 wave 0. Points MG_Pipe's MGPipeSessionFail seam (MG_Pipe/PipeSessionFail.h) at
+    // SessionFail, which is what makes the three Magma wire funnels in MG_Backend's renderer
+    // publish a SessionFault, bump SessionFaultCount() and appear in the census like every other
+    // death - without MG_Backend naming a single MG_Remote symbol.
+    //
+    // Called from MG_Backend/Init.cpp's InitServerRoleCommon, which BOTH the inproc server role
+    // and the spawn/TCP session child run, so there is one install point rather than one per
+    // transport. Installing it in the client process would be wrong and is not done: the hook's
+    // families are the SERVER's renderer refusing a wire verb, and a client that installed it
+    // would publish a SessionFault for a death the server never had.
+    void InstallPipeSessionFailHook();
+
 } // namespace MobileGL::MG_Remote

@@ -37,6 +37,10 @@
 #pragma once
 #include <Includes.h>
 
+// P7 wave 0 / Ph slice (2): RequireCovered's death goes through Session::Fail like every other
+// one. Not an out-of-line helper - this header is already inside MG_Remote, so it may name
+// MG_Remote's own funnel, and check_include_closure.py's four probes do not reach it.
+#include <MG_Remote/FatalFunnel.h>
 #include <MG_Util/Debug/Log.h>
 #include <MG_Util/Math/VectorTypes.h>
 
@@ -103,7 +107,9 @@ namespace MobileGL::MG_Remote::Server {
             const auto it = m_shadows.find(key);
             if (it == m_shadows.end() || it->second.Bytes.data() != hostBase) return;
             if (CoverageHas(it->second.Covered, start, end)) return;
-            MGLOG_F("MGPipe: Fatal{StageSnapshotTooNarrow, \"%s\"} - the server's ladder wants "
+            // Verbatim what the MGLOG_F said, through the funnel that publishes it (P7 wave 0).
+            SessionFail(MGFatalFamily::StageSnapshotTooNarrow,
+                    "MGPipe: Fatal{StageSnapshotTooNarrow, \"%s\"} - the server's ladder wants "
                     "[%zu, %zu) of a buffer whose staged coverage does not include it. Under "
                     "split the authoritative shadow is SERVER-OWNED (rule C) and "
                     "resource_subdata is the only way bytes reach it, so bytes outside a staged "
@@ -112,7 +118,6 @@ namespace MobileGL::MG_Remote::Server {
                     "GPU-written bytes dead (Managers.cpp:1126-1129). This is a missing record, "
                     "not a missing widening",
                     site, start, end);
-            std::abort();
         }
 
         // Diagnostics the unit cases read, so that a check can assert WHAT HAPPENED rather than
