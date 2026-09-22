@@ -1554,7 +1554,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 (slice.offset + start) % m_wireStorageOffsetAlignment != 0)
                 WireDescriptorFatal(isAtomicCounterBlock ? "unaligned-atomic-buffer-range@P7"
                                                          : "unaligned-storage-buffer-range@P7");
-            if (size > m_wireMaxStorageRange) WireDescriptorFatal("storage-buffer-native-range@P7");
+            if (size > m_wireMaxStorageRange) {
+                // P7 A.3: clamp, do not refuse. The monolith arm binds whatever the GL range
+                // asked for and never consults maxStorageBufferRange at all (see the resident
+                // path below), so refusing here was the wire arm inventing a death the other
+                // backend does not have. A clamped binding keeps every byte the device can
+                // name reachable; past it the shader is out of the descriptor and
+                // robustBufferAccess answers zero, which beats losing the draw outright.
+                MGLOG_E_ONCE("ResolveStorageBufferDescriptor: block '%s' bound %llu bytes, past this device's "
+                             "maxStorageBufferRange of %llu; the binding is clamped to the limit",
+                             blockName.c_str(), static_cast<unsigned long long>(size),
+                             static_cast<unsigned long long>(m_wireMaxStorageRange));
+                size = m_wireMaxStorageRange;
+            }
             outBufferInfo = {slice.buffer, slice.offset + start, size};
             // Shader writes stay in the canonical server VkBuffer. The event marks the
             // client's shadow stale; neither this path nor later acquires seed it back.
@@ -2362,9 +2374,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 blockIndex, Uint32 bindingPoint, UboBindResult& out) const {
         if (bindingPoint >= MG_Pipe::kMGPipeMaxBufferBindingPoints)
             WireDescriptorFatal("uniform-buffer-binding-point");
-        const VkDeviceSize blockSize = program.GetUBOSizeAt(blockIndex);
+        VkDeviceSize blockSize = program.GetUBOSizeAt(blockIndex);
         if (blockSize == 0) return false;
-        if (blockSize > m_wireMaxUniformRange) WireDescriptorFatal("uniform-block-native-range@P7");
+        if (blockSize > m_wireMaxUniformRange) {
+            // P7 A.3: clamp, do not refuse. A conformant program cannot get here -
+            // GL_MAX_UNIFORM_BLOCK_SIZE is published straight from this same
+            // maxUniformBufferRange (BackendLoaders/Vulkan/Loader.cpp), so a block this big
+            // fails to link long before a draw - which makes refusing it a Fatal for a shape
+            // nothing can produce. If the two ever disagree, the honest answer is the bytes
+            // the device CAN name: everything past the clamp is outside the descriptor and
+            // reads back as zero under robustBufferAccess, which is inside GL's "undefined"
+            // for a block the implementation never promised to hold. Clamping keeps the range
+            // constant across draws, so the descriptor-set reuse hash is unaffected.
+            MGLOG_E_ONCE("ResolveWireUniformBufferPayload: reflected uniform block %u is %llu bytes, past this "
+                         "device's maxUniformBufferRange of %llu; the binding is clamped to the limit and the "
+                         "remainder reads zero",
+                         blockIndex, static_cast<unsigned long long>(blockSize),
+                         static_cast<unsigned long long>(m_wireMaxUniformRange));
+            blockSize = m_wireMaxUniformRange;
+        }
         const auto& range = MG_Pipe::MGPipeApplier().BoundShaderBuffers[
             MG_Pipe::kMGPipeShaderBufferClassUniform][bindingPoint];
         BufferSlice source{};
