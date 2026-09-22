@@ -2021,6 +2021,24 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     add_test(NAME TcpLane.AccountingControls COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/scripts/ci/tcp_lane_tools_test.py")
     set_tests_properties(TcpLane.AccountingControls PROPERTIES LABELS unit TIMEOUT 20)
+    # P7 wave 0. scripts/ci/tcp_supervisor_smoke.py has been in the tree since P6.5 asserting the
+    # supervisor's Busy / token / wire-version / build-policy controls, and was referenced by
+    # NOTHING - no ctest entry, no workflow step - so nobody could have said whether those four
+    # controls were green. It also now carries Ph slice (1)'s negative control: a session child
+    # killed with SIGABRT must be NAMED in the supervisor log by pid and signal, and the next
+    # Hello must still be welcomed. It starts its own supervisor on its own free port, so it
+    # needs no fixture, but it takes the lane's resource lock because a second supervisor's
+    # session child would answer the other's peers with Busy and make both lanes flaky.
+    # It needs flatc, which is deliberately not in the build graph (gen_protocol.py's header):
+    # with none found the script exits 77 and this entry reports SKIP rather than passing on a
+    # test that did not run.
+    add_test(NAME TcpLane.SupervisorProtocolControls COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/scripts/ci/tcp_supervisor_smoke.py"
+        --server "${MGL_ITEST_SPLIT_SERVER_PATH}"
+        --out "${CMAKE_CURRENT_BINARY_DIR}/tcp-supervisor-smoke")
+    set_tests_properties(TcpLane.SupervisorProtocolControls PROPERTIES
+        LABELS integration-tcp TIMEOUT 180 SKIP_RETURN_CODE 77
+        RESOURCE_LOCK mobilegl-tcp)
     mgl_itest_join_environment(MGL_ITEST_GLES_TCP_ENVIRONMENT
         "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=spawn"
         "MOBILEGL_IPC_CONTROL=${MOBILEGL_ITEST_TCP_ENDPOINT}" "MOBILEGL_IPC_DATA=stream"

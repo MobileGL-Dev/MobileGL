@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Exercise a real TCP supervisor's Busy, token, version, and build-policy controls."""
+"""Exercise a real TCP supervisor's Busy, token, version, build-policy and REAP controls.
+
+P7 wave 0 registered this script as `TcpLane.SupervisorProtocolControls` in
+MG_IntegrationTest/CMakeLists.txt. Until then it was referenced by NOTHING in the tree - no
+ctest entry, no workflow step - so the four controls it asserts had been green or red for an
+unknown number of commits and nobody would have known which.
+
+It needs flatc, which is deliberately absent from the default build graph (gen_protocol.py's
+header block says why). Resolution order is gen_protocol.py's, minus the build-it-for-you arm:
+--flatc, then $MOBILEGL_FLATC_EXECUTABLE, then <repo>/../flatc-build/flatc. With none of them
+the script exits kSkipExit and ctest reports SKIP - loudly absent rather than quietly passing,
+which is the failure mode a gate nothing references already had.
+"""
 import argparse
 from contextlib import contextmanager
 import importlib
@@ -7,6 +19,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import socket
 import struct
@@ -16,6 +29,22 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# ctest's SKIP_RETURN_CODE for this entry. 77 is the automake convention the rest of the world
+# uses and ctest has no opinion of its own.
+kSkipExit = 77
+
+
+def resolve_flatc(explicit):
+    """gen_protocol.py's order, without its build-it-for-you arm. None when there is none."""
+    for candidate in (explicit, os.environ.get('MOBILEGL_FLATC_EXECUTABLE', ''),
+                      str(ROOT.parent / 'flatc-build' / 'flatc')):
+        if not candidate:
+            continue
+        found = candidate if os.path.isfile(candidate) else shutil.which(candidate)
+        if found:
+            return found
+    return None
 
 
 def read_exact(peer, size):
@@ -48,7 +77,7 @@ def receive(peer, schema):
     raise RuntimeError(f'unexpected first control reply {kind}')
 
 
-def hello(schema, flatbuffers, fingerprint=0, major=1, token='p65-smoke-token'):
+def hello(schema, flatbuffers, fingerprint=0, major=1, token='p65-smoke-token', identifier=b'MGLC'):
     builder = flatbuffers.Builder(512)
     build = builder.CreateString('intentionally-different-build-for-p65-control')
     auth = builder.CreateString(token)
@@ -71,7 +100,10 @@ def hello(schema, flatbuffers, fingerprint=0, major=1, token='p65-smoke-token'):
     envelope.Start(builder)
     envelope.AddMsgType(builder, schema['CtrlMsg'].CtrlMsg.Hello)
     envelope.AddMsg(builder, body)
-    builder.Finish(envelope.End(builder), b'MGLC')
+    # `identifier` is a parameter for ONE caller: the steady-state loop's identifier check.
+    # flatbuffers' VerifyCtrlEnvelopeBuffer passes a nullptr identifier to VerifyBuffer, so a
+    # frame of some other schema that happens to verify used to reach GetCtrlEnvelope here.
+    builder.Finish(envelope.End(builder), identifier)
     payload = bytes(builder.Output())
     return struct.pack('<4sI', b'MGLF', len(payload)) + payload
 
@@ -81,9 +113,10 @@ def supervisor(server, log, same_build=False):
     with socket.socket() as reserve:
         reserve.bind(('127.0.0.1', 0))
         port = reserve.getsockname()[1]
+    base = log.with_suffix('.library.log')
     env = dict(os.environ, MOBILEGL_IPC_ROLE='server', MOBILEGL_IPC_DIAL='no',
                MOBILEGL_IPC_TOKEN='p65-smoke-token', MOBILEGL_IPC_REQUIRE_SAME_BUILD=str(int(same_build)),
-               MOBILEGL_IPC_LOG_FORWARD='0', MOBILEGL_LOG_FILE_PATH=str(log.with_suffix('.library.log')))
+               MOBILEGL_IPC_LOG_FORWARD='0', MOBILEGL_LOG_FILE_PATH=str(base))
     for name in ('MOBILEGL_TRANSPORT', 'MOBILEGL_IPC_SERVER_PATH', 'MOBILEGL_IPC_RING_MB', 'MOBILEGL_IPC_STAGE_MB',
                  'MOBILEGL_IPC_CONTROL', 'MOBILEGL_IPC_ENDPOINT', 'MOBILEGL_BACKEND_TYPE'):
         env.pop(name, None)
@@ -91,13 +124,69 @@ def supervisor(server, log, same_build=False):
         child = subprocess.Popen([server, f'tcp://127.0.0.1:{port}', '--serve'], env=env,
                                  stdout=output, stderr=output, start_new_session=True)
     try:
-        yield port, child
+        # Log.cpp's RoleLogPath: the base name is a BASE, and the server role writes
+        # `<stem>.server<ext>`. Yielded rather than recomputed at the call site, so the one
+        # place that knows the rule is the one place that sets MOBILEGL_LOG_FILE_PATH.
+        yield port, child, base.with_name(base.stem + '.server' + base.suffix)
     finally:
         try:
             os.killpg(child.pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
         child.wait(timeout=10)
+
+
+@contextmanager
+def held_session(port, schema, message):
+    """A welcomed session whose sockets STAY OPEN, so its child is still alive to be killed.
+
+    `exchange` closes the pair before returning, which is what every other control in this file
+    wants and is exactly wrong for the reap case: a child that has already exited cannot be made
+    to fault. Busy is retried here for the same reason it is there - a previous child may still
+    be reaching _exit.
+    """
+    control = None
+    data = None
+    reply = None
+    for _ in range(30):
+        control = socket.create_connection(('127.0.0.1', port), timeout=3)
+        data = socket.create_connection(('127.0.0.1', port), timeout=3)
+        control.sendall(message)
+        reply = receive(control, schema)
+        if reply.get('code') != 7:
+            break
+        control.close()
+        data.close()
+        control = None
+        time.sleep(.05)
+    if control is None:
+        raise RuntimeError('supervisor remained Busy while a held session was wanted')
+    try:
+        yield control, reply
+    finally:
+        control.close()
+        data.close()
+
+
+def last_faulted(path):
+    """The supervisor's lifetime fault count as of the last reap line, or 0 before the first."""
+    if not path.is_file():
+        return 0
+    values = re.findall(r'sessionsFaulted=(\d+)', path.read_text(errors='replace'))
+    return int(values[-1]) if values else 0
+
+
+def wait_for_log(path, needle, seconds=15):
+    """The supervisor reaps on its next accept timeout (250 ms), so this polls rather than sleeps."""
+    deadline = time.monotonic() + seconds
+    while True:
+        if path.is_file():
+            text = path.read_text(errors='replace')
+            if needle in text:
+                return text
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(.05)
 
 
 @contextmanager
@@ -137,19 +226,28 @@ def exchange(port, schema, message):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--server', required=True)
-    parser.add_argument('--flatc', default='flatc')
+    parser.add_argument('--flatc', default='')
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
+    flatc = resolve_flatc(args.flatc)
+    if flatc is None:
+        print('tcp_supervisor_smoke: no flatc found (--flatc, $MOBILEGL_FLATC_EXECUTABLE, '
+              f'{ROOT.parent / "flatc-build" / "flatc"}); skipping. Build one once with '
+              '`python3 scripts/gen_protocol.py` and this lane runs.', flush=True)
+        return kSkipExit
+    if not os.path.isfile(args.server):
+        print(f'tcp_supervisor_smoke: no server image at {args.server}; skipping', flush=True)
+        return kSkipExit
     with tempfile.TemporaryDirectory(prefix='mgl-tcp-schema-') as directory:
-        subprocess.run([args.flatc, '--python', '-o', directory,
+        subprocess.run([flatc, '--python', '-o', directory,
                         str(ROOT / 'MobileGL/MG_Remote/Protocol/protocol.fbs')], check=True)
         sys.path[:0] = [directory, str(ROOT / '3rdparty/flatbuffers/python')]
         import flatbuffers
         schema = {name: importlib.import_module('MobileGL.Wire.' + name)
                   for name in ('CtrlEnvelope', 'CtrlMsg', 'Hello', 'LinkTerms', 'Refuse', 'Welcome')}
         evidence = {}
-        with supervisor(args.server, args.out / 'supervisor.log') as (port, process):
+        with supervisor(args.server, args.out / 'supervisor.log') as (port, process, serverLog):
             with pair(port) as held:
                 with pair(port) as second:
                     busy = receive(second, schema)
@@ -170,13 +268,75 @@ def main():
             assert accepted.get('fingerprint') == fingerprint, accepted
             evidence['different_build_connect'] = accepted
             assert process.poll() is None, 'a rejected session killed the supervisor'
-        with supervisor(args.server, args.out / 'same-build-supervisor.log', same_build=True) as (port, _):
+
+            # P7 wave 0: the steady-state control loop asks for the file identifier, which
+            # ServerSession::ParseEnvelope has asked since P5 and ServerMain's loop never did.
+            # flatbuffers verifies a table's offsets, not the four identifier bytes, so until now
+            # a frame of a DIFFERENT schema that happened to verify was read here as a
+            # CtrlEnvelope and its union tag believed. This is the cheap half of Ph's fuzz arm 1;
+            # the arm itself (five malformed shapes, its own ctest lane) is scheduled after P7.
+            with held_session(port, schema,
+                              hello(schema, flatbuffers, fingerprint=fingerprint)) as (control, welcome):
+                assert welcome.get('welcome', 0), welcome
+                control.sendall(hello(schema, flatbuffers, fingerprint=fingerprint,
+                                      identifier=b'XXXX'))
+                named = wait_for_log(serverLog, 'carries no CtrlEnvelope identifier')
+                assert named is not None, (
+                    'the session read a frame with the wrong file identifier without saying so; '
+                    f'see {serverLog}')
+            evidence['wrong_identifier_frame'] = next(
+                l.strip() for l in named.splitlines() if 'carries no CtrlEnvelope identifier' in l)
+            assert process.poll() is None, 'a malformed steady-state frame killed the supervisor'
+
+            # P7 wave 0, Ph slice (1) (ID-P7-1). THE SUPERVISOR NAMES A FAULTED SESSION, AND THE
+            # NEXT CONNECTION IS STILL SERVED.
+            #
+            # The fault is delivered as SIGABRT to the session child, which is the signal every
+            # death through SessionFail raises - so this exercises the reap path a real Fatal
+            # takes, without needing a scenario that can reach one. The child's pid comes from
+            # the Welcome it just sent (`serverPid`), which is the only honest way to name it:
+            # the supervisor's own pid is the parent's.
+            #
+            # Before this package the three `waitpid(active, nullptr, WNOHANG)` calls discarded
+            # the status, so the log carried no line at all for this event and the assertion
+            # below could not have been written.
+            held = hello(schema, flatbuffers, fingerprint=fingerprint)
+            with held_session(port, schema, held) as (control, welcome):
+                faulted = welcome.get('welcome', 0)
+                assert faulted and faulted != os.getpid(), welcome
+                # The count is a supervisor LIFETIME figure and the controls above have already
+                # moved it (the Busy probe holds a pair that never sends a Hello, and that child
+                # exits 67), so what is asserted is the DELTA, not an absolute.
+                prior = last_faulted(serverLog)
+                os.kill(faulted, signal.SIGABRT)
+            reaped = wait_for_log(serverLog, f'pid={faulted} reaped signal={int(signal.SIGABRT)}')
+            assert reaped is not None, (
+                f'the supervisor did not name session pid={faulted} as killed by '
+                f'signal={int(signal.SIGABRT)} in {serverLog}; a faulted session is '
+                f'indistinguishable from a finished one again (ID-P7-1)')
+            line = next(l for l in reaped.splitlines() if f'pid={faulted} reaped' in l)
+            assert f'sessionsFaulted={prior + 1}' in line, (line, prior)
+            # A refused handshake is a normal outcome and its child exits 0, so the counter must
+            # NOT have moved for the three refusals above. Stated as an assertion rather than
+            # left to the delta: a counter that counted refusals would make the number useless.
+            refusals = sum(1 for l in reaped.splitlines() if 'reaped exit=0' in l)
+            assert refusals >= 3, f'expected the three refusal children to exit 0: {refusals}'
+            evidence['faulted_session'] = {'pid': faulted, 'line': line.strip(),
+                                           'priorFaults': prior, 'cleanExits': refusals}
+            assert process.poll() is None, 'the supervisor died with its session child'
+
+            # And the point of fork-per-session: the NEXT Hello is welcomed as usual.
+            after = exchange(port, schema, hello(schema, flatbuffers, fingerprint=fingerprint))
+            assert after.get('welcome', 0) and after['welcome'] != faulted, after
+            evidence['connect_after_fault'] = after
+        with supervisor(args.server, args.out / 'same-build-supervisor.log', same_build=True) as (port, _, _log):
             strict = exchange(port, schema, hello(schema, flatbuffers, fingerprint=fingerprint))
             assert strict.get('code') == 3, strict
             evidence['same_build_required'] = strict
         (args.out / 'protocol-controls.json').write_text(json.dumps(evidence, indent=2))
         print(json.dumps(evidence, indent=2))
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

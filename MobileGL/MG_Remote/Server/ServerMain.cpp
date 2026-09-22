@@ -190,8 +190,41 @@ void SendLogAck(void* pointer) {
         const auto result = control->ReceiveFrame({buffer.data(), buffer.size()}, &size, kWaitForever);
         if (result == MOBILEGL_ERR_BUFFER_TOO_SMALL) { buffer.resize(static_cast<std::size_t>(size)); continue; }
         if (result != MOBILEGL_OK) break;
+        // THE FILE IDENTIFIER, ASKED FIRST AND SAID OUT LOUD (P7 wave 0).
+        //
+        // The plan asked for CtrlEnvelopeBufferHasIdentifier here because ServerSession::
+        // ParseEnvelope (:109) asks it and this loop did not. MEASURED, THE PREMISE IS WRONG:
+        // the generated VerifyCtrlEnvelopeBuffer is
+        // `verifier.VerifyBuffer<CtrlEnvelope>(CtrlEnvelopeIdentifier())`
+        // (protocol_generated.h:2378), so a wrong identifier was ALREADY refused - and so is
+        // ParseEnvelope's second call. Recorded for the integrator: the gap that row names does
+        // not exist.
+        //
+        // What DID exist is that both refusals were silent. A peer whose post-Welcome frame was
+        // garbage got its session ended with no line in the log at all, which is the half of a
+        // fuzz arm that matters - an arm that cannot tell "refused, by name" from "the child
+        // went away" measures nothing. So the identifier is now asked FIRST, because it is the
+        // specific diagnosis ("that is not our schema") where the verifier's is the general one,
+        // and both say so. Asking it first needs the length guard the verifier would otherwise
+        // have provided: BufferHasIdentifier reads bytes [4, 8).
+        if (size < 8) {
+            WireLogError("MG_Remote server: control frame is %llu bytes, too short to carry a "
+                         "CtrlEnvelope root and identifier; ending the session",
+                         static_cast<unsigned long long>(size));
+            break;
+        }
+        if (!Protocol::CtrlEnvelopeBufferHasIdentifier(buffer.data())) {
+            WireLogError("MG_Remote server: control frame carries no CtrlEnvelope identifier "
+                         "(size=%llu); ending the session rather than reading its union tag",
+                         static_cast<unsigned long long>(size));
+            break;
+        }
         flatbuffers::Verifier check(buffer.data(), static_cast<std::size_t>(size));
-        if (!Protocol::VerifyCtrlEnvelopeBuffer(check)) break;
+        if (!Protocol::VerifyCtrlEnvelopeBuffer(check)) {
+            WireLogError("MG_Remote server: control frame did not verify as a CtrlEnvelope "
+                         "(size=%llu); ending the session", static_cast<unsigned long long>(size));
+            break;
+        }
         const auto* envelope = Protocol::GetCtrlEnvelope(buffer.data());
         if (const auto* flush = envelope->msg_as_LogFlush()) {
             if (flush->ack()) break;
@@ -230,6 +263,55 @@ void SendLogAck(void* pointer) {
     // _exit closes control after cleanup/flush; peer EOF is the client's fence.
     std::fflush(nullptr);
     ::_exit(0);
+}
+
+// P7 wave 0, Ph slice (1) (ID-P7-1). THE SUPERVISOR OBSERVES AND NAMES A SESSION'S DEATH.
+//
+// Three `waitpid(active, nullptr, WNOHANG)` calls threw the status away, so a child that died of
+// SIGABRT inside SessionFail and one that returned from its control loop and _exit(0)'d were the
+// SAME EVENT to the supervisor: `active = -1`, no line, nothing to count. ID-P7-1 declines the
+// literal 98-site latch translation and asks for this instead, because P6.5's fork-per-session
+// already delivers "the next connection is served as usual" (:302) - what was missing is that
+// anybody could tell a faulted session from a finished one, which is the half of PH-1 an
+// operator, a fuzz arm and a flake triage all actually need.
+//
+// One function where there were three call sites, so the three cannot drift on what a reap means.
+// Returns true when `active` was reaped. `sessionsFaulted` is the SUPERVISOR's lifetime count,
+// not this child's: a supervisor that has served twenty sessions can say how many ended badly.
+bool ReapActiveSession(pid_t& active, unsigned long& sessionsFaulted) {
+    if (active <= 0) return false;
+    int status = 0;
+    if (::waitpid(active, &status, WNOHANG) != active) return false;
+    const int reaped = static_cast<int>(active);
+    active = -1;
+    // WIFEXITED / WIFSIGNALED / WTERMSIG, the same three questions ServerSpawn.cpp:289 asks of
+    // the same kind of child - but logged rather than folded into one signed integer, because
+    // this side has nobody to return the answer to.
+    if (WIFEXITED(status)) {
+        const int code = WEXITSTATUS(status);
+        if (code != 0) ++sessionsFaulted;
+        WireLogError("MG_Remote server: session pid=%d reaped exit=%d sessionsFaulted=%lu",
+                     reaped, code, sessionsFaulted);
+    } else if (WIFSIGNALED(status)) {
+        ++sessionsFaulted;
+        WireLogError("MG_Remote server: session pid=%d reaped signal=%d sessionsFaulted=%lu",
+                     reaped, WTERMSIG(status), sessionsFaulted);
+    } else {
+        // Neither exited nor signalled: WUNTRACED/WCONTINUED are not passed, so this is a status
+        // this build does not understand. Counted as a fault rather than silently ignored.
+        ++sessionsFaulted;
+        WireLogError("MG_Remote server: session pid=%d reaped status=0x%x sessionsFaulted=%lu",
+                     reaped, status, sessionsFaulted);
+    }
+    return true;
+}
+
+// The lifetime figure, once, on the way out. Every reap also prints the running total, so a
+// supervisor taken down by SIGTERM (which is how the fixtures end it) still leaves the number
+// behind - this line is for the exits the supervisor chooses.
+void LogSupervisorSummary(unsigned long sessionsFaulted) {
+    WireLogError("MG_Remote server: supervisor pid=%d shutting down sessionsFaulted=%lu",
+                 static_cast<int>(::getpid()), sessionsFaulted);
 }
 }
 
@@ -275,23 +357,24 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
     if (SocketTransport::Listen(endpoint, &listener) != MOBILEGL_OK) return 72;
     WireLogError("MG_Remote server: pid=%d listening on %s", static_cast<int>(::getpid()), endpoint.c_str());
     pid_t active = -1;
+    unsigned long sessionsFaulted = 0;
     for (;;) {
-        if (active > 0 && ::waitpid(active, nullptr, WNOHANG) == active) active = -1;
+        ReapActiveSession(active, sessionsFaulted);
         std::unique_ptr<SocketTransport> control;
         const auto accepted = SocketTransport::AcceptPair(listener, serve ? 250 : 30000, control);
         if (accepted == MOBILEGL_ERR_TIMEOUT && serve) continue;
-        if (accepted != MOBILEGL_OK) { ::close(listener); return 73; }
+        if (accepted != MOBILEGL_OK) { LogSupervisorSummary(sessionsFaulted); ::close(listener); return 73; }
         if (!serve) {
             ::close(listener);
             if (endpoint[0] != '@' && endpoint.compare(0, 6, "tcp://") != 0) ::unlink(endpoint.c_str());
             RunSession(std::move(control));
         }
-        if (active > 0 && ::waitpid(active, nullptr, WNOHANG) == active) active = -1;
+        ReapActiveSession(active, sessionsFaulted);
         // exit_group closes files just before waitpid can observe the exit.
         // Allow that small scheduling window; a live peer remains Busy.
         const auto reapDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
         while (active > 0 && std::chrono::steady_clock::now() < reapDeadline) {
-            if (::waitpid(active, nullptr, WNOHANG) == active) { active = -1; break; }
+            if (ReapActiveSession(active, sessionsFaulted)) break;
             ::usleep(1000);
         }
         if (active > 0) {
@@ -305,6 +388,7 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
         active = child;
         control->CloseLocalCopy();
     }
+    LogSupervisorSummary(sessionsFaulted);
     ::close(listener);
     if (endpoint[0] != '@' && endpoint.compare(0, 6, "tcp://") != 0) ::unlink(endpoint.c_str());
     return 0;
