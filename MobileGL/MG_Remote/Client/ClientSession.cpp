@@ -34,8 +34,10 @@
 #include <MG_Util/Debug/Log.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -86,6 +88,34 @@ namespace MobileGL::MG_Remote::Client {
         // "publish and wait for the server to drain and acknowledge", and a wait with no
         // deadline there turns a lost record into a hung process exit.
         constexpr Uint32 kDrainTimeoutMs = 5000;
+
+        // ---- F1 (P7 wave 2): WHO IS FETCHING THE FIRST SNAPSHOT --------------------------
+        //
+        // CapsMirror::RequireFirstSnapshot needs one fact this file owns and no other does:
+        // is a bring-up in flight, and is it on THIS thread. The counter answers the first;
+        // the thread-local answers the second, and it is the one that matters, because the
+        // defect F1 closes had the emitter and the handshake on the same thread in sequence -
+        // a wait there would burn its whole budget and change nothing.
+        //
+        // Not guarded by a mutex: the counter is only ever compared against zero and the
+        // thread-local is private to its thread by construction.
+        ::std::atomic<int> g_bringUpsInFlight{0};
+        thread_local Bool tl_bringingUpHere = false;
+
+        struct BringUpScope {
+            BringUpScope() {
+                g_bringUpsInFlight.fetch_add(1, ::std::memory_order_acq_rel);
+                m_outer = tl_bringingUpHere;
+                tl_bringingUpHere = true;
+            }
+            ~BringUpScope() {
+                tl_bringingUpHere = m_outer;
+                g_bringUpsInFlight.fetch_sub(1, ::std::memory_order_acq_rel);
+            }
+            BringUpScope(const BringUpScope&) = delete;
+            BringUpScope& operator=(const BringUpScope&) = delete;
+            Bool m_outer = false;
+        };
 
         MobileGLResult ReceiveEnvelope(Transport::ITransport& transport, std::vector<Uint8>& out,
                                        Uint32 timeoutMs) {
@@ -500,9 +530,44 @@ namespace MobileGL::MG_Remote::Client {
         return *instance;
     }
 
+    namespace {
+        // F1 (P7 wave 2). The wait CapsMirror::RequireFirstSnapshot calls. Its whole job is to
+        // distinguish "the snapshot is on its way and somebody else is fetching it" from "no
+        // snapshot can arrive while you block", and to answer the second immediately.
+        //
+        // IT DOES NOT PUMP. Pumping a half-built session from a thread that does not own it is
+        // how two readers end up splitting one control frame; the thread that IS bringing the
+        // session up already pumps, in FinishStartup step 7, and this one only has to see the
+        // generation it publishes.
+        Bool AwaitFirstCapsSnapshot(Uint32 timeoutMs) {
+            if (PublishedCapsGeneration() != 0) return true;
+            // The two immediate falses. Nothing is fetching, or the fetcher is the caller -
+            // which is the exact shape MobileGL::Initialize produced before F1 moved the
+            // split bring-up above MG_State::Init().
+            if (tl_bringingUpHere) return false;
+            if (g_bringUpsInFlight.load(::std::memory_order_acquire) == 0) return false;
+            const auto deadline =
+                std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+            while (std::chrono::steady_clock::now() < deadline) {
+                if (PublishedCapsGeneration() != 0) return true;
+                if (g_bringUpsInFlight.load(::std::memory_order_acquire) == 0) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            return PublishedCapsGeneration() != 0;
+        }
+    } // namespace
+
+    Bool BringUpInFlight() {
+        return g_bringUpsInFlight.load(::std::memory_order_acquire) != 0;
+    }
+
     ClientSession::ClientSession() {
         m_link = Transport::CreateSharedLink(Transport::TransportRoleTag::ClientProducer);
         m_cmd = &m_link->CommandsOut(); m_events = &m_link->EventsIn();
+        // F1: installed from the constructor rather than from Start, because the question it
+        // answers is asked by frontend object births that may precede any Start at all - and
+        // the honest answer to those is the Fatal, not a silent false.
+        SetCapsFirstSnapshotWait(&AwaitFirstCapsSnapshot);
     }
 
     ClientSession::~ClientSession() {
@@ -514,6 +579,12 @@ namespace MobileGL::MG_Remote::Client {
     Bool ClientSession::Started() const { return m_started; }
 
     MobileGLResult ClientSession::Start(MG_Config::TransportMode mode, const String& endpoint) {
+        // F1: the bring-up window opens HERE and not at FinishStartup, because under inproc the
+        // server's first CapsSnapshot is produced inside ServerSession::Accept - step 3 below -
+        // and a window that started after it would not contain the one moment a reader on
+        // another thread has to be able to wait through. Re-entrant: StartOverTransportPair
+        // opens a nested scope and BringUpScope nests.
+        const BringUpScope bringUp;
         if (m_started) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
@@ -540,6 +611,7 @@ namespace MobileGL::MG_Remote::Client {
     MobileGLResult ClientSession::StartOverTransportPair(
         std::unique_ptr<Transport::InProcessTransport> clientEnd,
         std::unique_ptr<Transport::InProcessTransport> serverEnd) {
+        const BringUpScope bringUp; // F1, and see Start() for why it opens this early.
         if (m_started) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
@@ -687,6 +759,7 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     MobileGLResult ClientSession::StartSpawned() {
+        const BringUpScope bringUp; // F1, and see Start() for why it opens this early.
         if (m_started) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
@@ -771,6 +844,7 @@ namespace MobileGL::MG_Remote::Client {
 
     MobileGLResult ClientSession::StartOverSocket(
         std::unique_ptr<Transport::SocketTransport> transport) {
+        const BringUpScope bringUp; // F1, and see Start() for why it opens this early.
         if (m_started) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
@@ -1218,6 +1292,10 @@ namespace MobileGL::MG_Remote::Client {
     MobileGLResult ClientSession::FinishStartup(Transport::Doorbell* peerBell,
                                                 Transport::Doorbell* selfBell,
                                                 bool startApplyThreadHere) {
+        // F1: every startup path - inproc, spawn, unix, tcp - reaches step 7 through here, so
+        // this is the one place that has to declare "a first snapshot is being fetched, on
+        // this thread". CapsMirror reads both halves of that (see AwaitFirstCapsSnapshot).
+        const BringUpScope bringUp;
         m_link->InitializeEndpoints();
         // NO STAGE RING. SEG_STAGE is package w1's encoder-local LINEAR ALLOCATOR:
         // a staged byte run carries no RingRecordHeader, nothing consumes SEG_STAGE,

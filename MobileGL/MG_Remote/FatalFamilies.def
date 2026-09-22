@@ -67,6 +67,7 @@
     X(UnmigratedEmulation,           ProtocolCorruption, "an emulation path the applier has no migrated arm for was reached") \
     X(RoleViolation,                 ProtocolCorruption, "a call ran on the wrong role/thread - an invariant the two roles must hold") \
     X(UnsetCallMask,                 ProtocolCorruption, "the CallMask was consulted before either half was published") \
+    X(CapsBeforeFirstSnapshot,       ProtocolCorruption, "a record family's liveness was asked of a placeholder caps mirror (F1)") \
     X(ConsumerMaskLie,               ProtocolCorruption, "the server published a consumer bit for a family whose op table is absent") \
     X(ClientTablesUninstalled,       ProtocolCorruption, "the applier ran before the client installed its tables") \
     X(NoClientSession,               ProtocolCorruption, "a path that needs the client session ran without one") \

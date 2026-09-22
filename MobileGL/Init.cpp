@@ -121,9 +121,50 @@ namespace MobileGL {
         // boundary counters latch their enable flag here, so every counting site in the
         // two backends is a load of an already-settled global for the rest of the run.
         MG_Util::PipeStats::Init();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // F1 (P7 wave 2). THE WIRE COMES UP BEFORE THE FIRST FRONTEND OBJECT IS BORN, and the
+        // ORDER is the fix - not a wait, and not a friendlier default mask.
+        //
+        // MG_State::Init() constructs GLContext, and GLContext's TextureState constructor
+        // materialises one default texture object per target (GL 3.3 core 3.8,
+        // TextureState.cpp:62-71). TextureObjectBase's constructor emits resource_create for
+        // every one of them (TextureState/TextureObject.cpp:168-169), and that emission is
+        // gated, through PipeFill's FamilyIsLive, on
+        // CapsMirror::ServerConsumes(kMGPipeSubsystemTextureResources). In the old order the
+        // mirror was still GENERATION 0 when it was asked - it had no snapshot because the
+        // session had not been started yet, MG_Backend::Init() being what starts it - so it
+        // answered from the placeholder, every one of those creates was withheld, and the log
+        // said so once and then never again:
+        //
+        //     MG_Remote client: the server does not consume MGPipe subsystem 0x400 - this
+        //     family emits NOTHING and the legacy pull path runs for it (R-8). callMask=0x0,
+        //     caps generation 0
+        //
+        // That is not a race and it never was one: the line reproduces byte-for-byte on
+        // lavapipe and on an Adreno 830, because the two Init calls are two statements in one
+        // thread. And "the legacy pull path runs for it" is false under split - the client has
+        // no pull path to fall back to - so the records are simply lost, and only a later
+        // respecify's self-healing create (TextureEmit.h:872) ever brings one back.
+        //
+        // A BOUNDED WAIT INSIDE ServerConsumes CANNOT FIX THIS AND WOULD DEADLOCK: during
+        // MG_State::Init() no handshake is in flight, and the one that will land is started
+        // LATER BY THIS SAME THREAD. The only correct answer is to have already brought it up,
+        // which is what this hook does. ServerConsumes now REFUSES to answer from a
+        // placeholder (CapsMirror.cpp), so a regression of this order is a named Fatal rather
+        // than a whole family of silently dropped records.
+        //
+        // In a build without MOBILEGL_BUILD_DISAGGREGATED this statement does not exist, so
+        // the pull build gains no symbol, no branch and no byte - which is what G1 measures.
+        const Bool splitBackendIsUp = MG_Backend::InitSplitRolesBeforeState();
+#endif
         MG_State::Init();
         MGLOG_D("MG_State initialized");
-        MG_Backend::Init();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (!splitBackendIsUp)
+#endif
+        {
+            MG_Backend::Init();
+        }
         MGLOG_D("MG_Backend initialized");
         MG_Impl::Init();
         MGLOG_D("MG_Impl initialized");

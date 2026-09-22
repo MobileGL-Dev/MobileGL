@@ -39,5 +39,21 @@ namespace MobileGL::MG_Backend {
     // client-minted and needs no backend call, which is P10's. CONTRACT-P5 4 flags this as a
     // KNOWN OPEN ITEM and asks v1 to record which way it went: P5 keeps today's order.
     void ShutdownSplitRoles();
+
+    // F1 (P7 wave 2). Init()'s SPLIT ARM, run BEFORE MG_State::Init() rather than after it.
+    //
+    // Returns true when this process took the split path - whether the bring-up succeeded or
+    // was refused by name - and the caller must then NOT call Init() a second time. Returns
+    // false under MG_Config::TransportMode::Monolith, where there is nothing to bring up and
+    // Init() keeps its own place after MG_State::Init().
+    //
+    // WHY IT EXISTS AT ALL, rather than MobileGL::Initialize simply calling Init() earlier:
+    // the monolith arm of Init() must keep running after MG_State::Init(), because
+    // BackendObject_DirectGLES::Initialize() is the tree's own order for it and moving it is a
+    // pull-build change G1 forbids. So the split arm - and only the split arm - moves.
+    //
+    // It exists ONLY in a split build, for the reason InitServerRoleForSpawn states: a
+    // definition guarded only on the inside still emits a symbol, and G1 measured that.
+    Bool InitSplitRolesBeforeState();
 #endif
 } // namespace MobileGL::MG_Backend

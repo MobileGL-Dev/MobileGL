@@ -24,8 +24,10 @@
 #include <MG_Util/Debug/Log.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 #include <vector>
 
 // CONTRACT-P6 4.3: the one value in the handshake that a same-process session cannot fake.
@@ -38,6 +40,42 @@
 namespace MobileGL::MG_Remote::Server {
 
     namespace {
+        // F1 (P7 wave 2). THE ONLY KNOB THAT CAN MAKE THE FIRST CapsSnapshot LATE.
+        //
+        // MOBILEGL_TEST_DELAY_FIRST_CAPS_MS delays the server's FIRST publication, and only
+        // it - a re-send (R-12) is never delayed, because the question is about the window
+        // before the client has any mask at all. Read once, on the first Accept, so a lane
+        // that does not set it pays one getenv per session and nothing else.
+        //
+        // WHAT IT PROVES, AND WHERE. Under spawn / unix: / tcp:// the publication happens in
+        // the SERVER's process, so the delay is a genuinely late snapshot from the client's
+        // point of view and it exercises the client's step-7 wait (ClientSession.cpp:1284).
+        // Under inproc there is no second process: Accept runs inside ClientSession::Start on
+        // the client's own thread, so the delay simply makes Start slower - which is itself
+        // the proof that under inproc the first snapshot CANNOT be late relative to session
+        // start, and therefore that the only window in which the client could read a
+        // placeholder is the one BEFORE Start is called. That window is F1's defect, and
+        // MobileGL::Initialize closes it by ordering rather than by waiting.
+        //
+        // It is a TEST knob: it exists only in a disaggregated build and does nothing at all
+        // unless it is set, so no production path can reach a delay it did not ask for.
+        void DelayFirstCapsSnapshotForTest() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            static Bool spent = false;
+            if (spent) return;
+            spent = true;
+            const char* text = std::getenv("MOBILEGL_TEST_DELAY_FIRST_CAPS_MS");
+            if (text == nullptr || *text == '\0') return;
+            const long ms = std::strtol(text, nullptr, 10);
+            if (ms <= 0) return;
+            MGLOG_W("MG_Remote server: MOBILEGL_TEST_DELAY_FIRST_CAPS_MS=%ld - the FIRST "
+                    "CapsSnapshot is held back by that many milliseconds. This is F1's "
+                    "test-only lever and must never be set in a measured run",
+                    ms);
+            std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+#endif
+        }
+
         // File-local on purpose: two callers, both handshake facts. A process-id helper on a
         // public header invites uses that are not.
         std::uint32_t SelfProcessId() {
@@ -615,6 +653,7 @@ namespace MobileGL::MG_Remote::Server {
 
         // ---- 6. the first CapsSnapshot, if there is a backend to take it from.
         if (m_backend != nullptr) {
+            DelayFirstCapsSnapshotForTest();
             const MobileGLResult published = PublishCapsSnapshot();
             if (published != MOBILEGL_OK) {
                 return published;

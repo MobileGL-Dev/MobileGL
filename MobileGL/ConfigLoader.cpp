@@ -32,6 +32,7 @@ namespace MobileGL::MG_Config {
     // and there is nothing to define.
     TransportMode Transport = TransportMode::Monolith;
     String TransportEndpoint;
+    Bool SplitTransportRequestedByConfig = false;
     IpcTable Ipc;
 #endif
 } // namespace MobileGL::MG_Config
@@ -330,6 +331,10 @@ namespace MobileGL::MG_ConfigLoader {
         }
         if (lowered == "inproc") {
             MG_Config::Transport = MG_Config::TransportMode::InProcess;
+            // P7 F1: see Config.h. Set beside the mode, on the two arms that actually resolve
+            // one, and NOT on the two that name a transport and then stay monolith - a process
+            // that was refused its transport brings no client half up either.
+            MG_Config::SplitTransportRequestedByConfig = true;
             MGLOG_I("Config: MOBILEGL_TRANSPORT=inproc - the MGPipe record stream crosses a real "
                     "ring to an apply thread");
             return;
@@ -342,6 +347,7 @@ namespace MobileGL::MG_ConfigLoader {
         // rather than the fork-coupled shape ARCHITECTURE.md:488 described.
         if (lowered == "spawn") {
             MG_Config::Transport = MG_Config::TransportMode::Spawn;
+            MG_Config::SplitTransportRequestedByConfig = true; // P7 F1, as above.
             // THE SAME SHAPE AS THE inproc LINE ABOVE, AND FOR THE SAME REASON.
             // run_trace_case.cmake asserts on a distinctive sentence from this
             // function rather than on `MOBILEGL_TRANSPORT=spawn` alone, because

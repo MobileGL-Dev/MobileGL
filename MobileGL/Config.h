@@ -456,6 +456,20 @@ namespace MobileGL::MG_Config {
     // The <path> of `unix:` / the <name> of `pipe:`. Empty for the other three modes.
     extern String TransportEndpoint;
 
+    // P7 F1. DID **THIS PROCESS'S OWN CONFIGURATION** ASK FOR A SPLIT TRANSPORT.
+    //
+    // `Transport` alone cannot answer that, and the difference is exactly the one the F1 gate
+    // turns on. A unit fixture assigns `Transport` by hand to put the code under test on its
+    // split arm (ServerLoopTest's main does, and says why) while building no client at all; a
+    // real run gets it from MG_ConfigLoader::Init(), and that run WILL bring a client half up.
+    // Only the second may be held to "never decide a record family's fate from a placeholder
+    // caps mirror" - in the first there is no handshake, no mirror to adopt and nothing the
+    // rule could mean.
+    //
+    // Written once, by InitTransport(), and never cleared: a process does not stop having been
+    // configured. Read by MG_Remote::Client::CapsMirror::RequireFirstSnapshot.
+    extern Bool SplitTransportRequestedByConfig;
+
     // The MOBILEGL_IPC_* family. A separate table rather than more FeaturesTable members,
     // for the G1 reason above and because every field here is meaningless without the
     // transport: a build that cannot reach the MG_Remote code cannot honour one of them.

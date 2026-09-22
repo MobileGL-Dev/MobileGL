@@ -474,4 +474,13 @@ namespace MobileGL::MG_Remote::Client {
     // tidy teardown. MG_Backend::Init() calls Start() on this one.
     ClientSession& ClientSessionInstance();
 
+    // F1 (P7 wave 2). Is a session bring-up running anywhere in this process right now.
+    //
+    // CapsMirror asks a narrower question through its own hook (SetCapsFirstSnapshotWait) and
+    // this is the half a TEST needs: a case that wants to read the mirror DURING a handshake
+    // has to know when the window has opened, and inferring it from a log line or a sleep is
+    // how such a case starts passing for the wrong reason. True from the first line of Start /
+    // StartSpawned / StartOverSocket / StartOverTransportPair until FinishStartup returns.
+    Bool BringUpInFlight();
+
 } // namespace MobileGL::MG_Remote::Client

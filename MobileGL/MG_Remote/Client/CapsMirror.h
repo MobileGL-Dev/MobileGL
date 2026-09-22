@@ -75,6 +75,8 @@ namespace MobileGL::MG_Remote::Client {
         // of the answer on the client under split: MGPipeGetResourceOps() is the SERVER's
         // registration and is null in the client process, which would silently disable the
         // whole push path in the one mode that matters.
+        //
+        // F1 (P7 wave 2): IT NEVER ANSWERS FROM A PLACEHOLDER ANY MORE. See RequireFirstSnapshot.
         Bool ServerConsumes(Uint64 subsystemBit) const;
 
         // GLFunctionsTable::PrefersCpuXfbPrimitiveAccounting (BackendObject.h:274) does NOT
@@ -84,6 +86,27 @@ namespace MobileGL::MG_Remote::Client {
         Bool PrefersCpuXfbPrimitiveAccounting() const;
 
     private:
+        // F1 (P7 wave 2). THE PLACEHOLDER MAY NOT ANSWER "THIS FAMILY HAS NO CONSUMER".
+        //
+        // The placeholder rule above is right for the READ accessors - one imprecise startup
+        // log line is cheaper than restructuring MG_Backend::Init() - and it was catastrophic
+        // for this one, which is not a read but a DECISION: answering it from a zeroed mask
+        // says "the server consumes nothing, emit nothing, run the legacy pull path", and
+        // under split there IS no legacy pull path on the client. Every record the caller
+        // would have emitted is simply lost, the emitter clears its dirty flags on the
+        // acceptance it never asked for, and the one R-8 warning that says so is emitted once
+        // per family for the life of the process.
+        //
+        // So: generation 0 is not an answer. This waits, bounded, for a handshake that is
+        // genuinely in flight on ANOTHER thread, and otherwise dies by name -
+        // Fatal{CapsBeforeFirstSnapshot, "<family>"} - naming the family that asked. It does
+        // NOT wait when the calling thread is the one performing the handshake: that is the
+        // shape MobileGL::Initialize used to produce (MG_State::Init() before
+        // MG_Backend::Init()), and waiting for a snapshot this thread has not yet gone to
+        // fetch is how a deadlock is spelled. The ORDER is the fix; this is the gate that
+        // makes a regression of it loud instead of silent.
+        void RequireFirstSnapshot(Uint64 subsystemBit) const;
+
         MG_Pipe::MGPCaps m_caps{};
         MG_Backend::FormatCapabilityCache m_formats{};
         RendererInfo m_renderer{};
@@ -120,5 +143,43 @@ namespace MobileGL::MG_Remote::Client {
     Uint64 ConsumerRefusals();
     Uint64 LastRefusedSubsystem();
     void ResetConsumerRefusalsForTest();
+
+    // F1's cases need the ONE state a running process can never get back: a mirror that has
+    // adopted nothing. A fork child inherits its parent's adopted instance, so without this a
+    // case about the placeholder would be a case about whatever the previous case adopted.
+    // Test-only by name, like ResetConsumerRefusalsForTest above it; nothing in the library
+    // calls either.
+    void ResetCapsMirrorForTest();
+
+    // ---- F1 (P7 wave 2) --------------------------------------------------------------------
+    //
+    // THE BOUNDED WAIT'S ONE HONEST SHAPE. ServerConsumes cannot pump a control plane itself -
+    // CapsMirror deliberately knows nothing about ClientSession - so the session installs the
+    // wait and the mirror calls it. The contract is narrow on purpose:
+    //
+    //   * it returns FALSE IMMEDIATELY when no session bring-up is in flight, or when the
+    //     CALLING thread is the one performing it. Both mean the snapshot cannot arrive while
+    //     this call blocks, and a wait there would burn the budget and then die anyway;
+    //   * otherwise it waits up to `timeoutMs` for the first Adopt() and reports whether one
+    //     landed.
+    //
+    // Installed once, by ClientSession's constructor. A raw function pointer for ID-8's
+    // reason, like SetCapsAdoptedHook beside it.
+    using CapsFirstSnapshotWait = Bool (*)(Uint32 timeoutMs);
+    void SetCapsFirstSnapshotWait(CapsFirstSnapshotWait wait);
+
+    // The generation, readable from a thread that does not own the mirror. m_generation is
+    // GL-thread state by the same argument that makes one gPipeInputs legal; this is the one
+    // fact a WAITING thread has to see, so it is published separately and atomically.
+    Uint64 PublishedCapsGeneration();
+
+    // `kMGPipeSubsystem*` -> the word the Fatal and the R-8 warning print. Names only grow
+    // (G14); an unknown bit prints as a hex literal rather than as a guess.
+    const char* CapsSubsystemName(Uint64 subsystemBit);
+
+    // How long RequireFirstSnapshot gives a handshake that IS in flight. Bounded and small:
+    // an in-process Adopt lands in microseconds and a socket one in single-digit milliseconds,
+    // so anything past this is a peer that is not coming.
+    inline constexpr Uint32 kFirstSnapshotWaitMs = 250;
 
 } // namespace MobileGL::MG_Remote::Client

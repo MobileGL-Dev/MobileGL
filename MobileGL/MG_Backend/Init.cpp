@@ -276,55 +276,16 @@ namespace MobileGL::MG_Backend {
             pActiveBackendObject = MakeUnique<MG_Remote::Client::BackendObject_Remote>();
             return true;
         }
-    } // namespace
-#endif
 
-#if MOBILEGL_BUILD_DISAGGREGATED
-    void ShutdownSplitRoles() {
-        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
-        // ClientSession::Stop IS table 3's whole order and it is idempotent: publish and wait
-        // for the server to drain (bounded - a lost record must be a red lane, not a hung
-        // exit), Doorbell::Kill through the transport's Shutdown, ServerLoop::Stop's bounded
-        // join - which also destroys the server's private BackendObject ON the apply thread
-        // while it still owns the context - the transport, and only THEN anything an emitter
-        // owns. A var-tail still named by an unapplied record is a use-after-free the join is
-        // what prevents, which is why the order is not a preference.
-        MG_Remote::Client::ClientSessionInstance().Stop();
-        // M-6: ClientSession::Stop's !m_started arm (a Start that FAILED after
-        // ServerSession::Accept - a refused Accept, an invalid cmd/reply ring) tears down only
-        // the client half and never stops the apply thread or drops the server's private backend,
-        // which ServerLoop::CreateBackend already built and which holds the process-wide
-        // g_resourceOps. So call ServerLoop::Stop() here unconditionally. It is idempotent: on the
-        // started path ClientSession::Stop already joined the thread, so this hits Stop's
-        // !joinable arm, which resets a backend that never ran a thread and is otherwise a no-op.
-        // Without this an early Start failure leaves BackendObject_DirectGLES permanently alive
-        // and every later split bring-up in the process fails at CreateBackend's m_backend!=null
-        // guard.
-        MG_Remote::Server::ServerLoopInstance().Stop();
-    }
-#endif
+        // F1 (P7 wave 2). THE WHOLE SPLIT ARM OF Init(), AS ONE BODY, so it can run from
+        // either of the two places that may reach it - MobileGL::Initialize's early hook,
+        // before MG_State::Init(), and Init() itself for a direct caller such as a unit
+        // fixture - without a second copy. Two copies of a bring-up order is how the two
+        // orders come to differ on the day one of them is wrong.
+        Bool g_splitBackendBroughtUp = false;
 
-#if MOBILEGL_BUILD_DISAGGREGATED
-    // The spawn server's entry into the SAME bring-up the inproc server role
-    // runs (ServerRole.h). A thin forwarder on purpose: the body stays in the
-    // anonymous namespace beside InitSplitRoles so the two cannot drift.
-    //
-    // THE WHOLE FUNCTION IS INSIDE THE GUARD, not just its body. A version with
-    // the guard inside still DEFINES the symbol in a pull build, and G1 caught
-    // it: 2 symbols added, 1 removed, .text +16 bytes. The pull build's identity
-    // is byte-for-byte, and "it returns false there" is not the same as "it is
-    // not there".
-    Bool InitServerRoleForSpawn() { return InitServerRoleCommon(); }
-#endif
-
-    void Init() {
-        MGLOG_D("Initializing MobileGL Backend...");
-
-#if MOBILEGL_BUILD_DISAGGREGATED
-        // THE SINGLE HOOK. In a build without MOBILEGL_BUILD_DISAGGREGATED, MG_Config::Transport
-        // is a `constexpr Monolith` (Config.h) and this whole statement is discarded, so the
-        // pull build gains no symbol, no branch and no byte - which is what G1 measures.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        void InitSplitBackend() {
+            g_splitBackendBroughtUp = true;
             if (!InitSplitRoles()) {
                 // NOT a fallback to the switch. pActiveBackendObject stays null and the next GL
                 // call fails loudly, which is the only honest outcome: the operator asked for a
@@ -373,6 +334,75 @@ namespace MobileGL::MG_Backend {
             }
             }
             LogBackendInfo();
+        }
+    } // namespace
+#endif
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // F1 (P7 wave 2). See BackendObjects.h for why this exists and MobileGL/Init.cpp for the
+    // defect the order closes.
+    Bool InitSplitRolesBeforeState() {
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return false;
+        InitSplitBackend();
+        return true;
+    }
+#endif
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    void ShutdownSplitRoles() {
+        g_splitBackendBroughtUp = false;
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        // ClientSession::Stop IS table 3's whole order and it is idempotent: publish and wait
+        // for the server to drain (bounded - a lost record must be a red lane, not a hung
+        // exit), Doorbell::Kill through the transport's Shutdown, ServerLoop::Stop's bounded
+        // join - which also destroys the server's private BackendObject ON the apply thread
+        // while it still owns the context - the transport, and only THEN anything an emitter
+        // owns. A var-tail still named by an unapplied record is a use-after-free the join is
+        // what prevents, which is why the order is not a preference.
+        MG_Remote::Client::ClientSessionInstance().Stop();
+        // M-6: ClientSession::Stop's !m_started arm (a Start that FAILED after
+        // ServerSession::Accept - a refused Accept, an invalid cmd/reply ring) tears down only
+        // the client half and never stops the apply thread or drops the server's private backend,
+        // which ServerLoop::CreateBackend already built and which holds the process-wide
+        // g_resourceOps. So call ServerLoop::Stop() here unconditionally. It is idempotent: on the
+        // started path ClientSession::Stop already joined the thread, so this hits Stop's
+        // !joinable arm, which resets a backend that never ran a thread and is otherwise a no-op.
+        // Without this an early Start failure leaves BackendObject_DirectGLES permanently alive
+        // and every later split bring-up in the process fails at CreateBackend's m_backend!=null
+        // guard.
+        MG_Remote::Server::ServerLoopInstance().Stop();
+    }
+#endif
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // The spawn server's entry into the SAME bring-up the inproc server role
+    // runs (ServerRole.h). A thin forwarder on purpose: the body stays in the
+    // anonymous namespace beside InitSplitRoles so the two cannot drift.
+    //
+    // THE WHOLE FUNCTION IS INSIDE THE GUARD, not just its body. A version with
+    // the guard inside still DEFINES the symbol in a pull build, and G1 caught
+    // it: 2 symbols added, 1 removed, .text +16 bytes. The pull build's identity
+    // is byte-for-byte, and "it returns false there" is not the same as "it is
+    // not there".
+    Bool InitServerRoleForSpawn() { return InitServerRoleCommon(); }
+#endif
+
+    void Init() {
+        MGLOG_D("Initializing MobileGL Backend...");
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // THE SINGLE HOOK. In a build without MOBILEGL_BUILD_DISAGGREGATED, MG_Config::Transport
+        // is a `constexpr Monolith` (Config.h) and this whole statement is discarded, so the
+        // pull build gains no symbol, no branch and no byte - which is what G1 measures.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            // F1: MobileGL::Initialize now brings the split roles up BEFORE MG_State::Init(),
+            // through InitSplitRolesBeforeState() below, so by the time Init() is reached on
+            // that path the work is done. A DIRECT caller - a unit fixture that calls
+            // MG_Backend::Init() itself - still gets the whole bring-up here. The flag rather
+            // than `pActiveBackendObject == nullptr`, because a bring-up that FAILED leaves
+            // that pointer null too and retrying it would refuse at CreateBackend's
+            // m_backend != nullptr guard with a second, misleading line.
+            if (!g_splitBackendBroughtUp) InitSplitBackend();
             return;
         }
 #endif
