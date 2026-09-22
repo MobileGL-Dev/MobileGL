@@ -234,6 +234,14 @@ namespace MobileGL::MG_Pipe {
         return "";
     }
 
+    // Rows 1 and 6 became live behaviour when D3 made every reader read the table (before that
+    // the bit-7 tests were hard-coded in Managers.cpp and DirectGLES.cpp and these rows were
+    // dead data). An edit that drops either row now makes BOTH readers agree, so nothing
+    // downstream can catch it; these two lines can.
+    static_assert(MGPipeSubsystemRequires(kMGPipeSubsystemVertexInput) == kMGPipeSubsystemResources,
+                  "D-K2's vertex-input row (bit 8 requires bit 7) has gone missing");
+    static_assert(MGPipeSubsystemRequires(kMGPipeSubsystemBufferBindings) == kMGPipeSubsystemResources,
+                  "D-K2's buffer-bindings row (bit 13 requires bit 7) has gone missing");
     static_assert(MGPipeSubsystemRequires(kMGPipeSubsystemTextureResources) ==
                       (kMGPipeSubsystemResources | kMGPipeSubsystemSamplers),
                   "D-K2's fourth row (bit 10 requires bit 11) has gone missing again");

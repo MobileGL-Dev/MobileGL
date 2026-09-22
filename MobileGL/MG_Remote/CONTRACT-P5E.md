@@ -413,11 +413,14 @@ may not depend on a client invariant to terminate), and a storage record that ca
 **not clean**: the direction that re-syncs, not a refusal, and it raises nothing.
 `SyncTextureViewToBackendByRecord` stamps that same storage serial — or 0, which reads as never
 clean — at both its arms, so the stamp and the gate name one quantity. Deletion ordering cannot
-strand the walk: a view holds a strong reference to its storage owner and the client emits
-`resource_destroy` from the DESTRUCTOR rather than from `glDeleteTextures`
-(`TextureObject.cpp:63`), so an owner's record outlives every record that views it whatever order
-the application deletes the two names in; `Live`/`Gen` are checked anyway, so a recycled slot
-answers null rather than a stranger's record.
+strand the walk, and the guarantee is the check, not the emit order: a view holds a strong
+reference to its storage owner and the client emits `resource_destroy` from the DESTRUCTOR rather
+than from `glDeleteTextures` (`TextureObject.cpp:63`), so the storage cannot go away under a live
+view whatever order the application deletes the two names in — but the two destroys leave one
+destructor chain back to back, owner FIRST when the view held the owner's last reference, so for
+one apply the view record is live with `ViewOf` naming a freed slot. No draw can land in that
+window, and the walk tests `Live`/`Gen`, so it answers null (not clean) rather than a recycled
+stranger's record.
 
 The four in-body live reads (`GetTarget` at
 `Managers.cpp:8876-8877, 8620-8621`; `IsTextureView` `:7060`; the TexBuffer backing `:8223-8231`)

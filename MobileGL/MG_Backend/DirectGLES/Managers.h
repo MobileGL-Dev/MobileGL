@@ -809,14 +809,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // may not depend on a client invariant to terminate: a chain the wire could make cyclic ends
     // as a null answer rather than as a hang.
     //
-    // DELETION ORDERING IS SAFE BY CONSTRUCTION, AND CHECKED ANYWAY. A view holds a strong
-    // SharedPtr to its storage owner (TextureObjectView::m_storageOwner) and the client emits
-    // resource_destroy from the DESTRUCTOR - "the last SharedPtr to this object dropping, not the
-    // glDelete* that only marks the name and leaves a still-bound object very much alive"
-    // (MG_State/GLState/TextureState/TextureObject.cpp:63) - so an owner's record cannot die
-    // while a record that views it is live, however the application orders its glDeleteTextures.
-    // If one ever did, PipeTextureRecordForHandle tests Live and Gen, so a recycled slot answers
-    // null rather than a stranger's record.
+    // DELETION ORDERING: THE LIVE/GEN TEST IS THE GUARANTEE, NOT THE EMIT ORDER. A view holds a
+    // strong SharedPtr to its storage owner (TextureObjectView::m_storageOwner) and the client
+    // emits resource_destroy from the DESTRUCTOR - "the last SharedPtr to this object dropping,
+    // not the glDelete* that only marks the name and leaves a still-bound object very much alive"
+    // (MG_State/GLState/TextureState/TextureObject.cpp:63). So the owner's storage cannot go away
+    // under a live view, whatever order the application deletes the two names in. But the two
+    // destroys are emitted back to back from one destructor chain, and when the view holds the
+    // owner's LAST reference the member is destroyed before the view's base destructor runs, so
+    // the wire carries resource_destroy(owner) and then resource_destroy(view): for one apply the
+    // view record is live with Desc.ViewOf naming a freed slot. No draw can land in between, and
+    // PipeTextureRecordForHandle tests Live and Gen, so that window answers null (= not clean)
+    // rather than a recycled stranger's record.
     const MG_Pipe::MGPipeResourceRecord* PipeTextureStorageRecordForRecord(
         const MG_Pipe::MGPipeResourceRecord& record);
 

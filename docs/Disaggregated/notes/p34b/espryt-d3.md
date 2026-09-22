@@ -112,17 +112,22 @@ cost to discover later:
    `PipeTextureRecordForHandle` tests `Live` and `Gen`, so a recycled slot answers null rather
    than a stranger's record.
 
-**Deletion ordering for the chosen shape, checked rather than assumed.** A view may outlive its
-owner's GL NAME — `glDeleteTextures(owner)` while the view is alive is legal and the storage
-must survive. It cannot outlive the owner's RECORD, and that is by construction on the client:
-`TextureObjectView::m_storageOwner` is a strong `SharedPtr`, and
+**Deletion ordering for the chosen shape: the walk's `Live`/`Gen` test is the guarantee, not
+the emit order** (the review corrected an earlier draft of this paragraph that claimed the
+ordering alone was enough). A view may outlive its owner's GL NAME — `glDeleteTextures(owner)`
+while the view is alive is legal and the storage must survive — and it cannot outlive the owner's
+STORAGE: `TextureObjectView::m_storageOwner` is a strong `SharedPtr`, and
 `MGPipeEmitTextureDestroyAndFree` is called from `TextureObjectBase`'s DESTRUCTOR, whose own
 comment says why — *"the last SharedPtr to this object dropping, not the glDelete* that only
-marks the name and leaves a still-bound object very much alive"* (`TextureObject.cpp:63`). So
-`Desc.ViewOf` cannot dangle while the record that carries it is live, whatever order the
-application deletes the two names in. The walk validates anyway, and **a null answer is NOT
-clean** — the direction that re-syncs, never the direction that shows stale texels. It is not a
-refusal and raises nothing (rule I: no new abort site, no new `Fatal` family word).
+marks the name and leaves a still-bound object very much alive"* (`TextureObject.cpp:63`). But
+`m_storageOwner` is a member of the derived class and there is no user destructor on the view,
+so when the view holds the owner's last reference C++ destroys the member first: the wire
+carries `resource_destroy(owner)` and then `resource_destroy(view)`, and for exactly one apply
+the view record is live with `Desc.ViewOf` naming a freed slot. No draw can land between two
+destroys from one destructor chain, and the walk tests `Live`/`Gen`, so that window answers
+null — and **a null answer is NOT clean**, the direction that re-syncs, never the direction that
+shows stale texels. It is not a refusal and raises nothing (rule I: no new abort site, no new
+`Fatal` family word).
 
 **Views of views resolve transitively.** One hop always reaches storage in practice —
 `glTextureView` composes a view-of-a-view onto the ROOT at creation, which is what the spec's
@@ -215,7 +220,7 @@ prose statements and the estimate counted two:
 | `MG_Impl/Pipe/PipeFill.cpp` `P4aFamilyDependencyBits` | its own `kMGPipeP4aFamilyDependencies[]`, four rows | `MGPipeSubsystemRequires()`; the local table is deleted |
 | `MG_Impl/Pipe/PipeFill.cpp` `P5eFamilyIsLive` | hand-coded `(pushMask & kMGPipeSubsystemResources) == 0` | `MGPipeSubsystemDependenciesAreSet(bit 13, mask)` |
 | `MG_Backend/DirectGLES/Managers.cpp` `PipeSubsystemDependencyMissing` | took a literal dependency BIT per call site | takes the FAMILY and asks the table |
-| …its four `Resolve<Family>SubsystemArm` call sites | five calls with five hand-written sentences | four calls, one per family, naming only the family |
+| …its `Resolve<Family>SubsystemArm` call sites | four calls with four hand-written sentences (`ResolveProgramSubsystemArm` never called it) | three calls, one per family that has a row, naming only the family |
 | `MG_Backend/DirectGLES/Managers.cpp` `ResolveVertexInputSubsystemArm` | hand-rolled `bitSet && !resourcesBitSet` | the table |
 | `MG_Backend/DirectGLES/DirectGLES.cpp` `ResolveBufferBindingSubsystemArm` | hand-rolled `bitSet && !resourcesBitSet` | the table |
 
