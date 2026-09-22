@@ -5,11 +5,17 @@
 > [`MobileGL/MG_Remote/CONTRACT-P6.md`](../../MobileGL/MG_Remote/CONTRACT-P6.md)；设计见
 > [`ARCHITECTURE.md`](ARCHITECTURE.md)。
 
-**状态（2026-09-21）：P6 全部包已落地（a6…t6），出口门第 1–6 项达成；第 7 项（真机配对 A/B
-热窗口）与第 8 项（三个强制性能数）尚未正式采集，因此 P6 记为「实现完成、出口性能/设备数待补」，
-未宣布收官。** 分支 `feat/disaggregated`，头 `16bfab10`，已推 origin。三种传输形态
-（`monolith` / `inproc` / `spawn`）在桌面（WSL lavapipe）与真机（Redmi `2f7cbe2e`）上都跑通了
-真实 trace 的两进程 retrace，逐像素对上 golden。
+**状态（2026-09-22）：P6 已收官。** 全部包（a6…t6）落地，出口门第 1–8 项全部达成：门 7（真机
+`2f7cbe2e` reboot-clean、同热窗口配对 A/B）判读为 **tie**——`inproc` 与 `spawn` 的 client CPU/帧
+差 −0.15%（会话 1）/ +0.16%（会话 2），都落在臂内散布之内，如实记录、不设门；门 8 的三个强制
+性能数（socket 门铃 vs condvar、`SEG_STAGE` 字节/帧、chunking 后记录/帧）已采齐，逐数见 §2；
+G1 pull 构建 **0/0/0/0** 且 `.text` 逐字节相同。测量期的源头：门 7 报告记 `98d0b96c`、门 8 的
+wire 计数器与真机第二轮记 `71aa9951`。分支 `feat/disaggregated` 其后又落地两个 P6.5 设计提交
+（`2d86e07a`、`2bd86664`），**现头 `2bd86664`，与 `origin` 同步**；**工作树另有未提交的 P6 收尾
+改动**（wire 计数器、`ServerMain` 的 `PipeStats` 武装、`MOBILEGL_PIPE_STATS_FILE` 角色派生、设备行
+与工具入库、测试），见 §1.1。三种传输形态（`monolith` / `inproc` / `spawn`）在桌面（WSL lavapipe）
+与真机（Redmi `2f7cbe2e`）上都跑通了真实 trace 的两进程 retrace，逐像素对上 golden。性能**只记录、
+不设门**。
 
 ---
 
@@ -34,6 +40,40 @@
 `split` 键改成 opt-out；Android CI 新增 `spawn-acceptance` 臂，真机 App 从 `nativeLibraryDir` 解析
 server 路径（`94e2f2e0`、`15bd9a67`、`1039502e`、`2afa0002`）。
 
+### 1.1 收尾（2026-09-22）
+
+下列改动**在两轮测量（门 7 的 `98d0b96c` 头、门 8 的 `71aa9951` 头）之后落地、目前仍在工作树里未
+提交**（其后两个提交 `2d86e07a`、`2bd86664` 只改文档与 `Transport/StreamLink.h` 的注释，不含这些代码）：
+
+- **wire 计数器**：`PipeStats` 新增 `ByteClass::StageSegmentBytes`（唯一收口点
+  `PipeWireCodec.cpp:878` `StageAllocate`）与 `CallClass::WireRecords`（`:1188` `EncodeRecord` 提交
+  路径），外加一个 staged-blob 直方图（复用 `PayloadBucketOf` 的桶边界，只经 JSON dump 出口）；
+  汇总行新增 `seg=` / `wrec=` / `wrec/f=`（后者与 `draws/f=` 同形，无 Present 时按既有规则退回窗口总量）。
+  两个计数器都在 `#if MOBILEGL_PIPE_PUSH` 内，落点选在唯一收口点而不是调用方，否则等于维护一张
+  "今天存在哪些 producer" 的名单。
+- **`ServerMain` 的 `PipeStats` 武装**：spawn server 此前从不武装计数器（红一次的证据：
+  **修复前 spawn server 0 条汇总行、修复后 29 条**，同一条 spawn trace、两侧 SSIM 均 1.000000）。
+  `Init()` 放在 `MG_ConfigLoader::Init()` 与 `MGPipeSetServerProcessRole(true)` **之后**、
+  `Shutdown()` 放在 `loop.Stop()` 之后 `_exit(0)` 之前——两处顺序都是承重的（前者让 latch 读到真
+  配置值，后者让 apply 线程不再发布时取运行总量与 JSON dump）。见 §2.1。
+- **`MOBILEGL_PIPE_STATS_FILE` 角色派生**：与日志 sink 同一套命名规则（库 `RoleLogPath` 导出、
+  PipeStats 调用而非复制），dump 与 banner 都印/写 `<base>.client.json` / `<base>.server.json`，
+  **基名不再指向任何文件**——没跟上改名的读取方会当场 `ENOENT`，这是刻意的。这一条在 G1 上红了
+  三次才做对（无条件派生 → `.text +24`；加 `#if` 但两臂共用局部 → 1 symbol resized；两臂分离但
+  重写 `MGLOG_W` 格式串 → `.rodata +64`），最终形态是 pull 臂的代码逐语句原样、所有新增都在 `#if` 内。
+- **`pin_device.sh` 新增 `2f7cbe2e` 条目**：本板 GPU 钳 **1050 MHz**（`thermal_pwrlevel` 写 0 读回 1、
+  `max_gpuclk` 只读 1 050 000 000、devfreq `max_freq` 同值），因此**绝对值与 1100 MHz 时代的
+  `35d0befa` 行不可比**，只有同会话的配对可比。三种动作（`check` / `pin` / `unpin`）均已实测。
+- **工具进树**：`tools/device_bench/p6/{ab_session.py,render_ab.py,README.md}`（真机配对 A/B 会话
+  运行器 + 只读渲染器，门 7 快照里的 `gate7_ab.py` / `render_gate7.py` 是它们的前身）与
+  `tools/trace_replay/run_android_retrace_local.py`（+19 行）：`MOBILEGL_TRACE_PACKAGE` 覆盖，
+  让开发包能**装在既有 trace 包旁边**而不是替换它（两个不同密钥签的 APK 不能共用一个 id；
+  缺省即原行为）。四个文件目前都在工作树里**未提交**。
+- **测试**：`PipeStats` **25/25**、全 unit **2367/2367**、`integration-spawn` **102/102**；
+  G1 复验 **0/0/0/0** 且 `.text` **逐字节相同**（pull 配置下两侧各 10 158 850 字节，`cmp` 无差异）。
+  逐条 red-once 与 G1 三次泄漏见
+  [`notes/p6/gate8-wire-counters.md`](notes/p6/gate8-wire-counters.md) §9.7.3。
+
 ---
 
 ## 2. 出口门（契约 §9）
@@ -46,16 +86,21 @@ server 路径（`94e2f2e0`、`15bd9a67`、`1039502e`、`2afa0002`）。
 | 4 | 进程树：运行时恰多一个子进程、结束后为零 | ✅ `ServerSpawnTest.StartsAServerProcessAndHandshakesAcrossIt`（`CountOwnChildren`） |
 | 5 | Arm 证明（ID-124）：每条 spawn 条目记子进程 pid 与 `transport=spawn` | ✅ `--require-spawn` 门要求 ConfigLoader marker **且** `spawn ARMED - pid N` |
 | 6 | 每包 red-once（R-16） | ✅ dl 的 S2/S7、hs 的 serverPid、sm/st 的守卫塌缩、t6 的名集合漂移均已跑红一次 |
-| 7 | **设备**：Redmi reboot-clean、同热窗口配对 A/B | ⏳ 功能已验（下 §3），正式配对 A/B 热窗口性能跑**未采集** |
-| 8 | **性能只记录**，但三个数强制：socket 门铃 vs condvar、`SEG_STAGE` 字节/帧、chunking 后记录/帧 | ⏳ **未采集**，`MEASUREMENTS.md:342` 仍说 chunking 后分布不存在 |
+| 7 | **设备**：Redmi reboot-clean、同热窗口配对 A/B | ✅ **配对 A/B 判读 tie**：会话 1（boot id `e69d0329…`→`107f24d3…`）六臂交错 `monolith,inproc,spawn,inproc,monolith,spawn` × best-of-3 —— 18/18 runner 退出 0、36/36 pin check `PINNED`、0 `Fatal{`；client CPU p50 ms/帧 **inproc 7.880/7.889、spawn 7.876/7.869**（均值 −0.15%，符号随顺序翻转，臂内散布 0.2–4.2%），`monolith` 约贵 30%。会话 2（boot id `107f24d3…`→`7e6c6e9f…`）inproc/spawn 交错 × best-of-2：4/4 OK、8/8 `PINNED`、0 `Fatal`；client CPU **7.987/7.989 vs 7.992/8.009**（+0.16%，亦在 0.14–0.69% 臂内散布内）。差值在臂内噪声内，**如实记录、不设门**。见 §3、[`notes/p6/gate7-device-ab.md`](notes/p6/gate7-device-ab.md)、[`notes/p6/gate8-doorbell-device.md`](notes/p6/gate8-doorbell-device.md) |
+| 8 | **性能只记录**，但三个数强制：socket 门铃 vs condvar、`SEG_STAGE` 字节/帧、chunking 后记录/帧 | ✅ 三个数齐（见 §3.2 / §3.3 与 [`notes/p6/gate8-doorbell-device.md`](notes/p6/gate8-doorbell-device.md)、[`notes/p6/gate8-wire-counters.md`](notes/p6/gate8-wire-counters.md)）：① socket 门铃 vs inproc condvar —— client **121.1 waits/帧**、5.6–6.1 parks/帧，两传输逐字相同（run total 30 401–30 407）；server inproc **10 866–11 963** waits/帧、5.0–6.2 parks/帧（park 率 0.042–0.06%），spawn **10 415–10 416** waits/帧、4.66–4.90 parks/帧。判读（诚实）：socket 阻塞读**既不更便宜也不更贵**，契约 §9「阻塞读可能更便宜」**未兑现**；spawn server waits 少 8.9–12.9% 归因于 handoff 纪律而非门铃本身；唯一 socket 略差的列是 clipark/f（6.07 vs 5.60/5.75，每帧多约 0.4 次 park）。② `SEG_STAGE` 字节/帧（inproc，真实 trace retrace）：OpenRA **130.8 KB median / 8.01 MB steady mean**（含启动负载 8.07 MB），rd12 **816.2 KB median / 1.53 MB steady mean**（含负载 10.79 MB）。③ 分块后记录/帧：OpenRA **211 median / 206 mean**，rd12 **7 497 median / 7 504 mean**；`maxrec=1808` 与分块前相同，默认 8 MiB chunk 预算在这两条负载上**从未被打到** |
+
+`MEASUREMENTS.md:342` 的「分块后的逐 blob 字节分布尚无新测量」据此可关闭：门 8 第二轮给了
+默认预算下的分布（`maxrec=1808`，稳态 `seg/wrec ≈ 109 B/条`），结论是**默认配置下该分布就是未分块的
+原始分布**（分块在这两条负载上没有机会生效，由 `MOBILEGL_IPC_STAGE_MB=1` 的负控独立证明：seg 运行
+总量两臂逐字节相同 2 698 026 763，`wrec` 仅 +0.11%）。
 
 负控（各跑红一次）：S1 不可解析镜像（sm）、S2 kill server（dl）、S3 未洗环境（sm）、S5 窗口 token
 到达（cp）、S6 **未跑——`LinkTerms.dataPlane` 不存在于树上**（`protocol.fbs` 无 `LinkTerms` / `Refuse`，hs 只落了 build stamp、`abiMajor/Minor` 补检与真实 pid；此处此前写"已跑红一次"是错的，随契约 §2 三行移交 P6.5，契约 §10.3）、S7 裸 abort（dl 普查门）、S8 `SessionFaultCount()==0`
 整轮（t6）。
 
-### 2.1 收官前另欠（2026-09-22 核出）
+### 2.1 出口门之外仍欠（2026-09-22 核出；出口门 1–8 本身已全部达成）
 
-- server 进程侧的 `PipeStats` 半边是**结构性零**：`ServerMain` 不跑 `MobileGL::Initialize`，`PipeStats::Init()` 从未在 server 进程执行，~80 处 `if (Enabled())` 永远为假，`srv=0 srvpark=0` 长得和"从没等过"一模一样（`PipeStats.h:256` 自己写明了这一点）——门 8 的"socket 门铃 vs condvar"因此没有 server 半边。修法是在 server 进程里于 config 加载与角色声明之后初始化它，汇总行落 `<base>.server.log`，由车道断言而非注释假设（工作区中进行中，未提交）。
+- server 进程侧的 `PipeStats` 半边是**结构性零**：`ServerMain` 不跑 `MobileGL::Initialize`，`PipeStats::Init()` 从未在 server 进程执行，~80 处 `if (Enabled())` 永远为假，`srv=0 srvpark=0` 长得和"从没等过"一模一样（`PipeStats.h:256` 自己写明了这一点）——门 8 的"socket 门铃 vs condvar"因此没有 server 半边。**已修（工作树未提交，见 §1.1）**：在 server 角色初始化的唯一收口点于 config 加载与角色声明之后加 `Init()`，`loop.Stop()` 之后加 `Shutdown()`，汇总行落 `<base>.server.log`；spawn server 汇总行 0 → 29 条，SSIM 1.0 不变。
 - 184 符号棘轮 CI 门（契约 §12.1）：`test.yml` / `scripts/` 里**没有**。
 - 契约 §2 表 0 分给 hs 的 `LinkTerms` / `Refuse` / `wireFingerprint` 拆分：**未落地**，移交 P6.5（`ROADMAP.md` P6.5 行，契约 §10.3）。
 - `MOBILEGL_IPC_IDLE_EXIT_S`（`ARCHITECTURE.md` §15.3 默认 30）：未被解析。
@@ -80,6 +125,68 @@ trace APK 以 `-Pmobilegl.buildDisaggregated=ON` 构建，调试签名安装。�
 从 123 秒的错误 `BarrierTimeout` 变成 **5.7 秒**的正确 `DEVICE LOST`（`revents=0x2010` = POLLRDHUP|POLLHUP）——
 仍红（驱动 bug），但红得诚实。
 
+### 3.1 配对 A/B（门 7，2026-09-22）
+
+reboot-clean + 同热窗口，臂 = `inproc` vs `spawn`（`monolith` 作基线行）。负载
+`minecraft-1.21.4-rd12-odinlite-in-world` + `DirectGLES`（~1471 draws/帧），
+`--benchmark-tail-frames 200`，主指标 = client 线程自身 `CLOCK_THREAD_CPUTIME_ID` 的稳态
+p50 ms/帧。两轮会话，各自一个 boot id、各自一次 `adb reboot`（boot id 变化即为事实）：
+
+| 会话 | boot id | 臂序 | 重复 | 结果 | client CPU p50 ms/帧 |
+|---|---|---|---|---|---|
+| 1 | `e69d0329…` → `107f24d3…` | `monolith,inproc,spawn,inproc,monolith,spawn` | best-of-3 | 18/18 runner 退出 0、36/36 pin check `PINNED`、0 `Fatal{` | inproc **7.880 / 7.889**、spawn **7.876 / 7.869**（均值 **−0.15%**，符号随顺序翻转，臂内散布 **0.2–4.2%**），monolith **约贵 30%** |
+| 2 | `107f24d3…` → `7e6c6e9f…` | `inproc,spawn,spawn,inproc` | best-of-2 | 4/4 OK、8/8 `PINNED`、0 `Fatal` | inproc **7.987 / 7.989**、spawn **7.992 / 8.009**（**+0.16%**，臂内散布 0.14–0.69%） |
+
+**判读：tie。** 两个方向的差值都在臂内噪声之内，且两轮之间绝对值漂移（~0.1 ms）大于传输差本身。
+按本阶段「性能只记录、不设门」的纪律，这组数**如实记录、不设门**，不写成"spawn 更快"也不写成
+"spawn 更慢"。臂证明（契约 §9.5）：每个 spawn 条目都记了子进程 pid 与 `transport=spawn`，
+inproc 臂带 `Config: IPC` 行，两个 monolith 臂**既不**带 transport marker **也不**带 `Config: IPC` 行
+（控制组 stayed a control）。逐臂 pin 证据、温度范围（会话 1：37.6–46.5 °C；会话 2：37.2–44.9 °C）
+与全部原始行见 [`notes/p6/gate7-device-ab.md`](notes/p6/gate7-device-ab.md)、
+[`notes/p6/gate8-doorbell-device.md`](notes/p6/gate8-doorbell-device.md)。
+
+### 3.2 门 8① 的 socket 门铃 vs `inproc` condvar
+
+| 半边 | inproc | spawn |
+|---|---|---|
+| client `cli` waits/帧 | **121.1**（run total 30 407） | **121.1**（run total 30 401），**两传输逐字相同** |
+| client `clipark` parks/帧 | 5.60 / 5.75 | **6.07 / 6.08**（唯一 socket 略差的列，每帧多约 0.4 次 park） |
+| server `srv` waits/帧 | 10 866–11 963 | 10 415–10 416（低 8.9–12.9%） |
+| server `srvpark` parks/帧 | 5.0–6.2 | 4.66–4.90 |
+| server park 率 | 0.042–0.06% | 0.042–0.047% |
+
+**判读（诚实）**：socket 阻塞读**既不更便宜也不更贵**——client CPU 差 +0.16% 在噪声内，契约 §9
+「阻塞读可能更便宜」**未兑现**（既未被证实也未被证伪，它该移动的那个可观测量没有向任何方向移动）。
+spawn server waits 少 8.9–12.9% **归因于 handoff 纪律而非门铃本身**（两条臂统计的不是同一个事件，
+可比的是 park 率，而 park 率两侧几乎相同）。这组数只记录、不设门。
+
+**读法警告**（结构性零，不是测量）：spawn 的 `srv` 对在 **server.log**、`cli` 对在 **client.log**；
+client 行上的 `srv=0 srvpark=0` 是「另一个进程」而不是「从未等待」，server 行上的 `cli=0 clipark=0`
+同理。spawn client **从不调 `OnPresent`** → 窗口字段 `frames=0 window=0` 无效，但 `PublishGauge` 是
+store，所以 `cli`/`clipark` 的 **run total 有效**；spawn client 只有 `Shutdown` 终行（benchmark 模式）
+或 0 行（snapshot 模式）。
+
+### 3.3 门 8②③ 的 wire 计数器（`SEG_STAGE` 字节/帧、分块后记录/帧）
+
+inproc、真实 trace retrace，`MOBILEGL_PIPE_STATS_PERIOD=1`：
+
+| 负载 | `SEG_STAGE` 字节/帧 | 记录/帧 |
+|---|---|---|
+| OpenRA | **130.8 KB median** / 8.01 MB steady mean（含启动负载 8.07 MB） | **211 median** / 206 mean |
+| rd12 in-world | **816.2 KB median** / 1.53 MB steady mean（含负载 10.79 MB） | **7 497 median** / 7 504 mean |
+
+**framing 警告**：PERIOD=1 下首窗含启动负载（rd12 帧 1 有 981 654 draws vs 稳态 ~1 471），
+run-wide mean 约 **7×** 稳态，所以两个读数都报，引用时必须说明口径。**`maxrec=1808` 与分块前相同**
+——默认 8 MiB chunk 预算在这两条负载上**从未被打到**。负控 `MOBILEGL_IPC_STAGE_MB=1`（256 KiB 预算）：
+`seg` 运行总量两臂**逐字节相同**（2 698 026 763），`wrec` 仅 **+0.11%**——证明计数器测的是生产者而非切分；
+同一 A/B 下 `tex` **+194%** **未解释**（`MOBILEGL_IPC_STAGE_MB` 同时是 arena 大小与 chunk 预算的来源，
+未隔离到单变量），**记为证据、不作结论**。逐 blob 分布首测（integration 车道 JSON；retrace 车道拿不到
+dump，因 snapshot 模式不走 `cleanUp()` → `MobileGL::Destroy()`）：**70 records、8 blobs、bucket 3–12**。
+
+**做与未做，分开写**：OpenRA 真机辅负载**未跑**（如实记「未跑」）；
+[`notes/p6/gate8-wire-counters.md`](notes/p6/gate8-wire-counters.md) 的 §6 数据全部来自 WSL + llvmpipe，
+门 8②③ 是**桌面 inproc** 数，门 8① 的 server 半边另有真机重复（§3.2）。
+
 ---
 
 ## 4. 日志按角色分文件（本阶段的一处基础设施改动）
@@ -94,9 +201,25 @@ G1 守卫下 pull 构建不变。
 
 ## 5. 已知未决 / 明确不属于 P6
 
-- **出口门 7、8**（真机配对 A/B、三个性能数）——待采集，见 §2。
-- **`DirectVulkan` 真机分离路径分歧**——Magma × 真实 GPU，非 P6。
+- **`DirectVulkan` 真机分离路径分歧**——Magma × 真实 GPU，非 P6。见 §3 与 `ROADMAP.md` P7 行。
 - **P6.5**：传输栈两轴化（控制面 `ITransport` × 数据面 `ILink`，握手协商、可混搭）+ TCP 跨机 + wire 定宽与布局摘要；`StreamLink` 已声明未接线；`SEG_STAGE` 送窗口复活。终局已改为 TCP 跨机跨平台（2026-09-22），AF_VSOCK 撤回；见 `ROADMAP.md` P6.5 行、`ARCHITECTURE.md` §11.9。
 - **Ph**：让 `Session::Fail` 可返回的策略翻转（需在每个依赖 `[[noreturn]]` 的站点造真实返回路径）+ 配对 / 认证；前置于 P12 的非 loopback 监听。
 - **P12**：真窗口跨进程（`ANativeWindow*` 是客户端进程内指针，`SetWindowHandle` 至今具名拒绝）。
 - **seq/op 未穿 SessionFault 帧**：90 个站点不逐一穿线，消息本身已带 op，帧只带 code/family/message。
+
+两条**结构性限制**，随收尾一起生效、如实记录（不是缺陷但会绊住读者）：
+
+- **spawn client 无 `OnPresent`** → 它的窗口字段 `frames=0 window=0`，于是
+  `draws=` / `wrec=` / `bytes[...]` / `gates[...]` 与**所有 per-frame 字段**在 spawn client 上都印 0 或
+  `n/a`，**无效**；但 `PublishGauge` 是 **store 不是 add**，所以 `cli` / `clipark`、`maxrec` /
+  `maxcap` / `ringwraps` / `ringpads` / `ringwaits`，以及发射侧直接 `Add` 的
+  `resid` / `csob-blob` / `seg` / `wrec` 的 **run total 有效**（窗口归属只有最后一段）。要取 spawn 的
+  窗口化 client 数必须让 client 进程到达一次帧边界——那会与 backend 的帧边界重复计数，需单独判断，
+  不在本阶段。**逐 role 的取数规则**因此是：`srv` 对读 server.log、`cli` 对读 client.log，
+  spawn client 只有 `Shutdown` 终行（benchmark 模式）或 0 行（snapshot 模式）。
+- **`MOBILEGL_PIPE_STATS_FILE` 已改角色派生**：dump 与 banner 都写/印
+  `<base>.client.json` / `<base>.server.json`，**基名不再指向任何文件**（与日志 sink 同一套
+  `RoleLogPath` 规则，刻意让没跟上的读取方当场 `ENOENT` 而不是半读通过）。inproc 只产出
+  `.client.json` 是**正确**的（服务端角色是线程不是进程，`Shutdown()` 只跑一次）。仓库内目前没有
+  这样的读者（`grep` 确认），但任何新写的车道/脚本都要读派生名。语义未变：仍是「在这里写 dump」，
+  只是「这里」由库按角色展开成两个名字。
