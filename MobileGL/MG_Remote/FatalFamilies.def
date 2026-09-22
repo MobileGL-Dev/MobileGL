@@ -1,0 +1,82 @@
+// MobileGL - MobileGL/MG_Remote/FatalFamilies.def
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// P6 `dl` (CONTRACT-P6 5.2, D2 ruling). THE INTERNAL FATAL VOCABULARY, and its projection onto
+// the SEVEN-value wire FatalCode.
+//
+// a6 censused 30 distinct family words against a 7-value wire enum, so Session::Fail(FatalCode,
+// detail) cannot carry the vocabulary in its first argument - the word would collapse to one of
+// seven and the log would say "ProtocolCorruption" where the code said "UnmigratedVerb". So the
+// family is an INTERNAL enum, generated from this file, and the wire keeps FatalCode. Each row
+// carries the coarse code the PEER is told when this family kills the session; the rich word
+// stays in the local log and in the SessionFault frame's `family` string.
+//
+// THE PROJECTION IS A TOTAL TABLE, NOT A SWITCH WITH A DEFAULT. This build has no -Werror
+// anywhere (measured: CMakeLists, every *.cmake, both workflows), so a gate premised on -Wswitch
+// catching a missing arm is fiction. A row here IS the arm; a family with no row does not
+// compile a call that names it.
+//
+// WHY EACH CODE. The wire FatalCode answers one question for the peer: what KIND of end was
+// this. The buckets:
+//   ProtocolCorruption - the peer sent, or the session reached, something that cannot be
+//                        honoured correctly: a malformed record, an unimplemented verb/surface,
+//                        an invariant the roles must hold, a reply that does not fit its
+//                        contract. The peer's takeaway is "we disagree about the protocol".
+//   RingOverrun        - a shared ring or event channel overran. A transport-capacity fact.
+//   SegmentMismatch    - a shared SEGMENT's geometry could not hold what a role needed to put
+//                        in it. Distinct from a ring overrun: the segment is the wrong SIZE,
+//                        not merely full this instant.
+//   AbiMismatch        - the two builds do not agree on layout or protocol version.
+//   ServerCrashed      - a liveness end the WAITING side attributes to the other: a drain that
+//                        never completed, an apply thread that is gone or never started. The
+//                        device-lost latch is armed from the doorbell, never from these, but the
+//                        peer that was waiting is told the server is gone.
+//   DeviceLost         - reserved: set by the latch (5.3), never raised as a Fatal family, so no
+//                        row projects onto it.
+//
+// clang-format off
+
+// X(Family, WireFatalCode, Why)
+#define MGL_FATAL_FAMILY_LIST(X) \
+    X(ProtocolCorruption,            ProtocolCorruption, "a record's bounds or self-describing length was violated") \
+    X(UnmigratedVerb,                ProtocolCorruption, "a wire verb slot P5/P6 does not implement was reached") \
+    X(UnmigratedSurface,             ProtocolCorruption, "a surface op named a client-process handle that means nothing here (P12)") \
+    X(UnmigratedPipeInput,           ProtocolCorruption, "a PipeInputs field with no field-ownership row was read across the boundary") \
+    X(RoleViolation,                 ProtocolCorruption, "a call ran on the wrong role/thread - an invariant the two roles must hold") \
+    X(UnsetCallMask,                 ProtocolCorruption, "the CallMask was consulted before either half was published") \
+    X(ClientTablesUninstalled,       ProtocolCorruption, "the applier ran before the client installed its tables") \
+    X(NoClientSession,               ProtocolCorruption, "a path that needs the client session ran without one") \
+    X(UnexpectedMapAccept,           ProtocolCorruption, "a persistent-map accept arrived where the protocol permits none") \
+    X(UncarriedInitialBytes,         ProtocolCorruption, "a producer's initial bytes were required on the wire and absent") \
+    X(ReplyStatusInvalid,            ProtocolCorruption, "a reply carried a status outside the defined set") \
+    X(ReplyError,                    ProtocolCorruption, "a reply-owning verb saw an error status it cannot represent") \
+    X(ReplyMissing,                  ProtocolCorruption, "a reply slot the protocol requires was empty") \
+    X(ReplyTooLarge,                 ProtocolCorruption, "an answer exceeded the size its verb's contract allows") \
+    X(ReadbackDeclined,              ProtocolCorruption, "a readback that cannot return without complete pixels was declined") \
+    X(ReadbackReplyShort,            ProtocolCorruption, "a readback reply carried fewer bytes than its shape requires") \
+    X(UnsizedReadback,               ProtocolCorruption, "a readback arrived with no declared size") \
+    X(BlobMissing,                   ProtocolCorruption, "a record named a blob that was never staged") \
+    X(BlobNotStaged,                 ProtocolCorruption, "a blob was referenced before its staging completed") \
+    X(ArtefactsMissing,              ProtocolCorruption, "a program create arrived with no artefacts") \
+    X(ArchiveEmpty,                  ProtocolCorruption, "a create_*_state archive carried no payload") \
+    X(BarrierViolation,             ProtocolCorruption, "a field was pulled across a verb boundary the barrier forbids") \
+    X(UnimplementedAdoptTier,        ProtocolCorruption, "MOBILEGL_IPC_ADOPT_TIER named a tier P5 does not implement") \
+    X(UnimplementedWritebackWait,    ProtocolCorruption, "a writeback wait shape P5 does not implement was requested") \
+    X(UnimplementedRemoteBackendObject, ProtocolCorruption, "a BackendObject_Remote entry point P5 does not implement was called") \
+    X(UnimplementedClientSession,    ProtocolCorruption, "a ClientSession entry point P5 does not implement was called") \
+    X(RingOverrun,                   RingOverrun,        "a shared ring refused a record after sufficient space had retired") \
+    X(EventRingOverflow,             RingOverrun,        "the reverse event ring overflowed") \
+    X(StageSnapshotTooNarrow,        SegmentMismatch,    "SEG_STAGE was too small for a snapshot a verb had to place in it") \
+    X(AbiMismatch,                   AbiMismatch,        "the two builds disagree on struct layout or protocol version") \
+    X(BarrierTimeout,                ServerCrashed,      "appliedSeq did not reach the target within the bounded wait") \
+    X(PresentCreditTimeout,          ServerCrashed,      "a present credit did not return within the bounded wait") \
+    X(RetirementWaitFailed,          ServerCrashed,      "a wait for the server to retire staging did not complete") \
+    X(ApplyThreadJoinTimeout,        ServerCrashed,      "the apply thread did not join within its bound at teardown") \
+    X(ApplyThreadNotRunning,         ServerCrashed,      "an operation needed the apply thread and it was not running")
+
+// clang-format on

@@ -12,6 +12,8 @@ set(MOBILEGL_WIRE_TESTS
         # P5 s1: the ring-owning session pair - four ShmSegment-backed segments, the five
         # watermarks with real writers, the reply slot pool and the event ring.
         SessionTest
+        # P6 dl: the Fatal-family table and its total projection onto the wire FatalCode.
+        FatalFamilyTest
 )
 
 if (NOT WIN32)
