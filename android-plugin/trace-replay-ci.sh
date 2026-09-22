@@ -278,7 +278,12 @@ is_angle_surface_lost() {
 is_infrastructure_failure() {
   diagnostics_dir="$1"
   adb_state="$(cat "${diagnostics_dir}/adb-state.txt" 2>/dev/null || true)"
-  if [ "${adb_state}" != "device" ]; then
+  # Diagnostics can take several adb calls: a device that was online at their
+  # start may disappear while we collect them. Keep the polling observation and
+  # check the live state as well, rather than trusting that earlier snapshot.
+  live_adb_state="$(adb_device_path get-state 2>/dev/null | tr -d '\r' || true)"
+  if [ -f "${diagnostics_dir}/adb-disconnected.txt" ] ||
+     [ "${adb_state}" != "device" ] || [ "${live_adb_state}" != "device" ]; then
     echo "trace-replay-ci.sh: Android device is unavailable (state: ${adb_state:-unknown})" >&2
     record_infrastructure_reason "device-unavailable"
     return 0
@@ -492,25 +497,35 @@ run_retrace() {
 
   app_exited=0
   saw_app_process=0
+  poll_started="$(date +%s)"
   for _ in $(seq 1 "${timeout_seconds}"); do
     if adb_device_path shell run-as "${package_name}" ls "${app_dir}/output/result.json" >/dev/null 2>&1; then
       break
     fi
     if adb_device_path shell pidof "${package_name}" >/dev/null 2>&1; then
       saw_app_process=1
-    elif [ "${saw_app_process}" -eq 1 ]; then
-      app_exited=1
-      break
+    else
+      poll_adb_state="$(adb_device_path get-state 2>/dev/null | tr -d '\r' || true)"
+      if [ "${poll_adb_state}" != "device" ]; then
+        printf '%s\n' "${poll_adb_state:-unknown}" > "${result_dir}/adb-disconnected.txt"
+        break
+      fi
+      if [ "${saw_app_process}" -eq 1 ]; then
+        app_exited=1
+        break
+      fi
     fi
     sleep 1
   done
 
   collect_run_diagnostics "${result_dir}"
   if ! adb_device_path shell run-as "${package_name}" ls "${app_dir}/output/result.json" >/dev/null 2>&1; then
-    if [ "${app_exited}" -eq 1 ]; then
+    if [ -f "${result_dir}/adb-disconnected.txt" ]; then
+      echo "trace-replay-ci.sh: device disconnected while waiting for result.json" >&2
+    elif [ "${app_exited}" -eq 1 ]; then
       echo "trace-replay-ci.sh: app process exited before result.json was created" >&2
     else
-      echo "trace-replay-ci.sh: result.json was not created after ${timeout_seconds}s" >&2
+      echo "trace-replay-ci.sh: result.json was not created after $(($(date +%s) - poll_started))s (budget ${timeout_seconds}s)" >&2
     fi
     if [ -s "${result_dir}/retrace.log" ]; then
       echo "trace-replay-ci.sh: retrace.log:" >&2

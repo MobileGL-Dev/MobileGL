@@ -70,21 +70,11 @@ def logs_proof(discovery, junit):
     logs = helper.marker_log_paths(lane)
     proof = {}
     for name in sorted(RSP_CASES):
-        # P6 splits the library log per role: MOBILEGL_LOG_FILE_PATH is a BASE NAME and the
-        # files that exist are <base>.client.log / <base>.server.log. Reading the base directly
-        # is FileNotFoundError after the split - the same class of reader the role-split
-        # landing already fixed everywhere else.
-        path = Path(logs[name])
-        if not helper.any_role_file(path):
-            raise RuntimeError(
-                f'{name}: no role log under {path} '
-                f'(looked for {helper.role_paths(path)}); the library never opened the sink')
-        text = helper.read_role_logs(path)
-        proof[name] = {
-            'private_log': str(path),
-            'role_logs': helper.role_paths(path),
-            **inproc_log_proof(text),
-        }
+        # MOBILEGL_LOG_FILE_PATH is a base name. In split builds neither role
+        # writes that literal path, and the server half owns applier failures.
+        paths = [Path(path) for path in helper.role_paths(logs[name])]
+        text = '\n'.join(path.read_text(encoding='utf-8', errors='replace') for path in paths)
+        proof[name] = {'private_logs': [str(path) for path in paths], **inproc_log_proof(text)}
     return proof
 
 
@@ -104,6 +94,32 @@ def self_test():
             raise AssertionError('invalid runtime log passed')
     with tempfile.TemporaryDirectory(prefix='mobilegl-runtime-proof-') as directory:
         build = Path(directory)
+        discovery = build / 'lane.json'
+        junit = build / 'lane.xml'
+        discovery.write_text(json.dumps({'tests': [
+            {'name': name, 'properties': [{'name': 'ENVIRONMENT',
+             'value': ['MOBILEGL_LOG_FILE_PATH=' + str(build / (name + '.log'))]}]}
+            for name in sorted(RSP_CASES)]}))
+        junit.write_text('<testsuite>' + ''.join(f'<testcase name="{name}" />' for name in sorted(RSP_CASES)) + '</testsuite>')
+        for name in RSP_CASES:
+            (build / (name + '.client.log')).write_text(good)
+            (build / (name + '.server.log')).write_text('server role\n')
+        logs_proof(discovery, junit)
+        server = build / (sorted(RSP_CASES)[0] + '.server.log')
+        server.write_text('Fatal{ProtocolCorruption, server-side example}\n')
+        try:
+            logs_proof(discovery, junit)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError('server-side Fatal passed the runtime log proof')
+        server.unlink()
+        try:
+            logs_proof(discovery, junit)
+        except FileNotFoundError:
+            pass
+        else:
+            raise AssertionError('missing server log passed the runtime log proof')
         (build / 'libMobileGL.so').write_bytes(b'checker fixture, not a real runtime')
         normal = ''.join(f'00000000 T fixture{i}\n' for i in range(1000))
         remote = normal + '00000000 T MG_Remote_fixture\n00000000 T MGPipeApply_fixture\n'
