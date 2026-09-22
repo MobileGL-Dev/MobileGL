@@ -60,7 +60,7 @@ P7 收官 = 五道出口门同时成立（§2–§7），而不是路线图 P7 �
 |---|---|---|---|
 | `uniform-buffer-byte-tail` | `UniformManager.cpp:2391` | **退役**（真机 MC 报告 §5 的活边界） | 拷贝窗口外扩到 4 字节边界进 transient slice，再 `vkCmdCopyBuffer` 对齐内部到正确子字目的；`CopyWireBufferRangeToSlice` 扩 |
 | `copy-image-in-place` | `VulkanRenderer.cpp:10383` | **退役** | `srcImage == dstImage` 时单次转 `GENERAL`、两侧布局 GENERAL、一次写回；同 mip+layer 且矩形重叠 → decline（GL 未定义） |
-| `vertex-layout` | `WireDraw.inc:245`、`VertexInputStateFactory.cpp:439-500` | **拆分** | `buffer-window` 一种保留为协议错（经 hook 的具名 Fatal——它抓过 Redmi 的 VAO 哈希碰撞）；其余六种形状/格式原因改 monolith 的「屏蔽该属性继续画」，`BuildWireVertexInput` 出 `unsupportedAttribMask` |
+| `vertex-layout` | `WireDraw.inc:245`、`VertexInputStateFactory.cpp:439-500` | **已拆分（wave 2-C，`8385a338`）** | `buffer-window` 一种保留为协议错（经 hook 的具名 Fatal，家族词暂留 `UnmigratedVerb`——改成更诚实的 `ProtocolCorruption` 要在 `MG_Pipe::MGPipeFatalFamily` 加一行 + 适配臂，§3.3 未花这笔，记 §12）；其余**七**种形状/格式原因（含审计之后新增的 `offset-overflow`）改 monolith 的「屏蔽该属性继续画」，`BuildWireVertexInput` 出 `unsupportedAttribMask`；`vertex-format-conversion` 同包改 decline。`WireDraw.inc` 从此无 `@P7`（普查 15 → 13 处 / 3 文件） |
 | `default-color-blit-shape` | `WireFramebuffer.inc:601` | **退役** | 恒等变换回落 `vkCmdBlitImage` 臂（`:611-624`）；非恒等旋转先 resolve/copy 进 scratch 2D RGBA 再 shader blit（复用 `:560-590` 的 scratch）；四旋转之外 decline |
 | `multisample-blit-shape` / `-aspect` | `WireFramebuffer.inc:631/:641` | **退役** | shape：resolve 进 scratch 单采样再 `vkCmdBlitImage` 缩放/翻转；aspect：MS 深/模板 → 单采样用 `VK_KHR_depth_stencil_resolve`（`DynamicBackendParameters` 里查扩展）或 `texelFetch(sampler2DMS)` 写 `gl_FragDepth` 的 shader resolve；单采样 → MS 尺寸不同 decline |
 | `depth-stencil-mipmap` | `WireFramebuffer.inc:753` | **退役**（随烘焙 (A)） | `GenerateWireMipmap` 深度分支接 `WireDepthMipmap.{vert,frag}` 烘焙程序 |
@@ -152,7 +152,9 @@ verify 今天只在 monolith 注册（`MG_IntegrationTest/CMakeLists.txt:1684-17
 
 ## §12 记录债
 
-- Magma 两进程 client 在 `StateObjectDeathOps` 落地前 `ObjectDeaths=0`：`CtWireScenario` 死亡用例在 Magma 臂按名 skip（§2.3）。
+- ~~Magma 两进程 client 在 `StateObjectDeathOps` 落地前 `ObjectDeaths=0`：`CtWireScenario` 死亡用例在 Magma 臂按名 skip（§2.3）。~~ **已退（wave 2-C，`04292f06`）**：两处 skip 守卫删除，死亡用例在三臂全绿；泄漏的是 **server 的 twin**（framebuffer 无 wire delete opcode，用例现在两边计数都读）。
+- §5.4 的「白盒断言发出的是 `BufferSubDataResident(49)`」在本树**不可达**：resident 发射需要 GPU 常驻存储 → 需要 `AdoptPersistentMap` → split 下 T2 对每次采纳都 decline（`PipeApply.cpp:2331`），T0/T1 归 P11。本阶段证明到「server 按自己的表发布该位、client 镜像在双后端 × 三传输收到」为止；`rsd=` PipeStats 计数器在 P11 落地采纳档后会显示这些记录。
+- §5.3 的 `g_programResourceCaches` 删除只在 disaggregated 构建：monolith 消费者已改读归档（red-once 在 monolith 臂也红），但归档成员必须 `#if MOBILEGL_BUILD_DISAGGREGATED` 才能守 G1，pull 构建保留旧缓存——钉子挪动那天一行改完，**P13**。
 - 门 3 的「不确定」在 wave 1 E0 之前无法区分「同 case 多次结果不同」与「不同 case 各自低于阈值」；两个历史点值（0.988998 / 0.976494）无 per-case 归属。
 - `MEASUREMENTS.md` §7.2 的同名比对自 P5b 起未重跑；「22 → texture readback」「3 → query」两行债务的关闭以 wave 3 的重跑为准。
 - Android 模拟器 retrace 车道每轮 2–6 例 flaky（含 monolith 对照）：门 1 的任何模拟器证据都先过「连续 N 轮绿」再算数。
