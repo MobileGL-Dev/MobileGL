@@ -139,8 +139,9 @@ namespace MobileGL::MG_Pipe {
 
     // THE VERTEX-ELEMENTS CSO's DEATH, and it is BACKEND-NEUTRAL - which is the whole point.
     // Before this, the only thing that ever returned a VertexElementsCso slot was DirectGLES'
-    // StateObjectDeathOps table; under any backend that installs none - DirectVulkan/Magma,
-    // which keeps its own age-reclaimed identity table on purpose - every VAO ever created
+    // StateObjectDeathOps table; under a backend that installed none - DirectVulkan/Magma at
+    // P3a, which keeps its own age-reclaimed identity table on purpose and which P7 wave 2
+    // package C gave an EMIT-only table that still frees no slot - every VAO ever created
     // held its slot and its ~1.3 KB applier record for the life of the process, on the shipped
     // 0x1ff mask, and past 65536 slots every create_vertex_elements became a permanent
     // Fatal{ProtocolCorruption}. The client mints the slot, so the client is where the death

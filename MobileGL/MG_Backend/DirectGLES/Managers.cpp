@@ -307,8 +307,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // whole death itself (MGPipeEmitVertexElementsDestroyAndFree: delete the
                 // applier record, raise this notice, free the slot), because the slot is minted
                 // client-side on every backend and a backend that installs no death ops - which
-                // Magma deliberately does not - otherwise leaked the slot and the record per
-                // VAO for the life of the process. What is left here is the one thing only this
+                // Magma did not until P7 wave 2 package C, and whose table even now only EMITS
+                // the wire record - otherwise leaked the slot and the record per VAO for the
+                // life of the process. What is left here is the one thing only this
                 // side can do: drop the driver VAO the twin owns. It is raised while the handle
                 // still resolves, so OnFrontendObjectDestroyed's shared free (which the other
                 // five kinds still depend on) is simply the one that gets there first; the

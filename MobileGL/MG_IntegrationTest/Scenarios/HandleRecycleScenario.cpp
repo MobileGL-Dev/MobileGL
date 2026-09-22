@@ -1394,12 +1394,20 @@ void main() { oColor = texture(uTex, vUv); }
         // back? Until C-1 the answer under DirectVulkan was NO. The mint is the client's
         // (MGPipeVertexInputEmitter::EmitVertexElements acquires a VertexElementsCso slot at
         // every validate point with a VAO bound) and the only free in the tree was Espryt's
-        // StateObjectDeathOps consumer - so under Magma, which installs none deliberately
+        // StateObjectDeathOps consumer - so under Magma, which installed none
         // (MagmaPipeArms.h: "an allocator here would grow by one SlotState plus one map node
         // per object EVER created, for the life of the process, on a platform with an LMK"),
         // every VAO ever created held its slot and its ~1.3 KB applier record until the process
         // died, on the shipped 0x1ff mask, until create_vertex_elements began tripping
         // Fatal{ProtocolCorruption} permanently at kMGPipeMaxVertexElementsSlots.
+        //
+        // P7 WAVE 2 PACKAGE C DOES NOT RETIRE THIS CASE, and the reason is the whole point of
+        // C-1. Magma now installs a StateObjectDeathOps table (CONTRACT-P7 §5.5), but that
+        // table's one arm EMITS the `object_death` record so the SERVER drops its twin - it
+        // frees no client slot and could not: the free is the client's own, from the frontend
+        // destructor, on the client thread. So this case still measures the only thing that
+        // ever protected the allocator, and it would still be the case that goes red if that
+        // free were ever moved back behind a backend table.
         //
         // THE OBSERVABLE IS THE ALLOCATOR, not pixels: this leak produces correct pictures the
         // whole way to the fatal, which is exactly why the four cases above ran green over it.

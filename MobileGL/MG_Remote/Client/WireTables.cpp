@@ -757,13 +757,21 @@ namespace MobileGL::MG_Remote::Client {
         //     That is what "keep inproc's existing backend dispatcher" meant, and it is also
         //     what keeps this from stomping a backend that installs ops of its own later.
         //
-        // WHAT THIS DOES *NOT* DO IS GIVE MAGMA A DEATH TABLE. Magma installs no
-        // StateObjectDeathOps at all (wave 2 package C mirrors g_glesStateObjectDeathOps for
-        // it); until it does, the client-side emitter installed here still asks
-        // MGPipeSlots().FindByLifetimeId for a handle, gets a null one for an object Magma
-        // never routed, and emits nothing. The count under Magma may therefore still be 0 -
-        // but it is now 0 because no object crossed, which the lane can see and attribute,
-        // instead of 0 because nobody was listening, which it could not.
+        // MAGMA NOW HAS A DEATH TABLE OF ITS OWN (P7 wave 2 package C, CONTRACT-P7 §5.5:
+        // DirectVulkan.cpp's g_magmaStateObjectDeathOps), and the two installs do NOT race,
+        // which is worth stating because the global is a bare last-writer-wins pointer with
+        // no stacking. They cannot meet: Magma's is installed from
+        // BackendObject_DirectVulkan::Initialize(), i.e. only in a process that OWNS a
+        // DirectVulkan backend, and the arm here runs only under `Transport == Spawn`, which
+        // is by construction the process that owns NO backend at all (InitSplitRoles builds a
+        // BackendObject_Remote there). So the spawn client keeps this emitter, the inproc and
+        // server-side roles keep Magma's, and `GetStateObjectDeathOps() == nullptr` below
+        // keeps meaning what P6.5 meant by it.
+        //
+        // MEASURED, both directions (package C's red-once): with Magma's install
+        // short-circuited, the two CtWireScenario death cases red on the INPROC arm alone
+        // (`deaths` 0 vs 0) and stay green on spawn and tcp - which is exactly the split of
+        // responsibility this comment claims.
         if (MG_Config::Transport == MG_Config::TransportMode::Spawn &&
             MG_State::GLState::GetStateObjectDeathOps() == nullptr) {
             MG_State::GLState::SetStateObjectDeathOps(&kClientStateObjectDeathOps);

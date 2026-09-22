@@ -25,6 +25,7 @@
 // half of that control is TheDirectApplierResetCallOnTheGLThreadIsRoleViolation below, and
 // the guard's two non-Fatal arms are pinned in PipeWireCodecTest's CtWireFatals suite.
 
+#include "../Harness/PipeSlotPeek.h"
 #include "../Harness/PipeStatsWindow.h"
 #include "../Harness/ScenarioFixture.h"
 #include "../Harness/SplitRuntimePeek.h"
@@ -147,13 +148,16 @@ namespace {
 
     TEST_F(CtWireScenario, TextureDeathCrossesAndTheRecycledSlotAnswersTheNewObject) {
         if (!Ready()) return;
-        // The object_death producer is Espryt-side (OnFrontendStateObjectDestroyed,
-        // CONTRACT-P5C.md §5.2); Magma installs no StateObjectDeathOps (P7), so under
-        // DirectVulkan there is no death record to watch and the case has nothing to prove.
-        if (HeadlessGL::Get().BackendName() != "DirectGLES") {
-            GTEST_SKIP() << "object_death is produced by the DirectGLES death-notice ops; "
-                            "DirectVulkan has none until P7";
-        }
+        // P7 wave 2 package C: THE BACKEND GUARD IS GONE, and both halves of why it was here
+        // are answered rather than waived. The producer used to be Espryt-side only
+        // (OnFrontendStateObjectDestroyed, CONTRACT-P5C.md §5.2), so a DirectVulkan run had
+        // no death record to watch; Magma now installs its own StateObjectDeathOps
+        // (DirectVulkan.cpp, CONTRACT-P7 §5.5) and emits the same `object_death`. Package L
+        // measured that the SPAWN arm already passed once the WireTables install condition
+        // went backend-agnostic and that the INPROC arm failed here with `deaths` 0 vs 0
+        // (notes/p7/magma-two-process-first-run.md §6); the table is what closes the inproc
+        // half, and this case is the gate on it. It is also the RED-ONCE for that table: with
+        // the install site short-circuited, both cases red on the two EXPECT_GT below.
         const GLubyte red[4] = {255, 0, 0, 255};
         const GLubyte green[4] = {0, 255, 0, 255};
 
@@ -204,14 +208,13 @@ namespace {
 
     TEST_F(CtWireScenario, FramebufferDeathCrossesAndTheRecycledSlotAnswersTheNewObject) {
         if (!Ready()) return;
-        // Same producer reason as the texture case above: object_death is emitted by the
-        // DirectGLES death-notice ops; DirectVulkan has none until P7.
-        if (HeadlessGL::Get().BackendName() != "DirectGLES") {
-            GTEST_SKIP() << "object_death is produced by the DirectGLES death-notice ops; "
-                            "DirectVulkan has none until P7";
-        }
+        // Backend-agnostic for the texture case's reason (P7 wave 2 package C): both
+        // backends now install a StateObjectDeathOps table and both emit `object_death`.
         // Framebuffer is the kind object_death EXISTS for: it has no other wire delete
-        // opcode (CONTRACT-P5C.md §5.2). The renderbuffer goes along so the FBO has storage.
+        // opcode (CONTRACT-P5C.md §5.2) - which is exactly why the missing Magma table was
+        // a SERVER-side twin leak and not merely a missing counter: with no consumer for
+        // the notice, nothing on the wire ever told the server this framebuffer had died.
+        // The renderbuffer goes along so the FBO has storage.
         GLuint fbo = 0, renderbuffer = 0;
         glGenFramebuffers(1, &fbo);
         glGenRenderbuffers(1, &renderbuffer);
@@ -234,6 +237,21 @@ namespace {
         const auto beforeCounters = ServerCounters();
         ASSERT_TRUE(beforeCounters.valid) << "server object-death telemetry missing";
         const MobileGL::Uint64 deathsBefore = beforeCounters.deaths;
+        // THE CLIENT'S OWN ACCOUNTING, read beside the server's (P7 wave 2 package C,
+        // CONTRACT-P7 §5.5's PipeSlotPeek clause). The two numbers answer DIFFERENT halves of
+        // one death and neither implies the other, which is exactly why both are read here:
+        //   * `deaths` below says the SERVER was told - the half the missing Magma table
+        //     broke, and the only delivery a framebuffer has (no wire delete opcode at all);
+        //   * this one says the CLIENT returned the slot. That half has been backend-neutral
+        //     since P4a (PipeFill.cpp's NotifyAndFree frees whatever the notice does), so it
+        //     is a CONTROL rather than the subject: if it ever regressed, a green `deaths`
+        //     would be measuring an object that never let go of its handle.
+        // `false` means the allocator is out of reach (a pull build, or Android's hidden
+        // symbols), and the peek is then simply not asserted - "could not look" is not
+        // "did not leak", so nothing is concluded from it either way.
+        unsigned fboSlotsBefore = 0;
+        const bool slotsReadable =
+            PeekPipeSlotLiveCount(PipeSlotKind::Framebuffer, &fboSlotsBefore);
         glDeleteFramebuffers(1, &fbo);
         // THE FENCE (MOBILEGL_IPC_BATCH_WAITS, default on): object_death is a kCtxObject
         // value-class record - published WITHOUT waiting for its own apply (production-safe:
@@ -245,7 +263,16 @@ namespace {
         ASSERT_TRUE(afterCounters.valid) << "server object-death telemetry missing";
         EXPECT_GT(afterCounters.deaths, deathsBefore)
             << "the framebuffer's death produced no object_death record - and no other "
-               "opcode can carry it";
+               "opcode can carry it. Backend "
+            << Gl().BackendName();
+        if (slotsReadable) {
+            unsigned fboSlotsAfter = 0;
+            ASSERT_TRUE(PeekPipeSlotLiveCount(PipeSlotKind::Framebuffer, &fboSlotsAfter));
+            EXPECT_LT(fboSlotsAfter, fboSlotsBefore)
+                << "the dead framebuffer kept its client slot: live count " << fboSlotsBefore
+                << " -> " << fboSlotsAfter << " across the delete. Backend "
+                << Gl().BackendName();
+        }
         glDeleteRenderbuffers(1, &renderbuffer);
 
         // Recycle: a new FBO and a new backing store, cleared to a different colour. A stale

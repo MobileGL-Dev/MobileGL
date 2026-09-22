@@ -21,6 +21,13 @@
 #include <Config.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Pipe/PipeApply.h>
+#if MOBILEGL_PIPE_PUSH
+// P7 wave 2 package C (CONTRACT-P7 §5.5): Magma's own death-notice table. Both headers are
+// push-only and reached here for the same reason DirectGLES/Managers.cpp reaches them - the
+// notice is declared by the frontend and answered by whichever backend is running.
+#include <MG_Remote/Client/WireTables.h>
+#include <MG_State/GLState/StateObjectDeathNotice.h>
+#endif
 #endif
 #include <atomic>
 #include <bit>
@@ -54,6 +61,66 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // thread other than the EGL thread that recreates the renderer.
         std::atomic<Uint64> g_rendererGeneration{1};
     } // namespace
+
+#if MOBILEGL_BUILD_DISAGGREGATED && MOBILEGL_PIPE_PUSH
+    namespace {
+        // P7 wave 2 package C, CONTRACT-P7 §5.5: MAGMA'S MIRROR OF g_glesStateObjectDeathOps
+        // (DirectGLES/Managers.cpp:335), and the one arm of that table Magma has any work in.
+        //
+        // WHAT THE NOTICE IS FOR HERE, and it is not what it is for on Espryt. Espryt's arm
+        // destroys a BACKEND TWIN keyed by lifetime id; Magma keeps no such twin - its two
+        // client-minted kinds (VertexElementsCso, Buffer) are keyed on {slot, gen} by
+        // MagmaPipeIdentityTables and every other kind is still reached from its frontend
+        // object. So the switch Espryt runs under `#else` has nothing to do on this backend
+        // and this table is exactly the EMIT arm: with a transport up and off the apply
+        // thread, the death crosses as the `object_death` record
+        // (MG_Remote::Client::EmitObjectDeathRecord, CONTRACT-P5C §5.2).
+        //
+        // WHY THAT MATTERS, measured rather than argued (package L's probe,
+        // notes/p7/magma-two-process-first-run.md §6): under SPAWN the client process has no
+        // DirectVulkan backend at all, so InstallClientWireTables' own emitter already
+        // answered the notice and CtWireScenario's two death cases PASSED. Under INPROC the
+        // server role's backend is a thread of this process, Transport is Split rather than
+        // Spawn, and WireTables' install condition deliberately stands aside for "the
+        // backend's own dispatcher" - which on Magma did not exist. Both cases therefore
+        // FAILED on inproc with `deaths` stuck at 0. This table is that dispatcher.
+        //
+        // FRAMEBUFFER IS WHY THE GAP WAS NOT MERELY COSMETIC. The client-side SLOT is freed
+        // backend-neutrally by P4a's per-kind helpers (MG_Impl/Pipe/PipeFill.cpp's
+        // NotifyAndFree frees whatever the notice does), so PipeSlotPeek never saw a leak.
+        // What leaked was the SERVER's twin: a framebuffer has NO wire delete opcode at all
+        // (BRIEF-P4A D-I2), so `object_death` is its only death delivery, and without a
+        // consumer here the server's record stayed Live for the life of the session.
+        void OnMagmaFrontendStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
+            // Monolith has no record to emit and no server twin to tell.
+            if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+            // Raised ON the apply thread: the server role destroying a frontend object it
+            // created itself (Magma's hidden blit / depth-mipmap resources). The client's
+            // allocator is a client-thread surface (CONTRACT-P5C §3.1) and EmitObjectDeathRecord
+            // probes it, so this arm stays silent exactly as Espryt's does.
+            if (MG_Remote::Server::ServerLoop::OnApplyThread()) return;
+            (void)MG_Remote::Client::EmitObjectDeathRecord(kind, lifetimeId);
+        }
+
+        const MG_State::GLState::StateObjectDeathOps g_magmaStateObjectDeathOps = {
+            .OnDestroyed = OnMagmaFrontendStateObjectDestroyed,
+        };
+    } // namespace
+
+    void InstallStateObjectDeathOps() {
+        // Installed from BackendObject_DirectVulkan::Initialize(), i.e. step 1 of
+        // InitServerRoleCommon (ServerLoop::CreateBackend calls Initialize), which is before
+        // the client session starts and therefore before any frontend object can die.
+        // Unconditional, exactly as Espryt's ResolveEsprytSlotTablesArm is: only one backend
+        // is live at a time, and InstallClientWireTables' own "whoever installed first keeps
+        // the notice" guard is what keeps the remote client from stomping this.
+        MG_State::GLState::SetStateObjectDeathOps(&g_magmaStateObjectDeathOps);
+    }
+
+    Bool StateObjectDeathOpsInstalled() {
+        return MG_State::GLState::GetStateObjectDeathOps() == &g_magmaStateObjectDeathOps;
+    }
+#endif // MOBILEGL_BUILD_DISAGGREGATED && MOBILEGL_PIPE_PUSH
 
     Uint64 GetRendererGeneration() {
         return g_rendererGeneration.load(std::memory_order_acquire);

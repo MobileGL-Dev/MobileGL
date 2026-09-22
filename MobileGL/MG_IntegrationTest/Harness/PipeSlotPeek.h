@@ -13,8 +13,19 @@
 // the leak it rules out is entirely inside the library, and it is invisible in pixels, in GL
 // names and in `glGetError` - so the only honest observable is the allocator's own live count
 // and high-water mark. Reading them is what makes the case fail on the backend it actually
-// failed on (DirectVulkan, which installs no StateObjectDeathOps) rather than only on the one
-// where a backend-owned free happened to exist.
+// failed on (DirectVulkan, which at P3a installed no StateObjectDeathOps) rather than only on
+// the one where a backend-owned free happened to exist.
+//
+// P7 wave 2 package C: DirectVulkan now installs a table of its own (CONTRACT-P7 §5.5), and
+// the sentence above is history rather than the current state - but the reason this header
+// exists is UNCHANGED and is worth spelling out, because the obvious reading of that news is
+// wrong. Magma's table does not free a client slot and never could: the free is P4a's, it
+// runs from the frontend object's own destructor on the client thread whatever backend is
+// live (MG_Impl/Pipe/PipeFill.cpp's NotifyAndFree), and Magma's table is the EMIT arm that
+// tells the SERVER to drop its twin. So the allocator is still the only observable of the
+// client half, and a case that reads `deaths` alone would be blind to a slot that never came
+// back. The two readings belong together, which is what CtWireScenario's framebuffer case now
+// does.
 //
 // A separate translation unit for BackendCapsPeek.h's reason, verbatim: the scenario sources
 // include the GL headers with prototypes and MobileGL's umbrella header is not meant to meet

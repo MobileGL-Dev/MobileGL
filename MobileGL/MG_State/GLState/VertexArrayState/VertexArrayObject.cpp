@@ -50,9 +50,12 @@ namespace MobileGL::MG_State::GLState {
         // ALL FOUR OF THOSE GO THROUGH ONE HELPER, and it is the client's rather than a
         // backend's: the handle is minted by MGPipeVertexInputEmitter on every backend, so a
         // death path that only exists inside a backend's death-ops table is no path at all
-        // under a backend that installs none - which is what DirectVulkan/Magma does on
-        // purpose, and what made every VAO leak a slot and a ~1.3 KB applier record for the
-        // life of the process on the shipped mask. The helper emits delete_vertex_elements,
+        // under a backend that installs none - which DirectVulkan/Magma did, and what made
+        // every VAO leak a slot and a ~1.3 KB applier record for the life of the process on
+        // the shipped mask. P7 wave 2 package C gave Magma a table (CONTRACT-P7 §5.5) and the
+        // argument is UNCHANGED, because that table emits the wire death record and frees no
+        // slot: the client's helper is still the only path any of the four take. The helper
+        // emits delete_vertex_elements,
         // raises the notice (a no-op unless a backend registered the ops) and frees the slot,
         // in that fixed order; MG_Pipe/PipeMutation.h and its definition say why each position
         // is where it is. The buffer's death has exactly this shape one file over

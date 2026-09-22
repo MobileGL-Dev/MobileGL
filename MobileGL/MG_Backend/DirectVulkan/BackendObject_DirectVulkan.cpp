@@ -367,6 +367,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void BackendObject_DirectVulkan::Initialize() {
 #if MOBILEGL_BUILD_DISAGGREGATED
         VkBufferManager::RegisterWireResourceOps();
+#if MOBILEGL_PIPE_PUSH
+        // P7 wave 2 package C (CONTRACT-P7 §5.5). BESIDE the resource ops and for the same
+        // reason: this is the one place both Magma server roles pass through - the inproc
+        // role and the spawn/TCP session child - and ServerLoop::CreateBackend calls it at
+        // step 1 of InitServerRoleCommon, before the client session exists and therefore
+        // before any frontend object can die unheard. A per-transport install is how one of
+        // the two roles ends up without it.
+        InstallStateObjectDeathOps();
+#endif
 #endif
         m_initialized = true;
     }

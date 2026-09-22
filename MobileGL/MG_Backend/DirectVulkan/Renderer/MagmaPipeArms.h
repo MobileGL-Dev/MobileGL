@@ -166,9 +166,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // WHAT IT DOES NOT COVER, AND WHY NO REPRODUCER OF THIS SHAPE CAN [fix-aba review v1,
     // MAJOR 1]. It does NOT exercise the GENERATION half of {slot, gen}:
     //
-    //   * this mint has no death notification - nothing in MG_Backend/DirectVulkan consumes
-    //     NotifyStateObjectDestroyed - so a slot returns to the free list only through
-    //     OnFrameBoundary's age sweep (kSweepInterval 256, kRetireAgeBoundaries 1024, below);
+    //   * THIS MINT still has no death notification, and that is now a narrower statement than
+    //     it was. P7 wave 2 package C gives DirectVulkan a StateObjectDeathOps table
+    //     (DirectVulkan.cpp's g_magmaStateObjectDeathOps, CONTRACT-P7 §5.5), so
+    //     NotifyStateObjectDestroyed DOES have a consumer on this backend - but that consumer's
+    //     one job is to emit the `object_death` RECORD so the server drops its twin, and it
+    //     never touches these per-renderer identity tables: they are the SERVER-side renderer's
+    //     own, the notice is raised on the CLIENT thread, and an Acquire/retire from the wrong
+    //     side is precisely the cross-role read CONTRACT-P5C §3.1 forbids. So a slot here still
+    //     returns to the free list only through OnFrameBoundary's age sweep (kSweepInterval
+    //     256, kRetireAgeBoundaries 1024, below), and everything the two bullets below derive
+    //     from that is unchanged;
     //   * HandleRecycleScenario issues five frame boundaries, so the free list is empty when
     //     the replacement VAO acquires and it gets a BRAND-NEW slot at Gen 1 (measured:
     //     redVao slot=2 gen=1, greenVao slot=3 gen=1). The knob-off FRESH verdict there is

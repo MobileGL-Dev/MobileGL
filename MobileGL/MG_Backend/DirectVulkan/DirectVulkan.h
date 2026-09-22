@@ -23,6 +23,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Uint64 GetRendererGeneration();
     void BumpRendererGeneration();
 
+#if MOBILEGL_BUILD_DISAGGREGATED && MOBILEGL_PIPE_PUSH
+    // P7 wave 2 package C (CONTRACT-P7 §5.5). Magma's StateObjectDeathOps table, installed
+    // from BackendObject_DirectVulkan::Initialize() so that GetStateObjectDeathOps() is
+    // non-null on every Magma role that owns a backend. See the definition for what the one
+    // arm does and for the inproc gap it closes. Push-only and disaggregated-only: a pull
+    // build declares no notice at all (StateObjectDeathNotice.h) and has nothing to emit.
+    void InstallStateObjectDeathOps();
+    // True when the notice currently installed is this backend's. Read by MG_Test so the
+    // install can be asserted without a death having to happen first.
+    Bool StateObjectDeathOpsInstalled();
+#endif
+
     // Drops every cached program-resource reflection entry (CPU-side strings/vectors
     // only, no Vulkan handles). Called at EGL teardown next to the renderer reset;
     // safe because GL calls are serialized in this codebase, and any still-live
