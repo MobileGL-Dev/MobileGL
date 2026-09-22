@@ -646,11 +646,23 @@
                 // A resolve cannot flip axes or convert RGBA to a BGRA/default
                 // attachment. Resolve into the source format first, then use
                 // the existing single-sample blit for those GL semantics.
+                //
+                // P7 wave 2-B2, CONTRACT-P7 §3.2 (`multisample-blit-shape`): AND IT CANNOT SCALE.
+                // vkCmdResolveImage carries ONE extent and one offset per side, so this arm used
+                // to refuse every rectangle whose destination was a different size from its
+                // source - a shape glBlitFramebuffer names, and one the monolith arm reaches by
+                // this very route (VulkanRenderer.cpp's `regionWasTransformed` branch resolves
+                // into a scratch and blits THAT). The two legs split the work the same way here:
+                // the resolve reads the source band AT RAW OFFSETS into a scratch sized by the
+                // SOURCE rect, and only the second leg - an ordinary vkCmdBlitImage on a
+                // single-sampled image, which is the one thing it is for - sees the scale and the
+                // flip. So the size equality drops out of this guard; what stays is the part
+                // neither leg can express (a rotated default source, a 3D source) or that names
+                // texels the source does not have.
                 const Int64 width = std::abs(static_cast<Int64>(sx1) - sx0);
                 const Int64 height = std::abs(static_cast<Int64>(sy1) - sy0);
-                if (!width || !height) return;
-                if (source.isDefault || source.is3D || width != std::abs(static_cast<Int64>(dx1) - dx0) ||
-                    height != std::abs(static_cast<Int64>(dy1) - dy0) ||
+                if (!width || !height || dx0 == dx1 || dy0 == dy1) return;
+                if (source.isDefault || source.is3D ||
                     std::min(sx0, sx1) < 0 || std::min(sy0, sy1) < 0 ||
                     static_cast<Uint64>(std::max(sx0, sx1)) > source.extent.width ||
                     static_cast<Uint64>(std::max(sy0, sy1)) > source.extent.height)
@@ -708,9 +720,21 @@
                         destination.is3D ? 0u : destination.layer, 1};
                     const Int32 z = destination.is3D ? static_cast<Int32>(destination.layer) : 0;
                     copy.dstOffsets[0] = {dx0, dy0, z}; copy.dstOffsets[1] = {dx1, dy1, z + 1};
+                    // The filter only started MATTERING with the scale above: at 1:1 LINEAR and
+                    // NEAREST read the same texel, so nothing here ever asked whether the format
+                    // could be filtered. VK_FILTER_LINEAR on a source whose optimalTilingFeatures
+                    // lack SAMPLED_IMAGE_FILTER_LINEAR is undefined behaviour, and GL says filter
+                    // is ignored for a multisample resolve in the first place - so a format that
+                    // cannot be filtered takes NEAREST rather than the command being illegal.
+                    VkFormatProperties scratchProperties{};
+                    vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle, source.format, &scratchProperties);
+                    const VkFilter blitFilter =
+                        filter == GL_LINEAR && (scratchProperties.optimalTilingFeatures &
+                                                VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)
+                            ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
                     vkCmdBlitImage(m_frameContext.GetCurrent().commandBuffer, resolved.image,
                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        1, &copy, filter == GL_LINEAR ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+                        1, &copy, blitFilter);
                     if (dst.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
                         m_textureManager->MarkWireTextureGpuWritten(destination.storage, destination.level, destination.layer, 1);
                 }
@@ -821,17 +845,41 @@
             }
             auto command = m_frameContext.GetCurrent().commandBuffer;
             if (source.samples != VK_SAMPLE_COUNT_1_BIT || destination.samples != VK_SAMPLE_COUNT_1_BIT) {
+                // P7 wave 2-B2, CONTRACT-P7 §3.2: WHAT IS LEFT HERE IS A MULTISAMPLE DESTINATION.
+                // Every blit that resolves a multisample SOURCE into a single-sample destination
+                // returned above - the depth/stencil arm at the top of this lambda through
+                // ResolveWireDepthStencil, the colour arm below it through its resolve scratch -
+                // and both of those now carry their own scale and flip. So the samples of the two
+                // sides can only differ here by the DESTINATION being multisampled, which is the
+                // shape this arm declines rather than the one it performs.
                 const Int32 width = region.srcOffsets[1].x - region.srcOffsets[0].x;
                 const Int32 height = region.srcOffsets[1].y - region.srcOffsets[0].y;
                 if (width <= 0 || height <= 0 || width != region.dstOffsets[1].x - region.dstOffsets[0].x ||
-                    height != region.dstOffsets[1].y - region.dstOffsets[0].y || source.format != destination.format)
-                    MagmaWireFatal("multisample-blit-shape@P7");
-                if (source.samples != VK_SAMPLE_COUNT_1_BIT && destination.samples == VK_SAMPLE_COUNT_1_BIT &&
-                    aspect == VK_IMAGE_ASPECT_COLOR_BIT) {
-                    VkImageResolve resolve{region.srcSubresource, region.srcOffsets[0],
-                        region.dstSubresource, region.dstOffsets[0], {static_cast<Uint32>(width), static_cast<Uint32>(height), 1}};
-                    vkCmdResolveImage(command, source.image, srcLayout, destination.image, dstLayout, 1, &resolve);
-                } else if (source.samples == destination.samples) {
+                    height != region.dstOffsets[1].y - region.dstOffsets[0].y || source.format != destination.format) {
+                    // `multisample-blit-shape@P7` RETIRES: the half that had a shape neither
+                    // vkCmdResolveImage nor vkCmdBlitImage could express is done above, and this
+                    // is the half that has none - vkCmdCopyImage is the only command that writes
+                    // a multisampled image, it takes one extent, and GL 4.6 core 18.3.1 makes a
+                    // multisample blit whose rectangles differ in size (or whose formats differ)
+                    // INVALID_OPERATION rather than a picture. Rule I (a): say it once, record
+                    // the error GL names, leave the destination alone, keep the session.
+                    MGLOG_E_ONCE("DirectVulkan::BlitWireFramebuffers: a %dx%d source rectangle "
+                                 "(format %d, %u sample(s)) cannot reach a %dx%d destination "
+                                 "rectangle (format %d, %u sample(s)) - a blit onto a multisample "
+                                 "attachment carries no scale, no flip and no format conversion; "
+                                 "declining the blit",
+                                 width, height, static_cast<Int>(source.format),
+                                 static_cast<Uint32>(source.samples),
+                                 region.dstOffsets[1].x - region.dstOffsets[0].x,
+                                 region.dstOffsets[1].y - region.dstOffsets[0].y,
+                                 static_cast<Int>(destination.format),
+                                 static_cast<Uint32>(destination.samples));
+                    RecordTextureCopyError("BlitWireFramebuffers", ErrorCode::InvalidOperation,
+                                           "glBlitFramebuffer onto a multisampled draw framebuffer requires "
+                                           "identical source and destination rectangles and formats.");
+                    return;
+                }
+                if (source.samples == destination.samples) {
                     VkImageCopy copy{region.srcSubresource, region.srcOffsets[0], region.dstSubresource,
                         region.dstOffsets[0], {static_cast<Uint32>(width), static_cast<Uint32>(height), 1}};
                     vkCmdCopyImage(command, source.image, srcLayout, destination.image, dstLayout, 1, &copy);

@@ -1631,6 +1631,213 @@ TEST_F(F1WireScenario, ColorBlitToDefaultFromANonSampleableSourceDegrades) {
 }
 
 namespace {
+// An 8x4 RGBA8 colour renderbuffer at `samples`, bottom half red and top half green in GL row
+// order. TWO HALVES AND NOT ONE COLOUR, for the reason the shader-mip case gives: a pass that
+// loses GL's row order averages a flat fill back to the same number everywhere and a
+// single-colour assertion calls that correct. Returns false when this driver cannot host the
+// attachment, which is a skip and not a failure.
+bool MakeMultisampleHalvesFbo(int samples, GLuint& fbo, GLuint& renderbuffer) {
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glGenRenderbuffers(1, &renderbuffer);
+    glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_RGBA8, 8, 4);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GLenum(GL_FRAMEBUFFER_COMPLETE)) return false;
+    while (glGetError() != GLenum(GL_NO_ERROR)) {}
+    glDisable(GL_SCISSOR_TEST);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(0, 0, 8, 2);
+    glClearColor(1, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glScissor(0, 2, 8, 2);
+    glClearColor(0, 1, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
+    return true;
+}
+
+// A single-sample RGBA8 destination of the given size, cleared to a colour that appears in no
+// assertion below - so "the blit did nothing" and "the blit landed the wrong band" read
+// differently from each other.
+void MakeSingleSampleTarget(int width, int height, const GLfloat (&clear)[4], GLuint& fbo, GLuint& tex) {
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, width, height);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    glClearColor(clear[0], clear[1], clear[2], clear[3]);
+    glClear(GL_COLOR_BUFFER_BIT);
+}
+} // namespace
+
+// P7 wave 2-B2, CONTRACT-P7 §3.2: `multisample-blit-shape@P7` RETIRES.
+//
+// vkCmdResolveImage carries ONE extent and one offset per side. It can neither scale nor flip,
+// so the wire arm refused every multisample colour blit whose destination rectangle was a
+// different size from its source - which glBlitFramebuffer names, and which the MONOLITH arm
+// already reaches by the route this package gives the wire arm (VulkanRenderer.cpp's
+// `regionWasTransformed` branch: resolve into a scratch at raw offsets, then blit the scratch).
+// The scratch was already here for the flip; the two size equalities were the only thing
+// keeping the scale out.
+//
+// THE SCALE AND THE FLIP IN ONE CASE, over the same source, because they fail differently: a
+// blit that dropped the scale lands a 8x4 band in a 4x2 attachment (and the driver refuses the
+// command), while one that dropped the flip returns the right two colours in the wrong order.
+// The second blit's expectation is the first's, rows swapped, so neither can pass the other's
+// assertion.
+//
+// Red once (executed, reverted): restore the two `width != |dx1-dx0|` clauses in
+// WireFramebuffer.inc's colour resolve arm and both blits die as
+// Fatal{UnmigratedVerb, "Magma:multisample-resolve-region"}.
+TEST_F(F1WireScenario, MultisampleColorBlitScalesAndFlipsThroughTheResolveScratch) {
+    if (!Ready()) return;
+    GLuint msFbo = 0, msRenderbuffer = 0;
+    if (!MakeMultisampleHalvesFbo(4, msFbo, msRenderbuffer)) {
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glDeleteFramebuffers(1, &msFbo);
+        glDeleteRenderbuffers(1, &msRenderbuffer);
+        GTEST_SKIP() << "this driver cannot host a 4x multisample RGBA8 renderbuffer";
+    }
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.MsBlitShape.setup";
+
+    // Half the source in each axis: every destination texel is the resolve of a 2x2 source box
+    // that lies wholly inside ONE half, so the boundary never falls inside a destination texel
+    // and the two colours cannot mix.
+    constexpr GLfloat kBlue[4]{0, 0, 1, 1};
+    GLuint dstFbo = 0, dstTexture = 0;
+    MakeSingleSampleTarget(4, 2, kBlue, dstFbo, dstTexture);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.MsBlitShape.target";
+
+    constexpr std::array<GLubyte, 4> kRed{255, 0, 0, 255};
+    constexpr std::array<GLubyte, 4> kGreen{0, 255, 0, 255};
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, msFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dstFbo);
+    glDisable(GL_SCISSOR_TEST);
+    const auto before = PeekSplitRuntime().emitSeq;
+    glBlitFramebuffer(0, 0, 8, 4, 0, 0, 4, 2, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    EXPECT_GT(PeekSplitRuntime().emitSeq, before) << "F1.MsBlitShape.wire";
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.MsBlitShape.scaled.error";
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, dstFbo);
+    for (int x = 0; x < 4; ++x) {
+        EXPECT_EQ(ReadOnePixel(x, 0), kRed) << "F1.MsBlitShape scaled bottom row, x=" << x;
+        EXPECT_EQ(ReadOnePixel(x, 1), kGreen) << "F1.MsBlitShape scaled top row, x=" << x;
+    }
+
+    // The same source, the same destination size, with the destination rectangle inverted on
+    // Y. The scratch holds the resolved band at its own origin either way; only the second leg
+    // sees the inversion, which is what vkCmdBlitImage's reversed offsets express.
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dstFbo);
+    glClearColor(kBlue[0], kBlue[1], kBlue[2], kBlue[3]);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, msFbo);
+    glBlitFramebuffer(0, 0, 8, 4, 0, 2, 4, 0, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.MsBlitShape.flipped.error";
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, dstFbo);
+    for (int x = 0; x < 4; ++x) {
+        EXPECT_EQ(ReadOnePixel(x, 0), kGreen) << "F1.MsBlitShape flipped bottom row, x=" << x;
+        EXPECT_EQ(ReadOnePixel(x, 1), kRed) << "F1.MsBlitShape flipped top row, x=" << x;
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glDeleteFramebuffers(1, &dstFbo);
+    glDeleteTextures(1, &dstTexture);
+    glDeleteFramebuffers(1, &msFbo);
+    glDeleteRenderbuffers(1, &msRenderbuffer);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    Gl().EndFrame();
+}
+
+// The surviving half of `multisample-blit-shape@P7`, and it is a DECLINE (rule I (a)).
+//
+// A MULTISAMPLE DESTINATION is the other side of the same guard and has no arm at all:
+// vkCmdCopyImage is the only command that writes a multisampled image, it takes one extent, and
+// GL 4.6 core 18.3.1 makes a blit whose rectangles differ in size INVALID_OPERATION when either
+// framebuffer is multisampled - so there is no picture to get right, only a shape that used to
+// end the session. What this case pins is that it no longer does, and that the destination is
+// exactly as the clear left it.
+//
+// THE DESTINATION IS READ THROUGH A RESOLVE, because glReadPixels on a multisampled framebuffer
+// is INVALID_OPERATION: the 1:1 resolve into a single-sample attachment is the retired arm
+// above, so this case also proves the decline did not disturb the arm next to it.
+//
+// Red once (executed, reverted): restore MagmaWireFatal("multisample-blit-shape@P7") and this
+// case dies as Fatal{UnmigratedVerb, "Magma:multisample-blit-shape@P7"}.
+TEST_F(F1WireScenario, MultisampleBlitOntoAMultisampleDestinationDeclinesAndKeepsTheSession) {
+    if (!Ready()) return;
+    GLuint msFbo = 0, msRenderbuffer = 0;
+    glGenFramebuffers(1, &msFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, msFbo);
+    glGenRenderbuffers(1, &msRenderbuffer);
+    glBindRenderbuffer(GL_RENDERBUFFER, msRenderbuffer);
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, 4, GL_RGBA8, 4, 2);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, msRenderbuffer);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GLenum(GL_FRAMEBUFFER_COMPLETE)) {
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glDeleteFramebuffers(1, &msFbo);
+        glDeleteRenderbuffers(1, &msRenderbuffer);
+        GTEST_SKIP() << "this driver cannot host a 4x multisample RGBA8 renderbuffer";
+    }
+    while (glGetError() != GLenum(GL_NO_ERROR)) {}
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(1, 0, 1, 1); // magenta: the colour the declined blit must leave behind
+    glClear(GL_COLOR_BUFFER_BIT);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.MsBlitDecline.setup";
+
+    // A single-sample 8x4 source, flat yellow, so a blit that ran at all is visible.
+    constexpr GLfloat kYellow[4]{1, 1, 0, 1};
+    GLuint srcFbo = 0, srcTexture = 0;
+    MakeSingleSampleTarget(8, 4, kYellow, srcFbo, srcTexture);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.MsBlitDecline.source";
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, msFbo);
+    const auto before = PeekSplitRuntime().emitSeq;
+    glBlitFramebuffer(0, 0, 8, 4, 0, 0, 4, 2, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    EXPECT_GT(PeekSplitRuntime().emitSeq, before) << "F1.MsBlitDecline.wire";
+    // THE glFinish IS LOAD-BEARING, and it is what the first run of this case measured: the
+    // decline records its error where the blit is PERFORMED - the server's apply thread - and
+    // that error reaches this client's queue with a later reply, not with the blit call. Without
+    // the round trip the check below reads GL_NO_ERROR and the INVALID_OPERATION surfaces at
+    // whatever the next synchronising call happens to be, which is how it first showed up:
+    // attached to the resolve twenty lines down, a call that is not wrong about anything.
+    glFinish();
+    EXPECT_EQ(FirstGLError(), GLenum(GL_INVALID_OPERATION))
+        << "F1.MsBlitDecline: the decline must record the error GL names for the shape";
+
+    // Resolve the multisample destination 1:1 into a single-sample attachment and read THAT:
+    // the round trip is also the proof that the session is still answering.
+    constexpr GLfloat kBlue[4]{0, 0, 1, 1};
+    GLuint readFbo = 0, readTexture = 0;
+    MakeSingleSampleTarget(4, 2, kBlue, readFbo, readTexture);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, msFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, readFbo);
+    glBlitFramebuffer(0, 0, 4, 2, 0, 0, 4, 2, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.MsBlitDecline.resolve";
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, readFbo);
+    constexpr std::array<GLubyte, 4> kMagenta{255, 0, 255, 255};
+    for (int y = 0; y < 2; ++y)
+        for (int x = 0; x < 4; ++x)
+            EXPECT_EQ(ReadOnePixel(x, y), kMagenta)
+                << "F1.MsBlitDecline: the declined blit wrote (" << x << "," << y << ")";
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.MsBlitDecline: the session survived";
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glDeleteFramebuffers(1, &readFbo);
+    glDeleteTextures(1, &readTexture);
+    glDeleteFramebuffers(1, &srcFbo);
+    glDeleteTextures(1, &srcTexture);
+    glDeleteFramebuffers(1, &msFbo);
+    glDeleteRenderbuffers(1, &msRenderbuffer);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    Gl().EndFrame();
+}
+
+namespace {
 // One 8x8x2 RGBA8 array texture with two levels, filled so that EVERY subresource this pair
 // of cases touches is distinguishable from every other one. A flat fill would let a copy that
 // went to the wrong level, the wrong layer or nowhere at all read as correct.

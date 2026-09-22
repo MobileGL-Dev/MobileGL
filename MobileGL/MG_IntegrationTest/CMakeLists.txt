@@ -3080,6 +3080,26 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_DEFAULT_BLIT_SCRATCH=${defaultBlitScratch}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-defaultblit${mglItestArmLogTag}-scratch${defaultBlitScratch}.log")
         endforeach()
+        # ---- P7 wave 2-B2: `multisample-blit-shape@P7`'s retirement and its decline ----------
+        #
+        # SPLIT-ONLY, like the in-place copy pair below and for the same reason: the retired arm
+        # does something the monolith arm does not. A scaled multisample colour blit takes the
+        # monolith's `vkCmdResolveImage` at 1:1 into the destination's offset - the scale is
+        # dropped - so there is no `DirectVulkan.` reading to register these beside, and an
+        # equality between the two arms would be an assertion that the wire arm is as wrong.
+        #
+        # NO KNOB: every driver that can host a 4x multisample RGBA8 renderbuffer reaches both
+        # entries with the plain Fm environment, and one that cannot says so as a SKIP.
+        foreach(multisampleBlitCase MultisampleColorBlitScalesAndFlipsThroughTheResolveScratch
+                                    MultisampleBlitOntoAMultisampleDestinationDeclinesAndKeepsTheSession)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.MsBlit."
+                TEST_FILTER "F1WireScenario.${multisampleBlitCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msblit${mglItestArmLogTag}-${multisampleBlitCase}.log")
+        endforeach()
         foreach(inPlaceCase CopyImageInPlaceAcrossLevelsAndLayers
                             CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone)
             gtest_discover_tests(MobileGLIntegrationTest
