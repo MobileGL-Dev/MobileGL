@@ -466,6 +466,8 @@ void main() { oColor = vec4(vColor, 1.0); }
         }
 
         Gl().EndFrame(); // close the setup window; SetUp's own store and map go in it
+        unsigned long long acquisitionsBefore = 0, pushedBefore = 0;
+        const bool separateClientStats = PeekSeparateClientMapStats(&acquisitionsBefore, &pushedBefore);
 
         // One acquisition inside the counted window: one fresh immutable store, mapped once.
         const CoherentStore store = MakeCoherentlyMappedQuadStore();
@@ -500,7 +502,16 @@ void main() { oColor = vec4(vColor, 1.0); }
                                      "not reach the process, or nothing reached PipeStats::OnPresent.";
         RecordProperty("stats_line", window.line.c_str());
 
-        const long long roundtrips = PipeStatsWindow::CounterOrAbsent(window, "mpr");
+        unsigned long long acquisitionsAfter = 0, pushedAfter = 0;
+        if (separateClientStats) {
+            ASSERT_TRUE(PeekSeparateClientMapStats(&acquisitionsAfter, &pushedAfter));
+            ASSERT_GE(acquisitionsAfter, acquisitionsBefore);
+            ASSERT_GE(pushedAfter, pushedBefore);
+            RecordProperty("stats_counter_owner", "client process totals over the counted workload");
+        }
+        const long long roundtrips = separateClientStats
+            ? static_cast<long long>(acquisitionsAfter - acquisitionsBefore)
+            : PipeStatsWindow::CounterOrAbsent(window, "mpr");
         ASSERT_GE(roundtrips, 0) << "the summary line carries no mpr= field: " << window.line;
         EXPECT_EQ(roundtrips, kExpectedRoundtrips)
             << "one PERSISTENT|WRITE|COHERENT map of one freshly defined store is ONE acquisition "
@@ -523,7 +534,9 @@ void main() { oColor = vec4(vColor, 1.0); }
         // cross-check. Deriving the arm from pmap would have made "the push was never wired" and
         // "the store was adopted" the same reading, and they are different defects with different
         // owners.
-        const double pushedBytes = PipeStatsWindow::CounterAsDoubleOrAbsent(window, "pmap");
+        const double pushedBytes = separateClientStats
+            ? static_cast<double>(pushedAfter - pushedBefore)
+            : PipeStatsWindow::CounterAsDoubleOrAbsent(window, "pmap");
         ASSERT_GE(pushedBytes, 0.0) << "the summary line carries no pmap= field: " << window.line;
         RecordProperty("persistent_map_push_bytes_per_frame", std::to_string(pushedBytes).c_str());
         RecordProperty("map_persistent_roundtrips", std::to_string(roundtrips).c_str());

@@ -321,6 +321,10 @@ namespace MobileGL::MG_Pipe {
         MGPReplySlot reply = MGPipeMintReplySlot();
         MGP_ResourceSubData(&record, bytes, byteCount, regions, record.RegionCount, &reply);
         const Bool accepted = MGPipeTakeReplyBool(reply, "resource_subdata");
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // A cancelled wire upload is declined even when no server reply was requested.
+        if (MGPipeInstalledArm() == MGPipeRouteArm::kClientWire) return accepted;
+#endif
         return MGPipeSubDataWantsItsReply(record) ? accepted : true;
     }
     inline void MGPipeRouteBufferSubDataResident(const MGPSubData& record, const void* bytes,

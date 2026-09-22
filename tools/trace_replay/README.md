@@ -403,3 +403,110 @@ the ANGLE the Android lane runs. The CI lane uses a pinned build
 extension set differ from the SDK copy (`GL_EXT_texture_buffer` support, ES 3.2
 entry points). Compare `GL_RENDERER` and the relevant extension lists on both
 stacks before treating a local result as a statement about CI.
+
+
+## TCP matrix driver (Linux / WSL)
+
+`run_tcp_matrix.py` uses a CTest JSON catalog plus the **current** `trace_cases.json`.
+It does not build, install an APK, or launch the remote server. For the formal
+P6.5 run-ahead matrix, use `--require-run-ahead`. It forces `MOBILEGL_IPC_RUN_AHEAD=1`
+and `MOBILEGL_IPC_VERB_BARRIER=1`, then requires `run-ahead ARMED` in each private
+client log and rejects any `running lockstep` / `DISARMED` marker. The checkpoint
+records `requested_arm` and `actual_arm`; strict resume cannot reuse an earlier
+lockstep image pass. Start the intended server first, then run serially:
+
+```bash
+ctest --test-dir /path/to/retrace-build --show-only=json-v1 > /tmp/trace-catalog.json
+python3 tools/trace_replay/run_tcp_matrix.py \
+  --catalog /tmp/trace-catalog.json \
+  --runner /path/to/mobilegl_trace_replay --library /path/to/libMobileGL.so \
+  --endpoint tcp://192.168.21.181:40613 --token devtoken \
+  --backend DirectGLES --credit 2 --require-run-ahead --out /tmp/tcp-matrix
+# Continue the same frozen library/runner/peer:
+python3 tools/trace_replay/run_tcp_matrix.py \
+  --catalog /tmp/trace-catalog.json \
+  --runner /path/to/mobilegl_trace_replay --library /path/to/libMobileGL.so \
+  --endpoint tcp://192.168.21.181:40613 --token devtoken \
+  --backend DirectGLES --credit 2 --require-run-ahead --out /tmp/tcp-matrix --resume
+```
+
+`--build-dir` can replace `--catalog` to obtain the JSON without building.
+`--runner` overrides the catalog runner; fixture paths default to the catalog's
+fixture directory and can be overridden with `--fixtures`. Repeat `--case` or
+`--backend` to select a subset. The default is the manifest's CI split subset
+(currently 39 cases), honoring each case's backend list. Explicit `--case
+minecraft-1.21.4-rd12-odinlite-in-world` permits that non-CI workload separately;
+an explicit `split:false` always remains excluded.
+
+The watchdog defaults to **300 seconds without log progress** and a separate
+**7200-second absolute ceiling** (`--idle-seconds`, `--max-seconds`). It observes
+runner output and trace/client/server log changes. It deliberately ignores the
+old local CTest/manifest `timeout_seconds`: TCP main-menu kept progressing beyond
+its old local 180-second budget. A growing log does not bypass the explicit absolute ceiling.
+On timeout the driver terminates and reaps the entire case process group,
+including a child that ignores TERM after CMake exits, and stops the matrix to
+avoid cascading Busy failures. Check the peer before resuming. Ctrl-C/TERM/HUP
+also clean up the group and save a cancelled checkpoint.
+
+Each attempt has a new directory. `checkpoint.json` is written atomically, and
+only a zero exit plus current-attempt successful result, matching backend/call/
+golden, adequate SSIM, an actual image, and the requested TCP arm marker count
+as passed. Resume also checks request/artifact identity and stored evidence
+hashes. Failed, timed-out, interrupted, changed, or missing evidence is rerun;
+old scratch `results.json` files are retained but never silently promoted into
+successful checkpoints. Replacing the remote deployment requires a new output
+root unless it is the same frozen peer. `results.json` summarizes the currently
+selected runs and marks reused evidence with `resumed:true`.
+
+`--wake-adb-serial 2f7cbe2e` explicitly opts into `adb shell input keyevent
+KEYCODE_WAKEUP` every 15 seconds during a case. It does not install anything or
+change global power/idle settings. Its own adb log is excluded from the progress
+watchdog, so wakeup messages cannot conceal a stalled trace.
+
+Tool regression tests use short process stubs, never a GPU/device/trace:
+
+```bash
+python3 tools/trace_replay/test_run_tcp_matrix.py
+```
+
+## TCP credit and Stage measurements
+
+`benchmark_tcp_credits.py` runs the complete OpenRA and rd12 traces at credits
+1, 2, and 3, then selects matching client/server tail frame IDs (100 and 200
+frames respectively). Extract the unchanged trace files as
+`inputs/OpenRA/openra.trace` and `inputs/rd12/trace.trace`. Keep the server and
+library frozen, enable server `MOBILEGL_PIPE_STATS=1` and
+`MOBILEGL_PIPE_STATS_PERIOD=1`, and leave the device connection free:
+
+```bash
+python3 tools/trace_replay/benchmark_tcp_credits.py \
+  --runner /path/to/mobilegl_trace_replay --library /path/to/libMobileGL.so \
+  --inputs /path/to/inputs --out /tmp/tcp-credits \
+  --endpoint tcp://192.168.21.181:40613 --token devtoken --serial 2f7cbe2e
+python3 tools/trace_replay/measure_tcp_stage_burst.py \
+  --library /path/to/libMobileGL.so --out /tmp/tcp-stage-burst \
+  --endpoint tcp://192.168.21.181:40613 --token devtoken
+```
+
+The credit runner serializes all six runs, sends the same explicit awake key as
+the matrix driver, and preserves complete benchmark and role logs. It requires
+the requested credit and continuous run-ahead ARMED proof in the client log,
+matching complete tail frames, and positive per-thread CPU observations.
+`--case` and `--credit` select a subset; `--resume` reuses only matching identity
+and intact evidence. FPS, `kWaitReply` counts, bucketed RTT distribution, Stage
+bytes, and the two role CPU clocks come from the selected steady window.
+Completing this benchmark does not perform or replace a golden image comparison.
+
+The Stage tool uploads exactly 64 MiB after one warmup frame, consumes the dirty
+buffer in a draw, and waits for apply. It requires actual TCP run-ahead and at
+least 64 MiB of observed Stage bytes in frame 2, preserves artifact hashes, and
+refuses to overwrite an existing output directory. Its throughput includes
+client copies and backend work; it is not raw Wi-Fi bandwidth. Divide steady
+frame Stage traffic by this separately measured throughput only with that
+interpretation. Device matrices, benchmarks, and the burst must run one at a time.
+
+Offline evidence controls (no device):
+
+```bash
+python3 tools/trace_replay/test_benchmark_tcp_credits.py
+```

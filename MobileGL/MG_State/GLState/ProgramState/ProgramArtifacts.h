@@ -413,9 +413,9 @@ namespace MobileGL::MG_State::GLState {
     // {h,cpp}, beside this header rather than inside it so the check_include_closure.py
     // "artifacts-header" probe stays untouched. It is two visitors over the tables below - a
     // writer that appends to a Vector<Uint8> and a reader that consumes one - length-prefixed,
-    // little-endian, with a format-version word first and a MGL_LINKARTIFACTS_SIZE echo
-    // second, so a struct that gained a field and a codec that did not is a mismatch at READ
-    // time rather than a silent truncation. Adding a member to any struct above therefore
+    // little-endian, with a format-version word and (for disaggregated v2) a recursive
+    // wire-schema digest of these tables. Native container sizes are local maintenance
+    // assertions below, never cross-standard-library wire facts. Adding a member to any struct above therefore
     // means: add its VisitFields row here, update the sizeof number below, and bump
     // kProgramArtifactsCodecVersion. `LinkArtifacts::program` stays the one deliberate
     // omission, and the codec has no arm for it.

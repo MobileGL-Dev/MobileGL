@@ -22,7 +22,7 @@ if (NOT WIN32)
     # P6 so: the SAME nine ITransport-contract cases InProcessTransportTest runs, over a real
     # socketpair with real threads, plus the three a stream has and a message queue does not.
     # POSIX for the same reason as FdPassingTest - and because CONTRACT-P6 §2.6 lands POSIX only.
-    list(APPEND MOBILEGL_WIRE_TESTS SocketTransportTest StreamLinkTest)
+    list(APPEND MOBILEGL_WIRE_TESTS SocketTransportTest StreamLinkTest StreamClientPublicationTest InitialCapsStartupTest)
     # P6 sm: two MobileGL processes. Needs the real server image beside it, so
     # the dependency is declared after the loop rather than assumed.
     list(APPEND MOBILEGL_WIRE_TESTS ServerSpawnTest)
@@ -141,3 +141,15 @@ foreach (wiretest IN ITEMS RemoteClientTest ServerLoopTest SessionHandshakeTest 
 
     gtest_discover_tests(${wiretest} DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 endforeach ()
+
+# P6.5 manual fault-injection probe: requires an explicit live peer and is never
+# registered with ctest, so a device-less unit run cannot silently skip this gate.
+if (NOT WIN32)
+    add_executable(MobileGLPeerLossProbe PeerLossProbe.cpp)
+    target_include_directories(MobileGLPeerLossProbe PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+        ${MGL_ROOT}/3rdparty/flatbuffers/include
+    )
+    target_link_libraries(MobileGLPeerLossProbe PRIVATE ${LINK_LIBRARIES})
+endif ()

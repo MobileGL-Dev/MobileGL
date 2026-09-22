@@ -2338,19 +2338,8 @@ void StartRunAheadSession() {
     Srv::ServerSessionInstance().SetCapabilityBits(
         static_cast<Uint64>(MG_Pipe::kCapRunAheadApply));
     Srv::ServerSessionInstance().SetConsumedSubsystems(kMGPipeSubsystemsMigratedAtP4a);
-    // THE MIRROR IS ADOPTED BEFORE Start, AND THAT IS THE LATCH'S RULE MADE VISIBLE. This
-    // process has no server backend, so PublishCapsSnapshot is deferred and the handshake
-    // carries no snapshot at all - and §1 says a later snapshot may only turn run-ahead OFF,
-    // never on. So the arm has to be true at the FIRST adoption, which for a fixture means
-    // before the session takes its latch. A test that adopted afterwards and found the client
-    // still lockstep would be reading the contract's own rule as a failure.
-    {
-        MG_Pipe::MGPCaps caps{};
-        caps.CallMask = static_cast<Uint64>(MG_Pipe::kCapRunAheadApply) |
-                        MG_Remote::MGCapsConsumerBits(kMGPipeSubsystemsMigratedAtP4a);
-        CapsMirrorInstance().Adopt(caps, MG_Backend::FormatCapabilityCache{}, RendererInfo{},
-                                   String{"4.6"}, BackendType::DirectGLES);
-    }
+    // The test peer publishes the first snapshot through the real handshake.
+    Srv::ServerSessionInstance().SetBackend(ControlCapsPeer());
     if (ClientSessionInstance().Start(MG_Config::TransportMode::InProcess, {}) != MOBILEGL_OK) {
         ::_exit(81);
     }
@@ -2411,11 +2400,7 @@ TEST(RemoteRunAhead, ClearingTheVerbBarrierDisarmsRunAheadEvenWithTheCapBit) {
         Srv::ServerSessionInstance().SetCapabilityBits(
             static_cast<Uint64>(MG_Pipe::kCapRunAheadApply));
         Srv::ServerSessionInstance().SetConsumedSubsystems(kMGPipeSubsystemsMigratedAtP4a);
-        MG_Pipe::MGPCaps caps{};
-        caps.CallMask = static_cast<Uint64>(MG_Pipe::kCapRunAheadApply) |
-                        MG_Remote::MGCapsConsumerBits(kMGPipeSubsystemsMigratedAtP4a);
-        CapsMirrorInstance().Adopt(caps, MG_Backend::FormatCapabilityCache{}, RendererInfo{},
-                                   String{"4.6"}, BackendType::DirectGLES);
+        Srv::ServerSessionInstance().SetBackend(ControlCapsPeer());
         if (ClientSessionInstance().Start(MG_Config::TransportMode::InProcess, {}) != MOBILEGL_OK) {
             ::_exit(81);
         }

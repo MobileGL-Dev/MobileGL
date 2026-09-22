@@ -36,6 +36,7 @@
 
 #include "Protocol/mg_protocol_base.h"
 #include <MG_Pipe/PipeWireLayout.h>
+#include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 
 #include <MGGitHash.h>
 #include <MG_Util/Debug/Log.h>
@@ -472,6 +473,8 @@ namespace MobileGL::MG_Remote {
         inputs.FormatCapabilityFormats = MG_Backend::kFormatCapabilityFormatCount;
         inputs.FormatCapabilitiesCodecVersion = kFormatCapabilitiesCodecVersion;
         inputs.RendererInfoCodecVersion = kRendererInfoCodecVersion;
+        inputs.ProgramArtifactsCodecVersion = MG_State::GLState::kProgramArtifactsCodecVersion;
+        inputs.ProgramArtifactsSchema = MG_State::GLState::ProgramArtifactsSchemaFingerprint();
         inputs.OpCount = static_cast<Uint64>(MG_Pipe::MGPWireOp::kOpCount);
         inputs.AbiVersion = MOBILEGL_ABI_VERSION(MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR);
         inputs.PointerBits = sizeof(void*) * 8;

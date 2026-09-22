@@ -174,6 +174,21 @@ TEST(SocketTransportTest, CarriesFramesInBothDirections) {
     EXPECT_EQ(Receive(*pair.client), welcome);
 }
 
+TEST(SocketTransportTest, RequestHalfCloseStillDeliversTheFinalReply) {
+    std::unique_ptr<SocketTransport> client, server;
+    ASSERT_EQ(SocketTransport::CreatePair(client, server), MOBILEGL_OK);
+    ASSERT_EQ(client->SendFrame(Span("last request")), MOBILEGL_OK);
+    EXPECT_EQ(Receive(*server), "last request");
+    ASSERT_EQ(client->ShutdownSend(), MOBILEGL_OK);
+    std::uint64_t bytes = 0;
+    char buffer[32]{};
+    EXPECT_EQ(server->ReceiveFrame({buffer, sizeof buffer}, &bytes, 1000), MOBILEGL_ERR_TRANSPORT_CLOSED);
+    ASSERT_EQ(server->SendFrame(Span("cleanup complete")), MOBILEGL_OK);
+    EXPECT_EQ(Receive(*client), "cleanup complete");
+    server->Shutdown();
+    EXPECT_EQ(client->ReceiveFrame({buffer, sizeof buffer}, &bytes, 1000), MOBILEGL_ERR_TRANSPORT_CLOSED);
+}
+
 TEST(SocketTransportTest, PreservesOrder) {
     Pair pair = MakePair();
 

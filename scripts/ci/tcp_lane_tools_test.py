@@ -35,6 +35,15 @@ class Accounting(unittest.TestCase):
             role = root / 'case.client.log'
             role.write_text('control=tcp data=stream server=127.0.0.1:40613 pid=42\n')
             tally.require_tcp_proof(junit, 'DirectGLES.Tcp.', discovery)
+            with self.assertRaises(ValueError):
+                tally.require_tcp_proof(junit, 'DirectGLES.Tcp.', discovery, require_run_ahead=True)
+            armed = 'control=tcp data=stream server=127.0.0.1:40613 pid=42\nrun-ahead ARMED\n'
+            role.write_text(armed)
+            tally.require_tcp_proof(junit, 'DirectGLES.Tcp.', discovery, require_run_ahead=True)
+            for fallback in ('running lockstep', 'run-ahead DISARMED'):
+                role.write_text(armed + fallback)
+                with self.assertRaises(ValueError):
+                    tally.require_tcp_proof(junit, 'DirectGLES.Tcp.', discovery, require_run_ahead=True)
             for bad in ('', 'control=tcp data=shm server=127.0.0.1:40613 pid=42',
                         'control=tcp data=stream server=127.0.0.1:40613 pid=0',
                         'spawn ARMED - the server role runs in pid 42'):
@@ -51,6 +60,38 @@ class Accounting(unittest.TestCase):
         with patch.object(parity, 'lane_cases', return_value={a}), \
                 patch.object(sys, 'argv', ['spawn_lane_parity.py', 'unused']):
             self.assertEqual(parity.main(), 0)
+
+
+class DeviceIdleExemption(unittest.TestCase):
+    def test_stop_restores_only_the_setting_this_task_changed(self):
+        spec = importlib.util.spec_from_file_location('tcp_device_server', ROOT / 'tools/trace_replay/tcp_device_server.py')
+        device = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(device)
+        package = 'top.mobilegl.plugin.trace'
+        for initially_allowed in (False, True):
+            allowed = {package} if initially_allowed else set()
+            def shell(_adb, command):
+                if len(command) == 3:
+                    return '\n'.join('user,' + name + ',10325' for name in sorted(allowed))
+                change = command[3]
+                if change.startswith('+'):
+                    allowed.add(change[1:])
+                else:
+                    allowed.discard(change[1:])
+                return ''
+            with tempfile.TemporaryDirectory() as directory, patch.object(device, 'shell', side_effect=shell):
+                state = Path(directory) / 'original.json'
+                device.allow_idle([], 'phone', package, state)
+                # A restarted supervisor must retain the first original state.
+                device.allow_idle([], 'phone', package, state)
+                self.assertIn(package, allowed)
+                self.assertEqual(json.loads(state.read_text())['originally_whitelisted'], initially_allowed)
+                with self.assertRaises(ValueError):
+                    device.restore_idle([], 'different-phone', package, state)
+                self.assertTrue(state.exists())
+                device.restore_idle([], 'phone', package, state)
+                self.assertEqual(package in allowed, initially_allowed)
+                self.assertFalse(state.exists())
 
 
 @unittest.skipUnless(sys.platform.startswith('linux'), 'supervisor fixture uses Linux /proc')
@@ -82,6 +123,10 @@ class Supervisor(unittest.TestCase):
                 unrelated = root / 'unrelated.json'
                 unrelated.write_text(json.dumps({'pid': os.getpid(), 'start': 'not-this-process'}))
                 fixture.stop(unrelated)
+                already_exited = root / 'already-exited.json'
+                already_exited.write_text(json.dumps({'pid': 2147483647, 'start': None}))
+                fixture.stop(already_exited)
+                self.assertFalse(already_exited.exists())
             finally:
                 fixture.stop(state)
             with self.assertRaises(OSError):

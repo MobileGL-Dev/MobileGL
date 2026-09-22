@@ -55,24 +55,30 @@ namespace {
         return MobileGL::MG_Remote::Server::ServerSessionInstance().Applier().Verbs();
     }
 
-    // P6 `t6`: THE COUNTERS BELOW LIVE IN THE SERVER'S PROCESS, and under spawn that is not
-    // this one.
-    //
-    // ServerVerbs() reads PipeApplier's in-process tallies. Under inproc the applier is a thread
-    // here and the numbers are this process's own; under spawn it is a thread in a DIFFERENT
-    // process and this process's copy stays 0 forever - so these cases would fail asserting a
-    // fact about somebody else's memory, which is a harness limit and not a product defect.
-    //
-    // SKIPPED BY NAME RATHER THAN EXCLUDED FROM THE LANE. Exit gate 9.2 asks that
-    // integration-spawn's case-name SET equal integration-split's, and a case dropped from the
-    // registration would make the two sets differ silently - the exact drift the shared
-    // registration macro exists to prevent. A skip keeps the name, states the reason, and is
-    // counted as a skip rather than as coverage.
-    //
-    // WHAT WOULD RETIRE IT: cross-process telemetry, which is also what `t6`'s S8 needs for
-    // SessionFaultCount() over a whole run. Until that exists this is the honest answer.
-    bool ServerCountersAreObservableHere() {
-        return MobileGL::MG_Config::Transport != MobileGL::MG_Config::TransportMode::Spawn;
+    // Inproc reads its local sink. A separate-process session snapshots that
+    // same sink on LogFlush, after the client fences its complete command prefix.
+    // TCP forwards the server log; unix+shm reads the server's local role file.
+    struct CounterSnapshot {
+        bool valid = false;
+        MobileGL::Uint64 resets = 0, serial = 0, deaths = 0;
+    };
+
+    CounterSnapshot ServerCounters() {
+        if (MobileGL::MG_Config::Transport != MobileGL::MG_Config::TransportMode::Spawn) {
+            return {true, ServerVerbs().ApplierResets(), ServerVerbs().ExpectedApplierResetSerial(),
+                    ServerVerbs().ObjectDeaths()};
+        }
+        MGPipeSyncPeerLog();
+        const std::string log = PipeStatsWindow::ReadWholeFile(PipeStatsWindow::ServerLibraryLogPath());
+        const auto at = log.rfind("MGPipe server counters:");
+        if (at == std::string::npos) return {};
+        const PipeStatsWindow::Window window{true, log.substr(at, log.find('\n', at) - at)};
+        const auto resets = PipeStatsWindow::CounterOrAbsent(window, "resets");
+        const auto serial = PipeStatsWindow::CounterOrAbsent(window, "reset-serial");
+        const auto deaths = PipeStatsWindow::CounterOrAbsent(window, "deaths");
+        if (resets < 0 || serial < 0 || deaths < 0) return {};
+        return {true, static_cast<MobileGL::Uint64>(resets), static_cast<MobileGL::Uint64>(serial),
+                static_cast<MobileGL::Uint64>(deaths)};
     }
 
     class CtWireScenario : public ScenarioTest {
@@ -116,24 +122,20 @@ namespace {
 
     TEST_F(CtWireScenario, ApplierResetCrossesAtThePrimedEdgeInSerialOrder) {
         if (!Ready()) return;
-        if (!ServerCountersAreObservableHere()) {
-            GTEST_SKIP() << "transport=spawn: the applier's counters are in the SERVER's process "
-                            "and this one's copy is 0 by construction. The record still crosses - "
-                            "the retrace lane is what proves that - but this case asserts on a "
-                            "tally only an in-process applier can publish.";
-        }
         // The first verb of the process primes the tracker; the edge is the producer. The
         // clear also gives the case its pixels, so a lane that emitted nothing is red twice
         // (here and in the fixture's emit-ordinal rule).
         glClearColor(0.2f, 0.4f, 0.6f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-        EXPECT_GE(ServerVerbs().ApplierResets(), 1u)
+        const auto counters = ServerCounters();
+        ASSERT_TRUE(counters.valid) << "server control-record telemetry missing";
+        EXPECT_GE(counters.resets, 1u)
             << "the FreshlyPrimed edge emitted no applier_reset; the server's g_applier was "
                "never reset for this session";
         // The serial sequence is the session's own count (§1: asserted, never dispatched
         // on): every record the sink accepted carried the serial it expected, or the counter
         // and the accepted tally would disagree.
-        EXPECT_EQ(ServerVerbs().ExpectedApplierResetSerial(), ServerVerbs().ApplierResets())
+        EXPECT_EQ(counters.serial, counters.resets)
             << "an applier_reset record was dropped or replayed on the wire";
 
         GLubyte pixel[4]{};
@@ -169,12 +171,9 @@ namespace {
         // The object dies unbound so the destructor - and the death record - fire at the
         // delete, and the tally is read AFTER the EmitAndWait the delete blocked on.
         glBindTexture(GL_TEXTURE_2D, 0);
-        if (!ServerCountersAreObservableHere()) {
-            GTEST_SKIP() << "transport=spawn: ObjectDeaths is the SERVER process's tally and this "
-                            "process's copy never moves. The death record itself crosses; what "
-                            "cannot cross today is the counter that would prove it here.";
-        }
-        const MobileGL::Uint64 deathsBefore = ServerVerbs().ObjectDeaths();
+        const auto beforeCounters = ServerCounters();
+        ASSERT_TRUE(beforeCounters.valid) << "server object-death telemetry missing";
+        const MobileGL::Uint64 deathsBefore = beforeCounters.deaths;
         glDeleteTextures(1, &texture);
         // THE FENCE, the framebuffer case's exactly (MOBILEGL_IPC_BATCH_WAITS, default on):
         // object_death is a kCtxObject value-class record, published WITHOUT waiting for its
@@ -183,7 +182,9 @@ namespace {
         // clock-free spin changed that timing, then failed 1 in 5. A clear is kCtxVerb and
         // still waits, and its wait covers the death.
         glClear(GL_COLOR_BUFFER_BIT);
-        EXPECT_GT(ServerVerbs().ObjectDeaths(), deathsBefore)
+        const auto afterCounters = ServerCounters();
+        ASSERT_TRUE(afterCounters.valid) << "server object-death telemetry missing";
+        EXPECT_GT(afterCounters.deaths, deathsBefore)
             << "the texture's death produced no object_death record; the server's twin was "
                "never told to let go";
 
@@ -230,12 +231,9 @@ namespace {
         // Die unbound, framebuffer first so the attachment's own death is a separate record.
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glBindRenderbuffer(GL_RENDERBUFFER, 0);
-        if (!ServerCountersAreObservableHere()) {
-            GTEST_SKIP() << "transport=spawn: ObjectDeaths is the SERVER process's tally and this "
-                            "process's copy never moves. The death record itself crosses; what "
-                            "cannot cross today is the counter that would prove it here.";
-        }
-        const MobileGL::Uint64 deathsBefore = ServerVerbs().ObjectDeaths();
+        const auto beforeCounters = ServerCounters();
+        ASSERT_TRUE(beforeCounters.valid) << "server object-death telemetry missing";
+        const MobileGL::Uint64 deathsBefore = beforeCounters.deaths;
         glDeleteFramebuffers(1, &fbo);
         // THE FENCE (MOBILEGL_IPC_BATCH_WAITS, default on): object_death is a kCtxObject
         // value-class record - published WITHOUT waiting for its own apply (production-safe:
@@ -243,7 +241,9 @@ namespace {
         // server-side counter this assertion reads only moves at apply time, so it needs a
         // wait boundary: a clear is kCtxVerb and still waits, and its wait covers the death.
         glClear(GL_COLOR_BUFFER_BIT);
-        EXPECT_GT(ServerVerbs().ObjectDeaths(), deathsBefore)
+        const auto afterCounters = ServerCounters();
+        ASSERT_TRUE(afterCounters.valid) << "server object-death telemetry missing";
+        EXPECT_GT(afterCounters.deaths, deathsBefore)
             << "the framebuffer's death produced no object_death record - and no other "
                "opcode can carry it";
         glDeleteRenderbuffers(1, &renderbuffer);

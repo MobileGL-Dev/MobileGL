@@ -319,7 +319,7 @@ namespace MobileGL::MG_Remote::Transport {
             }
             m_private[i] = ::operator new(static_cast<std::size_t>(bytes[i]),
                 std::align_val_t{alignof(RingControl)}, std::nothrow);
-            if (!m_private[i]) { Close(); return MOBILEGL_ERR_INVALID_ARGUMENT; }
+            if (!m_private[i]) { Close(); return MOBILEGL_ERR_OUT_OF_MEMORY; }
             m_privateSizes[i] = bytes[i];
             std::memset(m_private[i], 0, static_cast<std::size_t>(bytes[i]));
             m_mappedBytes += bytes[i];

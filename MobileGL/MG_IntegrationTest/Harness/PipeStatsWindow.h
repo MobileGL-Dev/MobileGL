@@ -174,7 +174,7 @@ namespace MGITest::PipeStatsWindow {
     // "the stats channel never reached the process". Concatenated, Last() takes whichever role
     // emitted the final summary.
     inline Window LastFromLaneLog() {
-        return Last(ReadWholeFile(LibraryLogPath()) + ReadWholeFile(ServerLibraryLogPath()));
+        return Last(ReadLaneLog());
     }
 
     // One counter out of that line, by its short name ("mpr", "draws", "csom"), or -1 when the

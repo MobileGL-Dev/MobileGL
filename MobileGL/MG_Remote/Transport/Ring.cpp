@@ -693,6 +693,8 @@ namespace MobileGL::MG_Remote::Transport {
         mix(inputs.FormatCapabilityFormats);
         mix(inputs.FormatCapabilitiesCodecVersion);
         mix(inputs.RendererInfoCodecVersion);
+        mix(inputs.ProgramArtifactsCodecVersion);
+        mix(inputs.ProgramArtifactsSchema);
         mix(inputs.OpCount);
         mix(inputs.AbiVersion);
         mix(inputs.PointerBits);

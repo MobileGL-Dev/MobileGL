@@ -8,6 +8,9 @@
 #include <thread>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <cstdio>
 
 using namespace MobileGL::MG_Remote::Transport;
 namespace {
@@ -64,18 +67,28 @@ namespace {
         Queue(1, 24);
         ASSERT_EQ(client.Flush(), MOBILEGL_OK);
         ASSERT_EQ(apply.WaitForWork(2000), SessionWait::Reached);
-        ASSERT_TRUE(apply.ApplyOne([&](const RingRecordView& v) {
+        RingRecordView view;
+        ASSERT_TRUE(consumer.Pop(view));
+        [&](const RingRecordView& v) {
             std::uint64_t offset;
             std::memcpy(&offset, v.payload, sizeof offset);
             const void* p = nullptr;
             ASSERT_EQ(server.ResolveSpan(LinkSegment::Stage, {offset, bytes.size()}, &p), MOBILEGL_OK);
             EXPECT_EQ(std::memcmp(p, bytes.data(), bytes.size()), 0);
-        }));
-        apply.RetireThrough(1);
+        }(view);
+        // Advance locally without a periodic-progress callback: this isolates
+        // flush-on-idle so removing it cannot be masked by the one-ms timer.
+        Watermark::AdvanceApplied(*serverMemory.CmdControl(), 1);
+        Watermark::AdvanceRetired(*serverMemory.CmdControl(), 1);
+        consumer.PublishRetired();
         // This is the production idle discipline, not a polling sender thread.
         EXPECT_EQ(apply.WaitForWork(1), SessionWait::TimedOut);
         EXPECT_EQ(publish.WaitForApplied(1, 2000), SessionWait::Reached);
-        EXPECT_EQ(client.Progress()->retiredSeq.load(), 1u);
+        // applied and retired are independent watermarks. The reader publishes
+        // them in dependency order, and an applied waiter can run between stores.
+        EXPECT_TRUE(client.ProducerBell().Wait(
+            clientMemory.CmdControl()->producerParked,
+            [&] { return client.Progress()->retiredSeq.load(std::memory_order_acquire) >= 1; }, 0, 2000));
     }
 
     TEST_F(StreamPair, RetiredByteCursorCrossesManyWrapsWithoutStageRingCursors) {
@@ -152,6 +165,109 @@ namespace {
         EXPECT_EQ(publish.WaitForApplied(10, 2000), SessionWait::ShutDown);
     }
 
+    TEST_F(StreamPair, PeerEofReleasesAnAlreadyWaitingReplyReader) {
+        std::atomic<bool> finished{false};
+        MobileGLResult result = MOBILEGL_OK;
+        std::thread waiting([&] {
+            std::int32_t status;
+            const void* payload;
+            std::uint64_t size;
+            result = client.ReadReply(1, &status, &payload, &size);
+            finished.store(true, std::memory_order_release);
+        });
+        server.Detach();
+        EXPECT_TRUE(Eventually([&] { return finished.load(std::memory_order_acquire); }));
+        waiting.join();
+        EXPECT_EQ(result, MOBILEGL_ERR_TRANSPORT_CLOSED);
+    }
+
+    TEST_F(StreamPair, AppliedWithoutItsReplyIsRefusedWithoutAnUnboundedWait) {
+        Queue(1, 1);
+        ASSERT_EQ(client.Flush(), MOBILEGL_OK);
+        ASSERT_EQ(apply.WaitForWork(2000), SessionWait::Reached);
+        ASSERT_TRUE(apply.ApplyOne([](const RingRecordView&) {}));
+        apply.RetireThrough(1);
+        ASSERT_EQ(server.FlushProgress(), MOBILEGL_OK);
+        ASSERT_EQ(publish.WaitForApplied(1, 2000), SessionWait::Reached);
+        std::int32_t status;
+        const void* p;
+        std::uint64_t size;
+        EXPECT_EQ(client.ReadReply(1, &status, &p, &size), MOBILEGL_ERR_PROTOCOL_MISMATCH);
+    }
+
+    TEST_F(StreamPair, ControlFenceWaitsForEventBytesOnTheIndependentDataConnection) {
+        EventRingProducer events(serverMemory.EventControl(), serverMemory.CmdControl(), serverMemory.EventRingBase(),
+                                 1024);
+        auto* payload = events.Reserve(kEventGlError, 8);
+        ASSERT_NE(payload, nullptr);
+        std::memset(payload, 0, 8);
+        events.Ring().Publish();
+        const auto fence = server.EventPublishedHead();
+        EXPECT_EQ(client.WaitForEventDelivery(fence, 1), MOBILEGL_ERR_TIMEOUT);
+        ASSERT_EQ(server.Flush(), MOBILEGL_OK);
+        EXPECT_EQ(client.WaitForEventDelivery(fence, 2000), MOBILEGL_OK);
+        EXPECT_GE(client.EventPublishedHead(), fence);
+    }
+
+    TEST(StreamLinkTcp, RecordsSixtyFourMiBStageBurstThroughputOnRealLoopbackTcp) {
+        int listener = ::socket(AF_INET, SOCK_STREAM, 0);
+        ASSERT_GE(listener, 0);
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        ASSERT_EQ(::bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof address), 0);
+        ASSERT_EQ(::listen(listener, 1), 0);
+        socklen_t addressBytes = sizeof address;
+        ASSERT_EQ(::getsockname(listener, reinterpret_cast<sockaddr*>(&address), &addressBytes), 0);
+        int clientFd = ::socket(AF_INET, SOCK_STREAM, 0);
+        ASSERT_GE(clientFd, 0);
+        ASSERT_EQ(::connect(clientFd, reinterpret_cast<sockaddr*>(&address), sizeof address), 0);
+        int serverFd = ::accept(listener, nullptr, nullptr);
+        ASSERT_GE(serverFd, 0);
+        ::close(listener);
+        int enabled = 1;
+        ASSERT_EQ(::setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &enabled, sizeof enabled), 0);
+        ASSERT_EQ(::setsockopt(serverFd, IPPROTO_TCP, TCP_NODELAY, &enabled, sizeof enabled), 0);
+        SessionSegmentSizes sizes;
+        sizes.CmdRingBytes = 1024;
+        sizes.EventRingBytes = 1024;
+        sizes.StageBytes = 64ull * 1024 * 1024;
+        sizes.ReplyBytes = 4096;
+        std::unique_ptr<ILink> client, server;
+        ASSERT_EQ(CreateStreamLink(clientFd, sizes, TransportRoleTag::ClientProducer, client), MOBILEGL_OK);
+        ASSERT_EQ(CreateStreamLink(serverFd, sizes, TransportRoleTag::ServerConsumer, server), MOBILEGL_OK);
+        client->InitializeEndpoints();
+        server->InitializeEndpoints();
+        std::memset(client->Memory().StageBase(), 0x5a, static_cast<std::size_t>(sizes.StageBytes));
+        client->NoteStage({0, sizes.StageBytes});
+        SessionProducer producer;
+        producer.Attach(*client, 0);
+        SessionConsumer consumer;
+        consumer.Attach(*server, 0);
+        auto* record = client->CommandsOut().Reserve(1, 0, sizeof(std::uint64_t));
+        ASSERT_NE(record, nullptr);
+        std::memcpy(record, &sizes.StageBytes, sizeof(std::uint64_t));
+        producer.PublishAndNotify(1);
+        const auto start = std::chrono::steady_clock::now();
+        ASSERT_EQ(client->Flush(), MOBILEGL_OK);
+        ASSERT_EQ(consumer.WaitForWork(10000), SessionWait::Reached);
+        ASSERT_TRUE(consumer.ApplyOne([&](const RingRecordView&) {
+            const auto* bytes = static_cast<const unsigned char*>(server->Memory().StageBase());
+            for (std::uint64_t offset = 0; offset < sizes.StageBytes; offset += 4096)
+                EXPECT_EQ(bytes[offset], 0x5a);
+            EXPECT_EQ(bytes[sizes.StageBytes - 1], 0x5a);
+        }));
+        consumer.RetireThrough(1);
+        ASSERT_EQ(server->FlushProgress(), MOBILEGL_OK);
+        ASSERT_EQ(producer.WaitForApplied(1, 10000), SessionWait::Reached);
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        const double mibPerSecond = 64.0 / elapsed;
+        RecordProperty("tcp_stage_bytes", std::to_string(sizes.StageBytes));
+        RecordProperty("tcp_stage_mib_per_second", std::to_string(mibPerSecond));
+        std::printf("P6.5 Stage burst control=none data=tcp-loopback bytes=%llu seconds=%.6f MiB/s=%.3f\n",
+                    static_cast<unsigned long long>(sizes.StageBytes), elapsed, mibPerSecond);
+    }
+
     void WriteFrame(int fd, unsigned kind, std::uint64_t a, const void* payload, std::uint32_t size) {
         unsigned char h[28]{};
         auto put = [&](unsigned at, std::uint64_t value, unsigned width) {
@@ -159,7 +275,7 @@ namespace {
                 h[at + i] = value >> (8 * i);
         };
         put(0, 0x444c474d, 4);
-        put(4, size, 4);
+        put(4, size + 20, 4);
         h[8] = kind;
         put(12, a, 8);
         ASSERT_EQ(::send(fd, h, sizeof h, MSG_NOSIGNAL), sizeof h);

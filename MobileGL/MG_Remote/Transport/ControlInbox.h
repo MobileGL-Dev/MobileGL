@@ -17,6 +17,7 @@ namespace MobileGL::MG_Remote::Transport {
         void Stop();
         MobileGLResult Receive(std::vector<std::uint8_t>& frame, std::uint32_t timeoutMs);
         std::uint64_t Peek();
+        bool WaitClosed(std::uint32_t timeoutMs);
     private:
         void Read();
         ITransport& m_transport;

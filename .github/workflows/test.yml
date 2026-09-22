@@ -1111,6 +1111,9 @@ jobs:
           # and not a phase one - which is the whole reason both lanes exist.
           ctest --output-on-failure -L integration-spawn --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/spawn-baseline.xml"
           python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/spawn-baseline.xml" --require-spawn-ran
+          ctest --show-only=json-v1 -L '^integration-tcp$' > "${RUNNER_TEMP}/tcp-discovery.json"
+          ctest --output-on-failure -L '^integration-tcp$' --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/tcp-baseline.xml"
+          python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/tcp-baseline.xml" --require-tcp-ran --require-run-ahead --discovery "${RUNNER_TEMP}/tcp-discovery.json"
 
       # Both full transport runs are hard gates. The per-case comparison below
       # remains diagnostic because explicit mechanism controls retain their own mode.
@@ -2940,6 +2943,9 @@ jobs:
       - name: The MGPipe generators' checks can still fail
         run: python3 scripts/gen_pipe.py --self-test
 
+      - name: The link seam owns physical storage and keeps link dispatch out of callers
+        run: python3 scripts/ci/link_seam_purity.py --self-test
+
       # The same question for the symbol tool the P1 gate is written in terms of.
       - name: The symbol report's buckets and gates can still fail
         run: python3 scripts/symbol_report.py --self-test
@@ -3015,7 +3021,10 @@ jobs:
       # feat/disaggregated trigger at the top of this file. It costs a couple of seconds and needs
       # no build.
       - name: The split and retrace negative controls still reject a red that is not theirs (R-16)
-        run: bash scripts/ci/control_smoke_test.sh
+        run: |
+          bash scripts/ci/control_smoke_test.sh
+          python3 scripts/ci/test_trace_infrastructure.py
+          python3 scripts/ci/tcp_lane_tools_test.py
 
       # A GATE as of P3a (G5). "pool 与延迟释放原样搬" (ROADMAP.md:19) is meant literally: the
       # buffer pool, the deferred-release drain and the three persistently mapped rings move

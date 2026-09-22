@@ -132,6 +132,8 @@ namespace MobileGL::MG_Remote::Transport {
         // Parent of a session child closes its duplicate without shutdown(2),
         // which would also disconnect the child's inherited socket.
         void CloseLocalCopy();
+        // End requests while retaining the receive side for final diagnostics/EOF.
+        MobileGLResult ShutdownSend();
 
     private:
         // Pulls whatever the socket has into the reassembler. Returns
@@ -153,6 +155,7 @@ namespace MobileGL::MG_Remote::Transport {
 
         FrameReader m_reader;
         std::atomic<bool> m_closed{false};
+        std::atomic<bool> m_readClosed{false};
         bool m_failed = false; // framing violated: latched, never recovers
     };
 

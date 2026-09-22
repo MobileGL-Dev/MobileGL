@@ -213,6 +213,17 @@ endif()
 
 include(GoogleTest)
 gtest_discover_tests(PipeCatalogueTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+# This source scanner must inspect the configured checkout, including in out-of-tree builds.
+# Apply the override after GoogleTest's deferred discovery, and only to this one test.
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/PipeCatalogueSourceRoot.cmake" CONTENT
+"if(\"PipeCatalogue.FrontendNeverTakesAnApplierAddress\" IN_LIST PipeCatalogueTest_TESTS)
+    set_tests_properties(PipeCatalogue.FrontendNeverTakesAnApplierAddress PROPERTIES
+        WORKING_DIRECTORY [==[${MGL_ROOT}]==])
+endif()
+")
+set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/PipeCatalogueSourceRoot.cmake")
+
 gtest_discover_tests(FieldOwnershipTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 foreach(pipeTest ResourceEmitTest VertexInputEmitTest
                  FramebufferEmitTest TextureEmitTest SamplerEmitTest ImageEmitTest

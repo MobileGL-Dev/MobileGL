@@ -26,8 +26,12 @@ def stop(state):
     saved = json.loads(state.read_text())
     pid = saved['pid']
     # PID reuse must never let a stale fixture file kill an unrelated process.
-    if process_start(pid) == saved['start']:
-        os.killpg(pid, signal.SIGTERM)
+    if saved['start'] is not None and process_start(pid) == saved['start']:
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            state.unlink(missing_ok=True)
+            return
         for _ in range(50):
             if process_start(pid) != saved['start']:
                 break
@@ -37,7 +41,7 @@ def stop(state):
                 os.killpg(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-    state.unlink()
+    state.unlink(missing_ok=True)
 
 
 def start(args):
@@ -54,8 +58,10 @@ def start(args):
     if args.state.exists():
         raise RuntimeError(f'stale fixture state; run stop first: {args.state}')
     env = dict(os.environ, MOBILEGL_IPC_ROLE='server', MOBILEGL_IPC_DIAL='no',
-               MOBILEGL_IPC_TOKEN='', MOBILEGL_IPC_LOG_FORWARD='1')
-    for key in ('MOBILEGL_IPC_CONTROL', 'MOBILEGL_IPC_ENDPOINT', 'MOBILEGL_BACKEND_TYPE'):
+               MOBILEGL_IPC_TOKEN='', MOBILEGL_IPC_LOG_FORWARD='1', MOBILEGL_TEST_SERVER_COUNTERS='1',
+               MOBILEGL_PIPE_STATS='1', MOBILEGL_PIPE_STATS_PERIOD='1')
+    for key in ('MOBILEGL_TRANSPORT', 'MOBILEGL_IPC_SERVER_PATH', 'MOBILEGL_IPC_RING_MB', 'MOBILEGL_IPC_STAGE_MB',
+                'MOBILEGL_IPC_CONTROL', 'MOBILEGL_IPC_ENDPOINT', 'MOBILEGL_BACKEND_TYPE'):
         env.pop(key, None)
     log_path = args.state.with_suffix('.log')
     with log_path.open('wb') as log:

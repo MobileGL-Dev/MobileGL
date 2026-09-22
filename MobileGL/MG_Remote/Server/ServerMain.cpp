@@ -4,6 +4,7 @@
 #include "../Transport/SocketTransport.h"
 #include "../Transport/WireLog.h"
 #include "../Protocol/SurfaceOpCodec.h"
+#include "../Handshake.h"
 #include "ServerLoop.h"
 #include "ServerSession.h"
 #include "SurfaceControlFrame.h"
@@ -19,6 +20,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <chrono>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -46,6 +48,17 @@ void ForwardLog(void* user, const char* text) {
     (void)transport.SendFrame({builder.GetBufferPointer(), builder.GetSize()});
 }
 
+void RefuseBusy(SocketTransport& transport, const char* detail) {
+    // Unread Hello bytes can make close send RST and discard our Refuse.
+    std::uint64_t bytes = 0;
+    if (transport.ReceiveFrame({nullptr, 0}, &bytes, 2000) == MOBILEGL_ERR_BUFFER_TOO_SMALL &&
+        bytes <= 1024 * 1024) {
+        std::vector<std::uint8_t> hello(static_cast<std::size_t>(bytes));
+        (void)transport.ReceiveFrame({hello.data(), hello.size()}, &bytes, 0);
+    }
+    Refuse(transport, Protocol::RefuseCode::Busy, detail);
+}
+
 struct FlushAck { ITransport* transport; std::uint64_t seq; };
 void SendLogAck(void* pointer) {
     auto& ack = *static_cast<FlushAck*>(pointer);
@@ -70,6 +83,10 @@ void SendLogAck(void* pointer) {
     if (!Protocol::VerifyCtrlEnvelopeBuffer(verifier)) ::_exit(67);
     const auto* hello = Protocol::GetCtrlEnvelope(helloFrame.data())->msg_as_Hello();
     if (!hello) ::_exit(67);
+    // Reject incompatible wire before backend bring-up can obscure the cause.
+    if (ValidatePeerHandshake(*control, hello->abiMajor(), hello->abiMinor(),
+            hello->wireFingerprint(), hello->buildFingerprint() ? hello->buildFingerprint()->c_str() : nullptr,
+            hello->dialMode()) != MOBILEGL_OK) ::_exit(0);
     if (tcp) {
         const char* expected = std::getenv("MOBILEGL_IPC_TOKEN");
         const std::string token = hello->token() ? hello->token()->str() : std::string();
@@ -178,6 +195,19 @@ void SendLogAck(void* pointer) {
         const auto* envelope = Protocol::GetCtrlEnvelope(buffer.data());
         if (const auto* flush = envelope->msg_as_LogFlush()) {
             if (flush->ack()) break;
+            if (const char* inspect = std::getenv("MOBILEGL_TEST_SERVER_COUNTERS");
+                inspect && std::strcmp(inspect, "1") == 0) {
+                // SyncPeerLog has fenced the client's complete command prefix.
+                // Acquire the applier's publication before reading its counters;
+                // this serial client sends no more records until this ack.
+                const auto applied = session.DataLink()->Progress()->appliedSeq.load(std::memory_order_acquire);
+                const auto& verbs = session.Applier().Verbs();
+                MGLOG_I("MGPipe server counters: applied=%llu resets=%llu reset-serial=%llu deaths=%llu",
+                        static_cast<unsigned long long>(applied),
+                        static_cast<unsigned long long>(verbs.ApplierResets()),
+                        static_cast<unsigned long long>(verbs.ExpectedApplierResetSerial()),
+                        static_cast<unsigned long long>(verbs.ObjectDeaths()));
+            }
             FlushAck ack{control.get(), flush->seq()};
             MobileGL::MG_Util::Debug::WithLogBarrier(&SendLogAck, &ack);
             continue;
@@ -197,13 +227,23 @@ void SendLogAck(void* pointer) {
     MobileGL::MG_Util::PipeStats::Shutdown();
     session.Close();
     MobileGL::MG_Util::Debug::SetLogForwarder(nullptr, nullptr);
-    control->Shutdown();
+    // _exit closes control after cleanup/flush; peer EOF is the client's fence.
     std::fflush(nullptr);
     ::_exit(0);
 }
 }
 
 extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int argc, char** argv) {
+    // The supervisor and every forked session child log under the server role.
+    // Set it here rather than trusting the launcher to have done so: log role is
+    // resolved from this env at first use, and a launcher that omits it would
+    // silently misfile this process's main-thread server lines as the client
+    // role and never forward them. Done before any logging so the value is cached
+    // as server and inherited by the fork children. DIAL/scrub stay hard checks.
+    if (const char* role = std::getenv("MOBILEGL_IPC_ROLE");
+        !role || std::strcmp(role, "server") != 0) {
+        ::setenv("MOBILEGL_IPC_ROLE", "server", 1);
+    }
     const char* dial = std::getenv("MOBILEGL_IPC_DIAL");
     if (!dial || std::strcmp(dial, "no") != 0) {
         std::fprintf(stderr, "MG_Remote server: MOBILEGL_IPC_DIAL=no anti-recursion catch (a) missing\n");
@@ -217,15 +257,15 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
     }
     std::string endpoint;
     bool serve = false;
-    unsigned maxSessions = 0;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
         if (arg == "--serve") serve = true;
         else if (arg == "--max-sessions" && i + 1 < argc) {
             char* end = nullptr;
             const auto count = std::strtoul(argv[++i], &end, 10);
-            if (*end || count == 0 || count > 1000000) return 71;
-            maxSessions = static_cast<unsigned>(count);
+            // This is a concurrency limit, not a cumulative session budget.
+            // P6.5 deliberately supports one active rendering session.
+            if (*end || count != 1) return 71;
         } else if (endpoint.empty() && arg.compare(0, 2, "--") != 0) endpoint = arg;
         else return 71;
     }
@@ -235,10 +275,8 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
     if (SocketTransport::Listen(endpoint, &listener) != MOBILEGL_OK) return 72;
     WireLogError("MG_Remote server: pid=%d listening on %s", static_cast<int>(::getpid()), endpoint.c_str());
     pid_t active = -1;
-    unsigned sessions = 0;
     for (;;) {
         if (active > 0 && ::waitpid(active, nullptr, WNOHANG) == active) active = -1;
-        if (maxSessions && sessions >= maxSessions && active < 0) break;
         std::unique_ptr<SocketTransport> control;
         const auto accepted = SocketTransport::AcceptPair(listener, serve ? 250 : 30000, control);
         if (accepted == MOBILEGL_ERR_TIMEOUT && serve) continue;
@@ -249,16 +287,22 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
             RunSession(std::move(control));
         }
         if (active > 0 && ::waitpid(active, nullptr, WNOHANG) == active) active = -1;
-        if (active > 0 || (maxSessions && sessions >= maxSessions)) {
-            Refuse(*control, Protocol::RefuseCode::Busy, "one session is already active");
+        // exit_group closes files just before waitpid can observe the exit.
+        // Allow that small scheduling window; a live peer remains Busy.
+        const auto reapDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
+        while (active > 0 && std::chrono::steady_clock::now() < reapDeadline) {
+            if (::waitpid(active, nullptr, WNOHANG) == active) { active = -1; break; }
+            ::usleep(1000);
+        }
+        if (active > 0) {
+            RefuseBusy(*control, "one session is already active");
             continue;
         }
         std::fflush(nullptr);
         const pid_t child = ::fork();
         if (child == 0) { ::close(listener); RunSession(std::move(control)); }
-        if (child < 0) { Refuse(*control, Protocol::RefuseCode::Busy, "could not create session child"); continue; }
+        if (child < 0) { RefuseBusy(*control, "could not create session child"); continue; }
         active = child;
-        ++sessions;
         control->CloseLocalCopy();
     }
     ::close(listener);

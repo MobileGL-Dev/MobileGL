@@ -47,6 +47,8 @@ def run_arm(build, out, case, forward):
         env['VK_ICD_FILENAMES'] = '/usr/share/vulkan/icd.d/lvp_icd.json'
     peer_env = dict(env, MOBILEGL_IPC_ROLE='server', MOBILEGL_IPC_DIAL='no',
                     MOBILEGL_IPC_LOG_FORWARD=str(int(forward)), MOBILEGL_LOG_FILE_PATH=str(out / 'peer.log'))
+    for name in ('MOBILEGL_TRANSPORT', 'MOBILEGL_IPC_SERVER_PATH', 'MOBILEGL_IPC_RING_MB', 'MOBILEGL_IPC_STAGE_MB'):
+        peer_env.pop(name, None)
     with (out / 'supervisor.log').open('wb') as output:
         server = subprocess.Popen([str(build / 'libMobileGLServer.so'), endpoint, '--serve'],
                                   env=peer_env, stdout=output, stderr=output, start_new_session=True)
@@ -79,12 +81,15 @@ def run_arm(build, out, case, forward):
             pass
         server.wait(timeout=10)
     passed = failed = skipped = 0
+    marker_assertion_failed = False
     if (out / 'result.xml').exists():
         for entry in ET.parse(out / 'result.xml').getroot().iter('testcase'):
             if entry.find('skipped') is not None or entry.get('status') == 'notrun':
                 skipped += 1
             elif entry.find('failure') is not None:
                 failed += 1
+                marker_assertion_failed = any(marker in (failure.get('message', '') + (failure.text or ''))
+                                              for failure in entry.findall('failure'))
             else:
                 passed += 1
     client_log = read(out / 'client.client.log')
@@ -93,6 +98,7 @@ def run_arm(build, out, case, forward):
             'marker_in_client': marker in client_log,
             'marker_in_server': marker in read(out / 'peer.server.log'),
             'marker_forwarded': marker in read(out / 'client.server.log'),
+            'marker_assertion_failed': marker_assertion_failed,
             'output': str(out)}
 
 
@@ -132,6 +138,7 @@ def main():
                                  and on.get('tcp_armed') and on.get('marker_in_server') and on.get('marker_forwarded')
                                  and off.get('failed') == 1 and not off.get('skipped') and off.get('tcp_armed')
                                  and off.get('marker_in_server') and not off.get('marker_forwarded')
+                                 and off.get('marker_assertion_failed')
                                  and not off.get('marker_in_client'))
         results[case] = arms
         print(case + ': ' + ('PASS' if arms['proved'] else 'NOT PROVEN'), flush=True)

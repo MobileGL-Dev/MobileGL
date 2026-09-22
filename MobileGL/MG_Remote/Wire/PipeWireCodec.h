@@ -343,6 +343,18 @@ namespace MobileGL::MG_Remote::Wire {
         // without a consumer cannot wait for retirement and retain the named refusal.
         void SetLink(Transport::ILink* link) { m_link = link; }
         void SetStageRetirementDoorbell(Transport::Doorbell* bell) { m_stageRetirementBell = bell; }
+        using CancellationHook = Bool (*)(void* self);
+        void SetCancellationState(const std::atomic<bool>* lost, CancellationHook hook, void* self) {
+            m_sessionLost = lost; m_cancellationHook = hook; m_cancellationSelf = self;
+        }
+        // The fast check is used on encode; the doorbell probe only runs while
+        // staging or at an unsuccessful wait boundary.
+        Bool Cancelled() const {
+            return m_cancelled || (m_sessionLost && m_sessionLost->load(std::memory_order_acquire));
+        }
+        Bool CheckCancellation();
+        void SetStageWaitTimeoutMs(Uint32 timeoutMs) { m_stageWaitTimeoutMs = timeoutMs; }
+
 
         // P5e (ra, CONTRACT-P5E §2.6): THE STAGE BELL IS A CLIENT WAIT, so it has to drain the
         // reverse channel like every other one. The encoder cannot drain it itself - SEG_EVENT
@@ -403,6 +415,12 @@ namespace MobileGL::MG_Remote::Wire {
         Uint64 m_cmdWrapPads = 0;
         Uint64 m_stageReclaimWaits = 0;
         Transport::Doorbell* m_stageRetirementBell = nullptr;
+        const std::atomic<bool>* m_sessionLost = nullptr;
+        CancellationHook m_cancellationHook = nullptr;
+        void* m_cancellationSelf = nullptr;
+        Bool m_cancelled = false;
+        Uint32 m_stageWaitTimeoutMs = 120000;
+
         // P5e (ra): the session's event drain, called around the stage-bell park (§2.6).
         StageWaitHook m_stageWaitHook = nullptr;
         void* m_stageWaitSelf = nullptr;

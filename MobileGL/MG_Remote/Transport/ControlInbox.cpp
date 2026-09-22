@@ -74,4 +74,17 @@ namespace MobileGL::MG_Remote::Transport {
         std::lock_guard<std::mutex> lock(m_mutex);
         return m_frames.empty() ? 0 : m_frames.front().size();
     }
+    bool ControlInbox::WaitClosed(std::uint32_t timeoutMs) {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        // Teardown has no outstanding control caller; discard queued snapshots
+        // so the reader can always reach EOF through its bounded inbox.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        for (;;) {
+            m_frames.clear();
+            m_bytes = 0;
+            m_cv.notify_all();
+            if (m_result != MOBILEGL_OK || m_stop) return true;
+            if (m_cv.wait_until(lock, deadline) == std::cv_status::timeout) return m_result != MOBILEGL_OK;
+        }
+    }
 }

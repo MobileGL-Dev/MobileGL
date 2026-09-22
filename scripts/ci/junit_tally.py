@@ -37,7 +37,7 @@ ARM_PREFIXES = {
 TCP_ARM = re.compile(r'control=tcp data=stream server=\S+ pid=[1-9][0-9]*\b')
 
 
-def require_tcp_proof(path, prefix, discovery):
+def require_tcp_proof(path, prefix, discovery, require_run_ahead=False):
     helper_path = Path(__file__).resolve().parents[2] / 'MobileGL/MG_IntegrationTest/Harness/split_log_paths.py'
     spec = importlib.util.spec_from_file_location('split_log_paths', helper_path)
     helper = importlib.util.module_from_spec(spec)
@@ -56,6 +56,9 @@ def require_tcp_proof(path, prefix, discovery):
         output = helper.read_role_logs(logs[name])
         if not TCP_ARM.search(output):
             raise ValueError(f"{case.get('name')}: missing TCP/stream endpoint and server pid arm proof")
+        if require_run_ahead and ('run-ahead ARMED' not in output or 'running lockstep' in output
+                                  or 'run-ahead DISARMED' in output):
+            raise ValueError(f"{case.get('name')}: TCP runtime did not keep requested run-ahead armed")
 
 
 def tally(path, prefix=None):
@@ -79,14 +82,18 @@ def main():
     for flag, prefix in ARM_PREFIXES.items():
         arms.add_argument(flag, dest='prefix', action='store_const', const=prefix)
     parser.add_argument('--discovery', help='CTest --show-only=json-v1 output (required for TCP proof)')
+    parser.add_argument('--require-run-ahead', action='store_true',
+                        help='Additionally prove actual run-ahead, without fallback or demotion, on each TCP case')
     args = parser.parse_args()
     if args.prefix in ('DirectGLES.Tcp.', 'DirectGLES.TcpDevice.') and not args.discovery:
         parser.error('TCP arm proof requires --discovery to locate each private role log')
+    if args.require_run_ahead and args.prefix not in ('DirectGLES.Tcp.', 'DirectGLES.TcpDevice.'):
+        parser.error('--require-run-ahead requires a TCP arm selection')
     try:
         prefix = args.prefix
         passed, failed, skipped = tally(args.junit, prefix=prefix)
         if prefix in ('DirectGLES.Tcp.', 'DirectGLES.TcpDevice.'):
-            require_tcp_proof(args.junit, prefix, args.discovery)
+            require_tcp_proof(args.junit, prefix, args.discovery, args.require_run_ahead)
     except Exception as exc:  # a malformed file is not "zero of everything"
         print(f"junit_tally: cannot prove {args.junit}: {exc}", file=sys.stderr)
         return 1

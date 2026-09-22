@@ -570,6 +570,8 @@ namespace MobileGL::MG_Remote::Transport {
         std::uint64_t FormatCapabilityFormats = 0;
         std::uint64_t FormatCapabilitiesCodecVersion = 0;
         std::uint64_t RendererInfoCodecVersion = 0;
+        std::uint64_t ProgramArtifactsCodecVersion = 0;
+        std::uint64_t ProgramArtifactsSchema = 0;
         std::uint64_t OpCount = 0;
         std::uint32_t AbiVersion = 0;
         std::uint32_t PointerBits = 0;

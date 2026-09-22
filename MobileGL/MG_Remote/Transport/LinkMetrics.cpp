@@ -104,4 +104,22 @@ void LinkMetricsEnd() {
     Emit("summary", metrics.total, ClockNs() - metrics.started, ThreadCpuNs() - metrics.cpuStarted);
     metrics.active = false;
 }
+void LinkMetricsServerPresent(std::uint64_t serial) {
+    // Independent of the client latch: spawn servers never call LinkMetricsBegin.
+    // The baseline belongs to the apply thread, and is discarded if that thread is replaced.
+    static thread_local const bool enabled = [] {
+        const char* value = std::getenv("MOBILEGL_PIPE_STATS");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    if (!enabled) return;
+    static thread_local std::uint64_t previousSerial = 0, previousWall = 0, previousCpu = 0;
+    const auto wall = ClockNs(), cpu = ThreadCpuNs();
+    const bool valid = previousWall != 0 && serial > previousSerial && cpu >= previousCpu;
+    MGLOG_I("P65ServerMetrics frame=%llu valid=%u wall_ns=%llu apply_thread_cpu_ns=%llu",
+        static_cast<unsigned long long>(serial), valid ? 1u : 0u,
+        static_cast<unsigned long long>(valid ? wall - previousWall : 0),
+        static_cast<unsigned long long>(valid ? cpu - previousCpu : 0));
+    previousSerial = serial; previousWall = wall; previousCpu = cpu;
+}
+
 }

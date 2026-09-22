@@ -14,6 +14,7 @@
 
 #include "../CapsCodec.h"
 #include "../Handshake.h"
+#include "../Transport/LinkMetrics.h"
 #include "../Protocol/generated/protocol_generated.h"
 #include "../Transport/InProcessTransport.h"
 
@@ -853,6 +854,7 @@ namespace MobileGL::MG_Remote::Server {
         if (!m_accepted) {
             return;
         }
+        Transport::LinkMetricsServerPresent(serial);
         m_consumer.ReturnPresentCredit(serial);
         FlushDataProgress();
     }

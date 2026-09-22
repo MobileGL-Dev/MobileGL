@@ -18,8 +18,8 @@
 //     and every one of TypeFacts' twenty members - a codec that dropped one would be invisible
 //     until a backend read a reflection answer that had quietly become zero;
 //   * a TRUNCATED stream is refused rather than guessed at;
-//   * a VERSION or struct-size mismatch is refused rather than deserialised into a layout this
-//     build does not have.
+//   * a VERSION or wire-schema mismatch is refused before decoding; native STL object
+//     sizes do not describe a cross-platform serialized archive.
 //
 // AND ONE PROPERTY THAT IS NOT ABOUT BYTES AT ALL: LinkArtifacts has 58 members and its
 // VisitFields table visits 57. The 58th is the live SharedPtr<glslang::TProgram>, which is
@@ -32,6 +32,7 @@
 // stays name-for-name identical between the pull and the push trees.
 
 #include <gtest/gtest.h>
+#include <cstring>
 
 #include "Includes.h"
 #if MOBILEGL_PIPE_PUSH
@@ -325,9 +326,8 @@ TEST(ProgramArtifactsCodec, ATruncatedStreamIsRefusedNotGuessed) {
 #endif
 }
 
-// Negative control 2. The version word and the struct-size echo are the two things a compiler
-// cannot check: a struct that gained a field and a codec that did not would otherwise
-// deserialise garbage into the tail of a reflection table. Both have to REFUSE.
+// Negative control 2: both the version and schema word must refuse mismatches.
+// Monolith v1 retains the old native-size echo in that second word.
 TEST(ProgramArtifactsCodec, AVersionMismatchIsRefused) {
 #if MOBILEGL_PIPE_PUSH
     Vector<Uint8> bytes;
@@ -344,9 +344,7 @@ TEST(ProgramArtifactsCodec, AVersionMismatchIsRefused) {
     ++wrongVersion[0];
     EXPECT_FALSE(DecodeProgramArtifacts(wrongVersion.data(), wrongVersion.size(), link, spirv));
 
-    // Then the MGL_LINKARTIFACTS_SIZE echo, which is the half that catches a struct that grew
-    // under a codec that did not - the failure the four sizeof trip wires in
-    // ProgramArtifacts.h send an author here to fix.
+    // Then the wire schema (v2) or local native-size echo (v1). Neither may be ignored.
     Vector<Uint8> wrongSize = bytes;
     ++wrongSize[4];
     EXPECT_FALSE(DecodeProgramArtifacts(wrongSize.data(), wrongSize.size(), link, spirv));
@@ -371,5 +369,41 @@ TEST(ProgramArtifactsCodec, TheTablesVisitEveryMemberExceptTheLiveProgram) {
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<TypeFacts>(), 20u);
 #else
     GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: the archive codec is push-only";
+#endif
+}
+
+TEST(ProgramArtifactsCodec, PortableHeaderUsesWireSchemaRatherThanNativeContainerSize) {
+#if MOBILEGL_PIPE_PUSH && MOBILEGL_BUILD_DISAGGREGATED
+    Vector<Uint8> bytes;
+    EncodeProgramArtifacts(MakeLinkArtifacts(), MakeSpirvArtifacts(), bytes);
+    ASSERT_GT(bytes.size(), 12u);
+    Uint32 version = 0;
+    Uint64 schema = 0;
+    std::memcpy(&version, bytes.data(), sizeof(version));
+    std::memcpy(&schema, bytes.data() + sizeof(version), sizeof(schema));
+    EXPECT_EQ(version, 2u);
+    EXPECT_EQ(schema, ProgramArtifactsSchemaFingerprint());
+    EXPECT_NE(schema, 0u);
+    EXPECT_NE(schema, sizeof(LinkArtifacts));
+    RecordProperty("program_archive_wire_schema", std::to_string(schema));
+
+    // The old Linux/native echo (1056) and unpinned libc++ echo (0) both fail.
+    // This control distinguishes a portable schema from simply deleting the check.
+    for (const Uint64 legacyEcho : {Uint64{1056}, Uint64{0}}) {
+        auto legacy = bytes;
+        std::memcpy(legacy.data() + sizeof(version), &legacyEcho, sizeof(legacyEcho));
+        LinkArtifacts link;
+        SpirvArtifacts spirv;
+        EXPECT_FALSE(DecodeProgramArtifacts(legacy.data(), legacy.size(), link, spirv));
+        EXPECT_TRUE(link.uniformReflection.empty());
+        EXPECT_TRUE(spirv.generatedSpirv.empty());
+    }
+    auto v1 = bytes;
+    v1[0] = 1;
+    LinkArtifacts link;
+    SpirvArtifacts spirv;
+    EXPECT_FALSE(DecodeProgramArtifacts(v1.data(), v1.size(), link, spirv));
+#else
+    GTEST_SKIP() << "portable archive headers apply to the disaggregated wire";
 #endif
 }

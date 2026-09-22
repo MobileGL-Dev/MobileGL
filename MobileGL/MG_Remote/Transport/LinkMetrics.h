@@ -10,4 +10,5 @@ namespace MobileGL::MG_Remote::Transport {
     void LinkMetricsReplyApplied(std::uint64_t startedNs);
     void LinkMetricsStageBytes(std::uint64_t bytes);
     void LinkMetricsPresent();
+    void LinkMetricsServerPresent(std::uint64_t serial);
 }

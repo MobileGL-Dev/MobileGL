@@ -196,9 +196,9 @@ namespace MobileGL::MG_Remote::Client {
                 // the queue's work is not the caller's budget being spent.
                 const auto wait = producer.WaitForAppliedOrEventBacklog(seq, chunkMs);
                 if (wait == Transport::SessionWait::Reached) {
-                    Transport::RingControl* control = producer.Control();
-                    if (control == nullptr ||
-                        Transport::Watermark::Reached(control->Progress.appliedSeq, seq)) {
+                    const auto* progress = producer.Progress();
+                    if (progress == nullptr ||
+                        Transport::Watermark::Reached(progress->appliedSeq, seq)) {
                         return wait;
                     }
                     DrainEventRing(events);
@@ -1025,8 +1025,20 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     void ClientSession::SyncPeerLog() {
-        if (!m_started || !m_controlInbox || !m_transport || DeviceLost()) return;
-        WaitForApplyToCatchUp("SyncPeerLog");
+        if (!m_started || !m_socketTransport || !m_transport || DeviceLost()) return;
+        const auto submitted = m_producer.LastPublishedSeq();
+        m_producer.PublishAndNotify(submitted);
+        const auto wait = WaitForAppliedBudget(m_producer, *m_events, submitted, kRemoteControlTimeoutMs);
+        if (wait == Transport::SessionWait::ShutDown) {
+            if (const auto* bell = m_producer.SelfDoorbell(); bell && bell->PeerHungUp())
+                LatchDeviceLost("log synchronization woke on a peer that had hung up");
+            return;
+        }
+        if (wait != Transport::SessionWait::Reached) {
+            SessionFail(MGFatalFamily::BarrierTimeout,
+                        "MGPipe: Fatal{BarrierTimeout, LogFlush} apply prefix was not completed");
+        }
+        DrainEventRing(*m_events);
         const std::lock_guard<std::mutex> lock(m_remoteControlMutex);
         const auto seq = ++m_logFlushSeq;
         flatbuffers::FlatBufferBuilder builder(64);
@@ -1254,21 +1266,48 @@ namespace MobileGL::MG_Remote::Client {
         m_encoder = Wire::PipeWireEncoder(m_link.get(), &m_segments);
         m_encoder.SetLink(m_link->Capabilities().PublishIsDelivery ? nullptr : m_link.get());
         m_encoder.SetStageRetirementDoorbell(m_producer.SelfDoorbell());
+        m_encoder.SetStageWaitTimeoutMs(kBarrierTimeoutMs);
+        m_encoder.SetCancellationState(&m_deviceLost, +[](void* self) {
+            auto& session = *static_cast<ClientSession*>(self);
+            auto* bell = session.m_producer.SelfDoorbell();
+            if (bell && bell->PeerHungUp()) {
+                session.LatchDeviceLost("staging observed a peer that had hung up");
+            }
+            return session.m_deviceLost.load(std::memory_order_acquire) || (bell && bell->Dead());
+        }, this);
+
         // P5e (ra, §2.6): the stage bell is a client wait and every client wait drains. The
         // encoder owns the park; the session owns SEG_EVENT, so the session lends it a drain.
         m_encoder.SetStageWaitHook(
             +[](void* self) { DrainEventRing(static_cast<ClientSession*>(self)->Events()); }, this);
 
-        // ---- 7. the first CapsSnapshot, if the server had a backend to publish one from.
-        // ONE DRAIN, ONE ADOPTER (c1): PumpControlPlane below is the only thing in the client
-        // that turns a CapsSnapshot into a CapsMirror generation, so R-12's "a second arrival
-        // IS the invalidation" lives in exactly one place. s1's step here used to stop at
-        // "the snapshot arrived and is verifiable"; it now goes all the way, through the same
-        // function every later arrival goes through.
-        if (PumpControlPlane() == 0) {
-            MGLOG_W("MG_Remote client: the handshake carried no CapsSnapshot - the caps mirror is "
-                    "a PLACEHOLDER until one arrives. Every caps read until then answers a "
-                    "default and says so");
+        // ---- 7. A real first snapshot belongs to startup, not to a later GL call.
+        // Inproc already queued it; an independent control reader may still be
+        // receiving it. Do not latch run-ahead against a placeholder: promotion
+        // after this first decision is deliberately forbidden.
+        {
+            std::vector<Uint8> initialCaps;
+            const auto received = ReceiveControlFrame(initialCaps, kHandshakeTimeoutMs);
+            if (received != MOBILEGL_OK) {
+                MGLOG_E("MG_Remote client: Refuse{InitialCapsSnapshot} no initial capabilities "
+                        "within %u ms (rc=%d); the session was not started",
+                        kHandshakeTimeoutMs, static_cast<int>(received));
+                Stop();
+                return received;
+            }
+            const auto* envelope = ParseEnvelope(initialCaps);
+            if (envelope == nullptr || envelope->msg_type() != ::MobileGL::Wire::CtrlMsg::CapsSnapshot ||
+                envelope->msg_as_CapsSnapshot() == nullptr ||
+                !AdoptCapsSnapshot(envelope->msg_as_CapsSnapshot())) {
+                MGLOG_E("MG_Remote client: Refuse{InitialCapsSnapshot} first post-Welcome control "
+                        "frame is not a valid capabilities snapshot; the session was not started");
+                Stop();
+                return MOBILEGL_ERR_PROTOCOL_MISMATCH;
+            }
+            LatchRunAheadFromCaps();
+            // A newer snapshot already queued may demote the initial decision.
+            // LogLine frames on TCP were filtered by ControlInbox before this read.
+            PumpControlPlane();
         }
 
         // BOTH, AND m_started FIRST. `Active()` is what the integration lane's skip reads and
@@ -1363,8 +1402,7 @@ namespace MobileGL::MG_Remote::Client {
             // gets right, and only then do the transports go.
             m_producer.Detach();
             m_link = Transport::CreateSharedLink(Transport::TransportRoleTag::ClientProducer);
-        m_cmd = &m_link->CommandsOut(); m_events = &m_link->EventsIn();
-        m_link->Memory().Close();
+            m_cmd = &m_link->CommandsOut(); m_events = &m_link->EventsIn();
             Server::ServerSessionInstance().Close();
             m_clientTransport.reset();
             m_serverTransport.reset();
@@ -1379,8 +1417,7 @@ namespace MobileGL::MG_Remote::Client {
         //
         // 1. publish and let the server drain. Bounded: a lost record must be a red lane, not
         //    a hung exit.
-        Transport::RingControl* control = m_link->Memory().CmdControl();
-        if (control != nullptr) {
+        if (m_link->Attached()) {
             // The PRODUCER's own last-published seq, not RingControl::submittedSeq. Ring.h:72-77
             // permits submittedSeq to be published lazily and Ring.h:243 encourages batching
             // the publish, so the shared watermark is allowed to lag the emitter - and a drain
@@ -1403,6 +1440,26 @@ namespace MobileGL::MG_Remote::Client {
         //    kWaitForever (CondVarDoorbell::Kill): a Notify is consumed by one Park, after which
         //    Doorbell::Wait re-tests a condition nothing published, finds the bell alive and
         //    parks again, forever. InProcessChannel::Close kills both bells.
+        // Request EOF starts remote backend destruction. Keep receiving until
+        // peer EOF, so the next client cannot overtake that session's cleanup.
+        if (m_socketTransport && !m_deviceLost.load(std::memory_order_acquire) &&
+            m_socketTransport->ShutdownSend() == MOBILEGL_OK) {
+            bool closed = false;
+            if (m_controlInbox) closed = m_controlInbox->WaitClosed(kDrainTimeoutMs);
+            else {
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kDrainTimeoutMs);
+                for (;;) {
+                    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        deadline - std::chrono::steady_clock::now()).count();
+                    if (left <= 0) break;
+                    std::vector<Uint8> finalFrame;
+                    const auto result = ReceiveControlFrame(finalFrame, static_cast<Uint32>(left));
+                    if (result == MOBILEGL_ERR_TRANSPORT_CLOSED) { closed = true; break; }
+                    if (result != MOBILEGL_OK) break;
+                }
+            }
+            if (!closed) MGLOG_W("MG_Remote client: remote teardown did not reach EOF within %u ms", kDrainTimeoutMs);
+        }
         if (m_transport != nullptr) {
             m_transport->Shutdown();
         }
@@ -1530,12 +1587,17 @@ namespace MobileGL::MG_Remote::Client {
                     Wire::WireOpName(op));
         }
 
+        const auto declineCancelled = [&] {
+            if (statusOut) *statusOut = Wire::ReplySink::kStatusDeclined;
+            return Wire::kInvalidSeq;
+        };
+        if (DeviceLost() || m_encoder.Cancelled()) return declineCancelled();
         const Bool rowCarriesReplySlot =
             (MG_Pipe::MGPipeCallFlagsFor(op) & static_cast<Uint32>(MG_Pipe::kReplySlot)) != 0;
         const Bool ownsReplySlot = rowCarriesReplySlot && wantReply;
-        const auto replyMetricStart = Transport::LinkMetricsBeginReply(ownsReplySlot);
         Uint64 seq = m_encoder.EncodeRecord(op, payload, payloadBytes, tails, tailCount);
         if (seq == Wire::kInvalidSeq) {
+            if (DeviceLost() || m_encoder.Cancelled()) return declineCancelled();
             // EncodeRecord already refused individually oversized records. This one fits,
             // but appliedSeq may be ahead of retiredTail: wait for actual reclaimable space,
             // including the wrap pad. Prior EmitAndWait calls have published every record.
@@ -1545,6 +1607,10 @@ namespace MobileGL::MG_Remote::Client {
             const Uint64 needed = layout.TotalBytes + (toEnd < layout.TotalBytes ? toEnd : 0);
             const BarrierWaitScope waiting;
             const auto wait = m_producer.WaitForCmdSpace(needed, kBarrierTimeoutMs);
+            if (wait == Transport::SessionWait::ShutDown) {
+                (void)m_encoder.CheckCancellation();
+                return declineCancelled();
+            }
             if (wait != Transport::SessionWait::Reached) {
                 SessionFail(MGFatalFamily::RetirementWaitFailed, "MGPipe: Fatal{RetirementWaitFailed, \"SEG_CMD\"} - %s needs %llu "
                         "reclaimable bytes; the retirement wait ended on %s",
@@ -1559,6 +1625,7 @@ namespace MobileGL::MG_Remote::Client {
             DrainEventRing(*m_events);
             seq = m_encoder.EncodeRecord(op, payload, payloadBytes, tails, tailCount);
             if (seq == Wire::kInvalidSeq) {
+                if (DeviceLost() || m_encoder.Cancelled()) return declineCancelled();
                 SessionFail(MGFatalFamily::RingOverrun, "MGPipe: Fatal{RingOverrun, \"SEG_CMD\"} - %s refused after sufficient "
                         "space retired", Wire::WireOpName(op));
             }
@@ -1567,8 +1634,14 @@ namespace MobileGL::MG_Remote::Client {
         // Publish the head, record submittedSeq, THEN ring - in that order, which is
         // SessionProducer's one job and RingTest.cpp:446's pin. Notify-then-publish loses the
         // wakeup.
+        const auto replyMetricStart = Transport::LinkMetricsBeginReply(ownsReplySlot);
         m_producer.PublishAndNotify(seq);
-        if (op == MG_Pipe::MGPWireOp::Present) Transport::LinkMetricsPresent();
+        if (op == MG_Pipe::MGPWireOp::Present) {
+            // A credit is permission to run ahead, not permission to retain the
+            // last frame locally until another frame or a wait happens to arrive.
+            Flush();
+            Transport::LinkMetricsPresent();
+        }
 
         // Does this row own a reply slot? kMGPipeCallFlags IS THE SINGLE SOURCE OF TRUTH
         // (R-16 / ID-31) - fourteen rows now, because the four Bool acceptance entry points
@@ -1871,6 +1944,18 @@ namespace MobileGL::MG_Remote::Client {
 #endif
     }
 
+    void ClientSession::Flush() {
+        if (!m_started || !m_link) return;
+        const auto result = m_link->Flush();
+        if (result == MOBILEGL_ERR_TRANSPORT_CLOSED) {
+            if (m_link->PeerHungUp()) LatchDeviceLost("published commands could not reach the disconnected peer");
+        } else if (result != MOBILEGL_OK) {
+            SessionFail(MGFatalFamily::ProtocolCorruption,
+                        "MGPipe: Fatal{ProtocolCorruption, link flush} published commands were not delivered (rc=%d)",
+                        static_cast<int>(result));
+        }
+    }
+
     void ClientSession::Finish() {
         // glFinish. Nothing goes on the wire - Flush and Finish have no record (ARCHITECTURE
         // §11) - and under lockstep there was nothing to do, because the client had already
@@ -1909,9 +1994,9 @@ namespace MobileGL::MG_Remote::Client {
                 // swapping, and this waiter holds the only drain.
                 wait = m_producer.WaitForPresentAckOrEventBacklog(awaited, kBarrierTimeoutMs);
                 if (wait != Transport::SessionWait::Reached) break;
-                Transport::RingControl* control = m_producer.Control();
-                if (control == nullptr ||
-                    Transport::Watermark::Reached(control->Progress.presentAckSerial, awaited)) {
+                const auto* progress = m_producer.Progress();
+                if (progress == nullptr ||
+                    Transport::Watermark::Reached(progress->presentAckSerial, awaited)) {
                     break;
                 }
                 DrainEventRing(*m_events);

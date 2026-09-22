@@ -79,6 +79,8 @@ namespace MobileGL::MG_Remote::Transport {
     // Incremental frame extractor over a raw byte stream.
     class FrameReader {
     public:
+        explicit FrameReader(std::uint32_t expectedMagic = kFrameMagic) : m_expectedMagic(expectedMagic) {}
+
         // Feeds raw stream bytes. Validates the frame header the moment enough
         // bytes for one exist - a bad magic or an oversized length is reported
         // here, not swallowed.
@@ -163,11 +165,11 @@ namespace MobileGL::MG_Remote::Transport {
             std::uint32_t length = 0;
             std::memcpy(&magic, m_buffer.data() + m_readPos, sizeof(magic));
             std::memcpy(&length, m_buffer.data() + m_readPos + 4, sizeof(length));
-            if (magic != kFrameMagic) {
+            if (magic != m_expectedMagic) {
                 m_failed = true;
                 WireLogError("MG_Remote framing: bad frame magic 0x%08X (expected 0x%08X); the "
                              "control stream is desynchronized and this transport is now dead",
-                             magic, kFrameMagic);
+                             magic, m_expectedMagic);
                 return MOBILEGL_ERR_PROTOCOL_MISMATCH;
             }
             if (length > kMaxFramePayloadSize) {
@@ -203,6 +205,7 @@ namespace MobileGL::MG_Remote::Transport {
         std::uint64_t m_pendingSize = 0;
         bool m_haveHeader = false;
         bool m_failed = false;
+        std::uint32_t m_expectedMagic = kFrameMagic;
     };
 
 } // namespace MobileGL::MG_Remote::Transport

@@ -858,7 +858,16 @@ namespace MobileGL::MG_Remote::Wire {
 
     Bool PipeWireEncoder::Valid() const { return m_progress != nullptr && m_cmd != nullptr; }
 
+    Bool PipeWireEncoder::CheckCancellation() {
+        if (Cancelled() || (m_cancellationHook && m_cancellationHook(m_cancellationSelf)) ||
+            (m_stageRetirementBell && m_stageRetirementBell->Dead())) {
+            m_cancelled = true;
+        }
+        return m_cancelled;
+    }
+
     Uint8* PipeWireEncoder::StageAllocate(Uint64 size) {
+        if (CheckCancellation()) return nullptr;
         if (m_stageBase == nullptr) {
             const SegmentView view = m_segments != nullptr ? m_segments->Get(kSegStage)
                                                            : SegmentView{};
@@ -912,6 +921,7 @@ namespace MobileGL::MG_Remote::Wire {
         bool reclaimed = false;
         bool waited = false;
         for (;;) {
+            if (CheckCancellation()) return nullptr;
             // THE WRAP SKIP MAY ONLY BE CHARGED AGAINST BYTES THAT ARE STILL IN FLIGHT. When
             // there are none the allocator starts over at offset zero, so a blob the segment
             // can hold whole is never refused (see RebaseEmptyStage). On retry this runs
@@ -952,9 +962,13 @@ namespace MobileGL::MG_Remote::Wire {
                 // therefore no reverse channel to drain.
                 if (m_stageWaitHook != nullptr) m_stageWaitHook(m_stageWaitSelf);
                 if (m_link) m_link->Flush();
-                if (!ready() && !m_stageRetirementBell->Wait(*m_signals.ProducerParked, ready, 0, 5000)) {
-                    SessionFail(MGFatalFamily::RetirementWaitFailed, "MGPipe: Fatal{RetirementWaitFailed, \"SEG_STAGE\"} producer wait "
-                            "ended before the pending allocation retired (shutdown or timeout)");
+                if (CheckCancellation()) return nullptr;
+                if (!ready() && !m_stageRetirementBell->Wait(*m_signals.ProducerParked, ready, 0,
+                                                           m_stageWaitTimeoutMs)) {
+                    if (CheckCancellation()) return nullptr;
+                    SessionFail(MGFatalFamily::RetirementWaitFailed,
+                        "MGPipe: Fatal{RetirementWaitFailed, \"SEG_STAGE\"} live peer did not retire "
+                        "the pending allocation within %u ms", m_stageWaitTimeoutMs);
                 }
                 if (m_stageWaitHook != nullptr) m_stageWaitHook(m_stageWaitSelf);
             }
@@ -972,6 +986,7 @@ namespace MobileGL::MG_Remote::Wire {
     }
 
     MGPBlobRef PipeWireEncoder::StageBytes(const void* bytes, Uint64 size) {
+        if (CheckCancellation()) return {};
         if (!Valid() || m_segments == nullptr) {
             WireProtocolFatal("PipeWireEncoder::StageBytes",
                               "no command producer or segment table installed");
@@ -988,6 +1003,7 @@ namespace MobileGL::MG_Remote::Wire {
         }
 
         Uint8* slot = StageAllocate(size);
+        if (slot == nullptr || CheckCancellation()) return {};
         std::memcpy(slot, bytes, static_cast<SizeT>(size));
         const Uint64 offset = static_cast<Uint64>(slot - m_stageBase);
         if (m_link) m_link->NoteStage({offset, size});
@@ -1017,6 +1033,7 @@ namespace MobileGL::MG_Remote::Wire {
 
     Uint64 PipeWireEncoder::EncodeRecord(MGPWireOp op, const void* payload, Uint64 payloadBytes,
                                          const WireTail* tails, Uint32 tailCount) {
+        if (Cancelled()) return kInvalidSeq;
         if (!Valid()) {
             WireProtocolFatal("PipeWireEncoder::EncodeRecord", "no SEG_CMD producer installed");
         }
@@ -1358,14 +1375,14 @@ namespace MobileGL::MG_Remote::Wire {
     // ---------------------------------------------------------------------------------
 
     PipeWireDecoder::PipeWireDecoder(Transport::ILink* link, SegmentTable* segments, ReplySink* replies)
-        : m_segments(segments), m_replies(replies), m_valid(link && link->Attached()) {
+        : m_valid(link && link->Attached()), m_segments(segments), m_replies(replies) {
         m_auditPoison = MG_Config::Ipc.Audit;
         InstallApplyHook();
     }
 
     PipeWireDecoder::PipeWireDecoder(Transport::RingControl* control, SegmentTable* segments,
                                      ReplySink* replies)
-        : m_segments(segments), m_replies(replies), m_valid(control != nullptr) {
+        : m_valid(control != nullptr), m_segments(segments), m_replies(replies) {
         m_auditPoison = MG_Config::Ipc.Audit;
         // Once, at construction, beside the resolver it is modelled on - not per record from
         // the apply thread. The thunk is inert without a decoder on the calling thread, so an

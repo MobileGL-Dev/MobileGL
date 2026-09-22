@@ -32,9 +32,9 @@
 // path.
 //
 // THE FORMAT, and every part of it is a refusal rather than a guess:
-//   * a VERSION word first, and a MGL_LINKARTIFACTS_SIZE echo second, so a struct that gained
-//     a field and a codec that did not is a MISMATCH AT READ TIME rather than a silent
-//     truncation that deserialises garbage into the tail of a reflection table;
+//   * a VERSION word first, and a wire-schema fingerprint second (v2), so member order,
+//     type or count-layout drift is a MISMATCH before decoding. The local-only v1 form
+//     retains its legacy native-size echo;
 //   * length-prefixed everything - strings, vectors, maps, sets - with the count checked
 //     against the bytes that remain before a single element is allocated, so a corrupt count
 //     cannot turn into a four-billion-element resize;
@@ -54,19 +54,20 @@
 // member it does not carry is one no twin has ever asked for. It could not be carried in any
 // case: it points into a glslang arena that no archived instance owns.
 //
-// AND THE OTHER HALF OF THAT CONTRACT LINE - `ProgramArtifactsCodec.cpp`'s libc++ caveat - is
-// about the STRUCT-SIZE ECHO, not about a member: under a toolchain whose `MGL_LINKARTIFACTS_SIZE`
-// is not pinned yet (the NDK's libc++ branch of `ProgramArtifacts.h`, inert until the integrator
-// fills it in) the echo word is 0. That is SAFE FOR P5e AND NOT A GAP: the echo compares what
-// this build wrote against what this build expects, so a round trip within one build is exact,
-// and P5e is an in-process split where the writer and the reader ARE one build. It becomes a
-// real check the day a client and a server built by different toolchains share a wire, which is
-// P6's boundary and P6's problem - stated here so it cannot be discovered instead.
+// P6.5: native STL object sizes never describe this field-wise byte stream. Disaggregated
+// peers use v2's recursive wire-schema fingerprint; monolith verification retains v1.
 namespace MobileGL::MG_State::GLState {
 
     // Bumped whenever the byte format changes in a way a previous reader would misread. A
     // reader that sees a different word REFUSES; it never tries to guess a layout.
+#if MOBILEGL_BUILD_DISAGGREGATED
+    inline constexpr Uint32 kProgramArtifactsCodecVersion = 2;
+    // Derived from the actual VisitFields order/names, container element schemas and scalar
+    // representations. No native container size/offset is included. Also checked in Hello.
+    Uint64 ProgramArtifactsSchemaFingerprint();
+#else
     inline constexpr Uint32 kProgramArtifactsCodecVersion = 1;
+#endif
 
     // Appends the archive to `out` (which is not cleared, so a caller may frame it). Never
     // fails: everything it walks is owned plain data.
@@ -75,7 +76,7 @@ namespace MobileGL::MG_State::GLState {
 
     // Replaces `link` and `spirv` with what `bytes` describes. Returns false - with both
     // outputs left in a defined, default state - for a truncated stream, a version mismatch, a
-    // struct-size mismatch, or trailing bytes the format does not account for. `link.program`
+    // wire-schema mismatch (native-size echo for local v1), or trailing bytes. `link.program`
     // is always null on return.
     Bool DecodeProgramArtifacts(const Uint8* bytes, SizeT size, LinkArtifacts& link,
                                 SpirvArtifacts& spirv);

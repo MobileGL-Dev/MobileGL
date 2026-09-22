@@ -11,6 +11,8 @@
 #if !defined(__ANDROID__)
 #include <MG_State/GLState/BufferState/BufferObject.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_Util/Metrics/PipeStats.h>
+#include <Config.h>
 #define MGITEST_PERSISTENT_MAP_PEEK_LIVE 1
 #endif
 
@@ -26,6 +28,19 @@
 #endif
 
 namespace MGITest {
+
+    bool PeekSeparateClientMapStats(unsigned long long* acquisitions, unsigned long long* pushedBytes) {
+#if defined(MGITEST_PERSISTENT_MAP_PEEK_LIVE) && MOBILEGL_BUILD_DISAGGREGATED && MOBILEGL_PIPE_PUSH
+        if (MobileGL::MG_Config::Transport != MobileGL::MG_Config::TransportMode::Spawn) return false;
+        namespace Stats = MobileGL::MG_Util::PipeStats;
+        *acquisitions = Stats::TotalCalls(Stats::CallClass::MapPersistentRoundtrips);
+        *pushedBytes = Stats::TotalBytes(Stats::ByteClass::PersistentMapPush);
+        return true;
+#else
+        (void)acquisitions; (void)pushedBytes;
+        return false;
+#endif
+    }
 
     bool PersistentMapPeekAvailable() {
 #if defined(MGITEST_PERSISTENT_MAP_PEEK_LIVE)

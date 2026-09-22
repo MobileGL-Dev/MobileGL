@@ -263,6 +263,8 @@ namespace MobileGL::MG_Pipe {
     // monolith transport, and on a lockstep one (there the client waited out every command it
     // issued before it could reach the call).
     void MGPipeClientFinish();
+    // Submit a stream link's published prefix; never wait for appliedSeq.
+    void MGPipeClientFlush();
 #endif
 
     void MGPipeEmitResourceCreate(MG_State::GLState::BufferObject& buffer);

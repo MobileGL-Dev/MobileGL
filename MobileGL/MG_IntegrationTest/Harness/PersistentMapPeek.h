@@ -58,4 +58,8 @@ namespace MGITest {
     // Same contract as above: false means "could not look".
     bool PeekBufferIsLivePersistentMap(unsigned int bufferName, bool* outLive);
 
+    // Separate-process clients own these counters; the remote Present window
+    // belongs to the server and cannot report client map acquisitions or bytes.
+    bool PeekSeparateClientMapStats(unsigned long long* acquisitions, unsigned long long* pushedBytes);
+
 } // namespace MGITest

@@ -245,6 +245,9 @@ namespace MobileGL::MG_Remote::Client {
         // true while a run-ahead queue still holds them, so under run-ahead glFinish becomes
         // exactly WaitForApplyToCatchUp + the drain that comes with it.
         void Finish();
+        // Submit published commands without waiting for application. This is
+        // glFlush's contract and the frame-submit boundary for Present.
+        void Flush();
 
         // The last seq this session published, whether or not it waited for it. The forced
         // waits above are defined against it.

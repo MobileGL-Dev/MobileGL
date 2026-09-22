@@ -13,6 +13,7 @@
 #include <bit>
 #include <cstring>
 #include <set>
+#include <limits>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -70,6 +71,88 @@ namespace MobileGL::MG_State::GLState {
         template <class T>
         concept ArchiveUniformInitializer = std::same_as<T, UniformInitializer>;
 
+        // glslang supplies no VisitFields table for this aggregate. Keep its one explicit
+        // table shared by the payload writer, reader and wire-schema walk.
+        template <class Self, class Visitor>
+        void VisitUniformInitializer(Self& value, Visitor&& visit) {
+            visit("name", value.name);
+            visit("basicType", value.basicType);
+            visit("vectorSize", value.vectorSize);
+            visit("matrixCols", value.matrixCols);
+            visit("matrixRows", value.matrixRows);
+            visit("arraySize", value.arraySize);
+            visit("intValues", value.intValues);
+            visit("floatValues", value.floatValues);
+        }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        void SchemaWord(Uint64& hash, Uint64 word) {
+            for (unsigned i = 0; i < 8; ++i) {
+                hash ^= (word >> (i * 8)) & 255u;
+                hash *= 1099511628211ull;
+            }
+        }
+        void SchemaName(Uint64& hash, const char* text) {
+            do {
+                hash ^= static_cast<unsigned char>(*text);
+                hash *= 1099511628211ull;
+            } while (*text++ != '\0');
+        }
+        template <class Value>
+        void DescribeWireType(Uint64& hash) {
+            using T = std::remove_cv_t<Value>;
+            if constexpr (ArchiveScalar<T>) {
+                // These are the bytes PutRaw/TakeRaw actually carry, not the surrounding
+                // C++ object's layout. Equal-width signed/unsigned or float/int differ.
+                if constexpr (std::is_enum_v<T>) {
+                    SchemaName(hash, "enum");
+                    DescribeWireType<std::underlying_type_t<T>>(hash);
+                } else {
+                    SchemaName(hash, std::is_same_v<T, bool> ? "bool" :
+                                     std::is_floating_point_v<T> ? "ieee-float" :
+                                     std::is_signed_v<T> ? "signed" : "unsigned");
+                    SchemaWord(hash, sizeof(T));
+                    if constexpr (std::is_floating_point_v<T>) {
+                        static_assert(std::numeric_limits<T>::is_iec559);
+                        SchemaWord(hash, std::numeric_limits<T>::digits);
+                        SchemaWord(hash, std::numeric_limits<T>::max_exponent);
+                    }
+                }
+            } else if constexpr (ArchiveString<T>) {
+                SchemaName(hash, "string-u64-count-byte-content");
+            } else if constexpr (ArchiveMap<T>) {
+                SchemaName(hash, "map-u64-count");
+                DescribeWireType<typename T::key_type>(hash);
+                DescribeWireType<typename T::mapped_type>(hash);
+            } else if constexpr (ArchiveSet<T>) {
+                SchemaName(hash, "set-u64-count");
+                DescribeWireType<typename T::value_type>(hash);
+            } else if constexpr (ArchiveFixedArray<T>) {
+                SchemaName(hash, "fixed-array");
+                SchemaWord(hash, std::tuple_size<T>::value);
+                DescribeWireType<typename T::value_type>(hash);
+            } else if constexpr (ArchiveVector<T>) {
+                SchemaName(hash, "vector-u64-count");
+                DescribeWireType<typename T::value_type>(hash);
+            } else {
+                SchemaName(hash, ArchiveUniformInitializer<T> ? "uniform-initializer" : "record");
+                // Visit only types/names from default records. Container contents are never
+                // traversed, and no sizeof(string/vector/map), offset or allocator enters it.
+                T value{};
+                Uint64 fields = 0;
+                const auto field = [&](const char* name, const auto& member) {
+                    ++fields;
+                    SchemaName(hash, name);
+                    DescribeWireType<std::remove_cvref_t<decltype(member)>>(hash);
+                };
+                if constexpr (ArchiveUniformInitializer<T>) VisitUniformInitializer(value, field);
+                else VisitFields(value, field);
+                SchemaWord(hash, fields);
+                SchemaName(hash, "end-record");
+            }
+        }
+#endif
+
         // ---- the writer ----
 
         template <class T>
@@ -117,6 +200,11 @@ namespace MobileGL::MG_State::GLState {
             } else if constexpr (ArchiveVector<T>) {
                 WriteSequence(out, value);
             } else if constexpr (ArchiveUniformInitializer<T>) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                VisitUniformInitializer(value, [&out](const char*, const auto& member) {
+                    WriteValue(out, member);
+                });
+#else
                 WriteValue(out, value.name);
                 WriteValue(out, value.basicType);
                 WriteValue(out, value.vectorSize);
@@ -125,6 +213,7 @@ namespace MobileGL::MG_State::GLState {
                 WriteValue(out, value.arraySize);
                 WriteValue(out, value.intValues);
                 WriteValue(out, value.floatValues);
+#endif
             } else {
                 // The archive's own structs: TypeFacts, ResourceReflection, XfbVarying. ONE
                 // table serves both directions, so a member added to any of them is carried by
@@ -223,6 +312,11 @@ namespace MobileGL::MG_State::GLState {
                     if (!in.Ok) return;
                 }
             } else if constexpr (ArchiveUniformInitializer<T>) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                VisitUniformInitializer(value, [&in](const char*, auto& member) {
+                    if (in.Ok) ReadValue(in, member);
+                });
+#else
                 ReadValue(in, value.name);
                 ReadValue(in, value.basicType);
                 ReadValue(in, value.vectorSize);
@@ -231,6 +325,7 @@ namespace MobileGL::MG_State::GLState {
                 ReadValue(in, value.arraySize);
                 ReadValue(in, value.intValues);
                 ReadValue(in, value.floatValues);
+#endif
             } else {
                 VisitFields(value, [&in](const char*, auto& field) {
                     if (in.Ok) ReadValue(in, field);
@@ -238,29 +333,41 @@ namespace MobileGL::MG_State::GLState {
             }
         }
 
-        // The struct-size echo. Under a toolchain whose sizes are not pinned yet
-        // (ProgramArtifacts.h's libc++ branch until the integrator fills it in) this is 0,
-        // which still round-trips within one build - the echo compares what THIS build wrote
-        // against what THIS build expects - and stops mattering the moment the pin lands.
-        //
-        // P5e (pg) READ THIS LINE AS THE CONTRACT ASKED (CONTRACT-P5E §5.5) and its verdict is
-        // in ProgramArtifactsCodec.h's header comment: the caveat is about the ECHO WORD, not
-        // about a member the codec skips - the one member VisitFields omits is
-        // `LinkArtifacts::program`, and no backend twin reads it. A 0 echo is exact for an
-        // in-process split, where the writer and the reader are one build, and becomes a real
-        // cross-toolchain check when P6 puts a client and a server in different processes
-        // built by different compilers.
+        // v1 is retained for local monolith verification. Its native size echo is not a
+        // wire compatibility fact: libstdc++ writes 1056 while unpinned libc++ writes zero.
+#if !MOBILEGL_BUILD_DISAGGREGATED
 #ifdef MGL_LINKARTIFACTS_SIZE
         inline constexpr Uint64 kLinkArtifactsSizeEcho = MGL_LINKARTIFACTS_SIZE;
 #else
         inline constexpr Uint64 kLinkArtifactsSizeEcho = 0;
 #endif
+#endif
     } // namespace
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Uint64 ProgramArtifactsSchemaFingerprint() {
+        static const Uint64 fingerprint = [] {
+            Uint64 hash = 1469598103934665603ull;
+            SchemaName(hash, "MobileGL.ProgramArchive.v2.little-endian");
+            // The outer stage framing is part of the same wire contract.
+            SchemaName(hash, "stage-list-u32-count-u32-elements");
+            SchemaWord(hash, kProgramArchiveMaxStages);
+            DescribeWireType<LinkArtifacts>(hash);
+            DescribeWireType<SpirvArtifacts>(hash);
+            return hash == 0 ? Uint64{1} : hash;
+        }();
+        return fingerprint;
+    }
+#endif
 
     void EncodeProgramArtifacts(const LinkArtifacts& link, const SpirvArtifacts& spirv,
                                 Vector<Uint8>& out) {
         PutRaw(out, kProgramArtifactsCodecVersion);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        PutRaw(out, ProgramArtifactsSchemaFingerprint());
+#else
         PutRaw(out, kLinkArtifactsSizeEcho);
+#endif
         // `link` is walked through its own VisitFields table, which omits the live
         // SharedPtr<glslang::TProgram>: 57 of the 58 members. There is no arm here for it and
         // there must not be one - it points into a glslang arena that no archived instance
@@ -280,14 +387,16 @@ namespace MobileGL::MG_State::GLState {
 
         ReadCursor in{bytes, size, 0, true};
         Uint32 version = 0;
-        Uint64 sizeEcho = 0;
-        if (!TakeRaw(in, version) || !TakeRaw(in, sizeEcho)) return false;
-        // REFUSED, NOT GUESSED. A different version word or a struct that changed width means
-        // the bytes describe a layout this build does not have; deserialising them anyway
-        // writes garbage into the tail of a reflection table, which is exactly the failure the
-        // two words exist to turn into a clean false.
+        Uint64 schema = 0;
+        if (!TakeRaw(in, version) || !TakeRaw(in, schema)) return false;
+        // Refuse the declared wire shape before reading any field. In v2 the second word
+        // follows serialization types/order; C++ container object sizes are irrelevant.
         if (version != kProgramArtifactsCodecVersion) return false;
-        if (sizeEcho != kLinkArtifactsSizeEcho) return false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (schema != ProgramArtifactsSchemaFingerprint()) return false;
+#else
+        if (schema != kLinkArtifactsSizeEcho) return false;
+#endif
 
         ReadValue(in, link);
         ReadValue(in, spirv);

@@ -1251,6 +1251,14 @@ namespace MobileGL::MG_Pipe {
 
     // P5e (ra), CONTRACT-P5E §2.5. Declared in PipeMutation.h; see there for why it is not a
     // ClientSession call at the GL entry point.
+    void MGPipeClientFlush() {
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        if (MG_Remote::Client::RunsAsTheServerRole()) return;
+        if (MG_Remote::Client::ClientSession* session = MG_Remote::Client::ClientSession::Active()) {
+            session->Flush();
+        }
+    }
+
     void MGPipeClientFinish() {
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
         if (MG_Remote::Client::RunsAsTheServerRole()) return;

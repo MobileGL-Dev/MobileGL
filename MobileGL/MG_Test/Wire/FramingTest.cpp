@@ -195,3 +195,21 @@ TEST(FramingTest, ManyMessagesCompactTheBufferInsteadOfGrowing) {
     }
     EXPECT_EQ(reader.BufferedBytes(), 0u);
 }
+
+TEST(Framing, ADataMagicReaderKeepsTheSameLengthAndReassemblyRules) {
+    using namespace MobileGL::MG_Remote::Transport;
+    constexpr std::uint32_t dataMagic = 0x444c474d;
+    std::vector<std::uint8_t> payload(20 + 9, 0x5a), framed;
+    ASSERT_EQ(AppendFrame(framed, payload.data(), payload.size()), MOBILEGL_OK);
+    std::memcpy(framed.data(), &dataMagic, sizeof dataMagic);
+    FrameReader reader(dataMagic);
+    ASSERT_EQ(reader.Feed(framed.data(), 7), MOBILEGL_OK);
+    EXPECT_FALSE(reader.HasMessage());
+    ASSERT_EQ(reader.Feed(framed.data() + 7, framed.size() - 7), MOBILEGL_OK);
+    EXPECT_EQ(reader.PendingMessageSize(), payload.size());
+    std::vector<std::uint8_t> received;
+    ASSERT_EQ(reader.TakeMessage(received), MOBILEGL_OK);
+    EXPECT_EQ(received, payload);
+    FrameReader controlReader;
+    EXPECT_EQ(controlReader.Feed(framed.data(), framed.size()), MOBILEGL_ERR_PROTOCOL_MISMATCH);
+}

@@ -50,9 +50,11 @@ CTS 周转单独计价（`gl44to46` 约 56,271 例）：逐阶段只跑该阶段
 
 ## 立即的下一项：P6.5 第一波 —— 全 TCP 传输（client 在 WSL，server 在 adb 设备）
 
-> 状态：**设计已定（2026-09-22），未实现。** 目标形态：x86_64 的 WSL 进程作为 client，Redmi `2f7cbe2e`（aarch64，Adreno）上的 server 进程作为 server，两者在同一局域网内经 **TCP** 连接；`integration` 全部用例与 CI retrace 的 split 子集在这条链路上跑通并对上 golden。本节是 P6.5 行的第一波，只做「控制面 TCP + 数据面 stream」这一对；同机的「TCP 控制 + 共享段数据」混搭（nd `auto` / sd）是第二波，本节不做。
+> 状态：**实现已接线，验收采证中（2026-09-22）。** 主机三臂与 Redmi TCP 102 项已全通过，G1 与真实断线门通过；完整 retrace 与余下链路性能数见 [`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md)，尚未宣布阶段收官。目标形态：x86_64 的 WSL 进程作为 client，Redmi `2f7cbe2e`（aarch64，Adreno）上的 server 进程作为 server，两者在同一局域网内经 **TCP** 连接；`integration` 全部用例与 CI retrace 的 split 子集在这条链路上跑通并对上 golden。本节是 P6.5 行的第一波，只做「控制面 TCP + 数据面 stream」这一对；同机的「TCP 控制 + 共享段数据」混搭（nd `auto` / sd）是第二波，本节不做。
 
-### 1 树上已有的（不重写）与必须先补的（不能绕）
+### 1 设计时的树上基线（实现前快照）
+
+以下表格保留本波开工前的缺口定位；当前实现与契约更正见 `MG_Remote/CONTRACT-P65.md` 和阶段进度，不以历史行号描述今天的树。
 
 | 已有 | 出处 | 对本波的意义 |
 |---|---|---|
@@ -116,7 +118,7 @@ server 在手机上**监听**，client 从 WSL **拨出**。理由不是偏好�
 6. red-once：wf 三条（P6.5 行）；ct——错令牌 → Refuse、`wireMajor` 不匹配 → 两端具名拒绝、`adb shell svc wifi disable` → 10 s 内闩住（而不是 120 s `BarrierTimeout`）；sl——`Progress` 倒退 → `Fatal{ProtocolCorruption}`、越窗的 `Stage` 帧 → 拒绝、去掉 flush-on-idle 后「帧内最后一条 `kWaitReply`」用例必须挂住并被超时抓到；lf——关掉前送后四个 arming 场景必须**按名红**；sv——第二个并发连接 → `Refuse{Busy}`。
 7. **必测数（记录）**：逐帧 `kWaitReply` 次数与 RTT 分布（OpenRA、MC in-world 各一）；`SEG_STAGE` 字节/帧对链路实测吞吐（车道自己量一次 64 MiB `Stage` 突发）；`PRESENT_CREDIT` 1 / 2 / 3 的帧率；loopback tcp+stream 对 spawn（unix+shm）的逐线程 CPU 差。
 
-### 6 两边怎么配（落地后的操作手册；今天还跑不了）
+### 6 两边怎么配（第一波操作手册）
 
 **手机（server）**
 ```bash
@@ -125,7 +127,7 @@ server 在手机上**监听**，client 从 WSL **拨出**。理由不是偏好�
 # 2. 手机 IP
 adb shell ip -f inet addr show wlan0
 # 3. 起 server（前台 Service → supervisor 监听）
-adb shell am start-foreground-service -n top.mobilegl.plugin.trace/.MobileGLServerService \
+adb shell am start-foreground-service -n top.mobilegl.plugin.trace/top.mobilegl.plugin.MobileGLServerService \
   --es listen tcp://0.0.0.0:40613 --es token devtoken \
   --es env "MOBILEGL_BACKEND_TYPE=DirectGLES;MOBILEGL_PIPE_STATS=1;MOBILEGL_PIPE_STATS_PERIOD=1;MOBILEGL_LOG_FILE_PATH=/data/data/top.mobilegl.plugin.trace/files/mgl.log"
 adb logcat -s MobileGL | grep -m1 'listening on tcp://'

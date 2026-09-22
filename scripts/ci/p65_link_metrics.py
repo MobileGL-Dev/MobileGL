@@ -75,9 +75,27 @@ def summarize(path: Path, warmup: int, throughput: float | None = None) -> dict:
     return result
 
 
+def summarize_server(path: Path, warmup: int) -> dict:
+    frames = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if "P65ServerMetrics " not in line:
+            continue
+        frame = dict(FIELDS.findall(line.split("P65ServerMetrics ", 1)[1]))
+        if frame.get("valid") == "1" and int(frame["frame"]) > warmup:
+            frames.append(frame)
+    if not frames:
+        raise ValueError(f"{path}: no valid server CPU frames after warmup={warmup}")
+    cpu = sum(int(f["apply_thread_cpu_ns"]) for f in frames)
+    wall = sum(int(f["wall_ns"]) for f in frames)
+    return {"server_log": str(path), "server_frames": len(frames),
+            "apply_thread_cpu_ms_per_frame": cpu / len(frames) / 1e6,
+            "server_fps": len(frames) * 1e9 / wall if wall else None}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arm", action="append", required=True, metavar="LABEL:LOG")
+    parser.add_argument("--server-arm", action="append", default=[], metavar="LABEL:LOG")
     parser.add_argument("--warmup-frames", type=int, default=0)
     parser.add_argument("--link-mib-per-second", type=float)
     parser.add_argument("--output", type=Path)
@@ -93,11 +111,22 @@ def main() -> int:
             report[label] = summarize(Path(filename), args.warmup_frames, args.link_mib_per_second)
         except (OSError, ValueError, KeyError) as error:
             parser.error(str(error))
+    for arm in args.server_arm:
+        label, sep, filename = arm.partition(":")
+        if not sep or label not in report:
+            parser.error("each --server-arm must name an existing client arm")
+        try:
+            report[label].update(summarize_server(Path(filename), args.warmup_frames))
+        except (OSError, ValueError, KeyError) as error:
+            parser.error(str(error))
     if "spawn" in report:
         baseline = report["spawn"]["client_thread_cpu_ms_per_frame"]
         for label, arm in report.items():
             if label != "spawn":
                 arm["client_thread_cpu_delta_vs_spawn_ms"] = arm["client_thread_cpu_ms_per_frame"] - baseline
+                if "apply_thread_cpu_ms_per_frame" in arm and "apply_thread_cpu_ms_per_frame" in report["spawn"]:
+                    arm["apply_thread_cpu_delta_vs_spawn_ms"] = (arm["apply_thread_cpu_ms_per_frame"] -
+                                                                report["spawn"]["apply_thread_cpu_ms_per_frame"])
     text = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.output:
         args.output.write_text(text, encoding="utf-8")

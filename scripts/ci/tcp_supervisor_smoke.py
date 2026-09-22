@@ -84,7 +84,8 @@ def supervisor(server, log, same_build=False):
     env = dict(os.environ, MOBILEGL_IPC_ROLE='server', MOBILEGL_IPC_DIAL='no',
                MOBILEGL_IPC_TOKEN='p65-smoke-token', MOBILEGL_IPC_REQUIRE_SAME_BUILD=str(int(same_build)),
                MOBILEGL_IPC_LOG_FORWARD='0', MOBILEGL_LOG_FILE_PATH=str(log.with_suffix('.library.log')))
-    for name in ('MOBILEGL_IPC_CONTROL', 'MOBILEGL_IPC_ENDPOINT', 'MOBILEGL_BACKEND_TYPE'):
+    for name in ('MOBILEGL_TRANSPORT', 'MOBILEGL_IPC_SERVER_PATH', 'MOBILEGL_IPC_RING_MB', 'MOBILEGL_IPC_STAGE_MB',
+                 'MOBILEGL_IPC_CONTROL', 'MOBILEGL_IPC_ENDPOINT', 'MOBILEGL_BACKEND_TYPE'):
         env.pop(name, None)
     with log.open('wb') as output:
         child = subprocess.Popen([server, f'tcp://127.0.0.1:{port}', '--serve'], env=env,
@@ -154,16 +155,16 @@ def main():
                     busy = receive(second, schema)
                     assert busy.get('code') == 7, busy
                     evidence['busy'] = busy
-            token = exchange(port, schema, hello(schema, flatbuffers, token='wrong-token'))
+            layout = exchange(port, schema, hello(schema, flatbuffers))
+            assert layout.get('code') == 2 and layout.get('expected', 0), layout
+            fingerprint = layout['expected']
+            evidence['wrong_layout'] = layout
+            token = exchange(port, schema, hello(schema, flatbuffers, fingerprint=fingerprint, token='wrong-token'))
             assert token.get('code') == 4, token
             evidence['wrong_token'] = token
             version = exchange(port, schema, hello(schema, flatbuffers, major=99))
             assert version.get('code') == 1, version
             evidence['wire_major_99'] = version
-            layout = exchange(port, schema, hello(schema, flatbuffers))
-            assert layout.get('code') == 2 and layout.get('expected', 0), layout
-            fingerprint = layout['expected']
-            evidence['wrong_layout'] = layout
             accepted = exchange(port, schema, hello(schema, flatbuffers, fingerprint=fingerprint))
             assert accepted.get('welcome', 0) and accepted['welcome'] != os.getpid(), accepted
             assert accepted.get('fingerprint') == fingerprint, accepted

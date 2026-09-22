@@ -1,4 +1,28 @@
-# 当前阶段进度 — P6：backend 跑在第二个进程里
+# 当前阶段进度 — P6.5：全 TCP 传输
+
+## P6.5 第一波（2026-09-22）
+
+实现与主要正确性门已完成，完整 retrace 与余下链路性能数仍在采证，**尚未宣布阶段收官**。
+当前工作基于远端 `e6c51d07`，在 `codex/p65-all-tcp` 工作树保留后续未提交修改。
+
+- TCP 控制、ShmLink/StreamLink 数据面、布局指纹、portable program archive v2、令牌/Refuse、
+  设备 supervisor/前台服务、日志前送与有序关闭均已接线。
+- 初始 caps 到达前误锁为 lockstep 的启动竞态已修复。READY7 主机 TCP **102/102**、
+  优化构建 Redmi TCP **102/102**，零 skip；两臂逐例确认 **run-ahead ARMED**，无 fallback/demotion。
+  保留车道此前为 spawn **102/102**、inproc **186/186**，零 skip。
+- G1 符号 **0/0/0/0**，`.text` 逐字一致；真实远端 kill **133 ms**、真实 Wi-Fi 中断 **5053 ms** 闩住 device loss。
+- 原有单角色日志读取的 CI 缺陷已与上游修复合并；模拟器掉线分类另有回归验证。
+- 正式 retrace 以 CI loader 的 **39 项** split 子集为准；`ci:false` 的 rd12 单列作性能测量。
+  早期 lockstep 样本中 OpenRA SSIM **1.0**、startup **0.999999511**，不替代修复后的完整矩阵。
+  正在以支持进度超时、进程组清理、实际 run-ahead 证明和可核验 checkpoint 的跑器完成矩阵。
+
+契约见 [`CONTRACT-P65.md`](../../MobileGL/MG_Remote/CONTRACT-P65.md)，
+制品身份与证据总索引见 [`evidence-index.md`](notes/p65/evidence-index.md)；
+具体结果与未决项见 [`validation-status.md`](notes/p65/validation-status.md)、
+[`wire-and-validation.md`](notes/p65/wire-and-validation.md)、
+[`performance.md`](notes/p65/performance.md)。以下保留 P6 收官时的原始进度快照。
+
+## P6 收官快照
 
 > **这份文档只记当前阶段（P6）。** 已收官阶段（P0…P5f）的逐门数字与证据在
 > [`ROADMAP.md`](ROADMAP.md) 的阶段表与各 `P5*` 报告里，不在这里重复。规范契约见

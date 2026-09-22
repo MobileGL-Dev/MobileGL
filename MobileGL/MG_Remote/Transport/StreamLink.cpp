@@ -15,6 +15,7 @@
 #if !defined(_WIN32)
 #include <cerrno>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <unistd.h>
 #if defined(__linux__)
 #include <pthread.h>
@@ -23,6 +24,8 @@
 
 namespace MobileGL::MG_Remote::Transport {
     namespace {
+        constexpr std::uint64_t kDataEnvelopeBytes = 20;
+        constexpr std::uint64_t kMaxDataPayload = kMaxFramePayloadSize - kDataEnvelopeBytes;
         constexpr std::uint32_t kDataMagic = 0x444c474d; // MGLD, little endian
         enum Kind : unsigned {
             Cmd = 1,
@@ -102,32 +105,17 @@ namespace MobileGL::MG_Remote::Transport {
             return memory->ReplyBytes() / memory->ReplySlotCount() - sizeof(ReplySlotHeader);
         }
         void Die(bool peer) {
-            closed.store(true, std::memory_order_release);
+            {
+                // Pair every reply-wait predicate transition with its mutex:
+                // an EOF between the predicate and cv.wait must not lose a wake.
+                std::lock_guard<std::mutex> lock(replyMutex);
+                closed.store(true, std::memory_order_release);
+            }
             consumer.Kill(peer);
             producer.Kill(peer);
             replyReady.notify_all();
 #if !defined(_WIN32)
             if (fd >= 0) ::shutdown(fd, SHUT_RDWR);
-#endif
-        }
-        bool Write(const void* data, std::size_t size) {
-#if !defined(_WIN32)
-            auto* p = static_cast<const std::uint8_t*>(data);
-            while (size) {
-                const auto n = ::send(fd, p, size, MSG_NOSIGNAL);
-                if (n < 0 && errno == EINTR) continue;
-                if (n <= 0) {
-                    Die(!stopping.load(std::memory_order_acquire));
-                    return false;
-                }
-                p += n;
-                size -= static_cast<std::size_t>(n);
-            }
-            return true;
-#else
-            (void)data;
-            (void)size;
-            return false;
 #endif
         }
         bool Read(void* data, std::size_t size) {
@@ -151,20 +139,50 @@ namespace MobileGL::MG_Remote::Transport {
 #endif
         }
         bool Send(unsigned kind, std::uint64_t a, std::uint64_t b, const void* payload, std::uint64_t size) {
-            if (size > kMaxFramePayloadSize) Corrupt("outgoing frame exceeds limit");
+            if (size > kMaxDataPayload) Corrupt("outgoing frame exceeds limit");
             std::uint8_t h[28]{};
             Put32(h, kDataMagic);
-            Put32(h + 4, static_cast<std::uint32_t>(size));
+            Put32(h + 4, static_cast<std::uint32_t>(kDataEnvelopeBytes + size));
             h[8] = static_cast<std::uint8_t>(kind);
             Put64(h + 12, a);
             Put64(h + 20, b);
-            return Write(h, sizeof h) && (!size || Write(payload, static_cast<std::size_t>(size)));
+#if !defined(_WIN32)
+            // One gather write keeps a small command and its envelope in one
+            // TCP send (TCP_NODELAY is enabled). Partial writes retain the same
+            // frame lock and advance through both vectors without copying.
+            iovec vectors[2] = {{h, sizeof h}, {const_cast<void*>(payload), static_cast<std::size_t>(size)}};
+            msghdr message{};
+            message.msg_iov = vectors;
+            message.msg_iovlen = size ? 2 : 1;
+            while (message.msg_iovlen) {
+                const auto sent = ::sendmsg(fd, &message, MSG_NOSIGNAL);
+                if (sent < 0 && errno == EINTR) continue;
+                if (sent <= 0) {
+                    Die(!stopping.load(std::memory_order_acquire));
+                    return false;
+                }
+                auto consumed = static_cast<std::size_t>(sent);
+                while (message.msg_iovlen && consumed >= message.msg_iov->iov_len) {
+                    consumed -= message.msg_iov->iov_len;
+                    ++message.msg_iov;
+                    --message.msg_iovlen;
+                }
+                if (message.msg_iovlen && consumed) {
+                    message.msg_iov->iov_base = static_cast<std::uint8_t*>(message.msg_iov->iov_base) + consumed;
+                    message.msg_iov->iov_len -= consumed;
+                }
+            }
+            return true;
+#else
+            (void)payload;
+            return false;
+#endif
         }
         bool SendRing(unsigned kind, void* base, std::uint64_t capacity, std::uint64_t head, std::uint64_t& sent) {
             if (head < sent || head - sent > capacity) Corrupt("outgoing ring window invalid");
             while (sent < head) {
                 const auto at = sent % capacity;
-                const auto count = std::min({head - sent, capacity - at, kMaxFramePayloadSize});
+                const auto count = std::min({head - sent, capacity - at, kMaxDataPayload});
                 if (!Send(kind, sent, 0, static_cast<std::uint8_t*>(base) + at, count)) return false;
                 sent += count;
             }
@@ -193,23 +211,31 @@ namespace MobileGL::MG_Remote::Transport {
             return Send(ProgressFrame, 0, 0, p, sizeof p);
         }
         void ReceiveRing(void* base, std::uint64_t capacity, std::uint64_t tail, std::uint64_t a,
-                         const std::vector<std::uint8_t>& p, std::uint64_t& received) {
-            if (a != received || a < tail || a - tail > capacity || p.size() > capacity - (a - tail) ||
-                p.size() > capacity - a % capacity || p.empty())
+                         const std::uint8_t* payload, std::uint64_t size, std::uint64_t& received) {
+            if (a != received || a < tail || a - tail > capacity || size > capacity - (a - tail) ||
+                size > capacity - a % capacity || size == 0)
                 Corrupt("ring frame outside receive window");
-            std::memcpy(static_cast<std::uint8_t*>(base) + a % capacity, p.data(), p.size());
-            received += p.size();
+            std::memcpy(static_cast<std::uint8_t*>(base) + a % capacity, payload, static_cast<std::size_t>(size));
+            received += size;
         }
         void Loop() {
 #if defined(__linux__)
             pthread_setname_np(pthread_self(), Client() ? "mgl-cli-io" : "mgl-srv-io");
 #endif
+            FrameReader frames(kDataMagic);
             for (;;) {
                 std::uint8_t h[28];
-                if (!Read(h, sizeof h)) return;
-                const auto size = Get32(h + 4), kind = unsigned(h[8]);
+                if (!Read(h, kFrameHeaderSize)) return;
+                if (frames.Feed(h, kFrameHeaderSize) != MOBILEGL_OK) Corrupt("invalid data frame header");
+                const auto framedSize = Get32(h + 4);
+                if (framedSize < kDataEnvelopeBytes) Corrupt("truncated data envelope");
+                if (!Read(h + kFrameHeaderSize, kDataEnvelopeBytes)) return;
+                if (frames.Feed(h + kFrameHeaderSize, kDataEnvelopeBytes) != MOBILEGL_OK)
+                    Corrupt("invalid data frame envelope");
+                const auto size = framedSize - static_cast<std::uint32_t>(kDataEnvelopeBytes);
+                const auto kind = unsigned(h[8]);
                 const auto a = Get64(h + 12), b = Get64(h + 20);
-                if (Get32(h) != kDataMagic || h[9] || h[10] || h[11] || size > kMaxFramePayloadSize)
+                if (Get32(h) != kDataMagic || h[9] || h[10] || h[11] || size > kMaxDataPayload)
                     Corrupt("invalid data frame header");
                 // Reject the size/window before allocating or reading a hostile payload.
                 if ((kind == Stage && (Client() || a > memory->StageBytes() || size > memory->StageBytes() - a)) ||
@@ -219,16 +245,28 @@ namespace MobileGL::MG_Remote::Transport {
                     (kind == ProgressFrame && (!Client() || size != 64)) ||
                     (kind == ClientProgress && (Client() || size != 8)) || kind < Cmd || kind > Event)
                     Corrupt("frame kind or size outside negotiated window");
-                std::vector<std::uint8_t> p(size);
-                if (size && !Read(p.data(), size)) return;
+                if (((kind == Cmd || kind == Stage || kind == Event) && b != 0) ||
+                    (kind == ProgressFrame && (a != 0 || b != 0)) || (kind == Reply && b > UINT32_MAX))
+                    Corrupt("nonzero reserved data envelope field");
+                std::uint8_t chunk[64 * 1024];
+                std::uint64_t remaining = size;
+                while (remaining) {
+                    const auto count = std::min<std::uint64_t>(remaining, sizeof chunk);
+                    if (!Read(chunk, static_cast<std::size_t>(count))) return;
+                    if (frames.Feed(chunk, count) != MOBILEGL_OK) Corrupt("invalid data frame payload");
+                    remaining -= count;
+                }
+                std::vector<std::uint8_t> p;
+                if (frames.TakeMessage(p) != MOBILEGL_OK) Corrupt("incomplete data frame");
+                const auto* payload = p.data() + kDataEnvelopeBytes;
                 if (kind == Stage) {
-                    std::memcpy(static_cast<std::uint8_t*>(memory->StageBase()) + a, p.data(), size);
+                    std::memcpy(static_cast<std::uint8_t*>(memory->StageBase()) + a, payload, size);
                 } else if (kind == Cmd) {
                     ReceiveRing(memory->CmdRingBase(), memory->CmdRingCapacity(),
-                                C().cmdRetiredTail.load(std::memory_order_acquire), a, p, receivedCmd);
+                                C().cmdRetiredTail.load(std::memory_order_acquire), a, payload, size, receivedCmd);
                 } else if (kind == ClientProgress) {
                     if (a != receivedCmd) Corrupt("cmdHead does not match delivered bytes");
-                    const auto tail = Get64(p.data());
+                    const auto tail = Get64(payload);
                     if (tail > E().cmdHead.load(std::memory_order_acquire)) Corrupt("event tail ahead of head");
                     const auto oldTail = E().cmdRetiredTail.load(std::memory_order_acquire);
                     Advance(E().cmdAppliedTail, tail);
@@ -241,11 +279,11 @@ namespace MobileGL::MG_Remote::Transport {
                     consumer.Notify();
                 } else if (kind == Event) {
                     ReceiveRing(memory->EventRingBase(), memory->EventRingCapacity(),
-                                E().cmdRetiredTail.load(std::memory_order_acquire), a, p, receivedEvent);
+                                E().cmdRetiredTail.load(std::memory_order_acquire), a, payload, size, receivedEvent);
                     Advance(E().cmdHead, receivedEvent);
                     producer.Notify();
                 } else if (kind == ProgressFrame) {
-                    const auto* v = p.data();
+                    const auto* v = payload;
                     if (Get64(v + 8) > Get64(v) || Get64(v) > C().submittedSeq.load(std::memory_order_acquire) ||
                         Get64(v + 40) > Get64(v + 32) || Get64(v + 32) > C().cmdHead.load(std::memory_order_acquire) ||
                         Get64(v + 48) > 1)
@@ -254,10 +292,17 @@ namespace MobileGL::MG_Remote::Transport {
                     Advance(C().cmdRetiredTail, Get64(v + 40));
                     C().eventRingFull.store(static_cast<std::uint32_t>(Get64(v + 48)), std::memory_order_release);
                     C().eventDropped.store(static_cast<std::uint32_t>(Get64(v + 56)), std::memory_order_release);
-                    Watermark::AdvanceRetired(C(), Get64(v + 8));
                     Watermark::AdvanceCompletedFrame(C(), Get64(v + 16));
                     Watermark::AdvancePresentAck(C(), Get64(v + 24));
-                    Watermark::AdvanceApplied(C(), Get64(v));
+                    {
+                        std::lock_guard<std::mutex> lock(replyMutex);
+                        Watermark::AdvanceApplied(C(), Get64(v));
+                        // AdvanceRetired clamps to local appliedSeq. Apply this
+                        // received snapshot in dependency order or the final
+                        // retirement is silently clamped to the previous batch.
+                        Watermark::AdvanceRetired(C(), Get64(v + 8));
+                    }
+                    replyReady.notify_all();
                     producer.Notify();
                 } else if (kind == Reply) {
                     {
@@ -265,7 +310,7 @@ namespace MobileGL::MG_Remote::Transport {
                         if (a <= replySeq) Corrupt("reply sequence moved backwards");
                         replySeq = a;
                         replyStatus = static_cast<std::int32_t>(static_cast<std::uint32_t>(b));
-                        reply = std::move(p);
+                        reply.assign(payload, payload + size);
                     }
                     replyReady.notify_all();
                     producer.Notify();
@@ -327,7 +372,7 @@ namespace MobileGL::MG_Remote::Transport {
         m_impl->owned->InitializeEndpoints();
     }
     SessionSegments& StreamLink::Memory() {
-        return m_impl->owned->Memory();
+        return m_impl->memory ? *m_impl->memory : m_impl->owned->Memory();
     }
     RingProducer& StreamLink::CommandsOut() {
         return m_impl->owned->CommandsOut();
@@ -416,7 +461,7 @@ namespace MobileGL::MG_Remote::Transport {
         for (const auto span : x.stage) {
             std::uint64_t sent = 0;
             while (sent < span.Size) {
-                const auto count = std::min(span.Size - sent, kMaxFramePayloadSize);
+                const auto count = std::min(span.Size - sent, kMaxDataPayload);
                 if (!x.Send(Stage, span.Offset + sent, 0,
                             static_cast<std::uint8_t*>(x.memory->StageBase()) + span.Offset + sent, count))
                     return MOBILEGL_ERR_TRANSPORT_CLOSED;
@@ -459,11 +504,15 @@ namespace MobileGL::MG_Remote::Transport {
     }
     MobileGLResult StreamLink::ReadReply(std::uint64_t seq, std::int32_t* status, const void** p, std::uint64_t* size) {
         auto& x = *m_impl;
-        if (!status || !p || !size || !x.Client()) return MOBILEGL_ERR_INVALID_ARGUMENT;
+        if (!status || !p || !size || !seq || !x.Client()) return MOBILEGL_ERR_INVALID_ARGUMENT;
+        if (!x.memory) return MOBILEGL_ERR_NOT_INITIALIZED;
         std::unique_lock<std::mutex> lock(x.replyMutex);
         // The applied watermark is sent after the reply, so normal callers never
         // wait here. A standalone reply reader may wait without polling.
-        x.replyReady.wait(lock, [&] { return x.replySeq >= seq || x.closed.load(std::memory_order_acquire); });
+        x.replyReady.wait(lock, [&] {
+            return x.closed.load(std::memory_order_acquire) || x.replySeq >= seq ||
+                   x.C().Progress.appliedSeq.load(std::memory_order_acquire) >= seq;
+        });
         if (x.replySeq != seq) return x.closed.load() ? MOBILEGL_ERR_TRANSPORT_CLOSED : MOBILEGL_ERR_PROTOCOL_MISMATCH;
         x.readReply = x.reply;
         *status = x.replyStatus;

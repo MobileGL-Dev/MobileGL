@@ -41,6 +41,7 @@
 #include <MG_Remote/CapsCodec.h>
 #include <MG_Remote/Handshake.h>
 #include <MG_Pipe/PipeWireLayout.h>
+#include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/Protocol/generated/protocol_generated.h>
 #include <MG_Remote/Server/ServerSession.h>
@@ -126,6 +127,8 @@ TEST(SessionHandshakeTest, TheAbiFingerprintChangesWhenAnyOfItsInputsDoes) {
     EXPECT_EQ(inputs.MemberLayout, MG_Pipe::kMGPipeWireMemberLayoutDigest);
     EXPECT_EQ(inputs.CatalogueLayout, MG_Pipe::kMGPipeWireCatalogueDigest);
     EXPECT_EQ(inputs.RenderStateLayout, MG_Pipe::WireRenderStateDigest());
+    EXPECT_EQ(inputs.ProgramArtifactsCodecVersion, MG_State::GLState::kProgramArtifactsCodecVersion);
+    EXPECT_EQ(inputs.ProgramArtifactsSchema, MG_State::GLState::ProgramArtifactsSchemaFingerprint());
     EXPECT_EQ(inputs.OpCount, static_cast<Uint64>(MG_Pipe::MGPWireOp::kOpCount));
     EXPECT_EQ(inputs.PointerBits, sizeof(void*) * 8);
     const auto perturbed = [&](auto mutate) {
@@ -142,6 +145,8 @@ TEST(SessionHandshakeTest, TheAbiFingerprintChangesWhenAnyOfItsInputsDoes) {
     EXPECT_NE(production, perturbed([](auto& i) { ++i.FormatCapabilityFormats; })) << "FormatCapabilityFormats";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.FormatCapabilitiesCodecVersion; })) << "FormatCapabilitiesCodecVersion";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.RendererInfoCodecVersion; })) << "RendererInfoCodecVersion";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.ProgramArtifactsCodecVersion; })) << "ProgramArtifactsCodecVersion";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.ProgramArtifactsSchema; })) << "ProgramArtifactsSchema";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.OpCount; })) << "OpCount";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.AbiVersion; })) << "AbiVersion";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.PointerBits; })) << "PointerBits";

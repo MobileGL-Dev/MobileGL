@@ -65,7 +65,10 @@ public final class MobileGLServerService extends Service {
             env.put("MOBILEGL_IPC_ROLE", "server");
             env.put("MOBILEGL_IPC_DIAL", "no");
             env.put("MOBILEGL_IPC_LOG_FORWARD", "1");
-            env.remove("MOBILEGL_IPC_CONTROL");
+            for (String name : new String[]{"MOBILEGL_TRANSPORT", "MOBILEGL_IPC_CONTROL", "MOBILEGL_IPC_ENDPOINT",
+                    "MOBILEGL_IPC_SERVER_PATH", "MOBILEGL_IPC_RING_MB", "MOBILEGL_IPC_STAGE_MB"}) {
+                env.remove(name);
+            }
             env.put("MOBILEGL_IPC_TOKEN", intent == null || intent.getStringExtra("token") == null
                     ? "" : intent.getStringExtra("token"));
             env.putIfAbsent("MOBILEGL_LOG_FILE_PATH", new File(getFilesDir(), "mgl.log").getAbsolutePath());

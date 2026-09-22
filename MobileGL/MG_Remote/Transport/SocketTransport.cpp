@@ -354,20 +354,28 @@ namespace MobileGL::MG_Remote::Transport {
         }
         int accepted[2] = {-1, -1};
         for (int index = 0; index < 2; ++index) {
-            const int ready = WaitReadable(listenFd, index == 0 ? timeoutMs : 2000);
-            if (ready <= 0) {
-                for (int fd : accepted) {
-                    if (fd >= 0) ::close(fd);
+            const std::uint32_t budget = index == 0 ? timeoutMs : 2000;
+            for (;;) {
+                const int ready = WaitReadable(listenFd, budget);
+                if (ready <= 0) {
+                    for (int fd : accepted) {
+                        if (fd >= 0) ::close(fd);
+                    }
+                    // Half a client is not a client. Both connections or neither, so
+                    // a peer that died between the two cannot leave a session that
+                    // looks up but has no way to receive a descriptor.
+                    if (index != 0 || ready < 0) WireLogError("MG_Remote SocketTransport: only %d of 2 connections arrived within "
+                                 "%u ms", index, timeoutMs);
+                    return ready == 0 ? MOBILEGL_ERR_TIMEOUT : MOBILEGL_ERR_TRANSPORT_CLOSED;
                 }
-                // Half a client is not a client. Both connections or neither, so
-                // a peer that died between the two cannot leave a session that
-                // looks up but has no way to receive a descriptor.
-                if (index != 0 || ready < 0) WireLogError("MG_Remote SocketTransport: only %d of 2 connections arrived within "
-                             "%u ms", index, timeoutMs);
-                return ready == 0 ? MOBILEGL_ERR_TIMEOUT : MOBILEGL_ERR_TRANSPORT_CLOSED;
-            }
-            accepted[index] = ::accept(listenFd, nullptr, nullptr);
-            if (accepted[index] < 0) {
+                accepted[index] = ::accept(listenFd, nullptr, nullptr);
+                if (accepted[index] >= 0) break;
+                // EINTR (this process reaps SIGCHLD by construction) and ECONNABORTED
+                // (the peer reset between poll() and accept()) are not transport
+                // failures: the listener is still good. Re-poll within the budget
+                // rather than returning TRANSPORT_CLOSED, which the --serve
+                // supervisor turns into a full server exit (return 73).
+                if (errno == EINTR || errno == ECONNABORTED) continue;
                 for (int fd : accepted) {
                     if (fd >= 0) ::close(fd);
                 }
@@ -454,6 +462,12 @@ namespace MobileGL::MG_Remote::Transport {
         CloseIfOpen(m_streamFd);
         CloseIfOpen(m_auxFd);
         m_closed = true;
+    }
+
+    MobileGLResult SocketTransport::ShutdownSend() {
+        std::lock_guard<std::mutex> lock(m_sendMutex);
+        if (m_streamFd < 0 || m_closed) return MOBILEGL_ERR_TRANSPORT_CLOSED;
+        return ::shutdown(m_streamFd, SHUT_WR) == 0 ? MOBILEGL_OK : MOBILEGL_ERR_TRANSPORT_CLOSED;
     }
 
     SocketTransport::~SocketTransport() { Shutdown(); }
@@ -548,9 +562,9 @@ namespace MobileGL::MG_Remote::Transport {
                 return MOBILEGL_OK;
             }
             if (n == 0) {
-                // Clean EOF. The peer is gone - but anything already reassembled
-                // stays readable, which ITransport promises in as many words.
-                m_closed = true;
+                // Request EOF can be a half-close: drain queued frames and keep
+                // the reverse direction usable for teardown diagnostics.
+                m_readClosed = true;
                 return MOBILEGL_ERR_TRANSPORT_CLOSED;
             }
             if (errno == EINTR) {
@@ -589,7 +603,7 @@ namespace MobileGL::MG_Remote::Transport {
             if (m_reader.HasMessage()) {
                 return m_reader.TakeMessage(buffer, outSize);
             }
-            if (m_closed) {
+            if (m_closed || m_readClosed) {
                 return MOBILEGL_ERR_TRANSPORT_CLOSED;
             }
 
@@ -609,7 +623,7 @@ namespace MobileGL::MG_Remote::Transport {
         if (m_failed) {
             return 0;
         }
-        if (!m_reader.HasMessage() && !m_closed) {
+        if (!m_reader.HasMessage() && !m_closed && !m_readClosed) {
             // A non-blocking pump, so a caller that has not received yet can
             // still size its buffer. Errors are not reported here: PeekFrameSize
             // answers "how big is the next message", and 0 means "none buffered",
@@ -677,6 +691,7 @@ namespace MobileGL::MG_Remote::Transport {
     SocketTransport::~SocketTransport() = default;
     int SocketTransport::TakeDataFd() { return -1; }
     void SocketTransport::CloseLocalCopy() {}
+    MobileGLResult SocketTransport::ShutdownSend() { return MOBILEGL_ERR_UNSUPPORTED; }
 
     MobileGLResult SocketTransport::SendFrame(MobileGLByteSpan) { return MOBILEGL_ERR_UNSUPPORTED; }
     MobileGLResult SocketTransport::ReceiveFrame(MobileGLMutableByteSpan, std::uint64_t*,

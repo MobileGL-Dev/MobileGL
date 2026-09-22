@@ -44,6 +44,7 @@
 // is legal under rule E (CONTRACT-P5C.md §5.2).
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
+#include <MG_State/GLState/StateObjectDeathNotice.h>
 #include <MG_Util/Debug/Log.h>
 // P5e (pg): ID-87 asks this package for bytes-per-link measured rather than argued, and the
 // archive's byte count exists exactly once - here, where it is serialised.
@@ -297,7 +298,8 @@ namespace MobileGL::MG_Remote::Client {
             const Uint64 seq = session.EmitAndWait(MGPWireOp::ResourceReadback, payload,
                                                    sizeof(*payload), nullptr, 0, nullptr, 0,
                                                    &status);
-            reply->Id = seq;
+            // Cancellation has no wire ordinal; retain the caller's nonzero local ticket.
+            if (seq != Wire::kInvalidSeq) reply->Id = seq;
             MG_Pipe::MGPipePostReply(*reply, status, 0);
             ++g_emitted;
         }
@@ -317,7 +319,8 @@ namespace MobileGL::MG_Remote::Client {
             const Uint64 seq = session.EmitAndWait(MGPWireOp::ResourceCreate, payload,
                                                    sizeof(*payload), nullptr, 0, nullptr, 0,
                                                    &status);
-            reply->Id = seq;
+            // Cancellation has no wire ordinal; retain the caller's nonzero local ticket.
+            if (seq != Wire::kInvalidSeq) reply->Id = seq;
             MG_Pipe::MGPipePostReply(*reply, status, status == 0 ? 1u : 0u);
             ++g_emitted;
             if (status == 1) ++g_declined;
@@ -330,7 +333,8 @@ namespace MobileGL::MG_Remote::Client {
             const Uint64 seq = session.EmitAndWait(MGPWireOp::SetTextureParams, payload,
                                                    sizeof(*payload), nullptr, 0, nullptr, 0,
                                                    &status);
-            reply->Id = seq;
+            // Cancellation has no wire ordinal; retain the caller's nonzero local ticket.
+            if (seq != Wire::kInvalidSeq) reply->Id = seq;
             MG_Pipe::MGPipePostReply(*reply, status, status == 0 ? 1u : 0u);
             ++g_emitted;
             if (status == 1) ++g_declined;
@@ -369,11 +373,14 @@ namespace MobileGL::MG_Remote::Client {
                 MGPWireOp::ResourceSubData, &record, sizeof(record),
                 varTail != nullptr ? &tail : nullptr, varTail != nullptr ? 1u : 0u, nullptr, 0,
                 &status, nullptr, wantReply);
-            reply->Id = seq;
-            MG_Pipe::MGPipePostReply(*reply, wantReply ? status : 0,
-                                     (wantReply ? status == 0 : true) ? 1u : 0u);
-            ++g_emitted;
-            if (wantReply && status == 1) ++g_declined;
+            // Cancellation has no wire ordinal; retain the caller's nonzero local ticket.
+            if (seq != Wire::kInvalidSeq) reply->Id = seq;
+            const Int32 postedStatus = (seq == Wire::kInvalidSeq || status == Wire::ReplySink::kStatusDeclined)
+                                           ? Wire::ReplySink::kStatusDeclined
+                                           : wantReply ? status : Wire::ReplySink::kStatusOk;
+            MG_Pipe::MGPipePostReply(*reply, postedStatus, postedStatus == Wire::ReplySink::kStatusOk ? 1u : 0u);
+            if (seq != Wire::kInvalidSeq) ++g_emitted;
+            if (postedStatus == Wire::ReplySink::kStatusDeclined) ++g_declined;
         }
 
         void Wire_BufferSubDataResident(const MG_Pipe::MGPSubData* payload, const void* blobBytes,
@@ -712,8 +719,29 @@ namespace MobileGL::MG_Remote::Client {
         }
     }
 
+    namespace {
+        void WireStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
+            (void)EmitObjectDeathRecord(kind, lifetimeId);
+        }
+
+        const MG_State::GLState::StateObjectDeathOps kClientStateObjectDeathOps = {
+            .OnDestroyed = &WireStateObjectDestroyed,
+        };
+    }
+
     void InstallClientWireTables() {
         using namespace MG_Pipe;
+
+        // DirectGLES normally installs this notice while creating its handle
+        // backend. An independent client never creates that backend: without a
+        // client emitter, NotifyAndFree silently drops object_death before
+        // freeing the slot. Keep inproc's existing backend dispatcher, and give
+        // the remote client the same wire delivery without a local twin table.
+        if (MG_Config::Transport == MG_Config::TransportMode::Spawn &&
+            MG_Config::ActiveBackendType == BackendType::DirectGLES &&
+            MG_State::GLState::GetStateObjectDeathOps() == nullptr) {
+            MG_State::GLState::SetStateObjectDeathOps(&kClientStateObjectDeathOps);
+        }
 
         // A fresh install means the routed tables are live again: a Start after a previous
         // session's Stop clears the teardown-refusal flag so its own routed calls are not
@@ -778,6 +806,9 @@ namespace MobileGL::MG_Remote::Client {
         // is complete, by ReinstallMonolithAfterTeardown, for the at-exit deletes that reach a
         // process with no session at all. Idempotent: safe to call when nothing was installed.
         g_clientTablesUninstalled.store(true, std::memory_order_release);
+        if (MG_State::GLState::GetStateObjectDeathOps() == &kClientStateObjectDeathOps) {
+            MG_State::GLState::SetStateObjectDeathOps(nullptr);
+        }
     }
 
     void ReinstallMonolithAfterTeardown() {

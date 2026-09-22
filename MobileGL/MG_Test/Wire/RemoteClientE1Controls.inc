@@ -40,7 +40,7 @@ void CheckE1Boundary(Bool serverCap, MGPWireOp op, Bool expectWait, const char* 
         const Uint64 caps = serverCap ? static_cast<Uint64>(kCapRunAheadApply) : 0;
         Srv::ServerSessionInstance().SetCapabilityBits(caps);
         Srv::ServerSessionInstance().SetConsumedSubsystems(kMGPipeSubsystemsMigratedAtP4a);
-        AdoptSnapshot(MakeSnapshot(kMGPipeSubsystemsMigratedAtP4a, caps));
+        Srv::ServerSessionInstance().SetBackend(ControlCapsPeer());
         auto& session = ClientSessionInstance();
         if (session.Start(MG_Config::TransportMode::InProcess, {}) != MOBILEGL_OK) ::_exit(81);
         auto& producer = session.Producer();

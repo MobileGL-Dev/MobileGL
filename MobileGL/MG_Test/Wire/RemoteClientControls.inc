@@ -74,9 +74,12 @@ struct BackendTag {
 };
 template struct PeerAccess<BackendTag, &Srv::ServerLoop::m_backend>;
 
-void StartControlSession() {
+MG_Backend::BackendObject* ControlCapsPeer();
+
+void StartControlSession(MG_Backend::BackendObject* capsSource = nullptr) {
     ::alarm(15);
     MG_Config::Transport = MG_Config::TransportMode::InProcess;
+    Srv::ServerSessionInstance().SetBackend(capsSource ? capsSource : ControlCapsPeer());
     Srv::ServerSessionInstance().SetCapabilityBits(0);
     Srv::ServerSessionInstance().SetConsumedSubsystems(kMGPipeSubsystemsMigratedAtP4a);
     if (ClientSessionInstance().Start(MG_Config::TransportMode::InProcess, {}) != MOBILEGL_OK)
@@ -134,6 +137,13 @@ struct CapsPeer : MG_Backend::BackendObject {
     const MG_Backend::DynamicBackendParameters& GetDynamicParameters() const override { return dynamic; }
     BackendType GetBackendType() const override { return BackendType::DirectGLES; }
 };
+
+MG_Backend::BackendObject* ControlCapsPeer() {
+    // A real encoded initial snapshot is required even when the apply fixture
+    // substitutes every verb and has no GPU backend of its own.
+    static CapsPeer backend;
+    return &backend;
+}
 
 void ExpectNamedAbort(const ChildResult& child, const char* diagnostic) {
     EXPECT_TRUE(DiedOfAbort(child)) << DescribeStatus(child) << '\n' << child.Log;
@@ -387,8 +397,7 @@ TEST(RemoteClientControls, BounceReadPixelsShortReplyRefusesBeforeScatter) {
 TEST(RemoteClientControls, DeleteTexturesAdvancesTheWireOrdinal) {
     const auto child = RunInChild([] {
         CapsPeer backend;
-        Srv::ServerSessionInstance().SetBackend(&backend);
-        StartControlSession();
+        StartControlSession(&backend);
         ErrorPeer replies;
         replies.status = 0; // The peer accepts the resource; the client must publish and delete it.
         replies.Install();
@@ -442,8 +451,7 @@ TEST(RemoteClientControls, ServerRoleRespecifyDoesNotEmitClientInitialBytes) {
     // SEG_EVENT producers are what replaces the mechanism this case used to drive.
     const auto child = RunInChild([] {
         CapsPeer backend;
-        Srv::ServerSessionInstance().SetBackend(&backend);
-        StartControlSession();
+        StartControlSession(&backend);
         MG_Config::Features.PipePush |= kMGPipeSubsystemResources;
         Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
             MG_State::GLState::BufferObject buffer(701);
@@ -475,8 +483,7 @@ TEST(RemoteClientControls, ServerRoleFlushDoesNotRunTheClientSubDataFollowup) {
     // (Fatal{RoleViolation, "MGPipeSlots"}; ev's events replace the mechanism).
     const auto child = RunInChild([] {
         CapsPeer backend;
-        Srv::ServerSessionInstance().SetBackend(&backend);
-        StartControlSession();
+        StartControlSession(&backend);
         MG_Config::Features.PipePush |= kMGPipeSubsystemResources;
         Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
             MGPipeResourceOps ops{};
