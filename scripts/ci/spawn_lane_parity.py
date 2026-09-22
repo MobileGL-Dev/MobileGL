@@ -75,7 +75,7 @@ def lane_cases(build_dir, label):
     return {m.group(1) for m in CASE.finditer(out)}
 
 
-def compare_arms(build_dir, tier, labels):
+def compare_arms(build_dir, tier, labels, inproc_only=()):
     """The three arms of one tier must name the same set after the arm segment comes off.
 
     Returns True on failure, the way main() below counts them."""
@@ -96,10 +96,10 @@ def compare_arms(build_dir, tier, labels):
     failed = False
     reference = "split"
     comparable = {k for k in sets[reference]
-                  if not any(only in k for only in MAGMA_INPROC_ONLY)}
+                  if not any(only in k for only in inproc_only)}
     if len(comparable) != len(sets[reference]):
         print(f"{tier}: {len(sets[reference]) - len(comparable)} inproc-only entrie(s) excluded "
-              f"from the comparison by name ({', '.join(MAGMA_INPROC_ONLY)})")
+              f"from the comparison by name ({', '.join(inproc_only)})")
     for arm, keys in sets.items():
         if arm == reference:
             continue
@@ -157,14 +157,29 @@ def main():
             failed = True
 
     # P7 package L, exit gate 1's half of the same question: the Magma arms.
+    # THE EXCLUSION IS PER TIER, not global. In the GATED tier the two scenarios are registered
+    # on the inproc arm ALONE (the CMakeLists says why), so they are absent from the other arms
+    # and have to come off the reference set. In the FULL-SUITE census they are registered on
+    # every arm - it is a whole-binary filter, and there they simply SKIP for want of their
+    # lane marker - so excluding them there would turn a present-on-all-arms case into a
+    # spurious "extra".
     failed |= compare_arms(args.build_dir, "magma gated tier",
                            {"split": "integration-magma-split",
                             "spawn": "integration-magma-spawn",
-                            "tcp": "integration-magma-tcp"})
+                            "tcp": "integration-magma-tcp"},
+                           inproc_only=MAGMA_INPROC_ONLY)
     failed |= compare_arms(args.build_dir, "magma informational tier",
                            {"split": "integration-magma-all-split",
                             "spawn": "integration-magma-all-spawn",
                             "tcp": "integration-magma-all-tcp"})
+    # Tier 3, the whole-suite census. It is expected to be RED and is in no gating step - but
+    # its three arms must still name the same set, because the census's whole value is that a
+    # case red on spawn and green on inproc is a two-process fact, and that comparison needs
+    # both arms to have run the same case.
+    failed |= compare_arms(args.build_dir, "magma full-suite tier",
+                           {"split": "integration-magma-full-split",
+                            "spawn": "integration-magma-full-spawn",
+                            "tcp": "integration-magma-full-tcp"})
     return 1 if failed else 0
 
 

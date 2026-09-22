@@ -3090,6 +3090,89 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endforeach()
 endif()
 
+# =====================================================================================
+# P7 PACKAGE L: THE WHOLE INTEGRATION BINARY UNDER MAGMA SPLIT - TIER 3, INFORMATIONAL
+# =====================================================================================
+#
+# WHY A THIRD TIER, AND WHY IT IS THE ONE THAT ANSWERS THE EXIT GATE. Tier 2 above replays the
+# split-arm registrations, which is ~100 scenarios - the set Espryt's disaggregation work has
+# been carrying since P5. It measured GREEN on Magma, all three transports, and that is a real
+# result but it is NOT exit gate 1. The gate says the INTEGRATION BINARY is green under Magma
+# split, and the set that phrase names is the one the monolith `DirectVulkan.` arm runs: the
+# whole suite minus MGL_ITEST_MONOLITH_MECHANISM_FILTER (the mechanism oracles, which toggle
+# process-local push masks, pointer-key ABA, direct persistent adoption or synchronous stats
+# slots and therefore must not inherit a transport). 511 cases, against tier 2's 102.
+#
+# THIS IS WHERE THE @P7 REFUSALS LIVE. None of tier 2's scenarios reaches one; the readback
+# matrices, the same-texture copy shapes and the odd-offset uniform ranges do, and they are in
+# this set and nowhere else in the disaggregated registry. THE FIRST RUN'S RED LIST IS WHAT
+# WAVE 2's CLUSTERS ARE SCHEDULED FROM - see notes/p7/magma-two-process-first-run.md.
+#
+# IN NO CI GATING STEP, and that is the whole design: a lane that must be green cannot carry a
+# census. A case leaves this tier for a gated one with the commit that retires its blocker.
+# The label spelling follows tier 2's rule (`ctest -L` is a regex, ID-131): the tier word goes
+# in the MIDDLE, so `-L integration-magma-split` and `-L integration-magma-all-split` cannot
+# reach `integration-magma-full-split` and vice versa.
+#
+# THE SAME PRIVATE-LOG DISCIPLINE as every other split-family entry, through a list of its own
+# rather than the shared MGL_SPLIT_ARM_TEST_LISTS: that list ALSO carries the per-entry lane
+# markers (strict-arming, pmap, server counters) and applying them to a census would arm three
+# unrelated oracles on cases that are here to be read, not to assert. SplitLogPaths.cmake.in
+# walks this list for the log path alone.
+#
+# PLACED AFTER TIER 2 AND BEFORE THE configure_file, for that file's stated reason.
+#
+# TWO DIFFERENCES FROM TIERS 1 AND 2's ENVIRONMENT, BOTH MEASURED RATHER THAN ASSUMED.
+#
+#   1. NO MGITEST_SPLIT_LANE=1. That marker arms ScenarioFixture's destructor assertion
+#      (ScenarioFixture.h:85-100): a case in an armed split lane must have MOVED the client
+#      encoder's record ordinal, because "the workload drew, cleared and read pixels, so
+#      records were due". That is exactly right for a CURATED lane, where every entry draws.
+#      It is wrong for a whole-binary census, which also contains query-only cases: the first
+#      run of this tier with the marker set produced 13 reds - AdvertisedLimitsScenario (8),
+#      SpirvShaderBinaryScenario (4) and ProgramPipelineScenario.AReservedName… - every one of
+#      them `EmitSeq was 20 at SetUp and is 20 now`, because a limits query is answered from
+#      the client's CapsMirror and a shader-binary error surface never reaches a verb. Those
+#      13 would red on a DirectGLES census too; they are a property of the census, not of
+#      Magma, and leaving them in would have buried the real list under noise.
+#      WHAT THIS GIVES UP, stated rather than discovered later: this tier does not prove its
+#      records crossed the wire, and the tcp arm's "Dial=Connect created no local server child"
+#      topology proof (ScenarioFixture.h:160-171, inside the same armed block) is inert here.
+#      Tiers 1 and 2 keep both, and they are the tiers that gate. MGITEST_TCP_LANE is still in
+#      the shared tcp fragment - it simply has no reader in this tier.
+#   2. DualBlockScenario.* IS FILTERED OUT. Its green REQUIRES MOBILEGL_IPC_ROLE_SPLIT_STATE=1,
+#      and a census must not set that knob - under it every barrier-pulled read aborts, which
+#      would replace this tier's subject with a different experiment. Without the knob the case
+#      is RED BY NAME (`MGPipeRoleSplitRehearsalActive() is false`), which is its documented
+#      negative-control behaviour and not a finding. The monolith `DirectVulkan.` arm has the
+#      same case and it SKIPS there, because that runtime is not split at all. Its own lane,
+#      `integration-dualblock-split`, is where it is read.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    set(MGL_MAGMA_FULL_TEST_LISTS "")
+    foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
+        mgl_itest_magma_arm_shape(${mglItestArm})
+        string(TOUPPER "${mglItestArm}" mglItestArmUpper)
+        mgl_itest_join_environment(mglItestMagmaFullEnvironment
+            "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_ITEST_REQUIRE_GPU=1"
+            ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV} ${mglItestArmTransportEnv})
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.${mglItestArm}.Full."
+            TEST_LIST "MGL_MAGMA_FULL_TESTS_${mglItestArmUpper}"
+            TEST_FILTER "-${MGL_ITEST_MONOLITH_MECHANISM_FILTER}:DualBlockScenario.*"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-magma-full-${mglItestArmLower}"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ${mglItestArmProperties}
+                ENVIRONMENT "${mglItestMagmaFullEnvironment}"
+        )
+        list(APPEND MGL_MAGMA_FULL_TEST_LISTS "MGL_MAGMA_FULL_TESTS_${mglItestArmUpper}")
+    endforeach()
+    message(STATUS "Integration tests: P7 package L tier 3 - the whole integration binary on "
+                   "DirectVulkan x {inproc, spawn, tcp} under the informational "
+                   "integration-magma-full-{split,spawn,tcp} labels (no CI gate)")
+endif()
+
 if (MOBILEGL_BUILD_DISAGGREGATED)
     # LAST, so every mgl_itest_register_split_arms call above has already contributed its list
     # name. Apply per-entry paths after GoogleTest discovery has populated the TEST_LISTs.

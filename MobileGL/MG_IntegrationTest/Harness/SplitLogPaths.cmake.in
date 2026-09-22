@@ -29,6 +29,29 @@ foreach(listName IN ITEMS @MGL_SPLIT_ARM_TEST_LISTS@)
         endif()
     endforeach()
 endforeach()
+# P7 package L tier 3: the whole-suite Magma census. A LIST OF ITS OWN, and the log path is the
+# ONLY property it gets - the loop above also arms the strict-arming, pmap and server-counter
+# lane markers by entry name, and a census is here to be READ, not to assert three unrelated
+# oracles it never opted into. The path itself is not optional: these entries are
+# DirectVulkan.{Split,Spawn,Tcp}. names, so split_log_paths.py's ownership gate requires exactly
+# one absolute private path each, and on the spawn and tcp arms two processes append to it.
+#
+# ONE EXCEPTION, AND IT IS TELEMETRY RATHER THAN AN ORACLE: CtWireScenario reads the server's
+# own control-record tallies, and without MOBILEGL_TEST_SERVER_COUNTERS=1 they are not published
+# at all - the case then reds on `server control-record telemetry missing`, which says nothing
+# about Magma. Measured: that is exactly what the spawn arm's ApplierReset case did on this
+# tier's first run. A switch that makes a counter readable is not the same kind of thing as the
+# strict-arming, pmap or persistent-map-arm markers above, which make a case ASSERT something it
+# never opted into, and those stay out of the census.
+foreach(listName IN ITEMS @MGL_MAGMA_FULL_TEST_LISTS@)
+    foreach(entry IN LISTS ${listName})
+        set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+            "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
+        if(entry MATCHES "CtWireScenario\\.")
+            set_tests_properties("${entry}" PROPERTIES ENVIRONMENT "MOBILEGL_TEST_SERVER_COUNTERS=1")
+        endif()
+    endforeach()
+endforeach()
 foreach(entry IN LISTS MGL_SPLIT_PA_STRICT_DRAW_TESTS MGL_SPLIT_PA_STRICT_DISPATCH_TESTS)
     set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
         "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
