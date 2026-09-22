@@ -9,10 +9,16 @@
 #include <MG_Remote/FatalFunnel.h>
 
 #include "../Includes.h" // MGLOG_F and the umbrella; a .cpp may pull it, a Transport/ header may not
+#include "Client/ClientSession.h"
+#include "Protocol/generated/protocol_generated.h"
+#include "Server/ServerSession.h"
+#include "Transport/ITransport.h"
 
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
+
+#include <flatbuffers/flatbuffers.h>
 
 namespace MobileGL::MG_Remote {
 
@@ -50,11 +56,39 @@ namespace MobileGL::MG_Remote {
         std::fputc('\n', stderr);
         std::fflush(stderr);
 
-        // `dl` step three publishes a SessionFault{family, detail, seq, op} frame to the peer
-        // here, so the guest's log names which record ended the session instead of reading a bare
-        // EOF. The family's wire projection is FatalCodeForFamily(family); until the frame lands
-        // the family is still carried in the line above and counted here.
-        (void)family;
+        // A SessionFault frame to the peer, BEFORE the abort, so the other side's log names the
+        // family instead of reading a bare EOF (5.2). Best-effort by nature: this thread is about
+        // to die, so a send that blocks or fails changes nothing it could have changed anyway.
+        //
+        // WHICHEVER ROLE THIS PROCESS IS. Under spawn only one session is active per process -
+        // the client has ClientSession, the server has ServerSession - so publishing on whatever
+        // control plane exists reaches the far side. Under inproc both exist and the frame goes
+        // to an in-process transport the aborting process will never read; harmless, and not
+        // worth a special case that would then be the untested one.
+        //
+        // `code` is the coarse seven-value projection; `family` carries the full word; `message`
+        // is the same line just logged. seq/op are not threaded through the 90 call sites and the
+        // message already names the op where it matters, so the frame carries what it can name
+        // honestly rather than a field that is always zero.
+        Transport::ITransport* control = nullptr;
+        if (Client::ClientSession* client = Client::ClientSession::Active()) {
+            control = client->Control_Plane();
+        }
+        if (control == nullptr) {
+            if (Server::ServerSession* server = Server::ServerSession::Active()) {
+                control = server->Control_Plane();
+            }
+        }
+        if (control != nullptr) {
+            ::flatbuffers::FlatBufferBuilder builder(256);
+            const auto fatal = ::MobileGL::Wire::CreateFatalDirect(
+                builder, FatalCodeForFamily(family), line, FatalFamilyName(family));
+            const auto root = ::MobileGL::Wire::CreateCtrlEnvelope(
+                builder, ::MobileGL::Wire::CtrlMsg::Fatal, fatal.Union());
+            ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);
+            (void)control->SendFrame(
+                MobileGLByteSpan{builder.GetBufferPointer(), builder.GetSize()});
+        }
 
         std::abort();
     }

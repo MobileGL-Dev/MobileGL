@@ -264,6 +264,11 @@ enum FatalCode : uint {
 table Fatal {
   code: FatalCode;
   message: string;
+  // P6 dl (CONTRACT-P6 5.2, D2). The internal MGFatalFamily word, so a peer that receives this
+  // frame before the sender aborts can name WHICH family ended the session instead of reading a
+  // bare EOF. `code` stays the coarse seven-value projection; this carries the full vocabulary.
+  // Append-only: an older peer that does not read it still gets `code` and `message`.
+  family: string;
 }
 
 // Severity-graded per plan B section 8.2: <= Warn is lossy, >= Error is

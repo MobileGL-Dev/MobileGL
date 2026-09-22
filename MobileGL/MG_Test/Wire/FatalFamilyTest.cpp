@@ -9,7 +9,9 @@
 // P6 `dl` (CONTRACT-P6 5.2). The Fatal-family table and its projection onto the wire FatalCode.
 
 #include <MG_Remote/FatalFamily.h>
+#include <MG_Remote/Protocol/generated/protocol_generated.h>
 
+#include <flatbuffers/flatbuffers.h>
 #include <gtest/gtest.h>
 
 #include <set>
@@ -80,4 +82,29 @@ TEST(FatalFamily, TheAnchorFamiliesProjectWhereTheirMeaningSays) {
     EXPECT_EQ(FatalCodeForFamily(MGFatalFamily::ApplyThreadNotRunning), FatalCode::ServerCrashed);
     // An unmigrated verb is a protocol-level "cannot honour this", not a crash.
     EXPECT_EQ(FatalCodeForFamily(MGFatalFamily::UnmigratedVerb), FatalCode::ProtocolCorruption);
+}
+
+TEST(FatalFamily, TheSessionFaultFrameCarriesTheFamilyAndItsCode) {
+    // `dl` step three (5.2): the Fatal frame a dying session publishes carries the full family
+    // WORD beside the coarse code, so a peer names which family ended the session instead of
+    // reading a bare EOF. This is the wire round-trip that proves the field is there and that the
+    // code the frame carries is the family's own projection.
+    for (const MGFatalFamily family : kAllFamilies) {
+        ::flatbuffers::FlatBufferBuilder builder(256);
+        const auto fatal = ::MobileGL::Wire::CreateFatalDirect(
+            builder, FatalCodeForFamily(family), "detail line", FatalFamilyName(family));
+        const auto root = ::MobileGL::Wire::CreateCtrlEnvelope(
+            builder, ::MobileGL::Wire::CtrlMsg::Fatal, fatal.Union());
+        ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);
+
+        ::flatbuffers::Verifier verifier(builder.GetBufferPointer(), builder.GetSize());
+        ASSERT_TRUE(::MobileGL::Wire::VerifyCtrlEnvelopeBuffer(verifier));
+        const auto* envelope = ::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer());
+        ASSERT_EQ(envelope->msg_type(), ::MobileGL::Wire::CtrlMsg::Fatal);
+        const auto* decoded = envelope->msg_as_Fatal();
+        ASSERT_NE(decoded, nullptr);
+        ASSERT_NE(decoded->family(), nullptr) << "the family field did not survive the wire";
+        EXPECT_STREQ(decoded->family()->c_str(), FatalFamilyName(family));
+        EXPECT_EQ(decoded->code(), FatalCodeForFamily(family));
+    }
 }

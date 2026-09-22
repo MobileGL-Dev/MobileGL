@@ -1463,7 +1463,8 @@ struct Fatal FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   struct Traits;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_CODE = 4,
-    VT_MESSAGE = 6
+    VT_MESSAGE = 6,
+    VT_FAMILY = 8
   };
   MobileGL::Wire::FatalCode code() const {
     return static_cast<MobileGL::Wire::FatalCode>(GetField<uint32_t>(VT_CODE, 0));
@@ -1471,12 +1472,17 @@ struct Fatal FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::String *message() const {
     return GetPointer<const ::flatbuffers::String *>(VT_MESSAGE);
   }
+  const ::flatbuffers::String *family() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_FAMILY);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint32_t>(verifier, VT_CODE, 4) &&
            VerifyOffset(verifier, VT_MESSAGE) &&
            verifier.VerifyString(message()) &&
+           VerifyOffset(verifier, VT_FAMILY) &&
+           verifier.VerifyString(family()) &&
            verifier.EndTable();
   }
 };
@@ -1490,6 +1496,9 @@ struct FatalBuilder {
   }
   void add_message(::flatbuffers::Offset<::flatbuffers::String> message) {
     fbb_.AddOffset(Fatal::VT_MESSAGE, message);
+  }
+  void add_family(::flatbuffers::Offset<::flatbuffers::String> family) {
+    fbb_.AddOffset(Fatal::VT_FAMILY, family);
   }
   explicit FatalBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
@@ -1505,8 +1514,10 @@ struct FatalBuilder {
 inline ::flatbuffers::Offset<Fatal> CreateFatal(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     MobileGL::Wire::FatalCode code = MobileGL::Wire::FatalCode::None,
-    ::flatbuffers::Offset<::flatbuffers::String> message = 0) {
+    ::flatbuffers::Offset<::flatbuffers::String> message = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> family = 0) {
   FatalBuilder builder_(_fbb);
+  builder_.add_family(family);
   builder_.add_message(message);
   builder_.add_code(code);
   return builder_.Finish();
@@ -1520,12 +1531,15 @@ struct Fatal::Traits {
 inline ::flatbuffers::Offset<Fatal> CreateFatalDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     MobileGL::Wire::FatalCode code = MobileGL::Wire::FatalCode::None,
-    const char *message = nullptr) {
+    const char *message = nullptr,
+    const char *family = nullptr) {
   auto message__ = message ? _fbb.CreateString(message) : 0;
+  auto family__ = family ? _fbb.CreateString(family) : 0;
   return MobileGL::Wire::CreateFatal(
       _fbb,
       code,
-      message__);
+      message__,
+      family__);
 }
 
 struct LogLine FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {

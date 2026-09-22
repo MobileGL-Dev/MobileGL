@@ -1034,6 +1034,21 @@ namespace MobileGL::MG_Remote::Client {
                 }
                 continue;
             }
+            if (envelope->msg_type() == ::MobileGL::Wire::CtrlMsg::Fatal) {
+                // `dl` step three: the server published a SessionFault before it aborted, so this
+                // is a death that NAMES ITSELF instead of arriving as a bare EOF. Log the family
+                // and detail, latch device-lost from it, and report the op declined - the same
+                // answer a hangup gives, now with a cause the guest's log can read.
+                if (const auto* fatal = envelope->msg_as_Fatal()) {
+                    const char* fam = fatal->family() ? fatal->family()->c_str() : "<none>";
+                    const char* msg = fatal->message() ? fatal->message()->c_str() : "";
+                    MGLOG_E("MG_Remote client: the server published a SessionFault before dying - "
+                            "Fatal family %s: %s", fam, msg);
+                }
+                LatchDeviceLost("the server published a SessionFault and then aborted");
+                frame.ok = false;
+                return MOBILEGL_ERR_TRANSPORT_CLOSED;
+            }
             if (envelope->msg_type() != ::MobileGL::Wire::CtrlMsg::SurfaceReply ||
                 envelope->msg_as_SurfaceReply() == nullptr) {
                 MGLOG_E("MG_Remote client: expected a SurfaceReply, got message type %d",
