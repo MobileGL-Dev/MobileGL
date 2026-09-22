@@ -772,3 +772,50 @@ P6（spawn transport）的实现包（a6 / c6 / lk / so / sm / cp / hs / dl / st
 - **门 8① 的两种门铃只在一条负载、一台设备上比过**，且参照注记里的 1600 spins/帧 属于更重的场景；若存在差异，应在每帧会合次数更多的负载上才看得见。
 - **spawn client 的窗口化字段仍不可信**，而且这一项是**结构**不是缺陷：要让 spawn client 推进窗口，得让 client 进程到达一次 `PipeStats::OnPresent`，而 client 的帧边界在 spawn 下是 `EmitPresent`（每条 present 记录一次）——接上去会与 backend 的帧边界重复计数。**不要顺手接**。
 - **`MOBILEGL_IPC_STAGE_MB` 同时是 arena 大小与 chunk 预算的来源**，所以分块的净效果没有被单变量隔离（§12.5 的 `tex` +194%）。
+
+## 13. P3b/P4b wave 2-D 包 D2（`7ed5da52`，WSL 桌面 lavapipe/llvmpipe）
+
+### 13.1 上传形状金标（R-11 / D-D4，`TextureUploadShapeScenario` 由记录升为门）
+
+工作负载常量 `kScatteredRects=40`、`kFrames=3`、一条连续带、**三张**纹理（第三张经
+`glTextureView` 的 level 1 上传，使 view/属主重映射落在被计数的窗口内）。
+
+| 臂 | emit | box | rect | jobs | client emitter |
+|---|---|---|---|---|---|
+| `DirectGLES.TextureUploadShape.`（monolith） | 9 | 9 | 0 | 9 | 9 |
+| `DirectGLES.Split.`（inproc） | 9 | 9 | 0 | 9 | 9 |
+| `DirectGLES.Spawn.` | 9 | 9 | 0 | 9 | 9 |
+| `DirectGLES.Tcp.` | 9 | 9 | 0 | 9 | 9 |
+
+P4a 的记录是两张纹理、无 client emitter 的 `emit=6 box=6 rect=0 jobs=6`（`ctu=0`），与本行
+**不可比**：工作负载不同。
+
+`rect=0` 不是散点图案的偶然，而是 unpack-ring 策略的既定输出：`Managers.cpp:8652` 在
+`UnpackRingAvailable()` 时把 `dirtyRectCount` 清零（"One box, one job"，即 Mali 悬崖的既有缓解），
+`:8764` 的 `rectShape` 还要求 `dirtyRectCount >= 2`。因此**客户端任何谓词翻转都动不了这四个数**
+——翻转 `summedArea*4 >= unionArea*3` 全绿，见 `notes/p34b/espryt-d2.md` 的四次尝试。红一次由
+"把 union box 切成两半 + `MOBILEGL_ESPRYT_DISABLE_UNPACK_RING=1`"做到：`box=6 rect=3 jobs=12`，
+而 26 个像素用例全绿。
+
+### 13.2 client 半边的读法（本包的修正）
+
+`ctu=` 与 `tex[]` 是否在同一个窗口里，按传输分：
+
+| 臂 | `tex[]` 在哪 | `ctu=` 在哪 |
+|---|---|---|
+| monolith | 唯一日志 | 同一行 |
+| inproc | **server** 日志（两个文件、一个进程、一套计数器） | 同一行 |
+| spawn / tcp | **server** 日志 | client 进程自己的计数器，**Present 节奏不同**——实测 `ctu=13` 对 `emit=9`，且用例读取时通常还没写出 |
+
+这与 §12.7 最后一条"spawn client 的窗口化字段仍不可信（是结构不是缺陷）"是同一件事，从集成用例
+这一侧再次证实。因此断言改读**进程内的 `MGPipeTextureEmitter::SubDataCount()`**（同一个计数器的源
+头，测试进程在四个臂下都是 client），`ctu=` 只在窗口对齐时断言；是否对齐由
+`PeekSplitRuntime()` 回答的传输决定，**不是**由数值是否 >= 0 决定——spawn 下 server 会发布一个
+完全可读的 `ctu=0`，按数值判会把比较悄悄变成 `0 == 9`。
+
+### 13.3 未跑项 / 不可调度项
+
+- **Mali 帧时增量（D-D4 要求与金标并列）不可调度。** 本阶段只有一台 Redmi（Adreno 830v2），
+  **无任何 Mali 设备**。按 Adreno 记录形状，偏差在此与场景头部注明：**Adreno-only; Mali delta
+  deferred**。不建模、不从 2026 年那次测量的条件推算。形状是悬崖的**因**，帧时是它在某一家硬件
+  上的**果**——门守的是因。

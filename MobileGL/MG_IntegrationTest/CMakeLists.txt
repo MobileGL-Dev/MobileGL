@@ -640,9 +640,16 @@ if (MOBILEGL_PIPE_PUSH)
     # question with a different owner's file behind it (review F-m7). ctu= is emitted by PipeStats
     # in EVERY push build whether or not anything increments it, so "the counter read zero" and
     # "no client emitter exists" are the same number and TextureUploadShape cannot tell them apart
-    # from the summary line alone. Once package B's texture emitter lands, an emitter that stopped
-    # emitting would read exactly like no emitter at all and the two-sided assertion the scenario
-    # exists for would pass while comparing nothing. This probe is what separates them.
+    # from the summary line alone. An emitter that STOPPED emitting reads exactly like no emitter
+    # at all in that field, and the two-sided assertion the scenario exists for would pass while
+    # comparing nothing. This probe is what separates them.
+    #
+    # THAT EMITTER HAS LANDED (P3b/P4b wave 2-D corrects this comment's tense):
+    # MG_Impl/Pipe/TextureEmit.h's EmitOneLevel increments
+    # CallClass::ClientTextureUploadEmissions on every piece it emits, so the probe hits and the
+    # else() arm below is unreachable on this tree. It is KEPT rather than deleted because it is
+    # what makes the arming decision falsifiable in both directions - a probe that cannot report
+    # "absent" cannot be shown to be looking for the right symbol.
     mgl_itest_probe_for_symbol(MGL_ITEST_CLIENT_TEXTURE_UPLOAD_EMITTER
         "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe" "ClientTextureUploadEmissions")
     if (MGL_ITEST_CLIENT_TEXTURE_UPLOAD_EMITTER)
@@ -1646,21 +1653,32 @@ gtest_discover_tests(MobileGLIntegrationTest
         ENVIRONMENT "${MGL_ITEST_VULKAN_OBJECT_SUBSYSTEM_NO_CONSUMER_ENVIRONMENT}"
 )
 
-# --- The texture upload shape: RECORDED, NOT GATED in P4a (D-D4) ----------------------
+# --- The texture upload shape: A GATE as of P3b/P4b R-11 (D-D4) -----------------------
 #
 # SSIM is blind to the box-versus-rect upload shape and the Mali cliff it hides is ~+6 ms/frame, so
 # the shape needs a number - two numbers, in fact, the server's tex[emit= box= rect= jobs=] and the
-# client's emit[ctu=], which agreeing is the whole reason both are published (D-L). What this lane
-# asserts is that the numbers could be READ, that the server bracket's own arithmetic holds and that
-# the two sides agree when both are non-zero; WHICH shape each texture took is RecordProperty'd and
-# printed for MEASUREMENTS.md. P3b/P4b turns it into a gate against a gold standard, with the Mali
-# frame-time delta published beside it - gating a shape this phase has not finished deciding would
-# either pin today's shape as the answer or fail on the change that is the next phase's point.
+# client's emit[ctu=], which agreeing is the whole reason both are published (D-L).
+#
+# P4a RECORDED those numbers rather than gating them, because the per-storage-owner emission cursor
+# with view/owner index remapping - what actually decides the shape for a texture uploaded through a
+# VIEW - was the next phase's and gating an unfinished shape pins a non-answer. THAT WORK LANDED
+# (MG_Impl/Pipe/TextureEmit.h's owner-keyed drain list; TextureObjectView::ToOwner*), so this lane's
+# RecordProperty block is now EXPECT_EQ against a gold row measured on this cursor, and the workload
+# carries a third texture written through a glTextureView so the remap is inside the counted window.
+#
+# MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1 IS THEREFORE MANDATORY HERE, not decorative: without it the
+# case SKIPS rather than dropping the third texture, because a conditional workload behind a fixed
+# gold row is a gate that passes by shrinking.
+#
+# THE MALI FRAME-TIME DELTA D-D4 asks for beside the gold is NOT SCHEDULABLE in this phase - one
+# Redmi, an Adreno, no Mali part - and is recorded as a declared deviation in the scenario header
+# and in docs/Disaggregated/MEASUREMENTS.md rather than modelled.
 #
 # Its own log path and its own single-case filter, for the per-lane-log reason above.
 mgl_itest_join_environment(MGL_ITEST_GLES_TEXTURE_UPLOAD_SHAPE_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_TEXTURE_UPLOAD_SHAPE_LANE=1"
     "MOBILEGL_PIPE_PUSH=0x1fff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/texture-upload-shape-DirectGLES.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
@@ -1671,6 +1689,7 @@ gtest_discover_tests(MobileGLIntegrationTest
     PROPERTIES
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
+        RESOURCE_LOCK texture-upload-shape-DirectGLES.log
         ENVIRONMENT "${MGL_ITEST_GLES_TEXTURE_UPLOAD_SHAPE_ENVIRONMENT}"
 )
 
@@ -2660,6 +2679,64 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_register_split_arms(
         "TextureViewAliasScenario.*-TextureViewAliasScenario.TheOwnerUploadDrainRunsAgainAfterADrawBoundary"
         "")
+
+    # ---- D2: THE UPLOAD-SHAPE GOLD, UNDER ALL THREE TRANSPORTS ------------------------------
+    #
+    # WRITTEN OUT PER ARM RATHER THAN THROUGH mgl_itest_register_split_arms, and the reason is
+    # structural rather than stylistic: the macro hands every arm the SHARED
+    # MGL_ITEST_GLES_<ARM>_ENVIRONMENT, and this case needs four things no shared list carries -
+    # MGITEST_TEXTURE_UPLOAD_SHAPE_LANE=1 (without it the case skips), MOBILEGL_PIPE_STATS=1 with
+    # PERIOD=1, MOBILEGL_PIPE_PUSH=0x1fff, and a MOBILEGL_LOG_FILE_PATH PRIVATE TO THE ARM. That
+    # last one is not negotiable: the library opens the log fopen(path, "w"), so two entries
+    # sharing a path truncate each other under `ctest -j` and the failure looks exactly like "the
+    # counter was never emitted". The PersistentMapArm pair above is the same shape for the same
+    # reason. A macro call here would produce three entries that all green-skip.
+    #
+    # WHAT THE SPLIT ARMS ADD OVER THE MONOLITH LANE. The monolith lane reads one log, because
+    # there is one role. Under SPAWN and TCP the client and the server are two PROCESSES with two
+    # independent counter sets - the client's line carries ctu= and the server's carries tex[] -
+    # and the `ctu == emit` comparison the whole scenario exists for is only a real comparison
+    # there. Under inproc it is one process with two log FILES, which is the arm that proves the
+    # role-derived path reading without needing two counter sets.
+    set(MGL_D2_TUS_FILTER "TextureUploadShapeScenario.TheEmittedUploadShapeIsRecordedAndTheTwoSidesAgree")
+    foreach(mglD2Arm Split Spawn Tcp)
+        string(TOLOWER "${mglD2Arm}" mglD2ArmLower)
+        set(mglD2Log "${CMAKE_CURRENT_BINARY_DIR}/texture-upload-shape-${mglD2ArmLower}-DirectGLES.log")
+        set(mglD2Extra)
+        if(mglD2Arm STREQUAL "Split")
+            set(mglD2Transport "MOBILEGL_TRANSPORT=inproc"
+                               "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}")
+        elseif(mglD2Arm STREQUAL "Spawn")
+            set(mglD2Transport "MOBILEGL_TRANSPORT=spawn"
+                               "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}")
+        else()
+            set(mglD2Transport "MOBILEGL_TRANSPORT=spawn"
+                               "MOBILEGL_IPC_CONTROL=${MOBILEGL_ITEST_TCP_ENDPOINT}"
+                               "MOBILEGL_IPC_DATA=stream" "MOBILEGL_IPC_REQUIRE_SAME_BUILD=1"
+                               "MOBILEGL_IPC_LOG_FORWARD=1" "MOBILEGL_IPC_TOKEN="
+                               "MGITEST_TCP_LANE=1" "MOBILEGL_ITEST_REQUIRE_GPU=1")
+            set(mglD2Extra FIXTURES_REQUIRED mobilegl-tcp)
+        endif()
+        mgl_itest_join_environment(MGL_D2_TUS_ENV_${mglD2Arm}
+            "MOBILEGL_BACKEND_TYPE=DirectGLES" ${mglD2Transport} "MGITEST_SPLIT_LANE=1"
+            "MGITEST_TEXTURE_UPLOAD_SHAPE_LANE=1" "MOBILEGL_PIPE_PUSH=0x1fff"
+            "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+            "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1"
+            "MOBILEGL_LOG_FILE_PATH=${mglD2Log}"
+            ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+        get_filename_component(mglD2LogName "${mglD2Log}" NAME)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectGLES.${mglD2Arm}.TextureUploadShape."
+            TEST_FILTER "${MGL_D2_TUS_FILTER}"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-gpu\;integration-${mglD2ArmLower}"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                RESOURCE_LOCK "${mglD2LogName}"
+                ${mglD2Extra}
+                ENVIRONMENT "${MGL_D2_TUS_ENV_${mglD2Arm}}"
+        )
+    endforeach()
 
     # The split half of the counting pair. MGITEST_PERSISTENT_MAP_ARM=emulated is R-6: under split
     # the adopt tier is pinned at T2, the resource owner declines every acquisition and the client

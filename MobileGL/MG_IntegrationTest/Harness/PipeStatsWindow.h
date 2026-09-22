@@ -177,6 +177,37 @@ namespace MGITest::PipeStatsWindow {
         return Last(ReadLaneLog());
     }
 
+    // ---- ONE ROLE AT A TIME, and P3b/P4b wave 2-D package D2 is why it had to exist -----------
+    //
+    // LastFromLaneLog() concatenates and takes the LAST window, which is the right answer for a
+    // counter only ONE role ever increments. It is the wrong answer for a claim that compares two
+    // roles' readings of the SAME records - TextureUploadShape's `tex[emit=]` (the server's) and
+    // `ctu=` (the client's) - because under SPAWN and TCP the two roles are two PROCESSES with two
+    // independent sets of counters. The client's line then carries `ctu=N tex[emit=0]` and the
+    // server's carries `ctu=0 tex[emit=N]`, and whichever line happens to be last answers BOTH
+    // questions with one role's numbers. The comparison silently becomes `N == 0` or `0 == N`.
+    //
+    // Under INPROC it happens to work either way - one process, one set of atomic counters, two
+    // log FILES - and that is exactly why this had to be written against the spawn shape rather
+    // than discovered by reading the inproc lane.
+    //
+    // Both return `found == false` where that role has no log (the pull build has no server half;
+    // a lane that configured no MOBILEGL_LOG_FILE_PATH has neither), which a caller must treat as
+    // "could not look" rather than as a zero.
+    inline Window LastFromClientLog() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MGPipeSyncPeerLog();
+#endif
+        return Last(ReadWholeFile(LibraryLogPath()));
+    }
+
+    inline Window LastFromServerLog() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MGPipeSyncPeerLog();
+#endif
+        return Last(ReadWholeFile(ServerLibraryLogPath()));
+    }
+
     // One counter out of that line, by its short name ("mpr", "draws", "csom"), or -1 when the
     // line does not carry it. The search includes the SEPARATOR before the name and the `=` after
     // it, so "draws" cannot match "draws/f=" and "mpr" cannot match a longer name ending in it -

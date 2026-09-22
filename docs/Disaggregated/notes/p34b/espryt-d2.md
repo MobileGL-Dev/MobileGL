@@ -98,3 +98,100 @@ from `os.environ` and strips only the transport keys). A feature knob that reach
 three is the worst of the three states: the lane is green and tests nothing.
 
 ---
+
+## Slice 2 — `TextureUploadShapeScenario` promoted from record to gate (R-11 / D-D4)
+
+`RecordProperty` → `EXPECT_EQ` against a gold row measured on this cursor, plus a third texture
+uploaded through a `glTextureView` so the view/owner remap is inside the counted workload.
+
+### The gold row
+
+Workload constants `kScatteredRects=40`, `kFrames=3`, one contiguous band, three textures.
+
+| | emit | box | rect | jobs | client emitter |
+|---|---|---|---|---|---|
+| **gold (this cursor)** | **9** | **9** | **0** | **9** | **9** |
+| P4a's record (two textures, no client emitter) | 6 | 6 | 0 | 6 | ctu=0 |
+
+Identical on all four arms — `DirectGLES.TextureUploadShape.` (monolith), `.Split.`, `.Spawn.`,
+`.Tcp.`.
+
+### The client half is read from the emitter, not from `ctu=`
+
+Measured, and it is a correction rather than a preference:
+
+| arm | where `tex[]` is | where `ctu=` is |
+|---|---|---|
+| monolith | the one log | same line |
+| inproc | the SERVER's log (two files, one process, one counter set) | same line |
+| spawn / tcp | the SERVER's log | the CLIENT process's own counters, on a **different Present cadence** — measured `ctu=13` against `emit=9`, and usually not yet written at all when the case reads |
+
+So `ctu == emit` is not a well-posed comparison under spawn/tcp from the summary lines. The log
+field is kept as a RECORD and asserted only where the two are window-aligned (decided by asking
+`PeekSplitRuntime()` which transport resolved — **not** by testing whether the number is >= 0,
+which was this case's first mistake: the server publishes a perfectly readable `ctu=0` under
+spawn and the comparison silently became `0 == 9`). The ASSERTION reads
+`MGPipeTextureEmitter::SubDataCount()` in-process, which is the same counter's source and is the
+client's true count in every arm, because the test process is the client under all four.
+
+`Harness/PipeStatsWindow.h` gains `LastFromClientLog()` / `LastFromServerLog()` for this.
+
+### Red-once (R-16)
+
+**The prescribed flip does not reach this workload, and that is a finding.** Flipping
+`summedArea * 4 >= unionArea * 3` in `MipmapStorage::GetDirtyRects` leaves the gate GREEN. Four
+attempts, in order, all green:
+
+1. flip `summedArea*4 >= unionArea*3` → green
+2. `rects.size() < 2` → `rects.empty()` → green
+3. remove the union-box re-seed in `MarkDirtyRegion` → green
+4. `MOBILEGL_ESPRYT_DISABLE_UNPACK_RING=1` alone → green
+
+The reason is two gates downstream of the predicate, either of which alone forces the box arm:
+
+* `Managers.cpp:8764` `rectShape = subRectEligible && dirtyRectCount >= 2` — the SERVER needs at
+  least two rects, and the client's list collapses to one for this workload; and
+* `Managers.cpp:8652` `if (BufferImpl::UnpackRingAvailable()) dirtyRectCount = 0;` — **by design**:
+  "through the unpack ring every glTexSubImage is a GPU copy job (Mali), so ~100 sprite rects
+  become ~100 jobs whose fixed cost dwarfs the union box's extra bytes… One box, one job."
+
+So `box=9 rect=0` is not an accident of the scatter pattern: it is the unpack-ring policy's
+intended output, and no client-side predicate can move it while the ring is available. The gold
+row pins the policy's output, which is the right thing to pin.
+
+The red-once that DOES bite makes `GetDirtyRects` hand back the union box cut in two AND disables
+the unpack ring:
+
+```
+DirectGLES.TextureUploadShape. ... FAILED
+  the BOX/RECT split moved: 6 box emissions against a gold of 9
+  the BOX/RECT split moved: 3 rect-list emissions against a gold of 0
+  the JOB count moved: 12 against a gold of 9
+  tex[emit=9 box=6 rect=3 jobs=12]
+```
+
+and all 26 pixel cases of `TextureView` / `TextureViewAlias` / `SampledSetStaleness` /
+`ImageSizeAfterRespec` / `CopyImageLevelRange` / `ClearThenReadPixels` stay GREEN under the same
+patch — the required property, and the point of the gate: SSIM and every pixel assertion are blind
+to a shape that inverted.
+
+### The Mali frame-time delta is NOT published
+
+D-D4 asks for the +6 ms/frame reading beside the gold. **Not schedulable**: this phase has one
+device, a Redmi with an Adreno, and no Mali part. Recorded as a declared deviation in the scenario
+header and in `docs/Disaggregated/MEASUREMENTS.md` as "Adreno-only; Mali delta deferred" rather
+than modelled or copied from the 2026 measurement's conditions. What the gate pins is the SHAPE,
+on the reasoning that the shape is the cliff's cause and the frame time is its consequence on one
+vendor's hardware.
+
+### Stale prose corrected
+
+All three said the client emitter had not landed. `MG_Impl/Pipe/TextureEmit.h`'s `EmitOneLevel`
+increments `CallClass::ClientTextureUploadEmissions` on every piece it emits, and the build's own
+probe hits (`MGITEST_PIPE_CLIENT_TEXTURE_UPLOAD_EMITTER_PRESENT=1` is in every lane's environment).
+
+* `Scenarios/TextureUploadShapeScenario.cpp` header and the client-half comment block
+* `MG_IntegrationTest/CMakeLists.txt`, the probe's comment ("Once package B's texture emitter
+  lands"). The `else()` arm is KEPT — it is what makes the arming decision falsifiable in both
+  directions — but it is unreachable on this tree and now says so.
+* `notes/p4a/p4a-results/gates-v1.md`'s re-run table
