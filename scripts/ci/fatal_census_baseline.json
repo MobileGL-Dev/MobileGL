@@ -1,5 +1,5 @@
 {
-  "abort_sites": 93,
+  "abort_sites": 4,
   "families": [
     "AbiMismatch",
     "ApplyThreadJoinTimeout",

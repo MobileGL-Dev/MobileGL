@@ -9,6 +9,7 @@
 // P5 package s1: the server half of a session.
 
 #include "ServerSession.h"
+#include <MG_Remote/FatalFunnel.h>
 
 #include "../CapsCodec.h"
 #include "../Protocol/generated/protocol_generated.h"
@@ -115,7 +116,7 @@ namespace MobileGL::MG_Remote::Server {
             // DynamicBackendParameters still carries SizeT, so a peer built from a different
             // tree hands over a caps block whose members are at different offsets and whose
             // bytes are all individually plausible.
-            MGLOG_F("MGPipe: Fatal{AbiMismatch, \"%s\"} ours=%llu theirs=%llu ourBuild=%s "
+            SessionFail(MGFatalFamily::AbiMismatch, "MGPipe: Fatal{AbiMismatch, \"%s\"} ours=%llu theirs=%llu ourBuild=%s "
                     "theirBuild=%s - the two peers were not built from the same struct shapes, "
                     "and there is no downgrade path: the caps block's size is ABI-dependent "
                     "(MGPipeTypes.h:145-146) and every field past the first difference would be "
@@ -123,7 +124,6 @@ namespace MobileGL::MG_Remote::Server {
                     what, static_cast<unsigned long long>(ours),
                     static_cast<unsigned long long>(theirs),
                     ourStamp == nullptr ? "?" : ourStamp, theirStamp == nullptr ? "?" : theirStamp);
-            std::abort();
         }
 
         // MOBILEGL_IPC_RING_MB / MOBILEGL_IPC_STAGE_MB, actually applied.
@@ -164,7 +164,7 @@ namespace MobileGL::MG_Remote::Server {
         // SetCapabilityBits / SetConsumedSubsystems for why the one that used to be here was
         // the phase's marquee defect committed from the server's side.
         [[noreturn]] void FatalUnsetCallMask(Bool capBitsSet, Bool consumedSet) {
-            MGLOG_F("MGPipe: Fatal{UnsetCallMask} - %s%s%s was never set on this ServerSession, "
+            SessionFail(MGFatalFamily::UnsetCallMask, "MGPipe: Fatal{UnsetCallMask} - %s%s%s was never set on this ServerSession, "
                     "and there is no default: a guessed consumer mask makes the client's R-8 "
                     "liveness gates answer from a server-side fact the server never stated. The "
                     "client would stop emitting whole record families, clear its dirty flags on "
@@ -174,7 +174,6 @@ namespace MobileGL::MG_Remote::Server {
                     capBitsSet ? "" : "SetCapabilityBits",
                     (!capBitsSet && !consumedSet) ? " and " : "",
                     consumedSet ? "" : "SetConsumedSubsystems");
-            std::abort();
         }
 
         // ---- P5c ev: the reverse channel's PRODUCER callbacks (CONTRACT-P5C §4.1) --------
@@ -192,12 +191,11 @@ namespace MobileGL::MG_Remote::Server {
         // a Reserve that returns nullptr is Fatal{EventRingOverflow}. CountDrop and the
         // eventRingFull latch stay built and stay unused-by-policy; P9 owns the policy.
         [[noreturn]] void FatalEventRingOverflow(const char* eventName, Uint64 payloadBytes) {
-            MGLOG_F("MGPipe: Fatal{EventRingOverflow} - the producer of %s could not reserve "
+            SessionFail(MGFatalFamily::EventRingOverflow, "MGPipe: Fatal{EventRingOverflow} - the producer of %s could not reserve "
                     "%llu bytes on SEG_EVENT. P5c's events are lossless and a full ring under "
                     "lockstep is a producer burst no measured workload has, so this is a "
                     "defect, not a drop (CONTRACT-P5C §4.4; the drop policy is P9's)",
                     eventName, static_cast<unsigned long long>(payloadBytes));
-            std::abort();
         }
 
         // ---- P5e (ra), CONTRACT-P5E §2.6: the ring stops being a Fatal and becomes a queue --
@@ -239,14 +237,13 @@ namespace MobileGL::MG_Remote::Server {
             // be a hang with a comment on it.
             const Uint64 cap = session.Events().Ring().MaxRecordBytes();
             if (payloadBytes + sizeof(Transport::RingRecordHeader) > cap) {
-                MGLOG_F("MGPipe: Fatal{EventRingOverflow} - %s needs %llu bytes and SEG_EVENT "
+                SessionFail(MGFatalFamily::EventRingOverflow, "MGPipe: Fatal{EventRingOverflow} - %s needs %llu bytes and SEG_EVENT "
                         "caps ONE record at %llu (half its capacity). Flow control cannot help: "
                         "no amount of draining makes a record fit a ring that is too small for "
                         "it. Raise MOBILEGL_IPC_EVENT_KB or slice the event at its producer, as "
                         "the writeback path already does",
                         eventName, static_cast<unsigned long long>(payloadBytes),
                         static_cast<unsigned long long>(cap));
-                std::abort();
             }
 
             Transport::RingControl& control = session.Control();
@@ -261,12 +258,11 @@ namespace MobileGL::MG_Remote::Server {
                 session.PublishEvents();
                 if (!drained() && !bell.Wait(control.consumerParked, drained, /*spinUs=*/0,
                                              kEventBacklogWaitMs)) {
-                    MGLOG_F("MGPipe: Fatal{EventRingOverflow} - %s waited %u ms for the client "
+                    SessionFail(MGFatalFamily::EventRingOverflow, "MGPipe: Fatal{EventRingOverflow} - %s waited %u ms for the client "
                             "to drain SEG_EVENT and it never did. Under run-ahead the apply "
                             "thread parks on this ring (CONTRACT-P5E §2.6); a client that does "
                             "not drain is one that is not running",
                             eventName, kEventBacklogWaitMs);
-                    std::abort();
                 }
                 slot = session.Events().Reserve(kind, payloadBytes);
                 if (slot != nullptr) return slot;
@@ -274,11 +270,10 @@ namespace MobileGL::MG_Remote::Server {
             // Two full rounds against a ring the record provably fits: something else is
             // producing into it, which on this side is impossible (one producer, the apply
             // thread, by construction).
-            MGLOG_F("MGPipe: Fatal{EventRingOverflow} - %s could not reserve %llu bytes on an "
+            SessionFail(MGFatalFamily::EventRingOverflow, "MGPipe: Fatal{EventRingOverflow} - %s could not reserve %llu bytes on an "
                     "emptied SEG_EVENT. The apply thread is SEG_EVENT's only producer, so a "
                     "drained ring that still refuses a record it fits is a corrupt cursor set",
                     eventName, static_cast<unsigned long long>(payloadBytes));
-            std::abort();
         }
 
         // Accept owns the single process callback table. Its owner need not be the
@@ -286,9 +281,8 @@ namespace MobileGL::MG_Remote::Server {
         ServerSession& ReverseCallbackOwner(const char* callback) {
             auto* session = ServerSession::Active();
             if (session == nullptr) {
-                MGLOG_F("MGPipe: Fatal{RoleViolation, \"%s.session-missing\"} - "
+                SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"%s.session-missing\"} - "
                         "a reverse callback has no accepted session owner", callback);
-                std::abort();
             }
             return *session;
         }
@@ -300,12 +294,11 @@ namespace MobileGL::MG_Remote::Server {
                 // The backend handed over a segment-tagged blobref. The ONLY legal shape at
                 // this boundary is the monolith one - Offset is the mapped address, valid
                 // for this call - because the segment copy is THIS function's own job.
-                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"OnBufferWriteback.Seg\"} - the "
+                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"OnBufferWriteback.Seg\"} - the "
                         "writeback producer was handed Seg %u; at the backend boundary the "
                         "blobref names the backend's own mapped bytes (Seg = "
                         "kMGHostSpanSegNone) and the copy into SEG_EVENT is the producer's",
                         bytes.Seg);
-                std::abort();
             }
             const Uint64 payloadBytes = sizeof(Transport::EventBufferWritebackHead) + bytes.Size;
             void* slot = ReserveEventOrBlock(session, Transport::kEventBufferWriteback,
@@ -375,11 +368,10 @@ namespace MobileGL::MG_Remote::Server {
         template <typename Fn>
         void InstallReverseCallback(Fn& entry, Fn producer) {
             if (entry != nullptr && entry != producer) {
-                MGLOG_F("MGPipe: Fatal{RoleViolation, \"callback-double-install\"} - a reverse "
+                SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"callback-double-install\"} - a reverse "
                         "MGPipeCallbacks entry is already claimed by a different function. With "
                         "an active transport the four reverse entries are the server "
                         "session's producers; the client installs them under monolith only");
-                std::abort();
             }
             entry = producer;
         }
@@ -442,9 +434,8 @@ namespace MobileGL::MG_Remote::Server {
         if (!g_sessionOwner.compare_exchange_strong(expectedOwner, this,
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
             if (expectedOwner == this) return MOBILEGL_ERR_INVALID_ARGUMENT;
-            MGLOG_F("MGPipe: Fatal{RoleViolation, \"callback-double-install\"} - another "
+            SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"callback-double-install\"} - another "
                     "ServerSession already owns or is accepting the process reverse channel");
-            std::abort();
         }
         struct ReleaseFailedClaim {
             ServerSession* self;
@@ -720,9 +711,8 @@ namespace MobileGL::MG_Remote::Server {
     Transport::RingControl& ServerSession::Control() {
         Transport::RingControl* control = m_shm.CmdControl();
         if (control == nullptr) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"ServerSession::Control\"} - the control "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ServerSession::Control\"} - the control "
                     "page does not exist until Accept() has mapped SEG_CMD");
-            std::abort();
         }
         return *control;
     }
@@ -746,9 +736,8 @@ namespace MobileGL::MG_Remote::Server {
             return *m_externalConsumerBell;
         }
         if (m_transport == nullptr) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"ServerSession::ConsumerDoorbell\"} - no "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ServerSession::ConsumerDoorbell\"} - no "
                     "transport; Accept() has not run");
-            std::abort();
         }
         if (m_transport->Role() == Transport::TransportRole::InProcess) {
             return static_cast<Transport::InProcessTransport*>(m_transport)->SelfDoorbell();
@@ -756,10 +745,9 @@ namespace MobileGL::MG_Remote::Server {
         // P6: SocketTransport's pair. The accessors stay off ITransport by ruling (contract
         // §3.9) precisely so that this stays one switch in one file rather than two virtuals
         // every transport has to invent a home for.
-        MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"ServerSession::ConsumerDoorbell\"} - transport "
+        SessionFail(MGFatalFamily::UnmigratedVerb, "MGPipe: Fatal{UnmigratedVerb, \"ServerSession::ConsumerDoorbell\"} - transport "
                 "role %u has no doorbell pair yet; that is P6's SocketTransport",
                 static_cast<unsigned>(m_transport->Role()));
-        std::abort();
     }
 
     Transport::Doorbell& ServerSession::ProducerDoorbell() {
@@ -767,17 +755,15 @@ namespace MobileGL::MG_Remote::Server {
             return *m_externalProducerBell;
         }
         if (m_transport == nullptr) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"ServerSession::ProducerDoorbell\"} - no "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ServerSession::ProducerDoorbell\"} - no "
                     "transport; Accept() has not run");
-            std::abort();
         }
         if (m_transport->Role() == Transport::TransportRole::InProcess) {
             return static_cast<Transport::InProcessTransport*>(m_transport)->PeerDoorbell();
         }
-        MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"ServerSession::ProducerDoorbell\"} - transport "
+        SessionFail(MGFatalFamily::UnmigratedVerb, "MGPipe: Fatal{UnmigratedVerb, \"ServerSession::ProducerDoorbell\"} - transport "
                 "role %u has no doorbell pair yet; that is P6's SocketTransport",
                 static_cast<unsigned>(m_transport->Role()));
-        std::abort();
     }
 
     Transport::SessionSegments& ServerSession::Shm() { return m_shm; }

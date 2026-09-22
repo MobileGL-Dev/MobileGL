@@ -10,6 +10,7 @@
 // reply read that sits inside it are package c1's (EmitAndWait below is still c0's stub).
 
 #include "ClientSession.h"
+#include <MG_Remote/FatalFunnel.h>
 
 #include "../CapsCodec.h"
 #include "../Protocol/generated/protocol_generated.h"
@@ -60,12 +61,10 @@ namespace MobileGL::MG_Remote::Client {
     } // namespace
 
 #define MGP5_C0_STUB(what)                                                                                             \
-    do {                                                                                                               \
-        MGLOG_F("MGPipe: Fatal{UnimplementedClientSession, \"%s\"} - P5 packages s1/c1 have not "                      \
+    SessionFail(MGFatalFamily::UnimplementedClientSession,                                                             \
+                "MGPipe: Fatal{UnimplementedClientSession, \"%s\"} - P5 packages s1/c1 have not "                      \
                 "landed this yet; c0 shipped the signature only",                                                      \
-                what);                                                                                                 \
-        std::abort();                                                                                                  \
-    } while (0)
+                what)
 
     namespace {
 
@@ -124,25 +123,23 @@ namespace MobileGL::MG_Remote::Client {
         // to be reachable, which is how the gap survived review.
         [[noreturn]] void FatalProtocolVersionMismatch(unsigned theirMajor, unsigned theirMinor,
                                                        const char* theirStamp) {
-            MGLOG_F("MGPipe: Fatal{AbiMismatch, \"protocol version\"} ours=%u.%u theirs=%u.%u "
+            SessionFail(MGFatalFamily::AbiMismatch, "MGPipe: Fatal{AbiMismatch, \"protocol version\"} ours=%u.%u theirs=%u.%u "
                     "ourBuild=%s theirBuild=%s - the peer speaks a different MGPipe protocol. "
                     "Under spawn this is most often a stale MOBILEGL_IPC_SERVER_PATH pointing at "
                     "a libMobileGLServer.so built from another tree.",
                     static_cast<unsigned>(MOBILEGL_PROTOCOL_ABI_MAJOR),
                     static_cast<unsigned>(MOBILEGL_PROTOCOL_ABI_MINOR), theirMajor, theirMinor,
                     GIT_COMMIT_HASH_SHORT, theirStamp == nullptr ? "?" : theirStamp);
-            std::abort();
         }
 
         [[noreturn]] void FatalAbiMismatch(const char* what, Uint64 ours, Uint64 theirs,
                                            const char* theirStamp) {
-            MGLOG_F("MGPipe: Fatal{AbiMismatch, \"%s\"} ours=%llu theirs=%llu ourBuild=%s "
+            SessionFail(MGFatalFamily::AbiMismatch, "MGPipe: Fatal{AbiMismatch, \"%s\"} ours=%llu theirs=%llu ourBuild=%s "
                     "theirBuild=%s - never a downgrade: the caps block's size is ABI-dependent "
                     "and every field past the first difference would be read at the wrong offset",
                     what, static_cast<unsigned long long>(ours),
                     static_cast<unsigned long long>(theirs), GIT_COMMIT_HASH_SHORT,
                     theirStamp == nullptr ? "?" : theirStamp);
-            std::abort();
         }
 
         // Guarded the same way ServerSession's helpers are: MG_Config::Ipc only exists
@@ -326,9 +323,8 @@ namespace MobileGL::MG_Remote::Client {
             Bool corrupt = false;
             while (events.Pop(view, &corrupt)) {
                 if (corrupt) {
-                    MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"event-ring\"} - the reverse "
+                    SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"event-ring\"} - the reverse "
                             "channel's record stream is corrupt");
-                    std::abort();
                 }
                 switch (view.kind) {
                 case Transport::kEventBufferWriteback: {
@@ -337,11 +333,10 @@ namespace MobileGL::MG_Remote::Client {
                         static_cast<const Transport::EventBufferWritebackHead*>(view.payload);
                     const void* bytes = static_cast<const Uint8*>(view.payload) + sizeof(*head);
                     if (view.payloadSize - sizeof(*head) < head->Size) {
-                        MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"buffer-writeback\"} - the "
+                        SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"buffer-writeback\"} - the "
                                 "head declares %llu inline bytes and the record carries %llu",
                                 static_cast<unsigned long long>(head->Size),
                                 static_cast<unsigned long long>(view.payloadSize - sizeof(*head)));
-                        std::abort();
                     }
                     // The blobref names SEG_EVENT and the IN-SEGMENT offset of those inline
                     // bytes - never a host address (R-2's rule B), which is the whole reason
@@ -363,11 +358,10 @@ namespace MobileGL::MG_Remote::Client {
                         static_cast<const Transport::EventGpuWrittenHead*>(view.payload);
                     const Uint64 tail = view.payloadSize - sizeof(*head);
                     if (tail / sizeof(Transport::EventRange) < head->RangeCount) {
-                        MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"gpu-written\"} - RangeCount "
+                        SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"gpu-written\"} - RangeCount "
                                 "%u does not fit the record's %llu tail bytes",
                                 static_cast<unsigned>(head->RangeCount),
                                 static_cast<unsigned long long>(tail));
-                        std::abort();
                     }
                     // EventRange and MGPRange are the same two Uint64s (EventRing.h:61-66
                     // asserts it), so the tail is handed over as-is rather than copied into
@@ -408,12 +402,11 @@ namespace MobileGL::MG_Remote::Client {
                     // least one byte and that byte terminates the string.
                     if (head->MessageBytes == 0 || tail < head->MessageBytes ||
                         message[head->MessageBytes - 1] != '\0') {
-                        MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"kEventGlError\"} - "
+                        SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"kEventGlError\"} - "
                                 "MessageBytes %u against a %llu-byte tail, or the terminating "
                                 "NUL is missing",
                                 static_cast<unsigned>(head->MessageBytes),
                                 static_cast<unsigned long long>(tail));
-                        std::abort();
                     }
                     // The error queue is CLIENT state, written here on the GL thread. The
                     // observation point is the next drain after the post - P9 owns the
@@ -1381,11 +1374,10 @@ namespace MobileGL::MG_Remote::Client {
         if (statusOut != nullptr) *statusOut = Wire::ReplySink::kStatusError;
         if (replySizeOut != nullptr) *replySizeOut = 0;
         if (!m_started) {
-            MGLOG_F("MGPipe: Fatal{NoClientSession, \"%s\"} - EmitAndWait on a session that has "
+            SessionFail(MGFatalFamily::NoClientSession, "MGPipe: Fatal{NoClientSession, \"%s\"} - EmitAndWait on a session that has "
                     "not started. There is no fall-through: a record that could not be emitted "
                     "is a verb that did not happen",
                     Wire::WireOpName(op));
-            std::abort();
         }
 
         // R-1's INVARIANT, AS A RUNTIME CHECK RATHER THAN A SENTENCE - but only while the
@@ -1399,11 +1391,10 @@ namespace MobileGL::MG_Remote::Client {
         // the fill quiescent during that apply). With the batch off, the original check
         // stands as written.
         if (MG_Config::Ipc.BatchWaits == 0 && ApplyThreadIsInsideApplier()) {
-            MGLOG_F("MGPipe: Fatal{BarrierViolation, \"%s\"} - the apply thread is inside the "
+            SessionFail(MGFatalFamily::BarrierViolation, "MGPipe: Fatal{BarrierViolation, \"%s\"} - the apply thread is inside the "
                     "applier while the GL thread is emitting. R-1 makes at most one of them "
                     "runnable, which is what keeps one process-wide gPipeInputs legal",
                     Wire::WireOpName(op));
-            std::abort();
         }
 
         Uint64 seq = m_encoder.EncodeRecord(op, payload, payloadBytes, tails, tailCount);
@@ -1418,11 +1409,10 @@ namespace MobileGL::MG_Remote::Client {
             const BarrierWaitScope waiting;
             const auto wait = m_producer.WaitForCmdSpace(needed, kBarrierTimeoutMs);
             if (wait != Transport::SessionWait::Reached) {
-                MGLOG_F("MGPipe: Fatal{RetirementWaitFailed, \"SEG_CMD\"} - %s needs %llu "
+                SessionFail(MGFatalFamily::RetirementWaitFailed, "MGPipe: Fatal{RetirementWaitFailed, \"SEG_CMD\"} - %s needs %llu "
                         "reclaimable bytes; the retirement wait ended on %s",
                         Wire::WireOpName(op), static_cast<unsigned long long>(needed),
                         wait == Transport::SessionWait::ShutDown ? "shutdown" : "timeout");
-                std::abort();
             }
             // P5e (ra, §2.6): EVERY WAIT EXIT DRAINS. The cmd-space wait is one of the two
             // safety nets under run-ahead (the stage bell is the other), and a client parked
@@ -1432,9 +1422,8 @@ namespace MobileGL::MG_Remote::Client {
             DrainEventRing(m_events);
             seq = m_encoder.EncodeRecord(op, payload, payloadBytes, tails, tailCount);
             if (seq == Wire::kInvalidSeq) {
-                MGLOG_F("MGPipe: Fatal{RingOverrun, \"SEG_CMD\"} - %s refused after sufficient "
+                SessionFail(MGFatalFamily::RingOverrun, "MGPipe: Fatal{RingOverrun, \"SEG_CMD\"} - %s refused after sufficient "
                         "space retired", Wire::WireOpName(op));
-                std::abort();
             }
         }
 
@@ -1588,12 +1577,11 @@ namespace MobileGL::MG_Remote::Client {
             return seq;
         }
         if (wait != Transport::SessionWait::Reached) {
-            MGLOG_F("MGPipe: Fatal{BarrierTimeout, \"%s\"} - appliedSeq did not reach %llu within "
+            SessionFail(MGFatalFamily::BarrierTimeout, "MGPipe: Fatal{BarrierTimeout, \"%s\"} - appliedSeq did not reach %llu within "
                     "%llu ms. A bounded wait is deliberate: a wedged CI job and a lost record look "
                     "identical from outside, and only one of them is a bug worth finding",
                     Wire::WireOpName(op), static_cast<unsigned long long>(seq),
                     static_cast<unsigned long long>(waitBudgetMs));
-            std::abort();
         }
 
         // THE REVERSE CHANNEL IS DRAINED HERE, and here is the only place it can be: under the
@@ -1620,11 +1608,10 @@ namespace MobileGL::MG_Remote::Client {
         Uint64 replySize = 0;
         Int32 status = Wire::ReplySink::kStatusError;
         if (!ReadReply(seq, replyOut, replyBytes, &status, &replySize)) {
-            MGLOG_F("MGPipe: Fatal{ReplyMissing, \"%s\"} - seq %llu carries kReplySlot and the "
+            SessionFail(MGFatalFamily::ReplyMissing, "MGPipe: Fatal{ReplyMissing, \"%s\"} - seq %llu carries kReplySlot and the "
                     "server applied it, but its slot does not stamp that seq. The stamp is what "
                     "makes a wrong-slot read detectable rather than plausible (R-3)",
                     Wire::WireOpName(op), static_cast<unsigned long long>(seq));
-            std::abort();
         }
         if (statusOut != nullptr) *statusOut = status;
         if (replySizeOut != nullptr) *replySizeOut = replySize;
@@ -1637,11 +1624,10 @@ namespace MobileGL::MG_Remote::Client {
         // (R-5). A client that treated it as a failure would re-create ID-39 from the other
         // side.
         if (replyOut != nullptr && replySize > replyBytes) {
-            MGLOG_F("MGPipe: Fatal{ReplyTooLarge, \"%s\"} - the answer is %llu bytes and the "
+            SessionFail(MGFatalFamily::ReplyTooLarge, "MGPipe: Fatal{ReplyTooLarge, \"%s\"} - the answer is %llu bytes and the "
                     "caller offered %llu. P5 does not chunk a reply",
                     Wire::WireOpName(op), static_cast<unsigned long long>(replySize),
                     static_cast<unsigned long long>(replyBytes));
-            std::abort();
         }
         return seq;
     }
@@ -1730,12 +1716,11 @@ namespace MobileGL::MG_Remote::Client {
             return;
         }
         if (wait != Transport::SessionWait::Reached) {
-            MGLOG_F("MGPipe: Fatal{BarrierTimeout, \"%s\"} - a forced run-ahead wait did not "
+            SessionFail(MGFatalFamily::BarrierTimeout, "MGPipe: Fatal{BarrierTimeout, \"%s\"} - a forced run-ahead wait did not "
                     "reach appliedSeq %llu within %u ms. The forced waits of CONTRACT-P5E §2.5 "
                     "are the points at which the client must be in step again, so a wedge here "
                     "is a wedge in the queue and not a slow frame",
                     why, static_cast<unsigned long long>(target), kBarrierTimeoutMs);
-            std::abort();
         }
         // EVERY WAIT EXIT DRAINS (§2.6). It is what the flow-control deadlock argument rests
         // on: the server blocks only on a full event ring, the client blocks only on
@@ -1794,13 +1779,12 @@ namespace MobileGL::MG_Remote::Client {
                 DrainEventRing(m_events);
             }
             if (wait == Transport::SessionWait::TimedOut) {
-                MGLOG_F("MGPipe: Fatal{PresentCreditTimeout} - present %llu waited %u ms for "
+                SessionFail(MGFatalFamily::PresentCreditTimeout, "MGPipe: Fatal{PresentCreditTimeout} - present %llu waited %u ms for "
                         "swap %llu to come back with a credit of %u. The credit, never the "
                         "ring's bytes, is what paces a run-ahead client (CONTRACT-P5E §2.4), "
                         "so a credit that never returns is a server that stopped swapping",
                         static_cast<unsigned long long>(serial), kBarrierTimeoutMs,
                         static_cast<unsigned long long>(awaited), credit);
-                std::abort();
             }
             // ShutDown is teardown and returns: the present did not happen, the same answer
             // the barrier gives on a dead doorbell.
@@ -1880,7 +1864,7 @@ namespace MobileGL::MG_Remote::Client {
             // is exactly "no record is being applied" and not merely "not decoding".
             if (isBarrieredFill && !ApplyThreadIsInsideApplier()) return;
             if (Server::ServerLoop::OnApplyThread()) return; // the applier owns the block
-            MGLOG_F("MGPipe: Fatal{RoleViolation, \"gPipeInputs\"} - the GL thread touched "
+            SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"gPipeInputs\"} - the GL thread touched "
                     "gPipeInputs (%s) on a RUN-AHEAD session %s. With the client running ahead "
                     "the block is the server's to read for as long as ANY record is in flight "
                     "(CONTRACT-P5E §3), so the only legal GL-thread write is a barriered fill "
@@ -1889,7 +1873,6 @@ namespace MobileGL::MG_Remote::Client {
                     isBarrieredFill ? "in a barriered fill that did not first wait for the "
                                       "applier to catch up"
                                     : "outside a barriered fill");
-            std::abort();
         }
         // MOBILEGL_IPC_BATCH_WAITS=1 makes "the fill runs while the apply thread applies an
         // earlier value record" the INTENDED shape: the fill writes only fields no record
@@ -1909,13 +1892,12 @@ namespace MobileGL::MG_Remote::Client {
         // access in a shared library, and it must stay thread-local (see InBarrierWait's note
         // above - a second GL thread would otherwise read the first one's wait as its own).
         if (InBarrierWait()) return;
-        MGLOG_F("MGPipe: Fatal{RoleViolation, \"gPipeInputs\"} - the GL thread touched gPipeInputs "
+        SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"gPipeInputs\"} - the GL thread touched gPipeInputs "
                 "(%s) while the apply thread was inside the applier and this thread was not in a "
                 "barrier wait. R-1's barrier is the only thing that makes one process-wide "
                 "gPipeInputs legal (CONTRACT-P5 table 3); a touch in this window races the "
                 "applier's own reads of it",
                 surface);
-        std::abort();
     }
     void ClientSession::NoteApplyThreadEnteredApplier() {
         g_roleInsideApplier = true;

@@ -28,6 +28,7 @@
 // regression re-committed at the transport layer.
 
 #include "EmitTables.h"
+#include <MG_Remote/FatalFunnel.h>
 
 #include "ClientSession.h"
 #include "GpuWritePending.h"
@@ -87,8 +88,7 @@ namespace MobileGL::MG_Remote::Client {
         // The same shape as MGPipeInputPoisonFatal (generated/PipeFilled.inc:407-413): names the
         // slot, live at every log level, aborts. Deliberately NOT MOBILEGL_ASSERT, which is
         // inert in an INFO build - and INFO is what every device lane runs.
-        MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"%s\"}", slot);
-        std::abort();
+        SessionFail(MGFatalFamily::UnmigratedVerb, "MGPipe: Fatal{UnmigratedVerb, \"%s\"}", slot);
     }
 
     namespace {
@@ -209,11 +209,10 @@ namespace MobileGL::MG_Remote::Client {
             RequireClientTablesInstalled(slot);
             ClientSession* session = ClientSession::Active();
             if (session == nullptr) {
-                MGLOG_F("MGPipe: Fatal{NoClientSession, \"%s\"} - the remote emit table is "
+                SessionFail(MGFatalFamily::NoClientSession, "MGPipe: Fatal{NoClientSession, \"%s\"} - the remote emit table is "
                         "installed but no ClientSession is active. A slot may not fall through "
                         "to a driver this role does not have",
                         slot);
-                std::abort();
             }
             return *session;
         }
@@ -836,11 +835,10 @@ namespace MobileGL::MG_Remote::Client {
                 // NOT a guess and not a zero-length reply. A format this build cannot size is a
                 // readback whose answer would be silently truncated, which is the one failure a
                 // picture comparison cannot see.
-                MGLOG_F("MGPipe: Fatal{UnsizedReadback, \"read_pixels\"} format=0x%04x type=0x%04x "
+                SessionFail(MGFatalFamily::UnsizedReadback, "MGPipe: Fatal{UnsizedReadback, \"read_pixels\"} format=0x%04x type=0x%04x "
                         "- the client must declare MGPReadbackInfo::DstSize and cannot size this "
                         "pair; P5's reduced path reads RGBA/UNSIGNED_BYTE",
                         static_cast<unsigned>(format), static_cast<unsigned>(type));
-                std::abort();
             }
             return static_cast<Uint64>(bytesPerPixel);
         }
@@ -882,29 +880,25 @@ namespace MobileGL::MG_Remote::Client {
         // an oversize reply, so the only failures left are a wrong status or a SHORT one.
         void RequireReadbackReplyComplete(Int32 status, Uint64 replySize, Uint64 expected) {
             if (status == Wire::ReplySink::kStatusError) {
-                MGLOG_F("MGPipe: Fatal{ReplyError, \"ReadPixels\"} - the readback answered ERROR; "
+                SessionFail(MGFatalFamily::ReplyError, "MGPipe: Fatal{ReplyError, \"ReadPixels\"} - the readback answered ERROR; "
                         "the destination is left untouched rather than filled with stale bytes");
-                std::abort();
             }
             if (status == Wire::ReplySink::kStatusDeclined) {
-                MGLOG_F("MGPipe: Fatal{ReadbackDeclined, \"ReadPixels\"} - the server has no "
+                SessionFail(MGFatalFamily::ReadbackDeclined, "MGPipe: Fatal{ReadbackDeclined, \"ReadPixels\"} - the server has no "
                         "GL.ReadPixels and DECLINED; a decline is a real answer for an acceptance "
                         "row (R-5) but a blocking readback has no pixels to return, so it is a "
                         "Fatal here rather than a buffer of stale bytes");
-                std::abort();
             }
             if (status != Wire::ReplySink::kStatusOk) {
-                MGLOG_F("MGPipe: Fatal{ReplyStatusInvalid, \"ReadPixels\"} - unknown reply status %d", status);
-                std::abort();
+                SessionFail(MGFatalFamily::ReplyStatusInvalid, "MGPipe: Fatal{ReplyStatusInvalid, \"ReadPixels\"} - unknown reply status %d", status);
             }
             if (replySize != expected) {
-                MGLOG_F("MGPipe: Fatal{ReadbackReplyShort, \"ReadPixels %llu < %llu\"} - the OK "
+                SessionFail(MGFatalFamily::ReadbackReplyShort, "MGPipe: Fatal{ReadbackReplyShort, \"ReadPixels %llu < %llu\"} - the OK "
                         "reply carried fewer bytes than the read's own DstSize (CONTRACT-P5 row "
                         "23's exact extent); the missing rows would otherwise be scattered as "
                         "whatever the destination held",
                         static_cast<unsigned long long>(replySize),
                         static_cast<unsigned long long>(expected));
-                std::abort();
             }
         }
 

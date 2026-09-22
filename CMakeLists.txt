@@ -621,6 +621,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # emitter that returns quietly is how a split lane runs monolith and
         # goes green (ARCHITECTURE.md 10.3).
         MobileGL/MG_Remote/CapsCodec.cpp
+        # P6 dl: the one place a session dies - Session::Fail's funnel (Fatal-family aware,
+        # publishes SessionFault, one telemetry point).
+        MobileGL/MG_Remote/FatalFunnel.cpp
         MobileGL/MG_Remote/Wire/PipeWireCodec.cpp
         MobileGL/MG_Remote/Client/ClientSession.cpp
         MobileGL/MG_Remote/Client/EmitTables.cpp

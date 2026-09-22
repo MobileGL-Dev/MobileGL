@@ -9,6 +9,7 @@
 // P5 package v1: the apply thread, its affinity, its parking, and the EGL ownership move.
 
 #include "ServerLoop.h"
+#include <MG_Remote/FatalFunnel.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
 
 #include <Config.h>
@@ -622,10 +623,9 @@ namespace MobileGL::MG_Remote::Server {
                 // Ring.h's own rule: a header the producer could not have written is
                 // Fatal{ProtocolCorruption}, never a retry. Retrying re-reads the same bytes
                 // for ever; skipping desynchronises seq, and seq IS the reply-slot id.
-                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"SEG_CMD record header\"} - the "
+                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"SEG_CMD record header\"} - the "
                         "consumer refused a record header at applied seq %llu",
                         static_cast<unsigned long long>(consumer.AppliedSeq()));
-                std::abort();
             }
             if (!popped) break;
             ++applied;
@@ -636,13 +636,12 @@ namespace MobileGL::MG_Remote::Server {
             // and PipeWireDecoder keeps its own count; a batched publish would move one and not
             // the other, which a single counter could not have told apart (w1-v1 5).
             if (applier.DecoderAppliedSeq() != consumer.AppliedSeq()) {
-                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"appliedSeq batched\"} - the "
+                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"appliedSeq batched\"} - the "
                         "session's watermark is %llu and the decoder applied %llu records. P5 "
                         "forbids batching appliedSeq (R-9): the verb barrier's waiter reads it, "
                         "and a watermark ahead of the decoder promises work that has not run",
                         static_cast<unsigned long long>(consumer.AppliedSeq()),
                         static_cast<unsigned long long>(applier.DecoderAppliedSeq()));
-                std::abort();
             }
             // RETIRE. MANDATORY, not optional: RingProducer::FreeBytes() reclaims against
             // retiredTail only, and w1's SEG_STAGE linear allocator reclaims on retiredSeq - so
@@ -705,13 +704,12 @@ namespace MobileGL::MG_Remote::Server {
                 // render correctly with the context on the wrong thread - the one outcome R-1
                 // exists to make impossible. Fatal by name, never a fallback; compare
                 // CreateBackend's default: arm, which also refuses rather than substitutes.
-                MGLOG_F("MGPipe: Fatal{ApplyThreadNotRunning, \"EGL on the app thread\"} - a "
+                SessionFail(MGFatalFamily::ApplyThreadNotRunning, "MGPipe: Fatal{ApplyThreadNotRunning, \"EGL on the app thread\"} - a "
                         "control frame reached RunSurfaceControlFrame with the server's backend "
                         "built but no mgl-srv-apply thread running (ClientSession::Start failed "
                         "after ServerLoop::CreateBackend). Dispatching it inline would make the "
                         "context current on the APP thread - the split lane's whole premise. "
                         "Refusing by name rather than falling back to monolith");
-                std::abort();
             }
             // Backend already gone (post-Stop teardown, or the pre-Init window): the dispatch's
             // null-backend arm would answer NOT_INITIALIZED anyway, so that is the honest result
@@ -805,7 +803,7 @@ namespace MobileGL::MG_Remote::Server {
             // run on into the client's teardown, reading rings the client is about to unmap -
             // a use-after-free whose only symptom is an intermittent crash somewhere else.
             // Aborting here is red, immediate, and names the cause.
-            MGLOG_F("MGPipe: Fatal{ApplyThreadJoinTimeout} - mgl-srv-apply did not exit within "
+            SessionFail(MGFatalFamily::ApplyThreadJoinTimeout, "MGPipe: Fatal{ApplyThreadJoinTimeout} - mgl-srv-apply did not exit within "
                     "%u ms of Stop(). Stop() published m_stopRequested (in the park predicate) "
                     "BEFORE it rang, so a plain Notify should already have un-parked the thread; "
                     "Doorbell::Kill() (Doorbell.h, CondVarDoorbell::Kill; table 3 step 2) is "
@@ -814,7 +812,6 @@ namespace MobileGL::MG_Remote::Server {
                     "lost, not slow. Aborting rather than detaching: a detached apply thread still "
                     "owns the context and would read rings the client is about to unmap",
                     kJoinTimeoutMs);
-            std::abort();
         }
         m_thread.join();
         // The identity is NOT cleared here any more: the thread clears it itself, under
@@ -882,10 +879,9 @@ namespace MobileGL::MG_Remote::Server {
         MG_Backend::WindowBackend WindowBackendFromFrameValue(Int value) {
             if (value < static_cast<Int>(MG_Backend::WindowBackend::Unknown) ||
                 value >= static_cast<Int>(MG_Backend::WindowBackend::WindowBackendCount)) {
-                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp.windowBackend\"} - a "
+                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp.windowBackend\"} - a "
                         "control frame carried window backend tag %d, which names no "
                         "WindowBackend", value);
-                std::abort();
             }
             return static_cast<MG_Backend::WindowBackend>(value);
         }
@@ -1069,9 +1065,8 @@ namespace MobileGL::MG_Remote::Server {
         // A kind the switch does not know never legitimately posts (RunSurfaceControlFrame
         // refuses None), so reaching this line means the slot's bytes were not written by the
         // poster at all - the ring's Fatal{ProtocolCorruption} discipline, one channel over.
-        MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp.kind\"} - the control slot held "
+        SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp.kind\"} - the control slot held "
                 "kind %d, which names no dispatchable op", static_cast<int>(frame.kind));
-        std::abort();
     }
 
     // ---------------------------------------------------------------------------------

@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "PersistentMapTracker.h"
+#include <MG_Remote/FatalFunnel.h>
 
 #include <MG_Pipe/MGPipeTypes.h>
 #include <MG_State/GLState/BufferState/BufferObject.h>
@@ -640,9 +641,8 @@ namespace MobileGL::MG_Remote::Client {
     void PersistentMapTracker::PushBlocksFor(BufferObject& buffer) {
         if (!PushIsArmed()) return;
         if (OnServerRole()) {
-            MGLOG_F("MGPipe: Fatal{RoleViolation, \"PushBlocksFor\"} - the persistent-map "
+            SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"PushBlocksFor\"} - the persistent-map "
                     "producer belongs to the client; the server consumes transported bytes");
-            std::abort();
         }
         PushBlocksForChecked(buffer);
     }
@@ -856,9 +856,8 @@ namespace MobileGL::MG_Remote::Client {
     void PersistentMapTracker::PushAllMembers() {
         if (!PushIsArmed()) return;
         if (OnServerRole()) {
-            MGLOG_F("MGPipe: Fatal{RoleViolation, \"PushAllMembers\"} - the persistent-map "
+            SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"PushAllMembers\"} - the persistent-map "
                     "producer belongs to the client; the server consumes transported bytes");
-            std::abort();
         }
         if (m_livePersistentMaps.empty()) return;
         // Copied out first: PushBlocksFor can erase its own entry (a member that stopped
@@ -874,9 +873,8 @@ namespace MobileGL::MG_Remote::Client {
     void PersistentMapTracker::PushDrawConsumers() {
         if (!PushIsArmed()) return;
         if (OnServerRole()) {
-            MGLOG_F("MGPipe: Fatal{RoleViolation, \"PushDrawConsumers\"} - the persistent-map "
+            SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"PushDrawConsumers\"} - the persistent-map "
                     "producer belongs to the client; the server consumes transported bytes");
-            std::abort();
         }
         if (m_livePersistentMaps.empty()) return;
         // THE EPOCH SKIP, AND WHAT IT RESTS ON. A page of a tracked map is marked by
@@ -1052,17 +1050,18 @@ namespace MobileGL::MG_Remote::Client {
         // of them and no family grep could see them - this is one. (The other, WireLog.cpp's, is
         // the sanctioned funnel: every one of its callers passes a Fatal{ string of its own.)
         if (tier <= 1) {
-            MGLOG_F("MGPipe: Fatal{UnimplementedAdoptTier, \"T%u\"} - MOBILEGL_IPC_ADOPT_TIER=%u "
+            SessionFail(MGFatalFamily::UnimplementedAdoptTier,
+                    "MGPipe: Fatal{UnimplementedAdoptTier, \"T%u\"} - MOBILEGL_IPC_ADOPT_TIER=%u "
                     "names an adoption tier P11 implements and P5 does not; P5 runs at T2 "
                     "(emulate) only.",
                     static_cast<unsigned>(tier), static_cast<unsigned>(tier));
         } else {
-            MGLOG_F("MGPipe: Fatal{UnimplementedAdoptTier, \"%u\"} - MOBILEGL_IPC_ADOPT_TIER=%u is "
+            SessionFail(MGFatalFamily::UnimplementedAdoptTier,
+                    "MGPipe: Fatal{UnimplementedAdoptTier, \"%u\"} - MOBILEGL_IPC_ADOPT_TIER=%u is "
                     "not an adoption tier; the only values are 0 and 1 (P11) and 2 (emulate, the "
                     "P5 default).",
                     static_cast<unsigned>(tier), static_cast<unsigned>(tier));
         }
-        std::abort();
     }
 
 } // namespace MobileGL::MG_Remote::Client

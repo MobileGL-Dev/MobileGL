@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """The Fatal census gate (CONTRACT-P6 5.2, exit gate S7).
 
-WHAT IT REFUSES: a `std::abort()` under MG_Remote/ that carries no family word.
+WHAT IT REFUSES: a `std::abort()` under MG_Remote/ that carries no family word, and a
+SessionFail / WireLogFatal call whose string forgot its family.
 
-S7 says "a bare abort() added outside Session::Fail -> the census gate goes red". Session::Fail
-does not exist yet - it is the 94-site funnel 5.2 describes, and this file is its precondition
-rather than its replacement. What CAN be checked today is the property that funnel exists to
-guarantee and that every consumer already depends on: every death names a FAMILY, in a
-`Fatal{Word...}` marker, on a line a grep can find.
+S7: "a bare abort() added outside Session::Fail -> the census gate goes red". Session::Fail now
+EXISTS - it is SessionFail() in FatalFunnel.cpp, and the ~90 scattered aborts route through it,
+so a bare std::abort() under MG_Remote/ is now the exception this gate refuses rather than the
+rule. Four aborts remain, all inside the two funnels (WireLog.cpp, FatalFunnel.cpp), and both
+files are exempt because their callers carry the family word. The property this enforces is the
+one every downstream consumer depends on: every death names a FAMILY, in a `Fatal{Word...}`
+marker, on a line a grep can find.
 
 That is not as weak as it sounds. a6's census found the vocabulary had drifted to 30 family
 words against a 7-value wire FatalCode, and found two aborts carrying no marker at all - so "the
@@ -44,6 +47,11 @@ BASELINE = Path(__file__).with_name("fatal_census_baseline.json")
 FUNNEL_FILES = {
     "MobileGL/MG_Remote/Transport/WireLog.cpp",
     "MobileGL/MG_Remote/Transport/WireLog.h",
+    # P6 dl: Session::Fail's funnel. Its abort is the sanctioned one every SessionFail reaches,
+    # exactly as WireLog.cpp's is for WireLogFatal; its own file also defines the SessionFail
+    # call, so it is exempt from both rules for the same reason WireLog is.
+    "MobileGL/MG_Remote/FatalFunnel.cpp",
+    "MobileGL/MG_Remote/FatalFunnel.h",
 }
 
 # Twelve lines: long enough for a wrapped MGLOG_F argument list (the longest in the tree runs to
@@ -54,6 +62,10 @@ kMarkerWindow = 12
 MARKER = re.compile(r"Fatal\{([A-Za-z][A-Za-z0-9]*)")
 ABORT = re.compile(r"\bstd::abort\(\)")
 WIRE_LOG_FATAL_CALL = re.compile(r"WireLogFatal\s*\(")
+# P6 dl: a SessionFail call must carry a Fatal{ word in its string, the same rule
+# WireLogFatal has - the enum and the string both name the family, and a call whose string
+# forgot it would let the two disagree. Checked everywhere SessionFail is called.
+SESSION_FAIL_CALL = re.compile(r"SessionFail\s*\(")
 
 
 def strip_comments(text):
@@ -136,10 +148,10 @@ def census():
             families.add(word)
 
         if rel not in FUNNEL_FILES:
-            # Rule 2: every WireLogFatal call carries a family word. The call may wrap, so the
+            # Rule 2: every WireLogFatal / SessionFail call carries a family word in its string.
             # window covers its continuation lines.
             for index, line in enumerate(lines):
-                if not WIRE_LOG_FATAL_CALL.search(line):
+                if not (WIRE_LOG_FATAL_CALL.search(line) or SESSION_FAIL_CALL.search(line)):
                     continue
                 window = "\n".join(lines[index:index + kMarkerWindow])
                 if not MARKER.search(window):

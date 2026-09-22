@@ -27,6 +27,7 @@
 // someone who reads the comment and not this file.
 
 #include "PipeWireCodec.h"
+#include <MG_Remote/FatalFunnel.h>
 
 #include <Config.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
@@ -375,14 +376,12 @@ namespace MobileGL::MG_Remote::Wire {
     // ---------------------------------------------------------------------------------
 
     void WireProtocolFatal(const char* what, const char* detail) {
-        MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s\"} %s", what, detail != nullptr ? detail : "");
-        std::abort();
+        SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} %s", what, detail != nullptr ? detail : "");
     }
 
     void WireProtocolFatalAt(const char* what, Uint64 got, Uint64 expected) {
-        MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s\"} got=%llu expected=%llu", what,
+        SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} got=%llu expected=%llu", what,
                 static_cast<unsigned long long>(got), static_cast<unsigned long long>(expected));
-        std::abort();
     }
 
     // ---------------------------------------------------------------------------------
@@ -458,20 +457,18 @@ namespace MobileGL::MG_Remote::Wire {
                 // The monolith shape: Seg = None, Offset = a host address, Size = 0. Legal
                 // there, and precisely what must not cross (rule A). Reading it as "absent"
                 // would silently drop the bytes of every record an unconverted emitter sent.
-                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} a blob with Size 0 "
+                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} a blob with Size 0 "
                         "declares Seg=%u Offset=%llu; under split a blobref is either fully "
                         "declared or all three fields zero",
                         WireOpName(op), static_cast<unsigned>(blob.Seg),
                         static_cast<unsigned long long>(blob.Offset));
-                std::abort();
             }
             return;
         }
         if (blob.Seg == kSegNone) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} Size=%llu with no segment "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} Size=%llu with no segment "
                     "(R-2.3): a non-zero Size must name a real SEG_*",
                     WireOpName(op), static_cast<unsigned long long>(blob.Size));
-            std::abort();
         }
         // R-2.3's SECOND HALF: "inside SOME segment" IS NOT THE RULE. Contract table 1 gives
         // every client->server content blob - groups A, B and C, all nineteen rows - the ONE
@@ -493,7 +490,7 @@ namespace MobileGL::MG_Remote::Wire {
         // seventh name would be a token nothing else in the tree recognises. The SEGMENT is in
         // the message, which is what has to be greppable.
         if (blob.Seg != kSegStage) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} seg=%u offset=%llu "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} seg=%u offset=%llu "
                     "size=%llu is not SEG_STAGE(%u); every client->server content blob is "
                     "staged whole in SEG_STAGE (contract table 1 groups A/B/C, R-10) and no "
                     "other segment may carry one",
@@ -501,24 +498,21 @@ namespace MobileGL::MG_Remote::Wire {
                     static_cast<unsigned long long>(blob.Offset),
                     static_cast<unsigned long long>(blob.Size),
                     static_cast<unsigned>(kSegStage));
-            std::abort();
         }
         if (segments.Resolve(blob.Seg, blob.Offset, blob.Size) == nullptr) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} seg=%u offset=%llu size=%llu "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} seg=%u offset=%llu size=%llu "
                     "does not lie inside that segment (R-2.3)",
                     WireOpName(op), static_cast<unsigned>(blob.Seg),
                     static_cast<unsigned long long>(blob.Offset),
                     static_cast<unsigned long long>(blob.Size));
-            std::abort();
         }
     }
 
     void RequireDeclaredBlob(MGPWireOp op, const MGPBlobRef& blob, const SegmentTable& segments) {
         if (blob.Size == 0) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} the record's own fields say "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} the record's own fields say "
                     "it carries content and its blob declares none (R-2.2 / rule A)",
                     WireOpName(op));
-            std::abort();
         }
         CheckBlobIsHonest(op, blob, segments);
     }
@@ -554,12 +548,11 @@ namespace MobileGL::MG_Remote::Wire {
         // resolver, reads outside the segment. P5 emits no spans, so this was latent; P8 arms
         // it, which is exactly when nobody will be reading this code.
         if (segments.Resolve(span.Seg, span.Offset, span.Size) == nullptr) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"host-span\"} seg=%u offset=%llu "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"host-span\"} seg=%u offset=%llu "
                     "size=%llu does not lie inside that segment (R-2.3 arm 4)",
                     static_cast<unsigned>(span.Seg),
                     static_cast<unsigned long long>(span.Offset),
                     static_cast<unsigned long long>(span.Size));
-            std::abort();
         }
     }
 
@@ -855,14 +848,13 @@ namespace MobileGL::MG_Remote::Wire {
 
         const Uint64 need = Align8(size);
         if (need > m_stageCapacity) {
-            MGLOG_F("MGPipe: Fatal{RingOverrun, \"SEG_STAGE\"} a %llu byte blob cannot fit a "
+            SessionFail(MGFatalFamily::RingOverrun, "MGPipe: Fatal{RingOverrun, \"SEG_STAGE\"} a %llu byte blob cannot fit a "
                     "%llu byte staging segment at any occupancy; a blob is staged whole, so a "
                     "row that cuts its content at MGPipeStageChunkBytes() never reaches this - "
                     "raise MOBILEGL_IPC_STAGE_MB or report the record type with no cut to the "
                     "integrator",
                     static_cast<unsigned long long>(size),
                     static_cast<unsigned long long>(m_stageCapacity));
-            std::abort();
         }
 
         bool reclaimed = false;
@@ -907,15 +899,14 @@ namespace MobileGL::MG_Remote::Wire {
                 // therefore no reverse channel to drain.
                 if (m_stageWaitHook != nullptr) m_stageWaitHook(m_stageWaitSelf);
                 if (!ready() && !m_stageRetirementBell->Wait(m_control->producerParked, ready, 0, 5000)) {
-                    MGLOG_F("MGPipe: Fatal{RetirementWaitFailed, \"SEG_STAGE\"} producer wait "
+                    SessionFail(MGFatalFamily::RetirementWaitFailed, "MGPipe: Fatal{RetirementWaitFailed, \"SEG_STAGE\"} producer wait "
                             "ended before the pending allocation retired (shutdown or timeout)");
-                    std::abort();
                 }
                 if (m_stageWaitHook != nullptr) m_stageWaitHook(m_stageWaitSelf);
             }
             ReclaimStagedBytes();
         }
-        MGLOG_F("MGPipe: Fatal{RingOverrun, \"SEG_STAGE\"} a %llu byte blob does not fit a %llu "
+        SessionFail(MGFatalFamily::RingOverrun, "MGPipe: Fatal{RingOverrun, \"SEG_STAGE\"} a %llu byte blob does not fit a %llu "
                 "byte staging segment with %llu bytes still in flight (retiredSeq=%llu); a "
                 "blob is staged whole and only the rows that cut at the stage chunk budget "
                 "stay small - raise MOBILEGL_IPC_STAGE_MB or report that row to the integrator",
@@ -924,7 +915,6 @@ namespace MobileGL::MG_Remote::Wire {
                 static_cast<unsigned long long>(m_stageHead - m_stageTail),
                 static_cast<unsigned long long>(
                     m_control != nullptr ? m_control->Progress.retiredSeq.load(std::memory_order_acquire) : 0));
-        std::abort();
     }
 
     MGPBlobRef PipeWireEncoder::StageBytes(const void* bytes, Uint64 size) {
@@ -1020,14 +1010,13 @@ namespace MobileGL::MG_Remote::Wire {
         if (total > m_cmd->MaxRecordBytes()) {
             // R-10's record bound. The content rows cut their BLOBS at the stage chunk budget
             // (MGPipeStageChunkBytes); a record's own bytes have no such budget and die here.
-            MGLOG_F("MGPipe: Fatal{RingOverrun, \"%s\"} a %llu byte record exceeds "
+            SessionFail(MGFatalFamily::RingOverrun, "MGPipe: Fatal{RingOverrun, \"%s\"} a %llu byte record exceeds "
                     "RingProducer::MaxRecordBytes() == %llu (half of a %llu byte SEG_CMD); the stage chunk "
                     "budget cuts blobs, not a record's own bytes - report the row to the "
                     "integrator",
                     WireOpName(op), static_cast<unsigned long long>(total),
                     static_cast<unsigned long long>(m_cmd->MaxRecordBytes()),
                     static_cast<unsigned long long>(m_cmd->Capacity()));
-            std::abort();
         }
 
         // MGPipeCallFlags -> RingRecordFlags. See the file header: these are two flag spaces
@@ -1131,13 +1120,12 @@ namespace MobileGL::MG_Remote::Wire {
                 // here and a Fatal on a peer - exactly the asymmetry EncodeRecord's own
                 // comment says it exists to prevent.
                 if (op == MGPWireOp::CreateShaderState && i < 6 && blob.Size != 0) {
-                    MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"CreateShaderState.Spirv[%u]\"} "
+                    SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"CreateShaderState.Spirv[%u]\"} "
                             "declares %llu bytes at the ENCODER; under split the modules travel "
                             "inside the Reflection archive and the six per-stage runs stay "
                             "undeclared",
                             static_cast<unsigned>(i),
                             static_cast<unsigned long long>(blob.Size));
-                    std::abort();
                 }
             }
         }
@@ -1347,11 +1335,10 @@ namespace MobileGL::MG_Remote::Wire {
         // then fails for ever: the barrier HANGS rather than returning something wrong, which
         // is the harder failure to diagnose of the two.
         if ((MGPipeCallFlagsFor(op) & static_cast<Uint32>(kReplySlot)) == 0) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s\"} the decoder tried to answer into "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} the decoder tried to answer into "
                     "a reply slot for a call the catalogue gives no kReplySlot; s1 sizes "
                     "ReplyPool from MGPipeCallFlagsFor and reserved none",
                     WireOpName(op));
-            std::abort();
         }
         if (m_replies != nullptr) {
             m_replies->PostReply(seq, status, bytes, size);
@@ -1376,23 +1363,21 @@ namespace MobileGL::MG_Remote::Wire {
         // the audit has stopped covering the carrier, which is the same failure as no audit at
         // all - the reason the run-count overflow just below is a Fatal too.
         if (blob.Size == 0 || blob.Seg != kSegStage) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s\"} the audit was asked to record a "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} the audit was asked to record a "
                     "resolved run with seg=%u size=%llu; only declared SEG_STAGE(%u) runs "
                     "reach the poison fill (R-2.5)",
                     WireOpName(op), static_cast<unsigned>(blob.Seg),
                     static_cast<unsigned long long>(blob.Size),
                     static_cast<unsigned>(kSegStage));
-            std::abort();
         }
         if (m_resolvedCount >= sizeof(m_resolved) / sizeof(m_resolved[0])) {
             // LOUD, NOT A SILENT DROP. This array is what the 0xDD fill covers, and a poison
             // that quietly stopped covering a run is the same failure as no poison at all -
             // rule C's only mechanical control going dark without a line in the log.
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s\"} more than %llu SEG_STAGE runs in "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} more than %llu SEG_STAGE runs in "
                     "one record; the audit fill would stop covering them",
                     WireOpName(op),
                     static_cast<unsigned long long>(sizeof(m_resolved) / sizeof(m_resolved[0])));
-            std::abort();
         }
         m_resolved[m_resolvedCount++] = blob;
     }
@@ -1508,7 +1493,7 @@ namespace MobileGL::MG_Remote::Wire {
         // record type)`; it CANNOT SEE THE TAIL, so this is the first thing that holds a
         // record declaring Count = 4000 while carrying 8 bytes to its own arithmetic.
         if (size != layout.TotalBytes) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"%s\"} the record declares Size=%llu and "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} the record declares Size=%llu and "
                     "its own count fields describe %llu bytes (fixed payload %llu + tails "
                     "%llu/%llu/%llu)",
                     WireOpName(op), static_cast<unsigned long long>(size),
@@ -1517,7 +1502,6 @@ namespace MobileGL::MG_Remote::Wire {
                     static_cast<unsigned long long>(layout.TailBytes[0]),
                     static_cast<unsigned long long>(layout.TailBytes[1]),
                     static_cast<unsigned long long>(layout.TailBytes[2]));
-            std::abort();
         }
 
         // The record's own ordinal, which is its reply-slot id (R-3). 1-based, and m_applySeq
@@ -1791,12 +1775,11 @@ namespace MobileGL::MG_Remote::Wire {
             for (Uint32 i = 0; i < 6; ++i) {
                 CheckBlobIsHonest(op, desc.Spirv[i], *m_segments);
                 if (desc.Spirv[i].Size != 0) {
-                    MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"CreateShaderState.Spirv[%u]\"} "
+                    SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"CreateShaderState.Spirv[%u]\"} "
                             "declares %llu bytes; under split the modules travel inside the "
                             "Reflection archive and the six per-stage runs stay undeclared",
                             static_cast<unsigned>(i),
                             static_cast<unsigned long long>(desc.Spirv[i].Size));
-                    std::abort();
                 }
             }
             const void* archiveBytes = ResolveOrFatal(op, desc.Reflection);
@@ -2067,11 +2050,10 @@ namespace MobileGL::MG_Remote::Wire {
             const Bool boxIsWhole =
                 rec.UnionBox.W != 0 && rec.UnionBox.H != 0 && rec.UnionBox.D != 0;
             if (!namesABuffer && !boxIsEmpty && !boxIsWhole) {
-                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"ResourceSubData\"} the union box "
+                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ResourceSubData\"} the union box "
                         "%ux%ux%u has a zero extent on some axes and not others; a box is "
                         "either empty or whole",
                         rec.UnionBox.W, rec.UnionBox.H, rec.UnionBox.D);
-                std::abort();
             }
             const Bool carriesContent = namesABuffer ? MGPipeSubDataBufferSize(rec) != 0
                                                      : (boxIsWhole || rec.RegionCount != 0);

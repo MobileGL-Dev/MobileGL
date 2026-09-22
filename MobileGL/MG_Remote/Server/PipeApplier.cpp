@@ -9,6 +9,7 @@
 // P5 package v1: the applier bridge, and the consumer for contract 7's five class-B verbs.
 
 #include "PipeApplier.h"
+#include <MG_Remote/FatalFunnel.h>
 
 #include "ServerSession.h"
 #include "../Transport/ReplySlot.h"
@@ -326,11 +327,10 @@ namespace MobileGL::MG_Remote::Server {
         // is a protocol fault, because such a client is pacing on this answer and a 0 would
         // acknowledge a frame nobody asked about.
         if (present.FrameSerial == 0 && MGPipeServerPublishesRunAhead()) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"Present.FrameSerial\"} - a run-ahead "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"Present.FrameSerial\"} - a run-ahead "
                     "server was handed present serial 0. The client mints this 1-based and "
                     "waits on it for its credit (CONTRACT-P5E §2.4); returning a credit for "
                     "serial 0 would release a wait that is asking about frame N");
-            std::abort();
         }
         m_lastPresentSerial = present.FrameSerial != 0 ? present.FrameSerial : m_presents;
         // §2.4's other half, and the reason ServerSession::ReturnPresentCredit has had no
@@ -385,11 +385,10 @@ namespace MobileGL::MG_Remote::Server {
             // The decoder always passes its ReplySink; a null one means the applier was built
             // without a reply pool, and answering nothing would leave the client's barrier
             // waiting for a slot that never gets stamped - a hang, not a wrong picture.
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"read_pixels without a reply sink\"} - "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"read_pixels without a reply sink\"} - "
                     "the pixels' only destination in P5 is SEG_REPLY (contract table 1 row 23) "
                     "and a client blocked on seq %llu would never be answered",
                     static_cast<unsigned long long>(seq));
-            std::abort();
         }
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("read_pixels");
         if (table == nullptr || table->GL.ReadPixels == nullptr) {
@@ -482,10 +481,9 @@ namespace MobileGL::MG_Remote::Server {
     // rather than rendering nothing. Named "(server sink)" in the message so a log reader can
     // tell which half is missing.
     [[noreturn]] static void ServerUnmigratedVerbFatal(const char* slot) {
-        MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"%s\"} (server sink: the record crossed and "
+        SessionFail(MGFatalFamily::UnmigratedVerb, "MGPipe: Fatal{UnmigratedVerb, \"%s\"} (server sink: the record crossed and "
                 "ServerVerbSink has no body for it yet - CONTRACT-P5B.md names the package)",
                 slot);
-        std::abort();
     }
 
     // P5b d1 (MG_Remote/CONTRACT-P5B.md §2 d1): draw_vbo's whole cross product. The record
@@ -553,22 +551,20 @@ namespace MobileGL::MG_Remote::Server {
             if (maxTouched < 0) return;
             const Uint32 required = static_cast<Uint32>(maxTouched) + 1u;
             if (st.SamplerViewStart != 0 || st.SamplerViewCount < required) {
-                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"SetSamplerViews.Count\"} - %s applies with "
+                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"SetSamplerViews.Count\"} - %s applies with "
                         "units 0..%d touched, so set_sampler_views must carry Start=0 and Count >= %u "
                         "(CONTRACT-P5E.md §5.3); the applied window is Start=%u Count=%u, which drops "
                         "the sync of at least one texture this draw samples",
                         verb, static_cast<int>(maxTouched), required, st.SamplerViewStart,
                         st.SamplerViewCount);
-                std::abort();
             }
             if (st.SamplerStateStart != 0 || st.SamplerStateCount < required) {
-                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"BindSamplerStates.Count\"} - %s applies with "
+                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"BindSamplerStates.Count\"} - %s applies with "
                         "units 0..%d touched, so bind_sampler_states must carry Start=0 and Count >= %u "
                         "(CONTRACT-P5E.md §5.3); the applied window is Start=%u Count=%u, which leaves "
                         "an earlier draw's sampler object on at least one unit",
                         verb, static_cast<int>(maxTouched), required, st.SamplerStateStart,
                         st.SamplerStateCount);
-                std::abort();
             }
         }
     } // namespace
@@ -1147,13 +1143,12 @@ namespace MobileGL::MG_Remote::Server {
         // accepted resets IS the expected value; anything else means the two ends disagree
         // about how many make-current edges have crossed, which no backend answer can fix.
         if (reset.ContextSerial != m_applierResetSerial) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"ApplierReset.ContextSerial\"} - the "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ApplierReset.ContextSerial\"} - the "
                     "record carries %llu and this session has accepted %llu reset(s); the "
                     "serial is asserted against the session's own count, not dispatched on "
                     "(one context per session in P5c)",
                     static_cast<unsigned long long>(reset.ContextSerial),
                     static_cast<unsigned long long>(m_applierResetSerial));
-            std::abort();
         }
         ++m_applierResetSerial;
         // THE WHOLE POINT OF THE RECORD: the reset runs HERE, on the apply thread, against
@@ -1170,16 +1165,14 @@ namespace MobileGL::MG_Remote::Server {
         // emits NOTHING in that case (§5.2) - so a null handle arriving here is corruption,
         // not a no-op.
         if (MG_Pipe::MGPipeHandleIsNull(death.Handle)) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"ObjectDeath.Handle\"} - a null "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ObjectDeath.Handle\"} - a null "
                     "handle never crosses: the client emits nothing for an object its own "
                     "allocator cannot resolve (CONTRACT-P5C.md §5.2)");
-            std::abort();
         }
         if (death.Kind >= static_cast<Uint32>(MG_Pipe::MGPipeKind::KindCount)) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"ObjectDeath.Kind\"} - %u is not an "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ObjectDeath.Kind\"} - %u is not an "
                     "MGPipeKind",
                     static_cast<unsigned>(death.Kind));
-            std::abort();
         }
         // The per-kind release, keyed by the handle the record carried. A false answer is
         // NOT a decline: the kind's own delete opcode may already have released the twin
@@ -1201,10 +1194,9 @@ namespace MobileGL::MG_Remote::Server {
 
     void PipeApplier::Attach(Transport::RingControl* control, MG_Backend::BackendObject* backend) {
         if (control == nullptr || m_segments == nullptr) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"PipeApplier::Attach\"} - no control "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"PipeApplier::Attach\"} - no control "
                     "page or no segment table; ServerSession::Accept builds both before the "
                     "apply thread starts");
-            std::abort();
         }
         m_verbs.SetBackend(backend);
         m_decoder = Wire::PipeWireDecoder(control, m_segments, m_replies);
@@ -1228,10 +1220,9 @@ namespace MobileGL::MG_Remote::Server {
 
     Bool PipeApplier::ApplyOne(const Transport::RingRecordView& record) {
         if (!m_attached) {
-            MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"PipeApplier::ApplyOne before Attach\"} "
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"PipeApplier::ApplyOne before Attach\"} "
                     "- a record reached the applier with no decoder; the apply thread calls "
                     "Attach once before its first pop");
-            std::abort();
         }
         // R-1's INVARIANT, THE SERVER'S HALF (table 3's gPipeInputs row, c1-v1 8.1). The flag
         // is raised for the WHOLE of this function and not only around DecodeAndApply: the

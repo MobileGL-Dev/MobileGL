@@ -29,6 +29,7 @@
 // before every `set_dynamic_state` - hundreds of times a frame, and each one a real record.
 
 #include "WireTables.h"
+#include <MG_Remote/FatalFunnel.h>
 
 #if MOBILEGL_BUILD_DISAGGREGATED
 
@@ -113,11 +114,10 @@ namespace MobileGL::MG_Remote::Client {
             RequireClientTablesInstalled(row);
             ClientSession* session = ClientSession::Active();
             if (session == nullptr) {
-                MGLOG_F("MGPipe: Fatal{NoClientSession, \"%s\"} - the client wire tables are "
+                SessionFail(MGFatalFamily::NoClientSession, "MGPipe: Fatal{NoClientSession, \"%s\"} - the client wire tables are "
                         "installed but no ClientSession is active. A row may not fall through to "
                         "a driver this role does not have",
                         row);
-                std::abort();
             }
             return *session;
         }
@@ -129,12 +129,11 @@ namespace MobileGL::MG_Remote::Client {
         MG_Pipe::MGPBlobRef StageRequired(ClientSession& session, const char* row,
                                           const void* bytes, Uint64 count) {
             if (bytes == nullptr || count == 0) {
-                MGLOG_F("MGPipe: Fatal{BlobMissing, \"%s\"} - the row's decoder requires a "
+                SessionFail(MGFatalFamily::BlobMissing, "MGPipe: Fatal{BlobMissing, \"%s\"} - the row's decoder requires a "
                         "declared blob and the call site handed over %llu bytes at %p. Under "
                         "monolith the companion pointer carries them; under split they have to "
                         "be staged, and there is nothing to stage",
                         row, static_cast<unsigned long long>(count), bytes);
-                std::abort();
             }
             return session.Encoder().StageBytes(bytes, count);
         }
@@ -409,12 +408,11 @@ namespace MobileGL::MG_Remote::Client {
             }
             ClientSession& session = RequireSession("ResourceRespecify");
             if (initialBytes != nullptr) {
-                MGLOG_F("MGPipe: Fatal{UncarriedInitialBytes, \"resource_respecify\"} - a call "
+                SessionFail(MGFatalFamily::UncarriedInitialBytes, "MGPipe: Fatal{UncarriedInitialBytes, \"resource_respecify\"} - a call "
                         "site handed initial content to a split respecify. R-13.3 rules that "
                         "initialBytes never crosses and that the content follows as "
                         "resource_subdata; a caller that still passes it has bytes nothing will "
                         "carry");
-                std::abort();
             }
             // The scope rides in the descriptor's own pads (CONTRACT-P5 table 1 row 19b, LANDED)
             // and is written only through MGPipeSetRespecifiedLevel - three fields are one
@@ -438,10 +436,9 @@ namespace MobileGL::MG_Remote::Client {
             // - the generated acceptance rows through MGPipeTakeReplyBool, and now these two
             // escapes - answers ERROR with the same named Fatal.
             if (status == 2) {
-                MGLOG_F("MGPipe: Fatal{ReplyError, \"resource_respecify\"} - the row answered "
+                SessionFail(MGFatalFamily::ReplyError, "MGPipe: Fatal{ReplyError, \"resource_respecify\"} - the row answered "
                         "ERROR, which is not an acceptance answer; folding it into accepted or "
                         "refused would make a transport fault look like a resource decision");
-                std::abort();
             }
             if (status == 1) ++g_declined;
             return status == 0;
@@ -485,22 +482,20 @@ namespace MobileGL::MG_Remote::Client {
             // the generated acceptance rows obey: status 2 is a transport fault, and returning
             // nullptr for it would make it indistinguishable from R-6's legitimate decline.
             if (status == 2) {
-                MGLOG_F("MGPipe: Fatal{ReplyError, \"map_persistent\"} - the row answered ERROR, "
+                SessionFail(MGFatalFamily::ReplyError, "MGPipe: Fatal{ReplyError, \"map_persistent\"} - the row answered ERROR, "
                         "which is not an acceptance answer; a transport fault is not a resource "
                         "decision and may not be folded into the decline R-6 predicts");
-                std::abort();
             }
             if (status == 1) ++g_declined;
             // NOT "always nullptr": the answer is READ. R-6 says the server declines, and the
             // day it stops declining this returns what it actually said rather than what the
             // ruling predicted.
             if (status == 0) {
-                MGLOG_F("MGPipe: Fatal{UnexpectedMapAccept, \"map_persistent\"} - the server "
+                SessionFail(MGFatalFamily::UnexpectedMapAccept, "MGPipe: Fatal{UnexpectedMapAccept, \"map_persistent\"} - the server "
                         "accepted a persistent map under split. R-6 makes the split answer a "
                         "constant decline because there is no way to hand a host pointer across "
                         "a process boundary in P5; a pointer arriving here is one this client "
                         "cannot dereference");
-                std::abort();
             }
             return nullptr;
         }
@@ -522,12 +517,11 @@ namespace MobileGL::MG_Remote::Client {
             }
             ClientSession& session = RequireSession("CreateShaderState");
             if (link == nullptr || spirv == nullptr) {
-                MGLOG_F("MGPipe: Fatal{ArtefactsMissing, \"create_shader_state\"} - the record's "
+                SessionFail(MGFatalFamily::ArtefactsMissing, "MGPipe: Fatal{ArtefactsMissing, \"create_shader_state\"} - the record's "
                         "two typed companions are null. Under monolith the applier reads the "
                         "modules out of spirv->generatedSpirv; under split there is nothing to "
                         "serialise, and emitting the record anyway would create a CSO with no "
                         "code");
-                std::abort();
             }
             // EncodeProgramArchive APPENDS and never fails - everything it walks is owned
             // plain data - so an empty archive means the two structs themselves were empty,
@@ -547,9 +541,8 @@ namespace MobileGL::MG_Remote::Client {
                                              static_cast<Uint64>(archive.size()));
             }
             if (archive.empty()) {
-                MGLOG_F("MGPipe: Fatal{ArchiveEmpty, \"create_shader_state\"} - the program's "
+                SessionFail(MGFatalFamily::ArchiveEmpty, "MGPipe: Fatal{ArchiveEmpty, \"create_shader_state\"} - the program's "
                         "artefacts serialised to nothing");
-                std::abort();
             }
             MG_Pipe::MGPProgramDesc record = *desc;
             for (Uint32 i = 0; i < 6; ++i) record.Spirv[i] = MG_Pipe::MGPBlobRef{};
@@ -714,9 +707,8 @@ namespace MobileGL::MG_Remote::Client {
 
     void RequireClientTablesInstalled(const char* row) {
         if (g_clientTablesUninstalled.load(std::memory_order_acquire)) {
-            MGLOG_F("MGPipe: Fatal{ClientTablesUninstalled, \"%s\"} - the client tables are "
+            SessionFail(MGFatalFamily::ClientTablesUninstalled, "MGPipe: Fatal{ClientTablesUninstalled, \"%s\"} - the client tables are "
                     "being torn down; refusing before session or ring access", row);
-            std::abort();
         }
     }
 

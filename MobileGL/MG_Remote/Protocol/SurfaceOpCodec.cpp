@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "SurfaceOpCodec.h"
+#include <MG_Remote/FatalFunnel.h>
 
 #include <MG_Backend/BackendObject.h>
 #include <MG_Remote/Protocol/generated/protocol_generated.h>
@@ -207,22 +208,24 @@ namespace MobileGL::MG_Remote {
         const SurfaceWireError error = DecodeWireSurfaceOp(op, &frame);
         if (error != SurfaceWireError::None) {
             if (error == SurfaceWireError::AndroidNativeWindowArrived) {
-                MGLOG_F("MGPipe: Fatal{UnmigratedSurface, \"AndroidNativeWindow@P12\"} - a wire "
+                SessionFail(MGFatalFamily::UnmigratedSurface,
+                        "MGPipe: Fatal{UnmigratedSurface, \"AndroidNativeWindow@P12\"} - a wire "
                         "SurfaceOp (%s) named an ANativeWindow*, which is a pointer into the "
                         "CLIENT's process and means nothing here. Real window arrival is P12; "
                         "until then the spawn surface path is pbuffer/surfaceless only",
                         ::MobileGL::Wire::EnumNameSurfaceOpKind(op.kind()));
             } else if (error == SurfaceWireError::MetalLayerArrived) {
-                MGLOG_F("MGPipe: Fatal{UnmigratedSurface, \"MetalLayer@P12\"} - a wire "
+                SessionFail(MGFatalFamily::UnmigratedSurface,
+                        "MGPipe: Fatal{UnmigratedSurface, \"MetalLayer@P12\"} - a wire "
                         "SurfaceOp named a CAMetalLayer* in the CLIENT's process. "
                         "Real window arrival is P12");
             } else {
-                MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp\"} - a wire surface op "
+                SessionFail(MGFatalFamily::ProtocolCorruption,
+                        "MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp\"} - a wire surface op "
                         "failed validation: %s (wire kind %u, window kind %u)",
                         SurfaceWireErrorName(error), static_cast<unsigned>(op.kind()),
                         static_cast<unsigned>(op.windowKind()));
             }
-            std::abort();
         }
         const MobileGLResult rc = Server::ServerLoopInstance().RunSurfaceControlFrame(frame);
         if (replyOut != nullptr) *replyOut = frame;

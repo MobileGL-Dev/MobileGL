@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "GpuWritePending.h"
+#include <MG_Remote/FatalFunnel.h>
 
 #include "ClientSession.h"
 // RunsAsTheServerRole: declared beside the wire emitters that need the same predicate, so this
@@ -252,12 +253,11 @@ namespace MobileGL::MG_Remote::Client {
         // UnmigratedVerbFatal), and it is what gives the hole a red spelling before the
         // transport arrives.
         if (!buffer.HasOutstandingGpuWrite()) return;
-        MGLOG_F("MGPipe: Fatal{UnimplementedWritebackWait} - a ClientSession is active and buffer %u "
+        SessionFail(MGFatalFamily::UnimplementedWritebackWait, "MGPipe: Fatal{UnimplementedWritebackWait} - a ClientSession is active and buffer %u "
                 "still has an outstanding GPU write after its readback was emitted. The wait is "
                 "ClientSession::EmitAndWait's (R-3: the reply slot id IS the record seq); P5 package "
                 "b1 landed the third state and s1/c1 own the wait itself.",
                 buffer.GetExternalIndex());
-        std::abort();
     }
 
 } // namespace MobileGL::MG_Remote::Client
