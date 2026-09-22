@@ -138,42 +138,54 @@ client's true count in every arm, because the test process is the client under a
 
 ### Red-once (R-16)
 
-**The prescribed flip does not reach this workload, and that is a finding.** Flipping
-`summedArea * 4 >= unionArea * 3` in `MipmapStorage::GetDirtyRects` leaves the gate GREEN. Four
-attempts, in order, all green:
+**The prescribed flip does not reach this workload — but not for the reason this note first
+gave.** Flipping `summedArea * 4 >= unionArea * 3` in `MipmapStorage::GetDirtyRects` leaves the
+gate green, and so do two other client-side mutations:
 
-1. flip `summedArea*4 >= unionArea*3` → green
-2. `rects.size() < 2` → `rects.empty()` → green
-3. remove the union-box re-seed in `MarkDirtyRegion` → green
-4. `MOBILEGL_ESPRYT_DISABLE_UNPACK_RING=1` alone → green
+1. flip `summedArea*4 >= unionArea*3` -> green
+2. `rects.size() < 2` -> `rects.empty()` -> green
+3. remove the union-box re-seed in `MarkDirtyRegion` -> green
+4. `MOBILEGL_ESPRYT_DISABLE_UNPACK_RING=1` alone -> green **(before the geometry fix)**
 
-The reason is two gates downstream of the predicate, either of which alone forces the box arm:
+The first three are green because they are mutations of a decision the CLIENT has already made
+correctly: with the inset scatter the client hands over thirty rects, and none of those three
+predicates is the one that takes the box arm. Attempt 4 was green for a completely different and
+much worse reason, and finding it is the reviewer's (fable, ID-P7-8):
 
-* `Managers.cpp:8764` `rectShape = subRectEligible && dirtyRectCount >= 2` — the SERVER needs at
-  least two rects, and the client's list collapses to one for this workload; and
-* `Managers.cpp:8652` `if (BufferImpl::UnpackRingAvailable()) dirtyRectCount = 0;` — **by design**:
-  "through the unpack ring every glTexSubImage is a GPU copy job (Mali), so ~100 sprite rects
-  become ~100 jobs whose fixed cost dwarfs the union box's extra bytes… One box, one job."
+> the original stride `x = ((i*7) % 32) * 2`, `y = ((i*5) % 32) * 2` reaches x=62 (rect 9) and
+> y=62 (rect 19) in a 64-px atlas, so the rects' union box covered the WHOLE LEVEL — and the
+> server's `subRectEligible` (`Managers.cpp:8486-8491`) requires
+> `!dirtyRegion.CoversWholeLevel`, a **bounding-box** test (`MipmapStorage.h:30-33`). Both
+> scatter textures were rect-INELIGIBLE before `:8649`'s ring policy was consulted.
 
-So `box=9 rect=0` is not an accident of the scatter pattern: it is the unpack-ring policy's
-intended output, and no client-side predicate can move it while the ring is available. The gold
-row pins the policy's output, which is the right thing to pin.
+So the gate's numbers were right and its subject was wrong: the box-versus-rect decision it
+exists to pin was never reached for the two textures the workload scatters into, and the only
+texture that could move under any red-once was the contiguous control band. The first
+substitute red-once's `box=6 rect=3 jobs=12` was exactly that band (64x8, cut in two, three
+frames) — **neither scatter texture moved**, which is what gave the wrong explanation away.
 
-The red-once that DOES bite makes `GetDirtyRects` hand back the union box cut in two AND disables
-the unpack ring:
+**The fix** is `kScatterMargin`: inset the scatter by one rect so the union box bounds at
+`(2,2)..(62,54)` and covers no level. Same 40 writes, same coarse stride, decision point live.
+The gold row is UNCHANGED at `emit=9 box=9 rect=0 jobs=9` — but it now means what it says, and
+`rect=0` is genuinely the unpack-ring policy's output rather than a bounding-box accident.
+
+**The red-once after the fix is ZERO-PATCH**, which is stronger than any throwaway source edit:
 
 ```
-DirectGLES.TextureUploadShape. ... FAILED
-  the BOX/RECT split moved: 6 box emissions against a gold of 9
-  the BOX/RECT split moved: 3 rect-list emissions against a gold of 0
-  the JOB count moved: 12 against a gold of 9
-  tex[emit=9 box=6 rect=3 jobs=12]
+MOBILEGL_ESPRYT_DISABLE_UNPACK_RING=1
+  tex[emit=9 box=3 rect=6 jobs=183]   bytes/f[tex=9024, was 104448]
+  the BOX/RECT split moved: 3 box emissions against a gold of 9
+  the BOX/RECT split moved: 6 rect-list emissions against a gold of 0
+  the JOB count moved: 183 against a gold of 9
 ```
 
-and all 26 pixel cases of `TextureView` / `TextureViewAlias` / `SampledSetStaleness` /
-`ImageSizeAfterRespec` / `CopyImageLevelRange` / `ClearThenReadPixels` stay GREEN under the same
-patch — the required property, and the point of the gate: SSIM and every pixel assertion are blind
-to a shape that inverted.
+**Which texture moved: BOTH SCATTER TEXTURES.** `box=3` is the contiguous control band alone
+(one contiguous region -> one rect -> not >= 2 -> box), `rect=6` is the plain scatter atlas AND
+the atlas written through the `glTextureView`, three frames each, and `jobs=183 = 3 + 6 x 30`
+confirms thirty rects per scatter emission. All 26 pixel cases of `TextureView` /
+`TextureViewAlias` / `SampledSetStaleness` / `ImageSizeAfterRespec` / `CopyImageLevelRange` /
+`ClearThenReadPixels` stay GREEN under the same knob — the required property, and the point of
+the gate: every pixel assertion is blind to a shape that inverted.
 
 ### The Mali frame-time delta is NOT published
 

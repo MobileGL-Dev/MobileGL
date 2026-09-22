@@ -790,12 +790,22 @@ P6（spawn transport）的实现包（a6 / c6 / lk / so / sm / cp / hs / dl / st
 P4a 的记录是两张纹理、无 client emitter 的 `emit=6 box=6 rect=0 jobs=6`（`ctu=0`），与本行
 **不可比**：工作负载不同。
 
-`rect=0` 不是散点图案的偶然，而是 unpack-ring 策略的既定输出：`Managers.cpp:8652` 在
-`UnpackRingAvailable()` 时把 `dirtyRectCount` 清零（"One box, one job"，即 Mali 悬崖的既有缓解），
-`:8764` 的 `rectShape` 还要求 `dirtyRectCount >= 2`。因此**客户端任何谓词翻转都动不了这四个数**
-——翻转 `summedArea*4 >= unionArea*3` 全绿，见 `notes/p34b/espryt-d2.md` 的四次尝试。红一次由
-"把 union box 切成两半 + `MOBILEGL_ESPRYT_DISABLE_UNPACK_RING=1`"做到：`box=6 rect=3 jobs=12`，
-而 26 个像素用例全绿。
+`rect=0` 是 **unpack-ring 策略的既定输出**：client 确实建出 30 个 rect（2 texel 间隙，
+`RegionsTouch` 不合并；summed area 120 远低于 union box 的 3/4，两道 client 侧谓词都不取 box 臂），
+记录把 30 个 region 全部带过去；是 server 在 `Managers.cpp:8649` 的
+`if (UnpackRingAvailable()) dirtyRectCount = 0;` 决定取 box——"One box, one job"，Mali 悬崖的既有
+缓解。门钉的就是这个策略的输出。
+
+**散点图案本身是被修过的（评审 fable 指出）**：原来的 stride `x=((i*7)%32)*2` / `y=((i*5)%32)*2`
+在 64 px 图集里会打到 x=62、y=62，union box 覆盖整个 level，而 server 的 `subRectEligible`
+（`Managers.cpp:8486-8491`）要求 `!dirtyRegion.CoversWholeLevel`（`MipmapStorage.h:30-33`，**包围盒**
+判据）——两张散点纹理在 ring 策略之前就已经 rect-ineligible，金标数字一样但量的不是同一件事。
+内缩一个 rect（`kScatterMargin`）后 union box 落在 (2,2)..(62,54)，决策点才真正带电。
+
+红一次因此是**零补丁**的：`MOBILEGL_ESPRYT_DISABLE_UNPACK_RING=1` 一个环境变量就把两张散点纹理
+从 box 翻成 rect——`box=3 rect=6 jobs=183`（3 = 连续带 x3 帧；6 = 两张散点 x3 帧；183 = 3 + 6x30），
+`bytes/f[tex]` 同时从 104448 降到 9024，而 26 个像素用例全绿。内缩之前同一个变量是全绿的，这正是
+`CoversWholeLevel` 把决策点短路掉的证据。
 
 ### 13.2 client 半边的读法（本包的修正）
 

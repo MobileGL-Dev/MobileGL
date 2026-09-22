@@ -113,6 +113,26 @@ namespace MGITest {
         constexpr int kScatteredRects = 40;
         constexpr int kRectSize = 2;
         constexpr int kFrames = 3;
+        // THE SCATTER IS INSET BY ONE RECT, AND WITHOUT IT THIS GATE MEASURED NOTHING.
+        //
+        // The original stride was x = ((i*7) % (kAtlasSize/kRectSize)) * kRectSize and the same
+        // with 5 for y. Both are surjective onto 0..31 over 40 iterations (rect 9 lands at x=62,
+        // rect 19 at y=62), so the rects' UNION BOX is the whole 64x64 level - and the server's
+        // subRectEligible (Managers.cpp:8486-8491) requires !dirtyRegion.CoversWholeLevel, a
+        // BOUNDING-BOX test (MipmapStorage.h:30-33). Both scatter textures were therefore
+        // rect-INELIGIBLE on every arm, before any policy about rect lists was consulted: the
+        // box-versus-rect decision this scenario exists to pin was never reached, and the only
+        // texture that could move was the contiguous control band.
+        //
+        // Insetting by one rect keeps the same 40 writes and the same coarse stride but bounds
+        // the union box at (kRectSize, kRectSize)..(62, 54), which covers no level. The decision
+        // point is now live for the two scatter textures, which is what makes the gold row below
+        // a statement about the emission shape rather than about the workload's bounding box.
+        constexpr int kScatterMargin = kRectSize;
+        constexpr int kScatterCells = kAtlasSize / kRectSize - 2 * (kScatterMargin / kRectSize);
+        static_assert(kScatterMargin + (kScatterCells - 1) * kRectSize + kRectSize < kAtlasSize,
+                      "the inset scatter must not reach the level's far edge, or its union box "
+                      "covers the level again and the server stops looking at the rect list");
         // The viewed texture's OWNER is twice the atlas so that its level 1 - which is what the
         // view opens onto - is exactly kAtlasSize and the same scattered pattern applies to it.
         constexpr int kViewedOwnerSize = kAtlasSize * 2;
@@ -131,13 +151,35 @@ namespace MGITest {
         // these numbers describe a workload that no longer exists. The assert makes that a compile
         // error rather than a mysterious red.
         //
-        // WHY box IS THE WHOLE OF emit ON THIS TREE. GetDirtyRects (MipmapStorage.cpp:430-457)
-        // hands the emitter a rect list only when the list has 2..maxRects entries AND the rects'
-        // summed area is under 3/4 of the union box. This workload's rects are spread on a coarse
-        // stride and the cascade merges every pair that touches, so the emitter takes the box arm
-        // for all three textures in all three frames. That is the SHAPE being pinned: a change
-        // that starts emitting rect lists here is exactly the +6 ms/frame inversion, and it is
-        // what the red-once for this gate produces on purpose.
+        // WHY box IS THE WHOLE OF emit ON THIS TREE, and this paragraph was WRONG in its first
+        // version - the correction is worth keeping because the wrong version is the one a reader
+        // reaches for.
+        //
+        // The client really does build a rect list here: MipmapStorage's cascade merges only
+        // rects that overlap or abut (RegionsTouch, MipmapStorage.cpp:88-91), the inset scatter
+        // leaves 2-texel gaps, and GetDirtyRects hands back THIRTY rects whose summed area (120
+        // texels) is far under 3/4 of the union box - so neither the 2..maxRects test nor the
+        // summedArea*4 >= unionArea*3 fallback takes the box arm. The record carries all thirty.
+        //
+        // THE SERVER DECIDES, and it decides BOX, at Managers.cpp:8649:
+        //
+        //     if (BufferImpl::UnpackRingAvailable()) dirtyRectCount = 0;
+        //
+        // "through the unpack ring every glTexSubImage is a GPU copy job (Mali), so ~100 sprite
+        // rects become ~100 jobs whose fixed cost dwarfs the union box's extra bytes - measured
+        // +6 ms/frame... One box, one job." That is the existing Mali-cliff mitigation, and
+        // box=9 rect=0 is its INTENDED OUTPUT rather than an accident of this workload. Pinning
+        // it is the point: a change that starts emitting rect lists through the ring is exactly
+        // the +6 ms/frame inversion, and disabling the ring is what the red-once does.
+        //
+        // WHAT THE FIRST VERSION GOT WRONG, because the trap is easy to fall into twice: the
+        // original scatter stride reached x=62 and y=62 in a 64-px atlas, so the union box
+        // covered the whole level - and the server's subRectEligible (Managers.cpp:8486-8491)
+        // requires !dirtyRegion.CoversWholeLevel, a BOUNDING-BOX test (MipmapStorage.h:30-33).
+        // Both scatter textures were rect-INELIGIBLE before the ring policy was ever consulted,
+        // so the gold looked identical while measuring something else entirely, and the only
+        // texture that could move under any red-once was the contiguous control band. The
+        // kScatterMargin inset above is what makes this paragraph true.
         struct UploadShapeGold {
             long long Emissions;
             long long BoxEmissions;
@@ -355,8 +397,8 @@ void main() { oColor = texture(uTex, vUv); }
                 const std::uint8_t patch[kRectSize * kRectSize * 4] = {
                     0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255};
                 for (int rect = 0; rect < kScatteredRects; ++rect) {
-                    const int x = ((rect * 7) % (kAtlasSize / kRectSize)) * kRectSize;
-                    const int y = ((rect * 5) % (kAtlasSize / kRectSize)) * kRectSize;
+                    const int x = kScatterMargin + ((rect * 7) % kScatterCells) * kRectSize;
+                    const int y = kScatterMargin + ((rect * 5) % kScatterCells) * kRectSize;
                     glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, kRectSize, kRectSize, GL_RGBA,
                                     GL_UNSIGNED_BYTE, patch);
                 }
@@ -433,6 +475,9 @@ void main() { oColor = texture(uTex, vUv); }
             // agree; this is what makes that a real question outside monolith.
             TextureEmitCountersPeek emitBefore{};
             const bool emitPeekLive = PeekTextureEmitCounters(&emitBefore);
+            // The log mark the two role readings are taken against, so that a teardown window
+            // cannot be mistaken for the workload's (see PipeStatsWindow.h).
+            const PipeStatsWindow::LogMark statsMark = PipeStatsWindow::MarkLaneLog();
 
             Image lastScattered;
             Image lastContiguous;
@@ -480,15 +525,29 @@ void main() { oColor = texture(uTex, vUv); }
             // two-sided comparison into `N == 0`. So each side is read from ITS OWN role's log, and
             // the server bracket falls back to the client log only where there is no server half -
             // the pull build and the monolith lane, where one file IS the whole run.
-            const PipeStatsWindow::Window clientWindow = PipeStatsWindow::LastFromClientLog();
-            const PipeStatsWindow::Window serverWindow = PipeStatsWindow::LastFromServerLog();
-            ASSERT_TRUE(clientWindow.found)
-                << "no 'MGPipe stats:' line in " << PipeStatsWindow::LibraryLogPath()
-                << ", so the shape could not be read at all";
+            const PipeStatsWindow::Window clientWindow =
+                PipeStatsWindow::LastFromClientLogSince(statsMark);
+            const PipeStatsWindow::Window serverWindow =
+                PipeStatsWindow::LastFromServerLogSince(statsMark);
             const PipeStatsWindow::Window& shapeWindow =
                 (serverWindow.found && PipeStatsWindow::CounterOrAbsent(serverWindow, "emit") > 0)
                     ? serverWindow
                     : clientWindow;
+            // THE ASSERTION IS ON THE WINDOW THAT CARRIES THE BRACKET, not on the client's, and
+            // moving to a marked read is what showed why. The client role emits NO summary window
+            // of its own under inproc/spawn/tcp at the point this case reads - only the
+            // "counters ON" banner, which also contains the marker string. Asserting
+            // clientWindow.found over the whole file therefore passed on the BANNER in all three
+            // split arms and claimed a window had been read when none had. Since the mark there
+            // is no banner to hide behind, so the claim has to be made about the role that
+            // actually published the counters.
+            ASSERT_TRUE(shapeWindow.found)
+                << "no 'MGPipe stats:' window was appended to either role's log by the swap that "
+                   "closes the counted window. client="
+                << PipeStatsWindow::LibraryLogPath()
+                << " server=" << PipeStatsWindow::ServerLibraryLogPath()
+                << ". The shape could not be read at all - which is a different finding from a "
+                   "shape that read zero.";
             RecordProperty("stats_line_client", clientWindow.line.c_str());
             if (serverWindow.found) RecordProperty("stats_line_server", serverWindow.line.c_str());
 

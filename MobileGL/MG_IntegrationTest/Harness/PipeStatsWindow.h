@@ -208,6 +208,32 @@ namespace MGITest::PipeStatsWindow {
         return Last(ReadWholeFile(ServerLibraryLogPath()));
     }
 
+    // ...AND SINCE A MARK, which is the form a counted window actually wants.
+    //
+    // The two above take the LAST summary line in the role's whole log, and that is one shutdown
+    // away from being the wrong line: the server writes a final, EMPTY window at teardown
+    // (frames=N window=0 draws=0, every counter zero), so a reader that runs after it - or that
+    // is slowed down enough for it to land first - reads four zeroes and reports them as the
+    // workload's shape. It has not bitten yet only because the scenarios read before teardown.
+    //
+    // Marking the log before the counted workload and reading only what was appended after
+    // removes the race entirely: with MOBILEGL_PIPE_STATS_PERIOD=1 the one eglSwapBuffers that
+    // closes the window emits exactly one line into that span, so "the last line since the mark"
+    // is that line and cannot be a later one.
+    inline Window LastFromClientLogSince(const LogMark& mark) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MGPipeSyncPeerLog();
+#endif
+        return Last(ReadFileSince(LibraryLogPath(), mark.client));
+    }
+
+    inline Window LastFromServerLogSince(const LogMark& mark) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MGPipeSyncPeerLog();
+#endif
+        return Last(ReadFileSince(ServerLibraryLogPath(), mark.server));
+    }
+
     // One counter out of that line, by its short name ("mpr", "draws", "csom"), or -1 when the
     // line does not carry it. The search includes the SEPARATOR before the name and the `=` after
     // it, so "draws" cannot match "draws/f=" and "mpr" cannot match a longer name ending in it -
