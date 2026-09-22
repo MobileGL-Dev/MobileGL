@@ -737,8 +737,34 @@ namespace MobileGL::MG_Remote::Client {
         // client emitter, NotifyAndFree silently drops object_death before
         // freeing the slot. Keep inproc's existing backend dispatcher, and give
         // the remote client the same wire delivery without a local twin table.
+        //
+        // P7 PACKAGE L: THE BACKEND TEST IS GONE, AND ITS ABSENCE IS THE POINT. P6.5 wrote
+        // `ActiveBackendType == DirectGLES` because DirectGLES was the only backend with a
+        // two-process lane, so the condition read as "the case this can happen in" rather than
+        // as a policy. Under a Magma spawn or tcp client it is a silent hole of exactly the
+        // shape P6.5 closed for Espryt: CtWireScenario's two death cases would report
+        // ObjectDeaths=0 and PASS NOTHING, because no notice was ever installed and
+        // NotifyAndFree would drop every object_death before freeing the slot - a green that
+        // means "the mechanism is absent". MEASURED on this tree: with the install site
+        // disabled, both DirectGLES spawn death cases red on CtWireScenario.cpp:187/:246 with
+        // `Expected: (afterCounters.deaths) > (deathsBefore), actual: 0 vs 0`.
+        //
+        // THE REMAINING TWO CONDITIONS STILL CARRY P6.5's INTENT, both halves of it:
+        //   * Transport == Spawn: this is the REMOTE client, the one with no local twin table.
+        //     Under inproc the server role is a thread in this process and its backend's own
+        //     dispatcher is the right one.
+        //   * GetStateObjectDeathOps() == nullptr: whoever installed first keeps the notice.
+        //     That is what "keep inproc's existing backend dispatcher" meant, and it is also
+        //     what keeps this from stomping a backend that installs ops of its own later.
+        //
+        // WHAT THIS DOES *NOT* DO IS GIVE MAGMA A DEATH TABLE. Magma installs no
+        // StateObjectDeathOps at all (wave 2 package C mirrors g_glesStateObjectDeathOps for
+        // it); until it does, the client-side emitter installed here still asks
+        // MGPipeSlots().FindByLifetimeId for a handle, gets a null one for an object Magma
+        // never routed, and emits nothing. The count under Magma may therefore still be 0 -
+        // but it is now 0 because no object crossed, which the lane can see and attribute,
+        // instead of 0 because nobody was listening, which it could not.
         if (MG_Config::Transport == MG_Config::TransportMode::Spawn &&
-            MG_Config::ActiveBackendType == BackendType::DirectGLES &&
             MG_State::GLState::GetStateObjectDeathOps() == nullptr) {
             MG_State::GLState::SetStateObjectDeathOps(&kClientStateObjectDeathOps);
         }
