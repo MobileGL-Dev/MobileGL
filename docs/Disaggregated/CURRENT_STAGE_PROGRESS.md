@@ -2,19 +2,32 @@
 
 ## P6.5 第一波（2026-09-22）
 
-实现与主要正确性门已完成，完整 retrace 与余下链路性能数仍在采证，**尚未宣布阶段收官**。
-当前工作基于远端 `e6c51d07`，在 `codex/p65-all-tcp` 工作树保留后续未提交修改。
+实现、代码审查与主要正确性门已完成；**已落地并推送 `feat/disaggregated@fe27380a`（2026-09-22）**（原
+在 `codex/p65-all-tcp` 的 WIP + 本次审查修复 + 收尾文档一并合入）。完整 39 例 device golden 矩阵与全套
+链路必测数按用户「本地代表性、CI 兜底」留 CI/后续，**尚未宣布阶段收官**。
 
 - TCP 控制、ShmLink/StreamLink 数据面、布局指纹、portable program archive v2、令牌/Refuse、
   设备 supervisor/前台服务、日志前送与有序关闭均已接线。
 - 初始 caps 到达前误锁为 lockstep 的启动竞态已修复。READY7 主机 TCP **102/102**、
-  优化构建 Redmi TCP **102/102**，零 skip；两臂逐例确认 **run-ahead ARMED**，无 fallback/demotion。
-  保留车道此前为 spawn **102/102**、inproc **186/186**，零 skip。
+  Redmi TCP **102/102**，零 skip；两臂逐例确认 **run-ahead ARMED**，无 fallback/demotion。
+  保留车道 spawn **102/102**、inproc **186/186**，零 skip。
+- **代码审查（四并行切片：数据面 StreamLink / wire 定宽 / 控制面握手）无硬正确性缺陷**；两处修复已落地——
+  `SocketTransport::AcceptPair` 重试 `EINTR`/`ECONNABORTED`（Medium，防常驻 server 因 accept 瞬态 `return 73` 整体退出）、
+  `mobilegl_server_main` 自设 `MOBILEGL_IPC_ROLE=server`（Low，不再盲信 launcher）；两处均在 `MG_Remote/`
+  （`MOBILEGL_BUILD_DISAGGREGATED` 门内），G1 monolith `.text` 构造性不受影响。其余为跟进项（`MobileGLServerService.onDestroy`
+  子进程泄漏→P12、`gen_pipe.py` 裸 `char` 符号性普查无实活风险、测试缺口等），见
+  [`code-review-findings.md`](notes/p65/code-review-findings.md)。
+- **修后固定制品再验收**（WSL client 与设备 APK 同 build stamp `p65-acceptfix-20260922`，`REQUIRE_SAME_BUILD=1` 真实通过）：
+  主机 full unit **2399/2399**、P6.5 子集 **147/147**、integration-tcp loopback **102/102**、
+  **device-102 102/102，全 102 条 client 日志 `run-ahead ARMED`**、代表性 device retrace
+  OpenRA SSIM **1.0** / startup **0.999999511** / in-world **0.999995438**，三条全 **ARMED**。
 - G1 符号 **0/0/0/0**，`.text` 逐字一致；真实远端 kill **133 ms**、真实 Wi-Fi 中断 **5053 ms** 闩住 device loss。
 - 原有单角色日志读取的 CI 缺陷已与上游修复合并；模拟器掉线分类另有回归验证。
-- 正式 retrace 以 CI loader 的 **39 项** split 子集为准；`ci:false` 的 rd12 单列作性能测量。
-  早期 lockstep 样本中 OpenRA SSIM **1.0**、startup **0.999999511**，不替代修复后的完整矩阵。
-  正在以支持进度超时、进程组清理、实际 run-ahead 证明和可核验 checkpoint 的跑器完成矩阵。
+- **残余（CI/后续）**：正式 retrace 的完整 **39 项** split 子集 device 矩阵（DirectGLES 现有阈值、OpenRA 1.0；
+  `ci:false` 的 rd12 单列）与链路必测数（逐帧 `kWaitReply`/RTT、`SEG_STAGE` 字节/帧、`PRESENT_CREDIT` 1/2/3、
+  loopback tcp-vs-spawn 逐线程 CPU）。`minecraft-1.21.11-main-menu` 的 Redmi 32B UBO 对齐 golden 伪差为
+  ci-false（设备实图 SSIM 0.998729），不作本波红。跑器 `tools/trace_replay/run_tcp_matrix.py`（支持进度超时、
+  进程组清理、实际 run-ahead 证明与可核验 checkpoint）已入库。
 
 契约见 [`CONTRACT-P65.md`](../../MobileGL/MG_Remote/CONTRACT-P65.md)，
 制品身份与证据总索引见 [`evidence-index.md`](notes/p65/evidence-index.md)；
