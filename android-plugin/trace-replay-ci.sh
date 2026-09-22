@@ -583,9 +583,14 @@ run_retrace() {
     fi
   fi
 
-  "${PYTHON}" -c 'import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")' "${result_dir}/result.json" || return "$?"
+  # The two paths below reach a NATIVE python. On Git Bash that is only right when MSYS
+  # converts /c/... for it, which a caller's MSYS_NO_PATHCONV=1 (set for adb's /data/...
+  # arguments) switches off - then json.load fails on a file that exists and every case
+  # reads "trace replay failed" over a passed result.json. host_path_for_adb converts
+  # explicitly, so the verdict no longer depends on the caller's environment.
+  "${PYTHON}" -c 'import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")' "$(host_path_for_adb "${result_dir}/result.json")" || return "$?"
   if [ "${require_inproc}" -eq 1 ]; then
-    "${PYTHON}" - "${result_dir}/mobilegl.log" "${result_dir}/transport-proof.json" <<'PY'
+    "${PYTHON}" - "$(host_path_for_adb "${result_dir}/mobilegl.log")" "$(host_path_for_adb "${result_dir}/transport-proof.json")" <<'PY'
 import json
 from pathlib import Path
 import re
