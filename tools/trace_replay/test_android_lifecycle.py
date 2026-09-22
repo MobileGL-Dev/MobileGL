@@ -25,13 +25,22 @@ def main():
         raise RuntimeError("TraceReplayActivity must handle CONFIG_ASSETS_PATHS")
     if changes & 0xF80 != 0xF80:
         raise RuntimeError("TraceReplayActivity must retain the fixed-size render surface on display changes")
+    # Every trace-flavour Java class that has NO android.* import belongs here, because javac
+    # plus `java` is the only way any of them is exercised outside an APK on a device. P7 added
+    # SpawnServerPath: a hand-rolled K=V;K=V parse whose failure mode on device is "the knob had
+    # no effect", which is why a defect in it survived from P6.
+    java_units = [
+        ("TraceReplaySession", "TraceReplaySessionTest"),
+        ("SpawnServerPath", "SpawnServerPathTest"),
+    ]
     with tempfile.TemporaryDirectory(prefix="mobilegl-replay-lifecycle-") as output:
-        subprocess.run([
-            "javac", "--release", "11", "-d", output,
-            str(trace / "java/top/mobilegl/plugin/trace/TraceReplaySession.java"),
-            str(root / "tools/trace_replay/TraceReplaySessionTest.java"),
-        ], check=True)
-        subprocess.run(["java", "-cp", output, "top.mobilegl.plugin.trace.TraceReplaySessionTest"], check=True)
+        sources = []
+        for unit, test in java_units:
+            sources.append(str(trace / f"java/top/mobilegl/plugin/trace/{unit}.java"))
+            sources.append(str(root / f"tools/trace_replay/{test}.java"))
+        subprocess.run(["javac", "--release", "11", "-d", output, *sources], check=True)
+        for _, test in java_units:
+            subprocess.run(["java", "-cp", output, f"top.mobilegl.plugin.trace.{test}"], check=True)
     print("Android replay manifest and lifecycle checks passed")
 
 

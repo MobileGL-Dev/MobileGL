@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+import datetime
+import hashlib
 import json
 import math
 import shutil
@@ -7,7 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from trace_cases import case_with_defaults, load_trace_cases
+from trace_cases import (case_for_backend, case_with_defaults, ci_backends, ci_trace_cases,
+                         load_trace_cases, split_trace_cases)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -246,6 +249,86 @@ def run_case(case, backend, extra_args=None, timeout_seconds=None, env_overrides
     return result.returncode
 
 
+# -------------------------------------------------------------------------------------------
+# P7-7 repeat archiving.
+#
+# WHY IT IS NOT OPTIONAL FOR E0. `.trace-work/android-retrace-result/<case>-<backend>/` is keyed
+# by case and backend and by nothing else, so repeat 2 overwrites repeat 1 and the only artefact
+# that survives a three-repeat run is the last one. That makes "is this case's divergence
+# REPRODUCIBLE, and are the three repeats the same picture?" - the first question P7-7 E0 asks -
+# unanswerable after the fact, and the device window is the one place where re-running to find
+# out is expensive. --archive-dir copies each repeat out before the next one starts.
+#
+# WHAT IS ARCHIVED, and why each piece: result.json (the SSIM the gate scored and which golden
+# it matched), the actual PNG (the only thing an actual-vs-actual comparison can be computed
+# from), both role logs and transport-proof.json (which arm actually ran - a divergence measured
+# on an arm that silently fell back to monolith is not a finding), and logcat.txt (a crash that
+# still wrote a result). The golden is copied ONCE per arm, not per repeat.
+# -------------------------------------------------------------------------------------------
+ARCHIVED_PER_REPEAT = ("result.json", "mobilegl.log", "mobilegl.client.log", "mobilegl.server.log",
+                       "transport-proof.json", "logcat.txt", "benchmark.json")
+
+
+def file_sha256(path):
+    h = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def archive_repeat(archive_dir, case, backend, repeat_index):
+    """Copy one repeat's evidence out of the overwritten result root. Returns the destination."""
+    arm = f"{safe_case(case['name'])}-{backend}"
+    source = RESULT_ROOT / arm
+    destination = Path(archive_dir) / arm / ("repeat-%02d" % repeat_index)
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in ARCHIVED_PER_REPEAT:
+        candidate = source / name
+        if candidate.is_file():
+            shutil.copyfile(candidate, destination / name)
+    for actual in sorted(source.glob("*-actual.png")):
+        shutil.copyfile(actual, destination / actual.name)
+    for diff in sorted(source.glob("*-diff.png")):
+        shutil.copyfile(diff, destination / diff.name)
+    # The goldens sit beside the repeats, once, so the archive is self-contained without
+    # carrying the same megabyte three times.
+    for golden in sorted(source.glob("*-golden.png")) + sorted(source.glob("*-alternate-golden.png")):
+        target = Path(archive_dir) / arm / golden.name
+        if not target.exists():
+            shutil.copyfile(golden, target)
+    return destination
+
+
+def write_archive_manifest(archive_dir, args, backends, cases):
+    """What this archive IS, recorded beside it rather than in the operator's shell history.
+
+    The APK hash in particular: `find_trace_apk` takes the newest of two output directories, so
+    "which binary produced these pictures" is a question the archive has to answer itself.
+    """
+    apk = find_trace_apk()
+    manifest = {
+        "tool": "run_android_retrace_local.py",
+        "written_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        "argv": sys.argv[1:],
+        "backends": list(backends),
+        "transport": args.transport,
+        "use_pbuffer": bool(args.use_pbuffer),
+        "repeat": args.repeat,
+        "env": list(args.env),
+        "transport_env": transport_env(args),
+        "transport_proof_args": transport_proof_args(args),
+        "package": BACKENDS["DirectGLES"]["package"],
+        "cases": [case["name"] for case in cases],
+        "apk": str(apk) if apk else None,
+        "apk_sha256": file_sha256(apk) if apk else None,
+    }
+    path = Path(archive_dir) / "run.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return manifest
+
+
 def read_benchmark(case, backend, run_index):
     """Reads the benchmark.json the run just pulled and files it under the run number."""
     result_dir = RESULT_ROOT / f"{safe_case(case['name'])}-{backend}"
@@ -404,6 +487,33 @@ def parse_args():
     parser.add_argument("--case", action="append", dest="cases", help="Case name to run; may be repeated.")
     parser.add_argument("--backend", action="append", choices=sorted(BACKENDS), help="Backend to run; may be repeated.")
     parser.add_argument("--all", action="store_true", help="Run every case in the APK workflow matrix.")
+    parser.add_argument(
+        "--matrix",
+        action="store_true",
+        help="Run the CI SPLIT SUBSET - the cases the retrace-split lane runs - rather than "
+             "every case in the manifest. This is the set P7 exit gate 3 is scored on: --all "
+             "additionally includes the non-CI workloads (rd12), which ID-P7-4 excludes from "
+             "that denominator. Each case runs only the backends its own ci_backends names.",
+    )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Replay each case/backend N times. With --archive-dir each repeat's result.json "
+             "and actual PNG are kept, so compare_actuals.py can compute actual-vs-actual SSIM "
+             "between repeats; without it the repeats overwrite one another and only the last "
+             "one survives.",
+    )
+    parser.add_argument(
+        "--archive-dir",
+        type=Path,
+        metavar="DIR",
+        help="Copy each repeat's evidence to DIR/<case>-<backend>/repeat-NN/ before the next "
+             "run overwrites the result root, and write DIR/run.json recording the APK hash, "
+             "the arm and the environment. Read it with "
+             "`python3 tools/trace_replay/compare_actuals.py summary DIR`.",
+    )
     parser.add_argument("--keep-results", action="store_true", help="Do not clear the previous result root.")
     parser.add_argument(
         "--env",
@@ -506,34 +616,91 @@ def main():
     args = parse_args()
     selected_backends = args.backend or list(BACKENDS)
     selected_names = set(args.cases or [])
-    selected_cases = [case_with_defaults(case) for case in CASES if args.all or case["name"] in selected_names]
+    if args.matrix:
+        # The CI split subset, resolved by the manifest's own loader so that a case added later
+        # is in it unless it says otherwise (trace_cases.py explains why the key is an opt-out).
+        pool = split_trace_cases(ci_trace_cases(CASES))
+    else:
+        pool = CASES
+    selected_cases = [case_with_defaults(case) for case in pool
+                      if args.all or args.matrix or case["name"] in selected_names]
     if not selected_cases:
-        print("No cases selected. Use --all or --case NAME.", file=sys.stderr)
+        print("No cases selected. Use --matrix, --all or --case NAME.", file=sys.stderr)
         return 2
     if args.benchmark and args.benchmark_repeats < 1:
         print("--benchmark-repeats must be at least 1.", file=sys.stderr)
         return 2
+    if args.repeat < 1:
+        print("--repeat must be at least 1.", file=sys.stderr)
+        return 2
+    if args.benchmark and args.repeat != 1:
+        print("--repeat is the correctness lane's repeat count; use --benchmark-repeats.",
+              file=sys.stderr)
+        return 2
+    if args.benchmark and args.transport != "monolith":
+        # REFUSED RATHER THAN RUN UNDER A NAME THAT LIES. run_benchmark_case passes args.env
+        # alone, so --benchmark --transport spawn has always produced a MONOLITH run labelled
+        # spawn (tools/device_bench/p6/README.md records the same pitfall). The knob the
+        # benchmark path does honour is --env, so say that instead of silently ignoring this.
+        print("--benchmark ignores --transport; pass the arm explicitly, e.g. "
+              f"--env MOBILEGL_TRANSPORT={args.transport} "
+              "--env MOBILEGL_IPC_ROLE_SPLIT_STATE=1 --env MOBILEGL_IPC_STRICT_ERRORS=1 "
+              "--env MOBILEGL_IPC_RUN_AHEAD=1", file=sys.stderr)
+        return 2
     if not args.keep_results and RESULT_ROOT.exists():
         shutil.rmtree(RESULT_ROOT)
     RESULT_ROOT.mkdir(parents=True, exist_ok=True)
+    if args.archive_dir:
+        write_archive_manifest(args.archive_dir, args, selected_backends, selected_cases)
     failures = 0
     for case in selected_cases:
         for backend in selected_backends:
+            if backend not in ci_backends(case):
+                # A case restricted to one backend stays restricted, and the two ways of asking
+                # for it are different questions. A SWEEP skips it and says so - the
+                # DirectVulkan-only iris case is simply not part of a DirectGLES sweep. A case
+                # NAMED on the command line is a request, and silently doing nothing with a
+                # request is how an operator concludes an arm was measured when it was not.
+                message = (f"{case['name']} does not run {backend}: the case declares "
+                           f"ci_backends = {', '.join(ci_backends(case))}")
+                if case["name"] in selected_names:
+                    print(message, file=sys.stderr)
+                    return 2
+                print("--- skipping " + message, flush=True)
+                continue
+            # The golden and threshold this backend is scored against (trace_cases.py's
+            # backend_overrides); the case unchanged when it declares none.
+            resolved = case_for_backend(case, backend)
             if args.benchmark:
                 print(f"=== Android benchmark: {case['name']} / {backend} ===", flush=True)
                 # No SSIM verdicts to render here; the summary page is for the correctness lane.
-                failures += run_benchmark_case(case, backend, args)
+                failures += run_benchmark_case(resolved, backend, args)
                 continue
-            print(f"=== Android retrace: {case['name']} / {backend} ===", flush=True)
-            rc = run_case(case, backend, extra_args=transport_proof_args(args),
-                          env_overrides=transport_env(args) + list(args.env),
-                          use_pbuffer=args.use_pbuffer)
+            for repeat in range(1, args.repeat + 1):
+                print(f"=== Android retrace: {case['name']} / {backend} "
+                      f"(repeat {repeat}/{args.repeat}) ===", flush=True)
+                extra = list(transport_proof_args(args))
+                if repeat > 1:
+                    # The repeats measure the REPLAY, not the push: re-extracting and
+                    # re-installing between them would put an installer inside the window and
+                    # would not change a byte of the input.
+                    extra.append("--reuse-fixture")
+                rc = run_case(resolved, backend, extra_args=extra,
+                              env_overrides=transport_env(args) + list(args.env),
+                              use_pbuffer=args.use_pbuffer)
+                if args.archive_dir:
+                    try:
+                        kept = archive_repeat(args.archive_dir, resolved, backend, repeat)
+                        print(f"archived repeat {repeat} to {kept}", flush=True)
+                    except OSError as error:
+                        print(f"failed to archive repeat {repeat}: {error}", file=sys.stderr)
+                        failures += 1
+                if rc not in (0, 2):
+                    failures += 1
             try:
                 render_summary()
             except Exception as error:
                 print(f"failed to render summary: {error}", file=sys.stderr)
-                failures += 1
-            if rc not in (0, 2):
                 failures += 1
     return 1 if failures else 0
 

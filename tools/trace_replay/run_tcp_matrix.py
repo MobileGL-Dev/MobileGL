@@ -3,6 +3,22 @@
 
 Requires Linux/WSL process groups. The old local CTest/manifest TIMEOUT is not a
 TCP deadline: log inactivity and an explicit absolute ceiling are separate.
+
+BOTH BACKENDS, ONE DRIVER (P7). `--backend` selects DirectGLES (the default, and the P6.5
+residual 39-case golden matrix) or DirectVulkan (P7 exit gate 3's device matrix). The three
+things that have to be per backend are, and the rest is deliberately shared:
+
+  * SELECTION - a case is planned for a backend only if its own `ci_backends` names it, so the
+    DirectVulkan-only iris case appears in a DirectVulkan sweep and not in a DirectGLES one,
+    and a `--case` named explicitly that does not run a requested backend is an error rather
+    than a silent one-plan-fewer;
+  * GOLDEN AND THRESHOLD - from `backend_overrides.<backend>` in trace_cases.json when the case
+    declares one, and a run that matched ANOTHER backend's declared golden is refused by name
+    (the shared `alternate_golden` is an OR across backends and cannot express this);
+  * RESULT NAMING AND CHECKPOINT KEY - `<backend>/credit-<n>/<case>`, which already carried the
+    backend, plus the golden/threshold recorded in each results.json row.
+
+`--require-run-ahead` is orthogonal to the backend and applies to both.
 """
 from __future__ import annotations
 import argparse
@@ -22,7 +38,8 @@ import sys
 import time
 import uuid
 
-from trace_cases import load_trace_case_manifest, ci_backends
+from trace_cases import (backend_override_goldens, case_for_backend, ci_backends,
+                         load_trace_case_manifest)
 
 ROOT = Path(__file__).resolve().parents[2]
 OWNED_ENV = {"MOBILEGL_TRANSPORT", "MOBILEGL_IPC_CONTROL", "MOBILEGL_IPC_DATA",
@@ -61,7 +78,7 @@ def atomic_json(path, value):
         temporary.unlink(missing_ok=True)
 
 
-def select_cases(manifest_path, requested):
+def select_cases(manifest_path, requested, backends=None):
     manifest = load_trace_case_manifest(manifest_path)
     raw = read_json(manifest_path)
     explicit = {case["name"]: case.get("split", raw.get("defaults", {}).get("split"))
@@ -79,6 +96,15 @@ def select_cases(manifest_path, requested):
         # An explicit split:false remains a refusal, including in this explicit selection.
         if explicit[name] is False or (not case["split"] and case.get("ci", True)):
             raise ValueError("case opts out of split: " + name)
+        # A NAMED CASE THAT DOES NOT RUN THE REQUESTED BACKEND IS AN ERROR, NOT A QUIET DROP.
+        # The default selection is a subset and filtering it per backend is correct - the
+        # DirectVulkan-only iris case is simply absent from a DirectGLES sweep. But
+        # `--case X --backend DirectVulkan` where X is DirectGLES-only used to produce one
+        # fewer plan and no message at all, and with a single --case it produced the generic
+        # "no selected case supports the requested backend" instead of naming X.
+        if requested and backends and not [b for b in backends if b in ci_backends(case)]:
+            raise ValueError(f"{name} does not run any requested backend: "
+                             f"ci_backends = {', '.join(ci_backends(case))}")
         selected.append(case)
     if not selected:
         raise ValueError("the manifest selected no split cases")
@@ -122,6 +148,11 @@ def definitions(command):
 
 
 def plan_case(case, backend, catalog, args, hashes):
+    # THE GOLDEN AND THE THRESHOLD ARE PER BACKEND FROM HERE ON. case_for_backend returns the
+    # case unchanged when it declares no `backend_overrides`, so every DirectGLES plan, its
+    # identity fingerprint and its checkpoint key are bit-for-bit what they were before.
+    resolved = case_for_backend(case, backend)
+    foreign_goldens = backend_override_goldens(case, backend)
     name = f"MobileGLTraceReplay.{case['name']}.{backend}"
     test = next((catalog[key] for key in (name, name + ".TCP", name + ".SPAWN", name + ".SPLIT")
                  if key in catalog), None)
@@ -146,18 +177,19 @@ def plan_case(case, backend, catalog, args, hashes):
             "TRACE_CROP_Y": "crop_y", "TRACE_CROP_WIDTH": "crop_width", "TRACE_CROP_HEIGHT": "crop_height",
             "TRACE_COHERENT_AS_FLUSH": "coherent_as_flush"}
     for key, field in keys.items():
-        value = case.get(field, False if field == "coherent_as_flush" else 0.99 if field == "ssim_threshold" else 0)
+        value = resolved.get(field, False if field == "coherent_as_flush" else 0.99 if field == "ssim_threshold" else 0)
         values[key] = ("ON" if value else "OFF") if isinstance(value, bool) else str(value)
     inputs = []
     for key, field in (("TRACE_ARCHIVE", "trace_archive"), ("TRACE_GOLDEN", "golden"),
                        ("TRACE_ALTERNATE_GOLDEN", "alternate_golden")):
-        path = (fixtures / case[field]).resolve() if case.get(field) else None
+        path = (fixtures / resolved[field]).resolve() if resolved.get(field) else None
         values[key] = str(path) if path else ""
         if path:
             stat = path.stat()
             inputs.append({"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
                            **({"sha256": digest(path)} if key != "TRACE_ARCHIVE" else {})})
-    trace_file = Path(case["trace_file"])
+    foreign = {str((fixtures / relative).resolve()) for relative in foreign_goldens}
+    trace_file = Path(resolved["trace_file"])
     if trace_file.is_absolute() or ".." in trace_file.parts:
         raise ValueError("trace_file must remain inside the extracted input directory")
     for path in (runner, args.library, script):
@@ -170,13 +202,14 @@ def plan_case(case, backend, catalog, args, hashes):
     relevant = {key: value for key, value in env.items() if key in case_keys or
                 key.startswith(("MOBILEGL_", "MGITEST_", "EGL_", "LIBGL_", "MESA_", "VK_", "__GL", "__EGL", "LD_")) or
                 key in ("DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DRI_PRIME", "GALLIUM_DRIVER")}
-    identity = fingerprint({"case": case, "backend": backend, "credit": args.credit,
+    identity = fingerprint({"case": resolved, "backend": backend, "credit": args.credit,
                             "endpoint": args.endpoint, "token": args.token,
                             "require_run_ahead": args.require_run_ahead,
                             "artifacts": {str(p): hashes[str(p)] for p in (runner, args.library, script)},
                             "inputs": inputs, "environment": relevant, "command": command})
-    return {"case": case, "backend": backend, "test": test, "command": command, "values": values,
+    return {"case": resolved, "backend": backend, "test": test, "command": command, "values": values,
             "script": script, "runner": runner, "identity": identity,
+            "foreign_goldens": foreign,
             "key": f"{backend}/credit-{args.credit}/{case['name']}"}
 
 
@@ -321,7 +354,15 @@ def validate_result(plan, work, endpoint, require_run_ahead=False):
     if Path(result.get("actualPath", "")).resolve() != actual.resolve() or not actual.is_file():
         raise ValueError("result has no current-attempt actual image")
     goldens = {str(Path(plan["values"][key]).resolve()) for key in ("TRACE_GOLDEN", "TRACE_ALTERNATE_GOLDEN") if plan["values"][key]}
-    if str(Path(result.get("matchedGoldenPath", "")).resolve()) not in goldens:
+    matched = str(Path(result.get("matchedGoldenPath", "")).resolve())
+    if matched not in goldens:
+        # THE WRONG-BACKEND GOLDEN IS NAMED AS SUCH. Matching an image another backend declared
+        # for this case is not "a different golden" in the ordinary sense - it is the arm going
+        # green against the other backend's picture, which is the one failure a two-backend
+        # golden matrix exists to catch, so it says so.
+        if matched in plan.get("foreign_goldens", set()):
+            raise ValueError("result matched a golden another backend declares for this case, "
+                             "not " + plan["backend"] + "'s: " + matched)
         raise ValueError("result matched a different golden")
     score = result.get("ssim")
     if isinstance(score, bool) or not isinstance(score, (float, int)) or not math.isfinite(score) or score < float(plan["values"]["TRACE_SSIM_THRESHOLD"]):
@@ -399,7 +440,11 @@ def main(argv=None):
     parser.add_argument("--token", default=os.environ.get("MOBILEGL_IPC_TOKEN", ""))
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--case", action="append")
-    parser.add_argument("--backend", action="append", choices=("DirectGLES", "DirectVulkan"))
+    parser.add_argument("--backend", action="append", choices=("DirectGLES", "DirectVulkan"),
+                        help="repeatable; default DirectGLES. A case is planned for a requested "
+                             "backend only when its own ci_backends carries it, and its golden "
+                             "and SSIM threshold come from that backend's backend_overrides "
+                             "block when the manifest declares one.")
     parser.add_argument("--credit", type=int, choices=(1, 2, 3), default=2)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--require-run-ahead", action="store_true",
@@ -421,7 +466,7 @@ def main(argv=None):
     if len(backends) != len(set(backends)):
         parser.error("duplicate --backend")
     try:
-        cases = select_cases(args.manifest, args.case)
+        cases = select_cases(args.manifest, args.case, backends)
         document = read_json(args.catalog) if args.catalog else json.loads(subprocess.check_output(
             ["ctest", "--test-dir", str(args.build_dir), "--show-only=json-v1"], text=True))
         catalog = {test["name"]: test for test in document["tests"]}
@@ -462,6 +507,12 @@ def main(argv=None):
                 row = {"key": plan["key"], "case": plan["case"]["name"], "backend": plan["backend"],
                        "credit": args.credit, "ci": plan["case"].get("ci", True), "identity": plan["identity"],
                        "require_run_ahead": args.require_run_ahead,
+                       # Which image and which threshold THIS backend was scored against. With
+                       # a per-backend golden in play, a results.json that named neither could
+                       # not be read months later without the manifest of the day beside it.
+                       "golden": plan["values"]["TRACE_GOLDEN"],
+                       "alternate_golden": plan["values"]["TRACE_ALTERNATE_GOLDEN"],
+                       "ssim_threshold": plan["values"]["TRACE_SSIM_THRESHOLD"],
                        "work": str(attempt / "work"), "status": "running", "started_at_ns": time.time_ns()}
                 checkpoint["runs"].append(row)
                 atomic_json(checkpoint_path, checkpoint)

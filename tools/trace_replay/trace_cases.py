@@ -39,7 +39,14 @@ KNOWN_CASE_KEYS = frozenset({
     "verify",
     "split",
     "avoid_angle_llvmpipe_explicit_lod_bias",
+    "backend_overrides",
 })
+
+# The only fields a per-backend block may restate. Deliberately three: they are the three the
+# comparison is made of. Letting a backend restate `target_call` or `crop_*` would mean the two
+# backends stopped retracing the same frame of the same trace through the same window, and the
+# rates would no longer be comparable - which is the one thing the two-backend matrix is for.
+BACKEND_OVERRIDE_KEYS = frozenset({"golden", "alternate_golden", "ssim_threshold"})
 
 
 def load_trace_case_manifest(path=TRACE_CASES_JSON):
@@ -108,8 +115,129 @@ def load_trace_case_manifest(path=TRACE_CASES_JSON):
                 f"{name} is marked split but excluded from CI, so the split matrix would drop it"
             )
         merged["split"] = split
+        validate_backend_overrides(merged)
         cases.append(merged)
     return {"defaults": defaults, "cases": cases}
+
+
+def validate_backend_overrides(case):
+    """`backend_overrides` names the golden/threshold ONE backend uses instead of the shared one.
+
+    P7 needs it because the device DirectVulkan matrix cannot be scored against the DirectGLES
+    picture. Until now the two backends shared `golden` plus an optional `alternate_golden`, and
+    `alternate_golden` is an OR, not a per-backend key: a DirectVulkan run that matched the
+    DirectGLES golden passed, and a DirectGLES run that matched a Magma-only image passed too.
+    That is exactly the "went green on the wrong arm" shape, so a per-backend golden REPLACES the
+    shared pair for that backend rather than being added to it (see case_for_backend).
+
+    Everything here is a load-time refusal rather than a runtime surprise, for the reason the
+    KNOWN_CASE_KEYS comment above gives: the failure mode of a manifest key is a lane that
+    quietly measures something else.
+    """
+    overrides = case.get("backend_overrides")
+    if overrides is None:
+        return
+    name = case["name"]
+    if not isinstance(overrides, dict) or not overrides:
+        raise ValueError(f"backend_overrides must be a non-empty object for {name}")
+    allowed = ci_backends(case)
+    for backend, entry in overrides.items():
+        if backend not in CI_BACKENDS:
+            raise ValueError(f"unknown backend in backend_overrides for {name}: {backend}")
+        if backend not in allowed:
+            # An override for a backend the case never runs can only ever be dead text, and a
+            # dead override reads exactly like a live one to whoever audits the golden next.
+            raise ValueError(
+                f"backend_overrides names {backend} but {name} does not run it "
+                f"(ci_backends = {', '.join(allowed)})")
+        if not isinstance(entry, dict) or not entry:
+            raise ValueError(f"backend_overrides[{backend}] must be a non-empty object for {name}")
+        unknown = sorted(set(entry) - BACKEND_OVERRIDE_KEYS)
+        if unknown:
+            raise ValueError(
+                f"backend_overrides[{backend}] for {name} may only restate "
+                f"{', '.join(sorted(BACKEND_OVERRIDE_KEYS))}; got {', '.join(unknown)}")
+        for key in ("golden", "alternate_golden"):
+            if key in entry and not (isinstance(entry[key], str) and entry[key]):
+                raise ValueError(f"backend_overrides[{backend}].{key} must be a non-empty "
+                                 f"path for {name}")
+        threshold = entry.get("ssim_threshold")
+        if "ssim_threshold" in entry and (isinstance(threshold, bool)
+                                          or not isinstance(threshold, (int, float))):
+            raise ValueError(f"backend_overrides[{backend}].ssim_threshold must be a number "
+                             f"for {name}")
+        if "alternate_golden" in entry and "golden" not in entry:
+            # Otherwise the block would add a second acceptable image to the SHARED golden,
+            # which is the OR this key exists to remove.
+            raise ValueError(f"backend_overrides[{backend}] for {name} sets alternate_golden "
+                             f"without golden; state the backend's own golden explicitly")
+
+
+def case_for_backend(case, backend):
+    """The case as ONE backend sees it: its own golden pair and threshold, or the shared ones.
+
+    Returns the case UNCHANGED - the same object - when it declares no `backend_overrides` at
+    all, so a manifest without the key produces byte-identical selections, environments and run
+    fingerprints to the ones it produced before the key existed.
+
+    THE KEY ITSELF IS DROPPED from the result even for a backend that overrides nothing, and
+    that is deliberate: `run_tcp_matrix` fingerprints the resolved case, so leaving the block in
+    would make "give DirectVulkan its own golden" invalidate every DirectGLES checkpoint in the
+    same run - a full re-sweep of an arm whose golden, threshold and trace did not move.
+    """
+    if "backend_overrides" not in case:
+        return case
+    merged = {key: value for key, value in case.items() if key != "backend_overrides"}
+    overrides = (case.get("backend_overrides") or {}).get(backend)
+    if overrides:
+        if "golden" in overrides:
+            # REPLACE, do not extend: an override's golden is this backend's whole answer.
+            merged["alternate_golden"] = ""
+        merged.update(overrides)
+    return merged
+
+
+def backend_override_goldens(case, backend):
+    """The goldens this case declares for OTHER backends - what `backend` must never match.
+
+    Two sources, and the second is the one that is easy to miss: when THIS backend replaced the
+    shared golden, the shared `golden`/`alternate_golden` stop being neutral and become the
+    other backends' images. A DirectVulkan run that matched the shared (DirectGLES) picture is
+    precisely the accident the per-backend key exists to make impossible, so it is named here
+    rather than reported as "a different golden".
+    """
+    overrides = case.get("backend_overrides") or {}
+    foreign = set()
+    if "golden" in (overrides.get(backend) or {}):
+        for key in ("golden", "alternate_golden"):
+            if case.get(key):
+                foreign.add(case[key])
+    for other, entry in overrides.items():
+        if other == backend:
+            continue
+        for key in ("golden", "alternate_golden"):
+            if entry.get(key):
+                foreign.add(entry[key])
+    resolved = case_for_backend(case, backend)
+    for key in ("golden", "alternate_golden"):
+        foreign.discard(resolved.get(key))
+    return foreign
+
+
+def refuse_backend_overrides(cases, consumer):
+    """Consumers that cannot express a per-backend golden must say so, not drop it silently.
+
+    `add_trace_replay_test_for_backends` and the APK matrix both carry ONE golden path for both
+    backends. Emitting a case that declares a per-backend golden through either of them would
+    register the DirectVulkan arm against the DirectGLES image - the precise failure this key was
+    added to close - so they refuse until they learn the key.
+    """
+    named = [case["name"] for case in cases if case.get("backend_overrides")]
+    if named:
+        raise ValueError(
+            f"{consumer} cannot express backend_overrides yet, and the following case(s) declare "
+            f"it: {', '.join(named)}. Teach {consumer} the key in the same commit that adds the "
+            f"override, or the arm it emits runs against another backend's golden.")
 
 
 def load_trace_cases(path=TRACE_CASES_JSON):
@@ -143,6 +271,7 @@ def fixture_files(case, fixture_root):
 
 
 def github_apk_case(case):
+    refuse_backend_overrides([case], "the APK retrace matrix (github_apk_case)")
     result = dict(case)
     for key in ("trace_archive", "golden", "alternate_golden"):
         if result.get(key):
@@ -332,6 +461,7 @@ def cmake_quote(value):
 
 
 def emit_cmake(cases, fixture_root):
+    refuse_backend_overrides(cases, "the CTest catalog emitter (emit_cmake)")
     root = fixture_root.rstrip("/\\")
     lines = ["# Generated from tools/trace_replay/trace_cases.json.", ""]
     keys = [

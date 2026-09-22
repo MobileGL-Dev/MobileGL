@@ -3020,11 +3020,19 @@ jobs:
       # which is a question every branch can answer and none of which depends on the TEMPORARY
       # feat/disaggregated trigger at the top of this file. It costs a couple of seconds and needs
       # no build.
+      # P7 adds the last two. THE DEVICE MATRIX DRIVER HAD NO CI STEP AT ALL: its 12 stub
+      # regressions (now 18, with the DirectVulkan half) were run by hand in WSL and recorded in
+      # a note, which is the same "a gate nobody can make red" shape the paragraph above is
+      # about - and it guards the tool that decides whether a device golden run PASSED.
+      # compare_actuals is the new half of that evidence (actual-vs-actual SSIM between
+      # repeats); both are stub/synthetic-only, need no build, no GPU and no device.
       - name: The split and retrace negative controls still reject a red that is not theirs (R-16)
         run: |
           bash scripts/ci/control_smoke_test.sh
           python3 scripts/ci/test_trace_infrastructure.py
           python3 scripts/ci/tcp_lane_tools_test.py
+          python3 tools/trace_replay/test_run_tcp_matrix.py
+          python3 tools/trace_replay/test_compare_actuals.py
 
       # A GATE as of P3a (G5). "pool 与延迟释放原样搬" (ROADMAP.md:19) is meant literally: the
       # buffer pool, the deferred-release drain and the three persistently mapped rings move

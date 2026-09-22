@@ -23,33 +23,69 @@ def module(name):
 
 
 class Accounting(unittest.TestCase):
-    def test_each_tcp_case_needs_a_real_endpoint_and_pid(self):
+    def check_tcp_proof(self, backend):
         tally = module('junit_tally')
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            name = 'DirectGLES.Tcp.TriangleScenario.Draw'
+            prefix = backend + '.Tcp.'
+            name = prefix + 'TriangleScenario.Draw'
             junit, discovery, base = root / 'junit.xml', root / 'lane.json', root / 'case.log'
             junit.write_text(f'<testsuite><testcase name="{name}" /></testsuite>')
             discovery.write_text(json.dumps({'tests': [{'name': name, 'properties': [
                 {'name': 'ENVIRONMENT', 'value': ['MOBILEGL_LOG_FILE_PATH=' + str(base)]}]}]}))
             role = root / 'case.client.log'
             role.write_text('control=tcp data=stream server=127.0.0.1:40613 pid=42\n')
-            tally.require_tcp_proof(junit, 'DirectGLES.Tcp.', discovery)
+            tally.require_tcp_proof(junit, prefix, discovery)
             with self.assertRaises(ValueError):
-                tally.require_tcp_proof(junit, 'DirectGLES.Tcp.', discovery, require_run_ahead=True)
+                tally.require_tcp_proof(junit, prefix, discovery, require_run_ahead=True)
             armed = 'control=tcp data=stream server=127.0.0.1:40613 pid=42\nrun-ahead ARMED\n'
             role.write_text(armed)
-            tally.require_tcp_proof(junit, 'DirectGLES.Tcp.', discovery, require_run_ahead=True)
+            tally.require_tcp_proof(junit, prefix, discovery, require_run_ahead=True)
             for fallback in ('running lockstep', 'run-ahead DISARMED'):
                 role.write_text(armed + fallback)
                 with self.assertRaises(ValueError):
-                    tally.require_tcp_proof(junit, 'DirectGLES.Tcp.', discovery, require_run_ahead=True)
+                    tally.require_tcp_proof(junit, prefix, discovery, require_run_ahead=True)
             for bad in ('', 'control=tcp data=shm server=127.0.0.1:40613 pid=42',
                         'control=tcp data=stream server=127.0.0.1:40613 pid=0',
                         'spawn ARMED - the server role runs in pid 42'):
                 role.write_text(bad)
                 with self.assertRaises(ValueError):
-                    tally.require_tcp_proof(junit, 'DirectGLES.Tcp.', discovery)
+                    tally.require_tcp_proof(junit, prefix, discovery)
+
+    def test_each_tcp_case_needs_a_real_endpoint_and_pid(self):
+        self.check_tcp_proof('DirectGLES')
+
+    def test_the_directvulkan_tcp_lane_is_held_to_the_same_proof(self):
+        """P7 exit gate 3 runs this lane on Magma, and the proof is prefix-driven.
+
+        `require_tcp_proof` selects by test-name prefix, so a DirectVulkan sweep asks it for
+        `DirectVulkan.Tcp.` - a prefix nothing in the tree had ever passed it. An empty
+        selection raises nothing at all, so a whole-backend typo would have read as a clean
+        pass; running the identical positive and negative battery under the other prefix is
+        what makes that impossible.
+        """
+        self.check_tcp_proof('DirectVulkan')
+
+    def test_a_prefix_that_matches_nothing_is_not_evidence(self):
+        """The shape the test above guards against, stated on its own.
+
+        require_tcp_proof iterates the testcases whose name starts with the prefix and asserts
+        per case. With no match it iterates nothing and returns, which is indistinguishable from
+        "every case proved its arm" - so the CALLER has to count, and this records that the
+        function itself will not.
+        """
+        tally = module('junit_tally')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            junit, discovery = root / 'junit.xml', root / 'lane.json'
+            junit.write_text('<testsuite><testcase name="DirectGLES.Tcp.A" /></testsuite>')
+            discovery.write_text(json.dumps({'tests': []}))
+            tally.require_tcp_proof(junit, 'DirectVulkan.Tcp.', discovery)
+            self.assertEqual(tally.tally(junit, 'DirectVulkan.Tcp.'), (0, 0, 0))
+            # And the same junit under the prefix that DOES match has no private log path, so
+            # the proof refuses rather than passing on the strength of the name alone.
+            with self.assertRaises(ValueError):
+                tally.require_tcp_proof(junit, 'DirectGLES.Tcp.', discovery)
 
     def test_equal_counts_do_not_hide_a_missing_case(self):
         parity = module('spawn_lane_parity')

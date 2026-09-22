@@ -357,33 +357,20 @@ public final class TraceReplayActivity extends Activity {
             this.envOverrides = envOverrides;
         }
 
-        // P6: MOBILEGL_TRANSPORT=spawn NEEDS AN ABSOLUTE PATH TO AN EXEC-ABLE FILE, and on
-        // Android there is exactly one such place. An APK's lib/<abi>/ is the only directory an
-        // untrusted_app may exec from - W^X has forbidden the app's own data dirs since API 29 -
-        // and the packager only puts a file there if it is named lib*.so, which is why the server
-        // executable wears that name (P0 spike A proved the arrangement on two devices).
+        // P6: MOBILEGL_TRANSPORT=spawn NEEDS AN ABSOLUTE PATH TO AN EXEC-ABLE FILE, and this is
+        // the one process that can spell it. The reasoning, and the K=V;K=V parsing rules it has
+        // to share with ApplyEnvOverrides, live in SpawnServerPath - a class with no android.*
+        // import, so test_android_lifecycle.py compiles and runs it with plain javac.
         //
-        // NOTHING OFF THE DEVICE CAN SPELL THAT PATH. nativeLibraryDir contains an
-        // install-time hash, so the host-side runner cannot pass MOBILEGL_IPC_SERVER_PATH the way
-        // it passes every other knob; the path has to be resolved HERE, by the process that is
-        // about to launch the server. Left unresolved, LaunchServer refuses BY NAME and the arm
-        // reds on "unresolvable image" - honest, but about the wrong thing.
-        //
-        // AN EXPLICIT VALUE WINS. A caller that set MOBILEGL_IPC_SERVER_PATH itself is pointing
-        // somewhere deliberately, and silently replacing it would make that knob untestable.
+        // P7: THE TWO DECISIONS BELOW USED TO BE String.contains() ON THE WHOLE JOINED LIST, and
+        // neither of them was entry-aware. The one that bit: `--env MOBILEGL_IPC_SERVER_PATH`
+        // (no '='), the documented UNSET spelling and the only way to ask for "spawn with no
+        // image" and watch LaunchServer refuse by name, did not match "MOBILEGL_IPC_SERVER_PATH="
+        // - so the resolved path was appended AFTER it and, because the last entry wins, the
+        // deliberate unset was silently undone. That is precisely the "silently replacing it
+        // would make that knob untestable" SpawnServerPath's own contract forbids.
         static String resolveSpawnServerPath(String envOverrides, String nativeLibraryDir) {
-            if (nativeLibraryDir == null || nativeLibraryDir.isEmpty()) {
-                return envOverrides;
-            }
-            if (!envOverrides.contains("MOBILEGL_TRANSPORT=spawn")) {
-                return envOverrides;
-            }
-            if (envOverrides.contains("MOBILEGL_IPC_SERVER_PATH=")) {
-                return envOverrides;
-            }
-            String serverPath = new File(nativeLibraryDir, "libMobileGLServer.so").getAbsolutePath();
-            String entry = "MOBILEGL_IPC_SERVER_PATH=" + serverPath;
-            return envOverrides.isEmpty() ? entry : envOverrides + ";" + entry;
+            return SpawnServerPath.resolve(envOverrides, nativeLibraryDir);
         }
 
         static TraceReplayRequest from(Intent intent, File filesDir, String defaultBackend,

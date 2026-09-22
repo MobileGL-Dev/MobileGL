@@ -34,7 +34,9 @@ if behavior!='no-result':
  if arm=='server-only':(work/'output/mobilegl.server.log').write_text('run-ahead ARMED\n')
  result={'passed':True,'statusCode':0,'backend':values['TRACE_BACKEND'],
          'targetCall':int(values['TRACE_TARGET_CALL']),'tracePath':str(work/'input'/values['TRACE_FILE']),
-         'actualPath':str(actual),'matchedGoldenPath':values['TRACE_GOLDEN'],'ssim':1.0}
+         'actualPath':str(actual),
+         'matchedGoldenPath':os.environ.get('CASE_MATCH_GOLDEN') or values['TRACE_GOLDEN'],
+         'ssim':float(os.environ.get('CASE_SSIM','1.0'))}
  (work/'output/result.json').write_text(json.dumps(result))
 if behavior=='timeout':time.sleep(60)
 raise SystemExit(7 if behavior=='failed' else 0)
@@ -63,19 +65,25 @@ class MatrixTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def write_inputs(self, behavior='success', extra_cases=None):
-        cases=[{'name':'Example','trace_archive':'fixture.tgz','trace_file':'trace.trace',
-                'golden':'golden.png','target_call':42,'width':16,'height':16,'timeout_seconds':.05}]
+    def write_inputs(self, behavior='success', extra_cases=None, case_overrides=None,
+                     backends=('DirectGLES',)):
+        case={'name':'Example','trace_archive':'fixture.tgz','trace_file':'trace.trace',
+              'golden':'golden.png','target_call':42,'width':16,'height':16,'timeout_seconds':.05}
+        case.update(case_overrides or {})
+        cases=[case]
         if extra_cases:cases.extend(extra_cases)
         self.manifest.write_text(json.dumps({'defaults':{'ssim_threshold':.99},'cases':cases}))
-        command=[sys.executable,str(self.stub),'-DTRACE_REPLAY_EXE='+sys.executable,
-                 '-DMOBILEGL_LIBRARY=/old/library','-DTRACE_CASE_NAME=Example','-DTRACE_BACKEND=DirectGLES',
-                 '-DTRACE_ARCHIVE='+str(self.fixtures/'fixture.tgz'),'-DTRACE_OUTPUT_DIR=/old/output',
-                 '-P',str(self.tool/'run_trace_case.cmake')]
-        self.catalog.write_text(json.dumps({'kind':'ctestInfo','tests':[{
-            'name':'MobileGLTraceReplay.Example.DirectGLES','command':command,
-            'properties':[{'name':'ENVIRONMENT','value':['CASE_BEHAVIOR='+behavior]},
-                          {'name':'TIMEOUT','value':.05},{'name':'WORKING_DIRECTORY','value':str(self.root)}]}]}))
+        tests=[]
+        for backend in backends:
+            command=[sys.executable,str(self.stub),'-DTRACE_REPLAY_EXE='+sys.executable,
+                     '-DMOBILEGL_LIBRARY=/old/library','-DTRACE_CASE_NAME=Example','-DTRACE_BACKEND='+backend,
+                     '-DTRACE_ARCHIVE='+str(self.fixtures/'fixture.tgz'),'-DTRACE_OUTPUT_DIR=/old/output',
+                     '-P',str(self.tool/'run_trace_case.cmake')]
+            tests.append({'name':'MobileGLTraceReplay.Example.'+backend,'command':command,
+                          'properties':[{'name':'ENVIRONMENT','value':['CASE_BEHAVIOR='+behavior]},
+                                        {'name':'TIMEOUT','value':.05},
+                                        {'name':'WORKING_DIRECTORY','value':str(self.root)}]})
+        self.catalog.write_text(json.dumps({'kind':'ctestInfo','tests':tests}))
 
     def run_main(self, *extra):
         args=['--catalog',str(self.catalog),'--source',str(self.source),'--library',str(self.library),
@@ -89,7 +97,14 @@ class MatrixTests(unittest.TestCase):
 
     def set_arm(self, arm, extra=None):
         catalog=matrix.read_json(self.catalog)
-        catalog['tests'][0]['properties'][0]['value'] += ['CASE_ARM='+arm,*(extra or [])]
+        for test in catalog['tests']:
+            test['properties'][0]['value'] += ['CASE_ARM='+arm,*(extra or [])]
+        self.catalog.write_text(json.dumps(catalog))
+
+    def set_case_env(self, entries):
+        catalog=matrix.read_json(self.catalog)
+        for test in catalog['tests']:
+            test['properties'][0]['value'] += list(entries)
         self.catalog.write_text(json.dumps(catalog))
 
     def test_required_arm_forces_both_environment_knobs_and_records_actual_arm(self):
@@ -205,6 +220,118 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual([c['name'] for c in matrix.select_cases(self.manifest,None)],['Example'])
         self.assertEqual(matrix.select_cases(self.manifest,['Extra'])[0]['name'],'Extra')
         with self.assertRaises(ValueError):matrix.select_cases(self.manifest,['OptOut'])
+
+    # ------------------------------------------------------------------------------------
+    # P7: the same driver runs the DirectVulkan device matrix.
+    # ------------------------------------------------------------------------------------
+    VULKAN_ONLY={'trace_archive':'fixture.tgz','trace_file':'trace.trace','golden':'golden.png',
+                 'target_call':42,'width':16,'height':16,'ci_backends':['DirectVulkan']}
+    GLES_ONLY=dict(VULKAN_ONLY,ci_backends=['DirectGLES'])
+
+    def plan_args(self, **extra):
+        args=types.SimpleNamespace(source=self.source,library=self.library,fixtures=self.fixtures,
+                                   runner=Path(sys.executable),endpoint='tcp://127.0.0.1:9',
+                                   token='x',credit=2,require_run_ahead=False,base_env={'BASE':'same'})
+        for key,value in extra.items():setattr(args,key,value)
+        return args
+
+    def plan_for(self, backend, case_overrides=None):
+        self.write_inputs(case_overrides=case_overrides,backends=('DirectGLES','DirectVulkan'))
+        catalog={test['name']:test for test in matrix.read_json(self.catalog)['tests']}
+        case=matrix.select_cases(self.manifest,None,[backend])[0]
+        return matrix.plan_case(case,backend,catalog,self.plan_args(),{})
+
+    def test_selection_honours_per_case_backends_and_names_an_impossible_pairing(self):
+        self.write_inputs(extra_cases=[dict(self.VULKAN_ONLY,name='VulkanOnly'),
+                                       dict(self.GLES_ONLY,name='GlesOnly')])
+        # The default subset is every split case; the per-backend filter happens in main(),
+        # so both restricted cases survive selection itself.
+        self.assertEqual([c['name'] for c in matrix.select_cases(self.manifest,None,['DirectVulkan'])],
+                         ['Example','VulkanOnly','GlesOnly'])
+        # A case NAMED on the command line that cannot run the requested backend is an error
+        # that says which case and what it does run - not one plan fewer and no message.
+        with self.assertRaises(ValueError) as caught:
+            matrix.select_cases(self.manifest,['GlesOnly'],['DirectVulkan'])
+        self.assertIn('GlesOnly',str(caught.exception))
+        self.assertIn('DirectGLES',str(caught.exception))
+        self.assertEqual(matrix.select_cases(self.manifest,['GlesOnly'],['DirectGLES'])[0]['name'],'GlesOnly')
+        self.assertEqual(matrix.select_cases(self.manifest,['VulkanOnly'],['DirectVulkan'])[0]['name'],'VulkanOnly')
+
+    def test_directvulkan_plans_its_own_golden_and_threshold(self):
+        overrides={'backend_overrides':{'DirectVulkan':{'golden':'vulkan-golden.png',
+                                                        'ssim_threshold':0.95}}}
+        (self.fixtures/'vulkan-golden.png').write_bytes(b'vulkan golden image')
+        vulkan=self.plan_for('DirectVulkan',overrides)
+        self.assertEqual(Path(vulkan['values']['TRACE_GOLDEN']).name,'vulkan-golden.png')
+        self.assertEqual(vulkan['values']['TRACE_SSIM_THRESHOLD'],'0.95')
+        self.assertEqual(vulkan['values']['TRACE_ALTERNATE_GOLDEN'],'')
+        self.assertTrue(vulkan['key'].startswith('DirectVulkan/'))
+        gles=self.plan_for('DirectGLES',overrides)
+        self.assertEqual(Path(gles['values']['TRACE_GOLDEN']).name,'golden.png')
+        self.assertEqual(gles['values']['TRACE_SSIM_THRESHOLD'],'0.99')
+        self.assertTrue(gles['key'].startswith('DirectGLES/'))
+        self.assertNotEqual(gles['identity'],vulkan['identity'])
+        # Each backend knows which goldens belong to the other one - including the SHARED
+        # golden, which stops being neutral the moment one backend replaces it.
+        self.assertEqual({Path(p).name for p in gles['foreign_goldens']},{'vulkan-golden.png'})
+        self.assertEqual({Path(p).name for p in vulkan['foreign_goldens']},{'golden.png'})
+
+    def test_directgles_planning_is_untouched_by_another_backends_override(self):
+        """The 'keep DirectGLES byte-identical' claim, asserted rather than asserted-in-prose."""
+        (self.fixtures/'vulkan-golden.png').write_bytes(b'vulkan golden image')
+        before=self.plan_for('DirectGLES')
+        after=self.plan_for('DirectGLES',{'backend_overrides':{'DirectVulkan':{
+            'golden':'vulkan-golden.png','ssim_threshold':0.95}}})
+        self.assertEqual(before['values'],after['values'])
+        self.assertEqual(before['key'],after['key'])
+        # The identity fingerprint is what --resume compares, so it must not move either.
+        self.assertEqual(before['identity'],after['identity'])
+
+    def test_a_directgles_golden_never_satisfies_a_directvulkan_run(self):
+        """RED-ONCE: the wrong-backend golden is refused, by name."""
+        (self.fixtures/'vulkan-golden.png').write_bytes(b'vulkan golden image')
+        self.write_inputs(case_overrides={'backend_overrides':{'DirectVulkan':{
+            'golden':'vulkan-golden.png'}}},backends=('DirectGLES','DirectVulkan'))
+        self.set_case_env(['CASE_MATCH_GOLDEN='+str(self.fixtures/'golden.png')])
+        self.assertEqual(self.run_main('--backend','DirectVulkan'),1)
+        row=self.checkpoint()[-1]
+        self.assertEqual(row['status'],'failed')
+        self.assertIn('another backend declares',row['error'])
+        self.assertIn('golden.png',row['error'])
+        self.assertEqual(row['returncode'],1)
+        # The control: the same stub reporting the DirectVulkan golden passes.
+        self.write_inputs(case_overrides={'backend_overrides':{'DirectVulkan':{
+            'golden':'vulkan-golden.png'}}},backends=('DirectGLES','DirectVulkan'))
+        self.set_case_env(['CASE_MATCH_GOLDEN='+str(self.fixtures/'vulkan-golden.png')])
+        self.assertEqual(self.run_main('--backend','DirectVulkan'),0)
+        row=self.checkpoint()[-1]
+        self.assertEqual(row['status'],'passed')
+        self.assertEqual(row['backend'],'DirectVulkan')
+        self.assertEqual(Path(row['golden']).name,'vulkan-golden.png')
+
+    def test_directvulkan_run_ahead_proof_and_checkpoint_keys_are_per_backend(self):
+        self.write_inputs(backends=('DirectGLES','DirectVulkan'))
+        self.set_arm('respect-env',['MOBILEGL_IPC_RUN_AHEAD=0','MOBILEGL_IPC_VERB_BARRIER=0'])
+        self.assertEqual(self.run_main('--backend','DirectGLES','--backend','DirectVulkan',
+                                       '--require-run-ahead'),0)
+        rows=self.checkpoint()
+        self.assertEqual([row['backend'] for row in rows],['DirectGLES','DirectVulkan'])
+        self.assertEqual({row['key'] for row in rows},
+                         {'DirectGLES/credit-2/Example','DirectVulkan/credit-2/Example'})
+        self.assertTrue(all(row['actual_arm']=={'armed':True,'lockstep':False,'disarmed':False}
+                            for row in rows))
+        # Each backend keeps its own checkpoint entry: resuming one must not consume the other.
+        self.assertEqual(self.run_main('--backend','DirectVulkan','--require-run-ahead','--resume'),0)
+        self.assertEqual(len(self.checkpoint()),2)
+
+    def test_a_directvulkan_lockstep_log_is_refused_exactly_as_a_directgles_one_is(self):
+        self.write_inputs(backends=('DirectGLES','DirectVulkan'))
+        self.set_arm('lockstep')
+        self.assertEqual(self.run_main('--backend','DirectVulkan','--require-run-ahead'),1)
+        row=self.checkpoint()[-1]
+        self.assertEqual(row['backend'],'DirectVulkan')
+        self.assertEqual(row['status'],'failed')
+        self.assertIn('required run-ahead',row['error'])
 
 
 if __name__ == '__main__':

@@ -286,6 +286,41 @@ unflushed persistent maps, e.g. the Create fixtures), pass
 sundial-lite fixture), pass `--ez avoid_angle_llvmpipe_explicit_lod_bias true` so
 the replay runs with `MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS=1`.
 
+### Repeats, the CI split subset, and keeping every repeat's evidence
+
+`run_android_retrace_local.py` drives the above through `trace-replay-ci.sh`. Three
+options exist for the P7-7 device diagnostics, where the question is not "did this
+case pass" but "which cases diverge, and is the divergence reproducible":
+
+| option | what it does |
+| --- | --- |
+| `--matrix` | run the **CI split subset** (the set `retrace-split` runs; 39 cases today) instead of the whole manifest. `--all` additionally includes the non-CI workloads such as rd12, which ID-P7-4 excludes from the exit-gate-3 denominator. Each case runs only the backends its own `ci_backends` names - and a case NAMED with `--case` that does not run the requested backend is an error, not a silent skip. |
+| `--repeat N` | replay each case/backend N times. Repeats after the first pass `--reuse-fixture`, so they measure the replay and not the push. |
+| `--archive-dir DIR` | copy each repeat's `result.json`, actual PNG, both role logs, `transport-proof.json` and `logcat.txt` to `DIR/<case>-<backend>/repeat-NN/` **before the next run overwrites them**, plus `DIR/run.json` recording the APK SHA-256, the arm and the environment. |
+
+The archive exists because `.trace-work/android-retrace-result/<case>-<backend>/` is
+keyed by case and backend and by nothing else: without `--archive-dir` the only
+artefact that survives a three-repeat run is the last one, and "were the three
+repeats the same picture?" becomes unanswerable after the fact.
+
+```sh
+python tools/trace_replay/run_android_retrace_local.py \
+  --matrix --backend DirectVulkan --use-pbuffer --transport inproc --repeat 3 \
+  --archive-dir .trace-work/p7w1/E0-inproc
+python3 tools/trace_replay/compare_actuals.py summary .trace-work/p7w1/E0-inproc \
+  --json E0-inproc-summary.json
+```
+
+`compare_actuals.py` computes the pair `result.json` cannot: SSIM between two actual
+PNGs. It is the retrace gate's OWN SSIM - a transcription of `ComputeChannelSsim` /
+`ComputeRgbSsim` (`android-plugin/app/src/trace/cpp/trace_replay_core.cpp:630` and
+`:671`), one global window per channel, C1 = (0.01*255)², C2 = (0.03*255)², alpha
+ignored - and the crop comes from each repeat's own `result.json`, so the
+`ssim_vs_first` column describes the same rectangle as the recorded `ssim_vs_golden`.
+`summary` prints `case × repeat × ssim_vs_golden × ssim_vs_first × bit-identical`;
+`compare A.png B.png` scores one pair; `--self-test` checks the transcription against
+closed-form values. Unit tests: `python3 tools/trace_replay/test_compare_actuals.py`.
+
 ## Benchmark mode (frame timing)
 
 Benchmark mode reuses the same fixtures as a performance harness instead of a
@@ -438,6 +473,38 @@ fixture directory and can be overridden with `--fixtures`. Repeat `--case` or
 minecraft-1.21.4-rd12-odinlite-in-world` permits that non-CI workload separately;
 an explicit `split:false` always remains excluded.
 
+### Both backends, one driver
+
+`--backend DirectVulkan` runs P7 exit gate 3's device matrix with the same
+run-ahead proof, resume and watchdog the DirectGLES matrix uses. Three things are
+per backend and the rest is deliberately shared:
+
+- **selection** - a case is planned for a backend only if its own `ci_backends`
+  names it, so `minecraft-1.21.4-fabric-iris-iterationrp-in-world` appears in a
+  DirectVulkan sweep (39 cases) and not in a DirectGLES one (38). A `--case` named
+  explicitly that does not run a requested backend is a refusal that names the
+  case, not one plan fewer and no message;
+- **golden and threshold** - from `backend_overrides.<backend>` in
+  `trace_cases.json` when the case declares one. A per-backend `golden` REPLACES
+  the shared `golden`/`alternate_golden` pair for that backend rather than adding
+  to it, and a run that matched an image another backend declares is refused by
+  name. (`alternate_golden` alone cannot express this: it is an OR across
+  backends, so a DirectVulkan run matching the DirectGLES picture passes.) The
+  block may restate only `golden`, `alternate_golden` and `ssim_threshold` -
+  restating `target_call` or a crop would stop the two backends retracing the same
+  frame through the same window, which is what makes the two numbers comparable;
+- **result naming and checkpoint key** - `<backend>/credit-<n>/<case>`, plus the
+  golden, alternate golden and threshold recorded in each `results.json` row.
+
+A case with no `backend_overrides` is resolved to itself, so DirectGLES plans,
+identities and checkpoint keys are unchanged by this option's existence - and the
+key is dropped from the fingerprint even for the backend that overrides nothing,
+so giving DirectVulkan its own golden does not invalidate the DirectGLES
+checkpoints. **The CTest catalog emitter and the APK matrix refuse a case that
+declares `backend_overrides`**: both carry one golden path for both backends, so
+emitting such a case through them would register one backend's arm against the
+other's image. Teach them the key in the same commit that adds an override.
+
 The watchdog defaults to **300 seconds without log progress** and a separate
 **7200-second absolute ceiling** (`--idle-seconds`, `--max-seconds`). It observes
 runner output and trace/client/server log changes. It deliberately ignores the
@@ -463,7 +530,8 @@ KEYCODE_WAKEUP` every 15 seconds during a case. It does not install anything or
 change global power/idle settings. Its own adb log is excluded from the progress
 watchdog, so wakeup messages cannot conceal a stalled trace.
 
-Tool regression tests use short process stubs, never a GPU/device/trace:
+Tool regression tests use short process stubs, never a GPU/device/trace. They run
+in CI beside the other executable negative controls (`test.yml`, the R-16 step):
 
 ```bash
 python3 tools/trace_replay/test_run_tcp_matrix.py
