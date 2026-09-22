@@ -9,6 +9,11 @@
 // ILink's second implementation, DECLARED BY c6 AND IMPLEMENTED BY NOBODY.
 // Authority: CONTRACT-P6.md §8.4. Its phase is P6.5.
 //
+// The link it exists for is TCP across machines (end state re-ruled 2026-09-22,
+// CONTRACT-P6.md §10.3, ARCHITECTURE.md §11.9), and it is one axis of two: the
+// control plane (ITransport) is chosen independently, so tcp control + shm data
+// on one machine is a legal pair and nothing above Transport/ may tell which.
+//
 // WHY A HEADER FOR SOMETHING THAT DOES NOT EXIST. ILink's adequacy - "can this
 // seam name what a byte stream needs?" - is the one claim c6 makes that an
 // argument cannot settle and a compile can. If ILink cannot express progress

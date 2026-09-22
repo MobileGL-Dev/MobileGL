@@ -50,8 +50,16 @@ server 路径（`94e2f2e0`、`15bd9a67`、`1039502e`、`2afa0002`）。
 | 8 | **性能只记录**，但三个数强制：socket 门铃 vs condvar、`SEG_STAGE` 字节/帧、chunking 后记录/帧 | ⏳ **未采集**，`MEASUREMENTS.md:342` 仍说 chunking 后分布不存在 |
 
 负控（各跑红一次）：S1 不可解析镜像（sm）、S2 kill server（dl）、S3 未洗环境（sm）、S5 窗口 token
-到达（cp）、S6 `dataPlane=StreamOnly`（hs 的 Refuse）、S7 裸 abort（dl 普查门）、S8 `SessionFaultCount()==0`
+到达（cp）、S6 **未跑——`LinkTerms.dataPlane` 不存在于树上**（`protocol.fbs` 无 `LinkTerms` / `Refuse`，hs 只落了 build stamp、`abiMajor/Minor` 补检与真实 pid；此处此前写"已跑红一次"是错的，随契约 §2 三行移交 P6.5，契约 §10.3）、S7 裸 abort（dl 普查门）、S8 `SessionFaultCount()==0`
 整轮（t6）。
+
+### 2.1 收官前另欠（2026-09-22 核出）
+
+- server 进程侧的 `PipeStats` 半边是**结构性零**：`ServerMain` 不跑 `MobileGL::Initialize`，`PipeStats::Init()` 从未在 server 进程执行，~80 处 `if (Enabled())` 永远为假，`srv=0 srvpark=0` 长得和"从没等过"一模一样（`PipeStats.h:256` 自己写明了这一点）——门 8 的"socket 门铃 vs condvar"因此没有 server 半边。修法是在 server 进程里于 config 加载与角色声明之后初始化它，汇总行落 `<base>.server.log`，由车道断言而非注释假设（工作区中进行中，未提交）。
+- 184 符号棘轮 CI 门（契约 §12.1）：`test.yml` / `scripts/` 里**没有**。
+- 契约 §2 表 0 分给 hs 的 `LinkTerms` / `Refuse` / `wireFingerprint` 拆分：**未落地**，移交 P6.5（`ROADMAP.md` P6.5 行，契约 §10.3）。
+- `MOBILEGL_IPC_IDLE_EXIT_S`（`ARCHITECTURE.md` §15.3 默认 30）：未被解析。
+- `TextureParamsWithoutASamplerView` 的"P6 inspection forwarder"债（`MEASUREMENTS.md` §7.2）：场景代码已无 P6 引用，是否已由 fc / cp 关闭**待核**。
 
 ---
 
@@ -88,7 +96,7 @@ G1 守卫下 pull 构建不变。
 
 - **出口门 7、8**（真机配对 A/B、三个性能数）——待采集，见 §2。
 - **`DirectVulkan` 真机分离路径分歧**——Magma × 真实 GPU，非 P6。
-- **P6.5**：数据面流式（`ILink`/`StreamLink` 已声明未接线）、AF_VSOCK、`SEG_STAGE` 送窗口复活。
-- **Ph**：让 `Session::Fail` 可返回的策略翻转（需在每个依赖 `[[noreturn]]` 的站点造真实返回路径）。
+- **P6.5**：传输栈两轴化（控制面 `ITransport` × 数据面 `ILink`，握手协商、可混搭）+ TCP 跨机 + wire 定宽与布局摘要；`StreamLink` 已声明未接线；`SEG_STAGE` 送窗口复活。终局已改为 TCP 跨机跨平台（2026-09-22），AF_VSOCK 撤回；见 `ROADMAP.md` P6.5 行、`ARCHITECTURE.md` §11.9。
+- **Ph**：让 `Session::Fail` 可返回的策略翻转（需在每个依赖 `[[noreturn]]` 的站点造真实返回路径）+ 配对 / 认证；前置于 P12 的非 loopback 监听。
 - **P12**：真窗口跨进程（`ANativeWindow*` 是客户端进程内指针，`SetWindowHandle` 至今具名拒绝）。
 - **seq/op 未穿 SessionFault 帧**：90 个站点不逐一穿线，消息本身已带 op，帧只带 code/family/message。

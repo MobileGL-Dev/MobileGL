@@ -81,12 +81,13 @@ Two consequences, and the second is why this file can exist without changing beh
 > it would not make Windows work; it would only put asio headers inside `Transport/`, which
 > `ITransport.h` keeps dependency-light on purpose. **Revisit at P6.5**, where
 > `asio::generic::stream_protocol` carries a raw (family, type, protocol) triple and therefore
-> gives AF_VSOCK from the same implementation - and where `ITransport` lets an `AsioTransport`
+> gives AF_VSOCK from the same implementation (2026-09-22: the end state's link is TCP, not
+> AF_VSOCK - §10.3 - and the argument is the same for `asio::ip::tcp`) - and where `ITransport` lets an `AsioTransport`
 > land beside `SocketTransport` without touching a caller.
 
-| `LinkTerms{dataPlane, wireForm, maxReplyBytes, cmdWindowBytes, stageWindowBytes}` | Appended to `Hello`/`Welcome`. `dataPlane` has exactly **one** legal value in P6, `SharedSegments`; `wireForm` exactly one, `StructImage`. Anything else is refused **by name**. The four sizes are **stated by the SERVER**. | any other value → `Refuse{ProtocolMismatch}` | the handshake | `hs` |
-| `Refuse{code, detail, peer values}` | Appended `CtrlMsg` union tag. A handshake disagreement is an **answer**, not an abort (§5.1). | — | both sides | `hs` |
-| `wireFingerprint` / `buildFingerprint` | The single `abiFingerprint` splits. §4. | mismatch → `Refuse`, never `Fatal` | the handshake | `hs` |
+| `LinkTerms{dataPlane, wireForm, maxReplyBytes, cmdWindowBytes, stageWindowBytes}` | Appended to `Hello`/`Welcome`. `dataPlane` has exactly **one** legal value in P6, `SharedSegments`; `wireForm` exactly one, `StructImage`. Anything else is refused **by name**. The four sizes are **stated by the SERVER**. | any other value → `Refuse{ProtocolMismatch}` | the handshake | `hs` → **not landed** (verified 2026-09-22: `protocol.fbs` has no `LinkTerms`); re-homed to P6.5 `nd`, §10.3 |
+| `Refuse{code, detail, peer values}` | Appended `CtrlMsg` union tag. A handshake disagreement is an **answer**, not an abort (§5.1). | — | both sides | `hs` → **not landed** (no `Refuse` in `union CtrlMsg`); re-homed to P6.5 `wf`, §10.3 |
+| `wireFingerprint` / `buildFingerprint` | The single `abiFingerprint` splits. §4. | mismatch → `Refuse`, never `Fatal` | the handshake | `hs` → **partially landed** (explicit build stamp, `abiMajor`/`abiMinor` checked, real pids; the split itself and the `PipeFields.def` layout digest are not); re-homed to P6.5 `wf`, §10.3 |
 | `FatalCode` | **Unchanged**, 7 values (`protocol.fbs:248-256`). `table Fatal` appends `family: string`. §5.2. | — | — | `dl` |
 
 All schema edits are **append-only**. A FlatBuffers table field's id is its vtable slot and an enum
@@ -625,6 +626,38 @@ Negative controls, each run red once:
 6. `ARCHITECTURE.md:9` and `MG_Backend/MGPipe/PipeInputs.h:281`, `:744`, `:957`, and
    `P5F-WIRE-COMPLETENESS §1.4` — "the server does not link `MG_Impl`". **False at this head.** §12.
 
+### 10.3 Amendments of 2026-09-22 — the end state re-ruled
+
+1. **The end state is TCP across machines, OSes and architectures**, not an AVF pVM over
+   `AF_VSOCK`. `docs/Disaggregated/P6-ENDSTATE-REVIEW.md` carries the retraction at its head; its
+   §3 gains form **D**. Same-machine `spawn` (AF_UNIX + shared segments) stays as the local form.
+2. **The transport stack has two independent axes.** The control plane (`ITransport`: `fork`
+   inherited fds / `unix:<path>` / `tcp://host:port`) and the data plane (`ILink`: `ShmLink` /
+   `StreamLink`) are chosen separately, negotiated in the handshake, and may be mixed — on one
+   machine, control over TCP with data over shared segments is a legal pair. Callers above
+   `Transport/` see `ITransport` + `ILink` and nothing else; branching on the link kind above that
+   line is a purity-gate failure (the `lk` grep gate, widened). Design: `ARCHITECTURE.md` §11.9.
+3. **§8.2's "`ITransport` is not extended" is amended in one respect**: descriptor passing leaves
+   the control plane and becomes the shared-segment data plane's *delivery*. `ShmLink` brings its
+   own AF_UNIX aux rendezvous, named in `Welcome`, and `SCM_RIGHTS` travels on that and nowhere
+   else. Rule G is unchanged: a transport that declares no descriptor passing (TCP) passes none,
+   and the data plane that needs it must bring its own channel or not be selected. `auto`
+   selection is decided by a **successful delivery**, never by inspecting addresses, and a
+   fall-back to `Stream` is named in the log and the stats line.
+4. **§2's three `hs` rows** (`LinkTerms`, `Refuse`, the fingerprint split) did not land in `hs`;
+   `protocol.fbs` carries neither `LinkTerms` nor a `Refuse` member of `CtrlMsg`. They are P6.5's
+   (`nd`, `wf`), and S6 in §9 moves with them. `CURRENT_STAGE_PROGRESS.md`'s earlier claim that
+   S6 had been run red is withdrawn.
+5. **Fixed-width wire form is no longer negotiable-later.** Two different binaries from two
+   compilers are the end state, so the `PipeFields.def`-derived layout digest, the fixed-width
+   rewrite of `DynamicBackendParameters` / `MGPCaps` / the `RenderStateParameters` blob, and the
+   `buildFingerprint`-only-under-`Dial == Fork` policy are P6.5 `wf`, taken off P7.
+6. **`Ph` gains pairing/authentication**: a `Hello` without a pairing token is refused on any
+   non-loopback listener. `Ph` precedes P12's non-loopback listen.
+7. **"The 511 class-C entries" in §11** is the P5-joint census
+   (`docs/Disaggregated/notes/p6/census-classC.md`). At this head the `MGR_UNMIGRATED_*` lists are
+   empty; `SetSwapInterval` (P10) and `DeleteTransformFeedback` (P9) are the two that remain.
+
 ---
 
 ## §11 Not P6
@@ -634,7 +667,9 @@ readback and the reply-slot pool (P9); `DynamicBackendParameters`' fixed-width r
 `MOBILEGL_IPC_POLL_ESCALATE` (P10); remaining monolith-only frontend-object / twin-registry glue
 (P3b/P4b) and the named P7 functionality debts; Windows `pipe:` / `unix:`; the 511 class-C entries.
 
-**The stream data plane is P6.5**, and it must land before P11 and before P9 picks a mechanism.
+**The two-axis transport stack — control × data, TCP-capable, cross-build — is P6.5** and is the
+IPC track's next stage (§10.3). P9 builds its reply semantics on P6.5's message replies rather than
+on a slot pool, and P11's T0/T1 are refused by name on a stream data plane.
 **Untrusted-guest hardening is `Ph`**, and it must land before any shipping server app accepts a
 connection from a guest it did not produce — including the `Fatal`-policy flip (§5.2), the
 handle-slot budget, and the caps in §12.

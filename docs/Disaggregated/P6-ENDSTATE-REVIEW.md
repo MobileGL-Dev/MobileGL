@@ -12,6 +12,14 @@
 > abort 计数 93→92、`m_windowHandle` 的注入点形状、以及 `MGPipeSplitActive()` 的命名冲突。
 > 正文已就地更正。a6 另发现四处本文未及的阻塞项（apply 线程在第一条记录前 abort、控制面两端都没接、
 > 控制回复等待无期限、`SurfaceReply` 装不下 result）。**以 [`notes/p6/a6-audit-v1.md`](notes/p6/a6-audit-v1.md) 为准。**
+>
+> **2026-09-22 更正（终局改判）**：本文假设的终局——client 在 AVF pVM、链路 `AF_VSOCK`——**撤回**。现定终局：
+> client 与 server 可在**不同机器、不同 OS / 架构**上，经 **TCP** 连接；传输栈拆成控制面（`ITransport`）× 数据面（`ILink`）
+> 两根独立可选、握手协商、可混搭的轴（同机可控制面 TCP + 数据面共享段）。后果：§3 加一行 **D TCP**（约束集与 C 相同——
+> 无 fd 传递、无共享页——但 RTT 毫秒级、带宽 30–100 MB/s）；§3.1、§7.3、§8.1、§8.2 的 vsock 条目撤回；§6 第 3 行
+> "P7 不变、定宽只是协商值"改为**定宽 + 布局摘要是 P6.5 的第一个包**；"形态 B 不需要 P6.5"不再是有效场景，**P6.5 上关键路径**；
+> §5.2 的 `LinkTerms` / `Refuse` / 指纹拆分经树上核实**未由 hs 落地**，归 P6.5。以 `ROADMAP.md` 的 P6.5 / Ph 行与
+> `ARCHITECTURE.md` §11.9 为准；本文其余部分作为审查记录不再改。
 
 ---
 
@@ -129,12 +137,15 @@ P6 该做的**不是**把它改成闩锁（那需要在每个 `[[noreturn]]` 站
 | **A 同内核两进程**（P6 的 spawn） | 进程 | `AF_UNIX` | `SCM_RIGHTS` + memfd/ASharedMemory + mmap | ✅ 今天就成立 |
 | **B 容器类 guest**（DroidSpace / Winlator / Termux，共享内核） | 命名空间 / 沙箱 | `AF_UNIX` | 同上（含 `AHardwareBuffer_sendHandleToUnixSocket`，API 26） | ✅ **整套 P6 机制逐字可用** |
 | **C AVF pVM** | 内核 | `AF_VSOCK`，**仅此** | 无。无 SCM_RIGHTS、无共享页、无 dma-buf | ❌ 需要 P6.5 |
+| **D 跨机 TCP**（2026-09-22 定的终局） | 机器 / OS / 架构 | `TCP`，仅此 | 无 | ❌ 需要 P6.5；且两端是**不同二进制**，wire 定宽 + 布局摘要成硬前提 |
 
-**这是本次审查最令人愉快的一条结论：形态 B 的终局，从"P6 + 修订后的 P12"就能到达，不需要 P6.5。**
+**这是本次审查最令人愉快的一条结论：形态 B 的终局，从"P6 + 修订后的 P12"就能到达，不需要 P6.5。**（2026-09-22：形态 B 不再是操作性场景；终局是 D，P6.5 在关键路径上。）
 同内核意味着 `AF_UNIX` + memfd + `SCM_RIGHTS` 全部照旧。
 Winlator 在自己 app 内跑 VirGL / Vortek 渲染服务，是"终局减去 VM"的一个**已出货存在性证明**。
 
 ### 3.1 [外部未验证] AVF 形态有一个可能致命的外部约束
+
+> **撤回（2026-09-22）**：终局不再是 AVF，本节只作历史记录，探针不做。
 
 审查给出的判断是：**一个普通（untrusted）Android app 根本无法参与 AVF。**
 两道独立的闸，任一成立即致命：
@@ -296,13 +307,13 @@ red-once：**改成从超时置位闩锁，则配对的正控制"server 落后�
 |---|---|---|---|
 | 1 | **P6（修订）** | 十个包，仍然可交付，仍然只落离屏 | — |
 | 2 | **P6.5（新）stream 数据面** | `StreamLink` 作为 `ILink` 的第二实现：分块封帧、watermark 变消息（**规则逐字保留**——late-never-early、`>=` 不是 `==`、倒退是 Fatal，只有机制变）、reply 变成自带 seq 的真消息（于是 **删掉** slot 池、`seq & mask` 取模、stamp 自检与 `ReplySlot.h:56-62` 的 P9 漂移风险）、`SEG_STAGE` 的编码器局部分配器变成发送窗口、**每方向一条专用读线程**（否则 event-ring 的流控死锁以 write/write 互阻的形式原样复活） | **必须在 P11 之前**，且**约束 P9 的机制选择** |
-| 3 | **P7 不变** | 定宽 payload 重写是**跨架构**前提，不是跨进程前提；`hs` 让它变成一个协商出来的 `wireForm` 值而不是新机器 | — |
+| 3 | **P7 不变** | 定宽 payload 重写是**跨架构**前提，不是跨进程前提；`hs` 让它变成一个协商出来的 `wireForm` 值而不是新机器。**2026-09-22 改判：跨架构现在就是终局，定宽 + 布局摘要归 P6.5 wf，P7 不再持有它** | — |
 | 4 | **P9 重定范围** | 从"`SEG_REPLY` 异步 slot 池"改成"**异步 reply 语义**"，机制推到 P6.5 之后 | 否则 P9 造一个阶段的工作量给 stream 删掉 |
 | 5 | **P11 加一条具名拒绝** | `SEG_ADOPT` 的档位是**只对共享映射成立**的；在非 shm 链路上点名 T0/T1 是具名拒绝并强制 T2 | 在 P6.5 之后 |
 | 6 | **P12 修订，而且更小** | **删掉 Surface 传递那一半**（Java `Surface` → Messenger/AIDL → `MobileGLServerService` → `ANativeWindow_fromSurface`，以及那 ~15–25 MB 的额外 ART）。server app 拥有自己的 SurfaceView，client 根本没有窗口，**于是 minSdk 26 没有扁平化 `ANativeWindow` 的 NDK API——那条逼得 P5–P11 必须无窗口的约束——彻底不再成立，因为什么都不需要被扁平化。** 新增：一个追加的 `WindowKind::ServerOwned`、两个后端各一条 `CreateEGLWindowSurface` 臂、**第二个 `m_windowHandle` 注入点**（§2.5；a6 精确化为：`ActivateEGLSurface` 每次 make-current 用 `surfaceState->Window` 覆写 server 的窗口，最小 latch 点在 `RegisterEGLWindowSurface` `BackendObject.cpp:232-238`，另需改 `sameHandle` 去重键 `BackendObject_DirectGLES.cpp:962-967`）、DirectGLES 进程全局 `g_Display`/`g_Surface`/`g_Context` 的去全局化、以及 DirectGLES 的 `kEventSurfaceChanged` Width/Height 缺口（Espryt 只发布格式，`DirectGLES.cpp:15793-15805`，server 拥有显示时 client 的默认 FBO 会永远停在 `MG_Impl/Init.cpp` 的 512×512 占位值）。**Magma 近得多**：它的旋转 / preTransform 补偿本来就整个在 server 侧、按 server 自己的 surface 取键 | 形态 C 需要 P6.5 + Ph；**形态 B 两个都不需要** |
 | 7 | **Ph（新）不可信 guest 加固** | 当前路线图里**没有家**。内容：把 `Session::Fail` 的**策略**翻成每会话闩锁（P6 收口站点，Ph 改它们做什么——注意这需要在每个站点发明真实返回路径，不是一个函数翻一下）；handle slot 预算（guest 能跨 13 个 kind 各逼一次 `1<<20` 条目的 vector resize，而 `BackendSlotTable` 的两条拒绝是 `MOBILEGL_ASSERT`，release 下展开为空，留下一个**静默的 null twin**）；readback 尺寸门挪到 server 侧、且在 resize **之前**加绝对上限；`StagedTextureStore` 的 resize 按该 level 宣告的范围设界；`ArchiveVector` 按 `count * sizeof(element)` 设上限；`SEG_EVENT` 溢出策略不能再是"一个仅仅在自己门铃上 park 的 guest 60 秒内杀掉宿主渲染器" | **必须在任何出货的 server app 接受一个不是它自己产生的 guest 的连接之前** |
 
-**顺序小结**：`P6 → {P7 ∥ P6.5 ∥ Ph}`；P6.5 在 P11 与 P9 机制选择之前；Ph 在任何出货 server 之前。
+**顺序小结**：`P6 → {P7 ∥ P6.5 ∥ Ph}`；P6.5 在 P11 与 P9 机制选择之前；Ph 在任何出货 server 之前。**2026-09-22**：IPC 跑道改为 `P6 → P6.5 → Ph → P12 → P9 → P10 → P11（同机臂）`，P7 与 P3b/P4b 在 monolith 跑道上并行。
 
 ---
 
@@ -330,6 +341,8 @@ red-once：**改成从超时置位闩锁，则配对的正控制"server 落后�
 
 ### 7.3 `AF_VSOCK` 探针（一小时，设备上）
 
+> **撤回（2026-09-22）**：终局改为 TCP 跨机；对应的测量变成 TCP loopback 与跨机臂上的 RTT / 吞吐（`ROADMAP.md` 开放问题 19）。
+
 从一个普通 app 调 `socket(AF_VSOCK)`，抓 avc denial；量一次 guest↔host 的 1 MiB 吞吐与单向延迟。
 §3.1 那条外部约束不做这个探针就不能当前提。
 
@@ -343,8 +356,8 @@ red-once：**改成从超时置位闩锁，则配对的正控制"server 落后�
 
 ## 8 仍然未决（不要当成已答）
 
-1. **[外部未验证]** 普通 Android app 能否成为 pVM 的 vsock 对端（§3.1）。它不改结构，改的是终局能承诺什么。
-2. **[外部未验证]** pKVM 下手机上的 `AF_VSOCK` 吞吐与单向延迟。树里、文档里、脚本里对 vsock / AVF / virtio / gfxstream / virgl
+1. ~~**[外部未验证]** 普通 Android app 能否成为 pVM 的 vsock 对端（§3.1）。它不改结构，改的是终局能承诺什么。~~ 撤回（2026-09-22，终局改为 TCP）。
+2. ~~**[外部未验证]** pKVM 下手机上的 `AF_VSOCK` 吞吐与单向延迟。~~ 撤回（2026-09-22；换成 TCP 跨机的 RTT 与吞吐，`ROADMAP.md` 开放问题 19）。树里、文档里、脚本里对 vsock / AVF / virtio / gfxstream / virgl
    **零引用**（已 grep）；公开数字都是服务器级 x86 的 iperf3，这个配置下的延迟数字**根本不存在**。
 3. server image 能否不链 `MG_Impl`。`PipeInputs.h:281/:744/:957` 与 `P5F-WIRE-COMPLETENESS` §1.4 断言它，
    `SPAWN-PLAN:77` 与 `CONTRACT` §3.3 挂着它。读不出来，只能试链（§7.2）。

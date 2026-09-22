@@ -428,6 +428,28 @@ server 没有第二份 `BufferObject`，不存在"staging → server 侧 shadow"
 
 fence 完成度必须来自**真的逐 fence 退休**，不是 present 水位（DirectGLES 的 `g_completedFrameSerial` 只在 `Present()` 里前进，帧中 fence 会退化成帧计数推断——`DirectVulkan.cpp` 写明这是被修掉的 bug）。无 present 循环下 `retiredTail` 会饿死：DirectGLES 的 server 加**非 present fence tick**（距上次 `Present` 超过 8 ms 或每 4096 条已 apply 记录插一个 `glFenceSync`）；P8 加一个无 present 的 split 用例。P5b 已把五条 sync 槽搬上 apply 线程（§17.5）。
 
+### 11.9 传输栈的两根轴（P6.5，2026-09-22 定）
+
+终局：client 与 server 可以在不同机器、不同 OS / 架构上，经 TCP 连接；同机 `spawn` 保留。为此传输栈拆成**两根独立可选、握手协商、可混搭**的轴，上层只见两个接口：
+
+| 轴 | 接口 | 实现 | 选项 |
+|---|---|---|---|
+| **控制面** | `ITransport`（`Transport/ITransport.h`，只承载 FlatBuffers 控制帧，**不再承载描述符传递**） | `SocketTransport` | `fork`（继承 fd，今天的 spawn）、`unix:<path>`（sm 的独立启动）、`tcp://host:port`（跨机；同机也可用） |
+| **数据面** | `ILink`（`Transport/ILink.h`，热路径：记录预留 / 提交、watermark、reply、event、span 解析） | `ShmLink`（共享段 + `RingControl` 页 + 门铃）、`StreamLink`（分块封帧、watermark 变消息、reply 变自带 seq 的消息、发送窗口） | `shm`、`stream`、`auto` |
+
+规则：
+
+- **配对在会话建立时选定一次，之后不变**（缝是 setup-time 的，`CONTRACT-P6.md` §8.2）。`Hello` / `Welcome` 里的 `LinkTerms{dataPlane, delivery, wireForm, maxReplyBytes, cmdWindowBytes, stageWindowBytes}` 由 **server 陈述**尺寸、client 请求可被钳制。
+- **共享段的交付与控制面解耦**：`ShmLink` 自带一个 AF_UNIX aux 汇合名，在 `Welcome` 里公布，`SCM_RIGHTS` 只走它。于是同机上"控制面 TCP + 数据面共享段"是合法配对，控制面走什么与数据面走什么互不牵连；`ITransport` 收窄为纯控制帧（`auxFd = -1` 已是"这条链不传 fd"的诚实答案）。
+- **`auto` 的判据是段实际交付成功**——client 连 aux、收到 fd、`Adopt` 通过 `fstat` 校验——而不是看对端地址是不是 loopback。回落到 `stream` 必须具名进日志与 stats 行（`ARM` 证明的形状，ID-124），不能静默降级。
+- **上层零链路种类分支**：`SessionProducer` / `SessionConsumer` / `ServerLoop` / `PipeWireEncoder`、`ClientSession.cpp` 的 `kSegEvent` 挂载、`ResourceTracker.h` 的 writeback 解析都只经 `ILink`；`ShmLink` / `StreamLink` / `RingControl` / `ReplySlotPool` / `EventRingConsumer` / `m_shm.` 只允许出现在 `Transport/` 与其测试（lk 的 grep 门加宽）。角色 / 拓扑谓词（`MGPipeSplitActive()`、`MGPipeBlocksAreDistinct()`、`MGPipeBackendIsLocal()`）回答的是"谁在哪个进程"，不是"用的什么链路"。
+- **门铃归数据面**：共享段上是 futex / condvar（同内核跨进程可用），stream 上是消息本身；控制面不参与热路径。
+- **跨机意味着两端是不同二进制**：`wireFingerprint`（`PipeFields.def` 派生的逐成员布局摘要 + 目录摘要 + 字节序 / 指针宽度）永远比较，`buildFingerprint` 只在 `Dial == Fork` 下比较；不一致是 `Refuse`，不是 abort。
+- 配置面（命名待 P6.5 定）：`MOBILEGL_TRANSPORT` 仍是**拓扑**（monolith / inproc / spawn，G1 相关）；新增 `MOBILEGL_IPC_CONTROL=fork|unix:<path>|tcp://host:port`（取代 `MOBILEGL_IPC_SERVER_PATH` 的角色）与 `MOBILEGL_IPC_DATA=auto|shm|stream`。
+- **代价要量**：`ILink::ReserveRecord` 在 VD32 下是 ~850–3550 次/帧的虚调用，客户端线程已 ~94% 占用；`lk` 的门对 inproc 结果与逐线程 CPU 逐字不变，P6.5 再加 2×2 矩阵车道（{unix, tcp} × {shm, stream}）与混搭对 (unix + shm) 的逐线程 CPU 差。
+
+TCP 上的两个数量级差别（RTT 毫秒级、带宽 30–100 MB/s）使 §13.1 的每一条 `kWaitReply` 行和 §14 的 `SEG_STAGE` 预算从"记录项"变成"可行性数"；见 `ROADMAP.md` P6.5 行的必测数与开放问题 19–23。
+
 ## 12. persistent map 与 ≥16 MiB 采纳
 
 `AcquirePersistentMap` 是永久的地址空间捐赠（返回 host-visible coherent 指针；≥16 MiB 可变 store 由 `TryAdoptLargeStorage` 自动走到，实测 MC 26.3 p99 163→21 ms、40→115 fps、省 ~400 MB）。**整个 monolith 改造期一动不动**（D-B4）。
@@ -449,7 +471,7 @@ fence 完成度必须来自**真的逐 fence 退休**，不是 present 水位（
 
 ### 13.1 稳态零 roundtrip 与不可避免的阻塞点
 
-零 round trip：全部 draw/clear/blit/copy/dispatch/barrier/XFB 跨度/bind/CSO/`set_*`/上传/`present`；全部 caps 站点；`glGetError`/`glFinish`/`glFlush`；fence 与 query 的创建及非阻塞轮询；`glGetTexImage`（DirectGLES）；`glReadPixels` → pack PBO（fire-and-forget + client 侧 `MarkGpuWritten`，P6+）；`glEndTransformFeedback`；`eglSwapBuffers`；`*IndirectCount`；restart/multi-draw。
+零 round trip：全部 draw/clear/blit/copy/dispatch/barrier/XFB 跨度/bind/CSO/`set_*`/上传/`present`；全部 caps 站点；`glGetError`/`glFinish`/`glFlush`；fence 与 query 的创建及非阻塞轮询；`glGetTexImage`（DirectGLES）；`glReadPixels` → pack PBO（fire-and-forget + client 侧 `MarkGpuWritten`，P6+）；`glEndTransformFeedback`；`eglSwapBuffers`；`*IndirectCount`；restart/multi-draw。**TCP 终局（2026-09-22）**：每一条 `kWaitReply` 行在跨机链路上就是一次 RTT——`ResourceCreate`、`SetTextureParams`、纹理半边的 `ResourceSubData` 都在此列（`CONTRACT-P5E.md` §2.5）——所以逐帧 `kWaitReply` 次数是 P6.5 的必测数，与本节的 roundtrip 计数器同源；MC 加载区块那一阵的几百次创建在 1–5 ms 一次下是可感知的卡顿，要么减少这一列，要么让它们异步（P9）。
 
 不可避免（全部罕见）：握手一次；surface 生命周期与首次 `MakeCurrent`+`InitCapabilities` 每 surface 至多一次；`glReadPixels` → 客户内存（像素进 `SEG_REPLY`）；`glGetTexImage`（DirectVulkan）；GPU-write pending 的 buffer 首次 CPU 读；`glClientWaitSync(timeout>0)`、`GL_QUERY_RESULT` 未完成、`glBeginConditionalRender`（谓词只解析一次）；`glBufferStorage` 的 ack；`MapPersistent`（仅 T1）；纹理拉取（§8.4）；client 侧索引扫描当源 EBO 在 pending 集里；ring/stage 耗尽与 present credit。
 
@@ -474,7 +496,7 @@ fence 完成度必须来自**真的逐 fence 退休**，不是 present 水位（
 - `eglSwapBuffers` → `present{frameSerial}` → publish + 敲门铃 → 返回，除非超出 credit。**`present` 与 `eglSwapBuffers` 严格 1:1**：两个后端的帧边界排空只在 `Present` 内发生，批量会饿死它们。
 - **`MOBILEGL_IPC_PRESENT_CREDIT` 默认 1**（P10 提出，P5e 落地，range 1..8）：延迟叠加，server 的 `Present` 末尾已在 `vkWaitForFences` 上等 2–3 帧，credit 2 就是端到端 4–5 帧；只有实测吞吐收益能抵掉延迟代价才调高。Magma 从不注册 `SetSwapInterval`，IPC credit 是它唯一的显式限帧器。
 - **P5e：credit 是 run-ahead 的唯一稳态背压，字节不是**（`CONTRACT-P5E.md` §2.4）。`MGPPresent::FrameSerial` 从"0，由 server 盖自己的帧数"改成**由 client 铸造、1 起算**——一个 credit 只能在付账方能推进的 id 空间里计量，而付账方是 client；`ServerVerbSink::OnPresent` 在 `Present()` 返回之后调 `ServerSession::ReturnPresentCredit(FrameSerial)`，一次 swap 一个 credit（那个函数自 v1 写下以来一直没有生产调用者，这是它的第一个）。credit 1 = client 在 server 应用并交换第 N 帧时发布第 N+1 帧的记录：一帧重叠，最多一帧附加延迟。等待发生在**编码之前**——先编码再 park 会把一次 SEG_CMD 预留持有整整一帧 server 时间。run-ahead server 上 `FrameSerial == 0` 是 `Fatal{ProtocolCorruption, "Present.FrameSerial"}`。
-- 预算（~850 draw + ~0.36 MB pmap/帧）：SEG_CMD 每帧 ~70 KB 对 8 MiB，SEG_STAGE ~1 MB/帧对 32 MiB，SEG_REPLY 不变。`WaitForCmdSpace` 与 stage bell 是安全网而不是节奏器，两者退出时都排空 SEG_EVENT。stats 行与 wire ledger 多一个 `credit-waits`：credit 1 下它是 0 就说明 server 从来不在帧的关键路径上，接近帧数就说明它一直是。
+- 预算（~850 draw + ~0.36 MB pmap/帧）：SEG_CMD 每帧 ~70 KB 对 8 MiB，SEG_STAGE ~1 MB/帧对 32 MiB，SEG_REPLY 不变。跨机 TCP 上这 ~1 MB/帧对的是 30–100 MB/s 的链路而不是内存，60 fps 即 60 MB/s，贴着 Wi-Fi 上限（`ROADMAP.md` 开放问题 19、20）。`WaitForCmdSpace` 与 stage bell 是安全网而不是节奏器，两者退出时都排空 SEG_EVENT。stats 行与 wire ledger 多一个 `credit-waits`：credit 1 下它是 0 就说明 server 从来不在帧的关键路径上，接近帧数就说明它一直是。
 - 线程——client：**v1 不加线程**，编码在 GL 线程上直接写 ring；外来线程的 sync/query 读从 `RingControl` 无锁回答，必须发射的少数取 `ctrlMutex` 走 `AuxRequest`（SPSC ring 不允许第二个 producer）。server：`mgl-srv-io`（封帧、`SCM_RIGHTS`、doorbell、CTRL RPC）、`mgl-srv-apply`（**终身持有原生 context**，`MakeCurrent` 的缓存失效风暴变启动期一次性）。
 - **核心放置**：全库无亲和性控制。规则：报总 CPU 工作量差（client tracker + encode + decode + server apply vs monolith `PrepareForDraw`）；复用 `ShaderCompilePool` 的大核探测把 `mgl-srv-apply` 绑到大核（`MOBILEGL_IPC_SERVER_AFFINITY`，默认 auto）。
 - 拆机顺序：publish + server 排空并 ack → 停 apply 线程 → 关 transport → client 排空 compile pool → `MobileGL::Destroy()` → 释放 sync/query handle（P5 落地形状见 §17.3）。
@@ -484,6 +506,7 @@ fence 完成度必须来自**真的逐 fence 退休**，不是 present 水位（
 ### 15.1 启动与握手
 
 - server 定位：`MOBILEGL_IPC_SERVER_PATH`（主要）→ `dladdr(&MobileGL::Initialize)` 同目录的 `libMobileGLServer.so`（兜底；集成测试静态链接 `MobileGL_s`、trace replay 的可执行文件不在库目录）。
+- **端点种类（P6.5 ct，2026-09-22）**：`fork`（继承 fd，本节其余各条描述的形状）、`unix:<path>`（sm 的独立启动，`SocketTransport::Listen` / `ConnectTo`，两条连接）、`tcp://host:port`（跨机；同机也可用，此时数据面仍可协商为共享段，§11.9）。TCP keepalive / 心跳失败**由传输层报告为挂断**，进 dl 的 device-lost 闩——它不是 apply 超时，dl 的"绝不取自超时"不因此松动。
 - 启动：`socketpair(AF_UNIX, SOCK_STREAM)` + `fork`/`execve`，fd 3 = socket。无文件系统 socket 路径、无 abstract namespace。
 - **子进程强制 monolith**（修无界 fork 链）：spawn 时构造显式 envp 剔除 `MOBILEGL_TRANSPORT` 与全部 `MOBILEGL_IPC_*`；`mobilegl_server_main` 在到达 `Init()` 之前把 `MG_Config::Transport` 硬置为 `Monolith`。两条都做。`MG_Test/Wire` 测试：进程树只多出恰好一个子进程。
 - `Hello{abi, backendType, buildFingerprint, configBlob}` → `Welcome{四个段}`。`configBlob` 转发 client 解析好的 `MG_Config::Features`；`buildFingerprint`（git hash + `PipeCalls.def` hash）不匹配 → `Fatal{AbiMismatch}`；segment 尺寸尚未混入 fingerprint（ID-47 债）。
@@ -500,7 +523,7 @@ fence 完成度必须来自**真的逐 fence 退休**，不是 present 水位（
 
 ### 15.3 Linux / Windows / 崩溃
 
-- Linux/X11：`Window` 是 XID，`nativeToken:u64` 直接送；Wayland 维持不支持；WSL/CI 永不开窗（`EGL_PLATFORM=surfaceless`）。Windows：`HWND` 进 `nativeToken`，Vulkan 可行，WGL/ANGLE 对外进程 HWND 不受支持 → headless only；transport 默认 named pipe。Windows 机器不是正确性门。macOS 不拆分。
+- Linux/X11：`Window` 是 XID，`nativeToken:u64` 直接送；Wayland 维持不支持；WSL/CI 永不开窗（`EGL_PLATFORM=surfaceless`）。Windows：`HWND` 进 `nativeToken`，Vulkan 可行，WGL/ANGLE 对外进程 HWND 不受支持 → headless only；transport 默认 named pipe。Windows 机器不是正确性门。macOS 不拆分。**2026-09-22**：TCP 终局下 Windows / 桌面 client 成为真实形态，`pipe:` / `unix:` 的 Windows 具名拒绝由 TCP 替代；"不是正确性门"与"macOS 不拆分"在 client 平台范围（`ROADMAP.md` 开放问题 22）定下前维持。
 - server 死：client 读到 EOF/EPIPE → device-lost 闩锁（GL 调用 no-op、`eglSwapBuffers` 返回 `EGL_FALSE`+`EGL_CONTEXT_LOST`、`glGetGraphicsResetStatus` 返回 `GL_UNKNOWN_CONTEXT_RESET`）；`MOBILEGL_IPC_RESPAWN=1` 时重启并全量重推（默认关）。client 死：server 读到 EOF → 立即销毁原生 context 并退出；`MOBILEGL_IPC_IDLE_EXIT_S`（默认 30）只作最后保险。
 
 ## 16. 构建布局
