@@ -1338,6 +1338,158 @@ namespace {
 #endif
     }
 
+    // ------------------------------------------------------------------------------------
+    // P7 wave 3 (CONTRACT-P7 §6): the respecify SCOPE pin, relaxed and still falsifiable.
+    //
+    // The pin used to say "no path in this phase may set a per-level scope on the descriptor",
+    // which stopped being true the day Wire_Escape_ResourceRespecify started writing the
+    // carrier: under split EVERY per-level glTexImage*D arrives with it set, and the pin fired
+    // on the server apply thread during bring-up, before one verify case could arm. It is now
+    // "a producer of a per-level scope must COVER the range it declares", and these two cases
+    // are the positive and the negative the contract asks for.
+    //
+    // A TEXTURE, NOT A BUFFER, and ScopedResourceOps with it: the scope is a texture concept,
+    // and every non-buffer row is refused with RefusedNoConsumer unless a backend table is
+    // registered - so without the scope this case would not reach the pin at all.
+    MGPResourceDesc Tex2DDesc(MGPipeHandle res, Uint32 extent, Uint32 levels, Uint32 glName) {
+        MGPResourceDesc desc{};
+        desc.Resource = res;
+        desc.Target = static_cast<Uint8>(MGPipeResourceTarget::Tex2D);
+        desc.InternalFormat = 1;
+        desc.Width = extent;
+        desc.Height = extent;
+        desc.Depth = 1;
+        desc.ArrayLayers = 1;
+        desc.Levels = levels;
+        desc.Samples = 1;
+        desc.GlNameForDiag = glName;
+        return desc;
+    }
+
+    // The packed (resource target, upload target) pair a Tex2D level's records carry. 0x0102 -
+    // and it is the very number the split bring-up's Fatal printed, which is how this case is
+    // known to be about the same shape.
+    const Uint16 kTex2DUpload = MGPipePackSubDataTarget(
+        static_cast<Uint32>(MGPipeResourceTarget::Tex2D),
+        static_cast<Uint32>(TextureUploadTarget::Texture2D));
+
+    MGPSubData TextureWrite(MGPipeHandle res, Uint16 uploadTarget, Uint16 level, Uint32 extent) {
+        MGPSubData record{};
+        record.Res = res;
+        record.Target = uploadTarget;
+        record.Level = level;
+        record.UnionBox = MGPBox{0, 0, 0, extent, extent, 1};
+        record.LevelWidth = extent;
+        record.LevelHeight = extent;
+        record.LevelDepth = 1;
+        return record;
+    }
+
+    Bool HasPendingUpload(Uint32 slot, Uint16 uploadTarget, Uint16 level) {
+        for (const auto& entry : MGPipeApplier().TextureResources[slot].PendingUploads) {
+            if (entry.UploadTarget == uploadTarget && entry.Level == level) return true;
+        }
+        return false;
+    }
+
+    // THE POSITIVE. A per-level producer that covers its declared range is accepted, and the
+    // accumulated texels of every OTHER level survive it - which is the thing the pin was
+    // standing in front of, checked rather than asserted.
+    TEST(ResourceEmit, APerLevelRespecifyCoveringItsDeclaredRangeKeepsTheOtherLevelsTexels) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#else
+        ApplierGuard guard;
+        ScopedResourceOps consumer;
+
+        const MGPipeHandle res{12, 1};
+        ASSERT_TRUE(MGPipeApplyResourceCreate(Tex2DDesc(res, 4, 2, 91)));
+
+        // Two levels with texels the server owes. The canonical sequence the pending set
+        // exists for: level 0 emitted, nothing uploaded yet, then level 1 redefined.
+        const Uint8 texels[64] = {};
+        ASSERT_TRUE(MGPipeApplyResourceSubData(TextureWrite(res, kTex2DUpload, 0, 4), texels, nullptr));
+        ASSERT_TRUE(MGPipeApplyResourceSubData(TextureWrite(res, kTex2DUpload, 1, 2), texels, nullptr));
+        ASSERT_TRUE(HasPendingUpload(res.Slot, kTex2DUpload, 0));
+        ASSERT_TRUE(HasPendingUpload(res.Slot, kTex2DUpload, 1));
+
+        // The split shape, both halves in agreement: the carrier says (kTex2DUpload, 1) and the
+        // trailing pointer the codec rebuilt from it says the same.
+        MGPResourceDesc perLevel = Tex2DDesc(res, 4, 2, 91);
+        MGPipeSetRespecifiedLevel(perLevel, kTex2DUpload, 1);
+        ASSERT_FALSE(MGPipeRespecifyIsWholeResource(perLevel));
+        const MGPRespecifiedLevel covered{kTex2DUpload, 1};
+        EXPECT_TRUE(MGPipeApplyResourceRespecify(perLevel, nullptr, &covered));
+
+        EXPECT_TRUE(HasPendingUpload(res.Slot, kTex2DUpload, 0))
+            << "a per-level respecify may not eat the levels it did not redefine";
+        EXPECT_FALSE(HasPendingUpload(res.Slot, kTex2DUpload, 1))
+            << "the level the call DID redefine has a new coordinate system, so its box goes";
+        EXPECT_EQ(ReadLog().find("PipeRespecifyScope"), std::string::npos)
+            << "the relaxed pin must be silent on a producer that covers its declaration";
+#endif
+    }
+
+    // THE NEGATIVE, and it is the whole reason the pin is relaxed rather than deleted. A
+    // producer that DECLARES a range and does not cover it is still refused by name: a null
+    // pointer takes the whole-resource arm and eats every other level's texels, and a pointer
+    // naming a different pair erases the wrong key and keeps the one the client stopped owing.
+    // Neither is visible as anything but missing pixels one frame later.
+    TEST(ResourceEmit, APerLevelRespecifyThatDoesNotCoverItsDeclaredRangeIsRefusedByName) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#elif !MOBILEGL_PIPE_VERIFY
+        // MOBILEGL_PIPE_VERIFY alone, NOT `POISON || VERIFY`, for PinNoLiveHostWrites' reason
+        // above: PinRespecifyScopeCoversItsDeclaration is compiled under `#if
+        // MOBILEGL_PIPE_VERIFY` only, so in a plain split build the wire genuinely is compiled
+        // out and this case must skip rather than expect a death that cannot happen.
+        GTEST_SKIP() << "Fatal{PipeRespecifyScope} is a MOBILEGL_PIPE_VERIFY wire and is compiled out here";
+#elif !MGTEST_HAVE_FORK
+        GTEST_SKIP() << "no fork on this platform; the wire's verdict is std::abort()";
+#else
+        ApplierGuard guard;
+        ScopedResourceOps consumer;
+
+        const MGPipeHandle res{13, 2};
+        ASSERT_TRUE(MGPipeApplyResourceCreate(Tex2DDesc(res, 4, 2, 92)));
+
+        struct Drive {
+            const char* What;
+            bool HasPointer;
+            Uint16 PointerTarget;
+            Uint16 PointerLevel;
+            const char* Wanted;
+        };
+        // Declared: (kTex2DUpload, 1). Covered: nothing, the wrong level, the wrong face.
+        const Drive drives[] = {
+            {"a null pointer", false, 0, 0, "covers NOTHING (target=0, level=0)"},
+            {"the wrong level", true, kTex2DUpload, 0, "covers (target=258, level=0)"},
+            {"the wrong upload target", true, static_cast<Uint16>(kTex2DUpload + 0x0100u), 1,
+             "covers (target=514, level=1)"},
+        };
+        for (const Drive& drive : drives) {
+            const ChildResult child = RunInChild([&res, &drive]() {
+                MGPResourceDesc perLevel = Tex2DDesc(res, 4, 2, 92);
+                MGPipeSetRespecifiedLevel(perLevel, kTex2DUpload, 1);
+                const MGPRespecifiedLevel named{drive.PointerTarget, drive.PointerLevel};
+                MGPipeApplyResourceRespecify(perLevel, nullptr,
+                                             drive.HasPointer ? &named : nullptr);
+            });
+            EXPECT_TRUE(DiedOfAbort(child))
+                << drive.What << ": " << DescribeStatus(child) << "; log: " << child.Log;
+            const std::string named =
+                "Fatal{PipeRespecifyScope} resource_respecify {slot=13, gen=2}";
+            EXPECT_NE(child.Log.find(named), std::string::npos)
+                << drive.What << ": wanted \"" << named << "\"; log: " << child.Log;
+            EXPECT_NE(child.Log.find("declares a per-level respecify scope (target=258, level=1)"),
+                      std::string::npos)
+                << drive.What << ": the refusal must print the DECLARED range; log: " << child.Log;
+            EXPECT_NE(child.Log.find(drive.Wanted), std::string::npos)
+                << drive.What << ": wanted \"" << drive.Wanted << "\"; log: " << child.Log;
+        }
+#endif
+    }
+
     // M-D. The slot is the one number in the family that reaches an ALLOCATOR, so it is
     // policed like every other: a slot outside the table's bound is Fatal{ProtocolCorruption}
     // and never a resize. Removing the bound turns this case into a multi-gigabyte allocation.

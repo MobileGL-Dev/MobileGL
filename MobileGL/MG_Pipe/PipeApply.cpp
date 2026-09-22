@@ -947,27 +947,74 @@ namespace MobileGL::MG_Pipe {
 #endif
 
 #if MOBILEGL_PIPE_VERIFY
-        // P5's pin, the same shape and for the same reason. The respecify SCOPE now has a wire
-        // carrier (MGPResourceDesc's HasRespecifiedLevel + the pair) and no producer: every
-        // descriptor P5 builds is whole-resource, and the per-level scope still arrives the old
-        // way, as the trailing MGPRespecifiedLevel* this function does not look at.
+        // P5's pin, RELAXED BY P7 WAVE 3 (CONTRACT-P7 §6) - and relaxed rather than deleted,
+        // because the thing it was guarding is now reachable instead of hypothetical.
         //
-        // The two must not disagree, and when a later package wires the carrier it will set the
-        // fields at a call site that also still passes the pointer - so the first thing that can
-        // go wrong is exactly one of the two moving. A verify build refuses to let that arrive
-        // unannounced, because a descriptor that says "whole resource" while the pointer says
-        // "level 1" drops every other level's pending upload with nothing saying so.
-        void PinWholeResourceRespecifyScope(const MGPResourceDesc& desc, MGPipeHandle res, const char* call) {
+        // WHAT IT USED TO SAY. "The respecify SCOPE has a wire carrier (MGPResourceDesc's
+        // HasRespecifiedLevel + the pair) and NO PRODUCER: every descriptor P5 builds is
+        // whole-resource, and the per-level scope still arrives the old way, as the trailing
+        // MGPRespecifiedLevel* this function does not look at." So any descriptor arriving with
+        // the carrier set was, by definition, a producer nobody had announced, and a verify
+        // build refused it.
+        //
+        // WHY THAT IS NOW WRONG, AND EXACTLY HOW FAR. The producer landed:
+        // Wire_Escape_ResourceRespecify (Client/WireTables.cpp:425-433) writes the carrier from
+        // the pointer through MGPipeSetRespecifiedLevel, and the server codec
+        // (Wire/PipeWireCodec.cpp:1677-1683) rebuilds the pointer from the carrier. So under a
+        // split transport EVERY per-level glTexImage*D arrives here with the carrier set, and
+        // the old pin made verify x split unmeasurable - it fired on the server's apply thread
+        // during bring-up, before a single verify case could arm:
+        //
+        //   Fatal{PipeRespecifyScope} resource_respecify {slot=12, gen=0}: the descriptor
+        //   carries a per-level respecify scope (target=258, level=0), and no path in this
+        //   phase may set one
+        //
+        // WHAT SURVIVES, AND IT IS THE WHOLE INVARIANT. The pin never cared that the carrier
+        // was set; it cared that THE TWO HALVES OF THE SCOPE COULD DISAGREE - "the first thing
+        // that can go wrong is exactly one of the two moving". That hazard did not go away when
+        // the producer landed, it became LIVE, and it is silent: the applier below drops pending
+        // uploads by the POINTER, so a descriptor that declares (target, level) while this call
+        // hands over a null pointer takes the WHOLE-RESOURCE arm and eats every other level's
+        // texels, and one that hands over a different pair erases the wrong key and keeps the
+        // one the client stopped owing. Neither shows up as anything but missing pixels, a
+        // frame later, on whichever level the wire dropped.
+        //
+        // So the rule becomes CONTRACT-P7 §6's: A PRODUCER OF A PER-LEVEL SCOPE MUST COVER THE
+        // RANGE IT DECLARES. Carrier set => the call passes a pointer, and that pointer names
+        // exactly the declared (uploadTarget, level).
+        //
+        // ONE-DIRECTIONAL ON PURPOSE. A whole-resource descriptor says NOTHING about the
+        // pointer, and must not: that is the monolith shape and it is still the majority of the
+        // calls in the tree. MG_Impl/Pipe/TextureEmit.h builds a value-initialized descriptor
+        // (carrier clear, by MGPipeClearRespecifiedLevel's own "the safe default") and states
+        // the scope in the trailing pointer alone, which is legal, load-bearing and untouched
+        // here. Checking that direction too would red every monolith glTexImage*D in the tree
+        // and would be asserting a convention, not an invariant - the pointer is the caller's
+        // statement, and a caller that has not been converted to the carrier has not lied.
+        void PinRespecifyScopeCoversItsDeclaration(const MGPResourceDesc& desc,
+                                                   const MGPRespecifiedLevel* level, MGPipeHandle res,
+                                                   const char* call) {
             if (MGPipeRespecifyIsWholeResource(desc)) return;
+            const Uint16 declaredTarget = MGPipeRespecifiedUploadTargetOf(desc);
+            const Uint16 declaredLevel = MGPipeRespecifiedLevelOf(desc);
+            if (level != nullptr && level->UploadTarget == declaredTarget &&
+                level->Level == declaredLevel) {
+                return;
+            }
             MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeRespecifyScope")
-                                 " %s {slot=%u, gen=%u}: the descriptor carries a per-level respecify "
-                                 "scope (target=%u, level=%u), and no path in this phase may set one",
-                                 call, res.Slot, res.Gen,
-                                 static_cast<unsigned>(MGPipeRespecifiedUploadTargetOf(desc)),
-                                 static_cast<unsigned>(MGPipeRespecifiedLevelOf(desc)));
+                                 " %s {slot=%u, gen=%u}: the descriptor declares a per-level respecify "
+                                 "scope (target=%u, level=%u) and this call covers %s(target=%u, "
+                                 "level=%u), so a per-level producer is not covering the range it "
+                                 "declares",
+                                 call, res.Slot, res.Gen, static_cast<unsigned>(declaredTarget),
+                                 static_cast<unsigned>(declaredLevel),
+                                 level == nullptr ? "NOTHING " : "",
+                                 level == nullptr ? 0u : static_cast<unsigned>(level->UploadTarget),
+                                 level == nullptr ? 0u : static_cast<unsigned>(level->Level));
         }
 #else
-        void PinWholeResourceRespecifyScope(const MGPResourceDesc&, MGPipeHandle, const char*) {}
+        void PinRespecifyScopeCoversItsDeclaration(const MGPResourceDesc&, const MGPRespecifiedLevel*,
+                                                   MGPipeHandle, const char*) {}
 #endif
 
 #if MOBILEGL_PIPE_VERIFY
@@ -1995,7 +2042,7 @@ namespace MobileGL::MG_Pipe {
         MGPipeResourceRecord* record = ResolveResourceIn(*table, "resource_respecify", desc.Resource);
         if (record == nullptr) return false;
         PinNoLiveHostWrites(*record, desc.Resource, "resource_respecify");
-        PinWholeResourceRespecifyScope(desc, desc.Resource, "resource_respecify");
+        PinRespecifyScopeCoversItsDeclaration(desc, level, desc.Resource, "resource_respecify");
 
         // IS THIS A REDEFINITION AT ALL? Asked BEFORE the descriptor is replaced, because the
         // stored one is the only thing there is to compare against (ID-18 M4). See
