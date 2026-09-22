@@ -2391,15 +2391,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // inside the GL binding range. A readback here could retire the command buffer
         // whose value BindProgramUniformBuffers is currently holding.
         const VkDeviceSize copied = std::min(available, blockSize);
-        if (bound && ((start & 3u) != 0 || ((source.offset + start) & 3u) != 0 || (copied & 3u) != 0))
-            WireDescriptorFatal("uniform-buffer-byte-tail@P7");
         static thread_local Vector<Uint8> zero;
         zero.assign(static_cast<SizeT>(blockSize), 0);
         BufferSlice padded{};
         if (!m_bufferManager->UploadTransient(BufferKind::Uniform, m_wireFrameIndex, zero.data(), blockSize,
                 std::max<VkDeviceSize>(4, m_minDynamicOffsetAlignment), padded) || !padded.IsValid()) return false;
-        if (bound && copied != 0 &&
-            !m_bufferManager->CopyWireBufferRangeToSlice(range.Res, start, copied, padded)) return false;
+        if (bound && copied != 0) {
+            // P7 A.1 retires `uniform-buffer-byte-tail@P7`. The window is word-aligned at both
+            // ends on nearly every bind - glBindBufferRange already forces the offset onto
+            // GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, and that is a multiple of four on every
+            // device - but GL 4.6 core 6.1.1 puts no such rule on the SIZE, so `copied` is free
+            // to end mid-word and the Redmi Minecraft run lands there
+            // (notes/p5f/magma-inproc-fix.md #5). An unaligned start is not reachable through
+            // the public API and only a protocol-level offset can produce one; the sub-word arm
+            // handles it anyway rather than leaving a second shape to trip over later. Both arms
+            // copy the same bytes to the same place: the sub-word one pays one extra transient
+            // slice and one extra region copy, and nothing outside [start, start + copied)
+            // reaches the block, which is what makes the padded zeros the visible tail.
+            const Bool wordWindow = ((start | copied) & 3u) == 0;
+            if (!(wordWindow
+                      ? m_bufferManager->CopyWireBufferRangeToSlice(range.Res, start, copied, padded)
+                      : m_bufferManager->CopyWireBufferSubWordRangeToSlice(range.Res, start, copied,
+                                                                           m_wireFrameIndex, padded, 0)))
+                return false;
+        }
         if (padded.offset > std::numeric_limits<Uint32>::max())
             WireDescriptorFatal("uniform-buffer-dynamic-offset@P7");
         out.directBindable = true;

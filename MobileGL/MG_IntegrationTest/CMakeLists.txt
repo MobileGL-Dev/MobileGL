@@ -2705,6 +2705,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             F1WireScenario.EnabledVertexBufferDrawKeepsNamedP7Fatal
             F1WireScenario.UniformBufferRangeAndRebindPixels
             F1WireScenario.ShortUniformBufferRangePadsMissingBytes
+            F1WireScenario.SubWordUniformBufferRangePadsMissingBytes
             F1WireScenario.ComputeWrittenVertexAndIndexBuffersDrawAndReadBack
             F1WireScenario.ColorBlitToDefaultIgnoresViewportAndPreservesOrientation
             F1WireScenario.ColorBlitToDefaultHonorsScissorAndReversedRect

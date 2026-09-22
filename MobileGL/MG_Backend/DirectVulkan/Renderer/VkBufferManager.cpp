@@ -353,6 +353,59 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
+    Bool VkBufferManager::CopyWireBufferSubWordRangeToSlice(MG_Pipe::MGPipeHandle res, Uint64 offset,
+                                                            Uint64 size, Uint32 frameIndex,
+                                                            const BufferSlice& dst, Uint64 dstSkip) {
+        auto* resource = FindWireBuffer(res);
+        if (!resource || offset > resource->size || size > resource->size - offset) return false;
+        if (dstSkip > dst.size || size > dst.size - dstSkip) return false;
+        if (size == 0) return true;
+        if (!m_copyProvider || dst.buffer == VK_NULL_HANDLE) return false;
+
+        // Round the read of the application's store OUT to whole words. The tail can only be
+        // clipped by the end of the store itself, and [offset, offset + size) already fits
+        // inside it, so the widened window still covers every byte the caller asked for.
+        const Uint64 alignedOffset = offset & ~Uint64{3};
+        const Uint64 stagedEnd = std::min<Uint64>((offset + size + 3) & ~Uint64{3}, resource->size);
+        const Uint64 headPad = offset - alignedOffset;
+        const Uint64 stagedSize = stagedEnd - alignedOffset;
+        if (stagedSize < headPad + size) return false;
+
+        // Uninitialized on purpose: the widening copy below writes every byte of it. The
+        // arena can grow to satisfy this, which parks (never frees) the buffer `dst` may
+        // already name - see BufferArena::EnsureCapacity - so the two slices are allowed to
+        // sit in different VkBuffers and the copy names each slice's own handle.
+        BufferSlice staging{};
+        if (!m_transientUploadArena.Allocate(frameIndex, stagedSize, 4, staging) || !staging.IsValid())
+            return false;
+
+        const VkCommandBuffer commands = m_copyProvider->AcquireBufferCopyCommandBuffer();
+        if (commands == VK_NULL_HANDLE) return false;
+        VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        before.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
+        before.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before, 0, nullptr, 0, nullptr);
+        const VkBufferCopy widen{alignedOffset, staging.offset, stagedSize};
+        vkCmdCopyBuffer(commands, resource->buffer.GetHandle(), staging.buffer, 1, &widen);
+        // The shift reads what the widening copy just wrote, so it needs its own edge even
+        // though both halves are transfers on one command buffer.
+        VkMemoryBarrier staged{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        staged.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        staged.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 1, &staged, 0, nullptr, 0, nullptr);
+        const VkBufferCopy shift{staging.offset + headPad, dst.offset + dstSkip, size};
+        vkCmdCopyBuffer(commands, staging.buffer, dst.buffer, 1, &shift);
+        VkMemoryBarrier after{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        after.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        after.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                             0, 1, &after, 0, nullptr, 0, nullptr);
+        resource->lastUseSerial = m_frameSerial;
+        return true;
+    }
+
     void VkBufferManager::ReadbackWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size) {
         Vector<Uint8> bytes(static_cast<SizeT>(size));
         if (!ReadWireBuffer(res, offset, size, bytes.data())) {

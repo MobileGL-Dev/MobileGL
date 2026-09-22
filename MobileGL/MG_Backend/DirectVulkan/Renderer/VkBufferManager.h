@@ -113,6 +113,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool ReadWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, void* dst);
         Bool CopyWireBufferRangeToSlice(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size,
                                         const BufferSlice& dst);
+        // P7 A.1, the sub-word half of the one above: the same copy for a window whose start
+        // or end does not land on a four-byte boundary. The read of the APPLICATION's store is
+        // rounded OUT to whole words and clamped to the store's end, so the widened window can
+        // never touch a byte the application does not own; it lands in a transient staging
+        // slice, and only the staging -> dst shift is sub-word - inside our own arena, where an
+        // unaligned region cannot alias anything else. vkCmdCopyBuffer places no alignment rule
+        // on a region's offsets or size (unlike vkCmdUpdateBuffer / vkCmdFillBuffer), so the
+        // shift is a plain legal copy. `dstSkip` is the byte inside `dst` the window starts at.
+        // This retires `uniform-buffer-byte-tail@P7`.
+        Bool CopyWireBufferSubWordRangeToSlice(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size,
+                                               Uint32 frameIndex, const BufferSlice& dst, Uint64 dstSkip);
         void MarkWireBufferGpuWritten(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size);
 
         // Resource-op entry points. All run on the server apply owner.

@@ -915,6 +915,69 @@ void main() { color = value + tail; }
     glDeleteProgram(program);
 }
 
+TEST_F(F1WireScenario, SubWordUniformBufferRangePadsMissingBytes) {
+    if (!Ready()) return;
+    // The sibling of ShortUniformBufferRangePadsMissingBytes whose bound range does NOT
+    // end on a four-byte boundary. That window is what `uniform-buffer-byte-tail@P7`
+    // used to refuse (a named Fatal that took the whole session with it), and it is the
+    // live boundary the Redmi Minecraft run reported (notes/p5f/magma-inproc-fix.md #5).
+    //
+    // Only the SIZE can land off a word here. glBindBufferRange constrains the offset to
+    // GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT and records GL_INVALID_VALUE otherwise
+    // (MG_Impl/GLImpl/Buffer/GL_Buffer.cpp ValidateBufferRangeOffsetAndSize), so an odd
+    // offset never reaches the backend through the public API - but GL 4.6 core 6.1.1
+    // puts no such rule on size, which is why 19 is a legal bind and 19 % 4 is not 0.
+    if (Gl().BackendName() != "DirectVulkan") GTEST_SKIP() << "Magma short-UBO compatibility policy";
+    Attach(GL_RGBA8);
+    const char* fragment = R"(#version 430 core
+layout(std140, binding=3) uniform ShortColour { vec4 value; vec4 tail; };
+layout(location=0) out vec4 color;
+void main() { color = value + tail; }
+)";
+    const GLuint program = BuildWireProgram({{GL_VERTEX_SHADER, kWireVertexIdTriangle},
+                                             {GL_FRAGMENT_SHADER, fragment}});
+    ASSERT_NE(program, 0u);
+    GLint alignment = 0;
+    glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &alignment);
+    ASSERT_GT(alignment, 0);
+    const size_t offset = size_t(alignment);
+    const GLsizeiptr boundSize = 19; // 16 bytes of `value` plus three bytes of tail.x
+    std::vector<GLubyte> bytes(offset + 8 * sizeof(GLfloat), 0);
+    const GLfloat values[] = {0, 1, 0, 1, 0, 1, 1, 1};
+    std::memcpy(bytes.data() + offset, values, sizeof(values));
+    // The byte immediately past the bound range, and the reason this case is sharper than
+    // its four-byte sibling: rounding the read OUT to a word pulls byte 19 into the staging
+    // slice, and the block must still end at byte 19. If it leaks, tail.x reads 0.5f and
+    // the red channel comes back 127 instead of 0.
+    bytes[offset + 19] = 0x3F;
+    GLuint ubo = 0, vao = 0;
+    glGenBuffers(1, &ubo);
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(bytes.size()), bytes.data(), GL_STATIC_DRAW);
+    glBindBufferRange(GL_UNIFORM_BUFFER, 3, ubo, GLintptr(offset), boundSize);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "a 19-byte uniform range is a legal bind";
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+    glUseProgram(program);
+    glViewport(0, 0, 8, 8);
+    glDisable(GL_DEPTH_TEST);
+    glClearColor(1, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    std::array<GLubyte, 4> pixel{};
+    glReadPixels(4, 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+    EXPECT_EQ(pixel, (std::array<GLubyte, 4>{0, 255, 0, 255}))
+        << "the sub-word uniform range did not pad to the reflected block exactly";
+    glBindBufferBase(GL_UNIFORM_BUFFER, 3, 0);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+    glUseProgram(0);
+    glBindVertexArray(0);
+    glDeleteBuffers(1, &ubo);
+    glDeleteVertexArrays(1, &vao);
+    glDeleteProgram(program);
+}
+
 TEST_F(F1WireScenario, ComputeWrittenVertexAndIndexBuffersDrawAndReadBack) {
     if (!Ready()) return;
     Attach(GL_RGBA8);
