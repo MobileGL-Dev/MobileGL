@@ -58,6 +58,11 @@ add_executable(MobileGLIntegrationTest
     Harness/P4aFinalFixPeek.cpp
     Harness/PersistentMapPeek.cpp
     Harness/SplitRuntimePeek.cpp
+    # ---- P3b/P4b wave 2-D package D2 (own block; D1 edits this file elsewhere) --------------
+    # The client texture emitter's own counters, for TextureViewAliasScenario's half of the
+    # owner-keyed emission cursor gate: a drain that ran and emitted nothing is invisible in
+    # pixels and is exactly the two-cursor regression's signature.
+    Harness/TextureEmitPeek.cpp
     Scenarios/OrientationScenario.cpp
     Scenarios/CrossFrameBufferScenario.cpp
     Scenarios/ResidentIndexScenario.cpp
@@ -121,6 +126,8 @@ add_executable(MobileGLIntegrationTest
     Scenarios/CopyImageLayeredScenario.cpp
     Scenarios/CopyImagePacked16Scenario.cpp
     Scenarios/TextureViewScenario.cpp
+    # P3b/P4b wave 2-D package D2: the verification half of the owner-keyed emission cursor.
+    Scenarios/TextureViewAliasScenario.cpp
     Scenarios/PackedWordReadbackScenario.cpp
     Scenarios/LayeredAttachmentBarrierScenario.cpp
     Scenarios/LayeredAttachmentShapeScenario.cpp
@@ -754,8 +761,13 @@ include(GoogleTest)
 # caller's transport. A separate label makes every exception inspectable.
 set(MGL_ITEST_MONOLITH_MECHANISM_FILTER
     "HandleRecycleScenario.*:CsoContentAddressingScenario.*:ResourceSubsystemControlScenario.*:ObjectSubsystemControlScenario.*:PipeVerifyArmingScenario.*:PoisonOmissionScenario.*:StorageBufferRegrowScenario.NStorageDefinitionsCostNMapPersistentRoundtripsNotOnePerDraw:LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip")
+# P3b/P4b wave 2-D package D2: TextureViewAliasScenario joins this list rather than the ambient
+# one for the same reason TextureViewScenario is in it - every case it carries constructs a
+# glTextureView, which DirectGLES withholds unless MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1
+# (ConfigLoader.cpp:213). In the ambient entry it would green-skip on every run and the gate
+# would be a name in a list.
 set(MGL_ITEST_GLES_VIEW_FILTER
-    "TextureViewScenario.*:F1WireScenario.ComputeImageStoreThroughViewPreservesOtherRootLayer:F1WireScenario.TextureViewClearTargetsItsRootMipAndLayer:F1WireScenario.GenerateMipmapThroughViewKeepsOwnerLevelsAndLayersOutsideItsWindow")
+    "TextureViewScenario.*:TextureViewAliasScenario.*:F1WireScenario.ComputeImageStoreThroughViewPreservesOtherRootLayer:F1WireScenario.TextureViewClearTargetsItsRootMipAndLayer:F1WireScenario.GenerateMipmapThroughViewKeepsOwnerLevelsAndLayersOutsideItsWindow")
 
 gtest_discover_tests(MobileGLIntegrationTest
     TEST_PREFIX "DirectGLES."
@@ -1930,9 +1942,22 @@ endif()
 # generated ctest include file verbatim and never expanded.
 set(MGL_ITEST_SPLIT_SERVER_PATH "${CMAKE_BINARY_DIR}/libMobileGLServer.so")
 
+# P3b/P4b wave 2-D package D2: MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1 IS ON THE SHARED GLES
+# SPLIT/SPAWN/TCP LISTS, not on a private entry, and that is the deliberate reading of the plan
+# row. The knob is Espryt's FEATURE opt-in (ConfigLoader.cpp:213), independent of transport: it
+# advertises GL_ARB_texture_view and nothing else. Without it TextureViewAliasScenario - and
+# TextureViewScenario, if it is ever registered here - green-skips in all three arms and the
+# gate is a name in a list. The monolith DirectGLES lane has carried it on its own view entry
+# since P4a for exactly this reason; the split arms had no equivalent.
+#
+# It is NOT added to MGL_ITEST_VULKAN_{SPLIT,SPAWN,TCP}_ENVIRONMENT below: the variable is read
+# only by ConfigLoader's Espryt feature block, so on DirectVulkan it would be a parsed-and-
+# ignored name, and tier 2's informational Magma replay of these registrations wants the two
+# backends' arms to differ only where the product differs.
 mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc"
     "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
+    "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
 # The two counting lanes, one per transport, and they are a PAIR: exit gate E3(c) asks that the
@@ -1998,9 +2023,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # makes the test process the CLIENT and has it launch a server from MOBILEGL_IPC_SERVER_PATH
     # - the same path the inproc arm already carries, because under inproc the library reads it
     # and decides it does not need one.
+    # D2: the texture-view opt-in, for the reason stated over the SPLIT list above. Under spawn
+    # the variable has to reach BOTH processes; it does, because the server is spawned from this
+    # process's environment.
     mgl_itest_join_environment(MGL_ITEST_GLES_SPAWN_ENVIRONMENT
         "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=spawn"
         "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
+        "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
     # A single supervisor serves one session at a time. Fixture teardown also reaps a
@@ -2016,7 +2045,19 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         --state "${MGL_TCP_STATE}")
     add_test(NAME TcpServer.Stop COMMAND "${Python3_EXECUTABLE}" "${MGL_TCP_FIXTURE}"
         stop --state "${MGL_TCP_STATE}")
-    set_tests_properties(TcpServer.Start PROPERTIES FIXTURES_SETUP mobilegl-tcp TIMEOUT 20)
+    # P3b/P4b wave 2-D package D2: THE TCP LANE'S SERVER IS PRE-STARTED BY THIS FIXTURE, not
+    # spawned from a client that already carries the lane environment, so a FEATURE opt-in has to
+    # be set here as well as on MGL_ITEST_GLES_TCP_ENVIRONMENT. tcp_server_fixture.py builds the
+    # supervisor's environment from os.environ (:60) and strips only the transport keys (:63-65),
+    # so a ctest ENVIRONMENT property on this entry reaches the server process.
+    #
+    # Measured, not assumed: without it every TextureViewAliasScenario case SKIPPED in the Tcp
+    # arm with "GL_ARB_texture_view not advertised" while the identical Split and Spawn arms ran
+    # - because under inproc and spawn the server inherits the client's environment and under tcp
+    # it does not. A feature knob that reaches two of three arms is the worst of the three states:
+    # the lane is green and tests nothing.
+    set_tests_properties(TcpServer.Start PROPERTIES FIXTURES_SETUP mobilegl-tcp TIMEOUT 20
+        ENVIRONMENT "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1")
     set_tests_properties(TcpServer.Stop PROPERTIES FIXTURES_CLEANUP mobilegl-tcp TIMEOUT 20)
     add_test(NAME TcpLane.AccountingControls COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/scripts/ci/tcp_lane_tools_test.py")
@@ -2039,11 +2080,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     set_tests_properties(TcpLane.SupervisorProtocolControls PROPERTIES
         LABELS integration-tcp TIMEOUT 180 SKIP_RETURN_CODE 77
         RESOURCE_LOCK mobilegl-tcp)
+    # D2: the texture-view opt-in on both TCP lists too, so the three shared GLES split arms
+    # carry one configuration. See the note over MGL_ITEST_GLES_SPLIT_ENVIRONMENT.
     mgl_itest_join_environment(MGL_ITEST_GLES_TCP_ENVIRONMENT
         "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=spawn"
         "MOBILEGL_IPC_CONTROL=${MOBILEGL_ITEST_TCP_ENDPOINT}" "MOBILEGL_IPC_DATA=stream"
         "MOBILEGL_IPC_REQUIRE_SAME_BUILD=1" "MOBILEGL_IPC_LOG_FORWARD=1" "MOBILEGL_IPC_TOKEN="
         "MGITEST_SPLIT_LANE=1" "MGITEST_TCP_LANE=1" "MOBILEGL_ITEST_REQUIRE_GPU=1"
+        "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
     mgl_itest_join_environment(MGL_ITEST_GLES_TCPDEVICE_ENVIRONMENT
         "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=spawn"
@@ -2051,6 +2095,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         "MOBILEGL_IPC_REQUIRE_SAME_BUILD=1" "MOBILEGL_IPC_LOG_FORWARD=1"
         "MOBILEGL_IPC_TOKEN=${MOBILEGL_ITEST_TCP_DEVICE_TOKEN}"
         "MGITEST_SPLIT_LANE=1" "MGITEST_TCP_LANE=1" "MOBILEGL_ITEST_REQUIRE_GPU=1"
+        "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
     # ---- P7 package L: THE SAME THREE ARMS FOR MAGMA ----------------------------------------
@@ -2567,6 +2612,54 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_register_split_arms("ClientVertexArrayScenario.*" "" integration-clientarrays)
 
     mgl_itest_register_split_arms("SyncWireScenario.*" "")
+
+    # =========================================================================================
+    # P3b/P4b WAVE 2-D PACKAGE D2 - OWN BLOCK. Package D1 (XFB / readback) registers its arms in
+    # its own block elsewhere in this file; keep the two apart so the integrator can merge both.
+    # =========================================================================================
+    #
+    # THE OWNER-KEYED EMISSION CURSOR, under all three transports. The claim is about WHICH
+    # emission cursor an upload through a texture VIEW lands on, and it is only interesting where
+    # the record actually crosses a wire: under monolith the drain's SubDataCount still moves but
+    # nothing downstream can disagree with the client's own dirty model, because there is one
+    # address space and one MipmapStorage. Under split the applier holds its own per-record
+    # pending-upload set, so a cursor that cleared the wrong flag produces a server-side level
+    # that never receives the texels - which is the failure this registration exists to reach.
+    #
+    # Every case draws and reads pixels, so each moves the client encoder's record ordinal and
+    # satisfies ScenarioFixture's armed-lane rule. The three GLES arm environments carry
+    # MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1 (above); without it every case green-skips through
+    # TextureViewUsable() rather than failing - which is what the Tcp arm did until the fixture
+    # entry below got the same knob.
+    #
+    # ONE CASE IS EXCLUDED BY NAME, and it is a defect this package FOUND rather than a lane
+    # problem. TheOwnerUploadDrainRunsAgainAfterADrawBoundary is red on all three transports and
+    # green under monolith:
+    #
+    #   after a view has been SAMPLED once, a later glTexSubImage through the OWNER's own name
+    #   never becomes visible through the view.
+    #
+    # The client half is provably correct - the case's own counter assertions pass, so the
+    # records were emitted and the applier accepted them. The server's per-texture clean gate
+    # BackendTextureObject::IsDrawSyncCleanByRecord (Managers.cpp:15433) compares the VIEW's
+    # record.Serial and record.PendingUploads, and an owner-side resource_subdata moves only the
+    # OWNER's (MG_Pipe/PipeApply.cpp:1175). Nothing anywhere propagates a serial bump from a
+    # storage owner to the records that view it: MGPResourceDesc::ViewOf is a forward edge with
+    # no reverse index, and the applier reads it only in the descriptor-equality helper
+    # (PipeApply.cpp:666). Under monolith the same gate reads GetContentVersion() THROUGH the
+    # view, which TextureObjectView forwards to the owner (TextureObjectView.cpp:100-102) - the
+    # forwarding the split gate has no equivalent of. CONTRACT-P5E.md:387-395 states the split
+    # gate in full and has the same hole, so the implementation is faithful to the contract.
+    #
+    # NOT EXCLUDED FROM THE MONOLITH LANES, where it is green and is the regression net for the
+    # forwarding that works. Listed in notes/p34b/split-scenario-census.md and
+    # notes/p34b/espryt-d2.md rather than deleted (G14). The fix is a one-line-shaped change in
+    # MG_Pipe/PipeApply.cpp with an O(#texture records) scan behind it, or a reverse index in
+    # MGPipeResourceRecord - an owner's decision, not this package's, and it is outside D2's
+    # declared footprint.
+    mgl_itest_register_split_arms(
+        "TextureViewAliasScenario.*-TextureViewAliasScenario.TheOwnerUploadDrainRunsAgainAfterADrawBoundary"
+        "")
 
     # The split half of the counting pair. MGITEST_PERSISTENT_MAP_ARM=emulated is R-6: under split
     # the adopt tier is pinned at T2, the resource owner declines every acquisition and the client
