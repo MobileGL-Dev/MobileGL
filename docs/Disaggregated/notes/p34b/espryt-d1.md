@@ -172,7 +172,51 @@ byte-identical.
 
 ## slice 3 — the dead `OnXfbScatterReady` declaration
 
-`RESULT: (pending)`
+Plan B's section 7.1 named ten reverse-channel callbacks. The tenth, `OnXfbScatterReady`,
+belonged to a design the tree does not have: plan B put the XFB scatter on the CLIENT — the
+server would hand back the packed scratch and the client would run the patch loop over its own
+shadow — so something had to tell the client the layout. P5c/P5f went the other way. The
+declaration was left behind with **zero producers, zero consumers and no `EventKind`**, and the
+`static_assert` beside `kMGPipeCallbackCount` made it look load-bearing.
+
+Deleted; `kMGPipeCallbackCount` 10 → 9. Three pieces of prose that still described the old design
+go with it:
+
+* `MGPipeCallbacks.h`'s own header — "ten callbacks" → nine, with the reason the tenth went.
+* `MGPipeTypes.h`'s `MGPXfbAccounting` comment, which said the scatter "is a read-modify-write of
+  the client's shadow and lives there". It lives on the server's staged shadow.
+* `ARCHITECTURE.md` §8.5, retitled from 「XFB scatter 搬到 client」 and rewritten to what the tree
+  does: server staged shadow, one `OnBufferWriteback` carrying the reconciled range (sliced —
+  slice 2), orphaned targets legal (slice 1). Its `OnXfbScatterReady` row in §8.1's table goes too,
+  since leaving it would be a new staleness rather than an inherited one.
+
+`PipeCatalogue.ReverseChannelHasTenCallbacks` now asserts 9. **The case name is deliberately not
+renamed**: G2/G14 say the ctest name set only grows, so renaming would delete a name the gate
+watches. The count it asserts is what has to be right; the comment carries the number.
+
+**RESULT — red once, then green.** With the member and the count restored (everything else as
+committed), `PipeCatalogue.ReverseChannelHasTenCallbacks` fails:
+
+```
+PipeCatalogueTest.cpp:1111: Failure
+Expected equality of these values:
+  kMGPipeCallbackCount   Which is: 10
+  9u                     Which is: 9
+```
+
+which is what makes the struct's shrink a measured fact rather than a claim — the `static_assert`
+beside the constant only proves the two agree with each other.
+
+**Gates.** `integration-split` 202/202, `integration-spawn` 118/118, `integration-tcp` 121/121,
+`ctest -L unit` 2408/2408, parity / census / ratchet (186) green. **G1 run for this slice in
+particular**, because `MGPipeCallbacks.h` is included from MG_Backend and the struct is *not*
+behind `MOBILEGL_BUILD_DISAGGREGATED`, so `sizeof(gMGPipeCallbacks)` really does shrink by 8 bytes
+in the pull build: `.text` still `0xa52203` and both nm lists still byte-identical. The shrink is
+in `.bss` and nothing indexes the table by count.
+
+*(One unrelated flake seen and cleared: `DirectGLES.Tcp.PrimitiveRestartScenario.TheFixedIndex
+ValueTakesTheForwardingPath` failed once in the tcp lane and passed on re-run, and the full lane
+was re-run clean at 121/121.)*
 
 ## slice 4 — readback close-out
 

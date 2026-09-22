@@ -1672,8 +1672,11 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPStreamOutputBegin, 120);
 
-    // end_stream_output carries the accounting the client owns; the scatter itself is a
-    // read-modify-write of the client's shadow and lives there (section 7.2.1).
+    // end_stream_output carries the accounting the client owns. THE SCATTER ITSELF IS THE
+    // SERVER'S, and this sentence used to say the opposite: plan B section 7.2.1 put the
+    // read-modify-write on the client's shadow, P5c/P5f put it on the server's own staged
+    // shadow, and the reconciled range comes back as an ordinary OnBufferWriteback. Nothing
+    // about the scatter crosses in this record.
     struct MGPXfbAccounting {
         Uint64 CapturedVertices;
         Uint64 PrimitivesWritten;

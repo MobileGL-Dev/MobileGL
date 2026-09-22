@@ -260,7 +260,6 @@ GL 是每 unit 每 target 各一个绑定；shader 看见哪一个取决于 samp
 | `OnSurfaceChanged(info)` | `SwapchainObject` 写 `pDefaultFramebufferInfo` 的分层倒置；client 自己合成 default-FB 对象 |
 | `OnCapsInvalidated()` | 2 处 `InvalidateCompileEnv` |
 | `OnLog(level, text)` | ≤WARN 有损，≥ERROR 无损 + 速率限制 |
-| `OnXfbScatterReady(scratch, packedStride, vertices)` | §8.5 |
 
 95 个写回点的其余归属：`MarkStorageDirty` 大多是 server 本地记账；后端凭空造的前端对象（Magma 占位纹理、swapchain default-FB 占位）→ server 原生；`SetBackendStateMemo` 直接删除；`SetBackendHashMemo/AuxMemo` → server 侧 per-slot 字段。**D-K（P3a）**：`PipeResource::m_backend` / `SetBackendResource` / `ReleaseBackend` / `BackendBufferResource` 在 push 下只是不再被写，真删会移动 pull 构建里 `sizeof(BufferObject)`（G1 破坏），随 pull 路径在 P13 退役。
 
@@ -278,9 +277,16 @@ GL 是每 unit 每 target 各一个绑定；shader 看见哪一个取决于 samp
 
 server 不保留纹素，三个原因会要求重发已发过的 level：`RequireImageBindableStorage` 的 re-dirty、整格式再生、view 源重铸。四条缓解：(1) **预防主因**：`ResourceCreate/Respecify` 一直携带 `ImageBindableHint`；(2) **拉取异步**：server 发 `OnTexturePullRequest` 并把 twin 标 not-ready，阻塞的是 apply 线程不是应用线程；(3) 有上限的保留默认关（`MOBILEGL_PIPE_TEXEL_RETAIN_MB=0`，`MipmapStorage` 保有每 level 完整 CPU 影子，缓存买的是延迟不是正确性）；(4) **显式终止符** `ResourceSubDataComplete`，可携带零个 region（内容只来自渲染 / GPU mip 的 level，client 没有字节；server 带着"已分配但为空"的存储继续）。真实语料上重铸拉取率见 `ROADMAP.md` 开放问题 2（780 个窗口 2 次）。P5b 下这条路径是 `Fatal{UnmigratedEmulation,"texture-remint-pull"}`（三条 trace 的首阻塞），P9 落地。
 
-### 8.5 XFB scatter 搬到 client
+### 8.5 XFB scatter 留在 server（本节在 P5c/P5f 之后重写；P3b/P4b espryt D1 更正文本）
 
-Espryt 的 `ScatterCapturedRecords` 是对 client shadow 的 read-modify-write（`gl_SkipComponents` 的空洞保留应用原本的内容）。server 没有 `MappedData()`，所以 server 把紧密打包的 scratch 经 `OnBufferWriteback` 推给 client，用 `OnXfbScatterReady` 告知布局；client 拥有目的 shadow 与反射归档里的 varying/stride，原样跑补丁循环，补好的范围作为普通 `ResourceSubData` 重发。不新增停顿类。
+Espryt 的 `ScatterCapturedRecords` 是 read-modify-write：`gl_SkipComponents` 的空洞必须保留目的缓冲原本的内容，所以补丁循环需要「捕获前的字节」。本节原来写的是**搬到 client**——server 把紧密打包的 scratch 经 `OnBufferWriteback` 推给 client，用 `OnXfbScatterReady` 告知布局，client 跑补丁循环再以 `ResourceSubData` 重发。**树上走的是相反的一条路**，这一段按树更正：
+
+- **捕获前的字节是 server 自己的 staged shadow**（rule C：拆分后权威影子归 server，`GLESBufferResource::hostBytes`），不是 client 的 `MappedData()`——后者在 apply 线程上是 `Fatal{RoleViolation, "buffer-legacy-arm"}`（CONTRACT-P5C §3.8）。所以 server 有它需要的一切：影子、反射归档里的 varying/stride（`ProgramArchive->Link`），补丁循环原地跑完。
+- **回程只有一条 `OnBufferWriteback`**，载的是**补好的整段**，不是 scratch。`OnXfbScatterReady` 因此是零生产者、零消费者、无 EventKind 的死声明，P3b/P4b espryt D1 slice 3 删除，`kMGPipeCallbackCount` 10 → 9。
+- **该回写按 SEG_EVENT 容量的四分之一切片**（`MGPipeBufferWritebackSliceBytes`，espryt D1 slice 2）：字节内联在 SEG_EVENT 记录里，而环形缓冲拒绝任何超过容量一半的记录，所以整段投递在 >128 KiB 时是 `Fatal{EventRingOverflow}`。切片按序投递，最后一片落地即蕴含之前每一片。
+- **孤儿目标（`HasDefinedContent == 0`）是合法目标**（espryt D1 slice 1）：它没有可读的捕获前字节是应用自己声明的，零填充后照常散射并上传，与 monolith 从新鲜 `MappedData()` 读到的逐字节相同。
+
+不新增停顿类。
 
 ## 9. 后端状态机改造
 

@@ -17,8 +17,19 @@
 // Today this traffic is 95 call sites across 17 methods poked directly into frontend
 // objects. gallium has no vocabulary for shadow writeback, GPU-write notification, texture
 // re-send requests or default-framebuffer geometry, because in Mesa the state tracker and
-// the driver share an address space. Naming them as ten callbacks plus one forward
+// the driver share an address space. Naming them as nine callbacks plus one forward
 // terminator (MGPipeContext::ResourceSubDataComplete) is the deliberate deviation (D8).
+//
+// NINE, NOT THE TEN PLAN B WROTE. The tenth was OnXfbScatterReady, and it went with the
+// design it belonged to: plan B put the XFB scatter on the CLIENT (the server would hand
+// back the packed scratch and the client would run the patch loop over its own shadow), so
+// there had to be a callback that told the client the layout. P5c/P5f went the other way -
+// the server reads its OWN staged shadow, scatters there and returns the reconciled range
+// through OnBufferWriteback, which needs no second callback - and the declaration was left
+// behind with zero producers, zero consumers and no EventKind of its own. Deleted here
+// (P3b/P4b espryt D1 slice 3) rather than carried: an entry that cannot fire is one every
+// reader of this file has to rule out by hand, and the size assertion below made it look
+// load-bearing.
 //
 // Installed at context creation. In a monolith these are direct calls; under split they are
 // records on the reverse channel, and their ORDER is a correctness requirement rather than
@@ -46,14 +57,11 @@ namespace MobileGL::MG_Pipe {
         void (*OnCapsInvalidated)();
         // <= WARN is lossy, >= ERROR is lossless and rate limited.
         void (*OnLog)(Uint8 level, const char* text);
-        // The XFB scatter is a read-modify-write of the CLIENT's shadow, so the server
-        // hands back the packed scratch and the client scatters (section 7.2.1).
-        void (*OnXfbScatterReady)(MGPipeHandle scratch, Uint64 packedStride, Uint64 vertices);
     };
 
-    // Ten, and the count is asserted so an eleventh cannot be added without touching the
+    // Nine, and the count is asserted so a tenth cannot be added without touching the
     // transport's reverse-channel record table.
-    inline constexpr SizeT kMGPipeCallbackCount = 10;
+    inline constexpr SizeT kMGPipeCallbackCount = 9;
     static_assert(sizeof(MGPipeCallbacks) == kMGPipeCallbackCount * sizeof(void (*)()),
                   "MGPipeCallbacks gained or lost a callback");
 
