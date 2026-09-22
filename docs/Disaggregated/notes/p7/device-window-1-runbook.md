@@ -137,17 +137,20 @@ bash tools/device_bench/pin_device.sh 2f7cbe2e check | tee 00-session/pin-check-
 ## 3. APK 安装身份（~5 min）
 
 ```bash
-# [Win]
-adb -s 2f7cbe2e install -r MobileGL-plugin-trace-release-p7w1.apk
+# [Win] 注意：Git Bash 里若设了 MSYS_NO_PATHCONV=1，adb.exe 收到 /c/... 会 "failed to stat"——
+#       APK 参数用 Windows 路径（$(cygpath -w ...)）；设备侧 /data/... 路径才需要 MSYS_NO_PATHCONV。
+#       flavour 后缀在 applicationIdSuffix 之后：包名是 top.mobilegl.plugin.p7w1.trace。
+adb -s 2f7cbe2e install -r "$(cygpath -w MobileGL-plugin-trace-release-p7w1.apk)"
 adb -s 2f7cbe2e shell pm list packages | grep mobilegl | tee 00-session/packages.txt
-adb -s 2f7cbe2e shell dumpsys package top.mobilegl.plugin.trace.p7w1 \
+adb -s 2f7cbe2e shell dumpsys package top.mobilegl.plugin.p7w1.trace \
   | grep -E 'versionName|lastUpdateTime|codePath|nativeLibraryPath' | tee 00-session/apk-install.txt
 sha256sum MobileGL-plugin-trace-release-p7w1.apk | tee 00-session/apk.sha256
 # 等 dex2oat 退出再开始任何臂：一条 am_kill ... due to installPackageLI 落在臂里量的是安装器。
-adb -s 2f7cbe2e shell 'while pgrep -f dex2oat >/dev/null; do sleep 2; done'
+adb -s 2f7cbe2e shell 'n=0; while pgrep dex2oat >/dev/null && [ $n -lt 150 ]; do sleep 2; n=$((n+1)); done; echo "dex2oat idle after $((n*2))s"'
+# （`pgrep -f dex2oat` 会匹配到承载这条循环的 sh 自己，永远不退出；按进程名匹配。）
 
 # 本窗口的其余步骤都要看得见这个 id：
-export MOBILEGL_TRACE_PACKAGE=top.mobilegl.plugin.trace.p7w1   # [Win] 每个 shell 都要设
+export MOBILEGL_TRACE_PACKAGE=top.mobilegl.plugin.p7w1.trace   # [Win] 每个 shell 都要设
 export MOBILEGL_TRACE_SKIP_INSTALL=1                            # 已装好，别让每个 case 再装一次
 ```
 
@@ -382,9 +385,9 @@ done | tee E3-caps/caps-compare.txt
 ```bash
 # [Win] 8.1 起设备端 supervisor（前台 Service），并临时豁免 Doze
 python3 tools/trace_replay/tcp_device_server.py start \
-  --serial 2f7cbe2e --package top.mobilegl.plugin.trace.p7w1 \
+  --serial 2f7cbe2e --package top.mobilegl.plugin.p7w1.trace \
   --listen tcp://0.0.0.0:40613 --token <TOKEN> --allow-idle \
-  --state-file /home/swung/.cache/mobilegl/tcp-server/2f7cbe2e-top.mobilegl.plugin.trace.p7w1.json \
+  --state-file /home/swung/.cache/mobilegl/tcp-server/2f7cbe2e-top.mobilegl.plugin.p7w1.trace.json \
   | tee P65-tcp-matrix/server-start.txt
 adb -s 2f7cbe2e logcat -s MobileGLServer -d | tee P65-tcp-matrix/server-ready.txt
 ```
@@ -559,8 +562,8 @@ done
 ```bash
 # [WSL] 1) 停测试包并恢复本次添加的包级 idle 豁免（validation-status.md:215-218）
 python3 <tree>/tools/trace_replay/tcp_device_server.py stop --serial 2f7cbe2e \
-  --package top.mobilegl.plugin.trace.p7w1 \
-  --state-file /home/swung/.cache/mobilegl/tcp-server/2f7cbe2e-top.mobilegl.plugin.trace.p7w1.json
+  --package top.mobilegl.plugin.p7w1.trace \
+  --state-file /home/swung/.cache/mobilegl/tcp-server/2f7cbe2e-top.mobilegl.plugin.p7w1.trace.json
 
 # [WSL root] 2) 撤掉本次新增的临时网络辅助配置
 sudo ip route del 192.168.21.181/32 via 192.168.31.1 dev eth0 metric 10
