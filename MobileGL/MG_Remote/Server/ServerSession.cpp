@@ -311,6 +311,21 @@ namespace MobileGL::MG_Remote::Server {
             return *session;
         }
 
+        // THE NUMBER THE BACKEND'S WRITEBACK PRODUCERS SLICE AGAINST (P3b/P4b espryt D1 slice 2).
+        //
+        // SEG_EVENT's capacity, published to MG_Pipe so that a producer in MG_Backend can ask it
+        // without reaching either MG_Remote::Client (wrong linkage; that side answers the same
+        // question for requests going the other way) or ServerSession (wrong layer). MG_Pipe turns
+        // it into the per-record width - see MGPipeBufferWritebackSliceBytes - because the quarter
+        // and its floor are one rule, not two. A session that has not attached a data link yet
+        // answers 0, which reads as "do not slice" and is correct: with no ring there is nothing
+        // to overflow.
+        Uint64 ServerEventRingCapacityBytes() {
+            auto* session = ServerSession::Active();
+            if (session == nullptr) return 0;
+            return session->Events().Ring().Capacity();
+        }
+
         void ServerOnBufferWriteback(MG_Pipe::MGPipeHandle res, Uint64 offset,
                                      MG_Pipe::MGPBlobRef bytes) {
             ServerSession& session = ReverseCallbackOwner("OnBufferWriteback");
@@ -637,6 +652,11 @@ namespace MobileGL::MG_Remote::Server {
         InstallReverseCallback(MG_Pipe::gMGPipeCallbacks.OnGpuWritten, &ServerOnGpuWritten);
         InstallReverseCallback(MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged,
                                &ServerOnSurfaceChanged);
+        // ... and, beside them, the one NUMBER a writeback producer has to know: how much of
+        // SEG_EVENT one record may be. Same ownership rule as the four entries above - installed
+        // here, released at Close only if it is still ours - because a producer left holding a
+        // dead session's ring width would slice against a ring that no longer exists.
+        InstallReverseCallback(MG_Pipe::gMGPipeEventRingCapacityBytes, &ServerEventRingCapacityBytes);
         g_active.store(this, std::memory_order_release);
 
         LogMemory("accept");
@@ -754,6 +774,9 @@ namespace MobileGL::MG_Remote::Server {
             }
             if (MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged == &ServerOnSurfaceChanged) {
                 MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged = nullptr;
+            }
+            if (MG_Pipe::gMGPipeEventRingCapacityBytes == &ServerEventRingCapacityBytes) {
+                MG_Pipe::gMGPipeEventRingCapacityBytes = nullptr;
             }
         }
         m_consumer.Detach();

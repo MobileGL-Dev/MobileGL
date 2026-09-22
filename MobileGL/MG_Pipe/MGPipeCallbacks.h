@@ -59,4 +59,43 @@ namespace MobileGL::MG_Pipe {
 
     // Null-initialized: a backend that installs nothing sends nothing.
     inline MGPipeCallbacks gMGPipeCallbacks{};
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // HOW MUCH OF ITSELF ONE REVERSE-CHANNEL RECORD MAY BE, and it is not a tuning knob: a
+    // producer that ignores it kills the server process.
+    //
+    // OnBufferWriteback's bytes travel INLINE in one SEG_EVENT record, and a ring producer
+    // refuses any record above Capacity()/2 OUTRIGHT (Transport/Ring.h) - not "when full", but
+    // always, because above half a capacity a record is placeable at some head offsets and not
+    // at others, so waiting for room would be a hang. The server's answer to a refusal is
+    // Fatal{EventRingOverflow}, and SEG_EVENT defaults to 256 KiB, so ANY producer that posts a
+    // whole range wider than ~128 KiB is a server that dies on a large enough buffer.
+    //
+    // THE PRODUCERS ARE IN MG_Backend, which cannot reach MG_Remote::Client's
+    // BufferWritebackSliceBytes (that one is the CLIENT-linkage answer to the same question,
+    // for requests going the other way) and must not reach ServerSession either. So the
+    // transport publishes the one number through this hook, exactly as it publishes segment
+    // resolution through gMGPipeSegmentResolver: the SERVER role installs it at Accept and
+    // releases it at Close, and a monolith build leaves it null.
+    using MGPipeEventRingCapacityQuery = Uint64 (*)();
+    inline MGPipeEventRingCapacityQuery gMGPipeEventRingCapacityBytes = nullptr;
+
+    // 0 means "do not slice": no transport is installed, so the callback is a direct call with
+    // no ring under it and cutting the range would only multiply the calls.
+    //
+    // A QUARTER of the ring rather than the MaxRecordBytes half, which is the same number and
+    // the same reasoning the client side uses (MG_Remote/Client/GpuWritePending.cpp): the record
+    // carries its own header and an EventBufferWritebackHead beside the payload, and the ring may
+    // still hold small events posted earlier in the same verb's apply. The 4 KiB floor is there so
+    // that a pathologically small operator-supplied ring cannot make a slicing loop spin at zero
+    // width; such a ring is broken anyway and the producer's Fatal{EventRingOverflow} names it on
+    // the first post.
+    inline Uint64 MGPipeBufferWritebackSliceBytes() {
+        if (gMGPipeEventRingCapacityBytes == nullptr) return 0;
+        const Uint64 capacity = gMGPipeEventRingCapacityBytes();
+        if (capacity == 0) return 0;
+        const Uint64 quarter = capacity / 4;
+        return quarter < 4096 ? 4096 : quarter;
+    }
+#endif
 } // namespace MobileGL::MG_Pipe

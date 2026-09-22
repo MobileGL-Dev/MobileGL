@@ -364,10 +364,23 @@ void main (void)
             return false;
         }
 
+        // The capture RANGE the writeback has to cross when the point of a case is that range's
+        // SIZE rather than its contents (P3b/P4b espryt D1 slice 2). One SEG_EVENT record may be
+        // at most half the event ring, which defaults to 256 KiB - so 1 MiB is about eight times
+        // what a whole-range post can ever carry, and no reasonable retuning of the ring makes it
+        // fit.
+        constexpr GLsizeiptr kLargeCaptureRangeBytes = 1024 * 1024;
+
         // Runs skip_components and reports what came back. `outCaptured` is the raw
         // readback so a failure can say whether anything was written at all.
+        //
+        // `storeBytes` widens the capture BUFFER without widening the capture: the records are the
+        // same six, but glBindBufferBase binds the whole store, so the range the backend mirrors
+        // back is `storeBytes` wide. That is the only way to reach a writeback of a given size
+        // from a test without drawing a proportional number of primitives.
         void RunSkipComponentsCapture(std::vector<float>& outCaptured, std::string* buildLog,
-                                      CaptureStoreShape shape = CaptureStoreShape::Declared) {
+                                      CaptureStoreShape shape = CaptureStoreShape::Declared,
+                                      GLsizeiptr storeBytes = 0) {
             outCaptured.clear();
 
             const GLuint program = BuildProgram(kXfbVertexSource, kXfbFragmentSource, SkipComponentsVaryings(),
@@ -396,33 +409,37 @@ void main (void)
 
             const unsigned floatCount = kSkipVertexCount * kSkipComponentCount;
             const GLsizeiptr byteSize = static_cast<GLsizeiptr>(sizeof(float) * floatCount);
+            // The STORE, which is what glBindBufferBase binds and therefore what the backend
+            // mirrors back; the capture itself is `byteSize` of it either way.
+            const GLsizeiptr storeSize = storeBytes > byteSize ? storeBytes : byteSize;
+            const unsigned storeFloats = static_cast<unsigned>(storeSize / sizeof(float));
 
             GLuint captureBuffer = 0;
             glGenBuffers(1, &captureBuffer);
             glBindBuffer(GL_ARRAY_BUFFER, captureBuffer);
-            glBufferData(GL_ARRAY_BUFFER, byteSize, nullptr, GL_STATIC_READ);
+            glBufferData(GL_ARRAY_BUFFER, storeSize, nullptr, GL_STATIC_READ);
             glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, captureBuffer);
             glBindBuffer(GL_ARRAY_BUFFER, 0);
 
             // The pre-fill that makes "nothing was captured" recognisable.
-            std::vector<float> prefill(floatCount);
-            for (unsigned i = 0; i < floatCount; ++i) {
+            std::vector<float> prefill(storeFloats);
+            for (unsigned i = 0; i < storeFloats; ++i) {
                 prefill[i] = -1.0f - static_cast<float>(i);
             }
             glBindBuffer(GL_ARRAY_BUFFER, captureBuffer);
             switch (shape) {
             case CaptureStoreShape::Declared:
-                glBufferData(GL_ARRAY_BUFFER, byteSize, prefill.data(), GL_STATIC_DRAW);
+                glBufferData(GL_ARRAY_BUFFER, storeSize, prefill.data(), GL_STATIC_DRAW);
                 break;
             case CaptureStoreShape::OrphanedPartial:
                 // The streaming idiom: orphan the store, then upload only the part the
                 // application cares about keeping.
-                glBufferData(GL_ARRAY_BUFFER, byteSize, nullptr, GL_STATIC_DRAW);
+                glBufferData(GL_ARRAY_BUFFER, storeSize, nullptr, GL_STATIC_DRAW);
                 glBufferSubData(GL_ARRAY_BUFFER, 0,
                                 static_cast<GLsizeiptr>(sizeof(float) * kOrphanStagedFloats), prefill.data());
                 break;
             case CaptureStoreShape::OrphanedWhole:
-                glBufferData(GL_ARRAY_BUFFER, byteSize, nullptr, GL_STATIC_DRAW);
+                glBufferData(GL_ARRAY_BUFFER, storeSize, nullptr, GL_STATIC_DRAW);
                 break;
             }
             glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -553,6 +570,104 @@ void main (void)
             return ::testing::AssertionSuccess();
         }
 
+        // THE OTHER WRITEBACK PRODUCER (P3b/P4b espryt D1 slice 2).
+        //
+        // A capture list with no gl_SkipComponents and one buffer is expressible on ES directly,
+        // so the driver writes the application's buffer itself and the mirror-back is
+        // ReadbackCapturedRanges' rather than ScatterCapturedRecords'. That is a DIFFERENT
+        // OnBufferWriteback call site - it posts from a live glMapBufferRange mapping instead of a
+        // staged vector - with the same unbounded record behind it, so it needs its own case or
+        // half the fix is untested. `value1` alone is a 16-byte record; the bound range is the
+        // whole store, which is what the writeback crosses.
+        void RunPlainCaptureIntoLargeRange(std::vector<float>& outCaptured, std::string* buildLog) {
+            outCaptured.clear();
+            const GLuint program = BuildProgram(kXfbVertexSource, kXfbFragmentSource, {"value1"},
+                                                GL_INTERLEAVED_ATTRIBS, buildLog);
+            ASSERT_NE(program, 0u) << "plain capture program failed to link: " << (buildLog ? *buildLog : "");
+            glUseProgram(program);
+
+            const std::vector<float> vertices = {
+                -1.0f, -1.0f, -1.0f, 1.0f, 1.0f,  -1.0f, -2.0f, 1.0f, -1.0f, 1.0f, -3.0f, 1.0f,
+                1.0f,  1.0f,  4.0f,  1.0f, -1.0f, 1.0f,  5.0f,  1.0f, 1.0f,  -1.0f, 6.0f, 1.0f,
+            };
+
+            GLuint vao = 0;
+            GLuint vbo = 0;
+            glGenVertexArrays(1, &vao);
+            glBindVertexArray(vao);
+            glGenBuffers(1, &vbo);
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(sizeof(float) * vertices.size()), vertices.data(),
+                         GL_STATIC_DRAW);
+            const GLint location = glGetAttribLocation(program, "vertex");
+            if (location >= 0) {
+                glEnableVertexAttribArray(static_cast<GLuint>(location));
+                glVertexAttribPointer(static_cast<GLuint>(location), 4, GL_FLOAT, GL_FALSE, 0, nullptr);
+            }
+
+            const unsigned capturedFloats = kSkipVertexCount * 4;
+            const unsigned storeFloats = static_cast<unsigned>(kLargeCaptureRangeBytes / sizeof(float));
+            std::vector<float> prefill(storeFloats);
+            for (unsigned i = 0; i < storeFloats; ++i) prefill[i] = -1.0f - static_cast<float>(i);
+
+            GLuint captureBuffer = 0;
+            glGenBuffers(1, &captureBuffer);
+            glBindBuffer(GL_ARRAY_BUFFER, captureBuffer);
+            glBufferData(GL_ARRAY_BUFFER, kLargeCaptureRangeBytes, prefill.data(), GL_STATIC_READ);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+            glEnable(GL_RASTERIZER_DISCARD);
+            glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, captureBuffer);
+            glBeginTransformFeedback(GL_TRIANGLES);
+            glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(kSkipVertexCount));
+            glEndTransformFeedback();
+            glDisable(GL_RASTERIZER_DISCARD);
+
+            outCaptured.resize(capturedFloats);
+            const GLsizeiptr capturedBytes = static_cast<GLsizeiptr>(sizeof(float) * capturedFloats);
+            glBindBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, captureBuffer, 0, capturedBytes);
+            const void* mapped = glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, capturedBytes, GL_MAP_READ_BIT);
+            if (mapped != nullptr) {
+                std::memcpy(outCaptured.data(), mapped, static_cast<std::size_t>(capturedBytes));
+                glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
+            }
+
+            glDisableVertexAttribArray(0);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            glDeleteBuffers(1, &vbo);
+            glDeleteBuffers(1, &captureBuffer);
+            glBindVertexArray(0);
+            glDeleteVertexArrays(1, &vao);
+            glUseProgram(0);
+            glDeleteProgram(program);
+            glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, 0);
+        }
+
+        // value1 == |vertex| * 1, one tight vec4 record per vertex.
+        ::testing::AssertionResult CheckPlainCapture(const std::vector<float>& captured) {
+            const std::vector<float> vertices = {
+                -1.0f, -1.0f, -1.0f, 1.0f, 1.0f,  -1.0f, -2.0f, 1.0f, -1.0f, 1.0f, -3.0f, 1.0f,
+                1.0f,  1.0f,  4.0f,  1.0f, -1.0f, 1.0f,  5.0f,  1.0f, 1.0f,  -1.0f, 6.0f, 1.0f,
+            };
+            if (captured.size() != vertices.size()) {
+                return ::testing::AssertionFailure()
+                       << "readback size " << captured.size() << " != " << vertices.size();
+            }
+            for (std::size_t i = 0; i < vertices.size(); ++i) {
+                const float expected = std::fabs(vertices[i]);
+                if (std::fabs(captured[i] - expected) > 0.0125f) {
+                    ::testing::AssertionResult failure = ::testing::AssertionFailure();
+                    failure << "capture mismatch at index " << i << ": got " << captured[i] << ", expected "
+                            << expected;
+                    if (std::fabs(captured[i] - (-1.0f - static_cast<float>(i))) <= 0.0125f) {
+                        failure << " - still the pre-fill, so nothing was mirrored back";
+                    }
+                    return failure;
+                }
+            }
+            return ::testing::AssertionSuccess();
+        }
+
         // The harness turns "no context came up" into a clean skip, and a skip is
         // indistinguishable from a pass in a ctest summary. For this scenario that
         // is a hole rather than a courtesy: the defect it pins is DirectVulkan's
@@ -624,6 +739,45 @@ void main (void)
             // Nothing was ever staged, so every hole is undefined and only the varyings are
             // checked - which is still the entire capture.
             EXPECT_TRUE(CheckSkipComponentsOrphaned(captured, 0));
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+        }
+
+        // ------------------------------------- P3b/P4b espryt D1 slice 2: a capture range that
+        //                                       does not fit one reverse-channel record
+        //
+        // Under a transport the captured bytes go back to the client INLINE in a SEG_EVENT
+        // record, and a ring producer refuses any record above half its capacity OUTRIGHT -
+        // always, not "when full", because above half a capacity a record is placeable at some
+        // head offsets and not at others and waiting for room would be a hang. SEG_EVENT defaults
+        // to 256 KiB. Both XFB writeback producers posted the WHOLE bound range as one record, so
+        // a capture target wider than ~128 KiB was Fatal{EventRingOverflow} and the server
+        // process died - on a buffer size, with nothing else wrong.
+        //
+        // A megabyte is about eight times what one record can ever be. The capture is still six
+        // records; it is glBindBufferBase over the whole store that makes the MIRRORED RANGE a
+        // megabyte, which is what a real capture buffer looks like and what the producer has to
+        // survive.
+        //
+        // TWO CASES BECAUSE THERE ARE TWO PRODUCERS. The skip_components layout is not
+        // expressible on ES, so it goes through ScatterCapturedRecords and posts from a staged
+        // vector; the plain single-varying layout is, so the driver writes the application's
+        // buffer and ReadbackCapturedRanges posts from a live glMapBufferRange mapping. They are
+        // different call sites with the same defect behind them.
+        TEST_F(XfbAfterClipDistanceScenario, AScatteredCaptureIntoAMegabyteRangeReachesTheApplication) {
+            if (!Ready()) return;
+            std::vector<float> captured;
+            std::string log;
+            RunSkipComponentsCapture(captured, &log, CaptureStoreShape::Declared, kLargeCaptureRangeBytes);
+            EXPECT_TRUE(CheckSkipComponents(captured));
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+        }
+
+        TEST_F(XfbAfterClipDistanceScenario, APlainCaptureIntoAMegabyteRangeReachesTheApplication) {
+            if (!Ready()) return;
+            std::vector<float> captured;
+            std::string log;
+            RunPlainCaptureIntoLargeRange(captured, &log);
+            EXPECT_TRUE(CheckPlainCapture(captured));
             EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
         }
 

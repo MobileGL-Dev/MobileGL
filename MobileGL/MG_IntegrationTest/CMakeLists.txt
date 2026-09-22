@@ -2284,11 +2284,18 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # this target": silently for a wholly orphaned store, and as
     # Fatal{StageSnapshotTooNarrow, "xfb_scatter_pre_capture"} for a partly uploaded one.
     #
-    # NARROW FILTER ON PURPOSE. The rest of XfbAfterClipDistanceScenario is a DirectVulkan
-    # allocation-pattern regression (its own header says so) and has never been run under a
-    # transport; slice 2 registers the whole scenario once the writeback event it posts is
-    # sliced. Registering it wholesale here would mix that slice's reds into this one's.
-    mgl_itest_register_split_arms("XfbAfterClipDistanceScenario.OrphanedCaptureTarget*" "Xfb.")
+    # ---- P3b/P4b espryt D1 slice 2: THE WHOLE XFB FAMILY, once the writeback is sliced -------
+    #
+    # Slice 1 registered only OrphanedCaptureTarget* here, because the rest of these two files
+    # could not survive a transport: both writeback producers posted the WHOLE bound range as one
+    # SEG_EVENT record, and a record above half the ring (128 KiB at the 256 KiB default) is
+    # refused outright, which the server answers with Fatal{EventRingOverflow}. With the event
+    # sliced, the two scenarios go on in full - including the megabyte-range pair whose whole
+    # subject is that slicing, and XfbRepeatedCaptureScenario's gl_NextBuffer compacted-target
+    # shape, which is the first thing outside the census to exercise the archive-served stride
+    # and varyings (ProgramArchive->Link's xfb fields) on the server.
+    mgl_itest_register_split_arms("XfbAfterClipDistanceScenario.*" "Xfb.")
+    mgl_itest_register_split_arms("XfbRepeatedCaptureScenario.*" "Xfb.")
 
 
     # ---- P5e fix1: THE PUSH-MONOLITH ARM, INSIDE THE GATED SET (ID-107) ----------------------

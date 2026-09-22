@@ -106,7 +106,69 @@ both byte-identical to `~/w7/p7-before/`.
 
 ## slice 2 — the unbounded writeback event
 
-`RESULT: (pending)`
+**The hole.** Both XFB writeback producers posted ONE unbounded `OnBufferWriteback` covering the
+whole bound range: `ScatterCapturedRecords` from its staged vector, `ReadbackCapturedRanges` from
+a live `glMapBufferRange` mapping. `ServerOnBufferWriteback` turns each into one SEG_EVENT record
+of `sizeof(EventBufferWritebackHead) + bytes`, and `RingProducer::Reserve` refuses any record
+above `Capacity()/2` **outright** — not "when full", but always, because above half a capacity a
+record is placeable at some head offsets and not at others and waiting for room would be a hang.
+`EventRingBytes` defaults to 256 KiB. So any capture target wider than ~128 KiB was
+`Fatal{EventRingOverflow}` and the **server process died** — on a buffer size, with nothing else
+wrong. The producers' own Fatal text already said what to do: *"Raise MOBILEGL_IPC_EVENT_KB or
+slice the event at its producer, as the writeback path already does"* — which was true of the
+client's request path and of nothing on this side.
+
+**The fix.** `MG_Pipe` grows the one number, published the way `gMGPipeSegmentResolver` is
+published: `gMGPipeEventRingCapacityBytes`, installed by `ServerSession::Accept` beside the four
+reverse-channel producers and released at `Close` only if still ours, and
+`MGPipeBufferWritebackSliceBytes()` which turns it into a per-record width (a quarter of the ring,
+4 KiB floor — the same number and the same reasoning as the client's `BufferWritebackSliceBytes`).
+The backend cannot reach `MG_Remote::Client` (wrong linkage) or `ServerSession` (wrong layer), so
+the hook is the seam. 0 means "do not slice": monolith has no ring under the callback.
+
+Both producers loop against one helper, `XfbWritebackSliceStep`, so a second spelling of the width
+cannot leave one of them still killing the server. `:1782` slices INSIDE its mapping and still
+unmaps once; `:1969` slices the staged vector and keeps the single `glBufferSubData` whole,
+because the ES store has no ring and cutting it would change how many backend calls one
+application call makes. In-order delivery makes the last slice's landing imply every earlier one,
+so the client needs nothing new to reassemble them.
+
+**Red-once (R-16).** `XfbAfterClipDistanceScenario.{AScatteredCapture,APlainCapture}IntoAMegabyteRangeReachesTheApplication`
+— a 1 MiB bound range (≈8× what one record can ever be) with the same six capture records; it is
+`glBindBufferBase` over the whole store that makes the mirrored range a megabyte. Two cases
+because there are two producers: the `gl_SkipComponents` layout is not expressible on ES and goes
+through the scatter, the plain single-varying layout is and goes through the readback.
+
+With `XfbWritebackSliceStep` returning the whole range (fix reverted), all six split entries went
+red and both monolith controls stayed green:
+
+```
+3744 DirectGLES.Split.Xfb …AScatteredCapture…  (Subprocess aborted)
+3745 DirectGLES.Split.Xfb …APlainCapture…      (Subprocess aborted)
+3753/3754 DirectGLES.Spawn.Xfb …              (Failed — the server process died)
+3762/3763 DirectGLES.Tcp.Xfb   …              (Failed — the server process died)
+```
+
+```
+MGPipe: Fatal{EventRingOverflow} - kEventBufferWriteback needs 1048600 bytes and SEG_EVENT caps
+ONE record at 131072 (half its capacity).
+```
+
+inproc aborts the test process (the server is in it); spawn and tcp lose the peer instead, which
+is the same defect seen from the other side of a socket.
+
+**Also registered here**: `XfbAfterClipDistanceScenario.*` and `XfbRepeatedCaptureScenario.*` in
+full on the three split arms (slice 1 had only `OrphanedCaptureTarget*`, because the rest could
+not survive the unsliced event). `XfbRepeatedCaptureScenario`'s `gl_NextBuffer` compacted-target
+shape is the first thing outside the census to exercise the archive-served stride and varyings
+(`ProgramArchive->Link`'s xfb fields) on the server — **it passed on all three arms with no
+further change**, so there was nothing of D1's to fix behind it.
+
+**Gates.** `integration-split` 202/202, `integration-spawn` 118/118, `integration-tcp` 121/121,
+`ctest -L unit` 2408/2408, the monolith + split XFB families 120/120,
+`spawn_lane_parity.py build-split` RC 0, `fatal_census.py` RC 0 (79 sites, 0 unmarked),
+`link_ratchet.py --assert-monotone` unchanged at 186. G1: `.text` `0xa52203`, both nm lists
+byte-identical.
 
 ## slice 3 — the dead `OnXfbScatterReady` declaration
 

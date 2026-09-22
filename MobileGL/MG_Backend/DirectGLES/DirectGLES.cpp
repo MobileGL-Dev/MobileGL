@@ -1734,6 +1734,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                        g_GLESFuncs.glResumeTransformFeedback != nullptr;
             }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // How wide one OnBufferWriteback may be for a capture range of `rangeBytes`, which is
+            // the whole range when the transport imposes no limit (monolith, where the callback is
+            // a direct call with no ring under it) or when the range already fits one.
+            //
+            // BOTH XFB WRITEBACK PRODUCERS ASK THE SAME FUNCTION. They post from different sources
+            // - one from a live glMapBufferRange mapping, one from a staged Vector<Uint8> - but
+            // they post the same KIND of record into the same ring, and a second spelling of the
+            // width is how one of them ends up being the producer that still kills the server.
+            SizeT XfbWritebackSliceStep(SizeT rangeBytes) {
+                const Uint64 slice = MG_Pipe::MGPipeBufferWritebackSliceBytes();
+                if (slice == 0 || slice >= static_cast<Uint64>(rangeBytes)) return rangeBytes;
+                return static_cast<SizeT>(slice);
+            }
+#endif
+
             // Mirrors one capture span's results into the frontend CPU shadows. The GPU wrote
             // the capture buffers behind the frontend's back, so the shadows that back
             // MapBuffer/GetBufferSubData still hold the pre-draw bytes. Buffers whose storage
@@ -1779,11 +1795,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 continue;
                             }
                             if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback != nullptr) {
-                                MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(
-                                    res, target.start,
-                                    MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(mapped),
-                                                        static_cast<Uint64>(size),
-                                                        MG_Pipe::kMGHostSpanSegNone, 0});
+                                // ONE EVENT PER SLICE, NOT ONE PER CAPTURE. The bytes travel
+                                // INLINE in a SEG_EVENT record and the ring refuses any record
+                                // above half its capacity outright, so a whole-range post of a
+                                // capture wider than ~128 KiB was Fatal{EventRingOverflow} - the
+                                // SERVER dying on a large buffer. The slicing shape is
+                                // BufferObject.cpp's one ring over: in-order delivery makes the
+                                // last slice's landing imply every earlier one, so the client
+                                // needs nothing new to reassemble them.
+                                //
+                                // INSIDE THE MAPPING, deliberately: the map is the expensive part
+                                // and the slices are reads of one live pointer, so this unmaps
+                                // once below however many events it posts.
+                                const SizeT step = XfbWritebackSliceStep(size);
+                                for (SizeT off = 0; off < size; off += step) {
+                                    const SizeT bytes = std::min(step, size - off);
+                                    MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(
+                                        res, target.start + off,
+                                        MG_Pipe::MGPBlobRef{
+                                            reinterpret_cast<Uint64>(static_cast<Uint8*>(mapped) + off),
+                                            static_cast<Uint64>(bytes), MG_Pipe::kMGHostSpanSegNone, 0});
+                                }
                             } else {
                                 MGLOG_E_ONCE("EndTransformFeedback: no reverse channel is installed, so the "
                                              "captured bytes of buffer {%u,%u} cannot reach the client shadow",
@@ -1992,11 +2024,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
                     if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
                         if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback != nullptr) {
-                            MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(
-                                splitRes, target.start,
-                                MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(staged.data()),
-                                                    static_cast<Uint64>(rangeBytes),
-                                                    MG_Pipe::kMGHostSpanSegNone, 0});
+                            // Sliced for the reason the readback path above is sliced: the bytes
+                            // are INLINE in a SEG_EVENT record and the ring refuses a record wider
+                            // than half its capacity outright, so one whole-range post of a
+                            // capture over ~128 KiB was Fatal{EventRingOverflow} and the server
+                            // died. Only the EVENT is cut; the glBufferSubData below stays one
+                            // call over the whole `staged` vector, because the ES store has no
+                            // ring and cutting it would change how many backend calls one
+                            // application call makes.
+                            const SizeT step = XfbWritebackSliceStep(rangeBytes);
+                            for (SizeT off = 0; off < rangeBytes; off += step) {
+                                const SizeT bytes = std::min(step, rangeBytes - off);
+                                MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(
+                                    splitRes, target.start + off,
+                                    MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(staged.data() + off),
+                                                        static_cast<Uint64>(bytes),
+                                                        MG_Pipe::kMGHostSpanSegNone, 0});
+                            }
                         } else {
                             MGLOG_E_ONCE("EndTransformFeedback: no reverse channel is installed, so the "
                                          "scattered capture of buffer {%u,%u} cannot reach the client shadow",
