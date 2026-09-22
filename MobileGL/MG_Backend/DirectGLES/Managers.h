@@ -687,12 +687,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
     //                  BackendSamplerObject* rows;
     //   programs     - g_programTwinLookupMemo.
     //
-    // THREE OF THEM CARRY A DEPENDENCY (MGPipe.h, D-K2) and it is diagnosed and REFUSED here
-    // rather than half-run, the bit-8-requires-bit-7 shape ResolveVertexInputSubsystemArm
-    // already ships: bit 11 requires bit 10, bit 9 requires bit 10, bit 10 requires bit 7. The
-    // mirror pairs (10 without 11, 10 without 9, 7 without 10) are all FINE and are said so out
-    // loud, because an unreachable branch that says something different is how the reachable
-    // one drifts. Bit 12 depends on nothing: a ShaderCso handle names no texture and no buffer.
+    // THE DEPENDENCY ROWS ARE IN MG_Pipe/SubsystemDeps.def, ONCE (P3b/P4b R-5), and the four
+    // resolvers below READ them through MGPipeSubsystemDependenciesAreSet rather than carrying a
+    // copy: a dependency the table declares is diagnosed and REFUSED here rather than half-run,
+    // the bit-8-requires-bit-7 shape ResolveVertexInputSubsystemArm already ships.
+    //
+    // THIS COMMENT USED TO RESTATE THE ROWS AND WAS WRONG IN TWO WAYS THAT NOTHING COULD FAIL,
+    // in the header of the file that IMPLEMENTS the refusal. It said "THREE OF THEM CARRY A
+    // DEPENDENCY" when there are six rows (bits 8 and 13 were the two it did not know about),
+    // and it listed "10 without 11" among the mirror pairs that are FINE - when 10-without-11 is
+    // precisely D-K2's FOURTH row (ID-14/ID-15), refused twenty lines below by
+    // ResolveTextureResourceSubsystemArm and withheld by the client at PipeFill.cpp's own gate.
+    // MGPipe.h carried the identical pair of defects and lost them with the table; this copy was
+    // left behind because Managers.h belonged to a package in flight. The rows are not restated
+    // here again: the file that states them is the one the code reads.
+    //
+    // The mirror pairs that really ARE fine are stated in MGPipe.h beside the table, because an
+    // absence is not a row - and because that is the one place where saying it cannot drift away
+    // from the rows it is the complement of.
     //
     // ResolveFramebufferSubsystemArm additionally carries D-C3's bring-up refusal: the wire
     // array is MGPFramebufferState::Color[8] and GetDynamicParameters().MaxColorAttachments is

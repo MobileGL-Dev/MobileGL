@@ -1474,79 +1474,44 @@ namespace MobileGL::MG_Pipe {
         // above: with a dependency unmet the client emits NOTHING for that family and the legacy
         // pull path runs untouched, on both sides of the boundary.
         //
-        // THE TABLE IS WRITTEN ONCE, HERE, and every one of its rows is the client mirror of the
-        // refusal Espryt already implements, bit for bit and non-transitively - the two must say
-        // the SAME thing, because a client that withheld more than the server refuses would
-        // leave the server's handle arm live with no records to read, and a client that withheld
-        // less is the defect above.
-        struct P4aFamilyDependencyRow {
-            Uint64 Family;   // exactly one bit, and it is one of kMGPipeP4aFamilySubsystems
-            Uint64 Requires; // the bits MOBILEGL_PIPE_PUSH must ALSO carry for it to be live
-        };
-
-        inline constexpr P4aFamilyDependencyRow kMGPipeP4aFamilyDependencies[] = {
-            // BIT 9 REQUIRES BIT 10. Every MGPSurface::Res in a set_framebuffer_state record
-            // names a Texture or a Renderbuffer handle, and only bit 10 populates those two slot
-            // tables (Managers.cpp ResolveFramebufferSubsystemArm).
-            {kMGPipeSubsystemFramebuffer, kMGPipeSubsystemTextureResources},
-
-            // BIT 10 REQUIRES BIT 7 - a buffer texture's MGPResourceDesc::BufferForTexBuffer
-            // names a Buffer handle and only bit 7 puts twins in the resource slot table (D-D1,
-            // ResolveTextureResourceSubsystemArm's first row) - AND BIT 11, which is D-K2's
-            // FOURTH row (ID-14/ID-15): MGPTextureParams::BuiltinSampler is a SamplerCso HANDLE,
-            // only bit 11 mints sampler CSOs (c0b's four unconditional mints deliberately
-            // exclude it), and the applier's verdict for a null one is Fatal{ProtocolCorruption}
-            // rather than a decline. The brief's original "bit 10 without 11 is fine" is
-            // WITHDRAWN for P4a as built.
-            {kMGPipeSubsystemTextureResources,
-             kMGPipeSubsystemResources | kMGPipeSubsystemSamplers},
-
-            // BIT 11 REQUIRES BIT 10. Every MGPBoundView::Texture and every MGPImageView::Res
-            // names a Texture handle and only bit 10 populates that slot table; without it every
-            // per-unit lookup would miss and the walk would `continue` WITHOUT unbinding
-            // (ResolveSamplerSubsystemArm). With the row above this is SYMMETRIC: bits 10 and 11
-            // are one arm with two switches, and the only two masks that reach either handle arm
-            // are "both set" and "neither set".
-            {kMGPipeSubsystemSamplers, kMGPipeSubsystemTextureResources},
-
-            // BIT 12 DEPENDS ON NOTHING, and that is a ROW rather than an absence so the table
-            // covers the four families exhaustively (the static_assert below): a ShaderCso handle
-            // names no texture and no buffer, the archive rides beside the record as a companion
-            // pointer, and the extra inputs the server specialises on are read from state the
-            // backend already holds (ResolveProgramSubsystemArm).
-            {kMGPipeSubsystemPrograms, 0},
-        };
-
-        // THE MIRROR PAIRS THAT STAY FINE, said out loud rather than left as an absence, because
-        // an unreachable branch that says something different is how the reachable one drifts
-        // (Managers.cpp's own words at :2377-2381) - and because the table is only trustworthy if
-        // what it does NOT contain was decided rather than forgotten:
-        //   - bit 10 set, bit 9 clear: FINE. The legacy FBO sync reaches the texture twin through
-        //     SyncTextureObjectToBackend, which dispatches to the handle arm by itself.
-        //   - bit 11 set, bit 9 clear: FINE, for the same reason - a sampler view names a texture,
-        //     never a framebuffer.
-        //   - bit 7 set, bit 10 clear: FINE, and it is P3a's shipped configuration.
-        //   - bit 12 set with any or none of 9/10/11: FINE, per the last row.
-        //   - bit 10 set, bit 11 clear (and its mirror) is NOT fine and is the row above; this is
-        //     the one sentence in the brief that P4a as built withdrew.
+        // THE TABLE IS WRITTEN ONCE, IN MG_Pipe/SubsystemDeps.def, and every one of its rows is
+        // the client mirror of the refusal Espryt already implements, bit for bit and
+        // non-transitively - the two must say the SAME thing, because a client that withheld more
+        // than the server refuses would leave the server's handle arm live with no records to
+        // read, and a client that withheld less is the defect above.
+        //
+        // THIS FILE USED TO HOLD ITS OWN COPY of the four P4a rows (P3b/P4b R-5 found six
+        // statements of one rule and two of them drifted). The rows moved to the .def with R-5
+        // and this reader was left pointing at the copy deliberately, because PipeFill.cpp is the
+        // contract package's file for the phase; wave 2-D package D3 switches it over.
+        //
+        // THE ARGUMENT IS MASKED TO kMGPipeP4aFamilySubsystems, AND THAT IS THE WHOLE DIFFERENCE
+        // BETWEEN A REWRITE AND A BEHAVIOUR CHANGE. The .def carries SIX rows; the table deleted
+        // from here carried FOUR, and this predicate is `wants()`'s fourth conjunct for P4a's
+        // families only. Reading all six unmasked would make the CLIENT withhold bit 8's
+        // vertex-input emissions at a mask with bit 7 clear - P3a's own rule, which this gate has
+        // never narrowed and which TextureEmitTest's
+        // EveryDKTwoDependencyRowGatesItsOwnFamilyAndTheMirrorPairsStayLive pins by name ("bit 8
+        // alone, with bit 7 clear: P3a's own rule, which this table must not touch"). Bit 13 is
+        // not narrowed here either; it asks the table for itself in P5eFamilyIsLive below,
+        // because bit 13's conjunct is bit 13's own. So the ROWS now come from one place and WHO
+        // each gate speaks for is still each gate's.
+        //
+        // The P4a-specific COVERAGE assertion stays for the same reason: a fifth P4a family
+        // without a row in the .def has to be a compile error, not a silent "depends on nothing".
         constexpr Uint64 P4aFamilyDependencyBits(Uint64 subsystem) {
-            Uint64 required = 0;
-            for (const P4aFamilyDependencyRow& row : kMGPipeP4aFamilyDependencies) {
-                if ((subsystem & row.Family) != 0) required |= row.Requires;
-            }
-            return required;
+            return MGPipeSubsystemRequires(subsystem & kMGPipeP4aFamilySubsystems);
         }
 
-        // The table covers the four families this phase migrates and nothing else, so a fifth
-        // family added to kMGPipeP4aFamilySubsystems without a row here does not silently inherit
-        // "depends on nothing".
         constexpr Uint64 P4aFamilyDependencyTableCoverage() {
             Uint64 covered = 0;
-            for (const P4aFamilyDependencyRow& row : kMGPipeP4aFamilyDependencies) covered |= row.Family;
+            for (const MGPipeSubsystemDependencyRow& row : kMGPipeSubsystemDependencies) covered |= row.Family;
             return covered;
         }
-        static_assert(P4aFamilyDependencyTableCoverage() == kMGPipeP4aFamilySubsystems,
-                      "every P4a family needs a D-K2 dependency row, even an empty one");
+        static_assert((P4aFamilyDependencyTableCoverage() & kMGPipeP4aFamilySubsystems) ==
+                          kMGPipeP4aFamilySubsystems,
+                      "every P4a family needs a D-K2 dependency row in MG_Pipe/SubsystemDeps.def, "
+                      "even an empty one");
         static_assert(P4aFamilyDependencyBits(kMGPipeSubsystemFramebuffer) ==
                           kMGPipeSubsystemTextureResources,
                       "bit 9 requires bit 10");
@@ -1602,14 +1567,18 @@ namespace MobileGL::MG_Pipe {
         // server whose four binding-point walks still read the frontend, so a record sent to it
         // would be stored and never looked at while the client latched its suppressor.
         //
-        // AND BIT 13 REQUIRES BIT 7, for bit 11's reason one family over: every
-        // MGPBufferRange::Res names a Buffer handle and only bit 7 puts one in the resource
-        // slot table, so without it every EnsureBufferResourceForHandle on the server would
-        // mint a twin with no record behind it. Withholding the whole family is the safe
-        // direction - the legacy frontend walk runs untouched on both sides.
+        // AND BIT 13'S OWN DEPENDENCY ROW IS READ FROM MG_Pipe/SubsystemDeps.def, exactly as
+        // P4a's four are (P3b/P4b R-5, switched over by wave 2-D package D3). It used to be the
+        // hand-coded `(pushMask & kMGPipeSubsystemResources) == 0` below - the sixth statement of
+        // the rule, and the one that sat fifteen lines from the block stating the other three,
+        // which is how "THREE OF THEM" survived two phases. Its reason is the table's: every
+        // MGPBufferRange::Res names a Buffer handle and only bit 7 puts one in the resource slot
+        // table, so without it every EnsureBufferResourceForHandle on the server would mint a
+        // twin with no record behind it. Withholding the whole family is the safe direction - the
+        // legacy frontend walk runs untouched on both sides.
         Bool P5eFamilyIsLive(Uint64 subsystem, Uint64 pushMask) {
             if ((subsystem & kMGPipeSubsystemBufferBindings) == 0) return true;
-            if ((pushMask & kMGPipeSubsystemResources) == 0) return false;
+            if (!MGPipeSubsystemDependenciesAreSet(kMGPipeSubsystemBufferBindings, pushMask)) return false;
 #if MOBILEGL_BUILD_DISAGGREGATED
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
                 return MG_Remote::Client::CapsMirrorInstance().ServerConsumes(

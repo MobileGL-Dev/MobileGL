@@ -691,24 +691,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // family bit, so an operator can put the whole binding-point family back on the
         // frontend walk with one cleared bit.
         //
-        // BIT 13 REQUIRES BIT 7, refused here rather than half-run, in
-        // ResolveVertexInputSubsystemArm's exact shape and for its exact reason: every
-        // MGPBufferRange::Res is resolved through the resource slot table and only bit 7 puts
-        // twins there, so the pair would produce a walk in which every point logged once and
-        // `continue`d WITHOUT unbinding - every draw then reading through whatever the driver
-        // last had at that point.
+        // THE BINDING-POINT FAMILY'S DEPENDENCY ROW IS READ FROM MG_Pipe/SubsystemDeps.def
+        // (P3b/P4b R-5, switched over by wave 2-D package D3), refused here rather than half-run,
+        // in ResolveVertexInputSubsystemArm's exact shape. The hand-rolled
+        // `bitSet && !resourcesBitSet` this used to be was the sixth statement of D-K2's rule -
+        // the .def's own "WHO READS IT" section names this function, and now it does. The reason
+        // is the table's and is printed from it.
         Bool ResolveBufferBindingSubsystemArm() {
             if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return false;
-            const Bool bitSet =
-                (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemBufferBindings) != 0;
-            const Bool resourcesBitSet =
-                (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemResources) != 0;
-            if (bitSet && !resourcesBitSet) {
+            const Uint64 mask = MG_Config::Features.PipePush;
+            const Bool bitSet = (mask & MG_Pipe::kMGPipeSubsystemBufferBindings) != 0;
+            if (bitSet &&
+                !MG_Pipe::MGPipeSubsystemDependenciesAreSet(MG_Pipe::kMGPipeSubsystemBufferBindings, mask)) {
+                const Uint64 required =
+                    MG_Pipe::MGPipeSubsystemRequires(MG_Pipe::kMGPipeSubsystemBufferBindings);
                 MGLOG_E("MGPipe: kMGPipeSubsystemBufferBindings (bit 13) is set but "
-                        "kMGPipeSubsystemResources (bit 7) is clear; every MGPBufferRange::Res "
-                        "resolves through the resource slot table, which only bit 7 populates - "
-                        "REFUSING bit 13 and running the legacy binding-point walk. Set bit 7 as "
-                        "well, or clear both");
+                        "MOBILEGL_PIPE_PUSH=0x%llx does not carry every bit "
+                        "MG_Pipe/SubsystemDeps.def says it requires (requires 0x%llx, missing "
+                        "0x%llx): %s - REFUSING bit 13 and running the legacy binding-point walk. "
+                        "Set every bit of the row, or clear bit 13",
+                        static_cast<unsigned long long>(mask),
+                        static_cast<unsigned long long>(required),
+                        static_cast<unsigned long long>(required & ~mask),
+                        MG_Pipe::MGPipeSubsystemDependencyWhy(MG_Pipe::kMGPipeSubsystemBufferBindings));
                 return false;
             }
             MGLOG_D("MGPipe: Espryt binding-point family runs the %s arm",

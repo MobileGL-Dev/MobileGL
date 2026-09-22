@@ -2952,24 +2952,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         Bool ResolveVertexInputSubsystemArm() {
-            const Bool bitSet = (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemVertexInput) != 0;
-            const Bool resourcesBitSet =
-                (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemResources) != 0;
-            // BIT 8 REQUIRES BIT 7, and it is refused here rather than half-run. The vertex-input
-            // handle arm resolves every attribute's driver buffer id through
-            // FindBufferResourceForHandle, i.e. out of the resource SLOT TABLE - and only bit 7
-            // puts twins in that table (with bit 7 clear EnsureBufferResource takes the legacy
-            // arm and parks the twin on PipeResource::m_backend instead). The pair therefore
-            // produced a walk in which every BindAttributeBufferByHandle logged once and
-            // `continue`d WITHOUT disabling the array, so every draw fetched through whatever
-            // pointer the driver VAO last held. The mirror pair (bit 7 set, bit 8 clear) is fine:
-            // the legacy VAO walk calls BindAttributeBuffer -> EnsureBufferResource, which
-            // dispatches to the handle arm by itself.
-            if (bitSet && !resourcesBitSet) {
-                MGLOG_E("MGPipe: kMGPipeSubsystemVertexInput (bit 8) is set but kMGPipeSubsystemResources "
-                        "(bit 7) is clear; the vertex-input handle arm resolves attribute buffer ids "
-                        "through the resource slot table, which only bit 7 populates - REFUSING bit 8 and "
-                        "running the legacy vertex-input arm. Set bit 7 as well, or clear both");
+            const Uint64 mask = MG_Config::Features.PipePush;
+            const Bool bitSet = (mask & MG_Pipe::kMGPipeSubsystemVertexInput) != 0;
+            // The vertex-input family's row, READ FROM MG_Pipe/SubsystemDeps.def (P3b/P4b R-5,
+            // switched over by wave 2-D package D3) rather than restated as the hand-rolled
+            // `bitSet && !resourcesBitSet` this function used to carry - one of the six statements
+            // of D-K2's rule that R-5 found with nothing comparing them. The table's own sentence
+            // is what the refusal prints. The mirror pair (bit 7 set, bit 8 clear) is fine - the
+            // legacy VAO walk calls BindAttributeBuffer -> EnsureBufferResource, which dispatches
+            // to the handle arm by itself - and lives with the other mirror pairs in MGPipe.h.
+            if (bitSet && !MG_Pipe::MGPipeSubsystemDependenciesAreSet(MG_Pipe::kMGPipeSubsystemVertexInput, mask)) {
+                MGLOG_E("MGPipe: kMGPipeSubsystemVertexInput (bit 8) is set but MOBILEGL_PIPE_PUSH="
+                        "0x%llx does not carry every bit MG_Pipe/SubsystemDeps.def says it requires "
+                        "(requires 0x%llx, missing 0x%llx): %s - REFUSING bit 8 and running the "
+                        "legacy vertex-input arm. Set every bit of the row, or clear bit 8",
+                        static_cast<unsigned long long>(mask),
+                        static_cast<unsigned long long>(
+                            MG_Pipe::MGPipeSubsystemRequires(MG_Pipe::kMGPipeSubsystemVertexInput)),
+                        static_cast<unsigned long long>(
+                            MG_Pipe::MGPipeSubsystemRequires(MG_Pipe::kMGPipeSubsystemVertexInput) & ~mask),
+                        MG_Pipe::MGPipeSubsystemDependencyWhy(MG_Pipe::kMGPipeSubsystemVertexInput));
                 return false;
             }
 #if MOBILEGL_PIPE_LEGACY_MEMOS
@@ -4228,14 +4230,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // Fatal{PipeLegacyMemosDisabled, ...} rather than running the very arm the operator asked
     // to have taken away and handing back a result measured on it.
     namespace {
-        // Shared by the three dependent families, so the refusal reads the same way three times
-        // and a future fourth cannot invent a different wording. Returns true when the
-        // dependency is missing, having said so once.
-        Bool PipeSubsystemDependencyMissing(Uint64 mask, Uint64 dependencyBit, const char* what) {
-            if ((mask & dependencyBit) != 0) return false;
-            MGLOG_E("MGPipe: %s - REFUSING the dependent bit and running the legacy arm. "
-                    "Set both bits, or clear both",
-                    what);
+        // Shared by the dependent families, so the refusal reads the same way every time and a
+        // future family cannot invent a different wording. Returns true when the dependency is
+        // missing, having said so once.
+        //
+        // P3b/P4b wave 2-D package D3: THE ROWS ARE READ FROM MG_Pipe/SubsystemDeps.def AND ARE
+        // NO LONGER RESTATED HERE. This function used to take a single dependency BIT written out
+        // at each call site - the server's own copy of the rule, one of the six statements R-5
+        // found and two of which had drifted - and a family with two required bits needed two
+        // guarded calls with two hand-written sentences. It now takes the FAMILY and asks
+        // MGPipeSubsystemDependenciesAreSet, so the set of required bits, the subset that is
+        // actually missing and the reason all come from the table; `what` is only the family's
+        // own name. The client's gate reads the same rows
+        // (MG_Impl/Pipe/PipeFill.cpp P4aFamilyDependencyBits), which is what makes
+        // MG_Test/Backend/DirectGLES/SubsystemDepsTest.cpp's comparison of the two a comparison
+        // of two readers rather than of two copies.
+        Bool PipeSubsystemDependencyMissing(Uint64 mask, Uint64 family, const char* what) {
+            if (MG_Pipe::MGPipeSubsystemDependenciesAreSet(family, mask)) return false;
+            const Uint64 required = MG_Pipe::MGPipeSubsystemRequires(family);
+            MGLOG_E("MGPipe: %s is set but MOBILEGL_PIPE_PUSH=0x%llx does not carry every bit "
+                    "MG_Pipe/SubsystemDeps.def says it requires (requires 0x%llx, missing 0x%llx): "
+                    "%s - REFUSING the dependent bit and running the legacy arm. Set every bit of "
+                    "the row, or clear the family's own",
+                    what, static_cast<unsigned long long>(mask),
+                    static_cast<unsigned long long>(required),
+                    static_cast<unsigned long long>(required & ~mask),
+                    MG_Pipe::MGPipeSubsystemDependencyWhy(family));
             return true;
         }
 
@@ -4344,17 +4364,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const Bool bitSet = (mask & MG_Pipe::kMGPipeSubsystemFramebuffer) != 0;
         Bool refused = false;
         if (bitSet) {
-            // BIT 9 REQUIRES BIT 10. Every MGPSurface::Res in the record names a Texture or a
-            // Renderbuffer handle, and only bit 10 puts twins in those two slot tables; without
-            // it every attachment lookup would miss and the walk would leave the driver
-            // framebuffer holding whatever the last owner attached. The mirror pair (bit 10 set,
-            // bit 9 clear) is FINE: the legacy FBO sync reaches the texture twin through
-            // SyncTextureObjectToBackend, which dispatches to the handle arm by itself.
-            refused = PipeSubsystemDependencyMissing(
-                mask, MG_Pipe::kMGPipeSubsystemTextureResources,
-                "kMGPipeSubsystemFramebuffer (bit 9) is set but kMGPipeSubsystemTextureResources "
-                "(bit 10) is clear; MGPSurface::Res names a Texture or Renderbuffer handle and "
-                "only bit 10 populates those slot tables");
+            // The framebuffer family's row, from MG_Pipe/SubsystemDeps.def. The mirror pair (bit
+            // 10 set, bit 9 clear) is FINE - the legacy FBO sync reaches the texture twin through
+            // SyncTextureObjectToBackend, which dispatches to the handle arm by itself - and that
+            // is stated with the other mirror pairs in MGPipe.h, beside the table it is the
+            // complement of, rather than here.
+            refused = PipeSubsystemDependencyMissing(mask, MG_Pipe::kMGPipeSubsystemFramebuffer,
+                                                     "kMGPipeSubsystemFramebuffer (bit 9)");
             // D-C3: the wire array is Color[8] and this is the driver's RAW ES cap, which is
             // NOT clamped to 8 on the GLES path (ValidateColorAttachmentInRange rejects at or
             // above it, and BackendObject_DirectGLES publishes it verbatim). Every campaign
@@ -4403,42 +4419,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const Bool bitSet = (mask & MG_Pipe::kMGPipeSubsystemTextureResources) != 0;
         Bool refused = false;
         if (bitSet) {
-            // BIT 10 REQUIRES BIT 7. A buffer texture's MGPResourceDesc::BufferForTexBuffer
-            // names a Buffer handle and only bit 7 puts twins in the resource slot table, so
-            // with bit 7 clear every glTexBuffer would resolve to no storage at all. The mirror
-            // pair (bit 7 set, bit 10 clear) is FINE and is P3a's shipped configuration.
-            refused = PipeSubsystemDependencyMissing(
-                mask, MG_Pipe::kMGPipeSubsystemResources,
-                "kMGPipeSubsystemTextureResources (bit 10) is set but kMGPipeSubsystemResources "
-                "(bit 7) is clear; a buffer texture's BufferForTexBuffer names a Buffer handle "
-                "and only bit 7 populates the resource slot table");
-            // BIT 10 REQUIRES BIT 11 - D-K2's FOURTH ROW (ID-14/ID-15), and it is the exact
-            // mirror of ResolveVertexInputSubsystemArm's bit-8-requires-bit-7 refusal above:
-            // the same "the handle arm resolves through a slot table only the other bit
-            // populates" shape, refused here rather than half-run, with the legacy arm as the
-            // fall-back. MGPTextureParams::BuiltinSampler is a SamplerCso HANDLE and only bit 11
-            // mints sampler CSOs (contract c0b's four unconditional mints deliberately exclude
-            // it), so with bit 11 clear every set_texture_params would carry a null there - and
-            // the applier's verdict for a null BuiltinSampler is Fatal{ProtocolCorruption}, not
-            // a decline. The brief's original sentence "bit 10 without 11 is fine" is WITHDRAWN
-            // for P4a as built; package F pins this arm at 0x5ff.
+            // The texture family's row, from MG_Pipe/SubsystemDeps.def. It is the ONLY row with
+            // two required bits, and it used to be TWO guarded calls here with the pair of
+            // sentences written out by hand - bit 7 for a buffer texture's BufferForTexBuffer,
+            // and bit 11, D-K2's FOURTH ROW (ID-14/ID-15), for MGPTextureParams::BuiltinSampler.
+            // One call now asks the table for both, and the refusal names whichever of the two is
+            // actually missing instead of always naming the first. Package F pins this arm at
+            // 0x5ff and CMakeLists.txt's refusal lane at 0x7ff; both are rows of the table now.
             //
-            // THE TWO MIRROR PAIRS THAT STAY FINE, said out loud because an unreachable branch
-            // that says something different is how the reachable one drifts:
-            //   - bit 7 set, bit 10 clear: P3a's shipped configuration (above).
-            //   - bit 11 set, bit 10 clear: refused one function down, by the bit-11-requires-
-            //     bit-10 row, so the pair is symmetric and neither half can run alone. That
-            //     symmetry is the point: bits 10 and 11 are now ONE arm with two switches, and
-            //     the only two masks that reach the texture handle arm are "both set" and
-            //     "neither set".
-            if (!refused) {
-                refused = PipeSubsystemDependencyMissing(
-                    mask, MG_Pipe::kMGPipeSubsystemSamplers,
-                    "kMGPipeSubsystemTextureResources (bit 10) is set but kMGPipeSubsystemSamplers "
-                    "(bit 11) is clear; MGPTextureParams::BuiltinSampler is a SamplerCso handle, "
-                    "only bit 11 mints sampler CSOs, and the applier's verdict for a null one is "
-                    "Fatal{ProtocolCorruption}");
-            }
+            // The mirror pairs live in MGPipe.h with the rest. The one worth remembering at this
+            // call site is that bits 10 and 11 are SYMMETRIC - each row names the other - so the
+            // only two masks that reach the texture handle arm are "both set" and "neither set".
+            refused = PipeSubsystemDependencyMissing(mask, MG_Pipe::kMGPipeSubsystemTextureResources,
+                                                     "kMGPipeSubsystemTextureResources (bit 10)");
         }
         const BufferImpl::PipeSubsystemArmVerdict verdict = BufferImpl::ClassifyPipeSubsystemArm(
             bitSet && !refused, MG_Config::Features.PipeLegacyMemos,
@@ -4469,23 +4462,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const Bool bitSet = (mask & MG_Pipe::kMGPipeSubsystemSamplers) != 0;
         Bool refused = false;
         if (bitSet) {
-            // BIT 11 REQUIRES BIT 10, and this is the pair G12 drives at 0x9ff. Every
-            // MGPBoundView::Texture and every MGPImageView::Res names a Texture handle, and
-            // only bit 10 puts one in the slot table; without it every per-unit lookup would
-            // miss and the walk would `continue` WITHOUT unbinding - i.e. every draw would
-            // sample through whatever the unit last held, which is exactly the shape the
-            // bit-8-without-bit-7 refusal exists to prevent one family over.
-            //
-            // THE MIRROR PAIR (bit 10 set, bit 11 clear) IS NOT FINE EITHER, and that is D-K2's
-            // fourth row (ID-14/ID-15): it is refused by ResolveTextureResourceSubsystemArm
-            // above, because MGPTextureParams::BuiltinSampler is a SamplerCso handle only bit 11
-            // mints. So this dependency is SYMMETRIC - the two bits are one arm with two
-            // switches - and this sentence used to claim the opposite.
-            refused = PipeSubsystemDependencyMissing(
-                mask, MG_Pipe::kMGPipeSubsystemTextureResources,
-                "kMGPipeSubsystemSamplers (bit 11) is set but kMGPipeSubsystemTextureResources "
-                "(bit 10) is clear; every MGPBoundView::Texture and MGPImageView::Res names a "
-                "Texture handle and only bit 10 populates that slot table");
+            // The sampler family's row, from MG_Pipe/SubsystemDeps.def, and this is the pair G12
+            // drives at 0x9ff. Its mirror (bit 10 set, bit 11 clear) is NOT fine either - that is
+            // D-K2's fourth row, refused by ResolveTextureResourceSubsystemArm above - so the
+            // dependency is SYMMETRIC and the table carries both halves.
+            refused = PipeSubsystemDependencyMissing(mask, MG_Pipe::kMGPipeSubsystemSamplers,
+                                                     "kMGPipeSubsystemSamplers (bit 11)");
         }
         const BufferImpl::PipeSubsystemArmVerdict verdict = BufferImpl::ClassifyPipeSubsystemArm(
             bitSet && !refused, MG_Config::Features.PipeLegacyMemos,

@@ -222,6 +222,18 @@ namespace MobileGL::MG_Pipe {
         return (pushMask & required) == required;
     }
 
+    // The ROW'S OWN REASON, so a reader that refuses prints the table's sentence instead of a
+    // copy of it (P3b/P4b wave 2-D package D3). Empty for a family whose row requires nothing,
+    // which is the same answer as "there is nothing to explain": a reader only asks after
+    // MGPipeSubsystemDependenciesAreSet has already said no, and that cannot happen for a row
+    // that requires 0.
+    inline constexpr const char* MGPipeSubsystemDependencyWhy(Uint64 subsystem) {
+        for (const MGPipeSubsystemDependencyRow& row : kMGPipeSubsystemDependencies) {
+            if ((subsystem & row.Family) != 0 && row.Requires != 0) return row.Why;
+        }
+        return "";
+    }
+
     static_assert(MGPipeSubsystemRequires(kMGPipeSubsystemTextureResources) ==
                       (kMGPipeSubsystemResources | kMGPipeSubsystemSamplers),
                   "D-K2's fourth row (bit 10 requires bit 11) has gone missing again");

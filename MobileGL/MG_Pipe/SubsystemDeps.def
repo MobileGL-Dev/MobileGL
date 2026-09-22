@@ -28,23 +28,34 @@
 // MG_Remote/FatalFamilies.def - no generator reads it - and it carries pure bit constants, so
 // including it from MGPipe.h keeps check_include_closure.py's value-header rule satisfied.
 //
-// WHO READS IT. MGPipe.h turns it into kMGPipeSubsystemDependencies[] and
-// MGPipeSubsystemRequires(). The two executable statements of the rule are:
+// WHO READS IT. MGPipe.h turns it into kMGPipeSubsystemDependencies[],
+// MGPipeSubsystemRequires(), MGPipeSubsystemDependenciesAreSet() and
+// MGPipeSubsystemDependencyWhy(). The two executable statements of the rule read those, and as
+// of wave 2-D package D3 they read NOTHING ELSE - every hand-written copy is gone:
 //
-//   CLIENT dependency check   MG_Impl/Pipe/PipeFill.cpp's kMGPipeP4aFamilyDependencies /
-//                             P4aFamilyDependenciesAreSet (bits 9-12), plus P5eFamilyIsLive's
-//                             hand-coded bit-13 row.
+//   CLIENT dependency check   MG_Impl/Pipe/PipeFill.cpp's P4aFamilyDependencyBits /
+//                             P4aFamilyDependenciesAreSet (bits 9-12) and P5eFamilyIsLive
+//                             (bit 13). The local kMGPipeP4aFamilyDependencies[] is deleted;
+//                             what stays is the P4a-specific COVERAGE static_assert, because
+//                             that gate answers for four of these six families and a fifth P4a
+//                             family without a row here must still be a compile error.
 //   SERVER consumer gate      MG_Backend/DirectGLES/Managers.cpp's four
-//                             Resolve<Family>SubsystemArm() over PipeSubsystemDependencyMissing
-//                             (bits 9-12), plus ResolveVertexInputSubsystemArm (bit 8) and
-//                             DirectGLES.cpp's ResolveBufferBindingSubsystemArm (bit 13).
+//                             Resolve<Family>SubsystemArm() over PipeSubsystemDependencyMissing,
+//                             which now takes the FAMILY rather than a literal bit (bits 9-12),
+//                             plus ResolveVertexInputSubsystemArm (bit 8) and DirectGLES.cpp's
+//                             ResolveBufferBindingSubsystemArm (bit 13). The texture family's
+//                             two guarded calls collapse into one, and the refusal names
+//                             whichever required bit is actually missing instead of always the
+//                             first, because the missing set is computed from the row.
 //
-// THEY ARE NOT SWITCHED OVER IN THIS COMMIT, deliberately: PipeFill.cpp is the contract
-// package's file for the whole phase (TextureEmit.h states that rule) and Managers.cpp belongs
-// to wave 2-D package D1 while it is in flight. The anti-drift property does not wait for that,
-// because MG_Test/Backend/DirectGLES/SubsystemDepsTest.cpp drives BOTH readers at every
+// The rows moved here one commit before the readers did (R-5 landed with PipeFill.cpp and
+// Managers.cpp belonging to packages in flight), and the anti-drift property never waited for
+// that: MG_Test/Backend/DirectGLES/SubsystemDepsTest.cpp drives BOTH readers at every
 // interesting mask and compares them against these rows - a change to either side alone reds.
-// Switching the two readers to read this table is two one-line changes for the integrator.
+// It is now a comparison of two READERS rather than of two copies, which is strictly weaker as
+// a drift detector and strictly stronger as a guarantee; it is kept because the two sides still
+// fold in reasons of their own (the server's own family bit, D-C3's wire-caps refusal, the
+// client's consumer and wired conjuncts) and those can still disagree.
 //
 // THE ROWS ARE NOT TRANSITIVE, and that is load-bearing rather than an oversight: each reader
 // tests the required BITS against MOBILEGL_PIPE_PUSH alone, never the other family's liveness,
