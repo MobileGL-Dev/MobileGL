@@ -1153,8 +1153,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 state.BoundShaderImages[unit].InternalFormat));
         if (format == VK_FORMAT_UNDEFINED) format = MG_Util::ConvertTextureInternalFormatToVkEnum(internalFormat);
         const auto feature = storage ? VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_BIT : VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT;
-        if (format == VK_FORMAT_UNDEFINED || !BufferFormatSupportsFeature(m_physicalDevice, format, feature))
-            WireDescriptorFatal("texel-buffer-native-format@P7");
+        if (format == VK_FORMAT_UNDEFINED || !BufferFormatSupportsFeature(m_physicalDevice, format, feature)) {
+            // P7 A.5, a decline (rule I (a)). GL's buffer-texture format list is wider than what
+            // Vulkan mandates for texel buffers - GL_RGB32{F,I,UI} and the 16-bit UNORM members
+            // are the realistic misses on a real driver - so this is a device capability gap, not
+            // anything the application did wrong, and nothing it could have sent differently.
+            //
+            // The placeholder is the RIGHT answer here, where it was not for the unaligned range
+            // above, and the difference is whether a correct answer exists at all. There, the
+            // bytes are addressable and only the descriptor cannot name them, so a placeholder
+            // would have hidden a fixable gap behind silently dropped writes. Here the device
+            // cannot represent this format as a texel buffer in any form - so the honest
+            // observable is monolith's for a missing view: the fetch reads zeros and the draw
+            // survives. AcquireUnboundTexelBufferView falls back to the R32 member of the
+            // shader's numeric class, whose texel-buffer support is mandatory, so the fallback
+            // itself cannot fail for want of device features.
+            MGLOG_E_ONCE("ResolveWireTexelBufferDescriptor: binding %u wants VkFormat %d as a %s texel buffer and "
+                         "this device does not support it; the binding falls back to the zero placeholder and the "
+                         "fetch reads zeros (texel-buffer-native-format)",
+                         binding, static_cast<Int>(format), storage ? "storage" : "uniform");
+            return placeholder();
+        }
         const VkDeviceSize texelSize = MG_Util::GetSizedInternalFormatSizeInBytes(internalFormat);
         VkDeviceSize start = 0, size = 0;
         if (texelSize == 0 || !ResolveWireRange(record.Desc.BufOffset, record.Desc.BufSize, slice.size, start, size)) return false;
