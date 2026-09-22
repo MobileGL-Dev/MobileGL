@@ -2,10 +2,10 @@
 # Regenerate: python3 scripts/link_ratchet.py --build-dir <dir> \
 #               --baseline scripts/data/link_ratchet_baseline.txt \
 #               --write-baseline scripts/data/link_ratchet_baseline.txt
-# base commit : 78b7d6beacbebb89a5cf8aa412dd3739be5f1247
+# base commit : 4bee13136585c1333823796500ed12a86b991e61
 # configure   : -DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON -DMOBILEGL_PIPE_PUSH=ON -DCMAKE_BUILD_TYPE=Release
 # build dir   : build-split
-# count       : 186
+# count       : 173
 #
 # One demangled symbol per line. A trailing ` # note` is an annotation the parser
 # ignores; `# P13` marks a symbol that cannot fall before P13 establishes module
@@ -78,12 +78,8 @@ MobileGL::MG_State::GLState::GetBufferBackendOps()
 MobileGL::MG_State::GLState::MGPipeTextureLegacyArmScope::MGPipeTextureLegacyArmScope()
 MobileGL::MG_State::GLState::MGPipeTextureLegacyArmScope::~MGPipeTextureLegacyArmScope()
 MobileGL::MG_State::GLState::ProgramArtifactsSchemaFingerprint()
-MobileGL::MG_State::GLState::ProgramObject::AllocateLifetimeId()
-MobileGL::MG_State::GLState::ProgramObject::AttachShader(std::shared_ptr<MobileGL::MG_State::GLState::ShaderObject> const&)
 MobileGL::MG_State::GLState::ProgramObject::JoinPendingLink() const
 MobileGL::MG_State::GLState::ProgramObject::JoinPendingSpirv() const
-MobileGL::MG_State::GLState::ProgramObject::Link(bool)
-MobileGL::MG_State::GLState::ProgramObject::~ProgramObject()
 MobileGL::MG_State::GLState::RenderbufferObject::GetExternalIndex() const
 MobileGL::MG_State::GLState::RenderbufferObject::GetHeight() const
 MobileGL::MG_State::GLState::RenderbufferObject::GetInternalFormat() const
@@ -111,22 +107,13 @@ MobileGL::MG_State::GLState::SamplerObject::GetWrapS() const
 MobileGL::MG_State::GLState::SamplerObject::GetWrapT() const
 MobileGL::MG_State::GLState::SamplerObject::SamplerObject(unsigned int)
 MobileGL::MG_State::GLState::SamplerObject::SetCompareMode(MobileGL::SamplerCompareMode)
-MobileGL::MG_State::GLState::SamplerObject::SetLodRange(float, float)
 MobileGL::MG_State::GLState::SamplerObject::SetMagFilter(MobileGL::SamplerFilterMode)
 MobileGL::MG_State::GLState::SamplerObject::SetMinFilter(MobileGL::SamplerFilterMode)
 MobileGL::MG_State::GLState::SamplerObject::SetMipmapMode(MobileGL::SamplerMipmapMode)
 MobileGL::MG_State::GLState::SamplerObject::SetSamplerCompareFunc(MobileGL::SamplerCompareFunc)
-MobileGL::MG_State::GLState::SamplerObject::SetWrapR(MobileGL::SamplerWrapMode)
-MobileGL::MG_State::GLState::SamplerObject::SetWrapS(MobileGL::SamplerWrapMode)
-MobileGL::MG_State::GLState::SamplerObject::SetWrapT(MobileGL::SamplerWrapMode)
 MobileGL::MG_State::GLState::SamplerObject::~SamplerObject()
 MobileGL::MG_State::GLState::SamplesAsIncompleteTexture(MobileGL::MG_State::GLState::ITextureObject const*, MobileGL::MG_State::GLState::SamplerObject const*)
 MobileGL::MG_State::GLState::SetBufferBackendOps(MobileGL::MG_State::GLState::BufferBackendOps const*)
-MobileGL::MG_State::GLState::ShaderObject::Compile()
-MobileGL::MG_State::GLState::ShaderObject::DropCompileNode() const
-MobileGL::MG_State::GLState::ShaderObject::JoinPendingCompile() const
-MobileGL::MG_State::GLState::ShaderObject::ReleaseCompileNode()
-MobileGL::MG_State::GLState::ShaderObject::SetShaderSource(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&)
 MobileGL::MG_State::GLState::TextureObject1D::TextureObject1D(unsigned int)
 MobileGL::MG_State::GLState::TextureObject2D::TextureObject2D(unsigned int)
 MobileGL::MG_State::GLState::TextureObject2DCube::TextureObject2DCube(unsigned int)

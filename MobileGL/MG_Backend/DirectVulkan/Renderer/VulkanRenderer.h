@@ -405,7 +405,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Int padding[3] = {0, 0, 0};
         };
 
+        // P7 wave 2-B2, CONTRACT-P7 §5.2 (B'): THE FRONTEND MEMBERS ARE PULL-BUILD ONLY. In a
+        // disaggregated build the monolith arm blits and generates depth mips with the baked
+        // modules (WireColorBlit.inc, WireDepthMipmap.inc), so no DirectVulkan object holds a
+        // ProgramObject, a ShaderObject or a SamplerObject any more - which is what takes
+        // ProgramObject::{AllocateLifetimeId, AttachShader, Link, ~ProgramObject},
+        // ShaderObject::{SetShaderSource, Compile, JoinPendingCompile, ReleaseCompileNode,
+        // DropCompileNode} and SamplerObject::{SetWrapS, SetWrapT, SetWrapR, SetLodRange} out
+        // of the link ratchet's `p7-magma` bucket (§4.2). The destructor of a SharedPtr member
+        // is a reference too, so the MEMBER has to go and not only its construction.
+        //
+        // The structs stay, empty, so ShutdownBlitResources and the two `= {}` assignments read
+        // the same on both builds.
         struct BlitResources {
+#if !MOBILEGL_BUILD_DISAGGREGATED
             SharedPtr<MG_State::GLState::ProgramObject> program;
             SharedPtr<MG_State::GLState::SamplerObject> nearestSampler;
             SharedPtr<MG_State::GLState::SamplerObject> linearSampler;
@@ -413,15 +426,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Int dstRectLocation = -1;
             Int surfaceTransformLocation = -1;
             Uint32 samplerBinding = 0;
+#endif
         };
 
         struct DepthMipmapResources {
+#if !MOBILEGL_BUILD_DISAGGREGATED
             SharedPtr<MG_State::GLState::ProgramObject> program;
             Int srcRectLocation = -1;
             Int dstRectLocation = -1;
             Int surfaceTransformLocation = -1;
             Int srcTexelSizeLocation = -1;
             Uint32 samplerBinding = 0;
+#endif
         };
 
         // A single-sample staging image for multisample-resolve blits that also have to change
@@ -1817,7 +1833,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool MaterializePendingDepthStencilClearForDefaultFramebuffer(
             VkCommandBuffer commandBuffer, const MG_State::GLState::FramebufferAttachmentObject& attachment,
             const ClearAttachmentPayload& payload);
+#if !MOBILEGL_BUILD_DISAGGREGATED
+        // P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')): the hidden blit program's pipeline. A
+        // disaggregated build has no hidden program on either arm, so this has neither a body
+        // nor a caller there.
         VkPipeline GetOrCreateBlitPipeline(const RenderPassEntry& renderPassEntry);
+#endif
         Bool GenerateDepthMipmapWithShader(FrameContext::FrameData& frame,
                                            MG_State::GLState::ITextureObject& texture,
                                            VkTextureManager::TextureResource& resource,

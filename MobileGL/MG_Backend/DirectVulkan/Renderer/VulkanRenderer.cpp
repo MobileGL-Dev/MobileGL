@@ -1452,6 +1452,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     namespace {
         static constexpr Uint32 kDescriptorSetsPerFrame = 64;
+#if !MOBILEGL_BUILD_DISAGGREGATED
+        // P7 wave 2-B2, CONTRACT-P7 §5.2 (B'): THE HIDDEN GL PROGRAMS ONLY EXIST IN THE PULL
+        // BUILD NOW. In a disaggregated build the monolith arm drives WireColorBlit.inc and
+        // WireDepthMipmap.inc - the baked modules the wire arm already uses - so nothing below
+        // this line is compiled: no GLSL text, no hidden object ids, no ShaderObject,
+        // ProgramObject or SamplerObject construction on a DirectVulkan path. That is what
+        // takes those three classes out of the link-closure ratchet's `p7-magma` bucket (§4.2),
+        // and the reason it is an `#if` and not a runtime branch is exactly that: a runtime
+        // early return leaves the symbols referenced.
+        //
+        // The pull build keeps every statement below byte for byte, which is what G1 pins.
         static constexpr Uint kHiddenBlitProgramId = 0xFFFFFFF0u;
         static constexpr Uint kHiddenBlitVertexShaderId = 0xFFFFFFF1u;
         static constexpr Uint kHiddenBlitFragmentShaderId = 0xFFFFFFF2u;
@@ -1530,6 +1541,7 @@ void main() {
     gl_FragDepth = 0.25 * (depth0 + depth1 + depth2 + depth3);
 }
 )";
+#endif // !MOBILEGL_BUILD_DISAGGREGATED
 
 
         static Uint32 ComputeFullMipLevelCount(const IntVec3& baseTexelSize) {
@@ -4521,11 +4533,18 @@ void main() {
 
     Bool VulkanRenderer::InitializeBlitResources() {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // P5f fv: both window and headless transports use WireFramebuffer's native
-        // operations. These hidden programs are frontend objects, so even creating
-        // them on the server would retain a client compiler/allocator dependency.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return true;
-#endif
+        // P5f fv gave this an early return for every non-monolith transport, because the hidden
+        // programs are frontend objects and creating them on the server would retain a client
+        // compiler/allocator dependency. P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')) takes the last
+        // step: in a disaggregated build there is NOTHING TO INITIALIZE on any transport,
+        // because the monolith arm now blits with WireColorBlit.inc's baked module too.
+        //
+        // AN `#if` AND NOT A RUNTIME BRANCH, which is the whole point (§4.2): the early return
+        // left every ShaderObject / ProgramObject / SamplerObject symbol REFERENCED by this
+        // object file, so the link-closure ratchet counted them whether or not the branch ever
+        // ran. Compiling the construction out is what makes them fall.
+        return true;
+#else
         ShutdownBlitResources();
 
         auto vertexShader = MakeShared<MG_State::GLState::ShaderObject>(ShaderStage::Vertex, kHiddenBlitVertexShaderId);
@@ -4595,6 +4614,7 @@ void main() {
         m_blitResources.nearestSampler = createSampler(kHiddenBlitNearestSamplerId, SamplerFilterMode::Nearest);
         m_blitResources.linearSampler = createSampler(kHiddenBlitLinearSamplerId, SamplerFilterMode::Linear);
         return true;
+#endif
     }
 
     void VulkanRenderer::ShutdownBlitResources() {
@@ -4625,11 +4645,12 @@ void main() {
 
     Bool VulkanRenderer::InitializeDepthMipmapResources() {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // P5f fv: both window and headless transports use WireFramebuffer's native
-        // operations. These hidden programs are frontend objects, so even creating
-        // them on the server would retain a client compiler/allocator dependency.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return true;
-#endif
+        // P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')): the depth-mip half of the same step. In a
+        // disaggregated build the monolith arm generates its depth chain with
+        // WireDepthMipmap.inc's baked pass, so there is no hidden GL program to build on any
+        // transport. See InitializeBlitResources above for why this is an `#if`.
+        return true;
+#else
         ShutdownDepthMipmapResources();
 
         auto vertexShader = MakeShared<MG_State::GLState::ShaderObject>(ShaderStage::Vertex,
@@ -4697,6 +4718,7 @@ void main() {
         MOBILEGL_ASSERT(foundSamplerBinding,
                         "InitializeDepthMipmapResources: failed to resolve reflected binding for uSource");
         return true;
+#endif
     }
 
     void VulkanRenderer::ShutdownDepthMipmapResources() {
@@ -4749,6 +4771,11 @@ void main() {
         m_deferredDepthMipmapCleanup.clear();
     }
 
+#if !MOBILEGL_BUILD_DISAGGREGATED
+    // P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')): the pull build's blit pipeline, built out of the
+    // hidden GL program through the program/pipeline factories. A disaggregated build has no
+    // such program on either arm - WireColorBlit.inc owns its pipeline - so this is compiled
+    // out with its only caller's body.
     VkPipeline VulkanRenderer::GetOrCreateBlitPipeline(const RenderPassEntry& renderPassEntry) {
         MOBILEGL_ASSERT(m_blitResources.program != nullptr, "GetOrCreateBlitPipeline: blit program is null");
         MOBILEGL_ASSERT(m_programFactory != nullptr, "GetOrCreateBlitPipeline: program factory is null");
@@ -4803,6 +4830,7 @@ void main() {
         }
         return m_pipelineFactory->GetOrCreatePipeline(payload);
     }
+#endif // !MOBILEGL_BUILD_DISAGGREGATED
 
     Bool VulkanRenderer::GenerateDepthMipmapWithShader(FrameContext::FrameData& frame,
                                                        MG_State::GLState::ITextureObject& texture,
@@ -4812,6 +4840,52 @@ void main() {
                                                        const IntVec3& storageBaseTexelSize,
                                                        VkImageLayout originalLayout,
                                                        VkImageLayout finalLayout) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')): THE MONOLITH ARM ON THE BAKED PASS. Every
+        // level below is WireDepthMipmap.inc's GenerateWireDepthMipLevel - the same 2x2
+        // texelFetch box, the same clamp, the same average, the same half-texel offset, since
+        // that shader is a PORT of the one this function used to compile at startup. What goes
+        // away with the GL program is the four frontend objects and the compiler call; what the
+        // texture ends up holding is the same chain.
+        //
+        // `texture`, `storageBaseTexelSize` and `originalLayout` are the pull build's; the pass
+        // reads its shape from `resource`, whose tracked layout IS `originalLayout` at entry.
+        (void)frame;
+        (void)texture;
+        (void)storageBaseTexelSize;
+        (void)originalLayout;
+        if (generateMipLevelCount <= 1) return true;
+        if (resource.aspect != VK_IMAGE_ASPECT_DEPTH_BIT) return false;
+        for (Uint32 level = baseMipLevel + 1; level < baseMipLevel + generateMipLevelCount; ++level) {
+            WireImage source{};
+            source.image = resource.image;
+            source.format = resource.format;
+            source.aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+            source.layout = resource.layout;
+            source.trackedLayout = &resource.layout;
+            source.levels = resource.mipLevels;
+            source.level = level - 1;
+            source.extent = {std::max(resource.extent.width >> (level - 1), 1u),
+                             std::max(resource.extent.height >> (level - 1), 1u)};
+            WireImage destination = source;
+            destination.level = level;
+            destination.extent = {std::max(resource.extent.width >> level, 1u),
+                                  std::max(resource.extent.height >> level, 1u)};
+            if (!GenerateWireDepthMipLevel(source, destination)) return false;
+        }
+        // The caller's contract is that the image is left in `finalLayout`; the per-level pass
+        // leaves it in the GENERAL it uses for a same-image source and destination.
+        WireImage whole{};
+        whole.image = resource.image;
+        whole.format = resource.format;
+        whole.aspect = resource.aspect;
+        whole.layout = resource.layout;
+        whole.trackedLayout = &resource.layout;
+        whole.levels = resource.mipLevels;
+        whole.extent = resource.extent;
+        TransitionWireImage(whole, finalLayout);
+        return true;
+#else
         MOBILEGL_ASSERT(m_depthMipmapResources.program != nullptr,
                         "GenerateDepthMipmapWithShader: depth mipmap program is null");
         MOBILEGL_ASSERT(m_blitResources.nearestSampler != nullptr,
@@ -5113,6 +5187,7 @@ void main() {
             MOBILEGL_ASSERT(finishedReady, "%s: failed to transition mip level %u to sampled layout", __func__, level);
         }
         return true;
+#endif
     }
 
     // Boost-style hash combine. The inputs are tiny enum ordinals and bit masks, so
@@ -9173,6 +9248,53 @@ void main() {
         MOBILEGL_ASSERT(clearReady,
                         "TryBlitToDefaultFramebufferWithShader: failed to materialize pending clear for textureId=%d",
                         sourceTexture->GetExternalIndex());
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')): THE MONOLITH ARM ON THE BAKED MODULE. Below
+        // this line the pull build binds a hidden GL program, writes three default-block
+        // uniforms into its global UBO and hands the sampler to the application's descriptor
+        // binder. A disaggregated build has no such program on either arm: the same pass, with
+        // the same vertex shader (WireColorBlit.vert IS this one, ported), takes its rects on a
+        // push constant and its sampler from its own descriptor set.
+        //
+        // The pre-amble above stays shared because it is not about the program: resolving the
+        // two bindings, ending an open render pass and materializing a pending clear on the
+        // source are what makes the blit legal, whichever pass performs it. What the baked path
+        // does NOT need is the sampling transition, the descriptor sync and the cached sampled
+        // view - it makes its own view and moves the layouts through TransitionWireImage, whose
+        // tracker is the same `trackedLayout` these bindings carry.
+        {
+            const auto toWire = [](const BlitImageBinding& binding) {
+                WireImage out{};
+                out.image = binding.image;
+                out.format = binding.format;
+                out.extent = {static_cast<Uint32>(binding.extent.x()), static_cast<Uint32>(binding.extent.y())};
+                out.samples = binding.sampleCount;
+                out.aspect = binding.aspectMask;
+                out.level = binding.mipLevel;
+                out.levels = binding.mipLevelCount;
+                out.layer = binding.baseArrayLayer;
+                out.layers = binding.layerCount;
+                out.viewType = binding.layerCount > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+                out.trackedLayout = binding.trackedLayout;
+                out.layout = binding.trackedLayout ? *binding.trackedLayout : VK_IMAGE_LAYOUT_UNDEFINED;
+                return out;
+            };
+            WireImage source = toWire(srcBinding);
+            WireImage destination = toWire(dstBinding);
+            // The default framebuffer's layout lives in the swapchain object, not in a
+            // per-resource slot, which is what ResolveWireImage does for the same surface and
+            // what TransitionWireImage writes back through.
+            destination.isDefault = true;
+            destination.swapchainImageIndex = drawDefaultImageIndex;
+            destination.trackedLayout = nullptr;
+            destination.layout = m_swapchainObject.GetImageLayout(drawDefaultImageIndex);
+            // `false` here means "not serviced by the shader pass", and the caller falls
+            // through to the native vkCmdBlitImage arm - the same contract the pull build's
+            // early returns above have.
+            return BlitWireColorToDefault(source, destination, srcX0, srcY0, srcX1, srcY1,
+                                          dstX0, dstY0, dstX1, dstY1, filter);
+        }
+#else
         const Bool ready = m_textureManager->TransitionTextureForSampling(frame.commandBuffer, *sourceTexture);
         if (!ready) {
             MGLOG_E_ONCE("BlitFramebuffer skipped: failed to transition source textureId=%d for sampling",
@@ -9283,6 +9405,7 @@ void main() {
         MOBILEGL_ASSERT(bound, "TryBlitToDefaultFramebufferWithShader: BindProgramUniformBuffers failed");
         vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
         return true;
+#endif
     }
 
     // A single-aspect depth/stencil copy between two images of the same format. An image copy
