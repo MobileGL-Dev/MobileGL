@@ -186,6 +186,15 @@ namespace MobileGL::MG_Pipe {
     // P5f (fr): these historical scope names remain greppable markers around
     // monolith glue until P3b/P4b remove those bodies. They hold no state and grant
     // no exemption: allocator and frontend-registry access always refuse apply.
+    //
+    // P7 wave 2-B2: MagmaP7AllocatorDebtScope has NO BACKEND USES LEFT. P5e ruling 12 named
+    // four Magma apply-thread allocator debts (VulkanRenderer.cpp x3, ResourceTracker.h x1);
+    // P5f fv and P5f fm retired two of them, and this package retires the surviving pair -
+    // ShutdownBlitResources and ShutdownDepthMipmapResources, where the objects the debt was
+    // about are simply never created off the monolith arm. The class stays because
+    // MG_Test/Wire/RemoteClientTest uses it as a NEGATIVE CONTROL: two RemoteGuards cases
+    // construct it on the apply thread and assert the allocator refuses anyway, which is the
+    // property P5f (fr) established and the only thing this name now asserts.
     class MagmaP7AllocatorDebtScope {
     public:
         MagmaP7AllocatorDebtScope() = default;

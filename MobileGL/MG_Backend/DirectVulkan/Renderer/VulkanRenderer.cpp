@@ -4598,22 +4598,28 @@ void main() {
     }
 
     void VulkanRenderer::ShutdownBlitResources() {
-#if MOBILEGL_BUILD_DISAGGREGATED
-        // P5c (G6, CONTRACT-P5C §3.1's named exemption): the hidden blit program and samplers
-        // are FRONTEND objects the server backend created on the apply thread, and under an
-        // active transport they die here on that same thread. Their destructors run the client
-        // death helper, whose lifetime-id probe is the frontend-keyed registry family - it
-        // resolves to nothing (no handle was ever minted for these objects) and routes no
-        // delete, so the scope admits the probe as named debt rather than letting the guard
-        // Fatal at server teardown. P7 gives these resources storage that is not a frontend
-        // object.
+        // P7 wave 2-B2: TWO OF P5e RULING 12'S FOUR APPLY-THREAD ALLOCATOR DEBTS ARE GONE, and
+        // the scope that named them with them. The debt was real when it was written: the hidden
+        // blit program and its samplers are FRONTEND objects, and under an active transport the
+        // server backend created them on the apply thread and destroyed them here on it, where
+        // their destructors run the client death helper and its lifetime-id probe.
         //
-        // P5e (id), ruling 12: one of Magma's FOUR apply-thread allocator debts, and the scope
-        // is now named after that debt rather than after the frontend-keyed registry - Espryt's
-        // half of which P5e is retiring, while this one waits for P7. The exemption is keyed on
-        // a DirectVulkan server, which is what this file always is.
-        const MG_Pipe::MagmaP7AllocatorDebtScope magmaP7AllocatorDebt;
-#endif
+        // What retires it is not a new exemption but the absence of the objects. P5f fv gave
+        // InitializeBlitResources an early return for every non-monolith transport, so off the
+        // monolith arm `m_blitResources` never holds anything and this assignment destroys
+        // nothing - MEASURED, not argued: a temporary probe here and in
+        // ShutdownDepthMipmapResources failed the session if either resource was non-null under
+        // a non-monolith transport, and integration-magma-{split,spawn,tcp} (93/72/74),
+        // integration-magma-full-{split,spawn} (524/524), integration-split (187) and
+        // integration-magma-buffers (21) all stayed green with it armed. Dropping its transport
+        // test killed EVERY monolith `DirectVulkan.` entry at teardown and left the split
+        // entries green, which is what makes the first run evidence rather than an absence.
+        //
+        // The TYPE stays: MG_Test/Wire/RemoteClientTest's RemoteGuards
+        // .BarrieredLegacyScopesCannotExemptAllocator and
+        // .BarrieredFrontendRegistryMembersRefuseBothLegacyScopes use it as a NEGATIVE CONTROL -
+        // they construct it on the apply thread and assert the allocator still refuses, which is
+        // the thing P5f (fr) changed and the only remaining reason for it to exist.
         m_blitResources = {};
     }
 
@@ -4694,13 +4700,9 @@ void main() {
     }
 
     void VulkanRenderer::ShutdownDepthMipmapResources() {
-#if MOBILEGL_BUILD_DISAGGREGATED
-        // Same shape as ShutdownBlitResources above: the hidden depth-mipmap program is a
-        // frontend object created and destroyed by the server backend on the apply thread, and
-        // its destructor's lifetime-id probe is admitted here as named debt - Magma's, P7's to
-        // retire, which is what the scope's P5e name says (ruling 12).
-        const MG_Pipe::MagmaP7AllocatorDebtScope magmaP7AllocatorDebt;
-#endif
+        // P7 wave 2-B2: the second of the pair, retired for ShutdownBlitResources's reason and
+        // proved by the same probe. InitializeDepthMipmapResources carries the same non-monolith
+        // early return, so off the monolith arm this assignment destroys nothing.
         m_depthMipmapResources = {};
     }
 
