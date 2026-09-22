@@ -191,6 +191,19 @@ TEST(SubsystemDepsTest, TheClientNeverEmitsAFamilyTheTableRefuses) {
 TEST(SubsystemDepsTest, TheServerConsumerGateNeverArmsAFamilyTheTableRefuses) {
 #if MOBILEGL_PIPE_PUSH
     using namespace MobileGL::MG_Backend::DirectGLES;
+    // THE RESOLVERS SURVIVE A SWEEP ONLY BECAUSE LEGACY MEMOS ARE ON. Each of them ends in
+    // ClassifyPipeSubsystemArm, and a verdict of NoArm calls StopOnArmlessPipeSubsystem
+    // (Managers.cpp:2928-2938), which aborts the process - that is the intended behaviour for a
+    // configuration with neither the handle arm nor the legacy arm, and it would turn this
+    // mask sweep into a crash rather than a failure. MOBILEGL_PIPE_LEGACY_MEMOS defaults ON
+    // (Config.h:399) and nothing in the unit lane clears it, so the legacy arm always survives
+    // and every resolver returns rather than stopping. Asserted rather than assumed, because the
+    // day that default flips this file would abort with no explanation.
+    ASSERT_TRUE(MG_Config::Features.PipeLegacyMemos)
+        << "MOBILEGL_PIPE_LEGACY_MEMOS is clear, so a resolver whose handle arm this sweep "
+           "deliberately refuses has NO arm left and StopOnArmlessPipeSubsystem will abort the "
+           "process instead of returning false. Run this case with the legacy memos on, or teach "
+           "it to skip the masks that leave a family armless.";
     struct Resolver {
         const char* Name;
         Uint64 Family;
@@ -221,10 +234,9 @@ TEST(SubsystemDepsTest, TheServerConsumerGateNeverArmsAFamilyTheTableRefuses) {
         }
     }
 #else
-    // The resolvers are declared under MOBILEGL_PIPE_PUSH (Managers.h:664); the pull build has
-    // no consumer gate to compare against the table. Skipped, not omitted, so the unit name set
-    // stays the same in both flavours (ID-P7-11).
-    GTEST_SKIP() << "the server consumer gate is compiled only under MOBILEGL_PIPE_PUSH";
+    GTEST_SKIP() << "the four Resolve<Family>SubsystemArm() resolvers are declared and defined "
+                    "only under MOBILEGL_PIPE_PUSH (Managers.h's P4a D-K3 block), so the pull "
+                    "build has no server consumer gate to compare against";
 #endif
 }
 
@@ -235,6 +247,8 @@ TEST(SubsystemDepsTest, TheServerConsumerGateNeverArmsAFamilyTheTableRefuses) {
 TEST(SubsystemDepsTest, TheTwoDocumentedRefusalLanesStillRefuseAndTheFullMaskStillArms) {
 #if MOBILEGL_PIPE_PUSH
     using namespace MobileGL::MG_Backend::DirectGLES;
+    ASSERT_TRUE(MG_Config::Features.PipeLegacyMemos)
+        << "see the sweep above: a refused family with the legacy arm also off aborts the process";
     {
         PushMaskScope scope(kMGPipeSubsystemsMigratedAtP5e);
         EXPECT_TRUE(ResolveTextureResourceSubsystemArm())
@@ -242,6 +256,14 @@ TEST(SubsystemDepsTest, TheTwoDocumentedRefusalLanesStillRefuseAndTheFullMaskSti
                "refusal assertion in this file is vacuous";
         EXPECT_TRUE(ResolveSamplerSubsystemArm());
         EXPECT_TRUE(ResolveProgramSubsystemArm());
+        // THE FRAMEBUFFER RESOLVER IS RECORDED, NOT ASSERTED, and the asymmetry is the point:
+        // ResolveFramebufferSubsystemArm folds D-C3's wire-caps refusal in beside the dependency
+        // rule (Managers.cpp:4323-4325), and that half asks the SERVER's published caps - which a
+        // bare unit binary with no session and no registered backend cannot answer in the
+        // affirmative. So a false here says nothing about D-K2 and asserting true would pin
+        // whatever a test binary happens to have linked. The sweep above still covers it in the
+        // direction that matters (it may never ARM where the table refuses).
+        RecordProperty("framebuffer_resolver_at_p5e", ResolveFramebufferSubsystemArm() ? 1 : 0);
     }
     {
         // 0x7ff: bits 0..10, i.e. the texture family WITHOUT the sampler family - D-K2's fourth
@@ -252,7 +274,15 @@ TEST(SubsystemDepsTest, TheTwoDocumentedRefusalLanesStillRefuseAndTheFullMaskSti
                "D-K2's fourth row has been dropped on the server side while the client and the "
                ".def still carry it";
     }
+    {
+        // 0x5ff: bits 0..8 and bit 10, i.e. the texture family WITHOUT the framebuffer bit and
+        // WITHOUT bit 11 - the second refusal lane CMakeLists.txt pins.
+        PushMaskScope scope(0x5ffull);
+        EXPECT_FALSE(ResolveTextureResourceSubsystemArm())
+            << "0x5ff leaves bit 11 clear too, so the fourth row refuses it for the same reason";
+    }
 #else
-    GTEST_SKIP() << "the server consumer gate is compiled only under MOBILEGL_PIPE_PUSH";
+    GTEST_SKIP() << "the four Resolve<Family>SubsystemArm() resolvers exist only under "
+                    "MOBILEGL_PIPE_PUSH";
 #endif
 }
