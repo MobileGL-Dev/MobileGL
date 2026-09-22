@@ -165,6 +165,12 @@ namespace {
     // base name must not exist as a file, so a reader that was not updated gets ENOENT and says so
     // rather than a file that looks like a complete run and is half of one.
     TEST_F(PipeStatsTest, JsonDumpPathIsRoleDerivedAndTheBaseNameIsNeverOpened) {
+#if !MOBILEGL_BUILD_DISAGGREGATED
+        // RoleDerivedJsonDumpPathForTesting is compiled only with two roles (gate G1: a monolith
+        // build has one and needs no derivation). The NAME stays registered in every build so
+        // ctest -N matches between flavours; the body only exists where the collision does.
+        GTEST_SKIP() << "role-derived dump paths only exist with two roles (MOBILEGL_BUILD_DISAGGREGATED=OFF)";
+#else
         using MobileGL::MG_Util::Debug::LogRole;
 
         const String saved = MobileGL::MG_Config::Features.PipeStatsFile;
@@ -195,6 +201,7 @@ namespace {
                "that is the trunc-versus-trunc collision this derivation exists to prevent";
 
         MobileGL::MG_Config::Features.PipeStatsFile = saved;
+#endif
     }
 
     TEST_F(PipeStatsTest, GateHitsAndMissesAreSeparateCounters) {

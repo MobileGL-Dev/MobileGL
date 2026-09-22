@@ -70,8 +70,21 @@ def logs_proof(discovery, junit):
     logs = helper.marker_log_paths(lane)
     proof = {}
     for name in sorted(RSP_CASES):
+        # P6 splits the library log per role: MOBILEGL_LOG_FILE_PATH is a BASE NAME and the
+        # files that exist are <base>.client.log / <base>.server.log. Reading the base directly
+        # is FileNotFoundError after the split - the same class of reader the role-split
+        # landing already fixed everywhere else.
         path = Path(logs[name])
-        proof[name] = {'private_log': str(path), **inproc_log_proof(path.read_text(encoding='utf-8', errors='replace'))}
+        if not helper.any_role_file(path):
+            raise RuntimeError(
+                f'{name}: no role log under {path} '
+                f'(looked for {helper.role_paths(path)}); the library never opened the sink')
+        text = helper.read_role_logs(path)
+        proof[name] = {
+            'private_log': str(path),
+            'role_logs': helper.role_paths(path),
+            **inproc_log_proof(text),
+        }
     return proof
 
 
