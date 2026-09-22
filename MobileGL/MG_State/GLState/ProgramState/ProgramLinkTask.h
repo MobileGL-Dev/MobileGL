@@ -207,6 +207,14 @@ namespace MobileGL::MG_State::GLState {
         // one and overwritten the qualifier. See the definition for why the invented binding is
         // deliberately left in place for the backends' own use.
         void SeedDefaultStorageBlockBindings();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P7 wave 2 package C, OQ-8: builds LinkArtifacts::storageBlocks - DirectVulkan's own
+        // storage-block index space - out of the reflection snapshot the call above produced,
+        // so the backends stop re-deriving it with SPIRV-Reflect on every draw. Runs after
+        // SnapshotGlslangReflection because it reads blockReflection. See the definition for
+        // which order it has to reproduce and why each clause of it is derivable here.
+        void SnapshotStorageBlockIndexSpace();
+#endif
         Bool ValidateFragmentOutputLocations();
         Bool ResolveTransformFeedbackVaryings();
         void ResolveGsTriangleStripCapture(const glslang::TIntermediate* captureIntermediate);

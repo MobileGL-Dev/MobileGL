@@ -362,7 +362,15 @@ TEST(ProgramArtifactsCodec, AVersionMismatchIsRefused) {
 // no archive owns. A codec arm for it would be a use-after-free waiting for a cache hit.
 TEST(ProgramArtifactsCodec, TheTablesVisitEveryMemberExceptTheLiveProgram) {
 #if MOBILEGL_PIPE_PUSH
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P7 OQ-8: 59 members, 58 visited. The 59th is still the live TProgram; the 58th is
+    // storageBlocks, which exists only in this build (ProgramArtifacts.h guards it so the pull
+    // build's LinkArtifacts keeps its size, its destructor and its .text).
+    EXPECT_EQ(ProgramArtifactsVisitedFieldCount<LinkArtifacts>(), 58u);
+    EXPECT_EQ(ProgramArtifactsVisitedFieldCount<StorageBlockReflection>(), 3u);
+#else
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<LinkArtifacts>(), 57u);
+#endif
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<SpirvArtifacts>(), 8u);
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<ResourceReflection>(), 14u);
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<XfbVarying>(), 11u);
@@ -381,7 +389,12 @@ TEST(ProgramArtifactsCodec, PortableHeaderUsesWireSchemaRatherThanNativeContaine
     Uint64 schema = 0;
     std::memcpy(&version, bytes.data(), sizeof(version));
     std::memcpy(&schema, bytes.data() + sizeof(version), sizeof(schema));
-    EXPECT_EQ(version, 2u);
+    // 3 since P7 OQ-8 (CONTRACT-P7 §5.3): LinkArtifacts gained storageBlocks, so a v2 reader
+    // would run out of bytes mid-stream rather than notice. The schema word beside it moved
+    // too - it is derived from the VisitFields tables - and so did `wireFingerprint`, which is
+    // what makes a mixed-version pair refuse at the handshake instead of at the first program.
+    EXPECT_EQ(version, kProgramArtifactsCodecVersion);
+    EXPECT_EQ(version, 3u);
     EXPECT_EQ(schema, ProgramArtifactsSchemaFingerprint());
     EXPECT_NE(schema, 0u);
     EXPECT_NE(schema, sizeof(LinkArtifacts));

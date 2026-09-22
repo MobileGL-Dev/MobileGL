@@ -131,6 +131,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     namespace {
+#if !MOBILEGL_BUILD_DISAGGREGATED
+        // P7 wave 2 package C, OQ-8: THE PULL BUILD'S HALF, VERBATIM. A disaggregated build
+        // answers GetShaderStorageBlock{Index,Binding} out of LinkArtifacts::storageBlocks
+        // instead (see those functions below), which retires this whole cache - the map, the
+        // SPIRV-Reflect rebuild, the teardown clear and the rehash hazard. It cannot be
+        // retired HERE because the archive member it reads is itself disaggregated-only, for
+        // G1: one more Vector in LinkArtifacts moves the pull build's .text, which is pinned
+        // byte-for-byte at 0xa52203.
+        //
+        // NOTHING OUTSIDE THIS FILE READS ANY OF IT (measured: BufferVariableResource,
+        // bufferVariables, activeVariables and StorageBlockResource have no reference anywhere
+        // else in the tree, and `dataSize` is written and never read - GL_BUFFER_VARIABLE and
+        // GL_ACTIVE_VARIABLES are answered by MG_Impl/GLImpl/Program/ProgramInterface.cpp out
+        // of glslang's own reflection, which is a different index space). So the two arms
+        // below differ in exactly the two functions their callers use, and in nothing else.
         struct BufferVariableResource {
             String name;
             GLuint blockIndex = 0;
@@ -162,6 +177,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<StorageBlockResource> storageBlocks;
             Vector<BufferVariableResource> bufferVariables;
         };
+#endif // !MOBILEGL_BUILD_DISAGGREGATED
 
         struct DrawElementsIndirectCommand {
             Uint32 count = 0;
@@ -178,12 +194,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 baseInstance = 0;
         };
 
+#if !MOBILEGL_BUILD_DISAGGREGATED
         // Keyed by GL program name so the freed-name reuse in IndexGenerator bounds the
         // map at the peak-simultaneous-program high-water mark; each slot's ownership is
         // checked against the program's lifetime id before it is served (see
         // GetProgramResourceCache). Cleared wholesale at EGL teardown via
         // ClearProgramResourceCaches.
         UnorderedMap<GLuint, ProgramResourceCache> g_programResourceCaches;
+#endif
 
         void ClearReadPixelsOutput(GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
             if (!pixels || width <= 0 || height <= 0) {
@@ -198,6 +216,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
+#if !MOBILEGL_BUILD_DISAGGREGATED
         String NormalizeDescriptorName(const SpvReflectDescriptorBinding& binding) {
             const char* rawName = binding.name;
             if (binding.type_description != nullptr && binding.type_description->type_name != nullptr) {
@@ -348,6 +367,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             return cache;
         }
+#endif // !MOBILEGL_BUILD_DISAGGREGATED
 
 #if MOBILEGL_BUILD_DISAGGREGATED
         // The verb's handles identify server stores. Readback orders GPU-produced
@@ -448,6 +468,67 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     } // namespace
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P7 wave 2 package C, OQ-8 (CONTRACT-P7 §5.3): THE MONOLITH CONSUMER READS THE ARCHIVE
+    // TOO, so one published list serves both of this backend's arms.
+    //
+    // THE TWO ARMS BELOW ARE NOT TWO ANSWERS. ProgramTest's
+    // TheArchivesStorageBlockOrderIsTheOneSpirvReflectProduces runs the OLD arm's algorithm -
+    // SPIRV-Reflect over the real modules, sorted and deduplicated exactly as
+    // GetProgramResourceCache does it - over a multi-stage program with an arrayed SSBO and an
+    // atomic-counter block, and asserts element-for-element equality with what the archive
+    // published. That equivalence is what makes an #if here a build-time SELECTION rather than
+    // a behavioural fork, and it is the reason the case exists.
+    //
+    // WHY AN #if AT ALL, AND WHAT IT COSTS. LinkArtifacts::storageBlocks is
+    // MOBILEGL_BUILD_DISAGGREGATED-only, because one more Vector member changes the struct's
+    // size, its implicit destructor and its move constructor in the PULL build whose .text G1
+    // pins byte-for-byte (0xa52203). So the pull build keeps `g_programResourceCaches`, the
+    // SPIRV-Reflect rebuild and `ClearProgramResourceCaches`, verbatim; only this build drops
+    // them - and with them the rehash hazard the ordering comment below the block-binding
+    // setter documents. Retiring the pull half is the day the member stops needing its guard,
+    // which is a G1/P13 decision and not a wave-2 one; recorded in notes/p7/magma-c.md.
+    void ClearProgramResourceCaches() {
+        // Nothing to clear: there is no cache in this build. Kept as an entry point so
+        // BackendObject_DirectVulkan's two EGL-teardown call sites stay statement for
+        // statement what they are in the pull build.
+    }
+
+    GLuint GetShaderStorageBlockIndex(const MG_State::GLState::ProgramObject& program, const String& name) {
+        const auto& blocks = program.GetLinkReflection().storageBlocks;
+        const auto find = [&blocks](const String& key) {
+            return std::find_if(blocks.begin(), blocks.end(),
+                [&](const MG_State::GLState::StorageBlockReflection& block) { return block.name == key; });
+        };
+        auto it = find(name);
+        if (it == blocks.end()) {
+            // Archive names are normalised, so an arrayed block that GL enumerates per element
+            // - "B[0]", "B[1]" - is one entry here, spelled "B". Same second chance the cache
+            // gave, for the same callers.
+            const auto bracket = name.rfind('[');
+            if (bracket == String::npos || name.empty() || name.back() != ']') return GL_INVALID_INDEX;
+            it = find(name.substr(0, bracket));
+            if (it == blocks.end()) return GL_INVALID_INDEX;
+        }
+        return static_cast<GLuint>(std::distance(blocks.begin(), it));
+    }
+
+    GLuint GetShaderStorageBlockBinding(const MG_State::GLState::ProgramObject& program, GLuint blockIndex) {
+        const auto& blocks = program.GetLinkReflection().storageBlocks;
+        if (blockIndex >= blocks.size()) {
+            return 0;
+        }
+        // THE OVERRIDE IS APPLIED ON READ, where the cache used to apply it on rebuild and
+        // patch it in place on rebind. Same answer by a shorter route: the program is the
+        // authoritative record of a rebound block (it is what GL_BUFFER_BINDING reports), the
+        // archive carries the DECLARED binding only, and asking the program here means a
+        // rebind can no longer be lost to a cache rebuild that happened to race a state-version
+        // bump.
+        const Int rebound = program.GetShaderStorageBlockBindingOverride(blocks[blockIndex].name);
+        if (rebound >= 0) return static_cast<GLuint>(rebound);
+        return blocks[blockIndex].binding;
+    }
+#else
     void ClearProgramResourceCaches() {
         // Called from EGL teardown while the backend's m_eglStateMutex is held; GL
         // calls are serialized in this codebase (contexts migrate threads but never
@@ -483,6 +564,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         return cache.storageBlocks[blockIndex].binding;
     }
+#endif
 
     void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearBufferfi called with null VulkanRenderer");
@@ -949,6 +1031,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 MakeUnique<GenericErrorInfo>("DirectVulkan", __func__, "Shader storage binding is out of range."));
             return;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P7 wave 2 package C, OQ-8: NOTHING LEFT TO PATCH, and the hazard goes with it.
+        //
+        // The frontend has already recorded the new binding on the program, and that record is
+        // now what GetShaderStorageBlockBinding reads (it asks
+        // GetShaderStorageBlockBindingOverride on every call, over an IMMUTABLE archive list).
+        // What stood here was the other half of a mutable cache: resolve the index, take a
+        // reference into g_programResourceCaches and patch `binding` in place so an
+        // already-built entry need not be thrown away.
+        //
+        // THE HAZARD THAT CAME WITH IT IS GONE TOO, and it is worth naming because it was a
+        // real crash rather than a theoretical one: GetShaderStorageBlockIndex re-entered
+        // GetProgramResourceCache, which indexes an OPEN-ADDRESSED map and can therefore
+        // insert, and a rehash moves entries - so a reference taken before that call dangled.
+        // Binding one program's storage block while another program's entry was still absent
+        // from the cache was a reproducible segfault (ProgramPipelineScenario's two
+        // storage-block cases, in one process). The ordering above was the fix; having no
+        // cache is the retirement. The pull build below keeps both.
+        (void)storageBlockBinding;
+    }
+#else
         // The frontend already validated that the name denotes an active block, and has
         // already recorded the new binding on the program - which is what reseeds this cache
         // whenever it is rebuilt. Writing the entry here as well keeps an ALREADY-BUILT cache
@@ -967,6 +1070,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (blockIndex >= cache.storageBlocks.size()) return;
         cache.storageBlocks[blockIndex].binding = storageBlockBinding;
     }
+#endif
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ReadPixels called with null VulkanRenderer");
         MOBILEGL_ASSERT(MGB_CTX_LIVE, "DirectVulkan::ReadPixels called with null GL context");

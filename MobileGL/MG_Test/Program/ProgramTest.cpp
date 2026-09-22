@@ -380,6 +380,177 @@ void main() {
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+// P7 wave 2 package C, OQ-8 (CONTRACT-P7 §5.3): THE ARCHIVE'S STORAGE-BLOCK INDEX SPACE IS
+// SPIRV-REFLECT'S, ELEMENT FOR ELEMENT.
+//
+// This is the equivalence the whole slice rests on. DirectVulkan's resource queries speak an
+// index space that used to be DERIVED, by running SPIRV-Reflect over the program's modules -
+// per draw on the wire path (MagmaProgramSource) and behind a mutable cache in the monolith
+// one (DirectVulkan.cpp's GetProgramResourceCache). It is now PUBLISHED at link time out of
+// glslang's reflection instead (ProgramLinkTask::SnapshotStorageBlockIndexSpace). Two
+// different producers, one index space: if they ever disagree,
+// ProgramFactory::ReflectLayout - which looks blocks up by the name ITS OWN reflect pass
+// produced - starts binding storage buffers at the wrong descriptor, silently.
+//
+// THE REFERENCE IS COMPUTED HERE, not copied as a constant, and it is computed with the same
+// algorithm the old consumer used: per module in linked-stage order, STORAGE_BUFFER
+// descriptors only, sorted by (normalised name, binding), deduplicated across modules by name.
+// Comparing against a hand-written expected list would only pin what the author believed.
+//
+// THE PROGRAM IS THE ONE THE CONTRACT ASKS FOR: multi-stage (vertex + fragment), with an
+// ARRAYED SSBO and an ATOMIC-COUNTER block. Both are the cases where the two producers could
+// legitimately have disagreed and neither is exotic:
+//   * an instance array reflects in glslang as one entry PER ELEMENT ("Blocks[0]",
+//     "Blocks[1]") and in SPIR-V as ONE descriptor with a count, so the archive has to strip
+//     the subscript and keep the first element - which is the one whose binding the single
+//     descriptor reports;
+//   * an atomic_uint is lowered by the transpiler onto a synthesized gl_AtomicCounterBlock_<N>
+//     BUFFER block, so SPIRV-Reflect sees an ordinary storage descriptor for it and the
+//     backend's space has always contained it - even though GL's own GL_SHADER_STORAGE_BLOCK
+//     enumeration excludes it. The archive must follow the BACKEND's space, not GL's.
+TEST_F(ProgramTest, TheArchivesStorageBlockOrderIsTheOneSpirvReflectProduces) {
+    char infoLog[1024] = "";
+    const char* vsSrc = R"(#version 460 core
+layout(std430, binding = 3) buffer Blocks {
+    uint value;
+} blocks[2];
+layout(binding = 0, offset = 0) uniform atomic_uint counter;
+layout(std430, binding = 6) buffer VertexOnly {
+    uint value;
+} vertexOnly;
+void main() {
+    atomicCounterIncrement(counter);
+    blocks[0].value = 1u;
+    vertexOnly.value = 2u;
+    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+}
+)";
+    const char* fsSrc = R"(#version 460 core
+layout(std430, binding = 5) buffer FragmentOnly {
+    uint value;
+} fragmentOnly;
+layout(std430, binding = 3) buffer Blocks {
+    uint value;
+} blocks[2];
+layout(location = 0) out vec4 color;
+void main() {
+    fragmentOnly.value = 3u;
+    color = vec4(float(blocks[1].value), 0.0, 0.0, 1.0);
+}
+)";
+
+    const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+    ShaderSource(vs, 1, &vsSrc, nullptr);
+    CompileShader(vs);
+    GLint status = GL_FALSE;
+    GetShaderiv(vs, GL_COMPILE_STATUS, &status);
+    GetShaderInfoLog(vs, sizeof(infoLog), nullptr, infoLog);
+    ASSERT_EQ(status, GL_TRUE) << infoLog;
+
+    const GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+    ShaderSource(fs, 1, &fsSrc, nullptr);
+    CompileShader(fs);
+    GetShaderiv(fs, GL_COMPILE_STATUS, &status);
+    GetShaderInfoLog(fs, sizeof(infoLog), nullptr, infoLog);
+    ASSERT_EQ(status, GL_TRUE) << infoLog;
+
+    const GLuint program = CreateProgram();
+    AttachShader(program, vs);
+    AttachShader(program, fs);
+    LinkProgram(program);
+    GetProgramiv(program, GL_LINK_STATUS, &status);
+    GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
+    ASSERT_EQ(status, GL_TRUE) << infoLog;
+
+    auto programObject = MobileGL::MG_State::pGLContext->GetProgramObject(program);
+    ASSERT_NE(programObject, nullptr);
+
+    // ---- the reference: the old consumer's algorithm, run here over the real modules ----
+    const auto normalise = [](const SpvReflectDescriptorBinding& binding) {
+        const char* raw = binding.name;
+        if (binding.type_description != nullptr && binding.type_description->type_name != nullptr) {
+            raw = binding.type_description->type_name;
+        }
+        String name = raw ? raw : "";
+        const auto suffix = name.find("[0]");
+        return suffix == String::npos ? name : name.substr(0, suffix);
+    };
+    std::vector<String> reference;
+    const auto& spirvs = programObject->GetSpirvReflection().generatedSpirv;
+    ASSERT_GE(spirvs.size(), 2u) << "the case needs a multi-stage program to be a real test of "
+                                    "the cross-stage dedupe";
+    for (const auto& spirv : spirvs) {
+        if (spirv.empty()) continue;
+        SpvReflectShaderModule module{};
+        ASSERT_EQ(spvReflectCreateShaderModule(spirv.size() * sizeof(Uint), spirv.data(), &module),
+                  SPV_REFLECT_RESULT_SUCCESS);
+        uint32_t count = 0;
+        ASSERT_EQ(spvReflectEnumerateDescriptorBindings(&module, &count, nullptr),
+                  SPV_REFLECT_RESULT_SUCCESS);
+        std::vector<SpvReflectDescriptorBinding*> bindings(count);
+        if (count != 0) {
+            ASSERT_EQ(spvReflectEnumerateDescriptorBindings(&module, &count, bindings.data()),
+                      SPV_REFLECT_RESULT_SUCCESS);
+        }
+        std::sort(bindings.begin(), bindings.end(),
+                  [&](const SpvReflectDescriptorBinding* lhs, const SpvReflectDescriptorBinding* rhs) {
+                      const String lhsName = lhs ? normalise(*lhs) : String();
+                      const String rhsName = rhs ? normalise(*rhs) : String();
+                      if (lhsName != rhsName) return lhsName < rhsName;
+                      return lhs->binding < rhs->binding;
+                  });
+        for (const SpvReflectDescriptorBinding* binding : bindings) {
+            if (binding == nullptr ||
+                binding->descriptor_type != SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+                continue;
+            }
+            const String name = normalise(*binding);
+            if (name.empty()) continue;
+            if (std::find(reference.begin(), reference.end(), name) != reference.end()) continue;
+            reference.push_back(name);
+        }
+        spvReflectDestroyShaderModule(&module);
+    }
+
+    // ---- what the archive published ----
+    std::vector<String> archived;
+    for (const auto& block : programObject->GetLinkReflection().storageBlocks) {
+        archived.push_back(block.name);
+    }
+
+    ASSERT_FALSE(reference.empty())
+        << "the reference walk found no storage descriptors at all, so the comparison below "
+           "would be vacuous - the shaders or the SPIR-V generation changed under this case";
+    EXPECT_EQ(archived, reference)
+        << "LinkArtifacts::storageBlocks is not the index space SPIRV-Reflect produces. "
+           "GetShaderStorageBlockIndex/Binding hand these indices to ProgramFactory::ReflectLayout, "
+           "which resolves blocks by the name its own reflect pass produced, so a divergence "
+           "here binds storage buffers at the wrong descriptor rather than failing loudly.";
+
+    // The arrayed block must appear ONCE, under its stripped name: glslang reflects it per
+    // element and SPIR-V carries one descriptor, and collapsing the two is the whole reason
+    // the archive normalises.
+    EXPECT_EQ(std::count(archived.begin(), archived.end(), String("Blocks")), 1)
+        << "the arrayed SSBO must collapse to one entry named without its subscript";
+    // The atomic counter is in the BACKEND's space even though GL's own enumeration excludes it.
+    EXPECT_NE(std::find_if(archived.begin(), archived.end(),
+                           [](const String& name) {
+                               return name.rfind("gl_AtomicCounterBlock", 0) == 0;
+                           }),
+              archived.end())
+        << "the synthesized atomic-counter block is a STORAGE_BUFFER descriptor in SPIR-V, so "
+           "DirectVulkan's index space contains it and the archive has to as well";
+
+    // And the indices actually resolve, which is what the consumers do with them.
+    for (Uint i = 0; i < archived.size(); ++i) {
+        EXPECT_EQ(MG_Backend::DirectVulkan::GetShaderStorageBlockIndex(*programObject, archived[i]), i)
+            << "name " << archived[i] << " did not resolve to its own index";
+    }
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+#endif // MOBILEGL_BUILD_DISAGGREGATED
+
 TEST_F(ProgramTest, DirectVulkanStorageBlockUsesShaderLayoutBinding) {
     char infoLog[1024] = "";
     const char* csSrc = R"(#version 460 core

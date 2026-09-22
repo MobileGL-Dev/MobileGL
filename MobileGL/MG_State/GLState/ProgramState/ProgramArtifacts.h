@@ -90,6 +90,47 @@ namespace MobileGL::MG_State::GLState {
     using PipeInputReflection = ResourceReflection;
     using PipeOutputReflection = ResourceReflection;
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P7 wave 2 package C, OQ-8 (CONTRACT-P7 §5.3): THE SHADER STORAGE BLOCKS AS DIRECTVULKAN
+    // INDEXES THEM, published once at link time instead of re-derived per draw.
+    //
+    // WHY A SECOND VIEW OF SOMETHING blockReflection ALREADY HOLDS. `blockReflection` is
+    // glslang's list, in TProgram index order, carrying uniform blocks, storage blocks and the
+    // synthesized atomic-counter blocks together, one entry per ARRAY ELEMENT. DirectVulkan's
+    // resource queries speak a different index space entirely - the one its SPIRV-Reflect walk
+    // produces: storage descriptors only, normalised block name with the array subscript
+    // stripped, deduplicated across stages. `GetShaderStorageBlockIndex(name)` hands that index
+    // out and `GetShaderStorageBlockBinding(index)` reads it back, so the two have to agree
+    // with each other and with the names ProgramFactory::ReflectLayout looks up (which come
+    // from its OWN reflect pass over the same modules). This vector IS that space, built once.
+    //
+    // WHAT IT COSTS AND WHAT IT BUYS. MagmaProgramSource is a BORROWED VIEW constructed afresh
+    // for every wire draw (WireDraw.inc's WireProgramSource), so its lazy
+    // `EnsureStorageBlocks` re-ran spvReflectCreateShaderModule over every stage module of
+    // every program on every draw that touched an SSBO. Reading it out of the archive instead
+    // takes the SPIR-V reflector off the wire draw path entirely.
+    //
+    // `binding` IS THE DECLARED (or IO-mapper-assigned) BINDING AND NOT THE CURRENT ONE.
+    // glShaderStorageBlockBinding travels separately - as the record's StorageOverrides on the
+    // wire and as ProgramObject::GetShaderStorageBlockBindingOverride in the monolith - and
+    // both consumers apply it on read, exactly as they did when this list was rebuilt per
+    // draw. Baking the current binding in would freeze a rebind at link time.
+    //
+    // DISAGGREGATED-ONLY, and that guard is load-bearing for G1: LinkArtifacts is a pull-build
+    // type too, and one more Vector member would change its size, its implicit destructor and
+    // its move constructor in a build whose .text must stay byte-identical.
+    struct StorageBlockReflection {
+        // The NORMALISED name: the SPIR-V block type name with a trailing array subscript
+        // stripped, which is what SpvReflectDescriptorBinding's type_name answers and what
+        // ProgramFactory::ReflectLayout looks blocks up by.
+        String name;
+        Uint32 binding = 0;
+        // GL_BUFFER_DATA_SIZE. Carried because the monolith resource-query consumer reports
+        // it; the wire consumer does not read it today.
+        Int32 dataSize = 0;
+    };
+#endif
+
     // Transform feedback (GL 3.0 core: glTransformFeedbackVaryings applies on
     // the NEXT link; the linked snapshot below is what draws and queries see).
     struct XfbVarying {
@@ -167,6 +208,12 @@ namespace MobileGL::MG_State::GLState {
         // The owned reflection snapshot. Indexed by TProgram index; see the structs above.
         Vector<UniformReflection> uniformReflection;
         Vector<BlockReflection> blockReflection;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P7 OQ-8: DirectVulkan's storage-block index space, filled beside blockReflection in
+        // SnapshotGlslangReflection. See StorageBlockReflection above for what the order is
+        // and why it is not blockReflection's.
+        Vector<StorageBlockReflection> storageBlocks;
+#endif
         Vector<PipeInputReflection> pipeInputReflection;
         Vector<PipeOutputReflection> pipeOutputReflection;
         // Program-level scalars glslang answers off the linked intermediates.
@@ -479,14 +526,32 @@ namespace MobileGL::MG_State::GLState {
         v("blockMemberElement", a.blockMemberElement);
     } // 11 fields
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P7 OQ-8. Three plain fields, so the generic codec arms carry it with no new arm of their
+    // own - which is the whole reason it is a table rather than hand-written bytes.
+    template <class Self, class V>
+        requires std::same_as<std::remove_const_t<Self>, StorageBlockReflection>
+    void VisitFields(Self& a, V&& v) {
+        v("name", a.name);
+        v("binding", a.binding);
+        v("dataSize", a.dataSize);
+    } // 3 fields
+#endif
+
     // Every member EXCEPT `program`: it is null for every archived instance by construction
     // (ProgramTranslationCache.h asserts that at insert) and must never be serialized - it is
-    // the live glslang TProgram that only DoReflection may touch. 57 of the 58 members.
+    // the live glslang TProgram that only DoReflection may touch. 57 of the 58 members in a
+    // pull/monolith build, 58 of 59 in a disaggregated one (P7 OQ-8's storageBlocks).
     template <class Self, class V>
         requires std::same_as<std::remove_const_t<Self>, LinkArtifacts>
     void VisitFields(Self& a, V&& v) {
         v("uniformReflection", a.uniformReflection);
         v("blockReflection", a.blockReflection);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Beside blockReflection because that is where it is FILLED, and a visitor that walks
+        // the table in declaration order then reads the two together.
+        v("storageBlocks", a.storageBlocks);
+#endif
         v("pipeInputReflection", a.pipeInputReflection);
         v("pipeOutputReflection", a.pipeOutputReflection);
         v("lastStageIsFragment", a.lastStageIsFragment);
@@ -569,7 +634,13 @@ namespace MobileGL::MG_State::GLState {
 #if defined(__GLIBCXX__) && !defined(_GLIBCXX_DEBUG) && (SIZE_MAX == UINT64_MAX)
 #define MGL_RESOURCEREFLECTION_SIZE 128
 #define MGL_XFBVARYING_SIZE 128
+#if MOBILEGL_BUILD_DISAGGREGATED
+// P7 OQ-8 added storageBlocks, one more Vector, in the disaggregated build ONLY. The pull
+// number below is the one G1 measures and it has not moved.
+#define MGL_LINKARTIFACTS_SIZE 1080
+#else
 #define MGL_LINKARTIFACTS_SIZE 1056
+#endif
 #define MGL_SPIRVARTIFACTS_SIZE 88
 #elif defined(_LIBCPP_VERSION) && (SIZE_MAX == UINT64_MAX) && defined(MGL_ARTIFACT_SIZES_LIBCXX_PINNED)
     // The integrator pins these from the NDK build (brief C.4); until then this branch is inert.

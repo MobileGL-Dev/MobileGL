@@ -232,3 +232,124 @@ divergence this slice closes. Restored: 10/10.
 **Lane arithmetic.** The three new `Split` entries carry `integration-magma-split`, so that
 gating lane grows 73 → 75 (and `-spawn` 52 → 54, `-tcp` 54 → 56). Growth only; G14's name
 sets are grow-only by rule.
+
+---
+
+## Slice 3 — OQ-8: one reflection archive serves the storage-block consumers (§5.3)
+
+**What landed.**
+
+- `LinkArtifacts` gains `Vector<StorageBlockReflection> storageBlocks` (`{name, binding,
+  dataSize}`), **`#if MOBILEGL_BUILD_DISAGGREGATED` only** — see G1 below.
+- `ProgramLinkTask::SnapshotStorageBlockIndexSpace()` fills it in phase A, right after
+  `SnapshotGlslangReflection`.
+- Its `VisitFields` row and its own three-field table join the codec;
+  `kProgramArtifactsCodecVersion` 2 → 3; `ProgramArtifactsSchemaFingerprint()` and therefore
+  `wireFingerprint` move with them, which is expected and is what makes a mixed-version pair
+  refuse at the handshake rather than at the first program.
+- `MagmaProgramSource::EnsureStorageBlocks` is **deleted**, with `m_storageBlocks`,
+  `m_storageBlocksReady`, the local `StorageBlock` struct and `#include <spirv_reflect.h>`.
+- `DirectVulkan.cpp`'s monolith consumer reads the archive too, under `#if` symmetry.
+
+**Why phase A and not phase B.** The obvious home is where the SPIR-V exists, and there is
+exactly one function that sees both finished halves — `ProgramSpirvTask::RunBody`'s L1 cache
+insert — but its writes reach only the TRANSLATION CACHE. Phase A's `artifacts` has already
+been moved into the `ProgramObject` by then (`ProgramObject.cpp`'s `JoinPendingLink`), and
+phase B is structurally forbidden from touching it. A field filled there would therefore be
+present on a cache HIT and absent on every cold link — the worst of both, and invisible until
+a second identical program linked. So the fill is glslang-derived, in phase A, and the
+equivalence below is what makes that safe.
+
+**The equivalence is measured, not asserted.** The consumers speak the index space
+SPIRV-Reflect produces, and the archive now produces it from glslang's reflection instead.
+`ProgramTest.TheArchivesStorageBlockOrderIsTheOneSpirvReflectProduces` runs the OLD algorithm —
+SPIRV-Reflect over the real modules, sorted by (normalised name, binding), deduplicated across
+stages — over a multi-stage program with an arrayed SSBO and an atomic-counter block, and
+compares element for element. Measured reference on this tree:
+
+```
+{ "Blocks", "VertexOnly", "gl_AtomicCounterBlock_0", "FragmentOnly" }
+```
+
+which exercises all three of the cases that could have diverged: the instance array collapses
+to one entry (glslang reflects per element, SPIR-V carries one descriptor with a count), the
+synthesized atomic-counter block IS in the backend's space although GL's own
+`GL_SHADER_STORAGE_BLOCK` enumeration excludes it, and `FragmentOnly` lands last because the
+cross-stage dedupe walks stages in linked order.
+
+**MEASUREMENT — `spvReflectCreateShaderModule` on the Magma wire draw path, per frame.**
+Same binary, same workload, same window (`frames=1 window=1 draws=1 acc=18`, identical bytes),
+`DirectVulkan` × inproc, `StorageBufferRegrowScenario` + the pipeline storage-block case, with
+a temporary `MGLOG_I("OQ8_REFLECT_CALL")` at the call site:
+
+| | reflect calls | frames | draws |
+|---|---|---|---|
+| BEFORE (`HEAD`'s per-draw `EnsureStorageBlocks`) | **4** | 1 | 1 |
+| AFTER (reads the archive) | **0** | 1 | 1 |
+
+The AFTER number is 0 structurally, not incidentally: the call site is gone and
+`MagmaProgramSource.h` no longer includes `spirv_reflect.h` at all, which is the gate a future
+edit would have to break on purpose. (A `MagmaProgramSource` is a borrowed view constructed
+once per wire draw, so its `mutable` memo was cold every time it was read — that is why the
+per-draw cost existed at all.)
+
+**The monolith half: DONE, under `#if` symmetry — with one caveat the integrator should see.**
+The task allowed deferring this if it could not be done without moving pull `.text`. It can,
+and it is: `GetShaderStorageBlockIndex` / `GetShaderStorageBlockBinding` /
+`ClearProgramResourceCaches` and the block-binding setter each have a disaggregated arm that
+reads the archive and a `#else` arm that is the previous code verbatim. In the disaggregated
+build that retires `g_programResourceCaches`, `ProgramResourceCache`, `StorageBlockResource`,
+`BufferVariableResource`, `AddBufferVariablesRecursive`, `NormalizeDescriptorName`,
+`GetProgramResourceCache` **and the rehash hazard** — the open-addressed-map dangling reference
+that was a reproducible segfault in `ProgramPipelineScenario`'s two storage-block cases.
+
+Two things are worth stating plainly:
+
+1. **The pull build keeps all of it.** The archive member is disaggregated-only because one
+   more `Vector` in `LinkArtifacts` changes its size, its implicit destructor and its move
+   constructor, and G1 pins the pull build's `.text` byte for byte. So §5.3's "`g_programResource
+   Caches` 随之删" is achieved in the disaggregated build and NOT in the pull one. Retiring the
+   pull half is a one-line change (drop the guard on the member) the day that pin is retired or
+   the member is moved — a P13 / integrator call, not a wave-2 one.
+2. **Nothing outside `DirectVulkan.cpp` read any of the retired machinery.** Measured:
+   `BufferVariableResource`, `bufferVariables`, `activeVariables` and `StorageBlockResource`
+   have no reference anywhere else in the tree, and `dataSize` was written and never read —
+   `GL_BUFFER_VARIABLE` and `GL_ACTIVE_VARIABLES` are answered by
+   `MG_Impl/GLImpl/Program/ProgramInterface.cpp` out of glslang's own reflection, which is a
+   different index space. So the two arms differ in exactly the two functions their callers
+   use and in nothing else.
+
+One genuine behaviour improvement rides along: the monolith `GetShaderStorageBlockBinding` now
+asks `GetShaderStorageBlockBindingOverride` on every read, over an immutable list, where it
+used to read a binding patched into a mutable cache. Same answer by a shorter route, and a
+rebind can no longer be lost to a cache rebuild that raced a state-version bump.
+
+**Proof (green).** `ctest -L unit` 2403/2403 (2402 before this slice; +1 is the new case).
+`DirectVulkan.*(ProgramPipeline|StorageBufferRegrow)` 60/60 — the **monolith** `DirectVulkan.`
+arm and the `Split` / `Spawn` / `Tcp` arms together, which is what says both consumers were
+switched.
+
+**G1 after the archive change:** `.text` `0xa52203` = 10822147 → 10822147 (+0), 27837 → 27837
+defined symbols, **0 added / 0 removed / 0 resized / 0 renamed**, and the file is byte-identical
+on disk (19143824 bytes both sides). The `#if` guards did their job; an unguarded call site
+caught it once mid-slice (the pull build failed to compile, which is the loud version).
+
+**RED-ONCE (executed).** `SnapshotStorageBlockIndexSpace` made to publish nothing:
+
+```
+ProgramTest.cpp:525: Failure
+    Which is: {}
+    Which is: { "Blocks", "VertexOnly", "gl_AtomicCounterBlock_0", "FragmentOnly" }
+...
+58% tests passed, 25 tests failed out of 60
+  3091 DirectVulkan.ProgramPipelineScenario.ComputeAndGraphicsStagesShareOnePipeline  (SEGFAULT)
+  3092 DirectVulkan.ProgramPipelineScenario.AStageProgramsStorageBlockBindingReaches... (Failed)
+  3282 DirectVulkan.StorageBufferRegrowScenario...                                      (Failed)
+  4179 DirectVulkan.Split.Buffers.StorageBufferRegrowScenario...                        (Failed)
+  4198 DirectVulkan.Spawn.Buffers.StorageBufferRegrowScenario...                        (Failed)
+  4217 DirectVulkan.Tcp.Buffers.StorageBufferRegrowScenario...                          (Failed)
+  4469 DirectVulkan.Split.ProgramPipelineScenario...                                    (Failed)
+```
+
+The monolith arm reds beside the three transports, which is the evidence that the monolith
+consumer really was switched and not merely edited. Restored: 61/61.

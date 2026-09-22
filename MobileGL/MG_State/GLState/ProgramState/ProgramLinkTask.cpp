@@ -106,6 +106,29 @@ namespace {
         return bracket == MobileGL::String::npos ? name : name.substr(0, bracket);
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P7 OQ-8. ShaderStage -> EShLanguage, so a reflection record's `stages` mask (which is an
+    // EShLanguageMask) can be tested against the stage of a snapshotted shader. Written here
+    // rather than lifted into a shared header because this is the only caller and
+    // ProgramArtifacts.h's include-closure probe forbids this file's neighbours from growing a
+    // dependency on ShaderStage.h. EShLangCount means "no glslang stage", which the caller
+    // skips rather than guesses at.
+    static EShLanguage ShaderStageToEShLanguage(MobileGL::ShaderStage stage) {
+        switch (stage) {
+        case MobileGL::ShaderStage::Vertex:      return EShLangVertex;
+        case MobileGL::ShaderStage::TessControl: return EShLangTessControl;
+        case MobileGL::ShaderStage::TessEval:    return EShLangTessEvaluation;
+        case MobileGL::ShaderStage::Geometry:    return EShLangGeometry;
+        case MobileGL::ShaderStage::Fragment:    return EShLangFragment;
+        case MobileGL::ShaderStage::Compute:     return EShLangCompute;
+        case MobileGL::ShaderStage::ShaderStageCount:
+        case MobileGL::ShaderStage::Unknown:
+            break;
+        }
+        return EShLangCount;
+    }
+#endif
+
     // Element index of an arrayed interface-block instance: "GOKU[3]" -> 3, "GOKU" -> 0.
     // Reflection spells arrayed instances exactly this way (glslang expands the instance
     // array into one TObjectReflection per element), and the subscript it writes is a plain
@@ -1735,8 +1758,96 @@ namespace MobileGL::MG_State::GLState {
         }
 
         SnapshotGlslangReflection();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P7 OQ-8. Guarded at the CALL as well as at the definition, which is not belt and
+        // braces: LinkArtifacts::storageBlocks does not exist in a pull build, so neither can
+        // the function that fills it, and G1 requires this translation unit to be statement
+        // for statement what it was there.
+        SnapshotStorageBlockIndexSpace();
+#endif
         return true;
     }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P7 wave 2 package C, OQ-8 (CONTRACT-P7 §5.3): DIRECTVULKAN'S STORAGE-BLOCK INDEX SPACE,
+    // BUILT ONCE HERE INSTEAD OF PER DRAW.
+    //
+    // WHAT ORDER THIS HAS TO PRODUCE, and it is not blockReflection's. The consumers speak the
+    // index space DirectVulkan's SPIRV-Reflect walk produces (DirectVulkan.cpp's
+    // GetProgramResourceCache, and the copy of it MagmaProgramSource used to carry):
+    //
+    //   for each SPIR-V module, IN LINKED-STAGE ORDER
+    //       take its STORAGE_BUFFER descriptors
+    //       sorted by (normalised block name, binding)
+    //       appending any name not already present
+    //
+    // Every clause is reproducible from what phase A already owns. `in.shaders` is the linked
+    // shader snapshot and is documented as ALREADY STAGE-SORTED, and it is the same list, in
+    // the same order, that ProgramSpirvTask turns into `generatedSpirv` one module per entry -
+    // so iterating it iterates the modules. `blockReflection[].stages` is an EShLanguageMask,
+    // which is what says whether a given block is one of a given module's descriptors. The
+    // name normalisation is StripArrayElementSuffix, which is the same "[k]" strip
+    // NormalizeDescriptorName does to the SPIR-V type name: glslang expands an INSTANCE ARRAY
+    // into one reflection entry per element ("Foo[0]", "Foo[1]") while SPIR-V carries one
+    // descriptor with a count, so stripping is what makes the two agree on ONE entry named
+    // "Foo".
+    //
+    // ATOMIC-COUNTER BLOCKS ARE INCLUDED, deliberately, and they are the case that makes the
+    // filter `type.isBuffer` rather than IsStorageBlock(). The transpiler lowers every
+    // atomic_uint onto a synthesized gl_AtomicCounterBlock_<binding> BUFFER block, so
+    // SPIRV-Reflect sees an ordinary STORAGE_BUFFER descriptor for it and DirectVulkan's index
+    // space has always contained it. GL's own GL_SHADER_STORAGE_BLOCK enumeration excludes
+    // them (ProgramInterface.cpp's ClassifyBlock does the exclusion there, in the space that
+    // needs it) - these are two different index spaces and this is the backend's.
+    //
+    // `binding` IS THE DECLARED ONE. A rebind travels separately and both consumers apply it
+    // on read; see StorageBlockReflection in ProgramArtifacts.h.
+    void ProgramLinkTask::SnapshotStorageBlockIndexSpace() {
+        artifacts.storageBlocks.clear();
+        const auto alreadyPresent = [this](const String& name) {
+            for (const auto& block : artifacts.storageBlocks) {
+                if (block.name == name) return true;
+            }
+            return false;
+        };
+        for (const LinkShaderInput& shader : in.shaders) {
+            const EShLanguage stage = ShaderStageToEShLanguage(shader.stage);
+            if (stage == EShLangCount) continue;
+            const Uint32 stageBit = 1u << static_cast<Uint32>(stage);
+
+            // Pointers, not copies: blockReflection is stable for the rest of this function and
+            // a BlockReflection carries several strings.
+            Vector<const ProgramObject::BlockReflection*> ofThisStage;
+            for (const ProgramObject::BlockReflection& block : artifacts.blockReflection) {
+                if (!block.type.isBuffer) continue;
+                if ((block.stages & stageBit) == 0) continue;
+                ofThisStage.push_back(&block);
+            }
+            // STABLE, so two entries that normalise to one name keep their declaration order
+            // and the FIRST (element 0, the base binding) is the one that survives the dedupe -
+            // which is the element SPIRV-Reflect's single descriptor reports.
+            std::stable_sort(ofThisStage.begin(), ofThisStage.end(),
+                             [](const ProgramObject::BlockReflection* lhs,
+                                const ProgramObject::BlockReflection* rhs) {
+                                 const String lhsName = StripArrayElementSuffix(lhs->name);
+                                 const String rhsName = StripArrayElementSuffix(rhs->name);
+                                 if (lhsName != rhsName) return lhsName < rhsName;
+                                 return lhs->binding < rhs->binding;
+                             });
+            for (const ProgramObject::BlockReflection* block : ofThisStage) {
+                const String name = StripArrayElementSuffix(block->name);
+                if (name.empty() || alreadyPresent(name)) continue;
+                ProgramObject::StorageBlockReflection record;
+                record.name = name;
+                record.binding = block->binding < 0 ? 0u : static_cast<Uint32>(block->binding);
+                record.dataSize = static_cast<Int32>(block->size);
+                artifacts.storageBlocks.push_back(Move(record));
+            }
+        }
+        MGLOG_D("ProgramObject %u: Reflection - %zu storage block(s) in the backend index space",
+                in.externalIndex, artifacts.storageBlocks.size());
+    }
+#endif
 
     // The last thing DoReflection does, and the thing that lets everything after it stop
     // caring that a glslang::TProgram ever existed: copy every reflection record the GL query

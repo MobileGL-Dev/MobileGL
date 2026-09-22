@@ -7,7 +7,11 @@
 #include <MG_Pipe/PipeApply.h>
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #include "../DirectVulkanResourceState.h"
-#include <spirv_reflect.h>
+// P7 wave 2 package C, OQ-8: spirv_reflect.h is GONE from this header, and its absence is the
+// gate. Everything this class needed it for - the storage-block index space - now travels in
+// the archive (LinkArtifacts::storageBlocks), so the SPIR-V reflector is off the Magma wire
+// draw path entirely. A future edit that re-adds the include is re-adding a per-draw reflect,
+// because a MagmaProgramSource is constructed once per draw and can memoise nothing.
 #endif
 
 namespace MobileGL::MG_Backend::DirectVulkan {
@@ -153,30 +157,49 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         GLenum GetTransformFeedbackBufferMode() const {
             return IsWire() ? Link().xfbBufferMode : m_frontend->GetTransformFeedbackBufferMode();
         }
+        // P7 wave 2 package C, OQ-8 (CONTRACT-P7 §5.3): READ OUT OF THE ARCHIVE.
+        //
+        // What stood here re-ran spvReflectCreateShaderModule over EVERY stage module of the
+        // program, and it did so PER DRAW: a MagmaProgramSource is a borrowed view that
+        // WireDraw.inc's WireProgramSource constructs afresh for each wire draw, so the lazy
+        // `m_storageBlocksReady` latch could never outlive one. The list it rebuilt is a pure
+        // function of the linked program, so it is now built once at link time and travels in
+        // the archive (LinkArtifacts::storageBlocks), which takes the SPIR-V reflector off the
+        // wire draw path entirely - this header no longer includes spirv_reflect.h at all.
         Uint GetShaderStorageBlockIndex(const String& name) const {
             if (!IsWire()) return DirectVulkan::GetShaderStorageBlockIndex(*m_frontend, name);
-            EnsureStorageBlocks();
-            String key = name;
-            auto find = [&] {
-                return std::find_if(m_storageBlocks.begin(), m_storageBlocks.end(),
-                    [&](const StorageBlock& block) { return block.Name == key; });
+            const auto& blocks = Link().storageBlocks;
+            // The archive carries NORMALISED names (the array subscript stripped), because
+            // that is the spelling SPIRV-Reflect's type_name gives and the spelling
+            // ProgramFactory::ReflectLayout looks up. A caller that still holds a GL-style
+            // "Foo[2]" gets the same second chance it always had.
+            const auto find = [&blocks](const String& key) {
+                return std::find_if(blocks.begin(), blocks.end(),
+                    [&](const MG_State::GLState::StorageBlockReflection& block) {
+                        return block.name == key;
+                    });
             };
-            auto found = find();
-            if (found == m_storageBlocks.end() && !name.empty() && name.back() == ']') {
+            auto found = find(name);
+            if (found == blocks.end() && !name.empty() && name.back() == ']') {
                 const auto bracket = name.rfind('[');
-                if (bracket != String::npos) { key = name.substr(0, bracket); found = find(); }
+                if (bracket != String::npos) found = find(name.substr(0, bracket));
             }
-            return found == m_storageBlocks.end() ? GL_INVALID_INDEX : static_cast<Uint>(found - m_storageBlocks.begin());
+            return found == blocks.end() ? GL_INVALID_INDEX
+                                         : static_cast<Uint>(found - blocks.begin());
         }
         Uint GetShaderStorageBlockBinding(Uint index) const {
             if (!IsWire()) return DirectVulkan::GetShaderStorageBlockBinding(*m_frontend, index);
-            EnsureStorageBlocks();
-            if (index >= m_storageBlocks.size()) return 0;
-            const auto& block = m_storageBlocks[index];
+            const auto& blocks = Link().storageBlocks;
+            if (index >= blocks.size()) return 0;
+            const auto& block = blocks[index];
+            // THE OVERRIDE STILL WINS, and it still comes off the RECORD rather than the
+            // archive: glShaderStorageBlockBinding is a post-link mutable and the archive
+            // carries link-time defaults only (rule on MagmaProgramSource, and the reason
+            // StorageBlockReflection::binding is documented as the DECLARED binding).
             for (const auto& override : m_record->StorageOverrides) {
-                if (override.Name == block.Name) return override.Binding;
+                if (override.Name == block.name) return override.Binding;
             }
-            return block.Binding;
+            return block.binding;
         }
 
     private:
@@ -187,48 +210,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return tIndex >= 0 && static_cast<SizeT>(tIndex) < Link().blockReflection.size()
                 ? &Link().blockReflection[tIndex] : nullptr;
         }
-        struct StorageBlock { String Name; Uint Binding; };
-        void EnsureStorageBlocks() const {
-            if (m_storageBlocksReady) return;
-            m_storageBlocksReady = true;
-            // Match the legacy resource-query index order: stage order, then
-            // normalized descriptor name/binding, deduplicated across stages.
-            for (const auto& spirv : GetGeneratedSpirv()) {
-                if (spirv.empty()) continue;
-                SpvReflectShaderModule module{};
-                if (spvReflectCreateShaderModule(spirv.size() * sizeof(Uint), spirv.data(), &module) != SPV_REFLECT_RESULT_SUCCESS) continue;
-                Uint32 count = 0;
-                if (spvReflectEnumerateDescriptorBindings(&module, &count, nullptr) == SPV_REFLECT_RESULT_SUCCESS) {
-                    Vector<SpvReflectDescriptorBinding*> bindings(count);
-                    if (spvReflectEnumerateDescriptorBindings(&module, &count, bindings.data()) == SPV_REFLECT_RESULT_SUCCESS) {
-                        auto name = [](const SpvReflectDescriptorBinding* binding) {
-                            const char* raw = binding->name;
-                            if (binding->type_description && binding->type_description->type_name) raw = binding->type_description->type_name;
-                            String result = raw ? raw : "";
-                            const auto suffix = result.find("[0]");
-                            return suffix == String::npos ? result : result.substr(0, suffix);
-                        };
-                        std::sort(bindings.begin(), bindings.end(), [&](const auto* a, const auto* b) {
-                            const String an = a ? name(a) : String(), bn = b ? name(b) : String();
-                            return an != bn ? an < bn : (a && b && a->binding < b->binding);
-                        });
-                        for (const auto* binding : bindings) {
-                            if (!binding || binding->descriptor_type != SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER) continue;
-                            const String key = name(binding);
-                            if (key.empty() || std::any_of(m_storageBlocks.begin(), m_storageBlocks.end(),
-                                    [&](const StorageBlock& block) { return block.Name == key; })) continue;
-                            m_storageBlocks.push_back({key, binding->binding});
-                        }
-                    }
-                }
-                spvReflectDestroyShaderModule(&module);
-            }
-        }
         const Program* m_frontend = nullptr;
         MG_Pipe::MGPipeHandle m_handle = MG_Pipe::kMGPipeNullHandle;
         const MG_Pipe::MGPipeShaderCsoRecord* m_record = nullptr;
-        mutable Bool m_storageBlocksReady = false;
-        mutable Vector<StorageBlock> m_storageBlocks;
+        // P7 OQ-8: the two mutables that memoised the per-draw reflect are gone with it. They
+        // were `mutable` precisely because this class is a borrowed const view - and that is
+        // also why they never helped: a view lives for one draw, so the latch was cold every
+        // time it was read.
     };
 #else
     using MagmaProgramSource = MG_State::GLState::ProgramObject;
