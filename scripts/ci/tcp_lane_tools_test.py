@@ -90,10 +90,15 @@ class Accounting(unittest.TestCase):
     def test_equal_counts_do_not_hide_a_missing_case(self):
         parity = module('spawn_lane_parity')
         a, b = 'TriangleScenario.Draw', 'TriangleScenario.Read'
+        # The Magma tiers (P7 package L) read through lane_names, not lane_cases; an empty set
+        # on every arm makes compare_arms report "nothing to compare" and stay out of this
+        # assertion, instead of running a real ctest in the placeholder build dir.
         with patch.object(parity, 'lane_cases', side_effect=[{a}, {a}, {b}]), \
+                patch.object(parity, 'lane_names', return_value=set()), \
                 patch.object(sys, 'argv', ['spawn_lane_parity.py', 'unused']):
             self.assertEqual(parity.main(), 1)
         with patch.object(parity, 'lane_cases', return_value={a}), \
+                patch.object(parity, 'lane_names', return_value=set()), \
                 patch.object(sys, 'argv', ['spawn_lane_parity.py', 'unused']):
             self.assertEqual(parity.main(), 0)
 
