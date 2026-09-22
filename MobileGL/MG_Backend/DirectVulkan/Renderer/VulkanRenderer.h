@@ -467,6 +467,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkImageLayout* trackedLayout = nullptr;
             VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
             VkImageAspectFlags aspect = 0;
+            // Zero for the default framebuffer, which no arm that reads this ever reaches.
+            VkImageUsageFlags usageFlags = 0;
             Uint32 level = 0, layer = 0, layers = 1, levels = 1;
             Bool isDefault = false;
             // Set when isDefault: the swapchain image index this role resolved to.
@@ -491,6 +493,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         PFN_vkCreateRenderPass2 m_wireCreateRenderPass2 = nullptr;
         VkResolveModeFlags m_wireDepthResolveModes = 0;
         VkResolveModeFlags m_wireStencilResolveModes = 0;
+        // P7 wave 2-B2, CONTRACT-P7 §3.2 (`multisample-blit-aspect`): the SECOND arm of the
+        // multisample depth/stencil resolve, for the device that does not carry
+        // VK_KHR_depth_stencil_resolve. One baked pass per aspect, sample zero, no frontend
+        // object - see WireMultisampleResolve.inc. `resolved` must be a single-sample image of
+        // the source's format and extent; the rect is expressed by the scissor.
+        Bool ResolveWireDepthStencilWithShader(WireImage source, WireImage resolved,
+                                               VkImageAspectFlags aspect, GLint sx0, GLint sy0,
+                                               Uint32 width, Uint32 height);
+        struct WireMultisampleResolveResources;
+        WireMultisampleResolveResources* m_wireMultisampleResolveResources = nullptr;
+        void DestroyWireMultisampleResolveResources();
+        Bool m_wireShaderStencilExport = false;
         Bool BlitWireColorToDefault(WireImage source, WireImage destination,
                                    GLint sx0, GLint sy0, GLint sx1, GLint sy1,
                                    GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter);

@@ -1837,6 +1837,84 @@ TEST_F(F1WireScenario, MultisampleBlitOntoAMultisampleDestinationDeclinesAndKeep
     Gl().EndFrame();
 }
 
+// P7 wave 2-B2, CONTRACT-P7 §3.2: the surviving half of `multisample-blit-aspect@P7`.
+//
+// The half WITH an arm is ResolveWireDepthStencil's: a multisample depth or stencil source now
+// reaches a single-sample destination on every device - through VK_KHR_depth_stencil_resolve
+// where it exists, through WireMultisampleResolve.inc's baked pass where it does not - and the
+// two MsResolve entries on each arm are its reading. This is the half with none.
+//
+// ONE SAMPLE INTO FOUR, with rectangles that MATCH so the shape decline next door is not what
+// fires. Vulkan has no command for it: vkCmdResolveImage only ever writes a single-sample
+// destination, vkCmdBlitImage refuses a multisampled side outright, and vkCmdCopyImage needs
+// the two counts to be equal. GL 4.6 core 18.3.1 calls this sample replication and the wire arm
+// declines it by name rather than ending the session over it.
+//
+// Red once (executed, reverted): restore MagmaWireFatal("multisample-blit-aspect@P7") and this
+// case dies as Fatal{UnmigratedVerb, "Magma:multisample-blit-aspect@P7"}.
+TEST_F(F1WireScenario, MultisampleBlitFromASingleSampleSourceDeclinesAndKeepsTheSession) {
+    if (!Ready()) return;
+    GLuint msFbo = 0, msRenderbuffer = 0;
+    glGenFramebuffers(1, &msFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, msFbo);
+    glGenRenderbuffers(1, &msRenderbuffer);
+    glBindRenderbuffer(GL_RENDERBUFFER, msRenderbuffer);
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, 4, GL_RGBA8, 4, 2);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, msRenderbuffer);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GLenum(GL_FRAMEBUFFER_COMPLETE)) {
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glDeleteFramebuffers(1, &msFbo);
+        glDeleteRenderbuffers(1, &msRenderbuffer);
+        GTEST_SKIP() << "this driver cannot host a 4x multisample RGBA8 renderbuffer";
+    }
+    while (glGetError() != GLenum(GL_NO_ERROR)) {}
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(1, 0, 1, 1); // magenta: the colour the declined blit must leave behind
+    glClear(GL_COLOR_BUFFER_BIT);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.MsAspectDecline.setup";
+
+    constexpr GLfloat kYellow[4]{1, 1, 0, 1};
+    GLuint srcFbo = 0, srcTexture = 0;
+    MakeSingleSampleTarget(4, 2, kYellow, srcFbo, srcTexture);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.MsAspectDecline.source";
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, msFbo);
+    const auto before = PeekSplitRuntime().emitSeq;
+    glBlitFramebuffer(0, 0, 4, 2, 0, 0, 4, 2, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    EXPECT_GT(PeekSplitRuntime().emitSeq, before) << "F1.MsAspectDecline.wire";
+    glFinish(); // the decline's error rides a later reply - see the shape case next door
+    EXPECT_EQ(FirstGLError(), GLenum(GL_INVALID_OPERATION))
+        << "F1.MsAspectDecline: the decline must record the error GL names for the shape";
+
+    constexpr GLfloat kBlue[4]{0, 0, 1, 1};
+    GLuint readFbo = 0, readTexture = 0;
+    MakeSingleSampleTarget(4, 2, kBlue, readFbo, readTexture);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, msFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, readFbo);
+    glBlitFramebuffer(0, 0, 4, 2, 0, 0, 4, 2, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.MsAspectDecline.resolve";
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, readFbo);
+    constexpr std::array<GLubyte, 4> kMagenta{255, 0, 255, 255};
+    for (int y = 0; y < 2; ++y)
+        for (int x = 0; x < 4; ++x)
+            EXPECT_EQ(ReadOnePixel(x, y), kMagenta)
+                << "F1.MsAspectDecline: the declined blit wrote (" << x << "," << y << ")";
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.MsAspectDecline: the session survived";
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glDeleteFramebuffers(1, &readFbo);
+    glDeleteTextures(1, &readTexture);
+    glDeleteFramebuffers(1, &srcFbo);
+    glDeleteTextures(1, &srcTexture);
+    glDeleteFramebuffers(1, &msFbo);
+    glDeleteRenderbuffers(1, &msRenderbuffer);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    Gl().EndFrame();
+}
+
 namespace {
 // One 8x8x2 RGBA8 array texture with two levels, filled so that EVERY subresource this pair
 // of cases touches is distinguishable from every other one. A flat fill would let a copy that

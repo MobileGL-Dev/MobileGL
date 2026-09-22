@@ -3446,6 +3446,7 @@ void main() {
         ClearAllWireDrawPassCaches();
         DestroyWireColorBlitResources();
         DestroyWireDepthMipmapResources();
+        DestroyWireMultisampleResolveResources();
 #endif
         OnSubmitsCompletedUpTo(m_submitCounter);
         DestroySubmitFencePool();
@@ -7913,6 +7914,9 @@ void main() {
     // AFTER WireColorBlit.inc: the depth mip reuses that file's window-Y convention and is
     // written to be read beside it.
     #include "WireDepthMipmap.inc"
+    // AFTER WireDepthMipmap.inc for the same reason: the multisample depth/stencil resolve is
+    // that file's pass with the box filter taken out and a sample index put in.
+    #include "WireMultisampleResolve.inc"
     #include "WireDraw.inc"
 
     void VulkanRenderer::Clear(GLbitfield mask) {
@@ -14777,6 +14781,16 @@ void main() {
             m_wireDepthResolveModes = resolveProperties.supportedDepthResolveModes;
             m_wireStencilResolveModes = resolveProperties.supportedStencilResolveModes;
         }
+        // P7 wave 2-B2, CONTRACT-P7 §3.2 (`multisample-blit-aspect`): the shader resolve's
+        // stencil half needs SPV_EXT_shader_stencil_export, because a fragment shader cannot
+        // write the stencil aspect without it. Enabled on the same terms as the resolve
+        // extensions above - wire arms only - and the arm declines stencil where it is absent
+        // rather than producing an undefined aspect.
+        m_wireShaderStencilExport = MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            IsExtensionSupported(availableExtensions, VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
+        if (m_wireShaderStencilExport)
+            EnableOptionalDeviceExtension(availableExtensions, enabledDeviceExtensions,
+                                          VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
 #endif
         if ((descriptorIndexingCore || descriptorIndexingExtension) && getPhysicalDeviceFeatures2 != nullptr &&
             getPhysicalDeviceProperties2 != nullptr) {

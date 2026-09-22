@@ -3091,7 +3091,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # NO KNOB: every driver that can host a 4x multisample RGBA8 renderbuffer reaches both
         # entries with the plain Fm environment, and one that cannot says so as a SKIP.
         foreach(multisampleBlitCase MultisampleColorBlitScalesAndFlipsThroughTheResolveScratch
-                                    MultisampleBlitOntoAMultisampleDestinationDeclinesAndKeepsTheSession)
+                                    MultisampleBlitOntoAMultisampleDestinationDeclinesAndKeepsTheSession
+                                    MultisampleBlitFromASingleSampleSourceDeclinesAndKeepsTheSession)
             gtest_discover_tests(MobileGLIntegrationTest
                 TEST_PREFIX "DirectVulkan.${mglItestArm}.MsBlit."
                 TEST_FILTER "F1WireScenario.${multisampleBlitCase}"
@@ -3099,6 +3100,35 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msblit${mglItestArmLogTag}-${multisampleBlitCase}.log")
+        endforeach()
+        # ---- P7 wave 2-B2: `multisample-blit-aspect@P7`'s retirement, BOTH ARMS ---------------
+        #
+        # THE CASE IS PROMOTED, NOT WRITTEN. DepthStencilReadbackMatrixScenario already owns the
+        # observable - clear a 4x multisample DEPTH24_STENCIL8 renderbuffer, resolve it into a
+        # single-sampled framebuffer with glBlitFramebuffer, read both aspects back, and check
+        # that a depth-only resolve left the destination's stencil alone and vice versa - and it
+        # already ran on these three arms in the INFORMATIONAL tier (`…Full.`). What it did not
+        # have was a gated entry, which is what CONTRACT-P7 §3.2's aspect row needs.
+        #
+        # TWO ENTRIES OVER ONE CASE, and the second is the only way its arm is reachable here:
+        # lavapipe carries VK_KHR_create_renderpass2 AND VK_KHR_depth_stencil_resolve, so the
+        # extension arm answers every resolve on this host and the shader pass - which exists FOR
+        # the device that has neither, where the session used to end at
+        # `Magma:multisample-depth-resolve-capability` - would never execute.
+        # MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE drops the extension arm, and the two entries
+        # then assert the same depth values and the same stencil indices, which is the whole
+        # claim: sample zero either way.
+        #
+        # ITS OWN ENTRIES RATHER THAN A LANE-WIDE FLIP, the shader-mip block's reason: the knob
+        # changes how EVERY depth/stencil resolve in the process is performed.
+        foreach(shaderDepthResolve 0 1)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.MsResolve${shaderDepthResolve}."
+                TEST_FILTER "DepthStencilReadbackMatrixScenario.AResolvedMultisampleDepthReadsBackFromTheDestination"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=${shaderDepthResolve}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msresolve${mglItestArmLogTag}-shader${shaderDepthResolve}.log")
         endforeach()
         foreach(inPlaceCase CopyImageInPlaceAcrossLevelsAndLayers
                             CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone)

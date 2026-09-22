@@ -59,6 +59,7 @@ namespace {
 using Uint32 = std::uint32_t;
 #include <MG_Backend/DirectVulkan/Renderer/WireColorBlitSpirv.h>
 #include <MG_Backend/DirectVulkan/Renderer/WireDepthMipmapSpirv.h>
+#include <MG_Backend/DirectVulkan/Renderer/WireMultisampleResolveSpirv.h>
 
 struct BakedShader {
     const char* name;            // ctest entry name, and the bake file's stem
@@ -103,6 +104,28 @@ const BakedShader kBakedShaders[] = {
                   "kWireDepthMipmapFragmentSpirv", EShLangFragment,
                   glslang::EShTargetVulkan_1_0, glslang::EShTargetSpv_1_0,
                   kWireDepthMipmapFragmentSpirv),
+    // P7 wave 2-B2: the multisample depth/stencil resolve's own pass. THREE ROWS FOR TWO
+    // PIPELINES - one vertex stage shared by both, and a fragment stage per aspect, because a
+    // fragment shader cannot write the stencil aspect without VK_EXT_shader_stencil_export and
+    // a device without that extension must still be able to compile the depth half.
+    MGL_BAKED_ROW("WireMultisampleResolveVertex",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireMultisampleResolve.vert",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireMultisampleResolveSpirv.h",
+                  "kWireMultisampleResolveVertexSpirv", EShLangVertex,
+                  glslang::EShTargetVulkan_1_0, glslang::EShTargetSpv_1_0,
+                  kWireMultisampleResolveVertexSpirv),
+    MGL_BAKED_ROW("WireMultisampleDepthResolveFragment",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireMultisampleDepthResolve.frag",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireMultisampleResolveSpirv.h",
+                  "kWireMultisampleDepthResolveFragmentSpirv", EShLangFragment,
+                  glslang::EShTargetVulkan_1_0, glslang::EShTargetSpv_1_0,
+                  kWireMultisampleDepthResolveFragmentSpirv),
+    MGL_BAKED_ROW("WireMultisampleStencilResolveFragment",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireMultisampleStencilResolve.frag",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireMultisampleResolveSpirv.h",
+                  "kWireMultisampleStencilResolveFragmentSpirv", EShLangFragment,
+                  glslang::EShTargetVulkan_1_0, glslang::EShTargetSpv_1_0,
+                  kWireMultisampleStencilResolveFragmentSpirv),
     // The two driver self-test probes. They are not Magma's, and they are in this table for
     // the reason the contract names them: they are baked, so they can be stale, and one of
     // them was.

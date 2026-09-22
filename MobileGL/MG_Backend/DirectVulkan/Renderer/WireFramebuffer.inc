@@ -101,6 +101,21 @@
         return forced;
     }
 
+    // AND THE SAME PROBLEM AGAIN FOR THE SHADER MULTISAMPLE RESOLVE (P7 wave 2-B2). lavapipe
+    // carries VK_KHR_create_renderpass2 AND VK_KHR_depth_stencil_resolve, so the extension arm
+    // is taken for every depth/stencil resolve this host can run and the shader arm - the one
+    // that exists for the device WITHOUT them, which is where the session used to die at
+    // `Magma:multisample-depth-resolve-capability` - would never execute under any lane. The
+    // knob drops the extension arm. It does not pretend the extension is missing anywhere else:
+    // nothing but the arm choice reads it.
+    static Bool MagmaWireForcedShaderDepthResolve() {
+        static const Bool forced = [] {
+            const char* value = std::getenv("MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE");
+            return value && *value && value[0] != '0';
+        }();
+        return forced;
+    }
+
     VulkanRenderer::WireImage VulkanRenderer::ResolveWireImage(
         const MG_Pipe::MGPFramebufferState& fbo, const MG_Pipe::MGPSurface& surface,
         VkImageAspectFlags aspect, Bool isWriteTarget) {
@@ -145,6 +160,11 @@
         out.layout = resource->layout;
         out.trackedLayout = &resource->layout;
         out.samples = resource->sampleCount;
+        // P7 wave 2-B2: the shader multisample resolve SAMPLES this image, which is a question
+        // about the image and not about the format - VkTextureManager asks for SAMPLED on every
+        // attachment it creates, and a device that declined it would make the descriptor write
+        // undefined rather than fail. Carried here so the arm can decline instead.
+        out.usageFlags = resource->usageFlags;
         out.level = level;
         out.levels = resource->mipLevels;
         out.layer = layer;
@@ -428,10 +448,25 @@
         else if (source.format == VK_FORMAT_D16_UNORM_S8_UINT || source.format == VK_FORMAT_D24_UNORM_S8_UINT ||
                  source.format == VK_FORMAT_D32_SFLOAT_S8_UINT)
             formatAspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
-        if (!m_wireCreateRenderPass2 ||
-            ((formatAspects & VK_IMAGE_ASPECT_DEPTH_BIT) && !(m_wireDepthResolveModes & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT)) ||
-            ((formatAspects & VK_IMAGE_ASPECT_STENCIL_BIT) && !(m_wireStencilResolveModes & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT)))
-            MagmaWireFatal("multisample-depth-resolve-capability");
+        // P7 wave 2-B2, CONTRACT-P7 §3.2 (`multisample-blit-aspect`): TWO ARMS, and which one
+        // runs is a fact about the DEVICE, not about the shape. VK_KHR_depth_stencil_resolve is
+        // the direct route and is taken wherever it exists; where it does not - which is where
+        // the session used to end at `Magma:multisample-depth-resolve-capability`, on the first
+        // glBlitFramebuffer(GL_DEPTH_BUFFER_BIT) out of a multisampled read framebuffer - a
+        // baked pass fetches sample ZERO and writes gl_FragDepth (or, with
+        // VK_EXT_shader_stencil_export, gl_FragStencilRefARB). Sample zero in both arms, because
+        // VK_RESOLVE_MODE_SAMPLE_ZERO_BIT is what the subpass below asks for.
+        //
+        // THE TWO CAPABILITY TESTS ARE NOT THE SAME TEST, and the difference is structural: the
+        // subpass resolves every aspect the FORMAT has, so it needs a mode for each of them,
+        // while the shader pass writes only the one aspect this blit asked for and leaves the
+        // rest of the scratch undefined - which is safe because the copy below reads exactly
+        // that aspect.
+        const Bool extensionResolve = !MagmaWireForcedShaderDepthResolve() && m_wireCreateRenderPass2 &&
+            (!(formatAspects & VK_IMAGE_ASPECT_DEPTH_BIT) ||
+             (m_wireDepthResolveModes & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT)) &&
+            (!(formatAspects & VK_IMAGE_ASPECT_STENCIL_BIT) ||
+             (m_wireStencilResolveModes & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT));
 
         // vkCmdResolveImage is color-only. A depth/stencil resolve subpass must
         // write at the source coordinates and may require both aspects to use
@@ -461,10 +496,14 @@
         resolved.extent = scratch->extent;
         resolved.aspect = formatAspects;
         resolved.trackedLayout = &scratch->layout;
+
+        VkImageView views[2]{};
+        VkRenderPass pass = VK_NULL_HANDLE;
+        VkFramebuffer framebuffer = VK_NULL_HANDLE;
+        if (extensionResolve) {
         TransitionWireImage(source, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
         TransitionWireImage(resolved, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
-        VkImageView views[2]{};
         VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         viewInfo.image = source.image;
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
@@ -503,7 +542,6 @@
         passInfo.pAttachments = attachments;
         passInfo.subpassCount = 1;
         passInfo.pSubpasses = &subpass;
-        VkRenderPass pass = VK_NULL_HANDLE;
         VK_VERIFY(m_wireCreateRenderPass2(m_device, &passInfo, nullptr, &pass));
         VkFramebufferCreateInfo framebufferInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
         framebufferInfo.renderPass = pass;
@@ -512,15 +550,38 @@
         framebufferInfo.width = source.extent.width;
         framebufferInfo.height = source.extent.height;
         framebufferInfo.layers = 1;
-        VkFramebuffer framebuffer = VK_NULL_HANDLE;
         VK_VERIFY(vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &framebuffer));
         VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         begin.renderPass = pass;
         begin.framebuffer = framebuffer;
         begin.renderArea = {{sx0, sy0}, {static_cast<Uint32>(width), static_cast<Uint32>(height)}};
+        vkCmdBeginRenderPass(m_frameContext.GetCurrent().commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdEndRenderPass(m_frameContext.GetCurrent().commandBuffer);
+        } else if (!ResolveWireDepthStencilWithShader(source, resolved, source.aspect, sx0, sy0,
+                                                      static_cast<Uint32>(width), static_cast<Uint32>(height))) {
+            // NEITHER ARM, and rule I (a) says what that is: this device has no
+            // VK_KHR_depth_stencil_resolve and the pass cannot stand in for it either - the
+            // commonest reason being a stencil-only resolve without VK_EXT_shader_stencil_export,
+            // where a fragment shader cannot put a value in the stencil aspect at all. A decline
+            // leaves the destination as the application last wrote it, which is what
+            // glBlitFramebuffer would do if the driver refused the resolve.
+            MGLOG_E_ONCE("DirectVulkan::ResolveWireDepthStencil: resolving aspect 0x%x of a %u-sample "
+                         "format %d needs either VK_KHR_depth_stencil_resolve (renderpass2=%d, "
+                         "depth modes 0x%x, stencil modes 0x%x) or a shader pass "
+                         "(stencil export=%d, source usage 0x%x); declining the blit",
+                         static_cast<Uint32>(source.aspect), static_cast<Uint32>(source.samples),
+                         static_cast<Int>(source.format), m_wireCreateRenderPass2 ? 1 : 0,
+                         static_cast<Uint32>(m_wireDepthResolveModes),
+                         static_cast<Uint32>(m_wireStencilResolveModes),
+                         m_wireShaderStencilExport ? 1 : 0, static_cast<Uint32>(source.usageFlags));
+            RecordTextureCopyError("ResolveWireDepthStencil", ErrorCode::InvalidOperation,
+                                   "This device cannot resolve that multisample depth/stencil aspect.");
+            WireRetiredObjects declined{};
+            declined.textures.push_back(Move(scratch));
+            RetireWireObjects(Move(declined));
+            return;
+        }
         auto& frame = m_frameContext.GetCurrent();
-        vkCmdBeginRenderPass(frame.commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
-        vkCmdEndRenderPass(frame.commandBuffer);
         // Depth/stencil resolve writes execute in COLOR_ATTACHMENT_OUTPUT,
         // unlike ordinary depth attachment writes. Include both when exposing
         // the resolved image to a transfer; layout-based inference only covers
@@ -579,9 +640,11 @@
                 MagmaWireFatal("multisample-depth-resolve-conversion");
         }
         WireRetiredObjects retired{};
-        retired.framebuffers.push_back(framebuffer);
-        retired.renderPasses.push_back(pass);
-        retired.imageViews = {views[0], views[1]};
+        // The shader arm owns and retires its own pass, framebuffer and views, so these four
+        // are null on that path - pushed only when the extension arm made them.
+        if (framebuffer != VK_NULL_HANDLE) retired.framebuffers.push_back(framebuffer);
+        if (pass != VK_NULL_HANDLE) retired.renderPasses.push_back(pass);
+        if (views[0] != VK_NULL_HANDLE) retired.imageViews = {views[0], views[1]};
         retired.textures.push_back(Move(scratch));
         if (aspectBuffer) retired.buffers.push_back(Move(aspectBuffer));
         RetireWireObjects(Move(retired));
@@ -883,7 +946,35 @@
                     VkImageCopy copy{region.srcSubresource, region.srcOffsets[0], region.dstSubresource,
                         region.dstOffsets[0], {static_cast<Uint32>(width), static_cast<Uint32>(height), 1}};
                     vkCmdCopyImage(command, source.image, srcLayout, destination.image, dstLayout, 1, &copy);
-                } else MagmaWireFatal("multisample-blit-aspect@P7");
+                } else {
+                    // `multisample-blit-aspect@P7` RETIRES. The half with an arm is
+                    // ResolveWireDepthStencil's: a multisample depth or stencil SOURCE now
+                    // reaches a single-sample destination on every device, through
+                    // VK_KHR_depth_stencil_resolve where it exists and through the baked pass in
+                    // WireMultisampleResolve.inc where it does not. This is the half with none -
+                    // the sample counts differ and the DESTINATION is the multisampled side, so
+                    // it is either one sample fanned out to N or N reduced to M.
+                    //
+                    // Vulkan has no command for either: vkCmdResolveImage only ever writes a
+                    // single-sample destination, vkCmdBlitImage refuses both sides, and
+                    // vkCmdCopyImage requires the counts to match. Reaching it through a draw
+                    // would need a pipeline with the destination's sample count and a
+                    // multisample source view, i.e. a second copy of the resolve machinery
+                    // pointed the other way, for a shape GL 4.6 core 18.3.1 calls
+                    // INVALID_OPERATION whenever the two rectangles are not identical and
+                    // describes as sample replication when they are. Rule I (a): name both
+                    // counts, record the error, leave the destination alone.
+                    MGLOG_E_ONCE("DirectVulkan::BlitWireFramebuffers: aspect 0x%x cannot go from a "
+                                 "%u-sample source to a %u-sample destination - a resolve only ever "
+                                 "writes one sample and a copy needs the counts to match; declining "
+                                 "the blit",
+                                 static_cast<Uint32>(aspect), static_cast<Uint32>(source.samples),
+                                 static_cast<Uint32>(destination.samples));
+                    RecordTextureCopyError("BlitWireFramebuffers", ErrorCode::InvalidOperation,
+                                           "glBlitFramebuffer cannot change the sample count of an "
+                                           "attachment in that direction.");
+                    return;
+                }
             } else {
                 vkCmdBlitImage(command,source.image,srcLayout,destination.image,dstLayout,1,&region,
                     filter == GL_LINEAR ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
