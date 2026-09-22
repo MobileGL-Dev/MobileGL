@@ -38,6 +38,10 @@
 #include <MG_Remote/Protocol/generated/protocol_generated.h>
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #include <MG_Util/Debug/Log.h>
+// P6 gate 8's two wire counters. MG_Util is BELOW MG_Remote in the build order and the pull build
+// has no MG_Remote at all, which is why every counter this file touches is behind
+// #if MOBILEGL_PIPE_PUSH - the same guard the header's producer readings live under.
+#include <MG_Util/Metrics/PipeStats.h>
 
 #include <cstdlib>
 #include <cstring>
@@ -857,6 +861,24 @@ namespace MobileGL::MG_Remote::Wire {
                     static_cast<unsigned long long>(m_stageCapacity));
         }
 
+        // P6 GATE 8's FIRST NUMBER (CONTRACT-P6.md §9 item 8): the bytes this producer staged. The
+        // blob's OWN bytes are recorded, from here - where the request first becomes an allocation
+        // - because this is the ONE place every writer of SEG_STAGE passes through (StageBytes is
+        // the only caller, and every buffer walk, texture slab, CSO archive and block name reaches
+        // them through it), which is what makes the count complete by construction rather than by
+        // a hand-kept list of callers.
+        //
+        // `size`, NOT `need`: the Align8 slack is the allocator's, not content the producer wrote,
+        // and charging it here would make a workload of 8-byte blobs look like one of 16-byte
+        // blobs. The allocator's wrap skip is excluded for the same reason.
+        //
+        // The sample below the byte add is the same call site for the same reason: the per-blob
+        // distribution is a property of what the PRODUCER handed over, before the arena rounds it.
+        if (MG_Util::PipeStats::Enabled()) {
+            MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageSegmentBytes, size);
+            MG_Util::PipeStats::RecordStagedBlobBytes(size);
+        }
+
         bool reclaimed = false;
         bool waited = false;
         for (;;) {
@@ -1152,6 +1174,20 @@ namespace MobileGL::MG_Remote::Wire {
             // the measured answer on the reduced path is a different row entirely.
             m_maxRecordOp = op;
         }
+        // P6 GATE 8's SECOND NUMBER (CONTRACT-P6.md §9 item 8), and it is counted HERE rather than
+        // at any emitter for the reason the CallClass comment gives: after chunking, the emitter
+        // no longer knows how many records its one call produced. By this point the record is
+        // COMMITTED - Reserve succeeded, the body is written and the blob slots have been checked
+        // honest - so this is exactly "records/frame post-chunking", not "emitter calls/frame".
+        //
+        // A kRecPad FILLER CANNOT REACH HERE: Reserve returns the filler's wake-up as a refusal
+        // (kInvalidSeq) and the caller retries, so no pad is ever counted, which is what keeps
+        // this number comparable with the seq space R-3 defines. A REFUSED emission is not counted
+        // either - the early return above is what makes one record cost exactly one.
+        if (MG_Util::PipeStats::Enabled()) {
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::WireRecords, 1);
+        }
+
         ++m_emitSeq;
         // The stage mark: where SEG_STAGE stood once everything this record names had been
         // staged. ReclaimStagedBytes releases up to the newest mark the server has retired.

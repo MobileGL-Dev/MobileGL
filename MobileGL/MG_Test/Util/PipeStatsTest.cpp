@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include <Config.h>
+#include <MG_Util/Debug/Log.h>
 #include <MG_Util/Metrics/PipeStats.h>
 
 #include <cstdio>
@@ -93,6 +94,109 @@ namespace {
         PS::Init();
     }
 
+    // THE LATCH IS THE WHOLE CONTRACT, and this case exists because a spawn server got
+    // it wrong in a way no other test could see. `Init()` is a step of
+    // MobileGL::Initialize(), and the spawn server process never calls that - it calls
+    // MG_ConfigLoader::Init + InitServerRoleForSpawn - so `g_pipeStatsEnabled` stayed
+    // false there and every `if (Enabled())` site in the process was permanently
+    // false. The observable consequence was not a wrong number but an ABSENT one:
+    // the server printed no summary line at all, and `wait[srv=0 srvpark=0]` (what a
+    // reader would have taken for "the server never waited") is in fact what this
+    // case's "false" arm looks like.
+    //
+    // It pins both directions, because only the pair is falsifiable: Init() must TAKE
+    // the config's value when it is true, and must CLEAR the latch when it is false -
+    // a version that only ever set the flag true would pass a one-sided test while
+    // making MOBILEGL_PIPE_STATS=0 mean nothing in a long-lived process.
+    TEST_F(PipeStatsTest, InitIsTheOnlyLatchAndItTakesTheConfigBothWays) {
+        const bool saved = MobileGL::MG_Config::Features.PipeStats;
+
+        MobileGL::MG_Config::Features.PipeStats = true;
+        PS::Init();
+        EXPECT_TRUE(PS::Enabled()) << "a true config must arm the counters";
+
+        MobileGL::MG_Config::Features.PipeStats = false;
+        PS::Init();
+        EXPECT_FALSE(PS::Enabled()) << "and a false one must disarm them, not leave the old latch";
+
+        MobileGL::MG_Config::Features.PipeStats = saved;
+        PS::Init();
+    }
+
+    // A summary line is emitted by whichever role reaches OnPresent, and this is what makes
+    // the spawn server's line appear at all: it has no swap of its own, so its cadence
+    // rides the present records it applies. The assertion is the arithmetic that cadence
+    // rests on - k presentations produce k windows when the period is 1 - because that is
+    // the property the lane's per-frame rates divide by.
+    TEST_F(PipeStatsTest, PresentationsAtTheDefaultPeriodOfOneMakeOneWindowEach) {
+        const Uint32 saved = MobileGL::MG_Config::Features.PipeStatsPeriod;
+        MobileGL::MG_Config::Features.PipeStatsPeriod = 1;
+        PS::Init();
+
+        for (Uint32 i = 0; i < 5; ++i) {
+            PS::PublishGauge(PS::Gauge::ServerWaits, static_cast<Uint64>(100 * (i + 1)));
+            PS::OnPresent();
+        }
+        EXPECT_EQ(PS::FrameCount(), 5u);
+        // The gauge is a RUN TOTAL: publishing five increasing values leaves the last one,
+        // never their sum. This is the mistake the report's first aggregation script made.
+        EXPECT_EQ(PS::GaugeValue(PS::Gauge::ServerWaits), 500u);
+
+        MobileGL::MG_Config::Features.PipeStatsPeriod = saved;
+        PS::Init();
+    }
+
+    // P6 gate 8: THE DUMP PATH IS ROLE-DERIVED AND THE BASE NAME IS NOT A FILE.
+    //
+    // The trap this exists for: under `spawn` both roles reach PipeStats::Shutdown() (the client
+    // through MobileGL::Destroy, the server through ServerMain's own call), and before this both
+    // opened MOBILEGL_PIPE_STATS_FILE itself with trunc - so the second writer silently replaced
+    // the first, and a reader held one role's numbers under a name that claimed to be the run's.
+    //
+    // ---- WHAT THIS CASE ASSERTS, AND WHAT ITS FIRST VERSION GOT WRONG ----
+    //
+    // The first version asserted about MG_Util::Debug::RoleLogPath directly: that the two roles get
+    // different paths, that neither equals the base name. All of that PASSED WITH THE FIX REVERTED -
+    // it tested the naming helper, which was never broken. What was broken was that the dump did
+    // not CALL it. A test that stays green while the defect is present is worse than no test.
+    //
+    // So the subject here is RoleDerivedJsonDumpPathForTesting(), the same expression the dump and
+    // the banner use; and the third assertion is the negative control the design rests on - the
+    // base name must not exist as a file, so a reader that was not updated gets ENOENT and says so
+    // rather than a file that looks like a complete run and is half of one.
+    TEST_F(PipeStatsTest, JsonDumpPathIsRoleDerivedAndTheBaseNameIsNeverOpened) {
+        using MobileGL::MG_Util::Debug::LogRole;
+
+        const String saved = MobileGL::MG_Config::Features.PipeStatsFile;
+        const char* base = "/tmp/mobilegl-pipestats-role-test.json";
+
+        // Unset: no path at all, and specifically not the empty string spelled as a file name.
+        MobileGL::MG_Config::Features.PipeStatsFile = "";
+        EXPECT_TRUE(PS::RoleDerivedJsonDumpPathForTesting().empty());
+
+        MobileGL::MG_Config::Features.PipeStatsFile = base;
+        const String path = PS::RoleDerivedJsonDumpPathForTesting();
+
+        // (1) THE DUMP PATH IS THE DERIVED ONE, spelled out, so a change to the rule is a change
+        // to this test. A unit process is the client role.
+        EXPECT_EQ(path, String("/tmp/mobilegl-pipestats-role-test.client.json"));
+
+        // (2) THE BASE NAME IS NOT THE PATH. This is the collision itself: if the dump wrote the
+        // configured name, spawn's second writer would truncate the first.
+        EXPECT_NE(path, String(base));
+
+        // (3) THE NEGATIVE CONTROL. PipeStats writes the derived path, never the base, so nothing
+        // may have created the base. A fresh base is absent, and this fails if that ever stops
+        // being true - which is exactly what a revert of the derivation does.
+        std::remove(base);
+        std::ifstream baseFile(base);
+        EXPECT_FALSE(baseFile.good())
+            << "the configured base name exists; something opened it directly, and under spawn "
+               "that is the trunc-versus-trunc collision this derivation exists to prevent";
+
+        MobileGL::MG_Config::Features.PipeStatsFile = saved;
+    }
+
     TEST_F(PipeStatsTest, GateHitsAndMissesAreSeparateCounters) {
         for (Uint32 i = 0; i < 5; ++i) {
             PS::CountGate(PS::Gate::MagmaPipelineMemo, /*hit=*/true);
@@ -171,6 +275,15 @@ namespace {
         // And the new ByteClass rides the ordinary bytes[] bracket under a short name that is
         // NOT "csob": the cso[] bracket above already prints csob= for the CSO bind count.
         EXPECT_NE(line.find("csob-blob="), String::npos) << line;
+        // P6 GATE 8'S TWO NUMBERS (CONTRACT-P6.md §9 item 8), pinned where an operator's grep
+        // would break. `seg` is the ByteClass that says how many bytes a frame stages into
+        // SEG_STAGE, and `wrec` / `wrec/f` are the post-chunking record count and its per-frame
+        // figure. The short name is `seg` and not `stage`, which would read as a prefix of
+        // `stage-buffer`'s long name and of nothing else in the bracket; it is also not `ssb`,
+        // because this is a per-frame BYTES field and `ssb` reads like a count.
+        EXPECT_NE(line.find("seg="), String::npos) << line;
+        EXPECT_NE(line.find("wrec="), String::npos) << line;
+        EXPECT_NE(line.find("wrec/f="), String::npos) << line;
         // P5d round 3's wait ledger. Four fields on a bracket of their own, and they are
         // pinned here for the reason every other short name is: they are what the inproc
         // performance work reads out of a run's log, so a rename or a dropped field breaks
@@ -196,6 +309,114 @@ namespace {
         EXPECT_NE(line.find("draws/f=1.86"), String::npos) << line;
         EXPECT_NE(line.find("buf=97.14"), String::npos) << line;
     }
+
+#if MOBILEGL_PIPE_PUSH
+    // P6 GATE 8's TWO NUMBERS (CONTRACT-P6.md §9 item 8), and each half is pinned because each
+    // half is a way the deliverable can be wrong without looking wrong.
+    //
+    // `seg` IS THE PRODUCER'S OWN BYTES. The wire encoder adds `size` and not the allocator's
+    // Align8 of it (PipeWireCodec.cpp's StageAllocate), so a blob of 4096 stages 4096. Checked
+    // here on the module's own arithmetic because that is the only place the rule can be read
+    // without a live ring: the encoder's call site is deliberately one line and has no test of
+    // its own.
+    TEST_F(PipeStatsTest, StageSegmentBytesIsAWindowedByteClassLikeAnyOther) {
+        PS::AddBytes(PS::ByteClass::StageSegmentBytes, 4096);
+        PS::AddBytes(PS::ByteClass::StageSegmentBytes, 2048);
+        PS::AddCalls(PS::CallClass::Draws, 1);
+        PS::OnPresent();
+
+        EXPECT_EQ(PS::TotalBytes(PS::ByteClass::StageSegmentBytes), 6144u);
+        EXPECT_EQ(PS::FrameBytes(PS::ByteClass::StageSegmentBytes), 0u) << "a Present clears the frame";
+        // 6144 over one frame, two decimals, in the ordinary bytes[] bracket.
+        EXPECT_NE(PS::FormatWindowLine().find("seg=6144.00"), String::npos)
+            << PS::FormatWindowLine();
+
+        PS::AdvanceSummaryWindow();
+        // And it obeys the file's LABEL rule, not a rule of its own: the new window has no
+        // Present in it, so the bracket is relabelled "bytes[" and `seg` carries the window
+        // TOTAL verbatim rather than a figure divided by a faked frame count. That is the same
+        // rule the bytes[] bracket follows and the same one the two window-total tests below
+        // pin; asserting "seg=0.00" here is what the first cut of this case did, and it was
+        // asserting a per-frame form the line deliberately does not print.
+        const String empty = PS::FormatWindowLine();
+        EXPECT_NE(empty.find("bytes["), String::npos) << empty;
+        EXPECT_EQ(empty.find("bytes/f["), String::npos) << empty;
+        EXPECT_NE(empty.find("seg=0"), String::npos) << empty;
+    }
+
+    // `wrec` IS A COUNT, SO IT DOES NOT DIVIDE LIKE A BYTE CLASS - and the per-frame form must
+    // read off the line, which is why the field exists at all rather than the operator doing the
+    // division by hand. 26 records over 13 frames is 2.00; the window total is printed beside it
+    // so the pair is self-checking.
+    TEST_F(PipeStatsTest, WireRecordsCarryBothTheWindowCountAndItsPerFrameForm) {
+        PS::AddCalls(PS::CallClass::WireRecords, 26);
+        for (Uint32 i = 0; i < 13; ++i) {
+            PS::OnPresent();
+        }
+
+        const String line = PS::FormatWindowLine();
+        EXPECT_NE(line.find("wrec=26"), String::npos) << line;
+        EXPECT_NE(line.find("wrec/f=2.00"), String::npos) << line;
+    }
+
+    // AND THE LABEL RULE THE FILE ALREADY OWNS APPLIES TO IT: a window with no Present in it has
+    // no per-frame reading, so `wrec/f` carries the window total rather than a figure divided by
+    // a faked 1. This is the same 47x overstatement PipeStatsTest pins for the bytes[] bracket,
+    // one field over, and it is the shape a trace slice with no swap at all would hit.
+    TEST_F(PipeStatsTest, WireRecordsFallBackToTheWindowTotalWithoutAFrame) {
+        PS::AddCalls(PS::CallClass::WireRecords, 47);
+
+        const String line = PS::FormatWindowLine();
+        EXPECT_EQ(PS::FrameCount(), 0u);
+        EXPECT_NE(line.find("wrec=47"), String::npos) << line;
+        EXPECT_NE(line.find("wrec/f=47"), String::npos) << line;
+        EXPECT_EQ(line.find("wrec/f=47.00"), String::npos) << line;
+    }
+
+    // THE STAGED-BLOB DISTRIBUTION, which is the optional deliverable MEASUREMENTS.md:342 says
+    // has never existed. It shares the draw-payload histogram's edges - bucket 0 is "0 bytes",
+    // bucket n>0 is [2^(n-1), 2^n) - so the two are read the same way, and it is a COUNT per
+    // bucket rather than a byte sum: the shape is the deliverable and the bytes have their own
+    // counter in `seg`.
+    TEST_F(PipeStatsTest, StagedBlobHistogramSharesThePayloadBucketEdges) {
+        PS::RecordStagedBlobBytes(1);        // [1, 2)     -> bucket 1
+        PS::RecordStagedBlobBytes(4096);     // [4096,8192)-> bucket 13
+        PS::RecordStagedBlobBytes(4096);     // same bucket
+        PS::RecordStagedBlobBytes(8192);     // [8192,...) -> bucket 14: the edge is exclusive
+
+        EXPECT_EQ(PS::TotalStagedBlobBucket(1), 1u);
+        EXPECT_EQ(PS::TotalStagedBlobBucket(13), 2u);
+        EXPECT_EQ(PS::TotalStagedBlobBucket(14), 1u);
+        EXPECT_EQ(PS::TotalStagedBlobBucket(0), 0u);
+        // Saturation and the out-of-range read, exactly as the draw-payload histogram's.
+        PS::RecordStagedBlobBytes(~Uint64{0});
+        EXPECT_EQ(PS::TotalStagedBlobBucket(PS::kStagedBlobHistogramBuckets - 1), 1u);
+        EXPECT_EQ(PS::TotalStagedBlobBucket(PS::kStagedBlobHistogramBuckets), 0u);
+    }
+
+    // A distribution is a RUN TOTAL and has no business being windowed: it is a shape over the
+    // whole workload, and a Present that cleared it would report the shape of one frame as if it
+    // were the run's. It reaches an operator through the JSON dump - the same channel and for the
+    // same reason the draw-payload histogram uses it - so that is where it is asserted.
+    TEST_F(PipeStatsTest, StagedBlobHistogramIsARunTotalAndReachesTheJsonDump) {
+        PS::RecordStagedBlobBytes(1024);
+        PS::OnPresent();
+
+        const String json = PS::FormatJson();
+        EXPECT_NE(json.find("\"staged-blob-bytes-histogram\""), String::npos) << json;
+        EXPECT_NE(json.find("\"wire-records\""), String::npos) << json;
+        EXPECT_NE(json.find("\"stage-segment-bytes\""), String::npos) << json;
+        // Run total, not a window: the sample above survives the Present.
+        EXPECT_EQ(PS::TotalStagedBlobBucket(11), 1u);
+
+        // The ordering is the JSON document's shape, not decoration: the new array is a SIBLING
+        // of the draw-payload one, so a reader that walks the object finds both where the two
+        // comments say they are.
+        EXPECT_LT(json.find("\"cmd-bytes-per-draw-histogram\""),
+                  json.find("\"staged-blob-bytes-histogram\""))
+            << json;
+    }
+#endif
 
     // Successive summaries report WINDOWS, not run totals: a run total over a workload that
     // changes shape (load, then steady state) averages away the very number section 2.3.1
@@ -312,6 +533,10 @@ namespace {
         EXPECT_STREQ(PS::NameOf(PS::CallClass::ClientTextureUploadEmissions),
                      "client-tex-upload-emissions");
         EXPECT_STREQ(PS::NameOf(PS::ByteClass::CsoBlobBytes), "cso-blob-bytes");
+        // P6 gate 8's two, under their long names - the JSON dump keys and the names the
+        // MEASUREMENTS.md entry will quote.
+        EXPECT_STREQ(PS::NameOf(PS::ByteClass::StageSegmentBytes), "stage-segment-bytes");
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::WireRecords), "wire-records");
 #endif
         EXPECT_STREQ(PS::NameOf(PS::Gate::EsprytRenderState), "espryt-render-state");
         EXPECT_STREQ(PS::NameOf(PS::Gate::EsprytTextureSyncList), "espryt-texture-sync-list");

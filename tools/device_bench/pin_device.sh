@@ -70,6 +70,33 @@ case "$SERIAL" in
     GPU_PINNED_FREQ=1100000000 # gpuclk is in Hz on kgsl, NOT kHz
     GPU_FREQ_UNIT=Hz
     ;;
+  2f7cbe2e)          # Redmi M332BF, same SoC as 35d0befa but a DIFFERENT board vendor lock
+    DEV_NAME="Redmi M332BF / SM8750 / Adreno 830v2"
+    GPU_STYLE=kgsl
+    # Read off THIS unit on 2026-09-22, then confirmed against a pinned window (pin written,
+    # every node read back equal to the pin, unpinned, every node back at the stock values
+    # recorded below). Same SM8750 as 35d0befa and the same policy ids, BUT THE STOCK RANGES
+    # DIFFER (policy6 max is 3072000 here vs 2841600 there) - which is exactly why copying the
+    # sibling row would have been wrong even though the two parts are the same silicon.
+    # Every write below needs root; the verify action re-reads all of them.
+    POLICIES="big:policy6:1958400:1017600:3072000 little:policy0:1555200:556800:2745600"
+    THERMAL_TYPE=cpuss-0-0      # thermal_zone13 on this boot; matched by type, never by number
+    KGSL=/sys/class/kgsl/kgsl-3d0
+    # THE ONE PLACE THIS DEVICE DIFFERS FROM 35d0befa'S ROW, AND IT IS MEASURED, NOT ASSUMED.
+    # Collapsing the kgsl pwrlevel range onto 0 does NOT reach 1100 MHz here: gpuclk reads
+    # 1050000000 and stays there across repeated samples, because this unit ships
+    # thermal_pwrlevel=1 permanently (it latches - writing 0 returns success and the node reads
+    # back 1) and max_gpuclk is read-only at 1050000000. devfreq's own max_freq also clamps to
+    # 1050000000. So the pin is "the fastest frequency this board will actually run", not "the
+    # top OPP in the table" - recorded as 1050 MHz so `check` compares against the truth.
+    # Consequence for the campaign, stated where the number is: absolute times from this device
+    # are NOT comparable with the 35d0befa rows taken while it could still reach 1100.
+    GPU_PIN_LEVEL=0            # pwrlevel 0 = the 1050 MHz ceiling this board enforces
+    GPU_STOCK_MIN_LEVEL=12
+    GPU_STOCK_MAX_LEVEL=0
+    GPU_PINNED_FREQ=1050000000 # gpuclk is in Hz on kgsl, NOT kHz
+    GPU_FREQ_UNIT=Hz
+    ;;
   3B159D009VZ00000)  # Oppo PLG110 / ColorOS, MediaTek MT6993 (Dimensity 9500), Mali
     DEV_NAME="Oppo PLG110 / MT6993 / Mali (gpufreqv2)"
     GPU_STYLE=gpufreqv2
@@ -84,7 +111,7 @@ case "$SERIAL" in
     ;;
   *)
     echo "$0: unknown serial '$SERIAL'." >&2
-    echo "Known: 35d0befa (Xiaomi/Adreno830), 3B159D009VZ00000 (Oppo/Mali)." >&2
+    echo "Known: 35d0befa (Xiaomi/Adreno830), 2f7cbe2e (Redmi/Adreno830), 3B159D009VZ00000 (Oppo/Mali)." >&2
     echo "Refusing to guess: the pin path differs per SoC and a wrong one fails silently." >&2
     exit 64 ;;
 esac

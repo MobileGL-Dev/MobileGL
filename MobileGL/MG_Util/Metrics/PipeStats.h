@@ -87,6 +87,32 @@ namespace MobileGL::MG_Util::PipeStats {
         // transport would actually have to move for the CSO families, as opposed to what the
         // records themselves cost.
         CsoBlobBytes,
+        // P6 GATE 8's FIRST NUMBER (CONTRACT-P6.md §9 item 8), and the reason it is a ByteClass
+        // rather than one more Gauge: the deliverable is BYTES PER FRAME, and a byte class IS
+        // the windowed sum this module already divides by the window's frame count. A gauge is
+        // a run total deliberately (see the Gauge enum) and windowing one is not a thing this
+        // module does.
+        //
+        // WHAT IT MEASURES, AND WHY IT IS NOT ANY OF THE stage-* CLASSES ABOVE. Those count what
+        // a BACKEND moves into its own driver, on the apply thread, from bytes the wire already
+        // delivered. This counts what the WIRE put into SEG_STAGE - the client-side staging
+        // arena a record's blobs are copied into - and it is read as "staged content per frame".
+        //
+        // COUNTED AT THE ALLOCATOR, WHICH IS THE ONE CHOKE POINT. Every writer that puts bytes
+        // into SEG_STAGE reaches them through PipeWireEncoder::StageBytes and that function's
+        // only allocation call is StageAllocate (PipeWireCodec.h:376), so a single site here
+        // covers the buffer content walks, the texture slabs, the CSO archives and the
+        // storage-block names alike. Summing at the CALLERS instead would be a hand-kept list of
+        // the paths that happen to exist today, and the next producer added would be missing
+        // from it with nothing to notice - which is the failure mode the site inventory at the
+        // top of PipeStats.cpp exists to forbid.
+        //
+        // IT IS THE PAYLOAD, NOT THE ARENA OCCUPANCY. Align8 slack and the allocator's wrap skip
+        // (a run that would straddle the segment's end skips the remainder) are real bytes of
+        // the segment and are NOT counted: neither is content the producer wrote, and neither
+        // is what MOBILEGL_IPC_STAGE_MB has to hold for one record. The per-blob distribution
+        // this average hides is the staged-blob histogram below.
+        StageSegmentBytes,
 #endif
         Count
     };
@@ -195,6 +221,34 @@ namespace MobileGL::MG_Util::PipeStats {
         // would start failing on the day the debt is paid. `vbs` is non-zero whenever the
         // server applied a verb at all, before and after retirement alike.
         ServerVerbBoundaries,
+        // P6 GATE 8's SECOND NUMBER (CONTRACT-P6.md §9 item 8): "records/frame post-chunking".
+        //
+        // ONE PER RECORD THE WIRE ENCODER ACTUALLY WROTE, which is what makes it the
+        // post-chunking count rather than a restatement of the emitter's call count. Before the
+        // stage chunk budget landed, one application call produced one record and the question
+        // could be answered from the emitter's side; now a call whose content is wider than
+        // MGPipeStageChunkBytes() produces SEVERAL - the buffer content walks cut themselves at
+        // the budget and one texture level is emitted as whole-width slabs - and only the
+        // encoder knows how many. So this is counted where the record is committed
+        // (PipeWireCodec.cpp's EncodeRecord, on the successful path), not where a caller asked
+        // for one.
+        //
+        // A kRecPad RING FILLER IS NOT A RECORD AND IS NOT COUNTED. Those are the bytes Reserve
+        // lays down when a record would have straddled the ring's boundary; they carry no
+        // opcode, both sides skip them, and they are already visible in the gauges as ringpads.
+        // An emission the ring REFUSED is not counted either: EncodeRecord returns kInvalidSeq
+        // and the caller publishes and retries, so the record is counted once, when it goes.
+        //
+        // Read it against the Client*Emission counters above: a sampler/framebuffer/texture set
+        // that is resolved and then suppressed does not reach this number, so records-per-frame
+        // is wire traffic while those are emission calls, and the difference between them is
+        // exactly what the suppressors absorbed.
+        //
+        // NOT SetBytes(), and that is the whole reason it is a CallClass rather than a Gauge: the
+        // deliverable is records PER FRAME, so it needs the windowed division and the label rule
+        // that goes with it (FormatWindowLine prints the run total instead when the window holds
+        // no Present).
+        WireRecords,
 #endif
         Count
     };
@@ -308,6 +362,30 @@ namespace MobileGL::MG_Util::PipeStats {
     // emit records only has to add the one call.
     inline constexpr Uint32 kPayloadHistogramBuckets = 24;
 
+#if MOBILEGL_PIPE_PUSH
+    // Per-STAGED-BLOB size histogram, and it is a SECOND histogram rather than a wider
+    // kPayloadHistogramBuckets because the two answer different questions about different
+    // populations: the one above is the command payload of a draw (plan section 4.5.7, sizing
+    // SEG_CMD), this one is how big the blobs a workload stages into SEG_STAGE actually are.
+    //
+    // IT EXISTS FOR CONTRACT-P6.md §9 item 8, and MEASUREMENTS.md:342 says in as many words why:
+    // the chunking work landed (1e7c372e buffer walks, 9469d48e texture slabs) and every
+    // `maxrec` number the file carries predates it, so "the per-blob byte distribution after
+    // chunking" had no measurement at all. A per-frame AVERAGE cannot answer it either: an
+    // average of 8 MiB is the same number whether one blob of 8 MiB was staged or two of 4 MiB
+    // that the budget should have cut to one. The bucket edges are PayloadBucketOf's, shared so
+    // the two distributions are read the same way.
+    //
+    // PUSH-ONLY like every counter added since P2: its only sampler is the wire encoder, which a
+    // pull build does not compile, so the array, the reset, the JSON row and the accessor would
+    // all exist there for a population that could never be sampled (gate G1).
+    inline constexpr Uint32 kStagedBlobHistogramBuckets = kPayloadHistogramBuckets;
+    Uint64 TotalStagedBlobBucket(Uint32 bucket);
+    // Sample one staged blob. Called by the wire encoder where a blob is staged, behind the
+    // usual Enabled() predicate.
+    void RecordStagedBlobBytes(Uint64 bytes);
+#endif
+
     // Frames between two summary lines when MOBILEGL_PIPE_STATS=1.
     inline constexpr Uint64 kDefaultSummaryFramePeriod = 120;
     // The period Init() latched from MOBILEGL_PIPE_STATS_PERIOD (kDefaultSummaryFramePeriod
@@ -368,5 +446,21 @@ namespace MobileGL::MG_Util::PipeStats {
     // ResetCounters() rather than by calling ResetForTesting().
     void SetEnabledForTesting(Bool enabled);
     void ResetForTesting();
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // The role-derived path the JSON dump will actually write, or empty when
+    // MOBILEGL_PIPE_STATS_FILE is unset. Empty when unset; never the bare configured name.
+    //
+    // IT EXISTS BECAUSE THE OBVIOUS TEST IS NOT A CONTROL. The first version of this case asserted
+    // things about MG_Util::Debug::RoleLogPath directly - that the two roles get different paths,
+    // that neither equals the base name. Every one of those assertions passes with the fix REVERTED,
+    // because they test the naming helper, which was never broken; what was broken was that
+    // WriteJsonDump did not CALL it. A test that stays green while the defect is present is worse
+    // than no test, so this accessor exists to make the call site itself observable.
+    //
+    // Guarded on the DISAGGREGATED option rather than PIPE_PUSH, because the collision it describes
+    // only exists with two roles - a monolith build has one and needs no derivation (gate G1).
+    String RoleDerivedJsonDumpPathForTesting();
+#endif
 
 } // namespace MobileGL::MG_Util::PipeStats

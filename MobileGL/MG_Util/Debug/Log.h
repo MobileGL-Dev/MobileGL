@@ -164,6 +164,24 @@ namespace MobileGL {
             // "the library never logged", which reads as a product failure.
             std::string RoleLogPath(const char* basePath, LogRole role);
 
+            // WHICH ROLE IS THE CALLING THREAD, exported for the same reason the naming rule is:
+            // a second answer to "am I the server" is a second answer that can disagree, and this
+            // one already exists twice inside this file (ThreadIsServerRole, ProcessIsSpawnedServer)
+            // in a form nothing outside can read.
+            //
+            // P6 GATE 8 NEEDS IT, and that is the caller that made it worth exporting. The MGPipe
+            // counters' JSON dump is written by whichever role reaches PipeStats::Shutdown(), and
+            // under `spawn` both roles do - in two processes, onto the same configured path. The
+            // fix is the log sink's own split (each role gets its own file), and the role is the
+            // only input that split needs.
+            LogRole CurrentThreadRole();
+            // The same question about a whole PROCESS rather than a thread: true only for a
+            // spawned server image, which is the server on every thread. Exported because the
+            // distinction matters to callers that are deciding a FILE NAME before any role has
+            // been stamped on a thread. `bool` rather than `Bool`: this header is included from
+            // translation units that do not pull MobileGL/Defines.h (Log.cpp is one of them).
+            bool CurrentProcessIsSpawnedServer();
+
             // THE TWO OPERATIONS EVERY READER ACTUALLY WANTS, so that no caller has to know how
             // many roles there are or how they are spelled.
             //
@@ -196,6 +214,13 @@ namespace MobileGL {
             inline std::string RoleLogPath(const char* basePath, LogRole) {
                 return basePath == nullptr ? std::string() : std::string(basePath);
             }
+
+            // INLINE, like everything else in this pull arm, and for the same G1 reason. There is
+            // one role in this build, so "which role is this thread" has exactly one true answer
+            // and no state to read - but a caller must still compile and mean the right thing in
+            // both flavours rather than wrapping these in an `#if` it might get wrong once.
+            inline LogRole CurrentThreadRole() { return LogRole::Client; }
+            inline bool CurrentProcessIsSpawnedServer() { return false; }
 
             inline std::string ReadRoleLogs(const char* basePath) {
                 std::string all;

@@ -44,6 +44,25 @@ BACKENDS = {
     },
 }
 
+# The trace APK's application id, overridable so a development build can be installed BESIDE an
+# existing trace install instead of replacing it.
+#
+# WHY IT IS NEEDED: `-Pmobilegl.applicationIdSuffix=<x>` is the only way to put two trace APKs on one
+# device, and two APKs signed by different keys cannot share an id at all (`adb install -r` fails
+# with INSTALL_FAILED_UPDATE_INCOMPATIBLE). A machine that already carries a trace install under the
+# canonical id - signed by whichever key was current when it was made - otherwise has to have that
+# install destroyed before an A/B can run, which is destructive and, on a shared bench, rude.
+#
+# ABSENT MEANS THE CANONICAL ID, so every existing caller keeps the behaviour it had. What the
+# override does NOT change: the Activity class, the intent action, the extras, the on-device app dir
+# and the arm-proof markers all stay identical, so the lane under test is the real lane. The one
+# thing that must move with it is `--package` in the same command, because trace-replay-ci.sh drives
+# `am start`, `run-as` and `force-stop` off it. tools/device_bench/p6/ab_session.py sets both.
+_trace_package_override = __import__("os").environ.get("MOBILEGL_TRACE_PACKAGE", "").strip()
+if _trace_package_override:
+    for _backend in BACKENDS.values():
+        _backend["package"] = _trace_package_override
+
 CASES = load_trace_cases()
 
 

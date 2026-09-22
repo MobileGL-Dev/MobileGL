@@ -46,6 +46,7 @@
 #include <Config.h>  // MG_Config::Transport - D1 pins it to Spawn in this process
 #include <MG_Backend/MGPipe/PipeInputs.h>  // D1c: MGPipeSetServerProcessRole
 #include <MG_Backend/ServerRole.h>
+#include <MG_Util/Metrics/PipeStats.h> // step 1.6: the counters' latch, server-process half
 #include <Init.h>   // MG_ConfigLoader::Init - the child loads its own config (step 1.5)
 
 #include <cstdio>
@@ -188,6 +189,46 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
     // them; without it they are compiled in and permanently false, which is worse than absent
     // because it reads as coverage.
     MobileGL::MG_Pipe::MGPipeSetServerProcessRole(true);
+    // ---- 1.6. THE MGPIPE COUNTERS, and this is the ONLY call site outside
+    // MobileGL::Initialize().
+    //
+    // GATE 8'S SERVER HALF WAS STRUCTURALLY ZERO WITHOUT THIS, and the shape of the
+    // defect is worth stating: the child never runs MobileGL::Initialize, so
+    // PipeStats::Init() - a step of it - never ran here, and g_pipeStatsEnabled
+    // stayed false. Every one of the ~80 `if (Enabled())` sites in the backends and
+    // in MG_Remote (ServerLoop's own ServerWaits/ServerParks publish included)
+    // compiled in and was permanently false in this process. The contract's
+    // mandatory "socket doorbell vs inproc condvar" number therefore had no server
+    // half under `spawn` at all, and its absence read exactly like a real zero:
+    // `wait[srv=0 srvpark=0]` is what "the server never waited" looks like too.
+    //
+    // IT GOES AFTER THE CONFIG LOAD AND AFTER THE ROLE IS STATED, and both halves
+    // of that order are load-bearing:
+    //
+    //   * AFTER MG_ConfigLoader::Init, because Init() LATCHES the flag out of
+    //     MG_Config::Features.PipeStats, and the parser does not exist until the
+    //     line above has run. Calling it earlier would latch the static default
+    //     (false) and the MOBILEGL_PIPE_STATS the launcher passed would be read by
+    //     nobody - the same class of defect the config load itself used to have.
+    //   * AFTER MGPipeSetServerProcessRole, because that is what makes the LOG SINK
+    //     know this process is the server, and PipeStats' summary line is emitted
+    //     through MGLOG_I. The sink resolves its role from MOBILEGL_IPC_ROLE (which
+    //     the launcher sets and its envp scrub preserves) and would in fact be
+    //     right either way, but ordering it this way means the line cannot be filed
+    //     under the client by a future change to that resolution. What the contract
+    //     requires - that the summary lands in `<base>.server.log` - is asserted by
+    //     the lane, not assumed from this comment.
+    //
+    // MOBILEGL_PIPE_STATS / _PERIOD / _FILE MEAN EXACTLY WHAT THEY MEAN IN THE
+    // CLIENT PROCESS, and that is the whole point of routing through Init(): all
+    // three are read from the child's own environment by the same parser and
+    // latched by the same function. Nothing about the stats channel is spawn-shaped.
+    // One asymmetry is real and intended: this process has no backend Present of
+    // its own, so its line cadence rides the present RECORDS it applies
+    // (PipeApplier -> DirectGLES/DirectVulkan Present -> OnPresent) rather than a
+    // swap the server does not perform. A spawn session that presents N times
+    // produces N windows here, which is the same N the client's own line counts.
+    MobileGL::MG_Util::PipeStats::Init();
     WireLogError("MG_Remote server: pid=%d config loaded, backend=%d, Transport pinned to Spawn "
                  "(D1: this process IS the server arm)",
                  selfPid, static_cast<int>(MobileGL::MG_Config::ActiveBackendType));
@@ -390,6 +431,15 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
     loop.Stop();
     session.Close();
     control->Shutdown();
+    // Step 1.6's other half, and its position is the same argument MobileGL::Destroy
+    // makes: AFTER loop.Stop(), because the apply thread is what publishes
+    // ServerWaits / ServerParks and a dump taken while it still runs is a race; and
+    // BEFORE _exit, because _exit runs no atexit handler and this is the only place
+    // the server's run totals and its JSON dump can be written at all. Without it
+    // the server printed whatever windows its last period boundary happened to
+    // reach and lost the final one - the same "the last frame's numbers can be
+    // lost" case Init.cpp's Shutdown call exists to avoid on the client side.
+    MobileGL::MG_Util::PipeStats::Shutdown();
     std::fflush(nullptr);
     ::_exit(0);
 }

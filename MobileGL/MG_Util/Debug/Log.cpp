@@ -94,6 +94,17 @@ namespace MobileGL {
             }
             return path.substr(0, dot) + "." + roleSuffix + path.substr(dot);
         }
+
+        // P6 gate 8: the role, in the two forms a caller can hold it in. Both are thin readers of
+        // state this file already keeps; neither adds a second source of truth.
+        LogRole CurrentThreadRole() {
+            if (t_logRole < 0) {
+                t_logRole = ProcessIsSpawnedServer() ? 1 : 0;
+            }
+            return t_logRole == 1 ? LogRole::Server : LogRole::Client;
+        }
+
+        bool CurrentProcessIsSpawnedServer() { return ProcessIsSpawnedServer(); }
 #endif
 
         std::mutex& LogMutex() {
