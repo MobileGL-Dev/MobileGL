@@ -48,8 +48,15 @@ def paths(document):
         props = {p["name"]: p["value"] for p in test.get("properties", [])}
         values = [v.split("=", 1)[1] for v in props.get("ENVIRONMENT", [])
                   if v.startswith("MOBILEGL_LOG_FILE_PATH=")]
+        # P7 package L: the Magma arms are here for the reason the GLES ones are - on a spawn or
+        # tcp arm TWO PROCESSES append to the path, so two entries sharing one file does not
+        # merely blur attribution, it interleaves two sessions. Leaving the DirectVulkan spawn
+        # and tcp prefixes out would have exempted the half of the new lane that needs the rule
+        # most, and the exemption would have looked like a clean run of this gate.
         is_split = test["name"].startswith(("DirectGLES.Split.", "DirectVulkan.Split.",
-                                           "DirectGLES.Spawn.", "DirectGLES.Tcp.", "DirectGLES.TcpDevice."))
+                                            "DirectGLES.Spawn.", "DirectGLES.Tcp.",
+                                            "DirectGLES.TcpDevice.",
+                                            "DirectVulkan.Spawn.", "DirectVulkan.Tcp."))
         if is_split and (len(values) != 1 or not values[0]):
             raise ValueError(f"{test['name']}: requires exactly one nonempty MOBILEGL_LOG_FILE_PATH")
         for value in values:

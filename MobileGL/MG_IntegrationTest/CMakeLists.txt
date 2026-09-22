@@ -2053,6 +2053,103 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         "MGITEST_SPLIT_LANE=1" "MGITEST_TCP_LANE=1" "MOBILEGL_ITEST_REQUIRE_GPU=1"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
+    # ---- P7 package L: THE SAME THREE ARMS FOR MAGMA ----------------------------------------
+    #
+    # The three lists above are the DirectGLES half of a dimension that had only one value. P7
+    # exit gate 1 asks for integration AND trace green "under Magma push and split", and until
+    # this package the shared labels `integration-split` / `-spawn` / `-tcp` held ZERO
+    # DirectVulkan entries: every arm of mgl_itest_register_split_arms hardcoded
+    # MOBILEGL_BACKEND_TYPE=DirectGLES and MGL_ITEST_MAGMA_WIRE_ENVIRONMENT hardcoded
+    # MOBILEGL_TRANSPORT=inproc, so the gate was not merely unmet, it was UNMEASURABLE.
+    #
+    # THE ONE DIFFERENCE FROM THE GLES TRIO IS ${MGL_ITEST_VULKAN_ENV}, AND IT IS NOT COSMETIC.
+    # That list carries VK_ICD_FILENAMES and, on lavapipe, the three iterationRP repairs the
+    # monolith `DirectVulkan.` arm has been pinned to since they were added (see its definition
+    # near the top of this file). A DirectVulkan lane that appended ${MGL_ITEST_COMMON_ENV}
+    # instead would run against whatever ICD the loader found first, which is exactly how a lane
+    # measures a different driver from the one the gate it mirrors measures.
+    #
+    # MOBILEGL_ITEST_REQUIRE_GPU=1 IS PINNED, as the existing Magma lanes pin it: on a host with
+    # no usable Vulkan every one of these entries would otherwise SKIP, and a lane that skipped
+    # everything and a lane that passed everything are the same green in ctest.
+    mgl_itest_join_environment(MGL_ITEST_VULKAN_SPLIT_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_TRANSPORT=inproc"
+        "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
+        "MOBILEGL_ITEST_REQUIRE_GPU=1"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
+    mgl_itest_join_environment(MGL_ITEST_VULKAN_SPAWN_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_TRANSPORT=spawn"
+        "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
+        "MOBILEGL_ITEST_REQUIRE_GPU=1"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
+    mgl_itest_join_environment(MGL_ITEST_VULKAN_TCP_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_TRANSPORT=spawn"
+        "MOBILEGL_IPC_CONTROL=${MOBILEGL_ITEST_TCP_ENDPOINT}" "MOBILEGL_IPC_DATA=stream"
+        "MOBILEGL_IPC_REQUIRE_SAME_BUILD=1" "MOBILEGL_IPC_LOG_FORWARD=1" "MOBILEGL_IPC_TOKEN="
+        "MGITEST_SPLIT_LANE=1" "MGITEST_TCP_LANE=1" "MOBILEGL_ITEST_REQUIRE_GPU=1"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
+
+    # THE TRANSPORT DIMENSION ON ITS OWN, for the Magma lanes further down this file that already
+    # have an environment of their OWN FLAVOUR (strict + dual-block state, run-ahead credits,
+    # cache pinning) and need only the transport half re-stated per arm. Kept beside the joined
+    # lists above so there is ONE place that says what "the spawn arm" and "the tcp arm" mean.
+    set(MGL_ITEST_SPLIT_ARM_TRANSPORT_ENV "MOBILEGL_TRANSPORT=inproc"
+        "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}")
+    set(MGL_ITEST_SPAWN_ARM_TRANSPORT_ENV "MOBILEGL_TRANSPORT=spawn"
+        "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}")
+    set(MGL_ITEST_TCP_ARM_TRANSPORT_ENV "MOBILEGL_TRANSPORT=spawn"
+        "MOBILEGL_IPC_CONTROL=${MOBILEGL_ITEST_TCP_ENDPOINT}" "MOBILEGL_IPC_DATA=stream"
+        "MOBILEGL_IPC_REQUIRE_SAME_BUILD=1" "MOBILEGL_IPC_LOG_FORWARD=1" "MOBILEGL_IPC_TOKEN="
+        "MGITEST_TCP_LANE=1")
+
+    # ---- P7 package L: ONE SHAPE FOR EVERY MAGMA LANE'S THREE ARMS --------------------------
+    #
+    # The gated Magma tier is six hand-laid blocks (Fm, Buffers, RunAhead, Caches, NamedBlit,
+    # P5fRsp) because each carries a flavour of its own. What they share is the ARM: the same
+    # three transports, the same tcp fixture, the same label and log-name arithmetic. This macro
+    # is that shared half, so a seventh block gets its arms right by calling one line.
+    #
+    # Sets, for the arm it is given:
+    #   mglItestArmLower          split | spawn | tcp
+    #   mglItestArmLogTag         "" on the inproc arm, "-spawn"/"-tcp" on the others - THE
+    #                             INPROC ARM'S PRIVATE LOG PATHS DO NOT MOVE. magma_cache_checks
+    #                             and magma_runahead_checks name entries and re-derive their logs
+    #                             from discovery, and P6.5's device evidence cites these paths.
+    #   mglItestArmProperties     the tcp fixture + resource lock; empty otherwise
+    #   mglItestArmTransportEnv   the arm's transport pins, to append to the lane's flavour
+    #   mglItestMagmaLabels       "integration-magma-<arm>" plus one label per WORD in ARGN
+    #
+    # THE SUB-LABEL SPELLING IS ASYMMETRIC ON PURPOSE. On the inproc arm a word keeps its
+    # historical name (`integration-magma-buffers`); on the others the ARM comes first
+    # (`integration-magma-spawn-buffers`). `ctest -L` is a regex, so the obvious
+    # `integration-magma-buffers-spawn` would be SELECTED by the CI step that runs
+    # `-L integration-magma-buffers` and require_greens its nineteen inproc entries by name -
+    # the lane would red on "required green entries differ" the day this package landed.
+    macro(mgl_itest_magma_arm_shape mglItestArm)
+        string(TOLOWER "${mglItestArm}" mglItestArmLower)
+        set(mglItestArmProperties)
+        set(mglItestArmLogTag "")
+        set(mglItestArmTransportEnv ${MGL_ITEST_SPLIT_ARM_TRANSPORT_ENV})
+        if("${mglItestArm}" STREQUAL "Spawn")
+            set(mglItestArmTransportEnv ${MGL_ITEST_SPAWN_ARM_TRANSPORT_ENV})
+            set(mglItestArmLogTag "-spawn")
+        elseif("${mglItestArm}" STREQUAL "Tcp")
+            set(mglItestArmTransportEnv ${MGL_ITEST_TCP_ARM_TRANSPORT_ENV})
+            set(mglItestArmLogTag "-tcp")
+            set(mglItestArmProperties FIXTURES_REQUIRED mobilegl-tcp RESOURCE_LOCK mobilegl-tcp)
+        endif()
+        set(mglItestMagmaLabels "integration-magma-${mglItestArmLower}")
+        foreach(mglItestWord IN ITEMS ${ARGN})
+            if("${mglItestArm}" STREQUAL "Split")
+                set(mglItestMagmaLabels "${mglItestMagmaLabels}\\;integration-magma-${mglItestWord}")
+            else()
+                set(mglItestMagmaLabels
+                    "${mglItestMagmaLabels}\\;integration-magma-${mglItestArmLower}-${mglItestWord}")
+            endif()
+        endforeach()
+    endmacro()
+    set(MGL_ITEST_MAGMA_ARMS Split Spawn Tcp)
+
     # scenarioFilter, a PREFIX TAIL (empty for most; "F1." and "Ct." for the two per-slot loops,
     # which name their sub-lane in the test name), then zero or more EXTRA LABEL STEMS. A stem is
     # suffixed with the arm's own name (`integration-clientarrays` becomes `-split` on one arm and
@@ -2066,10 +2163,56 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     set(MGL_SPLIT_ARM_TESTS "")
     set(MGL_SPLIT_ARM_TEST_LISTS "")
     set(MGL_SPLIT_ARM_INDEX 0)
-    macro(mgl_itest_register_split_arms scenarioFilter prefixTail)
-        set(mglItestArms Split Spawn Tcp)
-        if(MOBILEGL_ITEST_TCP_DEVICE_ENDPOINT)
-            list(APPEND mglItestArms TcpDevice)
+    set(MGL_SPLIT_ARM_CALLS "")
+    # ---- P7 package L: THE BACKEND IS NOW A PARAMETER, AND THE TWO TIERS IT REGISTERS -------
+    #
+    # TIER 1, GATED. DirectGLES keeps every label it had - `integration-gpu`,
+    # `integration-{split,spawn,tcp,tcp-device}` and the caller's extra stems - so the sets CI
+    # gates on and the names G14 ratchets are byte-for-byte what they were. Magma's own gated
+    # tier is `integration-magma-{split,spawn,tcp}`, laid out by hand further down this file
+    # because each of those lanes carries a FLAVOUR (strict + dual-block state, run-ahead
+    # credits, cache pinning) that no shared filter can express.
+    #
+    # TIER 2, INFORMATIONAL, AND THAT IS THE POINT. DirectVulkan through THIS macro registers
+    # `integration-magma-all-{split,spawn,tcp}`: every scenario the split arms run, on Magma, on
+    # all three transports. It is deliberately in NO CI gating step. P7's exit gate 1 needs a
+    # lane that can be RED - the first run's red list IS the work list wave 2 clusters A/B/C
+    # divide up - and a red list is worthless if the only way to record it is to break the
+    # build's green. When a cluster retires its share, its cases move from this tier into the
+    # gated one, and CI stays honest at every step in between.
+    #
+    # THE LABEL SPELLINGS ARE CHOSEN AGAINST `ctest -L`'s REGEX MATCH (ID-131's rule, which this
+    # file has paid for twice). `-L integration-magma-spawn` must NOT select this tier, so the
+    # tier's word goes in the MIDDLE - `integration-magma-all-spawn` does not contain
+    # `integration-magma-spawn` as a substring, while the obvious `integration-magma-spawn-all`
+    # does and would have quietly pulled ~100 expected-red entries into the gated lane. Checked
+    # in both directions for all six spellings.
+    #
+    # NO `integration-gpu` ON THE MAGMA ARMS, deliberately: that label is a hard CI gate and the
+    # existing Magma split entries do not carry it either. NO EXTRA LABEL STEMS either - a stem
+    # like `integration-clientarrays` would produce `integration-clientarrays-spawn`, which is
+    # the label the DirectGLES spawn arm already owns, and one `ctest -L` would then run two
+    # backends under one name.
+    #
+    # NO TcpDevice ARM ON MAGMA: the device endpoint is one phone, run serially, and doubling
+    # its matrix before the host lane is even green buys nothing. Stated rather than implied.
+    macro(mgl_itest_register_split_arms_for_backend mglItestBackend scenarioFilter prefixTail)
+        # QUOTED DEREFERENCE, NOT A BARE NAME: a macro parameter is a textual substitution and
+        # not a variable, so `if(mglItestBackend STREQUAL ...)` would compare the literal string
+        # "mglItestBackend" and take the else branch on every call.
+        if("${mglItestBackend}" STREQUAL "DirectGLES")
+            set(mglItestEnvStem GLES)
+            set(mglItestLaneStem "integration")
+            set(mglItestSharedLabels "integration-gpu\\;")
+            set(mglItestArms Split Spawn Tcp)
+            if(MOBILEGL_ITEST_TCP_DEVICE_ENDPOINT)
+                list(APPEND mglItestArms TcpDevice)
+            endif()
+        else()
+            set(mglItestEnvStem VULKAN)
+            set(mglItestLaneStem "integration-magma-all")
+            set(mglItestSharedLabels "")
+            set(mglItestArms Split Spawn Tcp)
         endif()
         foreach(mglItestArm IN LISTS mglItestArms)
             string(TOLOWER "${mglItestArm}" mglItestArmLower)
@@ -2081,7 +2224,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 set(mglItestArmLower tcp-device)
                 set(mglItestArmProperties RESOURCE_LOCK mobilegl-tcp-device)
             endif()
-            set(mglItestArmLabels "integration-gpu\\;integration-${mglItestArmLower}")
+            set(mglItestArmLabels "${mglItestSharedLabels}${mglItestLaneStem}-${mglItestArmLower}")
             foreach(mglItestExtra IN ITEMS ${ARGN})
                 set(mglItestArmLabels "${mglItestArmLabels}\\;${mglItestExtra}-${mglItestArmLower}")
             endforeach()
@@ -2095,19 +2238,36 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             # IT MATTERS MORE ON THE SPAWN ARM: there TWO PROCESSES append to the path, so two
             # entries sharing one file is not merely ambiguous, it interleaves two sessions.
             gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectGLES.${mglItestArm}.${prefixTail}"
+                TEST_PREFIX "${mglItestBackend}.${mglItestArm}.${prefixTail}"
                 TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
                 TEST_FILTER "${scenarioFilter}"
                 DISCOVERY_TIMEOUT 30
                 PROPERTIES
                     LABELS "${mglItestArmLabels}"
                     TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ENVIRONMENT "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}"
+                    ENVIRONMENT "${MGL_ITEST_${mglItestEnvStem}_${mglItestArmUpper}_ENVIRONMENT}"
                     ${mglItestArmProperties}
             )
             list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
             math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
         endforeach()
+    endmacro()
+
+    # THE NAME EVERY EXISTING CALL SITE USES, unchanged in signature so that this package adds a
+    # dimension without touching one registration. It also RECORDS its call, which is what makes
+    # tier 2 structural rather than maintained: the informational Magma tier at the end of this
+    # file replays the recorded list, so a scenario added to the split arms tomorrow joins the
+    # Magma census the same day and nobody has to remember a second edit. `-` stands for an empty
+    # prefix tail, because a CMake list cannot tell "one empty element" from "no elements".
+    macro(mgl_itest_register_split_arms scenarioFilter prefixTail)
+        if("${prefixTail}" STREQUAL "")
+            set(mglItestRecordedTail "-")
+        else()
+            set(mglItestRecordedTail "${prefixTail}")
+        endif()
+        list(APPEND MGL_SPLIT_ARM_CALLS "${scenarioFilter}|${mglItestRecordedTail}")
+        mgl_itest_register_split_arms_for_backend(DirectGLES "${scenarioFilter}" "${prefixTail}"
+                                                  ${ARGN})
     endmacro()
 
     mgl_itest_register_split_arms("ClearThenReadPixelsScenario.*" "")
@@ -2470,38 +2630,50 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         mgl_itest_register_split_arms("F1WireScenario.${f1Slot}Pixels" "F1.")
     endforeach()
     # P5f fm: the framebuffer/copy/mipmap verbs now consume server records on Magma too.
-    mgl_itest_join_environment(MGL_ITEST_MAGMA_WIRE_ENVIRONMENT
-        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_TRANSPORT=inproc"
-        "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
+    #
+    # P7 package L: THE SAME CASES ON ALL THREE TRANSPORTS. The flavour is everything this lane
+    # is except the transport, which the arm now supplies - so the inproc arm is byte-for-byte
+    # the lane P6.5 left green (same names, same labels, same log paths) and the two new arms
+    # differ from it in exactly one dimension. That is what makes a red here readable: it is a
+    # TRANSPORT fact, because nothing else changed.
+    set(MGL_ITEST_MAGMA_WIRE_FLAVOUR_ENV
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
-    # Every entry here is green, R11F_G11F_B10F packed-float mip generation included: the GPU
-    # shader blit retires the named native-format refusal, so GenerateMipmapPackedFloatPixels
-    # carries its siblings' label and their pixels assertion.
-    foreach(fmSlot ComputeImageStoreThroughViewPreservesOtherRootLayer EnabledVertexBufferDrawKeepsNamedP7Fatal SrgbDrawTracksFramebufferConversion Texture1DFramebufferClearPixels VertexIdSamplerAndScalarUniformPixels ComputeImageStoreFramebufferPixels PartialTextureUploadPreservesGpuClearPixels TextureViewClearTargetsItsRootMipAndLayer ClearBufferfiPixels ClearBufferfvPixels ClearBufferivPixels ClearBufferuivPixels ClearNamedFramebufferfiPixels ClearNamedFramebufferfvPixels ClearNamedFramebufferivPixels ClearNamedFramebufferuivPixels CopyTexImage2DPixels CopyTexSubImage2DPixels GenerateMipmapPixels GenerateMipmapPackedFloatPixels GenerateMipmapDepthPixels)
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.Split.Fm."
-            TEST_FILTER "F1WireScenario.${fmSlot}"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-magma-split"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${MGL_ITEST_MAGMA_WIRE_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-fm-${fmSlot}.log")
-    endforeach()
-    foreach(fmCase ClipDistanceScenario.AnEnabledClipDistanceRemovesTheNegativeHalf
-                   ClipDistanceScenario.ADisabledClipDistanceRemovesNothing
-                   ClipDistanceScenario.TheEnablesAreIndependentPerDistance
-                   CopyImageLayeredScenario.ArrayToArrayCopiesEverySlice
-                   CopyImageLayeredScenario.ArrayToArrayHonoursDifferentLayerOffsets
-                   CopyImageLayeredScenario.VolumeToVolumeHonoursNonZeroZ
-                   CopyImageLayeredScenario.VolumeToVolumeAtNonZeroMipLevel
-                   CopyImageLayeredScenario.ArrayToVolumeCopiesEverySlice
-                   CopyImageLayeredScenario.VolumeToArrayCopiesEverySlice)
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.Split.Fm."
-            TEST_FILTER "${fmCase}"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "integration-magma-split" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${MGL_ITEST_MAGMA_WIRE_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-fm-${fmCase}.log")
+    # Every entry here is green on the inproc arm, R11F_G11F_B10F packed-float mip generation
+    # included: the GPU shader blit retires the named native-format refusal, so
+    # GenerateMipmapPackedFloatPixels carries its siblings' label and their pixels assertion.
+    foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
+        mgl_itest_magma_arm_shape(${mglItestArm})
+        mgl_itest_join_environment(mglItestMagmaWireEnvironment
+            ${MGL_ITEST_MAGMA_WIRE_FLAVOUR_ENV} ${mglItestArmTransportEnv})
+        foreach(fmSlot ComputeImageStoreThroughViewPreservesOtherRootLayer EnabledVertexBufferDrawKeepsNamedP7Fatal SrgbDrawTracksFramebufferConversion Texture1DFramebufferClearPixels VertexIdSamplerAndScalarUniformPixels ComputeImageStoreFramebufferPixels PartialTextureUploadPreservesGpuClearPixels TextureViewClearTargetsItsRootMipAndLayer ClearBufferfiPixels ClearBufferfvPixels ClearBufferivPixels ClearBufferuivPixels ClearNamedFramebufferfiPixels ClearNamedFramebufferfvPixels ClearNamedFramebufferivPixels ClearNamedFramebufferuivPixels CopyTexImage2DPixels CopyTexSubImage2DPixels GenerateMipmapPixels GenerateMipmapPackedFloatPixels GenerateMipmapDepthPixels)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.Fm."
+                TEST_FILTER "F1WireScenario.${fmSlot}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES
+                    LABELS "${mglItestMagmaLabels}"
+                    TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-fm${mglItestArmLogTag}-${fmSlot}.log")
+        endforeach()
+        foreach(fmCase ClipDistanceScenario.AnEnabledClipDistanceRemovesTheNegativeHalf
+                       ClipDistanceScenario.ADisabledClipDistanceRemovesNothing
+                       ClipDistanceScenario.TheEnablesAreIndependentPerDistance
+                       CopyImageLayeredScenario.ArrayToArrayCopiesEverySlice
+                       CopyImageLayeredScenario.ArrayToArrayHonoursDifferentLayerOffsets
+                       CopyImageLayeredScenario.VolumeToVolumeHonoursNonZeroZ
+                       CopyImageLayeredScenario.VolumeToVolumeAtNonZeroMipLevel
+                       CopyImageLayeredScenario.ArrayToVolumeCopiesEverySlice
+                       CopyImageLayeredScenario.VolumeToArrayCopiesEverySlice)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.Fm."
+                TEST_FILTER "${fmCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-fm${mglItestArmLogTag}-${fmCase}.log")
+        endforeach()
     endforeach()
 endif()
 
@@ -2509,12 +2681,16 @@ endif()
 # strict field checks forced on. Existing public scenarios supply offset, mutation,
 # persistent-map, growth and indirect coverage; no copied backend implementation.
 if (MOBILEGL_BUILD_DISAGGREGATED)
-    mgl_itest_join_environment(MGL_ITEST_MAGMA_BUFFER_ENVIRONMENT
-        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_TRANSPORT=inproc"
+    set(MGL_ITEST_MAGMA_BUFFER_FLAVOUR_ENV
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan"
         "MOBILEGL_IPC_ROLE_SPLIT_STATE=1" "MOBILEGL_IPC_STRICT_ERRORS=1"
         "MOBILEGL_IPC_ADOPT_TIER=2" "MGITEST_PERSISTENT_MAP_ARM=emulated"
         "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+    foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
+    mgl_itest_magma_arm_shape(${mglItestArm} buffers)
+    mgl_itest_join_environment(MGL_ITEST_MAGMA_BUFFER_ENVIRONMENT
+        ${MGL_ITEST_MAGMA_BUFFER_FLAVOUR_ENV} ${mglItestArmTransportEnv})
     foreach(bufferCase
             F1WireScenario.EnabledVertexBufferDrawKeepsNamedP7Fatal
             F1WireScenario.UniformBufferRangeAndRebindPixels
@@ -2536,12 +2712,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             PersistentCoherentMapScenario.AWriteAfterAFrameBoundaryReachesTheNextFramesDraw
             StorageBufferRegrowScenario.AGrownStoreIsVisibleThroughItsExistingIndexedBinding)
         gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.Split.Buffers."
+            TEST_PREFIX "DirectVulkan.${mglItestArm}.Buffers."
             TEST_FILTER "${bufferCase}"
             DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "integration-magma-split\;integration-magma-buffers"
+            PROPERTIES LABELS "${mglItestMagmaLabels}"
                 TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${MGL_ITEST_MAGMA_BUFFER_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-buffers-${bufferCase}.log")
+                ${mglItestArmProperties}
+                ENVIRONMENT "${MGL_ITEST_MAGMA_BUFFER_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-buffers${mglItestArmLogTag}-${bufferCase}.log")
+    endforeach()
     endforeach()
 endif()
 
@@ -2550,15 +2728,30 @@ endif()
 # fails rather than turning this dedicated lane into a skip or a lockstep pass.
 if (MOBILEGL_BUILD_DISAGGREGATED)
     target_sources(MobileGLIntegrationTest PRIVATE Scenarios/MagmaRunAheadScenario.cpp)
+    # P7 package L: THE INPROC ARM ALONE, AND IT IS A PROPERTY OF THE SCENARIO, NOT A GAP.
+    # MagmaRunAheadScenario::HoldNextBatch arms the hold through
+    # ServerLoopInstance().SetBeforeRetireHookForTesting (Harness/SplitRuntimePeek.cpp:43-50) -
+    # a hook on THIS PROCESS's server loop. Under spawn or tcp the server loop is in another
+    # process, so the hook is installed on a loop that never runs and the wait times out with
+    # "the clear waited for apply instead of returning while its server batch was held".
+    # MEASURED, not assumed: registering all three arms made all 14 entries red on both new
+    # arms, with that sentence and no Fatal in either role log. An entry that cannot pass for a
+    # reason that is not the subject of its lane is the mirror image of R-16's rule, and this
+    # file already keeps four DirectGLES lanes (DualBlock, StrictProgramArm, PersistentMapArm,
+    # StrictArming) on one arm for exactly this reason. The two-process reading of run-ahead
+    # needs a cross-process hold - a server-side knob, not a function pointer - and that is
+    # named in this package's report as a debt rather than left as a red nobody can act on.
     foreach(credit 1 3)
+      foreach(mglItestArm IN ITEMS Split)
+        mgl_itest_magma_arm_shape(${mglItestArm} runahead)
         mgl_itest_join_environment(MGL_ITEST_MAGMA_RUNAHEAD_ENVIRONMENT
-            "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_TRANSPORT=inproc"
+            "MOBILEGL_BACKEND_TYPE=DirectVulkan"
             "MOBILEGL_IPC_ROLE_SPLIT_STATE=1" "MOBILEGL_IPC_STRICT_ERRORS=1"
             "MOBILEGL_IPC_RUN_AHEAD=1" "MOBILEGL_IPC_PRESENT_CREDIT=${credit}"
             "MOBILEGL_IPC_SPIN_US=0" "MOBILEGL_IPC_ADOPT_TIER=2"
             "MGITEST_MAGMA_RUNAHEAD_LANE=1" "MGITEST_SPLIT_LANE=1"
             "MOBILEGL_ITEST_REQUIRE_GPU=1"
-            ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+            ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV} ${mglItestArmTransportEnv})
         foreach(runAheadCase
                 QueuedBufferVersionsAndDeletedNameReuseKeepTheirPixels
                 QueuedProgramRebindsKeepEachUniformSnapshot
@@ -2568,13 +2761,15 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 GpuClearSurvivesTheFirstStorageImageUpgrade
                 PresentCreditActuallyParksTheClientAtItsConfiguredLimit)
             gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.Split.RunAhead.Credit${credit}."
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.RunAhead.Credit${credit}."
                 TEST_FILTER "MagmaRunAheadScenario.${runAheadCase}"
                 DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "integration-magma-split\;integration-magma-runahead"
+                PROPERTIES LABELS "${mglItestMagmaLabels}"
                     TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ENVIRONMENT "${MGL_ITEST_MAGMA_RUNAHEAD_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-runahead-credit${credit}-${runAheadCase}.log")
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${MGL_ITEST_MAGMA_RUNAHEAD_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-runahead${mglItestArmLogTag}-credit${credit}-${runAheadCase}.log")
         endforeach()
+      endforeach()
     endforeach()
 endif()
 
@@ -2583,14 +2778,23 @@ endif()
 # retain these names but skip outside this dedicated, strict inproc environment.
 if (MOBILEGL_BUILD_DISAGGREGATED)
     target_sources(MobileGLIntegrationTest PRIVATE Scenarios/MagmaWireCacheScenario.cpp)
-    mgl_itest_join_environment(MGL_ITEST_MAGMA_CACHES_ENVIRONMENT
-        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_TRANSPORT=inproc"
+    set(MGL_ITEST_MAGMA_CACHES_FLAVOUR_ENV
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan"
         "MOBILEGL_IPC_ROLE_SPLIT_STATE=1" "MOBILEGL_IPC_STRICT_ERRORS=1"
         "MOBILEGL_IPC_RUN_AHEAD=1" "MOBILEGL_IPC_PRESENT_CREDIT=3"
         "MOBILEGL_IPC_SPIN_US=0" "MOBILEGL_IPC_ADOPT_TIER=2"
         "MGITEST_MAGMA_CACHES_LANE=1" "MGITEST_SPLIT_LANE=1"
         "MOBILEGL_ITEST_REQUIRE_GPU=1"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+    # P7 package L: THE INPROC ARM ALONE, for the run-ahead lane's reason one step more
+    # explicit - MagmaWireCacheScenario::SetUp asserts `runtime.transportName == "inproc"`
+    # outright (MagmaWireCacheScenario.cpp:53), because the whole lane reads the SERVER's own
+    # view and attachment identity out of this process. MEASURED: all 7 entries red on both new
+    # arms with `Which is: "non-monolith" ... "inproc"` and no Fatal in either role log.
+    foreach(mglItestArm IN ITEMS Split)
+    mgl_itest_magma_arm_shape(${mglItestArm} caches)
+    mgl_itest_join_environment(MGL_ITEST_MAGMA_CACHES_ENVIRONMENT
+        ${MGL_ITEST_MAGMA_CACHES_FLAVOUR_ENV} ${mglItestArmTransportEnv})
     foreach(cacheCase
             SamplerSwizzleAtoBtoAKeepsEachQueuedPixel
             SamplerRespecifyKeepsOldAndNewNativeImages
@@ -2600,12 +2804,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             FramebufferSrgbPolicyAtoBtoAUsesDistinctFormats
             FramebufferRespecifyRebindsTheNewNativeImage)
         gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.Split.Caches."
+            TEST_PREFIX "DirectVulkan.${mglItestArm}.Caches."
             TEST_FILTER "MagmaWireCacheScenario.${cacheCase}"
             DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "integration-magma-split\;integration-magma-caches"
+            PROPERTIES LABELS "${mglItestMagmaLabels}"
                 TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${MGL_ITEST_MAGMA_CACHES_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-caches-${cacheCase}.log")
+                ${mglItestArmProperties}
+                ENVIRONMENT "${MGL_ITEST_MAGMA_CACHES_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-caches${mglItestArmLogTag}-${cacheCase}.log")
+    endforeach()
     endforeach()
 endif()
 
@@ -2630,10 +2836,19 @@ endif()
 # The separate spelling also avoids ctest's substring label match (see below).
 if (MOBILEGL_BUILD_DISAGGREGATED)
     foreach(namedBlitBackend DirectGLES DirectVulkan)
+        # P7 package L: the Magma half gets the three arms; the Espryt half stays inproc-only,
+        # because its spawn and tcp coverage of this scenario comes from the F1. blocks the
+        # registration macro already emits, and a second copy would only double the count.
+        set(namedBlitArms Split)
+        if (namedBlitBackend STREQUAL "DirectVulkan")
+            set(namedBlitArms ${MGL_ITEST_MAGMA_ARMS})
+        endif()
+        foreach(mglItestArm IN LISTS namedBlitArms)
+        mgl_itest_magma_arm_shape(${mglItestArm})
         mgl_itest_join_environment(MGL_ITEST_NAMED_BLIT_ENVIRONMENT
-            "MOBILEGL_BACKEND_TYPE=${namedBlitBackend}" "MOBILEGL_TRANSPORT=inproc"
+            "MOBILEGL_BACKEND_TYPE=${namedBlitBackend}"
             "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
-            ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+            ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV} ${mglItestArmTransportEnv})
         # THE LABEL IS `integration-magma-split` AND NOT `integration-split-magma`, and that is not
         # a preference: `ctest -L` takes a REGEX, not an exact name, so `-L integration-split`
         # MATCHES a label spelled `integration-split-magma` as a substring. The obvious name would
@@ -2641,19 +2856,21 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # split that looks done and is not. Measured: with that spelling
         # `ctest -N -L integration-split` still listed both DirectVulkan entries.
         if (namedBlitBackend STREQUAL "DirectVulkan")
-            set(MGL_ITEST_NAMED_BLIT_LABELS "integration-magma-split")
+            set(MGL_ITEST_NAMED_BLIT_LABELS "${mglItestMagmaLabels}")
         else()
             set(MGL_ITEST_NAMED_BLIT_LABELS "integration-split")
         endif()
         foreach(namedBlitCase NamedBlitPreservesBindingsAndRestoresNextVerbsPixels NamedBlitDefaultEndpointPixels)
             gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "${namedBlitBackend}.Split.NamedBlit."
+                TEST_PREFIX "${namedBlitBackend}.${mglItestArm}.NamedBlit."
                 TEST_FILTER "F1WireScenario.${namedBlitCase}"
                 DISCOVERY_TIMEOUT 30
                 PROPERTIES
                     LABELS "${MGL_ITEST_NAMED_BLIT_LABELS}"
                     TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ENVIRONMENT "${MGL_ITEST_NAMED_BLIT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5b-${namedBlitBackend}-${namedBlitCase}.log")
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${MGL_ITEST_NAMED_BLIT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5b-${namedBlitBackend}${mglItestArmLogTag}-${namedBlitCase}.log")
+        endforeach()
         endforeach()
     endforeach()
 endif()
@@ -2764,25 +2981,90 @@ endif()
 # P5f exit: observe every one of three real drawing frames on both backend roles.
 if (MOBILEGL_BUILD_DISAGGREGATED)
     foreach(backend DirectGLES DirectVulkan)
+        # P7 package L: the Magma half on all three transports. `integration-p5f-rsp` itself
+        # stays on the INPROC entries alone - the CI step that reads it require_greens exactly
+        # the two names it has always had, and `ctest -L` would have matched a suffixed spelling.
+        set(p5f_rsp_arms Split)
+        if (NOT backend STREQUAL "DirectGLES")
+            set(p5f_rsp_arms ${MGL_ITEST_MAGMA_ARMS})
+        endif()
+        foreach(mglItestArm IN LISTS p5f_rsp_arms)
+        mgl_itest_magma_arm_shape(${mglItestArm} p5f-rsp)
         if (backend STREQUAL "DirectGLES")
-            set(p5f_rsp_label "integration-split")
+            set(p5f_rsp_label "integration-split\\;integration-p5f-rsp")
+        elseif (mglItestArm STREQUAL "Split")
+            set(p5f_rsp_label "integration-magma-split\\;integration-p5f-rsp")
         else()
-            set(p5f_rsp_label "integration-magma-split")
+            set(p5f_rsp_label "${mglItestMagmaLabels}")
         endif()
         mgl_itest_join_environment(p5f_rsp_environment
-            "MOBILEGL_BACKEND_TYPE=${backend}" "MOBILEGL_TRANSPORT=inproc"
-            "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
+            "MOBILEGL_BACKEND_TYPE=${backend}" "MGITEST_SPLIT_LANE=1"
             "MGITEST_P5F_RSP_LANE=1" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
-            "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-rsp-${backend}.log"
-            ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+            "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-rsp-${backend}${mglItestArmLogTag}.log"
+            ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV} ${mglItestArmTransportEnv})
         gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "${backend}.Split.P5fRsp."
+            TEST_PREFIX "${backend}.${mglItestArm}.P5fRsp."
             TEST_FILTER "F1WireScenario.EachWireFrameHasZeroResidualPulls"
             DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "${p5f_rsp_label}\;integration-p5f-rsp"
+            PROPERTIES LABELS "${p5f_rsp_label}"
                 TIMEOUT ${MGL_ITEST_TIMEOUT}
-                RESOURCE_LOCK "p5f-rsp-${backend}.log"
+                RESOURCE_LOCK "p5f-rsp-${backend}${mglItestArmLogTag}.log"
+                ${mglItestArmProperties}
                 ENVIRONMENT "${p5f_rsp_environment}")
+        endforeach()
+    endforeach()
+endif()
+
+# =====================================================================================
+# P7 PACKAGE L: THE INFORMATIONAL MAGMA CENSUS - TIER 2 OF TWO
+# =====================================================================================
+#
+# THE TWO TIERS, STATED ONCE AND IN ONE PLACE.
+#
+#   TIER 1 - GATED. `integration-magma-split` (inproc, and its meaning is unchanged: the same
+#   73 entries, names, labels and private log paths P6.5 left green), plus the two arms this
+#   package adds beside it, `integration-magma-spawn` and `integration-magma-tcp`. They run the
+#   SIX HAND-LAID MAGMA LANES - Fm, Buffers, RunAhead, Caches, NamedBlit, P5fRsp - because each
+#   carries a flavour (strict + dual-block state, adopt tier, run-ahead credits, cache pinning)
+#   that a shared scenario filter cannot express. A label here may enter a CI gating step only
+#   after it has been measured green.
+#
+#   TIER 2 - INFORMATIONAL, THIS BLOCK. Every scenario the DirectGLES split arms run, on
+#   DirectVulkan, on all three transports: `integration-magma-all-split` / `-spawn` / `-tcp`.
+#   It is in NO CI gating step and must not be added to one wholesale. Its first run's RED LIST
+#   IS THE P7 WORK LIST - the cases wave 2's clusters A (UniformManager alignment), B
+#   (blit/copy/mip) and C (vertex / death ops / resident subdata / reflection) divide between
+#   them - and a red list you cannot record without breaking the build's green is a red list
+#   nobody writes down. As a cluster retires its share, its cases move UP into tier 1 with the
+#   commit that retires them, and the gate is honest at every step in between.
+#
+# WHY IT REPLAYS A RECORDED LIST INSTEAD OF NAMING SCENARIOS. The same argument the spawn arm
+# won in P6 (`t6`), one dimension over: a hand-written second list agrees with the first today
+# and drifts the first time somebody adds a scenario to one of them, and a Magma census covering
+# LESS than the Espryt lane looks exactly like a Magma census covering all of it. The
+# registration macro records every call it is given; this replays them, so a scenario added to
+# the split arms tomorrow joins the Magma census the same day.
+#
+# THE THREE ARMS INCLUDE INPROC, and that is the block's diagnostic half: a case red on spawn
+# and tcp but GREEN on inproc is a two-process defect (plumbing, a death notice, a reply that
+# never crossed), while a case red on all three is Magma's own missing verb and belongs to a
+# wave 2 cluster. Without the inproc arm every red would need a hand re-run to tell those apart.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    list(LENGTH MGL_SPLIT_ARM_CALLS mglItestSplitArmCallCount)
+    message(STATUS "Integration tests: P7 package L replays ${mglItestSplitArmCallCount} split-arm "
+                   "registration(s) on DirectVulkan under the informational "
+                   "integration-magma-all-{split,spawn,tcp} labels")
+    foreach(mglItestCall IN LISTS MGL_SPLIT_ARM_CALLS)
+        # The recorded form is "<filter>|<tail>", with "-" standing for an empty tail. Split by
+        # regex rather than by list(GET): a filter is allowed to contain anything but `|`, and a
+        # CMake list cannot represent a trailing empty element unambiguously.
+        string(REGEX REPLACE "\\|[^|]*$" "" mglItestReplayFilter "${mglItestCall}")
+        string(REGEX REPLACE "^.*\\|" "" mglItestReplayTail "${mglItestCall}")
+        if(mglItestReplayTail STREQUAL "-")
+            set(mglItestReplayTail "")
+        endif()
+        mgl_itest_register_split_arms_for_backend(DirectVulkan "${mglItestReplayFilter}"
+                                                  "${mglItestReplayTail}")
     endforeach()
 endif()
 

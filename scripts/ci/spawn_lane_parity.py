@@ -16,6 +16,14 @@ PUSH-MONOLITH arm (the CMakeLists explains why: the label means "the set the dis
 runs", not "runs inproc"), and that arm's scenario is monolith-only by construction. It cannot
 have a spawn counterpart, so it is named as an exception rather than allowed to widen the
 tolerance for everything else.
+
+P7 PACKAGE L ADDS THE SAME QUESTION FOR MAGMA, IN TWO TIERS, AND THE NORMALISATION IS
+DIFFERENT ON PURPOSE. The Espryt half above strips the sub-lane tails `F1.` and `Ct.` because
+they name neither the case nor the arm. The Magma half must NOT: `RunAhead.Credit1.` and
+`RunAhead.Credit3.` are two entries of the same case, differing in the credit the lane pins, and
+a normaliser that dropped the tail would fold them together and then report an equal-sized set
+that had silently lost one. So there the arm - and only the arm, the SECOND dotted segment - is
+what comes off.
 """
 import argparse
 import re
@@ -27,11 +35,82 @@ MONOLITH_ONLY = {"MonolithAttachmentClearScenario"}
 
 CASE = re.compile(r"DirectGLES\.[A-Za-z0-9]+\.(?:F1\.|Ct\.)?([A-Za-z0-9_]+Scenario\.[A-Za-z0-9_]+)")
 
+# `<Backend>.<Arm>.<everything else>` -> `<Backend>.<everything else>`. The arm is the only
+# segment two arms of one lane are allowed to differ in.
+ARM = re.compile(r"^(DirectGLES|DirectVulkan)\.(Split|Spawn|Tcp|TcpDevice)\.(.+)$")
+TEST_LINE = re.compile(r"^\s*Test\s+#\d+:\s*(\S+)\s*$", re.MULTILINE)
+
+# `ctest -N -L <tcp label>` lists the FIXTURE entries too, because every tcp entry declares
+# FIXTURES_REQUIRED mobilegl-tcp and ctest pulls the setup/cleanup in with them. They are the
+# supervisor, not cases, and they exist on exactly one arm by construction. Named here so that
+# any OTHER unparseable name is still an error rather than a silent drop.
+FIXTURE_ENTRIES = {"TcpServer.Start", "TcpServer.Stop"}
+
+# THE MAGMA TIER'S SANCTIONED ASYMMETRIES, LISTED HERE AND NOWHERE ELSE - the same discipline
+# MONOLITH_ONLY above gets. Both are inproc-only BY CONSTRUCTION, not by omission:
+#   MagmaRunAheadScenario  arms its hold through ServerLoopInstance().SetBeforeRetireHookForTesting,
+#                          a hook on the CALLING process's server loop. With the server in another
+#                          process the hold never activates and the wait times out.
+#   MagmaWireCacheScenario SetUp asserts runtime.transportName == "inproc" outright: the lane reads
+#                          the server's own view/attachment identity out of this process.
+# A cross-process hold and a cross-process cache peek are server-side knobs neither exists yet;
+# until they do, naming the two scenarios here keeps the tolerance from widening for anything else.
+MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.")
+
+
+def lane_names(build_dir, label):
+    """Every ctest entry name under an ANCHORED label (`ctest -L` is a regex, not a name)."""
+    out = subprocess.run(["ctest", "-N", "-L", "^" + label + "$"], cwd=build_dir,
+                         capture_output=True, text=True, check=True).stdout
+    return {m.group(1) for m in TEST_LINE.finditer(out)}
+
+
+def arm_keys(names):
+    return {f"{m.group(1)}.{m.group(3)}" for m in (ARM.match(n) for n in names) if m}
+
 
 def lane_cases(build_dir, label):
     out = subprocess.run(["ctest", "-N", "-L", "^" + label + "$"], cwd=build_dir,
                          capture_output=True, text=True, check=True).stdout
     return {m.group(1) for m in CASE.finditer(out)}
+
+
+def compare_arms(build_dir, tier, labels):
+    """The three arms of one tier must name the same set after the arm segment comes off.
+
+    Returns True on failure, the way main() below counts them."""
+    sets = {}
+    for arm, label in labels.items():
+        names = lane_names(build_dir, label) - FIXTURE_ENTRIES
+        sets[arm] = arm_keys(names)
+        print(f"{tier}: {label} has {len(names)} case entrie(s), "
+              f"{len(sets[arm])} after normalisation")
+        if len(names) != len(sets[arm]):
+            print(f"::error::{label}: {len(names) - len(sets[arm])} entry name(s) do not parse "
+                  f"as <Backend>.<Arm>.<case>, so this comparison silently drops them: "
+                  + ", ".join(sorted(n for n in names if not ARM.match(n))), file=sys.stderr)
+            return True
+    if not any(sets.values()):
+        print(f"::note::{tier}: no entries under {sorted(labels.values())} - nothing to compare")
+        return False
+    failed = False
+    reference = "split"
+    comparable = {k for k in sets[reference]
+                  if not any(only in k for only in MAGMA_INPROC_ONLY)}
+    if len(comparable) != len(sets[reference]):
+        print(f"{tier}: {len(sets[reference]) - len(comparable)} inproc-only entrie(s) excluded "
+              f"from the comparison by name ({', '.join(MAGMA_INPROC_ONLY)})")
+    for arm, keys in sets.items():
+        if arm == reference:
+            continue
+        missing, extra = sorted(comparable - keys), sorted(keys - comparable)
+        if missing or extra:
+            print(f"::error::{tier}: the {arm} arm does not match the {reference} arm: "
+                  f"missing={missing}, extra={extra}. Every arm of a tier is emitted from one "
+                  f"loop over the same case list, so a difference here is a registration bug, "
+                  f"not a coverage decision.", file=sys.stderr)
+            failed = True
+    return failed
 
 
 def main():
@@ -76,6 +155,16 @@ def main():
         if not cases or missing or extra:
             print(f"::error::{label}: missing={missing}, extra={extra}", file=sys.stderr)
             failed = True
+
+    # P7 package L, exit gate 1's half of the same question: the Magma arms.
+    failed |= compare_arms(args.build_dir, "magma gated tier",
+                           {"split": "integration-magma-split",
+                            "spawn": "integration-magma-spawn",
+                            "tcp": "integration-magma-tcp"})
+    failed |= compare_arms(args.build_dir, "magma informational tier",
+                           {"split": "integration-magma-all-split",
+                            "spawn": "integration-magma-all-spawn",
+                            "tcp": "integration-magma-all-tcp"})
     return 1 if failed else 0
 
 
