@@ -4239,6 +4239,40 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // THE SAFETY ARGUMENT P4a MADE AND NEVER RAN (P3b/P4b espryt D1 slice 5).
+        //
+        // "Running the legacy arm" is a real answer in a monolith and a POSTPONED CRASH under a
+        // transport. All four pre-handle arms reach frontend state through accessors that are
+        // BARRIER_PULLED rows (FieldOwnership.def) - GetFramebufferBindingSlot is the loudest of
+        // them - and under an active transport that state belongs to a client that is no longer
+        // parked behind this apply. The accessor's honest answer is
+        // Fatal{UnmigratedPipeInput, "<field>@<verb>"}, raised on the first verb that reaches it.
+        //
+        // So the verdict "Legacy" under a transport is not safe, it is merely quiet. The audit
+        // that called g_fboTextureSyncList "separation-safe because the record arm returns first"
+        // was right only while the record arm is ARMED, and nothing checked that.
+        //
+        // A FRAME-TIME FATAL IS THE WORST SPELLING OF "MOBILEGL_PIPE_PUSH LEFT BIT 9 CLEAR": it
+        // arrives after a session is up, inside a scenario body, naming an accessor and a verb
+        // rather than the mask that chose them. Stop at resolve time instead - once, before the
+        // first verb - where both causes are still in scope and can be said in one sentence.
+        //
+        // THROUGH StopOnArmlessPipeSubsystem AND NOT A SECOND FATAL, deliberately: it is this
+        // file's one voice for "the configuration left no arm to run", the census already knows
+        // its word, and a transport with no record arm IS that condition - the legacy arm is
+        // present but unreachable, which is the same "no arm" with a different cause. The cause
+        // is what `detail` carries.
+        [[noreturn]] void StopOnTransportWithoutRecordArm(const char* bit, const char* detail) {
+            char what[512];
+            std::snprintf(what, sizeof(what),
+                          "MOBILEGL_TRANSPORT is not monolith and %s is clear (or refused), so the "
+                          "record arm is off and the legacy arm is unreachable: %s",
+                          bit, detail);
+            BufferImpl::StopOnArmlessPipeSubsystem(what);
+        }
+#endif
+
         // The release-build VOICE for StateBackendObjectRegistry::GetOrCreateByHandle's two
         // silent refusals, shared by the kinds P4a re-keys so the wording cannot drift between
         // them. It is the shape GetOrCreateBufferResourceForHandle gives P3a's buffer family,
@@ -4347,6 +4381,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 "MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemFramebuffer (bit 9) clear (or refuses "
                 "it) and MOBILEGL_PIPE_LEGACY_MEMOS=0 disables the pre-handle g_fboSynced* arm");
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            verdict != BufferImpl::PipeSubsystemArmVerdict::Handles) {
+            StopOnTransportWithoutRecordArm(
+                "kMGPipeSubsystemFramebuffer (bit 9)",
+                "the pre-handle g_fboSynced* / g_fboTextureSyncList arm reads the framebuffer "
+                "binding slots, and under a transport GetFramebufferBindingSlot is a BARRIER_PULLED "
+                "row belonging to a client that is not parked behind this apply - so the first verb "
+                "to reach it would raise Fatal{UnmigratedPipeInput, "
+                "\"GetFramebufferBindingSlot@<verb>\"} mid-frame instead");
+        }
+#endif
         const Bool enabled = verdict == BufferImpl::PipeSubsystemArmVerdict::Handles;
         MGLOG_D("MGPipe: Espryt framebuffer family runs the %s arm", enabled ? "handle" : "legacy");
         return enabled;
@@ -4403,6 +4449,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 "refuses it) and MOBILEGL_PIPE_LEGACY_MEMOS=0 disables the pre-handle texture "
                 "cheap-gate trio");
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            verdict != BufferImpl::PipeSubsystemArmVerdict::Handles) {
+            StopOnTransportWithoutRecordArm(
+                "kMGPipeSubsystemTextureResources (bit 10)",
+                "the pre-handle texture cheap-gate trio resolves through the frontend texture "
+                "objects and their binding slots, which under a transport are client memory (rule "
+                "E) rather than anything this side owns");
+        }
+#endif
         const Bool enabled = verdict == BufferImpl::PipeSubsystemArmVerdict::Handles;
         MGLOG_D("MGPipe: Espryt texture-resource family runs the %s arm", enabled ? "handle" : "legacy");
         return enabled;
@@ -4440,6 +4496,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 "it) and MOBILEGL_PIPE_LEGACY_MEMOS=0 disables UnitSamplerLookupMemo's WeakPtr "
                 "arm and SamplerPassMemo's raw-pointer rows");
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            verdict != BufferImpl::PipeSubsystemArmVerdict::Handles) {
+            StopOnTransportWithoutRecordArm(
+                "kMGPipeSubsystemSamplers (bit 11)",
+                "UnitSamplerLookupMemo's WeakPtr arm and SamplerPassMemo's raw-pointer rows are "
+                "keyed on FRONTEND objects, and under a transport there is no frontend object on "
+                "this side to key on - a WeakPtr that can never lock is not a slower arm, it is a "
+                "unit that samples through whatever it last held");
+        }
+#endif
         const Bool enabled = verdict == BufferImpl::PipeSubsystemArmVerdict::Handles;
         MGLOG_D("MGPipe: Espryt sampler family runs the %s arm", enabled ? "handle" : "legacy");
         return enabled;
@@ -4458,6 +4525,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 "MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemPrograms (bit 12) clear and "
                 "MOBILEGL_PIPE_LEGACY_MEMOS=0 disables g_programTwinLookupMemo");
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            verdict != BufferImpl::PipeSubsystemArmVerdict::Handles) {
+            StopOnTransportWithoutRecordArm(
+                "kMGPipeSubsystemPrograms (bit 12)",
+                "g_programTwinLookupMemo is keyed on the frontend ProgramObject and the legacy arm "
+                "reads the current program through it; under a transport the program arrives as a "
+                "ShaderCso handle with its archive beside the record and there is no frontend "
+                "program here at all");
+        }
+#endif
         const Bool enabled = verdict == BufferImpl::PipeSubsystemArmVerdict::Handles;
         MGLOG_D("MGPipe: Espryt program family runs the %s arm", enabled ? "handle" : "legacy");
         return enabled;

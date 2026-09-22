@@ -224,4 +224,57 @@ was re-run clean at 121/121.)*
 
 ## slice 5 — four transport-aware resolvers
 
-`RESULT: (pending)`
+**The hole.** `ResolveFramebufferSubsystemArm` and its three siblings
+(`ResolveTextureResourceSubsystemArm`, `ResolveSampler…`, `ResolveProgram…`) classify a family's
+arm as `Handles`, `Legacy` or `NoArm`, and stop only on `NoArm`. Under a transport `Legacy` is not
+a slower answer, it is a **postponed crash**: all four pre-handle arms reach frontend state through
+accessors that are BARRIER_PULLED rows (`FieldOwnership.def`), and under an active transport that
+state belongs to a client that is no longer parked behind this apply — so the accessor's honest
+answer is `Fatal{UnmigratedPipeInput, "<field>@<verb>"}` on the first verb that reaches it.
+
+This is the audit's own claim about `g_fboTextureSyncList` — "separation-safe, because the record
+arm returns first" — which is true **only while the record arm is armed**, and nothing checked
+that. The row is in the plan (§1.2, `g_fboTextureSyncList`) precisely because the argument had
+never been run.
+
+**The fix.** Each of the four, under `#if MOBILEGL_BUILD_DISAGGREGATED`, now stops when
+`MG_Config::Transport != Monolith && verdict != Handles`, through one shared
+`StopOnTransportWithoutRecordArm(bit, detail)` that formats both causes and hands them to
+`BufferImpl::StopOnArmlessPipeSubsystem` — this file's existing single voice for "the
+configuration left no arm to run". A transport with the record arm off *is* that condition with a
+different cause: the legacy arm is present but unreachable. Reusing the voice keeps the census's
+family word (`PipeLegacyMemosDisabled`) and the cause travels in the message rather than in a new
+word the census would have to learn.
+
+**Red-once (R-16).** `MOBILEGL_PIPE_PUSH=0x1dff` (the Handles lane's `0x1fff` minus `0x200`,
+`kMGPipeSubsystemFramebuffer`) with `MOBILEGL_TRANSPORT=inproc`, running
+`ClearThenReadPixelsScenario.ClearWithNoDrawIsVisibleToDefaultFramebufferReadPixels`. Both runs
+abort (exit 134) — what changes is *what the abort says*:
+
+*without the stop (fix reverted):*
+```
+Fatal{UnmigratedPipeInput, "GetFramebufferBindingSlot@Clear"}
+```
+a mid-frame Fatal naming an accessor and a verb, from which nothing points at the mask.
+
+*with it:*
+```
+Fatal{PipeLegacyMemosDisabled, "MOBILEGL_TRANSPORT is not monolith and
+kMGPipeSubsystemFramebuffer (bit 9) is clear (or refused), so the record arm is off and the
+legacy arm is unreachable: the pre-handle g_fboSynced* / g_fboTextureSyncList arm reads the
+framebuffer binding slots, and under a transport GetFramebufferBindingSlot is a BARRIER_PULLED
+row belonging to a client that is not parked behind this apply - so the first verb to reach it
+would raise Fatal{UnmigratedPipeInput, "GetFramebufferBindingSlot@<verb>"} mid-frame instead"}
+```
+
+**"Resolve time", not "startup"** — said precisely, because the difference matters and the plan's
+wording ("启动期具名 stop") is looser than the tree. The four resolvers are function-local statics
+resolved lazily at first use, deliberately (`Managers.cpp`'s own comment: a stop inside
+`eglMakeCurrent` reads to the harness as "no usable GPU" and SKIPS). So the stop still lands in a
+scenario body where ctest reports it. What it no longer does is wait for a verb to dereference the
+client's state and then blame the accessor.
+
+**Gates.** `integration-split` 202/202, `integration-spawn` 118/118, `integration-tcp` 121/121,
+`ctest -L unit` 2408/2408, `integration-magma-split` 73/73, parity / census (79 sites, 0 unmarked)
+/ ratchet (186) green. G1 `.text` `0xa52203`, both nm lists byte-identical — the four blocks are
+inside `MOBILEGL_BUILD_DISAGGREGATED` and the pull build compiles none of them.
