@@ -281,7 +281,7 @@ red-once：**改成从超时置位闩锁，则配对的正控制"server 落后�
 
 > `MGPipeRunAheadCapBitsFor(...)` 与 `ConsumedSubsystemsFor(ActiveBackendType)` 要挪到 server 侧。
 > 注意一个被多处写错的细节：**CallMask 的能力位那一半已经读 server 自己的 backend 了**
-> （`Init.cpp:184-211` 读 `loop.Backend()->GetBackendFunctions()`，代码里带了理由）。只有那两个函数需要搬。
+> （`MG_Backend/Init.cpp:184-211` 读 `loop.Backend()->GetBackendFunctions()`，代码里带了理由）。只有那两个函数需要搬。
 
 ### 5.5 `t6` 的出口门加三条负控制、两个必测数字
 
