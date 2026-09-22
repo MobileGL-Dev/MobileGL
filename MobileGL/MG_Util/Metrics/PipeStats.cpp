@@ -236,6 +236,7 @@ namespace MobileGL::MG_Util::PipeStats {
             "render-state-cso-mints", "render-state-cso-binds", "map-persistent-roundtrips",
             "framebuffer-emissions", "sampler-view-emissions", "sampler-state-emissions",
             "shader-image-emissions", "client-tex-upload-emissions", "tex-remint-pulls",
+            "resident-subdata-emissions",
             "residual-pulls", "server-verb-boundaries", "wire-records",
 #endif
         };
@@ -612,6 +613,14 @@ namespace MobileGL::MG_Util::PipeStats {
         // Espryt had already allocated and then had to re-mint image-bindable, replaying its
         // levels from the client's shadow, because ImageBindableHint reached it too late.
         line += " trp=" + std::to_string(calls[static_cast<Uint32>(CallClass::TextureRemintPulls)]);
+        // rsd is P7's resident sub-data emission count (OQ-10): one per buffer_subdata_resident
+        // record (opcode 49) the client put on the wire. It is the ONLY observable that
+        // separates the resident arm from the in-place memcpy beside it - the bytes in the
+        // buffer are identical either way - so it is what the white-box cases read. Zero under
+        // monolith by construction, and zero under split too until the server publishes
+        // kCapResidentSubData off its own wire resource table (MG_Backend/Init.cpp).
+        line += " rsd=" +
+                std::to_string(calls[static_cast<Uint32>(CallClass::ResidentSubDataEmissions)]);
         // rsp is P5's residual-pull count: reads, on the server side, of a PipeInputs field no
         // pushed record supplies, answered out of the client's residual fill under the verb
         // barrier. It is the SIZE OF THE P6/P7/P8 DEBT and it is published on this line rather

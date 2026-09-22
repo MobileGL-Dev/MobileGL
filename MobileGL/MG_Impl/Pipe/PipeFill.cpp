@@ -1077,6 +1077,14 @@ namespace MobileGL::MG_Pipe {
 #endif
                 // The application's STAGING store, valid for the duration of the call only.
                 MGPipeRouteBufferSubDataResident(record, base + (at - offset), length);
+                // P7 wave 2 package C, OQ-10: `rsd=`, counted HERE rather than at the call
+                // above so that one glBufferSubData cut into N chunk records counts N. See
+                // PipeStats.h's CallClass::ResidentSubDataEmissions for why the count is the
+                // only thing that can tell this arm from the in-place memcpy beside it.
+                if (MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::AddCalls(
+                        MG_Util::PipeStats::CallClass::ResidentSubDataEmissions, 1);
+                }
             }, MGPipeContentChunkCap());
         if (!encodable) {
             MGLOG_E_ONCE("MGPipe: buffer_subdata_resident range [%llu, +%llu) on buffer %u cannot be encoded",
@@ -1883,8 +1891,11 @@ namespace MobileGL::MG_Pipe {
     //
     // BACKEND-NEUTRAL FROM THE FIRST COMMIT, which is the whole point: before P3a's C-1 fix
     // the only thing that ever returned a VertexElementsCso slot was DirectGLES'
-    // StateObjectDeathOps table, so under a backend that installs none every VAO leaked a slot
-    // and a ~1.3 KB applier record for the life of the process. P4a mints SIX kinds and there
+    // StateObjectDeathOps table, so under a backend that installed none every VAO leaked a slot
+    // and a ~1.3 KB applier record for the life of the process. It stays the point now that
+    // BOTH backends install one (P7 wave 2 package C gives Magma its own, CONTRACT-P7 §5.5):
+    // Magma's table EMITS the death record and frees nothing, so the slot still comes back
+    // from here and from nowhere else. P4a mints SIX kinds and there
     // is no intermediate state in which a backend table is the only path for any of them.
     //
     // THE THREE-STEP ORDER IS FIXED and each position is load-bearing (see PipeMutation.h):

@@ -73,6 +73,16 @@ namespace MGITest {
         // Real session state/watermarks. Only the client thread reads this snapshot;
         // the scheduling observer below reads producerParked separately.
         bool runAheadArmed = false;
+        // P7 wave 2 package C, OQ-10 (CONTRACT-P7 §5.4): kCapResidentSubData, as the CLIENT's
+        // caps mirror received it. This is the wire-level half of the bit's proof - the unit
+        // pair asserts that the SERVER derives it from its own resource table, and this says
+        // the client got what the server published, which is the only thing the frontend's
+        // MGPipeResourceOpsHaveSubDataResident can read under a transport.
+        //
+        // FALSE where the peek cannot look, like every field here, so a reader must have
+        // passed SplitRuntimeSkipReason() first: "no mirror" and "the bit was withheld" are
+        // the same false and completely different facts.
+        bool residentSubDataCap = false;
         unsigned int presentCredit = 0;
         unsigned long long appliedSeq = 0;
         unsigned long long retiredSeq = 0;

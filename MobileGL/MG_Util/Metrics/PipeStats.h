@@ -190,6 +190,25 @@ namespace MobileGL::MG_Util::PipeStats {
         // sync is allocated image-bindable up front and never counts. `trp=` on the summary
         // line; the number that decides MOBILEGL_PIPE_TEXEL_RETAIN_MB's default.
         TextureRemintPulls,
+        // P7 wave 2 package C, OQ-10 (CONTRACT-P7 §5.4). `rsd=` - THE RESIDENT SUB-DATA
+        // EMISSION COUNT: one per `buffer_subdata_resident` record (opcode 49) the CLIENT
+        // actually put on the wire for a buffer whose store the server owns.
+        //
+        // IT EXISTS BECAUSE THE TWO ARMS ARE INDISTINGUISHABLE IN PIXELS AND IN GL. A write to
+        // a resident store either crosses as opcode 49 or lands in the ordered in-place host
+        // memcpy beside it (MG_State/.../BufferObject.cpp's LandBytesIntoResidentStore), and
+        // both produce identical bytes in the buffer - which is exactly how the capability
+        // stayed unpublished for a whole phase with every lane green: `kCapResidentSubData`
+        // was never ORed into the server's mask, MGPipeResourceOpsHaveSubDataResident
+        // therefore answered false under every transport, and Magma's SubDataResident arm was
+        // dead code on the wire that nothing could see. A counter is the only observable that
+        // tells the two apart from a scenario, so it is what the white-box cases assert on.
+        //
+        // Counted at the EMITTER (MG_Impl/Pipe/PipeFill.cpp's MGPipeEmitBufferSubDataResident),
+        // once per record rather than once per call, because a write larger than the content
+        // chunk cap is cut into several records and the number that matters is how many
+        // crossed. Push-only like the nine above: a pull build has no wire and no opcode 49.
+        ResidentSubDataEmissions,
         // P5's, and push-only for the same reason as the nine above.
         //
         // `rsp` - THE SIZE OF THE P6/P7/P8 DEBT. One per read, on the server side, of a

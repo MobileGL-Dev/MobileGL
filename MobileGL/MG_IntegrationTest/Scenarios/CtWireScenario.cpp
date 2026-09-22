@@ -206,6 +206,67 @@ namespace {
             << "Ct.TextureDeath.pixels - the recycled texture read back the dead twin's content";
     }
 
+    // ------------------------------------------------------------------------------------
+    // P7 wave 2 package C, OQ-10 (CONTRACT-P7 §5.4): the resident-sub-data capability, read
+    // on the CLIENT, on a real session, on both backends and all three transports.
+    //
+    // WHAT IT PINS AND WHY IT IS HERE RATHER THAN IN A BUFFER SCENARIO. `kCapResidentSubData`
+    // is the one thing the frontend can ask, under a transport, about whether the side that
+    // will APPLY a write implements the resident arm: the client has no op table of its own
+    // to probe (MGPipeResourceOpsHaveSubDataResident says so in as many words) and reads this
+    // bit instead. Until this package nothing ever ORed it into the server's mask, so the
+    // answer was permanently "no" - which silently pinned BOTH backends to the ordered
+    // in-place host memcpy and made Magma's own SubDataResident arm
+    // (VkBufferManager.cpp's g_vulkanWireResourceOps) dead code on the wire. A capability
+    // that is never published is indistinguishable from one that does not exist, and no
+    // pixel, GL query or error can tell the two apart - so the bit itself is the assertion.
+    //
+    // THE SERVER HALF IS ASSERTED ELSEWHERE, deliberately: RemoteClientTest's
+    // MagmaTransportPublishesRealBufferConsumersWithoutRunAhead pins that the bit is DERIVED
+    // FROM THE SERVER'S OWN RESOURCE TABLE (`ops->SubDataResident != nullptr`) and never from
+    // a backend enum, which is ID-39's lesson. This case pins the other half - that what the
+    // server published actually reached the client - and the two together are what make the
+    // frontend's read of it mean anything.
+    //
+    // WHAT IT DOES NOT PIN, AND THE REASON IS R-6 RATHER THAN AN OMISSION. This does not
+    // assert that a `buffer_subdata_resident` record (opcode 49) crossed, because under a
+    // transport none can yet: the resident arm is reached only from a store that is GPU
+    // RESIDENT, residency comes only from AdoptPersistentMap, and every persistent-map
+    // acquisition declines under split by R-6 (PipeApply.cpp's MGPipeApplyMapPersistent:
+    // "A SPLIT BUILD RUNS AT TIER T2 AND DECLINES EVERY ACQUISITION, ALWAYS"; T0/T1 are
+    // P11's and AdoptTierIsEmulate is a named Fatal for them). So the capability is wired
+    // AHEAD of its consumer on purpose, and `rsd=` on the PipeStats line is the counter that
+    // will show the records the day P11 lands a tier that adopts. See notes/p7/magma-c.md.
+    TEST_F(CtWireScenario, TheServerPublishesTheResidentSubDataCapabilityFromItsOwnTable) {
+        if (!Ready()) return;
+        // A REAL WORKLOAD FIRST, and it is not decoration: ScenarioFixture's arming rule
+        // (ScenarioFixture.h:90) fails a case that runs in an armed split lane without moving
+        // the client encoder's record ordinal, because a case that emits nothing cannot tell
+        // "the transport resolved and carried this session" from "the emit table resolved and
+        // then put nothing on the wire". The bit below is a property OF that session, so the
+        // session has to have carried something before the reading means anything.
+        glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        GLubyte pixel[4]{};
+        glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "Ct.ResidentSubDataCap.workload";
+        const int expected[4] = {64, 128, 191, 255};
+        for (int i = 0; i < 4; ++i) EXPECT_NEAR(pixel[i], expected[i], 1)
+            << "Ct.ResidentSubDataCap.pixels";
+
+        const auto runtime = PeekSplitRuntime();
+        if (!runtime.peekAvailable || !runtime.sessionActive) {
+            GTEST_SKIP() << "no split runtime peek or no live client session: 'could not look' "
+                            "and 'the bit was withheld' are the same false";
+        }
+        EXPECT_TRUE(runtime.residentSubDataCap)
+            << "the client's caps mirror did not receive kCapResidentSubData on a "
+            << runtime.transportName << " session with backend " << Gl().BackendName()
+            << ". The server publishes it in MG_Backend/Init.cpp's InitServerRoleCommon from "
+               "its own wire resource table; without it every resident write falls back to "
+               "the in-place memcpy and opcode 49 never crosses on either backend";
+    }
+
     TEST_F(CtWireScenario, FramebufferDeathCrossesAndTheRecycledSlotAnswersTheNewObject) {
         if (!Ready()) return;
         // Backend-agnostic for the texture case's reason (P7 wave 2 package C): both

@@ -705,6 +705,15 @@ TEST(CapsMirrorTest, TheReadAccessorsStillAnswerFromThePlaceholder) {
     CapsMirror mirror;
     EXPECT_FALSE(mirror.Valid());
     EXPECT_EQ(mirror.Generation(), 0u);
+    // (F1 made ServerConsumes on a placeholder a refusal, so the two decision reads that used to
+    // sit here belong to the case above; the READ accessors below are what this case pins.)
+    // P7 wave 2 package C, OQ-10: the NEGATIVE half of the resident-sub-data pair. It used to
+    // be vacuous - nothing in the tree ever set kCapResidentSubData, so every reading of it was
+    // false - and MagmaTransportPublishesRealBufferConsumersWithoutRunAhead below is the
+    // positive half that makes this one mean "a mirror with no snapshot withholds the bit"
+    // rather than "the bit does not exist". Withholding is the SAFE direction: the client then
+    // keeps the ordered in-place host write (BufferObject::LandBytesIntoResidentStore) instead
+    // of emitting opcode 49 at a server that might have no arm for it - ID-39 in miniature.
     EXPECT_FALSE(mirror.HasCap(kCapResidentSubData));
     EXPECT_EQ(mirror.CallMask(), 0u);
     EXPECT_EQ(mirror.Backend(), BackendType::Unknown);
@@ -789,6 +798,24 @@ TEST(CapsMirrorTest, MagmaTransportPublishesRealBufferConsumersWithoutRunAhead) 
             EXPECT_NE(ops->MapPersistent, nullptr);
             if (ops->MapPersistent) EXPECT_EQ(ops->MapPersistent({7, 1}, 64, nullptr), nullptr)
                 << "Magma must not donate a server address as a client persistent map";
+            // P7 wave 2 package C, OQ-10 (CONTRACT-P7 §5.4): THE TABLE DECIDES THE BIT, and
+            // this is the assertion that says so rather than asserting a constant. Magma
+            // registers a SubDataResident arm (VkBufferManager.cpp's g_vulkanWireResourceOps),
+            // so the published mask must carry kCapResidentSubData - and it must carry it
+            // BECAUSE of the arm, which is why the two sides are compared to each other
+            // instead of both to `true`. Written this way the case also covers the backend
+            // that does NOT have the arm, on the day one exists: no enum is consulted here,
+            // and deleting the `|=` in MG_Backend/Init.cpp reds exactly this line (red-once).
+            EXPECT_EQ((server.CallMask() & static_cast<Uint64>(kCapResidentSubData)) != 0,
+                      ops->SubDataResident != nullptr)
+                << "kCapResidentSubData must be published from the server's own wire resource "
+                   "table (ID-39: never from the backend enum). Without it "
+                   "MGPipeResourceOpsHaveSubDataResident answers false under every transport "
+                   "and both backends fall back to the in-place memcpy, which makes Magma's "
+                   "SubDataResident arm dead code on the wire";
+            EXPECT_NE(ops->SubDataResident, nullptr)
+                << "Magma's wire resource table lost its resident sub-data arm; the bit above "
+                   "would then correctly go dark and opcode 49 would stop crossing";
         }
         EXPECT_TRUE(ClientSessionInstance().RunAheadArmed());
         ClientSessionInstance().Stop();

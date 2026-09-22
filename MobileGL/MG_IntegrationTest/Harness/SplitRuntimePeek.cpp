@@ -17,6 +17,7 @@
 #if defined(MGITEST_SPLIT_RUNTIME_PEEK) && !defined(__ANDROID__)
 #include <Config.h>
 
+#include <MG_Remote/Client/CapsMirror.h>
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/Client/EmitTables.h>
 #include <MG_Remote/Server/ServerLoop.h>
@@ -140,6 +141,12 @@ namespace MGITest {
             const MobileGL::MG_Remote::Wire::PipeWireEncoder& encoder = session->Encoder();
             state.emitSeq = encoder.EmitSeq();
             state.runAheadArmed = session->RunAheadArmed();
+            // P7 wave 2 package C, OQ-10: read through the SAME accessor the frontend's own
+            // MGPipeResourceOpsHaveSubDataResident reads (MG_Impl/Pipe/PipeFill.cpp), so a
+            // green case here and a resident emission there cannot disagree about the bit.
+            state.residentSubDataCap =
+                MobileGL::MG_Remote::Client::CapsMirrorInstance().HasCap(
+                    MobileGL::MG_Pipe::kCapResidentSubData);
             state.presentCredit = MobileGL::MG_Config::Ipc.PresentCredit;
             state.presentCreditWaits = session->PresentCreditWaits();
             if (const auto* control = session->Control()) {

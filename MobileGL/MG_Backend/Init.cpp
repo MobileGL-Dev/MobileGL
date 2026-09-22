@@ -220,6 +220,32 @@ namespace MobileGL::MG_Backend {
                         capBits |= MG_Pipe::kCapTimerQuery;
                 }
             }
+            // P7 wave 2 package C, OQ-10 (CONTRACT-P7 §5.4): kCapResidentSubData, PUBLISHED
+            // OFF THE SERVER'S OWN WIRE RESOURCE TABLE AND NOTHING ELSE.
+            //
+            // The question the bit answers is the one BufferObject::LandBytesIntoResidentStore
+            // asks before it chooses between emitting `buffer_subdata_resident` (opcode 49) and
+            // falling back to the ordered in-place host memcpy: "does the side that will APPLY
+            // this record implement the resident arm at all?" Under a transport the client has
+            // no op table to probe - MGPipeResourceOpsHaveSubDataResident says so in as many
+            // words (MG_Impl/Pipe/PipeFill.cpp) and reads this bit instead - and until now
+            // nothing ever set it, so the answer was permanently "no" and BOTH backends fell
+            // back to the memcpy while both of them in fact register a SubDataResident arm
+            // (DirectGLES Managers.cpp's g_glesResourceOps, Magma VkBufferManager.cpp's
+            // g_vulkanWireResourceOps). Magma's implementation was dead code on the wire.
+            //
+            // BY THE TABLE, NEVER BY THE BACKEND ENUM, and that is ID-39's lesson rather than a
+            // style preference: a mask is a statement about THIS backend's registered table, so
+            // a bit derived from `ActiveBackendType == ...` would keep claiming the capability
+            // for a build, a flavour or a future backend whose table does not carry the arm -
+            // which is exactly how 66 uploads were lost to a consumer bit that nobody could
+            // have honoured. `g_resourceOpsAtStep2` is the pointer this function just pinned,
+            // and step 5 already refuses a run where that pointer was swapped underneath us, so
+            // reading the arm off it means the published bit and the table that has to answer
+            // for it cannot come apart.
+            if (g_resourceOpsAtStep2 != nullptr && g_resourceOpsAtStep2->SubDataResident != nullptr) {
+                capBits |= MG_Pipe::kCapResidentSubData;
+            }
             // Each backend has an independent implementation-readiness gate.
             // The runtime RunAhead knob can decline the feature, never create it.
             const Bool runAheadReady = MG_Config::ActiveBackendType == BackendType::DirectVulkan

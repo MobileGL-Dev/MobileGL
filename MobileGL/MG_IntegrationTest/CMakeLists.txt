@@ -2833,9 +2833,15 @@ endif()
 # case's child truncates whatever path it inherits.
 if (MOBILEGL_BUILD_DISAGGREGATED)
     target_sources(MobileGLIntegrationTest PRIVATE Scenarios/CtWireScenario.cpp)
+    # P7 wave 2 package C adds the fifth: the OQ-10 capability read. It belongs in THIS list
+    # rather than in a buffer lane because the thing it reads is a property of the SESSION -
+    # what the server published at handshake and the client's mirror received - and this list
+    # is the one that is replayed on DirectVulkan by tier 2, so one name here gives the bit a
+    # reading on both backends and all three transports.
     foreach(ctCase ApplierResetCrossesAtThePrimedEdgeInSerialOrder
                    TextureDeathCrossesAndTheRecycledSlotAnswersTheNewObject
                    FramebufferDeathCrossesAndTheRecycledSlotAnswersTheNewObject
+                   TheServerPublishesTheResidentSubDataCapabilityFromItsOwnTable
                    TheDirectApplierResetCallOnTheGLThreadIsRoleViolation)
         mgl_itest_register_split_arms("CtWireScenario.${ctCase}" "Ct.")
     endforeach()

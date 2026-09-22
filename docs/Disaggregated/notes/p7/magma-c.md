@@ -78,3 +78,76 @@ Restored and rebuilt: 8/8 green again. This is precisely the shape package L's t
 predicted (`notes/p7/magma-two-process-first-run.md` §6): spawn and tcp were already carried by
 `InstallClientWireTables`' emitter, and **inproc was the only hole** — which is the hole this
 table closes.
+
+---
+
+## Slice 2 — OQ-10 `kCapResidentSubData` (§5.4)
+
+**What landed.** `InitServerRoleCommon` ORs `kCapResidentSubData` when
+`g_resourceOpsAtStep2->SubDataResident != nullptr` — the pointer that function already pinned at
+step 2 and that step 5 already refuses to see swapped. Never from `ActiveBackendType` (ID-39).
+`rsd=` joins the `emit[]` bracket on the PipeStats summary line, counted at
+`MGPipeEmitBufferSubDataResident` once per record. `SplitRuntimePeek` gains
+`residentSubDataCap`, read through the same `CapsMirrorInstance().HasCap()` accessor the
+frontend's `MGPipeResourceOpsHaveSubDataResident` reads.
+
+### BLOCKER FOR THE INTEGRATOR: §5.4's white-box case is not achievable at this tree
+
+§5.4 asks for a case in `integration-magma-buffers` and one in `integration-split` proving that
+the emitted record is `BufferSubDataResident` (opcode 49). **Neither can exist today, and the
+reason is R-6 rather than anything this package did or did not do.** The chain:
+
+| step | site | verdict under split |
+|---|---|---|
+| the resident emitter runs only from a resident store | `BufferObject.cpp` `UploadSubData` → `if (m_resource.IsGpuResident())` | — |
+| residency comes only from `AdoptPersistentMap` | `PipeResource.h:181`, the only writer of `m_gpuMapped` | — |
+| adoption needs a non-null `map_persistent` answer | `BufferObject.cpp` `TryAdoptLargeStorage` / `EnsureGpuResidentStorage` / `AcquireMemoryRange` | — |
+| the answer is a decline | `PipeApply.cpp:2331` "**A SPLIT BUILD RUNS AT TIER T2 AND DECLINES EVERY ACQUISITION, ALWAYS**" | always |
+| the tier gate has no other implemented value | `PersistentMapTracker.cpp:1033` `AdoptTierIsEmulate` — T0/T1 are P11's and are a named `Fatal{UnimplementedAdoptTier}` | always |
+
+So under any transport no buffer is ever GPU-resident, `LandBytesIntoResidentStore` is
+unreachable, and opcode 49 cannot cross. The capability is therefore wired **ahead of its
+consumer**, deliberately: when P11 lands a tier that adopts, the bit is already correct and
+already derived from the table, and `rsd=` is the counter that will show the records. The
+plan's phrasing ("both backends fall back to the in-place memcpy at `BufferObject.cpp:~711-716`")
+is one step optimistic — under split the code does not reach that fallback either, it takes the
+plain shadow `Memcpy` in `UploadSubData` above it.
+
+**What is proved instead, and it is both halves of the bit.**
+
+- *Server half* — `CapsMirrorTest.MagmaTransportPublishesRealBufferConsumersWithoutRunAhead`
+  (`RemoteClientTest.cpp`) now asserts
+  `(mask & kCapResidentSubData) != 0  ==  (ops->SubDataResident != nullptr)`. The two sides are
+  compared to each other rather than both to `true`, so the case also covers a backend WITHOUT
+  the arm on the day one exists.
+- *Client half* — the new `CtWireScenario.TheServerPublishesTheResidentSubDataCapabilityFromIts
+  OwnTable`, registered through the `ctCase` list so tier 2 replays it: green on
+  `DirectGLES.{Split,Spawn,Tcp}` (`integration-{split,spawn,tcp}`) and
+  `DirectVulkan.{Split,Spawn,Tcp}` (`integration-magma-all-*`), 6/6.
+- *Negative half* — `CapsMirrorTest.APlaceholderMirrorConsumesNothing` keeps the
+  no-snapshot-withholds-the-bit reading, which stopped being vacuous the moment anything set it.
+
+**RED-ONCE (executed, both levels).** `capBits |= MG_Pipe::kCapResidentSubData;` → `capBits |= 0;`:
+
+```
+RemoteClientTest.cpp:692: Failure
+Expected equality of these values:
+  (server.CallMask() & static_cast<Uint64>(kCapResidentSubData)) != 0
+    Which is: false
+    Which is: true
+
+25% tests passed, 6 tests failed out of 8
+  DirectGLES.{Split,Spawn,Tcp}.Ct....ResidentSubDataCapability...   ***Failed
+  DirectVulkan.{Split,Spawn,Tcp}.Ct....ResidentSubDataCapability... ***Failed
+CtWireScenario.cpp:262: Failure
+Value of: runtime.residentSubDataCap
+  Actual: false
+```
+
+Restored: 11/11 unit and 6/6 integration green again.
+
+**One incidental finding, recorded because it cost a cycle.** The first cut of the capability
+case did no GL work and failed on `ScenarioFixture.h:90` — an armed split lane refuses a case
+whose encoder ordinal did not move, because "emitted nothing" and "resolved the transport and
+then put nothing on the wire" are the same observation. The case now clears and reads back
+first. This is the same F1 arming rule package L hit on tier 3.
