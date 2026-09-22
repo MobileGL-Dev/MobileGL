@@ -1,0 +1,437 @@
+=== Android retrace: minecraft-1.21.4-fabric-iris-bsl-esc-menu-854 / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-bsl-esc-menu-854\trace.trace: 1 file pushed, 0 skipped. 20.2 MB/s (7409935 bytes in 0.349s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-bsl-esc-menu-854.0001303534.png: 1 file pushed, 0 skipped. 17.5 MB/s (227372 bytes in 0.012s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+trace-replay-ci.sh: app process exited before result.json was created
+trace-replay-ci.sh: retrace.log:
+/system/bin/app_process64
+apitrace: warning: caught signal 11
+724593: error: caught an unhandled exception
+apitrace: warning: caught signal 6
+724593: error: caught an unhandled exception
+trace-replay-ci.sh: tail of mobilegl.log:
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_maintenance1 (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_maintenance2 (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_maintenance3 (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_maintenance4 (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_maintenance5 (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_maintenance6 (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_separate_depth_stencil_layouts (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_image_robustness (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_calibrated_timestamps (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_buffer_device_address (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_extended_dynamic_state (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_queue_family_foreign (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_quad_control (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_image_view_min_lod (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_ANDROID_external_format_resolve (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_QCOM_ycbcr_degamma (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_bind_memory2 (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_pipeline_protected_access (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_external_semaphore (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_terminate_invocation (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_QCOM_fragment_density_map_offset (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_scalar_block_layout (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_map_memory2 (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_load_store_op_none (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_load_store_op_none (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_maximal_reconvergence (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_sampler_ycbcr_conversion (r.14)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_vertex_attribute_divisor (r.3)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_variable_pointers (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_QCOM_multiview_per_view_viewports (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_ray_query (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_primitives_generated_query (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_push_descriptor (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_timeline_semaphore (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_device_memory_report (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_subgroup_rotate (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_imageless_framebuffer (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_device_group (r.4)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_device_fault (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_relaxed_block_layout (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_expect_assume (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_atomic_int64 (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_external_fence (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_non_semantic_info (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_atomic_float (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_custom_border_color (r.12)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_host_query_reset (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_index_type_uint8 (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_multiview (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_storage_buffer_storage_class (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_fragment_density_map2 (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_QCOM_filter_cubic_weights (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_workgroup_memory_explicit_layout (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_QCOM_rotated_copy_commands (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_subgroup_extended_types (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_external_memory_acquire_unmodified (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_private_data (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_descriptor_buffer (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_conditional_rendering (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_mutable_descriptor_type (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_pipeline_creation_cache_control (r.3)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_robustness2 (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_clock (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_module_identifier (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_vertex_attribute_divisor (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_global_priority_query (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_separate_stencil_usage (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_border_color_swizzle (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_vertex_input_dynamic_state (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_IMG_filter_cubic (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_filter_cubic (r.3)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_subgroup_vote (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_device_address_binding_report (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_NV_optical_flow (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_QCOM_tile_properties (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_image_format_list (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_sampler_filter_minmax (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_16bit_storage (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_viewport_index_layer (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_pipeline_executable_properties (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_demote_to_helper_invocation (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_color_write_enable (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_dynamic_rendering_local_read (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_QCOM_render_pass_transform (r.4)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_create_renderpass2 (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_image_atomic_int64 (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_acceleration_structure (r.13)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_depth_clip_control (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_transform_feedback (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_blend_operation_advanced (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_provoking_vertex (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_8bit_storage (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_QCOM_multiview_per_view_render_areas (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_inline_uniform_block (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_subgroup_ballot (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_depth_stencil_resolve (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_float_controls (r.4)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_texture_compression_astc_hdr (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_global_priority (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_4444_formats (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_draw_parameters (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_vulkan_memory_model (r.3)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_descriptor_indexing (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_depth_clip_enable (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_synchronization2 (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_integer_dot_product (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_line_rasterization (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_line_rasterization (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_QCOM_image_processing (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_float_controls2 (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_fragment_shading_rate (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_descriptor_update_template (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_draw_indirect_count (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_driver_properties (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_ray_tracing_position_fetch (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_dynamic_rendering (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_zero_initialize_workgroup_memory (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_uniform_buffer_standard_layout (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_depth_clamp_zero_one (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_ANDROID_external_memory_android_hardware_buffer (r.5)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_image_2d_view_of_3d (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_extended_dynamic_state2 (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_dedicated_allocation (r.3)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_texel_buffer_alignment (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_primitive_topology_list_restart (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_rasterization_order_attachment_access (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_subgroup_uniform_control_flow (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_tooling_info (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_format_feature_flags2 (r.2)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_global_priority (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_sample_locations (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_multi_draw (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_swapchain (r.70)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_sampler_mirror_clamp_to_edge (r.3)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_QCOM_image_processing2 (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_external_fence_fd (r.1)
+[05:54:37] [Android mgl-srv-apply/INFO]: Required extension found: VK_KHR_swapchain
+[05:54:37] [Android mgl-srv-apply/INFO]:     Picked physical device. (Reason: First suitable device)
+[05:54:37] [Android mgl-srv-apply/INFO]: Picked physical device 0.
+[05:54:37] [Android mgl-srv-apply/INFO]: Vulkan: multiViewport enabled; rasterizable viewports=16 (device limit 16, GL state width 16)
+[05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_KHR_draw_indirect_count
+[05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_KHR_shader_draw_parameters
+[05:54:37] [Android mgl-srv-apply/INFO]: VK_KHR_image_format_list enabled: true
+[05:54:37] [Android mgl-srv-apply/INFO]: VK_KHR_draw_indirect_count enabled: true
+[05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_KHR_create_renderpass2
+[05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_KHR_depth_stencil_resolve
+[05:54:37] [Android mgl-srv-apply/INFO]: Vulkan: update-after-bind descriptor layouts enabled
+[05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_KHR_index_type_uint8
+[05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_primitive_topology_list_restart
+[05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_custom_border_color (maxCustomBorderColorSamplers=4000)
+[05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_subgroup_size_control (computeFullSubgroups)
+[05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_transform_feedback
+[05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_provoking_vertex (transformFeedbackPreservesProvokingVertex=false)
+[05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_vertex_attribute_divisor
+[05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_multi_draw (maxMultiDrawCount=1024)
+[05:54:37] [Android mgl-srv-apply/INFO]: Device feature support: robustBufferAccess=true geometryShader=true independentBlend=true logicOp=true shaderClipDistance=true shaderCullDistance=true wideLines=true shaderInt64=true vertexStoresAtomics=true fragmentStoresAtomics=true storageImageExtendedFormats=true storageImageReadWithoutFormat=true storageImageWriteWithoutFormat=true drawIndirectFirstInstance=true multiDrawIndirect=true
+[05:54:37] [Android mgl-srv-apply/INFO]: Device feature enabled: robustBufferAccess=true geometryShader=true independentBlend=true logicOp=true shaderClipDistance=true shaderCullDistance=true wideLines=true shaderInt64=true vertexStoresAtomics=true fragmentStoresAtomics=true storageImageExtendedFormats=true storageImageReadWithoutFormat=true storageImageWriteWithoutFormat=true drawIndirectFirstInstance=true multiDrawIndirect=true shaderDrawParameters=true
+[05:54:37] [Android mgl-srv-apply/INFO]: Multi-draw dispatch tier: ext (VK_EXT_multi_draw=true, multiDrawIndirect=true, mode=auto)
+[05:54:37] [Android mgl-srv-apply/INFO]: index type uint8 enabled: true
+[05:54:37] [Android mgl-srv-apply/INFO]: Logical device created.
+[05:54:37] [Android mgl-srv-apply/INFO]: Queues got successfully.
+[05:54:37] [Android mgl-srv-apply/INFO]: Timer queries supported (timestampValidBits=48, timestampPeriod=52.083332 ns/tick)
+[05:54:37] [Android mgl-srv-apply/INFO]: PRIMITIVES_GENERATED probe triangles: drawn=1 stream=0/1 pgq=0(0) stat=1(1)
+[05:54:37] [Android mgl-srv-apply/INFO]: PRIMITIVES_GENERATED probe triangles+discard: drawn=1 stream=0/1 pgq=0(0) stat=0(1)
+[05:54:37] [Android mgl-srv-apply/INFO]: PRIMITIVES_GENERATED probe patches+discard: drawn=1 stream=0/1 pgq=0(0) stat=0(1)
+[05:54:37] [Android mgl-srv-apply/INFO]: PRIMITIVES_GENERATED for XFB-inactive draws will accumulate through a clipping-invocations pipeline-statistics pool
+[05:54:37] [Android mgl-srv-apply/INFO]: Command pool created
+[05:54:37] [Android mgl-srv-apply/INFO]: MaxFramesInFlight: configured request=3
+[05:54:37] [Android mgl-srv-apply/INFO]: MaxFramesInFlight: using 3 (surface minImageCount=11, maxImageCount=64)
+[05:54:37] [Android mgl-srv-apply/INFO]: CreateFrameContexts completed
+[05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: using 256 program descriptor bindings
+[05:54:37] [Android mgl-srv-apply/INFO]: Got 5 surface formats:
+[05:54:37] [Android mgl-srv-apply/INFO]: Picked surface format: [VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR]
+[05:54:37] [Android mgl-srv-apply/INFO]: Got 4 present modes:
+[05:54:37] [Android mgl-srv-apply/INFO]: Picked present mode: VK_PRESENT_MODE_MAILBOX_KHR
+[05:54:37] [Android mgl-srv-apply/INFO]: Set minImageCount = 11
+[05:54:37] [Android mgl-srv-apply/INFO]: Swapchain currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+[05:54:37] [Android mgl-srv-apply/INFO]: Swapchain imageUsage = 0x13 (supportedUsageFlags = 0x9f)
+[05:54:37] [Android mgl-srv-apply/INFO]: Set swapchain preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+[05:54:37] [Android mgl-srv-apply/INFO]: Swapchain image views created
+[05:54:37] [Android mgl-srv-apply/INFO]: Swapchain created, extent = 854x480, swapchain imageCount = 11
+[05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: suppressing depth writes on accumulation-blended pipelines (driver lacks cross-pipeline position invariance)
+[05:54:37] [Android mgl-srv-apply/INFO]: Vulkan shader subgroup support: detected=true advertised=true size=64 stages=0x30 operations=0x2bf
+[05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS from 16777216 to 256
+[05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS from 16777216 to 256
+[05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMPUTE_UNIFORM_BLOCKS from 16777216 to 256
+[05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS from 16777216 to 256
+[05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_UNIFORM_BUFFER_BINDINGS from 16777216 to 256
+[05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_SHADER_STORAGE_BLOCK_SIZE from 2147483647 to 536870912
+[05:54:37] [Android mgl-srv-apply/ERROR]: NormalizePixelFormat: outFormat: unhandled internalFormat: GL_STENCIL_INDEX8
+[05:54:37] [Android mgl-srv-apply/ERROR]: NormalizePixelFormat: outType: unhandled internalFormat: GL_STENCIL_INDEX8
+[05:54:37] [Android mgl-srv-apply/INFO]: Vulkan shader subgroup support: detected=true advertised=true size=64 stages=0x30 operations=0x2bf
+[05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS from 16777216 to 256
+[05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS from 16777216 to 256
+[05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMPUTE_UNIFORM_BLOCKS from 16777216 to 256
+[05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS from 16777216 to 256
+[05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_UNIFORM_BUFFER_BINDINGS from 16777216 to 256
+[05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_SHADER_STORAGE_BLOCK_SIZE from 2147483647 to 536870912
+[05:54:39] [Android mgl-srv-apply/WARN]: GetOrCreatePipeline: patching vertex input location=4 format=82 -> 80 to match shader input type=35666 for program=7
+[05:54:42] [Android mgl-srv-apply/FATAL]: Vulkan error VK_ERROR_OUT_OF_HOST_MEMORY (-1) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/WireDraw.inc:500
+trace-replay-ci.sh: recent relevant logcat lines:
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_filter_cubic (r.3)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_subgroup_vote (r.1)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_device_address_binding_report (r.1)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_NV_optical_flow (r.1)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_QCOM_tile_properties (r.1)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_image_format_list (r.1)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_sampler_filter_minmax (r.2)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_16bit_storage (r.1)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_viewport_index_layer (r.1)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_pipeline_executable_properties (r.1)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_demote_to_helper_invocation (r.1)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_color_write_enable (r.1)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_dynamic_rendering_local_read (r.1)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_QCOM_render_pass_transform (r.4)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_create_renderpass2 (r.1)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_image_atomic_int64 (r.1)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_acceleration_structure (r.13)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_depth_clip_control (r.1)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_transform_feedback (r.1)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_blend_operation_advanced (r.2)
+09-23 05:54:37.950 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_provoking_vertex (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_8bit_storage (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_QCOM_multiview_per_view_render_areas (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_inline_uniform_block (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_subgroup_ballot (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_depth_stencil_resolve (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_float_controls (r.4)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_texture_compression_astc_hdr (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_global_priority (r.2)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_4444_formats (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_draw_parameters (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_vulkan_memory_model (r.3)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_descriptor_indexing (r.2)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_depth_clip_enable (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_synchronization2 (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_integer_dot_product (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_line_rasterization (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_line_rasterization (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_QCOM_image_processing (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_float_controls2 (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_fragment_shading_rate (r.2)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_descriptor_update_template (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_draw_indirect_count (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_driver_properties (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_ray_tracing_position_fetch (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_dynamic_rendering (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_zero_initialize_workgroup_memory (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_uniform_buffer_standard_layout (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_depth_clamp_zero_one (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_ANDROID_external_memory_android_hardware_buffer (r.5)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_image_2d_view_of_3d (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_extended_dynamic_state2 (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_dedicated_allocation (r.3)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_texel_buffer_alignment (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_primitive_topology_list_restart (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_rasterization_order_attachment_access (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_subgroup_uniform_control_flow (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_tooling_info (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_format_feature_flags2 (r.2)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_global_priority (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_sample_locations (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_EXT_multi_draw (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_swapchain (r.70)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_sampler_mirror_clamp_to_edge (r.3)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_QCOM_image_processing2 (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     VK_KHR_external_fence_fd (r.1)
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Required extension found: VK_KHR_swapchain
+09-23 05:54:37.951 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]:     Picked physical device. (Reason: First suitable device)
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Picked physical device 0.
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Vulkan: multiViewport enabled; rasterizable viewports=16 (device limit 16, GL state width 16)
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_KHR_draw_indirect_count
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_KHR_shader_draw_parameters
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: VK_KHR_image_format_list enabled: true
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: VK_KHR_draw_indirect_count enabled: true
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_KHR_create_renderpass2
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_KHR_depth_stencil_resolve
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Vulkan: update-after-bind descriptor layouts enabled
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_KHR_index_type_uint8
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_primitive_topology_list_restart
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_custom_border_color (maxCustomBorderColorSamplers=4000)
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_subgroup_size_control (computeFullSubgroups)
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_transform_feedback
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_provoking_vertex (transformFeedbackPreservesProvokingVertex=false)
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_vertex_attribute_divisor
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_multi_draw (maxMultiDrawCount=1024)
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Device feature support: robustBufferAccess=true geometryShader=true independentBlend=true logicOp=true shaderClipDistance=true shaderCullDistance=true wideLines=true shaderInt64=true vertexStoresAtomics=true fragmentStoresAtomics=true storageImageExtendedFormats=true storageImageReadWithoutFormat=true storageImageWriteWithoutFormat=true drawIndirectFirstInstance=true multiDrawIndirect=true
+09-23 05:54:37.952 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Device feature enabled: robustBufferAccess=true geometryShader=true independentBlend=true logicOp=true shaderClipDistance=true shaderCullDistance=true wideLines=true shaderInt64=true vertexStoresAtomics=true fragmentStoresAtomics=true storageImageExtendedFormats=true storageImageReadWithoutFormat=true storageImageWriteWithoutFormat=true drawIndirectFirstInstance=true multiDrawIndirect=true shaderDrawParameters=true
+09-23 05:54:37.953 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Multi-draw dispatch tier: ext (VK_EXT_multi_draw=true, multiDrawIndirect=true, mode=auto)
+09-23 05:54:37.953 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: index type uint8 enabled: true
+09-23 05:54:37.953 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Logical device created.
+09-23 05:54:37.953 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Queues got successfully.
+09-23 05:54:37.953 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Timer queries supported (timestampValidBits=48, timestampPeriod=52.083332 ns/tick)
+09-23 05:54:37.975 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: PRIMITIVES_GENERATED probe triangles: drawn=1 stream=0/1 pgq=0(0) stat=1(1)
+09-23 05:54:37.975 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: PRIMITIVES_GENERATED probe triangles+discard: drawn=1 stream=0/1 pgq=0(0) stat=0(1)
+09-23 05:54:37.975 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: PRIMITIVES_GENERATED probe patches+discard: drawn=1 stream=0/1 pgq=0(0) stat=0(1)
+09-23 05:54:37.975 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: PRIMITIVES_GENERATED for XFB-inactive draws will accumulate through a clipping-invocations pipeline-statistics pool
+09-23 05:54:37.975 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Command pool created
+09-23 05:54:37.975 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: MaxFramesInFlight: configured request=3
+09-23 05:54:37.975 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: MaxFramesInFlight: using 3 (surface minImageCount=11, maxImageCount=64)
+09-23 05:54:37.975 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: CreateFrameContexts completed
+09-23 05:54:37.975 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: using 256 program descriptor bindings
+09-23 05:54:37.976 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Got 5 surface formats:
+09-23 05:54:37.976 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Picked surface format: [VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR]
+09-23 05:54:37.976 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Got 4 present modes:
+09-23 05:54:37.976 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Picked present mode: VK_PRESENT_MODE_MAILBOX_KHR
+09-23 05:54:37.976 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Set minImageCount = 11
+09-23 05:54:37.976 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Swapchain currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+09-23 05:54:37.976 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Swapchain imageUsage = 0x13 (supportedUsageFlags = 0x9f)
+09-23 05:54:37.976 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Set swapchain preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+09-23 05:54:37.978 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Swapchain image views created
+09-23 05:54:37.981 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Swapchain created, extent = 854x480, swapchain imageCount = 11
+09-23 05:54:37.981 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: suppressing depth writes on accumulation-blended pipelines (driver lacks cross-pipeline position invariance)
+09-23 05:54:37.982 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Vulkan shader subgroup support: detected=true advertised=true size=64 stages=0x30 operations=0x2bf
+09-23 05:54:37.982 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS from 16777216 to 256
+09-23 05:54:37.982 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS from 16777216 to 256
+09-23 05:54:37.982 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMPUTE_UNIFORM_BLOCKS from 16777216 to 256
+09-23 05:54:37.982 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS from 16777216 to 256
+09-23 05:54:37.982 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_UNIFORM_BUFFER_BINDINGS from 16777216 to 256
+09-23 05:54:37.982 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_SHADER_STORAGE_BLOCK_SIZE from 2147483647 to 536870912
+09-23 05:54:37.982 11816 13391 E MobileGL: [05:54:37] [Android mgl-srv-apply/ERROR]: NormalizePixelFormat: outFormat: unhandled internalFormat: GL_STENCIL_INDEX8
+09-23 05:54:37.982 11816 13391 E MobileGL: [05:54:37] [Android mgl-srv-apply/ERROR]: NormalizePixelFormat: outType: unhandled internalFormat: GL_STENCIL_INDEX8
+09-23 05:54:37.983 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: Vulkan shader subgroup support: detected=true advertised=true size=64 stages=0x30 operations=0x2bf
+09-23 05:54:37.983 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS from 16777216 to 256
+09-23 05:54:37.983 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS from 16777216 to 256
+09-23 05:54:37.983 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMPUTE_UNIFORM_BLOCKS from 16777216 to 256
+09-23 05:54:37.983 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS from 16777216 to 256
+09-23 05:54:37.983 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_UNIFORM_BUFFER_BINDINGS from 16777216 to 256
+09-23 05:54:37.983 11816 13391 I MobileGL: [05:54:37] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_SHADER_STORAGE_BLOCK_SIZE from 2147483647 to 536870912
+09-23 05:54:37.985 11816 13390 I MobileGL: [05:54:37] [Android MobileGLTraceRe/INFO]: MG_Remote client: CapsMirror generation 2 adopted (backend=1, callMask=0x3fff00000474)
+09-23 05:54:37.985 11816 13390 I MobileGL: [05:54:37] [Android MobileGLTraceRe/INFO]: MG_Remote client: format capabilities filled from caps mirror generation 2
+09-23 05:54:37.985 11816 13390 I MobileGL: [05:54:37] [Android MobileGLTraceRe/INFO]: MG_Remote client: CapsMirror generation 3 adopted (backend=1, callMask=0x3fff00000474)
+09-23 05:54:37.985 11816 13390 I MobileGL: [05:54:37] [Android MobileGLTraceRe/INFO]: MG_Remote client: format capabilities filled from caps mirror generation 3
+09-23 05:54:37.989 11816 13390 W MobileGL: [05:54:37] [Android MobileGLTraceRe/WARN]: Stub function: glDebugMessageControl(...)
+09-23 05:54:38.419  2923  2923 I adbd    : in ShellService: for p in $(pidof top.mobilegl.plugin.p7w1.trace) $(pgrep libMobileGLServ); do echo "$(date +%s.%N) $p $(cat /proc/$p/comm) $(grep -E "VmRSS|VmHWM|VmSize" /proc/$p/status | tr -s " \t" " " | tr "\n" " ")"; done
+09-23 05:54:39.005  2923  2923 I adbd    : in ShellService: for p in $(pidof top.mobilegl.plugin.p7w1.trace) $(pgrep libMobileGLServ); do echo "$(date +%s.%N) $p $(cat /proc/$p/comm) $(grep -E "VmRSS|VmHWM|VmSize" /proc/$p/status | tr -s " \t" " " | tr "\n" " ")"; done
+09-23 05:54:39.230 11816 13391 W MobileGL: [05:54:39] [Android mgl-srv-apply/WARN]: GetOrCreatePipeline: patching vertex input location=4 format=82 -> 80 to match shader input type=35666 for program=7
+09-23 05:54:39.579  2923  2923 I adbd    : in ShellService: for p in $(pidof top.mobilegl.plugin.p7w1.trace) $(pgrep libMobileGLServ); do echo "$(date +%s.%N) $p $(cat /proc/$p/comm) $(grep -E "VmRSS|VmHWM|VmSize" /proc/$p/status | tr -s " \t" " " | tr "\n" " ")"; done
+09-23 05:54:40.153  2923  2923 I adbd    : in ShellService: for p in $(pidof top.mobilegl.plugin.p7w1.trace) $(pgrep libMobileGLServ); do echo "$(date +%s.%N) $p $(cat /proc/$p/comm) $(grep -E "VmRSS|VmHWM|VmSize" /proc/$p/status | tr -s " \t" " " | tr "\n" " ")"; done
+09-23 05:54:40.475  7990  8728 I libc    : kill: send 15 to pid 13471
+09-23 05:54:40.475  7990  8728 I libc    : debug pid reuse, real pid 13471
+09-23 05:54:40.719  2923  2923 I adbd    : in ShellService: for p in $(pidof top.mobilegl.plugin.p7w1.trace) $(pgrep libMobileGLServ); do echo "$(date +%s.%N) $p $(cat /proc/$p/comm) $(grep -E "VmRSS|VmHWM|VmSize" /proc/$p/status | tr -s " \t" " " | tr "\n" " ")"; done
+09-23 05:54:41.301  2923  2923 I adbd    : in ShellService: for p in $(pidof top.mobilegl.plugin.p7w1.trace) $(pgrep libMobileGLServ); do echo "$(date +%s.%N) $p $(cat /proc/$p/comm) $(grep -E "VmRSS|VmHWM|VmSize" /proc/$p/status | tr -s " \t" " " | tr "\n" " ")"; done
+09-23 05:54:41.862  2923  2923 I adbd    : in ShellService: for p in $(pidof top.mobilegl.plugin.p7w1.trace) $(pgrep libMobileGLServ); do echo "$(date +%s.%N) $p $(cat /proc/$p/comm) $(grep -E "VmRSS|VmHWM|VmSize" /proc/$p/status | tr -s " \t" " " | tr "\n" " ")"; done
+09-23 05:54:42.240 11816 13391 W libc    : calloc(1, 66144) failed: returning null pointer
+09-23 05:54:42.240 11816 13391 F MobileGL: [05:54:42] [Android mgl-srv-apply/FATAL]: Vulkan error VK_ERROR_OUT_OF_HOST_MEMORY (-1) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/WireDraw.inc:500
+09-23 05:54:42.240 11816 13391 I libc    : handling signal: 11
+09-23 05:54:42.240 11816 13391 F libc    : Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x240 in tid 13391 (mgl-srv-apply), pid 11816 (ugin.p7w1.trace)
+09-23 05:54:42.240 11816 13391 I libc    : debuggerd_dispatch_pseudothread start. crashing tid: 13391
+09-23 05:54:42.369 11816 13391 I libc    : crash_dump pid: 13522
+09-23 05:54:42.440  2923  2923 I adbd    : in ShellService: for p in $(pidof top.mobilegl.plugin.p7w1.trace) $(pgrep libMobileGLServ); do echo "$(date +%s.%N) $p $(cat /proc/$p/comm) $(grep -E "VmRSS|VmHWM|VmSize" /proc/$p/status | tr -s " \t" " " | tr "\n" " ")"; done
+09-23 05:54:42.478 13522 13522 W libc    : Access denied finding property "persist.vendor.track.malloc.enable"
+09-23 05:54:42.478 13522 13522 W libc    : Access denied finding property "persist.vendor.fd.monitor.enable"
+09-23 05:54:42.996  2923  2923 I adbd    : in ShellService: for p in $(pidof top.mobilegl.plugin.p7w1.trace) $(pgrep libMobileGLServ); do echo "$(date +%s.%N) $p $(cat /proc/$p/comm) $(grep -E "VmRSS|VmHWM|VmSize" /proc/$p/status | tr -s " \t" " " | tr "\n" " ")"; done
+09-23 05:54:43.387 13529 13529 F DEBUG   : Abort message: '[05:54:42] [Android mgl-srv-apply/FATAL]: Vulkan error VK_ERROR_OUT_OF_HOST_MEMORY (-1) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/WireDraw.inc:500'
+09-23 05:54:43.388 13529 13529 F DEBUG   :       #02 pc 000000000090f608  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)
+09-23 05:54:43.388 13529 13529 F DEBUG   :       #03 pc 0000000000885f7c  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)
+09-23 05:54:43.388 13529 13529 F DEBUG   :       #04 pc 00000000008a1ccc  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)
+09-23 05:54:43.388 13529 13529 F DEBUG   :       #05 pc 000000000085bf24  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)
+09-23 05:54:43.388 13529 13529 F DEBUG   :       #06 pc 00000000009ca30c  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)
+09-23 05:54:43.388 13529 13529 F DEBUG   :       #07 pc 00000000009a7594  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)
+09-23 05:54:43.388 13529 13529 F DEBUG   :       #08 pc 00000000009a7f70  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)
+09-23 05:54:43.388 13529 13529 F DEBUG   :       #09 pc 00000000009cb844  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)
+09-23 05:54:43.388 13529 13529 F DEBUG   :       #10 pc 00000000009ce934  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)
+09-23 05:54:43.388 13529 13529 F DEBUG   :       #11 pc 00000000009ce2f8  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)
+09-23 05:54:43.388 13529 13529 F DEBUG   :       #12 pc 00000000009d0630  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)
+09-23 05:54:43.388 13529 13529 F DEBUG   :       #13 pc 0000000000082d74  /apex/com.android.runtime/lib64/bionic/libc.so (__pthread_start(void*)+184) (BuildId: 223a572c9f034c6a9337d8b3bedc75f3)
+09-23 05:54:43.388 13529 13529 F DEBUG   :       #14 pc 00000000000751f0  /apex/com.android.runtime/lib64/bionic/libc.so (__start_thread+68) (BuildId: 223a572c9f034c6a9337d8b3bedc75f3)
+09-23 05:54:43.591  2923  2923 I adbd    : in ShellService: for p in $(pidof top.mobilegl.plugin.p7w1.trace) $(pgrep libMobileGLServ); do echo "$(date +%s.%N) $p $(cat /proc/$p/comm) $(grep -E "VmRSS|VmHWM|VmSize" /proc/$p/status | tr -s " \t" " " | tr "\n" " ")"; done
+09-23 05:54:43.707 13529 13529 I libc    : tombstoned_notify_completion, socket: 8
+09-23 05:54:43.727 11816 13333 I libc    : handling signal: 6
+09-23 05:54:43.730  4411  5837 D RecentsTaskLoader: reloadTasksData [TaskKey{id=402, stackId=0, baseIntent=Intent { act=top.mobilegl.plugin.TRACE_REPLAY flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity }, userId=0, lastActiveTime=13738979, windowingMode=1, isThumbnailBlur=false, isAccessLocked=false, isScreening=false, topActivity=null, mHashCode=12899534}, title=MobileGL, titleDescription=MobileGL, bounds=null, isLaunchTarget=false, isStackTask=true, isSystemApp=false, isDockable=true, baseActivity=null, isLocked=false, mNeedHide=false, hasMultipleTasks=false, cti1Key=, cti2Key=, cti1Task=, cti2Task=] 
+09-23 05:54:43.750  6687  7097 D DigestGenerator: digest=============The device has been root;The device bootloader is unlocked;com.topjohnwu.magisk have been installed;top.mobilegl.plugin.p7w1.traceAbort message: '[::] [Android mgl-srv-apply/FATAL]: Vulkan error VK_ERROR_OUT_OF_HOST_MEMORY (-) at /home/swung/w/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/WireDraw.inc:'
+09-23 05:54:43.750  6687  7097 D DigestGenerator:  XXlib/arm/libMobileGL.so ()
+09-23 05:54:43.750  6687  7097 D DigestGenerator:  XXlib/arm/libMobileGL.so ()
+09-23 05:54:43.750  6687  7097 D DigestGenerator:  XXlib/arm/libMobileGL.so ()
+09-23 05:54:43.750  6687  7097 D DigestGenerator:  XXlib/arm/libMobileGL.so ()
+09-23 05:54:43.750  6687  7097 D DigestGenerator:  XXlib/arm/libMobileGL.so ()
+09-23 05:54:43.750  6687  7097 D DigestGenerator:  XXlib/arm/libMobileGL.so ()
+09-23 05:54:43.750  6687  7097 D DigestGenerator:  XXlib/arm/libMobileGL.so ()
+09-23 05:54:43.750  6687  7097 D DigestGenerator:  XXlib/arm/libMobileGL.so ()
+09-23 05:54:43.750  6687  7097 D DigestGenerator:  XXlib/arm/libMobileGL.so ()
+09-23 05:54:43.750  6687  7097 D DigestGenerator:  XXlib/arm/libMobileGL.so ()
+09-23 05:54:43.750  6687  7097 D DigestGenerator:  XXlib/arm/libMobileGL.so ()
+09-23 05:54:43.750  6687  7097 D DigestGenerator:  /apex/com.android.runtime/lib/bionic/libc.so (__pthread_start(void*)+) ()
+09-23 05:54:43.750  6687  7097 D DigestGenerator:  /apex/com.android.runtime/lib/bionic/libc.so (__start_thread+) ()
+09-23 05:54:43.751  6687  7097 D MiSightJni: MiSight: Java_com_miui_misight_MiSight_nativeSendEvent enter called. '{"Stacktrace":"#02 pc 000000000090f608  \/data\/app\/~~akdT06-gXbOh3E9-_kUo3g==\/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==\/lib\/arm64\/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)\n      #03 pc 0000000000885f7c  \/data\/app\/~~akdT06-gXbOh3E9-_kUo3g==\/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==\/lib\/arm64\/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)\n      #04 pc 00000000008a1ccc  \/data\/app\/~~akdT06-gXbOh3E9-_kUo3g==\/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==\/lib\/arm64\/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)\n      #05 pc 000000000085bf24  \/data\/app\/~~akdT06-gXbOh3E9-_kUo3g==\/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==\/lib\/arm64\/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)\n      #06 pc 00000000009ca30c  \/data\/app\/~~akdT06-gXbOh3E9-_kUo3g==\/top.mobilegl.plugin.p7w1.trace-LcyZ7
+09-23 05:54:43.751  6687  7097 D MiEvent : flatten EventId 901001003 -t 1790114083 -paraList {"CrashType":"100000000","CurrentTime":1790114082000,"Digest":"69d43a634e750cb6f79a90e378a71057","Keyword":"{\"vn\":\"26.09.8c5dd6f-trace\",\"vc\":\"26090921\",\"isRoot\":false,\"count\":1,\"preInstalled\":false,\"unfold\":false,\"ram\":15,\"rom\":264}","PackageName":"top.mobilegl.plugin.p7w1.trace","Stacktrace":"#02 pc 000000000090f608  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)\n      #03 pc 0000000000885f7c  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)\n      #04 pc 00000000008a1ccc  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)\n      #05 pc 000000000085bf24  /data/app/~~akdT06-gXbOh3E9
+09-23 05:54:43.751  6687  7097 D MiEvent : report:EventId 901001003 -t 1790114083 -paraList {"CrashType":"100000000","CurrentTime":1790114082000,"Digest":"69d43a634e750cb6f79a90e378a71057","Keyword":"{\"vn\":\"26.09.8c5dd6f-trace\",\"vc\":\"26090921\",\"isRoot\":false,\"count\":1,\"preInstalled\":false,\"unfold\":false,\"ram\":15,\"rom\":264}","PackageName":"top.mobilegl.plugin.p7w1.trace","Stacktrace":"#02 pc 000000000090f608  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)\n      #03 pc 0000000000885f7c  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)\n      #04 pc 00000000008a1ccc  /data/app/~~akdT06-gXbOh3E9-_kUo3g==/top.mobilegl.plugin.p7w1.trace-LcyZ79iMzP_ykaj5F2SxQw==/lib/arm64/libMobileGL.so (BuildId: 05730fd88b3a6d8a96a82bfa51d7f8e28be3d6ff)\n      #05 pc 000000000085bf24  /data/app/~~akdT06-gXbOh3E9-
+09-23 05:54:43.772  2024  2024 W libc    : Access denied finding property "vendor.gpp.create_frc_extension"
+09-23 05:54:43.806  4411  4411 I WindowAnimParamsProvider: getClosingWindowAnimParams getClosingShortcutIcon task before=  [TaskKey{id=402, stackId=0, baseIntent=Intent { act=top.mobilegl.plugin.TRACE_REPLAY flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity }, userId=0, lastActiveTime=13738979, windowingMode=1, isThumbnailBlur=false, isAccessLocked=false, isScreening=false, topActivity=null, mHashCode=12899534}, title=MobileGL, titleDescription=MobileGL, bounds=null, isLaunchTarget=false, isStackTask=true, isSystemApp=false, isDockable=true, baseActivity=null, isLocked=false, mNeedHide=false, hasMultipleTasks=false, cti1Key=, cti2Key=, cti1Task=, cti2Task=] 
+09-23 05:54:43.806  4411  4411 I WindowAnimParamsProvider: getClosingWindowAnimParams getClosingShortcutIcon task after=  [TaskKey{id=402, stackId=0, baseIntent=Intent { act=top.mobilegl.plugin.TRACE_REPLAY flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity }, userId=0, lastActiveTime=13738979, windowingMode=1, isThumbnailBlur=false, isAccessLocked=false, isScreening=false, topActivity=null, mHashCode=12899534}, title=MobileGL, titleDescription=MobileGL, bounds=null, isLaunchTarget=false, isStackTask=true, isSystemApp=false, isDockable=true, baseActivity=null, isLocked=false, mNeedHide=false, hasMultipleTasks=false, cti1Key=, cti2Key=, cti1Task=, cti2Task=] 
+09-23 05:54:43.807  4411  4411 I WindowAnimParamsProvider: getUserIdFromRemoteTarget task before=  [TaskKey{id=402, stackId=0, baseIntent=Intent { act=top.mobilegl.plugin.TRACE_REPLAY flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity }, userId=0, lastActiveTime=13738979, windowingMode=1, isThumbnailBlur=false, isAccessLocked=false, isScreening=false, topActivity=null, mHashCode=12899534}, title=MobileGL, titleDescription=MobileGL, bounds=null, isLaunchTarget=false, isStackTask=true, isSystemApp=false, isDockable=true, baseActivity=null, isLocked=false, mNeedHide=false, hasMultipleTasks=false, cti1Key=, cti2Key=, cti1Task=, cti2Task=] 
+09-23 05:54:43.807  4411  4411 I WindowAnimParamsProvider: getUserIdFromRemoteTarget task after=  [TaskKey{id=402, stackId=0, baseIntent=Intent { act=top.mobilegl.plugin.TRACE_REPLAY flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity }, userId=0, lastActiveTime=13738979, windowingMode=1, isThumbnailBlur=false, isAccessLocked=false, isScreening=false, topActivity=null, mHashCode=12899534}, title=MobileGL, titleDescription=MobileGL, bounds=null, isLaunchTarget=false, isStackTask=true, isSystemApp=false, isDockable=true, baseActivity=null, isLocked=false, mNeedHide=false, hasMultipleTasks=false, cti1Key=, cti2Key=, cti1Task=, cti2Task=] 
+09-23 05:54:44.082  3176  3422 I libc    : kill: send 9 to pid -11816
+09-23 05:54:44.082  3176  3422 I libc    : debug pid reuse, real pid -11816
+09-23 05:54:44.096  4411  5837 D RecentsTaskLoader: reloadTasksData [TaskKey{id=402, stackId=0, baseIntent=Intent { act=top.mobilegl.plugin.TRACE_REPLAY flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity }, userId=0, lastActiveTime=13738979, windowingMode=1, isThumbnailBlur=false, isAccessLocked=false, isScreening=false, topActivity=null, mHashCode=12899534}, title=MobileGL, titleDescription=MobileGL, bounds=null, isLaunchTarget=false, isStackTask=true, isSystemApp=false, isDockable=true, baseActivity=null, isLocked=false, mNeedHide=false, hasMultipleTasks=false, cti1Key=, cti2Key=, cti1Task=, cti2Task=] 
+09-23 05:54:44.208  2923  2923 I adbd    : in ShellService: for p in $(pidof top.mobilegl.plugin.p7w1.trace) $(pgrep libMobileGLServ); do echo "$(date +%s.%N) $p $(cat /proc/$p/comm) $(grep -E "VmRSS|VmHWM|VmSize" /proc/$p/status | tr -s " \t" " " | tr "\n" " ")"; done
+09-23 05:54:44.449  4411  5837 D RecentsTaskLoader: reloadTasksData [TaskKey{id=402, stackId=0, baseIntent=Intent { act=top.mobilegl.plugin.TRACE_REPLAY flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity }, userId=0, lastActiveTime=13738979, windowingMode=1, isThumbnailBlur=false, isAccessLocked=false, isScreening=false, topActivity=null, mHashCode=12899534}, title=MobileGL, titleDescription=MobileGL, bounds=null, isLaunchTarget=false, isStackTask=true, isSystemApp=false, isDockable=true, baseActivity=null, isLocked=false, mNeedHide=false, hasMultipleTasks=false, cti1Key=, cti2Key=, cti1Task=, cti2Task=] 
+09-23 05:54:44.468  3176  4362 W libc    : Access denied finding property "vendor.video.jpegopt.enable"
+09-23 05:54:44.468  3176  4362 W libc    : Access denied finding property "vendor.video.jpegopt.enable"
+trace-replay-ci.sh: app trace-replay files:
+/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay:
+total 12
+drwxrwxrwx 4 u0_a318 u0_a318 3452 2026-09-23 05:54 .
+drwxrwxrwx 3 u0_a318 u0_a318 3452 2026-09-23 05:54 ..
+drwxrwxrwx 2 u0_a318 u0_a318 3452 2026-09-23 05:54 input
+drwxrwxrwx 2 u0_a318 u0_a318 3452 2026-09-23 05:54 output
+
+/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input:
+total 7474
+drwxrwxrwx 2 u0_a318 u0_a318    3452 2026-09-23 05:54 .
+drwxrwxrwx 4 u0_a318 u0_a318    3452 2026-09-23 05:54 ..
+-rw-r--r-- 1 u0_a318 u0_a318  227372 2026-09-23 05:54 golden.png
+-rw-r--r-- 1 u0_a318 u0_a318 7409935 2026-09-23 05:54 trace.trace
+
+/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output:
+total 42
+drwxrwxrwx 2 u0_a318 u0_a318  3452 2026-09-23 05:54 .
+drwxrwxrwx 4 u0_a318 u0_a318  3452 2026-09-23 05:54 ..
+-rw------- 1 u0_a318 u0_a318  6681 2026-09-23 05:54 mobilegl.client.log
+-rw------- 1 u0_a318 u0_a318 22953 2026-09-23 05:54 mobilegl.server.log
+-rw------- 1 u0_a318 u0_a318   187 2026-09-23 05:54 retrace.log
+archived repeat 1 to .trace-work\p7w4\bsl-mem-inproc\minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html

@@ -1,0 +1,38 @@
+=== Android retrace: minecraft-1.21.4-fabric-iris-bsl-esc-menu-854 / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-bsl-esc-menu-854\trace.trace: 1 file pushed, 0 skipped. 14.8 MB/s (7409935 bytes in 0.477s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-bsl-esc-menu-854.0001303534.png: 1 file pushed, 0 skipped. 9.1 MB/s (227372 bytes in 0.024s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999792, ssimThreshold=0.990000, mismatchPixels=292913, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 1303534,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999791667,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 292913
+}
+archived repeat 1 to .trace-work\p7w4\bsl-mem-monolith\minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html

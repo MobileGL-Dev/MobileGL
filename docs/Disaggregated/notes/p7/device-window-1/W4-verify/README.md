@@ -74,6 +74,16 @@ B 的 mip 形状半退役 + 深度 mip 烘焙（ID-P7-23）在真机上兑现；
 4. **两进程臂同样掷硬币**（spawn 3 遍 红/绿/红），且第三张图 `4e5ba514`（9836 像素）在 run-ahead 下也出现——丢掉的 draw 段有两种量化长度。归因与修复交 **B3**（`p7-magma-b3`）；主机 red-once 走 `integration-magma-spawn`。
 5. 附带：Magma 从不发布 `kCapRunAheadApply`，DirectVulkan 客户端本来就是逐记录 lockstep（`ClientSession.cpp:1984-1988`），`RUN_AHEAD=0` 改变的只是时序。
 
+## 3c. bsl-esc-menu-854：spawn 臂也死，是内存缺陷（`bsl-spawn.log`、`bsl-mem-*.log`）
+
+| 臂 | 结果 | 进程峰值 RSS（`/proc/<pid>/status` 每 0.4 s 采样，VmHWM） |
+|---|---|---|
+| monolith | 0.999791667 通过 | app 807 MiB |
+| spawn ×2 | server `mgl-srv-apply` 线程 `Scudo ERROR: internal map failure (error desc=Out of memory)` → SIGABRT；client 随后 `Fatal{UncarriedInitialBytes, "resource_respecify"}`（管道已死的下游症状） | client 543 MiB + **server 1195 MiB** |
+| inproc | 死（E0a 起如此） | 1607 MiB |
+
+设备 MemTotal 15.5 GB、MemAvailable 8.1 GB——不是系统 OOM，是 scudo 二级分配器的 `mmap` 返回 ENOMEM（`vm.max_map_count` 或每进程上限）。同一帧的字节，split 约为 monolith 的 2.1×。按 ID-P7-12 只有 monolith 自己红才排除，所以这是分离缺陷（ID-P7-27，交 M1 归因；`UploadPendingWireLevels` 拒绝后 pending 条目存活的话与 B3 同根）。
+
 ## 4. 会话卫生
 
 每次 `pm clear` 都杀掉设备上的 TCP supervisor（窗口 1b 用）；每段会话末尾用 `tcp_device_server.py start …`（runbook §7 的命令）重启并确认 `0.0.0.0:40613` 在听。`audit-cold-1` 的空结果是 Windows adb daemon 在 WSL adb 启动 supervisor 后短暂重启造成，与被测无关。
