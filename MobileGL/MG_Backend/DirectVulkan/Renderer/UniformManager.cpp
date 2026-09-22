@@ -2415,8 +2415,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                                            m_wireFrameIndex, padded, 0)))
                 return false;
         }
-        if (padded.offset > std::numeric_limits<Uint32>::max())
-            WireDescriptorFatal("uniform-buffer-dynamic-offset@P7");
+        if (padded.offset > std::numeric_limits<Uint32>::max()) {
+            // P7 A.2, a decline (rule I (a)), not a session death. A Vulkan dynamic offset is a
+            // uint32_t, so a transient uniform ring that grew past 4 GiB inside one frame has
+            // nowhere to put this block - which is our ring's problem, not a protocol fault, and
+            // nothing the peer could have sent differently. One binding is skipped and the draw
+            // is lost; the session keeps running and the next frame's rewound ring resolves it.
+            // The monolith arm has the same ceiling and truncates silently on the way out
+            // (ResolveDynamicUboDescriptor's static_cast<Uint32>), i.e. it binds a WRONG window
+            // rather than none, so declining is the strictly better observable of the two.
+            MGLOG_E_ONCE("ResolveWireUniformBufferPayload: the transient uniform ring reached offset "
+                         "%llu, past the 4 GiB a Vulkan dynamic offset can name; uniform binding "
+                         "point %u is declined for this draw",
+                         static_cast<unsigned long long>(padded.offset), bindingPoint);
+            return false;
+        }
         out.directBindable = true;
         out.buffer = padded.buffer;
         out.range = blockSize;
