@@ -1076,6 +1076,13 @@ jobs:
       # ProtocolSmoke and FdPassing - are registered only under MOBILEGL_BUILD_DISAGGREGATED
       # (MG_Test/CMakeLists.txt), and before this job existed NO cmake invocation anywhere in this
       # workflow passed that option. They had never been compiled by CI, let alone run.
+      # Exit gate 9.2. BEFORE the lanes run, because it costs a `ctest -N` and answers the one
+      # question a green lane cannot: did the spawn arm cover the same cases the split arm did?
+      # A spawn lane registered with fewer cases goes green while proving less, and nothing about
+      # a smaller green lane looks wrong.
+      - name: integration-spawn covers integration-split (9.2)
+        run: python3 scripts/ci/spawn_lane_parity.py build-split
+
       - name: Unit tests on the split runtime
         working-directory: build-split
         env:
@@ -1099,6 +1106,11 @@ jobs:
           sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
           ctest --output-on-failure -L integration-split --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/split-baseline.xml"
           python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/split-baseline.xml" --require-split-ran
+          # Exit gate 9.3: the spawn arm green at the same count. It runs the same cases through a
+          # SECOND PROCESS, so a failure here that the line above did not see is a transport fact
+          # and not a phase one - which is the whole reason both lanes exist.
+          ctest --output-on-failure -L integration-spawn --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/spawn-baseline.xml"
+          python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/spawn-baseline.xml" --require-spawn-ran
 
       # Both full transport runs are hard gates. The per-case comparison below
       # remains diagnostic because explicit mechanism controls retain their own mode.

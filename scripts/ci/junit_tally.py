@@ -20,10 +20,18 @@ import sys
 import xml.etree.ElementTree as ET
 
 
-def tally(path, split_only=False):
+# P6 `t6`: ONE FLAG PER ARM, because the prefix IS the arm and a shared flag would let a lane
+# tally the other lane's entries and call itself run. Exit gate 9.3 compares the two.
+ARM_PREFIXES = {
+    '--require-split-ran': 'DirectGLES.Split.',
+    '--require-spawn-ran': 'DirectGLES.Spawn.',
+}
+
+
+def tally(path, prefix=None):
     passed = failed = skipped = 0
     for case in ET.parse(path).getroot().iter('testcase'):
-        if split_only and not case.get('name', '').startswith('DirectGLES.Split.'):
+        if prefix is not None and not case.get('name', '').startswith(prefix):
             continue
         if case.find('failure') is not None or case.find('error') is not None:
             failed += 1
@@ -35,17 +43,20 @@ def tally(path, split_only=False):
 
 
 def main():
-    if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != '--require-split-ran'):
-        print("usage: junit_tally.py <junit.xml> [--require-split-ran]", file=sys.stderr)
+    if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] not in ARM_PREFIXES):
+        print("usage: junit_tally.py <junit.xml> [" + " | ".join(sorted(ARM_PREFIXES)) + "]",
+              file=sys.stderr)
         return 2
     try:
-        passed, failed, skipped = tally(sys.argv[1], split_only=len(sys.argv) == 3)
+        prefix = ARM_PREFIXES[sys.argv[2]] if len(sys.argv) == 3 else None
+        passed, failed, skipped = tally(sys.argv[1], prefix=prefix)
     except Exception as exc:  # a malformed file is not "zero of everything"
         print(f"junit_tally: cannot parse {sys.argv[1]}: {exc}", file=sys.stderr)
         return 1
     print(f"{passed} {failed} {skipped}")
     if len(sys.argv) == 3 and (passed == 0 or failed):
-        print('split baseline FAILED: no successful split runtime entries or an already-red selection', file=sys.stderr)
+        print(f'{prefix} baseline FAILED: no successful entries with that arm prefix, or an '
+              f'already-red selection', file=sys.stderr)
         return 1
     return 0
 

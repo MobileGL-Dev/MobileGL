@@ -2839,7 +2839,8 @@ TEST_F(PipeWireCodecTest, AdoptTierZeroIsFatalOnTheWirePathAndNamesP11) {
         (void)wire.PumpOne(&applied);
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("MOBILEGL_IPC_ADOPT_TIER=0 names adoption tier T0, which P11 implements"),
+    EXPECT_NE(r.Log.find("Fatal{UnimplementedAdoptTier, \"T0\"} - MOBILEGL_IPC_ADOPT_TIER=0 "
+                          "names an adoption tier P11 implements"),
               std::string::npos)
         << r.Log;
 }
@@ -2855,7 +2856,8 @@ TEST_F(PipeWireCodecTest, AdoptTierOneIsFatalOnTheWirePathAndNamesP11) {
         (void)wire.PumpOne(&applied);
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("MOBILEGL_IPC_ADOPT_TIER=1 names adoption tier T1, which P11 implements"),
+    EXPECT_NE(r.Log.find("Fatal{UnimplementedAdoptTier, \"T1\"} - MOBILEGL_IPC_ADOPT_TIER=1 "
+                          "names an adoption tier P11 implements"),
               std::string::npos)
         << r.Log;
 }

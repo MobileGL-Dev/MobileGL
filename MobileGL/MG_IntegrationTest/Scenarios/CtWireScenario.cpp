@@ -29,6 +29,7 @@
 #include "../Harness/SplitRuntimePeek.h"
 
 #include <MG_Pipe/PipeApply.h>
+#include <Config.h>  // `t6`: the spawn arm cannot observe the server process's counters
 #include <MG_Remote/Server/ServerSession.h>
 
 #if !defined(_WIN32)
@@ -51,6 +52,26 @@ namespace {
 
     MobileGL::MG_Remote::Server::ServerVerbSink& ServerVerbs() {
         return MobileGL::MG_Remote::Server::ServerSessionInstance().Applier().Verbs();
+    }
+
+    // P6 `t6`: THE COUNTERS BELOW LIVE IN THE SERVER'S PROCESS, and under spawn that is not
+    // this one.
+    //
+    // ServerVerbs() reads PipeApplier's in-process tallies. Under inproc the applier is a thread
+    // here and the numbers are this process's own; under spawn it is a thread in a DIFFERENT
+    // process and this process's copy stays 0 forever - so these cases would fail asserting a
+    // fact about somebody else's memory, which is a harness limit and not a product defect.
+    //
+    // SKIPPED BY NAME RATHER THAN EXCLUDED FROM THE LANE. Exit gate 9.2 asks that
+    // integration-spawn's case-name SET equal integration-split's, and a case dropped from the
+    // registration would make the two sets differ silently - the exact drift the shared
+    // registration macro exists to prevent. A skip keeps the name, states the reason, and is
+    // counted as a skip rather than as coverage.
+    //
+    // WHAT WOULD RETIRE IT: cross-process telemetry, which is also what `t6`'s S8 needs for
+    // SessionFaultCount() over a whole run. Until that exists this is the honest answer.
+    bool ServerCountersAreObservableHere() {
+        return MobileGL::MG_Config::Transport != MobileGL::MG_Config::TransportMode::Spawn;
     }
 
     class CtWireScenario : public ScenarioTest {
@@ -94,6 +115,12 @@ namespace {
 
     TEST_F(CtWireScenario, ApplierResetCrossesAtThePrimedEdgeInSerialOrder) {
         if (!Ready()) return;
+        if (!ServerCountersAreObservableHere()) {
+            GTEST_SKIP() << "transport=spawn: the applier's counters are in the SERVER's process "
+                            "and this one's copy is 0 by construction. The record still crosses - "
+                            "the retrace lane is what proves that - but this case asserts on a "
+                            "tally only an in-process applier can publish.";
+        }
         // The first verb of the process primes the tracker; the edge is the producer. The
         // clear also gives the case its pixels, so a lane that emitted nothing is red twice
         // (here and in the fixture's emit-ordinal rule).
@@ -141,6 +168,11 @@ namespace {
         // The object dies unbound so the destructor - and the death record - fire at the
         // delete, and the tally is read AFTER the EmitAndWait the delete blocked on.
         glBindTexture(GL_TEXTURE_2D, 0);
+        if (!ServerCountersAreObservableHere()) {
+            GTEST_SKIP() << "transport=spawn: ObjectDeaths is the SERVER process's tally and this "
+                            "process's copy never moves. The death record itself crosses; what "
+                            "cannot cross today is the counter that would prove it here.";
+        }
         const MobileGL::Uint64 deathsBefore = ServerVerbs().ObjectDeaths();
         glDeleteTextures(1, &texture);
         // THE FENCE, the framebuffer case's exactly (MOBILEGL_IPC_BATCH_WAITS, default on):
@@ -197,6 +229,11 @@ namespace {
         // Die unbound, framebuffer first so the attachment's own death is a separate record.
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glBindRenderbuffer(GL_RENDERBUFFER, 0);
+        if (!ServerCountersAreObservableHere()) {
+            GTEST_SKIP() << "transport=spawn: ObjectDeaths is the SERVER process's tally and this "
+                            "process's copy never moves. The death record itself crosses; what "
+                            "cannot cross today is the counter that would prove it here.";
+        }
         const MobileGL::Uint64 deathsBefore = ServerVerbs().ObjectDeaths();
         glDeleteFramebuffers(1, &fbo);
         // THE FENCE (MOBILEGL_IPC_BATCH_WAITS, default on): object_death is a kCtxObject

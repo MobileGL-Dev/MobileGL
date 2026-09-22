@@ -1983,36 +1983,75 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     #
     # ClearThenReadPixelsScenario is target A of the reduced path and already existed; Triangle is
     # target B and PersistentCoherentMap is target C, both new in P5.
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.Split."
-        TEST_LIST MGL_SPLIT_CLEAR_TESTS
-        TEST_FILTER "ClearThenReadPixelsScenario.*"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-split"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
-    )
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.Split."
-        TEST_LIST MGL_SPLIT_TRIANGLE_TESTS
-        TEST_FILTER "TriangleScenario.*"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-split"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
-    )
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.Split."
-        TEST_LIST MGL_SPLIT_PMAP_TESTS
-        TEST_FILTER "PersistentCoherentMapScenario.*"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-split"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
-    )
+    # ---- P6 `t6`: THE SPAWN ARM, beside the inproc one and never instead of it --------------
+    #
+    # EXIT GATES 9.2 AND 9.3: `integration-spawn`'s case-name set must be IDENTICAL to
+    # `integration-split`'s, and it must be green at the same count.
+    #
+    # THAT IDENTITY IS MADE STRUCTURAL RATHER THAN MAINTAINED. Registering the spawn arm as a
+    # second copy of each block would make the two sets agree today and drift the first time
+    # somebody adds a scenario to one of them - and a spawn lane covering LESS than the split
+    # lane goes green while proving less, with nothing to say so. One macro emits both arms from
+    # one filter, so a case added to either is added to both or to neither.
+    #
+    # ONE ENVIRONMENT DIFFERENCE, AND IT IS THE SUBJECT OF THE LANE. MOBILEGL_TRANSPORT=spawn
+    # makes the test process the CLIENT and has it launch a server from MOBILEGL_IPC_SERVER_PATH
+    # - the same path the inproc arm already carries, because under inproc the library reads it
+    # and decides it does not need one.
+    mgl_itest_join_environment(MGL_ITEST_GLES_SPAWN_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=spawn"
+        "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+
+    # scenarioFilter, a PREFIX TAIL (empty for most; "F1." and "Ct." for the two per-slot loops,
+    # which name their sub-lane in the test name), then zero or more EXTRA LABEL STEMS. A stem is
+    # suffixed with the arm's own name (`integration-clientarrays` becomes `-split` on one arm and
+    # `-spawn` on the other), so a lane-scoped label cannot accidentally name both lanes at once.
+    # A UNIQUE LIST VARIABLE PER CALL, and the names collected for SplitLogPaths to walk.
+    #
+    # gtest_discover_tests' TEST_LIST is not a configure-time value: the generated include file
+    # sets it when CTEST runs. So one shared variable would hold only the LAST block's entries -
+    # measured, and it is why the first version of this macro silently unhooked every private log
+    # path but one. The counter gives each call its own name; the names are what get walked.
+    set(MGL_SPLIT_ARM_TESTS "")
+    set(MGL_SPLIT_ARM_TEST_LISTS "")
+    set(MGL_SPLIT_ARM_INDEX 0)
+    macro(mgl_itest_register_split_arms scenarioFilter prefixTail)
+        foreach(mglItestArm IN ITEMS Split Spawn)
+            string(TOLOWER "${mglItestArm}" mglItestArmLower)
+            string(TOUPPER "${mglItestArm}" mglItestArmUpper)
+            set(mglItestArmLabels "integration-gpu\\;integration-${mglItestArmLower}")
+            foreach(mglItestExtra IN ITEMS ${ARGN})
+                set(mglItestArmLabels "${mglItestArmLabels}\\;${mglItestExtra}-${mglItestArmLower}")
+            endforeach()
+            # ONE ACCUMULATED LIST FOR BOTH ARMS, and it is not bookkeeping: SplitLogPaths gives
+            # every entry a PRIVATE MOBILEGL_LOG_FILE_PATH, and SplitLogPaths.PrivateAndDistinct
+            # reds if one is missing or shared. The per-block TEST_LIST variables this macro
+            # replaced were what fed it - dropping them silently unhooked the whole mechanism,
+            # which that gate caught. Accumulating here means a block added later is covered
+            # without anyone remembering to add its variable to the list.
+            #
+            # IT MATTERS MORE ON THE SPAWN ARM: there TWO PROCESSES append to the path, so two
+            # entries sharing one file is not merely ambiguous, it interleaves two sessions.
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectGLES.${mglItestArm}.${prefixTail}"
+                TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
+                TEST_FILTER "${scenarioFilter}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES
+                    LABELS "${mglItestArmLabels}"
+                    TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ENVIRONMENT "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}"
+            )
+            list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
+            math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
+        endforeach()
+    endmacro()
+
+    mgl_itest_register_split_arms("ClearThenReadPixelsScenario.*" "")
+    mgl_itest_register_split_arms("TriangleScenario.*" "")
+    mgl_itest_register_split_arms("PersistentCoherentMapScenario.*" "")
+
 
     # ---- P5e fix1: THE PUSH-MONOLITH ARM, INSIDE THE GATED SET (ID-107) ----------------------
     #
@@ -2077,16 +2116,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     set(MGL_SPLIT_D1_FILTER_DrawParametersScenario "DrawParametersScenario.*")
     set(MGL_SPLIT_D1_FILTER_PrimitiveRestartScenario "PrimitiveRestartScenario.*")
     foreach(mglItestD1Scenario IN LISTS MGL_SPLIT_D1_SCENARIOS)
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectGLES.Split."
-            TEST_LIST "MGL_SPLIT_D1_${mglItestD1Scenario}_TESTS"
-            TEST_FILTER "${MGL_SPLIT_D1_FILTER_${mglItestD1Scenario}}"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-gpu\;integration-split"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
-        )
+        mgl_itest_register_split_arms("${MGL_SPLIT_D1_FILTER_${mglItestD1Scenario}}" "")
     endforeach()
 
     # ---- P5e mv: THE MULTI-DRAW TIERS, INSIDE THE GATED SET (ID-109's rule, one level down) --
@@ -2199,16 +2229,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     set(MGL_SPLIT_I1_FILTER_AtomicCounterScenario          "AtomicCounterScenario.*")
     set(MGL_SPLIT_I1_FILTER_ProgramPipelineScenario        "ProgramPipelineScenario.*StorageBlock*")
     foreach(mglItestI1Scenario IN LISTS MGL_SPLIT_I1_SCENARIOS)
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectGLES.Split."
-            TEST_LIST "MGL_SPLIT_I1_${mglItestI1Scenario}_TESTS"
-            TEST_FILTER "${MGL_SPLIT_I1_FILTER_${mglItestI1Scenario}}"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-gpu\;integration-split"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
-        )
+        mgl_itest_register_split_arms("${MGL_SPLIT_I1_FILTER_${mglItestI1Scenario}}" "")
     endforeach()
 
     # ---- P5b t2: the transform-feedback spans, the XFB object bind, the patch parameter -------
@@ -2237,53 +2258,17 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # Every DirectVulkan XFB capture entry in the inproc census fails on exactly that (t2-v1.md
     # §"the 51"), and it retires with P7 (Magma's resource family) / P9 (the readback carrier) -
     # not here. A DirectVulkan arm of this lane would be red for a reason t2 cannot fix.
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.Split."
-        TEST_LIST MGL_SPLIT_T2_TESS_TESTS
-        TEST_FILTER "TessellationXfbCaptureScenario.*"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-split"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
-    )
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.Split."
-        TEST_LIST MGL_SPLIT_T2_XFB_TESTS
-        TEST_FILTER "XfbCaptureBufferReuseScenario.*"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-split"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
-    )
+    mgl_itest_register_split_arms("TessellationXfbCaptureScenario.*" "")
+    mgl_itest_register_split_arms("XfbCaptureBufferReuseScenario.*" "")
 
     # ---- P5e package vi (MG_Remote/CONTRACT-P5E.md §5.1, ID-82 / ruling 2) --------------------
     #
     # Client-memory vertices and indices now cross as owned ordinary buffers.
     # Keep the original names and private logs; all six scenarios join the full
     # GPU and split acceptance labels as well as their focused regression label.
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.Split."
-        TEST_LIST MGL_SPLIT_VI_CLIENT_ARRAY_TESTS
-        TEST_FILTER "ClientVertexArrayScenario.*"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-split\;integration-clientarrays-split"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
-    )
+    mgl_itest_register_split_arms("ClientVertexArrayScenario.*" "" integration-clientarrays)
 
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.Split."
-        TEST_LIST MGL_SPLIT_SYNC_TESTS
-        TEST_FILTER "SyncWireScenario.*"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-split"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}"
-    )
+    mgl_itest_register_split_arms("SyncWireScenario.*" "")
 
     # The split half of the counting pair. MGITEST_PERSISTENT_MAP_ARM=emulated is R-6: under split
     # the adopt tier is pinned at T2, the resource owner declines every acquisition and the client
@@ -2400,10 +2385,12 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             TIMEOUT ${MGL_ITEST_TIMEOUT}
             ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_STRICT_ENVIRONMENT}"
     )
-    # Apply per-entry paths after GoogleTest discovery has populated the TEST_LISTs.
-    configure_file(Harness/SplitLogPaths.cmake.in SplitLogPaths.cmake @ONLY)
-    set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
-        "${CMAKE_CURRENT_BINARY_DIR}/SplitLogPaths.cmake")
+    # The configure_file that used to sit here MOVED TO THE END OF THIS FILE (P6 `t6`).
+    #
+    # It substitutes @MGL_SPLIT_ARM_TEST_LISTS@, which the registration macro appends to - so
+    # running it here captured only the calls made ABOVE this line and silently dropped the F1
+    # and Ct blocks below it. SplitLogPaths.PrivateAndDistinct is what caught that, naming
+    # F1WireScenario.ClearBufferfiPixels; the generated file now sees every call.
     # Python is mandatory for this split integration gate (also used by the CI controls).
     # Do not silently omit the ownership check when the interpreter is unavailable.
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -2418,15 +2405,7 @@ endif()
 if (MOBILEGL_BUILD_DISAGGREGATED)
     target_sources(MobileGLIntegrationTest PRIVATE Scenarios/F1WireScenario.cpp)
     foreach(f1Slot ClearBufferfi ClearBufferfv ClearBufferiv ClearBufferuiv ClearNamedFramebufferfi ClearNamedFramebufferfv ClearNamedFramebufferiv ClearNamedFramebufferuiv CopyTexImage2D CopyTexSubImage2D GenerateMipmap GenerateMipmapPackedFloat GenerateMipmapDepth)
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectGLES.Split.F1."
-            TEST_FILTER "F1WireScenario.${f1Slot}Pixels"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-split"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5b-f1-${f1Slot}.log"
-        )
+        mgl_itest_register_split_arms("F1WireScenario.${f1Slot}Pixels" "F1.")
     endforeach()
     # P5f fm: the framebuffer/copy/mipmap verbs now consume server records on Magma too.
     mgl_itest_join_environment(MGL_ITEST_MAGMA_WIRE_ENVIRONMENT
@@ -2579,15 +2558,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                    TextureDeathCrossesAndTheRecycledSlotAnswersTheNewObject
                    FramebufferDeathCrossesAndTheRecycledSlotAnswersTheNewObject
                    TheDirectApplierResetCallOnTheGLThreadIsRoleViolation)
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectGLES.Split.Ct."
-            TEST_FILTER "CtWireScenario.${ctCase}"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-gpu\;integration-split"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5c-ct-${ctCase}.log"
-        )
+        mgl_itest_register_split_arms("CtWireScenario.${ctCase}" "Ct.")
     endforeach()
 endif()
 
@@ -2754,6 +2725,12 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 endif()
 
 if (MOBILEGL_BUILD_DISAGGREGATED)
+    # LAST, so every mgl_itest_register_split_arms call above has already contributed its list
+    # name. Apply per-entry paths after GoogleTest discovery has populated the TEST_LISTs.
+    configure_file(Harness/SplitLogPaths.cmake.in SplitLogPaths.cmake @ONLY)
+    set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/SplitLogPaths.cmake")
+
     add_test(NAME SplitLogPaths.ResultAccountingControls
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Harness/test_split_log_paths.py)
     set_tests_properties(SplitLogPaths.ResultAccountingControls PROPERTIES LABELS "unit")

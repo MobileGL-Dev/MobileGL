@@ -8,10 +8,19 @@ file(MAKE_DIRECTORY "@CMAKE_CURRENT_BINARY_DIR@/split-logs")
 # the caps bit, and a shared log file is a marker nobody can attribute.
 # P5e pa's strict lane joins it for the same reason as vi's: its four entries exist to CARRY a
 # Fatal marker (the two program rows), and a shared log file is a marker nobody can attribute.
-foreach(entry IN LISTS MGL_SPLIT_CLEAR_TESTS MGL_SPLIT_TRIANGLE_TESTS MGL_SPLIT_PMAP_TESTS
-                      MGL_SPLIT_T2_TESS_TESTS MGL_SPLIT_T2_XFB_TESTS MGL_SPLIT_SYNC_TESTS
-                      MGL_SPLIT_VI_CLIENT_ARRAY_TESTS
-                      MGL_SPLIT_PA_STRICT_DRAW_TESTS MGL_SPLIT_PA_STRICT_DISPATCH_TESTS)
+# P6 `t6`: ONE LIST FOR EVERY ENTRY THE SHARED REGISTRATION MACRO EMITS, on BOTH arms. The
+# per-block TEST_LIST variables this replaces were a list somebody had to remember to extend;
+# a block added without its variable got no private log and nothing said so until
+# PrivateAndDistinct happened to notice. The macro accumulates instead.
+# The macro's per-call lists, walked by NAME: gtest_discover_tests populates each of them when
+# ctest runs, which is also when this file is included.
+foreach(listName IN ITEMS @MGL_SPLIT_ARM_TEST_LISTS@)
+    foreach(entry IN LISTS ${listName})
+        set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+            "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
+    endforeach()
+endforeach()
+foreach(entry IN LISTS MGL_SPLIT_PA_STRICT_DRAW_TESTS MGL_SPLIT_PA_STRICT_DISPATCH_TESTS)
     set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
         "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
 endforeach()
@@ -21,13 +30,7 @@ foreach(scenario @MGL_SPLIT_SMALL_RING_SCENARIOS@)
             "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
     endforeach()
 endforeach()
-# P5b d1's split entries: the same private, distinct log per entry.
-foreach(scenario @MGL_SPLIT_D1_SCENARIOS@)
-    foreach(entry IN LISTS MGL_SPLIT_D1_${scenario}_TESTS)
-        set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
-            "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
-    endforeach()
-endforeach()
+# d1's entries are covered by MGL_SPLIT_ARM_TESTS above (P6 `t6`).
 
 # P5e mv's five tier-pinned lanes, the same rule for the same reason - and here it also repairs
 # the addendum §4 blind spot for them: these entries carry a third name segment, so the strict
@@ -43,7 +46,9 @@ endforeach()
 # P5b package i1's four scenarios, the same shape as the small-ring loop above: every
 # DirectGLES.Split. entry owns exactly one absolute log path and shares it with nobody, which
 # is what SplitLogPaths.PrivateAndDistinct checks over the discovered set.
-foreach(scenario @MGL_SPLIT_I1_SCENARIOS@)
+# i1's entries are covered by MGL_SPLIT_ARM_TESTS above (P6 `t6`); the loop is kept as a no-op
+# shell only so the surrounding prose still reads against a structure.
+foreach(scenario "")
     foreach(entry IN LISTS MGL_SPLIT_I1_${scenario}_TESTS)
         set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
             "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
