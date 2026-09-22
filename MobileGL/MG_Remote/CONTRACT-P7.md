@@ -64,10 +64,12 @@ P7 收官 = 五道出口门同时成立（§2–§7），而不是路线图 P7 �
 | `default-color-blit-shape` | `WireFramebuffer.inc:601` | **退役** | 恒等变换回落 `vkCmdBlitImage` 臂（`:611-624`）；非恒等旋转先 resolve/copy 进 scratch 2D RGBA 再 shader blit（复用 `:560-590` 的 scratch）；四旋转之外 decline |
 | `multisample-blit-shape` / `-aspect` | `WireFramebuffer.inc:631/:641` | **退役** | shape：resolve 进 scratch 单采样再 `vkCmdBlitImage` 缩放/翻转；aspect：MS 深/模板 → 单采样用 `VK_KHR_depth_stencil_resolve`（`DynamicBackendParameters` 里查扩展）或 `texelFetch(sampler2DMS)` 写 `gl_FragDepth` 的 shader resolve；单采样 → MS 尺寸不同 decline |
 | `depth-stencil-mipmap` | `WireFramebuffer.inc:753` | **退役**（随烘焙 (A)） | `GenerateWireMipmap` 深度分支接 `WireDepthMipmap.{vert,frag}` 烘焙程序 |
-| `texel-buffer-native-format` | `UniformManager.cpp:1153` | decline | 可选：重打包回落 |
-| `unaligned-{texel,storage,atomic}-buffer-range` | `:1161/:1551/:1552` | decline 或拷入对齐 transient | 可选；SSBO 可写范围的 copyback 未定 |
-| `storage-buffer-native-range` / `uniform-block-native-range` | `UniformManager.cpp` | decline（钳/拆） | 可选 |
-| `uniform-buffer-dynamic-offset` | `:2400` | decline | 可选（>4 GiB） |
+| `uniform-buffer-byte-tail` → **已退役（wave 2-A，`5a14e5a1`）** | — | — | 见上行；真正可达的形状是 `size` 非 4 倍数（offset 非对齐在前端就 `GL_INVALID_VALUE`） |
+| `texel-buffer-native-format` | `UniformManager.cpp` | **已 decline（wave 2-A）** | 零占位 view，fetch 读零；只在 Adreno 上有可观测（`GL_RGB32F` buffer texture） |
+| `unaligned-{texel,storage,atomic}-buffer-range` | `UniformManager.cpp` | **已具名 decline（wave 2-A）** | 跳过该绑定；可写 range 的 copyback 不做（分不出 readonly、录制点在 B/C 的 draw 尾，配方 `magma-a.md` §3.1）；真正活的缺口是 `glBindBufferRange(GL_ATOMIC_COUNTER_BUFFER, …, 4, 4)`，Adreno 64 字节对齐 |
+| `storage-buffer-native-range` / `uniform-block-native-range` | `UniformManager.cpp` | **已钳制（wave 2-A）** | 钳到 `maxStorageBufferRange` / `maxUniformBufferRange` |
+| `uniform-buffer-dynamic-offset` | `UniformManager.cpp` | **已 decline（wave 2-A）** | >4 GiB transient ring 跳过绑定 |
+| `storage-buffer-offset-overflow` / `texel-buffer-offset-overflow` | `UniformManager.cpp` | 具名 Fatal（经 hook） | 算术不变量，不带 `@P7` |
 | `vertex-format-conversion` | `WireDraw.inc:272` | decline | 可选：packed converter |
 | `buffer-legacy-arm` | `WireDraw.inc:14/:204` | 具名 Fatal 经 hook（`RoleViolation`） | 已是拒绝，只换漏斗 |
 
