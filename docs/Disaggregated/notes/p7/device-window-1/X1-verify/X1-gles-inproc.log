@@ -1,0 +1,39 @@
+=== Android retrace: improved-transparency-minecraft-26.3 / DirectGLES (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\improved-transparency-minecraft-26.3\trace.trace: 1 file pushed, 0 skipped. 16.3 MB/s (14404890 bytes in 0.843s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\improved-transparency-minecraft-26.3.0002667619.png: 1 file pushed, 0 skipped. 16.7 MB/s (368306 bytes in 0.021s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999684, ssimThreshold=0.995000, mismatchPixels=70353, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/improved-transparency-minecraft-26.3-diff.png",
+  "backend": "DirectGLES",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 2667619,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999683991,
+  "ssimThreshold": 0.995000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 70353
+}
+Android retrace: real inproc transport, strict role state and zero Fatal records confirmed
+archived repeat 1 to .trace-work\p7w2\X1-gles-inproc\improved-transparency-minecraft-26.3-DirectGLES\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
