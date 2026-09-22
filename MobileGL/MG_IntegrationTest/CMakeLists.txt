@@ -3066,6 +3066,33 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_TEST_PIPELINE_CREATE_DELAY_MS=25\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-pipelinedelay${mglItestArmLogTag}-${pipelineDelayCase}.log")
         endforeach()
+        # ---- P7 wave 2 package B3, EXIT GATE 3: the streamed `glBufferSubData -> draw` pair.
+        #
+        # TWO ENTRIES OVER ONE CASE, for the reason the ShaderMip pair gives. The plain entry is
+        # a regression gate that runs on every driver. The forced entry is the RED-ONCE: it makes
+        # the frame-counting half of VkBufferManager's busy predicate answer "idle", which is the
+        # state a mid-frame idle drain puts the wire arm into on the device and which no host
+        # lane reaches on its own - measured, zero mid-frame frame-boundary drains across the
+        # whole OpenRA replay, which is why the divergence is device-only and why the lane could
+        # not arm against it before this knob existed.
+        #
+        # ITS OWN ENTRY RATHER THAN A LANE-WIDE FLIP: the knob changes how EVERY streamed buffer
+        # write in the process is answered, so putting it in the shared Fm environment would
+        # retarget every other draw case in this lane.
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.${mglItestArm}.Fm."
+            TEST_FILTER "F1WireScenario.StreamedBufferSubDataBeforeEachDrawIsOrdered"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ${mglItestArmProperties}
+                ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-streamedsubdata${mglItestArmLogTag}.log")
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.${mglItestArm}.StaleSerial."
+            TEST_FILTER "F1WireScenario.StreamedBufferSubDataBeforeEachDrawIsOrdered"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ${mglItestArmProperties}
+                ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-streamedsubdata-stale${mglItestArmLogTag}.log")
         # `default-color-blit-shape@P7`'s retirement. TWO ENTRIES OVER ONE CASE, and the second
         # is the only way its arm is reachable here: every surface this lane creates reports
         # VK_SURFACE_TRANSFORM_IDENTITY, so the scratch path that exists FOR rotation would

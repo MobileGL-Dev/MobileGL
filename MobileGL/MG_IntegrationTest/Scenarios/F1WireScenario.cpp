@@ -2064,4 +2064,111 @@ TEST_F(F1WireScenario, CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone) {
     glBindTexture(GL_TEXTURE_2D, texture);
 }
 
+// ---- P7 wave 2 package B3, EXIT GATE 3: a streamed glBufferSubData -> draw pair is ordered --
+//
+// THE SHAPE OF THE OpenRA DEVICE DIVERGENCE, reduced to four quads. The application writes a
+// batch of vertices over the SAME range of ONE dynamic buffer and immediately draws it, then
+// writes the next batch over the same range and draws that, and so on - OpenRA does this ~24
+// times per frame into GL buffer 1, and the picture that reached the Redmi was missing exactly
+// the quads of one of those batches with the terrain under them intact.
+//
+// The server may answer such a write in two shapes: an ordered vkCmdCopyBuffer, or an immediate
+// host memcpy when it believes the GPU is finished with the bytes. Believing that wrongly is
+// silent and produces no log line and no GL error - the draw still executes, it just reads
+// somebody else's vertices. So the case cannot assert "no error"; it has to assert the pixels.
+//
+// Registered TWICE per arm. The plain entry is a regression gate on every driver. The
+// `StaleSerial.` entry carries MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL=1, which forces the
+// frame-counting half of the busy predicate to answer "idle" - the state a mid-frame idle drain
+// puts the wire arm into on the device, and one no host lane reaches by itself (measured: zero
+// mid-frame frame-boundary drains across the whole OpenRA replay). With the counting half
+// forced to lie, only the submission-fence half can still order the copy, which is exactly what
+// this package added and exactly what the entry pins.
+TEST_F(F1WireScenario, StreamedBufferSubDataBeforeEachDrawIsOrdered) {
+    if (!Ready()) return;
+    constexpr int kSize = 8, kBatches = 4, kColumn = kSize / kBatches;
+    Attach(GL_RGBA8);
+    const GLuint program = BuildWireProgram({
+        {GL_VERTEX_SHADER, R"(#version 430 core
+layout(location = 0) in vec2 aPos;
+layout(location = 1) in vec4 aColor;
+out vec4 vColor;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); vColor = aColor; }
+)"},
+        {GL_FRAGMENT_SHADER, R"(#version 430 core
+in vec4 vColor;
+out vec4 fragColor;
+void main() { fragColor = vColor; }
+)"}});
+    ASSERT_NE(program, 0u);
+
+    // One vertical bar per batch, each in its own two-pixel column and its own colour, so a
+    // draw that read another batch's bytes lands in the wrong column AND the wrong colour.
+    constexpr GLfloat kColors[kBatches][4] = {{1, 0, 0, 1}, {0, 1, 0, 1}, {0, 0, 1, 1}, {1, 1, 0, 1}};
+    const auto batchVertices = [&](int batch) {
+        const GLfloat x0 = -1.0f + static_cast<GLfloat>(batch) * 0.5f;
+        const GLfloat x1 = x0 + 0.5f;
+        const GLfloat* c = kColors[batch];
+        return std::array<GLfloat, 36>{
+            x0, -1, c[0], c[1], c[2], c[3],  x1, -1, c[0], c[1], c[2], c[3],  x1, 1, c[0], c[1], c[2], c[3],
+            x0, -1, c[0], c[1], c[2], c[3],  x1,  1, c[0], c[1], c[2], c[3],  x0, 1, c[0], c[1], c[2], c[3]};
+    };
+
+    GLuint vao = 0, vbo = 0;
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+    glGenBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    // GL_DYNAMIC_DRAW and no orphaning: OpenRA's buffer 1 exactly.
+    glBufferData(GL_ARRAY_BUFFER, sizeof(GLfloat) * 36, nullptr, GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(GLfloat), reinterpret_cast<const void*>(0));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(GLfloat),
+                          reinterpret_cast<const void*>(2 * sizeof(GLfloat)));
+    glUseProgram(program);
+    glViewport(0, 0, kSize, kSize);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    for (int batch = 0; batch < kBatches; ++batch) {
+        const auto vertices = batchVertices(batch);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(sizeof(vertices)), vertices.data());
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.StreamedSubData.draw";
+
+    std::vector<GLubyte> pixels(static_cast<size_t>(kSize) * kSize * 4, 0);
+    glReadPixels(0, 0, kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.StreamedSubData.readback";
+
+    for (int batch = 0; batch < kBatches; ++batch) {
+        const GLubyte* want = nullptr;
+        const GLubyte expected[4] = {static_cast<GLubyte>(kColors[batch][0] * 255.0f),
+                                     static_cast<GLubyte>(kColors[batch][1] * 255.0f),
+                                     static_cast<GLubyte>(kColors[batch][2] * 255.0f),
+                                     static_cast<GLubyte>(kColors[batch][3] * 255.0f)};
+        want = expected;
+        for (int dx = 0; dx < kColumn; ++dx) {
+            const int x = batch * kColumn + dx;
+            const GLubyte* got = pixels.data() + (static_cast<size_t>(kSize / 2) * kSize + x) * 4;
+            EXPECT_EQ(got[0], want[0]) << "F1.StreamedSubData: batch " << batch << " column " << x
+                                       << " lost its own vertices (r)";
+            EXPECT_EQ(got[1], want[1]) << "F1.StreamedSubData: batch " << batch << " column " << x
+                                       << " lost its own vertices (g)";
+            EXPECT_EQ(got[2], want[2]) << "F1.StreamedSubData: batch " << batch << " column " << x
+                                       << " lost its own vertices (b)";
+        }
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glDeleteBuffers(1, &vbo);
+    glBindVertexArray(0);
+    glDeleteVertexArrays(1, &vao);
+    glUseProgram(0);
+    glDeleteProgram(program);
+}
+
 } // namespace MGITest
