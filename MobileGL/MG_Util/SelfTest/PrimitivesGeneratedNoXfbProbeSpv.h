@@ -6,13 +6,15 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// Generated from PrimitivesGeneratedNoXfbProbe.{vert,tesc,tese} with:
-// glslangValidator --target-env vulkan1.1 -V PrimitivesGeneratedNoXfbProbe.<stage>
-// (SPIR-V words dumped little-endian, six per line.)
+// Generated from PrimitivesGeneratedNoXfbProbe.{vert,tesc,tese} (Vulkan 1.1 / SPIR-V 1.3) by
+// scripts/bake_internal_shaders.py, which runs MG_Test's BakedInternalShadersTest with the
+// IN-TREE glslang and splices the words it emits into the arrays below. Do not edit the words
+// by hand, and do not rely on remembering to regenerate: MOBILEGL_BAKED_INTERNAL_SHADERS (the
+// same test, run as a gate) recompiles all three sources and reds on the first word that
+// disagrees. Measured when that gate landed: these three arrays were already fresh.
 //
-// Regenerate whenever a probe shader changes; nothing else in the probe depends on
-// the exact binary. None of the modules carries an Xfb execution mode - that is the
-// probe's subject, see PrimitivesGeneratedNoXfbProbe.cpp.
+// None of the modules carries an Xfb execution mode - that is the probe's subject, see
+// PrimitivesGeneratedNoXfbProbe.cpp.
 
 #pragma once
 #include <cstddef>

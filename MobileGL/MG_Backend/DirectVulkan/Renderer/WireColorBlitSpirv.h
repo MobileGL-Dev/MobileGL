@@ -1,6 +1,11 @@
-// Generated from WireColorBlit.vert / WireColorBlit.frag with:
-// glslangValidator -V --target-env vulkan1.0 -o <stage>.spv <source>
-// Validated with spirv-val --target-env vulkan1.0. Do not edit the words by hand.
+// Generated from WireColorBlit.vert / WireColorBlit.frag (Vulkan 1.0 / SPIR-V 1.0) by
+// scripts/bake_internal_shaders.py, which runs MG_Test's BakedInternalShadersTest with the
+// IN-TREE glslang and splices the words it emits into the arrays below. Do not edit the words
+// by hand: MOBILEGL_BAKED_INTERNAL_SHADERS (the same test, run as a gate) recompiles every
+// source in its table and reds on the first word that disagrees.
+//
+// These words were hand-run through glslangValidator before that gate existed, and the gate
+// reproduces them exactly - which is the one thing nobody could have known beforehand.
 #pragma once
 
 static constexpr Uint32 kWireColorBlitVertexSpirv[] = {

@@ -2710,6 +2710,26 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_MIPMAP=${shaderMipTier}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-shadermip${mglItestArmLogTag}-tier${shaderMipTier}.log")
         endforeach()
+        # The DEPTH half of the same knob (CONTRACT-P7 §5.1 (A)). ONE TIER, not two: the depth
+        # pass renders into a depth ATTACHMENT view of the destination level, which a depth
+        # image always has usage for - there is no "cannot be attached" shape to force, so
+        # tier 2 would register a second copy of tier 1's run.
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.${mglItestArm}.DepthMip."
+            TEST_FILTER "F1WireScenario.GenerateMipmapDepthWithoutNativeBlitPixels"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ${mglItestArmProperties}
+                ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_MIPMAP=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-depthmip${mglItestArmLogTag}.log")
+        # NO KNOB on the decline: it is decided on the aspect before the blit-support question
+        # is asked, so the plain Fm environment reaches it on every driver.
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.${mglItestArm}.Fm."
+            TEST_FILTER "F1WireScenario.GenerateMipmapDepthStencilDeclinesAndKeepsTheSession"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ${mglItestArmProperties}
+                ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-dsmipdecline${mglItestArmLogTag}.log")
     endforeach()
 endif()
 

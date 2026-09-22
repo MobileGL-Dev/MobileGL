@@ -3445,6 +3445,7 @@ void main() {
         CollectWireObjects(m_submitCounter, true);
         ClearAllWireDrawPassCaches();
         DestroyWireColorBlitResources();
+        DestroyWireDepthMipmapResources();
 #endif
         OnSubmitsCompletedUpTo(m_submitCounter);
         DestroySubmitFencePool();
@@ -7877,6 +7878,9 @@ void main() {
     #include "WireFramebuffer.inc"
     #include "WireTextureReadback.inc"
     #include "WireColorBlit.inc"
+    // AFTER WireColorBlit.inc: the depth mip reuses that file's window-Y convention and is
+    // written to be read beside it.
+    #include "WireDepthMipmap.inc"
     #include "WireDraw.inc"
 
     void VulkanRenderer::Clear(GLbitfield mask) {

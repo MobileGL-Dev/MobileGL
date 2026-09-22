@@ -500,6 +500,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         struct WireColorBlitResources;
         WireColorBlitResources* m_wireColorBlitResources = nullptr;
         void DestroyWireColorBlitResources();
+        // P7 wave 2-B, CONTRACT-P7 §5.1 (A): the baked depth-mip program (WireDepthMipmap.inc).
+        // One level of a depth chain, source and destination being two depth subresources of
+        // the same image; the caller loops. It owns no frontend object, which is what the
+        // monolith arm's GenerateDepthMipmapWithShader cannot say.
+        Bool GenerateWireDepthMipLevel(WireImage source, WireImage destination);
+        struct WireDepthMipmapResources;
+        WireDepthMipmapResources* m_wireDepthMipmapResources = nullptr;
+        void DestroyWireDepthMipmapResources();
         void ReadWirePixels(GLint x, GLint y, GLsizei width, GLsizei height,
                             GLenum format, GLenum type, void* pixels);
         void GenerateWireMipmap();

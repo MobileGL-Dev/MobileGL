@@ -560,6 +560,109 @@ TEST_F(F1WireScenario, GenerateMipmapDepthPixels) {
     EXPECT_NEAR(pixel, 0.375f, 0.00001f);
 }
 
+// P7 wave 2-B, CONTRACT-P7 §5.1 (A): the baked depth mip program, on the two GL depth formats
+// that reach it as a depth-only Vulkan aspect (DEPTH_COMPONENT24 -> X8_D24_UNORM_PACK32,
+// DEPTH_COMPONENT32F -> D32_SFLOAT). GenerateMipmapDepthPixels above passes on this host
+// because lavapipe blits depth natively; the knob removes that arm, which is what an Adreno
+// does by itself - VK_FORMAT_FEATURE_BLIT_DST is OPTIONAL for depth formats, so a depth chain
+// through a shader is the ordinary case and not the exotic one.
+//
+// TWO HALVES AND A BAND THAT IS NOT ASSERTED. The generated level is read back through a real
+// sampled attachment, so a flat fill would prove nothing: the source is split at its middle
+// row instead. The ported filter takes a 2x2 box at ivec2(texCoord * srcTexelSize), which
+// lands half a texel off the destination centre - the monolith's own arithmetic, kept
+// deliberately (§3.2 retires a refusal by matching that arm, defects included). Under either
+// reading of that half texel, destination rows 0..2 come only from the lower half and rows
+// 4..7 only from the upper half; row 3 is the straddle and is the one row this case does not
+// pin, because pinning it would assert the half-texel offset rather than the mip.
+TEST_F(F1WireScenario, GenerateMipmapDepthWithoutNativeBlitPixels) {
+    if (!Ready()) return;
+    const std::string tier = SplitLane::MarkerValue("MGITEST_MAGMA_FORCE_SHADER_MIPMAP");
+    if (tier.empty())
+        GTEST_SKIP() << "MGITEST_MAGMA_FORCE_SHADER_MIPMAP is unset: this driver blits depth "
+                        "natively, so the baked depth mip program under test is not entered";
+    for (const GLenum internalFormat : {GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT32F}) {
+        GLuint depth = 0;
+        glGenTextures(1, &depth);
+        glBindTexture(GL_TEXTURE_2D, depth);
+        glTexStorage2D(GL_TEXTURE_2D, 5, internalFormat, 16, 16);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depth, 0);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+        ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE))
+            << "format 0x" << std::hex << internalFormat;
+        glDepthMask(GL_TRUE);
+        glDisable(GL_SCISSOR_TEST);
+        glClearDepth(0.75);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(0, 0, 16, 8);
+        glClearDepth(0.25);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glDisable(GL_SCISSOR_TEST);
+        const auto before = PeekSplitRuntime().emitSeq;
+        glGenerateMipmap(GL_TEXTURE_2D);
+        ASSERT_GT(PeekSplitRuntime().emitSeq, before) << "F1.DepthMip.wire";
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depth, 1);
+        ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+        GLfloat rows[8]{};
+        glReadPixels(2, 0, 1, 8, GL_DEPTH_COMPONENT, GL_FLOAT, rows);
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.DepthMip.error";
+        for (int row = 0; row < 8; ++row) {
+            if (row == 3) continue;
+            const GLfloat expected = row < 3 ? 0.25f : 0.75f;
+            EXPECT_NEAR(rows[row], expected, 0.002f)
+                << "F1.DepthMip.pixels tier=" << tier << " format=0x" << std::hex << internalFormat
+                << std::dec << " row=" << row;
+        }
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+        glDeleteTextures(1, &depth);
+        glBindTexture(GL_TEXTURE_2D, texture);
+    }
+    glClearDepth(1.0);
+}
+
+// The OTHER half of `depth-stencil-mipmap@P7`, and it is a decline rather than a retirement
+// (CONTRACT-P7 §3.2): a combined depth/stencil texture has no mip generation on EITHER arm -
+// the monolith's shader fallback asserts depth-only, and an assert is nothing in the release
+// build both arms ship as. What this case pins is that the wire arm now says so and carries
+// on, rather than taking the session down: no GL error, the session still alive afterwards,
+// and level zero still holding what was cleared into it.
+//
+// No knob: the decline is decided on the ASPECT, before the blit-support question is asked,
+// so it fires on every driver.
+// Red once (executed, reverted): restore the MagmaWireFatal and this case dies with
+// Fatal{UnmigratedVerb, "Magma:depth-stencil-mipmap@P7"}.
+TEST_F(F1WireScenario, GenerateMipmapDepthStencilDeclinesAndKeepsTheSession) {
+    if (!Ready()) return;
+    GLuint depthStencil = 0;
+    glGenTextures(1, &depthStencil);
+    glBindTexture(GL_TEXTURE_2D, depthStencil);
+    glTexStorage2D(GL_TEXTURE_2D, 4, GL_DEPTH24_STENCIL8, 8, 8);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, depthStencil, 0);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    glDepthMask(GL_TRUE);
+    glDisable(GL_SCISSOR_TEST);
+    glClearDepth(0.5);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.DepthStencilMip.error";
+    // The session is what the retired Fatal used to take with it. A readback is a round trip
+    // through the server, so it answers that question and the level-zero one at once.
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, depthStencil, 0);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    GLfloat level0 = 0;
+    glReadPixels(1, 1, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &level0);
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.DepthStencilMip.readback";
+    EXPECT_NEAR(level0, 0.5f, 0.002f) << "F1.DepthStencilMip.level0";
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+    glDeleteTextures(1, &depthStencil);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glClearDepth(1.0);
+}
+
 TEST_F(F1WireScenario, GenerateMipmapHonorsMutableBaseAndMaxWithoutChangingOtherLevels) {
     if (!Ready()) return;
     const std::array<GLubyte, 4> colors[5] = {

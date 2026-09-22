@@ -828,10 +828,26 @@
         if (base >= fullLevelCount) MagmaWireFatal("mipmap-base-extent");
         const Uint32 count = std::min(logicalEnd - logicalBase, fullLevelCount - base);
         if (count <= 1) return;
+        // P7 wave 2-B, CONTRACT-P7 §3.2: `depth-stencil-mipmap@P7` RETIRES FOR DEPTH AND
+        // DECLINES FOR DEPTH|STENCIL - and the decline comes BEFORE the chain is grown, so a
+        // level this verb is not going to fill is not created and then recorded as defined.
+        //
+        // The combined case is a decline rather than a Fatal because the monolith arm does no
+        // better: its shader fallback asserts depth-only (VulkanRenderer.cpp's GenerateMipmap,
+        // "shader fallback only supports depth-only textures") and an assert is nothing in the
+        // release build both arms ship as. Nothing in GL promises a stencil mip either - the
+        // pass writes gl_FragDepth and would leave the stencil aspect of the level it produced
+        // undefined, which is worse than leaving the whole level alone and saying so.
+        if (resource->aspect != VK_IMAGE_ASPECT_COLOR_BIT && resource->aspect != VK_IMAGE_ASPECT_DEPTH_BIT) {
+            MGLOG_E_ONCE("DirectVulkan::GenerateWireMipmap: aspect 0x%x (a combined depth/stencil or "
+                         "stencil-only texture, format %d) has no mip generation on either arm; "
+                         "declining and leaving levels %u..%u as they are",
+                         static_cast<Uint32>(resource->aspect), static_cast<Int>(resource->format),
+                         base + 1, base + count - 1);
+            return;
+        }
         if (!m_textureManager->GrowWireTextureMipChain(handle,base+count,frame.commandBuffer))
             MagmaWireFatal("mipmap-growth");
-        if (resource->aspect != VK_IMAGE_ASPECT_COLOR_BIT && resource->aspect != VK_IMAGE_ASPECT_DEPTH_BIT)
-            MagmaWireFatal("depth-stencil-mipmap@P7");
         VkFormatProperties props{};
         const VkFormat format = viewFormat == VK_FORMAT_UNDEFINED ? resource->format : viewFormat;
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle,format,&props);
@@ -841,7 +857,52 @@
                                 (props.optimalTilingFeatures & required) == required;
         const VkFilter filter = props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT ?
                                 VK_FILTER_LINEAR : VK_FILTER_NEAREST;
-        if (!nativeBlit) {
+        if (!nativeBlit && resource->aspect == VK_IMAGE_ASPECT_DEPTH_BIT) {
+            // P7 wave 2-B, CONTRACT-P7 §5.1 (A): THE DEPTH ARM, and it is first because a
+            // depth format without BLIT_DST is the ordinary case, not the exotic one -
+            // VK_FORMAT_FEATURE_BLIT_DST is optional for depth and plenty of devices decline
+            // it. Before this package the whole branch below was colour-only, so such a
+            // texture reached `mipmap-shader-format-or-shape` on its very first disjunction
+            // while the monolith arm quietly generated the chain with a shader.
+            //
+            // The per-level pass is WireDepthMipmap.inc's, which is the monolith's fragment
+            // shader with the monolith's arithmetic on a baked pipeline that owns no frontend
+            // object - §3.2's "observably the monolith's" without the GL program the monolith
+            // needs to get there.
+            if (baseLayer >= resource->arrayLayers || layerCount > resource->arrayLayers - baseLayer)
+                MagmaWireFatal(MagmaWireShapeDetail("mipmap-shader-format-or-shape", format,
+                    resource->format, props, resource->aspect, resource->viewType,
+                    resource->usageFlags, resource->extent, resource->depth, resource->mipLevels,
+                    baseLayer, layerCount, resource->arrayLayers).c_str());
+            for (Uint32 level = base + 1; level < base + count; ++level) {
+                for (Uint32 layer = baseLayer; layer < baseLayer + layerCount; ++layer) {
+                    WireImage source{};
+                    source.image = resource->image;
+                    source.format = format;
+                    source.aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+                    source.layout = resource->layout;
+                    source.trackedLayout = &resource->layout;
+                    source.levels = resource->mipLevels;
+                    source.level = level - 1;
+                    source.layer = layer;
+                    source.extent = {std::max(resource->extent.width >> (level - 1), 1u),
+                                     std::max(resource->extent.height >> (level - 1), 1u)};
+                    WireImage destination = source;
+                    destination.level = level;
+                    destination.extent = {std::max(resource->extent.width >> level, 1u),
+                                          std::max(resource->extent.height >> level, 1u)};
+                    // The pass reports the SHAPE it cannot take (1D, 3D, multisample, a
+                    // format without sampled or depth-attachment support), so the refusal
+                    // keeps its name and gains the reason.
+                    if (!GenerateWireDepthMipLevel(source, destination))
+                        MagmaWireFatal(MagmaWireShapeDetail("mipmap-shader-format-or-shape", format,
+                            resource->format, props, resource->aspect, resource->viewType,
+                            resource->usageFlags, resource->extent, resource->depth,
+                            resource->mipLevels, baseLayer, layerCount,
+                            resource->arrayLayers).c_str());
+                }
+            }
+        } else if (!nativeBlit) {
             // Packed floating-point color formats may support sampling and
             // rendering without BLIT_DST. Generate from actual GPU mip contents
             // through the native shader pass; no client or staged texels enter.
