@@ -114,6 +114,119 @@ namespace MobileGL::MG_Remote::Client {
         //     crashes honestly instead of refaulting forever). The page's own bit is
         //     the discriminator - see RefaultOfANonWriteAccess.
 
+        // THE TWO ADDRESS SPACES THIS MODULE STRADDLES, AND THE ONE ROW WHERE THEY MEET.
+        // Bionic tags every heap pointer on a TBI-capable arm64 - POINTER_TAG 0xb4 in the
+        // top byte, turned on process-wide by PR_TAGGED_ADDR_ENABLE for every app built
+        // against a recent target SDK - so the shadow pointer MappedData() hands back, and
+        // with it every base/end this table publishes, carries that tag. THE KERNEL DOES
+        // NOT: a fault's si_addr is the untagged faulting virtual address. The tombstone of
+        // the crash that found this prints both forms of the one address on adjacent lines -
+        // "x0 b4000073ac9a5000" (the pointer the application was writing through) against
+        // "fault addr 0x00000073ac9a5000" (what the kernel put in si_addr).
+        //
+        // Comparing one space against the other makes `address < base` true for EVERY fault,
+        // so ownership test (2) never matched, every fault on a page this module had itself
+        // protected was chained to debuggerd, and the process died on the application's FIRST
+        // legitimate write through a persistent write map. It is invisible on x86-64, which
+        // has no top-byte tag, which is why every host lane stayed green while all three
+        // heavy-persistent-map traces died on the phone (device window #1, E0a/E1/E4a/E4b).
+        //
+        // So the table stores NORMALISED addresses and the handler normalises si_addr before
+        // it compares: one space, fixed at the two doors into this file. Protecting through a
+        // normalised base is exactly what protecting through the tagged one did - mprotect
+        // untags its own address argument (do_mprotect_pkey's untagged_addr) - and every
+        // other use of base/end here is either an mprotect or a difference against a shadow
+        // base normalised the same way, so nothing else has to change. Pointer DEREFERENCES
+        // keep the tagged pointer they came from (PushBlocksFor's two edge hashes), because
+        // under a future MTE tagging level the tag is load-bearing for the access itself.
+        // THE MASK IS NOT GUARDED BY THE ARCHITECTURE, deliberately, and that is what makes
+        // the defect reachable from a gate. Bits 56-63 of a 64-bit userspace address are a
+        // tag on arm64 and are ZERO everywhere else this builds: Linux/x86-64 caps
+        // TASK_SIZE_MAX below 2^56 even with five-level paging, so masking them off is the
+        // identity on the host and the fix on the phone. Written as one arch-independent row
+        // so a host unit case can drive it with the device's own two addresses - an
+        // `#if defined(__aarch64__)` here would have made the only gate that can catch this
+        // a gate that never runs in CI, which is how it got to the device in the first place.
+        constexpr uintptr_t UntagAddress(uintptr_t address) {
+            if constexpr (sizeof(uintptr_t) >= 8) {
+                return address & ((static_cast<uintptr_t>(1) << 56) - 1);
+            } else {
+                // 32-bit: there is no top byte to lose and the shift above would be UB.
+                return address;
+            }
+        }
+
+        // Ownership test (2), as ONE row that the handler and the unit test both read, in
+        // the kernel's address space. `faultAddress` is si_addr exactly as delivered.
+        Bool SlotOwnsFault(const TrackedWriteMap& slot, uintptr_t faultAddress, SizeT& pageIndexOut) {
+            const uintptr_t base = UntagAddress(slot.base.load(std::memory_order_acquire));
+            if (base <= kSlotSettingUp) return false;
+            const uintptr_t address = UntagAddress(faultAddress);
+            if (address < base) return false;
+            // The handler reads base first, so a base it can observe is one whose end is
+            // already visible - the publish order in TrackWriteMap is what makes that true.
+            const uintptr_t end = UntagAddress(slot.end.load(std::memory_order_acquire));
+            if (address >= end) return false;
+            pageIndexOut = (address - base) >> kPageShift;
+            return true;
+        }
+
+        // THE DECLINE RECORD. A fault this handler chains away is, for a page the tracker
+        // itself protected, a process kill with no evidence anywhere: debuggerd's tombstone
+        // names the application's memcpy and says nothing about who took the page's write
+        // permission away. So a decline leaves a record before it chains. Written with
+        // relaxed atomic stores and read back by DeclinedFaultReport() on the GL thread -
+        // every operation here is async-signal-safe, which rules out MGLOG (it formats and
+        // takes a lock) and leaves the raw write(2) below for the case where nothing on the
+        // GL thread ever runs again.
+        std::atomic<Uint64> g_declinedFaults{0};
+        std::atomic<uintptr_t> g_declinedFaultAddress{0};
+        std::atomic<uintptr_t> g_declinedFaultNearestBase{0};
+        std::atomic<uintptr_t> g_declinedFaultNearestEnd{0};
+        std::atomic<Bool> g_declinedFaultAnnounced{false};
+
+        // Async-signal-safe hex, because snprintf is not on the safe list and this runs in a
+        // handler that is about to hand the process to debuggerd.
+        SizeT AppendHex(char* out, SizeT at, uintptr_t value) {
+            out[at++] = '0';
+            out[at++] = 'x';
+            Bool leading = true;
+            for (int shift = 60; shift >= 0; shift -= 4) {
+                const unsigned digit = static_cast<unsigned>((value >> shift) & 0xf);
+                if (digit == 0 && leading && shift != 0) continue;
+                leading = false;
+                out[at++] = static_cast<char>(digit < 10 ? '0' + digit : 'a' + (digit - 10));
+            }
+            return at;
+        }
+
+        SizeT AppendText(char* out, SizeT at, const char* text) {
+            while (*text != '\0') out[at++] = *text++;
+            return at;
+        }
+
+        // One line, once per process, straight to fd 2. It is the only channel a chained
+        // fault has: the next thing that happens is debuggerd's tombstone and then exit.
+        void AnnounceDeclinedFault(uintptr_t address, uintptr_t nearestBase, uintptr_t nearestEnd) {
+            Bool expected = false;
+            if (!g_declinedFaultAnnounced.compare_exchange_strong(expected, true)) return;
+            // 283 bytes at the longest (two full 16-digit addresses plus the two literals);
+            // the slack is deliberate, because this formats inside a signal handler where an
+            // overrun would be the second bug in the same crash.
+            char line[384];
+            SizeT at = AppendText(line, 0,
+                                  "MGPipe: persistent-map tracker DECLINED a SEGV_ACCERR as foreign - si_addr=");
+            at = AppendHex(line, at, address);
+            at = AppendText(line, at, " nearest-tracked=[");
+            at = AppendHex(line, at, nearestBase);
+            at = AppendText(line, at, ",");
+            at = AppendHex(line, at, nearestEnd);
+            at = AppendText(line, at,
+                            ") - if si_addr lies inside that span with the top byte masked off, the "
+                            "table published a TAGGED base against an UNTAGGED fault address\n");
+            (void)::write(2, line, at);
+        }
+
         uintptr_t FaultPcFrom(void* ucontext) {
 #if defined(__aarch64__)
             return static_cast<uintptr_t>(
@@ -225,14 +338,24 @@ namespace MobileGL::MG_Remote::Client {
                 // scan is what makes the claim checkable rather than assumed.
                 Bool matched = false;
                 Bool bitWasSet = false;
+                uintptr_t nearestBase = 0;
+                uintptr_t nearestEnd = 0;
                 for (SizeT i = 0; i < kMaxTrackedMaps; ++i) {
-                    const uintptr_t base =
-                        g_trackedMaps[i].base.load(std::memory_order_acquire);
-                    if (base <= kSlotSettingUp || address < base) continue;
-                    const uintptr_t end =
-                        g_trackedMaps[i].end.load(std::memory_order_acquire);
-                    if (address >= end) continue;
-                    const SizeT pageIndex = (address - base) >> kPageShift;
+                    SizeT pageIndex = 0;
+                    if (!SlotOwnsFault(g_trackedMaps[i], address, pageIndex)) {
+                        // Kept only to name the mapping in the decline record below: the
+                        // first live slot is enough to tell "nothing was tracked at all"
+                        // apart from "something was tracked and the comparison missed it".
+                        if (nearestBase == 0) {
+                            const uintptr_t base =
+                                g_trackedMaps[i].base.load(std::memory_order_acquire);
+                            if (base > kSlotSettingUp) {
+                                nearestBase = base;
+                                nearestEnd = g_trackedMaps[i].end.load(std::memory_order_acquire);
+                            }
+                        }
+                        continue;
+                    }
                     std::atomic<Uint64>* bits = g_trackedMaps[i].pageBits;
                     if (bits != nullptr) {
                         const Uint64 mask = 1ull << (pageIndex & 63);
@@ -251,10 +374,20 @@ namespace MobileGL::MG_Remote::Client {
                     g_faultEpoch.fetch_add(1, std::memory_order_release);
                     // Un-arm is a raw syscall, deliberately not the libc wrapper's
                     // bookkeeping: the handler's whole job is to get out of the way.
-                    mprotect(reinterpret_cast<void*>(address & ~(kPageBytes - 1)),
+                    mprotect(reinterpret_cast<void*>(UntagAddress(address) & ~(kPageBytes - 1)),
                              kPageBytes, PROT_READ | PROT_WRITE);
                     return;
                 }
+                // A SEGV_ACCERR this handler does not own. Legitimate (the JVM's implicit
+                // null checks land here every time), so it is recorded and chained, never
+                // refused - but recorded, because the ONE case where it is not legitimate
+                // is a page this module protected and then failed to recognise, and that
+                // case is otherwise a tombstone with no mention of the tracker at all.
+                g_declinedFaults.fetch_add(1, std::memory_order_relaxed);
+                g_declinedFaultAddress.store(address, std::memory_order_relaxed);
+                g_declinedFaultNearestBase.store(nearestBase, std::memory_order_relaxed);
+                g_declinedFaultNearestEnd.store(nearestEnd, std::memory_order_relaxed);
+                if (nearestBase != 0) AnnounceDeclinedFault(address, nearestBase, nearestEnd);
             }
             ChainToPreviousSegvHandler(sig, info, ucontext);
         }
@@ -345,7 +478,12 @@ namespace MobileGL::MG_Remote::Client {
             //   arm, where as an "untracked" member it would veto the epoch skip for every
             //   tracked buffer in the process (measured on device); end is clamped up to
             //   base so the [base, end) arithmetic never underflows.
-            const uintptr_t shadowBase = reinterpret_cast<uintptr_t>(shadow);
+            // NORMALISED AT THE DOOR (UntagAddress): everything this function publishes is
+            // compared against si_addr one day, and si_addr is the kernel's untagged
+            // address. Nothing below may reconstruct a pointer from these - the only
+            // consumers are mprotect, which untags its own argument, and differences
+            // against a shadow base PushBlocksFor normalises the same way.
+            const uintptr_t shadowBase = UntagAddress(reinterpret_cast<uintptr_t>(shadow));
             const uintptr_t rawBegin = shadowBase + rangeBegin;
             const uintptr_t rawEnd = shadowBase + rangeEnd;
             constexpr uintptr_t kPageMask = ~static_cast<uintptr_t>(kPageBytes - 1);
@@ -408,10 +546,11 @@ namespace MobileGL::MG_Remote::Client {
                 // once" rule the hash arm keeps: the server has never seen these bytes,
                 // so the first push must ship the whole interior, not just the pages the
                 // application happened to write first. The first push then clears and
-                // re-arms page by page, and the set-bit read the fault discriminator
-                // does on a pre-first-push fault is answered once and unprotected -
-                // harmless, and the invariant (bit set <=> writable) holds from the
-                // first push onward. The last word is masked: a set bit past pageCount
+                // re-arms page by page. Nothing is protected until it does, so every set
+                // bit here names a page that IS writable and the invariant the fault
+                // discriminator rests on - bit set <=> page writable - holds from this
+                // line onward rather than only from the first push. The last word is
+                // masked: a set bit past pageCount
                 // would re-arm a page outside the protected span - past the shadow's
                 // extent, a foreign page, which is the process-killer both alignments
                 // exist to keep out.
@@ -423,11 +562,29 @@ namespace MobileGL::MG_Remote::Client {
                         bitsInWord == 64 ? ~0ull : ((1ull << bitsInWord) - 1),
                         std::memory_order_relaxed);
                 }
-                if (end > base &&
-                    mprotect(reinterpret_cast<void*>(base), end - base, PROT_READ) != 0) {
-                    g_trackedMaps[i].base.store(0, std::memory_order_release);
-                    return false;
-                }
+                // AND THE RANGE IS *NOT* PROTECTED HERE. REGISTRATION ARMS NOTHING.
+                //
+                // It used to, and that is what let glMapBufferRange hand the application a
+                // pointer it could not write: AcquireMemoryRange sets m_isMapped, calls
+                // NotePersistentMapStateChanged - which lands here - and only THEN returns
+                // Bytes() + range.start (BufferObject.cpp:913-965). With an mprotect on this
+                // line, the returned range was PROT_READ before the caller ever saw it, and
+                // the application's first write was a fault that only the handler could
+                // rescue. A client may not hand out a pointer whose writability depends on a
+                // signal handler reaching the writing thread: the application is free to
+                // write a mapped arena from a worker thread that blocks every signal (the
+                // chunk builders this tracker exists for do exactly that), and a fault there
+                // with SIGSEGV blocked is an immediate, undebuggable process kill.
+                //
+                // Nothing is lost by waiting. Every bit was just SET, so the first push ships
+                // the whole interior no matter what faults before it, and it is that push
+                // that arms the pages (PushBlocksFor: clear the bit, mprotect PROT_READ, read
+                // the bytes) - which is where the dirty tracking has its first real question
+                // to ask. Arming here could only ever have produced faults whose answer was
+                // already known, one per page of the map: 6144 of them for the 24 MB arena
+                // that crashed on the device. The invariant the rest of this file rests on -
+                // bit set <=> page writable - is now true from registration onwards as well,
+                // where before it was knowingly false for the whole pre-first-push window.
                 // Publish order is end, then base: the handler reads base first, and a base
                 // it can observe is only ever one whose end is already visible.
                 g_trackedMaps[i].end.store(end, std::memory_order_release);
@@ -439,6 +596,26 @@ namespace MobileGL::MG_Remote::Client {
                 // protected until something else faults - "first push ships everything
                 // once" would then be true only of the read-only verbs' whole push.
                 g_faultEpoch.fetch_add(1, std::memory_order_release);
+                // NAME THE FIRST MAPPING, ONCE PER PROCESS. This module's whole failure mode
+                // is silent - a range it protected, a fault it did not recognise, a tombstone
+                // that names the application's memcpy - and the device run that found it had
+                // no line anywhere saying a mapping had even been registered, let alone at
+                // what address, in whose allocation, or with which top byte. One line at the
+                // first registration costs nothing and carries every field the next
+                // unexplained SEGV_ACCERR on this device needs: the allocator, the pointer the
+                // application will be handed, its tag, the extent that pointer owns, the span
+                // this table published, and which alignment arm produced it.
+                const uintptr_t tagged = reinterpret_cast<uintptr_t>(shadow);
+                MGLOG_I_ONCE("MGPipe: persistent-map tracker armed (first map): lifetime=%llu "
+                             "allocator=MapAlignedAllocator shadow=0x%llx tag=0x%02llx extent=%zu "
+                             "range=[%zu,%zu) tracked=[0x%llx,0x%llx) pages=%zu align=%s "
+                             "handed-out-writable=yes (pages arm at the first push, never here)",
+                             static_cast<unsigned long long>(lifetimeId),
+                             static_cast<unsigned long long>(tagged),
+                             static_cast<unsigned long long>(tagged >> 56), shadowExtent, rangeBegin,
+                             rangeEnd, static_cast<unsigned long long>(base),
+                             static_cast<unsigned long long>(end), pageCount,
+                             outward ? "outward" : "inward");
                 return true;
             }
             MGLOG_W("MGPipe: the mprotect tracker is full (%zu live persistent write maps); "
@@ -616,6 +793,35 @@ namespace MobileGL::MG_Remote::Client {
         ResetCountersForTest();
     }
 
+    uintptr_t PersistentMapTracker::UntagAddressForTest(uintptr_t address) {
+        return UntagAddress(address);
+    }
+
+    // The ownership row against a slot the caller composed, WITHOUT protecting anything: an
+    // x86-64 host has no top byte of its own, so the only way to drive the arm64 defect on
+    // the gate that has to catch it is to hand the real predicate the two addresses the
+    // device produced. A scratch slot, never one of the live ones - the handler scans
+    // g_trackedMaps concurrently and a test may not publish a base into it.
+    Bool PersistentMapTracker::OwnershipProbeForTest(uintptr_t slotBase, uintptr_t slotEnd,
+                                                     uintptr_t faultAddress, SizeT* pageIndexOut) {
+        TrackedWriteMap probe;
+        probe.base.store(slotBase, std::memory_order_relaxed);
+        probe.end.store(slotEnd, std::memory_order_relaxed);
+        SizeT pageIndex = 0;
+        const Bool owned = SlotOwnsFault(probe, faultAddress, pageIndex);
+        if (pageIndexOut != nullptr) *pageIndexOut = pageIndex;
+        return owned;
+    }
+
+    PersistentMapTracker::DeclinedFaultReport PersistentMapTracker::DeclinedFaults() {
+        DeclinedFaultReport report;
+        report.count = g_declinedFaults.load(std::memory_order_relaxed);
+        report.address = g_declinedFaultAddress.load(std::memory_order_relaxed);
+        report.nearestBase = g_declinedFaultNearestBase.load(std::memory_order_relaxed);
+        report.nearestEnd = g_declinedFaultNearestEnd.load(std::memory_order_relaxed);
+        return report;
+    }
+
     Bool PersistentMapTracker::MprotectArmAvailableForTest() {
         InstallWriteFaultHandler();
         return g_segvInstalled.load();
@@ -705,7 +911,14 @@ namespace MobileGL::MG_Remote::Client {
         if (tracked != nullptr) {
             const uintptr_t trackedBase = tracked->base.load(std::memory_order_acquire);
             const uintptr_t trackedEnd = tracked->end.load(std::memory_order_acquire);
-            const uintptr_t shadowBase = reinterpret_cast<uintptr_t>(buffer.MappedData());
+            // THE SAME NORMALISATION TrackWriteMap PUBLISHED WITH (UntagAddress), because
+            // every use of shadowBase below is a DIFFERENCE against trackedBase and the two
+            // must live in one address space. The bytes are read through `shadowBytes`, the
+            // tagged pointer as the allocator handed it out, and never by rebuilding a
+            // pointer from this value: an untagged pointer is fine to dereference under
+            // TBI, but it would be a tag fault the day heap tagging becomes real MTE.
+            const Uint8* const shadowBytes = buffer.MappedData();
+            const uintptr_t shadowBase = UntagAddress(reinterpret_cast<uintptr_t>(shadowBytes));
             if (trackedBase != 0 && trackedEnd > trackedBase && shadowBase != 0) {
                 // The protected span in buffer offsets: <= begin / >= end when aligned
                 // outward, >= begin / <= end when aligned inward. Both are read below only
@@ -740,7 +953,7 @@ namespace MobileGL::MG_Remote::Client {
                 };
                 if (interiorBegin > begin) {
                     const Uint64 edgeHash = XXH3_64bits(
-                        reinterpret_cast<const Uint8*>(shadowBase) + begin,
+                        shadowBytes + begin,
                         static_cast<size_t>(interiorBegin - begin));
                     if (edgeHash != tracked->edgeHashHead) {
                         tracked->edgeHashHead = edgeHash;
@@ -797,7 +1010,7 @@ namespace MobileGL::MG_Remote::Client {
                 }
                 if (interiorEnd < end) {
                     const Uint64 edgeHash = XXH3_64bits(
-                        reinterpret_cast<const Uint8*>(shadowBase) + interiorEnd,
+                        shadowBytes + interiorEnd,
                         static_cast<size_t>(end - interiorEnd));
                     if (edgeHash != tracked->edgeHashTail) {
                         tracked->edgeHashTail = edgeHash;

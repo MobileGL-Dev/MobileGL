@@ -174,6 +174,29 @@ namespace MobileGL::MG_Remote::Client {
                                                    SizeT rangeEnd, SizeT shadowExtent);
         static void UntrackForTest(Uint64 lifetimeId);
         static Uint64 FaultEpochForTest();
+        // Unit tests only, and the ONE row that carries the arm64 tagged-pointer defect: the
+        // kernel reports si_addr untagged while every base this table publishes comes from a
+        // bionic-tagged heap pointer, so the ownership test has to normalise both sides.
+        // UntagAddressForTest is that normalisation and OwnershipProbeForTest is the row
+        // itself, run against a slot the caller composes rather than a live one. Both are
+        // architecture-independent on purpose - the mask is the identity for every valid
+        // userspace address off arm64 - so a host CI lane can drive them with the device's
+        // own two addresses instead of the defect being reachable only on the phone.
+        static uintptr_t UntagAddressForTest(uintptr_t address);
+        static Bool OwnershipProbeForTest(uintptr_t slotBase, uintptr_t slotEnd, uintptr_t faultAddress,
+                                          SizeT* pageIndexOut);
+        // Unit tests and device triage: how many SEGV_ACCERRs the handler chained away as
+        // foreign, and the last one's si_addr beside the first live tracked span. Zero on a
+        // healthy client - the JVM's implicit null checks do land here, so a NON-zero count
+        // with a nearest-tracked span whose low 56 bits contain si_addr is the signature of
+        // the tagged/untagged mismatch and nothing else.
+        struct DeclinedFaultReport {
+            Uint64 count = 0;
+            uintptr_t address = 0;
+            uintptr_t nearestBase = 0;
+            uintptr_t nearestEnd = 0;
+        };
+        static DeclinedFaultReport DeclinedFaults();
 
     private:
         // One live member. tracked is the member's tracker slot when it is on the

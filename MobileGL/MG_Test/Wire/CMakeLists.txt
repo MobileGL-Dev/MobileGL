@@ -113,11 +113,15 @@ gtest_discover_tests(PipeWireCodecTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS un
 #   SurfaceControlFrameTest P5f fc: the value frame that replaced the control mailbox's
 #                          function-pointer payload, its wire codec against protocol.fbs's
 #                          SurfaceOp/SurfaceReply, and the two named refusals at the wire entry
+#   PersistentMapFaultTest P7 X1: the persistent-map tracker's two client-facing promises -
+#                          that its fault-ownership row runs in the KERNEL's address space
+#                          (arm64 tags every heap pointer, si_addr is untagged) and that a
+#                          map hands back a range writable without the handler
 #
 # THIS FILE IS THE PHASE'S ONE RECURRING MERGE CONFLICT, and it is the same-point-append shape
 # BRIEF §5's ownership table exists to prevent: three packages, three targets, one end-of-file.
 # The loop is what stops there being a fourth: a package adding a suite adds a NAME.
-foreach (wiretest IN ITEMS RemoteClientTest ServerLoopTest SessionHandshakeTest StagedTextureStoreTest SurfaceControlFrameTest)
+foreach (wiretest IN ITEMS RemoteClientTest ServerLoopTest SessionHandshakeTest StagedTextureStoreTest SurfaceControlFrameTest PersistentMapFaultTest)
     add_executable(${wiretest} ${wiretest}.cpp)
 
     target_include_directories(${wiretest} PRIVATE
