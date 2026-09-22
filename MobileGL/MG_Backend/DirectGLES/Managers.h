@@ -1029,6 +1029,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // resolver. A no-op for a base that is not this resource's server shadow.
         void RequireStagedCoverage(GLESBufferResource& resource, const Uint8* hostBase, SizeT start,
                                    SizeT end, const char* site);
+
+        // M-3's WHOLE-STORE predicate, and the GUARD every caller of RequireStagedCoverage over
+        // a whole-store read has to carry: true when the application DECLARED the store's
+        // content (glBufferData(size, data)), so a coverage gap is a missing record; false when
+        // it ORPHANED the store (glBufferData(size, NULL)), where every byte it has not staged
+        // since is undefined by its own declaration and the shadow's zero-fill is exactly what
+        // the monolith arm would have uploaded from MappedData(). Managers.cpp's pool-reuse
+        // ladder and DirectGLES.cpp's XFB scatter are its two callers and they must not be able
+        // to answer it differently.
+        Bool ResourceContentIsDeclared(MG_Pipe::MGPipeHandle res);
 #endif
 
         // MONOLITH GLUE, and named as such: the handle of a resource this backend is looking

@@ -2133,23 +2133,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const auto* record = ResourceRecordOf(res);
                 return record != nullptr ? static_cast<SizeT>(record->Desc.Width) : 0;
             }
-#if MOBILEGL_BUILD_DISAGGREGATED
-            // M-3's rule for the two WHOLE-STORE readers (v1 round 3). The descriptor is the
-            // application's own statement about the store: HasDefinedContent set means it SUPPLIED
-            // the content (glBufferData(size, data)), which under split arrives as resource_subdata
-            // records behind the respecify (table 1 row 19) - so a coverage gap at the draw is a
-            // MISSING RECORD and the zero-fill past the coverage is not the application's bytes.
-            // Clear means it ORPHANED the store (glBufferData(size, NULL), glBufferStorage(NULL)):
-            // every byte it has not staged since is UNDEFINED by its own declaration, the streaming
-            // idiom (orphan, partial glBufferSubData, draw) is the ordinary case, and uploading the
-            // shadow's zero-fill for the rest is exactly what the monolith arm uploads from
-            // MappedData(). Round 2 refused both shapes and aborted six LargeArenaAdoption /
-            // ResourceSubsystemControl entries on the joint by name (v1-v3.md 6).
-            Bool ResourceContentIsDeclared(MG_Pipe::MGPipeHandle res) {
-                const auto* record = ResourceRecordOf(res);
-                return record != nullptr && record->Desc.HasDefinedContent != 0;
-            }
-#endif
+            // ResourceContentIsDeclared MOVED OUT OF THIS ANONYMOUS NAMESPACE (P3b/P4b espryt
+            // D1 slice 1) to sit beside RequireStagedCoverage at namespace scope: the XFB
+            // scatter in DirectGLES.cpp has to ask the same M-3 question this file's pool-reuse
+            // ladder asks, and the two must not be able to answer it differently.
 
             void Ops_H_Create(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc) {
                 (void)res;
@@ -3051,6 +3038,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void RequireStagedCoverage(GLESBufferResource& resource, const Uint8* hostBase, SizeT start,
                                    SizeT end, const char* site) {
             ServerStaged().RequireCoverage(&resource, hostBase, start, end, site);
+        }
+
+        // M-3's rule for the WHOLE-STORE readers (v1 round 3). The descriptor is the
+        // application's own statement about the store: HasDefinedContent set means it SUPPLIED
+        // the content (glBufferData(size, data)), which under split arrives as resource_subdata
+        // records behind the respecify (table 1 row 19) - so a coverage gap at the draw is a
+        // MISSING RECORD and the zero-fill past the coverage is not the application's bytes.
+        // Clear means it ORPHANED the store (glBufferData(size, NULL), glBufferStorage(NULL)):
+        // every byte it has not staged since is UNDEFINED by its own declaration, the streaming
+        // idiom (orphan, partial glBufferSubData, draw) is the ordinary case, and uploading the
+        // shadow's zero-fill for the rest is exactly what the monolith arm uploads from
+        // MappedData(). Round 2 refused both shapes and aborted six LargeArenaAdoption /
+        // ResourceSubsystemControl entries on the joint by name (v1-v3.md 6).
+        //
+        // AT NAMESPACE SCOPE, not in the anonymous namespace it was written in (P3b/P4b espryt
+        // D1 slice 1): the XFB scatter guards ITS whole-store read with the same question, and
+        // a second spelling of "did the application declare these bytes" is how the pool-reuse
+        // ladder and the scatter end up disagreeing about one buffer.
+        Bool ResourceContentIsDeclared(MG_Pipe::MGPipeHandle res) {
+            const auto* record = ResourceRecordOf(res);
+            return record != nullptr && record->Desc.HasDefinedContent != 0;
         }
 #endif
 

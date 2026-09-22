@@ -1937,17 +1937,43 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
                         splitRes = target.handle;
                         splitResource = BufferImpl::FindBufferResourceForHandle(splitRes);
-                        const Uint8* hostBytes = splitResource != nullptr ? splitResource->hostBytes : nullptr;
-                        if (splitResource == nullptr || hostBytes == nullptr) {
+                        if (splitResource == nullptr) {
+                            // THE ONLY DISCARD LEFT, and it is the impossible one: this target
+                            // was recorded by BindBufferRange/Base against a handle the applier
+                            // had already minted a twin for, so no twin here means the slot
+                            // table and the capture list disagree about one resource. There is
+                            // no backendId to upload into either, so there is nothing to do but
+                            // name it.
                             MGLOG_E_ONCE("EndTransformFeedback: a scattered capture target (handle {%u,%u}) has "
-                                         "no server shadow to read the pre-capture bytes from; its capture is "
-                                         "discarded",
+                                         "no server twin at all; its capture is discarded",
                                          splitRes.Slot, splitRes.Gen);
                             continue;
                         }
-                        BufferImpl::RequireStagedCoverage(*splitResource, hostBytes, target.start, target.end,
-                                                          "xfb_scatter_pre_capture");
-                        Memcpy(staged.data(), hostBytes + target.start, rangeBytes);
+                        const Uint8* hostBytes = splitResource->hostBytes;
+                        // A NULL SHADOW IS NOT A LOST CAPTURE. It is the ORPHANED store
+                        // (glBufferData(size, NULL) with no resource_subdata since), which
+                        // M-3 declares legal: every byte the application has not staged is
+                        // UNDEFINED by its own declaration, and `staged` is already
+                        // value-initialised to zero - which is byte for byte what the monolith
+                        // arm scatters over when it reads a fresh MappedData(). Skipping the
+                        // Memcpy is therefore the WHOLE of the difference; skipping the TARGET
+                        // threw the varyings away and left the application's buffer holding its
+                        // pre-draw bytes under GL_NO_ERROR, the silent-loss class this file's
+                        // preamble exists to close. The streaming idiom that hits it - orphan,
+                        // partial glBufferSubData, capture into the rest - is ordinary.
+                        if (hostBytes != nullptr) {
+                            // Managers.cpp's pool-reuse ladder guards its whole-store
+                            // MGL_SERVER_STAGED_REQUIRE with exactly this predicate and for
+                            // exactly this reason: for a store whose content the application
+                            // SUPPLIED a coverage gap is a missing record and zero-filling past
+                            // it is silent data loss (Fatal by name); for an orphaned one the
+                            // gap is its own undefined content and the read is legal.
+                            if (BufferImpl::ResourceContentIsDeclared(splitRes)) {
+                                BufferImpl::RequireStagedCoverage(*splitResource, hostBytes, target.start,
+                                                                  target.end, "xfb_scatter_pre_capture");
+                            }
+                            Memcpy(staged.data(), hostBytes + target.start, rangeBytes);
+                        }
                     } else
 #endif
                     Memcpy(staged.data(), target.buffer->MappedData() + target.start, rangeBytes);

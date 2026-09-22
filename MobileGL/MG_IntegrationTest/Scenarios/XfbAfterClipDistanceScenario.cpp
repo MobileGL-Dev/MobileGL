@@ -331,9 +331,43 @@ void main (void)
         constexpr unsigned kSkipComponentCount = 4 * 4 + (1 + 2 + 3 + 4 + 1 + 2); // 16 values + 13 skipped
         constexpr unsigned kSkipVertexCount = 6;
 
+        // HOW THE CAPTURE BUFFER'S STORE IS DECLARED, which is the whole subject of the two
+        // orphan cases at the end of this file (P3b/P4b espryt D1 slice 1).
+        //
+        // glBufferData(size, data) DECLARES the content: the application supplied every byte,
+        // and under a transport those bytes reach the server as resource_subdata records behind
+        // the respecify, so a gap in the staged coverage is a MISSING RECORD. glBufferData(size,
+        // NULL) ORPHANS the store instead: the application has said, in the API, that every byte
+        // it does not upload afterwards is UNDEFINED. Both are ordinary - "orphan, upload part of
+        // it, capture into it" is the streaming idiom - and the scatter is a read-modify-write, so
+        // the two shapes are the difference between "read the old bytes" and "there are no old
+        // bytes to read, and the API says nobody may look".
+        enum class CaptureStoreShape {
+            Declared,        // glBufferData(size, prefill): every byte declared and staged.
+            OrphanedPartial, // glBufferData(size, NULL) + glBufferSubData over the FIRST HALF.
+            OrphanedWhole,   // glBufferData(size, NULL) and nothing staged at all.
+        };
+
+        // The floats the OrphanedPartial shape uploads: the first half of the records, so the
+        // buffer has a staged region and an unstaged one and the assertions can tell them apart.
+        constexpr unsigned kOrphanStagedFloats = (kSkipVertexCount / 2) * kSkipComponentCount;
+
+        // Is this component's offset WITHIN one record a captured varying rather than one of the
+        // gl_SkipComponents holes? The holes keep whatever the destination held, which past the
+        // staged region is undefined by the application's own declaration and must not be
+        // asserted; the varyings are the capture and must be there whatever the store's shape.
+        bool SkipComponentsIndexIsCaptured(unsigned indexInRecord) {
+            static const unsigned kValueOffsets[4] = {1, 8, 17, 25};
+            for (const unsigned offset : kValueOffsets) {
+                if (indexInRecord >= offset && indexInRecord < offset + 4) return true;
+            }
+            return false;
+        }
+
         // Runs skip_components and reports what came back. `outCaptured` is the raw
         // readback so a failure can say whether anything was written at all.
-        void RunSkipComponentsCapture(std::vector<float>& outCaptured, std::string* buildLog) {
+        void RunSkipComponentsCapture(std::vector<float>& outCaptured, std::string* buildLog,
+                                      CaptureStoreShape shape = CaptureStoreShape::Declared) {
             outCaptured.clear();
 
             const GLuint program = BuildProgram(kXfbVertexSource, kXfbFragmentSource, SkipComponentsVaryings(),
@@ -376,7 +410,21 @@ void main (void)
                 prefill[i] = -1.0f - static_cast<float>(i);
             }
             glBindBuffer(GL_ARRAY_BUFFER, captureBuffer);
-            glBufferData(GL_ARRAY_BUFFER, byteSize, prefill.data(), GL_STATIC_DRAW);
+            switch (shape) {
+            case CaptureStoreShape::Declared:
+                glBufferData(GL_ARRAY_BUFFER, byteSize, prefill.data(), GL_STATIC_DRAW);
+                break;
+            case CaptureStoreShape::OrphanedPartial:
+                // The streaming idiom: orphan the store, then upload only the part the
+                // application cares about keeping.
+                glBufferData(GL_ARRAY_BUFFER, byteSize, nullptr, GL_STATIC_DRAW);
+                glBufferSubData(GL_ARRAY_BUFFER, 0,
+                                static_cast<GLsizeiptr>(sizeof(float) * kOrphanStagedFloats), prefill.data());
+                break;
+            case CaptureStoreShape::OrphanedWhole:
+                glBufferData(GL_ARRAY_BUFFER, byteSize, nullptr, GL_STATIC_DRAW);
+                break;
+            }
             glBindBuffer(GL_ARRAY_BUFFER, 0);
 
             glEnable(GL_RASTERIZER_DISCARD);
@@ -468,6 +516,43 @@ void main (void)
             return ::testing::AssertionSuccess();
         }
 
+        // The orphaned store's weaker contract, checked exactly as far as the API allows.
+        //
+        // Below `stagedFloats` the destination's bytes are the application's - it uploaded them -
+        // so the FULL assertion holds: the varyings are the capture and the gl_SkipComponents
+        // holes still carry the pre-fill, which is the read-modify-write actually having read
+        // something. Above it the application declared the bytes undefined, so only the captured
+        // varyings are asserted; the holes are whatever the server had and are nobody's to check.
+        //
+        // WHAT THIS CATCHES, and it is the whole point of the two cases: the failure mode is not a
+        // wrong number, it is the pre-fill surviving where a varying belongs - the capture target
+        // silently dropped and the buffer left holding its pre-draw bytes under GL_NO_ERROR.
+        ::testing::AssertionResult CheckSkipComponentsOrphaned(const std::vector<float>& captured,
+                                                              unsigned stagedFloats) {
+            const std::vector<float> expected = SkipComponentsExpected();
+            if (captured.size() != expected.size()) {
+                return ::testing::AssertionFailure()
+                       << "readback size " << captured.size() << " != " << expected.size();
+            }
+            for (std::size_t i = 0; i < expected.size(); ++i) {
+                const bool isCaptured =
+                    SkipComponentsIndexIsCaptured(static_cast<unsigned>(i) % kSkipComponentCount);
+                if (i >= stagedFloats && !isCaptured) continue;
+                if (std::fabs(captured[i] - expected[i]) > 0.0125f) {
+                    ::testing::AssertionResult failure = ::testing::AssertionFailure();
+                    failure << (isCaptured ? "captured varying" : "preserved hole") << " at index " << i
+                            << (i < stagedFloats ? " (inside the uploaded region)" : " (past the uploaded region)")
+                            << ": got " << captured[i] << ", expected " << expected[i];
+                    if (isCaptured && std::fabs(captured[i] - (-1.0f - static_cast<float>(i))) <= 0.0125f) {
+                        failure << " - this component is still the PRE-FILL, so the capture never reached this "
+                                   "target at all";
+                    }
+                    return failure;
+                }
+            }
+            return ::testing::AssertionSuccess();
+        }
+
         // The harness turns "no context came up" into a clean skip, and a skip is
         // indistinguishable from a pass in a ctest summary. For this scenario that
         // is a hole rather than a courtesy: the defect it pins is DirectVulkan's
@@ -501,6 +586,46 @@ void main (void)
                 }
             }
         };
+
+        // ------------------------------------------- P3b/P4b espryt D1 slice 1: orphaned targets
+        //
+        // AN ORPHANED CAPTURE TARGET IS A LEGAL TARGET, and under a transport it was being thrown
+        // away. The scattered capture is a read-modify-write of the destination's PRE-CAPTURE
+        // bytes (the gl_SkipComponents holes have to keep them), and under split those bytes are
+        // the SERVER's staged shadow rather than a frontend MappedData(). A buffer the
+        // application orphaned and then only partly uploaded has no staged bytes for the rest -
+        // legitimately, because it declared them undefined - and the scatter read that as "this
+        // target has no pre-capture bytes, discard it", which is a total loss of the varyings
+        // under GL_NO_ERROR. The whole-store case (no upload at all) discarded silently; the
+        // partial one asked the staged-coverage assertion for a range wider than anything staged
+        // and died on Fatal{StageSnapshotTooNarrow, "xfb_scatter_pre_capture"}.
+        //
+        // The monolith arm has always been right here: `staged` is a value-initialised
+        // Vector<Uint8>, so an unreadable source means the scatter runs over zeroes and uploads
+        // them - which is byte for byte what it gets from a fresh MappedData(). Skipping the COPY
+        // is the whole of the difference between the two arms; skipping the TARGET was the bug.
+        //
+        // Both cases run on the split arms, where they are the red-once, and on the ambient
+        // monolith arms, where they are the control that says the expectation itself is right.
+        TEST_F(XfbAfterClipDistanceScenario, OrphanedCaptureTargetWithAPartialUploadKeepsItsVaryings) {
+            if (!Ready()) return;
+            std::vector<float> captured;
+            std::string log;
+            RunSkipComponentsCapture(captured, &log, CaptureStoreShape::OrphanedPartial);
+            EXPECT_TRUE(CheckSkipComponentsOrphaned(captured, kOrphanStagedFloats));
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+        }
+
+        TEST_F(XfbAfterClipDistanceScenario, OrphanedCaptureTargetWithNoUploadAtAllKeepsItsVaryings) {
+            if (!Ready()) return;
+            std::vector<float> captured;
+            std::string log;
+            RunSkipComponentsCapture(captured, &log, CaptureStoreShape::OrphanedWhole);
+            // Nothing was ever staged, so every hole is undefined and only the varyings are
+            // checked - which is still the entire capture.
+            EXPECT_TRUE(CheckSkipComponentsOrphaned(captured, 0));
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+        }
 
         // Control: the capture on its own must work.
         TEST_F(XfbAfterClipDistanceScenario, SkipComponentsCaptureAlone) {

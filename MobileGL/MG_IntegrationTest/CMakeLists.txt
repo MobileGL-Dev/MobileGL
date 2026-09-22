@@ -2274,6 +2274,22 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_register_split_arms("TriangleScenario.*" "")
     mgl_itest_register_split_arms("PersistentCoherentMapScenario.*" "")
 
+    # ---- P3b/P4b espryt D1 slice 1: THE ORPHANED XFB CAPTURE TARGET -------------------------
+    #
+    # The two cases whose whole subject is the split arm. A scattered capture is a
+    # read-modify-write of the destination's pre-capture bytes, and under a transport those bytes
+    # are the SERVER's staged shadow - so a buffer the application orphaned
+    # (glBufferData(size, NULL)) and only partly uploaded is the one shape where the shadow
+    # legitimately cannot answer for the whole range. The scatter used to read that as "discard
+    # this target": silently for a wholly orphaned store, and as
+    # Fatal{StageSnapshotTooNarrow, "xfb_scatter_pre_capture"} for a partly uploaded one.
+    #
+    # NARROW FILTER ON PURPOSE. The rest of XfbAfterClipDistanceScenario is a DirectVulkan
+    # allocation-pattern regression (its own header says so) and has never been run under a
+    # transport; slice 2 registers the whole scenario once the writeback event it posts is
+    # sliced. Registering it wholesale here would mix that slice's reds into this one's.
+    mgl_itest_register_split_arms("XfbAfterClipDistanceScenario.OrphanedCaptureTarget*" "Xfb.")
+
 
     # ---- P5e fix1: THE PUSH-MONOLITH ARM, INSIDE THE GATED SET (ID-107) ----------------------
     #
