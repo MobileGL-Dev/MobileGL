@@ -1569,6 +1569,38 @@ jobs:
         run: |
           ctest -L integration-magma-split --no-tests=error -j 2 --output-on-failure
 
+      # ---- P7 PACKAGE L: THE SAME MAGMA CASES IN TWO PROCESSES -----------------------------
+      #
+      # EXIT GATE 1's FIRST HALF, and until this package there was nothing to run: every arm of
+      # the split registration macro hardcoded MOBILEGL_BACKEND_TYPE=DirectGLES, so the shared
+      # `integration-split` / `-spawn` / `-tcp` labels held ZERO DirectVulkan entries and
+      # `integration-magma-split` was inproc by construction. These two lanes are the same
+      # scenarios the step above runs, with the transport as their one difference - so a red
+      # here that the step above did not see is a TWO-PROCESS fact and not a Magma one.
+      #
+      # THEY ARE GATED BECAUSE THEY MEASURED GREEN, and only for that reason: 52 of 52 entries
+      # on each arm, with the two ClipDistance cases skipping for the reason the inproc arm's
+      # allowlist already names. The 21 entries the inproc arm has and these do not are
+      # MagmaRunAheadScenario and MagmaWireCacheScenario, which are inproc-only BY
+      # CONSTRUCTION (they hold and peek THIS process's server loop); the CMakeLists and
+      # spawn_lane_parity.py both name them rather than widening a tolerance.
+      #
+      # THE INFORMATIONAL TIER - `integration-magma-all-{split,spawn,tcp}`, every scenario the
+      # split arms run, on Magma - IS DELIBERATELY NOT HERE. Its job is to be able to go red
+      # while CI stays green; a case moves into a gating step with the commit that retires its
+      # blocker.
+      - name: Integration-magma-spawn and -tcp - the same cases in two processes (P7 L)
+        working-directory: build-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_IPC_STRICT_ERRORS: "1"
+          MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
+        run: |
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          ctest -L '^integration-magma-spawn$' --no-tests=error -j 2 --output-on-failure
+          ctest -L '^integration-magma-tcp$' --no-tests=error -j 2 --output-on-failure
+
       - name: Magma application-buffer wire cases must all execute
         working-directory: build-split
         run: |
@@ -1604,6 +1636,68 @@ jobs:
           slp.require_green(json.load(open(sys.argv[2])), sys.argv[3],
                             ["DirectVulkan.Split.Buffers." + name for name in cases])
           PY
+
+      # P7 package L: THE SAME NINETEEN, BY NAME, IN TWO PROCESSES.
+      #
+      # `--no-tests=error` in the lane step above answers "did something run and pass"; it does
+      # not answer "did these nineteen run". require_green does, and it is the check that would
+      # catch the failure mode this package could plausibly introduce - an arm that registers
+      # SOME of the lane and goes green on a smaller set. The label spelling is what keeps the
+      # three arms apart under `ctest -L`'s regex: the inproc arm keeps the historical
+      # `integration-magma-buffers` (which is what the step above require_greens), and the new
+      # arms put the arm word FIRST, so neither selection can reach the other.
+      #
+      # TcpServer.Start / TcpServer.Stop ARE IN THE tcp ARM'S REQUIRED LIST ON PURPOSE. Every
+      # tcp entry declares FIXTURES_REQUIRED mobilegl-tcp, so ctest lists the supervisor's two
+      # fixture entries under the label as well - and they must be green too: a lane whose
+      # supervisor failed to start has nothing to say about the nineteen.
+      - name: Magma application-buffer wire cases must all execute on the spawn and tcp arms
+        working-directory: build-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+        run: |
+          for arm in spawn tcp; do
+            case "${arm}" in
+              spawn) prefix=DirectVulkan.Spawn.Buffers. ;;
+              tcp)   prefix=DirectVulkan.Tcp.Buffers. ;;
+            esac
+            label="integration-magma-${arm}-buffers"
+            ctest -L "^${label}$" --show-only=json-v1 > "${RUNNER_TEMP}/magma-buffer-${arm}.json"
+            ctest -L "^${label}$" --no-tests=error -j 2 --output-on-failure \
+              --output-junit "${RUNNER_TEMP}/magma-buffers-${arm}.xml"
+            python3 - "${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/split_log_paths.py" \
+              "${RUNNER_TEMP}/magma-buffer-${arm}.json" "${RUNNER_TEMP}/magma-buffers-${arm}.xml" \
+              "${prefix}" "${arm}" <<'PY'
+          import importlib.util, json, sys
+          spec = importlib.util.spec_from_file_location("slp", sys.argv[1])
+          slp = importlib.util.module_from_spec(spec); spec.loader.exec_module(slp)
+          cases = [
+              "F1WireScenario.EnabledVertexBufferDrawKeepsNamedP7Fatal",
+              "F1WireScenario.UniformBufferRangeAndRebindPixels",
+              "F1WireScenario.ShortUniformBufferRangePadsMissingBytes",
+              "F1WireScenario.ComputeWrittenVertexAndIndexBuffersDrawAndReadBack",
+              "F1WireScenario.ColorBlitToDefaultIgnoresViewportAndPreservesOrientation",
+              "F1WireScenario.ColorBlitToDefaultHonorsScissorAndReversedRect",
+              "IndexedDrawFamilyScenario.AnElementBufferDrawElementsOffsetSelectsTheRightQuad",
+              "IndexedDrawFamilyScenario.DrawElementsBaseVertexMovesTheSameIndicesToTheOtherQuad",
+              "IndexedDrawFamilyScenario.DrawRangeElementsDrawsTheRangedRun",
+              "IndexedDrawFamilyScenario.DrawElementsInstancedBaseVertexPaintsOneQuadPerInstance",
+              "IndexedDrawFamilyScenario.MultiDrawElementsBaseVertexPaintsEverySubDraw",
+              "IndexedDrawFamilyScenario.MultiDrawElementsIndirectDrawsFromTheIndirectBuffer",
+              "CrossFrameBufferScenario.VertexBufferSubData",
+              "CrossFrameBufferScenario.IndexBufferSubData",
+              "CrossFrameBufferScenario.VertexOrphanAndReupload",
+              "CrossFrameBufferScenario.IndexOrphanAndReupload",
+              "PersistentCoherentMapScenario.TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw",
+              "PersistentCoherentMapScenario.AWriteAfterAFrameBoundaryReachesTheNextFramesDraw",
+              "StorageBufferRegrowScenario.AGrownStoreIsVisibleThroughItsExistingIndexedBinding",
+          ]
+          required = [sys.argv[4] + name for name in cases]
+          if sys.argv[5] == "tcp":
+              required += ["TcpServer.Start", "TcpServer.Stop"]
+          slp.require_green(json.load(open(sys.argv[2])), sys.argv[3], required)
+          PY
+          done
 
       - name: Magma run-ahead must queue real GPU work and enforce credits 1 and 3
         working-directory: build-split
@@ -2587,6 +2681,20 @@ jobs:
           # resolves the image relative to nothing. Harmless on the inproc arm, which reads it
           # only to decide it does not need it.
           export MOBILEGL_IPC_SERVER_PATH="${GITHUB_WORKSPACE}/build-linux/libMobileGLServer.so"
+          # P7 package L: THE SAME THREE KNOBS THE MONOLITH RETRACE JOB EXPORTS FOR THIS ONE CASE.
+          # The iterationRP repairs are tri-state quirks that default to device auto-detection and
+          # lavapipe is on no auto list, so without them Program 203 runs unrepaired and misses its
+          # golden output. The monolith job has exported them since they landed; this job never
+          # did, so `iterationrp x DirectVulkan` was the one cell of the split matrix whose red
+          # could not be read as a transport fact - the monolith control it is compared against was
+          # running a different repair set. Exit gate 1 asks for the two halves to be COMPARABLE,
+          # and two runs that differ in a quirk knob are not.
+          if [ '${{ matrix.backend }}' = 'DirectVulkan' ] \
+             && [ '${{ matrix.case }}' = 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' ]; then
+            export MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH=1
+            export MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS=1
+            export MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER=1
+          fi
           ctest -V --no-tests=error --timeout 10800 \
             -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'
 
