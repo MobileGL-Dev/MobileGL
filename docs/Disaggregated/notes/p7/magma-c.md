@@ -1,5 +1,46 @@
 # P7 wave 2 package C — Magma object death, resident sub-data, the reflection archive, the vertex-layout split
 
+## For the integrator, first
+
+Nine things this package changes that live outside its own files or outside its own slices.
+`CONTRACT-P7.md` is the integrator's file (§0 "怎么改"), so none of these edit it.
+
+1. **§12's debt row is retired.** "Magma 两进程 client 在 `StateObjectDeathOps` 落地前
+   `ObjectDeaths=0`；`CtWireScenario` 的死亡用例在 Magma 臂按名 skip" — the table landed, both
+   skip guards are deleted, and the two cases are green on `DirectVulkan.{Split,Spawn,Tcp}`.
+   §2.3's "Magma 自己的 `StateObjectDeathOps` 表（wave 2-C）落地前…按名 skip" can go with it.
+2. **§3.1's pinned census moves: 15 sites / 4 files → 13 / 3.** `Renderer/WireDraw.inc` leaves
+   the list entirely. `scripts/ci/fatal_census.py` is unchanged (79 / 43 / 3 / 0) — the funnels
+   were already converted in wave 0, so retiring a `MagmaWireFatal` CALL moves no abort count.
+3. **§3.2 says "the other six" for `vertex-layout`; there are seven.** `offset-overflow`
+   post-dates the audit. It is masked with the rest; the reasoning is in slice 4 below.
+4. **§5.4's white-box case (opcode 49 on the wire) is not achievable at this tree**, and the
+   blocker is R-6, not this package. The full chain is in slice 2. The capability is wired
+   ahead of its consumer on purpose; `rsd=` on the PipeStats line is what will show the records
+   the day P11 lands an adoption tier.
+5. **§5.3's `g_programResourceCaches` deletion is achieved in the disaggregated build only.**
+   The archive member has to be `#if MOBILEGL_BUILD_DISAGGREGATED` for G1, so the pull build
+   keeps the cache. One-line change the day that pin is retired. P13.
+6. **A family-word question.** `buffer-window` is now a permanent protocol error going through
+   `MagmaWireFatal`, whose family is `UnmigratedVerb`. The honest word is `ProtocolCorruption`;
+   `MG_Pipe::MGPipeFatalFamily` carries only two words and its own comment says a third is
+   where the choice gets argued. §3.3 keeps the funnels on `UnmigratedVerb` deliberately so the
+   refusal census stays comparable to P5b. Flagged, not decided.
+7. **Gating lane counts grow** (grow-only, G14-legal): `integration-magma-split` 73 → 75,
+   `-spawn` 52 → 54, `-tcp` 54 → 56, `integration-split` 186 → 187, `integration-spawn`
+   102 → 103, `ctest -L unit` 2402 → 2403.
+8. **One ratchet symbol changes bucket** without changing the total (186, monotone green):
+   `p3b-p4b-espryt` 14 → 13 and `both-backends` 60 → 61, because slice 3's monolith consumer
+   makes `DirectVulkan.cpp` reference a frontend symbol only `DirectGLES` referenced before.
+   `p7-magma` — P7's own target bucket — is unchanged at 101. Nothing in this package was
+   aimed at gate 4; the §4.2 path to 101 → 0 is package B's `(B')`.
+9. **The worktree tool leaves `MOBILEGL_ITEST_VK_ICD` empty** and CMake warns about it; every
+   Magma entry then runs whatever ICD the loader finds first. This package reconfigured
+   `build-split` with `/usr/share/vulkan/icd.d/lvp_icd.json`, the pin `~/w7/pipe/build-split`
+   already carries. Worth adding to `p7_worktree.sh` so the next package does not have to
+   notice it.
+
+
 Base: `p7/magma-c` off `feat/disaggregated @ a686131e` (pipe HEAD at branch time).
 Build: `build-split` = `-DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON
 -DMOBILEGL_PIPE_PUSH=ON -DMOBILEGL_BUILD_INTEGRATION_TEST=ON`, ICD pinned to
@@ -9,6 +50,33 @@ worktree tool leaves `MOBILEGL_ITEST_VK_ICD` empty and CMake warns about it).
 Contract rows: CONTRACT-P7 §5.5 (`StateObjectDeathOps`), §5.4 (OQ-10), §5.3 (OQ-8), §3.2
 (`vertex-layout`, `vertex-format-conversion`). Discipline: rule I (no `std::abort()` on a Magma
 wire arm), rule J / R-16 (every fix red once on a two-process arm first).
+
+## Gates, on the four slices together
+
+| gate | base (`a686131e`) | after | |
+|---|---|---|---|
+| `ctest -L unit` | 2402 | **2403 / 2403** | +1 = the OQ-8 order case |
+| `integration-magma-split` | 73 (71 P + 2 S) | **75 / 75, 0 skipped** | +2 vertex-layout; the 2 skips were the death cases |
+| `integration-magma-spawn` | 52 (50 + 2) | **54 / 54, 0 skipped** | |
+| `integration-magma-tcp` | 54 (52 + 2) | **56 / 56, 0 skipped** | |
+| `integration-split` | 186 | **187 / 187** | +1 = the OQ-10 capability case |
+| `integration-spawn` | 102 | **103 / 103** | |
+| `integration-magma-full-split` | 453 P / 57 S / 0 red | **513 entries, 0 red, 55 skipped → 458 P / 55 S** | better on both counts |
+| `scripts/ci/fatal_census.py` | 79 / 43 / 3 / 0 | **79 / 43 / 3 / 0** | unchanged, as expected |
+| `scripts/ci/spawn_lane_parity.py` | green | **green** | all tiers equal after normalisation |
+| `grep -rn "@P7"` | 15 sites / 4 files | **13 / 3** | `WireDraw.inc` leaves the list |
+| `link_ratchet.py --assert-monotone` | 186 | **186, "unchanged"** | green |
+| **G1** (`build-linux`, pull) | `.text` `0xa52203` | **`.text` `0xa52203` (10822147, +0)** | `.data`/`.bss`/`.rodata`/total all +0; 27837 → 27837 defined symbols, **0 added / 0 removed / 0 resized / 0 renamed**; the `.so` is byte-identical on disk (19143824) |
+
+**Ratchet buckets.** AFTER: `p7-magma` **101**, `p3b-p4b-espryt` **13**, `both-backends` **61**,
+`p6-core` **11**, total **186**. CONTRACT-P7 §4.1 records the `852e3c28` baseline as
+101 / 14 / 60 / 11. So one symbol sits in `both-backends` that the baseline recorded under
+`p3b-p4b-espryt`; the total, the monotone assertion and **P7's own target bucket (101)** are all
+unchanged. HONESTY NOTE: I did not separately re-measure the buckets at `a686131e`, so I cannot
+attribute that single move to this package rather than to the two commits between the baseline
+and this branch point. Nothing here was aimed at gate 4 — §4.2's path from 101 to 0 is package
+B's `(B')`. (An attempt to identify the mover by rebuilding one object at the base failed to
+compile and was abandoned; the clean way is `--bucket --verbose-buckets` on a base build.)
 
 ---
 
