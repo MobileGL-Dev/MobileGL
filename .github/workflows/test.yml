@@ -3110,6 +3110,16 @@ jobs:
       - name: The link seam owns physical storage and keeps link dispatch out of callers
         run: python3 scripts/ci/link_seam_purity.py --self-test
 
+      # The same shape for Espryt's re-keyed memos (P3b/P4b, PLAN-PH-P34B-P7.md 1.2). P4a/P5f
+      # moved the resolved-binding, sampler-pass, image-sweep, twin-registry, unit-sampler and
+      # twin-lookup memos onto {slot, gen} handles and applier serials; the legacy pointer-keyed
+      # arms stayed behind MOBILEGL_PIPE_LEGACY_MEMOS / !MOBILEGL_BUILD_DISAGGREGATED because
+      # they are the PULL build's only arms and G1 pins that build's .text. Nothing checked that
+      # a NEW frontend-pointer key could not appear outside those arms. --self-test runs the
+      # negative controls and then the real scan in the same invocation, as its sibling does.
+      - name: Espryt memo keys carry no frontend pointer outside the legacy arms
+        run: python3 scripts/ci/espryt_memo_purity.py --self-test
+
       # The same question for the symbol tool the P1 gate is written in terms of.
       - name: The symbol report's buckets and gates can still fail
         run: python3 scripts/symbol_report.py --self-test
