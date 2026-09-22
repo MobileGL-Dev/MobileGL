@@ -19,6 +19,15 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 
+# P6: MOBILEGL_LOG_FILE_PATH IS A BASE NAME and the library writes one file per ROLE, so no file
+# of the literal name exists. The derivation is IMPORTED, not copied: a third copy of the rule is
+# a third thing that can fall behind, and the one that does reads an empty log and reports "the
+# runtime knob did not take" - a product failure that never happened. (It did happen: this check
+# went red on the role split for exactly that reason.)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "MobileGL" / "MG_IntegrationTest"
+                       / "Harness"))
+from split_log_paths import any_role_file, read_role_logs, role_paths  # noqa: E402
+
 CASES = (
     "QueuedBufferVersionsAndDeletedNameReuseKeepTheirPixels",
     "QueuedProgramRebindsKeepEachUniformSnapshot",
@@ -98,7 +107,10 @@ def run_case(test, build, directory, overrides):
     private = (cwd / private).resolve() if not private.is_absolute() else private.resolve()
     if not private.is_relative_to(build):
         raise RuntimeError(f"refusing to reset a private log outside the selected build: {private}")
-    private.unlink(missing_ok=True)
+    # Every role's file, because a stale server half would otherwise survive into this arm and
+    # its lines would read as evidence about the knob this run set.
+    for role_path in role_paths(private):
+        Path(role_path).unlink(missing_ok=True)
     xml = directory / "gtest.xml"
     command = [arg for arg in command if not arg.startswith("--gtest_output=")]
     command.append(f"--gtest_output=xml:{xml}")
@@ -119,10 +131,14 @@ def run_case(test, build, directory, overrides):
         except subprocess.TimeoutExpired:
             rc = 124
             output.write("\nRUNNER_TIMEOUT: process killed after discovered CTest timeout\n")
-    private_text = private.read_text(encoding="utf-8", errors="replace") if private.is_file() else ""
+    # BOTH ROLES, concatenated into the one evidence file this run archives. `Config: IPC` is the
+    # client's line and the queue-lead diagnostics are the applier's, so either half alone would
+    # answer one of the two questions the negative arm asks and be silent on the other.
+    private_text = read_role_logs(private)
     (directory / "private.log").write_text(private_text, encoding="utf-8")
     result = {"ctest_name": test["name"], "returncode": rc,
-              "seconds": round(time.monotonic()-started, 3), "private_log_present": private.is_file()}
+              "seconds": round(time.monotonic()-started, 3),
+              "private_log_present": any_role_file(private)}
     write_json(directory / "process.json", result)
     return result
 

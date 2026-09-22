@@ -122,6 +122,7 @@
     {}
 #endif
 
+#include <cstdio>
 #include <string>
 
 namespace MobileGL {
@@ -173,6 +174,49 @@ namespace MobileGL {
             // these readers exist to check.
             std::string ReadRoleLogs(const char* basePath);
             void TruncateRoleLogs(const char* basePath);
+#else
+            // THE SAME VOCABULARY IN THE PULL BUILD, where there is exactly one log because there
+            // is exactly one role. A reader that asks for "what this run logged" has to compile
+            // and mean the right thing in BOTH flavours; the alternative is an `#if` at every
+            // call site, and the call site that forgets one is the one that silently reads
+            // nothing. (It was not hypothetical: PipeInputsTest built only in the verify flavour
+            // and took the whole `build-linux-verify` job down with it.)
+            //
+            // HEADER-ONLY ON PURPOSE, FOR G1. The pull library's symbol set and `.text` must stay
+            // byte-identical to the baseline, so these may not become library symbols. Nothing
+            // inside the library calls them - only tests and harnesses do - so an inline
+            // definition emits code into those readers and nothing at all into libMobileGL.so.
+            enum class LogRole { Client, Server };
+
+            // No roles to separate, so nothing to record. Present so that a harness may say which
+            // role a thread is without asking which build it is in.
+            inline void SetThreadLogRole(LogRole) {}
+
+            // One role, one file: the pull build writes MOBILEGL_LOG_FILE_PATH unchanged.
+            inline std::string RoleLogPath(const char* basePath, LogRole) {
+                return basePath == nullptr ? std::string() : std::string(basePath);
+            }
+
+            inline std::string ReadRoleLogs(const char* basePath) {
+                std::string all;
+                if (basePath == nullptr) return all;
+                if (FILE* file = std::fopen(basePath, "rb")) {
+                    char chunk[4096];
+                    std::size_t got = 0;
+                    while ((got = std::fread(chunk, 1, sizeof(chunk), file)) > 0) {
+                        all.append(chunk, got);
+                    }
+                    std::fclose(file);
+                }
+                return all;
+            }
+
+            inline void TruncateRoleLogs(const char* basePath) {
+                if (basePath == nullptr) return;
+                if (FILE* file = std::fopen(basePath, "w")) {
+                    std::fclose(file);
+                }
+            }
 #endif
         } // namespace Debug
     } // namespace MG_Util

@@ -111,24 +111,23 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             return std::filesystem::path(MGITest::PipeStatsWindow::LibraryLogPath());
             }
 
-            static std::uintmax_t LibraryLogSize() {
-                std::error_code ec;
-                const std::filesystem::path path = LibraryLogPath();
-                if (path.empty()) return 0;
-                const std::uintmax_t size = std::filesystem::file_size(path, ec);
-                return ec ? 0 : size;
+            // ONE MARK PER ROLE. The library writes a log per role, so "how long is the log
+            // right now" is two numbers; a single scalar applied to the concatenation would slide
+            // by whatever the other role wrote in between and start the read mid-line.
+            static MGITest::PipeStatsWindow::LogMark LibraryLogMark() {
+                return MGITest::PipeStatsWindow::MarkLaneLog();
             }
 
-            static std::string LibraryLogSince(std::uintmax_t offset) {
-                const std::filesystem::path path = LibraryLogPath();
-                if (path.empty()) return {};
-                std::ifstream file(path, std::ios::binary);
-                if (!file.good()) return {};
-                file.seekg(static_cast<std::streamoff>(offset));
-                return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            // BOTH ROLES. The arming diagnostics this case looks for are emitted by the
+            // BACKEND, and under inproc the backend runs on the apply thread - the server role -
+            // so the line lands in the server's log. Reading only the client's found nothing and
+            // reported the emulation unarmed, which accused the product of a defect the reader
+            // had invented.
+            static std::string LibraryLogSince(const MGITest::PipeStatsWindow::LogMark& mark) {
+                return MGITest::PipeStatsWindow::ReadLaneLogSince(mark);
             }
 
-            static std::string LibraryLog() { return LibraryLogSince(0); }
+            static std::string LibraryLog() { return MGITest::PipeStatsWindow::ReadLaneLog(); }
 
             // One frame that crosses several verb boundaries: a clear (kClear), a draw (kDraw) and
             // a readback (kReadback). Three of the nine fill classes, so an entry compare that only
@@ -201,7 +200,7 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                                 "backwards; the VerifyCorrupted. lane owns that half";
             }
 
-            const std::uintmax_t before = LibraryLogSize();
+            const MGITest::PipeStatsWindow::LogMark before = LibraryLogMark();
             ASSERT_NO_FATAL_FAILURE(DrawOneFrame());
             EXPECT_EQ(FirstGLError(), 0u);
 
@@ -252,7 +251,7 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             }
 
             const std::string knob = std::getenv("MOBILEGL_PIPE_VERIFY_CORRUPT");
-            const std::uintmax_t before = LibraryLogSize();
+            const MGITest::PipeStatsWindow::LogMark before = LibraryLogMark();
             ASSERT_NO_FATAL_FAILURE(DrawOneFrame());
 
             const std::string appended = LibraryLogSince(before);

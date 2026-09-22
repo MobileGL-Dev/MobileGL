@@ -29,6 +29,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -41,13 +42,20 @@ namespace MGITest::PipeStatsWindow {
     // ROLE - `<stem>.client<ext>` and `<stem>.server<ext>` - because under inproc both roles are
     // threads of one process and a single file made every per-side assertion a search.
     //
-    // THE SUFFIX IS DERIVED HERE AND NOWHERE ELSE, matching MG_Util/Debug/Log.cpp's
-    // RoleLogPathFor. Two copies of a naming rule is one copy too many: the one that is not
-    // updated opens a file that does not exist and reports "the library never logged", which
-    // reads as a product failure rather than as a stale path.
+    // THE RULE IS COPIED HERE AND IT HAS TO BE, which is worth stating because the obvious fix is
+    // to call the library's own MG_Util::Debug::RoleLogPath and delete this. That does not link:
+    // this module links the SHIPPING libMobileGL.so, built -fvisibility=hidden, and the role-path
+    // helpers are `t` (local) in it - only MG_Test, which links the static archive, may call them.
+    //
+    // SO THE COPY IS FLAVOUR-AWARE INSTEAD. That is the part the first copy got wrong: it derived
+    // `.client` in BOTH flavours, while the pull build has one role and writes
+    // MOBILEGL_LOG_FILE_PATH unchanged. In the verify lane it therefore opened a file that never
+    // existed and every reader reported "the library never logged" - a product failure that had
+    // not happened. Keep this `#if` and Log.cpp's RoleLogPath in step.
     inline std::string RoleLogPath(const char* roleSuffix) {
         const char* base = std::getenv("MOBILEGL_LOG_FILE_PATH");
         if (base == nullptr || *base == '\0') return {};
+#if MOBILEGL_BUILD_DISAGGREGATED
         std::string path(base);
         const std::string::size_type slash = path.find_last_of("/\\");
         const std::string::size_type dot = path.find_last_of('.');
@@ -55,15 +63,27 @@ namespace MGITest::PipeStatsWindow {
             return path + "." + roleSuffix;
         }
         return path.substr(0, dot) + "." + roleSuffix + path.substr(dot);
+#else
+        (void)roleSuffix;
+        return std::string(base);
+#endif
     }
 
-    // The lane's private CLIENT log path, or empty when the lane configured none. Every existing
-    // caller wants this one: they read markers the CLIENT emits - the transport resolution line,
-    // PipeStats summaries, the arming diagnostics.
+    // The lane's private CLIENT log path, or empty when the lane configured none. In the pull
+    // build this IS the whole log.
     inline std::string LibraryLogPath() { return RoleLogPath("client"); }
 
-    // The server role's half, for a caller that wants a line only the applier writes.
-    inline std::string ServerLibraryLogPath() { return RoleLogPath("server"); }
+    // The server role's half, or EMPTY when this build has no separate server half. Empty rather
+    // than "the same path again": every caller below concatenates the two, and a pull build that
+    // named one file twice would show each line twice - which reads as a doubled counter or a
+    // repeated diagnostic rather than as a path mistake.
+    inline std::string ServerLibraryLogPath() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return RoleLogPath("server");
+#else
+        return {};
+#endif
+    }
 
     inline std::string ReadWholeFile(const std::string& path) {
         if (path.empty()) return {};
@@ -71,6 +91,51 @@ namespace MGITest::PipeStatsWindow {
         if (!file.good()) return {};
         return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     }
+
+    inline std::string ReadFileSince(const std::string& path, std::uintmax_t offset) {
+        if (path.empty()) return {};
+        std::ifstream file(path, std::ios::binary);
+        if (!file.good()) return {};
+        file.seekg(static_cast<std::streamoff>(offset));
+        return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    }
+
+    // A "the log is this long right now" snapshot, ONE OFFSET PER ROLE.
+    //
+    // The scenarios that assert on arming take a mark before the workload and read what was
+    // appended after it, so that only bytes this case caused can satisfy - or refute - the claim.
+    // The roles are separate files, so this cannot be one scalar: a single offset applied to the
+    // concatenation would slide by however much the OTHER role happened to write, and the read
+    // would start mid-line in the wrong file.
+    struct LogMark {
+        std::uintmax_t client = 0;
+        std::uintmax_t server = 0;
+    };
+
+    inline std::uintmax_t FileSizeOrZero(const std::string& path) {
+        if (path.empty()) return 0;
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
+        if (!file.good()) return 0;
+        const std::streamoff size = file.tellg();
+        return size < 0 ? 0 : static_cast<std::uintmax_t>(size);
+    }
+
+    inline LogMark MarkLaneLog() {
+        return LogMark{FileSizeOrZero(LibraryLogPath()), FileSizeOrZero(ServerLibraryLogPath())};
+    }
+
+    // BOTH ROLES, and for the arming diagnostics the SERVER's is the one that matters. Those lines
+    // are emitted by the BACKEND - "demoted to an ordinary varying", the reroute and emulation
+    // banners - and under inproc the backend runs on the apply thread, which is the server role.
+    // Reading only the client's half finds nothing and reports "the emulation is not armed",
+    // which is the most expensive possible way to be wrong: it accuses the product of a defect
+    // that the reader itself invented.
+    inline std::string ReadLaneLogSince(const LogMark& mark) {
+        return ReadFileSince(LibraryLogPath(), mark.client)
+               + ReadFileSince(ServerLibraryLogPath(), mark.server);
+    }
+
+    inline std::string ReadLaneLog() { return ReadLaneLogSince(LogMark{}); }
 
     // The last summary line in the log, verbatim. `found` is false when the library never emitted
     // one, which is a different failure from "the counter read zero" and has to be reported as

@@ -256,22 +256,20 @@ void main() {
             return std::filesystem::path(MGITest::PipeStatsWindow::LibraryLogPath());
             }
 
-            static std::uintmax_t LibraryLogSize() {
-                std::error_code ec;
-                const std::filesystem::path path = LibraryLogPath();
-                if (path.empty()) return 0;
-                const std::uintmax_t size = std::filesystem::file_size(path, ec);
-                return ec ? 0 : size;
+            // ONE MARK PER ROLE. The library writes a log per role, so "how long is the log
+            // right now" is two numbers; a single scalar applied to the concatenation would slide
+            // by whatever the other role wrote in between and start the read mid-line.
+            static MGITest::PipeStatsWindow::LogMark LibraryLogMark() {
+                return MGITest::PipeStatsWindow::MarkLaneLog();
             }
 
-            static std::string LibraryLogSince(std::uintmax_t offset) {
-                const std::filesystem::path path = LibraryLogPath();
-                if (path.empty()) return {};
-                std::ifstream file(path, std::ios::binary);
-                if (!file.good()) return {};
-                file.seekg(static_cast<std::streamoff>(offset));
-                return std::string((std::istreambuf_iterator<char>(file)),
-                                   std::istreambuf_iterator<char>());
+            // BOTH ROLES. The arming diagnostics this case looks for are emitted by the
+            // BACKEND, and under inproc the backend runs on the apply thread - the server role -
+            // so the line lands in the server's log. Reading only the client's found nothing and
+            // reported the emulation unarmed, which accused the product of a defect the reader
+            // had invented.
+            static std::string LibraryLogSince(const MGITest::PipeStatsWindow::LogMark& mark) {
+                return MGITest::PipeStatsWindow::ReadLaneLogSince(mark);
             }
 
             GLuint m_vao = 0;
@@ -536,7 +534,7 @@ void main() {
             // Taken BEFORE the draw, so the line this looks for can only be one this
             // process wrote for this span. The latch fires on the FIRST rerouted
             // draw, which is inside the query below.
-            const std::uintmax_t before = LibraryLogSize();
+            const MGITest::PipeStatsWindow::LogMark before = LibraryLogMark();
             const GLuint generated = QueryGenerated([]() { glDrawArrays(GL_TRIANGLES, 0, 3); });
             EXPECT_EQ(DrainGLErrors(), 0u);
             EXPECT_EQ(generated, 1u) << "the pinned-on lane did not even count correctly";
