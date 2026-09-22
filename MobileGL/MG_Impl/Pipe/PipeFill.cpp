@@ -985,7 +985,11 @@ namespace MobileGL::MG_Pipe {
             const Uint64 before = MG_Remote::Client::ClientWireRecordsEmitted();
             MGPipeEmitResourceSubData(buffer, 0, static_cast<SizeT>(buffer.GetSize()));
             if (MG_Remote::Client::ClientWireRecordsEmitted() == before) {
-                MGLOG_F("MGPipe: Fatal{InitialBytesNotCarried, \"resource_respecify\"} - the "
+                // UncarriedInitialBytes, not a second word for the same family: WireTables.cpp:418
+                // already dies of exactly this - a respecify that crossed with no initial bytes -
+                // under that name, and two words for one family is the vocabulary drift a6
+                // censused and 5.2's .def exists to bound (P7 wave 0).
+                MGLOG_F("MGPipe: Fatal{UncarriedInitialBytes, \"resource_respecify\"} - the "
                         "respecify crossed with initialBytes = nullptr (R-13.3) and the "
                         "resource_subdata records that were supposed to follow it emitted "
                         "NOTHING, so %llu bytes of initial content exist on no side of the wire",

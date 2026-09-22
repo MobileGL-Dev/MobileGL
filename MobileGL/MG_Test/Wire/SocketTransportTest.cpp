@@ -35,6 +35,7 @@
 // `BufferTooSmallKeepsTheMessage` matters more here: the message it must keep
 // is one this side already reassembled out of bytes nobody else can re-deliver.
 
+#include <MG_Remote/Protocol/generated/protocol_generated.h> // RefuseCode, for the word below
 #include <MG_Remote/Transport/Doorbell.h> // kWaitForever
 #include <MG_Remote/Transport/FdPassing.h>
 #include <MG_Remote/Transport/SocketTransport.h>
@@ -119,6 +120,14 @@ TEST(SocketTransportTest, TcpRejectsMalformedNamesAndUnauthenticatedWildcard) {
     ::unsetenv("MOBILEGL_IPC_TOKEN");
     EXPECT_EQ(SocketTransport::Listen("tcp://0.0.0.0:40613", &listener), MOBILEGL_ERR_PROTOCOL_MISMATCH);
     EXPECT_EQ(listener, -1);
+    // PH-7 (2). The refusal that path logs is `Refuse{Authentication}`, and `Authentication` has
+    // to be RefuseCode's own spelling: for a whole phase it read `Refuse{AuthenticationRequired}`,
+    // a word the wire enum has never had, so anyone grepping the refusal vocabulary found a name
+    // no peer could ever receive. fatal_census.py's rule 4 refuses an invented word statically;
+    // this pins the word that gate checks against to the enumerator the peer actually reads, so
+    // renaming the enumerator without the log line fails here rather than silently.
+    EXPECT_STREQ(MobileGL::Wire::EnumNameRefuseCode(MobileGL::Wire::RefuseCode::Authentication),
+                 "Authentication");
     if (wasSet) ::setenv("MOBILEGL_IPC_TOKEN", saved.c_str(), 1);
 }
 

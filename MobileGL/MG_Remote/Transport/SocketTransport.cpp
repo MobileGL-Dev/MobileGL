@@ -158,7 +158,11 @@ namespace MobileGL::MG_Remote::Transport {
             MobileGLResult result = MOBILEGL_ERR_UNSUPPORTED;
             for (auto* address = addresses; address; address = address->ai_next) {
                 if (!authenticated && !Loopback(address->ai_addr)) {
-                    WireLogError("MG_Remote: Refuse{AuthenticationRequired} non-loopback TCP listen needs MOBILEGL_IPC_TOKEN");
+                    // The word is RefuseCode's own enumerator. It read `AuthenticationRequired`
+                    // for a whole phase, naming a value protocol.fbs has never had, so a reader
+                    // grepping the refusal vocabulary found a word the wire cannot carry (PH-7
+                    // (2)); fatal_census.py's rule 4 now refuses that.
+                    WireLogError("MG_Remote: Refuse{Authentication} non-loopback TCP listen needs MOBILEGL_IPC_TOKEN");
                     result = MOBILEGL_ERR_PROTOCOL_MISMATCH;
                     continue;
                 }

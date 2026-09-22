@@ -33,11 +33,28 @@
 //                        not merely full this instant.
 //   AbiMismatch        - the two builds do not agree on layout or protocol version.
 //   ServerCrashed      - a liveness end the WAITING side attributes to the other: a drain that
-//                        never completed, an apply thread that is gone or never started. The
-//                        device-lost latch is armed from the doorbell, never from these, but the
-//                        peer that was waiting is told the server is gone.
+//                        never completed, an apply thread that is gone or never started, a native
+//                        resource the server had to have and could not obtain. The device-lost
+//                        latch is armed from the doorbell, never from these, but the peer that
+//                        was waiting is told the server is gone.
 //   DeviceLost         - reserved: set by the latch (5.3), never raised as a Fatal family, so no
 //                        row projects onto it.
+//
+// P7 WAVE 0 ADDED ELEVEN ROWS, for the eleven words the widened census gate found in the server
+// image outside MG_Remote/ (scripts/ci/fatal_census.py rule 3). Ten are ProtocolCorruption for
+// the reason that bucket already states - a record, a mask or a reply that cannot be honoured
+// correctly. The eleventh, ResourceUnavailable (Managers.cpp's three image-promotion sites and
+// VkBufferManager.cpp's eight), is ServerCrashed rather than SegmentMismatch: SegmentMismatch
+// means a SHARED SEGMENT was the wrong size, and telling a peer that when a VkBuffer allocation
+// or a native readback failed would be a lie about whose geometry was wrong. The honest thing to
+// tell a waiting peer is the one ServerCrashed already says. The wire enum has no "the server
+// could not obtain a resource" value and adding one would move `wireFingerprint`, which is a
+// protocol change no wave-0 instrument is entitled to make (recorded for the integrator).
+//
+// Two words were NOT given rows, they were collapsed instead: `InitialBytesNotCarried`
+// (MG_Impl/Pipe/PipeFill.cpp) said the same thing as `UncarriedInitialBytes` (Client/
+// WireTables.cpp) about the same record - a respecify that crossed with no initial bytes - and
+// two words for one family is exactly the drift a6 censused. PipeFill now uses the older word.
 //
 // clang-format off
 
@@ -47,16 +64,26 @@
     X(UnmigratedVerb,                ProtocolCorruption, "a wire verb slot P5/P6 does not implement was reached") \
     X(UnmigratedSurface,             ProtocolCorruption, "a surface op named a client-process handle that means nothing here (P12)") \
     X(UnmigratedPipeInput,           ProtocolCorruption, "a PipeInputs field with no field-ownership row was read across the boundary") \
+    X(UnmigratedEmulation,           ProtocolCorruption, "an emulation path the applier has no migrated arm for was reached") \
     X(RoleViolation,                 ProtocolCorruption, "a call ran on the wrong role/thread - an invariant the two roles must hold") \
     X(UnsetCallMask,                 ProtocolCorruption, "the CallMask was consulted before either half was published") \
+    X(ConsumerMaskLie,               ProtocolCorruption, "the server published a consumer bit for a family whose op table is absent") \
     X(ClientTablesUninstalled,       ProtocolCorruption, "the applier ran before the client installed its tables") \
     X(NoClientSession,               ProtocolCorruption, "a path that needs the client session ran without one") \
+    X(UnnamedIdentity,               ProtocolCorruption, "a per-context memo was consulted with a null context identity") \
+    X(PipeLegacyMemosDisabled,       ProtocolCorruption, "a subsystem bit is clear and this build compiles no legacy arm to fall back to") \
+    X(PipeVerifyBadKnob,             ProtocolCorruption, "a MOBILEGL_PIPE_VERIFY/POISON knob named a verb or field that does not exist") \
+    X(PipeVerifyDiffer,              ProtocolCorruption, "the verify comparator found a pushed field differing from the live one") \
     X(UnexpectedMapAccept,           ProtocolCorruption, "a persistent-map accept arrived where the protocol permits none") \
     X(UncarriedInitialBytes,         ProtocolCorruption, "a producer's initial bytes were required on the wire and absent") \
     X(ReplyStatusInvalid,            ProtocolCorruption, "a reply carried a status outside the defined set") \
     X(ReplyError,                    ProtocolCorruption, "a reply-owning verb saw an error status it cannot represent") \
     X(ReplyMissing,                  ProtocolCorruption, "a reply slot the protocol requires was empty") \
+    X(ReplyMismatched,               ProtocolCorruption, "the reply mailbox held an answer for a different slot than the one waited on") \
+    X(ReplyOverrun,                  ProtocolCorruption, "an answer was posted while a previous one was still unread") \
+    X(ReplyToNoSlot,                 ProtocolCorruption, "an answer was posted against reply slot 0, which means \"no record\"") \
     X(ReplyTooLarge,                 ProtocolCorruption, "an answer exceeded the size its verb's contract allows") \
+    X(ResidualBlockSize,             ProtocolCorruption, "a fixed-size residual block arrived at a size that is not its own") \
     X(ReadbackDeclined,              ProtocolCorruption, "a readback that cannot return without complete pixels was declined") \
     X(ReadbackReplyShort,            ProtocolCorruption, "a readback reply carried fewer bytes than its shape requires") \
     X(UnsizedReadback,               ProtocolCorruption, "a readback arrived with no declared size") \
@@ -77,6 +104,7 @@
     X(PresentCreditTimeout,          ServerCrashed,      "a present credit did not return within the bounded wait") \
     X(RetirementWaitFailed,          ServerCrashed,      "a wait for the server to retire staging did not complete") \
     X(ApplyThreadJoinTimeout,        ServerCrashed,      "the apply thread did not join within its bound at teardown") \
-    X(ApplyThreadNotRunning,         ServerCrashed,      "an operation needed the apply thread and it was not running")
+    X(ApplyThreadNotRunning,         ServerCrashed,      "an operation needed the apply thread and it was not running") \
+    X(ResourceUnavailable,           ServerCrashed,      "the server could not obtain a native GL/Vulkan resource it had to have")
 
 // clang-format on
