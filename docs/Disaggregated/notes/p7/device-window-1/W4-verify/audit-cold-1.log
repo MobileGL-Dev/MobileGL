@@ -1,0 +1,7 @@
+=== Android retrace: OpenRA / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\OpenRA\openra.trace: 1 file pushed, 0 skipped. 91.2 MB/s (22192645 bytes in 0.232s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\openra.0000031249.png: 1 file pushed, 0 skipped. 51.4 MB/s (403752 bytes in 0.007s)
+* daemon still not running
+adb.exe: cannot connect to daemon at tcp:5037: cannot connect to 127.0.0.1:5037: A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond. (10060)
+archived repeat 1 to .trace-work\p7w4\audit-cold-1\OpenRA-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html

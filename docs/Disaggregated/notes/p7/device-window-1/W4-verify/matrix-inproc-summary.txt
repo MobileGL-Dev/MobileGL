@@ -1,0 +1,82 @@
+arm                                                                          rep  pass   ssim_vs_golden    ssim_vs_first    bit-identical  px!=first
+---------------------------------------------------------------------------  ---  -----  ----------------  ---------------  -------------  ---------
+improved-transparency-minecraft-26.3-DirectVulkan                            1    yes    0.999600026       1.000000000      yes            0
+minecraft-1.17-main-menu-854-DirectVulkan                                    1    yes    0.999990914       1.000000000      yes            0
+minecraft-1.21.1-neoforge-create-indirect-in-world-DirectVulkan              1    NO     0.832130088       1.000000000      yes            0
+minecraft-1.21.1-neoforge-create-instancing-in-world-DirectVulkan            1    yes    0.999983621       1.000000000      yes            0
+minecraft-1.21.11-main-menu-DirectVulkan                                     1    NO     0.164983727       1.000000000      yes            0
+minecraft-1.21.4-fabric-common-mods-in-world-DirectVulkan                    1    yes    0.999869631       1.000000000      yes            0
+minecraft-1.21.4-fabric-common-mods-inventory-DirectVulkan                   1    yes    0.999994284       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-bliss-in-world-DirectVulkan                     1    yes    0.999092744       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-DirectVulkan                   1    -      -                 -                -              -
+    ! no result.json
+minecraft-1.21.4-fabric-iris-bsl-in-world-DirectVulkan                       1    yes    0.997009631       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world-DirectVulkan          1    yes    0.997491927       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world-DirectVulkan  1    yes    0.999510556       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-complementary-unbound-in-world-DirectVulkan     1    yes    0.999476169       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world-DirectVulkan  1    yes    0.996790729       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-iterationrp-in-world-DirectVulkan               1    yes    0.999257641       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-iterationt-in-world-DirectVulkan                1    yes    0.999419883       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world-DirectVulkan          1    yes    0.998933123       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world-DirectVulkan          1    yes    0.996630735       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-mellow-in-world-DirectVulkan                    1    yes    0.999372032       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-nostalgia-in-world-DirectVulkan                 1    yes    0.999396223       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-photon-v1.1-in-world-DirectVulkan               1    yes    0.999026329       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world-DirectVulkan              1    NO     0.008864795       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-sundial-lite-in-world-DirectVulkan              1    yes    0.996177977       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world-DirectVulkan       1    yes    0.999454686       1.000000000      yes            0
+minecraft-1.21.4-fabric-journeymap-in-world-DirectVulkan                     1    yes    0.999991304       1.000000000      yes            0
+minecraft-1.21.4-fabric-journeymap-in-world-normal-world-DirectVulkan        1    yes    0.999988398       1.000000000      yes            0
+minecraft-1.21.4-fabric-modernui-inventory-DirectVulkan                      1    yes    0.999996451       1.000000000      yes            0
+minecraft-1.21.4-fabric-modernui-inventory-normal-world-DirectVulkan         1    yes    0.999997628       1.000000000      yes            0
+minecraft-1.21.4-fabric-rei-inventory-DirectVulkan                           1    yes    0.999997568       1.000000000      yes            0
+minecraft-1.21.4-fabric-rei-inventory-normal-world-DirectVulkan              1    yes    0.999998800       1.000000000      yes            0
+minecraft-1.21.4-fabric-sodium-in-world-DirectVulkan                         1    yes    0.999993791       1.000000000      yes            0
+minecraft-1.21.4-fabric-xaero-minimap-in-world-DirectVulkan                  1    yes    0.999999407       1.000000000      yes            0
+minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world-DirectVulkan     1    yes    0.999992410       1.000000000      yes            0
+minecraft-1.21.4-fabric-xaero-world-map-in-world-DirectVulkan                1    yes    0.999999866       1.000000000      yes            0
+minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world-DirectVulkan   1    yes    0.999993780       1.000000000      yes            0
+minecraft-1.21.4-in-world-DirectVulkan                                       1    yes    0.999995585       1.000000000      yes            0
+minecraft-1.21.4-main-menu-DirectVulkan                                      1    yes    0.999696483       1.000000000      yes            0
+minecraft-1.21.4-startup-DirectVulkan                                        1    yes    0.999999511       1.000000000      yes            0
+OpenRA-DirectVulkan                                                          1    NO     0.976493989       1.000000000      yes            0
+
+OpenRA-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=NO, min ssim vs golden=0.976493989, min ssim vs first=1.000000000
+improved-transparency-minecraft-26.3-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999600026, min ssim vs first=1.000000000
+minecraft-1.17-main-menu-854-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999990914, min ssim vs first=1.000000000
+minecraft-1.21.1-neoforge-create-indirect-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=NO, min ssim vs golden=0.832130088, min ssim vs first=1.000000000
+minecraft-1.21.1-neoforge-create-instancing-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999983621, min ssim vs first=1.000000000
+minecraft-1.21.11-main-menu-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=NO, min ssim vs golden=0.164983727, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-common-mods-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999869631, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-common-mods-inventory-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999994284, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-iris-bliss-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999092744, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-DirectVulkan: 1 repeat(s), 1 error(s), all-bitwise-identical=NO, passed-all=NO, min ssim vs golden=-, min ssim vs first=-
+minecraft-1.21.4-fabric-iris-bsl-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.997009631, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.997491927, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999510556, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-iris-complementary-unbound-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999476169, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.996790729, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-iris-iterationrp-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999257641, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-iris-iterationt-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999419883, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.998933123, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.996630735, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-iris-mellow-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999372032, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-iris-nostalgia-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999396223, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-iris-photon-v1.1-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999026329, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=NO, min ssim vs golden=0.008864795, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-iris-sundial-lite-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.996177977, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999454686, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-journeymap-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999991304, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-journeymap-in-world-normal-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999988398, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-modernui-inventory-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999996451, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-modernui-inventory-normal-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999997628, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-rei-inventory-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999997568, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-rei-inventory-normal-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999998800, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-sodium-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999993791, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-xaero-minimap-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999999407, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999992410, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-xaero-world-map-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999999866, min ssim vs first=1.000000000
+minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999993780, min ssim vs first=1.000000000
+minecraft-1.21.4-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999995585, min ssim vs first=1.000000000
+minecraft-1.21.4-main-menu-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999696483, min ssim vs first=1.000000000
+minecraft-1.21.4-startup-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999999511, min ssim vs first=1.000000000

@@ -1,0 +1,240 @@
+=== Android retrace: OpenRA / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\OpenRA\openra.trace: 1 file pushed, 0 skipped. 58.2 MB/s (22192645 bytes in 0.363s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\openra.0000031249.png: 1 file pushed, 0 skipped. 24.9 MB/s (403752 bytes in 0.015s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": false,
+  "statusCode": 6,
+  "message": "retrace completed; ssim=0.988998, ssimThreshold=0.990000, mismatchPixels=9836, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/OpenRA-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 31249,
+  "width": 640,
+  "height": 480,
+  "cropX": 1,
+  "cropY": 1,
+  "cropWidth": 638,
+  "cropHeight": 478,
+  "ssim": 0.988997893,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 9836
+}
+trace-replay-ci.sh: tail of mobilegl.log:
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_descriptor_buffer (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_conditional_rendering (r.2)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_mutable_descriptor_type (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_pipeline_creation_cache_control (r.3)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_robustness2 (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_clock (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_module_identifier (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_vertex_attribute_divisor (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_global_priority_query (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_separate_stencil_usage (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_border_color_swizzle (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_vertex_input_dynamic_state (r.2)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_IMG_filter_cubic (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_filter_cubic (r.3)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_subgroup_vote (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_device_address_binding_report (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_NV_optical_flow (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_QCOM_tile_properties (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_image_format_list (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_sampler_filter_minmax (r.2)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_16bit_storage (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_viewport_index_layer (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_pipeline_executable_properties (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_demote_to_helper_invocation (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_color_write_enable (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_dynamic_rendering_local_read (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_QCOM_render_pass_transform (r.4)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_create_renderpass2 (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_image_atomic_int64 (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_acceleration_structure (r.13)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_depth_clip_control (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_transform_feedback (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_blend_operation_advanced (r.2)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_provoking_vertex (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_8bit_storage (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_QCOM_multiview_per_view_render_areas (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_inline_uniform_block (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_shader_subgroup_ballot (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_depth_stencil_resolve (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_float_controls (r.4)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_texture_compression_astc_hdr (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_global_priority (r.2)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_4444_formats (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_draw_parameters (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_vulkan_memory_model (r.3)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_descriptor_indexing (r.2)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_depth_clip_enable (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_synchronization2 (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_integer_dot_product (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_line_rasterization (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_line_rasterization (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_QCOM_image_processing (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_float_controls2 (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_fragment_shading_rate (r.2)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_descriptor_update_template (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_draw_indirect_count (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_driver_properties (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_ray_tracing_position_fetch (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_dynamic_rendering (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_zero_initialize_workgroup_memory (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_uniform_buffer_standard_layout (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_depth_clamp_zero_one (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_ANDROID_external_memory_android_hardware_buffer (r.5)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_image_2d_view_of_3d (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_extended_dynamic_state2 (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_dedicated_allocation (r.3)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_texel_buffer_alignment (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_primitive_topology_list_restart (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_rasterization_order_attachment_access (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_subgroup_uniform_control_flow (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_tooling_info (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_format_feature_flags2 (r.2)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_global_priority (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_sample_locations (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_EXT_multi_draw (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_swapchain (r.70)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_sampler_mirror_clamp_to_edge (r.3)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_QCOM_image_processing2 (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]:     VK_KHR_external_fence_fd (r.1)
+[05:36:23] [Android mgl-srv-apply/INFO]: Required extension found: VK_KHR_swapchain
+[05:36:23] [Android mgl-srv-apply/INFO]:     Picked physical device. (Reason: First suitable device)
+[05:36:23] [Android mgl-srv-apply/INFO]: Picked physical device 0.
+[05:36:23] [Android mgl-srv-apply/INFO]: Vulkan: multiViewport enabled; rasterizable viewports=16 (device limit 16, GL state width 16)
+[05:36:23] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_KHR_draw_indirect_count
+[05:36:23] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_KHR_shader_draw_parameters
+[05:36:23] [Android mgl-srv-apply/INFO]: VK_KHR_image_format_list enabled: true
+[05:36:23] [Android mgl-srv-apply/INFO]: VK_KHR_draw_indirect_count enabled: true
+[05:36:23] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_KHR_create_renderpass2
+[05:36:23] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_KHR_depth_stencil_resolve
+[05:36:23] [Android mgl-srv-apply/INFO]: Vulkan: update-after-bind descriptor layouts enabled
+[05:36:23] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_KHR_index_type_uint8
+[05:36:23] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_primitive_topology_list_restart
+[05:36:23] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_custom_border_color (maxCustomBorderColorSamplers=4000)
+[05:36:23] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_subgroup_size_control (computeFullSubgroups)
+[05:36:23] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_transform_feedback
+[05:36:23] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_provoking_vertex (transformFeedbackPreservesProvokingVertex=false)
+[05:36:23] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_vertex_attribute_divisor
+[05:36:23] [Android mgl-srv-apply/INFO]: Enabled optional device extension: VK_EXT_multi_draw (maxMultiDrawCount=1024)
+[05:36:23] [Android mgl-srv-apply/INFO]: Device feature support: robustBufferAccess=true geometryShader=true independentBlend=true logicOp=true shaderClipDistance=true shaderCullDistance=true wideLines=true shaderInt64=true vertexStoresAtomics=true fragmentStoresAtomics=true storageImageExtendedFormats=true storageImageReadWithoutFormat=true storageImageWriteWithoutFormat=true drawIndirectFirstInstance=true multiDrawIndirect=true
+[05:36:23] [Android mgl-srv-apply/INFO]: Device feature enabled: robustBufferAccess=true geometryShader=true independentBlend=true logicOp=true shaderClipDistance=true shaderCullDistance=true wideLines=true shaderInt64=true vertexStoresAtomics=true fragmentStoresAtomics=true storageImageExtendedFormats=true storageImageReadWithoutFormat=true storageImageWriteWithoutFormat=true drawIndirectFirstInstance=true multiDrawIndirect=true shaderDrawParameters=true
+[05:36:23] [Android mgl-srv-apply/INFO]: Multi-draw dispatch tier: ext (VK_EXT_multi_draw=true, multiDrawIndirect=true, mode=auto)
+[05:36:23] [Android mgl-srv-apply/INFO]: index type uint8 enabled: true
+[05:36:23] [Android mgl-srv-apply/INFO]: Logical device created.
+[05:36:23] [Android mgl-srv-apply/INFO]: Queues got successfully.
+[05:36:23] [Android mgl-srv-apply/INFO]: Timer queries supported (timestampValidBits=48, timestampPeriod=52.083332 ns/tick)
+[05:36:23] [Android mgl-srv-apply/INFO]: PRIMITIVES_GENERATED probe triangles: drawn=1 stream=0/1 pgq=0(0) stat=1(1)
+[05:36:23] [Android mgl-srv-apply/INFO]: PRIMITIVES_GENERATED probe triangles+discard: drawn=1 stream=0/1 pgq=0(0) stat=0(1)
+[05:36:23] [Android mgl-srv-apply/INFO]: PRIMITIVES_GENERATED probe patches+discard: drawn=1 stream=0/1 pgq=0(0) stat=0(1)
+[05:36:23] [Android mgl-srv-apply/INFO]: PRIMITIVES_GENERATED for XFB-inactive draws will accumulate through a clipping-invocations pipeline-statistics pool
+[05:36:23] [Android mgl-srv-apply/INFO]: Command pool created
+[05:36:23] [Android mgl-srv-apply/INFO]: MaxFramesInFlight: configured request=3
+[05:36:23] [Android mgl-srv-apply/INFO]: MaxFramesInFlight: using 3 (surface minImageCount=11, maxImageCount=64)
+[05:36:23] [Android mgl-srv-apply/INFO]: CreateFrameContexts completed
+[05:36:23] [Android mgl-srv-apply/INFO]: DirectVulkan: using 256 program descriptor bindings
+[05:36:23] [Android mgl-srv-apply/INFO]: Got 5 surface formats:
+[05:36:23] [Android mgl-srv-apply/INFO]: Picked surface format: [VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR]
+[05:36:23] [Android mgl-srv-apply/INFO]: Got 4 present modes:
+[05:36:23] [Android mgl-srv-apply/INFO]: Picked present mode: VK_PRESENT_MODE_MAILBOX_KHR
+[05:36:23] [Android mgl-srv-apply/INFO]: Set minImageCount = 11
+[05:36:23] [Android mgl-srv-apply/INFO]: Swapchain currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+[05:36:23] [Android mgl-srv-apply/INFO]: Swapchain imageUsage = 0x13 (supportedUsageFlags = 0x9f)
+[05:36:23] [Android mgl-srv-apply/INFO]: Set swapchain preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+[05:36:23] [Android mgl-srv-apply/INFO]: Swapchain image views created
+[05:36:23] [Android mgl-srv-apply/INFO]: Swapchain created, extent = 640x480, swapchain imageCount = 11
+[05:36:23] [Android mgl-srv-apply/INFO]: DirectVulkan: suppressing depth writes on accumulation-blended pipelines (driver lacks cross-pipeline position invariance)
+[05:36:23] [Android mgl-srv-apply/INFO]: Vulkan shader subgroup support: detected=true advertised=true size=64 stages=0x30 operations=0x2bf
+[05:36:23] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS from 16777216 to 256
+[05:36:23] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS from 16777216 to 256
+[05:36:23] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMPUTE_UNIFORM_BLOCKS from 16777216 to 256
+[05:36:23] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS from 16777216 to 256
+[05:36:23] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_UNIFORM_BUFFER_BINDINGS from 16777216 to 256
+[05:36:23] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_SHADER_STORAGE_BLOCK_SIZE from 2147483647 to 536870912
+[05:36:23] [Android mgl-srv-apply/INFO]: Vulkan shader subgroup support: detected=true advertised=true size=64 stages=0x30 operations=0x2bf
+[05:36:23] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS from 16777216 to 256
+[05:36:23] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS from 16777216 to 256
+[05:36:23] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_COMPUTE_UNIFORM_BLOCKS from 16777216 to 256
+[05:36:23] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS from 16777216 to 256
+[05:36:23] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_UNIFORM_BUFFER_BINDINGS from 16777216 to 256
+[05:36:23] [Android mgl-srv-apply/INFO]: DirectVulkan: clamped GL_MAX_SHADER_STORAGE_BLOCK_SIZE from 2147483647 to 536870912
+[05:36:23] [Android mgl-srv-apply/ERROR]: ProgramFactory: handing vkCreateShaderModule an INVALID module for program 2 stage 4 - a backend transform after the clip/XFB fixups broke it (The result pointer storage class and base pointer storage class in OpAccessChain do not match.
+  %100 = OpAccessChain %_ptr_Input_float %151 %uint_2
+)
+[05:36:23] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=1 window=1 draws=2 draws/f=2.00 acc=36 acc/draw=18.00 bytes/f[buf=299448.00 tex=0.00 ubog=48.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=24.00 csob-blob=17599.00 seg=17621419.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=2 csob=3 mpr=0] emit[fbe=1 sve=3 sse=2 sie=0 ctu=3 trp=0 rsd=0 rsp=0 vbs=3 wrec=114 wrec/f=114.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=89 srvpark=31 cli=65 clipark=8] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=0/2 mdt=0/2]
+[05:36:23] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=1 valid=0 wall_ns=0 apply_thread_cpu_ns=0
+[05:36:23] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=2 window=1 draws=2 draws/f=2.00 acc=21 acc/draw=10.50 bytes/f[buf=4968.00 tex=0.00 ubog=48.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=24.00 csob-blob=0.00 seg=5388.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=1 csob=3 mpr=0] emit[fbe=0 sve=2 sse=0 sie=0 ctu=0 trp=0 rsd=0 rsp=0 vbs=3 wrec=18 wrec/f=18.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=94 srvpark=32 cli=69 clipark=11] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=1/1 mdt=0/2]
+[05:36:23] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=2 valid=1 wall_ns=794532 apply_thread_cpu_ns=794167
+[05:36:23] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=3 window=1 draws=2 draws/f=2.00 acc=21 acc/draw=10.50 bytes/f[buf=4536.00 tex=0.00 ubog=48.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=24.00 csob-blob=0.00 seg=4560.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=3 mpr=0] emit[fbe=0 sve=2 sse=0 sie=0 ctu=0 trp=0 rsd=0 rsp=0 vbs=3 wrec=17 wrec/f=17.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=102 srvpark=33 cli=73 clipark=14] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=1/1 mdt=0/2]
+[05:36:23] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=3 valid=1 wall_ns=953906 apply_thread_cpu_ns=868072
+[05:36:23] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=4 window=1 draws=2 draws/f=2.00 acc=21 acc/draw=10.50 bytes/f[buf=5832.00 tex=0.00 ubog=48.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=24.00 csob-blob=0.00 seg=5856.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=3 mpr=0] emit[fbe=0 sve=2 sse=0 sie=0 ctu=0 trp=0 rsd=0 rsp=0 vbs=3 wrec=17 wrec/f=17.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=112 srvpark=33 cli=77 clipark=14] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=1/1 mdt=0/2]
+[05:36:23] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=4 valid=1 wall_ns=396042 apply_thread_cpu_ns=331563
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=5 window=1 draws=30 draws/f=30.00 acc=315 acc/draw=10.50 bytes/f[buf=24638688.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=10135.00 seg=213208323.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=1 csob=31 mpr=0] emit[fbe=0 sve=28 sse=1 sie=0 ctu=28 trp=0 rsd=0 rsp=0 vbs=31 wrec=493 wrec/f=493.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=477 srvpark=116 cli=242 clipark=72] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=15/15 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=5 valid=1 wall_ns=1451748020 apply_thread_cpu_ns=113414588
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=6 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87264.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130632.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=566 srvpark=118 cli=276 clipark=75] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=6 valid=1 wall_ns=2287500 apply_thread_cpu_ns=2174583
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=7 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87264.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130632.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=653 srvpark=119 cli=310 clipark=78] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=7 valid=1 wall_ns=1774635 apply_thread_cpu_ns=1651405
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=8 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=748 srvpark=120 cli=344 clipark=80] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=8 valid=1 wall_ns=1646615 apply_thread_cpu_ns=1562293
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=9 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=870 srvpark=121 cli=378 clipark=83] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=9 valid=1 wall_ns=1602656 apply_thread_cpu_ns=1450156
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=10 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=989 srvpark=123 cli=412 clipark=86] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=10 valid=1 wall_ns=2197135 apply_thread_cpu_ns=1588594
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=11 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=1110 srvpark=124 cli=446 clipark=89] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=11 valid=1 wall_ns=1646928 apply_thread_cpu_ns=1512657
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=12 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=1232 srvpark=125 cli=480 clipark=92] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=12 valid=1 wall_ns=1424843 apply_thread_cpu_ns=1343022
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=13 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=1355 srvpark=126 cli=514 clipark=94] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=13 valid=1 wall_ns=1429636 apply_thread_cpu_ns=1348698
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=14 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=1476 srvpark=127 cli=548 clipark=96] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=14 valid=1 wall_ns=1410521 apply_thread_cpu_ns=1300625
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=15 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=1601 srvpark=128 cli=582 clipark=98] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=15 valid=1 wall_ns=1416562 apply_thread_cpu_ns=1335469
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=16 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=1725 srvpark=129 cli=616 clipark=100] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=16 valid=1 wall_ns=1331042 apply_thread_cpu_ns=1249948
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=17 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=1846 srvpark=130 cli=650 clipark=102] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=17 valid=1 wall_ns=1392968 apply_thread_cpu_ns=1276093
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=18 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=1969 srvpark=132 cli=684 clipark=104] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=18 valid=1 wall_ns=1950521 apply_thread_cpu_ns=1337604
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=19 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=2092 srvpark=133 cli=718 clipark=106] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=19 valid=1 wall_ns=1390313 apply_thread_cpu_ns=1308230
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=20 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=2215 srvpark=134 cli=752 clipark=108] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=20 valid=1 wall_ns=1364375 apply_thread_cpu_ns=1264636
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=21 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=2338 srvpark=135 cli=786 clipark=110] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=21 valid=1 wall_ns=1364479 apply_thread_cpu_ns=1282760
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=22 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=2463 srvpark=136 cli=820 clipark=112] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=22 valid=1 wall_ns=1331562 apply_thread_cpu_ns=1244116
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=23 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=2586 srvpark=137 cli=854 clipark=114] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=23 valid=1 wall_ns=1359115 apply_thread_cpu_ns=1277500
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=24 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=2711 srvpark=138 cli=888 clipark=116] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=24 valid=1 wall_ns=1319531 apply_thread_cpu_ns=1238073
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=25 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=87480.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=130848.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=2831 srvpark=140 cli=922 clipark=118] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=25 valid=1 wall_ns=2055000 apply_thread_cpu_ns=1420574
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=26 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=86184.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=129552.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=2957 srvpark=141 cli=956 clipark=120] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=26 valid=1 wall_ns=1383750 apply_thread_cpu_ns=1301978
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=27 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=86184.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=129552.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=3081 srvpark=142 cli=990 clipark=122] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=27 valid=1 wall_ns=1313282 apply_thread_cpu_ns=1231772
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=28 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=86184.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=129552.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=3204 srvpark=143 cli=1024 clipark=124] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=28 valid=1 wall_ns=1366666 apply_thread_cpu_ns=1277292
+[05:36:24] [Android mgl-srv-apply/INFO]: MGPipe stats: frames=29 window=1 draws=30 draws/f=30.00 acc=120 acc/draw=4.00 bytes/f[buf=86184.00 tex=0.00 ubog=112.00 ubon=0.00 vtxc=0.00 idxc=0.00 icmd=0.00 pmap=0.00 resid=248.00 csob-blob=112.00 seg=129552.00] tex[emit=0 box=0 rect=0 jobs=0] cso[csom=0 csob=31 mpr=0] emit[fbe=0 sve=27 sse=0 sie=0 ctu=1 trp=0 rsd=0 rsp=0 vbs=31 wrec=211 wrec/f=211.00 maxrec=1808 maxcap=4194304 ringwraps=0 ringpads=0 ringwaits=0] wait[srv=3329 srvpark=144 cli=1058 clipark=126] gates[ers=0/0 etl=0/0 eub=0/0 mfp=0/0 mpm=28/2 mdt=0/30]
+[05:36:24] [Android mgl-srv-apply/INFO]: P65ServerMetrics frame=29 valid=1 wall_ns=1363334 apply_thread_cpu_ns=1281875
+trace replay failed: {'passed': False, 'statusCode': 6, 'message': 'retrace completed; ssim=0.988998, ssimThreshold=0.990000, mismatchPixels=9836, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png', 'tracePath': '/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace', 'goldenPath': '/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png', 'alternateGoldenPaths': [], 'matchedGoldenPath': '/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png', 'actualPath': '/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png', 'diffPath': '/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/OpenRA-diff.png', 'backend': 'DirectVulkan', 'angleVariant': '', 'targetFrame': -1, 'targetCall': 31249, 'width': 640, 'height': 480, 'cropX': 1, 'cropY': 1, 'cropWidth': 638, 'cropHeight': 478, 'ssim': 0.988997893, 'ssimThreshold': 0.99, 'useAngle': False, 'usePbuffer': True, 'avoidAngleLlvmpipeSamplerMipmapMinFilter': False, 'avoidAngleLlvmpipeExplicitLodBias': False, 'fixIterationRPSubgroupScratch': False, 'deriveNumSubgroups': False, 'iterationRPFixBarrier': False, 'holdMs': 0, 'mismatchPixels': 9836}
+archived repeat 1 to .trace-work\p7w4\stats-lockstep-cold-1\OpenRA-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
