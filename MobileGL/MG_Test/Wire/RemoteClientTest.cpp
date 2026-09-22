@@ -582,16 +582,132 @@ TEST(CapsMirrorTest, AMaskWithoutAFamilyRefusesItAndNamesIt) {
     EXPECT_EQ(LastRefusedSubsystem(), kMGPipeSubsystemTextureResources);
 }
 
-TEST(CapsMirrorTest, APlaceholderMirrorConsumesNothing) {
-    // The safe direction, stated as a case. With no snapshot the mask is zero, every family
-    // answers "no consumer", the client emits nothing and the legacy pull path runs. The unsafe
-    // direction - emitting to a server that has no consumer - is ID-39's 66 lost uploads.
+// =====================================================================================
+// F1 (P7 wave 2): the placeholder is not an answer
+// =====================================================================================
+//
+// THE CASE THIS REPLACES SAID THE OPPOSITE, and it was wrong in the one way a green test can
+// be. `APlaceholderMirrorConsumesNothing` asserted that a mirror with no snapshot answers
+// "no consumer" for every family, and called it "the safe direction ... the client emits
+// nothing and the legacy pull path runs". There is no legacy pull path on the CLIENT under
+// split. What actually happened, measured on lavapipe and on an Adreno 830: MG_State::Init()
+// built GLContext's default texture objects before MG_Backend::Init() had started the session,
+// every one of their resource_create records was withheld against callMask=0 at generation 0,
+// and the only trace of it was one WARN line. The mirror must refuse, not answer.
+
+TEST(CapsMirrorTest, APlaceholderMirrorRefusesToAnswerAndNamesTheFamily) {
+#if MGTEST_HAVE_FORK
+    // A DEATH, AND ITS OWN STRING (R-16). The family word and the subsystem both have to be in
+    // the line, because "something aborted" is satisfied by any of the other 43 families.
+    const ChildResult result = RunInChild([] {
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        // AND THE SECOND HALF OF THE ARMING CONDITION, set by hand here because this suite
+        // does not run MG_ConfigLoader::Init: the gate is for a process whose CONFIGURATION
+        // asked for a split transport, i.e. one that is going to bring a client half up.
+        MG_Config::SplitTransportRequestedByConfig = true;
+        CapsMirror mirror;
+        EXPECT_FALSE(mirror.Valid());
+        // No session, no bring-up in flight: the wait cannot succeed and must not be taken.
+        (void)mirror.ServerConsumes(kMGPipeSubsystemTextureResources);
+        std::fflush(nullptr);
+        ::_exit(0);
+    });
+    ASSERT_TRUE(DiedOfAbort(result)) << DescribeStatus(result) << "\n" << result.Log;
+    EXPECT_NE(result.Log.find("Fatal{CapsBeforeFirstSnapshot, \"TextureResources\"}"),
+              std::string::npos)
+        << "the refusal must name the family that asked; a death with no word is invisible to "
+           "the census, to run_trace_case.cmake and to every red-once:\n"
+        << result.Log;
+    EXPECT_NE(result.Log.find("0x400"), std::string::npos)
+        << "the subsystem bit belongs in the line beside its word:\n"
+        << result.Log;
+#else
+    GTEST_SKIP() << "the Fatal arm is only observable through a fork";
+#endif
+}
+
+TEST(CapsMirrorTest, ThePlaceholderWaitsForASnapshotAnotherThreadIsFetching) {
+#if MGTEST_HAVE_FORK
+    // THE POSITIVE HALF OF THE WAIT, and the only shape in which "block with a bounded wait" is
+    // a correct answer to F1: a bring-up that is genuinely in flight, on a thread that is not
+    // the asking one. The case above is why the wait cannot be the WHOLE fix - the production
+    // defect had the emitter and the handshake on ONE thread, in sequence, and no wait can
+    // help there.
+    //
+    // DRIVEN THROUGH THE PRODUCTION BRING-UP, not a flag this case sets: MG_Backend::Init() is
+    // what creates the server's backend, publishes its real mask and starts the session, and
+    // the in-flight fact the wait reads is ClientSession's own BringUpScope. The server's first
+    // snapshot is held back by the F1 test knob so the window is wide enough to enter on
+    // purpose rather than by luck - and by LESS than the wait's own budget, so a wait that is
+    // taken succeeds instead of expiring.
+    const ChildResult result = RunInChild([] {
+        ::alarm(30);
+        ::setenv("MOBILEGL_TEST_DELAY_FIRST_CAPS_MS", "50", 1);
+        // A FORK CHILD INHERITS WHATEVER THE PREVIOUS CASE ADOPTED, and a mirror that is
+        // already valid would make this case a statement about that snapshot rather than about
+        // the placeholder window. Back to generation 0 first, deliberately and by name.
+        ResetCapsMirrorForTest();
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        MG_Config::SplitTransportRequestedByConfig = true;
+        MG_Config::ActiveBackendType = BackendType::DirectVulkan;
+        MG_Config::Features.PipePush = kMGPipeSubsystemsMigratedAtP5e;
+        MG_Pipe::MGPipeSetResourceOps(nullptr);
+
+        std::atomic<bool> answered{false};
+        std::atomic<bool> consumes{false};
+        std::thread reader([&] {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            while (!BringUpInFlight() && PublishedCapsGeneration() == 0 &&
+                   std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            consumes.store(CapsMirrorInstance().ServerConsumes(kMGPipeSubsystemResources));
+            answered.store(true);
+        });
+        MG_Backend::Init();
+        reader.join();
+
+        EXPECT_TRUE(answered.load()) << "the reader never returned from ServerConsumes";
+        EXPECT_TRUE(consumes.load())
+            << "a reader that asked DURING the bring-up must get the server's real answer - "
+               "Magma publishes the resource family - rather than the placeholder's false";
+        EXPECT_GT(PublishedCapsGeneration(), 0u);
+        ClientSessionInstance().Stop();
+        MG_Remote::Server::ServerLoopInstance().Stop();
+        std::fflush(nullptr);
+        ::_exit(::testing::Test::HasFailure() ? 1 : 0);
+    });
+    ASSERT_GE(result.Status, 0) << "fork/waitpid failed";
+    ASSERT_TRUE(WIFEXITED(result.Status)) << DescribeStatus(result) << "\n" << result.Log;
+    EXPECT_EQ(WEXITSTATUS(result.Status), 0) << result.Log;
+#else
+    GTEST_SKIP() << "the production bring-up is process-global and needs fork to isolate";
+#endif
+}
+
+TEST(CapsMirrorTest, ARealSnapshotThatWithholdsAFamilyStillAnswersFalse) {
+    // THE OTHER NEGATIVE CONTROL, and the one that keeps this package from being a mask
+    // defaulted to all-ones: a server that really does not consume a family is still answered
+    // "no", counted and named. Only the PLACEHOLDER is refused.
+    AdoptSnapshot(MakeSnapshot(kMGPipeSubsystemPrograms, 0));
+    ResetConsumerRefusalsForTest();
+    EXPECT_TRUE(CapsMirrorInstance().Valid());
+    EXPECT_FALSE(CapsMirrorInstance().ServerConsumes(kMGPipeSubsystemTextureResources));
+    EXPECT_EQ(ConsumerRefusals(), 1u);
+    EXPECT_EQ(LastRefusedSubsystem(), kMGPipeSubsystemTextureResources);
+}
+
+TEST(CapsMirrorTest, TheReadAccessorsStillAnswerFromThePlaceholder) {
+    // P5's ruling for the READ accessors is NOT narrowed by F1, and it must not be: LogBackendInfo
+    // reads GetRendererInfo() during MG_Backend::Init() and an abort there is a process that
+    // cannot start. Only ServerConsumes - a decision, not a read - changed.
     MGPCaps empty{};
     CapsMirror mirror;
     EXPECT_FALSE(mirror.Valid());
-    EXPECT_FALSE(mirror.ServerConsumes(kMGPipeSubsystemResources));
-    EXPECT_FALSE(mirror.ServerConsumes(kMGPipeSubsystemPrograms));
+    EXPECT_EQ(mirror.Generation(), 0u);
     EXPECT_FALSE(mirror.HasCap(kCapResidentSubData));
+    EXPECT_EQ(mirror.CallMask(), 0u);
+    EXPECT_EQ(mirror.Backend(), BackendType::Unknown);
     (void)empty;
 }
 

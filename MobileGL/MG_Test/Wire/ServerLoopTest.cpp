@@ -2712,6 +2712,14 @@ int main(int argc, char** argv) {
     // left it at Monolith would be a server test running the monolith answers, which is the
     // failure this phase is built to make impossible.
     MG_Config::Transport = MG_Config::TransportMode::InProcess;
+    // AND IT SETS THE MODE BY HAND, WITHOUT MG_ConfigLoader::Init (P7 F1). That is not an
+    // accident of this suite and it is load-bearing for the caps gate: the client-side rule
+    // "a record family's liveness may never be decided from a placeholder caps mirror" is
+    // armed by ConfigLoader resolving a split transport for a process that will therefore go
+    // on to build a CLIENT. This binary builds server sessions and - in
+    // EglServerFixture::BringUp - the server's own frontend GLContext, and never a client
+    // session at all, so the gate stays disarmed here and the placeholder keeps answering
+    // exactly what it answered before.
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();
     fs::remove(path, ec);
