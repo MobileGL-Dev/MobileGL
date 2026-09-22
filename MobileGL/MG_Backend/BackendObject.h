@@ -332,13 +332,13 @@ namespace MobileGL {
         };
 
         struct DynamicBackendParameters {
-            SizeT UniformBufferOffsetAlignment = 256;
+            Uint64 UniformBufferOffsetAlignment = 256;
             // GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, which is a SEPARATE limit from the
             // uniform one and is routinely larger: Adreno 830 reports 32 for uniform buffers and
             // 64 for storage buffers. Answering the storage query with the uniform value let an
             // application bind a storage range at an offset the driver cannot address, which it
             // accepted without error and then wrote somewhere else entirely.
-            SizeT ShaderStorageBufferOffsetAlignment = 256;
+            Uint64 ShaderStorageBufferOffsetAlignment = 256;
             // GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT. 1.0 means the backend cannot filter anisotropically,
             // which is also why the extension is not advertised in that case.
             Float MaxTextureMaxAnisotropy = 1.0f;
@@ -460,8 +460,8 @@ namespace MobileGL {
             // VulkanRenderer::SelectProvokingVertexMode out of VK_EXT_provoking_vertex,
             // provokingVertexModePerPipeline and the topology, so no single convention is true
             // of the backend.
-            GLenum LayerProvokingVertex = GL_UNDEFINED_VERTEX;
-            GLenum ViewportIndexProvokingVertex = GL_UNDEFINED_VERTEX;
+            Uint32 LayerProvokingVertex = GL_UNDEFINED_VERTEX;
+            Uint32 ViewportIndexProvokingVertex = GL_UNDEFINED_VERTEX;
             Int MaxViewportWidth = 16384;
             Int MaxViewportHeight = 16384;
             Float ViewportBoundsRangeMin = 0.0f;
@@ -558,7 +558,7 @@ namespace MobileGL {
             Bool SupportsTessellationPointSize = true;
             // The geometry-stage twin (OpCapability GeometryPointSize).
             Bool SupportsGeometryPointSize = true;
-            SizeT MaxShaderStorageBlockSize = 128 * 1024 * 1024;
+            Uint64 MaxShaderStorageBlockSize = 128 * 1024 * 1024;
             Uint32 SubgroupSize = 0;
             Uint32 SubgroupSupportedStages = 0;
             Uint32 SubgroupSupportedFeatures = 0;

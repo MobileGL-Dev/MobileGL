@@ -12,12 +12,38 @@
 
 namespace MobileGL {
     namespace MG_Util::Debug {
+        std::mutex& LogMutex();
         static FILE* s_logFile = nullptr;
 
 #if MOBILEGL_BUILD_DISAGGREGATED
         // The server role's own sink. Opened lazily, on the first line a server-role thread
         // writes, so a process that never plays the role never creates the file.
         static FILE* s_serverLogFile = nullptr;
+        static LogForwarder s_forwarder = nullptr;
+        static void* s_forwarderUser = nullptr;
+
+        void SetLogForwarder(LogForwarder forwarder, void* user) {
+            std::lock_guard<std::mutex> lock(LogMutex());
+            s_forwarder = forwarder;
+            s_forwarderUser = user;
+        }
+
+        void WithLogBarrier(void (*action)(void*), void* user) {
+            std::lock_guard<std::mutex> lock(LogMutex());
+            action(user);
+        }
+
+        void WritePeerLog(const char* message) {
+            std::lock_guard<std::mutex> lock(LogMutex());
+            const char* path = std::getenv("MOBILEGL_LOG_FILE_PATH");
+            if (!path || !*path) path = MOBILEGL_LOG_FILE_PATH;
+            if (!path || !*path) return;
+            if (!s_serverLogFile) s_serverLogFile = std::fopen(RoleLogPath(path, LogRole::Server).c_str(), "w");
+            if (s_serverLogFile) {
+                std::fputs(message, s_serverLogFile);
+                std::fflush(s_serverLogFile);
+            }
+        }
 
         // THE PROCESS DEFAULT, read once. A spawned server image is the server on every thread -
         // there is no other role in it - and MOBILEGL_IPC_ROLE is set by the launcher before
@@ -256,6 +282,9 @@ namespace MobileGL {
 #endif
 
             WriteToFile(out.c_str());
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (s_forwarder && ThreadIsServerRole()) s_forwarder(s_forwarderUser, out.c_str());
+#endif
 
             va_end(args);
         }

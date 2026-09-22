@@ -2003,6 +2003,38 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
+    # A single supervisor serves one session at a time. Fixture teardown also reaps a
+    # child left behind by a failed client; the resource lock serializes this lane.
+    set(MOBILEGL_ITEST_TCP_ENDPOINT "tcp://127.0.0.1:40613" CACHE STRING "Loopback TCP integration endpoint")
+    set(MOBILEGL_ITEST_TCP_DEVICE_ENDPOINT "" CACHE STRING "Optional device TCP integration endpoint")
+    set(MOBILEGL_ITEST_TCP_DEVICE_TOKEN "" CACHE STRING "Token for the device TCP integration endpoint")
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    set(MGL_TCP_FIXTURE "${CMAKE_SOURCE_DIR}/scripts/ci/tcp_server_fixture.py")
+    set(MGL_TCP_STATE "${CMAKE_CURRENT_BINARY_DIR}/tcp-server.json")
+    add_test(NAME TcpServer.Start COMMAND "${Python3_EXECUTABLE}" "${MGL_TCP_FIXTURE}"
+        start --server "${MGL_ITEST_SPLIT_SERVER_PATH}" --endpoint "${MOBILEGL_ITEST_TCP_ENDPOINT}"
+        --state "${MGL_TCP_STATE}")
+    add_test(NAME TcpServer.Stop COMMAND "${Python3_EXECUTABLE}" "${MGL_TCP_FIXTURE}"
+        stop --state "${MGL_TCP_STATE}")
+    set_tests_properties(TcpServer.Start PROPERTIES FIXTURES_SETUP mobilegl-tcp TIMEOUT 20)
+    set_tests_properties(TcpServer.Stop PROPERTIES FIXTURES_CLEANUP mobilegl-tcp TIMEOUT 20)
+    add_test(NAME TcpLane.AccountingControls COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/scripts/ci/tcp_lane_tools_test.py")
+    set_tests_properties(TcpLane.AccountingControls PROPERTIES LABELS unit TIMEOUT 20)
+    mgl_itest_join_environment(MGL_ITEST_GLES_TCP_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=spawn"
+        "MOBILEGL_IPC_CONTROL=${MOBILEGL_ITEST_TCP_ENDPOINT}" "MOBILEGL_IPC_DATA=stream"
+        "MOBILEGL_IPC_REQUIRE_SAME_BUILD=1" "MOBILEGL_IPC_LOG_FORWARD=1" "MOBILEGL_IPC_TOKEN="
+        "MGITEST_SPLIT_LANE=1" "MGITEST_TCP_LANE=1" "MOBILEGL_ITEST_REQUIRE_GPU=1"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+    mgl_itest_join_environment(MGL_ITEST_GLES_TCPDEVICE_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=spawn"
+        "MOBILEGL_IPC_CONTROL=${MOBILEGL_ITEST_TCP_DEVICE_ENDPOINT}" "MOBILEGL_IPC_DATA=stream"
+        "MOBILEGL_IPC_REQUIRE_SAME_BUILD=1" "MOBILEGL_IPC_LOG_FORWARD=1"
+        "MOBILEGL_IPC_TOKEN=${MOBILEGL_ITEST_TCP_DEVICE_TOKEN}"
+        "MGITEST_SPLIT_LANE=1" "MGITEST_TCP_LANE=1" "MOBILEGL_ITEST_REQUIRE_GPU=1"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+
     # scenarioFilter, a PREFIX TAIL (empty for most; "F1." and "Ct." for the two per-slot loops,
     # which name their sub-lane in the test name), then zero or more EXTRA LABEL STEMS. A stem is
     # suffixed with the arm's own name (`integration-clientarrays` becomes `-split` on one arm and
@@ -2017,9 +2049,20 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     set(MGL_SPLIT_ARM_TEST_LISTS "")
     set(MGL_SPLIT_ARM_INDEX 0)
     macro(mgl_itest_register_split_arms scenarioFilter prefixTail)
-        foreach(mglItestArm IN ITEMS Split Spawn)
+        set(mglItestArms Split Spawn Tcp)
+        if(MOBILEGL_ITEST_TCP_DEVICE_ENDPOINT)
+            list(APPEND mglItestArms TcpDevice)
+        endif()
+        foreach(mglItestArm IN LISTS mglItestArms)
             string(TOLOWER "${mglItestArm}" mglItestArmLower)
             string(TOUPPER "${mglItestArm}" mglItestArmUpper)
+            set(mglItestArmProperties)
+            if(mglItestArm STREQUAL "Tcp")
+                set(mglItestArmProperties FIXTURES_REQUIRED mobilegl-tcp RESOURCE_LOCK mobilegl-tcp)
+            elseif(mglItestArm STREQUAL "TcpDevice")
+                set(mglItestArmLower tcp-device)
+                set(mglItestArmProperties RESOURCE_LOCK mobilegl-tcp-device)
+            endif()
             set(mglItestArmLabels "integration-gpu\\;integration-${mglItestArmLower}")
             foreach(mglItestExtra IN ITEMS ${ARGN})
                 set(mglItestArmLabels "${mglItestArmLabels}\\;${mglItestExtra}-${mglItestArmLower}")
@@ -2042,6 +2085,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                     LABELS "${mglItestArmLabels}"
                     TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ENVIRONMENT "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}"
+                    ${mglItestArmProperties}
             )
             list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
             math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")

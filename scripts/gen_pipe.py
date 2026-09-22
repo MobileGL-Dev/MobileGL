@@ -692,6 +692,33 @@ def banner(name, title, sources):
     return GENERATED_BANNER.format(name=name, title=title, sources=sources)
 
 
+def gen_wire_layout(calls, payloads):
+    """Compiler-evaluated wire layout, including same-width member reorders."""
+    out = [banner("PipeWireLayout.inc", "P6.5: wire layout and ordered catalogue.",
+                  "PipeFields.def and PipeCalls.def")]
+    out += ["struct WireLayoutMember { const char* Name; Uint64 Offset; Uint64 Size; };",
+            "inline constexpr WireLayoutMember kMGPipeWireLayoutMembers[] = {"]
+    fields = parse_field_lists()
+    for payload in payloads:
+        out.append('    {"%s", 0, sizeof(%s)},' % (payload, payload))
+        for field in fields[payload]:
+            out.append('    {"%s.%s", offsetof(%s, %s), sizeof(((%s*)nullptr)->%s)},' %
+                       (payload, field, payload, field, payload, field))
+    for payload, names in (("MGPipeHandle", ("Slot", "Gen")),
+                           ("MGPWireRecHeader", ("Op", "Flags", "Size"))):
+        out.append('    {"%s", 0, sizeof(%s)},' % (payload, payload))
+        for field in names:
+            out.append('    {"%s.%s", offsetof(%s, %s), sizeof(((%s*)nullptr)->%s)},' %
+                       (payload, field, payload, field, payload, field))
+    out += ["};", "struct WireCallLayout { const char* Name; const char* Payload; Uint64 Op; Uint64 Flags; Uint64 Wait; };",
+            "inline constexpr WireCallLayout kMGPipeWireCallLayouts[] = {"]
+    for call in calls:
+        out.append('    {"%s", "%s", static_cast<Uint64>(MGPWireOp::%s), static_cast<Uint64>(%s), static_cast<Uint64>(%s)},' %
+                   (call.Name, call.Payload, call.Name, " | ".join(call.Flags), call.Wait))
+    out += ["};", ""]
+    return "\n".join(out)
+
+
 def gen_tables(calls):
     screen = [c for c in calls if c.IsScreen]
     context = [c for c in calls if not c.IsScreen]
@@ -1698,6 +1725,7 @@ def main():
     write(os.path.join(GENERATED_DIR, "PipeThunks.inc"), gen_thunks(calls), args.check, changed)
     write(os.path.join(GENERATED_DIR, "PipeWire.inc"),
           gen_wire(calls, parse_field_lists().get("ResidualValueBlock")), args.check, changed)
+    write(os.path.join(GENERATED_DIR, "PipeWireLayout.inc"), gen_wire_layout(calls, payloads), args.check, changed)
     write(os.path.join(GENERATED_DIR, "PipeVerify.inc"), gen_verify(payloads), args.check, changed)
     write(os.path.join(GENERATED_DIR, "PipeFilled.inc"), gen_filled(accessors, calls, sticky, emitted),
           args.check, changed)

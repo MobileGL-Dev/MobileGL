@@ -32,6 +32,15 @@ namespace Wire {
 struct SegmentRef;
 struct SegmentRefBuilder;
 
+struct LinkTerms;
+struct LinkTermsBuilder;
+
+struct Refuse;
+struct RefuseBuilder;
+
+struct LogFlush;
+struct LogFlushBuilder;
+
 struct Hello;
 struct HelloBuilder;
 
@@ -111,6 +120,147 @@ inline const char *EnumNameSegmentKind(SegmentKind e) {
   if (::flatbuffers::IsOutRange(e, SegmentKind::None, SegmentKind::Adopt)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesSegmentKind()[index];
+}
+
+enum class DataPlane : uint8_t {
+  SharedSegments = 0,
+  Stream = 1,
+  MIN = SharedSegments,
+  MAX = Stream
+};
+
+inline const DataPlane (&EnumValuesDataPlane())[2] {
+  static const DataPlane values[] = {
+    DataPlane::SharedSegments,
+    DataPlane::Stream
+  };
+  return values;
+}
+
+inline const char * const *EnumNamesDataPlane() {
+  static const char * const names[3] = {
+    "SharedSegments",
+    "Stream",
+    nullptr
+  };
+  return names;
+}
+
+inline const char *EnumNameDataPlane(DataPlane e) {
+  if (::flatbuffers::IsOutRange(e, DataPlane::SharedSegments, DataPlane::Stream)) return "";
+  const size_t index = static_cast<size_t>(e);
+  return EnumNamesDataPlane()[index];
+}
+
+enum class WireForm : uint8_t {
+  StructImage = 0,
+  MIN = StructImage,
+  MAX = StructImage
+};
+
+inline const WireForm (&EnumValuesWireForm())[1] {
+  static const WireForm values[] = {
+    WireForm::StructImage
+  };
+  return values;
+}
+
+inline const char * const *EnumNamesWireForm() {
+  static const char * const names[2] = {
+    "StructImage",
+    nullptr
+  };
+  return names;
+}
+
+inline const char *EnumNameWireForm(WireForm e) {
+  if (::flatbuffers::IsOutRange(e, WireForm::StructImage, WireForm::StructImage)) return "";
+  const size_t index = static_cast<size_t>(e);
+  return EnumNamesWireForm()[index];
+}
+
+enum class DialMode : uint8_t {
+  No = 0,
+  Fork = 1,
+  Connect = 2,
+  MIN = No,
+  MAX = Connect
+};
+
+inline const DialMode (&EnumValuesDialMode())[3] {
+  static const DialMode values[] = {
+    DialMode::No,
+    DialMode::Fork,
+    DialMode::Connect
+  };
+  return values;
+}
+
+inline const char * const *EnumNamesDialMode() {
+  static const char * const names[4] = {
+    "No",
+    "Fork",
+    "Connect",
+    nullptr
+  };
+  return names;
+}
+
+inline const char *EnumNameDialMode(DialMode e) {
+  if (::flatbuffers::IsOutRange(e, DialMode::No, DialMode::Connect)) return "";
+  const size_t index = static_cast<size_t>(e);
+  return EnumNamesDialMode()[index];
+}
+
+enum class RefuseCode : uint32_t {
+  None = 0,
+  ProtocolVersion = 1,
+  WireFingerprint = 2,
+  BuildFingerprint = 3,
+  Authentication = 4,
+  LinkTerms = 5,
+  Backend = 6,
+  Busy = 7,
+  MalformedHello = 8,
+  MIN = None,
+  MAX = MalformedHello
+};
+
+inline const RefuseCode (&EnumValuesRefuseCode())[9] {
+  static const RefuseCode values[] = {
+    RefuseCode::None,
+    RefuseCode::ProtocolVersion,
+    RefuseCode::WireFingerprint,
+    RefuseCode::BuildFingerprint,
+    RefuseCode::Authentication,
+    RefuseCode::LinkTerms,
+    RefuseCode::Backend,
+    RefuseCode::Busy,
+    RefuseCode::MalformedHello
+  };
+  return values;
+}
+
+inline const char * const *EnumNamesRefuseCode() {
+  static const char * const names[10] = {
+    "None",
+    "ProtocolVersion",
+    "WireFingerprint",
+    "BuildFingerprint",
+    "Authentication",
+    "LinkTerms",
+    "Backend",
+    "Busy",
+    "MalformedHello",
+    nullptr
+  };
+  return names;
+}
+
+inline const char *EnumNameRefuseCode(RefuseCode e) {
+  if (::flatbuffers::IsOutRange(e, RefuseCode::None, RefuseCode::MalformedHello)) return "";
+  const size_t index = static_cast<size_t>(e);
+  return EnumNamesRefuseCode()[index];
 }
 
 enum class SurfaceOpKind : uint8_t {
@@ -350,11 +500,13 @@ enum class CtrlMsg : uint8_t {
   AuxRequest = 8,
   Fatal = 9,
   LogLine = 10,
+  Refuse = 11,
+  LogFlush = 12,
   MIN = NONE,
-  MAX = LogLine
+  MAX = LogFlush
 };
 
-inline const CtrlMsg (&EnumValuesCtrlMsg())[11] {
+inline const CtrlMsg (&EnumValuesCtrlMsg())[13] {
   static const CtrlMsg values[] = {
     CtrlMsg::NONE,
     CtrlMsg::Hello,
@@ -366,13 +518,15 @@ inline const CtrlMsg (&EnumValuesCtrlMsg())[11] {
     CtrlMsg::ResyncDone,
     CtrlMsg::AuxRequest,
     CtrlMsg::Fatal,
-    CtrlMsg::LogLine
+    CtrlMsg::LogLine,
+    CtrlMsg::Refuse,
+    CtrlMsg::LogFlush
   };
   return values;
 }
 
 inline const char * const *EnumNamesCtrlMsg() {
-  static const char * const names[12] = {
+  static const char * const names[14] = {
     "NONE",
     "Hello",
     "Welcome",
@@ -384,13 +538,15 @@ inline const char * const *EnumNamesCtrlMsg() {
     "AuxRequest",
     "Fatal",
     "LogLine",
+    "Refuse",
+    "LogFlush",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameCtrlMsg(CtrlMsg e) {
-  if (::flatbuffers::IsOutRange(e, CtrlMsg::NONE, CtrlMsg::LogLine)) return "";
+  if (::flatbuffers::IsOutRange(e, CtrlMsg::NONE, CtrlMsg::LogFlush)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesCtrlMsg()[index];
 }
@@ -437,6 +593,14 @@ template<> struct CtrlMsgTraits<MobileGL::Wire::Fatal> {
 
 template<> struct CtrlMsgTraits<MobileGL::Wire::LogLine> {
   static const CtrlMsg enum_value = CtrlMsg::LogLine;
+};
+
+template<> struct CtrlMsgTraits<MobileGL::Wire::Refuse> {
+  static const CtrlMsg enum_value = CtrlMsg::Refuse;
+};
+
+template<> struct CtrlMsgTraits<MobileGL::Wire::LogFlush> {
+  static const CtrlMsg enum_value = CtrlMsg::LogFlush;
 };
 
 template <bool B = false>
@@ -538,6 +702,270 @@ inline ::flatbuffers::Offset<SegmentRef> CreateSegmentRefDirect(
       name__);
 }
 
+struct LinkTerms FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef LinkTermsBuilder Builder;
+  struct Traits;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_DATAPLANE = 4,
+    VT_WIREFORM = 6,
+    VT_MAXREPLYBYTES = 8,
+    VT_CMDWINDOWBYTES = 10,
+    VT_STAGEWINDOWBYTES = 12,
+    VT_EVENTWINDOWBYTES = 14
+  };
+  MobileGL::Wire::DataPlane dataPlane() const {
+    return static_cast<MobileGL::Wire::DataPlane>(GetField<uint8_t>(VT_DATAPLANE, 0));
+  }
+  MobileGL::Wire::WireForm wireForm() const {
+    return static_cast<MobileGL::Wire::WireForm>(GetField<uint8_t>(VT_WIREFORM, 0));
+  }
+  uint64_t maxReplyBytes() const {
+    return GetField<uint64_t>(VT_MAXREPLYBYTES, 0);
+  }
+  uint64_t cmdWindowBytes() const {
+    return GetField<uint64_t>(VT_CMDWINDOWBYTES, 0);
+  }
+  uint64_t stageWindowBytes() const {
+    return GetField<uint64_t>(VT_STAGEWINDOWBYTES, 0);
+  }
+  uint64_t eventWindowBytes() const {
+    return GetField<uint64_t>(VT_EVENTWINDOWBYTES, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint8_t>(verifier, VT_DATAPLANE, 1) &&
+           VerifyField<uint8_t>(verifier, VT_WIREFORM, 1) &&
+           VerifyField<uint64_t>(verifier, VT_MAXREPLYBYTES, 8) &&
+           VerifyField<uint64_t>(verifier, VT_CMDWINDOWBYTES, 8) &&
+           VerifyField<uint64_t>(verifier, VT_STAGEWINDOWBYTES, 8) &&
+           VerifyField<uint64_t>(verifier, VT_EVENTWINDOWBYTES, 8) &&
+           verifier.EndTable();
+  }
+};
+
+struct LinkTermsBuilder {
+  typedef LinkTerms Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_dataPlane(MobileGL::Wire::DataPlane dataPlane) {
+    fbb_.AddElement<uint8_t>(LinkTerms::VT_DATAPLANE, static_cast<uint8_t>(dataPlane), 0);
+  }
+  void add_wireForm(MobileGL::Wire::WireForm wireForm) {
+    fbb_.AddElement<uint8_t>(LinkTerms::VT_WIREFORM, static_cast<uint8_t>(wireForm), 0);
+  }
+  void add_maxReplyBytes(uint64_t maxReplyBytes) {
+    fbb_.AddElement<uint64_t>(LinkTerms::VT_MAXREPLYBYTES, maxReplyBytes, 0);
+  }
+  void add_cmdWindowBytes(uint64_t cmdWindowBytes) {
+    fbb_.AddElement<uint64_t>(LinkTerms::VT_CMDWINDOWBYTES, cmdWindowBytes, 0);
+  }
+  void add_stageWindowBytes(uint64_t stageWindowBytes) {
+    fbb_.AddElement<uint64_t>(LinkTerms::VT_STAGEWINDOWBYTES, stageWindowBytes, 0);
+  }
+  void add_eventWindowBytes(uint64_t eventWindowBytes) {
+    fbb_.AddElement<uint64_t>(LinkTerms::VT_EVENTWINDOWBYTES, eventWindowBytes, 0);
+  }
+  explicit LinkTermsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<LinkTerms> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<LinkTerms>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<LinkTerms> CreateLinkTerms(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    MobileGL::Wire::DataPlane dataPlane = MobileGL::Wire::DataPlane::SharedSegments,
+    MobileGL::Wire::WireForm wireForm = MobileGL::Wire::WireForm::StructImage,
+    uint64_t maxReplyBytes = 0,
+    uint64_t cmdWindowBytes = 0,
+    uint64_t stageWindowBytes = 0,
+    uint64_t eventWindowBytes = 0) {
+  LinkTermsBuilder builder_(_fbb);
+  builder_.add_eventWindowBytes(eventWindowBytes);
+  builder_.add_stageWindowBytes(stageWindowBytes);
+  builder_.add_cmdWindowBytes(cmdWindowBytes);
+  builder_.add_maxReplyBytes(maxReplyBytes);
+  builder_.add_wireForm(wireForm);
+  builder_.add_dataPlane(dataPlane);
+  return builder_.Finish();
+}
+
+struct LinkTerms::Traits {
+  using type = LinkTerms;
+  static auto constexpr Create = CreateLinkTerms;
+};
+
+struct Refuse FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef RefuseBuilder Builder;
+  struct Traits;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_CODE = 4,
+    VT_DETAIL = 6,
+    VT_EXPECTED = 8,
+    VT_ACTUAL = 10,
+    VT_PEERVALUE = 12
+  };
+  MobileGL::Wire::RefuseCode code() const {
+    return static_cast<MobileGL::Wire::RefuseCode>(GetField<uint32_t>(VT_CODE, 0));
+  }
+  const ::flatbuffers::String *detail() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_DETAIL);
+  }
+  uint64_t expected() const {
+    return GetField<uint64_t>(VT_EXPECTED, 0);
+  }
+  uint64_t actual() const {
+    return GetField<uint64_t>(VT_ACTUAL, 0);
+  }
+  const ::flatbuffers::String *peerValue() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_PEERVALUE);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint32_t>(verifier, VT_CODE, 4) &&
+           VerifyOffset(verifier, VT_DETAIL) &&
+           verifier.VerifyString(detail()) &&
+           VerifyField<uint64_t>(verifier, VT_EXPECTED, 8) &&
+           VerifyField<uint64_t>(verifier, VT_ACTUAL, 8) &&
+           VerifyOffset(verifier, VT_PEERVALUE) &&
+           verifier.VerifyString(peerValue()) &&
+           verifier.EndTable();
+  }
+};
+
+struct RefuseBuilder {
+  typedef Refuse Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_code(MobileGL::Wire::RefuseCode code) {
+    fbb_.AddElement<uint32_t>(Refuse::VT_CODE, static_cast<uint32_t>(code), 0);
+  }
+  void add_detail(::flatbuffers::Offset<::flatbuffers::String> detail) {
+    fbb_.AddOffset(Refuse::VT_DETAIL, detail);
+  }
+  void add_expected(uint64_t expected) {
+    fbb_.AddElement<uint64_t>(Refuse::VT_EXPECTED, expected, 0);
+  }
+  void add_actual(uint64_t actual) {
+    fbb_.AddElement<uint64_t>(Refuse::VT_ACTUAL, actual, 0);
+  }
+  void add_peerValue(::flatbuffers::Offset<::flatbuffers::String> peerValue) {
+    fbb_.AddOffset(Refuse::VT_PEERVALUE, peerValue);
+  }
+  explicit RefuseBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<Refuse> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<Refuse>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<Refuse> CreateRefuse(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    MobileGL::Wire::RefuseCode code = MobileGL::Wire::RefuseCode::None,
+    ::flatbuffers::Offset<::flatbuffers::String> detail = 0,
+    uint64_t expected = 0,
+    uint64_t actual = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> peerValue = 0) {
+  RefuseBuilder builder_(_fbb);
+  builder_.add_actual(actual);
+  builder_.add_expected(expected);
+  builder_.add_peerValue(peerValue);
+  builder_.add_detail(detail);
+  builder_.add_code(code);
+  return builder_.Finish();
+}
+
+struct Refuse::Traits {
+  using type = Refuse;
+  static auto constexpr Create = CreateRefuse;
+};
+
+inline ::flatbuffers::Offset<Refuse> CreateRefuseDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    MobileGL::Wire::RefuseCode code = MobileGL::Wire::RefuseCode::None,
+    const char *detail = nullptr,
+    uint64_t expected = 0,
+    uint64_t actual = 0,
+    const char *peerValue = nullptr) {
+  auto detail__ = detail ? _fbb.CreateString(detail) : 0;
+  auto peerValue__ = peerValue ? _fbb.CreateString(peerValue) : 0;
+  return MobileGL::Wire::CreateRefuse(
+      _fbb,
+      code,
+      detail__,
+      expected,
+      actual,
+      peerValue__);
+}
+
+struct LogFlush FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef LogFlushBuilder Builder;
+  struct Traits;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_SEQ = 4,
+    VT_ACK = 6
+  };
+  uint64_t seq() const {
+    return GetField<uint64_t>(VT_SEQ, 0);
+  }
+  bool ack() const {
+    return GetField<uint8_t>(VT_ACK, 0) != 0;
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_SEQ, 8) &&
+           VerifyField<uint8_t>(verifier, VT_ACK, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct LogFlushBuilder {
+  typedef LogFlush Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_seq(uint64_t seq) {
+    fbb_.AddElement<uint64_t>(LogFlush::VT_SEQ, seq, 0);
+  }
+  void add_ack(bool ack) {
+    fbb_.AddElement<uint8_t>(LogFlush::VT_ACK, static_cast<uint8_t>(ack), 0);
+  }
+  explicit LogFlushBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<LogFlush> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<LogFlush>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<LogFlush> CreateLogFlush(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t seq = 0,
+    bool ack = false) {
+  LogFlushBuilder builder_(_fbb);
+  builder_.add_seq(seq);
+  builder_.add_ack(ack);
+  return builder_.Finish();
+}
+
+struct LogFlush::Traits {
+  using type = LogFlush;
+  static auto constexpr Create = CreateLogFlush;
+};
+
 struct Hello FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef HelloBuilder Builder;
   struct Traits;
@@ -548,7 +976,11 @@ struct Hello FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_BACKENDTYPE = 10,
     VT_PID = 12,
     VT_CONFIGBLOB = 14,
-    VT_ABIFINGERPRINT = 16
+    VT_ABIFINGERPRINT = 16,
+    VT_WIREFINGERPRINT = 18,
+    VT_LINKTERMS = 20,
+    VT_TOKEN = 22,
+    VT_DIALMODE = 24
   };
   uint32_t abiMajor() const {
     return GetField<uint32_t>(VT_ABIMAJOR, 0);
@@ -571,6 +1003,18 @@ struct Hello FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t abiFingerprint() const {
     return GetField<uint64_t>(VT_ABIFINGERPRINT, 0);
   }
+  uint64_t wireFingerprint() const {
+    return GetField<uint64_t>(VT_WIREFINGERPRINT, 0);
+  }
+  const MobileGL::Wire::LinkTerms *linkTerms() const {
+    return GetPointer<const MobileGL::Wire::LinkTerms *>(VT_LINKTERMS);
+  }
+  const ::flatbuffers::String *token() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_TOKEN);
+  }
+  MobileGL::Wire::DialMode dialMode() const {
+    return static_cast<MobileGL::Wire::DialMode>(GetField<uint8_t>(VT_DIALMODE, 0));
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -583,6 +1027,12 @@ struct Hello FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_CONFIGBLOB) &&
            verifier.VerifyVector(configBlob()) &&
            VerifyField<uint64_t>(verifier, VT_ABIFINGERPRINT, 8) &&
+           VerifyField<uint64_t>(verifier, VT_WIREFINGERPRINT, 8) &&
+           VerifyOffset(verifier, VT_LINKTERMS) &&
+           verifier.VerifyTable(linkTerms()) &&
+           VerifyOffset(verifier, VT_TOKEN) &&
+           verifier.VerifyString(token()) &&
+           VerifyField<uint8_t>(verifier, VT_DIALMODE, 1) &&
            verifier.EndTable();
   }
 };
@@ -612,6 +1062,18 @@ struct HelloBuilder {
   void add_abiFingerprint(uint64_t abiFingerprint) {
     fbb_.AddElement<uint64_t>(Hello::VT_ABIFINGERPRINT, abiFingerprint, 0);
   }
+  void add_wireFingerprint(uint64_t wireFingerprint) {
+    fbb_.AddElement<uint64_t>(Hello::VT_WIREFINGERPRINT, wireFingerprint, 0);
+  }
+  void add_linkTerms(::flatbuffers::Offset<MobileGL::Wire::LinkTerms> linkTerms) {
+    fbb_.AddOffset(Hello::VT_LINKTERMS, linkTerms);
+  }
+  void add_token(::flatbuffers::Offset<::flatbuffers::String> token) {
+    fbb_.AddOffset(Hello::VT_TOKEN, token);
+  }
+  void add_dialMode(MobileGL::Wire::DialMode dialMode) {
+    fbb_.AddElement<uint8_t>(Hello::VT_DIALMODE, static_cast<uint8_t>(dialMode), 0);
+  }
   explicit HelloBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -631,15 +1093,23 @@ inline ::flatbuffers::Offset<Hello> CreateHello(
     uint32_t backendType = 0,
     uint32_t pid = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> configBlob = 0,
-    uint64_t abiFingerprint = 0) {
+    uint64_t abiFingerprint = 0,
+    uint64_t wireFingerprint = 0,
+    ::flatbuffers::Offset<MobileGL::Wire::LinkTerms> linkTerms = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> token = 0,
+    MobileGL::Wire::DialMode dialMode = MobileGL::Wire::DialMode::No) {
   HelloBuilder builder_(_fbb);
+  builder_.add_wireFingerprint(wireFingerprint);
   builder_.add_abiFingerprint(abiFingerprint);
+  builder_.add_token(token);
+  builder_.add_linkTerms(linkTerms);
   builder_.add_configBlob(configBlob);
   builder_.add_pid(pid);
   builder_.add_backendType(backendType);
   builder_.add_buildFingerprint(buildFingerprint);
   builder_.add_abiMinor(abiMinor);
   builder_.add_abiMajor(abiMajor);
+  builder_.add_dialMode(dialMode);
   return builder_.Finish();
 }
 
@@ -656,9 +1126,14 @@ inline ::flatbuffers::Offset<Hello> CreateHelloDirect(
     uint32_t backendType = 0,
     uint32_t pid = 0,
     const std::vector<uint8_t> *configBlob = nullptr,
-    uint64_t abiFingerprint = 0) {
+    uint64_t abiFingerprint = 0,
+    uint64_t wireFingerprint = 0,
+    ::flatbuffers::Offset<MobileGL::Wire::LinkTerms> linkTerms = 0,
+    const char *token = nullptr,
+    MobileGL::Wire::DialMode dialMode = MobileGL::Wire::DialMode::No) {
   auto buildFingerprint__ = buildFingerprint ? _fbb.CreateString(buildFingerprint) : 0;
   auto configBlob__ = configBlob ? _fbb.CreateVector<uint8_t>(*configBlob) : 0;
+  auto token__ = token ? _fbb.CreateString(token) : 0;
   return MobileGL::Wire::CreateHello(
       _fbb,
       abiMajor,
@@ -667,7 +1142,11 @@ inline ::flatbuffers::Offset<Hello> CreateHelloDirect(
       backendType,
       pid,
       configBlob__,
-      abiFingerprint);
+      abiFingerprint,
+      wireFingerprint,
+      linkTerms,
+      token__,
+      dialMode);
 }
 
 struct Welcome FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -682,7 +1161,10 @@ struct Welcome FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_REPLYPOOL = 14,
     VT_EVENTRING = 16,
     VT_BUILDFINGERPRINT = 18,
-    VT_ABIFINGERPRINT = 20
+    VT_ABIFINGERPRINT = 20,
+    VT_WIREFINGERPRINT = 22,
+    VT_LINKTERMS = 24,
+    VT_BACKENDTYPE = 26
   };
   uint32_t abiMajor() const {
     return GetField<uint32_t>(VT_ABIMAJOR, 0);
@@ -711,6 +1193,15 @@ struct Welcome FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t abiFingerprint() const {
     return GetField<uint64_t>(VT_ABIFINGERPRINT, 0);
   }
+  uint64_t wireFingerprint() const {
+    return GetField<uint64_t>(VT_WIREFINGERPRINT, 0);
+  }
+  const MobileGL::Wire::LinkTerms *linkTerms() const {
+    return GetPointer<const MobileGL::Wire::LinkTerms *>(VT_LINKTERMS);
+  }
+  uint32_t backendType() const {
+    return GetField<uint32_t>(VT_BACKENDTYPE, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -728,6 +1219,10 @@ struct Welcome FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_BUILDFINGERPRINT) &&
            verifier.VerifyString(buildFingerprint()) &&
            VerifyField<uint64_t>(verifier, VT_ABIFINGERPRINT, 8) &&
+           VerifyField<uint64_t>(verifier, VT_WIREFINGERPRINT, 8) &&
+           VerifyOffset(verifier, VT_LINKTERMS) &&
+           verifier.VerifyTable(linkTerms()) &&
+           VerifyField<uint32_t>(verifier, VT_BACKENDTYPE, 4) &&
            verifier.EndTable();
   }
 };
@@ -763,6 +1258,15 @@ struct WelcomeBuilder {
   void add_abiFingerprint(uint64_t abiFingerprint) {
     fbb_.AddElement<uint64_t>(Welcome::VT_ABIFINGERPRINT, abiFingerprint, 0);
   }
+  void add_wireFingerprint(uint64_t wireFingerprint) {
+    fbb_.AddElement<uint64_t>(Welcome::VT_WIREFINGERPRINT, wireFingerprint, 0);
+  }
+  void add_linkTerms(::flatbuffers::Offset<MobileGL::Wire::LinkTerms> linkTerms) {
+    fbb_.AddOffset(Welcome::VT_LINKTERMS, linkTerms);
+  }
+  void add_backendType(uint32_t backendType) {
+    fbb_.AddElement<uint32_t>(Welcome::VT_BACKENDTYPE, backendType, 0);
+  }
   explicit WelcomeBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -784,9 +1288,15 @@ inline ::flatbuffers::Offset<Welcome> CreateWelcome(
     ::flatbuffers::Offset<MobileGL::Wire::SegmentRef> replyPool = 0,
     ::flatbuffers::Offset<MobileGL::Wire::SegmentRef> eventRing = 0,
     ::flatbuffers::Offset<::flatbuffers::String> buildFingerprint = 0,
-    uint64_t abiFingerprint = 0) {
+    uint64_t abiFingerprint = 0,
+    uint64_t wireFingerprint = 0,
+    ::flatbuffers::Offset<MobileGL::Wire::LinkTerms> linkTerms = 0,
+    uint32_t backendType = 0) {
   WelcomeBuilder builder_(_fbb);
+  builder_.add_wireFingerprint(wireFingerprint);
   builder_.add_abiFingerprint(abiFingerprint);
+  builder_.add_backendType(backendType);
+  builder_.add_linkTerms(linkTerms);
   builder_.add_buildFingerprint(buildFingerprint);
   builder_.add_eventRing(eventRing);
   builder_.add_replyPool(replyPool);
@@ -813,7 +1323,10 @@ inline ::flatbuffers::Offset<Welcome> CreateWelcomeDirect(
     ::flatbuffers::Offset<MobileGL::Wire::SegmentRef> replyPool = 0,
     ::flatbuffers::Offset<MobileGL::Wire::SegmentRef> eventRing = 0,
     const char *buildFingerprint = nullptr,
-    uint64_t abiFingerprint = 0) {
+    uint64_t abiFingerprint = 0,
+    uint64_t wireFingerprint = 0,
+    ::flatbuffers::Offset<MobileGL::Wire::LinkTerms> linkTerms = 0,
+    uint32_t backendType = 0) {
   auto buildFingerprint__ = buildFingerprint ? _fbb.CreateString(buildFingerprint) : 0;
   return MobileGL::Wire::CreateWelcome(
       _fbb,
@@ -825,7 +1338,10 @@ inline ::flatbuffers::Offset<Welcome> CreateWelcomeDirect(
       replyPool,
       eventRing,
       buildFingerprint__,
-      abiFingerprint);
+      abiFingerprint,
+      wireFingerprint,
+      linkTerms,
+      backendType);
 }
 
 struct CapsSnapshot FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -1211,7 +1727,8 @@ struct SurfaceReply FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_OK = 6,
     VT_EGLMAJOR = 8,
     VT_EGLMINOR = 10,
-    VT_DEFAULTFB = 12
+    VT_DEFAULTFB = 12,
+    VT_EVENTHEAD = 14
   };
   uint64_t seq() const {
     return GetField<uint64_t>(VT_SEQ, 0);
@@ -1228,6 +1745,9 @@ struct SurfaceReply FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const MobileGL::Wire::DefaultFramebufferInfo *defaultFb() const {
     return GetPointer<const MobileGL::Wire::DefaultFramebufferInfo *>(VT_DEFAULTFB);
   }
+  uint64_t eventHead() const {
+    return GetField<uint64_t>(VT_EVENTHEAD, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1237,6 +1757,7 @@ struct SurfaceReply FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<int32_t>(verifier, VT_EGLMINOR, 4) &&
            VerifyOffset(verifier, VT_DEFAULTFB) &&
            verifier.VerifyTable(defaultFb()) &&
+           VerifyField<uint64_t>(verifier, VT_EVENTHEAD, 8) &&
            verifier.EndTable();
   }
 };
@@ -1260,6 +1781,9 @@ struct SurfaceReplyBuilder {
   void add_defaultFb(::flatbuffers::Offset<MobileGL::Wire::DefaultFramebufferInfo> defaultFb) {
     fbb_.AddOffset(SurfaceReply::VT_DEFAULTFB, defaultFb);
   }
+  void add_eventHead(uint64_t eventHead) {
+    fbb_.AddElement<uint64_t>(SurfaceReply::VT_EVENTHEAD, eventHead, 0);
+  }
   explicit SurfaceReplyBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1277,8 +1801,10 @@ inline ::flatbuffers::Offset<SurfaceReply> CreateSurfaceReply(
     bool ok = false,
     int32_t eglMajor = 0,
     int32_t eglMinor = 0,
-    ::flatbuffers::Offset<MobileGL::Wire::DefaultFramebufferInfo> defaultFb = 0) {
+    ::flatbuffers::Offset<MobileGL::Wire::DefaultFramebufferInfo> defaultFb = 0,
+    uint64_t eventHead = 0) {
   SurfaceReplyBuilder builder_(_fbb);
+  builder_.add_eventHead(eventHead);
   builder_.add_seq(seq);
   builder_.add_defaultFb(defaultFb);
   builder_.add_eglMinor(eglMinor);
@@ -1656,6 +2182,12 @@ struct CtrlEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const MobileGL::Wire::LogLine *msg_as_LogLine() const {
     return msg_type() == MobileGL::Wire::CtrlMsg::LogLine ? static_cast<const MobileGL::Wire::LogLine *>(msg()) : nullptr;
   }
+  const MobileGL::Wire::Refuse *msg_as_Refuse() const {
+    return msg_type() == MobileGL::Wire::CtrlMsg::Refuse ? static_cast<const MobileGL::Wire::Refuse *>(msg()) : nullptr;
+  }
+  const MobileGL::Wire::LogFlush *msg_as_LogFlush() const {
+    return msg_type() == MobileGL::Wire::CtrlMsg::LogFlush ? static_cast<const MobileGL::Wire::LogFlush *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1704,6 +2236,14 @@ template<> inline const MobileGL::Wire::Fatal *CtrlEnvelope::msg_as<MobileGL::Wi
 
 template<> inline const MobileGL::Wire::LogLine *CtrlEnvelope::msg_as<MobileGL::Wire::LogLine>() const {
   return msg_as_LogLine();
+}
+
+template<> inline const MobileGL::Wire::Refuse *CtrlEnvelope::msg_as<MobileGL::Wire::Refuse>() const {
+  return msg_as_Refuse();
+}
+
+template<> inline const MobileGL::Wire::LogFlush *CtrlEnvelope::msg_as<MobileGL::Wire::LogFlush>() const {
+  return msg_as_LogFlush();
 }
 
 struct CtrlEnvelopeBuilder {
@@ -1786,6 +2326,14 @@ inline bool VerifyCtrlMsg(::flatbuffers::VerifierTemplate<B> &verifier, const vo
     }
     case CtrlMsg::LogLine: {
       auto ptr = reinterpret_cast<const MobileGL::Wire::LogLine *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case CtrlMsg::Refuse: {
+      auto ptr = reinterpret_cast<const MobileGL::Wire::Refuse *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case CtrlMsg::LogFlush: {
+      auto ptr = reinterpret_cast<const MobileGL::Wire::LogFlush *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;

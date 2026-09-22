@@ -319,6 +319,8 @@ else()
 endif()
 
 enable_testing()
+set(MOBILEGL_TRACE_TCP_ENDPOINT "" CACHE STRING "Optional TCP supervisor endpoint for the CI split trace subset")
+set(MOBILEGL_TRACE_TCP_TOKEN "" CACHE STRING "Token for the TCP trace supervisor")
 function(add_trace_replay_test CASE_NAME BACKEND)
     set(oneValueArgs
             TRACE_ARCHIVE
@@ -340,7 +342,9 @@ function(add_trace_replay_test CASE_NAME BACKEND)
             # entry is a second arm of.
             VARIANT
             TRANSPORT
-            IPC_SERVER_PATH)
+            IPC_SERVER_PATH
+            IPC_CONTROL
+            IPC_TOKEN)
     cmake_parse_arguments(TRACE_CASE "" "${oneValueArgs}" "" ${ARGN})
     foreach(required TRACE_ARCHIVE GOLDEN TARGET_CALL WIDTH HEIGHT)
         if(NOT TRACE_CASE_${required})
@@ -417,6 +421,8 @@ function(add_trace_replay_test CASE_NAME BACKEND)
             -DTRACE_COHERENT_AS_FLUSH=${TRACE_CASE_COHERENT_AS_FLUSH}
             -DTRACE_TRANSPORT=${TRACE_CASE_TRANSPORT}
             -DTRACE_IPC_SERVER_PATH=${TRACE_CASE_IPC_SERVER_PATH}
+            -DTRACE_IPC_CONTROL=${TRACE_CASE_IPC_CONTROL}
+            -DTRACE_IPC_TOKEN=${TRACE_CASE_IPC_TOKEN}
             -DTRACE_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${CASE_NAME}/${trace_case_output_tag}
             -DTRACE_ARTIFACT_DIR=${CMAKE_CURRENT_BINARY_DIR}/${CASE_NAME}/${trace_case_artifact_tag}
             -P ${MOBILEGL_TRACE_ROOT}/run_trace_case.cmake)
@@ -439,6 +445,9 @@ function(add_trace_replay_test CASE_NAME BACKEND)
         set_tests_properties(${trace_case_name} PROPERTIES
                 ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330"
                 LABELS "${trace_case_labels}")
+    endif()
+    if(TRACE_CASE_IPC_CONTROL)
+        set_tests_properties(${trace_case_name} PROPERTIES RESOURCE_LOCK mobilegl-tcp-trace)
     endif()
 endfunction()
 
@@ -491,6 +500,10 @@ function(add_trace_replay_split_test CASE_NAME)
                 IPC_SERVER_PATH "${CMAKE_BINARY_DIR}/libMobileGLServer.so" ${ARGN})
         add_trace_replay_test(${CASE_NAME} ${backend} VARIANT SPAWN TRANSPORT spawn
                 IPC_SERVER_PATH "${CMAKE_BINARY_DIR}/libMobileGLServer.so" ${ARGN})
+        if(MOBILEGL_TRACE_TCP_ENDPOINT)
+            add_trace_replay_test(${CASE_NAME} ${backend} VARIANT TCP TRANSPORT spawn
+                IPC_CONTROL "${MOBILEGL_TRACE_TCP_ENDPOINT}" IPC_TOKEN "${MOBILEGL_TRACE_TCP_TOKEN}" ${ARGN})
+        endif()
     endforeach()
 endfunction()
 

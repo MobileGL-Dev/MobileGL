@@ -279,6 +279,7 @@ TEST(SurfaceControlFrameTest, TheReplyHalfRoundTripsAsASurfaceReply) {
     frame.ok = true;
     frame.eglMajor = 1;
     frame.eglMinor = 5;
+    frame.eventHead = 0x123456789ull;
 
     flatbuffers::FlatBufferBuilder builder(256);
     EncodeSurfaceReplyFrame(frame, &builder);
@@ -294,6 +295,7 @@ TEST(SurfaceControlFrameTest, TheReplyHalfRoundTripsAsASurfaceReply) {
     EXPECT_TRUE(back.ok);
     EXPECT_EQ(back.eglMajor, 1);
     EXPECT_EQ(back.eglMinor, 5);
+    EXPECT_EQ(back.eventHead, frame.eventHead) << "control replies must fence data events";
 }
 
 TEST(SurfaceControlFrameTest, MalformedAndInprocOnlyFramesRefuseToEncode) {

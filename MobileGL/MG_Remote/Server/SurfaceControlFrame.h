@@ -96,6 +96,7 @@ namespace MobileGL::MG_Remote::Server {
         Bool ok = false;
         Int eglMajor = 0;
         Int eglMinor = 0;
+        Uint64 eventHead = 0; // data-plane delivery fence carried by SurfaceReply
     };
 
     namespace Detail {
@@ -110,14 +111,15 @@ namespace MobileGL::MG_Remote::Server {
             // Exhaustive by the language's aggregate decomposition rule: adding ANY member
             // without extending this binding is a compile error, so new fields cannot evade it.
             const auto& [kind, seq, display, surface, readSurface, context, windowBackend,
-                         nativeToken, width, height, swapInterval, ok, eglMajor, eglMinor] = frame;
+                         nativeToken, width, height, swapInterval, ok, eglMajor, eglMinor, eventHead] = frame;
             return IsSurfaceControlValue<decltype(kind)> && IsSurfaceControlValue<decltype(seq)> &&
                    IsSurfaceControlValue<decltype(display)> && IsSurfaceControlValue<decltype(surface)> &&
                    IsSurfaceControlValue<decltype(readSurface)> && IsSurfaceControlValue<decltype(context)> &&
                    IsSurfaceControlValue<decltype(windowBackend)> && IsSurfaceControlValue<decltype(nativeToken)> &&
                    IsSurfaceControlValue<decltype(width)> && IsSurfaceControlValue<decltype(height)> &&
                    IsSurfaceControlValue<decltype(swapInterval)> && IsSurfaceControlValue<decltype(ok)> &&
-                   IsSurfaceControlValue<decltype(eglMajor)> && IsSurfaceControlValue<decltype(eglMinor)>;
+                   IsSurfaceControlValue<decltype(eglMajor)> && IsSurfaceControlValue<decltype(eglMinor)> &&
+                   IsSurfaceControlValue<decltype(eventHead)>;
         }
     } // namespace Detail
 

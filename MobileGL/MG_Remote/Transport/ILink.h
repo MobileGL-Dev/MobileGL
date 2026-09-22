@@ -72,10 +72,17 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 
 namespace MobileGL::MG_Remote::Transport {
 
     class Doorbell;
+    class SessionSegments;
+    struct SessionSegmentSizes;
+    class RingProducer;
+    class RingConsumer;
+    class EventRingProducer;
+    class EventRingConsumer;
 
     // Which end of the link this instance is. Deliberately NOT ITransport's
     // TransportRole: that enum's InProcess value names a control-plane
@@ -194,6 +201,16 @@ namespace MobileGL::MG_Remote::Transport {
         std::uint64_t MaxReplyBytes = 0;
     };
 
+    // Non-owning synchronization addresses, acquired once at attachment. They
+    // denote process-local atomics on a stream and shared atomics on a mapping.
+    struct LinkSignals {
+        std::atomic<std::uint64_t>* CmdHead = nullptr;
+        std::atomic<std::uint64_t>* SubmittedSeq = nullptr;
+        std::atomic<std::uint32_t>* ConsumerParked = nullptr;
+        std::atomic<std::uint32_t>* ProducerParked = nullptr;
+        std::atomic<std::uint32_t>* EventRingFull = nullptr;
+    };
+
     // -------------------------------------------------------------------------
     // The seam itself.
     //
@@ -210,6 +227,19 @@ namespace MobileGL::MG_Remote::Transport {
         // ---- setup ----------------------------------------------------------
 
         virtual LinkCapabilities Capabilities() const = 0;
+
+        // Setup views. Ownership remains in the link; callers cache the ring
+        // endpoint once so reserve/pop and spin predicates remain non-virtual.
+        virtual SessionSegments& Memory() = 0;
+        virtual void InitializeEndpoints() = 0;
+        LinkSignals Signals();
+        std::uint64_t SegmentSize(LinkSegment segment);
+        virtual RingProducer& CommandsOut() = 0;
+        virtual RingConsumer& CommandsIn() = 0;
+        virtual EventRingProducer& EventsOut() = 0;
+        virtual EventRingConsumer& EventsIn() = 0;
+        virtual void BindDoorbells(Doorbell*, Doorbell*) {}
+
 
         // The watermark block. Taken once; every wait predicate reads through
         // the returned pointer with no further virtual dispatch. Never null on
@@ -259,6 +289,8 @@ namespace MobileGL::MG_Remote::Transport {
 
         virtual LinkArena* EventArena() = 0;
         virtual LinkCursor* EventCursor() = 0;
+        virtual std::uint64_t EventPublishedHead() const = 0;
+        virtual MobileGLResult WaitForEventDelivery(std::uint64_t head, std::uint32_t timeoutMs) = 0;
 
         // ---- wakeups --------------------------------------------------------
         //
@@ -289,6 +321,14 @@ namespace MobileGL::MG_Remote::Transport {
         // waiting on. The second method writing StreamLink revealed.
         virtual MobileGLResult FlushProgress() = 0;
 
+        // The encoder keeps its established stage allocator; the link tracks only the
+        // newly written spans that must precede command delivery.
+        virtual void NoteStage(LinkSpan) {}
+        // Called after local progress advances. Stream links coalesce transmission;
+        // the explicit FlushProgress at every park remains mandatory.
+        virtual void ProgressChanged() {}
+        virtual bool PeerHungUp() const { return false; }
+
         // ---- lifecycle -------------------------------------------------------
 
         virtual bool Attached() const = 0;
@@ -298,5 +338,10 @@ namespace MobileGL::MG_Remote::Transport {
     protected:
         ILink() = default;
     };
+
+    // Setup factories keep concrete link selection out of codec/session code.
+    std::unique_ptr<ILink> CreateSharedLink(TransportRoleTag role);
+    MobileGLResult CreateStreamLink(int fd, const SessionSegmentSizes& sizes,
+                                   TransportRoleTag role, std::unique_ptr<ILink>& out);
 
 } // namespace MobileGL::MG_Remote::Transport

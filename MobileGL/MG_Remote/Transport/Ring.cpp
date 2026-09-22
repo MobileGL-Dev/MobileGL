@@ -417,6 +417,11 @@ namespace MobileGL::MG_Remote::Transport {
     // SessionProducer
     // -----------------------------------------------------------------------
 
+    void SessionProducer::Attach(ILink& link, std::uint32_t spinUs) {
+        Attach(link.Memory().CmdControl(), &link.CommandsOut(), &link.ConsumerBell(), &link.ProducerBell(), spinUs);
+        SetLink(link.Capabilities().PublishIsDelivery ? nullptr : &link);
+    }
+
     void SessionProducer::Attach(RingControl* control, RingProducer* cmd, Doorbell* peerBell,
                                  Doorbell* selfBell, std::uint32_t spinUs) {
         m_control = control;
@@ -432,6 +437,7 @@ namespace MobileGL::MG_Remote::Transport {
         m_peerBell = nullptr;
         m_selfBell = nullptr;
         m_lastPublishedSeq = 0;
+        m_link = nullptr;
     }
 
     void SessionProducer::PublishAndNotify(std::uint64_t submittedSeq) {
@@ -469,6 +475,7 @@ namespace MobileGL::MG_Remote::Transport {
         // COUNTED BEFORE THE WAIT AND ONLY WHEN ONE REALLY HAPPENS - after the two refusals
         // above, which answer TimedOut without ever reaching the bell. See Waits()/Parks() in
         // the header for why the pair is the reading and either number alone is not.
+        if (m_link && m_link->Flush() != MOBILEGL_OK) return SessionWait::ShutDown;
         m_waits.fetch_add(1, std::memory_order_relaxed);
         // &m_parks is the OTHER half of the pair, and it is passed rather than read off the
         // bell: the bell is this endpoint's and the encoder waits on it too, so its own
@@ -547,6 +554,11 @@ namespace MobileGL::MG_Remote::Transport {
     // SessionConsumer
     // -----------------------------------------------------------------------
 
+    void SessionConsumer::Attach(ILink& link, std::uint32_t spinUs) {
+        Attach(link.Memory().CmdControl(), &link.CommandsIn(), &link.ProducerBell(), &link.ConsumerBell(), spinUs);
+        SetLink(link.Capabilities().PublishIsDelivery ? nullptr : &link);
+    }
+
     void SessionConsumer::Attach(RingControl* control, RingConsumer* cmd, Doorbell* peerBell,
                                  Doorbell* selfBell, std::uint32_t spinUs) {
         m_control = control;
@@ -566,6 +578,7 @@ namespace MobileGL::MG_Remote::Transport {
         m_selfBell = nullptr;
         m_retirableCursor = 0;
         m_borrowHeld = false;
+        m_link = nullptr;
     }
 
     SessionWait SessionConsumer::WaitForWork(std::uint32_t timeoutMs) {
@@ -574,6 +587,7 @@ namespace MobileGL::MG_Remote::Transport {
         }
         RingControl* control = m_control;
         RingConsumer* cmd = m_cmd;
+        if (m_link && m_link->FlushProgress() != MOBILEGL_OK) return SessionWait::ShutDown;
         const bool woke = m_selfBell->Wait(
             control->consumerParked,
             [control, cmd] {
@@ -647,6 +661,7 @@ namespace MobileGL::MG_Remote::Transport {
     }
 
     void SessionConsumer::NotifyClient() {
+        if (m_link) m_link->ProgressChanged();
         if (m_control != nullptr && m_peerBell != nullptr) {
             NotifyIfParked(*m_peerBell, m_control->producerParked);
         }
@@ -671,29 +686,17 @@ namespace MobileGL::MG_Remote::Transport {
         };
         mix(inputs.DynamicParamsSize);
         mix(inputs.CapsSize);
-        mix(inputs.FunctionTableSize);
+        mix(inputs.MemberLayout);
+        mix(inputs.CatalogueLayout);
+        mix(inputs.RenderStateLayout);
         mix(inputs.FormatCapabilityTargets);
         mix(inputs.FormatCapabilityFormats);
         mix(inputs.FormatCapabilitiesCodecVersion);
         mix(inputs.RendererInfoCodecVersion);
         mix(inputs.OpCount);
         mix(inputs.AbiVersion);
-        // CONTRACT-P6 4.2: THE BUILD SYSTEM'S OWN ANSWER, mixed before the bytes and separately
-        // from them. `BuildStampPresent == 0` means the build could not determine a commit at
-        // all; that is a different claim from "the commit is the empty string", and before this
-        // field existed the two collapsed - so every stampless build agreed with every other,
-        // which is the exact agreement the stamp is there to refuse.
-        mix(inputs.BuildStampPresent);
-        // A presence marker before the bytes, so that "no stamp" (nullptr) and
-        // "an empty stamp" ("") are different inputs rather than the same
-        // absence of bytes.
-        mix(inputs.BuildStamp != nullptr ? 1u : 0u);
-        if (inputs.BuildStamp != nullptr) {
-            for (const char* c = inputs.BuildStamp; *c != '\0'; ++c) {
-                hash ^= static_cast<std::uint64_t>(static_cast<unsigned char>(*c));
-                hash *= 1099511628211ull;
-            }
-        }
+        mix(inputs.PointerBits);
+        mix(inputs.LittleEndian);
         // 0 is reserved for "not stated": a peer that forgot to fill the field
         // must not accidentally agree with one that did.
         return hash == 0 ? 1ull : hash;

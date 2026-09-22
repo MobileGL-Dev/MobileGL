@@ -26,6 +26,7 @@
 // first place. The static_asserts below pin the collision so it cannot be re-introduced by
 // someone who reads the comment and not this file.
 
+#include <MG_Remote/Transport/LinkMetrics.h>
 #include "PipeWireCodec.h"
 #include <MG_Remote/FatalFunnel.h>
 
@@ -392,6 +393,17 @@ namespace MobileGL::MG_Remote::Wire {
     // SegmentTable
     // ---------------------------------------------------------------------------------
 
+    void SegmentTable::AttachLink(Transport::ILink* link) {
+        m_link = link;
+        for (Uint32 id = kSegCmd; id <= kSegEvent; ++id) {
+            const auto segment = static_cast<Transport::LinkSegment>(id);
+            const Uint64 size = link ? link->SegmentSize(segment) : 0;
+            const void* base = nullptr;
+            if (link && link->ResolveSpan(segment, {0, size}, &base) != MOBILEGL_OK) base = nullptr;
+            Install(static_cast<SegmentId>(id), {const_cast<void*>(base), size});
+        }
+    }
+
     void SegmentTable::Install(SegmentId seg, SegmentView view) {
         if (seg == kSegNone || static_cast<Uint32>(seg) > static_cast<Uint32>(kSegAdopt)) {
             WireProtocolFatalAt("SegmentTable::Install", static_cast<Uint64>(seg),
@@ -417,6 +429,11 @@ namespace MobileGL::MG_Remote::Wire {
         }
         if (size == 0) {
             return nullptr;
+        }
+        if (m_link) {
+            const void* bytes = nullptr;
+            return m_link->ResolveSpan(static_cast<Transport::LinkSegment>(seg), {offset, size}, &bytes)
+                       == MOBILEGL_OK ? bytes : nullptr;
         }
         const SegmentView& view = m_views[static_cast<SizeT>(seg)];
         if (view.Base == nullptr) {
@@ -822,11 +839,24 @@ namespace MobileGL::MG_Remote::Wire {
     // Encoder
     // ---------------------------------------------------------------------------------
 
+    PipeWireEncoder::PipeWireEncoder(Transport::ILink* link, SegmentTable* segments)
+        : m_segments(segments) {
+        if (!link) return;
+        m_progress = link->Progress(); m_signals = link->Signals(); m_cmd = &link->CommandsOut();
+        m_link = link->Capabilities().PublishIsDelivery ? nullptr : link;
+    }
+
     PipeWireEncoder::PipeWireEncoder(Transport::RingControl* control, Transport::RingProducer* cmd,
                                      Transport::RingProducer* stage, SegmentTable* segments)
-        : m_control(control), m_cmd(cmd), m_stage(stage), m_segments(segments) {}
+        : m_cmd(cmd), m_stage(stage), m_segments(segments) {
+        if (control) {
+            m_progress = &control->Progress;
+            m_signals = {&control->cmdHead, &control->submittedSeq, &control->consumerParked,
+                         &control->producerParked, &control->eventRingFull};
+        }
+    }
 
-    Bool PipeWireEncoder::Valid() const { return m_control != nullptr && m_cmd != nullptr; }
+    Bool PipeWireEncoder::Valid() const { return m_progress != nullptr && m_cmd != nullptr; }
 
     Uint8* PipeWireEncoder::StageAllocate(Uint64 size) {
         if (m_stageBase == nullptr) {
@@ -896,6 +926,7 @@ namespace MobileGL::MG_Remote::Wire {
             if ((m_stageHead + skip + need) - m_stageTail <= m_stageCapacity) {
                 const Uint64 at = (m_stageHead + skip) % m_stageCapacity;
                 m_stageHead += skip + need;
+                Transport::LinkMetricsStageBytes(size);
                 return m_stageBase + at;
             }
             if (!reclaimed) {
@@ -907,7 +938,7 @@ namespace MobileGL::MG_Remote::Wire {
             if (m_stageRetirementBell == nullptr || m_stageMarkFront == m_stageMarks.size()) break;
             const Uint64 pending = m_stageMarks[m_stageMarkFront].Seq;
             const auto ready = [&] {
-                return m_control->Progress.retiredSeq.load(std::memory_order_acquire) >= pending;
+                return m_progress->retiredSeq.load(std::memory_order_acquire) >= pending;
             };
             if (!ready()) {
                 // The allocation still cannot progress after reclamation. Count this
@@ -920,7 +951,8 @@ namespace MobileGL::MG_Remote::Wire {
                 // again. The hook is null in every standalone codec, which has no session and
                 // therefore no reverse channel to drain.
                 if (m_stageWaitHook != nullptr) m_stageWaitHook(m_stageWaitSelf);
-                if (!ready() && !m_stageRetirementBell->Wait(m_control->producerParked, ready, 0, 5000)) {
+                if (m_link) m_link->Flush();
+                if (!ready() && !m_stageRetirementBell->Wait(*m_signals.ProducerParked, ready, 0, 5000)) {
                     SessionFail(MGFatalFamily::RetirementWaitFailed, "MGPipe: Fatal{RetirementWaitFailed, \"SEG_STAGE\"} producer wait "
                             "ended before the pending allocation retired (shutdown or timeout)");
                 }
@@ -936,7 +968,7 @@ namespace MobileGL::MG_Remote::Wire {
                 static_cast<unsigned long long>(m_stageCapacity),
                 static_cast<unsigned long long>(m_stageHead - m_stageTail),
                 static_cast<unsigned long long>(
-                    m_control != nullptr ? m_control->Progress.retiredSeq.load(std::memory_order_acquire) : 0));
+                    m_progress != nullptr ? m_progress->retiredSeq.load(std::memory_order_acquire) : 0));
     }
 
     MGPBlobRef PipeWireEncoder::StageBytes(const void* bytes, Uint64 size) {
@@ -958,6 +990,7 @@ namespace MobileGL::MG_Remote::Wire {
         Uint8* slot = StageAllocate(size);
         std::memcpy(slot, bytes, static_cast<SizeT>(size));
         const Uint64 offset = static_cast<Uint64>(slot - m_stageBase);
+        if (m_link) m_link->NoteStage({offset, size});
 
         MGPBlobRef ref{};
         ref.Seg = kSegStage;
@@ -1222,10 +1255,10 @@ namespace MobileGL::MG_Remote::Wire {
     }
 
     void PipeWireEncoder::ReclaimStagedBytes() {
-        if (m_control == nullptr) {
+        if (m_progress == nullptr) {
             return;
         }
-        const Uint64 retired = m_control->Progress.retiredSeq.load(std::memory_order_acquire);
+        const Uint64 retired = m_progress->retiredSeq.load(std::memory_order_acquire);
         Uint64 upTo = m_stageTail;
         while (m_stageMarkFront < m_stageMarks.size() &&
                m_stageMarks[m_stageMarkFront].Seq <= retired) {
@@ -1281,11 +1314,11 @@ namespace MobileGL::MG_Remote::Wire {
         // popping a ring, and the release store on SEG_CMD's head below is what orders the
         // staged writes before the record that names them.
         m_cmd->Publish();
-        if (m_control != nullptr) {
+        if (m_progress != nullptr) {
             // submittedSeq is the one watermark the PRODUCER owns (Ring.h's five-watermark
             // block). Nobody waits on it; it answers "how far ahead of the server is the
             // client right now".
-            m_control->submittedSeq.store(m_emitSeq, std::memory_order_release);
+            m_signals.SubmittedSeq->store(m_emitSeq, std::memory_order_release);
         }
         // The reclaim has a trigger in this package, rather than depending on a c1 barrier
         // that does not exist yet: every publish is a chance to notice what the server has
@@ -1324,9 +1357,15 @@ namespace MobileGL::MG_Remote::Wire {
     // Decoder
     // ---------------------------------------------------------------------------------
 
+    PipeWireDecoder::PipeWireDecoder(Transport::ILink* link, SegmentTable* segments, ReplySink* replies)
+        : m_segments(segments), m_replies(replies), m_valid(link && link->Attached()) {
+        m_auditPoison = MG_Config::Ipc.Audit;
+        InstallApplyHook();
+    }
+
     PipeWireDecoder::PipeWireDecoder(Transport::RingControl* control, SegmentTable* segments,
                                      ReplySink* replies)
-        : m_control(control), m_segments(segments), m_replies(replies) {
+        : m_segments(segments), m_replies(replies), m_valid(control != nullptr) {
         m_auditPoison = MG_Config::Ipc.Audit;
         // Once, at construction, beside the resolver it is modelled on - not per record from
         // the apply thread. The thunk is inert without a decoder on the calling thread, so an
@@ -1340,7 +1379,7 @@ namespace MobileGL::MG_Remote::Wire {
 
     void PipeWireDecoder::UninstallApplyHook() { MG_Pipe::gMGPipeWireRecordApply = nullptr; }
 
-    Bool PipeWireDecoder::Valid() const { return m_control != nullptr && m_segments != nullptr; }
+    Bool PipeWireDecoder::Valid() const { return m_valid && m_segments != nullptr; }
 
     Uint64 PipeWireDecoder::AppliedSeq() const { return m_applySeq; }
 

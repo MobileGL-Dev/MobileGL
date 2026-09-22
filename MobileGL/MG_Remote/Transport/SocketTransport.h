@@ -43,6 +43,7 @@
 // calls it, the peer's reads return 0 and its sends fail.
 
 #pragma once
+#include <atomic>
 
 #include "Framing.h"
 #include "ITransport.h"
@@ -124,6 +125,13 @@ namespace MobileGL::MG_Remote::Transport {
         // transport owns, so a test can assert the child inherited exactly these.
         int StreamFd() const { return m_streamFd; }
         int AuxFd() const { return m_auxFd; }
+        bool IsTcp() const { return m_tcp; }
+        // TCP's second connection belongs exclusively to the data plane.
+        // Taking it disables all descriptor passing on this transport.
+        int TakeDataFd();
+        // Parent of a session child closes its duplicate without shutdown(2),
+        // which would also disconnect the child's inherited socket.
+        void CloseLocalCopy();
 
     private:
         // Pulls whatever the socket has into the reassembler. Returns
@@ -132,6 +140,7 @@ namespace MobileGL::MG_Remote::Transport {
 
         int m_streamFd = -1;
         int m_auxFd = -1;
+        bool m_tcp = false;
         TransportRole m_role = TransportRole::Client;
 
         // ITransport's threading rule: callers serialise sends, and receives may
@@ -143,7 +152,7 @@ namespace MobileGL::MG_Remote::Transport {
         std::mutex m_recvMutex;
 
         FrameReader m_reader;
-        bool m_closed = false;
+        std::atomic<bool> m_closed{false};
         bool m_failed = false; // framing violated: latched, never recovers
     };
 

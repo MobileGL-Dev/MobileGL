@@ -471,6 +471,9 @@ namespace MobileGL::MG_Config {
         // SPLIT variant already carry it, and an environment variable that nothing parses is
         // indistinguishable from one that is parsed and ignored.
         String ServerPath;
+        // Control endpoint and data-plane selection are independent of topology.
+        String Control = "fork"; // fork | unix:<path> | tcp://host:port
+        String Data = "auto";    // auto | shm | stream
         // MOBILEGL_IPC_RING_MB: SEG_CMD size. A RECORD MAY BE AT MOST HALF OF THIS
         // (RingProducer::MaxRecordBytes), so 8 MiB caps one record at 4 MiB; R-10 makes the
         // codec publish a max-record-bytes counter rather than assume that is enough.

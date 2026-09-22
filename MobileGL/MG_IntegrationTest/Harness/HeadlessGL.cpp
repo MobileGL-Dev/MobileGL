@@ -327,7 +327,18 @@ namespace MGITest {
         // has thought of. Only then does the parent do the real bring-up.
         //
         // Returns an empty string when the platform survived a full bring-up.
+        bool RemoteConnectRequested() {
+            const char* control = std::getenv("MOBILEGL_IPC_CONTROL");
+            return control != nullptr && std::strncmp(control, "tcp://", 6) == 0;
+        }
+
         std::string PreflightBringUp() {
+            // Connect already isolates driver setup in the server's session
+            // child. A local pre-flight would consume a remote session, then
+            // race its teardown and make the actual test receive Refuse{Busy}.
+            if (RemoteConnectRequested()) {
+                return {};
+            }
 #if !MGITEST_HAVE_FORK_PREFLIGHT
             // No fork(): let the in-process bring-up speak for itself, which is
             // what this module did before. Windows/macOS are not CI targets for
@@ -585,7 +596,9 @@ namespace MGITest {
             // That is a real result, not a machine without a GPU, so say so: it
             // means something is different between the two attempts (a leaked
             // exclusive device, an environment the child did not have).
-            m_skipReason = reason + " - although an identical bring-up in a forked pre-flight child succeeded";
+            m_skipReason = reason + (RemoteConnectRequested()
+                ? " - remote TCP bring-up failed"
+                : " - although an identical bring-up in a forked pre-flight child succeeded");
             return false;
         }
 

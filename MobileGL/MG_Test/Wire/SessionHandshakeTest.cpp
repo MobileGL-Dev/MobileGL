@@ -39,6 +39,8 @@
 #include "Includes.h"
 
 #include <MG_Remote/CapsCodec.h>
+#include <MG_Remote/Handshake.h>
+#include <MG_Pipe/PipeWireLayout.h>
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/Protocol/generated/protocol_generated.h>
 #include <MG_Remote/Server/ServerSession.h>
@@ -114,100 +116,148 @@ namespace {
 // below. Also red, separately, by deleting any one `mix(...)` line from MixAbiFingerprint: the
 // matching EXPECT_NE names the input that stopped being mixed. Both perturbations were run.
 TEST(SessionHandshakeTest, TheAbiFingerprintChangesWhenAnyOfItsInputsDoes) {
-    const Uint64 production = CapsAbiFingerprint();
-    EXPECT_NE(production, 0u) << "0 is reserved for \"not stated\"";
-    EXPECT_EQ(production, CapsAbiFingerprint()) << "not stable within one build";
-
-    const Transport::AbiFingerprintInputs inputs = CapsAbiFingerprintInputs();
-    EXPECT_EQ(production, Transport::MixAbiFingerprint(inputs))
-        << "CapsAbiFingerprint() is not MixAbiFingerprint over CapsAbiFingerprintInputs(): the "
-           "handshake compares a value this case cannot reach, which is finding 6 again";
-
-    // The inputs are the real ones, so a CapsAbiFingerprintInputs() that hard-coded a size
-    // would be caught here rather than agreed with by a peer built from a different tree.
+    const Uint64 production = WireFingerprint();
+    const auto inputs = CapsAbiFingerprintInputs();
+    EXPECT_NE(production, 0u);
+    EXPECT_EQ(production, CapsAbiFingerprint());
+    EXPECT_EQ(production, Transport::MixAbiFingerprint(inputs));
     EXPECT_EQ(inputs.DynamicParamsSize, sizeof(MG_Backend::DynamicBackendParameters));
     EXPECT_EQ(inputs.CapsSize, sizeof(MG_Pipe::MGPCaps));
-    EXPECT_EQ(inputs.FunctionTableSize, sizeof(MG_Backend::GLFunctionsTable));
-    EXPECT_EQ(inputs.FormatCapabilityTargets,
-              static_cast<Uint64>(MG_Backend::kFormatCapabilityTargetCount));
-    EXPECT_EQ(inputs.FormatCapabilityFormats,
-              static_cast<Uint64>(MG_Backend::kFormatCapabilityFormatCount));
-    EXPECT_NE(inputs.FormatCapabilitiesCodecVersion, 0u);
-    EXPECT_NE(inputs.RendererInfoCodecVersion, 0u);
+    EXPECT_EQ(inputs.MemberLayout, MG_Pipe::kMGPipeWireMemberLayoutDigest);
+    EXPECT_EQ(inputs.CatalogueLayout, MG_Pipe::kMGPipeWireCatalogueDigest);
+    EXPECT_EQ(inputs.RenderStateLayout, MG_Pipe::WireRenderStateDigest());
     EXPECT_EQ(inputs.OpCount, static_cast<Uint64>(MG_Pipe::MGPWireOp::kOpCount));
-    EXPECT_EQ(inputs.AbiVersion, static_cast<Uint32>(MOBILEGL_ABI_VERSION(
-                                     MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR)));
-    // CONTRACT-P6 4.2. THE ASSERTION SPLITS WITH THE MACRO PAIR, and it has to: this used to
-    // demand a non-empty stamp unconditionally and was RED in every build whose git could not be
-    // read - a real signal, but one that told the reader nothing about WHICH of the two states
-    // the build was in. Now the build system states it, and both states are asserted.
-    ASSERT_NE(inputs.BuildStamp, nullptr);
-    EXPECT_EQ(inputs.BuildStampPresent, static_cast<Uint32>(MOBILEGL_BUILD_STAMP_PRESENT))
-        << "the fingerprint disagrees with the build system about whether this build has a stamp";
-#if MGL_HANDSHAKE_TEST_HAS_GIT_HASH
-    EXPECT_STREQ(inputs.BuildStamp, MOBILEGL_BUILD_STAMP_VALUE);
-#endif
-#if MOBILEGL_BUILD_STAMP_PRESENT
-    EXPECT_NE(inputs.BuildStamp[0], '\0')
-        << "the build claims a stamp and the fingerprint mixed an empty one";
-#else
-    // A stampless build is a KNOWN, DECLARED state - CMake warns at configure time - but it must
-    // not be a silent one here either. What still has to hold is that the ABSENCE is mixed, which
-    // the BuildStampPresent perturbation below proves.
-    EXPECT_STREQ(inputs.BuildStamp, "")
-        << "PRESENT is 0 but a value came through; the two halves of the pair disagree";
-#endif
-
-    // Every input moves the answer. Each lambda changes exactly one field of a copy of the
-    // REAL inputs, so what is proven is that the production value depends on that field.
-    const auto perturbed = [&](auto&& mutate) {
-        Transport::AbiFingerprintInputs copy = inputs;
+    EXPECT_EQ(inputs.PointerBits, sizeof(void*) * 8);
+    const auto perturbed = [&](auto mutate) {
+        auto copy = inputs;
         mutate(copy);
         return Transport::MixAbiFingerprint(copy);
     };
-    EXPECT_NE(production, perturbed([](Transport::AbiFingerprintInputs& i) { ++i.DynamicParamsSize; }))
-        << "sizeof(DynamicBackendParameters) is not mixed";
-    EXPECT_NE(production, perturbed([](Transport::AbiFingerprintInputs& i) { ++i.CapsSize; }))
-        << "sizeof(MGPCaps) is not mixed";
-    EXPECT_NE(production, perturbed([](Transport::AbiFingerprintInputs& i) { ++i.FunctionTableSize; }))
-        << "sizeof(GLFunctionsTable) is not mixed";
-    EXPECT_NE(production,
-              perturbed([](Transport::AbiFingerprintInputs& i) { ++i.FormatCapabilityTargets; }))
-        << "kFormatCapabilityTargetCount is not mixed";
-    EXPECT_NE(production,
-              perturbed([](Transport::AbiFingerprintInputs& i) { ++i.FormatCapabilityFormats; }))
-        << "kFormatCapabilityFormatCount is not mixed";
-    EXPECT_NE(production, perturbed([](Transport::AbiFingerprintInputs& i) {
-                  ++i.FormatCapabilitiesCodecVersion;
-              }))
-        << "kFormatCapabilitiesCodecVersion is not mixed";
-    EXPECT_NE(production,
-              perturbed([](Transport::AbiFingerprintInputs& i) { ++i.RendererInfoCodecVersion; }))
-        << "kRendererInfoCodecVersion is not mixed";
-    EXPECT_NE(production, perturbed([](Transport::AbiFingerprintInputs& i) { ++i.OpCount; }))
-        << "MGPWireOp::kOpCount is not mixed (ID-33)";
-    EXPECT_NE(production, perturbed([](Transport::AbiFingerprintInputs& i) { ++i.AbiVersion; }))
-        << "the protocol ABI version is not mixed (ID-33)";
-    EXPECT_NE(production,
-              perturbed([](Transport::AbiFingerprintInputs& i) { i.BuildStamp = "not-this-build"; }))
-        << "the git stamp is not mixed";
-    // A missing stamp is not the same as an empty one, and neither is the same as a real build.
-    // THE PRESENCE FLAG IS ITSELF AN INPUT (4.2), and this is the assertion that makes a
-    // stampless build safe to reason about: a peer that says "I could not name my commit" must
-    // not produce the same fingerprint as one whose commit genuinely is "". It has to move the
-    // answer in EITHER build state, which is why it sits outside the #if below.
-    EXPECT_NE(production, perturbed([](Transport::AbiFingerprintInputs& i) { ++i.BuildStampPresent; }))
-        << "BuildStampPresent is not mixed; 'no stamp' and 'empty stamp' are one input again";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.DynamicParamsSize; })) << "DynamicParamsSize";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.CapsSize; })) << "CapsSize";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.MemberLayout; })) << "MemberLayout";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.CatalogueLayout; })) << "CatalogueLayout";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.RenderStateLayout; })) << "RenderStateLayout";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.FormatCapabilityTargets; })) << "FormatCapabilityTargets";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.FormatCapabilityFormats; })) << "FormatCapabilityFormats";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.FormatCapabilitiesCodecVersion; })) << "FormatCapabilitiesCodecVersion";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.RendererInfoCodecVersion; })) << "RendererInfoCodecVersion";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.OpCount; })) << "OpCount";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.AbiVersion; })) << "AbiVersion";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.PointerBits; })) << "PointerBits";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.LittleEndian; })) << "LittleEndian";
+}
 
-    EXPECT_NE(production, perturbed([](Transport::AbiFingerprintInputs& i) { i.BuildStamp = nullptr; }));
-#if MOBILEGL_BUILD_STAMP_PRESENT
-    // Vacuous without a stamp: production's value already IS "", so this perturbation would be
-    // the identity and the assertion would pass while proving nothing.
-    EXPECT_NE(production, perturbed([](Transport::AbiFingerprintInputs& i) { i.BuildStamp = ""; }));
+TEST(SessionHandshakeTest, SameWidthFieldReorderingChangesTheWireDigestWithoutABuildStamp) {
+    using namespace MG_Pipe;
+    std::vector<WireLayoutMember> fields(std::begin(kMGPipeWireLayoutMembers),
+                                       std::end(kMGPipeWireLayoutMembers));
+    // MGPRange.Offset and Size have the same width: sizeof-only checks cannot see this.
+    SizeT offsetIndex = 0, sizeIndex = 0;
+    for (SizeT i = 0; i < fields.size(); ++i) {
+        if (std::strcmp(fields[i].Name, "MGPRange.Offset") == 0) offsetIndex = i;
+        if (std::strcmp(fields[i].Name, "MGPRange.Size") == 0) sizeIndex = i;
+    }
+    ASSERT_NE(offsetIndex, sizeIndex);
+    ASSERT_EQ(fields[offsetIndex].Size, fields[sizeIndex].Size);
+    std::swap(fields[offsetIndex].Offset, fields[sizeIndex].Offset);
+    EXPECT_NE(WireMemberLayoutDigest(fields.data(), fields.size()), kMGPipeWireMemberLayoutDigest);
+    const auto before = WireFingerprint();
+    EXPECT_STREQ(BuildFingerprint(), MOBILEGL_BUILD_STAMP_VALUE);
+    EXPECT_EQ(BuildFingerprintPresent(), MOBILEGL_BUILD_STAMP_PRESENT != 0);
+    EXPECT_EQ(before, WireFingerprint());
+}
+
+namespace {
+    class ScopedHandshakeEnvironment {
+    public:
+        ScopedHandshakeEnvironment(const char* name, const char* value) : m_name(name) {
+            const char* previous = std::getenv(name);
+            m_present = previous != nullptr;
+            if (m_present) m_previous = previous;
+            Set(value);
+        }
+        ~ScopedHandshakeEnvironment() { Set(m_present ? m_previous.c_str() : nullptr); }
+    private:
+        void Set(const char* value) {
+#if defined(_WIN32)
+            ::_putenv_s(m_name, value == nullptr ? "" : value);
+#else
+            if (value == nullptr) ::unsetenv(m_name); else ::setenv(m_name, value, 1);
 #endif
-    EXPECT_NE(perturbed([](Transport::AbiFingerprintInputs& i) { i.BuildStamp = nullptr; }),
-              perturbed([](Transport::AbiFingerprintInputs& i) { i.BuildStamp = ""; }))
-        << "\"no stamp\" and \"an empty stamp\" collapsed into one input";
+        }
+        const char* m_name;
+        bool m_present = false;
+        std::string m_previous;
+    };
+
+    std::vector<Uint8> ReadHandshakeFrame(Transport::ITransport& transport) {
+        Uint64 bytes = 0;
+        if (transport.ReceiveFrame({nullptr, 0}, &bytes, 1000) != MOBILEGL_ERR_BUFFER_TOO_SMALL) return {};
+        std::vector<Uint8> frame(bytes);
+        if (transport.ReceiveFrame({frame.data(), frame.size()}, &bytes, 1000) != MOBILEGL_OK) return {};
+        return frame;
+    }
+
+    void CheckHandshake(Uint32 major, Uint64 wire, const char* build,
+                        ::MobileGL::Wire::DialMode dial, ::MobileGL::Wire::RefuseCode expected) {
+        using namespace ::MobileGL::Wire;
+        std::unique_ptr<Transport::InProcessTransport> client, server;
+        Transport::InProcessTransport::CreatePair(client, server);
+        ::flatbuffers::FlatBufferBuilder builder(512);
+        auto terms = CreateLinkTerms(builder);
+        auto hello = CreateHelloDirect(builder, major, MOBILEGL_PROTOCOL_ABI_MINOR, build,
+                                       0, 1, nullptr, wire, wire, terms, nullptr, dial);
+        auto root = CreateCtrlEnvelope(builder, CtrlMsg::Hello, hello.Union());
+        FinishCtrlEnvelopeBuffer(builder, root);
+        std::vector<Uint8> first(builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize());
+        Server::ServerSession session;
+        Transport::SessionSegmentSizes sizes;
+        sizes.CmdRingBytes = 4096; sizes.StageBytes = 4096;
+        sizes.ReplyBytes = 4096; sizes.EventRingBytes = 4096;
+        session.SetSegmentSizes(sizes);
+        const auto result = session.Accept(*server, &first);
+        EXPECT_EQ(result, expected == RefuseCode::None ? MOBILEGL_OK : MOBILEGL_ERR_PROTOCOL_MISMATCH);
+        const auto reply = ReadHandshakeFrame(*client);
+        ASSERT_FALSE(reply.empty());
+        ::flatbuffers::Verifier verifier(reply.data(), reply.size());
+        ASSERT_TRUE(VerifyCtrlEnvelopeBuffer(verifier));
+        const auto* envelope = GetCtrlEnvelope(reply.data());
+        if (expected == RefuseCode::None) {
+            ASSERT_NE(envelope->msg_as_Welcome(), nullptr);
+            EXPECT_EQ(envelope->msg_as_Welcome()->wireFingerprint(), WireFingerprint());
+            ASSERT_NE(envelope->msg_as_Welcome()->linkTerms(), nullptr);
+            EXPECT_EQ(envelope->msg_as_Welcome()->linkTerms()->cmdWindowBytes(), 4096u);
+        } else {
+            ASSERT_NE(envelope->msg_as_Refuse(), nullptr);
+            EXPECT_EQ(envelope->msg_as_Refuse()->code(), expected);
+            EXPECT_FALSE(session.Accepted());
+        }
+        session.Close();
+    }
+}
+
+TEST(SessionHandshakeTest, WireMajorMismatchReturnsNamedRefuseWithoutAborting) {
+    CheckHandshake(99, WireFingerprint(), BuildFingerprint(), ::MobileGL::Wire::DialMode::No,
+                   ::MobileGL::Wire::RefuseCode::ProtocolVersion);
+}
+TEST(SessionHandshakeTest, WireLayoutMismatchReturnsNamedRefuseWithoutAborting) {
+    CheckHandshake(MOBILEGL_PROTOCOL_ABI_MAJOR, WireFingerprint() ^ 1, BuildFingerprint(),
+                   ::MobileGL::Wire::DialMode::No, ::MobileGL::Wire::RefuseCode::WireFingerprint);
+}
+TEST(SessionHandshakeTest, ConnectAcceptsDifferentBuildWithIdenticalWire) {
+    ScopedHandshakeEnvironment required("MOBILEGL_IPC_REQUIRE_SAME_BUILD", "0");
+    CheckHandshake(MOBILEGL_PROTOCOL_ABI_MAJOR, WireFingerprint(), "different-commit",
+                   ::MobileGL::Wire::DialMode::Connect, ::MobileGL::Wire::RefuseCode::None);
+}
+TEST(SessionHandshakeTest, ForkRefusesDifferentBuildWithIdenticalWire) {
+    CheckHandshake(MOBILEGL_PROTOCOL_ABI_MAJOR, WireFingerprint(), "different-commit",
+                   ::MobileGL::Wire::DialMode::Fork, ::MobileGL::Wire::RefuseCode::BuildFingerprint);
+}
+TEST(SessionHandshakeTest, ConnectCanRequireTheSameBuild) {
+    ScopedHandshakeEnvironment required("MOBILEGL_IPC_REQUIRE_SAME_BUILD", "1");
+    CheckHandshake(MOBILEGL_PROTOCOL_ABI_MAJOR, WireFingerprint(), "different-commit",
+                   ::MobileGL::Wire::DialMode::Connect, ::MobileGL::Wire::RefuseCode::BuildFingerprint);
 }
 
 // ---------------------------------------------------------------------------

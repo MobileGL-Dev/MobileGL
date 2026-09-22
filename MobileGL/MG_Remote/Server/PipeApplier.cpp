@@ -62,6 +62,12 @@ namespace MobileGL::MG_Remote::Server {
     // The view is rebuilt per call rather than stored, so that this body does not change
     // ReplyPool's four members and therefore does not touch v1's header at all.
     void ReplyPool::PostReply(Uint64 seq, Int32 status, const void* bytes, Uint64 size) {
+        if (m_link) {
+            const auto result = m_link->PostReply(seq, status, bytes, size);
+            if (result == MOBILEGL_ERR_BUFFER_TOO_SMALL)
+                SessionFail(MGFatalFamily::ReplyTooLarge, "MGPipe: Fatal{ReplyTooLarge, stream reply}");
+            return;
+        }
         Transport::ReplySlotPool pool(m_base, m_size, m_slots);
         // Fatal inside Post when the answer does not fit a slot: P5 does not chunk replies,
         // and the client knows an answer's size before it emits the record.
@@ -1191,6 +1197,15 @@ namespace MobileGL::MG_Remote::Server {
 
     PipeApplier::PipeApplier(Wire::SegmentTable* segments, ReplyPool* replies)
         : m_segments(segments), m_replies(replies) {}
+
+    void PipeApplier::Attach(Transport::ILink* link, MG_Backend::BackendObject* backend) {
+        if (!link || !link->Attached() || !m_segments)
+            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, PipeApplier::Attach missing link}");
+        m_verbs.SetBackend(backend);
+        m_decoder = Wire::PipeWireDecoder(link, m_segments, m_replies);
+        m_decoder.SetVerbSink(&m_verbs);
+        MG_Pipe::MGPipeServerBlockNoteIdentity(); m_attached = true;
+    }
 
     void PipeApplier::Attach(Transport::RingControl* control, MG_Backend::BackendObject* backend) {
         if (control == nullptr || m_segments == nullptr) {

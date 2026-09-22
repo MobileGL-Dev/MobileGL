@@ -11,6 +11,8 @@
 
 #include "ClientSession.h"
 #include <MG_Remote/FatalFunnel.h>
+#include <MG_Remote/Handshake.h>
+#include <MG_Remote/Transport/LinkMetrics.h>
 
 #include "../CapsCodec.h"
 #include "../Protocol/generated/protocol_generated.h"
@@ -107,39 +109,6 @@ namespace MobileGL::MG_Remote::Client {
                 return nullptr;
             }
             return ::MobileGL::Wire::GetCtrlEnvelope(bytes.data());
-        }
-
-        // CONTRACT-P6 4.3: THE DECLARED PROTOCOL VERSION, WHICH THIS SIDE NEVER READ.
-        //
-        // Hello has carried abiMajor/abiMinor since P5 and the SERVER checks them, but the
-        // client only ever compared the fingerprint - so the asymmetry was silent in the one
-        // direction that matters for spawn, where the peer is a SEPARATE IMAGE the operator
-        // chose with MOBILEGL_IPC_SERVER_PATH.
-        //
-        // The fingerprint mixes AbiVersion and would catch a mismatch anyway, but it catches it
-        // as "struct shapes" - which sends the reader looking for a layout change that is not
-        // there. Checking the version FIRST turns the same failure into the sentence that
-        // explains it. Both handshake sites call this; there are two, and only one of them used
-        // to be reachable, which is how the gap survived review.
-        [[noreturn]] void FatalProtocolVersionMismatch(unsigned theirMajor, unsigned theirMinor,
-                                                       const char* theirStamp) {
-            SessionFail(MGFatalFamily::AbiMismatch, "MGPipe: Fatal{AbiMismatch, \"protocol version\"} ours=%u.%u theirs=%u.%u "
-                    "ourBuild=%s theirBuild=%s - the peer speaks a different MGPipe protocol. "
-                    "Under spawn this is most often a stale MOBILEGL_IPC_SERVER_PATH pointing at "
-                    "a libMobileGLServer.so built from another tree.",
-                    static_cast<unsigned>(MOBILEGL_PROTOCOL_ABI_MAJOR),
-                    static_cast<unsigned>(MOBILEGL_PROTOCOL_ABI_MINOR), theirMajor, theirMinor,
-                    GIT_COMMIT_HASH_SHORT, theirStamp == nullptr ? "?" : theirStamp);
-        }
-
-        [[noreturn]] void FatalAbiMismatch(const char* what, Uint64 ours, Uint64 theirs,
-                                           const char* theirStamp) {
-            SessionFail(MGFatalFamily::AbiMismatch, "MGPipe: Fatal{AbiMismatch, \"%s\"} ours=%llu theirs=%llu ourBuild=%s "
-                    "theirBuild=%s - never a downgrade: the caps block's size is ABI-dependent "
-                    "and every field past the first difference would be read at the wrong offset",
-                    what, static_cast<unsigned long long>(ours),
-                    static_cast<unsigned long long>(theirs), GIT_COMMIT_HASH_SHORT,
-                    theirStamp == nullptr ? "?" : theirStamp);
         }
 
         // Guarded the same way ServerSession's helpers are: MG_Config::Ipc only exists
@@ -531,6 +500,11 @@ namespace MobileGL::MG_Remote::Client {
         return *instance;
     }
 
+    ClientSession::ClientSession() {
+        m_link = Transport::CreateSharedLink(Transport::TransportRoleTag::ClientProducer);
+        m_cmd = &m_link->CommandsOut(); m_events = &m_link->EventsIn();
+    }
+
     ClientSession::~ClientSession() {
         if (m_started) {
             Stop();
@@ -580,13 +554,19 @@ namespace MobileGL::MG_Remote::Client {
 
         // ---- 2. Hello. Sent before the server accepts: InProcessTransport queues whole
         // messages, so one thread can drive both halves of the handshake in order.
-        const Uint64 fingerprint = CapsAbiFingerprint();
+        const auto dial = ::MobileGL::Wire::DialMode::No;
+        const auto dataPlane = ::MobileGL::Wire::DataPlane::SharedSegments;
+        const Uint64 fingerprint = WireFingerprint();
         {
             ::flatbuffers::FlatBufferBuilder builder(512);
-            auto stamp = builder.CreateString(GIT_COMMIT_HASH_SHORT);
+            auto stamp = builder.CreateString(BuildFingerprint());
+            auto terms = ::MobileGL::Wire::CreateLinkTerms(builder, dataPlane);
+            const char* tokenText = std::getenv("MOBILEGL_IPC_TOKEN");
+            auto token = builder.CreateString(tokenText == nullptr ? "" : tokenText);
             auto hello = ::MobileGL::Wire::CreateHello(
                 builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR, stamp,
-                /*backendType=*/0u, /*pid=*/SelfProcessId(), /*configBlob=*/0, fingerprint);
+                static_cast<Uint32>(MG_Config::ActiveBackendType), SelfProcessId(), 0,
+                fingerprint, fingerprint, terms, token, dial);
             auto root = ::MobileGL::Wire::CreateCtrlEnvelope(
                 builder, ::MobileGL::Wire::CtrlMsg::Hello, hello.Union());
             ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);
@@ -617,6 +597,10 @@ namespace MobileGL::MG_Remote::Client {
                 return received;
             }
             const ::MobileGL::Wire::CtrlEnvelope* envelope = ParseEnvelope(frame);
+            if (LogPeerRefusal(envelope)) {
+                Stop();
+                return MOBILEGL_ERR_PROTOCOL_MISMATCH;
+            }
             // msg_as_Welcome() IS PART OF THE GUARD - flatbuffers' Verifier::VerifyTable is
             // `return !table || table->Verify(*this)`, so a NULL union member verifies while
             // msg_type() still reports Welcome. See ServerSession::Accept for the same guard.
@@ -634,16 +618,32 @@ namespace MobileGL::MG_Remote::Client {
             // 4.3: the pid the SERVER stated, taken before any check can abort, so a Fatal line
             // can name it too.
             m_peerServerPid = static_cast<std::uint32_t>(welcome->serverPid());
-            // The VERSION before the fingerprint: both would fire, and only one names the cause.
-            if (welcome->abiMajor() != MOBILEGL_PROTOCOL_ABI_MAJOR ||
-                welcome->abiMinor() != MOBILEGL_PROTOCOL_ABI_MINOR) {
-                FatalProtocolVersionMismatch(static_cast<unsigned>(welcome->abiMajor()),
-                                             static_cast<unsigned>(welcome->abiMinor()),
-                                             theirStamp);
+            const MobileGLResult compatible = ValidatePeerHandshake(*m_transport,
+                welcome->abiMajor(), welcome->abiMinor(), welcome->wireFingerprint(), theirStamp, dial);
+            if (compatible != MOBILEGL_OK) {
+                Stop();
+                return compatible;
             }
-            if (welcome->abiFingerprint() != fingerprint) {
-                FatalAbiMismatch("struct shapes", fingerprint, welcome->abiFingerprint(),
-                                 theirStamp);
+            const auto* terms = welcome->linkTerms();
+            if (terms == nullptr || terms->dataPlane() != dataPlane ||
+                terms->wireForm() != ::MobileGL::Wire::WireForm::StructImage ||
+                terms->cmdWindowBytes() < Transport::kMinRingCapacity ||
+                (terms->cmdWindowBytes() & (terms->cmdWindowBytes() - 1)) != 0 ||
+                terms->stageWindowBytes() == 0 || terms->maxReplyBytes() == 0 ||
+                terms->maxReplyBytes() > 0xFFFFFFFFull - sizeof(Transport::ReplySlotHeader) ||
+                terms->eventWindowBytes() < Transport::kMinRingCapacity ||
+                (terms->eventWindowBytes() & (terms->eventWindowBytes() - 1)) != 0) {
+                const auto result = RefuseHandshake(*m_transport, ::MobileGL::Wire::RefuseCode::LinkTerms,
+                                                    "invalid server link terms");
+                Stop();
+                return result;
+            }
+            if (welcome->backendType() != static_cast<Uint32>(MG_Config::ActiveBackendType)) {
+                const auto result = RefuseHandshake(*m_transport, ::MobileGL::Wire::RefuseCode::Backend,
+                    "server backend differs from request", static_cast<Uint32>(MG_Config::ActiveBackendType),
+                    welcome->backendType());
+                Stop();
+                return result;
             }
             // The four SegmentRefs are what a spawn client MAPS (P6). Under inproc the mapping
             // already exists, so what they are good for here is the cross-check that the two
@@ -675,7 +675,7 @@ namespace MobileGL::MG_Remote::Client {
         // under the client role; under `spawn` it becomes ShmSegment::Adopt of the fds the
         // server passed by SCM_RIGHTS, which is why nothing below this line knows which it was.
         const MobileGLResult attached =
-            m_shm.AttachInProcess(server.Shm(), Transport::MemoryRole::Client);
+            m_link->Memory().AttachInProcess(server.Shm(), Transport::MemoryRole::Client);
         if (attached != MOBILEGL_OK) {
             Stop();
             return attached;
@@ -690,6 +690,35 @@ namespace MobileGL::MG_Remote::Client {
         if (m_started) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
+        const std::string configured(MG_Config::Ipc.Control.c_str());
+        if (configured != "fork") {
+            const bool tcp = configured.compare(0, 6, "tcp://") == 0;
+            const bool unixSocket = configured.compare(0, 5, "unix:") == 0;
+            const std::string data(MG_Config::Ipc.Data.c_str());
+            if ((!tcp && !unixSocket) ||
+                (data != "auto" && data != (tcp ? "stream" : "shm"))) {
+                MGLOG_E("MG_Remote: Refuse{ProtocolMismatch} unsupported control/data pair %s/%s",
+                        configured.c_str(), data.c_str());
+                return MOBILEGL_ERR_UNSUPPORTED;
+            }
+            m_connectDial = true;
+            const auto endpoint = tcp ? configured : configured.substr(5);
+            std::unique_ptr<Transport::SocketTransport> socket;
+            const auto connected = Transport::SocketTransport::ConnectTo(endpoint, kSpawnConnectTimeoutMs, socket);
+            if (connected != MOBILEGL_OK) return connected;
+            const auto started = StartOverSocket(std::move(socket));
+            if (started == MOBILEGL_OK) {
+                MGLOG_I("MG_Remote client: control=%s data=%s server=%s pid=%u dial=connect",
+                        tcp ? "tcp" : "unix", tcp ? "stream" : "shm",
+                        tcp ? endpoint.c_str() + 6 : endpoint.c_str(), m_peerServerPid);
+            }
+            return started;
+        }
+        if (MG_Config::Ipc.Data != "auto" && MG_Config::Ipc.Data != "shm") {
+            MGLOG_E("MG_Remote: Refuse{ProtocolMismatch} fork requires shm data in P6.5 wave one");
+            return MOBILEGL_ERR_UNSUPPORTED;
+        }
+        m_connectDial = false;
         // A rendezvous nobody else can collide with. Independent processes need
         // a NAME; making it per-process-per-instant is what stops two runs on
         // one machine - which `ctest -j` produces by construction - finding each
@@ -755,13 +784,20 @@ namespace MobileGL::MG_Remote::Client {
         // ---- Hello. The same bytes as inproc; the fingerprint is still compared
         // for equality, because under Dial == Fork the child IS the same binary and
         // comparing it catches a stale MOBILEGL_IPC_SERVER_PATH (CONTRACT-P6 4.1).
-        const Uint64 fingerprint = CapsAbiFingerprint();
+        const auto dial = m_connectDial ? ::MobileGL::Wire::DialMode::Connect : ::MobileGL::Wire::DialMode::Fork;
+        const auto dataPlane = m_socketTransport->IsTcp() ? ::MobileGL::Wire::DataPlane::Stream
+                                                        : ::MobileGL::Wire::DataPlane::SharedSegments;
+        const Uint64 fingerprint = WireFingerprint();
         {
             ::flatbuffers::FlatBufferBuilder builder(512);
-            auto stamp = builder.CreateString(GIT_COMMIT_HASH_SHORT);
+            auto stamp = builder.CreateString(BuildFingerprint());
+            auto terms = ::MobileGL::Wire::CreateLinkTerms(builder, dataPlane);
+            const char* tokenText = std::getenv("MOBILEGL_IPC_TOKEN");
+            auto token = builder.CreateString(tokenText == nullptr ? "" : tokenText);
             auto hello = ::MobileGL::Wire::CreateHello(
                 builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR, stamp,
-                /*backendType=*/0u, /*pid=*/SelfProcessId(), /*configBlob=*/0, fingerprint);
+                static_cast<Uint32>(MG_Config::ActiveBackendType), SelfProcessId(), 0,
+                fingerprint, fingerprint, terms, token, dial);
             auto root = ::MobileGL::Wire::CreateCtrlEnvelope(
                 builder, ::MobileGL::Wire::CtrlMsg::Hello, hello.Union());
             ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);
@@ -778,6 +814,8 @@ namespace MobileGL::MG_Remote::Client {
         // own mapping, which a6 showed is vacuous against a real peer. Here the wire
         // values are the only values, which is what that check has to become on
         // every lane (CONTRACT-P6 4.4).
+        Transport::SessionSegmentSizes negotiatedSizes;
+        bool stream = false;
         Uint64 announced[4] = {0, 0, 0, 0};
         const Uint32 replySlotCount = Transport::kDefaultReplySlotCount;
         {
@@ -791,6 +829,10 @@ namespace MobileGL::MG_Remote::Client {
                 return received;
             }
             const ::MobileGL::Wire::CtrlEnvelope* envelope = ParseEnvelope(frame);
+            if (LogPeerRefusal(envelope)) {
+                Stop();
+                return MOBILEGL_ERR_PROTOCOL_MISMATCH;
+            }
             if (envelope == nullptr || envelope->msg_type() != ::MobileGL::Wire::CtrlMsg::Welcome ||
                 envelope->msg_as_Welcome() == nullptr) {
                 MGLOG_E("MG_Remote client: the spawned server first frame is not a verifiable "
@@ -805,17 +847,39 @@ namespace MobileGL::MG_Remote::Client {
             // 4.3: the pid the SERVER stated, taken before any check can abort, so a Fatal line
             // can name it too.
             m_peerServerPid = static_cast<std::uint32_t>(welcome->serverPid());
-            // The VERSION before the fingerprint: both would fire, and only one names the cause.
-            if (welcome->abiMajor() != MOBILEGL_PROTOCOL_ABI_MAJOR ||
-                welcome->abiMinor() != MOBILEGL_PROTOCOL_ABI_MINOR) {
-                FatalProtocolVersionMismatch(static_cast<unsigned>(welcome->abiMajor()),
-                                             static_cast<unsigned>(welcome->abiMinor()),
-                                             theirStamp);
+            const MobileGLResult compatible = ValidatePeerHandshake(*m_transport,
+                welcome->abiMajor(), welcome->abiMinor(), welcome->wireFingerprint(), theirStamp, dial);
+            if (compatible != MOBILEGL_OK) {
+                Stop();
+                return compatible;
             }
-            if (welcome->abiFingerprint() != fingerprint) {
-                FatalAbiMismatch("struct shapes", fingerprint, welcome->abiFingerprint(),
-                                 theirStamp);
+            const auto* terms = welcome->linkTerms();
+            if (terms == nullptr || terms->dataPlane() != dataPlane ||
+                terms->wireForm() != ::MobileGL::Wire::WireForm::StructImage ||
+                terms->cmdWindowBytes() < Transport::kMinRingCapacity ||
+                (terms->cmdWindowBytes() & (terms->cmdWindowBytes() - 1)) != 0 ||
+                terms->stageWindowBytes() == 0 || terms->maxReplyBytes() == 0 ||
+                terms->maxReplyBytes() > 0xFFFFFFFFull - sizeof(Transport::ReplySlotHeader) ||
+                terms->eventWindowBytes() < Transport::kMinRingCapacity ||
+                (terms->eventWindowBytes() & (terms->eventWindowBytes() - 1)) != 0) {
+                const auto result = RefuseHandshake(*m_transport, ::MobileGL::Wire::RefuseCode::LinkTerms,
+                                                    "invalid server link terms");
+                Stop();
+                return result;
             }
+            if (welcome->backendType() != static_cast<Uint32>(MG_Config::ActiveBackendType)) {
+                const auto result = RefuseHandshake(*m_transport, ::MobileGL::Wire::RefuseCode::Backend,
+                    "server backend differs from request", static_cast<Uint32>(MG_Config::ActiveBackendType),
+                    welcome->backendType());
+                Stop();
+                return result;
+            }
+            stream = terms->dataPlane() == ::MobileGL::Wire::DataPlane::Stream;
+            negotiatedSizes.CmdRingBytes = terms->cmdWindowBytes();
+            negotiatedSizes.StageBytes = terms->stageWindowBytes();
+            negotiatedSizes.EventRingBytes = terms->eventWindowBytes();
+            negotiatedSizes.ReplyBytes = (terms->maxReplyBytes() + sizeof(Transport::ReplySlotHeader)) *
+                                        negotiatedSizes.ReplySlotCount;
             const ::MobileGL::Wire::SegmentRef* refs[4] = {welcome->cmdRing(), welcome->stageRing(),
                                                            welcome->replyPool(),
                                                            welcome->eventRing()};
@@ -828,6 +892,14 @@ namespace MobileGL::MG_Remote::Client {
                 }
                 announced[index] = refs[index]->sizeBytes();
             }
+        }
+
+        if (stream) {
+            const auto attached = AttachStreamLink(m_socketTransport->TakeDataFd(), negotiatedSizes);
+            if (attached != MOBILEGL_OK) { Stop(); return attached; }
+            m_controlInbox = std::make_unique<Transport::ControlInbox>(*m_transport);
+            Server::ServerLoopInstance().SetRemoteControlSink(&RemoteControlSinkThunk, this);
+            return FinishStartup(&m_link->ConsumerBell(), &m_link->ProducerBell(), false);
         }
 
         // ---- the four descriptors. THIS is the step inproc does not have, and the
@@ -894,14 +966,14 @@ namespace MobileGL::MG_Remote::Client {
 
             // ---- adopt and map. The same Adopt + Map every inproc run has
             // exercised since P5; only the origin of the descriptor is new.
-            const MobileGLResult adopted = m_shm.AdoptFromDescriptors(
+            const MobileGLResult adopted = m_link->Memory().AdoptFromDescriptors(
                 fds, announced, replySlotCount, Transport::MemoryRole::Client);
             if (adopted != MOBILEGL_OK) {
                 closeAll();
                 Stop();
                 return adopted;
             }
-            // The four segment descriptors now belong to m_shm. The two bells
+            // The four segment descriptors now belong to m_link->Memory(). The two bells
             // belong to the doorbells, which own and close them.
             //
             // WHICH BELL IS WHICH IS THE SESSION'S KNOWLEDGE, exactly as under
@@ -947,6 +1019,46 @@ namespace MobileGL::MG_Remote::Client {
         return static_cast<ClientSession*>(user)->RunRemoteSurfaceControlFrame(frame);
     }
 
+    MobileGLResult ClientSession::ReceiveControlFrame(std::vector<Uint8>& frame, Uint32 timeoutMs) {
+        return m_controlInbox ? m_controlInbox->Receive(frame, timeoutMs)
+                              : ReceiveEnvelope(*m_transport, frame, timeoutMs);
+    }
+
+    void ClientSession::SyncPeerLog() {
+        if (!m_started || !m_controlInbox || !m_transport || DeviceLost()) return;
+        WaitForApplyToCatchUp("SyncPeerLog");
+        const std::lock_guard<std::mutex> lock(m_remoteControlMutex);
+        const auto seq = ++m_logFlushSeq;
+        flatbuffers::FlatBufferBuilder builder(64);
+        auto flush = ::MobileGL::Wire::CreateLogFlush(builder, seq, false);
+        auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::LogFlush, flush.Union());
+        ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
+        if (m_transport->SendFrame({builder.GetBufferPointer(), builder.GetSize()}) != MOBILEGL_OK) {
+            LatchDeviceLost("control stream closed during LogFlush");
+            return;
+        }
+        for (;;) {
+            std::vector<Uint8> bytes;
+            const auto received = ReceiveControlFrame(bytes, kRemoteControlTimeoutMs);
+            if (received == MOBILEGL_ERR_TRANSPORT_CLOSED) {
+                LatchDeviceLost("control stream closed during LogFlush");
+                return;
+            }
+            if (received != MOBILEGL_OK)
+                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, LogFlush} no acknowledgement rc=%d", received);
+            const auto* reply = ParseEnvelope(bytes);
+            if (!reply)
+                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, LogFlush} malformed acknowledgement");
+            if (const auto* ack = reply->msg_as_LogFlush()) {
+                if (!ack->ack() || ack->seq() != seq) {
+                    SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, LogFlush} reply sequence mismatch");
+                }
+                return;
+            }
+            if (const auto* caps = reply->msg_as_CapsSnapshot()) AdoptCapsSnapshot(caps);
+        }
+    }
+
     MobileGLResult ClientSession::RunRemoteSurfaceControlFrame(Server::SurfaceControlFrame& frame) {
         if (m_transport == nullptr) {
             return MOBILEGL_ERR_NOT_INITIALIZED;
@@ -974,6 +1086,15 @@ namespace MobileGL::MG_Remote::Client {
         // caller-serialised on the server's m_callerMutex under inproc; the same
         // discipline has to hold here or two replies race for one correlation.
         const std::lock_guard<std::mutex> lock(m_remoteControlMutex);
+        // Control and data are independent ordered streams. Finish the old
+        // command prefix before a surface operation can change its EGL tuple.
+        if (m_started && m_link && !m_link->Capabilities().PublishIsDelivery) {
+            const auto submitted = m_producer.LastPublishedSeq();
+            m_producer.PublishAndNotify(submitted);
+            if (WaitForAppliedBudget(m_producer, *m_events, submitted, kRemoteControlTimeoutMs) !=
+                Transport::SessionWait::Reached) return MOBILEGL_ERR_TRANSPORT_CLOSED;
+            DrainEventRing(*m_events);
+        }
         const MobileGLResult sent = m_transport->SendFrame(
             MobileGLByteSpan{builder.GetBufferPointer(), builder.GetSize()});
         if (sent != MOBILEGL_OK) {
@@ -986,7 +1107,7 @@ namespace MobileGL::MG_Remote::Client {
         for (;;) {
             std::vector<Uint8> reply;
             const MobileGLResult received =
-                ReceiveEnvelope(*m_transport, reply, kRemoteControlTimeoutMs);
+                ReceiveControlFrame(reply, kRemoteControlTimeoutMs);
             if (received != MOBILEGL_OK) {
                 // `dl` (D5b): THE EXPIRY IS NOT FATAL AND IT IS NOT ONE ANSWER. The transport
                 // already distinguishes the two states this wait can end in, and the contract
@@ -1063,6 +1184,10 @@ namespace MobileGL::MG_Remote::Client {
                 return MOBILEGL_ERR_PROTOCOL_MISMATCH;
             }
             MG_Remote::DecodeWireSurfaceReply(*wire, &frame);
+            if (m_link) {
+                const auto delivered = m_link->WaitForEventDelivery(frame.eventHead, kRemoteControlTimeoutMs);
+                if (delivered != MOBILEGL_OK) return delivered;
+            }
             return MOBILEGL_OK;
         }
     }
@@ -1081,9 +1206,7 @@ namespace MobileGL::MG_Remote::Client {
     MobileGLResult ClientSession::FinishStartup(Transport::Doorbell* peerBell,
                                                 Transport::Doorbell* selfBell,
                                                 bool startApplyThreadHere) {
-        Transport::RingControl* control = m_shm.CmdControl();
-        m_cmd = Transport::RingProducer(control, m_shm.CmdRingBase(), m_shm.CmdRingCapacity(),
-                                        Transport::RingCursorSet::Cmd);
+        m_link->InitializeEndpoints();
         // NO STAGE RING. SEG_STAGE is package w1's encoder-local LINEAR ALLOCATOR:
         // a staged byte run carries no RingRecordHeader, nothing consumes SEG_STAGE,
         // and the allocator reclaims on retiredSeq. A RingProducer over
@@ -1091,23 +1214,22 @@ namespace MobileGL::MG_Remote::Client {
         // two tails, so FreeBytes() would fall to zero the first time the head
         // lapped the capacity and never recover - a guaranteed hang. See
         // RingControl's stage triple in Ring.h.
-        if (!m_cmd.Valid()) {
+        if (!m_cmd->Valid()) {
             Stop();
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
         // PeerDoorbell() is the bell the SERVER parks on and this side rings; SelfDoorbell() is
         // this side's own. Which is which is the session's knowledge, not the transport's.
-        m_producer.Attach(control, &m_cmd, peerBell, selfBell, SpinUsFromConfig());
+        m_link->BindDoorbells(peerBell, selfBell);
+        peerBell = &m_link->ConsumerBell(); selfBell = &m_link->ProducerBell();
+        m_producer.Attach(*m_link, SpinUsFromConfig());
 
-        m_replies = Transport::ReplySlotPool(m_shm.ReplyBase(), m_shm.ReplyBytes(),
-                                             m_shm.ReplySlotCount());
-        m_events = Transport::EventRingConsumer(m_shm.EventControl(), control,
-                                                m_shm.EventRingBase(), m_shm.EventRingCapacity(),
-                                                m_shm.EventSegmentBase());
+
         // P5e (ra, §2.6): the drain's other half. A server parked on a full SEG_EVENT is woken
         // by the drain that emptied it, not by the next thing this client happens to publish.
-        m_events.SetServerDoorbell(peerBell);
-        if (!m_replies.Valid() || !m_events.Valid()) {
+        m_events->SetServerDoorbell(peerBell);
+        m_events->SetLink(m_link->Capabilities().PublishIsDelivery ? nullptr : m_link.get());
+        if (MaxReplyBytes() == 0 || !m_events->Valid()) {
             Stop();
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
@@ -1128,21 +1250,9 @@ namespace MobileGL::MG_Remote::Client {
         //
         // The Install calls themselves are package w1's and are named-Fatal stubs until w1
         // lands; see ServerSession::Accept for why they are called anyway.
-        m_segments.Install(Wire::kSegCmd,
-                           Wire::SegmentView{m_shm.CmdRingBase(), m_shm.CmdRingCapacity()});
-        m_segments.Install(Wire::kSegStage,
-                           Wire::SegmentView{m_shm.StageBase(), m_shm.StageBytes()});
-        m_segments.Install(Wire::kSegReply,
-                           Wire::SegmentView{m_shm.ReplyBase(), m_shm.ReplyBytes()});
-        m_segments.Install(Wire::kSegEvent,
-                           Wire::SegmentView{m_shm.EventSegmentBase(),
-                                             m_shm.AnnouncedSize(Transport::SessionSegmentSlot::Event)});
-        // nullptr for the stage producer, and that is the honest value: c0's
-        // signature predates w1's ruling that SEG_STAGE is a linear allocator, and
-        // the encoder reaches its bytes through the SegmentTable above. Handing it
-        // a live RingProducer over a cursor triple nobody consumes would be the
-        // half-wired shape this session exists not to have.
-        m_encoder = Wire::PipeWireEncoder(control, &m_cmd, nullptr, &m_segments);
+        m_segments.AttachLink(m_link.get());
+        m_encoder = Wire::PipeWireEncoder(m_link.get(), &m_segments);
+        m_encoder.SetLink(m_link->Capabilities().PublishIsDelivery ? nullptr : m_link.get());
         m_encoder.SetStageRetirementDoorbell(m_producer.SelfDoorbell());
         // P5e (ra, §2.6): the stage bell is a client wait and every client wait drains. The
         // encoder owns the park; the session owns SEG_EVENT, so the session lends it a drain.
@@ -1171,6 +1281,7 @@ namespace MobileGL::MG_Remote::Client {
         // to be true before the pointer that grants access to it is published. `Stop()` takes
         // them down in the mirror order (m_started = false, then g_active = nullptr).
         m_started = true;
+        Transport::LinkMetricsBegin();
         g_active = this;
         // D1c: THE SESSION-LIVE AND APPLY-THREAD FACTS, stated where they become true.
         //
@@ -1239,6 +1350,8 @@ namespace MobileGL::MG_Remote::Client {
         // monolith adapter runs is a defined no-op rather than a use-after-free.
         UninstallClientWireTables();
         if (!m_started) {
+            m_controlInbox.reset();
+            if (m_socketTransport) m_socketTransport->Shutdown();
             // Start's own failure paths land here with a half-built session. FIVE of them are
             // reached AFTER ServerSession::Accept has already returned OK, so tearing down
             // only the client half is not enough and gets three things wrong at once: the
@@ -1249,7 +1362,9 @@ namespace MobileGL::MG_Remote::Client {
             // still point at. The server closes FIRST, in the same order the started path
             // gets right, and only then do the transports go.
             m_producer.Detach();
-            m_shm.Close();
+            m_link = Transport::CreateSharedLink(Transport::TransportRoleTag::ClientProducer);
+        m_cmd = &m_link->CommandsOut(); m_events = &m_link->EventsIn();
+        m_link->Memory().Close();
             Server::ServerSessionInstance().Close();
             m_clientTransport.reset();
             m_serverTransport.reset();
@@ -1264,7 +1379,7 @@ namespace MobileGL::MG_Remote::Client {
         //
         // 1. publish and let the server drain. Bounded: a lost record must be a red lane, not
         //    a hung exit.
-        Transport::RingControl* control = m_shm.CmdControl();
+        Transport::RingControl* control = m_link->Memory().CmdControl();
         if (control != nullptr) {
             // The PRODUCER's own last-published seq, not RingControl::submittedSeq. Ring.h:72-77
             // permits submittedSeq to be published lazily and Ring.h:243 encourages batching
@@ -1291,6 +1406,7 @@ namespace MobileGL::MG_Remote::Client {
         if (m_transport != nullptr) {
             m_transport->Shutdown();
         }
+        m_controlInbox.reset();
 
         // 3. JOIN, bounded - package v1's ServerLoop::Stop, which also destroys the server's
         //    private BackendObject on that thread before it exits.
@@ -1300,12 +1416,14 @@ namespace MobileGL::MG_Remote::Client {
         //    referenced by an unapplied record is a use-after-free the join is what prevents.
         LogMemory("teardown");
         LogWireLedger();
+        Transport::LinkMetricsEnd();
         m_producer.Detach();
         m_encoder = Wire::PipeWireEncoder();
-        m_events = Transport::EventRingConsumer();
-        m_replies = Transport::ReplySlotPool();
-        m_cmd = Transport::RingProducer();
-        m_shm.Close();
+        *m_events = Transport::EventRingConsumer();
+        *m_cmd = Transport::RingProducer();
+        m_link = Transport::CreateSharedLink(Transport::TransportRoleTag::ClientProducer);
+        m_cmd = &m_link->CommandsOut(); m_events = &m_link->EventsIn();
+        m_link->Memory().Close();
         Server::ServerSessionInstance().Close();
         m_clientTransport.reset();
         m_serverTransport.reset();
@@ -1412,6 +1530,10 @@ namespace MobileGL::MG_Remote::Client {
                     Wire::WireOpName(op));
         }
 
+        const Bool rowCarriesReplySlot =
+            (MG_Pipe::MGPipeCallFlagsFor(op) & static_cast<Uint32>(MG_Pipe::kReplySlot)) != 0;
+        const Bool ownsReplySlot = rowCarriesReplySlot && wantReply;
+        const auto replyMetricStart = Transport::LinkMetricsBeginReply(ownsReplySlot);
         Uint64 seq = m_encoder.EncodeRecord(op, payload, payloadBytes, tails, tailCount);
         if (seq == Wire::kInvalidSeq) {
             // EncodeRecord already refused individually oversized records. This one fits,
@@ -1419,7 +1541,7 @@ namespace MobileGL::MG_Remote::Client {
             // including the wrap pad. Prior EmitAndWait calls have published every record.
             Wire::WireRecordLayout layout{};
             Wire::MGPipeWireRecordLayout(op, payload, layout);
-            const Uint64 toEnd = m_cmd.Capacity() - m_cmd.LocalHead() % m_cmd.Capacity();
+            const Uint64 toEnd = m_cmd->Capacity() - m_cmd->LocalHead() % m_cmd->Capacity();
             const Uint64 needed = layout.TotalBytes + (toEnd < layout.TotalBytes ? toEnd : 0);
             const BarrierWaitScope waiting;
             const auto wait = m_producer.WaitForCmdSpace(needed, kBarrierTimeoutMs);
@@ -1434,7 +1556,7 @@ namespace MobileGL::MG_Remote::Client {
             // here without draining is the other half of the flow-control deadlock: the server
             // stops applying on a full event ring, so retiredSeq stops moving, so this wait
             // never completes. One drain on the way out closes it.
-            DrainEventRing(m_events);
+            DrainEventRing(*m_events);
             seq = m_encoder.EncodeRecord(op, payload, payloadBytes, tails, tailCount);
             if (seq == Wire::kInvalidSeq) {
                 SessionFail(MGFatalFamily::RingOverrun, "MGPipe: Fatal{RingOverrun, \"SEG_CMD\"} - %s refused after sufficient "
@@ -1446,6 +1568,7 @@ namespace MobileGL::MG_Remote::Client {
         // SessionProducer's one job and RingTest.cpp:446's pin. Notify-then-publish loses the
         // wakeup.
         m_producer.PublishAndNotify(seq);
+        if (op == MG_Pipe::MGPWireOp::Present) Transport::LinkMetricsPresent();
 
         // Does this row own a reply slot? kMGPipeCallFlags IS THE SINGLE SOURCE OF TRUTH
         // (R-16 / ID-31) - fourteen rows now, because the four Bool acceptance entry points
@@ -1456,9 +1579,7 @@ namespace MobileGL::MG_Remote::Client {
         // The catalogue still says which rows CARRY a slot; a caller that passes false says it
         // will not read this one (resource_subdata's buffer half, §2.5 - the only such caller).
         // The server posts either way, so the wire is unchanged and the row keeps its flag.
-        const Bool rowCarriesReplySlot =
-            (MG_Pipe::MGPipeCallFlagsFor(op) & static_cast<Uint32>(MG_Pipe::kReplySlot)) != 0;
-        const Bool ownsReplySlot = rowCarriesReplySlot && wantReply;
+
 
         // ---- THE P5e WAIT RULE (CONTRACT-P5E §2.3) ---------------------------------------
         //
@@ -1564,7 +1685,7 @@ namespace MobileGL::MG_Remote::Client {
         const BarrierWaitScope waiting;
         const Uint64 waitBudgetMs = AppliedWaitBudgetMs(op, payload);
         const Transport::SessionWait wait =
-            WaitForAppliedBudget(m_producer, m_events, seq, waitBudgetMs);
+            WaitForAppliedBudget(m_producer, *m_events, seq, waitBudgetMs);
         if (wait == Transport::SessionWait::ShutDown) {
             // `dl`: SHUTDOWN IS TWO DIFFERENT EVENTS AND ONLY ONE IS A DEVICE LOSS. Stop() kills
             // this same bell to wake a parked applier, so an orderly exit arrives here too - and
@@ -1599,12 +1720,14 @@ namespace MobileGL::MG_Remote::Client {
                     static_cast<unsigned long long>(waitBudgetMs));
         }
 
+        Transport::LinkMetricsReplyApplied(replyMetricStart);
+
         // THE REVERSE CHANNEL IS DRAINED HERE, and here is the only place it can be: under the
         // barrier this is the one instant at which the apply thread is known not to be inside
         // the applier, and MGPipeClientOnGpuWritten / OnBufferWriteback write frontend objects.
         // It is what gives AwaitBufferWriteback something to have waited FOR: b1's third state
         // clears when the writeback lands, and the writeback lands on this ring.
-        DrainEventRing(m_events);
+        DrainEventRing(*m_events);
 
         if (!ownsReplySlot) {
             // P5e (ra, §2.3). A barriered record's apply has returned and this thread is the
@@ -1716,7 +1839,7 @@ namespace MobileGL::MG_Remote::Client {
         if (target == 0) return;
         const BarrierWaitScope waiting;
         const Transport::SessionWait wait =
-            WaitForAppliedBudget(m_producer, m_events, target, kBarrierTimeoutMs);
+            WaitForAppliedBudget(m_producer, *m_events, target, kBarrierTimeoutMs);
         if (wait == Transport::SessionWait::ShutDown) {
             // `dl`: the same two-events distinction the verb barrier makes. Only a peer that
             // HUNG UP is a device loss; Stop() reaches this path too.
@@ -1741,7 +1864,7 @@ namespace MobileGL::MG_Remote::Client {
         // on: the server blocks only on a full event ring, the client blocks only on
         // watermarks the server advances, and every client wait drains - so at most one side
         // is parked at any instant.
-        DrainEventRing(m_events);
+        DrainEventRing(*m_events);
         ReleaseFillPins();
 #else
         (void)why;
@@ -1791,7 +1914,7 @@ namespace MobileGL::MG_Remote::Client {
                     Transport::Watermark::Reached(control->Progress.presentAckSerial, awaited)) {
                     break;
                 }
-                DrainEventRing(m_events);
+                DrainEventRing(*m_events);
             }
             if (wait == Transport::SessionWait::TimedOut) {
                 SessionFail(MGFatalFamily::PresentCreditTimeout, "MGPipe: Fatal{PresentCreditTimeout} - present %llu waited %u ms for "
@@ -1803,7 +1926,7 @@ namespace MobileGL::MG_Remote::Client {
             }
             // ShutDown is teardown and returns: the present did not happen, the same answer
             // the barrier gives on a dead doorbell.
-            if (wait == Transport::SessionWait::Reached) DrainEventRing(m_events);
+            if (wait == Transport::SessionWait::Reached) DrainEventRing(*m_events);
         }
         m_presentsSent = serial;
         return serial;
@@ -1935,9 +2058,9 @@ namespace MobileGL::MG_Remote::Client {
         // drains them would otherwise hold the GL thread here for ever, and a frame backlog
         // deeper than this is a finding rather than a steady state.
         for (Uint32 guard = 0; guard < kMaxControlFramesPerPump; ++guard) {
-            if (m_transport->PeekFrameSize() == 0) break;
+            if ((m_controlInbox ? m_controlInbox->Peek() : m_transport->PeekFrameSize()) == 0) break;
             std::vector<Uint8> frame;
-            if (ReceiveEnvelope(*m_transport, frame, 0) != MOBILEGL_OK) break;
+            if (ReceiveControlFrame(frame, 0) != MOBILEGL_OK) break;
             const ::MobileGL::Wire::CtrlEnvelope* envelope = ParseEnvelope(frame);
             if (envelope == nullptr) {
                 MGLOG_E("MG_Remote client: an unverifiable control frame (%llu bytes) was dropped",
@@ -1965,6 +2088,22 @@ namespace MobileGL::MG_Remote::Client {
         return adopted;
     }
 
+    MobileGLResult ClientSession::AttachStreamLink(int fd, const Transport::SessionSegmentSizes& sizes) {
+        std::unique_ptr<Transport::ILink> link;
+        const auto attached = Transport::CreateStreamLink(fd, sizes, Transport::TransportRoleTag::ClientProducer, link);
+        if (attached != MOBILEGL_OK) return attached;
+        AttachDataLink(std::move(link));
+        return MOBILEGL_OK;
+    }
+
+    void ClientSession::AttachDataLink(std::unique_ptr<Transport::ILink> link) {
+        m_link = std::move(link);
+        m_cmd = &m_link->CommandsOut(); m_events = &m_link->EventsIn();
+        m_producer.SetLink(m_link->Capabilities().PublishIsDelivery ? nullptr : m_link.get());
+        m_encoder.SetLink(m_link->Capabilities().PublishIsDelivery ? nullptr : m_link.get());
+        m_events->SetLink(m_link->Capabilities().PublishIsDelivery ? nullptr : m_link.get());
+    }
+
     Transport::SessionProducer& ClientSession::Producer() { return m_producer; }
 
     Transport::SessionWait ClientSession::WaitForApplied(Uint64 seq, Uint32 timeoutMs) {
@@ -1973,38 +2112,48 @@ namespace MobileGL::MG_Remote::Client {
 
     Bool ClientSession::ReadReply(Uint64 seq, void* outBytes, Uint64 outCapacity, Int32* outStatus,
                                   Uint64* outSize) {
-        return m_replies.Read(seq, outBytes, outCapacity, outStatus, outSize);
+        const void* bytes = nullptr; Uint64 size = 0; Int32 status = 0;
+        if (m_link->ReadReply(seq, &status, &bytes, &size) != MOBILEGL_OK) return false;
+        if (outStatus) *outStatus = status;
+        if (outSize) *outSize = size;
+        if (size > outCapacity || (size && !outBytes)) return false;
+        if (size) std::memcpy(outBytes, bytes, static_cast<SizeT>(size));
+        return true;
     }
 
-    Uint32 ClientSession::MaxReplyBytes() const { return m_replies.MaxReplyBytes(); }
+    Uint32 ClientSession::MaxReplyBytes() const { return static_cast<Uint32>(m_link->Capabilities().MaxReplyBytes); }
 
-    Bool ClientSession::ReplyCanHold(Uint64 bytes) const { return m_replies.CanHold(bytes); }
+    Bool ClientSession::ReplyCanHold(Uint64 bytes) const { return bytes <= MaxReplyBytes(); }
 
     // ID-47. Forwarded verbatim so that the message, the boundary and the abort are the pool's
     // and are pinned once, in SessionTest, rather than re-derived per caller.
     void ClientSession::RequireReadPixelsReplyFits(Uint32 width, Uint32 height, Uint32 format,
                                                    Uint32 type, Uint64 bytes) const {
-        m_replies.RequireReadPixelsFits(width, height, format, type, bytes);
+        if (!ReplyCanHold(bytes)) {
+            SessionFail(MGFatalFamily::ReplyTooLarge,
+                "MGPipe: Fatal{ReplyTooLarge, \"ReadPixels %ux%u 0x%04X/0x%04X %llu > %u\"}",
+                width, height, format, type, static_cast<unsigned long long>(bytes), MaxReplyBytes());
+        }
     }
 
-    Transport::EventRingConsumer& ClientSession::Events() { return m_events; }
+    Transport::EventRingConsumer& ClientSession::Events() { return *m_events; }
 
     Uint32 ClientSession::DrainPublishedEvents() {
         // Not gated on m_started on purpose: PumpControlPlane's own pre-start call during
         // Start() has its ring-consumer twin here, and DrainEventRing's Valid() check is
         // the whole guard either case needs.
-        return DrainEventRing(m_events);
+        return DrainEventRing(*m_events);
     }
 
-    Uint64 ClientSession::EventRingCapacityBytes() const { return m_shm.EventRingCapacity(); }
+    Uint64 ClientSession::EventRingCapacityBytes() const { return m_link->Memory().EventRingCapacity(); }
 
-    Uint64 ClientSession::StageCapacityBytes() const { return m_shm.StageBytes(); }
+    Uint64 ClientSession::StageCapacityBytes() const { return m_link->Memory().StageBytes(); }
 
     Wire::SegmentTable& ClientSession::Segments() { return m_segments; }
 
-    Transport::RingControl* ClientSession::Control() { return m_shm.CmdControl(); }
+    Transport::RingControl* ClientSession::Control() { return m_link->Memory().CmdControl(); }
 
-    Transport::SessionSegments& ClientSession::Shm() { return m_shm; }
+    Transport::SessionSegments& ClientSession::Shm() { return m_link->Memory(); }
 
     Transport::ITransport* ClientSession::Control_Plane() { return m_transport; }
 
@@ -2071,3 +2220,7 @@ namespace MobileGL::MG_Remote::Client {
 #undef MGP5_C0_STUB
 
 } // namespace MobileGL::MG_Remote::Client
+
+extern "C" __attribute__((visibility("default"))) void MGPipeSyncPeerLog() {
+    if (auto* session = MobileGL::MG_Remote::Client::ClientSession::Active()) session->SyncPeerLog();
+}

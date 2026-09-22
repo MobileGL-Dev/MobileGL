@@ -17,6 +17,11 @@ skipped are three different answers and the caller needs all three.
 """
 
 import sys
+import re
+import argparse
+import importlib.util
+import json
+from pathlib import Path
 import xml.etree.ElementTree as ET
 
 
@@ -25,7 +30,32 @@ import xml.etree.ElementTree as ET
 ARM_PREFIXES = {
     '--require-split-ran': 'DirectGLES.Split.',
     '--require-spawn-ran': 'DirectGLES.Spawn.',
+    '--require-tcp-ran': 'DirectGLES.Tcp.',
+    '--require-tcp-device-ran': 'DirectGLES.TcpDevice.',
 }
+
+TCP_ARM = re.compile(r'control=tcp data=stream server=\S+ pid=[1-9][0-9]*\b')
+
+
+def require_tcp_proof(path, prefix, discovery):
+    helper_path = Path(__file__).resolve().parents[2] / 'MobileGL/MG_IntegrationTest/Harness/split_log_paths.py'
+    spec = importlib.util.spec_from_file_location('split_log_paths', helper_path)
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    logs = helper.marker_log_paths(json.loads(Path(discovery).read_text()))
+    for case in ET.parse(path).getroot().iter('testcase'):
+        if not case.get('name', '').startswith(prefix):
+            continue
+        if case.find('skipped') is not None or case.get('status') in ('notrun', 'disabled'):
+            continue
+        # The console sink is compiled out of CI builds, so system-out cannot
+        # establish the transport. Read this entry's private role logs instead.
+        name = case.get('name')
+        if name not in logs:
+            raise ValueError(f'{name}: discovery has no private log path')
+        output = helper.read_role_logs(logs[name])
+        if not TCP_ARM.search(output):
+            raise ValueError(f"{case.get('name')}: missing TCP/stream endpoint and server pid arm proof")
 
 
 def tally(path, prefix=None):
@@ -43,18 +73,25 @@ def tally(path, prefix=None):
 
 
 def main():
-    if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] not in ARM_PREFIXES):
-        print("usage: junit_tally.py <junit.xml> [" + " | ".join(sorted(ARM_PREFIXES)) + "]",
-              file=sys.stderr)
-        return 2
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('junit')
+    arms = parser.add_mutually_exclusive_group()
+    for flag, prefix in ARM_PREFIXES.items():
+        arms.add_argument(flag, dest='prefix', action='store_const', const=prefix)
+    parser.add_argument('--discovery', help='CTest --show-only=json-v1 output (required for TCP proof)')
+    args = parser.parse_args()
+    if args.prefix in ('DirectGLES.Tcp.', 'DirectGLES.TcpDevice.') and not args.discovery:
+        parser.error('TCP arm proof requires --discovery to locate each private role log')
     try:
-        prefix = ARM_PREFIXES[sys.argv[2]] if len(sys.argv) == 3 else None
-        passed, failed, skipped = tally(sys.argv[1], prefix=prefix)
+        prefix = args.prefix
+        passed, failed, skipped = tally(args.junit, prefix=prefix)
+        if prefix in ('DirectGLES.Tcp.', 'DirectGLES.TcpDevice.'):
+            require_tcp_proof(args.junit, prefix, args.discovery)
     except Exception as exc:  # a malformed file is not "zero of everything"
-        print(f"junit_tally: cannot parse {sys.argv[1]}: {exc}", file=sys.stderr)
+        print(f"junit_tally: cannot prove {args.junit}: {exc}", file=sys.stderr)
         return 1
     print(f"{passed} {failed} {skipped}")
-    if len(sys.argv) == 3 and (passed == 0 or failed):
+    if prefix is not None and (passed == 0 or failed):
         print(f'{prefix} baseline FAILED: no successful entries with that arm prefix, or an '
               f'already-red selection', file=sys.stderr)
         return 1

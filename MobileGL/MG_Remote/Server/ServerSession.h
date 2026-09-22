@@ -40,7 +40,9 @@
 //      refused to exist until both landed would block every other package's bring-up.
 
 #pragma once
+#include "../Transport/ILink.h"
 #include <Includes.h>
+#include <vector>
 
 #include <MG_Pipe/MGPipe.h>
 
@@ -60,13 +62,19 @@ namespace MobileGL::MG_Remote::Server {
     public:
         static ServerSession* Active();
 
+        ServerSession();
         ~ServerSession();
+        MobileGLResult AttachStreamLink(int dataFd, const Transport::SessionSegmentSizes& sizes);
+        void AttachDataLink(std::unique_ptr<Transport::ILink> link);
+        Transport::ILink* DataLink() const { return m_link.get(); }
+        void FlushDataProgress();
 
         // Maps the four segments, answers Hello with Welcome, and publishes the first
         // CapsSnapshot. The ABI assertion (CapsCodec.h) happens HERE, before a single record is
         // decoded: sizeof(DynamicBackendParameters), sizeof(MGPCaps), sizeof(GLFunctionsTable)
         // and the build fingerprint must match, and a mismatch is Fatal{AbiMismatch}.
-        MobileGLResult Accept(Transport::ITransport& transport);
+        MobileGLResult Accept(Transport::ITransport& transport,
+                              const std::vector<Uint8>* firstFrame = nullptr);
 
         // Re-publishes the whole snapshot. R-12: a SECOND arrival IS the invalidation signal,
         // which is how DirectGLES - which has no OnCapsInvalidated producer - tells the client
@@ -199,17 +207,17 @@ namespace MobileGL::MG_Remote::Server {
         void LogMemory(const char* phase) const;
 
     private:
+        std::unique_ptr<Transport::ILink> m_link;
         // sm: non-owning; the spawn entry point owns the SocketDoorbells.
         Transport::Doorbell* m_externalConsumerBell = nullptr;
         Transport::Doorbell* m_externalProducerBell = nullptr;
-        Transport::RingConsumer m_commands;
+        Transport::RingConsumer* m_commands = nullptr;
         Wire::SegmentTable m_segments;
         PipeApplier m_applier;
         ReplyPool m_replies;
 
-        Transport::SessionSegments m_shm;
         Transport::SessionConsumer m_consumer;
-        Transport::EventRingProducer m_events;
+        Transport::EventRingProducer* m_events = nullptr;
         Transport::ITransport* m_transport = nullptr;
         MG_Backend::BackendObject* m_backend = nullptr;
         Transport::SessionSegmentSizes m_sizes;

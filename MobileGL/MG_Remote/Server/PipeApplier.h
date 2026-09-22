@@ -89,6 +89,7 @@ namespace MobileGL::MG_Remote::Server {
         ReplyPool() = default;
         ReplyPool(void* base, Uint64 sizeBytes, Uint32 slotCount, Uint32 slotBytes);
 
+        void SetLink(Transport::ILink* link) { m_link = link; }
         void PostReply(Uint64 seq, Int32 status, const void* bytes, Uint64 size) override;
 
         // A reply larger than one slot is Fatal rather than chunked: P5's only large answer is
@@ -97,6 +98,7 @@ namespace MobileGL::MG_Remote::Server {
         Uint32 SlotBytes() const;
 
     private:
+        Transport::ILink* m_link = nullptr;
         Uint8* m_base = nullptr;
         Uint64 m_size = 0;
         Uint32 m_slots = 0;
@@ -350,6 +352,7 @@ namespace MobileGL::MG_Remote::Server {
         // CALLED ON THE APPLY THREAD, ONCE, BEFORE THE FIRST RECORD. PipeWireDecoder is "not
         // thread safe: one decoder on the apply thread, by construction", and its constructor
         // installs the process-wide apply hook.
+        void Attach(Transport::ILink* link, MG_Backend::BackendObject* backend);
         void Attach(Transport::RingControl* control, MG_Backend::BackendObject* backend);
         void Detach();
         Bool Attached() const;

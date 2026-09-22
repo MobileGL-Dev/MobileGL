@@ -153,7 +153,8 @@ namespace {
                 auto stamp = builder.CreateString(GIT_COMMIT_HASH_SHORT);
                 auto hello = ::MobileGL::Wire::CreateHello(
                     builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR, stamp,
-                    /*backendType=*/0u, /*pid=*/0u, /*configBlob=*/0, CapsAbiFingerprint());
+                    /*backendType=*/0u, /*pid=*/0u, /*configBlob=*/0, CapsAbiFingerprint(),
+                    CapsAbiFingerprint(), ::MobileGL::Wire::CreateLinkTerms(builder));
                 auto root = ::MobileGL::Wire::CreateCtrlEnvelope(
                     builder, ::MobileGL::Wire::CtrlMsg::Hello, hello.Union());
                 ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);

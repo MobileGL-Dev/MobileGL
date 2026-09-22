@@ -17,6 +17,7 @@
 
 #include "RoleMemory.h"
 #include "SessionRings.h"
+#include <new>
 
 #include <MG_Util/Debug/Log.h>
 
@@ -308,6 +309,36 @@ namespace MobileGL::MG_Remote::Transport {
         return MOBILEGL_OK;
     }
 
+    MobileGLResult SessionSegments::CreatePrivate(const SessionSegmentSizes& sizes, MemoryRole role) {
+        Close();
+        const std::uint64_t bytes[4] = {SegmentBytesForRing(sizes.CmdRingBytes), sizes.StageBytes,
+                                      sizes.ReplyBytes, SegmentBytesForRing(sizes.EventRingBytes)};
+        for (unsigned i = 0; i != 4; ++i) {
+            if (!bytes[i] || bytes[i] > static_cast<std::uint64_t>(SIZE_MAX)) {
+                Close(); return MOBILEGL_ERR_INVALID_ARGUMENT;
+            }
+            m_private[i] = ::operator new(static_cast<std::size_t>(bytes[i]),
+                std::align_val_t{alignof(RingControl)}, std::nothrow);
+            if (!m_private[i]) { Close(); return MOBILEGL_ERR_INVALID_ARGUMENT; }
+            m_privateSizes[i] = bytes[i];
+            std::memset(m_private[i], 0, static_cast<std::size_t>(bytes[i]));
+            m_mappedBytes += bytes[i];
+        }
+        m_cmdControl = static_cast<RingControl*>(m_private[0]);
+        m_cmdRingBase = static_cast<std::uint8_t*>(m_private[0]) + sizeof(RingControl);
+        m_cmdRingCapacity = RingCapacityForSegment(bytes[0]);
+        m_stageBase = m_private[1]; m_stageBytes = bytes[1];
+        m_replyBase = m_private[2]; m_replyBytes = bytes[2]; m_replySlotCount = sizes.ReplySlotCount;
+        m_eventControl = static_cast<RingControl*>(m_private[3]);
+        m_eventSegmentBase = m_private[3];
+        m_eventRingBase = static_cast<std::uint8_t*>(m_private[3]) + sizeof(RingControl);
+        m_eventRingCapacity = RingCapacityForSegment(bytes[3]);
+        InitRingControl(*m_cmdControl); InitRingControl(*m_eventControl);
+        m_role = role; m_valid = true;
+        LedgerAddSegment(role, m_mappedBytes); m_booked = true;
+        return MOBILEGL_OK;
+    }
+
     MobileGLResult SessionSegments::AttachInProcess(SessionSegments& owner, MemoryRole role) {
         Close();
         if (!owner.Valid()) {
@@ -497,6 +528,8 @@ namespace MobileGL::MG_Remote::Transport {
         }
         for (std::size_t index = 0; index < kSlotCount; ++index) {
             m_segments[index] = nullptr;
+            if (m_private[index]) ::operator delete(m_private[index], std::align_val_t{alignof(RingControl)});
+            m_private[index] = nullptr; m_privateSizes[index] = 0;
         }
         m_cmdControl = nullptr;
         m_cmdRingBase = nullptr;
@@ -516,7 +549,7 @@ namespace MobileGL::MG_Remote::Transport {
 
     std::uint64_t SessionSegments::AnnouncedSize(SessionSegmentSlot slot) const {
         const ShmSegment* segment = m_segments[SlotIndex(slot)];
-        return segment == nullptr ? 0 : segment->Size();
+        return segment == nullptr ? m_privateSizes[SlotIndex(slot)] : segment->Size();
     }
 
     const char* SessionSegments::AnnouncedName(SessionSegmentSlot slot) const {

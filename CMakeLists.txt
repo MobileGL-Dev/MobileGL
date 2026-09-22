@@ -592,6 +592,9 @@ endif()
 if (MOBILEGL_BUILD_DISAGGREGATED)
     message(STATUS "MobileGL: disaggregated transport ON, appending MG_Remote sources")
     list(APPEND SOURCE_FILES
+        MobileGL/MG_Remote/Transport/ShmLink.cpp
+        MobileGL/MG_Remote/Transport/LinkMetrics.cpp
+        MobileGL/MG_Remote/Transport/StreamLink.cpp
         MobileGL/MG_Remote/Transport/Ring.cpp
         MobileGL/MG_Remote/Transport/Doorbell.cpp
         MobileGL/MG_Remote/Transport/ShmSegment.cpp
@@ -603,6 +606,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         MobileGL/MG_Remote/Transport/FdPassing.cpp
         MobileGL/MG_Remote/Transport/InProcessTransport.cpp
         MobileGL/MG_Remote/Transport/SocketTransport.cpp
+        MobileGL/MG_Remote/Transport/ControlInbox.cpp
         # Keeps MG_Util/Debug/Log.h - and through it the GL frontend's
         # umbrella header - out of the header-only wire code (WireLog.h).
         MobileGL/MG_Remote/Transport/WireLog.cpp

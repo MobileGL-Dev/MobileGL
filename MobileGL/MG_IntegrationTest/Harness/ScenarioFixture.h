@@ -23,7 +23,11 @@
 
 #include <cctype>
 #include <cstdlib>
+#include <fstream>
 #include <string>
+#if defined(__linux__)
+#include <unistd.h>
+#endif
 
 #include <gtest/gtest.h>
 
@@ -152,6 +156,18 @@ namespace MGITest {
                 RecordProperty("split_transport", state.transportName);
                 RecordProperty("split_implemented_verbs", static_cast<int>(state.implementedVerbs));
                 RecordProperty("split_emit_seq_at_setup", static_cast<int>(state.emitSeq));
+#if defined(__linux__)
+                if (std::getenv("MGITEST_TCP_LANE")) {
+                    // Connect must never silently launch a local server. The
+                    // companion log gate proves the remote Welcome pid/endpoint.
+                    std::ifstream children("/proc/self/task/" + std::to_string(::getpid()) + "/children");
+                    ASSERT_TRUE(children.good()) << "TCP topology proof cannot read /proc children";
+                    int child = 0;
+                    ASSERT_FALSE(static_cast<bool>(children >> child))
+                        << "Dial=Connect created a local server child: " << child;
+                    RecordProperty("tcp_local_children", 0);
+                }
+#endif
             }
             // A scenario starts from a clean slate but shares the context (and so
             // the renderer's memos) with every other scenario in this process -

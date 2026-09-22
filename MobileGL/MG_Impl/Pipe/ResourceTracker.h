@@ -600,11 +600,11 @@ namespace MobileGL::MG_Pipe {
             // so only a non-empty run goes through the bounds-checked resolve.
             if (bytes.Size != 0) {
                 auto* session = MG_Remote::Client::ClientSession::Active();
-                const void* resolved =
-                    session == nullptr
-                        ? nullptr
-                        : session->Segments().Resolve(MG_Remote::Wire::kSegEvent, bytes.Offset,
-                                                      bytes.Size);
+                const void* resolved = nullptr;
+                if (session && session->DataLink()) {
+                    session->DataLink()->ResolveSpan(MG_Remote::Transport::LinkSegment::Event,
+                                                    {bytes.Offset, bytes.Size}, &resolved);
+                }
                 if (resolved == nullptr) {
                     MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"OnBufferWriteback.Offset\"} - "
                             "the writeback blobref's {%llu + %llu} does not resolve inside the "

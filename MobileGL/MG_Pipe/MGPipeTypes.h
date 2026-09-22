@@ -175,10 +175,8 @@ namespace MobileGL::MG_Pipe {
         MGPBlobRef RendererInfo;
     };
     static_assert(std::is_trivially_copyable_v<MGPCaps>, "MGPCaps must be trivially copyable");
-    // Stated as a COMPOSITION rather than a literal: DynamicBackendParameters still carries
-    // SizeT fields, so its literal size is ABI-dependent until P0.5 moves the caps block
-    // into MGPipeValueTypes.h with fixed-width members. The assertion still fires on any
-    // padding introduced between the members below.
+    // Stated as a composition to catch padding between the wire members.
+    // P6.5: all dynamic scalar widths are explicit; member offsets are in the wire digest.
     static_assert(sizeof(MGPCaps) == sizeof(DynamicBackendParameters) + 8 + 24 + 24,
                   "MGPCaps gained padding or a member; update the wire format");
 

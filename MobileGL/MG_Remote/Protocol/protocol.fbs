@@ -56,6 +56,47 @@ table SegmentRef {
 // Handshake
 // ---------------------------------------------------------------------------
 
+// P6.5: independent control and data-plane choices. Values are append-only.
+enum DataPlane : ubyte { SharedSegments = 0, Stream = 1 }
+enum WireForm : ubyte { StructImage = 0 }
+enum DialMode : ubyte { No = 0, Fork = 1, Connect = 2 }
+
+// Window sizes are stated by the server; the client's values are proposals only.
+table LinkTerms {
+  dataPlane: DataPlane;
+  wireForm: WireForm;
+  maxReplyBytes: ulong;
+  cmdWindowBytes: ulong;
+  stageWindowBytes: ulong;
+  eventWindowBytes: ulong;
+}
+
+enum RefuseCode : uint {
+  None = 0,
+  ProtocolVersion = 1,
+  WireFingerprint = 2,
+  BuildFingerprint = 3,
+  Authentication = 4,
+  LinkTerms = 5,
+  Backend = 6,
+  Busy = 7,
+  MalformedHello = 8,
+}
+
+// A handshake rejection is a normal session outcome, never a process abort.
+table Refuse {
+  code: RefuseCode;
+  detail: string;
+  expected: ulong;
+  actual: ulong;
+  peerValue: string;
+}
+
+table LogFlush {
+  seq: ulong;
+  ack: bool;
+}
+
 table Hello {
   abiMajor: uint;
   abiMinor: uint;
@@ -63,15 +104,12 @@ table Hello {
   backendType: uint;
   pid: uint;
   configBlob: [ubyte];
-  // CONTRACT-P5 table 0, "ABI agreement": MGPCaps has only a COMPOSITIONAL size
-  // assertion, because DynamicBackendParameters still carries SizeT and GLenum.
-  // So the two peers assert they were built from the same struct shapes instead
-  // of rewriting them fixed-width (that is P7's account). This is
-  // MG_Remote::CapsAbiFingerprint(): sizeof(DynamicBackendParameters),
-  // sizeof(MGPCaps), sizeof(GLFunctionsTable), the protocol ABI version and the
-  // build's git stamp, mixed. A mismatch is Fatal{AbiMismatch} and NEVER a
-  // downgrade - every alternative silently reads one struct as another.
+  // Retained legacy slot. P6.5 peers compare wireFingerprint instead.
   abiFingerprint: ulong;
+  wireFingerprint: ulong;
+  linkTerms: LinkTerms;
+  token: string;
+  dialMode: DialMode;
 }
 
 table Welcome {
@@ -82,12 +120,12 @@ table Welcome {
   stageRing: SegmentRef;
   replyPool: SegmentRef;
   eventRing: SegmentRef;
-  // The server's half of the assertion above. The string is carried beside the
-  // mixed value only so a mismatch can name both builds in the Fatal line; the
-  // COMPARISON is on abiFingerprint, which also covers the three sizeofs the
-  // string cannot.
   buildFingerprint: string;
+  // Retained legacy slot; do not reuse or renumber it.
   abiFingerprint: ulong;
+  wireFingerprint: ulong;
+  linkTerms: LinkTerms;
+  backendType: uint;
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +259,8 @@ table SurfaceReply {
   eglMajor: int;
   eglMinor: int;
   defaultFb: DefaultFramebufferInfo;
+  // P6.5: all preceding data-plane events must arrive before this reply is observed.
+  eventHead: ulong;
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +346,8 @@ union CtrlMsg {
   AuxRequest,
   Fatal,
   LogLine,
+  Refuse,
+  LogFlush,
 }
 
 table CtrlEnvelope {

@@ -118,6 +118,8 @@ TEST(ProtocolSmokeTest, UnionTagsAreFrozenWireValues) {
     EXPECT_EQ(static_cast<int>(CtrlMsg::AuxRequest), 8);
     EXPECT_EQ(static_cast<int>(CtrlMsg::Fatal), 9);
     EXPECT_EQ(static_cast<int>(CtrlMsg::LogLine), 10);
+    EXPECT_EQ(static_cast<int>(CtrlMsg::Refuse), 11);
+    EXPECT_EQ(static_cast<int>(CtrlMsg::LogFlush), 12);
 
     EXPECT_EQ(static_cast<int>(SegmentKind::Cmd), 1);
     EXPECT_EQ(static_cast<int>(SegmentKind::Adopt), 6);
@@ -155,4 +157,28 @@ TEST(ProtocolSmokeTest, TravelsAcrossTheTransportUnchanged) {
     const Hello* hello = GetCtrlEnvelope(received.data())->msg_as_Hello();
     ASSERT_NE(hello, nullptr);
     EXPECT_EQ(hello->pid(), 4242u);
+}
+
+TEST(ProtocolSmokeTest, StreamHandshakeCarriesIndependentWireBuildAndServerWindows) {
+    ::flatbuffers::FlatBufferBuilder builder(512);
+    auto terms = CreateLinkTerms(builder, DataPlane::Stream, WireForm::StructImage,
+                                 1048560, 8388608, 33554432, 262144);
+    auto hello = CreateHelloDirect(builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR,
+        "commit-123", 1, 42, nullptr, 0, 0x12345678, terms, "pairing-token", DialMode::Connect);
+    auto envelope = CreateCtrlEnvelope(builder, CtrlMsg::Hello, hello.Union());
+    FinishCtrlEnvelopeBuffer(builder, envelope);
+    ::flatbuffers::Verifier verifier(builder.GetBufferPointer(), builder.GetSize());
+    ASSERT_TRUE(VerifyCtrlEnvelopeBuffer(verifier));
+    const auto* parsed = GetCtrlEnvelope(builder.GetBufferPointer())->msg_as_Hello();
+    ASSERT_NE(parsed, nullptr);
+    EXPECT_EQ(parsed->wireFingerprint(), 0x12345678u);
+    EXPECT_EQ(parsed->buildFingerprint()->str(), "commit-123");
+    EXPECT_EQ(parsed->token()->str(), "pairing-token");
+    EXPECT_EQ(parsed->dialMode(), DialMode::Connect);
+    ASSERT_NE(parsed->linkTerms(), nullptr);
+    EXPECT_EQ(parsed->linkTerms()->dataPlane(), DataPlane::Stream);
+    EXPECT_EQ(parsed->linkTerms()->maxReplyBytes(), 1048560u);
+    EXPECT_EQ(parsed->linkTerms()->cmdWindowBytes(), 8388608u);
+    EXPECT_EQ(parsed->linkTerms()->stageWindowBytes(), 33554432u);
+    EXPECT_EQ(parsed->linkTerms()->eventWindowBytes(), 262144u);
 }

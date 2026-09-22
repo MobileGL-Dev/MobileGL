@@ -36,6 +36,10 @@
 #include <iterator>
 #include <string>
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+extern "C" void MGPipeSyncPeerLog();
+#endif
+
 namespace MGITest::PipeStatsWindow {
 
     // P6: MOBILEGL_LOG_FILE_PATH IS A BASE NAME, NOT A FILE. The library writes one log per
@@ -121,6 +125,9 @@ namespace MGITest::PipeStatsWindow {
     }
 
     inline LogMark MarkLaneLog() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MGPipeSyncPeerLog();
+#endif
         return LogMark{FileSizeOrZero(LibraryLogPath()), FileSizeOrZero(ServerLibraryLogPath())};
     }
 
@@ -131,6 +138,9 @@ namespace MGITest::PipeStatsWindow {
     // which is the most expensive possible way to be wrong: it accuses the product of a defect
     // that the reader itself invented.
     inline std::string ReadLaneLogSince(const LogMark& mark) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MGPipeSyncPeerLog();
+#endif
         return ReadFileSince(LibraryLogPath(), mark.client)
                + ReadFileSince(ServerLibraryLogPath(), mark.server);
     }

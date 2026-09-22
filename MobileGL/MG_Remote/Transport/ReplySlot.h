@@ -257,6 +257,19 @@ namespace MobileGL::MG_Remote::Transport {
             std::memcpy(slot, &header, sizeof(header));
         }
 
+        // The link can lend the immutable payload after appliedSeq without a
+        // second copy. The same seq and size honesty checks guard both readers.
+        bool ReadView(std::uint64_t seq, std::int32_t* status, const void** payload,
+                      std::uint64_t* size) const {
+            if (!m_base || !seq || !status || !payload || !size) return false;
+            const auto* slot = SlotAt(seq);
+            ReplySlotHeader header{}; std::memcpy(&header, slot, sizeof header);
+            std::atomic_thread_fence(std::memory_order_acquire);
+            if (header.Seq != seq || header.Size > MaxReplyBytes()) return false;
+            *status = header.Status; *size = header.Size;
+            *payload = slot + sizeof header; return true;
+        }
+
         // Client side. Returns false when the slot does not carry THIS seq - the
         // self-check the stamp exists for. `outBytes` may be null for an answer
         // with no payload (every DECLINE, and the four Bool acceptances).

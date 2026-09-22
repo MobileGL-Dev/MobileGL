@@ -190,7 +190,7 @@ namespace MobileGL::MG_Remote {
     void EncodeSurfaceReplyFrame(const SurfaceControlFrame& frame,
                                  flatbuffers::FlatBufferBuilder* builder) {
         const auto reply = ::MobileGL::Wire::CreateSurfaceReply(*builder, frame.seq, frame.ok, frame.eglMajor,
-                                                    frame.eglMinor, /*defaultFb=*/0);
+                                                    frame.eglMinor, /*defaultFb=*/0, frame.eventHead);
         const auto envelope =
             ::MobileGL::Wire::CreateCtrlEnvelope(*builder, ::MobileGL::Wire::CtrlMsg::SurfaceReply, reply.Union());
         ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(*builder, envelope);
@@ -201,6 +201,7 @@ namespace MobileGL::MG_Remote {
         frame->ok = reply.ok();
         frame->eglMajor = reply.eglMajor();
         frame->eglMinor = reply.eglMinor();
+        frame->eventHead = reply.eventHead();
     }
 
     MobileGLResult ServerApplyWireSurfaceOp(const ::MobileGL::Wire::SurfaceOp& op, SurfaceControlFrame* replyOut) {

@@ -186,6 +186,7 @@ namespace MobileGL::MG_Remote::Transport {
         // finished with every payload pointer it popped: a writeback's bytes live
         // in the ring itself, so retiring early is the R-11 violation one level
         // down.
+        void SetLink(ILink* link) { m_link = link; }
         void Drained() {
             m_consumer.PublishRetired();
             if (m_cmdControl != nullptr) {
@@ -202,6 +203,7 @@ namespace MobileGL::MG_Remote::Transport {
                     NotifyIfParked(*m_serverBell, m_cmdControl->consumerParked);
                 }
             }
+            if (m_link) m_link->Flush();
         }
 
         // The bell the SERVER parks on, lent by the session so that Drained() can ring it.
@@ -231,6 +233,7 @@ namespace MobileGL::MG_Remote::Transport {
 
     private:
         RingControl* m_cmdControl = nullptr;
+        ILink* m_link = nullptr;
         RingConsumer m_consumer;
         const std::uint8_t* m_segmentBase = nullptr;
         // P5e (ra): the server's bell, rung by Drained() when it cleared a full latch.

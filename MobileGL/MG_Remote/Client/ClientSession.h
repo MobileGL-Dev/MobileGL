@@ -33,6 +33,8 @@
 // defect P4a paid two contract corrections for, and "always accept" is ID-39's 66 lost uploads.
 
 #pragma once
+#include "../Transport/ILink.h"
+#include "../Transport/ControlInbox.h"
 #include <Includes.h>
 
 #include <atomic>  // the device-lost latch is read off the GL thread
@@ -96,7 +98,13 @@ namespace MobileGL::MG_Remote::Client {
         // the server states its own pid, which IS ours, and that is the honest answer there.
         std::uint32_t PeerServerPid() const { return m_peerServerPid; }
 
+        ClientSession();
         ~ClientSession();
+        MobileGLResult AttachStreamLink(int dataFd, const Transport::SessionSegmentSizes& sizes);
+        void AttachDataLink(std::unique_ptr<Transport::ILink> link);
+        Transport::ILink* DataLink() const { return m_link.get(); }
+        bool ConnectDial() const { return m_connectDial; }
+        void SyncPeerLog();
 
         // Builds the four segments, performs Hello/Welcome, takes the first CapsSnapshot, and
         // - for TransportMode::InProcess - starts the server role's apply thread. Returns a
@@ -407,6 +415,11 @@ namespace MobileGL::MG_Remote::Client {
         void LogWireLedger() const;
 
     private:
+        MobileGLResult ReceiveControlFrame(std::vector<Uint8>& frame, Uint32 timeoutMs);
+        std::unique_ptr<Transport::ControlInbox> m_controlInbox;
+        std::unique_ptr<Transport::ILink> m_link;
+        bool m_connectDial = false;
+        std::uint64_t m_logFlushSeq = 0;
         // P5e (ra): the latch, taken from PumpControlPlane after every adoption. Private
         // because "when may run-ahead start" is this class's own rule and not a caller's.
         void LatchRunAheadFromCaps();
@@ -439,11 +452,9 @@ namespace MobileGL::MG_Remote::Client {
 
         std::unique_ptr<Transport::InProcessTransport> m_clientTransport;
         std::unique_ptr<Transport::InProcessTransport> m_serverTransport;
-        Transport::SessionSegments m_shm;
-        Transport::RingProducer m_cmd;
+        Transport::RingProducer* m_cmd = nullptr;
         Transport::SessionProducer m_producer;
-        Transport::EventRingConsumer m_events;
-        Transport::ReplySlotPool m_replies;
+        Transport::EventRingConsumer* m_events = nullptr;
         Transport::ITransport* m_transport = nullptr;
         Bool m_started = false;
         // Written by whichever thread first notices the hangup - the GL thread in the barrier,

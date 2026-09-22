@@ -372,10 +372,10 @@ namespace MobileGL::MG_Remote::Server {
         // The decoder is built HERE, on this thread, because PipeWireDecoder is "not thread
         // safe: one decoder on the apply thread, by construction" and its constructor installs
         // the process-wide apply hook.
-        session.Applier().Attach(&session.Control(), m_backend.get());
+        session.Applier().Attach(session.DataLink(), m_backend.get());
 
-        Transport::RingControl& control = session.Control();
-        Transport::Doorbell& bell = session.ConsumerDoorbell();
+        const auto signals = session.DataLink()->Signals();
+        Transport::Doorbell& bell = session.DataLink()->ConsumerBell();
         Transport::RingConsumer& ring = session.CommandRing();
         const Uint32 spinUs = SpinUsFromConfig();
 
@@ -400,16 +400,16 @@ namespace MobileGL::MG_Remote::Server {
         // this bell (that pairing is the whole of the flow-control protocol; a cleared flag
         // with no bell is the lost wakeup the forward direction's publish-then-ring order
         // exists to prevent).
-        const auto ready = [this, &control, &ring] {
+        const auto ready = [this, signals, &ring] {
             if (m_stopRequested.load(std::memory_order_acquire) || ControlIsPending()) return true;
-            if (control.eventRingFull.load(std::memory_order_acquire) != 0) return false;
-            return control.cmdHead.load(std::memory_order_acquire) != ring.LocalTail();
+            if (signals.EventRingFull->load(std::memory_order_acquire) != 0) return false;
+            return signals.CmdHead->load(std::memory_order_acquire) != ring.LocalTail();
         };
 
         for (;;) {
             PumpControlRequest();
             if (m_stopRequested.load(std::memory_order_acquire)) break;
-            if (control.eventRingFull.load(std::memory_order_acquire) == 0) DrainRing();
+            if (signals.EventRingFull->load(std::memory_order_acquire) == 0) DrainRing();
             if (m_stopRequested.load(std::memory_order_acquire)) break;
             if (ready()) continue;
 
@@ -436,7 +436,9 @@ namespace MobileGL::MG_Remote::Server {
                 MG_Util::PipeStats::PublishGauge(Gauge::ServerWaits, waits);
                 MG_Util::PipeStats::PublishGauge(Gauge::ServerParks, ParkBlockCount());
             }
-            const bool woke = bell.Wait(control.consumerParked, ready, spinUs,
+            // Flush-on-idle publishes the last reply record even below the batch threshold.
+            session.FlushDataProgress();
+            const bool woke = bell.Wait(*signals.ConsumerParked, ready, spinUs,
                                         Transport::kWaitForever, &m_parkBlocks);
             if (!woke) {
                 // Wait returns false only on a dead bell or an expired deadline, and this park
@@ -735,7 +737,7 @@ namespace MobileGL::MG_Remote::Server {
         // it atomically, so the apply thread cannot observe the request until this side is
         // waiting, and the doorbell remembers the notify regardless.
         if (m_session != nullptr) {
-            m_session->ConsumerDoorbell().Notify();
+            m_session->DataLink()->ConsumerBell().Notify();
         }
         m_controlDone.wait(lock, [this] { return m_controlFinished; });
         frame = m_controlFrame; // the reply half, written by the dispatch
@@ -786,7 +788,7 @@ namespace MobileGL::MG_Remote::Server {
             // The bell may already be dead - ClientSession::Stop calls transport->Shutdown()
             // first, which is what table 3's step 2 requires - and Notify on a dead bell is
             // harmless. Ringing anyway covers the paths that Stop without a Kill.
-            m_session->ConsumerDoorbell().Notify();
+            m_session->DataLink()->ConsumerBell().Notify();
         }
 
         // THE JOIN IS BOUNDED. std::thread::join has no deadline, so a lost wakeup would wedge

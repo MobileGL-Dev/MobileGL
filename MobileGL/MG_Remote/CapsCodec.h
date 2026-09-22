@@ -20,13 +20,7 @@
 //   RendererInfo       -> RendererInfo (MG_Util/Types.h:317): three Strings, an
 //       Optional<String>, and a Vector<GLExtension> inside GLInfo.
 //
-// THE ABI RULING (table 0). MGPCaps has only a COMPOSITIONAL size assertion
-// (MGPipeTypes.h:145-146) because DynamicBackendParameters still carries SizeT and GLenum
-// members - P0.5's fixed-width rewrite did not happen. P5 does NOT rewrite it. Instead the
-// handshake asserts that both peers agree on sizeof(DynamicBackendParameters),
-// sizeof(MGPCaps) and the build fingerprint, and Fatal{AbiMismatch} otherwise. P6's spawn is
-// same-machine and same-binary, so it inherits this unchanged; the fixed-width rewrite is on
-// P7's account.
+// P6.5: wire layout and build identity are independent handshake facts.
 
 #pragma once
 #include <Includes.h>
@@ -90,19 +84,11 @@ namespace MobileGL::MG_Remote {
     Bool EncodeRendererInfo(const RendererInfo& info, Vector<Uint8>& out);
     Bool DecodeRendererInfo(const void* bytes, Uint64 size, RendererInfo& out);
 
-    // ---- the ABI assertion the handshake carries ----------------------------------------
-    //
-    // The inputs, as this build sees them: sizeof(DynamicBackendParameters), sizeof(MGPCaps),
-    // sizeof(GLFunctionsTable), the format-capability table's extents, the two caps-blob codec
-    // versions, MGPWireOp::kOpCount, the protocol ABI version and the compile-time git stamp.
-    // Public so that the sensitivity control can pin every one of them to the real value AND
-    // perturb them one at a time through the same mixer the handshake uses.
+    // Wire compatibility never includes a git stamp or local function-pointer tables.
     Transport::AbiFingerprintInputs CapsAbiFingerprintInputs();
-
-    // What Hello/Welcome carry and compare: EXACTLY Transport::MixAbiFingerprint(
-    // CapsAbiFingerprintInputs()) - one implementation, no second hash (ID-46 finding 6). A
-    // mismatch is Fatal{AbiMismatch} and never a downgrade, because every alternative silently
-    // reads one struct as another.
-    Uint64 CapsAbiFingerprint();
+    Uint64 WireFingerprint();
+    Uint64 CapsAbiFingerprint(); // legacy spelling of WireFingerprint
+    const char* BuildFingerprint();
+    Bool BuildFingerprintPresent();
 
 } // namespace MobileGL::MG_Remote

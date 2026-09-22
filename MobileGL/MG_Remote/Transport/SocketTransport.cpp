@@ -16,6 +16,10 @@
 #include <cstddef>
 #include <cstring>
 #include <memory>
+#include <chrono>
+#include <cstdlib>
+#include <algorithm>
+#include <cstdio>
 
 #if defined(__unix__) || defined(__APPLE__) || defined(__ANDROID__)
 #    define MOBILEGL_SOCKET_TRANSPORT_POSIX 1
@@ -25,6 +29,10 @@
 #    include <sys/socket.h>
 #    include <sys/types.h>
 #    include <unistd.h>
+#    include <fcntl.h>
+#    include <netdb.h>
+#    include <netinet/in.h>
+#    include <netinet/tcp.h>
 #else
 #    define MOBILEGL_SOCKET_TRANSPORT_POSIX 0
 #endif
@@ -35,6 +43,140 @@ namespace MobileGL::MG_Remote::Transport {
 
     namespace {
         constexpr std::uint64_t kPumpChunkBytes = 64ull * 1024;
+
+        bool TcpName(const std::string& name) { return name.compare(0, 6, "tcp://") == 0; }
+
+        bool TcpAddress(const std::string& name, addrinfo** result) {
+            *result = nullptr;
+            const std::string address = name.substr(6);
+            std::string host, port;
+            if (!address.empty() && address[0] == '[') {
+                const auto end = address.find(']');
+                if (end == std::string::npos || end + 1 >= address.size() || address[end + 1] != ':')
+                    return false;
+                host = address.substr(1, end - 1);
+                port = address.substr(end + 2);
+            } else {
+                const auto colon = address.find(':');
+                if (colon == std::string::npos || address.find(':', colon + 1) != std::string::npos)
+                    return false;
+                host = address.substr(0, colon);
+                port = address.substr(colon + 1);
+            }
+            if (host.empty() || port.empty() || port.find_first_not_of("0123456789") != std::string::npos)
+                return false;
+            char* end = nullptr;
+            const auto number = std::strtoul(port.c_str(), &end, 10);
+            if (*end || number == 0 || number > 65535) return false;
+            addrinfo hints{};
+            hints.ai_family = AF_UNSPEC;
+            hints.ai_socktype = SOCK_STREAM;
+            hints.ai_protocol = IPPROTO_TCP;
+            hints.ai_flags = AI_NUMERICSERV;
+            return ::getaddrinfo(host.c_str(), port.c_str(), &hints, result) == 0;
+        }
+
+        bool Loopback(const sockaddr* address) {
+            if (address->sa_family == AF_INET)
+                return (ntohl(reinterpret_cast<const sockaddr_in*>(address)->sin_addr.s_addr) >> 24) == 127;
+            if (address->sa_family == AF_INET6)
+                return IN6_IS_ADDR_LOOPBACK(&reinterpret_cast<const sockaddr_in6*>(address)->sin6_addr);
+            return false;
+        }
+
+        bool TcpSocket(int fd) {
+            sockaddr_storage address{};
+            socklen_t size = sizeof(address);
+            return ::getsockname(fd, reinterpret_cast<sockaddr*>(&address), &size) == 0 &&
+                   (address.ss_family == AF_INET || address.ss_family == AF_INET6);
+        }
+
+        bool ConfigureTcp(int fd) {
+            const int one = 1, idle = 2, interval = 1, count = 3, timeout = 5000;
+            if (::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) != 0 ||
+                ::setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one)) != 0) return false;
+#if defined(TCP_KEEPIDLE)
+            if (::setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle)) != 0) return false;
+#endif
+#if defined(TCP_KEEPINTVL)
+            if (::setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval)) != 0) return false;
+#endif
+#if defined(TCP_KEEPCNT)
+            if (::setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count)) != 0) return false;
+#endif
+#if defined(TCP_USER_TIMEOUT)
+            if (::setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &timeout, sizeof(timeout)) != 0) return false;
+#endif
+            return true;
+        }
+
+        MobileGLResult ConnectTcp(const std::string& name, std::uint32_t timeoutMs, int* outFd) {
+            addrinfo* addresses = nullptr;
+            if (!TcpAddress(name, &addresses)) return MOBILEGL_ERR_INVALID_ARGUMENT;
+            const auto deadline = std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(std::max(1u, timeoutMs));
+            do {
+                for (auto* address = addresses; address; address = address->ai_next) {
+                    const int fd = ::socket(address->ai_family, SOCK_STREAM, IPPROTO_TCP);
+                    if (fd < 0) continue;
+                    const int flags = ::fcntl(fd, F_GETFL, 0);
+                    ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+                    bool connected = ::connect(fd, address->ai_addr, address->ai_addrlen) == 0;
+                    if (!connected && errno == EINPROGRESS) {
+                        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            deadline - std::chrono::steady_clock::now()).count();
+                        pollfd pfd{fd, POLLOUT, 0};
+                        int rc;
+                        do { rc = ::poll(&pfd, 1, static_cast<int>(std::max<std::int64_t>(0, remaining))); }
+                        while (rc < 0 && errno == EINTR && std::chrono::steady_clock::now() < deadline);
+                        int error = 0;
+                        socklen_t length = sizeof(error);
+                        connected = rc > 0 && ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0;
+                    }
+                    if (connected && ConfigureTcp(fd)) {
+                        ::fcntl(fd, F_SETFL, flags);
+                        ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+                        *outFd = fd;
+                        ::freeaddrinfo(addresses);
+                        return MOBILEGL_OK;
+                    }
+                    ::close(fd);
+                    if (std::chrono::steady_clock::now() >= deadline) break;
+                }
+                ::usleep(5000);
+            } while (std::chrono::steady_clock::now() < deadline);
+            ::freeaddrinfo(addresses);
+            WireLogError("MG_Remote SocketTransport: TCP connect to %s exhausted %u ms", name.c_str(), timeoutMs);
+            return MOBILEGL_ERR_TRANSPORT_CLOSED;
+        }
+
+        MobileGLResult ListenTcp(const std::string& name, int* outFd) {
+            addrinfo* addresses = nullptr;
+            if (!TcpAddress(name, &addresses)) return MOBILEGL_ERR_INVALID_ARGUMENT;
+            const char* token = std::getenv("MOBILEGL_IPC_TOKEN");
+            const bool authenticated = token != nullptr && token[0] != '\0';
+            MobileGLResult result = MOBILEGL_ERR_UNSUPPORTED;
+            for (auto* address = addresses; address; address = address->ai_next) {
+                if (!authenticated && !Loopback(address->ai_addr)) {
+                    WireLogError("MG_Remote: Refuse{AuthenticationRequired} non-loopback TCP listen needs MOBILEGL_IPC_TOKEN");
+                    result = MOBILEGL_ERR_PROTOCOL_MISMATCH;
+                    continue;
+                }
+                const int fd = ::socket(address->ai_family, SOCK_STREAM, IPPROTO_TCP);
+                if (fd < 0) continue;
+                const int one = 1;
+                ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+                ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+                if (::bind(fd, address->ai_addr, address->ai_addrlen) == 0 && ::listen(fd, 8) == 0) {
+                    *outFd = fd;
+                    result = MOBILEGL_OK;
+                    break;
+                }
+                ::close(fd);
+            }
+            ::freeaddrinfo(addresses);
+            return result;
+        }
 
         void CloseIfOpen(int& fd) {
             if (fd >= 0) {
@@ -116,6 +258,7 @@ namespace MobileGL::MG_Remote::Transport {
         }
 
         MobileGLResult ConnectOne(const std::string& path, std::uint32_t timeoutMs, int* outFd) {
+            if (TcpName(path)) return ConnectTcp(path, timeoutMs, outFd);
             sockaddr_un address{};
             socklen_t length = 0;
             if (!FillAddress(path, &address, &length)) {
@@ -155,6 +298,7 @@ namespace MobileGL::MG_Remote::Transport {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
         *outListenFd = -1;
+        if (TcpName(path)) return ListenTcp(path, outListenFd);
         sockaddr_un address{};
         socklen_t length = 0;
         if (!FillAddress(path, &address, &length)) {
@@ -210,7 +354,7 @@ namespace MobileGL::MG_Remote::Transport {
         }
         int accepted[2] = {-1, -1};
         for (int index = 0; index < 2; ++index) {
-            const int ready = WaitReadable(listenFd, timeoutMs);
+            const int ready = WaitReadable(listenFd, index == 0 ? timeoutMs : 2000);
             if (ready <= 0) {
                 for (int fd : accepted) {
                     if (fd >= 0) ::close(fd);
@@ -218,7 +362,7 @@ namespace MobileGL::MG_Remote::Transport {
                 // Half a client is not a client. Both connections or neither, so
                 // a peer that died between the two cannot leave a session that
                 // looks up but has no way to receive a descriptor.
-                WireLogError("MG_Remote SocketTransport: only %d of 2 connections arrived within "
+                if (index != 0 || ready < 0) WireLogError("MG_Remote SocketTransport: only %d of 2 connections arrived within "
                              "%u ms", index, timeoutMs);
                 return ready == 0 ? MOBILEGL_ERR_TIMEOUT : MOBILEGL_ERR_TRANSPORT_CLOSED;
             }
@@ -229,6 +373,11 @@ namespace MobileGL::MG_Remote::Transport {
                 }
                 WireLogError("MG_Remote SocketTransport: accept failed: %s", std::strerror(errno));
                 return MOBILEGL_ERR_TRANSPORT_CLOSED;
+            }
+            ::fcntl(accepted[index], F_SETFD, FD_CLOEXEC);
+            if (TcpSocket(accepted[index]) && !ConfigureTcp(accepted[index])) {
+                for (int fd : accepted) if (fd >= 0) ::close(fd);
+                return MOBILEGL_ERR_UNSUPPORTED;
             }
         }
         // First connection is control, second is aux. The order IS the protocol;
@@ -292,7 +441,20 @@ namespace MobileGL::MG_Remote::Transport {
     }
 
     SocketTransport::SocketTransport(int streamFd, int auxFd, TransportRole role)
-        : m_streamFd(streamFd), m_auxFd(auxFd), m_role(role) {}
+        : m_streamFd(streamFd), m_auxFd(auxFd), m_tcp(TcpSocket(streamFd)), m_role(role) {}
+
+    int SocketTransport::TakeDataFd() {
+        if (!m_tcp) return -1;
+        const int fd = m_auxFd;
+        m_auxFd = -1;
+        return fd;
+    }
+
+    void SocketTransport::CloseLocalCopy() {
+        CloseIfOpen(m_streamFd);
+        CloseIfOpen(m_auxFd);
+        m_closed = true;
+    }
 
     SocketTransport::~SocketTransport() { Shutdown(); }
 
@@ -340,7 +502,8 @@ namespace MobileGL::MG_Remote::Transport {
                 m_closed = true;
                 return MOBILEGL_ERR_TRANSPORT_CLOSED;
             }
-            WireLogError("MG_Remote SocketTransport: send failed after %llu of %llu bytes: %s",
+            // SendFrame is also the log sink: do not recurse into the logger.
+            std::fprintf(stderr, "MG_Remote SocketTransport: send failed after %llu of %llu bytes: %s\n",
                          static_cast<unsigned long long>(written),
                          static_cast<unsigned long long>(framed.size()), std::strerror(errno));
             m_closed = true;
@@ -457,7 +620,7 @@ namespace MobileGL::MG_Remote::Transport {
     }
 
     MobileGLResult SocketTransport::ShareFd(int fd, MobileGLByteSpan sideband) {
-        if (m_auxFd < 0) {
+        if (m_tcp || m_auxFd < 0) {
             // A link that declared no descriptor passing. Rule G: it does not
             // invent a third answer, and the caller transfers the bytes instead.
             return MOBILEGL_ERR_UNSUPPORTED;
@@ -472,13 +635,15 @@ namespace MobileGL::MG_Remote::Transport {
     MobileGLResult SocketTransport::ReceiveFd(int* outFd, MobileGLMutableByteSpan sideband,
                                               std::uint64_t* outSidebandSize,
                                               std::uint32_t timeoutMs) {
-        if (m_auxFd < 0) {
+        if (m_tcp || m_auxFd < 0) {
             return MOBILEGL_ERR_UNSUPPORTED;
         }
         return FdPassing::ReceiveFd(m_auxFd, outFd, sideband, outSidebandSize, timeoutMs);
     }
 
     void SocketTransport::Shutdown() {
+        // Wake a blocking ReceiveFrame before taking its lock.
+        if (m_streamFd >= 0) ::shutdown(m_streamFd, SHUT_RDWR);
         // Idempotent, and tears down BOTH directions - which on a socket is what
         // closing does anyway. Taking both locks in a fixed order (send, then
         // recv) so a concurrent sender and the dedicated reader cannot deadlock
@@ -510,6 +675,8 @@ namespace MobileGL::MG_Remote::Transport {
 
     SocketTransport::SocketTransport(int, int, TransportRole role) : m_role(role) {}
     SocketTransport::~SocketTransport() = default;
+    int SocketTransport::TakeDataFd() { return -1; }
+    void SocketTransport::CloseLocalCopy() {}
 
     MobileGLResult SocketTransport::SendFrame(MobileGLByteSpan) { return MOBILEGL_ERR_UNSUPPORTED; }
     MobileGLResult SocketTransport::ReceiveFrame(MobileGLMutableByteSpan, std::uint64_t*,

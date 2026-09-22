@@ -136,6 +136,10 @@ namespace MobileGL {
             void Close();
 
 #if MOBILEGL_BUILD_DISAGGREGATED
+            using LogForwarder = void (*)(void*, const char*);
+            void SetLogForwarder(LogForwarder forwarder, void* user);
+            void WritePeerLog(const char* message);
+            void WithLogBarrier(void (*action)(void*), void* user);
             // P6: ONE LOG PER ROLE, and the role is a per-THREAD fact because under inproc both
             // roles live in one process. The client keeps MOBILEGL_LOG_FILE_PATH unchanged so
             // every existing reader keeps its path; the server's lines go to the same path with

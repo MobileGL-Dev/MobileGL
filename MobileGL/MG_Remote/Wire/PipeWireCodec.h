@@ -84,6 +84,7 @@ namespace MobileGL::MG_Remote::Wire {
     // span at all (it only ever writes Ptr = nullptr). Install() therefore takes the role.
     class SegmentTable {
     public:
+        void AttachLink(Transport::ILink* link);
         void Install(SegmentId seg, SegmentView view);
         SegmentView Get(SegmentId seg) const;
 
@@ -100,6 +101,7 @@ namespace MobileGL::MG_Remote::Wire {
         static void UninstallProcessResolver();
 
     private:
+        Transport::ILink* m_link = nullptr;
         SegmentView m_views[kSegAdopt + 1];
     };
 
@@ -218,6 +220,7 @@ namespace MobileGL::MG_Remote::Wire {
     class PipeWireEncoder {
     public:
         PipeWireEncoder() = default;
+        PipeWireEncoder(Transport::ILink* link, SegmentTable* segments);
         PipeWireEncoder(Transport::RingControl* control, Transport::RingProducer* cmd,
                         Transport::RingProducer* stage, SegmentTable* segments);
 
@@ -338,6 +341,7 @@ namespace MobileGL::MG_Remote::Wire {
         Uint64 StageReclaimWaits() const;
         // The live session supplies its shutdown-aware producer doorbell. Standalone codecs
         // without a consumer cannot wait for retirement and retain the named refusal.
+        void SetLink(Transport::ILink* link) { m_link = link; }
         void SetStageRetirementDoorbell(Transport::Doorbell* bell) { m_stageRetirementBell = bell; }
 
         // P5e (ra, CONTRACT-P5E §2.6): THE STAGE BELL IS A CLIENT WAIT, so it has to drain the
@@ -373,6 +377,7 @@ namespace MobileGL::MG_Remote::Wire {
         // over the segment; the in-segment offset is `cursor % capacity` and a run that would
         // straddle the end skips to the boundary, exactly as a ring does, but WITHOUT touching
         // RingControl - see ReclaimStagedBytes above.
+        Transport::ILink* m_link = nullptr;
         Uint8* StageAllocate(Uint64 size);
 
         // AN EMPTY STAGE STARTS OVER AT ZERO, so that the wrap skip is only ever charged
@@ -386,7 +391,8 @@ namespace MobileGL::MG_Remote::Wire {
         // the head and underflow StagedBytesInFlight().
         void RebaseEmptyStage();
 
-        Transport::RingControl* m_control = nullptr;
+        Transport::LinkProgress* m_progress = nullptr;
+        Transport::LinkSignals m_signals{};
         Transport::RingProducer* m_cmd = nullptr;
         Transport::RingProducer* m_stage = nullptr;
         SegmentTable* m_segments = nullptr;
@@ -606,6 +612,7 @@ namespace MobileGL::MG_Remote::Wire {
     class PipeWireDecoder {
     public:
         PipeWireDecoder() = default;
+        PipeWireDecoder(Transport::ILink* link, SegmentTable* segments, ReplySink* replies);
         PipeWireDecoder(Transport::RingControl* control, SegmentTable* segments,
                         ReplySink* replies);
 
@@ -707,7 +714,7 @@ namespace MobileGL::MG_Remote::Wire {
 
         friend Bool MGPipeWireRecordApplyThunk(MG_Pipe::MGPWireOp, const void*, Uint64, Uint64);
 
-        Transport::RingControl* m_control = nullptr;
+        Bool m_valid = false;
         SegmentTable* m_segments = nullptr;
         ReplySink* m_replies = nullptr;
         WireVerbSink* m_verbs = nullptr;

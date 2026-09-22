@@ -29,14 +29,16 @@ CASE = re.compile(r"DirectGLES\.[A-Za-z0-9]+\.(?:F1\.|Ct\.)?([A-Za-z0-9_]+Scenar
 
 
 def lane_cases(build_dir, label):
-    out = subprocess.run(["ctest", "-N", "-L", label], cwd=build_dir,
-                         capture_output=True, text=True).stdout
+    out = subprocess.run(["ctest", "-N", "-L", "^" + label + "$"], cwd=build_dir,
+                         capture_output=True, text=True, check=True).stdout
     return {m.group(1) for m in CASE.finditer(out)}
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("build_dir")
+    parser.add_argument("--require-device", action="store_true",
+                        help="Also require the configured integration-tcp-device lane")
     args = parser.parse_args()
 
     split = lane_cases(args.build_dir, "integration-split")
@@ -63,7 +65,18 @@ def main():
         print("::error::cases in integration-spawn that integration-split does not run: " +
               ", ".join(extra) + ". The split arm is the control; a case only the spawn arm runs "
               "has no baseline to be compared against.", file=sys.stderr)
-    return 1 if (missing or extra) else 0
+    failed = bool(missing or extra)
+    labels = ["integration-tcp"]
+    if args.require_device:
+        labels.append("integration-tcp-device")
+    for label in labels:
+        cases = lane_cases(args.build_dir, label)
+        missing, extra = sorted(spawn - cases), sorted(cases - spawn)
+        print(f"{label} parity: spawn {len(spawn)}, tcp {len(cases)}")
+        if not cases or missing or extra:
+            print(f"::error::{label}: missing={missing}, extra={extra}", file=sys.stderr)
+            failed = True
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

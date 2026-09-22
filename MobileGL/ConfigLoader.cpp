@@ -378,6 +378,8 @@ namespace MobileGL::MG_ConfigLoader {
     inline void InitIpc() {
         auto& ipc = MG_Config::Ipc;
         QueryEnvVariable("MOBILEGL_IPC_SERVER_PATH", ipc.ServerPath, "");
+        QueryEnvVariable("MOBILEGL_IPC_CONTROL", ipc.Control, "fork");
+        QueryEnvVariable("MOBILEGL_IPC_DATA", ipc.Data, "auto");
         // Both ring floors are 1 MiB, not 0: a ring caps ONE record at half its size, and
         // the catalogue's largest fixed payload (MGPFramebufferState, 304 bytes) plus a
         // create_shader_state archive already needs far more than a toy ring. The ceilings

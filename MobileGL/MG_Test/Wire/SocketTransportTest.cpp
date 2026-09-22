@@ -51,12 +51,76 @@
 
 #if !defined(_WIN32)
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <unistd.h>
 #endif
 
 using namespace MobileGL::MG_Remote::Transport;
 
 #if !defined(_WIN32)
+
+TEST(SocketTransportTest, TcpCarriesControlAndIndependentDataWithKeepalive) {
+    // Find an available loopback port; Listen deliberately refuses ambiguous port 0 URIs.
+    int reservation = ::socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT_GE(reservation, 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ASSERT_EQ(::bind(reservation, reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
+    socklen_t addressSize = sizeof(address);
+    ASSERT_EQ(::getsockname(reservation, reinterpret_cast<sockaddr*>(&address), &addressSize), 0);
+    const auto endpoint = std::string("tcp://127.0.0.1:") + std::to_string(ntohs(address.sin_port));
+    ::close(reservation);
+    int listener = -1;
+    ASSERT_EQ(SocketTransport::Listen(endpoint, &listener), MOBILEGL_OK);
+    std::unique_ptr<SocketTransport> client, server;
+    ASSERT_EQ(SocketTransport::ConnectTo(endpoint, 1000, client), MOBILEGL_OK);
+    ASSERT_EQ(SocketTransport::AcceptPair(listener, 1000, server), MOBILEGL_OK);
+    ::close(listener);
+    ASSERT_TRUE(client->IsTcp());
+    ASSERT_TRUE(server->IsTcp());
+    for (auto* transport : {client.get(), server.get()}) {
+        int option = 0;
+        socklen_t size = sizeof(option);
+        ASSERT_EQ(::getsockopt(transport->StreamFd(), IPPROTO_TCP, TCP_NODELAY, &option, &size), 0);
+        EXPECT_EQ(option, 1);
+        ASSERT_EQ(::getsockopt(transport->StreamFd(), SOL_SOCKET, SO_KEEPALIVE, &option, &size), 0);
+        EXPECT_EQ(option, 1);
+        EXPECT_EQ(transport->ShareFd(0, {nullptr, 0}), MOBILEGL_ERR_UNSUPPORTED);
+    }
+    const int clientData = client->TakeDataFd(), serverData = server->TakeDataFd();
+    ASSERT_GE(clientData, 0);
+    ASSERT_GE(serverData, 0);
+    EXPECT_EQ(client->TakeDataFd(), -1);
+    const char message[] = "independent";
+    ASSERT_EQ(::send(clientData, message, sizeof(message), MSG_NOSIGNAL), sizeof(message));
+    char received[sizeof(message)]{};
+    ASSERT_EQ(::recv(serverData, received, sizeof(received), MSG_WAITALL), sizeof(received));
+    EXPECT_EQ(std::memcmp(message, received, sizeof(message)), 0);
+    ASSERT_EQ(server->SendFrame({message, sizeof(message)}), MOBILEGL_OK);
+    std::uint64_t size = 0;
+    ASSERT_EQ(client->ReceiveFrame({received, sizeof(received)}, &size, 1000), MOBILEGL_OK);
+    EXPECT_EQ(size, sizeof(message));
+    ::close(clientData);
+    ::close(serverData);
+}
+
+TEST(SocketTransportTest, TcpRejectsMalformedNamesAndUnauthenticatedWildcard) {
+    int listener = -1;
+    for (const char* endpoint : {"tcp://", "tcp://localhost", "tcp://localhost:0", "tcp://localhost:65536",
+                                 "tcp://localhost:-1", "tcp://[::1]broken", "tcp://::1:40000"}) {
+        EXPECT_EQ(SocketTransport::Listen(endpoint, &listener), MOBILEGL_ERR_INVALID_ARGUMENT) << endpoint;
+        EXPECT_EQ(listener, -1);
+    }
+    const char* prior = std::getenv("MOBILEGL_IPC_TOKEN");
+    const std::string saved = prior ? prior : "";
+    const bool wasSet = prior != nullptr;
+    ::unsetenv("MOBILEGL_IPC_TOKEN");
+    EXPECT_EQ(SocketTransport::Listen("tcp://0.0.0.0:40613", &listener), MOBILEGL_ERR_PROTOCOL_MISMATCH);
+    EXPECT_EQ(listener, -1);
+    if (wasSet) ::setenv("MOBILEGL_IPC_TOKEN", saved.c_str(), 1);
+}
 
 namespace {
 
