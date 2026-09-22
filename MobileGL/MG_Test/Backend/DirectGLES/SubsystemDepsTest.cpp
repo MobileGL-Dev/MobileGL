@@ -189,6 +189,7 @@ TEST(SubsystemDepsTest, TheClientNeverEmitsAFamilyTheTableRefuses) {
 // disagreement is a half-run subsystem rather than an extra refusal.
 // ---------------------------------------------------------------------------------------------
 TEST(SubsystemDepsTest, TheServerConsumerGateNeverArmsAFamilyTheTableRefuses) {
+#if MOBILEGL_PIPE_PUSH
     using namespace MobileGL::MG_Backend::DirectGLES;
     struct Resolver {
         const char* Name;
@@ -219,6 +220,12 @@ TEST(SubsystemDepsTest, TheServerConsumerGateNeverArmsAFamilyTheTableRefuses) {
                 << resolver.Name << " armed with its own bit clear at " << Describe(mask);
         }
     }
+#else
+    // The resolvers are declared under MOBILEGL_PIPE_PUSH (Managers.h:664); the pull build has
+    // no consumer gate to compare against the table. Skipped, not omitted, so the unit name set
+    // stays the same in both flavours (ID-P7-11).
+    GTEST_SKIP() << "the server consumer gate is compiled only under MOBILEGL_PIPE_PUSH";
+#endif
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -226,6 +233,7 @@ TEST(SubsystemDepsTest, TheServerConsumerGateNeverArmsAFamilyTheTableRefuses) {
 //    vacuously green because every resolver said NO for an unrelated reason.
 // ---------------------------------------------------------------------------------------------
 TEST(SubsystemDepsTest, TheTwoDocumentedRefusalLanesStillRefuseAndTheFullMaskStillArms) {
+#if MOBILEGL_PIPE_PUSH
     using namespace MobileGL::MG_Backend::DirectGLES;
     {
         PushMaskScope scope(kMGPipeSubsystemsMigratedAtP5e);
@@ -244,4 +252,7 @@ TEST(SubsystemDepsTest, TheTwoDocumentedRefusalLanesStillRefuseAndTheFullMaskSti
                "D-K2's fourth row has been dropped on the server side while the client and the "
                ".def still carry it";
     }
+#else
+    GTEST_SKIP() << "the server consumer gate is compiled only under MOBILEGL_PIPE_PUSH";
+#endif
 }
