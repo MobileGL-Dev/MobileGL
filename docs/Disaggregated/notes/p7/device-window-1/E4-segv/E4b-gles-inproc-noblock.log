@@ -1,0 +1,454 @@
+=== Android retrace: improved-transparency-minecraft-26.3 / DirectGLES (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\improved-transparency-minecraft-26.3\trace.trace: 1 file pushed, 0 skipped. 17.9 MB/s (14404890 bytes in 0.769s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\improved-transparency-minecraft-26.3.0002667619.png: 1 file pushed, 0 skipped. 17.7 MB/s (368306 bytes in 0.020s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+trace-replay-ci.sh: app process exited before result.json was created
+trace-replay-ci.sh: retrace.log:
+/system/bin/app_process64
+renderableType = 8
+ERROR: 0:2: '' : the location is not within attribute range [0, MAX_ATTRIBUTES-1] 
+ERROR: 1 compilation errors.  No code generated.
+
+ERROR: 0:2: '' : the location is not within attribute range [0, MAX_ATTRIBUTES-1] 
+ERROR: 1 compilation errors.  No code generated.
+
+ERROR: 0:2: '' : the location is not within attribute range [0, MAX_ATTRIBUTES-1] 
+ERROR: 1 compilation errors.  No code generated.
+
+ERROR: 0:2: '' : the location is not within attribute range [0, MAX_ATTRIBUTES-1] 
+ERROR: 1 compilation errors.  No code generated.
+
+ERROR: 0:2: '' : the location is not within attribute range [0, MAX_ATTRIBUTES-1] 
+ERROR: 1 compilation errors.  No code generated.
+
+ERROR: 0:2: '' : the location is not within attribute range [0, MAX_ATTRIBUTES-1] 
+ERROR: 1 compilation errors.  No code generated.
+
+apitrace: warning: caught signal 11
+7682: error: caught an unhandled exception
+trace-replay-ci.sh: tail of mobilegl.log:
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_KHR_texture_compression_astc_sliced_3d
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_KHR_texture_compression_astc_ldr
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_KHR_texture_compression_astc_hdr
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_texture_compression_astc
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_compression_s3tc
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_compression_s3tc_srgb
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_compression_rgtc
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_compression_bptc
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_texture_npot
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_filter_anisotropic
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_format_BGRA8888
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_read_format_bgra
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_texture_3D
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_color_buffer_float
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_color_buffer_half_float
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_float_blend
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_alpha_test
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_depth24
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_packed_depth_stencil
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_depth_texture
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_depth_texture_cube_map
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_sRGB
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_texture_float
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_texture_float_linear
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_texture_half_float
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_texture_half_float_linear
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_type_2_10_10_10_REV
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_sRGB_decode
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_compression_astc_decode_mode
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_mirror_clamp_to_edge
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_format_sRGB_override
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_element_index_uint
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_copy_image
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_geometry_shader
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_tessellation_shader
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_texture_stencil8
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_shader_io_blocks
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_shader_image_atomic
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_sample_variables
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_border_clamp
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_EGL_image_external_wrap_modes
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_multisampled_render_to_texture
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_multisampled_render_to_texture2
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_shader_multisample_interpolation
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_cube_map_array
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_draw_buffers_indexed
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_gpu_shader5
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_robustness
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_buffer
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_shader_framebuffer_fetch
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_ARM_shader_framebuffer_fetch_depth_stencil
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_texture_storage_multisample_2d_array
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_sample_shading
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_get_program_binary
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_debug_label
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_KHR_blend_equation_advanced
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_KHR_blend_equation_advanced_coherent
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_tiled_rendering
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_ANDROID_extension_pack_es31a
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_primitive_bounding_box
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_standard_derivatives
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_vertex_array_object
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_disjoint_timer_query
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_KHR_debug
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_YUV_target
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_sRGB_write_control
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_norm16
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_discard_framebuffer
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_surfaceless_context
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OVR_multiview
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OVR_multiview2
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_sRGB_R8
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_KHR_no_error
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_debug_marker
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_EGL_image_external_essl3
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OVR_multiview_multisampled_render_to_texture
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_buffer_storage
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_external_buffer
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_blit_framebuffer_params
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_clip_cull_distance
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_protected_textures
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_shader_non_constant_global_initializers
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_texture_foveated
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_texture_foveated2
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_texture_foveated_subsampled_layout
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_shader_framebuffer_fetch_noncoherent
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_shader_framebuffer_fetch_rate
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_memory_object
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_memory_object_fd
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_EGL_image_array
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_NV_shader_noperspective_interpolation
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_KHR_robust_buffer_access_behavior
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_EGL_image_storage
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_blend_func_extended
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_clip_control
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_texture_view
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_fragment_invocation_density
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_motion_estimation
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_validate_shader_binary
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_YUV_texture_gather
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_shading_rate
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_frame_extrapolation
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_texture_lod_bias
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_IMG_texture_filter_cubic
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_render_shared_exponent
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_polygon_offset_clamp
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_sRGB_RG8
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_depth_clamp
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_fragment_shading_rate
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_fragment_shading_rate_primitive
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_fragment_shading_rate_attachment
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_shader_implicit_conversions
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_storage_compression
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_EGL_image_storage_compression
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_render_snorm
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_render_sRGB_R8_RG8
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_ycbcr_degamma
+[02:45:44] [Android mgl-srv-apply/INFO]:     glPolygonMode (NV/ANGLE): yes
+[02:45:44] [Android mgl-srv-apply/INFO]:     indexed glColorMaski: yes
+[02:45:44] [Android mgl-srv-apply/INFO]:     dual-source blend (EXT_blend_func_extended): yes
+[02:45:44] [Android mgl-srv-apply/INFO]:     draw indirect (ES 3.1 core): yes
+[02:45:44] [Android mgl-srv-apply/INFO]:     multi-draw indirect (EXT_multi_draw_indirect): no
+[02:45:44] [Android mgl-srv-apply/INFO]:     multi-draw base vertex (EXT/OES_draw_elements_base_vertex + EXT_multi_draw_arrays): no
+[02:45:44] [Android mgl-srv-apply/INFO]:     draw elements base vertex (ES 3.2 core or EXT/OES_draw_elements_base_vertex): yes
+[02:45:44] [Android mgl-srv-apply/INFO]:     compute shaders (ES 3.1 core): yes
+[02:45:44] [Android mgl-srv-apply/INFO]:     base instance (EXT_base_instance; emulated by attribute offsets when absent): no
+[02:45:44] [Android mgl-srv-apply/INFO]:     clip distances (EXT_clip_cull_distance): yes
+[02:45:44] [Android mgl-srv-apply/INFO]:     viewport array (OES_viewport_array; gl_ViewportIndex collapses to viewport 0 when absent): no
+[02:45:44] [Android mgl-srv-apply/INFO]:     tessellation gl_PointSize (EXT/OES_tessellation_point_size): no
+[02:45:44] [Android mgl-srv-apply/INFO]:     geometry gl_PointSize (EXT/OES_geometry_point_size): no
+[02:45:44] [Android mgl-srv-apply/INFO]: OpenGL ES capabilities:
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT: 32
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT: 64
+[02:45:44] [Android mgl-srv-apply/WARN]: One or more capability queries were rejected by this driver; the affected limits keep MobileGL's spec-minimum floors
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_VERTEX_ATTRIBS reduced from the driver's 32 to 16: layout(location = N) on a vertex input is refused from N = 16 upward
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_ALIASED_LINE_WIDTH_RANGE: [1.000, 8.000]
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_SMOOTH_LINE_WIDTH_RANGE: [1.000, 1.000]
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_SMOOTH_LINE_WIDTH_GRANULARITY: 1.000
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_ALIASED_POINT_SIZE_RANGE: [1.000, 1023.000]
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_3D_TEXTURE_SIZE: 2048
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_ARRAY_TEXTURE_LAYERS: 2048
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_CUBE_MAP_TEXTURE_SIZE: 16384
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_FRAMEBUFFER_WIDTH: 16384
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_FRAMEBUFFER_HEIGHT: 16384
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_FRAMEBUFFER_LAYERS: 2048
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_RENDERBUFFER_SIZE: 16384
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_TEXTURE_SIZE: 16384
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COLOR_TEXTURE_SAMPLES: 4
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_DEPTH_TEXTURE_SAMPLES: 4
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_FRAMEBUFFER_SAMPLES: 4
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_INTEGER_SAMPLES: 1
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_SAMPLES: 4
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_SAMPLE_MASK_WORDS: 1
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_TEXTURE_IMAGE_UNITS: 16
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS: 16
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS: 16
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS: 96
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_VERTEX_ATTRIBS: 16
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS: 36
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS: 36
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS: 12
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS: 4
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_TESS_EVALUATION_SHADER_STORAGE_BLOCKS: 4
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS: 4
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS: 12
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMPUTE_UNIFORM_BLOCKS: 14
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS: 1024
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMPUTE_WORK_GROUP_COUNT: 65535 65535 65535
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMPUTE_WORK_GROUP_SIZE: 1024 1024 64
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS: 36
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_TEXTURE_BUFFER_SIZE: 134217728
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_UNIFORM_BUFFER_BINDINGS: 84
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_UNIFORM_BLOCK_SIZE: 65536
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_IMAGE_UNITS: 23
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMBINED_IMAGE_UNIFORMS: 23
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_VERTEX_IMAGE_UNIFORMS: 8
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_GEOMETRY_IMAGE_UNIFORMS: 3
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_FRAGMENT_IMAGE_UNIFORMS: 8
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMPUTE_IMAGE_UNIFORMS: 16
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_DRAW_BUFFERS: 8
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COLOR_ATTACHMENTS: 8
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_CLIP_DISTANCES: 8
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_CULL_DISTANCES: 8
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMBINED_CLIP_AND_CULL_DISTANCES: 8
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_VIEWPORTS: 16
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_VIEWPORT_DIMS: [16384, 16384]
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_VIEWPORT_BOUNDS_RANGE: [-32768.000, 32767.000]
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_VIEWPORT_SUBPIXEL_BITS: 0
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_LAYER_PROVOKING_VERTEX: GL_LAST_VERTEX_CONVENTION
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_VIEWPORT_INDEX_PROVOKING_VERTEX: GL_UNDEFINED_VERTEX
+[02:45:44] [Android mgl-srv-apply/INFO]: baseInstance probe: shader observed gl_InstanceID = 0 (baseInstance was 7)
+[02:45:44] [Android mgl-srv-apply/INFO]:     Indirect draw gl_InstanceID includes baseInstance: false
+[02:45:44] [Android mgl-srv-apply/INFO]:     Located inter-stage interface blocks transport their payload: true
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_disjoint_timer_query supported: true
+[02:45:44] [Android mgl-srv-apply/INFO]:     GL_KHR_parallel_shader_compile supported: false
+[02:45:44] [Android mgl-srv-apply/INFO]:     ANGLE renderer: false
+[02:45:44] [Android mgl-srv-apply/INFO]:     ANGLE llvmpipe renderer: false
+[02:45:44] [Android mgl-srv-apply/INFO]:     Avoid sampler mipmap min filter: false
+[02:45:44] [Android mgl-srv-apply/INFO]:     Avoid explicit LOD bias: false
+[02:45:44] [Android mgl-srv-apply/INFO]: [driver-bug] layered blit destination probe: a blit asking for destination layer 1 landed on layer 0 - THE DESTINATION LAYER IS IGNORED
+trace-replay-ci.sh: recent relevant logcat lines:
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_shader_multisample_interpolation
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_cube_map_array
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_draw_buffers_indexed
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_gpu_shader5
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_robustness
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_buffer
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_shader_framebuffer_fetch
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_ARM_shader_framebuffer_fetch_depth_stencil
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_texture_storage_multisample_2d_array
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_sample_shading
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_get_program_binary
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_debug_label
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_KHR_blend_equation_advanced
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_KHR_blend_equation_advanced_coherent
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_tiled_rendering
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_ANDROID_extension_pack_es31a
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_primitive_bounding_box
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_standard_derivatives
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_vertex_array_object
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_disjoint_timer_query
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_KHR_debug
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_YUV_target
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_sRGB_write_control
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_norm16
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_discard_framebuffer
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_surfaceless_context
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_OVR_multiview
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_OVR_multiview2
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_sRGB_R8
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_KHR_no_error
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_debug_marker
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_EGL_image_external_essl3
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_OVR_multiview_multisampled_render_to_texture
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_buffer_storage
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_external_buffer
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_blit_framebuffer_params
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_clip_cull_distance
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_protected_textures
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_shader_non_constant_global_initializers
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_texture_foveated
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_texture_foveated2
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_texture_foveated_subsampled_layout
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_shader_framebuffer_fetch_noncoherent
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_shader_framebuffer_fetch_rate
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_memory_object
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_memory_object_fd
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_EGL_image_array
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_NV_shader_noperspective_interpolation
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_KHR_robust_buffer_access_behavior
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_EGL_image_storage
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_blend_func_extended
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_clip_control
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_OES_texture_view
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_fragment_invocation_density
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_motion_estimation
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_validate_shader_binary
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_YUV_texture_gather
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_shading_rate
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_frame_extrapolation
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_texture_lod_bias
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_IMG_texture_filter_cubic
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_render_shared_exponent
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_polygon_offset_clamp
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_sRGB_RG8
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_depth_clamp
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_fragment_shading_rate
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_fragment_shading_rate_primitive
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_fragment_shading_rate_attachment
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_shader_implicit_conversions
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_storage_compression
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_EGL_image_storage_compression
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_render_snorm
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_render_sRGB_R8_RG8
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_QCOM_ycbcr_degamma
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     glPolygonMode (NV/ANGLE): yes
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     indexed glColorMaski: yes
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     dual-source blend (EXT_blend_func_extended): yes
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     draw indirect (ES 3.1 core): yes
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     multi-draw indirect (EXT_multi_draw_indirect): no
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     multi-draw base vertex (EXT/OES_draw_elements_base_vertex + EXT_multi_draw_arrays): no
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     draw elements base vertex (ES 3.2 core or EXT/OES_draw_elements_base_vertex): yes
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     compute shaders (ES 3.1 core): yes
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     base instance (EXT_base_instance; emulated by attribute offsets when absent): no
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     clip distances (EXT_clip_cull_distance): yes
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     viewport array (OES_viewport_array; gl_ViewportIndex collapses to viewport 0 when absent): no
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     tessellation gl_PointSize (EXT/OES_tessellation_point_size): no
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     geometry gl_PointSize (EXT/OES_geometry_point_size): no
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]: OpenGL ES capabilities:
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT: 32
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT: 64
+09-23 02:45:44.668  4645  7469 W MobileGL: [02:45:44] [Android mgl-srv-apply/WARN]: One or more capability queries were rejected by this driver; the affected limits keep MobileGL's spec-minimum floors
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_VERTEX_ATTRIBS reduced from the driver's 32 to 16: layout(location = N) on a vertex input is refused from N = 16 upward
+09-23 02:45:44.668  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_ALIASED_LINE_WIDTH_RANGE: [1.000, 8.000]
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_SMOOTH_LINE_WIDTH_RANGE: [1.000, 1.000]
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_SMOOTH_LINE_WIDTH_GRANULARITY: 1.000
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_ALIASED_POINT_SIZE_RANGE: [1.000, 1023.000]
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_3D_TEXTURE_SIZE: 2048
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_ARRAY_TEXTURE_LAYERS: 2048
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_CUBE_MAP_TEXTURE_SIZE: 16384
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_FRAMEBUFFER_WIDTH: 16384
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_FRAMEBUFFER_HEIGHT: 16384
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_FRAMEBUFFER_LAYERS: 2048
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_RENDERBUFFER_SIZE: 16384
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_TEXTURE_SIZE: 16384
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COLOR_TEXTURE_SAMPLES: 4
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_DEPTH_TEXTURE_SAMPLES: 4
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_FRAMEBUFFER_SAMPLES: 4
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_INTEGER_SAMPLES: 1
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_SAMPLES: 4
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_SAMPLE_MASK_WORDS: 1
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_TEXTURE_IMAGE_UNITS: 16
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS: 16
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS: 16
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS: 96
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_VERTEX_ATTRIBS: 16
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS: 36
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS: 36
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS: 12
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS: 4
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_TESS_EVALUATION_SHADER_STORAGE_BLOCKS: 4
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS: 4
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS: 12
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMPUTE_UNIFORM_BLOCKS: 14
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS: 1024
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMPUTE_WORK_GROUP_COUNT: 65535 65535 65535
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMPUTE_WORK_GROUP_SIZE: 1024 1024 64
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS: 36
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_TEXTURE_BUFFER_SIZE: 134217728
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_UNIFORM_BUFFER_BINDINGS: 84
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_UNIFORM_BLOCK_SIZE: 65536
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_IMAGE_UNITS: 23
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMBINED_IMAGE_UNIFORMS: 23
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_VERTEX_IMAGE_UNIFORMS: 8
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_GEOMETRY_IMAGE_UNIFORMS: 3
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_FRAGMENT_IMAGE_UNIFORMS: 8
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMPUTE_IMAGE_UNIFORMS: 16
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_DRAW_BUFFERS: 8
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COLOR_ATTACHMENTS: 8
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_CLIP_DISTANCES: 8
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_CULL_DISTANCES: 8
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_COMBINED_CLIP_AND_CULL_DISTANCES: 8
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_VIEWPORTS: 16
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_MAX_VIEWPORT_DIMS: [16384, 16384]
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_VIEWPORT_BOUNDS_RANGE: [-32768.000, 32767.000]
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_VIEWPORT_SUBPIXEL_BITS: 0
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_LAYER_PROVOKING_VERTEX: GL_LAST_VERTEX_CONVENTION
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_VIEWPORT_INDEX_PROVOKING_VERTEX: GL_UNDEFINED_VERTEX
+09-23 02:45:44.669  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]: baseInstance probe: shader observed gl_InstanceID = 0 (baseInstance was 7)
+09-23 02:45:44.670  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     Indirect draw gl_InstanceID includes baseInstance: false
+09-23 02:45:44.670  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     Located inter-stage interface blocks transport their payload: true
+09-23 02:45:44.670  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_EXT_disjoint_timer_query supported: true
+09-23 02:45:44.670  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     GL_KHR_parallel_shader_compile supported: false
+09-23 02:45:44.670  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     ANGLE renderer: false
+09-23 02:45:44.670  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     ANGLE llvmpipe renderer: false
+09-23 02:45:44.670  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     Avoid sampler mipmap min filter: false
+09-23 02:45:44.670  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]:     Avoid explicit LOD bias: false
+09-23 02:45:44.676  4645  7465 I MobileGL: [02:45:44] [Android MobileGLTraceRe/INFO]: MG_Remote client: CapsMirror generation 2 adopted (backend=0, callMask=0x3fff00000670)
+09-23 02:45:44.677  4645  7465 I MobileGL: [02:45:44] [Android MobileGLTraceRe/INFO]: MG_Remote client: format capabilities filled from caps mirror generation 2
+09-23 02:45:44.677  4645  7465 I MobileGL: [02:45:44] [Android MobileGLTraceRe/INFO]: MG_Remote client: CapsMirror generation 3 adopted (backend=0, callMask=0x3fff00000670)
+09-23 02:45:44.677  4645  7465 I MobileGL: [02:45:44] [Android MobileGLTraceRe/INFO]: MG_Remote client: format capabilities filled from caps mirror generation 3
+09-23 02:45:44.681  4645  7465 W MobileGL: [02:45:44] [Android MobileGLTraceRe/WARN]: Stub function: glDebugMessageControl(...)
+09-23 02:45:44.731  4645  7469 I MobileGL: [02:45:44] [Android mgl-srv-apply/INFO]: [driver-bug] layered blit destination probe: a blit asking for destination layer 1 landed on layer 0 - THE DESTINATION LAYER IS IGNORED
+09-23 02:45:44.757  7366  8136 I libc    : kill: send 15 to pid 7478
+09-23 02:45:44.757  7366  8136 I libc    : debug pid reuse, real pid 7478
+09-23 02:45:44.921  4645  7465 I libc    : handling signal: 11
+09-23 02:45:44.921  4645  7465 F libc    : Fatal signal 11 (SIGSEGV), code 2 (SEGV_ACCERR), fault addr 0x73ab788000 in tid 7465 (MobileGLTraceRe), pid 4645 (ugin.p7w1.trace)
+09-23 02:45:44.921  4645  7465 I libc    : debuggerd_dispatch_pseudothread start. crashing tid: 7465
+09-23 02:45:44.941  4645  7465 I libc    : crash_dump pid: 7482
+09-23 02:45:44.966  7482  7482 W libc    : Access denied finding property "persist.vendor.track.malloc.enable"
+09-23 02:45:44.966  7482  7482 W libc    : Access denied finding property "persist.vendor.fd.monitor.enable"
+09-23 02:45:45.240  7484  7484 F DEBUG   : pid: 4645, tid: 7465, name: MobileGLTraceRe  >>> top.mobilegl.plugin.p7w1.trace <<<
+09-23 02:45:45.240  7484  7484 F DEBUG   : Abort message: '[02:45:44] [Android MobileGLTraceRe/FATAL]: Failed to load EGL function: eglSwapBuffersWithDamageEXT'
+09-23 02:45:45.240  7484  7484 F DEBUG   :       #00 pc 0000000000099168  /apex/com.android.runtime/lib64/bionic/libc.so (__memcpy_aarch64_nt+616) (BuildId: 223a572c9f034c6a9337d8b3bedc75f3)
+09-23 02:45:45.241  7484  7484 F DEBUG   :       #01 pc 0000000000691c80  /data/app/~~GTtJpgg4160VWYt1KJ1Fww==/top.mobilegl.plugin.p7w1.trace-yro313nlE_p3MnRQTGbTyQ==/lib/arm64/libtrace_replay_runner.so (BuildId: 3d06283277788e3c03041ce7ad63185ec723ff9c)
+09-23 02:45:45.241  7484  7484 F DEBUG   :       #02 pc 00000000004614b0  /data/app/~~GTtJpgg4160VWYt1KJ1Fww==/top.mobilegl.plugin.p7w1.trace-yro313nlE_p3MnRQTGbTyQ==/lib/arm64/libtrace_replay_runner.so (BuildId: 3d06283277788e3c03041ce7ad63185ec723ff9c)
+09-23 02:45:45.241  7484  7484 F DEBUG   :       #03 pc 00000000004602cc  /data/app/~~GTtJpgg4160VWYt1KJ1Fww==/top.mobilegl.plugin.p7w1.trace-yro313nlE_p3MnRQTGbTyQ==/lib/arm64/libtrace_replay_runner.so (mobilegl_apitrace_main+5072) (BuildId: 3d06283277788e3c03041ce7ad63185ec723ff9c)
+09-23 02:45:45.241  7484  7484 F DEBUG   :       #04 pc 000000000045042c  /data/app/~~GTtJpgg4160VWYt1KJ1Fww==/top.mobilegl.plugin.p7w1.trace-yro313nlE_p3MnRQTGbTyQ==/lib/arm64/libtrace_replay_runner.so (BuildId: 3d06283277788e3c03041ce7ad63185ec723ff9c)
+09-23 02:45:45.241  7484  7484 F DEBUG   :       #05 pc 000000000044ee68  /data/app/~~GTtJpgg4160VWYt1KJ1Fww==/top.mobilegl.plugin.p7w1.trace-yro313nlE_p3MnRQTGbTyQ==/lib/arm64/libtrace_replay_runner.so (mobilegl_trace::RunTraceReplay(mobilegl_trace::Request const&)+3176) (BuildId: 3d06283277788e3c03041ce7ad63185ec723ff9c)
+09-23 02:45:45.241  7484  7484 F DEBUG   :       #06 pc 0000000000455178  /data/app/~~GTtJpgg4160VWYt1KJ1Fww==/top.mobilegl.plugin.p7w1.trace-yro313nlE_p3MnRQTGbTyQ==/lib/arm64/libtrace_replay_runner.so (Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay+2068) (BuildId: 3d06283277788e3c03041ce7ad63185ec723ff9c)
+09-23 02:45:45.242  7484  7484 F DEBUG   :       #41 pc 0000000000082d74  /apex/com.android.runtime/lib64/bionic/libc.so (__pthread_start(void*)+184) (BuildId: 223a572c9f034c6a9337d8b3bedc75f3)
+09-23 02:45:45.242  7484  7484 F DEBUG   :       #42 pc 00000000000751f0  /apex/com.android.runtime/lib64/bionic/libc.so (__start_thread+68) (BuildId: 223a572c9f034c6a9337d8b3bedc75f3)
+09-23 02:45:45.280  7484  7484 I libc    : tombstoned_notify_completion, socket: 8
+09-23 02:45:45.301  6687  7097 D DigestGenerator: digest=============The device has been root;The device bootloader is unlocked;com.topjohnwu.magisk have been installed;top.mobilegl.plugin.p7w1.traceAbort message: '[::] [Android MobileGLTraceRe/FATAL]: Failed to load EGL function: eglSwapBuffersWithDamageEXT'
+09-23 02:45:45.301  6687  7097 D DigestGenerator:  /apex/com.android.runtime/lib/bionic/libc.so (__memcpy_aarch_nt+) ()
+09-23 02:45:45.301  6687  7097 D DigestGenerator:  XXlib/arm/libtrace_replay_runner.so ()
+09-23 02:45:45.301  6687  7097 D DigestGenerator:  XXlib/arm/libtrace_replay_runner.so ()
+09-23 02:45:45.301  6687  7097 D DigestGenerator:  XXlib/arm/libtrace_replay_runner.so (mobilegl_apitrace_main+) ()
+09-23 02:45:45.301  6687  7097 D DigestGenerator:  XXlib/arm/libtrace_replay_runner.so ()
+09-23 02:45:45.301  6687  7097 D DigestGenerator:  XXlib/arm/libtrace_replay_runner.so (mobilegl_trace::RunTraceReplay(mobilegl_trace::Request const&)+) ()
+09-23 02:45:45.301  6687  7097 D DigestGenerator:  XXlib/arm/libtrace_replay_runner.so (Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay+) ()
+09-23 02:45:45.301  6687  7097 D DigestGenerator:  /apex/com.android.runtime/lib/bionic/libc.so (__pthread_start(void*)+) ()
+09-23 02:45:45.301  6687  7097 D DigestGenerator:  /apex/com.android.runtime/lib/bionic/libc.so (__start_thread+) ()
+09-23 02:45:45.304  4411  5837 D RecentsTaskLoader: reloadTasksData [TaskKey{id=307, stackId=0, baseIntent=Intent { act=top.mobilegl.plugin.TRACE_REPLAY flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity }, userId=0, lastActiveTime=2400552, windowingMode=1, isThumbnailBlur=false, isAccessLocked=false, isScreening=false, topActivity=null, mHashCode=10069389}, title=MobileGL, titleDescription=MobileGL, bounds=null, isLaunchTarget=false, isStackTask=true, isSystemApp=false, isDockable=true, baseActivity=null, isLocked=false, mNeedHide=false, hasMultipleTasks=false, cti1Key=, cti2Key=, cti1Task=, cti2Task=] 
+09-23 02:45:45.322  3176  3422 I libc    : kill: send 9 to pid -4645
+09-23 02:45:45.322  3176  3422 I libc    : debug pid reuse, real pid -4645
+09-23 02:45:45.350  2024  2024 W libc    : Access denied finding property "vendor.gpp.create_frc_extension"
+09-23 02:45:45.384  4411  4411 I WindowAnimParamsProvider: getClosingWindowAnimParams getClosingShortcutIcon task before=  [TaskKey{id=307, stackId=0, baseIntent=Intent { act=top.mobilegl.plugin.TRACE_REPLAY flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity }, userId=0, lastActiveTime=2400552, windowingMode=1, isThumbnailBlur=false, isAccessLocked=false, isScreening=false, topActivity=null, mHashCode=10069389}, title=MobileGL, titleDescription=MobileGL, bounds=null, isLaunchTarget=false, isStackTask=true, isSystemApp=false, isDockable=true, baseActivity=null, isLocked=false, mNeedHide=false, hasMultipleTasks=false, cti1Key=, cti2Key=, cti1Task=, cti2Task=] 
+09-23 02:45:45.384  4411  4411 I WindowAnimParamsProvider: getClosingWindowAnimParams getClosingShortcutIcon task after=  [TaskKey{id=307, stackId=0, baseIntent=Intent { act=top.mobilegl.plugin.TRACE_REPLAY flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity }, userId=0, lastActiveTime=2400552, windowingMode=1, isThumbnailBlur=false, isAccessLocked=false, isScreening=false, topActivity=null, mHashCode=10069389}, title=MobileGL, titleDescription=MobileGL, bounds=null, isLaunchTarget=false, isStackTask=true, isSystemApp=false, isDockable=true, baseActivity=null, isLocked=false, mNeedHide=false, hasMultipleTasks=false, cti1Key=, cti2Key=, cti1Task=, cti2Task=] 
+09-23 02:45:45.385  4411  4411 I WindowAnimParamsProvider: getUserIdFromRemoteTarget task before=  [TaskKey{id=307, stackId=0, baseIntent=Intent { act=top.mobilegl.plugin.TRACE_REPLAY flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity }, userId=0, lastActiveTime=2400552, windowingMode=1, isThumbnailBlur=false, isAccessLocked=false, isScreening=false, topActivity=null, mHashCode=10069389}, title=MobileGL, titleDescription=MobileGL, bounds=null, isLaunchTarget=false, isStackTask=true, isSystemApp=false, isDockable=true, baseActivity=null, isLocked=false, mNeedHide=false, hasMultipleTasks=false, cti1Key=, cti2Key=, cti1Task=, cti2Task=] 
+09-23 02:45:45.385  4411  4411 I WindowAnimParamsProvider: getUserIdFromRemoteTarget task after=  [TaskKey{id=307, stackId=0, baseIntent=Intent { act=top.mobilegl.plugin.TRACE_REPLAY flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity }, userId=0, lastActiveTime=2400552, windowingMode=1, isThumbnailBlur=false, isAccessLocked=false, isScreening=false, topActivity=null, mHashCode=10069389}, title=MobileGL, titleDescription=MobileGL, bounds=null, isLaunchTarget=false, isStackTask=true, isSystemApp=false, isDockable=true, baseActivity=null, isLocked=false, mNeedHide=false, hasMultipleTasks=false, cti1Key=, cti2Key=, cti1Task=, cti2Task=] 
+trace-replay-ci.sh: app trace-replay files:
+/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay:
+total 12
+drwxrwxrwx 4 u0_a318 u0_a318 3452 2026-09-23 02:45 .
+drwxrwxrwx 3 u0_a318 u0_a318 3452 2026-09-23 02:45 ..
+drwxrwxrwx 2 u0_a318 u0_a318 3452 2026-09-23 02:45 input
+drwxrwxrwx 2 u0_a318 u0_a318 3452 2026-09-23 02:45 output
+
+/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input:
+total 14450
+drwxrwxrwx 2 u0_a318 u0_a318     3452 2026-09-23 02:45 .
+drwxrwxrwx 4 u0_a318 u0_a318     3452 2026-09-23 02:45 ..
+-rw-r--r-- 1 u0_a318 u0_a318   368306 2026-09-23 02:45 golden.png
+-rw-r--r-- 1 u0_a318 u0_a318 14404890 2026-09-23 02:45 trace.trace
+
+/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output:
+total 54
+drwxrwxrwx 2 u0_a318 u0_a318  3452 2026-09-23 02:45 .
+drwxrwxrwx 4 u0_a318 u0_a318  3452 2026-09-23 02:45 ..
+-rw------- 1 u0_a318 u0_a318  7157 2026-09-23 02:45 mobilegl.client.log
+-rw------- 1 u0_a318 u0_a318 33972 2026-09-23 02:45 mobilegl.server.log
+-rw------- 1 u0_a318 u0_a318   922 2026-09-23 02:45 retrace.log
+archived repeat 1 to .trace-work\p7w1\E4b-gles-inproc-noblock\improved-transparency-minecraft-26.3-DirectGLES\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html

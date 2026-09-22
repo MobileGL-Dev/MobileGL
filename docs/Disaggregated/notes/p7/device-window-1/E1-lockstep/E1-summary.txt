@@ -1,0 +1,21 @@
+arm                                                                rep  pass   ssim_vs_golden    ssim_vs_first    bit-identical  px!=first
+-----------------------------------------------------------------  ---  -----  ----------------  ---------------  -------------  ---------
+improved-transparency-minecraft-26.3-DirectVulkan                  1    -      -                 -                -              -
+    ! no result.json
+minecraft-1.21.1-neoforge-create-instancing-in-world-DirectVulkan  1    -      -                 -                -              -
+    ! no result.json
+minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-DirectVulkan         1    -      -                 -                -              -
+    ! no result.json
+minecraft-1.21.4-fabric-iris-iterationt-in-world-DirectVulkan      1    -      -                 -                -              -
+    ! no result.json
+minecraft-1.21.4-fabric-sodium-in-world-DirectVulkan               1    yes    0.999993791       1.000000000      yes            0
+minecraft-1.21.4-in-world-DirectVulkan                             1    yes    0.999995585       1.000000000      yes            0
+OpenRA-DirectVulkan                                                1    NO     0.988997893       1.000000000      yes            0
+
+OpenRA-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=NO, min ssim vs golden=0.988997893, min ssim vs first=1.000000000
+improved-transparency-minecraft-26.3-DirectVulkan: 1 repeat(s), 1 error(s), all-bitwise-identical=NO, passed-all=NO, min ssim vs golden=-, min ssim vs first=-
+minecraft-1.21.1-neoforge-create-instancing-in-world-DirectVulkan: 1 repeat(s), 1 error(s), all-bitwise-identical=NO, passed-all=NO, min ssim vs golden=-, min ssim vs first=-
+minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-DirectVulkan: 1 repeat(s), 1 error(s), all-bitwise-identical=NO, passed-all=NO, min ssim vs golden=-, min ssim vs first=-
+minecraft-1.21.4-fabric-iris-iterationt-in-world-DirectVulkan: 1 repeat(s), 1 error(s), all-bitwise-identical=NO, passed-all=NO, min ssim vs golden=-, min ssim vs first=-
+minecraft-1.21.4-fabric-sodium-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999993791, min ssim vs first=1.000000000
+minecraft-1.21.4-in-world-DirectVulkan: 1 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999995585, min ssim vs first=1.000000000

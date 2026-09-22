@@ -1,0 +1,9 @@
+== check ==
+  device : Redmi M332BF / SM8750 / Adreno 830v2 (2f7cbe2e)
+  big     policy6  gov=walt       cur=1958400   min=1958400   max=1958400     (pin 1958400 / stock 1017600-3072000)
+  little  policy0  gov=walt       cur=1555200   min=1555200   max=1555200     (pin 1555200 / stock 556800-2745600)
+  gpu     kgsl-3d0 pwrlevel=0..0  freq=1100000000 Hz  busy=8%   (pin lvl 0 = 1050000000 Hz / stock lvl 0..12)
+  thermal cpuss-0-0 36400 mC = 36.4 C   (/sys/class/thermal/thermal_zone13)
+
+  VERDICT: DRIFT
+    - gpu pinned to pwrlevel 0 but gpuclk=1100000000 (expected 1050000000)

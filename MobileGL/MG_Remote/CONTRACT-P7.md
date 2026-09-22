@@ -46,13 +46,13 @@ P7 收官 = 五道出口门同时成立（§2–§7），而不是路线图 P7 �
 
 **2.4 trace 半边。** `retrace-split` 已是 39 case × 2 后端 × {inproc, spawn}（`test.yml:2449/:2470`）；欠 `iterationrp × DirectVulkan` 的三个旋钮在 retrace-split 作业里与 `:2183` 同样导出（wave 0 L）。门 1 的 trace 半边 = 78 条 DirectVulkan split 行全部达阈值。
 
-**2.5 门 1 的判据。** gating 三臂同数绿（【待填：L 包首轮的 73/73 × 3】）+ parity 通过 + retrace-split 78 条 DV 行达阈值 + informational 车道的红名单为空或每条按名归入 P8 / P9 / P13 并在 `notes/p7/` 有票。
+**2.5 门 1 的判据。** gating 三臂同数绿（wave 0 落地时：magma-split 73 = 71 PASS + 2 SKIP，magma-spawn 52 = 50 + 2，magma-tcp 54 = 52 + 2 fixture——`MagmaRunAheadScenario`（14）与 `MagmaWireCacheScenario`（7）只注册 inproc 臂，`spawn_lane_parity.py` 的 `MAGMA_INPROC_ONLY` 具名例外；跨进程的 hold / cache peek 是 §12 的债）+ parity 通过 + retrace-split 78 条 DV 行达阈值 + informational 车道（`integration-magma-full-{split,spawn,tcp}`，整个集成二进制：510 / 510 / 512 条，首轮 453 PASS / 57 SKIP / **0 红**，tcp 臂 1 红 = `IterationRPProgram203Scenario` 的 exposure texel，StreamLink × Magma 交叉项，见 `notes/p7/magma-two-process-first-run.md`）的红名单为空或每条按名归入 P8 / P9 / P13 并在 `notes/p7/` 有票。**主机 lavapipe 打不到任何 `@P7` 拒绝**（驱动能力差异），门 1 的红名单实际来自真机（§7.1 的设备窗口）。
 
 ---
 
 ## §3 `@P7` 具名拒绝：普查、退役与 decline
 
-**3.1 普查数（钉住）。** 基线上 `grep -rn "@P7" MobileGL/ --include=*.cpp --include=*.inc --include=*.h` = **【待填：C 包实测；审计两次分别数得 14 串 / 13 语句与 15 处 / 4 文件——以 C 包的 `fatal_census.py --json` 为准】**处，全部在 `Renderer/UniformManager.cpp`、`Renderer/WireFramebuffer.inc`、`Renderer/WireDraw.inc`、`Renderer/VulkanRenderer.cpp`。另有两项 P7 归属但不带 `@P7` 字样：`Fatal{RoleViolation, "buffer-legacy-arm"}`（`WireDraw.inc:14/:204`）与「Magma 无 `StateObjectDeathOps`」（两条集成用例 skip）。
+**3.1 普查数（钉住）。** 基线上 `grep -rn "@P7" MobileGL/ --include=*.cpp --include=*.inc --include=*.h` = **15 处 / 4 文件**（wave 0 包 C 以 `fatal_census.py --json` 钉住；两次审计的 14 串 / 13 语句是把一个三元里的两个串算成一条），全部在 `Renderer/UniformManager.cpp`、`Renderer/WireFramebuffer.inc`、`Renderer/WireDraw.inc`、`Renderer/VulkanRenderer.cpp`。另有两项 P7 归属但不带 `@P7` 字样：`Fatal{RoleViolation, "buffer-legacy-arm"}`（`WireDraw.inc:14/:204`）与「Magma 无 `StateObjectDeathOps`」（两条集成用例 skip）。
 
 **3.2 退役表。** 「退役」= 实现该形状，与 monolith 臂同可观测；「decline」= 规则 I (a)。
 
@@ -71,13 +71,13 @@ P7 收官 = 五道出口门同时成立（§2–§7），而不是路线图 P7 �
 | `vertex-format-conversion` | `WireDraw.inc:272` | decline | 可选：packed converter |
 | `buffer-legacy-arm` | `WireDraw.inc:14/:204` | 具名 Fatal 经 hook（`RoleViolation`） | 已是拒绝，只换漏斗 |
 
-**3.3 普查门（wave 0 包 C）。** `scripts/ci/fatal_census.py` 的扫描根扩到 server 镜像（`MG_Remote`、`MG_Pipe`、`MG_Backend`、`MG_Impl/Pipe`、`MG_State`，MG_Test / MG_Benchmark / MG_IntegrationTest 除外）；`abort_sites` 成为**向下棘轮**；每个 `Fatal{Word` 在 `FatalFamilies.def` 有行；`Refuse{Word}` 对 `protocol.fbs` `RefuseCode` 校验。baseline 数：【待填：C 包】。
+**3.3 普查门（wave 0 包 C）。** `scripts/ci/fatal_census.py` 的扫描根扩到 server 镜像（`MG_Remote`、`MG_Pipe`、`MG_Backend`、`MG_Impl/Pipe`、`MG_State`，MG_Test / MG_Benchmark / MG_IntegrationTest 除外）；`abort_sites` 成为**向下棘轮**；每个 `Fatal{Word` 在 `FatalFamilies.def` 有行；`Refuse{Word}` 对 `protocol.fbs` `RefuseCode` 校验。baseline 数（wave 0 落地，`852e3c28`）：**79 处 abort / 20 文件**（扩容前 4 / `MG_Remote` 一处），**43 个家族词**（补了 11 行 `.def`，`InitialBytesNotCarried` 并入 `UncarriedInitialBytes`），3 个 `Refuse{}` 词，0 无标记；`ResourceUnavailable` 投影到 `ServerCrashed` 而非 `SegmentMismatch`（段几何没错的时候不说段错了）；Magma 三个 wire fatal 漏斗（`MagmaWireFatal` / `WireDescriptorFatal` / `WireBufferLegacyFatal`）经 `MG_Pipe` 的 `MGPipeSessionFailHook` 进 `SessionFail`，家族词保持 `UnmigratedVerb`（改名会作废自 P5b 起的拒绝普查计数）；`Refuse{AuthenticationRequired}` 改为词表里的 `Authentication`。
 
 ---
 
 ## §4 出口门 4：184 符号棘轮下降 P7 的 101 个
 
-**4.1 定义（wave 0 包 R，`scripts/link_ratchet.py`）。** 在 disaggregated 构建的对象树上：按 `notes/p6/a6-link-experiment-data.md` 的路径规则把 `MobileGL.dir` 下对象分 SERVER / FRONTEND / SHARED；集合 = (SERVER 未定义) − (SERVER 已定义) − (SHARED 已定义) ∩ (FRONTEND 已定义)。baseline 存**符号列表**（`scripts/data/link_ratchet_baseline.txt`），`--assert-monotone` 只对新增符号红，消失只提示重基线（ID-P7-7）。基线数：【待填：R 包；a6 为 184 = P7 101 / P3b-P4b 14 / 共有 60 / P6 自己 6】。
+**4.1 定义（wave 0 包 R，`scripts/link_ratchet.py`）。** 在 disaggregated 构建的对象树上：按 `notes/p6/a6-link-experiment-data.md` 的路径规则把 `MobileGL.dir` 下对象分 SERVER / FRONTEND / SHARED；集合 = (SERVER 未定义) − (SERVER 已定义) − (SHARED 已定义) ∩ (FRONTEND 已定义)。baseline 存**符号列表**（`scripts/data/link_ratchet_baseline.txt`），`--assert-monotone` 只对新增符号红，消失只提示重基线（ID-P7-7）。基线数（`scripts/data/link_ratchet_baseline.txt`，`852e3c28`）：**186** = `p7-magma` **101** / `p3b-p4b-espryt` **14** / `both-backends` **60** / `p6-core` 11——三个后端桶与 a6 的手数逐符号相同，多出的 2 个是 P6.5 的 `ClientSession::StartSpawned()` 与 `ProgramArtifactsSchemaFingerprint()`。Espryt 桶里 5 个是 `MG_Impl/Pipe/SlotAllocator.cpp.o` 定义的 `MG_Pipe::` 符号，按文件位置落在前端桶、只有 P13 的模块搬迁能清（标 `# P13`），所以 P3b/P4b 的可清数是 9 不是 14。`MG_Remote/FatalFunnel.cpp.o` 归 SHARED（两个角色都经它）；`MG_Backend/Init.cpp.o` 按 a6 规则归 SERVER，虽然它引用 5 个 client-session 符号。CI 步骤在 `build-linux-split` 作业；baseline 由参考工具链生成，CI 的 `clang++-20` 内联决策可能让首轮红——三元规则：已列类的兄弟方法、无新引用对象 = 内联，重基线；新引用对象永远不是内联。
 
 **4.2 P7 的目标。** `--bucket` 归到 DirectVulkan 引用对象的那一桶（a6 的 101）降到 **0**。唯一还在构造前端 `SamplerObject` / `ShaderObject` / `ProgramObject` 的 DirectVulkan 站点是 `VulkanRenderer.cpp:4526-4583 / 4624-4684`（monolith 臂的隐藏 blit / 深度 mip 程序），其 early-return 是运行时而非 `#if`，所以符号仍被引用。降到 0 的路径：在 **disaggregated 构建里** monolith 臂也改用烘焙模块（§5.2 的 (B')），pull 构建的代码逐语句原样——G1 不动。若 wave 3 实测某桶符号无法在不动 pull `.text` 的前提下消失，按名记入 §12 并在 baseline 里 `# P13` 标注，不算门 4 失败。
 

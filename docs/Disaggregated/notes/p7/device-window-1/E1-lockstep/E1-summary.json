@@ -1,0 +1,163 @@
+{
+  "archive": ".trace-work\\p7w1\\E1-inproc-ra0",
+  "rows": [
+    {
+      "arm": "improved-transparency-minecraft-26.3-DirectVulkan",
+      "repeat": 1,
+      "dir": ".trace-work\\p7w1\\E1-inproc-ra0\\improved-transparency-minecraft-26.3-DirectVulkan\\repeat-01",
+      "error": "no result.json"
+    },
+    {
+      "arm": "minecraft-1.21.1-neoforge-create-instancing-in-world-DirectVulkan",
+      "repeat": 1,
+      "dir": ".trace-work\\p7w1\\E1-inproc-ra0\\minecraft-1.21.1-neoforge-create-instancing-in-world-DirectVulkan\\repeat-01",
+      "error": "no result.json"
+    },
+    {
+      "arm": "minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-DirectVulkan",
+      "repeat": 1,
+      "dir": ".trace-work\\p7w1\\E1-inproc-ra0\\minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-DirectVulkan\\repeat-01",
+      "error": "no result.json"
+    },
+    {
+      "arm": "minecraft-1.21.4-fabric-iris-iterationt-in-world-DirectVulkan",
+      "repeat": 1,
+      "dir": ".trace-work\\p7w1\\E1-inproc-ra0\\minecraft-1.21.4-fabric-iris-iterationt-in-world-DirectVulkan\\repeat-01",
+      "error": "no result.json"
+    },
+    {
+      "arm": "minecraft-1.21.4-fabric-sodium-in-world-DirectVulkan",
+      "repeat": 1,
+      "dir": ".trace-work\\p7w1\\E1-inproc-ra0\\minecraft-1.21.4-fabric-sodium-in-world-DirectVulkan\\repeat-01",
+      "backend": "DirectVulkan",
+      "passed": true,
+      "status_code": 0,
+      "ssim_vs_golden": 0.999993791,
+      "ssim_threshold": 0.99,
+      "matched_golden": "golden.png",
+      "mismatch_pixels_vs_golden": 29858,
+      "actual": "minecraft-1.21.4-fabric-sodium-in-world-DirectVulkan-actual.png",
+      "actual_sha256": "5898599b747a7e834eee31f9da55838ee081bb5fce512543848d614c82e3877e",
+      "identical_to_first": true,
+      "ssim_vs_first": 1.0,
+      "mismatch_pixels_vs_first": 0,
+      "crop": {
+        "x": 0,
+        "y": 0,
+        "width": 854,
+        "height": 480
+      }
+    },
+    {
+      "arm": "minecraft-1.21.4-in-world-DirectVulkan",
+      "repeat": 1,
+      "dir": ".trace-work\\p7w1\\E1-inproc-ra0\\minecraft-1.21.4-in-world-DirectVulkan\\repeat-01",
+      "backend": "DirectVulkan",
+      "passed": true,
+      "status_code": 0,
+      "ssim_vs_golden": 0.999995585,
+      "ssim_threshold": 0.99,
+      "matched_golden": "golden.png",
+      "mismatch_pixels_vs_golden": 27574,
+      "actual": "minecraft-1.21.4-in-world-DirectVulkan-actual.png",
+      "actual_sha256": "0d4c315c7d3555a1256cc8654c6faaa3abaf202d67382677be5c1ae6d2d140fc",
+      "identical_to_first": true,
+      "ssim_vs_first": 1.0,
+      "mismatch_pixels_vs_first": 0,
+      "crop": {
+        "x": 0,
+        "y": 0,
+        "width": 854,
+        "height": 480
+      }
+    },
+    {
+      "arm": "OpenRA-DirectVulkan",
+      "repeat": 1,
+      "dir": ".trace-work\\p7w1\\E1-inproc-ra0\\OpenRA-DirectVulkan\\repeat-01",
+      "backend": "DirectVulkan",
+      "passed": false,
+      "status_code": 6,
+      "ssim_vs_golden": 0.988997893,
+      "ssim_threshold": 0.99,
+      "matched_golden": "golden.png",
+      "mismatch_pixels_vs_golden": 9836,
+      "actual": "OpenRA-DirectVulkan-actual.png",
+      "actual_sha256": "4e5ba514ba211c64777af1a87382611d86d49fa55eb3c97734e7d7e8aae1f75c",
+      "identical_to_first": true,
+      "ssim_vs_first": 1.0,
+      "mismatch_pixels_vs_first": 0,
+      "crop": {
+        "x": 1,
+        "y": 1,
+        "width": 638,
+        "height": 478
+      }
+    }
+  ],
+  "arms": [
+    {
+      "arm": "OpenRA-DirectVulkan",
+      "repeats": 1,
+      "errors": 0,
+      "all_bitwise_identical": true,
+      "passed_all": false,
+      "min_ssim_vs_golden": 0.988997893,
+      "min_ssim_vs_first": 1.0
+    },
+    {
+      "arm": "improved-transparency-minecraft-26.3-DirectVulkan",
+      "repeats": 1,
+      "errors": 1,
+      "all_bitwise_identical": false,
+      "passed_all": false,
+      "min_ssim_vs_golden": null,
+      "min_ssim_vs_first": null
+    },
+    {
+      "arm": "minecraft-1.21.1-neoforge-create-instancing-in-world-DirectVulkan",
+      "repeats": 1,
+      "errors": 1,
+      "all_bitwise_identical": false,
+      "passed_all": false,
+      "min_ssim_vs_golden": null,
+      "min_ssim_vs_first": null
+    },
+    {
+      "arm": "minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-DirectVulkan",
+      "repeats": 1,
+      "errors": 1,
+      "all_bitwise_identical": false,
+      "passed_all": false,
+      "min_ssim_vs_golden": null,
+      "min_ssim_vs_first": null
+    },
+    {
+      "arm": "minecraft-1.21.4-fabric-iris-iterationt-in-world-DirectVulkan",
+      "repeats": 1,
+      "errors": 1,
+      "all_bitwise_identical": false,
+      "passed_all": false,
+      "min_ssim_vs_golden": null,
+      "min_ssim_vs_first": null
+    },
+    {
+      "arm": "minecraft-1.21.4-fabric-sodium-in-world-DirectVulkan",
+      "repeats": 1,
+      "errors": 0,
+      "all_bitwise_identical": true,
+      "passed_all": true,
+      "min_ssim_vs_golden": 0.999993791,
+      "min_ssim_vs_first": 1.0
+    },
+    {
+      "arm": "minecraft-1.21.4-in-world-DirectVulkan",
+      "repeats": 1,
+      "errors": 0,
+      "all_bitwise_identical": true,
+      "passed_all": true,
+      "min_ssim_vs_golden": 0.999995585,
+      "min_ssim_vs_first": 1.0
+    }
+  ]
+}

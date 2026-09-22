@@ -1,0 +1,2290 @@
+=== Android retrace: OpenRA / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\OpenRA\openra.trace: 1 file pushed, 0 skipped. 56.1 MB/s (22192645 bytes in 0.378s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\openra.0000031249.png: 1 file pushed, 0 skipped. 24.6 MB/s (403752 bytes in 0.016s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=1.000000, ssimThreshold=0.990000, mismatchPixels=0, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/OpenRA-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 31249,
+  "width": 640,
+  "height": 480,
+  "cropX": 1,
+  "cropY": 1,
+  "cropWidth": 638,
+  "cropHeight": 478,
+  "ssim": 1.000000000,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 0
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/OpenRA-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\OpenRA-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-startup / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-startup\trace.trace: 1 file pushed, 0 skipped. 32.8 MB/s (11177350 bytes in 0.325s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-startup.0000092195.png: 1 file pushed, 0 skipped. 0.4 MB/s (17687 bytes in 0.046s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=1.000000, ssimThreshold=0.990000, mismatchPixels=520, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-startup-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 92195,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999999511,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 520
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-startup-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-startup-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-main-menu / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-main-menu\trace.trace: 1 file pushed, 0 skipped. 32.9 MB/s (41461943 bytes in 1.200s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-main-menu.0000481787.png: 1 file pushed, 0 skipped. 30.4 MB/s (412167 bytes in 0.013s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-main-menu.0000481787-mali.png: 1 file pushed, 0 skipped. 84.9 MB/s (374621 bytes in 0.004s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999696, ssimThreshold=0.990000, mismatchPixels=1197, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": ["/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/alternate-golden.png"],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-main-menu-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 481787,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999696483,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 1197
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-main-menu-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-main-menu-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.11-main-menu / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.11-main-menu\trace.trace: 1 file pushed, 0 skipped. 15.4 MB/s (7407705 bytes in 0.459s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.11-main-menu.0000205347.png: 1 file pushed, 0 skipped. 38.0 MB/s (340727 bytes in 0.009s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": false,
+  "statusCode": 6,
+  "message": "retrace completed; ssim=0.164984, ssimThreshold=0.990000, mismatchPixels=188576, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.11-main-menu-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 205347,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.164983727,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 188576
+}
+trace-replay-ci.sh: tail of retrace.log:
+/system/bin/app_process64
+trace-replay-ci.sh: tail of mobilegl.log:
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_astc_decode_mode (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_index_type_uint8 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_conservative_rasterization (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_shader_stencil_export (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_calibrated_timestamps (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_external_memory_fd (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_QCOM_render_pass_shader_resolve (r.4)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_maintenance1 (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_maintenance2 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_maintenance3 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_maintenance4 (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_maintenance5 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_maintenance6 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_separate_depth_stencil_layouts (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_image_robustness (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_calibrated_timestamps (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_buffer_device_address (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_extended_dynamic_state (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_queue_family_foreign (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_quad_control (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_image_view_min_lod (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_ANDROID_external_format_resolve (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_QCOM_ycbcr_degamma (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_bind_memory2 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_pipeline_protected_access (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_external_semaphore (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_terminate_invocation (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_QCOM_fragment_density_map_offset (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_scalar_block_layout (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_map_memory2 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_load_store_op_none (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_load_store_op_none (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_maximal_reconvergence (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_sampler_ycbcr_conversion (r.14)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_vertex_attribute_divisor (r.3)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_variable_pointers (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_QCOM_multiview_per_view_viewports (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_ray_query (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_primitives_generated_query (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_push_descriptor (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_timeline_semaphore (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_device_memory_report (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_subgroup_rotate (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_imageless_framebuffer (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_device_group (r.4)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_device_fault (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_relaxed_block_layout (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_expect_assume (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_atomic_int64 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_external_fence (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_non_semantic_info (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_shader_atomic_float (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_custom_border_color (r.12)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_host_query_reset (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_index_type_uint8 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_multiview (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_storage_buffer_storage_class (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_fragment_density_map2 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_QCOM_filter_cubic_weights (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_workgroup_memory_explicit_layout (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_QCOM_rotated_copy_commands (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_subgroup_extended_types (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_external_memory_acquire_unmodified (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_private_data (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_descriptor_buffer (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_conditional_rendering (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_mutable_descriptor_type (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_pipeline_creation_cache_control (r.3)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_robustness2 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_clock (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_shader_module_identifier (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_vertex_attribute_divisor (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_global_priority_query (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_separate_stencil_usage (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_border_color_swizzle (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_vertex_input_dynamic_state (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_IMG_filter_cubic (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_filter_cubic (r.3)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_shader_subgroup_vote (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_device_address_binding_report (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_NV_optical_flow (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_QCOM_tile_properties (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_image_format_list (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_sampler_filter_minmax (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_16bit_storage (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_shader_viewport_index_layer (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_pipeline_executable_properties (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_shader_demote_to_helper_invocation (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_color_write_enable (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_dynamic_rendering_local_read (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_QCOM_render_pass_transform (r.4)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_create_renderpass2 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_shader_image_atomic_int64 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_acceleration_structure (r.13)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_depth_clip_control (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_transform_feedback (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_blend_operation_advanced (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_provoking_vertex (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_8bit_storage (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_QCOM_multiview_per_view_render_areas (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_inline_uniform_block (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_shader_subgroup_ballot (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_depth_stencil_resolve (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_float_controls (r.4)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_texture_compression_astc_hdr (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_global_priority (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_4444_formats (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_draw_parameters (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_vulkan_memory_model (r.3)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_descriptor_indexing (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_depth_clip_enable (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_synchronization2 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_integer_dot_product (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_line_rasterization (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_line_rasterization (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_QCOM_image_processing (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_float_controls2 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_fragment_shading_rate (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_descriptor_update_template (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_draw_indirect_count (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_driver_properties (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_ray_tracing_position_fetch (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_dynamic_rendering (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_zero_initialize_workgroup_memory (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_uniform_buffer_standard_layout (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_depth_clamp_zero_one (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_ANDROID_external_memory_android_hardware_buffer (r.5)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_image_2d_view_of_3d (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_extended_dynamic_state2 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_dedicated_allocation (r.3)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_texel_buffer_alignment (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_primitive_topology_list_restart (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_rasterization_order_attachment_access (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_subgroup_uniform_control_flow (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_tooling_info (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_format_feature_flags2 (r.2)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_global_priority (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_sample_locations (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_EXT_multi_draw (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_swapchain (r.70)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_sampler_mirror_clamp_to_edge (r.3)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_QCOM_image_processing2 (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]:     VK_KHR_external_fence_fd (r.1)
+[02:14:51] [Android MobileGLTraceRe/INFO]: Required extension found: VK_KHR_swapchain
+[02:14:51] [Android MobileGLTraceRe/INFO]:     Picked physical device. (Reason: First suitable device)
+[02:14:51] [Android MobileGLTraceRe/INFO]: Picked physical device 0.
+[02:14:51] [Android MobileGLTraceRe/INFO]: Vulkan: multiViewport enabled; rasterizable viewports=16 (device limit 16, GL state width 16)
+[02:14:51] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_KHR_draw_indirect_count
+[02:14:51] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_KHR_shader_draw_parameters
+[02:14:51] [Android MobileGLTraceRe/INFO]: VK_KHR_image_format_list enabled: true
+[02:14:51] [Android MobileGLTraceRe/INFO]: VK_KHR_draw_indirect_count enabled: true
+[02:14:51] [Android MobileGLTraceRe/INFO]: Vulkan: update-after-bind descriptor layouts enabled
+[02:14:51] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_KHR_index_type_uint8
+[02:14:51] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_EXT_primitive_topology_list_restart
+[02:14:51] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_EXT_custom_border_color (maxCustomBorderColorSamplers=4000)
+[02:14:51] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_EXT_subgroup_size_control (computeFullSubgroups)
+[02:14:51] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_EXT_transform_feedback
+[02:14:51] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_EXT_provoking_vertex (transformFeedbackPreservesProvokingVertex=false)
+[02:14:51] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_EXT_vertex_attribute_divisor
+[02:14:51] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_EXT_multi_draw (maxMultiDrawCount=1024)
+[02:14:51] [Android MobileGLTraceRe/INFO]: Device feature support: robustBufferAccess=true geometryShader=true independentBlend=true logicOp=true shaderClipDistance=true shaderCullDistance=true wideLines=true shaderInt64=true vertexStoresAtomics=true fragmentStoresAtomics=true storageImageExtendedFormats=true storageImageReadWithoutFormat=true storageImageWriteWithoutFormat=true drawIndirectFirstInstance=true multiDrawIndirect=true
+[02:14:51] [Android MobileGLTraceRe/INFO]: Device feature enabled: robustBufferAccess=true geometryShader=true independentBlend=true logicOp=true shaderClipDistance=true shaderCullDistance=true wideLines=true shaderInt64=true vertexStoresAtomics=true fragmentStoresAtomics=true storageImageExtendedFormats=true storageImageReadWithoutFormat=true storageImageWriteWithoutFormat=true drawIndirectFirstInstance=true multiDrawIndirect=true shaderDrawParameters=true
+[02:14:51] [Android MobileGLTraceRe/INFO]: Multi-draw dispatch tier: ext (VK_EXT_multi_draw=true, multiDrawIndirect=true, mode=auto)
+[02:14:51] [Android MobileGLTraceRe/INFO]: index type uint8 enabled: true
+[02:14:51] [Android MobileGLTraceRe/INFO]: Logical device created.
+[02:14:51] [Android MobileGLTraceRe/INFO]: Queues got successfully.
+[02:14:51] [Android MobileGLTraceRe/INFO]: Timer queries supported (timestampValidBits=48, timestampPeriod=52.083332 ns/tick)
+[02:14:51] [Android MobileGLTraceRe/INFO]: PRIMITIVES_GENERATED probe triangles: drawn=1 stream=0/1 pgq=0(0) stat=1(1)
+[02:14:51] [Android MobileGLTraceRe/INFO]: PRIMITIVES_GENERATED probe triangles+discard: drawn=1 stream=0/1 pgq=0(0) stat=0(1)
+[02:14:51] [Android MobileGLTraceRe/INFO]: PRIMITIVES_GENERATED probe patches+discard: drawn=1 stream=0/1 pgq=0(0) stat=0(1)
+[02:14:51] [Android MobileGLTraceRe/INFO]: PRIMITIVES_GENERATED for XFB-inactive draws will accumulate through a clipping-invocations pipeline-statistics pool
+[02:14:51] [Android MobileGLTraceRe/INFO]: Command pool created
+[02:14:51] [Android MobileGLTraceRe/INFO]: MaxFramesInFlight: configured request=3
+[02:14:51] [Android MobileGLTraceRe/INFO]: MaxFramesInFlight: using 3 (surface minImageCount=11, maxImageCount=64)
+[02:14:51] [Android MobileGLTraceRe/INFO]: CreateFrameContexts completed
+[02:14:51] [Android MobileGLTraceRe/INFO]: DirectVulkan: using 256 program descriptor bindings
+[02:14:51] [Android MobileGLTraceRe/INFO]: Got 5 surface formats:
+[02:14:51] [Android MobileGLTraceRe/INFO]: Picked surface format: [VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR]
+[02:14:51] [Android MobileGLTraceRe/INFO]: Got 4 present modes:
+[02:14:51] [Android MobileGLTraceRe/INFO]: Picked present mode: VK_PRESENT_MODE_MAILBOX_KHR
+[02:14:51] [Android MobileGLTraceRe/INFO]: Set minImageCount = 11
+[02:14:51] [Android MobileGLTraceRe/INFO]: Swapchain currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+[02:14:51] [Android MobileGLTraceRe/INFO]: Swapchain imageUsage = 0x13 (supportedUsageFlags = 0x9f)
+[02:14:51] [Android MobileGLTraceRe/INFO]: Set swapchain preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+[02:14:51] [Android MobileGLTraceRe/INFO]: Swapchain image views created
+[02:14:51] [Android MobileGLTraceRe/INFO]: Swapchain created, extent = 854x480, swapchain imageCount = 11
+[02:14:51] [Android MobileGLTraceRe/INFO]: DirectVulkan: suppressing depth writes on accumulation-blended pipelines (driver lacks cross-pipeline position invariance)
+[02:14:51] [Android MobileGLTraceRe/INFO]: Vulkan shader subgroup support: detected=true advertised=true size=64 stages=0x30 operations=0x2bf
+[02:14:51] [Android MobileGLTraceRe/INFO]: DirectVulkan: clamped GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS from 16777216 to 256
+[02:14:51] [Android MobileGLTraceRe/INFO]: DirectVulkan: clamped GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS from 16777216 to 256
+[02:14:51] [Android MobileGLTraceRe/INFO]: DirectVulkan: clamped GL_MAX_COMPUTE_UNIFORM_BLOCKS from 16777216 to 256
+[02:14:51] [Android MobileGLTraceRe/INFO]: DirectVulkan: clamped GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS from 16777216 to 256
+[02:14:51] [Android MobileGLTraceRe/INFO]: DirectVulkan: clamped GL_MAX_UNIFORM_BUFFER_BINDINGS from 16777216 to 256
+[02:14:51] [Android MobileGLTraceRe/INFO]: DirectVulkan: clamped GL_MAX_SHADER_STORAGE_BLOCK_SIZE from 2147483647 to 536870912
+[02:14:51] [Android MobileGLTraceRe/ERROR]: NormalizePixelFormat: outFormat: unhandled internalFormat: GL_STENCIL_INDEX8
+[02:14:51] [Android MobileGLTraceRe/ERROR]: NormalizePixelFormat: outType: unhandled internalFormat: GL_STENCIL_INDEX8
+[02:14:51] [Android MobileGLTraceRe/WARN]: Stub function: glDebugMessageControl(...)
+[02:14:51] [Android MobileGLTraceRe/WARN]: GetOrCreateRenderPass: depth/stencil attachment id=1 starts with undefined layout and partial/no clear; using DONT_CARE for uncleared aspects
+[02:14:51] [Android MobileGLTraceRe/WARN]: GetOrCreateRenderPass: color attachment textureId=9 starts with undefined layout and no clear; using LOAD_OP_DONT_CARE
+[02:14:52] [Android MobileGLTraceRe/WARN]: DirectVulkan::ReadPixels: no write is recorded for swapchain image 1 of the default framebuffer; the readback returns its raw pixels
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.11-main-menu-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.11-main-menu-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.17-main-menu-854 / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.17-main-menu-854\trace.trace: 1 file pushed, 0 skipped. 30.8 MB/s (16947395 bytes in 0.524s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.17-main-menu-854.0000117757.png: 1 file pushed, 0 skipped. 22.1 MB/s (443389 bytes in 0.019s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999991, ssimThreshold=0.990000, mismatchPixels=329, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.17-main-menu-854-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 117757,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999990914,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 329
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.17-main-menu-854-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.17-main-menu-854-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-in-world\trace.trace: 1 file pushed, 0 skipped. 54.6 MB/s (48692730 bytes in 0.851s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-in-world.0000280000.png: 1 file pushed, 0 skipped. 22.0 MB/s (296445 bytes in 0.013s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999996, ssimThreshold=0.990000, mismatchPixels=27574, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 280000,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999995585,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 27574
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-sodium-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-sodium-in-world\trace.trace: 1 file pushed, 0 skipped. 40.2 MB/s (30953189 bytes in 0.734s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-sodium-in-world.0000923340.png: 1 file pushed, 0 skipped. 172.9 MB/s (174433 bytes in 0.001s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999994, ssimThreshold=0.990000, mismatchPixels=29858, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-sodium-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 923340,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999993791,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 29858
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-sodium-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-sodium-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-common-mods-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-common-mods-in-world\trace.trace: 1 file pushed, 0 skipped. 42.7 MB/s (32447725 bytes in 0.725s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-common-mods-in-world.0000522084.png: 1 file pushed, 0 skipped. 14.7 MB/s (327206 bytes in 0.021s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999870, ssimThreshold=0.990000, mismatchPixels=79678, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-common-mods-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 522084,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999869631,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 79678
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-common-mods-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-common-mods-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-common-mods-inventory / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-common-mods-inventory\trace.trace: 1 file pushed, 0 skipped. 46.1 MB/s (41882318 bytes in 0.866s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-common-mods-inventory.0000728558.png: 1 file pushed, 0 skipped. 44.3 MB/s (250887 bytes in 0.005s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999994, ssimThreshold=0.990000, mismatchPixels=24846, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-common-mods-inventory-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 728558,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999994284,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 24846
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-common-mods-inventory-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-common-mods-inventory-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-rei-inventory / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-rei-inventory\trace.trace: 1 file pushed, 0 skipped. 122.2 MB/s (197879451 bytes in 1.545s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-rei-inventory.0005431826.png: 1 file pushed, 0 skipped. 20.6 MB/s (176731 bytes in 0.008s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999998, ssimThreshold=0.990000, mismatchPixels=19107, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-rei-inventory-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 5431826,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999997568,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 19107
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-rei-inventory-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-rei-inventory-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-xaero-minimap-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-xaero-minimap-in-world\trace.trace: 1 file pushed, 0 skipped. 97.9 MB/s (68409532 bytes in 0.667s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-xaero-minimap-in-world.0002553500.png: 1 file pushed, 0 skipped. 171.9 MB/s (110300 bytes in 0.001s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999999, ssimThreshold=0.990000, mismatchPixels=170, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-xaero-minimap-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 2553500,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 10,
+  "cropWidth": 140,
+  "cropHeight": 158,
+  "ssim": 0.999999407,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 170
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-xaero-minimap-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-xaero-minimap-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-xaero-world-map-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-xaero-world-map-in-world\trace.trace: 1 file pushed, 0 skipped. 61.6 MB/s (36840479 bytes in 0.571s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-xaero-world-map-in-world.0001598209.png: 1 file pushed, 0 skipped. 76.2 MB/s (12516 bytes in 0.000s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=1.000000, ssimThreshold=0.990000, mismatchPixels=181, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-xaero-world-map-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 1598209,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999999866,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 181
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-xaero-world-map-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-xaero-world-map-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-journeymap-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-journeymap-in-world\trace.trace: 1 file pushed, 0 skipped. 78.6 MB/s (53076992 bytes in 0.644s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-journeymap-in-world.0002632392.png: 1 file pushed, 0 skipped. 171.8 MB/s (115169 bytes in 0.001s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999991, ssimThreshold=0.990000, mismatchPixels=51248, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-journeymap-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 2632392,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999991304,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 51248
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-journeymap-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-journeymap-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-modernui-inventory / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-modernui-inventory\trace.trace: 1 file pushed, 0 skipped. 96.2 MB/s (138253759 bytes in 1.370s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-modernui-inventory.0004907381.png: 1 file pushed, 0 skipped. 170.5 MB/s (136268 bytes in 0.001s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999996, ssimThreshold=0.990000, mismatchPixels=22950, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-modernui-inventory-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 4907381,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999996451,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 22950
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-modernui-inventory-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-modernui-inventory-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-rei-inventory-normal-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-rei-inventory-normal-world\trace.trace: 1 file pushed, 0 skipped. 69.2 MB/s (31856698 bytes in 0.439s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-rei-inventory-normal-world.0000734465.png: 1 file pushed, 0 skipped. 13.7 MB/s (145114 bytes in 0.010s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999999, ssimThreshold=0.990000, mismatchPixels=12178, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-rei-inventory-normal-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 734465,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999998800,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 12178
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-rei-inventory-normal-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-rei-inventory-normal-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world\trace.trace: 1 file pushed, 0 skipped. 48.9 MB/s (21162779 bytes in 0.413s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world.0000457190.png: 1 file pushed, 0 skipped. 126.9 MB/s (111216 bytes in 0.001s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999992, ssimThreshold=0.990000, mismatchPixels=6415, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 457190,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 10,
+  "cropWidth": 140,
+  "cropHeight": 158,
+  "ssim": 0.999992410,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 6415
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world\trace.trace: 1 file pushed, 0 skipped. 53.9 MB/s (29249484 bytes in 0.518s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world.0000573061.png: 1 file pushed, 0 skipped. 151.9 MB/s (131881 bytes in 0.001s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999994, ssimThreshold=0.990000, mismatchPixels=60510, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 573061,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999993780,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 60510
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-journeymap-in-world-normal-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-journeymap-in-world-normal-world\trace.trace: 1 file pushed, 0 skipped. 58.2 MB/s (27430578 bytes in 0.449s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-journeymap-in-world-normal-world.0000641975.png: 1 file pushed, 0 skipped. 170.9 MB/s (129595 bytes in 0.001s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999988, ssimThreshold=0.990000, mismatchPixels=40227, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-journeymap-in-world-normal-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 641975,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999988398,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 40227
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-journeymap-in-world-normal-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-journeymap-in-world-normal-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-modernui-inventory-normal-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-modernui-inventory-normal-world\trace.trace: 1 file pushed, 0 skipped. 55.7 MB/s (32181102 bytes in 0.551s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-modernui-inventory-normal-world.0000727926.png: 1 file pushed, 0 skipped. 165.7 MB/s (138346 bytes in 0.001s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999998, ssimThreshold=0.990000, mismatchPixels=14879, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-modernui-inventory-normal-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 727926,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999997628,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 14879
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-modernui-inventory-normal-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-modernui-inventory-normal-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-bsl-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-bsl-in-world\trace.trace: 1 file pushed, 0 skipped. 34.0 MB/s (12635537 bytes in 0.354s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-bsl-in-world.0000110725.png: 1 file pushed, 0 skipped. 25.8 MB/s (602071 bytes in 0.022s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-bsl-in-world.0000110725-mali.png: 1 file pushed, 0 skipped. 28.7 MB/s (606400 bytes in 0.020s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.997010, ssimThreshold=0.990000, mismatchPixels=393627, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": ["/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/alternate-golden.png"],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-bsl-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 110725,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.997009631,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 393627
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-bsl-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-bsl-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world\trace.trace: 1 file pushed, 0 skipped. 34.1 MB/s (11983226 bytes in 0.336s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world.0000095322.png: 1 file pushed, 0 skipped. 10.8 MB/s (350351 bytes in 0.031s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.996631, ssimThreshold=0.990000, mismatchPixels=373628, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 95322,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.996630735,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 373628
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world\trace.trace: 1 file pushed, 0 skipped. 36.5 MB/s (16069904 bytes in 0.420s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world.0000141559.png: 1 file pushed, 0 skipped. 23.0 MB/s (639369 bytes in 0.026s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999455, ssimThreshold=0.990000, mismatchPixels=359364, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 141559,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999454686,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 359364
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-sundial-lite-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-sundial-lite-in-world\trace.trace: 1 file pushed, 0 skipped. 33.3 MB/s (18112927 bytes in 0.519s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-sundial-lite-in-world.0000150023.png: 1 file pushed, 0 skipped. 15.2 MB/s (757214 bytes in 0.048s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.996173, ssimThreshold=0.990000, mismatchPixels=402683, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-sundial-lite-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 150023,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.996172813,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 402683
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-sundial-lite-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-sundial-lite-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world\trace.trace: 1 file pushed, 0 skipped. 37.4 MB/s (16054147 bytes in 0.409s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world.0000151297.png: 1 file pushed, 0 skipped. 11.1 MB/s (734681 bytes in 0.063s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999511, ssimThreshold=0.990000, mismatchPixels=384125, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 151297,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999510556,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 384125
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-complementary-unbound-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-complementary-unbound-in-world\trace.trace: 1 file pushed, 0 skipped. 32.3 MB/s (15649098 bytes in 0.462s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-complementary-unbound-in-world.0000146559.png: 1 file pushed, 0 skipped. 24.7 MB/s (736491 bytes in 0.028s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999476, ssimThreshold=0.990000, mismatchPixels=385300, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-complementary-unbound-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 146559,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999476169,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 385300
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-complementary-unbound-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-complementary-unbound-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-mellow-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-mellow-in-world\trace.trace: 1 file pushed, 0 skipped. 29.0 MB/s (12632868 bytes in 0.415s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-mellow-in-world.0000096143.png: 1 file pushed, 0 skipped. 15.4 MB/s (601666 bytes in 0.037s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999372, ssimThreshold=0.990000, mismatchPixels=363637, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-mellow-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 96143,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999372032,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 363637
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-mellow-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-mellow-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-nostalgia-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-nostalgia-in-world\trace.trace: 1 file pushed, 0 skipped. 33.7 MB/s (14969100 bytes in 0.423s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-nostalgia-in-world.0000153808-linux-mesa.png: 1 file pushed, 0 skipped. 23.2 MB/s (986690 bytes in 0.040s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-nostalgia-in-world.0000153808.png: 1 file pushed, 0 skipped. 23.6 MB/s (684356 bytes in 0.028s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999396, ssimThreshold=0.990000, mismatchPixels=293937, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/alternate-golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": ["/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/alternate-golden.png"],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/alternate-golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-nostalgia-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 153808,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999396223,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 293937
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-nostalgia-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-nostalgia-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-bliss-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-bliss-in-world\trace.trace: 1 file pushed, 0 skipped. 25.6 MB/s (13898443 bytes in 0.517s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-bliss-in-world.0000113511.png: 1 file pushed, 0 skipped. 39.9 MB/s (716858 bytes in 0.017s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999093, ssimThreshold=0.990000, mismatchPixels=386131, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-bliss-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 113511,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999092741,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 386131
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-bliss-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-bliss-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world\trace.trace: 1 file pushed, 0 skipped. 35.3 MB/s (14676755 bytes in 0.396s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world.0000125124-linux-mesa.png: 1 file pushed, 0 skipped. 8.9 MB/s (680244 bytes in 0.073s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.997492, ssimThreshold=0.990000, mismatchPixels=173054, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 125124,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.997491927,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 173054
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-iterationt-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-iterationt-in-world\trace.trace: 1 file pushed, 0 skipped. 25.6 MB/s (94141776 bytes in 3.513s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-iterationt-in-world.0000110538.png: 1 file pushed, 0 skipped. 15.5 MB/s (705968 bytes in 0.043s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999422, ssimThreshold=0.990000, mismatchPixels=354474, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-iterationt-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 110538,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999421604,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 354474
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-iterationt-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-iterationt-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world\trace.trace: 1 file pushed, 0 skipped. 23.6 MB/s (92544229 bytes in 3.739s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.0000115019.png: 1 file pushed, 0 skipped. 25.4 MB/s (800864 bytes in 0.030s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.998937, ssimThreshold=0.990000, mismatchPixels=402672, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 115019,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.998936755,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 402672
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-photon-v1.1-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-photon-v1.1-in-world\trace.trace: 1 file pushed, 0 skipped. 26.9 MB/s (23119092 bytes in 0.821s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-photon-v1.1-in-world.0000159866.png: 1 file pushed, 0 skipped. 14.9 MB/s (753968 bytes in 0.048s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999026, ssimThreshold=0.990000, mismatchPixels=391258, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-photon-v1.1-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 159866,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999026329,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 391258
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-photon-v1.1-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-photon-v1.1-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world\trace.trace: 1 file pushed, 0 skipped. 30.7 MB/s (23928828 bytes in 0.743s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world.0000172128.png: 1 file pushed, 0 skipped. 12.7 MB/s (741063 bytes in 0.055s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": false,
+  "statusCode": 6,
+  "message": "retrace completed; ssim=0.008865, ssimThreshold=0.990000, mismatchPixels=403024, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 172128,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.008864795,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 403024
+}
+trace-replay-ci.sh: tail of retrace.log:
+/opt/Java/jdk-21/bin/java
+trace-replay-ci.sh: tail of mobilegl.log:
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0x92d6883871214bff programHash=0x733247df7346812c; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0xfd859c3c16240e5a vertexInputHash=0x8593abcf0503abf2 stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=2 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=0 depthWrite=0 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=2 attributeCount=2
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=5208 bytes=20832 hash=0xebf1c9b5309a34da
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=54861 bytes=219444 hash=0x7494802520217e0c
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f8b7410 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f896c50 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=0 colorWriteMask=0x7 srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=0 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[1]: blend=0 colorWriteMask=0xf srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=0 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0x51c8345111745534 programHash=0xfd859c3c16240e5a; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0xf25a0f918681264f vertexInputHash=0x11196d7a2e83ae58 stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=2 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=1 depthWrite=1 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=7 attributeCount=7
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=7392 bytes=29568 hash=0xd75fb889f88f52de
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=41701 bytes=166804 hash=0x146fbc0bffc96087
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f8c36b0 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f8c40d0 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=0 colorWriteMask=0xf srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=7 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[1]: blend=1 colorWriteMask=0xf srcColor=1 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=7 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0xb7f37a15d3bc9ed8 programHash=0xf25a0f918681264f; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0xf25a0f918681264f vertexInputHash=0x11196d7a2e83ae58 stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=2 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=1 depthWrite=1 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=7 attributeCount=7
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=7392 bytes=29568 hash=0xd75fb889f88f52de
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=41701 bytes=166804 hash=0x146fbc0bffc96087
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f8c36b0 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f8c40d0 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=0 colorWriteMask=0xf srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=7 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[1]: blend=1 colorWriteMask=0xf srcColor=1 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=7 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0xb7f37a15d3bc9ed8 programHash=0xf25a0f918681264f; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0xf25a0f918681264f vertexInputHash=0x11196d7a2e83ae58 stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=2 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=1 depthWrite=1 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=7 attributeCount=7
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=7392 bytes=29568 hash=0xd75fb889f88f52de
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=41701 bytes=166804 hash=0x146fbc0bffc96087
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f8c36b0 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f8c40d0 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=0 colorWriteMask=0xf srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=7 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[1]: blend=1 colorWriteMask=0xf srcColor=1 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=7 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0xb7f37a15d3bc9ed8 programHash=0xf25a0f918681264f; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0xecb48583183184c4 vertexInputHash=0x45bac5451f4652eb stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=1 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=1 depthWrite=1 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=6 attributeCount=6
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=5326 bytes=21304 hash=0xc7f8e37029f4b758
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=32856 bytes=131424 hash=0x4e67f88470e25619
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f8ae890 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f8bc750 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=1 colorWriteMask=0xf srcColor=1 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=7 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0xfaab5db7c91ee477 programHash=0xecb48583183184c4; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0xecb48583183184c4 vertexInputHash=0x45bac5451f4652eb stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=1 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=1 depthWrite=1 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=6 attributeCount=6
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=5326 bytes=21304 hash=0xc7f8e37029f4b758
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=32856 bytes=131424 hash=0x4e67f88470e25619
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f8ae890 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f8bc750 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=1 colorWriteMask=0xf srcColor=1 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=7 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0xfaab5db7c91ee477 programHash=0xecb48583183184c4; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0xf20fd89618dd0dc5 vertexInputHash=0x8593abcf0503abf2 stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=2 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=0 depthWrite=0 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=2 attributeCount=2
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=3515 bytes=14060 hash=0x8b26b076eac6df4e
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=9338 bytes=37352 hash=0xc68df9e35c0ddbd9
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f899830 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f89da90 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=0 colorWriteMask=0xf srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=0 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[1]: blend=0 colorWriteMask=0x7 srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=0 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0x3a40c4e099475857 programHash=0xf20fd89618dd0dc5; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0x7f5d6d38463579e2 vertexInputHash=0x8593abcf0503abf2 stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=1 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=0 depthWrite=0 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=2 attributeCount=2
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=3576 bytes=14304 hash=0x5458d29e69686747
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=7709 bytes=30836 hash=0x96c50928c0b94a07
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f8a12d0 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f8bda70 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=0 colorWriteMask=0x7 srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=0 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0xc1e02805d7c8f897 programHash=0x7f5d6d38463579e2; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0x733247df7346812c vertexInputHash=0x8593abcf0503abf2 stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=1 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=0 depthWrite=0 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=2 attributeCount=2
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=14390 bytes=57560 hash=0xbe0284b61fc1ce83
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=41374 bytes=165496 hash=0x4fb01f676f2f4152
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f892570 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f8b4830 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=0 colorWriteMask=0xf srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=0 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0x92d6883871214bff programHash=0x733247df7346812c; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0xfd859c3c16240e5a vertexInputHash=0x8593abcf0503abf2 stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=2 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=0 depthWrite=0 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=2 attributeCount=2
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=5208 bytes=20832 hash=0xebf1c9b5309a34da
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=54861 bytes=219444 hash=0x7494802520217e0c
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f8b7410 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f896c50 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=0 colorWriteMask=0x7 srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=0 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[1]: blend=0 colorWriteMask=0xf srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=0 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0x51c8345111745534 programHash=0xfd859c3c16240e5a; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0xf25a0f918681264f vertexInputHash=0x11196d7a2e83ae58 stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=2 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=1 depthWrite=1 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=7 attributeCount=7
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=7392 bytes=29568 hash=0xd75fb889f88f52de
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=41701 bytes=166804 hash=0x146fbc0bffc96087
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f8c36b0 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f8c40d0 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=0 colorWriteMask=0xf srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=7 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[1]: blend=1 colorWriteMask=0xf srcColor=1 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=7 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0xb7f37a15d3bc9ed8 programHash=0xf25a0f918681264f; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0xf25a0f918681264f vertexInputHash=0x11196d7a2e83ae58 stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=2 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=1 depthWrite=1 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=7 attributeCount=7
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=7392 bytes=29568 hash=0xd75fb889f88f52de
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=41701 bytes=166804 hash=0x146fbc0bffc96087
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f8c36b0 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f8c40d0 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=0 colorWriteMask=0xf srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=7 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[1]: blend=1 colorWriteMask=0xf srcColor=1 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=7 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0xb7f37a15d3bc9ed8 programHash=0xf25a0f918681264f; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0xf25a0f918681264f vertexInputHash=0x11196d7a2e83ae58 stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=2 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=1 depthWrite=1 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=7 attributeCount=7
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=7392 bytes=29568 hash=0xd75fb889f88f52de
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=41701 bytes=166804 hash=0x146fbc0bffc96087
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f8c36b0 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f8c40d0 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=0 colorWriteMask=0xf srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=7 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[1]: blend=1 colorWriteMask=0xf srcColor=1 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=7 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0xb7f37a15d3bc9ed8 programHash=0xf25a0f918681264f; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0xecb48583183184c4 vertexInputHash=0x45bac5451f4652eb stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=1 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=1 depthWrite=1 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=6 attributeCount=6
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=5326 bytes=21304 hash=0xc7f8e37029f4b758
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=32856 bytes=131424 hash=0x4e67f88470e25619
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f8ae890 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f8bc750 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=1 colorWriteMask=0xf srcColor=1 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=7 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0xfaab5db7c91ee477 programHash=0xecb48583183184c4; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0xecb48583183184c4 vertexInputHash=0x45bac5451f4652eb stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=1 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=1 depthWrite=1 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=6 attributeCount=6
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=5326 bytes=21304 hash=0xc7f8e37029f4b758
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=32856 bytes=131424 hash=0x4e67f88470e25619
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f8ae890 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f8bc750 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=1 colorWriteMask=0xf srcColor=1 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=7 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0xfaab5db7c91ee477 programHash=0xecb48583183184c4; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0xf20fd89618dd0dc5 vertexInputHash=0x8593abcf0503abf2 stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=2 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=0 depthWrite=0 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=2 attributeCount=2
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=3515 bytes=14060 hash=0x8b26b076eac6df4e
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=9338 bytes=37352 hash=0xc68df9e35c0ddbd9
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f899830 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f89da90 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=0 colorWriteMask=0xf srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=0 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[1]: blend=0 colorWriteMask=0x7 srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=0 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0x3a40c4e099475857 programHash=0xf20fd89618dd0dc5; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline failed: result=VK_ERROR_UNKNOWN (-13) programHash=0x7f5d6d38463579e2 vertexInputHash=0x8593abcf0503abf2 stageCount=2 topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST(3) colorAttachmentCount=1 samples=VK_SAMPLE_COUNT_1_BIT(1) subpass=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline state: cullMode=VK_CULL_MODE_BACK_BIT(0x2) frontFace=1 depthTest=0 depthWrite=0 depthCompare=VK_COMPARE_OP_LESS_OR_EQUAL(3) depthBias=0 rasterizerDiscard=0 stencilTest=0 logicOpEnable=0 logicOp=VK_LOGIC_OP_COPY(3)
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline vertex input: bindingCount=2 attributeCount=2
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[0]: stage=0x1 words=3576 bytes=14304 hash=0x5458d29e69686747
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline spirv[1]: stage=0x10 words=7709 bytes=30836 hash=0x96c50928c0b94a07
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[0]: stage=0x1 module=0xb40000760f8a12d0 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/INFO]: PipelineFactory::CreatePipeline stage[1]: stage=0x10 module=0xb40000760f8bda70 entry=main specialization=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: PipelineFactory::CreatePipeline colorAttachment[0]: blend=0 colorWriteMask=0x7 srcColor=6 dstColor=7 colorOp=0 srcAlpha=1 dstAlpha=0 alphaOp=0
+[02:19:02] [Android MobileGLTraceRe/FATAL]: vkCreateGraphicsPipelines
+[02:19:02] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_UNKNOWN (-13) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp:660
+[02:19:02] [Android MobileGLTraceRe/ERROR]: PipelineFactory::GetOrCreatePipeline: creation failed for hash=0xc1e02805d7c8f897 programHash=0x7f5d6d38463579e2; not caching the failure
+[02:19:02] [Android MobileGLTraceRe/WARN]: DirectVulkan::ReadPixels: no write is recorded for swapchain image 7 of the default framebuffer; the readback returns its raw pixels
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world\trace.trace: 1 file pushed, 0 skipped. 24.5 MB/s (30008874 bytes in 1.166s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world.0000145353.png: 1 file pushed, 0 skipped. 13.4 MB/s (713152 bytes in 0.051s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world.0000145353-android-angle.png: 1 file pushed, 0 skipped. 22.8 MB/s (750528 bytes in 0.031s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.996789, ssimThreshold=0.990000, mismatchPixels=397107, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": ["/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/alternate-golden.png"],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 145353,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.996789335,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 397107
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.1-neoforge-create-indirect-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.1-neoforge-create-indirect-in-world\trace.trace: 1 file pushed, 0 skipped. 17.2 MB/s (7392453 bytes in 0.410s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.1-neoforge-create-indirect-in-world.0000504631.png: 1 file pushed, 0 skipped. 20.6 MB/s (280527 bytes in 0.013s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": false,
+  "statusCode": 6,
+  "message": "retrace completed; ssim=0.000005, ssimThreshold=0.990000, mismatchPixels=408398, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.1-neoforge-create-indirect-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 504631,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.000004874,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 408398
+}
+trace-replay-ci.sh: tail of retrace.log:
+/opt/Java/jdk-21/bin/java
+trace-replay-ci.sh: tail of mobilegl.log:
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_shader_stencil_export (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_calibrated_timestamps (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_external_memory_fd (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_QCOM_render_pass_shader_resolve (r.4)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_maintenance1 (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_maintenance2 (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_maintenance3 (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_maintenance4 (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_maintenance5 (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_maintenance6 (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_separate_depth_stencil_layouts (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_image_robustness (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_calibrated_timestamps (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_buffer_device_address (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_extended_dynamic_state (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_queue_family_foreign (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_quad_control (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_image_view_min_lod (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_ANDROID_external_format_resolve (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_QCOM_ycbcr_degamma (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_bind_memory2 (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_pipeline_protected_access (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_external_semaphore (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_terminate_invocation (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_QCOM_fragment_density_map_offset (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_scalar_block_layout (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_map_memory2 (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_load_store_op_none (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_load_store_op_none (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_maximal_reconvergence (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_sampler_ycbcr_conversion (r.14)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_vertex_attribute_divisor (r.3)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_variable_pointers (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_QCOM_multiview_per_view_viewports (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_ray_query (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_primitives_generated_query (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_push_descriptor (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_timeline_semaphore (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_device_memory_report (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_subgroup_rotate (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_imageless_framebuffer (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_device_group (r.4)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_device_fault (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_relaxed_block_layout (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_expect_assume (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_atomic_int64 (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_external_fence (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_non_semantic_info (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_shader_atomic_float (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_custom_border_color (r.12)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_host_query_reset (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_index_type_uint8 (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_multiview (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_storage_buffer_storage_class (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_fragment_density_map2 (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_QCOM_filter_cubic_weights (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_workgroup_memory_explicit_layout (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_QCOM_rotated_copy_commands (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_subgroup_extended_types (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_external_memory_acquire_unmodified (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_private_data (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_descriptor_buffer (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_conditional_rendering (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_mutable_descriptor_type (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_pipeline_creation_cache_control (r.3)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_robustness2 (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_clock (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_shader_module_identifier (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_vertex_attribute_divisor (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_global_priority_query (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_separate_stencil_usage (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_border_color_swizzle (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_vertex_input_dynamic_state (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_IMG_filter_cubic (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_filter_cubic (r.3)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_shader_subgroup_vote (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_device_address_binding_report (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_NV_optical_flow (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_QCOM_tile_properties (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_image_format_list (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_sampler_filter_minmax (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_16bit_storage (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_shader_viewport_index_layer (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_pipeline_executable_properties (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_shader_demote_to_helper_invocation (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_color_write_enable (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_dynamic_rendering_local_read (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_QCOM_render_pass_transform (r.4)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_create_renderpass2 (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_shader_image_atomic_int64 (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_acceleration_structure (r.13)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_depth_clip_control (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_transform_feedback (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_blend_operation_advanced (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_provoking_vertex (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_8bit_storage (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_QCOM_multiview_per_view_render_areas (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_inline_uniform_block (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_shader_subgroup_ballot (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_depth_stencil_resolve (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_float_controls (r.4)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_texture_compression_astc_hdr (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_global_priority (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_4444_formats (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_draw_parameters (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_vulkan_memory_model (r.3)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_descriptor_indexing (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_depth_clip_enable (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_synchronization2 (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_integer_dot_product (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_line_rasterization (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_line_rasterization (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_QCOM_image_processing (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_float_controls2 (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_fragment_shading_rate (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_descriptor_update_template (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_draw_indirect_count (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_driver_properties (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_ray_tracing_position_fetch (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_dynamic_rendering (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_zero_initialize_workgroup_memory (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_uniform_buffer_standard_layout (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_depth_clamp_zero_one (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_ANDROID_external_memory_android_hardware_buffer (r.5)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_image_2d_view_of_3d (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_extended_dynamic_state2 (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_dedicated_allocation (r.3)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_texel_buffer_alignment (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_primitive_topology_list_restart (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_rasterization_order_attachment_access (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_shader_subgroup_uniform_control_flow (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_tooling_info (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_format_feature_flags2 (r.2)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_global_priority (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_sample_locations (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_EXT_multi_draw (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_swapchain (r.70)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_sampler_mirror_clamp_to_edge (r.3)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_QCOM_image_processing2 (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]:     VK_KHR_external_fence_fd (r.1)
+[02:19:37] [Android MobileGLTraceRe/INFO]: Required extension found: VK_KHR_swapchain
+[02:19:37] [Android MobileGLTraceRe/INFO]:     Picked physical device. (Reason: First suitable device)
+[02:19:37] [Android MobileGLTraceRe/INFO]: Picked physical device 0.
+[02:19:37] [Android MobileGLTraceRe/INFO]: Vulkan: multiViewport enabled; rasterizable viewports=16 (device limit 16, GL state width 16)
+[02:19:37] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_KHR_draw_indirect_count
+[02:19:37] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_KHR_shader_draw_parameters
+[02:19:37] [Android MobileGLTraceRe/INFO]: VK_KHR_image_format_list enabled: true
+[02:19:37] [Android MobileGLTraceRe/INFO]: VK_KHR_draw_indirect_count enabled: true
+[02:19:37] [Android MobileGLTraceRe/INFO]: Vulkan: update-after-bind descriptor layouts enabled
+[02:19:37] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_KHR_index_type_uint8
+[02:19:37] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_EXT_primitive_topology_list_restart
+[02:19:37] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_EXT_custom_border_color (maxCustomBorderColorSamplers=4000)
+[02:19:37] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_EXT_subgroup_size_control (computeFullSubgroups)
+[02:19:37] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_EXT_transform_feedback
+[02:19:37] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_EXT_provoking_vertex (transformFeedbackPreservesProvokingVertex=false)
+[02:19:37] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_EXT_vertex_attribute_divisor
+[02:19:37] [Android MobileGLTraceRe/INFO]: Enabled optional device extension: VK_EXT_multi_draw (maxMultiDrawCount=1024)
+[02:19:37] [Android MobileGLTraceRe/INFO]: Device feature support: robustBufferAccess=true geometryShader=true independentBlend=true logicOp=true shaderClipDistance=true shaderCullDistance=true wideLines=true shaderInt64=true vertexStoresAtomics=true fragmentStoresAtomics=true storageImageExtendedFormats=true storageImageReadWithoutFormat=true storageImageWriteWithoutFormat=true drawIndirectFirstInstance=true multiDrawIndirect=true
+[02:19:37] [Android MobileGLTraceRe/INFO]: Device feature enabled: robustBufferAccess=true geometryShader=true independentBlend=true logicOp=true shaderClipDistance=true shaderCullDistance=true wideLines=true shaderInt64=true vertexStoresAtomics=true fragmentStoresAtomics=true storageImageExtendedFormats=true storageImageReadWithoutFormat=true storageImageWriteWithoutFormat=true drawIndirectFirstInstance=true multiDrawIndirect=true shaderDrawParameters=true
+[02:19:37] [Android MobileGLTraceRe/INFO]: Multi-draw dispatch tier: ext (VK_EXT_multi_draw=true, multiDrawIndirect=true, mode=auto)
+[02:19:37] [Android MobileGLTraceRe/INFO]: index type uint8 enabled: true
+[02:19:37] [Android MobileGLTraceRe/INFO]: Logical device created.
+[02:19:37] [Android MobileGLTraceRe/INFO]: Queues got successfully.
+[02:19:37] [Android MobileGLTraceRe/INFO]: Timer queries supported (timestampValidBits=48, timestampPeriod=52.083332 ns/tick)
+[02:19:37] [Android MobileGLTraceRe/INFO]: PRIMITIVES_GENERATED probe triangles: drawn=1 stream=0/1 pgq=0(0) stat=1(1)
+[02:19:37] [Android MobileGLTraceRe/INFO]: PRIMITIVES_GENERATED probe triangles+discard: drawn=1 stream=0/1 pgq=0(0) stat=0(1)
+[02:19:37] [Android MobileGLTraceRe/INFO]: PRIMITIVES_GENERATED probe patches+discard: drawn=1 stream=0/1 pgq=0(0) stat=0(1)
+[02:19:37] [Android MobileGLTraceRe/INFO]: PRIMITIVES_GENERATED for XFB-inactive draws will accumulate through a clipping-invocations pipeline-statistics pool
+[02:19:37] [Android MobileGLTraceRe/INFO]: Command pool created
+[02:19:37] [Android MobileGLTraceRe/INFO]: MaxFramesInFlight: configured request=3
+[02:19:37] [Android MobileGLTraceRe/INFO]: MaxFramesInFlight: using 3 (surface minImageCount=11, maxImageCount=64)
+[02:19:37] [Android MobileGLTraceRe/INFO]: CreateFrameContexts completed
+[02:19:37] [Android MobileGLTraceRe/INFO]: DirectVulkan: using 256 program descriptor bindings
+[02:19:37] [Android MobileGLTraceRe/INFO]: Got 5 surface formats:
+[02:19:37] [Android MobileGLTraceRe/INFO]: Picked surface format: [VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR]
+[02:19:37] [Android MobileGLTraceRe/INFO]: Got 4 present modes:
+[02:19:37] [Android MobileGLTraceRe/INFO]: Picked present mode: VK_PRESENT_MODE_MAILBOX_KHR
+[02:19:37] [Android MobileGLTraceRe/INFO]: Set minImageCount = 11
+[02:19:37] [Android MobileGLTraceRe/INFO]: Swapchain currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+[02:19:37] [Android MobileGLTraceRe/INFO]: Swapchain imageUsage = 0x13 (supportedUsageFlags = 0x9f)
+[02:19:37] [Android MobileGLTraceRe/INFO]: Set swapchain preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+[02:19:37] [Android MobileGLTraceRe/INFO]: Swapchain image views created
+[02:19:37] [Android MobileGLTraceRe/INFO]: Swapchain created, extent = 854x480, swapchain imageCount = 11
+[02:19:37] [Android MobileGLTraceRe/INFO]: DirectVulkan: suppressing depth writes on accumulation-blended pipelines (driver lacks cross-pipeline position invariance)
+[02:19:37] [Android MobileGLTraceRe/INFO]: Vulkan shader subgroup support: detected=true advertised=true size=64 stages=0x30 operations=0x2bf
+[02:19:37] [Android MobileGLTraceRe/INFO]: DirectVulkan: clamped GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS from 16777216 to 256
+[02:19:37] [Android MobileGLTraceRe/INFO]: DirectVulkan: clamped GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS from 16777216 to 256
+[02:19:37] [Android MobileGLTraceRe/INFO]: DirectVulkan: clamped GL_MAX_COMPUTE_UNIFORM_BLOCKS from 16777216 to 256
+[02:19:37] [Android MobileGLTraceRe/INFO]: DirectVulkan: clamped GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS from 16777216 to 256
+[02:19:37] [Android MobileGLTraceRe/INFO]: DirectVulkan: clamped GL_MAX_UNIFORM_BUFFER_BINDINGS from 16777216 to 256
+[02:19:37] [Android MobileGLTraceRe/INFO]: DirectVulkan: clamped GL_MAX_SHADER_STORAGE_BLOCK_SIZE from 2147483647 to 536870912
+[02:19:37] [Android MobileGLTraceRe/WARN]: Stub function: glDebugMessageControl(...)
+[02:19:38] [Android MobileGLTraceRe/WARN]: ResolveSamplerDescriptor: using fallback texture for unbound sampler binding=1 ('tex') location=2 unit=0 target=1
+[02:19:38] [Android MobileGLTraceRe/WARN]: GetOrCreateRenderPass: depth/stencil attachment id=5 starts with undefined layout and partial/no clear; using DONT_CARE for uncleared aspects
+[02:19:38] [Android MobileGLTraceRe/WARN]: GetOrCreatePipeline: patching vertex input location=3 format=82 -> 80 to match shader input type=35664 for program=34
+[02:19:38] [Android MobileGLTraceRe/WARN]: ResolveSamplerDescriptor: framebuffer feedback loop detected: textureId=5 is bound for sampling at binding=0, but is also attached to drawFbo=2 as Depth (level=0, trackedLayout=3)
+[02:19:43] [Android MobileGLTraceRe/WARN]: DirectVulkan::ReadPixels: no write is recorded for swapchain image 1 of the default framebuffer; the readback returns its raw pixels
+[02:19:43] [Android MobileGLTraceRe/FATAL]: vkQueueSubmit(texture upload batch)
+[02:19:43] [Android MobileGLTraceRe/FATAL]: Vulkan error VK_ERROR_DEVICE_LOST (-4) at /home/swung/w7/pipe/MobileGL/MG_Backend/DirectVulkan/Renderer/VkTextureManager.cpp:3624
+[02:19:43] [Android MobileGLTraceRe/ERROR]: SubmitPendingCommandBuffer: vkQueueSubmit returned -4
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.1-neoforge-create-indirect-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.1-neoforge-create-indirect-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.1-neoforge-create-instancing-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.1-neoforge-create-instancing-in-world\trace.trace: 1 file pushed, 0 skipped. 16.2 MB/s (7713946 bytes in 0.454s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.1-neoforge-create-instancing-in-world.0000530333.png: 1 file pushed, 0 skipped. 9.0 MB/s (280621 bytes in 0.030s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999984, ssimThreshold=0.990000, mismatchPixels=48428, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.1-neoforge-create-instancing-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 530333,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999983725,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 48428
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.1-neoforge-create-instancing-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.1-neoforge-create-instancing-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: improved-transparency-minecraft-26.3 / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\improved-transparency-minecraft-26.3\trace.trace: 1 file pushed, 0 skipped. 17.9 MB/s (14404890 bytes in 0.769s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\improved-transparency-minecraft-26.3.0002667619.png: 1 file pushed, 0 skipped. 24.0 MB/s (368306 bytes in 0.015s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999600, ssimThreshold=0.995000, mismatchPixels=73242, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/improved-transparency-minecraft-26.3-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 2667619,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999600026,
+  "ssimThreshold": 0.995000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 73242
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/improved-transparency-minecraft-26.3-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\improved-transparency-minecraft-26.3-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-iterationrp-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-iterationrp-in-world\trace.trace: 1 file pushed, 0 skipped. 19.8 MB/s (23003299 bytes in 1.108s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-iterationrp-in-world.0000202020.png: 1 file pushed, 0 skipped. 28.4 MB/s (603392 bytes in 0.020s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999258, ssimThreshold=0.980000, mismatchPixels=246544, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-iterationrp-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 202020,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999257641,
+  "ssimThreshold": 0.980000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 246544
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-iterationrp-in-world-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-iterationrp-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-bsl-esc-menu-854 / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-bsl-esc-menu-854\trace.trace: 1 file pushed, 0 skipped. 16.5 MB/s (7409935 bytes in 0.428s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-bsl-esc-menu-854.0001303534.png: 1 file pushed, 0 skipped. 107.0 MB/s (227372 bytes in 0.002s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999792, ssimThreshold=0.990000, mismatchPixels=292913, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 1303534,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999791667,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 292913
+}
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")
+                                         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg/.trace-work/android-retrace-result/minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-DirectVulkan/result.json'
+archived repeat 1 to .trace-work\p7w1\E0a-monolith\minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
