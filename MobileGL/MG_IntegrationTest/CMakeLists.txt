@@ -2706,6 +2706,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             F1WireScenario.UniformBufferRangeAndRebindPixels
             F1WireScenario.ShortUniformBufferRangePadsMissingBytes
             F1WireScenario.SubWordUniformBufferRangePadsMissingBytes
+            F1WireScenario.UnalignedAtomicCounterRangeDeclinesAndTheSessionLives
             F1WireScenario.ComputeWrittenVertexAndIndexBuffersDrawAndReadBack
             F1WireScenario.ColorBlitToDefaultIgnoresViewportAndPreservesOrientation
             F1WireScenario.ColorBlitToDefaultHonorsScissorAndReversedRect

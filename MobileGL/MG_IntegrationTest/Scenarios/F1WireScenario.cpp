@@ -1055,6 +1055,65 @@ void main() { color = vec4(0, 1, 0, 1); }
     glDeleteProgram(graphics);
 }
 
+TEST_F(F1WireScenario, UnalignedAtomicCounterRangeDeclinesAndTheSessionLives) {
+    if (!Ready()) return;
+    // The one shape in the P7 unaligned-range cluster an application can actually reach.
+    // GL 4.6 core 6.1.1 gives GL_ATOMIC_COUNTER_BUFFER no queryable offset alignment, so
+    // glBindBufferRange only enforces offset % 4 on it, while glslang lowers the counter
+    // block onto a storage buffer whose descriptor offset must be a multiple of
+    // GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT (minStorageBufferOffsetAlignment: 16 on
+    // lavapipe, 64 on Adreno). Offset 4 is therefore a legal bind the backend cannot
+    // express. It used to take the session with it as a named Fatal; it is now a decline,
+    // and what this case pins is exactly that - the dispatch is lost, nothing else is.
+    if (Gl().BackendName() != "DirectVulkan") GTEST_SKIP() << "Magma descriptor-alignment decline";
+    GLint storageAlignment = 0;
+    glGetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &storageAlignment);
+    if (storageAlignment <= 4) GTEST_SKIP() << "this device can express a 4-byte-aligned counter range";
+    const char* compute = R"(#version 430 core
+layout(local_size_x=1) in;
+layout(binding=0, offset=0) uniform atomic_uint counter;
+void main() { atomicCounterIncrement(counter); }
+)";
+    const GLuint cs = BuildWireProgram({{GL_COMPUTE_SHADER, compute}});
+    ASSERT_NE(cs, 0u);
+    GLuint counters = 0;
+    glGenBuffers(1, &counters);
+    const std::array<GLuint, 4> seed{0x11111111u, 0x22222222u, 0x33333333u, 0x44444444u};
+    glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, counters);
+    glBufferData(GL_ATOMIC_COUNTER_BUFFER, GLsizeiptr(seed.size() * sizeof(GLuint)), seed.data(), GL_DYNAMIC_COPY);
+    // Offset 4: a multiple of 4 and so a legal GL bind, but not a multiple of the storage
+    // alignment this device reports. The bind itself must NOT raise a GL error.
+    glBindBufferRange(GL_ATOMIC_COUNTER_BUFFER, 0, counters, GLintptr(4), GLsizeiptr(sizeof(GLuint)));
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "offset 4 is a legal GL_ATOMIC_COUNTER_BUFFER range";
+    glUseProgram(cs);
+    glDispatchCompute(1, 1, 1);
+    glMemoryBarrier(GL_ATOMIC_COUNTER_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+    // The session is still here - this is the whole point - and it still answers GL.
+    std::array<GLuint, 4> after{};
+    glGetBufferSubData(GL_ATOMIC_COUNTER_BUFFER, 0, GLsizeiptr(after.size() * sizeof(GLuint)), after.data());
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the declined dispatch must not poison the context";
+    // The dispatch was declined, so the counter is untouched; the bytes outside the bound
+    // range must be untouched either way. Both halves of that are worth pinning: a future
+    // copy-back implementation turns the first EXPECT into seed[1] + 1 and nothing else.
+    EXPECT_EQ(after[1], seed[1]) << "a declined counter dispatch must not have run";
+    EXPECT_EQ(after[0], seed[0]);
+    EXPECT_EQ(after[2], seed[2]);
+    EXPECT_EQ(after[3], seed[3]);
+    // And the context is still usable for ordinary work afterwards.
+    GLuint probe = 0;
+    glGenBuffers(1, &probe);
+    glBindBuffer(GL_ARRAY_BUFFER, probe);
+    glBufferData(GL_ARRAY_BUFFER, 16, seed.data(), GL_STATIC_DRAW);
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the session survived the decline";
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glDeleteBuffers(1, &probe);
+    glBindBufferBase(GL_ATOMIC_COUNTER_BUFFER, 0, 0);
+    glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, 0);
+    glUseProgram(0);
+    glDeleteBuffers(1, &counters);
+    glDeleteProgram(cs);
+}
+
 TEST_F(F1WireScenario, SrgbDrawTracksFramebufferConversion) {
     if (!Ready()) return;
     Attach(GL_SRGB8_ALPHA8);

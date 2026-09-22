@@ -1160,9 +1160,32 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (texelSize == 0 || !ResolveWireRange(record.Desc.BufOffset, record.Desc.BufSize, slice.size, start, size)) return false;
         size = std::min(size / texelSize, static_cast<VkDeviceSize>(m_wireMaxTexelElements)) * texelSize;
         if (size == 0) return false;
-        if (start > std::numeric_limits<VkDeviceSize>::max() - slice.offset ||
-            (slice.offset + start) % m_wireTexelOffsetAlignment != 0)
-            WireDescriptorFatal("unaligned-texel-buffer-range@P7");
+        if (start > std::numeric_limits<VkDeviceSize>::max() - slice.offset)
+            WireDescriptorFatal("texel-buffer-offset-overflow");
+        if ((slice.offset + start) % m_wireTexelOffsetAlignment != 0) {
+            // P7 A.4, a named decline (rule I (a)). Not reachable through the public API:
+            // glTexBufferRange already refuses an offset that is not a multiple of
+            // GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT (GL_Texture.cpp), and that cap is published
+            // from this same minTexelBufferOffsetAlignment. It stays a decline rather than a
+            // copy for the reason below.
+            const Bool writable = storage && state.BoundShaderImages[unit].Access != kMGPipeImageAccessReadOnly;
+            MGLOG_E_ONCE("ResolveWireTexelBufferDescriptor: binding %u is bound at offset %llu, which is not a "
+                         "multiple of this device's minTexelBufferOffsetAlignment (%llu); the %s view is DECLINED "
+                         "(unaligned-texel-buffer-range)", binding,
+                         static_cast<unsigned long long>(slice.offset + start),
+                         static_cast<unsigned long long>(m_wireTexelOffsetAlignment),
+                         writable ? "writable" : "read-only");
+            // A read-only fetch can still be served the way an unbound buffer texture is -
+            // zeros, which is what a missing view gives in monolith - and that keeps the draw.
+            // A writable imageBuffer must not: the placeholder is shared by every unbound
+            // binding, so absorbing real stores into it would alias other bindings AND lose
+            // the application's writes without a word. Copying into an aligned transient slice
+            // is not the answer either: the transient arena carries no
+            // {UNIFORM,STORAGE}_TEXEL_BUFFER usage (VkBufferManager::InitializeTransientArenas),
+            // so no VkBufferView can be made over it, and widening a shared per-frame
+            // allocation to buy an unreachable path is the wrong trade. See notes/p7/magma-a.md.
+            return writable ? false : placeholder();
+        }
         VkBufferViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO};
         viewInfo.buffer = slice.buffer;
         viewInfo.format = format;
@@ -1550,10 +1573,43 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (!m_bufferManager->AcquireWireSlice(BufferKind::ShaderStorage, range.Res, slice) || !slice.IsValid()) return false;
             VkDeviceSize start = 0, size = 0;
             if (!ResolveWireRange(range.Offset, range.Size, slice.size, start, size)) return false;
-            if (start > std::numeric_limits<VkDeviceSize>::max() - slice.offset ||
-                (slice.offset + start) % m_wireStorageOffsetAlignment != 0)
-                WireDescriptorFatal(isAtomicCounterBlock ? "unaligned-atomic-buffer-range@P7"
-                                                         : "unaligned-storage-buffer-range@P7");
+            if (start > std::numeric_limits<VkDeviceSize>::max() - slice.offset)
+                WireDescriptorFatal("storage-buffer-offset-overflow");
+            if ((slice.offset + start) % m_wireStorageOffsetAlignment != 0) {
+                // P7 A.4, a named decline (rule I (a)), and the one shape in this cluster an
+                // application can actually reach. GL has no queryable atomic-counter buffer
+                // offset alignment, so glBindBufferRange only enforces offset % 4 for
+                // GL_ATOMIC_COUNTER_BUFFER (GL 4.6 core 6.1.1, GL_Buffer.cpp
+                // ValidateBufferRangeOffsetAndSize); glslang lowers the counter block onto a
+                // storage buffer, whose descriptor offset must be a multiple of
+                // minStorageBufferOffsetAlignment - 16 on lavapipe, 64 on Adreno. Offset 4 is
+                // therefore a legal bind this backend cannot express. The plain SSBO half is
+                // unreachable by comparison: GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT is
+                // published from that same Vulkan limit, so the frontend already refused it
+                // with GL_INVALID_VALUE.
+                //
+                // DECLINED RATHER THAN COPIED, deliberately. Copying the window into an aligned
+                // transient slice reads correctly and then silently DROPS every shader write,
+                // and this site cannot tell a writable block from a read-only one: there is no
+                // readonly bit in the storage-block reflection (ProgramFactory.h carries only
+                // name and index), an atomic counter is written by definition, and
+                // MarkWireBufferGpuWritten below already assumes any binding here may be
+                // written. A correct copy needs a post-dispatch copy-back from the transient
+                // slice to the unaligned source, ordered with a barrier - and the place to
+                // record that is the draw/dispatch tail in VulkanRenderer.cpp / WireDraw.inc,
+                // which belong to wave-2 packages B and C, not to this file. Losing the
+                // dispatch with a named line in the role log beats returning stale counters
+                // with no error at all. notes/p7/magma-a.md carries the recipe.
+                MGLOG_E_ONCE("ResolveStorageBufferDescriptor: block '%s' is bound at offset %llu, which is not a "
+                             "multiple of this device's minStorageBufferOffsetAlignment (%llu); %s ranges cannot be "
+                             "expressed as a descriptor and the shader's writes would be dropped by a read-only "
+                             "copy, so the binding is DECLINED (unaligned-%s-buffer-range)",
+                             blockName.c_str(), static_cast<unsigned long long>(slice.offset + start),
+                             static_cast<unsigned long long>(m_wireStorageOffsetAlignment),
+                             isAtomicCounterBlock ? "atomic-counter" : "shader-storage",
+                             isAtomicCounterBlock ? "atomic" : "storage");
+                return false;
+            }
             if (size > m_wireMaxStorageRange) {
                 // P7 A.3: clamp, do not refuse. The monolith arm binds whatever the GL range
                 // asked for and never consults maxStorageBufferRange at all (see the resident
