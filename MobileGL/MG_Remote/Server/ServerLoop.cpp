@@ -343,6 +343,10 @@ namespace MobileGL::MG_Remote::Server {
         // declaration: it is an identity, not a handshake, and this thread is the only writer.
         Detail::g_applyThreadKey.store(Detail::CurrentThreadKey(), std::memory_order_relaxed);
         NameThisThread("mgl-srv-apply");
+        // P6: THIS THREAD IS THE SERVER, and saying so is what sends its lines to the server's
+        // own log. Under spawn the process role already answers this; under INPROC it is the
+        // only thing that can, because the client role is another thread of this same process.
+        MG_Util::Debug::SetThreadLogRole(MG_Util::Debug::LogRole::Server);
 
         Bool recognised = true;
         const char* raw = AffinityStringFromConfig();

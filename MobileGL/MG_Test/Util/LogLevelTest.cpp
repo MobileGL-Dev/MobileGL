@@ -198,6 +198,13 @@ int main(int argc, char** argv) {
 #else
     setenv("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str(), 1);
 #endif
+    // P6: the sink writes one file per role and the env is a BASE NAME. This suite emits on the
+    // main thread (client role), so the read path is the client-derived one; a pull build has
+    // no split and keeps the base. The env keeps the base either way.
+#if MOBILEGL_BUILD_DISAGGREGATED
+    g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(),
+                                                      MobileGL::MG_Util::Debug::LogRole::Client);
+#endif
 
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

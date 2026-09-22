@@ -183,7 +183,12 @@ write_junit() {
 }
 
 # Model the library file sink separately from ctest stdout (ID-53).
-log="${CONTROL_TMPDIR}/entry.log"
+#
+# P6: the real sink writes one file per ROLE, `<base>.client.log` / `<base>.server.log`, and the
+# validator derives those from the ENV base. So the manifest below keeps the base names (what the
+# lane sets) while the on-disk writes here land in the CLIENT file - which is the role that raises
+# these markers in a real run.
+log="${CONTROL_TMPDIR}/entry.client.log"
 if [ "${json_requested:-0}" = 1 ]; then
   python3 -c 'import json, os; p=os.environ["CONTROL_TMPDIR"]; entries=[("ClearThenReadPixelsScenario.ClearWithNoDrawIsVisibleToDefaultFramebufferReadPixels", "entry.log"), ("PersistentCoherentMapScenario.TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw", "pmap.log")]; entries += [("TriangleScenario.SecondEntry", "second.log")] if os.environ["STUB_MODE"] == "partial-fatal" else []; print(json.dumps({"tests": [{"name": "DirectGLES.Split."+n, "properties": [{"name": "LABELS", "value": ["integration-split"]}, {"name": "ENVIRONMENT", "value": ["MOBILEGL_LOG_FILE_PATH="+p+"/"+f]}]} for n,f in entries]}))'
   if [ "${mode}" = stale-fatal ]; then
@@ -221,7 +226,7 @@ fi
 # the pixel assertion arrives, the library says nothing, and the control must refuse the red.
 if [ "${MOBILEGL_IPC_PERSISTENT_BLOCK_KB:-64}" = 0 ] && [ "${mode}" = evidence ]; then
   echo 'MGPipe: persistent-map push disabled - MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0 is exit gate E3(a)'"'"'s NEGATIVE CONTROL' \
-    > "${CONTROL_TMPDIR}/pmap.log"
+    > "${CONTROL_TMPDIR}/pmap.client.log"
 fi
 case "${mode}" in
   e3-skipped-selection)

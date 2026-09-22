@@ -31,12 +31,15 @@ class ResultAccountingTest(unittest.TestCase):
         self.temp.cleanup()
 
     def discovery(self, names):
+        # P6: the ENV path is a BASE NAME and the library writes <base>.client.log /
+        # <base>.server.log. The fixture writes the CLIENT role file - what a real run leaves on
+        # disk - while the XML carries the base, exactly as the lane does.
         tests = []
         for i, name in enumerate(names):
-            log = self.root / (str(i) + ".log")
-            log.write_text("")
+            base = self.root / (str(i) + ".log")
+            (self.root / (str(i) + ".client.log")).write_text("")
             tests.append({"name": name, "properties": [{"name": "ENVIRONMENT", "value": [
-                "MOBILEGL_LOG_FILE_PATH=" + str(log)]}]})
+                "MOBILEGL_LOG_FILE_PATH=" + str(base)]}]})
         return {"tests": tests}
 
     def results(self, rows):
@@ -97,7 +100,7 @@ class ResultAccountingTest(unittest.TestCase):
     def test_admitted_or_fatal_on_passed_case_is_not_hidden(self):
         for marker in ['Admitted{UnmigratedPipeInput, "GetProgramObject@Clear"}',
                        'Fatal{UnmigratedPipeInput, "GetProgramObject@Clear"}']:
-            (self.root / "0.log").write_text(marker)
+            (self.root / "0.client.log").write_text(marker)
             with self.assertRaises(ValueError):
                 self.census()
 

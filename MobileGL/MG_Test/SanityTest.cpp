@@ -2113,7 +2113,16 @@ TEST(LogSanity, UsesEnvOverrideForFilePath) {
     UnsetEnvVar("MOBILEGL_LOG_FILE_PATH");
 
     {
-        std::ifstream logFile(logPath);
+        // P6: the sink writes ONE FILE PER ROLE, so the base name is not itself a file. This
+        // process logs on the main thread - the client role - so the line landed in the
+        // client-derived path. In a pull build there is no split and the base IS the file.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const fs::path readPath = MobileGL::MG_Util::Debug::RoleLogPath(
+            logPath.string().c_str(), MobileGL::MG_Util::Debug::LogRole::Client);
+#else
+        const fs::path readPath = logPath;
+#endif
+        std::ifstream logFile(readPath);
         ASSERT_TRUE(logFile.good());
 
         const std::string contents((std::istreambuf_iterator<char>(logFile)), std::istreambuf_iterator<char>());
@@ -2121,6 +2130,10 @@ TEST(LogSanity, UsesEnvOverrideForFilePath) {
     }
 
     fs::remove(logPath);
+#if MOBILEGL_BUILD_DISAGGREGATED
+    fs::remove(MobileGL::MG_Util::Debug::RoleLogPath(
+        logPath.string().c_str(), MobileGL::MG_Util::Debug::LogRole::Client));
+#endif
 }
 
 // ---- Pure-state entry points: glHint / glPointParameter* / glPixelStoref / glGetDoublev -----------
@@ -3549,11 +3562,19 @@ namespace {
         ScopedLogFileRedirect& operator=(const ScopedLogFileRedirect&) = delete;
 
         // Everything written so far. Closes the log first so the last line is on disk.
+        //
+        // P6: BOTH ROLES, because "everything written" now spans two files - the sink writes one
+        // per role - and a caller of a general "give me the log" helper cannot know which role
+        // wrote the line it wants. In a pull build there is no split and m_path is the file.
         std::string Contents() const {
             MobileGL::MG_Util::Debug::Close();
+#if MOBILEGL_BUILD_DISAGGREGATED
+            return MobileGL::MG_Util::Debug::ReadRoleLogs(m_path.string().c_str());
+#else
             std::ifstream logFile(m_path);
             if (!logFile.good()) return {};
             return std::string(std::istreambuf_iterator<char>(logFile), std::istreambuf_iterator<char>());
+#endif
         }
 
     private:

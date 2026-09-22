@@ -71,6 +71,7 @@
 #include <string>
 #include <vector>
 
+#include "../Harness/PipeStatsWindow.h"
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/ScenarioFixture.h"
 
@@ -124,8 +125,9 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
         }
 
         std::string LibraryLogPath() {
-            const char* path = std::getenv("MOBILEGL_LOG_FILE_PATH");
-            return (path != nullptr && *path != '\0') ? std::string(path) : std::string();
+            // P6: the path is a BASE NAME and the library writes one log per role; PipeStatsWindow
+            // derives the suffix, so the rule lives in one place.
+            return MGITest::PipeStatsWindow::LibraryLogPath();
         }
 
         std::string ReadWholeFile(const std::string& path) {

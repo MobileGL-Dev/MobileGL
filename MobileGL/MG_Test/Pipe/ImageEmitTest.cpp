@@ -24,6 +24,7 @@
 // pull and the push trees.
 
 #include <gtest/gtest.h>
+#include <MG_Util/Debug/Log.h>
 
 #include <filesystem>
 #include <fstream>
@@ -698,6 +699,13 @@ int main(int argc, char** argv) {
 #else
     setenv("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str(), 1);
 #endif
+    // P6: MOBILEGL_LOG_FILE_PATH is a BASE NAME and the library writes one file per role. These
+    // cases read the log by OFFSET (a single growing file), and every marker they assert is
+    // raised by the encoder on THIS thread - the client role. So g_logPath, which is the read
+    // path from here on, becomes the client-derived name; the env keeps the base. The rule is
+    // the library's own, not a copy.
+    g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(),
+                                                      MobileGL::MG_Util::Debug::LogRole::Client);
 #if MOBILEGL_PIPE_PUSH
     MobileGL::Initialize();
 #endif

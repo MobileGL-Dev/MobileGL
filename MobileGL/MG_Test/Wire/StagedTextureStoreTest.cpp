@@ -22,6 +22,7 @@
 // staged bytes" a checked fact rather than a design intention.
 
 #include <Config.h>
+#include <MG_Util/Debug/Log.h>
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Remote/Server/StagedTextureStore.h>
@@ -51,9 +52,10 @@ namespace {
     std::string g_logPath;
 
     std::string ReadLog() {
-        std::ifstream in(g_logPath, std::ios::binary);
-        if (!in) return {};
-        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        // BOTH ROLES' LOGS (P6). A death test asserts that the CHILD said something; which
+        // role's thread said it is not what these cases are about, and refusals raised on the
+        // apply thread are written under the SERVER role by construction.
+        return MobileGL::MG_Util::Debug::ReadRoleLogs(g_logPath.c_str());
     }
 
     unsigned ProcessId() {

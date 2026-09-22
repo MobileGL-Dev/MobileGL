@@ -22,6 +22,7 @@
 // comes back through the recording ReplySink on the record's own seq (R-3/R-5).
 
 #include <gtest/gtest.h>
+#include <MG_Util/Debug/Log.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -75,10 +76,10 @@ namespace {
     std::string g_logPath;
 
     std::string ReadLog() {
-        std::ifstream in(g_logPath, std::ios::binary);
-        std::ostringstream ss;
-        ss << in.rdbuf();
-        return ss.str();
+        // BOTH ROLES' LOGS (P6). A death test asserts that the CHILD said something; which
+        // role's thread said it is not what these cases are about, and refusals raised on the
+        // apply thread are written under the SERVER role by construction.
+        return MobileGL::MG_Util::Debug::ReadRoleLogs(g_logPath.c_str());
     }
 
     long ProcessId() {

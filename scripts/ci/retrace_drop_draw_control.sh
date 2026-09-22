@@ -40,7 +40,7 @@
 # Usage:  retrace_drop_draw_control.sh <case> <backend>
 #   CTEST           ctest binary                      (default: ctest)
 #   CONTROL_TMPDIR  scratch dir                       (default: ${RUNNER_TEMP:-/tmp})
-#   LIBRARY_LOG     the replay's library log          (default: <case>/<backend>/output/mobilegl.log)
+#   LIBRARY_LOG     the replay's CLIENT library log   (default: <case>/<backend>/output/mobilegl.client.log)
 set -u
 
 CASE="${1:?usage: retrace_drop_draw_control.sh <case> <backend>}"
@@ -48,7 +48,10 @@ BACKEND="${2:?usage: retrace_drop_draw_control.sh <case> <backend>}"
 
 CTEST="${CTEST:-ctest}"
 CONTROL_TMPDIR="${CONTROL_TMPDIR:-${RUNNER_TEMP:-/tmp}}"
-LIBRARY_LOG="${LIBRARY_LOG:-${CASE}/${BACKEND}/output/mobilegl.log}"
+# P6: BOTH ROLES HAVE THEIR OWN LOG and neither keeps the old name, so an un-updated default
+# here would be a file that does not exist rather than half a session read as a whole one. This
+# control's marker (`E2 control armed`) is a CLIENT-side line.
+LIBRARY_LOG="${LIBRARY_LOG:-${CASE}/${BACKEND}/output/mobilegl.client.log}"
 mkdir -p "${CONTROL_TMPDIR}"
 FROZEN_LIBRARY="${FROZEN_LIBRARY:?FROZEN_LIBRARY must name the split library the replay loads}"
 symbols=$(nm --defined-only "${FROZEN_LIBRARY}") || exit 1

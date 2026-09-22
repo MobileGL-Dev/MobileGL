@@ -9,6 +9,38 @@ import sys
 import xml.etree.ElementTree as ET
 
 
+# P6: THE SINK WRITES ONE FILE PER ROLE, so MOBILEGL_LOG_FILE_PATH is a BASE NAME and no file
+# of that literal name exists. The derivation matches MG_Util/Debug/Log.cpp's RoleLogPath: the
+# role goes before the extension. A census that read the base would find nothing and report a
+# confident zero for every marker the run actually raised - which under split is most of them,
+# because the applier's refusals are on the server side.
+def role_paths(base):
+    text = str(base)
+    slash = max(text.rfind("/"), text.rfind("\\"))
+    dot = text.rfind(".")
+    out = []
+    for role in ("client", "server"):
+        if dot == -1 or dot < slash:
+            out.append(text + "." + role)
+        else:
+            out.append(text[:dot] + "." + role + text[dot:])
+    return out
+
+
+def read_role_logs(base):
+    """Concatenated text of every role file that exists for this base, or '' if none do."""
+    chunks = []
+    for path in role_paths(base):
+        p = Path(path)
+        if p.is_file():
+            chunks.append(p.read_text(errors="replace"))
+    return "".join(chunks)
+
+
+def any_role_file(base):
+    return any(Path(p).is_file() for p in role_paths(base))
+
+
 def paths(document):
     owners = {}
     split = {}
@@ -89,10 +121,10 @@ def classify_markers(logs):
     scanned = []
     for name in sorted(logs):
         path = logs[name]
-        if not Path(path).is_file():
+        if not any_role_file(path):
             continue
         scanned.append(name)
-        text = Path(path).read_text(errors="replace")
+        text = read_role_logs(path)
         for tag, field, verb, why in MARKER_RE.findall(text):
             pair = f"{field}@{verb}"
             if tag == "Fatal":
@@ -204,12 +236,12 @@ def expect_fatal(document, junit_path, expected_path):
             if failed:
                 problems.append(f"{name} is RED and declares no private log")
             continue  # metadata/monolith-arm entries have no marker channel
-        if not Path(path).is_file():
-            problems.append(f"{name}: declared private log {path} does not exist")
+        if not any_role_file(path):
+            problems.append(f"{name}: declared private log {path} has no role file (.client/.server)")
             continue
         scanned += 1
         entry_fatal = set()
-        for tag, field, verb, why in MARKER_RE.findall(Path(path).read_text(errors="replace")):
+        for tag, field, verb, why in MARKER_RE.findall(read_role_logs(path)):
             pair = f"{field}@{verb}"
             if tag == "Fatal":
                 entry_fatal.add(pair)
@@ -380,7 +412,7 @@ def main():
         missing = []
         label = sys.argv[5] if len(sys.argv) > 5 else ""
         for name, path in selected.items():
-            if Path(path).is_file() and re.search(sys.argv[4], Path(path).read_text(errors="replace")):
+            if any_role_file(path) and re.search(sys.argv[4], read_role_logs(path)):
                 print(f"private-log evidence: {name}: {path}")
             else:
                 missing.append(f"{name} ({path})")

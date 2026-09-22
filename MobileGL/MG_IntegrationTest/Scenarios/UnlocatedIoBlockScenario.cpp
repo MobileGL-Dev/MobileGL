@@ -49,6 +49,7 @@
 #include <string>
 #include <vector>
 
+#include "../Harness/PipeStatsWindow.h"
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/ScenarioFixture.h"
 
@@ -354,9 +355,9 @@ void main()
             // configured. MOBILEGL_LOG_FILE_PATH is read at log-init, before anything this
             // fixture can reach, so the ctest entry sets it and this only reads it back.
             static std::filesystem::path LibraryLogPath() {
-                const char* path = std::getenv("MOBILEGL_LOG_FILE_PATH");
-                return (path != nullptr && *path != '\0') ? std::filesystem::path(path)
-                                                          : std::filesystem::path();
+                // P6: the path is a BASE NAME and the library writes one log per role; PipeStatsWindow
+            // derives the suffix, so the rule lives in one place.
+            return std::filesystem::path(MGITest::PipeStatsWindow::LibraryLogPath());
             }
 
             // How many bytes the library log already holds. Everything this fixture asserts on

@@ -25,6 +25,7 @@
 // half of that control is TheDirectApplierResetCallOnTheGLThreadIsRoleViolation below, and
 // the guard's two non-Fatal arms are pinned in PipeWireCodecTest's CtWireFatals suite.
 
+#include "../Harness/PipeStatsWindow.h"
 #include "../Harness/ScenarioFixture.h"
 #include "../Harness/SplitRuntimePeek.h"
 
@@ -292,7 +293,10 @@ namespace {
         // same); the NAME is asserted from the log below, which the child truncated and
         // wrote before it died.
         EXPECT_EXIT(MobileGL::MG_Pipe::MGPipeApplierReset(), ::testing::KilledBySignal(SIGABRT), ".*");
-        if (const char* logPath = std::getenv("MOBILEGL_LOG_FILE_PATH"); logPath != nullptr) {
+        // THE CLIENT'S LOG: MGPipeApplierReset is called here, on the GL thread, so the guard's
+        // line is written under the client role. P6 splits the lane's log per role and the
+        // suffix rule lives in PipeStatsWindow.
+        if (const std::string logPath = MGITest::PipeStatsWindow::LibraryLogPath(); !logPath.empty()) {
             std::ifstream in(logPath, std::ios::binary);
             std::ostringstream log;
             log << in.rdbuf();

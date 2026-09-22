@@ -1169,9 +1169,12 @@ jobs:
       - name: The split lane really resolved the transport
         working-directory: build-split
         run: |
-          log=MobileGL/MG_IntegrationTest/persistent-map-arm-split-DirectGLES.log
+          # P6: the sink writes one file per ROLE from the base MOBILEGL_LOG_FILE_PATH; the
+          # transport-resolution line is ConfigLoader's, on the CLIENT thread, so it is in the
+          # .client half. The base name itself names no file now.
+          log=MobileGL/MG_IntegrationTest/persistent-map-arm-split-DirectGLES.client.log
           if [ ! -f "${log}" ]; then
-            echo "::error::${log} does not exist: the DirectGLES.Split.PersistentMapArm. entry never ran, so nothing in this job establishes that MOBILEGL_TRANSPORT ever resolved to inproc in a live process"
+            echo "::error::${log} does not exist: the DirectGLES.Split.PersistentMapArm. entry never ran (or the per-role split renamed it), so nothing in this job establishes that MOBILEGL_TRANSPORT ever resolved to inproc in a live process"
             exit 1
           fi
           # THE DISTINCTIVE PART OF THE INFO LINE, not the bare KEY=VALUE (review finding M-5):
@@ -2649,7 +2652,7 @@ jobs:
         working-directory: build-retrace/tools/trace_replay
         env:
           CONTROL_TMPDIR: ${{ runner.temp }}
-          LIBRARY_LOG: ${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.log
+          LIBRARY_LOG: ${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.client.log
           FROZEN_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
           # The control has to run the arm it is a control FOR. Hard-coded inproc, it would go on
           # proving something about the other arm while spawn ran unguarded.
@@ -2667,13 +2670,22 @@ jobs:
         if: always()
         working-directory: build-retrace/tools/trace_replay
         run: |
-          log="${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.log"
+          # BOTH ROLES, because under spawn every applier refusal is raised in the SERVER's
+          # process and a census reading only the client's file reports a confident zero for the
+          # half it cannot see.
+          log="${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.client.log"
+          server_log="${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.server.log"
           if [ ! -f "${log}" ]; then
             echo "no ${log} - the replay wrote no library log"
             exit 0
           fi
-          echo "Fatal{ lines: $(grep -c 'Fatal{' "${log}" || true)"
-          grep -o 'Fatal{[A-Za-z]*, "[^"]*"' "${log}" | sort | uniq -c | sort -rn | head -20 || true
+          census_files="${log}"
+          if [ -f "${server_log}" ]; then census_files="${census_files} ${server_log}"; fi
+          echo "census over: ${census_files}"
+          echo "Fatal{ lines: $(cat ${census_files} | grep -c 'Fatal{' || true)"
+          cat ${census_files} | grep -o 'Fatal{[A-Za-z]*, "[^"]*"' | sort | uniq -c | sort -rn | head -20 || true
+          # The transport line is the CLIENT's: ConfigLoader resolves it there, and under spawn
+          # the server states its own separately.
           grep -m1 "MOBILEGL_TRANSPORT=" "${log}" || echo "no transport line in ${log}"
 
       - name: Upload core dumps

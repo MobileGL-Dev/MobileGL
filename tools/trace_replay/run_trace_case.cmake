@@ -101,7 +101,17 @@ message(STATUS "${replay_stdout}")
 message(STATUS "${replay_stderr}")
 
 set(retrace_log "${TRACE_OUTPUT_DIR}/output/retrace.log")
-set(mobilegl_log "${TRACE_OUTPUT_DIR}/output/mobilegl.log")
+# BOTH ROLES ARE SUFFIXED, and the client's rename is deliberate. Leaving it at the old
+# `mobilegl.log` would have been the compatible choice and the wrong one: a reader that was not
+# updated would go on finding a file, go on passing, and go on seeing only half the session.
+# With both names moved, an un-updated reader gets "file not found" and says so.
+set(mobilegl_log "${TRACE_OUTPUT_DIR}/output/mobilegl.client.log")
+# P6: THE SERVER ROLE HAS ITS OWN LOG, and the census below must read BOTH or a server-side
+# Fatal{ is invisible to it. Not hypothetical: under spawn the server is where every applier
+# refusal and Fatal{UnmigratedSurface} is raised, which are exactly the lines this lane counts.
+# The client file keeps the unsuffixed name, so every other reader here - the transport markers,
+# the pipe-verify block, the artifact copy - is unchanged.
+set(mobilegl_server_log "${TRACE_OUTPUT_DIR}/output/mobilegl.server.log")
 if(EXISTS "${retrace_log}")
     file(STRINGS "${retrace_log}" gl_identity_lines REGEX "MOBILEGL_TRACE_GL_")
     foreach(line IN LISTS gl_identity_lines)
@@ -128,8 +138,12 @@ if(DEFINED TRACE_ARTIFACT_DIR AND NOT "${TRACE_ARTIFACT_DIR}" STREQUAL "")
     if(EXISTS "${retrace_log}")
         file(COPY_FILE "${retrace_log}" "${TRACE_ARTIFACT_DIR}/${TRACE_CASE_NAME}-${TRACE_BACKEND}-retrace.log")
     endif()
+    if(EXISTS "${mobilegl_server_log}")
+        file(COPY_FILE "${mobilegl_server_log}"
+             "${TRACE_ARTIFACT_DIR}/${TRACE_CASE_NAME}-${TRACE_BACKEND}-mobilegl.server.log")
+    endif()
     if(EXISTS "${mobilegl_log}")
-        file(COPY_FILE "${mobilegl_log}" "${TRACE_ARTIFACT_DIR}/${TRACE_CASE_NAME}-${TRACE_BACKEND}-mobilegl.log")
+        file(COPY_FILE "${mobilegl_log}" "${TRACE_ARTIFACT_DIR}/${TRACE_CASE_NAME}-${TRACE_BACKEND}-mobilegl.client.log")
     endif()
 endif()
 
@@ -336,10 +350,19 @@ if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "
             endif()
         endif()
         # The refusal census. Recorded on every split run, pass or fail.
+        #
+        # BOTH FILES, and the server's is the one that matters most: under spawn every
+        # applier refusal is raised over there, so a census reading only the client's would
+        # report a confident zero for the half of the session it cannot see.
         file(STRINGS "${mobilegl_log}" split_fatals REGEX "Fatal\\{")
+        if(EXISTS "${mobilegl_server_log}")
+            file(STRINGS "${mobilegl_server_log}" split_server_fatals REGEX "Fatal\\{")
+            list(APPEND split_fatals ${split_server_fatals})
+        endif()
         list(LENGTH split_fatals split_fatal_count)
         message(STATUS "MGPipe split: ${split_case} transport=$ENV{MOBILEGL_TRANSPORT}, "
-                       "Fatal{ lines in ${mobilegl_log}: ${split_fatal_count}")
+                       "Fatal{ lines across ${mobilegl_log} and ${mobilegl_server_log}: "
+                       "${split_fatal_count}")
         if(split_fatals)
             foreach(line IN LISTS split_fatals)
                 message(STATUS "${line}")

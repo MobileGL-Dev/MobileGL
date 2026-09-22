@@ -37,11 +37,33 @@
 
 namespace MGITest::PipeStatsWindow {
 
-    // The lane's private log path, or empty when the lane configured none.
-    inline std::string LibraryLogPath() {
-        const char* path = std::getenv("MOBILEGL_LOG_FILE_PATH");
-        return (path != nullptr && *path != '\0') ? std::string(path) : std::string();
+    // P6: MOBILEGL_LOG_FILE_PATH IS A BASE NAME, NOT A FILE. The library writes one log per
+    // ROLE - `<stem>.client<ext>` and `<stem>.server<ext>` - because under inproc both roles are
+    // threads of one process and a single file made every per-side assertion a search.
+    //
+    // THE SUFFIX IS DERIVED HERE AND NOWHERE ELSE, matching MG_Util/Debug/Log.cpp's
+    // RoleLogPathFor. Two copies of a naming rule is one copy too many: the one that is not
+    // updated opens a file that does not exist and reports "the library never logged", which
+    // reads as a product failure rather than as a stale path.
+    inline std::string RoleLogPath(const char* roleSuffix) {
+        const char* base = std::getenv("MOBILEGL_LOG_FILE_PATH");
+        if (base == nullptr || *base == '\0') return {};
+        std::string path(base);
+        const std::string::size_type slash = path.find_last_of("/\\");
+        const std::string::size_type dot = path.find_last_of('.');
+        if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) {
+            return path + "." + roleSuffix;
+        }
+        return path.substr(0, dot) + "." + roleSuffix + path.substr(dot);
     }
+
+    // The lane's private CLIENT log path, or empty when the lane configured none. Every existing
+    // caller wants this one: they read markers the CLIENT emits - the transport resolution line,
+    // PipeStats summaries, the arming diagnostics.
+    inline std::string LibraryLogPath() { return RoleLogPath("client"); }
+
+    // The server role's half, for a caller that wants a line only the applier writes.
+    inline std::string ServerLibraryLogPath() { return RoleLogPath("server"); }
 
     inline std::string ReadWholeFile(const std::string& path) {
         if (path.empty()) return {};
@@ -70,7 +92,15 @@ namespace MGITest::PipeStatsWindow {
         return window;
     }
 
-    inline Window LastFromLaneLog() { return Last(ReadWholeFile(LibraryLogPath())); }
+    // BOTH ROLES, and the server's is where the numbers are. The `draws` / `vbs` counters
+    // increment in the backend's PrepareForDraw, which runs on the APPLY THREAD - the server
+    // role - so under inproc split the summary line lands in the server's log. Reading only the
+    // client's would find the "counters ON" banner (client-side) but no window, which reads as
+    // "the stats channel never reached the process". Concatenated, Last() takes whichever role
+    // emitted the final summary.
+    inline Window LastFromLaneLog() {
+        return Last(ReadWholeFile(LibraryLogPath()) + ReadWholeFile(ServerLibraryLogPath()));
+    }
 
     // One counter out of that line, by its short name ("mpr", "draws", "csom"), or -1 when the
     // line does not carry it. The search includes the SEPARATOR before the name and the `=` after

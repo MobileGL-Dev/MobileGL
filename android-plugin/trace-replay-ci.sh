@@ -239,7 +239,7 @@ collect_run_diagnostics() {
   adb_device_path shell dumpsys activity activities > "${diagnostics_dir}/activity.txt" 2>&1 || true
   adb_device_path shell run-as "${package_name}" ls -laR "${app_dir}" > "${diagnostics_dir}/app-files.txt" 2>&1 || true
   adb_device_path exec-out run-as "${package_name}" cat "${app_dir}/output/retrace.log" > "${diagnostics_dir}/retrace.log" || true
-  adb_device_path exec-out run-as "${package_name}" cat "${app_dir}/output/mobilegl.log" > "${diagnostics_dir}/mobilegl.log" || true
+  collect_role_logs "${app_dir}/output/mobilegl.log" "${diagnostics_dir}/mobilegl.log" || true
 }
 
 # Records why a retrace was charged to the infrastructure rather than the code
@@ -303,6 +303,39 @@ copy_app_artifact() {
     echo "trace-replay-ci.sh: warning: failed to copy ${source_path}" >&2
     rm -f "${destination_path}"
   fi
+}
+
+# P6: the library writes ONE LOG PER ROLE - <base>.client.log and <base>.server.log - because
+# under inproc both roles are threads of one process. Pull both and concatenate into the single
+# <dest> every downstream reader still expects: the client-only markers (ConfigLoader's transport
+# line, `spawn ARMED`, the client Config: IPC line) are present, and the Fatal census and the
+# capabilities probe see BOTH roles - the applier's refusals and its GL_RENDERER line live on the
+# server side. The two source files are also kept beside <dest> for a human reading the artifact.
+collect_role_logs() {
+  base_source="$1"   # e.g. <app_dir>/output/mobilegl.log
+  dest="$2"          # e.g. <result_dir>/mobilegl.log
+  base_no_ext="${base_source%.log}"
+  dest_no_ext="${dest%.log}"
+: > "${dest}"
+  wrote_any=0
+  for role in client server; do
+    role_src="${base_no_ext}.${role}.log"
+    role_dst="${dest_no_ext}.${role}.log"
+    # PULL, THEN JUDGE BY CONTENT. `run-as test -f` is unreliable through `exec-out` on some
+    # devices (measured: it returned 0 for a file that does not exist), and `exec-out` folds the
+    # device-side `cat: ... No such file` error into the stdout stream - so a missing role file
+    # arrives as a one-line log that begins with `cat:`. The monolith arm legitimately has no
+    # server file, and that must be a silent skip rather than a one-line server log. So: pull,
+    # then drop anything empty or carrying cat's own not-found line.
+    adb_device_path exec-out run-as "${package_name}" cat "${role_src}" > "${role_dst}" 2>/dev/null || true
+    if [ -s "${role_dst}" ] && ! head -1 "${role_dst}" | grep -q '^cat: .*: No such file'; then
+      cat "${role_dst}" >> "${dest}"
+      wrote_any=1
+    else
+      rm -f "${role_dst}"
+    fi
+  done
+  [ "${wrote_any}" -eq 1 ] || rm -f "${dest}"
 }
 
 copy_texture_2d_dumps() {
@@ -505,7 +538,7 @@ run_retrace() {
     copy_app_artifact "${app_dir}/output/${safe_case}-diff.png" "${result_dir}/${safe_case}-${backend}-diff.png"
   fi
   copy_app_artifact "${app_dir}/output/retrace.log" "${result_dir}/retrace.log"
-  copy_app_artifact "${app_dir}/output/mobilegl.log" "${result_dir}/mobilegl.log"
+  collect_role_logs "${app_dir}/output/mobilegl.log" "${result_dir}/mobilegl.log"
   if [ "${benchmark}" -eq 1 ]; then
     copy_app_artifact "${app_dir}/output/benchmark.json" "${result_dir}/benchmark.json"
   fi
@@ -592,10 +625,12 @@ armed = re.search(r"spawn ARMED - the server role runs in pid (\d+)", text)
 
 # `any`, NOT the `all` the inproc gate uses, and the difference is load-bearing.
 #
-# Under spawn TWO PROCESSES append to one MOBILEGL_LOG_FILE_PATH, and the launcher deliberately
-# scrubs every MOBILEGL_IPC_* out of the child's environment (anti-recursion catch (b)) - so the
-# server's own `Config: IPC` line reads strict=0 role-split-state=0 BY CONSTRUCTION. Demanding
-# that every line match would red every spawn run for the one thing the design requires.
+# This log is the CONCATENATION of the two role files (collect_role_logs), so it carries the
+# SERVER's own `Config: IPC` line as well as the client's - and the server's reads strict=0
+# role-split-state=0 by construction, because the launcher scrubs every MOBILEGL_IPC_* out of
+# the child's environment (anti-recursion catch (b)). Demanding that EVERY line match would red
+# every spawn run for the one thing the design requires; `any` asks that the CLIENT's line is
+# present, which is the one that carries the knobs.
 configs = re.findall(r"Config: IPC[^\r\n]*", text)
 fatals = re.findall(r"^.*Fatal\{.*$", text, re.MULTILINE)
 required = {"strict": "1", "role-split-state": "1", "run-ahead": "1"}

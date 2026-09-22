@@ -18,6 +18,7 @@
 // assert ITS OWN failure string (R-16) instead of asserting that something, somewhere, died.
 
 #include <gtest/gtest.h>
+#include <MG_Util/Debug/Log.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -78,12 +79,17 @@ namespace {
 
     std::string g_logPath;
 
+    // BOTH ROLES' LOGS. P6 gives the client and the server role a file each, and a death test
+    // asserts that the CHILD said something - which role's thread said it is not what these
+    // cases are about. The refusals raised on the apply thread (RefuseFromApplyThread and every
+    // guard that rides it) are written under the SERVER role by construction, so a reader that
+    // took only g_logPath would report "the child aborted, but said nothing" for the very
+    // diagnostics it exists to check.
     std::string ReadLog() {
-        std::ifstream in(g_logPath, std::ios::binary);
-        if (!in) return {};
-        std::ostringstream out;
-        out << in.rdbuf();
-        return out.str();
+        // BOTH ROLES' LOGS (P6). A death test asserts that the CHILD said something; which
+        // role's thread said it is not what these cases are about, and refusals raised on the
+        // apply thread are written under the SERVER role by construction.
+        return MobileGL::MG_Util::Debug::ReadRoleLogs(g_logPath.c_str());
     }
 
     int ProcessId() {
@@ -146,7 +152,7 @@ namespace {
         // child's output. That is how the second death case in this file came to see the first
         // one's slot name and assert on it: a control reading another control's message, which
         // is one of the three shapes R-16 was written after.
-        { std::ofstream truncate(g_logPath, std::ios::trunc | std::ios::binary); }
+        MobileGL::MG_Util::Debug::TruncateRoleLogs(g_logPath.c_str());
         std::fflush(nullptr);
         const pid_t pid = ::fork();
         if (pid < 0) return result;

@@ -14,6 +14,88 @@ namespace MobileGL {
     namespace MG_Util::Debug {
         static FILE* s_logFile = nullptr;
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The server role's own sink. Opened lazily, on the first line a server-role thread
+        // writes, so a process that never plays the role never creates the file.
+        static FILE* s_serverLogFile = nullptr;
+
+        // THE PROCESS DEFAULT, read once. A spawned server image is the server on every thread -
+        // there is no other role in it - and MOBILEGL_IPC_ROLE is set by the launcher before
+        // exec, so this is answerable before any MobileGL code runs. Under inproc it is false
+        // and the apply thread opts in per-thread.
+        static bool ProcessIsSpawnedServer() {
+            static const bool value = [] {
+                const char* role = std::getenv("MOBILEGL_IPC_ROLE");
+                return role != nullptr && std::strcmp(role, "server") == 0;
+            }();
+            return value;
+        }
+
+        // Per THREAD, not per process: under inproc the server role is the mgl-srv-apply thread
+        // and the GL thread is the client, in one address space. -1 means "not asked yet", which
+        // is resolved from the process default on first use.
+        static thread_local int t_logRole = -1;
+
+        static bool ThreadIsServerRole() {
+            if (t_logRole < 0) {
+                t_logRole = ProcessIsSpawnedServer() ? 1 : 0;
+            }
+            return t_logRole == 1;
+        }
+
+        void SetThreadLogRole(LogRole role) { t_logRole = role == LogRole::Server ? 1 : 0; }
+
+        std::string ReadRoleLogs(const char* basePath) {
+            std::string all;
+            for (const LogRole role : {LogRole::Client, LogRole::Server}) {
+                const std::string path = RoleLogPath(basePath, role);
+                if (FILE* file = std::fopen(path.c_str(), "rb")) {
+                    char chunk[4096];
+                    std::size_t got = 0;
+                    while ((got = std::fread(chunk, 1, sizeof(chunk), file)) > 0) {
+                        all.append(chunk, got);
+                    }
+                    std::fclose(file);
+                }
+            }
+            return all;
+        }
+
+        void TruncateRoleLogs(const char* basePath) {
+            // BOTH, because a reader that concatenates them would otherwise fold a previous
+            // run's server lines into this one's - which is the stale-tail failure R-16 was
+            // written after, one file over.
+            for (const LogRole role : {LogRole::Client, LogRole::Server}) {
+                if (FILE* file = std::fopen(RoleLogPath(basePath, role).c_str(), "w")) {
+                    std::fclose(file);
+                }
+            }
+        }
+
+        // MOBILEGL_LOG_FILE_PATH IS A BASE NAME NOW, AND NEITHER ROLE KEEPS IT.
+        //
+        // `foo.log` becomes `foo.client.log` and `foo.server.log`; a path with no extension gets
+        // the suffix appended. The suffix goes BEFORE the extension so the pair sorts together
+        // and a `*.log` glob still finds both.
+        //
+        // THE CLIENT IS RENAMED TOO, ON PURPOSE. Leaving it at the unsuffixed path would have
+        // been the compatible choice and the wrong one: every reader that was not updated would
+        // go on finding a file, go on passing, and go on seeing only half the session - and a
+        // refusal census that reports a confident zero for the half it cannot see is worse than
+        // one that fails. With both names moved, an un-updated reader gets ENOENT and says so.
+        // There were fourteen such readers in this tree when the split landed.
+        std::string RoleLogPath(const char* basePath, LogRole role) {
+            const char* roleSuffix = role == LogRole::Server ? "server" : "client";
+            std::string path(basePath);
+            const std::string::size_type slash = path.find_last_of("/\\");
+            const std::string::size_type dot = path.find_last_of('.');
+            if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) {
+                return path + "." + roleSuffix;
+            }
+            return path.substr(0, dot) + "." + roleSuffix + path.substr(dot);
+        }
+#endif
+
         std::mutex& LogMutex() {
             static auto* mutex = new std::mutex();
             return *mutex;
@@ -64,63 +146,63 @@ namespace MobileGL {
 
         void InitFile() {
 #if MOBILEGL_LOG_ENABLE_FILE
-            if (!s_logFile) {
-                // MOBILEGL_LOG_FILE_PATH must stay a raw getenv (not MG_Config::Features):
-                // InitFile() runs before MG_ConfigLoader::Init() in MobileGL::Initialize().
-                const char* logPath = std::getenv("MOBILEGL_LOG_FILE_PATH");
-                if (!logPath || !*logPath) {
-                    logPath = MOBILEGL_LOG_FILE_PATH;
-                }
-                if (logPath && *logPath) {
-                    // "a", NOT "w", WHENEVER A SECOND PROCESS SHARES THIS PATH.
-                    //
-                    // Under transport=spawn the server is a separate process
-                    // writing the same MOBILEGL_LOG_FILE_PATH, and two "w"
-                    // handles each carry their OWN file offset: both start at 0
-                    // and overwrite each other's bytes. The result is not
-                    // interleaved, it is CORRUPT - observed as half-lines like
-                    // `ote client: CapsMirror generation 1 adopted` while
-                    // diagnosing the spawn retrace, and as the server's whole
-                    // startup block vanishing under the client's later writes.
-                    // O_APPEND makes each write atomic at the end of the file,
-                    // which is what makes the log a usable census across both
-                    // processes - and run_trace_case.cmake's Fatal{ count reads
-                    // exactly this file.
-                    //
-                    // THE CLIENT STILL TRUNCATES ONCE, so a fresh run does not
-                    // read as a growing pile of old ones. The server never does:
-                    // it is always started by a client that has already opened
-                    // this path, and a truncate from the far side would delete
-                    // the very startup lines a failed session needs.
-                    //
-                    // GUARDED, BECAUSE G1 MEASURES BYTES AND NOT INTENT. Only a disaggregated
-                    // build can ever have a second process on this path, so a pull build gains
-                    // nothing from the append - and it would pay for it in .text, which G1
-                    // requires to be unchanged. Measured: unguarded, the pull library's .text
-                    // moved 16 bytes with its symbol set identical, which is exactly the kind of
-                    // drift that is invisible unless somebody looks.
-#if MOBILEGL_BUILD_DISAGGREGATED
-                    const char* role = std::getenv("MOBILEGL_IPC_ROLE");
-                    const bool isSpawnedServer = role != nullptr && std::strcmp(role, "server") == 0;
-                    if (!isSpawnedServer) {
-                        if (FILE* truncate = std::fopen(logPath, "w")) std::fclose(truncate);
-                    }
-                    s_logFile = std::fopen(logPath, "a");
-#else
-                    s_logFile = std::fopen(logPath, "w");
-#endif
-                }
+            // MOBILEGL_LOG_FILE_PATH must stay a raw getenv (not MG_Config::Features):
+            // InitFile() runs before MG_ConfigLoader::Init() in MobileGL::Initialize().
+            const char* logPath = std::getenv("MOBILEGL_LOG_FILE_PATH");
+            if (!logPath || !*logPath) {
+                logPath = MOBILEGL_LOG_FILE_PATH;
             }
+            if (!logPath || !*logPath) {
+                return;
+            }
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // ONE FILE PER ROLE, OPENED LAZILY BY WHOEVER FIRST WRITES ONE.
+            //
+            // Each role truncates ITS OWN file exactly once, which is what the previous
+            // single-file design could not do: there the client truncated and the server was
+            // forbidden to, because a truncate from the far side would have deleted the very
+            // startup lines a failed session needs. With separate files that asymmetry is gone -
+            // nobody else writes the file being truncated.
+            //
+            // "w" IS SAFE AGAIN HERE, and the O_APPEND this replaces was never about ordering:
+            // it was about two PROCESSES holding two handles to one path at two offsets, each
+            // overwriting the other's bytes. Two paths, two writers, no sharing.
+            if (ThreadIsServerRole()) {
+                if (!s_serverLogFile) {
+                    s_serverLogFile = std::fopen(RoleLogPath(logPath, LogRole::Server).c_str(), "w");
+                }
+                return;
+            }
+            if (!s_logFile) {
+                s_logFile = std::fopen(RoleLogPath(logPath, LogRole::Client).c_str(), "w");
+            }
+#else
+            if (!s_logFile) {
+                s_logFile = std::fopen(logPath, "w");
+            }
+#endif
 #endif
         }
 
         void WriteToFile(const char* msg) {
 #if MOBILEGL_LOG_ENABLE_FILE
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // The sink is chosen by the CALLING THREAD's role, which is the only choice that is
+            // correct under inproc: there both roles are threads of one process, so anything
+            // process-scoped would file the apply thread's lines under the client.
+            FILE** sink = ThreadIsServerRole() ? &s_serverLogFile : &s_logFile;
+            if (!*sink) InitFile();
+            if (*sink) {
+                std::fputs(msg, *sink);
+                std::fflush(*sink);
+            }
+#else
             if (!s_logFile) InitFile();
             if (s_logFile) {
                 std::fputs(msg, s_logFile);
                 std::fflush(s_logFile);
             }
+#endif
 #endif
         }
 
@@ -169,6 +251,12 @@ namespace MobileGL {
 
         void Close() {
 #if MOBILEGL_LOG_ENABLE_FILE
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (s_serverLogFile) {
+                std::fclose(s_serverLogFile);
+                s_serverLogFile = nullptr;
+            }
+#endif
             if (s_logFile) {
                 std::fclose(s_logFile);
                 s_logFile = nullptr;

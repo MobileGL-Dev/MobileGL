@@ -34,6 +34,7 @@
 // between the pull and the push trees.
 
 #include <gtest/gtest.h>
+#include <MG_Util/Debug/Log.h>
 
 #include <cstring>
 #include <filesystem>
@@ -95,10 +96,10 @@ namespace {
     }
 
     std::string ReadLog() {
-        std::ifstream in(g_logPath, std::ios::binary);
-        std::ostringstream ss;
-        ss << in.rdbuf();
-        return ss.str();
+        // BOTH ROLES' LOGS (P6). A death test asserts that the CHILD said something; which
+        // role's thread said it is not what these cases are about, and refusals raised on the
+        // apply thread are written under the SERVER role by construction.
+        return MobileGL::MG_Util::Debug::ReadRoleLogs(g_logPath.c_str());
     }
 
     // The op table is INSTALLED BY A BACKEND, at its own bring-up, and uninstalled at its

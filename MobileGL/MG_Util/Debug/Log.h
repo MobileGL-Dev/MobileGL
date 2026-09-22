@@ -122,6 +122,8 @@
     {}
 #endif
 
+#include <string>
+
 namespace MobileGL {
     namespace MG_Util {
         namespace Debug {
@@ -131,6 +133,47 @@ namespace MobileGL {
             constexpr char* GetOSName();
             std::string GetThreadName();
             void Close();
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P6: ONE LOG PER ROLE, and the role is a per-THREAD fact because under inproc both
+            // roles live in one process. The client keeps MOBILEGL_LOG_FILE_PATH unchanged so
+            // every existing reader keeps its path; the server's lines go to the same path with
+            // `.server` inserted before the extension.
+            //
+            // WHY NOT ONE SHARED FILE. It worked - O_APPEND made the spawn case correct - but it
+            // put two sessions' lines in one place and made every per-side assertion a search
+            // rather than a read. The `--require-spawn` gate had to accept "ANY Config: IPC line
+            // matches" because the server's own line is scrubbed of the client's knobs by
+            // construction; with the two separated it can demand that THE client's line matches.
+            //
+            // THREAD-SCOPED, NOT PROCESS-SCOPED, for the case that is easy to miss: under inproc
+            // the server role is the mgl-srv-apply THREAD, so a process-wide flag would file its
+            // lines under whichever role set it last.
+            enum class LogRole { Client, Server };
+
+            // Called by the apply thread when it starts (inproc), and once by ServerMain for a
+            // whole spawned server process. Without it a thread defaults to the process role,
+            // which MOBILEGL_IPC_ROLE=server sets for the spawned image.
+            void SetThreadLogRole(LogRole role);
+
+            // THE NAMING RULE, EXPORTED, so that no reader has to reimplement it. Every consumer
+            // of a lane's log - the unit mains, the integration harness, the retrace runner -
+            // needs the same `<stem>.<role><ext>` derivation, and a second copy is a copy that
+            // can fall behind: the one that does opens a file that does not exist and reports
+            // "the library never logged", which reads as a product failure.
+            std::string RoleLogPath(const char* basePath, LogRole role);
+
+            // THE TWO OPERATIONS EVERY READER ACTUALLY WANTS, so that no caller has to know how
+            // many roles there are or how they are spelled.
+            //
+            // A test asserts that THE RUN said something; which role's thread said it is not
+            // what the assertion is about, and guessing wrong turns a real diagnostic into "the
+            // child aborted and said nothing". Refusals raised on the apply thread are written
+            // under the SERVER role by construction, which is exactly the class of diagnostic
+            // these readers exist to check.
+            std::string ReadRoleLogs(const char* basePath);
+            void TruncateRoleLogs(const char* basePath);
+#endif
         } // namespace Debug
     } // namespace MG_Util
 } // namespace MobileGL

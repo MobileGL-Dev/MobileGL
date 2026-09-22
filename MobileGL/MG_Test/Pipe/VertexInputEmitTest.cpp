@@ -33,6 +33,7 @@
 // stays name-for-name identical between the pull and the push trees.
 
 #include <gtest/gtest.h>
+#include <MG_Util/Debug/Log.h>
 
 #include <filesystem>
 #include <string>
