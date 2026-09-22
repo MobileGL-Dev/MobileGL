@@ -2500,7 +2500,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!m_bufferManager->UploadTransient(BufferKind::Uniform, m_wireFrameIndex, zero.data(), blockSize,
                 std::max<VkDeviceSize>(4, m_minDynamicOffsetAlignment), padded) || !padded.IsValid()) return false;
         if (bound && copied != 0) {
-            // P7 A.1 retires `uniform-buffer-byte-tail@P7`. The window is word-aligned at both
+            // P7 A.1 retires `uniform-buffer-byte-tail`. The window is word-aligned at both
             // ends on nearly every bind - glBindBufferRange already forces the offset onto
             // GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, and that is a multiple of four on every
             // device - but GL 4.6 core 6.1.1 puts no such rule on the SIZE, so `copied` is free

@@ -918,7 +918,7 @@ void main() { color = value + tail; }
 TEST_F(F1WireScenario, SubWordUniformBufferRangePadsMissingBytes) {
     if (!Ready()) return;
     // The sibling of ShortUniformBufferRangePadsMissingBytes whose bound range does NOT
-    // end on a four-byte boundary. That window is what `uniform-buffer-byte-tail@P7`
+    // end on a four-byte boundary. That window is what `uniform-buffer-byte-tail`
     // used to refuse (a named Fatal that took the whole session with it), and it is the
     // live boundary the Redmi Minecraft run reported (notes/p5f/magma-inproc-fix.md #5).
     //

@@ -121,7 +121,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // unaligned region cannot alias anything else. vkCmdCopyBuffer places no alignment rule
         // on a region's offsets or size (unlike vkCmdUpdateBuffer / vkCmdFillBuffer), so the
         // shift is a plain legal copy. `dstSkip` is the byte inside `dst` the window starts at.
-        // This retires `uniform-buffer-byte-tail@P7`.
+        // This retires `uniform-buffer-byte-tail`.
         Bool CopyWireBufferSubWordRangeToSlice(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size,
                                                Uint32 frameIndex, const BufferSlice& dst, Uint64 dstSkip);
         void MarkWireBufferGpuWritten(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size);
