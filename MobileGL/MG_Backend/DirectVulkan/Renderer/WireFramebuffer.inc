@@ -87,6 +87,20 @@
         return tier;
     }
 
+    // THE SAME PROBLEM FOR THE ROTATED DEFAULT-BLIT ARM. Every surface this lane can create is
+    // VK_SURFACE_TRANSFORM_IDENTITY - headless, pbuffer or X11 - and the Redmi evidence for this
+    // cluster is a pbuffer too, so the scratch arm that exists FOR rotation would never execute
+    // anywhere a test could watch it. The knob forces it on an identity surface, where it has to
+    // produce exactly the pixels the fall-through arm produces; that equality is the assertion.
+    // It does NOT fake a rotation: nothing downstream is told the surface turned.
+    static Bool MagmaWireForcedDefaultBlitScratch() {
+        static const Bool forced = [] {
+            const char* value = std::getenv("MGITEST_MAGMA_FORCE_DEFAULT_BLIT_SCRATCH");
+            return value && *value && value[0] != '0';
+        }();
+        return forced;
+    }
+
     VulkanRenderer::WireImage VulkanRenderer::ResolveWireImage(
         const MG_Pipe::MGPFramebufferState& fbo, const MG_Pipe::MGPSurface& surface,
         VkImageAspectFlags aspect, Bool isWriteTarget) {
@@ -677,11 +691,64 @@
             if (aspect == VK_IMAGE_ASPECT_COLOR_BIT && destination.isDefault && !source.isDefault &&
                 source.samples == VK_SAMPLE_COUNT_1_BIT && destination.samples == VK_SAMPLE_COUNT_1_BIT &&
                 source.image != destination.image) {
-                if (!BlitWireColorToDefault(source, destination, sx0, sy0, sx1, sy1,
-                                            dx0, dy0, dx1, dy1, filter))
-                    MagmaWireFatal("default-color-blit-shape@P7");
-                m_swapchainObject.SetImageContentDefined(destination.swapchainImageIndex, true);
-                return;
+                // P7 wave 2-B, CONTRACT-P7 §3.2: `default-color-blit-shape@P7` RETIRES, in three
+                // pieces, because the one Fatal covered three unrelated situations.
+                //
+                // The shader blit is here for ROTATION and for nothing else. It can only SAMPLE
+                // its source - sampler2D, a float result, one of two 2D view types - so an
+                // RGBA8UI attachment, a 3D slice or an array layer made it return false, and the
+                // refusal fired even on a surface with NO rotation, where the ordinary
+                // vkCmdBlitImage arm twenty lines down would have done the blit correctly and
+                // does handle those shapes.
+                const auto transform = m_swapchainObject.GetPreTransform();
+                const Bool knownRotation = transform == VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR ||
+                                           transform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ||
+                                           transform == VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR ||
+                                           transform == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR;
+                if (!knownRotation) {
+                    // Mirrors, and mirror-rotations, are the shapes neither arm can express: the
+                    // blit rectangle would have to be reflected, and this package does not have a
+                    // device that reports one to check the result against. A decline (§3.2's
+                    // "outside the four rotations"), not a Fatal, and it says which transform.
+                    MGLOG_E_ONCE("DirectVulkan::BlitWireFramebuffers: the surface pre-transform is 0x%x, "
+                                 "which is neither identity nor one of the three rotations either blit "
+                                 "arm can express; declining the blit to the default framebuffer",
+                                 static_cast<Uint32>(transform));
+                    return;
+                }
+                if (!MagmaWireForcedDefaultBlitScratch() &&
+                    BlitWireColorToDefault(source, destination, sx0, sy0, sx1, sy1,
+                                           dx0, dy0, dx1, dy1, filter)) {
+                    m_swapchainObject.SetImageContentDefined(destination.swapchainImageIndex, true);
+                    return;
+                }
+                // A source the shader pass cannot sample, on a rotated surface. Move the region
+                // into an owned 2D image of a sampled-float format in the same size-compatibility
+                // class and blit THAT. The knob forces this arm on an identity surface, where it
+                // must produce the same pixels the fall-through below produces - which is what
+                // makes it reachable from a host lane at all (every host surface here is
+                // identity, and the Redmi evidence is a pbuffer, so nothing else would run it).
+                if (transform != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR ||
+                    MagmaWireForcedDefaultBlitScratch()) {
+                    if (BlitWireColorToDefaultThroughScratch(source, destination, sx0, sy0, sx1, sy1,
+                                                             dx0, dy0, dx1, dy1, filter)) {
+                        m_swapchainObject.SetImageContentDefined(destination.swapchainImageIndex, true);
+                        return;
+                    }
+                    MGLOG_E_ONCE("DirectVulkan::BlitWireFramebuffers: a %ux%u source of format %d "
+                                 "(view type %d) cannot reach the rotated (0x%x) default framebuffer "
+                                 "through either the shader pass or a scratch copy; declining the blit",
+                                 source.extent.width, source.extent.height,
+                                 static_cast<Int>(source.format), static_cast<Int>(source.viewType),
+                                 static_cast<Uint32>(transform));
+                    return;
+                }
+                // Identity: fall through to the ordinary vkCmdBlitImage arm below. It already
+                // maps GL's bottom row onto the native image's last row for a default target,
+                // and vkCmdBlitImage takes integer formats and array layers natively. Its 3D
+                // addressing was wrong and is fixed with this package - see the srcBaseLayer /
+                // srcZ note down there; the bug was invisible until now because a 3D source hit
+                // the Fatal above and never reached that arm.
             }
             const Bool sameImage = source.image == destination.image;
             const VkImageLayout srcLayout = sameImage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -690,10 +757,21 @@
             if (sameImage) destination.layout = source.layout;
             else TransitionWireImage(destination,dstLayout);
             VkImageBlit region{};
-            region.srcSubresource = {aspect,source.level,source.layer,1};
-            region.dstSubresource = {aspect,destination.level,destination.layer,1};
-            region.srcOffsets[0] = {sx0,sy0,0}; region.srcOffsets[1] = {sx1,sy1,1};
-            region.dstOffsets[0] = {dx0,dy0,0}; region.dstOffsets[1] = {dx1,dy1,1};
+            // A 3D IMAGE CARRIES ITS SLICE ON Z, NOT ON THE LAYER AXIS. Its only subresource is
+            // layer 0, and the selected slice is the z of the offsets - which is how the copy
+            // endpoint (`CopyImageSliceMapping`) and the multisample resolve arm above already
+            // address one. This arm addressed it as `baseArrayLayer = source.layer` with z 0..1,
+            // so a blit from slice 1 of a 3D texture read slice 0 out of a layer the image does
+            // not have. Nothing caught it, because until this package that shape reached the
+            // arm's Fatal first and never got here at all.
+            const Uint32 srcBaseLayer = source.is3D ? 0u : source.layer;
+            const Uint32 dstBaseLayer = destination.is3D ? 0u : destination.layer;
+            const Int32 srcZ = source.is3D ? static_cast<Int32>(source.layer) : 0;
+            const Int32 dstZ = destination.is3D ? static_cast<Int32>(destination.layer) : 0;
+            region.srcSubresource = {aspect,source.level,srcBaseLayer,1};
+            region.dstSubresource = {aspect,destination.level,dstBaseLayer,1};
+            region.srcOffsets[0] = {sx0,sy0,srcZ}; region.srcOffsets[1] = {sx1,sy1,srcZ+1};
+            region.dstOffsets[0] = {dx0,dy0,dstZ}; region.dstOffsets[1] = {dx1,dy1,dstZ+1};
             // Headless and identity surfaces store GL's bottom row at Vulkan's last row.
             if (source.isDefault) {
                 region.srcOffsets[0].y = static_cast<GLint>(source.extent.height)-sy0;

@@ -1554,6 +1554,82 @@ TEST_F(F1WireScenario, ColorBlitToDefaultHonorsScissorAndReversedRect) {
     Gl().EndFrame();
 }
 
+// P7 wave 2-B, CONTRACT-P7 §3.2: `default-color-blit-shape@P7` RETIRES.
+//
+// One Fatal covered three unrelated situations. The shader pass it guarded exists for ROTATION
+// and can only SAMPLE its source - sampler2D, a float result, one of two 2D view types - so a
+// 3D slice or an integer attachment made it return false and the refusal fired EVEN ON A SURFACE
+// WITH NO ROTATION, where the ordinary vkCmdBlitImage arm below it would have done the blit
+// correctly and does handle those shapes. Identity now falls through to that arm; a rotated
+// surface moves the region into an owned 2D float scratch and blits that; anything outside the
+// four rotations declines by name.
+//
+// THE SOURCE IS A 3D TEXTURE SLICE, which is ordinary defined GL (a layer of a 3D texture is a
+// legal colour attachment) and is exactly the shape the shader pass cannot sample. The same case
+// runs twice on each arm: plain, taking the identity fall-through, and under
+// MGITEST_MAGMA_FORCE_DEFAULT_BLIT_SCRATCH, taking the rotated arm's scratch path on an identity
+// surface - where it must produce THE SAME PIXELS. That equality is what makes the scratch arm
+// testable at all: every surface this lane can create is identity, and so is the Redmi pbuffer
+// the cluster's evidence comes from.
+//
+// Red once (executed, reverted): restore MagmaWireFatal("default-color-blit-shape@P7") and both
+// entries die by that name.
+TEST_F(F1WireScenario, ColorBlitToDefaultFromANonSampleableSourceDegrades) {
+    if (!Ready()) return;
+    ASSERT_GE(Gl().Width(), 16);
+    ASSERT_GE(Gl().Height(), 16);
+    const int width = Gl().Width(), height = Gl().Height();
+    GLuint volume = 0, volumeFbo = 0;
+    glGenTextures(1, &volume);
+    glBindTexture(GL_TEXTURE_3D, volume);
+    glTexStorage3D(GL_TEXTURE_3D, 1, GL_RGBA8, 6, 4, 2);
+    glGenFramebuffers(1, &volumeFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, volumeFbo);
+    // Slice 1, not slice 0: a scratch copy that forgot the z origin would read the other slice
+    // and every quadrant assertion below would still be about SOME real texels.
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, volume, 0, 1);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    constexpr GLfloat colors[4][4] = {{1, 0, 0, 1}, {0, 1, 0, 1}, {0, 0, 1, 1}, {1, 1, 0, 1}};
+    glEnable(GL_SCISSOR_TEST);
+    for (int quadrant = 0; quadrant < 4; ++quadrant) {
+        glScissor((quadrant % 2) * 3, (quadrant / 2) * 2, 3, 2);
+        glClearColor(colors[quadrant][0], colors[quadrant][1], colors[quadrant][2], colors[quadrant][3]);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
+    glDisable(GL_SCISSOR_TEST);
+    // The OTHER slice gets one flat colour that appears in no quadrant.
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, volume, 0, 0);
+    glClearColor(0, 1, 1, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, volume, 0, 1);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.DefaultBlitShape.setup";
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glClearColor(1, 0, 1, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, volumeFbo);
+    const auto before = PeekSplitRuntime().emitSeq;
+    glBlitFramebuffer(0, 0, 6, 4, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    EXPECT_GT(PeekSplitRuntime().emitSeq, before) << "F1.DefaultBlitShape.wire";
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    const std::string arm = SplitLane::MarkerValue("MGITEST_MAGMA_FORCE_DEFAULT_BLIT_SCRATCH");
+    EXPECT_EQ(ReadOnePixel(width / 4, height / 4), (std::array<GLubyte, 4>{255, 0, 0, 255}))
+        << "F1.DefaultBlitShape bottom left (scratch arm=" << arm << ")";
+    EXPECT_EQ(ReadOnePixel(3 * width / 4, height / 4), (std::array<GLubyte, 4>{0, 255, 0, 255}))
+        << "F1.DefaultBlitShape bottom right (scratch arm=" << arm << ")";
+    EXPECT_EQ(ReadOnePixel(width / 4, 3 * height / 4), (std::array<GLubyte, 4>{0, 0, 255, 255}))
+        << "F1.DefaultBlitShape top left (scratch arm=" << arm << ")";
+    EXPECT_EQ(ReadOnePixel(3 * width / 4, 3 * height / 4), (std::array<GLubyte, 4>{255, 255, 0, 255}))
+        << "F1.DefaultBlitShape top right (scratch arm=" << arm << ")";
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.DefaultBlitShape.error";
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glDeleteFramebuffers(1, &volumeFbo);
+    glBindTexture(GL_TEXTURE_3D, 0);
+    glDeleteTextures(1, &volume);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    Gl().EndFrame();
+}
+
 namespace {
 // One 8x8x2 RGBA8 array texture with two levels, filled so that EVERY subresource this pair
 // of cases touches is distinguishable from every other one. A flat fill would let a copy that

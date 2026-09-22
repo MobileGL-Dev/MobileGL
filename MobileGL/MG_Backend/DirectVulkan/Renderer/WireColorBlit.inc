@@ -43,6 +43,112 @@
         return BlitWireColorImage(source, destination, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, filter, false);
     }
 
+    // P7 wave 2-B (CONTRACT-P7 §3.2, `default-color-blit-shape`). The shader blit below can only
+    // SAMPLE its source: sampler2D, a float result, and one of two 2D view types. A framebuffer
+    // whose colour attachment is RGBA8UI, or a layer of a 3D texture, is none of those, and on a
+    // rotated Android surface there is no other arm - an axis-aligned vkCmdBlitImage cannot
+    // express a quarter turn. So the source region becomes an owned 2D image first, through
+    // vkCmdCopyImage, which cares about the texel BLOCK SIZE and not about how the block is
+    // interpreted; the scratch then takes the shader blit as an ordinary 2D float source.
+    //
+    // REINTERPRETATION IS THE POINT FOR THE INTEGER CASE, and GL agrees: glBlitFramebuffer
+    // between an integer and a normalized format is INVALID_OPERATION (GL 4.6 core 18.3.1), so
+    // there is no defined result to be wrong about - only a shape that used to end the session
+    // and now produces the source's bits. For a float source of the wrong VIEW TYPE the copy is
+    // a plain slice extraction and the result is exactly right.
+    Bool VulkanRenderer::BlitWireColorToDefaultThroughScratch(WireImage source, WireImage destination,
+        GLint sx0, GLint sy0, GLint sx1, GLint sy1,
+        GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter) {
+        if (!destination.isDefault || source.isDefault) return false;
+        if (source.samples != VK_SAMPLE_COUNT_1_BIT || destination.samples != VK_SAMPLE_COUNT_1_BIT)
+            return false;
+        if (!source.image || !destination.image || source.image == destination.image) return false;
+        const Int64 width = std::abs(static_cast<Int64>(sx1) - sx0);
+        const Int64 height = std::abs(static_cast<Int64>(sy1) - sy0);
+        if (!width || !height || dx0 == dx1 || dy0 == dy1) return true;
+        if (std::min(sx0, sx1) < 0 || std::min(sy0, sy1) < 0 ||
+            static_cast<Uint64>(std::max(sx0, sx1)) > source.extent.width ||
+            static_cast<Uint64>(std::max(sy0, sy1)) > source.extent.height) return false;
+        // A compressed source cannot be a colour attachment, so it cannot be a framebuffer blit's
+        // source either - but the block arithmetic below would silently produce nonsense for one,
+        // and "cannot happen" is the reason the guards this package retires were written as
+        // asserts. The size-compatibility classes are Vulkan's own (VkFormat texel block size);
+        // the destination format is whatever the swapchain uses and is always sampled-float.
+        if (vkuFormatIsCompressed(source.format)) return false;
+        VkFormat scratchFormat = VK_FORMAT_UNDEFINED;
+        switch (vkuFormatTexelBlockSize(source.format)) {
+        case 1: scratchFormat = VK_FORMAT_R8_UNORM; break;
+        case 2: scratchFormat = VK_FORMAT_R8G8_UNORM; break;
+        case 4: scratchFormat = VK_FORMAT_R8G8B8A8_UNORM; break;
+        case 8: scratchFormat = VK_FORMAT_R16G16B16A16_SFLOAT; break;
+        case 16: scratchFormat = VK_FORMAT_R32G32B32A32_SFLOAT; break;
+        default: return false;
+        }
+        VkFormatProperties scratchProperties{};
+        vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle, scratchFormat, &scratchProperties);
+        const VkFormatFeatureFlags scratchRequired = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+            (filter == GL_LINEAR ? VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT : 0);
+        if ((scratchProperties.optimalTilingFeatures & scratchRequired) != scratchRequired) return false;
+
+        auto scratch = MakeUnique<VkTextureManager::TextureResource>();
+        VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        info.imageType = VK_IMAGE_TYPE_2D;
+        info.format = scratchFormat;
+        info.extent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
+        info.mipLevels = info.arrayLayers = 1;
+        info.samples = VK_SAMPLE_COUNT_1_BIT;
+        info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VmaAllocationCreateInfo allocation{};
+        allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        allocation.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        if (vmaCreateImage(m_allocator, &info, &allocation, &scratch->image, &scratch->allocation,
+                           nullptr) != VK_SUCCESS)
+            return false;
+        scratch->format = scratchFormat;
+        scratch->extent = {info.extent.width, info.extent.height};
+        scratch->mipLevels = scratch->arrayLayers = scratch->depth = 1;
+        scratch->aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        WireImage staged{};
+        staged.image = scratch->image;
+        staged.format = scratchFormat;
+        staged.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        staged.extent = scratch->extent;
+        staged.trackedLayout = &scratch->layout;
+
+        m_textureManager->FlushPendingUploads();
+        TransitionWireImage(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        TransitionWireImage(staged, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkImageCopy copy{};
+        // A 3D source carries its slice on z and always names layer 0; every other source
+        // carries it on the layer axis, which is the same split ResolveWireImage records.
+        copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, source.level, source.is3D ? 0u : source.layer, 1};
+        copy.srcOffset = {std::min(sx0, sx1), std::min(sy0, sy1),
+                          source.is3D ? static_cast<Int32>(source.layer) : 0};
+        copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.dstOffset = {0, 0, 0};
+        copy.extent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
+        vkCmdCopyImage(m_frameContext.GetCurrent().commandBuffer, source.image,
+                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staged.image,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        staged.layout = scratch->layout;
+        // The scratch holds the region at its own origin, so a reversed source rectangle
+        // becomes a reversed rectangle OVER THE SCRATCH - the multisample resolve arm's shape.
+        const GLint rx0 = sx1 > sx0 ? 0 : static_cast<GLint>(width);
+        const GLint rx1 = sx1 > sx0 ? static_cast<GLint>(width) : 0;
+        const GLint ry0 = sy1 > sy0 ? 0 : static_cast<GLint>(height);
+        const GLint ry1 = sy1 > sy0 ? static_cast<GLint>(height) : 0;
+        const Bool blitted = BlitWireColorImage(staged, destination, rx0, ry0, rx1, ry1,
+                                                dx0, dy0, dx1, dy1, filter, false);
+        // Retired whether or not the blit took: the copy above is already recorded against this
+        // image, so the submission that consumes it owns the storage either way.
+        WireRetiredObjects retired{};
+        retired.textures.push_back(Move(scratch));
+        RetireWireObjects(Move(retired));
+        return blitted;
+    }
+
     Bool VulkanRenderer::BlitWireColorImage(WireImage source, WireImage destination,
         GLint sx0, GLint sy0, GLint sx1, GLint sy1,
         GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter, Bool mipmap) {

@@ -20,6 +20,7 @@
 | 1 | `mipmap-shader-format-or-shape` | 诊断 + 颜色 shader mip 回落（**退役**一半：可渲染格式的不可附着图像） | 见 §1 |
 | 2 | `depth-stencil-mipmap@P7` + 烘焙 (A)(D) | DEPTH-only **退役**（烘焙深度 mip 程序）；D\|S **decline** | 见 §2 |
 | 3 | `copy-image-in-place@P7` | **退役**（单次 GENERAL 转换）；同级同层矩形重叠 **decline** | 见 §3 |
+| 4 | `default-color-blit-shape@P7` | **退役**（恒等回落 + 旋转 scratch）；四旋转之外 **decline** | 见 §4 |
 
 ---
 
@@ -262,3 +263,59 @@ layer / 根本没拷」都读成对的。
 > 原因是 `40613`（`~/w7/pipe/build-split` 的默认值）上已经有一个兄弟树的 `libMobileGLServer` 在监听。
 > 这是本地 configure 选项，不影响车道语义；`magma-two-process-first-run.md` 里 wave 0 也为同一原因
 > 用了专用端口。
+
+---
+
+## 4. 片 4：`default-color-blit-shape@P7`
+
+### 4.1 一条 Fatal 盖住了三种互不相干的情况
+
+那条 shader pass **是为旋转存在的**：它只能**采样**自己的源（`sampler2D`、float 结果、两种 2D view
+type 之一）。于是 RGBA8UI 附件、3D 切片、数组层都会让 `BlitWireColorToDefault` 返回 false——**而且在完全
+没有旋转的表面上也会**，尽管二十行之下那条普通的 `vkCmdBlitImage` 臂本来就能正确完成。
+
+拆成三块：
+
+1. **恒等变换 → 回落**到普通 `vkCmdBlitImage` 臂（它已经把 GL 的底行映射到原生图像的末行）；
+2. **非恒等旋转 + 采不到的源** → 把源矩形 `vkCmdCopyImage` 进一张自有的 2D、单采样、与源**同尺寸兼容类**
+   的采样浮点格式 scratch，再对 scratch 做 shader blit；
+3. **四个旋转之外**（镜像 / 镜像旋转）→ `MGLOG_E_ONCE` **decline** 并写明是哪个 transform：两条臂都表达
+   不了反射，而本包没有一台会报这种 transform 的设备来核对结果。
+
+对整数源的**重解释就是重点**，GL 也同意：整数与归一化格式之间的 `glBlitFramebuffer` 是
+`INVALID_OPERATION`（4.6 core 18.3.1），所以没有「正确结果」可言——只有一种以前会结束会话、现在会产出源
+比特的形状。对 view type 不对的浮点源，那次 copy 就是一次切片抽取，结果**完全正确**。
+
+### 4.2 退役顺带挖出一个真 bug
+
+普通 blit 臂把 3D 源当成层来寻址：`region.srcSubresource = {aspect, source.level, source.layer, 1}`，
+`srcOffsets[].z = 0..1`。**3D 图像的切片在 z 上，它唯一的 subresource 是 layer 0**——copy 端点
+（`CopyImageSliceMapping`）与上面的 multisample resolve 臂早就是这么寻址的。所以从 3D 纹理第 1 片 blit
+会去读第 0 片、并用一个该图像根本没有的层。
+
+**在此之前看不见**：这种形状先撞上那条 Fatal，根本走不到这条臂。本片第一次跑场景时回落臂的四个象限全错、
+scratch 臂全对，bug 就是这么掉出来的。两条臂现在都对。
+
+### 4.3 场景
+
+`F1WireScenario.ColorBlitToDefaultFromANonSampleableSourceDegrades`：源是 **3D 纹理的第 1 片**
+（普通合法 GL，正是 shader pass 采不到的形状），第 0 片填一个任何象限都不会出现的颜色（青）——一次忘了 z
+原点的 scratch copy 会去读另一片，而那样四个象限断言**仍然是在断言某些真 texel**，所以必须让它可分辨。
+
+**同一条用例、每臂注册两遍**：不带旋钮（走恒等回落臂）与 `MGITEST_MAGMA_FORCE_DEFAULT_BLIT_SCRATCH=1`
+（在恒等表面上走旋转臂的 scratch 路径）。**两者必须产出同样的像素**，这条等式就是断言——也是 scratch 臂
+唯一可被主机车道到达的方式：本车道能创建的每一个表面都是 `VK_SURFACE_TRANSFORM_IDENTITY`，本簇的 Redmi
+证据也是 pbuffer。
+
+### 4.4 red-once（R-16，已执行并还原）
+
+把 `MagmaWireFatal("default-color-blit-shape@P7")` 放回去 → 两条都死于
+`Fatal{UnmigratedVerb, "Magma:default-color-blit-shape@P7"}`；还原后 2/2 绿。
+
+### 4.5 门与设备债
+
+`integration-magma-split` **81**（+2）、`-spawn` **60**（+2）、`-tcp` **62**（+2），三臂 0 红。
+
+**欠设备核对**：非恒等旋转下的 scratch 臂只在恒等表面上被旋钮验证过（像素与回落臂相同）；真正的
+ROTATE_90/180/270 几何要在手机上看一眼。四旋转之外的 decline 无设备可核（没有会报镜像 transform 的
+设备），按 decline 收口。

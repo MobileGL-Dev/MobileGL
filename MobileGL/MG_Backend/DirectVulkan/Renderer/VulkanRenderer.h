@@ -497,6 +497,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool BlitWireColorImage(WireImage source, WireImage destination,
                                GLint sx0, GLint sy0, GLint sx1, GLint sy1,
                                GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter, Bool mipmap);
+        // P7 wave 2-B, CONTRACT-P7 §3.2 (`default-color-blit-shape`): the rotated arm. Moves the
+        // source region into an owned single-sample 2D image of a sampled-float format in the
+        // same size-compatibility class, then shader-blits THAT to the rotated default
+        // framebuffer - the shapes BlitWireColorImage itself cannot sample (an integer format, a
+        // 3D or array source) become shapes it can.
+        Bool BlitWireColorToDefaultThroughScratch(WireImage source, WireImage destination,
+                                                  GLint sx0, GLint sy0, GLint sx1, GLint sy1,
+                                                  GLint dx0, GLint dy0, GLint dx1, GLint dy1,
+                                                  GLenum filter);
         struct WireColorBlitResources;
         WireColorBlitResources* m_wireColorBlitResources = nullptr;
         void DestroyWireColorBlitResources();

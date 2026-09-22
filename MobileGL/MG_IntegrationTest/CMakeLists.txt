@@ -2734,6 +2734,20 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # strongest sense: the monolith arm declines every in-place copy, so there is no
         # DirectVulkan. entry to register these beside - the wire arm is the one that performs
         # them, which is what §3.2 asks for.
+        # `default-color-blit-shape@P7`'s retirement. TWO ENTRIES OVER ONE CASE, and the second
+        # is the only way its arm is reachable here: every surface this lane creates reports
+        # VK_SURFACE_TRANSFORM_IDENTITY, so the scratch path that exists FOR rotation would
+        # never run. Forced onto an identity surface it must produce the SAME pixels as the
+        # fall-through, which is what the shared assertions check.
+        foreach(defaultBlitScratch 0 1)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.DefaultBlitShape${defaultBlitScratch}."
+                TEST_FILTER "F1WireScenario.ColorBlitToDefaultFromANonSampleableSourceDegrades"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_DEFAULT_BLIT_SCRATCH=${defaultBlitScratch}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-defaultblit${mglItestArmLogTag}-scratch${defaultBlitScratch}.log")
+        endforeach()
         foreach(inPlaceCase CopyImageInPlaceAcrossLevelsAndLayers
                             CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone)
             gtest_discover_tests(MobileGLIntegrationTest
