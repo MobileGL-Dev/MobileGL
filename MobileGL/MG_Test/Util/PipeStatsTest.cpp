@@ -134,13 +134,19 @@ namespace {
         PS::Init();
 
         for (Uint32 i = 0; i < 5; ++i) {
+#if MOBILEGL_PIPE_PUSH
             PS::PublishGauge(PS::Gauge::ServerWaits, static_cast<Uint64>(100 * (i + 1)));
+#endif
             PS::OnPresent();
         }
         EXPECT_EQ(PS::FrameCount(), 5u);
+#if MOBILEGL_PIPE_PUSH
         // The gauge is a RUN TOTAL: publishing five increasing values leaves the last one,
         // never their sum. This is the mistake the report's first aggregation script made.
+        // Gauges are push-only (gate G1, see PipeStats.h); the pull flavour keeps the case
+        // registered for name parity and asserts only the window arithmetic above.
         EXPECT_EQ(PS::GaugeValue(PS::Gauge::ServerWaits), 500u);
+#endif
 
         MobileGL::MG_Config::Features.PipeStatsPeriod = saved;
         PS::Init();
