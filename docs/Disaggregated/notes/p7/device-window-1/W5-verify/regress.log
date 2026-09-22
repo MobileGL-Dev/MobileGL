@@ -1,0 +1,117 @@
+=== Android retrace: minecraft-1.21.4-fabric-iris-iterationt-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-iterationt-in-world\trace.trace: 1 file pushed, 0 skipped. 20.1 MB/s (94141776 bytes in 4.474s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-iterationt-in-world.0000110538.png: 1 file pushed, 0 skipped. 37.6 MB/s (705968 bytes in 0.018s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999420, ssimThreshold=0.990000, mismatchPixels=354383, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-iterationt-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 110538,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999419883,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 354383
+}
+Android retrace: real inproc transport, strict role state and zero Fatal records confirmed
+archived repeat 1 to .trace-work\p7w5\regress\minecraft-1.21.4-fabric-iris-iterationt-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world\trace.trace: 1 file pushed, 0 skipped. 20.3 MB/s (92544229 bytes in 4.341s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world.0000115019.png: 1 file pushed, 0 skipped. 19.8 MB/s (800864 bytes in 0.038s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.998933, ssimThreshold=0.990000, mismatchPixels=402662, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 115019,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.998933123,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 402662
+}
+Android retrace: real inproc transport, strict role state and zero Fatal records confirmed
+archived repeat 1 to .trace-work\p7w5\regress\minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
+=== Android retrace: improved-transparency-minecraft-26.3 / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\improved-transparency-minecraft-26.3\trace.trace: 1 file pushed, 0 skipped. 13.2 MB/s (14404890 bytes in 1.043s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\improved-transparency-minecraft-26.3.0002667619.png: 1 file pushed, 0 skipped. 18.5 MB/s (368306 bytes in 0.019s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=0.999600, ssimThreshold=0.995000, mismatchPixels=73242, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/improved-transparency-minecraft-26.3-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 2667619,
+  "width": 854,
+  "height": 480,
+  "cropX": 0,
+  "cropY": 0,
+  "cropWidth": 0,
+  "cropHeight": 0,
+  "ssim": 0.999600026,
+  "ssimThreshold": 0.995000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 73242
+}
+Android retrace: real inproc transport, strict role state and zero Fatal records confirmed
+archived repeat 1 to .trace-work\p7w5\regress\improved-transparency-minecraft-26.3-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html

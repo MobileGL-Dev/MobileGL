@@ -1,0 +1,39 @@
+=== Android retrace: OpenRA / DirectVulkan (repeat 1/1) ===
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-fixture\OpenRA\openra.trace: 1 file pushed, 0 skipped. 49.1 MB/s (22192645 bytes in 0.431s)
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\tools\trace_replay\fixtures\openra.0000031249.png: 1 file pushed, 0 skipped. 23.2 MB/s (403752 bytes in 0.017s)
+Starting: Intent { act=top.mobilegl.plugin.TRACE_REPLAY cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.trace.TraceReplayActivity (has extras) }
+{
+  "passed": true,
+  "statusCode": 0,
+  "message": "retrace completed; ssim=1.000000, ssimThreshold=0.990000, mismatchPixels=0, matchedGoldenPath=/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "tracePath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/trace.trace",
+  "goldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "alternateGoldenPaths": [],
+  "matchedGoldenPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/input/golden.png",
+  "actualPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/actual.png",
+  "diffPath": "/data/user/0/top.mobilegl.plugin.p7w1.trace/files/trace-replay/output/OpenRA-diff.png",
+  "backend": "DirectVulkan",
+  "angleVariant": "",
+  "targetFrame": -1,
+  "targetCall": 31249,
+  "width": 640,
+  "height": 480,
+  "cropX": 1,
+  "cropY": 1,
+  "cropWidth": 638,
+  "cropHeight": 478,
+  "ssim": 1.000000000,
+  "ssimThreshold": 0.990000000,
+  "useAngle": false,
+  "usePbuffer": true,
+  "avoidAngleLlvmpipeSamplerMipmapMinFilter": false,
+  "avoidAngleLlvmpipeExplicitLodBias": false,
+  "fixIterationRPSubgroupScratch": false,
+  "deriveNumSubgroups": false,
+  "iterationRPFixBarrier": false,
+  "holdMs": 0,
+  "mismatchPixels": 0
+}
+trace replay failed actual spawn/second-process/zero-Fatal proof: {"required_transport": "spawn", "library_log": "C:\\Users\\geekerwan\\AndroidStudioProjects\\FoldCraftLauncher\\MobileGL-disagg\\.trace-work\\android-retrace-result\\OpenRA-DirectVulkan\\mobilegl.log", "transport_resolution_marker": true, "server_pid": 21640, "ipc_config_lines": ["Config: IPC ring=8MiB stage=32MiB spin=50us persistent-block=64KiB adopt-tier=2 verb-barrier=1 run-ahead=0 present-credit=1 strict=1 audit=0 role-split-state=1 affinity='auto'"], "required_ipc_settings": {"strict": "1", "role-split-state": "1", "run-ahead": "1"}, "client_ipc_line_present": false, "fatal_count": 0, "fatal_lines": [], "passed": false}
+archived repeat 1 to .trace-work\p7w5\spawn-lock-2\OpenRA-DirectVulkan\repeat-01
+C:\Users\geekerwan\AndroidStudioProjects\FoldCraftLauncher\MobileGL-disagg\.trace-work\android-retrace-summary\mobilegl-android-retrace-overview.html
