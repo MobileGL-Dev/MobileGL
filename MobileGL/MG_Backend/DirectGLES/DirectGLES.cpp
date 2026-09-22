@@ -66,8 +66,20 @@
 
 namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
-    // read_pixels writes server reply scratch. The client refuses PACK_BUFFER before
-    // emission, so no frontend pack binding can affect this destination.
+    // A readback on the server writes REPLY SCRATCH, so it has no pack buffer - and this
+    // function is how every pack-PBO lookup in this file says so under a transport.
+    //
+    // THE REASON IS NOT "THE CLIENT REFUSES PACK_BUFFER BEFORE EMISSION", which is what this
+    // comment used to claim and is not true of the tree (P3b/P4b espryt D1 slice 4). The client
+    // SERVICES the pack PBO itself, AFTER the reply lands: EmitTables.cpp uploads the reply's
+    // tight rows into the bound buffer with pbo->UploadSubData, one row at a time at the stride
+    // the application's GL_PACK_* state implies, so padding and untouched bytes survive. A
+    // refusal would have been visible as a GL error; what actually happens is an ordinary
+    // buffer upload the client performs on its own side.
+    //
+    // The server's half is ID-49's: read with NEUTRAL pack state into a tight w*h*bpp reply.
+    // Which is exactly why the server must see NO pack buffer here - not because the client
+    // forbade one, but because the client kept it.
     static const SharedPtr<MG_State::GLState::BufferObject>& SplitReadbackPackBuffer() {
         static const SharedPtr<MG_State::GLState::BufferObject> none;
         return none;
@@ -14917,11 +14929,43 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (width <= 0 || sliceHeight <= 0 || sliceCount <= 0) {
             return true;
         }
+        const void* shadow = textureMipmapObject->MapMipmapData(uploadTarget, level);
 #if MOBILEGL_PIPE_PUSH
-        // P4a (D-M). glGetTexImage is answered out of the frontend's own level shadow,
-        // converted to the requested format and type. Monolith is unchanged; a split server
-        // holds no shadow to convert, and the readback family as a whole is P3b/P4b's and
-        // P8's rather than this phase's.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P4a (D-M) SAID "a split server holds no shadow to convert" AND ABORTED. That is the
+        // premise this row of P3b/P4b re-examined, and it is wrong in the only case that can
+        // get here: the level storage this converts IS the server's own, fed by the staged
+        // texture store, so when MapMipmapData answers the conversion is reading bytes that
+        // exist on this side and the answer is right. There is nothing to migrate - the
+        // emulation was never reaching across the split, it only looked as though it must.
+        //
+        // WHEN IT DOES NOT ANSWER, THE VERB DECLINES BY NAME (rule I) RATHER THAN ABORTING.
+        // std::abort inside a server that is answering a client's readback takes the whole
+        // session down for a texture level it happens not to hold; GL's own answer for "this
+        // read cannot be served" is an error code and untouched destination bytes, and a
+        // client that gets GL_INVALID_OPERATION can carry on. The abort also bypassed
+        // Session::Fail entirely, which is the funnel the census gate watches.
+        //
+        // THE FUNNEL KEEPS ITS TEETH FOR THE OTHER SITES: MGPipeUnmigratedEmulation still
+        // aborts for generate-mipmap-storage, generate-mipmap-cpu-fallback,
+        // generate-mipmap-cpu-filter and texture-remint-pull, which really do reach into a
+        // client address space. Only this call site is retired, and only because its own
+        // premise did not hold.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            if (shadow == nullptr) {
+                MGLOG_E_ONCE("GetTexImage: no level shadow on this side for target=0x%x level=%d, and under an "
+                             "active transport there is no client shadow to fall back to - the read is "
+                             "DECLINED and the destination keeps its bytes",
+                             static_cast<unsigned>(uploadTarget), level);
+                MGB_CTX->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>(
+                        "DirectGLES", "GetTexImage",
+                        "the level has no shadow on the server and there is no client shadow to convert"));
+                return false;
+            }
+        } else
+#endif
         MG_Pipe::MGPipeUnmigratedEmulation("get-tex-image-shadow");
 #endif
         const auto& pixelPackBufferObject =
@@ -14934,7 +14978,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
-        const void* shadow = textureMipmapObject->MapMipmapData(uploadTarget, level);
         if (!shadow) {
             return false;
         }

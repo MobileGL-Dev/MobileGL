@@ -31,6 +31,7 @@
 // and DirectVulkan is the built-in control.
 
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -253,6 +254,117 @@ namespace MGITest {
         EXPECT_EQ(FirstGLError(), 0u);
         ResetAllPixelStoreModes();
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDeleteFramebuffers(1, &framebuffer);
+        glDeleteTextures(1, &texture);
+    }
+
+    // THE ONE READBACK DESTINATION NOTHING COVERED (P3b/P4b espryt D1 slice 4): a bound
+    // GL_PIXEL_PACK_BUFFER, with a non-default GL_PACK_* state, read back afterwards through
+    // glMapBufferRange.
+    //
+    // The case above reads into a CLIENT POINTER, which under a transport is served by
+    // ScatterTightReadbackIntoPackState - a pure function with unit cover of its own. A PBO
+    // destination is a different half of the same seam and had none: the server reads with
+    // NEUTRAL pack state into a tight w*h*bpp reply (ID-49), and the CLIENT then services the
+    // PBO itself after the reply lands, uploading the tight rows one at a time at the stride the
+    // application's pack state implies (EmitTables.cpp's `if (pbo)` branch). Nothing in the tree
+    // ran that branch, and it is arithmetic - a stride, an alignment round-up, two skips and a
+    // buffer offset - which is the kind of code that is either exactly right or quietly wrong.
+    //
+    // WHAT MAKES IT A TEST RATHER THAN A SMOKE CHECK is the poison. Every byte of the buffer
+    // starts 0xCD; the rows land where the pack state says and NOTHING ELSE MOVES. A branch that
+    // uploaded the reply whole, or ignored the buffer offset, or rounded the stride the other
+    // way, writes over poison that this asserts is still there.
+    //
+    // The numbers are chosen so each term does something: ROW_LENGTH 5 at 4 bytes per pixel is
+    // 20, which ALIGNMENT 8 rounds up to a 24-byte stride (a stride equal to the row length would
+    // not tell a missing round-up from a present one); SKIP_ROWS 1 and SKIP_PIXELS 2 move the
+    // first pixel to byte 24 + 8 = 32 of the image; and the read is issued at buffer offset 16,
+    // so the first pixel lands at 48 and a branch that dropped the offset would land at 32.
+    TEST_F(PixelStoreSweepScenario, ReadPixelsIntoAPackBufferHonoursPackStateAndLeavesTheGapsAlone) {
+        if (!Ready()) return;
+        ResetAllPixelStoreModes();
+
+        constexpr int kW = 2;
+        constexpr int kH = 2;
+        constexpr GLint kAlignment = 8;
+        constexpr GLint kRowLength = 5;
+        constexpr GLint kSkipRows = 1;
+        constexpr GLint kSkipPixels = 2;
+        constexpr std::size_t kBpp = 4;
+        constexpr std::size_t kOffset = 16;
+        constexpr std::size_t kPboBytes = 256;
+        constexpr std::uint8_t kPoison = 0xCD;
+        // The same arithmetic GL defines and EmitTables.cpp implements, written out here rather
+        // than borrowed, so the test cannot agree with the code by construction.
+        constexpr std::size_t kStride = ((kRowLength * kBpp) + kAlignment - 1) / kAlignment * kAlignment;
+        constexpr std::size_t kFirst = kOffset + kSkipRows * kStride + kSkipPixels * kBpp;
+        static_assert(kStride == 24, "the alignment round-up must actually round");
+        static_assert(kFirst == 48, "the skips and the buffer offset must all move the first pixel");
+
+        // Four distinct opaque colours, so a row or a pixel landing in the wrong place is a
+        // wrong VALUE and not just a wrong offset.
+        const std::uint8_t texels[kW * kH * kBpp] = {
+            0x11, 0x22, 0x33, 0xFF, 0x44, 0x55, 0x66, 0xFF,
+            0x77, 0x88, 0x99, 0xFF, 0xAA, 0xBB, 0xCC, 0xFF,
+        };
+
+        GLuint texture = 0, framebuffer = 0, pbo = 0;
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kW, kH, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels);
+        glGenFramebuffers(1, &framebuffer);
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+        ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+        ASSERT_EQ(FirstGLError(), 0u);
+
+        const std::vector<std::uint8_t> poison(kPboBytes, kPoison);
+        glGenBuffers(1, &pbo);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
+        glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(kPboBytes), poison.data(), GL_STREAM_READ);
+        ASSERT_EQ(FirstGLError(), 0u);
+
+        glPixelStorei(GL_PACK_ALIGNMENT, kAlignment);
+        glPixelStorei(GL_PACK_ROW_LENGTH, kRowLength);
+        glPixelStorei(GL_PACK_SKIP_ROWS, kSkipRows);
+        glPixelStorei(GL_PACK_SKIP_PIXELS, kSkipPixels);
+        glReadPixels(0, 0, kW, kH, GL_RGBA, GL_UNSIGNED_BYTE,
+                     reinterpret_cast<void*>(static_cast<std::uintptr_t>(kOffset)));
+        EXPECT_EQ(FirstGLError(), 0u);
+        ResetAllPixelStoreModes();
+
+        std::vector<std::uint8_t> readback(kPboBytes, 0);
+        const void* mapped =
+            glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(kPboBytes), GL_MAP_READ_BIT);
+        ASSERT_NE(mapped, nullptr) << "the pack buffer could not be mapped for readback";
+        std::memcpy(readback.data(), mapped, kPboBytes);
+        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+
+        // Every byte the pack state names carries its texel; every other byte is still poison.
+        std::vector<bool> written(kPboBytes, false);
+        for (int y = 0; y < kH; ++y) {
+            for (int x = 0; x < kW; ++x) {
+                for (std::size_t c = 0; c < kBpp; ++c) {
+                    const std::size_t at = kFirst + static_cast<std::size_t>(y) * kStride +
+                                           static_cast<std::size_t>(x) * kBpp + c;
+                    ASSERT_LT(at, kPboBytes);
+                    written[at] = true;
+                    EXPECT_EQ(readback[at], texels[(y * kW + x) * kBpp + c])
+                        << "pixel (" << x << ", " << y << ") component " << c << " at buffer byte " << at
+                        << (readback[at] == kPoison ? " is still the poison: nothing was written here" : "");
+                }
+            }
+        }
+        for (std::size_t i = 0; i < kPboBytes; ++i) {
+            if (written[i]) continue;
+            EXPECT_EQ(readback[i], kPoison)
+                << "buffer byte " << i << " is outside every row the pack state names and must not have moved";
+        }
+
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDeleteBuffers(1, &pbo);
         glDeleteFramebuffers(1, &framebuffer);
         glDeleteTextures(1, &texture);
     }

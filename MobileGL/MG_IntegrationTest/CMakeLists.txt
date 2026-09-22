@@ -2297,6 +2297,59 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_register_split_arms("XfbAfterClipDistanceScenario.*" "Xfb.")
     mgl_itest_register_split_arms("XfbRepeatedCaptureScenario.*" "Xfb.")
 
+    # ---- P3b/P4b espryt D1 slice 4: THE READBACK FAMILY ON THE SPLIT ARMS -------------------
+    #
+    # The 回读 half of the plan's "回读 / pack state" row. The PACK half is done - server reads
+    # with neutral pack state, the client scatters (ID-49, EmitTables.cpp) - and the READBACK half
+    # had no split coverage at all, so every claim about it was a reading of the code rather than
+    # a run of it. Arming the lanes is the first half of the work and the census is the second:
+    # what reds here IS the remaining worklist, and each red is either D1's to fix or excluded BY
+    # NAME with the Fatal quoted, the way the d1 draw block excludes
+    # MultiDrawScenario.ClientSideIndicesBatchMatchesUnrolledDraws.
+    mgl_itest_register_split_arms("PixelStoreSweepScenario.*" "")
+    mgl_itest_register_split_arms("PackedWordReadbackScenario.*" "")
+    mgl_itest_register_split_arms("LayeredTextureReadbackScenario.*" "")
+    # FramebufferChurnScenario shares PixelStoreSweepScenario.cpp and is the other half of its
+    # story - ~3300 texture+framebuffer pairs per case, the shape that walked an Adreno driver to
+    # 1.2 GB of leaked objects and then answered every readback with someone else's pixels. Under
+    # a transport every one of those pairs is also a create/destroy record round trip, so this is
+    # the only entry in the readback block that says anything about the OBJECT lifetime half.
+    mgl_itest_register_split_arms("FramebufferChurnScenario.*" "")
+
+    # DepthStencilReadbackMatrixScenario GETS ITS OWN BLOCK, because it needs a variable the
+    # registration macro cannot carry: MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION=1.
+    #
+    # Without it this scenario is UNFALSIFIABLE on the machines this suite runs on, and the
+    # ambient DirectGLES.ForcedDepthStencilEmulation. lane says why: OpenGL ES has no depth or
+    # stencil readback in core, but Mesa accepts the reads anyway, so on llvmpipe every case goes
+    # green through a native path the Adreno device does not have - deleting the whole emulation
+    # left all of them passing. A split arm that inherited the ambient default would be measuring
+    # the same non-path three more times. So the pin is MIRRORED here, which is what the plan's
+    # row asks for.
+    foreach(mglItestDsArm IN LISTS MGL_ITEST_MAGMA_ARMS)
+        mgl_itest_magma_arm_shape(${mglItestDsArm})
+        string(TOLOWER "${mglItestDsArm}" mglItestDsArmLower)
+        mgl_itest_join_environment(mglItestDsEnvironment
+            "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_SPLIT_LANE=1"
+            "MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION=1"
+            ${mglItestArmTransportEnv} ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectGLES.${mglItestDsArm}.ForcedDs."
+            TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
+            TEST_FILTER "DepthStencilReadbackMatrixScenario.*"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-gpu\;integration-${mglItestDsArmLower}"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${mglItestDsEnvironment}"
+                ${mglItestArmProperties}
+        )
+        # Into the accumulated list like every other arm entry, so SplitLogPaths gives each of
+        # these a private MOBILEGL_LOG_FILE_PATH too - two processes append on the spawn arm.
+        list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
+        math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
+    endforeach()
+
 
     # ---- P5e fix1: THE PUSH-MONOLITH ARM, INSIDE THE GATED SET (ID-107) ----------------------
     #
@@ -2652,6 +2705,17 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     foreach(f1Slot ClearBufferfi ClearBufferfv ClearBufferiv ClearBufferuiv ClearNamedFramebufferfi ClearNamedFramebufferfv ClearNamedFramebufferiv ClearNamedFramebufferuiv CopyTexImage2D CopyTexSubImage2D GenerateMipmap GenerateMipmapPackedFloat GenerateMipmapDepth)
         mgl_itest_register_split_arms("F1WireScenario.${f1Slot}Pixels" "F1.")
     endforeach()
+    # THE TWO PACK-STATE CASES OF F1, which are not ${slot}Pixels-shaped (P3b/P4b espryt D1
+    # slice 4). ID-49 splits a readback in two: the server reads with NEUTRAL pack state into a
+    # tight w*h*bpp reply, and the CLIENT scatters those rows into the application's destination
+    # per its own GL_PACK_*. Only the client half has ever been exercised by a unit case over
+    # ScatterTightReadbackIntoPackState; these two run the whole seam, one for the padding a
+    # non-default pack state must leave untouched and one for the overflow that has to be refused
+    # BEFORE anything is written.
+    mgl_itest_register_split_arms(
+        "F1WireScenario.TextureAndFramebufferReadsPreservePackBufferPadding" "F1.")
+    mgl_itest_register_split_arms(
+        "F1WireScenario.TextureReadbackRejectsPackedDestinationOverflowBeforeWriting" "F1.")
     # P5f fm: the framebuffer/copy/mipmap verbs now consume server records on Magma too.
     #
     # P7 package L: THE SAME CASES ON ALL THREE TRANSPORTS. The flavour is everything this lane

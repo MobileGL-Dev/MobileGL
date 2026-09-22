@@ -220,7 +220,115 @@ was re-run clean at 121/121.)*
 
 ## slice 4 — readback close-out
 
-`RESULT: (pending)`
+The plan's 回读 row had four parts. The headline is part (a): **the census came back clean**, which
+is not what the row expected ("Expect reds — that is the point").
+
+### (a) the readback lane census
+
+Registered on the three split arms (`integration-split` / `-spawn` / `-tcp`), 22 cases per arm:
+
+| family | cases/arm | result |
+|---|---|---|
+| `F1WireScenario.TextureAndFramebufferReadsPreservePackBufferPadding` | 1 | green |
+| `F1WireScenario.TextureReadbackRejectsPackedDestinationOverflowBeforeWriting` | 1 | green |
+| `PixelStoreSweepScenario.*` | 2 (+1 new, below) | green |
+| `FramebufferChurnScenario.*` | 1 | green |
+| `PackedWordReadbackScenario.*` | 3 | green |
+| `LayeredTextureReadbackScenario.*` | 2 | green |
+| `DepthStencilReadbackMatrixScenario.*` | 12 | green |
+
+**No case needed a fix and no case needed a named deferral.** The first run was 65/65 (63 cases +
+the two TCP fixture entries), before any of this slice's code changes. That is a real finding and
+it is worth stating plainly: the 回读 half was assumed open because nothing had ever run it under a
+transport, and the assumption, not the code, was what was wrong. `ScatterTightReadbackIntoPackState`
+and the server's neutral-pack read were already carrying it.
+
+Two honest caveats, because a skip is not coverage:
+
+* `DepthStencilReadbackMatrixScenario.SeparateDepthAndStencilAttachmentsAreBothReadable` **SKIPS on
+  all three arms** — and on monolith too. It is a driver fact, named by the case itself: *"this
+  driver cannot host separate DEPTH_COMPONENT24 and STENCIL_INDEX8 attachments"*. Not a transport
+  fact, nothing deferred.
+* `DepthStencilReadbackMatrixScenario` needs `MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION=1`
+  mirrored into the split arms, which the registration macro cannot carry, so it gets its own
+  per-arm block (`DirectGLES.{Split,Spawn,Tcp}.ForcedDs.`). Without the pin the scenario is
+  unfalsifiable here: ES has no core depth/stencil readback, Mesa accepts the reads anyway, and on
+  llvmpipe every case goes green through a path the Adreno device does not have — deleting the
+  whole emulation left all of them passing. A split arm inheriting the ambient default would have
+  measured the same non-path three more times.
+
+### (b) the two `std::abort` emulations
+
+The row said both *"still `std::abort` under any non-monolith transport"*. Checked rather than
+assumed, and the tree disagrees on one of them:
+
+* **`copy-image-shadow-mirror` already cannot abort.** `MirrorCopyImageIntoDestinationShadow`
+  returns under `if (MG_Config::Transport != Monolith)` **before** reaching
+  `MGPipeUnmigratedEmulation`, and has since P5b package i1 (its own comment names the ruling and
+  the two backstop Fatals that bound what the skip loses). Nothing to do; the row is stale.
+* **`get-tex-image-shadow` is retired here**, and the interesting part is *why* it was there. P4a's
+  comment reads "a split server holds no shadow to convert" — but the level storage this function
+  converts **is the server's own**, fed by the staged texture store. When `MapMipmapData` answers,
+  the conversion reads bytes that exist on this side and the answer is right; the emulation was
+  never reaching across the split, it only looked as though it must. So: convert when the shadow
+  is there, and decline by name (rule I: `MGLOG_E_ONCE` + `GL_INVALID_OPERATION`, destination
+  untouched) when it is not. `std::abort` inside a server answering a client's readback takes the
+  whole session down for a texture level it happens not to hold, and it bypasses `Session::Fail`,
+  which is the funnel the census gate watches.
+  **The funnel keeps its teeth for the other four sites** — `generate-mipmap-storage`,
+  `generate-mipmap-cpu-fallback`, `generate-mipmap-cpu-filter`, `texture-remint-pull` — which
+  really do reach into a client address space. Only this call site is retired, and only because its
+  own premise did not hold. `fatal_census.py` is unchanged at 79 abort sites, because the abort
+  lives in `MGPipeUnmigratedEmulation` and that function stays.
+
+  **Reachability, said out loud**: no case in the armed census reaches this site under a transport,
+  and the analysis says why — the client emits `MGPWireOp::GetTextureImage` and the server answers
+  it with `ReadTextureImageWire` (a scratch-FBO read), never through the backend's `GetTexImage`
+  slot. So this change is defence in depth and **has no integration-level red-once of its own**;
+  saying otherwise would be inventing one.
+
+### (c) the case nothing covered
+
+`PixelStoreSweepScenario.ReadPixelsIntoAPackBufferHonoursPackStateAndLeavesTheGapsAlone`:
+`glReadPixels` into a bound `GL_PIXEL_PACK_BUFFER` at a non-zero buffer offset, with
+`PACK_ALIGNMENT`/`ROW_LENGTH`/`SKIP_ROWS`/`SKIP_PIXELS` all non-default, read back with
+`glMapBufferRange`. This is the only thing that drives `EmitTables.cpp`'s `if (pbo)` branch — the
+client servicing the pack PBO itself after the reply lands, uploading tight rows one at a time at
+the stride the pack state implies. The existing sweep case reads into a client POINTER, which is
+`ScatterTightReadbackIntoPackState`'s half and has unit cover; the PBO half had none, and it is
+pure arithmetic (stride, alignment round-up, two skips, a buffer offset).
+
+Every number is chosen to make a term matter: `ROW_LENGTH` 5 × 4 bpp = 20, which `ALIGNMENT` 8
+rounds up to a **24**-byte stride; `SKIP_ROWS` 1 + `SKIP_PIXELS` 2 put the first pixel at image
+byte 32; the read is issued at buffer offset 16, so it lands at **48**. The whole buffer starts
+`0xCD` and the case asserts both halves: the rows land where the pack state says, and **every other
+byte is still poison**.
+
+**RESULT — red once, then green.** Dropping just the buffer-offset term from
+`EmitTables.cpp:1001` (`start = pixels + …` → `start = …`) and rebuilding:
+
+```
+3794 DirectGLES.Split.PixelStoreSweepScenario.ReadPixelsIntoAPackBuffer…  (Failed)
+3797 DirectGLES.Spawn.…                                                   (Failed)
+3800 DirectGLES.Tcp.…                                                     (Failed)
+```
+`PixelStoreSweepScenario.cpp:353: readback[at] Which is: '\xCD' (205)` — the destination is still
+poison because the rows landed 16 bytes early. The ambient monolith entries passed in the same run
+(the driver services its own PBO there), so the three reds are a transport fact. `EmitTables.cpp`
+was restored immediately and is **not** part of this commit.
+
+### (d) the stale comment
+
+`SplitReadbackPackBuffer`'s comment claimed *"The client refuses PACK_BUFFER before emission, so no
+frontend pack binding can affect this destination."* The client does no such thing — it **keeps**
+the PBO and services it after the reply. The conclusion (the server must see no pack buffer) was
+right; the reason was backwards, and a refusal would have been observable as a GL error. Rewritten
+to the actual reason, with ID-49's split of the work named.
+
+**Gates.** `integration-split` 225/225 (base 186), `integration-spawn` 141/141 (base 102),
+`integration-tcp` 144/144 (142 labelled + 2 fixtures; base 103 + 2), `ctest -L unit` 2408/2408,
+`integration-magma-split` 73/73, parity / census (79 sites, 0 unmarked) / ratchet (186) green.
+G1 `.text` `0xa52203`, both nm lists byte-identical.
 
 ## slice 5 — four transport-aware resolvers
 
