@@ -2684,6 +2684,32 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-fm${mglItestArmLogTag}-${fmCase}.log")
         endforeach()
+        # ---- P7 wave 2-B: THE TWO SHADER MIP ARMS, FORCED ------------------------------------
+        #
+        # WHY A KNOB AND NOT A FORMAT. The refusal these two entries cover
+        # (`Magma:mipmap-shader-format-or-shape`) killed two Iris cases on an Adreno 830v2 and
+        # has never once fired on this host, because lavapipe reports BLIT_SRC|BLIT_DST for
+        # every colour format the integration binary can create - so GenerateWireMipmap takes
+        # its NATIVE arm for all of them and neither shader arm is reachable by choosing a
+        # format. `GenerateMipmapPackedFloatPixels` next door looks like it covers the shader
+        # arm and does not: R11F_G11F_B10F blits natively here too.
+        # MGITEST_MAGMA_FORCE_SHADER_MIPMAP drops that arm instead, one tier per shape, so the
+        # host lane exercises the code the device actually runs.
+        #
+        # ITS OWN ENTRIES RATHER THAN A LANE-WIDE FLIP, for the reason the strict-arming entry
+        # gives: the knob changes how EVERY mipmap in the process is generated, so putting it in
+        # the shared Fm environment would silently retarget GenerateMipmapPixels,
+        # GenerateMipmapPackedFloatPixels, GenerateMipmapDepthPixels and the two base/view cases
+        # as well - four green entries that would stop measuring the arm they were written for.
+        foreach(shaderMipTier 1 2)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.ShaderMip${shaderMipTier}."
+                TEST_FILTER "F1WireScenario.GenerateMipmapWithoutNativeBlitPixels"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_MIPMAP=${shaderMipTier}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-shadermip${mglItestArmLogTag}-tier${shaderMipTier}.log")
+        endforeach()
     endforeach()
 endif()
 

@@ -13,6 +13,80 @@
                                    "MGPipe: Fatal{UnmigratedVerb, \"Magma:%s\"}", detail);
     }
 
+    // P7 wave 2-B. THE NAME STAYS FIRST AND THE DRIVER'S ANSWER FOLLOWS IT. Two Iris cases
+    // died on the Redmi (Adreno 830v2) with `Fatal{UnmigratedVerb, "Magma:mipmap-shader-
+    // format-or-shape"}` and that line was the whole evidence: five disjunctions share the
+    // name, so the one thing the device could have told us - WHICH format, at what shape,
+    // missing WHICH feature bit - was the one thing it did not. The census, the retrace
+    // refusal tally and every log grep key on the leading word, so it is unchanged and
+    // unprefixed; everything after the first space is for the reader of the next device run.
+    static String MagmaWireShapeDetail(const char* name, VkFormat format, VkFormat storageFormat,
+                                       const VkFormatProperties& props, VkImageAspectFlags aspect,
+                                       VkImageViewType viewType, VkImageUsageFlags usage,
+                                       const VkExtent2D& extent, Uint32 depth, Uint32 levels,
+                                       Uint32 baseLayer, Uint32 layerCount, Uint32 arrayLayers) {
+        const auto hex = [](Uint32 value) {
+            static const char* digits = "0123456789abcdef";
+            String out = "0x";
+            Bool leading = true;
+            for (Int shift = 28; shift >= 0; shift -= 4) {
+                const Uint32 nibble = (value >> shift) & 0xfu;
+                if (nibble == 0 && leading && shift) continue;
+                leading = false;
+                out.push_back(digits[nibble]);
+            }
+            return out;
+        };
+        const VkFormatFeatureFlags absent = ~props.optimalTilingFeatures;
+        String missing;
+        const auto note = [&](VkFormatFeatureFlags bit, const char* word) {
+            if (!(absent & bit)) return;
+            if (!missing.empty()) missing += "|";
+            missing += word;
+        };
+        note(VK_FORMAT_FEATURE_BLIT_SRC_BIT, "BLIT_SRC");
+        note(VK_FORMAT_FEATURE_BLIT_DST_BIT, "BLIT_DST");
+        note(VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT, "SAMPLED");
+        note(VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT, "SAMPLED_LINEAR");
+        note(VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT, "COLOR_ATTACHMENT");
+        note(VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT, "DEPTH_STENCIL_ATTACHMENT");
+        if (missing.empty()) missing = "none";
+        String out = name;
+        out += " format=" + std::to_string(static_cast<Int>(format));
+        // A view that reinterprets its owner's format is the OTHER reason the native blit
+        // arm is skipped, and it is invisible in the format number alone.
+        if (storageFormat != format) out += " storage=" + std::to_string(static_cast<Int>(storageFormat));
+        out += " extent=" + std::to_string(extent.width) + "x" + std::to_string(extent.height) +
+               "x" + std::to_string(depth);
+        out += " levels=" + std::to_string(levels);
+        out += " aspect=" + hex(static_cast<Uint32>(aspect));
+        out += " view=" + std::to_string(static_cast<Int>(viewType));
+        out += " usage=" + hex(static_cast<Uint32>(usage));
+        out += " layers=" + std::to_string(baseLayer) + "+" + std::to_string(layerCount) +
+               "/" + std::to_string(arrayLayers);
+        out += " missing=" + missing;
+        return out;
+    }
+
+    // THE HOST GATE CANNOT REACH THE SHADER MIP ARM ON ITS OWN. lavapipe reports
+    // BLIT_SRC|BLIT_DST for every colour format this lane can create, so `nativeBlit` is
+    // always true there and both shader shapes below would only ever run on the phone -
+    // which is how the Adreno refusal reached a release in the first place. The knob makes
+    // them reachable from a host lane and is read exactly once:
+    //   1 - drop the native blit (the arm an Adreno takes for a format without BLIT_DST);
+    //   2 - also hide the destination's COLOR_ATTACHMENT usage (the arm it takes for a
+    //       sampled-only texture, which renders through owned scratch and copies back).
+    // MGITEST_, not MOBILEGL_: it is a test knob, it is not mirrored into the accepted-env
+    // table, and this file is compiled only into the disaggregated build.
+    static Uint32 MagmaWireForcedShaderMipmapTier() {
+        static const Uint32 tier = [] {
+            const char* value = std::getenv("MGITEST_MAGMA_FORCE_SHADER_MIPMAP");
+            if (!value || !*value) return 0u;
+            return static_cast<Uint32>(std::strtoul(value, nullptr, 10));
+        }();
+        return tier;
+    }
+
     VulkanRenderer::WireImage VulkanRenderer::ResolveWireImage(
         const MG_Pipe::MGPFramebufferState& fbo, const MG_Pipe::MGPSurface& surface,
         VkImageAspectFlags aspect, Bool isWriteTarget) {
@@ -762,19 +836,46 @@
         const VkFormat format = viewFormat == VK_FORMAT_UNDEFINED ? resource->format : viewFormat;
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle,format,&props);
         const auto required = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
-        const Bool nativeBlit = format == resource->format && (props.optimalTilingFeatures & required) == required;
+        const Uint32 forcedShaderTier = MagmaWireForcedShaderMipmapTier();
+        const Bool nativeBlit = forcedShaderTier == 0 && format == resource->format &&
+                                (props.optimalTilingFeatures & required) == required;
         const VkFilter filter = props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT ?
                                 VK_FILTER_LINEAR : VK_FILTER_NEAREST;
         if (!nativeBlit) {
             // Packed floating-point color formats may support sampling and
             // rendering without BLIT_DST. Generate from actual GPU mip contents
             // through the native shader pass; no client or staged texels enter.
-            if (resource->aspect != VK_IMAGE_ASPECT_COLOR_BIT ||
-                resource->viewType == VK_IMAGE_VIEW_TYPE_1D || resource->viewType == VK_IMAGE_VIEW_TYPE_1D_ARRAY ||
-                resource->viewType == VK_IMAGE_VIEW_TYPE_3D ||
-                !(resource->usageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) ||
-                baseLayer >= resource->arrayLayers || layerCount > resource->arrayLayers - baseLayer)
-                MagmaWireFatal("mipmap-shader-format-or-shape");
+            //
+            // TWO SHADER SHAPES, not one. The arm that was here rendered STRAIGHT INTO the
+            // next level, which needs the image to have been created with
+            // COLOR_ATTACHMENT usage - and a texture whose format the device refuses as a
+            // colour attachment never gets that bit (VkTextureManager.cpp:2156-2160), so
+            // every sampled-only texture without BLIT support fell into the refusal rather
+            // than into a fallback. When the FORMAT can be rendered and only the IMAGE
+            // cannot, an owned scratch attachment of the destination level's size renders
+            // the mip and vkCmdCopyImage moves it in: a raw texel move, no conversion, and
+            // the texels still come from GPU contents rather than from a staged shadow.
+            const Bool colour = resource->aspect == VK_IMAGE_ASPECT_COLOR_BIT;
+            const Bool planar = resource->viewType != VK_IMAGE_VIEW_TYPE_1D &&
+                                resource->viewType != VK_IMAGE_VIEW_TYPE_1D_ARRAY &&
+                                resource->viewType != VK_IMAGE_VIEW_TYPE_3D;
+            const Bool layersInRange = baseLayer < resource->arrayLayers &&
+                                       layerCount <= resource->arrayLayers - baseLayer;
+            // The shader arm samples through a sampler2D and writes a vec4, which is what
+            // BlitWireColorImage's own float check enforces; naming it here rather than
+            // letting the blit return false is what puts the reason in the fatal line.
+            const Bool sampledFloat = vkuFormatIsSampledFloat(format);
+            const Bool renderableFormat =
+                (props.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0;
+            const Bool attachable = forcedShaderTier < 2 &&
+                (resource->usageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0;
+            const Bool viaScratch = !attachable && renderableFormat &&
+                (resource->usageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) != 0;
+            if (!colour || !planar || !layersInRange || !sampledFloat || (!attachable && !viaScratch))
+                MagmaWireFatal(MagmaWireShapeDetail("mipmap-shader-format-or-shape", format,
+                    resource->format, props, resource->aspect, resource->viewType,
+                    resource->usageFlags, resource->extent, resource->depth, resource->mipLevels,
+                    baseLayer, layerCount, resource->arrayLayers).c_str());
             for (Uint32 level = base + 1; level < base + count; ++level) {
                 for (Uint32 layer = baseLayer; layer < baseLayer + layerCount; ++layer) {
                     WireImage source{};
@@ -792,10 +893,63 @@
                     destination.level = level;
                     destination.extent = {std::max(resource->extent.width >> level, 1u),
                                           std::max(resource->extent.height >> level, 1u)};
-                    if (!BlitWireColorImage(source, destination, 0, 0, source.extent.width, source.extent.height,
-                        0, 0, destination.extent.width, destination.extent.height,
-                        filter == VK_FILTER_LINEAR ? GL_LINEAR : GL_NEAREST, true))
+                    const GLenum blitFilter = filter == VK_FILTER_LINEAR ? GL_LINEAR : GL_NEAREST;
+                    if (attachable) {
+                        if (!BlitWireColorImage(source, destination, 0, 0, source.extent.width,
+                            source.extent.height, 0, 0, destination.extent.width,
+                            destination.extent.height, blitFilter, true))
+                            MagmaWireFatal("mipmap-shader-blit");
+                        continue;
+                    }
+                    // Owned, per level, and retired with the submit that consumes it - the
+                    // shape the multisample resolve above already uses. A shared scratch
+                    // resized here would destroy an image an earlier queued pass still reads.
+                    auto scratch = MakeUnique<VkTextureManager::TextureResource>();
+                    VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+                    info.imageType = VK_IMAGE_TYPE_2D;
+                    info.format = format;
+                    info.extent = {destination.extent.width, destination.extent.height, 1};
+                    info.mipLevels = info.arrayLayers = 1;
+                    info.samples = VK_SAMPLE_COUNT_1_BIT;
+                    info.tiling = VK_IMAGE_TILING_OPTIMAL;
+                    info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                 VK_IMAGE_USAGE_SAMPLED_BIT;
+                    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+                    VmaAllocationCreateInfo allocation{};
+                    allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+                    allocation.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+                    if (vmaCreateImage(m_allocator, &info, &allocation, &scratch->image,
+                                       &scratch->allocation, nullptr) != VK_SUCCESS)
+                        MagmaWireFatal("mipmap-shader-scratch-allocation");
+                    scratch->format = format;
+                    scratch->extent = destination.extent;
+                    scratch->mipLevels = scratch->arrayLayers = scratch->depth = 1;
+                    scratch->aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+                    WireImage target{};
+                    target.image = scratch->image;
+                    target.format = format;
+                    target.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+                    target.extent = destination.extent;
+                    target.trackedLayout = &scratch->layout;
+                    if (!BlitWireColorImage(source, target, 0, 0, source.extent.width,
+                        source.extent.height, 0, 0, target.extent.width, target.extent.height,
+                        blitFilter, true))
                         MagmaWireFatal("mipmap-shader-blit");
+                    target.layout = scratch->layout;
+                    TransitionWireImage(target, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                    WireImage writeBack = destination;
+                    writeBack.layout = resource->layout;
+                    TransitionWireImage(writeBack, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                    VkImageCopy copy{};
+                    copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, layer, 1};
+                    copy.extent = {destination.extent.width, destination.extent.height, 1};
+                    vkCmdCopyImage(m_frameContext.GetCurrent().commandBuffer, scratch->image,
+                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, resource->image,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                    WireRetiredObjects retired{};
+                    retired.textures.push_back(Move(scratch));
+                    RetireWireObjects(Move(retired));
                 }
             }
         } else {

@@ -481,6 +481,66 @@ TEST_F(F1WireScenario, GenerateMipmapPackedFloatPixels) {
     for (int i = 0; i < 8; ++i) EXPECT_NEAR(rows[i], generated[i], 0.01f);
 }
 
+// P7 wave 2-B: THE ARM THE HOST CANNOT REACH ON ITS OWN.
+//
+// Two Iris cases (minecraft-1.21.4-fabric-iris-iterationt-in-world and its -nodsa twin) killed
+// the server apply thread on a Redmi (Adreno 830v2) with
+//     MGPipe: Fatal{UnmigratedVerb, "Magma:mipmap-shader-format-or-shape"}
+// deterministically, under both run-ahead and lockstep, while the monolith arm passed and the
+// host lane stayed green. It stayed green because lavapipe reports BLIT_SRC|BLIT_DST for every
+// colour format this scenario can create: `nativeBlit` is always true here, so NEITHER shader
+// arm of GenerateWireMipmap has ever executed on the gate machine. A refusal no host lane can
+// reach is a refusal that ships.
+//
+// MGITEST_MAGMA_FORCE_SHADER_MIPMAP is what makes them reachable, and it selects which one:
+//   1 - drop the native blit only. The destination level is still a colour attachment, so the
+//       pass renders straight into it (the arm an Adreno takes for a format without BLIT_DST).
+//   2 - also treat the destination as not attachable. The pass renders into owned scratch and
+//       copies the mip in (the arm it takes for a texture whose image never got
+//       COLOR_ATTACHMENT usage - which, before this package, was the refusal itself).
+//
+// The assertion is the ORDINARY mip result, per half: a shader mip that renders somewhere else
+// is still wrong unless the level holds what a blit would have put there, in GL's row order.
+// Red once (executed, reverted): drop the scratch arm (force `viaScratch` false) and the tier-2
+// entry dies with Fatal{UnmigratedVerb, "Magma:mipmap-shader-format-or-shape ..."} by name.
+TEST_F(F1WireScenario, GenerateMipmapWithoutNativeBlitPixels) {
+    if (!Ready()) return;
+    const std::string tier = SplitLane::MarkerValue("MGITEST_MAGMA_FORCE_SHADER_MIPMAP");
+    if (tier.empty())
+        GTEST_SKIP() << "MGITEST_MAGMA_FORCE_SHADER_MIPMAP is unset: this driver reports "
+                        "BLIT_SRC|BLIT_DST for GL_RGBA8, so the shader mip arms under test are "
+                        "not entered and this case would assert the native blit twice over";
+    Attach(GL_RGBA8, GL_COLOR_ATTACHMENT0, 4);
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0.75f, 0.25f, 0.5f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    // Two different halves, not one flat colour: a pass that loses GL's row order averages to
+    // the same number everywhere and a single-colour assertion would call that correct.
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(0, 0, 8, 4);
+    glClearColor(0.25f, 0.75f, 0.5f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
+    const auto before = PeekSplitRuntime().emitSeq;
+    glGenerateMipmap(GL_TEXTURE_2D);
+    ASSERT_GT(PeekSplitRuntime().emitSeq, before) << "F1.ShaderMip.wire";
+    // Level one is 4x4, and each of its rows averages two source rows from ONE half - the
+    // boundary never falls inside a destination texel, so the two colours survive unmixed.
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 1);
+    ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+    GLubyte rows[4][4]{};
+    glReadPixels(1, 0, 1, 4, GL_RGBA, GL_UNSIGNED_BYTE, rows);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.ShaderMip.error";
+    const int bottom[4] = {64, 191, 128, 255};
+    const int top[4] = {191, 64, 128, 255};
+    for (int row = 0; row < 4; ++row) {
+        const int* expected = row < 2 ? bottom : top;
+        for (int channel = 0; channel < 4; ++channel)
+            EXPECT_NEAR(rows[row][channel], expected[channel], 2)
+                << "F1.ShaderMip.pixels tier=" << tier << " row=" << row << " channel=" << channel;
+    }
+}
+
 TEST_F(F1WireScenario, GenerateMipmapDepthPixels) {
     if (!Ready()) return;
     std::array<GLfloat, 8 * 8> source{};
