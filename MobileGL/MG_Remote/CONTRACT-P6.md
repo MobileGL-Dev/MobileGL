@@ -276,6 +276,20 @@ red-once are byte-identical. What the funnel buys, and what makes it worth `dl`'
 - one telemetry point;
 - a CI census gate refusing any **new** bare abort outside the funnel.
 
+> **LANDED, in three steps.** (1) `FatalFamilies.def` + `FatalFamily.h` generate `MGFatalFamily`,
+> its total projection `FatalCodeForFamily` and `FatalFamilyName`; 32 rows, tested. (2) `SessionFail`
+> (`FatalFunnel.{h,cpp}`) is the funnel: the ~90 scattered `MGLOG_F("...Fatal{...}"); abort();` pairs
+> under `MG_Remote/` become one call each, the message string passed **verbatim** so every line and
+> grep is byte-identical, the family enum riding alongside for the coarse code. `SessionFaultCount()`
+> is the telemetry point. The census now also requires every `SessionFail`/`WireLogFatal` call's
+> string to carry a `Fatal{` word, and its baseline drops from 93 bare aborts to 4 (both funnels).
+> (3) `table Fatal` gains `family: string`; `SessionFail` publishes the frame on whichever session
+> control plane is active before aborting, and the client's control-reply loop recognizes it, names
+> the family and latches device-lost. **seq/op are NOT threaded** through the 90 sites — the message
+> already names the op — so the frame carries `code`, `family` and `message`, not a field always 0.
+> A `kill -9` bypasses `abort()` and is caught by `dl`'s hangup witness instead; the self-detected
+> fatal is the one that publishes.
+
 **The policy flip is not P6's.** Making `Fail` return needs a real return path invented at every site
 whose callers rely on `[[noreturn]]`, and a6 counted how many do. That is `Ph`'s (§11).
 
