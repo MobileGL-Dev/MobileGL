@@ -33,6 +33,8 @@
 #include <MG_Pipe/PipeApply.h>
 // P7 wave 0: the seam WireDescriptorFatal dies through. See MG_Pipe/PipeSessionFail.h.
 #include <MG_Pipe/PipeSessionFail.h>
+// P7 wave 2 package B3: rule I's tally for this file's silent wire-draw exits.
+#include "WireDeclineTally.h"
 #endif
 #include <vulkan/utility/vk_format_utils.h>
 #include <algorithm>
@@ -2944,7 +2946,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool UniformManager::PrepareWireTextureResources(const MagmaProgramSource& program,
                                                       const ProgramFactory::VkProgramObject& programObj) {
         if (!program.IsWire()) return true;
-        if (programObj.declinedDescriptors || m_textureManager == nullptr) return false;
+        if (programObj.declinedDescriptors || m_textureManager == nullptr) {
+            MGL_WIRE_DECLINE_AT(DescriptorDeclined, "the program carries a descriptor MobileGL could not resolve");
+            return false;
+        }
         const auto& state = MG_Pipe::MGPipeApplier();
         // Resolve writable images first: aliases sampled by the same draw must
         // see the final STORAGE-capable allocation before any view is built.
@@ -2958,11 +2963,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 const Uint32 count = BindingDescriptorCount(programObj, binding);
                 for (Uint32 element = 0; element < count; ++element) {
                     const Int location = baseLocation + static_cast<Int>(element);
-                    if (baseLocation < 0 || !program.UniformLocationsAliasSameUniform(baseLocation, location))
+                    if (baseLocation < 0 || !program.UniformLocationsAliasSameUniform(baseLocation, location)) {
+                        MGL_WIRE_DECLINE_AT(SamplerLocationAlias,
+                                            "binding %u element %u does not alias one sampler uniform", binding,
+                                            element);
                         return false;
+                    }
                     const Int unit = program.GetUniformSamplerOrImageUnitIndex(static_cast<Uint>(location));
                     if (unit < 0 || static_cast<Uint32>(unit) >=
-                        (storage ? MG_Pipe::kMGPipeMaxImageUnits : MG_Pipe::kMGPipeMaxTextureUnits)) return false;
+                        (storage ? MG_Pipe::kMGPipeMaxImageUnits : MG_Pipe::kMGPipeMaxTextureUnits)) {
+                        MGL_WIRE_DECLINE_AT(SamplerUnitRange, "sampler/image unit %d is out of range", unit);
+                        return false;
+                    }
                     const auto handle = storage ? state.BoundShaderImages[unit].Res
                                                 : state.BoundSamplerViews[unit].Texture;
                     // Null is the wire's unbound/incomplete binding. Its native

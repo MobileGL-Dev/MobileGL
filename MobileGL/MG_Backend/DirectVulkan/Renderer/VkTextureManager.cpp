@@ -23,6 +23,8 @@
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Remote/Server/StagedTextureStore.h>
 #include "../DirectVulkan.h"
+// P7 wave 2 package B3: rule I's tally for the silent exits on this file's wire arm.
+#include "WireDeclineTally.h"
 #endif
 #include <algorithm>
 #include <cstdio>
@@ -2385,6 +2387,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: pending upload for level %u exceeds the "
                              "image's %u levels; left pending",
                              handle.Slot, handle.Gen, static_cast<Uint32>(level), resource.mipLevels);
+                WireDeclineTally::Count(WireDeclineSite::UploadLevelBeyondChain);
                 continue;
             }
             const IntVec3 glExtent = store.LevelExtentOrUndefined(key, uploadTarget, level);
@@ -2405,9 +2408,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 texelSize.y() != static_cast<Int>(std::max(resource.extent.height >> level, 1u)) ||
                 (volume && texelSize.z() != static_cast<Int>(std::max(resource.depth >> level, 1u))) ||
                 (!volume && Uint64(ResolveUploadArrayLayer(static_cast<TextureUploadTarget>(uploadTarget))) +
-                    static_cast<Uint64>(texelSize.z()) > resource.arrayLayers))
+                    static_cast<Uint64>(texelSize.z()) > resource.arrayLayers)) {
+                // NOT `incomplete`: this arm reports SUCCESS while leaving the entry pending,
+                // so the draw proceeds against texels that were never uploaded. Counted
+                // separately for exactly that reason (B3).
+                WireDeclineTally::Count(WireDeclineSite::UploadLevelExtentMismatch);
                 continue;
+            }
             if (texelSize.x() <= 0 || texelSize.y() <= 0 || byteSize == 0) {
+                WireDeclineTally::Count(WireDeclineSite::UploadEmptyLevel);
                 incomplete = true;
                 continue;
             }
@@ -2423,6 +2432,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                              "level %u left pending",
                              handle.Slot, handle.Gen, static_cast<Int>(resource.format),
                              static_cast<Uint32>(level));
+                WireDeclineTally::Count(WireDeclineSite::UploadConversion);
                 incomplete = true;
                 continue;
             }
@@ -2435,6 +2445,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                   (resource.aspect & VK_IMAGE_ASPECT_STENCIL_BIT);
             if (vkuFormatIsCompressed(resource.format) || !levelTexels ||
                 item.byteSize % levelTexels != 0 || item.byteSize / levelTexels == 0) {
+                WireDeclineTally::Count(WireDeclineSite::UploadTexelArithmetic);
                 incomplete = true;
                 continue;
             }
@@ -2454,6 +2465,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     if (offset[axis] < 0 || extent[axis] <= 0 ||
                         static_cast<Uint64>(offset[axis]) + static_cast<Uint64>(extent[axis]) >
                             static_cast<Uint64>(texelSize[axis])) {
+                        WireDeclineTally::Count(WireDeclineSite::UploadRegionOutOfBounds);
                         incomplete = true;
                         return;
                     }
@@ -2496,7 +2508,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     addRegion({region.X, region.Y, region.Z, region.W, region.H, region.D});
             }
         }
-        if (incomplete) return false;
+        // B3: the pending gauge is sampled here, on every pass through the funnel, because a
+        // refusal below does NOT consume the entries - they and their level shadows stay
+        // alive for the next draw to trip over (and, on a heavy-texture trace, to accumulate).
+        {
+            Uint64 pendingBytes = 0;
+            for (const auto& pending : record.PendingUploads) {
+                pendingBytes += static_cast<Uint64>(
+                    store.LevelByteSize(MG_Remote::Server::StagedTextureStore::KeyForHandle(handle),
+                                        pending.UploadTarget, pending.Level));
+            }
+            WireDeclineTally::SetPendingGauge(static_cast<Uint64>(record.PendingUploads.size()), pendingBytes);
+        }
+        if (incomplete) {
+            WireDeclineTally::Count(WireDeclineSite::UploadIncomplete);
+            return false;
+        }
         if (items.empty()) {
             return true;
         }
@@ -2505,7 +2532,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Submit older renderer work before adding the new bytes to the batch,
         // otherwise Draw(old T), TexSubImage(T), Draw(new T) can upload before
         // the first draw. A clean texture never reaches this submission boundary.
-        if (pVulkanRenderer && !pVulkanRenderer->FlushWirePendingCommandsForTextureUpdate()) return false;
+        if (pVulkanRenderer && !pVulkanRenderer->FlushWirePendingCommandsForTextureUpdate()) {
+            WireDeclineTally::Count(WireDeclineSite::UploadFlushFailed);
+            return false;
+        }
 
         // UploadDirtyMipLevels' batching rules, verbatim: flush an open batch that already
         // writes this image and was touched by the open recording, and bound the staging bytes
@@ -2659,7 +2689,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 level = 0, layer = 0;
             VkFormat viewFormat = VK_FORMAT_UNDEFINED;
             const auto storage = ResolveWireTextureStorage(handle, level, layer, &viewFormat);
-            if (MG_Pipe::MGPipeHandleIsNull(storage)) return nullptr;
+            if (MG_Pipe::MGPipeHandleIsNull(storage)) {
+                WireDeclineTally::Count(WireDeclineSite::TexResolveStorage);
+                return nullptr;
+            }
             if (storage != handle) {
                 auto* resource = SyncTextureResourceByHandle(storage, false, requireStorage);
                 if (!resource) return nullptr;
@@ -2698,12 +2731,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return &resource;
         }
         if (!SyncWireTextureShape(record, resource, requireStorage)) {
+            WireDeclineTally::Count(WireDeclineSite::TexShapeSync);
             return nullptr;
         }
         if (!renderbuffer && !UploadPendingWireLevels(handle, record, resource)) {
+            WireDeclineTally::Count(WireDeclineSite::TexUploadPendingLevels);
             return nullptr;
         }
-        if (requireStorage && (resource.usageFlags & VK_IMAGE_USAGE_STORAGE_BIT) == 0) return nullptr;
+        if (requireStorage && (resource.usageFlags & VK_IMAGE_USAGE_STORAGE_BIT) == 0) {
+            WireDeclineTally::Count(WireDeclineSite::TexStorageUsage);
+            return nullptr;
+        }
         resource.syncedWireSerial = record.Serial;
         return &resource;
     }

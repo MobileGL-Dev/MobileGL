@@ -203,7 +203,10 @@
             Flags<DrawSetupAspect> aspects, const DrawCmdParam& drawParams, const IndexBufferView* indices) {
         auto& state = MG_Pipe::MGPipeApplier();
         const auto program = WireProgramSource(state.BoundShaderCso);
-        if (!program.GetLinkStatus() || !program.GetSpirvStatus()) return false;
+        if (!program.GetLinkStatus() || !program.GetSpirvStatus()) {
+            MGL_WIRE_DECLINE_AT(ProgramLinkOrSpirv, "program is not linked or carries no SPIR-V");
+            return false;
+        }
         if (aspects & DrawSetupAspect::IndirectDrawBuffer)
             WireBufferLegacyFatal();
         MakeXfbWritesVisible();
@@ -224,10 +227,16 @@
             flags |= ProgramFactory::CompileOptionBit::ZeroBaseVertex;
             programObject = &m_programFactory->GetOrCreateProgram(program, flags);
         }
-        if (programObject->pointSizeCapabilityUnsupported) return false;
+        if (programObject->pointSizeCapabilityUnsupported) {
+            MGL_WIRE_DECLINE_AT(PointSizeCapability, "the program writes gl_PointSize and the device cannot express it");
+            return false;
+        }
         const auto& programObj = *programObject;
         m_currentDrawXfbCaptureDeclined = programObj.xfbCaptureDeclined;
-        if (!m_uniformManager->PrepareWireTextureResources(program, programObj)) return false;
+        if (!m_uniformManager->PrepareWireTextureResources(program, programObj)) {
+            MGL_WIRE_DECLINE_AT(TextureResourcesUnprepared, "a sampled/storage image could not be made ready; see the Tex* tally");
+            return false;
+        }
         // Lazy image uploads/promotions can submit the old recording. Resolve
         // ALL attachments before descriptor binding captures the current cmd.
         for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
@@ -277,6 +286,7 @@
                          "mask 0x%x whose enabled array has no supported vertex format",
                          program.GetExternalIndex(),
                          input.unsupportedAttribMask & programObj.activeVertexInputLocationMask);
+            WireDeclineTally::Count(WireDeclineSite::VertexFormatUnsupported);
             return false;
         }
         Vector<BufferSlice> vertexSlices(input.bindings.size());
@@ -291,7 +301,10 @@
             const VkDeviceSize offset = input.bindingBaseOffsets[binding];
             const auto type = static_cast<DataType>(attr.Type);
             const SizeT elementSize = VertexInputStateFactory::GetAttributeByteSize(type, attr.Size, attr.IsBgra);
-            if (offset > slice.size || elementSize > slice.size - offset) return false;
+            if (offset > slice.size || elementSize > slice.size - offset) {
+                MGL_WIRE_DECLINE_AT(VertexAttributeWindow, "an enabled attribute's first element lies outside its buffer");
+                return false;
+            }
             const auto conversion = input.bindingConversions[binding];
             if (conversion != VertexInputStateFactory::VertexStreamConversion::None) {
                 const SizeT stride = static_cast<SizeT>(attr.Stride);
@@ -300,9 +313,15 @@
                 // name arbitrary vertices, so preserve the entire valid source stream.
                 if (stride && !(aspects & DrawSetupAspect::IndexBuffer) && !resource.Divisor)
                     count = std::min<SizeT>(count, static_cast<SizeT>(drawParams.firstVertex) + drawParams.vertexCount);
-                if (!count) return false;
+                if (!count) {
+                    MGL_WIRE_DECLINE_AT(VertexStreamCountZero, "the converted vertex stream would hold no elements");
+                    return false;
+                }
                 Vector<Uint8> source((count - 1) * stride + elementSize);
-                if (!m_bufferManager.ReadWireBuffer(resource.Res, offset, source.size(), source.data())) return false;
+                if (!m_bufferManager.ReadWireBuffer(resource.Res, offset, source.size(), source.data())) {
+                    MGL_WIRE_DECLINE_AT(VertexStreamRead, "the vertex bytes to convert could not be read back");
+                    return false;
+                }
                 Vector<Uint8> converted;
                 // P7 wave 2 package C, CONTRACT-P7 §3.2 `vertex-format-conversion`: DECLINE.
                 // The converter is asked only for a conversion BuildWireVertexInput already
@@ -318,10 +337,14 @@
                                  "location=%u type=%u size=%u conversion=%d",
                                  location, attr.Type, static_cast<Uint32>(attr.Size),
                                  static_cast<Int>(conversion));
+                    WireDeclineTally::Count(WireDeclineSite::VertexStreamConverter);
                     return false;
                 }
                 if (!m_bufferManager.UploadTransient(BufferKind::Vertex, m_frameContext.GetCurrentFrameIndex(),
-                        converted.data(), converted.size(), 16, vertexSlices[binding])) return false;
+                        converted.data(), converted.size(), 16, vertexSlices[binding])) {
+                    MGL_WIRE_DECLINE_AT(VertexTransientUpload, "the converted vertex stream did not fit the transient arena");
+                    return false;
+                }
             } else {
                 slice.offset += offset;
                 slice.size -= offset;
@@ -332,9 +355,15 @@
         BufferSlice indexSlice{};
         VkIndexType indexType = VK_INDEX_TYPE_MAX_ENUM;
         if (aspects & DrawSetupAspect::IndexBuffer) {
-            if (!indices) return false;
+            if (!indices) {
+                MGL_WIRE_DECLINE_AT(IndexViewMissing, "an indexed draw arrived with no index view");
+                return false;
+            }
             const SizeT width = MG_Util::GetGLTypeSize(indices->indexType);
-            if (width != 1 && width != 2 && width != 4) return false;
+            if (width != 1 && width != 2 && width != 4) {
+                MGL_WIRE_DECLINE_AT(IndexTypeWidth, "the index type is not 1, 2 or 4 bytes wide");
+                return false;
+            }
             indexType = width == 4 ? VK_INDEX_TYPE_UINT32 : width == 2 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT8;
             const auto& restart = MGB_CTX->GetRenderStateParameters();
             const Uint32 fixed = MG_Util::FixedRestartIndexForGLType(indices->indexType);
@@ -350,10 +379,16 @@
                     MagmaWireFatal("index-buffer-resource");
                 const Uint64 offset = state.IndexBuffer.Offset + indices->indexByteOffset;
                 if (offset < state.IndexBuffer.Offset || offset > indexSlice.size ||
-                    indices->indexByteSize > indexSlice.size - offset) return false;
+                    indices->indexByteSize > indexSlice.size - offset) {
+                    MGL_WIRE_DECLINE_AT(IndexWindow, "the index range lies outside its buffer");
+                    return false;
+                }
                 if (replaceRestart || expandByte || offset % width) {
                     copied.resize(indices->indexByteSize);
-                    if (!m_bufferManager.ReadWireBuffer(state.IndexBuffer.Res, offset, copied.size(), copied.data())) return false;
+                    if (!m_bufferManager.ReadWireBuffer(state.IndexBuffer.Res, offset, copied.size(), copied.data())) {
+                        MGL_WIRE_DECLINE_AT(IndexStreamRead, "the indices to rewrite could not be read back");
+                        return false;
+                    }
                     bytes = copied.data();
                 }
                 indexSlice.offset += offset;
@@ -377,9 +412,15 @@
                     if (expandByte) indexType = VK_INDEX_TYPE_UINT16;
                 }
                 if (!m_bufferManager.UploadTransient(BufferKind::Index, m_frameContext.GetCurrentFrameIndex(),
-                        bytes, uploadSize, 16, indexSlice)) return false;
+                        bytes, uploadSize, 16, indexSlice)) {
+                    MGL_WIRE_DECLINE_AT(IndexTransientUpload, "the rewritten indices did not fit the transient arena");
+                    return false;
+                }
             }
-            if (!indexSlice.IsValid()) return false;
+            if (!indexSlice.IsValid()) {
+                MGL_WIRE_DECLINE_AT(IndexSliceInvalid, "no usable index slice was resolved");
+                return false;
+            }
         }
 
         if (!frame.isCommandRecording) m_frameContext.BeginCommandRecording();
@@ -387,7 +428,10 @@
         // Resolve it before constructing framebuffer views so both roles of that image
         // name the same allocation even on its first storage-image use.
         if (!m_uniformManager->BindProgramUniformBuffers(frame.commandBuffer, program, programObj,
-                m_frameContext.GetCurrentFrameIndex(), VK_PIPELINE_BIND_POINT_GRAPHICS)) return false;
+                m_frameContext.GetCurrentFrameIndex(), VK_PIPELINE_BIND_POINT_GRAPHICS)) {
+            MGL_WIRE_DECLINE_AT(UniformBufferBinding, "the program's uniform/storage bindings could not be bound");
+            return false;
+        }
 
         Vector<VkAttachmentDescription> attachments;
         Vector<VkImageViewCreateInfo> viewInfos;
@@ -459,7 +503,10 @@
             depth.attachment = add(fbo->Depth, VK_IMAGE_ASPECT_DEPTH_BIT);
         else if (fbo->Stencil.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
             depth.attachment = add(fbo->Stencil, VK_IMAGE_ASPECT_STENCIL_BIT);
-        if (attachments.empty()) return false;
+        if (attachments.empty()) {
+            MGL_WIRE_DECLINE_AT(NoAttachments, "the draw framebuffer resolved to no attachments");
+            return false;
+        }
         passKey.width = extent.width;
         passKey.height = extent.height;
         passKey.layers = layers;
@@ -516,7 +563,10 @@
         const Uint64 compatibilityId = m_wireRenderPassCompatibility.Intern(pipelinePassKey);
         const auto pipeline = GetOrCreatePipelineWithInput(mode, program, programObj, flags, input, pass,
             ResolvePrimitiveRestartEnable(aspects, indices), compatibilityId);
-        if (pipeline == VK_NULL_HANDLE) return false;
+        if (pipeline == VK_NULL_HANDLE) {
+            MGL_WIRE_DECLINE_AT(PipelineUnavailable, "no graphics pipeline could be created for this draw");
+            return false;
+        }
         for (Uint32 i = 0; i < vertexSlices.size(); ++i)
             vkCmdBindVertexBuffers(frame.commandBuffer, i, 1, &vertexSlices[i].buffer, &vertexSlices[i].offset);
         Uint32 binding = static_cast<Uint32>(vertexSlices.size());
@@ -527,14 +577,23 @@
             const void* data = nullptr;
             VkDeviceSize size = 0;
             if (!TryGetCurrentVertexAttributeUploadPayload(MGB_CTX->GetCurrentVertexAttribute(location),
-                    programObj.vertexInputTypes[location], format, data, size)) return false;
+                    programObj.vertexInputTypes[location], format, data, size)) {
+                MGL_WIRE_DECLINE_AT(CurrentAttributePayload, "a disabled array's current attribute value has no upload payload");
+                return false;
+            }
             BufferSlice slice{};
             if (!m_bufferManager.UploadTransient(BufferKind::Vertex, m_frameContext.GetCurrentFrameIndex(),
-                    data, size, 16, slice)) return false;
+                    data, size, 16, slice)) {
+                MGL_WIRE_DECLINE_AT(CurrentAttributeUpload, "the current attribute value did not fit the transient arena");
+                return false;
+            }
             vkCmdBindVertexBuffers(frame.commandBuffer, binding++, 1, &slice.buffer, &slice.offset);
         }
         if (indexSlice.IsValid()) vkCmdBindIndexBuffer(frame.commandBuffer, indexSlice.buffer, indexSlice.offset, indexType);
-        if (!VkRenderPassManager::BeginRenderPass(frame.commandBuffer, pass)) return false;
+        if (!VkRenderPassManager::BeginRenderPass(frame.commandBuffer, pass)) {
+            MGL_WIRE_DECLINE_AT(BeginRenderPass, "the render pass for this draw could not be begun");
+            return false;
+        }
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
         ApplyDynamicDrawStateTail(frame, pass.extent, fbo->IsDefault,
                                  ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin));
@@ -546,14 +605,26 @@
         RetireWireDrawPass();
         auto& frame = m_frameContext.GetCurrent();
         const auto program = WireProgramSource(MG_Pipe::MGPipeApplier().DispatchProgram);
-        if (!program.GetLinkStatus() || !program.GetSpirvStatus()) return;
+        if (!program.GetLinkStatus() || !program.GetSpirvStatus()) {
+            MGL_WIRE_DECLINE_AT(ComputeProgramLinkOrSpirv, "the compute program is not linked or carries no SPIR-V");
+            return;
+        }
         const auto& programObj = m_programFactory->GetOrCreateProgram(program, {});
-        if (!m_uniformManager->PrepareWireTextureResources(program, programObj)) return;
+        if (!m_uniformManager->PrepareWireTextureResources(program, programObj)) {
+            MGL_WIRE_DECLINE_AT(ComputeTextureResourcesUnprepared, "a sampled/storage image could not be made ready for the dispatch");
+            return;
+        }
         const auto pipeline = GetOrCreateComputePipeline(programObj);
-        if (!pipeline) return;
+        if (!pipeline) {
+            MGL_WIRE_DECLINE_AT(ComputePipelineUnavailable, "no compute pipeline could be created for this dispatch");
+            return;
+        }
         if (!frame.isCommandRecording) m_frameContext.BeginCommandRecording();
         if (!m_uniformManager->BindProgramUniformBuffers(frame.commandBuffer, program, programObj,
-                m_frameContext.GetCurrentFrameIndex(), VK_PIPELINE_BIND_POINT_COMPUTE)) return;
+                m_frameContext.GetCurrentFrameIndex(), VK_PIPELINE_BIND_POINT_COMPUTE)) {
+            MGL_WIRE_DECLINE_AT(ComputeUniformBufferBinding, "the dispatch's uniform/storage bindings could not be bound");
+            return;
+        }
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
         vkCmdDispatch(frame.commandBuffer, x, y, z);
     }

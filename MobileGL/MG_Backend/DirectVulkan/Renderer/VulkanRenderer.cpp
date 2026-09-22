@@ -49,6 +49,8 @@
 #include <MG_Remote/Server/ServerLoop.h>
 // P5c (G6): the named-blit arm's endpoint resolution runs inside the frontend-keyed scope.
 #include <MG_Impl/Pipe/SlotAllocator.h>
+// P7 wave 2 package B3: rule I's tally for WireDraw.inc's silent draw drops.
+#include "WireDeclineTally.h"
 #endif
 #include <algorithm>
 #include <bit>
@@ -3453,6 +3455,9 @@ void main() {
             VK_VERIFY(vkDeviceWaitIdle(m_device));
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
+        // P7 wave 2 package B3: the session's decline tally. Silent when nothing declined, so a
+        // green lane stays quiet and a lane that dropped a draw cannot (rule I's observable).
+        WireDeclineTally::Dump("shutdown");
         DestroyWireDrawPass();
         CollectWireObjects(m_submitCounter, true);
         ClearAllWireDrawPassCaches();
@@ -13688,6 +13693,23 @@ void main() {
         // loops still rewind the arena and age their caches every 8 iterations -
         // bounded by 8 iterations' transient usage.
         ++m_drainsSinceLastPresent;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // B3 probe: a drain that reaches here found the GPU caught up and nothing recording.
+        // Every 8th one is treated as a FRAME BOUNDARY - mid-frame. See the note.
+        {
+            static const Bool probe = [] {
+                const char* value = std::getenv("MOBILEGL_MAGMA_WIREBUF_PROBE");
+                return value && value[0] == '1';
+            }();
+            if (probe) {
+                MGLOG_I("WBUF drain#%llu%s submit=%llu completed=%llu",
+                        static_cast<unsigned long long>(m_drainsSinceLastPresent),
+                        (m_drainsSinceLastPresent % 8) == 0 ? " ***FRAME-BOUNDARY-WORK***" : "",
+                        static_cast<unsigned long long>(m_submitCounter),
+                        static_cast<unsigned long long>(m_completedSubmitCounter));
+            }
+        }
+#endif
         if ((m_drainsSinceLastPresent % 8) != 0) {
             return true;
         }

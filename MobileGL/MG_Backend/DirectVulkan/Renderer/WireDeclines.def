@@ -1,0 +1,90 @@
+// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireDeclines.def
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// P7 wave 2 package B3. THE NAMES OF EVERY WAY A MAGMA WIRE DRAW CAN DECLINE.
+//
+// CONTRACT-P7 §0 rule I says a refusal on the wire arm is either a named decline or a named
+// Fatal. Before B3 the draw path had a third shape the rule does not admit: a bare
+// `return false` with no log, no counter and no census entry - roughly twenty of them in
+// SetupWireDraw alone, plus the texture-sync chain behind PrepareWireTextureResources. A draw
+// that took one of those exits left NO trace anywhere, which is precisely why the OpenRA
+// device divergence survived four device windows with client and server logs that were
+// LINE-IDENTICAL between a passing and a failing run.
+//
+// Each row below is one such exit. The name is what the decline logs and what the tally
+// counts, so "which exit did this frame take" is answerable from a counter dump instead of
+// from a bisect. Rows are append-only: the integration lane asserts specific counters moved.
+//
+// MGL_WIRE_DECLINE(Name)
+
+// ---- SetupWireDraw, in statement order -------------------------------------------------
+MGL_WIRE_DECLINE(ProgramLinkOrSpirv)
+MGL_WIRE_DECLINE(PointSizeCapability)
+MGL_WIRE_DECLINE(TextureResourcesUnprepared)
+MGL_WIRE_DECLINE(VertexFormatUnsupported)
+MGL_WIRE_DECLINE(VertexAttributeWindow)
+MGL_WIRE_DECLINE(VertexStreamCountZero)
+MGL_WIRE_DECLINE(VertexStreamRead)
+MGL_WIRE_DECLINE(VertexStreamConverter)
+MGL_WIRE_DECLINE(VertexTransientUpload)
+MGL_WIRE_DECLINE(IndexViewMissing)
+MGL_WIRE_DECLINE(IndexTypeWidth)
+MGL_WIRE_DECLINE(IndexWindow)
+MGL_WIRE_DECLINE(IndexStreamRead)
+MGL_WIRE_DECLINE(IndexTransientUpload)
+MGL_WIRE_DECLINE(IndexSliceInvalid)
+MGL_WIRE_DECLINE(UniformBufferBinding)
+MGL_WIRE_DECLINE(NoAttachments)
+MGL_WIRE_DECLINE(PipelineUnavailable)
+MGL_WIRE_DECLINE(CurrentAttributePayload)
+MGL_WIRE_DECLINE(CurrentAttributeUpload)
+MGL_WIRE_DECLINE(BeginRenderPass)
+
+// ---- DispatchWireCompute ----------------------------------------------------------------
+MGL_WIRE_DECLINE(ComputeProgramLinkOrSpirv)
+MGL_WIRE_DECLINE(ComputeTextureResourcesUnprepared)
+MGL_WIRE_DECLINE(ComputePipelineUnavailable)
+MGL_WIRE_DECLINE(ComputeUniformBufferBinding)
+
+// ---- UniformManager::PrepareWireTextureResources ----------------------------------------
+MGL_WIRE_DECLINE(DescriptorDeclined)
+MGL_WIRE_DECLINE(SamplerLocationAlias)
+MGL_WIRE_DECLINE(SamplerUnitRange)
+
+// ---- VkTextureManager::SyncTextureResourceByHandle --------------------------------------
+MGL_WIRE_DECLINE(TexResolveStorage)
+MGL_WIRE_DECLINE(TexViewFormat)
+MGL_WIRE_DECLINE(TexNoApplierRecord)
+MGL_WIRE_DECLINE(TexRecordDeadOrStale)
+MGL_WIRE_DECLINE(TexShapeSync)
+MGL_WIRE_DECLINE(TexUploadPendingLevels)
+MGL_WIRE_DECLINE(TexStorageUsage)
+
+// ---- VkTextureManager::UploadPendingWireLevels ------------------------------------------
+// The five `incomplete`/false exits the investigation named, plus the two that leave an
+// entry pending WITHOUT failing (a `continue`) - those are the ones that can starve a draw
+// of its texels while still reporting success, so they are counted separately.
+MGL_WIRE_DECLINE(UploadLevelBeyondChain)
+MGL_WIRE_DECLINE(UploadLevelExtentMismatch)
+MGL_WIRE_DECLINE(UploadEmptyLevel)
+MGL_WIRE_DECLINE(UploadConversion)
+MGL_WIRE_DECLINE(UploadTexelArithmetic)
+MGL_WIRE_DECLINE(UploadRegionOutOfBounds)
+MGL_WIRE_DECLINE(UploadIncomplete)
+MGL_WIRE_DECLINE(UploadFlushFailed)
+
+// ---- VkTextureManager::SyncWireTextureShape ---------------------------------------------
+MGL_WIRE_DECLINE(ShapeBufferBacked)
+MGL_WIRE_DECLINE(ShapeViewOfStorage)
+MGL_WIRE_DECLINE(ShapeNoLevels)
+MGL_WIRE_DECLINE(ShapeNoVulkanShape)
+MGL_WIRE_DECLINE(ShapeNoVkFormat)
+MGL_WIRE_DECLINE(ShapeSampleCount)
+MGL_WIRE_DECLINE(ShapePreserveFlushFailed)
+MGL_WIRE_DECLINE(ShapeImageFlagsUnsupported)
+MGL_WIRE_DECLINE(ShapeCreateImageFailed)
