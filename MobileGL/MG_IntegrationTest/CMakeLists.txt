@@ -2651,34 +2651,25 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # TextureViewUsable() rather than failing - which is what the Tcp arm did until the fixture
     # entry below got the same knob.
     #
-    # ONE CASE IS EXCLUDED BY NAME, and it is a defect this package FOUND rather than a lane
-    # problem. TheOwnerUploadDrainRunsAgainAfterADrawBoundary is red on all three transports and
-    # green under monolith:
+    # ALL FOUR CASES RUN ON ALL THREE ARMS. TheOwnerUploadDrainRunsAgainAfterADrawBoundary was
+    # EXCLUDED BY NAME here by package D2, which found the defect but could not fix it inside its
+    # own footprint:
     #
     #   after a view has been SAMPLED once, a later glTexSubImage through the OWNER's own name
     #   never becomes visible through the view.
     #
-    # The client half is provably correct - the case's own counter assertions pass, so the
-    # records were emitted and the applier accepted them. The server's per-texture clean gate
-    # BackendTextureObject::IsDrawSyncCleanByRecord (Managers.cpp:15433) compares the VIEW's
-    # record.Serial and record.PendingUploads, and an owner-side resource_subdata moves only the
-    # OWNER's (MG_Pipe/PipeApply.cpp:1175). Nothing anywhere propagates a serial bump from a
-    # storage owner to the records that view it: MGPResourceDesc::ViewOf is a forward edge with
-    # no reverse index, and the applier reads it only in the descriptor-equality helper
-    # (PipeApply.cpp:666). Under monolith the same gate reads GetContentVersion() THROUGH the
-    # view, which TextureObjectView forwards to the owner (TextureObjectView.cpp:100-102) - the
-    # forwarding the split gate has no equivalent of. CONTRACT-P5E.md:387-395 states the split
-    # gate in full and has the same hole, so the implementation is faithful to the contract.
-    #
-    # NOT EXCLUDED FROM THE MONOLITH LANES, where it is green and is the regression net for the
-    # forwarding that works. Listed in notes/p34b/split-scenario-census.md and
-    # notes/p34b/espryt-d2.md rather than deleted (G14). The fix is a one-line-shaped change in
-    # MG_Pipe/PipeApply.cpp with an O(#texture records) scan behind it, or a reverse index in
-    # MGPipeResourceRecord - an owner's decision, not this package's, and it is outside D2's
-    # declared footprint.
-    mgl_itest_register_split_arms(
-        "TextureViewAliasScenario.*-TextureViewAliasScenario.TheOwnerUploadDrainRunsAgainAfterADrawBoundary"
-        "")
+    # Package D3 fixed it and this is its red-once (rule J): the case is red on Split, Spawn AND
+    # Tcp at D2's head a7c06f4f with this exclusion lifted and nothing else changed, and green on
+    # all three with the fix. The client half was never at fault - the case's own counter
+    # assertions pass on the red run, so the records were emitted and the applier accepted them.
+    # The server's per-texture clean gate BackendTextureObject::IsDrawSyncCleanByRecord
+    # (MG_Backend/DirectGLES/Managers.cpp) compared the VIEW's record.Serial and
+    # record.PendingUploads, while an owner-side resource_subdata moves only the OWNER's
+    # (MG_Pipe/PipeApply.cpp ApplyTextureUpload). The gate now RESOLVES THROUGH Desc.ViewOf to the
+    # storage owner's record for those two clauses, which is the split equivalent of the monolith
+    # gate's GetContentVersion() forwarding (TextureObjectView.cpp:100-102). CONTRACT-P5E.md §5.2
+    # states the rule the code now implements.
+    mgl_itest_register_split_arms("TextureViewAliasScenario.*" "")
 
     # ---- D2: THE UPLOAD-SHAPE GOLD, UNDER ALL THREE TRANSPORTS ------------------------------
     #

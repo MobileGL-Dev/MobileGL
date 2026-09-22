@@ -770,6 +770,44 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // composite: this reader hides the split behind one lookup, exactly as the wire does.
     const MG_Pipe::MGPipeShaderCsoRecord* PipeShaderCsoRecordForHandle(MG_Pipe::MGPipeHandle cso);
 
+    // P3b/P4b (wave 2-D, package D3): THE STORAGE RECORD BEHIND A TEXTURE RECORD - the record of
+    // the texture it views for a glTextureView, and itself for every other texture.
+    //
+    // WHY THERE IS A SECOND READER. A view owns no texels, and the client keeps ONE emission
+    // cursor per storage: an upload through a view's own name is remapped onto its storage owner
+    // before it is emitted (MG_Impl/Pipe/TextureEmit.h, `ViewOf names the storage owner, and ONE
+    // HOP always reaches storage`), so every resource_subdata for either name is keyed on the
+    // OWNER and the applier moves the OWNER's Serial and PendingUploads alone
+    // (MG_Pipe/PipeApply.cpp, ApplyTextureUpload). A view therefore has a Serial that no upload
+    // ever moves, and the two STORAGE clauses of its draw-path clean gate have to be asked of
+    // this record instead of its own - which is what the monolith gate gets for free, because
+    // GetContentVersion() through a view is forwarded to the owner
+    // (MG_State/GLState/TextureState/TextureObjectView.cpp:100-102). CONTRACT-P5E.md §5.2 states
+    // the rule; without it a view that has been sampled once never sees another owner write.
+    //
+    // NULL IS "ASK AGAIN", NEVER "CLEAN". Every caller treats a null answer as a reason to RUN
+    // the sync, which is the direction that re-uploads rather than the direction that shows stale
+    // texels, and it raises nothing: a missing record is PipeTextureRecordForHandle's own
+    // null-on-miss answer one level up, not a protocol refusal.
+    //
+    // BOUNDED, THOUGH ONE HOP IS ALWAYS ENOUGH. glTextureView composes a view-of-a-view onto the
+    // ROOT at creation - the spec's additive min-level rule - and TextureObjectView's invariant
+    // is that its owner "is never a view itself", so Desc.ViewOf already names storage. The walk
+    // is written transitively anyway and gives up after a fixed number of hops, because THIS side
+    // may not depend on a client invariant to terminate: a chain the wire could make cyclic ends
+    // as a null answer rather than as a hang.
+    //
+    // DELETION ORDERING IS SAFE BY CONSTRUCTION, AND CHECKED ANYWAY. A view holds a strong
+    // SharedPtr to its storage owner (TextureObjectView::m_storageOwner) and the client emits
+    // resource_destroy from the DESTRUCTOR - "the last SharedPtr to this object dropping, not the
+    // glDelete* that only marks the name and leaves a still-bound object very much alive"
+    // (MG_State/GLState/TextureState/TextureObject.cpp:63) - so an owner's record cannot die
+    // while a record that views it is live, however the application orders its glDeleteTextures.
+    // If one ever did, PipeTextureRecordForHandle tests Live and Gen, so a recycled slot answers
+    // null rather than a stranger's record.
+    const MG_Pipe::MGPipeResourceRecord* PipeTextureStorageRecordForRecord(
+        const MG_Pipe::MGPipeResourceRecord& record);
+
     // P5e (fb): the texture's own TARGET, from its descriptor. The image-unit bind needs it
     // (glBindImageTexture's layered/format rules are per target) and MGPImageView has no room
     // for it - 24 bytes, no pad - so it is read off the resource record instead of being added

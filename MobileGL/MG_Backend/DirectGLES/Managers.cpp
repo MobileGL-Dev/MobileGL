@@ -4566,6 +4566,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return PipeRecordAt(MG_Pipe::MGPipeApplier().RenderbufferResources, res);
     }
 
+    // P3b/P4b (wave 2-D, package D3). See the declaration for why a view's storage clauses are
+    // asked of another record, why null means "ask again" and why the deletion order cannot
+    // strand this walk.
+    const MG_Pipe::MGPipeResourceRecord* PipeTextureStorageRecordForRecord(
+        const MG_Pipe::MGPipeResourceRecord& record) {
+        // ONE hop is the shape the client emits and the second is already generous; the bound is
+        // here so a cyclic chain is a null answer rather than a hang, not because a real chain
+        // is ever this long.
+        constexpr Uint32 kViewChainBound = 4;
+        const MG_Pipe::MGPipeResourceRecord* storage = &record;
+        for (Uint32 hop = 0; hop < kViewChainBound; ++hop) {
+            if (MG_Pipe::MGPipeHandleIsNull(storage->Desc.ViewOf)) return storage;
+            storage = PipeTextureRecordForHandle(storage->Desc.ViewOf);
+            if (storage == nullptr) return nullptr;
+        }
+        return nullptr;
+    }
+
     MobileGL::TextureTarget PipeTextureTargetForHandle(MG_Pipe::MGPipeHandle res) {
         const auto* record = PipeTextureRecordForHandle(res);
         if (record == nullptr) return MobileGL::TextureTarget::Unknown;
@@ -7517,11 +7535,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("Storage texture of view %u has no ES name yet.", record.Desc.GlNameForDiag);
                 return;
             }
+            // P3b/P4b D3: THE SERIAL THIS TWIN STAMPS IS THE STORAGE'S, not this view's, because
+            // the gate that reads it back (IsDrawSyncCleanByRecord) now asks the same record. It
+            // is read AFTER the storage sync above - which has just consumed the owner's pending
+            // uploads - and taken by VALUE, because the applier's vector may move under any later
+            // call and a Uint64 cannot dangle. A storage record that has gone answers 0, which
+            // the gate reads as "never clean": the direction that re-syncs.
+            const MG_Pipe::MGPipeResourceRecord* storageRecord = PipeTextureStorageRecordForRecord(record);
+            const Uint64 storageSerial = storageRecord != nullptr ? storageRecord->Serial : 0;
             if (m_isInitialized && m_viewSourceBackendTextureId == storageBackendTextureId) {
                 // The steady case, and the only one this arm has to be fast at: one record read,
                 // one integer compare and the serial stamp that keeps the aggregate clean gate
                 // (IsDrawSyncCleanByRecord) answering true for the next draw.
-                m_syncedResourceSerial = record.Serial;
+                m_syncedResourceSerial = storageSerial;
                 return;
             }
             // The view window is a sampler-view CSO, created even when this
@@ -7563,7 +7589,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_prevTextureInfo = {static_cast<TextureInternalFormat>(record.Desc.InternalFormat),
                 record.Desc.Width, record.Desc.Height, record.Desc.Depth, view.NumLevels, 0,
                 record.Desc.Samples, record.Desc.FixedSampleLocations != 0};
-            m_syncedResourceSerial = record.Serial;
+            // The storage's, for the steady arm's reason above (P3b/P4b D3).
+            m_syncedResourceSerial = storageSerial;
         }
 #endif
 
@@ -15515,9 +15542,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool BackendTextureObject::IsDrawSyncCleanByRecord(MG_Pipe::MGPipeHandle res,
                                                            const MG_Pipe::MGPipeResourceRecord& record) const {
             (void)res;
+            // P3b/P4b D3: THE TWO STORAGE CLAUSES ARE ASKED OF THE STORAGE RECORD, which is this
+            // record for every texture that owns its texels and the record named by Desc.ViewOf
+            // for a glTextureView. A view's own Serial is moved by nothing an upload does - the
+            // client keys every resource_subdata on the storage owner, and the applier moves that
+            // record's Serial and PendingUploads alone - so reading the view's here answered
+            // "clean" for every owner write after the view's first sample. The three PARAMETER
+            // clauses below stay this record's: a view has its own texture parameters and its own
+            // built-in sampler, which is the whole point of the name existing. See
+            // PipeTextureStorageRecordForRecord and CONTRACT-P5E.md §5.2.
+            const MG_Pipe::MGPipeResourceRecord* storage = PipeTextureStorageRecordForRecord(record);
+            if (storage == nullptr) return false;
             // SyncMipmapsToBackend's own early-out, verbatim.
-            if (!m_isInitialized || m_syncedResourceSerial == 0 || m_syncedResourceSerial != record.Serial ||
-                !record.PendingUploads.empty()) {
+            if (!m_isInitialized || m_syncedResourceSerial == 0 || m_syncedResourceSerial != storage->Serial ||
+                !storage->PendingUploads.empty()) {
                 return false;
             }
             // SyncTextureParamsToBackend's (ResolvePushedTextureParams' gate).

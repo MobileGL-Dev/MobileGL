@@ -388,11 +388,38 @@ vertex-elements CSO stays identity-addressed.
 Every draw-path entry is `SyncTextureToBackendByHandle(h, imageBindable)`: record first, twin by
 `GetOrCreateByHandle`, three syncs `(h, *rec)`; the by-value twin copy + second `Find`
 (`DirectGLES.cpp:1745-1755, 1781-1805`) go with the map arm. Clean = `m_isInitialized &&
-m_syncedResourceSerial == rec->Serial && rec->PendingUploads.empty() && m_syncedParamsSerial ==
+m_syncedResourceSerial == storage->Serial && storage->PendingUploads.empty() && m_syncedParamsSerial ==
 rec->ParamsSerial && !rec->Params.ForceResync && !m_forceTextureParamsResync &&
 m_syncedBuiltinSampler == rec->Params.BuiltinSampler && m_syncedBuiltinSamplerSerial ==
 SamplerCso(rec->Params.BuiltinSampler)->Serial && !rec->Params.SamplerResync && !m_forceSamplerResync
-&& rec->Desc.StorageKind == Mipmap` — no new state. The four in-body live reads (`GetTarget` at
+&& rec->Desc.StorageKind == Mipmap` — no new state.
+
+**`storage` is the STORAGE RECORD, which is `rec` itself for a texture that owns its texels and
+the record `rec->Desc.ViewOf` names for a `glTextureView`** (P3b/P4b wave 2-D package D3;
+`Managers.cpp PipeTextureStorageRecordForRecord`). This clause was `rec->Serial` /
+`rec->PendingUploads` through P5e and **that was wrong**, which is why it is corrected here rather
+than restated: a view owns no texels and the client keeps ONE emission cursor per storage — an
+upload through a view's own name is remapped onto its owner before it is emitted
+(`MG_Impl/Pipe/TextureEmit.h`) — so every `resource_subdata` for either name is keyed on the OWNER
+and `ApplyTextureUpload` moves the OWNER's `Serial` and `PendingUploads` alone. A view's own
+`Serial` is moved by nothing an upload does, so a gate that read it answered CLEAN for every owner
+write after the view's first sample and the view went on sampling the texels it was minted with.
+The monolith gate has this for free: `GetContentVersion()` through a view is forwarded to the owner
+(`TextureObjectView.cpp:100-102`). The three PARAMETER clauses stay `rec`'s — a view has its own
+texture parameters and its own built-in sampler, which is the whole reason the second name exists —
+as does `Desc.StorageKind`. The resolution is transitive and BOUNDED (one hop always reaches
+storage, because `glTextureView` composes a view-of-a-view onto the root at creation, but this side
+may not depend on a client invariant to terminate), and a storage record that cannot be resolved is
+**not clean**: the direction that re-syncs, not a refusal, and it raises nothing.
+`SyncTextureViewToBackendByRecord` stamps that same storage serial — or 0, which reads as never
+clean — at both its arms, so the stamp and the gate name one quantity. Deletion ordering cannot
+strand the walk: a view holds a strong reference to its storage owner and the client emits
+`resource_destroy` from the DESTRUCTOR rather than from `glDeleteTextures`
+(`TextureObject.cpp:63`), so an owner's record outlives every record that views it whatever order
+the application deletes the two names in; `Live`/`Gen` are checked anyway, so a recycled slot
+answers null rather than a stranger's record.
+
+The four in-body live reads (`GetTarget` at
 `Managers.cpp:8876-8877, 8620-8621`; `IsTextureView` `:7060`; the TexBuffer backing `:8223-8231`)
 read `Desc.Target / Desc.ViewOf / Desc.BufferForTexBuffer`; `GetExternalIndex` in logs becomes
 `Desc.GlNameForDiag`. The unit work list is `{Res, backend}` keyed `(ContextSerial,
