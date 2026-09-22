@@ -113,7 +113,7 @@ TEST(FatalFamily, TheAnchorFamiliesProjectWhereTheirMeaningSays) {
 // ---------------------------------------------------------------------------------------------
 // P7 wave 0: the seam MG_Backend's three Magma wire funnels die through (MG_Pipe/
 // PipeSessionFail.h). Until this package they logged and raised their own std::abort(), so
-// fifteen `@P7` refusals plus WireBufferLegacyFatal published no SessionFault to the peer, bumped
+// fifteen P7-marked refusals plus WireBufferLegacyFatal published no SessionFault to the peer, bumped
 // no SessionFaultCount() and were invisible to the census gate. These three cases are the
 // red-once for that: delete InstallPipeSessionFailHook()'s call in InitServerRoleCommon and the
 // first two go red on the exit code, point a funnel back at MGLOG_F + abort and all three do.
@@ -137,7 +137,7 @@ TEST(FatalFunnelSeam, TheMagmaWireVerbDeathReachesSessionFailAndBumpsTheFaultCou
 #else
     using namespace MobileGL;
     // WireFramebuffer.inc's MagmaWireFatal, character for character - the funnel eleven of the
-    // fifteen `@P7` refusals die through.
+    // fifteen P7-marked refusals die through.
     EXPECT_EXIT(
         {
             std::signal(SIGABRT, &ReportFaultCountAndExit);

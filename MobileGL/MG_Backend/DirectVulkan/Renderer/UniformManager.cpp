@@ -68,7 +68,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     // P7 wave 0, the descriptor half of WireFramebuffer.inc's MagmaWireFatal - same message,
-    // same seam, same reason. Four of the fifteen `@P7` refusals die here.
+    // same seam, same reason. Four of the fifteen P7-marked refusals die here.
     [[noreturn]] static void WireDescriptorFatal(const char* detail) {
         MG_Pipe::MGPipeSessionFail(MG_Pipe::MGPipeFatalFamily::UnmigratedVerb,
                                    "MGPipe: Fatal{UnmigratedVerb, \"Magma:%s\"}", detail);

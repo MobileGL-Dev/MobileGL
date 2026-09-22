@@ -2,7 +2,7 @@
 // belong to the applier; no frontend object, lifetime-id lookup or allocator is used.
 #if MOBILEGL_BUILD_DISAGGREGATED
     // P7 wave 0. THE MESSAGE IS UNCHANGED; where it goes is not. This funnel is how eleven of
-    // the fifteen `@P7` refusals die (the other four are WireDescriptorFatal's), and until now
+    // the fifteen P7-marked refusals die (the other four are WireDescriptorFatal's), and until now
     // every one of them raised its own abort: no SessionFault frame for the peer, no
     // SessionFaultCount() for exit gate S8, and nothing tying the hand-typed word to
     // FatalFamilies.def. MGPipeSessionFail hands the line to the hook MG_Remote installs at

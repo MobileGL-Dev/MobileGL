@@ -6,13 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P7 wave 0 (plan section 1.3 row `@P7`, item (0); Ph slice (2)). HOW A BACKEND DEATH REACHES
+// P7 wave 0 (plan section 1.3's P7-marked refusal row, item (0); Ph slice (2)). HOW A BACKEND DEATH REACHES
 // Session::Fail WITHOUT THE BACKEND KNOWING MG_Remote EXISTS.
 //
 // The three Magma wire funnels - MagmaWireFatal (Renderer/WireFramebuffer.inc),
 // WireDescriptorFatal (Renderer/UniformManager.cpp) and WireBufferLegacyFatal
 // (Renderer/WireDraw.inc) - each logged their line and raised their OWN std::abort(). Fifteen
-// `@P7` refusals and two more sites die through them, and every one of those deaths:
+// P7-marked refusals (the grep key is the at-sign form, not spelled here) and two more sites die through them, and every one of those deaths:
 //
 //   * published NO SessionFault frame, so the peer read a bare EOF and could not name what
 //     ended the session (CONTRACT-P6 5.2's whole point);
@@ -35,7 +35,7 @@
 //
 // THE MESSAGE STRING IS PASSED VERBATIM, family word and all - the same rule FatalFunnel.h
 // states. The lines these three funnels write are already counted by name in the retrace refusal
-// census and in every recorded `@P7` measurement, so they are byte-identical before and after.
+// census and in every recorded P7-refusal measurement, so they are byte-identical before and after.
 
 #pragma once
 

@@ -30,26 +30,38 @@ because the Magma wire arms live in Renderer/Wire*.inc and nothing else compiles
 TEST TREES ARE OUT. A death test's deliberate abort is not a production death, and the benchmark
 and integration harnesses drive the library rather than being it.
 
-THE 83 SITES OF THE WIDENED PERIMETER, TRIAGED. Every one was read; the triage is the argument
-for why the gate can be green with eighty-three deaths in it, and the two tables below are the
-only places an unnamed one is tolerated.
+THE SITES OF THE WIDENED PERIMETER, TRIAGED. The widening found 83; the same package routed
+five of them through Session::Fail and added one funnel of its own, so the floor the baseline
+records is 79 over 20 files. The triage is the argument for why the gate can be green with
+seventy-nine deaths inside it. The ENFORCEABLE artefact is the baseline's per-file map - this
+prose is why that map reads the way it does.
 
-  (i)   INSIDE A SANCTIONED FUNNEL - 4 sites. The abort is reached only through a function whose
-        CALLERS carry the family word, so the death is named by the caller. FUNNEL_FILES exempts
-        the two whole files that are nothing but funnel; FUNNEL_SITES exempts the individual
-        funnels that live inside a file with ordinary named deaths around them.
-  (ii)  NAMED, AND OWNED BY A Ph / P7 ROW - 20 sites. The Magma wire arms (WireFramebuffer.inc,
-        WireDraw.inc, UniformManager.cpp, VulkanRenderer.cpp) hold the 15 `@P7` refusals due for
-        retirement in P7 wave 2; StagedShadow.h / StagedTextureStore.h and the D11 rows are Ph's.
-        They carry their family word today, which is the whole point of widening the perimeter:
-        the census can now SEE them, and the ratchet below means retiring one is visible.
-  (iii) NAMED, BUT NOT SESSION-SCOPED - the remainder. Startup and role self-checks that predate
-        the split (Init.cpp's ConsumerMaskLie pair, MagmaPipeArms.h's PipeLegacyMemosDisabled,
-        DirectGLES.cpp's UnnamedIdentity, the PipeVerify knob parser) plus the backend-internal
-        resource failures in Managers.cpp / VkBufferManager.cpp. They die before or beside a
-        session rather than inside one, so routing them through SessionFail would publish a
-        SessionFault to a peer that does not exist yet. They are named, which is what this gate
-        asks of them; converting them to latches is Ph's fuzz arm 2, not wave 0's.
+  (i)   INSIDE A SANCTIONED FUNNEL - 5 sites, and the only ones allowed to carry no marker. The
+        abort is reached only through a function whose CALLERS carry the family word, so the
+        death is named by the caller. FUNNEL_FILES exempts the two whole files that are nothing
+        but funnel (WireLog.cpp, FatalFunnel.cpp); FUNNEL_SITES exempts the three that live
+        inside a file with ordinary named deaths around them, one argued line each.
+  (ii)  NAMED, AND PEER-REACHABLE - the bulk. DirectGLES.cpp 15, Managers.cpp 12,
+        VkBufferManager.cpp 11, PipeRoute.cpp 7, ResourceTracker.h 5, PipeInputs.cpp 3,
+        MultiDraw.cpp / SlotAllocator.cpp / BufferObject.cpp / DirectVulkan.cpp 2 each, and the
+        singletons. A record the peer sent can reach these, and most already sit in a function
+        that returns Bool or MobileGLResult - which is exactly why ID-P7-1 scopes their
+        conversion to latch-and-decline as Ph's fuzz arm 2, AFTER P7, rather than as wave 0's.
+        They carry their family word today, which is the point of widening the perimeter: the
+        census can SEE them now, and the ratchet makes retiring one visible.
+  (iii) NAMED, BUT NOT SESSION-SCOPED - Init.cpp's ConsumerMaskLie pair, MagmaPipeArms.h's and
+        Managers.cpp's PipeLegacyMemosDisabled, DirectGLES.cpp:227's UnnamedIdentity,
+        PipeFill.cpp's PipeVerify knob parser. Startup and role self-checks that predate the
+        split: they die BEFORE a session exists, so routing them through SessionFail would
+        publish a SessionFault to a peer that has not connected. They are named, which is what
+        this gate asks of them.
+
+WHAT THE SAME PACKAGE RETIRED, so the numbers above can be checked: StagedShadow.h:115 and
+StagedTextureStore.h:344 now call SessionFail, and the three Magma wire funnels
+(WireFramebuffer.inc, UniformManager.cpp, WireDraw.inc) - through which all fifteen `@P7`
+refusals die - go through MG_Pipe's MGPipeSessionFail seam. Those fifteen are now visible to
+every consumer of the funnel: a SessionFault frame for the peer, a SessionFaultCount() for exit
+gate S8, and a family word that FatalFamilies.def projects.
 
 THE FOUR RULES, spelled out rather than inferred:
 
