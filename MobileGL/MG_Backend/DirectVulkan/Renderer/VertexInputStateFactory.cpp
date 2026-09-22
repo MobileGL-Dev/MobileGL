@@ -442,13 +442,58 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (Uint32 location = 0; location < elements.AttributeCount; ++location) {
             const auto& attr = elements.Attributes[location];
             if (!attr.Enabled || !(activeMask & (1u << location))) continue;
-            const auto reject = [&](const char* reason, VkFormat format = VK_FORMAT_UNDEFINED) {
-                MGLOG_E("Magma wire vertex layout: %s location=%u type=%u size=%u normalized=%u integer=%u long=%u bgra=%u stride=%d offset=%llu format=%d bufferWindow=%u+%u activeMask=0x%x",
+            // P7 wave 2 package C, CONTRACT-P7 §3.2 `vertex-layout`: THE ONE STRING BECAME TWO
+            // VERDICTS, and the split is by what the reason is ABOUT rather than by severity.
+            //
+            // Every reason here used to return false, and the single caller answered that with
+            // one P7-marked MagmaWireFatal - an abort, bypassing Session::Fail, invisible
+            // to the census gate and with no equivalent on the monolith arm at all. But the
+            // reasons are not one kind of thing:
+            //
+            //   * `buffer-window` is a statement about the RECORD: an enabled attribute the
+            //     program reads names a slot outside the window set_vertex_buffers published.
+            //     Nothing about the device or the format is involved; the two halves of the
+            //     protocol disagree about what crossed. It stays a named Fatal through the hook
+            //     (see the caller), and it is load-bearing rather than defensive - it is what
+            //     caught the Redmi VAO hash collision fixed in 376c04be.
+            //
+            //   * every other reason is a statement about what VULKAN CAN EXPRESS on this
+            //     device: a GL type with no VkFormat, a format without
+            //     VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT, a component size we cannot compute, an
+            //     offset sum that does not fit. The monolith arm has had an answer for these
+            //     since it was written, and it is not an abort: mask the attribute out of the
+            //     vertex input state and carry on (the `unsupportedAttribMask |= ...; continue;`
+            //     sites in GetOrCreateVertexInputState above). The draw path then decides,
+            //     loudly and once, whether the masked attribute was one the program actually
+            //     reads. This arm now does exactly that, which is what "same observable as the
+            //     monolith lane" means for this row.
+            //
+            // THE COUNT: the contract says "the other six"; there are SEVEN return sites below
+            // it, because `offset-overflow` was added after the audit's count and is an
+            // arithmetic guard rather than a shape one. It is masked with the rest: an
+            // attribute whose base offsets cannot be added is one Vulkan cannot fetch, the
+            // monolith arm never computes that sum at all, and masking is strictly safer than
+            // a Fatal for a number no application can reach on purpose. Recorded in
+            // notes/p7/magma-c.md rather than silently reconciled.
+            const auto describe = [&](const char* reason, VkFormat format) {
+                MGLOG_E_ONCE("Magma wire vertex layout: %s location=%u type=%u size=%u normalized=%u integer=%u long=%u bgra=%u stride=%d offset=%llu format=%d bufferWindow=%u+%u activeMask=0x%x",
                     reason, location, attr.Type, static_cast<Uint32>(attr.Size), static_cast<Uint32>(attr.Normalized),
                     static_cast<Uint32>(attr.IsInteger), static_cast<Uint32>(attr.IsLong), static_cast<Uint32>(attr.IsBgra),
                     attr.Stride, static_cast<unsigned long long>(attr.Offset), static_cast<Int>(format),
                     state.VertexBufferStart, state.VertexBufferCount, activeMask);
+            };
+            // The protocol verdict: the caller turns a false into the named Fatal.
+            const auto reject = [&](const char* reason, VkFormat format = VK_FORMAT_UNDEFINED) {
+                describe(reason, format);
                 return false;
+            };
+            // The device verdict: MGLOG_E_ONCE + mask + continue, the monolith arm's shape.
+            // MGLOG_E_ONCE and not MGLOG_E, also the monolith arm's: an unmappable attribute is
+            // a property of the VAO and the device, so it repeats every draw, and the per-draw
+            // line is what made the old abort look preferable to whoever wrote it.
+            const auto maskOut = [&](const char* reason, VkFormat format = VK_FORMAT_UNDEFINED) {
+                describe(reason, format);
+                out.unsupportedAttribMask |= 1u << location;
             };
             // set_vertex_buffers is flattened PER ATTRIBUTE (VertexInputEmit.h), not
             // indexed by the original ARB binding point in attr.BindingIndex.
@@ -456,27 +501,35 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 location - state.VertexBufferStart >= state.VertexBufferCount) return reject("buffer-window");
             const auto& buffer = state.VertexBuffers[location];
             const auto type = static_cast<DataType>(attr.Type);
-            if (attr.Stride < 0 || attr.Size < 1 || attr.Size > 4) return reject("attribute-shape");
+            if (attr.Stride < 0 || attr.Size < 1 || attr.Size > 4) { maskOut("attribute-shape"); continue; }
             VkFormat format = ToVkVertexFormat(type, attr.Size, attr.Normalized, attr.IsInteger,
                                                attr.IsBgra, attr.IsLong);
             auto conversion = VertexStreamConversion::None;
             if (format == VK_FORMAT_UNDEFINED && type == DataType::Float64) {
                 const auto* backend = MG_Remote::Server::ServerLoopInstance().Backend();
-                if (backend && backend->GetDynamicParameters().SupportsFloat64VertexAttributes) return reject("native-fp64-format");
+                if (backend && backend->GetDynamicParameters().SupportsFloat64VertexAttributes) {
+                    // Exactly the monolith arm's answer for the same state: with native fp64
+                    // the module KEPT its 64-bit inputs (DemoteFloat64Pass did not run), so
+                    // narrowing the stream would feed float32 to a Float64 input - and the
+                    // monolith build therefore leaves sourceVkFormat UNDEFINED and falls into
+                    // its own mask-out below. Same place, same mask.
+                    maskOut("native-fp64-format");
+                    continue;
+                }
                 format = ToFloat32VertexFormat(attr.Size);
                 conversion = VertexStreamConversion::Float64ToFloat32;
             }
-            if (format == VK_FORMAT_UNDEFINED) return reject("format-map");
+            if (format == VK_FORMAT_UNDEFINED) { maskOut("format-map"); continue; }
             if (!SupportsVertexBufferFormat(format)) {
-                if (!IsScaledIntegerVertexFormat(format)) return reject("native-format-feature", format);
+                if (!IsScaledIntegerVertexFormat(format)) { maskOut("native-format-feature", format); continue; }
                 format = ToFloat32VertexFormat(attr.Size);
                 conversion = VertexStreamConversion::ScaledIntegerToFloat32;
-                if (!SupportsVertexBufferFormat(format)) return reject("converted-format-feature", format);
+                if (!SupportsVertexBufferFormat(format)) { maskOut("converted-format-feature", format); continue; }
             }
             const SizeT elementSize = GetAttributeByteSize(type, attr.Size, attr.IsBgra);
-            if (!elementSize) return reject("element-size", format);
+            if (!elementSize) { maskOut("element-size", format); continue; }
             const Uint64 offset = attr.Offset + buffer.Offset;
-            if (offset < attr.Offset) return reject("offset-overflow", format);
+            if (offset < attr.Offset) { maskOut("offset-overflow", format); continue; }
             const SizeT alignment = (type == DataType::Int2101010Rev || type == DataType::Uint2101010Rev)
                 ? elementSize : GetComponentSize(type);
             if (conversion == VertexStreamConversion::None && alignment > 1 &&
@@ -500,8 +553,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // resolved binding/attribute/divisor values, including a legal zero stride.
         Uint64 hash = XXH64(out.bindings.data(), out.bindings.size() * sizeof(out.bindings[0]), 0);
         hash = XXH64(out.attributes.data(), out.attributes.size() * sizeof(out.attributes[0]), hash);
-        out.layoutHash = XXH64(out.bindingDivisors.data(),
+        hash = XXH64(out.bindingDivisors.data(),
             out.bindingDivisors.size() * sizeof(out.bindingDivisors[0]), hash);
+        // THE MASK IS PART OF THE LAYOUT NOW, for the same reason the monolith entry's hash
+        // carries it (the XXH64_update over unsupportedAttribMask in GetOrCreateVertexInputState
+        // above). Before this package the mask was always zero here, so leaving it out of the
+        // hash was free; now two VAOs can produce the SAME bindings, attributes and divisors
+        // and differ only in which enabled attribute was masked out, and a hash blind to that
+        // would serve one of them the other's pipeline.
+        out.layoutHash = XXH64(&out.unsupportedAttribMask, sizeof(out.unsupportedAttribMask), hash);
         out.state.vertexBindingDescriptionCount = static_cast<Uint32>(out.bindings.size());
         out.state.pVertexBindingDescriptions = out.bindings.data();
         out.state.vertexAttributeDescriptionCount = static_cast<Uint32>(out.attributes.size());

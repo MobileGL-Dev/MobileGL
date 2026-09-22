@@ -151,3 +151,84 @@ case did no GL work and failed on `ScenarioFixture.h:90` — an armed split lane
 whose encoder ordinal did not move, because "emitted nothing" and "resolved the transport and
 then put nothing on the wire" are the same observation. The case now clears and reads back
 first. This is the same F1 arming rule package L hit on tier 3.
+
+---
+
+## Slice 4 — the `vertex-layout` split and `vertex-format-conversion` (§3.2)
+
+**What landed.** `BuildWireVertexInput` answered eight conditions with one `false`, and the
+caller answered that with a P7-marked `MagmaWireFatal` — a session kill where the monolith arm
+masks the attribute out and declines the draw. Split by what the reason is ABOUT:
+
+| reason | before | after |
+|---|---|---|
+| `buffer-window` | `false` → P7-marked Fatal | `false` → named Fatal `Magma:vertex-layout-buffer-window` (no P7 marker: it is a permanent protocol error, not an unmigrated shape) |
+| `attribute-shape`, `native-fp64-format`, `format-map`, `native-format-feature`, `converted-format-feature`, `element-size`, `offset-overflow` | `false` → Fatal | `MGLOG_E_ONCE` + `unsupportedAttribMask \|= 1<<loc` + `continue`, then the monolith arm's own pre-flight in `WireDraw.inc` declines the draw when a masked bit is one the program reads |
+| `vertex-format-conversion` | P7-marked Fatal | `MGLOG_E_ONCE` + `return false` (decline, rule I (a)) |
+
+`unsupportedAttribMask` now enters the wire layout hash, for the reason the monolith entry's
+hash already carries it: two VAOs can otherwise produce identical bindings/attributes/divisors
+and differ only in which enabled attribute was masked, and a blind hash would serve one the
+other's pipeline. It was safe to omit only while the mask was always zero.
+
+**Count correction.** CONTRACT-P7 §3.2 says "the other six". There are SEVEN non-`buffer-window`
+return sites in the tree: `offset-overflow` post-dates the audit's count and is an arithmetic
+guard rather than a shape one. It is masked with the rest — an attribute whose base offsets
+cannot be added is one Vulkan cannot fetch, the monolith arm never computes that sum at all,
+and masking is strictly safer than a Fatal for a number no application can reach on purpose.
+
+**Family-word question for the integrator.** `buffer-window` now goes through `MagmaWireFatal`,
+whose family is `UnmigratedVerb`. The honest word for "the record's own numbers are impossible"
+is `ProtocolCorruption`. `MG_Pipe::MGPipeFatalFamily` carries only `UnmigratedVerb` and
+`RoleViolation` and its own comment says a third "costs a row here and an arm in the adapter -
+which is the point, because that arm is where the choice gets argued". Not taken here: it is a
+cross-package edit (`MG_Pipe/PipeSessionFail.h` + the `MG_Remote` adapter) and §3.3 records that
+the three Magma funnels keep `UnmigratedVerb` deliberately, because renaming invalidates the
+refusal census kept since P5b. Flagged rather than decided.
+
+**Census.** `grep -rn "@P7" MobileGL/ --include=*.cpp --include=*.inc --include=*.h`:
+**15 sites / 4 files → 13 sites / 3 files.** `Renderer/WireDraw.inc` leaves the list entirely
+(both of its marked refusals are retired). `scripts/ci/fatal_census.py` is unchanged at
+`79 abort sites over 20 files, 43 distinct family words, 3 refusal words, 0 unmarked` — the
+funnels were already converted in wave 0, so retiring a `MagmaWireFatal` call moves no
+`std::abort()` count. (Note for anyone editing near this row: the census counts the marker
+literally, so a COMMENT that spells it raises the number. The first cut of this slice pushed
+15 → 16 that way.)
+
+**New scenario.** `Scenarios/MagmaVertexLayoutScenario.cpp`, DirectVulkan only — Espryt hands
+`GL_FIXED` to a driver that supports it, so the same case under the same name would assert a
+different fact there. `DataType::Fixed32` has no arm in `ToVkVertexFormat` at all, which is
+what makes it the one unmappable shape reachable on host lavapipe; CONTRACT-P7 §2.5 records
+that no other P7-marked refusal is (they need real hardware), so without this shape the
+retirement would have had no host gate.
+
+- `AnUnmappableVertexFormatDeclinesTheDrawInsteadOfEndingTheSession` — the program READS the
+  `GL_FIXED` array, so the draw declines and the framebuffer keeps the clear colour.
+- `AnUnreadUnmappableArrayDoesNotStopTheRestOfTheDraw` — the array is enabled and unmappable
+  but unread, so the draw lands. This is what stops the first case being satisfied by
+  "decline every draw that mentions GL_FIXED".
+
+Registered on `DirectVulkan.{Split,Spawn,Tcp}.VertexLayout.` AND picked up by the ambient
+monolith `DirectVulkan.` discovery, so the A/B is direct: the same two assertions on the wire
+arm and on the monolith arm.
+
+**Proof (green).** 8/8 — monolith `DirectVulkan.` ×2, `Split` ×2, `Spawn` ×2, `Tcp` ×2.
+
+**RED-ONCE (executed).** `format-map` put back on the protocol verdict
+(`return reject("format-map")`):
+
+```
+70% tests passed, 3 tests failed out of 10
+#4238 DirectVulkan.Split.VertexLayout...Unmappable...  Subprocess aborted***Exception
+  MGPipe: Fatal{UnmigratedVerb, "Magma:vertex-layout-buffer-window"}
+#4240 DirectVulkan.Spawn.VertexLayout...Unmappable...  Subprocess aborted
+#4242 DirectVulkan.Tcp.VertexLayout...Unmappable...    Subprocess aborted
+#3408 DirectVulkan.MagmaVertexLayoutScenario...Unmappable...   Passed   <- monolith control
+```
+
+The three split arms KILL THE PROCESS and the monolith arm stays green, which is exactly the
+divergence this slice closes. Restored: 10/10.
+
+**Lane arithmetic.** The three new `Split` entries carry `integration-magma-split`, so that
+gating lane grows 73 → 75 (and `-spawn` 52 → 54, `-tcp` 54 → 56). Growth only; G14's name
+sets are grow-only by rule.

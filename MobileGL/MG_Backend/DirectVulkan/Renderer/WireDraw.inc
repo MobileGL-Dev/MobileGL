@@ -245,8 +245,40 @@
         const auto& vao = state.VertexElementsCsos[vaoHandle.Slot];
         if (!vao.Live || vao.Gen != vaoHandle.Gen) MagmaWireFatal("vertex-elements-generation");
         VertexInputStateFactory::BackendVertexInputState input{};
+        // P7 wave 2 package C, CONTRACT-P7 §3.2: THE `vertex-layout` ROW IS RETIRED AND SPLIT.
+        //
+        // A false is now ONE reason and only one - `buffer-window`, an enabled attribute the
+        // program reads whose slot lies outside the window set_vertex_buffers published. That
+        // is a disagreement about what crossed, not about what this device can express, so it
+        // keeps a named Fatal through the hook (MGPipeSessionFail -> Session::Fail, which is
+        // what rule I asks of a refusal that must stay a refusal). It is the check that caught
+        // the Redmi VAO hash collision fixed in 376c04be, which is why it is not softened.
+        // The P7 marker is gone from the detail string with the abort: this is a permanent
+        // protocol error, not a shape the split path has yet to migrate, so it must not keep
+        // counting against the census of unmigrated refusals (scripts/ci/fatal_census.py
+        // counts the marker literally, which is also why no comment in this package spells it).
         if (!m_vertexInputStateFactory->BuildWireVertexInput(vao, state,
-                programObj.activeVertexInputLocationMask, input)) MagmaWireFatal("vertex-layout@P7");
+                programObj.activeVertexInputLocationMask, input))
+            MagmaWireFatal("vertex-layout-buffer-window");
+        // The seven device/format reasons are now MASKED OUT of the vertex input state, and
+        // this is the monolith arm's pre-flight for them, statement for statement
+        // (VulkanRenderer.cpp's SetupDraw: "Fail loudly rather than render wrong pixels"). An
+        // enabled array with no usable VkFormat never reaches the vertex input state, which
+        // makes it indistinguishable from a DISABLED one - and a disabled one is answered
+        // below by uploading the current attribute value, so without this check the draw would
+        // quietly feed the shader a constant in place of the application's vertex data.
+        //
+        // A DECLINE, NOT A FATAL (rule I (a)): the draw is skipped, the reason is named once,
+        // and the observable is the monolith lane's for the same VAO on the same device.
+        // BuildWireVertexInput only considers attributes the program reads, so a masked bit is
+        // always an active one and this predicate is the whole of the difference.
+        if ((input.unsupportedAttribMask & programObj.activeVertexInputLocationMask) != 0) {
+            MGLOG_E_ONCE("Magma wire draw skipped: program=%u reads vertex attribute location "
+                         "mask 0x%x whose enabled array has no supported vertex format",
+                         program.GetExternalIndex(),
+                         input.unsupportedAttribMask & programObj.activeVertexInputLocationMask);
+            return false;
+        }
         Vector<BufferSlice> vertexSlices(input.bindings.size());
         for (SizeT binding = 0; binding < input.bindings.size(); ++binding) {
             const Uint32 location = input.bindingAttributeLocations[binding];
@@ -272,8 +304,22 @@
                 Vector<Uint8> source((count - 1) * stride + elementSize);
                 if (!m_bufferManager.ReadWireBuffer(resource.Res, offset, source.size(), source.data())) return false;
                 Vector<Uint8> converted;
-                if (!ConvertWireVertexStream(attr, conversion, source.data(), stride, count, converted))
-                    MagmaWireFatal("vertex-format-conversion@P7");
+                // P7 wave 2 package C, CONTRACT-P7 §3.2 `vertex-format-conversion`: DECLINE.
+                // The converter is asked only for a conversion BuildWireVertexInput already
+                // chose, so a refusal here means the two disagree about what is convertible -
+                // a MobileGL-internal defect, not a peer's malformed record and not a verb the
+                // split path has yet to migrate. Killing the session for it told the peer
+                // "protocol corruption" about a bug on this side; skipping the draw and naming
+                // it once is the honest answer and is what the row asks for. The packed
+                // converter that would make the refusal unreachable is the row's optional half
+                // and is not taken here.
+                if (!ConvertWireVertexStream(attr, conversion, source.data(), stride, count, converted)) {
+                    MGLOG_E_ONCE("Magma wire draw skipped: no vertex stream converter for "
+                                 "location=%u type=%u size=%u conversion=%d",
+                                 location, attr.Type, static_cast<Uint32>(attr.Size),
+                                 static_cast<Int>(conversion));
+                    return false;
+                }
                 if (!m_bufferManager.UploadTransient(BufferKind::Vertex, m_frameContext.GetCurrentFrameIndex(),
                         converted.data(), converted.size(), 16, vertexSlices[binding])) return false;
             } else {

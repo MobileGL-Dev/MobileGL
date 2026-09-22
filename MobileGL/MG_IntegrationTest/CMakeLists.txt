@@ -2826,6 +2826,49 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endforeach()
 endif()
 
+# =====================================================================================
+# P7 WAVE 2 PACKAGE C: THE `vertex-layout` RETIREMENT (CONTRACT-P7 §3.2)
+# =====================================================================================
+#
+# The source is NOT inside the `if (MOBILEGL_BUILD_DISAGGREGATED)` above, and that is the
+# point of the case pair: the claim is "the wire arm now does what the MONOLITH arm does",
+# so the monolith DirectVulkan arm has to run the very same two cases. The ambient
+# `TEST_PREFIX "DirectVulkan."` discovery near the top of this file picks them up from the
+# target sources with no entry of its own; the three transports are added below.
+target_sources(MobileGLIntegrationTest PRIVATE Scenarios/MagmaVertexLayoutScenario.cpp)
+
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    # The flavour block is the buffers lane's minus the persistent-map knobs, which nothing
+    # here touches. MOBILEGL_BACKEND_TYPE and the ICD pin are the load-bearing pair: without
+    # them the entries run DirectGLES under a DirectVulkan prefix and skip themselves in
+    # SetUp, which reads as six green skips and proves nothing (measured, first cut).
+    set(MGL_ITEST_MAGMA_VERTEXLAYOUT_FLAVOUR_ENV
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan"
+        "MOBILEGL_IPC_ROLE_SPLIT_STATE=1" "MOBILEGL_IPC_STRICT_ERRORS=1"
+        "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
+    # ALL THREE ARMS, unlike the caches and run-ahead lanes above: nothing here reads this
+    # process's server loop, so there is no inproc-only property to declare. The scenario's own
+    # SetUp skips DirectGLES, so a DirectGLES registration would only add three skips.
+    foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
+    mgl_itest_magma_arm_shape(${mglItestArm} vertexlayout)
+    mgl_itest_join_environment(MGL_ITEST_MAGMA_VERTEXLAYOUT_ENVIRONMENT
+        ${MGL_ITEST_MAGMA_VERTEXLAYOUT_FLAVOUR_ENV} ${mglItestArmTransportEnv})
+    foreach(vertexLayoutCase
+            AnUnmappableVertexFormatDeclinesTheDrawInsteadOfEndingTheSession
+            AnUnreadUnmappableArrayDoesNotStopTheRestOfTheDraw)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.${mglItestArm}.VertexLayout."
+            TEST_FILTER "MagmaVertexLayoutScenario.${vertexLayoutCase}"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "${mglItestMagmaLabels}"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ${mglItestArmProperties}
+                ENVIRONMENT "${MGL_ITEST_MAGMA_VERTEXLAYOUT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-vertexlayout${mglItestArmLogTag}-${vertexLayoutCase}.log")
+    endforeach()
+    endforeach()
+endif()
+
 # P5c ct (MG_Remote/CONTRACT-P5C.md §5): the two control records, split-only source for the
 # same reason as f1's - the scenario reads the SERVER sink's tallies, which a monolith build
 # has no symbol for. One block per case with a LOG PATH OF ITS OWN, the F1 pattern:
