@@ -61,9 +61,15 @@ namespace MobileGL::MG_Pipe {
     // 47 DirectGLES cases at ID-41). With them the four families emit NOTHING in that state and
     // the legacy pull path runs exactly as it does on a pull build.
     //
-    // D-K2's TABLE IS IN PipeFill.cpp, ONCE: bit 9 requires bit 10, bit 10 requires bits 7 and
-    // 11, bit 11 requires bit 10, bit 12 depends on nothing - the client mirror, bit for bit, of
-    // the four `Resolve<Family>SubsystemArm()` refusals in DirectGLES/Managers.cpp.
+    // D-K2's ROWS ARE IN MG_Pipe/SubsystemDeps.def, ONCE (P3b/P4b R-5), and this comment no
+    // longer restates them - restating them here is half of how the rule ended up with six
+    // statements, two of which were wrong. PipeFill.cpp's kMGPipeP4aFamilyDependencies is still
+    // the client's own copy and is still the bit-for-bit mirror of the four
+    // `Resolve<Family>SubsystemArm()` refusals in DirectGLES/Managers.cpp; switching it to read
+    // the .def is the integrator's one-line change (PipeFill.cpp is the contract package's file
+    // for the whole phase, so the emitter packages do not edit it).
+    // MG_Test/Backend/DirectGLES/SubsystemDepsTest.cpp drives BOTH readers at every interesting
+    // mask and compares them against the .def, so the two cannot drift in the meantime.
     //
     // It is exported for the unit gate and for no other caller: the gate itself is
     // FamilyIsLive() inside PipeFill.cpp, every birth hook and every `wants()` row resolves

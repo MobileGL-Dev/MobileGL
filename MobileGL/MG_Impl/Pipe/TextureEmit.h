@@ -100,9 +100,10 @@ namespace MobileGL::MG_Pipe {
     // THE FLIP IS THE WHOLE SWITCH AND NOTHING ELSE MOVES: PipeFill.cpp ORs this constant into
     // kMGPipeWiredSubsystems, static_asserts it is 0-or-its-own-bit, gates every birth hook on
     // FamilyIsLive(kMGPipeSubsystemTextureResources, this), and gates DrainTextureSubData on
-    // the same OR. Bit 9 (framebuffer) REQUIRES bit 10 (D-K2), because every MGPSurface::Res
-    // names a texture or renderbuffer handle the applier must hold a record for - so this
-    // package may never be integrated with only one of the two constants set.
+    // the same OR. D-K2's rows - including bit 9's dependency on this family - are in
+    // MG_Pipe/SubsystemDeps.def, once (P3b/P4b R-5), and are not restated here; what this
+    // comment still has to say is the consequence for INTEGRATION ORDER, which no table can
+    // carry: this package may never be integrated with only one of the two constants set.
     inline constexpr Uint64 kMGPipeWiredTextureSubsystem = kMGPipeSubsystemTextureResources;
     static_assert(kMGPipeWiredTextureSubsystem == 0 ||
                       kMGPipeWiredTextureSubsystem == kMGPipeSubsystemTextureResources,

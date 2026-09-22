@@ -1,0 +1,73 @@
+// MobileGL - MobileGL/MG_Pipe/SubsystemDeps.def
+// Copyright (c) 2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+//
+// D-K2's SUBSYSTEM DEPENDENCY RULE, IN ONE PLACE (P3b/P4b R-5).
+//
+// WHAT WAS WRONG. The rule "bit X requires bit Y" was stated in SIX places, and the audit found
+// two of them WRONG in the same direction:
+//
+//   * MG_Pipe/MGPipe.h's comment said "THREE OF THEM HAVE A DEPENDENCY" (there are six rows) and
+//     "The mirror pairs (10 without 11, 10 without 9, 7 without 10) are all fine" - but 10
+//     without 11 is exactly D-K2's FOURTH row, refused by the server at
+//     Managers.cpp ResolveTextureResourceSubsystemArm and withheld by the client at
+//     PipeFill.cpp's table. PipeFill.cpp says so out loud: "The brief's original
+//     'bit 10 without 11 is fine' is WITHDRAWN for P4a as built.";
+//   * MG_Backend/DirectGLES/Managers.h's header comment repeats both defects, in the header of
+//     the file that IMPLEMENTS the refusal.
+//
+// Neither wrong comment could fail anything, which is the whole argument for a table: the two
+// EXECUTABLE statements of the rule are in different link units with no shared header, and the
+// four PROSE statements drifted because nothing compared them to anything.
+//
+// WHAT THIS FILE IS. The rule, once, as rows. It is a preprocessor-only table like
+// MG_Remote/FatalFamilies.def - no generator reads it - and it carries pure bit constants, so
+// including it from MGPipe.h keeps check_include_closure.py's value-header rule satisfied.
+//
+// WHO READS IT. MGPipe.h turns it into kMGPipeSubsystemDependencies[] and
+// MGPipeSubsystemRequires(). The two executable statements of the rule are:
+//
+//   CLIENT dependency check   MG_Impl/Pipe/PipeFill.cpp's kMGPipeP4aFamilyDependencies /
+//                             P4aFamilyDependenciesAreSet (bits 9-12), plus P5eFamilyIsLive's
+//                             hand-coded bit-13 row.
+//   SERVER consumer gate      MG_Backend/DirectGLES/Managers.cpp's four
+//                             Resolve<Family>SubsystemArm() over PipeSubsystemDependencyMissing
+//                             (bits 9-12), plus ResolveVertexInputSubsystemArm (bit 8) and
+//                             DirectGLES.cpp's ResolveBufferBindingSubsystemArm (bit 13).
+//
+// THEY ARE NOT SWITCHED OVER IN THIS COMMIT, deliberately: PipeFill.cpp is the contract
+// package's file for the whole phase (TextureEmit.h states that rule) and Managers.cpp belongs
+// to wave 2-D package D1 while it is in flight. The anti-drift property does not wait for that,
+// because MG_Test/Backend/DirectGLES/SubsystemDepsTest.cpp drives BOTH readers at every
+// interesting mask and compares them against these rows - a change to either side alone reds.
+// Switching the two readers to read this table is two one-line changes for the integrator.
+//
+// THE ROWS ARE NOT TRANSITIVE, and that is load-bearing rather than an oversight: each reader
+// tests the required BITS against MOBILEGL_PIPE_PUSH alone, never the other family's liveness,
+// because Espryt's resolvers classify their arms from that mask alone. Making the rows
+// transitive here would make the two sides disagree at some mask, which is the failure the
+// table exists to prevent. PipeFill.cpp:1576-1581 argues this at length and
+// TextureEmitTest.cpp:1278-1283 pins it.
+//
+// THE MIRROR PAIRS THAT STAY FINE are stated in MGPipe.h beside the table rather than here,
+// because an absence is not a row.
+
+// clang-format off
+
+// X(Family, Requires, Why)
+//   Family   - exactly one kMGPipeSubsystem* bit
+//   Requires - the bits MOBILEGL_PIPE_PUSH must ALSO carry for that family to be live; 0 is a
+//              ROW and not an absence, so the table covers its families exhaustively
+#define MGL_SUBSYSTEM_DEPENDENCY_LIST(X) \
+    X(kMGPipeSubsystemVertexInput,      kMGPipeSubsystemResources,                                  "a vertex buffer binding names a Buffer handle and only bit 7 puts one in the slot table (P3a's shipped shape; ResolveVertexInputSubsystemArm)") \
+    X(kMGPipeSubsystemFramebuffer,      kMGPipeSubsystemTextureResources,                           "every MGPSurface::Res names a Texture or Renderbuffer handle and only bit 10 populates those two slot tables (ResolveFramebufferSubsystemArm)") \
+    X(kMGPipeSubsystemTextureResources, kMGPipeSubsystemResources | kMGPipeSubsystemSamplers,       "a buffer texture's BufferForTexBuffer names a Buffer handle (bit 7); and MGPTextureParams::BuiltinSampler is a SamplerCso HANDLE only bit 11 mints, whose null the applier treats as Fatal{ProtocolCorruption} rather than a decline - D-K2's fourth row, ID-14/ID-15, which WITHDRAWS the brief's 'bit 10 without 11 is fine'") \
+    X(kMGPipeSubsystemSamplers,         kMGPipeSubsystemTextureResources,                           "every MGPBoundView::Texture and MGPImageView::Res names a Texture handle and only bit 10 populates that slot table; with the row above this is SYMMETRIC - bits 10 and 11 are one arm with two switches (ResolveSamplerSubsystemArm)") \
+    X(kMGPipeSubsystemPrograms,         0,                                                          "a ShaderCso handle names no texture and no buffer, the archive rides beside the record as a companion pointer, and the server's extra specialisation inputs come from state the backend already holds (ResolveProgramSubsystemArm)") \
+    X(kMGPipeSubsystemBufferBindings,   kMGPipeSubsystemResources,                                  "every MGPBufferRange::Res names a Buffer handle and only bit 7 puts one in the slot table, so without it every server-side EnsureBufferResourceForHandle would mint a twin with no record behind it (P5e sb; ResolveBufferBindingSubsystemArm)")
+
+// clang-format on

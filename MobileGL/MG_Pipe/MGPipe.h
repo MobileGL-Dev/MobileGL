@@ -112,17 +112,30 @@ namespace MobileGL::MG_Pipe {
     // path that regressed are four different findings, and clearing one must not disarm the
     // other three.
     //
-    // THREE OF THEM HAVE A DEPENDENCY and it is diagnosed at the first use, never half-run -
-    // one Resolve<Family>SubsystemArm per family beside the backend's existing
-    // ResolveResourceSubsystemArm, modelled on the bit-8-requires-bit-7 refusal it already
-    // ships, and lazy rather than at bring-up because a pre-flight child dying on a signal
-    // makes a whole lane SKIP green: bit 11 requires bit 10 because
-    // every MGPBoundView::Texture and MGPImageView::Res names a Texture handle and only bit 10
-    // puts one in the slot table; bit 9 requires bit 10 because MGPSurface::Res does; and bit
-    // 10 requires bit 7 because a buffer texture's BufferForTexBuffer names a Buffer handle.
-    // The mirror pairs (10 without 11, 10 without 9, 7 without 10) are all fine, and are
-    // stated as such because an unreachable branch that says something different is how the
-    // reachable one drifts. Bit 12 depends on nothing.
+    // FOUR OF THE SIX FAMILIES CARRY A DEPENDENCY and it is diagnosed at the first use, never
+    // half-run - one Resolve<Family>SubsystemArm per family beside the backend's existing
+    // ResolveResourceSubsystemArm, and lazy rather than at bring-up because a pre-flight child
+    // dying on a signal makes a whole lane SKIP green.
+    //
+    // THE ROWS ARE IN SubsystemDeps.def, ONCE (P3b/P4b R-5), and this comment no longer
+    // restates them. It used to, and it was WRONG in two ways that nothing could fail: it said
+    // "THREE OF THEM" when there are six rows, and it said "the mirror pairs (10 without 11,
+    // 10 without 9, 7 without 10) are all fine" when 10-without-11 is precisely D-K2's FOURTH
+    // row (ID-14/ID-15) - refused by the server and withheld by the client, with PipeFill.cpp
+    // saying so out loud: "The brief's original 'bit 10 without 11 is fine' is WITHDRAWN for
+    // P4a as built." The audit found the same pair of defects repeated in
+    // MG_Backend/DirectGLES/Managers.h's header, i.e. in the header of the file that
+    // implements the refusal.
+    //
+    // THE MIRROR PAIRS THAT REALLY ARE FINE, said out loud rather than left as an absence,
+    // because a table is only trustworthy if what it does NOT contain was decided:
+    //   - bit 10 set, bit 9 clear: FINE. The legacy FBO sync reaches the texture twin through
+    //     SyncTextureObjectToBackend, which dispatches to the handle arm by itself.
+    //   - bit 11 set, bit 9 clear: FINE, for the same reason - a sampler view names a texture,
+    //     never a framebuffer.
+    //   - bit 7 set, bit 10 clear: FINE, and it is P3a's shipped configuration.
+    //   - bit 12 set with any or none of 9/10/11: FINE, per its own row.
+    //   - bit 10 set, bit 11 clear and its mirror are NOT fine; that is the fourth row.
     inline constexpr Uint64 kMGPipeSubsystemFramebuffer = 1ull << 9;       // set_framebuffer_state
     inline constexpr Uint64 kMGPipeSubsystemTextureResources = 1ull << 10; // texture + renderbuffer
                                                                           // resource_*, set_texture_params
@@ -137,8 +150,9 @@ namespace MobileGL::MG_Pipe {
     // path that regressed and a buffer path that regressed are different findings, and
     // clearing one must not disarm the other.
     //
-    // BIT 13 REQUIRES BIT 7, and for bit 11's reason: every MGPBufferRange::Res names a Buffer
-    // handle, and only bit 7 puts one in the slot table.
+    // Its dependency row is in SubsystemDeps.def with the other five (P3b/P4b R-5). It used to
+    // be stated here instead, fifteen lines away from the block that stated the other three -
+    // which is how "THREE OF THEM" above stayed wrong through two phases.
     inline constexpr Uint64 kMGPipeSubsystemBufferBindings = 1ull << 13;
     // bits 14..62 reserved for the later phases, allocated in ROADMAP order.
     // NOT a subsystem, a BEHAVIOUR: turn OFF client-side content addressing of CSOs, so
@@ -165,6 +179,58 @@ namespace MobileGL::MG_Pipe {
     static_assert(kMGPipeSubsystemsMigratedAtP5e ==
                       (kMGPipeSubsystemsMigratedAtP4a | kMGPipeSubsystemBufferBindings),
                   "the P5e phase constant and P5e's subsystem bit have drifted");
+
+    // ---- D-K2's dependency rule, in ONE place (P3b/P4b R-5) --------------------------------
+    //
+    // The rows, their reasons and the argument for a table rather than six comments are in
+    // SubsystemDeps.def. This is the expansion both readers are meant to end up on; the
+    // anti-drift property is already live through
+    // MG_Test/Backend/DirectGLES/SubsystemDepsTest.cpp, which drives the client check and the
+    // server gate at every interesting mask and compares both against these rows.
+#include "SubsystemDeps.def"
+
+    struct MGPipeSubsystemDependencyRow {
+        Uint64 Family;   // exactly one kMGPipeSubsystem* bit
+        Uint64 Requires; // the bits MOBILEGL_PIPE_PUSH must ALSO carry; 0 is a row, not a gap
+        const char* Why;
+    };
+
+#define MGL_SUBSYSTEM_DEPENDENCY_ROW(family, requires_, why) {family, requires_, why},
+    inline constexpr MGPipeSubsystemDependencyRow kMGPipeSubsystemDependencies[] = {
+        MGL_SUBSYSTEM_DEPENDENCY_LIST(MGL_SUBSYSTEM_DEPENDENCY_ROW)};
+#undef MGL_SUBSYSTEM_DEPENDENCY_ROW
+
+    // The bits `subsystem` additionally needs, or 0 for a family with no row. A family with no
+    // row and a family whose row says 0 are the same answer ON PURPOSE: both mean "nothing else
+    // is required", and the table covers its families exhaustively so the two cannot be
+    // confused for "I forgot to look".
+    inline constexpr Uint64 MGPipeSubsystemRequires(Uint64 subsystem) {
+        Uint64 required = 0;
+        for (const MGPipeSubsystemDependencyRow& row : kMGPipeSubsystemDependencies) {
+            if ((subsystem & row.Family) != 0) required |= row.Requires;
+        }
+        return required;
+    }
+
+    // NOT TRANSITIVE, and that is load-bearing: each reader tests the required BITS against
+    // MOBILEGL_PIPE_PUSH alone and never the other family's liveness, because Espryt's
+    // resolvers classify their arms from that mask alone (PipeFill.cpp's own argument;
+    // TextureEmitTest.cpp pins it). A transitive closure here would make the two sides disagree
+    // at some mask - the failure this table exists to prevent.
+    inline constexpr Bool MGPipeSubsystemDependenciesAreSet(Uint64 subsystem, Uint64 pushMask) {
+        const Uint64 required = MGPipeSubsystemRequires(subsystem);
+        return (pushMask & required) == required;
+    }
+
+    static_assert(MGPipeSubsystemRequires(kMGPipeSubsystemTextureResources) ==
+                      (kMGPipeSubsystemResources | kMGPipeSubsystemSamplers),
+                  "D-K2's fourth row (bit 10 requires bit 11) has gone missing again");
+    static_assert(MGPipeSubsystemRequires(kMGPipeSubsystemPrograms) == 0,
+                  "bit 12 depends on nothing, and that is a row rather than an absence");
+    static_assert(!MGPipeSubsystemDependenciesAreSet(kMGPipeSubsystemTextureResources, 0x7ffull),
+                  "0x7ff is the mask whose texture family Espryt refuses; the table must agree");
+    static_assert(MGPipeSubsystemDependenciesAreSet(kMGPipeSubsystemTextureResources, 0x1fffull),
+                  "0x1fff is P4a's own arm and every row of it must be satisfied");
 
     // The catalogue itself. Only macros, so it is safe to expand inside the namespace, and
     // consumers (the unit test, later the transport) get MGP_CALL_LIST from this header.
