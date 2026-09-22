@@ -987,6 +987,48 @@ jobs:
           fi
           echo "libMobileGL.so defines ${remote} MG_Remote symbol(s) and the MGPipe applier (${defined} defined symbols)"
 
+      # The link-closure ratchet (CONTRACT-P6.md 12.1, ID-P7-7): the set of frontend symbols a
+      # server-only image would still have to link, recomputed from the per-object partition in
+      # scripts/link_ratchet.py and compared against the stored LIST.
+      #
+      # THIS job and not `build-linux`: build-linux passes the same three options from
+      # ${MOBILEGL_CI_DISAGGREGATED}, which is ON only on feat/disaggregated and
+      # codex/fix-github-ci, so on every other branch it builds a monolith - MG_Remote would not
+      # be compiled at all, the SERVER half of the partition would be empty, and the gate would
+      # go green having measured nothing. This job turns the three options on unconditionally,
+      # and the nm step immediately above has just proved they took. The script re-reads them
+      # from CMakeCache.txt anyway and refuses the run if they are not all ON.
+      #
+      # Only NEW symbols fail. A symbol that has DISAPPEARED is the ratchet turning and is
+      # printed with an instruction to re-baseline in the same commit - the baseline stores the
+      # list rather than a count precisely so that clearing one symbol while adding another does
+      # not walk through at an unchanged total (ID-P7-7).
+      #
+      # It reads the per-object output of the MobileGL target, so it must run before anything
+      # that cleans the build tree; the packaging step below excludes *.o from the tarball but
+      # does not delete them.
+      - name: The server image reaches no further into the frontend than the baseline
+        run: |
+          mkdir -p ci-artifacts
+          python3 scripts/link_ratchet.py --self-test
+          python3 scripts/link_ratchet.py \
+            --build-dir "${BUILD_DIR}" \
+            --baseline scripts/data/link_ratchet_baseline.txt \
+            --assert-monotone \
+            --bucket \
+            --json ci-artifacts/link-ratchet.json
+
+      # Uploaded even when the gate fired: a red ratchet is exactly the moment someone needs the
+      # per-symbol definer/referrer attribution the JSON carries, and a job that failed before
+      # uploading its evidence is a job nobody can act on.
+      - name: Upload link ratchet
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: link-ratchet
+          path: ci-artifacts/link-ratchet.json
+          if-no-files-found: warn
+
       - name: Show ccache stats
         if: always()
         run: ccache --show-stats

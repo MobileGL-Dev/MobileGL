@@ -699,7 +699,13 @@ owed to P13. Method and full symbol list:
 `Client::AdoptTierIsEmulate()`; `MG_Pipe/PipeApply.cpp` needs `Client::ClientSession::Active()` and
 `AdoptTierIsEmulate()`.
 
-**Gate**: a ratchet recomputes the 184 in CI and asserts it only ever falls.
+**Gate (landed, P7 wave 0 — ID-P7-7)**: `scripts/link_ratchet.py` recomputes this set from an
+explicit per-object partition on every `build-linux-split` run and fails on any symbol absent from
+`scripts/data/link_ratchet_baseline.txt` — which stands at **186** on `78b7d6be`, the 184 plus
+P6.5's `Client::ClientSession::StartSpawned()` and `MG_State::GLState::ProgramArtifactsSchemaFingerprint()`,
+with the three backend buckets reproducing a6's 101 / 14 / 60 exactly — while a symbol that
+disappears is reported rather than failed, so progress never turns the build red
+([`link-ratchet.md`](../../docs/Disaggregated/notes/p7/link-ratchet.md)).
 
 ### 12.2 D11 — five unbounded peer-driven allocations, capped, with no `try`/`catch`
 
