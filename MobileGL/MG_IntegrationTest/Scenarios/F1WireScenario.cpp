@@ -1554,4 +1554,153 @@ TEST_F(F1WireScenario, ColorBlitToDefaultHonorsScissorAndReversedRect) {
     Gl().EndFrame();
 }
 
+namespace {
+// One 8x8x2 RGBA8 array texture with two levels, filled so that EVERY subresource this pair
+// of cases touches is distinguishable from every other one. A flat fill would let a copy that
+// went to the wrong level, the wrong layer or nowhere at all read as correct.
+//   level 0 layer 0: four quadrants  (GL row order: red/green on the bottom, blue/yellow up)
+//   level 0 layer 1: magenta
+//   level 1 layer 0: cyan       level 1 layer 1: white
+constexpr std::array<GLubyte, 4> kInPlaceRed{255, 0, 0, 255};
+constexpr std::array<GLubyte, 4> kInPlaceGreen{0, 255, 0, 255};
+constexpr std::array<GLubyte, 4> kInPlaceBlue{0, 0, 255, 255};
+constexpr std::array<GLubyte, 4> kInPlaceYellow{255, 255, 0, 255};
+constexpr std::array<GLubyte, 4> kInPlaceMagenta{255, 0, 255, 255};
+constexpr std::array<GLubyte, 4> kInPlaceCyan{0, 255, 255, 255};
+constexpr std::array<GLubyte, 4> kInPlaceWhite{255, 255, 255, 255};
+
+std::array<GLubyte, 4> InPlaceQuadrant(int x, int y) {
+    if (y < 4) return x < 4 ? kInPlaceRed : kInPlaceGreen;
+    return x < 4 ? kInPlaceBlue : kInPlaceYellow;
+}
+
+GLuint MakeInPlaceCopyTexture() {
+    GLuint name = 0;
+    glGenTextures(1, &name);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, name);
+    glTexStorage3D(GL_TEXTURE_2D_ARRAY, 2, GL_RGBA8, 8, 8, 2);
+    std::vector<GLubyte> level0(8 * 8 * 2 * 4);
+    for (int layer = 0; layer < 2; ++layer)
+        for (int y = 0; y < 8; ++y)
+            for (int x = 0; x < 8; ++x) {
+                const auto colour = layer == 0 ? InPlaceQuadrant(x, y) : kInPlaceMagenta;
+                const size_t at = (static_cast<size_t>(layer) * 64 + y * 8 + x) * 4;
+                std::copy(colour.begin(), colour.end(), level0.begin() + at);
+            }
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, 8, 8, 2, GL_RGBA, GL_UNSIGNED_BYTE, level0.data());
+    std::vector<GLubyte> level1(4 * 4 * 2 * 4);
+    for (int layer = 0; layer < 2; ++layer)
+        for (int at = 0; at < 16; ++at) {
+            const auto colour = layer == 0 ? kInPlaceCyan : kInPlaceWhite;
+            std::copy(colour.begin(), colour.end(),
+                      level1.begin() + (static_cast<size_t>(layer) * 16 + at) * 4);
+        }
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 1, 0, 0, 0, 4, 4, 2, GL_RGBA, GL_UNSIGNED_BYTE, level1.data());
+    return name;
+}
+
+// (level, side) -> the whole level, every layer, as glGetTexImage hands it back.
+std::vector<GLubyte> ReadInPlaceLevel(GLint level, int side) {
+    std::vector<GLubyte> pixels(static_cast<size_t>(side) * side * 2 * 4, 17);
+    glGetTexImage(GL_TEXTURE_2D_ARRAY, level, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    return pixels;
+}
+
+::testing::AssertionResult InPlaceTexelIs(const std::vector<GLubyte>& pixels, int side, int layer,
+                                          int x, int y, const std::array<GLubyte, 4>& expected) {
+    const size_t at = ((static_cast<size_t>(layer) * side * side) + static_cast<size_t>(y) * side + x) * 4;
+    if (at + 4 > pixels.size()) return ::testing::AssertionFailure() << "texel out of range";
+    for (int channel = 0; channel < 4; ++channel)
+        if (pixels[at + channel] != expected[channel])
+            return ::testing::AssertionFailure()
+                   << "layer " << layer << " (" << x << "," << y << ") channel " << channel
+                   << " is " << int(pixels[at + channel]) << ", expected " << int(expected[channel]);
+    return ::testing::AssertionSuccess();
+}
+} // namespace
+
+// P7 wave 2-B, CONTRACT-P7 §3.2: `copy-image-in-place@P7` RETIRES.
+//
+// glCopyImageSubData between two subresources of ONE texture is ordinary, defined GL (4.6 core
+// 18.3.2 even spells out that a texture and a view of it are two objects over one image and may
+// be copied between). The wire arm took the session down for it, because the TRANSFER_SRC /
+// TRANSFER_DST pair below it cannot describe one image: both endpoints share one tracked
+// VkImageLayout and the second transition undoes the first. GENERAL can describe it.
+//
+// The monolith arm still DECLINES this shape outright, so this case is split-only in the
+// strongest sense - there is no monolith reading of it to compare against, and that asymmetry
+// is deliberate rather than an oversight (§3.2 asks the wire arm to perform the copy).
+//
+// Red once (executed, reverted): restore MagmaWireFatal("copy-image-in-place@P7") and this case
+// dies by that name.
+TEST_F(F1WireScenario, CopyImageInPlaceAcrossLevelsAndLayers) {
+    if (!Ready()) return;
+    const GLuint array = MakeInPlaceCopyTexture();
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.CopyInPlace.setup";
+
+    // LEVEL 0 -> LEVEL 1, same layer: the destination level is a different subresource of the
+    // same image, so one GENERAL transition has to cover both of them.
+    const auto before = PeekSplitRuntime().emitSeq;
+    glCopyImageSubData(array, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0,
+                       array, GL_TEXTURE_2D_ARRAY, 1, 0, 0, 0, 4, 4, 1);
+    ASSERT_GT(PeekSplitRuntime().emitSeq, before) << "F1.CopyInPlace.wire";
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.CopyInPlace.levelCopy.error";
+    {
+        const auto level1 = ReadInPlaceLevel(1, 4);
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.CopyInPlace.levelCopy.readback";
+        for (int y = 0; y < 4; ++y)
+            for (int x = 0; x < 4; ++x) {
+                // The source rectangle is level 0's bottom-left quadrant, which is all red.
+                EXPECT_TRUE(InPlaceTexelIs(level1, 4, 0, x, y, kInPlaceRed))
+                    << "F1.CopyInPlace.level1.layer0";
+                EXPECT_TRUE(InPlaceTexelIs(level1, 4, 1, x, y, kInPlaceWhite))
+                    << "F1.CopyInPlace.level1.layer1 must not be touched";
+            }
+    }
+
+    // LAYER 0 -> LAYER 1 at level 0: the same level, disjoint slices. Defined GL, and the
+    // overlap decline must NOT catch it.
+    glCopyImageSubData(array, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0,
+                       array, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 1, 8, 8, 1);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.CopyInPlace.layerCopy.error";
+    {
+        const auto level0 = ReadInPlaceLevel(0, 8);
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.CopyInPlace.layerCopy.readback";
+        for (int y = 0; y < 8; ++y)
+            for (int x = 0; x < 8; ++x) {
+                EXPECT_TRUE(InPlaceTexelIs(level0, 8, 0, x, y, InPlaceQuadrant(x, y)))
+                    << "F1.CopyInPlace.level0.layer0 is the source and must be unchanged";
+                EXPECT_TRUE(InPlaceTexelIs(level0, 8, 1, x, y, InPlaceQuadrant(x, y)))
+                    << "F1.CopyInPlace.level0.layer1 must carry the source's quadrants";
+            }
+    }
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    glDeleteTextures(1, &array);
+    glBindTexture(GL_TEXTURE_2D, texture);
+}
+
+// The one in-place shape that stays a DECLINE (§3.2): same image, same level, same layer,
+// overlapping rectangles. GL 4.6 core 18.3.2 leaves that undefined, and GENERAL makes the
+// command legal to RECORD rather than meaningful to execute - vkCmdCopyImage orders nothing
+// between its own reads and writes inside one region. The case pins that nothing is recorded:
+// no GL error, and the level still holds exactly what it held.
+TEST_F(F1WireScenario, CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone) {
+    if (!Ready()) return;
+    const GLuint array = MakeInPlaceCopyTexture();
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.CopyInPlaceOverlap.setup";
+    // (0,0)-(4,4) onto (2,2): four of the sixteen texels are in both rectangles.
+    glCopyImageSubData(array, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0,
+                       array, GL_TEXTURE_2D_ARRAY, 0, 2, 2, 0, 4, 4, 1);
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.CopyInPlaceOverlap.error";
+    const auto level0 = ReadInPlaceLevel(0, 8);
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.CopyInPlaceOverlap.readback";
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 8; ++x)
+            EXPECT_TRUE(InPlaceTexelIs(level0, 8, 0, x, y, InPlaceQuadrant(x, y)))
+                << "F1.CopyInPlaceOverlap.level0 must be untouched by a declined copy";
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    glDeleteTextures(1, &array);
+    glBindTexture(GL_TEXTURE_2D, texture);
+}
+
 } // namespace MGITest

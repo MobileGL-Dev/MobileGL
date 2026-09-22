@@ -19,6 +19,7 @@
 |---|---|---|---|
 | 1 | `mipmap-shader-format-or-shape` | 诊断 + 颜色 shader mip 回落（**退役**一半：可渲染格式的不可附着图像） | 见 §1 |
 | 2 | `depth-stencil-mipmap@P7` + 烘焙 (A)(D) | DEPTH-only **退役**（烘焙深度 mip 程序）；D\|S **decline** | 见 §2 |
+| 3 | `copy-image-in-place@P7` | **退役**（单次 GENERAL 转换）；同级同层矩形重叠 **decline** | 见 §3 |
 
 ---
 
@@ -197,9 +198,67 @@ glslang **库**、烘焙器 shell 出一个 glslangValidator **二进制**，就
 `ctest -L unit` **2410**（+8 = 新鲜度门的八行）全绿；信息档 `integration-magma-full-split` **513**，
 0 红 / 59 skip（基线 510，0 红 / 57 skip——两条新增用例在无旋钮的全量档自 skip）。
 
-**G1 实测过了，而且这一条事先不是显然的**：`DriverPostIterationRPWitnessSpv.h` 是
+**G1 实测过了，而且这一条事先不是显然的**（片 2）：`DriverPostIterationRPWitnessSpv.h` 是
 `MG_Util/SelfTest` 的头，pull 构建也编它，重烘改了 2142 → 2143 个字。pull `.text` 仍是 **`0xa52203`**，
 `nm --defined-only` 的名字表与 `~/w7/p7-before/pull-syms.txt` 逐行相同（30570 行）——字长的变化落在
 `.rodata`，没有改动任何一条指令的编码宽度。`fatal_census` 绿（79 abort 站点 / 43 家族词 / 0 无标记，
 本片**退掉一处** `Fatal{}` 用法但不动 abort 站点数）；`link_ratchet --assert-monotone` 186 不变，
 `p7-magma` 桶 101。
+
+---
+
+## 3. 片 3：`copy-image-in-place@P7`
+
+### 3.1 那条 Fatal 说的是真话，但只对它下面的代码成立
+
+`glCopyImageSubData` 在**同一个纹理的两个子资源**之间拷是普通的、有定义的 GL（4.6 core 18.3.2 还专门
+写明纹理与它的 view 是同一 image 上的两个对象、允许互拷）。wire 臂为它带走整个会话，理由写在注释里：
+下面那对 `TRANSFER_SRC` / `TRANSFER_DST` **描述不了一个 image**——两端共用同一个被跟踪的
+`VkImageLayout`，第二次转换会把第一次撤销。
+
+`VK_IMAGE_LAYOUT_GENERAL` 能描述它（`vkCmdCopyImage` 两侧都接受 GENERAL）。于是：**一次**把整个 image
+转成 GENERAL（源级与目标级都在里面）、命令两侧都 GENERAL、**一次**还原；access mask 带上读写两个方向，
+因为这一道 barrier 是两边共同的边。
+
+monolith 臂至今仍把所有 in-place 拷贝整体 decline（同函数上方的 `!wire &&` 分支），所以这一片**让 wire
+臂比 monolith 臂多做一件事**——这正是 §3.2 要求的形状，而不是对齐。
+
+`inPlace` 在 pull 构建里是 `constexpr false`，它守的每个分支都会折掉：这个函数也编进 monolith 镜像，
+而 G1 钉着那个镜像的 `.text`。
+
+### 3.2 留下来的那一种 decline
+
+同 image + 同 level + 同 layer + **矩形重叠**：GL 4.6 core 18.3.2 说重叠处结果未定义。GENERAL 让这条
+命令**可记录**，不让它**有意义**——`vkCmdCopyImage` 对自己在同一 region 内的读写不排序，tiler 产出的是
+每个 texel 先到的那一半。所以 `MGLOG_E_ONCE` + return，把这句话说一次，而不是把它发出去。
+
+判据是**三个维度同时成立**：同 level、slice 区间相交、矩形相交。level 0→1、层与层不相交、同一级上两个
+不相交的矩形，都是有定义的，都照做。
+
+### 3.3 场景
+
+`F1WireScenario` 里两条（split-only，因为 monolith 没有可对照的读数），一张 8×8×2、两级的
+`GL_TEXTURE_2D_ARRAY`，**每一个被碰到的子资源都填成互不相同的颜色**（level 0 layer 0 四象限、
+level 0 layer 1 洋红、level 1 layer 0 青、level 1 layer 1 白）——铺平色会让「拷到了错的 level / 错的
+layer / 根本没拷」都读成对的。
+
+- `CopyImageInPlaceAcrossLevelsAndLayers`：level 0 → level 1（同层）后 level 1 layer 0 变成源矩形那个
+  全红象限、layer 1 仍是白；再 level 0 layer 0 → layer 1（同级、层不相交）后两层都是四象限，源不变。
+- `CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone`：同级同层 (0,0)-(4,4) → (2,2)，无 GL 错，
+  level 0 layer 0 逐 texel 不变（若真执行，(4,4) 会从黄变红，断言分得出来）。
+
+三臂各注册两条。
+
+### 3.4 red-once（R-16，已执行并还原）
+
+把 `MagmaWireFatal("copy-image-in-place@P7")` 放回去 → 两条都死于
+`Fatal{UnmigratedVerb, "Magma:copy-image-in-place@P7"}`；还原后 2/2 绿。
+
+### 3.5 门
+
+`integration-magma-split` **79**（+2）、`-spawn` **58**（+2）、`-tcp` **60**（+2），三臂 0 红。
+
+> **本树的 tcp 端口改成了 `40913`。** 跑本片的门时 `TcpServer.Start` 整条 tcp 车道红了 59/60，
+> 原因是 `40613`（`~/w7/pipe/build-split` 的默认值）上已经有一个兄弟树的 `libMobileGLServer` 在监听。
+> 这是本地 configure 选项，不影响车道语义；`magma-two-process-first-run.md` 里 wave 0 也为同一原因
+> 用了专用端口。

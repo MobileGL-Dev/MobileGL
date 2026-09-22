@@ -2730,6 +2730,20 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                 ${mglItestArmProperties}
                 ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-dsmipdecline${mglItestArmLogTag}.log")
+        # `copy-image-in-place@P7`'s retirement and its one surviving decline. SPLIT-ONLY in the
+        # strongest sense: the monolith arm declines every in-place copy, so there is no
+        # DirectVulkan. entry to register these beside - the wire arm is the one that performs
+        # them, which is what §3.2 asks for.
+        foreach(inPlaceCase CopyImageInPlaceAcrossLevelsAndLayers
+                            CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.CopyInPlace."
+                TEST_FILTER "F1WireScenario.${inPlaceCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-copyinplace${mglItestArmLogTag}-${inPlaceCase}.log")
+        endforeach()
     endforeach()
 endif()
 

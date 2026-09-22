@@ -10386,10 +10386,24 @@ void main() {
         const Bool srcResolved = resolveImage(srcEndpoint, srcImage);
         const Bool dstResolved = resolveImage(dstEndpoint, dstImage);
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (wire) {
-            if (srcImage.image == dstImage.image) MagmaWireFatal("copy-image-in-place@P7");
-            m_textureManager->FlushPendingUploads();
-        }
+        // P7 wave 2-B, CONTRACT-P7 §3.2: `copy-image-in-place@P7` RETIRES.
+        //
+        // What the Fatal here used to say was true of the code below it and of nothing else: the
+        // TRANSFER_SRC/TRANSFER_DST pair cannot describe one image, because both endpoints share
+        // one VkImageLayout and the second transition undoes the first. VK_IMAGE_LAYOUT_GENERAL
+        // can describe it - it is a legal layout for both sides of vkCmdCopyImage - so a
+        // same-image copy takes ONE transition of the whole image to GENERAL, GENERAL on both
+        // sides of the command, and ONE restore. The monolith arm declines this shape outright
+        // (a few lines up, `!wire &&`); the wire arm is now the one that performs it, which is
+        // what §3.2 asks for and more than parity would give.
+        //
+        // `inPlace` is constexpr false in the pull build so that every branch it guards folds
+        // away: this function is in the monolith image too and G1 pins that image's .text.
+        const Bool inPlace = wire && srcImage.image != VK_NULL_HANDLE &&
+                             srcImage.image == dstImage.image;
+        if (wire) m_textureManager->FlushPendingUploads();
+#else
+        constexpr Bool inPlace = false;
 #endif
         // Real checks, not MOBILEGL_ASSERT: the assertions this replaces compile to nothing in
         // a release build, which is where both observed failures happened - a null resource
@@ -10535,6 +10549,34 @@ void main() {
                          __func__, srcZ, srcSlices.availableSlices, dstZ, dstSlices.availableSlices, srcDepth);
             return;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // THE ONE IN-PLACE SHAPE THAT STAYS A DECLINE (§3.2). GL 4.6 core 18.3.2: if the source
+        // and destination name the same image AND the same level AND the same layers, the result
+        // is UNDEFINED where the regions overlap. GENERAL makes the command legal to record, not
+        // meaningful to execute - vkCmdCopyImage has no ordering between its own reads and writes
+        // within one region, so what a tiler produces is whichever half of each texel it reached
+        // first. Declining says that, once, instead of shipping it.
+        //
+        // The test is ALL THREE dimensions at once: same level, overlapping slice range, and
+        // overlapping rectangle. A copy from level 0 to level 1, or between disjoint layers, or
+        // between disjoint rectangles of one level, is perfectly defined and is performed.
+        if (inPlace && srcMipLevel == dstMipLevel) {
+            const Uint32 srcSliceBegin = srcSlices.baseSlice, dstSliceBegin = dstSlices.baseSlice;
+            const Bool slicesOverlap = srcSliceBegin < dstSliceBegin + copySliceCount &&
+                                       dstSliceBegin < srcSliceBegin + copySliceCount;
+            const Bool rectOverlaps = srcX < dstX + srcWidth && dstX < srcX + srcWidth &&
+                                      srcY < dstY + srcHeight && dstY < srcY + srcHeight;
+            if (slicesOverlap && rectOverlaps) {
+                MGLOG_E_ONCE("%s: in-place copy on objectId=%u overlaps itself at level %u "
+                             "(src %dx%d+%d+%d slice %u, dst +%d+%d slice %u, %u slice(s)); GL leaves "
+                             "the result undefined, so the copy is declined rather than recorded",
+                             __func__, CopyImageEndpointName(srcEndpoint), srcMipLevel,
+                             srcWidth, srcHeight, srcX, srcY, srcSliceBegin, dstX, dstY,
+                             dstSliceBegin, copySliceCount);
+                return;
+            }
+        }
+#endif
 
         const auto materializeClear = [this, &frame](const CopyImageEndpoint& endpoint) {
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -10579,6 +10621,19 @@ void main() {
         const VkImageLayout srcRestoreLayout = resolveRestoreLayout(srcOriginalLayout, srcImage.isRenderbuffer);
         const VkImageLayout dstRestoreLayout = resolveRestoreLayout(dstOriginalLayout, dstImage.isRenderbuffer);
 
+        // ONE IMAGE, ONE LAYOUT, ONE TRANSITION. For a same-image copy both endpoints are the same
+        // VkImage behind the same tracked layout, so the two transitions below would describe one
+        // subresource twice and the second would undo the first. GENERAL is the layout both sides
+        // of vkCmdCopyImage accept at once, the barrier covers the WHOLE image (both the source
+        // level and the destination level are in it), and the access mask carries both directions
+        // because this one barrier is the edge for both.
+        const VkImageLayout copySourceLayout =
+            inPlace ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        const VkImageLayout copyDestinationLayout =
+            inPlace ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        const VkAccessFlags copySourceAccess =
+            inPlace ? (VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT)
+                    : VK_ACCESS_TRANSFER_READ_BIT;
         VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcAccessMask = 0;
         GetImageTransitionSourceState(srcOriginalLayout, srcStageMask, srcAccessMask);
@@ -10588,17 +10643,19 @@ void main() {
         // [baseSlice, baseSlice + depth) the slice mapping above hands the copy.
         if (srcOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             Bool srcReady = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, srcImage.image, *srcImage.trackedLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                frame.commandBuffer, srcImage.image, *srcImage.trackedLayout, copySourceLayout,
                 srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT,
+                srcAccessMask, copySourceAccess,
                 srcImage.aspect, 0, srcImage.mipLevels);
             MOBILEGL_ASSERT(srcReady, "%s: failed to transition undefined source image", __func__);
             srcCopyLayout = *srcImage.trackedLayout;
         } else {
             Bool srcReady = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, srcImage.image, srcCopyLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                frame.commandBuffer, srcImage.image, srcCopyLayout, copySourceLayout,
                 srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, copyAspectMask, srcMipLevel, 1);
+                srcAccessMask, copySourceAccess,
+                inPlace ? srcImage.aspect : copyAspectMask,
+                inPlace ? 0u : srcMipLevel, inPlace ? srcImage.mipLevels : 1u);
             MOBILEGL_ASSERT(srcReady, "%s: failed to transition source image", __func__);
         }
 
@@ -10606,7 +10663,10 @@ void main() {
         VkAccessFlags dstAccessMask = 0;
         GetImageTransitionSourceState(dstOriginalLayout, dstStageMask, dstAccessMask);
         VkImageLayout dstCopyLayout = dstOriginalLayout;
-        if (dstOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
+        if (inPlace) {
+            // Already moved, by the barrier above: trackedLayout is the same field.
+            dstCopyLayout = *dstImage.trackedLayout;
+        } else if (dstOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             Bool dstReady = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, dstImage.image, *dstImage.trackedLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 dstStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -10648,8 +10708,8 @@ void main() {
                 copyRegion.dstSubresource.baseArrayLayer, copyRegion.dstSubresource.layerCount,
                 copyRegion.dstOffset.z, srcWidth, srcHeight, copyRegion.extent.depth);
         vkCmdCopyImage(frame.commandBuffer,
-                       srcImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                       dstImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       srcImage.image, copySourceLayout,
+                       dstImage.image, copyDestinationLayout,
                        1, &copyRegion);
 #if MOBILEGL_BUILD_DISAGGREGATED
         // The copy coordinates above are already storage-relative. Name that
@@ -10665,21 +10725,27 @@ void main() {
             Bool srcRestored = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, srcImage.image, *srcImage.trackedLayout, srcRestoreLayout,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, srcRestoreStageMask,
-                VK_ACCESS_TRANSFER_READ_BIT, srcRestoreAccessMask,
+                copySourceAccess, srcRestoreAccessMask,
                 srcImage.aspect, 0, srcImage.mipLevels);
             MOBILEGL_ASSERT(srcRestored, "%s: failed to restore undefined source image layout", __func__);
         } else {
             Bool srcRestored = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, srcImage.image, srcCopyLayout, srcRestoreLayout,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, srcRestoreStageMask,
-                VK_ACCESS_TRANSFER_READ_BIT, srcRestoreAccessMask, copyAspectMask, srcMipLevel, 1);
+                copySourceAccess, srcRestoreAccessMask,
+                inPlace ? srcImage.aspect : copyAspectMask,
+                inPlace ? 0u : srcMipLevel, inPlace ? srcImage.mipLevels : 1u);
             MOBILEGL_ASSERT(srcRestored, "%s: failed to restore source image layout", __func__);
         }
 
         VkPipelineStageFlags dstRestoreStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags dstRestoreAccessMask = 0;
         GetImageTransitionDestinationState(dstRestoreLayout, dstRestoreStageMask, dstRestoreAccessMask);
-        if (dstOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
+        if (inPlace) {
+            // The restore above already moved the whole image off GENERAL, and the destination
+            // is that same image: a second restore would barrier a layout the tracker has
+            // already left, which is the mirror of the bug the retired Fatal was guarding.
+        } else if (dstOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             Bool dstRestored = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, dstImage.image, *dstImage.trackedLayout, dstRestoreLayout,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, dstRestoreStageMask,
