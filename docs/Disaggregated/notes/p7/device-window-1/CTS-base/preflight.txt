@@ -1,0 +1,10 @@
+mgprobe backend=DirectVulkan surface=imagereader lib=./libMobileGL.so
+  GL_VENDOR   MobileGL-Dev (BZLZHH, Swung0x48, Tungsten)
+  GL_RENDERER Magma (MobileGL Core) (Adreno (TM) 830, Vulkan 1.3.284, Driver 512.800.71)
+  GL_VERSION  4.6.0 MobileGL 26.09-dev, Direct (Vulkan) Backend, GIT@d260f11
+  GLSL        4.60 MobileGL
+  version 4.6 profile_mask 0x1 (core)
+  default-FB readback (64,128,191,255) ok
+  user-FBO readback   (229,51,102,255) ok
+  rbo-FBO readback    (26,178,77,255) ok
+PASS backend=DirectVulkan surface=imagereader default_fb=ok user_fbo=ok rbo_fbo=ok glerr=0x0

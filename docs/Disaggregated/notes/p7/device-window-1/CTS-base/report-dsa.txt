@@ -1,0 +1,14 @@
+=== glcts conformance summary [DirectVulkan-dsa] ===
+files parsed      : 1
+cases with result : 371
+
+   Pass                       368   99.19%
+ ! Fail                         2    0.54%
+   CompatibilityWarning         1    0.27%
+
+conformance pass rate (Pass+NotSupported+warnings) :  99.46%  (369/371)
+strict pass rate      (Pass only)                  :  99.19%  (368/371)
+failures                                           : 2
+
+--- worst groups (of 1) ---
+  KHR-GL46.direct_state_access                              2/371    fail  (  0.5%)

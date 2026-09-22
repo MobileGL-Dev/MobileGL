@@ -1,0 +1,9 @@
+=== glcts conformance summary [DirectVulkan-packed-pixels] ===
+files parsed      : 1
+cases with result : 4732
+
+   Pass                      4732  100.00%
+
+conformance pass rate (Pass+NotSupported+warnings) : 100.00%  (4732/4732)
+strict pass rate      (Pass only)                  : 100.00%  (4732/4732)
+failures                                           : 0

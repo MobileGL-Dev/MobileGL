@@ -1,0 +1,14 @@
+=== glcts conformance summary [DirectVulkan-shader-image] ===
+files parsed      : 1
+cases with result : 125
+
+   Pass                        63   50.40%
+   NotSupported                56   44.80%
+ ! Fail                         6    4.80%
+
+conformance pass rate (Pass+NotSupported+warnings) :  95.20%  (119/125)
+strict pass rate      (Pass only)                  :  50.40%  (63/125)
+failures                                           : 6
+
+--- worst groups (of 2) ---
+  KHR-GL46.shader_image_load_store                          6/51     fail  ( 11.8%)

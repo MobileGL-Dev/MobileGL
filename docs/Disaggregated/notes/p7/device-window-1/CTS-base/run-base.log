@@ -1,0 +1,41 @@
+=== START Tue Sep 22 03:25:49 PM -04 2026 ===
+=== block shader-image start 15:25:49 ===
+=== block shader-image rc=0 15:25:57 ===
+[shader-image]    Pass                        63   50.40%
+[shader-image]    NotSupported                56   44.80%
+[shader-image]  ! Fail                         6    4.80%
+[shader-image] conformance pass rate (Pass+NotSupported+warnings) :  95.20%  (119/125)
+[shader-image] strict pass rate      (Pass only)                  :  50.40%  (63/125)
+[shader-image] failures                                           : 6
+[shader-image]   KHR-GL46.shader_image_load_store                          6/51     fail  ( 11.8%)
+=== block ssbo start 15:25:58 ===
+=== block ssbo rc=0 15:26:01 ===
+[ssbo]    Pass                       124  100.00%
+[ssbo] conformance pass rate (Pass+NotSupported+warnings) : 100.00%  (124/124)
+[ssbo] strict pass rate      (Pass only)                  : 100.00%  (124/124)
+[ssbo] failures                                           : 0
+=== block dsa start 15:26:02 ===
+=== block dsa rc=0 15:26:09 ===
+[dsa]    Pass                       368   99.19%
+[dsa]  ! Fail                         2    0.54%
+[dsa] conformance pass rate (Pass+NotSupported+warnings) :  99.46%  (369/371)
+[dsa] strict pass rate      (Pass only)                  :  99.19%  (368/371)
+[dsa] failures                                           : 2
+[dsa]   KHR-GL46.direct_state_access                              2/371    fail  (  0.5%)
+=== block texture start 15:26:10 ===
+=== block texture rc=0 15:28:41 ===
+[texture]    Pass                       815   77.32%
+[texture]    NotSupported               221   20.97%
+[texture]  ! Fail                        18    1.71%
+[texture] conformance pass rate (Pass+NotSupported+warnings) :  98.29%  (1036/1054)
+[texture] strict pass rate      (Pass only)                  :  77.32%  (815/1054)
+[texture] failures                                           : 18
+[texture] --- NOT MEASURED (excluded from the rates above) ---
+[texture]   The rates above cover only cases that produced a result.
+=== block packed-pixels start 15:28:41 ===
+=== block packed-pixels rc=0 15:32:01 ===
+[packed-pixels]    Pass                      4732  100.00%
+[packed-pixels] conformance pass rate (Pass+NotSupported+warnings) : 100.00%  (4732/4732)
+[packed-pixels] strict pass rate      (Pass only)                  : 100.00%  (4732/4732)
+[packed-pixels] failures                                           : 0
+=== DONE Tue Sep 22 03:32:02 PM -04 2026 ===

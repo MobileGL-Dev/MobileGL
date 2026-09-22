@@ -1,0 +1,24 @@
+=== glcts conformance summary [DirectVulkan-texture] ===
+files parsed      : 1
+cases with result : 1054
+
+   Pass                       815   77.32%
+   NotSupported               221   20.97%
+ ! Fail                        18    1.71%
+
+conformance pass rate (Pass+NotSupported+warnings) :  98.29%  (1036/1054)
+strict pass rate      (Pass only)                  :  77.32%  (815/1054)
+failures                                           : 18
+
+--- NOT MEASURED (excluded from the rates above) ---
+  quarantined up front : 1
+  The rates above cover only cases that produced a result.
+
+--- worst groups (of 19) ---
+  KHR-GL46.texture_cube_map_array                           5/27     fail  ( 18.5%)
+  KHR-GL46.texture_barrier                                  4/4      fail  (100.0%)
+  KHR-GL46.texture_swizzle                                  4/697    fail  (  0.6%)
+  KHR-GL46.texture_border_clamp                             2/32     fail  (  6.2%)
+  KHR-GL46.texture_buffer                                   1/16     fail  (  6.2%)
+  KHR-GL46.texture_size_promotion                           1/1      fail  (100.0%)
+  KHR-GL46.texture_view                                     1/7      fail  ( 14.3%)

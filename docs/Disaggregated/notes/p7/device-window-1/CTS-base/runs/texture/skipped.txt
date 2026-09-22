@@ -1,0 +1,1 @@
+KHR-GL46.texture_repeat_mode.rgb565_11x131_0_clamp_to_edge
