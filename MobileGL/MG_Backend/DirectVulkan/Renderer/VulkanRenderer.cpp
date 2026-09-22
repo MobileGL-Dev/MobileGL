@@ -13608,13 +13608,46 @@ void main() {
 
     void VulkanRenderer::OnSubmitsCompletedUpTo(Uint64 submitIndex) {
         m_completedSubmitCounter = std::max(m_completedSubmitCounter, submitIndex);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // ---- P7 wave 2 package B3: THE COMPLETED-FRAME-SERIAL FLOOR MUST BE PROVABLE --------
+        //
+        // "Frame-serial completion piggybacks on submission completion" holds only while a
+        // frame serial has ONE submission. On the wire arm it has at least two: the per-frame
+        // palette glTexImage2D reaches UploadPendingWireLevels ->
+        // FlushWirePendingCommandsForTextureUpdate -> FlushPendingCommands at the first
+        // palette-sampling draw and submits S1 under a POOLED fence, and the frame's draws
+        // (and the barriered vkCmdCopyBuffer that StagedWireRangeCopy records for every
+        // streamed glBufferSubData) then go out in the Present submission S2.
+        //
+        // S1 is tiny and signals almost immediately. Retiring it used to advance the floor to
+        // ITS frameSerial - which is also S2's - so VkBufferManager was told "frame N-1 is
+        // complete" while S2(N-1), the submission actually carrying frame N-1's buffer copies,
+        // was still executing. The next frame's first write to that buffer then failed
+        // WriteWireBuffer's busy predicate and took the unordered host memcpy, and S2(N-1)'s
+        // queued copies landed on top of it afterwards: a PREFIX TEAR of one draw's vertex
+        // range, no log line, no GL error, no Fatal.
+        //
+        // The floor now advances only to a serial NO remaining in-flight submission still
+        // carries. NotifyFrameSerialComplete is monotone and already refuses the still-
+        // recording serial, so this can only ever advance the floor later, never further.
+        // On the disaggregated build's MONOLITH arm this is behaviour-identical (one
+        // submission per serial). The #else branch below is the pull build's statement,
+        // unchanged, which is what keeps G1's .text byte-identical.
+        Bool retiredAny = false;
+        Uint64 advanceTo = 0;
+#endif
         while (!m_inFlightSubmits.empty() && m_inFlightSubmits.front().submitIndex <= submitIndex) {
             SubmitRecord record = m_inFlightSubmits.front();
             m_inFlightSubmits.erase(m_inFlightSubmits.begin());
+#if MOBILEGL_BUILD_DISAGGREGATED
+            retiredAny = true;
+            advanceTo = std::max(advanceTo, record.frameSerial);
+#else
             // Frame-serial completion piggybacks on submission completion.
             // NotifyFrameSerialComplete refuses the current (still-recording)
             // serial, so mid-frame flush records do not mark it early.
             m_bufferManager.NotifyFrameSerialComplete(record.frameSerial);
+#endif
             if (!record.pooledFence || m_device == VK_NULL_HANDLE) {
                 continue; // frame-slot fences are reset/destroyed by FrameContext
             }
@@ -13624,6 +13657,50 @@ void main() {
                 vkDestroyFence(m_device, record.fence, nullptr);
             }
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (retiredAny) {
+            // Clamp to one below the lowest serial still in flight.
+            for (const auto& remaining : m_inFlightSubmits) {
+                advanceTo = std::min(advanceTo, remaining.frameSerial > 0 ? remaining.frameSerial - 1 : Uint64{0});
+            }
+            // Lens C's probe, and the red-once's reading: an advance that names a serial some
+            // remaining submission still carries. Unreachable with the clamp above; the R-16
+            // revert is to delete the clamp loop, and then this counts.
+            for (const auto& remaining : m_inFlightSubmits) {
+                if (remaining.frameSerial <= advanceTo) {
+                    WireDeclineTally::CountUnsoundSerialComplete();
+                    // Logged per event, not once: this is the red-once's reading and the log is
+                    // the only place it can be read from: the renderer this trace builds is
+                    // never Shutdown() (the process exits), so a teardown dump reports the
+                    // start-up context's zero instead of the replay's count.
+                    MGLOG_W("MGWIRE-FLOOR unsound-serial-complete #%llu: advancing the completed "
+                            "frame-serial floor to %llu, which submission %llu (serial %llu) still carries",
+                            static_cast<unsigned long long>(WireDeclineTally::UnsoundSerialCompleteEvents()),
+                            static_cast<unsigned long long>(advanceTo),
+                            static_cast<unsigned long long>(remaining.submitIndex),
+                            static_cast<unsigned long long>(remaining.frameSerial));
+                    break;
+                }
+            }
+            {
+                static const Bool probe = [] {
+                    const char* value = std::getenv("MOBILEGL_MAGMA_WIREBUF_PROBE");
+                    return value && value[0] == '1';
+                }();
+                if (probe) {
+                    Uint64 minRemaining = ~Uint64{0};
+                    for (const auto& r : m_inFlightSubmits) minRemaining = std::min(minRemaining, r.frameSerial);
+                    MGLOG_I("FLOOR retire upTo=%llu advanceTo=%llu remaining=%zu minRemainingSerial=%lld "
+                            "frameSerial=%llu",
+                            static_cast<unsigned long long>(submitIndex),
+                            static_cast<unsigned long long>(advanceTo), m_inFlightSubmits.size(),
+                            m_inFlightSubmits.empty() ? -1LL : static_cast<long long>(minRemaining),
+                            static_cast<unsigned long long>(m_bufferManager.GetFrameSerial()));
+                }
+            }
+            m_bufferManager.NotifyFrameSerialComplete(advanceTo);
+        }
+#endif
         // Mid-frame-flushed command buffers whose submission just completed can
         // be freed now; present-less flush loops have no other reclaim point.
         m_frameContext.FreeRetiredCommandBuffersCompletedUpTo(m_completedSubmitCounter);

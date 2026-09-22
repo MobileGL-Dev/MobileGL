@@ -74,6 +74,18 @@ public:
         while (bytes > peak && !PeakPendingBytes().compare_exchange_weak(peak, bytes, std::memory_order_relaxed)) {
         }
     }
+    // The frame-serial floor's own counter. An "unsound serial complete" is an advance of
+    // VkBufferManager's completed-frame-serial floor to a serial that ANOTHER submission still
+    // in flight also carries - i.e. the renderer telling the buffer manager "frame N-1 is done"
+    // while the submission holding frame N-1's buffer copies is still executing. It is what
+    // lets a streamed glBufferSubData take the unordered host path and tear one draw's vertex
+    // range. With a provable floor it is unreachable, so this counter is the red-once's reading:
+    // non-zero on the wire arms before the fix, zero after, zero on monolith either way.
+    static void CountUnsoundSerialComplete() {
+        UnsoundSerial().fetch_add(1, std::memory_order_relaxed);
+    }
+    static Uint64 UnsoundSerialCompleteEvents() { return UnsoundSerial().load(std::memory_order_relaxed); }
+
     static Uint64 PendingUploadEntries() { return PendingEntries().load(std::memory_order_relaxed); }
     static Uint64 PendingUploadBytes() { return PendingBytes().load(std::memory_order_relaxed); }
     static Uint64 PeakPendingUploadBytes() { return PeakPendingBytes().load(std::memory_order_relaxed); }
@@ -81,6 +93,7 @@ public:
     static void Reset() {
         for (SizeT i = 0; i < kSiteCount; ++i) Slots()[i].store(0, std::memory_order_relaxed);
         Total().store(0, std::memory_order_relaxed);
+        UnsoundSerial().store(0, std::memory_order_relaxed);
         PendingEntries().store(0, std::memory_order_relaxed);
         PendingBytes().store(0, std::memory_order_relaxed);
         PeakPendingBytes().store(0, std::memory_order_relaxed);
@@ -90,6 +103,10 @@ public:
     // from the forced-condition harness; silent when nothing declined, so a green lane stays
     // quiet and a lane that dropped a draw cannot.
     static void Dump(const char* tag) {
+        // The floor counter prints unconditionally: "zero unsound advances" is the reading the
+        // red-once needs, and an absent line cannot be told from a lane that never ran.
+        MGLOG_I("MGWIRE-FLOOR[%s] unsoundSerialComplete=%llu", tag,
+                static_cast<unsigned long long>(UnsoundSerialCompleteEvents()));
         if (TotalDeclines() == 0 && PeakPendingUploadBytes() == 0) return;
         MGLOG_I("MGWIRE-DECLINES[%s] total=%llu pendingEntries=%llu pendingBytes=%llu peakPendingBytes=%llu", tag,
                 static_cast<unsigned long long>(TotalDeclines()),
@@ -122,6 +139,10 @@ private:
         return value;
     }
     static std::atomic<Uint64>& PeakPendingBytes() {
+        static std::atomic<Uint64> value{0};
+        return value;
+    }
+    static std::atomic<Uint64>& UnsoundSerial() {
         static std::atomic<Uint64> value{0};
         return value;
     }
