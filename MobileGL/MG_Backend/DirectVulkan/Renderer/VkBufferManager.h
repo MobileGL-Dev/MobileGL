@@ -228,6 +228,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkBufferObject buffer;
             Uint64 size = 0;
             Uint64 lastUseSerial = 0;
+            // P7 wave 2 package B3: the submission that carries the most recent GPU use of
+            // this buffer. lastUseSerial above is a FRAME COUNTER and cannot answer "has the
+            // GPU finished reading these bytes" (see WriteWireBuffer); this can, because
+            // IsSubmitIndexComplete polls the submission's own fence and reports an
+            // unsubmitted index as incomplete.
+            Uint64 lastUseSubmitIndex = 0;
             Bool gpuWritesPending = false;
             // Only ranges actually submitted by resource_subdata are covered. No
             // shadow is retained: flush cannot replay stale bytes over GPU writes.

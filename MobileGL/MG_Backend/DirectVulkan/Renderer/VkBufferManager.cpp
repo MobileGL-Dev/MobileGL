@@ -21,6 +21,52 @@
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P7 wave 2 package B3, INVESTIGATION PROBE (split-only, read once, not in
+        // ConfigLoader's accepted-env table - package B's MGITEST_MAGMA_FORCE_SHADER_MIPMAP
+        // shape). MOBILEGL_MAGMA_WIREBUF_PROBE=1 prints one line per streamed-buffer event so
+        // the `glBufferSubData -> draw` ordering of a trace can be read off a log instead of
+        // inferred. Costs a branch on a cached bool when unset.
+        Bool WireBufProbeEnabled() {
+            static const Bool enabled = [] {
+                const char* value = std::getenv("MOBILEGL_MAGMA_WIREBUF_PROBE");
+                return value && value[0] == '1';
+            }();
+            return enabled;
+        }
+
+        // P7 wave 2 package B3, FORCING KNOB (split-only, read once, not in ConfigLoader's
+        // accepted-env table - package B's MGITEST_MAGMA_FORCE_SHADER_MIPMAP shape).
+        //
+        // WriteWireBuffer has exactly one unsafe shape: taking the immediate host memcpy
+        // because `lastUseSerial > GetCompletedSerial()` said the buffer is idle. That
+        // predicate's first term is PURE COUNTING (`m_frameSerial - frameCount`, no fence),
+        // so on any arm where the frame serial advances without the GPU having proved the
+        // frame's submissions complete, the answer is a guess. Host lanes never reach that
+        // state on their own (measured: 0 mid-frame frame-boundary drains over the whole
+        // OpenRA replay), so the lane cannot arm against it without forcing it.
+        //
+        // 0/unset = off. 1 = the serial term answers "idle" for every write it would have
+        // ordered. N>1 = only the Nth such write (1-based), which is how one
+        // `glBufferSubData -> draw` pair is poisoned in isolation and the device's "one draw
+        // contributed nothing" signature is reproduced rather than the whole frame destroyed.
+        //
+        // The knob forces ONLY the counting term to lie. It does NOT bypass the ordered copy,
+        // so it stays a valid red-once across the fix: before the submission term existed the
+        // lie reached the host memcpy (red); with the submission term the lie is caught and
+        // the copy is still ordered (green).
+        Uint64 ForceStaleSerialSelector() {
+            static const Uint64 selector = [] {
+                const char* value = std::getenv("MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL");
+                if (!value || !value[0]) return Uint64{0};
+                return static_cast<Uint64>(std::strtoull(value, nullptr, 10));
+            }();
+            return selector;
+        }
+        // Counts only the writes the busy predicate wanted to ORDER, so the selector indexes
+        // the streamed subdata -> draw pairs and nothing else.
+        Uint64 g_orderedWireWriteCounter = 0;
+#endif
         constexpr VmaAllocationCreateFlags kResidentBufferAllocationFlags =
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
         constexpr SizeT kLiveResourcePruneThreshold = 256;
@@ -237,6 +283,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
         resource.lastUseSerial = 0;
+        // B3: the wait above proved every submission at or below the sync point complete, so
+        // the submission term must be cleared with the serial or it would keep answering busy.
+        resource.lastUseSubmitIndex = 0;
         resource.gpuWritesPending = false;
         return true;
     }
@@ -251,7 +300,45 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         if (size == 0) return;
         Bool uploaded = false;
-        if (resource->lastUseSerial > GetCompletedSerial()) {
+        const Uint64 probeLastUse = resource->lastUseSerial;
+        const Uint64 probeCompleted = GetCompletedSerial();
+
+        // ---- P7 wave 2 package B3: WHY THIS PREDICATE HAS TWO TERMS --------------------------
+        //
+        // A streamed `glBufferSubData -> draw` pair is only correct if the write is ordered
+        // against every draw that still reads the bytes it overwrites. The question "is this
+        // buffer still busy?" used to be answered by the FRAME SERIAL alone, and that answer is
+        // a guess: GetCompletedSerial() is max(m_frameSerial - frameCount, m_completedSerialFloor)
+        // and its first term is PURE COUNTING - it asserts that work from frameCount serials ago
+        // has finished with no fence behind it. On the wire arm the serial is advanced not only
+        // by Present but by TryDrainFrameTransients -> VkBufferManager::BeginFrame on every 8th
+        // drain, which happens MID-FRAME (VulkanRenderer.cpp's drain block; ReadWireBuffer below
+        // already carries a comment acknowledging "even if the idle drain advanced the frame"),
+        // and package B established that mid-frame pooled-fence submissions are not covered by
+        // frame.imageInFlightFence. So the counting term can say "idle" about a buffer a
+        // recorded-or-in-flight draw is still reading, and the write is then applied as an
+        // unsynchronised host memcpy. The draw executes and reads bytes that are not its own -
+        // it renders another batch's geometry, or nothing at all. That is the OpenRA device
+        // divergence: one draw's quads missing, the terrain under them intact.
+        //
+        // The second term is the fence-backed one and it is the fix. IsSubmitIndexComplete
+        // polls the real fences and answers false for an index that is not even submitted yet,
+        // which is exactly the state a draw being recorded right now is in.
+        Bool busyBySerial = resource->lastUseSerial > GetCompletedSerial();
+        if (busyBySerial && ForceStaleSerialSelector() != 0) {
+            const Uint64 index = ++g_orderedWireWriteCounter;
+            const Uint64 selector = ForceStaleSerialSelector();
+            if (selector == 1 || selector == index) {
+                busyBySerial = false;
+                MGLOG_W("MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL: write #%llu {slot=%u, gen=%u} off=%llu "
+                        "size=%llu - the counting term is forced to answer \"idle\"",
+                        static_cast<unsigned long long>(index), res.Slot, res.Gen,
+                        static_cast<unsigned long long>(offset), static_cast<unsigned long long>(size));
+            }
+        }
+        const Bool busyBySubmission =
+            pVulkanRenderer != nullptr && !pVulkanRenderer->IsSubmitIndexComplete(resource->lastUseSubmitIndex);
+        if (busyBySerial || busyBySubmission) {
             // Vulkan buffer copies require four-byte aligned ranges. An odd GL
             // byte update waits, then writes only the exact range; rounding it
             // from a CPU shadow could overwrite neighbouring GPU-written bytes.
@@ -273,6 +360,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!uploaded) {
             MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-upload\"}");
             std::abort();
+        }
+        if (WireBufProbeEnabled()) {
+            MGLOG_I("WBUF write slot=%u gen=%u off=%llu size=%llu branch=%s bySerial=%d bySubmit=%d "
+                    "lastUse=%llu completed=%llu frameSerial=%llu floor=%llu lastUseSubmit=%llu",
+                    res.Slot, res.Gen, static_cast<unsigned long long>(offset),
+                    static_cast<unsigned long long>(size),
+                    (busyBySerial || busyBySubmission) ? "STAGED-or-WAIT" : "HOST-IMMEDIATE",
+                    busyBySerial ? 1 : 0, busyBySubmission ? 1 : 0,
+                    static_cast<unsigned long long>(probeLastUse), static_cast<unsigned long long>(probeCompleted),
+                    static_cast<unsigned long long>(m_frameSerial),
+                    static_cast<unsigned long long>(m_completedSerialFloor),
+                    static_cast<unsigned long long>(resource->lastUseSubmitIndex));
         }
         MG_Remote::Server::StagedShadowStore::CoverageAdd(resource->stagedCoverage,
                                                          static_cast<SizeT>(offset),
@@ -304,8 +403,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto* resource = FindWireBuffer(res);
         if (!resource || !resource->buffer.IsValid() || resource->size == 0) return false;
         resource->lastUseSerial = m_frameSerial;
+        // B3: the draw this slice is being acquired for is recorded into the NEXT submission.
+        // Until that submission's fence signals, a host write to these bytes is a data race.
+        if (pVulkanRenderer) resource->lastUseSubmitIndex = pVulkanRenderer->GetWireNextSubmitIndex();
         outSlice = resource->buffer.GetSlice(0, resource->size);
         outSlice.mapped = nullptr;
+        if (WireBufProbeEnabled()) {
+            MGLOG_I("WBUF bind  slot=%u gen=%u frameSerial=%llu", res.Slot, res.Gen,
+                    static_cast<unsigned long long>(m_frameSerial));
+        }
         return true;
     }
 
@@ -523,6 +629,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         "VkBufferManager::BeginFrame frame index out of range");
         m_currentFrameIndex = frameIndex;
         ++m_frameSerial;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (WireBufProbeEnabled()) {
+            MGLOG_I("WBUF BEGINFRAME idx=%u newSerial=%llu floor=%llu (arena slot rewound)", frameIndex,
+                    static_cast<unsigned long long>(m_frameSerial),
+                    static_cast<unsigned long long>(m_completedSerialFloor));
+        }
+#endif
         CollectDeferredReleases(frameIndex);
         m_transientUploadArena.BeginFrame(frameIndex);
     }
@@ -819,6 +932,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                              &afterBarrier, 0, nullptr, 0, nullptr);
 
         resource.lastUseSerial = m_frameSerial;
+        // B3: the copy just recorded rides the next submission too, so a later host write to
+        // the same bytes must wait for it exactly as a draw's read must.
+        if (pVulkanRenderer) resource.lastUseSubmitIndex = pVulkanRenderer->GetWireNextSubmitIndex();
         resource.gpuWritesPending = true;
         return true;
     }

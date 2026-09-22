@@ -149,6 +149,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool FlushWirePendingCommandsForTextureUpdate() {
             return !HasPendingRecordedWork() || FlushPendingCommands();
         }
+        // P7 wave 2 package B3: the submission that will carry whatever is recorded NEXT.
+        // RetireWireObjects (WireDraw.inc) already tags future objects with exactly this, and
+        // for the same reason: a draw being set up now is not in any submission yet, so the
+        // index that names it is one past the counter. Deliberately NOT
+        // GetSyncPointSubmitIndex(), which answers m_submitCounter when nothing is recorded -
+        // true for a fence taken at that instant, wrong for work about to be recorded.
+        Uint64 GetWireNextSubmitIndex() const { return m_submitCounter + 1; }
 #endif
 
         // FrameContext::IRecordingObserver: prepares the frame's timer-query
