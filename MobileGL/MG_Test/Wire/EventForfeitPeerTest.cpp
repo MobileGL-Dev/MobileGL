@@ -28,16 +28,19 @@
 // (the event bytes cross the data connection, the peer's drain is a progress frame it never
 // sends). Each plane runs in its own ctest entry under its own lane label.
 //
-// THE SCENARIOS (the last four are the PH-6 fix round's):
+// THE SCENARIOS (all but the first are the PH-6 fix round's):
 //   * the peer stops draining and stays - NotDraining after the knob;
 //   * the peer is KILLED while the server waits, with a knob longer than ServerLoop::Stop()'s
-//     5000 ms join - PeerGone well inside the knob, exit 0. The control EOF reaches ServerMain,
-//     which says so to the session and stops the loop; the reservation's wait ends on that stop;
+//     5000 ms join - PeerGone well inside the knob, exit 0 (whichever of the data bell's death and
+//     the control EOF's stop reaches the waiting apply thread first);
 //   * the same kill with a SURFACE OP QUEUED behind the wait - ServerMain is then blocked in the
 //     apply thread's mailbox and cannot see the EOF, so only the data bell can report the death:
 //     on the shm plane that is the server bell's death witness on the control socket;
 //   * the peer stays but its control stream ENDS (a malformed frame) while the server waits -
 //     `Stopped`, at once, exit 0, instead of Stop()'s join running out under the long knob;
+//   * the peer HALF-CLOSES control (ClientSession::Stop's step 2) and keeps its data connection -
+//     PeerGone, at once: on the stream plane only ServerMain's note that the control stream ended
+//     can say so, because the data bell is still alive;
 //   * the shm plane's server started by Server::LaunchServer, the launcher that SCRUBS the child's
 //     MOBILEGL_IPC_* - the knob must survive the scrub (ServerSpawn.cpp's allow-list).
 // Every knob here is NOT the default (2000), and every forfeit line is read for the value it
@@ -342,6 +345,8 @@ namespace {
         KilledWhileWaiting,         // SIGKILLed while the server waits: PeerGone, at once
         KilledWithAControlOpQueued, // the same, with a surface op stuck behind the wait
         ControlEndsWhileWaiting,    // the peer stays; its control stream ends: Stopped, at once
+        ControlHalfClosedWhileWaiting, // the peer half-closes control (a teardown's first act),
+                                       // data still open: PeerGone, at once
     };
 
     // A surface op the server's control loop has to post into the apply thread's mailbox - and
@@ -354,7 +359,7 @@ namespace {
         frame.display = 0x4d47;
         flatbuffers::FlatBufferBuilder builder(256);
         if (EncodeSurfaceOpFrame(frame, &builder) != SurfaceWireError::None) return false;
-        auto* control = client.ControlTransportForTest();
+        auto* control = client.ControlSocketForTest();
         return control != nullptr &&
                control->SendFrame(MobileGLByteSpan{builder.GetBufferPointer(), builder.GetSize()}) == MOBILEGL_OK;
     }
@@ -363,7 +368,7 @@ namespace {
     // (P7 wave 0's named refusal) - a control stream that ENDS while the peer is still there.
     bool SendMalformedControlFrame(Client::ClientSession& client) {
         static const std::uint8_t kJunk[4] = {0xde, 0xad, 0xbe, 0xef};
-        auto* control = client.ControlTransportForTest();
+        auto* control = client.ControlSocketForTest();
         return control != nullptr && control->SendFrame(MobileGLByteSpan{kJunk, sizeof(kJunk)}) == MOBILEGL_OK;
     }
 
@@ -380,10 +385,21 @@ namespace {
         if (filled != kChildOk) ::_exit(filled);
         const char one = 1;
         (void)::write(published, &one, 1);
-        if (scenario == Scenario::KilledWithAControlOpQueued || scenario == Scenario::ControlEndsWhileWaiting) {
+        if (scenario == Scenario::KilledWithAControlOpQueued || scenario == Scenario::ControlEndsWhileWaiting ||
+            scenario == Scenario::ControlHalfClosedWhileWaiting) {
             std::this_thread::sleep_for(std::chrono::milliseconds(kRawFrameAfterMs));
-            const bool sent = scenario == Scenario::KilledWithAControlOpQueued ? SendSurfaceOpBehindTheWait(client)
-                                                                                : SendMalformedControlFrame(client);
+            bool sent = false;
+            if (scenario == Scenario::KilledWithAControlOpQueued) {
+                sent = SendSurfaceOpBehindTheWait(client);
+            } else if (scenario == Scenario::ControlEndsWhileWaiting) {
+                sent = SendMalformedControlFrame(client);
+            } else {
+                // ClientSession::Stop's step 2, alone: the control stream's write half closes, the
+                // process and its data connection stay. The server sees EOF on control and nothing
+                // at all on the data plane.
+                auto* socket = client.ControlSocketForTest();
+                sent = socket != nullptr && socket->ShutdownSend() == MOBILEGL_OK;
+            }
             if (!sent) ::_exit(kRawFrame);
         }
         char go = 0;
@@ -442,6 +458,7 @@ namespace {
         case Scenario::KilledWhileWaiting: return "kill";
         case Scenario::KilledWithAControlOpQueued: return "kill-op";
         case Scenario::ControlEndsWhileWaiting: return "ctl-end";
+        case Scenario::ControlHalfClosedWhileWaiting: return "ctl-half";
         }
         return "?";
     }
@@ -527,8 +544,12 @@ namespace {
             // swallowed Stop()'s ring and waited on, and after 5000 ms the child died of
             // Fatal{ApplyThreadJoinTimeout} (`reaped signal=6 sessionsFaulted=1`); at a knob under
             // the join it was reported as NotDraining after the whole knob.
-            const char* expected = killed ? "ReverseChannelForfeit{PeerGone} - kEventBufferWriteback"
-                                          : "ReverseChannelForfeit{Stopped} - kEventBufferWriteback";
+            // A half-closed control stream is the peer LEAVING - ServerMain says so to the session
+            // before it stops the loop, so it is PeerGone even on the stream plane, whose data bell
+            // is still alive; a malformed frame from a peer that stays is a stop.
+            const char* expected = scenario == Scenario::ControlEndsWhileWaiting
+                                       ? "ReverseChannelForfeit{Stopped} - kEventBufferWriteback"
+                                       : "ReverseChannelForfeit{PeerGone} - kEventBufferWriteback";
             auto endedAt = std::chrono::steady_clock::now();
             if (killed) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(kKillAfterMs));
@@ -698,6 +719,10 @@ TEST(EventForfeitPeer, ShmControlStreamThatEndsWhileTheServerWaitsStopsTheWaitBy
     RunArm(false, Scenario::ControlEndsWhileWaiting);
 }
 
+TEST(EventForfeitPeer, ShmControlHalfClosedWhileTheServerWaitsIsPeerGone) {
+    RunArm(false, Scenario::ControlHalfClosedWhileWaiting);
+}
+
 TEST(EventForfeitPeer, ShmLaunchedServerTakesTheWaitKnobThroughTheScrubbedEnvironment) { RunLaunchedArm(); }
 
 TEST(EventForfeitPeer, StreamPeerThatStopsDrainingIsForfeitedAndTheNextConnectionIsWelcomed) {
@@ -714,6 +739,10 @@ TEST(EventForfeitPeer, StreamPeerKilledWithASurfaceOpQueuedBehindTheWaitIsPeerGo
 
 TEST(EventForfeitPeer, StreamControlStreamThatEndsWhileTheServerWaitsStopsTheWaitByName) {
     RunArm(true, Scenario::ControlEndsWhileWaiting);
+}
+
+TEST(EventForfeitPeer, StreamControlHalfClosedWhileTheServerWaitsIsPeerGone) {
+    RunArm(true, Scenario::ControlHalfClosedWhileWaiting);
 }
 
 #endif
