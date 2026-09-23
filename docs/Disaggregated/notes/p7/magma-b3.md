@@ -31,7 +31,7 @@ spawn）每跑一次是金图 `ace2af04` 与错图 `fb75d412`（14658 px）之�
 | 4 | **可证的地板（主修）** | `OnSubmitsCompletedUpTo` 只把地板推到**没有任何在飞提交仍持有**的序号；`unsound-serial-complete` 计数器 |
 | 5 | 本文 | — |
 | 6 | 复审（ID-P7-34）第 4 条 | `.def` 53 行**每行有站点、每站点有 W/E 行**；`scripts/ci/wire_declines_audit.py` 守住两半（§1.5） |
-| 7 | 复审第 1 条 | `StaleSerial.` 只注册 split + spawn；`spawn_lane_parity.py` 的具名例外 `MAGMA_NOT_OVER_TCP`（§4.2） |
+| 7 | 复审第 1 条 | `StaleSerial.` 只注册 split + spawn；`spawn_lane_parity.py` 的具名例外 `MAGMA_SERVER_ENV_KNOB_NO_TCP`（与 B2 的五条 server 端旋钮同一张表，§4.2） |
 | 8 | 复审第 3 条 | 注释改正：**地板是保证、提交项是探针/纵深**；`WaitForWireBufferHostAccess` 早返回加提交项、`ReadWireBuffer` 补盖戳（§3.2） |
 | 9 | 复审第 2 条 | `run_trace_case.cmake`：split retrace 见 `MGWIRE-FLOOR unsound-serial-complete` 即红——主修有了车道（§4.1） |
 | 10 | 本文（复审轮） | — |
@@ -337,7 +337,7 @@ MobileGLTraceReplay.OpenRA.DirectVulkan.SPAWN   ***Failed   (transport=spawn, 26
 tcp 臂的服务端是车道夹具（`scripts/ci/tcp_server_fixture.py`），从它**自己**的环境起一次，
 条目级 `ENVIRONMENT` 到不了它——`DirectVulkan.Tcp.StaleSerial.*` 跑的是未强制的用例，却顶着旋钮的名字。
 inproc 的服务端在测试进程里、spawn 的服务端继承 client 的环境，那两臂上旋钮是真的（§4.2 基线正是两臂红）。
-`scripts/ci/spawn_lane_parity.py` 增加第二种具名不对称 **`MAGMA_NOT_OVER_TCP = ("DirectVulkan.StaleSerial.",)`**
+`scripts/ci/spawn_lane_parity.py` 的 server 端旋钮例外表 **`MAGMA_SERVER_ENV_KNOB_NO_TCP`** 加入 `.StaleSerial.`（集成时并入 B2 返工的同一机制 `compare_arms(no_tcp=)` / CMake `mglItestServerEnvKnobArm`，而不是包树里单独的 `MAGMA_NOT_OVER_TCP`）
 （与 ID-P7-14 的 `MAGMA_INPROC_ONLY` 同形）：只从 **tcp 臂**的比较基准里去掉，spawn 缺了它仍是错误。
 B2 在自己的树里把它的旋钮条目加进同一个元组，集成者合并两处 hunk。
 

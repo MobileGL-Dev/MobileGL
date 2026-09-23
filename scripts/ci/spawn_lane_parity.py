@@ -107,7 +107,6 @@ def compare_arms(build_dir, tier, labels, inproc_only=(), no_tcp=()):
     it on spawn, which is where it does most of its work.
 
     Returns True on failure, the way main() below counts them."""
-    not_on_arm = not_on_arm or {}
     sets = {}
     for arm, label in labels.items():
         names = lane_names(build_dir, label) - FIXTURE_ENTRIES
