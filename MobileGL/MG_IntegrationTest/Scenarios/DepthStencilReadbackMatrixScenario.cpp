@@ -44,6 +44,7 @@
 
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/ScenarioFixture.h"
+#include "../Harness/SplitLane.h"
 
 #ifdef GLAPI
 #undef GLAPI
@@ -422,8 +423,35 @@ namespace MGITest {
     // THE BANDS ARE UNEQUAL ON PURPOSE (0.25 bottom / 0.75 top): a flip that did not happen
     // returns the bands the right way up, and a "flip" that merely reordered the readback would
     // move the colour too - so colour and depth are checked to agree about which way up they are.
+    //
+    // THE CASE IS ARMED ON THE MAGMA WIRE ARM ONLY, and the two gates below say which of the
+    // other arms that discover it (the suite is registered whole on the monolith DirectVulkan
+    // arm and on every DirectGLES arm) owe this picture and do not yet produce it. Both are
+    // recorded debts (notes/p7/magma-b2.md §6), not agreements with the wrong answer:
+    //   - Espryt (DirectGLES, monolith and split alike): the flipped resolve writes nothing and
+    //     raises no error, and the scaled one raises no error either. P3b/P4b.
+    //   - the monolith DirectVulkan arm: `VulkanRenderer.cpp` refuses a depth blit with a
+    //     flipped rectangle ("depth blits with flipped rectangles are not supported yet" - the
+    //     destination keeps its clear, no error) and scales a multisample depth blit that GL
+    //     calls INVALID_OPERATION. The wire arm is the more correct one here; the monolith fix
+    //     is P13/G1-bound.
+    // The backend gate runs first so a DirectGLES entry names the backend that owes the fix,
+    // whichever lane it sits in; MGITEST_SPLIT_LANE then separates the wire DirectVulkan arms
+    // (`DirectVulkan.{Split,Spawn,Tcp}.MsFlip*.`, all of which carry it) from the monolith one.
     TEST_F(DepthStencilReadbackMatrixScenario, AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines) {
         if (!Ready()) return;
+        if (Gl().BackendName() != "DirectVulkan") {
+            GTEST_SKIP() << "Espryt (" << Gl().BackendName() << ") does not produce this picture yet: a "
+                            "flipped multisample depth resolve writes nothing with no error and a scaled "
+                            "one raises no INVALID_OPERATION - a P3b/P4b debt (notes/p7/magma-b2.md §6)";
+        }
+        if (!SplitLane::IsSplitLane()) {
+            GTEST_SKIP() << "the monolith DirectVulkan arm (MGITEST_SPLIT_LANE unset) refuses a flipped "
+                            "depth blit (\"depth blits with flipped rectangles are not supported yet\", "
+                            "destination untouched, no error) and scales a multisample depth blit GL "
+                            "calls INVALID_OPERATION - a wire-vs-monolith divergence where the wire arm "
+                            "is the correct one; the monolith fix is P13/G1-bound (notes/p7/magma-b2.md §6)";
+        }
         DepthSource multisampled = MakeRenderbufferSource(GL_DEPTH24_STENCIL8, 4);
         if (!SourceIsUsable()) {
             DestroySource(multisampled);
