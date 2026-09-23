@@ -301,6 +301,20 @@ is_infrastructure_failure() {
   return 1
 }
 
+# A replay that PASSED and then lost its logs is not evidence either way. Sampled on the APK
+# workflow (5 of 7 failed legs): result.json said "passed": true, then "error: device offline"
+# before the role logs were copied, and the --require-inproc/--require-spawn proof read an empty
+# mobilegl.log and failed the leg with exit 1 - charging the emulator's disappearance to the trace
+# instead of asking for the one infrastructure retry. True only when a proof needs the log
+# ($2 = 1), the log is empty, and the classifier above says the infrastructure failed; an online
+# device with an empty log stays the proof's failure.
+passed_replay_lost_its_logs() {
+  lost_logs_dir="$1"
+  [ "$2" -eq 1 ] || return 1
+  [ ! -s "${lost_logs_dir}/mobilegl.log" ] || return 1
+  is_infrastructure_failure "${lost_logs_dir}"
+}
+
 copy_app_artifact() {
   source_path="$1"
   destination_path="$2"
@@ -589,6 +603,10 @@ run_retrace() {
   # reads "trace replay failed" over a passed result.json. host_path_for_adb converts
   # explicitly, so the verdict no longer depends on the caller's environment.
   "${PYTHON}" -c 'import json, sys; result = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if result.get("passed") else f"trace replay failed: {result}")' "$(host_path_for_adb "${result_dir}/result.json")" || return "$?"
+  if passed_replay_lost_its_logs "${result_dir}" "$((require_inproc | require_spawn))"; then
+    echo "trace-replay-ci.sh: the replay passed but its logs were never copied, so the transport proof has nothing to read; requesting one infrastructure retry" >&2
+    exit "${INFRASTRUCTURE_FAILURE_EXIT_CODE}"
+  fi
   if [ "${require_inproc}" -eq 1 ]; then
     "${PYTHON}" - "$(host_path_for_adb "${result_dir}/mobilegl.log")" "$(host_path_for_adb "${result_dir}/transport-proof.json")" <<'PY'
 import json
