@@ -76,8 +76,10 @@ MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.")
 # P7 wave 2-B3 (ID-P7-34) adds `.StaleSerial.`: MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL is read by
 # the server too (VkBufferManager.cpp), so the streamed subdata-then-draw red-once has the same
 # two arms and the same tcp absence. One list, one mechanism, for every server-side knob.
+# `.MsFlip1.` (B2 review round 2) is the shader-resolve knob twin of the knob-free `.MsFlip.`,
+# which keeps its tcp entry.
 MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
-                                ".DefaultBlitShape1.", ".MsResolve1.", ".StaleSerial.")
+                                ".DefaultBlitShape1.", ".MsResolve1.", ".StaleSerial.", ".MsFlip1.")
 
 
 def lane_names(build_dir, label):
@@ -130,6 +132,20 @@ def compare_arms(build_dir, tier, labels, inproc_only=(), no_tcp=()):
               f"from the comparison by name ({', '.join(inproc_only)})")
     if no_tcp:
         dropped = {k for k in comparable if any(only in k for only in no_tcp)}
+        # EVERY TAIL MUST NAME SOMETHING (review round 2). A tail that matches no split key is
+        # silently inert - a renamed prefix would leave the exception in the list and the
+        # entry it was about riding under some other name - so an unmatched tail is an error,
+        # and so is a tail that suddenly matches a different number of entries than the one
+        # knob case it was written for.
+        for tail in no_tcp:
+            hits = sorted(k for k in comparable if tail in k)
+            if len(hits) != 1:
+                print(f"::error::{tier}: the server-env-knob tail {tail!r} matches {len(hits)} "
+                      f"split entrie(s) {hits}, not exactly one. Each tail names ONE knob case; a "
+                      f"tail that names none is an exception about nothing, and one that names "
+                      f"more has let a second case ride off the tcp arm unexamined.",
+                      file=sys.stderr)
+                return True
         if dropped:
             print(f"{tier}: {len(dropped)} server-env-knob entrie(s) excluded from the TCP "
                   f"comparison only ({', '.join(no_tcp)}) - the knob is read on the server and "

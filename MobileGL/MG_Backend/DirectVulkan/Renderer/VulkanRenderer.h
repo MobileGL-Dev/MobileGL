@@ -513,6 +513,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void ResolveWireDepthStencil(WireImage source, WireImage destination,
                                      GLint sx0, GLint sy0, GLint sx1, GLint sy1,
                                      GLint dx0, GLint dy0, GLint dx1, GLint dy1);
+        // True when the rectangles give a multisample depth/stencil resolve a shape it declines
+        // (a scale, an X mirror, a Y mirror across two formats); the decline has then been
+        // logged and its INVALID_OPERATION recorded. BlitWireFramebuffers asks it BEFORE any
+        // aspect runs, so a declined call leaves every attachment alone.
+        Bool DeclineWireDepthStencilResolveShape(const WireImage& source, const WireImage& destination,
+                                                 GLint sx0, GLint sy0, GLint sx1, GLint sy1,
+                                                 GLint dx0, GLint dy0, GLint dx1, GLint dy1);
         PFN_vkCreateRenderPass2 m_wireCreateRenderPass2 = nullptr;
         VkResolveModeFlags m_wireDepthResolveModes = 0;
         VkResolveModeFlags m_wireStencilResolveModes = 0;

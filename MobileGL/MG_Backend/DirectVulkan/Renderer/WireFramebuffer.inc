@@ -432,6 +432,68 @@
             MagmaWireFatal("read-conversion");
     }
 
+    Bool VulkanRenderer::DeclineWireDepthStencilResolveShape(const WireImage& source,
+        const WireImage& destination, GLint sx0, GLint sy0, GLint sx1, GLint sy1,
+        GLint dx0, GLint dy0, GLint dx1, GLint dy1) {
+        const Int64 spanX = static_cast<Int64>(sx1) - sx0;
+        const Int64 spanY = static_cast<Int64>(sy1) - sy0;
+        const Int64 dstSpanX = static_cast<Int64>(dx1) - dx0;
+        const Int64 dstSpanY = static_cast<Int64>(dy1) - dy0;
+        const Int64 width = spanX < 0 ? -spanX : spanX;
+        const Int64 height = spanY < 0 ? -spanY : spanY;
+        const Int64 dstWidth = dstSpanX < 0 ? -dstSpanX : dstSpanX;
+        const Int64 dstHeight = dstSpanY < 0 ? -dstSpanY : dstSpanY;
+        // A SCALE has no arm here and is not supposed to: 18.3.1 makes a multisample blit whose
+        // rectangles differ in size INVALID_OPERATION. Rule I (a), the same three lines the
+        // colour arm's multisample-destination decline uses. A ZERO span on one side only is a
+        // size mismatch too (review round 2): it used to return silently with the other side
+        // non-empty, where GL raises the error. Only when BOTH sides are empty on an axis is
+        // there nothing to do and nothing to say - that is the caller's early return.
+        if (width != dstWidth || height != dstHeight) {
+            MGLOG_E_ONCE("DirectVulkan::ResolveWireDepthStencil: a %lldx%lld source rectangle "
+                         "cannot reach a %lldx%lld destination rectangle - a multisample resolve "
+                         "carries no scale; declining the blit",
+                         static_cast<long long>(width), static_cast<long long>(height),
+                         static_cast<long long>(dstWidth), static_cast<long long>(dstHeight));
+            RecordTextureCopyError("ResolveWireDepthStencil", ErrorCode::InvalidOperation,
+                                   "glBlitFramebuffer from a multisampled read framebuffer requires "
+                                   "identical source and destination rectangle dimensions.");
+            return true;
+        }
+        if (!width || !height) return false;
+        // WHICH MIRRORS HAVE AN ARM. The copy-out in ResolveWireDepthStencil moves the resolved
+        // aspect through a buffer, and a buffer copy addresses ROWS: one VkBufferImageCopy per
+        // row, walked backwards, is a vertical mirror for free. A HORIZONTAL one would need a
+        // region per TEXEL, which is not a copy any more - and re-encoding across formats
+        // (BlitDepthAcrossFormats, shared with the monolith arm) has no flip either. Both
+        // decline by name, each under its OWN once-site (review round 2: one site covered both,
+        // so after the first X decline a cross-format Y decline logged nothing); §6 in
+        // notes/p7/magma-b2.md carries them. These are declines of a LEGAL blit - GL would
+        // raise no error here - so the INVALID_OPERATION is rule I (a)'s named refusal, not
+        // GL's answer.
+        const Bool mirrorX = (spanX < 0) != (dstSpanX < 0);
+        const Bool mirrorY = (spanY < 0) != (dstSpanY < 0);
+        if (mirrorX) {
+            MGLOG_E_ONCE("DirectVulkan::ResolveWireDepthStencil: a multisample resolve mirrored on "
+                         "X (source format %d, destination format %d) has no arm - the copy-out "
+                         "reverses whole rows and nothing smaller; declining the blit",
+                         static_cast<Int>(source.format), static_cast<Int>(destination.format));
+            RecordTextureCopyError("ResolveWireDepthStencil", ErrorCode::InvalidOperation,
+                                   "This device cannot mirror that multisample depth/stencil blit.");
+            return true;
+        }
+        if (mirrorY && source.format != destination.format) {
+            MGLOG_E_ONCE("DirectVulkan::ResolveWireDepthStencil: a multisample resolve mirrored on "
+                         "Y across two formats (source format %d, destination format %d) has no "
+                         "arm - the cross-format re-encode has no flip; declining the blit",
+                         static_cast<Int>(source.format), static_cast<Int>(destination.format));
+            RecordTextureCopyError("ResolveWireDepthStencil", ErrorCode::InvalidOperation,
+                                   "This device cannot mirror that multisample depth/stencil blit.");
+            return true;
+        }
+        return false;
+    }
+
     void VulkanRenderer::ResolveWireDepthStencil(WireImage source, WireImage destination,
         GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1) {
         // P7 wave 2-B2 (review round): A REVERSED RECTANGLE IS NOT A MALFORMED ONE. This guard
@@ -443,31 +505,23 @@
         // spans - so a flip is a legal blit that has to produce a mirrored picture.
         //
         // Spans are therefore signed and everything downstream works off the min corner.
+        //
+        // THE SHAPE DECLINES ARE DECIDED ONCE PER CALL (review round 2). BlitWireFramebuffers
+        // asks DeclineWireDepthStencilResolveShape before ANY aspect runs, because the colour
+        // lambda runs first: asked only here, a scaled COLOR|DEPTH blit scaled and wrote its
+        // colour and THEN recorded INVALID_OPERATION on its depth - a partial effect GL 18.3.1
+        // forbids (the whole call errors) - and an X-mirrored one mirrored its colour and left
+        // its depth alone. The call below is the same question for a caller that did not ask;
+        // on the BlitWireFramebuffers path it has already answered false.
+        if (DeclineWireDepthStencilResolveShape(source, destination, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1))
+            return;
         const Int64 spanX = static_cast<Int64>(sx1) - sx0;
         const Int64 spanY = static_cast<Int64>(sy1) - sy0;
-        const Int64 dstSpanX = static_cast<Int64>(dx1) - dx0;
-        const Int64 dstSpanY = static_cast<Int64>(dy1) - dy0;
-        if (!spanX || !spanY || !dstSpanX || !dstSpanY) return;
+        if (!spanX || !spanY) return; // both sides empty on an axis (the helper errored otherwise)
         const Int64 width = spanX < 0 ? -spanX : spanX;
         const Int64 height = spanY < 0 ? -spanY : spanY;
-        // A SCALE has no arm here and is not supposed to: 18.3.1 makes a multisample blit whose
-        // rectangles differ in size INVALID_OPERATION. Rule I (a), the same three lines the
-        // colour arm's multisample-destination decline uses.
-        if (width != (dstSpanX < 0 ? -dstSpanX : dstSpanX) ||
-            height != (dstSpanY < 0 ? -dstSpanY : dstSpanY)) {
-            MGLOG_E_ONCE("DirectVulkan::ResolveWireDepthStencil: a %lldx%lld source rectangle "
-                         "cannot reach a %lldx%lld destination rectangle - a multisample resolve "
-                         "carries no scale; declining the blit",
-                         static_cast<long long>(width), static_cast<long long>(height),
-                         static_cast<long long>(dstSpanX < 0 ? -dstSpanX : dstSpanX),
-                         static_cast<long long>(dstSpanY < 0 ? -dstSpanY : dstSpanY));
-            RecordTextureCopyError("ResolveWireDepthStencil", ErrorCode::InvalidOperation,
-                                   "glBlitFramebuffer from a multisampled read framebuffer requires "
-                                   "identical source and destination rectangle dimensions.");
-            return;
-        }
-        const Bool mirrorX = (spanX < 0) != (dstSpanX < 0);
-        const Bool mirrorY = (spanY < 0) != (dstSpanY < 0);
+        // Past the helper the only mirror left is a same-format vertical one.
+        const Bool mirrorY = (spanY < 0) != (dy1 < dy0);
         const GLint sxMin = std::min(sx0, sx1), syMin = std::min(sy0, sy1);
         const GLint dxMin = std::min(dx0, dx1), dyMin = std::min(dy0, dy1);
         if (source.isDefault || destination.isDefault || source.is3D || destination.is3D ||
@@ -477,22 +531,6 @@
             static_cast<Uint64>(dxMin + width) > destination.extent.width ||
             static_cast<Uint64>(dyMin + height) > destination.extent.height)
             MagmaWireFatal("multisample-depth-resolve-region");
-        // WHICH MIRRORS HAVE AN ARM. The copy-out below moves the resolved aspect through a
-        // buffer, and a buffer copy addresses ROWS: one VkBufferImageCopy per row, walked
-        // backwards, is a vertical mirror for free. A HORIZONTAL one would need a region per
-        // TEXEL, which is not a copy any more - and re-encoding across formats
-        // (BlitDepthAcrossFormats, shared with the monolith arm) has no flip either. Both
-        // decline by name; §12 in notes/p7/magma-b2.md carries them.
-        if (mirrorX || (mirrorY && source.format != destination.format)) {
-            MGLOG_E_ONCE("DirectVulkan::ResolveWireDepthStencil: a multisample resolve mirrored on "
-                         "%s (source format %d, destination format %d) has no arm - the copy-out "
-                         "reverses whole rows and nothing smaller; declining the blit",
-                         mirrorX ? "X" : "Y across two formats",
-                         static_cast<Int>(source.format), static_cast<Int>(destination.format));
-            RecordTextureCopyError("ResolveWireDepthStencil", ErrorCode::InvalidOperation,
-                                   "This device cannot mirror that multisample depth/stencil blit.");
-            return;
-        }
         VkImageAspectFlags formatAspects = VK_IMAGE_ASPECT_DEPTH_BIT;
         if (source.format == VK_FORMAT_S8_UINT) formatAspects = VK_IMAGE_ASPECT_STENCIL_BIT;
         else if (source.format == VK_FORMAT_D16_UNORM_S8_UINT || source.format == VK_FORMAT_D24_UNORM_S8_UINT ||
@@ -772,6 +810,33 @@
         const auto* draw = named ? state.FramebufferRecordFor(state.VerbBlitDrawFbo) : state.DrawFramebuffer();
         if (!read || !draw) MagmaWireFatal("blit-framebuffer-record");
         state.VerbBlitNamedConsumed = named;
+        // P7 wave 2-B2 (review round 2): ONE ANSWER FOR THE WHOLE CALL. The aspects below run
+        // colour first, so a multisample depth/stencil shape that declines (a scale, an X
+        // mirror, a Y mirror across two formats) used to be discovered only after the colour
+        // attachment had already been scaled or mirrored and written - the call then recorded
+        // INVALID_OPERATION with half its effect in place, which GL 18.3.1 does not allow (an
+        // erroring blit writes nothing). The shape is a fact about the rectangles and the two
+        // images, so it is asked here, before any aspect runs, for every depth/stencil aspect
+        // the mask names that would take the multisample resolve arm.
+        //
+        // A default READ framebuffer is never multisampled here, and a default DRAW one behind a
+        // multisample read is ResolveWireDepthStencil's region Fatal whatever the shape - and
+        // resolving the default draw image early would move its write index - so both are left
+        // to the lambda.
+        if ((mask & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)) && !read->IsDefault && !draw->IsDefault) {
+            const auto declines = [&](const MG_Pipe::MGPSurface& src, const MG_Pipe::MGPSurface& dst,
+                                      VkImageAspectFlags aspect) -> Bool {
+                const WireImage source = ResolveWireImage(*read, src, aspect, /*isWriteTarget=*/false);
+                if (!source.image || source.samples == VK_SAMPLE_COUNT_1_BIT) return false;
+                const WireImage destination = ResolveWireImage(*draw, dst, aspect, /*isWriteTarget=*/true);
+                if (!destination.image || destination.samples != VK_SAMPLE_COUNT_1_BIT) return false;
+                return DeclineWireDepthStencilResolveShape(source, destination, sx0, sy0, sx1, sy1,
+                                                           dx0, dy0, dx1, dy1);
+            };
+            if (((mask & GL_DEPTH_BUFFER_BIT) && declines(read->Depth, draw->Depth, VK_IMAGE_ASPECT_DEPTH_BIT)) ||
+                ((mask & GL_STENCIL_BUFFER_BIT) && declines(read->Stencil, draw->Stencil, VK_IMAGE_ASPECT_STENCIL_BIT)))
+                return;
+        }
         const auto blit = [&](const MG_Pipe::MGPSurface& src, const MG_Pipe::MGPSurface& dst,
                               VkImageAspectFlags aspect) {
             WireImage source = ResolveWireImage(*read,src,aspect, /*isWriteTarget=*/false);

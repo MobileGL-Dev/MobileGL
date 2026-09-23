@@ -566,6 +566,45 @@ namespace MGITest {
                        "the declined scale must have left the destination alone");
         EXPECT_EQ(FirstGLError(), 0u) << "the session survived the decline";
 
+        // THE SAME SCALE WITH COLOUR IN THE MASK. An erroring blit writes nothing (18.3.1), so
+        // the colour attachment must come through untouched too. The colour arm CAN scale a
+        // multisample resolve on its own, and it runs before the depth arm - so a decline
+        // decided per aspect scaled and wrote the colour and then raised the error on the
+        // depth. The shape is decided once, before any aspect, and this is what pins it.
+        glBindFramebuffer(GL_FRAMEBUFFER, resolved.fbo);
+        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.5f, kPrimeStencil);
+        glClearColor(0, 0, 1, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ASSERT_EQ(FirstGLError(), 0u);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolved.fbo);
+        glBlitFramebuffer(0, 0, kWidth, kHeight, 0, 0, kWidth / 2, kHeight / 2,
+                          GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        glFinish();
+        EXPECT_EQ(FirstGLError(), GLenum(GL_INVALID_OPERATION))
+            << "a scaled multisample COLOR|DEPTH blit is INVALID_OPERATION as a whole";
+        glBindFramebuffer(GL_FRAMEBUFFER, resolved.fbo);
+        std::array<GLubyte, 4> untouched{};
+        glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, untouched.data());
+        EXPECT_EQ(untouched, (std::array<GLubyte, 4>{0, 0, 255, 255}))
+            << "the declined COLOR|DEPTH scale must not have written its colour either";
+        ExpectAllDepth(ReadDepthFloat(0, 0, kWidth, kHeight), 0.5f,
+                       "the declined COLOR|DEPTH scale must have left the depth alone");
+        EXPECT_EQ(FirstGLError(), 0u) << "the session survived the combined decline";
+
+        // AN EMPTY DESTINATION BEHIND A NON-EMPTY SOURCE is a size mismatch as well, not a
+        // no-op: 64x48 cannot reach 0x48.
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolved.fbo);
+        glBlitFramebuffer(0, 0, kWidth, kHeight, 0, 0, 0, kHeight, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        glFinish();
+        EXPECT_EQ(FirstGLError(), GLenum(GL_INVALID_OPERATION))
+            << "a multisample resolve onto an empty destination rectangle is a size mismatch";
+        glBindFramebuffer(GL_FRAMEBUFFER, resolved.fbo);
+        ExpectAllDepth(ReadDepthFloat(0, 0, kWidth, kHeight), 0.5f,
+                       "the empty-destination decline must have left the depth alone");
+        EXPECT_EQ(FirstGLError(), 0u) << "the session survived the empty-destination decline";
+
         DestroySource(resolved);
         DestroySource(multisampled);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);

@@ -3228,6 +3228,20 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                 ${mglItestArmProperties}
                 ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msflip${mglItestArmLogTag}.log")
+        # ITS KNOB TWIN (review round 2). Knob-free, lavapipe answers every resolve through the
+        # VK_KHR_depth_stencil_resolve arm, so the shader arm's min-corner rectangle under a
+        # flip - the device WITHOUT the extension - never ran. MsFlip1 forces it. Split+spawn
+        # only, the server-side-knob reason above, named in spawn_lane_parity.py's
+        # MAGMA_SERVER_ENV_KNOB_NO_TCP; the knob-free MsFlip. keeps all three arms.
+        if(mglItestServerEnvKnobArm)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.MsFlip1."
+                TEST_FILTER "DepthStencilReadbackMatrixScenario.AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msflip${mglItestArmLogTag}-shader1.log")
+        endif()
         foreach(inPlaceCase CopyImageInPlaceAcrossLevelsAndLayers
                             CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone)
             gtest_discover_tests(MobileGLIntegrationTest
