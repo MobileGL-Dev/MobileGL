@@ -304,6 +304,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // takes - flush what is recorded, wait for it - and sweep again, which retires every
         // parked store, because none can be tagged past the sync point it just waited out.
         void EnforceWireDeferredWatermark();
+        // ...and the same sync point when more than this many stores are parked, whatever their
+        // bytes (see the definition for the measurement). Not a knob: it bounds an object count
+        // the byte budget cannot see, and MOBILEGL_IPC_WIRE_DEFERRED_MB=0 disables it too.
+        static constexpr SizeT kWireDeferredCountCeiling = 1024;
         // Teardown: the caller has proven the device idle (Shutdown / RecreateTransientArenas).
         void DestroyAllDeferredWireReleases();
         // THE one Fatal{ResourceUnavailable, "buffer-write-sync"} site (rule I: no second abort

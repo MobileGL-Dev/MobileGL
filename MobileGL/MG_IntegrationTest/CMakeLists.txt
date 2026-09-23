@@ -3444,7 +3444,7 @@ endif()
 # =====================================================================================
 #
 # ID-P7-27 / ID-P7-32: bsl-esc-menu-854 delivers one present per replay, and the split server
-# held every orphaned VkBuffer until a frame boundary that never came. The two cases read the
+# held every orphaned VkBuffer until a frame boundary that never came. The three cases read the
 # server's own wbuf[] gauges (PipeStats.h) off its `MGPipe stats:` line, so the flavour pins the
 # stats channel at one line per swap, and MOBILEGL_IPC_WIRE_DEFERRED_MB=8 keeps the watermark
 # case at 48 MiB of traffic instead of 400.
@@ -3471,7 +3471,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         ${MGL_ITEST_MAGMA_RECLAIM_FLAVOUR_ENV} ${mglItestArmTransportEnv})
     foreach(reclaimCase
             RespecifiesWithNoDrawBetweenKeepTheLiveStoreCountBounded
-            RespecifyAndDrawEachStoreInOneFrameStaysWithinTheDeferredBudget)
+            RespecifyAndDrawEachStoreInOneFrameStaysWithinTheDeferredBudget
+            ManySmallRespecifyAndDrawRoundsStayUnderTheStoreCountCeiling)
         gtest_discover_tests(MobileGLIntegrationTest
             TEST_PREFIX "DirectVulkan.${mglItestArm}.Reclaim."
             TEST_FILTER "MagmaWireReclaimScenario.${reclaimCase}"

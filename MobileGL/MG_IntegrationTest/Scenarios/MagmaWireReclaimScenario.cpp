@@ -17,7 +17,7 @@
 // split server held 25,923 dead stores against 28 live wire buffers and 41k mappings; on the
 // Redmi it died in scudo at 1.2 GiB while the monolith passed at 807 MiB.
 //
-// WHAT THE TWO CASES PIN, both inside ONE frame (no swap between the first and the last
+// WHAT THE THREE CASES PIN, all inside ONE frame (no swap between the first and the last
 // respecify), because that is the only shape in which the bug existed:
 //   * RespecifiesWithNoDrawBetween... - the stores no GPU command ever named. They are dead the
 //     moment they are orphaned, so the live store count must stay a small multiple of the wire
@@ -27,6 +27,8 @@
 //     MOBILEGL_IPC_WIRE_DEFERRED_MB watermark's forced sync point. The parked bytes must stay
 //     within the budget plus one store, and every draw must still land on its own strip - a
 //     store destroyed while its draw was pending shows up as a wrong strip (or a dead lavapipe).
+//   * ManySmallRespecifyAndDrawRounds... - the same with stores too small to reach any byte
+//     budget; the fixed 1024-store ceiling on the same sync point is what bounds them.
 //
 // READ FROM THE SERVER, NOT THE PICTURE. The numbers are the wbuf[] gauges the server role's
 // VkBufferManager publishes (PipeStats.h, Gauge::WireBuffers..WireDeferredSyncs): RUN MAXIMA,
@@ -76,6 +78,13 @@ namespace MGITest {
         // 8 MiB budget the lane sets, so the watermark has to fire several times in the frame.
         constexpr int kDrawnRespecifies = 48;
         constexpr std::size_t kDrawnStoreBytes = static_cast<std::size_t>(kMiB);
+
+        // Case 3: many SMALL respecify-and-draw rounds - 3000 x 256 B is 750 KB, nowhere near
+        // the byte budget, so only the store-count ceiling (VkBufferManager::
+        // kWireDeferredCountCeiling, 1024) can bound them inside the frame.
+        constexpr int kSmallDrawnRespecifies = 3000;
+        constexpr std::size_t kSmallDrawnStoreBytes = 256;
+        constexpr long long kDeferredCountCeiling = 1024;
 
         constexpr const char* kVertex = R"(#version 330 core
 layout(location = 0) in vec2 aPos;
@@ -306,6 +315,48 @@ void main() { fragColor = uColor; })";
                 << "the Magma server held " << livePeak << " VkBuffers at once; the records ("
                 << wireBuffers << ") plus a budget's worth of parked stores allow " << liveBound
                 << ". " << window.line;
+        }
+
+        // --------------------------------------------------------------------------------------
+        // CASE 3. 3000 respecify-and-draw rounds of a 256-byte store in one frame. The byte
+        // budget never trips (750 KB against 8 MiB), which is the bsl-esc-menu-854 shape the
+        // count ceiling exists for: one stretch there parked 12,498 stores in 39.5 MB. Before M2
+        // every one of the 3000 was alive at the end of the loop.
+        TEST_F(MagmaWireReclaimScenario, ManySmallRespecifyAndDrawRoundsStayUnderTheStoreCountCeiling) {
+            if (!Ready() || IsSkipped()) return;
+            const PipeStatsWindow::LogMark mark = SetupFrame();
+
+            ClearTo(0.0f, 0.0f, 0.0f, 0.0f);
+            std::vector<std::uint8_t> bytes(kSmallDrawnStoreBytes, 0);
+            for (int i = 0; i < kSmallDrawnRespecifies; ++i) {
+                Respecify(bytes, 0, kWidth);
+                DrawStrip(i % 200);
+            }
+            const Image image = ReadPixels(kWidth, kHeight);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            const Rgba8 want = StripColor((kSmallDrawnRespecifies - 1) % 200);
+            EXPECT_TRUE(Near(image.At(kWidth / 2, kHeight / 2), want))
+                << "read " << image.At(kWidth / 2, kHeight / 2) << ", wanted " << want
+                << ": the last of " << kSmallDrawnRespecifies << " draws did not land on top";
+
+            const PipeStatsWindow::Window window = CloseFrameAndReadServerWindow(mark);
+            ASSERT_TRUE(window.found) << "no 'MGPipe stats:' window in the server log "
+                                      << PipeStatsWindow::ServerLibraryLogPath();
+            const long long wireBuffers = PipeStatsWindow::CounterOrAbsent(window, "wbufs");
+            const long long livePeak = PipeStatsWindow::CounterOrAbsent(window, "wlivepk");
+            const long long syncs = PipeStatsWindow::CounterOrAbsent(window, "wdefsync");
+            ASSERT_GT(wireBuffers, 0) << "the server published no wbufs= gauge: " << window.line;
+            RecordProperty("wire_buffers", static_cast<int>(wireBuffers));
+            RecordProperty("wire_stores_peak", static_cast<int>(livePeak));
+            RecordProperty("wire_deferred_syncs", static_cast<int>(syncs));
+            // The ceiling is checked after the park that crosses it, so one store past it plus the
+            // records is the most the arm can hold.
+            const long long liveBound = wireBuffers + kDeferredCountCeiling + 2;
+            EXPECT_LE(livePeak, liveBound)
+                << "the Magma server held " << livePeak << " VkBuffers at once after "
+                << kSmallDrawnRespecifies << " small respecify-and-draw rounds in one frame; the "
+                   "records plus the " << kDeferredCountCeiling << "-store ceiling allow " << liveBound
+                << ". A count that tracks the rounds is the bsl-esc-menu-854 shape. " << window.line;
         }
 
     } // namespace

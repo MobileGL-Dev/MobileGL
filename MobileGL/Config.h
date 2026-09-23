@@ -505,9 +505,11 @@ namespace MobileGL::MG_Config {
         // exceed it after a sweep, the server flushes what it has recorded and waits for it
         // (WaitForWireBufferHostAccess's sync point, mid-frame), which retires every one. It is
         // not a frame count because a frame is not bounded: a snapshot-exiting pbuffer replay
-        // delivers one present for 1.3 M calls. 0 IS THE NEGATIVE CONTROL, not "unlimited by
-        // design": no forced sync, so a one-frame respecify-and-draw loop grows without bound
-        // and MagmaWireReclaimScenario's watermark case must go red.
+        // delivers one present for 1.3 M calls. The same sync point also fires above a fixed
+        // 1024 parked stores (VkBufferManager::kWireDeferredCountCeiling), because small
+        // orphans never reach a byte budget. 0 IS THE NEGATIVE CONTROL for both, not "unlimited
+        // by design": no forced sync, so a one-frame respecify-and-draw loop grows without bound
+        // and MagmaWireReclaimScenario's watermark cases must go red.
         Uint32 WireDeferredMb = 64;
         // MOBILEGL_IPC_SPIN_US: spin before parking on a doorbell, either direction.
         Uint32 SpinUs = 50;

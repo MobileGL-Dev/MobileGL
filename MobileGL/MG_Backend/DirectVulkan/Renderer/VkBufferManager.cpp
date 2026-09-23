@@ -612,7 +612,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void VkBufferManager::EnforceWireDeferredWatermark() {
         const Uint64 budget = static_cast<Uint64>(MG_Config::Ipc.WireDeferredMb) * 1024u * 1024u;
-        if (budget == 0 || m_deferredWireBytes <= budget) return;
+        // TWO TRIGGERS, ONE SWITCH. Bytes are what the knob names, but a VkBuffer costs per
+        // OBJECT as well as per byte, and small orphans never reach a byte budget: measured on
+        // bsl-esc-menu-854 (spawn, lavapipe), one stretch with no submission parked 12,498 stores
+        // in 39.5 MB against 64 MiB. So a fixed count ceiling rides the same sync point; the
+        // knob's 0 turns both off, which keeps it one negative control.
+        if (budget == 0) return;
+        if (m_deferredWireBytes <= budget && m_deferredWireReleases.size() <= kWireDeferredCountCeiling) return;
         // What is left after the sweep is named by work that is recorded but unsubmitted, or
         // submitted but unretired. Every entry is tagged at or below the sync point taken HERE,
         // so waiting it out - the host-access wait's own call, which flushes the recording first
