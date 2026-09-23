@@ -4,7 +4,7 @@
 
 **阶段：P7 DirectVulkan（Magma）全量迁移**，并行流 **P3b/P4b 深化（Espryt，wave 2-D）** 与 **Ph 小件（簇 F）**。计划 [`notes/p7/PLAN-PH-P34B-P7.md`](notes/p7/PLAN-PH-P34B-P7.md)（五波）。
 
-**更新：2026-09-22 夜** · `origin/feat/disaggregated` = `87584d0b`（自 `3c80cd62` 起 42 提交：B2 返工 r1/r2、B3 返工 + 修复轮、V1、F 片 1–3、E1；提交尾注已按用户令改写；四份 fable 审查均 land with fixes，修复轮在跑，ID-P7-39）。集成树 `~/w7/pipe` = origin。
+**更新：2026-09-22 夜** · `origin/feat/disaggregated` = `87584d0b`；集成树 `~/w7/pipe` 领先 20 提交（B3 修复 r2、V1 修复轮、B2 r3），门 / 审查在跑；**窗口 1b 的 39 例 TCP 矩阵在跑**（ID-P7-40）。
 
 ## 1. 出口门总览（CONTRACT-P7 §8 的 9 项分母）
 
@@ -56,9 +56,9 @@
 
 | 包 | 内容 | 状态 |
 |---|---|---|
-| B2 r3（fable） | 用例按解析后的 transport 门控（`Full.` / `VerifySplit.` 重新跑）、pre-pass 含默认 draw framebuffer、措辞、§6 三条域外债 | 进行中（ID-P7-38） |
-| B3 修复 r2（fable） | `LOGGED` 锚定 + 夹具、spawn FATAL 挪到普查前、inproc fail-closed、nit ×6、pull-library 控制证据核查 | 进行中（ID-P7-38） |
-| V1 修复轮 | server 侧 read hook 红、poison 分角色、`MGPipeNeutralReadPixelsPack()`、逐条武装证明 + 具名例外表、措辞 | 进行中（Agent 通道） |
+| B2 r3 审查（fable） | transport 门控的真值域、默认 framebuffer pre-pass 的解析、新腿的读面 | 进行中；代码已在 pipe（ID-P7-40） |
+| B3 修复 r2 审查（fable） | 剥注释 / 字面量的边界、块回溯规则、自测覆盖、fail-closed 顺序、pull-library 控制 | 进行中；代码已在 pipe，门全绿（ID-P7-40） |
+| V1 修复轮审查（fable） | read 侧 corrupt 的两次施加、server 半边断言、逐条武装普查的双向性、例外表 5 类 | 进行中；代码已在 pipe（ID-P7-40） |
 | M2 | `VkBufferManager` serial 门控回收（不假设帧有界）+ `MOBILEGL_IPC_WIRE_DEFERRED_MB` 水位线 + spawn red-once | 进行中 |
 | F 修复轮（fable） | child 绑定后关 hand-off 端 + `MSG_DONTWAIT`（后续 DataBind 具名拒绝而非挂起）、listener 绑定后关、`protocol.fbs` 摘要 pin、旧 server + 新 client 症状写明、unix 配对 §12 债、nit ×6 | 进行中（ID-P7-39） |
 
@@ -74,4 +74,5 @@
 
 ## 6. 阻塞 / 需要人
 
-- P6.5 残余 39 例 TCP 矩阵（窗口 1b）等 WSL 主机路由：Arch 里 `sudo ip route add 192.168.21.181/32 via 192.168.31.1 dev eth0 metric 10`（设备 supervisor 在 `0.0.0.0:40613` 带 token，冻结制品 `~/w7/logs/p7w1b/host/`）。
+- ~~P6.5 残余 39 例 TCP 矩阵（窗口 1b）等 WSL 主机路由~~ **用户已加路由（2026-09-22 夜）**，矩阵在跑（p7w5 stamp 的主机制品 `~/w7/logs/p7w5host/host/` ↔ 手机 p7w5 server，ID-P7-40）。
+- 待修 flake：`InitialCapsStartup.ANullInitialSnapshotFailsInsteadOfStartingWithAPlaceholder` 在并发构建负载下的 pipe 门里连续两次红、单跑 3/3 绿（同族 `DelayedTcpSnapshot…` 曾有同样记录）。
