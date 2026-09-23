@@ -1351,6 +1351,11 @@ namespace {
     // A TEXTURE, NOT A BUFFER, and ScopedResourceOps with it: the scope is a texture concept,
     // and every non-buffer row is refused with RefusedNoConsumer unless a backend table is
     // registered - so without the scope this case would not reach the pin at all.
+    //
+    // The helpers are MOBILEGL_PIPE_PUSH-only, like the applier they read: a pull build compiles
+    // these two cases as skips (gate G2 keeps the names in every build), and MGPipeApplier() is
+    // not declared there.
+#if MOBILEGL_PIPE_PUSH
     MGPResourceDesc Tex2DDesc(MGPipeHandle res, Uint32 extent, Uint32 levels, Uint32 glName) {
         MGPResourceDesc desc{};
         desc.Resource = res;
@@ -1391,6 +1396,7 @@ namespace {
         }
         return false;
     }
+#endif // MOBILEGL_PIPE_PUSH
 
     // THE POSITIVE. A per-level producer that covers its declared range is accepted, and the
     // accumulated texels of every OTHER level survive it - which is the thing the pin was
