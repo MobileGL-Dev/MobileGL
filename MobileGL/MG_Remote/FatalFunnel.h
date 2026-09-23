@@ -44,8 +44,61 @@ namespace MobileGL::MG_Remote {
     void SessionFail(MGFatalFamily family, const char* fmt, ...);
 
     // How many times a session has ended through the funnel this process. Exit gate S8 asserts
-    // this is zero over a whole good run; a test reads it to prove the funnel was reached.
+    // this is zero over a whole good run; a test reads it to prove the funnel was reached. A
+    // latched fault (SessionLatch below) counts here too: it ends the session just as surely.
     ::std::uint64_t SessionFaultCount();
+
+    // ---- PH-1 (3), ID-P7-1: THE PER-SESSION LATCH ---------------------------------------
+    //
+    // WHAT IT IS. At a site whose input bytes the PEER wrote, and which already sits in a
+    // function that can say "no" (Bool / MobileGLResult), a named fault no longer has to kill the
+    // process: SessionLatch logs the SAME line SessionFail would (family word and all, so every
+    // `Fatal{` grep, the census and the SessionFault frame read exactly as before), publishes the
+    // SessionFault to the peer, records the FIRST fault (family + line), and RETURNS false. The
+    // site returns failure, the decoder declines, ServerLoop::DrainRing stops applying at its
+    // next check, the apply thread leaves its loop, and ServerMain::RunSession closes the session
+    // cleanly and exits kSessionLatchedExitCode - a named, counted end the supervisor reaps and
+    // then serves the next connection, exactly as P6.5's fork-per-session already does for a
+    // crash (ID-P7-1: "下一连接照常服务" is the supervisor's, not the latch's).
+    //
+    // WHERE IT IS ARMED, AND WHY ONLY THERE. ArmSessionLatch() is called by exactly one site:
+    // ServerMain::RunSession, i.e. the spawn / TCP session child (with or without --serve), whose
+    // process IS the session. Unarmed, SessionLatch IS SessionFail - same line, same abort - and
+    // that is the answer everywhere else, deliberately:
+    //   * INPROC keeps Fatal. CONTRACT-P5's R-2 arms (rules A/B/C, the four honesty arms) are
+    //     Fatal{ProtocolCorruption} in the formal wording, and under inproc the client and the
+    //     server share one process: a latched-but-alive server would leave the client's GL thread
+    //     parked on a barrier in the SAME process with no EOF to wake it, and there is no
+    //     supervisor to serve a "next connection" - the process is the session. So the latch
+    //     changes nothing inproc and every death test stays a death test.
+    //   * THE CLIENT never arms it: a client-side arm of a shared helper (the encoder's honesty
+    //     pass) is a local bug, not a peer's bytes.
+    // The census (scripts/ci/fatal_census.py rule 2) checks SessionLatch calls the way it checks
+    // SessionFail calls: the string must carry its `Fatal{Word` and the word must have a .def row.
+    void ArmSessionLatch();
+    bool SessionLatchArmed();
+    // True once the first fault has latched. One acquire load: DrainRing asks it per record.
+    bool SessionLatched();
+    // The first latched fault - its family and its line, verbatim. Meaningful only once
+    // SessionLatched() is true; the line's storage lives for the process.
+    MGFatalFamily SessionLatchedFamily();
+    const char* SessionLatchedLine();
+    // Every fault this armed process latched or declined after the first (>= 1 once latched).
+    ::std::uint64_t SessionLatchCount();
+
+    // The session child's exit status when its session ended on a latched fault. Distinct from
+    // RunSession's other codes (64-74) so the supervisor's reap line names it; nonzero, so it is
+    // counted in `sessionsFaulted` like every other fault.
+    inline constexpr int kSessionLatchedExitCode = 75;
+
+    // LATCH-OR-DIE. Armed: log + stderr echo + SessionFault (first fault only) + count, then
+    // return false, so a Bool site reads `return SessionLatch(...);`. Unarmed: SessionFail with
+    // the identical line (does not return).
+    bool
+#if defined(__GNUC__) || defined(__clang__)
+        __attribute__((format(printf, 2, 3)))
+#endif
+        SessionLatch(MGFatalFamily family, const char* fmt, ...);
 
     // P7 wave 0. Points MG_Pipe's MGPipeSessionFail seam (MG_Pipe/PipeSessionFail.h) at
     // SessionFail, which is what makes the three Magma wire funnels in MG_Backend's renderer

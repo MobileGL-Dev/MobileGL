@@ -426,6 +426,15 @@ namespace MobileGL::MG_Remote::Server {
             if (stopOrForfeit()) break;
             if (signals.EventRingFull->load(std::memory_order_acquire) == 0) DrainRing();
             if (stopOrForfeit()) break;
+            // PH-1 (3): a latched session applies nothing more, so this thread leaves the loop
+            // (and does not spin on a ring whose head is still ahead of a tail DrainRing will no
+            // longer move). The exit path below tears the backend down as for a Stop; the
+            // control connection's owner (ServerMain::RunSession) sees the latch and closes.
+            if (SessionLatched()) {
+                MGLOG_E("MG_Remote server: mgl-srv-apply leaves its loop - the session latched a "
+                        "named fault and declines the rest of the ring (PH-1)");
+                break;
+            }
             if (ready()) continue;
 
             const Uint64 waits = m_parks.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -627,11 +636,18 @@ namespace MobileGL::MG_Remote::Server {
         // the consumer's own m_localTail (Ring.cpp:222-232) - no mutex, no steady_clock, no
         // allocation; `applied == 0` then skips the retire block below entirely. Keep it that
         // way: anything added here runs ~900 times a frame doing nothing.
+        //
+        // PH-1 (3), ID-P7-1: THE LATCH CHECK, AT THE TOP AND BEFORE EVERY POP. Once a named fault
+        // has latched (an armed spawn / TCP session child only - unarmed this is one acquire load
+        // of a flag nobody sets), no further record is applied: the rest of the ring is declined
+        // unread, the apply thread leaves its loop, and RunSession closes the session by name.
+        if (SessionLatched()) return 0;
         ServerSession& session = *m_session;
         Transport::SessionConsumer& consumer = session.Consumer();
         PipeApplier& applier = session.Applier();
         Uint64 applied = 0;
         for (;;) {
+            if (SessionLatched()) break;
             bool corrupt = false;
             const bool popped = consumer.ApplyOne(
                 [this, &applier](const Transport::RingRecordView& record) {
@@ -654,10 +670,13 @@ namespace MobileGL::MG_Remote::Server {
             if (corrupt) {
                 // Ring.h's own rule: a header the producer could not have written is
                 // Fatal{ProtocolCorruption}, never a retry. Retrying re-reads the same bytes
-                // for ever; skipping desynchronises seq, and seq IS the reply-slot id.
-                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"SEG_CMD record header\"} - the "
+                // for ever; skipping desynchronises seq, and seq IS the reply-slot id. PH-1 (3):
+                // the header is the peer's bytes, so an armed session child latches here and
+                // stops reading the ring - neither a retry nor a skip.
+                (void)SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"SEG_CMD record header\"} - the "
                         "consumer refused a record header at applied seq %llu",
                         static_cast<unsigned long long>(consumer.AppliedSeq()));
+                break;
             }
             if (!popped) break;
             ++applied;
@@ -672,12 +691,15 @@ namespace MobileGL::MG_Remote::Server {
             // and PipeWireDecoder keeps its own count; a batched publish would move one and not
             // the other, which a single counter could not have told apart (w1-v1 5).
             if (applier.DecoderAppliedSeq() != consumer.AppliedSeq()) {
-                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"appliedSeq batched\"} - the "
+                // PH-1 (3): latched, and nothing is retired against a watermark this side no
+                // longer believes.
+                (void)SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"appliedSeq batched\"} - the "
                         "session's watermark is %llu and the decoder applied %llu records. P5 "
                         "forbids batching appliedSeq (R-9): the verb barrier's waiter reads it, "
                         "and a watermark ahead of the decoder promises work that has not run",
                         static_cast<unsigned long long>(consumer.AppliedSeq()),
                         static_cast<unsigned long long>(applier.DecoderAppliedSeq()));
+                return applied;
             }
             // RETIRE. MANDATORY, not optional: RingProducer::FreeBytes() reclaims against
             // retiredTail only, and w1's SEG_STAGE linear allocator reclaims on retiredSeq - so
@@ -917,23 +939,30 @@ namespace MobileGL::MG_Remote::Server {
         // WindowHandle, so an out-of-range tag is a memory-corruption shape, not bad input -
         // same discipline as the ring's Fatal{ProtocolCorruption} on a header the producer could
         // not have written.
-        MG_Backend::WindowBackend WindowBackendFromFrameValue(Int value) {
+        //
+        // PH-1 (3): false = the refusal latched (an armed spawn / TCP session child, where the
+        // frame's values came off the wire through SurfaceOpCodec). Under spawn the codec has
+        // already mapped the wire WindowKind onto a legal tag, so this arm is defence in depth
+        // there; unarmed it still dies.
+        Bool WindowBackendFromFrameValue(Int value, MG_Backend::WindowBackend* out) {
             if (value < static_cast<Int>(MG_Backend::WindowBackend::Unknown) ||
                 value >= static_cast<Int>(MG_Backend::WindowBackend::WindowBackendCount)) {
-                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp.windowBackend\"} - a "
+                return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp.windowBackend\"} - a "
                         "control frame carried window backend tag %d, which names no "
                         "WindowBackend", value);
             }
-            return static_cast<MG_Backend::WindowBackend>(value);
+            *out = static_cast<MG_Backend::WindowBackend>(value);
+            return true;
         }
 
-        MG_Backend::WindowHandle UnpackWindowHandle(const SurfaceControlFrame& frame) {
+        Bool UnpackWindowHandle(const SurfaceControlFrame& frame, MG_Backend::WindowHandle* out) {
             MG_Backend::WindowHandle handle;
-            handle.Backend = WindowBackendFromFrameValue(frame.windowBackend);
+            if (!WindowBackendFromFrameValue(frame.windowBackend, &handle.Backend)) return false;
             handle.Handle = HandleFromToken<void*>(frame.nativeToken);
             handle.Width = static_cast<Uint32>(frame.width);
             handle.Height = static_cast<Uint32>(frame.height);
-            return handle;
+            *out = handle;
+            return true;
         }
 
         // P7 CI. THE TEST LEVER FOR THE CLIENT'S COLD-START BUDGET (ClientSession.cpp,
@@ -1003,8 +1032,13 @@ namespace MobileGL::MG_Remote::Server {
             return MOBILEGL_OK;
         }
         case SurfaceControlOp::CreateWindowSurface: {
+            MG_Backend::WindowHandle window;
+            if (!UnpackWindowHandle(frame, &window)) {
+                frame.ok = false;
+                return MOBILEGL_ERR_PROTOCOL_MISMATCH; // PH-1 (3): latched
+            }
             frame.ok = backend->CreateEGLWindowSurface(HandleFromToken<EGLSurface>(frame.surface),
-                                                       UnpackWindowHandle(frame));
+                                                       window);
             // N-3: BackendObject_DirectGLES destroys and recreates the native context to create
             // a DIFFERENT surface, so whatever tuple was bound names a dead context.
             if (frame.ok) ForgetCurrentTuple();
@@ -1103,10 +1137,16 @@ namespace MobileGL::MG_Remote::Server {
             ForgetCurrentTuple();
             frame.ok = true;
             return MOBILEGL_OK;
-        case SurfaceControlOp::SetWindowHandle:
-            backend->SetWindowHandle(UnpackWindowHandle(frame));
+        case SurfaceControlOp::SetWindowHandle: {
+            MG_Backend::WindowHandle window;
+            if (!UnpackWindowHandle(frame, &window)) {
+                frame.ok = false;
+                return MOBILEGL_ERR_PROTOCOL_MISMATCH; // PH-1 (3): latched
+            }
+            backend->SetWindowHandle(window);
             frame.ok = true;
             return MOBILEGL_OK;
+        }
         case SurfaceControlOp::InitCapabilities:
             // Inproc-only (f0-egl §4.2): on the wire the ANSWER to this op is the CapsSnapshot
             // frame itself, so there is no SurfaceOp kind for it. The frame channel still has to
@@ -1142,8 +1182,12 @@ namespace MobileGL::MG_Remote::Server {
         // A kind the switch does not know never legitimately posts (RunSurfaceControlFrame
         // refuses None), so reaching this line means the slot's bytes were not written by the
         // poster at all - the ring's Fatal{ProtocolCorruption} discipline, one channel over.
-        SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp.kind\"} - the control slot held "
+        // PH-1 (3): latched in an armed session child (under spawn SurfaceOpCodec has already
+        // refused an unknown wire kind, so this is defence in depth); unarmed it dies.
+        frame.ok = false;
+        (void)SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp.kind\"} - the control slot held "
                 "kind %d, which names no dispatchable op", static_cast<int>(frame.kind));
+        return MOBILEGL_ERR_PROTOCOL_MISMATCH;
     }
 
     // ---------------------------------------------------------------------------------

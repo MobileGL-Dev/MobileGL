@@ -6,6 +6,7 @@
 #include "../Transport/WireLog.h"
 #include "../Protocol/SurfaceOpCodec.h"
 #include "../Handshake.h"
+#include "../FatalFunnel.h"
 #include "ServerLoop.h"
 #include "ServerSession.h"
 #include "SurfaceControlFrame.h"
@@ -245,6 +246,11 @@ void SendLogAck(void* pointer) {
     MobileGL::MG_ConfigLoader::Init();
     MobileGL::MG_Config::Transport = MobileGL::MG_Config::TransportMode::Spawn;
     MobileGL::MG_Pipe::MGPipeSetServerProcessRole(true);
+    // PH-1 (3), ID-P7-1: THIS PROCESS IS THE SESSION, so a named fault on the peer's bytes may end
+    // it cleanly instead of aborting it (FatalFunnel.h's latch block). Armed here and nowhere
+    // else: inproc keeps every Fatal (client and server share that process), and the supervisor
+    // that forked this child never applies a record.
+    ArmSessionLatch();
     // The child bypasses MobileGL::Initialize: arm its own role counters.
     MobileGL::MG_Util::PipeStats::Init();
     const auto backend = static_cast<MobileGL::BackendType>(hello->backendType());
@@ -368,15 +374,26 @@ void SendLogAck(void* pointer) {
     // this child would sit here, holding the supervisor's one session slot, answering every
     // later client Busy. Now each quiet interval asks whether the apply thread is still there;
     // when it is not (forfeit, or a dead data bell), the session takes the ordinary exit below:
-    // Stop, Close, _exit(0). The interval is the supervisor's own accept poll.
+    // Stop, Close, _exit(0). (PH-6 used the supervisor's 250 ms accept poll as the interval; the
+    // PH-1 note below says why the slice is now 100 ms.)
     //
     // ASKED AT THE TOP OF EVERY TURN, NOT ONLY WHEN A WAIT TIMES OUT (PH-6 fix round). A peer that
     // forfeited the reverse channel but keeps TALKING - a LogFlush or a surface op more often than
     // every 250 ms, each of which this loop answers - never let ReceiveFrame time out, so the
     // question was never asked and the session, with the supervisor's one slot, lived as long as
     // the peer kept chattering.
-    constexpr std::uint32_t kControlPollMs = 250;
+    //
+    // PH-1 (3): the same wait is also how a LATCH raised on the apply thread (the decoder, the
+    // applier, DrainRing) ends this loop within one slice while the peer is silent. ReceiveFrame
+    // keeps a partial frame in its reassembler across a timeout, so slicing loses no bytes; a
+    // latched session is then closed below with kSessionLatchedExitCode. The latch is asked
+    // BEFORE the apply thread's liveness because a latch also stops that thread (it leaves its
+    // loop and clears m_running), and the session must be named by its latch, not as a stopped
+    // apply thread. One slice serves both: the latch's 100 ms (PH-6 had 250 ms; the shorter wait
+    // only asks the question more often).
+    constexpr std::uint32_t kControlSliceMs = 100;
     for (;;) {
+        if (SessionLatched()) break;
         if (!loop.Running()) {
             WireLogError("MG_Remote server: pid=%d the apply thread has stopped (%s, %llu event(s) dropped); "
                          "ending the session",
@@ -385,7 +402,7 @@ void SendLogAck(void* pointer) {
             break;
         }
         std::uint64_t size = 0;
-        const auto result = control->ReceiveFrame({buffer.data(), buffer.size()}, &size, kControlPollMs);
+        const auto result = control->ReceiveFrame({buffer.data(), buffer.size()}, &size, kControlSliceMs);
         if (result == MOBILEGL_ERR_TIMEOUT) continue;
         if (result == MOBILEGL_ERR_BUFFER_TOO_SMALL) { buffer.resize(static_cast<std::size_t>(size)); continue; }
         if (result != MOBILEGL_OK) {
@@ -454,6 +471,9 @@ void SendLogAck(void* pointer) {
         if (!operation) break;
         Server::SurfaceControlFrame reply{};
         (void)ServerApplyWireSurfaceOp(*operation, &reply);
+        // PH-1 (3): an op that latched (its own bytes, or a record the apply thread was on) is
+        // answered by the SessionFault already sent and the close below, not by a reply.
+        if (SessionLatched()) break;
         session.FlushDataProgress();
         if (session.DataLink()) reply.eventHead = session.DataLink()->EventPublishedHead();
         flatbuffers::FlatBufferBuilder builder(256);
@@ -466,11 +486,22 @@ void SendLogAck(void* pointer) {
     loop.Stop();
     // Publish the final server window while log forwarding is still attached.
     MobileGL::MG_Util::PipeStats::Shutdown();
+    // PH-1 (3): a latched session ends HERE, by the same orderly path as a peer's EOF - the apply
+    // thread has already left its loop and destroyed the backend on its own thread (loop.Stop()
+    // joined it), the session closes, and the exit status names the latch so the supervisor
+    // counts it. The first fault's line was logged (and sent as a SessionFault) when it latched.
+    const bool latched = SessionLatched();
+    if (latched) {
+        WireLogError("MG_Remote server: pid=%d session closed on a latched fault (%s; %llu named "
+                     "fault(s) latched or declined); exiting %d for the supervisor to reap - PH-1",
+                     selfPid, FatalFamilyName(SessionLatchedFamily()),
+                     static_cast<unsigned long long>(SessionLatchCount()), kSessionLatchedExitCode);
+    }
     session.Close();
     MobileGL::MG_Util::Debug::SetLogForwarder(nullptr, nullptr);
     // _exit closes control after cleanup/flush; peer EOF is the client's fence.
     std::fflush(nullptr);
-    ::_exit(0);
+    ::_exit(latched ? kSessionLatchedExitCode : 0);
 }
 
 // P7 wave 0, Ph slice (1) (ID-P7-1). THE SUPERVISOR OBSERVES AND NAMES A SESSION'S DEATH.
@@ -498,8 +529,11 @@ bool ReapActiveSession(pid_t& active, unsigned long& sessionsFaulted) {
     if (WIFEXITED(status)) {
         const int code = WEXITSTATUS(status);
         if (code != 0) ++sessionsFaulted;
-        WireLogError("MG_Remote server: session pid=%d reaped exit=%d sessionsFaulted=%lu",
-                     reaped, code, sessionsFaulted);
+        // PH-1 (3): a latched session is a named, orderly end - still a fault (counted), and said
+        // as one so the reap line alone tells it from a crash or a refused bring-up.
+        WireLogError("MG_Remote server: session pid=%d reaped exit=%d%s sessionsFaulted=%lu",
+                     reaped, code, code == kSessionLatchedExitCode ? " (latched fault)" : "",
+                     sessionsFaulted);
     } else if (WIFSIGNALED(status)) {
         ++sessionsFaulted;
         WireLogError("MG_Remote server: session pid=%d reaped signal=%d sessionsFaulted=%lu",

@@ -34,6 +34,7 @@
 //   the boundary               before the data plane needs it.
 
 #include <MG_Remote/Client/ClientSession.h>
+#include <MG_Remote/FatalFunnel.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Remote/Server/ServerSpawn.h>
 #include <MG_Remote/Transport/Doorbell.h>
@@ -290,12 +291,20 @@ TEST(ServerSpawnTest, ARawPeerMutatesARecordAfterTheClientEncoderAcceptedIt) {
         }
     }
     ASSERT_EQ(reaped, MOBILEGL_OK) << "server did not reject the mutated record promptly";
-    EXPECT_EQ(exitCode, -SIGABRT) << "the malformed opcode did not reach the server decoder";
+    // PH-1 (3): the opcode is the peer's byte, so the session child LATCHES by name (the
+    // decoder's pre-gate asks the generated gate's question first) and closes with
+    // kSessionLatchedExitCode instead of aborting in MGPipeWireProtocolFatal, whose line carries
+    // no `Fatal{` marker at all. Red-once: drop AdmitsTheGeneratedGate and this reads -SIGABRT and
+    // "protocol corruption applying <unknown opcode>" again.
+    EXPECT_EQ(exitCode, MobileGL::MG_Remote::kSessionLatchedExitCode)
+        << "the malformed opcode did not latch the session by name";
     const std::string log = MobileGL::MG_Util::Debug::ReadRoleLogs(logBase.c_str());
-    EXPECT_NE(log.find("protocol corruption applying"), std::string::npos)
-        << "the server process exited without the protocol corruption diagnostic";
-    EXPECT_NE(log.find("unknown opcode"), std::string::npos)
-        << "the malformed opcode was not identified in the server log";
+    EXPECT_NE(log.find("Fatal{ProtocolCorruption, \"opcode\"} got=65535"), std::string::npos)
+        << "the server process exited without the named opcode fault";
+    EXPECT_NE(log.find("SessionLatch{ProtocolCorruption}"), std::string::npos)
+        << "the fault was not latched";
+    EXPECT_EQ(log.find("protocol corruption applying"), std::string::npos)
+        << "the record reached the generated gate's unnamed death";
     client.Stop();
 }
 

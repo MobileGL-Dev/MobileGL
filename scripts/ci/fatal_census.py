@@ -67,8 +67,9 @@ THE FOUR RULES, spelled out rather than inferred:
 
   1. an abort's `Fatal{Word` marker is within kMarkerWindow lines above it, OR the abort is
      exempted by FUNNEL_FILES / FUNNEL_SITES;
-  2. every WireLogFatal / SessionFail call carries a `Fatal{` in its format string - a funnel that
-     accepted an unmarked string would launder exactly what rule 1 refuses;
+  2. every WireLogFatal / SessionFail / SessionLatch call carries a `Fatal{` in its format string -
+     a funnel that accepted an unmarked string would launder exactly what rule 1 refuses (PH-1 (3)
+     added SessionLatch, the per-session latch-or-die twin of SessionFail);
   3. every family word found in the perimeter has a row in FatalFamilies.def. a6's finding was a
      30-word vocabulary against a 7-value wire enum; the .def is the projection that bounds the
      divergence, and a word with no row projects onto nothing at all;
@@ -173,6 +174,12 @@ WIRE_LOG_FATAL_CALL = re.compile(r"WireLogFatal\s*\(")
 # and it reported MG_Pipe's own seam - whose callers carry the word exactly as SessionFail's do -
 # for being a SessionFail call with no word in its DECLARATION.
 SESSION_FAIL_CALL = re.compile(r"(?<![A-Za-z0-9_])SessionFail\s*\(")
+# PH-1 (3), ID-P7-1: the per-session latch (FatalFunnel.h SessionLatch) is SessionFail's
+# latch-or-die twin - unarmed it IS SessionFail, armed it logs the same line and returns - so its
+# calls are held to the same rule: the string carries its `Fatal{Word`, and rule 3 then holds the
+# word to FatalFamilies.def. Without this, converting a site from SessionFail to SessionLatch
+# would quietly take it out of the census.
+SESSION_LATCH_CALL = re.compile(r"(?<![A-Za-z0-9_])SessionLatch\s*\(")
 FAMILY_ROW = re.compile(r"^\s*X\(([A-Za-z][A-Za-z0-9]*)\s*,", re.MULTILINE)
 REFUSE_ENUM = re.compile(r"enum\s+RefuseCode\s*:[^{]*\{(.*?)\}", re.DOTALL)
 ENUM_VALUE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9]*)\s*=", re.MULTILINE)
@@ -302,7 +309,8 @@ def census():
             # Rule 2: every WireLogFatal / SessionFail call carries a family word in its string.
             # window covers its continuation lines.
             for index, line in enumerate(lines):
-                if not (WIRE_LOG_FATAL_CALL.search(line) or SESSION_FAIL_CALL.search(line)):
+                if not (WIRE_LOG_FATAL_CALL.search(line) or SESSION_FAIL_CALL.search(line) or
+                        SESSION_LATCH_CALL.search(line)):
                     continue
                 window = "\n".join(lines[index:index + kMarkerWindow])
                 if not MARKER.search(window):

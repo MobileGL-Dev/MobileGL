@@ -209,6 +209,8 @@ namespace MobileGL::MG_Remote::Client {
             RequireClientTablesInstalled(slot);
             ClientSession* session = ClientSession::Active();
             if (session == nullptr) {
+                // @Ph-declined (ID-P7-1): returns ClientSession& and runs in the CLIENT - no
+                // session to hand back, no peer bytes, and the latch is a server-session idea.
                 SessionFail(MGFatalFamily::NoClientSession, "MGPipe: Fatal{NoClientSession, \"%s\"} - the remote emit table is "
                         "installed but no ClientSession is active. A slot may not fall through "
                         "to a driver this role does not have",

@@ -341,7 +341,9 @@ namespace MobileGL::MG_Remote::Server {
         // is a protocol fault, because such a client is pacing on this answer and a 0 would
         // acknowledge a frame nobody asked about.
         if (present.FrameSerial == 0 && MGPipeServerPublishesRunAhead()) {
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"Present.FrameSerial\"} - a run-ahead "
+            // PH-1 (3): latches in an armed session child - no credit is returned for it, the
+            // session closes and the peer's credit wait ends on the hang-up.
+            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"Present.FrameSerial\"} - a run-ahead "
                     "server was handed present serial 0. The client mints this 1-based and "
                     "waits on it for its credit (CONTRACT-P5E §2.4); returning a credit for "
                     "serial 0 would release a wait that is asking about frame N");
@@ -502,8 +504,11 @@ namespace MobileGL::MG_Remote::Server {
     // slot flipped on the client ahead of its server half aborts BY NAME on the apply thread
     // rather than rendering nothing. Named "(server sink)" in the message so a log reader can
     // tell which half is missing.
-    [[noreturn]] static void ServerUnmigratedVerbFatal(const char* slot) {
-        SessionFail(MGFatalFamily::UnmigratedVerb, "MGPipe: Fatal{UnmigratedVerb, \"%s\"} (server sink: the record crossed and "
+    //
+    // PH-1 (3): the shape is the PEER's (a multi-draw record it chose to send), so in an armed
+    // session child the refusal latches and the verb returns false; unarmed it still dies.
+    static Bool ServerUnmigratedVerbLatch(const char* slot) {
+        return SessionLatch(MGFatalFamily::UnmigratedVerb, "MGPipe: Fatal{UnmigratedVerb, \"%s\"} (server sink: the record crossed and "
                 "ServerVerbSink has no body for it yet - CONTRACT-P5B.md names the package)",
                 slot);
     }
@@ -567,13 +572,16 @@ namespace MobileGL::MG_Remote::Server {
         // "both counts are still 0", and it is distinguishable from the narrowing this refuses
         // (a narrowed window carries a non-zero count that is merely too small). The moment
         // either set has been received, the rule binds.
-        void CheckUnitWindows(const MG_Pipe::MGPipeApplierState& st, const char* verb) {
-            if (st.SamplerViewCount == 0 && st.SamplerStateCount == 0) return;
+        //
+        // PH-1 (3): both windows are the PEER's records, so the refusals latch in an armed
+        // session child (false = latched, the verb declines); unarmed they still die.
+        Bool CheckUnitWindows(const MG_Pipe::MGPipeApplierState& st, const char* verb) {
+            if (st.SamplerViewCount == 0 && st.SamplerStateCount == 0) return true;
             const Int maxTouched = MG_Pipe::gPipeInputs.GetMaxTouchedTextureUnit();
-            if (maxTouched < 0) return;
+            if (maxTouched < 0) return true;
             const Uint32 required = static_cast<Uint32>(maxTouched) + 1u;
             if (st.SamplerViewStart != 0 || st.SamplerViewCount < required) {
-                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"SetSamplerViews.Count\"} - %s applies with "
+                return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"SetSamplerViews.Count\"} - %s applies with "
                         "units 0..%d touched, so set_sampler_views must carry Start=0 and Count >= %u "
                         "(CONTRACT-P5E.md §5.3); the applied window is Start=%u Count=%u, which drops "
                         "the sync of at least one texture this draw samples",
@@ -581,13 +589,14 @@ namespace MobileGL::MG_Remote::Server {
                         st.SamplerViewCount);
             }
             if (st.SamplerStateStart != 0 || st.SamplerStateCount < required) {
-                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"BindSamplerStates.Count\"} - %s applies with "
+                return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"BindSamplerStates.Count\"} - %s applies with "
                         "units 0..%d touched, so bind_sampler_states must carry Start=0 and Count >= %u "
                         "(CONTRACT-P5E.md §5.3); the applied window is Start=%u Count=%u, which leaves "
                         "an earlier draw's sampler object on at least one unit",
                         verb, static_cast<int>(maxTouched), required, st.SamplerStateStart,
                         st.SamplerStateCount);
             }
+            return true;
         }
     } // namespace
 #endif
@@ -596,8 +605,8 @@ namespace MobileGL::MG_Remote::Server {
                                    const MG_Pipe::MGPDrawRange* ranges,
                                    const MG_Pipe::MGHostSpan* userIndices,
                                    const MG_Pipe::MGPDrawIndirect* indirect) {
-        if (userIndices != nullptr) {
-            Wire::CheckDrawUserIndices(info, ranges, *userIndices);
+        if (userIndices != nullptr && !Wire::CheckDrawUserIndices(info, ranges, *userIndices)) {
+            return false; // PH-1 (3): latched (armed session child); unarmed it died inside
         }
         // The witness first, before the backend is consulted, so a unit process with no
         // backend object still sees the wire's fields (PipeApplier.h LastDraw).
@@ -617,7 +626,7 @@ namespace MobileGL::MG_Remote::Server {
 #if MOBILEGL_BUILD_DISAGGREGATED
         // Ruling 19 / ID-95: the window promise, checked at every draw, before the backend is
         // asked to resolve anything out of the windows.
-        CheckUnitWindows(MG_Pipe::MGPipeApplier(), "draw_vbo");
+        if (!CheckUnitWindows(MG_Pipe::MGPipeApplier(), "draw_vbo")) return false;
 #endif
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("draw_vbo");
         if (table == nullptr) return false;
@@ -694,12 +703,12 @@ namespace MobileGL::MG_Remote::Server {
         // ---- the multi-draws: the two arrays rebuilt from the ranges (rule C) --------------
         if (info.NumDraws != 1) {
             if (userIndices != nullptr) {
-                ServerUnmigratedVerbFatal(info.IndexSize == 0 ? "MultiDrawArrays+CLIENT_INDICES"
-                                                              : "MultiDrawElements+CLIENT_INDICES");
+                return ServerUnmigratedVerbLatch(info.IndexSize == 0 ? "MultiDrawArrays+CLIENT_INDICES"
+                                                                     : "MultiDrawElements+CLIENT_INDICES");
             }
             if (instanced) {
-                ServerUnmigratedVerbFatal(info.IndexSize == 0 ? "MultiDrawArrays+INSTANCED"
-                                                              : "MultiDrawElements+INSTANCED");
+                return ServerUnmigratedVerbLatch(info.IndexSize == 0 ? "MultiDrawArrays+INSTANCED"
+                                                                     : "MultiDrawElements+INSTANCED");
             }
             const auto n = static_cast<SizeT>(info.NumDraws);
             m_multiCounts.resize(n);
@@ -840,7 +849,7 @@ namespace MobileGL::MG_Remote::Server {
     Bool ServerVerbSink::OnLaunchGrid(const MG_Pipe::MGPGridInfo& grid) {
 #if MOBILEGL_BUILD_DISAGGREGATED
         // Ruling 19 / ID-95: a dispatch samples through the same unit windows a draw does.
-        CheckUnitWindows(MG_Pipe::MGPipeApplier(), "launch_grid");
+        if (!CheckUnitWindows(MG_Pipe::MGPipeApplier(), "launch_grid")) return false;
 #endif
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("launch_grid");
         if (table == nullptr) return false;
@@ -1164,8 +1173,9 @@ namespace MobileGL::MG_Remote::Server {
         // session, so the only legal sequence is 0, 1, 2, ... and the session's own count of
         // accepted resets IS the expected value; anything else means the two ends disagree
         // about how many make-current edges have crossed, which no backend answer can fix.
+        // PH-1 (3): latches in an armed session child (the peer wrote the serial); dies unarmed.
         if (reset.ContextSerial != m_applierResetSerial) {
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ApplierReset.ContextSerial\"} - the "
+            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ApplierReset.ContextSerial\"} - the "
                     "record carries %llu and this session has accepted %llu reset(s); the "
                     "serial is asserted against the session's own count, not dispatched on "
                     "(one context per session in P5c)",
@@ -1186,13 +1196,14 @@ namespace MobileGL::MG_Remote::Server {
         // §1's zero ruling: a null handle means "the object never crossed", and the client
         // emits NOTHING in that case (§5.2) - so a null handle arriving here is corruption,
         // not a no-op.
+        // PH-1 (3): both refusals latch in an armed session child; unarmed they die as before.
         if (MG_Pipe::MGPipeHandleIsNull(death.Handle)) {
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ObjectDeath.Handle\"} - a null "
+            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ObjectDeath.Handle\"} - a null "
                     "handle never crosses: the client emits nothing for an object its own "
                     "allocator cannot resolve (CONTRACT-P5C.md §5.2)");
         }
         if (death.Kind >= static_cast<Uint32>(MG_Pipe::MGPipeKind::KindCount)) {
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ObjectDeath.Kind\"} - %u is not an "
+            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ObjectDeath.Kind\"} - %u is not an "
                     "MGPipeKind",
                     static_cast<unsigned>(death.Kind));
         }

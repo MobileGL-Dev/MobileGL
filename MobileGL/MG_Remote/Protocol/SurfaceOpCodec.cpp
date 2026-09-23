@@ -205,28 +205,40 @@ namespace MobileGL::MG_Remote {
     }
 
     MobileGLResult ServerApplyWireSurfaceOp(const ::MobileGL::Wire::SurfaceOp& op, SurfaceControlFrame* replyOut) {
+        // PH-1 (3), ID-P7-1: a latched session answers no further control op. RunSession stops
+        // reading the control connection once it sees the latch; this covers the op it may
+        // already be holding.
+        if (SessionLatched()) return MOBILEGL_ERR_PROTOCOL_MISMATCH;
         SurfaceControlFrame frame;
         const SurfaceWireError error = DecodeWireSurfaceOp(op, &frame);
         if (error != SurfaceWireError::None) {
+            // PH-1 (3): the op's bytes are the peer's. Each of the three refusals latches in an
+            // armed session child and the op is answered with no dispatch; unarmed they die.
             if (error == SurfaceWireError::AndroidNativeWindowArrived) {
-                SessionFail(MGFatalFamily::UnmigratedSurface,
+                (void)SessionLatch(MGFatalFamily::UnmigratedSurface,
                         "MGPipe: Fatal{UnmigratedSurface, \"AndroidNativeWindow@P12\"} - a wire "
                         "SurfaceOp (%s) named an ANativeWindow*, which is a pointer into the "
                         "CLIENT's process and means nothing here. Real window arrival is P12; "
                         "until then the spawn surface path is pbuffer/surfaceless only",
                         ::MobileGL::Wire::EnumNameSurfaceOpKind(op.kind()));
             } else if (error == SurfaceWireError::MetalLayerArrived) {
-                SessionFail(MGFatalFamily::UnmigratedSurface,
+                (void)SessionLatch(MGFatalFamily::UnmigratedSurface,
                         "MGPipe: Fatal{UnmigratedSurface, \"MetalLayer@P12\"} - a wire "
                         "SurfaceOp named a CAMetalLayer* in the CLIENT's process. "
                         "Real window arrival is P12");
             } else {
-                SessionFail(MGFatalFamily::ProtocolCorruption,
+                (void)SessionLatch(MGFatalFamily::ProtocolCorruption,
                         "MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp\"} - a wire surface op "
                         "failed validation: %s (wire kind %u, window kind %u)",
                         SurfaceWireErrorName(error), static_cast<unsigned>(op.kind()),
                         static_cast<unsigned>(op.windowKind()));
             }
+            if (replyOut != nullptr) {
+                *replyOut = SurfaceControlFrame{};
+                replyOut->seq = op.seq();
+                replyOut->ok = false;
+            }
+            return MOBILEGL_ERR_PROTOCOL_MISMATCH;
         }
         const MobileGLResult rc = Server::ServerLoopInstance().RunSurfaceControlFrame(frame);
         if (replyOut != nullptr) *replyOut = frame;

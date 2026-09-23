@@ -281,6 +281,17 @@ namespace MobileGL::MG_Remote::Wire {
         static_assert(sizeof(kWirePayloadBytes) / sizeof(kWirePayloadBytes[0]) ==
                           static_cast<SizeT>(MGPWireOp::kOpCount));
 
+        // PH-1 (3): the pre-gate in DecodeAndApply (AdmitsTheGeneratedGate) asks "shorter than
+        // its own type" with this file's payload list, and the generated MGP_WIRE_CHECK_BOUNDS
+        // asks it with sizeof(MGPWireRec_X). Pinned equal row by row, so a record the pre-gate
+        // admits can never be one the generated gate would still abort on.
+#define MGPW_REC_ROW(Name, Payload)                                                            \
+        static_assert(sizeof(MG_Pipe::MGPWireRec_##Name) ==                                    \
+                          Align8(sizeof(MGPWireRecHeader) + sizeof(MG_Pipe::Payload)),         \
+                      "MGPWireRec_" #Name " and this file's payload row disagree on size");
+        MGPW_FOR_EACH_CALL(MGPW_REC_ROW)
+#undef MGPW_REC_ROW
+
         // The header's Size field is 32 bits by wire contract (Ring.h's kMaxRingCapacity
         // comment). Every count-derived total is checked against this BEFORE it is used, so a
         // corrupt Count can never wrap the arithmetic that is supposed to catch it.
@@ -389,6 +400,18 @@ namespace MobileGL::MG_Remote::Wire {
                 static_cast<unsigned long long>(got), static_cast<unsigned long long>(expected));
     }
 
+    // PH-1 (3): the same two lines through the latch (PipeWireCodec.h says where each is used).
+    Bool WireProtocolLatch(const char* what, const char* detail) {
+        return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} %s", what,
+                            detail != nullptr ? detail : "");
+    }
+
+    Bool WireProtocolLatchAt(const char* what, Uint64 got, Uint64 expected) {
+        return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} got=%llu expected=%llu",
+                            what, static_cast<unsigned long long>(got),
+                            static_cast<unsigned long long>(expected));
+    }
+
     // ---------------------------------------------------------------------------------
     // SegmentTable
     // ---------------------------------------------------------------------------------
@@ -472,22 +495,22 @@ namespace MobileGL::MG_Remote::Wire {
     // R-2's honesty arms
     // ---------------------------------------------------------------------------------
 
-    void CheckBlobIsHonest(MGPWireOp op, const MGPBlobRef& blob, const SegmentTable& segments) {
+    Bool CheckBlobIsHonest(MGPWireOp op, const MGPBlobRef& blob, const SegmentTable& segments) {
         if (blob.Size == 0) {
             if (blob.Seg != kSegNone || blob.Offset != 0) {
                 // The monolith shape: Seg = None, Offset = a host address, Size = 0. Legal
                 // there, and precisely what must not cross (rule A). Reading it as "absent"
                 // would silently drop the bytes of every record an unconverted emitter sent.
-                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} a blob with Size 0 "
+                return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} a blob with Size 0 "
                         "declares Seg=%u Offset=%llu; under split a blobref is either fully "
                         "declared or all three fields zero",
                         WireOpName(op), static_cast<unsigned>(blob.Seg),
                         static_cast<unsigned long long>(blob.Offset));
             }
-            return;
+            return true;
         }
         if (blob.Seg == kSegNone) {
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} Size=%llu with no segment "
+            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} Size=%llu with no segment "
                     "(R-2.3): a non-zero Size must name a real SEG_*",
                     WireOpName(op), static_cast<unsigned long long>(blob.Size));
         }
@@ -511,7 +534,7 @@ namespace MobileGL::MG_Remote::Wire {
         // seventh name would be a token nothing else in the tree recognises. The SEGMENT is in
         // the message, which is what has to be greppable.
         if (blob.Seg != kSegStage) {
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} seg=%u offset=%llu "
+            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} seg=%u offset=%llu "
                     "size=%llu is not SEG_STAGE(%u); every client->server content blob is "
                     "staged whole in SEG_STAGE (contract table 1 groups A/B/C, R-10) and no "
                     "other segment may carry one",
@@ -521,45 +544,47 @@ namespace MobileGL::MG_Remote::Wire {
                     static_cast<unsigned>(kSegStage));
         }
         if (segments.Resolve(blob.Seg, blob.Offset, blob.Size) == nullptr) {
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} seg=%u offset=%llu size=%llu "
+            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} seg=%u offset=%llu size=%llu "
                     "does not lie inside that segment (R-2.3)",
                     WireOpName(op), static_cast<unsigned>(blob.Seg),
                     static_cast<unsigned long long>(blob.Offset),
                     static_cast<unsigned long long>(blob.Size));
         }
+        return true;
     }
 
-    void RequireDeclaredBlob(MGPWireOp op, const MGPBlobRef& blob, const SegmentTable& segments) {
+    Bool RequireDeclaredBlob(MGPWireOp op, const MGPBlobRef& blob, const SegmentTable& segments) {
         if (blob.Size == 0) {
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} the record's own fields say "
+            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} the record's own fields say "
                     "it carries content and its blob declares none (R-2.2 / rule A)",
                     WireOpName(op));
         }
-        CheckBlobIsHonest(op, blob, segments);
+        return CheckBlobIsHonest(op, blob, segments);
     }
 
-    void CheckHostSpanIsHonest(const MGHostSpan& span) {
+    Bool CheckHostSpanIsHonest(const MGHostSpan& span) {
         if (span.Ptr != nullptr) {
             // Rule B. In one address space this pointer WORKS, which is the whole reason the
             // rule has to be mechanical: an inproc implementation that kept using it is
             // indistinguishable from a correct one until the day it is a second process.
-            WireProtocolFatal("host-span",
-                              "MGHostSpan::Ptr is non-null under split; the encoder writes "
-                              "nullptr and names SEG_STAGE (R-2.1)");
+            return WireProtocolLatch("host-span",
+                                     "MGHostSpan::Ptr is non-null under split; the encoder writes "
+                                     "nullptr and names SEG_STAGE (R-2.1)");
         }
         if (span.Size != 0 && span.Seg == kMGHostSpanSegNone) {
-            WireProtocolFatalAt("host-span.seg", span.Size, 0);
+            return WireProtocolLatchAt("host-span.seg", span.Size, 0);
         }
         if (span.Size == 0 && span.Seg != kMGHostSpanSegNone) {
-            WireProtocolFatalAt("host-span.size", span.Seg, 0);
+            return WireProtocolLatchAt("host-span.size", span.Seg, 0);
         }
+        return true;
     }
 
-    void CheckHostSpanIsHonest(const MGHostSpan& span, const SegmentTable& segments) {
-        CheckHostSpanIsHonest(span);
+    Bool CheckHostSpanIsHonest(const MGHostSpan& span, const SegmentTable& segments) {
+        if (!CheckHostSpanIsHonest(span)) return false;
         if (span.Size == 0) {
             // Fully absent, and the arms above already proved Seg agrees with that.
-            return;
+            return true;
         }
         // ARM 4, WHICH THE OTHER OVERLOAD CANNOT DO. A span naming a real segment and a run
         // past the end of it used to pass every check and reach WireVerbSink::OnDrawVbo, which
@@ -569,32 +594,34 @@ namespace MobileGL::MG_Remote::Wire {
         // resolver, reads outside the segment. P5 emits no spans, so this was latent; P8 arms
         // it, which is exactly when nobody will be reading this code.
         if (segments.Resolve(span.Seg, span.Offset, span.Size) == nullptr) {
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"host-span\"} seg=%u offset=%llu "
+            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"host-span\"} seg=%u offset=%llu "
                     "size=%llu does not lie inside that segment (R-2.3 arm 4)",
                     static_cast<unsigned>(span.Seg),
                     static_cast<unsigned long long>(span.Offset),
                     static_cast<unsigned long long>(span.Size));
         }
+        return true;
     }
 
-    void CheckDrawUserIndices(const MGPDrawInfo& info, const MGPDrawRange* ranges,
+    Bool CheckDrawUserIndices(const MGPDrawInfo& info, const MGPDrawRange* ranges,
                               const MGHostSpan& span) {
         if ((info.Flags & kDrawHasUserIndices) == 0 || (info.Flags & kDrawIsIndirect) != 0 ||
             info.NumDraws != 1 || ranges == nullptr) {
-            WireProtocolFatal("DrawVbo.userIndices.shape",
-                              "a user-index span requires exactly one direct indexed range");
+            return WireProtocolLatch("DrawVbo.userIndices.shape",
+                                     "a user-index span requires exactly one direct indexed range");
         }
         if (info.IndexSize != 1 && info.IndexSize != 2 && info.IndexSize != 4) {
-            WireProtocolFatalAt("DrawVbo.userIndices.IndexSize", info.IndexSize, 4);
+            return WireProtocolLatchAt("DrawVbo.userIndices.IndexSize", info.IndexSize, 4);
         }
         // Client arrays are staged from their first index; Start only addresses an EBO.
         if (ranges[0].Start != 0) {
-            WireProtocolFatalAt("DrawVbo.userIndices.Start", ranges[0].Start, 0);
+            return WireProtocolLatchAt("DrawVbo.userIndices.Start", ranges[0].Start, 0);
         }
         const Uint64 required = static_cast<Uint64>(ranges[0].Count) * info.IndexSize;
         if (required > span.Size) {
-            WireProtocolFatalAt("DrawVbo.userIndices.extent", required, span.Size);
+            return WireProtocolLatchAt("DrawVbo.userIndices.extent", required, span.Size);
         }
+        return true;
     }
 
     // ---------------------------------------------------------------------------------
@@ -625,8 +652,8 @@ namespace MobileGL::MG_Remote::Wire {
             const auto& p = *static_cast<const MGPVertexBuffers*>(payload);
             if (p.Count > kMGPipeMaxVertexAttribs ||
                 static_cast<Uint64>(p.Start) + p.Count > kMGPipeMaxVertexAttribs) {
-                WireProtocolFatalAt("SetVertexBuffers.Count",
-                                    static_cast<Uint64>(p.Start) + p.Count, kMGPipeMaxVertexAttribs);
+                return WireProtocolLatchAt("SetVertexBuffers.Count",
+                                           static_cast<Uint64>(p.Start) + p.Count, kMGPipeMaxVertexAttribs);
             }
             tail0 = TailBytesFor(p.Count, sizeof(MGPVertexBuffer));
             tails = 1;
@@ -635,8 +662,8 @@ namespace MobileGL::MG_Remote::Wire {
         case MGPWireOp::SetSamplerViews: {
             const auto& p = *static_cast<const MGPSamplerViews*>(payload);
             if (static_cast<Uint64>(p.Start) + p.Count > kMGPipeMaxTextureUnits) {
-                WireProtocolFatalAt("SetSamplerViews.Count", static_cast<Uint64>(p.Start) + p.Count,
-                                    kMGPipeMaxTextureUnits);
+                return WireProtocolLatchAt("SetSamplerViews.Count", static_cast<Uint64>(p.Start) + p.Count,
+                                           kMGPipeMaxTextureUnits);
             }
             tail0 = TailBytesFor(p.Count, sizeof(MGPBoundView));
             tails = 1;
@@ -645,8 +672,8 @@ namespace MobileGL::MG_Remote::Wire {
         case MGPWireOp::BindSamplerStates: {
             const auto& p = *static_cast<const MGPSamplerStates*>(payload);
             if (static_cast<Uint64>(p.Start) + p.Count > kMGPipeMaxTextureUnits) {
-                WireProtocolFatalAt("BindSamplerStates.Count",
-                                    static_cast<Uint64>(p.Start) + p.Count, kMGPipeMaxTextureUnits);
+                return WireProtocolLatchAt("BindSamplerStates.Count",
+                                           static_cast<Uint64>(p.Start) + p.Count, kMGPipeMaxTextureUnits);
             }
             tail0 = TailBytesFor(p.Count, sizeof(MGPipeHandle));
             tails = 1;
@@ -655,8 +682,8 @@ namespace MobileGL::MG_Remote::Wire {
         case MGPWireOp::SetShaderImages: {
             const auto& p = *static_cast<const MGPShaderImages*>(payload);
             if (static_cast<Uint64>(p.Start) + p.Count > kMGPipeMaxImageUnits) {
-                WireProtocolFatalAt("SetShaderImages.Count", static_cast<Uint64>(p.Start) + p.Count,
-                                    kMGPipeMaxImageUnits);
+                return WireProtocolLatchAt("SetShaderImages.Count", static_cast<Uint64>(p.Start) + p.Count,
+                                           kMGPipeMaxImageUnits);
             }
             tail0 = TailBytesFor(p.Count, sizeof(MGPImageView));
             tails = 1;
@@ -672,14 +699,14 @@ namespace MobileGL::MG_Remote::Wire {
             // is the arm that turns Count into a byte length, so a forged count has to be
             // refused before it is multiplied rather than after.
             if (p.Class >= kMGPipeShaderBufferClassCount) {
-                WireProtocolFatalAt("SetShaderBuffers.Class", p.Class, kMGPipeShaderBufferClassCount);
+                return WireProtocolLatchAt("SetShaderBuffers.Class", p.Class, kMGPipeShaderBufferClassCount);
             }
             if (static_cast<Uint64>(p.Start) + p.Count > kMGPipeMaxBufferBindingPoints) {
-                WireProtocolFatalAt("SetShaderBuffers.Count", static_cast<Uint64>(p.Start) + p.Count,
-                                    kMGPipeMaxBufferBindingPoints);
+                return WireProtocolLatchAt("SetShaderBuffers.Count", static_cast<Uint64>(p.Start) + p.Count,
+                                           kMGPipeMaxBufferBindingPoints);
             }
             if (p.HostSpanCount != 0 && p.HostSpanCount != p.Count) {
-                WireProtocolFatalAt("SetShaderBuffers.HostSpanCount", p.HostSpanCount, p.Count);
+                return WireProtocolLatchAt("SetShaderBuffers.HostSpanCount", p.HostSpanCount, p.Count);
             }
             tail0 = TailBytesFor(p.Count, sizeof(MGPBufferRange));
             tail1 = TailBytesFor(p.HostSpanCount, sizeof(MGHostSpan));
@@ -709,16 +736,16 @@ namespace MobileGL::MG_Remote::Wire {
             // multiplied.
             const auto& p = *static_cast<const MGPProgramBindings*>(payload);
             if (p.BlockBindingCount > kMGPipeMaxProgramBlockBindings) {
-                WireProtocolFatalAt("SetProgramBindings.BlockBindingCount", p.BlockBindingCount,
-                                    kMGPipeMaxProgramBlockBindings);
+                return WireProtocolLatchAt("SetProgramBindings.BlockBindingCount", p.BlockBindingCount,
+                                           kMGPipeMaxProgramBlockBindings);
             }
             if (p.SamplerUnitCount > kMGPipeMaxProgramSamplerUnits) {
-                WireProtocolFatalAt("SetProgramBindings.SamplerUnitCount", p.SamplerUnitCount,
-                                    kMGPipeMaxProgramSamplerUnits);
+                return WireProtocolLatchAt("SetProgramBindings.SamplerUnitCount", p.SamplerUnitCount,
+                                           kMGPipeMaxProgramSamplerUnits);
             }
             if (p.StorageOverrideCount > kMGPipeMaxProgramStorageOverrides) {
-                WireProtocolFatalAt("SetProgramBindings.StorageOverrideCount",
-                                    p.StorageOverrideCount, kMGPipeMaxProgramStorageOverrides);
+                return WireProtocolLatchAt("SetProgramBindings.StorageOverrideCount",
+                                           p.StorageOverrideCount, kMGPipeMaxProgramStorageOverrides);
             }
             tail0 = TailBytesFor(p.BlockBindingCount, sizeof(Int32));
             tail1 = TailBytesFor(p.SamplerUnitCount, sizeof(MGPProgramSamplerUnit));
@@ -742,10 +769,10 @@ namespace MobileGL::MG_Remote::Wire {
             // scatters attribute values onto the wrong locations.
             const auto& p = *static_cast<const MGPVertexAttribDefaults*>(payload);
             if (p.Count != PopCount32(p.Mask)) {
-                WireProtocolFatalAt("SetVertexAttribDefaults.Count", p.Count, PopCount32(p.Mask));
+                return WireProtocolLatchAt("SetVertexAttribDefaults.Count", p.Count, PopCount32(p.Mask));
             }
             if (p.Count > kMGPipeMaxVertexAttribs) {
-                WireProtocolFatalAt("SetVertexAttribDefaults.Count", p.Count, kMGPipeMaxVertexAttribs);
+                return WireProtocolLatchAt("SetVertexAttribDefaults.Count", p.Count, kMGPipeMaxVertexAttribs);
             }
             tail0 = TailBytesFor(p.Count, sizeof(MGPAttribValue));
             tails = 1;
@@ -768,7 +795,7 @@ namespace MobileGL::MG_Remote::Wire {
             // regions, so a non-zero count is a fault rather than a tail.
             const auto& p = *static_cast<const MGPSubData*>(payload);
             if (p.RegionCount != 0) {
-                WireProtocolFatalAt("BufferSubDataResident.RegionCount", p.RegionCount, 0);
+                return WireProtocolLatchAt("BufferSubDataResident.RegionCount", p.RegionCount, 0);
             }
             break;
         }
@@ -785,12 +812,12 @@ namespace MobileGL::MG_Remote::Wire {
             // buffer by GL rule - and an indirect draw declares no ranges, because the server
             // never reads the indirect buffer to learn a count and the client has none to send.
             if (userIndices && indirect) {
-                WireProtocolFatal("DrawVbo.Flags",
-                                  "kDrawHasUserIndices and kDrawIsIndirect are exclusive; an "
-                                  "indirect draw's indices come from the bound element buffer");
+                return WireProtocolLatch("DrawVbo.Flags",
+                                         "kDrawHasUserIndices and kDrawIsIndirect are exclusive; an "
+                                         "indirect draw's indices come from the bound element buffer");
             }
             if (indirect && p.NumDraws != 0) {
-                WireProtocolFatalAt("DrawVbo.NumDraws", p.NumDraws, 0);
+                return WireProtocolLatchAt("DrawVbo.NumDraws", p.NumDraws, 0);
             }
             if (userIndices) {
                 tail1 = sizeof(MGHostSpan);
@@ -830,7 +857,7 @@ namespace MobileGL::MG_Remote::Wire {
         out.TailCount = tails;
         out.TotalBytes = Align8(out.TotalBytes);
         if (out.TotalBytes > kMaxRecordBytesOnTheWire) {
-            WireProtocolFatalAt("record.Size", out.TotalBytes, kMaxRecordBytesOnTheWire);
+            return WireProtocolLatchAt("record.Size", out.TotalBytes, kMaxRecordBytesOnTheWire);
         }
         return true;
     }
@@ -1075,7 +1102,9 @@ namespace MobileGL::MG_Remote::Wire {
             MGHostSpan span{};
             std::memcpy(&span, tails[1].Bytes, sizeof(span));
             const auto& info = *static_cast<const MGPDrawInfo*>(payload);
-            CheckDrawUserIndices(info, static_cast<const MGPDrawRange*>(tails[0].Bytes), span);
+            // Encoder side: the latch is armed only in a server session child, so here the
+            // arm dies on a bad shape and its answer carries nothing to act on (PH-1 (3)).
+            (void)CheckDrawUserIndices(info, static_cast<const MGPDrawRange*>(tails[0].Bytes), span);
         }
 
         const Uint64 total = layout.TotalBytes;
@@ -1185,7 +1214,7 @@ namespace MobileGL::MG_Remote::Wire {
             for (Uint32 i = 0; i < slots.Count; ++i) {
                 MGPBlobRef blob{};
                 std::memcpy(&blob, bytes + slots.Offset + i * sizeof(MGPBlobRef), sizeof(MGPBlobRef));
-                CheckBlobIsHonest(op, blob, *m_segments);
+                (void)CheckBlobIsHonest(op, blob, *m_segments); // encoder: unarmed, dies (PH-1 (3))
                 // THE ENCODER MUST NOT ACCEPT A RECORD THE DECODER FATALS ON. w1's ruling that
                 // CreateShaderState's modules travel inside the Reflection archive lived only
                 // in the decoder, so an emitter that declared a per-stage run got a valid seq
@@ -1210,7 +1239,7 @@ namespace MobileGL::MG_Remote::Wire {
                 std::memcpy(&span, bytes + at + i * sizeof(MGHostSpan), sizeof(MGHostSpan));
                 // All four arms, including the one that needs the table: a producer that
                 // computed an offset wrongly is caught here rather than on a peer.
-                CheckHostSpanIsHonest(span, *m_segments);
+                (void)CheckHostSpanIsHonest(span, *m_segments); // encoder: unarmed, dies (PH-1 (3))
             }
         }
 
@@ -1445,7 +1474,7 @@ namespace MobileGL::MG_Remote::Wire {
         return t_activeDecoder->ApplyChecked(op, record, size);
     }
 
-    void PipeWireDecoder::NoteResolvedRun(MGPWireOp op, const MGPBlobRef& blob) {
+    Bool PipeWireDecoder::NoteResolvedRun(MGPWireOp op, const MGPBlobRef& blob) {
         // UNREACHABLE NOW, AND LOUD RATHER THAN SILENT. This used to `return`, and that made
         // the audit's bookkeeping quietly optional: a record naming a non-SEG_STAGE carrier
         // was applied AND recorded nothing, so PoisonedStageBytes() stayed zero and rule C's
@@ -1455,7 +1484,7 @@ namespace MobileGL::MG_Remote::Wire {
         // the audit has stopped covering the carrier, which is the same failure as no audit at
         // all - the reason the run-count overflow just below is a Fatal too.
         if (blob.Size == 0 || blob.Seg != kSegStage) {
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} the audit was asked to record a "
+            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} the audit was asked to record a "
                     "resolved run with seg=%u size=%llu; only declared SEG_STAGE(%u) runs "
                     "reach the poison fill (R-2.5)",
                     WireOpName(op), static_cast<unsigned>(blob.Seg),
@@ -1466,24 +1495,28 @@ namespace MobileGL::MG_Remote::Wire {
             // LOUD, NOT A SILENT DROP. This array is what the 0xDD fill covers, and a poison
             // that quietly stopped covering a run is the same failure as no poison at all -
             // rule C's only mechanical control going dark without a line in the log.
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} more than %llu SEG_STAGE runs in "
+            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} more than %llu SEG_STAGE runs in "
                     "one record; the audit fill would stop covering them",
                     WireOpName(op),
                     static_cast<unsigned long long>(sizeof(m_resolved) / sizeof(m_resolved[0])));
         }
         m_resolved[m_resolvedCount++] = blob;
+        return true;
     }
 
+    // PH-1 (3): nullptr ONLY when a named fault latched (an armed session child); every caller
+    // returns false on it. Unarmed, each arm below still dies by name and this never returns null.
     const void* PipeWireDecoder::ResolveOrFatal(MGPWireOp op, const MGPBlobRef& blob) {
-        RequireDeclaredBlob(op, blob, *m_segments);
+        if (!RequireDeclaredBlob(op, blob, *m_segments)) return nullptr;
         const void* bytes = m_segments->Resolve(blob.Seg, blob.Offset, blob.Size);
         if (bytes == nullptr) {
             // RequireDeclaredBlob already ran the same arithmetic, so reaching here means the
             // table moved under us rather than that the record is wrong. Same Fatal either
             // way: there is no recovery from a segment that stopped covering its own runs.
-            WireProtocolFatalAt("segment-resolve", blob.Offset, blob.Size);
+            (void)WireProtocolLatchAt("segment-resolve", blob.Offset, blob.Size);
+            return nullptr;
         }
-        NoteResolvedRun(op, blob);
+        if (!NoteResolvedRun(op, blob)) return nullptr;
         return bytes;
     }
 
@@ -1513,6 +1546,36 @@ namespace MobileGL::MG_Remote::Wire {
         m_resolvedCount = 0;
     }
 
+    namespace {
+        // PH-1 (3): THE GENERATED GATE'S TWO PEER-REACHABLE DEATHS, ASKED FIRST AND BY NAME, in
+        // an armed session child only. MGP_WIRE_CHECK_BOUNDS (MG_Pipe/generated/PipeWire.inc)
+        // aborts on an opcode no row names and on a record shorter than its own type or not
+        // 8-aligned, through MGPipeWireProtocolFatal - a line with no `Fatal{` marker, in a file
+        // gen_pipe.py owns (fatal_census.py's FUNNEL_SITES records that debt). Both operands are
+        // the ring header's `kind` and `size`, which the peer writes, so a session child asks the
+        // same two questions here first and a failure latches by name; whatever reaches the
+        // generated gate then passes it by construction (MGPW_REC_ROW pins the sizes equal).
+        // Unarmed - inproc, the unit cases - this admits everything and the generated gate keeps
+        // its old death line for line.
+        Bool AdmitsTheGeneratedGate(MGPWireOp op, Uint64 size) {
+            if (!SessionLatchArmed()) return true;
+            const SizeT index = static_cast<SizeT>(op);
+            if (index == 0 || index >= static_cast<SizeT>(MGPWireOp::kOpCount)) {
+                return WireProtocolLatchAt("opcode", static_cast<Uint64>(op),
+                                           static_cast<Uint64>(MGPWireOp::kOpCount));
+            }
+            WireRecordLayout minimum{};
+            (void)MGPipeWireRecordLayout(op, nullptr, minimum);
+            // Its own word, not the layout's "record.Size": the two refusals are different
+            // questions (shorter than the type vs. past the wire's 32-bit Size), and a log line
+            // - and PeerLatchTest's first-Fatal check - has to be able to tell them apart.
+            if (size < minimum.TotalBytes || (size % 8) != 0) {
+                return WireProtocolLatchAt("record.Minimum", size, minimum.TotalBytes);
+            }
+            return true;
+        }
+    } // namespace
+
     Bool PipeWireDecoder::DecodeAndApply(const Transport::RingRecordView& record) {
         if (!Valid()) {
             WireProtocolFatal("PipeWireDecoder::DecodeAndApply", "no control page or segment table");
@@ -1533,15 +1596,18 @@ namespace MobileGL::MG_Remote::Wire {
 
         m_resolvedCount = 0;
         m_lastAcceptanceKnown = false;
-        PipeWireDecoder* previous = t_activeDecoder;
-        t_activeDecoder = this;
-        // The generated gate first, ALWAYS: MGPipeApplyWireRecord owns the per-opcode
-        // `size >= sizeof(MGPWireRec_X)` check, because that is the half that follows from the
-        // opcode alone and therefore belongs to the generator. It then calls back into
-        // ApplyChecked through the hook, which owns the half that needs the payload. The hook
-        // was installed once, at construction.
-        const Bool applied = MG_Pipe::MGPipeApplyWireRecord(op, base, size, size);
-        t_activeDecoder = previous;
+        Bool applied = false;
+        if (AdmitsTheGeneratedGate(op, size)) {
+            PipeWireDecoder* previous = t_activeDecoder;
+            t_activeDecoder = this;
+            // The generated gate first, ALWAYS: MGPipeApplyWireRecord owns the per-opcode
+            // `size >= sizeof(MGPWireRec_X)` check, because that is the half that follows from the
+            // opcode alone and therefore belongs to the generator. It then calls back into
+            // ApplyChecked through the hook, which owns the half that needs the payload. The hook
+            // was installed once, at construction.
+            applied = MG_Pipe::MGPipeApplyWireRecord(op, base, size, size);
+            t_activeDecoder = previous;
+        }
 
         PoisonResolvedRuns();
 
@@ -1576,16 +1642,24 @@ namespace MobileGL::MG_Remote::Wire {
         const auto* base = static_cast<const Uint8*>(record);
         const void* payload = base + sizeof(MGPWireRecHeader);
 
+        // PH-1 (3), ID-P7-1: FROM HERE ON EVERY NAMED FAULT ON A PEER'S BYTES LATCHES. In an armed
+        // session child each arm below logs its unchanged `Fatal{ProtocolCorruption, "..."}` line
+        // and returns false, and so does this function: the record is declined, DrainRing sees
+        // the latch before the next one, and the session closes by name. Unarmed (inproc, unit
+        // cases) every arm still dies exactly as it did.
         WireRecordLayout layout{};
-        if (!MGPipeWireRecordLayout(op, payload, layout)) {
-            WireProtocolFatalAt("opcode", static_cast<Uint64>(op),
-                                static_cast<Uint64>(MGPWireOp::kOpCount));
+        const SizeT opIndex = static_cast<SizeT>(op);
+        if (opIndex == 0 || opIndex >= static_cast<SizeT>(MGPWireOp::kOpCount)) {
+            return WireProtocolLatchAt("opcode", static_cast<Uint64>(op),
+                                       static_cast<Uint64>(MGPWireOp::kOpCount));
         }
+        // With the opcode known, false here means a count bound in the layout latched.
+        if (!MGPipeWireRecordLayout(op, payload, layout)) return false;
         // THE TAIL CROSS-CHECK (BRIEF §5 w1). The generated gate proved `size >= sizeof(the
         // record type)`; it CANNOT SEE THE TAIL, so this is the first thing that holds a
         // record declaring Count = 4000 while carrying 8 bytes to its own arithmetic.
         if (size != layout.TotalBytes) {
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} the record declares Size=%llu and "
+            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} the record declares Size=%llu and "
                     "its own count fields describe %llu bytes (fixed payload %llu + tails "
                     "%llu/%llu/%llu)",
                     WireOpName(op), static_cast<unsigned long long>(size),
@@ -1656,7 +1730,7 @@ namespace MobileGL::MG_Remote::Wire {
                             base + sizeof(MGPWireRecHeader) + offsetof(MGPCaps, FormatCapabilities) +
                                 i * sizeof(MGPBlobRef),
                             sizeof(MGPBlobRef));
-                CheckBlobIsHonest(op, blob, *m_segments);
+                if (!CheckBlobIsHonest(op, blob, *m_segments)) return false;
             }
             return false;
 
@@ -1781,13 +1855,14 @@ namespace MobileGL::MG_Remote::Wire {
                 // chunk table computes it from the mask the record itself carries.
                 const Uint64 expected =
                     static_cast<Uint64>(MGPipePipelineChunkBlobBytes(desc.ChunkMask));
-                RequireDeclaredBlob(op, desc.Blob, *m_segments);
+                if (!RequireDeclaredBlob(op, desc.Blob, *m_segments)) return false;
                 if (desc.Blob.Size != expected) {
-                    WireProtocolFatalAt("CreateRenderState.Blob", desc.Blob.Size, expected);
+                    return WireProtocolLatchAt("CreateRenderState.Blob", desc.Blob.Size, expected);
                 }
                 chunks = ResolveOrFatal(op, desc.Blob);
-            } else {
-                CheckBlobIsHonest(op, desc.Blob, *m_segments);
+                if (chunks == nullptr) return false;
+            } else if (!CheckBlobIsHonest(op, desc.Blob, *m_segments)) {
+                return false;
             }
             MGPipeApplyCreateRenderState(desc, chunks);
             return true;
@@ -1807,6 +1882,7 @@ namespace MobileGL::MG_Remote::Wire {
             // (PipeApply.cpp:1990-1999) and is the model every other row copies; the decoder
             // adds only what the applier cannot see, which is that the bytes exist at all.
             const void* blob = ResolveOrFatal(op, desc.Blob);
+            if (blob == nullptr) return false;
             MGPipeApplyCreateVertexElements(desc, blob);
             return true;
         }
@@ -1825,12 +1901,13 @@ namespace MobileGL::MG_Remote::Wire {
             // and borderColorForm must survive BYTE FOR BYTE, because all three colour
             // representations are always numerically populated and it is the only thing that
             // says which one the backend must use (MGPipeTypes.h:425-428).
-            RequireDeclaredBlob(op, desc.Parameters, *m_segments);
+            if (!RequireDeclaredBlob(op, desc.Parameters, *m_segments)) return false;
             if (desc.Parameters.Size != sizeof(MobileGL::SamplerParameters)) {
-                WireProtocolFatalAt("CreateSamplerState.Parameters", desc.Parameters.Size,
-                                    sizeof(MobileGL::SamplerParameters));
+                return WireProtocolLatchAt("CreateSamplerState.Parameters", desc.Parameters.Size,
+                                           sizeof(MobileGL::SamplerParameters));
             }
             const void* bytes = ResolveOrFatal(op, desc.Parameters);
+            if (bytes == nullptr) return false;
             // Copied into a local rather than reinterpret_cast in place: the staged run is
             // 8-aligned by the ring, but SamplerParameters is a frontend type and this file
             // may not assume its alignment requirement is one the ring happens to satisfy.
@@ -1868,9 +1945,9 @@ namespace MobileGL::MG_Remote::Wire {
             // archive - and then the archive has to stop carrying generatedSpirv, in the same
             // change, or the two disagree.
             for (Uint32 i = 0; i < 6; ++i) {
-                CheckBlobIsHonest(op, desc.Spirv[i], *m_segments);
+                if (!CheckBlobIsHonest(op, desc.Spirv[i], *m_segments)) return false;
                 if (desc.Spirv[i].Size != 0) {
-                    SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"CreateShaderState.Spirv[%u]\"} "
+                    return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"CreateShaderState.Spirv[%u]\"} "
                             "declares %llu bytes; under split the modules travel inside the "
                             "Reflection archive and the six per-stage runs stay undeclared",
                             static_cast<unsigned>(i),
@@ -1878,6 +1955,7 @@ namespace MobileGL::MG_Remote::Wire {
                 }
             }
             const void* archiveBytes = ResolveOrFatal(op, desc.Reflection);
+            if (archiveBytes == nullptr) return false;
             // P5e (pg), gap G-A: DECODED ONTO THE HEAP AND HANDED TO THE RECORD, not onto this
             // stack. Before P5e these were two locals that died at the closing brace and the
             // applier kept only the descriptor, so every reflection question the program twin
@@ -1893,10 +1971,13 @@ namespace MobileGL::MG_Remote::Wire {
             if (!MG_State::GLState::DecodeProgramArchive(static_cast<const Uint8*>(archiveBytes),
                                                          static_cast<SizeT>(desc.Reflection.Size),
                                                          *archive)) {
-                WireProtocolFatal("CreateShaderState.Reflection",
-                                  "DecodeProgramArchive refused the archive - a truncated "
-                                  "stream, a codec version mismatch, a struct-size mismatch, or "
-                                  "a stage list that does not match the modules it frames");
+                // PH-5's ArchiveVector bound (ProgramArtifactsCodec.cpp) refuses here too: a
+                // vector count whose immediate allocation exceeds the archive's remaining bytes
+                // makes DecodeProgramArchive answer false.
+                return WireProtocolLatch("CreateShaderState.Reflection",
+                                         "DecodeProgramArchive refused the archive - a truncated "
+                                         "stream, a codec version mismatch, a struct-size mismatch, or "
+                                         "a stage list that does not match the modules it frames");
             }
             MGPipeApplyCreateShaderState(desc, &archive->Link, &archive->Spirv, archive);
             return true;
@@ -1917,13 +1998,14 @@ namespace MobileGL::MG_Remote::Wire {
             if (dyn.ChunkMask != 0) {
                 const Uint64 expected =
                     static_cast<Uint64>(MGPipeDynamicChunkBlobBytes(dyn.ChunkMask));
-                RequireDeclaredBlob(op, dyn.Blob, *m_segments);
+                if (!RequireDeclaredBlob(op, dyn.Blob, *m_segments)) return false;
                 if (dyn.Blob.Size != expected) {
-                    WireProtocolFatalAt("SetDynamicState.Blob", dyn.Blob.Size, expected);
+                    return WireProtocolLatchAt("SetDynamicState.Blob", dyn.Blob.Size, expected);
                 }
                 chunks = ResolveOrFatal(op, dyn.Blob);
-            } else {
-                CheckBlobIsHonest(op, dyn.Blob, *m_segments);
+                if (chunks == nullptr) return false;
+            } else if (!CheckBlobIsHonest(op, dyn.Blob, *m_segments)) {
+                return false;
             }
             MGPipeApplySetDynamicState(dyn, chunks);
             return true;
@@ -1983,7 +2065,7 @@ namespace MobileGL::MG_Remote::Wire {
                     // ALL FOUR ARMS, the segment-range one included: this row and DrawVbo are
                     // the only two host-span carriers in the catalogue, and an out-of-segment
                     // span used to pass every check here.
-                    CheckHostSpanIsHonest(span, *m_segments);
+                    if (!CheckHostSpanIsHonest(span, *m_segments)) return false;
                 }
             }
             MGPipeApplySetShaderBuffers(*static_cast<const MGPShaderBuffers*>(payload),
@@ -2029,7 +2111,7 @@ namespace MobileGL::MG_Remote::Wire {
                     std::memcpy(&entry, reinterpret_cast<const Uint8*>(overrides) +
                                             i * sizeof(MGPProgramStorageOverride),
                                 sizeof(MGPProgramStorageOverride));
-                    CheckHostSpanIsHonest(entry.Name, *m_segments);
+                    if (!CheckHostSpanIsHonest(entry.Name, *m_segments)) return false;
                     // THE NUL IS THE CLIENT'S AND IS CHECKED, not assumed: the emitter stages
                     // the name with its terminator (ProgramEmit.h), and a span whose last byte
                     // is not 0 would make the applier's String(const char*) walk off the end of
@@ -2039,9 +2121,9 @@ namespace MobileGL::MG_Remote::Wire {
                         m_segments->Resolve(entry.Name.Seg, entry.Name.Offset, entry.Name.Size));
                     if (entry.Name.Size == 0 || name == nullptr ||
                         name[entry.Name.Size - 1] != '\0') {
-                        WireProtocolFatal("SetProgramBindings.StorageOverrides.Name",
-                                          "an override name span is empty or is not "
-                                          "NUL-terminated; the applier copies it as a C string");
+                        return WireProtocolLatch("SetProgramBindings.StorageOverrides.Name",
+                                                 "an override name span is empty or is not "
+                                                 "NUL-terminated; the applier copies it as a C string");
                     }
                     overrideNames.push_back(name);
                 }
@@ -2061,6 +2143,7 @@ namespace MobileGL::MG_Remote::Wire {
             // program's GlobalUboSize, which this record does not carry). Under rule A it
             // stops being inert for the first time, which is the whole point of arming Size.
             const void* bytes = ResolveOrFatal(op, rec.Blob);
+            if (bytes == nullptr) return false;
             MGPipeApplySetGlobalConstants(rec, bytes);
             return true;
         }
@@ -2101,12 +2184,13 @@ namespace MobileGL::MG_Remote::Wire {
             // rather than ">=" is what makes a client built against an older block a loud
             // mismatch instead of a silently short read of CapabilityBits.
             const auto& rec = *static_cast<const MGPResidualValueState*>(payload);
-            RequireDeclaredBlob(op, rec.Blob, *m_segments);
+            if (!RequireDeclaredBlob(op, rec.Blob, *m_segments)) return false;
             if (rec.Blob.Size != sizeof(ResidualValueBlock)) {
-                WireProtocolFatalAt("SetResidualValueState.Blob", rec.Blob.Size,
-                                    sizeof(ResidualValueBlock));
+                return WireProtocolLatchAt("SetResidualValueState.Blob", rec.Blob.Size,
+                                           sizeof(ResidualValueBlock));
             }
             const void* bytes = ResolveOrFatal(op, rec.Blob);
+            if (bytes == nullptr) return false;
             ResidualValueBlock block{};
             std::memcpy(&block, bytes, sizeof(block));
             MGPipeApplySetResidualValueState(block);
@@ -2128,7 +2212,7 @@ namespace MobileGL::MG_Remote::Wire {
                     Uint64(rec.UnionBox.X) + rec.UnionBox.W > rec.LevelWidth ||
                     Uint64(rec.UnionBox.Y) + rec.UnionBox.H > rec.LevelHeight ||
                     Uint64(rec.UnionBox.Z) + rec.UnionBox.D > rec.LevelDepth))
-                WireProtocolFatal("ResourceSubData.LevelExtent", "invalid full image extent or dirty box");
+                return WireProtocolLatch("ResourceSubData.LevelExtent", "invalid full image extent or dirty box");
             // Rule A arms both halves. The buffer half already declared a real size in
             // monolith and is cross-checked at PipeApply.cpp:702; THE TEXTURE HALF DECLARED 0
             // (TextureEmit.h:1265-1267, on the grounds that the byte count was "the server's
@@ -2145,7 +2229,7 @@ namespace MobileGL::MG_Remote::Wire {
             const Bool boxIsWhole =
                 rec.UnionBox.W != 0 && rec.UnionBox.H != 0 && rec.UnionBox.D != 0;
             if (!namesABuffer && !boxIsEmpty && !boxIsWhole) {
-                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ResourceSubData\"} the union box "
+                return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ResourceSubData\"} the union box "
                         "%ux%ux%u has a zero extent on some axes and not others; a box is "
                         "either empty or whole",
                         rec.UnionBox.W, rec.UnionBox.H, rec.UnionBox.D);
@@ -2155,8 +2239,9 @@ namespace MobileGL::MG_Remote::Wire {
             const void* bytes = nullptr;
             if (carriesContent) {
                 bytes = ResolveOrFatal(op, rec.Blob);
-            } else {
-                CheckBlobIsHonest(op, rec.Blob, *m_segments);
+                if (bytes == nullptr) return false;
+            } else if (!CheckBlobIsHonest(op, rec.Blob, *m_segments)) {
+                return false;
             }
             noteAcceptance(MGPipeApplyResourceSubData(
                 rec, bytes, reinterpret_cast<const MGPSubRegion*>(tailAt(0))));
@@ -2168,10 +2253,12 @@ namespace MobileGL::MG_Remote::Wire {
             // kOptional is a CAPABILITY question under split, not a null-pointer one: the
             // client gates on kCapResidentSubData through the caps mirror before it emits
             // (R-8). By the time a record is here, the answer was already yes.
-            const void* bytes = MGPipeSubDataBufferSize(rec) != 0 ? ResolveOrFatal(op, rec.Blob)
-                                                                  : nullptr;
-            if (bytes == nullptr) {
-                CheckBlobIsHonest(op, rec.Blob, *m_segments);
+            const void* bytes = nullptr;
+            if (MGPipeSubDataBufferSize(rec) != 0) {
+                bytes = ResolveOrFatal(op, rec.Blob);
+                if (bytes == nullptr) return false;
+            } else if (!CheckBlobIsHonest(op, rec.Blob, *m_segments)) {
+                return false;
             }
             MGPipeApplyBufferSubDataResident(rec, bytes);
             return true;
@@ -2241,16 +2328,17 @@ namespace MobileGL::MG_Remote::Wire {
             MGHostSpan span{};
             if ((info.Flags & kDrawHasUserIndices) != 0) {
                 if (layout.TailCount != 2 || layout.TailBytes[1] != sizeof(MGHostSpan)) {
-                    WireProtocolFatalAt("DrawVbo.userIndices", layout.TailBytes[1],
-                                        sizeof(MGHostSpan));
+                    return WireProtocolLatchAt("DrawVbo.userIndices", layout.TailBytes[1],
+                                               sizeof(MGHostSpan));
                 }
                 std::memcpy(&span, tailAt(1), sizeof(span));
                 // ALL FOUR ARMS. WireVerbSink's header promises OnDrawVbo "a DECODED,
                 // VALIDATED argument list"; without the segment-range arm a span whose run
                 // left SEG_STAGE reached the sink and that promise was false. P5b's d1 is what
                 // arms this path (client-side index arrays staged whole, CONTRACT-P5B.md d1).
-                CheckHostSpanIsHonest(span, *m_segments);
-                CheckDrawUserIndices(info, reinterpret_cast<const MGPDrawRange*>(tailAt(0)), span);
+                if (!CheckHostSpanIsHonest(span, *m_segments)) return false;
+                if (!CheckDrawUserIndices(info, reinterpret_cast<const MGPDrawRange*>(tailAt(0)), span))
+                    return false;
                 userIndices = &span;
             }
             // P5b d1: the indirect block, in the span's place. The layout already refused a
@@ -2259,8 +2347,8 @@ namespace MobileGL::MG_Remote::Wire {
             MGPDrawIndirect indirectBlock{};
             if ((info.Flags & kDrawIsIndirect) != 0) {
                 if (layout.TailCount != 2 || layout.TailBytes[1] != sizeof(MGPDrawIndirect)) {
-                    WireProtocolFatalAt("DrawVbo.indirect", layout.TailBytes[1],
-                                        sizeof(MGPDrawIndirect));
+                    return WireProtocolLatchAt("DrawVbo.indirect", layout.TailBytes[1],
+                                               sizeof(MGPDrawIndirect));
                 }
                 std::memcpy(&indirectBlock, tailAt(1), sizeof(indirectBlock));
                 indirect = &indirectBlock;
@@ -2326,17 +2414,18 @@ namespace MobileGL::MG_Remote::Wire {
             // (rule C).
             const auto& rec = *static_cast<const MGPStorageBlockBinding*>(payload);
             constexpr Uint64 kMaxBlockNameBytes = 4096;
-            RequireDeclaredBlob(op, rec.Name, *m_segments);
+            if (!RequireDeclaredBlob(op, rec.Name, *m_segments)) return false;
             if (rec.Name.Size > kMaxBlockNameBytes) {
-                WireProtocolFatalAt("SetStorageBlockBinding.Name", rec.Name.Size, kMaxBlockNameBytes);
+                return WireProtocolLatchAt("SetStorageBlockBinding.Name", rec.Name.Size, kMaxBlockNameBytes);
             }
             const void* bytes = ResolveOrFatal(op, rec.Name);
+            if (bytes == nullptr) return false;
             char name[kMaxBlockNameBytes + 1];
             std::memcpy(name, bytes, static_cast<SizeT>(rec.Name.Size));
             name[rec.Name.Size] = '\0';
             if (name[rec.Name.Size - 1] != '\0') {
-                WireProtocolFatal("SetStorageBlockBinding.Name",
-                                  "the staged block name is not NUL-terminated; Size is strlen + 1");
+                return WireProtocolLatch("SetStorageBlockBinding.Name",
+                                         "the staged block name is not NUL-terminated; Size is strlen + 1");
             }
             return m_verbs != nullptr && m_verbs->OnSetStorageBlockBinding(rec, name);
         }
@@ -2386,8 +2475,8 @@ namespace MobileGL::MG_Remote::Wire {
         case MGPWireOp::kInvalid:
         case MGPWireOp::kOpCount:
         default:
-            WireProtocolFatalAt("opcode", static_cast<Uint64>(op),
-                                static_cast<Uint64>(MGPWireOp::kOpCount));
+            return WireProtocolLatchAt("opcode", static_cast<Uint64>(op),
+                                       static_cast<Uint64>(MGPWireOp::kOpCount));
         }
     }
 

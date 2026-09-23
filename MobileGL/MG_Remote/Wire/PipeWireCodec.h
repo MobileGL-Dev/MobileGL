@@ -112,6 +112,16 @@ namespace MobileGL::MG_Remote::Wire {
     [[noreturn]] void WireProtocolFatal(const char* what, const char* detail);
     [[noreturn]] void WireProtocolFatalAt(const char* what, Uint64 got, Uint64 expected);
 
+    // PH-1 (3), ID-P7-1: THE SAME TWO LINES, THROUGH THE LATCH. Byte-identical to the two above
+    // (same `Fatal{ProtocolCorruption, "<what>"}` wording), but through MG_Remote::SessionLatch:
+    // in the spawn / TCP session child the fault latches and these RETURN false, so the decode
+    // path declines the record and the session closes by name; everywhere else (inproc, the
+    // client, a unit case) SessionLatch is SessionFail and these do not return. Used ONLY on the
+    // decode path, where the bytes are the peer's - an encoder-side check is a local bug and
+    // keeps the [[noreturn]] spelling.
+    Bool WireProtocolLatch(const char* what, const char* detail);
+    Bool WireProtocolLatchAt(const char* what, Uint64 got, Uint64 expected);
+
     // R-2.3 arms 1-4 over one record's blobref. Split only; a monolith emission is exempt by
     // construction because it never reaches this layer.
     //
@@ -128,11 +138,15 @@ namespace MobileGL::MG_Remote::Wire {
     // destination range, GlobalUboSize, the stage mask), which this signature does not see.
     // RequireDeclaredBlob below is arm 2, and the decoder's per-op arm calls it exactly where
     // the payload says content is implied.
-    void CheckBlobIsHonest(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob,
+    //
+    // PH-1 (3): EVERY HONESTY ARM NOW ANSWERS. `true` = honest; `false` = a named fault latched
+    // (armed session child only - unarmed, the arm dies exactly as before and never returns
+    // false). A decode-path caller returns on false; an encoder-side caller may discard it.
+    Bool CheckBlobIsHonest(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob,
                            const SegmentTable& segments);
     // R-2.3 arm 2: the record's other fields say it carries content, so the blob must be
     // declared. Fatal on an absent blob, then CheckBlobIsHonest on a present one.
-    void RequireDeclaredBlob(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob,
+    Bool RequireDeclaredBlob(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob,
                              const SegmentTable& segments);
     // R-2.3 arms 1 and 3 for MGHostSpan. P5's reduced path should produce ZERO host spans
     // (kCapNeedsHostIndexBytes / kCapNeedsHostUboBytes are both 0 in P5, table 0), so this
@@ -142,17 +156,18 @@ namespace MobileGL::MG_Remote::Wire {
     // run PAST THE END OF IT passes this function. Use the overload below on any path that has
     // a table; this one exists because c0 shipped the signature and other packages compile
     // against it.
-    void CheckHostSpanIsHonest(const MG_Pipe::MGHostSpan& span);
+    Bool CheckHostSpanIsHonest(const MG_Pipe::MGHostSpan& span);
     // All four arms. Arm 4 is the one the signature above cannot express: a span is only
     // honest if its Offset+Size actually lies inside the segment it names, and the promise
     // WireVerbSink's header makes - that OnDrawVbo is handed a VALIDATED argument list - is
     // false without it. Latent in P5 (nothing emits a span) and armed at P8, which is exactly
     // when nobody will be reading this file.
-    void CheckHostSpanIsHonest(const MG_Pipe::MGHostSpan& span, const SegmentTable& segments);
+    Bool CheckHostSpanIsHonest(const MG_Pipe::MGHostSpan& span, const SegmentTable& segments);
 
     // A legal segment run must also contain every index the draw will consume. Shared by
     // the encoder, decoder and sink so a direct sink call cannot bypass the extent gate.
-    void CheckDrawUserIndices(const MG_Pipe::MGPDrawInfo& info,
+    // PH-1 (3): answers like the arms above (false = latched).
+    Bool CheckDrawUserIndices(const MG_Pipe::MGPDrawInfo& info,
                               const MG_Pipe::MGPDrawRange* ranges,
                               const MG_Pipe::MGHostSpan& span);
 
@@ -199,7 +214,9 @@ namespace MobileGL::MG_Remote::Wire {
     // `payload` must already be known to hold at least the op's payload struct - that is what
     // MGP_WIRE_CHECK_BOUNDS proves, and this function is only ever called after it. Returns
     // false for an opcode outside the catalogue; a count past its own GL bound is Fatal,
-    // because a decoder holding such a record has nothing safe left to do with it.
+    // because a decoder holding such a record has nothing safe left to do with it - and in an
+    // armed session child (PH-1 (3)) that Fatal latches instead and this returns false too, which
+    // is why the decoder asks the opcode question itself before calling.
     Bool MGPipeWireRecordLayout(MG_Pipe::MGPWireOp op, const void* payload, WireRecordLayout& out);
 
     // The catalogue's own spelling of an opcode, for a Fatal line. Out of range is "<opcode>".
@@ -722,8 +739,9 @@ namespace MobileGL::MG_Remote::Wire {
 
     private:
         Bool ApplyChecked(MG_Pipe::MGPWireOp op, const void* record, Uint64 size);
+        // nullptr only when the session latched a named fault (PH-1 (3)); unarmed it dies.
         const void* ResolveOrFatal(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob);
-        void NoteResolvedRun(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob);
+        Bool NoteResolvedRun(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob);
         void PoisonResolvedRuns();
         // The ONLY way this class answers a record. Fatals if `op` carries no kReplySlot -
         // see LastAcceptanceKnown() for why that is a Fatal and not a log line.

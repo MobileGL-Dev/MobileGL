@@ -404,6 +404,9 @@ namespace MobileGL::MG_Remote::Server {
         ServerSession& ReverseCallbackOwner(const char* callback) {
             auto* session = ServerSession::Active();
             if (session == nullptr) {
+                // @Ph-declined (ID-P7-1): returns ServerSession& - there is no session to hand
+                // back and no honest "declined" reference, and the input is the backend's own
+                // reverse call, not a peer's bytes. Stays Fatal.
                 SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"%s.session-missing\"} - "
                         "a reverse callback has no accepted session owner", callback);
             }
@@ -432,6 +435,9 @@ namespace MobileGL::MG_Remote::Server {
                 // The backend handed over a segment-tagged blobref. The ONLY legal shape at
                 // this boundary is the monolith one - Offset is the mapped address, valid
                 // for this call - because the segment copy is THIS function's own job.
+                // @Ph-declined (ID-P7-1): the blobref is the BACKEND's (a reverse callback with
+                // a void signature and no caller that could act on a decline), and it rides the
+                // ServerSession& above; not a peer's bytes. Stays Fatal.
                 SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"OnBufferWriteback.Seg\"} - the "
                         "writeback producer was handed Seg %u; at the backend boundary the "
                         "blobref names the backend's own mapped bytes (Seg = "
@@ -997,6 +1003,8 @@ namespace MobileGL::MG_Remote::Server {
     Transport::RingControl& ServerSession::Control() {
         Transport::RingControl* control = m_link->Memory().CmdControl();
         if (control == nullptr) {
+            // @Ph-declined (ID-P7-1): returns RingControl& - no honest reference exists before
+            // Accept() mapped SEG_CMD, and this is a call-order invariant, not a peer's bytes.
             SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ServerSession::Control\"} - the control "
                     "page does not exist until Accept() has mapped SEG_CMD");
         }
@@ -1022,6 +1030,8 @@ namespace MobileGL::MG_Remote::Server {
             return *m_externalConsumerBell;
         }
         if (m_transport == nullptr) {
+            // @Ph-declined (ID-P7-1): returns Doorbell& - no bell exists to hand back before
+            // Accept(); a call-order invariant, not a peer's bytes.
             SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ServerSession::ConsumerDoorbell\"} - no "
                     "transport; Accept() has not run");
         }
@@ -1031,6 +1041,8 @@ namespace MobileGL::MG_Remote::Server {
         // P6: SocketTransport's pair. The accessors stay off ITransport by ruling (contract
         // §3.9) precisely so that this stays one switch in one file rather than two virtuals
         // every transport has to invent a home for.
+        // @Ph-declined (ID-P7-1): returns Doorbell& for a transport role this build wires no
+        // pair for - a build-shape fact, not a peer's bytes, and no reference to decline with.
         SessionFail(MGFatalFamily::UnmigratedVerb, "MGPipe: Fatal{UnmigratedVerb, \"ServerSession::ConsumerDoorbell\"} - transport "
                 "role %u has no doorbell pair yet; that is P6's SocketTransport",
                 static_cast<unsigned>(m_transport->Role()));
@@ -1041,12 +1053,14 @@ namespace MobileGL::MG_Remote::Server {
             return *m_externalProducerBell;
         }
         if (m_transport == nullptr) {
+            // @Ph-declined (ID-P7-1): returns Doorbell& - as ConsumerDoorbell above.
             SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ServerSession::ProducerDoorbell\"} - no "
                     "transport; Accept() has not run");
         }
         if (m_transport->Role() == Transport::TransportRole::InProcess) {
             return static_cast<Transport::InProcessTransport*>(m_transport)->PeerDoorbell();
         }
+        // @Ph-declined (ID-P7-1): returns Doorbell& - as ConsumerDoorbell above.
         SessionFail(MGFatalFamily::UnmigratedVerb, "MGPipe: Fatal{UnmigratedVerb, \"ServerSession::ProducerDoorbell\"} - transport "
                 "role %u has no doorbell pair yet; that is P6's SocketTransport",
                 static_cast<unsigned>(m_transport->Role()));
