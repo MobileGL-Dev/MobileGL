@@ -39,6 +39,12 @@ spawn）每跑一次是金图 `ace2af04` 与错图 `fb75d412`（14658 px）之�
 | 14 | 修正轮 | `run_trace_case.cmake`：spawn 无服务端日志即 FATAL（§4.1） |
 | 15–16 | 修正轮 | 注释/日志措辞：image-flags 出口的注释；`Magma wire decline [Site]`（§1.5） |
 | 17–19 | 本文（修正轮） | §5 标明包树/落地树；§7.2 行号；§7.2 `WaitForFrameSerial` 答 true 的债 |
+| 20 | 本文（修正轮） | 修正轮的描述：审计的 strip / 块走查 / 自测、spawn 服务端日志 FATAL、修正轮的门 |
+| 21–23 | 修正轮 2（fable 对修正轮的复审，land with fixes） | 审计：站点的日志必须是**以** `MGLOG_W/E` 开头的语句（`if (g) MGLOG_W(...)` 不算）；带前缀的字符字面量 `L'"'` / `u8'"'`；块走查在同缩进 `return`/`break;`/`case …:` 处停、跨过第 0 列 `#if`/`#endif`（§1.5） |
+| 24 | 修正轮 2 | `run_trace_case.cmake`：服务端日志缺失即 FATAL 移到 marker / ARMED 检查**之后**，inproc 也要（§4.1） |
+| 25 | 修正轮 2 | `retrace_pull_library_control.sh`：接受 P6 日志改名后 pull 库实际得到的那句 FATAL（§4.5） |
+| 26 | 修正轮 2 | 注释：`WireDeclineTally.h` 引用了不存在的 `MGL_WIRE_DECLINE_FALSE`；`.def` 横幅说 wire 臂而非 draw |
+| 27 | 本文（修正轮 2） | — |
 
 ---
 
@@ -114,6 +120,26 @@ OpenRA / DirectVulkan / `MOBILEGL_TRANSPORT=inproc` / lavapipe：retrace `PASS s
   8 行之内（向上遇到缩进更浅的行即停）；`.def` 同样去注释后再认行。`--self-test` 的 8 个内联夹具
   （// 注释站点、/* */ 注释站点、字符串站点、别的分支的日志、嵌套分支的日志、注释里的日志、`MGLOG_D` → rc 1；
   好站点 → rc 0，且都要打出对应的那句话）在 CI 同一步里先跑。树上仍是 53 / 53 / 0。
+  **修正轮 2（fable 对修正轮的复审）**：又三个洞。`LOGGED` 没锚定行首，`if (g) MGLOG_W("x");` /
+  `g ? MGLOG_W("x") : (void)0;` 这种只在某些时候才打的单行守卫日志，站在 `Count` 的缩进上就算成了站点自己的日志
+  ——计数每次动、日志只偶尔打，正是审计要拒的那种站点；带前缀的字符字面量 `L'"'` / `u8'"'` 里的 `'` 被当成数字分隔符，
+  里面的 `"` 打开一个幻影字符串把本行剩下的部分（连同站点）抹掉（fail-closed 的误红）；块走查遇到第 0 列的
+  `#if`/`#endif` 就停（误红），而同缩进的 `return`/`break;`/`case …:` **之上**的日志（控制流到不了 `Count`）却算数。
+  现在：`LOGGED` 锚定 `^\s*MGLOG_[WE]`，走查用 `match` 不用 `search`；`CHAR_PREFIX` 与 `RAW_PREFIX` 同形（前缀之前
+  须是非标识符字符或行首，所以 `0xAB'CD` 不受影响）；走查跨过 `#if`/`#ifdef`/`#ifndef`/`#endif`（`#else`/`#elif`
+  仍是停点——另一侧的日志属于另一个构建），在同缩进的 `case`/`default:`/`break;`/`return`/`continue;`/`goto`/`throw`
+  处停。夹具 8 → **14**，新夹具在旧审计（`53471e7b`）与新审计上的读数：
+
+  | 夹具 | 期望 | 旧审计 | 新审计 |
+  |---|---|---|---|
+  | guarded one-liner log at the Count's indentation | rc 1 | rc 0 **误绿** | rc 1 |
+  | log on the far side of a same-indent return | rc 1 | rc 0 **误绿** | rc 1 |
+  | log in the previous case of a same-indent switch | rc 1 | rc 0 **误绿** | rc 1 |
+  | log only on the other side of a #else | rc 1 | rc 1 | rc 1（钉住 `#else` 仍是停点） |
+  | prefixed char literals (L'"', u8'"') before a site on the same line | rc 0 | rc 1 **误红** | rc 0 |
+  | count under its log across a column-0 #if/#endif | rc 0 | rc 1 **误红** | rc 0 |
+
+  14/14，树上仍是 **53 / 53 / 0**（树上今天没有带前缀的字符字面量，也没有跨 `#if` 的裸 `Count`，所以两处误红没有真的红过）。
 
 | 审计 | 行 | 有站点 | 未记日志 | rc |
 |---|---|---|---|---|
@@ -350,7 +376,42 @@ CMake Error at run_trace_case.cmake:321 (message):
   counted as a clean one.
 ```
 
-inproc 也写 `mobilegl.server.log`（apply 线程），但本轮按复审只收紧了 spawn；inproc 仍是 `if(EXISTS …)`。
+**修正轮 2：这条 FATAL 移到 marker 与 ARMED 检查之后，并且 inproc 也要服务端日志。** 修正轮把它放在了
+marker 检查与 `spawn ARMED … pid` 检查**之前**，于是一次启动/握手失败（没有服务端进程、也没有 ARMED 行）报的是
+「服务端没留下文件」，而不是更具体的「resolved, but carries no spawn ARMED」，把读者指向错误的进程。现在它紧挨在
+census 之前（`:384`），tcp 臂原来同样位置的「no forwarded server log」检查随之并入；也不再按 transport 分支：
+runner 承认的每一行 transport 都有服务端角色的文件——spawn 是服务端进程写的（tcp 是夹具转发的行落在同一文件），
+inproc 是 `mgl-srv-apply` 线程的行按线程角色路由到同一个 `.server.log` sink（首条服务端角色行时惰性打开），
+而本车道要求的 INFO 档下 `ServerLoop.cpp:365` 在 apply 线程启动时就写一行，所以干净的 inproc 回放**一定**有这个文件
+（修正轮那句「inproc 仍是 `if(EXISTS …)`」到此为止）；两条 census 的读取也不再 `if(EXISTS …)`。
+演示（OpenRA DirectVulkan，包装真回放、回放之后毁掉一份日志）：
+
+```
+1. inproc，删服务端日志（536 行）
+   修正轮 runner（53471e7b）  rc 0   Fatal{ lines ...: 0 / MGWIRE-FLOOR unsound-serial-complete lines: 0   ← 误绿
+   修正轮 2 runner            rc 1
+   CMake Error at run_trace_case.cmake:384 (message):
+     OpenRA DirectVulkan: MOBILEGL_TRANSPORT=inproc but the run wrote no
+     .../output/mobilegl.server.log, so the server role's Fatal{ and MGWIRE-FLOOR
+     lines cannot be counted.  A split retrace with no server log cannot be
+     counted as a clean one.
+2. spawn，删服务端日志（541 行）
+   修正轮 2 runner            rc 1   同上，`MOBILEGL_TRANSPORT=spawn but the run wrote no …`，同在 `:384`
+3. spawn，删服务端日志**并**删掉 client 日志里的 `spawn ARMED` 行（启动/握手失败的形状）
+   修正轮 runner（53471e7b）  rc 1   run_trace_case.cmake:321 … but the run wrote no …server.log   ← 指向服务端
+   修正轮 2 runner            rc 1
+   CMake Error at run_trace_case.cmake:356 (message):
+     OpenRA DirectVulkan: .../output/mobilegl.client.log reports
+     MOBILEGL_TRANSPORT=spawn resolved, but carries no "spawn ARMED - the server
+     role runs in pid ".  That sentence is written by
+     ClientSession::StartSpawned AFTER the launch, the connect and the handshake
+     all succeeded, ...
+4. spawn，只删 `spawn ARMED` 行（服务端日志保留）
+   修正轮 2 runner            rc 1   同 3，`:356` 的 ARMED 消息
+```
+
+不毁日志时 OpenRA DirectVulkan **与 DirectGLES** 的 SPLIT / SPAWN 四条全绿（ssim 1.000000 / 0 px / `MGWIRE-FLOOR` 0 行；
+inproc 的服务端日志 DirectVulkan 536 行、DirectGLES 987 行）。
 
 **图是金的、用例是红的**——这正是这条门要的：它红在「地板断言了一次没等过的完成」，
 不管这台驱动的时序有没有把它变成像素。
@@ -425,6 +486,38 @@ inproc 与 spawn **sha 逐字相同**，证明机制在**服务端**。
 未决。本包已有的 red-once 是 §4.1 的确定性计数器（B §5.4 的形状）加 §4.2 的两进程像素用例，
 两者都不靠时序。**如实记录**：主机上因此**没有**一张自然发生的错图，只有计数器与强制图。
 
+### 4.5 范围外：pull 库对照自 P6 日志改名起就到不了绿（复审点名，修正轮 2 修）
+
+`scripts/ci/retrace_pull_library_control.sh`（`test.yml` retrace-split 矩阵的两行 transport 都跑它）要求 red 里带
+`run_trace_case.cmake` 的 `never reported resolving it`——那是 marker 搜索那一句。P6 一角色一日志的改名（`b3155525`）
+之后 pull 库到不了那一步：pull 构建只有一个角色，`RoleLogPath` 原样返回 `MOBILEGL_LOG_FILE_PATH`（`MG_Util/Debug/Log.h`
+的 pull 臂），写的是 `output/mobilegl.log`；runner 读的是 `output/mobilegl.client.log`（`run_trace_case.cmake:115`），
+于是在 marker 搜索**之前**一步就 FATAL（`:269-273`：「the run wrote no …client.log, so there is no evidence the transport
+ever resolved」）。这句里没有对照要的话，对照的第二道门（「red 必须是本对照自己的 red」）把自己的 red 拒了，步骤 rc 1。
+
+**本树实测**（真 ctest；`build-linux` 的 pull 库盖到 `build-split` 的冻结路径上，`SPLIT_TRANSPORT=inproc`，
+未加后缀的 `MobileGLTraceReplay.OpenRA.DirectVulkan` 条目，与 CI 同形）：
+
+```
+pull control library: .../build-split/libMobileGL.so: MG_Remote=0
+CMake Error at run_trace_case.cmake:270 (message):
+  ... .../OpenRA/DirectVulkan/output/mobilegl.client.log,
+  so there is no evidence the transport ever resolved.  A split retrace with ...
+::error::the split retrace went red (ctest exit 8) with the pull library in place, but the failure
+  never says the library did not resolve the transport - run_trace_case.cmake's "never reported
+  resolving it" is absent from the output. ...
+控制脚本 rc=1
+```
+
+修法一处：`EVIDENCE` 变成 `grep -F` 的两行模式（`never reported resolving it` 与 `no evidence the transport ever resolved`），
+红检扰动的那一行（`grep -qF "${EVIDENCE}"`）原样不动；两句都是同一条 transport 身份断言以同一理由拒绝同一个库
+（pull 构建没有 split 日志可供 marker 落脚），都不是 loader 失败 / 缺夹具 / 超时 / SSIM 掉——那才是第二道门要拒的。
+`stub_ctest.sh` 加 `retrace-evidence-nolog`（按 CMake 折行的样子复现这句），`control_smoke_test.sh` 期望它 PASS
+（22 → **23**/23），`redcheck_control_smoke_test.sh` 仍把「red without the transport-resolution message」变红。
+修后本树实测 inproc 与 spawn 两臂的对照都 rc 0：「the pull library turned the split retrace red for its own reason
+(ctest exit 8): 1 selected case(s) named the transport, not the picture」。CI 上这一步自改名以来的读数本包看不到，
+只能说：按同一份代码它每次都会 rc 1。
+
 ---
 
 ## 5. 门
@@ -478,6 +571,14 @@ split 构建 rc 0；G1 rc 0、`.text` **`0xa52203`**、nm **0 / 0**（唯一的�
 census rc 0 **79**；audit `--self-test` **8/8** rc 0、树上 **53 / 53 / 0** rc 0；ratchet **unchanged at 186**；parity rc 0；
 `unit` **2420/2420**、`integration-magma-split` **90/90**、`integration-magma-spawn` **69/69**；
 OpenRA DirectVulkan SPLIT / SPAWN PASS、ssim 1.000000、0 px、`MGWIRE-FLOOR` 0 行。
+
+**修正轮 2 的门——包树 `3977901f`（修正轮 2 最后一个代码提交），合并前**（`~/w7/b3bin/r3/gate3.log`）：
+split 构建 rc 0；G1 rc 0、`.text` **`0xa52203`**、nm **0 / 0**（产品文件改动只有两处 disagg-only 的注释）；
+census rc 0 **79**；audit `--self-test` **14/14** rc 0、树上 **53 / 53 / 0** rc 0；ratchet **unchanged at 186**；parity rc 0；
+`control_smoke_test.sh` **23/23** rc 0、`redcheck_control_smoke_test.sh` rc 0；
+`unit` **2420/2420**、`integration-magma-split` **90/90**、`integration-magma-spawn` **69/69**；
+OpenRA DirectVulkan SPLIT / SPAWN PASS、ssim 1.000000、0 px、`MGWIRE-FLOOR` 0 行（DirectGLES 两臂同，§4.1）；
+§4.1 的四个 fail-closed 演示与 §4.5 的 pull 库对照（inproc 与 spawn 各一次，rc 0）。
 
 包树上外加 `MobileGLTraceReplay.OpenRA.DirectVulkan.SPLIT` / `.SPAWN`（带 §4.1 的新红条件）：
 PASS、ssim 1.000000、0 px、`MGWIRE-FLOOR` 0 行。为跑这两条，本树 `build-split` 以
@@ -541,7 +642,8 @@ Present（`:14094`）三处「等一条 fence、把它之前的都记成完成�
     每第 8 次 drain 会调 `BeginFrame`）。结论（不在该处回收 arena 存储）仍然正确，只是理由写错了；
     改注释会和 B2 在同文件区域的改动打架。
   - `VulkanRenderer::WaitForFrameSerial` 里 fence 等待循环上方的注释（包树 `774bc17f` 为
-    `VulkanRenderer.cpp:13400-13403`，落地树 `pipe@6207c9c9` 为 `:13530-13533`；以函数名为准）的
+    `VulkanRenderer.cpp:13400-13403`，落地树 `pipe@6207c9c9` 为 `:13529-13532`、引用的那句在 `:13531-13532`；
+    以函数名为准）的
     「OnSubmitsCompletedUpTo calls NotifyFrameSerialComplete for every record it retires, so the
     completed-serial floor still advances correctly after one fence wait」——disagg 构建上 §3.1 之后
     **不再逐记录通知**，地板只推到无在飞持有的序号。该函数是 pull 与 disagg 共用代码，注释归 B4 一起改。
@@ -553,7 +655,14 @@ Present（`:14094`）三处「等一条 fence、把它之前的都记成完成�
   `IsTimerQueryResultReady(record)`，所以今天它退化为一次**假超时**（结果这次拿不到、下次再收），不是错读。
   **修法归 B4**：`OnSubmitsCompletedUpTo` 之后只在 `IsFrameSerialComplete(serial)` 为真时返回，否则**从头重扫**
   ——`OnSubmitsCompletedUpTo` 会从正在迭代的 vector 里 erase，所以是 restart，不能 continue；
-  与 §7.1 的聚合等待与上面的注释一起做。
+  与 §7.1 的聚合等待与上面的注释一起做。**修正轮 2 补给 B4 的一句**：`OnSubmitsCompletedUpTo(record.submitIndex)`
+  之后**不得再读 `record`**——`:13404` 的 range-for 拿的是 `m_inFlightSubmits` 元素的引用，而 `OnSubmitsCompletedUpTo`
+  正是从这个 vector 里 erase；要用的字段先拷出来（`RefreshCompletedSubmits` `:13471` 的
+  「Copy before OnSubmitsCompletedUpTo erases the front record」就是这条规则）。
+- **`run_trace_case.cmake` 的 census 排在 replay 退出码之后（修正轮 2 记债，本轮不动）**：`:172-174` 对非零
+  `replay_result` 直接 `FATAL_ERROR`，两条 census（`Fatal{` 与 `MGWIRE-FLOOR`，修正轮 2 之后在 `:390` 与 `:416` 起）都在它之后——一次带 abort 的
+  回放只留下退出码，日志里的 `Fatal{` 名字与地板计数不会被打印出来，读者得自己去翻两份日志。census 应当先于退出码判定
+  读两份日志（存在则读）；与 §4.1 的 fail-closed 顺序一起改时要分清：「无服务端日志即 FATAL」是对**退出码为 0** 的回放说的。
 - **disaggregated 构建的 monolith 臂现在比 pull 构建更可靠（复审 (a)）**：monolith 的
   `VkBufferResource` 路径 `OnSubData` 经 `IsResourceBusy`（`VkBufferManager.cpp:709`）读的是**同一个**
   `GetCompletedSerial()` 地板，所以 §3.1 的钳制在 disagg 构建里也保护了 monolith 臂的 mid-frame flush；
