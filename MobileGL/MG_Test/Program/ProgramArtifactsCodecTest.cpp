@@ -326,6 +326,31 @@ TEST(ProgramArtifactsCodec, ATruncatedStreamIsRefusedNotGuessed) {
 #endif
 }
 
+// A count is not permission to reserve a container larger than the bytes left in the
+// untrusted archive. This mutates the first LinkArtifacts vector count to the boundary value
+// that the former raw <= Remaining check accepted but sizeof(value_type) <= Remaining rejects.
+TEST(ProgramArtifactsCodec, AVectorCountCannotReservePastTheRemainingArchiveBytes) {
+#if MOBILEGL_PIPE_PUSH
+    Vector<Uint8> bytes;
+    EncodeProgramArtifacts(LinkArtifacts{}, SpirvArtifacts{}, bytes);
+    constexpr SizeT countOffset = sizeof(Uint32) + sizeof(Uint64);
+    ASSERT_GT(bytes.size(), countOffset + sizeof(Uint64));
+    const SizeT available = bytes.size() - countOffset - sizeof(Uint64);
+    const Uint64 forgedCount = static_cast<Uint64>(available / sizeof(UniformReflection)) + 1;
+    ASSERT_LT(forgedCount, static_cast<Uint64>(available))
+        << "fixture must pass the old count <= remaining check";
+    std::memcpy(bytes.data() + countOffset, &forgedCount, sizeof(forgedCount));
+
+    LinkArtifacts link;
+    SpirvArtifacts spirv;
+    EXPECT_FALSE(DecodeProgramArtifacts(bytes.data(), bytes.size(), link, spirv));
+    EXPECT_TRUE(link.uniformReflection.empty());
+    EXPECT_TRUE(spirv.generatedSpirv.empty());
+#else
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: the archive codec is push-only";
+#endif
+}
+
 // Negative control 2: both the version and schema word must refuse mismatches.
 // Monolith v1 retains the old native-size echo in that second word.
 TEST(ProgramArtifactsCodec, AVersionMismatchIsRefused) {

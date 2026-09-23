@@ -247,15 +247,16 @@ namespace MobileGL::MG_State::GLState {
             return true;
         }
 
-        // A COUNT IS CHECKED AGAINST THE BYTES THAT REMAIN BEFORE ANYTHING IS ALLOCATED. Every
-        // element this codec writes costs at least one byte, so a count larger than the
-        // remaining bytes cannot describe this stream - and refusing it here is what stops a
-        // corrupt or truncated archive from turning into a multi-gigabyte resize before the
-        // element loop notices it has run out.
-        Bool TakeCount(ReadCursor& in, SizeT& count) {
+        // A COUNT IS CHECKED AGAINST THE BYTES THAT REMAIN BEFORE ANYTHING IS ALLOCATED.
+        // For resizable vectors, also charge sizeof(value_type) per element: even when a
+        // serialized record is compact, its immediate vector reservation must not exceed the
+        // remaining untrusted archive bytes. The division form avoids multiplying attacker
+        // input and is safe on both 32-bit and 64-bit SizeT.
+        Bool TakeCount(ReadCursor& in, SizeT& count, SizeT allocationBytesPerElement = 1) {
             Uint64 raw = 0;
             if (!TakeRaw(in, raw)) return false;
-            if (raw > static_cast<Uint64>(in.Remaining())) {
+            if (allocationBytesPerElement == 0 ||
+                raw > static_cast<Uint64>(in.Remaining() / allocationBytesPerElement)) {
                 in.Ok = false;
                 return false;
             }
@@ -304,7 +305,8 @@ namespace MobileGL::MG_State::GLState {
                 }
             } else if constexpr (ArchiveVector<T>) {
                 SizeT count = 0;
-                if (!TakeCount(in, count)) return;
+                using Element = typename T::value_type;
+                if (!TakeCount(in, count, sizeof(Element))) return;
                 value.clear();
                 value.resize(count);
                 for (auto& element : value) {
