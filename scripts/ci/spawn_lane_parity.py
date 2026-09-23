@@ -26,6 +26,9 @@ that had silently lost one. So there the arm - and only the arm, the SECOND dott
 what comes off.
 """
 import argparse
+import importlib.util
+import json
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -106,6 +109,36 @@ def lane_cases(build_dir, label):
     out = subprocess.run(["ctest", "-N", "-L", "^" + label + "$"], cwd=build_dir,
                          capture_output=True, text=True, check=True).stdout
     return {m.group(1) for m in CASE.finditer(out)}
+
+
+def whole_build_discovery(build_dir):
+    """`ctest --show-only=json-v1` over EVERY entry: a lock is a property of the registration, and
+    an entry that reaches the supervisor under some other label is just as able to collide."""
+    out = subprocess.run(["ctest", "--show-only=json-v1"], cwd=build_dir,
+                         capture_output=True, text=True, check=True).stdout
+    return json.loads(out)
+
+
+def tcp_lock_check(build_dir):
+    """Every entry on the loopback TCP supervisor holds RESOURCE_LOCK mobilegl-tcp (the rule and
+    its history live beside junit_tally.tcp_lock_violations). Returns True on failure."""
+    spec = importlib.util.spec_from_file_location("junit_tally", Path(__file__).with_name("junit_tally.py"))
+    tally = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tally)
+    document = whole_build_discovery(build_dir)
+    reaching = [t for t in document.get("tests", [])
+                if tally.TCP_FIXTURE in tally._list_property(t, "FIXTURES_REQUIRED")
+                or tally.TCP_LANE_LABEL in tally._list_property(t, "LABELS")]
+    bad = tally.tcp_lock_violations(document)
+    print(f"tcp supervisor lock: {len(reaching)} entrie(s) reach the loopback supervisor, "
+          f"{len(bad)} without RESOURCE_LOCK {tally.TCP_FIXTURE}")
+    if bad:
+        print(f"::error::entries that reach the one-session TCP supervisor (FIXTURES_REQUIRED "
+              f"{tally.TCP_FIXTURE}, or label {tally.TCP_LANE_LABEL}) must hold RESOURCE_LOCK "
+              f"{tally.TCP_FIXTURE}; without it `ctest -j` runs them beside another Tcp case and "
+              f"the second client dies Refuse{{Busy}}: " + ", ".join(bad), file=sys.stderr)
+        return True
+    return False
 
 
 def compare_arms(build_dir, tier, labels, inproc_only=(), no_tcp=()):
@@ -246,6 +279,9 @@ def main():
                            {"split": "integration-magma-full-split",
                             "spawn": "integration-magma-full-spawn",
                             "tcp": "integration-magma-full-tcp"})
+    # The arms above can only be compared if they can all RUN: every tcp entry shares one
+    # single-session supervisor, so the lock is part of what registering a tcp arm means.
+    failed |= tcp_lock_check(args.build_dir)
     return 1 if failed else 0
 
 

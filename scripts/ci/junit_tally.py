@@ -36,6 +36,52 @@ ARM_PREFIXES = {
 
 TCP_ARM = re.compile(r'control=tcp data=stream server=\S+ pid=[1-9][0-9]*\b')
 
+# THE LOOPBACK SUPERVISOR SERVES ONE SESSION AT A TIME (ServerMain.cpp answers a second Hello
+# Refuse{Busy}; CONTRACT-P65.md), so every entry that reaches it has to hold the lane's lock.
+# P7's D2 TextureUploadShape Tcp entry required the fixture but locked only its private log name:
+# under `ctest -L integration-gpu -j 4` it ran beside another Tcp case and whichever client
+# connected second died Refuse{Busy} -> Fatal{CapsBeforeFirstSnapshot}. `-L '^integration-tcp$'`
+# happened to schedule it next to SupervisorProtocolControls (which runs its own supervisor), so
+# the lane that exists to exercise the fixture could not see it. Asserted on the registration, not
+# on a lucky schedule.
+TCP_FIXTURE = 'mobilegl-tcp'
+TCP_LANE_LABEL = 'integration-tcp'
+
+
+def _list_property(test, name):
+    """A json-v1 list property as a list of strings (a ';'-joined string counts as a list)."""
+    for prop in test.get('properties', []):
+        if prop.get('name') != name:
+            continue
+        value = prop.get('value')
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item) for item in value]
+        return [item for item in str(value).split(';') if item]
+    return []
+
+
+def tcp_lock_violations(document):
+    """Entries of a ctest --show-only=json-v1 document that reach the loopback TCP supervisor -
+    FIXTURES_REQUIRED names mobilegl-tcp, or the entry is labelled exactly integration-tcp - and do
+    not hold RESOURCE_LOCK mobilegl-tcp. Sorted names; empty when the registration is sound."""
+    bad = []
+    for test in document.get('tests', []):
+        reaches = (TCP_FIXTURE in _list_property(test, 'FIXTURES_REQUIRED')
+                   or TCP_LANE_LABEL in _list_property(test, 'LABELS'))
+        if reaches and TCP_FIXTURE not in _list_property(test, 'RESOURCE_LOCK'):
+            bad.append(test.get('name', '<unnamed>'))
+    return sorted(bad)
+
+
+def require_tcp_locks(document):
+    bad = tcp_lock_violations(document)
+    if bad:
+        raise ValueError(f'{len(bad)} entrie(s) reach the one-session TCP supervisor without '
+                         f'RESOURCE_LOCK {TCP_FIXTURE}, so `ctest -j` can run them beside another '
+                         f'Tcp case and the second client dies Refuse{{Busy}}: ' + ', '.join(bad))
+
 
 def require_tcp_proof(path, prefix, discovery, require_run_ahead=False):
     helper_path = Path(__file__).resolve().parents[2] / 'MobileGL/MG_IntegrationTest/Harness/split_log_paths.py'
@@ -109,7 +155,9 @@ def main():
     arms = parser.add_mutually_exclusive_group()
     for flag, prefix in ARM_PREFIXES.items():
         arms.add_argument(flag, dest='prefix', action='store_const', const=prefix)
-    parser.add_argument('--discovery', help='CTest --show-only=json-v1 output (required for TCP proof)')
+    parser.add_argument('--discovery', help='CTest --show-only=json-v1 output (required for TCP proof); '
+                                            'every entry in it that reaches the TCP supervisor must '
+                                            'hold RESOURCE_LOCK mobilegl-tcp')
     parser.add_argument('--require-run-ahead', action='store_true',
                         help='Additionally prove actual run-ahead, without fallback or demotion, on each TCP case')
     parser.add_argument('--require-entry-passed', action='append', default=[], metavar='NAME',
@@ -121,6 +169,8 @@ def main():
         parser.error('--require-run-ahead requires a TCP arm selection')
     try:
         prefix = args.prefix
+        if args.discovery:
+            require_tcp_locks(json.loads(Path(args.discovery).read_text()))
         passed, failed, skipped = tally(args.junit, prefix=prefix)
         if prefix in ('DirectGLES.Tcp.', 'DirectGLES.TcpDevice.'):
             require_tcp_proof(args.junit, prefix, args.discovery, args.require_run_ahead)

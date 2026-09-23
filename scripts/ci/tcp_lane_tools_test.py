@@ -124,12 +124,75 @@ class Accounting(unittest.TestCase):
         # assertion, instead of running a real ctest in the placeholder build dir.
         with patch.object(parity, 'lane_cases', side_effect=[{a}, {a}, {b}]), \
                 patch.object(parity, 'lane_names', return_value=set()), \
+                patch.object(parity, 'whole_build_discovery', return_value={'tests': []}), \
                 patch.object(sys, 'argv', ['spawn_lane_parity.py', 'unused']):
             self.assertEqual(parity.main(), 1)
         with patch.object(parity, 'lane_cases', return_value={a}), \
                 patch.object(parity, 'lane_names', return_value=set()), \
+                patch.object(parity, 'whole_build_discovery', return_value={'tests': []}), \
                 patch.object(sys, 'argv', ['spawn_lane_parity.py', 'unused']):
             self.assertEqual(parity.main(), 0)
+
+    @staticmethod
+    def discovered(name, **properties):
+        return {'name': name, 'properties': [{'name': key, 'value': value}
+                                             for key, value in properties.items()]}
+
+    def test_every_entry_on_the_one_session_supervisor_holds_its_lock(self):
+        """P7 CI: DirectGLES.Tcp.TextureUploadShape required mobilegl-tcp and locked only its log.
+
+        The loopback supervisor answers a second concurrent Hello Refuse{Busy}, so under
+        `ctest -L integration-gpu -j 4` that entry and another Tcp case killed each other.
+        The stub mirrors the real json-v1 shapes: the fixture's own setup entry, a sound Tcp
+        case, the violator as it was registered, a Magma tcp entry that reaches the fixture
+        under another label, a labelled control with no fixture, and the device lane, whose
+        lock is its own."""
+        tally = module('junit_tally')
+        parity = module('spawn_lane_parity')
+        entry = self.discovered
+        tus = 'DirectGLES.Tcp.TextureUploadShape.TextureUploadShapeScenario.TheEmittedUploadShapeIsRecordedAndTheTwoSidesAgree'
+        sound = [
+            entry('TcpServer.Start', FIXTURES_SETUP=['mobilegl-tcp']),
+            entry('DirectGLES.Tcp.TriangleScenario.Draw', LABELS=['integration-gpu', 'integration-tcp'],
+                  FIXTURES_REQUIRED=['mobilegl-tcp'], RESOURCE_LOCK=['mobilegl-tcp']),
+            entry('TcpLane.SupervisorProtocolControls', LABELS=['integration-tcp'], RESOURCE_LOCK=['mobilegl-tcp']),
+            entry('DirectGLES.TcpDevice.TriangleScenario.Draw', LABELS=['integration-tcp-device'],
+                  RESOURCE_LOCK=['mobilegl-tcp-device']),
+            entry('DirectGLES.Split.TriangleScenario.Draw', LABELS=['integration-split'], RESOURCE_LOCK=['x.log']),
+            # A lock list that reached json-v1 as one ';'-joined string still counts.
+            entry(tus, LABELS='integration-gpu;integration-tcp', FIXTURES_REQUIRED='mobilegl-tcp',
+                  RESOURCE_LOCK='texture-upload-shape-tcp-DirectGLES.log;mobilegl-tcp'),
+        ]
+        self.assertEqual(tally.tcp_lock_violations({'tests': sound}), [])
+        broken = sound[:-1] + [
+            entry(tus, LABELS=['integration-gpu', 'integration-tcp'], FIXTURES_REQUIRED=['mobilegl-tcp'],
+                  RESOURCE_LOCK=['texture-upload-shape-tcp-DirectGLES.log']),
+            entry('DirectVulkan.Tcp.Fm.TriangleScenario.Draw', LABELS=['integration-magma-tcp'],
+                  FIXTURES_REQUIRED=['mobilegl-tcp']),
+            entry('TcpLane.Unlocked', LABELS=['integration-tcp']),
+        ]
+        expected = sorted([tus, 'DirectVulkan.Tcp.Fm.TriangleScenario.Draw', 'TcpLane.Unlocked'])
+        self.assertEqual(tally.tcp_lock_violations({'tests': broken}), expected)
+        with self.assertRaises(ValueError) as raised:
+            tally.require_tcp_locks({'tests': broken})
+        self.assertIn(tus, str(raised.exception))
+        # Both places CI reads the registration: junit_tally's --discovery handling (the TCP lane
+        # step) and the parity gate's whole-build discovery (every label).
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            junit, discovery = root / 'junit.xml', root / 'lane.json'
+            junit.write_text('<testsuite><testcase name="TcpLane.SupervisorProtocolControls" /></testsuite>')
+            for tests, rc in ((broken, 1), (sound, 0)):
+                discovery.write_text(json.dumps({'tests': tests}))
+                with patch.object(sys, 'argv', ['junit_tally.py', str(junit), '--discovery', str(discovery),
+                                                '--require-entry-passed', 'TcpLane.SupervisorProtocolControls']):
+                    self.assertEqual(tally.main(), rc)
+        for tests, rc in ((broken, 1), (sound, 0)):
+            with patch.object(parity, 'lane_cases', return_value={'TriangleScenario.Draw'}), \
+                    patch.object(parity, 'lane_names', return_value=set()), \
+                    patch.object(parity, 'whole_build_discovery', return_value={'tests': tests}), \
+                    patch.object(sys, 'argv', ['spawn_lane_parity.py', 'unused']):
+                self.assertEqual(parity.main(), rc)
 
 
 class DeviceIdleExemption(unittest.TestCase):

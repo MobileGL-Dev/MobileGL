@@ -2704,6 +2704,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     foreach(mglD2Arm Split Spawn Tcp)
         string(TOLOWER "${mglD2Arm}" mglD2ArmLower)
         set(mglD2Log "${CMAKE_CURRENT_BINARY_DIR}/texture-upload-shape-${mglD2ArmLower}-DirectGLES.log")
+        get_filename_component(mglD2LogName "${mglD2Log}" NAME)
+        set(mglD2Locks "${mglD2LogName}")
         set(mglD2Extra)
         if(mglD2Arm STREQUAL "Split")
             set(mglD2Transport "MOBILEGL_TRANSPORT=inproc"
@@ -2718,6 +2720,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                                "MOBILEGL_IPC_LOG_FORWARD=1" "MOBILEGL_IPC_TOKEN="
                                "MGITEST_TCP_LANE=1" "MOBILEGL_ITEST_REQUIRE_GPU=1")
             set(mglD2Extra FIXTURES_REQUIRED mobilegl-tcp)
+            # The loopback supervisor serves ONE session (ServerMain.cpp answers a second Hello
+            # Refuse{Busy}), and every other Tcp entry holds this lock. Without it `ctest -L
+            # integration-gpu -j N` ran this case beside another Tcp case and whichever client
+            # connected second died Refuse{Busy} -> Fatal{CapsBeforeFirstSnapshot}.
+            # scripts/ci/spawn_lane_parity.py and junit_tally.py --discovery now refuse any entry
+            # on the fixture that does not hold it.
+            set(mglD2Locks "${mglD2LogName}\;mobilegl-tcp")
         endif()
         mgl_itest_join_environment(MGL_D2_TUS_ENV_${mglD2Arm}
             "MOBILEGL_BACKEND_TYPE=DirectGLES" ${mglD2Transport} "MGITEST_SPLIT_LANE=1"
@@ -2726,7 +2735,6 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1"
             "MOBILEGL_LOG_FILE_PATH=${mglD2Log}"
             ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
-        get_filename_component(mglD2LogName "${mglD2Log}" NAME)
         gtest_discover_tests(MobileGLIntegrationTest
             TEST_PREFIX "DirectGLES.${mglD2Arm}.TextureUploadShape."
             TEST_FILTER "${MGL_D2_TUS_FILTER}"
@@ -2734,7 +2742,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             PROPERTIES
                 LABELS "integration-gpu\;integration-${mglD2ArmLower}"
                 TIMEOUT ${MGL_ITEST_TIMEOUT}
-                RESOURCE_LOCK "${mglD2LogName}"
+                RESOURCE_LOCK "${mglD2Locks}"
                 ${mglD2Extra}
                 ENVIRONMENT "${MGL_D2_TUS_ENV_${mglD2Arm}}"
         )
