@@ -628,6 +628,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<WireRetiredObjects> m_wireRetiredObjects;
         Uint32 m_wirePreparationDepth = 0;
         void DispatchWireCompute(GLuint x, GLuint y, GLuint z);
+        void RewindWireDescriptorSetsIfDue();
         UniquePtr<RenderPassEntry> m_wireDrawPass;
         Vector<VkImageView> m_wireDrawViews;
         VkPipeline GetOrCreatePipelineWithInput(GLenum mode, const MagmaProgramSource& program,

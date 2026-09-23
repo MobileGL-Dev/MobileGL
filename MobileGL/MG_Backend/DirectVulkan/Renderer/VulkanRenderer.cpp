@@ -7061,8 +7061,10 @@ void main() {
                                    const DrawCmdParam& drawParams,
                                    const IndexBufferView* pIndexBufferView) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            RewindWireDescriptorSetsIfDue();
             return SetupWireDraw(frame, mode, aspects, drawParams, pIndexBufferView);
+        }
 #endif
         // Sync each sampled texture at most once across this whole draw: the layout
         // probe loop, the post-transition loop, and ResolveSamplerDescriptor would
@@ -7682,6 +7684,7 @@ void main() {
     void VulkanRenderer::DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            RewindWireDescriptorSetsIfDue();
             DispatchWireCompute(numGroupsX, numGroupsY, numGroupsZ);
             return;
         }
@@ -13572,6 +13575,36 @@ void main() {
         const auto& frame = m_frameContext.GetCurrent();
         return frame.isCommandRecording || frame.hasCommandBufferRecorded;
     }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    void VulkanRenderer::RewindWireDescriptorSetsIfDue() {
+        if (!m_uniformManager || m_frameContext.GetFrameCount() == 0) return;
+        const Uint32 frameIndex = m_frameContext.GetCurrentFrameIndex();
+        if (!m_uniformManager->WireDescriptorSetBudgetReached(frameIndex)) return;
+
+        // A set cannot be rewritten while a recorded or submitted command
+        // buffer might still read it. This wire-only boundary first submits
+        // the current recording, then waits for that exact submit index.
+        if (HasPendingRecordedWork() && !FlushPendingCommands())
+            MagmaWireFatal("descriptor-rewind-flush");
+        const Uint64 through = m_submitCounter;
+        if (through > m_completedSubmitCounter) {
+            // B4 has not yet made every old retirement site aggregate-safe.
+            // Queue idle proves even a submission a previous single-fence path
+            // prematurely removed from m_inFlightSubmits has finished; only
+            // then may any layout cursor be rewound and its sets rewritten.
+            if (vkQueueWaitIdle(m_graphicsQueue) != VK_SUCCESS)
+                MagmaWireFatal("descriptor-rewind-wait");
+            OnSubmitsCompletedUpTo(through);
+        }
+        if (HasPendingRecordedWork() || m_completedSubmitCounter < through)
+            MagmaWireFatal("descriptor-rewind-proof");
+        const SizeT cachedSets = m_uniformManager->RewindWireDescriptorSets(frameIndex);
+        MGLOG_I("Magma descriptor rewind: frame=%u retiredSubmit=%llu budget=%u cached=%zu",
+                frameIndex, static_cast<unsigned long long>(through),
+                UniformManager::kWireDescriptorSetBudget, cachedSets);
+    }
+#endif
 
     Bool VulkanRenderer::IsSubmitIndexComplete(Uint64 submitIndex) {
         if (submitIndex <= m_completedSubmitCounter) {

@@ -674,6 +674,40 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Bool UniformManager::WireDescriptorSetBudgetReached(Uint32 frameIndex) const {
+        MOBILEGL_ASSERT(frameIndex < m_frames.size(), "WireDescriptorSetBudgetReached invalid frame index");
+        return m_frames[frameIndex].allocatedSetsThisFrame >= kWireDescriptorSetBudget;
+    }
+
+    SizeT UniformManager::RewindWireDescriptorSets(Uint32 frameIndex) {
+        MOBILEGL_ASSERT(frameIndex < m_frames.size(), "RewindWireDescriptorSets invalid frame index");
+        auto& frame = m_frames[frameIndex];
+        // The caller proved that the last graphics submit using these sets has
+        // retired and that no unsubmitted command buffer still references them.
+        // Keep the pools and sets: only the per-layout write cursors rewind.
+        // Image and buffer views stay alive until the regular frame boundary.
+        m_peakDescriptorSetsObserved = std::max(m_peakDescriptorSetsObserved, frame.peakAllocatedSetsThisFrame);
+        SizeT cachedSets = 0;
+        for (auto& entry : frame.descriptorSetCacheByLayout) {
+            cachedSets += entry.second.sets.size();
+            entry.second.cursor = 0;
+        }
+        frame.allocatedSetsThisFrame = 0;
+        frame.peakAllocatedSetsThisFrame = 0;
+        for (auto& entry : m_descriptorReuseMemo) entry.valid = false;
+        m_fastRebindMemo.valid = false;
+        m_lastBindValid = false;
+        const Uint32 touchedBindings =
+            std::min<Uint32>(m_samplerResolveMemoHighWater, static_cast<Uint32>(m_samplerResolveMemo.size()));
+        for (Uint32 binding = 0; binding < touchedBindings; ++binding) {
+            m_samplerResolveMemo[binding].valid = false;
+            m_samplerResolveMemo[binding].infoValid = false;
+        }
+        return cachedSets;
+    }
+#endif
+
     void UniformManager::OnDescriptorSetLayoutDestroyed(VkDescriptorSetLayout descriptorSetLayout) {
         SizeT purgedSets = 0;
         for (auto& frame : m_frames) {

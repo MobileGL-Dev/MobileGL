@@ -17,7 +17,7 @@
 // split server held 25,923 dead stores against 28 live wire buffers and 41k mappings; on the
 // Redmi it died in scudo at 1.2 GiB while the monolith passed at 807 MiB.
 //
-// WHAT THE THREE CASES PIN, all inside ONE frame (no swap between the first and the last
+// WHAT THE CASES PIN, all inside ONE frame (no swap between the first and the last
 // respecify), because that is the only shape in which the bug existed:
 //   * RespecifiesWithNoDrawBetween... - the stores no GPU command ever named. They are dead the
 //     moment they are orphaned, so the live store count must stay a small multiple of the wire
@@ -43,8 +43,10 @@
 // whose environment the lane cannot set and whose log this process cannot read
 // (scripts/ci/spawn_lane_parity.py names the exception).
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -99,6 +101,7 @@ namespace MGITest {
         constexpr std::size_t kAbaPinStoreBytes = static_cast<std::size_t>(kMiB);
         constexpr std::size_t kAbaNewStoreBytes = 64 * 1024;
         constexpr GLuint64 kAbaWaitNs = 2000000000ull; // 2 s: a 64x16 draw on lavapipe retires in ms
+        constexpr int kDescriptorDraws = 2049; // one past UniformManager's wire epoch budget
 
         constexpr const char* kVertex = R"(#version 330 core
 layout(location = 0) in vec2 aPos;
@@ -117,6 +120,14 @@ void main() { fragColor = uColor; })";
 layout(std140) uniform Block { vec4 color; };
 out vec4 fragColor;
 void main() { fragColor = color; })";
+
+        constexpr const char* kStorageVertex = R"(#version 430 core
+layout(location = 0) in vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); })";
+        constexpr const char* kStorageFragment = R"(#version 430 core
+layout(std430, binding = 0) readonly buffer Colors { vec4 color[]; };
+out vec4 fragColor;
+void main() { fragColor = color[0]; })";
 
         // Two triangles covering pixel columns [x0, x1) over the whole height, in NDC.
         void WriteStripQuad(float* out, int x0, int x1) {
@@ -504,6 +515,63 @@ void main() { fragColor = color; })";
             const PipeStatsWindow::Window window = CloseFrameAndReadServerWindow(mark);
             if (window.found) RecordProperty("wire_stores_peak",
                                              static_cast<int>(PipeStatsWindow::CounterOrAbsent(window, "wlivepk")));
+        }
+
+        // M3: a fixed SSBO store and one live layout, but 2049 distinct aligned
+        // windows force 2049 descriptor writes before a present. M2's buffer-store
+        // ceiling cannot help: no store is orphaned. The first 2048 sets must be
+        // retired by submit index before their per-layout cursor rewinds, and the
+        // last draw must read the last window rather than a set still in flight.
+        TEST_F(MagmaWireReclaimScenario, DescriptorSetsRewindInsideOneLongFrameAfterTheirSubmitRetires) {
+            if (!Ready() || IsSkipped()) return;
+            std::string error;
+            const GLuint program = CompileProgram(kStorageVertex, kStorageFragment, &error);
+            ASSERT_NE(program, 0u) << error;
+            const PipeStatsWindow::LogMark mark = SetupFrame();
+            ClearTo(0.0f, 0.0f, 0.0f, 0.0f);
+            std::vector<std::uint8_t> quad(kUndrawnStoreBytes, 0);
+            glBindBuffer(GL_ARRAY_BUFFER, m_buffer);
+            Respecify(quad, 0, kWidth);
+
+            GLint alignment = 0;
+            glGetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &alignment);
+            ASSERT_GT(alignment, 0);
+            const std::size_t stride = static_cast<std::size_t>(std::max(alignment, 16));
+            std::vector<std::uint8_t> bytes(stride * kDescriptorDraws, 0);
+            const Rgba8 last{60, 200, 90, 255};
+            for (int i = 0; i < kDescriptorDraws; ++i) {
+                const float color[4] = {i + 1 == kDescriptorDraws ? last.r / 255.0f : 200.0f / 255.0f,
+                                        i + 1 == kDescriptorDraws ? last.g / 255.0f : 60.0f / 255.0f,
+                                        i + 1 == kDescriptorDraws ? last.b / 255.0f : 30.0f / 255.0f, 1.0f};
+                std::memcpy(bytes.data() + stride * i, color, sizeof(color));
+            }
+            GLuint storage = 0;
+            glGenBuffers(1, &storage);
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, storage);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(bytes.size()), bytes.data(), GL_STATIC_DRAW);
+            glUseProgram(program);
+            for (int i = 0; i < kDescriptorDraws; ++i) {
+                glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 0, storage,
+                                  static_cast<GLintptr>(stride * i), 16);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+            }
+            const Image image = ReadPixels(kWidth, kHeight);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_TRUE(Near(image.At(kWidth / 2, kHeight / 2), last))
+                << "the last SSBO window was not read after descriptor recycling";
+            (void)CloseFrameAndReadServerWindow(mark);
+            const std::string serverLog = PipeStatsWindow::ReadServerLogSince(mark);
+            const std::string marker = "Magma descriptor rewind:";
+            const std::size_t rewind = serverLog.find(marker);
+            ASSERT_NE(rewind, std::string::npos) << "2049 distinct descriptor writes in one frame did not rewind";
+            const std::size_t cachedAt = serverLog.find(" cached=", rewind);
+            ASSERT_NE(cachedAt, std::string::npos) << serverLog.substr(rewind, 160);
+            const unsigned long long cached = std::strtoull(serverLog.c_str() + cachedAt + 8, nullptr, 10);
+            EXPECT_LE(cached, 2080ull) << "the fixed-layout cache grew beyond the 2048-set epoch: "
+                                       << serverLog.substr(rewind, 160);
+            RecordProperty("descriptor_cached_at_rewind", static_cast<int>(cached));
+            glDeleteBuffers(1, &storage);
+            glDeleteProgram(program);
         }
 
     } // namespace

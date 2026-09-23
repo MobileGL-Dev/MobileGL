@@ -54,6 +54,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void Shutdown();
 
         void BeginFrame(Uint32 frameIndex);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // A present-less wire frame may run arbitrarily many draws. Before its
+        // descriptor cursor reaches this budget, the renderer retires the
+        // submission that last used the sets and rewinds every layout cursor.
+        static constexpr Uint32 kWireDescriptorSetBudget = 2048;
+        Bool WireDescriptorSetBudgetReached(Uint32 frameIndex) const;
+        SizeT RewindWireDescriptorSets(Uint32 frameIndex);
+#endif
         // A command buffer (re)began recording: descriptor bindings recorded into
         // the previous buffer do not carry over, so drop the bind-dedup shadow.
         void OnCommandBufferBoundary() { m_lastBindValid = false; }

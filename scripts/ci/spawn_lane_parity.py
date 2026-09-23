@@ -87,7 +87,8 @@ MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
                                 ".Reclaim.MagmaWireReclaimScenario.RespecifiesWithNoDrawBetweenKeepTheLiveStoreCountBounded",
                                 ".Reclaim.MagmaWireReclaimScenario.RespecifyAndDrawEachStoreInOneFrameStaysWithinTheDeferredBudget",
                                 ".Reclaim.MagmaWireReclaimScenario.ManySmallRespecifyAndDrawRoundsStayUnderTheStoreCountCeiling",
-                                ".Reclaim.MagmaWireReclaimScenario.ADrawAfterTheEarlyReclaimFollowsTheNewStoreNotTheMemoizedHandle")
+                                ".Reclaim.MagmaWireReclaimScenario.ADrawAfterTheEarlyReclaimFollowsTheNewStoreNotTheMemoizedHandle",
+                                ".Reclaim.MagmaWireReclaimScenario.DescriptorSetsRewindInsideOneLongFrameAfterTheirSubmitRetires")
 
 
 def lane_names(build_dir, label):
