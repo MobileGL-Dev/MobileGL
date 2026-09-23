@@ -516,7 +516,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // True when the rectangles give a multisample depth/stencil resolve a shape it declines
         // (a scale, an X mirror, a Y mirror across two formats); the decline has then been
         // logged and its INVALID_OPERATION recorded. BlitWireFramebuffers asks it BEFORE any
-        // aspect runs, so a declined call leaves every attachment alone.
+        // aspect runs, so a call the SHAPE declines leaves every attachment alone - the user
+        // and the default draw framebuffer alike. The CAPABILITY decline inside
+        // ResolveWireDepthStencil (a stencil-only resolve without VK_EXT_shader_stencil_export
+        // on a device without VK_KHR_depth_stencil_resolve) is still decided per aspect, after
+        // colour ran; rule I (a) accepts that (notes/p7/magma-b2.md §2.10).
         Bool DeclineWireDepthStencilResolveShape(const WireImage& source, const WireImage& destination,
                                                  GLint sx0, GLint sy0, GLint sx1, GLint sy1,
                                                  GLint dx0, GLint dy0, GLint dx1, GLint dy1);
