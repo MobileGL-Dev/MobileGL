@@ -49,9 +49,25 @@ PULL_LIBRARY="${PULL_LIBRARY:?PULL_LIBRARY must name the pull build libMobileGL.
 FROZEN_LIBRARY="${FROZEN_LIBRARY:?FROZEN_LIBRARY must name the path the cases have baked in}"
 mkdir -p "${CONTROL_TMPDIR}"
 
-# run_trace_case.cmake's own sentence for "this library never resolved the transport". Anchored on
-# the distinctive clause rather than on the whole paragraph, which carries substituted paths.
-EVIDENCE='never reported resolving it'
+# run_trace_case.cmake's own sentences for "this library never resolved the transport", one per
+# line (grep -F takes its patterns newline-separated). Anchored on the distinctive clause rather
+# than on the whole paragraph, which carries substituted paths.
+#
+# TWO SENTENCES SINCE P6's LOG RENAME, and the second is the one a pull library actually gets.
+# A pull build has one log role and writes MOBILEGL_LOG_FILE_PATH unchanged - output/mobilegl.log
+# (MG_Util/Debug/Log.h, the pull arm of RoleLogPath) - while the disaggregated build's readers,
+# run_trace_case.cmake among them, read output/mobilegl.client.log. So the pull library never
+# reaches the marker search that says "never reported resolving it": the runner stops one check
+# earlier, at "the run wrote no <client log>, so there is no evidence the transport ever
+# resolved". Both are the transport-identity assertion refusing the same library for the same
+# reason (a pull build has no split log for the marker to be in); neither is a loader failure, a
+# missing fixture, a timeout or an SSIM drop, which are the reds hole 2 below exists to refuse.
+# MEASURED on the B3 package tree with the real ctest and the real pull library: with only the
+# first sentence here, the control exited 1 through hole 2 on every pull-library run - the step
+# had been red for no product reason since the rename. scripts/ci/testdata/stub_ctest.sh's
+# retrace-evidence-nolog mode reproduces the shape.
+EVIDENCE='never reported resolving it
+no evidence the transport ever resolved'
 
 selector="^MobileGLTraceReplay\.${CASE}\.${BACKEND}$"
 
@@ -130,7 +146,7 @@ fi
 # indent, and a line-oriented grep for the literal finds nothing. That is not hypothetical - it is
 # the shape the stub reproduces in scripts/ci/testdata/stub_ctest.sh.
 if ! tr -s '[:space:]' ' ' < "${out}" | grep -qF "${EVIDENCE}"; then
-  echo "::error::the split retrace went red (ctest exit ${control_rc}) with the pull library in place, but the failure never says the library did not resolve the transport - run_trace_case.cmake's \"${EVIDENCE}\" is absent from the output. A loader failure, a missing fixture, a timeout or an SSIM drop all land here, and none of them establishes that the transport-identity assertion is what caught the pull library. Only 'non-zero ctest' used to be checked (ID-46 finding 8b)."
+  echo "::error::the split retrace went red (ctest exit ${control_rc}) with the pull library in place, but the failure never says the library did not resolve the transport - neither of run_trace_case.cmake's sentences (\"${EVIDENCE//$'\n'/\" / \"}\") is in the output. A loader failure, a missing fixture, a timeout or an SSIM drop all land here, and none of them establishes that the transport-identity assertion is what caught the pull library. Only 'non-zero ctest' used to be checked (ID-46 finding 8b)."
   exit 1
 fi
 

@@ -28,6 +28,10 @@
 #   retrace-noselect   `ctest -N` matches nothing; the run exits 8 the way --no-tests=error does
 #   retrace-unrelated  one match; the run fails without naming the transport
 #   retrace-evidence   one match; the run fails with run_trace_case.cmake's own sentence
+#   retrace-evidence-nolog
+#                      one match; the run fails one check earlier, with the runner's "wrote no
+#                      <client log> ... no evidence the transport ever resolved" - the shape a
+#                      PULL library produces since P6's per-role log rename
 #   retrace-green      one match; the run PASSES
 #
 # EXIT GATE E2's DRAW-DROP CONTROL (scripts/ci/retrace_drop_draw_control.sh). The library's own
@@ -289,6 +293,18 @@ case "${mode}" in
     echo "  MOBILEGL_TRANSPORT=inproc is set for OpenRA DirectGLES and the library never"
     echo "  reported resolving it: mobilegl.log carries no"
     echo '  "MOBILEGL_TRANSPORT=inproc - the MGPipe record stream".'
+    exit 8
+    ;;
+  retrace-evidence-nolog)
+    # What a pull library gets since P6: it wrote output/mobilegl.log (one role, no suffix), the
+    # runner reads output/mobilegl.client.log and stops at the no-log check BEFORE the marker
+    # search. CMake-wrapped like the mode above, with the clause split across lines.
+    echo "1/1 Test #1: MobileGLTraceReplay.OpenRA.DirectGLES ...***Failed"
+    echo "CMake Error at run_trace_case.cmake:270 (message):"
+    echo "  MOBILEGL_TRANSPORT=inproc is set for OpenRA DirectGLES but the run wrote no"
+    echo "  OpenRA/DirectGLES/output/mobilegl.client.log, so there is no evidence the"
+    echo "  transport ever resolved.  A split retrace with no library log cannot be"
+    echo "  counted as a split retrace."
     exit 8
     ;;
   retrace-green)

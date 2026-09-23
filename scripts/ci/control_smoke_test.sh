@@ -116,6 +116,11 @@ expect FAILED "red without the transport-resolution message" -- run_retrace retr
 # The real thing - and note the stub emits it CMake-wrapped across two lines, which a line-oriented
 # grep for the literal sentence would miss.
 expect PASSED "run_trace_case.cmake's own sentence, wrapped" -- run_retrace retrace-evidence
+# The sentence a pull library ACTUALLY gets since P6's log rename: it wrote the unsuffixed
+# mobilegl.log, the runner reads mobilegl.client.log, and the no-log check fires before the marker
+# search. The control accepted only the marker sentence until B3's fix round 2, and was red on
+# every real pull-library run (measured on the B3 package tree).
+expect PASSED "the no-client-log sentence a pull library gets"  -- run_retrace retrace-evidence-nolog
 # The pull library replaying green is the failure this control exists to catch.
 expect FAILED "a pull library passed the split retrace"      -- run_retrace retrace-green
 
