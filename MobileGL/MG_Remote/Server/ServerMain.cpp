@@ -23,6 +23,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 #include <chrono>
 #include <cerrno>
@@ -191,7 +192,8 @@ enum class DataSource { None, Handoff, Listener };
 // cut for reading FIRST (after shutdown(SHUT_RD) every further sendmsg to it fails with EPIPE, which
 // FdPassing reports as "peer gone" and the supervisor answers by name), and then whatever was
 // queued before the cut is received here and refused with the supervisor's own words. No
-// DataBind can be in neither place.
+// DataBind can be in neither place - on the way out after Accept here, and on every way out
+// before it through ExitBeforeAccept below; only a crashed child still drops them.
 void CloseHandoffRefusingQueued(int handoff) {
     (void)::shutdown(handoff, SHUT_RD);
     for (;;) {
@@ -207,12 +209,42 @@ void CloseHandoffRefusingQueued(int handoff) {
     ::close(handoff);
 }
 
+// ID-P7-44, f2-auth fix round. EVERY WAY OUT OF A SESSION CHILD BEFORE ACCEPT LETS GO OF THE
+// HAND-OFF THE WAY THE WAY OUT AFTER IT DOES. The supervisor forwards DataBinds to a child from the
+// moment it forks it, so a child that refused its Hello at ValidatePeerHandshake, refused its
+// backend, or could not bring one up used to `_exit` with DataBinds queued on the hand-off - and an
+// exit drops queued descriptors exactly as a close does: those peers saw their connections end
+// with no frame. On any other source (the single-session listener, the unix endpoint's none) there
+// is nothing queued to refuse, and this is the `fflush` + `_exit` it replaces.
+[[noreturn]] void ExitBeforeAccept(int sourceFd, DataSource sourceKind, int code) {
+    if (sourceFd >= 0 && sourceKind == DataSource::Handoff) CloseHandoffRefusingQueued(sourceFd);
+    std::fflush(nullptr);
+    ::_exit(code);
+}
+
+// A TEST-ONLY lever (f2-auth fix round, ID-P7-44): MOBILEGL_TEST_DELAY_SESSION_HANDSHAKE_MS holds a
+// session child for that many milliseconds before it looks at its Hello, so a control can queue
+// DataBinds on the hand-off of a child that is about to refuse that Hello - a window of
+// microseconds otherwise. Like MOBILEGL_TEST_DELAY_FIRST_CAPS_MS (ServerSession.cpp) it exists only
+// in the disaggregated server, does nothing unless set, and says so when it is.
+void DelaySessionHandshakeForTest() {
+    const char* text = std::getenv("MOBILEGL_TEST_DELAY_SESSION_HANDSHAKE_MS");
+    if (text == nullptr || *text == '\0') return;
+    const long ms = std::strtol(text, nullptr, 10);
+    if (ms <= 0) return;
+    WireLogError("MG_Remote server: pid=%d MOBILEGL_TEST_DELAY_SESSION_HANDSHAKE_MS=%ld - this session child "
+                 "waits that long before its handshake. A test-only lever; never set it in a measured run",
+                 static_cast<int>(::getpid()), ms);
+    std::this_thread::sleep_for(std::chrono::milliseconds(std::min<long>(ms, 60000)));
+}
+
 // Called only after fork (or, in the single-session shape, instead of it): the supervisor never
 // creates a backend or EGL context. `dataSource` is set on TCP (PH-7 (4)) and empty on a unix
 // endpoint, whose second connection is the SCM_RIGHTS socket AcceptPair already paired.
 // `sourceFd` is the descriptor that source reads from - the child's end of the hand-off
 // socketpair under --serve, the listener itself in the single-session shape - and -1 when there
-// is none; it is let go of the moment Accept returns.
+// is none; it is let go of the moment Accept returns, and on every exit before that
+// (ExitBeforeAccept, ID-P7-44).
 //
 // `helloFrame` is the first frame when somebody has already read and authenticated it - the TCP
 // supervisor always has (PH-7 (5)) - and empty when this function reads it itself, within
@@ -230,15 +262,13 @@ void CloseHandoffRefusingQueued(int handoff) {
         const auto received = control->ReceiveFrame({nullptr, 0}, &bytes, helloWaitMs);
         if (received == MOBILEGL_ERR_TIMEOUT) {
             Refuse(*control, Protocol::RefuseCode::Authentication, Server::kPreAuthDeadline);
-            std::fflush(nullptr);
-            ::_exit(0);
+            ExitBeforeAccept(sourceFd, sourceKind, 0);
         }
         if (received == MOBILEGL_ERR_PROTOCOL_MISMATCH ||
             (received == MOBILEGL_ERR_BUFFER_TOO_SMALL && bytes > Server::kPreAuthFirstFrameMaxBytes)) {
             DrainUnread(control->StreamFd());
             Refuse(*control, Protocol::RefuseCode::MalformedHello, Server::kFirstFrameNotAFrame);
-            std::fflush(nullptr);
-            ::_exit(0);
+            ExitBeforeAccept(sourceFd, sourceKind, 0);
         }
         if (received == MOBILEGL_ERR_TRANSPORT_CLOSED) {
             // Fix round: this used to be a bare `_exit(0)` whatever had arrived. A close INSIDE
@@ -249,8 +279,7 @@ void CloseHandoffRefusingQueued(int handoff) {
                 Refuse(*control, Protocol::RefuseCode::MalformedHello, Server::kFirstFrameTruncated);
             else
                 WireLogError("MG_Remote server: pid=%d control peer closed before sending a first frame", selfPid);
-            std::fflush(nullptr);
-            ::_exit(0);
+            ExitBeforeAccept(sourceFd, sourceKind, 0);
         }
         if (received == MOBILEGL_ERR_BUFFER_TOO_SMALL) {
             // The reassembler holds the whole frame already; this second call copies it out.
@@ -258,19 +287,18 @@ void CloseHandoffRefusingQueued(int handoff) {
             if (control->ReceiveFrame({helloFrame.data(), helloFrame.size()}, &bytes, 0) != MOBILEGL_OK) {
                 WireLogError("MG_Remote server: pid=%d first frame of %llu bytes could not be copied out", selfPid,
                              static_cast<unsigned long long>(helloFrame.size()));
-                std::fflush(nullptr);
-                ::_exit(0);
+                ExitBeforeAccept(sourceFd, sourceKind, 0);
             }
         } else if (received != MOBILEGL_OK) {
             WireLogError("MG_Remote server: pid=%d first frame could not be read (rc=%d)", selfPid,
                          static_cast<int>(received));
-            std::fflush(nullptr);
-            ::_exit(0);
+            ExitBeforeAccept(sourceFd, sourceKind, 0);
         }
         // MOBILEGL_OK with nothing copied is a ZERO-LENGTH frame. It was the one complete frame
         // this read exited on without a word (fix round); `helloFrame` stays empty and the
         // classification below names it, as the TCP supervisor's does ("no identifier").
     }
+    DelaySessionHandshakeForTest();
     // THE FIRST FRAME, CLASSIFIED BY THE SAME FUNCTION THE TCP SUPERVISOR USES (plan §1.1, fuzz
     // arm 1 row: "ServerMain.cpp:193 CtrlEnvelopeBufferHasIdentifier"). The identifier is asked
     // first, and every malformed shape is refused BY NAME - this read used to `_exit(67)` on all
@@ -283,13 +311,11 @@ void CloseHandoffRefusingQueued(int handoff) {
     // arm is the single-session shape's.)
     if (shape == Server::FirstFrameShape::DataBind) {
         Refuse(*control, Protocol::RefuseCode::Authentication, "data connection names no live session");
-        std::fflush(nullptr);
-        ::_exit(0);
+        ExitBeforeAccept(sourceFd, sourceKind, 0);
     }
     if (shape != Server::FirstFrameShape::Hello) {
         Refuse(*control, Protocol::RefuseCode::MalformedHello, Server::FirstFrameRefusalDetail(shape));
-        std::fflush(nullptr);
-        ::_exit(0);
+        ExitBeforeAccept(sourceFd, sourceKind, 0);
     }
     const auto* hello = Protocol::GetCtrlEnvelope(helloFrame.data())->msg_as_Hello();
     // PH-7 (1). The SAME policy ServerSession::Accept applies, from Handshake.h, so the
@@ -306,11 +332,11 @@ void CloseHandoffRefusingQueued(int handoff) {
     // this build's stamp. An unauthenticated peer now learns only Refuse{Authentication}. On TCP
     // --serve the supervisor has already asked (the answer is the same; it is asked again so this
     // function holds the rule on its own for the unix and single-session shapes).
-    if (AuthenticatePeerToken(*control, hello->token()) != MOBILEGL_OK) ::_exit(0);
+    if (AuthenticatePeerToken(*control, hello->token()) != MOBILEGL_OK) ExitBeforeAccept(sourceFd, sourceKind, 0);
     // Reject incompatible wire before backend bring-up can obscure the cause.
     if (ValidatePeerHandshake(*control, hello->abiMajor(), hello->abiMinor(),
             hello->wireFingerprint(), hello->buildFingerprint() ? hello->buildFingerprint()->c_str() : nullptr,
-            hello->dialMode()) != MOBILEGL_OK) ::_exit(0);
+            hello->dialMode()) != MOBILEGL_OK) ExitBeforeAccept(sourceFd, sourceKind, 0);
     MobileGL::MG_ConfigLoader::Init();
     MobileGL::MG_Config::Transport = MobileGL::MG_Config::TransportMode::Spawn;
     MobileGL::MG_Pipe::MGPipeSetServerProcessRole(true);
@@ -324,21 +350,21 @@ void CloseHandoffRefusingQueued(int handoff) {
     const auto backend = static_cast<MobileGL::BackendType>(hello->backendType());
     if (backend != MobileGL::BackendType::DirectGLES && backend != MobileGL::BackendType::DirectVulkan) {
         Refuse(*control, Protocol::RefuseCode::Backend, "unsupported Hello.backendType");
-        ::_exit(0);
+        ExitBeforeAccept(sourceFd, sourceKind, 0);
     }
     const char* pinned = std::getenv("MOBILEGL_BACKEND_TYPE");
     if (pinned && *pinned && backend != MobileGL::MG_Config::ActiveBackendType) {
         Refuse(*control, Protocol::RefuseCode::Backend, "Hello.backendType disagrees with pinned backend");
-        ::_exit(0);
+        ExitBeforeAccept(sourceFd, sourceKind, 0);
     }
     MobileGL::MG_Config::ActiveBackendType = backend;
-    if (!MobileGL::MG_Backend::InitServerRoleForSpawn()) ::_exit(66);
+    if (!MobileGL::MG_Backend::InitServerRoleForSpawn()) ExitBeforeAccept(sourceFd, sourceKind, 66);
     auto& session = Server::ServerSessionInstance();
     int serverBell[2] = {-1, -1}, clientBell[2] = {-1, -1};
     std::unique_ptr<SocketDoorbell> selfBell, peerBell;
     if (!tcp) {
         if (::socketpair(AF_UNIX, SOCK_STREAM, 0, serverBell) != 0 ||
-            ::socketpair(AF_UNIX, SOCK_STREAM, 0, clientBell) != 0) ::_exit(74);
+            ::socketpair(AF_UNIX, SOCK_STREAM, 0, clientBell) != 0) ExitBeforeAccept(sourceFd, sourceKind, 74);
         selfBell = std::make_unique<SocketDoorbell>(serverBell[0], serverBell[1], 1, true);
         peerBell = std::make_unique<SocketDoorbell>(-1, clientBell[1], 1, true);
         session.SetExternalDoorbells(selfBell.get(), peerBell.get());
@@ -652,7 +678,8 @@ void LogSupervisorSummary(unsigned long sessionsFaulted) {
 //
 //   - every new connection is PENDING until its first frame is complete. The supervisor reads it
 //     itself, a few bytes per wakeup, from all pending connections at once (one poll loop - no
-//     peer can make it wait for another), and never a byte past the frame;
+//     unauthenticated peer can make it wait for another; the one wait left is up to 50 ms for an
+//     exiting session before an AUTHENTICATED Hello is told Busy), and never a byte past the frame;
 //   - a pending connection has MOBILEGL_IPC_PREAUTH_MS (default 2000) to complete it, and at most
 //     MOBILEGL_IPC_PREAUTH_MAX (default 8) are pending at once. The queue is SHARED between
 //     addresses: when it is full a newcomer displaces the oldest connection of the address holding
@@ -771,8 +798,10 @@ private:
 
     // exit_group closes files just before waitpid can observe the exit. Allow that small
     // scheduling window before deciding whether a session is live - the old loop gave it to every
-    // connection it accepted while a child existed; this gives it to the two decisions that
-    // depend on the answer (a DataBind's routing, an authenticated Hello's Busy).
+    // connection it accepted while a child existed; this gives it to the one decision that
+    // depends on the answer: an AUTHENTICATED Hello's Busy (a client reconnecting the moment its
+    // last session ended must not be told Busy by a zombie). Only a peer holding the token can
+    // make the loop wait here; a DataBind's routing takes one look (Judge, fix round).
     void WaitOutAnExitingSession() {
         const auto reapDeadline = Clock::now() + std::chrono::milliseconds(50);
         while (m_active > 0 && Clock::now() < reapDeadline) {
@@ -851,7 +880,12 @@ private:
             // from a session that just ended is a legitimate client's.
             std::uint8_t nonce[kDataNonceBytes] = {};
             (void)DecodeDataBind(payload, nonce);
-            WaitOutAnExitingSession();
+            // One look, not WaitOutAnExitingSession's 50 ms (fix round): DataBinds are
+            // unauthenticated and never counted, so waiting for each would let any peer stall this
+            // loop 50 ms per connection. Nothing needs the wait here - a child that is exiting
+            // either has cut its hand-off already (the send below fails and is refused by name) or
+            // refuses what is queued on its way out (ExitBeforeAccept / CloseHandoffRefusingQueued).
+            Reap();
             if (m_active <= 0) {
                 // StreamLink's frames may already follow the DataBind; read them away so the close
                 // does not become an RST that discards the refusal.

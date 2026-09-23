@@ -20,8 +20,10 @@ deadline (`silent_peer`), that Busy is the answer to an AUTHENTICATED second cli
 pending cap and the backoff (`pending_cap`, `auth_backoff`), and ID-P7-44's queued-DataBind
 refusal (`data_bind_queued_before_bound`). The f2-auth fix round added that the pending queue is
 shared between addresses (`pending_queue_is_shared`) and that an address holding slots with silent
-connections is backed off (`silent_slot_holder_backed_off`). The five malformed-frame shapes are
-fuzz arm 1's own entry, scripts/ci/ph_fuzz_control_frames.py.
+connections is backed off (`silent_slot_holder_backed_off`), that routing DataBinds does not stall
+the supervisor (`data_bind_routing_does_not_stall`), and that a child which refuses its Hello
+refuses the DataBinds queued to it (`data_bind_queued_before_refused_hello`, ID-P7-44). The five
+malformed-frame shapes are fuzz arm 1's own entry, scripts/ci/ph_fuzz_control_frames.py.
 
 It needs flatc, which is deliberately absent from the default build graph (gen_protocol.py's
 header block says why). Resolution order is gen_protocol.py's, minus the build-it-for-you arm:
@@ -731,6 +733,42 @@ def main():
                                                  'fresh_control': still_busy}
             assert process.poll() is None, 'the refused DataBinds killed the supervisor'
 
+            # ---- f2-auth fix round: ROUTING A DataBind DOES NOT STALL THE SUPERVISOR -------------
+            #
+            # While a session was live the supervisor waited up to 50 ms for it to exit before
+            # routing EACH DataBind - and a DataBind is unauthenticated and never counted, so any
+            # peer could hold the one poll loop 50 ms per connection it opened. Now it takes one
+            # look. Twenty DataBinds into a bound session, opened four at a time (under the pending
+            # cap of 8 however the host schedules the supervisor), are all refused by name, and
+            # the last answer arrives well inside the 20 x 50 ms = 1 s the old wait alone cost.
+            # RED before the fix: the stalled loop let the connections pile up past the pending
+            # cap (Busy "too many connections are awaiting authentication"), or elapsed >= 1.0 s.
+            with held_session(port, schema, flatbuffers,
+                              hello(schema, flatbuffers, fingerprint=fingerprint)) as (control, welcome):
+                assert welcome.get('welcome', 0), welcome
+                ready = wait_for_log(serverLog, f'pid={welcome["welcome"]} transport=spawn role=server ready')
+                assert ready is not None, f'the held session never came up; see {serverLog}'
+                stalled = []
+                began = time.monotonic()
+                for _ in range(5):
+                    burst = [open_data(port, schema, flatbuffers, os.urandom(16)) for _ in range(4)]
+                    try:
+                        for extra in burst:
+                            extra.settimeout(10)
+                            try:
+                                stalled.append(receive(extra, schema))
+                            except (RuntimeError, OSError) as error:
+                                stalled.append({'error': repr(error)})
+                    finally:
+                        for extra in burst:
+                            extra.close()
+                elapsed = time.monotonic() - began
+            for answer in stalled:
+                assert answer.get('code') == 4 and answer.get('detail') == kDetailHandoff, answer
+            assert elapsed < .5, f'twenty DataBinds into a live session took {elapsed:.2f} s to be answered'
+            evidence['data_bind_routing_does_not_stall'] = {'refused': len(stalled), 'seconds': round(elapsed, 3)}
+            assert process.poll() is None, 'the DataBind burst killed the supervisor'
+
             # ---- ID-P7-44: A DataBind QUEUED TO THE CHILD BEFORE IT LET GO IS REFUSED, NOT DROPPED
             #
             # The F fix round closed the child's end of the hand-off the moment Accept returned;
@@ -933,6 +971,55 @@ def main():
             evidence['silent_slot_holder_backed_off'] = {'refusal': silent, 'line': next(
                 l.strip() for l in named.splitlines() if reason in l)}
             assert process.poll() is None, 'the pre-auth limits killed the supervisor'
+
+        # ---- ID-P7-44, f2-auth fix round: A CHILD THAT REFUSES ITS HELLO REFUSES WHAT WAS QUEUED --
+        #
+        # The supervisor forwards DataBinds to a child from the moment it forks it. A child that
+        # then refused its Hello (here: an authenticated Hello with fingerprint 0, refused at
+        # ValidatePeerHandshake) used to `_exit` with them still queued on the hand-off, and the
+        # exit dropped their descriptors - those peers' connections just ended. The window is
+        # microseconds, so it is held open with the server's test-only lever
+        # MOBILEGL_TEST_DELAY_SESSION_HANDSHAKE_MS: the child waits 1.5 s before its handshake, three
+        # DataBinds are routed into its queue meanwhile, and each must be refused by name when the
+        # child refuses its Hello - by the CHILD, after its wait (not at once by the supervisor).
+        # RED before the fix: "control channel closed before a complete frame" on all three.
+        delay = {'MOBILEGL_TEST_DELAY_SESSION_HANDSHAKE_MS': '1500'}
+        with supervisor(args.server, args.out / 'handshake-delay.log', extra_env=delay) as (port, process, serverLog):
+            control = connect_control(port)
+            extras = []
+            try:
+                control.settimeout(10)
+                control.sendall(hello(schema, flatbuffers))
+                deadline = time.monotonic() + 5
+                while not child_pids(process.pid):
+                    assert time.monotonic() < deadline, 'the supervisor forked no child for an authenticated Hello'
+                    time.sleep(.01)
+                began = time.monotonic()
+                extras = [open_data(port, schema, flatbuffers, os.urandom(16)) for _ in range(3)]
+                queued = []
+                for extra in extras:
+                    extra.settimeout(10)
+                    try:
+                        answer = receive(extra, schema)
+                    except (RuntimeError, OSError) as error:
+                        answer = {'error': repr(error)}
+                    answer['seconds'] = round(time.monotonic() - began, 3)
+                    queued.append(answer)
+                refused_hello = receive(control, schema)
+            finally:
+                for extra in extras:
+                    extra.close()
+                control.close()
+            assert refused_hello.get('code') == 2, refused_hello
+            for answer in queued:
+                assert answer.get('code') == 4 and answer.get('detail') == kDetailHandoff, (
+                    f'a DataBind queued to a session child that then refused its Hello was answered {answer}, '
+                    f'not refused by name (ID-P7-44); all: {queued}')
+                assert answer['seconds'] >= 1.0, (
+                    f'the DataBind was answered after {answer["seconds"]} s - by the supervisor, not by the '
+                    f'child it was queued to; all: {queued}')
+            evidence['data_bind_queued_before_refused_hello'] = {'hello': refused_hello, 'refused': queued}
+            assert process.poll() is None, 'the refused Hello killed the supervisor'
 
         # ---- F fix round: THE SINGLE-SESSION SERVER CLOSES ITS LISTENER ONCE THE SESSION IS BOUND
         #
