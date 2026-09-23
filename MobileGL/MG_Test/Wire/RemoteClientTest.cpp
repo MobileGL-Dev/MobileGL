@@ -2823,6 +2823,146 @@ TEST(RemoteRunAhead, AnEventBurstBehindAnUnwaitedSequenceFlowControlsInsteadOfAb
     ExpectChildSuccess(child);
 }
 
+// ===========================================================================================
+// PH-6 (ID-P7-2): a client that does not drain SEG_EVENT FORFEITS the reverse channel
+// ===========================================================================================
+//
+// The flow-control case above is the healthy half: a client that drains late gets every event.
+// These two are the other half, and they are why ReserveEventOrBlock's two BUSY refusals became
+// a latch. Each child reads its OWN outcome - the latch, the server's drop tally, the shared
+// page's eventDropped the client sees, the time spent against MOBILEGL_IPC_EVENT_WAIT_MS, and the
+// apply thread leaving by itself - and exits non-zero on the first that is wrong; the parent then
+// asserts the named line and the ABSENCE of Fatal{EventRingOverflow}.
+namespace {
+    // Waits for mgl-srv-apply to leave on its own: the forfeit's stop is the ordinary one, so
+    // nobody calls Stop() to get it out.
+    bool ApplyThreadLeavesWithin(std::chrono::milliseconds budget) {
+        const auto until = std::chrono::steady_clock::now() + budget;
+        while (std::chrono::steady_clock::now() < until) {
+            if (!Srv::ServerLoopInstance().Running()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return false;
+    }
+
+    Uint64 MillisecondsSince(std::chrono::steady_clock::time_point start) {
+        return static_cast<Uint64>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() - start)
+                                       .count());
+    }
+} // namespace
+
+// STONEWALL: the client never drains. 3000 GPU-write marks of ~1 KiB against a 256 KiB ring:
+// ~250 fit, the next one waits MOBILEGL_IPC_EVENT_WAIT_MS (300 ms here) and forfeits, and the
+// remaining ~2750 are drops that cost no wait at all - so the whole burst returns in a little over
+// the knob, not in 30 s and not with an abort.
+//
+// THE RED (recorded in the F2 package note): put ReserveEventOrBlock back to its two 30000 ms
+// rounds and this child is killed by StartRunAheadSession's alarm(15) inside the first wait -
+// before that change it would have aborted at 30 s with Fatal{EventRingOverflow} "waited 30000 ms".
+TEST(RemoteRunAhead, AStonewallingClientForfeitsTheReverseChannelWithinTheWaitKnob) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.EventWaitMs = 300;
+        StartRunAheadSession();
+        const auto start = std::chrono::steady_clock::now();
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+            +[](void*) -> MobileGLResult {
+                MG_Pipe::MGPRange ranges[64];
+                for (Uint32 r = 0; r < 64; ++r) ranges[r] = MG_Pipe::MGPRange{r * 64ull, 64ull};
+                for (Uint32 i = 0; i < 3000; ++i) {
+                    MG_Pipe::gMGPipeCallbacks.OnGpuWritten(MG_Pipe::MGPipeHandle{7, 1}, 64, ranges);
+                }
+                return MOBILEGL_OK;
+            },
+            nullptr);
+        const Uint64 elapsedMs = MillisecondsSince(start);
+        auto& server = Srv::ServerSessionInstance();
+        if (!server.ReverseChannelForfeited()) ::_exit(101);
+        const Uint64 drops = server.ForfeitDrops();
+        // Some fitted (the ring was empty) and some did not (it holds ~250 of 3000).
+        if (drops == 0 || drops >= 3000u) ::_exit(102);
+        // The shared page's counter is the one a client can read; the server's own tally is the
+        // one a peer cannot write. They agree when nothing else counts.
+        if (ClientSessionInstance().Events().DroppedEvents() != drops) ::_exit(103);
+        // The knob, spent once: at least most of it, and nowhere near the old 30 s.
+        if (elapsedMs < 250u || elapsedMs > 5000u) ::_exit(104);
+        if (!ApplyThreadLeavesWithin(std::chrono::milliseconds(3000))) ::_exit(105);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+    EXPECT_NE(child.Log.find("ReverseChannelForfeit{NotDraining} - kEventGpuWritten"), std::string::npos)
+        << child.Log;
+    EXPECT_NE(child.Log.find("mgl-srv-apply stops on ReverseChannelForfeit"), std::string::npos) << child.Log;
+    EXPECT_EQ(child.Log.find("Fatal{EventRingOverflow"), std::string::npos) << child.Log;
+}
+
+// TRICKLE: the client drains, one record per 50 ms, and the record the server is waiting to place
+// is twenty times bigger than what each drain frees. Every drain clears the latch and rings the
+// server; every retry still does not fit. The old shape gave up after TWO such rounds and called
+// it "a drained ring that still refuses a record it fits is a corrupt cursor set" - ~100 ms into a
+// session whose only fault was a slow reader, and a Fatal. Now the rounds share one deadline:
+// the server keeps retrying for the whole knob (600 ms here) and then forfeits by name, TooSlow,
+// with the short drains counted.
+//
+// THE RED (recorded in the F2 package note): the old two-round ReserveEventOrBlock aborts this
+// child with Fatal{EventRingOverflow} "could not reserve ... on an emptied SEG_EVENT".
+TEST(RemoteRunAhead, ATricklingClientGetsTheWholeWaitThenForfeitsByNameInsteadOfAborting) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.EventWaitMs = 600;
+        StartRunAheadSession();
+        std::atomic<bool> stop{false};
+        std::atomic<Uint32> popped{0};
+        std::thread trickler([&stop, &popped] {
+            Transport::EventRingConsumer& events = ClientSessionInstance().Events();
+            while (!stop.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                Transport::RingRecordView view;
+                if (events.Pop(view)) popped.fetch_add(1);
+                // Releases what was popped, clears the latch and rings the server: a real drain,
+                // just a stingy one.
+                events.Drained();
+            }
+        });
+        const auto start = std::chrono::steady_clock::now();
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+            +[](void*) -> MobileGLResult {
+                // Fill with ONE-range marks (48 bytes a record) until under 4 KiB is left, without
+                // ever blocking - so the fill is not paced by the trickle - then ask for 64-range
+                // marks (~1 KiB each). The first of those that does not fit is the one the server
+                // waits for, and one popped 48-byte record never makes room for it.
+                auto& ring = Srv::ServerSessionInstance().Events().Ring();
+                const MG_Pipe::MGPRange one{0, 64};
+                while (ring.FreeBytes() > 4096u) {
+                    MG_Pipe::gMGPipeCallbacks.OnGpuWritten(MG_Pipe::MGPipeHandle{7, 1}, 1, &one);
+                }
+                MG_Pipe::MGPRange ranges[64];
+                for (Uint32 r = 0; r < 64; ++r) ranges[r] = MG_Pipe::MGPRange{r * 64ull, 64ull};
+                for (Uint32 i = 0; i < 16; ++i) {
+                    MG_Pipe::gMGPipeCallbacks.OnGpuWritten(MG_Pipe::MGPipeHandle{7, 1}, 64, ranges);
+                }
+                return MOBILEGL_OK;
+            },
+            nullptr);
+        const Uint64 elapsedMs = MillisecondsSince(start);
+        stop.store(true, std::memory_order_release);
+        trickler.join();
+        auto& server = Srv::ServerSessionInstance();
+        if (!server.ReverseChannelForfeited()) ::_exit(101);
+        if (server.ForfeitDrops() == 0) ::_exit(102);
+        // The trickle really happened while the server waited - otherwise this is the stonewall
+        // case under another name.
+        if (popped.load() < 2u) ::_exit(103);
+        // The WHOLE budget was spent retrying, not two rounds of it.
+        if (elapsedMs < 540u || elapsedMs > 5000u) ::_exit(104);
+        if (!ApplyThreadLeavesWithin(std::chrono::milliseconds(3000))) ::_exit(105);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+    EXPECT_NE(child.Log.find("ReverseChannelForfeit{TooSlow} - kEventGpuWritten"), std::string::npos)
+        << child.Log;
+    EXPECT_EQ(child.Log.find("Fatal{EventRingOverflow"), std::string::npos) << child.Log;
+}
+
 // §2.7 / ruling 13: the deferred-destroy queue stays, and an enqueue from an unbarriered
 // apply is the finding. Under strict it is the abort; this is the arm the lane owns.
 TEST(RemoteGuards, ADeferredDestroyFromAnUnbarrieredApplyIsFatalUnderStrict) {

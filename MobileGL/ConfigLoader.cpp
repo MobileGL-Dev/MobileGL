@@ -396,6 +396,10 @@ namespace MobileGL::MG_ConfigLoader {
         // control: no forced sync, and MagmaWireReclaimScenario's watermark case must go red.
         ipc.WireDeferredMb = QueryEnvUint32("MOBILEGL_IPC_WIRE_DEFERRED_MB", 64, 0, 65536);
         ipc.SpinUs = QueryEnvUint32("MOBILEGL_IPC_SPIN_US", 50, 0, 1000000);
+        // PH-6 (ID-P7-2; Config.h has the semantics). 0 is NOT admitted: a server with no
+        // patience at all would forfeit a healthy run-ahead client the first time its ring
+        // filled between two of the client's drains, which is an ordinary backlog.
+        ipc.EventWaitMs = QueryEnvUint32("MOBILEGL_IPC_EVENT_WAIT_MS", 2000, 1, 600000);
         // 0 is admitted ON PURPOSE and is the negative control of exit gate E3(a): it turns
         // the persistent-map push OFF, and PersistentCoherentMapScenario must go red.
         ipc.PersistentBlockKb = QueryEnvUint32("MOBILEGL_IPC_PERSISTENT_BLOCK_KB", 64, 0, 65536);
@@ -469,10 +473,12 @@ namespace MobileGL::MG_ConfigLoader {
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
         // One line, on the arm where these numbers decide behaviour, because every one of
         // them is a number a bug report has to quote.
-        MGLOG_I("Config: IPC ring=%uMiB stage=%uMiB wire-deferred=%uMiB spin=%uus persistent-block=%uKiB "
+        MGLOG_I("Config: IPC ring=%uMiB stage=%uMiB wire-deferred=%uMiB spin=%uus event-wait=%ums "
+                "persistent-block=%uKiB "
                 "adopt-tier=%u verb-barrier=%u run-ahead=%u present-credit=%u control-timeout=%ums "
                 "cold-start=%ums strict=%d audit=%d role-split-state=%d affinity='%s'",
-                ipc.RingMb, ipc.StageMb, ipc.WireDeferredMb, ipc.SpinUs, ipc.PersistentBlockKb, ipc.AdoptTier,
+                ipc.RingMb, ipc.StageMb, ipc.WireDeferredMb, ipc.SpinUs, ipc.EventWaitMs,
+                ipc.PersistentBlockKb, ipc.AdoptTier,
                 ipc.VerbBarrier, ipc.RunAhead, ipc.PresentCredit, ipc.ControlTimeoutMs, ipc.ColdStartMs,
                 static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit),
                 static_cast<int>(ipc.RoleSplitState), ipc.ServerAffinity.c_str());

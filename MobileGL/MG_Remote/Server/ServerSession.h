@@ -42,6 +42,7 @@
 #pragma once
 #include "../Transport/ILink.h"
 #include <Includes.h>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <vector>
@@ -211,6 +212,38 @@ namespace MobileGL::MG_Remote::Server {
         void PostGlError(Uint32 code, const char* message);
         Transport::ITransport* Control_Plane();
 
+        // ---- PH-6 (ID-P7-2): THE REVERSE CHANNEL IS FORFEITED, NOT FATAL -------------------
+        //
+        // A run-ahead producer that finds SEG_EVENT full parks until the client drains room
+        // (CONTRACT-P5E §2.6). What a client that does not drain used to cost was two Fatals
+        // inside ReserveEventOrBlock - "waited 30000 ms", twice, and "a drained ring that still
+        // refuses a record it fits is a corrupt cursor set", which a peer that drains one slot at
+        // a time reaches in milliseconds. Both are the PEER's behaviour, not a defect of this
+        // process, so neither may abort it.
+        //
+        // What replaces them is a LATCH on this session. The first event that cannot be placed
+        // within MOBILEGL_IPC_EVENT_WAIT_MS raises it (ForfeitReverseChannel, which logs
+        // `ReverseChannelForfeit{<cause>}` once); that event and every later one is a counted
+        // drop (CountDrop on the shared page, ForfeitDrops() here) into scratch the producer may
+        // fill and forget; the apply loop's park predicate sees the latch and takes the ordinary
+        // stop path; ServerMain's control loop sees the apply thread gone and ends the session.
+        // The process exits 0 and the supervisor welcomes the next connection. The latch is
+        // set, read and reset on the apply thread's side of Accept/Close only, and read with
+        // acquire elsewhere (the control loop, tests).
+        Bool ReverseChannelForfeited() const {
+            return m_reverseChannelForfeit.load(std::memory_order_acquire);
+        }
+        // Drops since the latch went up, counted HERE because the shared page's eventDropped is
+        // on a page the peer can write.
+        Uint64 ForfeitDrops() const { return m_forfeitDrops.load(std::memory_order_acquire); }
+        // `cause` is one word (the braces' content); `why` the sentence; `shortDrains` how many
+        // times the client cleared the latch without making room. Returns the scratch the caller
+        // writes the dropped event into.
+        void* ForfeitReverseChannel(const char* cause, const char* why, const char* eventName,
+                                    Uint64 payloadBytes, Uint32 waitedMs, Uint32 budgetMs,
+                                    Uint32 shortDrains);
+        void* DropEventAfterForfeit(Uint64 payloadBytes);
+
         // completedFrameSerial / presentAckSerial: the two watermarks only the server can
         // advance, kept together with the other three rather than poked into RingControl from
         // whatever code happens to notice a present finished.
@@ -246,6 +279,10 @@ namespace MobileGL::MG_Remote::Server {
         Bool m_consumedSet = false;
         Bool m_sizesSet = false;
         Bool m_accepted = false;
+        // PH-6. Written by the apply thread (the only SEG_EVENT producer), reset by Accept.
+        std::atomic<Bool> m_reverseChannelForfeit{false};
+        std::atomic<Uint64> m_forfeitDrops{0};
+        std::vector<Uint8> m_forfeitScratch;
     };
 
     // Leak-at-exit like every other MG_Remote singleton (ID-8): no frontend destructor may

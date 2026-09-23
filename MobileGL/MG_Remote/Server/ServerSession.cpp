@@ -239,19 +239,39 @@ namespace MobileGL::MG_Remote::Server {
         // `eventRingFull` as well (SessionProducer::WaitFor*OrEventBacklog) - so a parked
         // client is always wakeable by the server that is waiting for it.
         //
-        // TWO NAMED REFUSALS SURVIVE, and they are the impossible cases rather than the busy
-        // ones: a single event larger than the ring can EVER hold (no amount of draining
-        // helps), and a wait that ran out of patience (the peer is gone or wedged). A server
-        // that does not publish kCapRunAheadApply keeps P5C's Fatal unchanged.
+        // ONE NAMED REFUSAL SURVIVES, the impossible case: a single event larger than the ring
+        // can EVER hold (no amount of draining helps). The two BUSY refusals that used to sit
+        // beside it - a wait that ran out of patience, and two rounds against a ring the record
+        // fits - are the PEER's behaviour and became the forfeit latch below (PH-6, ID-P7-2).
+        // A server that does not publish kCapRunAheadApply keeps P5C's Fatal unchanged.
         Bool ServerPublishesRunAhead(const ServerSession& session) {
             if (!session.CallMaskIsSet()) return false;
             return (session.CallMask() & static_cast<Uint64>(MG_Pipe::kCapRunAheadApply)) != 0;
         }
 
-        constexpr Uint32 kEventBacklogWaitMs = 30000;
+        // PH-6 (ID-P7-2): MOBILEGL_IPC_EVENT_WAIT_MS (Config.h). It was a 30000 ms constant, and
+        // it was spent TWICE per reservation (two rounds), so the plan's "60 seconds" was really
+        // 30 s against a peer that never drains and a few milliseconds against one that trickles.
+        Uint32 EventBacklogWaitMs() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            return MG_Config::Ipc.EventWaitMs;
+#else
+            return 2000;
+#endif
+        }
+
+        Uint32 MillisecondsSince(std::chrono::steady_clock::time_point start) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start).count();
+            return elapsed <= 0 ? 0u : static_cast<Uint32>(elapsed);
+        }
 
         void* ReserveEventOrBlock(ServerSession& session, Transport::EventKind kind,
                                   const char* eventName, Uint64 payloadBytes) {
+            // FORFEITED: every event after the first drop is a drop too, at once - no Reserve and
+            // no second wait. The session is on its way down, and the peer has already shown it
+            // does not read this ring.
+            if (session.ReverseChannelForfeited()) return session.DropEventAfterForfeit(payloadBytes);
             void* slot = session.Events().Reserve(kind, payloadBytes);
             if (slot != nullptr) return slot;
             if (!ServerPublishesRunAhead(session)) FatalEventRingOverflow(eventName, payloadBytes);
@@ -275,29 +295,66 @@ namespace MobileGL::MG_Remote::Server {
             const auto drained = [signals] {
                 return signals.EventRingFull->load(std::memory_order_acquire) == 0;
             };
-            for (Uint32 round = 0; round < 2; ++round) {
+            // ONE DEADLINE FOR THE WHOLE RESERVATION, NOT ONE PER PARK. The loop goes round as
+            // often as the client clears the latch - that is how a client that drains in pieces
+            // eventually makes room - but every round spends the same budget, so a peer that
+            // clears the latch without freeing enough (it drains one slot per interval, or it
+            // writes the flag itself) cannot hold the apply thread longer than the knob says.
+            // The old shape gave up after TWO rounds, and called that "a corrupt cursor set":
+            // a trickling peer reached it in milliseconds and took the process down with it.
+            const Uint32 budgetMs = EventBacklogWaitMs();
+            const auto start = std::chrono::steady_clock::now();
+            const auto deadline = start + std::chrono::milliseconds(budgetMs);
+            // Rounds in which the client DID clear the latch and the record still did not fit.
+            // Zero at the deadline means the client never drained at all; more means it drained
+            // too little, too slowly - two different peers, and the log says which one this was.
+            Uint32 shortDrains = 0;
+            const auto outOfPatience = [&]() {
+                return shortDrains == 0
+                           ? session.ForfeitReverseChannel("NotDraining", "the client did not drain SEG_EVENT",
+                                                           eventName, payloadBytes, MillisecondsSince(start),
+                                                           budgetMs, shortDrains)
+                           : session.ForfeitReverseChannel("TooSlow",
+                                                           "the client drained SEG_EVENT but never made room for "
+                                                           "this record",
+                                                           eventName, payloadBytes, MillisecondsSince(start),
+                                                           budgetMs, shortDrains);
+            };
+            for (;;) {
                 // PUBLISH AND RING FIRST. The client cannot drain a ring whose head it has not
                 // been shown, and the latch Reserve just set is only useful to a client that
                 // gets a bell with it.
                 session.PublishEvents();
-                if (!drained() && !bell.Wait(*signals.ConsumerParked, drained, /*spinUs=*/0,
-                                             kEventBacklogWaitMs)) {
-                    SessionFail(MGFatalFamily::EventRingOverflow, "MGPipe: Fatal{EventRingOverflow} - %s waited %u ms for the client "
-                            "to drain SEG_EVENT and it never did. Under run-ahead the apply "
-                            "thread parks on this ring (CONTRACT-P5E §2.6); a client that does "
-                            "not drain is one that is not running",
-                            eventName, kEventBacklogWaitMs);
+                // DEAD FIRST (the plan's own clause): a bell whose peer is gone answers every
+                // Wait with an immediate false, and reporting that as "waited N ms" would name
+                // a timeout for what is a hangup.
+                if (bell.Dead()) {
+                    return session.ForfeitReverseChannel("PeerGone", "the client's doorbell is dead - the peer is gone",
+                                                         eventName, payloadBytes, MillisecondsSince(start), budgetMs,
+                                                         shortDrains);
+                }
+                if (!drained()) {
+                    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        deadline - std::chrono::steady_clock::now()).count();
+                    if (left <= 0) return outOfPatience();
+                    if (!bell.Wait(*signals.ConsumerParked, drained, /*spinUs=*/0, static_cast<Uint32>(left))) {
+                        if (bell.Dead()) {
+                            return session.ForfeitReverseChannel(
+                                "PeerGone", "the client's doorbell died while the server waited - the peer is gone",
+                                eventName, payloadBytes, MillisecondsSince(start), budgetMs, shortDrains);
+                        }
+                        return outOfPatience();
+                    }
                 }
                 slot = session.Events().Reserve(kind, payloadBytes);
                 if (slot != nullptr) return slot;
+                // The client cleared the latch and the record STILL does not fit: it drained less
+                // than this record needs. That is a slow drain, not a corrupt cursor set, and it
+                // gets the rest of the same budget - Reserve has just raised the latch again, so
+                // the next round parks until the client clears it once more.
+                ++shortDrains;
+                if (std::chrono::steady_clock::now() >= deadline) return outOfPatience();
             }
-            // Two full rounds against a ring the record provably fits: something else is
-            // producing into it, which on this side is impossible (one producer, the apply
-            // thread, by construction).
-            SessionFail(MGFatalFamily::EventRingOverflow, "MGPipe: Fatal{EventRingOverflow} - %s could not reserve %llu bytes on an "
-                    "emptied SEG_EVENT. The apply thread is SEG_EVENT's only producer, so a "
-                    "drained ring that still refuses a record it fits is a corrupt cursor set",
-                    eventName, static_cast<unsigned long long>(payloadBytes));
         }
 
         // Accept owns the single process callback table. Its owner need not be the
@@ -493,6 +550,10 @@ namespace MobileGL::MG_Remote::Server {
             }
         } releaseOnFailure{this};
         m_transport = &transport;
+        // PH-6: a forfeit is THIS session's fact. A process that accepts again (inproc context
+        // loss, a test's second session) starts with a reverse channel it has not given up.
+        m_reverseChannelForfeit.store(false, std::memory_order_release);
+        m_forfeitDrops.store(0, std::memory_order_release);
         // MOBILEGL_IPC_RING_MB / _STAGE_MB unless SetSegmentSizes overrode them. Unconditional
         // on purpose - see SizesFromConfig.
         if (!m_sizesSet) {
@@ -995,6 +1056,39 @@ namespace MobileGL::MG_Remote::Server {
         }
         tail[length] = '\0';
         PublishEvents();
+    }
+
+    // PH-6 (ID-P7-2). THE FIRST DROP, AND THE LATCH IT RAISES.
+    //
+    // Logged ONCE, by name, with everything a triage needs: which event, how big, what the
+    // client did (never drained / drained too little / went away), how long the server waited
+    // against which budget. MGLOG_E and not a Fatal marker on purpose: nothing here is this
+    // process's defect, so neither the census nor a retrace's `Fatal{` scan may count it as one -
+    // and the session that follows is an ordinary stop, exit 0, not a SessionFault.
+    void* ServerSession::ForfeitReverseChannel(const char* cause, const char* why, const char* eventName,
+                                               Uint64 payloadBytes, Uint32 waitedMs, Uint32 budgetMs,
+                                               Uint32 shortDrains) {
+        if (!m_reverseChannelForfeit.exchange(true, std::memory_order_acq_rel)) {
+            MGLOG_E("MGPipe: ReverseChannelForfeit{%s} - %s needs %llu bytes on a full SEG_EVENT and %s "
+                    "(waited %u ms of MOBILEGL_IPC_EVENT_WAIT_MS=%u, %u short drain(s)). The reverse "
+                    "channel is lossless (CONTRACT-P5C §4.4), so a session that drops one event cannot "
+                    "go on: this event and every later one is dropped and counted, and the session "
+                    "stops by the ordinary stop path (PH-6, ID-P7-2)",
+                    cause, eventName, static_cast<unsigned long long>(payloadBytes), why, waitedMs, budgetMs,
+                    shortDrains);
+        }
+        return DropEventAfterForfeit(payloadBytes);
+    }
+
+    // The producer still fills and publishes what it was given, because its code is the same
+    // whether the slot is SEG_EVENT or not; the scratch is where that write goes to die. Apply
+    // thread only (SEG_EVENT has one producer), so the one buffer needs no lock.
+    void* ServerSession::DropEventAfterForfeit(Uint64 payloadBytes) {
+        if (m_events != nullptr) m_events->CountDrop();
+        m_forfeitDrops.fetch_add(1, std::memory_order_acq_rel);
+        const SizeT bytes = static_cast<SizeT>(payloadBytes == 0 ? 1 : payloadBytes);
+        if (m_forfeitScratch.size() < bytes) m_forfeitScratch.resize(bytes);
+        return m_forfeitScratch.data();
     }
 
     // Both of these advance AND ring, through SessionConsumer. The free functions in namespace

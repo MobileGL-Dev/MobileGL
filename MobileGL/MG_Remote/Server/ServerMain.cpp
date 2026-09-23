@@ -350,9 +350,26 @@ void SendLogAck(void* pointer) {
     WireLogError("MG_Remote server: pid=%d transport=spawn role=server ready control=%s data=%s",
                  selfPid, tcp ? "tcp" : "unix", tcp ? "stream" : "shm");
     std::vector<std::uint8_t> buffer(64 * 1024);
+    // PH-6 (ID-P7-2): THE CONTROL WAIT IS BOUNDED, SO A SESSION CAN END FROM THE SERVER'S SIDE.
+    // It used to be kWaitForever, which left exactly one way out: the peer closing its control
+    // connection. A peer that forfeited the reverse channel is by definition one that stopped
+    // reading, and it may well keep that connection open - so the apply thread would stop and
+    // this child would sit here, holding the supervisor's one session slot, answering every
+    // later client Busy. Now each quiet interval asks whether the apply thread is still there;
+    // when it is not (forfeit, or a dead data bell), the session takes the ordinary exit below:
+    // Stop, Close, _exit(0). The interval is the supervisor's own accept poll.
+    constexpr std::uint32_t kControlPollMs = 250;
     for (;;) {
         std::uint64_t size = 0;
-        const auto result = control->ReceiveFrame({buffer.data(), buffer.size()}, &size, kWaitForever);
+        const auto result = control->ReceiveFrame({buffer.data(), buffer.size()}, &size, kControlPollMs);
+        if (result == MOBILEGL_ERR_TIMEOUT) {
+            if (loop.Running()) continue;
+            WireLogError("MG_Remote server: pid=%d the apply thread has stopped (%s, %llu event(s) dropped); "
+                         "ending the session",
+                         selfPid, session.ReverseChannelForfeited() ? "ReverseChannelForfeit" : "its bell died",
+                         static_cast<unsigned long long>(session.ForfeitDrops()));
+            break;
+        }
         if (result == MOBILEGL_ERR_BUFFER_TOO_SMALL) { buffer.resize(static_cast<std::size_t>(size)); continue; }
         if (result != MOBILEGL_OK) break;
         // THE FILE IDENTIFIER, ASKED FIRST AND SAID OUT LOUD (P7 wave 0).

@@ -402,17 +402,27 @@ namespace MobileGL::MG_Remote::Server {
         // this bell (that pairing is the whole of the flow-control protocol; a cleared flag
         // with no bell is the lost wakeup the forward direction's publish-then-ring order
         // exists to prevent).
-        const auto ready = [this, signals, &ring] {
-            if (m_stopRequested.load(std::memory_order_acquire) || ControlIsPending()) return true;
+        //
+        // PH-6 (ID-P7-2) ADDS THE FORFEIT LATCH BESIDE STOP, AND FOR STOP'S REASON. A session whose
+        // reverse channel was forfeited (ServerSession::ForfeitReverseChannel) has a client that
+        // is not reading SEG_EVENT, so its ring stays full - and the ring test below would park
+        // this thread on `eventRingFull` for ever, waiting for a drain that the forfeit has
+        // already decided will not come. The latch wins over the ring exactly as Stop does, and
+        // the loop takes the same way out.
+        const auto stopOrForfeit = [this, &session] {
+            return m_stopRequested.load(std::memory_order_acquire) || session.ReverseChannelForfeited();
+        };
+        const auto ready = [this, signals, &ring, &stopOrForfeit] {
+            if (stopOrForfeit() || ControlIsPending()) return true;
             if (signals.EventRingFull->load(std::memory_order_acquire) != 0) return false;
             return signals.CmdHead->load(std::memory_order_acquire) != ring.LocalTail();
         };
 
         for (;;) {
             PumpControlRequest();
-            if (m_stopRequested.load(std::memory_order_acquire)) break;
+            if (stopOrForfeit()) break;
             if (signals.EventRingFull->load(std::memory_order_acquire) == 0) DrainRing();
-            if (m_stopRequested.load(std::memory_order_acquire)) break;
+            if (stopOrForfeit()) break;
             if (ready()) continue;
 
             const Uint64 waits = m_parks.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -466,8 +476,23 @@ namespace MobileGL::MG_Remote::Server {
         // drain (ClientSession::Stop step 1) normally empties the ring first and is BOUNDED, so
         // a timeout there leaves records here; applying them costs nothing and dropping them
         // would leave the emitter's var-tails referenced by records nobody ever read.
+        //
+        // EXCEPT AFTER A FORFEIT (PH-6). That stop was not asked for by a client finishing its
+        // work; it was decided about a peer that stopped reading this session's answers, and
+        // every event the rest of its queue produced would only be one more counted drop - while
+        // a peer that keeps publishing could keep this final drain going as long as it liked,
+        // which is exactly the unbounded hold the forfeit exists to end. The queue is left
+        // unapplied; the rings die with the session.
+        const Bool forfeited = session.ReverseChannelForfeited();
         PumpControlRequest();
-        DrainRing();
+        if (forfeited) {
+            MGLOG_E("MG_Remote server: mgl-srv-apply stops on ReverseChannelForfeit - %llu reverse-channel "
+                    "event(s) dropped, applied seq %llu; the records still queued are not applied",
+                    static_cast<unsigned long long>(session.ForfeitDrops()),
+                    static_cast<unsigned long long>(session.Consumer().AppliedSeq()));
+        } else {
+            DrainRing();
+        }
 
         // THE BACKEND IS DESTROYED ON THIS THREAD, WHILE IT IS STILL THE CONTEXT OWNER.
         // ~BackendObject_DirectGLES calls DestroyEGLContext (BackendObject_DirectGLES.cpp:
@@ -633,6 +658,10 @@ namespace MobileGL::MG_Remote::Server {
             }
             if (!popped) break;
             ++applied;
+            // PH-6: the record whose event forfeited the reverse channel is the last one this
+            // session applies. Checked only AFTER a popped record, so the empty-ring answer above
+            // still costs its two loads and nothing else.
+            if (session.ReverseChannelForfeited()) break;
         }
         if (applied != 0) {
             // THE TWO TALLIES MUST AGREE, AND THAT IS WHAT MAKES R-9's BATCHING BAN CHECKABLE.

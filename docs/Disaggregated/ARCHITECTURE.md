@@ -653,6 +653,7 @@ CMake：
 | `MOBILEGL_IPC_RING_MB` | 8 | `SEG_CMD`；单条记录至多一半 |
 | `MOBILEGL_IPC_STAGE_MB` | 32 | `SEG_STAGE`；目标负载 profile 显式 256 |
 | `MOBILEGL_IPC_SPIN_US` | 50 | park 前自旋；P5d 三轮起自旋按一次性校准的迭代预算走、稳态不读时钟，`0` = 不自旋直接 park |
+| `MOBILEGL_IPC_EVENT_WAIT_MS` | 2000（1–600000） | PH-6（ID-P7-2），只由 server 读（`ServerSpawn.cpp` 放行给 spawn 子进程）：run-ahead 下一条反向事件遇到满的 `SEG_EVENT` 时，server 等 client 腾出空间的**整笔预算**（不是每次 park 的）。到期、client 只涓流不腾够、或 client 的 bell 已死（先判死，不误报为超时）→ `ReverseChannelForfeit{NotDraining\|TooSlow\|PeerGone}`：该事件及其后全部计数丢弃（`eventDropped`），apply 循环按正常 Stop 退出，会话 exit 0，supervisor 照常欢迎下一连接。取代原先 30000 ms × 两轮后的 `Fatal{EventRingOverflow}`。lockstep 臂（无 `kCapRunAheadApply`，即 Magma）不等待，仍是 P5C 的 Fatal |
 | `MOBILEGL_IPC_PERSISTENT_BLOCK_KB` | 64 | persistent-map 推送块粒度；`0` 是 E3(a) 阴性对照 |
 | `MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS` | 1 | 推送只发内容变了的块（追踪 buffer 走 mprotect 位图，未追踪走内容哈希）；`0` 恢复全范围推送（A/B 对照） |
 | `MOBILEGL_IPC_BATCH_WAITS` | 1 | 值类记录（无 reply slot 的 kCtxState/kCtxCso/kCtxObject）发布即返回，barrier 推迟到下一个拉取类 verb；**`generate_mipmap` 例外**（它的 apply 读 `MGB_CTX->GetActiveTextureUnit()`，规则：只有 apply 不读残余填充字段的记录才可免等）；`0` 恢复 R-1 逐条 barrier（`MOBILEGL_PIPE_VERIFY` 强制 0） |

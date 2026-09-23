@@ -97,10 +97,14 @@ namespace MobileGL::MG_Remote::Server {
         // audit value, none names an endpoint, a role, a path or a segment size, and ServerMain's
         // catch (b) keeps verifying the four it verifies (TRANSPORT, SERVER_PATH, RING_MB,
         // STAGE_MB). Everything else under the prefix still goes.
+        //
+        // PH-6 (ID-P7-2) adds MOBILEGL_IPC_EVENT_WAIT_MS on the same argument: it is the server's
+        // patience with a client that has stopped draining SEG_EVENT, nothing on the client reads
+        // it, and scrubbing it would make a spawned server wait the default whatever the lane set.
         bool ShouldScrub(const char* entry) {
             static constexpr const char* kServerOwned[] = {
                 "MOBILEGL_IPC_WIRE_DEFERRED_MB=", "MOBILEGL_IPC_SPIN_US=", "MOBILEGL_IPC_SERVER_AFFINITY=",
-                "MOBILEGL_IPC_AUDIT=",
+                "MOBILEGL_IPC_AUDIT=", "MOBILEGL_IPC_EVENT_WAIT_MS=",
             };
             for (const char* kept : kServerOwned) {
                 if (std::strncmp(entry, kept, std::strlen(kept)) == 0) {
