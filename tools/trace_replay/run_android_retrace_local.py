@@ -78,6 +78,15 @@ def is_lfs_pointer(path):
 
 
 def find_trace_apk():
+    # A preinstalled APK need not be the newest Gradle output in this tree.
+    # Let the caller pin the exact signed file used for the session so run.json
+    # does not present an unrelated local build's SHA as device provenance.
+    override = __import__("os").environ.get("MOBILEGL_TRACE_APK", "").strip()
+    if override:
+        path = Path(override).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"MOBILEGL_TRACE_APK does not exist: {path}")
+        return path
     candidates = [
         path
         for directory in TRACE_APK_DIRS
