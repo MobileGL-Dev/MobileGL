@@ -30,11 +30,15 @@
 //
 // A REPLY LARGER THAN ONE SLOT IS FATAL, NOT CHUNKED, AND THE CLIENT SAYS SO
 // FIRST (ID-47). P5's only large answer is ReadPixels, and the client knows its
-// size before it emits the record, so it refuses an oversize read BY NAME before
-// emission (RequireReadPixelsFits: Fatal{ReplyTooLarge, "ReadPixels <w>x<h>
-// <format> <bytes> > <cap>"}); Post's own refusal is the server's last line of
-// defence, and reaching it means the two sides disagree about the frame rather
-// than that the pool is too small. Chunking is a P6 debt; the pool has no knob.
+// size before it emits the record, so it refuses an oversize ANSWER BY NAME
+// before emission (RequireReadPixelsFits: Fatal{ReplyTooLarge, "ReadPixels
+// <w>x<h> <format> <bytes> > <cap>"}); Post's own refusal is the server's last
+// line of defence, and reaching it means the two sides disagree about the frame
+// rather than that the pool is too small. The pool still has no knob and a reply
+// is still never chunked: since P7 gate 5 (g5-readback) the client splits a READ
+// larger than one slot into bands, each an ordinary read_pixels record whose
+// answer fits (EmitTables.h PlanReadbackBands), so the refusal is left for the
+// one read no banding can answer - a single pixel larger than a slot.
 //
 // ORDERING. The client only looks at a slot after it has seen
 // RingControl::appliedSeq >= its own seq with an ACQUIRE load, and the server
@@ -102,6 +106,8 @@ namespace MobileGL::MG_Remote::Transport {
     // 640x480). A 2400x1080 RGBA8 device surface is ~10.4 MB and is a P6 debt
     // (chunked readback or a dedicated readback carrier), recorded in the
     // ROADMAP by the integrator - the geometry here is not the place it is paid.
+    // It was paid at P7 gate 5 by client-side banding (g5-readback), with this
+    // geometry unchanged.
     inline constexpr std::uint32_t kDefaultReplySlotCount = 8;
 
     // Slot 0 exists and is used: seq is 1-based, so seq % slotCount hits slot 0
@@ -196,9 +202,9 @@ namespace MobileGL::MG_Remote::Transport {
             WireLogFatal("MGPipe: Fatal{ReplyTooLarge, \"ReadPixels %ux%u 0x%04X/0x%04X %llu > %u\"} - "
                          "the answer does not fit one SEG_REPLY slot (%u slots of %u bytes, payload "
                          "cap %u; a cap of 0 means no reply pool is configured). Refused at the "
-                         "client before emission (ID-47): P5 neither truncates nor chunks a reply, "
-                         "and a read larger than the cap is a P6 debt (chunked readback), not a "
-                         "bigger pool",
+                         "client before emission (ID-47): a reply is neither truncated nor "
+                         "chunked, and the client bands any read whose single pixel fits a slot, "
+                         "so this answer is one that no banding could have sent",
                          static_cast<unsigned>(width), static_cast<unsigned>(height),
                          static_cast<unsigned>(format), static_cast<unsigned>(type),
                          static_cast<unsigned long long>(bytes),

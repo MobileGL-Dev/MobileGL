@@ -366,8 +366,10 @@ namespace MobileGL::MG_Remote::Client {
         // DECLINED IS A REAL ANSWER - MapPersistent's nullptr and the four Bool acceptances.
         Bool ReadReply(Uint64 seq, void* outBytes, Uint64 outCapacity, Int32* outStatus,
                        Uint64* outSize);
-        // What one answer may carry. A ReadPixels bigger than this is Fatal rather than
-        // chunked, so the client checks BEFORE it emits.
+        // What one answer may carry. No single answer is ever bigger than this: a ReadPixels
+        // whose whole read is bigger is split by the emitter into row bands (or, for a row
+        // wider than a reply, single-row pieces) that each fit (g5-readback, EmitTables.h
+        // PlanReadbackBands), and the client still checks every band BEFORE it emits.
         Uint32 MaxReplyBytes() const;
         // ID-47, the fifth primitive: true exactly when an answer of `bytes` can be posted.
         Bool ReplyCanHold(Uint64 bytes) const;
@@ -375,8 +377,9 @@ namespace MobileGL::MG_Remote::Client {
         // Returns when the answer fits; otherwise
         //     Fatal{ReplyTooLarge, "ReadPixels <w>x<h> <format> <bytes> > <cap>"}
         // and abort - AT THE CLIENT, BEFORE EMISSION. Package c1's OnReadPixels emitter calls
-        // this once, immediately before EmitAndWait(MGPWireOp::ReadPixels, ...), with the
-        // record's box, its Format/Type enums and the DstSize it computed; the server's Post
+        // this immediately before each EmitAndWait(MGPWireOp::ReadPixels, ...), with that
+        // band's box, its Format/Type enums and the DstSize it computed - and, when not even one
+        // pixel fits a reply, once for that one pixel instead of emitting; the server's Post
         // keeps its own refusal as the last line of defence, but that one fires on the apply
         // thread with the record already on the wire, where all the client sees is a hang.
         void RequireReadPixelsReplyFits(Uint32 width, Uint32 height, Uint32 format, Uint32 type,

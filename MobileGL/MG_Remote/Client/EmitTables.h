@@ -146,6 +146,64 @@ namespace MobileGL::MG_Remote::Client {
                                            GLsizei height, Uint64 bytesPerPixel,
                                            const PixelStoreParameters& pack);
 
+    // P7 gate 5 (g5-readback). A glReadPixels whose tight answer is larger than one reply slot
+    // is NOT one record: the client splits the w*h rectangle into BANDS, emits each band as an
+    // ordinary read_pixels record with its own box and its own tight DstSize (so every answer
+    // still fits one slot, ID-47, and the server's PH-3 bound `tight == DstSize <= maxReplyBytes`
+    // holds unchanged), and scatters each band into the application's destination under its
+    // own GL_PACK_* state. No reply is chunked; the READ is.
+    //
+    // THE SHAPE. Whole-width row bands of floor(maxReplyBytes / rowBytes) rows when a row fits
+    // a reply; otherwise every row is cut into column pieces of floor(maxReplyBytes / bpp)
+    // pixels. Both shapes are contiguous in the tight layout, which is what lets the neutral-
+    // pack fast path keep reading straight into the application's pointer. Bands are in
+    // row-major order and cover the rectangle exactly once.
+    //
+    // NO PLAN exactly when not even ONE pixel fits a reply (maxReplyBytes < bytesPerPixel,
+    // including a link with no reply pool at all); the emitter then refuses BY NAME through
+    // ID-47's unchanged helper rather than emitting anything. That is the only ReadPixels shape
+    // left that ends in Fatal{ReplyTooLarge}: CONTRACT-P5 row 23 makes an answer that cannot fit
+    // a slot a named Fatal, not a GL error, and no pixel can be returned in pieces smaller than
+    // itself.
+    //
+    // THE PLAN IS TWO NUMBERS AND THE BANDS ARE WALKED, NOT LISTED: a band list would be one
+    // allocation per read that grows with the read, and the walk below is the only place the
+    // order and the coverage are decided - the emitter and the unit control both call it.
+    struct ReadbackBand {
+        Uint64 FirstRow = 0;
+        Uint64 Rows = 0;
+        Uint64 FirstColumn = 0;
+        Uint64 Columns = 0;
+    };
+    struct ReadbackBandPlan {
+        Uint64 RowsPerBand = 0;    // 1 when a single row does not fit a reply
+        Uint64 ColumnsPerBand = 0; // the whole width when it does
+    };
+    // False (and `plan` untouched) exactly when not even one pixel fits a reply.
+    Bool PlanReadbackBands(Uint64 width, Uint64 height, Uint64 bytesPerPixel, Uint64 maxReplyBytes,
+                           ReadbackBandPlan& plan);
+    template <typename Visit>
+    void ForEachReadbackBand(Uint64 width, Uint64 height, const ReadbackBandPlan& plan,
+                             Visit&& visit) {
+        if (plan.RowsPerBand == 0 || plan.ColumnsPerBand == 0) return;
+        for (Uint64 row = 0; row < height; row += plan.RowsPerBand) {
+            const Uint64 rows = plan.RowsPerBand < height - row ? plan.RowsPerBand : height - row;
+            for (Uint64 column = 0; column < width; column += plan.ColumnsPerBand) {
+                const Uint64 columns =
+                    plan.ColumnsPerBand < width - column ? plan.ColumnsPerBand : width - column;
+                visit(ReadbackBand{row, rows, column, columns});
+            }
+        }
+    }
+
+    // The scatter for ONE band: `band` holds band.Rows x band.Columns tight pixels, and they land
+    // where ScatterTightReadbackIntoPackState would have put those pixels of the whole
+    // `width`-wide read. ScatterTightReadbackIntoPackState is this function over the single band
+    // {0, height, 0, width}, so the whole-read arithmetic and the banded one cannot drift.
+    void ScatterReadbackBandIntoPackState(const void* band, void* destination, GLsizei width,
+                                          const ReadbackBand& where, Uint64 bytesPerPixel,
+                                          const PixelStoreParameters& pack);
+
     // ID-49. True when the destination layout IS the tight layout, which is the only condition
     // under which EmitReadPixels may read the reply straight into the application pointer and
     // skip the bounce. Exported because the FAST PATH and the SCATTER have to agree, and the

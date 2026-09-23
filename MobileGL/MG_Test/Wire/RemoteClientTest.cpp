@@ -1226,6 +1226,173 @@ TEST(RemoteReadback, TheFastPathIsTakenExactlyWhenTheScatterWouldChangeNothing) 
 }
 
 // =====================================================================================
+// P7 gate 5 (g5-readback): a read larger than one reply slot is BANDED, not refused
+// =====================================================================================
+
+namespace {
+    // The bands the production walk visits, in order - the emitter iterates the same walk.
+    std::vector<ReadbackBand> CollectReadbackBands(Uint64 width, Uint64 height, Uint64 bpp, Uint64 cap,
+                                                   Bool* planned = nullptr) {
+        ReadbackBandPlan plan;
+        const Bool ok = PlanReadbackBands(width, height, bpp, cap, plan);
+        if (planned != nullptr) *planned = ok;
+        std::vector<ReadbackBand> bands;
+        if (ok) ForEachReadbackBand(width, height, plan, [&](const ReadbackBand& band) { bands.push_back(band); });
+        return bands;
+    }
+} // namespace
+
+TEST(RemoteReadback, TheCtsReadOfExactlyTwoMiBIsTwoBandsThatEachFitASlot) {
+    // KHR-GL46.direct_state_access.renderbuffers_storage's own read: 256x512 RGBA/FLOAT is
+    // 2,097,152 bytes against ID-47's 2,097,136. It used to be Fatal{ReplyTooLarge}; it is now two
+    // records - 511 rows (2,093,056 bytes) and the single top row - and BOTH are answers one slot
+    // holds, so the server's PH-3 bound (tight == DstSize <= maxReplyBytes) is met per record.
+    constexpr Uint64 kCap = 2u * 1024u * 1024u - 16u;
+    const Uint64 bpp = 16;
+    ASSERT_EQ(TightReadbackByteCount(256, 512, 0x1908 /*RGBA*/, 0x1406 /*FLOAT*/), 2097152u);
+    const auto bands = CollectReadbackBands(256, 512, bpp, kCap);
+    ASSERT_EQ(bands.size(), 2u);
+    EXPECT_EQ(bands[0].FirstRow, 0u);
+    EXPECT_EQ(bands[0].Rows, 511u);
+    EXPECT_EQ(bands[1].FirstRow, 511u);
+    EXPECT_EQ(bands[1].Rows, 1u);
+    for (const ReadbackBand& band : bands) {
+        EXPECT_EQ(band.FirstColumn, 0u);
+        EXPECT_EQ(band.Columns, 256u);
+        EXPECT_LE(TightReadbackByteCount(static_cast<GLsizei>(band.Columns), static_cast<GLsizei>(band.Rows),
+                                         0x1908, 0x1406),
+                  kCap);
+    }
+    // A read that already fits is ONE record, unchanged from before: exactly the cap, and E2's
+    // 640x480 RGBA8 snapshot.
+    EXPECT_EQ(CollectReadbackBands(131071, 1, 16, kCap).size(), 1u) << "exactly the cap is one band";
+    EXPECT_EQ(CollectReadbackBands(640, 480, 4, kCap).size(), 1u);
+    // More than the whole 16 MiB SEG_REPLY: 2048x2100 RGBA8 is 255-row bands, nine of them.
+    EXPECT_EQ(CollectReadbackBands(2048, 2100, 4, kCap).size(), 9u);
+}
+
+TEST(RemoteReadback, EveryPlanCoversTheReadOnceInRowMajorOrderWithBandsThatFitAndStayContiguous) {
+    // The plan's invariants over a sweep that includes both shapes - whole-width row bands and,
+    // for a row wider than a reply, single-row column pieces - at small caps so every boundary is
+    // hit: the cap exactly one row, one byte short of a row, one pixel, one pixel short of two.
+    struct Shape { Uint64 w, h, bpp, cap; };
+    const Shape shapes[] = {
+        {7, 5, 4, 28},   {7, 5, 4, 27},  {7, 5, 4, 4},   {7, 5, 4, 7},   {7, 5, 16, 1000},
+        {20, 3, 16, 100}, {1, 9, 3, 3},  {9, 1, 3, 26},  {256, 512, 16, 2097136}, {5, 5, 8, 8},
+        {33, 17, 4, 131}, {1024, 513, 4, 2097136},
+    };
+    int rowShapes = 0, pieceShapes = 0;
+    for (const Shape& s : shapes) {
+        SCOPED_TRACE(std::to_string(s.w) + "x" + std::to_string(s.h) + " bpp " + std::to_string(s.bpp) +
+                     " cap " + std::to_string(s.cap));
+        Bool planned = false;
+        const auto bands = CollectReadbackBands(s.w, s.h, s.bpp, s.cap, &planned);
+        ASSERT_TRUE(planned);
+        std::vector<int> covered(static_cast<size_t>(s.w * s.h), 0);
+        Uint64 previousTightEnd = 0;
+        Bool pieces = false;
+        for (const ReadbackBand& band : bands) {
+            ASSERT_GT(band.Rows, 0u);
+            ASSERT_GT(band.Columns, 0u);
+            EXPECT_LE(band.Rows * band.Columns * s.bpp, s.cap) << "a band's answer does not fit a reply";
+            // CONTIGUOUS IN THE TIGHT LAYOUT (whole-width rows, or a piece of one row), and in
+            // order: the direct path reads each answer straight into the application's buffer at
+            // exactly this offset, so a gap or an overlap here is a torn picture there.
+            EXPECT_TRUE(band.Columns == s.w || band.Rows == 1);
+            if (band.Columns != s.w) pieces = true;
+            const Uint64 tightStart = band.FirstRow * s.w + band.FirstColumn;
+            EXPECT_EQ(tightStart, previousTightEnd) << "bands are not consecutive in row-major order";
+            previousTightEnd = tightStart + (band.Rows - 1) * s.w + band.Columns;
+            for (Uint64 r = 0; r < band.Rows; ++r)
+                for (Uint64 c = 0; c < band.Columns; ++c)
+                    ++covered[static_cast<size_t>((band.FirstRow + r) * s.w + band.FirstColumn + c)];
+        }
+        EXPECT_EQ(previousTightEnd, s.w * s.h);
+        for (size_t i = 0; i < covered.size(); ++i) ASSERT_EQ(covered[i], 1) << "pixel " << i;
+        // AS FEW RECORDS AS THE SHAPE ALLOWS: a whole-width band takes every row a reply holds.
+        if (!pieces) {
+            const Uint64 rowsPerReply = s.cap / (s.w * s.bpp);
+            EXPECT_EQ(bands.size(), (s.h + rowsPerReply - 1) / rowsPerReply);
+            ++rowShapes;
+        } else {
+            EXPECT_GT(s.w * s.bpp, s.cap) << "a row that fits a reply was cut into pieces";
+            ++pieceShapes;
+        }
+    }
+    EXPECT_GT(rowShapes, 0);
+    EXPECT_GT(pieceShapes, 0) << "the sweep never reached the column-piece arm";
+}
+
+TEST(RemoteReadback, NotEvenOnePixelFittingIsTheOnlyReadWithNoPlan) {
+    // The one read banding cannot answer, left to ID-47's named Fatal at the emitter: a single
+    // pixel larger than a reply (a server that declared a cap below 16 bytes), or no reply pool.
+    Bool planned = true;
+    EXPECT_TRUE(CollectReadbackBands(4, 4, 16, 15, &planned).empty());
+    EXPECT_FALSE(planned);
+    EXPECT_TRUE(CollectReadbackBands(4, 4, 4, 0, &planned).empty());
+    EXPECT_FALSE(planned);
+    // And one byte more is a plan, of single-pixel pieces.
+    const auto bands = CollectReadbackBands(4, 4, 16, 16, &planned);
+    EXPECT_TRUE(planned);
+    EXPECT_EQ(bands.size(), 16u);
+    // Degenerate reads plan nothing (the emitter returns before planning them).
+    EXPECT_TRUE(CollectReadbackBands(0, 4, 4, 64, &planned).empty());
+    EXPECT_FALSE(planned);
+}
+
+TEST(RemoteReadback, ABandedScatterWritesExactlyTheBytesTheWholeScatterWrites) {
+    // The bounce path's composition: every band scattered on its own must leave the destination
+    // byte-identical to one whole-read scatter, gaps included, for pack states that pad, skip,
+    // and - the ill-formed 0 < ROW_LENGTH < width case m6 keeps verbatim - overlap. Both band
+    // shapes are driven: row bands at a cap of two rows and a bit, pieces at a cap under a row.
+    constexpr GLsizei kW = 11;
+    constexpr GLsizei kH = 7;
+    constexpr Uint8 kSentinel = 0xEE;
+    for (const Uint64 bpp : {Uint64{3}, Uint64{4}, Uint64{16}}) {
+        std::vector<Uint8> tight(static_cast<size_t>(kW) * kH * bpp);
+        for (size_t i = 0; i < tight.size(); ++i) tight[i] = static_cast<Uint8>(i * 13 + 5);
+        std::vector<PixelStoreParameters> layouts(6);
+        layouts[1].Alignment = 8;
+        layouts[2].RowLength = kW + 3;
+        layouts[2].Alignment = 8;
+        layouts[3].SkipRows = 2;
+        layouts[3].SkipPixels = 3;
+        layouts[4].RowLength = kW + 1;
+        layouts[4].SkipRows = 1;
+        layouts[4].SkipPixels = 1;
+        layouts[4].Alignment = 2;
+        layouts[5].RowLength = 4; // < width: consecutive rows overlap, so ORDER decides the bytes
+        for (const Uint64 cap : {kW * bpp * 2 + 5, kW * bpp - 1, bpp * 3}) {
+            for (size_t l = 0; l < layouts.size(); ++l) {
+                SCOPED_TRACE("bpp " + std::to_string(bpp) + " cap " + std::to_string(cap) + " layout " +
+                             std::to_string(l));
+                const PixelStoreParameters& pack = layouts[l];
+                std::vector<Uint8> whole(4096, kSentinel);
+                ScatterTightReadbackIntoPackState(tight.data(), whole.data(), kW, kH, bpp, pack);
+
+                ReadbackBandPlan plan;
+                ASSERT_TRUE(PlanReadbackBands(kW, kH, bpp, cap, plan));
+                std::vector<Uint8> banded(4096, kSentinel);
+                int bandCount = 0;
+                ForEachReadbackBand(kW, kH, plan, [&](const ReadbackBand& band) {
+                    // What the server would answer for this band: its own tight rectangle.
+                    std::vector<Uint8> answer(static_cast<size_t>(band.Rows * band.Columns * bpp));
+                    for (Uint64 r = 0; r < band.Rows; ++r) {
+                        std::memcpy(answer.data() + r * band.Columns * bpp,
+                                    tight.data() + ((band.FirstRow + r) * kW + band.FirstColumn) * bpp,
+                                    static_cast<size_t>(band.Columns * bpp));
+                    }
+                    ScatterReadbackBandIntoPackState(answer.data(), banded.data(), kW, band, bpp, pack);
+                    ++bandCount;
+                });
+                EXPECT_GT(bandCount, 1) << "the cap did not band this read, so the comparison is vacuous";
+                EXPECT_EQ(banded, whole);
+            }
+        }
+    }
+}
+
+// =====================================================================================
 // R-17: the routing, its reply mailbox, and the arm that is actually installed
 // =====================================================================================
 
