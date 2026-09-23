@@ -4,19 +4,19 @@
 
 **阶段：P7 DirectVulkan（Magma）全量迁移**，并行流 **P3b/P4b 深化（Espryt，wave 2-D）** 与 **Ph 小件（簇 F）**。计划 [`notes/p7/PLAN-PH-P34B-P7.md`](notes/p7/PLAN-PH-P34B-P7.md)（五波）。
 
-**更新：2026-09-22 夜** · `origin/feat/disaggregated` = `3c80cd62`（B3 + ID-P7-33/34）；集成树 `~/w7/pipe` = `75858bfd`（B2 返工 r1 + B3 返工 + V1，未推：等 B2 r2 与 V1 门 / 审查，ID-P7-35/36）。
+**更新：2026-09-22 夜** · `origin/feat/disaggregated` = `3c80cd62`（= 旧 1135c664 的树，提交尾注已按用户令改写并强推）；集成树 `~/w7/pipe` 领先 20+ 提交（B2 返工 r1/r2、B3 返工 + 修复轮、V1、F 片 1–3），门全绿，等 fable 审查后推送（ID-P7-37）。
 
 ## 1. 出口门总览（CONTRACT-P7 §8 的 9 项分母）
 
 | # | 子系统 | 状态 | 证据 |
 |---|---|---|---|
-| 1 | Magma 两进程车道三臂同数绿 | ✅ | `integration-magma-{split,spawn,tcp}` 96 / 75 / 71，full-split 535（pipe `75a64ce0`；tcp 少 6 条 = 六个 server 端旋钮条目的具名 parity 例外 `MAGMA_SERVER_ENV_KNOB_NO_TCP`）；OpenRA DirectVulkan inproc + spawn 回放 1.000000 且 0 条 `unsound-serial-complete`（B3 的新红条件已进 pipe 门） |
+| 1 | Magma 两进程车道三臂同数绿 | ✅ | `integration-magma-{split,spawn,tcp}` 97 / 76 / 71，full-split 535（pipe，B2 r2 + B3 修复之后；tcp 少 6 = 六个 server 端旋钮条目的具名 parity 例外 `MAGMA_SERVER_ENV_KNOB_NO_TCP`）；OpenRA DirectVulkan inproc + spawn 回放 1.000000 且 0 条 `unsound-serial-complete`（每个包的门都跑） |
 | 2 | §3.2 六个 `@P7` 退役 | ✅ | A（byte-tail、native-range、对齐 decline）、B（copy-image、default-color-blit、mip 半退役）、B2（multisample shape/aspect）、C（vertex-layout 拆分）；树上 `@P7` 拒绝站点 **0** |
 | 3 | `StateObjectDeathOps` | ✅ | C，`dce9953d..cf7ca59f` |
 | 4 | 烘焙 (A)(D) + (B′) | ✅ | B 深度 mip 烘焙；B2 disaggregated 构建的 monolith 臂改用烘焙模块 |
 | 5 | OQ-8 反射归档 `storageBlocks` | ✅ | C |
 | 6 | OQ-10 `kCapResidentSubData` 按 server 表发布 | ✅ | C |
-| 7 | verify × split（门 2） | 🔄→✅ | **V1 已报告并 cherry-pick 到 pipe**（`a1d17566..75858bfd`）：monolith verify 1136 不变、`integration-verify-split` 1070（DirectGLES 533 / DirectVulkan 537，逐条 inproc 武装证明）、`VERIFY_CORRUPT` 10/10 红、`POISON_OMIT` 2/2 红（split 臂）、8 verify trace × DV × inproc 0 分歧；verify 只能 inproc（比对器要求推送态与 GL 上下文同进程）；pipe 门 + fable 审查在跑 |
+| 7 | verify × split（门 2） | ✅（修复轮在跑） | V1 落地 pipe：pipe 的 verify 构建上 monolith verify **1140**、`integration-verify-split` **1074**（双后端 inproc，逐条武装证明）全绿；`VERIFY_CORRUPT` 10/10 红、`POISON_OMIT` 2/2 红（split 臂）；8 verify trace × DV × inproc 0 分歧；verify 只能 inproc（比对器要求推送态与 GL 上下文同进程）；fable 审查 land with fixes（server 侧 read hook 补红、poison 分角色、中性 pack 共享函数、逐条武装证明）→ 修复轮在跑 |
 | 8 | 真机 ssim 1.0（门 3，分母 36） | 🔄 | p7w4：34/36 与 monolith 差 ≤ 0.0005；**OpenRA 已关**（ID-P7-33/34：真因 = wire 臂 frame-serial floor 不健全，B3 修；p7w5 **27/27 golden**，[`W5-verify/`](notes/p7/device-window-1/W5-verify/README.md)）；**bsl-esc-menu** = server 死 VkBuffer 无界累积（ID-P7-32，**M2** 在修）；终局形式（三遍逐位 + spawn 臂同会话）留 p7w6 |
 | 9 | CTS 五块 AFTER ≤ 0.5 pp（门 5） | ⏳ | `$BASE` 已取（`notes/p7/device-window-1/CTS-base/`）；AFTER 在 wave 4 |
 
@@ -41,6 +41,9 @@
 | B2 返工 r1 | tcp 五条 server 端旋钮条目改 split+spawn（parity 例外 `MAGMA_SERVER_ENV_KNOB_NO_TCP`）、翻转 MS 深/模板 resolve 逐行镜像、缩放 / X 镜像 / 跨格式 decline、`MsFlip.` 用例 | pipe `9fed478d..cc3c18c5`（审查 rework → r2 在跑，ID-P7-35） |
 | B3 返工 | `WireDeclines.def` 53 行全站点 + 审计脚本、`StaleSerial.` parity 例外、注记 + `:273`/`:432`、`run_trace_case.cmake` 对 `unsound-serial-complete` 打红 | pipe `b8d10d07..75a64ce0`（审查 land with fixes → 修复轮在跑，ID-P7-36） |
 | V1 | `PipeRespecifyScope` 放宽、`integration-verify-split`（1070 条，双后端 inproc）、两负控 split 臂红、8 verify trace × DV × inproc 0 分歧、比对器 ReadPixels 窗口 oracle 改中性 pack | pipe `a1d17566..75858bfd`（门 + 审查在跑） |
+| B2 返工 r2 | 用例按 `IsSplitLane()` + 后端名 skip、逐行拷贝行距对齐 + stencil 腿、`DeclineWireDepthStencilResolveShape` 先决定、`MsFlip1.`、parity tail 恰匹配 | pipe（审查在跑，ID-P7-37） |
+| B3 修复轮 | 审计剥注释 / 字面量 + 按块回溯 + `--self-test`、spawn 无 server 日志 FATAL、注记双行 + `WaitForFrameSerial` 债 | pipe（审查在跑，ID-P7-37） |
+| F 片 1–3 | 常量时间令牌 / ≥16 字节 / 无令牌只 loopback / smoke 进 CI；`Welcome.dataNonce` 绑定（TCP 250 ms 配对窗口消失，指纹变更）；PH-8 钳制证明 | pipe（门在跑，ID-P7-37） |
 
 ## 3. 真机（Redmi 2f7cbe2e，Adreno 830）
 
@@ -48,25 +51,26 @@
 - p7w4 结论（[`W4-verify/README.md`](notes/p7/device-window-1/W4-verify/README.md)）：OpenRA 是与温度无关的约 50% 竞态、只出三张图；调色板纹理逐字节正确；错像素 100% 落在 call 30376 一次 draw 的 quad 前缀里；机制由裁判裁定并由 B3 计数证实。
 - bsl-esc-menu-854：monolith 807 MiB 过，spawn 的 server 1.2 GiB 死（scudo `internal map failure`）；M1 归因 = 死 VkBuffer 无界累积（一帧 1.3 M 调用、整跑 2 次 swap）；M2 修复中。
 
-## 4. 在跑（agent；2026-09-22 夜六包撞 session limit 后按 worktree 未提交 diff 重派，实现方 `claude-opus-5-5`，审查方 fable）
+## 4. 在跑（agent；实现方 `claude-opus-5-5`，审查方 fable）
 
 | 包 | 内容 | 状态 |
 |---|---|---|
-| B2 返工 r2 | 用例按 `IsSplitLane()` skip（monolith DirectVulkan / Espryt 两条新 §12 行）、逐行拷贝行距对齐 + stencil 腿 red-once、部分效应陈述、两个 `MGLOG_E_ONCE`、`MsFlip1.`、§7 双行 | 进行中（ID-P7-35） |
-| B3 修复轮 | 审计剥注释 / 字面量 + 按块回溯 + `--self-test`、`run_trace_case.cmake` spawn server 日志缺失 fail-closed、注记标「包树」+ §12 `WaitForFrameSerial` 债 | 进行中（ID-P7-36） |
+| B2 r2 审查 | fable：skip 逻辑覆盖、行距对齐算术、decline 先决定的位置、parity 恰匹配、场景腿的 GL 依据 | 进行中 |
+| B3 修复轮审查 | fable：剥注释 / 字面量的边界、块回溯规则、自测覆盖、spawn fail-closed | 进行中 |
+| V1 修复轮 | server 侧 read hook 红、poison 分角色、`MGPipeNeutralReadPixelsPack()`、逐条武装证明 + 具名例外表、措辞 | 进行中（Agent 通道） |
 | M2 | `VkBufferManager` serial 门控回收（不假设帧有界）+ `MOBILEGL_IPC_WIRE_DEFERRED_MB` 水位线 + spawn red-once | 进行中 |
-| V1 审查 | fable：放宽的形状、比对器 oracle 收窄（server ReadPixels 窗口的盲点）、`PipeInputs.cpp` 越分区改动、车道武装证明、inproc-only 的理由 | 进行中；pipe 门含首次 `build-verify` |
-| F | Ph 小件：slice 1 令牌（常量时间 / ≥16 字节 / `Refuse{Authentication}` / smoke 接 CI）收尾 → `Welcome.dataNonce` → PH-8 → D11 + PH-2 → PH-6 → PH-1 (3)(4) | 进行中 |
 | E1 | Iris trace 普查（39 × 2 后端 × 3 臂）+ `MEASUREMENTS.md` §7.2 同名重跑 + P9 例外表 | 进行中 |
+| F 门 | pipe 上 F 片 1–3 的全门（tcp 车道 + smoke + flatc） | 进行中 |
 
 ## 5. 下一步（按序）
 
-1. B2 返工 r2 落地 → pipe 全门（含 DirectGLES 三条 split 车道）→ fable 复审 → 推送（B3 返工同批）。
-2. M2 落地 → p7w6 APK → bsl-esc-menu spawn 臂通过 → 门 3 分母 36 全部与 monolith 同（三遍逐位相同 + spawn 臂，§7.2）。
-3. **B4**：裁判的 `WaitForSubmitsUpTo` 聚合等待（`Present:14094` / `WaitForSubmitIndex` / `WaitForFrameSerial`）+ 裁判点名的 Magma 债（§12）。
-4. wave 3 余项：`MEASUREMENTS.md` §7.2 同名重跑、Iris trace 普查（39 × 2 后端 × 2 传输）、棘轮 88 的 monolith draw 路径 `#if`。
-5. wave 4：CTS AFTER（inproc × DV 五块 vs `$BASE`，≤ 0.5 pp，新增 crash = 0）、门 3 终局三遍。
-6. wave 5：F 余片、fuzz 三臂、P7 收官异模型整体审查（ID-66）。
+1. B2 r2 / B3 修复轮审查绿 + F 门绿 → 推送（origin 从 `3c80cd62` 前进）。
+2. **F2**：D11 五处 + PH-2、PH-6 drop-with-latch、PH-1 (3)(4)、PH-7 (5) fork 前认证——先要一个能向 spawn / TCP server 发畸形记录的对端字节驱动（fuzz 臂 2 的第一块）。
+3. M2 落地 → p7w6 APK（**含 F 的 wireFingerprint 变更：手机 server 必须重部署**）→ bsl-esc-menu spawn 臂通过 → 门 3 分母 36 全部与 monolith 同（三遍逐位相同 + spawn 臂，§7.2）。
+4. **B4**：裁判的 `WaitForSubmitsUpTo` 聚合等待（`Present:14094` / `WaitForSubmitIndex` / `WaitForFrameSerial`）+ 裁判点名的 Magma 债（§12）。
+5. wave 3 余项：`MEASUREMENTS.md` §7.2 同名重跑、Iris trace 普查（39 × 2 后端 × 2 传输）、棘轮 88 的 monolith draw 路径 `#if`。
+6. wave 4：CTS AFTER（inproc × DV 五块 vs `$BASE`，≤ 0.5 pp，新增 crash = 0）、门 3 终局三遍。
+7. wave 5：F 余片、fuzz 三臂、P7 收官异模型整体审查（ID-66）。
 
 ## 6. 阻塞 / 需要人
 
