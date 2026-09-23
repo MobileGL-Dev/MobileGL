@@ -738,6 +738,37 @@
         const Bool resolvedByShader =
             shaderFirst && ResolveWireDepthStencilWithShader(source, resolved, source.aspect, sxMin, syMin,
                                                              static_cast<Uint32>(width), static_cast<Uint32>(height));
+        // WHICH ARM RESOLVED IS SAID, ONCE PER ARM (review round). Lavapipe resolves correctly
+        // through both, so the pixels cannot tell a lane which one ran; these two lines can, and
+        // the MsResolveQ./MsFlipQ. entries (Qualcomm's arm order substituted on the host) and the
+        // MsResolve1./MsFlip1. ones (the extension arm dropped) read them back from the server
+        // log - DepthStencilReadbackMatrixScenario::ExpectTheShaderResolveArmWhereTheLaneAsks.
+        // Keep the two phrases in step with that reader.
+        //
+        // AND A PREFERENCE THAT FELL BACK IS NOT SILENT: where the shader arm goes first it goes
+        // first because the render pass is known to leave its target unwritten on that device,
+        // so a shader decline (a stencil aspect without VK_EXT_shader_stencil_export, a format
+        // that is not SAMPLED_IMAGE + DEPTH_STENCIL_ATTACHMENT, a failed pipeline create -
+        // WireMultisampleResolve.inc) that lands on the render pass is the resolve most likely
+        // to read back as zeroes with no GL error. A recorded debt (notes/p7/g5-msrbo.md §4).
+        if (resolvedByShader) {
+            MGLOG_I_ONCE("DirectVulkan::ResolveWireDepthStencil: resolved by the shader pass "
+                         "(prefer-shader=%d, render-pass arm available=%d)",
+                         m_wirePreferShaderDepthResolve ? 1 : 0, extensionResolve ? 1 : 0);
+        } else if (extensionResolve) {
+            if (m_wirePreferShaderDepthResolve)
+                MGLOG_W_ONCE("DirectVulkan::ResolveWireDepthStencil: this device prefers the shader pass, "
+                             "which did not resolve aspect 0x%x of a %u-sample format %d (stencil export=%d, "
+                             "source usage 0x%x); falling back to the no-draw VK_KHR_depth_stencil_resolve "
+                             "render pass, which on the device that set the preference left its target "
+                             "unwritten",
+                             static_cast<Uint32>(source.aspect), static_cast<Uint32>(source.samples),
+                             static_cast<Int>(source.format), m_wireShaderStencilExport ? 1 : 0,
+                             static_cast<Uint32>(source.usageFlags));
+            MGLOG_I_ONCE("DirectVulkan::ResolveWireDepthStencil: resolved by the "
+                         "VK_KHR_depth_stencil_resolve render pass (prefer-shader=%d)",
+                         m_wirePreferShaderDepthResolve ? 1 : 0);
+        }
         if (!resolvedByShader && extensionResolve) {
         TransitionWireImage(source, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
         TransitionWireImage(resolved, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);

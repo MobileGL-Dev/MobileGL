@@ -15150,12 +15150,26 @@ void main() {
                                           VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
         // P7 gate 5 (g5-msrbo): the Adreno's no-draw depth/stencil resolve pass writes nothing,
         // so the shader resolve goes first there (WireDepthResolveArm.h says why and where).
+        //
+        // THE VENDOR THE POLICY READS CAN BE SUBSTITUTED, AND ONLY HERE (review round). No host
+        // lane runs on a Qualcomm device, so the order this line picks for the Redmi ran nowhere
+        // a lane could see it: dropping this assignment, or the `m_wirePreferShaderDepthResolve ||`
+        // in ResolveWireDepthStencil, left every lane green and put
+        // KHR-GL46.direct_state_access.renderbuffers_storage_multisample back at 54 Fail lines on
+        // the device. MGITEST_MAGMA_DEPTH_RESOLVE_VENDOR_ID (strtoul base 0, so `0x5143`) replaces
+        // the id handed to WirePrefersShaderDepthResolve and nothing else - no other vendor
+        // check reads it - and the DirectVulkan.{Split,Spawn}.MsResolveQ./MsFlipQ. entries set it
+        // to Qualcomm's id and read ResolveWireDepthStencil's arm line back from the server log.
+        Uint32 depthResolvePolicyVendor = m_physicalDevice.properties.vendorID;
+        if (const char* substitute = std::getenv("MGITEST_MAGMA_DEPTH_RESOLVE_VENDOR_ID");
+            substitute != nullptr && *substitute != '\0')
+            depthResolvePolicyVendor = static_cast<Uint32>(std::strtoul(substitute, nullptr, 0));
         m_wirePreferShaderDepthResolve = MG_Config::Transport != MG_Config::TransportMode::Monolith &&
-            WirePrefersShaderDepthResolve(m_physicalDevice.properties.vendorID);
+            WirePrefersShaderDepthResolve(depthResolvePolicyVendor);
         if (m_wirePreferShaderDepthResolve)
-            MGLOG_I("DirectVulkan: vendor 0x%x - the wire arm resolves multisample depth/stencil with the "
-                    "shader pass first (the no-draw resolve render pass is the fallback)",
-                    m_physicalDevice.properties.vendorID);
+            MGLOG_I("DirectVulkan: vendor 0x%x (policy vendor 0x%x) - the wire arm resolves multisample "
+                    "depth/stencil with the shader pass first (the no-draw resolve render pass is the fallback)",
+                    m_physicalDevice.properties.vendorID, depthResolvePolicyVendor);
 #endif
         if ((descriptorIndexingCore || descriptorIndexingExtension) && getPhysicalDeviceFeatures2 != nullptr &&
             getPhysicalDeviceProperties2 != nullptr) {

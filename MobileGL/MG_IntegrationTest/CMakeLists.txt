@@ -3370,8 +3370,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # depth/stencil format: the wire arm moved every single-sample depth/stencil aspect with
         # vkCmdBlitImage where the monolith copies at 1:1, and for one aspect of a packed format
         # that moved the whole native word (a depth-only blit replaced the destination's stencil
-        # on lavapipe). NO KNOB: the packed-aspect leg is red on every host without the copy arm,
-        # so all three arms carry it.
+        # on lavapipe). NO KNOB: the packed-aspect leg is red on lavapipe without the copy arm
+        # (measured there only - a driver whose one-aspect blit keeps the other aspect stays green
+        # without it), and nothing in it is read on the server, so all three arms carry it.
         gtest_discover_tests(MobileGLIntegrationTest
             TEST_PREFIX "DirectVulkan.${mglItestArm}.DsBlit."
             TEST_FILTER "DepthStencilReadbackMatrixScenario.ASingleSampledDepthStencilBlitCopiesEveryAspect"
@@ -3403,6 +3404,42 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msflip${mglItestArmLogTag}-shader1.log")
+        endif()
+        # ---- P7 gate 5 (g5-msrbo review round): THE QUALCOMM ARM ORDER, ON A HOST -------------
+        #
+        # What made KHR-GL46.direct_state_access.renderbuffers_storage_multisample pass on the
+        # Redmi is an arm ORDER: on a Qualcomm device ResolveWireDepthStencil takes the shader
+        # pass first, because the Adreno's no-draw VK_KHR_depth_stencil_resolve render pass left
+        # its target unwritten. Lavapipe resolves correctly through both arms, so no pixel on this
+        # host can see the order, and without these entries dropping it went unnoticed by every
+        # lane. MGITEST_MAGMA_DEPTH_RESOLVE_VENDOR_ID substitutes the vendor id the server's arm
+        # policy reads (VulkanRenderer.cpp, next to m_wirePreferShaderDepthResolve) - nothing
+        # else reads it - and the two resolve cases then assert their pixels AND that the
+        # server's private log says the shader pass resolved and the render pass never did
+        # (DepthStencilReadbackMatrixScenario::ExpectTheShaderResolveArmWhereTheLaneAsks, which
+        # asserts the same of the MsResolve1./MsFlip1. entries above).
+        #
+        # Split+spawn only, the server-side-knob reason above, named in spawn_lane_parity.py's
+        # MAGMA_SERVER_ENV_KNOB_NO_TCP.
+        #
+        # Red once (executed, reverted): drop `m_wirePreferShaderDepthResolve ||` from
+        # ResolveWireDepthStencil's `shaderFirst` (WireFramebuffer.inc) and all four entries fail
+        # on the arm assertion with their pixels green.
+        if(mglItestServerEnvKnobArm)
+            foreach(qualcommOrderCase MsResolveQ:AResolvedMultisampleDepthReadsBackFromTheDestination
+                                      MsFlipQ:AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines)
+                string(REPLACE ":" ";" qualcommOrderPair "${qualcommOrderCase}")
+                list(GET qualcommOrderPair 0 qualcommOrderTail)
+                list(GET qualcommOrderPair 1 qualcommOrderTest)
+                string(TOLOWER "${qualcommOrderTail}" qualcommOrderLog)
+                gtest_discover_tests(MobileGLIntegrationTest
+                    TEST_PREFIX "DirectVulkan.${mglItestArm}.${qualcommOrderTail}."
+                    TEST_FILTER "DepthStencilReadbackMatrixScenario.${qualcommOrderTest}"
+                    DISCOVERY_TIMEOUT 30
+                    PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                        ${mglItestArmProperties}
+                        ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_DEPTH_RESOLVE_VENDOR_ID=0x5143\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-${qualcommOrderLog}${mglItestArmLogTag}.log")
+            endforeach()
         endif()
         foreach(inPlaceCase CopyImageInPlaceAcrossLevelsAndLayers
                             CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone)

@@ -85,8 +85,13 @@ MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.")
 # private log with the stats channel and MOBILEGL_IPC_WIRE_DEFERRED_MB=8 in the entry's environment -
 # server-process environment again, so the same two arms and the same tcp absence. Its three cases
 # are three tails (one key each) under the `.Reclaim.` prefix.
+# P7 gate 5 (g5-msrbo review round): `.MsResolveQ.` / `.MsFlipQ.` set
+# MGITEST_MAGMA_DEPTH_RESOLVE_VENDOR_ID, which the SERVER's depth/stencil resolve arm policy reads
+# in place of the device's vendor id - the knob-free `.MsResolve0.` / `.MsFlip.` keep their tcp
+# entries.
 MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
                                 ".DefaultBlitShape1.", ".MsResolve1.", ".StaleSerial.", ".MsFlip1.",
+                                ".MsResolveQ.", ".MsFlipQ.",
                                 ".Reclaim.MagmaWireReclaimScenario.RespecifiesWithNoDrawBetweenKeepTheLiveStoreCountBounded",
                                 ".Reclaim.MagmaWireReclaimScenario.RespecifyAndDrawEachStoreInOneFrameStaysWithinTheDeferredBudget",
                                 ".Reclaim.MagmaWireReclaimScenario.ManySmallRespecifyAndDrawRoundsStayUnderTheStoreCountCeiling",

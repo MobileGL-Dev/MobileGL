@@ -38,12 +38,15 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
 
 #include "../Harness/HeadlessGL.h"
+#include "../Harness/PipeStatsWindow.h"
 #include "../Harness/ScenarioFixture.h"
+#include "../Harness/SplitLane.h"
 
 #ifdef GLAPI
 #undef GLAPI
@@ -227,6 +230,51 @@ namespace MGITest {
                                            ? " - which is the poison value, so nothing was written at all"
                                            : "");
             }
+
+            // P7 gate 5 (g5-msrbo review round): WHICH WIRE ARM RESOLVED, WHERE THE ENTRY SAYS
+            // WHICH ONE IT HAS TO BE. Lavapipe resolves a multisample depth/stencil aspect
+            // correctly through both of ResolveWireDepthStencil's arms, so the pixel assertions
+            // above cannot tell them apart - and the fix that made
+            // KHR-GL46.direct_state_access.renderbuffers_storage_multisample pass on the Redmi is
+            // exactly an arm ORDER (the shader pass first on Qualcomm, because the Adreno's no-draw
+            // resolve render pass leaves its target unwritten). Two kinds of entry name the arm:
+            //   - MsResolveQ. / MsFlipQ. set MGITEST_MAGMA_DEPTH_RESOLVE_VENDOR_ID to Qualcomm's id,
+            //     the one input the server's arm policy reads in place of the device's vendor;
+            //   - MsResolve1. / MsFlip1. set MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=1, which
+            //     drops the render-pass arm altogether.
+            // Either way the server must have resolved with the shader pass and never with the
+            // render pass. The claim is read off the SERVER's private log (the backend runs on the
+            // apply thread, the server role, on every arm), where ResolveWireDepthStencil says
+            // once per arm which one ran; keep the two phrases in step with WireFramebuffer.inc.
+            // Every other entry - the device's own vendor, whatever order that picks - asserts
+            // nothing here.
+            //
+            // Red once (executed, reverted): drop `m_wirePreferShaderDepthResolve ||` from
+            // ResolveWireDepthStencil's `shaderFirst` and both Q entries fail here on split and
+            // spawn with the render-pass line in the log, while their pixels stay green.
+            static void ExpectTheShaderResolveArmWhereTheLaneAsks(const char* what) {
+                const std::string vendor = SplitLane::MarkerValue("MGITEST_MAGMA_DEPTH_RESOLVE_VENDOR_ID");
+                const bool qualcommOrder = !vendor.empty() && std::strtoul(vendor.c_str(), nullptr, 0) == 0x5143ul;
+                const bool renderPassDropped = SplitLane::MarkerIsOne("MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE");
+                if (!qualcommOrder && !renderPassDropped) return;
+                if (PipeStatsWindow::ServerLibraryLogPath().empty()) {
+                    ADD_FAILURE() << what << ": the entry names the resolve arm (vendor=" << vendor
+                                  << ", force-shader=" << renderPassDropped
+                                  << ") but configured no MOBILEGL_LOG_FILE_PATH, and the server's log "
+                                     "is the only place the arm is visible";
+                    return;
+                }
+                glFinish();
+                const std::string server = PipeStatsWindow::ReadServerLogSince(PipeStatsWindow::LogMark{});
+                EXPECT_NE(server.find("ResolveWireDepthStencil: resolved by the shader pass"), std::string::npos)
+                    << what << ": the server never resolved with the shader pass (vendor=" << vendor
+                    << ", force-shader=" << renderPassDropped << ")";
+                EXPECT_EQ(server.find("ResolveWireDepthStencil: resolved by the VK_KHR_depth_stencil_resolve render pass"),
+                          std::string::npos)
+                    << what << ": the server resolved with the no-draw render pass, the arm that leaves its "
+                               "target unwritten on the Adreno (vendor=" << vendor
+                    << ", force-shader=" << renderPassDropped << ")";
+            }
         };
 
         // ---- glReadPixels across the source kinds -----------------------------------
@@ -398,6 +446,7 @@ namespace MGITest {
         ExpectAllDepth(ReadDepthFloat(0, 0, kWidth, kHeight), 0.375f,
                        "stencil-only resolve preserves destination depth");
         EXPECT_EQ(FirstGLError(), 0u);
+        ExpectTheShaderResolveArmWhereTheLaneAsks("depth-only and stencil-only resolves");
 
         DestroySource(resolved);
         DestroySource(multisampled);
@@ -562,6 +611,9 @@ namespace MGITest {
                                << " stencil values are wrong; first at (" << firstX << ", " << firstY
                                << "): got " << firstGot << ", want " << firstWant;
         }
+        // The two flipped resolves above are the only ones in this case that reach an arm: every
+        // leg below declines on its shape first.
+        ExpectTheShaderResolveArmWhereTheLaneAsks("flipped depth and narrow stencil resolves");
 
         // A SCALE, which is INVALID_OPERATION and must leave the destination as it is.
         ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.5f, 3);
@@ -693,8 +745,10 @@ namespace MGITest {
     // the monolith arm copies at 1:1 - and for ONE aspect of a packed format the blit moved the
     // whole native word.
     //
-    // THE SUB-RECTANGLE LEG is the red one without the copy arm, on any host: a depth-only blit
-    // of a packed DEPTH24_STENCIL8 replaced the destination's stencil on lavapipe. It also pins
+    // THE SUB-RECTANGLE LEG is the red one without the copy arm on lavapipe (the only host it was
+    // measured on): a depth-only blit of a packed DEPTH24_STENCIL8 replaced the destination's
+    // stencil there. A driver whose one-aspect blit keeps the other aspect stays green without
+    // the copy arm, so this leg is a lavapipe pin, not a universal one. It also pins
     // the min corners on both sides and a 1-byte stencil row whose width is not a multiple of 4
     // (the buffer round trip's padded stride). THE SCALED LEG is the shape that still takes
     // vkCmdBlitImage, so the copy arm must not have swallowed it.
