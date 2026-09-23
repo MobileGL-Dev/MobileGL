@@ -4,7 +4,7 @@
 
 **阶段：P7 DirectVulkan（Magma）全量迁移**，并行流 **P3b/P4b 深化（Espryt，wave 2-D）** 与 **Ph 小件（簇 F）**。计划 [`notes/p7/PLAN-PH-P34B-P7.md`](notes/p7/PLAN-PH-P34B-P7.md)（五波）。
 
-**更新：2026-09-23（ID-P7-49–59）** · 当前交接 [notes/p7/HANDOFF-2026-09-23.md](notes/p7/HANDOFF-2026-09-23.md)。CI 自 P6.5 起的七个红因已修，`1997fd88` 上 Test 全绿（含 P6.5 以来首次跑的 retrace 链）；棘轮 171、门 4 关闭（ID-P7-55/56）。F2（Ph 余项 + fuzz 三臂）与门 5 预演抓出的三个 inproc CTS 缺陷已落地（ID-P7-57/58）；门 3 与 CTS AFTER 在设备窗口 2（ID-P7-59）。
+**更新：2026-09-23（ID-P7-49–62）** · 当前交接 [notes/p7/HANDOFF-2026-09-23.md](notes/p7/HANDOFF-2026-09-23.md)。窗口 2（`6afa077f`）：**门 5 PASS**（五块全 ≥ BASE、0 新 crash），门 3 严格读数 33/36——三例 Iris 光影包在 monolith 上同样不逐位稳定（ID-P7-62 分布判据下 36/36）。codex 收官审查的修复、spawn 冷启动心跳（协议修订 2）、1:1 blit 最近邻已落地（ID-P7-60/61/62）；终局窗口 3 在最终 APK 上复跑门 3 / 门 5。
 
 ## 1. 出口门总览（CONTRACT-P7 §8 的 9 项分母）
 
@@ -17,8 +17,8 @@
 | 5 | OQ-8 反射归档 `storageBlocks` | ✅ | C |
 | 6 | OQ-10 `kCapResidentSubData` 按 server 表发布 | ✅ | C |
 | 7 | verify × split（门 2） | ✅ | B4 集成树 verify build：unit 2439、integration-verify 1152、integration-verify-split 1086，全绿；V1/V1 r2 负控与 8 verify trace 证据仍有效 |
-| 8 | 真机 ssim 1.0（门 3，分母 36） | 🔄 | p7w5 OpenRA 27/27 golden；p7w6 bsl-esc-menu DirectVulkan inproc/spawn 6/6 且图像 SHA 与 monolith 相同；DirectGLES × TCP 38 例窗口矩阵 16/29 pass、8 idle timeout、2 visual failure、3 missing result。Photon / D24 两项错图已由同 APK DirectGLES monolith 复现；36 例 DirectVulkan 三遍、同会话 monolith 对照和 M3 后 APK 回归待跑 |
-| 9 | CTS 五块 AFTER ≤ 0.5 pp（门 5） | ⏳ | `$BASE` 已取（`notes/p7/device-window-1/CTS-base/`）；AFTER 在 wave 4 |
+| 8 | 真机 ssim 1.0（门 3，分母 36） | 🔄 | 窗口 2（`6afa077f`，reboot-clean、pinned）：OpenRA 四臂 1.000000；严格读数 33/36，三例 Iris（sundial-lite / bliss / derivative d24.4.14）monolith 同样不逐位稳定（9/9、11/18、9/9 张不同图，derivative 是光影包自身同一 dispatch 内的 imageLoad/imageStore 竞态）→ ID-P7-62 分布判据；create-instancing 1:1 LINEAR blit 偏差已修；终局窗口 3 复跑 |
+| 9 | CTS 五块 AFTER ≤ 0.5 pp（门 5） | ✅ | 窗口 2 inproc × DirectVulkan：shader-image +4.35 pp、texture +0.96 pp、ssbo / dsa / packed-pixels 持平，0 新 crash；UBO（GTF）不在本 glcts，记 unrun；终局窗口 3 复核 |
 
 **40% 检查点（§8 中点）已过：6/9**，不触发重定基线。G1 全程恒等（pull `.text` `0xa52203`、符号 0/0）；census 79 站点 / 0 未标；棘轮 186 → 173 → **171**（ratchet88：`p7-magma` 余 86 全标 `# P13`，门 4 关闭，ID-P7-55）。
 
@@ -55,6 +55,9 @@
 | F2 | Ph 余项：PH-1 (3)(4) 每会话闩、PH-6 事件通道弃投闩、PH-7 (5) fork 前认证 + 预认证有界 + 退避、fuzz 三臂进 CI；PH-4 两个回归（零尺寸层、`R8 == 0`）与 ID-49 回读在线内修掉 | F2 线 29 提交 + 集成 2 跟进（ID-P7-57） |
 | 门 5 修复 | 超槽 ReadPixels 切带、深度/模板 resolve 臂由设备探针选（+ POST FIXED 行）、单采样深/模板 blit 改 copy、越界图像单元绑占位 | ID-P7-58 |
 | 窗口 2 工装 | 门 3 / bsl / CTS AFTER 一条命令、可续跑、共享设备锁；判读按合同公式、五块必齐、同一 boot_id | ID-P7-59 |
+| codex 收官修复 | 越界 / 空图像单元 nullDescriptor 或按单元私有占位、PH-5 最小编码宽度、闩 pop 前再查、探针按设备缓存、判读器硬编码 §7.2 常量 | ID-P7-60 |
+| spawn 冷启动心跳 | server 执行 surface 操作期间发 `SurfaceProgress`，client 预算量沉默（封顶 120 s）；控制协议修订 2 | ID-P7-61 |
+| 门 3 判读 + blit | monolith 不稳定的 case 用最近邻分布判据、monolith ×5；1:1 LINEAR blit 走最近邻 | ID-P7-62 |
 
 ## 3. 真机（Redmi 2f7cbe2e，Adreno 830）
 
@@ -66,13 +69,12 @@
 
 | 工作 | 状态 |
 |---|---|
-| 设备窗口 2（p7w7） | 最终功能 APK 构建 → reboot-clean → 门 3（36 例 × monolith ×1 + inproc ×3 + spawn ×3 + `RUN_AHEAD=0` ×1）→ bsl 映射 / `wbuf[]` → CTS AFTER 五块 → 判读 |
+| 终局设备窗口 3（p7w8） | 最终 APK → reboot-clean → 门 3（monolith ×5 + inproc ×3 + spawn ×3 + `RUN_AHEAD=0` ×1）→ bsl → CTS AFTER → 判读；验证 create-instancing 回到 monolith 图、Adreno robustness2 nullDescriptor |
 
 ## 5. 下一步
 
-1. 窗口 2 判读：门 3（臂内三遍逐位、与同会话 monolith 差 ≤ 0.0005、OpenRA 1.0）与门 5（每块 ≤ 0.5 pp、新 crash = 0）。
-2. P7 收官异模型整体审查（codex，ID-66）。
-3. P7 收官文档（ROADMAP / 本页 / 交接）。
+1. 窗口 3 判读 → 门 3 / 门 5 收官，P7 出口门 9/9。
+2. P7 收官文档（ROADMAP P7 行、本页、交接）。
 
 ## 6. 阻塞 / 需要人
 
