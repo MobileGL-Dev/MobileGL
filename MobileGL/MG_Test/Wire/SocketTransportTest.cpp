@@ -78,9 +78,30 @@ TEST(SocketTransportTest, TcpCarriesControlAndIndependentDataWithKeepalive) {
     int listener = -1;
     ASSERT_EQ(SocketTransport::Listen(endpoint, &listener), MOBILEGL_OK);
     std::unique_ptr<SocketTransport> client, server;
-    ASSERT_EQ(SocketTransport::ConnectTo(endpoint, 1000, client), MOBILEGL_OK);
-    ASSERT_EQ(SocketTransport::AcceptPair(listener, 1000, server), MOBILEGL_OK);
+    // X2 (P7): the product's TCP shape, not ConnectTo/AcceptPair. Two loopback connections
+    // opened back to back reach the accept queue out of connect order under host load
+    // (measured: 5 of 3000), and AcceptPair pairs them BY ORDER - this test then hung in
+    // recv(serverData) 3 times in 500 loaded runs because the bytes sent on the client's data
+    // socket arrived on the server's control socket. PH-7 (4) took by-order pairing out of the
+    // product on TCP: the control connection is accepted before the data connection is opened,
+    // and the data connection names itself with a DataBind nonce (see the DataBind test below).
+    ASSERT_EQ(SocketTransport::ConnectControl(endpoint, 1000, client), MOBILEGL_OK);
+    int serverControl = -1;
+    ASSERT_EQ(SocketTransport::AcceptOne(listener, 1000, &serverControl), MOBILEGL_OK);
+    server = std::make_unique<SocketTransport>(serverControl, -1, TransportRole::Server);
+    std::uint8_t nonce[kDataNonceBytes];
+    ASSERT_EQ(SocketTransport::MintNonce(nonce, sizeof(nonce)), MOBILEGL_OK);
+    const auto bind = MobileGL::MG_Remote::EncodeDataBind(nonce, sizeof(nonce));
+    int clientData = -1, serverData = -1;
+    ASSERT_EQ(SocketTransport::ConnectDataConnection(endpoint, 1000, MobileGLByteSpan{bind.data(), bind.size()},
+                                                     &clientData), MOBILEGL_OK);
+    ASSERT_EQ(SocketTransport::AcceptOne(listener, 1000, &serverData), MOBILEGL_OK);
     ::close(listener);
+    std::vector<std::uint8_t> bound;
+    ASSERT_EQ(SocketTransport::ReceiveOneFrame(serverData, 1000, 1024, &bound), MOBILEGL_OK);
+    std::uint8_t presented[kDataNonceBytes] = {};
+    ASSERT_TRUE(MobileGL::MG_Remote::DecodeDataBind(bound, presented));
+    ASSERT_TRUE(ConstantTimeNonceMatch(nonce, presented));
     ASSERT_TRUE(client->IsTcp());
     ASSERT_TRUE(server->IsTcp());
     for (auto* transport : {client.get(), server.get()}) {
@@ -92,10 +113,10 @@ TEST(SocketTransportTest, TcpCarriesControlAndIndependentDataWithKeepalive) {
         EXPECT_EQ(option, 1);
         EXPECT_EQ(transport->ShareFd(0, {nullptr, 0}), MOBILEGL_ERR_UNSUPPORTED);
     }
-    const int clientData = client->TakeDataFd(), serverData = server->TakeDataFd();
-    ASSERT_GE(clientData, 0);
-    ASSERT_GE(serverData, 0);
+    // A control-only TCP transport owns no data descriptor: on TCP the data plane is the
+    // DataBind-bound connection, never AcceptPair's second socket.
     EXPECT_EQ(client->TakeDataFd(), -1);
+    EXPECT_EQ(server->TakeDataFd(), -1);
     const char message[] = "independent";
     ASSERT_EQ(::send(clientData, message, sizeof(message), MSG_NOSIGNAL), sizeof(message));
     char received[sizeof(message)]{};
