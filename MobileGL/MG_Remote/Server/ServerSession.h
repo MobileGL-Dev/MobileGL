@@ -58,10 +58,6 @@
 #include "../Wire/PipeWireCodec.h"
 #include "PipeApplier.h"
 
-namespace MobileGL::MG_Remote::Transport {
-    class StreamLink;
-}
-
 namespace MobileGL::MG_Remote::Server {
 
     class ServerSession {
@@ -70,7 +66,6 @@ namespace MobileGL::MG_Remote::Server {
 
         ServerSession();
         ~ServerSession();
-        MobileGLResult AttachStreamLink(int dataFd, const Transport::SessionSegmentSizes& sizes);
         void AttachDataLink(std::unique_ptr<Transport::ILink> link);
         Transport::ILink* DataLink() const { return m_link.get(); }
         void FlushDataProgress();
@@ -227,7 +222,7 @@ namespace MobileGL::MG_Remote::Server {
         void LogMemory(const char* phase) const;
 
     private:
-        MobileGLResult BindDataConnection(Transport::ITransport& control, Transport::StreamLink& link,
+        MobileGLResult BindDataConnection(Transport::ITransport& control, Transport::ILink& link,
                                           const Uint8* nonce);
 
         DataConnectionSource m_dataSource;

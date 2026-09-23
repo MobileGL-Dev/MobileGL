@@ -399,6 +399,18 @@ namespace MobileGL::MG_Remote::Transport {
 #endif
         return result;
     }
+    MobileGLResult CreateDeferredStreamLink(const SessionSegmentSizes& sizes, TransportRoleTag role,
+                                            std::unique_ptr<ILink>& out) {
+        auto link = std::make_unique<StreamLink>();
+        const auto result = link->AttachOwnedDeferred(sizes, role);
+        if (result == MOBILEGL_OK) out = std::move(link);
+        return result;
+    }
+    MobileGLResult BindStreamLinkDataFd(ILink& link, int fd) {
+        auto* stream = dynamic_cast<StreamLink*>(&link);
+        if (stream == nullptr) return MOBILEGL_ERR_INVALID_ARGUMENT;
+        return stream->BindDataFd(fd);
+    }
     void StreamLink::InitializeEndpoints() {
         m_impl->owned->SetRole(m_impl->role);
         m_impl->owned->InitializeEndpoints();

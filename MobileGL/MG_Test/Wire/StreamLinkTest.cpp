@@ -268,6 +268,60 @@ namespace {
                     static_cast<unsigned long long>(sizes.StageBytes), elapsed, mibPerSecond);
     }
 
+    // PH-7 (4), ID-P7-3, through the Transport factory pair ServerSession::Accept uses so that
+    // session code never names the concrete link (scripts/ci/link_seam_purity.py). In the
+    // production order: created without a descriptor, endpoints initialised, then bound once.
+    // A second bind, and a bind onto a link the factory did not make as a stream, are refused
+    // and leave the descriptor with the caller; the bound link then carries a record.
+    TEST(StreamLinkFactory, DeferredServerLinkBindsOnceAndThenCarriesARecord) {
+        SessionSegmentSizes sizes;
+        sizes.CmdRingBytes = 1024;
+        sizes.EventRingBytes = 1024;
+        sizes.StageBytes = 4096;
+        sizes.ReplyBytes = 4096;
+        std::unique_ptr<ILink> server;
+        ASSERT_EQ(CreateDeferredStreamLink(sizes, TransportRoleTag::ServerConsumer, server), MOBILEGL_OK);
+        ASSERT_NE(server, nullptr);
+        EXPECT_FALSE(server->Capabilities().PublishIsDelivery);
+        server->InitializeEndpoints();
+
+        int sockets[2];
+        ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets), 0);
+        std::unique_ptr<ILink> client;
+        ASSERT_EQ(CreateStreamLink(sockets[0], sizes, TransportRoleTag::ClientProducer, client), MOBILEGL_OK);
+        client->InitializeEndpoints();
+        ASSERT_EQ(BindStreamLinkDataFd(*server, sockets[1]), MOBILEGL_OK);
+
+        int spare[2];
+        ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, spare), 0);
+        EXPECT_EQ(BindStreamLinkDataFd(*server, spare[0]), MOBILEGL_ERR_INVALID_ARGUMENT);
+        auto shared = CreateSharedLink(TransportRoleTag::ServerConsumer);
+        ASSERT_NE(shared, nullptr);
+        EXPECT_EQ(BindStreamLinkDataFd(*shared, spare[1]), MOBILEGL_ERR_INVALID_ARGUMENT);
+        EXPECT_EQ(::close(spare[0]), 0);
+        EXPECT_EQ(::close(spare[1]), 0);
+
+        SessionProducer producer;
+        producer.Attach(*client, 0);
+        SessionConsumer consumer;
+        consumer.Attach(*server, 0);
+        const std::uint64_t value = 0x5a5a5a5aull;
+        auto* record = client->CommandsOut().Reserve(1, 0, sizeof value);
+        ASSERT_NE(record, nullptr);
+        std::memcpy(record, &value, sizeof value);
+        producer.PublishAndNotify(1);
+        ASSERT_EQ(client->Flush(), MOBILEGL_OK);
+        ASSERT_EQ(consumer.WaitForWork(2000), SessionWait::Reached);
+        ASSERT_TRUE(consumer.ApplyOne([&](const RingRecordView& v) {
+            std::uint64_t seen = 0;
+            std::memcpy(&seen, v.payload, sizeof seen);
+            EXPECT_EQ(seen, value);
+        }));
+        consumer.RetireThrough(1);
+        ASSERT_EQ(server->FlushProgress(), MOBILEGL_OK);
+        EXPECT_EQ(producer.WaitForApplied(1, 2000), SessionWait::Reached);
+    }
+
     void WriteFrame(int fd, unsigned kind, std::uint64_t a, const void* payload, std::uint32_t size) {
         unsigned char h[28]{};
         auto put = [&](unsigned at, std::uint64_t value, unsigned width) {

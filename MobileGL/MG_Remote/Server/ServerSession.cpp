@@ -9,7 +9,6 @@
 // P5 package s1: the server half of a session.
 
 #include "../Transport/SocketTransport.h"
-#include "../Transport/StreamLink.h"
 #include "ServerSession.h"
 #include <MG_Remote/FatalFunnel.h>
 
@@ -564,7 +563,7 @@ namespace MobileGL::MG_Remote::Server {
         // its descriptor: Welcome has to announce the sizes of memory the connection it names
         // will fill.
         Uint8 dataNonce[Transport::kDataNonceBytes] = {};
-        Transport::StreamLink* pendingStream = nullptr;
+        Transport::ILink* pendingStream = nullptr;
         if (stream) {
             auto* socket = dynamic_cast<Transport::SocketTransport*>(&transport);
             if (socket == nullptr || !socket->IsTcp() || !m_dataSource)
@@ -581,8 +580,8 @@ namespace MobileGL::MG_Remote::Server {
                                       "stream data plane unavailable: the server could not mint a data nonce");
                 return created;
             }
-            auto link = std::make_unique<Transport::StreamLink>();
-            created = link->AttachOwnedDeferred(m_sizes, Transport::TransportRoleTag::ServerConsumer);
+            std::unique_ptr<Transport::ILink> link;
+            created = Transport::CreateDeferredStreamLink(m_sizes, Transport::TransportRoleTag::ServerConsumer, link);
             if (created == MOBILEGL_OK) {
                 pendingStream = link.get();
                 AttachDataLink(std::move(link));
@@ -801,7 +800,7 @@ namespace MobileGL::MG_Remote::Server {
     // control peer going away; the deadline is refused on the control connection, where the
     // client is listening.
     MobileGLResult ServerSession::BindDataConnection(Transport::ITransport& control,
-                                                     Transport::StreamLink& link, const Uint8* nonce) {
+                                                     Transport::ILink& link, const Uint8* nonce) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kHandshakeTimeoutMs);
         Uint32 refused = 0;
         for (;;) {
@@ -823,7 +822,7 @@ namespace MobileGL::MG_Remote::Server {
                 return offered;
             }
             if (Transport::ConstantTimeNonceMatch(nonce, presented)) {
-                const MobileGLResult bound = link.BindDataFd(fd);
+                const MobileGLResult bound = Transport::BindStreamLinkDataFd(link, fd);
 #if !defined(_WIN32)
                 if (bound != MOBILEGL_OK) ::close(fd);
 #endif
@@ -835,14 +834,6 @@ namespace MobileGL::MG_Remote::Server {
             (void)RefuseHandshake(stray, ::MobileGL::Wire::RefuseCode::Authentication,
                                   "data connection nonce mismatch");
         }
-    }
-
-    MobileGLResult ServerSession::AttachStreamLink(int fd, const Transport::SessionSegmentSizes& sizes) {
-        std::unique_ptr<Transport::ILink> link;
-        const auto attached = Transport::CreateStreamLink(fd, sizes, Transport::TransportRoleTag::ServerConsumer, link);
-        if (attached != MOBILEGL_OK) return attached;
-        AttachDataLink(std::move(link));
-        return MOBILEGL_OK;
     }
 
     void ServerSession::AttachDataLink(std::unique_ptr<Transport::ILink> link) {

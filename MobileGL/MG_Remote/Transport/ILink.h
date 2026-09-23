@@ -343,5 +343,15 @@ namespace MobileGL::MG_Remote::Transport {
     std::unique_ptr<ILink> CreateSharedLink(TransportRoleTag role);
     MobileGLResult CreateStreamLink(int fd, const SessionSegmentSizes& sizes,
                                    TransportRoleTag role, std::unique_ptr<ILink>& out);
+    // PH-7 (4), ID-P7-3. The server's nonce-bound stream link, in the two steps
+    // StreamLink::AttachOwnedDeferred / BindDataFd describe: created with its owned memory and
+    // no descriptor (Welcome announces those sizes before the data connection exists), then
+    // bound to the one data connection that presented the session's nonce. Both halves live
+    // here so session code never names the concrete link (scripts/ci/link_seam_purity.py).
+    // Binding answers INVALID_ARGUMENT for a link these factories did not make as a stream,
+    // and leaves `fd` to the caller whenever it does not answer OK.
+    MobileGLResult CreateDeferredStreamLink(const SessionSegmentSizes& sizes, TransportRoleTag role,
+                                            std::unique_ptr<ILink>& out);
+    MobileGLResult BindStreamLinkDataFd(ILink& link, int fd);
 
 } // namespace MobileGL::MG_Remote::Transport
