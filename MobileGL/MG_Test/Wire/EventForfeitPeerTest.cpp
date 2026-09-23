@@ -127,6 +127,19 @@ namespace {
         return "libMobileGLServer.so";
     }
 
+    // THE HARNESS'S HEADLESS PIN (HeadlessGL.cpp, EnsureHeadlessPlatform), for the servers this test
+    // starts itself: both the `--serve` supervisor (SupervisorEnvironment copies this process's
+    // environment) and the LaunchServer child inherit it, and each peer brings a pbuffer context up
+    // on that server. Without it Mesa takes its build-time x11 platform: on a WSLg workstation that
+    // binds the window system and goes green, on a runner with no DISPLAY InitPbufferSurface fails
+    // and every case reds before the ring ever fills. An operator's explicit EGL_PLATFORM still
+    // wins, as in the harness and in tcp_server_fixture.py.
+    void PinHeadlessEgl() {
+        if (std::getenv("EGL_PLATFORM") == nullptr) ::setenv("EGL_PLATFORM", "surfaceless", 1);
+        ::unsetenv("DISPLAY");
+        ::unsetenv("WAYLAND_DISPLAY");
+    }
+
     std::string WaitKnobEntry(std::uint32_t waitMs) {
         return "MOBILEGL_IPC_EVENT_WAIT_MS=" + std::to_string(waitMs);
     }
@@ -514,6 +527,7 @@ namespace {
         // A peer the parent kills leaves the release pipe with no reader; the parent's write to it
         // must be an EPIPE, not a SIGPIPE that takes this process down before the supervisor goes.
         std::signal(SIGPIPE, SIG_IGN);
+        PinHeadlessEgl();
         const bool killed =
             scenario == Scenario::KilledWhileWaiting || scenario == Scenario::KilledWithAControlOpQueued;
         const std::uint32_t waitMs = scenario == Scenario::StopsDraining ? kEventWaitMs : kLongEventWaitMs;
@@ -686,6 +700,7 @@ namespace {
     // the server's own forfeit line has to name it.
     void RunLaunchedArm() {
         std::signal(SIGPIPE, SIG_IGN); // as RunArm: no write in this file may kill the test process
+        PinHeadlessEgl();
         const std::string tag = "launched-" + std::to_string(::getpid());
         const std::string logBase = "/tmp/mgl-fz3-" + tag + ".log";
         const std::string endpoint = "@mgl-fz3-" + tag;
