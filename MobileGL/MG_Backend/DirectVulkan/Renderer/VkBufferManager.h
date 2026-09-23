@@ -244,6 +244,63 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         WireBufferResource* FindWireBuffer(MG_Pipe::MGPipeHandle res);
         Bool WaitForWireBufferHostAccess(WireBufferResource& resource);
+
+        // P7 wave 4 (M2), ID-P7-27: THE WIRE ARM'S ORPHANS NEED A RECLAIM THAT IS NOT A FRAME
+        // BOUNDARY.
+        //
+        // RespecifyWireBuffer - which is every glBufferData that crosses the wire - orphans the
+        // old store unconditionally, because unlike OnRespecify it has no shadow to upload in
+        // place from and no cheap way to know the client is re-sending the same size. The orphan
+        // is legitimate (M1 measured the conditional-orphan mirror: 6701 live against 6702).
+        // What was missing is the RECLAIM. DeferRelease parks into m_deferredBufferReleases,
+        // whose only sweep is CollectDeferredReleases from a frame boundary, and on a pbuffer
+        // replay the server sees ONE present record for the whole run - so on
+        // minecraft-1.21.4-fabric-iris-bsl-esc-menu-854 the buckets held 25,923 dead stores
+        // against 28 live wire buffers, one memfd mapping each, and the server died in scudo's
+        // secondary allocator.
+        //
+        // So a wire store is parked HERE instead, with the facts that say when it is dead, and
+        // THE DEFER PATH ITSELF RECLAIMS - every park sweeps, and the frame boundary is only one
+        // more sweep point (CollectDeferredReleases), never the one this depends on:
+        //
+        //   * `lastUseSerial == 0` - read BEFORE RespecifyWireBuffer zeroes it. Zero means no
+        //     GPU command has named the store since it was minted or since the last host-access
+        //     wait proved every recorded command complete (WaitForWireBufferHostAccess); every
+        //     path that hands the store to the GPU stamps m_frameSerial, which starts at 1. Such
+        //     a store is destroyed at the park and never enters the list.
+        //   * `submitIndex` - the renderer's GetSyncPointSubmitIndex() at park time, which is by
+        //     construction the LAST submission that can name this store: every command that
+        //     names it was recorded before the park (the record left behind a bumped slice
+        //     epoch, so no memo can hand it out again), and a recorded command is either already
+        //     submitted (<= m_submitCounter) or in the batch that becomes m_submitCounter + 1.
+        //     IsSubmitIndexComplete(submitIndex) is a fence observation, so this is the gate
+        //     that empties the set MID-FRAME - the shape CollectWireObjects already uses for
+        //     the wire image/view tables.
+        //   * THE RENDERER IS IDLE - IsSubmitIndexComplete(GetSyncPointSubmitIndex()): nothing
+        //     is recorded and every submission has retired. Then every parked store is dead,
+        //     including one tagged for a batch that was abandoned rather than submitted (a
+        //     minimized Present drops its recording), whose own index may never complete.
+        //
+        // THE FRAME-SERIAL FLOOR IS DELIBERATELY NOT A PROOF HERE. It cannot move inside a
+        // frame (NotifyFrameSerialComplete refuses the current serial), so it frees nothing in
+        // the one-present replay this exists for, and on this package's base it is the floor
+        // B3 found unsound (a serial with two submissions was declared complete on the first
+        // fence, 6a92a10dd): a free on that floor is a GPU use-after-free, not a wrong pixel.
+        struct DeferredWireRelease {
+            VkBufferObject buffer;
+            Uint64 lastUseSerial = 0;
+            Uint64 submitIndex = 0;
+            // Cached: GetSize() is gone once the object is destroyed, and the watermark's
+            // running total has to stay exact as entries leave.
+            Uint64 bytes = 0;
+        };
+        // Park a wire store, then sweep. `lastUseSerial` is the releasing resource's, captured
+        // before the caller resets it.
+        void DeferWireRelease(VkBufferObject&& buffer, Uint64 lastUseSerial);
+        // Destroy every parked store proven dead by the rules above. Returns how many.
+        SizeT SweepDeferredWireReleases();
+        // Teardown: the caller has proven the device idle (Shutdown / RecreateTransientArenas).
+        void DestroyAllDeferredWireReleases();
 #endif
         Bool InitializeTransientArenas();
         static VkBufferUsageFlags GetVkBufferUsage(BufferKind kind);
@@ -280,6 +337,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<WeakPtr<VkBufferResource>> m_liveResources;
 #if MOBILEGL_BUILD_DISAGGREGATED
         std::unordered_map<Uint64, WireBufferResource> m_wireBuffers;
+        // See DeferredWireRelease. ONE FLAT LIST rather than the per-frame-slot buckets above:
+        // the whole point is that these entries do not wait for a frame slot to come round.
+        Vector<DeferredWireRelease> m_deferredWireReleases;
+        // Bytes currently parked in that list, kept exact so the watermark needs no walk.
+        Uint64 m_deferredWireBytes = 0;
+        // Live VkBuffers this arm owns: the stores held by m_wireBuffers plus the parked ones.
+        // Maintained rather than counted, because the publish runs on every park.
+        Uint64 m_wireStoreCount = 0;
 #endif
     // Size m_liveResources had just after the last sweep; the next sweep waits for it to double.
     SizeT m_liveResourcesLastPruned = 0;

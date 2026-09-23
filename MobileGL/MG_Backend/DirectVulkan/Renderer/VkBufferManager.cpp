@@ -240,7 +240,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     res.Slot, res.Gen);
             std::abort();
         }
-        DeferRelease(std::move(resource->buffer));
+        // THE SERIAL IS READ BEFORE THE RESET BELOW ZEROES IT. Whether it is zero - whether any
+        // GPU command has named this store - decides whether the orphan can go at once or has
+        // to wait for a submission (DeferredWireRelease), and three lines from now the record
+        // no longer carries it.
+        const Uint64 orphanedUseSerial = resource->lastUseSerial;
+        DeferWireRelease(std::move(resource->buffer), orphanedUseSerial);
         resource->size = desc.Width;
         resource->lastUseSerial = 0;
         resource->gpuWritesPending = false;
@@ -262,6 +267,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     res.Slot, res.Gen, static_cast<unsigned long long>(resource->size));
             std::abort();
         }
+        ++m_wireStoreCount;
         // Under transport, defined bytes follow as resource_subdata records. An
         // undefined store has no shadow to upload and no implicit zero snapshot.
         if (initialBytes != nullptr && desc.HasDefinedContent) {
@@ -570,9 +576,76 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void VkBufferManager::DestroyWireBuffer(MG_Pipe::MGPipeHandle res) {
         const auto found = m_wireBuffers.find(WireBufferKey(res));
         if (found == m_wireBuffers.end()) return;
-        DeferRelease(std::move(found->second.buffer));
+        DeferWireRelease(std::move(found->second.buffer), found->second.lastUseSerial);
         m_wireBuffers.erase(found);
         ++m_sliceEpochCounter;
+    }
+
+    void VkBufferManager::DeferWireRelease(VkBufferObject&& buffer, Uint64 lastUseSerial) {
+        if (!buffer.IsValid()) return;
+        // Two stores go NOW rather than into the list. With no frame slots (DeferRelease's own
+        // teardown guard, and for its reason) there is no manager left to reclaim anything
+        // later. And a store whose last-use serial is 0 was never named by a GPU command since
+        // it was minted or since a host-access wait retired everything recorded before it - see
+        // DeferredWireRelease - so there is nothing to wait for.
+        if (m_deferredBufferReleases.empty() || lastUseSerial == 0) {
+            buffer.Destroy();
+            if (m_wireStoreCount > 0) --m_wireStoreCount;
+            return;
+        }
+        DeferredWireRelease entry;
+        entry.lastUseSerial = lastUseSerial;
+        // The last submission that can name this store: see DeferredWireRelease. Zero when there
+        // is no renderer, which is also when there is no queue and nothing to wait for.
+        entry.submitIndex = pVulkanRenderer != nullptr ? pVulkanRenderer->GetSyncPointSubmitIndex() : 0;
+        entry.bytes = static_cast<Uint64>(buffer.GetSize());
+        entry.buffer = std::move(buffer);
+        m_deferredWireBytes += entry.bytes;
+        m_deferredWireReleases.push_back(std::move(entry));
+        // EVERY PARK SWEEPS. The frame boundary is not a reclaim point this arm can lean on - a
+        // pbuffer replay that snapshot-exits delivers ONE present for 1.3 M calls (ID-P7-32) -
+        // so the only cadence that tracks the workload is the workload itself.
+        SweepDeferredWireReleases();
+    }
+
+    SizeT VkBufferManager::SweepDeferredWireReleases() {
+        if (m_deferredWireReleases.empty() || pVulkanRenderer == nullptr) return 0;
+        SizeT dead = 0;
+        if (pVulkanRenderer->IsSubmitIndexComplete(pVulkanRenderer->GetSyncPointSubmitIndex())) {
+            // Idle: nothing recorded, every submission retired. Every parked store is dead,
+            // including one tagged for a batch that was abandoned instead of submitted.
+            dead = m_deferredWireReleases.size();
+        } else {
+            // The list is in park order and GetSyncPointSubmitIndex() never decreases, so the
+            // submit indices are non-decreasing and the dead entries are a PREFIX: the first
+            // entry the renderer will not call complete proves none after it is either. That
+            // bounds the walk to a couple of fence polls, which matters because this runs on
+            // every glBufferData the wire carries.
+            while (dead < m_deferredWireReleases.size() &&
+                   pVulkanRenderer->IsSubmitIndexComplete(m_deferredWireReleases[dead].submitIndex)) {
+                ++dead;
+            }
+        }
+        if (dead == 0) return 0;
+        for (SizeT i = 0; i < dead; ++i) {
+            DeferredWireRelease& entry = m_deferredWireReleases[i];
+            m_deferredWireBytes -= entry.bytes;
+            entry.buffer.Destroy();
+        }
+        m_deferredWireReleases.erase(m_deferredWireReleases.begin(),
+                                     m_deferredWireReleases.begin() + static_cast<std::ptrdiff_t>(dead));
+        const Uint64 destroyedCount = static_cast<Uint64>(dead);
+        m_wireStoreCount = destroyedCount <= m_wireStoreCount ? m_wireStoreCount - destroyedCount : 0;
+        return dead;
+    }
+
+    void VkBufferManager::DestroyAllDeferredWireReleases() {
+        for (auto& entry : m_deferredWireReleases) {
+            entry.buffer.Destroy();
+            if (m_wireStoreCount > 0) --m_wireStoreCount;
+        }
+        m_deferredWireReleases.clear();
+        m_deferredWireBytes = 0;
     }
 #endif
 
@@ -617,7 +690,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DestroyAllDeferredReleases();
         ReleaseAllLiveResources();
 #if MOBILEGL_BUILD_DISAGGREGATED
+        // DestroyAllDeferredReleases above emptied the parked list; this destroys the stores the
+        // records still hold, so nothing this arm minted outlives the count.
         m_wireBuffers.clear();
+        m_wireStoreCount = 0;
 #endif
         m_copyProvider = nullptr;
         m_initInfo = {};
@@ -1334,6 +1410,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         "VkBufferManager::CollectDeferredReleases frame index out of range");
         m_deferredBufferReleases[frameIndex].clear();
         m_deferredResourceReleases[frameIndex].clear();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The wire list is not per-slot and does not wait for a frame boundary; a boundary is
+        // just one more point to sweep at (BeginFrame after its slot fence, and every slot of
+        // the idle drain, where the renderer-idle rule empties the list).
+        SweepDeferredWireReleases();
+#endif
     }
 
     BufferSlice VkBufferManager::AcquireUnboundStorageDescriptor() {
@@ -1429,6 +1511,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkBufferManager::DestroyAllDeferredReleases() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Both callers (Shutdown, RecreateTransientArenas) have proven the device idle.
+        DestroyAllDeferredWireReleases();
+#endif
         for (auto& releases : m_deferredBufferReleases) {
             for (auto& buffer : releases) {
                 buffer.Destroy();
