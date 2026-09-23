@@ -26,6 +26,9 @@ if (NOT WIN32)
     # P6 sm: two MobileGL processes. Needs the real server image beside it, so
     # the dependency is declared after the loop rather than assumed.
     list(APPEND MOBILEGL_WIRE_TESTS ServerSpawnTest)
+    # P7 F2 latch (PH-1 (3)(4), Ph fuzz arm 2): one raw-peer row per latched site against a real
+    # `--serve` supervisor, each followed by a healthy next session. Needs the server image too.
+    list(APPEND MOBILEGL_WIRE_TESTS PeerLatchTest)
 endif()
 
 include(GoogleTest)
@@ -43,13 +46,23 @@ foreach (test IN LISTS MOBILEGL_WIRE_TESTS)
             ${MGL_ROOT}/MobileGL
             ${MGL_ROOT}/3rdparty/flatbuffers/include
     )
+    if (test STREQUAL "PeerLatchTest")
+        # It builds records and a program archive by hand, so it reaches MG_Pipe and MG_State
+        # the way the codec suites do.
+        target_include_directories(${test} PRIVATE
+                ${MGL_ROOT}/MobileGL/MG_Pipe
+                ${MGL_ROOT}/3rdparty/xxHash
+                ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
+                ${MGL_ROOT}/3rdparty/SPIRV-Reflect
+        )
+    endif ()
 
     target_link_libraries(${test} PRIVATE
             GTest::gtest_main
             ${LINK_LIBRARIES}
     )
 
-    if (test STREQUAL "ServerSpawnTest")
+    if (test STREQUAL "ServerSpawnTest" OR test STREQUAL "PeerLatchTest")
         # It execs the real image, so it must be built first and must be told
         # where it is. MOBILEGL_TEST_SERVER_PATH is read by the test's
         # ServerImage() helper; without it the test would depend on the working
@@ -157,6 +170,12 @@ if (Python3_Interpreter_FOUND)
     add_test(NAME ProtocolSchema.RevisionPinsDigest
              COMMAND ${Python3_EXECUTABLE} ${MGL_ROOT}/scripts/ci/protocol_revision_pin.py --self-test)
     set_tests_properties(ProtocolSchema.RevisionPinsDigest PROPERTIES LABELS unit)
+    # P7 F2 latch (fuzz arm 2): every per-session latch site in the four PH-1 (3) files has a
+    # PeerLatchTest row whose marker names it, or is argued unreachable in the script; the
+    # self-test drops each covering row and requires its site to go unmapped.
+    add_test(NAME PeerLatch.SiteMap
+             COMMAND ${Python3_EXECUTABLE} ${MGL_ROOT}/scripts/ci/ph_latch_sites.py --self-test)
+    set_tests_properties(PeerLatch.SiteMap PROPERTIES LABELS unit)
 endif ()
 
 # Ph fuzz arm 3 (PH-6, ID-P7-2): a `--serve` supervisor, a peer that stops draining SEG_EVENT, and

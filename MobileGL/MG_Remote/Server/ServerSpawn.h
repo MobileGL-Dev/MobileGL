@@ -44,6 +44,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace MobileGL::MG_Remote::Server {
 
@@ -73,6 +74,14 @@ namespace MobileGL::MG_Remote::Server {
     // repeat it.
     MobileGLResult LaunchServer(const std::string& imagePath, const std::string& endpoint,
                                 LaunchedServer* out);
+
+    // The same launch with arguments after the endpoint - `--serve` for the fork-per-session
+    // supervisor a TCP deployment runs (ServerMain.cpp). PH-1 (4)'s control needs exactly that
+    // shape on a unit rig: a session that latches must leave a supervisor that serves the next
+    // connection, and a single-session server exits with its only session.
+    MobileGLResult LaunchServerWithArgs(const std::string& imagePath, const std::string& endpoint,
+                                        const std::vector<std::string>& extraArgs,
+                                        LaunchedServer* out);
 
     // Waits for the child, up to `timeoutMs`. Returns MOBILEGL_ERR_TIMEOUT if it
     // is still running, in which case the caller decides whether to escalate -

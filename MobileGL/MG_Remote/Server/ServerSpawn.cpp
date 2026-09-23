@@ -218,6 +218,12 @@ namespace MobileGL::MG_Remote::Server {
 
     MobileGLResult LaunchServer(const std::string& imagePath, const std::string& endpoint,
                                 LaunchedServer* out) {
+        return LaunchServerWithArgs(imagePath, endpoint, {}, out);
+    }
+
+    MobileGLResult LaunchServerWithArgs(const std::string& imagePath, const std::string& endpoint,
+                                        const std::vector<std::string>& extraArgs,
+                                        LaunchedServer* out) {
         if (out == nullptr || endpoint.empty()) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
@@ -240,9 +246,17 @@ namespace MobileGL::MG_Remote::Server {
         const std::string::size_type slash = image.find_last_of('/');
         ScrubbedEnv env =
             BuildChildEnv(slash == std::string::npos ? std::string() : image.substr(0, slash));
-        std::string argv0 = image;
-        std::string argv1 = endpoint;
-        char* argv[] = {argv0.data(), argv1.data(), nullptr};
+        // Built before the fork: the child may only make async-signal-safe calls until execve.
+        std::vector<std::string> args;
+        args.reserve(2 + extraArgs.size());
+        args.push_back(image);
+        args.push_back(endpoint);
+        for (const std::string& arg : extraArgs) args.push_back(arg);
+        std::vector<char*> argvStorage;
+        argvStorage.reserve(args.size() + 1);
+        for (std::string& arg : args) argvStorage.push_back(arg.data());
+        argvStorage.push_back(nullptr);
+        char** argv = argvStorage.data();
 
         // A close-on-exec pipe so an execve that fails reports its errno back
         // instead of vanishing: the app process's stderr is /dev/null on Android
@@ -338,6 +352,10 @@ namespace MobileGL::MG_Remote::Server {
         Transport::WireLogError("MG_Remote spawn: unsupported on this platform - P6 lands POSIX only "
                      "(CONTRACT-P6 §2.6); there is no fork() to build a second process from");
         return MOBILEGL_ERR_UNSUPPORTED;
+    }
+    MobileGLResult LaunchServerWithArgs(const std::string& imagePath, const std::string& endpoint,
+                                        const std::vector<std::string>&, LaunchedServer* out) {
+        return LaunchServer(imagePath, endpoint, out);
     }
     MobileGLResult ReapServer(LaunchedServer&, std::uint32_t, int*) {
         return MOBILEGL_ERR_UNSUPPORTED;
