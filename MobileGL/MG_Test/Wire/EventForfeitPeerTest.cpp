@@ -189,18 +189,32 @@ namespace {
             ::execve(image.c_str(), argv, envp.data());
             ::_exit(127);
         }
+        // Both sides set the group, the usual way to close the race: whichever runs first, the
+        // supervisor leads its own process group before StopSupervisor could ever signal it.
+        if (pid > 0) (void)::setpgid(pid, pid);
         return pid;
+    }
+
+    // THE WHOLE GROUP, NOT JUST THE SUPERVISOR. Its session children are forks of it and share its
+    // group; a child stuck in a long wait (the red shapes of this very file: a reservation that
+    // outlives Stop()'s join) would otherwise survive the test, reparented, still holding ctest's
+    // stdout and stderr. The fallback covers a group that no longer has a leader to name it by.
+    void SignalSupervisorGroup(pid_t pid, int sig) {
+        if (::kill(-pid, sig) != 0) (void)::kill(pid, sig);
     }
 
     void StopSupervisor(pid_t pid) {
         if (pid <= 0) return;
-        ::kill(pid, SIGTERM);
+        SignalSupervisorGroup(pid, SIGTERM);
         for (int i = 0; i < 500; ++i) {
             int status = 0;
-            if (::waitpid(pid, &status, WNOHANG) == pid) return;
+            if (::waitpid(pid, &status, WNOHANG) == pid) {
+                (void)::kill(-pid, SIGKILL); // a session child the supervisor did not outlive
+                return;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        ::kill(pid, SIGKILL);
+        SignalSupervisorGroup(pid, SIGKILL);
         int status = 0;
         ::waitpid(pid, &status, 0);
     }
@@ -671,6 +685,7 @@ namespace {
     // way a fork-dial client starts its server, with the knob set in the PEER's environment, and
     // the server's own forfeit line has to name it.
     void RunLaunchedArm() {
+        std::signal(SIGPIPE, SIG_IGN); // as RunArm: no write in this file may kill the test process
         const std::string tag = "launched-" + std::to_string(::getpid());
         const std::string logBase = "/tmp/mgl-fz3-" + tag + ".log";
         const std::string endpoint = "@mgl-fz3-" + tag;
