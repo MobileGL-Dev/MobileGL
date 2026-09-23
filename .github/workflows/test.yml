@@ -995,18 +995,26 @@ jobs:
         run: |
           ulimit -c unlimited
           sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
-          ctest --output-on-failure -L '^integration-verify-split$' --no-tests=error -j 4
+          # --output-junit, because the arm proof below has to tell a gtest SKIP from a pass: an
+          # entry that skipped reached no verb honestly, and the skip set moves with the driver.
+          ctest --output-on-failure -L '^integration-verify-split$' --no-tests=error -j 4 \
+            --output-junit "${RUNNER_TEMP}/verify-split.xml"
 
-      # THE ARM PROOF, per entry. Every ambient entry has a private log path (SplitLogPaths.cmake.in),
-      # so this grep - unlike integration-verify's, over a shared log - is a census:
+      # THE ARM PROOF, PER ENTRY AND BY NAME. Every ambient entry has a private log path
+      # (SplitLogPaths.cmake.in), so this - unlike integration-verify's grep over a shared log -
+      # is a census:
       #   * ConfigLoader's `MOBILEGL_TRANSPORT=inproc` line in EVERY client log: an entry that ran
       #     monolith would have passed every assertion above and fails here by name;
-      #   * `MGPipe: verify armed` in both VerifySplitArming. logs, and in at least 850 per-entry
-      #     client logs. The line is latched at a process's first fill, so the processes that never
-      #     reach a verb (limits queries, CapsMirror answers, the poison parent) honestly lack it -
-      #     909 of 1064 carried it on the landing run - and a count that falls through the floor
-      #     means the comparator stopped arming somewhere after bring-up.
-      - name: The verify-split entries ran inproc and armed the comparator
+      #   * `MGPipe: verify armed` in both VerifySplitArming. logs;
+      #   * and then the census proper. This used to be a FLOOR - "at least 850 armed of at least
+      #     1000 logs" - which leaves the remaining ~155 unnamed, so the lane could lose fifty
+      #     arms, gain fifty skips, and the floor would not move. It is now the two-sided rule
+      #     dualblock-expected-fatals.txt already rides: each client log must ARM, or belong to an
+      #     entry ctest reported SKIPPED, or be NAMED in Harness/verify-split-unarmed-expected.txt
+      #     (56 names in five classes, each class saying why it reaches no verb). A listed entry
+      #     that arms, and a listed name with no log at all, both fail - an exception set that
+      #     keeps rows nothing needs is how a proof rots green.
+      - name: The verify-split entries ran inproc, and every one armed, skipped or is named
         working-directory: build-verify-split/MobileGL/MG_IntegrationTest
         run: |
           shopt -s nullglob
@@ -1027,12 +1035,10 @@ jobs:
               exit 1
             fi
           done
-          armed=$(grep -l 'MGPipe: verify armed' "${logs[@]}" | wc -l)
-          if [ "${armed}" -lt 850 ]; then
-            echo "::error::only ${armed} of ${#logs[@]} verify-split entries armed the comparator (floor 850, 909 at landing)"
-            exit 1
-          fi
-          echo "${#logs[@]} entries resolved inproc; ${armed} of them armed the comparator"
+          python3 "${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/split_log_paths.py" \
+            verify-split-arming verify-split-logs "${RUNNER_TEMP}/verify-split.xml" \
+            "${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/verify-split-unarmed-expected.txt"
+
 
       # NEGATIVE CONTROL A ON THE SPLIT ARM - integration-verify's step A, same knob, same shape
       # (this step passes when ctest FAILS), aimed at the ambient VerifySplit. entries of BOTH

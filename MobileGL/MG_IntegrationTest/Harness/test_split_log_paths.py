@@ -117,5 +117,79 @@ class ResultAccountingTest(unittest.TestCase):
             helper.require_green(self.document, self.xml, [A, B])
 
 
+class VerifySplitArmProofTest(unittest.TestCase):
+    """The per-entry arm proof, BOTH SIDES (P7 wave 3, V1 fix round).
+
+    The thing it replaced was a count, and a count cannot be tested for the failure that
+    matters - "fifty arms became fifty skips" leaves it unmoved. These four cases are the four
+    ways the census can be wrong, and each one has to raise."""
+
+    ARMED = "DirectGLES.VerifySplit.TriangleScenario.DrawsATriangle"
+    QUIET = "DirectGLES.VerifySplit.AdvertisedLimitsScenario.EveryGL45CoreMinimumIsMet"
+    SKIPPED = "DirectVulkan.VerifySplit.F1WireScenario.SomethingLavapipeCannotDo"
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.logs = self.root / "verify-split-logs"
+        self.logs.mkdir()
+        self.xml = self.root / "run.xml"
+        self.expected = self.root / "expected.txt"
+        self.expected.write_text("# the quiet one\n" + self.QUIET + "\n")
+        self.write_log(self.ARMED, helper.VERIFY_ARMED_LINE)
+        self.write_log(self.QUIET, "no fill here")
+        self.write_log(self.SKIPPED, "no fill here either")
+        self.results([(self.ARMED, "run", None), (self.QUIET, "run", None),
+                      (self.SKIPPED, "notrun", "skipped")])
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def write_log(self, entry, text):
+        (self.logs / (entry + ".client.log")).write_text(text + "\n")
+
+    def results(self, rows):
+        suite = ET.Element("testsuite")
+        for name, status, kind in rows:
+            case = ET.SubElement(suite, "testcase", name=name, status=status)
+            if kind:
+                ET.SubElement(case, kind)
+        ET.ElementTree(suite).write(self.xml)
+
+    def proof(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            helper.verify_split_arming(self.logs, self.xml, self.expected)
+
+    def test_armed_skipped_or_named_is_the_whole_rule(self):
+        self.proof()
+
+    def test_an_unlisted_quiet_entry_fails(self):
+        self.expected.write_text("# nobody\n")
+        with self.assertRaisesRegex(ValueError, "never armed"):
+            self.proof()
+
+    def test_a_listed_entry_that_armed_fails(self):
+        self.write_log(self.QUIET, helper.VERIFY_ARMED_LINE)
+        with self.assertRaisesRegex(ValueError, "DID arm"):
+            self.proof()
+
+    def test_a_listed_name_with_no_log_fails(self):
+        (self.logs / (self.QUIET + ".client.log")).unlink()
+        self.results([(self.ARMED, "run", None), (self.SKIPPED, "notrun", "skipped")])
+        with self.assertRaisesRegex(ValueError, "match no per-entry client log"):
+            self.proof()
+
+    def test_a_log_with_no_result_fails(self):
+        self.results([(self.ARMED, "run", None), (self.QUIET, "run", None)])
+        with self.assertRaisesRegex(ValueError, "no entry in the JUnit result"):
+            self.proof()
+
+    def test_an_empty_log_directory_is_not_a_green(self):
+        for path in self.logs.glob("*.client.log"):
+            path.unlink()
+        with self.assertRaisesRegex(ValueError, "did not take"):
+            self.proof()
+
+
 if __name__ == "__main__":
     unittest.main()

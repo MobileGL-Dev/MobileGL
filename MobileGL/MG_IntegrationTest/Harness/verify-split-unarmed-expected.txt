@@ -1,0 +1,129 @@
+# THE VERIFY-SPLIT ENTRIES THAT HONESTLY NEVER ARM THE COMPARATOR, BY NAME.
+#
+# `MGPipe: verify armed` is latched at a process's FIRST FILL, so a process that reaches no verb
+# never prints it. The lane's arm proof (.github/workflows/test.yml, integration-verify-split)
+# used to allow that with a COUNT - "at least 850 of at least 1000 client logs carry the line" -
+# which leaves the remainder unnamed: the lane could lose fifty arms, gain fifty skips, and the
+# floor would not move. This file is the census instead, and split_log_paths.py's
+# `verify-split-arming` mode is what reads it.
+#
+# THE RULE, PER ENTRY. Every verify-split-logs/*.client.log must either
+#   (a) carry the arming line, or
+#   (b) belong to an entry ctest reported SKIPPED - a gtest skip is a process that brought a
+#       session up and left before any verb, and the skip set is DRIVER-DEPENDENT (a GitHub
+#       runner's lavapipe/llvmpipe skips more or fewer cases than the host's), so naming those
+#       would ratchet on the driver rather than on the comparator, or
+#   (c) be named below.
+#
+# TWO-SIDED, the rule dualblock-expected-fatals.txt already rides (ID-119):
+#   * an unlisted, unskipped entry that did not arm FAILS - a case stopped issuing a verb, or
+#     the comparator stopped reaching it, and both are quieter lanes than they look;
+#   * a LISTED entry that ARMED fails - remove the row in the commit that made it arm;
+#   * a LISTED name with no client log in this run fails - the entry was renamed or filtered
+#     out, and the row is an amnesty nobody asked for.
+#   A listed entry that SKIPS on some driver is allowed and reported: that is (b) doing its job.
+#
+# HOW TO REFRESH (never by hand from a guess):
+#   ctest --test-dir build-split -L '^integration-verify-split$' -j 6 \
+#       --output-junit /tmp/verify-split.xml
+#   python3 MobileGL/MG_IntegrationTest/Harness/split_log_paths.py verify-split-arming \
+#       build-split/MobileGL/MG_IntegrationTest/verify-split-logs /tmp/verify-split.xml this-file
+# and put the names it prints here, under the class they belong to.
+#
+# MEASURED ON THE HOST (WSL Arch + lavapipe, build-split, 1064 entries with a private log):
+# 909 armed, 99 unarmed and skipped, 56 unarmed and named below.
+
+# --------------------------------------------------------------------------------------------
+# CAPS, LIMITS AND EXTENSION ADVERTISEMENT - answered from the client's CapsMirror, no verb (22)
+# These call glGetIntegerv / glGetString / glGetInternalformativ and compare the answer
+# against a floor or against the other width of the same query. Nothing in them reaches a fill
+# point, so the arming line - latched at the process's FIRST fill - is honestly absent. They are
+# the same 13 entries per backend that tier 3 measured as reds under MGITEST_SPLIT_LANE=1, for
+# the same reason (a query answered without moving the encoder's record ordinal).
+# --------------------------------------------------------------------------------------------
+DirectGLES.VerifySplit.AdvertisedLimitsScenario.ComputeLocalSizeComesFromTheLinkedProgram
+DirectGLES.VerifySplit.AdvertisedLimitsScenario.ComputeUniformBlocksIsAnAmountAnApplicationCouldActuallyAllocate
+DirectGLES.VerifySplit.AdvertisedLimitsScenario.ComputeWorkGroupLimitsAreTheCapsBlocksAnswer
+DirectGLES.VerifySplit.AdvertisedLimitsScenario.EveryBufferLimitIsWithinItsAdvertisedRange
+DirectGLES.VerifySplit.AdvertisedLimitsScenario.EveryGL45CoreMinimumIsMet
+DirectGLES.VerifySplit.AdvertisedLimitsScenario.IndexedBufferBindingsAreReportedVerbatimOnBothWidths
+DirectGLES.VerifySplit.AdvertisedLimitsScenario.IndexedTargetSizeSurvivesDivisionByItsBindingCount
+DirectGLES.VerifySplit.AdvertisedLimitsScenario.PerStageBlockCountsFitInTheirBindingPoints
+DirectGLES.VerifySplit.AdvertisedLimitsScenario.ViewportArrayLimitsMeetTheirGL43Floors
+DirectGLES.VerifySplit.DoublePrecisionScenario.TheFp64ExtensionIsNotAdvertised
+DirectGLES.VerifySplit.SpirvShaderBinaryScenario.ShaderBinaryFormatIsAdvertisedExactlyOnce
+DirectVulkan.VerifySplit.AdvertisedLimitsScenario.ComputeLocalSizeComesFromTheLinkedProgram
+DirectVulkan.VerifySplit.AdvertisedLimitsScenario.ComputeUniformBlocksIsAnAmountAnApplicationCouldActuallyAllocate
+DirectVulkan.VerifySplit.AdvertisedLimitsScenario.ComputeWorkGroupLimitsAreTheCapsBlocksAnswer
+DirectVulkan.VerifySplit.AdvertisedLimitsScenario.EveryBufferLimitIsWithinItsAdvertisedRange
+DirectVulkan.VerifySplit.AdvertisedLimitsScenario.EveryGL45CoreMinimumIsMet
+DirectVulkan.VerifySplit.AdvertisedLimitsScenario.IndexedBufferBindingsAreReportedVerbatimOnBothWidths
+DirectVulkan.VerifySplit.AdvertisedLimitsScenario.IndexedTargetSizeSurvivesDivisionByItsBindingCount
+DirectVulkan.VerifySplit.AdvertisedLimitsScenario.PerStageBlockCountsFitInTheirBindingPoints
+DirectVulkan.VerifySplit.AdvertisedLimitsScenario.ViewportArrayLimitsMeetTheirGL43Floors
+DirectVulkan.VerifySplit.DoublePrecisionScenario.TheFp64ExtensionIsNotAdvertised
+DirectVulkan.VerifySplit.SpirvShaderBinaryScenario.ShaderBinaryFormatIsAdvertisedExactlyOnce
+
+# --------------------------------------------------------------------------------------------
+# SHADER AND PROGRAM OBJECT SURFACES - compile, link, specialize, query, glGetError (16)
+# glShaderBinary / glSpecializeShader / glCompileShader / glGetUniformdv / the compiler
+# thread pool's settle-and-join, and the reserved-name pipeline case. Every one of them asserts on
+# an error code or a program query; none issues a draw, a dispatch, a clear or a readback.
+# --------------------------------------------------------------------------------------------
+DirectGLES.VerifySplit.AsyncCompileScenario.CompletionStatusPollingThenForcedJoin
+DirectGLES.VerifySplit.AsyncCompileScenario.ZeroCompilerThreadsSettlesEverythingImmediately
+DirectGLES.VerifySplit.DoublePrecisionScenario.GetUniformdvReadsBackWhatWasStored
+DirectGLES.VerifySplit.DoublePrecisionScenario.TheUniformIsStillReportedAsADouble
+DirectGLES.VerifySplit.ProgramPipelineScenario.AReservedNameTakesStateBeforeItIsAProgramPipeline
+DirectGLES.VerifySplit.SpirvShaderBinaryScenario.AnUnsupportedBinaryFormatIsRejectedInsteadOfSilentlyAccepted
+DirectGLES.VerifySplit.SpirvShaderBinaryScenario.CompileShaderOnASpirvShaderIsInvalidOperationAndShaderSourceTakesItBack
+DirectGLES.VerifySplit.SpirvShaderBinaryScenario.SpecializeShaderErrorSurfaceMatchesTheExtension
+DirectVulkan.VerifySplit.AsyncCompileScenario.CompletionStatusPollingThenForcedJoin
+DirectVulkan.VerifySplit.AsyncCompileScenario.ZeroCompilerThreadsSettlesEverythingImmediately
+DirectVulkan.VerifySplit.DoublePrecisionScenario.GetUniformdvReadsBackWhatWasStored
+DirectVulkan.VerifySplit.DoublePrecisionScenario.TheUniformIsStillReportedAsADouble
+DirectVulkan.VerifySplit.ProgramPipelineScenario.AReservedNameTakesStateBeforeItIsAProgramPipeline
+DirectVulkan.VerifySplit.SpirvShaderBinaryScenario.AnUnsupportedBinaryFormatIsRejectedInsteadOfSilentlyAccepted
+DirectVulkan.VerifySplit.SpirvShaderBinaryScenario.CompileShaderOnASpirvShaderIsInvalidOperationAndShaderSourceTakesItBack
+DirectVulkan.VerifySplit.SpirvShaderBinaryScenario.SpecializeShaderErrorSurfaceMatchesTheExtension
+
+# --------------------------------------------------------------------------------------------
+# OBJECT STATE WRITTEN AND READ BACK, OR A CALL REJECTED BEFORE IT BECOMES A VERB (14)
+# glVertexAttribLFormat then glGetVertexAttribiv (the 64-bit format case does NOT draw - the
+# comment above it names the Adreno null-deref that is why), glTexBufferRange then the level
+# queries, glEnable then glIsEnabled, glGetIntegerv(GL_SAMPLE_MASK_WORDS) then glSampleMaski, the
+# two glCopyImageSubData level-range REJECTIONS (the call errors out, so no verb is filled), and
+# the arena readback, which is glBufferSubData + glGetBufferSubData and not a pipe verb.
+# --------------------------------------------------------------------------------------------
+DirectGLES.VerifySplit.BufferTextureScenario.LevelQueriesDescribeTheAttachedBufferRange
+DirectGLES.VerifySplit.ClipDistanceScenario.EnableIsObservableThroughIsEnabled
+DirectGLES.VerifySplit.CopyImageLevelRangeScenario.LevelOneOfASingleLevelTextureIsRejected
+DirectGLES.VerifySplit.CopyImageLevelRangeScenario.LevelTwoOfATwoLevelTextureIsRejected
+DirectGLES.VerifySplit.DoublePrecisionScenario.A64BitVertexFormatIsRecordedAndItsArrayIsDroppedAtDraw
+DirectGLES.VerifySplit.LargeArenaAdoptionScenario.ReadbackSeesTheLatestCpuWrite
+DirectGLES.VerifySplit.SampleMaskScopeScenario.TheAdvertisedSampleMaskWordCountMatchesWhatSampleMaskiAccepts
+DirectVulkan.VerifySplit.BufferTextureScenario.LevelQueriesDescribeTheAttachedBufferRange
+DirectVulkan.VerifySplit.ClipDistanceScenario.EnableIsObservableThroughIsEnabled
+DirectVulkan.VerifySplit.CopyImageLevelRangeScenario.LevelOneOfASingleLevelTextureIsRejected
+DirectVulkan.VerifySplit.CopyImageLevelRangeScenario.LevelTwoOfATwoLevelTextureIsRejected
+DirectVulkan.VerifySplit.DoublePrecisionScenario.A64BitVertexFormatIsRecordedAndItsArrayIsDroppedAtDraw
+DirectVulkan.VerifySplit.LargeArenaAdoptionScenario.ReadbackSeesTheLatestCpuWrite
+DirectVulkan.VerifySplit.SampleMaskScopeScenario.TheAdvertisedSampleMaskWordCountMatchesWhatSampleMaskiAccepts
+
+# --------------------------------------------------------------------------------------------
+# FRAMEBUFFER COMPLETENESS QUERIES - attach and ask, never render (2)
+# glCheckFramebufferStatus on an attachment of that format. Only the DirectGLES half is
+# here: on DirectVulkan both cases SKIP (the format is not renderable on lavapipe), and a skip is
+# recognised without a name.
+# --------------------------------------------------------------------------------------------
+DirectGLES.VerifySplit.SnormAttachmentScenario.SignedNormalizedColorAttachmentsReportComplete
+DirectGLES.VerifySplit.ThreeChannelAttachmentScenario.ThreeChannelColorAttachmentsReportComplete
+
+# --------------------------------------------------------------------------------------------
+# THE POISON PARENT THAT ONLY FORKS (2)
+# PoisonOmissionScenario.WithoutOmissionCompletes re-executes the binary and waits; the
+# frame is drawn in the CHILD, which writes its own log (<base>.poison-child). The parent process
+# brings a session up and forks, so it reaches no verb of its own.
+# --------------------------------------------------------------------------------------------
+DirectGLES.VerifySplit.PoisonOmissionScenario.WithoutOmissionCompletes
+DirectVulkan.VerifySplit.PoisonOmissionScenario.WithoutOmissionCompletes

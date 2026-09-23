@@ -202,6 +202,105 @@ def require_green(document, junit_path, required):
     print(f"SplitLogPaths require-green: {len(by_name)} PASS, 0 skip, 0 failed, complete discovery")
 
 
+VERIFY_ARMED_LINE = "MGPipe: verify armed"
+
+
+def verify_split_arming(logs_dir, junit_path, expected_path):
+    """THE VERIFY-SPLIT LANE'S ARM PROOF, PER ENTRY (P7 wave 3, V1 fix round).
+
+    What this replaces: a COUNT. The landing shape of the lane's arm proof asserted that at
+    least 850 of at least 1000 per-entry client logs carried `MGPipe: verify armed`, which
+    leaves ~117 entries unnamed and therefore unaccounted - a lane can lose fifty arms and
+    gain fifty skips and the floor never moves. The census is the point (dualblock-expected-
+    fatals.txt's rule, ID-119), so this is the same two-sided ratchet applied to arming:
+
+      * an entry whose client log carries the arming line is ARMED and needs nothing else;
+      * an entry that ctest reported SKIPPED is recognised without a name - a gtest skip is a
+        process that brought a session up and left before any verb, which is honestly unarmed,
+        and the skip set is driver-dependent (a GitHub runner's lavapipe/llvmpipe skips more
+        or fewer than the host's), so naming those would ratchet on the driver;
+      * every OTHER unarmed entry must be named in the committed expected file, which says why
+        each class is there.
+
+    Two-sided, and both directions are failures:
+      * an unlisted, unskipped entry that did not arm - the comparator stopped reaching it, or
+        a case stopped issuing a verb, and either way the lane is quieter than it looks;
+      * a LISTED entry that armed - the name is stale and the file must lose the row in the
+        commit that made it arm, or the exception set rots into a permanent amnesty;
+      * a LISTED entry with no client log in this run at all - the name no longer matches an
+        entry (a rename, a filter change), which would otherwise be an invisible amnesty too.
+    A listed entry that SKIPPED on this run is neither: it is reported and allowed, because a
+    driver difference is exactly what the skip recognition above exists to absorb."""
+    directory = Path(logs_dir)
+    logs = sorted(directory.glob("*.client.log"))
+    if not logs:
+        raise ValueError(f"verify-split arming: no *.client.log under {directory} - the per-entry "
+                         f"private log paths did not take, so nothing here is a per-entry proof")
+    status = {}
+    for case in ET.parse(junit_path).getroot().iter("testcase"):
+        name = case.get("name")
+        if case.find("skipped") is not None:
+            status[name] = "skipped"
+        elif (case.find("failure") is not None or case.find("error") is not None
+              or case.get("status") == "fail"):
+            status[name] = "failed"
+        else:
+            status[name] = "passed"
+
+    expected = read_pair_set(expected_path)
+    armed, skipped, named, unnamed, listed_armed, no_result = [], [], [], [], [], []
+    for path in logs:
+        entry = path.name[: -len(".client.log")]
+        if entry not in status:
+            no_result.append(entry)
+            continue
+        if VERIFY_ARMED_LINE in path.read_text(errors="replace"):
+            armed.append(entry)
+            if entry in expected:
+                listed_armed.append(entry)
+        elif status[entry] == "skipped":
+            skipped.append(entry)
+        elif entry in expected:
+            named.append(entry)
+        else:
+            unnamed.append(entry)
+
+    seen = set(armed) | set(skipped) | set(named) | set(unnamed)
+    stale = sorted(expected - seen)
+    listed_and_skipped = sorted(expected & set(skipped))
+    print(f"SplitLogPaths verify-split-arming: {len(logs)} per-entry client log(s) - "
+          f"{len(armed)} armed, {len(skipped)} unarmed and skipped, "
+          f"{len(named)} unarmed and named in {Path(expected_path).name}")
+    if listed_and_skipped:
+        print(f"SplitLogPaths verify-split-arming: {len(listed_and_skipped)} named entrie(s) "
+              f"skipped on this driver instead of running unarmed (allowed): "
+              f"{', '.join(listed_and_skipped)}")
+    problems = []
+    if no_result:
+        problems.append("%d private log(s) have no entry in the JUnit result: %s. The glob and "
+                        "the run disagree about the lane's members, so neither side is a census."
+                        % (len(no_result), ", ".join(sorted(no_result)[:20])))
+    if unnamed:
+        problems.append("%d entrie(s) ran, did not skip, and never armed the comparator: %s. Each "
+                        "is a process that reached no verb - add it to %s with the class it "
+                        "belongs to, or find out why the fill stopped happening."
+                        % (len(unnamed), ", ".join(sorted(unnamed)[:20]), Path(expected_path).name))
+    if listed_armed:
+        problems.append("%d entrie(s) are named in %s but DID arm: %s. Remove the row in the "
+                        "commit that made them arm - an exception set that keeps rows nothing "
+                        "needs any more is how this proof rots."
+                        % (len(listed_armed), Path(expected_path).name,
+                           ", ".join(sorted(listed_armed)[:20])))
+    if stale:
+        problems.append("%d name(s) in %s match no per-entry client log in this run: %s. The "
+                        "entry was renamed or filtered out; drop the row in the same commit."
+                        % (len(stale), Path(expected_path).name, ", ".join(stale[:20])))
+    if problems:
+        raise ValueError("the verify-split arm proof: " + " | ".join(problems))
+    print(f"SplitLogPaths verify-split-arming: per-entry arm proof OK - every log armed, skipped "
+          f"or named ({len(expected)} name(s) in the expected set)")
+
+
 def expect_fatal(document, junit_path, expected_path):
     """THE DUAL-BLOCK LANE'S CENSUS AND TWO-SIDED RATCHET (P5f f1, P5F §4/§6).
 
@@ -371,6 +470,13 @@ def main():
         return
     if mode == "expect-fatal":
         expect_fatal(json.loads(Path(sys.argv[2]).read_text()), sys.argv[3], sys.argv[4])
+        return
+    if mode == "verify-split-arming":
+        # <logs dir> <junit xml> <expected names>. It takes the LOG DIRECTORY rather than the
+        # discovery JSON on purpose: the claim is about the files a run left on disk, and a
+        # helper that rebuilt the set from discovery could not notice a log that was never
+        # written.
+        verify_split_arming(sys.argv[2], sys.argv[3], sys.argv[4])
         return
     if mode == "require-green":
         require_green(json.loads(Path(sys.argv[2]).read_text()), sys.argv[3], sys.argv[4:])

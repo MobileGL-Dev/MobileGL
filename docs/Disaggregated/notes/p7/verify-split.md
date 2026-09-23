@@ -96,9 +96,20 @@ upload，所以描述符宣告 `(target, level)` 而调用递空指针，会走�
   集合是错的（tier 3 实测 13 红全是 CapsMirror 回答的查询）。取而代之的是**逐条目私有日志**
   （`SplitLogPaths.cmake.in` 的 `MGL_VERIFY_SPLIT_TEST_LISTS`）和 CI 的逐条目臂证明：每个 client 日志都必须有
   ConfigLoader 的 `MOBILEGL_TRANSPORT=inproc` 行；`MGPipe: verify armed` 是进程首次 fill 时才打的，所以从不到达
-  动词的进程（limits 查询、CapsMirror 回答、只 fork 的 poison 父进程）诚实地没有它——落地这一轮 1064 个里
-  909 个有、155 个没有（其中 99 个是 skip）——CI 要求两个 `VerifySplitArming.` 日志都有，并给逐条目计数设下限
-  850。
+  动词的进程诚实地没有它。
+- **臂证明是逐条目的普查，不是计数（V1 修复轮改）。** 落地形状是「≥1000 个日志里 ≥850 个 armed」，剩下的
+  ~155 条无名——车道掉 50 个 arm、多 50 个 skip，这个下限一动不动。现在用 `dualblock-expected-fatals.txt` 那条
+  两侧规则（ID-119）：每个 client 日志要么 **armed**，要么属于 **ctest 报 SKIPPED 的条目**（gtest skip = 起了会话
+  没到动词，而且 skip 集合随驱动变，点名会变成对驱动上棘轮），要么**按名**列在
+  `MG_IntegrationTest/Harness/verify-split-unarmed-expected.txt` 里。两侧都红：列了却 armed、列了却本轮没有日志、
+  没列却既没 armed 也没 skip。读表的是 `split_log_paths.py` 新增的 `verify-split-arming` 模式（`test_split_log_paths.py`
+  里六条控制用例覆盖四种错法）；车道步骤为此加 `--output-junit`。
+- **本机实测（1064 个私有 client 日志）：909 armed、99 unarmed 且 skip、56 unarmed 且按名列出。** 五类，逐类原因
+  写在文件里：caps/limits/扩展广告（22，`glGet*` 由 client 的 CapsMirror 回答，不经填充点）；shader / program 对象
+  与其错误面（16，编译、链接、specialize、uniform 回读、编译线程池 settle，都不画）；对象状态写了再查回、或调用在
+  成为动词之前就被拒（14，含两条 `glCopyImageSubData` level 拒绝与 arena 的 `glGetBufferSubData` 回读）；framebuffer
+  完整性查询（2，只有 DirectGLES 半边——DirectVulkan 上这两条 skip，由 skip 规则吸收）；只 fork 的 poison 父进程（2，
+  帧画在子进程里、写子进程自己的日志）。
 
 ### 2.2 发现 A（真实分歧，已定位；改的是预言，不是规则）
 
