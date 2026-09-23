@@ -3028,6 +3028,20 @@ namespace MobileGL::MG_Util::SelfTest {
                                             graphicsQueueFamilyIndex, deviceExtensions, features,
                                             vkGetPhysicalDeviceFeatures2Fn, vkGetPhysicalDeviceProperties2Fn);
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The "Known Driver Bugs" section's Vulkan table (DriverBugProbes.h): each probe makes its
+        // own throwaway device on the physical device picked above.
+        {
+            VulkanDriverBugProbeContext bugContext;
+            bugContext.getInstanceProcAddr = getInstanceProcAddr;
+            bugContext.instance = instance;
+            bugContext.physicalDevice = physicalDevice;
+            bugContext.graphicsQueueFamilyIndex = graphicsQueueFamilyIndex;
+            bugContext.deviceExtensions = &deviceExtensions;
+            builder.report.knownDriverBugs = CollectVulkanKnownDriverBugs(bugContext);
+        }
+#endif
+
         if (HasVkExtension(deviceExtensions, VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME)) {
             builder.Pass("VK_KHR_draw_indirect_count",
                          "supported (count-buffer indirect draws run as single native "

@@ -1171,3 +1171,55 @@ TEST(DriverBugProbes, Packed16MirrorArithmeticMatchesTheDeviceEvidence) {
     EXPECT_EQ(MirrorPacked5551(0x0047), 0x8C20);
     EXPECT_EQ(MirrorPacked5551(0x3800), 0x0007);
 }
+
+// ===================== DEPTH/STENCIL RENDER-PASS RESOLVE (Vulkan) =====================
+//
+// The Vulkan table's row for MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.h's probe: a
+// pure function of its measurement. FIXED where the shader substitute can write every aspect,
+// UNFIXABLE where a stencil resolve still has to use the render pass that writes nothing, and no
+// row at all for a clean or inconclusive measurement.
+#if MOBILEGL_BUILD_DISAGGREGATED
+namespace {
+    MG_Backend::DirectVulkan::WireDepthResolveProbeMeasurement DepthResolveMeasurement(Uint32 renderPassMatches,
+                                                                                   Uint32 shaderMatches) {
+        MG_Backend::DirectVulkan::WireDepthResolveProbeMeasurement measurement;
+        measurement.ran = true;
+        MG_Backend::DirectVulkan::WireDepthResolveFormatReading reading;
+        reading.name = "D24_UNORM_S8_UINT";
+        reading.samples = 4;
+        reading.ran = true;
+        for (auto* aspect : {&reading.depth, &reading.stencil}) {
+            aspect->measured = true;
+            aspect->texels = 16;
+            aspect->renderPassMatches = renderPassMatches;
+            aspect->shaderRan = true;
+            aspect->shaderMatches = shaderMatches;
+        }
+        measurement.formats.push_back(reading);
+        return measurement;
+    }
+} // namespace
+#endif
+
+TEST(DriverBugProbes, DepthStencilResolvePassRowIsFixedWhereTheShaderSubstituteWritesEveryAspect) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    using MobileGL::MG_Util::SelfTest::DescribeDepthStencilResolvePassBug;
+    const auto broken = DepthResolveMeasurement(0, 16);
+    const auto fixed = DescribeDepthStencilResolvePassBug(broken, /*shaderStencilExport=*/true);
+    ASSERT_TRUE(fixed.has_value()) << "the render pass wrote nothing while the control resolved: a bug row";
+    EXPECT_EQ(fixed->verdict, DriverBugVerdict::Fixed);
+    EXPECT_FALSE(fixed->name.empty());
+    EXPECT_NE(fixed->detail.find("render pass 0/16"), std::string::npos) << fixed->detail;
+    const auto stencilLeft = DescribeDepthStencilResolvePassBug(broken, /*shaderStencilExport=*/false);
+    ASSERT_TRUE(stencilLeft.has_value());
+    EXPECT_EQ(stencilLeft->verdict, DriverBugVerdict::Unfixable)
+        << "without VK_EXT_shader_stencil_export a stencil resolve still lands on the broken pass";
+    EXPECT_FALSE(DescribeDepthStencilResolvePassBug(DepthResolveMeasurement(16, 16), true).has_value())
+        << "a clean render pass is no row";
+    EXPECT_FALSE(DescribeDepthStencilResolvePassBug(DepthResolveMeasurement(0, 0), true).has_value())
+        << "an inconclusive probe (the control failed too) must never be reported as the bug";
+    EXPECT_FALSE(DescribeDepthStencilResolvePassBug({}, true).has_value()) << "a probe that did not run is no row";
+#else
+    GTEST_SKIP() << "the Vulkan table exists only in the disaggregated build";
+#endif
+}

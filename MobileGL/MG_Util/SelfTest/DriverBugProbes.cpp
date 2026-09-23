@@ -11,6 +11,9 @@
 
 #include <Config.h>
 #include <MG_Util/Debug/Log.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.h>
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -2475,4 +2478,73 @@ namespace MobileGL::MG_Util::SelfTest {
         }
         return findings;
     }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Optional<DriverBugFinding> DescribeDepthStencilResolvePassBug(
+        const MG_Backend::DirectVulkan::WireDepthResolveProbeMeasurement& measurement, Bool shaderStencilExport) {
+        using namespace MG_Backend::DirectVulkan;
+        if (EvaluateWireDepthResolveProbe(measurement) != WireDepthResolveProbeVerdict::RenderPassResolveBroken)
+            return std::nullopt;
+        String detail =
+            "a render pass whose subpass carries a VK_KHR_depth_stencil_resolve attachment (SAMPLE_ZERO) and "
+            "records no draw leaves its single-sample resolve target unwritten, while MobileGL's shader "
+            "resolve pass fed the same multisample inputs resolves them correctly - measured here on 4x4 "
+            "4-sample images cleared to depth 0.25 / stencil 0x5A over a depth 0.75 / stencil 0xA5 "
+            "sentinel: ";
+        detail += DescribeWireDepthResolveProbe(measurement);
+        detail +=
+            ". On the split, inproc and tcp transports a multisample depth/stencil resolve "
+            "(glBlitFramebuffer out of a multisample framebuffer) therefore takes the shader pass "
+            "first - sample 0 fetched and written through gl_FragDepth / gl_FragStencilRefARB - and "
+            "keeps the render pass only as the fallback for what the shader cannot write; the "
+            "monolith transport never records that render pass";
+        if (!shaderStencilExport) {
+            detail +=
+                ". THIS DEVICE HAS NO VK_EXT_shader_stencil_export, so a fragment shader cannot write "
+                "the stencil aspect: a STENCIL resolve still falls back to the render pass and reads "
+                "back unwritten. Depth is repaired, stencil is not";
+        }
+        return DriverBugFinding{"Depth/stencil render-pass resolve writes nothing",
+                                shaderStencilExport ? DriverBugVerdict::Fixed : DriverBugVerdict::Unfixable,
+                                Move(detail)};
+    }
+
+    namespace {
+        // The same probe the Magma renderer runs at bring-up (VulkanRenderer::
+        // ArmWireDepthResolveOrder), on a throwaway device carrying the renderer's extensions.
+        Optional<DriverBugFinding> ProbeDepthStencilResolvePassBug(const VulkanDriverBugProbeContext& context) {
+            using namespace MG_Backend::DirectVulkan;
+            if (context.getInstanceProcAddr == nullptr || context.deviceExtensions == nullptr) return std::nullopt;
+            Bool renderPassArmAvailable = false, shaderStencilExport = false;
+            const WireDepthResolveProbeMeasurement measurement = RunWireDepthResolveProbeOnThrowawayDevice(
+                context.getInstanceProcAddr, context.instance, context.physicalDevice,
+                context.graphicsQueueFamilyIndex, *context.deviceExtensions, renderPassArmAvailable,
+                shaderStencilExport);
+            // Without the extension there is no render-pass arm and nothing to have a bug in.
+            if (!renderPassArmAvailable) return std::nullopt;
+            const WireDepthResolveProbeVerdict verdict = EvaluateWireDepthResolveProbe(measurement);
+            MGLOG_I("Driver POST: depth/stencil resolve probe verdict=%s%s%s",
+                    WireDepthResolveProbeVerdictName(verdict), measurement.failureReason.empty() ? "" : " - ",
+                    measurement.failureReason.c_str());
+            for (const WireDepthResolveFormatReading& reading : measurement.formats)
+                MGLOG_I("Driver POST: depth/stencil resolve probe %s", DescribeWireDepthResolveFormat(reading).c_str());
+            return DescribeDepthStencilResolvePassBug(measurement, shaderStencilExport);
+        }
+
+        using VulkanDriverBugProbeFn = Optional<DriverBugFinding> (*)(const VulkanDriverBugProbeContext&);
+        constexpr VulkanDriverBugProbeFn kVulkanDriverBugProbes[] = {
+            &ProbeDepthStencilResolvePassBug,
+        };
+    } // namespace
+
+    Vector<DriverBugFinding> CollectVulkanKnownDriverBugs(const VulkanDriverBugProbeContext& context) {
+        Vector<DriverBugFinding> findings;
+        for (const VulkanDriverBugProbeFn probe : kVulkanDriverBugProbes) {
+            if (Optional<DriverBugFinding> finding = probe(context)) {
+                findings.push_back(Move(*finding));
+            }
+        }
+        return findings;
+    }
+#endif
 } // namespace MobileGL::MG_Util::SelfTest

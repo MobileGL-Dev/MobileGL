@@ -9,6 +9,9 @@
 #pragma once
 #include <Includes.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Backend/DirectVulkan/Renderer/WireDepthResolveArm.h>
+#endif
 
 namespace MobileGL::MG_Util::SelfTest {
     // ===================== KNOWN DRIVER BUGS =====================
@@ -33,7 +36,8 @@ namespace MobileGL::MG_Util::SelfTest {
     //
     // ADDING A SIBLING IS ONE FUNCTION: write an `Optional<DriverBugFinding> ProbeXxx(gl)`
     // that returns nullopt when the driver is not affected, and add it to the table in
-    // CollectGlesKnownDriverBugs().
+    // CollectGlesKnownDriverBugs(). A Vulkan probe takes a VulkanDriverBugProbeContext instead
+    // and goes in CollectVulkanKnownDriverBugs()'s table (bottom of this file).
 
     // What MobileGL can do about a bug this device HAS. There is deliberately no "not
     // affected" member: a driver that passes the probe produces no finding at all, so the
@@ -342,4 +346,35 @@ namespace MobileGL::MG_Util::SelfTest {
     // Every known driver bug this GLES driver actually has. Bugs it does not have are absent,
     // so an unaffected device renders an empty section rather than a wall of "not affected".
     Vector<DriverBugFinding> CollectGlesKnownDriverBugs(const MG_External::GLESFunctionsTable& gl);
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // ===================== KNOWN VULKAN DRIVER BUGS =====================
+    //
+    // The DirectVulkan (Magma) backend's table, under the rules above: a control per probe, an
+    // inconclusive probe is never a finding, a clean one contributes nothing. A probe gets the
+    // POST's throwaway instance and the physical device it picked, and creates whatever device it
+    // needs itself.
+    //
+    // DISAGGREGATED BUILDS ONLY, for now: its one row is a defect of the Magma WIRE arm, which the
+    // monolith never records, and the pull build's image must not move (P7 gate G1). A row about a
+    // path the monolith takes moves this guard into the table.
+    struct VulkanDriverBugProbeContext {
+        PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
+        VkInstance instance = VK_NULL_HANDLE;
+        VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+        Uint32 graphicsQueueFamilyIndex = 0;
+        const Vector<VkExtensionProperties>* deviceExtensions = nullptr;
+    };
+
+    // The row for the multisample depth/stencil resolve probe
+    // (MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.h), a pure function of its
+    // measurement: nullopt unless the verdict is the defect. FIXED where the shader substitute
+    // can write every aspect (VK_EXT_shader_stencil_export present), UNFIXABLE otherwise - a
+    // stencil resolve then still lands on the render pass that writes nothing.
+    Optional<DriverBugFinding> DescribeDepthStencilResolvePassBug(
+        const MG_Backend::DirectVulkan::WireDepthResolveProbeMeasurement& measurement, Bool shaderStencilExport);
+
+    // Every known driver bug this Vulkan driver actually has.
+    Vector<DriverBugFinding> CollectVulkanKnownDriverBugs(const VulkanDriverBugProbeContext& context);
+#endif
 } // namespace MobileGL::MG_Util::SelfTest
