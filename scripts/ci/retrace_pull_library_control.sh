@@ -155,7 +155,10 @@ fi
 # width: "never reported resolving it" arrives split over two lines with a two-space continuation
 # indent, and a line-oriented grep for the literal finds nothing. That is not hypothetical - it is
 # the shape the stub reproduces in scripts/ci/testdata/stub_ctest.sh.
-if ! tr -s '[:space:]' ' ' < "${out}" | grep -qF "${EVIDENCE}"; then
+# `ctest -V` ALSO PREFIXES EVERY OUTPUT LINE WITH "<test number>: ", continuation lines included,
+# so without stripping it first the folded text reads "never 1: reported resolving it" and the
+# control reds on the very sentence it is looking for (the *-prefixed stub modes).
+if ! sed -E 's/^[0-9]+: //' "${out}" | tr -s '[:space:]' ' ' | grep -qF "${EVIDENCE}"; then
   echo "::error::the split retrace went red (ctest exit ${control_rc}) with the pull library in place, but the failure never says the library did not resolve the transport - neither of run_trace_case.cmake's sentences (\"${EVIDENCE//$'\n'/\" / \"}\") is in the output. A loader failure, a missing fixture, a timeout or an SSIM drop all land here, and none of them establishes that the transport-identity assertion is what caught the pull library. Only 'non-zero ctest' used to be checked (ID-46 finding 8b)."
   exit 1
 fi

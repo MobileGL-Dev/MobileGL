@@ -144,9 +144,15 @@ function parseGpuLabel(logText) {
 
 async function collectGroupLabels(files, defaultGroup) {
   const labels = new Map();
+  // A pull library writes one mobilegl.log. A split library writes one log per ROLE
+  // (mobilegl.client.log / mobilegl.server.log) and no mobilegl.log, so the Linux split lanes'
+  // summaries had no GPU label at all; their role logs are read wherever mobilegl.log is absent.
+  const present = new Set(files.map((file) => normalizeSlashes(file)));
   const logFiles = files.filter((file) => {
     const name = path.basename(file).toLowerCase();
-    return name === "mobilegl.log" || name === "logcat.txt";
+    if (name === "mobilegl.log" || name === "logcat.txt") return true;
+    if (name !== "mobilegl.client.log" && name !== "mobilegl.server.log") return false;
+    return !present.has(normalizeSlashes(path.join(path.dirname(file), "mobilegl.log")));
   });
   for (const logFile of logFiles) {
     const group = inferGroup(logFile, defaultGroup);

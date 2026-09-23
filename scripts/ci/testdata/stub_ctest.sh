@@ -32,6 +32,8 @@
 #                      one match; the run fails one check earlier, with the runner's "wrote no
 #                      <client log> ... no evidence the transport ever resolved" - the shape a
 #                      PULL library produces since P6's per-role log rename
+#   retrace-evidence-prefixed, retrace-evidence-nolog-prefixed
+#                      the two above with `ctest -V`'s "1: " prefix on every line
 #   retrace-green      one match; the run PASSES
 #
 # EXIT GATE E2's DRAW-DROP CONTROL (scripts/ci/retrace_drop_draw_control.sh). The library's own
@@ -306,6 +308,15 @@ case "${mode}" in
     echo "  transport ever resolved.  A split retrace with no library log cannot be"
     echo "  counted as a split retrace."
     exit 8
+    ;;
+  retrace-evidence-prefixed|retrace-evidence-nolog-prefixed)
+    # The two modes above as `ctest -V` really prints them: EVERY line of a test's output carries
+    # a "<test number>: " prefix, continuation lines included, so after whitespace folding the
+    # wrapped sentence reads "never 1: reported resolving it" / "no evidence the 1: transport ever
+    # resolved". A short case directory breaks the sentence at exactly those words; CI's long
+    # paths happened not to (retrace-split, run 35671704873: 5 false reds from this shape).
+    STUB_MODE="${mode%-prefixed}" bash "$0" "$@" | sed 's/^/1: /'
+    exit "${PIPESTATUS[0]}"
     ;;
   retrace-green)
     echo "100% tests passed, 0 tests failed out of 1"

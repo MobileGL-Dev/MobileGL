@@ -2542,7 +2542,7 @@ jobs:
           # silently is guarded here. trace_cases.py now also rejects an unknown manifest key, which
           # was the hole: `"splitt": true` loaded clean and emptied the subset (review N-4).
           if [ "$(printf '%s' "${SPLIT_MATRIX}" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["include"]))')" -lt 1 ]; then
-            echo "::error::the split retrace subset is EMPTY. `split` is an OPT-OUT as of P6 - a CI case is in this subset unless it carries \"split\": false - so an empty subset means either every case opted out or the CI matrix itself is empty. Either way retrace-split would be skipped with no red, and exit gate E2 names OpenRA."
+            echo "::error::the split retrace subset is EMPTY. 'split' is an OPT-OUT as of P6 - a CI case is in this subset unless it carries \"split\": false - so an empty subset means either every case opted out or the CI matrix itself is empty. Either way retrace-split would be skipped with no red, and exit gate E2 names OpenRA."
             exit 1
           fi
           echo "split-matrix=${SPLIT_MATRIX}" >> "$GITHUB_OUTPUT"
@@ -2979,6 +2979,14 @@ jobs:
     name: retrace split (${{ matrix.backend }} / ${{ matrix.transport }}, ${{ matrix.case }})
     runs-on: ubuntu-latest
     timeout-minutes: 240
+    # THE LAVAPIPE ICD PIN the integration lanes get through -DMOBILEGL_ITEST_VK_ICD. Here it
+    # can be job-wide: add_trace_replay_test's ENVIRONMENT names no VK_ICD_FILENAMES, so nothing
+    # overrides it. mesa-vulkan-drivers installs every Mesa ICD, and an unpinned loader probes all
+    # of them inside the spawned server's lazy Magma bring-up - the MakeCurrent that outlasted the
+    # client's reply bound in runs 35671704873 / 35706183230. ClientSession's cold-start budget
+    # is the fix; this pin keeps the bring-up on the one device a runner has.
+    env:
+      VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
     needs:
       - build-linux-monolith-control
       - build-linux-split

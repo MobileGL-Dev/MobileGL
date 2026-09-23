@@ -121,6 +121,10 @@ expect PASSED "run_trace_case.cmake's own sentence, wrapped" -- run_retrace retr
 # search. The control accepted only the marker sentence until B3's fix round 2, and was red on
 # every real pull-library run (measured on the B3 package tree).
 expect PASSED "the no-client-log sentence a pull library gets"  -- run_retrace retrace-evidence-nolog
+# Both sentences again as `ctest -V` really prints them, with "1: " on every line: folded
+# naively that is "never 1: reported resolving it", and the control used to red on it.
+expect PASSED "the marker sentence under ctest -V's N: prefix" -- run_retrace retrace-evidence-prefixed
+expect PASSED "the no-log sentence under ctest -V's N: prefix" -- run_retrace retrace-evidence-nolog-prefixed
 # The pull library replaying green is the failure this control exists to catch.
 expect FAILED "a pull library passed the split retrace"      -- run_retrace retrace-green
 
