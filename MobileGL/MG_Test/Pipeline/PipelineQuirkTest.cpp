@@ -724,3 +724,88 @@ TEST(PipelineQuirkTest, WireDepthResolveProbeKnobReplacesTheMeasurementNotTheVer
     GTEST_SKIP() << "the wire resolve arms exist only in the disaggregated build";
 #endif
 }
+
+// Codex closeout finding 7 (cf-magma): THE VERDICT BELONGS TO A DEVICE, NOT TO THE PROCESS. The
+// choice was a function-static in VulkanRenderer::ArmWireDepthResolveOrder, so a renderer on a
+// second physical device, or under a changed driver, in the same process took the first device's
+// order without probing. ArmWireDepthResolveOrder now asks WireDepthResolveArmCache, keyed by
+// (vendor, device, driver version, pipeline-cache UUID) plus the choice's own inputs; this pins that
+// two identities are decided independently and that one identity is still decided once.
+TEST(PipelineQuirkTest, WireDepthResolveVerdictIsMemoizedPerDeviceIdentityNotPerProcess) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    using MobileGL::MG_Backend::DirectVulkan::WireDepthResolveArmCache;
+    using MobileGL::MG_Backend::DirectVulkan::WireDepthResolveArmChoice;
+    using MobileGL::MG_Backend::DirectVulkan::WireDepthResolveDeviceIdentity;
+    WireDepthResolveArmCache cache;
+    Int probes = 0;
+    const auto probeReading = [&](FakeArms arms) {
+        return [&probes, arms] {
+            ++probes;
+            return ChooseWireDepthResolveArm(WireDepthResolveProbeKnob::Measure, true, [arms] {
+                return FakeMeasurement({FakeFormat("D24_UNORM_S8_UINT", arms, arms)});
+            });
+        };
+    };
+    // The Redmi's device, whose render pass writes nothing ...
+    WireDepthResolveDeviceIdentity adreno;
+    adreno.vendorID = 0x5143;
+    adreno.deviceID = 0x44050001;
+    adreno.driverVersion = 0x80000000u | 512;
+    adreno.pipelineCacheUUID[0] = 0xA8;
+    adreno.renderPassArmAvailable = true;
+    // ... and, later in the same process, a device whose render pass resolves.
+    WireDepthResolveDeviceIdentity lavapipe;
+    lavapipe.vendorID = 0x10005;
+    lavapipe.deviceID = 0;
+    lavapipe.driverVersion = 1;
+    lavapipe.pipelineCacheUUID[0] = 0x3E;
+    lavapipe.renderPassArmAvailable = true;
+
+    Bool decided = false;
+    const WireDepthResolveArmChoice first = cache.Resolve(adreno, probeReading(kRenderPassWroteNothing), &decided);
+    EXPECT_TRUE(decided);
+    EXPECT_TRUE(first.preferShader);
+    const WireDepthResolveArmChoice second = cache.Resolve(lavapipe, probeReading(kBothArmsResolve), &decided);
+    EXPECT_TRUE(decided) << "a second device in the process must run its OWN probe";
+    EXPECT_EQ(second.verdict, WireDepthResolveProbeVerdict::Clean);
+    EXPECT_FALSE(second.preferShader) << "the second device took the first device's verdict";
+    EXPECT_EQ(probes, 2);
+
+    // The same device again is still decided once: the probe stays once per device per process.
+    const WireDepthResolveArmChoice again = cache.Resolve(adreno, probeReading(kBothArmsResolve), &decided);
+    EXPECT_FALSE(decided);
+    EXPECT_TRUE(again.preferShader);
+    EXPECT_EQ(probes, 2);
+
+    // Each field of the identity separates: a driver update (version or pipeline-cache UUID alone),
+    // another device of the vendor, and the choice's own inputs.
+    const auto separates = [&](WireDepthResolveDeviceIdentity other, const char* what) {
+        const Int before = probes;
+        const auto choice = cache.Resolve(other, probeReading(kBothArmsResolve), &decided);
+        EXPECT_TRUE(decided) << what << " reused another identity's verdict";
+        EXPECT_EQ(probes, before + 1) << what;
+        EXPECT_FALSE(choice.preferShader) << what;
+    };
+    auto updatedDriver = adreno;
+    updatedDriver.driverVersion += 1;
+    separates(updatedDriver, "a changed driver version");
+    auto rebuiltDriver = adreno;
+    rebuiltDriver.pipelineCacheUUID[15] = 0x01;
+    separates(rebuiltDriver, "a changed pipeline-cache UUID");
+    auto sibling = adreno;
+    sibling.deviceID += 1;
+    separates(sibling, "another device of the same vendor");
+    auto otherVendor = adreno;
+    otherVendor.vendorID = 0x13B5;
+    separates(otherVendor, "another vendor with the same device id");
+    auto noRenderPassArm = adreno;
+    noRenderPassArm.renderPassArmAvailable = false;
+    separates(noRenderPassArm, "a renderer without the render-pass arm");
+    auto forcedClean = adreno;
+    forcedClean.knob = WireDepthResolveProbeKnob::ForceClean;
+    separates(forcedClean, "a different probe knob");
+    EXPECT_EQ(cache.Size(), 8u);
+#else
+    GTEST_SKIP() << "the wire resolve arms exist only in the disaggregated build";
+#endif
+}

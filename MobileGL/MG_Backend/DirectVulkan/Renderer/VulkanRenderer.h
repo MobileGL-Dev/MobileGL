@@ -564,7 +564,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // target unwritten while the shader control resolved - the shader arm then resolves
         // first and the render-pass arm is the fallback (P7 gate 5, g5-msprobe).
         Bool m_wirePreferShaderDepthResolve = false;
-        // Runs the probe (memoized per process) and sets the member above. Called at the end of
+        // Runs the probe (memoized per device identity) and sets the member above. Called at the end of
         // device creation, after ArmPrimGenReroute: it records on m_graphicsQueue.
         void ArmWireDepthResolveOrder();
         Bool BlitWireColorToDefault(WireImage source, WireImage destination,

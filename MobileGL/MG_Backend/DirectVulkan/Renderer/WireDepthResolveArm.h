@@ -9,6 +9,10 @@
 
 #include <Includes.h>
 
+#include <cstring>
+#include <mutex>
+#include <utility>
+
 // P7 gate 5 (g5-msrbo, g5-msprobe): WHICH ARM RESOLVES A MULTISAMPLE DEPTH/STENCIL ASPECT FIRST.
 //
 // The wire arm has two (WireFramebuffer.inc, ResolveWireDepthStencil): a render pass that carries
@@ -212,6 +216,61 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         choice.preferShader = choice.verdict == WireDepthResolveProbeVerdict::RenderPassResolveBroken;
         return choice;
     }
+
+    // WHOSE VERDICT IT IS (codex closeout finding 7). The verdict is a property of ONE device and
+    // driver, and a process can hold more than one: inproc tears a renderer down and initializes
+    // another, possibly on a different physical device or under a different driver. The choice was
+    // a function-static - the first renderer's answer for every renderer after it - so a second
+    // device skipped its own probe and took an order measured elsewhere. It is now memoized per
+    // IDENTITY: the device (vendor, device, driver version, pipeline-cache UUID - the last changes
+    // with the driver build even where the version number does not) plus the two inputs the choice
+    // itself depends on (whether a render-pass arm exists to judge, and the test knob). The same
+    // identity is still probed once per process; a different one is probed for itself.
+    struct WireDepthResolveDeviceIdentity {
+        Uint32 vendorID = 0;
+        Uint32 deviceID = 0;
+        Uint32 driverVersion = 0;
+        Uint8 pipelineCacheUUID[16] = {};
+        Bool renderPassArmAvailable = false;
+        WireDepthResolveProbeKnob knob = WireDepthResolveProbeKnob::Measure;
+
+        Bool operator==(const WireDepthResolveDeviceIdentity& other) const {
+            return vendorID == other.vendorID && deviceID == other.deviceID && driverVersion == other.driverVersion &&
+                   std::memcmp(pipelineCacheUUID, other.pipelineCacheUUID, sizeof(pipelineCacheUUID)) == 0 &&
+                   renderPassArmAvailable == other.renderPassArmAvailable && knob == other.knob;
+        }
+    };
+
+    class WireDepthResolveArmCache {
+    public:
+        // The identity's memoized choice, or `decide()`'s - called at most once per identity, under
+        // the cache's lock (a probe records on the device's queue; two renderers of one identity
+        // must not both run it). `decided`, when given, says whether this call ran `decide`.
+        template <typename DecideFn>
+        WireDepthResolveArmChoice Resolve(const WireDepthResolveDeviceIdentity& identity, DecideFn&& decide,
+                                          Bool* decided = nullptr) {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            for (const auto& entry : m_entries) {
+                if (entry.first == identity) {
+                    if (decided) *decided = false;
+                    return entry.second;
+                }
+            }
+            WireDepthResolveArmChoice choice = decide();
+            m_entries.emplace_back(identity, choice);
+            if (decided) *decided = true;
+            return choice;
+        }
+
+        SizeT Size() const {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            return m_entries.size();
+        }
+
+    private:
+        mutable std::mutex m_mutex;
+        Vector<std::pair<WireDepthResolveDeviceIdentity, WireDepthResolveArmChoice>> m_entries;
+    };
 
     // One format's readings, both arms: "D24_UNORM_S8_UINT x4: depth expected 0x400000 sentinel
     // 0xbfffff: render pass 0/16 (first 0xbfffff, sentinel 16), shader control 16/16 (first

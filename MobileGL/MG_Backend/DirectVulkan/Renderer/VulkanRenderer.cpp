@@ -15856,8 +15856,9 @@ void main() {
     // P7 gate 5 (g5-msprobe): THE ARM ORDER OF THE MULTISAMPLE DEPTH/STENCIL RESOLVE IS A MEASURED
     // PROPERTY OF THIS DEVICE. WireDepthResolveArm.h says why (the Adreno 830's no-draw
     // VK_KHR_depth_stencil_resolve pass writes nothing), WireDepthResolveProbe.h what is run. The
-    // answer is a device property, so it is memoized per process like the PRIMITIVES_GENERATED
-    // probe's, and logged once with every reading - the line the device evidence quotes.
+    // answer is a device property, so it is memoized per DEVICE IDENTITY (WireDepthResolveArmCache:
+    // vendor, device, driver version, pipeline-cache UUID - codex closeout finding 7), and logged once
+    // per identity with every reading - the line the device evidence quotes.
     //
     // THE MEASUREMENT CAN BE REPLACED, AND ONLY HERE: MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=bug|clean
     // hands ChooseWireDepthResolveArm a canned measurement instead of running the probe - no host
@@ -15875,9 +15876,20 @@ void main() {
         // (the probe asks that per format): without it the shader pass is the only arm.
         const Bool renderPassArmAvailable = !MagmaWireForcedShaderDepthResolve() && m_wireCreateRenderPass2 &&
             (m_wireDepthResolveModes & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT) != 0;
-        static const WireDepthResolveArmChoice s_choice = [&]() {
-            const char* knobValue = std::getenv("MGITEST_MAGMA_DEPTH_RESOLVE_PROBE");
-            const WireDepthResolveProbeKnob knob = ParseWireDepthResolveProbeKnob(knobValue);
+        const char* knobValue = std::getenv("MGITEST_MAGMA_DEPTH_RESOLVE_PROBE");
+        const WireDepthResolveProbeKnob knob = ParseWireDepthResolveProbeKnob(knobValue);
+        // Memoized per DEVICE IDENTITY, not per process (codex closeout finding 7; see
+        // WireDepthResolveArmCache): a second renderer on another device or driver probes for itself.
+        WireDepthResolveDeviceIdentity identity;
+        identity.vendorID = m_physicalDevice.properties.vendorID;
+        identity.deviceID = m_physicalDevice.properties.deviceID;
+        identity.driverVersion = m_physicalDevice.properties.driverVersion;
+        std::memcpy(identity.pipelineCacheUUID, m_physicalDevice.properties.pipelineCacheUUID,
+                    sizeof(identity.pipelineCacheUUID));
+        identity.renderPassArmAvailable = renderPassArmAvailable;
+        identity.knob = knob;
+        static WireDepthResolveArmCache s_choices;
+        const WireDepthResolveArmChoice resolved = s_choices.Resolve(identity, [&]() {
             if (knob == WireDepthResolveProbeKnob::Unrecognised)
                 MGLOG_W("DirectVulkan: MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=%s is not `bug`, `clean` or "
                         "`elide-subject`; the resolve probe runs as if it were unset", knobValue);
@@ -15923,8 +15935,8 @@ void main() {
                 MGLOG_I("DirectVulkan: depth/stencil resolve probe %s",
                         DescribeWireDepthResolveFormat(reading).c_str());
             return choice;
-        }();
-        m_wirePreferShaderDepthResolve = s_choice.preferShader;
+        });
+        m_wirePreferShaderDepthResolve = resolved.preferShader;
     }
 #endif
 
