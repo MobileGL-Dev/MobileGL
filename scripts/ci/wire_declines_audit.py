@@ -14,10 +14,12 @@ Rows are APPEND-ONLY (the lanes assert specific counters), so (1) cannot be fixe
 deleting a row once a release has shipped it. This check is why it cannot rot.
 
 Sites reached through MGL_WIRE_DECLINE_AT satisfy both at once. A bare
-WireDeclineTally::Count(WireDeclineSite::X) is allowed ONLY when an MGLOG_ statement carrying
-the same reason already stands just above it.
+WireDeclineTally::Count(WireDeclineSite::X) is allowed ONLY when an MGLOG_W/E statement stands
+just above it IN THE SAME BLOCK: at the Count line's own indentation, with no line of lesser
+indentation (an enclosing `if (...) {`, a `} else {`) between them. A log in a sibling branch
+or a nested one is not this site's line.
 
-Sources are matched on their text with comments and string/character literals blanked out
+Everything is matched on the text with comments and string/character literals blanked out
 (newlines kept, so every report cites the real line): a site or a log that is only a comment,
 or only a string, is not one.
 
@@ -30,10 +32,12 @@ import sys
 RENDERER = "MobileGL/MG_Backend/DirectVulkan/Renderer"
 DEF = os.path.join(RENDERER, "WireDeclines.def")
 SOURCES = (".cpp", ".inc", ".h")
-# How far above a bare Count() an MGLOG_ may stand and still be "the line for this site".
+# How far above a bare Count() an MGLOG_ may stand and still be "the line for this site" -
+# a cap on top of the block walk, so a log far up the same block does not count either.
 LOG_WINDOW = 8
 
-ROW = re.compile(r"^\s*MGL_WIRE_DECLINE\(([A-Za-z][A-Za-z0-9]*)\)\s*$")
+# Matched on comment-stripped text, so a row with a trailing `// note` is still a row.
+ROW = re.compile(r"^\s*MGL_WIRE_DECLINE\(\s*([A-Za-z][A-Za-z0-9]*)\s*\)\s*$")
 AT_SITE = re.compile(r"MGL_WIRE_DECLINE_AT\(\s*([A-Za-z][A-Za-z0-9]*)\s*,")
 COUNT_SITE = re.compile(r"WireDeclineTally::Count\(\s*WireDeclineSite::([A-Za-z][A-Za-z0-9]*)\s*\)")
 # Warning or error only: an MGLOG_D / MGLOG_V is compiled away in the Release builds that ship,
@@ -96,15 +100,40 @@ def strip_code(text: str) -> str:
     return "".join(out)
 
 
-def main() -> int:
-    root = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else ".")
+def indent_of(line: str) -> int:
+    return len(line.expandtabs(4)) - len(line.expandtabs(4).lstrip())
+
+
+def has_own_log(lines, i: int) -> bool:
+    """Is there an MGLOG_W/E statement above line i in the same block, within LOG_WINDOW?
+
+    Walk upwards; blank lines and deeper lines (a log's continuation lines, a nested block)
+    are passed over, but only a line at exactly the Count's indentation can be its log. The
+    first line indented LESS than the Count is the block's opening (or a sibling branch's
+    `} else {`) and ends the walk."""
+    own = indent_of(lines[i])
+    for k in range(i - 1, max(-1, i - 1 - LOG_WINDOW), -1):
+        line = lines[k]
+        if not line.strip():
+            continue
+        ind = indent_of(line)
+        if ind < own:
+            return False
+        if ind == own and LOGGED.search(line):
+            return True
+    return False
+
+
+def audit(root: str) -> int:
     def_path = os.path.join(root, DEF)
     if not os.path.isfile(def_path):
         print("wire-declines: %s not found" % DEF, file=sys.stderr)
         return 2
 
     rows = []
-    for line in open(def_path, encoding="utf-8"):
+    with open(def_path, encoding="utf-8") as f:
+        def_text = strip_code(f.read())
+    for line in def_text.splitlines():
         m = ROW.match(line)
         if m:
             rows.append(m.group(1))
@@ -131,8 +160,7 @@ def main() -> int:
             for m in COUNT_SITE.finditer(line):
                 name = m.group(1)
                 counted.setdefault(name, []).append((entry, i + 1))
-                window = lines[max(0, i - LOG_WINDOW):i]
-                if not any(LOGGED.search(w) for w in window):
+                if not has_own_log(lines, i):
                     unlogged_counts.append((entry, i + 1, name))
 
     orphan_rows = [r for r in rows if r not in counted]
@@ -145,8 +173,8 @@ def main() -> int:
             print("wire-declines: %s:%d counts %s, which is not a row in WireDeclines.def"
                   % (where[0], where[1], name), file=sys.stderr)
     for entry, line, name in unlogged_counts:
-        print("wire-declines: %s:%d counts %s with no MGLOG_ within %d lines above it - a decline "
-              "must be readable from the log, not only from a counter"
+        print("wire-declines: %s:%d counts %s with no MGLOG_W/E in its own block within %d lines "
+              "above it - a decline must be readable from the log, not only from a counter"
               % (entry, line, name, LOG_WINDOW), file=sys.stderr)
 
     bad = len(orphan_rows) + len(unknown_sites) + len(unlogged_counts)
@@ -154,6 +182,10 @@ def main() -> int:
           % (len(rows), len(rows) - len(orphan_rows), sum(len(v) for v in counted.values()),
              len(unlogged_counts), len(unknown_sites)))
     return 1 if bad else 0
+
+
+def main() -> int:
+    return audit(os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "."))
 
 
 if __name__ == "__main__":
